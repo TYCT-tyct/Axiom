@@ -56,6 +56,22 @@ type PaymentsMerchantMethod struct {
 	Enabled    bool
 }
 
+type PaymentsRedeemCode struct {
+	ID         uuid.UUID
+	SiteID     uuid.UUID
+	CodeHash   []byte
+	CodeHint   string
+	Amount     int64
+	Note       string
+	State      string
+	ExpiresAt  pgtype.Timestamptz
+	CreatedAt  time.Time
+	CreatedBy  uuid.UUID
+	RedeemedAt pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	DisabledBy *uuid.UUID
+}
+
 type PaymentsRefund struct {
 	ID               uuid.UUID
 	OrderID          uuid.UUID

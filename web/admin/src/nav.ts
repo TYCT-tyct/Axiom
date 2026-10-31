@@ -7,6 +7,7 @@ export const nav = [
   { to: "/", label: "nav.overview", icon: "grid", permission: "sites.manage" },
   { to: "/users", label: "nav.users", icon: "card", permission: "users.view" },
   { to: "/orders", label: "nav.orders", icon: "card", permission: "sites.manage" },
+  { to: "/redeem-codes", label: "nav.redeemCodes", icon: "card", permission: "sites.manage" },
   { to: "/calls", label: "nav.calls", icon: "list", permission: "calls.search" },
   { to: "/audit", label: "nav.audit", icon: "search", permission: "audit.view" },
   { to: "/suppliers", label: "nav.suppliers", icon: "cube", permission: "suppliers.view" },

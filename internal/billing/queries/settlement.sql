@@ -141,8 +141,8 @@ SELECT coalesce(sum(e.amount), 0)::bigint FROM billing.entries e JOIN billing.tr
 WHERE t.request_id = @request_id AND t.attempt_seq = @attempt_seq AND e.book = 'supplier_cost';
 
 -- name: InsertCreditBatch :exec
--- A gift leaves what a payment has NULL (an empty currency or offline channel is NULL); a paid batch sets them as
--- credit_batches_source_check requires.
+-- A gift or redeemed code leaves what a payment has NULL (an empty currency or offline channel is NULL); a paid batch
+-- sets them as credit_batches_source_check requires.
 INSERT INTO billing.credit_batches (id, site_id, account_id, source, amount, expires_at, currency, paid, fee, merchant_id,
     offline_channel, rate_id)
 VALUES (@id, @site_id, @account_id, @source, @amount, sqlc.narg(expires_at), nullif(@currency::text, ''), sqlc.narg(paid),

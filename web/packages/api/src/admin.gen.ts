@@ -373,6 +373,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/payments/redeem-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One site's redeem codes, newest first, without the codes themselves.
+         * @description Pages of a site's codes, filtered by the state a page shows and by a note prefix. `expired` is an enabled code past its expiry, which is how the page shows it; the stored state stays enabled. The rows carry the last four characters of each code for support, never the code: a code is written once and shown once, in the answer that made it (docs/domains/payments.md「兑换码」).
+         */
+        get: operations["listRedeemCodes"];
+        put?: never;
+        /**
+         * Make a batch of redeem codes. The codes are in this answer only.
+         * @description Makes `count` codes for the site, each worth `amount` of its currency, all expiring at `expires_at` (never, if absent), with an optional `note` and the `reason` of the audit entry. The answer is the only place the codes themselves are ever shown: only a hash is stored, so a lost answer cannot be recovered and the batch must be made again. A replay of `Idempotency-Key` answers the same batch (IDs, amounts and hints) but not the codes: the stored answer keeps no secret.
+         */
+        post: operations["createRedeemCodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/redeem-codes/{code_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                code_id: components["schemas"]["RedeemCodeId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable an unused redeem code.
+         * @description Stops an enabled code from being redeemed, with the audit entry's reason. A disabled code answers as disabled, and a code already redeemed cannot be disabled: its credit is the account's.
+         */
+        post: operations["disableRedeemCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/rate-limits/{target}/{id}": {
         parameters: {
             query?: never;
@@ -2876,6 +2922,56 @@ export interface components {
             /** @description Where it was received, such as a bank account. */
             channel: string;
         };
+        /** @description A redeem code's ID (TypeID). */
+        RedeemCodeId: string;
+        /**
+         * @description A code's state as a page shows it: `expired` is an enabled code past its expiry, the stored state stays enabled.
+         * @enum {string}
+         */
+        RedeemCodeState: "enabled" | "used" | "disabled" | "expired";
+        /** @description One generation of codes: each worth `amount` of the site's currency, all with the same expiry and note. */
+        RedeemCodeBatchRequest: {
+            site_id: components["schemas"]["SiteId"];
+            amount: components["schemas"]["Money"];
+            /** @description How many codes the batch makes. */
+            count: number;
+            /** @description What the batch is for, shown beside each code. Absent: none. */
+            note?: string;
+            /**
+             * Format: date-time
+             * @description UTC, in the future. Absent: the codes never expire.
+             */
+            expires_at?: string;
+            reason: components["schemas"]["Reason"];
+        };
+        RedeemCode: {
+            id: components["schemas"]["RedeemCodeId"];
+            state: components["schemas"]["RedeemCodeState"];
+            amount: components["schemas"]["Money"];
+            note: string;
+            /** @description The code's last four characters; never the code. */
+            hint: string;
+            /** @description The code itself, shown only in the answer that made it, and never in a list or a read. Absent there. */
+            code?: string;
+            /**
+             * Format: date-time
+             * @description Absent: the code never expires.
+             */
+            expires_at?: string;
+            /** Format: date-time */
+            created_at: string;
+            created_by: components["schemas"]["UserId"];
+            /**
+             * Format: date-time
+             * @description When the code was redeemed; absent if it was not.
+             */
+            redeemed_at?: string;
+        };
+        RedeemCodeList: {
+            data: components["schemas"]["RedeemCode"][];
+            /** @description Absent on the last page. */
+            next_cursor?: string;
+        };
         /** @description `amount` is the credit, in the site's currency. An offline payment has `payment`, and `exchange_rate` when it was converted from another currency. */
         CreditGrant: {
             id: components["schemas"]["Uuid"];
@@ -4323,6 +4419,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listRedeemCodes: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                state?: components["schemas"]["RedeemCodeState"];
+                /** @description The beginning of a code batch's note, ignoring case. Omit for every note. */
+                note?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the site's codes, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createRedeemCodes: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemCodeBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description The codes made, with `code` in each; a replay of the key carries `code` in none of them. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    disableRedeemCode: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                code_id: components["schemas"]["RedeemCodeId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The code as it now is. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCode"];
                 };
             };
             400: components["responses"]["BadRequest"];

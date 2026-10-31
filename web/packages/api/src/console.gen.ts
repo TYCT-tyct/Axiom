@@ -1124,6 +1124,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/redeem-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The redeem codes this account redeemed, newest first
+         * @description One page of the credit this account got from redeem codes, newest first: each redemption's credit, when it was redeemed, and when the credit expires. It never shows a code, only its last four characters, so the history is not a way to recover one. Needs `balance.view`, like every read of the account's money.
+         */
+        get: operations["listRedemptions"];
+        put?: never;
+        /**
+         * Redeem a code into credit
+         * @description Turns a code the site issued into a credit batch of the account's currency, with the code's expiry, and records it in the account's history. A code credits once, whichever account redeems it: `201` is the credit this request made, `200` is the credit an earlier request with the same `Idempotency-Key` made (the answer was lost; the key is reused, not the code), and a code already redeemed with another key is `conflict`. A code that is unknown, expired or disabled is `unprocessable`; a code is never echoed in an answer or an error.
+         *
+         *     Attempts that fail are limited per account and per network, an hour at a time: past the limit the request is `rate_limited` with `Retry-After` the seconds until the window is over, and the attempt is counted before the code is looked at. A replay of the key is not an attempt. If the counting itself fails, the request is refused (`internal`), never let through.
+         */
+        post: operations["redeemCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1294,6 +1320,29 @@ export interface components {
             amount: string;
             /** @example USD */
             currency: string;
+        };
+        RedeemCodeRequest: {
+            /** @description The code as issued, with or without its dashes or spaces, in any case. */
+            code: string;
+        };
+        RedeemCodeRedemption: {
+            /** @description The redemption's ID (TypeID), also the credit batch's. */
+            id: string;
+            amount: components["schemas"]["Money"];
+            /** @description The code's last four characters; never the code. */
+            code_hint: string;
+            /**
+             * Format: date-time
+             * @description When the credit expires; absent: never.
+             */
+            expires_at?: string;
+            /** Format: date-time */
+            redeemed_at: string;
+        };
+        RedeemCodeHistory: {
+            data: components["schemas"]["RedeemCodeRedemption"][];
+            /** @description Absent on the last page. */
+            next_cursor?: string;
         };
         Version: {
             /**
@@ -3881,6 +3930,78 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listRedemptions: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the account's redemptions, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeHistory"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    redeemCode: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A key the caller chooses for one intended redemption, 1 to 128 of letters, digits and `._:-` (a UUID is fine). */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description The credit an earlier request with this key made. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeRedemption"];
+                };
+            };
+            /** @description The credit this code made. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeRedemption"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Failure"];
         };
     };

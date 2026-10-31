@@ -6,6 +6,7 @@ import mappings from "./mappings";
 import models from "./models";
 import orders from "./orders";
 import pricing from "./pricing";
+import redeem from "./redeem";
 import settings from "./settings";
 import suppliers from "./suppliers";
 import users from "./users";
@@ -17,6 +18,7 @@ export default {
     overview: "Overview",
     users: "Users",
     orders: "Orders",
+    redeemCodes: "Redeem codes",
     calls: "Calls",
     audit: "Audit log",
     suppliers: "Suppliers",
@@ -83,5 +85,6 @@ export default {
   mappings,
   models,
   pricing,
+  redeem,
   settings,
 } satisfies Messages<typeof zh>;

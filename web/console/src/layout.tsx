@@ -11,6 +11,7 @@ const nav = [
   { to: "/calls", label: "nav.calls", icon: "list", permission: "calls.view" },
   { to: "/models", label: "nav.models", icon: "cube" },
   { to: "/balance", label: "nav.balance", icon: "card", permission: "balance.view" },
+  { to: "/redeem", label: "nav.redeem", icon: "card", permission: "balance.view" },
   { to: "/orders", label: "nav.orders", icon: "list", permission: "balance.view" },
   { to: "/statement", label: "nav.statement", icon: "chart", permission: "balance.view" },
   { to: "/security", label: "nav.security", icon: "shield" },

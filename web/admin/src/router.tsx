@@ -6,6 +6,7 @@ import { Layout } from "./layout";
 import { modelStatus } from "./models/catalog";
 import { paymentOrderState } from "./orders/states";
 import { callStatus, overviewRange } from "./overview";
+import { redeemState } from "./redeem";
 import { supplierStatus } from "./suppliers/statuses";
 
 const root = createRootRoute({ component: Outlet });
@@ -62,6 +63,11 @@ const routeTree = root.addChildren([
         since: text(search.since),
         until: text(search.until),
       }),
+    ),
+    shellPage(
+      "/redeem-codes",
+      () => import("./pages/redeem-codes"),
+      (search) => ({ state: redeemState(search.state), note: text(search.note) }),
     ),
     shellPage(
       "/calls",

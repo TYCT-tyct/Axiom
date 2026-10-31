@@ -941,6 +941,114 @@ paths:
           $ref: '#/components/responses/Conflict'
         default:
           $ref: '#/components/responses/Failure'
+  /api/admin/v1/payments/redeem-codes:
+    get:
+      operationId: listRedeemCodes
+      tags: [Payments]
+      summary: One site's redeem codes, newest first, without the codes themselves.
+      description: >-
+        Pages of a site's codes, filtered by the state a page shows and by a note prefix. `expired` is an enabled code
+        past its expiry, which is how the page shows it; the stored state stays enabled. The rows carry the last four
+        characters of each code for support, never the code: a code is written once and shown once, in the answer that
+        made it (docs/domains/payments.md「兑换码」).
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: state, in: query, required: false, schema: {$ref: "#/components/schemas/RedeemCodeState"}}
+        - name: note
+          in: query
+          required: false
+          description: The beginning of a code batch's note, ignoring case. Omit for every note.
+          schema: {type: string, maxLength: 200}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of the site's codes, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCodeList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createRedeemCodes
+      tags: [Payments]
+      summary: Make a batch of redeem codes. The codes are in this answer only.
+      description: >-
+        Makes `count` codes for the site, each worth `amount` of its currency, all expiring at `expires_at` (never, if
+        absent), with an optional `note` and the `reason` of the audit entry. The answer is the only place the codes
+        themselves are ever shown: only a hash is stored, so a lost answer cannot be recovered and the batch must be
+        made again. A replay of `Idempotency-Key` answers the same batch (IDs, amounts and hints) but not the codes: the
+        stored answer keeps no secret.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RedeemCodeBatchRequest"}
+      responses:
+        "201":
+          description: The codes made, with `code` in each; a replay of the key carries `code` in none of them.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCodeList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/redeem-codes/{code_id}/disable:
+    parameters:
+      - {name: code_id, in: path, required: true, schema: {$ref: "#/components/schemas/RedeemCodeId"}}
+    post:
+      operationId: disableRedeemCode
+      tags: [Payments]
+      summary: Disable an unused redeem code.
+      description: >-
+        Stops an enabled code from being redeemed, with the audit entry's reason. A disabled code answers as disabled,
+        and a code already redeemed cannot be disabled: its credit is the account's.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The code as it now is.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RedeemCode"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/rate-limits/{target}/{id}:
     parameters:
       - {name: target, in: path, required: true, schema: {type: string, enum: [tier, account, key]}}
@@ -5285,6 +5393,48 @@ components:
       properties:
         amount: {$ref: "#/components/schemas/Money"}
         channel: {type: string, minLength: 1, maxLength: 200, description: "Where it was received, such as a bank account."}
+    RedeemCodeId: {type: string, pattern: '^rdm_[0-9a-hjkmnp-tv-z]{26}$', description: "A redeem code's ID (TypeID)."}
+    RedeemCodeState:
+      type: string
+      enum: [enabled, used, disabled, expired]
+      description: >-
+        A code's state as a page shows it: `expired` is an enabled code past its expiry, the stored state stays enabled.
+    RedeemCodeBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [site_id, amount, count, reason]
+      properties:
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        amount: {$ref: "#/components/schemas/Money"}
+        count: {type: integer, minimum: 1, maximum: 100, description: "How many codes the batch makes."}
+        note: {type: string, maxLength: 200, description: "What the batch is for, shown beside each code. Absent: none."}
+        expires_at: {type: string, format: date-time, description: "UTC, in the future. Absent: the codes never expire."}
+        reason: {$ref: "#/components/schemas/Reason"}
+      description: "One generation of codes: each worth `amount` of the site's currency, all with the same expiry and note."
+    RedeemCode:
+      type: object
+      additionalProperties: false
+      required: [id, state, amount, note, hint, created_at, created_by]
+      properties:
+        id: {$ref: "#/components/schemas/RedeemCodeId"}
+        state: {$ref: "#/components/schemas/RedeemCodeState"}
+        amount: {$ref: "#/components/schemas/Money"}
+        note: {type: string}
+        hint: {type: string, pattern: '^[0-9A-HJKMNP-TV-Z]{4}$', description: "The code's last four characters; never the code."}
+        code:
+          type: string
+          description: >-
+            The code itself, shown only in the answer that made it, and never in a list or a read. Absent there.
+        expires_at: {type: string, format: date-time, description: "Absent: the code never expires."}
+        created_at: {type: string, format: date-time}
+        created_by: {$ref: "#/components/schemas/UserId"}
+        redeemed_at: {type: string, format: date-time, description: "When the code was redeemed; absent if it was not."}
+    RedeemCodeList:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/RedeemCode"}}
+        next_cursor: {type: string, description: "Absent on the last page."}
     CreditGrant:
       type: object
       required: [id, account_id, source, amount, created_at, balance_after]

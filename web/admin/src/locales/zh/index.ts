@@ -4,6 +4,7 @@ import mappings from "./mappings";
 import models from "./models";
 import orders from "./orders";
 import pricing from "./pricing";
+import redeem from "./redeem";
 import settings from "./settings";
 import suppliers from "./suppliers";
 import users from "./users";
@@ -16,6 +17,7 @@ export default {
     overview: "运营看板",
     users: "用户",
     orders: "订单与退款",
+    redeemCodes: "兑换码",
     calls: "调用记录",
     audit: "审计日志",
     suppliers: "供应商",
@@ -81,5 +83,6 @@ export default {
   mappings,
   models,
   pricing,
+  redeem,
   settings,
 };
