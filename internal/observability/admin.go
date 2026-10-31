@@ -23,6 +23,8 @@ type CallSummary struct {
 type AdminQuery struct {
 	Since, Until       time.Time
 	Account, RequestID *uuid.UUID
+	Model              string // exact model name; empty narrows nothing
+	Status             string // "error" or "ok"; empty narrows nothing
 	After              *Cursor
 	PageSize           int
 }
@@ -32,7 +34,9 @@ const adminCallsSQL = `SELECT id, at, site_id, account_id, model, error_kind, la
  WHERE (%[1]s,id) < (%[2]s,$2::uuid) AND at >= $3 AND at < $4
  AND ($5::text = '' OR account_id = nullif($5,'')::uuid)
  AND ($6::text = '' OR id = nullif($6,'')::uuid)
- ORDER BY %[1]s DESC,call_log.id DESC LIMIT $7`
+ AND ($7::text = '' OR model = $7)
+ AND ($8::text = '' OR (error_kind IS DISTINCT FROM '') = ($8 = 'error'))
+ ORDER BY %[1]s DESC,call_log.id DESC LIMIT $9`
 
 // The UTC expression isolates the global index from account queries: PostgreSQL otherwise prefers
 // chronological scans for correlated sparse account filters, reading thousands of blocks before LIMIT.
@@ -49,7 +53,7 @@ func ListAdmin(ctx context.Context, tx pg.Tx, q AdminQuery) ([]CallSummary, *Cur
 		return nil, nil, err
 	}
 	at, id := cursorOf(OwnQuery{Until: q.Until, After: q.After})
-	rows, err := tx.Query(ctx, adminListSQL(q.Account != nil || q.RequestID != nil), at, id, q.Since, q.Until, uuidFilter(q.Account), uuidFilter(q.RequestID), q.PageSize+1)
+	rows, err := tx.Query(ctx, adminListSQL(q.Account != nil || q.RequestID != nil), at, id, q.Since, q.Until, uuidFilter(q.Account), uuidFilter(q.RequestID), q.Model, q.Status, q.PageSize+1)
 	if err != nil {
 		return nil, nil, err
 	}
