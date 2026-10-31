@@ -1,7 +1,10 @@
 package secret_test
 
 import (
+	"bytes"
 	"encoding/base64"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -64,6 +67,24 @@ func TestKeyFilePaths(t *testing.T) {
 	}
 }
 
+// TestKeyFileSymlinkRefused: the variable must name the file, not a link to one. The writer refuses to replace a link
+// because rename replaces the directory entry, so a link would read one file and rotate another; the reader refuses it
+// for the same reason: whoever can point the variable at a link chooses the key material.
+func TestKeyFileSymlinkRefused(t *testing.T) {
+	target := keyFile(t, keyLine(1, 1))
+	link := filepath.Join(t.TempDir(), "master-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+	keys, err := secret.Load(link)
+	if keys != nil || err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("a symlink to a key file loaded as %v; want a regular-file refusal", err)
+	}
+	if strings.Contains(err.Error(), link) || strings.Contains(err.Error(), target) {
+		t.Fatal("the refusal quotes a path")
+	}
+}
+
 func TestKeyFilePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows mode bits do not represent NTFS ACLs")
@@ -93,6 +114,33 @@ func TestKeyFileLineEndings(t *testing.T) {
 	} {
 		loadKeys(t, content)
 	}
+}
+
+// TestKeyMaterialFormatting: the types that hold key bytes are printed into a log line or an error as easily as a
+// Secret is, so they redact every verb rather than the verbs their authors remembered.
+func TestKeyMaterialFormatting(t *testing.T) {
+	path := keyFile(t, keyLine(1, 1))
+	master, err := secret.LoadMaster(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac, err := secret.LoadMAC(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shapes := []any{master, *master, mac, *mac}
+	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d", "%b", "%o", "%U", "%t", "%f", "%e", "%g", "%20.3s", "%+020v", "%#q", "%Z"} {
+		for _, shape := range shapes {
+			t.Run(format, func(t *testing.T) { assertRedacted(t, fmt.Sprintf(format, shape)) })
+		}
+	}
+	var logs bytes.Buffer
+	for _, handler := range []slog.Handler{
+		slog.NewTextHandler(&logs, nil), slog.NewJSONHandler(&logs, nil),
+	} {
+		slog.New(handler).Info("keys", slog.Any("master", master), slog.Any("mac", mac))
+	}
+	assertRedacted(t, logs.String())
 }
 
 // TestReportWaitsForCheck: a ring read from a file alone has checked no fingerprint, so it must not let a heartbeat

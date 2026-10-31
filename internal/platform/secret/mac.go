@@ -4,6 +4,9 @@ import (
 	"cmp"
 	"crypto/hmac"
 	"crypto/sha256"
+	"fmt"
+	"io"
+	"log/slog"
 	"maps"
 	"slices"
 )
@@ -14,7 +17,7 @@ const macFileVariable = "AXIOM_KEY_HASH_FILE"
 // secret key cannot be checked against guesses by whoever reads the table. The file has the master key file's format
 // and protection; versions let the key rotate while hashes made under the old one are still found. Immutable after
 // LoadMAC, so goroutines share it.
-type MACKeys struct {
+type MACKeys struct { //nolint:recvcheck // the other methods read the snapshot; Format and LogValue take a value so a dereferenced copy redacts too
 	keys     map[uint32][32]byte
 	versions []uint32 // newest first
 }
@@ -28,6 +31,15 @@ func LoadMAC(path string) (*MACKeys, error) {
 	versions := slices.SortedFunc(maps.Keys(keys), func(a, b uint32) int { return cmp.Compare(b, a) })
 	return &MACKeys{keys, versions}, nil
 }
+
+// Format redacts every verb, for the reason MasterKeys does: the keys are what an API key's hash is verifiable against,
+// so printing them would let whoever reads the log check guesses against the table.
+func (MACKeys) Format(state fmt.State, _ rune) {
+	_, _ = io.WriteString(state, redacted) //nolint:errcheck // fmt's output buffer cannot fail.
+}
+
+// LogValue keeps structured handlers from inspecting the keys behind the fields.
+func (MACKeys) LogValue() slog.Value { return slog.StringValue(redacted) }
 
 // Versions lists the key versions, newest first; the first is the one new hashes are made with.
 func (m *MACKeys) Versions() []uint32 { return slices.Clone(m.versions) }

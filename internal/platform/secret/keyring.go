@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"runtime"
 	"slices"
@@ -83,7 +84,7 @@ func (s *keySnapshot) withConfirmed(versions []uint32) *keySnapshot {
 // MasterKeys is one read of the master key file. The ring a node checks and seals with and the login and mail keys
 // derived from the file's highest version come from these bytes, so a file replaced during startup cannot mix two snapshots; the
 // plaintext stays here and callers receive only the ring and the derived keys.
-type MasterKeys struct {
+type MasterKeys struct { //nolint:recvcheck // the other methods read the snapshot; Format and LogValue take a value so a dereferenced copy redacts too
 	keys   map[uint32][32]byte
 	latest uint32
 }
@@ -104,6 +105,15 @@ func (m *MasterKeys) Keyring() *Keyring {
 	ring.state.Store(newSnapshot(m.keys, m.latest))
 	return ring
 }
+
+// Format redacts every verb, the invalid ones included: fmt prints a struct's fields by reflection when a verb does not
+// apply, so a String method alone would still let `%x` or a mistyped verb write the keys out.
+func (MasterKeys) Format(state fmt.State, _ rune) {
+	_, _ = io.WriteString(state, redacted) //nolint:errcheck // fmt's output buffer cannot fail.
+}
+
+// LogValue keeps structured handlers from inspecting the keys behind the fields.
+func (MasterKeys) LogValue() slog.Value { return slog.StringValue(redacted) }
 
 // Load validates the entire file and uses its legacy highest write version. A database-backed node must use
 // Rotation.Check before sealing: the database's active version overrides this legacy default.
@@ -158,14 +168,12 @@ func readKeyFile(variable, path string) (map[uint32][32]byte, uint32, error) {
 	if path == "" {
 		return nil, 0, fmt.Errorf("%s: required", variable)
 	}
-	file, err := os.Open(path) // #nosec G304 -- The trusted startup configuration selects the key file.
+	// Lstat, not Stat: opening follows a link, and the writer refuses to replace one because rename replaces the
+	// directory entry, so a link would read one file's bytes and rotate another's. Whoever can point the variable at a
+	// link would otherwise choose the master key the node seals under while the deployment keeps its own file private.
+	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, 0, fileError(variable, "open", err)
-	}
-	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
-	info, err := file.Stat()
-	if err != nil {
-		return nil, 0, fileError(variable, "stat", err)
 	}
 	if !info.Mode().IsRegular() {
 		return nil, 0, fmt.Errorf("%s: want a regular file", variable)
@@ -174,6 +182,11 @@ func readKeyFile(variable, path string) (map[uint32][32]byte, uint32, error) {
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return nil, 0, fmt.Errorf("%s: permissions must deny all group and other access", variable)
 	}
+	file, err := os.Open(path) // #nosec G304 -- The trusted startup configuration selects the key file.
+	if err != nil {
+		return nil, 0, fileError(variable, "open", err)
+	}
+	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
 	return readKeys(variable, file)
 }
 
