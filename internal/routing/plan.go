@@ -18,6 +18,7 @@ type need struct {
 	preset *Preset
 	over   *Override
 	auto   bool                   // rank across every model: the request named openrouter/auto
+	free   bool                   // rank across the free models: the request named openrouter/free
 	tokens int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
 	demand billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
 	tiers  catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
@@ -34,15 +35,19 @@ func (r *Router) attempts(n *need) int {
 }
 
 // rankAll reports whether one ranking spans every model rather than each model's endpoints first: a global sort, or
-// openrouter/auto, whose whole choice is a comparison between models.
-func (n *need) rankAll() bool { return n.over.SortGlobal || n.auto }
+// openrouter/auto or openrouter/free, whose whole choice is a comparison between models.
+func (n *need) rankAll() bool { return n.over.SortGlobal || n.auto || n.free }
 
-// rankModels ranks the endpoints of every model the request may reach: the models it names, or every model in the
-// snapshot for openrouter/auto, which lets the ranking choose the model. It records why a model was left out.
+// rankModels ranks the endpoints of every model the request may reach: the models it names, every model in the snapshot
+// for openrouter/auto, or the free models for openrouter/free; both routers let the ranking choose the model. It records
+// why a model was left out.
 func (r *Router) rankModels(snap *Snapshot, n *need, rec *Record) []ranked {
 	models := n.in.Models
-	if n.in.Auto {
+	switch {
+	case n.in.Auto:
 		models = snap.models
+	case n.in.Free:
+		models = snap.free
 	}
 	var order []ranked
 	var seen []catalog.ModelID
@@ -78,7 +83,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		return Plan{}, nil, ErrUnknownPreset
 	}
 	n := &need{
-		in: &in, req: in.Req, preset: &preset, over: &in.Override, auto: in.Auto, now: now,
+		in: &in, req: in.Req, preset: &preset, over: &in.Override, auto: in.Auto, free: in.Free, now: now,
 		tokens: inputTokens(in.Req), demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)

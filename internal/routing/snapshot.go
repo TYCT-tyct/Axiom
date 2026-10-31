@@ -100,6 +100,7 @@ type Endpoint struct {
 	Codename  string // the supplier group's public codename; never its real name
 	Model     catalog.ModelID
 	ModelSlug string // the model's catalog slug, frozen with the snapshot so a response names what the route chose
+	Free      bool   // the model is a :free catalog entry, the only kind openrouter/free may choose
 	Owner     Owner
 
 	LiveHealth  *quality.State
@@ -252,6 +253,7 @@ type Snapshot struct {
 	built   time.Time
 	byModel map[catalog.ModelID][]*candidate
 	models  []catalog.ModelID // in id order, for openrouter/auto
+	free    []catalog.ModelID // the free ones, in id order, for openrouter/free
 	presets map[PresetID]Preset
 }
 
@@ -320,10 +322,7 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 
 		s.byModel[e.Model] = append(s.byModel[e.Model], c)
 	}
-	for m := range s.byModel {
-		s.models = append(s.models, m)
-	}
-	slices.SortFunc(s.models, func(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) })
+	s.models, s.free = modelsOf(endpoints)
 	for _, p := range presets {
 		if _, dup := s.presets[p.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: preset %s twice", uuid.UUID(p.ID))
@@ -339,6 +338,27 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 	}
 	return s, nil
 }
+
+// modelsOf lists the models in id order, and the free ones among them in the same order: a model is free when its
+// endpoint serves the catalog's :free entry, and those are the only ones openrouter/free may choose.
+func modelsOf(endpoints []Endpoint) (models, free []catalog.ModelID) {
+	isFree := make(map[catalog.ModelID]bool, len(endpoints))
+	for _, e := range endpoints {
+		isFree[e.Model] = isFree[e.Model] || e.Free
+	}
+	for m, f := range isFree {
+		models = append(models, m)
+		if f {
+			free = append(free, m)
+		}
+	}
+	slices.SortFunc(models, compareModelID)
+	slices.SortFunc(free, compareModelID)
+	return models, free
+}
+
+// compareModelID orders models as bytes, the order of the database's uuids.
+func compareModelID(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) }
 
 func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrices][]candidatePrice) (*candidate, error) {
 	c, err := r.candidate(e)
