@@ -238,7 +238,7 @@ USD 表用 USD / 百万 token，DeepSeek CNY 表用人民币 / 百万 token；�
 
 | 模型 | 页面 | LiteLLM | OpenRouter | 结论 |
 |---|---|---|---|---|
-| `deepseek-flash` | 高峰 0.30 / 1.20 / 0.006 | 同页面高峰 | 基价是低谷 0.15 / 0.60 / 0.003，高峰在 `overrides` | OpenRouter 的基价不是目录要的高峰价；catalog 只录高峰，不能把 OpenRouter 选作来源 |
+| `deepseek-flash` | 高峰 0.30 / 1.20 / 0.006 | 同页面高峰 | `deepseek/deepseek-v4.1-flash-1017` 的基价是低谷 0.15 / 0.60 / 0.003，高峰在 `overrides` | OpenRouter 的条目 ID 与目录 slug 不同，基价也不是目录要的高峰价；catalog 只录高峰，不能把 OpenRouter 选作来源 |
 | `deepseek-v4-pro` | 1.32 / 3.96 / 0.044 | 同页面 | `deepseek/deepseek-v4-pro` 1.60 / 3.20 / 0.135，`-0813` 0.115 / 4.00 / 0.11 | OpenRouter 与页面、LiteLLM 都不一致 |
 | `google/gemini-3.8-flash` | 0.75 / 3.75 / 0.075 | 同页面 | 0.825 / 4.125 / 0.0825 | OpenRouter 高 10% |
 | `anthropic/claude-haiku-5.5` | ≤100k 0.10 / 0.50 / 0.01；>100k 0.50 / 2.50 / 0.05 | 只有基础档 | 基础档 + `overrides`，数值与页面一致 | OpenRouter 能表达分档但按设计 held（数据集的阈值依据未写明）；LiteLLM 没有分档，当前价目表有分档时也不能跟随 |
