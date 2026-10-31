@@ -1124,6 +1124,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/redeem-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The redeem codes this account redeemed, newest first
+         * @description One page of the credit this account got from redeem codes, newest first: each redemption's credit, when it was redeemed, and when the credit expires. It never shows a code, only its last four characters, so the history is not a way to recover one. Needs `balance.view`, like every read of the account's money.
+         */
+        get: operations["listRedemptions"];
+        put?: never;
+        /**
+         * Redeem a code into credit
+         * @description Turns a code the site issued into a credit batch of the account's currency, with the code's expiry, and records it in the account's history. A code credits once, whichever account redeems it: `201` is the credit this request made, `200` is the credit an earlier request with the same `Idempotency-Key` made (the answer was lost; the key is reused, not the code), and a code already redeemed with another key is `conflict`. A code that is unknown, expired or disabled is `unprocessable`; a code is never echoed in an answer or an error.
+         *
+         *     Attempts that fail are limited per account and per network, an hour at a time: past the limit the request is `rate_limited` with `Retry-After` the seconds until the window is over, and the attempt is counted before the code is looked at. A replay of the key is not an attempt. If the counting itself fails, the request is refused (`internal`), never let through.
+         */
+        post: operations["redeemCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1287,13 +1313,36 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits. */
         Money: {
             /** @example 1500000000 */
             amount: string;
             /** @example USD */
             currency: string;
+        };
+        RedeemCodeRequest: {
+            /** @description The code as issued, with or without its dashes or spaces, in any case. */
+            code: string;
+        };
+        RedeemCodeRedemption: {
+            /** @description The redemption's ID (TypeID), also the credit batch's. */
+            id: string;
+            amount: components["schemas"]["Money"];
+            /** @description The code's last four characters; never the code. */
+            code_hint: string;
+            /**
+             * Format: date-time
+             * @description When the credit expires; absent: never.
+             */
+            expires_at?: string;
+            /** Format: date-time */
+            redeemed_at: string;
+        };
+        RedeemCodeHistory: {
+            data: components["schemas"]["RedeemCodeRedemption"][];
+            /** @description Absent on the last page. */
+            next_cursor?: string;
         };
         Version: {
             /**
@@ -1451,10 +1500,10 @@ export interface components {
             /** @description The batch's own identity; paid credit uses the order's ID as the batch ID. */
             id: string;
             /**
-             * @description `gift`: credit given by an operator; `paid`: credit bought through a payment.
+             * @description `gift`: credit given by an operator; `paid`: credit bought through a payment; `redeem`: credit a redeem code gave.
              * @enum {string}
              */
-            source: "gift" | "paid";
+            source: "gift" | "paid" | "redeem";
             amount: components["schemas"]["Money"];
             remaining: components["schemas"]["Money"];
             frozen: components["schemas"]["Money"];
@@ -1467,10 +1516,10 @@ export interface components {
             expires_at?: string;
         };
         /**
-         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
          * @enum {string}
          */
-        StatementKind: "top_up" | "gift" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
+        StatementKind: "top_up" | "gift" | "redeem" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
         /** @description One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded, or null for a movement recorded before the ledger numbered them: those are listed by their timestamps, which do not prove the order they were posted in, so the balance between two of them is not known. */
         StatementRow: {
             /** @description The row's own identity, to tell two rows apart; it names no ledger entry. */
@@ -3881,6 +3930,78 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listRedemptions: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the account's redemptions, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeHistory"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    redeemCode: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A key the caller chooses for one intended redemption, 1 to 128 of letters, digits and `._:-` (a UUID is fine). */
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description The credit an earlier request with this key made. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeRedemption"];
+                };
+            };
+            /** @description The credit this code made. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemCodeRedemption"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
             default: components["responses"]["Failure"];
         };
     };

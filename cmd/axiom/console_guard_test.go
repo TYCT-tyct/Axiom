@@ -46,6 +46,8 @@ var sessionOperations = []endpoint{
 	{http.MethodPut, someKey, `{"name":"k","disabled":false}`},
 	{http.MethodDelete, someKey, ""},
 	{http.MethodGet, "/balance", ""},
+	{http.MethodGet, "/redeem-codes", ""},
+	{http.MethodPost, "/redeem-codes", `{"code":"AAAAA-BBBBB-CCCCC-DDDDD"}`},
 	{http.MethodGet, "/statement", ""},
 	{http.MethodGet, "/statement.csv", ""},
 	{http.MethodGet, "/calls", ""},

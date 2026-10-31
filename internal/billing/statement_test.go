@@ -36,6 +36,7 @@ func TestStatementKinds(t *testing.T) {
 	}{
 		{"credit", "gift", StatementGift},
 		{"credit", "paid", StatementTopUp},
+		{"credit", "redeem", StatementRedeem},
 		{"settle", "", StatementSpend},
 		{"expire", "", StatementExpiry},
 		{"refund", "", StatementRefund},

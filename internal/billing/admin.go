@@ -14,7 +14,7 @@ import (
 // for paid credit what was paid, where, and the exchange rate version it was converted at (zero in one currency).
 type CreditBatch struct {
 	ID, Site, Account uuid.UUID
-	Source            string // gift or paid
+	Source            string // gift, paid or redeem
 	Amount            int64  // billionths of a credit
 	ExpiresAt         *time.Time
 	CreatedAt         time.Time

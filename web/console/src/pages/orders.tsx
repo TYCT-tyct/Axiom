@@ -3,7 +3,7 @@ import {
   type Attempt,
   accountKey,
   can,
-  failed,
+  failedFrom,
   LoadMore,
   opened,
   type Sendable,
@@ -345,10 +345,7 @@ function useRefundRequest(order: Schemas["Order"], change: (next: Attempt<Refund
       void client.invalidateQueries({ queryKey: balanceQuery.queryKey });
       onDone();
     },
-    onError: (error, sent) => {
-      setFailure(error);
-      change(failed(sent.from, sent.request, error, () => crypto.randomUUID()));
-    },
+    onError: failedFrom(change, setFailure),
   });
   return { failure, pending: refund.isPending, mutate: refund.mutate };
 }

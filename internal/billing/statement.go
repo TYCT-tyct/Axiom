@@ -20,7 +20,8 @@ type StatementKind string
 const (
 	StatementTopUp    StatementKind = "top_up" // paid credit, from a payment or an offline channel
 	StatementGift     StatementKind = "gift"
-	StatementSpend    StatementKind = "spend" // one call's charge
+	StatementRedeem   StatementKind = "redeem" // credit a redeem code gave
+	StatementSpend    StatementKind = "spend"  // one call's charge
 	StatementExpiry   StatementKind = "expiry"
 	StatementRefund   StatementKind = "refund"
 	StatementReversal StatementKind = "reversal"
@@ -203,6 +204,8 @@ func statementKind(kind, source string) (StatementKind, error) {
 			return StatementGift, nil
 		case "paid":
 			return StatementTopUp, nil
+		case "redeem":
+			return StatementRedeem, nil
 		}
 		return "", fmt.Errorf("a credit from the batch source %q is not a statement kind", source)
 	case "settle":
