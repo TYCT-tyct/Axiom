@@ -112,13 +112,10 @@ func (c *cluster) open() *pg.DB {
 	return db
 }
 
-func (c *cluster) node(holder string) *persist.Node { return c.nodeWith(holder, false) }
-
-func (c *cluster) nodeWith(holder string, directFormats bool) *persist.Node {
+func (c *cluster) node(holder string) *persist.Node {
 	c.t.Helper()
 	n, err := persist.New(persist.Config{
 		DB: c.open(), Scope: platform, Keys: c.keys, Holder: holder, LeaseTTL: ttl, Now: c.clock.now, Catalog: c.catalog,
-		DirectFormats: directFormats,
 	})
 	if err != nil {
 		c.t.Fatal(err)

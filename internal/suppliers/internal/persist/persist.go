@@ -46,9 +46,6 @@ type Config struct {
 	// Catalog says what an upstream name is. It is required: without it every model would wait in the queue of names to
 	// map and every endpoint would be taken out of routing.
 	Catalog Catalog
-	// DirectFormats lets the projection write embeddings and rerank. It stays false until every node that may read
-	// these tables can parse them: an older node drops a whole supplier on a format it does not know.
-	DirectFormats bool
 }
 
 // Node takes leases for one process.

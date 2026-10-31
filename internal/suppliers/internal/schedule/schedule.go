@@ -114,12 +114,11 @@ func New(cfg Config) (*Schedule, error) {
 	}
 	node, err := persist.New(persist.Config{
 		DB: cfg.DB, Scope: cfg.Scope, Keys: cfg.Keys, Holder: cfg.Holder, LeaseTTL: leaseTTL, Now: cfg.Now, Catalog: cat,
-		DirectFormats: cfg.DirectFormats,
 	})
 	if err != nil {
 		return nil, err
 	}
-	s := &Schedule{cfg: cfg, node: node, settings: settings()}
+	s := &Schedule{cfg: cfg, node: node, settings: settings(cfg.DirectFormats)}
 	if err := river.AddWorkerSafely(cfg.Queue.Workers(), river.WorkFunc(s.workSync)); err != nil {
 		return nil, err
 	}
@@ -142,9 +141,10 @@ func (cfg Config) check() error {
 }
 
 // settings are the engine's defaults, with the backoff spread by a tenth so that suppliers that failed together do not
-// try again together.
-func settings() syncer.Settings {
+// try again together, and the node's gate on the direct formats.
+func settings(directFormats bool) syncer.Settings {
 	s := syncer.Defaults()
+	s.DirectFormats = directFormats
 	s.Jitter = func(d time.Duration) time.Duration { return d + rand.N(d/10+1) } //nolint:gosec // spreads retries in time; nothing depends on it being unpredictable
 	return s
 }

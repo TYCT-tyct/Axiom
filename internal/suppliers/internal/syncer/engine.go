@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"axiom/internal/catalog"
+	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 )
 
@@ -40,6 +41,10 @@ type Settings struct {
 	MaxPages int
 	// LowBalance is the balance under which BalanceLow is sent.
 	LowBalance adapter.Amount
+	// DirectFormats lets the state keep embeddings and rerank. While it is false the state holds only the formats a
+	// pre-P18 node can name: such a node may load this state for any task and project it, and a name it does not know
+	// fails its whole step.
+	DirectFormats bool
 }
 
 // Defaults are the design's values.
@@ -276,7 +281,7 @@ func (e *Engine) catalog(ctx context.Context, c *Commit) error {
 	plans := map[string]string{}
 	var groups []GroupSnap
 	for _, g := range page.Items {
-		snap, err := group(c, g, prev[g.Ref], plans)
+		snap, err := group(c, g, prev[g.Ref], plans, e.set.DirectFormats)
 		if err != nil {
 			return err
 		}
@@ -292,32 +297,61 @@ func (e *Engine) catalog(ctx context.Context, c *Commit) error {
 	return nil
 }
 
-func group(c *Commit, g adapter.Group, before GroupSnap, plans map[string]string) (GroupSnap, error) {
+// group is the snapshot of one group the listing read. Unless direct is set, a model keeps only the formats a pre-P18
+// node can name, and a model the gate leaves with none is not listed: the formats column needs at least one.
+func group(c *Commit, g adapter.Group, before GroupSnap, plans map[string]string, direct bool) (GroupSnap, error) {
 	snap := GroupSnap{Ref: g.Ref, Name: g.Name, Ratio: string(g.Ratio), Facts: string(g.Facts)}
 	if g.ModelsUnread {
-		// Nothing was read: the models stay as they were, and only a confirmed base follows a changed ratio.
-		for _, m := range before.Models {
-			plan, err := plan(c, g, adapter.Model{UpstreamName: m.Name}, m.Plan, plans)
-			if err != nil {
-				return snap, err
-			}
-			snap.Models = append(snap.Models, ModelSnap{Name: m.Name, Formats: m.Formats, Without: m.Without, Plan: plan})
-		}
-		return snap, nil
+		return keptGroup(c, g, snap, before, plans, direct)
 	}
 	for _, m := range g.Models {
+		reported := make([]int, len(m.Formats))
+		for i, f := range m.Formats {
+			reported[i] = int(f)
+		}
+		formats, held := storable(reported, direct)
+		if held {
+			continue
+		}
 		plan, err := plan(c, g, m, "", plans)
 		if err != nil {
 			return snap, err
-		}
-		formats := make([]int, len(m.Formats))
-		for i, f := range m.Formats {
-			formats[i] = int(f)
 		}
 		snap.Models = append(snap.Models, ModelSnap{Name: m.UpstreamName, Formats: formats, Without: m.Without, Plan: plan})
 	}
 	sort.Slice(snap.Models, func(i, j int) bool { return snap.Models[i].Name < snap.Models[j].Name })
 	return snap, nil
+}
+
+// keptGroup is the snapshot of a group whose models were not read: they stay as they were, behind the same gate, and
+// only a confirmed base follows a changed ratio.
+func keptGroup(c *Commit, g adapter.Group, snap, before GroupSnap, plans map[string]string, direct bool) (GroupSnap, error) {
+	for _, m := range before.Models {
+		formats, held := storable(m.Formats, direct)
+		if held {
+			continue
+		}
+		plan, err := plan(c, g, adapter.Model{UpstreamName: m.Name}, m.Plan, plans)
+		if err != nil {
+			return snap, err
+		}
+		snap.Models = append(snap.Models, ModelSnap{Name: m.Name, Formats: formats, Without: m.Without, Plan: plan})
+	}
+	return snap, nil
+}
+
+// preP18Formats are the formats a node released before P18 can name. It names what that node knows rather than what is
+// new, so a format added later is held back too until the gate opens.
+var preP18Formats = []int{int(protocol.Messages), int(protocol.Responses), int(protocol.Chat)}
+
+// storable is the formats the state may keep: all of them once the gate is open, else only those of preP18Formats.
+// held reports a model the gate leaves with none, which is then not listed until it opens.
+func storable(formats []int, direct bool) (kept []int, held bool) {
+	if direct {
+		return formats, false
+	}
+	kept = slices.DeleteFunc(slices.Clone(formats), func(f int) bool { return !slices.Contains(preP18Formats, f) })
+	return kept, len(kept) == 0 && len(formats) > 0
 }
 
 // plan decides the cost plan of one endpoint and returns its fingerprint, or "" when the cost is unknown: a schedule

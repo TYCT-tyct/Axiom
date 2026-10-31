@@ -554,8 +554,7 @@ func TestAListingTheDatabaseRefusesWritesNothing(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t)
 	c.model("gpt-4o", catalog.StatusListed)
-	// The gate is open: a closed one leaves out every format a pre-P18 node cannot read before the store sees it.
-	s := c.acquire(c.nodeWith("a", true))
+	s := c.acquire(c.node("a"))
 	// The second model asks for a call format the store has no name for, which the projection cannot write: the group is
 	// written before it fails, and must be gone with it.
 	bad := listing(1, []listedGroup{{ref: "default", name: "Default", ratio: "1", models: []listedModel{

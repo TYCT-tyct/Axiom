@@ -24,7 +24,7 @@
 
 - WebSocket 的升级请求一律拒绝，回 400 `invalid_request`。
 
-- **直接格式**：`/v1/embeddings`、`/v1/rerank` 与其余调用路径一样，同时以 `/v1/...` 和 `/api/v1/...` 提供。embeddings、rerank 是“直接格式”：上游回一份 JSON，不流式，网关读完整份、结算后原样改写回复（见「转发规则」）。两者都只走原生端点，不做格式转换；一个供应商模型记录必须把 `embeddings` 或 `rerank` 写进 `formats` 才会被路由到，端点路径分别是 `/v1/embeddings`、`/v1/rerank`。同步写入 embeddings、rerank 由 `AXIOM_DIRECT_FORMATS` 控制（默认 `off`，关闭时只写 messages、responses、chat）：先把兼容读取的版本铺到所有节点并保持关闭，确认旧节点退出后再在全部节点开启，避免旧版本读到不认识的格式而摘掉整家供应商（[suppliers 的 README](../../internal/suppliers/README.md)）。
+- **直接格式**：`/v1/embeddings`、`/v1/rerank` 与其余调用路径一样，同时以 `/v1/...` 和 `/api/v1/...` 提供。embeddings、rerank 是“直接格式”：上游回一份 JSON，不流式，网关读完整份、结算后原样改写回复（见「转发规则」）。两者都只走原生端点，不做格式转换；一个供应商模型记录必须把 `embeddings` 或 `rerank` 写进 `formats` 才会被路由到，端点路径分别是 `/v1/embeddings`、`/v1/rerank`。同步写入 embeddings、rerank 由 `AXIOM_DIRECT_FORMATS` 控制（默认 `off`，关闭时同步状态和投影都只有 messages、responses、chat）：先把兼容读取的版本铺到所有节点并保持关闭，确认旧节点退出后再在全部节点开启，避免旧版本读到不认识的格式而摘掉整家供应商（[suppliers 的 README](../../internal/suppliers/README.md)）。
 - **`/embeddings/models` 没有提供**：OpenRouter 另有这个列表，但本站在模型目录里还没有“输出模态”这一事实，嵌入模型没有输出价，默认也不会出现在 `/api/v1/models`，更没有单独列表。调用按请求里的 `model` 走，见「待定问题」。
 - **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 与 `GET /api/v1/models/{model}` 返回 OpenRouter 的模型对象（价格取准入账户及当前等级的主站发布售价，带 `context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning`，外壳是 `data`/`links.next`/`total_count`），并读 OpenRouter 文档里的查询参数；`/v1/models` 仍是 OpenAI 与 Anthropic 的合并形，两种客户端各读各的。逐项的差距见 [OpenRouter 能力对照表](../openrouter-parity.md)。
 - **挂载**：`/v1/` 与 `/api/v1/` 只挂在节点的公开监听上，管理端监听不提供；它们在控制台的 API 和网站页面之前截走，不经过控制台那一层的响应压缩（网关自己写应答、自己决定何时 flush），也不会被控制台 API 的 404 回答。所以客户端只需要知道站点的 API 域名，认 key 的规则见下文「鉴权」。节点在路由快照可用之前不报告就绪（见[运维的「节点启动自检」](operations.md#部署与节点管理)）。

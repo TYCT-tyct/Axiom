@@ -16,7 +16,4 @@ const (
 	// NoFormat is a name the listing still has in a group nothing can be called from — one sold by subscription, or one
 	// whose price changes by the hour: its formats are none, so it is not a model of the supplier at all.
 	NoFormat Reason = "no call format is served here"
-	// DirectFormatOff is a name the listing serves only in a format this deployment has not enabled writing yet: it
-	// waits for the compatibility gate rather than disappearing from the listing.
-	DirectFormatOff Reason = "direct formats are not enabled on this deployment"
 )
