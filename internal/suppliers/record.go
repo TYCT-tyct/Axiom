@@ -294,6 +294,7 @@ func EndRequest(ctx context.Context, tx pg.Tx, id platform.RequestID, site, acco
 }
 
 // EndedRequest is one request's end: the database time it ended at and the tenant that owns it.
+// EndedRequest is one request's terminal time for EndRequests, with the tenant that owns it.
 type EndedRequest struct {
 	Request, Site, Account uuid.UUID
 	At                     time.Time
