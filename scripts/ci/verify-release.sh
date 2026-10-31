@@ -54,6 +54,10 @@ if [ -n "$metadata" ]; then
   [ -n "$recorded_sbom" ] || die "release record has no sbom_sha256"
   actual_sbom=$(sha256sum "$sbom" | cut -d ' ' -f1)
   [ "$actual_sbom" = "$recorded_sbom" ] || die "the SBOM $sbom hashes to $actual_sbom, not the recorded $recorded_sbom"
+  # jq -s accepts JSON Lines and several top-level values; the artifact promises one SPDX document, and a trailing
+  # object must not be silently ignored by the predicate comparison below.
+  jq -e -s 'length == 1 and (.[0] | type == "object")' "$sbom" > /dev/null \
+    || die "the SBOM $sbom must be exactly one JSON object"
 fi
 
 temps=()
@@ -89,10 +93,7 @@ jq -s -c --arg digest "${digest#sha256:}" '
 # Compare the retained SBOM with the signed predicate, not with the record: whoever swaps the file can update the record
 # in the same edit, but cannot make the signature cover the new bytes.
 if [ -n "${sbom:-}" ]; then
-  canonical_sbom=$(mktemp)
-  temps+=("$canonical_sbom")
-  jq -S . "$sbom" > "$canonical_sbom" || die "the SBOM $sbom is not valid JSON"
-  jq -e --slurpfile sbom "$canonical_sbom" 'any(.[]; . == $sbom[0])' "$predicates" > /dev/null \
+  jq -e --slurpfile sbom "$sbom" 'any(.[]; . == $sbom[0])' "$predicates" > /dev/null \
     || die "the SBOM $sbom is not the verified attestation's predicate"
 fi
 

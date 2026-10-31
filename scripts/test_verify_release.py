@@ -36,7 +36,7 @@ esac
 
 class VerifyRelease(unittest.TestCase):
     def run_verify(self, image=IMAGE, metadata=None, env=None, verify_status=0, attest_status=0, subject_digest="",
-                   sbom=None, sbom_sha256=None):
+                   sbom=None, sbom_sha256=None, sbom_raw=None):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bindir = root / "bin"
@@ -54,7 +54,7 @@ class VerifyRelease(unittest.TestCase):
             environment.update(env or {})
             args = [image]
             if metadata is not None:
-                document = json.dumps(PREDICATE if sbom is None else sbom)
+                document = json.dumps(PREDICATE if sbom is None else sbom) if sbom_raw is None else sbom_raw
                 (root / "sbom.spdx.json").write_text(document)
                 record = dict(metadata)
                 if "sbom_sha256" not in record:
@@ -159,6 +159,13 @@ class VerifyRelease(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("verified", result.stdout)
         self.assertEqual(len(calls), 2)
+
+    def test_refuses_an_sbom_with_a_second_top_level_value(self):
+        document = json.dumps(PREDICATE) + "\n" + json.dumps({"spdxVersion": "SPDX-2.3", "name": "trailing"})
+        result, calls = self.run_verify(metadata=self.record(), sbom_raw=document)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exactly one JSON object", result.stderr)
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":
