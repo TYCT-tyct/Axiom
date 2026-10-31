@@ -18,6 +18,7 @@ import (
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/mail"
+	"axiom/internal/platform/objectstore"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/telemetry"
@@ -65,6 +66,8 @@ func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
 
 // serveWith lets a test capture its recorder and opt into price syncing with local datasets. A nil prices constructor
 // disables the periodic price job, so tests of the listeners and call path never download the production datasets.
+//
+//nolint:funlen,cyclop // startup order is the contract: listeners drain before the recorder, the queue, the cache and the database.
 func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
 	prices func(*egress.Client) *catalog.Fetcher,
@@ -80,13 +83,29 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
+	archive, err := openArchiveStore(cfg.objectstore)
+	if err != nil {
+		return err
+	}
+	var archiveStore observability.ArchiveStore
+	if archive != nil {
+		archiveStore = archive
+		defer archive.Close()
+	}
 	tel, db, master, err := openCoreNode(ctx, cfg, console.master, logger)
 	if err != nil {
 		return err
 	}
 	defer tel.Shutdown(context.WithoutCancel(ctx)) //nolint:errcheck // nothing exports yet, so there is nothing to lose
 	defer db.Close()                               // after the listeners and the recorder close: requests in flight may still need it
-	console.master = master                        // the same ring, with the check's write version
+	retentionDB, err := openRetentionDB(ctx, cfg.retentionURL, archive != nil)
+	if err != nil {
+		return err
+	}
+	if retentionDB != nil {
+		defer retentionDB.Close()
+	}
+	console.master = master // the same ring, with the check's write version
 
 	exit, err := outbound(tel)
 	if err != nil {
@@ -102,7 +121,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer stopCache()
-	queue, recorder, recovery, registration, err := startBackground(syncCtx, db, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, tel, logger, cfg.shutdownTimeout, record)
+	queue, recorder, recovery, registration, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, archiveStore, tel, logger, cfg.shutdownTimeout, record)
 	if err != nil {
 		return err
 	}
@@ -262,9 +281,11 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 // reconciliation, the ledger's daily check and the expiry of credit on the money queue. Each queue has its own workers,
 // so a burst of syncs cannot hold a money job back (internal/platform/README.md「任务队列」). It reaches the suppliers and
 // the datasets through exit, the client the whole node shares.
-func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
+//
+//nolint:cyclop // every registration is checked in order; the order is the queue's startup contract.
+func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
 	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	tel *telemetry.Telemetry, logger *slog.Logger,
+	archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger,
 ) (*pg.Queue, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	recovery, registration, err := registerNotifications(ctx, db, queue, smtp, cache, master, keys, exit, logger)
@@ -304,6 +325,12 @@ func startSync(ctx context.Context, db *pg.DB, smtp mail.Config, cache *kv.Clien
 	if err := billing.RegisterCorrections(billing.CorrectConfig{
 		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
 	}); err != nil {
+		return nil, nil, nil, err
+	}
+	// The call log's partitions move to the object store and leave PostgreSQL on the archive queue; with no bucket
+	// they stay, because a drop without a confirmed archive loses records. It connects as its own login, so SQL run as
+	// the application cannot own or drop the log tables.
+	if err := registerRetention(retentionDB, archive, queue, tel, logger); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := suppliers.RegisterReconcile(suppliers.ReconcileJobConfig{
@@ -421,13 +448,13 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 // startBackground starts what serves the call path and outlives it: the call-record writer and the job queue. Both are
 // closed on every way out (closeRecorder, stopQueue), before the database they use; a queue that fails to start closes
 // the recorder it had already started, since the caller has no defer of its own yet.
-func startBackground(ctx context.Context, db *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
+func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
+	archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	recorder := record(ctx, db, tel, logger)
-	queue, recovery, registration, err := startSync(ctx, db, smtp, cache, master, keys, exit, prices, exchangeSource, tel, logger)
+	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, archive, tel, logger)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
 		return nil, nil, nil, nil, err
@@ -467,6 +494,51 @@ func openCache(ctx context.Context, cfg kv.Config, timeout time.Duration, db *pg
 		return nil, fmt.Errorf("shared cache:\n%w", err)
 	}
 	return cache, nil
+}
+
+// openRetentionDB opens the retention job's own login. Without the URL the job does not run; a configured archive bucket
+// without it is refused at startup, because "the archive is on" must not mean a job that never starts.
+func openRetentionDB(ctx context.Context, url string, archive bool) (*pg.DB, error) {
+	if url == "" {
+		if archive {
+			return nil, fmt.Errorf("%s is set but %s is not: the archive needs the retention job's own login", "AXIOM_OBJECTSTORE_ENDPOINT", retentionDatabaseURLVar)
+		}
+		return nil, nil //nolint:nilnil // no URL is a valid state: retention is off
+	}
+	db, err := pg.Open(ctx, url, pg.WithCompletionReserve(1))
+	if err != nil {
+		return nil, fmt.Errorf("retention database:\n%w", err)
+	}
+	if err := observability.CheckRetentionRole(ctx, db, pg.PlatformScope()); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("retention database:\n%w", err)
+	}
+	return db, nil
+}
+
+// registerRetention adds the job when the node has its login, and says so once when it does not.
+func registerRetention(db *pg.DB, archive observability.ArchiveStore, queue *pg.Queue, tel *telemetry.Telemetry, logger *slog.Logger) error {
+	if db == nil {
+		logger.Info("call-log retention is off: " + retentionDatabaseURLVar + " is not set")
+		return nil
+	}
+	return observability.RegisterRetention(observability.RetentionConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Store: archive, Logger: logger,
+		Meter: tel.Metrics.Meter("axiom/observability"),
+	})
+}
+
+// openArchiveStore opens the deployment's object store, or none: a bucket that is not configured turns the call log's
+// archive off and leaves every partition in PostgreSQL.
+func openArchiveStore(cfg objectstore.Config) (*objectstore.Client, error) {
+	client, err := objectstore.Open(cfg)
+	if errors.Is(err, objectstore.ErrNotConfigured) {
+		return nil, nil //nolint:nilnil // no bucket is a valid state: the archive is off
+	}
+	if err != nil {
+		return nil, fmt.Errorf("object store:\n%w", err)
+	}
+	return client, nil
 }
 
 // closeCache ends the cache's loops and deletes the node's heartbeat within timeout, on a context that outlives the one

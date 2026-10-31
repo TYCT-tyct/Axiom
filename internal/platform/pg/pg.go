@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"uuid"
@@ -91,6 +92,17 @@ func (t Tx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error
 // QueryRow runs a query that returns at most one row.
 func (t Tx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
 	return row{t.tx.QueryRow(ctx, sql, hideFromRewriters(args)...)}
+}
+
+// CopyTo runs a COPY … TO STDOUT statement and writes its output to w, returning the rows copied. Callers build the
+// statement themselves: PostgreSQL's COPY takes no parameters, and the only names Axiom copies are partition names it
+// validated. pgx hands out the connection to run it; nothing is handed back.
+func (t Tx) CopyTo(ctx context.Context, w io.Writer, sql string) (int64, error) {
+	tag, err := t.tx.Conn().PgConn().CopyTo(ctx, w, sql)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // SetRole runs the rest of the transaction as role, which the login role must be a member of, like SET LOCAL ROLE:

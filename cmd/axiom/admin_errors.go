@@ -20,6 +20,7 @@ var adminRefusals = []refusal{
 	{payments.ErrStale, http.StatusConflict, codeStaleRevision, "the merchant account changed since it was read"},
 	{payments.ErrTampered, http.StatusConflict, codeConflict, "the merchant account's settings do not match its sealed secrets; enter the secrets again"},
 	{observability.ErrAlertConfiguration, http.StatusUnprocessableEntity, codeUnprocessable, "the alert configuration is invalid"},
+	{observability.ErrRetention, http.StatusUnprocessableEntity, codeUnprocessable, "the hot window is 0 to 3650 days"},
 	{observability.ErrAlertRevision, http.StatusConflict, codeStaleRevision, "the alert configuration changed since it was read"},
 	{idem.ErrReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another request"},
 
