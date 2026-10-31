@@ -157,7 +157,8 @@ WITH reservation AS (
         price_versions, created_at)
     VALUES ($8, $3, $4, $1, $6, $9,
         $2, $7, 1, $5, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8),
-        $11::text[], $12::text[], $13, $14, $15::jsonb, $16, $17)
+        $11::text[], $12::text[], $13, $14, $15::jsonb, $16,
+        to_timestamp($17::bigint / 1000000.0))
 ), balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + $5 WHERE b.account_id = $4
 )
@@ -184,7 +185,7 @@ type InsertReservationParams struct {
 	Endpoints       pgtype.FlatArray[uuid.UUID]
 	ExchangeRates   []byte
 	PriceVersions   pgtype.FlatArray[uuid.UUID]
-	CreatedAt       time.Time
+	CreatedAtUs     int64
 }
 
 // One statement writes the reservation and its three counters. prices, fallbacks, models and endpoints are by route
@@ -209,7 +210,7 @@ func (q *Queries) InsertReservation(ctx context.Context, db DBTX, arg InsertRese
 		arg.Endpoints,
 		arg.ExchangeRates,
 		arg.PriceVersions,
-		arg.CreatedAt,
+		arg.CreatedAtUs,
 	)
 	return err
 }

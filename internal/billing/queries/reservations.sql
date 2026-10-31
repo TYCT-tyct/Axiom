@@ -55,7 +55,8 @@ WITH reservation AS (
         price_versions, created_at)
     VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
         @workspace_window, @key_window, 1, @amount, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @lifetime_seconds::float8),
-        @prices::text[], @fallbacks::text[], @models, @endpoints, @exchange_rates::jsonb, @price_versions, @created_at)
+        @prices::text[], @fallbacks::text[], @models, @endpoints, @exchange_rates::jsonb, @price_versions,
+        to_timestamp(sqlc.arg(created_at_us)::bigint / 1000000.0))
 ), balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + @amount WHERE b.account_id = @account_id
 )

@@ -114,7 +114,7 @@ func (b *Billing) Reserve(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUI
 		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: usage.Day, KeyWindow: usage.Day, Amount: r.Amount.CeilAmount(),
-		LifetimeSeconds: b.config.Lifetime.Seconds(), CreatedAt: time.Now(),
+		LifetimeSeconds: b.config.Lifetime.Seconds(), CreatedAtUs: time.Now().UnixMicro(),
 	}); err != nil {
 		return nil, nil, fmt.Errorf("billing: write the reservation: %w", err)
 	}
@@ -148,7 +148,7 @@ func (b *Billing) reservationParams(a Admitted, id uuid.UUID, q []Quotable, r Re
 		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: day, KeyWindow: day, Amount: r.Amount.CeilAmount(),
-		LifetimeSeconds: b.config.Lifetime.Seconds(), CreatedAt: at,
+		LifetimeSeconds: b.config.Lifetime.Seconds(), CreatedAtUs: at.UnixMicro(),
 	}, nil
 }
 

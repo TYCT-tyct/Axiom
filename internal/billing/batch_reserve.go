@@ -253,7 +253,7 @@ func insertReservationArgs(p InsertReservationParams) []any {
 	return []any{
 		p.WorkspaceID, p.WorkspaceWindow, p.SiteID, p.AccountID, p.Amount, p.KeyID, p.KeyWindow, p.RequestID,
 		p.HolderID, p.LifetimeSeconds, p.Prices, p.Fallbacks, p.Models, p.Endpoints, p.ExchangeRates, p.PriceVersions,
-		p.CreatedAt,
+		p.CreatedAtUs,
 	}
 }
 
