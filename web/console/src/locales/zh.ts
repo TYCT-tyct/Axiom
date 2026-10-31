@@ -472,6 +472,11 @@ export default {
       unlink: "解除绑定",
       providers: { github: "GitHub", google: "Google", linuxdo: "LinuxDo" },
     },
+    pendingCodes: {
+      failed: "取不到新的恢复码。如果一直失败，请在下面重新生成一组。",
+      retry: "重试",
+      regenerate: "重新生成",
+    },
     oauth: {
       identity_linked: "这个第三方账户已经绑定了其他用户。",
       identity_already_linked: "本站账户已经绑定该提供方的另一个登录，请先解除原有绑定。",

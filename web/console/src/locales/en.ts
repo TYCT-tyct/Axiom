@@ -489,6 +489,11 @@ export default {
       unlink: "Unlink",
       providers: { github: "GitHub", google: "Google", linuxdo: "LinuxDo" },
     },
+    pendingCodes: {
+      failed: "The new recovery codes could not be fetched. If that keeps happening, make new ones below.",
+      retry: "Try again",
+      regenerate: "Make new codes",
+    },
     oauth: {
       identity_linked: "That provider account is already linked to a different user.",
       identity_already_linked: "This account already has a different login from that provider; unlink it first.",

@@ -1,6 +1,8 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
 import {
+  currentSession,
   RecoveryDialog,
+  sessionBinding,
   TotpSetupDialog,
   useBeginTotp,
   useErrors,
@@ -28,8 +30,11 @@ import { registerPasskey } from "../webauthn";
 
 export default function Security() {
   const { t } = useTranslation();
+  const errors = useErrors();
+  const session = useSession();
   const oauth = new URLSearchParams(window.location.search).get("oauth");
-  usePendingRecoveryCodes();
+  const pending = usePendingRecoveryCodes();
+  const [regenerate, setRegenerate] = useState(false);
   return (
     <>
       <PageHeader title={t("nav.security")} description={t("security.description")} />
@@ -37,29 +42,67 @@ export default function Security() {
         {oauth === "identity_linked" || oauth === "identity_already_linked" ? (
           <FormError>{t(`security.oauth.${oauth}`)}</FormError>
         ) : null}
+        {pending.failure ? (
+          <FormError>
+            <p>{t("security.pendingCodes.failed")}</p>
+            <p className="text-t2">{errors.message(pending.failure)}</p>
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button size="sm" onClick={pending.retry}>
+                {t("security.pendingCodes.retry")}
+              </Button>
+              {session.mfa_enabled ? (
+                <Button size="sm" onClick={() => setRegenerate(true)}>
+                  {t("security.pendingCodes.regenerate")}
+                </Button>
+              ) : null}
+            </div>
+          </FormError>
+        ) : null}
         <TwoStep />
         <Passkeys />
         <LinkedAccounts />
         <Invite />
       </div>
+      {regenerate ? <RecoveryDialog onClose={() => setRegenerate(false)} /> : null}
     </>
   );
 }
 
 // usePendingRecoveryCodes takes the codes a provider link left on this session. The link's answer is a redirect, so this
-// page is where they are shown; taking clears them, and a failed call leaves them sealed for the next visit.
+// page is where they are shown; taking clears them on the server. A failed call is reported with a retry, not swallowed:
+// a lost answer may mean the only copy is gone, and the caller then offers to make new codes.
 function usePendingRecoveryCodes() {
   const session = useSession();
   const show = useShowRecoveryCodes();
+  const client = useQueryClient();
+  const [failure, setFailure] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
+  const binding = sessionBinding(session);
   useEffect(() => {
-    void unwrap(consoleApi.POST("/api/console/v1/auth/recovery-codes/take"))
+    const sent = binding;
+    let live = true;
+    unwrap(consoleApi.POST("/api/console/v1/auth/recovery-codes/take"))
       .then(({ recovery_codes }) => {
+        const now = currentSession(client);
+        // A late answer belongs to the session that asked for it; after a sign-out or another account it is dropped.
+        if (!live || !now || sessionBinding(now) !== sent) {
+          return;
+        }
         if (recovery_codes.length > 0) {
-          show({ csrf_token: session.csrf_token, recovery_codes });
+          show({ csrf_token: now.csrf_token, recovery_codes });
+          setFailure(null);
         }
       })
-      .catch(() => undefined);
-  }, [session.csrf_token, show]);
+      .catch((error) => {
+        if (live) {
+          setFailure(error);
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [binding, attempt, client, show]);
+  return { failure, retry: () => setAttempt((count) => count + 1) };
 }
 
 // Starting to enable asks for a new secret and opens the dialog that proves it; nothing is stored until it is proved.
@@ -215,9 +258,15 @@ function usePasskeyChange() {
     setFailure(null);
     try {
       const { token, codes } = await change();
-      const session = await start(token);
-      if (session && codes?.length) {
-        show({ csrf_token: session.csrf_token, recovery_codes: codes });
+      // The codes exist only in the answer that made them: show them before refreshing the session, so a failed refresh
+      // keeps them on screen and the dialog's Done retries the refresh instead of losing the codes.
+      if (codes?.length) {
+        show({ csrf_token: token, recovery_codes: codes });
+      }
+      try {
+        await start(token);
+      } catch {
+        // The dialog holds the codes and retries the session when it closes; the list still reads the new cookie.
       }
       await client.invalidateQueries({ queryKey: passkeysQuery.queryKey });
     } catch (error) {
@@ -379,9 +428,13 @@ function useIdentityActions() {
       const grant = await unwrap(
         consoleApi.DELETE("/api/console/v1/auth/identities/{provider}", { params: { path: { provider } } }),
       );
-      await start(grant.csrf_token);
       if (grant.recovery_codes?.length) {
         show({ csrf_token: grant.csrf_token, recovery_codes: grant.recovery_codes });
+      }
+      try {
+        await start(grant.csrf_token);
+      } catch {
+        // The codes are on screen and Done retries the session; the list still reads through the new cookie.
       }
       await queryClient.invalidateQueries({ queryKey: identitiesQuery.queryKey });
     } catch (error) {

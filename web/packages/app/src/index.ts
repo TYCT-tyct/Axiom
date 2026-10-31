@@ -8,6 +8,16 @@ export { readForm, toInstant, toLocalInput } from "./forms";
 export { LoadMore, Stat } from "./parts";
 export { AppProviders } from "./providers";
 export { QrCode } from "./qr";
-export { accountKey, can, Gate, safeNext, useSession, useSignIn, useStartSession } from "./session";
+export {
+  accountKey,
+  can,
+  currentSession,
+  Gate,
+  safeNext,
+  sessionBinding,
+  useSession,
+  useSignIn,
+  useStartSession,
+} from "./session";
 export { Shell } from "./shell";
 export { RecoveryDialog, TotpSetupDialog, useBeginTotp, useShowRecoveryCodes } from "./totp-dialogs";
