@@ -67,6 +67,8 @@ export function nextWindow(page: { next_cursor?: string | null; since?: string; 
 export type AdminCallFilters = {
   account_id?: string;
   request_id?: string;
+  model?: string;
+  status?: "ok" | "error";
   since?: string;
   until?: string;
 };
@@ -93,6 +95,15 @@ export const adminCallsQuery = (filters: AdminCallFilters) =>
       ),
     initialPageParam: {} as PageWindow,
     getNextPageParam: nextWindow,
+  });
+
+// The operations dashboard: one request for the site's calls, revenue, cost, cash and busiest accounts and models. The
+// window is absolute, so the figures and the links they open keep describing the same calls.
+export const overviewQuery = (since: string, until: string) =>
+  queryOptions({
+    queryKey: [accountKey, "overview", since, until],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/reports/overview`, { params: { query: { since, until } }, signal })),
   });
 
 // The route and the attempts are shown as JSON and may hold integers beyond JavaScript's exact range, so the trace is

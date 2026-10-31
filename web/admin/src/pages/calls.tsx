@@ -1,11 +1,72 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, LoadMore, useSession } from "@axiom/app";
-import { Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, TextField, useFormat } from "@axiom/ui";
+import {
+  Button,
+  DataState,
+  EmptyState,
+  Icon,
+  Notice,
+  PageHeader,
+  Panel,
+  Table,
+  Td,
+  TextField,
+  useFormat,
+} from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { Code, FilterBar, Head, mainCell, PageBody, State, Time, text, toInstant, toLocalInput } from "../parts";
+import { callStatus } from "../overview";
+import {
+  ChoiceFilter,
+  Code,
+  FilterBar,
+  Head,
+  mainCell,
+  PageBody,
+  State,
+  Time,
+  text,
+  toInstant,
+  toLocalInput,
+} from "../parts";
 import { adminCallsQuery } from "../queries";
+
+type CallFilters = {
+  account_id?: string;
+  request_id?: string;
+  model?: string;
+  status?: "ok" | "error";
+  since?: string;
+  until?: string;
+};
+
+function narrowed(filters: CallFilters): boolean {
+  return Boolean(
+    filters.account_id || filters.request_id || filters.model || filters.status || filters.since || filters.until,
+  );
+}
+
+// An older node does not know the model and result filters: it answers without echoing them, and its rows were not
+// narrowed, so the page says so instead of passing them off as the filtered result.
+function unfiltered(filters: CallFilters, page: AdminSchemas["AdminCallList"] | undefined): boolean {
+  return (
+    (filters.model !== undefined && page?.model_filter === undefined) ||
+    (filters.status !== undefined && page?.status_filter === undefined)
+  );
+}
+
+// What the filter form means in the address: text that is blank narrows nothing, and a time is the instant it names.
+function callSearch(values: Record<string, string>) {
+  return {
+    account_id: text(values.account_id),
+    request_id: text(values.request_id),
+    model: text(values.model),
+    status: callStatus(values.status),
+    since: toInstant(values.since),
+    until: toInstant(values.until),
+  };
+}
 
 // The support view of calls: what a person asks about a bill, without costs, endpoints or routes. The operator's trace
 // is a separate page and permission, so this one never shows a field the support role may not read.
@@ -16,24 +77,28 @@ export default function Calls() {
     adminCallsQuery({
       account_id: filters.account_id,
       request_id: filters.request_id,
+      model: filters.model,
+      status: filters.status,
       since: filters.since,
       until: filters.until,
     }),
   );
   const rows = calls.data?.pages.flatMap((page) => page.data ?? []) ?? [];
-  const narrowed = Boolean(filters.account_id || filters.request_id || filters.since || filters.until);
+  const first = calls.data?.pages[0];
+  const unsupported = first !== undefined && unfiltered(filters, first);
   return (
     <>
       <PageHeader title={t("nav.calls")} description={t("calls.description")} />
       <PageBody>
         <Filters filters={filters} />
         <Panel>
+          {unsupported ? <Notice>{t("calls.filters.unsupported")}</Notice> : null}
           <DataState
             query={calls}
             isEmpty={() => rows.length === 0}
             empty={
-              <EmptyState title={narrowed ? t("calls.noMatch.title") : t("calls.empty.title")}>
-                {narrowed ? t("calls.noMatch.body") : t("calls.empty.body")}
+              <EmptyState title={narrowed(filters) ? t("calls.noMatch.title") : t("calls.empty.title")}>
+                {narrowed(filters) ? t("calls.noMatch.body") : t("calls.empty.body")}
               </EmptyState>
             }
           >
@@ -46,28 +111,11 @@ export default function Calls() {
   );
 }
 
-function Filters({
-  filters,
-}: {
-  filters: { account_id?: string; request_id?: string; since?: string; until?: string };
-}) {
+function Filters({ filters }: { filters: CallFilters }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   return (
-    <FilterBar
-      values={filters}
-      onApply={(values) =>
-        navigate({
-          to: "/calls",
-          search: {
-            account_id: text(values.account_id),
-            request_id: text(values.request_id),
-            since: toInstant(values.since),
-            until: toInstant(values.until),
-          },
-        })
-      }
-    >
+    <FilterBar values={filters} onApply={(values) => navigate({ to: "/calls", search: callSearch(values) })}>
       <TextField
         label={t("calls.filters.account")}
         hint={t("calls.filters.accountHint")}
@@ -84,6 +132,25 @@ function Filters({
         defaultValue={filters.request_id}
         autoComplete="off"
         spellCheck={false}
+      />
+      <TextField
+        label={t("calls.filters.model")}
+        hint={t("calls.filters.modelHint")}
+        name="model"
+        defaultValue={filters.model}
+        maxLength={200}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <ChoiceFilter
+        label={t("calls.filters.result")}
+        name="status"
+        value={filters.status}
+        any={t("calls.filters.anyResult")}
+        options={[
+          { value: "ok", label: t("calls.filters.ok") },
+          { value: "error", label: t("calls.filters.error") },
+        ]}
       />
       <TextField
         label={t("calls.filters.since")}

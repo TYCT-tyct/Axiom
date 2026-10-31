@@ -10,6 +10,7 @@ export { Notice } from "./components/notice";
 export { usePageTitle } from "./components/page-title";
 export { Badge, Panel, Table, Td, Th } from "./components/panel";
 export { PreferenceSwitches } from "./components/preferences";
+export { Segmented } from "./components/segmented";
 export { DataState, EmptyState, NotFoundState } from "./components/states";
 export { moneyInput, parseMoney, useFormat } from "./format";
 export type { CommonMessages, Messages } from "./i18n";
