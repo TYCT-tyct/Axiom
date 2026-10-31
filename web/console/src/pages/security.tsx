@@ -1,8 +1,6 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
 import {
-  currentSession,
   RecoveryDialog,
-  sessionBinding,
   TotpSetupDialog,
   useBeginTotp,
   useErrors,
@@ -23,8 +21,9 @@ import {
   useFormat,
 } from "@axiom/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ChangeEvent, useEffect, useState } from "react";
+import { type ChangeEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { usePendingCodes } from "../pending-codes";
 import { identitiesQuery, passkeysQuery, siteQuery } from "../queries";
 import { registerPasskey } from "../webauthn";
 
@@ -33,7 +32,7 @@ export default function Security() {
   const errors = useErrors();
   const session = useSession();
   const oauth = new URLSearchParams(window.location.search).get("oauth");
-  const pending = usePendingRecoveryCodes();
+  const pending = usePendingCodes();
   const [regenerate, setRegenerate] = useState(false);
   return (
     <>
@@ -42,12 +41,12 @@ export default function Security() {
         {oauth === "identity_linked" || oauth === "identity_already_linked" ? (
           <FormError>{t(`security.oauth.${oauth}`)}</FormError>
         ) : null}
-        {pending.failure ? (
+        {pending?.failure ? (
           <FormError>
             <p>{t("security.pendingCodes.failed")}</p>
             <p className="text-t2">{errors.message(pending.failure)}</p>
             <div className="flex flex-wrap gap-2 pt-1">
-              <Button size="sm" onClick={pending.retry}>
+              <Button size="sm" onClick={pending.retry} disabled={pending.pending}>
                 {t("security.pendingCodes.retry")}
               </Button>
               {session.mfa_enabled ? (
@@ -66,43 +65,6 @@ export default function Security() {
       {regenerate ? <RecoveryDialog onClose={() => setRegenerate(false)} /> : null}
     </>
   );
-}
-
-// usePendingRecoveryCodes takes the codes a provider link left on this session. The link's answer is a redirect, so this
-// page is where they are shown; taking clears them on the server. A failed call is reported with a retry, not swallowed:
-// a lost answer may mean the only copy is gone, and the caller then offers to make new codes.
-function usePendingRecoveryCodes() {
-  const session = useSession();
-  const show = useShowRecoveryCodes();
-  const client = useQueryClient();
-  const [failure, setFailure] = useState<unknown>(null);
-  const [attempt, setAttempt] = useState(0);
-  const binding = sessionBinding(session);
-  useEffect(() => {
-    const sent = binding;
-    let live = true;
-    unwrap(consoleApi.POST("/api/console/v1/auth/recovery-codes/take"))
-      .then(({ recovery_codes }) => {
-        const now = currentSession(client);
-        // A late answer belongs to the session that asked for it; after a sign-out or another account it is dropped.
-        if (!live || !now || sessionBinding(now) !== sent) {
-          return;
-        }
-        if (recovery_codes.length > 0) {
-          show({ csrf_token: now.csrf_token, recovery_codes });
-          setFailure(null);
-        }
-      })
-      .catch((error) => {
-        if (live) {
-          setFailure(error);
-        }
-      });
-    return () => {
-      live = false;
-    };
-  }, [binding, attempt, client, show]);
-  return { failure, retry: () => setAttempt((count) => count + 1) };
 }
 
 // Starting to enable asks for a new secret and opens the dialog that proves it; nothing is stored until it is proved.

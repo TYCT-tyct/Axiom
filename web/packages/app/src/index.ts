@@ -15,6 +15,7 @@ export {
   Gate,
   safeNext,
   sessionBinding,
+  useCachedSession,
   useSession,
   useSignIn,
   useStartSession,
