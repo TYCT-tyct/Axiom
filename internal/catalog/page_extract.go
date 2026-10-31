@@ -167,6 +167,9 @@ func appendWordBoundary(text *strings.Builder) {
 	}
 }
 
+// styleValue is the inline style with case and spaces removed, so "display: flex" and "DISPLAY:FLEX" compare alike.
+func styleValue(value string) string { return strings.ToLower(strings.ReplaceAll(value, " ", "")) }
+
 // separatesPriceText reports whether a node starts a new visual run. HTML block tags do; so do the layout classes these
 // price pages use for a block or a flex/grid container. Adjacent inline spans with no such marker stay one word:
 // "<span>$0</span><span>.10</span>" is "$0.10", and "<span>Pri</span><span>cing</span>" is "Pricing".
@@ -181,25 +184,29 @@ func separatesPriceText(n *html.Node) bool {
 		return true
 	}
 	for _, a := range n.Attr {
-		switch a.Key {
-		case "class":
-			for _, class := range strings.Fields(a.Val) {
-				switch class {
-				case "block", "flex", "grid", "table", "list-item", "icon",
-					"material-icons", "material-icons-outlined", "material-symbols-outlined",
-					"material-symbols-rounded", "material-symbols-sharp":
-					return true
-				}
-			}
-		case "style":
-			style := strings.ToLower(strings.ReplaceAll(a.Val, " ", ""))
-			if strings.Contains(style, "display:block") || strings.Contains(style, "display:flex") ||
-				strings.Contains(style, "display:grid") || strings.Contains(style, "display:table") {
-				return true
-			}
+		if a.Key == "class" && separatesPriceClass(a.Val) || a.Key == "style" && separatesPriceStyle(a.Val) {
+			return true
 		}
 	}
 	return false
+}
+
+func separatesPriceClass(value string) bool {
+	for class := range strings.FieldsSeq(value) {
+		switch class {
+		case "block", "flex", "grid", "table", "list-item", "icon",
+			"material-icons", "material-icons-outlined", "material-symbols-outlined",
+			"material-symbols-rounded", "material-symbols-sharp":
+			return true
+		}
+	}
+	return false
+}
+
+func separatesPriceStyle(value string) bool {
+	style := styleValue(value)
+	return strings.Contains(style, "display:block") || strings.Contains(style, "display:flex") ||
+		strings.Contains(style, "display:grid") || strings.Contains(style, "display:table")
 }
 
 // stacksPriceChildren reports whether a node lays its children out on separate lines. A flex row does not; a flex
@@ -209,22 +216,35 @@ func stacksPriceChildren(n *html.Node) bool {
 		return false
 	}
 	for _, a := range n.Attr {
-		switch a.Key {
-		case "class":
-			for _, class := range strings.Fields(a.Val) {
-				if class == "flex-col" || class == "flex-column" || class == "grid" {
-					return true
-				}
-			}
-		case "style":
-			style := strings.ToLower(strings.ReplaceAll(a.Val, " ", ""))
-			if strings.Contains(style, "display:grid") ||
-				strings.Contains(style, "display:flex") && strings.Contains(style, "flex-direction:column") {
-				return true
-			}
+		if a.Key == "class" && stacksPriceClass(a.Val) || a.Key == "style" && stacksPriceStyle(a.Val) {
+			return true
 		}
 	}
 	return false
+}
+
+func stacksPriceClass(value string) bool {
+	for class := range strings.FieldsSeq(value) {
+		switch class {
+		case "flex-col", "flex-column", "grid":
+			return true
+		}
+	}
+	return false
+}
+
+func stacksPriceStyle(value string) bool {
+	style := styleValue(value)
+	return strings.Contains(style, "display:grid") ||
+		strings.Contains(style, "display:flex") && strings.Contains(style, "flex-direction:column")
+}
+
+// wrotePriceText reports whether a child added visible text. A whitespace-only text node does not start a stacked run.
+func wrotePriceText(c *html.Node, before, after int) bool {
+	if c.Type == html.TextNode {
+		return strings.TrimSpace(c.Data) != ""
+	}
+	return after > before
 }
 
 func appendPriceText(text *strings.Builder, n *html.Node) {
@@ -241,16 +261,12 @@ func appendPriceText(text *strings.Builder, n *html.Node) {
 		if skipPriceNode(c) {
 			continue
 		}
-		if (stacked && seen) || (c.Type == html.ElementNode && separatesPriceText(c)) {
+		if stacked && seen || separatesPriceText(c) {
 			appendWordBoundary(text)
 		}
 		before := text.Len()
 		appendPriceText(text, c)
-		if c.Type == html.TextNode {
-			seen = seen || strings.TrimSpace(c.Data) != ""
-		} else {
-			seen = seen || text.Len() > before
-		}
+		seen = seen || wrotePriceText(c, before, text.Len())
 	}
 	if separatesPriceText(n) {
 		text.WriteByte(' ')

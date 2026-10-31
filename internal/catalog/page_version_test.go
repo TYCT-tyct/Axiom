@@ -1,7 +1,6 @@
 package catalog_test
 
 import (
-	"context"
 	"crypto/sha256"
 	"testing"
 	"uuid"
@@ -9,12 +8,12 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-func (s *store) insertSnapshot(ctx context.Context, page uuid.UUID, version int, text string) uuid.UUID {
+func (s *store) insertSnapshot(page uuid.UUID, version int, text string) uuid.UUID {
 	s.t.Helper()
 	sum := sha256.Sum256([]byte(text))
 	var id uuid.UUID
-	if err := s.db.Tx(ctx, platformScope, func(tx pg.Tx) error {
-		return tx.QueryRow(ctx, `INSERT INTO catalog.page_snapshot (page_id, extractor_version, text, text_sha256)
+	if err := s.db.Tx(s.t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(s.t.Context(), `INSERT INTO catalog.page_snapshot (page_id, extractor_version, text, text_sha256)
 			VALUES ($1, $2, $3, $4) RETURNING id`, page, version, text, sum[:]).Scan(&id)
 	}); err != nil {
 		s.t.Fatal(err)
@@ -22,9 +21,9 @@ func (s *store) insertSnapshot(ctx context.Context, page uuid.UUID, version int,
 	return id
 }
 
-func (s *store) installSnapshot(ctx context.Context, page uuid.UUID, version int, text string) uuid.UUID {
+func (s *store) installSnapshot(page uuid.UUID, version int, text string) uuid.UUID {
 	s.t.Helper()
-	id := s.insertSnapshot(ctx, page, version, text)
+	id := s.insertSnapshot(page, version, text)
 	if err := s.exec(platformScope, `UPDATE catalog.watched_page SET current_snapshot_id = $2 WHERE id = $1`, page, id); err != nil {
 		s.t.Fatal(err)
 	}
@@ -36,8 +35,8 @@ func TestPageSnapshotVersionCannotGoBackwards(t *testing.T) {
 	s := newStore(t)
 	s.seed("acme/alpha", basicSpec, basic)
 	page := s.watch(t.Context(), "acme", "USD")
-	newer := s.installSnapshot(t.Context(), page, 2, "alpha $2")
-	older := s.insertSnapshot(t.Context(), page, 1, "alpha $1")
+	newer := s.installSnapshot(page, 2, "alpha $2")
+	older := s.insertSnapshot(page, 1, "alpha $1")
 
 	if err := s.exec(platformScope, `UPDATE catalog.watched_page SET current_snapshot_id = $2 WHERE id = $1`, page, older); err == nil {
 		t.Fatal("database accepted a move back to the older extractor")
@@ -52,7 +51,7 @@ func TestPageExtractorUpgradeDoesNotCollapseAdjacentCells(t *testing.T) {
 	s := newStore(t)
 	s.seed("acme/alpha", basicSpec, basic)
 	page := s.watch(t.Context(), "acme", "USD")
-	prior := s.installSnapshot(t.Context(), page, 1, "Model Input Output alpha 1 23")
+	prior := s.installSnapshot(page, 1, "Model Input Output alpha 1 23")
 	changed := "Model Input Output alpha 12 3"
 
 	if err := s.observeLegacy(t.Context(), page, changed, changed); err != nil {
@@ -74,7 +73,7 @@ func TestPageExtractorUpgradeWithSameContentKeepsSnapshot(t *testing.T) {
 	s := newStore(t)
 	s.seed("acme/alpha", basicSpec, basic)
 	page := s.watch(t.Context(), "acme", "USD")
-	old := s.installSnapshot(t.Context(), page, 1, "alpha $1  \u200b")
+	old := s.installSnapshot(page, 1, "alpha $1  \u200b")
 
 	if err := s.observeLegacy(t.Context(), page, "alpha $1", "alpha $1  \u200b"); err != nil {
 		t.Fatal(err)
@@ -95,7 +94,7 @@ func TestPageExtractorUpgradeWithChangedContentReviewsAgainstPriorSnapshot(t *te
 	s := newStore(t)
 	s.seed("acme/alpha", basicSpec, basic)
 	page := s.watch(t.Context(), "acme", "USD")
-	old := s.installSnapshot(t.Context(), page, 1, "alpha $1")
+	old := s.installSnapshot(page, 1, "alpha $1")
 
 	if err := s.observeLegacy(t.Context(), page, "alpha $2", "alpha $2"); err != nil {
 		t.Fatal(err)
@@ -120,7 +119,7 @@ func TestPageOlderExtractorCannotMoveSnapshotBack(t *testing.T) {
 	s := newStore(t)
 	s.seed("acme/alpha", basicSpec, basic)
 	page := s.watch(t.Context(), "acme", "USD")
-	newer := s.installSnapshot(t.Context(), page, 3, "alpha $3")
+	newer := s.installSnapshot(page, 3, "alpha $3")
 
 	if err := s.observe(t.Context(), page, "alpha $4"); err != nil {
 		t.Fatal(err)
@@ -141,8 +140,8 @@ func TestPageExtractorUpgradeKeepsAnOpenReview(t *testing.T) {
 	s := newStore(t)
 	s.seed("acme/alpha", basicSpec, basic)
 	page := s.watch(t.Context(), "acme", "USD")
-	baseline := s.installSnapshot(t.Context(), page, 1, "alpha $1")
-	changed := s.installSnapshot(t.Context(), page, 1, "alpha $2")
+	baseline := s.installSnapshot(page, 1, "alpha $1")
+	changed := s.installSnapshot(page, 1, "alpha $2")
 	if err := s.exec(platformScope, `INSERT INTO catalog.review (page_id, snapshot_id, previous_snapshot_id, removed, added)
 		VALUES ($1, $2, $3, '$1', '$2')`, page, changed, baseline); err != nil {
 		t.Fatal(err)

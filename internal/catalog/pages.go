@@ -230,6 +230,20 @@ func recordFetchedPage(ctx context.Context, tx pg.Tx, page, snapshot uuid.UUID, 
 	return pageSignal(ctx, tx, "catalog.page_overdue", page, true)
 }
 
+// keepsCurrentSnapshot reports whether the stored snapshot stays: a worker still on the old extractor must not move the
+// page back after a newer one stored a snapshot, and an upgrade that changes only layout normalization is not a page
+// change. Keeping it also keeps official evidence and any open review pointed at the text a reviewer already saw; the
+// first real change stores the new version.
+func keepsCurrentSnapshot(current CatalogWatchedPage, prior PageSnapshotContentRow, content PageContent) bool {
+	if current.CurrentSnapshotID == nil {
+		return false
+	}
+	if pageExtractorVersion < prior.ExtractorVersion {
+		return true
+	}
+	return pageExtractorVersion != prior.ExtractorVersion && samePageContent(prior.Text, content)
+}
+
 func savePageContent(ctx context.Context, tx pg.Tx, current CatalogWatchedPage, content PageContent, seconds int64) error {
 	q := New()
 	var prior PageSnapshotContentRow
@@ -240,14 +254,7 @@ func savePageContent(ctx context.Context, tx pg.Tx, current CatalogWatchedPage, 
 			return err
 		}
 	}
-	// A worker still running the old extractor must not move the page back after a newer one stored a snapshot.
-	if current.CurrentSnapshotID != nil && pageExtractorVersion < prior.ExtractorVersion {
-		return recordFetchedPage(ctx, tx, current.ID, *current.CurrentSnapshotID, seconds)
-	}
-	// An upgrade that changes only layout normalization is not a page change. Keeping the current snapshot also keeps
-	// official evidence and any open review pointed at the text a reviewer already saw; the first real change stores
-	// the new version.
-	if current.CurrentSnapshotID != nil && pageExtractorVersion != prior.ExtractorVersion && samePageContent(prior.Text, content) {
+	if keepsCurrentSnapshot(current, prior, content) {
 		return recordFetchedPage(ctx, tx, current.ID, *current.CurrentSnapshotID, seconds)
 	}
 	snapshot, err := q.InsertPageSnapshot(ctx, tx, InsertPageSnapshotParams{PageID: current.ID, ExtractorVersion: pageExtractorVersion, Text: content.Text, TextSha256: content.SHA256[:]})
