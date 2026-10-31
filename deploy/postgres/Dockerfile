@@ -11,8 +11,10 @@ RUN apk add --no-cache pgbackrest=2.58.0-r0 \
     && install -d -o postgres -g postgres /var/lib/pgbackrest
 
 COPY pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
+COPY wal-path.sh /usr/local/bin/wal-path.sh
+COPY pgbackrest.sh /usr/local/bin/pgbackrest
 COPY entrypoint.sh pitr.sh basebackup.sh /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/pitr.sh /usr/local/bin/basebackup.sh \
+RUN chmod 0755 /usr/local/bin/wal-path.sh /usr/local/bin/pgbackrest /usr/local/bin/entrypoint.sh /usr/local/bin/pitr.sh /usr/local/bin/basebackup.sh \
     && chown root:postgres /etc/pgbackrest/pgbackrest.conf \
     && chmod 0640 /etc/pgbackrest/pgbackrest.conf
 

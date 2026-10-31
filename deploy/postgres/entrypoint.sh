@@ -1,5 +1,5 @@
 #!/bin/sh
-# The database's entrypoint: the base image's own entrypoint, plus continuous WAL archiving when the backup bucket is
+# The database's entrypoint: the base image's own entrypoint, plus continuous WAL archiving when the WAL bucket is
 # configured (docs/ops/backup-restore.md「WAL 连续归档与时间点恢复」). With no bucket the arguments are untouched and the
 # server starts with archive_mode off, so a deployment that does not back up behaves exactly as before.
 #
@@ -10,7 +10,6 @@ set -eu
 
 if [ -n "${PGBACKREST_REPO1_S3_BUCKET:-}" ]; then
 	missing=""
-	[ -n "${PGBACKREST_REPO1_PATH-}" ] || missing="$missing PGBACKREST_REPO1_PATH"
 	[ -n "${PGBACKREST_REPO1_S3_KEY-}" ] || missing="$missing PGBACKREST_REPO1_S3_KEY"
 	[ -n "${PGBACKREST_REPO1_S3_KEY_SECRET-}" ] || missing="$missing PGBACKREST_REPO1_S3_KEY_SECRET"
 	[ -n "${PGBACKREST_REPO1_CIPHER_PASS-}" ] || missing="$missing PGBACKREST_REPO1_CIPHER_PASS"
@@ -18,6 +17,12 @@ if [ -n "${PGBACKREST_REPO1_S3_BUCKET:-}" ]; then
 		printf 'postgres: WAL archiving is configured but missing:%s\n' "$missing" >&2
 		exit 1
 	}
+	# Compute the path once and export it to the server as well: PostgreSQL's restore_command and archive_command run in
+	# this environment, and a bad overlap must stop the server before a prune can delete the archive.
+	. /usr/local/bin/wal-path.sh
+	PGBACKREST_REPO1_PATH=$(wal_repo_path)
+	export PGBACKREST_REPO1_PATH
+	pgbackrest version >/dev/null
 	# Only the server takes these arguments; a one-off client command keeps the image's own behaviour.
 	case "${1:-postgres}" in
 	postgres | -*) ;;

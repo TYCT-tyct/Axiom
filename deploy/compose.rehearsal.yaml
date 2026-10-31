@@ -2,13 +2,6 @@
 # server on the stack's own network, so nothing reaches a real bucket and the sets it holds are as disposable as the
 # stack. Not part of a deployment.
 services:
-  # The rehearsal wipes and re-creates the cluster from the logical set, so its WAL archive would belong to a system
-  # identifier that no longer exists. Continuous archiving and PITR are exercised by deploy/postgres's own test against
-  # SeaweedFS; this stack keeps the archive off and the bucket for the sets.
-  postgres:
-    environment:
-      PGBACKREST_REPO1_S3_BUCKET: ""
-
   s3:
     # MinIO's own images are no longer publicly available — its Docker Hub repository is gone and quay.io/minio/minio
     # answers 401 — and this one is on Docker Hub with a tag per release. The rehearsal uses only what a backup uses:

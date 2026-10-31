@@ -95,11 +95,12 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm backup
 
 逻辑 set 回答「机器没了怎么重建」；这一节回答「库还在，但写错了怎么回到写错之前」。两者写同一个桶，但前缀不同：逻辑 set 在
 `<AXIOM_BACKUP_PREFIX>` 下，WAL 仓库在 `<AXIOM_BACKUP_WAL_PREFIX>` 下（默认 `<AXIOM_BACKUP_PREFIX>-pgbackrest`），两者平级；
-逻辑 set 的保留只列举和删除自己的前缀，删不到 WAL 仓库。`AXIOM_BACKUP_WAL_PREFIX` 不能设成 `<AXIOM_BACKUP_PREFIX>` 或它的
-子路径，否则逻辑 set 的保留会把归档一起删掉。
+逻辑 set 的保留只列举和删除自己的前缀，删不到 WAL 仓库。两个前缀都会去掉首尾斜杠（`axiom/` 按 `axiom` 算）；
+`AXIOM_BACKUP_WAL_PREFIX` 不能设成 `<AXIOM_BACKUP_PREFIX>` 或它的子路径，否则逻辑 set 的保留会把归档一起删掉，`pgbackrest`
+和数据库启动会直接拒绝这个组合。
 
 数据库镜像 `deploy/postgres` 是钉住的 `postgres:18.6-alpine` 加 pgBackRest 2.58.0（Alpine 3.24 的
-`pgbackrest=2.58.0-r0`）。`AXIOM_BACKUP_BUCKET` 非空时，`entrypoint.sh` 给服务器加 `archive_mode=on`、
+`pgbackrest=2.58.0-r0`）。WAL 桶（默认 `AXIOM_BACKUP_BUCKET`，可用 `AXIOM_BACKUP_WAL_BUCKET` 覆盖）非空时，`entrypoint.sh` 给服务器加 `archive_mode=on`、
 `archive_command=pgbackrest --stanza=axiom archive-push %p`、`restore_command=pgbackrest --stanza=axiom archive-get %f %p`
 和 `archive_timeout=300`；为空时一个参数都不加，`archive_mode` 仍是 `off`。`archive_timeout` 让空闲库最多 5 分钟就封存当前
 WAL 段，时间点恢复最多丢这 5 分钟，而不是等段写满。这些是启动参数，不写进 PGDATA，所以同一个镜像开与不开归档的数据目录
@@ -111,7 +112,8 @@ WAL 仓库读不出来；逻辑 set 仍能用 age 私钥恢复。仓库里已经
 ### 开启与日常
 
 1. `deploy/.env` 设 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_S3_*`、`AXIOM_BACKUP_CIPHER_PASS`（前缀不是 `axiom` 时还有
-   `AXIOM_BACKUP_PREFIX`；AWS S3 把 `AXIOM_BACKUP_S3_URI_STYLE` 改成 `host`）。只设桶不设口令时数据库拒绝启动并列出缺的变量。
+   `AXIOM_BACKUP_PREFIX`；WAL 用单独的桶时设 `AXIOM_BACKUP_WAL_BUCKET`，否则跟随备份桶；AWS S3 把
+   `AXIOM_BACKUP_S3_URI_STYLE` 改成 `host`）。WAL 桶非空却不设口令时数据库拒绝启动并列出缺的变量。
 2. 数据库镜像从本仓库构建，不像程序镜像那样按 digest 拉取：
 
    ```bash
@@ -169,6 +171,20 @@ docker exec axiom-pitr psql -U postgres -d axiom -Atc \
 容器，或者 `docker rm -f axiom-pitr`），再删掉 `postgres_pitr` 卷（默认项目名 `axiom`，按 `docker volume ls` 的实际名字替换；
 不要删 `postgres` 卷），然后从空的卷重新跑。不要在半恢复的卷上继续。
 
+**密钥环也要覆盖目标时刻。** PITR 只恢复数据库，不恢复 `keys` 卷。如果目标时间早于一次主密钥轮换，恢复库的
+`platform.key_versions` 仍引用旧版本，而当前的 `keys/master` 可能已在退役后删掉它：行数核对会通过，程序启动却报
+`missing versions [1]`，旧凭证也解不开。接管前先看恢复库要求的版本：
+
+```bash
+docker exec axiom-pitr psql -U postgres -d axiom -Atc \
+  "select version, state from platform.key_versions order by version"
+```
+
+每次轮换前把当时的完整 `master` 文件另存一份（和 age 私钥分开，覆盖整个 PITR 窗口）。把包含这些版本的历史文件作为候选，用部署
+镜像、恢复库的应用角色连接串和 `AXIOM_MASTER_KEY_FILE` 指向该文件运行 `axiom keyring check`；通过后才继续换卷。检查失败就
+不要接管：换用含所需版本的历史文件，或放弃这个目标时间。`axiom keyring check` 只读数据库和候选文件，不替换正在用的 `keys`
+卷；确认后再把候选文件放进卷（0600，属主按部署的密钥服务要求）。
+
 确认正确后，先停掉恢复实例，再停源库，把恢复卷的内容换进 `postgres` 卷。旧卷先复制一份到 `axiom_postgres_before_pitr`，确认
 新库没问题再删；不要在没有任何副本的情况下直接覆盖旧卷：
 
@@ -191,9 +207,11 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env up --detach --wait 
 ### 和逻辑 set 的关系
 
 逻辑恢复（`scripts/ops/restore.sh`）会 initdb 出一个新的 system identifier；旧的 WAL 仓库属于已经丢掉的集群，不能直接接上。
-恢复脚本启动恢复后的库时把 `AXIOM_BACKUP_BUCKET` 置空，让归档保持关闭；确认要长期保留旧仓库时，给新集群换一个新的
-`AXIOM_BACKUP_WAL_PREFIX`（例如 `<前缀>-pgbackrest-restored`）再 `stanza-create`，不要拿旧 stanza 名硬接新集群。演练（`just backup-rehearsal`）也把归档关掉，
-原因相同；WAL 这条路由 `deploy/postgres` 的容器测试守。
+恢复脚本把 `AXIOM_BACKUP_WAL_BUCKET` 置空并写进 set 的 `deploy/.env`，所以不只是第一次启动，后续每次启动都关归档；逻辑 set 的
+`AXIOM_BACKUP_BUCKET` 保留，恢复作业和以后的逻辑备份仍读同一个桶。确认要长期保留旧仓库时，给新集群设一个新的
+`AXIOM_BACKUP_WAL_BUCKET`（通常还是备份桶）和 `AXIOM_BACKUP_WAL_PREFIX`（例如 `<前缀>-pgbackrest-restored`）再 `stanza-create`，
+不要拿旧 stanza 名硬接新集群。演练（`just backup-rehearsal`）的恢复也走这条线：脚本把初始集群的 WAL 桶置空（它还没有
+stanza），并在恢复后断言安装文件里出现了空的 `AXIOM_BACKUP_WAL_BUCKET=`；WAL 这条路由 `internal/platform/backup` 的容器测试守。
 
 ## 主密钥轮换
 
@@ -208,7 +226,8 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env up --detach --wait 
 1. 先做一个完整备份 set，并暂停备份调度直到轮换完成。自动退役可能在几分钟内删掉旧版本，备份若跨过
    数据库转储和密钥归档两个时刻就可能缺版本；备份脚本从转储本身读出版本清单（和转储是同一个快照）并核对密钥归档，
    缺一个就让这种 set 失败重跑。不要用备份前后两次查询代替转储里的清单：版本可能在两次查询之间新增并退役。
-   保留旧 set 配套的 `keys.tar.age`：零在线引用并不等于历史备份不再需要旧密钥。
+   保留旧 set 配套的 `keys.tar.age`：零在线引用并不等于历史备份不再需要旧密钥。还要为 PITR 窗口保留每次轮换前的完整
+   `master` 文件：PITR 只恢复数据库，不恢复 `keys` 卷，目标时间在轮换前时恢复库引用的版本可能已从当前文件退役删除。
    恢复旧 set 时必须用该 set 的数据库和密钥环一起恢复，不能搭配已经退役并删去旧版本的当前文件。
 2. 在密钥目录中运行 `axiom keyring add --version 2`（用未使用过的正版本号）。
    它原子替换本机 `master` 文件，生成新随机材料，登记为可读；数据库写版本保持不变。
@@ -364,6 +383,7 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 | 2026-10-30 11:13 | 20261030111116-4e91d2 | 38s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
 | 2026-10-30 11:37 | 20261030113558-676233 | 33s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
 | 2026-10-30 11:47 | 20261030114440-bb2802 | 91s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
+| 2026-10-31 08:50 | 20261031084908-c274fc | 29s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
 | 2026-10-30 12:45 | 20261030124404-0967c4 | 27s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
 
 ## 生产入口

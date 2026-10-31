@@ -8,6 +8,10 @@
 # time is an input, not a property of the data.
 set -eu
 
+. /usr/local/bin/wal-path.sh
+PGBACKREST_REPO1_PATH=$(wal_repo_path)
+export PGBACKREST_REPO1_PATH
+
 [ -n "${PGBACKREST_REPO1_S3_BUCKET:-}" ] || {
 	printf 'pitr: PGBACKREST_REPO1_S3_BUCKET is not set: there is no archive to restore from\n' >&2
 	exit 1

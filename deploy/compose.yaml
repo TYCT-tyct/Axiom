@@ -66,10 +66,12 @@ x-ops: &ops
 # sets' because both are written by the one machine that owns the database.
 #
 # PGBACKREST_REPO1_S3_BUCKET is also the on/off switch of archiving: empty means archive_mode stays off and the server
-# starts exactly as before.
+# starts exactly as before. The logical set bucket stays configured, so a restored cluster writes
+# AXIOM_BACKUP_WAL_BUCKET= (scripts/ops/restore.sh) instead of clearing the bucket it still needs.
 x-pgbackrest-env: &pgbackrest-env
-  PGBACKREST_REPO1_PATH: /${AXIOM_BACKUP_WAL_PREFIX:-${AXIOM_BACKUP_PREFIX:-axiom}-pgbackrest}
-  PGBACKREST_REPO1_S3_BUCKET: ${AXIOM_BACKUP_BUCKET-}
+  AXIOM_BACKUP_PREFIX: ${AXIOM_BACKUP_PREFIX:-axiom}
+  AXIOM_BACKUP_WAL_PREFIX: ${AXIOM_BACKUP_WAL_PREFIX-}
+  PGBACKREST_REPO1_S3_BUCKET: ${AXIOM_BACKUP_WAL_BUCKET-${AXIOM_BACKUP_BUCKET-}}
   PGBACKREST_REPO1_S3_KEY: ${AXIOM_BACKUP_S3_ACCESS_KEY_ID-}
   PGBACKREST_REPO1_S3_KEY_SECRET: ${AXIOM_BACKUP_S3_SECRET_ACCESS_KEY-}
   PGBACKREST_REPO1_S3_REGION: ${AXIOM_BACKUP_S3_REGION:-us-east-1}
