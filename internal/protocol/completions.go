@@ -1,12 +1,21 @@
 package protocol
 
 import (
+	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: events are read token by token, in place
 	"fmt"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol/internal/sse"
 )
+
+// EchoPrompts is a legacy completion's echo: Bytes holds each prompt's text bytes in prompt order, and Choices is the
+// n each prompt generates. A choice's text starts with its prompt repeated; the relay drops only the part it has
+// received, so a batch that ends before every choice arrives still charges the text that did arrive.
+type EchoPrompts struct {
+	Bytes   []int64
+	Choices int64
+}
 
 // completionsStream reads OpenAI's legacy text completions stream (OpenAI《Create completion》, read 2026-10-31):
 // chunks whose choices carry text instead of a delta, a usage object in the last chunk when the request asked for one,
@@ -19,10 +28,22 @@ type completionsStream struct {
 	reportErr                                   error
 	failed, rewrites, noChoices, choiceFinished bool
 	index                                       int64
+	indexSet                                    bool
+	// pending holds text read before its choice's index; JSON members may come in any order. Only an upstream that
+	// puts text before index allocates it.
+	pending []jsontext.Value
+	// echo holds each prompt's text bytes and the n each generates; echoSeen is how much of a choice's echo has
+	// already arrived, so a batch that ends early only deducts what it received. Both are nil without echo.
+	echo        *EchoPrompts
+	echoChoices int64
+	echoSeen    map[int64]int64
 }
 
 func newCompletionsStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
 	s := &completionsStream{choices: map[int64]bool{}}
+	if o.Echo != nil && len(o.Echo.Bytes) > 0 {
+		s.echo, s.echoChoices, s.echoSeen = o.Echo, max(o.Echo.Choices, 1), map[int64]int64{}
+	}
 	s.init(u, o, nil, charge)
 	s.completionsWriter = completionsWriter{id: s.eventReader.id, model: s.eventReader.model, created: "0"}
 	return s
@@ -102,8 +123,12 @@ func (s *completionsStream) done() (event, error) {
 func (s *completionsStream) choice() error {
 	// The choices array decides whether the chunk is a pure usage ending; a chunk with a choice is not, even when the
 	// choice also carries usage. Reset before reading: noChoices is set once for the array, not once per element.
-	s.noChoices, s.index, s.choiceFinished = false, 0, false
+	s.noChoices, s.index, s.indexSet, s.choiceFinished = false, 0, false, false
+	s.pending = s.pending[:0]
 	if err := walk(&s.reader, s, completionsChoiceFields); err != nil {
+		return err
+	}
+	if err := s.applyPendingText(); err != nil {
 		return err
 	}
 	// finish_reason may come before index in the object; apply it only after the whole choice is read, so the state
@@ -116,24 +141,73 @@ func (s *completionsStream) choice() error {
 
 func (s *completionsStream) choiceIndex() error {
 	n, err := s.count()
-	s.index = n
+	s.index, s.indexSet = n, true
+	if err != nil {
+		return err
+	}
+	if err := s.applyPendingText(); err != nil {
+		return err
+	}
 	if _, started := s.choices[s.index]; !started {
 		if err := s.charge(choiceSize); err != nil {
 			return err
 		}
 		s.choices[s.index] = false
 	}
-	return err
+	return nil
 }
 
-// textField counts a choice's text as content and leaves it in place.
+// textField keeps a choice's text in place. A choice's index decides how much of its text is the prompt's echo, and the
+// index may come after the text, so text read before the index waits until it is known.
 func (s *completionsStream) textField() error {
-	before := s.e.content
-	err := s.text()
-	if s.e.content > before {
-		s.e.role = content
+	v, err := s.raw()
+	if err != nil || v == nil {
+		return err
 	}
-	return err
+	if s.indexSet {
+		return s.addChoiceText(v)
+	}
+	s.pending = append(s.pending, v)
+	return nil
+}
+
+// applyPendingText counts text that arrived before its choice's index.
+func (s *completionsStream) applyPendingText() error {
+	for _, v := range s.pending {
+		if err := s.addChoiceText(v); err != nil {
+			return err
+		}
+	}
+	s.pending = s.pending[:0]
+	return nil
+}
+
+// addChoiceText counts the text after the echo this choice has already received. The prompt is repeated at the start of
+// every choice, so each choice tracks its own prefix: a batch that ends before choice N returns must not deduct N's
+// echo from the text choice 0 generated. The echoed bytes are still forwarded; only the meter leaves them out.
+func (s *completionsStream) addChoiceText(v jsontext.Value) error {
+	text, err := s.unquote(v)
+	if err != nil {
+		return err
+	}
+	if s.capture != nil {
+		s.capture.add(v)
+	}
+	if s.index >= 0 && s.echo != nil {
+		if prompt := s.index / s.echoChoices; prompt < int64(len(s.echo.Bytes)) {
+			seen := s.echoSeen[s.index]
+			drop := min(int64(len(text)), max(s.echo.Bytes[prompt]-seen, 0))
+			s.echoSeen[s.index] = seen + drop
+			text = text[drop:]
+		}
+	}
+	if len(text) == 0 {
+		return nil
+	}
+	s.e.content += int64(len(text))
+	s.e.shape.Add(text)
+	s.e.role = content
+	return nil
 }
 
 // finishReason marks the choice finished and leaves the signal where the upstream wrote it: unlike Chat, whose
@@ -184,7 +258,7 @@ func (s *completionsStream) rewritten() error {
 
 func (s *completionsStream) dropBuffers() {
 	s.eventReader.dropBuffers()
-	s.choices, s.report = nil, nil
+	s.choices, s.report, s.pending, s.echo, s.echoSeen = nil, nil, nil, nil, nil
 }
 
 // completionsWriter writes the chunks of ours a completions client gets: the usage chunk and the error chunk.

@@ -34,9 +34,6 @@ type Demand struct {
 	InputBytes   int64
 	InputItems   catalog.ItemSet
 	ServiceTiers catalog.ServiceTierSet
-	// EchoBytes is the prompt text a legacy completion's echo repeats at the start of every choice, already multiplied
-	// by the choices: the output estimate subtracts it, so only generated text is billed (Echo is off when 0).
-	EchoBytes int64
 	// TextTokens is the request's text counted in the tokens of the model family's own tokenizer, when the caller
 	// counted it (NewTextCount); 0 keeps the bytes-per-token rule of the estimate. It is an estimate, not a bound:
 	// InputBound goes by TextBytes alone.

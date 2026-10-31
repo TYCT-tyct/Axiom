@@ -136,7 +136,6 @@ func DemandOf(req *protocol.Request) billing.Demand {
 		TextBytes: req.TextBytes + req.SearchBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
 		Direct: req.Format.Direct(), InputBytes: req.MaxInputBytes,
 		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
-		EchoBytes: echoBytes(req),
 	}
 	if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.WebSearches})
@@ -149,19 +148,6 @@ func DemandOf(req *protocol.Request) billing.Demand {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemCodeExecution, MaxUses: req.CodeExecutions})
 	}
 	return d
-}
-
-// echoBytes is what a legacy completion's echo repeats: every prompt comes back at the start of each of its choices, so
-// the output estimate has to leave out the prompt's own text. Zero when the request did not ask for echo.
-func echoBytes(req *protocol.Request) int64 {
-	if !req.Echo {
-		return 0
-	}
-	total := int64(0)
-	for _, n := range req.PromptBytes {
-		total += n
-	}
-	return total * max(req.ChoiceCount, 1)
 }
 
 // nothing says why the plan is empty: a Wait when some endpoint would have served but is full, otherwise a NoEndpoint.

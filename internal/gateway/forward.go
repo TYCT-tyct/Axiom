@@ -39,7 +39,7 @@ func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageC
 	s := a.s
 	relay := protocol.NewRelay(s.c.Format, a.entry.Target.Format, body, uc, protocol.RelayOptions{
 		ID: s.c.ID.String(), Model: s.c.Request.Model, ActualModel: s.servedModel(a), Created: s.start.Unix(),
-		Memory: s.x.Memory, Aggregate: s.aggregate, Citations: s.citations,
+		Memory: s.x.Memory, Aggregate: s.aggregate, Citations: s.citations, Echo: echoPrompts(&s.c.Request),
 	})
 	s.live = relay
 	idleFor := s.x.Limits.cfg.IdleTimeout
@@ -504,4 +504,12 @@ func (s *session) drop(relay *protocol.Relay) {
 	if s.live == relay {
 		s.live = nil
 	}
+}
+
+// echoPrompts is what a legacy completion repeats at the start of every choice, nil when it did not ask for echo.
+func echoPrompts(r *protocol.Request) *protocol.EchoPrompts {
+	if !r.Echo || len(r.PromptBytes) == 0 {
+		return nil
+	}
+	return &protocol.EchoPrompts{Bytes: r.PromptBytes, Choices: r.ChoiceCount}
 }

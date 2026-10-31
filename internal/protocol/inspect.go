@@ -90,9 +90,9 @@ type Request struct {
 	// endpoint's default. Legacy completions sets it; a format that leaves it false keeps the default rule.
 	MaxOutputSet bool
 	// Echo is legacy completions' echo: the prompt comes back as the first text of every choice. PromptBytes then
-	// holds the text bytes of each prompt in order, so the relay keeps that echoed text out of the output estimate, and
-	// ChoiceCount is the choices each prompt generates (n), which maps a choice's index to its prompt. PromptBytes is
-	// nil when echo is off.
+	// holds the text bytes of each prompt in order, so the relay can drop that prefix per choice, and ChoiceCount is
+	// the choices each prompt generates (n), which maps a choice's index to its prompt. PromptBytes is nil when echo
+	// is off.
 	Echo        bool
 	PromptBytes []int64
 	ChoiceCount int64

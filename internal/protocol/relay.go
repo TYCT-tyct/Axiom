@@ -99,7 +99,10 @@ type RelayOptions struct {
 	Capture *Capture
 	// Citations are the web search results the gateway supplied, which an aggregated Chat reply cites in its
 	// annotations. A stream cannot know the whole message, so it carries none.
-	Citations       []Citation
+	Citations []Citation
+	// Echo, when set, is the prompt text a legacy completion repeats at the start of each choice. A pointer keeps the
+	// gateway's common options small; only an echo request allocates it.
+	Echo            *EchoPrompts
 	legacyFunctions bool
 }
 

@@ -422,7 +422,7 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 	if !inputReported(u) { // none of the input was reported, so it is estimated
 		estimateInput(counts, input)
 	}
-	counts[catalog.ItemOutput] = estimateOutput(*reply, p, outputCap, tok, d.EchoBytes)
+	counts[catalog.ItemOutput] = estimateOutput(*reply, p, outputCap, tok)
 	if !reply.Reported.Has(catalog.ItemWebSearch) {
 		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)
 	}
@@ -463,11 +463,11 @@ func estimateInput(counts map[catalog.Item]int64, estimate int64) {
 // shape takes in tok's weights or at outputBytesPerToken for a family without, never below a count reported so far and
 // never above the output cap the attempt was quoted at (outputCap, the meter's own, which metering holds the output
 // to). A report that carried it keeps it.
-func estimateOutput(reply billing.Segment, p protocol.Progress, outputCap int64, tok billing.Tokenizer, echo int64) int64 {
+func estimateOutput(reply billing.Segment, p protocol.Progress, outputCap int64, tok billing.Tokenizer) int64 {
 	if reply.Reported.Has(catalog.ItemOutput) {
 		return reply.Usage.Count(catalog.ItemOutput)
 	}
-	content := max(p.ContentBytes-echo, 0)
+	content := max(p.ContentBytes, 0)
 	out, ok := billing.TextTokens(tok, p.Text, content)
 	if !ok {
 		out = tokensOf(content, outputBytesPerToken)

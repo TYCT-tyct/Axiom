@@ -254,6 +254,62 @@ func TestCompletionsSample(t *testing.T) {
 	}
 }
 
+// TestCompletionsEchoPerChoice: echo repeats the prompt at the start of every choice, and the meter drops only the
+// prefix it has received. A choice that never arrived must not deduct its echo from the text another choice generated.
+func TestCompletionsEchoPerChoice(t *testing.T) {
+	t.Parallel()
+	const prompt, generated = 300, 30
+	echo := func(text string, index int) string {
+		return fmt.Sprintf(
+			"data: {\"id\":\"x\",\"object\":\"text_completion\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":%d,\"text\":%q,\"finish_reason\":\"length\"}]}\n\n",
+			index, text,
+		)
+	}
+	for _, c := range []struct {
+		name   string
+		echo   *protocol.EchoPrompts
+		stream string
+		broken bool
+		want   int64
+	}{
+		{
+			name:   "two prompts, the stream breaks before the second",
+			echo:   &protocol.EchoPrompts{Bytes: []int64{prompt, prompt}, Choices: 1},
+			stream: echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0),
+			broken: true,
+			want:   generated,
+		},
+		{
+			name:   "one prompt, n=2, the stream breaks before the second",
+			echo:   &protocol.EchoPrompts{Bytes: []int64{prompt}, Choices: 2},
+			stream: echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0),
+			broken: true,
+			want:   generated,
+		},
+		{
+			name: "one prompt, both choices",
+			echo: &protocol.EchoPrompts{Bytes: []int64{prompt}, Choices: 2},
+			stream: echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 0) +
+				echo(strings.Repeat("a", prompt)+strings.Repeat("b", generated), 1) + "data: [DONE]\n\n",
+			want: 2 * generated,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := options
+			o.Echo = c.echo
+			got := relayWith(t, protocol.Completions, protocol.Completions, strings.NewReader(c.stream),
+				protocol.UsageContext{}, protocol.NewMemory(0), o, completionSettled)
+			if (got.err != nil) != c.broken {
+				t.Fatalf("broken %v, read error %v", c.broken, got.err)
+			}
+			p := got.r.Progress()
+			if p.ContentBytes != c.want || p.Text.Bytes != c.want {
+				t.Errorf("content %d, text %d, want %d each", p.ContentBytes, p.Text.Bytes, c.want)
+			}
+		})
+	}
+}
+
 // completionChunks parses a relayed stream's data events, checking that it ends once with [DONE].
 func completionChunks(t *testing.T, out []byte) []map[string]any {
 	t.Helper()
