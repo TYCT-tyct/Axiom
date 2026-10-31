@@ -23,7 +23,7 @@ func inspectNew(f Format, body []byte) (Request, error) {
 	if err := jsonx.Validate(body); err != nil {
 		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
-	d := directScanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), trackEcho: f == Completions && echoRequested(body)}
+	d := directScanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body))}
 	d.r = Request{Format: f, Choices: 1, ChoiceCount: 1, InputItems: 1 << catalog.ItemInput, ServiceTiers: 1 << catalog.ServiceTierStandard}
 	if err := d.top(); err != nil {
 		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
@@ -33,6 +33,16 @@ func inspectNew(f Format, body []byte) (Request, error) {
 	}
 	if err := d.validate(); err != nil {
 		return Request{}, err
+	}
+	if d.r.Echo {
+		// The prompt may come before echo, so the first scan cannot know to keep its sizes. Only a request that echoes is
+		// scanned a second time; those are rare, and a normal request pays just the bool.
+		sizes := directScanner{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), trackEcho: true}
+		sizes.r = Request{Format: f, Choices: 1, ChoiceCount: 1, InputItems: 1 << catalog.ItemInput, ServiceTiers: 1 << catalog.ServiceTierStandard}
+		if err := sizes.top(); err != nil {
+			return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		}
+		d.r.PromptBytes = sizes.r.PromptBytes
 	}
 	return d.r, nil
 }
@@ -79,7 +89,7 @@ type directScanner struct {
 	reader
 	r                                      Request
 	prompts, n, suffixBytes                int64 // legacy completions: prompts, the n each returns, the inserted suffix's bytes
-	trackEcho                              bool  // legacy completions with echo: keep each prompt's text bytes for metering
+	trackEcho                              bool  // the echo pass: record each prompt's text bytes for metering
 	queryBytes, maxDoc                     int64 // rerank: the query's bytes and the largest document's
 	hasInput, hasQuery, hasDocs, hasPrompt bool
 }
@@ -225,9 +235,9 @@ func (d *directScanner) completionsMember() error {
 		}
 		return err
 	case "echo":
-		// The echo itself is recorded by promptBytes while the prompt is read; the member only enables it, which
-		// echoRequested already saw before the scan.
-		return d.skip()
+		k, err := d.flag()
+		d.r.Echo = k == 't'
+		return err
 	case "suffix":
 		v, err := d.str()
 		if err == nil && v != nil {
@@ -296,13 +306,6 @@ func (d *directScanner) promptBytes(n int64) {
 	if d.trackEcho {
 		d.r.PromptBytes = append(d.r.PromptBytes, n)
 	}
-}
-
-// echoRequested reports whether the body's top-level echo member is true. It is read before the scan so the scanner
-// knows to record prompt sizes wherever prompt appears, in any member order.
-func echoRequested(body []byte) bool {
-	v, ok, err := member(body, "echo")
-	return err == nil && ok && v.Kind() == 't'
 }
 
 // embeddingInput reads OpenAI's input: a string, an array of strings, a token array, an array of token arrays, or an

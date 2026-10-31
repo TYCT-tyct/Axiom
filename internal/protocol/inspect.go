@@ -89,10 +89,11 @@ type Request struct {
 	// MaxOutputSet is true when the request named its output cap, so an explicit 0 means no output rather than the
 	// endpoint's default. Legacy completions sets it; a format that leaves it false keeps the default rule.
 	MaxOutputSet bool
-	// PromptBytes is legacy completions' echo: with echo on, the prompt comes back as the first text of every choice,
-	// so this holds the text bytes of each prompt in order and the relay keeps that echoed text out of the output
-	// estimate. ChoiceCount is the choices each prompt generates (n), which maps a choice's index to its prompt. Both
-	// are nil or zero when echo is off.
+	// Echo is legacy completions' echo: the prompt comes back as the first text of every choice. PromptBytes then
+	// holds the text bytes of each prompt in order, so the relay keeps that echoed text out of the output estimate, and
+	// ChoiceCount is the choices each prompt generates (n), which maps a choice's index to its prompt. PromptBytes is
+	// nil when echo is off.
+	Echo        bool
 	PromptBytes []int64
 	ChoiceCount int64
 	// TextBytes bounds the text input's tokens: the body's bytes less the image and document data that Images and

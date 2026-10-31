@@ -51,7 +51,7 @@ func TestCompletionsInspect(t *testing.T) {
 		name                            string
 		body                            string
 		text, maxInput, choices, maxOut int64
-		stream, capSet                  bool
+		stream, capSet, echo            bool
 		promptBytes                     []int64
 		err                             string
 	}{
@@ -74,7 +74,7 @@ func TestCompletionsInspect(t *testing.T) {
 		},
 		{
 			name: "echo", body: `{"model":"m","prompt":["a","bc"],"n":2,"echo":true}`, text: 3, maxInput: 2,
-			choices: 4, promptBytes: []int64{1, 2},
+			choices: 4, echo: true, promptBytes: []int64{1, 2},
 		},
 		{name: "n zero", body: `{"model":"m","prompt":"x","n":0}`, text: 1, maxInput: 1, choices: 1},
 		{name: "model missing", body: `{"prompt":"x"}`, err: "model is missing"},
@@ -103,9 +103,9 @@ func TestCompletionsInspect(t *testing.T) {
 			}
 			if r.Format != protocol.Completions || r.Model != "m" || r.TextBytes != c.text || r.MaxInputBytes != c.maxInput ||
 				r.Choices != c.choices || r.MaxOutput != c.maxOut || r.MaxOutputSet != c.capSet || r.Stream != c.stream ||
-				!slices.Equal(r.PromptBytes, c.promptBytes) {
-				t.Errorf("request %+v, want text %d, largest %d, choices %d, cap %d/%v, stream %v, echo %v",
-					r, c.text, c.maxInput, c.choices, c.maxOut, c.capSet, c.stream, c.promptBytes)
+				r.Echo != c.echo || !slices.Equal(r.PromptBytes, c.promptBytes) {
+				t.Errorf("request %+v, want text %d, largest %d, choices %d, cap %d/%v, stream %v, echo %v %v",
+					r, c.text, c.maxInput, c.choices, c.maxOut, c.capSet, c.stream, c.echo, c.promptBytes)
 			}
 			if r.InputItems != 1<<catalog.ItemInput || r.ServiceTiers != 1<<catalog.ServiceTierStandard {
 				t.Errorf("items %b, tiers %b", r.InputItems, r.ServiceTiers)
