@@ -64,6 +64,7 @@ type Model struct {
 	ID           ModelID
 	Slug         string
 	Author       string
+	AuthorName   string // the author's display name, for checks that ask a model who made it; the slug when it has none
 	Status       Status
 	VersionBasis VersionBasis
 	PriceSource  PriceSource

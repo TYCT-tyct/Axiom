@@ -170,8 +170,9 @@ func (h *Handler) authorise(r *http.Request, caller accounts.Caller, fn func(con
 }
 
 // model resolves the public base name and checks model visibility. Discovery does not apply a call's request-level
-// checks: :exacto and :thinking describe the base model even when a call would need an explicit provider.sort or a
-// reasoning request to serve them. Unknown, retired, unserved and key-hidden models are all model_not_found, never 403.
+// checks: :thinking describes the base model even when a call would need a reasoning request to serve it, and :exacto
+// is a callable route of the same model. Unknown, retired, unserved and key-hidden models are all model_not_found,
+// never 403.
 func (v visibility) model(name string) (modelEntry, error) {
 	parsed, ref := parseModelName(name)
 	if ref != nil {

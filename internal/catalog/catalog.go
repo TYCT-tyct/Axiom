@@ -201,6 +201,9 @@ func ReadSnapshot(ctx context.Context, tx pg.Tx) (*Snapshot, error) {
 		}
 	}
 	sortModels(snap.listed)
+	if err := addAuthorNames(ctx, tx, snap.models); err != nil {
+		return nil, err
+	}
 	names, err := q.ListNamesForSnapshot(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -223,6 +226,28 @@ func ReadSnapshot(ctx context.Context, tx pg.Tx) (*Snapshot, error) {
 		snap.prices[priceKey{p.Model, p.Currency}] = p
 	}
 	return snap, nil
+}
+
+// addAuthorNames resolves each model's author to its display name, which a verification answer must name: the slug is
+// the catalog's key, not what a model calls its maker (docs/domains/quality.md「真伪检测」). An author row without a
+// name falls back to its slug, so a check never compares an answer with an empty claim.
+func addAuthorNames(ctx context.Context, tx pg.Tx, models map[ModelID]Model) error {
+	authors, err := New().ListAuthors(ctx, tx)
+	if err != nil {
+		return err
+	}
+	names := make(map[string]string, len(authors))
+	for _, a := range authors {
+		names[a.Slug] = a.Name
+	}
+	for id, m := range models {
+		m.AuthorName = names[m.Author]
+		if m.AuthorName == "" {
+			m.AuthorName = m.Author
+		}
+		models[id] = m
+	}
+	return nil
 }
 
 func modelFromRow(row CatalogModel) (Model, error) {

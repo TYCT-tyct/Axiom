@@ -271,3 +271,10 @@ func TestHealthModeRejectsUnknownValues(t *testing.T) {
 		t.Fatalf("mode validation: %v", err)
 	}
 }
+
+func TestModelVerificationRejectsUnknownValues(t *testing.T) {
+	_, err := readSettings([]string{"AXIOM_MODEL_VERIFICATION=maybe"})
+	if err == nil || !strings.Contains(err.Error(), "AXIOM_MODEL_VERIFICATION: want on or off") {
+		t.Fatalf("verification validation: %v", err)
+	}
+}

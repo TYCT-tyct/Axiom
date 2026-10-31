@@ -89,6 +89,7 @@ func TestFilters(t *testing.T) {
 		{"override only another supplier", nil, func(in *routing.Input) { in.Override.OnlyNames = []string{"g99"} }, nil, routing.OverrideFilter, true},
 		{"override excludes the supplier", nil, func(in *routing.Input) { in.Override.ExcludeNames = []string{"g1"} }, nil, routing.OverrideFilter, true},
 		{"override class", nil, func(in *routing.Input) { in.Override.Classes = 1 << routing.ClassRelay }, nil, routing.OverrideFilter, true},
+		{"override verified only", func(e *routing.Endpoint) { e.Verified = false }, func(in *routing.Input) { in.Override.VerifiedOnly = true }, nil, routing.NotVerified, false},
 		{"override price limit", nil, func(in *routing.Input) {
 			in.Override.MaxPrice.Set.Add(catalog.ItemOutput)
 			in.Override.MaxPrice.Max[catalog.ItemOutput] = price(t, "0.000001")

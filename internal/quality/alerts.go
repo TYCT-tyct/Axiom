@@ -3,6 +3,7 @@ package quality
 import (
 	"context"
 	"strconv"
+	"time"
 	"uuid"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -111,4 +112,29 @@ func persistHealthSignal(ctx context.Context, tx pg.Tx, c change) error {
 		}
 	}
 	return nil
+}
+
+// fakeAlert is the signal that an endpoint answered as another model verifyFailures times in a row. One episode
+// raises one signal, and a later pass or a changed claim resolves it.
+const fakeAlert = "endpoint_fake"
+
+func (l *Loop) raiseFake(id suppliers.EndpointID, author string, failures int, at time.Time) {
+	if l.alerts == nil {
+		return
+	}
+	key := id.String()
+	fields := map[string]string{"claimed_author": author, "failures": strconv.Itoa(failures)}
+	// A new episode gets a new source, so observability does not take it for the one already resolved.
+	if err := l.alerts.RaiseOnce("quality:"+key+":"+strconv.FormatInt(at.UnixNano(), 10), fakeAlert, key, "critical", fields); err != nil {
+		l.logger.Warn("quality fake alert failed", "endpoint", key, "err", err)
+	}
+}
+
+func (l *Loop) resolveFake(id suppliers.EndpointID) {
+	if l.alerts == nil {
+		return
+	}
+	if err := l.alerts.Resolve(fakeAlert, id.String()); err != nil {
+		l.logger.Warn("quality fake alert resolution failed", "endpoint", id.String(), "err", err)
+	}
 }
