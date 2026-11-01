@@ -1,0 +1,6 @@
+package: adminapi
+output: types.gen.go
+generate:
+  # The models alone: with the server and the embedded spec in one file the output passed the 1 MB limit of
+  # scripts/check_artifacts.py, which every admin endpoint brings closer.
+  models: true
