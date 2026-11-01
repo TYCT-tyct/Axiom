@@ -560,7 +560,7 @@ SELECT count(*) FILTER (WHERE state = 'pending') AS pending,
         AND updated_at > transaction_timestamp() - make_interval(secs => $1::bigint)) AS cancelled,
     coalesce(sum(credits) FILTER (WHERE state NOT IN ('cancelled', 'expired', 'failed')
         AND created_at >= date_trunc('day', transaction_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'), 0)::bigint AS daily,
-    count(*) FILTER (WHERE state IN ('paid', 'partially_refunded', 'refunded')) AS paid
+    count(*) FILTER (WHERE state IN ('paid', 'partially_refunded', 'refunded', 'charged_back')) AS paid
 FROM payments.orders WHERE account_id = $2
 `
 

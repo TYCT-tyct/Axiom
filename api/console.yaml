@@ -1427,6 +1427,28 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/subscriptions:
+    get:
+      operationId: listAccountSubscriptions
+      tags: [Balance]
+      summary: The account's subscription
+      description: >-
+        The account's subscriptions, newest first, each with its current window: what the window holds, what it has
+        used, what is held by calls in flight, and what is left (docs/domains/billing.md「订阅套餐」). A window's unused
+        credit does not carry over. Calls draw on the plan first and on the balance when the window cannot cover them.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      responses:
+        "200":
+          description: The subscriptions
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AccountSubscriptionList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/statement:
     get:
       operationId: listStatement
@@ -2472,6 +2494,46 @@ components:
         - internal
         - not_implemented
         - unavailable
+    SubscriptionCredit:
+      type: string
+      pattern: '^(0|[1-9][0-9]*)$'
+      maxLength: 19
+      description: >-
+        An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot
+        round it.
+      example: "5000000000"
+    AccountSubscriptionWindow:
+      type: object
+      required: [seq, starts_at, ends_at, quota, used, reserved, remaining]
+      properties:
+        seq: {type: integer, minimum: 1}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+        quota: {$ref: "#/components/schemas/SubscriptionCredit"}
+        used: {$ref: "#/components/schemas/SubscriptionCredit"}
+        reserved: {$ref: "#/components/schemas/SubscriptionCredit"}
+        remaining: {$ref: "#/components/schemas/SubscriptionCredit"}
+    AccountSubscriptionStanding:
+      type: string
+      enum: [active, expired]
+      x-enum-varnames: [SubscriptionActive, SubscriptionExpired]
+      description: "`expired`: the term ended; `closed_at` is when what was left of it was written off."
+    AccountSubscription:
+      type: object
+      required: [id, plan_name, state, starts_at, ends_at, current_window]
+      properties:
+        id: {type: string, format: uuid}
+        plan_name: {type: string, description: "The plan's name when it was bought; a later rename does not change it."}
+        state: {$ref: "#/components/schemas/AccountSubscriptionStanding"}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+        closed_at: {type: string, format: date-time, description: "When what was left was written off; absent until then."}
+        current_window: {$ref: "#/components/schemas/AccountSubscriptionWindow"}
+    AccountSubscriptionList:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/AccountSubscription"}}
     Money:
       type: object
       required: [amount, currency]
@@ -2760,11 +2822,11 @@ components:
           description: "When what is left of the batch stops counting. Absent when it never expires."
     StatementKind:
       type: string
-      enum: [top_up, gift, redeem, spend, expiry, refund, reversal, freeze, unfreeze]
+      enum: [top_up, gift, redeem, spend, expiry, refund, reversal, freeze, unfreeze, chargeback, chargeback_reversal]
       description: >-
         What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit
         given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change),
-        freeze or unfreeze.
+        freeze or unfreeze, a chargeback's debit or the reversal of that debit after a won dispute.
     StatementRow:
       type: object
       required: [id, at, kind, amount, balance_after, reference, frozen_change, frozen_after]

@@ -98,20 +98,25 @@ func (b *bank) reserve(a Admitted, amount int64) (*Hold, error) {
 	return h, err
 }
 
-// consistent checks the counters against the reservations: the balance row's reserved and each window's reserved
-// are the sums of the pending amounts, and the balance never passes its floor.
+// consistent checks the counters against the reservations: the balance row's reserved is the sum of the pending
+// amounts the wallet funds, each subscription window's is the sum of the pending amounts its plan funds, the spend
+// counters hold both, and the balance never passes its floor.
 func (b *bank) consistent() {
 	b.t.Helper()
 	// What a reservation still holds: all of a pending one, since only settlement or cleanup ends it; and what it
 	// charged, which its windows have spent.
 	const held = `CASE r.state WHEN 'pending' THEN r.amount ELSE 0 END`
+	const wallet = `CASE WHEN r.state = 'pending' AND r.funding <> 'plan' THEN r.amount ELSE 0 END`
 	const window = `((r.workspace_id, r.workspace_window) = (s.subject, s.window_start)
 		OR (r.key_id, r.key_window) = (s.subject, s.window_start))`
 	for name, query := range map[string]string{
-		"balance": `SELECT b.reserved - coalesce((SELECT sum(` + held + `) FROM billing.reservations r), 0) FROM billing.balances b`,
+		"balance": `SELECT b.reserved - coalesce((SELECT sum(` + wallet + `) FROM billing.reservations r), 0) FROM billing.balances b`,
 		"windows": `SELECT count(*) FROM billing.spend s WHERE s.reserved <> coalesce((SELECT sum(` + held + `)
 			FROM billing.reservations r WHERE ` + window + `), 0)
 			OR s.spent <> coalesce((SELECT sum(r.charged) FROM billing.reservations r WHERE ` + window + `), 0)`,
+		"plans": `SELECT count(*) FROM billing.subscription_windows w WHERE w.reserved <> coalesce((SELECT sum(` + held + `)
+			FROM billing.reservations r WHERE r.funding = 'plan' AND r.subscription_id = w.subscription_id
+			AND r.window_seq = w.seq), 0)`,
 		"floor": `SELECT count(*) FROM billing.balances WHERE balance - frozen - reserved < floor`,
 	} {
 		if n := b.count(query); n != 0 {

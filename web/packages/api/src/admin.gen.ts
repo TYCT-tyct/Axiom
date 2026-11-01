@@ -2024,6 +2024,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/subscription-plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the subscription plans
+         * @description The site's catalog of subscription plans, by name: what one window of a plan holds, how long its window and its term are, and the price it is listed at (docs/domains/billing.md「订阅套餐」). Plans are administrator data; nothing here is hard-coded.
+         */
+        get: operations["listSubscriptionPlans"];
+        put?: never;
+        /**
+         * Add a subscription plan
+         * @description Adds a plan to the catalog. `price` is the list price in whole minor units of the site's currency. `quota` is the credit one window holds. A term holds at most 400 windows, and its total credit must fit the ledger. The terms are copied into every subscription sold from the plan, so a later change affects only what is sold after it.
+         */
+        post: operations["createSubscriptionPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/subscription-plans/{plan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change a subscription plan
+         * @description Saves the plan at the revision the caller read. A revision that has moved is a 409, so two administrators cannot overwrite each other. Subscriptions already sold keep the terms they were sold with.
+         */
+        put: operations["updateSubscriptionPlan"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/accounts/{account_id}/subscription-grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sell or give an account a subscription
+         * @description Grants the plan to the account, or renews the plan already in force: the term extends from its end (or from now when it has ended), and the new windows' credit is credited to the plan's liability in the ledger (docs/domains/billing.md「订阅套餐」). The source `gift` (the default) is a gift expense; `offline_payment` records money received outside the payment channels, like a credit grant. Another plan in force is a 409: a plan is not replaced silently. The ID is the idempotency key; the same key and terms change nothing.
+         */
+        post: operations["grantSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/accounts/{account_id}/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List an account's subscriptions
+         * @description The account's subscriptions, newest first, each with its current window.
+         */
+        get: operations["listSubscriptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2385,11 +2469,11 @@ export interface components {
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
-        /** @description One cash entry of the ledger: a paid credit or a refund. Every field is optional during rolling deployment. */
+        /** @description One cash entry of the ledger: a paid credit, a refund, a chargeback or the reversal of a chargeback. Every field is optional during rolling deployment. */
         CashMovement: {
             id?: components["schemas"]["Uuid"];
             /** @enum {string} */
-            kind?: "credit" | "refund";
+            kind?: "credit" | "refund" | "chargeback" | "chargeback_reverse";
             /**
              * Format: date-time
              * @description The transaction's time, which is what the dashboard's window counted.
@@ -2412,7 +2496,7 @@ export interface components {
         Merchant: {
             id?: components["schemas"]["MerchantId"];
             site_id?: components["schemas"]["SiteId"];
-            /** @description The compiled-in channel plugin, such as easypay. */
+            /** @description The compiled-in channel plugin, such as easypay or stripe. */
             kind?: string;
             name?: string;
             enabled?: boolean;
@@ -3181,6 +3265,104 @@ export interface components {
             data: components["schemas"]["RedeemCode"][];
             /** @description Absent on the last page. */
             next_cursor?: string;
+        };
+        /**
+         * @description An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+         * @example 5000000000
+         */
+        CreditAmount: string;
+        /** @description A plan as an administrator sets it. `price` is the list price in whole minor units of the site's currency. */
+        SubscriptionPlanInput: {
+            name: string;
+            price: components["schemas"]["Money"];
+            quota: components["schemas"]["CreditAmount"];
+            /** @description How long one window lasts, at least an hour. */
+            window_seconds: number;
+            /** @description How long the whole subscription lasts, at least one window. */
+            term_seconds: number;
+            /** @description Absent: true. */
+            active?: boolean;
+            reason: components["schemas"]["Reason"];
+        };
+        SubscriptionPlanUpdate: {
+            name: string;
+            price: components["schemas"]["Money"];
+            quota: components["schemas"]["CreditAmount"];
+            window_seconds: number;
+            term_seconds: number;
+            /** @description Absent: true. */
+            active?: boolean;
+            /** @description The revision the caller read. */
+            rev: number;
+            reason: components["schemas"]["Reason"];
+        };
+        SubscriptionPlan: {
+            id: components["schemas"]["Uuid"];
+            name: string;
+            price: components["schemas"]["Money"];
+            quota: components["schemas"]["CreditAmount"];
+            window_seconds: number;
+            term_seconds: number;
+            active: boolean;
+            rev: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SubscriptionPlanList: {
+            data: components["schemas"]["SubscriptionPlan"][];
+        };
+        /**
+         * @description How the plan was paid for. Absent in a request: gift.
+         * @enum {string}
+         */
+        SubscriptionSource: "gift" | "offline_payment";
+        /** @description A gift needs only `plan_id`; an offline payment needs `payment` too, and `source` set to it. */
+        SubscriptionGrantInput: {
+            plan_id: components["schemas"]["Uuid"];
+            source?: components["schemas"]["SubscriptionSource"];
+            payment?: components["schemas"]["OfflinePayment"];
+            reason: components["schemas"]["Reason"];
+        };
+        SubscriptionWindow: {
+            seq: number;
+            /** Format: date-time */
+            starts_at: string;
+            /** Format: date-time */
+            ends_at: string;
+            quota: components["schemas"]["CreditAmount"];
+            used: components["schemas"]["CreditAmount"];
+            reserved: components["schemas"]["CreditAmount"];
+            remaining: components["schemas"]["CreditAmount"];
+        };
+        /**
+         * @description `expired`: the term ended; `closed_at` is when what was left of it was written off.
+         * @enum {string}
+         */
+        SubscriptionStanding: "active" | "expired";
+        Subscription: {
+            id: components["schemas"]["Uuid"];
+            account_id: components["schemas"]["AccountId"];
+            plan_id: components["schemas"]["Uuid"];
+            /** @description The plan's name when it was sold; a later rename does not change it. */
+            plan_name: string;
+            state: components["schemas"]["SubscriptionStanding"];
+            /** Format: date-time */
+            starts_at: string;
+            /** Format: date-time */
+            ends_at: string;
+            /**
+             * Format: date-time
+             * @description When the remaining liability was written off; absent until then.
+             */
+            closed_at?: string;
+            /** Format: date-time */
+            created_at: string;
+            current_window: components["schemas"]["SubscriptionWindow"];
+        };
+        SubscriptionList: {
+            data: components["schemas"]["Subscription"][];
         };
         /** @description `amount` is the credit, in the site's currency. An offline payment has `payment`, and `exchange_rate` when it was converted from another currency. */
         CreditGrant: {
@@ -7772,6 +7954,165 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listSubscriptionPlans: {
+        parameters: {
+            query?: {
+                include_inactive?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plans. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionPlanList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createSubscriptionPlan: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubscriptionPlanInput"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionPlan"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSubscriptionPlan: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                plan_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubscriptionPlanUpdate"];
+            };
+        };
+        responses: {
+            /** @description Saved. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionPlan"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    grantSubscription: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubscriptionGrantInput"];
+            };
+        };
+        responses: {
+            /** @description Granted. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Subscription"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listSubscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subscriptions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             default: components["responses"]["Failure"];
         };
     };

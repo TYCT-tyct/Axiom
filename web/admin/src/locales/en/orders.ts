@@ -93,7 +93,7 @@ export default {
     emptyTitle: "No cash in this window",
     emptyBody: "A paid top-up or a refund appears here at the time the ledger recorded it.",
     col: { at: "Time", kind: "Movement", account: "Account", amount: "Cash", source: "Source" },
-    kind: { credit: "Top-up", refund: "Refund" },
+    kind: { credit: "Top-up", refund: "Refund", chargeback: "Chargeback", chargeback_reverse: "Chargeback reversed" },
     online: "Order {{order}}",
     offline: "Offline: {{channel}}",
   },

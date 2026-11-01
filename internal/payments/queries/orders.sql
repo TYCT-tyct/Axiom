@@ -62,7 +62,7 @@ SELECT count(*) FILTER (WHERE state = 'pending') AS pending,
         AND updated_at > transaction_timestamp() - make_interval(secs => @cancel_window::bigint)) AS cancelled,
     coalesce(sum(credits) FILTER (WHERE state NOT IN ('cancelled', 'expired', 'failed')
         AND created_at >= date_trunc('day', transaction_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'), 0)::bigint AS daily,
-    count(*) FILTER (WHERE state IN ('paid', 'partially_refunded', 'refunded')) AS paid
+    count(*) FILTER (WHERE state IN ('paid', 'partially_refunded', 'refunded', 'charged_back')) AS paid
 FROM payments.orders WHERE account_id = @account_id;
 
 -- The account's limits are checked under its own transaction lock, so two orders at once cannot both see the last

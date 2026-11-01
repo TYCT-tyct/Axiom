@@ -7,6 +7,7 @@ package billing
 import (
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -32,4 +33,53 @@ type BillingExchangeSync struct {
 	LastSuccess *time.Time
 	SourceAt    *time.Time
 	Alerted     bool
+}
+
+type BillingSubscriptionGrant struct {
+	ID             uuid.UUID
+	SiteID         uuid.UUID
+	AccountID      uuid.UUID
+	SubscriptionID uuid.UUID
+	PlanID         uuid.UUID
+	PlanName       string
+	Source         string
+	Quota          int64
+	WindowSeconds  int64
+	TermSeconds    int64
+	Windows        int32
+	Face           int64
+	Currency       pgtype.Text
+	Paid           *int64
+	Fee            *int64
+	MerchantID     *uuid.UUID
+	OfflineChannel pgtype.Text
+	RateID         *uuid.UUID
+	CreatedAt      time.Time
+}
+
+type BillingSubscriptionPlan struct {
+	ID            uuid.UUID
+	SiteID        uuid.UUID
+	Name          string
+	Currency      string
+	Price         int64
+	Quota         int64
+	WindowSeconds int64
+	TermSeconds   int64
+	Active        bool
+	Rev           int32
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type BillingSubscriptionWindow struct {
+	SubscriptionID uuid.UUID
+	Seq            int32
+	SiteID         uuid.UUID
+	AccountID      uuid.UUID
+	StartsAt       time.Time
+	EndsAt         time.Time
+	Quota          int64
+	Used           int64
+	Reserved       int64
 }

@@ -369,3 +369,63 @@ func TestRunBatchRollsBackAndARetryChargesOnce(t *testing.T) {
 	b.balanced()
 	b.consistent()
 }
+
+// reserveOnePlan reserves 100 for b and returns the hold, failing the test if the batch refused it.
+func reserveOnePlan(t *testing.T, b *bank) *Hold {
+	t.Helper()
+	holds, errs, err := b.reserveMany(b.admitted, []int64{100})
+	if err != nil || errs[0] != nil {
+		t.Fatalf("ReserveMany = %v, %v", errs[0], err)
+	}
+	return holds[0]
+}
+
+// TestReserveManyPlanBoundaries: admission passes a window or a term at the database's whole clock, not at the UTC day
+// the counters are bucketed by. A window that ended at 10:00 must not keep funding requests after 10:00 merely because
+// both times fall on the same date.
+func TestReserveManyPlanBoundaries(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	if now.Sub(now.Truncate(24*time.Hour)) < 2*time.Second {
+		t.Skip("the test needs a moment past UTC midnight to tell the day from the whole timestamp")
+	}
+	t.Run("a window ended after midnight is passed before quoting", reservePlanWindowBoundary)
+	t.Run("an ended term is expired before quoting", reservePlanTermBoundary)
+}
+
+func reservePlanWindowBoundary(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 1000, 0, Config{})
+	sub := b.subscribe(b.makePlan(300, 7200), uuid.NewV7())
+	b.sql("UPDATE billing.subscriptions SET starts_at = date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' WHERE id = '"+sub.ID.String()+"'",
+		"UPDATE billing.subscription_windows SET starts_at = date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', "+
+			"ends_at = date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + interval '1 second', used = 300 "+
+			"WHERE subscription_id = '"+sub.ID.String()+"' AND seq = 1")
+	h := reserveOnePlan(t, b)
+	if h.funding != "plan" || h.windowSeq != 2 {
+		t.Fatalf("hold funds from %q window %d, want the plan's second window", h.funding, h.windowSeq)
+	}
+	if w := b.window(2); w.Reserved != 100 {
+		t.Errorf("window 2 reserves %d, want the whole 100", w.Reserved)
+	}
+	b.consistent()
+}
+
+func reservePlanTermBoundary(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 1000, 0, Config{})
+	sub := b.subscribe(b.makePlan(300, 3600), uuid.NewV7())
+	b.sql("UPDATE billing.subscriptions SET starts_at = date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', " +
+		"ends_at = date_trunc('day', clock_timestamp() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + interval '1 second' WHERE id = '" + sub.ID.String() + "'")
+	h := reserveOnePlan(t, b)
+	if h.funding != "wallet" {
+		t.Fatalf("hold funds from %q, want the wallet after the term ended", h.funding)
+	}
+	if state := b.subscribed().State; state != "expired" {
+		t.Errorf("subscription state %q, want expired", state)
+	}
+	if w := b.window(1); w.Reserved != 0 || w.Used != 0 {
+		t.Errorf("window 1 is %+v, want nothing reserved or used", w)
+	}
+	b.consistent()
+}

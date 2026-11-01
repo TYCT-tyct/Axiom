@@ -232,35 +232,88 @@ func replaceCharge(ctx context.Context, tx pg.Tx, ev suppliers.ChargeEvent) (int
 	}
 	charged := &locked{id: ev.Request, row: row, balance: balance}
 	charged.owed = price.price
-	charged.charged = min(price.price, add(row.Charged, room(balance, 0)))
-	borne := max(price.price-charged.charged, 0)
-	revision := int64(ev.Revision)
-	reversed, err := post(ctx, tx, charged.event("reverse", revision), reversal(row.Price, row.Charged)...)
+	correction, err := chargeCorrection(ctx, tx, row, balance, charged, price, int64(ev.Revision))
 	if err != nil {
 		return 0, err
 	}
-	settled, err := post(ctx, tx, charged.event("settle", revision), charge(price.price, charged.charged)...)
-	if err != nil {
-		return 0, err
-	}
-	if !reversed && !settled {
+	if !correction.reversed && !correction.settled {
 		return 0, errNoCorrection
+	}
+	if err := correctPlanWindow(ctx, tx, ev.Request, row, correction.windowDelta); err != nil {
+		return 0, err
 	}
 	if err := writeCorrection(ctx, tx, charged, segments, price.tiers); err != nil {
 		return 0, err
 	}
-	if err := realignAllocation(ctx, tx, ev.Request, row, balance, charged.charged); err != nil {
-		return 0, err
+	if correction.walletDelta != 0 { // a plan charge moves no wallet money, so the allocation has nothing to realign
+		if err := realignAllocation(ctx, tx, ev.Request, row, balance, charged.charged); err != nil {
+			return 0, err
+		}
 	}
-	if borne > 0 {
+	if correction.borne > 0 {
 		if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{
 			Kind: "billing.charge_correction_borne", Key: ev.Request.String(), Severity: "critical",
-			Fields: map[string]string{"request": ev.Request.String(), "event": ev.ID.String(), "borne": fmt.Sprint(borne)},
+			Fields: map[string]string{"request": ev.Request.String(), "event": ev.ID.String(), "borne": fmt.Sprint(correction.borne)},
 		}); err != nil {
 			return 0, fmt.Errorf("billing: report the borne correction: %w", err)
 		}
 	}
-	return borne, nil
+	return correction.borne, nil
+}
+
+// correctionPost is what chargeCorrection wrote: whether each event landed, and the counter and allocation moves that
+// follow from the source that actually paid.
+type correctionPost struct {
+	reversed, settled bool
+	windowDelta       int64 // the frozen window's used amount changes by this much
+	walletDelta       int64 // the user's balance changes by this much
+	borne             int64
+}
+
+// chargeCorrection reverses the old charge and posts the corrected one, choosing the source the effective settlement
+// actually used. A true plan charge is capped by its frozen window and moves no wallet money; a reservation whose late
+// settlement paid from the wallet (funding was rewritten then) is corrected against the wallet and its allocation.
+func chargeCorrection(ctx context.Context, tx pg.Tx, row LockReservationRow, balance LockBalanceRow, charged *locked, price priced, revision int64) (correctionPost, error) {
+	reverse, settle, windowDelta, walletDelta, err := correctionLines(ctx, tx, row, balance, charged, price)
+	if err != nil {
+		return correctionPost{}, err
+	}
+	reversed, err := post(ctx, tx, charged.event("reverse", revision), reverse...)
+	if err != nil {
+		return correctionPost{}, err
+	}
+	settled, err := post(ctx, tx, charged.event("settle", revision), settle...)
+	if err != nil {
+		return correctionPost{}, err
+	}
+	return correctionPost{
+		reversed: reversed, settled: settled, windowDelta: windowDelta, walletDelta: walletDelta,
+		borne: max(price.price-charged.charged, 0),
+	}, nil
+}
+
+// correctionLines prices the corrected charge against the source the reservation records and returns the two ledger
+// entries and the counters they move.
+func correctionLines(ctx context.Context, tx pg.Tx, row LockReservationRow, balance LockBalanceRow, charged *locked, price priced) ([]line, []line, int64, int64, error) {
+	if row.SubscriptionID != (uuid.UUID{}) {
+		// A plan charge is capped by the frozen window, whose room is read afresh: a later request may have taken what
+		// this one released, and the window's quota bounds every charge into it (docs/domains/billing.md「订阅套餐」).
+		left, sub, err := planRoom(ctx, tx, row.SubscriptionID, row.WindowSeq)
+		if err != nil {
+			return nil, nil, 0, 0, err
+		}
+		charged.charged = min(price.price, min(row.Amount, add(row.Charged, left)))
+		delta := charged.charged - row.Charged
+		reverse, settle := planReversal(row.Price, row.Charged), planCharge(price.price, charged.charged)
+		if sub.ClosedAt != nil && delta != 0 {
+			// The subscription was written off, so its liability is zero: the difference comes back out of the expired
+			// income that write-off booked, and the pair leaves the liability at zero and never negative.
+			settle = append(settle, line{bookCreditExpired, delta, siteCredits}, line{bookPlanLiability, -delta, siteCredits})
+		}
+		return reverse, settle, delta, 0, nil
+	}
+	charged.charged = min(price.price, add(row.Charged, room(balance, 0)))
+	return reversal(row.Price, row.Charged), charge(price.price, charged.charged), 0, charged.charged - row.Charged, nil
 }
 
 // lockCorrection reads the request's account, then locks its balance and reservation, the order every settlement uses.
@@ -291,7 +344,7 @@ func writeCorrection(ctx context.Context, tx pg.Tx, charged *locked, segments []
 	}
 	row := charged.row
 	if _, err := queries.EndReservation(ctx, tx, EndReservationParams{
-		Profit: correctedProfit(row, charged.charged), Reserved: 0, Spent: charged.charged - row.Charged,
+		Profit: correctedProfit(row, charged.charged), BalanceReserved: 0, SpendReserved: 0, Spent: charged.charged - row.Charged,
 		AccountID: row.AccountID, WorkspaceID: row.WorkspaceID, WorkspaceWindow: row.WorkspaceWindow,
 		KeyID: row.KeyID, KeyWindow: row.KeyWindow, RequestID: charged.id, State: "settled",
 		Charged: charged.charged, Price: charged.owed, Waived: row.Waived, Estimated: false,
@@ -323,6 +376,21 @@ func realignAllocation(ctx context.Context, tx pg.Tx, request uuid.UUID, row Loc
 		return fmt.Errorf("%w: the allocation moved while correcting %s", errNotReady, request)
 	} else if err != nil {
 		return err
+	}
+	return nil
+}
+
+// correctPlanWindow moves the corrected charge into the frozen window's used amount.
+func correctPlanWindow(ctx context.Context, tx pg.Tx, request uuid.UUID, row LockReservationRow, delta int64) error {
+	if delta == 0 {
+		return nil
+	}
+	if n, err := queries.ChargeWindowUsed(ctx, tx, ChargeWindowUsedParams{
+		SubscriptionID: row.SubscriptionID, Seq: row.WindowSeq, Delta: delta,
+	}); err != nil {
+		return fmt.Errorf("billing: move the window's usage: %w", err)
+	} else if n != 1 {
+		return fmt.Errorf("billing: the window of %s cannot take a correction of %d", request, delta)
 	}
 	return nil
 }
