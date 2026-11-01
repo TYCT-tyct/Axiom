@@ -75,7 +75,7 @@ func TestAdminCallsPlansUseIndexOrder(t *testing.T) {
 // hasSortNode reports a Sort plan node. A Merge Append's "Sort Key:" line is not a sort node: it says how the append
 // merges partitions already read in index order, which is what this test requires.
 func hasSortNode(plan string) bool {
-	for _, line := range strings.Split(plan, "\n") {
+	for line := range strings.SplitSeq(plan, "\n") {
 		fields := strings.Fields(line)
 		for i := 0; i+1 < len(fields); i++ {
 			if fields[i] == "Sort" && strings.HasPrefix(fields[i+1], "(cost=") {
