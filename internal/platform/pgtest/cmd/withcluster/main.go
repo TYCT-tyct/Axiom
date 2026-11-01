@@ -36,9 +36,10 @@ func run(args []string) int {
 		return 1
 	}
 	// The cache is one container for the run, as the cluster is: a test that changes its state starts its own
-	// (internal/platform/kv/README.md「测试」). Its URL and password file go in the environment the same way, so that
-	// neither enters a test's cache key.
-	url, passwordFile, terminateCache, err := kvtest.StartServer(ctx)
+	// (internal/platform/kv/README.md「测试」). Its URL and the two password files go in the environment the same way, so
+	// that none enters a test's cache key; the second password is the read-only admin a test reads a lifetime or lists
+	// keys with, which must not cost a container.
+	url, passwordFile, adminPasswordFile, terminateCache, err := kvtest.StartServer(ctx)
 	if err != nil {
 		stop, cancel := context.WithTimeout(context.Background(), terminateTimeout)
 		defer cancel()
@@ -53,7 +54,8 @@ func run(args []string) int {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // running the command it is given is this tool's job
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = append(os.Environ(),
-		pgtest.ClusterEnv+"="+connection, kvtest.URLEnv+"="+url, kvtest.PasswordFileEnv+"="+passwordFile)
+		pgtest.ClusterEnv+"="+connection, kvtest.URLEnv+"="+url, kvtest.PasswordFileEnv+"="+passwordFile,
+		kvtest.AdminPasswordFileEnv+"="+adminPasswordFile)
 	// The cluster's connection keeps the command's reaper alive across idle gaps between packages (#411).
 	// A changing session is a test cache input, so only pass it when there is a reaper to keep alive.
 	if !testcontainers.ReadConfig().Config.RyukDisabled {

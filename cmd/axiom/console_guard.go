@@ -48,8 +48,6 @@ type guard struct {
 	accounts *accounts.Service
 	proxies  []netip.Prefix
 	logger   *slog.Logger
-	// timeout is the request's deadline when a test wants another than the surface's.
-	timeout time.Duration
 	// admin makes this the admin listener's guard: the host must be an admin domain, and the permission an operation
 	// names is asked of the platform (accounts.PlatformTarget) instead of the session's own account.
 	admin bool
@@ -71,12 +69,9 @@ func (g *guard) target(p accounts.Principal) accounts.Target {
 	return accounts.AccountTarget(p.AccountID())
 }
 
-// deadline is the time a request has: the guard's own when a test sets one, else the surface's.
+// deadline is the time a request has, which the surface sets.
 func (g *guard) deadline() time.Duration {
-	switch {
-	case g.timeout != 0:
-		return g.timeout
-	case g.admin:
+	if g.admin {
 		return adminDeadline
 	}
 	return consoleDeadline

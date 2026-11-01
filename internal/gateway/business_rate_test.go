@@ -93,7 +93,7 @@ func testNodeRateAccountIsolation(t *testing.T, mode, dimension string) {
 	var server *kvtest.Server
 	var cache *kv.Client
 	if mode != "local" {
-		server = kvtest.Own(t)
+		server = kvtest.New(t)
 		cache = server.OpenIn(t, kvtest.Namespace(), kv.Deps{})
 	}
 	r := newRig(t, func(o *rigOptions) {
@@ -113,7 +113,9 @@ func testNodeRateAccountIsolation(t *testing.T, mode, dimension string) {
 	}
 	for n := range 6 {
 		if mode == "outage" && n == 2 {
-			server.Stop(t)
+			if err := cache.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
 		}
 		resp, body := send(a.key)
 		limit := 0
@@ -177,7 +179,7 @@ func TestBusinessRateConcurrentAdmission(t *testing.T) {
 
 func TestBusinessRateSharedAndFallback(t *testing.T) {
 	t.Parallel()
-	server := kvtest.Own(t)
+	server := kvtest.New(t)
 	namespace, clock := kvtest.Namespace(), newFrozenClock()
 	reader := sdkmetric.NewManualReader()
 	cache := server.OpenIn(t, namespace, kv.Deps{Now: clock.Now, Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")})
@@ -211,7 +213,9 @@ func TestBusinessRateSharedAndFallback(t *testing.T) {
 		t.Fatalf("inference used %d cache accesses", accesses)
 	}
 	// Both requests advanced the local account pool, even while shared storage was healthy.
-	server.Stop(t)
+	if err := cache.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	resp, body := r.do(http.MethodPost, "/api/v1/messages/count_tokens", a.key, strings.NewReader(countBody))
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("fallback lost its history: %d %s", resp.StatusCode, body)

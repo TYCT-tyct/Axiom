@@ -44,8 +44,8 @@ func TestStickyKeysAndValues(t *testing.T) {
 
 func TestStickyLifetime(t *testing.T) {
 	t.Parallel()
-	// The life is read as the admin, whom only a container of the test's own has (README「权限」).
-	server := kvtest.Own(t)
+	// The life is a read, as the shared server's admin user may do (README「权限」).
+	server := kvtest.New(t)
 	cache := server.Open(t, kv.Deps{})
 	router, err := New(Config{})
 	if err != nil {
@@ -57,7 +57,7 @@ func TestStickyLifetime(t *testing.T) {
 		if _, err := cache.Do(t.Context(), kv.StickyWrite, router.StickyWrite(key, endpoint, ttl)); err != nil {
 			t.Fatal(err)
 		}
-		life, err := server.Do(t, t.Context(), server.Admin.B().Pttl().Key(key).Build())[0].ToInt64()
+		life, err := server.TTL(t, t.Context(), key)
 		want := ttl.Milliseconds()
 		if ttl == 0 {
 			want = time.Hour.Milliseconds()

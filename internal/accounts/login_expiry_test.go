@@ -10,7 +10,7 @@ import (
 
 func TestSharedAttemptKeysExpireAndRefundDeletes(t *testing.T) {
 	t.Parallel()
-	server := kvtest.Own(t)
+	server := kvtest.New(t)
 	namespace := kvtest.Namespace()
 	s := &Service{cache: server.OpenIn(t, namespace, kv.Deps{})}
 	key := attemptKey(namespace, "expiry")
@@ -41,7 +41,7 @@ func TestSharedAttemptKeysExpireAndRefundDeletes(t *testing.T) {
 
 func checkLoginTTL(t *testing.T, server *kvtest.Server, key string, upper int64) {
 	t.Helper()
-	ttl, err := server.Do(t, t.Context(), server.Admin.B().Pttl().Key(key).Build())[0].AsInt64()
+	ttl, err := server.TTL(t, t.Context(), key)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -222,10 +222,10 @@ func deadCache(t *testing.T, now func() time.Time) *kv.Client {
 }
 
 // TestRecipientKeyHidesTheAddressAndExpires: the shared key is a hash, has the one-minute lifetime, and lists no
-// address even to a reader with every permission. A server of the test's own is needed for that reader.
+// address even to the reader with every key.
 func TestRecipientKeyHidesTheAddressAndExpires(t *testing.T) {
 	t.Parallel()
-	server := kvtest.Own(t)
+	server := kvtest.New(t)
 	cache := server.Open(t, kv.Deps{})
 	node := sharedThrottle(cache, testMailKey(t))
 	const recipient = "User@Example.com"
@@ -236,14 +236,14 @@ func TestRecipientKeyHidesTheAddressAndExpires(t *testing.T) {
 	if !node.allow(t.Context(), recipient) {
 		t.Fatal("the first message was refused")
 	}
-	keys, err := server.Do(t, t.Context(), server.Admin.B().Keys().Pattern(cache.Key(kv.MailSpace, uuid.Nil(), "*")).Build())[0].AsStrSlice()
+	keys, err := server.Read(t, t.Context(), server.Admin.B().Keys().Pattern(cache.Key(kv.MailSpace, uuid.Nil(), "*")).Build())[0].AsStrSlice()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(keys) != 1 || keys[0] != key {
 		t.Fatalf("the shared store holds %v; want only %q", keys, key)
 	}
-	life, err := server.Do(t, t.Context(), server.Admin.B().Pttl().Key(key).Build())[0].AsInt64()
+	life, err := server.TTL(t, t.Context(), key)
 	if err != nil || life <= 0 || life > rateInterval.Milliseconds() {
 		t.Fatalf("the key lives %d ms, err %v; want at most one interval", life, err)
 	}

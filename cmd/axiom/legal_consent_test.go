@@ -33,7 +33,7 @@ func TestLegalConsentHTTP(t *testing.T) {
 	if _, err := admin.user(memberPassword+"\n", "create", "--email", memberEmail); err != nil {
 		t.Fatal(err)
 	}
-	console := startNode(c, clock, 0)
+	console := startNode(c, clock)
 	site := admin.siteID()
 	path := "/sites/" + site + "/legal-documents"
 

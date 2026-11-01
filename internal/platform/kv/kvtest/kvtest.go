@@ -30,6 +30,9 @@ const (
 	URLEnv = "KVTEST_URL"
 	// PasswordFileEnv names the file that holds the password of that server's axiom user.
 	PasswordFileEnv = "KVTEST_PASSWORD_FILE"
+	// AdminPasswordFileEnv names the file that holds the password of that server's admin user, who may read every key
+	// so that a test of a lifetime or a key list costs no container of its own.
+	AdminPasswordFileEnv = "KVTEST_ADMIN_PASSWORD_FILE" //nolint:gosec // the name of a variable, not a credential
 
 	// image is the tag deploy/compose.yaml pins: a test that passed on another version proves another version.
 	image = "valkey/valkey:9.1.2-alpine"
@@ -47,22 +50,30 @@ type Server struct {
 	URL          string // valkey://axiom@host:port
 	PasswordFile string // the file that holds the axiom user's password
 
-	// Admin runs commands as a user with every permission, for the tests of kv under a server that misbehaves:
-	// CLIENT PAUSE, a memory limit filled to the brim. It is nil for the server a run shares, which no test may
-	// disturb.
+	// Admin runs commands as the admin user: every permission on a container of this test's own, for CLIENT PAUSE, a
+	// memory limit filled to the brim, or a restart, and read-only on the server a run shares, so that a test may read a
+	// lifetime or list a namespace without starting a container. Do refuses the shared server; Read does not.
 	Admin valkey.Client
 	// box is the container of this test's own, which Stop and Start restart; nil for the shared server.
 	box *box
 }
 
-// New is the server of the run: the one withcluster started when both variables are set, and a container of this
+// New is the server of the run: the one withcluster started when its three variables are set, and a container of this
 // test's own otherwise, so `go test ./internal/platform/kv` works alone.
 func New(t testing.TB) *Server {
 	t.Helper()
-	if url, file := shared(); url != "" && file != "" {
-		return &Server{URL: url, PasswordFile: file}
+	address, file, adminFile := shared()
+	if address == "" || file == "" || adminFile == "" {
+		return Own(t)
 	}
-	return Own(t)
+	parsed, err := url.Parse(address)
+	if err != nil {
+		t.Fatalf("parse %s: %v", URLEnv, err)
+	}
+	return &Server{
+		URL: address, PasswordFile: file,
+		Admin: dial(t, parsed.Host, "admin", readPassword(t, adminFile)),
+	}
 }
 
 // Own is a container of this test's own, which it may pause, restart, or fill: a test that changes the server's state
@@ -82,7 +93,7 @@ func Own(t testing.TB, opts ...Option) *Server {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), startTimeout)
 	t.Cleanup(cancel)
-	b, err := startOnAPort(ctx, acl(password, admin), settings)
+	b, err := startOnAPort(ctx, acl(password, admin, false), settings)
 	if err != nil {
 		t.Fatalf("start valkey: %v", err)
 	}
@@ -224,8 +235,18 @@ func (s *Server) OpenIn(t testing.TB, namespace string, deps kv.Deps) *kv.Client
 // Do runs commands as the admin user and returns their replies, for the tests that change the server's state.
 func (s *Server) Do(t testing.TB, ctx context.Context, cmds ...valkey.Completed) []valkey.ValkeyResult {
 	t.Helper()
-	if s.Admin == nil {
+	if s.box == nil {
 		t.Skip("the server that a run shares is not for a test that changes its state")
+	}
+	return s.Read(t, ctx, cmds...)
+}
+
+// Read runs commands as the admin user and returns their replies. It works on the shared server, whose admin user may
+// only read: a lifetime (PTTL), a key list (KEYS), or a scan.
+func (s *Server) Read(t testing.TB, ctx context.Context, cmds ...valkey.Completed) []valkey.ValkeyResult {
+	t.Helper()
+	if s.Admin == nil {
+		t.Fatal("this server has no admin user")
 	}
 	results := s.Admin.DoMulti(ctx, cmds...)
 	for i, result := range results {
@@ -236,6 +257,48 @@ func (s *Server) Do(t testing.TB, ctx context.Context, cmds ...valkey.Completed)
 	return results
 }
 
+// TTL is key's remaining life in milliseconds, read as the admin user: reading it needs no container of the test's own.
+func (s *Server) TTL(t testing.TB, ctx context.Context, key string) (int64, error) {
+	t.Helper()
+	if s.Admin == nil {
+		t.Fatal("this server has no admin user")
+	}
+	return s.Admin.Do(ctx, s.Admin.B().Pttl().Key(key).Build()).AsInt64()
+}
+
+// Down is a client of an address where nothing listens: the outage a deployment has when its server is gone, without a
+// container to stop. Under train load, waiting for the container was what made an outage test hang, not the outage.
+func Down(t testing.TB) *kv.Client {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "password")
+	if err := os.WriteFile(file, []byte(newPassword()+"\n"), 0o600); err != nil {
+		t.Fatalf("write the password file: %v", err)
+	}
+	var listen net.ListenConfig
+	listener, err := listen.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("find an address nothing listens on: %v", err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close the address: %v", err)
+	}
+	client, err := kv.Open(t.Context(), kv.Config{
+		URL: "valkey://axiom@" + address, PasswordFile: file, Nodes: 1, Namespace: Namespace(),
+	}, Deps(kv.Deps{AccessTimeout: kv.Timeout}))
+	if err != nil {
+		t.Fatalf("open a client of an address nothing listens on: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Second)
+		defer cancel()
+		if err := client.Close(ctx); err != nil {
+			t.Errorf("close the down client: %v", err)
+		}
+	})
+	return client
+}
+
 // Client connects as the deployed user, axiom, for the tests of what its ACL refuses: no other test can run a command
 // the program does not send.
 func (s *Server) Client(t testing.TB) valkey.Client {
@@ -244,51 +307,65 @@ func (s *Server) Client(t testing.TB) valkey.Client {
 	if err != nil {
 		t.Fatalf("parse %s: %v", URLEnv, err)
 	}
-	password, err := os.ReadFile(s.PasswordFile) // #nosec G304 -- the file the test's own server was given
-	if err != nil {
-		t.Fatalf("read the password file: %v", err)
-	}
-	return dial(t, u.Host, u.User.Username(), strings.TrimSpace(string(password)))
+	return dial(t, u.Host, u.User.Username(), readPassword(t, s.PasswordFile))
 }
 
-// StartServer runs the container a whole run shares and returns its URL, the file its password was written to, and the
-// function that removes both. The ACL user and the configuration are a deployment's, because the tests must run as the
-// user a deployment gives them.
-func StartServer(ctx context.Context) (url, passwordFile string, terminate func(context.Context) error, err error) {
-	password := newPassword()
+// StartServer runs the container a whole run shares and returns its URL, the two files its axiom and admin passwords
+// were written to, and the function that removes them. The ACL user and the configuration are a deployment's, because
+// the tests must run as the user a deployment gives them; the admin user may only read, because another test's keys are
+// in this server too.
+func StartServer(ctx context.Context) (url, passwordFile, adminPasswordFile string, terminate func(context.Context) error, err error) {
+	password, admin := newPassword(), newPassword()
 	dir, err := os.MkdirTemp("", "kvtest-")
 	if err != nil {
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
-	passwordFile = filepath.Join(dir, "password")
-	if err := os.WriteFile(passwordFile, []byte(password+"\n"), 0o600); err != nil {
-		return "", "", nil, err
+	passwordFile, adminPasswordFile = filepath.Join(dir, "password"), filepath.Join(dir, "admin-password")
+	for _, f := range []struct{ path, password string }{{passwordFile, password}, {adminPasswordFile, admin}} {
+		if err := os.WriteFile(f.path, []byte(f.password+"\n"), 0o600); err != nil {
+			return "", "", "", nil, errors.Join(err, os.RemoveAll(dir))
+		}
 	}
-	b, err := startServer(ctx, acl(password, ""), options{memory: defaultMemory, policy: defaultPolicy})
+	b, err := startServer(ctx, acl(password, admin, true), options{memory: defaultMemory, policy: defaultPolicy})
 	if err != nil {
-		return "", "", nil, errors.Join(err, os.RemoveAll(dir))
+		return "", "", "", nil, errors.Join(err, os.RemoveAll(dir))
 	}
 	terminate = func(ctx context.Context) error {
 		return errors.Join(b.terminate(ctx), os.RemoveAll(dir))
 	}
-	return "valkey://axiom@" + b.address, passwordFile, terminate, nil
+	return "valkey://axiom@" + b.address, passwordFile, adminPasswordFile, terminate, nil
 }
 
-// shared is the server withcluster started. Its URL and password file identify infrastructure, not test inputs.
-func shared() (url, passwordFile string) {
-	return containertest.Untracked(URLEnv), containertest.Untracked(PasswordFileEnv)
+// shared is the server withcluster started. Its URL and password files identify infrastructure, not test inputs.
+func shared() (address, passwordFile, adminPasswordFile string) {
+	return containertest.Untracked(URLEnv), containertest.Untracked(PasswordFileEnv), containertest.Untracked(AdminPasswordFileEnv)
+}
+
+// readPassword reads a password file as a deployment wrote it.
+func readPassword(t testing.TB, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path) // #nosec G304 -- the file the test's own server was given
+	if err != nil {
+		t.Fatalf("read the password file: %v", err)
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 // acl is the ACL file: the axiom user with the commands of README「权限」 under ax:*, `default` off, and an admin user
-// when the container is a test's own. Only a password's SHA-256 goes in the file, as in a deployment.
-func acl(password string, admin string) string {
+// with every permission on a test's own container or reads only on the shared one. Only a password's SHA-256 goes in the
+// file, as in a deployment.
+func acl(password, admin string, readOnly bool) string {
 	users := []string{
 		"user default off",
 		"user axiom on #" + digest(password) + " ~ax:* +hello +auth +ping +client|setinfo +info +time +get +set +del " +
 			"+incr +pexpire +eval",
 	}
 	if admin != "" {
-		users = append(users, "user admin on #"+digest(admin)+" ~* +@all")
+		commands := "+@all"
+		if readOnly {
+			commands = "+hello +auth +ping +client|setinfo +get +pttl +keys +scan +info +time"
+		}
+		users = append(users, "user admin on #"+digest(admin)+" ~* "+commands)
 	}
 	return strings.Join(users, "\n") + "\n"
 }
