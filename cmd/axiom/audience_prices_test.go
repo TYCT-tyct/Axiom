@@ -100,7 +100,7 @@ func seedAudiencePrices(t *testing.T, f publicationViewFixture, account accounts
 			if !ok {
 				t.Fatal("missing main site")
 			}
-			if _, err := billing.CreateRule(t.Context(), tx, audit.System("audience.test"), w.site, site.Currency, in, "audience price"); err != nil {
+			if _, err := billing.CreateRule(t.Context(), tx, audit.System("audience.test"), w.site, site.Currency, in, nil, "audience price"); err != nil {
 				return err
 			}
 			return refreshSalePrices(t.Context(), tx, w.site, site.Currency)

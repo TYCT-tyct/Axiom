@@ -139,7 +139,7 @@ func TestExchangePublicationAndPreviewFreezeEvidence(t *testing.T) {
 	var published Sold
 	err := f.tx(func(tx pg.Tx) error {
 		var err error
-		r, err = CreateRule(t.Context(), tx, system, f.site, cny, in, "test exchange sale")
+		r, err = CreateRule(t.Context(), tx, system, f.site, cny, in, nil, "test exchange sale")
 		if err != nil {
 			return err
 		}

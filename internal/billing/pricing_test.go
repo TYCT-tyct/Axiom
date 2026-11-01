@@ -7,6 +7,7 @@ import (
 	"testing"
 	"uuid"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/jsonx"
@@ -44,6 +45,40 @@ func rule(target Selector, m Method) RuleInput {
 
 // TestRuleChecks: a rule breaks a rule of rules by one member, which the refusal names; the rules that pass are the
 // ones the contract describes.
+// TestRuleItemsWaitForEveryNode: a rule's fixed price and fixed markup pass the catalog's new-item switches, so a name
+// an older node cannot read is never stored in a rule.
+func TestRuleItemsWaitForEveryNode(t *testing.T) {
+	t.Parallel()
+	allow := func(s catalog.Schedule) error {
+		if s.Priced(1 << catalog.ItemFileSearch) {
+			return catalog.ErrFileSearch
+		}
+		return nil
+	}
+	for _, tc := range []struct {
+		name, method, field string
+	}{
+		{"a fixed price", `{"kind":"fixed","schedule":{"v":1,"currency":"USD","rates":{"input":"1","file_search":"0.0025"}}}`, "method/schedule"},
+		{"a fixed markup", `{"kind":"cost_plus","markup_ratio":"0.1","fixed_markup":{"file_search":"0.0025"}}`, "method/fixed_markup"},
+	} {
+		in := RuleInput{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}}
+		if err := jsonx.Unmarshal([]byte(tc.method), &in.Method); err != nil {
+			t.Fatal(err)
+		}
+		var e *RuleError
+		if err := in.CheckItems(allow); !errors.As(err, &e) || e.Field != tc.field {
+			t.Errorf("%s: %v, want a refusal of %s", tc.name, err, tc.field)
+		}
+	}
+	in := RuleInput{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}, Method: fixed()}
+	if err := in.CheckItems(allow); err != nil {
+		t.Errorf("a token price: %v", err)
+	}
+	if err := in.CheckItems(nil); err != nil {
+		t.Errorf("no gate: %v", err)
+	}
+}
+
 func TestRuleChecks(t *testing.T) {
 	t.Parallel()
 	ratio := func(s string) *string { return &s }
@@ -160,7 +195,7 @@ func (r rules) tx(f func(tx pg.Tx) error) error {
 func (r rules) create(in RuleInput) (Rule, error) {
 	var made Rule
 	err := r.tx(func(tx pg.Tx) (err error) {
-		made, err = CreateRule(r.t.Context(), tx, system, r.site, usd, in, "because")
+		made, err = CreateRule(r.t.Context(), tx, system, r.site, usd, in, nil, "because")
 		return err
 	})
 	return made, err
@@ -187,7 +222,7 @@ func (r rules) store(in RuleInput) {
 func (r rules) update(id uuid.UUID, rev int64, in RuleInput) (Rule, error) {
 	var made Rule
 	err := r.tx(func(tx pg.Tx) (err error) {
-		made, err = UpdateRule(r.t.Context(), tx, system, r.site, usd, id, rev, in, "changed", nil)
+		made, err = UpdateRule(r.t.Context(), tx, system, r.site, usd, id, rev, in, nil, "changed", nil)
 		return err
 	})
 	return made, err

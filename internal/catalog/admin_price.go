@@ -209,6 +209,10 @@ func (c *Catalog) allowFileSearch(s Schedule) error {
 	return nil
 }
 
+// AllowSchedule applies the same new-item switches to a price list stored outside the catalog, such as a billing rule's
+// fixed price: that price reaches the same published versions, so the switch must be checked before the rule is saved.
+func (c *Catalog) AllowSchedule(s Schedule) error { return c.allowPrices(s) }
+
 // allowPrices applies every new-item compatibility switch before a price is written to the catalog.
 func (c *Catalog) allowPrices(s Schedule) error {
 	if err := c.allowCounted(s); err != nil {

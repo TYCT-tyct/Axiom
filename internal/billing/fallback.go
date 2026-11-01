@@ -215,16 +215,17 @@ func missingRate(s catalog.Schedule, f fallbacks, it catalog.Item) platform.Unit
 	if perUseItems.Has(it) {
 		return f.perUse[it]
 	}
-	if unit := it.Unit(); unit != catalog.UnitToken {
+	if it.Unit() == catalog.UnitUse {
+		// A per-use item without a site default (a request or a file search) is never charged another tool's price: only
+		// its own price is comparable, so without one it falls through to the token price like any unpriced item.
 		if highest, priced := itemPrice(s, it); priced {
 			return highest
 		}
-		// A per-use item without a site default (a request or a file search) is never charged another tool's price: only
-		// its own price is comparable, so without one it falls through to the token price like any unpriced item.
-		if unit != catalog.UnitUse {
-			if highest, priced := unitPrice(s, unit); priced {
-				return highest
-			}
+	} else if unit := it.Unit(); unit != catalog.UnitToken {
+		// A counted item keeps the dearest price of its unit: the input and output images of a model are comparable, and
+		// the item's own price in another service tier is not the cost of serving it in this one.
+		if highest, priced := unitPrice(s, unit); priced {
+			return highest
 		}
 	}
 	return tokenPrice(s)

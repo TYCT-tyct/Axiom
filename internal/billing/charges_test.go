@@ -59,6 +59,20 @@ func TestItemizedSalePrices(t *testing.T) {
 	}
 }
 
+// TestCountedItemMissingAtATierUsesItsUnitPrice: a piece the served tier does not price is charged at the dearest piece
+// price of the schedule, not at the same item's price in another tier, which would undercharge an output image reported
+// as an input image.
+func TestCountedItemMissingAtATierUsesItsUnitPrice(t *testing.T) {
+	t.Parallel()
+	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.0000000001","output":"0.0000000002","image_in_piece":"0.01","image_out_piece":"0.10"},"service_tiers":{"priority":{"rates":{"input":"0.0000000008","output":"0.0000000009"}}}}`)
+	seg := chargeTestSegment(t, map[catalog.Item]int64{catalog.ItemImageInPiece: 1}, catalog.ServiceTierPriority, nil, nil)
+	items := chargeItems(s, fallbacks{}, seg, false, 0)
+	if len(items) != 1 || items[0].Item != "image_in_piece" || items[0].UnitPrice != "0.1" {
+		t.Fatalf("items: %+v", items)
+	}
+	checkChargePrices(t, items, "0.1", "", true)
+}
+
 // TestFileSearchWithoutAnyPriceFallsBackToTokens: a per-use item with no site default is never charged another tool's
 // price; a schedule that prices no file search at all charges it at the dearest token price and marks it estimated.
 func TestFileSearchWithoutAnyPriceFallsBackToTokens(t *testing.T) {

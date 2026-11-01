@@ -65,6 +65,21 @@ func TestFreeModelPublicationStaysZero(t *testing.T) {
 	}
 }
 
+// TestFileSearchPriceNeedsTheModelToSellIt: a rule that prices file_search for a model whose spec does not declare it
+// leaves the model unpriced rather than publishing a name every node would read for a tool the model never serves.
+func TestFileSearchPriceNeedsTheModelToSellIt(t *testing.T) {
+	t.Parallel()
+	schedule := `{"v":1,"currency":"USD","rates":{"input":"0.000001","file_search":"0.0025"}}`
+	rule := Rule{Enabled: true, Target: Selector{Kind: "all"}, Method: Method{Kind: "fixed", Schedule: jsonx.Raw(schedule)}, ID: uuid.NewV7(), Rev: 1}
+	p, err := proposePrice(defaultPricePolicy(), []Rule{rule}, catalog.Model{Slug: "acme/alpha"}, nil, usd, nil, fallbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Problem == "" || len(p.Schedule) != 0 {
+		t.Errorf("problem %q, schedule %s; want the model unpriced", p.Problem, p.Schedule)
+	}
+}
+
 // TestSoldZeroChecksEveryAudience: a :free model is safe only if no published layer, not just the default, has a
 // non-zero price.
 func TestSoldZeroChecksEveryAudience(t *testing.T) {

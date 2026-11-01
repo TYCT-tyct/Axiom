@@ -123,6 +123,38 @@ func (in RuleInput) Check(currency platform.Currency) error {
 	return in.Constraints.check()
 }
 
+// CheckItems applies the catalog's new-item switches to the price lists a rule carries. Check validates their form;
+// this refuses a price on an item a node running an older release cannot read, whether the rule sells it as a whole
+// price list or marks it up by a fixed amount, so a stored rule cannot make another node's price refresh fail.
+func (in RuleInput) CheckItems(allow func(catalog.Schedule) error) error {
+	if allow == nil {
+		return nil
+	}
+	return in.Method.checkItems(allow)
+}
+
+func (m Method) checkItems(allow func(catalog.Schedule) error) error {
+	if len(m.Schedule) > 0 {
+		s, err := catalog.ParseSchedule(m.Schedule)
+		if err != nil {
+			return &RuleError{"method/schedule", "is not a price list of the catalog's form"}
+		}
+		if err := allow(s); err != nil {
+			return &RuleError{"method/schedule", err.Error()}
+		}
+	}
+	if len(m.FixedMarkup) > 0 {
+		s, err := catalog.ParseSchedule(fmt.Appendf(nil, `{"v":1,"currency":"XXX","rates":%s}`, m.FixedMarkup))
+		if err != nil {
+			return &RuleError{"method/fixed_markup", "is not a set of prices"}
+		}
+		if err := allow(s); err != nil {
+			return &RuleError{"method/fixed_markup", err.Error()}
+		}
+	}
+	return nil
+}
+
 func checkTarget(t Selector) error {
 	if !slices.Contains(targetKinds, t.Kind) {
 		return &RuleError{"target/kind", "is not a thing a rule prices"}
@@ -354,8 +386,11 @@ func Place(r Rule, rules []Rule) []Rule {
 }
 
 // CreateRule adds a rule to the site. The change is recorded as the rule's first version and in the audit log.
-func CreateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, currency platform.Currency, in RuleInput, reason string) (Rule, error) {
+func CreateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, currency platform.Currency, in RuleInput, allow func(catalog.Schedule) error, reason string) (Rule, error) {
 	if err := in.Check(currency); err != nil {
+		return Rule{}, err
+	}
+	if err := in.CheckItems(allow); err != nil {
 		return Rule{}, err
 	}
 	if _, err := LockPricePolicy(ctx, tx, site); err != nil {
@@ -381,7 +416,7 @@ func CreateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 
 // UpdateRule replaces the rule as of rev. validate checks external subjects after locking the stored rule;
 // only unchanged retirement bypasses validation, so legacy rules can always be stopped.
-func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, currency platform.Currency, id uuid.UUID, rev int64, in RuleInput, reason string, validate func() error) (Rule, error) {
+func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, currency platform.Currency, id uuid.UUID, rev int64, in RuleInput, allow func(catalog.Schedule) error, reason string, validate func() error) (Rule, error) {
 	if _, err := LockPricePolicy(ctx, tx, site); err != nil {
 		return Rule{}, err
 	}
@@ -403,7 +438,7 @@ func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	if err != nil {
 		return Rule{}, err
 	}
-	if err := checkRuleUpdate(before, in, currency, validate); err != nil {
+	if err := checkRuleUpdate(before, in, currency, allow, validate); err != nil {
 		return Rule{}, err
 	}
 	r := Rule{RuleInput: in, ID: id}
@@ -421,12 +456,15 @@ func UpdateRule(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID
 	return r, record(ctx, tx, actor, "pricing_rule.update", r, reason)
 }
 
-func checkRuleUpdate(before Rule, in RuleInput, currency platform.Currency, validate func() error) error {
+func checkRuleUpdate(before Rule, in RuleInput, currency platform.Currency, allow func(catalog.Schedule) error, validate func() error) error {
 	retiring, err := unchangedRetirement(before, in)
 	if err != nil || retiring {
 		return err
 	}
 	if err := in.Check(currency); err != nil {
+		return err
+	}
+	if err := in.CheckItems(allow); err != nil {
 		return err
 	}
 	if validate != nil {
