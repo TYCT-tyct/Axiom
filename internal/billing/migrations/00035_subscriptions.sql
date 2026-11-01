@@ -192,7 +192,8 @@ ALTER TABLE billing.entries
 ALTER TABLE billing.transactions
     DROP CONSTRAINT IF EXISTS transactions_kind_check,
     ADD CONSTRAINT transactions_kind_check CHECK (kind IN ('credit', 'settle', 'reverse', 'attempt_cost',
-        'cost_adjust', 'expire', 'freeze', 'unfreeze', 'refund', 'plan_credit', 'plan_expire')) NOT VALID;
+        'cost_adjust', 'expire', 'freeze', 'unfreeze', 'refund', 'chargeback', 'chargeback_reverse',
+        'plan_credit', 'plan_expire')) NOT VALID;
 
 ALTER TABLE billing.reservations VALIDATE CONSTRAINT reservations_funding_check;
 ALTER TABLE billing.entries VALIDATE CONSTRAINT entries_book_check;

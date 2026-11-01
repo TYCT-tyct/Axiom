@@ -27,6 +27,21 @@ func (q *Queries) AddFrozen(ctx context.Context, db DBTX, arg AddFrozenParams) e
 	return err
 }
 
+const nextChargeBackRevision = `-- name: NextChargeBackRevision :one
+SELECT (coalesce(max(revision), 0) + 1)::bigint AS revision
+FROM billing.transactions
+WHERE request_id = $1 AND attempt_seq = 0 AND kind = 'chargeback'
+`
+
+// Under the balance lock, so two chargebacks of one batch cannot choose the same revision. A reversal keeps the
+// revision of the chargeback it undoes; this counts only chargebacks, so a later dispute gets the next one.
+func (q *Queries) NextChargeBackRevision(ctx context.Context, db DBTX, batch uuid.UUID) (int64, error) {
+	row := db.QueryRow(ctx, nextChargeBackRevision, batch)
+	var revision int64
+	err := row.Scan(&revision)
+	return revision, err
+}
+
 const refundHistory = `-- name: RefundHistory :one
 SELECT coalesce(b.refund_with_fee, $1::boolean)::boolean AS with_fee,
     coalesce(h.returned, 0)::bigint AS returned, coalesce(h.fee, 0)::bigint AS fee
@@ -35,7 +50,8 @@ LEFT JOIN LATERAL (
     SELECT -sum(e.amount) FILTER (WHERE e.book = 'cash') AS returned,
         sum(e.amount) FILTER (WHERE e.book = 'fee_income') AS fee
     FROM billing.transactions t JOIN billing.entries e ON e.transaction_id = t.id
-    WHERE t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'refund'
+    WHERE t.request_id = b.id AND t.attempt_seq = 0
+        AND t.kind IN ('refund', 'chargeback', 'chargeback_reverse')
 ) h ON true
 WHERE b.id = $2
 `
@@ -52,6 +68,8 @@ type RefundHistoryRow struct {
 }
 
 // Read under the balance lock. The ledger is authoritative for cash and fees; the first successful refund fixes policy.
+// Chargebacks return cash the same way a refund does and a reversal takes it back, so all three count in what has
+// already been returned.
 func (q *Queries) RefundHistory(ctx context.Context, db DBTX, arg RefundHistoryParams) (RefundHistoryRow, error) {
 	row := db.QueryRow(ctx, refundHistory, arg.WithFee, arg.Batch)
 	var i RefundHistoryRow

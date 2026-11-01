@@ -2469,11 +2469,11 @@ export interface components {
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
-        /** @description One cash entry of the ledger: a paid credit or a refund. Every field is optional during rolling deployment. */
+        /** @description One cash entry of the ledger: a paid credit, a refund, a chargeback or the reversal of a chargeback. Every field is optional during rolling deployment. */
         CashMovement: {
             id?: components["schemas"]["Uuid"];
             /** @enum {string} */
-            kind?: "credit" | "refund";
+            kind?: "credit" | "refund" | "chargeback" | "chargeback_reverse";
             /**
              * Format: date-time
              * @description The transaction's time, which is what the dashboard's window counted.
@@ -2496,7 +2496,7 @@ export interface components {
         Merchant: {
             id?: components["schemas"]["MerchantId"];
             site_id?: components["schemas"]["SiteId"];
-            /** @description The compiled-in channel plugin, such as easypay. */
+            /** @description The compiled-in channel plugin, such as easypay or stripe. */
             kind?: string;
             name?: string;
             enabled?: boolean;

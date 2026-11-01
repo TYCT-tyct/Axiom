@@ -17,12 +17,13 @@ SELECT coalesce(max(seq), 0)::bigint FROM billing.transactions WHERE account_id 
 -- for one from before the sequence). A fully spent batch stays here because a correction can give its credit back
 -- (#277); consumption, expiry and freeze totals are the replay cache, and trail the ledger until the account is
 -- replayed. Served by credit_batches_by_account.
-SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded,
+SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded, b.charged_back,
     coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
 FROM billing.credit_batches b
 JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
 WHERE b.account_id = @account_id
-    AND (b.consumed > 0 OR (b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired));
+    AND (b.consumed > 0 OR b.charged_back > 0
+        OR (b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired));
 
 -- name: LegacyMovements :many
 -- A page of the account's transactions from before the sequence (seq NULL), in the order of their time and ID, after the
@@ -57,12 +58,23 @@ SELECT p.seq::bigint AS seq, p.created_at, p.id, p.kind, p.request_id, p.revisio
 FROM page p
 ORDER BY p.seq;
 
+-- name: ChargebackBatch :one
+-- A chargeback can name a batch that expired before it arrived. LiveBatches leaves a fully expired batch out to keep
+-- every replay small, so the chargeback loads just that batch before it posts; after the first chargeback the row's
+-- charged_back keeps it in LiveBatches for the reversal.
+SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded, b.charged_back,
+    coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
+FROM billing.credit_batches b
+JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
+WHERE b.id = @id AND b.account_id = @account_id;
+
 -- name: SaveBatches :exec
 UPDATE billing.credit_batches b SET consumed = v.consumed, expired = v.expired,
-    freeze_total = v.freeze_total, unfreeze_total = v.unfreeze_total, refunded = v.refunded
+    freeze_total = v.freeze_total, unfreeze_total = v.unfreeze_total, refunded = v.refunded,
+    charged_back = v.charged_back
 FROM (SELECT unnest(@ids::uuid[]) AS id, unnest(@consumed::bigint[]) AS consumed, unnest(@expired::bigint[]) AS expired,
     unnest(@freeze_total::bigint[]) AS freeze_total, unnest(@unfreeze_total::bigint[]) AS unfreeze_total,
-    unnest(@refunded::bigint[]) AS refunded) v
+    unnest(@refunded::bigint[]) AS refunded, unnest(@charged_back::bigint[]) AS charged_back) v
 WHERE b.id = v.id;
 
 -- name: SaveAllocation :execrows

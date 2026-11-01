@@ -203,13 +203,19 @@ func (e BillingItem) Valid() bool {
 
 // Defines values for CashMovementKind.
 const (
-	Credit CashMovementKind = "credit"
-	Refund CashMovementKind = "refund"
+	Chargeback        CashMovementKind = "chargeback"
+	ChargebackReverse CashMovementKind = "chargeback_reverse"
+	Credit            CashMovementKind = "credit"
+	Refund            CashMovementKind = "refund"
 )
 
 // Valid indicates whether the value is a known member of the CashMovementKind enum.
 func (e CashMovementKind) Valid() bool {
 	switch e {
+	case Chargeback:
+		return true
+	case ChargebackReverse:
+		return true
 	case Credit:
 		return true
 	case Refund:
@@ -2030,7 +2036,7 @@ type CashAmount struct {
 	Currency string `json:"currency"`
 }
 
-// CashMovement One cash entry of the ledger: a paid credit or a refund. Every field is optional during rolling deployment.
+// CashMovement One cash entry of the ledger: a paid credit, a refund, a chargeback or the reversal of a chargeback. Every field is optional during rolling deployment.
 type CashMovement struct {
 	// AccountId An account's ID (TypeID).
 	AccountId *AccountId `json:"account_id,omitempty"`
@@ -2536,7 +2542,7 @@ type Merchant struct {
 	// Id A merchant account's ID (TypeID).
 	Id *MerchantId `json:"id,omitempty"`
 
-	// Kind The compiled-in channel plugin, such as easypay.
+	// Kind The compiled-in channel plugin, such as easypay or stripe.
 	Kind    *string           `json:"kind,omitempty"`
 	Methods *[]MerchantMethod `json:"methods,omitempty"`
 	Name    *string           `json:"name,omitempty"`

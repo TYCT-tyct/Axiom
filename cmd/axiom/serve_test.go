@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"axiom/internal/observability"
@@ -277,10 +278,11 @@ func servingAddrs(t *testing.T, logs records, done <-chan error) addresses {
 }
 
 // awaitRecord reads log records until the node logs msg. The node logs "ready" after it has set the probes' readiness.
+// It waits for the record or the node's own return, not for a wall clock: a start slowed by a loaded machine still
+// serves, and a start that fails returns its error on done, so the two together cover every outcome. A node that
+// neither logs nor returns is a hang the test binary's timeout reports with every goroutine.
 func awaitRecord(t *testing.T, logs records, done <-chan error, msg string) addresses {
 	t.Helper()
-	timeout := time.NewTimer(10 * time.Second) // one deadline: other records must not extend it
-	defer timeout.Stop()
 	for {
 		select {
 		case line := <-logs:
@@ -293,10 +295,24 @@ func awaitRecord(t *testing.T, logs records, done <-chan error, msg string) addr
 			}
 		case err := <-done:
 			t.Fatalf("the node stopped before logging %q: %v", msg, err)
-		case <-timeout.C:
-			t.Fatalf("the node did not log %q", msg)
 		}
 	}
+}
+
+// TestAwaitRecordWaitsForASlowStart: the reader waits for the record or the node's return, not for a clock. A start
+// slower than the old ten-second deadline still reaches the test; the fake clock keeps the check instant.
+func TestAwaitRecordWaitsForASlowStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		logs := make(records, 1)
+		done := make(chan error)
+		go func() {
+			time.Sleep(11 * time.Second)
+			logs <- []byte(`{"msg":"serving","public":"127.0.0.1:1"}`)
+		}()
+		if got := awaitRecord(t, logs, done, "serving"); got.Public != "127.0.0.1:1" {
+			t.Fatalf("serving address = %q, want 127.0.0.1:1", got.Public)
+		}
+	})
 }
 
 // response is a response read in full.

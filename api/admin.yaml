@@ -5101,10 +5101,11 @@ components:
     CashMovement:
       type: object
       description: >-
-        One cash entry of the ledger: a paid credit or a refund. Every field is optional during rolling deployment.
+        One cash entry of the ledger: a paid credit, a refund, a chargeback or the reversal of a chargeback. Every
+        field is optional during rolling deployment.
       properties:
         id: {$ref: "#/components/schemas/Uuid"}
-        kind: {type: string, enum: [credit, refund]}
+        kind: {type: string, enum: [credit, refund, chargeback, chargeback_reverse]}
         at: {type: string, format: date-time, description: "The transaction's time, which is what the dashboard's window counted."}
         account_id: {$ref: "#/components/schemas/AccountId"}
         batch_id: {$ref: "#/components/schemas/Uuid"}
@@ -5127,7 +5128,7 @@ components:
       properties:
         id: {$ref: "#/components/schemas/MerchantId"}
         site_id: {$ref: "#/components/schemas/SiteId"}
-        kind: {type: string, description: "The compiled-in channel plugin, such as easypay."}
+        kind: {type: string, description: "The compiled-in channel plugin, such as easypay or stripe."}
         name: {type: string}
         enabled: {type: boolean}
         currency: {type: string, pattern: '^[A-Z]{3}$', description: "The currency users pay this account in; the callback carries no currency."}
