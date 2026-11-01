@@ -279,7 +279,7 @@ function EndpointRow({
       </Td>
       {onOpen ? (
         <Td className="whitespace-nowrap">
-          <div className="flex flex-col items-end gap-1 sm:flex-row sm:justify-end">
+          <div className="flex justify-end gap-1">
             {state === "ready" && testFormats(endpoint.formats).length > 0 ? (
               <Button
                 size="sm"
@@ -289,9 +289,12 @@ function EndpointRow({
                 {t("suppliers.test.open")}
               </Button>
             ) : null}
+            {/* A phone has room beside the status for one button, and the precision column itself is shown only from
+                xl up; the precision is set from a wider window. */}
             <Button
               size="sm"
               variant="secondary"
+              className="hidden sm:inline-flex"
               aria-label={t("suppliers.quantization.title", { name: endpoint.upstream_name })}
               onClick={() => onOpen({ kind: "quantization", endpoint })}
             >
