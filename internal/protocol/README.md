@@ -74,6 +74,8 @@ Messages 的 `fallbacks` 读取为 `Request.Models`，最多三项、只允许�
 
 `Prepare(r, body, t, w)` 把 `Inspect` 接受过的请求体改写给同格式的端点，返回新分配的请求体。它复用 `Inspect` 的顶层位置表，跳过不改写的大块内容，只解析要改的值（如 Messages 的 `metadata`、Responses 的 `include`），按位置分段拷贝原文，所以下表之外的字节（空白、键序、转义写法、思考块的签名、`redacted_thinking`、`encrypted_content`、压缩项）原样到达上游。Chat 的改写见下表之后的「Chat 的改写」：模型方言的成员（推理参数、`cache_control`、回传的 `reasoning_content`）不改写，由端点按它自己的方言处理（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。`Target.Compact` 时不是生成请求，而是压缩请求：只用下表里 `model`、路由参数和标识那三行，什么都不补（见下），目前只有 Responses 有。字段取自 Anthropic《Messages API reference》、OpenAI《Create a model response》《Compaction》（2026-10-14 读取）。
 
+`Rewrites.NativeSearch` 大于 0 时，`Prepare` 在正文已经写成端点格式之后打开厂商自己的联网搜索：Chat 写 `web_search_options:{}`，Responses 和 Messages 往 `tools` 里加一个搜索工具（Messages 带 `max_uses`，Responses 同时把 `max_tool_calls` 收紧到同一个次数）；正文里已经打开搜索时原样返回，一个请求不会搜两次。`PrepareCost` 另加 256 字节覆盖注入的工具。`NativeSearchSupported` 说明哪些格式能打开它，`ResponsesMaxToolCalls` 只读客户端已有的上限供 gateway 收紧。行为、上限和计费见[接入的「插件与提示词变换」](../../docs/domains/gateway.md#插件与提示词变换)。
+
 位置表还记录 `Inspect` 时的请求体长度；长度不符时 `Prepare` 回退 tokenizer 改写，不对另一份体使用旧偏移量（`TestPrepareDiscardsPositionsForDifferentBodySize` 覆盖三种格式的更短、更长请求体）。这是 O(1) 的长度保护，不证明相同长度的内容相同；调用方仍须传入 `Inspect` 读过的同一份内容，改写或补全体后必须重新 `Inspect` 并更新准入摘要，不能沿用旧摘要定价。
 
 | 成员 | Messages | Responses | 理由 |

@@ -177,18 +177,28 @@ func (s *SearXNG) Search(ctx context.Context, q Query) ([]Result, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: the backend answered %d", ErrUpstream, resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	body, err := readBody(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read the response: %w", ErrUpstream, err)
-	}
-	if len(body) > maxResponseBytes {
-		return nil, fmt.Errorf("%w: the backend answered more than %d bytes", ErrUpstream, maxResponseBytes)
+		return nil, err
 	}
 	results, err := parseResults(body, limit)
 	if err != nil {
 		return nil, fmt.Errorf("%w: the backend answered invalid JSON", ErrUpstream)
 	}
 	return results, nil
+}
+
+// readBody reads a backend's response with the working-set bound, so one answer cannot grow the node's memory past
+// what the call reserved.
+func readBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("%w: read the response: %w", ErrUpstream, err)
+	}
+	if len(body) > maxResponseBytes {
+		return nil, fmt.Errorf("%w: the backend answered more than %d bytes", ErrUpstream, maxResponseBytes)
+	}
+	return body, nil
 }
 
 // transportFailure names what went wrong without the request's URL.

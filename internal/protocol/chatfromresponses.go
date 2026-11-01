@@ -33,6 +33,8 @@ type responsesEvent struct {
 	id, callID, name, arguments, encrypted []byte
 	delta, text, refusal, partText         []byte
 	partKind                               partKind
+	annotation                             string     // the type of an output_text.annotation.added's annotation
+	url, title                             []byte     // a url_citation annotation's URL and title
 	parts                                  []donePart // of the item, as output_item.done gives it
 	next                                   *int64     // the index the next part of the array being read takes
 	contents, summaries                    int64
@@ -46,9 +48,12 @@ const (
 	messageItem
 	functionItem
 	reasoningItemKind
+	webSearchItem
 )
 
-var itemKinds = map[string]itemKind{"message": messageItem, "function_call": functionItem, "reasoning": reasoningItemKind}
+var itemKinds = map[string]itemKind{
+	"message": messageItem, "function_call": functionItem, "reasoning": reasoningItemKind, "web_search_call": webSearchItem,
+}
 
 type partKind uint8
 
@@ -133,6 +138,16 @@ var (
 		"item":          func(s *responsesToChat) error { return walk(&s.walk, s, responsesChatItem) },
 		"part":          func(s *responsesToChat) error { return walk(&s.walk, s, responsesChatPart) },
 		"response":      func(s *responsesToChat) error { return walk(&s.walk, s, responsesChatResponse) },
+		"annotation":    func(s *responsesToChat) error { return walk(&s.walk, s, responsesChatAnnotation) },
+	}
+	responsesChatAnnotation = map[string]func(*responsesToChat) error{
+		"type": func(s *responsesToChat) error {
+			v, err := s.walk.str()
+			s.ev.annotation = string(v)
+			return err
+		},
+		"url":   func(s *responsesToChat) error { return s.read(&s.ev.url) },
+		"title": func(s *responsesToChat) error { return s.read(&s.ev.title) },
 	}
 	responsesChatItem = map[string]func(*responsesToChat) error{
 		"type": func(s *responsesToChat) error {
@@ -252,7 +267,7 @@ func (s *responsesToChat) convert(name string) (role, []byte, error) {
 	case "response.output_item.done":
 		return passive, nil, s.itemDone()
 	case "response.output_text.annotation.added":
-		return 0, nil, fmt.Errorf("an annotation, which Chat has no place for")
+		return passive, nil, s.annotationEntry()
 	case "response.completed":
 		if s.tools > 0 {
 			return end, s.hold(`"tool_calls"`), nil
@@ -265,6 +280,25 @@ func (s *responsesToChat) convert(name string) (role, []byte, error) {
 		return 0, nil, fmt.Errorf("incomplete for %q", ev.incomplete)
 	}
 	return passive, nil, nil
+}
+
+// annotationEntry writes a url_citation annotation as the Chat annotation of the same name. Other annotation types
+// (file, container) have no Chat counterpart and are left out.
+func (s *responsesToChat) annotationEntry() error {
+	if s.ev.annotation != "url_citation" || len(s.ev.url) == 0 {
+		return nil
+	}
+	b := make([]byte, 0, len(s.ev.url)+len(s.ev.title)+48)
+	b = append(b, `{"type":"url_citation","url_citation":{"url":`...)
+	b = append(b, s.ev.url...)
+	b = append(b, `,"title":`...)
+	if len(s.ev.title) == 0 {
+		b = append(b, `null`...)
+	} else {
+		b = append(b, s.ev.title...)
+	}
+	b = append(b, `}}`...)
+	return s.addCitation(b)
 }
 
 // responsesParts are the events that give a piece of a part, or the part whole: its kind, otherPart for the type
@@ -347,6 +381,8 @@ func (s *responsesToChat) item(added bool) (*responsesItem, error) {
 	if s.ev.item == otherItem {
 		return nil, fmt.Errorf("item %d of a type a converted request does not ask for", s.ev.index)
 	}
+	// A web_search_call is the provider's own tool: it has no Chat content, and its usage is metered from the
+	// response's usage. Keep its item so its later events and the response's end are accepted.
 	if s.ev.item == functionItem && (nonEmpty(s.ev.callID) == nil || nonEmpty(s.ev.name) == nil) {
 		return nil, fmt.Errorf("function call %d without a call_id or a name", s.ev.index)
 	}

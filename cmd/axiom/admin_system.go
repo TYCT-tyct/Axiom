@@ -18,7 +18,6 @@ import (
 	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/typeid"
-	"axiom/internal/websearch"
 )
 
 func (a adminAPI) GetSystemSettings(ctx context.Context, r adminapi.GetSystemSettingsRequestObject) (adminapi.GetSystemSettingsResponseObject, error) {
@@ -222,60 +221,6 @@ func (a adminAPI) SetMailSettings(ctx context.Context, r adminapi.SetMailSetting
 	return adminapi.SetMailSettings200JSONResponse{Body: body, Headers: adminapi.SetMailSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
-func searchSettingsBody(cfg websearch.Config, source string, restart *bool) (adminapi.SearchSettings, error) {
-	return adminJSON[adminapi.SearchSettings](map[string]any{"url": cfg.URL, "has_key": cfg.Key.Reveal() != "", "source": source, "restart_required": restart})
-}
-
-func (a adminAPI) GetSearchSettings(ctx context.Context, _ adminapi.GetSearchSettingsRequestObject) (adminapi.GetSearchSettingsResponseObject, error) {
-	cfg, found, err := a.savedSearch(ctx)
-	if err != nil {
-		return nil, err
-	}
-	source := "environment"
-	if found {
-		source = "database"
-	}
-	body, err := searchSettingsBody(cfg, source, nil)
-	return adminapi.GetSearchSettings200JSONResponse(body), err
-}
-
-func (a adminAPI) savedSearch(ctx context.Context) (cfg websearch.Config, found bool, err error) {
-	cfg = a.search
-	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
-		var stored websearch.Config
-		stored, found, err = websearch.StoredConfig(ctx, tx, a.keys)
-		if found {
-			cfg = stored
-		}
-		return err
-	})
-	return cfg, found, err
-}
-
-//nolint:dupl // the file parser's handler mirrors this one but answers with its own generated type
-func (a adminAPI) SetSearchSettings(ctx context.Context, r adminapi.SetSearchSettingsRequestObject) (adminapi.SetSearchSettingsResponseObject, error) {
-	v := r.Body.Settings
-	s := websearch.Settings{URL: strings.TrimSpace(textValue(v.Url)), Key: v.Key}
-	// Credentials never enter the persisted, unkeyed fingerprint: whether the request carried one does.
-	identity := []any{s.URL, r.Body.Reason, s.Key != nil}
-	body, replayed, err := setBackendSettings(ctx, a.db, "setSearchSettings", s.URL, identity, r.Params.IdempotencyKey,
-		a.checkSearchURL, websearch.ErrInvalidConfig, "invalid search backend configuration; verify the URL and reenter the key after a URL change",
-		func(tx pg.Tx) (adminapi.SearchSettings, error) { return a.saveSearch(ctx, tx, s, r.Body.Reason) })
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.SetSearchSettings200JSONResponse{Body: body, Headers: adminapi.SetSearchSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
-}
-
-// saveSearch writes the search backend's settings and renders them back; saveFileParser does the same for the parser.
-func (a adminAPI) saveSearch(ctx context.Context, tx pg.Tx, s websearch.Settings, reason string) (adminapi.SearchSettings, error) {
-	cfg, err := websearch.SaveConfig(ctx, tx, a.keys, actor(ctx), s, a.search, reason)
-	if err != nil {
-		return adminapi.SearchSettings{}, err
-	}
-	return searchSettingsBody(cfg, "database", new(true))
-}
-
 func (a adminAPI) saveFileParser(ctx context.Context, tx pg.Tx, s fileparse.Settings, reason string) (adminapi.FileParserSettings, error) {
 	cfg, err := fileparse.SaveConfig(ctx, tx, a.keys, actor(ctx), s, a.fileParser, reason)
 	if err != nil {
@@ -331,15 +276,8 @@ func testBackendSettings[T any](ctx context.Context, a adminAPI, operation, kind
 	})
 }
 
-// checkSearchURL and checkFileParserURL refuse a backend URL this node cannot use: not an http(s) base URL, or a host the
-// egress rules keep off the public internet.
-func (a adminAPI) checkSearchURL(ctx context.Context, raw string) error {
-	return a.checkBackendURL(ctx, raw, "the search backend", func(v, k string) (string, error) {
-		cfg, err := websearch.Parse(v, k)
-		return cfg.URL, err
-	})
-}
-
+// checkFileParserURL refuses a backend URL this node cannot use: not an http(s) base URL, or a host the egress rules
+// keep off the public internet.
 func (a adminAPI) checkFileParserURL(ctx context.Context, raw string) error {
 	return a.checkBackendURL(ctx, raw, "the file parser backend", func(v, k string) (string, error) {
 		cfg, err := fileparse.Parse(v, k)
@@ -362,22 +300,6 @@ func (a adminAPI) checkBackendURL(ctx context.Context, raw, what string, parse f
 		return invalidField("/settings/url", what+" could not be validated as public")
 	}
 	return nil
-}
-
-//nolint:dupl // the file parser's handler mirrors this one but answers with its own generated type
-func (a adminAPI) TestSearchSettings(ctx context.Context, r adminapi.TestSearchSettingsRequestObject) (adminapi.TestSearchSettingsResponseObject, error) {
-	body, replayed, err := testBackendSettings(ctx, a, "testSearchSettings", "search_config", "search_config.test",
-		r.Params.IdempotencyKey, r.Body.Reason, r.Body, func(ctx context.Context) (websearch.Config, error) {
-			cfg, _, err := a.savedSearch(ctx)
-			return cfg, err
-		},
-		func(ctx context.Context, cfg websearch.Config) string {
-			return websearch.TestConfig(ctx, cfg, a.exit, a.logger)
-		})
-	if err != nil {
-		return nil, err
-	}
-	return adminapi.TestSearchSettings200JSONResponse{Body: body, Headers: adminapi.TestSearchSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
 func fileParserSettingsBody(cfg fileparse.Config, source string, restart *bool) (adminapi.FileParserSettings, error) {
@@ -410,7 +332,6 @@ func (a adminAPI) savedFileParser(ctx context.Context) (cfg fileparse.Config, fo
 	return cfg, found, err
 }
 
-//nolint:dupl // the search backend's handler mirrors this one but answers with its own generated type
 func (a adminAPI) SetFileParserSettings(ctx context.Context, r adminapi.SetFileParserSettingsRequestObject) (adminapi.SetFileParserSettingsResponseObject, error) {
 	v := r.Body.Settings
 	s := fileparse.Settings{URL: strings.TrimSpace(textValue(v.Url)), Key: v.Key}
@@ -426,7 +347,6 @@ func (a adminAPI) SetFileParserSettings(ctx context.Context, r adminapi.SetFileP
 	return adminapi.SetFileParserSettings200JSONResponse{Body: body, Headers: adminapi.SetFileParserSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
-//nolint:dupl // the search backend's handler mirrors this one but answers with its own generated type
 func (a adminAPI) TestFileParserSettings(ctx context.Context, r adminapi.TestFileParserSettingsRequestObject) (adminapi.TestFileParserSettingsResponseObject, error) {
 	body, replayed, err := testBackendSettings(ctx, a, "testFileParserSettings", "file_parser_config", "file_parser_config.test",
 		r.Params.IdempotencyKey, r.Body.Reason, r.Body, func(ctx context.Context) (fileparse.Config, error) {

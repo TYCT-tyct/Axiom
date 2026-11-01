@@ -26,18 +26,16 @@ type nodeRoutes struct {
 	calls         callNode
 }
 
-// plugins opens the self-hosted backends the plugins call, each only when the deployment configured one: without a
-// backend the plugin keeps the refusal it has always answered.
-func (p consoleParts) plugins(ctx context.Context, db *pg.DB, exit *egress.Client) (websearch.Searcher, fileparse.Parser, error) {
+// plugins opens the search engines and the file parser the plugins call, each only when the deployment configured
+// one: without a backend the plugin keeps the refusal it has always answered.
+func (p consoleParts) plugins(ctx context.Context, db *pg.DB, exit *egress.Client) (gateway.SearchBackends, fileparse.Parser, error) {
 	search, err := p.search(ctx, db)
 	if err != nil {
 		return nil, nil, err
 	}
-	var searcher websearch.Searcher
-	if search.Configured() {
-		if searcher, err = websearch.Open(search, exit); err != nil {
-			return nil, nil, err
-		}
+	engines, err := websearch.OpenEngines(search.Engines, exit)
+	if err != nil {
+		return nil, nil, err
 	}
 	parser, err := p.fileParser(ctx, db)
 	if err != nil {
@@ -49,7 +47,7 @@ func (p consoleParts) plugins(ctx context.Context, db *pg.DB, exit *egress.Clien
 			return nil, nil, err
 		}
 	}
-	return searcher, fileParser, nil
+	return engines, fileParser, nil
 }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
@@ -92,12 +90,12 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if !p.cfg.modelVerification {
 		verify = nil
 	}
-	searcher, fileParser, err := p.plugins(ctx, db, exit)
+	engines, fileParser, err := p.plugins(ctx, db, exit)
 	if err != nil {
 		return nodeRoutes{}, err
 	}
 	calls, err := startCallPath(ctx, callDeps{
-		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, search: searcher,
+		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, search: engines,
 		fileParser: fileParser,
 		gate:       gate, limits: limits,
 		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger, proxies: p.cfg.trustedProxies,
@@ -122,7 +120,7 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 		return nodeRoutes{}, err
 	}
 	public := withModelCalls(
-		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, catalog: cat, db: db, models: calls.models},
+		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, catalog: cat, db: db, models: calls.models, search: calls.search.List()},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
 	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger})
@@ -135,26 +133,22 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }
 
+// search reads the node's engine list, falling back to the old single-backend row and then the environment.
+func (p consoleParts) search(ctx context.Context, db *pg.DB) (loaded websearch.Loaded, err error) {
+	err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		var e error
+		loaded, e = websearch.Load(ctx, tx, p.master, p.cfg.search)
+		return e
+	})
+	return loaded, err
+}
+
 // fileParser reads the parser backend this node converts files through: the admin's saved configuration when there is
 // one, the environment's otherwise.
 func (p consoleParts) fileParser(ctx context.Context, db *pg.DB) (fileparse.Config, error) {
 	cfg := p.cfg.fileParser
 	err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
 		stored, found, err := fileparse.StoredConfig(ctx, tx, p.master)
-		if found {
-			cfg = stored
-		}
-		return err
-	})
-	return cfg, err
-}
-
-// search reads the backend this node searches through: the admin's saved configuration when there is one, the
-// environment's otherwise.
-func (p consoleParts) search(ctx context.Context, db *pg.DB) (websearch.Config, error) {
-	cfg := p.cfg.search
-	err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
-		stored, found, err := websearch.StoredConfig(ctx, tx, p.master)
 		if found {
 			cfg = stored
 		}

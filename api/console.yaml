@@ -2321,6 +2321,22 @@ components:
         rates:
           type: array
           items: {$ref: "#/components/schemas/ModelRate"}
+        search_engines:
+          type: array
+          description: >-
+            What one web search through each enabled backend costs, per search plus each result after the first. A
+            backend whose published per-search price is zero sells at the model's web_search rate instead. Absent
+            from a node that serves no backend.
+          items: {$ref: "#/components/schemas/ModelSearchEnginePrice"}
+    ModelSearchEnginePrice:
+      type: object
+      additionalProperties: false
+      required: [name, price_per_search, price_per_extra_result, default]
+      properties:
+        name: {type: string, description: "The engine a request's web plugin names; \"native\" is the provider's own search."}
+        price_per_search: {type: string, description: "Decimal currency units per search; zero means the model's web_search price."}
+        price_per_extra_result: {type: string, description: "Decimal currency units for each result after the first."}
+        default: {type: boolean, description: "The backend a request that names none falls back to."}
     ModelRate:
       type: object
       additionalProperties: false

@@ -32,8 +32,31 @@ type WebPlugin struct {
 	SearchPrompt   string
 	IncludeDomains []string
 	ExcludeDomains []string
-	Online         bool
+	// Engine is the search backend the client chose: "native" for the model provider's own search, or an enabled
+	// backend's name. Empty leaves the choice to the gateway (docs/domains/gateway.md「联网搜索」).
+	Engine string
+	Online bool
 }
+
+// MaxEngineNameBytes bounds a search engine name. Backends are deployment configuration, so the name only has to be
+// short and unambiguous; whether one exists is the gateway's question, not the parser's.
+const MaxEngineNameBytes = 32
+
+// ValidEngineName reports whether name has the shape of a backend name: lowercase letters, digits, '-' and '_',
+// starting with a letter or digit. It is deliberately not a set lookup.
+func ValidEngineName(name string) bool {
+	if name == "" || len(name) > MaxEngineNameBytes || !isLowerAlnum(name[0]) {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if c := name[i]; !isLowerAlnum(c) && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func isLowerAlnum(c byte) bool { return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' }
 
 // ChatSearchQuery returns the text of the last user message, the query a web search runs for. It walks the body's
 // tokens instead of decoding the whole request: a long history is read once and only the last user message's text is
