@@ -183,7 +183,6 @@ type session struct {
 	logger   *slog.Logger
 
 	ends       []billing.AttemptResult // the supplier requests made, in order; the last is the one charged
-	attempted  int                     // the attempts routing made, of which a loop's further samplings are not
 	tries      []try                   // the same attempts as the call log needs them: their entry and when they began
 	currency   platform.Currency       // of the last attempt's price, the site's until one is made
 	skips      skips

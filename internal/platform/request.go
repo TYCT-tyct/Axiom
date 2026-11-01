@@ -15,9 +15,10 @@ const MaxAttempts = 3
 // Each step is one more sampling, and so one more attempt.
 const MaxServerToolSteps = 30
 
-// MaxAttemptSeq is the highest attempt number. Every supplier request is an attempt: the routing tries, and each further
-// sampling of a model-side loop, which a request runs at most once (a loop's searches end its fallbacks), so the two add
-// up. The tables' CHECKs (suppliers 00024, observability 00016) hold the same 33.
+// MaxAttemptSeq is the highest attempt number. Every supplier request is an attempt: at most MaxAttempts routing tries,
+// and each further sampling of a model-side loop, at most MaxServerToolSteps for the call, so the two add up. A routing
+// try counts the loop's samplings before it, so one never numbers past MaxAttempts. The tables' CHECKs (suppliers 00024,
+// observability 00016) hold the same 33.
 const MaxAttemptSeq = MaxAttempts + MaxServerToolSteps
 
 // AttemptSeq numbers an attempt within its request, from 1, in the order the attempts begin.

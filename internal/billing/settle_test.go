@@ -454,21 +454,6 @@ var settleEntries = map[string]func(*testing.T, *bank, *Hold, Outcome) Final{
 	},
 }
 
-// longLoop is a loop of four samplings that found nothing to search, then a fallback, attempt 5, that answered.
-func longLoop(t *testing.T) Outcome {
-	t.Helper()
-	full := used(t, 50, 20, 1)
-	o := Outcome{}
-	for seq := 1; seq <= 4; seq++ {
-		o.Attempts = append(o.Attempts, AttemptResult{
-			Seq: seq, Cost: 7, Segments: []Segment{full}, Result: FailedBeforeCommit,
-			Finish: FinishToolUse, Continues: seq > 1,
-		})
-	}
-	o.Attempts = append(o.Attempts, AttemptResult{Seq: 5, Cost: 7, Segments: []Segment{full}, Result: Committed, Finish: FinishStop})
-	return o
-}
-
 // TestSettleChargesTheLoopTogether: each sampling of a model-side loop is an attempt of its own for suppliers, one row
 // and one cost each, while the user is charged for the loop's samplings together under 免单规则 judged by the last. A
 // charge of several attempts records no charged attempt, so a supplier's record of one cannot correct it. Both
@@ -488,8 +473,6 @@ func TestSettleChargesTheLoopTogether(t *testing.T) {
 		{"the last sampling refused unrun: the first one's search", loop(t, NotExecuted, FinishError, false), 10, 0},
 		{"the client left mid-loop: never waived", loop(t, FailedBeforeCommit, FinishCancelled, false), 160, 0},
 		{"a fallback after the loop answers alone", loop(t, FailedBeforeCommit, FinishError, true), 80, 1},
-		// Numbered past platform.MaxAttempts, the fallback is not one an older correction worker can take.
-		{"a fallback numbered past the routing tries", longLoop(t), 80, 0},
 	} {
 		for name, settle := range settleEntries {
 			t.Run(tc.name+"/"+name, func(t *testing.T) {
@@ -499,9 +482,6 @@ func TestSettleChargesTheLoopTogether(t *testing.T) {
 					t.Fatalf("charged %+v, want %d", f.Charged, tc.want)
 				}
 				checkAttemptRows(t, b.supplies.attempts[h.id], tc.o)
-				if n := b.count("SELECT count(*) FROM billing.reservations WHERE charged_seq > 3"); n != 0 {
-					t.Fatalf("%d reservations name a charged attempt past 3, which a correction worker of the release before drops", n)
-				}
 				if n := b.count("SELECT count(*) FROM billing.reservations WHERE charged_seq IS NOT NULL"); n != tc.chargedQ {
 					t.Fatalf("%d reservations name a charged attempt, want %d", n, tc.chargedQ)
 				}

@@ -110,32 +110,53 @@ func TestServerLoopDoesNotPriceARefusedRequest(t *testing.T) {
 	})
 }
 
-// TestServerLoopStepsDoNotSpendTheFallbacks: each step of a loop is an attempt, but not a routing one. A loop that ran
-// no search (its calls named no query) and then got an empty reply still falls back to the next entry, after more
-// samplings than platform.MaxAttempts; the fallback answers alone and continues nothing.
-func TestServerLoopStepsDoNotSpendTheFallbacks(t *testing.T) {
-	run(t, func(t *testing.T, ctx context.Context) {
-		noQuery := strings.Replace(chatToolCall, `{\"query\":\"axiom\"}`, `{}`, 1)
-		searcher := &recordingSearcher{}
-		upstream := protocol.Chat
-		h := newHarness(t, ctx, options{
-			client: protocol.Chat, upstream: &upstream, entries: 2, request: []byte(searchTool),
-			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
-			search: searcher, server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
-			script: map[int][]scripted{
-				1: {serve(beat{data: noQuery}), serve(beat{data: noQuery}), serve(beat{data: noQuery}), serve(beat{})},
-				2: {serve(beat{data: chatAnswer})},
-			},
+// TestServerLoopSamplingsCountAgainstFallbacks: a loop's samplings are attempts, and a fallback is begun only while
+// fewer than platform.MaxAttempts were made, so an attempt charged alone never numbers past it: a correction worker of
+// the release before loops drops such a number. A loop that ran no search may still fall back while attempts are left.
+func TestServerLoopSamplingsCountAgainstFallbacks(t *testing.T) {
+	noQuery := strings.Replace(chatToolCall, `{\"query\":\"axiom\"}`, `{}`, 1)
+	for name, tc := range map[string]struct {
+		first    []scripted
+		status   int
+		attempts int
+	}{
+		"three samplings leave no fallback": {
+			first:  []scripted{serve(beat{data: noQuery}), serve(beat{data: noQuery}), serve(beat{})},
+			status: http.StatusBadGateway, attempts: 3,
+		},
+		"two samplings leave the third attempt": {
+			first:  []scripted{serve(beat{data: noQuery}), serve(beat{})},
+			status: http.StatusOK, attempts: 3,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			run(t, func(t *testing.T, ctx context.Context) {
+				upstream := protocol.Chat
+				h := newHarness(t, ctx, options{
+					client: protocol.Chat, upstream: &upstream, entries: 2, request: []byte(searchTool),
+					price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
+					search: &recordingSearcher{}, server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+					script: map[int][]scripted{1: tc.first, 2: {serve(beat{data: chatAnswer})}},
+				})
+				h.run()
+				attempts := h.settlements[0].outcome.Attempts
+				if h.w.status != tc.status || len(attempts) != tc.attempts {
+					t.Fatalf("status = %d, attempts = %+v; want %d and %d attempts", h.w.status, attempts, tc.status, tc.attempts)
+				}
+				checkAloneWithinRouting(t, attempts)
+			})
 		})
-		h.run()
-		if h.w.status != http.StatusOK || !strings.Contains(h.w.body(), "Axiom is a gateway.") || len(searcher.queries) != 0 {
-			t.Fatalf("status = %d, searches = %d, body = %s", h.w.status, len(searcher.queries), h.w.body())
+	}
+}
+
+// checkAloneWithinRouting: every attempt charged alone, one that continues no loop, numbers within MaxAttempts.
+func checkAloneWithinRouting(t *testing.T, attempts []billing.AttemptResult) {
+	t.Helper()
+	for _, at := range attempts {
+		if !at.Continues && at.Seq > platform.MaxAttempts {
+			t.Fatalf("attempt %d is charged alone past platform.MaxAttempts", at.Seq)
 		}
-		attempts := h.settlements[0].outcome.Attempts
-		if len(attempts) != 5 || attempts[4].Seq != 5 || attempts[4].Continues || !attempts[3].Continues {
-			t.Fatalf("attempts = %+v, want four samplings of the loop, then a fallback of its own", attempts)
-		}
-	})
+	}
 }
 
 // chatEmptyAnswer is a well-formed reply with no content: a role, a stop and usage.

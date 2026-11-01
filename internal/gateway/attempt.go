@@ -74,7 +74,7 @@ func (s *session) mayStart(maxAttempts int) (ended, bool) {
 		return ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}, true
 	case !time.Now().Before(s.deadline):
 		return ended{err: protocol.Error{Type: protocol.Timeout}}, true
-	case s.attempted >= maxAttempts:
+	case len(s.ends) >= maxAttempts:
 		return s.exhausted(), true
 	case time.Now().After(s.c.Plan.StartBy):
 		if len(s.ends) == 0 {
@@ -262,7 +262,6 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	a.obs.Source = uuid.UUID(s.c.Admission.OwnerID())
 	a.obs.BreakerFallback = entry.BreakerFallback
 	a.obs.Request = s.c.ID
-	s.attempted++
 	a.first = s.begin(entry, kept, false)
 	a.i = a.first
 	s.currency = entry.Price.Schedule.Currency()
@@ -278,9 +277,10 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 }
 
 // begin numbers a supplier request: its place in the settlement's attempts and the call log's, in step. continues says
-// it is a further sampling of the previous request's loop. The number stays within platform.MaxAttemptSeq: at most
-// platform.MaxAttempts begin an attempt, and a loop adds at most one per step, which the session's loop caps for the
-// whole call at platform.MaxServerToolSteps.
+// it is a further sampling of the previous request's loop. A fallback is only begun while fewer than
+// platform.MaxAttempts attempts were made, a loop's samplings counted (mayStart), so every attempt that does not
+// continue a loop is numbered within platform.MaxAttempts, which every release's correction worker reads; a loop adds
+// at most one attempt a step, platform.MaxServerToolSteps for the call, so the number stays within MaxAttemptSeq.
 func (s *session) begin(entry routing.Entry, kept int, continues bool) int {
 	s.ends = append(s.ends, billing.AttemptResult{Seq: len(s.ends) + 1, Entry: kept, Result: billing.Unknown, Continues: continues})
 	s.tries = append(s.tries, try{entry: entry, started: time.Now()})
