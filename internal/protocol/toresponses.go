@@ -20,6 +20,9 @@ func toResponses(c *canon, t Target, w Rewrites, b *budget, body []byte) ([]byte
 		return nil, err
 	}
 	o := newWriter(len(body)+4096, b)
+	if o.err != nil {
+		return nil, o.err
+	}
 	o.str(`{"model":`).quoted(t.Model).str(`,"input":[`)
 	if err := input(o, c, t.CacheBreakpoints == catalog.ClaimYes); err != nil {
 		return nil, err

@@ -97,7 +97,10 @@ type canonFunction struct {
 // legacyChoice maps the deprecated auto/none choices and named functions to tool_choice.
 func legacyChoice(v jsontext.Value, b *budget) (jsontext.Value, error) {
 	if v.Kind() == '"' {
-		var buf [16]byte
+		if len(v) > 32 { // auto and none fit with every byte escaped; anything longer is neither
+			return nil, shapeError("a function_call that is not a choice")
+		}
+		var buf [32]byte
 		name, _ := jsontext.AppendUnquote(buf[:0], v) //nolint:errcheck // decodeCanon validates JSON; Kind above guarantees a string
 		switch string(name) {
 		case "auto", "none":

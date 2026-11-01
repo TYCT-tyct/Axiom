@@ -2,9 +2,9 @@ package protocol
 
 import (
 	"bytes"
-	"encoding/json/jsontext" //nolint:depguard // native replay preserves every member except converted artifacts
 	"slices"
 	"strconv"
+	"unsafe"
 	"uuid"
 )
 
@@ -18,7 +18,7 @@ func replayBody(f Format, body []byte, item bool, b *budget) ([]byte, error) {
 		return nil, err
 	}
 	p := &rewriter{body: body, out: make([]byte, 0, len(body))}
-	p.dec = jsontext.NewDecoder(bytes.NewReader(body))
+	p.dec = newDecoder(body)
 	rules := replayRules[f]
 	if item {
 		rules = replayItemRules
@@ -36,6 +36,9 @@ func replayHistory(history [][]byte, b *budget) ([][]byte, error) {
 			continue
 		}
 		if !copied {
+			if err := b.draw(rounded(int64(len(history)) * int64(unsafe.Sizeof([]byte(nil))))); err != nil {
+				return nil, err
+			}
 			out, copied = slices.Clone(history), true
 		}
 		var err error

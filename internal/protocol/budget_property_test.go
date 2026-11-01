@@ -75,7 +75,7 @@ func budgetShapes() map[string]map[Format]string {
 			Responses: responses(repeat(`{"role":"user","content":"a"},{"role":"assistant","content":"b"}`, many/2), ""),
 		},
 		"long text": {
-			Chat:      chat(`{"role":"user","content":"`+long+`"}`, ""),
+			Chat:      chat(`{"role":"system","content":"s"},{"role":"user","content":"`+long+`"}`, ""),
 			Messages:  messages(`{"role":"user","content":"`+long+`"}`, ""),
 			Responses: responses(`{"role":"user","content":"`+long+`"}`, ""),
 		},
@@ -122,6 +122,18 @@ func budgetShapes() map[string]map[Format]string {
 				`,"temperature":0.`+strings.Repeat("0", 1<<20)+`5,"tools":[{"type":"function","function":{"name":"f"}}],`+
 					`"tool_choice":{"type":"function","function":{"name":"`+long+`"}}`),
 		},
+		"wide values": {
+			Chat: chat(`{"role":"user","content":"x"},{"role":"assistant","content":null,"tool_calls":[{"id":"c","type":"function","function":{"name":"f","arguments":"{`+
+				strings.ReplaceAll(members, `"`, `\"`)+`}"}}]},{"role":"tool","tool_call_id":"c","content":"ok"}`,
+				`,"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":{"type":"function","function":{"name":"f"},`+members+`}`),
+			Embeddings: `{"model":"m","input":"x",` + members + `}`,
+		},
+		"legacy choice": {
+			Chat: chat(`{"role":"user","content":"x"}`, `,"functions":[{"name":"f"}],"function_call":"`+long+`"`),
+		},
+		"replay": {
+			Messages: messages(`{"role":"user","content":"x"},{"role":"assistant","content":[{"type":"thinking","thinking":"`+long+`","signature":""},{"type":"text","text":"a"}]},{"role":"user","content":"y"}`, ""),
+		},
 		"empty objects": {
 			Chat:      chat(repeat(`{}`, many), ""),
 			Messages:  messages(repeat(`{}`, many), ""),
@@ -160,7 +172,7 @@ func budgetCases(t *testing.T) []budgetCase {
 	var cases []budgetCase
 	shapes := budgetShapes()
 	for _, shape := range slices.Sorted(maps.Keys(shapes)) {
-		for _, from := range []Format{Chat, Messages, Responses} {
+		for _, from := range []Format{Chat, Messages, Responses, Embeddings} {
 			if body := []byte(shapes[shape][from]); len(body) > 0 {
 				cases = append(cases, shapeCases(t, shape, from, body)...)
 			}
@@ -181,7 +193,11 @@ func shapeCases(t *testing.T, shape string, from Format, body []byte) []budgetCa
 		t.Fatalf("%s from %v: %v", shape, from, err)
 	}
 	var cases []budgetCase
-	for _, to := range []Format{Chat, Messages, Responses} {
+	targets := []Format{Chat, Messages, Responses}
+	if from.Direct() {
+		targets = []Format{from}
+	}
+	for _, to := range targets {
 		c := budgetCase{
 			name: fmt.Sprintf("%s %v to %v", shape, from, to), r: r, body: body,
 			t: Target{Format: to, Model: "up", MaxOutput: 4096}, w: Rewrites{Identity: derived},

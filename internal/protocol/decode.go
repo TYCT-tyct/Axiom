@@ -401,9 +401,19 @@ func (d *decoder) unknown(m *map[string]jsontext.Value) error {
 // top reads the Chat request's members.
 //
 
+// validateMemory is what one check of v's names for duplicates takes: jsontext records each name of an object past 64
+// of them, about 150 bytes a name measured 2026-11-02 for 20,000. A colon is counted for each member, inside strings
+// too, so it bounds them.
+func validateMemory(v []byte) int64 {
+	return mapEntryMemory * int64(bytes.Count(v, []byte(":")))
+}
+
 // unmarshalWithin decodes a small value of a request, drawing its allocation from b first.
+//
+// What it takes grows with the value's bytes and, as jsonx checks names for duplicates twice, once validating and
+// once decoding, with its members.
 func unmarshalWithin(v []byte, dst any, b *budget) error {
-	if err := b.draw(int64(len(v)) + 512); err != nil {
+	if err := b.draw(rounded(int64(len(v))) + 512 + 2*validateMemory(v)); err != nil {
 		return err
 	}
 	return jsonx.Unmarshal(v, dst)

@@ -758,7 +758,7 @@ func rewriteDirectWithin(r *Request, body []byte, t Target, w Rewrites, b *budge
 	if err := b.draw(rounded(int64(size))); err != nil {
 		return nil, err
 	}
-	p := &rewriter{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, t: t, w: w}
+	p := &rewriter{dec: newDecoder(body), body: body, t: t, w: w}
 	p.b = b
 	p.out = make([]byte, 0, size)
 	if err := p.top(rules); err != nil {

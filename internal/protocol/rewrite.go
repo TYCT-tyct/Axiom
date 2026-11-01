@@ -1,8 +1,6 @@
 package protocol
 
 import (
-	"bytes"
-	"encoding/json/jsontext" //nolint:depguard // same-format rewrites preserve raw request members
 	"errors"
 	"fmt"
 )
@@ -36,7 +34,7 @@ func rewriteWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) ([]
 		}
 	}
 	p := &rewriter{
-		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, size), t: t, w: w,
+		dec: newDecoder(body), body: body, out: make([]byte, 0, size), t: t, w: w,
 	}
 	p.b = b
 	if indexed {

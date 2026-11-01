@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // the body is edited in place, keeping unknown members as written
+	"errors"
 	"fmt"
 	"strconv"
 )
@@ -75,7 +76,7 @@ func injectNativeSearch(format Format, body []byte, maxUses int, b *budget) ([]b
 		return nil, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
 	}
 	close := len(trimmed) - 1
-	dec := jsontext.NewDecoder(bytes.NewBuffer(body))
+	dec := newDecoder(body) // the prepared body: no names are repeated in it
 	if dec.PeekKind() != '{' {
 		return nil, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
 	}
@@ -104,8 +105,15 @@ func injectNativeSearch(format Format, body []byte, maxUses int, b *budget) ([]b
 			hasOptions = true
 		}
 	}
+	searches := false
+	if toolsStart >= 0 && (format != Chat || !hasOptions) {
+		var err error
+		if searches, err = hasWebSearchTool(format, tools, b); err != nil {
+			return nil, err
+		}
+	}
 	if format == Chat {
-		if hasOptions || (toolsStart >= 0 && hasWebSearchTool(Chat, tools)) {
+		if hasOptions || searches {
 			return body, nil
 		}
 		return splice(body, close, close, []byte(`,"web_search_options":{}`), b)
@@ -120,7 +128,7 @@ func injectNativeSearch(format Format, body []byte, maxUses int, b *budget) ([]b
 		out, err = splice(body, toolsStart, toolsEnd, append(append([]byte{'['}, tool...), ']'), b)
 	case len(tools) == 0 || tools[0] != '[' || tools[len(tools)-1] != ']':
 		return nil, fmt.Errorf("%w: tools is not an array", ErrInvalid)
-	case hasWebSearchTool(format, tools):
+	case searches:
 		out = body
 	default:
 		// Insert before the array's closing bracket, after a comma when it already holds a tool.
@@ -197,7 +205,7 @@ func maxToolCalls(body []byte) (start, end, value int, err error) {
 	if len(trimmed) == 0 || trimmed[len(trimmed)-1] != '}' {
 		return 0, 0, 0, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
 	}
-	dec := jsontext.NewDecoder(bytes.NewBuffer(trimmed))
+	dec := newDecoder(trimmed)
 	if dec.PeekKind() != '{' {
 		return 0, 0, 0, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
 	}
@@ -237,66 +245,86 @@ func nativeSearchTool(format Format, maxUses int) []byte {
 }
 
 // hasWebSearchTool reports whether a tools array already turns the provider's web search on. It reads the array in
-// place and each tool's type into a small array of its own, so it allocates nothing however many tools there are; a
-// member name matches as encoding/json matched it, whatever its case.
-func hasWebSearchTool(format Format, tools []byte) bool {
-	dec := jsontext.NewDecoder(bytes.NewBuffer(tools), jsontext.AllowDuplicateNames(true))
+// place and each tool's type by its decoded value, as encoding/json did, into a small array of its own: a type longer
+// than that array, which only a long or escaped spelling is, is decoded into a buffer drawn from b. A member name
+// matches as encoding/json matched it, whatever its case; an element that is not a tool ends the search, as it did.
+func hasWebSearchTool(format Format, tools []byte, b *budget) (bool, error) {
+	dec := newDecoder(tools) // a value of the prepared body: no names are repeated in it
 	if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '[' {
-		return false
+		return false, nil //nolint:nilerr // not an array: it holds no search tool
 	}
-	var name, value [32]byte
+	var name [32]byte
+	var value [128]byte
 	for dec.PeekKind() != ']' {
-		kind, ok := toolType(dec, &name, &value)
-		if !ok {
-			return false
+		kind, err := toolType(dec, &name, &value, b)
+		if errors.Is(err, errNotTool) {
+			return false, nil
 		}
-		switch format { //nolint:exhaustive // only the two tool-bearing formats reach here
-		case Chat, Responses:
-			if string(kind) == "web_search" || string(kind) == "web_search_preview" {
-				return true
-			}
-		case Messages:
-			if bytes.HasPrefix(kind, []byte("web_search")) {
-				return true
-			}
+		if err != nil || searchType(format, kind) {
+			return err == nil, err
 		}
 	}
-	return false
+	return false, nil
 }
 
-// toolType reads one tool and returns its type, the last one given, unquoted into value; nil when it has none or one
-// too long to be a web search tool's. It reports false for an element that is not an object.
-func toolType(dec *jsontext.Decoder, name, value *[32]byte) ([]byte, bool) {
+// searchType reports whether a tool of the decoded type kind is the format's own web search.
+func searchType(format Format, kind []byte) bool {
+	if format == Messages {
+		return bytes.HasPrefix(kind, []byte("web_search"))
+	}
+	return string(kind) == "web_search" || string(kind) == "web_search_preview"
+}
+
+// errNotTool is an element of a tools array that is not an object.
+var errNotTool = errors.New("protocol: not a tool")
+
+// toolType reads one tool and returns its type, the last one given, decoded; nil when it has none.
+func toolType(dec *jsontext.Decoder, name *[32]byte, value *[128]byte, b *budget) ([]byte, error) {
 	if dec.PeekKind() != '{' {
-		return nil, false
+		return nil, errNotTool
 	}
 	if _, err := dec.ReadToken(); err != nil {
-		return nil, false
+		return nil, errNotTool
 	}
 	var kind []byte
 	for dec.PeekKind() != '}' {
-		n, err := dec.ReadValue()
-		if err != nil {
-			return nil, false
+		n, errName := dec.ReadValue()
+		v, errValue := dec.ReadValue()
+		if errName != nil || errValue != nil {
+			return nil, errNotTool
 		}
-		v, err := dec.ReadValue()
-		if err != nil {
-			return nil, false
-		}
-		if len(n) > len(name) {
+		if len(n) > len(name) { // "type" with every byte escaped is 26 bytes
 			continue
 		}
 		unquoted, _ := jsontext.AppendUnquote(name[:0], n) //nolint:errcheck // a member name is a valid string
-		if !bytes.EqualFold(unquoted, []byte("type")) {
-			continue
-		}
-		kind = nil
-		if v.Kind() == '"' && len(v) <= len(value) {
-			kind, _ = jsontext.AppendUnquote(value[:0], v) //nolint:errcheck // the kind says it is a string
+		if bytes.EqualFold(unquoted, []byte("type")) {
+			var err error
+			if kind, err = decodedType(v, value, b); err != nil {
+				return nil, err
+			}
 		}
 	}
-	_, err := dec.ReadToken()
-	return kind, err == nil
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, errNotTool
+	}
+	return kind, nil
+}
+
+// decodedType is a tool's type unquoted into value, or into a buffer drawn from b when it does not fit; nil when it is
+// not a string.
+func decodedType(v jsontext.Value, value *[128]byte, b *budget) ([]byte, error) {
+	if v.Kind() != '"' {
+		return nil, nil
+	}
+	buf := value[:0]
+	if len(v) > len(value) {
+		if err := b.draw(rounded(int64(len(v)))); err != nil {
+			return nil, err
+		}
+		buf = make([]byte, 0, len(v))
+	}
+	kind, _ := jsontext.AppendUnquote(buf, v) //nolint:errcheck // the kind says it is a string
+	return kind, nil
 }
 
 // splice is body with its bytes from start to end replaced by with, in a body of its own drawn from b before it is made;

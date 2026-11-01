@@ -14,11 +14,15 @@ import (
 // 2026-10-14; README.md「跨格式转换」). Strings are copied as written. The body is written into one writer, which
 // starts at the size of the Chat body and draws every growth from b first.
 func toMessages(c *canon, t Target, w Rewrites, b *budget, body []byte) ([]byte, error) {
-	m := &messagesWriter{c: c, t: t, o: newWriter(len(body)+4096, b)}
+	m := &messagesWriter{c: c, t: t}
 	if err := m.check(); err != nil {
 		return nil, err
 	}
-	o := m.o
+	o := newWriter(len(body)+4096, b)
+	if o.err != nil {
+		return nil, o.err
+	}
+	m.o = o
 	o.str(`{"model":`).quoted(t.Model).str(`,"max_tokens":`).int(m.maxTokens)
 	for _, write := range []func() error{m.system, m.messages, m.tools, m.toolChoice, m.thinking, m.sampling} {
 		if err := write(); err != nil {
@@ -330,7 +334,11 @@ func (m *messagesWriter) arguments(v jsontext.Value) error {
 	switch {
 	case len(args) == 0:
 		o.buf = append(s[:at], "{}"...)
-	case args[0] != '{' || m.args.Validate(args) != nil:
+	case args[0] != '{':
+		return &NotSupported{Reason: "a tool call's arguments are not a JSON object"}
+	case o.b.draw(validateMemory(args)) != nil: // the client's own JSON, whose names are checked for duplicates here
+		return ErrMemory
+	case m.args.Validate(args) != nil:
 		return &NotSupported{Reason: "a tool call's arguments are not a JSON object"}
 	default:
 		o.buf = append(s[:at], args...) // copy within the array: args lies in it, at or after at

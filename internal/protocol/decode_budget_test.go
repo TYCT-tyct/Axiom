@@ -160,3 +160,29 @@ func TestMemoryErrorKeepsItsType(t *testing.T) {
 		})
 	}
 }
+
+// TestPrepareRefusesTheOutputCleanly: a budget that holds the tree but not the output buffer refuses with ErrMemory,
+// whatever the writer would have written first (here the system blocks, which look at what was written), and gives
+// back everything it drew.
+func TestPrepareRefusesTheOutputCleanly(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":"` + strings.Repeat("x", 1<<20) + `"}]}`)
+	r, err := Inspect(Chat, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []Format{Messages, Responses} {
+		target := Target{Format: to, Model: "up", MaxOutput: 4096}
+		tree := &budget{m: NewMemory(1 << 40)}
+		if _, err := decodeCanonWithin(body, tree); err != nil {
+			t.Fatal(err)
+		}
+		left := tree.peak + 1024 // the tree fits, a buffer of the body's size does not
+		m := NewMemory(left)
+		if _, _, err := PrepareBudgeted(m, &r, body, target, Rewrites{}); !errors.Is(err, ErrMemory) {
+			t.Errorf("format %v: %v, want ErrMemory", to, err)
+		}
+		if m.left.Load() != left {
+			t.Errorf("format %v: %d of %d left after the refusal", to, m.left.Load(), left)
+		}
+	}
+}

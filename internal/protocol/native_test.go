@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -111,5 +112,39 @@ func TestInjectNativeSearchRefusesWhatItCannotRewrite(t *testing.T) {
 				t.Fatal("injectNativeSearch() succeeded")
 			}
 		})
+	}
+}
+
+// TestInjectNativeSearchKnowsEveryEscape: a tool already searching is one whatever the escapes of its type, so the
+// search is never added twice; a Messages type longer than the scan's own array is decoded too.
+func TestInjectNativeSearchKnowsEveryEscape(t *testing.T) {
+	escaped := func(s string) string {
+		var b strings.Builder
+		for _, c := range []byte(s) {
+			fmt.Fprintf(&b, `\u%04x`, c)
+		}
+		return b.String()
+	}
+	for _, tc := range []struct {
+		format       Format
+		kind, tool   string
+		maxUses, use int
+	}{
+		{Responses, "web_search", `{"type":"web_search"}`, 1, 1},
+		{Responses, "web_search_preview", `{"type":"web_search"}`, 1, 1},
+		{Chat, "web_search", `"web_search_options"`, 0, 1},
+		{Messages, "web_search_20250305", `"max_uses":2`, 0, 2},
+		{Messages, "web_search_" + strings.Repeat("9", 200), `"max_uses":2`, 0, 2},
+	} {
+		for _, spelling := range []string{tc.kind, escaped(tc.kind), escaped(tc.kind[:5]) + tc.kind[5:]} {
+			body := `{"model":"m","tools":[{"type":"function","name":"f"},{"type":"` + spelling + `","name":"web_search"}]}`
+			got, err := injectNativeSearch(tc.format, []byte(body), tc.use, nil)
+			if err != nil {
+				t.Fatalf("%v %s: %v", tc.format, spelling, err)
+			}
+			if n := strings.Count(string(got), tc.tool); n != strings.Count(body, tc.tool) {
+				t.Errorf("%v %s: the search was added again: %s", tc.format, spelling, got)
+			}
+		}
 	}
 }

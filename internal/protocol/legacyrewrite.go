@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // preserve caller-owned payload bytes while upgrading the envelope
 	"errors"
 )
@@ -39,7 +38,7 @@ func rewriteLegacy(body []byte, b *budget) ([]byte, error) {
 		return nil, err
 	}
 	p := &rewriter{body: body, out: make([]byte, 0, size), legacy: raw}
-	p.dec = jsontext.NewDecoder(bytes.NewBuffer(body))
+	p.dec = newDecoder(body)
 	if err := p.top(legacyRequestRules); err != nil {
 		return nil, err
 	}
