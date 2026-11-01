@@ -207,7 +207,7 @@ func (c *locked) planUnattempted(ctx context.Context, tx pg.Tx) (settlementPlan,
 func (c *locked) planCharge(ctx context.Context, tx pg.Tx, o Outcome) (settlementPlan, error) {
 	var p settlementPlan
 	p.posts, p.records = c.attemptWrites(o)
-	last := o.Attempts[len(o.Attempts)-1]
+	last := charged(o.Attempts)
 	if c.row.State == "cleanup_released" { // the usage arrived after all: the request is no longer lost
 		if err := c.b.suppliers.ResolveLostRequest(ctx, tx, c.id); err != nil {
 			return p, fmt.Errorf("billing: resolve the lost request: %w", err)
@@ -251,7 +251,7 @@ func (c *locked) attemptWrites(o Outcome) ([]PostLedgerParams, []suppliers.Attem
 		c.costKnown = c.costKnown && at.CostKnown
 		c.cost = sum(c.cost, platform.AmountExact(at.Cost))
 		records[i] = suppliers.AttemptRecord{
-			Request: platform.RequestID(c.id), Seq: platform.AttemptSeq(at.Seq), //nolint:gosec // at most platform.MaxAttempts
+			Request: platform.RequestID(c.id), Seq: platform.AttemptSeq(at.Seq), //nolint:gosec // at most platform.MaxAttemptSeq
 			Site: c.row.SiteID, Account: c.row.AccountID,
 			Receipt: at.Receipt, Usage: usages(at.Segments), Cost: at.Estimate, FinishedAt: at.FinishedAt,
 		}

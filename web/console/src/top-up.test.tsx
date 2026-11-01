@@ -42,6 +42,17 @@ describe("Checkout", () => {
   });
 });
 
+it("opens a payment link with the site origin as its referrer and no opener", () => {
+  const html = renderToStaticMarkup(
+    <I18nextProvider i18n={i18n}>
+      <Checkout checkout={{ pay_url: "https://wx.tenpay.com/checkout" }} />
+    </I18nextProvider>,
+  );
+  expect(html).toContain('rel="noopener"');
+  expect(html).toContain('referrerPolicy="origin"');
+  expect(html).not.toContain("noreferrer");
+});
+
 describe("balanceMoved", () => {
   it("refreshes when the poll confirms a payment, and on the first read of a paid order", () => {
     expect(balanceMoved("pending", "paid")).toBe(true);

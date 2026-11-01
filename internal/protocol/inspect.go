@@ -124,6 +124,17 @@ type Request struct {
 	// sets no limit and the model's default applies. A rerank request sets WebSearches to one: its search unit is
 	// priced as a web search, though the request does not ask for the model's web_search ability.
 	WebSearches, CodeExecutions int64
+	// ServerSearch is OpenRouter's openrouter:web_search server tool, nil when the request declares none. The gateway
+	// runs the loop it stands for, or maps it to the provider's own search, and removes the declaration before an
+	// endpoint sees it (docs/domains/gateway.md「服务端工具」).
+	ServerSearch *ServerWebSearch
+	// NativeWeb is set when the request declares the provider's own web search tool or turns Chat's web_search_options
+	// on. It is not the server tool: the two are refused together.
+	NativeWeb bool
+	// MaxToolCalls is the request's top-level max_tool_calls, the steps all built-in tool calls share; HasMaxToolCalls
+	// tells an explicit 0 from an absent member.
+	MaxToolCalls    int64
+	HasMaxToolCalls bool
 	// HidesReasoning is set when the request asks for reasoning to be left out of the stream, whose progress then
 	// cannot be observed (docs/domains/billing.md「预留与结算」).
 	HidesReasoning bool
@@ -200,13 +211,13 @@ func Inspect(f Format, body []byte) (Request, error) {
 	if s.r.ServiceTiers == 0 {
 		s.r.ServiceTiers = anyTier
 	}
-	if s.callCap > 0 { // only Responses has it, and its tools have no limits of their own
-		if s.r.Needs.Has(WebSearch) {
-			s.r.WebSearches = s.callCap
-		}
-		if s.r.Needs.Has(CodeExecution) {
-			s.r.CodeExecutions = s.callCap
-		}
+	// Only Responses sends max_tool_calls upstream, where it caps the provider's tools; Chat and Messages lose it in
+	// Prepare (it is OpenRouter's loop control there), so a quote that counted it would cover fewer uses than run.
+	if f == Responses && s.r.HasMaxToolCalls && s.r.Needs.Has(CodeExecution) {
+		s.r.CodeExecutions = s.r.MaxToolCalls
+	}
+	if f == Responses && s.r.HasMaxToolCalls && s.r.Needs.Has(WebSearch) && s.r.ServerSearch == nil {
+		s.r.WebSearches = s.r.MaxToolCalls
 	}
 	return s.r, nil
 }
@@ -238,19 +249,22 @@ type scanner struct {
 	compressionSet, transformsSet, middleOut bool
 	modelsSet, fallbacksSet                  bool
 	fallbackModels                           []string
-	callCap                                  int64 // Responses' max_tool_calls
 }
 
 // part is the content part, tool or reasoning setting being read.
 type part struct {
 	toolKind                 string // dual-mode Responses tools need an explicit client execution claim
+	typeSeen                 bool   // the tool's type member was read before its parameters
 	localShell, clientSearch bool
 	kind                     Capabilities
-	payload                  int64 // the raw bytes of the data the part carries
-	binary                   bool  // the payload is image or file data, not text
-	refs                     int64 // files the part refers to by an id
-	max                      int64 // a server tool's max_uses
-	off, hidden, on          bool  // reasoning turned off; reasoning left out of the stream
+	payload                  int64  // the raw bytes of the data the part carries
+	binary                   bool   // the payload is image or file data, not text
+	refs                     int64  // files the part refers to by an id
+	max                      int64  // a server tool's max_uses
+	serverRaw                []byte // a tool's parameters, kept until its type is known
+	serverRawBig             bool
+	server                   *ServerWebSearch
+	off, hidden, on          bool // reasoning turned off; reasoning left out of the stream
 }
 
 // fields maps an object's member names to their readers; other members are skipped.

@@ -53,10 +53,10 @@ func (b *budget) give(n int64) {
 // fast reports whether nothing is drawn: a nil budget, or the shared noBudget of a Prepare outside a node.
 func (b *budget) fast() bool { return b == nil || b.m == nil }
 
-// What a decoder of its own holds beyond the values it reads: jsontext's decoder and the bytes.Buffer it reads from,
-// and the scratch a member name or an escaped string is unquoted into. Measured 2026-11-01 at 1.2 KiB for a decoder
-// over a 1 MiB body; the allowance leaves room for the runtime's own buffers.
-const decoderMemory = 4 << 10
+// bodyDecoderMemory is what a decoder of its own holds beyond the values it reads: jsontext's decoder and the
+// bytes.Buffer it reads from, and the scratch a member name or an escaped string is unquoted into. Measured 2026-11-01
+// at 1.2 KiB for a decoder over a 1 MiB body; the allowance leaves room for the runtime's own buffers.
+const bodyDecoderMemory = 4 << 10
 
 // mapEntryMemory is what an entry of a map with a string key and a value of up to 24 bytes takes, its share of every
 // table the map grows through included; the key's own bytes are charged beside it. Measured 2026-11-01 at about 165
@@ -85,7 +85,7 @@ func decodeCanonWithin(body []byte, b *budget) (*canon, error) {
 	if b.fast() {
 		return decodeCanon(body)
 	}
-	if err := b.draw(decoderMemory); err != nil {
+	if err := b.draw(bodyDecoderMemory); err != nil {
 		return nil, err
 	}
 	d := &decoder{dec: newDecoder(body), b: b}

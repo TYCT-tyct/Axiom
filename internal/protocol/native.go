@@ -29,6 +29,9 @@ func PrepareBudgeted(m *Memory, r *Request, body []byte, t Target, w Rewrites) (
 // prepare is PrepareBudgeted on a budget of the caller's, which the tests read what it drew from.
 func (b *budget) prepare(r *Request, body []byte, t Target, w Rewrites) (u Upstream, held int64, err error) {
 	u, err = prepareWithin(r, body, t, w, b)
+	if err == nil {
+		u.Body, err = b.serverRewrites(u.Body, t, w)
+	}
 	if err != nil {
 		b.give(b.held)
 		return u, 0, err
@@ -48,6 +51,54 @@ func (b *budget) prepare(r *Request, body []byte, t Target, w Rewrites) (u Upstr
 	}
 	b.give(b.held - held)
 	return u, held, nil
+}
+
+// serverRewrites applies the gateway's server-loop edits to a prepared body: the loop's own cap and forced choice
+// out, its search function in. Each is a step under b.within.
+func (b *budget) serverRewrites(body []byte, t Target, w Rewrites) ([]byte, error) {
+	var err error
+	if w.ServerLoop || w.HasMaxToolCalls && (t.Format == Chat || t.Format == Messages) {
+		if body, err = b.within(body, RemoveMaxToolCalls); err != nil {
+			return nil, err
+		}
+	}
+	if w.ServerLoop && !w.ServerFunction {
+		drop := func(body []byte) ([]byte, error) { return DropForcedToolChoice(t.Format, body) }
+		if body, err = b.within(body, drop); err != nil {
+			return nil, err
+		}
+	}
+	if w.ServerFunction {
+		inject := func(body []byte) ([]byte, error) { return injectServerFunction(t.Format, body) }
+		if body, err = b.within(body, inject); err != nil {
+			return nil, err
+		}
+	}
+	return body, nil
+}
+
+// within runs step, which splices a member in or out of body and may scan it, under a reservation drawn before it
+// starts: a body of the input's size, the room the server function takes and a decoder's state. Of the reservation
+// only the output's capacity stays drawn; the input stays drawn too until prepare settles what it holds.
+// TestPrepareAllocatesOnlyWhatItDrew holds the bound.
+func (b *budget) within(body []byte, step func([]byte) ([]byte, error)) ([]byte, error) {
+	reserve := rounded(int64(len(body))+serverFunctionCost(true)) + bodyDecoderMemory
+	if err := b.draw(reserve); err != nil {
+		return nil, err
+	}
+	out, err := step(body)
+	if err != nil || len(out) == 0 || len(body) > 0 && &out[0] == &body[0] { // refused, or the body as it was
+		b.give(reserve)
+		return out, err
+	}
+	if kept := rounded(int64(cap(out))); kept > reserve {
+		if err := b.draw(kept - reserve); err != nil {
+			return nil, err
+		}
+	} else {
+		b.give(reserve - kept)
+	}
+	return out, nil
 }
 
 // NativeSearchSupported reports whether a format has a way to turn on the provider's own web search: Chat's

@@ -54,6 +54,27 @@ type Meter struct {
 	flying  bool           // request is in flight
 	stop    platform.Exact // spend past it exhausts the approved segments
 	ask     platform.Exact // spend past it asks for the next segment
+	done    completed      // the final usage of the samplings before the current one
+}
+
+// completed is what the hops that already ended spent. A model-side loop reads a fresh relay per hop, whose progress
+// starts at zero; without this the meter would compare every hop with the first segment alone.
+type completed struct {
+	contentBytes, searches, toolCalls, output int64
+}
+
+// Complete records the final progress of one hop. The caller invokes it once, after the hop has ended; the next hop's
+// Observe adds its own progress to it. A hop without a final output count falls back to the byte bound, which is what
+// Observe would have used for it.
+func (m *Meter) Complete(p Progress) {
+	out := p.Reported.OutputTotal()
+	if !p.Final.Has(catalog.ItemOutput) {
+		out = max(out, add(add(p.ContentBytes, p.PartialBytes), mul(max(p.ToolCalls, 0), max(p.ToolCallTokens, 0))))
+	}
+	m.done.contentBytes += p.ContentBytes
+	m.done.searches += max(p.Searches, p.Reported.Count(catalog.ItemWebSearch))
+	m.done.toolCalls += p.ToolCalls
+	m.done.output += out
 }
 
 // OutputCap is the most output tokens the attempt can have: the entry's output limit on each choice. Metering holds the
@@ -127,11 +148,15 @@ func (m *Meter) Observe(p Progress) MeterStep {
 }
 
 func (m *Meter) used(p Progress) (out, excess int64) {
-	out = p.Reported.OutputTotal()
+	// Each relay reports only its own hop. A completed hop's final token count is added as it is; its byte bound must
+	// not be compared with the current hop's bytes, or hidden reasoning and visible output would be mixed.
+	current := p.Reported.OutputTotal()
 	if !p.Final.Has(catalog.ItemOutput) {
-		out = max(out, add(add(p.ContentBytes, p.PartialBytes), mul(max(p.ToolCalls, 0), max(p.ToolCallTokens, 0))))
+		current = max(current, add(add(p.ContentBytes, p.PartialBytes),
+			mul(max(p.ToolCalls, 0), max(p.ToolCallTokens, 0))))
 	}
-	searches := max(p.Searches, p.Reported.Count(catalog.ItemWebSearch))
+	out = m.done.output + current
+	searches := m.done.searches + max(p.Searches, p.Reported.Count(catalog.ItemWebSearch))
 	return min(out, m.q.outputCap), max(searches-m.q.searches, 0)
 }
 

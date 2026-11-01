@@ -14,7 +14,7 @@ func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 // rewriteCost is what a same-format rewrite holds at once: the buffer it writes into, the scratch an identifier or a
 // response ID is unquoted into and the string it becomes, and a legacy request's conversion to the canonical model.
 func rewriteCost(r *Request, body []byte, t Target, w Rewrites) int64 {
-	n := int64(len(body)) + nativeSearchCost(w.NativeSearch)
+	n := int64(len(body)) + nativeSearchCost(w.NativeSearch) + serverFunctionCost(w.ServerFunction)
 	cost := int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n + replayCost(r.Format, body)
 	if r.Format == Responses {
 		cost += replayHistoryCost(w.History)
@@ -32,4 +32,12 @@ func nativeSearchCost(uses int) int64 {
 		return 0
 	}
 	return 256
+}
+
+// serverFunctionCost is the room the web search function declaration takes, escaped and with its schema.
+func serverFunctionCost(add bool) int64 {
+	if !add {
+		return 0
+	}
+	return 4 << 10
 }

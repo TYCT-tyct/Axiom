@@ -25,7 +25,7 @@ func HashEndUser(key []byte, id string) EndUserHash       // 带密钥的哈希�
 var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close 之后、或在队列满时给出的错误
 ```
 
-`CallRecord` 带一个请求的元数据和它的每次尝试（`AttemptRecord`）；`call_log` 一行是调用，`call_attempt` 一行是尝试。尝试的 `Seq` 从 1 连续到最多 3，写入时校验；调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 由最后一个尝试算出，因此不会与尝试表不一致。查询和生成的代码在 `internal/store`（sqlc，`sqlc.yaml` 的 `observability` 项），包外引用不到，所以所有写入都经过 `CallRecord`、`AttemptRecord`、`Recorder`，所有读取都经过下面按账户的查询和「追溯」的 `GetTrace`。`CallRecord` 只用本模块、`catalog`、`platform` 的类型和 `uuid.UUID`（`accounts` 的带类型 ID 随它的表加入后换上）；`AttemptRecord` 用 `uuid.UUID`、`platform.AttemptSeq` 和时间。HTTP 处理器随 gateway 加入，调用的就是 `ListOwn`、`GetOwn` 和按日/模型/工作区的 `ActivityOwn`；尝试不向用户开放（用户看不到端点、成本和路由）。
+`CallRecord` 带一个请求的元数据和它的每次尝试（`AttemptRecord`）；`call_log` 一行是调用，`call_attempt` 一行是尝试。尝试的 `Seq` 从 1 连续到最多 `platform.MaxAttemptSeq`（33：路由的 3 次回退加模型侧循环的每次采样，迁移 `00016_loop_attempts.sql` 放宽了表上的 CHECK），写入时校验；调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 由最后一个尝试算出，因此不会与尝试表不一致。查询和生成的代码在 `internal/store`（sqlc，`sqlc.yaml` 的 `observability` 项），包外引用不到，所以所有写入都经过 `CallRecord`、`AttemptRecord`、`Recorder`，所有读取都经过下面按账户的查询和「追溯」的 `GetTrace`。`CallRecord` 只用本模块、`catalog`、`platform` 的类型和 `uuid.UUID`（`accounts` 的带类型 ID 随它的表加入后换上）；`AttemptRecord` 用 `uuid.UUID`、`platform.AttemptSeq` 和时间。HTTP 处理器随 gateway 加入，调用的就是 `ListOwn`、`GetOwn` 和按日/模型/工作区的 `ActivityOwn`；尝试不向用户开放（用户看不到端点、成本和路由）。
 
 ## 表（schema `observability`）
 
@@ -65,7 +65,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 | 文字能存进库 | `Enqueue` 拒绝不合法的 UTF-8 和 NUL，包括每次尝试的文字；编码本身失败（`errEncoding`）和数据库的数据错误一样走坏行隔离。测试：非法 UTF-8 的行夹在好行之间，经真实的编码和库写入，好行落库、坏行被计数 |
 | 终端用户标识只以带密钥的哈希存放 | `EndUserHash` 是带私有数组的结构，包外无法构造非零值 |
 | 没有对话正文、密钥或凭证 | 两张表的列里没有这样的名字或字节类型，文字和 JSON 列都有长度或格式检查；测试读 `information_schema` 核对两张表。请求头只记应用归因的三个，由 gateway 去控制字符、按列宽截断（`app_referer` 另去掉 userinfo、查询串和片段）后放入 `app_referer`、`app_title`、`app_categories`；其余请求头一律不记 |
-| 每次尝试有且只有一行，且能从调用找到 | `call_attempt` 的主键 `(request_id, at, attempt_seq)`；`Seq` 必须从 1 连续递增，最多 3 次；调用行的端点、来源类别、出口和次数由最后一个尝试算出。测试：写两次只有一行，按序号读回每次尝试，调用行与最后尝试一致 |
+| 每次尝试有且只有一行，且能从调用找到 | `call_attempt` 的主键 `(request_id, at, attempt_seq)`；`Seq` 必须从 1 连续递增，最多 `platform.MaxAttemptSeq` 次（`TestALoopsAttemptsAreKept`）；调用行的端点、来源类别、出口和次数由最后一个尝试算出。测试：写两次只有一行，按序号读回每次尝试，调用行与最后尝试一致 |
 | 同一个请求写两次是一行 | 两张表都是 `ON CONFLICT … DO NOTHING`；`at` 是请求开始时间，不是写入时间，所以重试的是同一个键。测试：同一个 `CallRecord` 写两次，调用一行、每次尝试一行 |
 | 写入从不因没有分区而失败 | 两张表都有默认分区兜底；测试写入 2001 年和 2090 年的调用和尝试 |
 | 队列满不阻塞调用 | `Enqueue` 只做非阻塞发送；满了就丢掉这条调用和它的尝试，计入 `records.lost` / `attempts.lost`（reason `queue_full`）并返回 `ErrQueueFull`。测试：写协程卡住、队列满时第四次 `Enqueue` 立即返回，之前入队的照常写入 |
@@ -129,7 +129,7 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 - **路由过程**：调用行的 `route` 列，内容是 routing 的 `Record.JSON()`：被排除的候选和原因、选定的路线、每次尝试的结局。尝试不重复存路由。
 - **账本交易**：由 billing 的 `LedgerOf(ctx, tx, id)` 按同一个请求 ID 读，每笔交易带自己的分录。observability 不读 billing 的表，也不引用 billing（依赖表里 observability 在 billing 之上），所以「串起」由调用方把两个函数的结果合起来：三个查询、两个模块，各读自己的表（[总体架构的「模块边界规则」](../../docs/architecture.md#模块边界规则)）。
 - **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，队列满时会丢而账本照记，校正还会在记录写好后再记交易，抄下来的链接会缺、会旧。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。这一列留在表里（`NOT NULL DEFAULT '{}'`），新代码既不读也不写；按[平台的迁移规则](../platform/README.md#迁移)，等停止使用它的版本发布之后再删（#204）。本次发布仍不删：还需要一个已发布的版本先停止读写它，滚动发布期间旧节点可能仍在写。
-- **不变量**：尝试序号从 1 连续到 `len(Attempts)`，调用行的 `attempt_count` 等于它（写入时算好）；`route` 是 JSON 对象；`LedgerOf` 的每笔交易 `request_id` 等于调用 ID、`attempt_seq` 是 0（请求本身）或 1 到 3（某次尝试），每笔交易的分录合计为 0（billing 写入时断言）。测试：`TestTraceReadsTheWholeChain`（cmd/axiom，走一次真实结算）与 `TestCallAndAttemptsRoundTrip`。
+- **不变量**：尝试序号从 1 连续到 `len(Attempts)`，调用行的 `attempt_count` 等于它（写入时算好）；`route` 是 JSON 对象；`LedgerOf` 的每笔交易 `request_id` 等于调用 ID、`attempt_seq` 是 0（请求本身）或 1 到 33（某次尝试），每笔交易的分录合计为 0（billing 写入时断言）。测试：`TestTraceReadsTheWholeChain`（cmd/axiom，走一次真实结算）与 `TestCallAndAttemptsRoundTrip`。
 
 ## 分区
 

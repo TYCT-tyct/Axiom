@@ -211,9 +211,12 @@ func shapeCases(t *testing.T, shape string, from Format, body []byte) []budgetCa
 		}
 		cases = append(cases, c)
 		if shape == "long text" || shape == "tiny parts" || shape == "tool calls" {
-			c.name += " searching"
-			c.w.NativeSearch = 1
-			cases = append(cases, c)
+			search, loop := c, c
+			search.name += " searching"
+			search.w.NativeSearch = 1
+			loop.name += " in a server loop"
+			loop.w.ServerLoop, loop.w.ServerFunction, loop.w.HasMaxToolCalls = true, true, true
+			cases = append(cases, search, loop)
 		}
 	}
 	return cases

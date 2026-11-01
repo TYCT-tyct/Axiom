@@ -35,48 +35,26 @@ func (s *session) servedModel(a *attempt) string {
 // the first content, the commit point (I4), and from there each step is written to the client as it comes. The
 // goroutine that calls it is the relay's owner: it alone calls the relay, one read at a time. Only the idle timer
 // beside it acts on the attempt, by cancelling it, which closes the body and ends the read.
-func (a *attempt) stream(ctx context.Context, body io.Reader, uc protocol.UsageContext) (step, ended) {
+func (a *attempt) stream(ctx context.Context, body io.ReadCloser, uc protocol.UsageContext) (step, ended) {
 	s := a.s
-	relay := protocol.NewRelay(s.c.Format, a.entry.Target.Format, body, uc, protocol.RelayOptions{
-		ID: s.c.ID.String(), Model: s.c.Request.Model, ActualModel: s.servedModel(a), Created: s.start.Unix(),
-		Memory: s.x.Memory, Aggregate: s.aggregate, Citations: s.citations, Echo: s.echo,
-		ZeroOutput: s.c.Request.ZeroOutput(),
-	})
-	s.live = relay
 	idleFor := s.x.Limits.cfg.IdleTimeout
-	idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })
-	defer idle.Stop()
-	// Billing settles with no extension in flight, and the extension's goroutine must not outlive the call, whose slots
-	// bound it; its outcome changes nothing now.
-	defer a.landed(true) //nolint:errcheck // see above
-	// Once the upstream is no longer read, a write that blocks lets it generate nothing more on the call's account.
+	defer a.landed(true) //nolint:errcheck // see the extension's goroutine
 	defer s.setWriteFor(s.x.Limits.cfg.WriteTimeout)
 	for {
-		st, err := a.next(relay)
-		if err != nil {
-			return a.broke(ctx, relay, err)
+		relay := protocol.NewRelay(s.c.Format, a.entry.Target.Format, body, uc, protocol.RelayOptions{
+			ID: s.c.ID.String(), Model: s.c.Request.Model, ActualModel: s.servedModel(a), Created: s.start.Unix(),
+			Memory: s.x.Memory, Aggregate: s.aggregate, Citations: s.citations, Echo: s.echo,
+			ZeroOutput: s.c.Request.ZeroOutput(), ServerTool: a.serverTool(),
+		})
+		s.live = relay
+		idle := time.AfterFunc(idleFor, func() { a.cancel(errIdle) })
+		st, e, next := a.readHop(ctx, relay, idle, idleFor)
+		idle.Stop()
+		body.Close() //nolint:errcheck,gosec // the hop is over or abandoned; the close tells us nothing
+		if !next {
+			return st, e
 		}
-		// The upstream is idle when it sends nothing new: a keep-alive, a comment and a repeated snapshot do not
-		// count, bytes that make progress on an event and content do (docs/domains/gateway.md「路径与格式」).
-		p := relay.Progress()
-		if st.Kind == protocol.StepCommit || p.ContentBytes != a.seen.ContentBytes ||
-			p.PartialBytes > a.seen.PartialBytes || p.Searches != a.seen.Searches {
-			idle.Reset(idleFor)
-		}
-		a.seen = p
-		// Every read is metered before what it brought is written, before the commit point too (I1).
-		if err := a.metered(ctx, p, st.Kind == protocol.StepUpstreamDone, idle, idleFor); err != nil {
-			return a.truncate(relay, cut(err))
-		}
-		switch st.Kind {
-		case protocol.StepCommit:
-			s.commit(a, st.Out)
-		case protocol.StepData, protocol.StepHeartbeat:
-			s.write(st.Out)
-		case protocol.StepUpstreamDone:
-			return a.complete(relay)
-		case protocol.StepProgress, protocol.StepBuffered:
-		}
+		body, uc = a.nextBody, a.nextUsage
 	}
 }
 
@@ -291,8 +269,19 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 	}
 	e, finish, again := s.classify(ctx, err, a.conn)
 	rec := &s.ends[a.i]
+	if s.loop != nil {
+		a.hopDone(relay)
+		s.dropOut()
+	}
 	a.usage, rec.Finish = relay.Usage(), finish
 	scope := scopeOf(a.obs.Fault)
+	if s.aggregate && s.loop != nil {
+		// A loop's sampling is the answer only once it has ended without a server call: one that broke off may be a tool
+		// call the gateway never ran, and what it holds must not reach the client as a reply to charge.
+		rec.Result = billing.FailedBeforeCommit
+		s.drop(relay)
+		return s.unanswered(a, e, again, scope)
+	}
 	if s.aggregate {
 		return s.brokeAggregate(a, relay, e, again, scope)
 	}
@@ -368,6 +357,11 @@ func scopeOf(fault protocol.Fault) routing.Scope {
 // entry; one that may not answers with the error, unless the client is gone, which gets nothing. scope is whose the
 // failure is, which the call's record keeps as the supplier's own failures are kept.
 func (s *session) unanswered(a *attempt, e protocol.Error, again bool, scope routing.Scope) (step, ended) {
+	if again && s.searched {
+		// A search already ran on this call's account. Another entry would have to run it again, and the client was
+		// promised one stream, so the failure ends the loop as an upstream error.
+		e, again = protocol.Error{Type: protocol.UpstreamFailed}, false
+	}
 	if !again {
 		s.record(a, true, scope, routing.ReturnToClient)
 		if s.isGone() {
@@ -444,9 +438,13 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 			s.drop(relay)
 			s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 			return over, ended{}
-		case !a.content: // a 200 with nothing in it is a failure: the next entry answers
+		case !a.content: // a 200 with nothing in it is a failure: the next entry answers, unless a search already ran
 			rec.Result = billing.FailedBeforeCommit
 			s.drop(relay)
+			if s.searched {
+				s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+				return over, ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
+			}
 			s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
 			return nextEntry, ended{}
 		}
@@ -469,6 +467,10 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 		return over, ended{}
 	}
+	if s.searched {
+		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+		return over, ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
+	}
 	s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
 	return nextEntry, ended{}
 }
@@ -482,6 +484,10 @@ func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 	a.cancel(errCut)
 	a.obs.Cut = quality.Ours
 	rec := &s.ends[a.i]
+	if s.loop != nil {
+		a.hopDone(relay)
+		s.dropOut()
+	}
 	a.usage, rec.Finish = relay.Usage(), billing.FinishTruncated
 	s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 	if s.isStarted() {
