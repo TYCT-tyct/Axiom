@@ -111,6 +111,7 @@ function MerchantBasics({
       >
         <option value="easypay">{t("settings.payments.kinds.easypay")}</option>
         <option value="alipay">{t("settings.payments.kinds.alipay")}</option>
+        <option value="stripe">{t("settings.payments.kinds.stripe")}</option>
         <option value="wechatpay">{t("settings.payments.kinds.wechatpay")}</option>
       </SelectField>
       <TextField
@@ -187,29 +188,67 @@ function MerchantFlags({ merchant }: { merchant: Merchant | undefined }) {
 function MerchantSecrets({ merchant, kind, error }: { merchant: Merchant | undefined; kind: string; error: unknown }) {
   const { t } = useTranslation();
   const errors = useErrors();
+  const stripe = kind === "stripe";
   const defaults =
     kind === "alipay"
       ? { app_id: "", seller_id: "", gateway: "https://openapi.alipay.com/gateway.do" }
       : kind === "wechatpay"
         ? { app_id: "", mch_id: "", serial_no: "", gateway: "https://api.mch.weixin.qq.com" }
-        : { gateway: "https://", pid: "", mode: "redirect" };
+        : stripe
+          ? {}
+          : { gateway: "https://", pid: "", mode: "redirect" };
   return (
     <>
       <TextAreaField
+        key={kind}
         label={t("settings.payments.settings")}
-        hint={t("settings.payments.settingsHint")}
+        hint={stripe ? t("settings.payments.stripeSettingsHint") : t("settings.payments.settingsHint")}
         name="settings"
         className="min-h-40"
         defaultValue={JSON.stringify(merchant?.settings ?? defaults, null, 2)}
         error={errors.field(error, "merchant/settings")}
       />
-      {kind === "alipay" ? (
+      {stripe ? (
+        <StripeSecrets merchant={merchant} error={error} />
+      ) : kind === "alipay" ? (
         <AlipaySecrets merchant={merchant} error={error} />
       ) : kind === "wechatpay" ? (
         <WechatSecrets merchant={merchant} error={error} />
       ) : (
         <EasyPaySecrets merchant={merchant} error={error} />
       )}
+    </>
+  );
+}
+
+function StripeSecrets({ merchant, error }: { merchant: Merchant | undefined; error: unknown }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return (
+    <>
+      <TextField
+        label={t("settings.payments.stripeSecretKey")}
+        hint={merchant ? t("settings.payments.stripeSecretKeep") : t("settings.payments.stripeSecretNew")}
+        name="secret_key"
+        type="password"
+        autoComplete="new-password"
+        error={errors.field(error, "merchant/secrets")}
+      />
+      <TextField
+        label={t("settings.payments.stripeWebhookSecret")}
+        hint={merchant ? t("settings.payments.stripeWebhookKeep") : t("settings.payments.stripeWebhookNew")}
+        name="webhook_secret"
+        type="password"
+        autoComplete="new-password"
+        error={errors.field(error, "merchant/secrets")}
+      />
+      <TextField
+        label={t("settings.payments.stripeOldWebhookSecret")}
+        hint={t("settings.payments.stripeOldWebhookHint")}
+        name="old_webhook_secret"
+        type="password"
+        autoComplete="new-password"
+      />
     </>
   );
 }
@@ -323,6 +362,7 @@ function EasyPaySecrets({ merchant, error }: { merchant: Merchant | undefined; e
     </>
   );
 }
+
 function MethodsEditor({
   rows,
   setRows,

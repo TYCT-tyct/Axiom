@@ -9,6 +9,7 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/jackc/pgx/v5/pgtype" //nolint:depguard // sqlc's nullable timestamp fields; no query is issued here
 	"github.com/riverqueue/river"
 
 	"axiom/internal/billing"
@@ -117,6 +118,7 @@ func (p *Payments) reconcileMerchant(ctx context.Context, merchant uuid.UUID, da
 	return nil
 }
 
+//nolint:cyclop,gocognit // the day's order, refund and dispute checks are one reconciliation
 func checkMerchant(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.Time) ([]RecordDiscrepancyParams, error) {
 	expected := make(map[string]*big.Int)
 	differences, err := checkBatches(ctx, tx, merchant, day, expected)
@@ -137,6 +139,24 @@ func checkMerchant(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.T
 		}
 		expected[r.Currency].Sub(expected[r.Currency], amount)
 	}
+	// A chargeback takes cash on the day it is applied and gives it back on the day it is reversed. Both are payment
+	// minor units, like the paid totals and refund cash above; checkCash converts the whole expectation to billionths.
+	disputes, err := queries.ReconcileDisputes(ctx, tx, ReconcileDisputesParams{MerchantID: merchant, Since: day, Until: day.Add(24 * time.Hour)})
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range disputes {
+		if expected[d.Currency] == nil {
+			expected[d.Currency] = new(big.Int)
+		}
+		amount := big.NewInt(d.Cash)
+		if inWindow(d.AppliedAt, day) {
+			expected[d.Currency].Sub(expected[d.Currency], amount)
+		}
+		if inWindow(d.ReversedAt, day) {
+			expected[d.Currency].Add(expected[d.Currency], amount)
+		}
+	}
 	cash, err := checkCash(ctx, tx, merchant, day, expected)
 	differences = append(differences, cash...)
 	if err != nil {
@@ -154,6 +174,10 @@ func checkMerchant(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.T
 		differences = append(differences, d)
 	}
 	return differences, nil
+}
+
+func inWindow(at pgtype.Timestamptz, day time.Time) bool {
+	return at.Valid && !at.Time.Before(day) && at.Time.Before(day.Add(24*time.Hour))
 }
 
 func checkCash(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.Time, expected map[string]*big.Int) ([]RecordDiscrepancyParams, error) {

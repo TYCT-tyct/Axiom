@@ -225,6 +225,45 @@ function readMethods(
   return methods;
 }
 
+function readSecrets(
+  values: Record<string, string>,
+  creating: boolean,
+  kind: string,
+): { [key: string]: string } | null | undefined {
+  switch (kind) {
+    case "stripe":
+      return readStripeSecrets(values, creating);
+    case "alipay":
+      return readAlipaySecrets(values, creating);
+    case "wechatpay":
+      return readWechatSecrets(values, creating);
+    default:
+      return readEasyPaySecrets(values, creating);
+  }
+}
+
+function readStripeSecrets(
+  values: Record<string, string>,
+  creating: boolean,
+): { [key: string]: string } | null | undefined {
+  const secretKey = (values.secret_key ?? "").trim();
+  const webhook = (values.webhook_secret ?? "").trim();
+  const oldWebhook = (values.old_webhook_secret ?? "").trim();
+  if (!secretKey && !webhook && !oldWebhook) {
+    return creating ? null : undefined;
+  }
+  // The server replaces the sealed map rather than merging into it, so a partial rotation would drop the other secret.
+  if (!secretKey || !webhook) {
+    return null;
+  }
+  // Both required secrets are non-empty past the guard, so only the rotating one needs a condition.
+  return {
+    secret_key: secretKey,
+    webhook_secret: webhook,
+    ...(oldWebhook ? { old_webhook_secret: oldWebhook } : {}),
+  };
+}
+
 function readAlipaySecrets(
   values: Record<string, string>,
   creating: boolean,
@@ -288,20 +327,6 @@ function readEasyPaySecrets(
   return { ...(key ? { key } : {}), ...(oldKey ? { old_key: oldKey } : {}) };
 }
 
-function readSecrets(
-  values: Record<string, string>,
-  creating: boolean,
-  kind: string,
-): { [key: string]: string } | null | undefined {
-  switch (kind) {
-    case "alipay":
-      return readAlipaySecrets(values, creating);
-    case "wechatpay":
-      return readWechatSecrets(values, creating);
-    default:
-      return readEasyPaySecrets(values, creating);
-  }
-}
 function withChangeFields(
   input: AdminSchemas["MerchantInput"],
   rev: number | undefined,
@@ -364,7 +389,8 @@ export function readMerchant(
   if ("problem" in methods) {
     return methods;
   }
-  const secrets = readSecrets(values, merchant === undefined, basics.kind);
+  // Changing the plugin changes which secret names the server can bind; the old ones cannot carry over.
+  const secrets = readSecrets(values, merchant === undefined || merchant.kind !== basics.kind, basics.kind);
   if (secrets === null) {
     return { problem: words.secret };
   }

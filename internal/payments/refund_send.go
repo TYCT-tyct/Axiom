@@ -60,6 +60,22 @@ func (p *Payments) driveRefund(ctx context.Context, id uuid.UUID, initial bool) 
 	return p.saveRefundOutcome(ctx, row, outcome, result.ProviderRef, !canQuery && !canResend)
 }
 
+// Stripe keeps an idempotency key for 24 hours. Leave a minute of margin on the safe side of that boundary.
+const refundKeyWindow = 24*time.Hour - time.Minute
+
+func refundKeyOpenAt(r PaymentsRefund, now time.Time) bool {
+	return r.SentAt.Valid && now.Before(r.SentAt.Time.Add(refundKeyWindow))
+}
+
+func (p *Payments) refundKeyWindowOpen(ctx context.Context, r PaymentsRefund) bool {
+	var now time.Time
+	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) {
+		now, err = queries.RefundClock(ctx, tx)
+		return err
+	})
+	return err == nil && refundKeyOpenAt(r, now)
+}
+
 func refundHasBudget(ctx context.Context) bool {
 	if ctx.Err() != nil {
 		return false
@@ -136,7 +152,17 @@ func (p *Payments) callRefund(ctx context.Context, ch Channel, r PaymentsRefund,
 	}
 	result, err := ch.QueryRefund(ctx, call)
 	finishErr := p.finishQuery(ctx, o.MerchantID, token, queryHealthOutcome(ctx, err, false))
+	if p.resendMissingRefund(ctx, ch, r, err, finishErr, canResend) {
+		// The first request may have died before it reached the channel. Within the key's window, sending the same
+		// RefundCall again is the only safe way to finish; after the window a missing refund proves nothing.
+		return ch.Refund(ctx, call)
+	}
 	return result, errors.Join(err, finishErr)
+}
+
+func (p *Payments) resendMissingRefund(ctx context.Context, ch Channel, r PaymentsRefund, queryErr, finishErr error, canResend bool) bool {
+	return finishErr == nil && canResend && errors.Is(queryErr, ErrRefundNotFound) &&
+		ch.Caps().Has(CapRefund) && p.refundKeyWindowOpen(ctx, r)
 }
 
 func (p *Payments) saveRefundOutcome(ctx context.Context, row PaymentsRefund, outcome, provider string, noRecovery bool) error {
