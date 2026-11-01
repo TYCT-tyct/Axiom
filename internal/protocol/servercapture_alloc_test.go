@@ -125,3 +125,45 @@ func TestTurnAllocatesWithinItsCharge(t *testing.T) {
 		}
 	}
 }
+
+// TestRequestScansAllocateOnlyTheCopy: the loop's request rewrites walk the client's tools and messages where they lie.
+// A body of a hundred thousand empty objects costs each at most the copy of the body it returns, and the check for a
+// colliding function nothing that grows with it; decoding the arrays would take tens of bytes an element.
+func TestRequestScansAllocateOnlyTheCopy(t *testing.T) {
+	empties := strings.TrimSuffix(strings.Repeat("{},", 100000), ",")
+	tools := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}],"tools":[` + empties + `,{"type":"openrouter:web_search"}]}`)
+	plain := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}],"tools":[` + empties + `]}`)
+	history := []byte(`{"model":"m","messages":[` + empties + `]}`)
+	turn := ServerTurn{Calls: []ServerToolCall{{ID: "c1", Arguments: `{"query":"q"}`}}}
+	const slack = 16 << 10 // the decoders and the scratch for names, once a call
+	limits := map[string]int{
+		"remove":   allocated(len(tools)) + slack,
+		"declared": slack,
+		"inject":   allocated(len(plain)+1<<10) + slack,
+		"append":   allocated(len(history)+1<<10) + slack,
+	}
+	got := alloctest.Measure(t,
+		alloctest.Function{Name: "remove", F: func() {
+			if _, err := RemoveServerTool(Chat, tools); err != nil {
+				panic(err)
+			}
+		}},
+		alloctest.Function{Name: "declared", F: func() { ServerFunctionDeclared(Chat, plain) }},
+		alloctest.Function{Name: "inject", F: func() {
+			if _, err := injectServerFunction(Chat, plain); err != nil {
+				panic(err)
+			}
+		}},
+		alloctest.Function{Name: "append", F: func() {
+			if _, err := AppendServerTurn(Chat, history, turn, []string{"result"}); err != nil {
+				panic(err)
+			}
+		}},
+	)
+	for name, limit := range limits {
+		t.Logf("%s: %.0f bytes, limit %d", name, got[name].Bytes, limit)
+		if got[name].Bytes > float64(limit) {
+			t.Errorf("%s allocated %.0f bytes for a body of a hundred thousand elements, want at most %d", name, got[name].Bytes, limit)
+		}
+	}
+}

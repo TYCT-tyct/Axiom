@@ -25,8 +25,8 @@ type serverCapture struct {
 	held      int // the footprint the relay has charged for this capture
 	nDetails  int // the reasoning_details entries in details, which turn decodes one by one
 
-	levels [walkDepth]walkLevel // the token walk's decoders and buffers, kept between events (servercapture_read.go)
-	scr    [11][]byte           // the members an event is read into before it is acted on
+	walker            // the token walk's decoders, kept between events (walk.go, servercapture_read.go)
+	scr    [11][]byte // the members an event is read into before it is acted on
 }
 
 // ServerTurn is the assistant turn one loop hop produced, in the client's format, together with every call it made.

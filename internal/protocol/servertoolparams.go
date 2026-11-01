@@ -15,7 +15,10 @@ import (
 //
 //nolint:cyclop // a token walk needs a branch per malformed shape
 func topMember(body []byte, member string) (value []byte, start, end int, ok bool, err error) {
-	dec := jsontext.NewDecoder(bytes.NewReader(body))
+	// The body is parsed in place, and names are not collected for a duplicate check (Inspect made it): a body of many
+	// members costs this scan nothing per member.
+	dec := jsontext.NewDecoder(bytes.NewBuffer(body), walkOptions[0], walkOptions[1])
+	var name []byte
 	if k := dec.PeekKind(); k != '{' {
 		return nil, 0, 0, false, fmt.Errorf("%w: the request is not an object", ErrInvalid)
 	}
@@ -23,16 +26,16 @@ func topMember(body []byte, member string) (value []byte, start, end int, ok boo
 		return nil, 0, 0, false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
 	for dec.PeekKind() != '}' {
-		key, err := dec.ReadToken()
+		key, err := dec.ReadValue()
 		if err != nil {
 			return nil, 0, 0, false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 		}
-		name := key.String()
+		name = unquote(name[:0], key)
 		from := int(dec.InputOffset())
 		if err := dec.SkipValue(); err != nil {
 			return nil, 0, 0, false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 		}
-		if name != member {
+		if string(name) != member {
 			continue
 		}
 		to := int(dec.InputOffset())
@@ -173,26 +176,29 @@ func ServerFunctionDeclared(f Format, body []byte) bool {
 	if err != nil || !ok {
 		return false
 	}
-	var tools []struct {
-		Type     string `json:"type"`
-		Name     string `json:"name"`
-		Function struct {
-			Name string `json:"name"`
-		} `json:"function"`
-	}
-	if jsonx.Unmarshal(value, &tools) != nil {
-		return false
-	}
-	for _, t := range tools {
-		name := t.Name
-		if f == Chat {
-			name = t.Function.Name
+	// Each tool is walked where it lies: a tools array of many small objects is not decoded into a slice of them.
+	var w walker
+	var name []byte
+	found := false
+	match := func(member []byte, v jsontext.Value) error { //nolint:unparam // the walk's callback: other callbacks fail
+		if string(member) == "name" {
+			name = unquote(name[:0], v)
+			found = found || string(name) == ServerToolName
 		}
-		if name == ServerToolName {
-			return true
-		}
+		return nil
 	}
-	return false
+	_ = w.array(0, value, func(tool jsontext.Value) error { //nolint:errcheck // a tools array that does not walk declares nothing
+		if f != Chat {
+			return w.object(1, tool, match)
+		}
+		return w.object(1, tool, func(member []byte, v jsontext.Value) error {
+			if string(member) == "function" {
+				return w.object(2, v, match)
+			}
+			return nil
+		})
+	})
+	return found
 }
 
 // serverArguments keeps a malformed model call from making the history invalid: an arguments string that is not a

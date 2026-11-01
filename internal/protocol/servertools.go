@@ -69,39 +69,80 @@ func RemoveServerTool(f Format, body []byte) ([]byte, error) {
 	if err != nil || !ok {
 		return body, err
 	}
-	var tools []jsontext.Value
-	if err := jsonx.Unmarshal(value, &tools); err != nil {
+	if jsontext.Value(value).Kind() != '[' {
 		return nil, fmt.Errorf("%w: tools is not an array", ErrInvalid)
 	}
-	kept, removed := tools[:0], false
-	for _, tool := range tools {
-		var t struct {
-			Type string `json:"type"`
-		}
-		if err := jsonx.Unmarshal(tool, &t); err != nil {
-			return nil, fmt.Errorf("%w: a tool is not an object", ErrInvalid)
-		}
-		if t.Type == "openrouter:web_search" {
-			removed = true
-			continue
-		}
-		kept = append(kept, tool)
+	// Each tool is walked where it lies, twice: once to find the declaration, once to copy the others. Nothing is
+	// allocated per tool, so a tools array of many small objects costs only the copy of the body, at most its length.
+	var t toolScan
+	removed := false
+	if err := t.w.array(0, value, func(tool jsontext.Value) error {
+		is, err := t.server(tool)
+		removed = removed || is
+		return err
+	}); err != nil {
+		return nil, walkError(err)
 	}
 	if !removed {
 		return body, nil
 	}
-	out := make([]byte, 0, len(body))
-	out = append(out, body[:start]...)
-	out = append(out, '[')
-	for i, tool := range kept {
-		if i > 0 {
+	out := append(make([]byte, 0, len(body)), body[:start]...)
+	out, err = t.others(append(out, '['), value)
+	if err != nil {
+		return nil, walkError(err)
+	}
+	return append(append(out, ']'), body[end:]...), nil
+}
+
+// toolScan walks a tools array for the server tool's declaration.
+type toolScan struct {
+	w   walker
+	typ []byte
+}
+
+// server reports whether tool is the openrouter:web_search declaration.
+func (t *toolScan) server(tool jsontext.Value) (bool, error) {
+	if tool.Kind() != '{' {
+		return false, fmt.Errorf("%w: a tool is not an object", ErrInvalid)
+	}
+	t.typ = t.typ[:0]
+	err := t.w.object(1, tool, func(member []byte, v jsontext.Value) error {
+		if string(member) == "type" {
+			t.typ = unquote(t.typ[:0], v)
+		}
+		return nil
+	})
+	return string(t.typ) == "openrouter:web_search", err
+}
+
+// others appends every tool of tools but the server tool's declaration to out, comma-separated.
+func (t *toolScan) others(out []byte, tools []byte) ([]byte, error) {
+	first := true
+	err := t.w.array(0, tools, func(tool jsontext.Value) error {
+		if is, err := t.server(tool); is || err != nil {
+			return err
+		}
+		if !first {
 			out = append(out, ',')
 		}
+		first = false
 		out = append(out, tool...)
+		return nil
+	})
+	return out, err
+}
+
+// walkError is a request scan's error: a value the walk could not read is the client's malformed body.
+func walkError(err error) error {
+	if _, ok := err.(errNotRead); ok { //nolint:errorlint // the walk returns it unwrapped
+		return fmt.Errorf("%w: the tools are not well formed", ErrInvalid)
 	}
-	out = append(out, ']')
-	out = append(out, body[end:]...)
-	return out, nil
+	return err
+}
+
+// arrayEmpty reports whether v, an array as written, has no elements.
+func arrayEmpty(v []byte) bool {
+	return len(bytes.TrimSpace(v[1:len(v)-1])) == 0
 }
 
 // injectServerFunction adds the gateway's web search function to a body already in the endpoint's format, after any
@@ -111,28 +152,21 @@ func injectServerFunction(f Format, body []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, start, end, ok, err := topMember(body, "tools")
+	value, _, end, ok, err := topMember(body, "tools")
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
 		return insertMember(body, "tools", append(append([]byte{'['}, tool...), ']'))
 	}
-	var tools []jsontext.Value
-	if err := jsonx.Unmarshal(value, &tools); err != nil {
+	if jsontext.Value(value).Kind() != '[' {
 		return nil, fmt.Errorf("%w: tools is not an array", ErrInvalid)
 	}
 	at := end - 1 // the closing ']'
-	comma := byte(0)
-	if len(tools) > 0 {
-		comma = ','
-	} else if len(bytes.TrimSpace(value[1:at-start])) > 0 {
-		comma = ','
-	}
 	out := make([]byte, 0, len(body)+len(tool)+1)
 	out = append(out, body[:at]...)
-	if comma != 0 {
-		out = append(out, comma)
+	if !arrayEmpty(value) {
+		out = append(out, ',')
 	}
 	out = append(out, tool...)
 	out = append(out, body[at:]...)
@@ -278,14 +312,13 @@ func AppendServerTurn(f Format, body []byte, turn ServerTurn, results []string) 
 		added := append(append([]byte{'['}, parts...), ']')
 		return insertMember(body, member, added)
 	}
-	var elems []jsontext.Value
-	if err := jsonx.Unmarshal(value, &elems); err != nil {
+	if jsontext.Value(value).Kind() != '[' {
 		return nil, fmt.Errorf("%w: %s is not an array", ErrInvalid, member)
 	}
 	at := end - 1
 	out := make([]byte, 0, len(body)+len(parts)+2)
 	out = append(out, body[:at]...)
-	if len(elems) > 0 {
+	if !arrayEmpty(value) {
 		out = append(out, ',')
 	}
 	out = append(out, parts...)

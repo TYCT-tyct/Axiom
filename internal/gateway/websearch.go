@@ -222,16 +222,19 @@ func (h *Handler) checkServerTool(req *protocol.Request, body []byte) *Refusal {
 // The body is what routing, the quote and Prepare see from here on, so the model-side loop's function declaration is
 // added per endpoint later, after conversion, and no converter meets a tool it cannot express.
 func (h *Handler) stripServerTool(c *Call, body []byte, req protocol.Request) ([]byte, protocol.Request, error) {
+	// The copy without the declaration is never longer than the body, so the body's length is charged before it is made.
+	held := int64(len(body))
+	if !h.Memory.Charge(held) {
+		return nil, req, ErrOverloaded
+	}
 	stripped, err := protocol.RemoveServerTool(req.Format, body)
 	if err != nil {
+		h.Memory.Refund(held)
 		return nil, req, invalid(err.Error())
 	}
 	if len(stripped) == len(body) {
+		h.Memory.Refund(held)
 		return body, req, nil // no declaration found: Inspect would not have set ServerSearch
-	}
-	held := int64(cap(stripped))
-	if !h.Memory.Charge(held) {
-		return nil, req, ErrOverloaded
 	}
 	next, err := protocol.Inspect(req.Format, stripped)
 	if err != nil {
