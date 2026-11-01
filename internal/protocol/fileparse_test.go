@@ -347,3 +347,42 @@ func TestAnnotationRefusedForBudgetAllocatesNothing(t *testing.T) {
 		t.Fatalf("a refused annotation allocated %v bytes, want the bound's scan only", bytes)
 	}
 }
+
+// TestAnnotationBudgetCoversEveryChoicesBody: a reply's file annotations are held once as the entries and again in every
+// choice, and each choice's render copies them once more into the body. A budget that covers the entries and the pieces
+// but not those copies is short of what the reply allocates, so it takes no annotations at all.
+func TestAnnotationBudgetCoversEveryChoicesBody(t *testing.T) {
+	const choices = 8
+	text := strings.Repeat("x", 1<<20)
+	files := []FileAnnotation{{Hash: strings.Repeat("a", 64), Name: "scan.pdf", Text: text}}
+	bound := int64(quotedLength(text) + quotedLength(files[0].Hash) + quotedLength(files[0].Name) + 128)
+	// Entries twice over and every choice's piece once: what the reply holds without the body's copies.
+	withoutBody := 2*bound + choices*bound
+	a := annotateWithin(files, choices, withoutBody+1024)
+	for i := range a.choices {
+		if len(a.choices[i].annotations) > 0 {
+			t.Fatalf("choice %d carries annotations a budget of %d cannot hold", i, withoutBody+1024)
+		}
+	}
+	a = annotateWithin(files, choices, 1<<30)
+	for i := range a.choices {
+		if !strings.Contains(string(a.choices[i].annotations), "scan.pdf") {
+			t.Fatalf("choice %d has no annotations: %q", i, a.choices[i].annotations)
+		}
+	}
+}
+
+// annotateWithin runs the file annotations on a reply of choices choices under a budget of budget bytes.
+func annotateWithin(files []FileAnnotation, choices int, budget int64) *chatAggregate {
+	a := &chatAggregate{choices: make([]chatChoice, choices)}
+	left := budget
+	a.init(func(n int) error {
+		if int64(n) > left {
+			return ErrMemory
+		}
+		left -= int64(n)
+		return nil
+	})
+	a.annotateFiles(files)
+	return a
+}

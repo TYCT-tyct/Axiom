@@ -195,13 +195,8 @@ func (a *chatAggregate) annotateFiles(files []FileAnnotation) {
 		return
 	}
 	// The entries are encoded before any choice holds them, and the encoding is larger than the text it carries: reserve
-	// its bound — every string's quoted length and the entry's own syntax — before FileAnnotationEntries allocates it.
-	// Each choice's copy is charged by grow as it takes capacity, and take's second factor covers the body the choices
-	// are written into.
-	bound := 0
-	for _, f := range files {
-		bound += quotedLength(f.Text) + quotedLength(f.Hash) + quotedLength(f.Name) + 128
-	}
+	// its bound before FileAnnotationEntries allocates it.
+	bound := annotationBound(files)
 	if a.take(bound, 2) != nil {
 		return
 	}
@@ -209,14 +204,26 @@ func (a *chatAggregate) annotateFiles(files []FileAnnotation) {
 	if len(entries) == 0 || len(entries) > bound {
 		return // an encoding that grew past its bound is not appended: better no annotation than an uncharged copy
 	}
+	a.appendAnnotations(entries)
+}
+
+// appendAnnotations writes the entries into every choice, charging each copy twice over, as the other annotation paths
+// are: the piece the choice keeps and the body its render is written into. A choice that cannot be charged leaves every
+// choice without the annotations, so a reply never carries them on some choices and not others.
+func (a *chatAggregate) appendAnnotations(entries []byte) {
+	prior := make([]int, len(a.choices))
 	for i := range a.choices {
 		c := &a.choices[i]
+		prior[i] = len(c.annotations)
 		n := len(entries)
-		if len(c.annotations) > 0 {
+		if prior[i] > 0 {
 			n++
 		}
 		var err error
-		if c.annotations, err = grow(&a.aggBase, c.annotations, n, 1); err != nil {
+		if c.annotations, err = grow(&a.aggBase, c.annotations, n, 2); err != nil {
+			for j := range a.choices {
+				a.choices[j].annotations = a.choices[j].annotations[:prior[j]]
+			}
 			return
 		}
 		if len(c.annotations) > 0 {
@@ -224,4 +231,13 @@ func (a *chatAggregate) annotateFiles(files []FileAnnotation) {
 		}
 		c.annotations = append(c.annotations, entries...)
 	}
+}
+
+// annotationBound is the encoded length of the file annotations: every string quoted, and each entry's own syntax.
+func annotationBound(files []FileAnnotation) int {
+	bound := 0
+	for _, f := range files {
+		bound += quotedLength(f.Text) + quotedLength(f.Hash) + quotedLength(f.Name) + 128
+	}
+	return bound
 }
