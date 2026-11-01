@@ -142,7 +142,7 @@ func (c *easyPayChannel) payment(r easyPayOrderResponse, order string) (Payment,
 	if err != nil {
 		return Payment{}, err
 	}
-	amount := easyPayMinor(text, digits(c.currency))
+	amount := parseMinorText(text, digits(c.currency))
 	state := PayPending
 	if paid {
 		state = PayPaid
@@ -189,7 +189,7 @@ func (c *easyPayChannel) Refund(ctx context.Context, r RefundCall) (RefundState,
 		return RefundState{}, &Rejected{Code: "invalid_amount", Message: "invalid refund amount"}
 	}
 	v := c.credentials("refund")
-	v.Set("money", easyPayFormat(r.Amount))
+	v.Set("money", formatMinorText(r.Amount))
 	v.Set("out_trade_no", r.Order.TypeID())
 	state, missing, err := c.refund(ctx, v)
 	if missing && r.TradeNo != "" {
