@@ -126,7 +126,7 @@ func TestModelsPickTheAudienceOfThePage(t *testing.T) {
 		ID: "acme/alpha", Name: "alpha", Author: "Acme", ContextLength: 1000, MaxOutput: 100, Streams: true,
 		Pricing: catalog.ScheduleView{Currency: currency},
 	}}}
-	c := startNodeWithModels(consoleBase(t), &testClock{now: time.Now()}, 0, false, fake)
+	c := startNodeWithModels(consoleBase(t), &testClock{now: time.Now()}, false, fake)
 	site, _, err := c.svc.SiteForHost(consoleHost)
 	if err != nil {
 		t.Fatal(err)
