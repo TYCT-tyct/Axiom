@@ -1,4 +1,3 @@
-//nolint:revive // the direct-format request scanner and reply encoder share the format's rules and helpers
 package protocol
 
 import (

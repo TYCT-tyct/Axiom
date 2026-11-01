@@ -3,10 +3,10 @@ package protocol_test
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 
+	"axiom/internal/platform/alloctest"
 	"axiom/internal/protocol"
 )
 
@@ -39,7 +39,8 @@ func TestConvertSchemaRefs(t *testing.T) {
 
 // TestConvertManyDetails: reasoning a client streamed back in many pieces, of one index or of many, merges in work
 // that grows with the pieces, not with their square: the bytes allocated stay within a small multiple of the body,
-// where joining 20,000 pieces of 100 bytes by copying all before each would allocate 20 GB.
+// where joining 20,000 pieces of 100 bytes by copying all before each would allocate 20 GB. The measurement runs in a
+// child process, so this binary's other goroutines and collections are not counted as the conversion's.
 func TestConvertManyDetails(t *testing.T) {
 	piece := strings.Repeat("x", 100)
 	for name, index := range map[string]func(int) int{"one index": func(int) int { return 0 }, "an index each": func(i int) int { return i }} {
@@ -49,19 +50,21 @@ func TestConvertManyDetails(t *testing.T) {
 				details = append(details, fmt.Sprintf(`{"type":"reasoning.text","format":"anthropic-claude-v1","text":"%s","index":%d}`, piece, index(i)))
 			}
 			body := chatBody(`"messages":[` + userHi + `,{"role":"assistant","content":"x","reasoning_details":[` + strings.Join(details, ",") + `]},` + userHi + `]`)
-			var before, after runtime.MemStats
-			runtime.ReadMemStats(&before)
-			_, err := convertBody(protocol.Messages, body, nil)
-			runtime.ReadMemStats(&after)
-			if allocated := after.TotalAlloc - before.TotalAlloc; err != nil || allocated > 50*uint64(len(body)) {
-				t.Errorf("error %v; %d bytes allocated for a body of %d", err, allocated, len(body))
+			got := alloctest.Measure(t, alloctest.Function{Name: name, F: func() {
+				if _, err := convertBody(protocol.Messages, body, nil); err != nil {
+					t.Fatal(err)
+				}
+			}})
+			if allocated := got[name].Bytes; allocated > 50*float64(len(body)) {
+				t.Errorf("%v bytes allocated for a body of %d", allocated, len(body))
 			}
 		})
 	}
 }
 
 // TestConvertManyItemIDs: reasoning handed back for many Responses items, each with its own ID, is gathered by the ID
-// decoded once, so the bytes allocated stay within a small multiple of the body.
+// decoded once, so the bytes allocated stay within a small multiple of the body. The measurement runs in a child
+// process, so this binary's other goroutines and collections are not counted as the conversion's.
 func TestConvertManyItemIDs(t *testing.T) {
 	var details []string
 	for i := range 20000 {
@@ -69,12 +72,17 @@ func TestConvertManyItemIDs(t *testing.T) {
 			`{"type":"reasoning.encrypted","format":"openai-responses-v1","id":"rs_%d","data":"e"}`, i, i))
 	}
 	body := chatBody(`"messages":[` + userHi + `,{"role":"assistant","content":"x","reasoning_details":[` + strings.Join(details, ",") + `]},` + userHi + `]`)
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
 	got, err := convertBody(protocol.Responses, body, nil)
-	runtime.ReadMemStats(&after)
-	if allocated := after.TotalAlloc - before.TotalAlloc; err != nil || allocated > 50*uint64(len(body)) {
-		t.Errorf("error %v; %d bytes allocated for a body of %d", err, allocated, len(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	measured := alloctest.Measure(t, alloctest.Function{Name: "items", F: func() {
+		if _, err := convertBody(protocol.Responses, body, nil); err != nil {
+			t.Fatal(err)
+		}
+	}})
+	if allocated := measured["items"].Bytes; allocated > 50*float64(len(body)) {
+		t.Errorf("%v bytes allocated for a body of %d", allocated, len(body))
 	}
 	if n := strings.Count(string(got), `"type":"reasoning"`); n != 20000 {
 		t.Errorf("%d reasoning items, want 20000", n)
