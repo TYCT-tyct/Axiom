@@ -11,7 +11,7 @@ import (
 	"axiom/internal/payments"
 )
 
-var paymentPlugins = []payments.Plugin{payments.EasyPay{}, payments.Stripe{}}
+var paymentPlugins = []payments.Plugin{payments.Alipay{}, payments.EasyPay{}, payments.Stripe{}}
 
 // A channel signs callbacks instead of authenticating as a console user. Only these two routes bypass that guard.
 func withPaymentCallbacks(public, notify http.Handler) http.Handler {

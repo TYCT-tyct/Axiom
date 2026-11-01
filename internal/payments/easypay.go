@@ -188,7 +188,7 @@ func (c *easyPayChannel) Create(ctx context.Context, r CreateRequest) (Checkout,
 }
 
 func (c *easyPayChannel) createParams(r CreateRequest) url.Values {
-	v := url.Values{"pid": {c.settings.PID}, "type": {r.Upstream}, "out_trade_no": {r.Order.TypeID()}, "notify_url": {r.NotifyURL}, "return_url": {r.ReturnURL}, "name": {r.Subject}, "money": {easyPayFormat(r.Total)}}
+	v := url.Values{"pid": {c.settings.PID}, "type": {r.Upstream}, "out_trade_no": {r.Order.TypeID()}, "notify_url": {r.NotifyURL}, "return_url": {r.ReturnURL}, "name": {r.Subject}, "money": {formatMinorText(r.Total)}}
 	if c.settings.Preset == "epusdt" {
 		v.Set("currency", strings.ToLower(c.currency.String()))
 	}

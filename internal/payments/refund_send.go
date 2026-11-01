@@ -134,6 +134,9 @@ func (p *Payments) callRefund(ctx context.Context, ch Channel, r PaymentsRefund,
 		Refund: RefundID(r.ID), Order: o.ID, TradeNo: o.TradeNo, ProviderRef: r.ProviderRef,
 		Amount: Money{Currency: o.Total.Currency, Minor: r.Amount}, Reason: r.Reason,
 	}
+	if r.SentAt.Valid {
+		call.SentAt = r.SentAt.Time
+	}
 	if first || !canQuery && canResend {
 		if !ch.Caps().Has(CapRefund) {
 			return RefundState{}, errors.New("payments: refund capability was disabled")
