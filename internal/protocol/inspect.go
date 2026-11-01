@@ -223,6 +223,7 @@ type reader struct {
 	buf  []byte // scratch for unquoting
 	// charge, unless nil, is asked first for what buf grows by: the relay's readers keep buf from event to event.
 	charge func(n int) error
+	b      *budget // the Prepare's budget, for a reader the gateway prepares with
 }
 
 // scanner reads one body. Members of an object may come in any order, so a part's meaning is gathered in p and
@@ -382,7 +383,15 @@ func (s *reader) unquote(v jsontext.Value) (b []byte, err error) {
 	if bytes.IndexByte(v, '\\') < 0 {
 		return v[1 : len(v)-1], nil
 	}
-	if s.buf, err = sse.Grow(s.buf[:0], len(v), s.charge); err != nil { // unquoting never lengthens a string
+	switch {
+	case s.charge != nil:
+		s.buf, err = sse.Grow(s.buf[:0], len(v), s.charge)
+	case s.b != nil:
+		s.buf, err = growBytes(s.buf[:0], len(v), s.b)
+	default:
+		s.buf, err = sse.Grow(s.buf[:0], len(v), nil)
+	}
+	if err != nil { // unquoting never lengthens a string
 		return nil, err
 	}
 	s.buf, err = jsontext.AppendUnquote(s.buf, v)

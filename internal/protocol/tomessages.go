@@ -10,8 +10,8 @@ import (
 
 // toMessages writes a Chat request as an Anthropic Messages request (Anthropic《Messages API reference》, read
 // 2026-10-14; README.md「跨格式转换」). Strings are copied as written.
-func toMessages(c *canon, t Target, w Rewrites) ([]byte, error) {
-	m := &messagesWriter{c: c, t: t}
+func toMessages(c *canon, t Target, w Rewrites, b *budget) ([]byte, error) {
+	m := &messagesWriter{c: c, t: t, b: b}
 	if err := m.check(); err != nil {
 		return nil, err
 	}
@@ -35,7 +35,11 @@ func toMessages(c *canon, t Target, w Rewrites) ([]byte, error) {
 		}
 		out = append(out, '}')
 	}
-	return append(out, '}'), nil
+	out = append(out, '}')
+	if err := b.draw(rounded(int64(cap(out)))); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 type messagesWriter struct {
@@ -46,6 +50,7 @@ type messagesWriter struct {
 	effort     string
 	firstTurn  int // where the leading system messages end
 	thinkingOn bool
+	b          *budget
 }
 
 // manualRatios are OpenRouter's shares of max_tokens for a thinking budget by effort (OpenRouter《Reasoning
@@ -410,7 +415,7 @@ func (m *messagesWriter) tools(out []byte) ([]byte, error) {
 			out = append(out, ',')
 		}
 		var err error
-		if out, err = messagesTool(out, tool); err != nil {
+		if out, err = messagesTool(out, tool, m.b); err != nil {
 			return nil, err
 		}
 	}
@@ -418,7 +423,7 @@ func (m *messagesWriter) tools(out []byte) ([]byte, error) {
 }
 
 // messagesTool writes a function tool; a strict one only with a schema in Anthropic's subset.
-func messagesTool(out []byte, tool canonTool) ([]byte, error) {
+func messagesTool(out []byte, tool canonTool, b *budget) ([]byte, error) {
 	if tool.Type != "function" {
 		return nil, &NotSupported{Reason: "a " + tool.Type + " tool has no Messages counterpart"}
 	}
@@ -433,7 +438,7 @@ func messagesTool(out []byte, tool canonTool) ([]byte, error) {
 	}
 	out = append(append(out, `,"input_schema":`...), schema...)
 	if f.Strict != nil && *f.Strict {
-		if err := anthropicSchema(schema); err != nil {
+		if err := anthropicSchema(schema, b); err != nil {
 			return nil, err
 		}
 		out = append(out, `,"strict":true`...)
@@ -495,7 +500,7 @@ func (m *messagesWriter) replyFormat() (string, error) {
 	case f.Type != "json_schema" || f.JSONSchema == nil:
 		return "", &NotSupported{Reason: "response_format " + f.Type + " has no Messages counterpart"}
 	}
-	if err := anthropicSchema(f.JSONSchema.Schema); err != nil {
+	if err := anthropicSchema(f.JSONSchema.Schema, m.b); err != nil {
 		return "", err
 	}
 	return `"format":{"type":"json_schema","schema":` + string(f.JSONSchema.Schema) + `}`, nil

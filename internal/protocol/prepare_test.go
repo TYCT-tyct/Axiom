@@ -414,48 +414,16 @@ func TestPrepareOutputCap(t *testing.T) {
 		if err != nil || string(u.Body) != c.want {
 			t.Errorf("%s: got %s (%v), want %s", c.name, u.Body, err, c.want)
 		}
-		if cost := protocol.PrepareCost(&r, []byte(c.body), target, w); int64(cap(u.Body))+3*int64(len(c.body)) != cost {
-			t.Errorf("%s: the buffer was %d bytes, the cost %d: the rewrite outgrew its room", c.name, cap(u.Body), cost)
-		}
 	}
 }
 
-// TestPrepareCost: a rewrite's cost is the capacity of the buffer it writes into, exactly, however much it adds, and
-// three times the body for what it unquotes; a request that is not converted costs nothing, as it fails before it
-// allocates.
-func TestPrepareCost(t *testing.T) {
-	const id = "0123456789abcdef0123456789abcdef"
-	w := protocol.Rewrites{Identity: func(string) string { return id }, History: history}
-	rewritten := `{"model":"m","previous_response_id":"r","input":"next","prompt_cache_key":"k","user":"u","safety_identifier":"s"}`
-	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
-		body := `{"model":"m","metadata":{"user_id":"u"}}`
-		if f == protocol.Responses {
-			body = rewritten
-		}
-		r := inspected(t, f, []byte(body))
-		target := protocol.Target{Format: f, Model: "up", EncryptedReasoning: catalog.ClaimYes, MaxOutput: math.MaxInt64}
-		u, err := protocol.Prepare(&r, []byte(body), target, w)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if cost := protocol.PrepareCost(&r, []byte(body), target, w); int64(cap(u.Body))+3*int64(len(body)) != cost {
-			t.Errorf("format %d: a rewrite's buffer is %d bytes, its cost %d", f, cap(u.Body), cost)
-		}
-	}
-	body := []byte(`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"Hi"}]}`)
-	m := inspected(t, protocol.Messages, body)
-	if cost := protocol.PrepareCost(&m, body, protocol.Target{Format: protocol.Responses}, w); cost == 0 {
-		t.Error("a Messages request for a Responses endpoint costs nothing")
-	}
-}
-
-// TestPrepareCostBoundsTheAllocation: what Prepare allocates, for bodies of the worst shapes there are (nothing but empty
+// TestPrepareBudgetBoundsTheAllocation: what Prepare allocates, for bodies of the worst shapes there are (nothing but empty
 // objects, the smallest messages, members it does not know, an identifier of escapes), stays within the cost. The
 // allocation counted is the total, garbage included, which bounds the peak; it is measured in a child process, so the
 // rest of this test binary's goroutines and collections are not counted as Prepare's.
 //
 //nolint:exhaustive // the formats with output are the ones bounded here
-func TestPrepareCostBoundsTheAllocation(t *testing.T) {
+func TestPrepareBudgetBoundsTheAllocation(t *testing.T) {
 	w := protocol.Rewrites{Identity: func(string) string { return "0123456789abcdef0123456789abcdef" }}
 	bs := "\\"
 	var members []string
@@ -468,7 +436,6 @@ func TestPrepareCostBoundsTheAllocation(t *testing.T) {
 		body   []byte
 		req    protocol.Request
 		target protocol.Target
-		cost   int64
 	}
 	var funcs []alloctest.Function
 	var bounds []bounded
@@ -505,20 +472,50 @@ func TestPrepareCostBoundsTheAllocation(t *testing.T) {
 		}
 		for _, f := range targets {
 			target := protocol.Target{Format: f, Model: "up", MaxOutput: 4096}
-			cost := protocol.PrepareCost(&r, body, target, w)
 			name := fmt.Sprintf("%s from format %d, format %d", c.name, c.from, f)
 			funcs = append(funcs, alloctest.Function{Name: name, F: func() {
 				_, _ = protocol.Prepare(&r, body, target, w) //nolint:errcheck // a body of the worst shape may be refused; what it took is the point
 			}})
-			bounds = append(bounds, bounded{name: name, body: body, req: r, target: target, cost: cost})
+			bounds = append(bounds, bounded{name: name, body: body, req: r, target: target})
 		}
 	}
 	got := alloctest.Measure(t, funcs...)
 	for _, c := range bounds {
 		// The buffer kept is read in this process: the child reports what one call allocates, not what it returns.
 		u, _ := protocol.Prepare(&c.req, c.body, c.target, w) //nolint:errcheck // as in the measurement
-		if allocated := int64(got[c.name].Bytes); allocated > c.cost || int64(cap(u.Body)) > c.cost {
-			t.Errorf("%s: %d bytes allocated, %d kept, of the %d it costs, for a body of %d", c.name, allocated, cap(u.Body), c.cost, len(c.body))
+		need := prepareNeed(t, &c.req, c.body, c.target, w)
+		allocated := int64(got[c.name].Bytes)
+		if need > allocated+16<<10 || int64(cap(u.Body)) > need { // the charges round up; the total does not
+			t.Errorf("%s: %d bytes allocated, %d kept, of the %d it drew, for a body of %d", c.name, allocated, cap(u.Body), need, len(c.body))
+		}
+		if _, _, err := protocol.PrepareBudgeted(protocol.NewMemory(need-1), &c.req, c.body, c.target, w); !errors.Is(err, protocol.ErrMemory) {
+			t.Errorf("%s: a byte short of the %d it drew did not refuse: %v", c.name, need, err)
 		}
 	}
+}
+
+// prepareNeed is the smallest budget PrepareBudgeted finishes with: what it draws at once, found by asking, since a
+// conversion has no bound before it runs.
+func prepareNeed(t *testing.T, r *protocol.Request, body []byte, target protocol.Target, w protocol.Rewrites) int64 {
+	t.Helper()
+	lo, hi := int64(0), int64(1<<20)
+	for {
+		_, _, err := protocol.PrepareBudgeted(protocol.NewMemory(hi), r, body, target, w)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, protocol.ErrMemory) {
+			break // it got as far as the request's own answer; find where that starts
+		}
+		lo, hi = hi+1, hi*2
+	}
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if _, _, err := protocol.PrepareBudgeted(protocol.NewMemory(mid), r, body, target, w); errors.Is(err, protocol.ErrMemory) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
 }

@@ -11,14 +11,44 @@ import (
 // Prepare prepares the request and, when the web plugin chose the provider's own search, adds that search to the body
 // the endpoint's format expects. The tool goes in after conversion, so the body it edits is the one that is sent.
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
-	u, err := prepare(r, body, t, w)
-	if err != nil || w.NativeSearch <= 0 {
-		return u, err
+	u, _, err := PrepareBudgeted(nil, r, body, t, w)
+	return u, err
+}
+
+// PrepareBudgeted is Prepare drawing every allocation it makes from m first, and returning what it leaves charged:
+// the capacity of the body it made, which the caller gives back once the request is sent. A request that would surpass
+// the budget is ErrMemory and leaves nothing charged. A nil m charges nothing, as Prepare does.
+func PrepareBudgeted(m *Memory, r *Request, body []byte, t Target, w Rewrites) (u Upstream, held int64, err error) {
+	b := &noBudget
+	if m != nil {
+		b = &budget{m: m}
 	}
-	if u.Body, err = injectNativeSearch(t.Format, u.Body, w.NativeSearch); err != nil {
-		return u, err
+	u, err = prepareWithin(r, body, t, w, b)
+	if err != nil {
+		b.give(b.held)
+		return u, 0, err
 	}
-	return u, nil
+	if w.NativeSearch > 0 {
+		old := int64(cap(u.Body))
+		if u.Body, err = injectNativeSearch(t.Format, u.Body, w.NativeSearch); err != nil {
+			b.give(b.held)
+			return u, 0, err
+		}
+		if err := b.draw(rounded(int64(cap(u.Body)))); err != nil {
+			b.give(b.held)
+			return u, 0, err
+		}
+		b.give(rounded(old))
+	}
+	held = int64(cap(u.Body))
+	if b.held < held { // a path that wrote its body without drawing for it, as the direct rewrites do
+		if err := b.draw(held - b.held); err != nil {
+			b.give(b.held)
+			return u, 0, err
+		}
+	}
+	b.give(b.held - held)
+	return u, held, nil
 }
 
 // NativeSearchSupported reports whether a format has a way to turn on the provider's own web search: Chat's

@@ -15,7 +15,11 @@ import (
 // but minItems 0 or 1, additionalProperties false on every object, enums of plain values, formats from its list, and
 // $ref only to the schema's own definitions, none of them recursive. A schema outside it is not approximated by
 // dropping what it cannot keep: the request goes to an endpoint that can (README.md「跨格式转换」).
-func anthropicSchema(raw jsontext.Value) error {
+func anthropicSchema(raw jsontext.Value, b *budget) error {
+	// The schema is read into Go values, whose maps and slices take a few times the schema's own bytes.
+	if err := b.draw(8*int64(len(raw)) + 2048); err != nil {
+		return err
+	}
 	var root any
 	if err := jsonx.Unmarshal(raw, &root); err != nil {
 		return &NotSupported{Reason: "a schema is not JSON: " + err.Error()}

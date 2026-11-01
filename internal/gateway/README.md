@@ -150,7 +150,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 | `Acquire` | `ErrNoSlot` / `ErrNoEndpoint` / `ErrSupplierResting` | 跳过，不算尝试；前两种记录 `Full`，余额暂停记录 `SupplierBalance`。无尝试且含不可用端点时回 503，只有凭证满载时回 429 |
 | `Prepare` | `*NotSupported`；`ErrInvalid`；其他 | 跳过，记 `FormatNotServed`；400 照客户端的错；503 并记 error |
 | 重试预算 | 第一次尝试 `Router.Sent`；之后 `Router.TakeRetry`，用完 | 跳过，记 `RetryBudget` |
-| 内存 | `Prepare` 之前先按 `protocol.PrepareCost` 向节点预算申请它最多同时占用的量，`Prepare` 之后只留结果缓冲的容量，`Send` 返回即退还 | 申请不到：不调 `Prepare`，503 |
+| 内存 | `protocol.PrepareBudgeted` 在解码和写出时逐次向节点预算申请：同一格式改写先申请输出缓冲，跨格式按实际解码出的树申请；`Prepare` 之后只留结果缓冲的容量，`Send` 返回即退还 | 申请不到：`ErrMemory`，503 |
 | `bind` | 序号、`Hold.Bind(Kept[i])`、`Router.Begin` | 此后算一次尝试 |
 | `send` | `Send`（带白名单头，会话值已派生，见「头白名单」），`HeaderWait` 的计时器到点取消尝试 | 失败：`Executed` 定 `NotExecuted` 或 `Unknown`；`RateLimited` 通知 `Router.Throttled`；`routing.Decide`：换条目 / 同条目再来（再 `Acquire`，也算一次尝试）/ 400 `invalid_request` |
 | `stream` | `NewRelay`、读到结束 | 见下 |
@@ -456,7 +456,7 @@ G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）
 | compact 的答复不带本站的费用字段，结算写不进时也不加 `billing_pending` | 原样透传的响应体加了字段就不再是上游的回复；费用只在调用记录里查 | 在透传的 JSON 里插字段：客户端按上游的格式读它 |
 | 生成请求优先客户端的原格式；三种格式两两可转（Messages 与 Responses 之间也经 Chat 的映射），`NativeOnly` 只限制压缩请求。路由快照把每个端点列为三种格式可服务，`callFormat` 仍用 Native 选实际调用格式；带 `file_id` 的请求只安排一次尝试 | 同格式不经过规范模型；转换时表达不了的成员由 protocol 拒绝，预留按实际调用格式的用量口径计算。`file_id` 是供应商账户的资源，只可能在一个端点，换端点必错还多花一次尝试 | 先转换：多一次有损转换；把 Served 当成 Native：给 Chat 端点发送错误格式；`file_id` 按普通请求重试：把别家的文件 id 发给不持有它的端点 |
 | `Target.Streams` 告诉 `Prepare` 端点能流式，请求里一律要流；路由对生成请求只保留能流式的端点（`FormatNotServed`） | 网关总是以流读上游，非流式客户端拿聚合结果，不能流式的端点必然让这次尝试失败：花了上游的钱、用户免单、还占一次尝试。压缩调用读的是整份答复，是唯一的例外 | 让不能流式的端点接生成请求：`Relay` 只按事件流读，整份 JSON 读不出内容，只能失败；启动时断言所有端点都能流式：适配器注册表不在路由手里 |
-| `Prepare` 之前按它最多同时占用的量（`protocol.PrepareCost`）向节点内存预算申请，之后只留结果缓冲的容量，`Send` 返回即退还 | 之后再记，预算满了分配也已经发生，503 撤销不了峰值（评审 #157）。申请量是请求体的字节数、`{`、`null` 和 `:` 的个数的函数（常数和实测见 protocol README），而不是请求体的固定倍数：一堆 `{}` 每 3 字节占 1.3 KiB，固定倍数挡不住。申请只在 `Prepare` 期间占着（毫秒级、纯 CPU），所以多留对吞吐几乎没有影响，少留则预算形同虚设。代价：数 `{`、`null` 和 `:` 要多扫几遍请求体（只在跨格式时，`bytes.Count` 每秒数十 GB），含大量括号的文本（代码）申请得多些 | 之后再按 `len` 记：低估（容量大于长度），且在分配之后；请求体的固定倍数：不是上界；让 `Prepare` 逐次增长时记账：转换里的解码是一次调用，没有可记账的点 |
+| `PrepareBudgeted` 开始时先为输出缓冲按 `rewriteSize` 申请；跨格式在解码、规范编码、反向映射和写出时逐次向节点内存预算申请，申请不到返回 `ErrMemory`（503），返回前退回树和中间缓冲，只留结果缓冲的容量到 `Send` 返回 | 之后再记，预算满了分配已经发生，503 撤销不了峰值（评审 #157）。同格式的输出容量事先定得下，所以先申请；跨格式没有事先的上界：按 `{`、`null`、`:` 计的形状常数挡不住一堆 `{}`（每 3 字节占 1.3 KiB），按字节的固定倍数也不是上界。逐次申请后长文本约为请求体，最坏形状按实际树的大小；`jsontext.ReadValue` 返回请求体的切片，不再为每个值复制一份。代价：解码路径分散在 `decode.go` 和 `request*.go`，每次分配多一次函数调用；`ReadValue` 的值只在请求体活着时有效，`Call.Body` 的预算要留到 `Call.Done` | 之后再按 `len` 记：低估（容量大于长度），且在分配之后；请求体的固定倍数：不是上界；继续用形状常数：一堆 `{}` 和 `null` 就超出 |
 | 没写输出上限或写成 `null`、0（含 `-0`）的生成请求，发给上游的是报价用的上限（条目的输出上限），不是模型默认值 | 路由把默认值裁到上下文剩下的部分来报价，上游不知道就按默认值生成，多出来的不在预留里（I1）；条目的上限只有一个来源，`Entry.MaxOutput`，`Target.MaxOutput` 与它相同 | 只改跨格式：同格式的 Responses 仍会超出；靠计量器的输出上限封顶：上游照常生成，封顶只少记，花费并没有少 |
 | 尝试关闭时就写好它的 `billing.AttemptResult`，结算直接交 `billing.Outcome`；回执（对账键在里面）原样交给 billing，成本经 `Costs` | 回执只在关闭时拿到，用量此时已定；中间再有一层 `Ending` 要多一次逐项转换 | G4 的 `Ending` 加 `SettleFunc`：结算之外的路径都得经它，测试也只能测到它为止 |
 | 任何一次追加失败都截断，不等当前段用完再看 | 计费文档：超时或追加失败就中断上游；计量器失败后每读一次就重发，数据库出故障时每个流每次读都打一次库 | 失败后照读到段用完：省不了钱，只多打库 |

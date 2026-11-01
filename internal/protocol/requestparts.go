@@ -20,21 +20,21 @@ var (
 	responsesRefusalHead = `{"type":"` + contentNames[Responses]["refusal"] + `","refusal":`
 )
 
-func nativeContent(v jsontext.Value, f Format, role string) (jsontext.Value, error) {
+func nativeContent(v jsontext.Value, f Format, role string, b *budget) (jsontext.Value, error) {
 	if v.Kind() == '"' || isNull(v) {
 		return v, nil
 	}
-	parts, err := requestArray(v)
+	parts, err := arrayWithin(v, b)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]requestObject, 0, len(parts))
 	for _, raw := range parts {
-		o, err := requestMembers(raw)
+		o, err := membersWithin(raw, b)
 		if err != nil {
 			return nil, err
 		}
-		part, err := nativePart(o, string(o.take("type")), f, role)
+		part, err := nativePart(o, string(o.take("type")), f, role, b)
 		if err != nil {
 			return nil, err
 		}
@@ -43,15 +43,15 @@ func nativeContent(v jsontext.Value, f Format, role string) (jsontext.Value, err
 		}
 		out = append(out, part)
 	}
-	return jsonValue(out), nil
+	return jsonValueWithin(out, b), nil
 }
 
-func nativePart(o requestObject, quotedKind string, f Format, role string) (requestObject, error) {
+func nativePart(o requestObject, quotedKind string, f Format, role string, b *budget) (requestObject, error) {
 	chatKind, err := nativePartKind(o, quotedKind, f, role)
 	if err != nil {
 		return nil, err
 	}
-	part := requestObject{"type": jsonValue(chatKind)}
+	part := requestObject{"type": jsonValueWithin(chatKind, b)}
 	switch chatKind {
 	case "text":
 		part["text"] = o.take("text")
@@ -61,17 +61,17 @@ func nativePart(o requestObject, quotedKind string, f Format, role string) (requ
 		if role != "user" {
 			return nil, &NotSupported{Reason: "an image outside user content"}
 		}
-		url, err := nativeImage(o, f)
+		url, err := nativeImage(o, f, b)
 		if err != nil {
 			return nil, err
 		}
-		part["image_url"] = jsonValue(url)
+		part["image_url"] = jsonValueWithin(url, b)
 	case "file":
-		file, err := nativeFile(o, f)
+		file, err := nativeFile(o, f, b)
 		if err != nil {
 			return nil, err
 		}
-		part["file"] = jsonValue(file)
+		part["file"] = jsonValueWithin(file, b)
 	default:
 		return nil, &NotSupported{Reason: "content part has no Chat counterpart"}
 	}
@@ -105,7 +105,7 @@ func nativePartKind(o requestObject, quotedKind string, f Format, role string) (
 	return chatKind, nil
 }
 
-func nativeFile(o requestObject, f Format) (requestObject, error) {
+func nativeFile(o requestObject, f Format, b *budget) (requestObject, error) {
 	file := requestObject{}
 	if f == Responses {
 		if err := fileDetail(o); err != nil {
@@ -122,7 +122,7 @@ func nativeFile(o requestObject, f Format) (requestObject, error) {
 		}
 		return file, nil
 	}
-	source, err := requestMembers(o.take("source"))
+	source, err := membersWithin(o.take("source"), b)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func nativeFile(o requestObject, f Format) (requestObject, error) {
 	if err != nil {
 		return nil, err
 	}
-	file["file_data"] = jsonValue("data:application/pdf;base64," + data)
+	file["file_data"] = jsonValueWithin("data:application/pdf;base64,"+data, b)
 	// Anthropic's title is the document's name, which Chat calls the file's name.
 	o.move(file, "title", "filename")
 	return file, source.remaining()
@@ -154,7 +154,7 @@ func fileDetail(o requestObject) error {
 	}
 }
 
-func nativeImage(o requestObject, f Format) (requestObject, error) {
+func nativeImage(o requestObject, f Format, b *budget) (requestObject, error) {
 	image := requestObject{}
 	if f == Responses {
 		o.move(image, "image_url", "url")
@@ -164,7 +164,7 @@ func nativeImage(o requestObject, f Format) (requestObject, error) {
 		}
 		return image, nil
 	}
-	source, err := requestMembers(o.take("source"))
+	source, err := membersWithin(o.take("source"), b)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +183,7 @@ func nativeImage(o requestObject, f Format) (requestObject, error) {
 		if err != nil {
 			return nil, err
 		}
-		image["url"] = jsonValue("data:" + media + ";base64," + data)
+		image["url"] = jsonValueWithin("data:"+media+";base64,"+data, b)
 	default:
 		return nil, &NotSupported{Reason: "image source has no Chat counterpart"}
 	}

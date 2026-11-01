@@ -12,7 +12,7 @@ import (
 // toResponses writes a Chat request as an OpenAI Responses request (OpenAI《Create a model response》, read
 // 2026-10-14; README.md「跨格式转换」). Strings are copied as written. The upstream stores nothing, as for a Responses
 // client (README.md「同格式改写」).
-func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
+func toResponses(c *canon, t Target, w Rewrites, b *budget) ([]byte, error) {
 	if !isNull(c.Stop) {
 		return nil, &NotSupported{Reason: "stop has no Responses counterpart"}
 	}
@@ -43,7 +43,11 @@ func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
 			out = appendQuoted(append(append(append(out, ',', '"'), id.name...), `":`...), w.Identity(*id.value))
 		}
 	}
-	return append(out, '}'), nil
+	out = append(out, '}')
+	if err := b.draw(rounded(int64(cap(out)))); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // input writes the messages as input items; breakpoints says whether the model takes OpenAI's cache breakpoints.

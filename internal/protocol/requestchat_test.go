@@ -220,7 +220,7 @@ func TestNativeChatCapAndContinuation(t *testing.T) {
 	}
 }
 
-func TestNativeChatPrepareCostBoundsAllocations(t *testing.T) {
+func TestNativeChatPrepareBudgetBoundsAllocations(t *testing.T) {
 	if raceDetector() {
 		// The race build randomly discards sync.Pool entries, including the JSON
 		// decoder's buffers. This bounds production memory, measured without -race.
@@ -240,18 +240,21 @@ func TestNativeChatPrepareCostBoundsAllocations(t *testing.T) {
 			body := []byte(chatBody(c.members))
 			r := inspected(t, c.f, body)
 			target, w := chatTarget(4096), protocol.Rewrites{Identity: derive}
-			cost := protocol.PrepareCost(&r, body, target, w)
 			got := alloctest.Measure(t, alloctest.Function{Name: "prepare", F: func() {
 				if _, err := protocol.Prepare(&r, body, target, w); err != nil {
 					t.Fatal(err)
 				}
 			}})
-			t.Logf("allocated %.0f bytes; budget %d bytes", got["prepare"].Bytes, cost)
-			if got["prepare"].Bytes > float64(cost) {
-				t.Fatalf("allocated %.0f bytes within a %d-byte budget", got["prepare"].Bytes, cost)
+			need := prepareNeed(t, &r, body, target, w)
+			t.Logf("body %d, allocated %.0f bytes, drew %d bytes", len(body), got["prepare"].Bytes, need)
+			if need > int64(got["prepare"].Bytes)+16<<10 {
+				t.Fatalf("drew %d bytes, more than the %.0f allocated", need, got["prepare"].Bytes)
 			}
-			if float64(cost) > 2*got["prepare"].Bytes {
-				t.Fatalf("budget %d exceeds twice the measured %.0f bytes", cost, got["prepare"].Bytes)
+			if _, held, err := protocol.PrepareBudgeted(protocol.NewMemory(need), &r, body, target, w); err != nil || held < int64(len(body)) {
+				t.Fatalf("budget %d: held %d, err %v", need, held, err)
+			}
+			if _, _, err := protocol.PrepareBudgeted(protocol.NewMemory(need-1), &r, body, target, w); !errors.Is(err, protocol.ErrMemory) {
+				t.Fatalf("a byte short of the %d it drew did not refuse: %v", need, err)
 			}
 		})
 	}

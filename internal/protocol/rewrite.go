@@ -9,6 +9,10 @@ import (
 
 // rewrite is Prepare for an endpoint of the request's format.
 func rewrite(r *Request, body []byte, t Target, w Rewrites) ([]byte, error) {
+	return rewriteWithin(r, body, t, w, nil)
+}
+
+func rewriteWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
 	f := r.Format
 	rules := rulesFor(f, t)
 	if rules.members == nil {
@@ -25,16 +29,21 @@ func rewrite(r *Request, body []byte, t Target, w Rewrites) ([]byte, error) {
 		}
 	}
 	w = w.withDefaults()
-	p := &rewriter{
-		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, rewriteSize(rules, len(body), t, w)), t: t, w: w,
+	size := rewriteSize(rules, len(body), t, w)
+	if err := b.draw(rounded(int64(size))); err != nil {
+		return nil, err
 	}
+	p := &rewriter{
+		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, size), t: t, w: w,
+	}
+	p.reader.b = b
 	if indexed {
 		err = p.indexedTop(&r.positions, rules)
 	} else {
 		err = p.top(rules)
 	}
 	if err != nil {
-		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) {
+		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) || errors.Is(err, ErrMemory) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
@@ -64,3 +73,7 @@ func rewriteBody(r *Request, body []byte) ([]byte, bool, error) {
 	body, err := replayBody(r.Format, body, false)
 	return body, false, err
 }
+
+// quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
+// needs escaping, the longest escape there is.
+func quoted(n int) int { return 6*n + len(`""`) }

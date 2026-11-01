@@ -13,22 +13,24 @@ import (
 // convertNative writes a Messages or Responses request for an endpoint of the other of the two (README.md
 // 「跨格式转换」): the request is read into the canonical model by its own format's reader and written by the target
 // format's writer, so both directions share Chat's mapping and cannot drift from it.
-func convertNative(from Format, body []byte, t Target, w Rewrites) ([]byte, error) {
-	chat, err := nativeChatRequest(from, body, t, w)
+func convertNative(from Format, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
+	chat, err := nativeChatRequest(from, body, t, w, b)
 	if err != nil {
 		return nil, err
 	}
 	if from == Messages { // a Messages reply hands back thinking signatures, not the encrypted content include asks for
 		t.EncryptedReasoning = catalog.ClaimNo
 	}
-	return convert(chat, t, w)
+	out, err := convert(chat, t, w, b)
+	b.give(int64(len(chat))) // the canonical Chat request is read into the target format and no longer needed
+	return out, err
 }
 
 // convert writes a Chat request for a Messages or Responses endpoint (README.md「跨格式转换」): what the endpoint's
 // format can express is written; reasoning uses the documented approximations in README.md,
 // and other unrepresentable settings are *NotSupported.
-func convert(body []byte, t Target, w Rewrites) ([]byte, error) {
-	c, err := decodeCanon(body)
+func convert(body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
+	c, err := decodeCanonWithin(body, b)
 	if err != nil {
 		return nil, err
 	}
@@ -42,9 +44,9 @@ func convert(body []byte, t Target, w Rewrites) ([]byte, error) {
 		return nil, err
 	}
 	if t.Format == Messages {
-		return toMessages(c, t, w)
+		return toMessages(c, t, w, b)
 	}
-	return toResponses(c, t, w)
+	return toResponses(c, t, w, b)
 }
 
 // checkCalls holds the tool calls to what both other formats require: every call has a result and every result a

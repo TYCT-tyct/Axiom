@@ -114,12 +114,19 @@ func TestInjectNativeSearchRefusesWhatItCannotRewrite(t *testing.T) {
 	}
 }
 
-func TestPrepareCostIncludesTheNativeTool(t *testing.T) {
+func TestPrepareBudgetIncludesTheNativeTool(t *testing.T) {
 	r := &Request{Format: Chat}
 	body := []byte(`{"model":"m","messages":[]}`)
-	without := PrepareCost(r, body, Target{Format: Chat, Model: "m"}, Rewrites{})
-	with := PrepareCost(r, body, Target{Format: Chat, Model: "m"}, Rewrites{NativeSearch: 1})
-	if with <= without {
-		t.Fatalf("PrepareCost() with a native tool = %d, want more than %d", with, without)
+	target := Target{Format: Chat, Model: "m"}
+	without, _, err := PrepareBudgeted(NewMemory(1<<20), r, body, target, Rewrites{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	with, _, err := PrepareBudgeted(NewMemory(1<<20), r, body, target, Rewrites{NativeSearch: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(with.Body) <= len(without.Body) {
+		t.Fatalf("a body with a native tool is %d bytes, without it %d", len(with.Body), len(without.Body))
 	}
 }

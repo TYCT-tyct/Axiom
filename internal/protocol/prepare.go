@@ -127,16 +127,24 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 // prepare is Prepare without the native search tool, which is added after the target format's body exists: a
 // conversion writes the body first, then the tool goes into the format the endpoint speaks.
 func prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
+	return prepareWithin(r, body, t, w, nil)
+}
+
+func prepareWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error
 	if r.Format == t.Format {
 		if r.Format.Convertible() {
-			u.Body, err = rewrite(r, body, t, w)
+			u.Body, err = rewriteWithin(r, body, t, w, b)
 		} else {
-			u.Body, err = rewriteDirect(r, body, t, w)
+			u.Body, err = rewriteDirectWithin(r, body, t, w, b)
 		}
-		return u, err
+		if err != nil {
+			return u, err
+		}
+		b.give(b.held - int64(cap(u.Body)))
+		return u, nil
 	}
 	if !r.Format.Convertible() || !t.Format.Convertible() {
 		return u, &NotSupported{Reason: fmt.Sprintf("format %d is not converted to format %d", r.Format, t.Format)}
@@ -146,13 +154,17 @@ func prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	}
 	switch {
 	case t.Format == Chat && (r.Format == Messages || r.Format == Responses):
-		u.Body, err = requestToChat(r.Format, body, t, w)
+		u.Body, err = requestToChat(r.Format, body, t, w, b)
 	case r.Format != Chat:
-		u.Body, err = convertNative(r.Format, body, t, w)
+		u.Body, err = convertNative(r.Format, body, t, w, b)
 	default:
-		u.Body, err = convert(body, t, w)
+		u.Body, err = convert(body, t, w, b)
 	}
-	return u, err
+	if err != nil {
+		return u, err
+	}
+	b.give(b.held - int64(cap(u.Body))) // the output stays charged until the gateway is done with it
+	return u, nil
 }
 
 // usageContext carries the request's metering facts and legacy reply shape through an upstream attempt.

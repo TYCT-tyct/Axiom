@@ -9,24 +9,24 @@ import (
 // messagesRequestToChat inverts toMessages. The block splitting follows sub2api
 // backend/internal/pkg/apicompat/chatcompletions_anthropic_bridge.go (8f2cbb5);
 // text and image blocks keep their position rather than being lifted across turns.
-func messagesRequestToChat(src, dst requestObject, maxOutput int64) ([]requestObject, error) {
-	if err := messagesSettings(src, dst, maxOutput); err != nil {
+func messagesRequestToChat(src, dst requestObject, maxOutput int64, b *budget) ([]requestObject, error) {
+	if err := messagesSettings(src, dst, maxOutput, b); err != nil {
 		return nil, err
 	}
 	var out []requestObject
 	if system := src.take("system"); !isNull(system) {
-		messages, err := messagesContent("system", system)
+		messages, err := messagesContent("system", system, b)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, messages...)
 	}
-	messages, err := requestArray(src.take("messages"))
+	messages, err := arrayWithin(src.take("messages"), b)
 	if err != nil {
 		return nil, err
 	}
 	for _, raw := range messages {
-		converted, err := messagesTurnToChat(raw)
+		converted, err := messagesTurnToChat(raw, b)
 		if err != nil {
 			return nil, err
 		}
@@ -35,8 +35,8 @@ func messagesRequestToChat(src, dst requestObject, maxOutput int64) ([]requestOb
 	return out, nil
 }
 
-func messagesTurnToChat(raw jsontext.Value) ([]requestObject, error) {
-	o, err := requestMembers(raw)
+func messagesTurnToChat(raw jsontext.Value, b *budget) ([]requestObject, error) {
+	o, err := membersWithin(raw, b)
 	if err != nil {
 		return nil, err
 	}
@@ -47,23 +47,23 @@ func messagesTurnToChat(raw jsontext.Value) ([]requestObject, error) {
 	if role != "user" && role != "assistant" && role != "system" {
 		return nil, &NotSupported{Reason: "message role has no Chat counterpart"}
 	}
-	out, err := messagesContent(role, o.take("content"))
+	out, err := messagesContent(role, o.take("content"), b)
 	if err != nil {
 		return nil, err
 	}
 	return out, o.remaining()
 }
 
-func messagesSettings(src, dst requestObject, maxOutput int64) error {
+func messagesSettings(src, dst requestObject, maxOutput int64, b *budget) error {
 	src.move(dst, "max_tokens", "max_tokens")
 	src.move(dst, "stop_sequences", "stop")
 	if tier := dst["service_tier"]; string(tier) == `"standard_only"` {
-		dst["service_tier"] = jsonValue("default")
+		dst["service_tier"] = jsonValueWithin("default", b)
 	} else if !isNull(tier) && string(tier) != `"auto"` {
 		return &NotSupported{Reason: "service_tier has no Chat counterpart"}
 	}
 	if v := src.take("metadata"); !isNull(v) {
-		meta, err := requestMembers(v)
+		meta, err := membersWithin(v, b)
 		if err != nil {
 			return err
 		}
@@ -72,46 +72,46 @@ func messagesSettings(src, dst requestObject, maxOutput int64) error {
 			return err
 		}
 	}
-	if err := messagesThinking(src, dst, maxOutput); err != nil {
+	if err := messagesThinking(src, dst, maxOutput, b); err != nil {
 		return err
 	}
 	return nil
 }
 
-func messagesThinking(src, dst requestObject, maxOutput int64) error {
+func messagesThinking(src, dst requestObject, maxOutput int64, b *budget) error {
 	if v := src.take("output_config"); !isNull(v) {
-		o, err := requestMembers(v)
+		o, err := membersWithin(v, b)
 		if err != nil {
 			return err
 		}
 		o.move(dst, "effort", "reasoning_effort")
-		if err := messagesFormatToChat(o.take("format"), dst); err != nil {
+		if err := messagesFormatToChat(o.take("format"), dst, b); err != nil {
 			return err
 		}
 		if err := o.remaining(); err != nil {
 			return err
 		}
 	}
-	return thinkingToChat(src.take("thinking"), dst, maxOutput)
+	return thinkingToChat(src.take("thinking"), dst, maxOutput, b)
 }
 
-func thinkingToChat(v jsontext.Value, dst requestObject, maxOutput int64) error {
+func thinkingToChat(v jsontext.Value, dst requestObject, maxOutput int64, b *budget) error {
 	if isNull(v) {
 		return nil
 	}
-	o, err := requestMembers(v)
+	o, err := membersWithin(v, b)
 	if err != nil {
 		return err
 	}
 	switch string(o.take("type")) {
 	case `"disabled"`:
-		dst["reasoning_effort"] = jsonValue("none")
+		dst["reasoning_effort"] = jsonValueWithin("none", b)
 	case `"adaptive"`:
 		if effortAbsent(dst["reasoning_effort"]) {
-			dst["reasoning_effort"] = jsonValue("medium")
+			dst["reasoning_effort"] = jsonValueWithin("medium", b)
 		}
 	case `"enabled"`:
-		if err := budgetToChat(o.take("budget_tokens"), dst, maxOutput); err != nil {
+		if err := budgetToChat(o.take("budget_tokens"), dst, maxOutput, b); err != nil {
 			return err
 		}
 	default:
@@ -129,16 +129,16 @@ func thinkingToChat(v jsontext.Value, dst requestObject, maxOutput int64) error 
 // kept in the body as the client wrote it, but it must not stop a thinking mode from writing the effort it needs.
 func effortAbsent(v jsontext.Value) bool { return isNull(v) || string(v) == `""` }
 
-func budgetToChat(budget jsontext.Value, dst requestObject, maxOutput int64) error {
+func budgetToChat(v jsontext.Value, dst requestObject, maxOutput int64, b *budget) error {
 	var n int64
-	if err := jsonx.Unmarshal(budget, &n); err != nil || n < 1024 {
+	if err := unmarshalWithin(v, &n, b); err != nil || n < 1024 {
 		return shapeError("thinking budget must be at least 1024")
 	}
 	if !effortAbsent(dst["reasoning_effort"]) {
 		return nil
 	}
-	if cap := dst["max_tokens"]; !isNull(cap) {
-		if err := jsonx.Unmarshal(cap, &maxOutput); err != nil {
+	if limit := dst["max_tokens"]; !isNull(limit) {
+		if err := unmarshalWithin(limit, &maxOutput, b); err != nil {
 			return err
 		}
 	}
@@ -147,15 +147,15 @@ func budgetToChat(budget jsontext.Value, dst requestObject, maxOutput int64) err
 	if err != nil {
 		return err
 	}
-	dst["reasoning_effort"] = jsonValue(effort)
+	dst["reasoning_effort"] = jsonValueWithin(effort, b)
 	return nil
 }
 
-func messagesFormatToChat(v jsontext.Value, dst requestObject) error {
+func messagesFormatToChat(v jsontext.Value, dst requestObject, b *budget) error {
 	if isNull(v) {
 		return nil
 	}
-	o, err := requestMembers(v)
+	o, err := membersWithin(v, b)
 	if err != nil {
 		return err
 	}
@@ -167,10 +167,10 @@ func messagesFormatToChat(v jsontext.Value, dst requestObject) error {
 		return shapeError("output_config schema must be an object")
 	}
 	// Messages has no schema name; Chat requires one as an identifier, not a constraint.
-	dst["response_format"] = jsonValue(requestObject{
-		"type":        jsonValue("json_schema"),
-		"json_schema": jsonValue(requestObject{"name": jsonValue("response"), "schema": schema, "strict": jsonValue(true)}),
-	})
+	dst["response_format"] = jsonValueWithin(requestObject{
+		"type":        jsonValueWithin("json_schema", b),
+		"json_schema": jsonValueWithin(requestObject{"name": jsonValueWithin("response", b), "schema": schema, "strict": jsonValueWithin(true, b)}, b),
+	}, b)
 	return o.remaining()
 }
 
@@ -180,41 +180,41 @@ type chatMessageBlocks struct {
 	reasoning         joined
 }
 
-func messagesContent(role string, v jsontext.Value) ([]requestObject, error) {
+func messagesContent(role string, v jsontext.Value, b *budget) ([]requestObject, error) {
 	if v.Kind() == '"' {
-		return []requestObject{{"role": jsonValue(role), "content": v}}, nil
+		return []requestObject{{"role": jsonValueWithin(role, b), "content": v}}, nil
 	}
-	blocks, err := requestArray(v)
+	blocks, err := arrayWithin(v, b)
 	if err != nil {
 		return nil, err
 	}
 	state := chatMessageBlocks{role: role}
 	for _, raw := range blocks {
-		o, err := requestMembers(raw)
+		o, err := membersWithin(raw, b)
 		if err != nil {
 			return nil, err
 		}
-		if err := state.block(o); err != nil {
+		if err := state.block(o, b); err != nil {
 			return nil, err
 		}
 		if err := o.remaining(); err != nil {
 			return nil, err
 		}
 	}
-	state.flush()
+	state.flush(b)
 	if len(state.out) == 0 {
-		state.out = append(state.out, requestObject{"role": jsonValue(role), "content": jsonValue("")})
+		state.out = append(state.out, requestObject{"role": jsonValueWithin(role, b), "content": jsonValueWithin("", b)})
 	}
 	return state.out, nil
 }
 
-func (s *chatMessageBlocks) flush() {
+func (s *chatMessageBlocks) flush(b *budget) {
 	if len(s.parts) == 0 && len(s.calls) == 0 && s.reasoning.pieces == 0 {
 		return
 	}
-	msg := requestObject{"role": jsonValue(s.role), "content": jsonValue(s.parts)}
+	msg := requestObject{"role": jsonValueWithin(s.role, b), "content": jsonValueWithin(s.parts, b)}
 	if len(s.calls) > 0 {
-		msg["tool_calls"] = jsonValue(s.calls)
+		msg["tool_calls"] = jsonValueWithin(s.calls, b)
 	}
 	if s.reasoning.pieces > 0 {
 		msg["reasoning_content"] = s.reasoning.value(nil)
@@ -223,20 +223,20 @@ func (s *chatMessageBlocks) flush() {
 	s.parts, s.calls, s.reasoning = nil, nil, joined{}
 }
 
-func (s *chatMessageBlocks) block(o requestObject) error {
+func (s *chatMessageBlocks) block(o requestObject, b *budget) error {
 	kind := string(o.take("type"))
 	switch {
 	case kind == `"tool_result"` && s.role == "user":
-		return s.toolResult(o)
+		return s.toolResult(o, b)
 	case kind == `"tool_use"` && s.role == "assistant":
-		return s.toolCall(o)
+		return s.toolCall(o, b)
 	case kind == `"thinking"` && s.role == "assistant":
-		return s.thinking(o)
+		return s.thinking(o, b)
 	case kind == `"redacted_thinking"` && s.role == "assistant":
 		o.take("data") // follows the reverse converter's non-replayable reasoning drop policy
 		return nil
 	}
-	part, err := nativePart(o, kind, Messages, s.role)
+	part, err := nativePart(o, kind, Messages, s.role, b)
 	if err != nil {
 		return err
 	}
@@ -245,9 +245,9 @@ func (s *chatMessageBlocks) block(o requestObject) error {
 }
 
 // toolResult closes the turn so far: a Chat tool turn must follow the assistant turn it answers.
-func (s *chatMessageBlocks) toolResult(o requestObject) error {
-	s.flush()
-	result, err := messagesToolResult(o)
+func (s *chatMessageBlocks) toolResult(o requestObject, b *budget) error {
+	s.flush(b)
+	result, err := messagesToolResult(o, b)
 	if err != nil {
 		return err
 	}
@@ -255,34 +255,34 @@ func (s *chatMessageBlocks) toolResult(o requestObject) error {
 	return nil
 }
 
-func (s *chatMessageBlocks) toolCall(o requestObject) error {
+func (s *chatMessageBlocks) toolCall(o requestObject, b *budget) error {
 	input := o.take("input")
 	if input.Kind() != '{' {
 		return shapeError("tool input must be an object")
 	}
-	call := requestObject{"id": o.take("id"), "type": jsonValue("function")}
-	call["function"] = jsonValue(requestObject{"name": o.take("name"), "arguments": jsonValue(string(input))})
+	call := requestObject{"id": o.take("id"), "type": jsonValueWithin("function", b)}
+	call["function"] = jsonValueWithin(requestObject{"name": o.take("name"), "arguments": jsonValueWithin(string(input), b)}, b)
 	s.calls = append(s.calls, call)
 	return nil
 }
 
 // thinking replays the plaintext of an Anthropic thinking block as Chat reasoning; only the provider that signed it can
 // verify the signature, and the text alone is what a Chat endpoint reads.
-func (s *chatMessageBlocks) thinking(o requestObject) error {
+func (s *chatMessageBlocks) thinking(o requestObject, b *budget) error {
 	o.take("signature")
 	return s.reasoning.add(o.take("thinking"))
 }
 
-func messagesToolResult(o requestObject) (requestObject, error) {
+func messagesToolResult(o requestObject, b *budget) (requestObject, error) {
 	id, v := o.take("tool_use_id"), o.take("content")
 	if isNull(v) || string(v) == "[]" {
-		v = jsonValue("") // Anthropic permits omitted content; Chat requires text.
+		v = jsonValueWithin("", b) // Anthropic permits omitted content; Chat requires text.
 	}
 	var failed bool
 	if v := o.take("is_error"); !isNull(v) && jsonx.Unmarshal(v, &failed) != nil {
 		return nil, shapeError("tool result is_error must be boolean")
 	}
-	content, err := nativeContent(v, Messages, "tool")
+	content, err := nativeContent(v, Messages, "tool", b)
 	if err != nil {
 		return nil, err
 	}
@@ -293,15 +293,15 @@ func messagesToolResult(o requestObject) (requestObject, error) {
 			if err != nil {
 				return nil, err
 			}
-			content = jsonValue("Error: " + text)
+			content = jsonValueWithin("Error: "+text, b)
 		} else {
-			parts, err := requestArray(content)
+			parts, err := arrayWithin(content, b)
 			if err != nil {
 				return nil, err
 			}
-			marker := jsonValue(requestObject{"type": jsonValue("text"), "text": jsonValue("Error: ")})
-			content = jsonValue(append([]jsontext.Value{marker}, parts...))
+			marker := jsonValueWithin(requestObject{"type": jsonValueWithin("text", b), "text": jsonValueWithin("Error: ", b)}, b)
+			content = jsonValueWithin(append([]jsontext.Value{marker}, parts...), b)
 		}
 	}
-	return requestObject{"role": jsonValue("tool"), "tool_call_id": id, "content": content}, nil
+	return requestObject{"role": jsonValueWithin("tool", b), "tool_call_id": id, "content": content}, nil
 }

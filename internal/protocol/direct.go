@@ -750,14 +750,26 @@ var directRewriteRules = map[Format]formatRules{
 
 // rewriteDirect rewrites a direct format's request for the endpoint.
 func rewriteDirect(r *Request, body []byte, t Target, w Rewrites) ([]byte, error) {
+	return rewriteDirectWithin(r, body, t, w, nil)
+}
+
+func rewriteDirectWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
 	rules, ok := directRewriteRules[r.Format]
 	if !ok {
 		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", r.Format)}
 	}
 	w = w.withDefaults()
+	size := rewriteSize(rules, len(body), t, w)
+	if err := b.draw(rounded(int64(size))); err != nil {
+		return nil, err
+	}
 	p := &rewriter{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, t: t, w: w}
-	p.out = make([]byte, 0, rewriteSize(rules, len(body), t, w))
+	p.reader.b = b
+	p.out = make([]byte, 0, size)
 	if err := p.top(rules); err != nil {
+		if errors.Is(err, ErrMemory) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
 	return p.out, nil

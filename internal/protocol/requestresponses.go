@@ -7,8 +7,8 @@ import (
 	"axiom/internal/platform/jsonx"
 )
 
-func responsesRequestToChat(src, dst requestObject, w Rewrites) ([]requestObject, error) {
-	if err := responsesChatDefaults(src); err != nil {
+func responsesRequestToChat(src, dst requestObject, w Rewrites, b *budget) ([]requestObject, error) {
+	if err := responsesChatDefaults(src, b); err != nil {
 		return nil, err
 	}
 	src.move(dst, "max_output_tokens", "max_completion_tokens")
@@ -20,10 +20,10 @@ func responsesRequestToChat(src, dst requestObject, w Rewrites) ([]requestObject
 	if (!isNull(previous) && string(previous) != `""`) != (len(w.History) > 0) {
 		return nil, errHistory
 	}
-	if err := responsesReasoning(src.take("reasoning"), dst); err != nil {
+	if err := responsesReasoning(src.take("reasoning"), dst, b); err != nil {
 		return nil, err
 	}
-	if err := responsesTextToChat(src.take("text"), dst); err != nil {
+	if err := responsesTextToChat(src.take("text"), dst, b); err != nil {
 		return nil, err
 	}
 	var out []requestObject
@@ -31,22 +31,22 @@ func responsesRequestToChat(src, dst requestObject, w Rewrites) ([]requestObject
 		if _, err := requestString(instructions); err != nil {
 			return nil, err
 		}
-		out = append(out, requestObject{"role": jsonValue("system"), "content": instructions})
+		out = append(out, requestObject{"role": jsonValueWithin("system", b), "content": instructions})
 	}
-	items, err := responsesInput(src.take("input"), w.History)
+	items, err := responsesInput(src.take("input"), w.History, b)
 	if err != nil {
 		return nil, err
 	}
-	return responsesItemsToChat(items, out)
+	return responsesItemsToChat(items, out, b)
 }
 
-func responsesChatDefaults(src requestObject) error {
+func responsesChatDefaults(src requestObject, b *budget) error {
 	for _, field := range [...]struct{ name, value string }{{"truncation", `"disabled"`}, {"background", "false"}} {
 		if v := src.take(field.name); !isNull(v) && string(v) != field.value {
 			return &NotSupported{Reason: field.name + " has no Chat counterpart"}
 		}
 	}
-	include, err := requestArray(src.take("include"))
+	include, err := arrayWithin(src.take("include"), b)
 	if err != nil {
 		return err
 	}
@@ -59,7 +59,7 @@ func responsesChatDefaults(src requestObject) error {
 }
 
 // responsesInput combines resolved history with the current input before item conversion.
-func responsesInput(v jsontext.Value, history [][]byte) ([]jsontext.Value, error) {
+func responsesInput(v jsontext.Value, history [][]byte, b *budget) ([]jsontext.Value, error) {
 	items := make([]jsontext.Value, 0, len(history)+1)
 	for _, item := range history {
 		canonical, err := jsonx.MarshalCanonical(jsontext.Value(item))
@@ -69,9 +69,9 @@ func responsesInput(v jsontext.Value, history [][]byte) ([]jsontext.Value, error
 		items = append(items, canonical)
 	}
 	if v.Kind() == '"' {
-		items = append(items, jsonValue(requestObject{"role": jsonValue("user"), "content": v}))
+		items = append(items, jsonValueWithin(requestObject{"role": jsonValueWithin("user", b), "content": v}, b))
 	} else {
-		input, err := requestArray(v)
+		input, err := arrayWithin(v, b)
 		if err != nil {
 			return nil, err
 		}
@@ -80,11 +80,11 @@ func responsesInput(v jsontext.Value, history [][]byte) ([]jsontext.Value, error
 	return items, nil
 }
 
-func responsesReasoning(v jsontext.Value, dst requestObject) error {
+func responsesReasoning(v jsontext.Value, dst requestObject, b *budget) error {
 	if isNull(v) {
 		return nil
 	}
-	o, err := requestMembers(v)
+	o, err := membersWithin(v, b)
 	if err != nil {
 		return err
 	}
@@ -96,30 +96,30 @@ func responsesReasoning(v jsontext.Value, dst requestObject) error {
 	return o.remaining()
 }
 
-func responsesTextToChat(v jsontext.Value, dst requestObject) error {
+func responsesTextToChat(v jsontext.Value, dst requestObject, b *budget) error {
 	if isNull(v) {
 		return nil
 	}
-	o, err := requestMembers(v)
+	o, err := membersWithin(v, b)
 	if err != nil {
 		return err
 	}
 	o.move(dst, "verbosity", "verbosity")
 	if v := o.take("format"); !isNull(v) {
-		format, err := requestMembers(v)
+		format, err := membersWithin(v, b)
 		if err != nil {
 			return err
 		}
 		kind := format.take("type")
 		switch string(kind) {
 		case `"text"`, `"json_object"`:
-			dst["response_format"] = jsonValue(requestObject{"type": kind})
+			dst["response_format"] = jsonValueWithin(requestObject{"type": kind}, b)
 		case `"json_schema"`:
 			schema := requestObject{}
 			for _, name := range []string{"name", "description", "schema", "strict"} {
 				format.move(schema, name, name)
 			}
-			dst["response_format"] = jsonValue(requestObject{"type": kind, "json_schema": jsonValue(schema)})
+			dst["response_format"] = jsonValueWithin(requestObject{"type": kind, "json_schema": jsonValueWithin(schema, b)}, b)
 		default:
 			return &NotSupported{Reason: "text.format has no Chat counterpart"}
 		}
@@ -139,28 +139,28 @@ type chatInputItems struct {
 	calls     map[int][]requestObject
 }
 
-func responsesItemsToChat(items []jsontext.Value, out []requestObject) ([]requestObject, error) {
+func responsesItemsToChat(items []jsontext.Value, out []requestObject, b *budget) ([]requestObject, error) {
 	s := chatInputItems{out: out, calls: map[int][]requestObject{}}
 	for _, raw := range items {
-		o, err := requestMembers(raw)
+		o, err := membersWithin(raw, b)
 		if err != nil {
 			return nil, err
 		}
-		if err := s.item(o); err != nil {
+		if err := s.item(o, b); err != nil {
 			return nil, err
 		}
 		if err := o.remaining(); err != nil {
 			return nil, err
 		}
 	}
-	s.flushReasoning()
+	s.flushReasoning(b)
 	for index, calls := range s.calls {
-		s.out[index]["tool_calls"] = jsonValue(calls)
+		s.out[index]["tool_calls"] = jsonValueWithin(calls, b)
 	}
 	return s.out, nil
 }
 
-func (s *chatInputItems) item(o requestObject) error {
+func (s *chatInputItems) item(o requestObject, b *budget) error {
 	kind := o.take("type")
 	o.take("id")
 	if status := o.take("status"); !isNull(status) && string(status) != `"completed"` {
@@ -168,25 +168,25 @@ func (s *chatInputItems) item(o requestObject) error {
 	}
 	switch string(kind) {
 	case "", `"message"`:
-		return s.message(o)
+		return s.message(o, b)
 	case `"function_call"`:
-		s.call(o)
+		s.call(o, b)
 	case `"function_call_output"`:
 		s.reasoning = joined{} // A tool result must immediately follow the assistant call it answers.
-		v, err := nativeContent(o.take("output"), Responses, "tool")
+		v, err := nativeContent(o.take("output"), Responses, "tool", b)
 		if err != nil {
 			return err
 		}
-		s.out = append(s.out, requestObject{"role": jsonValue("tool"), "tool_call_id": o.take("call_id"), "content": v})
+		s.out = append(s.out, requestObject{"role": jsonValueWithin("tool", b), "tool_call_id": o.take("call_id"), "content": v})
 	case `"reasoning"`:
-		return reasoningSummary(o, &s.reasoning)
+		return reasoningSummary(o, &s.reasoning, b)
 	default:
 		return &NotSupported{Reason: "input item has no Chat counterpart"}
 	}
 	return nil
 }
 
-func (s *chatInputItems) message(o requestObject) error {
+func (s *chatInputItems) message(o requestObject, b *budget) error {
 	role, err := requestString(o.take("role"))
 	if err != nil {
 		return err
@@ -194,55 +194,55 @@ func (s *chatInputItems) message(o requestObject) error {
 	if role != "user" && role != "assistant" && !isSystem(role) {
 		return &NotSupported{Reason: "input message role has no Chat counterpart"}
 	}
-	v, err := nativeContent(o.take("content"), Responses, role)
+	v, err := nativeContent(o.take("content"), Responses, role, b)
 	if err != nil {
 		return err
 	}
-	msg := requestObject{"role": jsonValue(role), "content": v}
+	msg := requestObject{"role": jsonValueWithin(role, b), "content": v}
 	if role == "assistant" {
-		s.attachReasoning(msg)
+		s.attachReasoning(msg, b)
 	} else {
-		s.flushReasoning()
+		s.flushReasoning(b)
 	}
 	s.out = append(s.out, msg)
 	return nil
 }
 
-func (s *chatInputItems) call(o requestObject) {
+func (s *chatInputItems) call(o requestObject, b *budget) {
 	call := requestObject{
-		"id": o.take("call_id"), "type": jsonValue("function"),
-		"function": jsonValue(requestObject{"name": o.take("name"), "arguments": o.take("arguments")}),
+		"id": o.take("call_id"), "type": jsonValueWithin("function", b),
+		"function": jsonValueWithin(requestObject{"name": o.take("name"), "arguments": o.take("arguments")}, b),
 	}
 	if len(s.out) == 0 || string(s.out[len(s.out)-1]["role"]) != `"assistant"` {
-		s.out = append(s.out, requestObject{"role": jsonValue("assistant"), "content": jsonValue("")})
+		s.out = append(s.out, requestObject{"role": jsonValueWithin("assistant", b), "content": jsonValueWithin("", b)})
 	}
 	i := len(s.out) - 1
 	s.calls[i] = append(s.calls[i], call)
-	s.attachReasoning(s.out[i])
+	s.attachReasoning(s.out[i], b)
 }
 
-func (s *chatInputItems) attachReasoning(msg requestObject) {
+func (s *chatInputItems) attachReasoning(msg requestObject, b *budget) {
 	if s.reasoning.pieces > 0 {
 		msg["reasoning_content"], s.reasoning = s.reasoning.value(nil), joined{}
 	}
 }
 
-func (s *chatInputItems) flushReasoning() {
+func (s *chatInputItems) flushReasoning(b *budget) {
 	if s.reasoning.pieces > 0 {
-		msg := requestObject{"role": jsonValue("assistant"), "content": jsonValue("")}
-		s.attachReasoning(msg)
+		msg := requestObject{"role": jsonValueWithin("assistant", b), "content": jsonValueWithin("", b)}
+		s.attachReasoning(msg, b)
 		s.out = append(s.out, msg)
 	}
 }
 
-func reasoningSummary(o requestObject, text *joined) error {
+func reasoningSummary(o requestObject, text *joined, b *budget) error {
 	o.take("encrypted_content") // Chat cannot replay another provider's opaque reasoning
-	parts, err := requestArray(o.take("summary"))
+	parts, err := arrayWithin(o.take("summary"), b)
 	if err != nil {
 		return err
 	}
 	for _, raw := range parts {
-		p, err := requestMembers(raw)
+		p, err := membersWithin(raw, b)
 		if err != nil {
 			return err
 		}
