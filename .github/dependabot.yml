@@ -23,6 +23,11 @@ updates:
     groups:
       go:
         patterns: ["*"]
+    ignore:
+      # v0.10.0's heap BPE allocates about twice the bytes and 20% more allocations counting long unbroken text, which the
+      # bench gate rejects; stay on 0.8.1 until it is fixed: https://github.com/TYCT-tyct/Axiom/issues/555
+      - dependency-name: github.com/tiktoken-go/tokenizer
+        versions: [">=0.10.0"]
   - package-ecosystem: npm
     directory: /web
     schedule:

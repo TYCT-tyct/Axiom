@@ -12,7 +12,7 @@ tool (
 )
 
 require (
-	github.com/getkin/kin-openapi v0.151.0
+	github.com/getkin/kin-openapi v0.152.0
 	github.com/google/go-cmp v0.7.0
 	golang.org/x/perf v0.0.0-20260929162123-406019bb8b68
 )

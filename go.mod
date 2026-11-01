@@ -3,13 +3,13 @@ module axiom
 go 1.27.3
 
 require (
-	github.com/fxamacker/cbor/v2 v2.9.4
-	github.com/getkin/kin-openapi v0.151.0
+	github.com/fxamacker/cbor/v2 v2.9.6
+	github.com/getkin/kin-openapi v0.152.0
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/google/go-cmp v0.7.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/moby/moby/api v1.56.1
-	github.com/oapi-codegen/runtime v1.7.0
+	github.com/oapi-codegen/runtime v1.8.0
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/riverqueue/river v0.49.0
