@@ -141,3 +141,31 @@ func TestChargebackCanMakeTheBalanceNegative(t *testing.T) {
 		t.Fatalf("charged_back = %d", got)
 	}
 }
+
+func TestChargebackAfterTheBatchExpired(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	p := b.paidBatch(500, 500, 0)
+	b.sql("UPDATE billing.credit_batches SET expires_at = now() - interval '1 day' WHERE id = '" + p.ID.String() + "'")
+	if wrote := b.expire(); wrote != 500 {
+		t.Fatalf("expiry wrote off %d, want 500", wrote)
+	}
+	amounts, err := b.chargeback(p.ID, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if amounts.Credits != 500 || amounts.Returned != 500 {
+		t.Fatalf("expired chargeback = %+v", amounts)
+	}
+	if got := b.balanceOf(b.admitted.Account); got != -500 {
+		t.Fatalf("balance after expired chargeback = %d, want -500", got)
+	}
+	// The account is below its floor now; the ledger itself must still replay and balance.
+	if err := b.reverseChargeback(amounts); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.balanceOf(b.admitted.Account); got != 0 {
+		t.Fatalf("balance after reversal = %d, want 0", got)
+	}
+	b.balanced()
+}

@@ -162,6 +162,16 @@ func (a *allocation) funded() int64 {
 	return total
 }
 
+// restoreBatch adds a batch that LiveBatches left out, so a chargeback can still name it. Its opening key is at or
+// before the allocation place; keeping it in the spend order makes the balance replay see the same batch.
+func (a *allocation) restoreBatch(b *batchState) {
+	a.batches[b.id] = b
+	if b.opened.compare(a.at) <= 0 {
+		a.open = append(a.open, b)
+		slices.SortFunc(a.open, spendOrder)
+	}
+}
+
 func (a *allocation) frozen() int64 {
 	var total int64
 	for _, b := range a.open {

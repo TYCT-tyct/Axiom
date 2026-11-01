@@ -36,6 +36,61 @@ func (q *Queries) AllocationState(ctx context.Context, db DBTX, accountID uuid.U
 	return i, err
 }
 
+const chargebackBatch = `-- name: ChargebackBatch :one
+SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded, b.charged_back,
+    coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
+FROM billing.credit_batches b
+JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
+WHERE b.id = $1 AND b.account_id = $2
+`
+
+type ChargebackBatchParams struct {
+	ID        uuid.UUID
+	AccountID uuid.UUID
+}
+
+type ChargebackBatchRow struct {
+	ID            uuid.UUID
+	SiteID        uuid.UUID
+	Source        string
+	ExpiresAt     *time.Time
+	Amount        int64
+	Consumed      int64
+	Expired       int64
+	FreezeTotal   int64
+	UnfreezeTotal int64
+	Refunded      int64
+	ChargedBack   int64
+	OpenedSeq     int64
+	OpenedAt      time.Time
+	OpenedID      uuid.UUID
+}
+
+// A chargeback can name a batch that expired before it arrived. LiveBatches leaves a fully expired batch out to keep
+// every replay small, so the chargeback loads just that batch before it posts; after the first chargeback the row's
+// charged_back keeps it in LiveBatches for the reversal.
+func (q *Queries) ChargebackBatch(ctx context.Context, db DBTX, arg ChargebackBatchParams) (ChargebackBatchRow, error) {
+	row := db.QueryRow(ctx, chargebackBatch, arg.ID, arg.AccountID)
+	var i ChargebackBatchRow
+	err := row.Scan(
+		&i.ID,
+		&i.SiteID,
+		&i.Source,
+		&i.ExpiresAt,
+		&i.Amount,
+		&i.Consumed,
+		&i.Expired,
+		&i.FreezeTotal,
+		&i.UnfreezeTotal,
+		&i.Refunded,
+		&i.ChargedBack,
+		&i.OpenedSeq,
+		&i.OpenedAt,
+		&i.OpenedID,
+	)
+	return i, err
+}
+
 const dueAccounts = `-- name: DueAccounts :many
 SELECT b.account_id FROM billing.credit_batches b
 WHERE b.expires_at <= $1::timestamptz AND b.consumed + b.expired < b.amount AND b.account_id > $2
@@ -160,7 +215,8 @@ SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired,
 FROM billing.credit_batches b
 JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
 WHERE b.account_id = $1
-    AND (b.consumed > 0 OR (b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired))
+    AND (b.consumed > 0 OR b.charged_back > 0
+        OR (b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired))
 `
 
 type LiveBatchesRow struct {

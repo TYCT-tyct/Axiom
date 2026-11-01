@@ -102,8 +102,11 @@ func ReverseChargeBack(ctx context.Context, tx pg.Tx, amounts ChargebackAmounts)
 	if err != nil {
 		return err
 	}
-	b := a.batches[amounts.Batch]
-	if b == nil || b.chargedBack < amounts.Credits {
+	b, err := loadChargebackBatch(ctx, tx, a, credit.Account, amounts.Batch)
+	if err != nil {
+		return err
+	}
+	if b.chargedBack < amounts.Credits {
 		return fmt.Errorf("billing: batch %s has %d charged back, not %d", amounts.Batch, b.chargedBack, amounts.Credits)
 	}
 	entries, err := returnEntries(credit, amounts.Credits, amounts.RefundAmounts)
@@ -128,11 +131,36 @@ func (c Chargeback) load(ctx context.Context, tx pg.Tx) (CreditBatch, *allocatio
 	if err != nil {
 		return CreditBatch{}, nil, nil, err
 	}
-	b := a.batches[c.Batch]
-	if b == nil || b.amount != credit.Amount || b.source != "paid" {
+	b, err := loadChargebackBatch(ctx, tx, a, credit.Account, c.Batch)
+	if err != nil {
+		return CreditBatch{}, nil, nil, err
+	}
+	if b.amount != credit.Amount || b.source != "paid" {
 		return CreditBatch{}, nil, nil, fmt.Errorf("billing: batch %s is not open paid credit", c.Batch)
 	}
 	return credit, a, b, nil
+}
+
+// loadChargebackBatch returns the batch's replay state, loading a fully expired batch that LiveBatches omits. The
+// balance is already locked by replayAccount; reading one row does not change the allocation place.
+func loadChargebackBatch(ctx context.Context, tx pg.Tx, a *allocation, account, id uuid.UUID) (*batchState, error) {
+	if b := a.batches[id]; b != nil {
+		return b, nil
+	}
+	row, err := queries.ChargebackBatch(ctx, tx, ChargebackBatchParams{ID: id, AccountID: account})
+	if err != nil {
+		return nil, fmt.Errorf("billing: load chargeback batch %s: %w", id, err)
+	}
+	if row.Source != "paid" {
+		return nil, fmt.Errorf("billing: batch %s is not paid credit", id)
+	}
+	b := &batchState{
+		id: row.ID, site: row.SiteID, source: row.Source, expiresAt: row.ExpiresAt, amount: row.Amount,
+		consumed: row.Consumed, expired: row.Expired, opened: orderKey{seq: row.OpenedSeq, at: row.OpenedAt, id: row.OpenedID},
+		freezeTotal: row.FreezeTotal, unfreezeTotal: row.UnfreezeTotal, refunded: row.Refunded, chargedBack: row.ChargedBack,
+	}
+	a.restoreBatch(b)
+	return b, nil
 }
 
 // postChargeback writes the event, replays it into the batch cache and saves the cache, all under the balance lock.
