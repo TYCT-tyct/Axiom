@@ -3,7 +3,8 @@ import { consoleApi, unwrap } from "@axiom/api";
 // The statement's own pieces: the file a page offers to download, and what a row's amount means.
 
 // statementCsv is the account's statement as the server gives it: comma-separated text, newest first.
-export const statementCsv = () => unwrap(consoleApi.GET("/api/console/v1/statement.csv", { parseAs: "text" }));
+export const statementCsv = (signal: AbortSignal) =>
+  unwrap(consoleApi.GET("/api/console/v1/statement.csv", { parseAs: "text", signal }));
 
 // The filename uses the same UTC day as the server's Content-Disposition.
 export function statementName(now = new Date()) {

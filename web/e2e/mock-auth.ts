@@ -36,7 +36,7 @@ export function authState(permissions: string[]): AuthState {
   };
 }
 
-function grant(state: AuthState, status: Schemas["SessionGrant"]["status"]): Schemas["SessionGrant"] {
+export function grant(state: AuthState, status: Schemas["SessionGrant"]["status"]): Schemas["SessionGrant"] {
   state.csrfCount += 1;
   state.csrf = `csrf-${state.csrfCount}`;
   return { status, csrf_token: state.csrf };
@@ -52,7 +52,7 @@ export const session = (state: AuthState): Schemas["Session"] => ({
   permissions: state.permissions,
 });
 
-const recoveryCodes = Array.from({ length: 10 }, (_, i) => `abcd-efgh-ijkl-${String(1000 + i)}`);
+export const recoveryCodes = Array.from({ length: 10 }, (_, i) => `abcd-efgh-ijkl-${String(1000 + i)}`);
 
 type WithState<B> = { body: B; state: AuthState };
 

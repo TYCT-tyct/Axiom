@@ -49,6 +49,7 @@ func (s *Service) failed(ctx context.Context, a securityAttempt, action string, 
 	}{
 		{ErrBadCredentials, "bad_credentials"},
 		{ErrBadCode, "bad_code"},
+		{errPasskeyAssertion, "bad_passkey"},
 		{ErrInvalidInvite, "invalid_invite"},
 	} {
 		if errors.Is(*result, c.err) {

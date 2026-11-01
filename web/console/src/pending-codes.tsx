@@ -1,5 +1,12 @@
 import { consoleApi, unwrap } from "@axiom/api";
-import { currentSession, sessionBinding, useCachedSession, useShowRecoveryCodes } from "@axiom/app";
+import {
+  currentSession,
+  holdsSession,
+  identityOf,
+  sessionBinding,
+  useCachedSession,
+  useShowRecoveryCodes,
+} from "@axiom/app";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, use, useCallback, useEffect, useRef, useState } from "react";
 import { forgetPending, takePending } from "./pending-codes-store";
@@ -46,7 +53,7 @@ export function PendingCodesProvider({ children }: { children: ReactNode }) {
     void takePending(sent, attempt, () => unwrap(consoleApi.POST("/api/console/v1/auth/recovery-codes/take"))).then(
       (result) => {
         const now = currentSession(client);
-        if (!now || sessionBinding(now) !== sent) {
+        if (!now || !holdsSession(client, sent)) {
           return;
         }
         setPending(false);
@@ -55,7 +62,7 @@ export function PendingCodesProvider({ children }: { children: ReactNode }) {
           return;
         }
         if (result.codes.length > 0) {
-          show({ csrf_token: now.csrf_token, recovery_codes: result.codes });
+          show({ csrf_token: now.csrf_token, recovery_codes: result.codes }, identityOf(now));
           setFailure(null);
         }
       },

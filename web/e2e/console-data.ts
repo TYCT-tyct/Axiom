@@ -12,6 +12,7 @@ export type MockState = AuthState & {
   site: Schemas["Site"];
   balance: Schemas["Balance"];
   keys: Schemas["Key"][];
+  passkeys: Schemas["Passkey"][];
   calls: Schemas["Call"][];
   models: Schemas["PublicModel"][];
   statement: Schemas["StatementRow"][];
@@ -210,6 +211,7 @@ export function usualState(): MockState {
       aKey(2, { name: "CI runner", disabled: true, models: ["openai/gpt-5"], ip_allow: ["203.0.113.0/24"] }),
       aKey(1, { name: "Old key", expires_at: "2026-09-01T00:00:00Z" }),
     ],
+    passkeys: [],
     calls: range(120).map((n) => aCall(n)),
     models: range(4).map((n) => aModel(n)),
     statement: range(120).map((n) => aMovement(n)),

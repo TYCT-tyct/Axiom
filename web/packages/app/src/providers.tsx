@@ -1,19 +1,15 @@
-import { ApiError, isTransient } from "@axiom/api";
+import { isTransient } from "@axiom/api";
 import type { AuthApi } from "@axiom/api/auth";
 import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
-import { AuthProvider, endSession } from "./session";
+import { AuthProvider, endUnauthenticated } from "./session";
 import { RecoveryCodesHost } from "./totp-dialogs";
 
 // A call refused for want of a session means the session has ended (it timed out, or another device ended it): whatever
 // the page was doing, it goes to the sign-in page and returns here after.
 function createQueryClient() {
-  const endOnUnauthenticated = (error: unknown) => {
-    if (error instanceof ApiError && error.code === "unauthenticated") {
-      endSession(queryClient);
-    }
-  };
-  const queryClient = new QueryClient({
+  const endOnUnauthenticated = (error: unknown): void => endUnauthenticated(queryClient, error);
+  const queryClient: QueryClient = new QueryClient({
     queryCache: new QueryCache({ onError: endOnUnauthenticated }),
     mutationCache: new MutationCache({ onError: endOnUnauthenticated }),
     defaultOptions: {

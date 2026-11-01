@@ -1,5 +1,5 @@
 import { ApiError, type Schemas } from "@axiom/api";
-import { LoadMore, readForm, useErrors } from "@axiom/app";
+import { LoadMore, readForm, useErrors, useSessionBound } from "@axiom/app";
 import {
   Badge,
   Button,
@@ -214,15 +214,21 @@ function TimeFilterFields({ filters }: { filters: CallFilters }) {
 }
 
 // useCallsExport downloads the same filters as the list. A refused or failed request is shown beside the button, not
-// replacing the table: the list is still the page's main answer.
+// replacing the table: the list is still the page's main answer. The download is bound to the session that asked: when
+// another tab passes the browser to someone else, the request is abandoned and nothing is saved.
 function useCallsExport(filters: CallFilters) {
+  const bound = useSessionBound();
   const [failed, setFailed] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const start = () => {
     setBusy(true);
     setFailed(null);
-    callsCsv(filters)
-      .then((csv) => save(new File([csv], callsName(), { type: "text/csv" })))
+    void bound((signal) => callsCsv(filters, signal))
+      .then((answer) => {
+        if (answer) {
+          save(new File([answer.value], callsName(), { type: "text/csv" }));
+        }
+      })
       .catch(setFailed)
       .finally(() => setBusy(false));
   };
