@@ -99,6 +99,27 @@ func TestTheRequestCostIsBookedOnce(t *testing.T) {
 	r.ledgerBalanced()
 }
 
+// TestAnUnexecutedAttemptIsNotChargedARequest: the request price belongs to an executed attempt, so a refused upstream
+// attempt leaves no supplier row and no supplier-cost entry even when the plan prices only the request.
+func TestAnUnexecutedAttemptIsNotChargedARequest(t *testing.T) {
+	t.Parallel()
+	r, receipt := costedRigWith(t, `{"v":1,"currency":"XXX","rates":{"input":"0","output":"0","request":"1"}}`)
+	up := withCosts(r, r.billing, r.suppliers)
+	up.setReceipt(receipt)
+	up.setScript(failure(routing.ScopeEndpoint, true))
+	a := r.funded(1e12)
+	r.do("POST", "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
+	id := r.lastCall().ID
+	if row, ok := r.supplierRow(id); ok && (row.native != "0" || row.flag != "complete") {
+		t.Errorf("an unexecuted attempt left supplier row %+v", row)
+	}
+	if cost := r.count(`SELECT coalesce(sum(e.amount),0)::bigint FROM billing.entries e
+		JOIN billing.transactions t ON t.id=e.transaction_id WHERE t.request_id=$1 AND e.book='supplier_cost'`, id); cost != 0 {
+		t.Errorf("an unexecuted attempt cost %d", cost)
+	}
+	r.ledgerBalanced()
+}
+
 // checkTheSuppliersCost checks what a costed call left in the books and on the supplier's side. The books hold the
 // supplier's own amount for what the attempt used — the reported tokens, and any the relay had to count itself — and
 // never the sale price, a hundred times more; no cap counts a waiver. The supplier's row is the same attempt, written in
