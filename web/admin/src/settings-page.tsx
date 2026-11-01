@@ -27,7 +27,10 @@ export function SettingsPage<T>({
   query: UseQueryResult<T>;
   labels: SettingsLabels;
   facts: ComponentType<{ view: T; action: ReactNode }>;
-  dialogs: { edit: ComponentType<{ view: T; onClose: () => void }>; test: ComponentType<{ view: T; onClose: () => void }> };
+  dialogs: {
+    edit: ComponentType<{ view: T; onClose: () => void }>;
+    test: ComponentType<{ view: T; onClose: () => void }>;
+  };
 }) {
   const [editing, setEditing] = useState(false);
   const [testing, setTesting] = useState(false);

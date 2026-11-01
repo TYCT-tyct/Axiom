@@ -407,7 +407,9 @@ function SearchEnginePrices({
           <tr key={engine.name}>
             <Td>
               {engine.name}
-              {engine.default ? <span className="block text-label text-t3">{t("publicModels.defaultEngine")}</span> : null}
+              {engine.default ? (
+                <span className="block text-label text-t3">{t("publicModels.defaultEngine")}</span>
+              ) : null}
             </Td>
             <Td className="text-right whitespace-nowrap tabular-nums">
               {engine.price_per_search === "0"

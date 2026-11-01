@@ -210,6 +210,8 @@ export default {
     name: "Name",
     nameHint: "What a request names as its engine, such as searxng or firecrawl. Lowercase letters, digits, - and _.",
     kind: "Backend",
+    searxng: "SearXNG",
+    firecrawl: "Firecrawl",
     url: "Base URL",
     urlHint:
       "A SearXNG instance with the JSON format enabled, such as https://search.example.com; Firecrawl defaults to https://api.firecrawl.dev/v2.",
@@ -222,9 +224,15 @@ export default {
     markup: "Markup",
     markupHint: "Cost plus this ratio, like a model price's markup_ratio; 0.2 is a 20% markup.",
     price: "{{search}} per search, {{result}} per extra result",
-    published: "Published: {{search}} per search, {{result}} per extra result. A zero search price sells at the model's web_search price.",
+    published:
+      "Published: {{search}} per search, {{result}} per extra result. A zero search price sells at the model's web_search price.",
     source: "Configuration",
-    sources: { environment: "Environment", database: "Saved here", saved: "Old single-backend setting", none: "Nothing configured" },
+    sources: {
+      environment: "Environment",
+      database: "Saved here",
+      saved: "Old single-backend setting",
+      none: "Nothing configured",
+    },
     restart: "Restart",
     restartBody: "Saved; this server picks it up after a restart.",
     restartSaved: "Saved; restart this server before it searches with the new settings.",

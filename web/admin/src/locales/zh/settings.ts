@@ -202,8 +202,11 @@ export default {
     name: "名称",
     nameHint: "请求里 engine 写的名字，例如 searxng、firecrawl；小写字母、数字、- 和 _。",
     kind: "后端类型",
+    searxng: "SearXNG",
+    firecrawl: "Firecrawl",
     url: "基地址",
-    urlHint: "打开 JSON 格式的 SearXNG 实例，例如 https://search.example.com；Firecrawl 默认 https://api.firecrawl.dev/v2。",
+    urlHint:
+      "打开 JSON 格式的 SearXNG 实例，例如 https://search.example.com；Firecrawl 默认 https://api.firecrawl.dev/v2。",
     key: "API 密钥",
     keySet: "已设置，不会读出来",
     keyMissing: "未设置",
