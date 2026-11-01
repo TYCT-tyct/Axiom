@@ -295,3 +295,27 @@ func checkCutSearch(t *testing.T, h *harness, searcher *cutSearcher, charged int
 		t.Fatalf("attempts = %+v, want %d search charged", attempts, charged)
 	}
 }
+
+// TestServerLoopBrokenToolHopIsNotAnAnswer: in a call that does not stream, a hop that sent the web search call and
+// then broke off is not a partial answer to keep. The client gets the upstream error, the internal call stays hidden,
+// and no model usage is charged.
+func TestServerLoopBrokenToolHopIsNotAnAnswer(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
+		firstChunk := chatToolCall[:strings.Index(chatToolCall, "\n\n")+2]
+		h := newHarness(t, ctx, options{
+			client: protocol.Chat, request: []byte(strings.Replace(searchTool, `"stream":true`, `"stream":false`, 1)), search: searcher,
+			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
+			server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+			script: map[int][]scripted{1: {serve(beat{data: firstChunk}, beat{hangup: true})}},
+		})
+		h.run()
+		if h.w.status != http.StatusBadGateway || strings.Contains(h.w.body(), "openrouter_web_search") || len(searcher.queries) != 0 {
+			t.Fatalf("status = %d, searches = %d, body = %s; want a 502 that hides the call", h.w.status, len(searcher.queries), h.w.body())
+		}
+		attempts := h.settlements[0].outcome.Attempts
+		if len(attempts) != 1 || attempts[0].Result != billing.FailedBeforeCommit {
+			t.Fatalf("attempts = %+v, want one that failed before commit", attempts)
+		}
+	})
+}

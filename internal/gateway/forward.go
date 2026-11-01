@@ -275,6 +275,13 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 	}
 	a.usage, rec.Finish = relay.Usage(), finish
 	scope := scopeOf(a.obs.Fault)
+	if s.aggregate && s.loop != nil {
+		// A loop's sampling is the answer only once it has ended without a server call: one that broke off may be a tool
+		// call the gateway never ran, and what it holds must not reach the client as a reply to charge.
+		rec.Result = billing.FailedBeforeCommit
+		s.drop(relay)
+		return s.unanswered(a, e, again, scope)
+	}
 	if s.aggregate {
 		return s.brokeAggregate(a, relay, e, again, scope)
 	}
