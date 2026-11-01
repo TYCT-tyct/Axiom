@@ -38,6 +38,8 @@ func (b *bank) expire() int64 {
 }
 
 // checkStored compares what the allocation of the account stores with a replay of the whole ledger from nothing.
+//
+//nolint:cyclop // the stored and replayed allocation are compared field by field for a useful failure
 func (b *bank) checkStored(account uuid.UUID) {
 	b.t.Helper()
 	fresh := b.replayed(account)

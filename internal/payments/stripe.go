@@ -282,18 +282,26 @@ func (c *stripeChannel) QueryRefund(ctx context.Context, r RefundCall) (RefundSt
 	ctx, cancel := stripeDeadline(ctx)
 	defer cancel()
 	if r.ProviderRef != "" {
-		refund, err := c.client.V1Refunds.Retrieve(ctx, r.ProviderRef, nil)
-		if err != nil {
-			if stripeNotFound(err) {
-				return RefundState{}, ErrRefundNotFound
-			}
-			return RefundState{}, stripeFailure(err)
-		}
-		if !stripeRefundMatches(refund, r) {
-			return RefundState{}, errors.New("stripe: the refund found does not match its amount or currency")
-		}
-		return stripeRefund(refund)
+		return c.queryRefundByRef(ctx, r)
 	}
+	return c.queryRefundByIntent(ctx, r)
+}
+
+func (c *stripeChannel) queryRefundByRef(ctx context.Context, r RefundCall) (RefundState, error) {
+	refund, err := c.client.V1Refunds.Retrieve(ctx, r.ProviderRef, nil)
+	if err != nil {
+		if stripeNotFound(err) {
+			return RefundState{}, ErrRefundNotFound
+		}
+		return RefundState{}, stripeFailure(err)
+	}
+	if !stripeRefundMatches(refund, r) {
+		return RefundState{}, errors.New("stripe: the refund found does not match its amount or currency")
+	}
+	return stripeRefund(refund)
+}
+
+func (c *stripeChannel) queryRefundByIntent(ctx context.Context, r RefundCall) (RefundState, error) {
 	pi, err := c.paymentIntent(ctx, r.TradeNo)
 	if err != nil {
 		return RefundState{}, err

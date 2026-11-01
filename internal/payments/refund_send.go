@@ -149,15 +149,17 @@ func (p *Payments) callRefund(ctx context.Context, ch Channel, r PaymentsRefund,
 	}
 	result, err := ch.QueryRefund(ctx, call)
 	finishErr := p.finishQuery(ctx, o.MerchantID, token, queryHealthOutcome(ctx, err, false))
-	if finishErr == nil && errors.Is(err, ErrRefundNotFound) && canResend && p.refundKeyWindowOpen(ctx, r) {
+	if p.resendMissingRefund(ctx, ch, r, err, finishErr, canResend) {
 		// The first request may have died before it reached the channel. Within the key's window, sending the same
 		// RefundCall again is the only safe way to finish; after the window a missing refund proves nothing.
-		if !ch.Caps().Has(CapRefund) {
-			return result, err
-		}
 		return ch.Refund(ctx, call)
 	}
 	return result, errors.Join(err, finishErr)
+}
+
+func (p *Payments) resendMissingRefund(ctx context.Context, ch Channel, r PaymentsRefund, queryErr, finishErr error, canResend bool) bool {
+	return finishErr == nil && canResend && errors.Is(queryErr, ErrRefundNotFound) &&
+		ch.Caps().Has(CapRefund) && p.refundKeyWindowOpen(ctx, r)
 }
 
 func (p *Payments) saveRefundOutcome(ctx context.Context, row PaymentsRefund, outcome, provider string, noRecovery bool) error {

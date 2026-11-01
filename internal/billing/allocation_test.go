@@ -283,6 +283,7 @@ func checkReplays(t *testing.T, rows []LiveBatchesRow, log []movement, live *all
 	sameAllocation(t, "from nothing", fresh, live)
 }
 
+//nolint:cyclop // every field of a batch is compared so a divergence names the field, not just "different"
 func sameAllocation(t *testing.T, name string, got, live *allocation) {
 	t.Helper()
 	if got.unfunded != live.unfunded || got.at.compare(live.at) != 0 {
