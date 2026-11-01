@@ -272,9 +272,7 @@ function EndpointRow({
         </div>
       </Td>
       <Td className="hidden whitespace-nowrap xl:table-cell">
-        {endpoint.quantization
-          ? t(`suppliers.quantization.levels.${endpoint.quantization}`)
-          : t("suppliers.quantization.none")}
+        {endpoint.quantization ?? t("suppliers.quantization.none")}
       </Td>
       <Td className="whitespace-nowrap">
         <State tone={endpointTones[state]}>{t(`suppliers.endpoints.state.${state}`)}</State>

@@ -159,7 +159,7 @@ export function QuantizationDialog({
           <option value="">{t("suppliers.quantization.none")}</option>
           {levels.map((level) => (
             <option key={level} value={level}>
-              {t(`suppliers.quantization.levels.${level}`)}
+              {level}
             </option>
           ))}
         </SelectField>
@@ -179,7 +179,7 @@ export function QuantizationDialog({
       done={(changed) => (
         <p>
           {changed.quantization
-            ? t("suppliers.quantization.done", { level: t(`suppliers.quantization.levels.${changed.quantization}`) })
+            ? t("suppliers.quantization.done", { level: changed.quantization })
             : t("suppliers.quantization.cleared")}
         </p>
       )}
