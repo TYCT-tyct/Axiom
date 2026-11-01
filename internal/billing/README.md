@@ -287,7 +287,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 |---|---|---|---|
 | 预留行（请求 ID、持有者、限额窗口、段号 1、金额、截止时间、挂起）与三层占用 | 准入 | billing | 主键 `request_id`；写入栅栏；余额行锁守底线 |
 | 追加（累计目标） | 每段一个 | billing | 已覆盖即成功不写；否则 `WHERE request_id=$r AND segment=<锁内读到的> AND state='pending'`；写入栅栏 |
-| 每次尝试的成本分录，以及供应商侧每次供应商请求的成本行（用量、回执、供应商单位下的估算、结束时间；循环每跳一行） | 结算 | billing、suppliers | `(request_id, attempt_seq, attempt_cost)`；cost 分录与 `attempt_costs` 行同成同败；主键 `(request_id, attempt_seq, hop)` |
+| 每次尝试的成本分录，以及供应商侧每次供应商请求的成本行（用量、回执、供应商单位下的估算、结束时间；循环每跳一行） | 结算 | billing、suppliers | `(request_id, attempt_seq, attempt_cost)`；cost 分录与 `attempt_cost_hops` 行同成同败；逐跳主键 `(request_id, attempt_seq, hop)`；`attempt_costs` 保留旧的一行聚合键 |
 | 请求结算、余额、花费计数、预留终态；或只释放（终态时同事务写 `EndRequest`） | 结算 | billing、suppliers | `(request_id, 0, settle, 0)`；锁内按预留状态分支 |
 | 加额度 | 后台（平台范围） | billing | `(credit_id, 0, credit, 0)`；批次主键；审计日志同事务 |
 | 额度到期作废、批次的已用与已作废、分配的位置 | 到期任务（平台范围），重放的页一个事务，作废一个事务 | billing | `(batch_id, 0, expire, 作废前的累计作废额)`；作废在余额行锁内、重放核对余额；不加锁的页按位置做比较后再写 |

@@ -10,6 +10,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
@@ -469,3 +470,95 @@ data: {"id":"gen-1","object":"chat.completion.chunk","created":1,"model":"up-1",
 data: [DONE]
 
 `
+
+// perCallCosts prices each supplier request once, as a schedule with a per-request price does. It records how many
+// requests were priced, so a loop that reprices all segments under the last receipt is visible.
+type perCallCosts struct{ calls int }
+
+func (c *perCallCosts) Credits(_ suppliers.AttemptReceipt, _ []catalog.Usage, _ platform.Currency) (suppliers.AttemptCost, int64, bool, error) {
+	c.calls++
+	return suppliers.AttemptCost{Native: platform.AmountExact(1), Flag: suppliers.CostComplete}, 1, true, nil
+}
+
+// TestServerLoopChargesEverySupplierRequest: a per-request price is charged once per hop, and the aggregate cost is the
+// sum of the hop results rather than one pricing of all segments under the last receipt.
+func TestServerLoopChargesEverySupplierRequest(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		costs := &perCallCosts{}
+		upstream := protocol.Chat
+		h := newHarness(t, ctx, options{
+			client: protocol.Chat, upstream: &upstream, request: []byte(searchTool),
+			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
+			search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
+			server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+			costs:  costs,
+			script: map[int][]scripted{1: {serve(beat{data: chatToolCall}), serve(beat{data: chatAnswer})}},
+		})
+		h.run()
+		if h.w.status != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", h.w.status, h.w.body())
+		}
+		rec := h.settlements[0].outcome.Attempts[0]
+		if len(rec.Hops) != 2 || rec.Cost != 2 || costs.calls != 2 {
+			t.Fatalf("hops = %+v, cost = %d, priced = %d; want two one-credit hops", rec.Hops, rec.Cost, costs.calls)
+		}
+		for i, hop := range rec.Hops {
+			if hop.Cost != 1 || hop.Estimate.Native.Cmp(platform.AmountExact(1)) != 0 || !hop.CostKnown {
+				t.Fatalf("hop %d = %+v, want one known credit", i, hop)
+			}
+		}
+		if rec.Estimate.Native.Cmp(platform.AmountExact(2)) != 0 {
+			t.Fatalf("aggregate native cost = %s, want 2", rec.Estimate.Native.AppendDecimal(nil))
+		}
+	})
+}
+
+// TestServerLoopKeepsAFailedRequest: the second hop can fail before it reaches a Relay, but the supplier may still have
+// charged it. Its receipt must be a row with the first hop's, and an explicit refusal must be distinguished from an
+// execution whose usage is unknown.
+func TestServerLoopKeepsAFailedRequest(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		costs := &perCallCosts{}
+		upstream := protocol.Chat
+		h := newHarness(t, ctx, options{
+			client: protocol.Chat, upstream: &upstream, request: []byte(searchTool),
+			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
+			search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
+			server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+			costs:  costs,
+			script: map[int][]scripted{1: {serve(beat{data: chatToolCall}), failure(routing.ScopeEndpoint, false)}},
+		})
+		h.run()
+		if h.w.status != http.StatusBadGateway {
+			t.Fatalf("status = %d, body = %s, want 502", h.w.status, h.w.body())
+		}
+		rec := h.settlements[0].outcome.Attempts[0]
+		if len(rec.Hops) != 2 || len(rec.Hops[1].Segments) != 0 {
+			t.Fatalf("hops = %+v, want the failed request as the second hop", rec.Hops)
+		}
+		if len(rec.Receipts) != 2 || costs.calls != 2 {
+			t.Fatalf("receipts = %d, priced = %d; want both requests kept", len(rec.Receipts), costs.calls)
+		}
+		if rec.Hops[1].CostKnown {
+			t.Fatalf("a request whose execution is unknown was priced as known: %+v", rec.Hops[1])
+		}
+
+		costs = &perCallCosts{}
+		h = newHarness(t, ctx, options{
+			client: protocol.Chat, upstream: &upstream, request: []byte(searchTool),
+			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
+			search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
+			server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+			costs:  costs,
+			script: map[int][]scripted{1: {serve(beat{data: chatToolCall}), failure(routing.ScopeEndpoint, true)}},
+		})
+		h.run()
+		rec = h.settlements[0].outcome.Attempts[0]
+		if len(rec.Hops) != 2 || rec.Hops[1].Estimate.Conversion != suppliers.ConversionNotRun || rec.Hops[1].Cost != 0 {
+			t.Fatalf("a refused request = %+v, want a zero-cost not-executed hop", rec.Hops)
+		}
+		if !rec.Hops[1].CostKnown || costs.calls != 1 {
+			t.Fatalf("a refused request was priced (calls = %d): %+v", costs.calls, rec.Hops[1])
+		}
+	})
+}

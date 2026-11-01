@@ -64,10 +64,38 @@ SELECT count(*)::int AS named FROM lost;
 -- person; its flag is returned, because the estimate of a probe is an upper bound and judging the endpoint by it would
 -- say nothing (H-I9).
 WITH pairs AS (
-    SELECT cr.id AS charge_id, ac.request_id, ac.attempt_seq, ac.hop
+    SELECT cr.id AS charge_id, h.request_id, h.attempt_seq, h.hop
+    FROM suppliers.charge_records cr
+    JOIN suppliers.attempt_cost_hops h ON h.supplier_id = cr.supplier_id AND h.charge_ref = cr.charge_ref
+    WHERE cr.state <> 'matched' AND cr.funding = 'wallet' AND h.charge_record_id IS NULL
+        AND (SELECT count(*) FROM suppliers.attempt_cost_hops x
+             WHERE x.supplier_id = cr.supplier_id AND x.charge_ref = cr.charge_ref) = 1
+    ORDER BY cr.id
+    LIMIT @batch::int
+), claimed AS (
+    UPDATE suppliers.attempt_cost_hops h SET charge_record_id = p.charge_id, state = 'matched'
+    FROM pairs p
+    WHERE h.request_id = p.request_id AND h.attempt_seq = p.attempt_seq AND h.hop = p.hop AND h.charge_record_id IS NULL
+    RETURNING p.charge_id, h.request_id, h.attempt_seq, h.hop, h.endpoint_id, h.cost_schedule_id, h.estimated_native, h.cost_flag, h.test
+)
+UPDATE suppliers.charge_records cr SET state = 'matched', attribution = 'attempt', attempt_request_id = claimed.request_id,
+    attempt_seq = claimed.attempt_seq, attempt_hop = claimed.hop, lost_request_id = NULL, revision = cr.revision + 1
+FROM claimed
+WHERE cr.id = claimed.charge_id AND cr.state <> 'matched'
+RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native, claimed.estimated_native, claimed.cost_flag,
+    claimed.endpoint_id, claimed.cost_schedule_id, claimed.request_id, claimed.attempt_seq, claimed.test,
+    (SELECT s.native_unit FROM suppliers.suppliers s WHERE s.id = cr.supplier_id) AS native_unit;
+
+-- name: MatchLegacyCharges :many
+-- The same matching for a row an old node wrote during a rolling upgrade. A request that has detail rows is excluded:
+-- the new matcher must not attribute one of its charges to the aggregate row as well.
+WITH pairs AS (
+    SELECT cr.id AS charge_id, ac.request_id, ac.attempt_seq, 0::smallint AS hop
     FROM suppliers.charge_records cr
     JOIN suppliers.attempt_costs ac ON ac.supplier_id = cr.supplier_id AND ac.charge_ref = cr.charge_ref
     WHERE cr.state <> 'matched' AND cr.funding = 'wallet' AND ac.charge_record_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM suppliers.attempt_cost_hops h
+                        WHERE h.request_id = ac.request_id AND h.attempt_seq = ac.attempt_seq)
         AND (SELECT count(*) FROM suppliers.attempt_costs x
              WHERE x.supplier_id = cr.supplier_id AND x.charge_ref = cr.charge_ref) = 1
     ORDER BY cr.id
@@ -75,8 +103,8 @@ WITH pairs AS (
 ), claimed AS (
     UPDATE suppliers.attempt_costs ac SET charge_record_id = p.charge_id, state = 'matched'
     FROM pairs p
-    WHERE ac.request_id = p.request_id AND ac.attempt_seq = p.attempt_seq AND ac.hop = p.hop AND ac.charge_record_id IS NULL
-    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.hop, ac.endpoint_id, ac.cost_schedule_id, ac.estimated_native, ac.cost_flag, ac.test
+    WHERE ac.request_id = p.request_id AND ac.attempt_seq = p.attempt_seq AND ac.charge_record_id IS NULL
+    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, p.hop, ac.endpoint_id, ac.cost_schedule_id, ac.estimated_native, ac.cost_flag, ac.test
 )
 UPDATE suppliers.charge_records cr SET state = 'matched', attribution = 'attempt', attempt_request_id = claimed.request_id,
     attempt_seq = claimed.attempt_seq, attempt_hop = claimed.hop, lost_request_id = NULL, revision = cr.revision + 1
@@ -127,10 +155,22 @@ UPDATE suppliers.endpoints SET cost_state = 'unknown', cost_state_reason = 'unde
 WHERE id = @id AND cost_state = 'known' AND cost_schedule_id = @cost_schedule_id;
 
 -- name: ListUnmatchedAttempts :many
--- One batch of the attempts waiting past the grace, in a fixed order, after the position of the last one given before.
--- A test generation is not one: whether the supplier bills a probe at all is nothing a person can chase, and its cost is
--- the platform's own (H-I9).
-SELECT request_id, attempt_seq, hop, charge_ref, finished_at FROM suppliers.attempt_costs
+-- One batch of the legacy attempts waiting past the grace, in a fixed order, after the position of the last one given
+-- before. A new node writes detail rows, which ListUnmatchedHops reads; this query keeps old nodes' rows visible.
+-- A test generation is not one: whether the supplier bills a probe at all is nothing a person can chase, and its cost
+-- is the platform's own (H-I9).
+SELECT ac.request_id, ac.attempt_seq, 0::smallint AS hop, ac.charge_ref, ac.finished_at FROM suppliers.attempt_costs ac
+WHERE ac.state = 'pending' AND ac.charge_ref IS NOT NULL AND ac.finished_at < @before AND NOT ac.test
+    AND NOT EXISTS (SELECT 1 FROM suppliers.attempt_cost_hops h
+                    WHERE h.request_id = ac.request_id AND h.attempt_seq = ac.attempt_seq)
+    AND (ac.finished_at, ac.request_id, ac.attempt_seq) > (@after_at::timestamptz, @after_request::uuid, @after_seq::smallint)
+ORDER BY ac.finished_at, ac.request_id, ac.attempt_seq
+LIMIT @batch::int;
+
+-- name: ListUnmatchedHops :many
+-- The same read for the per-hop detail rows written by this version. The cursor includes the hop because one gateway
+-- attempt can have several.
+SELECT request_id, attempt_seq, hop, charge_ref, finished_at FROM suppliers.attempt_cost_hops
 WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < @before AND NOT test
     AND (finished_at, request_id, attempt_seq, hop) > (@after_at::timestamptz, @after_request::uuid, @after_seq::smallint, @after_hop::smallint)
 ORDER BY finished_at, request_id, attempt_seq, hop

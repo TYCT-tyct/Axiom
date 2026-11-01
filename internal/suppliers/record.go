@@ -210,46 +210,174 @@ func setBasis(row *store.AttemptCostRow, a AttemptRecord) {
 	}
 }
 
-// RecordAttempts writes the cost and reconciliation key of a request's attempts, all in one statement, in the
-// transaction of billing's settlement, so that they are there if and only if the cost billing booked is. An attempt
-// already recorded stays as it was: a settlement repeated after a crash changes nothing.
+// RecordAttempts writes the cost and reconciliation keys of a request's attempts in billing's settlement transaction,
+// so that they are there if and only if the cost billing booked is. An attempt already recorded stays as it was: a
+// settlement repeated after a crash changes nothing.
+//
+// The legacy attempt_costs row remains one per gateway attempt, with the sum of the hops: that is the row old nodes
+// insert and match against during a rolling upgrade. The new attempt_cost_hops table carries the per-hop rows; a
+// request whose loop failed after a search keeps the failed request's row even though no Relay consumed it.
 func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) error {
-	rows := make([]store.AttemptCostRow, 0, len(attempts))
+	details, groups, order, err := attemptGroups(attempts)
+	if err != nil {
+		return err
+	}
+	aggregates, err := aggregateAttemptRows(groups, order)
+	if err != nil {
+		return err
+	}
+	if len(aggregates) > 0 {
+		if err := store.InsertAttemptCosts(ctx, tx, aggregates); err != nil {
+			return fmt.Errorf("record attempts: %w", err)
+		}
+	}
+	if len(details) > 0 {
+		if err := store.InsertAttemptCostHops(ctx, tx, details); err != nil {
+			return fmt.Errorf("record attempt hops: %w", err)
+		}
+	}
+	return nil
+}
+
+// attemptGroups validates the records and keeps the detail rows in input order, grouped by the legacy attempt key.
+func attemptGroups(attempts []AttemptRecord) ([]store.AttemptCostRow, map[attemptKey][]AttemptRecord, []attemptKey, error) {
+	details := make([]store.AttemptCostRow, 0, len(attempts))
+	groups := make(map[attemptKey][]AttemptRecord, len(attempts))
+	order := make([]attemptKey, 0, len(attempts))
 	for i := range attempts {
 		a := &attempts[i]
 		if !a.Seq.Valid() {
-			return fmt.Errorf("record attempts: attempt number %d of request %s", a.Seq, a.Request)
+			return nil, nil, nil, fmt.Errorf("record attempts: attempt number %d of request %s", a.Seq, a.Request)
 		}
 		if a.Hop < 0 || a.Hop > 255 {
-			return fmt.Errorf("record attempts: hop %d of attempt %d of request %s", a.Hop, a.Seq, a.Request)
+			return nil, nil, nil, fmt.Errorf("record attempts: hop %d of attempt %d of request %s", a.Hop, a.Seq, a.Request)
 		}
-		usage, err := usageOf(a.Usage)
+		row, err := attemptCostRow(*a)
 		if err != nil {
-			return err
+			return nil, nil, nil, err
 		}
-		estimate, err := decimal(a.Cost.Native)
+		details = append(details, row)
+		k := attemptKey{uuid.UUID(a.Request), int16(a.Seq)}
+		if _, ok := groups[k]; !ok {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], *a)
+	}
+	return details, groups, order, nil
+}
+
+type attemptKey struct {
+	request uuid.UUID
+	seq     int16
+}
+
+// aggregateAttemptRows builds one old-format row per attempt. A loop has several detail rows but still one aggregate
+// row, because charge_records keeps its foreign key to the old table during a rolling upgrade.
+func aggregateAttemptRows(groups map[attemptKey][]AttemptRecord, order []attemptKey) ([]store.AttemptCostRow, error) {
+	aggregates := make([]store.AttemptCostRow, 0, len(order))
+	for _, k := range order {
+		group := groups[k]
+		a := group[0]
+		a.Hop = 0
+		if len(group) > 1 {
+			a = mergeAttempts(group)
+		}
+		row, err := attemptCostRow(a)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		row := store.AttemptCostRow{
-			RequestID: uuid.UUID(a.Request), AttemptSeq: int16(a.Seq), Hop: a.Hop, SiteID: tenant(&a.Site), AccountID: tenant(&a.Account),
-			SupplierID: a.Receipt.supplier, CredentialID: a.Receipt.credential, EndpointID: a.Receipt.endpoint,
-			ScheduleID: a.Receipt.schedule, Usage: usage, PricedAt: a.Receipt.pricedAt, FinishedAt: a.FinishedAt,
-			CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate, Test: a.Test,
+		aggregates = append(aggregates, row)
+	}
+	return aggregates, nil
+}
+
+// mergeAttempts summarizes a loop for the legacy one-row table. The charge reference is deliberately empty: each hop
+// has its own reference, and leaving one here would let an old matcher attribute a hop's charge to the whole attempt.
+func mergeAttempts(group []AttemptRecord) AttemptRecord {
+	out := group[len(group)-1]
+	out.Hop, out.Usage = 0, nil
+	out.Receipt.ref = ""
+	out.FinishedAt = group[0].FinishedAt
+	out.Cost = group[0].Cost
+	for _, a := range group {
+		out.Usage = append(out.Usage, a.Usage...)
+		out.Test = out.Test || a.Test
+		if a.FinishedAt.After(out.FinishedAt) {
+			out.FinishedAt = a.FinishedAt
 		}
-		setBasis(&row, *a)
-		if a.Receipt.ref != "" {
-			row.ChargeRef = &a.Receipt.ref
+	}
+	for _, a := range group[1:] {
+		mergeAttemptCost(&out.Cost, a.Cost)
+	}
+	return out
+}
+
+// mergeAttemptCost folds one hop's supplier cost into the legacy aggregate. The summed flag is the weakest part; the
+// native amount is added exactly, and an overflow leaves the conversion state so the row cannot be read as known.
+func mergeAttemptCost(dst *AttemptCost, src AttemptCost) {
+	dst.Missing |= src.Missing
+	dst.Unknown = dst.Unknown || src.Unknown
+	dst.Conversion = mergeAttemptConversion(dst.Conversion, src.Conversion)
+	switch {
+	case dst.Flag == CostUnpriced || src.Flag == CostUnpriced:
+		dst.Flag = CostUnpriced
+	case dst.Flag == CostComplete || src.Flag == CostComplete:
+		dst.Flag = CostComplete
+	default:
+		dst.Flag = CostNoUsage
+	}
+	n, err := dst.Native.Add(src.Native)
+	if err != nil {
+		dst.Conversion = ConversionOverflow
+		return
+	}
+	dst.Native = n
+}
+
+func mergeAttemptConversion(a, b Conversion) Conversion {
+	if a == ConversionUnset {
+		return b
+	}
+	if b == ConversionUnset || a == b {
+		return a
+	}
+	if a == ConversionNotRun {
+		return b
+	}
+	if b == ConversionNotRun {
+		return a
+	}
+	for _, c := range []Conversion{
+		ConversionUnpriced, ConversionOverflow, ConversionMissingRate, ConversionConverted,
+	} {
+		if a == c || b == c {
+			return c
 		}
-		rows = append(rows, row)
 	}
-	if len(rows) == 0 {
-		return nil
+	return ConversionSame
+}
+
+// attemptCostRow is one attempt or hop as the store writes it.
+func attemptCostRow(a AttemptRecord) (store.AttemptCostRow, error) {
+	usage, err := usageOf(a.Usage)
+	if err != nil {
+		return store.AttemptCostRow{}, err
 	}
-	if err := store.InsertAttemptCosts(ctx, tx, rows); err != nil {
-		return fmt.Errorf("record attempts: %w", err)
+	estimate, err := decimal(a.Cost.Native)
+	if err != nil {
+		return store.AttemptCostRow{}, err
 	}
-	return nil
+	row := store.AttemptCostRow{
+		RequestID: uuid.UUID(a.Request), AttemptSeq: int16(a.Seq), Hop: a.Hop, SiteID: tenant(&a.Site), AccountID: tenant(&a.Account),
+		SupplierID: a.Receipt.supplier, CredentialID: a.Receipt.credential, EndpointID: a.Receipt.endpoint,
+		ScheduleID: a.Receipt.schedule, Usage: usage, PricedAt: a.Receipt.pricedAt, FinishedAt: a.FinishedAt,
+		CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate, Test: a.Test,
+	}
+	setBasis(&row, a)
+	if a.Receipt.ref != "" {
+		row.ChargeRef = &a.Receipt.ref
+	}
+	return row, nil
 }
 
 // usageOf is the usage of an attempt as stored: the counts of each item added over the segments, and the tier. An

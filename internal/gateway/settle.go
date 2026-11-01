@@ -276,6 +276,14 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	if len(a.receipts) > 1 {
 		rec.Receipts = append([]suppliers.AttemptReceipt(nil), a.receipts...)
 	}
+	if a.s.loop != nil {
+		// Every supplier request of the loop, including one that failed before a Relay, is a hop of its own. The
+		// attempt's cost is their sum, not a second pricing of all segments under the last receipt.
+		rec.Segments = a.hops
+		if a.recordHops(rec) {
+			return
+		}
+	}
 	if rec.Result == billing.NotExecuted {
 		rec.CostKnown = true
 		rec.Estimate.Conversion = suppliers.ConversionNotRun
@@ -283,10 +291,9 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		return
 	}
 	if len(a.hops) > 0 {
-		// The model-side loop sampled the model once per hop; each hop's usage is its own segment (docs/domains/billing.md
-		// 「预留与结算」).
+		// A non-loop attempt with sampled usage (a pass-through of a compact response, for instance) keeps its single
+		// aggregate price.
 		rec.Segments = a.hops
-		a.recordHops(rec)
 	} else {
 		rec.Segments = estimated(a.usage, a.seen, a.demand(), a.entry.Limits, a.meter.OutputCap(),
 			billing.TokenizerOf(a.entry.Target.Model))
@@ -308,74 +315,6 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	// not a cost known to be what the supplier charged, whatever it converted to.
 	rec.CostKnown = known && err == nil && c.Flag == suppliers.CostComplete
 	rec.Cost, rec.Estimate = credits, c
-}
-
-// recordHops gives suppliers one cost and receipt per supplier request. The aggregate Estimate and Cost stay the
-// gateway attempt's own numbers; a charge is reconciled against the hop that produced it.
-func (a *attempt) recordHops(rec *billing.AttemptResult) {
-	if len(a.hopEnds) == 0 || len(a.hopReceipts) < len(a.hopEnds) {
-		return
-	}
-	from := 0
-	for i, end := range a.hopEnds {
-		if end < from || end > len(a.hops) {
-			return
-		}
-		segs := a.hops[from:end]
-		from = end
-		receipt := a.hopReceipts[i].WithExchange(a.entry.Exchange)
-		usage := make([]catalog.Usage, len(segs))
-		for j, seg := range segs {
-			usage[j] = seg.Usage
-		}
-		c, _, _, err := a.s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
-		if err != nil {
-			c.Flag = suppliers.CostUnpriced
-		}
-		c.Flag = costFlag(segs, c.Flag)
-		rec.Hops = append(rec.Hops, billing.AttemptHop{
-			Segments: segs, Receipt: receipt, Estimate: c, FinishedAt: time.Now(),
-		})
-	}
-}
-
-// addSearchUsage adds the call's external searches and file parses to the user's side of the charged attempt after the
-// supplier's cost was computed from the supplier's own usage. The work is ours, not the supplier's: one explicit zero
-// report cannot hide it, and a retry does not put it in another attempt's supplier price. Only the last attempt is
-// charged (billing.Settle), so only that one carries the count.
-func addSearchUsage(rec *billing.AttemptResult, searches int64) {
-	if searches <= 0 || len(rec.Segments) == 0 {
-		return
-	}
-	counts := make(map[catalog.Item]int64, catalog.NumItems)
-	for it := range catalog.NumItems {
-		counts[it] = rec.Segments[0].Usage.Count(it)
-	}
-	counts[catalog.ItemWebSearch] += searches
-	rec.Segments[0].Usage = recountCapped(rec.Segments[0].Usage, counts)
-}
-
-// costFlag is what the supplier's row says of how far its estimate can be trusted, decided here, where the source of the
-// usage is known (suppliers' Cost sees counts only): reconciliation judges a price only against a complete estimate. An
-// attempt whose upstream reported no usage at all has none, whatever the estimates put in its place; one with some
-// counts the upstream did not report, or that the schedule did not price, is unpriced; priced is the flag suppliers gave.
-func costFlag(segments []billing.Segment, priced suppliers.CostFlag) suppliers.CostFlag {
-	reported, guessed := false, false
-	for _, seg := range segments {
-		reported = reported || seg.Reported != 0
-		for it := range catalog.NumItems {
-			guessed = guessed || (seg.Usage.Count(it) > 0 && !seg.Reported.Has(it))
-		}
-	}
-	switch {
-	case !reported:
-		return suppliers.CostNoUsage
-	case priced != suppliers.CostComplete:
-		return priced
-	case guessed:
-		return suppliers.CostUnpriced
-	}
-	return suppliers.CostComplete
 }
 
 // demand is the request as billing estimates it: what the request says, and its text counted in the tokens of the

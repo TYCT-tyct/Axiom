@@ -241,7 +241,8 @@ type attempt struct {
 	nextUsage   protocol.UsageContext
 	receipts    []suppliers.AttemptReceipt // one per supplier request: a loop hop acquires its own slot and RPM
 	hopEnds     []int                      // a.hops index after each finished hop
-	hopReceipts []suppliers.AttemptReceipt // receipt of each finished hop, parallel to hopEnds
+	failure     *suppliers.Failure         // the last request's failure, when it did not reach a Relay
+	sent        bool                       // whether the connection now held has sent a request
 
 	asked   billing.ExtendRequest
 	landing chan error // the outcome of the extension asked for, nil when none is in flight
@@ -290,9 +291,12 @@ func (a *attempt) close(ctx context.Context) {
 		receipt = a.receipts[len(a.receipts)-1]
 	}
 	if a.conn != nil {
-		receipt = a.s.done(a.conn).WithExchange(a.entry.Exchange)
-		a.receipts = append(a.receipts, receipt)
-		a.hopReceipts = append(a.hopReceipts, receipt)
+		done := a.s.done(a.conn).WithExchange(a.entry.Exchange)
+		a.conn = nil
+		if a.sent {
+			receipt = done
+			a.receipts = append(a.receipts, receipt)
+		}
 	}
 	a.obs.Credential = receipt.CredentialID()
 	a.result(receipt)
@@ -342,6 +346,7 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 	defer a.close(ctx)
 	resp, fail := a.send(ctx, up, held)
 	if fail != nil {
+		a.failure = fail
 		a.obs.Failure, a.obs.Cut, a.obs.Ended = fail, cutOf(ctx), time.Now()
 		return s.failed(a, fail)
 	}
@@ -367,6 +372,7 @@ func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*
 	}
 	wait := time.AfterFunc(waitFor, func() { a.cancel(errHeaderWait) })
 	resp, fail := a.conn.Send(ctx, call)
+	a.sent = true
 	wait.Stop() // at once: a late firing would cancel the stream the headers began
 	return resp, fail
 }

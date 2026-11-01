@@ -445,14 +445,15 @@ func TestSettlementsKeepEveryLoopHop(t *testing.T) {
 			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 			h := b.hold(1000)
 			o := outcome(Committed, FinishStop, used(t, 50, 20, 1))
-			o.Attempts[0].Hops = []AttemptHop{hop(), hop()}
+			failed := AttemptHop{Estimate: suppliers.AttemptCost{Conversion: suppliers.ConversionNotRun, Flag: suppliers.CostComplete}, FinishedAt: time.Now()}
+			o.Attempts[0].Hops = []AttemptHop{hop(), failed}
 			settle(t, b, h, o)
 			rows := b.supplies.attempts[h.id]
 			if len(rows) != 2 || rows[0].Hop != 0 || rows[1].Hop != 1 {
-				t.Fatalf("suppliers got %+v, want one row for each loop hop", rows)
+				t.Fatalf("suppliers got %+v, want one row for each supplier request", rows)
 			}
-			if len(rows[0].Usage) == 0 || len(rows[1].Usage) == 0 {
-				t.Fatalf("a hop was stored without its usage: %+v", rows)
+			if len(rows[0].Usage) == 0 || len(rows[1].Usage) != 0 {
+				t.Fatalf("a hop's usage was lost: %+v", rows)
 			}
 			b.balanced()
 		})

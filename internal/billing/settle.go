@@ -63,6 +63,8 @@ type AttemptHop struct {
 	Segments   []Segment
 	Receipt    suppliers.AttemptReceipt
 	Estimate   suppliers.AttemptCost
+	Cost       int64 // what this hop contributes to the attempt's own cost, in billionths of a credit
+	CostKnown  bool
 	FinishedAt time.Time
 }
 

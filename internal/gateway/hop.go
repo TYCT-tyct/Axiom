@@ -141,8 +141,8 @@ func (a *attempt) sendNext(ctx context.Context) *ended {
 	// this call is entitled to reuse it. conn is cleared so a failed acquire cannot call Done twice.
 	prev := s.done(a.conn).WithExchange(a.entry.Exchange)
 	a.receipts = append(a.receipts, prev)
-	a.hopReceipts = append(a.hopReceipts, prev)
 	a.conn = nil
+	a.sent = false
 	conn, err := s.x.Upstreams.Acquire(uuid.UUID(a.entry.Endpoint))
 	if err != nil {
 		s.x.Limits.Queue.Wake()
@@ -162,6 +162,7 @@ func (a *attempt) sendNext(ctx context.Context) *ended {
 	}
 	resp, fail := a.send(sendCtx, up, held) //nolint:bodyclose // the body is kept in a.nextBody and closed by stream
 	if fail != nil {
+		a.failure = fail
 		s.dropOut()
 		_, e := s.failed(a, fail)
 		rec := &s.ends[a.i]
