@@ -54,8 +54,11 @@ export function MailSettings() {
         edit: t("settings.mail.edit"),
         test: t("settings.mail.test"),
       }}
-      facts={MailFacts}
-      dialogs={{ edit: MailEditDialog, test: MailTestDialog }}
+      facts={({ view, action }) => <MailFacts view={view} action={action} />}
+      dialogs={{
+        edit: ({ view, onClose }) => <MailEditDialog view={view} onClose={onClose} />,
+        test: ({ onClose }) => <MailTestDialog onClose={onClose} />,
+      }}
     />
   );
 }
