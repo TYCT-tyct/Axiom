@@ -159,7 +159,12 @@ func DemandOf(req *protocol.Request) billing.Demand {
 		Direct: req.Format.Direct(), InputBytes: req.MaxInputBytes,
 		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers, Requests: 1,
 	}
-	if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {
+	if req.ServerSearch != nil {
+		// The gateway's web search loop samples the model once per search, each with its own output limit.
+		d.ServerTools = append(d.ServerTools, billing.ServerTool{
+			Item: catalog.ItemWebSearch, MaxUses: req.WebSearches, Repeats: req.ServerSearch.Loop,
+		})
+	} else if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.WebSearches})
 	}
 	if req.Web != nil {

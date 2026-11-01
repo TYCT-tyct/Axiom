@@ -234,6 +234,30 @@ func TestCallAndAttemptsRoundTrip(t *testing.T) {
 	}
 }
 
+// withAttempts is rec with n attempts numbered in order, the later ones copies of its second.
+func withAttempts(rec CallRecord, n int) CallRecord {
+	attempts := rec.Attempts[:2:2]
+	for len(attempts) < n {
+		a := rec.Attempts[1]
+		a.Seq = platform.AttemptSeq(len(attempts) + 1) //nolint:gosec // G115: a test's few attempts
+		attempts = append(attempts, a)
+	}
+	rec.Attempts = attempts
+	return rec
+}
+
+// TestALoopsAttemptsAreKept: every sampling of a model-side loop is an attempt, so a call keeps up to
+// platform.MaxAttemptSeq of them, which the table's widened check (00016) accepts.
+func TestALoopsAttemptsAreKept(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	rec := withAttempts(record(uuid.NewV7(), now), platform.MaxAttemptSeq)
+	keep(t, db, rec)
+	if got := trace(t, db, rec.ID); len(got.Attempts) != platform.MaxAttemptSeq || got.Attempts[platform.MaxAttemptSeq-1].Seq != platform.MaxAttemptSeq {
+		t.Fatalf("read back %d attempts, want %d in order", len(got.Attempts), platform.MaxAttemptSeq)
+	}
+}
+
 // trace reads a call's chain in the platform scope.
 func trace(t *testing.T, db *pg.DB, id uuid.UUID) CallRecord {
 	t.Helper()

@@ -205,10 +205,10 @@ func TestRecordingAttemptsIsOneStatementAndRepeatable(t *testing.T) {
 	}
 	bad := newRequest()
 	err := w.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		return RecordAttempts(t.Context(), tx, []AttemptRecord{w.attempt(bad, 1, "x"), w.attempt(bad, 4, "y")})
+		return RecordAttempts(t.Context(), tx, []AttemptRecord{w.attempt(bad, 1, "x"), w.attempt(bad, platform.MaxAttemptSeq+1, "y")})
 	})
 	if err == nil || w.count("SELECT count(*) FROM suppliers.attempt_costs WHERE request_id = $1", uuid.UUID(bad)) != 0 {
-		t.Errorf("an attempt number 4: %v", err)
+		t.Errorf("an attempt number past platform.MaxAttemptSeq: %v", err)
 	}
 }
 

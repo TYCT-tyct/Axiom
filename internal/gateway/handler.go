@@ -188,6 +188,7 @@ type Call struct {
 	// search instead. nativeSearch is the most searches the gateway turns on upstream, 0 when it turns on none.
 	searchBackend *websearch.Backend
 	nativeSearch  int
+	serverLoop    bool                      // openrouter:web_search runs the model-side loop through searchBackend
 	searchPrice   platform.UnitPrice        // the backend's published price per search, zero to use the model's
 	files         []protocol.FileAnnotation // the annotations a parsed Chat reply returns, so the client can skip reparsing
 	Header        http.Header               // the client's values of the headers that may go upstream, which headers.go derives per attempt
@@ -393,8 +394,22 @@ func keyKey(c accounts.Caller) string {
 	return string(id[:])
 }
 
+// prepareServer refuses an openrouter:web_search tool this node cannot serve and removes its declaration, so routing,
+// the quote and the converters see the body the gateway will send.
+func (h *Handler) prepareServer(c *Call, body []byte, req protocol.Request) ([]byte, protocol.Request, error) {
+	if ref := h.checkServerTool(&req, body); ref != nil {
+		return nil, req, ref
+	}
+	if req.ServerSearch == nil {
+		return body, req, nil
+	}
+	return h.stripServerTool(c, body, req)
+}
+
 // read reads the body and everything the request says: its summary, the models, its session and its count in the
 // rate window. Nothing here touches the database.
+//
+//nolint:cyclop // one branch per request plugin and refusal
 func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	body, err := h.readBody(w, r, c)
 	if err != nil {
@@ -416,6 +431,10 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if ref := h.checkWebSearch(&req); ref != nil {
 		return ref
 	}
+	body, req, err = h.prepareServer(c, body, req)
+	if err != nil {
+		return err
+	}
 	if err := h.gateParsing(r, c, sessionBody, req); err != nil {
 		return err
 	}
@@ -435,12 +454,14 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 		return err
 	}
 	web, file, parses := req.Web, req.File, req.FileParses
+	server := req
 	body, req, err = h.compress(c, body, req, snap, models)
 	if err != nil {
 		return err
 	}
 	restoreWeb(&req, web)
 	restoreFile(&req, file, parses)
+	restoreServer(&req, server)
 	return h.fillCall(c, r, sessionBody, body, req, snap, models, names, over)
 }
 

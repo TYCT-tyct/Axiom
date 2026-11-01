@@ -3,7 +3,6 @@ package protocol
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"unicode/utf8"
 
 	"axiom/internal/catalog"
@@ -30,12 +29,15 @@ type serverTool struct {
 	unsupported bool
 }
 
+var noServerStop = func(*scanner) error { return fmt.Errorf("stop_server_tools_when is not supported yet") }
+
 var grammars = [...]grammar{
 	Messages: {
 		top: withProvider(fields{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
 			"fallbacks":  (*scanner).fallbacks,
 			"max_tokens": (*scanner).maxOutput, "system": (*scanner).content, "messages": (*scanner).content, "tools": (*scanner).tools,
+			"max_tool_calls": (*scanner).maxToolCalls, "stop_server_tools_when": noServerStop,
 			"thinking": (*scanner).reasoning, "output_config": func(s *scanner) error { return s.object(messagesOutputFields) }, "output_format": (*scanner).format,
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
 			"context_management": func(s *scanner) error { return s.object(editsHolder) },
@@ -45,7 +47,10 @@ var grammars = [...]grammar{
 			"type": (*scanner).partType, "content": (*scanner).result, "cache_control": (*scanner).cacheControl,
 			"source": (*scanner).source,
 		},
-		tool:    fields{"type": (*scanner).toolType, "max_uses": (*scanner).maxUses, "cache_control": (*scanner).cacheControl},
+		tool: fields{
+			"type": (*scanner).toolType, "max_uses": (*scanner).maxUses, "cache_control": (*scanner).cacheControl,
+			"parameters": (*scanner).serverParams,
+		},
 		parts:   map[string]Capabilities{"image": Images, "document": Documents},
 		servers: []serverTool{{"web_search_", WebSearch, false}, {"code_execution_", CodeExecution, false}, {"web_fetch_", 0, true}, {"mcp_toolset", 0, true}, {"tool_search_tool_", 0, true}, {"advisor_", 0, true}},
 		tiers:   map[string]catalog.ServiceTierSet{"auto": 0, "standard_only": 1 << catalog.ServiceTierStandard},
@@ -58,7 +63,8 @@ var grammars = [...]grammar{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
 			"max_output_tokens": (*scanner).maxOutput, "input": (*scanner).content,
 			"tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
-			"reasoning": (*scanner).reasoning, "text": (*scanner).withFormat, "service_tier": (*scanner).serviceTier,
+			"stop_server_tools_when": noServerStop,
+			"reasoning":              (*scanner).reasoning, "text": (*scanner).withFormat, "service_tier": (*scanner).serviceTier,
 			"previous_response_id": (*scanner).previous, "context_management": (*scanner).edits,
 		}),
 		part: fields{
@@ -67,6 +73,7 @@ var grammars = [...]grammar{
 		},
 		tool: fields{
 			"type":        (*scanner).toolType,
+			"parameters":  (*scanner).serverParams,
 			"execution":   func(s *scanner) (err error) { s.p.clientSearch, err = s.is("client"); return err },
 			"environment": func(s *scanner) error { return s.object(shellEnvironmentFields) },
 		},
@@ -80,6 +87,7 @@ var grammars = [...]grammar{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
 			"max_tokens": (*scanner).maxOutput, "max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
 			"tools": (*scanner).tools, "functions": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
+			"max_tool_calls": (*scanner).maxToolCalls, "stop_server_tools_when": noServerStop,
 			"function_call":    func(s *scanner) error { s.r.legacy = s.r.legacy || s.dec.PeekKind() != 'n'; return s.skip() },
 			"tool_choice":      func(s *scanner) error { s.r.modernTools = s.r.modernTools || s.dec.PeekKind() != 'n'; return s.skip() },
 			"reasoning_effort": (*scanner).reasoningEffort, "reasoning": (*scanner).reasoning,
@@ -105,7 +113,7 @@ var grammars = [...]grammar{
 			"image_url": func(s *scanner) error { return s.object(chatImageFields) },
 			"file":      func(s *scanner) error { return s.object(chatFileFields) },
 		},
-		tool:  fields{"type": (*scanner).toolType},
+		tool:  fields{"type": (*scanner).toolType, "parameters": (*scanner).serverParams},
 		parts: map[string]Capabilities{"image_url": Images, "file": Documents},
 		tiers: openAITiers,
 		input: openAIInput,
@@ -231,9 +239,14 @@ func (s *scanner) previous() error {
 	return err
 }
 
-// maxToolCalls reads Responses' cap on all built-in tool calls together, which Inspect applies to each at the end.
+// maxToolCalls reads the cap on all built-in tool calls together. It is OpenRouter's, so every format may carry it;
+// Inspect applies it to the native tools, and the gateway to the web search tool's loop.
 func (s *scanner) maxToolCalls() (err error) {
-	s.callCap, err = s.count()
+	s.r.MaxToolCalls, err = s.count()
+	s.r.HasMaxToolCalls = err == nil
+	if err == nil && (s.r.MaxToolCalls < 0 || s.r.MaxToolCalls > DefaultServerToolCalls) {
+		return fmt.Errorf("max_tool_calls is between 0 and %d", DefaultServerToolCalls)
+	}
 	return err
 }
 
@@ -352,91 +365,6 @@ func (s *scanner) tools() error {
 	})
 }
 
-func (s *scanner) tool() error {
-	s.p = part{kind: Tools}
-	if err := s.object(s.g.tool); err != nil {
-		return err
-	}
-	switch {
-	case s.p.toolKind == "shell" && !s.p.localShell, s.p.toolKind == "tool_search" && !s.p.clientSearch:
-		return fmt.Errorf("the %s server tool is not supported yet", s.p.toolKind)
-	}
-	if s.p.kind&(WebSearch|CodeExecution) != 0 {
-		if err := s.addCalls(); err != nil {
-			return err
-		}
-	}
-	s.r.Needs |= s.p.kind
-	return nil
-}
-
-// addCalls adds a server tool's limit to its kind's total. Limits of two tools of a kind add up, and a tool without
-// one leaves the total to the model's default. A total past int64 is refused: wrapped, it would bound nothing.
-func (s *scanner) addCalls() error {
-	n := &s.r.WebSearches
-	if s.p.kind == CodeExecution {
-		n = &s.r.CodeExecutions
-	}
-	switch {
-	case s.r.Needs.Has(s.p.kind) && (*n == 0 || s.p.max == 0):
-		*n = 0
-	case s.p.max > math.MaxInt64-*n:
-		return fmt.Errorf("max_uses add up past %d", int64(math.MaxInt64))
-	default:
-		*n += s.p.max
-	}
-	return nil
-}
-
-// openrouterTools are the server tool types OpenRouter documents (OpenRouter《Server Tools》, read 2026-10-29). The
-// model decides when to call one and the provider executes it, resampling the model with the result: a loop this
-// gateway does not run, and one whose search, fetch, sandbox and image jobs would also need a service or a sandbox
-// here. The namespace is recognized in every format so that a client's tool is refused by name before admission,
-// rather than forwarded as a function the upstream would ignore (docs/domains/gateway.md「服务端工具」).
-var openrouterTools = map[string]struct{}{
-	"openrouter:web_search": {}, "openrouter:web_fetch": {}, "openrouter:datetime": {},
-	"openrouter:image_generation": {}, "openrouter:apply_patch": {}, "openrouter:shell": {},
-	"openrouter:bash": {}, "openrouter:fusion": {}, "openrouter:advisor": {}, "openrouter:subagent": {},
-	"openrouter:experimental__search_models": {}, "openrouter:tool_search": {}, "openrouter:files": {},
-}
-
-// openrouterTool refuses one tool of OpenRouter's namespace. A documented type says what is missing; a name the
-// namespace does not document is told so, because OpenRouter adds tools and a request may carry a name from a newer
-// provider release.
-func openrouterTool(name string) error {
-	if _, ok := openrouterTools[name]; !ok {
-		return fmt.Errorf("%.64q is not an OpenRouter server tool", name)
-	}
-	if name == "openrouter:web_search" {
-		return fmt.Errorf("the %s server tool is not supported: %s", name, NoWebSearch)
-	}
-	return fmt.Errorf("the %s server tool is not supported yet: this gateway runs no OpenRouter-side tool loop", name)
-}
-
-func (s *scanner) toolType() error {
-	v, err := s.str()
-	if hasPrefix(v, "openrouter:") {
-		return openrouterTool(string(v))
-	}
-	if s.r.Format == Responses {
-		switch string(v) {
-		case "shell":
-			s.p.toolKind = "shell"
-		case "tool_search":
-			s.p.toolKind = "tool_search"
-		}
-	}
-	for _, t := range s.g.servers {
-		if hasPrefix(v, t.prefix) {
-			if t.unsupported {
-				return fmt.Errorf("the %s server tool is not supported yet", t.prefix)
-			}
-			s.p.kind = t.kind
-		}
-	}
-	return err
-}
-
 // Even a connector with a tool allowlist can run repeatedly; no complete quote exists for it yet.
 func (s *scanner) mcpServers() error {
 	return s.array(func(*scanner) error {
@@ -487,6 +415,7 @@ func (s *scanner) format() error { return s.object(formatFields) }
 func (s *scanner) webSearchOptions() error {
 	if s.dec.PeekKind() != 'n' {
 		s.r.Needs |= WebSearch
+		s.r.NativeWeb = true
 	}
 	return s.skip()
 }

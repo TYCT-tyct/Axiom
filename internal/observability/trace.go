@@ -119,7 +119,7 @@ func traceAttempts(rows []store.ListTraceAttemptsRow) ([]AttemptRecord, error) {
 	attempts := make([]AttemptRecord, len(rows))
 	for i, r := range rows {
 		attempts[i] = AttemptRecord{
-			Seq:         platform.AttemptSeq(r.AttemptSeq), //nolint:gosec // G115: the table checks attempt_seq between 1 and 3
+			Seq:         platform.AttemptSeq(r.AttemptSeq), //nolint:gosec // G115: the table checks attempt_seq between 1 and 33
 			SourceClass: r.SourceClass, Egress: r.Egress, Outcome: AttemptOutcome(r.Outcome), ErrorKind: r.ErrorKind,
 			StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, FirstToken: time.Duration(r.FirstTokenMs) * time.Millisecond,
 		}

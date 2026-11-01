@@ -87,6 +87,7 @@ func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req prot
 	}
 	parsed.File, parsed.FileParses = file, count.n
 	parsed.Web = web
+	restoreServer(&parsed, req)
 	c.files = annotations(files)
 	return newBody, parsed, nil
 }

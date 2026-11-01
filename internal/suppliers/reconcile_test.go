@@ -331,3 +331,26 @@ func TestTwoRunsAtOnceMatchEachPairOnce(t *testing.T) {
 		t.Errorf("%d events, want 30", n)
 	}
 }
+
+// TestALoopsSamplingsAreAttemptsMatchedOnTheirOwn: each sampling of a model-side loop is an attempt numbered past the
+// routing tries, up to platform.MaxAttemptSeq, with the key it was written under since 00002. Its charge matches its own
+// attempt, a charge for a sampling that failed before any reply included.
+func TestALoopsSamplingsAreAttemptsMatchedOnTheirOwn(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	request := newRequest()
+	first, failed := subRef(), subRef()
+	unanswered := w.attempt(request, platform.MaxAttemptSeq, failed)
+	unanswered.Usage = nil // it failed before a reply, but the supplier may still have charged it
+	w.record(w.attempt(request, 4, first), unanswered)
+	w.ingest(w.charge(first, "22.5", w.clock.now()), w.charge(failed, "0.1", w.clock.now()))
+	if report := w.reconcile(w.clock.now()); report.Matched != 2 {
+		t.Fatalf("report %+v, want each sampling's charge matched", report)
+	}
+	for ref, seq := range map[string]int{first: 4, failed: platform.MaxAttemptSeq} {
+		if n := w.count(`SELECT count(*) FROM suppliers.charge_records WHERE charge_ref = $1 AND state = 'matched'
+			AND attempt_request_id = $2 AND attempt_seq = $3`, ref, uuid.UUID(request), seq); n != 1 {
+			t.Errorf("%s is not matched to attempt %d", ref, seq)
+		}
+	}
+}

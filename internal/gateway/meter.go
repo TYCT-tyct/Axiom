@@ -30,11 +30,7 @@ func (a *attempt) metered(ctx context.Context, p protocol.Progress, done bool, i
 		if came, err := a.landed(false); came && err != nil && !done {
 			return err
 		}
-		step := a.meter.Observe(billing.Progress{
-			ContentBytes: p.ContentBytes, PartialBytes: p.PartialBytes, Searches: p.Searches,
-			ToolCalls: p.ToolCalls, ToolCallTokens: a.toolCallTokens,
-			Reported: p.Reported.Usage, Final: p.Final,
-		})
+		step := a.meter.Observe(a.billingProgress(p))
 		if step.Extend {
 			a.extend(ctx, step.Request)
 		}
@@ -131,4 +127,13 @@ func cut(err error) ended {
 		e.after = maxRetryAfter
 	}
 	return e
+}
+
+// billingProgress is one relay step's progress in the meter's terms.
+func (a *attempt) billingProgress(p protocol.Progress) billing.Progress {
+	return billing.Progress{
+		ContentBytes: p.ContentBytes, PartialBytes: p.PartialBytes, Searches: p.Searches,
+		ToolCalls: p.ToolCalls, ToolCallTokens: a.toolCallTokens,
+		Reported: p.Reported.Usage, Final: p.Final,
+	}
 }

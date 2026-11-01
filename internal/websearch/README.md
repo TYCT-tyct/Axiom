@@ -6,7 +6,7 @@
 
 只有两件事：一次带界的查询换来有界的条目（URL、标题、摘要），以及把管理员配置的搜索引擎加载成节点可用的后端。`Searcher` 是一次搜索的实现，`SearXNG` 和 `Firecrawl` 是两个实现；`Engine`/`Backend`/`Engines` 是配置与运行时集合；`Load`/`Save` 读写配置，`OpenEngines` 在启动时把它变成后端。网关负责准入、路径选择、预留、注入位置、正文大小的最终上限、调用记录和计费；本包负责 URL、参数、密钥、响应大小、结果条数、去重、截断和售价计算。
 
-不在这里：模型侧的搜索循环（`openrouter:web_search` 仍拒绝）、把结果转成各格式的注解（[gateway 的「插件与提示词变换」](../../docs/domains/gateway.md#插件与提示词变换)）、按次收费（[billing 的「预留与结算」](../../docs/domains/billing.md#预留与结算)）。
+不在这里：模型侧的搜索循环（`openrouter:web_search` 的循环在 gateway，见「服务端工具」）、把结果转成各格式的注解（[gateway 的「插件与提示词变换」](../../docs/domains/gateway.md#插件与提示词变换)）、按次收费（[billing 的「预留与结算」](../../docs/domains/billing.md#预留与结算)）。
 
 ## 配置
 

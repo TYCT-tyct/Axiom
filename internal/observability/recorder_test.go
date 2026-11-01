@@ -10,6 +10,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
 )
 
@@ -466,7 +467,7 @@ func TestEnqueueRejectsAnIncompleteAttempt(t *testing.T) {
 		"no start time":       func(c *CallRecord) { c.Attempts[0].StartedAt = time.Time{} },
 		"finish before start": func(c *CallRecord) { c.Attempts[1].FinishedAt = c.Attempts[1].StartedAt.Add(-time.Second) },
 		"a sequence gap":      func(c *CallRecord) { c.Attempts[1].Seq = 3 },
-		"four attempts":       func(c *CallRecord) { c.Attempts = append(c.Attempts, c.Attempts[1], c.Attempts[1]) },
+		"too many attempts":   func(c *CallRecord) { *c = withAttempts(*c, platform.MaxAttemptSeq+1) },
 	} {
 		rec := record(uuid.NewV7(), now)
 		edit(&rec)

@@ -366,8 +366,8 @@ func appendCount(dst []byte, name string, n int64) []byte {
 	return strconv.AppendInt(dst, n, 10)
 }
 
-// appendQuoted appends s as a JSON string.
-func appendQuoted(dst []byte, s string) []byte {
+// appendQuoted appends s as a JSON string. It takes bytes as well, so a buffer is quoted without a string copy of it.
+func appendQuoted[S ~[]byte | ~string](dst []byte, s S) []byte {
 	dst, _ = jsontext.AppendQuote(dst, s) //nolint:errcheck // invalid UTF-8 is written as U+FFFD, and that is all the error says
 	return dst
 }
