@@ -224,7 +224,15 @@ function OrderRow({ order, allowed, onRefund }: { order: Schemas["Order"]; allow
 
 // OrderState is where the payment stands and what can be done about it; below md the refunds read here too, since
 // their column is hidden.
-function OrderState({ order, allowed, onRefund }: { order: Schemas["Order"]; allowed: boolean; onRefund: () => void }) {
+export function OrderState({
+  order,
+  allowed,
+  onRefund,
+}: {
+  order: Schemas["Order"];
+  allowed: boolean;
+  onRefund: () => void;
+}) {
   const { t } = useTranslation();
   const actions = useOrderActions(order.id);
   const failure = actions.verify.error ?? actions.cancel.error;
@@ -237,7 +245,7 @@ function OrderState({ order, allowed, onRefund }: { order: Schemas["Order"]; all
         <div className="mt-2 flex flex-wrap gap-1.5">
           {order.checkout?.pay_url ? (
             <Button asChild>
-              <a href={order.checkout.pay_url} rel="noreferrer">
+              <a href={order.checkout.pay_url} rel="noopener" referrerPolicy="origin">
                 {t("orders.pay")}
               </a>
             </Button>
