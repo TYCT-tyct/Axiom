@@ -211,10 +211,12 @@ func (a *chatAggregate) annotateFiles(files []FileAnnotation) {
 // are: the piece the choice keeps and the body its render is written into. A choice that cannot be charged leaves every
 // choice without the annotations, so a reply never carries them on some choices and not others.
 func (a *chatAggregate) appendAnnotations(entries []byte) {
-	prior := make([]int, len(a.choices))
+	prior := make([]int, len(a.choices)) // every choice's length before any append: a rollback restores them all
+	for i := range a.choices {
+		prior[i] = len(a.choices[i].annotations)
+	}
 	for i := range a.choices {
 		c := &a.choices[i]
-		prior[i] = len(c.annotations)
 		n := len(entries)
 		if prior[i] > 0 {
 			n++

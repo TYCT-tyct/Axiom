@@ -372,9 +372,32 @@ func TestAnnotationBudgetCoversEveryChoicesBody(t *testing.T) {
 	}
 }
 
+// TestAnnotationRollbackKeepsUpstreamAnnotations: a budget that runs out at the second choice takes the file annotations
+// off the first again, and leaves every choice's own upstream annotations as they were, the choices not reached included.
+func TestAnnotationRollbackKeepsUpstreamAnnotations(t *testing.T) {
+	text := strings.Repeat("x", 1<<20)
+	files := []FileAnnotation{{Hash: strings.Repeat("a", 64), Name: "scan.pdf", Text: text}}
+	bound := int64(quotedLength(text) + quotedLength(files[0].Hash) + quotedLength(files[0].Name) + 128)
+	citation := `{"type":"url_citation"}`
+	choices := make([]chatChoice, 3)
+	choices[2].annotations = []byte(citation)
+	// The entries twice over and the first choice's copy twice over fit; the second choice's copy does not.
+	a := annotateWithinChoices(files, choices, 5*bound)
+	for i, want := range []string{"", "", citation} {
+		if got := string(a.choices[i].annotations); got != want {
+			t.Errorf("choice %d annotations = %.40q, want %q", i, got, want)
+		}
+	}
+}
+
 // annotateWithin runs the file annotations on a reply of choices choices under a budget of budget bytes.
 func annotateWithin(files []FileAnnotation, choices int, budget int64) *chatAggregate {
-	a := &chatAggregate{choices: make([]chatChoice, choices)}
+	return annotateWithinChoices(files, make([]chatChoice, choices), budget)
+}
+
+// annotateWithinChoices runs the file annotations on a reply holding choices under a budget of budget bytes.
+func annotateWithinChoices(files []FileAnnotation, choices []chatChoice, budget int64) *chatAggregate {
+	a := &chatAggregate{choices: choices}
 	left := budget
 	a.init(func(n int) error {
 		if int64(n) > left {
