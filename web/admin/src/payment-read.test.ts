@@ -169,6 +169,89 @@ it("reads an Alipay rotation with the old public key", () => {
   });
 });
 
+const wechatValues = {
+  ...merchantValues,
+  kind: "wechatpay",
+  settings:
+    '{"app_id":"wx1234567890abcdef","mch_id":"1900000001","serial_no":"408B07E79B8269FEC3D5D3E6AB8ED163A6A380DB"}',
+  key: "",
+  private_key: "merchant-private-key",
+  api_v3_key: "01234567890123456789012345678901",
+  platform_certificate: "platform-certificate",
+  platform_public_key: "",
+  old_platform_certificate: "",
+  old_platform_public_key: "",
+};
+
+it("reads a new WeChat Pay merchant with its key material", () => {
+  const read = readMerchant(wechatValues, undefined, merchantWords);
+  if (isProblem(read)) {
+    throw new Error(read.problem);
+  }
+  expect(read.kind).toBe("wechatpay");
+  expect(read.settings).toEqual({
+    app_id: "wx1234567890abcdef",
+    mch_id: "1900000001",
+    serial_no: "408B07E79B8269FEC3D5D3E6AB8ED163A6A380DB",
+  });
+  expect(read.secrets).toEqual({
+    private_key: "merchant-private-key",
+    api_v3_key: "01234567890123456789012345678901",
+    platform_certificate: "platform-certificate",
+  });
+});
+
+it("requires current WeChat Pay key material when any secret is supplied", () => {
+  expect(readMerchant({ ...wechatValues, private_key: "" }, undefined, merchantWords)).toEqual({ problem: "secret" });
+  expect(readMerchant({ ...wechatValues, api_v3_key: "" }, undefined, merchantWords)).toEqual({ problem: "secret" });
+  expect(readMerchant({ ...wechatValues, platform_certificate: "" }, undefined, merchantWords)).toEqual({
+    problem: "secret",
+  });
+  expect(
+    readMerchant(
+      { ...wechatValues, old_platform_certificate: "old-certificate", platform_certificate: "" },
+      undefined,
+      merchantWords,
+    ),
+  ).toEqual({ problem: "secret" });
+});
+
+it("keeps a WeChat Pay merchant's channel and sealed secrets on edit", () => {
+  const { kind: _kind, ...withoutKind } = wechatValues;
+  const read = readMerchant(
+    {
+      ...withoutKind,
+      private_key: "",
+      api_v3_key: "",
+      platform_certificate: "",
+      platform_public_key: "",
+      old_platform_certificate: "",
+      old_platform_public_key: "",
+    },
+    { rev: 4, kind: "wechatpay" },
+    merchantWords,
+  );
+  if (isProblem(read)) {
+    throw new Error(read.problem);
+  }
+  expect(read.kind).toBe("wechatpay");
+  expect(read.rev).toBe(4);
+  expect(read.secrets).toBeUndefined();
+});
+
+it("reads a WeChat Pay rotation with the old certificate", () => {
+  const read = readMerchant({ ...wechatValues, old_platform_certificate: "old-certificate" }, undefined, merchantWords);
+  if (isProblem(read)) {
+    throw new Error(read.problem);
+  }
+  expect(read.secrets).toEqual({
+    private_key: "merchant-private-key",
+    api_v3_key: "01234567890123456789012345678901",
+    platform_certificate: "platform-certificate",
+    old_platform_certificate: "old-certificate",
+  });
+});
+
 it("refuses a merchant the contract or the plugin would refuse", () => {
   const edit = (change: Record<string, string>) =>
     readMerchant({ ...merchantValues, ...change }, undefined, merchantWords);

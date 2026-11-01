@@ -229,6 +229,34 @@ function readAlipaySecrets(
   };
 }
 
+function readWechatSecrets(
+  values: Record<string, string>,
+  creating: boolean,
+): { [key: string]: string } | null | undefined {
+  const names = [
+    "private_key",
+    "api_v3_key",
+    "platform_certificate",
+    "platform_public_key",
+    "old_platform_certificate",
+    "old_platform_public_key",
+  ];
+  const secrets: { [key: string]: string } = {};
+  for (const name of names) {
+    const value = (values[name] ?? "").trim();
+    if (value) {
+      secrets[name] = value;
+    }
+  }
+  if (Object.keys(secrets).length === 0) {
+    return creating ? null : undefined;
+  }
+  if (!secrets.private_key || !secrets.api_v3_key || (!secrets.platform_certificate && !secrets.platform_public_key)) {
+    return null;
+  }
+  return secrets;
+}
+
 function readEasyPaySecrets(
   values: Record<string, string>,
   creating: boolean,
@@ -249,7 +277,14 @@ function readSecrets(
   creating: boolean,
   kind: string,
 ): { [key: string]: string } | null | undefined {
-  return kind === "alipay" ? readAlipaySecrets(values, creating) : readEasyPaySecrets(values, creating);
+  switch (kind) {
+    case "alipay":
+      return readAlipaySecrets(values, creating);
+    case "wechatpay":
+      return readWechatSecrets(values, creating);
+    default:
+      return readEasyPaySecrets(values, creating);
+  }
 }
 function withChangeFields(
   input: AdminSchemas["MerchantInput"],

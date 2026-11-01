@@ -21,11 +21,13 @@ type Draft = {
 };
 type Update = (key: string, change: Partial<Draft>) => void;
 
-function draftOf(method: AdminSchemas["MerchantMethod"] | undefined): Draft {
+function draftOf(method: AdminSchemas["MerchantMethod"] | undefined, kind: string): Draft {
+  const fallback =
+    kind === "wechatpay" ? { method: "wxpay", upstream: "native" } : { method: "alipay", upstream: "alipay" };
   return {
     key: crypto.randomUUID(),
-    method: method?.method ?? "alipay",
-    upstream: method?.upstream ?? "alipay",
+    method: method?.method ?? fallback.method,
+    upstream: method?.upstream ?? fallback.upstream,
     percent: formatPercent(method?.fee_ppm ?? 30_000),
     fixed: method?.fee_fixed ? moneyInput(method.fee_fixed.amount) : "0",
     min: method?.single_min ? moneyInput(method.single_min.amount) : "",
@@ -50,10 +52,12 @@ export function MerchantFields({
   currency: string;
   error: unknown;
 }) {
-  const [rows, setRows] = useState<Draft[]>(() =>
-    merchant?.methods?.length ? merchant.methods.map((method) => draftOf(method)) : [draftOf(undefined)],
-  );
   const [kind, setKind] = useState(merchant?.kind ?? "easypay");
+  const [rows, setRows] = useState<Draft[]>(() =>
+    merchant?.methods?.length
+      ? merchant.methods.map((method) => draftOf(method, merchant?.kind ?? "easypay"))
+      : [draftOf(undefined, merchant?.kind ?? "easypay")],
+  );
   const [paidIn, setPaidIn] = useState(merchant?.currency ?? merchantCurrency(currency));
   const update: Update = (key, change) =>
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
@@ -69,7 +73,7 @@ export function MerchantFields({
       />
       <MerchantFlags merchant={merchant} />
       <MerchantSecrets key={kind} merchant={merchant} kind={kind} error={error} />
-      <MethodsEditor rows={rows} setRows={setRows} update={update} paidIn={paidIn} error={error} />
+      <MethodsEditor rows={rows} setRows={setRows} update={update} paidIn={paidIn} kind={kind} error={error} />
     </>
   );
 }
@@ -104,6 +108,7 @@ function MerchantBasics({
       >
         <option value="easypay">{t("settings.payments.kinds.easypay")}</option>
         <option value="alipay">{t("settings.payments.kinds.alipay")}</option>
+        <option value="wechatpay">{t("settings.payments.kinds.wechatpay")}</option>
       </SelectField>
       <TextField
         label={t("settings.payments.name")}
@@ -182,7 +187,9 @@ function MerchantSecrets({ merchant, kind, error }: { merchant: Merchant | undef
   const defaults =
     kind === "alipay"
       ? { app_id: "", seller_id: "", gateway: "https://openapi.alipay.com/gateway.do" }
-      : { gateway: "https://", pid: "", mode: "redirect" };
+      : kind === "wechatpay"
+        ? { app_id: "", mch_id: "", serial_no: "", gateway: "https://api.mch.weixin.qq.com" }
+        : { gateway: "https://", pid: "", mode: "redirect" };
   return (
     <>
       <TextAreaField
@@ -195,6 +202,8 @@ function MerchantSecrets({ merchant, kind, error }: { merchant: Merchant | undef
       />
       {kind === "alipay" ? (
         <AlipaySecrets merchant={merchant} error={error} />
+      ) : kind === "wechatpay" ? (
+        <WechatSecrets merchant={merchant} error={error} />
       ) : (
         <EasyPaySecrets merchant={merchant} error={error} />
       )}
@@ -234,6 +243,60 @@ function AlipaySecrets({ merchant, error }: { merchant: Merchant | undefined; er
   );
 }
 
+function WechatSecrets({ merchant, error }: { merchant: Merchant | undefined; error: unknown }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return (
+    <>
+      <TextAreaField
+        label={t("settings.payments.wechatPrivateKey")}
+        hint={merchant ? t("settings.payments.wechatPrivateKeyKeep") : t("settings.payments.wechatPrivateKeyNew")}
+        name="private_key"
+        className="min-h-32"
+        autoComplete="off"
+        spellCheck={false}
+        error={errors.field(error, "merchant/secrets")}
+      />
+      <TextField
+        label={t("settings.payments.wechatAPIv3Key")}
+        hint={t("settings.payments.wechatAPIv3KeyHint")}
+        name="api_v3_key"
+        type="password"
+        autoComplete="new-password"
+        error={errors.field(error, "merchant/secrets")}
+      />
+      <TextAreaField
+        label={t("settings.payments.wechatPlatformCertificate")}
+        hint={t("settings.payments.wechatPlatformCertificateHint")}
+        name="platform_certificate"
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <TextAreaField
+        label={t("settings.payments.wechatPlatformPublicKey")}
+        hint={t("settings.payments.wechatPlatformPublicKeyHint")}
+        name="platform_public_key"
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <TextAreaField
+        label={t("settings.payments.wechatOldPlatformCertificate")}
+        hint={t("settings.payments.wechatOldPlatformCertificateHint")}
+        name="old_platform_certificate"
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <TextAreaField
+        label={t("settings.payments.wechatOldPlatformPublicKey")}
+        hint={t("settings.payments.wechatOldPlatformPublicKeyHint")}
+        name="old_platform_public_key"
+        autoComplete="off"
+        spellCheck={false}
+      />
+    </>
+  );
+}
+
 function EasyPaySecrets({ merchant, error }: { merchant: Merchant | undefined; error: unknown }) {
   const { t } = useTranslation();
   const errors = useErrors();
@@ -262,12 +325,14 @@ function MethodsEditor({
   setRows,
   update,
   paidIn,
+  kind,
   error,
 }: {
   rows: Draft[];
   setRows: React.Dispatch<React.SetStateAction<Draft[]>>;
   update: Update;
   paidIn: string;
+  kind: string;
   error: unknown;
 }) {
   const { t } = useTranslation();
@@ -286,7 +351,7 @@ function MethodsEditor({
           onRemove={() => setRows((current) => current.filter((entry) => entry.key !== row.key))}
         />
       ))}
-      <Button size="sm" onClick={() => setRows((current) => [...current, draftOf(undefined)])}>
+      <Button size="sm" onClick={() => setRows((current) => [...current, draftOf(undefined, kind)])}>
         <Icon name="plus" />
         {t("settings.payments.addMethod")}
       </Button>
