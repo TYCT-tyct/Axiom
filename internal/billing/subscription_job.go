@@ -69,8 +69,8 @@ func runSubscriptions(ctx context.Context, cfg SubscriptionConfig, failures metr
 		return fmt.Errorf("billing: find the subscriptions that are due: %w", err)
 	}
 	for _, d := range due {
-		if ctx.Err() != nil {
-			return nil // the node is stopping; the next run finds it again
+		if err := ctx.Err(); err != nil {
+			return err // the node is stopping; the next run finds it again
 		}
 		if err := visitSubscription(ctx, cfg, d.ID, d.AccountID); err != nil {
 			failures.Add(ctx, 1)

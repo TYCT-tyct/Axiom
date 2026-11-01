@@ -150,7 +150,9 @@ const dueSubscriptions = `-- name: DueSubscriptions :many
 SELECT s.id, s.site_id, s.account_id, s.ends_at
 FROM billing.subscriptions s
 JOIN billing.subscription_windows w ON w.subscription_id = s.id AND w.seq = s.current_seq
-WHERE s.state = 'active' AND (s.ends_at <= clock_timestamp() OR w.ends_at <= clock_timestamp())
+WHERE (s.state = 'active' AND (s.ends_at <= clock_timestamp() OR w.ends_at <= clock_timestamp()))
+    OR (s.state = 'expired' AND s.closed_at IS NULL AND NOT EXISTS (
+        SELECT 1 FROM billing.reservations r WHERE r.subscription_id = s.id AND r.state = 'pending'))
 ORDER BY s.ends_at, s.id
 LIMIT $1
 `
@@ -162,8 +164,10 @@ type DueSubscriptionsRow struct {
 	EndsAt    time.Time
 }
 
-// Active subscriptions whose term or current window has ended, oldest first. Once one is processed it leaves this set,
-// so the scan needs no cursor.
+// Subscriptions a run must look at, oldest first: an active one whose term or current window ended (to pass the window
+// and expire the term), and an expired one not yet closed. An expired subscription still holding a pending plan
+// reservation is left out rather than returned and skipped, so a page full of such rows cannot starve the ones behind
+// them; the reservation's end makes it due again on the following run.
 func (q *Queries) DueSubscriptions(ctx context.Context, db DBTX, max int32) ([]DueSubscriptionsRow, error) {
 	rows, err := db.Query(ctx, dueSubscriptions, max)
 	if err != nil {
@@ -364,12 +368,16 @@ func (q *Queries) LastWindowSeq(ctx context.Context, db DBTX, subscriptionID uui
 
 const liability = `-- name: Liability :one
 SELECT coalesce(sum(e.amount), 0)::bigint AS credited
-FROM billing.entries e JOIN billing.transactions t ON t.id = e.transaction_id
-WHERE t.request_id = $1 AND e.book = 'plan_liability'
+FROM billing.entries e
+JOIN billing.transactions t ON t.id = e.transaction_id
+LEFT JOIN billing.reservations r ON r.request_id = t.request_id
+WHERE e.book = 'plan_liability'
+    AND (t.request_id = $1 OR r.subscription_id = $1)
 `
 
-// What a subscription still owes: the sum of its plan_liability entries, negated (a credit to the liability is
-// negative). The grant's face and every charge and write-off reference the subscription as their request id.
+// What a subscription still owes: the sum of its plan_liability entries, which is negative while credit remains
+// (a credit to the liability is negative). The grant and write-off reference the subscription as their request id; a call settlement and its
+// correction reference the call, so they join back through the reservation that froze the subscription.
 func (q *Queries) Liability(ctx context.Context, db DBTX, subscriptionID uuid.UUID) (int64, error) {
 	row := db.QueryRow(ctx, liability, subscriptionID)
 	var credited int64
@@ -507,6 +515,19 @@ func (q *Queries) SetCurrentWindow(ctx context.Context, db DBTX, arg SetCurrentW
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setReservationsWallet = `-- name: SetReservationsWallet :exec
+UPDATE billing.reservations SET funding = 'wallet', subscription_id = NULL, window_seq = NULL
+WHERE request_id = ANY($1::uuid[]) AND funding <> 'wallet'
+`
+
+// A plan reservation cleanup released settles late from the wallet: the window's hold is already back and its credit
+// may have lapsed, so the row must record the source that actually paid. Corrections then follow the wallet, not a
+// window that never paid (docs/domains/billing.md「订阅套餐」).
+func (q *Queries) SetReservationsWallet(ctx context.Context, db DBTX, requestIds []uuid.UUID) error {
+	_, err := db.Exec(ctx, setReservationsWallet, requestIds)
+	return err
 }
 
 const settleWindow = `-- name: SettleWindow :execrows

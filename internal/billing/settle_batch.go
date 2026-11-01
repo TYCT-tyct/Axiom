@@ -103,9 +103,9 @@ func (b *Billing) planSettlements(ctx context.Context, tx pg.Tx, items []Settlem
 		plan.c = c
 		plans[i] = plan
 		if plan.end != nil {
-			if !plan.c.plan() { // a plan charge moves no wallet money, so the next item's cap is unchanged
-				balance.Balance = addClamp(balance.Balance, -plan.end.spent)
-			}
+			// The next item's cap follows the wallet entries this one actually posts: a plan charge moves none, while a
+			// plan hold cleanup released pays its late settlement from the wallet and must lower the balance here too.
+			balance.Balance = addClamp(balance.Balance, -plan.walletDebit())
 			balance.Reserved = addClamp(balance.Reserved, plan.end.balanceReserved)
 		}
 	}
@@ -143,6 +143,16 @@ type settlementPlan struct {
 	posts   []PostLedgerParams
 	records []suppliers.AttemptRecord
 	end     *reservationEnd
+}
+
+// walletDebit is the net amount this plan's ledger events take from the user's balance, exactly what the balance
+// statement will apply for them.
+func (p settlementPlan) walletDebit() int64 {
+	var total platform.Exact
+	for _, ev := range p.posts {
+		total = sum(total, platform.AmountExact(ev.UserDebit))
+	}
+	return total.CeilAmount()
 }
 
 // reservationEnd is the EndReservation of one plan, its counters in the plan's order for the next item's cap, and the
@@ -300,7 +310,9 @@ func (c *locked) planLate(p priced, last AttemptResult) (*reservationEnd, []Post
 		ledgerParams(reversalEvent, reversal(c.row.Price, c.row.Charged)),
 		ledgerParams(c.settlement, charge(p.price, c.charged)),
 	}
-	// A plan hold cleanup released has no window left to charge: the usage is the wallet's to pay, as late does.
+	// A plan hold cleanup released has no window left to charge: the usage is the wallet's to pay, as late does. The
+	// row must say so before a correction reads it as a plan charge.
+	w.wallet = true
 	return &reservationEnd{c: c, w: w, spent: c.charged - c.row.Charged}, posts, nil
 }
 
@@ -321,8 +333,13 @@ func writeSettlements(ctx context.Context, tx pg.Tx, s Suppliers, plans []settle
 			return fmt.Errorf("billing: record the attempts: %w", err)
 		}
 	}
-	ends, err := endSettlementReservations(ctx, tx, plans)
-	if err != nil {
+	ends := settlementEnds(plans)
+	// The source is rewritten while the reservation is still pending: the update policy only shows pending rows, and
+	// once the row is settled its source is frozen with the rest of the terminal record.
+	if err := markLateWallets(ctx, tx, ends); err != nil {
+		return err
+	}
+	if err := endSettlementReservations(ctx, tx, ends); err != nil {
 		return err
 	}
 	if err := settlePlanWindows(ctx, tx, ends); err != nil {
@@ -429,10 +446,8 @@ func execRows(batch pg.BatchResults, what string, want int) error {
 	return nil
 }
 
-// endSettlementReservations ends every plan's reservation in one statement and reads the database time of each. The
-// statement moves the balance's and each window's counters by their sums, so the batch's counters end exactly where the
-// items' would one by one.
-func endSettlementReservations(ctx context.Context, tx pg.Tx, plans []settlementPlan) ([]*reservationEnd, error) {
+// settlementEnds is the non-nil reservation ends of the batch, in item order.
+func settlementEnds(plans []settlementPlan) []*reservationEnd {
 	var ends []*reservationEnd
 	for i, p := range plans {
 		if p.end != nil {
@@ -440,8 +455,15 @@ func endSettlementReservations(ctx context.Context, tx pg.Tx, plans []settlement
 			ends = append(ends, p.end)
 		}
 	}
+	return ends
+}
+
+// endSettlementReservations ends every plan's reservation in one statement and reads the database time of each. The
+// statement moves the balance's and each window's counters by their sums, so the batch's counters end exactly where the
+// items' would one by one.
+func endSettlementReservations(ctx context.Context, tx pg.Tx, ends []*reservationEnd) error {
 	if len(ends) == 0 {
-		return nil, nil
+		return nil
 	}
 	params := EndReservationBatchParams{AccountID: ends[0].c.row.AccountID}
 	for _, e := range ends {
@@ -449,7 +471,7 @@ func endSettlementReservations(ctx context.Context, tx pg.Tx, plans []settlement
 	}
 	rows, err := queries.EndReservationBatch(ctx, tx, params)
 	if err != nil {
-		return nil, fmt.Errorf("billing: end the reservations: %w", err)
+		return fmt.Errorf("billing: end the reservations: %w", err)
 	}
 	at := make(map[uuid.UUID]time.Time, len(rows))
 	for _, row := range rows {
@@ -458,11 +480,11 @@ func endSettlementReservations(ctx context.Context, tx pg.Tx, plans []settlement
 	for _, e := range ends {
 		t, ok := at[e.c.id]
 		if !ok {
-			return nil, &BatchWorkError{Index: e.index, Err: fmt.Errorf("billing: the reservation %s did not end", e.c.id)}
+			return &BatchWorkError{Index: e.index, Err: fmt.Errorf("billing: the reservation %s did not end", e.c.id)}
 		}
 		e.at = t
 	}
-	return ends, nil
+	return nil
 }
 
 // add appends one EndReservation to the batch's arrays. A NULL of the single statement, which keeps what the row has,

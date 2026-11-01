@@ -4,8 +4,9 @@
 -- Subscription plans as a funding source (docs/domains/billing.md「订阅套餐」): the admin's catalog of plans, the
 -- account's subscription and its windows, the grants that sold or gave them, and the two columns a reservation needs
 -- to stay in the window it was frozen into. Every ALTER is atomic, so this nontransactional migration can resume after
--- a failure; the guards allow it to run again. Nothing here rewrites a row: the new reservation columns have constant
--- defaults or stay empty for rows an old node wrote.
+-- a failure; every object is guarded with IF NOT EXISTS and every policy is dropped first, so running the whole file
+-- again after a partial success passes. Nothing here rewrites a row: the new reservation columns have constant defaults
+-- or stay empty for rows an old node wrote.
 CREATE TABLE IF NOT EXISTS billing.subscription_plans (
     id uuid PRIMARY KEY,
     site_id uuid NOT NULL,
@@ -13,8 +14,8 @@ CREATE TABLE IF NOT EXISTS billing.subscription_plans (
     currency text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
     price bigint NOT NULL CHECK (price >= 0),           -- minor units of currency, the catalog price
     quota bigint NOT NULL CHECK (quota > 0),            -- credits in one window
-    window_seconds bigint NOT NULL CHECK (window_seconds >= 3600),
-    term_seconds bigint NOT NULL CHECK (term_seconds >= window_seconds),
+    window_seconds bigint NOT NULL CHECK (window_seconds BETWEEN 3600 AND 9223372036),
+    term_seconds bigint NOT NULL CHECK (term_seconds BETWEEN window_seconds AND 9223372036),
     active boolean NOT NULL DEFAULT true,
     rev integer NOT NULL DEFAULT 1 CHECK (rev > 0),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -22,8 +23,11 @@ CREATE TABLE IF NOT EXISTS billing.subscription_plans (
     UNIQUE (site_id, name)
 );
 ALTER TABLE billing.subscription_plans ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS reads ON billing.subscription_plans;
 CREATE POLICY reads ON billing.subscription_plans FOR SELECT USING ((SELECT platform.in_platform_scope()));
+DROP POLICY IF EXISTS inserts ON billing.subscription_plans;
 CREATE POLICY inserts ON billing.subscription_plans FOR INSERT WITH CHECK ((SELECT platform.in_platform_scope()));
+DROP POLICY IF EXISTS updates ON billing.subscription_plans;
 CREATE POLICY updates ON billing.subscription_plans FOR UPDATE USING ((SELECT platform.in_platform_scope()))
     WITH CHECK ((SELECT platform.in_platform_scope()));
 GRANT SELECT, INSERT ON billing.subscription_plans TO axiom_app;
@@ -51,16 +55,19 @@ CREATE TABLE IF NOT EXISTS billing.subscriptions (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_subscription ON billing.subscriptions (account_id) WHERE state = 'active';
 ALTER TABLE billing.subscriptions ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS reads ON billing.subscriptions;
 CREATE POLICY reads ON billing.subscriptions FOR SELECT USING (
     (SELECT platform.in_platform_scope())
     OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
     OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
 );
+DROP POLICY IF EXISTS inserts ON billing.subscriptions;
 CREATE POLICY inserts ON billing.subscriptions FOR INSERT WITH CHECK (
     (SELECT platform.in_platform_scope())
     OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
     OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
 );
+DROP POLICY IF EXISTS updates ON billing.subscriptions;
 CREATE POLICY updates ON billing.subscriptions FOR UPDATE USING (
     (SELECT platform.in_platform_scope())
     OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
@@ -92,16 +99,19 @@ CREATE TABLE IF NOT EXISTS billing.subscription_windows (
     CHECK (used + reserved <= quota)
 );
 ALTER TABLE billing.subscription_windows ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS reads ON billing.subscription_windows;
 CREATE POLICY reads ON billing.subscription_windows FOR SELECT USING (
     (SELECT platform.in_platform_scope())
     OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
     OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
 );
+DROP POLICY IF EXISTS inserts ON billing.subscription_windows;
 CREATE POLICY inserts ON billing.subscription_windows FOR INSERT WITH CHECK (
     (SELECT platform.in_platform_scope())
     OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
     OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
 );
+DROP POLICY IF EXISTS updates ON billing.subscription_windows;
 CREATE POLICY updates ON billing.subscription_windows FOR UPDATE USING (
     (SELECT platform.in_platform_scope())
     OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
@@ -126,8 +136,8 @@ CREATE TABLE IF NOT EXISTS billing.subscription_grants (
     plan_name text NOT NULL CHECK (plan_name <> ''),
     source text NOT NULL CHECK (source IN ('gift', 'paid')),
     quota bigint NOT NULL CHECK (quota > 0),
-    window_seconds bigint NOT NULL CHECK (window_seconds >= 3600),
-    term_seconds bigint NOT NULL CHECK (term_seconds >= window_seconds),
+    window_seconds bigint NOT NULL CHECK (window_seconds BETWEEN 3600 AND 9223372036),
+    term_seconds bigint NOT NULL CHECK (term_seconds BETWEEN window_seconds AND 9223372036),
     windows integer NOT NULL CHECK (windows >= 1 AND windows <= 400),
     face bigint NOT NULL CHECK (face > 0),               -- windows × quota, the liability credited
     currency text,
@@ -145,11 +155,13 @@ CREATE TABLE IF NOT EXISTS billing.subscription_grants (
     CHECK (face = quota * windows)
 );
 ALTER TABLE billing.subscription_grants ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS reads ON billing.subscription_grants;
 CREATE POLICY reads ON billing.subscription_grants FOR SELECT USING (
     (SELECT platform.in_platform_scope())
     OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
     OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
 );
+DROP POLICY IF EXISTS inserts ON billing.subscription_grants;
 CREATE POLICY inserts ON billing.subscription_grants FOR INSERT WITH CHECK (
     (SELECT platform.in_platform_scope())
     OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
@@ -167,6 +179,8 @@ ALTER TABLE billing.reservations
     ADD CONSTRAINT reservations_funding_check CHECK (
         (funding = 'wallet' AND subscription_id IS NULL AND window_seq IS NULL)
         OR (funding = 'plan' AND subscription_id IS NOT NULL AND window_seq IS NOT NULL)) NOT VALID;
+-- A late settlement may rewrite a released plan hold as a wallet hold, so the app needs those three columns.
+GRANT UPDATE (funding, subscription_id, window_seq) ON billing.reservations TO axiom_app;
 
 -- The plan's liability and the discount it was sold at (docs/domains/billing.md「账本」).
 ALTER TABLE billing.entries

@@ -61,3 +61,21 @@ func planRoom(ctx context.Context, tx pg.Tx, subscription uuid.UUID, seq int32) 
 	win := Window{Seq: w.Seq, StartsAt: w.StartsAt, EndsAt: w.EndsAt, Quota: w.Quota, Used: w.Used, Reserved: w.Reserved}
 	return win.Remaining(), Subscription{ID: s.ID, State: s.State, ClosedAt: s.ClosedAt}, nil
 }
+
+// markLateWallets records the source that actually paid a late settlement: cleanup released the window's hold and its
+// credit may have lapsed, so the row becomes a wallet reservation before a correction can read it as a plan charge.
+func markLateWallets(ctx context.Context, tx pg.Tx, ends []*reservationEnd) error {
+	var ids []uuid.UUID
+	for _, e := range ends {
+		if e.w.wallet {
+			ids = append(ids, e.c.id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := queries.SetReservationsWallet(ctx, tx, ids); err != nil {
+		return fmt.Errorf("billing: record the wallet as the late settlement's source: %w", err)
+	}
+	return nil
+}

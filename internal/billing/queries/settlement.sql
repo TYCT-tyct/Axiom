@@ -120,14 +120,18 @@ SELECT request_id, ended_at FROM updated;
 
 -- name: SettleWindows :exec
 -- The plan windows of a batch's settlements: each hold goes back and its charge is used, in one statement under the
--- balance row lock the batch already holds.
+-- balance row lock the batch already holds. The rows are summed by window first: several requests of one batch may
+-- freeze the same window, and UPDATE ... FROM applies only one matching input row to a target row.
 WITH input AS (
     SELECT i AS ord, (@subscriptions::uuid[])[i] AS subscription_id, (@seqs::integer[])[i] AS seq,
         (@helds::bigint[])[i] AS held, (@chargeds::bigint[])[i] AS charged
     FROM generate_subscripts(@subscriptions::uuid[], 1) AS i
+), totals AS (
+    SELECT subscription_id, seq, sum(held) AS held, sum(charged) AS charged
+    FROM input GROUP BY subscription_id, seq
 )
-UPDATE billing.subscription_windows w SET reserved = w.reserved - i.held, used = w.used + i.charged
-FROM input i WHERE w.subscription_id = i.subscription_id AND w.seq = i.seq;
+UPDATE billing.subscription_windows w SET reserved = w.reserved - t.held, used = w.used + t.charged
+FROM totals t WHERE w.subscription_id = t.subscription_id AND w.seq = t.seq;
 
 -- name: PostLedger :execrows
 -- Lock before allocating the transaction sequence. Every write depends on the inserted event, so a duplicate

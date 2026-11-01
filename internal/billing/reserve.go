@@ -159,22 +159,8 @@ func (b *Billing) ExtendIn(ctx context.Context, tx pg.Tx, h *Hold, r ExtendReque
 		return err
 	}
 	avail := a.available(balance, usage.WorkspaceUsed, usage.KeyUsed)
-	amount := platform.AmountExact(delta)
-	if row.Funding == "plan" {
-		// The plan pays for the rest: the wallet's own headroom is not its business, and the workspace and key limits
-		// count both sources alike. A window short of the delta truncates the answer, as a short balance does.
-		if short := shortSource(amount, avail[1:]); short >= 0 {
-			return a.transient(&Insufficient{Source: avail[short+1].Source})
-		}
-		w, err := queries.Window(ctx, tx, WindowParams{SubscriptionID: *row.SubscriptionID, Seq: *row.WindowSeq})
-		if err != nil {
-			return fmt.Errorf("billing: read the frozen window: %w", err)
-		}
-		if amount.Cmp(platform.AmountExact(w.Quota-w.Used-w.Reserved)) > 0 {
-			return a.transient(&Insufficient{Source: SourceBalance})
-		}
-	} else if short := shortSource(amount, avail); short >= 0 {
-		return a.transient(&Insufficient{Source: avail[short].Source})
+	if err := extendRoom(ctx, tx, a, row, platform.AmountExact(delta), avail); err != nil {
+		return err
 	}
 	// Under the balance row lock nothing changed the row since it was read, so the compare must hold.
 	if n, err := queries.ExtendReservation(ctx, tx, ExtendReservationParams{
@@ -190,6 +176,29 @@ func (b *Billing) ExtendIn(ctx context.Context, tx pg.Tx, h *Hold, r ExtendReque
 		funding: row.Funding, subscription: derefUUID(row.SubscriptionID), windowSeq: derefInt32(row.WindowSeq),
 	}
 	return booked.addReserved(ctx, tx, delta)
+}
+
+// extendRoom checks the delta against the source the reservation froze. A plan hold is not capped by the wallet's own
+// headroom, but the workspace and key limits count both sources alike; a window short of the delta truncates the answer,
+// as a short balance does.
+func extendRoom(ctx context.Context, tx pg.Tx, a Admitted, row GetReservationRow, amount platform.Exact, avail []Available) error {
+	if row.Funding != "plan" {
+		if short := shortSource(amount, avail); short >= 0 {
+			return a.transient(&Insufficient{Source: avail[short].Source})
+		}
+		return nil
+	}
+	if short := shortSource(amount, avail[1:]); short >= 0 {
+		return a.transient(&Insufficient{Source: avail[short+1].Source})
+	}
+	w, err := queries.Window(ctx, tx, WindowParams{SubscriptionID: *row.SubscriptionID, Seq: *row.WindowSeq})
+	if err != nil {
+		return fmt.Errorf("billing: read the frozen window: %w", err)
+	}
+	if amount.Cmp(platform.AmountExact(w.Quota-w.Used-w.Reserved)) > 0 {
+		return a.transient(&Insufficient{Source: SourceBalance})
+	}
+	return nil
 }
 
 // SettleOrphan ends the reservation of a request whose admission's COMMIT went unacknowledged (README.md「追加与结算」).

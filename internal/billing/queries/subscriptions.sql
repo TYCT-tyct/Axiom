@@ -95,6 +95,13 @@ WHERE subscription_id = @subscription_id AND seq = @seq AND @held >= 0 AND @char
 UPDATE billing.subscription_windows SET used = used + @delta
 WHERE subscription_id = @subscription_id AND seq = @seq AND used + @delta >= 0 AND used + @delta <= quota;
 
+-- name: SetReservationsWallet :exec
+-- A plan reservation cleanup released settles late from the wallet: the window's hold is already back and its credit
+-- may have lapsed, so the row must record the source that actually paid. Corrections then follow the wallet, not a
+-- window that never paid (docs/domains/billing.md「订阅套餐」).
+UPDATE billing.reservations SET funding = 'wallet', subscription_id = NULL, window_seq = NULL
+WHERE request_id = ANY(@request_ids::uuid[]) AND funding <> 'wallet';
+
 -- name: InsertGrant :execrows
 INSERT INTO billing.subscription_grants (id, site_id, account_id, subscription_id, plan_id, plan_name, source, quota,
     window_seconds, term_seconds, windows, face, currency, paid, fee, merchant_id, offline_channel, rate_id)
@@ -108,23 +115,31 @@ SELECT id, site_id, account_id, subscription_id, plan_id, plan_name, source, quo
 FROM billing.subscription_grants WHERE id = @id;
 
 -- name: Liability :one
--- What a subscription still owes: the sum of its plan_liability entries, negated (a credit to the liability is
--- negative). The grant's face and every charge and write-off reference the subscription as their request id.
+-- What a subscription still owes: the sum of its plan_liability entries, which is negative while credit remains
+-- (a credit to the liability is negative). The grant and write-off reference the subscription as their request id; a call settlement and its
+-- correction reference the call, so they join back through the reservation that froze the subscription.
 SELECT coalesce(sum(e.amount), 0)::bigint AS credited
-FROM billing.entries e JOIN billing.transactions t ON t.id = e.transaction_id
-WHERE t.request_id = @subscription_id AND e.book = 'plan_liability';
+FROM billing.entries e
+JOIN billing.transactions t ON t.id = e.transaction_id
+LEFT JOIN billing.reservations r ON r.request_id = t.request_id
+WHERE e.book = 'plan_liability'
+    AND (t.request_id = @subscription_id OR r.subscription_id = @subscription_id);
 
 -- name: PendingPlanHolds :one
 SELECT coalesce(sum(amount), 0)::bigint AS held
 FROM billing.reservations WHERE subscription_id = @subscription_id AND state = 'pending';
 
 -- name: DueSubscriptions :many
--- Active subscriptions whose term or current window has ended, oldest first. Once one is processed it leaves this set,
--- so the scan needs no cursor.
+-- Subscriptions a run must look at, oldest first: an active one whose term or current window ended (to pass the window
+-- and expire the term), and an expired one not yet closed. An expired subscription still holding a pending plan
+-- reservation is left out rather than returned and skipped, so a page full of such rows cannot starve the ones behind
+-- them; the reservation's end makes it due again on the following run.
 SELECT s.id, s.site_id, s.account_id, s.ends_at
 FROM billing.subscriptions s
 JOIN billing.subscription_windows w ON w.subscription_id = s.id AND w.seq = s.current_seq
-WHERE s.state = 'active' AND (s.ends_at <= clock_timestamp() OR w.ends_at <= clock_timestamp())
+WHERE (s.state = 'active' AND (s.ends_at <= clock_timestamp() OR w.ends_at <= clock_timestamp()))
+    OR (s.state = 'expired' AND s.closed_at IS NULL AND NOT EXISTS (
+        SELECT 1 FROM billing.reservations r WHERE r.subscription_id = s.id AND r.state = 'pending'))
 ORDER BY s.ends_at, s.id
 LIMIT @max;
 

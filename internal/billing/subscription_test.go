@@ -14,15 +14,15 @@ import (
 // The subscription suite: a plan is the first source a call draws on, the wallet the second, and a reservation keeps
 // the window it froze (docs/domains/billing.md「订阅套餐」).
 
-// makePlan adds the site's plan: quota of credit in each window, one window every windowSeconds, termSeconds in all.
-func (b *bank) makePlan(quota, window, term int64) Plan {
+// makePlan adds the site's plan: quota of credit in each hourly window, term seconds in all.
+func (b *bank) makePlan(quota, term int64) Plan {
 	b.t.Helper()
 	var p Plan
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
 		var err error
 		p, err = CreatePlan(b.t.Context(), tx, b.admitted.Site, PlanInput{
 			Name: "Monthly " + uuid.NewV7().String(), Reason: "test",
-			Currency: usd, Price: 2_000_000_000, Quota: quota, WindowSeconds: window, TermSeconds: term, Active: true,
+			Currency: usd, Price: 2_000_000_000, Quota: quota, WindowSeconds: 3600, TermSeconds: term, Active: true,
 		},
 			audit.System("billing.test"))
 		return err
@@ -34,17 +34,22 @@ func (b *bank) makePlan(quota, window, term int64) Plan {
 
 // subscribe grants p to the account under id, or renews the plan in force, and returns the subscription it made.
 func (b *bank) subscribe(p Plan, id uuid.UUID) Subscription {
+	return b.subscribeFor(b.admitted, p, id)
+}
+
+// subscribeFor grants p to a under id, for tests that need more than one account on the site.
+func (b *bank) subscribeFor(a Admitted, p Plan, id uuid.UUID) Subscription {
 	b.t.Helper()
 	var sub Subscription
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
 		if err := CreditSubscription(b.t.Context(), tx, SubscriptionGrant{
-			ID: id, Site: b.admitted.Site,
-			Account: b.admitted.Account, Plan: p.ID, SiteCurrency: usd, Source: "gift", Actor: audit.System("billing.test"),
+			ID: id, Site: a.Site,
+			Account: a.Account, Plan: p.ID, SiteCurrency: usd, Source: "gift", Actor: audit.System("billing.test"),
 			Reason: "test",
 		}); err != nil {
 			return err
 		}
-		subs, err := Subscriptions(b.t.Context(), tx, b.admitted.Account, 10)
+		subs, err := Subscriptions(b.t.Context(), tx, a.Account, 10)
 		if err != nil {
 			return err
 		}
@@ -57,15 +62,18 @@ func (b *bank) subscribe(p Plan, id uuid.UUID) Subscription {
 }
 
 // advance passes the windows whose time came, as admission and the job do, and returns the window that holds now.
-func (b *bank) advance() *planWindow {
+func (b *bank) advance() *planWindow { return b.advanceFor(b.admitted) }
+
+// advanceFor does what admission does for a, for tests that need more than one account.
+func (b *bank) advanceFor(a Admitted) *planWindow {
 	b.t.Helper()
 	var w *planWindow
-	if err := b.app.Tx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
-		if _, err := lockAccount(b.t.Context(), tx, b.admitted.Account); err != nil {
+	if err := b.app.Tx(b.t.Context(), a.Scope, func(tx pg.Tx) error {
+		if _, err := lockAccount(b.t.Context(), tx, a.Account); err != nil {
 			return err
 		}
 		var err error
-		w, err = planWindowNow(b.t.Context(), tx, b.admitted.Account)
+		w, err = planWindowNow(b.t.Context(), tx, a.Account)
 		return err
 	}); err != nil {
 		b.t.Fatal(err)
@@ -108,7 +116,7 @@ func TestSubscriptionFundsACallFirst(t *testing.T) {
 	t.Parallel()
 
 	b := newBank(t, 1000, 0, Config{})
-	sub := b.subscribe(b.makePlan(400, 3600, 7200), uuid.NewV7())
+	sub := b.subscribe(b.makePlan(400, 7200), uuid.NewV7())
 	h := b.holdOn(b.exact, 400)
 	if h.funding != "plan" || h.subscription != sub.ID || h.windowSeq != 1 {
 		t.Fatalf("hold funds from %q of %s window %d, want the plan's first window", h.funding, h.subscription, h.windowSeq)
@@ -138,7 +146,7 @@ func TestSubscriptionWindowExhaustedFallsBackToTheWallet(t *testing.T) {
 	t.Parallel()
 
 	b := newBank(t, 1000, 0, Config{})
-	b.subscribe(b.makePlan(300, 3600, 3600), uuid.NewV7())
+	b.subscribe(b.makePlan(300, 3600), uuid.NewV7())
 	h := b.holdOn(b.exact, 400)
 	if h.funding != "wallet" {
 		t.Fatalf("hold funds from %q, want the wallet: the window holds 300 of 400", h.funding)
@@ -164,7 +172,7 @@ func TestSubscriptionExtendStaysInTheFrozenWindow(t *testing.T) {
 	t.Parallel()
 
 	b := newBank(t, 10_000, 0, Config{})
-	b.subscribe(b.makePlan(300, 3600, 7200), uuid.NewV7())
+	b.subscribe(b.makePlan(300, 7200), uuid.NewV7())
 	h := b.holdOn(b.exact, 250)
 	err := b.billing.Extend(t.Context(), h, ExtendRequest{Seq: 2, Target: platform.AmountExact(350)})
 	var short *Insufficient
@@ -189,7 +197,7 @@ func TestSubscriptionResetDoesNotCarryOver(t *testing.T) {
 	t.Parallel()
 
 	b := newBank(t, 1000, 0, Config{})
-	sub := b.subscribe(b.makePlan(300, 3600, 7200), uuid.NewV7())
+	sub := b.subscribe(b.makePlan(300, 7200), uuid.NewV7())
 	h := b.holdOn(b.exact, 100)
 	if _, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, used(t, 100, 0, 0))); err != nil {
 		t.Fatal(err)
@@ -213,7 +221,7 @@ func TestSubscriptionSettleLandsInTheFrozenWindow(t *testing.T) {
 	t.Parallel()
 
 	b := newBank(t, 1000, 0, Config{})
-	sub := b.subscribe(b.makePlan(300, 3600, 7200), uuid.NewV7())
+	sub := b.subscribe(b.makePlan(300, 7200), uuid.NewV7())
 	h := b.holdOn(b.exact, 200)
 	b.sql("UPDATE billing.subscription_windows SET starts_at = now() - interval '2 hours', " +
 		"ends_at = now() - interval '1 hour' WHERE subscription_id = '" + sub.ID.String() + "' AND seq = 1")
@@ -241,7 +249,7 @@ func TestSubscriptionRenewalAddsTermAndWindows(t *testing.T) {
 	t.Parallel()
 
 	b := newBank(t, 0, 0, Config{})
-	p := b.makePlan(100, 3600, 7200)
+	p := b.makePlan(100, 7200)
 	first := b.subscribe(p, uuid.NewV7())
 	renewed := b.subscribe(p, uuid.NewV7())
 	if renewed.ID != first.ID {
@@ -265,7 +273,7 @@ func TestSubscriptionGrantIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	b := newBank(t, 0, 0, Config{})
-	p := b.makePlan(100, 3600, 7200)
+	p := b.makePlan(100, 7200)
 	id := uuid.NewV7()
 	b.subscribe(p, id)
 	b.subscribe(p, id)
@@ -275,7 +283,7 @@ func TestSubscriptionGrantIsIdempotent(t *testing.T) {
 	if n := b.book(bookPlanLiability); n != -200 {
 		t.Errorf("plan liability %d after the same key twice, want -200", n)
 	}
-	other := b.makePlan(1000, 3600, 7200)
+	other := b.makePlan(1000, 7200)
 	err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
 		return CreditSubscription(t.Context(), tx, SubscriptionGrant{
 			ID: id, Site: b.admitted.Site,
@@ -294,7 +302,7 @@ func TestSubscriptionExpiryWaitsForItsHolds(t *testing.T) {
 	t.Parallel()
 
 	b := newBank(t, 1000, 0, Config{})
-	sub := b.subscribe(b.makePlan(300, 3600, 3600), uuid.NewV7())
+	sub := b.subscribe(b.makePlan(300, 3600), uuid.NewV7())
 	h := b.holdOn(b.exact, 200)
 	b.sql("UPDATE billing.subscriptions SET starts_at = now() - interval '2 hours', "+
 		"ends_at = now() - interval '1 hour' WHERE id = '"+sub.ID.String()+"'",

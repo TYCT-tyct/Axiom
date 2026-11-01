@@ -40,10 +40,8 @@ func (b *Billing) ReserveMany(ctx context.Context, tx pg.Tx, reqs []ReserveReque
 		return holds, kept, errs, nil
 	}
 	account := reqs[0].Admitted.Account
-	for _, r := range reqs[1:] {
-		if r.Admitted.Account != account {
-			return nil, nil, nil, fmt.Errorf("billing: a reservation batch mixes accounts %s and %s", account, r.Admitted.Account)
-		}
+	if err := sameReservationAccount(reqs, account); err != nil {
+		return nil, nil, nil, err
 	}
 	src, err := b.lockBatch(ctx, tx, account, reqs)
 	var refused error
@@ -56,20 +54,15 @@ func (b *Billing) ReserveMany(ctx context.Context, tx pg.Tx, reqs []ReserveReque
 		return nil, nil, nil, err
 	}
 	if refused != nil {
-		for i := range errs {
-			errs[i] = refused
-		}
+		fillBatchErrors(errs, refused)
 		return holds, kept, errs, nil
+	}
+	if err := advanceDuePlan(ctx, tx, &src); err != nil {
+		return nil, nil, nil, err
 	}
 	usage, err := readBatchUsage(ctx, tx, reqs, src.day)
 	if err != nil {
 		return nil, nil, nil, err
-	}
-	if src.plan != nil && src.plan.due(src.day) {
-		// A window or the term ended: pass the window first, so the batch quotes against the one that holds now.
-		if src.plan, err = planWindowNow(ctx, tx, account); err != nil {
-			return nil, nil, nil, err
-		}
 	}
 	quoted := b.quoteBatch(reqs, src, usage, errs)
 	if err := insertBatch(ctx, tx, quoted); err != nil {
@@ -86,10 +79,43 @@ func (b *Billing) ReserveMany(ctx context.Context, tx pg.Tx, reqs []ReserveReque
 	return holds, kept, errs, nil
 }
 
+// sameReservationAccount checks that every request of a batch names the account the batch locked.
+func sameReservationAccount(reqs []ReserveRequest, account uuid.UUID) error {
+	for _, r := range reqs[1:] {
+		if r.Admitted.Account != account {
+			return fmt.Errorf("billing: a reservation batch mixes accounts %s and %s", account, r.Admitted.Account)
+		}
+	}
+	return nil
+}
+
+// fillBatchErrors gives every request of a refused batch the same per-request refusal.
+func fillBatchErrors(errs []error, refused error) {
+	for i := range errs {
+		errs[i] = refused
+	}
+}
+
+// advanceDuePlan passes a window or a term that ended before this batch quotes, so a reservation never freezes a
+// window whose time is over. The due test keeps the database's whole timestamp: the budget day below is only the
+// calendar bucket of the counters, and midnight must not decide whether a window that ends at 10:00 still funds a call.
+func advanceDuePlan(ctx context.Context, tx pg.Tx, src *batchSources) error {
+	if src.plan == nil || !src.plan.due(src.now) {
+		return nil
+	}
+	plan, err := planWindowNow(ctx, tx, src.plan.account)
+	if err != nil {
+		return err
+	}
+	src.plan = plan
+	return nil
+}
+
 // batchSources is what a batch reads under its account's lock, once for every request in it.
 type batchSources struct {
 	balance LockBalanceRow
-	day     time.Time
+	now     time.Time   // the database's clock, whole, for plan expiry
+	day     time.Time   // now's UTC day, for the counters' budget windows
 	plan    *planWindow // the account's subscription window, nil when no plan may fund a request
 	found   map[string]fallbacks
 	bodies  map[string]string
@@ -122,15 +148,17 @@ func (b *Billing) lockBatch(ctx context.Context, tx pg.Tx, account uuid.UUID, re
 		if err := batch.QueryRow().Scan(&holder); err != nil {
 			return fenceErr(err)
 		}
-		plan, err := scanPlan(batch)
+		plan, found, err := scanPlan(batch)
 		if err != nil {
 			return err
 		}
-		src.plan = plan
-		if err := batch.QueryRow().Scan(&src.day); err != nil {
+		if found {
+			src.plan = &plan
+		}
+		if err := batch.QueryRow().Scan(&src.now); err != nil {
 			return fmt.Errorf("billing: read the clock: %w", err)
 		}
-		src.day = src.day.UTC().Truncate(24 * time.Hour) // the windows are UTC days, as ReadUsage makes them
+		src.day = src.now.UTC().Truncate(24 * time.Hour) // the counters are UTC days, as ReadUsage makes them
 		return nil
 	})
 	return src, err
@@ -199,18 +227,18 @@ type quotedReservation struct {
 	quote  Reservation
 }
 
-// scanPlan reads the plan window of the batch's statement, nil when the account has none in force.
-func scanPlan(batch pg.BatchResults) (*planWindow, error) {
+// scanPlan reads the plan window of the batch's statement; found is false when the account has none in force.
+func scanPlan(batch pg.BatchResults) (planWindow, bool, error) {
 	var r AvailablePlanRow
 	err := batch.QueryRow().Scan(&r.SubscriptionID, &r.SiteID, &r.AccountID, &r.TermEnds, &r.Seq, &r.WindowStarts,
 		&r.WindowEnds, &r.Quota, &r.Used, &r.Reserved)
 	if errors.Is(err, pg.ErrNoRows) {
-		return nil, nil
+		return planWindow{}, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("billing: read the subscription window: %w", err)
+		return planWindow{}, false, fmt.Errorf("billing: read the subscription window: %w", err)
 	}
-	return planWindowOf(r), nil
+	return *planWindowOf(r), true, nil
 }
 
 // quoteBatch quotes the requests in order. Each quote sees the amounts the earlier quoted requests add to the balance's

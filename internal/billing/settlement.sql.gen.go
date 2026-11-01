@@ -734,9 +734,12 @@ WITH input AS (
     SELECT i AS ord, ($1::uuid[])[i] AS subscription_id, ($2::integer[])[i] AS seq,
         ($3::bigint[])[i] AS held, ($4::bigint[])[i] AS charged
     FROM generate_subscripts($1::uuid[], 1) AS i
+), totals AS (
+    SELECT subscription_id, seq, sum(held) AS held, sum(charged) AS charged
+    FROM input GROUP BY subscription_id, seq
 )
-UPDATE billing.subscription_windows w SET reserved = w.reserved - i.held, used = w.used + i.charged
-FROM input i WHERE w.subscription_id = i.subscription_id AND w.seq = i.seq
+UPDATE billing.subscription_windows w SET reserved = w.reserved - t.held, used = w.used + t.charged
+FROM totals t WHERE w.subscription_id = t.subscription_id AND w.seq = t.seq
 `
 
 type SettleWindowsParams struct {
@@ -747,7 +750,8 @@ type SettleWindowsParams struct {
 }
 
 // The plan windows of a batch's settlements: each hold goes back and its charge is used, in one statement under the
-// balance row lock the batch already holds.
+// balance row lock the batch already holds. The rows are summed by window first: several requests of one batch may
+// freeze the same window, and UPDATE ... FROM applies only one matching input row to a target row.
 func (q *Queries) SettleWindows(ctx context.Context, db DBTX, arg SettleWindowsParams) error {
 	_, err := db.Exec(ctx, settleWindows,
 		arg.Subscriptions,

@@ -232,66 +232,88 @@ func replaceCharge(ctx context.Context, tx pg.Tx, ev suppliers.ChargeEvent) (int
 	}
 	charged := &locked{id: ev.Request, row: row, balance: balance}
 	charged.owed = price.price
-	plan := row.Funding == "plan"
-	var closed bool
-	if plan {
-		// A plan charge is capped by the frozen window, whose room is read afresh: a later request may have taken what
-		// this one released, and the window's quota bounds every charge into it (docs/domains/billing.md「订阅套餐」).
-		left, sub, err := planRoom(ctx, tx, *row.SubscriptionID, *row.WindowSeq)
-		if err != nil {
-			return 0, err
-		}
-		closed = sub.ClosedAt != nil
-		charged.charged = min(price.price, min(row.Amount, add(row.Charged, left)))
-	} else {
-		charged.charged = min(price.price, add(row.Charged, room(balance, 0)))
-	}
-	borne := max(price.price-charged.charged, 0)
-	revision := int64(ev.Revision)
-	reverse, settle := reversal(row.Price, row.Charged), charge(price.price, charged.charged)
-	if plan {
-		reverse, settle = planReversal(row.Price, row.Charged), planCharge(price.price, charged.charged)
-		if delta := charged.charged - row.Charged; closed && delta != 0 {
-			// The subscription was written off, so its liability is zero: the difference comes back out of the expired
-			// income that write-off booked, and the pair leaves the liability at zero and never negative.
-			settle = append(settle, line{bookCreditExpired, delta, siteCredits}, line{bookPlanLiability, -delta, siteCredits})
-		}
-	}
-	reversed, err := post(ctx, tx, charged.event("reverse", revision), reverse...)
+	correction, err := chargeCorrection(ctx, tx, row, balance, charged, price, int64(ev.Revision))
 	if err != nil {
 		return 0, err
 	}
-	settled, err := post(ctx, tx, charged.event("settle", revision), settle...)
-	if err != nil {
-		return 0, err
-	}
-	if !reversed && !settled {
+	if !correction.reversed && !correction.settled {
 		return 0, errNoCorrection
 	}
-	if plan {
-		if err := correctPlanWindow(ctx, tx, ev.Request, row, charged.charged-row.Charged); err != nil {
-			return 0, err
-		}
+	if err := correctPlanWindow(ctx, tx, ev.Request, row, correction.windowDelta); err != nil {
+		return 0, err
 	}
 	if err := writeCorrection(ctx, tx, charged, segments, price.tiers); err != nil {
 		return 0, err
 	}
-	wallet := charged.charged
-	if plan {
-		wallet = 0 // the user's balance did not move for a plan charge, so the allocation has nothing to realign
+	if correction.walletDelta != 0 { // a plan charge moves no wallet money, so the allocation has nothing to realign
+		if err := realignAllocation(ctx, tx, ev.Request, row, balance, charged.charged); err != nil {
+			return 0, err
+		}
 	}
-	if err := realignAllocation(ctx, tx, ev.Request, row, balance, wallet); err != nil {
-		return 0, err
-	}
-	if borne > 0 {
+	if correction.borne > 0 {
 		if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{
 			Kind: "billing.charge_correction_borne", Key: ev.Request.String(), Severity: "critical",
-			Fields: map[string]string{"request": ev.Request.String(), "event": ev.ID.String(), "borne": fmt.Sprint(borne)},
+			Fields: map[string]string{"request": ev.Request.String(), "event": ev.ID.String(), "borne": fmt.Sprint(correction.borne)},
 		}); err != nil {
 			return 0, fmt.Errorf("billing: report the borne correction: %w", err)
 		}
 	}
-	return borne, nil
+	return correction.borne, nil
+}
+
+// correctionPost is what chargeCorrection wrote: whether each event landed, and the counter and allocation moves that
+// follow from the source that actually paid.
+type correctionPost struct {
+	reversed, settled bool
+	windowDelta       int64 // the frozen window's used amount changes by this much
+	walletDelta       int64 // the user's balance changes by this much
+	borne             int64
+}
+
+// chargeCorrection reverses the old charge and posts the corrected one, choosing the source the effective settlement
+// actually used. A true plan charge is capped by its frozen window and moves no wallet money; a reservation whose late
+// settlement paid from the wallet (funding was rewritten then) is corrected against the wallet and its allocation.
+func chargeCorrection(ctx context.Context, tx pg.Tx, row LockReservationRow, balance LockBalanceRow, charged *locked, price priced, revision int64) (correctionPost, error) {
+	reverse, settle, windowDelta, walletDelta, err := correctionLines(ctx, tx, row, balance, charged, price)
+	if err != nil {
+		return correctionPost{}, err
+	}
+	reversed, err := post(ctx, tx, charged.event("reverse", revision), reverse...)
+	if err != nil {
+		return correctionPost{}, err
+	}
+	settled, err := post(ctx, tx, charged.event("settle", revision), settle...)
+	if err != nil {
+		return correctionPost{}, err
+	}
+	return correctionPost{
+		reversed: reversed, settled: settled, windowDelta: windowDelta, walletDelta: walletDelta,
+		borne: max(price.price-charged.charged, 0),
+	}, nil
+}
+
+// correctionLines prices the corrected charge against the source the reservation records and returns the two ledger
+// entries and the counters they move.
+func correctionLines(ctx context.Context, tx pg.Tx, row LockReservationRow, balance LockBalanceRow, charged *locked, price priced) ([]line, []line, int64, int64, error) {
+	if row.Funding == "plan" {
+		// A plan charge is capped by the frozen window, whose room is read afresh: a later request may have taken what
+		// this one released, and the window's quota bounds every charge into it (docs/domains/billing.md「订阅套餐」).
+		left, sub, err := planRoom(ctx, tx, *row.SubscriptionID, *row.WindowSeq)
+		if err != nil {
+			return nil, nil, 0, 0, err
+		}
+		charged.charged = min(price.price, min(row.Amount, add(row.Charged, left)))
+		delta := charged.charged - row.Charged
+		reverse, settle := planReversal(row.Price, row.Charged), planCharge(price.price, charged.charged)
+		if sub.ClosedAt != nil && delta != 0 {
+			// The subscription was written off, so its liability is zero: the difference comes back out of the expired
+			// income that write-off booked, and the pair leaves the liability at zero and never negative.
+			settle = append(settle, line{bookCreditExpired, delta, siteCredits}, line{bookPlanLiability, -delta, siteCredits})
+		}
+		return reverse, settle, delta, 0, nil
+	}
+	charged.charged = min(price.price, add(row.Charged, room(balance, 0)))
+	return reversal(row.Price, row.Charged), charge(price.price, charged.charged), 0, charged.charged - row.Charged, nil
 }
 
 // lockCorrection reads the request's account, then locks its balance and reservation, the order every settlement uses.
