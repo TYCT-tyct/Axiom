@@ -45,3 +45,11 @@ func ReadCredits(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]
 	}
 	return out, nil
 }
+
+// TransactionCreatedAt returns the timestamp of one ledger transaction, so a caller recording a channel fact uses the
+// ledger's clock instead of its own.
+func TransactionCreatedAt(ctx context.Context, tx pg.Tx, requestID uuid.UUID, kind string, revision int64) (time.Time, error) {
+	return queries.TransactionCreatedAt(ctx, tx, TransactionCreatedAtParams{
+		RequestID: requestID, Kind: kind, Revision: revision,
+	})
+}

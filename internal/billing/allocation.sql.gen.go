@@ -36,6 +36,61 @@ func (q *Queries) AllocationState(ctx context.Context, db DBTX, accountID uuid.U
 	return i, err
 }
 
+const chargebackBatch = `-- name: ChargebackBatch :one
+SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded, b.charged_back,
+    coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
+FROM billing.credit_batches b
+JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
+WHERE b.id = $1 AND b.account_id = $2
+`
+
+type ChargebackBatchParams struct {
+	ID        uuid.UUID
+	AccountID uuid.UUID
+}
+
+type ChargebackBatchRow struct {
+	ID            uuid.UUID
+	SiteID        uuid.UUID
+	Source        string
+	ExpiresAt     *time.Time
+	Amount        int64
+	Consumed      int64
+	Expired       int64
+	FreezeTotal   int64
+	UnfreezeTotal int64
+	Refunded      int64
+	ChargedBack   int64
+	OpenedSeq     int64
+	OpenedAt      time.Time
+	OpenedID      uuid.UUID
+}
+
+// A chargeback can name a batch that expired before it arrived. LiveBatches leaves a fully expired batch out to keep
+// every replay small, so the chargeback loads just that batch before it posts; after the first chargeback the row's
+// charged_back keeps it in LiveBatches for the reversal.
+func (q *Queries) ChargebackBatch(ctx context.Context, db DBTX, arg ChargebackBatchParams) (ChargebackBatchRow, error) {
+	row := db.QueryRow(ctx, chargebackBatch, arg.ID, arg.AccountID)
+	var i ChargebackBatchRow
+	err := row.Scan(
+		&i.ID,
+		&i.SiteID,
+		&i.Source,
+		&i.ExpiresAt,
+		&i.Amount,
+		&i.Consumed,
+		&i.Expired,
+		&i.FreezeTotal,
+		&i.UnfreezeTotal,
+		&i.Refunded,
+		&i.ChargedBack,
+		&i.OpenedSeq,
+		&i.OpenedAt,
+		&i.OpenedID,
+	)
+	return i, err
+}
+
 const dueAccounts = `-- name: DueAccounts :many
 SELECT b.account_id FROM billing.credit_batches b
 WHERE b.expires_at <= $1::timestamptz AND b.consumed + b.expired < b.amount AND b.account_id > $2
@@ -155,12 +210,13 @@ func (q *Queries) LegacyMovements(ctx context.Context, db DBTX, arg LegacyMoveme
 }
 
 const liveBatches = `-- name: LiveBatches :many
-SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded,
+SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded, b.charged_back,
     coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
 FROM billing.credit_batches b
 JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
 WHERE b.account_id = $1
-    AND (b.consumed > 0 OR (b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired))
+    AND (b.consumed > 0 OR b.charged_back > 0
+        OR (b.consumed + b.expired < b.amount AND b.refunded < b.amount - b.consumed - b.expired))
 `
 
 type LiveBatchesRow struct {
@@ -174,6 +230,7 @@ type LiveBatchesRow struct {
 	FreezeTotal   int64
 	UnfreezeTotal int64
 	Refunded      int64
+	ChargedBack   int64
 	OpenedSeq     int64
 	OpenedAt      time.Time
 	OpenedID      uuid.UUID
@@ -203,6 +260,7 @@ func (q *Queries) LiveBatches(ctx context.Context, db DBTX, accountID uuid.UUID)
 			&i.FreezeTotal,
 			&i.UnfreezeTotal,
 			&i.Refunded,
+			&i.ChargedBack,
 			&i.OpenedSeq,
 			&i.OpenedAt,
 			&i.OpenedID,
@@ -339,10 +397,11 @@ func (q *Queries) SaveAllocation(ctx context.Context, db DBTX, arg SaveAllocatio
 
 const saveBatches = `-- name: SaveBatches :exec
 UPDATE billing.credit_batches b SET consumed = v.consumed, expired = v.expired,
-    freeze_total = v.freeze_total, unfreeze_total = v.unfreeze_total, refunded = v.refunded
+    freeze_total = v.freeze_total, unfreeze_total = v.unfreeze_total, refunded = v.refunded,
+    charged_back = v.charged_back
 FROM (SELECT unnest($1::uuid[]) AS id, unnest($2::bigint[]) AS consumed, unnest($3::bigint[]) AS expired,
     unnest($4::bigint[]) AS freeze_total, unnest($5::bigint[]) AS unfreeze_total,
-    unnest($6::bigint[]) AS refunded) v
+    unnest($6::bigint[]) AS refunded, unnest($7::bigint[]) AS charged_back) v
 WHERE b.id = v.id
 `
 
@@ -353,6 +412,7 @@ type SaveBatchesParams struct {
 	FreezeTotal   []int64
 	UnfreezeTotal []int64
 	Refunded      []int64
+	ChargedBack   []int64
 }
 
 func (q *Queries) SaveBatches(ctx context.Context, db DBTX, arg SaveBatchesParams) error {
@@ -363,6 +423,7 @@ func (q *Queries) SaveBatches(ctx context.Context, db DBTX, arg SaveBatchesParam
 		arg.FreezeTotal,
 		arg.UnfreezeTotal,
 		arg.Refunded,
+		arg.ChargedBack,
 	)
 	return err
 }

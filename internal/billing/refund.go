@@ -157,6 +157,12 @@ func (a *allocation) postRefund(ctx context.Context, tx pg.Tx, f Freeze, site uu
 }
 
 func (r Refund) entries(credit CreditBatch, amounts RefundAmounts) ([]line, error) {
+	return returnEntries(credit, r.Amount, amounts)
+}
+
+// returnEntries books credit and the matching cash and fee as returned. Refunds and chargebacks share the shape; a
+// reversal negates it.
+func returnEntries(credit CreditBatch, credits int64, amounts RefundAmounts) ([]line, error) {
 	// CreditPaid already checked that the whole payment fits the ledger, so both bounded parts fit too.
 	scale, err := unitScale(credit.Payment.Currency)
 	if err != nil {
@@ -165,16 +171,16 @@ func (r Refund) entries(credit CreditBatch, amounts RefundAmounts) ([]line, erro
 	cash, fee := amounts.Returned*scale, amounts.Fee*scale
 	if credit.RateID == (uuid.UUID{}) {
 		return []line{
-			{bookUserBalance, r.Amount, siteCredits},
+			{bookUserBalance, credits, siteCredits},
 			{bookFeeIncome, fee, siteCredits},
 			{bookCash, -cash, siteCredits},
-			{bookExchange, cash - fee - r.Amount, siteCredits},
+			{bookExchange, cash - fee - credits, siteCredits},
 		}, nil
 	}
 	in := credit.Payment.Currency.String()
 	return []line{
-		{bookUserBalance, r.Amount, siteCredits},
-		{bookExchange, -r.Amount, siteCredits},
+		{bookUserBalance, credits, siteCredits},
+		{bookExchange, -credits, siteCredits},
 		{bookFeeIncome, fee, in},
 		{bookCash, -cash, in},
 		{bookExchange, cash - fee, in},

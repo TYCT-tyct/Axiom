@@ -48,11 +48,14 @@ type batchState struct {
 	expiresAt                            *time.Time
 	amount, consumed, expired            int64
 	freezeTotal, unfreezeTotal, refunded int64
+	chargedBack                          int64
 	opened                               orderKey // its credit transaction: the batch holds nothing before it
 	touched                              bool     // replay state changed since it was loaded
 }
 
-func (b *batchState) remaining() int64 { return b.amount - b.consumed - b.expired - b.refunded }
+func (b *batchState) remaining() int64 {
+	return b.amount - b.consumed - b.expired - b.refunded - b.chargedBack
+}
 
 func (b *batchState) frozen() int64 { return b.freezeTotal - b.unfreezeTotal - b.refunded }
 
@@ -119,7 +122,7 @@ func newAllocation(state AllocationStateRow, loaded []LiveBatchesRow) *allocatio
 		b := &batchState{
 			id: r.ID, site: r.SiteID, source: r.Source, expiresAt: r.ExpiresAt, amount: r.Amount, consumed: r.Consumed,
 			expired: r.Expired, opened: orderKey{seq: r.OpenedSeq, at: r.OpenedAt, id: r.OpenedID},
-			freezeTotal: r.FreezeTotal, unfreezeTotal: r.UnfreezeTotal, refunded: r.Refunded,
+			freezeTotal: r.FreezeTotal, unfreezeTotal: r.UnfreezeTotal, refunded: r.Refunded, chargedBack: r.ChargedBack,
 		}
 		a.batches[b.id] = b
 		if b.opened.compare(at) <= 0 {
@@ -130,6 +133,26 @@ func newAllocation(state AllocationStateRow, loaded []LiveBatchesRow) *allocatio
 	return a
 }
 
+// chargeback takes or gives back credit of the named batch without touching a freeze. A chargeback's debit is
+// positive and a reversal's is negative, so the cumulative column moves by the movement's debit either way. The batch
+// is the one the payment credited: spending the debit from other batches would leave the charged batch refundable and
+// take the loss twice.
+func (a *allocation) chargeback(m movement) error {
+	b := a.batches[m.request]
+	if b == nil {
+		return fmt.Errorf("chargeback %s is not an open batch", m.request)
+	}
+	b.chargedBack += m.debit
+	// Consumed credit does not protect a payment from a chargeback: the user may have spent it, and the debt then takes
+	// the balance negative. Only a refund and a chargeback together cannot exceed what the payment credited.
+	if b.chargedBack < 0 || b.refunded+b.chargedBack > b.amount {
+		return fmt.Errorf("chargeback leaves batch %s with %d charged back of %d", b.id, b.chargedBack, b.amount)
+	}
+	b.touched = true
+	a.reopen()
+	return nil
+}
+
 // funded is what the batches hold, less the debt: the balance, if every movement is replayed.
 func (a *allocation) funded() int64 {
 	total := -a.unfunded
@@ -137,6 +160,16 @@ func (a *allocation) funded() int64 {
 		total += b.remaining()
 	}
 	return total
+}
+
+// restoreBatch adds a batch that LiveBatches left out, so a chargeback can still name it. Its opening key is at or
+// before the allocation place; keeping it in the spend order makes the balance replay see the same batch.
+func (a *allocation) restoreBatch(b *batchState) {
+	a.batches[b.id] = b
+	if b.opened.compare(a.at) <= 0 {
+		a.open = append(a.open, b)
+		slices.SortFunc(a.open, spendOrder)
+	}
 }
 
 func (a *allocation) frozen() int64 {
@@ -160,6 +193,8 @@ func (a *allocation) apply(m movement) error {
 		err = a.writeOff(m)
 	case m.kind == "freeze" || m.kind == "unfreeze" || m.kind == "refund":
 		err = a.refund(m)
+	case m.kind == "chargeback" || m.kind == "chargeback_reverse":
+		err = a.chargeback(m)
 	case m.debit > 0:
 		a.spend(m.debit)
 	case m.debit < 0:
@@ -325,9 +360,18 @@ func (a *allocation) writeOff(m movement) error {
 // 「额度批次」「到期」).
 func (a *allocation) spend(n int64) {
 	for _, b := range a.open {
-		take := min(b.available(), n)
+		if n == 0 {
+			break
+		}
+		// A charged-back batch may hold a negative remainder. It stays in the balance, but it cannot fund a later
+		// charge: giving it a negative "take" would spend another batch's credit to cancel the debt in this cache.
+		available := b.available()
+		if available <= 0 {
+			continue
+		}
+		take := min(available, n)
 		b.consumed += take
-		b.touched = b.touched || take > 0
+		b.touched = true
 		n -= take
 	}
 	a.dropSpent()
@@ -465,6 +509,7 @@ func (a *allocation) save(ctx context.Context, tx pg.Tx, account uuid.UUID) erro
 			batches.FreezeTotal = append(batches.FreezeTotal, b.freezeTotal)
 			batches.UnfreezeTotal = append(batches.UnfreezeTotal, b.unfreezeTotal)
 			batches.Refunded = append(batches.Refunded, b.refunded)
+			batches.ChargedBack = append(batches.ChargedBack, b.chargedBack)
 		}
 	}
 	if len(batches.Ids) == 0 {

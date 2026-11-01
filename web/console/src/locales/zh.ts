@@ -1,4 +1,6 @@
 // The console's messages in Chinese, the source every other language follows.
+import { zh as statement } from "./statement";
+
 export default {
   announcements: {
     title: "站内公告",
@@ -240,36 +242,7 @@ export default {
     siteCurrency: "站点货币",
     save: "保存偏好",
   },
-  statement: {
-    description: "账户额度的充值、赠送、扣费、到期、退款冻结与已完成退款。",
-    movements: "流水",
-    export: "导出 CSV",
-    exportFailed: "导出没有成功：{{reason}}",
-    note: "按入账顺序从新到旧排列。冻结额仍包含在余额内，退款成功才扣余额；冻结额不含在途调用预留。导出含最近的 10 000 条，更早的在页面上翻页查看。",
-    segment: { title: "这一段没有余额变动", body: "加载更多，继续查看更早的流水。" },
-    empty: {
-      title: "还没有额度变动",
-      body: "充值、赠送或调用扣费之后，记录会出现在这里。",
-      balance: "查看余额",
-    },
-    col: { time: "时间", kind: "类型", amount: "金额", balance: "变动后余额" },
-    kind: {
-      top_up: "充值",
-      gift: "赠送",
-      redeem: "兑换码",
-      spend: "调用扣费",
-      expiry: "到期",
-      refund: "退款完成",
-      reversal: "调用退费",
-      freeze: "退款冻结",
-      unfreeze: "退款解冻",
-    },
-    frozenChange: "冻结额变动",
-    frozenAfter: "冻结：{{amount}}",
-    balanceUnknown: "不可用",
-    balanceUnknownNote: "这笔记录早于账本编号，先后顺序无法确定，所以无法给出变动后余额。",
-    call: "调用 {{id}}",
-  },
+  statement,
   keys: {
     description: "创建和管理调用 Axiom 用的 key。",
     create: "创建 key",
