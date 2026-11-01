@@ -103,7 +103,9 @@ func (b *Billing) planSettlements(ctx context.Context, tx pg.Tx, items []Settlem
 		plan.c = c
 		plans[i] = plan
 		if plan.end != nil {
-			balance.Balance = addClamp(balance.Balance, -plan.end.spent)
+			if !plan.c.plan() { // a plan charge moves no wallet money, so the next item's cap is unchanged
+				balance.Balance = addClamp(balance.Balance, -plan.end.spent)
+			}
 			balance.Reserved = addClamp(balance.Reserved, plan.end.balanceReserved)
 		}
 	}
@@ -268,8 +270,8 @@ func (c *locked) planEnd(p priced, last AttemptResult) (*reservationEnd, []PostL
 		c.owed, c.charged = p.price, min(p.price, c.row.Amount)
 		lines = planCharge(p.price, c.charged)
 	} else {
-		lines = charge(p.price, 0)
 		c.owed, c.charged = p.price, min(p.price, c.cap(held))
+		lines = charge(p.price, c.charged)
 	}
 	w, err := result(p, last)
 	if err != nil {

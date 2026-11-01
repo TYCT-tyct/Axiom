@@ -57,6 +57,7 @@ type Plan struct {
 	Quota, WindowSeconds, TermSeconds int64
 	Active                            bool
 	Rev                               int32
+	CreatedAt, UpdatedAt              time.Time
 }
 
 // PlanInput is what an administrator sets: the plan's terms and price.
@@ -212,6 +213,7 @@ func planOf(p BillingSubscriptionPlan) Plan {
 	return Plan{
 		ID: p.ID, Site: p.SiteID, Name: p.Name, Currency: currency, Price: p.Price,
 		Quota: p.Quota, WindowSeconds: p.WindowSeconds, TermSeconds: p.TermSeconds, Active: p.Active, Rev: p.Rev,
+		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}
 }
 

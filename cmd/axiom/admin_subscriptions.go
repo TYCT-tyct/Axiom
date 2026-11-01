@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strconv"
 	"uuid"
 
@@ -59,7 +60,7 @@ func planBody(p billing.Plan, currency platform.Currency) (adminapi.Subscription
 	return adminapi.SubscriptionPlan{
 		Id: p.ID.String(), Name: p.Name, Price: adminMoney(price, currency),
 		Quota: strconv.FormatInt(p.Quota, 10), WindowSeconds: int(p.WindowSeconds),
-		TermSeconds: int(p.TermSeconds), Active: p.Active, Rev: int(p.Rev),
+		TermSeconds: int(p.TermSeconds), Active: p.Active, Rev: int(p.Rev), CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}, nil
 }
 
@@ -178,7 +179,7 @@ func (a adminAPI) GrantSubscription(ctx context.Context, r adminapi.GrantSubscri
 				ID: uuid.NewV7(), Site: uuid.UUID(account.Site), Account: uuid.UUID(id),
 				Plan: plan, SiteCurrency: currency, Source: source, Actor: actor(ctx), Reason: r.Body.Reason,
 			}
-			if source == "offline_payment" {
+			if source == "paid" {
 				if r.Body.Payment == nil {
 					return adminapi.Subscription{}, unprocessableFields("/payment", "an offline payment says what was paid and where")
 				}
@@ -293,7 +294,15 @@ func planID(s adminapi.Uuid) (uuid.UUID, error) {
 
 // planProblem maps the module's plan errors to the contract's refusals.
 func planProblem(err error) error {
-	if e, ok := errors.AsType[*billing.PlanError](err); ok {
+	switch {
+	case errors.Is(err, billing.ErrPlanConflict):
+		return &apiError{status: http.StatusConflict, code: codeConflict,
+			message: "another subscription plan is in force for the account, or the plan cannot be sold"}
+	case errors.As(err, new(*billing.PaidError)):
+		return unprocessableFields("/payment", err.Error())
+	}
+	var e *billing.PlanError
+	if errors.As(err, &e) {
 		return unprocessable(e.Reason)
 	}
 	return err
