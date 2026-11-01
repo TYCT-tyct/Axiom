@@ -18,7 +18,7 @@ const optional = (text: string): string | undefined => (text.trim() === "" ? und
 // enginesOf reads a node that has engines, or one built before them: the old response has url and has_key only, and
 // the page must keep working against it while the deployments are rolled one at a time.
 function enginesOf(view: Settings): ShownEngine[] {
-	if (view.engines !== undefined) return view.engines;
+	if (Array.isArray(view.engines)) return view.engines;
 	if (!view.url) return [];
 	return [{
 		id: "00000000-0000-0000-0000-000000000000",
@@ -118,17 +118,23 @@ function SearchFacts({ view, action }: { view: Settings; action: ReactNode }) {
 
 function SearchEditDialog({ view, onClose }: { view: Settings; onClose: () => void }) {
 	const { t } = useTranslation();
-	// One empty row after the saved ones, for a new engine.
-	const legacy = view.engines === undefined;
+	// An old node exposes only its single backend's URL and key. Do not show fields its contract cannot save: a
+	// successful response would otherwise leave the extra engines, type, costs and switches unchanged.
+	const legacy = !Array.isArray(view.engines);
 	const rows = [...enginesOf(view), undefined];
 	return (
 		<ChangeDialog
 			operation="search-settings"
 			title={t("settings.search.edit")}
-			intro={<p>{t("settings.search.intro")}</p>}
+			intro={
+				<>
+					<p>{t("settings.search.intro")}</p>
+					{legacy ? <p>{t("settings.search.legacyOnly")}</p> : null}
+				</>
+			}
 			action={t("settings.search.save")}
-			fields={(error) => <SearchFields rows={rows} error={error} />}
-			read={(values) => readEngines(values)}
+			fields={(error) => legacy ? <LegacySearchFields view={view} error={error} /> : <SearchFields rows={rows} error={error} />}
+			read={(values) => legacy ? readLegacyEngine(values, view) : readEngines(values)}
 			send={(engines, { reason, key }) => {
 				const params = { header: { "Idempotency-Key": key } };
 				if (legacy) {
@@ -142,6 +148,51 @@ function SearchEditDialog({ view, onClose }: { view: Settings; onClose: () => vo
 			done={(saved) => <SearchSaved saved={saved} />}
 			onClose={onClose}
 		/>
+	);
+}
+
+// readLegacyEngine is the old contract's one backend: URL and key only. The identity fields are hidden from the old
+// form's fields but keep the response shape; the old node ignores them in its legacy PUT.
+function readLegacyEngine(values: Record<string, string>, view: Settings): Engine[] {
+	const saved = enginesOf(view)[0];
+	return [{
+		id: saved?.id,
+		name: saved?.name ?? "searxng",
+		kind: saved?.kind ?? "searxng",
+		url: optional(values.url ?? ""),
+		key: optional(values.key ?? ""),
+		enabled: true,
+		default: true,
+		cost_per_search: saved?.cost_per_search ?? "0",
+		cost_per_extra_result: saved?.cost_per_extra_result ?? "0",
+		markup: saved?.markup ?? "0",
+	}];
+}
+
+function LegacySearchFields({ view, error }: { view: Settings; error: unknown }) {
+	const { t } = useTranslation();
+	const errors = useErrors();
+	const saved = enginesOf(view)[0];
+	return (
+		<div className="flex flex-col gap-4">
+			<TextField
+				label={t("settings.search.url")}
+				hint={t("settings.search.urlHint")}
+				name="url"
+				inputMode="url"
+				autoComplete="off"
+				defaultValue={saved?.url ?? ""}
+				error={errors.field(error, "settings/url")}
+			/>
+			<TextField
+				label={t("settings.search.key")}
+				hint={t("settings.search.keyHint")}
+				name="key"
+				type="password"
+				autoComplete="new-password"
+				error={errors.field(error, "settings")}
+			/>
+		</div>
 	);
 }
 
@@ -247,7 +298,7 @@ function SearchSaved({ saved }: { saved: Settings }) {
 
 function SearchTestDialog({ view, onClose }: { view: Settings; onClose: () => void }) {
 	const { t } = useTranslation();
-	const legacy = view.engines === undefined;
+	const legacy = !Array.isArray(view.engines);
 	const engine = enginesOf(view).find((e) => e.default) ?? enginesOf(view)[0];
 	if (!engine) {
 		return (

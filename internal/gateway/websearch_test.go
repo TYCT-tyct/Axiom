@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"uuid"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
@@ -296,6 +297,98 @@ func TestNativeSearchUsesTheRealRequestAndOneRoute(t *testing.T) {
 			t.Fatalf("entries = %d, native = %d; want one native entry", len(call.Plan.Entries), call.nativeSearch)
 		}
 	})
+}
+
+// TestAutomaticSearchTrimsNormalFallback: when the first entry searches without a tool, a normal fallback would answer
+// without the search the client asked for after the first entry fails. The route must keep automatic-search entries
+// only, so the old three-entry route (alpha-1, alpha-2, beta-1) becomes two alpha entries.
+func TestAutomaticSearchTrimsNormalFallback(t *testing.T) {
+	alwaysSpec := `{"items":["input","output"],"tiers":[],"context_length":128000,"max_output_tokens":1000,"streams":true,"abilities":[],"always_searches":true}`
+	price := `{"v":1,"currency":"USD",
+		"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},
+		"service_tiers":{"priority":{"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"}}}}`
+	r := newRig(t, func(o *rigOptions) {
+		o.alphaSpec, o.price, o.search = alwaysSpec, price, &recordingSearcher{}
+	})
+	a := r.newAccount(1e9)
+	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, strings.NewReader(
+		`{"model":"acme/alpha","models":["acme/beta"],"plugins":[{"id":"web","engine":"test"}],"messages":[{"role":"user","content":"hello"}]}`))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
+	}
+	call := r.admits[0]
+	if len(call.Plan.Entries) == 0 || slices.ContainsFunc(call.Plan.Entries, func(e routing.Entry) bool { return e.Model != r.alpha }) {
+		t.Fatalf("automatic search kept a normal fallback: %+v", call.Plan.Entries)
+	}
+	if call.Request.Web != nil {
+		t.Fatal("automatic search kept the plugin instead of turning it into the model's own search")
+	}
+}
+
+// TestAutomaticSearchDoesNotFallbackAfterFailure replays the first automatic entry failing: the normal beta fallback
+// answers successfully if it is still in the route, but it must not be reached because it cannot search.
+func TestAutomaticSearchDoesNotFallbackAfterFailure(t *testing.T) {
+	alwaysSpec := `{"items":["input","output"],"tiers":[],"context_length":128000,"max_output_tokens":1000,"streams":true,"abilities":[],"always_searches":true}`
+	price := `{"v":1,"currency":"USD",
+		"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},
+		"service_tiers":{"priority":{"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"}}}}`
+	r := newRig(t, func(o *rigOptions) {
+		o.alphaSpec, o.price, o.search = alwaysSpec, price, &recordingSearcher{}
+		o.endpoints = func(_ string, e *routing.Endpoint) {
+			e.OutputSpeed, e.Target = 100, protocol.Target{Model: "up"}
+		}
+	})
+	up := withExecutor(r, &flakyLedger{})
+	a := r.funded(1e12)
+	sample, _ := sample(t, protocol.Messages)
+	for name, e := range r.endpoints {
+		script := streamed(sample, 1, 10, false)
+		if strings.HasPrefix(name, "alpha-") {
+			script = failure(routing.ScopeEndpoint, false)
+		}
+		up.eps[uuid.UUID(e.ID)].script = []scripted{script}
+	}
+	body := strings.Replace(stream("acme/alpha"), `{"model":"acme/alpha"`,
+		`{"model":"acme/alpha","models":["acme/beta"],"plugins":[{"id":"web","engine":"test"}]`, 1)
+	resp, out := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(body))
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("the normal fallback answered after the automatic entry failed: %s", out)
+	}
+	if sends := up.eps[uuid.UUID(r.endpoints["beta-1"].ID)].sends; sends != 0 {
+		t.Fatalf("the normal fallback was called %d times, want none", sends)
+	}
+}
+
+// TestBackendSearchReroutesAroundSmallContext: the first entry fits the original request but not the injected results.
+// Setting SearchBytes and routing again must choose the larger-context fallback, not search first and then fail at the
+// small endpoint.
+func TestBackendSearchReroutesAroundSmallContext(t *testing.T) {
+	smallSpec := `{"items":["input","output"],"tiers":[],"context_length":8192,"max_output_tokens":1000,"streams":true,"abilities":[]}`
+	price := `{"v":1,"currency":"USD",
+		"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},
+		"service_tiers":{"priority":{"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"}}}}`
+	r := newRig(t, func(o *rigOptions) {
+		o.alphaSpec, o.price, o.search = smallSpec, price, &recordingSearcher{}
+		o.endpoints = func(name string, e *routing.Endpoint) {
+			if strings.HasPrefix(name, "alpha-") {
+				e.Context = 8192
+			}
+		}
+	})
+	a := r.newAccount(1e9)
+	body := `{"model":"acme/alpha","models":["acme/beta"],"plugins":[{"id":"web","engine":"test"}],"messages":[{"role":"system","content":"` +
+		strings.Repeat("x", 20000) + `"},{"role":"user","content":"what is axiom"}]}`
+	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, strings.NewReader(body))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
+	}
+	call := r.admits[0]
+	if call.Request.SearchBytes != protocol.WebSearchMaxBytes || call.searchBackend == nil {
+		t.Fatalf("admitted %+v, want a backend search with its input bound", call)
+	}
+	if len(call.Plan.Entries) == 0 || call.Plan.Entries[0].Model != r.beta {
+		t.Fatalf("first entry = %+v, want the larger-context beta fallback", call.Plan.Entries)
+	}
 }
 
 func TestSearchEngineSelectionReachesTheCall(t *testing.T) {

@@ -231,6 +231,8 @@ export default {
     edit: "Edit web search",
     intro:
       "A request's web plugin searches once through the engine it names, or through the provider's own search when it names none and the model supports one. Every engine is keyed on arrival and never shown again; changing a backend or URL needs its key entered again. The change goes to the audit log.",
+    legacyOnly:
+      "This server exposes only the old single-backend settings, so this form can save just its URL and key. Upgrade the server to edit multiple engines, backend types, costs or markup.",
     save: "Save web search",
     saved: "The search engines are saved.",
     test: "Run a test",

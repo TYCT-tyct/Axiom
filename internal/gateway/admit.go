@@ -171,8 +171,33 @@ func (h *Handler) planAdmission(it *admissionItem) error {
 	if err := h.judgeRate(it.admission, c, callDimension); err != nil {
 		return err
 	}
+	// The first route chooses the search path, so it sees the request without a search's injected input. A backend
+	// search re-plans below with that bound; a retry after a queued backend attempt starts here again without it.
+	c.Request.SearchBytes = 0
+	plan, err := h.planRoute(c, it.admission)
+	if err != nil {
+		return err
+	}
+	h.outage.recovered(depRouting)
+	it.admitted = billingAdmitted(it.admission, c)
+	plan, err = h.resolveSearch(c, plan, func() (routing.Plan, error) {
+		// The backend's injected results are input the context check must see. The request is the same pointer, so a
+		// second plan reads the SearchBytes the backend path just reserved and recomputes the output limit with it.
+		return h.planRoute(c, it.admission)
+	})
+	if err != nil {
+		return err
+	}
+	it.plan = plan
+	return nil
+}
+
+// planRoute is one route of the call's current request. It runs twice for a backend search: once to choose the search
+// path from the first entry, and once after the injected-results bound is set, so a small-context first entry cannot
+// be chosen only because the search results were not counted yet.
+func (h *Handler) planRoute(c *Call, admission accounts.Admission) (routing.Plan, error) {
 	plan, wait, err := h.Models.plan(h.Router, routing.Input{
-		Admission: routingAdmission(it.admission, c), Req: &c.Request, Models: c.models, Auto: c.auto, Free: c.free, Override: c.over, Sticky: c.sticky,
+		Admission: routingAdmission(admission, c), Req: &c.Request, Models: c.models, Auto: c.auto, Free: c.free, Override: c.over, Sticky: c.sticky,
 		// Compaction has no Chat counterpart; only the three chat formats convert. Direct formats and legacy
 		// completions have no counterpart either.
 		NativeOnly: c.Compact || !c.Request.Format.Convertible(),
@@ -184,26 +209,16 @@ func (h *Handler) planAdmission(it *admissionItem) error {
 		FileRef: c.Request.FileRefs > 0,
 	})
 	if wait != nil {
-		return &errWait{wait.RetryAfter}
+		return plan, &errWait{wait.RetryAfter}
 	}
-	if err != nil {
-		return err
-	}
-	h.outage.recovered(depRouting)
-	it.admitted = billingAdmitted(it.admission, c)
-	plan, err = h.resolveSearch(c, plan)
-	if err != nil {
-		return err
-	}
-	it.plan = plan
-	return nil
+	return plan, err
 }
 
 // resolveSearch decides the request's one search path, now that routing has chosen the entry whose model and format
 // decide what the provider can do. The plugin is one search, never two (docs/domains/gateway.md「联网搜索」): a request
 // that already declares the provider's own search tool, and a model that searches on every call, keep that path and
 // drop the plugin; otherwise the plugin is either the provider's tool or one backend, and never both.
-func (h *Handler) resolveSearch(c *Call, plan routing.Plan) (routing.Plan, error) {
+func (h *Handler) resolveSearch(c *Call, plan routing.Plan, replan func() (routing.Plan, error)) (routing.Plan, error) {
 	if c.Request.Web == nil || len(plan.Entries) == 0 {
 		return plan, nil
 	}
@@ -221,7 +236,15 @@ func (h *Handler) resolveSearch(c *Call, plan routing.Plan) (routing.Plan, error
 		return nativeSearch(c, plan, decision)
 	}
 	if decision.backend != nil {
-		return backendSearch(c, plan, decision)
+		return backendSearch(c, plan, decision, replan)
+	}
+	if choice.Always {
+		// The first entry searches without a tool. A normal fallback has neither that tool nor injected results, so
+		// keeping it would silently turn a failed automatic search into an answer with no search at all.
+		plan = autoSearchRoute(c, plan)
+		if len(plan.Entries) == 0 {
+			return plan, invalid("no candidate endpoint searches automatically")
+		}
 	}
 	c.Request.Web = nil
 	c.Request.SearchBytes = 0
@@ -245,6 +268,7 @@ func nativeSearch(c *Call, plan routing.Plan, decision searchDecision) (routing.
 	c.nativeSearch = decision.native
 	c.Request.Needs |= protocol.WebSearch
 	c.Request.WebSearches = int64(decision.native)
+	c.Request.SearchBytes = 0
 	c.Request.Web = nil
 	plan = searchRoute(c, plan, decision)
 	if len(plan.Entries) == 0 {
@@ -255,7 +279,7 @@ func nativeSearch(c *Call, plan routing.Plan, decision searchDecision) (routing.
 
 // backendSearch reads the query once, keeps the plugin for DemandOf and webSearch, and keeps only entries that can
 // follow that one external search.
-func backendSearch(c *Call, plan routing.Plan, decision searchDecision) (routing.Plan, error) {
+func backendSearch(c *Call, plan routing.Plan, decision searchDecision, replan func() (routing.Plan, error)) (routing.Plan, error) {
 	query, err := protocol.ChatSearchQuery(c.Body)
 	if err != nil {
 		return plan, invalid(err.Error())
@@ -270,11 +294,30 @@ func backendSearch(c *Call, plan routing.Plan, decision searchDecision) (routing
 	// results reserve) for DemandOf and webSearch; only its price changes.
 	c.search, c.searchBackend, c.searchPrice = query, decision.backend, decision.price
 	c.Request.SearchBytes = protocol.WebSearchMaxBytes
+	// The first route ran with no injected input. Route again with the bound the backend will add; otherwise a small
+	// context endpoint can win now and only fail after the search has already run and been charged.
+	plan, err = replan()
+	if err != nil {
+		return plan, err
+	}
 	plan = searchRoute(c, plan, decision)
 	if len(plan.Entries) == 0 {
 		return plan, invalid("no candidate endpoint can run the selected search engine")
 	}
 	return plan, nil
+}
+
+// autoSearchRoute keeps only models that search without a tool. The first entry chose that path; a normal fallback
+// would answer without the search the client asked for.
+func autoSearchRoute(c *Call, plan routing.Plan) routing.Plan {
+	kept := make([]int, 0, len(plan.Entries))
+	for i := range plan.Entries {
+		model, ok := c.snap.Model(plan.Entries[i].Model)
+		if ok && model.AlwaysSearches() {
+			kept = append(kept, i)
+		}
+	}
+	return trim(plan, kept)
 }
 
 // searchRoute cuts the fallbacks to the entries that can follow the one search path the first entry chose. A native
