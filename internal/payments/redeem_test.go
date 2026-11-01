@@ -412,8 +412,9 @@ func TestRedeemExpiryAcrossTheLock(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	// The code expires while the redemption waits; its state is set directly rather than by waiting out a short expiry.
-	w.exec(fmt.Sprintf("UPDATE payments.redeem_codes SET expires_at = now() - interval '1 second' WHERE id = '%s'", uuid.UUID(codes[0].ID)))
+	// The code expires while the redemption waits, after that transaction began: the expiry is later than the start and
+	// earlier than the decision once the lock is released. Set it from the database clock, not by waiting out a short expiry.
+	w.exec(fmt.Sprintf("UPDATE payments.redeem_codes SET expires_at = clock_timestamp() WHERE id = '%s'", uuid.UUID(codes[0].ID)))
 	close(release)
 	if err := <-held; err != nil {
 		t.Fatal(err)
