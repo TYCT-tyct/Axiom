@@ -190,17 +190,22 @@ func (h *Handler) planAdmission(it *admissionItem) error {
 		return err
 	}
 	h.outage.recovered(depRouting)
-	it.plan, it.admitted = plan, billingAdmitted(it.admission, c)
-	return h.resolveSearch(c, plan)
+	it.admitted = billingAdmitted(it.admission, c)
+	plan, err = h.resolveSearch(c, plan)
+	if err != nil {
+		return err
+	}
+	it.plan = plan
+	return nil
 }
 
 // resolveSearch decides the request's one search path, now that routing has chosen the entry whose model and format
 // decide what the provider can do. The plugin is one search, never two (docs/domains/gateway.md「联网搜索」): a request
 // that already declares the provider's own search tool, and a model that searches on every call, keep that path and
 // drop the plugin; otherwise the plugin is either the provider's tool or one backend, and never both.
-func (h *Handler) resolveSearch(c *Call, plan routing.Plan) error {
+func (h *Handler) resolveSearch(c *Call, plan routing.Plan) (routing.Plan, error) {
 	if c.Request.Web == nil || len(plan.Entries) == 0 {
-		return nil
+		return plan, nil
 	}
 	entry := plan.Entries[0]
 	choice := searchChoice{MaxUses: entry.Limits.MaxUses[catalog.ItemWebSearch]}
@@ -210,22 +215,86 @@ func (h *Handler) resolveSearch(c *Call, plan routing.Plan) error {
 	}
 	decision, err := chooseSearch(c.Request.Web, choice, c.Request.Needs.Has(protocol.WebSearch), h.Search)
 	if err != nil {
-		return err
+		return plan, err
 	}
 	if decision.native > 0 {
-		c.nativeSearch = decision.native
-		c.Request.Needs |= protocol.WebSearch
-		c.Request.WebSearches = int64(decision.native)
+		return nativeSearch(c, plan, decision)
 	}
 	if decision.backend != nil {
-		// The backend search still runs before the attempt, so the request keeps its plugin (and the input bound the
-		// injected results reserve) for DemandOf and webSearch; only its price changes.
-		c.searchBackend, c.searchPrice = decision.backend, decision.price
-		return nil
+		return backendSearch(c, plan, decision)
 	}
 	c.Request.Web = nil
 	c.Request.SearchBytes = 0
-	return nil
+	return plan, nil
+}
+
+// nativeSearch turns on the model's own tool and keeps only entries that can run it.
+func nativeSearch(c *Call, plan routing.Plan, decision searchDecision) (routing.Plan, error) {
+	// A request that already carries Responses' call limit keeps the stricter of it and the model's bound; the same
+	// number goes into the body below, so the reservation and the upstream limit cannot disagree. Inspect records
+	// the cap for a tool the client declared; a plugin turns the tool on after Inspect, so read the cap here for that
+	// path too.
+	if c.Request.Format == protocol.Responses && c.Request.WebSearches == 0 {
+		if n, err := protocol.ResponsesMaxToolCalls(c.Body); err == nil {
+			c.Request.WebSearches = n
+		}
+	}
+	if c.Request.WebSearches > 0 {
+		decision.native = min(decision.native, int(c.Request.WebSearches))
+	}
+	c.nativeSearch = decision.native
+	c.Request.Needs |= protocol.WebSearch
+	c.Request.WebSearches = int64(decision.native)
+	c.Request.Web = nil
+	plan = searchRoute(c, plan, decision)
+	if len(plan.Entries) == 0 {
+		return plan, invalid("no candidate endpoint can run the model's native web search")
+	}
+	return plan, nil
+}
+
+// backendSearch reads the query once, keeps the plugin for DemandOf and webSearch, and keeps only entries that can
+// follow that one external search.
+func backendSearch(c *Call, plan routing.Plan, decision searchDecision) (routing.Plan, error) {
+	query, err := protocol.ChatSearchQuery(c.Body)
+	if err != nil {
+		return plan, invalid(err.Error())
+	}
+	if query == "" {
+		return plan, invalid(protocol.ErrEmptySearchQuery.Error())
+	}
+	if len(query) > protocol.MaxWebSearchQueryBytes {
+		return plan, invalid(fmt.Sprintf("The web plugin's search query is longer than %d bytes.", protocol.MaxWebSearchQueryBytes))
+	}
+	// The backend search runs before the attempt, so the request keeps its plugin (and the input bound the injected
+	// results reserve) for DemandOf and webSearch; only its price changes.
+	c.search, c.searchBackend, c.searchPrice = query, decision.backend, decision.price
+	c.Request.SearchBytes = protocol.WebSearchMaxBytes
+	plan = searchRoute(c, plan, decision)
+	if len(plan.Entries) == 0 {
+		return plan, invalid("no candidate endpoint can run the selected search engine")
+	}
+	return plan, nil
+}
+
+// searchRoute cuts the fallbacks to the entries that can follow the one search path the first entry chose. A native
+// search on a model that cannot run it, or on one that searches on every call, would fail or search twice; a backend
+// search on a model that always searches would double-search the same way. Trimming here, before Quote, means the
+// reservation covers exactly the entries an attempt may use.
+func searchRoute(c *Call, plan routing.Plan, decision searchDecision) routing.Plan {
+	kept := make([]int, 0, len(plan.Entries))
+	for i := range plan.Entries {
+		entry := &plan.Entries[i]
+		model, ok := c.snap.Model(entry.Model)
+		if !ok || model.AlwaysSearches() {
+			continue
+		}
+		if decision.native > 0 && (!servesWebSearch(model) || !protocol.NativeSearchSupported(entry.Target.Format)) {
+			continue
+		}
+		kept = append(kept, i)
+	}
+	return trim(plan, kept)
 }
 
 // maxNativeSearches bounds what one plugin request may turn on at a provider; a model's spec may allow more, but one

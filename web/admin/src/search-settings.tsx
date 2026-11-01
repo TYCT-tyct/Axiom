@@ -10,9 +10,32 @@ import { searchSettingsQuery } from "./queries";
 import { SettingsPage } from "./settings-page";
 
 type Engine = AdminSchemas["SearchEngineInput"];
+type ShownEngine = AdminSchemas["SearchEngine"];
 type Settings = AdminSchemas["SearchSettings"];
 
 const optional = (text: string): string | undefined => (text.trim() === "" ? undefined : text.trim());
+
+// enginesOf reads a node that has engines, or one built before them: the old response has url and has_key only, and
+// the page must keep working against it while the deployments are rolled one at a time.
+function enginesOf(view: Settings): ShownEngine[] {
+	if (view.engines !== undefined) return view.engines;
+	if (!view.url) return [];
+	return [{
+		id: "00000000-0000-0000-0000-000000000000",
+		name: "searxng",
+		kind: "searxng",
+		url: view.url,
+		has_key: view.has_key ?? false,
+		enabled: true,
+		default: true,
+		cost_per_search: "0",
+		cost_per_extra_result: "0",
+		markup: "0",
+		price_per_search: "0",
+		price_per_extra_result: "0",
+		price_version: 1,
+	}];
+}
 
 // readEngines turns the indexed fields into the list the API takes. A row whose name is empty is a row the person did
 // not fill in, not an engine without a name; the server checks the rest.
@@ -60,17 +83,18 @@ export function SearchSettings() {
 
 function SearchFacts({ view, action }: { view: Settings; action: ReactNode }) {
 	const { t } = useTranslation();
-	const source = view.source === "database" ? "database" : view.source;
+	const source = view.source ?? "none";
+	const engines = enginesOf(view);
 	const rows: [string, ReactNode][] = [
 		[
 			t("settings.search.state"),
-			<State key="state" tone={view.engines.length > 0 ? "good" : "neutral"}>
-				{t(view.engines.length > 0 ? "settings.search.on" : "settings.search.off")}
+			<State key="state" tone={engines.length > 0 ? "good" : "neutral"}>
+				{t(engines.length > 0 ? "settings.search.on" : "settings.search.off")}
 			</State>,
 		],
 		[t("settings.search.source"), t(`settings.search.sources.${source}`)],
 	];
-	for (const engine of view.engines) {
+	for (const engine of engines) {
 		rows.push([
 			`${engine.name} · ${engine.kind}`,
 			<span key={engine.id}>
@@ -83,7 +107,7 @@ function SearchFacts({ view, action }: { view: Settings; action: ReactNode }) {
 			</span>,
 		]);
 	}
-	if (view.engines.length === 0) {
+	if (engines.length === 0) {
 		rows.push([t("settings.search.engines"), t("settings.search.none")]);
 	}
 	if (view.restart_required) {
@@ -95,7 +119,8 @@ function SearchFacts({ view, action }: { view: Settings; action: ReactNode }) {
 function SearchEditDialog({ view, onClose }: { view: Settings; onClose: () => void }) {
 	const { t } = useTranslation();
 	// One empty row after the saved ones, for a new engine.
-	const rows = [...view.engines, undefined];
+	const legacy = view.engines === undefined;
+	const rows = [...enginesOf(view), undefined];
 	return (
 		<ChangeDialog
 			operation="search-settings"
@@ -104,21 +129,23 @@ function SearchEditDialog({ view, onClose }: { view: Settings; onClose: () => vo
 			action={t("settings.search.save")}
 			fields={(error) => <SearchFields rows={rows} error={error} />}
 			read={(values) => readEngines(values)}
-			send={(engines, { reason, key }) =>
-				unwrapChange(
-					adminApi.PUT("/api/admin/v1/settings/search", {
-						params: { header: { "Idempotency-Key": key } },
-						body: { engines, reason },
-					}),
-				)
-			}
+			send={(engines, { reason, key }) => {
+				const params = { header: { "Idempotency-Key": key } };
+				if (legacy) {
+					return unwrapChange(adminApi.PUT("/api/admin/v1/settings/search", {
+						params,
+						body: { settings: { url: engines[0]?.url ?? "", key: engines[0]?.key }, reason },
+					}));
+				}
+				return unwrapChange(adminApi.PUT("/api/admin/v1/settings/search", { params, body: { engines, reason } }));
+			}}
 			done={(saved) => <SearchSaved saved={saved} />}
 			onClose={onClose}
 		/>
 	);
 }
 
-function SearchFields({ rows, error }: { rows: (Settings["engines"][number] | undefined)[]; error: unknown }) {
+function SearchFields({ rows, error }: { rows: (ShownEngine | undefined)[]; error: unknown }) {
 	const { t } = useTranslation();
 	const errors = useErrors();
 	return (
@@ -220,7 +247,8 @@ function SearchSaved({ saved }: { saved: Settings }) {
 
 function SearchTestDialog({ view, onClose }: { view: Settings; onClose: () => void }) {
 	const { t } = useTranslation();
-	const engine = view.engines.find((e) => e.default) ?? view.engines[0];
+	const legacy = view.engines === undefined;
+	const engine = enginesOf(view).find((e) => e.default) ?? enginesOf(view)[0];
 	if (!engine) {
 		return (
 			<ChangeDialog
@@ -261,7 +289,7 @@ function SearchTestDialog({ view, onClose }: { view: Settings; onClose: () => vo
 				unwrapChange(
 					adminApi.POST("/api/admin/v1/settings/search/tests", {
 						params: { header: { "Idempotency-Key": key } },
-						body: { engine: input, reason },
+						body: legacy ? { reason } : { engine: input, reason },
 					}),
 				)
 			}

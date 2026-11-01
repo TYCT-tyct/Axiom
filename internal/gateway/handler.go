@@ -407,11 +407,9 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 		return err
 	}
 	onlineWebPlugin(&req, names.online)
-	query, ref := h.checkWebSearch(&req, body)
-	if ref != nil {
+	if ref := h.checkWebSearch(&req); ref != nil {
 		return ref
 	}
-	c.search = query
 	if err := pinnedProvider(&req, over); err != nil {
 		return err
 	}

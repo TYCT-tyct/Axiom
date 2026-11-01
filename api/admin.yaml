@@ -4540,16 +4540,21 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SearchEngine'
+          description: Present on a node that supports multiple engines. A page talking to an older node sees url and
+            has_key instead and sends the old single-backend shape.
         source:
           type: string
           enum: [database, saved, environment, none]
           description: Where the list came from. "saved" is the old single-backend row and "environment" is
             AXIOM_SEARCH_URL; both apply until an engine list is saved.
+        url:
+          type: string
+          description: The default engine's URL, for a page built before engines existed.
+        has_key:
+          type: boolean
+          description: Whether the default engine has a key, for a page built before engines existed.
         restart_required:
           type: boolean
-      required:
-      - engines
-      - source
     SearchSettingsUpdate:
       type: object
       additionalProperties: false
@@ -4559,21 +4564,33 @@ components:
           maxItems: 16
           items:
             $ref: '#/components/schemas/SearchEngineInput'
+        settings:
+          type: object
+          additionalProperties: false
+          description: The old single-backend shape, still accepted from a page built before engines existed.
+          properties:
+            url:
+              type: string
+              maxLength: 2048
+            key:
+              type: string
+              maxLength: 4096
         reason:
           $ref: '#/components/schemas/Reason'
       required:
-      - engines
       - reason
     SearchConfigTest:
       type: object
       additionalProperties: false
       properties:
         engine:
-          $ref: '#/components/schemas/SearchEngineInput'
+          description: The engine to test. Absent tests the saved default, which is what a page built before engines
+            existed asks for.
+          allOf:
+          - $ref: '#/components/schemas/SearchEngineInput'
         reason:
           $ref: '#/components/schemas/Reason'
       required:
-      - engine
       - reason
     MailConfigTest:
       type: object

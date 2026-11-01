@@ -5,6 +5,7 @@ import (
 	"encoding/json"          //nolint:depguard // the tools array is decoded into a small typed value, not edited in place
 	"encoding/json/jsontext" //nolint:depguard // the body is edited in place, keeping unknown members as written
 	"fmt"
+	"strconv"
 )
 
 // Prepare prepares the request and, when the web plugin chose the provider's own search, adds that search to the body
@@ -80,24 +81,116 @@ func injectNativeSearch(format Format, body []byte, maxUses int) ([]byte, error)
 		return insertBefore(body, close, []byte(`,"web_search_options":{}`)), nil
 	}
 	tool := nativeSearchTool(format, maxUses)
-	if toolsStart < 0 {
-		return insertBefore(body, close, append(append([]byte(`,"tools":[`), tool...), ']')), nil
-	}
+	var out []byte
 	switch {
+	case toolsStart < 0:
+		out = insertBefore(body, close, append(append([]byte(`,"tools":[`), tool...), ']'))
 	case bytes.Equal(tools, []byte("null")):
-		return splice(body, toolsStart, toolsEnd, append(append([]byte{'['}, tool...), ']')), nil
+		out = splice(body, toolsStart, toolsEnd, append(append([]byte{'['}, tool...), ']'))
 	case len(tools) == 0 || tools[0] != '[' || tools[len(tools)-1] != ']':
 		return nil, fmt.Errorf("%w: tools is not an array", ErrInvalid)
 	case hasWebSearchTool(format, tools):
-		return body, nil
+		out = body
+	default:
+		// Insert before the array's closing bracket, after a comma when it already holds a tool.
+		at := toolsStart + bytes.Index(body[toolsStart:toolsEnd], tools) + len(tools) - 1
+		insert := append([]byte{','}, tool...)
+		if len(bytes.TrimSpace(tools[1:len(tools)-1])) == 0 {
+			insert = tool
+		}
+		out = splice(body, at, at, insert)
 	}
-	// Insert before the array's closing bracket, after a comma when it already holds a tool.
-	at := toolsStart + bytes.Index(body[toolsStart:toolsEnd], tools) + len(tools) - 1
-	insert := append([]byte{','}, tool...)
-	if len(bytes.TrimSpace(tools[1:len(tools)-1])) == 0 {
-		insert = tool
+	if format == Responses {
+		return withMaxToolCalls(out, maxUses)
 	}
-	return splice(body, at, at, insert), nil
+	return out, nil
+}
+
+// ResponsesMaxToolCalls reads Responses' max_tool_calls without rewriting the body. The gateway uses it to clamp a
+// plugin's native search to a limit the client already set, even when the client did not declare the tool.
+func ResponsesMaxToolCalls(body []byte) (int64, error) {
+	dec := jsontext.NewDecoder(bytes.NewReader(body))
+	if dec.PeekKind() != '{' {
+		return 0, fmt.Errorf("%w: a request is not an object", ErrInvalid)
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return 0, err
+	}
+	for dec.PeekKind() != '}' {
+		name, err := dec.ReadToken()
+		if err != nil {
+			return 0, err
+		}
+		key := name.String()
+		value, err := dec.ReadValue()
+		if err != nil {
+			return 0, err
+		}
+		if key != "max_tool_calls" {
+			continue
+		}
+		n, err := strconv.ParseInt(string(bytes.TrimSpace(value)), 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		if n <= 0 {
+			return 0, nil
+		}
+		return n, nil
+	}
+	return 0, nil
+}
+
+// withMaxToolCalls puts the effective search bound into Responses' max_tool_calls, the only member that limits how
+// many server tools one response may call. A stricter limit already in the body wins; anything else is replaced, so
+// the upstream limit is never looser than the reservation.
+func withMaxToolCalls(body []byte, maxUses int) ([]byte, error) {
+	start, end, existing, err := maxToolCalls(body)
+	if err != nil {
+		return nil, err
+	}
+	if existing > 0 && existing < maxUses {
+		maxUses = existing
+	}
+	limit := strconv.AppendInt(nil, int64(maxUses), 10)
+	if start >= 0 {
+		return splice(body, start, end, limit), nil
+	}
+	return insertBefore(body, len(bytes.TrimRight(body, " \t\r\n"))-1, append([]byte(`,"max_tool_calls":`), limit...)), nil
+}
+
+// maxToolCalls returns the value's span and value, or -1 when the body has no max_tool_calls.
+func maxToolCalls(body []byte) (start, end, value int, err error) {
+	trimmed := bytes.TrimRight(body, " \t\r\n")
+	if len(trimmed) == 0 || trimmed[len(trimmed)-1] != '}' {
+		return 0, 0, 0, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
+	}
+	dec := jsontext.NewDecoder(bytes.NewReader(trimmed))
+	if dec.PeekKind() != '{' {
+		return 0, 0, 0, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return 0, 0, 0, err
+	}
+	start, end = -1, -1
+	for dec.PeekKind() != '}' {
+		name, err := dec.ReadToken()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		key := name.String()
+		v, err := dec.ReadValue()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if key == "max_tool_calls" {
+			start, end = int(dec.InputOffset())-len(v), int(dec.InputOffset())
+			if n, parseErr := strconv.Atoi(string(bytes.TrimSpace(v))); parseErr == nil {
+				value = n
+			}
+		}
+	}
+	return start, end, value, nil
 }
 
 // nativeSearchTool is the tool object a format adds, maxUses searches at most. Chat's switch is a member, not a tool.

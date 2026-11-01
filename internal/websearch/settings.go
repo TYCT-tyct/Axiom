@@ -347,7 +347,7 @@ func prepareEngine(s EngineSettings, old map[uuid.UUID]Engine, legacy []Engine) 
 // what lets an admin save the backend the page shows from the environment without retyping its key.
 func savedEngine(s EngineSettings, e Engine, byID map[uuid.UUID]Engine, legacy []Engine) (Engine, bool) {
 	if id := strings.TrimSpace(s.ID); id != "" {
-		if parsed, err := uuid.Parse(id); err == nil {
+		if parsed, err := uuid.Parse(id); err == nil && parsed != uuid.Nil() {
 			previous, found := byID[parsed]
 			return previous, found
 		}
@@ -369,16 +369,18 @@ func savedEngine(s EngineSettings, e Engine, byID map[uuid.UUID]Engine, legacy [
 // are unchanged, and nothing when the caller cleared it. A new destination always needs the key again, so a saved
 // credential never authenticates to a backend it was not entered for.
 func engineKey(s EngineSettings, url string, old Engine, found bool, kind Kind) (string, error) {
+	key := ""
 	if s.Key != nil {
-		return strings.TrimSpace(*s.Key), nil
+		key = strings.TrimSpace(*s.Key)
+	} else if found && old.URL == url && old.Kind == kind {
+		key = old.Key.Reveal()
 	}
-	if found && old.URL == url && old.Kind == kind {
-		return old.Key.Reveal(), nil
-	}
-	if kind == KindFirecrawl {
+	// An explicit empty key is still an empty key: Firecrawl cannot open without one, so accepting it here would
+	// save a configuration that makes the next node fail to start. The final key is checked, not just its presence.
+	if kind == KindFirecrawl && key == "" {
 		return "", fmt.Errorf("%w: firecrawl needs an API key", ErrInvalidConfig)
 	}
-	return "", nil
+	return key, nil
 }
 
 func parsePrice(s string) (platform.UnitPrice, error) {
@@ -393,6 +395,11 @@ func parseID(s string) (uuid.UUID, error) {
 	id, err := uuid.Parse(s)
 	if err != nil {
 		return uuid.Nil(), fmt.Errorf("%w: %q is not an engine id", ErrInvalidConfig, s)
+	}
+	if id == uuid.Nil() {
+		// A zero UUID is how an older page spells "no entity id"; it must create an engine, not look up a row that
+		// cannot exist, or the first save from that page would lose the legacy key.
+		return uuid.NewV7(), nil
 	}
 	return id, nil
 }

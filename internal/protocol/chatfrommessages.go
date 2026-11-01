@@ -44,17 +44,20 @@ const (
 	thinkingBlock
 	redactedBlock
 	toolBlock
+	serverToolBlock
+	webSearchResultBlock
 	inputDelta
 	signatureDelta
 	citationDelta
 )
 
-// blockKinds and deltaKinds are the kinds of the block and delta types a converted request can bring about; any other is the
-// upstream's failure, such as a server tool's block, which the request has none of. A citation is not one: a
-// url_citation becomes a Chat annotation.
+// blockKinds and deltaKinds are the kinds of the block and delta types a converted request can bring about; any other
+// is the upstream's failure. Server-tool blocks are read and left out: the model's own search has no Chat block, and
+// its usage is metered from the message's usage. A citation is not one: a url_citation becomes a Chat annotation.
 var (
 	blockKinds = map[string]blockKind{
 		"text": textBlock, "thinking": thinkingBlock, "redacted_thinking": redactedBlock, "tool_use": toolBlock,
+		"server_tool_use": serverToolBlock, "web_search_tool_result": webSearchResultBlock,
 	}
 	deltaKinds = map[string]blockKind{
 		"text_delta": textBlock, "thinking_delta": thinkingBlock, "signature_delta": signatureDelta,
@@ -66,7 +69,7 @@ var (
 // other are the upstream's failure.
 var messagesFinish = map[string]string{
 	"end_turn": `"stop"`, "stop_sequence": `"stop"`, "tool_use": `"tool_calls"`, "max_tokens": `"length"`,
-	"model_context_window_exceeded": `"length"`, "refusal": `"content_filter"`,
+	"model_context_window_exceeded": `"length"`, "refusal": `"content_filter"`, "pause_turn": `"stop"`,
 }
 
 const anthropicFormat = `,"format":"anthropic-claude-v1"`
@@ -188,7 +191,7 @@ func (s *messagesToChat) blockStart() error {
 		return fmt.Errorf("block %d started before block %d stopped", s.ev.index, s.open)
 	}
 	s.open, s.kind, s.deltas, s.stash = s.ev.index, s.ev.block, false, s.stash[:0]
-	switch s.kind { //nolint:exhaustive // a citation is a delta, not a block that starts
+	switch s.kind {
 	case textBlock:
 		s.leading = false
 		return s.addText(&s.draft.content, nonEmpty(s.ev.text))
@@ -208,7 +211,11 @@ func (s *messagesToChat) blockStart() error {
 			[]byte(anthropicFormat), detailIndex(s.details-1), []byte("}"))
 	case toolBlock:
 		return s.toolStart()
-	case otherBlock, inputDelta, signatureDelta:
+	case serverToolBlock, webSearchResultBlock:
+		// The provider ran the search itself; there is no Chat content for it. The text after it is still leading,
+		// and the usage in message_delta carries the searches to the meter.
+		return nil
+	case otherBlock, inputDelta, signatureDelta, citationDelta:
 	}
 	return fmt.Errorf("block %d of a type a converted request does not ask for", s.ev.index)
 }
@@ -265,6 +272,8 @@ func (s *messagesToChat) blockDelta() error {
 		return s.arguments(nonEmpty(s.ev.partial))
 	case s.ev.delta == citationDelta && s.kind == textBlock:
 		return s.citation()
+	case s.ev.delta == inputDelta && s.kind == serverToolBlock:
+		return nil // the search query, which Chat does not receive
 	}
 	return fmt.Errorf("block %d gets a delta of a type it does not take", s.open)
 }
@@ -274,6 +283,9 @@ func (s *messagesToChat) blockStop() error {
 		return fmt.Errorf("block %d stops, which is not open", s.ev.index)
 	}
 	s.open = -1
+	if s.kind == serverToolBlock || s.kind == webSearchResultBlock {
+		return nil
+	}
 	if s.kind != toolBlock || s.deltas || len(s.stash) == 0 {
 		return nil
 	}

@@ -67,6 +67,7 @@ type rig struct {
 
 	cfg       Config
 	price     string                           // every model's sale schedule, unless a test lists another
+	alphaSpec string                           // alpha's spec, the basic one when empty
 	alpha     catalog.ModelID                  // acme/alpha, served by two endpoints
 	beta      catalog.ModelID                  // acme/beta, served by one
 	bare      catalog.ModelID                  // anthropic/claude-test, listed with its maker's name too, and no endpoint
@@ -114,6 +115,7 @@ type rigOptions struct {
 	search    websearch.Searcher // the web plugin's backend, nil when the node has none
 	backends  SearchBackends     // the whole engine set, when a test needs names and prices; search is used otherwise
 	price     string             // the model's sale schedule, the cheap one when empty
+	alphaSpec string             // alpha's spec, the basic one when empty
 	suppliers bool               // the suppliers tables too, for a real suppliers service to price attempts
 	lifetime  time.Duration      // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
 	proxies   []netip.Prefix     // the reverse proxies the handler believes, none when empty
@@ -137,7 +139,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	}
 	r := &rig{
 		t: t, cfg: DefaultConfig(), endpoints: map[string]routing.Endpoint{}, sold: map[catalog.ModelID]billing.Sold{},
-		models: NewModelList(), price: cmpOr(o.price, cheap),
+		models: NewModelList(), price: cmpOr(o.price, cheap), alphaSpec: o.alphaSpec,
 	}
 	// The tests run many rigs at once on a machine that is busy with other things, where a second is not enough for a
 	// transaction or a key lookup; the tests of the budgets set their own.

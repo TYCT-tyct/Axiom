@@ -2159,20 +2159,31 @@ export interface components {
             markup: string;
         };
         SearchSettings: {
-            engines: components["schemas"]["SearchEngine"][];
+            /** @description Present on a node that supports multiple engines. A page talking to an older node sees url and has_key instead and sends the old single-backend shape. */
+            engines?: components["schemas"]["SearchEngine"][];
             /**
              * @description Where the list came from. "saved" is the old single-backend row and "environment" is AXIOM_SEARCH_URL; both apply until an engine list is saved.
              * @enum {string}
              */
-            source: "database" | "saved" | "environment" | "none";
+            source?: "database" | "saved" | "environment" | "none";
+            /** @description The default engine's URL, for a page built before engines existed. */
+            url?: string;
+            /** @description Whether the default engine has a key, for a page built before engines existed. */
+            has_key?: boolean;
             restart_required?: boolean;
         };
         SearchSettingsUpdate: {
-            engines: components["schemas"]["SearchEngineInput"][];
+            engines?: components["schemas"]["SearchEngineInput"][];
+            /** @description The old single-backend shape, still accepted from a page built before engines existed. */
+            settings?: {
+                url?: string;
+                key?: string;
+            };
             reason: components["schemas"]["Reason"];
         };
         SearchConfigTest: {
-            engine: components["schemas"]["SearchEngineInput"];
+            /** @description The engine to test. Absent tests the saved default, which is what a page built before engines existed asks for. */
+            engine?: components["schemas"]["SearchEngineInput"];
             reason: components["schemas"]["Reason"];
         };
         MailConfigTest: {

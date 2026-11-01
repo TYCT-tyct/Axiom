@@ -32,6 +32,7 @@ func TestEngineKey(t *testing.T) {
 		"new engine, searxng no key":   {EngineSettings{}, "https://other.example.com", Engine{}, false, KindSearXNG, "", false},
 		"new engine, firecrawl no key": {EngineSettings{}, "https://api.firecrawl.dev/v2", Engine{}, false, KindFirecrawl, "", true},
 		"cleared":                      {EngineSettings{Key: key("left")}, "https://search.example.com", saved, true, KindSearXNG, "left", false},
+		"firecrawl explicit empty key": {EngineSettings{Key: key("")}, firecrawlBase, Engine{}, false, KindFirecrawl, "", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := engineKey(tc.settings, tc.url, tc.old, tc.found, tc.kind)
@@ -42,6 +43,24 @@ func TestEngineKey(t *testing.T) {
 				t.Fatalf("engineKey() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPrepareEngineZeroIDKeepsLegacyKey(t *testing.T) {
+	legacy := Engine{URL: "https://search.example.com", Kind: KindSearXNG, Key: secret.New("legacy")}
+	s := EngineSettings{
+		ID: uuid.Nil().String(), Name: "searxng", Kind: "searxng", URL: legacy.URL,
+		Enabled: true, Default: true, CostSearch: "0", CostResult: "0", Markup: "0",
+	}
+	e, err := prepareEngine(s, nil, []Engine{legacy})
+	if err != nil {
+		t.Fatalf("prepareEngine() error = %v", err)
+	}
+	if e.ID == uuid.Nil() {
+		t.Fatal("a zero UUID was saved as the engine id")
+	}
+	if e.Key.Reveal() != "legacy" {
+		t.Fatalf("key = %q, want the legacy key retained", e.Key.Reveal())
 	}
 }
 

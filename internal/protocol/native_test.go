@@ -28,22 +28,37 @@ func TestInjectNativeSearch(t *testing.T) {
 		{
 			name: "responses adds a tool", format: Responses, uses: 1,
 			body: `{"model":"m","input":[]}`,
-			want: []string{`"tools":[{"type":"web_search"}]`},
+			want: []string{`"tools":[{"type":"web_search"}]`, `"max_tool_calls":1`},
 		},
 		{
 			name: "responses appends after a tool", format: Responses, uses: 1,
 			body: `{"model":"m","tools":[{"type":"function","name":"f"}]}`,
-			want: []string{`{"type":"function","name":"f"},{"type":"web_search"}`},
+			want: []string{`{"type":"function","name":"f"},{"type":"web_search"}`, `"max_tool_calls":1`},
 		},
 		{
 			name: "responses replaces null", format: Responses, uses: 1,
 			body: `{"model":"m","tools":null}`,
-			want: []string{`"tools":[{"type":"web_search"}]`},
+			want: []string{`"tools":[{"type":"web_search"}]`, `"max_tool_calls":1`},
 		},
 		{
 			name: "responses keeps its own search", format: Responses, uses: 1,
 			body: `{"model":"m","tools":[{"type":"web_search_preview"}]}`,
 			want: []string{`{"type":"web_search_preview"}`}, absent: []string{`"type":"web_search"}`},
+		},
+		{
+			name: "responses uses the requested bound", format: Responses, uses: 3,
+			body: `{"model":"m","input":[]}`,
+			want: []string{`"max_tool_calls":3`},
+		},
+		{
+			name: "responses keeps a stricter call limit", format: Responses, uses: 3,
+			body: `{"model":"m","input":[],"max_tool_calls":2}`,
+			want: []string{`"max_tool_calls":2`}, absent: []string{`"max_tool_calls":3`},
+		},
+		{
+			name: "responses replaces a looser call limit", format: Responses, uses: 3,
+			body: `{"model":"m","input":[],"max_tool_calls":99}`,
+			want: []string{`"max_tool_calls":3`},
 		},
 		{
 			name: "chat keeps its own tool", format: Chat, uses: 1,

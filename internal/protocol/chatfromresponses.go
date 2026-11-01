@@ -48,9 +48,12 @@ const (
 	messageItem
 	functionItem
 	reasoningItemKind
+	webSearchItem
 )
 
-var itemKinds = map[string]itemKind{"message": messageItem, "function_call": functionItem, "reasoning": reasoningItemKind}
+var itemKinds = map[string]itemKind{
+	"message": messageItem, "function_call": functionItem, "reasoning": reasoningItemKind, "web_search_call": webSearchItem,
+}
 
 type partKind uint8
 
@@ -378,6 +381,8 @@ func (s *responsesToChat) item(added bool) (*responsesItem, error) {
 	if s.ev.item == otherItem {
 		return nil, fmt.Errorf("item %d of a type a converted request does not ask for", s.ev.index)
 	}
+	// A web_search_call is the provider's own tool: it has no Chat content, and its usage is metered from the
+	// response's usage. Keep its item so its later events and the response's end are accepted.
 	if s.ev.item == functionItem && (nonEmpty(s.ev.callID) == nil || nonEmpty(s.ev.name) == nil) {
 		return nil, fmt.Errorf("function call %d without a call_id or a name", s.ev.index)
 	}

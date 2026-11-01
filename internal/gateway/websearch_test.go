@@ -254,6 +254,50 @@ func TestExternalSearchStaysOutOfSupplierCost(t *testing.T) {
 
 // TestSearchEngineSelectionReachesTheCall: a named engine keeps the plugin (its flat search and the injected input) and
 // fixes the price the reservation quotes; a request that already declares the provider's tool drops it instead.
+// TestNativeSearchUsesTheRealRequestAndOneRoute: a native search never reads the user's last message as a backend
+// query, so a long one must not be refused at admission, and no fallback may take a different search path after the
+// first entry chose native. The reservation therefore covers only the native entries.
+func TestNativeSearchUsesTheRealRequestAndOneRoute(t *testing.T) {
+	nativeSpec := `{"items":["input","output","web_search"],"tiers":[],"context_length":128000,"max_output_tokens":1000,"streams":true,"abilities":["web_search"]}`
+	price := `{"v":1,"currency":"USD",
+		"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},
+		"service_tiers":{"priority":{"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"}}}}`
+	t.Run("a long last message", func(t *testing.T) {
+		r := newRig(t, func(o *rigOptions) { o.alphaSpec, o.price = nativeSpec, price })
+		a := r.newAccount(1e12)
+		body := `{"model":"acme/alpha","plugins":[{"id":"web"}],"messages":[{"role":"user","content":"` +
+			strings.Repeat("x", 2000) + `"}]}`
+		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, strings.NewReader(body))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
+		}
+		call := r.admits[0]
+		if call.nativeSearch == 0 || call.Request.SearchBytes != 0 || call.Request.Web != nil {
+			t.Fatalf("admitted %+v, want native search without a backend query or input reservation", call)
+		}
+	})
+	t.Run("a fallback that cannot search natively", func(t *testing.T) {
+		r := newRig(t, func(o *rigOptions) {
+			o.alphaSpec, o.price = nativeSpec, price
+			o.endpoints = func(name string, e *routing.Endpoint) {
+				if name == "alpha-2" {
+					e.Enabled = false
+				}
+			}
+		})
+		a := r.newAccount(1e12)
+		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key,
+			strings.NewReader(`{"model":"acme/alpha","plugins":[{"id":"web"}],"messages":[{"role":"user","content":"hello"}]}`))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
+		}
+		call := r.admits[0]
+		if call.nativeSearch == 0 || len(call.Plan.Entries) != 1 {
+			t.Fatalf("entries = %d, native = %d; want one native entry", len(call.Plan.Entries), call.nativeSearch)
+		}
+	})
+}
+
 func TestSearchEngineSelectionReachesTheCall(t *testing.T) {
 	searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com/one", Title: "One", Content: "text"}}}
 	paid := pricedEngine("paid", "0.005", "0.0125")
