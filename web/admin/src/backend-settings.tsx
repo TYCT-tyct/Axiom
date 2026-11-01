@@ -8,9 +8,9 @@ import { ChangeDialog, type Problem } from "./change";
 import { Facts, State } from "./parts";
 import { SettingsPage } from "./settings-page";
 
-// BackendView is the admin API's answer for a backend set by a base URL and an optional key. The search service and the
-// file parser have the same shape, so one card serves both; the words come from the resource's locale block, named by
-// prefix, and the two calls from its own endpoints.
+// BackendView is the admin API's answer for a backend set by a base URL and an optional key. The file parser is such a
+// backend: the words come from its locale block, named by prefix, and the two calls from its own endpoints. Search has
+// an engine list of its own and does not use this card.
 type BackendView = {
   url?: string;
   has_key?: boolean;
