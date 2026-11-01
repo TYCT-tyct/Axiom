@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useErrors } from "./errors";
 import { readForm } from "./forms";
 import { QrCode } from "./qr";
-import { currentSession, identityOf, useAuth, useCachedSession, useStartSession } from "./session";
+import { claimSession, holdsSession, identityOf, useAuth, useCachedSession, useStartSession } from "./session";
 
 type Change = Schemas["FactorChange"];
 
@@ -43,23 +43,21 @@ function RecoveryCodes({ change, onClose }: { change: Change; onClose: () => voi
   );
 }
 
-const ShowCodes = createContext<((change: Change) => void) | null>(null);
+const ShowCodes = createContext<((change: Change, identity: string) => void) | null>(null);
 
 // RecoveryCodesHost shows the recovery codes of a changed factor above everything in it. The codes belong to the person
 // signed in: when the browser passes to another person (another tab signs out and someone else signs in), the dialog
 // closes and the codes leave memory, because this host outlives the pages. The session itself rotating is how these
-// codes were made, so the host follows the person, not the token.
+// codes were made, so the host follows the person, not the token. The caller names the person it asked for the change
+// as, captured before the request went out: this host must not read the session when the answer lands, because by then
+// another tab may have signed someone else in.
 export function RecoveryCodesHost({ children }: { children: ReactNode }) {
-  const client = useQueryClient();
   const identity = identityOf(useCachedSession());
   const [shown, setShown] = useState<{ change: Change; identity: string } | null>(null);
   useEffect(() => {
     setShown((held) => (held && held.identity !== identity ? null : held));
   }, [identity]);
-  const show = useCallback(
-    (change: Change) => setShown({ change, identity: identityOf(currentSession(client)) }),
-    [client],
-  );
+  const show = useCallback((change: Change, asked: string) => setShown({ change, identity: asked }), []);
   const visible = shown && shown.identity === identity ? shown.change : null;
   return (
     <ShowCodes value={show}>
@@ -94,11 +92,16 @@ export function TotpSetupDialog({ setup, onClose }: { setup: Schemas["TotpSetup"
   const { t } = useTranslation("common");
   const errors = useErrors();
   const { api } = useAuth();
+  const client = useQueryClient();
   const show = useShowCodes();
   const confirm = useMutation({
     mutationFn: api.confirmTotpSetup,
-    onSuccess: (change) => {
-      show(change);
+    onMutate: () => claimSession(client),
+    onSuccess: (change, _variables, claim) => {
+      if (!claim || !holdsSession(client, claim.binding)) {
+        return;
+      }
+      show(change, claim.identity);
       onClose();
     },
   });
@@ -155,11 +158,16 @@ export function RecoveryDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation("common");
   const errors = useErrors();
   const { api } = useAuth();
+  const client = useQueryClient();
   const show = useShowCodes();
   const regenerate = useMutation({
     mutationFn: api.regenerateRecoveryCodes,
-    onSuccess: (change) => {
-      show(change);
+    onMutate: () => claimSession(client),
+    onSuccess: (change, _variables, claim) => {
+      if (!claim || !holdsSession(client, claim.binding)) {
+        return;
+      }
+      show(change, claim.identity);
       onClose();
     },
   });

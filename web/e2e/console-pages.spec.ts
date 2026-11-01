@@ -521,6 +521,36 @@ test.describe("calls", () => {
     expect((await download).suggestedFilename()).toMatch(/^calls-\d{4}-\d{2}-\d{2}\.csv$/);
   });
 
+  test("an export that is out when another account signs in downloads nothing", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/calls");
+    let downloads = 0;
+    page.on("download", () => downloads++);
+
+    // Hold the export until the page has read the other account's session; the page then abandons its request.
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/calls/export*", async (route) => {
+      await held;
+      await route.fallback().catch(() => {});
+    });
+    const sent = page.waitForRequest((request) => request.url().includes("/calls/export"));
+    const abandoned = page.waitForEvent("requestfailed", {
+      predicate: (request) => request.url().includes("/calls/export"),
+    });
+    await page.getByRole("button", { name: "导出 CSV" }).click();
+    await sent;
+
+    state.account = 2;
+    state.user.email = "other@example.com";
+    await returnToWindow(page);
+    await expect(page.getByRole("navigation", { name: "主导航" }).getByText("other@example.com")).toBeVisible();
+    await abandoned;
+    answer();
+    expect(downloads).toBe(0);
+  });
+
   test("a failed call says so, and a call that is not the account's is not found", async ({ page }) => {
     const state = await mockConsole(page);
     signedInAs(state);

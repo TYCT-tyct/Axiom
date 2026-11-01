@@ -1,5 +1,52 @@
-import { expect, it } from "vitest";
-import { safeNext } from "./session";
+import { QueryClient } from "@tanstack/react-query";
+import { describe, expect, it } from "vitest";
+import { claimSession, holdsSession, type Session, safeNext, sessionBinding } from "./session";
+
+const session = (over: Partial<Session> = {}) =>
+  ({
+    user: { id: "user_a", email: "a@example.com", invite_code: "invite" },
+    account: "acct_a",
+    level: "mfa",
+    mfa_enabled: true,
+    csrf_token: "csrf-1",
+    expires_at: "2026-10-15T00:00:00Z",
+    permissions: [],
+    ...over,
+  }) as Session;
+
+const withSession = (held: Session | null) => {
+  const client = new QueryClient();
+  client.setQueryData(["session"], held);
+  return client;
+};
+
+describe("a session claim", () => {
+  it("names the person and the session the page holds when work starts", () => {
+    expect(claimSession(withSession(session()))).toEqual({
+      binding: "user_a/acct_a/csrf-1",
+      identity: "user_a/acct_a",
+    });
+    expect(claimSession(withSession(null))).toBeNull();
+  });
+
+  it("holds while that session is current", () => {
+    const client = withSession(session());
+    expect(holdsSession(client, "user_a/acct_a/csrf-1")).toBe(true);
+  });
+
+  it.each([
+    ["another account", session({ user: { id: "user_b", email: "b@example.com", invite_code: "x" } })],
+    ["the same person's next session", session({ csrf_token: "csrf-2" })],
+    ["no session", null],
+  ])("drops an answer once the browser passes to %s", (_, now) => {
+    const client = withSession(now);
+    expect(holdsSession(client, sessionBinding(session()))).toBe(false);
+  });
+
+  it("never holds an answer nobody claimed", () => {
+    expect(holdsSession(withSession(session()), "")).toBe(false);
+  });
+});
 
 const dots = [
   // the issue's case: the router decodes %2F, and the browser resolves `..` out of the base

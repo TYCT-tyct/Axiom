@@ -1,10 +1,14 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { failOnce, mockConsole, signedInAs } from "./console-api.ts";
 
 // The console's credit statement against the mocked API (console-api.ts): paging, refund holds, export, and the states
 // of a page with no rows.
 
 test.use({ timezoneId: "Asia/Shanghai" });
+
+// What a page does when its window comes back to the front, which is when it asks again for the session.
+const returnToWindow = (page: Page) =>
+  page.evaluate(() => document.dispatchEvent(new Event("visibilitychange", { bubbles: true })));
 
 test.describe("statement", () => {
   test("the movements page by cursor, a charge opens its call, and the export is a file", async ({ page }) => {
@@ -92,5 +96,35 @@ test.describe("statement", () => {
     await page.goto("/console/statement");
     await expect(page.getByRole("heading", { name: "还没有额度变动" })).toBeVisible();
     await expect(page.getByRole("row")).toHaveCount(0);
+  });
+
+  test("an export that is out when another account signs in downloads nothing", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/statement");
+    let downloads = 0;
+    page.on("download", () => downloads++);
+
+    // Hold the export until the page has read the other account's session; the page then abandons its request.
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/statement.csv", async (route) => {
+      await held;
+      await route.fallback().catch(() => {});
+    });
+    const sent = page.waitForRequest((request) => request.url().includes("/statement.csv"));
+    const abandoned = page.waitForEvent("requestfailed", {
+      predicate: (request) => request.url().includes("/statement.csv"),
+    });
+    await page.getByRole("button", { name: "导出 CSV" }).click();
+    await sent;
+
+    state.account = 2;
+    state.user.email = "other@example.com";
+    await returnToWindow(page);
+    await expect(page.getByRole("navigation", { name: "主导航" }).getByText("other@example.com")).toBeVisible();
+    await abandoned;
+    answer();
+    expect(downloads).toBe(0);
   });
 });

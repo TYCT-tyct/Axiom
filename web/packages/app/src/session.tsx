@@ -3,7 +3,7 @@ import type { AuthApi } from "@axiom/api/auth";
 import { DataState } from "@axiom/ui";
 import { type QueryClient, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useRouterState, useSearch } from "@tanstack/react-router";
-import { createContext, type ReactNode, use, useEffect, useState } from "react";
+import { createContext, type ReactNode, use, useCallback, useEffect, useRef, useState } from "react";
 
 export type Session = Schemas["Session"];
 
@@ -59,6 +59,75 @@ export function useCachedSession(): Session | null {
   return useQuery({ ...sessionQuery(api), enabled: false }).data ?? null;
 }
 
+// SessionClaim names the session an answer belongs to: the person the page showed and the session it asked under, both
+// read before the request went out.
+export type SessionClaim = { binding: string; identity: string };
+
+export function claimSession(client: QueryClient): SessionClaim | null {
+  const session = currentSession(client);
+  return session ? { binding: sessionBinding(session), identity: identityOf(session) } : null;
+}
+
+// holdsSession reports whether an answer claimed by binding still belongs on the page: the same person and the same
+// session, not the next one of the same person.
+export function holdsSession(client: QueryClient, binding: string): boolean {
+  return binding !== "" && sessionBinding(currentSession(client)) === binding;
+}
+
+// endUnauthenticated ends the session when a call was refused for want of one. Queries and mutations reach it through
+// their caches; work outside them, such as a file download, calls it too.
+export function endUnauthenticated(client: QueryClient, error: unknown) {
+  if (error instanceof ApiError && error.code === "unauthenticated") {
+    endSession(client);
+  }
+}
+
+// useSessionBound runs work for the session that is current when it starts. The work gets a signal that ends when that
+// session ends, changes, or the page goes away; an answer that arrives after either is dropped instead of handed to
+// the caller. The caller also gets the claim, so something only one person may see is labelled with the person who
+// asked, not whoever is on the page when it lands.
+export function useSessionBound() {
+  const client = useQueryClient();
+  const binding = sessionBinding(useCachedSession());
+  const running = useRef(new Set<AbortController>());
+  useEffect(() => {
+    return () => {
+      if (!binding) {
+        return;
+      }
+      for (const controller of running.current) {
+        controller.abort();
+      }
+      running.current.clear();
+    };
+  }, [binding]);
+  return useCallback(
+    async <T,>(
+      request: (signal: AbortSignal) => Promise<T>,
+    ): Promise<{ value: T; claim: SessionClaim } | undefined> => {
+      const claim = claimSession(client);
+      if (!claim) {
+        return undefined;
+      }
+      const controller = new AbortController();
+      running.current.add(controller);
+      try {
+        const value = await request(controller.signal);
+        return holdsSession(client, claim.binding) ? { value, claim } : undefined;
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return undefined;
+        }
+        endUnauthenticated(client, error);
+        throw error;
+      } finally {
+        running.current.delete(controller);
+      }
+    },
+    [client],
+  );
+}
+
 // What the session may do. A change of it without a change of person keeps the pages (a dialog may hold what is shown
 // once) but not the data the lost permission read.
 const permissionsOf = (session: Session | null) => (session ? [...session.permissions].sort().join(",") : "");
@@ -103,7 +172,7 @@ function sessionQuery(api: AuthApi) {
 
 // endSession drops the session and what it loaded. Pages see the null session and send the visitor to sign in again,
 // to come back to the page they were on.
-export function endSession(queryClient: QueryClient) {
+function endSession(queryClient: QueryClient) {
   setCsrfToken("");
   queryClient.setQueryData(sessionKey, null);
   queryClient.removeQueries({ queryKey: [accountKey] });

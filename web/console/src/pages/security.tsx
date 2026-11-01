@@ -5,6 +5,7 @@ import {
   useBeginTotp,
   useErrors,
   useSession,
+  useSessionBound,
   useShowRecoveryCodes,
   useStartSession,
 } from "@axiom/app";
@@ -208,22 +209,29 @@ function AddPasskey({ actions }: { actions: PasskeyActions }) {
 type PasskeyActions = ReturnType<typeof usePasskeyActions>;
 
 // usePasskeyChange runs one passkey change: shared busy and failure state, the session the change issued, the recovery
-// codes it made (when TOTP is on) and the reloaded list.
+// codes it made (when TOTP is on) and the reloaded list. The change is bound to the session that asked for it: if another
+// tab signs someone else in while it is out, the answer is dropped, so the codes are never labelled with the new person.
 function usePasskeyChange() {
   const start = useStartSession();
   const show = useShowRecoveryCodes();
+  const bound = useSessionBound();
   const client = useQueryClient();
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  async function run(change: () => Promise<{ token: string; codes?: string[] }>) {
+  async function run(change: (signal: AbortSignal) => Promise<{ token: string; codes?: string[] }>) {
     setBusy(true);
     setFailure(null);
     try {
-      const { token, codes } = await change();
+      const answer = await bound(change);
+      if (!answer) {
+        return;
+      }
+      const { token, codes } = answer.value;
       // The codes exist only in the answer that made them: show them before refreshing the session, so a failed refresh
-      // keeps them on screen and the dialog's Done retries the refresh instead of losing the codes.
+      // keeps them on screen and the dialog's Done retries the refresh instead of losing the codes. The host is told the
+      // person the change was asked for as; changing a factor rotates this session but not that person.
       if (codes?.length) {
-        show({ csrf_token: token, recovery_codes: codes });
+        show({ csrf_token: token, recovery_codes: codes }, answer.claim.identity);
       }
       try {
         await start(token);
@@ -249,15 +257,16 @@ function usePasskeyActions() {
   const { failure, busy, run } = usePasskeyChange();
   const supported = typeof window !== "undefined" && "PublicKeyCredential" in window;
   async function add() {
-    await run(async () => {
+    await run(async (signal) => {
       const begin = await unwrap(
-        consoleApi.POST("/api/console/v1/auth/passkeys/register/begin", { body: { name, password } }),
+        consoleApi.POST("/api/console/v1/auth/passkeys/register/begin", { body: { name, password }, signal }),
       );
       const credential = await registerPasskey(begin.public_key);
       const added = await unwrap(
         consoleApi.POST("/api/console/v1/auth/passkeys/register/finish", {
           params: { query: { flow_id: begin.flow_id } },
           body: credential,
+          signal,
         }),
       );
       setName("");
@@ -266,9 +275,13 @@ function usePasskeyActions() {
     });
   }
   async function remove(id: string) {
-    await run(async () => {
+    await run(async (signal) => {
       const grant = await unwrap(
-        consoleApi.DELETE("/api/console/v1/auth/passkeys/{id}", { params: { path: { id } }, body: { password } }),
+        consoleApi.DELETE("/api/console/v1/auth/passkeys/{id}", {
+          params: { path: { id } },
+          body: { password },
+          signal,
+        }),
       );
       return { token: grant.csrf_token, codes: grant.recovery_codes };
     });
@@ -367,6 +380,7 @@ function useIdentityActions() {
   const errors = useErrors();
   const start = useStartSession();
   const show = useShowRecoveryCodes();
+  const bound = useSessionBound();
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -374,10 +388,13 @@ function useIdentityActions() {
     setBusy(true);
     setFailure(null);
     try {
-      const { authorize_url } = await unwrap(
-        consoleApi.POST("/api/console/v1/auth/oauth/link/start", { body: { provider } }),
+      const answer = await bound((signal) =>
+        unwrap(consoleApi.POST("/api/console/v1/auth/oauth/link/start", { body: { provider }, signal })),
       );
-      window.location.assign(authorize_url);
+      if (!answer) {
+        return;
+      }
+      window.location.assign(answer.value.authorize_url);
     } catch (error) {
       setFailure(error);
       setBusy(false);
@@ -387,11 +404,20 @@ function useIdentityActions() {
     setBusy(true);
     setFailure(null);
     try {
-      const grant = await unwrap(
-        consoleApi.DELETE("/api/console/v1/auth/identities/{provider}", { params: { path: { provider } } }),
+      const answer = await bound((signal) =>
+        unwrap(
+          consoleApi.DELETE("/api/console/v1/auth/identities/{provider}", {
+            params: { path: { provider } },
+            signal,
+          }),
+        ),
       );
+      if (!answer) {
+        return;
+      }
+      const grant = answer.value;
       if (grant.recovery_codes?.length) {
-        show({ csrf_token: grant.csrf_token, recovery_codes: grant.recovery_codes });
+        show({ csrf_token: grant.csrf_token, recovery_codes: grant.recovery_codes }, answer.claim.identity);
       }
       try {
         await start(grant.csrf_token);

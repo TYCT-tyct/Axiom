@@ -166,3 +166,47 @@ test.describe("two-step verification settings", () => {
     });
   }
 });
+
+test.describe("passkey changes and the session that asked", () => {
+  test("a removal that finishes after another account signs in shows no codes", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.mfaEnabled = true;
+    state.passkeys = [
+      {
+        id: "pk_00000000000000000000000000",
+        name: "Laptop",
+        created_at: "2026-10-01T08:00:00Z",
+        backup_eligible: true,
+      },
+    ];
+    signedInAs(state, "mfa");
+    await page.goto("/console/security");
+    await page.getByLabel("当前密码").fill(knownPassword);
+
+    // Hold the removal itself, not the list read.
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/api/console/v1/auth/passkeys/*", async (route) => {
+      if (route.request().method() !== "DELETE") {
+        return route.fallback();
+      }
+      await held;
+      await route.fallback().catch(() => {});
+    });
+    const sent = page.waitForRequest((request) => request.method() === "DELETE");
+    const abandoned = page.waitForEvent("requestfailed", {
+      predicate: (request) => request.method() === "DELETE",
+    });
+    await page.getByRole("button", { name: "移除", exact: true }).click();
+    await sent;
+
+    // Another tab signs someone else in; this page reads the new session when its window comes back.
+    state.account = 2;
+    state.user.email = "other@example.com";
+    await returnToWindow(page);
+    await expect(page.getByRole("navigation", { name: "主导航" }).getByText("other@example.com")).toBeVisible();
+    await abandoned;
+    answer();
+    await expect(page.getByRole("dialog", { name: "保存你的恢复码" })).toHaveCount(0);
+  });
+});
