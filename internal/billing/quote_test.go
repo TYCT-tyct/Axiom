@@ -105,6 +105,14 @@ func TestQuoteEntry(t *testing.T) {
 		{"two flat parses: 80 + 2×100 + 500 at 10", tools(text, ServerTool{Item: webSearch, MaxUses: 2, Flat: true}), false, "5280"},
 		{"compaction doubles 1 sampling: 80 + 1000 at 4 + 500 at 20", Demand{TextBytes: 80, Compaction: true}, false, "14080"},
 		{
+			"a loop of one search: 80 + 1000 at 4 + 2×500 at 20 + 100",
+			tools(text, ServerTool{Item: webSearch, MaxUses: 1, Repeats: true}), false, "24180",
+		},
+		{
+			"a loop of two searches: 80 + 2×1000 at 4 + 3×500 at 20 + 200",
+			tools(text, ServerTool{Item: webSearch, MaxUses: 2, Repeats: true}), false, "38280",
+		},
+		{
 			"compaction doubles 2 samplings: 80 + 3×1000 at 4 + 100 + 500 at 20",
 			tools(Demand{TextBytes: 80, Compaction: true}, ServerTool{Item: webSearch, MaxUses: 1}), false, "22180",
 		},

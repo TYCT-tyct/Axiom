@@ -29,7 +29,8 @@ type Suppliers interface {
 	EndRequests(ctx context.Context, tx pg.Tx, ends []suppliers.EndedRequest) error
 }
 
-// Outcome is how a call ended: its attempts in order, of which the last is charged. A call whose client left has the
+// Outcome is how a call ended: its attempts in order, of which the last is charged, together with the attempts of the
+// model-side loop it continues (charged). A call whose client left has the
 // leaving in the charged attempt's Finish (FinishCancelled), not here: an attempt that failed before the client left is
 // judged by how it failed. A call with no attempt is one that never reached an upstream.
 type Outcome struct {
@@ -46,6 +47,10 @@ type AttemptResult struct {
 	Segments   []Segment
 	Result     Result
 	Finish     FinishReason
+	// Continues says the attempt is a further sampling of the previous attempt's model-side loop, on the same entry:
+	// its request carries the previous replies and the searches they asked for, so the user is charged for the loop's
+	// samplings together while each keeps its own supplier cost and charge key.
+	Continues bool
 	// Receipt, Estimate and FinishedAt are what suppliers stores of the attempt: the schedule, endpoint and credential
 	// that priced it with the supplier's own charge reference, its cost in the supplier's unit, and when it ended.
 	Receipt    suppliers.AttemptReceipt
@@ -162,7 +167,7 @@ func (c *locked) settle(ctx context.Context, tx pg.Tx, o Outcome) (Final, error)
 	if err := c.recordAttempts(ctx, tx, o); err != nil {
 		return Final{}, err
 	}
-	last := o.Attempts[len(o.Attempts)-1]
+	last := charged(o.Attempts)
 	if c.row.State == "cleanup_released" { // the usage arrived after all: the request is no longer lost
 		if err := c.b.suppliers.ResolveLostRequest(ctx, tx, c.id); err != nil {
 			return Final{}, fmt.Errorf("billing: resolve the lost request: %w", err)
@@ -197,7 +202,7 @@ func (c *locked) recordAttempts(ctx context.Context, tx pg.Tx, o Outcome) error 
 		c.costKnown = c.costKnown && at.CostKnown
 		c.cost = sum(c.cost, platform.AmountExact(at.Cost))
 		records[i] = suppliers.AttemptRecord{
-			Request: platform.RequestID(c.id), Seq: platform.AttemptSeq(at.Seq), //nolint:gosec // at most platform.MaxAttempts
+			Request: platform.RequestID(c.id), Seq: platform.AttemptSeq(at.Seq), //nolint:gosec // at most platform.MaxAttemptSeq
 			Site: c.row.SiteID, Account: c.row.AccountID,
 			Receipt: at.Receipt, Usage: usages(at.Segments), Cost: at.Estimate, FinishedAt: at.FinishedAt,
 		}
@@ -403,15 +408,6 @@ type written struct {
 	usage             []byte
 	tiers             int16
 	wallet            bool // the settlement paid from the wallet though the reservation was frozen in a plan window
-}
-
-// result is what a charge for the last attempt writes: the reservation is settled.
-func result(p priced, last AttemptResult) (written, error) {
-	usage, err := encodeUsage(last.Segments)
-	return written{
-		state: "settled", seq: int32p(last.Seq), entry: int32p(last.Entry), price: p.price, waived: p.waived,
-		estimated: p.estimated, usage: usage, tiers: p.tiers,
-	}, err
 }
 
 // kept moves the reservation to state and keeps what it records.

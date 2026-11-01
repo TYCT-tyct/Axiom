@@ -219,6 +219,9 @@ func (h *Handler) planRoute(c *Call, admission accounts.Admission) (routing.Plan
 // that already declares the provider's own search tool, and a model that searches on every call, keep that path and
 // drop the plugin; otherwise the plugin is either the provider's tool or one backend, and never both.
 func (h *Handler) resolveSearch(c *Call, plan routing.Plan, replan func() (routing.Plan, error)) (routing.Plan, error) {
+	if c.Request.ServerSearch != nil {
+		return h.resolveServerTool(c, plan)
+	}
 	if c.Request.Web == nil || len(plan.Entries) == 0 {
 		return plan, nil
 	}
@@ -248,6 +251,67 @@ func (h *Handler) resolveSearch(c *Call, plan routing.Plan, replan func() (routi
 	}
 	c.Request.Web = nil
 	c.Request.SearchBytes = 0
+	return plan, nil
+}
+
+// resolveServerTool decides how the openrouter:web_search tool runs: the provider's own search when the routed entry
+// can serve it and the engine is native, otherwise the model-side loop through the chosen backend. The engine choice
+// and its default are the web plugin's (docs/domains/gateway.md「联网搜索」「服务端工具」).
+func (h *Handler) resolveServerTool(c *Call, plan routing.Plan) (routing.Plan, error) {
+	tool := c.Request.ServerSearch
+	if len(plan.Entries) == 0 {
+		return plan, nil
+	}
+	cap := tool.MaxUses
+	if cap == 0 {
+		cap = protocol.DefaultServerToolCalls
+	}
+	if c.Request.HasMaxToolCalls {
+		cap = min(cap, c.Request.MaxToolCalls)
+	}
+	if cap <= 0 {
+		return plan, invalid("max_tool_calls is 0: the web search tool would have no step to run")
+	}
+	entry := plan.Entries[0]
+	choice := searchChoice{MaxUses: cap}
+	if model, ok := c.snap.Model(entry.Model); ok {
+		choice.Native = servesWebSearch(model) && protocol.NativeSearchSupported(entry.Target.Format)
+		choice.Always = model.AlwaysSearches()
+	}
+	if choice.Always {
+		// The model searches without a tool on every call; the tool's declaration is dropped and its searches are the
+		// model's own, as the web plugin treats such a model. A fallback without the automatic search would answer
+		// without one, so only models that search stay.
+		tool.Loop = false
+		c.Request.Needs |= protocol.WebSearch
+		c.Request.WebSearches = min(cap, maxNativeSearches)
+		c.Request.SearchBytes, c.Request.Web = 0, nil
+		plan = autoSearchRoute(c, plan)
+		if len(plan.Entries) == 0 {
+			return plan, invalid("no candidate endpoint searches automatically")
+		}
+		return plan, nil
+	}
+	decision, err := chooseSearchFor(&protocol.WebPlugin{Engine: tool.Engine, MaxResults: tool.MaxResults}, choice, false, h.Search, "tool")
+	if err != nil {
+		return plan, err
+	}
+	if decision.native > 0 {
+		tool.Loop = false
+		return nativeSearch(c, plan, decision)
+	}
+	// The loop runs one search per step and samples the model again after each: its input re-reads and per-use fees
+	// are what the reservation covers, at the cap above.
+	tool.Loop = true
+	c.serverLoop, c.searchBackend, c.searchPrice = true, decision.backend, decision.price
+	c.Request.Needs |= protocol.Tools
+	c.Request.WebSearches = cap
+	c.Request.SearchBytes = 0
+	c.Request.Web = nil
+	plan = searchRoute(c, plan, decision)
+	if len(plan.Entries) == 0 {
+		return plan, invalid("no candidate endpoint can run the selected search engine")
+	}
 	return plan, nil
 }
 
@@ -361,9 +425,14 @@ type searchDecision struct {
 
 // chooseSearch is resolveSearch's decision, apart from the catalog it reads: declared is a request that already turns
 // the provider's own search on, and all are the node's enabled engines.
+func chooseSearch(web *protocol.WebPlugin, choice searchChoice, declared bool, all SearchBackends) (searchDecision, error) {
+	return chooseSearchFor(web, choice, declared, all, "plugin")
+}
+
+// chooseSearchFor is chooseSearch with the word the refusal uses for the request's member: a plugin or the tool.
 //
 //nolint:gocognit // one branch per engine choice, which is the rule being expressed
-func chooseSearch(web *protocol.WebPlugin, choice searchChoice, declared bool, all SearchBackends) (searchDecision, error) {
+func chooseSearchFor(web *protocol.WebPlugin, choice searchChoice, declared bool, all SearchBackends, noun string) (searchDecision, error) {
 	if declared || choice.Always {
 		return searchDecision{}, nil
 	}
@@ -382,10 +451,10 @@ func chooseSearch(web *protocol.WebPlugin, choice searchChoice, declared bool, a
 	switch web.Engine {
 	case "native":
 		if !choice.Native {
-			return searchDecision{}, invalid("plugin option \"native\" is not supported: the selected model has no native web search on this endpoint")
+			return searchDecision{}, invalid(fmt.Sprintf("%s option \"native\" is not supported: the selected model has no native web search on this endpoint", noun))
 		}
 		return native()
-	case "":
+	case "", "auto":
 		if choice.Native {
 			return native()
 		}
@@ -394,13 +463,13 @@ func chooseSearch(web *protocol.WebPlugin, choice searchChoice, declared bool, a
 			if web.Online {
 				return searchDecision{}, invalid(errOnline)
 			}
-			return searchDecision{}, invalid(fmt.Sprintf("plugin %q is not supported: %s", "web", protocol.NoWebSearch))
+			return searchDecision{}, invalid(fmt.Sprintf("%s %q is not supported: %s", noun, "web", protocol.NoWebSearch))
 		}
 		return backend(b)
 	default:
 		b, ok := findBackend(all, web.Engine)
 		if !ok {
-			return searchDecision{}, invalid(fmt.Sprintf("plugin option %q is not an enabled search engine", web.Engine))
+			return searchDecision{}, invalid(fmt.Sprintf("%s option %q is not an enabled search engine", noun, web.Engine))
 		}
 		return backend(b)
 	}

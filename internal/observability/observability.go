@@ -64,7 +64,7 @@ const (
 // the request's start (the partition key) and the tenant. The supplier's cost and reconciliation key stay with
 // suppliers, which keeps them by (request ID, sequence); this record is what makes the attempt findable there.
 type AttemptRecord struct {
-	Seq         platform.AttemptSeq // 1 to platform.MaxAttempts, in the order the attempts were made
+	Seq         platform.AttemptSeq // 1 to platform.MaxAttemptSeq, in the order the attempts were made
 	Endpoint    uuid.UUID
 	Supplier    uuid.UUID
 	SourceClass string // official, cloud or relay
@@ -176,8 +176,8 @@ type attemptRow struct {
 // newRows checks what the database cannot say well and converts r and its attempts. The call's endpoint, source
 // class, egress and attempt count come from the last attempt, so the two statements below always agree.
 func newRows(r CallRecord) (row, []attemptRow, error) {
-	if len(r.Attempts) > platform.MaxAttempts {
-		return row{}, nil, fmt.Errorf("attempts: %d, at most %d", len(r.Attempts), platform.MaxAttempts)
+	if len(r.Attempts) > platform.MaxAttemptSeq {
+		return row{}, nil, fmt.Errorf("attempts: %d, at most %d", len(r.Attempts), platform.MaxAttemptSeq)
 	}
 	attempts := make([]attemptRow, len(r.Attempts))
 	want := platform.AttemptSeq(1)

@@ -23,7 +23,7 @@ const (
 // working set is bounded by the body's size, braces and colons (above). What stays is the capacity of Upstream.Body,
 // which is never more than the cost.
 func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
-	n := int64(len(body)) + nativeSearchCost(w.NativeSearch)
+	n := int64(len(body)) + nativeSearchCost(w.NativeSearch) + serverFunctionCost(w.ServerFunction)
 	if r.Format == t.Format {
 		cost := int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n + replayCost(r.Format, body)
 		if r.Format == Responses {
@@ -66,6 +66,14 @@ func nativeSearchCost(uses int) int64 {
 		return 0
 	}
 	return 256
+}
+
+// serverFunctionCost is the room the web search function declaration takes, escaped and with its schema.
+func serverFunctionCost(add bool) int64 {
+	if !add {
+		return 0
+	}
+	return 4 << 10
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
