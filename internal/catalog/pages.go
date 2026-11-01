@@ -220,8 +220,43 @@ func reservePageRequestIn(ctx context.Context, tx pg.Tx, origin string, delay ti
 	return wait, false, err
 }
 
+func recordFetchedPage(ctx context.Context, tx pg.Tx, page, snapshot uuid.UUID, seconds int64) error {
+	if err := New().RecordPageSuccess(ctx, tx, RecordPageSuccessParams{ID: page, CurrentSnapshotID: &snapshot, Seconds: seconds}); err != nil {
+		return err
+	}
+	if err := pageSignal(ctx, tx, "catalog.page_failed", page, true); err != nil {
+		return err
+	}
+	return pageSignal(ctx, tx, "catalog.page_overdue", page, true)
+}
+
+// keepsCurrentSnapshot reports whether the stored snapshot stays: a worker still on the old extractor must not move the
+// page back after a newer one stored a snapshot, and an upgrade that changes only layout normalization is not a page
+// change. Keeping it also keeps official evidence and any open review pointed at the text a reviewer already saw; the
+// first real change stores the new version.
+func keepsCurrentSnapshot(current CatalogWatchedPage, prior PageSnapshotContentRow, content PageContent) bool {
+	if current.CurrentSnapshotID == nil {
+		return false
+	}
+	if pageExtractorVersion < prior.ExtractorVersion {
+		return true
+	}
+	return pageExtractorVersion != prior.ExtractorVersion && samePageContent(prior.Text, content)
+}
+
 func savePageContent(ctx context.Context, tx pg.Tx, current CatalogWatchedPage, content PageContent, seconds int64) error {
 	q := New()
+	var prior PageSnapshotContentRow
+	if current.CurrentSnapshotID != nil {
+		var err error
+		prior, err = q.PageSnapshotContent(ctx, tx, *current.CurrentSnapshotID)
+		if err != nil {
+			return err
+		}
+	}
+	if keepsCurrentSnapshot(current, prior, content) {
+		return recordFetchedPage(ctx, tx, current.ID, *current.CurrentSnapshotID, seconds)
+	}
 	snapshot, err := q.InsertPageSnapshot(ctx, tx, InsertPageSnapshotParams{PageID: current.ID, ExtractorVersion: pageExtractorVersion, Text: content.Text, TextSha256: content.SHA256[:]})
 	if errors.Is(err, pg.ErrNoRows) {
 		snapshot, err = q.FindPageSnapshot(ctx, tx, FindPageSnapshotParams{PageID: current.ID, ExtractorVersion: pageExtractorVersion, TextSha256: content.SHA256[:]})
@@ -234,11 +269,5 @@ func savePageContent(ctx context.Context, tx pg.Tx, current CatalogWatchedPage, 
 			return err
 		}
 	}
-	if err := q.RecordPageSuccess(ctx, tx, RecordPageSuccessParams{ID: current.ID, CurrentSnapshotID: &snapshot, Seconds: seconds}); err != nil {
-		return err
-	}
-	if err := pageSignal(ctx, tx, "catalog.page_failed", current.ID, true); err != nil {
-		return err
-	}
-	return pageSignal(ctx, tx, "catalog.page_overdue", current.ID, true)
+	return recordFetchedPage(ctx, tx, current.ID, snapshot, seconds)
 }

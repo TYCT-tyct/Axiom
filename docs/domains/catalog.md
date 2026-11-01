@@ -162,7 +162,89 @@
 | Google | [Google Terms](https://policies.google.com/terms) 禁止违反机器可读限制的自动访问；[Gemini 附加条款](https://ai.google.dev/gemini-api/terms) | 未见公开价格文档的绝对自动访问禁令；本次只读低频 GET、逐次检查 robots，不当作每小时读取的法律许可 |
 | DeepSeek | [Terms of Use](https://cdn.deepseek.com/policies/en-US/deepseek-terms-of-use.html) §3.5(3) 限制用 robots 等复制服务内容 | 保守排除两个币种的价格页自动 GET，公共文档的适用范围交负责人审阅；首次诊断读取先于该条款的完整识别，不计为准入通过 |
 
-清单在 `deploy/catalog/price-pages.json`，只是 live 验收输入，不自动启用；页面 GET 的结果、hash、失败与重试原因留在 PR。完整四家逐模型验收仍须真实目录数据，检验上架、名字、每币种当前价与来源、分档、证据和未处理核对；没有真实目录连接时如实报告未验证。
+清单在 `deploy/catalog/price-pages.json`，只是 live 验收输入，不自动启用；页面 GET 的结果、hash、失败与重试原因留在本文的 2026-10-31 运行一节和 PR。完整四家逐模型验收仍须真实目录数据，检验上架、名字、每币种当前价与来源、分档、证据和未处理核对；没有真实目录连接时如实报告未验证。
+
+### 2026-10-31 的四家 live 运行
+
+本次在一台开发服务器上对四家的五个公开价格页各跑一次 `check-pages`（DeepSeek 的 USD 与 CNY 分页；每个价格页一次 GET，robots 由工具按同源读取），并用同一 UA 另存每个页面的原始响应，供修复后的抽取器复算 hash；没有重试。统一出站、robots、4 分钟期限和 32 MiB 上限不变。运行用的清单是临时文件，仓库里的 `deploy/catalog/price-pages.json` 和上表的条款排除不变；这是一次诊断性读取，不启用定时监测，也不把条款结论写成通过（该框仍由负责人定）。四个 USD 页的主运行以非零退出，唯一失败是 OpenAI 的 403；CNY 页另跑一次，退出 0。
+
+| 厂商 | URL | robots.txt | 页面 | 抽取正文 |
+|---|---|---|---|---|
+| OpenAI | `https://openai.com/api/pricing/` | 200，`Allow: /`（另禁 `/microsoft-for-startups/`） | **403**（拦截页 9,662 B） | 无 |
+| Anthropic | `https://platform.claude.com/docs/en/about-claude/pricing` | 200，`Disallow: /api/` | 200，1,307,125 B | 2,386 B，sha256 `5a3c20c9…` |
+| Google | `https://ai.google.dev/gemini-api/docs/pricing` | 200，`Disallow: /*?*authuser=` | 200，261,792 B | 57,627 B，sha256 `25100a50…` |
+| DeepSeek USD | `https://api-docs.deepseek.com/quick_start/pricing/` | 200，但返回文档首页 HTML（`text/html`，无 robots 指令） | 200，27,815 B | 1,636 B，sha256 `752d5c0c…` |
+| DeepSeek CNY | `https://api-docs.deepseek.com/zh-cn/quick_start/pricing/` | 同站，同上 | 200，27,987 B | 1,670 B，sha256 `7a04e595…` |
+
+运行时保存的原始响应 sha256：OpenAI `7fec3897…`、Anthropic `9de88a38…`、Google `41919361…`、DeepSeek USD `57941235…`、DeepSeek CNY `ed99e49b…`。抽取正文的 hash 是最终抽取器对同一份保存的响应重算的；修复前的运行 hash 见 PR。
+
+USD 表用 USD / 百万 token，DeepSeek CNY 表用人民币 / 百万 token；“读”是缓存命中，“写 5m”“写 1h”是缓存写入的两种保留时间；“—”表示页面没有该项。
+
+**Anthropic**（`platform.claude.com`，Model pricing 与 Additional models 两表）
+
+| 模型 | 输入 | 输出 | 读 | 写 5m | 写 1h |
+|---|---|---|---|---|---|
+| Claude Fable 5.1 | 10 | 50 | 0.25 | 12.50 | 20 |
+| Claude Opus 5.5 | 4 | 20 | 0.20 | 5 | 8 |
+| Claude Sonnet 5.5 | 2 | 10 | 0.10 | 2.50 | 4 |
+| Claude Haiku 5.5，提示 ≤100k | 0.10 | 0.50 | 0.01 | 0.125 | 0.20 |
+| Claude Haiku 5.5，提示 >100k | 0.50 | 2.50 | 0.05 | 0.625 | 1 |
+| Claude Mythos 5.1 | 10 | 50 | 0.25 | 12.50 | 20 |
+| Claude Fable 5 | 10 | 50 | 1 | 12.50 | 20 |
+| Claude Mythos 5 | 10 | 50 | 1 | 12.50 | 20 |
+| Claude Opus 5、4.8、4.7、4.6、4.5 | 5 | 25 | 0.50 | 6.25 | 10 |
+| Claude Opus 4.1、4 | 15 | 75 | 1.50 | 18.75 | 30 |
+| Claude Sonnet 5 | 2 | 10 | 0.20 | 2.50 | 4 |
+| Claude Sonnet 4.6、4.5、4 | 3 | 15 | 0.30 | 3.75 | 6 |
+| Claude Haiku 4.5 | 1 | 5 | 0.10 | 1.25 | 2 |
+| Claude Haiku 3.5 | 0.80 | 4 | 0.08 | 1 | 1.60 |
+
+**Google**（`ai.google.dev`，Standard 档；未列 image、TTS、Live、Transcribe 等非纯文本模型）
+
+| 模型（页面 ID） | 输入 | 输出 | 缓存读 | 备注 |
+|---|---|---|---|---|
+| Gemini 4 Argon（`gemini-4-argon`） | 2.00 | 10.00 | 0.10 | 2026-12-01 起 4.00 / 20.00 / 0.20 |
+| Gemini 3.8 Flash（`gemini-3.8-flash`） | 0.75 | 3.75 | 0.075 | 2027-01-01 起 1.50 / 7.50 / 0.15；缓存存储 0.50（2027-01-01 起 1.00）/ 百万 token·小时 |
+| Gemini 3.6 Flash（`gemini-3.6-flash`） | 0.75 | 3.75 | 0.075 | 同上 |
+| Gemini 3.5 Flash-Lite（`gemini-3.5-flash-lite`） | 0.30 | 2.50 | 0.03 | 文本/图像/视频/音频同价；存储 1.00 |
+| Gemini 3.1 Flash-Lite（`gemini-3.1-flash-lite`） | 0.25 | 1.50 | 0.025 | 音频输入 0.50、读 0.05；存储 1.00 |
+| Gemini 3.1 Pro Preview（`gemini-3.1-pro-preview`、`-customtools`） | 2.00 | 12.00 | 0.20 | >200k：4.00 / 18.00 / 0.40；存储 4.50 |
+| Gemini 3 Flash Preview（`gemini-3-flash-preview`） | 0.50 | 3.00 | 0.05 | 音频输入 1.00、读 0.10；存储 1.00 |
+| Gemini 2.5 Pro（`gemini-2.5-pro`） | 1.25 | 10.00 | 0.125 | >200k：2.50 / 15.00 / 0.25；存储 4.50 |
+| Gemini 2.5 Flash（`gemini-2.5-flash`） | 0.30 | 2.50 | 0.03 | 音频输入 1.00、读 0.10；存储 1.00 |
+| Gemini 2.5 Flash-Lite（`gemini-2.5-flash-lite`） | 0.10 | 0.40 | 0.01 | 音频输入 0.30、读 0.03；存储 1.00 |
+
+每个 Google 模型还列了 Search 与 Maps 的按次价格（有每月免费额度），随模型不同：Gemini 4 Argon 与 3.x 的多数模型是 `$14 / 1,000`，Gemini 2.5 Pro、Flash、Flash-Lite 是 Search `$35 / 1,000`、Maps `$25 / 1,000`。这是工具项，不在上表的 token 价格里。
+
+**DeepSeek USD**（`api-docs.deepseek.com`，高峰价）
+
+| 模型（页面写明的版本） | 输入（缓存未命中） | 输出 | 缓存命中 | 备注 |
+|---|---|---|---|---|
+| `deepseek-flash`（DeepSeek-V4.1-Flash-1017） | 0.30 | 1.20 | 0.006 | 低谷半价：0.15 / 0.60 / 0.003；旧名 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` 仍被接受，但对应型号已退役，由这个版本按 Flash 价服务 |
+| `deepseek-v4-pro`（DeepSeek-V4-Pro-0813） | 1.32 | 3.96 | 0.044 | 低谷半价：0.66 / 1.98 / 0.022 |
+
+**DeepSeek CNY**（`api-docs.deepseek.com/zh-cn`，高峰价；与 USD 是两个独立页面，不是汇率换算）
+
+| 模型（页面写明的版本） | 输入（缓存未命中） | 输出 | 缓存命中 | 备注 |
+|---|---|---|---|---|
+| `deepseek-flash`（DeepSeek-V4.1-Flash-1017） | 2.00 | 8.00 | 0.04 | 低谷半价：1.00 / 4.00 / 0.02 |
+| `deepseek-v4-pro`（DeepSeek-V4-Pro-0813） | 9.00 | 27.00 | 0.30 | 低谷半价：4.50 / 13.50 / 0.15 |
+
+**OpenAI**：页面 403，没有模型清单和价格。`deploy/catalog/dialects.json` 里的 6 个 OpenAI slug（`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`、`gpt-6-luna`、`gpt-6.1-sol`）未与官方页面核对。
+
+目录侧没有可读的数据：这台服务器没有 `AXIOM_DATABASE_URL`，`go run ./cmd/axiom catalog check` 在配置检查处退出（`AXIOM_DATABASE_URL: required`）。所以上面只能记录页面和两个数据集的事实，不能回答“已上架、公开名字、当前参考价与选定来源、证据、未处理核对”；`deploy/catalog/dialects.json` 的 slug 只说明请求写法的数据覆盖了哪些模型，不能代替目录行。完整四家逐模型验收仍须在有真实目录的机器上跑，不能用这张表或临时数据冒充通过。
+
+两个数据集与页面的交叉核对（只列不一致和会被 held 的；其余在 LiteLLM 有直接条目的文本模型，输入、输出和缓存读价与页面一致，LiteLLM 多数没有 1h 缓存写，OpenRouter 有；LiteLLM 没有 `claude-opus-4`、`claude-3-5-haiku` 的直接条目，只有 Bedrock/Vertex 前缀；两个数据集都只有美元，DeepSeek CNY 没有数据集对照）：
+
+| 模型 | 页面 | LiteLLM | OpenRouter | 结论 |
+|---|---|---|---|---|
+| `deepseek-flash` | 高峰 0.30 / 1.20 / 0.006 | 同页面高峰 | `deepseek/deepseek-v4.1-flash-1017` 的基价是低谷 0.15 / 0.60 / 0.003，高峰在 `overrides` | OpenRouter 的条目 ID 与目录 slug 不同，基价也不是目录要的高峰价；catalog 只录高峰，不能把 OpenRouter 选作来源 |
+| `deepseek-v4-pro` | 1.32 / 3.96 / 0.044 | 同页面 | `deepseek/deepseek-v4-pro` 1.60 / 3.20 / 0.135，`-0813` 0.115 / 4.00 / 0.11 | OpenRouter 与页面、LiteLLM 都不一致 |
+| `google/gemini-3.8-flash` | 0.75 / 3.75 / 0.075 | 同页面 | 0.825 / 4.125 / 0.0825 | OpenRouter 高 10% |
+| `anthropic/claude-haiku-5.5` | ≤100k 0.10 / 0.50 / 0.01；>100k 0.50 / 2.50 / 0.05 | 只有基础档 | 基础档 + `overrides`，数值与页面一致 | OpenRouter 能表达分档但按设计 held（数据集的阈值依据未写明）；LiteLLM 没有分档，当前价目表有分档时也不能跟随 |
+| 12 个 Google 条目（本页 7 个） | — | 没有 `cache_write` | `input_cache_write` 有 16 位小数，如 `0.0000000416666666666667` | 按[模块说明](../../internal/catalog/README.md#参考价的录入)拒绝整条，不能作为这些模型的来源 |
+
+运行暴露的抽取问题：Anthropic 把模型名和说明放在相邻的内联标签里，CSS 的 flex 列把它们排成两行；DeepSeek 的标题锚点带 U+200B。旧抽取把前者粘成 `Claude Fable 5.1For…`、`$0.10 / MTokfor…`，并把后者留在正文。最终抽取按布局补边界：表格单元格、块标签、flex 列/网格、`display:block` 和图标前后留边界；`$0` + `.10`、`Pri` + `cing` 这类连续内联文本保持粘连；隐藏节点不贡献边界。`pageExtractorVersion` 为 2，`TestRecordedPricePagesSeparateTextRuns` 用两段裁剪过的页面固定逐字正文，另有 `$0.10`、`Pricing`、隐藏节点、flex/block/icon 和版本升级的回归测试。对同一份保存的响应重算：Anthropic 6 处空格、DeepSeek USD 1 个零宽字符、Google 14 个图标后的空格并去掉 1 个脚注前的假空格（正文 57,614 → 57,627 B），没有其他正文变化；CNY 页是在修复后取的，没有修复前的对照。版本升级时对同一响应运行旧抽取器，当前快照与旧结果逐字相同才保留快照，不新建、不产生复核，保留当前证据和未处理复核；不采用删空白后的比较，`1 23` 和 `12 3` 会碰撞。旧 worker 不能把当前指针移回，数据库触发器也拒绝当前指针回退到更低版本，真实内容变化仍按原基线复核。
 
 ## 待定问题
 

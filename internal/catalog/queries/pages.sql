@@ -61,6 +61,9 @@ SELECT id FROM catalog.page_snapshot WHERE page_id = $1 AND extractor_version = 
 -- name: PageSnapshotText :one
 SELECT text FROM catalog.page_snapshot WHERE id = $1;
 
+-- name: PageSnapshotContent :one
+SELECT extractor_version, text FROM catalog.page_snapshot WHERE id = $1;
+
 -- name: ObservePage :exec
 INSERT INTO catalog.page_observation (page_id, snapshot_id) VALUES ($1, $2);
 

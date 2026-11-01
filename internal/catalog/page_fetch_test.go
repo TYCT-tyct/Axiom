@@ -19,6 +19,15 @@ func TestPageExtractionIgnoresLayoutAndRejectsAmbiguity(t *testing.T) {
 	for _, tc := range []struct{ name, body, want string }{
 		{"table", `<nav>ignore</nav><h2>Start</h2><table><tr><td>alpha</td><td>$1 &amp; $2</td></tr></table><p>End</p>`, "alpha $1 & $2"},
 		{"inline", `<h2>Start</h2><div>alpha <b>$1</b> &amp; $2</div><script>price=3</script><p hidden>noise</p>End`, "alpha $1 & $2"},
+		{"adjacent price", `<h2>Start</h2><span>$0</span><span>.10</span><p>End</p>`, "$0.10"},
+		{"adjacent heading", `<h2>Start</h2><span>Pri</span><span>cing</span><p>$1</p><p>End</p>`, "Pricing $1"},
+		{"hidden inline", `<h2>Start</h2><span>$0.</span><i hidden>tracking</i><span>10</span><p>End</p>`, "$0.10"},
+		{"hidden between text", `<h2>Start</h2><span>$0.</span><i hidden>tracking</i>10<p>End</p>`, "$0.10"},
+		{"flex column", `<h2>Start</h2><div class="flex min-w-0 flex-col"><a>Claude Fable 5.1</a><span>desc</span></div><p>End</p>`, "Claude Fable 5.1 desc"},
+		{"block span", `<h2>Start</h2><div>$0.10 <span>/ MTok</span><span class="block">for prompts</span></div><p>End</p>`, "$0.10 / MTok for prompts"},
+		{"block style", `<h2>Start</h2><div>$0.10 <span>/ MTok</span><span style="display: block">for prompts</span></div><p>End</p>`, "$0.10 / MTok for prompts"},
+		{"icon", `<h2>Start</h2><ul><li><span class="material-symbols-outlined">check_circle</span><span>Content</span></li></ul><p>End</p>`, "check_circle Content"},
+		{"footnote", `<h2>Start</h2><p>products<a href="#note">*</a></p><p>End</p>`, "products*"},
 		{"missing", "not a price section", ""},
 		{"ambiguous start", "Start Start alpha $1 End", ""},
 		{"ambiguous end", "Start alpha $1 End End", ""},
@@ -42,6 +51,51 @@ func TestPageExtractionIgnoresLayoutAndRejectsAmbiguity(t *testing.T) {
 		if strings.Replace(pair[0], removed, added, 1) != pair[1] {
 			t.Fatalf("diff %q -> %q: %q/%q", pair[0], pair[1], removed, added)
 		}
+	}
+}
+
+func TestLegacyPageExtractionKeepsAdjacentCellBoundaries(t *testing.T) {
+	body := `<h2>Start</h2><table><tr><td>Model</td><td>Input</td><td>Output</td></tr><tr><td>alpha</td><td>12</td><td>3</td></tr></table><p>End</p>`
+	got, err := legacyExtractPriceSection([]byte(body), "Start", "End")
+	if err != nil || got != "Model Input Output alpha 12 3" {
+		t.Fatalf("got %q, %v; want the version-1 cell boundaries", got, err)
+	}
+}
+
+// TestRecordedPricePagesSeparateTextRuns: a vendor lays a table cell out with a flex column or a display:block span, so inline
+// tags the browser stacks must not merge into one word; and a heading's anchor zero-width space is not content. The
+// fixtures are trimmed from the pages the 2026-10-31 acceptance run fetched (docs/domains/catalog.md「官方页面监测的落地边界（#281）」).
+func TestRecordedPricePagesSeparateTextRuns(t *testing.T) {
+	for _, tc := range []struct{ name, file, start, end, want, legacy string }{
+		{
+			name:  "anthropic",
+			file:  "pages/anthropic-pricing.html",
+			start: "Pricing", end: "Cloud platform pricing",
+			want:   "Model Input Claude Fable 5.1 For demanding reasoning and long-horizon agentic work $10 / MTok $0.10 / MTok for prompts up to 100,000 tokens Claude Haiku 5.5 For high-volume, latency-sensitive tasks $0.50 / MTok for prompts over 100,000 tokens $2.50 / MTok",
+			legacy: "Model Input Claude Fable 5.1For demanding reasoning and long-horizon agentic work $10 / MTok $0.10 / MTokfor prompts up to 100,000 tokens Claude Haiku 5.5For high-volume, latency-sensitive tasks $0.50 / MTokfor prompts over 100,000 tokens $2.50 / MTok",
+		},
+		{
+			name:  "deepseek",
+			file:  "pages/deepseek-pricing.html",
+			start: "Model Details", end: "Search & Fetch Pricing",
+			want:   "MODEL deepseek-flash deepseek-v4-pro MODEL VERSION DeepSeek-V4.1-Flash-1017 DeepSeek-V4-Pro-0813 1M OUTPUT TOKENS OFF-PEAK $0.6 PEAK $1.2 OFF-PEAK $1.98 PEAK $3.96",
+			legacy: "\u200b MODEL deepseek-flash deepseek-v4-pro MODEL VERSION DeepSeek-V4.1-Flash-1017 DeepSeek-V4-Pro-0813 1M OUTPUT TOKENS OFF-PEAK $0.6 PEAK $1.2 OFF-PEAK $1.98 PEAK $3.96",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := sample(t, tc.file)
+			got, err := extractPriceSection(body, tc.start, tc.end)
+			if err != nil || got != tc.want {
+				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
+			}
+			if strings.ContainsRune(got, '\u200b') {
+				t.Fatal("a zero-width space reached the evidence")
+			}
+			legacy, err := legacyExtractPriceSection(body, tc.start, tc.end)
+			if err != nil || legacy != tc.legacy {
+				t.Fatalf("legacy got %q, %v; want %q", legacy, err, tc.legacy)
+			}
+		})
 	}
 }
 
@@ -120,8 +174,8 @@ func (tc pageFetchCase) run(t *testing.T) {
 	got, err := fetchPage(ctx, client, PageTarget{Author: "acme", URL: server.URL + "/price", Currency: "USD", SectionStart: "Start", SectionEnd: "End"}, reserve, pause)
 	good := tc.wantPage && tc.pageStatus == 0 && tc.page == ""
 	if good {
-		if err != nil || got.Text != "alpha $1" {
-			t.Fatalf("content %q, error %v", got.Text, err)
+		if err != nil || got.Text != "alpha $1" || !got.LegacyOK || got.LegacyText != "alpha $1" {
+			t.Fatalf("content %q legacy %q (%v), error %v", got.Text, got.LegacyText, got.LegacyOK, err)
 		}
 	} else if err == nil {
 		t.Fatal("expected failed inspection")

@@ -381,9 +381,10 @@ function putAccountKeyLimits({ body, params, state }: Ctx<"/api/admin/v1/account
 
 const handlers: Handler<AdminState>[] = [
   route("get", `${base}/version`, none, ({ state }) => ok({ version: state.version })),
-  route("get", `${base}/site`, none, ({ state }) =>
-    ok({ name: "Axiom", ...(state.logo.logo?.data_url ? { logo_url: state.logo.logo.data_url } : {}) }),
-  ),
+  route("get", `${base}/site`, none, ({ state }) => {
+    const logo = state.logoUrl ?? state.logo.logo?.data_url;
+    return ok({ name: state.brandName ?? "Axiom", ...(logo ? { logo_url: logo } : {}) });
+  }),
   route("post", `${base}/auth/sign-in`, none, signIn),
   route("post", `${base}/auth/mfa`, { level: "pending_mfa" }, verifyMfa),
   route("post", `${base}/auth/sign-out`, { level: "any" }, signOut),
