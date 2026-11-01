@@ -299,3 +299,48 @@ func TestCreateSupplierInACurrencyTheRatesCover(t *testing.T) {
 	rec := f.change(f.s, http.MethodPost, "/suppliers", strings.Replace(createBody, `"USD"`, `"CNY"`, 1), newKey())
 	expectAdmin(t, "createSupplier in CNY", rec, http.StatusCreated, "")
 }
+
+// TestSupplierEndpointQuantization: a person records and clears the precision of an endpoint, the supplier detail shows
+// it, a replay with the same key changes nothing, and an unknown endpoint is the same 404 as one that is not there.
+func TestSupplierEndpointQuantization(t *testing.T) {
+	t.Parallel()
+	f := newSupplierFixture(t)
+	endpoint := f.seedTestEndpoint("https://api.example.com")
+	supplier := strings.TrimSpace(f.text(fmt.Sprintf(`SELECT supplier_id::text FROM suppliers.endpoints WHERE id = '%s'`, endpoint)))
+	path := "/suppliers/" + supplier + "/endpoints/" + endpoint + "/quantization"
+	key := newKey()
+	rec := f.change(f.s, http.MethodPut, path, `{"quantization":"fp8","reason":"r"}`, key)
+	expectAdmin(t, "setSupplierEndpointQuantization", rec, http.StatusOK, "")
+	var changed adminapi.SupplierEndpoint
+	decode(t, rec, &changed)
+	if changed.Quantization == nil || *changed.Quantization != adminapi.SupplierEndpointQuantizationFp8 {
+		t.Fatalf("the endpoint's precision: %v", changed.Quantization)
+	}
+	rec = f.change(f.s, http.MethodPut, path, `{"quantization":"fp8","reason":"r"}`, key)
+	expectAdmin(t, "the replay", rec, http.StatusOK, "")
+	if rec.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("the replay did not say it was one")
+	}
+	rec = f.change(f.s, http.MethodPut, path, `{"quantization":null,"reason":"r"}`, newKey())
+	expectAdmin(t, "clearing the precision", rec, http.StatusOK, "")
+	var cleared adminapi.SupplierEndpoint
+	decode(t, rec, &cleared)
+	if cleared.Quantization != nil {
+		t.Fatalf("a cleared precision: %v", *cleared.Quantization)
+	}
+	rec = f.do(http.MethodGet, "/suppliers/"+supplier, "", as(f.s))
+	expectAdmin(t, "getSupplier", rec, http.StatusOK, "")
+	var detail adminapi.SupplierDetail
+	decode(t, rec, &detail)
+	if len(detail.Endpoints) != 1 || detail.Endpoints[0].Quantization != nil {
+		t.Errorf("the detail's endpoints: %+v", detail.Endpoints)
+	}
+	expectAdmin(t, "an unknown endpoint", f.change(f.s, http.MethodPut,
+		"/suppliers/"+supplier+"/endpoints/"+uuid.NewV7().String()+"/quantization", `{"quantization":"fp8","reason":"r"}`, newKey()),
+		http.StatusNotFound, codeNotFound)
+	expectAdmin(t, "a level nobody knows", f.change(f.s, http.MethodPut, path, `{"quantization":"int3","reason":"r"}`, newKey()),
+		http.StatusBadRequest, codeInvalidRequest)
+	if f.auditCount("supplier.endpoint.quantization") != "2" {
+		t.Errorf("quantization audit entries of %s, want 2", f.auditCount("supplier.endpoint.quantization"))
+	}
+}

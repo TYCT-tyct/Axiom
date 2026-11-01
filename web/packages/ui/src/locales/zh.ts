@@ -166,6 +166,7 @@ export default {
       image_out_piece: "输出图片",
       audio_in_second: "音频输入（秒）",
       audio_out_second: "音频输出（秒）",
+      request: "每次请求",
       character_in: "字符",
     },
     unit: { token: "token", use: "次", piece: "张", second: "秒", character: "字符" },

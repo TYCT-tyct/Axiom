@@ -3,7 +3,6 @@ output: adminapi.gen.go
 generate:
   std-http-server: true
   strict-server: true
-  models: true
   # The contract itself, for cmd/axiom to enforce: GetSwagger (internal/platform/README.md「接口约定」).
   embedded-spec: true
 # A request body is decoded by the project's JSON policy, with the template the console's API uses (see its header).

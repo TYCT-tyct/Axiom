@@ -42,6 +42,9 @@ type Demand struct {
 	// own unit: the images to generate, the seconds of audio, the characters to read aloud. A count of a token or
 	// per-use item here is ignored, because those are bounded by TextBytes, the output limit and ServerTools.
 	Counts map[catalog.Item]int64
+	// Requests is how many generation requests this call is: 1 for an ordinary call, and 0 only where there is none to
+	// charge, as a probe's cost estimate. It is billed at the per-request item when the schedule prices one.
+	Requests int64
 }
 
 // ServerTool is a server tool and the most uses the request allows it; 0 means the request set none, so the entry's
@@ -273,9 +276,33 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	if err := q.priceCounted(d, &prices, tiers, longest, samplings); err != nil {
 		return q, err
 	}
+	if err := q.priceRequest(d.Requests, &prices, tiers, longest); err != nil {
+		return q, err
+	}
 	q.allowance = q.output.Mul(allowance)
 	q.amount = sum(q.fixed, q.allowance, q.output.Mul(output))
 	return q, nil
+}
+
+// priceRequest reserves one request per call at the price settlement charges: the served tier's, or the highest request
+// price in the schedule when the eligible tiers price none. A caller with no request to charge, as a probe's estimate,
+// reserves nothing.
+func (q *quote) priceRequest(requests int64, prices *quotePrices, tiers catalog.ServiceTierSet, longest int64) error {
+	if requests == 0 || !prices.schedule.Priced(1<<catalog.ItemRequest) {
+		return nil
+	}
+	price, missing := prices.schedule.Highest(1<<catalog.ItemRequest, tiers, longest)
+	if missing {
+		// Settlement charges a request missing at the served tier at the highest request price in the schedule, never
+		// at a token or another per-use price. Reserve the same amount, so admission and settlement agree when a model
+		// prices only some service tiers per request.
+		var ok bool
+		if price, ok = itemPrice(*prices.schedule, catalog.ItemRequest); !ok {
+			return ErrUnpriced
+		}
+	}
+	q.fixed = sum(q.fixed, price.Mul(requests))
+	return nil
 }
 
 // priceTokens adds every sampling's input and the whole output at their dearest token prices, and returns the input price

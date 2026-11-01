@@ -10,11 +10,12 @@ import (
 	"axiom/internal/platform/jsonx"
 )
 
-// openrouterItems are the pricing fields whose unit is known: tokens, or searches for web_search (Anthropic's $0.01 a
-// search is "0.01" there). The per-image fields are not read: their published definition is per input or output image,
-// but the list prices Gemini's prompt and image the same and a generated image at 0.00003, which is the price of one
-// image token, so a per-piece price taken from it would be a fraction of the cost. Per-request fields are another unit
-// again and are not read here.
+// openrouterItems are the pricing fields whose unit is known: tokens, searches for web_search (Anthropic's $0.01 a
+// search is "0.01" there), or one generation request for request. The per-image fields are not read: their published
+// definition is per input or output image, but the list prices Gemini's prompt and image the same and a generated image
+// at 0.00003, which is the price of one image token, so a per-piece price taken from it would be a fraction of the cost.
+// OpenRouter's list carries no request today (checked 2026-11-01); the mapping is here because max_price.request is
+// documented for providers that charge per request.
 var openrouterItems = map[string]Item{
 	"prompt":               ItemInput,
 	"completion":           ItemOutput,
@@ -23,6 +24,7 @@ var openrouterItems = map[string]Item{
 	"input_cache_write_1h": ItemCacheWrite1h,
 	"internal_reasoning":   ItemReasoning,
 	"web_search":           ItemWebSearch,
+	"request":              ItemRequest,
 }
 
 var errOverrides = errors.New("the entry has price overrides (long prompts or hours of the day), whose thresholds and usage basis are not documented")

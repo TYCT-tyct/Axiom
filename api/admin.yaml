@@ -3100,6 +3100,50 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/quantization:
+    put:
+      operationId: setSupplierEndpointQuantization
+      tags: [Suppliers]
+      summary: Record the precision an endpoint serves at
+      description: >-
+        The level OpenRouter names for the model's precision, or null to clear it. Neither reference system reports the
+        level, so the supplier sync cannot fill it in: only a person records it, and an endpoint with none recorded
+        never matches a request that filters by quantization. Every node applies the change on its next reload.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: endpoint_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/EndpointQuantizationUpdate"}
+      responses:
+        "200":
+          description: The endpoint as changed.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierEndpoint"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/suppliers/{supplier_id}/status:
     put:
       operationId: setSupplierStatus
@@ -6137,6 +6181,23 @@ components:
           items: {$ref: "#/components/schemas/ModelFormat"}
         cost_state: {type: string, enum: [known, unknown, conflict]}
         enabled: {type: boolean}
+        quantization:
+          type: string
+          nullable: true
+          enum: [int4, int8, fp4, mxfp4, nvfp4, fp6, fp8, mxfp8, fp16, bf16, fp32, unknown]
+          description: >-
+            The precision a person recorded for this endpoint. Absent or null when none is recorded, which is not the
+            level `unknown`; a request that filters by quantization does not match an endpoint without one.
+    EndpointQuantizationUpdate:
+      type: object
+      required: [quantization, reason]
+      properties:
+        quantization:
+          type: string
+          nullable: true
+          enum: [int4, int8, fp4, mxfp4, nvfp4, fp6, fp8, mxfp8, fp16, bf16, fp32, unknown]
+          description: One of OpenRouter's levels, or null to clear the record.
+        reason: {$ref: "#/components/schemas/Reason"}
     SupplierDetail:
       type: object
       required: [supplier, groups, credentials, unbound_keys, endpoints]

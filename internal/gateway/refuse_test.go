@@ -61,7 +61,7 @@ func TestARefusalIsAnErrorOfProtocol(t *testing.T) {
 		{&Refusal{Status: 404, Code: "no_endpoint"}, protocol.NoEndpoint},
 		{&Refusal{Status: 503, Code: "no_endpoint"}, protocol.NoEndpointForNow},
 		{invalid("x"), protocol.InvalidRequest},
-		{unsupported("quantizations"), protocol.InvalidRequest},
+		{unsupported("colour"), protocol.InvalidRequest},
 		{errTooLarge, protocol.RequestTooLarge},
 		{&Refusal{Status: 400, Code: "context_length_exceeded"}, protocol.ContextLengthExceeded},
 		{&Refusal{Status: 403, Code: "permission_denied"}, protocol.PermissionDenied},

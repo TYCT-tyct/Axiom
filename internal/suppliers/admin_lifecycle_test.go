@@ -141,3 +141,40 @@ func TestUnitValue(t *testing.T) {
 	_, err := confirm("5")
 	refuses(t, "a value for a removed supplier", err, ErrStatusLocked)
 }
+
+// TestEndpointQuantization: a person records and clears an endpoint's precision, the detail shows it as recorded, and a
+// supplier without that endpoint is refused. The sync never writes it.
+func TestEndpointQuantization(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	id := a.connect("https://api.example.com", "ops@example.com").ID
+	group := a.group(id, "g", true)
+	endpoint := uuid.NewV7()
+	a.sql(fmt.Sprintf(`INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats, enabled)
+		VALUES ('%s', '%s', '%s', '%s', 'alpha', ARRAY['messages'], true)`, endpoint, id, group, uuid.NewV7()))
+	set := func(level *Quantization) (Endpoint, error) {
+		return inTx(a, func(ctx context.Context, tx pg.Tx) (Endpoint, error) {
+			return a.admin.SetEndpointQuantization(ctx, tx, a.actor, id, endpoint, level, "because")
+		})
+	}
+	level := QuantizationFP8
+	got, err := set(&level)
+	refuses(t, "recording a level", err, nil)
+	same(t, "the endpoint", QuantizationFP8, got.Quantization)
+	detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+	refuses(t, "the detail", err, nil)
+	same(t, "the detail's level", QuantizationFP8, detail.Endpoints[0].Quantization)
+
+	got, err = set(nil)
+	refuses(t, "clearing the level", err, nil)
+	same(t, "a cleared level", Quantization(""), got.Quantization)
+	detail, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+	refuses(t, "the detail after clearing", err, nil)
+	same(t, "the cleared detail", Quantization(""), detail.Endpoints[0].Quantization)
+
+	_, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Endpoint, error) {
+		return a.admin.SetEndpointQuantization(ctx, tx, a.actor, id, uuid.NewV7(), &level, "because")
+	})
+	refuses(t, "an endpoint the supplier lacks", err, ErrNoSupplierEndpoint)
+	same(t, "the audit entries", "2", a.text(`SELECT count(*)::text FROM platform.audit_log WHERE action = 'supplier.endpoint.quantization'`))
+}

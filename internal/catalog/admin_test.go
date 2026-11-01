@@ -89,6 +89,22 @@ func TestPriceHistory(t *testing.T) {
 	}
 }
 
+// TestSourceSwitchHoldsRequestPrices: switching a source writes a new schedule through the same compatibility gate as
+// a publish, so a request price cannot enter through the source switch while an older node may still read the snapshot.
+func TestSourceSwitchHoldsRequestPrices(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	id, _ := s.seed("acme/request-switch", basicSpec, basic)
+	request := `{"v":1,"currency":"USD","rates":{"input":"1","output":"2","request":"1"}}`
+	_, err := s.c.SelectPriceSource(t.Context(), catalog.SelectPriceSourceRequest{
+		Op: op(), Model: id, Rev: 0, Source: catalog.SourceManual, Bases: s.bases(t.Context(), id),
+		Prices: []catalog.SourcePrice{{Schedule: raw(request), Evidence: raw(evidence)}},
+	})
+	if !errors.Is(err, catalog.ErrRequestPrices) {
+		t.Fatalf("source switch: %v, want ErrRequestPrices", err)
+	}
+}
+
 // TestPriceLoss: a draft model is not held to the listing gate, but a new schedule still may not lose a price the
 // current one has, whether it is published as a version or by switching the source; nothing changes when it is refused.
 func TestPriceLoss(t *testing.T) {

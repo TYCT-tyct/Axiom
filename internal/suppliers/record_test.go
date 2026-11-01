@@ -1,6 +1,7 @@
 package suppliers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers/internal/store"
 )
 
 var (
@@ -57,6 +59,84 @@ func (w *world) count(sql string, args ...any) (n int) {
 	w.t.Helper()
 	w.tx(func(ctx context.Context, tx pg.Tx) error { return tx.QueryRow(ctx, sql, args...).Scan(&n) })
 	return n
+}
+
+// TestCostChargesOneRequestPerAttempt: a request price is charged once for an executed attempt, whatever the number of
+// internal samplings, and the charge is complete even when every token price is zero. The request is not upstream usage,
+// so it is added to the schedule's cost after the segments rather than counted in any Usage.
+func TestCostChargesOneRequestPerAttempt(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		q := store.New()
+		id, err := q.InsertCostSchedule(ctx, tx, store.InsertCostScheduleParams{
+			SupplierID: w.supplier, EndpointID: w.endpoint, NativeUnit: "quota",
+			Schedule: []byte(`{"currency":"XXX","rates":{"input":"0","output":"0","request":"1"},"v":1}`),
+			Basis:    "published", Fingerprint: "request",
+		})
+		if err != nil {
+			return err
+		}
+		w.sc = id
+		return q.SetEndpointCost(ctx, tx, store.SetEndpointCostParams{ID: w.endpoint, CostScheduleID: &id})
+	})
+	if err := w.svc.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	a, err := w.svc.Acquire(w.endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := a.Done()
+	usage := func(counts map[catalog.Item]int64) catalog.Usage {
+		u, err := catalog.NewUsage(counts, catalog.ServiceTierStandard, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	for name, tc := range map[string]struct {
+		usage []catalog.Usage
+		flag  CostFlag
+	}{
+		"one sampling":  {[]catalog.Usage{usage(map[catalog.Item]int64{catalog.ItemInput: 100, catalog.ItemOutput: 50})}, CostComplete},
+		"two samplings": {[]catalog.Usage{usage(map[catalog.Item]int64{catalog.ItemInput: 100}), usage(map[catalog.Item]int64{catalog.ItemOutput: 50})}, CostComplete},
+		"no usage":      {nil, CostComplete},
+	} {
+		cost, err := w.svc.Cost(receipt, tc.usage)
+		text, derr := decimal(cost.Native)
+		if err != nil || derr != nil || text != "1" || cost.Flag != tc.flag {
+			t.Errorf("%s: %q, %v, %v; want one request, %v", name, text, cost.Flag, err, tc.flag)
+		}
+	}
+}
+
+// TestRequestCostReconcilesWithin: the supplier charges exactly the request price and the attempt's cost now includes
+// that request, so reconciliation matches instead of judging the cost an under-estimate and delisting the endpoint.
+func TestRequestCostReconcilesWithin(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		q := store.New()
+		id, err := q.InsertCostSchedule(ctx, tx, store.InsertCostScheduleParams{
+			SupplierID: w.supplier, EndpointID: w.endpoint, NativeUnit: "quota",
+			Schedule: []byte(`{"currency":"XXX","rates":{"input":"0","output":"0","request":"1"},"v":1}`),
+			Basis:    "published", Fingerprint: "request",
+		})
+		if err != nil {
+			return err
+		}
+		w.sc = id
+		return q.SetEndpointCost(ctx, tx, store.SetEndpointCostParams{ID: w.endpoint, CostScheduleID: &id})
+	})
+	if err := w.svc.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	w.record(w.attempt(newRequest(), 1, newAPIRef))
+	w.ingest(w.charge(newAPIRef, "1", w.clock.now()))
+	var logs bytes.Buffer
+	w.runReconciliation(w.reconciliation(&logs))
+	w.checkReconciled("within", "", logs.String())
 }
 
 // A stored attempt shows the prompt the upstream reported beside the items: 100 prompt tokens that are 80 cache reads and

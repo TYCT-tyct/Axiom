@@ -87,8 +87,12 @@ type Measures struct {
 	Health     float64
 	Latency    time.Duration
 	Throughput float64 // output tokens per second
-	Quality    float64 // 0 to 1: reliability and the measured time to first token and speed
-	Confidence float64 // 0 to 1: 0 when nothing was counted; decays after the last counted outcome
+	// LatencyPercentiles and ThroughputPercentiles are p50, p75, p90 and p99 over the last five minutes, 0 when fewer
+	// than minSamples samples are that recent. They are copied here so routing reads them without a lock.
+	LatencyPercentiles    [4]time.Duration
+	ThroughputPercentiles [4]float64
+	Quality               float64 // 0 to 1: reliability and the measured time to first token and speed
+	Confidence            float64 // 0 to 1: 0 when nothing was counted; decays after the last counted outcome
 	// Verified is set when a fingerprint check passed and is still recent (verifyMaxAge), with no contradiction
 	// since. An endpoint never checked is not verified; neither is one concluded fake (docs/domains/quality.md
 	//「真伪检测」). VerifiedAt is when the last check passed, kept after it ages out or is contradicted, and
@@ -130,10 +134,13 @@ type State struct {
 	errorRate   float64 // the moving average of failures (1) and successes (0); 0 before any
 	latency     average // seconds to the first token
 	speed       average // output tokens per second
-	samples     int     // counted outcomes, capped at scoreSamples: the confidence's evidence
-	sampled     time.Time
-	verify      verification // the last fingerprint check and its schedule
-	verifying   bool         // a verification generation is in flight
+	// The rolling windows the percentile preferences read, fed by the same samples as latency and speed.
+	latencyWindow sampleWindow
+	speedWindow   sampleWindow
+	samples       int // counted outcomes, capped at scoreSamples: the confidence's evidence
+	sampled       time.Time
+	verify        verification // the last fingerprint check and its schedule
+	verifying     bool         // a verification generation is in flight
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -199,10 +206,14 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	e.count(v, o.Ended)
 	m.health(e, v, &o)
 	if latency {
-		e.latency.add(o.FirstToken.Sub(o.Sent).Seconds(), o.Ended)
+		seconds := o.FirstToken.Sub(o.Sent).Seconds()
+		e.latency.add(seconds, o.Ended)
+		e.latencyWindow.add(seconds, o.FirstToken)
 	}
 	if v == success && o.Done && o.content() && o.OutputTokens >= speedMinOutput && o.Ended.After(o.FirstToken) {
-		e.speed.add(float64(o.OutputTokens)/o.Ended.Sub(o.FirstToken).Seconds(), o.Ended)
+		speed := float64(o.OutputTokens) / o.Ended.Sub(o.FirstToken).Seconds()
+		e.speed.add(speed, o.Ended)
+		e.speedWindow.add(speed, o.Ended)
 	}
 }
 
@@ -261,6 +272,14 @@ func (e *State) measures(now time.Time) Measures {
 	}
 	if v, ok := e.speed.measured(now); ok {
 		out.Throughput = v
+	}
+	if v, ok := e.latencyWindow.percentiles(now); ok {
+		for i := range v {
+			out.LatencyPercentiles[i] = time.Duration(v[i] * float64(time.Second))
+		}
+	}
+	if v, ok := e.speedWindow.percentiles(now); ok {
+		out.ThroughputPercentiles = v
 	}
 	out.Verified = e.verify.verified(now)
 	out.VerifyConfidence = e.verify.confidence(now)

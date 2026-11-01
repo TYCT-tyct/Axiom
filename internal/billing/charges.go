@@ -29,14 +29,15 @@ type ChargeDetails struct {
 	Estimated     bool   `json:"estimated"`
 }
 
-// ChargeItem is one sampling's billed quantity at its effective sale price; it contains no supplier identity or cost.
+// ChargeItem is one sampling's billed quantity, or the attempt's request, at its effective sale price; it contains no
+// supplier identity or cost.
 type ChargeItem struct {
 	Item         string `json:"item"`
 	Quantity     int64  `json:"quantity"`
 	Unit         string `json:"unit"`
 	UnitPrice    string `json:"unit_price"`
 	Amount       string `json:"amount"`
-	Sampling     int    `json:"sampling"`
+	Sampling     int    `json:"sampling,omitempty"`
 	ServiceTier  string `json:"service_tier"`
 	ContextBand  int    `json:"context_band"`
 	PriceVersion string `json:"price_version,omitempty"`
@@ -111,8 +112,45 @@ func chargeDetails(r ReadChargesRow) (ChargeDetails, error) {
 			}
 			d.Items = append(d.Items, items...)
 		}
+		if request := requestChargeOf(s, f, segments, tiers); request.ok {
+			// One request per attempt, charged whether or not its model usage was waived, and reported by the schedule
+			// rather than the upstream: the charge details name it once, with no sampling.
+			d.Items = append(d.Items, ChargeItem{
+				Item: catalog.ItemRequest.String(), Quantity: 1, Unit: catalog.ItemRequest.Unit().String(),
+				UnitPrice: request.rate.String(), Amount: chargeDecimal(request.amount), ServiceTier: request.tier.String(),
+				ContextBand: request.band, PriceVersion: r.PriceVersion, Estimated: request.fallback, Fallback: request.fallback,
+			})
+		}
 	}
 	return reconcileCharges(d, r.Price, r.Charged)
+}
+
+// requestCharge is the attempt's one request: what settlement charges for it, and what the charge details report.
+type requestCharge struct {
+	rate     platform.UnitPrice
+	amount   platform.Exact
+	tier     catalog.ServiceTier
+	band     int
+	fallback bool // the price is the fallback of a tier the schedule does not declare
+	ok       bool // the schedule prices the request item at all
+}
+
+// requestChargeOf prices the attempt's one request at the band of its last sampling, which carries the tier it ran on.
+// The upstream reports no count of it, so one request is its whole charge, whatever the usage and even when the model
+// usage is waived. ok is false when the schedule prices no request item.
+func requestChargeOf(s catalog.Schedule, f fallbacks, segments []Segment, tiers catalog.ServiceTierSet) requestCharge {
+	if len(segments) == 0 {
+		return requestCharge{}
+	}
+	last := segments[len(segments)-1]
+	rate, band, ok := requestRate(s, f, last, tiers)
+	if !ok {
+		return requestCharge{}
+	}
+	return requestCharge{
+		rate: rate, amount: rate.Mul(1), tier: last.Usage.ServiceTier(), band: band,
+		fallback: requestFallback(s, last, tiers), ok: true,
+	}
 }
 
 func reconcileCharges(d ChargeDetails, price, charged int64) (ChargeDetails, error) {
@@ -161,6 +199,22 @@ func chargeItems(s catalog.Schedule, f fallbacks, seg Segment, waived bool, tier
 		items = append(items, unknownChargeItem(seg.Usage.ServiceTier(), rate, count, tokens))
 	}
 	return items
+}
+
+// requestRate is the price of one generation request, or false when the schedule prices none. It is charged once per
+// attempt, not per sampling, and is not usage the upstream reports.
+func requestRate(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet) (platform.UnitPrice, int, bool) {
+	if !s.Priced(1 << catalog.ItemRequest) {
+		return platform.UnitPrice{}, 0, false
+	}
+	_, band, _ := s.Rate(seg.Usage, catalog.ItemRequest)
+	return itemRate(s, f, seg, tiers, catalog.ItemRequest), band, true
+}
+
+// requestFallback reports whether the served tier has no request price and the charge uses the highest one instead.
+func requestFallback(s catalog.Schedule, seg Segment, tiers catalog.ServiceTierSet) bool {
+	_, _, ok := s.Rate(seg.Usage, catalog.ItemRequest)
+	return !ok || undeclaredTier(tiers, seg.Usage.ServiceTier())
 }
 
 func knownChargeItem(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, it catalog.Item) ChargeItem {

@@ -105,7 +105,7 @@ func TestUnits(t *testing.T) {
 		catalog.ItemWebSearch: catalog.UnitUse, catalog.ItemCodeExecution: catalog.UnitUse,
 		catalog.ItemImageInPiece: catalog.UnitPiece, catalog.ItemImageOutPiece: catalog.UnitPiece,
 		catalog.ItemAudioInSecond: catalog.UnitSecond, catalog.ItemAudioOutSecond: catalog.UnitSecond,
-		catalog.ItemCharacterIn: catalog.UnitCharacter,
+		catalog.ItemCharacterIn: catalog.UnitCharacter, catalog.ItemRequest: catalog.UnitUse,
 	}
 	if len(want) != int(catalog.NumItems) {
 		t.Fatalf("the table names %d items, want %d", len(want), catalog.NumItems)

@@ -43,6 +43,21 @@ func checkRandomCharge(t *testing.T, r *rand.Rand) {
 			t.Fatal(err)
 		}
 	}
+	if len(segments) > 0 {
+		if rate, band, ok := requestRate(s, defaults, segments[len(segments)-1], tiers); ok {
+			last := segments[len(segments)-1]
+			d.Items = append(d.Items, ChargeItem{
+				Item: catalog.ItemRequest.String(), Quantity: 1, Unit: catalog.ItemRequest.Unit().String(),
+				UnitPrice: rate.String(), Amount: chargeDecimal(rate.Mul(1)), ServiceTier: last.Usage.ServiceTier().String(),
+				ContextBand: band,
+			})
+			amount, err := exact.Add(rate.Mul(1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			exact = amount
+		}
+	}
 	p, err := priceSegments(s, defaults, segments, waived, tiers)
 	if err != nil {
 		t.Fatal(err)
@@ -100,30 +115,9 @@ func randomChargeSchedule(t *testing.T, r *rand.Rand) catalog.Schedule {
 
 func randomChargeSegment(t *testing.T, r *rand.Rand) Segment {
 	t.Helper()
-	counts := map[catalog.Item]int64{}
-	var reported catalog.ItemSet
 	extreme := r.IntN(8) == 0
-	for it := range catalog.NumItems {
-		counts[it] = r.Int64N(4097)
-		if r.IntN(3) == 0 {
-			counts[it] = 0
-		}
-		if extreme && r.IntN(2) == 0 {
-			counts[it] = maxUnknownCount
-		}
-		if r.IntN(2) == 0 {
-			reported.Add(it)
-		}
-	}
-	fields := []string{"usage.new_tokens", "usage.new_uses", "usage.prompt_tokens_details.cached_tokens_details.audio_tokens"}
-	values := []string{"0", "1", "2.5", "invalid", "-1", "4"}
-	if extreme {
-		values = append(values, "10000000000", "10000000001")
-	}
-	var unknown []catalog.UnknownUsage
-	for range r.IntN(4) {
-		unknown = append(unknown, catalog.UnknownUsage{Field: fields[r.IntN(len(fields))], Value: values[r.IntN(len(values))]})
-	}
+	counts, reported := randomCounts(r, extreme)
+	unknown := randomUnknowns(r, extreme)
 	tier := []catalog.ServiceTier{catalog.ServiceTierStandard, catalog.ServiceTierFlex, catalog.ServiceTierPriority, catalog.ServiceTierFast}[r.IntN(4)]
 	u, err := catalog.NewUsage(counts, tier, unknown)
 	if err != nil {
@@ -137,4 +131,41 @@ func randomChargeSegment(t *testing.T, r *rand.Rand) Segment {
 		}
 	}
 	return Segment{Usage: u, Reported: reported}
+}
+
+// randomCounts is the item counts of a random usage and which of them the upstream reported. The request item is never
+// there: the gateway charges it once per call, never as upstream-reported usage.
+func randomCounts(r *rand.Rand, extreme bool) (map[catalog.Item]int64, catalog.ItemSet) {
+	counts := map[catalog.Item]int64{}
+	var reported catalog.ItemSet
+	for it := range catalog.NumItems {
+		if it == catalog.ItemRequest {
+			continue
+		}
+		counts[it] = r.Int64N(4097)
+		if r.IntN(3) == 0 {
+			counts[it] = 0
+		}
+		if extreme && r.IntN(2) == 0 {
+			counts[it] = maxUnknownCount
+		}
+		if r.IntN(2) == 0 {
+			reported.Add(it)
+		}
+	}
+	return counts, reported
+}
+
+// randomUnknowns is up to three fields the protocol could not map, sometimes with a value no number can hold.
+func randomUnknowns(r *rand.Rand, extreme bool) []catalog.UnknownUsage {
+	fields := []string{"usage.new_tokens", "usage.new_uses", "usage.prompt_tokens_details.cached_tokens_details.audio_tokens"}
+	values := []string{"0", "1", "2.5", "invalid", "-1", "4"}
+	if extreme {
+		values = append(values, "10000000000", "10000000001")
+	}
+	var unknown []catalog.UnknownUsage
+	for range r.IntN(4) {
+		unknown = append(unknown, catalog.UnknownUsage{Field: fields[r.IntN(len(fields))], Value: values[r.IntN(len(values))]})
+	}
+	return unknown
 }

@@ -38,8 +38,18 @@ SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_
 FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;
 
 -- name: ListEndpointsOf :many
-SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
 FROM suppliers.endpoints WHERE supplier_id = @supplier_id ORDER BY upstream_name, id;
+
+-- name: GetEndpointOf :many
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
+FROM suppliers.endpoints WHERE supplier_id = @supplier_id AND id = @id;
+
+-- name: SetEndpointQuantization :exec
+-- The level an admin recorded for this endpoint. The sync never writes it; NULL is "not recorded", which is not the
+-- level unknown.
+UPDATE suppliers.endpoints SET quantization = sqlc.narg(quantization)
+WHERE supplier_id = @supplier_id AND id = @id;
 
 -- name: GetCredentialOf :many
 -- One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.

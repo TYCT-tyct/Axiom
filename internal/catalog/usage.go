@@ -31,6 +31,9 @@ const (
 	ItemAudioInSecond // seconds of audio input
 	ItemAudioOutSecond
 	ItemCharacterIn // characters of text read aloud
+	// ItemRequest is one generation request, charged whatever its size: a provider's per-request price. It is appended
+	// after the items above so the indices of counts stored before it never move.
+	ItemRequest
 	NumItems
 )
 
@@ -38,7 +41,7 @@ const (
 var itemNames = [NumItems]string{
 	"input", "cache_read", "cache_write", "cache_write_1h", "audio_in", "image_in",
 	"output", "reasoning", "audio_out", "image_out", "web_search", "code_execution",
-	"image_in_piece", "image_out_piece", "audio_in_second", "audio_out_second", "character_in",
+	"image_in_piece", "image_out_piece", "audio_in_second", "audio_out_second", "character_in", "request",
 }
 
 func (it Item) String() string { return itemNames[it] }
@@ -66,7 +69,7 @@ func (u Unit) String() string { return unitNames[u] }
 // item has a case, so a new one must state its unit here, and the return after the switch is only for the compiler.
 func (it Item) Unit() Unit {
 	switch it {
-	case ItemWebSearch, ItemCodeExecution:
+	case ItemWebSearch, ItemCodeExecution, ItemRequest:
 		return UnitUse
 	case ItemImageInPiece, ItemImageOutPiece:
 		return UnitPiece

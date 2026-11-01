@@ -184,9 +184,14 @@ func (c consoleAPI) readCallCharges(ctx context.Context, tx pg.Tx, calls []obser
 func chargeBody(d billing.ChargeDetails) *consoleapi.ChargeDetails {
 	items := make([]consoleapi.ChargeItem, len(d.Items))
 	for i, item := range d.Items {
+		// Request charges are one per attempt, not one per sampling; sampling is optional for exactly that case.
+		var sampling *int
+		if item.Sampling > 0 {
+			sampling = new(item.Sampling)
+		}
 		items[i] = consoleapi.ChargeItem{
 			Item: new(item.Item), Quantity: new(item.Quantity), Unit: new(consoleapi.ChargeItemUnit(item.Unit)), UnitPrice: new(item.UnitPrice),
-			Amount: new(item.Amount), Sampling: new(item.Sampling), ServiceTier: new(item.ServiceTier), ContextBand: new(item.ContextBand),
+			Amount: new(item.Amount), Sampling: sampling, ServiceTier: new(item.ServiceTier), ContextBand: new(item.ContextBand),
 			PriceVersion: optionalText(item.PriceVersion), Estimated: new(item.Estimated), Fallback: new(item.Fallback),
 		}
 	}

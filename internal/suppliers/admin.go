@@ -56,6 +56,8 @@ var (
 	ErrUnitValue = errors.New("suppliers: a unit value is above 0 and at most 1000, with at most 15 decimals")
 	// ErrNoCredential is a credential the supplier does not have.
 	ErrNoCredential = errors.New("suppliers: the supplier has no such credential")
+	// ErrNoSupplierEndpoint is an endpoint the supplier does not have.
+	ErrNoSupplierEndpoint = errors.New("suppliers: the supplier has no such endpoint")
 	// ErrLimits is a concurrency that is not 1 to 2147483647, or a per-minute limit that is not 1 to
 	// MaxRequestsPerMinute or none.
 	ErrLimits = fmt.Errorf("suppliers: concurrency is 1 to 2147483647, and requests a minute 1 to %d or none", MaxRequestsPerMinute)
@@ -104,6 +106,13 @@ func supplierOf(r store.GetSupplierViewRow) Supplier {
 		BalanceNative: r.BalanceNative, LowBalanceThreshold: r.LowBalanceThreshold, BalanceObservedAt: r.BalanceObservedAt,
 		UnitValue: r.UnitValue,
 	}
+}
+
+func derefQuantization(s *string) Quantization {
+	if s == nil {
+		return ""
+	}
+	return Quantization(*s)
 }
 
 func deref(s *string) string {
@@ -253,6 +262,9 @@ type Endpoint struct {
 	Formats          []string
 	CostState        string
 	Enabled          bool
+	// Quantization is the level an admin recorded, empty when none is. It is not the supplier's report: the sync cannot
+	// see it.
+	Quantization Quantization
 }
 
 // Detail is a supplier with its groups, the keys bound to them and its endpoints, as the sync last stored them.
@@ -327,7 +339,7 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, e
 	for _, e := range endpoints {
 		d.Endpoints = append(d.Endpoints, Endpoint{
 			ID: e.ID, Group: e.SupplierGroupID, Model: e.ModelID, UpstreamName: e.UpstreamName, Formats: e.Formats,
-			CostState: e.CostState, Enabled: e.Enabled,
+			CostState: e.CostState, Enabled: e.Enabled, Quantization: derefQuantization(e.Quantization),
 		})
 	}
 	return d, nil
@@ -428,4 +440,48 @@ func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid
 		return Supplier{}, err
 	}
 	return a.view(ctx, tx, id)
+}
+
+// SetEndpointQuantization records the level an endpoint serves at, or clears it with nil. Only an admin sets it: the
+// supplier's own model list does not report it, so the sync cannot. Every other node sees it on its next Reload.
+func (a *Admin) SetEndpointQuantization(ctx context.Context, tx pg.Tx, actor audit.Actor, supplierID, endpointID uuid.UUID,
+	level *Quantization, reason string,
+) (Endpoint, error) {
+	if _, err := a.locked(ctx, tx, supplierID); err != nil {
+		return Endpoint{}, err
+	}
+	rows, err := store.New().GetEndpointOf(ctx, tx, store.GetEndpointOfParams{SupplierID: supplierID, ID: endpointID})
+	if err != nil {
+		return Endpoint{}, fmt.Errorf("read the endpoint: %w", err)
+	}
+	if len(rows) == 0 {
+		return Endpoint{}, ErrNoSupplierEndpoint
+	}
+	e := rows[0]
+	var stored *string
+	if level != nil {
+		value := string(*level)
+		stored = &value
+	}
+	if err := store.New().SetEndpointQuantization(ctx, tx, store.SetEndpointQuantizationParams{
+		SupplierID: supplierID, ID: endpointID, Quantization: stored,
+	}); err != nil {
+		return Endpoint{}, fmt.Errorf("set the endpoint's quantization: %w", err)
+	}
+	from := derefQuantization(e.Quantization)
+	to := Quantization("")
+	if level != nil {
+		to = *level
+	}
+	if err := audit.Record(ctx, tx, audit.Event{
+		Actor: actor, Action: "supplier.endpoint.quantization", Reason: reason,
+		Target: audit.Target{Module: "suppliers", Kind: "endpoint", ID: endpointID.String()},
+		Detail: map[string]any{"supplier": supplierID.String(), "from": string(from), "to": string(to)},
+	}); err != nil {
+		return Endpoint{}, err
+	}
+	return Endpoint{
+		ID: e.ID, Group: e.SupplierGroupID, Model: e.ModelID, UpstreamName: e.UpstreamName, Formats: e.Formats,
+		CostState: e.CostState, Enabled: e.Enabled, Quantization: to,
+	}, nil
 }
