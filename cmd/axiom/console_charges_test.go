@@ -36,7 +36,7 @@ func TestCallChargeDetailsAcrossAPIs(t *testing.T) {
 		return w.query("SELECT count(*)::text FROM observability.call_log WHERE id::text=$1", id) == "1"
 	})
 	generation := generationCharges(t, n, w.richKey, id)
-	f := startNode(w.commandLine, &testClock{now: time.Now()}, 0)
+	f := startNode(w.commandLine, &testClock{now: time.Now()})
 	session := f.signIn("rich@example.com", ownerPassword)
 	checkConsoleCharges(t, f, session, id, generation)
 	checkUnavailableChargeAPIs(t, w, n, f, session, id)

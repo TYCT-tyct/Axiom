@@ -80,7 +80,8 @@ class WebContainer(unittest.TestCase):
     def test_journey_reaches_the_hosts_databases_at_their_container_addresses(self):
         passwords = self.root / "kv"
         env = dict(PGTEST_CLUSTER_URL="postgres://postgres:postgres@127.0.0.1:5001/postgres?sslmode=disable",
-                   KVTEST_URL="valkey://axiom@127.0.0.1:5002", KVTEST_PASSWORD_FILE=str(passwords / "password"))
+                   KVTEST_URL="valkey://axiom@127.0.0.1:5002", KVTEST_PASSWORD_FILE=str(passwords / "password"),
+                   KVTEST_ADMIN_PASSWORD_FILE=str(passwords / "admin-password"))
         self.assertEqual(self.run_script("pnpm", "--dir", "web", "journey", **env).returncode, 0)
         commands = self.commands()
         create = next(args for args in commands if args[:2] == ["docker", "create"])
@@ -90,6 +91,10 @@ class WebContainer(unittest.TestCase):
         self.assertIn("PGTEST_CLUSTER_URL=postgres://postgres:postgres@123:5432/postgres?sslmode=disable", create)
         self.assertIn("KVTEST_URL=valkey://axiom@123:6379", create)
         self.assertIn(f"{passwords}:{passwords}:ro", create)
+        for name in ("KVTEST_URL", "KVTEST_PASSWORD_FILE", "KVTEST_ADMIN_PASSWORD_FILE"):
+            found = [i for i, arg in enumerate(create) if arg == name or arg.startswith(name + "=")]
+            self.assertTrue(found, name)
+            self.assertEqual(create[found[0] - 1], "--env")
         self.assertNotIn("--network=host", create)
 
     def test_failed_or_exited_container_and_wrong_cgroup_fail_and_cleanup(self):

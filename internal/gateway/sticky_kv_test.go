@@ -155,8 +155,8 @@ func TestStickyOutageDoesNotUseLocalBindings(t *testing.T) {
 func TestStickyDoesNotRenewOnUse(t *testing.T) {
 	t.Parallel()
 	reader := sdkmetric.NewManualReader()
-	// The life is read as the admin, whom only a container of the test's own has (README「权限」).
-	server := kvtest.Own(t)
+	// The life is a read, as the shared server's admin user may do; no container of the test's own is created for it.
+	server := kvtest.New(t)
 	cache := server.Open(t, kv.Deps{Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")})
 	router, _ := stickyRouter(t, time.Hour)
 	key := routing.StickyKey(cache, uuid.UUID{1}, routing.SessionKey{1})
@@ -178,7 +178,7 @@ func TestStickyDoesNotRenewOnUse(t *testing.T) {
 	s.tries[0].entry.Endpoint = ep(2)
 	s.stick()
 	waitFor(t, "the changed endpoint", func() bool { return stickyValue(t, cache, barrier) == ep(2) })
-	life, err := server.Do(t, t.Context(), server.Admin.B().Pttl().Key(key).Build())[0].ToInt64()
+	life, err := server.TTL(t, t.Context(), key)
 	if err != nil || life <= time.Minute.Milliseconds() {
 		t.Fatalf("using the binding replaced its original expiry: %d, %v", life, err)
 	}

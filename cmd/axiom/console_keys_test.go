@@ -231,7 +231,7 @@ func TestKeyRetiredModelHint(t *testing.T) {
 		INSERT INTO catalog.name (name, norm, visibility, model_id) SELECT slug, slug, 'public', id FROM m`); err != nil {
 		t.Fatal(err)
 	}
-	f := startNode(c, &testClock{now: time.Now()}, 0)
+	f := startNode(c, &testClock{now: time.Now()})
 	s := f.owner()
 	old := f.createKey(s, `{"name":"Old","models":["acme/retired","acme/listed","acme/unknown"]}`).Key
 	retired := []string{"acme/retired"}
