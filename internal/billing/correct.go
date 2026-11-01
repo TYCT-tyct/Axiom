@@ -372,7 +372,7 @@ func correctionReady(row LockReservationRow, ev suppliers.ChargeEvent) error {
 	if !row.Estimated || row.Entry == nil || row.ChargedSeq == nil || row.PricingTiers < 0 {
 		return errNoCorrection
 	}
-	if ev.Revision < 1 || *row.ChargedSeq < 1 || *row.ChargedSeq > platform.MaxAttemptSeq {
+	if ev.Revision < 1 || *row.ChargedSeq < 1 || *row.ChargedSeq > platform.MaxAttempts {
 		return errNoCorrection
 	}
 	if ev.AttemptSeq != platform.AttemptSeq(*row.ChargedSeq) {
