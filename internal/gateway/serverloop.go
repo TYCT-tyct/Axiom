@@ -54,13 +54,10 @@ func (a *attempt) search(ctx context.Context, turn protocol.ServerTurn) *ended {
 			calls = append(calls, call)
 		}
 	}
-	if s.isGone() {
-		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
-	}
 	results := make([]string, 0, len(calls))
 	for _, call := range calls {
-		if s.isGone() {
-			return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
+		if e := a.stopped(ctx); e != nil {
+			return e
 		}
 		if loop.disabled || loop.steps >= loop.cap {
 			loop.disabled = true
@@ -99,14 +96,21 @@ func (a *attempt) search(ctx context.Context, turn protocol.ServerTurn) *ended {
 		if !s.reserveSearch(websearch.WorkingSet) {
 			return a.abort(protocol.Error{Type: protocol.Overloaded}, 1)
 		}
-		// The search is new paid work, so it follows the client even when the endpoint's call does not.
-		searchCtx, cancel := context.WithTimeout(s.req.Context(), websearch.Timeout)
-		//nolint:contextcheck // the search is new paid work and follows the client, not the endpoint call policy
+		// The search is new paid work: the attempt's end (the call's deadline, the node's shutdown) stops it, and so does
+		// the client leaving, even when the endpoint's policy kept the first sampling reading after it.
+		searchCtx, cancel := context.WithTimeout(ctx, websearch.Timeout)
+		stop := context.AfterFunc(s.req.Context(), cancel)
 		found, err := loop.backend.Search(searchCtx, websearch.Query{
 			Text: query, MaxResults: int(remaining),
 			IncludeDomains: loop.tool.IncludeDomains, ExcludeDomains: loop.tool.ExcludeDomains,
 		})
+		stop()
 		cancel()
+		if err != nil {
+			if e := a.stopped(ctx); e != nil {
+				return e // cut by the attempt's end or the client, not the backend's failure
+			}
+		}
 		switch {
 		case errors.Is(err, websearch.ErrQueryTooLong):
 			results = append(results, "The search query is longer than this search engine accepts. Try a shorter one.")
@@ -137,8 +141,16 @@ func (a *attempt) search(ctx context.Context, turn protocol.ServerTurn) *ended {
 	if loop.steps >= loop.cap {
 		loop.disabled = true
 	}
-	// AppendServerTurn copies the whole conversation: charge the copy and the results before it allocates, not after.
-	held := int64(2*len(s.c.Body)) + int64(protocol.MaxServerResultBytes) + 8<<10
+	if e := a.stopped(ctx); e != nil {
+		return e // the searches that ran stay charged; nothing is sent after the attempt ended
+	}
+	// AppendServerTurn copies the whole conversation with the replayed turn, already JSON, and the results, which a JSON
+	// escape writes in at most six bytes a byte (\u00XX); Inspect reads the copy. Both are charged before they allocate.
+	added := len(turn.Assistant)
+	for _, r := range results {
+		added += 6 * len(r)
+	}
+	held := 2*int64(len(s.c.Body)+added) + 8<<10
 	if !s.reserveSearch(held) {
 		return a.abort(protocol.Error{Type: protocol.Overloaded}, 1)
 	}
@@ -167,6 +179,25 @@ func (a *attempt) search(ctx context.Context, turn protocol.ServerTurn) *ended {
 	s.c.Body, s.c.Request = body, req
 	s.serverFunction = !loop.disabled
 	return nil
+}
+
+// stopped is how the loop ends when its attempt or its client did, nil while both go on: a client that left gets
+// nothing, a call out of time or a node going away the timeout, and an extension refused its billing error.
+func (a *attempt) stopped(ctx context.Context) *ended {
+	switch cause := context.Cause(ctx); {
+	case a.s.isGone():
+		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
+	case ctx.Err() == nil:
+		return nil
+	case errors.Is(cause, context.DeadlineExceeded), errors.Is(cause, errShutdown):
+		return a.abort(protocol.Error{Type: protocol.Timeout}, 0)
+	default:
+		if failed, ok := errors.AsType[*extendFailed](cause); ok {
+			e := cut(failed.err)
+			return a.abort(e.err, e.after)
+		}
+		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
+	}
 }
 
 // searchQuery is the query a tool call asked for; an arguments object this gateway cannot read is no query.
@@ -220,24 +251,28 @@ func (a *attempt) abort(e protocol.Error, after int) *ended {
 	return &ended{err: e, after: after}
 }
 
-// holdOut keeps the client-format events of a hop that may not be the answer. The bytes are charged to the node's
-// budget until the call ends or the hop turns out to be a tool call.
+// holdOut keeps the client-format events of a hop that may not be the answer. What is charged to the node's budget
+// is the buffer's capacity, charged before it grows, until the call ends or the hop turns out to be a tool call.
 func (s *session) holdOut(out []byte) bool {
-	if len(out) == 0 {
+	need := len(s.out) + len(out)
+	if need <= cap(s.out) {
+		s.out = append(s.out, out...)
 		return true
 	}
-	if !s.x.Memory.Charge(int64(len(out))) {
+	size := max(need, 2*cap(s.out))
+	if !s.x.Memory.Charge(int64(size - cap(s.out))) {
 		return false
 	}
-	s.outHeld += int64(len(out))
-	s.out = append(s.out, out...)
+	s.outHeld += int64(size - cap(s.out))
+	s.out = append(append(make([]byte, 0, size), s.out...), out...)
 	return true
 }
 
-// dropOut discards the held events of a tool-call hop and gives their budget back.
+// dropOut discards the held events of a tool-call hop and gives their budget back, with the buffer: a buffer kept for
+// the next hop would still hold the memory the budget no longer counts.
 func (s *session) dropOut() {
 	s.x.Memory.Refund(s.outHeld)
-	s.outHeld, s.out = 0, s.out[:0]
+	s.outHeld, s.out = 0, nil
 }
 
 // hopCap is the output limit of one sampling: each hop is its own upstream call under the request's max output. The

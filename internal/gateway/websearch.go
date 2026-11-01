@@ -193,6 +193,11 @@ func (h *Handler) checkServerTool(req *protocol.Request, body []byte) *Refusal {
 	if req.NativeWeb {
 		return invalid("openrouter:web_search cannot be combined with the provider's own web search tool.")
 	}
+	if req.Needs.Has(protocol.CodeExecution) {
+		// Every sampling of the loop could run the provider's code again, while the quote counts its uses once and the
+		// loop removes max_tool_calls, the one limit the upstream would hold them to.
+		return invalid("openrouter:web_search cannot be combined with the provider's code execution tool.")
+	}
 	if !req.Format.Convertible() {
 		return invalid("openrouter:web_search is only supported for the chat formats.")
 	}

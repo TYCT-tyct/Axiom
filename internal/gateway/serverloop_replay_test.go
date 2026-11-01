@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
 	"axiom/internal/websearch"
@@ -191,6 +192,35 @@ func TestServerLoopReleasesTheOldSlotBeforeTheNextHop(t *testing.T) {
 		attempts := h.settlements[0].outcome.Attempts
 		if len(attempts) != 2 || len(attempts[0].Segments) != 1 || len(attempts[1].Segments) != 1 {
 			t.Fatalf("settled attempts = %+v, want one per supplier request", attempts)
+		}
+	})
+}
+
+// TestServerLoopReplaysThinkingThroughChat: a Chat client on a Messages upstream gets the signed thinking as
+// reasoning_details. The loop must keep them, or the next hop has no reasoning to replay before its tool result and a
+// thinking upstream refuses it after the search was paid for.
+func TestServerLoopReplaysThinkingThroughChat(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
+		request := `{"model":"acme/alpha","stream":true,"max_tokens":8000,"reasoning":{"max_tokens":2000},` +
+			`"messages":[{"role":"user","content":"what is axiom"}],"tools":[{"type":"openrouter:web_search","parameters":{"engine":"exa","max_results":2}}]}`
+		upstream := protocol.Messages
+		h := newHarness(t, ctx, options{
+			client: protocol.Chat, upstream: &upstream, request: []byte(request),
+			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
+			search: searcher, server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+			script: map[int][]scripted{1: {serve(beat{data: messagesToolWithThinking}), serve(beat{data: messagesAnswer})}},
+			mutate: func(c *Call) { c.Plan.Entries[0].Target.Thinking = catalog.ThinkingManual },
+		})
+		h.run()
+		if h.w.status != http.StatusOK || len(h.up.endpoint(1).calls) != 2 {
+			t.Fatalf("status = %d, upstream calls = %d, body = %s", h.w.status, len(h.up.endpoint(1).calls), h.w.body())
+		}
+		second := string(h.up.endpoint(1).calls[1].Body)
+		for _, want := range []string{`"type":"thinking"`, `"signature":"signed-thinking"`, `"type":"tool_result"`} {
+			if !strings.Contains(second, want) {
+				t.Fatalf("the next Messages hop lost %s: %s", want, second)
+			}
 		}
 	})
 }

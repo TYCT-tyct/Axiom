@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"time"
 	"uuid"
 
@@ -67,9 +68,19 @@ func (a *attempt) readHop(ctx context.Context, relay *protocol.Relay, idle *time
 				st, e := a.complete(relay)
 				return st, e, false
 			}
+			// The upstream is done: the search and the next send have waits of their own, and the idle timer would cut
+			// the attempt during a slow search.
+			idle.Stop()
 			calls := relay.ServerCalls()
-			turn := relay.ServerTurn()
 			a.hopDone(relay)
+			var turn protocol.ServerTurn
+			if len(calls) > 0 {
+				var err error
+				if turn, err = relay.ServerTurn(); err != nil {
+					s.drop(relay)
+					return over, *a.abort(turnError(err)), false
+				}
+			}
 			if turn.Client && len(calls) > 0 {
 				s.drop(relay)
 				return over, *a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0), false
@@ -107,6 +118,15 @@ func (a *attempt) readHop(ctx context.Context, relay *protocol.Relay, idle *time
 	}
 }
 
+// turnError is how a loop ends whose tool turn could not be kept for the next request: over the node's budget, the
+// node is busy; otherwise the upstream's reply could not be replayed.
+func turnError(err error) (protocol.Error, int) {
+	if errors.Is(err, protocol.ErrMemory) {
+		return protocol.Error{Type: protocol.Overloaded}, 1
+	}
+	return protocol.Error{Type: protocol.UpstreamFailed}, 0
+}
+
 // flush writes the held events of the answering hop as one stream. Before it the status is not fixed and nothing has
 // reached the client (I4); after it the hop is the answer.
 func (s *session) flush(a *attempt) bool {
@@ -140,7 +160,9 @@ func (a *attempt) sendNext(ctx context.Context) *ended {
 	}
 	s.ends[a.i].Finish = billing.FinishToolUse
 	a.endRequest()
-	a.hops, a.usage, a.seen = nil, protocol.Usage{}, protocol.Progress{}
+	// Only the answering sampling's content decides what reached the client: a tool hop of a call that does not stream
+	// commits in the relay's sense without anything being delivered.
+	a.hops, a.usage, a.seen, a.content, a.obs.Delivered = nil, protocol.Usage{}, protocol.Progress{}, false, false
 	conn, err := s.x.Upstreams.Acquire(uuid.UUID(a.entry.Endpoint))
 	if err != nil {
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)

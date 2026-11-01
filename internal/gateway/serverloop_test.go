@@ -281,13 +281,24 @@ func TestServerToolNeedsABackend(t *testing.T) {
 	}
 }
 
-func TestServerToolConflictsWithTheWebPlugin(t *testing.T) {
+// TestServerToolConflicts: the loop runs alone. The web plugin would be a second search path, and the provider's code
+// execution would run again on every sampling while the quote counts its uses once.
+func TestServerToolConflicts(t *testing.T) {
 	r := newRig(t)
 	a := r.newAccount(1e18)
-	body := `{"model":"acme/beta","plugins":[{"id":"web"}],"tools":[{"type":"openrouter:web_search"}],"messages":[{"role":"user","content":"hello"}]}`
-	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, strings.NewReader(body))
-	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, "cannot be combined with the web plugin") {
-		t.Fatalf("%d %s", resp.StatusCode, out)
+	for _, tc := range []struct{ path, body, want string }{
+		{"/v1/chat/completions", `{"model":"acme/beta","plugins":[{"id":"web"}],"tools":[{"type":"openrouter:web_search"}],"messages":[{"role":"user","content":"hello"}]}`,
+			"cannot be combined with the web plugin"},
+		{"/v1/responses", `{"model":"acme/beta","max_tool_calls":1,"tools":[{"type":"openrouter:web_search"},{"type":"code_interpreter","container":{"type":"auto"}}],"input":"hello"}`,
+			"cannot be combined with the provider's code execution tool"},
+	} {
+		resp, out := r.do(http.MethodPost, tc.path, a.key, strings.NewReader(tc.body))
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, tc.want) {
+			t.Fatalf("%s: %d %s, want a 400 saying %q", tc.path, resp.StatusCode, out, tc.want)
+		}
+	}
+	if got := r.count("SELECT count(*) FROM billing.reservations"); got != 0 {
+		t.Fatalf("the refusals created %d reservations", got)
 	}
 }
 

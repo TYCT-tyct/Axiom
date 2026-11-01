@@ -17,6 +17,7 @@ type serverCapture struct {
 	blockAt   map[int64]int
 	text      []byte
 	reasoning []byte
+	details   []byte // Chat's reasoning_details entries as the chunks gave them, comma-separated, merged by turn
 	args      int
 	client    bool
 }
@@ -52,9 +53,10 @@ type serverEvent struct {
 	Choices []struct {
 		Index int64 `json:"index"`
 		Delta struct {
-			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
-			Reasoning        string `json:"reasoning"`
+			Content          string            `json:"content"`
+			ReasoningContent string            `json:"reasoning_content"`
+			Reasoning        string            `json:"reasoning"`
+			ReasoningDetails []json.RawMessage `json:"reasoning_details"`
 			ToolCalls        []struct {
 				Index    int64  `json:"index"`
 				ID       string `json:"id"`
@@ -100,6 +102,14 @@ func (c *serverCapture) event(data []byte) error {
 					c.reasoning = append(c.reasoning, choice.Delta.ReasoningContent...)
 				} else {
 					c.reasoning = append(c.reasoning, choice.Delta.Reasoning...)
+				}
+				// The signatures and encrypted data a Messages or Responses upstream gave travel here; without them the
+				// next hop cannot replay the reasoning its tool call depends on.
+				for _, d := range choice.Delta.ReasoningDetails {
+					if len(c.details) > 0 {
+						c.details = append(c.details, ',')
+					}
+					c.details = append(c.details, d...)
 				}
 			}
 			for _, call := range choice.Delta.ToolCalls {
@@ -277,12 +287,30 @@ func (c *serverCapture) bound() error {
 	return nil
 }
 
+// size is what the capture holds, in bytes: the measure the relay charges its growth by, and bounds the turn with.
+func (c *serverCapture) size() int {
+	n := len(c.text) + len(c.reasoning) + len(c.details) + c.args
+	for _, b := range c.blocks {
+		n += len(b.text) + len(b.thinking) + len(b.signature) + len(b.id) + len(b.name) + len(b.input) + len(b.raw)
+	}
+	for _, call := range c.calls {
+		n += len(call.ID) + len(call.Name)
+	}
+	return n
+}
+
+// turnBound is the most turn writes: every string it holds escaped, six bytes a byte at worst (\u00XX), and the
+// members and quotes around each block and call.
+func (c *serverCapture) turnBound() int {
+	return 6*c.size() + 128*(len(c.blocks)+len(c.calls)+1)
+}
+
 // turn builds the assistant turn the client format expects, so the next hop can replay it unchanged. Chat and Messages
 // get one assistant message; Responses gets the array of output items. A block this capture did not understand keeps
 // its raw start object rather than being dropped.
 //
-//nolint:gocognit // one branch per format and block kind
-func (c *serverCapture) turn() ServerTurn {
+//nolint:gocognit,cyclop // one branch per format and block kind
+func (c *serverCapture) turn() (ServerTurn, error) {
 	t := ServerTurn{Client: c.client, Calls: append([]ServerToolCall(nil), c.calls...)}
 	//nolint:exhaustive // only the three chat formats carry tools
 	switch c.format {
@@ -298,6 +326,12 @@ func (c *serverCapture) turn() ServerTurn {
 			quoted := jsonString(string(c.reasoning))
 			t.Assistant = append(t.Assistant, `,"reasoning_content":`...)
 			t.Assistant = append(t.Assistant, quoted...)
+		}
+		if len(c.details) > 0 {
+			var err error
+			if t.Assistant, err = appendDetails(append(t.Assistant, `,"reasoning_details":`...), c.details); err != nil {
+				return ServerTurn{}, err
+			}
 		}
 		server := c.serverCalls()
 		if len(server) > 0 {
@@ -330,7 +364,7 @@ func (c *serverCapture) turn() ServerTurn {
 		}
 		t.Assistant = append(t.Assistant, ']')
 	}
-	return t
+	return t, nil
 }
 
 // jsonString quotes a Go string for a JSON body. A string always encodes; the empty fallback is unreachable and keeps
@@ -413,10 +447,17 @@ func blockJSON(b capturedBlock) []byte {
 }
 
 // capture reads the client-format events a step carries, which a conversion may frame several of.
-func (r *Relay) capture(data []byte) error {
+func (r *Relay) capture(data []byte) (err error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil
 	}
+	before := r.srv.size()
+	defer func() {
+		if err == nil {
+			// What the capture kept grows by appending, which may double a buffer: twice the growth bounds it.
+			err = r.charge(2 * (r.srv.size() - before))
+		}
+	}()
 	if bytes.TrimSpace(data)[0] == '{' {
 		return r.srv.event(data)
 	}
@@ -444,10 +485,15 @@ func (r *Relay) ServerCalls() []ServerToolCall {
 	return r.srv.serverCalls()
 }
 
-// ServerTurn is the assistant turn behind ServerCalls, for replay in the loop's next request.
-func (r *Relay) ServerTurn() ServerTurn {
+// ServerTurn is the assistant turn behind ServerCalls, for replay in the loop's next request. Its bound is charged to
+// the relay before it is built, and given back with the relay's: the turn is copied into the next request before the
+// relay is released. A turn over the node's budget is ErrMemory; reasoning details that do not merge, ErrUpstream.
+func (r *Relay) ServerTurn() (ServerTurn, error) {
 	if r.srv == nil {
-		return ServerTurn{}
+		return ServerTurn{}, nil
+	}
+	if err := r.charge(r.srv.turnBound()); err != nil {
+		return ServerTurn{}, err
 	}
 	return r.srv.turn()
 }
