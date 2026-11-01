@@ -119,6 +119,8 @@ func TestAlipayRefund(t *testing.T) {
 		rejected   bool
 		wantErr    bool
 		refundFee  string
+		omitFee    bool
+		emptyFee   bool
 	}{
 		"succeeded":    {fundChange: "Y", signed: true, state: RefundSucceeded},
 		"pending":      {fundChange: "N", signed: true, state: RefundPending},
@@ -128,6 +130,8 @@ func TestAlipayRefund(t *testing.T) {
 		"system error": {failure: "ACQ.SYSTEM_ERROR", signed: true, wantErr: true},
 		"unsigned":     {failure: "ACQ.TRADE_NOT_EXIST", wantErr: true},
 		"wrong amount": {fundChange: "Y", signed: true, wantErr: true, refundFee: "12.35"},
+		"missing fee":  {fundChange: "Y", signed: true, wantErr: true, omitFee: true},
+		"empty fee":    {fundChange: "Y", signed: true, wantErr: true, emptyFee: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := call()
@@ -145,8 +149,14 @@ func TestAlipayRefund(t *testing.T) {
 				if tc.failure != "" {
 					return fmt.Sprintf(`{"code":"40004","msg":"Business Failed","sub_code":%q}`, tc.failure), tc.signed
 				}
+				if tc.omitFee {
+					return fmt.Sprintf(`{"code":"10000","msg":"Success","out_trade_no":%q,"trade_no":"T1","fund_change":%q}`,
+						r.Order.TypeID(), tc.fundChange), tc.signed
+				}
 				fee := tc.refundFee
-				if fee == "" {
+				if tc.emptyFee {
+					fee = ""
+				} else if fee == "" {
 					fee = "12.34"
 				}
 				return fmt.Sprintf(`{"code":"10000","msg":"Success","out_trade_no":%q,"trade_no":"T1","fund_change":%q,"refund_fee":%q}`,
@@ -222,30 +232,38 @@ func TestAlipayQueryRefund(t *testing.T) {
 			Amount: Money{currency(t, "CNY"), 1234},
 		}
 	}
+	base := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	for name, tc := range map[string]struct {
 		node     string
 		signed   bool
-		sentAt   time.Time
+		sentAgo  time.Duration
+		noSend   bool
 		provider string
 		state    RefundOutcome
 		wantErr  bool
 	}{
-		"success":       {node: `{"code":"10000","msg":"Success","out_request_no":"%s","refund_status":"REFUND_SUCCESS","refund_amount":"12.34"}`, signed: true, state: RefundSucceeded},
-		"recent empty":  {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAt: time.Now(), state: RefundPending},
-		"no send time":  {node: `{"code":"10000","msg":"Success"}`, signed: true, state: RefundPending},
-		"old empty":     {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAt: time.Now().Add(-11 * time.Minute), state: RefundFailed},
-		"old zero":      {node: `{"code":"10000","msg":"Success","refund_amount":"0.00"}`, signed: true, sentAt: time.Now().Add(-11 * time.Minute), state: RefundFailed},
-		"old invalid":   {node: `{"code":"10000","msg":"Success","refund_amount":"oops"}`, signed: true, sentAt: time.Now().Add(-11 * time.Minute), state: RefundPending},
-		"grace edge":    {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAt: time.Now().Add(-9*time.Minute - 59*time.Second), state: RefundPending},
-		"not exists":    {node: `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`, signed: true, state: RefundFailed},
-		"system error":  {node: `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.SYSTEM_ERROR"}`, signed: true, wantErr: true},
-		"unsigned":      {node: `{"code":"10000","msg":"Success"}`, wantErr: true},
-		"other request": {node: `{"code":"10000","msg":"Success","out_request_no":"rfd_other","refund_status":"REFUND_SUCCESS"}`, signed: true, wantErr: true},
-		"other amount":  {node: `{"code":"10000","msg":"Success","out_request_no":"%s","refund_status":"REFUND_SUCCESS","refund_amount":"12.35"}`, signed: true, wantErr: true},
+		"success":        {node: `{"code":"10000","msg":"Success","out_request_no":"%s","refund_status":"REFUND_SUCCESS","refund_amount":"12.34"}`, signed: true, state: RefundSucceeded},
+		"recent empty":   {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAgo: time.Minute, state: RefundPending},
+		"no send time":   {node: `{"code":"10000","msg":"Success"}`, signed: true, noSend: true, state: RefundPending},
+		"old empty":      {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAgo: 11 * time.Minute, state: RefundFailed},
+		"old zero":       {node: `{"code":"10000","msg":"Success","refund_amount":"0.00"}`, signed: true, sentAgo: 11 * time.Minute, state: RefundFailed},
+		"old invalid":    {node: `{"code":"10000","msg":"Success","refund_amount":"oops"}`, signed: true, sentAgo: 11 * time.Minute, state: RefundPending},
+		"grace edge":     {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAgo: 9*time.Minute + 59*time.Second, state: RefundPending},
+		"grace exact":    {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAgo: 10 * time.Minute, state: RefundFailed},
+		"grace after":    {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAgo: 10*time.Minute + time.Second, state: RefundFailed},
+		"missing amount": {node: `{"code":"10000","msg":"Success","out_request_no":"%s","refund_status":"REFUND_SUCCESS"}`, signed: true, wantErr: true},
+		"empty amount":   {node: `{"code":"10000","msg":"Success","out_request_no":"%s","refund_status":"REFUND_SUCCESS","refund_amount":""}`, signed: true, wantErr: true},
+		"not exists":     {node: `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`, signed: true, state: RefundFailed},
+		"system error":   {node: `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.SYSTEM_ERROR"}`, signed: true, wantErr: true},
+		"unsigned":       {node: `{"code":"10000","msg":"Success"}`, wantErr: true},
+		"other request":  {node: `{"code":"10000","msg":"Success","out_request_no":"rfd_other","refund_status":"REFUND_SUCCESS"}`, signed: true, wantErr: true},
+		"other amount":   {node: `{"code":"10000","msg":"Success","out_request_no":"%s","refund_status":"REFUND_SUCCESS","refund_amount":"12.35"}`, signed: true, wantErr: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := makeCall(t)
-			r.SentAt = tc.sentAt
+			if !tc.noSend {
+				r.SentAt = base.Add(-tc.sentAgo)
+			}
 			r.ProviderRef = tc.provider
 			expected := r.Refund.TypeID()
 			if r.ProviderRef != "" {
@@ -259,6 +277,7 @@ func TestAlipayQueryRefund(t *testing.T) {
 				}
 				return node, tc.signed
 			})
+			ch.(*alipayChannel).now = func() time.Time { return base }
 			state, err := ch.QueryRefund(t.Context(), r)
 			if tc.wantErr {
 				if err == nil {
@@ -279,7 +298,7 @@ func TestAlipayQueryRefund(t *testing.T) {
 			if alipayBiz(t, biz, "out_request_no") != "rfd_other" {
 				t.Errorf("%v", biz)
 			}
-			return `{"code":"10000","msg":"Success","out_request_no":"rfd_other","refund_status":"REFUND_SUCCESS"}`, true
+			return `{"code":"10000","msg":"Success","out_request_no":"rfd_other","refund_status":"REFUND_SUCCESS","refund_amount":"12.34"}`, true
 		})
 		if state, err := ch.QueryRefund(t.Context(), r); err != nil || state.State != RefundSucceeded {
 			t.Fatal(state, err)
@@ -287,6 +306,7 @@ func TestAlipayQueryRefund(t *testing.T) {
 	})
 }
 
+//nolint:gocognit // one independent probe outcome per subtest; the subtests are the test
 func TestAlipayTestConfig(t *testing.T) {
 	t.Run("not exists is accepted", func(t *testing.T) {
 		var probe string
@@ -302,6 +322,30 @@ func TestAlipayTestConfig(t *testing.T) {
 		}
 		if !strings.HasPrefix(probe, "probe_") {
 			t.Fatalf("probe %q", probe)
+		}
+	})
+	t.Run("unsigned not exists fails", func(t *testing.T) {
+		ch, _ := alipayChannelWith(t, func(string, map[string]jsonx.Raw, url.Values) (string, bool) {
+			return `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`, false
+		})
+		if err := ch.(*alipayChannel).testConfig(t.Context()); err == nil {
+			t.Fatal("unsigned not-exists accepted")
+		}
+	})
+	t.Run("wrongly signed not exists fails", func(t *testing.T) {
+		ch, _ := alipayChannelWithGateway(t, &alipayTestGateway{t: t, corruptSignature: true, respond: func(string, map[string]jsonx.Raw, url.Values) (string, bool) {
+			return `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`, true
+		}})
+		if err := ch.(*alipayChannel).testConfig(t.Context()); err == nil {
+			t.Fatal("wrongly signed not-exists accepted")
+		}
+	})
+	t.Run("missing signature not exists fails", func(t *testing.T) {
+		ch, _ := alipayChannelWithGateway(t, &alipayTestGateway{t: t, omitSignature: true, respond: func(string, map[string]jsonx.Raw, url.Values) (string, bool) {
+			return `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`, true
+		}})
+		if err := ch.(*alipayChannel).testConfig(t.Context()); err == nil {
+			t.Fatal("missing-signature not-exists accepted")
 		}
 	})
 	t.Run("bad credentials fail", func(t *testing.T) {

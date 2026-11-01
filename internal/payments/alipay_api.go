@@ -240,7 +240,8 @@ func (c *alipayChannel) refundResponse(node jsonx.Raw, r RefundCall, outRequestN
 	if result.OutTradeNo != r.Order.TypeID() {
 		return RefundState{}, errors.New("alipay: refund echoed another order")
 	}
-	if result.FundChange == "Y" && result.RefundFee != "" && parseMinorText(result.RefundFee, digits(c.currency)) != r.Amount.Minor {
+	if result.FundChange == "Y" &&
+		(result.RefundFee == "" || parseMinorText(result.RefundFee, digits(c.currency)) != r.Amount.Minor) {
 		return RefundState{}, errors.New("alipay: refund echoed another amount")
 	}
 	state := RefundPending
@@ -283,10 +284,10 @@ func (c *alipayChannel) refundQueryResult(node jsonx.Raw, outRequestNo string, a
 	if result.OutRequestNo != "" && result.OutRequestNo != outRequestNo {
 		return RefundState{}, errors.New("alipay: refund query echoed another request")
 	}
-	if result.RefundStatus == "REFUND_SUCCESS" && result.RefundAmount != "" && parseMinorText(result.RefundAmount, digits(c.currency)) != amount.Minor {
-		return RefundState{}, errors.New("alipay: refund query echoed another amount")
-	}
 	if result.RefundStatus == "REFUND_SUCCESS" {
+		if result.RefundAmount == "" || parseMinorText(result.RefundAmount, digits(c.currency)) != amount.Minor {
+			return RefundState{}, errors.New("alipay: refund query echoed another amount")
+		}
 		return RefundState{State: RefundSucceeded, ProviderRef: outRequestNo}, nil
 	}
 	if alipayEmptyRefundQuery(result.OutRequestNo, result.RefundStatus, result.RefundAmount) &&
@@ -296,7 +297,7 @@ func (c *alipayChannel) refundQueryResult(node jsonx.Raw, outRequestNo string, a
 	return RefundState{State: RefundPending, ProviderRef: outRequestNo}, nil
 }
 
-// emptyRefundQuery recognises the no-record answer; some gateways still echo a zero refund amount.
+// alipayEmptyRefundQuery recognises the no-record answer; some gateways still echo a zero refund amount.
 func alipayEmptyRefundQuery(outRequestNo, refundStatus, refundAmount string) bool {
 	if outRequestNo != "" || refundStatus != "" {
 		return false
@@ -313,7 +314,8 @@ func alipayZeroAmount(text string) bool {
 	return strings.Trim(whole, "0") == "" && strings.Trim(fraction, "0") == ""
 }
 
-// testConfig proves the application credentials with a read-only query for an order number that cannot exist.
+// testConfig proves the application credentials with a read-only query for an order number that cannot exist. Only a
+// signed business answer proves the configured public key, so an unsigned or badly signed ACQ.TRADE_NOT_EXIST fails.
 func (c *alipayChannel) testConfig(ctx context.Context) error {
 	_, failure, err := c.call(ctx, "alipay.trade.query", map[string]any{"out_trade_no": "probe_" + rand.Text()})
 	if err != nil {
@@ -322,7 +324,7 @@ func (c *alipayChannel) testConfig(ctx context.Context) error {
 	if !failure.found() {
 		return errors.New("alipay: merchant probe found a trade")
 	}
-	if failure.SubCode == alipayTradeNotExist {
+	if failure.Signed && failure.SubCode == alipayTradeNotExist {
 		return nil
 	}
 	return failure
