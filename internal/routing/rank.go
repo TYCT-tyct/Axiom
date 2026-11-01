@@ -140,16 +140,20 @@ func slow(c *candidate, o *Override) bool {
 		o.MaxLatency > 0 && c.Latency > o.MaxLatency {
 		return true
 	}
-	for i := range o.MinThroughputPercentiles.Values {
-		if o.MinThroughputPercentiles.Has(i) && c.ThroughputPercentiles[i] > 0 &&
-			c.ThroughputPercentiles[i] < o.MinThroughputPercentiles.Values[i] {
-			return true
+	if o.MinThroughputPercentiles.Set != 0 {
+		for i := range o.MinThroughputPercentiles.Values {
+			if o.MinThroughputPercentiles.Has(i) && c.ThroughputPercentiles[i] > 0 &&
+				c.ThroughputPercentiles[i] < o.MinThroughputPercentiles.Values[i] {
+				return true
+			}
 		}
 	}
-	for i := range o.MaxLatencyPercentiles.Values {
-		if o.MaxLatencyPercentiles.Has(i) && c.LatencyPercentiles[i] > 0 &&
-			c.LatencyPercentiles[i].Seconds() > o.MaxLatencyPercentiles.Values[i] {
-			return true
+	if o.MaxLatencyPercentiles.Set != 0 {
+		for i := range o.MaxLatencyPercentiles.Values {
+			if o.MaxLatencyPercentiles.Has(i) && c.LatencyPercentiles[i] > 0 &&
+				c.LatencyPercentiles[i].Seconds() > o.MaxLatencyPercentiles.Values[i] {
+				return true
+			}
 		}
 	}
 	return false
