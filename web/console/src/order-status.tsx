@@ -107,7 +107,7 @@ export function Checkout({ checkout }: { checkout: Schemas["Checkout"] }) {
       {checkout.pay_url ? (
         <>
           <Button asChild variant="primary" size="md">
-            <a href={checkout.pay_url} rel="noreferrer">
+            <a href={checkout.pay_url} rel="noopener" referrerPolicy="origin">
               <Icon name="card" />
               {t("topup.payNow")}
             </a>

@@ -108,10 +108,10 @@ type Payment struct{ State PayState; TradeNo string; Paid Money } // Pending | P
 ```
 type RefundCall struct{ Refund RefundID; Order OrderID; TradeNo, ProviderRef string; Amount Money; Reason string; SentAt time.Time } // SentAt 是第一次发送的时间；查询"渠道没有这笔退款"多久算失败时用，零值表示不知道
 type RefundState struct{ State RefundOutcome; ProviderRef string } // Succeeded | Failed | Pending
-type Rejected struct{ Code, Message string }                      // 渠道明确拒绝；实现 error
+type Rejected struct{ Code, Message string }                      // 渠道明确拒绝或确定未执行；实现 error
 ```
 
-- **错误只分两种**：`*Rejected` 是确定的失败（下单被拒、退款被拒）；其他任何错误都是"结果未知"，调用方不得据此改订单或退款为失败。超时、断连、5xx、HTML 或解析不了的响应都是未知。
+- **错误只分两种**：`*Rejected` 是确定的失败（下单被拒、退款被拒，或退款请求在发出前已经确定没有发）；其他任何错误都是"结果未知"，调用方不得据此改订单或退款为失败。超时、断连、5xx、HTML 或解析不了的响应都是未知。
 - **用能力集合而不是可选接口**：sub2api 用类型断言判断扩展接口（`payment_fulfillment.go:65-69`），能力随插件种类固定；易支付是否能查单、能退款取决于这家网关，是商户账户的配置，所以由 `Caps` 声明。调用没有声明的能力是程序错误，panic。
 - **`RefundKey`**：渠道把 `RefundCall.Refund` 当作退款单号，同一单号重发只退一次（Stripe 的幂等键、支付宝的 `out_request_no`、微信的 `out_refund_no`）。只有声明了它，结果未知的退款才能重发；易支付不声明。
 - **拒付是回调的一种**：`Notice.Dispute != nil` 时核心只走拒付流程（找订单、记 `order_disputes`、按规则扣钱或记差异），不看 `Success`/`Paid`。插件把渠道状态归一成 `DisputeAction`，核心不解析 Stripe 的状态字符串；`Warning` 只记录，`Open`/`Lost` 扣钱，`Won` 对已扣的钱做反向分录。订单是否进入被拒付、钱扣多少，由核心和 billing 决定，插件不碰数据库。
@@ -191,6 +191,22 @@ type Rejected struct{ Code, Message string }                      // 渠道明�
 
 结论：Epusdt 预设保留但只能保存为停用；开放 USDT 要等一个提供商户查单的易支付兼容网关，由负责人选定并实测后重新验收 E1-4（[支付的「加密货币」](../../docs/domains/payments.md#加密货币)）。真实钱包、正式商户、可公网访问的回调和生产部署仍由负责人提供与决定。
 
+### 微信支付配置与边界
+
+`WechatPay{}` 实现 `Plugin`，`Kind()` 是 `wechatpay`，和 `EasyPay{}` 一起登记在 `cmd/axiom/payments.go`。`Settings` 严格读取 `app_id`、`mch_id`、`serial_no`（商户 API 证书序列号，十六进制）、`platform_public_key_id`（可省略，公钥模式必填）、`old_platform_public_key_id`（可省略）和 `gateway`（可省略，默认 `https://api.mch.weixin.qq.com`，只接受无用户信息、查询串、片段和路径的 HTTPS 地址）。`Secrets` 读取 `private_key`（商户 API 证书私钥，PKCS#8 或 PKCS#1，RSA 至少 2048 位）、`api_v3_key`（恰好 32 字节）、`platform_certificate` 或 `platform_public_key`（至少一份，验签公钥；证书序列号从证书算，公钥 ID 来自 settings），以及可选的 `old_platform_certificate`、`old_platform_public_key`；其他密钥名拒绝保存。付款币种必须是 CNY。示例（证书和公钥二选一，轮换时再加旧的）：
+
+```json
+{"app_id":"wx1234567890abcdef","mch_id":"1900000001","serial_no":"408B07E79B8269FEC3D5D3E6AB8ED163A6A380DB","gateway":"https://api.mch.weixin.qq.com"}
+```
+
+付款方式映射只存于 `MethodInput.Upstream`，只接受 `native` 和 `h5`：Native 向 `/v3/pay/transactions/native` 下单，返回 `weixin://` 的 `code_url`；H5 向 `/v3/pay/transactions/h5` 下单，要求服务端客户端 IP 有效，带 `scene_info.payer_client_ip` 和 `h5_info.type = Wap`，返回的 `h5_url` 追加 URL 编码的 `redirect_url`。签过名的 4xx（429 除外）是明确拒绝，返回 `*Rejected`；429、5xx、超时、断连和验签失败是结果未知。`Channel.Methods()` 返回 `nil`，付款方式（如 `wxpay`）由管理员配置。`normalizeSettings` 去掉首尾空白、把证书序列号转成大写、补默认网关并去掉末尾 `/`；`identitySettings` 比较 `app_id`、`mch_id`、`serial_no`、`platform_public_key_id`、`old_platform_public_key_id` 和 `gateway`，订单在途时这些和密钥都不能改，付款方式映射和 `upstream` 可以改。所有设置仍整体参与密钥封装的哈希校验。
+
+请求签名只用标准库：`Authorization: WECHATPAY2-SHA256-RSA2048 mchid="…",nonce_str="…",signature="…",timestamp="…",serial_no="…"`，签名串是 `方法\nURL（含查询串）\n时间戳\n随机串\n正文\n`。应答和回调先按 `Wechatpay-Serial` 选公钥，对 `时间戳\n随机串\n正文\n` 验 SHA256withRSA，再解析正文；`204` 无正文不验。没配置的序列号、缺签名头或坏签名都返回错误，不解析正文；错误信息只带 HTTP 状态和微信的业务码，不带正文、请求头或任何密钥。回调另外拒绝 5 分钟以外的时间戳，并要求 `application/json`、无查询串、`event_type = TRANSACTION.SUCCESS`、`resource_type = encrypt-resource`、`algorithm = AEAD_AES_256_GCM`、`original_type = transaction`；正文用 APIv3 密钥、`resource.nonce` 和 `resource.associated_data` 做 AES-256-GCM 解密，明文里的 `mchid`、`appid` 必须与配置一致。
+
+金额是微信的整数分：`Payment.Paid`、`Notice.Paid` 的 `Minor` 直接取 `amount.total`，缺失或空为 0（留给查单），非法、负数、溢出或币种不是 CNY 为 -1（待处理）。查单应答的 `appid`、`mchid` 必须与配置一致，缺失或不同都是结果未知，不能只凭平台签名把另一商户的订单记到本账户；`SUCCESS`、`REFUND` 为已支付，`NOTPAY`、`USERPAYING` 为待支付，`CLOSED`、`REVOKED`、`PAYERROR` 为已关闭，其他状态是结果未知；签名正确的 404 `ORDER_NOT_EXIST` 是待支付。关单成功是 204，其他错误交给核心记日志。退款先按订单号查询取原单 `amount.total`；查单请求本身失败、查单显示未支付、已关闭或拿不到原单金额时退款请求都还没发出，按明确拒绝处理，让核心解冻（否则之后按 `rfd_…` 查退款只会得到 404，退款会一直待确认）；只有退款 POST 已经发出后的超时、5xx、429 和坏应答才是结果未知。再以 `rfd_…` 为 `out_refund_no` 调 `/v3/refund/domestic/refunds`；`SUCCESS` 为成功，`PROCESSING` 和 `ABNORMAL` 为待确认，`CLOSED` 为失败，退款申请的 429 `FREQUENCY_LIMITED`（文档说可能已受理）和 `QueryRefund` 的 404 `RESOURCE_NOT_EXISTS` 也是待确认，这几种都等核心的 24 小时人工结论。查退款也只按 `rfd_…` 查，`ProviderRef` 存微信退款单号供展示。退款申请的应答回显的单号、退款额和原单额不一致时按结果未知处理；查退款同样核对单号和退款额。`Caps()` 是 `CapQuery | CapClose | CapRefund | CapQueryRefund | CapRefundKey`，不声明 `CapStatements`。
+
+`testConfig` 用商户配置查一个随机不存在的订单号，只有签名正确的 `ORDER_NOT_EXIST` 算通过；不建单、不转钱、不返回渠道正文。`Ack` 成功回 200 和空正文，失败回 500 和 `{"code":"FAIL","message":"失败"}`。`Open` 只做本地校验，保存不做网络探测。十秒出站期限、1 MiB 响应上限和错误脱敏沿用核心的出站客户端。滚动发布：旧节点不认识 `kind = "wechatpay"`，不选中这个商户、回调回 503；微信支付重试约 24 小时，所以所有节点升级后再创建微信商户。没有迁移和契约变化。
+
 ### billing 要提供的接口
 
 payments 引用 billing，在自己的事务里调用（[总体架构的规则 5](../../docs/architecture.md#模块边界规则)：数据的所有方提供接受调用方事务的函数）：
@@ -208,7 +224,7 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 
 `ReadSiteSettings`、`SetSiteSettings` 读写收款开关与额度上下限；复用 settings 表，省略上下限表示不限，其余付款规则不变。站点专属事务咨询锁串行化首次 upsert 与审计，修改和前后值审计同事务。管理 HTTP 入口负责 MFA、sites.manage、CSRF、理由、幂等和金额币种校验。
 
-`TestMerchant` 复用调用方的幂等认领事务及连接读取、解封既有商户，再在认领仍开启时调用渠道的只读测试；网络期限为 10 秒，不再嵌套打开第二个数据库连接。易支付用带认证的 `api.php?act=query` 检查商户，Epusdt 使用已有的不存在订单查询探测；不创建应付订单、不转钱、不返回网关正文；商户查询响应可能带回密钥和结算个人信息，因此只取状态码，不持久化或记录响应原文。无此能力的插件返回 unsupported；网络/认证失败返回 failed，并写含商户 ID、请求 ID 和渠道脱敏错误的 Warn 日志。`TestMerchantConfigQuery` 检查认证参数、成功/拒绝/非 JSON/HTTP 错误及响应脱敏，`TestPaymentSettingsBoundsAndIsolation` 检查精确大额、上下限与跨站拒绝。
+`TestMerchant` 复用调用方的幂等认领事务及连接读取、解封既有商户，再在认领仍开启时调用渠道的只读测试；网络期限为 10 秒，不再嵌套打开第二个数据库连接。易支付用带认证的 `api.php?act=query` 检查商户，Epusdt 使用已有的不存在订单查询探测，微信支付用随机不存在的订单号查单并要求签名正确的 `ORDER_NOT_EXIST`；都不创建应付订单、不转钱、不返回网关正文；商户查询响应可能带回密钥和结算个人信息，因此只取状态码，不持久化或记录响应原文。无此能力的插件返回 unsupported；网络/认证失败返回 failed，并写含商户 ID、请求 ID 和渠道脱敏错误的 Warn 日志。`TestMerchantConfigQuery` 检查认证参数、成功/拒绝/非 JSON/HTTP 错误及响应脱敏，`TestPaymentSettingsBoundsAndIsolation` 检查精确大额、上下限与跨站拒绝。
 
 ## 不变量
 
@@ -355,6 +371,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | E1-2e `feat(payments): list orders and decide refunds in the admin API` | 管理端订单列表（用户、用户账户、状态、渠道、日期筛选与游标）与退款队列/批准/驳回；站点范围、金额单位、审计与幂等；批准要求另一人；本地决策与幂等答案同事务 | 筛选与游标分页；站点隔离；退款只列本站；金额文本精确；批准与驳回写审计，重放只做一次；自批 403，终态 409，字段错误 422；同一键不能用于两笔退款；答案写入失败时批准与审计一起回滚 |
 | E1-3 `feat(payments): add the easypay protocol channel` | 易支付插件：配置项（[支付的「易支付协议插件」](../../docs/domains/payments.md#易支付协议插件)）、跳转与接口两种下单、验签、白名单、查单确认、关单、退款 | 按协议自写的签名向量；参数走私（下单参数里嵌 `trade_status`）被拒；多余参数、`pid` 不符被拒；GET 与 POST 回调；PHP 风格的字符串整数、明确失败码优先、回显订单号不符；相对支付链接补全、`//` 开头被拒；退款响应是 HTML、空、字符串 `code`；退款先按订单号、明确"订单不存在"才按网关订单号；全部经出站客户端，日志和链路里没有查询串；本机假网关的端到端 |
 | E1-4 `feat(payments): take USDT through an easypay-compatible gateway` | Epusdt 作为易支付商户账户的接入与预设：`usdt.tron` 映射、数字 `pid`、法币金额；退款只能线下；接入前实测它的查单接口 | 用 Epusdt 官方镜像在本地部署后的下单、GET 回调、查单确认、入账；`money=100.0000` 精确解析；查单不可用时这个商户账户不能保存为启用，停用不依赖网关 |
+| E1-9 `feat(payments): take WeChat Pay through the official API v3` | 微信支付插件：配置（平台证书和微信支付公钥两种验签、APIv3 密钥、商户证书序列号）、Native 与 H5 下单、请求签名、应答与回调验签、AES-256-GCM 解密、查单、关单、退款与退款查询、后台只读测试；没有迁移和契约变化 | 请求签名串和应答/回调验签串逐字节向量；证书模式与公钥模式各验一次，旧证书/旧公钥可验；篡改正文、未知序列号、超 5 分钟的回调、错 `mchid`/`appid` 被拒；回调金额缺失/非法/非 CNY 的三种状态；Native/H5 下单回显校验；查单状态映射与签名正确的 `ORDER_NOT_EXIST`；退款先查原单、回显金额不符为未知、`CLOSED` 失败、`PROCESSING`/`ABNORMAL`/404 保持待确认；后台测试只认 `ORDER_NOT_EXIST`；本机 TLS 网关的端到端（下单、加密回调、查单确认入账、重放、丢回调补单、关单、退款、未知退款查询收敛、密钥不外泄） |
 | E1-5 `feat(payments): reconcile unfinished orders and daily channel statements` | `payments.poll` 的商户并发上限与熔断（每单退避和过期后补查由 E1-2c 提供）；`payments.reconcile`；待处理记录的管理页与告警 | 丢回调由补单入账；一笔订单在有效期内的查询次数符合退避；一个商户账户超时不挡其他账户，连续未知触发暂停和告警；不能关单的渠道过期后付款，在补查窗口内补到；现金分录与订单不符、用量计数与订单复算不符时出现待处理记录并告警；同一差额重复上报只留一行 |
 | E1-6a `feat(billing): freeze paid credit as replayed events` | billing：冻结、解冻、退款三种带序号的交易，批次的冻结状态，重放、准入、到期都按冻结额处理；`FreezeRefund`、`SettleRefund`、`ReleaseRefund`（[billing 的「额度批次的分配与到期」](../billing/README.md#额度批次的分配与到期)） | 随机冻结、解冻、退款、扣费、到期，从头重放等于现场，且从任意位置续放相同（扩展 `TestReplayProperty`）；冻结期间并发调用花不掉冻结的额度；到期不作废冻结的额度；冻结后余额底线以下的扣费不动冻结额度；billing 不变量①–⑦（⑦ 随本 PR 加入）在冻结后成立 |
 | E1-6b `feat(payments): refund through channels with a sending state` | 表 `refunds` 和迁移；发起、审批、发送中、查询、人工结论（凭证、第二人批准）与金额不符策略（默认人工，可选按实付折算）；`payments.poll` 的第 4、5 步；订单状态按成功退款合计 | 渠道超时 → 待确认 → 查询收敛到成功或失败；第一个事务后崩溃只发一次；发送中崩溃时不认单号的渠道不重发、进待处理，认单号的用同一单号重发；不认单号的渠道同一订单只有一笔在途；同一人不能把未知退款标为失败；同一幂等键只退一次；多次部分退款合计不超过入账额度；性质测试：任意汇率序列和拆分下 Σ退款 ≤ Σ实付，全退恰好等于净付款额；退不退手续费两种策略；失败在一个事务里解冻 |
@@ -362,4 +379,4 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | E1-8 `feat(payments): redeem codes into credit` | 表 `redeem_codes`、`redeem_redemptions`、`redeem_attempts` 与迁移；`IssueCodes`、`Redeem`、`ListCodes`、`DisableCode`、`ListRedemptions`；billing 的 `CreditRedeem`（来源 `redeem`，迁移 billing 00033）；管理与控制台契约和页面 | 只存哈希、明文只在生成应答；一个码并发只兑一次（两个账户、一个账户两次）；同键重放回同一笔；已用、过期、已停用、无效各自被拒；账户 30/31、IP 100/101 的边界与计数故障拒绝；停用幂等且写审计；列表/历史不含码；站点与账户隔离 |
 | #310 `feat(payments): take Alipay through the official channel protocol` | `Alipay{}` 插件（配置、三种下单产品、RSA2 签名与官方验签、查单、关单、退款、退款查询、商户测试）与 `cmd/axiom` 的登记；`RefundCall.SentAt`；无迁移、无契约字段 | 签名原文与应答节点原文、篡改/换钥/旧公钥、`app_id`/`seller_id` 绑定、三种产品与非法链接、金额缺失/无效/精度、`ACQ.TRADE_NOT_EXIST` 与其他业务错误的分类、退款成功/待查/确定失败/无记录满 10 分钟、丢回调后补单入账、未知退款用同一 `rfd_` 查询收敛；本地 TLS 网关覆盖下单 → POST 回调 → 查单确认 → 重复回调 → 关单 → 退款 → 退款查询 |
 
-**上线门槛**：主站打开"是否开放充值"之前，E1-3 在负责人提供的真实网关上做小额实测（下单、回调、查单确认、关单、退款、手续费的舍入、币种配置），结果记在 [#309](https://github.com/TYCT-tyct/Axiom/issues/309)；没有这份记录不打开。USDT 另需一个提供商户查单的易支付兼容网关，按 E1-4 跑通下单、GET 回调、查单确认、入账后才开放；Epusdt 已发布版本不满足（见上）。支付宝同样要等负责人的真实商户和 ICP 备案，用官方沙箱协议与录制样本只能证明代码行为；真实商户的下单、回调、查单、关单、退款和手续费实测记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有这份记录前不创建生产商户账户。Stripe 的商户凭证和真实沙箱小额实测（Checkout 下单、真实 webhook 端点、`checkout.session.completed`/异步付款、退款、拒付、币种与手续费）由负责人在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497) 记录，代码只对官方协议、官方 SDK 和本地假 Stripe 服务验证；没有这份记录不创建生产 Stripe 商户账户。上线顺序是先让所有节点和页面升级，再建第一个 Stripe 商户账户。
+**上线门槛**：主站打开"是否开放充值"之前，E1-3 在负责人提供的真实网关上做小额实测（下单、回调、查单确认、关单、退款、手续费的舍入、币种配置），结果记在 [#309](https://github.com/TYCT-tyct/Axiom/issues/309)；没有这份记录不打开。USDT 另需一个提供商户查单的易支付兼容网关，按 E1-4 跑通下单、GET 回调、查单确认、入账后才开放；Epusdt 已发布版本不满足（见上）。支付宝同样要等负责人的真实商户和 ICP 备案，用官方沙箱协议与录制样本只能证明代码行为；真实商户的下单、回调、查单、关单、退款和手续费实测记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有这份记录前不创建生产商户账户。Stripe 的商户凭证和真实沙箱小额实测（Checkout 下单、真实 webhook 端点、`checkout.session.completed`/异步付款、退款、拒付、币种与手续费）由负责人在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497) 记录，代码只对官方协议、官方 SDK 和本地假 Stripe 服务验证；没有这份记录不创建生产 Stripe 商户账户。微信支付在负责人提供商户号、APIv3 密钥、商户 API 证书和平台证书或公钥后，按 E1-9 在真实沙箱或商户上做小额实测（Native 扫码、H5、回调、查单、关单、退款、退款查询），结果记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)；没有这份记录不打开。上线顺序是先让所有节点和页面升级，再建第一个 Stripe 或微信支付商户账户。

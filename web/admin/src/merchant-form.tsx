@@ -1,11 +1,12 @@
 import type { AdminSchemas } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, CheckField, Icon, moneyInput, SelectField, TextAreaField, TextField } from "@axiom/ui";
+import { Button, CheckField, Icon, moneyInput, SelectField, TextField } from "@axiom/ui";
 import type React from "react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { paymentCurrencies } from "./credit-read";
-import { formatPercent } from "./payment-read";
+import { MerchantSecrets } from "./merchant-secrets";
+import { defaultMethodRows, formatPercent, methodFallback } from "./payment-read";
 
 type Merchant = AdminSchemas["Merchant"];
 type Draft = {
@@ -21,11 +22,12 @@ type Draft = {
 };
 type Update = (key: string, change: Partial<Draft>) => void;
 
-function draftOf(method: AdminSchemas["MerchantMethod"] | undefined): Draft {
+function draftOf(method: AdminSchemas["MerchantMethod"] | undefined, kind: string): Draft {
+  const fallback = methodFallback(kind);
   return {
     key: crypto.randomUUID(),
-    method: method?.method ?? "alipay",
-    upstream: method?.upstream ?? "alipay",
+    method: method?.method ?? fallback.method,
+    upstream: method?.upstream ?? fallback.upstream,
     percent: formatPercent(method?.fee_ppm ?? 30_000),
     fixed: method?.fee_fixed ? moneyInput(method.fee_fixed.amount) : "0",
     min: method?.single_min ? moneyInput(method.single_min.amount) : "",
@@ -50,11 +52,17 @@ export function MerchantFields({
   currency: string;
   error: unknown;
 }) {
-  const [rows, setRows] = useState<Draft[]>(() =>
-    merchant?.methods?.length ? merchant.methods.map((method) => draftOf(method)) : [draftOf(undefined)],
-  );
   const [kind, setKind] = useState(merchant?.kind ?? "easypay");
+  const [rows, setRows] = useState<Draft[]>(() =>
+    merchant?.methods?.length
+      ? merchant.methods.map((method) => draftOf(method, merchant?.kind ?? "easypay"))
+      : [draftOf(undefined, merchant?.kind ?? "easypay")],
+  );
   const [paidIn, setPaidIn] = useState(merchant?.currency ?? merchantCurrency(currency));
+  const changeKind = (next: string) => {
+    setKind(next);
+    setRows((current) => defaultMethodRows(current, kind, next));
+  };
   const update: Update = (key, change) =>
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
   return (
@@ -62,14 +70,14 @@ export function MerchantFields({
       <MerchantBasics
         merchant={merchant}
         kind={kind}
-        setKind={setKind}
+        setKind={changeKind}
         paidIn={paidIn}
         setPaidIn={setPaidIn}
         error={error}
       />
       <MerchantFlags merchant={merchant} />
       <MerchantSecrets key={kind} merchant={merchant} kind={kind} error={error} />
-      <MethodsEditor rows={rows} setRows={setRows} update={update} paidIn={paidIn} error={error} />
+      <MethodsEditor rows={rows} setRows={setRows} update={update} paidIn={paidIn} kind={kind} error={error} />
     </>
   );
 }
@@ -105,6 +113,7 @@ function MerchantBasics({
         <option value="easypay">{t("settings.payments.kinds.easypay")}</option>
         <option value="alipay">{t("settings.payments.kinds.alipay")}</option>
         <option value="stripe">{t("settings.payments.kinds.stripe")}</option>
+        <option value="wechatpay">{t("settings.payments.kinds.wechatpay")}</option>
       </SelectField>
       <TextField
         label={t("settings.payments.name")}
@@ -177,137 +186,19 @@ function MerchantFlags({ merchant }: { merchant: Merchant | undefined }) {
   );
 }
 
-function MerchantSecrets({ merchant, kind, error }: { merchant: Merchant | undefined; kind: string; error: unknown }) {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  const stripe = kind === "stripe";
-  const defaults =
-    kind === "alipay"
-      ? { app_id: "", seller_id: "", gateway: "https://openapi.alipay.com/gateway.do" }
-      : stripe
-        ? {}
-        : { gateway: "https://", pid: "", mode: "redirect" };
-  return (
-    <>
-      <TextAreaField
-        key={kind}
-        label={t("settings.payments.settings")}
-        hint={stripe ? t("settings.payments.stripeSettingsHint") : t("settings.payments.settingsHint")}
-        name="settings"
-        className="min-h-40"
-        defaultValue={JSON.stringify(merchant?.settings ?? defaults, null, 2)}
-        error={errors.field(error, "merchant/settings")}
-      />
-      {stripe ? (
-        <StripeSecrets merchant={merchant} error={error} />
-      ) : kind === "alipay" ? (
-        <AlipaySecrets merchant={merchant} error={error} />
-      ) : (
-        <EasyPaySecrets merchant={merchant} error={error} />
-      )}
-    </>
-  );
-}
-
-function StripeSecrets({ merchant, error }: { merchant: Merchant | undefined; error: unknown }) {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  return (
-    <>
-      <TextField
-        label={t("settings.payments.stripeSecretKey")}
-        hint={merchant ? t("settings.payments.stripeSecretKeep") : t("settings.payments.stripeSecretNew")}
-        name="secret_key"
-        type="password"
-        autoComplete="new-password"
-        error={errors.field(error, "merchant/secrets")}
-      />
-      <TextField
-        label={t("settings.payments.stripeWebhookSecret")}
-        hint={merchant ? t("settings.payments.stripeWebhookKeep") : t("settings.payments.stripeWebhookNew")}
-        name="webhook_secret"
-        type="password"
-        autoComplete="new-password"
-        error={errors.field(error, "merchant/secrets")}
-      />
-      <TextField
-        label={t("settings.payments.stripeOldWebhookSecret")}
-        hint={t("settings.payments.stripeOldWebhookHint")}
-        name="old_webhook_secret"
-        type="password"
-        autoComplete="new-password"
-      />
-    </>
-  );
-}
-
-function AlipaySecrets({ merchant, error }: { merchant: Merchant | undefined; error: unknown }) {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  return (
-    <>
-      <TextAreaField
-        label={t("settings.payments.privateKey")}
-        hint={merchant ? t("settings.payments.privateKeyKeep") : t("settings.payments.privateKeyNew")}
-        name="private_key"
-        className="min-h-32"
-        autoComplete="off"
-        spellCheck={false}
-        error={errors.field(error, "merchant/secrets")}
-      />
-      <TextAreaField
-        label={t("settings.payments.publicKey")}
-        hint={t("settings.payments.publicKeyHint")}
-        name="public_key"
-        autoComplete="off"
-        spellCheck={false}
-      />
-      <TextAreaField
-        label={t("settings.payments.oldPublicKey")}
-        hint={t("settings.payments.oldPublicKeyHint")}
-        name="old_public_key"
-        autoComplete="off"
-        spellCheck={false}
-      />
-    </>
-  );
-}
-
-function EasyPaySecrets({ merchant, error }: { merchant: Merchant | undefined; error: unknown }) {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  return (
-    <>
-      <TextField
-        label={t("settings.payments.key")}
-        hint={merchant ? t("settings.payments.keyKeep") : t("settings.payments.keyNew")}
-        name="key"
-        type="password"
-        autoComplete="new-password"
-        error={errors.field(error, "merchant/secrets")}
-      />
-      <TextField
-        label={t("settings.payments.oldKey")}
-        hint={t("settings.payments.oldKeyHint")}
-        name="old_key"
-        type="password"
-        autoComplete="new-password"
-      />
-    </>
-  );
-}
-
 function MethodsEditor({
   rows,
   setRows,
   update,
   paidIn,
+  kind,
   error,
 }: {
   rows: Draft[];
   setRows: React.Dispatch<React.SetStateAction<Draft[]>>;
   update: Update;
   paidIn: string;
+  kind: string;
   error: unknown;
 }) {
   const { t } = useTranslation();
@@ -326,7 +217,7 @@ function MethodsEditor({
           onRemove={() => setRows((current) => current.filter((entry) => entry.key !== row.key))}
         />
       ))}
-      <Button size="sm" onClick={() => setRows((current) => [...current, draftOf(undefined)])}>
+      <Button size="sm" onClick={() => setRows((current) => [...current, draftOf(undefined, kind)])}>
         <Icon name="plus" />
         {t("settings.payments.addMethod")}
       </Button>
