@@ -276,6 +276,8 @@ func mergeDetails(details []canonReasoningDetail) ([]canonReasoningDetail, error
 }
 
 // mergeDetailsWithin is mergeDetails drawing every allocation from b first.
+//
+//nolint:cyclop,gocognit // one pass merges each detail's text and summary; splitting would scatter the invariant
 func mergeDetailsWithin(details []canonReasoningDetail, b *budget) ([]canonReasoningDetail, error) {
 	var out []canonReasoningDetail
 	var text, summary []joined
@@ -361,7 +363,7 @@ func (j *joined) addWithin(piece jsontext.Value, b *budget) error {
 
 // value is the joined string: the piece as written when there was one, unset as it was when none.
 func (j *joined) value(unset jsontext.Value) jsontext.Value {
-	v, _ := j.valueWithin(unset, nil) // a nil budget never fails
+	v, _ := j.valueWithin(unset, nil) //nolint:errcheck // a nil budget never fails
 	return v
 }
 

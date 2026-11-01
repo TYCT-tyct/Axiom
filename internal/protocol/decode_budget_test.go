@@ -31,7 +31,12 @@ func TestDecodeChargesWhatItAllocates(t *testing.T) {
 	funcs := make([]alloctest.Function, 0, len(cases))
 	for _, c := range cases {
 		body := c.body
-		funcs = append(funcs, alloctest.Function{Name: c.name, F: func() { _, _ = decodeCanon(body) }})
+		funcs = append(funcs, alloctest.Function{Name: c.name, F: func() {
+			_, err := decodeCanon(body)
+			if err != nil {
+				panic(err)
+			}
+		}})
 	}
 	measured := alloctest.Measure(t, funcs...)
 	for _, c := range cases {

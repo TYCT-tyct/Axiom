@@ -7,11 +7,6 @@ import (
 	"fmt"
 )
 
-// rewrite is Prepare for an endpoint of the request's format.
-func rewrite(r *Request, body []byte, t Target, w Rewrites) ([]byte, error) {
-	return rewriteWithin(r, body, t, w, nil)
-}
-
 func rewriteWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
 	f := r.Format
 	rules := rulesFor(f, t)
@@ -36,7 +31,7 @@ func rewriteWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) ([]
 	p := &rewriter{
 		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, size), t: t, w: w,
 	}
-	p.reader.b = b
+	p.b = b
 	if indexed {
 		err = p.indexedTop(&r.positions, rules)
 	} else {

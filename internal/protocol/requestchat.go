@@ -72,6 +72,8 @@ func requestToChat(f Format, body []byte, t Target, w Rewrites, b *budget) ([]by
 // nativeChatRequest writes a Messages or Responses request as the canonical Chat-shaped request, before anything the
 // target adds: the model's name, the identifiers' derived values and the endpoint's settings. A conversion to the other
 // of the two formats reads it (convertNative) instead of the endpoint's rewrite.
+//
+//nolint:cyclop,gocognit // one branch per source format and member, in the order the conversion reads them
 func nativeChatRequest(f Format, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
 	// Dispatch on JSON values, independent of escaped enum spelling or whitespace
 	// in empty arrays. Same-format rewrites still preserve the original bytes.

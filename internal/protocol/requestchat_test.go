@@ -220,6 +220,7 @@ func TestNativeChatCapAndContinuation(t *testing.T) {
 	}
 }
 
+//nolint:gocognit // the table and its assertions are the test
 func TestNativeChatPrepareBudgetBoundsAllocations(t *testing.T) {
 	if raceDetector() {
 		// The race build randomly discards sync.Pool entries, including the JSON

@@ -65,7 +65,10 @@ func (c *canon) upgradeCalls(b *budget) error {
 			continue
 		}
 		if calls == nil {
-			calls = newLegacyCalls(c.Messages, b)
+			var err error
+			if calls, err = newLegacyCalls(c.Messages, b); err != nil {
+				return err
+			}
 		}
 		var err error
 		switch {
@@ -120,19 +123,23 @@ type legacyCalls struct {
 	pending map[string][]string
 }
 
-func newLegacyCalls(messages []canonMessage, b *budget) *legacyCalls {
+func newLegacyCalls(messages []canonMessage, b *budget) (*legacyCalls, error) {
 	calls := &legacyCalls{used: map[string]bool{}, pending: map[string][]string{}}
 	for _, m := range messages {
 		for _, call := range m.ToolCalls {
-			_ = b.draw(mapEntryMemory + int64(len(call.ID))) // the map was made here; a spent budget stops the caller
+			if err := b.draw(mapEntryMemory + int64(len(call.ID))); err != nil {
+				return nil, err
+			}
 			calls.used[call.ID] = true
 		}
 		if m.ToolCallID != nil {
-			_ = b.draw(mapEntryMemory + int64(len(*m.ToolCallID)))
+			if err := b.draw(mapEntryMemory + int64(len(*m.ToolCallID))); err != nil {
+				return nil, err
+			}
 			calls.used[*m.ToolCallID] = true
 		}
 	}
-	return calls
+	return calls, nil
 }
 
 // add makes a message's legacy function call a tool call, with an ID of its own.
@@ -148,8 +155,11 @@ func (c *legacyCalls) add(m *canonMessage, b *budget) error {
 		return shapeError("a function_call without a name")
 	}
 	name, _ := jsontext.AppendUnquote(nil, call.Function.Name) //nolint:errcheck // Unmarshal validated JSON and Name's kind above
-	call.ID, call.Type = c.assign(string(name), b), "function"
+	call.ID, call.Type = "", "function"
 	var err error
+	if call.ID, err = c.assign(string(name), b); err != nil {
+		return err
+	}
 	if m.ToolCalls, err = growWithin(m.ToolCalls, b); err != nil {
 		return err
 	}
@@ -168,7 +178,7 @@ func (c *legacyCalls) answer(m *canonMessage, b *budget) error {
 		return shapeError("a function result without a name")
 	}
 	name, _ := jsontext.AppendUnquote(nil, m.Name) //nolint:errcheck // decodeCanon validated JSON and Name's kind above
-	id, ok := c.claim(string(name), b)
+	id, ok := c.claim(string(name))
 	if !ok {
 		return &NotSupported{Reason: "a function result that answers no call"}
 	}
@@ -181,22 +191,24 @@ func (c *legacyCalls) answer(m *canonMessage, b *budget) error {
 
 // assign is an ID for a call of name that no call or result of the request uses, and the next result of that name takes
 // it.
-func (c *legacyCalls) assign(name string, b *budget) string {
+func (c *legacyCalls) assign(name string, b *budget) (string, error) {
 	for {
 		c.next++
 		id := "call_legacy_" + strconv.Itoa(c.next)
 		if c.used[id] {
 			continue
 		}
-		_ = b.draw(mapEntryMemory + int64(len(id)) + int64(len(name)))
+		if err := b.draw(mapEntryMemory + int64(len(id)) + int64(len(name))); err != nil {
+			return "", err
+		}
 		c.used[id] = true
 		c.pending[name] = append(c.pending[name], id)
-		return id
+		return id, nil
 	}
 }
 
 // claim is the oldest call of name that no result has answered.
-func (c *legacyCalls) claim(name string, b *budget) (id string, ok bool) {
+func (c *legacyCalls) claim(name string) (id string, ok bool) {
 	queue := c.pending[name]
 	if len(queue) == 0 {
 		return "", false

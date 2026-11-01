@@ -231,7 +231,7 @@ func (s *chatMessageBlocks) block(o requestObject, b *budget) error {
 	case kind == `"tool_use"` && s.role == "assistant":
 		return s.toolCall(o, b)
 	case kind == `"thinking"` && s.role == "assistant":
-		return s.thinking(o, b)
+		return s.thinking(o)
 	case kind == `"redacted_thinking"` && s.role == "assistant":
 		o.take("data") // follows the reverse converter's non-replayable reasoning drop policy
 		return nil
@@ -268,7 +268,7 @@ func (s *chatMessageBlocks) toolCall(o requestObject, b *budget) error {
 
 // thinking replays the plaintext of an Anthropic thinking block as Chat reasoning; only the provider that signed it can
 // verify the signature, and the text alone is what a Chat endpoint reads.
-func (s *chatMessageBlocks) thinking(o requestObject, b *budget) error {
+func (s *chatMessageBlocks) thinking(o requestObject) error {
 	o.take("signature")
 	return s.reasoning.add(o.take("thinking"))
 }

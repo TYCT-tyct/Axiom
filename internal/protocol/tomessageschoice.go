@@ -9,7 +9,7 @@ import (
 // toolChoice maps tool_choice and parallel_tool_calls. Anthropic refuses a forced choice while thinking, and some
 // models (Claude Opus 5.5, Sonnet 5.5 and Fable 5.1) refuse one at all.
 func (m *messagesWriter) toolChoice(out []byte) ([]byte, error) {
-	choice, forced, err := messagesChoice(m.c.ToolChoice, m.b)
+	choice, forced, err := messagesChoice(m.c.ToolChoice)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func (m *messagesWriter) toolChoice(out []byte) ([]byte, error) {
 
 // messagesChoice is tool_choice in Messages' terms, but its closing brace, and whether it forces a tool. A choice is
 // the value the client wrote, not the bytes it spelled it with: an escaped "auto" is auto (README.md「跨格式转换」).
-func messagesChoice(v jsontext.Value, b *budget) (choice string, forced bool, err error) {
+func messagesChoice(v jsontext.Value) (choice string, forced bool, err error) {
 	if isNull(v) {
 		return messagesChoices["auto"], false, nil
 	}

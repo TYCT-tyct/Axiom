@@ -200,7 +200,7 @@ func (s *chatInputItems) message(o requestObject, b *budget) error {
 	}
 	msg := requestObject{"role": jsonValueWithin(role, b), "content": v}
 	if role == "assistant" {
-		s.attachReasoning(msg, b)
+		s.attachReasoning(msg)
 	} else {
 		s.flushReasoning(b)
 	}
@@ -218,10 +218,10 @@ func (s *chatInputItems) call(o requestObject, b *budget) {
 	}
 	i := len(s.out) - 1
 	s.calls[i] = append(s.calls[i], call)
-	s.attachReasoning(s.out[i], b)
+	s.attachReasoning(s.out[i])
 }
 
-func (s *chatInputItems) attachReasoning(msg requestObject, b *budget) {
+func (s *chatInputItems) attachReasoning(msg requestObject) {
 	if s.reasoning.pieces > 0 {
 		msg["reasoning_content"], s.reasoning = s.reasoning.value(nil), joined{}
 	}
@@ -230,7 +230,7 @@ func (s *chatInputItems) attachReasoning(msg requestObject, b *budget) {
 func (s *chatInputItems) flushReasoning(b *budget) {
 	if s.reasoning.pieces > 0 {
 		msg := requestObject{"role": jsonValueWithin("assistant", b), "content": jsonValueWithin("", b)}
-		s.attachReasoning(msg, b)
+		s.attachReasoning(msg)
 		s.out = append(s.out, msg)
 	}
 }
