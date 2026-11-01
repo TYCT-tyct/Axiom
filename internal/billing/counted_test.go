@@ -415,7 +415,7 @@ func TestRequestPrice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if priced.price != 2_000_000_000 {
-		t.Errorf("an undeclared tier's request = %d, want 2000000000", priced.price)
+	if priced.price != 2_000_000_000 || !priced.estimated {
+		t.Errorf("an undeclared tier's request = %d, estimated %v; want 2000000000, estimated", priced.price, priced.estimated)
 	}
 }

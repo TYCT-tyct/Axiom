@@ -116,10 +116,11 @@ func chargeDetails(r ReadChargesRow) (ChargeDetails, error) {
 				// One request per attempt, charged whether or not its model usage was waived, and reported by the
 				// schedule rather than the upstream: the charge details name it once, with no sampling.
 				last := segments[len(segments)-1]
+				fallback := requestFallback(s, last, tiers)
 				d.Items = append(d.Items, ChargeItem{
 					Item: catalog.ItemRequest.String(), Quantity: 1, Unit: catalog.ItemRequest.Unit().String(),
 					UnitPrice: rate.String(), Amount: chargeDecimal(rate.Mul(1)), ServiceTier: last.Usage.ServiceTier().String(),
-					ContextBand: band, PriceVersion: r.PriceVersion,
+					ContextBand: band, PriceVersion: r.PriceVersion, Estimated: fallback, Fallback: fallback,
 				})
 			}
 		}
@@ -183,6 +184,12 @@ func requestRate(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.Ser
 	}
 	_, band, _ := s.Rate(seg.Usage, catalog.ItemRequest)
 	return itemRate(s, f, seg, tiers, catalog.ItemRequest), band, true
+}
+
+// requestFallback reports whether the served tier has no request price and the charge uses the highest one instead.
+func requestFallback(s catalog.Schedule, seg Segment, tiers catalog.ServiceTierSet) bool {
+	_, _, ok := s.Rate(seg.Usage, catalog.ItemRequest)
+	return !ok || undeclaredTier(tiers, seg.Usage.ServiceTier())
 }
 
 func knownChargeItem(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, it catalog.Item) ChargeItem {
