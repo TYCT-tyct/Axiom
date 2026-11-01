@@ -225,34 +225,38 @@ const allTiers = catalog.ServiceTierSet(1<<catalog.ServiceTierStandard | 1<<cata
 // within reports whether what a request may be charged per item is within the limit: the highest price over the service
 // tiers it may be served at and the context tiers a prompt of at most length tokens can fall in, so a priority or
 // long-context price above the limit counts. A tier without a price does not hide the ones that have: the known prices
-// are held to the limit, and a token item missing a price is held at the highest token price of the schedule, which is
-// what billing charges it (docs/domains/billing.md「价目表缺项」). A call item missing a price has the site's default price,
-// which routing does not know, so it is not compared.
+// are held to the limit, and one missing everywhere is held at the fallback billing charges it
+// (docs/domains/billing.md「价目表缺项」).
 func (p PriceLimit) within(s catalog.Schedule, tiers catalog.ServiceTierSet, length int64) bool {
 	for it := range catalog.NumItems {
-		if !p.Set.Has(it) {
-			continue
-		}
-		var one catalog.ItemSet
-		one.Add(it)
-		highest, missing := s.Highest(one, tiers, length)
-		if highest.Cmp(p.Max[it]) > 0 {
+		if p.Set.Has(it) && !p.itemWithin(s, tiers, length, it) {
 			return false
 		}
-		if missing {
-			switch {
-			case tokenItems.Has(it):
-				if fallback, _ := s.Highest(tokenItems, allTiers, math.MaxInt64); fallback.Cmp(p.Max[it]) > 0 {
-					return false
-				}
-			case it == catalog.ItemRequest:
-				// A request missing at every eligible tier is charged at the highest request price the schedule has,
-				// matching settlement and the quote. Other call items keep the site default, which routing cannot know.
-				if fallback, _ := s.Highest(one, allTiers, math.MaxInt64); fallback.Cmp(p.Max[it]) > 0 {
-					return false
-				}
-			}
-		}
+	}
+	return true
+}
+
+// itemWithin holds one item to the limit: the highest price over the eligible tiers and contexts, then, for an item the
+// schedule prices nowhere, the fallback billing charges it. A token item is held at the highest token price of the
+// schedule. A request is held at the highest request price of any tier, which is what settlement and the quote charge.
+// Another call item missing a price has the site's default price, which routing does not know, so it is not compared.
+func (p PriceLimit) itemWithin(s catalog.Schedule, tiers catalog.ServiceTierSet, length int64, it catalog.Item) bool {
+	var one catalog.ItemSet
+	one.Add(it)
+	highest, missing := s.Highest(one, tiers, length)
+	if highest.Cmp(p.Max[it]) > 0 {
+		return false
+	}
+	if !missing {
+		return true
+	}
+	switch {
+	case tokenItems.Has(it):
+		fallback, _ := s.Highest(tokenItems, allTiers, math.MaxInt64)
+		return fallback.Cmp(p.Max[it]) <= 0
+	case it == catalog.ItemRequest:
+		fallback, _ := s.Highest(one, allTiers, math.MaxInt64)
+		return fallback.Cmp(p.Max[it]) <= 0
 	}
 	return true
 }

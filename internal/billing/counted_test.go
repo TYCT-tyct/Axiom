@@ -404,7 +404,12 @@ func TestRequestPrice(t *testing.T) {
 		"request": {1, "use", "1.5"}, "output": {10, "token", "0"},
 	})
 	b.balanced()
+}
 
+// TestRequestPriceOfAnotherServiceTier: a request price on a tier the request may not be served at is still what the
+// request pays, in the quote and in settlement, rather than the price of another per-use item.
+func TestRequestPriceOfAnotherServiceTier(t *testing.T) {
+	t.Parallel()
 	// A request price only on standard, with complete token prices on priority, must still be admitted for a priority
 	// request. Admission reserves the same highest request price settlement charges, instead of rejecting a price table
 	// the listing gate accepted.

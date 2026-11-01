@@ -112,21 +112,45 @@ func chargeDetails(r ReadChargesRow) (ChargeDetails, error) {
 			}
 			d.Items = append(d.Items, items...)
 		}
-		if len(segments) > 0 {
-			if rate, band, ok := requestRate(s, f, segments[len(segments)-1], tiers); ok {
-				// One request per attempt, charged whether or not its model usage was waived, and reported by the
-				// schedule rather than the upstream: the charge details name it once, with no sampling.
-				last := segments[len(segments)-1]
-				fallback := requestFallback(s, last, tiers)
-				d.Items = append(d.Items, ChargeItem{
-					Item: catalog.ItemRequest.String(), Quantity: 1, Unit: catalog.ItemRequest.Unit().String(),
-					UnitPrice: rate.String(), Amount: chargeDecimal(rate.Mul(1)), ServiceTier: last.Usage.ServiceTier().String(),
-					ContextBand: band, PriceVersion: r.PriceVersion, Estimated: fallback, Fallback: fallback,
-				})
-			}
+		if request := requestChargeOf(s, f, segments, tiers); request.ok {
+			// One request per attempt, charged whether or not its model usage was waived, and reported by the schedule
+			// rather than the upstream: the charge details name it once, with no sampling.
+			d.Items = append(d.Items, ChargeItem{
+				Item: catalog.ItemRequest.String(), Quantity: 1, Unit: catalog.ItemRequest.Unit().String(),
+				UnitPrice: request.rate.String(), Amount: chargeDecimal(request.amount), ServiceTier: request.tier.String(),
+				ContextBand: request.band, PriceVersion: r.PriceVersion, Estimated: request.fallback, Fallback: request.fallback,
+			})
 		}
 	}
 	return reconcileCharges(d, r.Price, r.Charged)
+}
+
+// requestCharge is the attempt's one request: what settlement charges for it, and what the charge details report.
+type requestCharge struct {
+	rate     platform.UnitPrice
+	amount   platform.Exact
+	tier     catalog.ServiceTier
+	band     int
+	fallback bool // the price is the fallback of a tier the schedule does not declare
+	ok       bool // the schedule prices the request item at all
+}
+
+// requestChargeOf prices the attempt's one request at the band of its last sampling, which carries the tier it ran on.
+// The upstream reports no count of it, so one request is its whole charge, whatever the usage and even when the model
+// usage is waived. ok is false when the schedule prices no request item.
+func requestChargeOf(s catalog.Schedule, f fallbacks, segments []Segment, tiers catalog.ServiceTierSet) requestCharge {
+	if len(segments) == 0 {
+		return requestCharge{}
+	}
+	last := segments[len(segments)-1]
+	rate, band, ok := requestRate(s, f, last, tiers)
+	if !ok {
+		return requestCharge{}
+	}
+	return requestCharge{
+		rate: rate, amount: rate.Mul(1), tier: last.Usage.ServiceTier(), band: band,
+		fallback: requestFallback(s, last, tiers), ok: true,
+	}
 }
 
 func reconcileCharges(d ChargeDetails, price, charged int64) (ChargeDetails, error) {

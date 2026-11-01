@@ -316,43 +316,44 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 	var p priced
 	total := platform.Exact{}
 	charged := chargedItems(perUseOnly)
+	var err error
 	for _, seg := range segments {
-		cost, missing, err := segmentCost(s, seg.Usage, perUseOnly)
-		if undeclaredTier(tiers, seg.Usage.ServiceTier()) {
-			cost, missing, err = platform.Exact{}, ^catalog.ItemSet(0), nil
-			p.estimated = true
-		}
-		if err == nil {
-			err = p.addExtras(s, f, seg, tiers, perUseOnly)
-		}
-		if err == nil {
-			cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), charged)
-		}
-		if err == nil {
-			cost, err = addMissing(s, f, cost, seg.Usage, missing, charged)
-		}
-		if err == nil {
-			total, err = total.Add(cost)
-		}
-		if err != nil {
+		if total, err = p.addSegment(total, s, f, seg, perUseOnly, tiers, charged); err != nil {
 			return priced{}, fmt.Errorf("billing: price the usage: %w", err)
 		}
-		p.estimated = p.estimated || guessed(seg, charged, missing)
 	}
-	if len(segments) > 0 {
-		if rate, _, ok := requestRate(s, f, segments[len(segments)-1], tiers); ok {
-			// A schedule that prices the per-request item charges one request for the attempt, whatever its usage and
-			// even when the model usage is waived. The upstream reports no count of it, so this is its whole charge.
-			p.estimated = p.estimated || requestFallback(s, segments[len(segments)-1], tiers)
-			next, err := total.Add(rate.Mul(1))
-			if err != nil {
-				return priced{}, fmt.Errorf("billing: price the request: %w", err)
-			}
-			total = next
-		}
+	request := requestChargeOf(s, f, segments, tiers)
+	p.estimated = p.estimated || request.fallback
+	if total, err = total.Add(request.amount); err != nil {
+		return priced{}, fmt.Errorf("billing: price the request: %w", err)
 	}
 	p.price = ceilAmount(total)
 	return p, nil
+}
+
+// addSegment prices one sampling and adds it to the total: the usage at its band, then the per-use items the client's
+// usage shows, the unknown usage and the items the schedule prices nowhere, each at its fallback, and reports that the
+// charge is estimated when any of it was guessed.
+func (p *priced) addSegment(total platform.Exact, s catalog.Schedule, f fallbacks, seg Segment, perUseOnly bool, tiers catalog.ServiceTierSet, charged catalog.ItemSet) (platform.Exact, error) {
+	cost, missing, err := segmentCost(s, seg.Usage, perUseOnly)
+	if undeclaredTier(tiers, seg.Usage.ServiceTier()) {
+		cost, missing, err = platform.Exact{}, ^catalog.ItemSet(0), nil
+		p.estimated = true
+	}
+	if err == nil {
+		err = p.addExtras(s, f, seg, tiers, perUseOnly)
+	}
+	if err == nil {
+		cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), charged)
+	}
+	if err == nil {
+		cost, err = addMissing(s, f, cost, seg.Usage, missing, charged)
+	}
+	if err != nil {
+		return platform.Exact{}, err
+	}
+	p.estimated = p.estimated || guessed(seg, charged, missing)
+	return total.Add(cost)
 }
 
 // addExtras computes the two amounts the client's usage shows beyond its token counts: the sale price of the per-use

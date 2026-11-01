@@ -453,11 +453,9 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
 	}
-	var quantization Quantization
-	if r.Quantization != nil {
-		if quantization, err = ParseQuantization(*r.Quantization); err != nil {
-			return nil, fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
-		}
+	quantization, err := optionalQuantization(r)
+	if err != nil {
+		return nil, err
 	}
 	currency, err := platform.ParseCurrency(r.SettlementCurrency)
 	if err != nil {
@@ -477,14 +475,30 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt),
 		poolLow: r.PoolLow.Bool,
 	}
-	if r.SiteID != nil {
-		ep.ownerSite = *r.SiteID
-	}
-	if r.AccountID != nil {
-		ep.ownerAccount = *r.AccountID
-	}
+	ep.ownerSite, ep.ownerAccount = owner(r.SiteID), owner(r.AccountID)
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil
+}
+
+// owner is the tenant a nullable column names, the zero id for an endpoint of the platform's own.
+func owner(id *uuid.UUID) uuid.UUID {
+	if id == nil {
+		return uuid.UUID{}
+	}
+	return *id
+}
+
+// optionalQuantization parses the level an admin recorded, or the empty level when none is recorded: absence is a level
+// no request matches, not a synonym for the level OpenRouter names 'unknown'.
+func optionalQuantization(r store.ListRoutableRow) (Quantization, error) {
+	if r.Quantization == nil {
+		return "", nil
+	}
+	quantization, err := ParseQuantization(*r.Quantization)
+	if err != nil {
+		return "", fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
+	}
+	return quantization, nil
 }
 
 func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {

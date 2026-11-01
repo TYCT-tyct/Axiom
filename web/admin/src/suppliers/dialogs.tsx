@@ -130,7 +130,18 @@ export function QuantizationDialog({
   const { t } = useTranslation();
   type Level = NonNullable<AdminSchemas["SupplierEndpoint"]["quantization"]>;
   const levels = [
-    "int4", "int8", "fp4", "mxfp4", "nvfp4", "fp6", "fp8", "mxfp8", "fp16", "bf16", "fp32", "unknown",
+    "int4",
+    "int8",
+    "fp4",
+    "mxfp4",
+    "nvfp4",
+    "fp6",
+    "fp8",
+    "mxfp8",
+    "fp16",
+    "bf16",
+    "fp32",
+    "unknown",
   ] as const satisfies readonly Level[];
   return (
     <ChangeDialog
@@ -165,13 +176,13 @@ export function QuantizationDialog({
           }),
         )
       }
-      done={(changed) =>
+      done={(changed) => (
         <p>
           {changed.quantization
             ? t("suppliers.quantization.done", { level: t(`suppliers.quantization.levels.${changed.quantization}`) })
             : t("suppliers.quantization.cleared")}
         </p>
-      }
+      )}
       onClose={onClose}
     />
   );

@@ -67,9 +67,5 @@ func (w *sampleWindow) percentiles(now time.Time) ([4]float64, bool) {
 
 // nearestRank is the zero-based index of the p-th percentile by nearest rank: rank ceil(p × n / 100), counted from 1.
 func nearestRank(p, n int) int {
-	rank := (p*n + 99) / 100
-	if rank < 1 {
-		rank = 1
-	}
-	return rank - 1
+	return max((p*n+99)/100, 1) - 1
 }

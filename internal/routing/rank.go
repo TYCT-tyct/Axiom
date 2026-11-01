@@ -136,24 +136,33 @@ func (r *Router) score(c *candidate, n *need, strategy Strategy, price *candidat
 // known to be slow, and it is to be measured. A number is compared with the moving average; a percentile cutoff with the
 // same percentile of the endpoint's rolling window, and every cutoff the request named has to hold.
 func slow(c *candidate, o *Override) bool {
-	if o.MinThroughput > 0 && c.Throughput > 0 && c.Throughput < o.MinThroughput ||
-		o.MaxLatency > 0 && c.Latency > o.MaxLatency {
-		return true
+	return (o.MinThroughput > 0 && c.Throughput > 0 && c.Throughput < o.MinThroughput) ||
+		(o.MaxLatency > 0 && c.Latency > o.MaxLatency) ||
+		below(c.ThroughputPercentiles, o.MinThroughputPercentiles) ||
+		above(c.LatencyPercentiles, o.MaxLatencyPercentiles)
+}
+
+// below reports whether a measured throughput percentile is under a cutoff the request set; an unmeasured one (0) is not.
+func below(measured [4]float64, cut Cutoffs) bool {
+	if cut.Set == 0 {
+		return false
 	}
-	if o.MinThroughputPercentiles.Set != 0 {
-		for i := range o.MinThroughputPercentiles.Values {
-			if o.MinThroughputPercentiles.Has(i) && c.ThroughputPercentiles[i] > 0 &&
-				c.ThroughputPercentiles[i] < o.MinThroughputPercentiles.Values[i] {
-				return true
-			}
+	for i, v := range measured {
+		if cut.Has(i) && v > 0 && v < cut.Values[i] {
+			return true
 		}
 	}
-	if o.MaxLatencyPercentiles.Set != 0 {
-		for i := range o.MaxLatencyPercentiles.Values {
-			if o.MaxLatencyPercentiles.Has(i) && c.LatencyPercentiles[i] > 0 &&
-				c.LatencyPercentiles[i].Seconds() > o.MaxLatencyPercentiles.Values[i] {
-				return true
-			}
+	return false
+}
+
+// above is below for a latency cutoff, which is in seconds while the measure is a duration.
+func above(measured [4]time.Duration, cut Cutoffs) bool {
+	if cut.Set == 0 {
+		return false
+	}
+	for i, v := range measured {
+		if cut.Has(i) && v > 0 && v.Seconds() > cut.Values[i] {
+			return true
 		}
 	}
 	return false
