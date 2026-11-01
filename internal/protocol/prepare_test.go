@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/alloctest"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
@@ -451,7 +451,8 @@ func TestPrepareCost(t *testing.T) {
 
 // TestPrepareCostBoundsTheAllocation: what Prepare allocates, for bodies of the worst shapes there are (nothing but empty
 // objects, the smallest messages, members it does not know, an identifier of escapes), stays within the cost. The
-// allocation counted is the total, garbage included, which bounds the peak.
+// allocation counted is the total, garbage included, which bounds the peak; it is measured in a child process, so the
+// rest of this test binary's goroutines and collections are not counted as Prepare's.
 //
 //nolint:exhaustive // the formats with output are the ones bounded here
 func TestPrepareCostBoundsTheAllocation(t *testing.T) {
@@ -462,6 +463,15 @@ func TestPrepareCostBoundsTheAllocation(t *testing.T) {
 		members = append(members, fmt.Sprintf(`"k%05d":1`, i))
 	}
 	pair := `{"role":"user","content":"a"},{"role":"assistant","content":"b"}`
+	type bounded struct {
+		name   string
+		body   []byte
+		req    protocol.Request
+		target protocol.Target
+		cost   int64
+	}
+	var funcs []alloctest.Function
+	var bounds []bounded
 	for _, c := range []struct {
 		name string
 		from protocol.Format
@@ -482,7 +492,8 @@ func TestPrepareCostBoundsTheAllocation(t *testing.T) {
 		{"empty items", protocol.Responses, `{"model":"m","input":[` + strings.Repeat("{},", 20000) + `{}]}`},
 		{"members of an item it does not know", protocol.Responses, `{"model":"m","input":[{"role":"user","content":"a",` + strings.Join(members, ",") + `}]}`},
 	} {
-		r := inspected(t, c.from, []byte(c.body))
+		body := []byte(c.body)
+		r := inspected(t, c.from, body)
 		targets := []protocol.Format{c.from}
 		switch c.from {
 		case protocol.Chat:
@@ -494,15 +505,20 @@ func TestPrepareCostBoundsTheAllocation(t *testing.T) {
 		}
 		for _, f := range targets {
 			target := protocol.Target{Format: f, Model: "up", MaxOutput: 4096}
-			cost := protocol.PrepareCost(&r, []byte(c.body), target, w)
-			var before, after runtime.MemStats
-			runtime.ReadMemStats(&before)
-			u, _ := protocol.Prepare(&r, []byte(c.body), target, w) //nolint:errcheck // a body of the worst shape may be refused; what it took is the point
-			runtime.ReadMemStats(&after)
-			allocated := int64(after.TotalAlloc - before.TotalAlloc) //nolint:gosec // G115: bytes allocated by one call, far below 2⁶³
-			if allocated > cost || int64(cap(u.Body)) > cost {
-				t.Errorf("%s, format %d: %d bytes allocated, %d kept, of the %d it costs, for a body of %d", c.name, f, allocated, cap(u.Body), cost, len(c.body))
-			}
+			cost := protocol.PrepareCost(&r, body, target, w)
+			name := fmt.Sprintf("%s from format %d, format %d", c.name, c.from, f)
+			funcs = append(funcs, alloctest.Function{Name: name, F: func() {
+				_, _ = protocol.Prepare(&r, body, target, w) //nolint:errcheck // a body of the worst shape may be refused; what it took is the point
+			}})
+			bounds = append(bounds, bounded{name: name, body: body, req: r, target: target, cost: cost})
+		}
+	}
+	got := alloctest.Measure(t, funcs...)
+	for _, c := range bounds {
+		// The buffer kept is read in this process: the child reports what one call allocates, not what it returns.
+		u, _ := protocol.Prepare(&c.req, c.body, c.target, w) //nolint:errcheck // as in the measurement
+		if allocated := int64(got[c.name].Bytes); allocated > c.cost || int64(cap(u.Body)) > c.cost {
+			t.Errorf("%s: %d bytes allocated, %d kept, of the %d it costs, for a body of %d", c.name, allocated, cap(u.Body), c.cost, len(c.body))
 		}
 	}
 }

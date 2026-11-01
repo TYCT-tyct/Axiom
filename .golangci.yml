@@ -165,6 +165,11 @@ linters:
       - path: ^internal/platform/jsonx/ # the one place that handles JSON
         linters: [depguard]
         text: from list 'json'
+      # The direct-format request scanner and reply encoder share the format's rules and helpers, so the file is long by
+      # nature; only the length is exempt, and every other revive rule still checks it (#537).
+      - path: ^internal/protocol/direct\.go$
+        linters: [revive]
+        text: file-length-limit
 
 formatters:
   enable:

@@ -42,20 +42,17 @@ func (n *need) rankAll() bool { return n.over.SortGlobal || n.auto || n.free }
 // for openrouter/auto, or the free models for openrouter/free; both routers let the ranking choose the model. It records
 // why a model was left out.
 func (r *Router) rankModels(snap *Snapshot, n *need, rec *Record) []ranked {
-	models := n.in.Models
+	var models []catalog.ModelID
 	switch {
 	case n.in.Auto:
-		models = snap.models
+		models = snap.models // already unique
 	case n.in.Free:
-		models = snap.free
+		models = snap.free // already unique
+	default:
+		models = uniqueModels(n.in.Models)
 	}
 	var order []ranked
-	var seen []catalog.ModelID
 	for _, m := range models {
-		if slices.Contains(seen, m) { // a model named twice is one model: its endpoints are ranked once
-			continue
-		}
-		seen = append(seen, m)
 		if !n.in.Admission.allows(m) {
 			rec.Excluded = append(rec.Excluded, Excluded{Reason: NotAllowed})
 			continue
@@ -67,6 +64,30 @@ func (r *Router) rankModels(snap *Snapshot, n *need, rec *Record) []ranked {
 		order = append(order, r.rank(cands, n, rec)...)
 	}
 	return order
+}
+
+// uniqueModels drops a model named twice, keeping the first place it was named: the request's own list may repeat one,
+// while the snapshot's model lists are already unique.
+func uniqueModels(models []catalog.ModelID) []catalog.ModelID {
+	if len(models) < 2 {
+		return models
+	}
+	seen := make(map[catalog.ModelID]struct{}, len(models))
+	for _, m := range models {
+		seen[m] = struct{}{}
+	}
+	if len(seen) == len(models) {
+		return models
+	}
+	out := make([]catalog.ModelID, 0, len(seen))
+	for _, m := range models {
+		if _, ok := seen[m]; !ok {
+			continue
+		}
+		out = append(out, m)
+		delete(seen, m)
+	}
+	return out
 }
 
 // Plan makes the route of a request: the candidates of the first model that survive the filters, in order, then the
