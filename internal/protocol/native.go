@@ -10,10 +10,26 @@ import (
 
 // Prepare prepares the request and, when the web plugin chose the provider's own search, adds that search to the body
 // the endpoint's format expects. The tool goes in after conversion, so the body it edits is the one that is sent.
+//
+//nolint:cyclop,gocognit // one branch per format and rewrite
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u, err := prepare(r, body, t, w)
 	if err != nil {
 		return u, err
+	}
+	if w.ServerLoop {
+		if u.Body, err = RemoveMaxToolCalls(u.Body); err != nil {
+			return u, err
+		}
+		if !w.ServerFunction {
+			if u.Body, err = DropForcedToolChoice(t.Format, u.Body); err != nil {
+				return u, err
+			}
+		}
+	} else if w.HasMaxToolCalls && (t.Format == Chat || t.Format == Messages) {
+		if u.Body, err = RemoveMaxToolCalls(u.Body); err != nil {
+			return u, err
+		}
 	}
 	if w.ServerFunction {
 		if u.Body, err = injectServerFunction(t.Format, u.Body); err != nil {

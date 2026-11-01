@@ -13,8 +13,12 @@ func TestServerCaptureChat(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(c.calls) != 1 || c.calls[0].ID != "call_1" || c.calls[0].Arguments != `{"query":"axiom"}` {
-		t.Fatalf("calls = %+v", c.calls)
+	calls := c.serverCalls()
+	if len(calls) != 1 || calls[0].ID != "call_1" || calls[0].Arguments != `{"query":"axiom"}` {
+		t.Fatalf("calls = %+v", calls)
+	}
+	if len(c.calls) != 2 || !c.calls[1].Client {
+		t.Fatalf("the client tool was not kept as part of the turn: %+v", c.calls)
 	}
 }
 
@@ -29,8 +33,8 @@ func TestServerCaptureMessages(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(c.calls) != 1 || c.calls[0].ID != "toolu_1" || c.calls[0].Arguments != `{"query":"axiom"}` {
-		t.Fatalf("calls = %+v", c.calls)
+	if calls := c.serverCalls(); len(calls) != 1 || calls[0].ID != "toolu_1" || calls[0].Arguments != `{"query":"axiom"}` {
+		t.Fatalf("calls = %+v", calls)
 	}
 }
 
@@ -46,8 +50,8 @@ func TestServerCaptureResponses(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(c.calls) != 1 || c.calls[0].ID != "call_1" || c.calls[0].Arguments != `{"query":"axiom"}` {
-		t.Fatalf("calls = %+v", c.calls)
+	if calls := c.serverCalls(); len(calls) != 1 || calls[0].ID != "call_1" || calls[0].Arguments != `{"query":"axiom"}` {
+		t.Fatalf("calls = %+v", calls)
 	}
 }
 
@@ -56,7 +60,7 @@ func TestServerCaptureIgnoresOtherTools(t *testing.T) {
 	if err := c.event([]byte(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"keep","arguments":"{}"}}]}}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.calls) != 0 {
-		t.Fatalf("calls = %+v", c.calls)
+	if len(c.serverCalls()) != 0 || !c.client || len(c.calls) != 1 {
+		t.Fatalf("calls = %+v, client = %v", c.calls, c.client)
 	}
 }

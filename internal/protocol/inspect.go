@@ -251,12 +251,15 @@ type scanner struct {
 // part is the content part, tool or reasoning setting being read.
 type part struct {
 	toolKind                 string // dual-mode Responses tools need an explicit client execution claim
+	typeSeen                 bool   // the tool's type member was read before its parameters
 	localShell, clientSearch bool
 	kind                     Capabilities
-	payload                  int64 // the raw bytes of the data the part carries
-	binary                   bool  // the payload is image or file data, not text
-	refs                     int64 // files the part refers to by an id
-	max                      int64 // a server tool's max_uses
+	payload                  int64  // the raw bytes of the data the part carries
+	binary                   bool   // the payload is image or file data, not text
+	refs                     int64  // files the part refers to by an id
+	max                      int64  // a server tool's max_uses
+	serverRaw                []byte // a tool's parameters, kept until its type is known
+	serverRawBig             bool
 	server                   *ServerWebSearch
 	off, hidden, on          bool // reasoning turned off; reasoning left out of the stream
 }

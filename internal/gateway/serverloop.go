@@ -45,10 +45,22 @@ func newServerLoop(c *Call) *serverLoop {
 // undelivered, while the searches that did run stay charged (docs/domains/billing.md「免单规则」).
 //
 //nolint:cyclop,funlen,gocognit // one branch per cap, query, result budget and backend outcome
-func (a *attempt) search(ctx context.Context, calls []protocol.ServerToolCall) *ended {
+func (a *attempt) search(ctx context.Context, turn protocol.ServerTurn) *ended {
 	s, loop := a.s, a.s.loop
+	calls := make([]protocol.ServerToolCall, 0, len(turn.Calls))
+	for _, call := range turn.Calls {
+		if !call.Client {
+			calls = append(calls, call)
+		}
+	}
+	if s.isGone() {
+		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
+	}
 	results := make([]string, 0, len(calls))
 	for _, call := range calls {
+		if s.isGone() {
+			return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
+		}
 		if loop.disabled || loop.steps >= loop.cap {
 			loop.disabled = true
 			results = append(results, "The web search step limit for this request was reached. Answer with the results you already have.")
@@ -86,7 +98,9 @@ func (a *attempt) search(ctx context.Context, calls []protocol.ServerToolCall) *
 		if !s.reserveSearch(websearch.WorkingSet) {
 			return a.abort(protocol.Error{Type: protocol.Overloaded}, 1)
 		}
-		searchCtx, cancel := context.WithTimeout(ctx, websearch.Timeout)
+		// The search is new paid work, so it follows the client even when the endpoint's call does not.
+		searchCtx, cancel := context.WithTimeout(s.req.Context(), websearch.Timeout)
+		//nolint:contextcheck // the search is new paid work and follows the client, not the endpoint call policy
 		found, err := loop.backend.Search(searchCtx, websearch.Query{
 			Text: query, MaxResults: int(remaining),
 			IncludeDomains: loop.tool.IncludeDomains, ExcludeDomains: loop.tool.ExcludeDomains,
@@ -127,7 +141,7 @@ func (a *attempt) search(ctx context.Context, calls []protocol.ServerToolCall) *
 	if !s.reserveSearch(held) {
 		return a.abort(protocol.Error{Type: protocol.Overloaded}, 1)
 	}
-	body, err := protocol.AppendServerTurn(s.c.Format, s.c.Body, calls, results)
+	body, err := protocol.AppendServerTurn(s.c.Format, s.c.Body, turn, results)
 	if err != nil {
 		s.logger.Error("the web search turn could not be appended", "request_id", s.c.ID.String(), "err", err)
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
@@ -247,6 +261,8 @@ func (a *attempt) hopDone(relay *protocol.Relay) {
 	}
 	a.hopRecorded = true
 	s := a.s
+	p := relay.Progress()
+	a.meter.Complete(a.billingProgress(p))
 	u := relay.Usage()
 	a.usage.Segments = append(a.usage.Segments, u.Segments...)
 	if u.Invalid != nil && a.usage.Invalid == nil {

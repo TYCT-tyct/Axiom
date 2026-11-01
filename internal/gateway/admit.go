@@ -304,7 +304,7 @@ func (h *Handler) resolveServerTool(c *Call, plan routing.Plan) (routing.Plan, e
 	// are what the reservation covers, at the cap above.
 	tool.Loop = true
 	c.serverLoop, c.searchBackend, c.searchPrice = true, decision.backend, decision.price
-	c.Request.Needs |= protocol.WebSearch | protocol.Tools
+	c.Request.Needs |= protocol.Tools
 	c.Request.WebSearches = cap
 	c.Request.SearchBytes = 0
 	c.Request.Web = nil

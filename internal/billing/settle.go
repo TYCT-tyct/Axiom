@@ -48,7 +48,10 @@ type AttemptResult struct {
 	Finish     FinishReason
 	// Receipt, Estimate and FinishedAt are what suppliers stores of the attempt: the schedule, endpoint and credential
 	// that priced it with the supplier's own charge reference, its cost in the supplier's unit, and when it ended.
-	Receipt    suppliers.AttemptReceipt
+	Receipt suppliers.AttemptReceipt
+	// Receipts are every supplier request behind a loop attempt, in order; Receipt is the last of them for the one
+	// summary row settlement has always written.
+	Receipts   []suppliers.AttemptReceipt
 	Estimate   suppliers.AttemptCost
 	FinishedAt time.Time
 }

@@ -3,7 +3,6 @@ package protocol
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"unicode/utf8"
 
 	"axiom/internal/catalog"
@@ -251,27 +250,6 @@ func (s *scanner) maxToolCalls() (err error) {
 	return err
 }
 
-// serverParams reads the openrouter:web_search tool's parameters. Other tools' members of that name are their own
-// data: the type says which tool this object is, and members are read in order, as the formats write type first.
-func (s *scanner) serverParams() error {
-	if s.p.toolKind != "openrouter:web_search" {
-		return s.skip()
-	}
-	v, err := s.dec.ReadValue()
-	if err != nil {
-		return err
-	}
-	if len(v) > MaxServerToolBytes {
-		return fmt.Errorf("the web search parameters are larger than %d bytes", MaxServerToolBytes)
-	}
-	t, err := parseServerParams(v)
-	if err != nil {
-		return err
-	}
-	s.p.server = t
-	return nil
-}
-
 // content reads a message's content or a tool result's output: a string, which TextBytes already counts, or parts.
 func (s *scanner) content() error {
 	if s.dec.PeekKind() == '"' {
@@ -385,106 +363,6 @@ func (s *scanner) tools() error {
 		}
 		return s.tool()
 	})
-}
-
-func (s *scanner) tool() error {
-	s.p = part{kind: Tools}
-	if err := s.object(s.g.tool); err != nil {
-		return err
-	}
-	switch {
-	case s.p.toolKind == "shell" && !s.p.localShell, s.p.toolKind == "tool_search" && !s.p.clientSearch:
-		return fmt.Errorf("the %s server tool is not supported yet", s.p.toolKind)
-	}
-	if s.p.server != nil {
-		if s.r.ServerSearch != nil {
-			return fmt.Errorf("openrouter:web_search is declared more than once")
-		}
-		s.r.ServerSearch = s.p.server
-		s.p.kind |= WebSearch
-	} else if s.p.kind&WebSearch != 0 {
-		s.r.NativeWeb = true
-	}
-	if s.p.kind&(WebSearch|CodeExecution) != 0 {
-		if err := s.addCalls(); err != nil {
-			return err
-		}
-	}
-	s.r.Needs |= s.p.kind
-	return nil
-}
-
-// addCalls adds a server tool's limit to its kind's total. Limits of two tools of a kind add up, and a tool without
-// one leaves the total to the model's default. A total past int64 is refused: wrapped, it would bound nothing.
-func (s *scanner) addCalls() error {
-	n := &s.r.WebSearches
-	if s.p.kind == CodeExecution {
-		n = &s.r.CodeExecutions
-	}
-	switch {
-	case s.r.Needs.Has(s.p.kind) && (*n == 0 || s.p.max == 0):
-		*n = 0
-	case s.p.max > math.MaxInt64-*n:
-		return fmt.Errorf("max_uses add up past %d", int64(math.MaxInt64))
-	default:
-		*n += s.p.max
-	}
-	return nil
-}
-
-// openrouterTools are the server tool types OpenRouter documents (OpenRouter《Server Tools》, read 2026-10-29). The
-// model decides when to call one and the provider executes it; this gateway runs web_search's loop and refuses the
-// rest, whose fetch, sandbox and image jobs would need services or sandboxes here. The namespace is recognized in every
-// format so that a client's tool is refused by name before admission, not forwarded as a function.
-var openrouterTools = map[string]struct{}{
-	"openrouter:web_search": {}, "openrouter:web_fetch": {}, "openrouter:datetime": {},
-	"openrouter:image_generation": {}, "openrouter:apply_patch": {}, "openrouter:shell": {},
-	"openrouter:bash": {}, "openrouter:fusion": {}, "openrouter:advisor": {}, "openrouter:subagent": {},
-	"openrouter:experimental__search_models": {}, "openrouter:tool_search": {}, "openrouter:files": {},
-}
-
-// openrouterTool refuses one tool of OpenRouter's namespace. A documented type says what is missing; a name the
-// namespace does not document is told so, because OpenRouter adds tools and a request may carry a name from a newer
-// provider release.
-func openrouterTool(name string) error {
-	if _, ok := openrouterTools[name]; !ok {
-		return fmt.Errorf("%.64q is not an OpenRouter server tool", name)
-	}
-	if name == "openrouter:web_search" {
-		return fmt.Errorf("the %s server tool is not supported: %s", name, NoWebSearch)
-	}
-	return fmt.Errorf("the %s server tool is not supported yet: this gateway runs no OpenRouter-side tool loop", name)
-}
-
-func (s *scanner) toolType() error {
-	v, err := s.str()
-	if hasPrefix(v, "openrouter:") {
-		if string(v) == "openrouter:web_search" {
-			s.p.toolKind = string(v)
-			if s.p.server == nil {
-				s.p.server = &ServerWebSearch{MaxResults: DefaultWebSearchResults}
-			}
-			return err
-		}
-		return openrouterTool(string(v))
-	}
-	if s.r.Format == Responses {
-		switch string(v) {
-		case "shell":
-			s.p.toolKind = "shell"
-		case "tool_search":
-			s.p.toolKind = "tool_search"
-		}
-	}
-	for _, t := range s.g.servers {
-		if hasPrefix(v, t.prefix) {
-			if t.unsupported {
-				return fmt.Errorf("the %s server tool is not supported yet", t.prefix)
-			}
-			s.p.kind = t.kind
-		}
-	}
-	return err
 }
 
 // Even a connector with a tool allowlist can run repeatedly; no complete quote exists for it yet.

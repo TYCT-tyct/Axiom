@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"time"
+	"uuid"
 
 	"axiom/internal/billing"
 	"axiom/internal/protocol"
@@ -67,9 +68,18 @@ func (a *attempt) readHop(ctx context.Context, relay *protocol.Relay, idle *time
 				return st, e, false
 			}
 			calls := relay.ServerCalls()
+			turn := relay.ServerTurn()
 			a.hopDone(relay)
+			if turn.Client && len(calls) > 0 {
+				s.drop(relay)
+				return over, *a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0), false
+			}
 			if len(calls) > 0 && !s.loop.disabled {
-				if e := a.search(ctx, calls); e != nil {
+				if s.isGone() {
+					s.drop(relay)
+					return over, *a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0), false
+				}
+				if e := a.search(ctx, turn); e != nil {
 					s.drop(relay)
 					return over, *e, false
 				}
@@ -123,12 +133,32 @@ func (s *session) flush(a *attempt) bool {
 // searches already run stay charged.
 func (a *attempt) sendNext(ctx context.Context) *ended {
 	s := a.s
+	if s.isGone() {
+		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
+	}
+	// Each hop is its own supplier request, so it takes its own slot and rolling-minute quota. The previous
+	// credential is released only after the next one is acquired, so a failure here still has a live connection to
+	// close and its receipt.
+	conn, err := s.x.Upstreams.Acquire(uuid.UUID(a.entry.Endpoint))
+	if err != nil {
+		s.x.Limits.Queue.Wake()
+		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
+	}
+	prev := s.done(a.conn).WithExchange(a.entry.Exchange)
+	a.receipts = append(a.receipts, prev)
+	a.conn = conn
 	up, held, err := s.prepare(a.entry)
 	if err != nil {
 		e := s.unprepared(err)
 		return &e
 	}
-	resp, fail := a.send(ctx, up, held) //nolint:bodyclose // the body is kept in a.nextBody and closed by stream
+	// The next sampling is new paid work: it follows the client even when this endpoint's first call did not. The
+	// first hop keeps the attempt context chosen by the endpoint's policy.
+	sendCtx := ctx //nolint:contextcheck // the first hop keeps the attempt's context; a loop hop follows the client
+	if s.loop != nil {
+		sendCtx = s.req.Context()
+	}
+	resp, fail := a.send(sendCtx, up, held) //nolint:bodyclose // the body is kept in a.nextBody and closed by stream
 	if fail != nil {
 		s.dropOut()
 		_, e := s.failed(a, fail)

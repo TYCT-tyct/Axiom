@@ -176,7 +176,7 @@ func (s *session) prepare(entry routing.Entry) (up protocol.Upstream, held int64
 	account := uuid.UUID(s.c.caller.AccountID())
 	w := protocol.Rewrites{
 		Identity: s.x.identity(account), Device: s.x.deviceID(account), NativeSearch: s.c.nativeSearch,
-		ServerFunction: s.serverFunction,
+		ServerFunction: s.serverFunction, ServerLoop: s.c.serverLoop, HasMaxToolCalls: s.c.Request.HasMaxToolCalls,
 	}
 	target := entry.Target
 	target.Compact = s.c.Compact
@@ -239,6 +239,7 @@ type attempt struct {
 	hopRecorded bool              // whether this hop's usage is in hops
 	nextBody    io.ReadCloser
 	nextUsage   protocol.UsageContext
+	receipts    []suppliers.AttemptReceipt // one per supplier request: a loop hop acquires its own slot and RPM
 
 	asked   billing.ExtendRequest
 	landing chan error // the outcome of the extension asked for, nil when none is in flight
@@ -283,6 +284,8 @@ func (a *attempt) close(ctx context.Context) {
 	a.release()
 	a.s.x.Router.End(a.entry.Endpoint) // before the wake: a waiter must find both the endpoint's count and the slot free
 	receipt := a.s.done(a.conn)
+	receipt = receipt.WithExchange(a.entry.Exchange)
+	a.receipts = append(a.receipts, receipt)
 	a.obs.Credential = receipt.CredentialID()
 	a.result(receipt)
 	a.observe(ctx)

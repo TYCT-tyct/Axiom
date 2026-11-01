@@ -273,6 +273,9 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	s := a.s
 	rec := &s.ends[a.i]
 	rec.Receipt, rec.FinishedAt = receipt, time.Now()
+	if len(a.receipts) > 1 {
+		rec.Receipts = append([]suppliers.AttemptReceipt(nil), a.receipts...)
+	}
 	if rec.Result == billing.NotExecuted {
 		rec.CostKnown = true
 		rec.Estimate.Conversion = suppliers.ConversionNotRun

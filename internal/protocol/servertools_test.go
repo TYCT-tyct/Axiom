@@ -29,6 +29,32 @@ func TestInspectWebSearchTool(t *testing.T) {
 	}
 }
 
+func TestInspectWebSearchParameterOrder(t *testing.T) {
+	for _, tc := range []struct {
+		format protocol.Format
+		body   string
+	}{
+		{protocol.Chat, `{"model":"m","tools":[{"parameters":{"engine":"native","max_results":7},"type":"openrouter:web_search"}]}`},
+		{protocol.Messages, `{"model":"m","tools":[{"max_uses":4,"parameters":{"engine":"native","max_results":7},"type":"openrouter:web_search"}]}`},
+		{protocol.Responses, `{"model":"m","tools":[{"parameters":{"engine":"native","max_results":7},"type":"openrouter:web_search"}]}`},
+	} {
+		req, err := protocol.Inspect(tc.format, []byte(tc.body))
+		if err != nil {
+			t.Fatalf("%d: %v", tc.format, err)
+		}
+		if req.ServerSearch == nil || req.ServerSearch.Engine != "native" || req.ServerSearch.MaxResults != 7 {
+			t.Fatalf("%d: parameters were not read after type: %+v", tc.format, req.ServerSearch)
+		}
+	}
+	// A client tool's large parameters are its own; the web tool's are bounded.
+	if _, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","tools":[{"type":"function","function":{"name":"f"},"parameters":{"schema":"`+strings.Repeat("x", protocol.MaxServerToolBytes+1)+`"}}]}`)); err != nil {
+		t.Fatalf("a client tool's parameters were bounded: %v", err)
+	}
+	if _, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","tools":[{"parameters":{"x":"`+strings.Repeat("x", protocol.MaxServerToolBytes+1)+`"},"type":"openrouter:web_search"}]}`)); !errors.Is(err, protocol.ErrInvalid) {
+		t.Fatalf("large web search parameters: %v", err)
+	}
+}
+
 func TestInspectWebSearchToolRefusals(t *testing.T) {
 	for _, parameters := range []string{
 		`{"mode":"deep"}`,
@@ -102,7 +128,7 @@ func TestAppendServerTurn(t *testing.T) {
 			[]string{`"role":"user","content":"hi"`, `"type":"function_call_output"`},
 		},
 	} {
-		out, err := protocol.AppendServerTurn(tc.format, []byte(tc.body), calls, results)
+		out, err := protocol.AppendServerTurn(tc.format, []byte(tc.body), protocol.ServerTurn{Calls: calls}, results)
 		if err != nil {
 			t.Fatalf("%d: %v", tc.format, err)
 		}
@@ -164,12 +190,35 @@ func TestAppendServerTurnNormalizesArguments(t *testing.T) {
 	calls := []protocol.ServerToolCall{{ID: "call_1", Arguments: `{"query":`}}
 	for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"input":[{"role":"user","content":"hi"}]}`
-		out, err := protocol.AppendServerTurn(f, []byte(body), calls, []string{"no result"})
+		out, err := protocol.AppendServerTurn(f, []byte(body), protocol.ServerTurn{Calls: calls}, []string{"no result"})
 		if err != nil {
 			t.Fatalf("%d: %v", f, err)
 		}
 		if _, err := protocol.Inspect(f, out); err != nil {
 			t.Errorf("%d: malformed arguments made the body invalid: %v: %s", f, err, out)
 		}
+	}
+}
+
+func TestRemoveLoopControls(t *testing.T) {
+	for _, tc := range []struct {
+		body, want string
+	}{
+		{`{"model":"m","max_tool_calls":3,"messages":[]}`, `{"model":"m","messages":[]}`},
+		{`{"max_tool_calls":3}`, `{}`},
+		{`{"model":"m","max_tool_calls":3,"tool_choice":"required","messages":[]}`, `{"model":"m","messages":[]}`},
+	} {
+		body, err := protocol.RemoveMaxToolCalls([]byte(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err = protocol.DropForcedToolChoice(protocol.Chat, body)
+		if err != nil || string(body) != tc.want {
+			t.Fatalf("%s -> %s (%v), want %s", tc.body, body, err, tc.want)
+		}
+	}
+	withTool := []byte(`{"model":"m","tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required","messages":[]}`)
+	if out, err := protocol.DropForcedToolChoice(protocol.Chat, withTool); err != nil || !strings.Contains(string(out), "tool_choice") {
+		t.Fatalf("a client's forced choice was removed: %s (%v)", out, err)
 	}
 }

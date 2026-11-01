@@ -79,6 +79,12 @@ type Rewrites struct {
 	// ServerFunction adds the gateway's web search function to the prepared body, for the model-side loop the
 	// openrouter:web_search tool stands for. The tool's own declaration was removed from the client's body.
 	ServerFunction bool
+	// ServerLoop is the openrouter:web_search loop, even on the sampling after its cap where ServerFunction is false.
+	// The loop consumes OpenRouter's max_tool_calls and must not send it to a Chat or Messages upstream.
+	ServerLoop bool
+	// HasMaxToolCalls says the client sent OpenRouter's max_tool_calls, which Chat and Messages do not accept. It is
+	// removed even on the native search path, where no loop runs.
+	HasMaxToolCalls bool
 }
 
 // defaultIdentityLen is what a derived value may take when Rewrites.IdentityLen is 0: derived identifiers are short

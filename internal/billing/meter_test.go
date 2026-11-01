@@ -393,3 +393,15 @@ func TestMeterFlatSearch(t *testing.T) {
 		t.Errorf("Observe(2 searches) = %+v, want an extension", step)
 	}
 }
+
+// TestMeterCompletedHopsStock: a model-side loop reads a fresh relay per hop, so the meter must carry the final usage
+// of the hops that ended. Without it every hop looks like the first segment and output can pass the extension point.
+func TestMeterCompletedHopsStock(t *testing.T) {
+	t.Parallel()
+	m := meter(t, Demand{TextBytes: 80}, entry(t, true, 1))
+	u := usage(t, map[catalog.Item]int64{catalog.ItemOutput: 4})
+	m.Complete(Progress{ContentBytes: 4, Reported: u, Final: 1 << catalog.ItemOutput})
+	if step := m.Observe(Progress{ContentBytes: 5}); !step.Extend || !step.Exhausted || step.Left != 0 {
+		t.Fatalf("step = %+v after a completed hop of 4 tokens and 5 more bytes, want an exhausted extension", step)
+	}
+}

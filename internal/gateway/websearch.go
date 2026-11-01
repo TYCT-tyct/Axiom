@@ -84,7 +84,9 @@ func restoreServer(req *protocol.Request, old protocol.Request) {
 	req.MaxToolCalls, req.HasMaxToolCalls = old.MaxToolCalls, old.HasMaxToolCalls
 	req.WebSearches = old.WebSearches
 	if old.ServerSearch != nil {
-		req.Needs |= protocol.WebSearch | protocol.Tools
+		// The loop runs ordinary tools through an external backend; only native search needs the model's WebSearch
+		// capability, which resolveServerTool adds when it chooses that path.
+		req.Needs |= protocol.Tools
 	}
 }
 

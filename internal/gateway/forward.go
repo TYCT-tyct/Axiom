@@ -350,6 +350,11 @@ func scopeOf(fault protocol.Fault) routing.Scope {
 // entry; one that may not answers with the error, unless the client is gone, which gets nothing. scope is whose the
 // failure is, which the call's record keeps as the supplier's own failures are kept.
 func (s *session) unanswered(a *attempt, e protocol.Error, again bool, scope routing.Scope) (step, ended) {
+	if again && s.searched {
+		// A search already ran on this call's account. Another entry would have to run it again, and the client was
+		// promised one stream, so the failure ends the loop as an upstream error.
+		e, again = protocol.Error{Type: protocol.UpstreamFailed}, false
+	}
 	if !again {
 		s.record(a, true, scope, routing.ReturnToClient)
 		if s.isGone() {
@@ -426,9 +431,13 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 			s.drop(relay)
 			s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 			return over, ended{}
-		case !a.content: // a 200 with nothing in it is a failure: the next entry answers
+		case !a.content: // a 200 with nothing in it is a failure: the next entry answers, unless a search already ran
 			rec.Result = billing.FailedBeforeCommit
 			s.drop(relay)
+			if s.searched {
+				s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+				return over, ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
+			}
 			s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
 			return nextEntry, ended{}
 		}
@@ -450,6 +459,10 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 		rec.Finish = billing.FinishCancelled
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 		return over, ended{}
+	}
+	if s.searched {
+		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
+		return over, ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
 	}
 	s.record(a, true, routing.ScopeEndpoint, routing.NextEntry)
 	return nextEntry, ended{}
