@@ -340,6 +340,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/settings/file-parser": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Saved file parser backend override; the key is never returned. Environment remains authoritative when absent.
+         * @description Saved file parser backend override; the key is never returned. Environment remains authoritative when absent.
+         */
+        get: operations["getFileParserSettings"];
+        /**
+         * Save an encrypted file parser backend override. Restart nodes to apply. An omitted key retains the saved key; a URL change requires reentry.
+         * @description Save an encrypted file parser backend override. Restart nodes to apply. An omitted key retains the saved key; a URL change requires reentry.
+         */
+        put: operations["setFileParserSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/settings/file-parser/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask the saved file parser backend whether it is healthy. Accepted means it answered its health endpoint. Ten tests per session per minute.
+         * @description Ask the saved file parser backend whether it is healthy. Accepted means it answered its health endpoint. Ten tests per session per minute.
+         */
+        post: operations["testFileParserSettings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/payments/merchants": {
         parameters: {
             query?: never;
@@ -2128,6 +2172,22 @@ export interface components {
             reason: components["schemas"]["Reason"];
         };
         SearchConfigTest: {
+            reason: components["schemas"]["Reason"];
+        };
+        FileParserSettings: {
+            url?: string;
+            has_key?: boolean;
+            restart_required?: boolean;
+            source?: string;
+        };
+        FileParserSettingsUpdate: {
+            settings: {
+                url?: string;
+                key?: string;
+            };
+            reason: components["schemas"]["Reason"];
+        };
+        FileParserConfigTest: {
             reason: components["schemas"]["Reason"];
         };
         MailConfigTest: {
@@ -4381,6 +4441,99 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SearchConfigTest"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getFileParserSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileParserSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setFileParserSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileParserSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Result */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileParserSettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    testFileParserSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileParserConfigTest"];
             };
         };
         responses: {

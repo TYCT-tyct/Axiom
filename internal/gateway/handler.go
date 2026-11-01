@@ -19,6 +19,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/fileparse"
 	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
@@ -59,6 +60,9 @@ type Deps struct {
 	// Search runs the web plugin through the deployment's backend; nil means no backend is configured, and every
 	// request that asks for web search keeps its documented refusal.
 	Search websearch.Searcher
+	// Parser runs the file-parser plugin's OCR engines through the deployment's backend; nil means no backend is
+	// configured, and a request that asks for one keeps its documented refusal.
+	Parser fileparse.Parser
 }
 
 // Handler serves the model API: the call paths in both prefixes, and the model list.
@@ -178,8 +182,9 @@ type Call struct {
 	Compact   bool // the Responses compact endpoint: the upstream answers whole and its body is passed through
 	Request   protocol.Request
 	Body      []byte
-	search    string      // the web plugin's query, read before admission and never logged
-	Header    http.Header // the client's values of the headers that may go upstream, which headers.go derives per attempt
+	search    string                    // the web plugin's query, read before admission and never logged
+	files     []protocol.FileAnnotation // the annotations a parsed Chat reply returns, so the client can skip reparsing
+	Header    http.Header               // the client's values of the headers that may go upstream, which headers.go derives per attempt
 	Session   routing.SessionKey
 	Admission accounts.Admission
 	Admitted  billing.Admitted
@@ -200,7 +205,8 @@ type Call struct {
 	over        routing.Override // what the request's provider object narrows the route by
 	accountRate int
 	rateReset   int64
-	rate        int // requests of the key in the rate window, counted before admission
+	rate        int  // requests of the key in the rate window, counted before admission
+	gated       bool // the file parser's gate counted the call already; fillCall does not count it again
 
 	mu       sync.Mutex
 	releases []func()
@@ -406,6 +412,13 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 		return ref
 	}
 	c.search = query
+	if err := h.gateParsing(r, c, sessionBody, req); err != nil {
+		return err
+	}
+	body, req, err = h.parseFiles(r.Context(), c, body, req)
+	if err != nil {
+		return err
+	}
 	if err := pinnedProvider(&req, over); err != nil {
 		return err
 	}
@@ -417,16 +430,28 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	web := req.Web
+	web, file, parses := req.Web, req.File, req.FileParses
 	body, req, err = h.compress(c, body, req, snap, models)
 	if err != nil {
 		return err
 	}
 	restoreWeb(&req, web)
+	restoreFile(&req, file, parses)
+	return h.fillCall(c, r, sessionBody, body, req, snap, models, names, over)
+}
+
+// fillCall fills the call with what routing and admission read, and counts the key's rate window: nothing here touches the
+// database.
+func (h *Handler) fillCall(c *Call, r *http.Request, sessionBody, body []byte, req protocol.Request, snap *catalog.Snapshot,
+	models []catalog.ModelID, names variantNames, over routing.Override,
+) error {
 	c.Body, c.Request, c.snap, c.models, c.auto, c.free, c.over = body, req, snap, models, names.auto, names.free, over
 	headerSession := strings.TrimSpace(r.Header.Get("X-Session-Id"))
 	if !utf8.ValidString(headerSession) || utf8.RuneCountInString(headerSession) > 256 {
 		return invalid("x-session-id must be valid UTF-8 with at most 256 characters.")
+	}
+	if c.gated {
+		return nil // the file parser's gate counted this call before parsing; the session and rate are already set
 	}
 	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, sessionBody, headerSession)
 	c.rate = h.precheck(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller),

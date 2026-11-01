@@ -315,6 +315,9 @@ func (r *Relay) unframe(b []byte) (data, rest []byte, err error) {
 // finishAggregate returns the body of a reply that ended well, from the ending out, or, when the ending cannot make
 // one, the upstream's failure.
 func (r *Relay) finishAggregate(out []byte, f Final) []byte {
+	if a, ok := r.agg.(*chatAggregate); ok {
+		a.annotateFiles(f.Files)
+	}
 	r.agg.seal()
 	if a, ok := r.agg.(*chatAggregate); ok {
 		a.cite(r.o.Citations)
@@ -342,6 +345,9 @@ func (r *Relay) failAggregate(e Error, f *Final, u Usage) []byte {
 	if r.client == Messages {
 		r.status = http.StatusBadGateway
 		return body
+	}
+	if a, ok := r.agg.(*chatAggregate); ok {
+		a.annotateFiles(f.files())
 	}
 	r.agg.seal()
 	if a, ok := r.agg.(*chatAggregate); ok {

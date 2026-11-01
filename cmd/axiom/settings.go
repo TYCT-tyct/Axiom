@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"axiom/internal/fileparse"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
@@ -50,6 +51,7 @@ type nodeSettings struct {
 	valkey                            kv.Config
 	smtp                              mail.Config
 	search                            websearch.Config
+	fileParser                        fileparse.Config
 	objectstore                       objectstore.Config
 	retentionURL                      string
 	exchangeSource                    string
@@ -132,6 +134,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 	}
 	smtp, mailErr := mail.ReadConfig(env)
 	searchErr := readSearchSettings(env, s)
+	fileParserErr := readFileParserSettings(env, s)
 	archiveErr := readArchiveSettings(env, s)
 	var exchangeErr error
 	if s.exchangeSource != "manual" && s.exchangeSource != "ecb" {
@@ -147,7 +150,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 	if err := readNodeTLS(env, s); err != nil {
 		errs = append(errs, err)
 	}
-	return append(errs, mailErr, searchErr, archiveErr, s.valkey.Resolve(), healthErr, exchangeErr)
+	return append(errs, mailErr, searchErr, fileParserErr, archiveErr, s.valkey.Resolve(), healthErr, exchangeErr)
 }
 
 // readSearchSettings reads the web search backend. It is optional: with no URL the feature is off, and every web plugin
@@ -155,6 +158,14 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 func readSearchSettings(env *config.Env, s *nodeSettings) error {
 	cfg, err := websearch.ReadConfig(env)
 	s.search = cfg
+	return err
+}
+
+// readFileParserSettings reads the file parser backend. It is optional: with no URL the OCR engines are off, and every
+// file-parser request that names one keeps the documented refusal.
+func readFileParserSettings(env *config.Env, s *nodeSettings) error {
+	cfg, err := fileparse.ReadConfig(env)
+	s.fileParser = cfg
 	return err
 }
 

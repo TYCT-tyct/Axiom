@@ -18,7 +18,8 @@ func TestUnsupportedPluginsAreRejectedBeforeAdmission(t *testing.T) {
 	for _, members := range []string{
 		`"plugins":[{"id":"unknown"}]`,
 		`"plugins":[{"id":"web"}]`,
-		`"plugins":[{"id":"file-parser"}]`,
+		`"plugins":[{"id":"file-parser","pdf":{"engine":"mistral-ocr"}}]`,
+		`"plugins":[{"id":"file-parser","pdf":{"engine":"tika"}}]`,
 		`"transforms":["unknown"]`,
 		`"plugins":[{"id":"response-healing","unknown":true}]`,
 	} {
