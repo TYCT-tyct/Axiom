@@ -117,7 +117,7 @@ type batchSources struct {
 	balance LockBalanceRow
 	now     time.Time   // the database's clock, whole, for plan expiry
 	day     time.Time   // now's UTC day, for the counters' budget windows
-	hasPlan bool        // whether the account has a plan window in force, read with the balance
+	hasPlan bool        // whether a plan is in force, read after the balance lock
 	plan    *planWindow // the account's subscription window, nil when no plan may fund a request
 	found   map[string]fallbacks
 	bodies  map[string]string
@@ -131,9 +131,9 @@ func (b *Billing) lockBatch(ctx context.Context, tx pg.Tx, account uuid.UUID, re
 	args := [3]any{batchCurrencies(reqs), account, b.holder}
 	err := tx.Batch(ctx, []pg.Statement{
 		{SQL: readFallbacks, Args: args[:1]},
-		{SQL: lockBalancePlan, Args: args[1:2]},
+		{SQL: lockBalance, Args: args[1:2]},
 		{SQL: fenceHolder, Args: args[2:]},
-		{SQL: now, Args: nil},
+		{SQL: batchClock, Args: args[1:2]},
 	}, func(batch pg.BatchResults) error {
 		read, err := scanFallbacks(batch)
 		if err != nil {
@@ -143,15 +143,15 @@ func (b *Billing) lockBatch(ctx context.Context, tx pg.Tx, account uuid.UUID, re
 			return err
 		}
 		bal := &src.balance
-		if err := batch.QueryRow().Scan(&bal.Balance, &bal.Floor, &bal.Reserved, &bal.Frozen, &src.hasPlan); err != nil {
+		if err := batch.QueryRow().Scan(&bal.Balance, &bal.Floor, &bal.Reserved, &bal.Frozen); err != nil {
 			return balanceErr(err)
 		}
 		var holder uuid.UUID
 		if err := batch.QueryRow().Scan(&holder); err != nil {
 			return fenceErr(err)
 		}
-		if err := batch.QueryRow().Scan(&src.now); err != nil {
-			return fmt.Errorf("billing: read the clock: %w", err)
+		if err := batch.QueryRow().Scan(&src.now, &src.hasPlan); err != nil {
+			return fmt.Errorf("billing: read the clock and plan flag: %w", err)
 		}
 		src.day = src.now.UTC().Truncate(24 * time.Hour) // the counters are UTC days, as ReadUsage makes them
 		return nil

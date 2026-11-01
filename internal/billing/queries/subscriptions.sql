@@ -51,6 +51,12 @@ WHERE id = @id AND state = 'expired' AND closed_at IS NULL;
 -- name: SetCurrentWindow :execrows
 UPDATE billing.subscriptions SET current_seq = @seq WHERE id = @id AND state = 'active';
 
+-- name: BatchClock :one
+-- The database's clock and whether a plan is in force, read after the balance lock so a grant that committed while
+-- admission waited is visible. The lock statement's own snapshot predates that wait.
+SELECT clock_timestamp()::timestamptz AS now,
+    EXISTS (SELECT 1 FROM billing.subscriptions WHERE account_id = @account_id AND state = 'active') AS has_plan;
+
 -- name: AvailablePlan :one
 -- The account's subscription in force with its current window, as admission reads it under the balance row lock.
 SELECT s.id AS subscription_id, s.site_id, s.account_id, s.ends_at AS term_ends, w.seq, w.starts_at AS window_starts,

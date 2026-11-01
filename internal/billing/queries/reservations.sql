@@ -27,15 +27,6 @@ INSERT INTO billing.balances (account_id, site_id, floor) VALUES (@account_id, @
 -- name: LockBalance :one
 SELECT balance, floor, reserved, frozen FROM billing.balances WHERE account_id = @account_id FOR UPDATE;
 
--- name: LockBalancePlan :one
--- The balance row and whether the account has a plan window in force, in one statement. Admission reads the plan only
--- when the flag is true, so a wallet-only account pays no second plan query.
-SELECT b.balance, b.floor, b.reserved, b.frozen,
-    EXISTS (SELECT 1 FROM billing.subscriptions s
-        JOIN billing.subscription_windows w ON w.subscription_id = s.id AND w.seq = s.current_seq
-        WHERE s.account_id = b.account_id AND s.state = 'active')::boolean AS has_plan
-FROM billing.balances b WHERE b.account_id = @account_id FOR UPDATE OF b;
-
 -- Run after LockBalance, so it starts after the lock and its snapshot holds every change committed before it.
 -- Counters are kept per UTC day; a limit counts the days of its window that holds day, its UTC day, week or month,
 -- or every day for a limit that never resets, so changing how often a limit resets counts all that the new window

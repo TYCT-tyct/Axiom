@@ -112,6 +112,25 @@ func (q *Queries) AvailablePlan(ctx context.Context, db DBTX, accountID uuid.UUI
 	return i, err
 }
 
+const batchClock = `-- name: BatchClock :one
+SELECT clock_timestamp()::timestamptz AS now,
+    EXISTS (SELECT 1 FROM billing.subscriptions WHERE account_id = $1 AND state = 'active') AS has_plan
+`
+
+type BatchClockRow struct {
+	Now     time.Time
+	HasPlan bool
+}
+
+// The database's clock and whether a plan is in force, read after the balance lock so a grant that committed while
+// admission waited is visible. The lock statement's own snapshot predates that wait.
+func (q *Queries) BatchClock(ctx context.Context, db DBTX, accountID uuid.UUID) (BatchClockRow, error) {
+	row := db.QueryRow(ctx, batchClock, accountID)
+	var i BatchClockRow
+	err := row.Scan(&i.Now, &i.HasPlan)
+	return i, err
+}
+
 const chargeWindowUsed = `-- name: ChargeWindowUsed :execrows
 UPDATE billing.subscription_windows SET used = used + $1
 WHERE subscription_id = $2 AND seq = $3 AND used + $1 >= 0 AND used + $1 <= quota
