@@ -234,9 +234,10 @@ function readStripeSecrets(
   if (!secretKey || !webhook) {
     return null;
   }
+  // Both required secrets are non-empty past the guard, so only the rotating one needs a condition.
   return {
-    ...(secretKey ? { secret_key: secretKey } : {}),
-    ...(webhook ? { webhook_secret: webhook } : {}),
+    secret_key: secretKey,
+    webhook_secret: webhook,
     ...(oldWebhook ? { old_webhook_secret: oldWebhook } : {}),
   };
 }
