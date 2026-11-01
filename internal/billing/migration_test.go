@@ -14,7 +14,7 @@ func TestSubscriptionMigrationReruns(t *testing.T) {
 	t.Parallel()
 
 	db := pgtest.New(t, Migrations())
-	raw, err := migrations.ReadFile("migrations/00034_subscriptions.sql")
+	raw, err := migrations.ReadFile("migrations/00035_subscriptions.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

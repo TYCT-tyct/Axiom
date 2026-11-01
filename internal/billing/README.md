@@ -238,7 +238,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 ## 订阅套餐
 
-[计费的「订阅套餐」](../../docs/domains/billing.md#订阅套餐)的实现。迁移 `migrations/00034_subscriptions.sql`（`NO TRANSACTION`，四张表、预留的三列和两个加宽的检查；对象都带 `IF NOT EXISTS`，策略先 `DROP POLICY IF EXISTS`，部分成功后重跑可恢复），查询 `queries/subscriptions.sql`，代码 `subscription.go`（套餐目录与读取）、`subscription_grant.go`（发放与续期）、`subscription_lifecycle.go`（窗口推进、到期作废、周期任务）、`subscription_fund.go`（窗口的预留与结算），`reserve.go`、`batch_reserve.go`、`settle.go`、`settle_price.go`、`settle_batch.go`、`cleanup.go`、`correct.go` 里的套餐分支。
+[计费的「订阅套餐」](../../docs/domains/billing.md#订阅套餐)的实现。迁移 `migrations/00035_subscriptions.sql`（`NO TRANSACTION`，四张表、预留的三列和两个加宽的检查；对象都带 `IF NOT EXISTS`，策略先 `DROP POLICY IF EXISTS`，部分成功后重跑可恢复），查询 `queries/subscriptions.sql`，代码 `subscription.go`（套餐目录与读取）、`subscription_grant.go`（发放与续期）、`subscription_lifecycle.go`（窗口推进、到期作废、周期任务）、`subscription_fund.go`（窗口的预留与结算），`reserve.go`、`batch_reserve.go`、`settle.go`、`settle_price.go`、`settle_batch.go`、`cleanup.go`、`correct.go` 里的套餐分支。
 
 - **接口**：`CreatePlan`/`UpdatePlan`/`ReadPlan`/`Plans` 是套餐目录（管理员数据，按站点，`rev` 比较后写）；`CreditSubscription(ctx, tx, SubscriptionGrant)` 发放或续期，`tx` 必须是平台范围；`Subscriptions(ctx, tx, account, max)` 是控制台和管理页的读取；`RegisterSubscriptions` 注册队列任务 `billing.subscription_windows`。`Hold.Funding`/`Subscription`/`WindowSeq` 是预留冻结的来源，`planWindowNow` 是准入看到的当前窗口（顺带推进到期的窗口、结束到期的套餐）。
 - **资金选择**：账户有在效套餐时，准入把窗口剩余当作可用额度的上限——窗口罩得住整个请求就整笔走套餐（`funding='plan'`，窗口的在途加这笔），否则整笔走钱包；一笔预留只有一个来源（「资金来源」）。窗口的「已用 + 在途」不超过额度，追加也落在同一个窗口，窗口不够就按余额不足截断。
