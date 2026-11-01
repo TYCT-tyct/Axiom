@@ -27,6 +27,10 @@ type Config struct {
 	// release that opens the image, audio and speech endpoints, after the fleet runs this one, turns this on
 	// (README.md「新增计费项与滚动升级」).
 	CountedItems bool
+	// RequestPrices allows publishing the per-request item. It has its own switch because the release that first read
+	// request prices is not the release that opened counted items; the same rolling-upgrade rule applies: keep it off
+	// until every node runs a release that reads "request" (README.md「新增计费项与滚动升级」).
+	RequestPrices bool
 }
 
 // ErrStale is what Current returns when the snapshot is missing, or the database has not confirmed it for longer than
@@ -37,6 +41,10 @@ var ErrStale = errors.New("the catalog snapshot is missing or stale")
 // character while Config.CountedItems is off: a node running an older release cannot parse that name and would drop the
 // whole snapshot.
 var ErrCountedItems = errors.New("catalog: prices for counted items wait until every node reads them")
+
+// ErrRequestPrices is what a publish or a source switch returns for a per-request price while Config.RequestPrices is
+// off: an older release's parser rejects the name and would drop the whole snapshot.
+var ErrRequestPrices = errors.New("catalog: request prices wait until every node reads them")
 
 // Catalog holds the node's snapshot and runs the admin operations. The platform scope is given by cmd/axiom.
 type Catalog struct {

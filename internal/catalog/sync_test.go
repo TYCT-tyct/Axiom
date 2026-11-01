@@ -212,6 +212,40 @@ func TestSyncHoldsCountedPrices(t *testing.T) {
 	}
 }
 
+// TestSyncHoldsRequestPrices: a request price is held while nodes that cannot read the name may still load the
+// snapshot, even though the same schedule passes the listing gate for its token items. The request item has its own
+// switch, so opening counted items is not enough.
+func TestSyncHoldsRequestPrices(t *testing.T) {
+	t.Parallel()
+	s := newStore(t)
+	id := s.follow("openai/req@20250101", catalog.VersionDated, catalog.SourceOpenRouter, xSpec, xCurrent,
+		"openai/req", "req-2025")
+	data := catalog.Fetched{Source: catalog.SourceOpenRouter, At: time.Now().Add(time.Second), Body: []byte(`{"data":[{
+		"id":"req-2025","canonical_slug":"openai/req@20250101","architecture":{"output_modalities":["text"]},
+		"pricing":{"prompt":"0.000001","completion":"0.000002","input_cache_read":"0.0000001","request":"1"}}]}`)}
+	report, err := s.c.SyncDataset(t.Context(), data, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := report.Results[0]; r.Outcome != catalog.OutcomeHeld || !strings.Contains(r.Reason, "request prices") {
+		t.Fatalf("result %+v, want held until every node reads request prices", r)
+	}
+	if s.priceCount(id) != 1 {
+		t.Error("a held model got a price")
+	}
+	c, err := catalog.Open(s.db, platformScope, catalog.Config{RequestPrices: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err = c.SyncDataset(t.Context(), data, true)
+	if err != nil || report.Results[0].Outcome != catalog.OutcomePublished {
+		t.Fatalf("round with RequestPrices on: %+v, %v", report, err)
+	}
+	if got, want := s.usd(id), `{"currency":"USD","rates":{"cache_read":"0.0000001","input":"0.000001","output":"0.000002","request":"1"},"v":1}`; got != want {
+		t.Errorf("schedule %s, want %s", got, want)
+	}
+}
+
 // TestSyncHoldKeepsTheCandidate: what is held for a person to approve is the schedule they would publish.
 func TestSyncHoldKeepsTheCandidate(t *testing.T) {
 	t.Parallel()
