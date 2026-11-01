@@ -132,6 +132,36 @@ test.describe("permissions", () => {
 });
 
 test.describe("the four states of a view of data", () => {
+  // A page area that is waiting still has a level-one heading: the gate scenes wait for the page to render, and a
+  // heading that disappears while the session, the page's chunk or its data is on the way makes a working page look
+  // like one that never rendered (#363). The requests are held until the heading is read, so this needs no sleep.
+  for (const { case: waiting, pattern } of [
+    { case: "session", pattern: "**/api/admin/v1/session" },
+    { case: "page chunk", pattern: "**/assets/model-*.js" },
+    { case: "page data", pattern: "**/api/admin/v1/models/*" },
+  ] as const) {
+    test(`a page waiting for its ${waiting} still has a level-one heading`, async ({ page }) => {
+      const state = await mockAdmin(page);
+      signedInAs(state, "mfa");
+      let release = () => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route(pattern, async (route) => {
+        await held;
+        await route.fallback();
+      });
+      const model = state.models[0];
+      if (!model) {
+        throw new Error("the mock has no model");
+      }
+      await page.goto(`/models/${model.id}`);
+      await expect(page.getByRole("heading", { level: 1 })).toHaveText(words("state.loading"));
+      release();
+      await expect(h1(page, model.slug)).toBeVisible();
+    });
+  }
+
   test("loading, empty and failing lists say what to do", async ({ page }) => {
     const state = await mockAdmin(page, "empty");
     signedInAs(state, "mfa");

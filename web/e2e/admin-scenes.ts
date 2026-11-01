@@ -4,6 +4,7 @@ import { uuid } from "./admin-data.ts";
 import { adminUrl } from "./apps.ts";
 import type { MockData } from "./mock.ts";
 import { signedInAs } from "./mock-auth.ts";
+import { pageHeading } from "./page-heading.ts";
 import { type Scene, type Suite, dialogScene as scene } from "./scene.ts";
 import { words } from "./words.ts";
 
@@ -13,7 +14,7 @@ export const acct = (n: number) => `acct_${String(n).padStart(26, "0")}`;
 
 async function goto(page: Page, path: string) {
   await page.goto(adminUrl(path));
-  await page.getByRole("heading", { level: 1 }).waitFor();
+  await pageHeading(page);
 }
 
 const press = (page: Page, name: string, nth = 0) =>

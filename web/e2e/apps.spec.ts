@@ -5,6 +5,7 @@ import { apps } from "./apps.ts";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole } from "./console-api.ts";
 import { signedInAs } from "./mock-auth.ts";
+import { pageHeading } from "./page-heading.ts";
 
 for (const app of apps) {
   test(`the ${app.name} works under the content security policy`, async ({ page }) => {
@@ -17,7 +18,7 @@ for (const app of apps) {
     const policy = response?.headers()["content-security-policy"];
     expect(policy).toBe(contentSecurityPolicy);
     expect(policy).not.toContain("unsafe-");
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await pageHeading(page);
     expect(errors).toEqual([]);
   });
 

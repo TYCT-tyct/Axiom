@@ -8,6 +8,7 @@ import { adminUrl } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { consoleSuite } from "./console-scenes.ts";
 import { signedInAs } from "./mock-auth.ts";
+import { pageHeading } from "./page-heading.ts";
 import type { Scene, Suite } from "./scene.ts";
 import { words } from "./words.ts";
 
@@ -345,7 +346,7 @@ test.describe("long list", () => {
       return { ...user, id: `user_${digits}`, account_id: `acct_${digits}`, email: `user${n}@example.com` };
     });
     await page.goto(adminUrl("users"));
-    await page.getByRole("heading", { level: 1 }).waitFor();
+    await pageHeading(page);
     await loadRows(page, page.getByRole("row"), 1000);
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(10_000);
     const outcome = await scroll(page);
