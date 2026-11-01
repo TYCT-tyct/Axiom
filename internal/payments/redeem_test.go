@@ -373,7 +373,7 @@ func TestRedeemConcurrentOneCode(t *testing.T) {
 func TestRedeemExpiryAcrossTheLock(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	expires := time.Now().Add(800 * time.Millisecond)
+	expires := time.Now().Add(time.Hour)
 	codes := w.issue(100, 1, &expires)
 	locked := make(chan struct{})
 	release := make(chan struct{})
@@ -394,13 +394,26 @@ func TestRedeemExpiryAcrossTheLock(t *testing.T) {
 		_, err := w.redeem(codes[0].Code, "late")
 		done <- err
 	}()
-	// It is waiting for the lock while the code is still valid.
-	select {
-	case err := <-done:
-		t.Fatalf("the redemption did not wait for the lock: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	// The database reports the redemption waiting for the account's advisory lock while the code is still valid; the
+	// interleaving is observed, not inferred from how long a sleep lasted.
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		select {
+		case err := <-done:
+			t.Fatalf("the redemption did not wait for the lock: %v", err)
+		default:
+		}
+		if w.count(w.p.platform, `SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+			WHERE l.locktype = 'advisory' AND NOT l.granted AND a.datname = current_database()
+			AND a.wait_event_type = 'Lock' AND a.wait_event = 'advisory'`) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the redemption never asked for the account's lock")
+		}
+		time.Sleep(time.Millisecond)
 	}
-	time.Sleep(time.Until(expires) + 50*time.Millisecond)
+	// The code expires while the redemption waits; its state is set directly rather than by waiting out a short expiry.
+	w.exec(fmt.Sprintf("UPDATE payments.redeem_codes SET expires_at = now() - interval '1 second' WHERE id = '%s'", uuid.UUID(codes[0].ID)))
 	close(release)
 	if err := <-held; err != nil {
 		t.Fatal(err)
