@@ -63,13 +63,27 @@ func TestAdminCallsPlansUseIndexOrder(t *testing.T) {
 		lines := adminPlanLines(t, db, since, until, account)
 
 		plan := strings.Join(lines, "\n")
-		if strings.Contains(plan, "Sort") || strings.Contains(plan, "Bitmap") || strings.Contains(plan, "Seq Scan") || !strings.Contains(plan, "Index Scan") {
+		if hasSortNode(plan) || strings.Contains(plan, "Bitmap") || strings.Contains(plan, "Seq Scan") || !strings.Contains(plan, "Index Scan") {
 			t.Fatalf("account %q:\n%s", account, plan)
 		}
 		if n := buffers(t, plan); n > 800 {
 			t.Fatalf("account %q reads %d buffers:\n%s", account, n, plan)
 		}
 	}
+}
+
+// hasSortNode reports a Sort plan node. A Merge Append's "Sort Key:" line is not a sort node: it says how the append
+// merges partitions already read in index order, which is what this test requires.
+func hasSortNode(plan string) bool {
+	for line := range strings.SplitSeq(plan, "\n") {
+		fields := strings.Fields(line)
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "Sort" && strings.HasPrefix(fields[i+1], "(cost=") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func adminPageIDs(t *testing.T, db *pg.DB, scope pg.Scope, q AdminQuery) []uuid.UUID {

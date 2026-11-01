@@ -93,7 +93,7 @@ func readQuantizations(_ *routing.Override, name string, value []byte) error {
 		return mismatch(name, "a list of names")
 	}
 	if len(names) > 0 {
-		return invalid("provider." + name + " is not supported: supplier group records and catalog specs carry no quantization level.")
+		return invalid("provider." + name + " is not supported: no endpoint records a quantization level; catalog specs and the supplier model projection carry none, and a missing record cannot stand for a requested level.")
 	}
 	return nil
 }
@@ -176,7 +176,7 @@ func readSortMember(o *routing.Override, name, member string, value []byte, by *
 		o.SortGlobal = partition == "none"
 	default:
 		if member == "percentile" {
-			return invalid("provider." + name + ".percentile is not supported: sort orders by by and partition only, and quality has no percentile measures.")
+			return invalid("provider." + name + ".percentile is not supported: a sort object takes by and partition; percentile cutoffs belong to preferred_min_throughput and preferred_max_latency, which quality cannot compare without rolling five-minute p50/p75/p90/p99 samples.")
 		}
 		return unsupported(name + "." + member)
 	}
@@ -214,7 +214,7 @@ func jsonNumber(name string, value []byte, hi float64) (float64, error) {
 	var v float64
 	if err := jsonx.Unmarshal(value, &v); err != nil || v < 0 || v > hi {
 		if trimmed := bytes.TrimSpace(value); len(trimmed) > 0 && trimmed[0] == '{' {
-			return 0, invalid("provider." + name + " percentile objects are not supported: quality measures an EWMA of latency and throughput, not five-minute p50/p75/p90/p99.")
+			return 0, invalid("provider." + name + " percentile objects are not supported: quality keeps one EWMA latency and throughput per endpoint (at least 5 samples, fresh for 30 minutes), not the rolling five-minute p50/p75/p90/p99 samples a cutoff needs.")
 		}
 		return 0, mismatch(name, "a number")
 	}
@@ -247,8 +247,11 @@ func readMaxPrice(o *routing.Override, name string, value []byte) error {
 		}
 		item, ok := maxPriceItems[member]
 		if !ok {
-			if member == "request" || member == "image" {
-				return invalid("provider." + name + "." + member + " is not supported: the price schedule has no per-request or per-image item; it prices tokens and per-use tools only.")
+			switch member {
+			case "request":
+				return invalid("provider." + name + ".request is not supported: the published price version has no per-request item; it prices tokens and per-use server tools only, and OpenRouter's pricing.request is not imported.")
+			case "image":
+				return invalid("provider." + name + ".image is not supported: the price version has per-piece image items, but OpenRouter's single image cap does not say whether it covers input images, generated images or token-priced images, and no endpoint reports image pieces; the item to compare is undecided.")
 			}
 			return unsupported(name + "." + member)
 		}
