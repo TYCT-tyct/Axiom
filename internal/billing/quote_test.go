@@ -102,6 +102,7 @@ func TestQuoteEntry(t *testing.T) {
 		{"model default of 3 searches: 80 + 3×1000 at 4 + 300 + 500 at 20", tools(text, ServerTool{Item: webSearch}), false, "22380"},
 		{"the request's 1 search: 80 + 1000 at 4 + 100 + 500 at 20", tools(text, ServerTool{Item: webSearch, MaxUses: 1}), false, "14180"},
 		{"a flat search adds only its fee: 80 + 100 + 500 at 10", tools(text, ServerTool{Item: webSearch, MaxUses: 1, Flat: true}), false, "5180"},
+		{"two flat parses: 80 + 2×100 + 500 at 10", tools(text, ServerTool{Item: webSearch, MaxUses: 2, Flat: true}), false, "5280"},
 		{"compaction doubles 1 sampling: 80 + 1000 at 4 + 500 at 20", Demand{TextBytes: 80, Compaction: true}, false, "14080"},
 		{
 			"compaction doubles 2 samplings: 80 + 3×1000 at 4 + 100 + 500 at 20",

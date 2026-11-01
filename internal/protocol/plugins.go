@@ -41,42 +41,74 @@ func (s *scanner) plugins() (err error) {
 }
 
 func (s *scanner) plugin() error {
-	var (
-		id      string
-		enabled = true
-		web     WebPlugin
-		option  string // the first option written, for the error an id other than web gets
-	)
+	p := pluginFields{enabled: true}
 	if s.dec.PeekKind() != '{' {
 		return s.mismatch("a plugin object")
 	}
-	err := s.eachMember(func() error {
-		name := string(s.name)
-		switch name {
-		case "id":
-			v, err := s.str()
-			if len(v) > 64 {
-				return fmt.Errorf("plugin id is not supported")
-			}
-			id = string(v)
-			return err
-		case "enabled":
-			k, err := s.flag()
-			enabled = k != 'f'
-			return err
-		}
-		if option == "" {
-			option = name
-		}
-		return s.webOption(&web, name)
-	})
-	if err != nil {
+	if err := s.eachMember(func() error { return p.member(s) }); err != nil {
 		return err
 	}
-	if id != "web" && option != "" {
-		return fmt.Errorf("plugin option %q is not supported", option)
+	if p.id != "web" && p.webOption != "" {
+		return fmt.Errorf("plugin option %q is not supported", p.webOption)
 	}
-	return s.applyPlugin(id, enabled, &web)
+	if p.id != "file-parser" && p.fileOption != "" {
+		return fmt.Errorf("plugin option %q is not supported", p.fileOption)
+	}
+	return s.applyPlugin(p.id, p.enabled, &p.web, &p.file)
+}
+
+// pluginFields is one plugin object as it is read: the id, whether it is enabled, and the options of each plugin that
+// has any. An option written for an id that does not read it is an error, so it is remembered per plugin.
+type pluginFields struct {
+	id, webOption, fileOption string
+	enabled                   bool
+	web                       WebPlugin
+	file                      FileParser
+}
+
+// member reads one member of the plugin object.
+func (p *pluginFields) member(s *scanner) error {
+	name := string(s.name)
+	switch name {
+	case "id":
+		v, err := s.str()
+		if len(v) > 64 {
+			return fmt.Errorf("plugin id is not supported")
+		}
+		p.id = string(v)
+		return err
+	case "enabled":
+		k, err := s.flag()
+		p.enabled = k != 'f'
+		return err
+	case "pdf":
+		if p.fileOption == "" {
+			p.fileOption = name
+		}
+		return s.pdfOption(&p.file)
+	}
+	if p.webOption == "" {
+		p.webOption = name
+	}
+	return s.webOption(&p.web, name)
+}
+
+// pdfOption reads the file-parser plugin's pdf object, where OpenRouter names the engine. Another member of it is a
+// value this deployment cannot honour, so it is refused rather than read past.
+func (s *scanner) pdfOption(file *FileParser) error {
+	if s.dec.PeekKind() == 'n' {
+		return s.token()
+	}
+	return s.eachMember(func() error {
+		if string(s.name) != "engine" {
+			return fmt.Errorf("plugin option %.64q is not supported", s.name)
+		}
+		v, err := s.str()
+		if err != nil {
+			return err
+		}
+		return file.setEngine(string(v))
+	})
 }
 
 // webOption reads one of the web plugin's options. It is apart from plugin so only a web plugin is read into WebPlugin.
@@ -142,30 +174,50 @@ func (s *scanner) domains(dst *[]string) error {
 	})
 }
 
-func (s *scanner) applyPlugin(id string, enabled bool, web *WebPlugin) error {
+func (s *scanner) applyPlugin(id string, enabled bool, web *WebPlugin, file *FileParser) error {
 	switch id {
 	case "web":
 		return s.applyWeb(id, enabled, web)
 	case "response-healing", "context-compression":
-		if enabled && s.r.Format != Chat {
-			return fmt.Errorf("plugin %q is not supported for this format", id)
-		}
-		if id == "response-healing" {
-			s.r.ResponseHealing = enabled
-			return nil
-		}
-		s.compressionSet = true
-		s.r.Compression = CompressionDisabled
-		if enabled {
-			s.r.Compression = CompressionEnabled
-		}
+		return s.applyLocal(id, enabled)
 	case "file-parser":
-		if enabled {
-			return fmt.Errorf("plugin %q is not supported: external services are not configured", id)
-		}
+		return s.applyFile(id, enabled, file)
 	default:
 		return fmt.Errorf("plugin %q is not supported", id)
 	}
+}
+
+// applyLocal records the plugins the gateway runs itself, whose state is a flag: response healing on the aggregate and
+// context compression in read.
+func (s *scanner) applyLocal(id string, enabled bool) error {
+	if enabled && s.r.Format != Chat {
+		return fmt.Errorf("plugin %q is not supported for this format", id)
+	}
+	if id == "response-healing" {
+		s.r.ResponseHealing = enabled
+		return nil
+	}
+	s.compressionSet = true
+	s.r.Compression = CompressionDisabled
+	if enabled {
+		s.r.Compression = CompressionEnabled
+	}
+	return nil
+}
+
+// applyFile records a file parser, which every format with content parts carries. No engine named means native: the
+// file goes to the endpoint, and the request keeps the shape it had before the plugin existed.
+func (s *scanner) applyFile(id string, enabled bool, file *FileParser) error {
+	if !enabled {
+		return nil
+	}
+	if s.r.Format == Completions || s.r.Format.Direct() {
+		return fmt.Errorf("plugin %q is not supported for this format", id)
+	}
+	if file.Engine == "" {
+		file.Engine = FileEngineNative
+	}
+	s.r.File = file
 	return nil
 }
 

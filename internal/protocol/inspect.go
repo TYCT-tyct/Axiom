@@ -76,6 +76,13 @@ type Request struct {
 	// SearchBytes is what the injected search results may add to TextBytes: the admission and the route reserve input
 	// for it before the search runs, because the results are not in the body they read.
 	SearchBytes int64
+	// File is the file-parser plugin the request enabled, nil when it asked for none. The gateway replaces the files
+	// with parsed text before admission when the engine is not native, and leaves them to an endpoint that accepts
+	// documents otherwise.
+	File *FileParser
+	// FileParses is how many files the gateway parsed for this request before admission: each is a per-use charge,
+	// which the admission reserves.
+	FileParses int64
 	// MessageCount is Chat conversation length for the vendor message cap.
 	MessageCount int64
 	// Previous is Responses' previous_response_id. The stored history it names is input too.

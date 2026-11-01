@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"net/url"
+	"strings"
 	"time"
 	"uuid"
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
+	"axiom/internal/fileparse"
 	"axiom/internal/payments"
 	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
@@ -216,6 +219,147 @@ func (a adminAPI) SetMailSettings(ctx context.Context, r adminapi.SetMailSetting
 		return nil, err
 	}
 	return adminapi.SetMailSettings200JSONResponse{Body: body, Headers: adminapi.SetMailSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+func (a adminAPI) saveFileParser(ctx context.Context, tx pg.Tx, s fileparse.Settings, reason string) (adminapi.FileParserSettings, error) {
+	cfg, err := fileparse.SaveConfig(ctx, tx, a.keys, actor(ctx), s, a.fileParser, reason)
+	if err != nil {
+		return adminapi.FileParserSettings{}, err
+	}
+	return fileParserSettingsBody(cfg, "database", new(true))
+}
+
+// setBackendSettings runs one backend's save: the URL must pass the egress check, credentials never enter the persisted,
+// unkeyed idempotency fingerprint, and the module's invalid-configuration error becomes the field error its message names.
+func setBackendSettings[T any](ctx context.Context, db *pg.DB, operation, rawURL string, request any, key string,
+	check func(context.Context, string) error, invalid error, message string, save func(pg.Tx) (T, error),
+) (response T, replayed bool, err error) {
+	return idempotently(ctx, db, operation, key, request, func(tx pg.Tx) (T, error) {
+		if rawURL != "" {
+			if err := check(ctx, rawURL); err != nil {
+				return response, err
+			}
+		}
+		response, err := save(tx)
+		if errors.Is(err, invalid) {
+			return response, invalidField("/settings", message)
+		}
+		return response, err
+	})
+}
+
+// testBackendSettings runs one backend's connectivity test and records it: the rate limit is checked first, the test
+// runs outside the request's cancellation, and a replayed key does not call the backend again.
+func testBackendSettings[T any](ctx context.Context, a adminAPI, operation, kind, action, key, reason string,
+	request any, lookup func(context.Context) (T, error), test func(context.Context, T) string,
+) (adminapi.ConfigTestResult, bool, error) {
+	if err := a.tests.allow(uuid.UUID(callOf(ctx).principal.SessionID())); err != nil {
+		return adminapi.ConfigTestResult{}, false, err
+	}
+	cfg, err := lookup(ctx)
+	if err != nil {
+		return adminapi.ConfigTestResult{}, false, err
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	return idempotently(ctx, a.db, operation, key, request, func(tx pg.Tx) (adminapi.ConfigTestResult, error) {
+		result := test(ctx, cfg)
+		err := audit.Record(ctx, tx, audit.Event{
+			Actor: actor(ctx), Action: action, Reason: reason,
+			Target: audit.Target{Module: "platform", Kind: kind, ID: uuid.Nil().String()}, Detail: map[string]any{"status": result},
+		})
+		body, e := adminJSON[adminapi.ConfigTestResult](map[string]string{"status": result})
+		if err != nil {
+			return body, err
+		}
+		return body, e
+	})
+}
+
+// checkFileParserURL refuses a backend URL this node cannot use: not an http(s) base URL, or a host the egress rules
+// keep off the public internet.
+func (a adminAPI) checkFileParserURL(ctx context.Context, raw string) error {
+	return a.checkBackendURL(ctx, raw, "the file parser backend", func(v, k string) (string, error) {
+		cfg, err := fileparse.Parse(v, k)
+		return cfg.URL, err
+	})
+}
+
+func (a adminAPI) checkBackendURL(ctx context.Context, raw, what string, parse func(string, string) (string, error)) error {
+	base, err := parse(raw, "")
+	if err != nil {
+		return invalidField("/settings/url", what+" must be an http(s) base URL with a host and no credentials, query or fragment")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	host, err := url.Parse(base)
+	if err != nil {
+		return invalidField("/settings/url", what+" must be an http(s) base URL with a host")
+	}
+	if err := a.exit.Check(checkCtx, host.Hostname()); err != nil {
+		return invalidField("/settings/url", what+" could not be validated as public")
+	}
+	return nil
+}
+
+func fileParserSettingsBody(cfg fileparse.Config, source string, restart *bool) (adminapi.FileParserSettings, error) {
+	return adminJSON[adminapi.FileParserSettings](map[string]any{"url": cfg.URL, "has_key": cfg.Key.Reveal() != "", "source": source, "restart_required": restart})
+}
+
+func (a adminAPI) GetFileParserSettings(ctx context.Context, _ adminapi.GetFileParserSettingsRequestObject) (adminapi.GetFileParserSettingsResponseObject, error) {
+	cfg, found, err := a.savedFileParser(ctx)
+	if err != nil {
+		return nil, err
+	}
+	source := "environment"
+	if found {
+		source = "database"
+	}
+	body, err := fileParserSettingsBody(cfg, source, nil)
+	return adminapi.GetFileParserSettings200JSONResponse(body), err
+}
+
+func (a adminAPI) savedFileParser(ctx context.Context) (cfg fileparse.Config, found bool, err error) {
+	cfg = a.fileParser
+	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
+		var stored fileparse.Config
+		stored, found, err = fileparse.StoredConfig(ctx, tx, a.keys)
+		if found {
+			cfg = stored
+		}
+		return err
+	})
+	return cfg, found, err
+}
+
+func (a adminAPI) SetFileParserSettings(ctx context.Context, r adminapi.SetFileParserSettingsRequestObject) (adminapi.SetFileParserSettingsResponseObject, error) {
+	v := r.Body.Settings
+	s := fileparse.Settings{URL: strings.TrimSpace(textValue(v.Url)), Key: v.Key}
+	identity := []any{s.URL, r.Body.Reason, s.Key != nil}
+	body, replayed, err := setBackendSettings(ctx, a.db, "setFileParserSettings", s.URL, identity, r.Params.IdempotencyKey,
+		a.checkFileParserURL, fileparse.ErrInvalidConfig, "invalid file parser backend configuration; verify the URL and reenter the key after a URL change",
+		func(tx pg.Tx) (adminapi.FileParserSettings, error) {
+			return a.saveFileParser(ctx, tx, s, r.Body.Reason)
+		})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetFileParserSettings200JSONResponse{Body: body, Headers: adminapi.SetFileParserSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+func (a adminAPI) TestFileParserSettings(ctx context.Context, r adminapi.TestFileParserSettingsRequestObject) (adminapi.TestFileParserSettingsResponseObject, error) {
+	body, replayed, err := testBackendSettings(ctx, a, "testFileParserSettings", "file_parser_config", "file_parser_config.test",
+		r.Params.IdempotencyKey, r.Body.Reason, r.Body, func(ctx context.Context) (fileparse.Config, error) {
+			cfg, _, err := a.savedFileParser(ctx)
+			return cfg, err
+		},
+		func(ctx context.Context, cfg fileparse.Config) string {
+			return fileparse.TestConfig(ctx, cfg, a.exit, a.logger)
+		})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.TestFileParserSettings200JSONResponse{Body: body, Headers: adminapi.TestFileParserSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
 func (a adminAPI) TestMailSettings(ctx context.Context, r adminapi.TestMailSettingsRequestObject) (adminapi.TestMailSettingsResponseObject, error) {

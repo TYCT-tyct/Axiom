@@ -41,7 +41,7 @@ func (r *rig) seedCatalog() {
 
 // model lists a model with its slug as a public name, and the other names given, at the basic spec and the cheap price.
 func (r *rig) model(slug string, names ...string) catalog.ModelID {
-	return r.listed(slug, basicSpec, r.price, names...)
+	return r.listed(slug, cmpOr(r.spec, basicSpec), r.price, names...)
 }
 
 // listed is model with its own spec and price schedule, which is also the sale price the OpenRouter list shows. The

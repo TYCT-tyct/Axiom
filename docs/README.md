@@ -34,6 +34,7 @@
 | 路由在调用路径上的代码接口：会话标识、回退路线、换不换端点 | [internal/routing/README.md](../internal/routing/README.md) | 实现或调用 `routing` 的路由接口之前 |
 | 接入与对外接口：路径与格式、转发规则、用量与费用、错误、路由参数、对接接口、会话状态、版本 | [domains/gateway.md](domains/gateway.md) | 改动 `gateway` 模块、对外接口或兼容行为之前 |
 | 联网搜索：一次查询、SearXNG 适配器、配置与覆盖、结果上限、失败与测试 | [internal/websearch/README.md](../internal/websearch/README.md) | 改 `web` 插件、换搜索后端或部署 SearXNG 之前 |
+| 文件解析：一次转换、Docling serve 适配器、配置与覆盖、大小上限、失败与测试 | [internal/fileparse/README.md](../internal/fileparse/README.md) | 改 `file-parser` 插件、换解析后端或部署 Docling 之前 |
 | 一次调用在代码里怎么走：不变量、步骤、所有权、期限、并发与背压、故障矩阵、性能估算、PR 拆分 | [internal/gateway/README.md](../internal/gateway/README.md) | 实现或改动调用路径上任何模块之前 |
 | 运营：分工、agent 的组成与模型来源、运营接口、风险分级与审批、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
 | 记录与告警：记录范围、分类标签、分层存储、保留、受控导出、监控告警、通知渠道 | [domains/observability.md](domains/observability.md) | 改动 `observability` 模块、记录或告警之前 |

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"axiom/internal/platform/secret"
 
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/idem"
 )
 
 func TestAdminSystemSettings(t *testing.T) {
@@ -209,6 +211,68 @@ func TestSMTPDestinationBoundary(t *testing.T) {
 	requestID := rec.Header().Get("X-Request-ID")
 	if requestID == "" || !strings.Contains(logs, "destination denied") || !strings.Contains(logs, requestID) || strings.Contains(logs, "private-recipient@example.com") {
 		t.Fatal("missing or unsafe SMTP diagnostic")
+	}
+}
+
+// TestAdminFileParserSettings: the backend is saved, read back, kept when the key is omitted, refused when the URL moves
+// with the old key, and its test says when it is disabled. The key never comes back and is never audited.
+func TestAdminFileParserSettings(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	path := "/settings/file-parser"
+	body := `{"settings":{"url":"https://8.8.8.8","key":"parser-test-value"},"reason":"configure"}`
+	rec := f.change(s, http.MethodPut, path, body, newKey())
+	expectAdmin(t, "save parser", rec, 200, "")
+	if strings.Contains(rec.Body.String(), "parser-test-value") {
+		t.Fatal("key in response")
+	}
+	var got adminapi.FileParserSettings
+	decode(t, rec, &got)
+	if got.HasKey == nil || !*got.HasKey || got.RestartRequired == nil || !*got.RestartRequired ||
+		got.Source == nil || *got.Source != "database" {
+		t.Fatalf("missing metadata: %+v", got)
+	}
+	body = strings.Replace(body, `,"key":"parser-test-value"`, "", 1)
+	expectAdmin(t, "retain key", f.change(s, http.MethodPut, path, body, newKey()), 200, "")
+	expectAdmin(t, "destination change", f.change(s, http.MethodPut, path, strings.Replace(body, "8.8.8.8", "8.8.4.4", 1), newKey()), 400, "")
+	rec = f.do(http.MethodGet, path, "", as(s))
+	expectAdmin(t, "read parser", rec, 200, "")
+	if !strings.Contains(rec.Body.String(), "8.8.8.8") || strings.Contains(rec.Body.String(), "parser-test-value") {
+		t.Fatal(rec.Body.String())
+	}
+	if strings.Contains(f.text("SELECT detail::text FROM platform.audit_log WHERE action='file_parser_config.update' LIMIT 1"), "parser-test-value") {
+		t.Fatal("secret in audit")
+	}
+	expectAdmin(t, "disable", f.change(s, http.MethodPut, path, `{"settings":{"url":""},"reason":"disable"}`, newKey()), 200, "")
+	rec = f.change(s, http.MethodPost, path+"/tests", `{"reason":"probe"}`, newKey())
+	expectAdmin(t, "test disabled", rec, 200, "")
+	if !strings.Contains(rec.Body.String(), "disabled") {
+		t.Fatal(rec.Body.String())
+	}
+}
+
+// TestSearchFingerprintKeepsItsShape: a client retries a save under the same Idempotency-Key after a restart, possibly on
+// another node. The retry is a replay only if the fingerprint covers the same engine list, the reason, and whether a
+// credential came with the body — not the credential itself, and not the key the retry arrives under. A fingerprint
+// that drifted would answer 409 instead of the stored response.
+func TestSearchFingerprintKeepsItsShape(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	body := `{"settings":{"url":"https://8.8.8.8","key":"search-test-value"},"reason":"configure"}`
+	expectAdmin(t, "save", f.change(s, http.MethodPut, "/settings/search", body, newKey()), 200, "")
+	want, err := idem.Fingerprint([]any{"configure", "", "searxng", "searxng", "https://8.8.8.8", true, true, "0", "0", "0", true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.text("SELECT fingerprint::text FROM platform.idempotency WHERE operation='setSearchSettings'"); got != `\x`+hex.EncodeToString(want[:]) {
+		t.Fatalf("fingerprint = %s, want the destination, the reason and the credential's presence", got)
+	}
+	retained := strings.Replace(body, `,"key":"search-test-value"`, "", 1)
+	expectAdmin(t, "retain", f.change(s, http.MethodPut, "/settings/search", retained, newKey()), 200, "")
+	if got := f.text("SELECT count(DISTINCT fingerprint)::text FROM platform.idempotency WHERE operation='setSearchSettings'"); got != "2" {
+		t.Fatalf("dropping the credential left %s fingerprints, want a second", got)
 	}
 }
 

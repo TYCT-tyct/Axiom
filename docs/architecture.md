@@ -50,7 +50,7 @@
 | operations | 运营接口（含 MCP 工具）；风险分级与审批（含 AI 审批）、额度上限、审计的检索与回放；运营 agent 的接入与模型代理；部署与节点管理；权限判断调用 accounts 的授权 | 审批策略 |
 | observability | 调用记录、对话内容的保存与清理、指标、告警、通知渠道 | 调用记录、通知渠道、受控导出 |
 
-另有两块不承载业务规则：`platform` 是基础设施（数据库、加密、日志、审计日志、出站客户端、JSON、配置、遥测、HTTP 服务、前端文件、幂等键、ID 写法；缓存已设计、尚未实现，事件尚未实现）、由 `api/` 生成的接口契约（控制台接口的类型和 `StrictServerInterface` 在 `platform/consoleapi`，由 `cmd/axiom` 实现），以及跨层使用的值类型：金额（最小单位的整数）、单价（精确小数）、被下层引用的实体 ID，只有类型和运算，不放业务规则。术语表里对应的概念归 `platform`：审计日志、租户范围、请求 ID、尝试序号、币种、单价、精确金额、金额；`web` 是前端，包括官网、按站点域名换品牌的用户控制台和管理后台。
+另有两块不承载业务规则：`platform` 是基础设施（数据库、加密、日志、审计日志、出站客户端、JSON、配置、遥测、HTTP 服务、前端文件、幂等键、ID 写法；共享缓存已实现，限流计数、登录前的尝试次数、会话粘性和邮件收件人冷却在多节点间共享，未配置 Valkey 时用进程内实现、不可用时按用途有界地兜底，主备切换尚未实现，能力和降级规则见 [platform/kv 的设计](../internal/platform/kv/README.md)；事件尚未实现）、由 `api/` 生成的接口契约（控制台接口的类型和 `StrictServerInterface` 在 `platform/consoleapi`，由 `cmd/axiom` 实现），以及跨层使用的值类型：金额（最小单位的整数）、单价（精确小数）、被下层引用的实体 ID，只有类型和运算，不放业务规则。术语表里对应的概念归 `platform`：审计日志、租户范围、请求 ID、尝试序号、币种、单价、精确金额、金额；`web` 是前端，包括官网、按站点域名换品牌的用户控制台和管理后台。
 
 ## 模块边界规则
 
@@ -77,6 +77,7 @@
 |---|---|---|
 | `platform` | — | 基础设施和共用值类型，不引用任何模块 |
 | `websearch` | — | 多个搜索后端的适配器（自托管 SearXNG、付费 Firecrawl）及其配置；只依赖 `platform` 的出口、配置和密钥设施 |
+| `fileparse` | — | 自托管的 Docling serve 文档解析适配器；只依赖 `platform` 的出口、配置和密钥设施 |
 | `catalog` | — | 模型和价目表结构是最底层的业务概念 |
 | `accounts` | — | 站点、账户、授权和配置链被所有面向租户的模块使用 |
 | `protocol` | `catalog` | `Request` 用目录的计费项集合和服务等级集合表达请求可能用到什么，累计的用量按目录的计费项表达 |
@@ -86,7 +87,7 @@
 | `routing` | `catalog`、`protocol`、`suppliers`、`quality`、`billing`、`accounts` | 路由快照由模型、端点、属性、价格、预设和配置组成；按请求的调用格式过滤 |
 | `observability` | `catalog`、`protocol`、`accounts` | 调用记录的用量按计费项保存、按租户查看；对话内容按消息去重，要懂调用格式 |
 | `payments` | `billing`、`accounts`、`observability` | 到账在同一个事务里生成付费额度批次；收款渠道是站点配置；拒付申诉要整理该账户的调用记录 |
-| `gateway` | `catalog`、`protocol`、`accounts`、`suppliers`、`quality`、`billing`、`routing`、`observability`、`websearch` | 编排一次调用：认 key、解析、路由、预留、调上游、观测、结算、记录；`web` 插件经 `websearch` 搜索 |
+| `gateway` | `catalog`、`protocol`、`accounts`、`suppliers`、`quality`、`billing`、`routing`、`observability`、`websearch`、`fileparse` | 编排一次调用：认 key、解析、路由、预留、调上游、观测、结算、记录；`web` 插件经 `websearch` 搜索，`file-parser` 的 OCR 引擎经 `fileparse` 解析 |
 | `operations` | `accounts`、`observability`、`gateway` | 授权、通知渠道、节点管理；审批经管理接口的中间层，不引用被审批的模块 |
 
 ## 一次调用怎么走

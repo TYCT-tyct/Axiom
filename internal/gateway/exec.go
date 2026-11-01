@@ -207,6 +207,10 @@ type session struct {
 	searches   int64
 	citations  []protocol.Citation
 	searchHeld int64
+	// parses is how many files the call's parser read before its attempt, charged per use like a search, and files are
+	// the annotations its reply returns so a client can reuse the text instead of the file.
+	parses int64
+	files  []protocol.FileAnnotation
 	// echo is the prompt sizes a legacy completion that echoes repeats at the start of its choices, nil without echo;
 	// echoHeld is the part of the node's budget they hold until the call is over.
 	echo     *protocol.EchoPrompts
@@ -231,6 +235,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 		x: x, w: w, rc: http.NewResponseController(w), c: c, req: r, start: now, currency: c.site.Currency,
 		deadline: now.Add(x.Limits.cfg.MaxCall), logger: x.Logger.With("request_id", c.ID.String()),
 		writeFor: x.Limits.cfg.WriteTimeout, aggregate: !c.Request.Stream && !c.Compact,
+		files: c.files, parses: c.Request.FileParses,
 	}
 }
 
@@ -245,7 +250,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
 	o := billing.Outcome{Attempts: s.ends}
 	if len(o.Attempts) > 0 {
-		addSearchUsage(&o.Attempts[len(o.Attempts)-1], s.searches)
+		addSearchUsage(&o.Attempts[len(o.Attempts)-1], s.searches+s.parses)
 	}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
@@ -271,7 +276,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	case s.aggregate:
 		s.answerAggregate(e, fin, err)
 	case e.done:
-		final := protocol.Final{Pending: err != nil}
+		final := protocol.Final{Pending: err != nil, Files: s.files}
 		if fin != nil {
 			final = *fin
 		}
@@ -336,7 +341,7 @@ func (s *session) rewriteDirect(reply []byte, fin *protocol.Final) ([]byte, prot
 // relay that has not ended yet, which is always the case here. The body is the relay's buffers, so its share of the
 // node's budget stays charged until the call is over (session.live), as the compact reply's is (replyHeld).
 func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
-	final := protocol.Final{Pending: err != nil}
+	final := protocol.Final{Pending: err != nil, Files: s.files}
 	if fin != nil {
 		final = *fin
 	}
@@ -401,7 +406,7 @@ func (s *session) dropReply() {
 func (s *session) final(f billing.Final) *protocol.Final {
 	fin := &protocol.Final{
 		Cost: f.Charged, Currency: s.currency, Estimated: f.Estimated,
-		ServerToolCost: f.ServerToolCost, CacheDiscount: f.CacheDiscount,
+		ServerToolCost: f.ServerToolCost, CacheDiscount: f.CacheDiscount, Files: s.files,
 	}
 	for _, seg := range f.Segments {
 		fin.Usage.Segments = append(fin.Usage.Segments, protocol.Segment{Usage: seg.Usage, Reported: seg.Reported})
