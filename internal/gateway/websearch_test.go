@@ -348,11 +348,15 @@ func TestAutomaticSearchDoesNotFallbackAfterFailure(t *testing.T) {
 		}
 		up.eps[uuid.UUID(e.ID)].script = []scripted{script}
 	}
-	body := strings.Replace(stream("acme/alpha"), `{"model":"acme/alpha"`,
-		`{"model":"acme/alpha","models":["acme/beta"],"plugins":[{"id":"web","engine":"test"}]`, 1)
-	resp, out := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(body))
-	if resp.StatusCode == http.StatusOK {
-		t.Fatalf("the normal fallback answered after the automatic entry failed: %s", out)
+	// A Chat body is required here: the Messages contract rejects the web plugin, so building the test from the
+	// Messages sample would exercise a different request and pass for the wrong reason.
+	body := `{"model":"acme/alpha","models":["acme/beta"],"plugins":[{"id":"web","engine":"test"}],"stream":true,"messages":[{"role":"user","content":"hello"}]}`
+	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, strings.NewReader(body))
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s, want the failed automatic entry's 502", resp.StatusCode, out)
+	}
+	if sends := up.eps[uuid.UUID(r.endpoints["alpha-1"].ID)].sends; sends == 0 {
+		t.Fatal("the automatic entry was never called")
 	}
 	if sends := up.eps[uuid.UUID(r.endpoints["beta-1"].ID)].sends; sends != 0 {
 		t.Fatalf("the normal fallback was called %d times, want none", sends)
