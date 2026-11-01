@@ -65,6 +65,9 @@ func (p *Payments) dispute(ctx context.Context, merchant MerchantID, n Notice) e
 		if err != nil {
 			return fmt.Errorf("payments: lock the dispute: %w", err)
 		}
+		if row.OrderID != o.ID || row.PaymentIntent != d.PaymentIntent {
+			return p.disputeDifference(ctx, tx, merchant, &o, d, "dispute_order")
+		}
 		return p.applyDispute(ctx, tx, o, row, d, created > 0, n.Raw)
 	})
 }
