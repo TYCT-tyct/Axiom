@@ -52,6 +52,15 @@ func (b *budget) give(n int64) {
 // fast reports whether nothing is drawn: a nil budget, or the shared noBudget of a Prepare outside a node.
 func (b *budget) fast() bool { return b == nil || b.m == nil }
 
+// checkBody refuses a request whose body alone cannot fit, before a reader or writer allocates its output.
+func (b *budget) checkBody(n int) error {
+	if !b.fast() && int64(n) > b.m.left.Load() {
+		b.err = ErrMemory
+		return ErrMemory
+	}
+	return nil
+}
+
 // What a decoder of its own holds beyond the values it reads: jsontext's decoder and the bytes.Buffer it reads from,
 // and the scratch a member name or an escaped string is unquoted into. Measured 2026-11-01 at 1.2 KiB for a decoder
 // over a 1 MiB body; the allowance leaves room for the runtime's own buffers.
@@ -81,11 +90,11 @@ func decodeCanonWithin(body []byte, b *budget) (*canon, error) {
 	if b.fast() {
 		return decodeCanon(body)
 	}
-	if err := jsonx.Validate(body); err != nil {
-		return nil, invaliderr(err)
-	}
 	if err := b.draw(decoderMemory); err != nil {
 		return nil, err
+	}
+	if err := jsonx.Validate(body); err != nil {
+		return nil, invaliderr(err)
 	}
 	d := &decoder{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), b: b}
 	c := &canon{}

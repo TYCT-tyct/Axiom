@@ -7,26 +7,33 @@ import (
 	"fmt"
 )
 
+//nolint:cyclop // one branch per preparation stage, kept in one place so the order stays visible
 func rewriteWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
 	f := r.Format
 	rules := rulesFor(f, t)
 	if rules.members == nil {
 		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
 	}
+	w = w.withDefaults()
+	size := rewriteSize(rules, len(body), t, w)
+	if err := b.draw(rounded(int64(size))); err != nil {
+		return nil, err
+	}
 	body, indexed, err := rewriteBody(r, body)
 	if err != nil {
 		return nil, err
+	}
+	if bigger := rewriteSize(rules, len(body), t, w); bigger > size {
+		if err := b.draw(rounded(int64(bigger - size))); err != nil {
+			return nil, err
+		}
+		size = bigger
 	}
 	if f == Responses {
 		w.History, err = replayHistory(w.History)
 		if err != nil {
 			return nil, err
 		}
-	}
-	w = w.withDefaults()
-	size := rewriteSize(rules, len(body), t, w)
-	if err := b.draw(rounded(int64(size))); err != nil {
-		return nil, err
 	}
 	p := &rewriter{
 		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, size), t: t, w: w,

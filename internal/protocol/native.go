@@ -30,10 +30,18 @@ func PrepareBudgeted(m *Memory, r *Request, body []byte, t Target, w Rewrites) (
 	}
 	if w.NativeSearch > 0 {
 		old := int64(cap(u.Body))
+		// The injected tool is bounded; reserve its room before injectNativeSearch builds the new body, so a
+		// budget too small for the copy refuses without first making it.
+		reserved := rounded(int64(len(u.Body)) + nativeSearchCost(w.NativeSearch))
+		if err := b.draw(reserved); err != nil {
+			b.give(b.held)
+			return u, 0, err
+		}
 		if u.Body, err = injectNativeSearch(t.Format, u.Body, w.NativeSearch); err != nil {
 			b.give(b.held)
 			return u, 0, err
 		}
+		b.give(reserved)
 		if err := b.draw(rounded(int64(cap(u.Body)))); err != nil {
 			b.give(b.held)
 			return u, 0, err

@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go: strings are kept as written, never decoded and encoded again
+	"errors"
 	"slices"
 	"strconv"
 )
@@ -106,7 +107,13 @@ func legacyChoice(v jsontext.Value, b *budget) (jsontext.Value, error) {
 	var named struct {
 		Name jsontext.Value `json:"name"`
 	}
-	if err := unmarshalWithin(v, &named, b); err != nil || named.Name.Kind() != '"' {
+	if err := unmarshalWithin(v, &named, b); err != nil {
+		if errors.Is(err, ErrMemory) {
+			return nil, err
+		}
+		return nil, shapeError("a function_call without a name")
+	}
+	if named.Name.Kind() != '"' {
 		return nil, shapeError("a function_call without a name")
 	}
 	if err := b.draw(int64(len(named.Name) + 32)); err != nil {
@@ -151,7 +158,13 @@ func (c *legacyCalls) add(m *canonMessage, b *budget) error {
 		return shapeError("tool_calls and function_call in one message")
 	}
 	var call canonToolCall
-	if err := unmarshalWithin(m.FunctionCall, &call.Function, b); err != nil || call.Function.Name.Kind() != '"' {
+	if err := unmarshalWithin(m.FunctionCall, &call.Function, b); err != nil {
+		if errors.Is(err, ErrMemory) {
+			return err
+		}
+		return shapeError("a function_call without a name")
+	}
+	if call.Function.Name.Kind() != '"' {
 		return shapeError("a function_call without a name")
 	}
 	name, _ := jsontext.AppendUnquote(nil, call.Function.Name) //nolint:errcheck // Unmarshal validated JSON and Name's kind above

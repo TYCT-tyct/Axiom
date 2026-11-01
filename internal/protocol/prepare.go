@@ -128,6 +128,12 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 //nolint:cyclop // one branch per format pair and target
 func prepareWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
+	// The body is the lower bound of what this request can retain or copy. Check it before any reader, rewriter
+	// or writer runs: a body larger than the budget must fail before its output is allocated, not after. The
+	// actual tree and output charges then follow as before.
+	if err := b.checkBody(len(body)); err != nil {
+		return u, err
+	}
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error
 	if r.Format == t.Format {

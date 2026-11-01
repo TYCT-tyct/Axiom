@@ -129,14 +129,16 @@
 - 不会退还超过申请过的量：直接格式的改写没有事先算好的容量时，`PrepareBudgeted` 在返回前为输出容量补记一次。
 - 申请量按请求的实际形状走，不按请求里 `{`、`null`、`:` 的个数估：长文本约为请求体的一倍到四倍；`{}`、`null`、不认识的成员等最坏形状按实际树的大小申请，20k 个空对象约 12 MiB，不再按每个对象 2048 字节估成 40 MiB。
 - 解码树、规范编码、反向映射的中间缓冲在 `PrepareBudgeted` 返回前退回；请求体本身由准入的预算一直持有，不重复计入。
+- 进入任何读取、改写或写出之前先比较请求体长度和剩余预算：请求体是这次准备至少要保留或复制的量，装不下就直接返回 `ErrMemory`，不去分配一份装不下的输出。
 
 发布与失败：
 
 - 没有存储或对外接口变化，新旧节点可以同时运行；同一请求在两种节点上写出的字节相同。旧节点在跨格式时仍按形状上界申请，会比新节点更早地 503；滚动发布期间客户端可能遇到两种拒绝频率，这是唯一的可观察差异，不需要迁移或回滚脚本。
-- `ErrMemory` 发生在任何上游尝试之前，因此没有重试、没有上游费用、没有迟到的回调；`Prepare` 是同步调用，返回后不再持有 budget。进程在中途退出时，budget 和预留都在进程内，随进程消失，不会留下数据库里的预留。
+- `ErrMemory` 只阻止**当前待发起的尝试**：它发生在这一次上游调用之前，所以这一次没有重试、没有供应商费用、没有迟到的回调。准入可能已经用 `ReserveMany` 写入了数据库资金预留；执行器仍会进入 `conclude`，已有尝试照常结算，预留按既有规则释放。若进程在准备期间退出，数据库预留不会随进程消失，由既有的过期预留清理机制处理。
+- 进程内的内存预算与数据库资金预留是两件事：前者限制这次准备和发送的峰值，后者保证账户余额；`ErrMemory` 不写账本，也不把这次 503 当成一次上游调用。
 - 钱：这条路径不写预留、账本或调用记录。被 503 拒绝的请求不计模型用量，也不产生供应商费用；成功的请求按原来的结算路径计费，内存预算不是资金。
 
-测试：`TestDecodeChargesWhatItAllocates` 在子进程里核对最坏形状的申请量不超过实际分配总量，且少一个字节就 `ErrMemory`；`TestPrepareLargeRequestReservesAboutItsBody` 核对大请求的申请量不超过请求体的五倍；`TestPrepareConcurrentLargeRequests` 核对并发准备时失败方不占预算、成功方只留输出容量；gateway 的 `TestMemoryIsAskedForBeforePrepareAllocates`、`TestMemoryHoldsARequestByItsCapacityWhileItIsSent`、`TestMemoryHoldsConcurrentRequestsToTheBudget` 核对预算的申请、持有和退还。
+测试：`TestDecodeChargesWhatItAllocates` 与 `TestBudgetedDecodeChargesWhatItAllocates` 在子进程里核对最坏形状的申请量不超过实际分配总量，且少一个字节就 `ErrMemory`；`TestPrepareRefusesBeforeLargeOutput` 核对 64 KiB 预算遇到 1 MiB 正文时在输出分配之前拒绝；`TestPrepareLargeRequestReservesAboutItsBody` 核对大请求的申请量不超过请求体的五倍；`TestPrepareConcurrentLargeRequests` 核对并发准备时失败方不占预算、成功方只留输出容量；`TestMemoryErrorKeepsItsType` 核对旧版函数调用和 thinking 预算处耗尽预算仍是 `ErrMemory`；gateway 的 `TestMemoryIsAskedForBeforePrepareAllocates`、`TestMemoryHoldsARequestByItsCapacityWhileItIsSent`、`TestMemoryHoldsConcurrentRequestsToTheBudget` 核对预算的申请、持有和退还。
 
 ### 用量与费用
 

@@ -342,8 +342,6 @@ type joined struct {
 	body   []byte
 }
 
-func (j *joined) add(piece jsontext.Value) error { return j.addWithin(piece, nil) }
-
 func (j *joined) addWithin(piece jsontext.Value, b *budget) error {
 	switch {
 	case isNull(piece):
@@ -359,12 +357,6 @@ func (j *joined) addWithin(piece jsontext.Value, b *budget) error {
 	}
 	j.body = append(j.body, piece[1:len(piece)-1]...)
 	return nil
-}
-
-// value is the joined string: the piece as written when there was one, unset as it was when none.
-func (j *joined) value(unset jsontext.Value) jsontext.Value {
-	v, _ := j.valueWithin(unset, nil) //nolint:errcheck // a nil budget never fails
-	return v
 }
 
 func (j *joined) valueWithin(unset jsontext.Value, b *budget) (jsontext.Value, error) {

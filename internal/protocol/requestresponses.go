@@ -62,6 +62,9 @@ func responsesChatDefaults(src requestObject, b *budget) error {
 func responsesInput(v jsontext.Value, history [][]byte, b *budget) ([]jsontext.Value, error) {
 	items := make([]jsontext.Value, 0, len(history)+1)
 	for _, item := range history {
+		if err := b.draw(rounded(int64(len(item)))); err != nil {
+			return nil, err
+		}
 		canonical, err := jsonx.MarshalCanonical(jsontext.Value(item))
 		if err != nil {
 			return nil, fmt.Errorf("protocol: invalid history item: %w", err)
@@ -200,7 +203,7 @@ func (s *chatInputItems) message(o requestObject, b *budget) error {
 	}
 	msg := requestObject{"role": jsonValueWithin(role, b), "content": v}
 	if role == "assistant" {
-		s.attachReasoning(msg)
+		s.attachReasoning(msg, b)
 	} else {
 		s.flushReasoning(b)
 	}
@@ -218,19 +221,24 @@ func (s *chatInputItems) call(o requestObject, b *budget) {
 	}
 	i := len(s.out) - 1
 	s.calls[i] = append(s.calls[i], call)
-	s.attachReasoning(s.out[i])
+	s.attachReasoning(s.out[i], b)
 }
 
-func (s *chatInputItems) attachReasoning(msg requestObject) {
+func (s *chatInputItems) attachReasoning(msg requestObject, b *budget) {
 	if s.reasoning.pieces > 0 {
-		msg["reasoning_content"], s.reasoning = s.reasoning.value(nil), joined{}
+		v, err := s.reasoning.valueWithin(nil, b)
+		if err != nil {
+			return
+		}
+		msg["reasoning_content"] = v
+		s.reasoning = joined{}
 	}
 }
 
 func (s *chatInputItems) flushReasoning(b *budget) {
 	if s.reasoning.pieces > 0 {
 		msg := requestObject{"role": jsonValueWithin("assistant", b), "content": jsonValueWithin("", b)}
-		s.attachReasoning(msg)
+		s.attachReasoning(msg, b)
 		s.out = append(s.out, msg)
 	}
 }
@@ -249,7 +257,7 @@ func reasoningSummary(o requestObject, text *joined, b *budget) error {
 		if string(p.take("type")) != `"summary_text"` {
 			return &NotSupported{Reason: "reasoning summary part has no Chat counterpart"}
 		}
-		if err := text.add(p.take("text")); err != nil {
+		if err := text.addWithin(p.take("text"), b); err != nil {
 			return err
 		}
 		if err := p.remaining(); err != nil {
