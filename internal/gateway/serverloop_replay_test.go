@@ -188,9 +188,9 @@ func TestServerLoopReleasesTheOldSlotBeforeTheNextHop(t *testing.T) {
 		if len(h.settlements) != 1 {
 			t.Fatalf("settlements = %d, want 1", len(h.settlements))
 		}
-		hops := h.settlements[0].outcome.Attempts[0].Hops
-		if len(hops) != 2 || len(hops[0].Segments) != 1 || len(hops[1].Segments) != 1 {
-			t.Fatalf("settled hops = %+v, want one segment and receipt per supplier request", hops)
+		attempts := h.settlements[0].outcome.Attempts
+		if len(attempts) != 2 || len(attempts[0].Segments) != 1 || len(attempts[1].Segments) != 1 {
+			t.Fatalf("settled attempts = %+v, want one per supplier request", attempts)
 		}
 	})
 }

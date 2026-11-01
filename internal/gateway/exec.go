@@ -182,7 +182,8 @@ type session struct {
 	deadline time.Time // the longest the call may run
 	logger   *slog.Logger
 
-	ends       []billing.AttemptResult // the attempts made, in order; the last is the one charged
+	ends       []billing.AttemptResult // the supplier requests made, in order; the last is the one charged
+	attempted  int                     // the attempts routing made, of which a loop's further samplings are not
 	tries      []try                   // the same attempts as the call log needs them: their entry and when they began
 	currency   platform.Currency       // of the last attempt's price, the site's until one is made
 	skips      skips
@@ -259,7 +260,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
 	o := billing.Outcome{Attempts: s.ends}
 	if len(o.Attempts) > 0 {
-		addSearchUsage(&o.Attempts[len(o.Attempts)-1], s.searches+s.parses)
+		addSearchUsage(&o.Attempts[s.closeLoop()], s.searches+s.parses)
 	}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
@@ -297,6 +298,22 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	if err == nil {
 		s.x.log(ctx, s.trail(), o, f, time.Now())
 	}
+}
+
+// closeLoop gives every attempt of the model-side loop the last attempt belongs to how the loop ended: its answer
+// reached the client, or it did not. It returns the loop's first attempt, which is the last itself outside a loop.
+// The searches are counted there, the first of the samplings billing charges together.
+func (s *session) closeLoop() int {
+	head := len(s.ends) - 1
+	result := billing.FailedBeforeCommit
+	if r := s.ends[head].Result; r == billing.Committed || r == billing.Aggregated {
+		result = r
+	}
+	for head > 0 && s.ends[head].Continues {
+		head--
+		s.ends[head].Result = result
+	}
+	return head
 }
 
 // stick moves the session to the endpoint of the charged attempt when that attempt delivered content and the session
@@ -433,6 +450,9 @@ func (s *session) settleOnPanic(ctx context.Context) {
 		return
 	}
 	if !s.concluded {
+		if len(s.ends) > 0 {
+			s.closeLoop()
+		}
 		o := billing.Outcome{Attempts: s.ends}
 		f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 		s.handedOff = s.x.settled(ctx, s, o, err)

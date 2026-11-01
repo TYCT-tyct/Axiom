@@ -15,8 +15,9 @@ import (
 )
 
 // serverLoop is one openrouter:web_search request's model-side loop: the backend it searches through, the caps the
-// client set, and how much of each was used. It lives on the session, so every hop of the loop shares one attempt and
-// the attempt's usage carries every sampling (docs/domains/billing.md「预留与结算」).
+// client set, and how much of each was used. It lives on the session, so its caps hold for the whole call; each
+// sampling is an attempt of its own, and billing charges the loop's samplings together (docs/domains/billing.md
+// 「预留与结算」).
 type serverLoop struct {
 	backend *websearch.Backend
 	tool    *protocol.ServerWebSearch
@@ -253,23 +254,15 @@ func (a *attempt) hopCap() int64 {
 	return out * n
 }
 
-// hopDone keeps one hop's usage as its own billing segments: every sampling has its input and output, and only the
-// charged attempt's segments reach the user's bill, so they are merged here rather than priced as one reply.
+// hopDone keeps one sampling's usage as its own attempt's billing segments, estimated under the sampling's own output
+// limit, and tells the meter the sampling is over, so the next one's progress adds to it.
 func (a *attempt) hopDone(relay *protocol.Relay) {
 	if a.hopRecorded {
 		return
 	}
 	a.hopRecorded = true
-	s := a.s
-	p := relay.Progress()
-	a.meter.Complete(a.billingProgress(p))
-	u := relay.Usage()
-	a.usage.Segments = append(a.usage.Segments, u.Segments...)
-	if u.Invalid != nil && a.usage.Invalid == nil {
-		a.usage.Invalid = u.Invalid
-	}
-	a.seen = relay.Progress()
-	d := routing.DemandOf(&s.c.Request)
-	a.hops = append(a.hops, estimated(u, a.seen, d, a.entry.Limits, a.hopCap(), billing.TokenizerOf(a.entry.Target.Model))...)
-	a.hopEnds = append(a.hopEnds, len(a.hops))
+	a.seen, a.usage = relay.Progress(), relay.Usage()
+	a.meter.Complete(a.billingProgress(a.seen))
+	d := routing.DemandOf(&a.s.c.Request)
+	a.hops = estimated(a.usage, a.seen, d, a.entry.Limits, a.hopCap(), billing.TokenizerOf(a.entry.Target.Model))
 }

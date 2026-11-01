@@ -332,27 +332,25 @@ func TestTwoRunsAtOnceMatchEachPairOnce(t *testing.T) {
 	}
 }
 
-// TestLoopHopsAreRecordedAndMatchedIndependently: each supplier request behind a model-side loop has its own attempt
-// cost row and charge attribution, even though they share one gateway attempt number.
-func TestLoopHopsAreRecordedAndMatchedIndependently(t *testing.T) {
+// TestALoopsSamplingsAreAttemptsMatchedOnTheirOwn: each sampling of a model-side loop is an attempt numbered past the
+// routing tries, up to platform.MaxAttemptSeq, with the key it was written under since 00002. Its charge matches its own
+// attempt, a charge for a sampling that failed before any reply included.
+func TestALoopsSamplingsAreAttemptsMatchedOnTheirOwn(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 1)
-	req := newRequest()
-	first, second := w.attempt(req, 1, "hop-a"), w.attempt(req, 1, "hop-b")
-	second.Hop = 1
-	w.record(first, second)
-	w.ingest(w.charge("hop-a", "23", w.clock.now()), w.charge("hop-b", "23", w.clock.now()))
-	report := w.reconcile(w.clock.now())
-	if report.Matched != 2 {
-		t.Fatalf("matched %d charges, want one for each hop: %+v", report.Matched, report)
+	request := newRequest()
+	first, failed := subRef(), subRef()
+	unanswered := w.attempt(request, platform.MaxAttemptSeq, failed)
+	unanswered.Usage = nil // it failed before a reply, but the supplier may still have charged it
+	w.record(w.attempt(request, 4, first), unanswered)
+	w.ingest(w.charge(first, "22.5", w.clock.now()), w.charge(failed, "0.1", w.clock.now()))
+	if report := w.reconcile(w.clock.now()); report.Matched != 2 {
+		t.Fatalf("report %+v, want each sampling's charge matched", report)
 	}
-	for ref, want := range map[string]int16{"hop-a": 0, "hop-b": 1} {
-		var got int16
-		w.tx(func(ctx context.Context, tx pg.Tx) error {
-			return tx.QueryRow(ctx, `SELECT attempt_hop FROM suppliers.charge_records WHERE charge_ref = $1`, ref).Scan(&got)
-		})
-		if got != want {
-			t.Errorf("%s attributed to hop %d, want %d", ref, got, want)
+	for ref, seq := range map[string]int{first: 4, failed: platform.MaxAttemptSeq} {
+		if n := w.count(`SELECT count(*) FROM suppliers.charge_records WHERE charge_ref = $1 AND state = 'matched'
+			AND attempt_request_id = $2 AND attempt_seq = $3`, ref, uuid.UUID(request), seq); n != 1 {
+			t.Errorf("%s is not matched to attempt %d", ref, seq)
 		}
 	}
 }

@@ -205,10 +205,10 @@ func TestRecordingAttemptsIsOneStatementAndRepeatable(t *testing.T) {
 	}
 	bad := newRequest()
 	err := w.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		return RecordAttempts(t.Context(), tx, []AttemptRecord{w.attempt(bad, 1, "x"), w.attempt(bad, 4, "y")})
+		return RecordAttempts(t.Context(), tx, []AttemptRecord{w.attempt(bad, 1, "x"), w.attempt(bad, platform.MaxAttemptSeq+1, "y")})
 	})
 	if err == nil || w.count("SELECT count(*) FROM suppliers.attempt_costs WHERE request_id = $1", uuid.UUID(bad)) != 0 {
-		t.Errorf("an attempt number 4: %v", err)
+		t.Errorf("an attempt number past platform.MaxAttemptSeq: %v", err)
 	}
 }
 
@@ -303,50 +303,5 @@ func TestOnlyALostRequestCanBeResolved(t *testing.T) {
 	}
 	if n := w.count("SELECT count(*) FROM suppliers.lost_request_resolutions"); n != 0 {
 		t.Errorf("%d resolutions written for a request that was never lost", n)
-	}
-}
-
-// TestOldSettlementWriteWorksAfterHopMigration: a node still on the old binary inserts the aggregate attempt with
-// ON CONFLICT (request_id, attempt_seq). The hop migration must leave that unique key and the old table unchanged so
-// the statement keeps working while both versions are live.
-func TestOldSettlementWriteWorksAfterHopMigration(t *testing.T) {
-	t.Parallel()
-	w := newWorld(t, 1)
-	id := newRequest()
-	w.record(w.attempt(id, 1, ""))
-	w.tx(func(ctx context.Context, tx pg.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO suppliers.attempt_costs
-			(request_id, attempt_seq, site_id, account_id, supplier_id, credential_id, endpoint_id, cost_schedule_id,
-			 usage, priced_at, finished_at, cost_flag, estimated_native)
-			VALUES ($1, 1, NULL, NULL, $2, $3, $4, $5, '{}'::jsonb, now(), now(), 'complete', 0)
-			ON CONFLICT (request_id, attempt_seq) DO NOTHING`,
-			uuid.UUID(id), w.supplier, w.credential, w.endpoint, w.sc)
-		return err
-	})
-	if n := w.count("SELECT count(*) FROM suppliers.attempt_costs WHERE request_id = $1", uuid.UUID(id)); n != 1 {
-		t.Fatalf("old settlement wrote %d aggregate rows, want one", n)
-	}
-}
-
-// TestLoopHopsKeepTheirOwnDetailRows: the legacy table still has one aggregate row, while each supplier request,
-// including one with no usage because it failed before a Relay, has its own detail row and hop number.
-func TestLoopHopsKeepTheirOwnDetailRows(t *testing.T) {
-	t.Parallel()
-	w := newWorld(t, 1)
-	id := newRequest()
-	first := w.attempt(id, 1, "hop-a")
-	second := w.attempt(id, 1, "hop-b")
-	second.Hop = 1
-	second.Usage = nil
-	second.Cost.Flag = CostNoUsage
-	w.record(first, second)
-	if n := w.count("SELECT count(*) FROM suppliers.attempt_costs WHERE request_id = $1", uuid.UUID(id)); n != 1 {
-		t.Fatalf("legacy rows = %d, want one aggregate row", n)
-	}
-	if n := w.count("SELECT count(*) FROM suppliers.attempt_cost_hops WHERE request_id = $1", uuid.UUID(id)); n != 2 {
-		t.Fatalf("detail rows = %d, want one per supplier request", n)
-	}
-	if n := w.count("SELECT count(*) FROM suppliers.attempt_cost_hops WHERE request_id = $1 AND hop = 1 AND charge_ref = 'hop-b'", uuid.UUID(id)); n != 1 {
-		t.Fatalf("the failed hop's detail row = %d, want one with its own reference", n)
 	}
 }

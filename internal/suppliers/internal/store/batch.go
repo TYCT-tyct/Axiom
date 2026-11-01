@@ -19,7 +19,6 @@ type AttemptCostRow struct {
 	ConversionFrom, ConversionTo, ConversionState    *string
 	RequestID                                        uuid.UUID
 	AttemptSeq                                       int16
-	Hop                                              int16
 	SiteID, AccountID                                *uuid.UUID
 	SupplierID, CredentialID, EndpointID, ScheduleID uuid.UUID
 	ChargeRef                                        *string
@@ -30,32 +29,6 @@ type AttemptCostRow struct {
 	Test                                             bool
 }
 
-type attemptCostArgs struct {
-	unit, exchange                                []*uuid.UUID
-	from, to, conversion                          []*string
-	req, supplier, credential, endpoint, schedule []uuid.UUID
-	seq, hop                                      []int16
-	site, account                                 []*uuid.UUID
-	ref                                           []*string
-	usage                                         [][]byte
-	priced, finished                              []time.Time
-	flag, estimated                               []string
-	test                                          []bool
-}
-
-func (a *attemptCostArgs) add(r AttemptCostRow) {
-	a.unit, a.exchange = append(a.unit, r.UnitValueID), append(a.exchange, r.ExchangeRateID)
-	a.from, a.to, a.conversion = append(a.from, r.ConversionFrom), append(a.to, r.ConversionTo), append(a.conversion, r.ConversionState)
-	a.req, a.seq, a.hop = append(a.req, r.RequestID), append(a.seq, r.AttemptSeq), append(a.hop, r.Hop)
-	a.site, a.account = append(a.site, r.SiteID), append(a.account, r.AccountID)
-	a.supplier, a.credential = append(a.supplier, r.SupplierID), append(a.credential, r.CredentialID)
-	a.endpoint, a.schedule = append(a.endpoint, r.EndpointID), append(a.schedule, r.ScheduleID)
-	a.ref, a.usage = append(a.ref, r.ChargeRef), append(a.usage, r.Usage)
-	a.priced, a.finished = append(a.priced, r.PricedAt), append(a.finished, r.FinishedAt)
-	a.flag, a.estimated = append(a.flag, r.CostFlag), append(a.estimated, r.EstimatedNative)
-	a.test = append(a.test, r.Test)
-}
-
 const insertAttemptCosts = `
 INSERT INTO suppliers.attempt_costs (request_id, attempt_seq, site_id, account_id, supplier_id, credential_id, endpoint_id,
     cost_schedule_id, charge_ref, usage, priced_at, finished_at, cost_flag, estimated_native,
@@ -64,15 +37,6 @@ SELECT * FROM unnest($1::uuid[], $2::smallint[], $3::uuid[], $4::uuid[], $5::uui
     $9::text[], $10::jsonb[], $11::timestamptz[], $12::timestamptz[], $13::text[], $14::numeric[],
     $15::uuid[], $16::uuid[], $17::text[], $18::text[], $19::text[], $20::boolean[])
 ON CONFLICT (request_id, attempt_seq) DO NOTHING`
-
-const insertAttemptCostHops = `
-INSERT INTO suppliers.attempt_cost_hops (request_id, attempt_seq, hop, site_id, account_id, supplier_id, credential_id, endpoint_id,
-    cost_schedule_id, charge_ref, usage, priced_at, finished_at, cost_flag, estimated_native,
-    unit_value_id, exchange_rate_id, conversion_from, conversion_to, conversion_state, test)
-SELECT * FROM unnest($1::uuid[], $2::smallint[], $3::smallint[], $4::uuid[], $5::uuid[], $6::uuid[], $7::uuid[], $8::uuid[], $9::uuid[],
-    $10::text[], $11::jsonb[], $12::timestamptz[], $13::timestamptz[], $14::text[], $15::numeric[],
-    $16::uuid[], $17::uuid[], $18::text[], $19::text[], $20::text[], $21::boolean[])
-ON CONFLICT (request_id, attempt_seq, hop) DO NOTHING`
 
 // EndedRequestRow is one request's end: the database time it ended at and the tenant that owns it.
 type EndedRequestRow struct {
@@ -96,26 +60,34 @@ func InsertEndedRequests(ctx context.Context, db DBTX, rows []EndedRequestRow) e
 	return err
 }
 
-// InsertAttemptCosts writes the legacy aggregate row of each attempt. It is deliberately the old statement: an old
-// node settling concurrently must still find its ON CONFLICT (request_id, attempt_seq) target.
+// InsertAttemptCosts writes the attempts of a request in one statement. A row already there stays as it was, so a
+// settlement repeated after a crash changes nothing.
 func InsertAttemptCosts(ctx context.Context, db DBTX, rows []AttemptCostRow) error {
-	var a attemptCostArgs
+	var a struct {
+		unit, exchange                                []*uuid.UUID
+		from, to, conversion                          []*string
+		req, supplier, credential, endpoint, schedule []uuid.UUID
+		seq                                           []int16
+		site, account                                 []*uuid.UUID
+		ref                                           []*string
+		usage                                         [][]byte
+		priced, finished                              []time.Time
+		flag, estimated                               []string
+		test                                          []bool
+	}
 	for _, r := range rows {
-		a.add(r)
+		a.unit, a.exchange = append(a.unit, r.UnitValueID), append(a.exchange, r.ExchangeRateID)
+		a.from, a.to, a.conversion = append(a.from, r.ConversionFrom), append(a.to, r.ConversionTo), append(a.conversion, r.ConversionState)
+		a.req, a.seq = append(a.req, r.RequestID), append(a.seq, r.AttemptSeq)
+		a.site, a.account = append(a.site, r.SiteID), append(a.account, r.AccountID)
+		a.supplier, a.credential = append(a.supplier, r.SupplierID), append(a.credential, r.CredentialID)
+		a.endpoint, a.schedule = append(a.endpoint, r.EndpointID), append(a.schedule, r.ScheduleID)
+		a.ref, a.usage = append(a.ref, r.ChargeRef), append(a.usage, r.Usage)
+		a.priced, a.finished = append(a.priced, r.PricedAt), append(a.finished, r.FinishedAt)
+		a.flag, a.estimated = append(a.flag, r.CostFlag), append(a.estimated, r.EstimatedNative)
+		a.test = append(a.test, r.Test)
 	}
 	_, err := db.Exec(ctx, insertAttemptCosts, a.req, a.seq, a.site, a.account, a.supplier, a.credential, a.endpoint,
-		a.schedule, a.ref, a.usage, a.priced, a.finished, a.flag, a.estimated, a.unit, a.exchange, a.from, a.to, a.conversion, a.test)
-	return err
-}
-
-// InsertAttemptCostHops writes the per-hop detail rows. A row already there stays as it was, so a settlement repeated
-// after a crash changes nothing.
-func InsertAttemptCostHops(ctx context.Context, db DBTX, rows []AttemptCostRow) error {
-	var a attemptCostArgs
-	for _, r := range rows {
-		a.add(r)
-	}
-	_, err := db.Exec(ctx, insertAttemptCostHops, a.req, a.seq, a.hop, a.site, a.account, a.supplier, a.credential, a.endpoint,
 		a.schedule, a.ref, a.usage, a.priced, a.finished, a.flag, a.estimated, a.unit, a.exchange, a.from, a.to, a.conversion, a.test)
 	return err
 }

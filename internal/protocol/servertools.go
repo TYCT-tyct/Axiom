@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // the tools and turns are spliced into the body as written
 	"fmt"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
 )
 
@@ -16,7 +17,7 @@ const ServerToolName = "openrouter_web_search"
 
 // DefaultServerToolCalls is OpenRouter's default and maximum max_tool_calls: one step per tool call, after which the
 // model is asked for a final answer with the context it has (OpenRouter《Server Tools》, read 2026-11-01).
-const DefaultServerToolCalls = 30
+const DefaultServerToolCalls = platform.MaxServerToolSteps
 
 // MaxServerResults bounds one engine search's result count. OpenRouter documents 1 to 25 per search; the engines this
 // gateway runs return at most ten (websearch.MaxResults), so a larger request gets the engine's ten.

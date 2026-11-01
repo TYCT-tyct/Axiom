@@ -542,12 +542,10 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 }
 
 const listUnmatchedAttempts = `-- name: ListUnmatchedAttempts :many
-SELECT ac.request_id, ac.attempt_seq, 0::smallint AS hop, ac.charge_ref, ac.finished_at FROM suppliers.attempt_costs ac
-WHERE ac.state = 'pending' AND ac.charge_ref IS NOT NULL AND ac.finished_at < $1 AND NOT ac.test
-    AND NOT EXISTS (SELECT 1 FROM suppliers.attempt_cost_hops h
-                    WHERE h.request_id = ac.request_id AND h.attempt_seq = ac.attempt_seq)
-    AND (ac.finished_at, ac.request_id, ac.attempt_seq) > ($2::timestamptz, $3::uuid, $4::smallint)
-ORDER BY ac.finished_at, ac.request_id, ac.attempt_seq
+SELECT request_id, attempt_seq, charge_ref, finished_at FROM suppliers.attempt_costs
+WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < $1 AND NOT test
+    AND (finished_at, request_id, attempt_seq) > ($2::timestamptz, $3::uuid, $4::smallint)
+ORDER BY finished_at, request_id, attempt_seq
 LIMIT $5::int
 `
 
@@ -562,15 +560,13 @@ type ListUnmatchedAttemptsParams struct {
 type ListUnmatchedAttemptsRow struct {
 	RequestID  uuid.UUID
 	AttemptSeq int16
-	Hop        int16
 	ChargeRef  *string
 	FinishedAt time.Time
 }
 
-// One batch of the legacy attempts waiting past the grace, in a fixed order, after the position of the last one given
-// before. A new node writes detail rows, which ListUnmatchedHops reads; this query keeps old nodes' rows visible.
-// A test generation is not one: whether the supplier bills a probe at all is nothing a person can chase, and its cost
-// is the platform's own (H-I9).
+// One batch of the attempts waiting past the grace, in a fixed order, after the position of the last one given before.
+// A test generation is not one: whether the supplier bills a probe at all is nothing a person can chase, and its cost is
+// the platform's own (H-I9).
 func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUnmatchedAttemptsParams) ([]ListUnmatchedAttemptsRow, error) {
 	rows, err := db.Query(ctx, listUnmatchedAttempts,
 		arg.Before,
@@ -589,67 +585,6 @@ func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUn
 		if err := rows.Scan(
 			&i.RequestID,
 			&i.AttemptSeq,
-			&i.Hop,
-			&i.ChargeRef,
-			&i.FinishedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listUnmatchedHops = `-- name: ListUnmatchedHops :many
-SELECT request_id, attempt_seq, hop, charge_ref, finished_at FROM suppliers.attempt_cost_hops
-WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < $1 AND NOT test
-    AND (finished_at, request_id, attempt_seq, hop) > ($2::timestamptz, $3::uuid, $4::smallint, $5::smallint)
-ORDER BY finished_at, request_id, attempt_seq, hop
-LIMIT $6::int
-`
-
-type ListUnmatchedHopsParams struct {
-	Before       time.Time
-	AfterAt      time.Time
-	AfterRequest uuid.UUID
-	AfterSeq     int16
-	AfterHop     int16
-	Batch        int32
-}
-
-type ListUnmatchedHopsRow struct {
-	RequestID  uuid.UUID
-	AttemptSeq int16
-	Hop        int16
-	ChargeRef  *string
-	FinishedAt time.Time
-}
-
-// The same read for the per-hop detail rows written by this version. The cursor includes the hop because one gateway
-// attempt can have several.
-func (q *Queries) ListUnmatchedHops(ctx context.Context, db DBTX, arg ListUnmatchedHopsParams) ([]ListUnmatchedHopsRow, error) {
-	rows, err := db.Query(ctx, listUnmatchedHops,
-		arg.Before,
-		arg.AfterAt,
-		arg.AfterRequest,
-		arg.AfterSeq,
-		arg.AfterHop,
-		arg.Batch,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListUnmatchedHopsRow
-	for rows.Next() {
-		var i ListUnmatchedHopsRow
-		if err := rows.Scan(
-			&i.RequestID,
-			&i.AttemptSeq,
-			&i.Hop,
 			&i.ChargeRef,
 			&i.FinishedAt,
 		); err != nil {
@@ -678,22 +613,22 @@ func (q *Queries) LockChargeEvents(ctx context.Context, db DBTX) error {
 
 const matchCharges = `-- name: MatchCharges :many
 WITH pairs AS (
-    SELECT cr.id AS charge_id, h.request_id, h.attempt_seq, h.hop
+    SELECT cr.id AS charge_id, ac.request_id, ac.attempt_seq
     FROM suppliers.charge_records cr
-    JOIN suppliers.attempt_cost_hops h ON h.supplier_id = cr.supplier_id AND h.charge_ref = cr.charge_ref
-    WHERE cr.state <> 'matched' AND cr.funding = 'wallet' AND h.charge_record_id IS NULL
-        AND (SELECT count(*) FROM suppliers.attempt_cost_hops x
+    JOIN suppliers.attempt_costs ac ON ac.supplier_id = cr.supplier_id AND ac.charge_ref = cr.charge_ref
+    WHERE cr.state <> 'matched' AND cr.funding = 'wallet' AND ac.charge_record_id IS NULL
+        AND (SELECT count(*) FROM suppliers.attempt_costs x
              WHERE x.supplier_id = cr.supplier_id AND x.charge_ref = cr.charge_ref) = 1
     ORDER BY cr.id
     LIMIT $1::int
 ), claimed AS (
-    UPDATE suppliers.attempt_cost_hops h SET charge_record_id = p.charge_id, state = 'matched'
+    UPDATE suppliers.attempt_costs ac SET charge_record_id = p.charge_id, state = 'matched'
     FROM pairs p
-    WHERE h.request_id = p.request_id AND h.attempt_seq = p.attempt_seq AND h.hop = p.hop AND h.charge_record_id IS NULL
-    RETURNING p.charge_id, h.request_id, h.attempt_seq, h.hop, h.endpoint_id, h.cost_schedule_id, h.estimated_native, h.cost_flag, h.test
+    WHERE ac.request_id = p.request_id AND ac.attempt_seq = p.attempt_seq AND ac.charge_record_id IS NULL
+    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.endpoint_id, ac.cost_schedule_id, ac.estimated_native, ac.cost_flag, ac.test
 )
 UPDATE suppliers.charge_records cr SET state = 'matched', attribution = 'attempt', attempt_request_id = claimed.request_id,
-    attempt_seq = claimed.attempt_seq, attempt_hop = claimed.hop, lost_request_id = NULL, revision = cr.revision + 1
+    attempt_seq = claimed.attempt_seq, lost_request_id = NULL, revision = cr.revision + 1
 FROM claimed
 WHERE cr.id = claimed.charge_id AND cr.state <> 'matched'
 RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native, claimed.estimated_native, claimed.cost_flag,
@@ -731,81 +666,6 @@ func (q *Queries) MatchCharges(ctx context.Context, db DBTX, batch int32) ([]Mat
 	var items []MatchChargesRow
 	for rows.Next() {
 		var i MatchChargesRow
-		if err := rows.Scan(
-			&i.ChargeID,
-			&i.Revision,
-			&i.ActualNative,
-			&i.EstimatedNative,
-			&i.CostFlag,
-			&i.EndpointID,
-			&i.CostScheduleID,
-			&i.RequestID,
-			&i.AttemptSeq,
-			&i.Test,
-			&i.NativeUnit,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const matchLegacyCharges = `-- name: MatchLegacyCharges :many
-WITH pairs AS (
-    SELECT cr.id AS charge_id, ac.request_id, ac.attempt_seq, 0::smallint AS hop
-    FROM suppliers.charge_records cr
-    JOIN suppliers.attempt_costs ac ON ac.supplier_id = cr.supplier_id AND ac.charge_ref = cr.charge_ref
-    WHERE cr.state <> 'matched' AND cr.funding = 'wallet' AND ac.charge_record_id IS NULL
-        AND NOT EXISTS (SELECT 1 FROM suppliers.attempt_cost_hops h
-                        WHERE h.request_id = ac.request_id AND h.attempt_seq = ac.attempt_seq)
-        AND (SELECT count(*) FROM suppliers.attempt_costs x
-             WHERE x.supplier_id = cr.supplier_id AND x.charge_ref = cr.charge_ref) = 1
-    ORDER BY cr.id
-    LIMIT $1::int
-), claimed AS (
-    UPDATE suppliers.attempt_costs ac SET charge_record_id = p.charge_id, state = 'matched'
-    FROM pairs p
-    WHERE ac.request_id = p.request_id AND ac.attempt_seq = p.attempt_seq AND ac.charge_record_id IS NULL
-    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, p.hop, ac.endpoint_id, ac.cost_schedule_id, ac.estimated_native, ac.cost_flag, ac.test
-)
-UPDATE suppliers.charge_records cr SET state = 'matched', attribution = 'attempt', attempt_request_id = claimed.request_id,
-    attempt_seq = claimed.attempt_seq, attempt_hop = claimed.hop, lost_request_id = NULL, revision = cr.revision + 1
-FROM claimed
-WHERE cr.id = claimed.charge_id AND cr.state <> 'matched'
-RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native, claimed.estimated_native, claimed.cost_flag,
-    claimed.endpoint_id, claimed.cost_schedule_id, claimed.request_id, claimed.attempt_seq, claimed.test,
-    (SELECT s.native_unit FROM suppliers.suppliers s WHERE s.id = cr.supplier_id) AS native_unit
-`
-
-type MatchLegacyChargesRow struct {
-	ChargeID        uuid.UUID
-	Revision        int32
-	ActualNative    string
-	EstimatedNative string
-	CostFlag        string
-	EndpointID      uuid.UUID
-	CostScheduleID  uuid.UUID
-	RequestID       uuid.UUID
-	AttemptSeq      int16
-	Test            bool
-	NativeUnit      string
-}
-
-// The same matching for a row an old node wrote during a rolling upgrade. A request that has detail rows is excluded:
-// the new matcher must not attribute one of its charges to the aggregate row as well.
-func (q *Queries) MatchLegacyCharges(ctx context.Context, db DBTX, batch int32) ([]MatchLegacyChargesRow, error) {
-	rows, err := db.Query(ctx, matchLegacyCharges, batch)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []MatchLegacyChargesRow
-	for rows.Next() {
-		var i MatchLegacyChargesRow
 		if err := rows.Scan(
 			&i.ChargeID,
 			&i.Revision,

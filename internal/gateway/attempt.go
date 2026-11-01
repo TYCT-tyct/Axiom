@@ -74,7 +74,7 @@ func (s *session) mayStart(maxAttempts int) (ended, bool) {
 		return ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}, true
 	case !time.Now().Before(s.deadline):
 		return ended{err: protocol.Error{Type: protocol.Timeout}}, true
-	case len(s.ends) >= maxAttempts:
+	case s.attempted >= maxAttempts:
 		return s.exhausted(), true
 	case time.Now().After(s.c.Plan.StartBy):
 		if len(s.ends) == 0 {
@@ -216,9 +216,12 @@ func (s *session) record(a *attempt, failed bool, scope routing.Scope, next rout
 }
 
 // attempt is one try at an endpoint, from the moment its identity is fixed. The goroutine that runs the call owns it.
+// A model-side loop runs inside it, one supplier request per sampling: each is an attempt of its own in s.ends, with its
+// own number, slot, receipt and cost, while the stream, its meter and its timers stay with this one.
 type attempt struct {
 	s     *session
-	i     int // index in s.ends
+	first int // index in s.ends of the attempt's first supplier request
+	i     int // index in s.ends of the supplier request now running, or the last one
 	entry routing.Entry
 	conn  Conn
 	meter *billing.Meter // bound to the entry that was priced
@@ -233,16 +236,12 @@ type attempt struct {
 
 	content     bool              // the upstream sent content: the commit point came
 	state       string            // the turn state the upstream set, passed on with the answer (headers.go)
-	usage       protocol.Usage    // every hop's report, appended as the loop reads them
+	usage       protocol.Usage    // what the stream reported, once it is over
 	seen        protocol.Progress // what the relay had seen last
-	hops        []billing.Segment // each hop's usage, estimated where the upstream did not report it
-	hopRecorded bool              // whether this hop's usage is in hops
+	hops        []billing.Segment // a loop sampling's usage, estimated where the upstream did not report it
+	hopRecorded bool              // whether this sampling's usage is in hops
 	nextBody    io.ReadCloser
 	nextUsage   protocol.UsageContext
-	receipts    []suppliers.AttemptReceipt // one per supplier request: a loop hop acquires its own slot and RPM
-	hopEnds     []int                      // a.hops index after each finished hop
-	failure     *suppliers.Failure         // the last request's failure, when it did not reach a Relay
-	sent        bool                       // whether the connection now held has sent a request
 
 	asked   billing.ExtendRequest
 	landing chan error // the outcome of the extension asked for, nil when none is in flight
@@ -256,15 +255,16 @@ type attempt struct {
 func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Conn) (*attempt, context.Context) {
 	kept := s.c.Hold.Kept[i]
 	a := &attempt{
-		s: s, i: len(s.ends), entry: entry, conn: conn, meter: s.c.Hold.Bind(kept),
+		s: s, entry: entry, conn: conn, meter: s.c.Hold.Bind(kept),
 		toolCallTokens: billing.ToolCallTokens(billing.TokenizerOf(entry.Target.Model)),
 	}
 	a.obs.Endpoint, a.obs.Sent = uuid.UUID(entry.Endpoint), time.Now()
 	a.obs.Source = uuid.UUID(s.c.Admission.OwnerID())
 	a.obs.BreakerFallback = entry.BreakerFallback
 	a.obs.Request = s.c.ID
-	s.ends = append(s.ends, billing.AttemptResult{Seq: len(s.ends) + 1, Entry: kept, Result: billing.Unknown})
-	s.tries = append(s.tries, try{entry: entry, started: a.obs.Sent})
+	s.attempted++
+	a.first = s.begin(entry, kept, false)
+	a.i = a.first
 	s.currency = entry.Price.Schedule.Currency()
 	s.last = a
 	policy := conn.Policy()
@@ -277,30 +277,38 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	return a, ctx
 }
 
+// begin numbers a supplier request: its place in the settlement's attempts and the call log's, in step. continues says
+// it is a further sampling of the previous request's loop. The number stays within platform.MaxAttemptSeq: at most
+// platform.MaxAttempts begin an attempt, and a loop adds at most one per step, which the session's loop caps for the
+// whole call at platform.MaxServerToolSteps.
+func (s *session) begin(entry routing.Entry, kept int, continues bool) int {
+	s.ends = append(s.ends, billing.AttemptResult{Seq: len(s.ends) + 1, Entry: kept, Result: billing.Unknown, Continues: continues})
+	s.tries = append(s.tries, try{entry: entry, started: time.Now()})
+	return len(s.ends) - 1
+}
+
 // close ends the attempt: its upstream is cancelled if it still runs, the credential's slot and the endpoint's count
-// are given back, what billing takes of it is made from its usage and the receipt, which has the supplier's request
-// id, and quality is told how it ended. ctx is the attempt's, by then cancelled, which only quality's counters read.
+// are given back, what billing takes of its last supplier request is made from its usage and the receipt, and quality
+// is told how it ended. ctx is the attempt's, by then cancelled, which only quality's counters read.
 func (a *attempt) close(ctx context.Context) {
 	a.s.setCancel(nil, false)
 	a.unhook()
 	a.cancel(nil)
 	a.release()
 	a.s.x.Router.End(a.entry.Endpoint) // before the wake: a waiter must find both the endpoint's count and the slot free
-	receipt := suppliers.AttemptReceipt{}
-	if len(a.receipts) > 0 {
-		receipt = a.receipts[len(a.receipts)-1]
-	}
 	if a.conn != nil {
-		done := a.s.done(a.conn).WithExchange(a.entry.Exchange)
-		a.conn = nil
-		if a.sent {
-			receipt = done
-			a.receipts = append(a.receipts, receipt)
-		}
+		a.endRequest()
 	}
+	a.observe(ctx)
+}
+
+// endRequest ends the supplier request now held: its slot is given back, and its own record is priced with its own
+// receipt, which has the supplier's request id. A loop ends one per sampling, so each charge reconciles alone.
+func (a *attempt) endRequest() {
+	receipt := a.s.done(a.conn)
+	a.conn = nil
 	a.obs.Credential = receipt.CredentialID()
 	a.result(receipt)
-	a.observe(ctx)
 }
 
 // observe tells quality how the attempt ended, once, as it closes, with the input it was estimated at and the output
@@ -313,8 +321,10 @@ func (a *attempt) observe(ctx context.Context) {
 	}
 	r := &s.c.Request
 	o.InputTokens = billing.InputEstimate(billing.Demand{TextBytes: r.TextBytes, Images: r.Images, Documents: r.Documents}, a.entry.Limits)
-	for _, seg := range s.ends[a.i].Segments {
-		o.OutputTokens += seg.Usage.OutputTotal()
+	for _, rec := range s.ends[a.first : a.i+1] {
+		for _, seg := range rec.Segments {
+			o.OutputTokens += seg.Usage.OutputTotal()
+		}
 	}
 	s.x.Quality.Observe(ctx, *o)
 }
@@ -346,7 +356,6 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 	defer a.close(ctx)
 	resp, fail := a.send(ctx, up, held)
 	if fail != nil {
-		a.failure = fail
 		a.obs.Failure, a.obs.Cut, a.obs.Ended = fail, cutOf(ctx), time.Now()
 		return s.failed(a, fail)
 	}
@@ -372,7 +381,6 @@ func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*
 	}
 	wait := time.AfterFunc(waitFor, func() { a.cancel(errHeaderWait) })
 	resp, fail := a.conn.Send(ctx, call)
-	a.sent = true
 	wait.Stop() // at once: a late firing would cancel the stream the headers began
 	return resp, fail
 }

@@ -128,45 +128,45 @@ func (s *session) flush(a *attempt) bool {
 	return true
 }
 
-// sendNext prepares and sends the next hop's request on the same entry and credential. A failure after a search ends
-// the call: another entry could not continue without running the searches again on a fresh reservation, and the
-// searches already run stay charged.
+// sendNext ends the sampling that asked for the searches and sends the next one on the same entry. Each sampling is a
+// supplier request of its own: the finished one gives its slot back and is priced on its own receipt before the next
+// takes a slot and its rolling-minute quota, so a credential of capacity one can carry the loop, and each supplier
+// charge has its own attempt to reconcile against. A failure after a search ends the call: another entry could not
+// continue without running the searches again on a fresh reservation, and the searches already run stay charged.
 func (a *attempt) sendNext(ctx context.Context) *ended {
 	s := a.s
 	if s.isGone() {
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
 	}
-	// Each hop is its own supplier request, so it takes its own slot and rolling-minute quota. Release the finished
-	// request first: with a credential capacity of one, acquiring while the old slot is held would fail even though
-	// this call is entitled to reuse it. conn is cleared so a failed acquire cannot call Done twice.
-	prev := s.done(a.conn).WithExchange(a.entry.Exchange)
-	a.receipts = append(a.receipts, prev)
-	a.conn = nil
-	a.sent = false
+	s.ends[a.i].Finish = billing.FinishToolUse
+	a.endRequest()
+	a.hops, a.usage, a.seen = nil, protocol.Usage{}, protocol.Progress{}
 	conn, err := s.x.Upstreams.Acquire(uuid.UUID(a.entry.Endpoint))
 	if err != nil {
-		s.x.Limits.Queue.Wake()
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
 	}
-	a.conn = conn
 	up, held, err := s.prepare(a.entry)
 	if err != nil {
+		s.done(conn)
 		e := s.unprepared(err)
-		return &e
+		return a.abort(e.err, e.after)
 	}
-	// The next sampling is new paid work: it follows the client even when this endpoint's first call did not. The
-	// first hop keeps the attempt context chosen by the endpoint's policy.
-	sendCtx := ctx //nolint:contextcheck // the first hop keeps the attempt's context; a loop hop follows the client
-	if s.loop != nil {
-		sendCtx = s.req.Context()
+	if a.i == a.first {
+		// The next sampling is new paid work: it follows the client even when the endpoint's policy kept the first one
+		// reading after the client left. It stays on the attempt's context, so the deadline, the idle and header waits
+		// and the node's shutdown stop it as they stop the first.
+		context.AfterFunc(s.req.Context(), func() { a.cancel(errClientGone) })
 	}
-	resp, fail := a.send(sendCtx, up, held) //nolint:bodyclose // the body is kept in a.nextBody and closed by stream
+	a.conn = conn
+	a.i = s.begin(a.entry, s.ends[a.i].Entry, true)
+	resp, fail := a.send(ctx, up, held) //nolint:bodyclose // the body is kept in a.nextBody and closed by stream
 	if fail != nil {
-		a.failure = fail
+		a.obs.Failure, a.obs.Cut, a.obs.Ended = fail, cutOf(ctx), time.Now()
 		s.dropOut()
 		_, e := s.failed(a, fail)
+		a.endRequest() // after failed: a request the supplier refused unrun costs nothing, one that may have run is estimated
 		rec := &s.ends[a.i]
-		rec.Result, rec.Finish = billing.FailedBeforeCommit, billing.FinishError
+		rec.Finish = billing.FinishError
 		if s.isGone() {
 			rec.Finish = billing.FinishCancelled
 		}
@@ -176,6 +176,5 @@ func (a *attempt) sendNext(ctx context.Context) *ended {
 		return &e
 	}
 	a.nextBody, a.nextUsage = resp.Body, up.Usage
-	a.seen = protocol.Progress{}
 	return nil
 }

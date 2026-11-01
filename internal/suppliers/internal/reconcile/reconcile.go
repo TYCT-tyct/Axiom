@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"sort"
 	"time"
 	"uuid"
 
@@ -63,14 +62,12 @@ type Cursor struct {
 	At      time.Time
 	Request uuid.UUID
 	Seq     int16
-	Hop     int16
 }
 
 // Unmatched is an attempt with a key and no charge.
 type Unmatched struct {
 	Request uuid.UUID
 	Seq     int16
-	Hop     int16
 	Ref     string
 }
 
@@ -152,17 +149,20 @@ func Run(ctx context.Context, tx store.DBTX, now time.Time, cfg Config) (Report,
 	if err := holdOverdue(ctx, tx, q, now, cfg, &report); err != nil {
 		return report, err
 	}
-	waiting, more, err := listUnmatched(ctx, tx, q, now, cfg)
+	waiting, err := q.ListUnmatchedAttempts(ctx, tx, store.ListUnmatchedAttemptsParams{
+		Before: now.Add(-cfg.Grace), AfterAt: cfg.After.At, AfterRequest: cfg.After.Request, AfterSeq: cfg.After.Seq,
+		Batch: int32(cfg.Batch), //nolint:gosec // a batch size set in configuration
+	})
 	if err != nil {
-		return report, err
+		return report, fmt.Errorf("list unmatched attempts: %w", err)
 	}
 	for _, w := range waiting {
-		report.Unmatched = append(report.Unmatched, Unmatched{Request: w.RequestID, Seq: w.AttemptSeq, Hop: w.Hop, Ref: *w.ChargeRef})
+		report.Unmatched = append(report.Unmatched, Unmatched{Request: w.RequestID, Seq: w.AttemptSeq, Ref: *w.ChargeRef})
 	}
-	report.More = report.More || more
-	if more && len(waiting) > 0 {
+	if len(waiting) == cfg.Batch {
 		last := waiting[len(waiting)-1]
-		report.Next = Cursor{At: last.FinishedAt, Request: last.RequestID, Seq: last.AttemptSeq, Hop: last.Hop}
+		report.Next = Cursor{At: last.FinishedAt, Request: last.RequestID, Seq: last.AttemptSeq}
+		report.More = true
 	}
 	return report, nil
 }
@@ -170,9 +170,9 @@ func Run(ctx context.Context, tx store.DBTX, now time.Time, cfg Config) (Report,
 // matchAll matches in batches, until one comes back short or the run has used its batches.
 func matchAll(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Config, report *Report) error {
 	for range cfg.MaxBatches {
-		matches, short, err := matchBatch(ctx, tx, q, cfg)
+		matches, err := q.MatchCharges(ctx, tx, int32(cfg.Batch)) //nolint:gosec // a batch size set in configuration
 		if err != nil {
-			return err
+			return fmt.Errorf("match charges: %w", err)
 		}
 		for _, m := range matches {
 			if err := settleMatch(ctx, tx, q, cfg, m, report); err != nil {
@@ -180,104 +180,12 @@ func matchAll(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Config, 
 			}
 		}
 		report.Matched += len(matches)
-		if short {
+		if len(matches) < cfg.Batch {
 			return nil
 		}
 	}
 	report.More = true
 	return nil
-}
-
-// matchBatch reads one batch from each table and reports whether both came back short. The detail table is the new
-// write path; the legacy table is what an old node still writes during a rolling upgrade.
-func matchBatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Config) ([]matchRow, bool, error) {
-	matches, err := q.MatchCharges(ctx, tx, int32(cfg.Batch)) //nolint:gosec // a batch size set in configuration
-	if err != nil {
-		return nil, false, fmt.Errorf("match charges: %w", err)
-	}
-	legacy, err := q.MatchLegacyCharges(ctx, tx, int32(cfg.Batch)) //nolint:gosec // as above
-	if err != nil {
-		return nil, false, fmt.Errorf("match legacy charges: %w", err)
-	}
-	rows := make([]matchRow, 0, len(matches)+len(legacy))
-	for _, m := range matches {
-		rows = append(rows, matchRow{
-			ChargeID: m.ChargeID, Revision: m.Revision, ActualNative: m.ActualNative,
-			EstimatedNative: m.EstimatedNative, CostFlag: m.CostFlag, EndpointID: m.EndpointID,
-			CostScheduleID: m.CostScheduleID, RequestID: m.RequestID, AttemptSeq: m.AttemptSeq, Test: m.Test,
-			NativeUnit: m.NativeUnit,
-		})
-	}
-	for _, m := range legacy {
-		rows = append(rows, matchRow{
-			ChargeID: m.ChargeID, Revision: m.Revision, ActualNative: m.ActualNative,
-			EstimatedNative: m.EstimatedNative, CostFlag: m.CostFlag, EndpointID: m.EndpointID,
-			CostScheduleID: m.CostScheduleID, RequestID: m.RequestID, AttemptSeq: m.AttemptSeq, Test: m.Test,
-			NativeUnit: m.NativeUnit,
-		})
-	}
-	return rows, len(matches) < cfg.Batch && len(legacy) < cfg.Batch, nil
-}
-
-// listUnmatched merges the legacy table and the per-hop table. Each query is already ordered and bounded; taking the
-// first cfg.Batch of the merge is the same as reading both further, because anything beyond either query's batch is
-// later than everything it returned.
-func listUnmatched(ctx context.Context, tx store.DBTX, q *store.Queries, now time.Time, cfg Config) (
-	[]store.ListUnmatchedHopsRow, bool, error,
-) {
-	before := now.Add(-cfg.Grace)
-	legacy, err := q.ListUnmatchedAttempts(ctx, tx, store.ListUnmatchedAttemptsParams{
-		Before: before, AfterAt: cfg.After.At, AfterRequest: cfg.After.Request, AfterSeq: cfg.After.Seq,
-		Batch: int32(cfg.Batch), //nolint:gosec // a batch size set in configuration
-	})
-	if err != nil {
-		return nil, false, fmt.Errorf("list unmatched attempts: %w", err)
-	}
-	hops, err := q.ListUnmatchedHops(ctx, tx, store.ListUnmatchedHopsParams{
-		Before: before, AfterAt: cfg.After.At, AfterRequest: cfg.After.Request, AfterSeq: cfg.After.Seq,
-		AfterHop: cfg.After.Hop, Batch: int32(cfg.Batch), //nolint:gosec // as above
-	})
-	if err != nil {
-		return nil, false, fmt.Errorf("list unmatched hops: %w", err)
-	}
-	waiting := make([]store.ListUnmatchedHopsRow, 0, len(legacy)+len(hops))
-	for _, w := range legacy {
-		waiting = append(waiting, store.ListUnmatchedHopsRow(w))
-	}
-	waiting = append(waiting, hops...)
-	sort.Slice(waiting, func(i, j int) bool {
-		a, b := waiting[i], waiting[j]
-		if !a.FinishedAt.Equal(b.FinishedAt) {
-			return a.FinishedAt.Before(b.FinishedAt)
-		}
-		if a.RequestID != b.RequestID {
-			return a.RequestID.String() < b.RequestID.String()
-		}
-		if a.AttemptSeq != b.AttemptSeq {
-			return a.AttemptSeq < b.AttemptSeq
-		}
-		return a.Hop < b.Hop
-	})
-	more := len(waiting) > cfg.Batch || len(legacy) == cfg.Batch || len(hops) == cfg.Batch
-	if len(waiting) > cfg.Batch {
-		waiting = waiting[:cfg.Batch]
-	}
-	return waiting, more, nil
-}
-
-// matchRow is the common shape of a match from the detail table and one from the legacy table.
-type matchRow struct {
-	ChargeID        uuid.UUID
-	Revision        int32
-	ActualNative    string
-	EstimatedNative string
-	CostFlag        string
-	EndpointID      uuid.UUID
-	CostScheduleID  uuid.UUID
-	RequestID       uuid.UUID
-	AttemptSeq      int16
-	Test            bool
-	NativeUnit      string
 }
 
 // holdOverdue holds, in batches, the charges that waited past the grace.
@@ -302,7 +210,7 @@ func holdOverdue(ctx context.Context, tx store.DBTX, q *store.Queries, now time.
 }
 
 // settleMatch judges a match against the tolerance, delists an endpoint whose estimate was too low, and tells billing.
-func settleMatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Config, m matchRow, report *Report) error {
+func settleMatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Config, m store.MatchChargesRow, report *Report) error {
 	verdict, err := judge(cfg, m)
 	if err != nil {
 		report.Violations = append(report.Violations, fmt.Sprintf("charge %s: %v", m.ChargeID, err))
@@ -333,7 +241,7 @@ func settleMatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Confi
 // estimate that leaves out priced items or had no usage says nothing about the price, so it is "unjudged", and so does
 // a test generation, whose estimate is a deliberate upper bound: a probe charges the platform, not a tenant, and its
 // own price must never delist a payable endpoint (H-I9).
-func judge(cfg Config, m matchRow) (string, error) {
+func judge(cfg Config, m store.MatchChargesRow) (string, error) {
 	if m.CostFlag != "complete" || m.Test {
 		return "unjudged", nil
 	}

@@ -273,17 +273,6 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	s := a.s
 	rec := &s.ends[a.i]
 	rec.Receipt, rec.FinishedAt = receipt, time.Now()
-	if len(a.receipts) > 1 {
-		rec.Receipts = append([]suppliers.AttemptReceipt(nil), a.receipts...)
-	}
-	if a.s.loop != nil {
-		// Every supplier request of the loop, including one that failed before a Relay, is a hop of its own. The
-		// attempt's cost is their sum, not a second pricing of all segments under the last receipt.
-		rec.Segments = a.hops
-		if a.recordHops(rec) {
-			return
-		}
-	}
 	if rec.Result == billing.NotExecuted {
 		rec.CostKnown = true
 		rec.Estimate.Conversion = suppliers.ConversionNotRun
@@ -291,9 +280,7 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		return
 	}
 	if len(a.hops) > 0 {
-		// A non-loop attempt with sampled usage (a pass-through of a compact response, for instance) keeps its single
-		// aggregate price.
-		rec.Segments = a.hops
+		rec.Segments = a.hops // a sampling of a model-side loop, estimated under its own output limit (hopDone)
 	} else {
 		rec.Segments = estimated(a.usage, a.seen, a.demand(), a.entry.Limits, a.meter.OutputCap(),
 			billing.TokenizerOf(a.entry.Target.Model))

@@ -102,11 +102,16 @@ func TestServerLoopSearchesAndAnswersInOneStream(t *testing.T) {
 			t.Fatalf("the client saw the tool hop or more than one stream: %s", h.w.body())
 		}
 		out := h.settlements[0].outcome
-		if len(out.Attempts) != 1 || len(out.Attempts[0].Segments) != 2 {
-			t.Fatalf("settled attempts = %+v, want one attempt with two samplings", out.Attempts)
+		if len(out.Attempts) != 2 {
+			t.Fatalf("settled attempts = %+v, want one per supplier request", out.Attempts)
 		}
-		if len(out.Attempts[0].Receipts) != 2 {
-			t.Fatalf("settled receipts = %d, want one per supplier request", len(out.Attempts[0].Receipts))
+		for i, at := range out.Attempts {
+			if at.Seq != i+1 || at.Continues != (i > 0) || len(at.Segments) != 1 || at.Result != billing.Committed {
+				t.Fatalf("attempt %d = %+v, want sampling %d of the loop, delivered", i, at, i+1)
+			}
+		}
+		if out.Attempts[0].Finish != billing.FinishToolUse || out.Attempts[1].Finish != billing.FinishStop {
+			t.Fatalf("finishes = %d, %d; want tool use, then stop", out.Attempts[0].Finish, out.Attempts[1].Finish)
 		}
 		if got := out.Attempts[0].Segments[0].Usage.Count(catalog.ItemWebSearch); got != 1 {
 			t.Fatalf("settled searches = %d, want 1", got)
@@ -126,8 +131,8 @@ func TestServerLoopTwoSteps(t *testing.T) {
 		if got := h.up.endpoint(1).acquired; got != 3 {
 			t.Fatalf("supplier acquisitions = %d, want one per hop", got)
 		}
-		if got := len(h.settlements[0].outcome.Attempts[0].Receipts); got != 3 {
-			t.Fatalf("receipts = %d, want one per hop", got)
+		if got := len(h.settlements[0].outcome.Attempts); got != 3 {
+			t.Fatalf("attempts = %d, want one per hop", got)
 		}
 		if got := h.settlements[0].outcome.Attempts[0].Segments[0].Usage.Count(catalog.ItemWebSearch); got != 2 {
 			t.Fatalf("settled searches = %d, want 2", got)
@@ -186,11 +191,11 @@ func TestServerLoopUpstreamFailureIsUpstreamError(t *testing.T) {
 		if h.w.status != http.StatusBadGateway {
 			t.Fatalf("status = %d, body = %s, want 502 after the search", h.w.status, h.w.body())
 		}
-		rec := h.settlements[0].outcome.Attempts[0]
-		if rec.Result != billing.FailedBeforeCommit || rec.Finish != billing.FinishError {
-			t.Fatalf("attempt = %+v, want failed before commit", rec)
+		attempts := h.settlements[0].outcome.Attempts
+		if len(attempts) != 2 || attempts[0].Result != billing.FailedBeforeCommit || attempts[1].Finish != billing.FinishError {
+			t.Fatalf("attempts = %+v, want a loop that failed before commit", attempts)
 		}
-		if got := rec.Segments[0].Usage.Count(catalog.ItemWebSearch); got != 1 {
+		if got := attempts[0].Segments[0].Usage.Count(catalog.ItemWebSearch); got != 1 {
 			t.Fatalf("the successful search was not charged: %d", got)
 		}
 	})
@@ -251,8 +256,10 @@ func TestServerLoopAggregateCarriesTheFinalReply(t *testing.T) {
 			!strings.Contains(reply.Choices[0].Message.Content, "Axiom is a gateway.") {
 			t.Fatalf("aggregated reply = %s (%v)", h.w.body(), err)
 		}
-		if len(searcher.queries) != 1 || len(h.settlements[0].outcome.Attempts[0].Segments) != 2 {
-			t.Fatalf("searches = %d, attempts = %+v", len(searcher.queries), h.settlements[0].outcome.Attempts)
+		attempts := h.settlements[0].outcome.Attempts
+		if len(searcher.queries) != 1 || len(attempts) != 2 || attempts[0].Result != billing.Aggregated ||
+			attempts[1].Result != billing.Aggregated {
+			t.Fatalf("searches = %d, attempts = %+v", len(searcher.queries), attempts)
 		}
 	})
 }
@@ -392,8 +399,9 @@ func TestServerLoopEmptyContinuationDoesNotFallBack(t *testing.T) {
 		if n := len(h.up.endpoint(2).calls); n != 0 {
 			t.Fatalf("the fallback entry got %d calls after a search", n)
 		}
-		if rec := h.settlements[0].outcome.Attempts[0]; rec.Result != billing.FailedBeforeCommit || rec.Finish != billing.FinishError {
-			t.Fatalf("attempt = %+v, want failed before commit", rec)
+		attempts := h.settlements[0].outcome.Attempts
+		if len(attempts) != 2 || attempts[0].Result != billing.FailedBeforeCommit || attempts[1].Result != billing.FailedBeforeCommit {
+			t.Fatalf("attempts = %+v, want a loop that failed before commit", attempts)
 		}
 	})
 }
@@ -480,8 +488,8 @@ func (c *perCallCosts) Credits(_ suppliers.AttemptReceipt, _ []catalog.Usage, _ 
 	return suppliers.AttemptCost{Native: platform.AmountExact(1), Flag: suppliers.CostComplete}, 1, true, nil
 }
 
-// TestServerLoopChargesEverySupplierRequest: a per-request price is charged once per hop, and the aggregate cost is the
-// sum of the hop results rather than one pricing of all segments under the last receipt.
+// TestServerLoopChargesEverySupplierRequest: each hop is an attempt priced on its own receipt, so a per-request price is
+// counted once per hop and the call's cost is the sum, never one pricing of all segments under the last receipt.
 func TestServerLoopChargesEverySupplierRequest(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		costs := &perCallCosts{}
@@ -498,17 +506,14 @@ func TestServerLoopChargesEverySupplierRequest(t *testing.T) {
 		if h.w.status != http.StatusOK {
 			t.Fatalf("status = %d, body = %s", h.w.status, h.w.body())
 		}
-		rec := h.settlements[0].outcome.Attempts[0]
-		if len(rec.Hops) != 2 || rec.Cost != 2 || costs.calls != 2 {
-			t.Fatalf("hops = %+v, cost = %d, priced = %d; want two one-credit hops", rec.Hops, rec.Cost, costs.calls)
+		attempts := h.settlements[0].outcome.Attempts
+		if len(attempts) != 2 || costs.calls != 2 || costOf(h.settlements[0].outcome) != 2 {
+			t.Fatalf("attempts = %+v, priced = %d; want two one-credit requests", attempts, costs.calls)
 		}
-		for i, hop := range rec.Hops {
-			if hop.Cost != 1 || hop.Estimate.Native.Cmp(platform.AmountExact(1)) != 0 || !hop.CostKnown {
-				t.Fatalf("hop %d = %+v, want one known credit", i, hop)
+		for i, at := range attempts {
+			if at.Cost != 1 || at.Estimate.Native.Cmp(platform.AmountExact(1)) != 0 || !at.CostKnown {
+				t.Fatalf("attempt %d = %+v, want one known credit", i, at)
 			}
-		}
-		if rec.Estimate.Native.Cmp(platform.AmountExact(2)) != 0 {
-			t.Fatalf("aggregate native cost = %s, want 2", rec.Estimate.Native.AppendDecimal(nil))
 		}
 	})
 }
@@ -535,19 +540,19 @@ func failedLoop(t *testing.T, ctx context.Context, executed bool) (*harness, *pe
 }
 
 // TestServerLoopKeepsAnUnknownFailedRequest: the second hop can fail before it reaches a Relay, but the supplier may
-// still have charged it. Its receipt and its own row must survive, with the execution marked unknown.
+// still have run and charged it. It is an attempt of its own, priced as any failed attempt whose outcome is unknown.
 func TestServerLoopKeepsAnUnknownFailedRequest(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h, costs := failedLoop(t, ctx, false)
-		rec := h.settlements[0].outcome.Attempts[0]
-		if len(rec.Hops) != 2 || len(rec.Hops[1].Segments) != 0 {
-			t.Fatalf("hops = %+v, want the failed request as the second hop", rec.Hops)
+		attempts := h.settlements[0].outcome.Attempts
+		if len(attempts) != 2 || attempts[1].Seq != 2 || !attempts[1].Continues || attempts[1].Result != billing.Unknown {
+			t.Fatalf("attempts = %+v, want the failed request as a second, unknown attempt", attempts)
 		}
-		if len(rec.Receipts) != 2 || costs.calls != 2 {
-			t.Fatalf("receipts = %d, priced = %d; want both requests kept", len(rec.Receipts), costs.calls)
+		if costs.calls != 2 || attempts[1].CostKnown {
+			t.Fatalf("priced = %d, second = %+v; want it priced and not known", costs.calls, attempts[1])
 		}
-		if rec.Hops[1].CostKnown {
-			t.Fatalf("a request whose execution is unknown was priced as known: %+v", rec.Hops[1])
+		if h.up.endpoint(1).acquired != 2 || h.up.endpoint(1).done != 2 {
+			t.Fatalf("acquired/done = %d/%d, want each request ended once", h.up.endpoint(1).acquired, h.up.endpoint(1).done)
 		}
 	})
 }
@@ -557,12 +562,41 @@ func TestServerLoopKeepsAnUnknownFailedRequest(t *testing.T) {
 func TestServerLoopDoesNotPriceARefusedRequest(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		h, costs := failedLoop(t, ctx, true)
-		rec := h.settlements[0].outcome.Attempts[0]
-		if len(rec.Hops) != 2 || rec.Hops[1].Estimate.Conversion != suppliers.ConversionNotRun || rec.Hops[1].Cost != 0 {
-			t.Fatalf("a refused request = %+v, want a zero-cost not-executed hop", rec.Hops)
+		attempts := h.settlements[0].outcome.Attempts
+		if len(attempts) != 2 || attempts[1].Result != billing.NotExecuted || attempts[1].Cost != 0 ||
+			attempts[1].Estimate.Conversion != suppliers.ConversionNotRun {
+			t.Fatalf("attempts = %+v, want a zero-cost not-executed second attempt", attempts)
 		}
-		if !rec.Hops[1].CostKnown || costs.calls != 1 {
-			t.Fatalf("a refused request was priced (calls = %d): %+v", costs.calls, rec.Hops[1])
+		if !attempts[1].CostKnown || costs.calls != 1 {
+			t.Fatalf("a refused request was priced (calls = %d): %+v", costs.calls, attempts[1])
+		}
+	})
+}
+
+// TestServerLoopStepsDoNotSpendTheFallbacks: each step of a loop is an attempt, but not a routing one. A loop that ran
+// no search (its calls named no query) and then got an empty reply still falls back to the next entry, after more
+// samplings than platform.MaxAttempts; the fallback answers alone and continues nothing.
+func TestServerLoopStepsDoNotSpendTheFallbacks(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		noQuery := strings.Replace(chatToolCall, `{\"query\":\"axiom\"}`, `{}`, 1)
+		searcher := &recordingSearcher{}
+		upstream := protocol.Chat
+		h := newHarness(t, ctx, options{
+			client: protocol.Chat, upstream: &upstream, entries: 2, request: []byte(searchTool),
+			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
+			search: searcher, server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+			script: map[int][]scripted{
+				1: {serve(beat{data: noQuery}), serve(beat{data: noQuery}), serve(beat{data: noQuery}), serve(beat{})},
+				2: {serve(beat{data: chatAnswer})},
+			},
+		})
+		h.run()
+		if h.w.status != http.StatusOK || !strings.Contains(h.w.body(), "Axiom is a gateway.") || len(searcher.queries) != 0 {
+			t.Fatalf("status = %d, searches = %d, body = %s", h.w.status, len(searcher.queries), h.w.body())
+		}
+		attempts := h.settlements[0].outcome.Attempts
+		if len(attempts) != 5 || attempts[4].Seq != 5 || attempts[4].Continues || !attempts[3].Continues {
+			t.Fatalf("attempts = %+v, want four samplings of the loop, then a fallback of its own", attempts)
 		}
 	})
 }
