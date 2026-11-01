@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/alloctest"
 	"axiom/internal/routing"
@@ -261,9 +262,14 @@ func timed(h *harness, in routing.Input, reps int) time.Duration {
 
 // planTimeRatio fails when planning over large candidates takes more than a thousand times as long as over small.
 func planTimeRatio(t *testing.T, small, large int) {
-	const samples = 3
 	hs, ins := candidates(t, small, routing.Config{})
 	hl, inl := candidates(t, large, routing.Config{})
+	checkPlanRatio(t, "candidates", small, large, 1000, hs, ins, hl, inl)
+}
+
+// checkPlanRatio fails when planning large takes more than limit times as long as planning small.
+func checkPlanRatio(t *testing.T, what string, small, large int, limit float64, hs *harness, ins routing.Input, hl *harness, inl routing.Input) {
+	const samples = 3
 	reps := 1 // doubled until even the fastest of a few runs at the small size is long enough to time; the first runs
 	// also warm both sizes up
 	for min(timed(hs, ins, reps), timed(hs, ins, reps), timed(hs, ins, reps)) < 2*time.Millisecond {
@@ -274,8 +280,50 @@ func planTimeRatio(t *testing.T, small, large int) {
 	for range samples {
 		bestSmall, bestLarge = min(bestSmall, timed(hs, ins, reps)), min(bestLarge, timed(hl, inl, reps))
 	}
-	if ratio := float64(bestLarge) / float64(bestSmall); ratio > 1000 {
-		t.Errorf("planning %d candidates takes %.0f times as long as %d (%v against %v for %d plans), want about %d",
-			large, ratio, small, bestLarge, bestSmall, reps, large/small)
+	if ratio := float64(bestLarge) / float64(bestSmall); ratio > limit {
+		t.Errorf("planning %d %s takes %.0f times as long as %d (%v against %v for %d plans), want about %d",
+			large, what, ratio, small, bestLarge, bestSmall, reps, large/small)
+	}
+}
+
+// modelCandidates is a harness with n models, one endpoint each and all free, and a request for openrouter/auto or
+// openrouter/free: what TestPlanScalesAcrossModels plans over. Only the last model is allowed, so the model scan is what
+// the plan costs and its one candidate leaves nothing for the global sort to hide it behind.
+func modelCandidates(tb testing.TB, n int, auto, free bool) (*harness, routing.Input) {
+	tb.Helper()
+	endpoints := make([]routing.Endpoint, 0, n)
+	for i := 1; i <= n; i++ {
+		m := catalog.ModelID(id(i))
+		endpoints = append(endpoints, endpoint(tb, i, func(e *routing.Endpoint) {
+			e.Model = m
+			e.Free = true
+		}))
+	}
+	in := input()
+	in.Auto, in.Free = auto, free
+	in.Models = []catalog.ModelID{model} // auto and free ignore the request's own list
+	in.Admission.Allowed = map[catalog.ModelID]struct{}{catalog.ModelID(id(n)): {}}
+	return newHarness(tb, routing.Config{}, openPreset(), endpoints...), in
+}
+
+// TestPlanScalesAcrossModels: openrouter/auto and openrouter/free rank the snapshot's own model lists, which are unique
+// already. Planning over 64 times the models costs about 64 times as much, not 4096: #537 found a dedup of those lists
+// that compared every model with every earlier one. Only one model is allowed, so the scan is the cost and the global
+// sort cannot hide it; only a model count sees the quadratic, since candidates adds endpoints of one model.
+func TestPlanScalesAcrossModels(t *testing.T) {
+	const small, large = 100, 6400
+	for _, c := range []struct {
+		name string
+		auto bool
+		free bool
+	}{
+		{"auto", true, false},
+		{"free", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hs, ins := modelCandidates(t, small, c.auto, c.free)
+			hl, inl := modelCandidates(t, large, c.auto, c.free)
+			checkPlanRatio(t, "models", small, large, 300, hs, ins, hl, inl)
+		})
 	}
 }

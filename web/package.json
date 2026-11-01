@@ -38,9 +38,10 @@
     "vitest": "5.0.5",
     "web-vitals": "6.2.3"
   },
-  "//": "zod 4.6.5 can exhaust memory on oversized constrained collections (GHSA-mrhx-c7xc-m3w5, Dependabot alert 11). knip's ^4.6.5 range allows the fixed release, so pin the transitive dependency to the newest patched version rather than depend on a stale lock.",
+  "//": "zod 4.6.5 can exhaust memory on oversized constrained collections (GHSA-mrhx-c7xc-m3w5, Dependabot alert 11). knip's ^4.6.5 range allows the fixed release, so pin the transitive dependency to the newest patched version rather than depend on a stale lock. minimatch before 11.0.1 expands crafted glob patterns into a denial of service (GHSA-g3hv-75wg-m249, CVE-2026-118764); @redocly/openapi-core asks for 5.1.9, whose major has no patched release, so pin the first patched 11.0.1. minimatch 11 has no callable default export; @redocly/openapi-core uses one only for remote documents with configured headers, which generation from api/*.yaml does not exercise.",
   "pnpm": {
     "overrides": {
+      "minimatch": "11.0.1",
       "zod": "4.6.7"
     }
   }
