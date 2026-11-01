@@ -4168,6 +4168,174 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/subscription-plans:
+    get:
+      operationId: listSubscriptionPlans
+      tags: [Pricing]
+      summary: List the subscription plans
+      description: >-
+        The site's catalog of subscription plans, by name: what one window of a plan holds, how long its window and its
+        term are, and the price it is listed at (docs/domains/billing.md「订阅套餐」). Plans are administrator data;
+        nothing here is hard-coded.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.view
+      parameters:
+        - name: include_inactive
+          in: query
+          required: false
+          schema: {type: boolean, default: false}
+      responses:
+        "200":
+          description: The plans.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SubscriptionPlanList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createSubscriptionPlan
+      tags: [Pricing]
+      summary: Add a subscription plan
+      description: >-
+        Adds a plan to the catalog. `price` is the list price in whole minor units of the site's currency. `quota` is
+        the credit one window holds. A term holds at most 400 windows, and its total credit must fit the ledger. The
+        terms are copied into every subscription sold from the plan, so a later change affects only what is sold after
+        it.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SubscriptionPlanInput"}
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SubscriptionPlan"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/subscription-plans/{plan_id}:
+    put:
+      operationId: updateSubscriptionPlan
+      tags: [Pricing]
+      summary: Change a subscription plan
+      description: >-
+        Saves the plan at the revision the caller read. A revision that has moved is a 409, so two administrators cannot
+        overwrite each other. Subscriptions already sold keep the terms they were sold with.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: pricing.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: plan_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SubscriptionPlanUpdate"}
+      responses:
+        "200":
+          description: Saved.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SubscriptionPlan"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/subscription-grants:
+    post:
+      operationId: grantSubscription
+      tags: [Users]
+      summary: Sell or give an account a subscription
+      description: >-
+        Grants the plan to the account, or renews the plan already in force: the term extends from its end (or from
+        now when it has ended), and the new windows' credit is credited to the plan's liability in the ledger
+        (docs/domains/billing.md「订阅套餐」). The source `gift` (the default) is a gift expense; `offline_payment`
+        records money received outside the payment channels, like a credit grant. Another plan in force is a 409: a
+        plan is not replaced silently. The ID is the idempotency key; the same key and terms change nothing.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: credits.grant
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SubscriptionGrantInput"}
+      responses:
+        "201":
+          description: Granted.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Subscription"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/subscriptions:
+    get:
+      operationId: listSubscriptions
+      tags: [Users]
+      summary: List an account's subscriptions
+      description: The account's subscriptions, newest first, each with its current window.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.view
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+      responses:
+        "200":
+          description: The subscriptions.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SubscriptionList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
 components:
   securitySchemes:
     session:
@@ -5954,6 +6122,108 @@ components:
       properties:
         data: {type: array, items: {$ref: "#/components/schemas/RedeemCode"}}
         next_cursor: {type: string, description: "Absent on the last page."}
+    CreditAmount:
+      type: string
+      pattern: '^(0|[1-9][0-9]*)$'
+      maxLength: 19
+      description: >-
+        An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot
+        round it (docs/domains/billing.md「钱的表示」).
+      example: "5000000000"
+    SubscriptionPlanInput:
+      type: object
+      additionalProperties: false
+      required: [name, price, quota, window_seconds, term_seconds, reason]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        price: {$ref: "#/components/schemas/Money"}
+        quota: {$ref: "#/components/schemas/CreditAmount"}
+        window_seconds: {type: integer, minimum: 3600, description: "How long one window lasts, at least an hour."}
+        term_seconds: {type: integer, minimum: 3600, description: "How long the whole subscription lasts, at least one window."}
+        active: {type: boolean, description: "Absent: true."}
+        reason: {$ref: "#/components/schemas/Reason"}
+      description: "A plan as an administrator sets it. `price` is the list price in whole minor units of the site's currency."
+    SubscriptionPlanUpdate:
+      type: object
+      additionalProperties: false
+      required: [name, price, quota, window_seconds, term_seconds, rev, reason]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        price: {$ref: "#/components/schemas/Money"}
+        quota: {$ref: "#/components/schemas/CreditAmount"}
+        window_seconds: {type: integer, minimum: 3600}
+        term_seconds: {type: integer, minimum: 3600}
+        active: {type: boolean, description: "Absent: true."}
+        rev: {type: integer, minimum: 1, description: "The revision the caller read."}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SubscriptionPlan:
+      type: object
+      required: [id, name, price, quota, window_seconds, term_seconds, active, rev, created_at, updated_at]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        name: {type: string}
+        price: {$ref: "#/components/schemas/Money"}
+        quota: {$ref: "#/components/schemas/CreditAmount"}
+        window_seconds: {type: integer}
+        term_seconds: {type: integer}
+        active: {type: boolean}
+        rev: {type: integer}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    SubscriptionPlanList:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/SubscriptionPlan"}}
+    SubscriptionSource:
+      type: string
+      enum: [gift, offline_payment]
+      description: "How the plan was paid for. Absent in a request: gift."
+    SubscriptionGrantInput:
+      type: object
+      additionalProperties: false
+      required: [plan_id, reason]
+      properties:
+        plan_id: {$ref: "#/components/schemas/Uuid"}
+        source: {$ref: "#/components/schemas/SubscriptionSource"}
+        payment: {$ref: "#/components/schemas/OfflinePayment"}
+        reason: {$ref: "#/components/schemas/Reason"}
+      description: "A gift needs only `plan_id`; an offline payment needs `payment` too, and `source` set to it."
+    SubscriptionWindow:
+      type: object
+      required: [seq, starts_at, ends_at, quota, used, reserved, remaining]
+      properties:
+        seq: {type: integer, minimum: 1}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+        quota: {$ref: "#/components/schemas/CreditAmount"}
+        used: {$ref: "#/components/schemas/CreditAmount"}
+        reserved: {$ref: "#/components/schemas/CreditAmount"}
+        remaining: {$ref: "#/components/schemas/CreditAmount"}
+    SubscriptionStanding:
+      type: string
+      enum: [active, expired]
+      x-enum-varnames: [SubscriptionActive, SubscriptionExpired]
+      description: "`expired`: the term ended; `closed_at` is when what was left of it was written off."
+    Subscription:
+      type: object
+      required: [id, account_id, plan_id, plan_name, state, starts_at, ends_at, created_at, current_window]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        plan_id: {$ref: "#/components/schemas/Uuid"}
+        plan_name: {type: string, description: "The plan's name when it was sold; a later rename does not change it."}
+        state: {$ref: "#/components/schemas/SubscriptionStanding"}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+        closed_at: {type: string, format: date-time, description: "When the remaining liability was written off; absent until then."}
+        created_at: {type: string, format: date-time}
+        current_window: {$ref: "#/components/schemas/SubscriptionWindow"}
+    SubscriptionList:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/Subscription"}}
     CreditGrant:
       type: object
       required: [id, account_id, source, amount, created_at, balance_after]

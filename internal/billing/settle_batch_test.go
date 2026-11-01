@@ -313,3 +313,93 @@ func settleOne(t *testing.T, b *bank, holds []*Hold, outcomes []Outcome) []int64
 	}
 	return charges
 }
+
+// TestSettleBatchSameWindowAggregates: two requests that froze the same window settle and release in one batch, and the
+// window takes both moves. A set-based UPDATE ... FROM matches one input row per target row, so the batch must sum
+// them first or the ledger charges 200 while the window still shows 100 reserved and 100 used.
+func TestSettleBatchSameWindowAggregates(t *testing.T) {
+	t.Parallel()
+
+	b := newBank(t, 1000, 0, Config{})
+	b.subscribe(b.makePlan(400, 3600), uuid.NewV7())
+	o := outcome(Committed, FinishStop, used(t, 100, 0, 0))
+	charges := settleBatch(t, b, []*Hold{b.holdOn(b.exact, 100), b.holdOn(b.exact, 100)}, []Outcome{o, o})
+	if len(charges) != 2 || charges[0] != 100 || charges[1] != 100 {
+		t.Fatalf("charges %v, want 100 and 100", charges)
+	}
+	if w := b.window(1); w.Used != 200 || w.Reserved != 0 {
+		t.Errorf("window 1 is %+v after two charges of 100, want 200 used and 0 reserved", w)
+	}
+	// The same window releases two more holds in one batch: the reserved goes back once for both.
+	h1, h2 := b.holdOn(b.exact, 50), b.holdOn(b.exact, 50)
+	settleBatch(t, b, []*Hold{h1, h2}, []Outcome{{}, {}})
+	if w := b.window(1); w.Used != 200 || w.Reserved != 0 {
+		t.Errorf("window 1 is %+v after releasing two holds, want 200 used and 0 reserved", w)
+	}
+	b.consistent()
+	b.balanced()
+}
+
+// TestSettleBatchPlanAndWalletMix: when a batch has a plan charge and a wallet charge, the wallet charge is capped by
+// the balance the plan charge left, which is the whole balance because a plan charge moves none of it.
+func TestSettleBatchPlanAndWalletMix(t *testing.T) {
+	t.Parallel()
+
+	b := newBank(t, 1000, 0, Config{})
+	b.subscribe(b.makePlan(100, 3600), uuid.NewV7())
+	plan := b.holdOn(b.exact, 100)
+	wallet := b.holdOn(b.exact, 100)
+	if plan.funding != "plan" || wallet.funding != "wallet" {
+		t.Fatalf("holds fund from %q and %q, want one of each", plan.funding, wallet.funding)
+	}
+	o := outcome(Committed, FinishStop, used(t, 100, 0, 0))
+	charges := settleBatch(t, b, []*Hold{plan, wallet}, []Outcome{o, o})
+	if charges[0] != 100 || charges[1] != 100 {
+		t.Fatalf("charges %v, want 100 from the plan and 100 from the wallet", charges)
+	}
+	if n := b.balanceOf(b.admitted.Account); n != 900 {
+		t.Errorf("balance %d after the mixed batch, want 900", n)
+	}
+	if w := b.window(1); w.Used != 100 || w.Reserved != 0 {
+		t.Errorf("window 1 is %+v, want 100 used", w)
+	}
+	b.consistent()
+	b.balanced()
+}
+
+// TestSettleBatchLatePlanHoldsPayFromTheWalletInOrder: cleanup released two plan holds, so each late settlement pays
+// from the wallet. The first takes the whole 100 balance; the second must be capped at 0, not take the balance to -100.
+func TestSettleBatchLatePlanHoldsPayFromTheWalletInOrder(t *testing.T) {
+	t.Parallel()
+
+	b := newBank(t, 100, 0, Config{})
+	b.subscribe(b.makePlan(300, 3600), uuid.NewV7())
+	h1, h2 := b.holdOn(b.exact, 100), b.holdOn(b.exact, 100)
+	b.sql(fmt.Sprintf("UPDATE billing.reservations SET deadline = now() - interval '1 minute' WHERE request_id IN ('%s', '%s')",
+		h1.id, h2.id))
+	if n, err := b.billing.Cleanup(t.Context(), 10); err != nil || n != 2 {
+		t.Fatalf("Cleanup = %d, %v; want both holds released", n, err)
+	}
+	o := outcome(Committed, FinishStop, used(t, 100, 0, 0))
+	finals, afters, err := b.billing.SettleBatch(t.Context(), b.admitted.Scope, []Settlement{{Hold: h1, Outcome: o}, {Hold: h2, Outcome: o}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, after := range afters {
+		after()
+	}
+	if got := []int64{finals[0].Charged.CeilAmount(), finals[1].Charged.CeilAmount()}; got[0] != 100 || got[1] != 0 {
+		t.Fatalf("charges %v, want 100 then 0: the second settlement may not pass the floor", got)
+	}
+	if n := b.balanceOf(b.admitted.Account); n != 0 {
+		t.Errorf("balance %d after the late settlements, want 0", n)
+	}
+	if w := b.window(1); w.Used != 0 || w.Reserved != 0 {
+		t.Errorf("window 1 is %+v after cleanup and wallet-paid settlements, want nothing used", w)
+	}
+	if n := b.count("SELECT count(*) FROM billing.reservations WHERE funding = 'wallet' AND subscription_id IS NULL"); n != 2 {
+		t.Errorf("%d late settlements record the wallet as their source, want 2", n)
+	}
+	b.consistent()
+	b.balanced()
+}

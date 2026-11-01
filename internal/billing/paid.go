@@ -80,6 +80,18 @@ func MinorUnits(c platform.Currency, billionths int64) (int64, error) {
 	return billionths / scale, nil
 }
 
+// FromMinor is billionths of a unit of c in c's minor units, the inverse of MinorUnits.
+func FromMinor(c platform.Currency, minor int64) (int64, error) {
+	scale, err := unitScale(c)
+	if err != nil {
+		return 0, err
+	}
+	if minor > math.MaxInt64/scale || minor < math.MinInt64/scale {
+		return 0, &PaidError{"of more minor units than the ledger holds"}
+	}
+	return minor * scale, nil
+}
+
 // billionths is p's paid and fee amounts in billionths of a unit of its currency, the unit of the ledger.
 func (p Payment) billionths() (paid, fee int64, err error) {
 	scale, err := unitScale(p.Currency)

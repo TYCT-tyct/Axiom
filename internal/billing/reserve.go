@@ -45,7 +45,13 @@ type Hold struct {
 	admitted        Admitted
 	workspaceWindow time.Time
 	keyWindow       time.Time
+	funding         string    // "wallet" or "plan": where the hold is frozen (docs/domains/billing.md「订阅套餐」)
+	subscription    uuid.UUID // the plan's subscription, zero for a wallet hold
+	windowSeq       int32     // the window the plan hold is frozen in, zero for a wallet hold
 }
+
+// plan reports whether the hold is frozen in a subscription window rather than in the balance's reserved counter.
+func (h *Hold) plan() bool { return h.funding == "plan" }
 
 // lockedPrices are the kept entries' schedules in canonical JSON by route index, "" for a dropped entry: settlement and
 // cleanup price usage with them, whichever process runs them.
@@ -97,7 +103,7 @@ func (b *Billing) reservationParams(a Admitted, id uuid.UUID, q []Quotable, r Re
 		Prices: prices, Fallbacks: locked, Models: models, Endpoints: endpoints,
 		RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		WorkspaceWindow: day, KeyWindow: day, Amount: r.Amount.CeilAmount(),
-		LifetimeSeconds: b.config.Lifetime.Seconds(), CreatedAtUs: at.UnixMicro(),
+		LifetimeSeconds: b.config.Lifetime.Seconds(), CreatedAtUs: at.UnixMicro(), Funding: "wallet",
 	}, nil
 }
 
@@ -153,8 +159,8 @@ func (b *Billing) ExtendIn(ctx context.Context, tx pg.Tx, h *Hold, r ExtendReque
 		return err
 	}
 	avail := a.available(balance, usage.WorkspaceUsed, usage.KeyUsed)
-	if short := shortSource(platform.AmountExact(delta), avail); short >= 0 {
-		return a.transient(&Insufficient{Source: avail[short].Source})
+	if err := extendRoom(ctx, tx, a, row, platform.AmountExact(delta), avail); err != nil {
+		return err
 	}
 	// Under the balance row lock nothing changed the row since it was read, so the compare must hold.
 	if n, err := queries.ExtendReservation(ctx, tx, ExtendReservationParams{
@@ -165,8 +171,34 @@ func (b *Billing) ExtendIn(ctx context.Context, tx pg.Tx, h *Hold, r ExtendReque
 		return fmt.Errorf("billing: the extension of %s changed %d rows under the lock", h.id, n)
 	}
 	// Book to the windows the row holds, the same ones the limits were just checked in.
-	booked := Hold{id: h.id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow}
+	booked := Hold{
+		id: h.id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow,
+		funding: row.Funding, subscription: derefUUID(row.SubscriptionID), windowSeq: derefInt32(row.WindowSeq),
+	}
 	return booked.addReserved(ctx, tx, delta)
+}
+
+// extendRoom checks the delta against the source the reservation froze. A plan hold is not capped by the wallet's own
+// headroom, but the workspace and key limits count both sources alike; a window short of the delta truncates the answer,
+// as a short balance does.
+func extendRoom(ctx context.Context, tx pg.Tx, a Admitted, row GetReservationRow, amount platform.Exact, avail []Available) error {
+	if row.Funding != "plan" {
+		if short := shortSource(amount, avail); short >= 0 {
+			return a.transient(&Insufficient{Source: avail[short].Source})
+		}
+		return nil
+	}
+	if short := shortSource(amount, avail[1:]); short >= 0 {
+		return a.transient(&Insufficient{Source: avail[short+1].Source})
+	}
+	w, err := queries.Window(ctx, tx, WindowParams{SubscriptionID: *row.SubscriptionID, Seq: *row.WindowSeq})
+	if err != nil {
+		return fmt.Errorf("billing: read the frozen window: %w", err)
+	}
+	if amount.Cmp(platform.AmountExact(w.Quota-w.Used-w.Reserved)) > 0 {
+		return a.transient(&Insufficient{Source: SourceBalance})
+	}
+	return nil
 }
 
 // SettleOrphan ends the reservation of a request whose admission's COMMIT went unacknowledged (README.md「追加与结算」).
@@ -190,7 +222,10 @@ func (b *Billing) SettleOrphanIn(ctx context.Context, tx pg.Tx, a Admitted, id u
 			RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		})
 	case err == nil && row.State == "pending":
-		h := &Hold{id: id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow}
+		h := &Hold{
+			id: id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow,
+			funding: row.Funding, subscription: derefUUID(row.SubscriptionID), windowSeq: derefInt32(row.WindowSeq),
+		}
 		if _, err = queries.ReleaseReservation(ctx, tx, id); err == nil {
 			err = h.addReserved(ctx, tx, -row.Amount)
 		}
@@ -215,13 +250,37 @@ func (b *Billing) ended(ctx context.Context, tx pg.Tx, id, site, account uuid.UU
 	return err
 }
 
+// addReserved moves the hold's counters by delta: the balance's reserved for a wallet hold, the frozen window's for a
+// plan hold, and the workspace's and key's always, since their limits count both sources alike.
 func (h *Hold) addReserved(ctx context.Context, tx pg.Tx, delta int64) error {
 	a := h.admitted
+	balance := delta
+	if h.plan() {
+		balance = 0
+		if err := moveWindowReserved(ctx, tx, h.subscription, h.windowSeq, delta); err != nil {
+			return err
+		}
+	}
 	if err := queries.AddReserved(ctx, tx, AddReservedParams{
-		Delta: delta, AccountID: a.Account, WorkspaceID: a.Workspace, WorkspaceWindow: h.workspaceWindow,
-		KeyID: a.Key, KeyWindow: h.keyWindow,
+		BalanceDelta: balance, SpendDelta: delta, AccountID: a.Account, WorkspaceID: a.Workspace,
+		WorkspaceWindow: h.workspaceWindow, KeyID: a.Key, KeyWindow: h.keyWindow,
 	}); err != nil {
 		return fmt.Errorf("billing: move the reserved counters: %w", err)
+	}
+	return nil
+}
+
+// addWindowReserved moves a window's reserved amount, refusing to cross its quota: a request that would is refused
+// before, so 0 rows here is an accounting error rather than a shortage.
+func moveWindowReserved(ctx context.Context, tx pg.Tx, subscription uuid.UUID, seq int32, delta int64) error {
+	n, err := queries.AddWindowReserved(ctx, tx, AddWindowReservedParams{
+		SubscriptionID: subscription, Seq: seq, Delta: delta,
+	})
+	if err != nil {
+		return fmt.Errorf("billing: move the window's reserved amount: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("billing: the window %s/%d cannot take %d reserved under the lock", subscription, seq, delta)
 	}
 	return nil
 }
@@ -299,4 +358,20 @@ func reset(l *Limit) Reset {
 		return ResetNever
 	}
 	return l.Reset
+}
+
+// derefUUID is *p, or the zero UUID when p is nil.
+func derefUUID(p *uuid.UUID) uuid.UUID {
+	if p == nil {
+		return uuid.UUID{}
+	}
+	return *p
+}
+
+// derefInt32 is *p, or 0 when p is nil.
+func derefInt32(p *int32) int32 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
