@@ -313,3 +313,51 @@ func TestDecodeRefusesBeforeAllocating(t *testing.T) {
 		t.Errorf("allocated %d bytes before refusing a %d-byte body on a 64 KiB budget", got, len(body))
 	}
 }
+
+// TestPrepareRefusesAfterBodyFits: the body checks in the previous test pass, but the tree or an intermediate copy
+// does not fit. The rejection must still happen before the writer or compatibility copy allocates its output.
+func TestPrepareRefusesAfterBodyFits(t *testing.T) {
+	long := strings.Repeat("x", 1<<20)
+	cases := []struct {
+		name string
+		from Format
+		body []byte
+		to   Format
+		w    Rewrites
+	}{
+		{
+			name: "cross format output", from: Chat,
+			body: []byte(`{"model":"m","messages":[{"role":"user","content":"` + long + `"}]}`), to: Messages,
+		},
+		{
+			name: "legacy output", from: Chat,
+			body: []byte(`{"model":"m","functions":[{"name":"f","description":"` + long + `"}],"messages":[{"role":"user","content":"x"}]}`), to: Chat,
+		},
+		{
+			name: "native search copies", from: Chat,
+			body: []byte(`{"model":"m","messages":[{"role":"user","content":"` + long + `"}]}`), to: Chat,
+			w: Rewrites{NativeSearch: 1},
+		},
+	}
+	funcs := make([]alloctest.Function, 0, len(cases))
+	for _, c := range cases {
+		body, target, w, budget := c.body, Target{Format: c.to, Model: "up", MaxOutput: 4096}, c.w, int64(len(c.body))
+		name := c.name
+		r, err := Inspect(c.from, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		funcs = append(funcs, alloctest.Function{Name: c.name, F: func() {
+			_, _, err := PrepareBudgeted(NewMemory(budget), &r, body, target, w)
+			if !errors.Is(err, ErrMemory) {
+				panic(name + ": wanted ErrMemory, got " + fmt.Sprint(err))
+			}
+		}})
+	}
+	measured := alloctest.Measure(t, funcs...)
+	for _, c := range cases {
+		if got := int64(measured[c.name].Bytes); got > 2*int64(len(c.body)) {
+			t.Errorf("%s: allocated %d bytes after the body check but before refusing", c.name, got)
+		}
+	}
+}

@@ -28,7 +28,7 @@ func responsesRequestToChat(src, dst requestObject, w Rewrites, b *budget) ([]re
 	}
 	var out []requestObject
 	if instructions := src.take("instructions"); !isNull(instructions) {
-		if _, err := requestString(instructions); err != nil {
+		if _, err := requestString(instructions, b); err != nil {
 			return nil, err
 		}
 		out = append(out, requestObject{"role": jsonValueWithin("system", b), "content": instructions})
@@ -190,7 +190,7 @@ func (s *chatInputItems) item(o requestObject, b *budget) error {
 }
 
 func (s *chatInputItems) message(o requestObject, b *budget) error {
-	role, err := requestString(o.take("role"))
+	role, err := requestString(o.take("role"), b)
 	if err != nil {
 		return err
 	}

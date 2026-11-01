@@ -30,9 +30,10 @@ func PrepareBudgeted(m *Memory, r *Request, body []byte, t Target, w Rewrites) (
 	}
 	if w.NativeSearch > 0 {
 		old := int64(cap(u.Body))
-		// The injected tool is bounded; reserve its room before injectNativeSearch builds the new body, so a
-		// budget too small for the copy refuses without first making it.
-		reserved := rounded(int64(len(u.Body)) + nativeSearchCost(w.NativeSearch))
+		// Responses may hold the source body, the injected body and withMaxToolCalls' copy at once, and the scan
+		// clones the tools array. Reserve that whole working set before injectNativeSearch builds it, so a budget
+		// too small refuses without first making the copies.
+		reserved := rounded(3*int64(len(u.Body)) + nativeSearchCost(w.NativeSearch))
 		if err := b.draw(reserved); err != nil {
 			b.give(b.held)
 			return u, 0, err

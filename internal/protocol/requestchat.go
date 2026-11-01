@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go: preserve strings and schemas as written
+	"errors"
 
 	"axiom/internal/platform/jsonx"
 )
@@ -43,7 +44,12 @@ func (o requestObject) move(to requestObject, from, name string) {
 
 func requestArray(v jsontext.Value) ([]jsontext.Value, error) { return arrayWithin(v, nil) }
 
-func requestString(v jsontext.Value) (string, error) {
+func requestString(v jsontext.Value, budgets ...*budget) (string, error) {
+	if len(budgets) > 0 {
+		if err := budgets[0].draw(int64(len(v))); err != nil {
+			return "", err
+		}
+	}
 	s, err := jsontext.AppendUnquote(nil, v)
 	if err != nil {
 		return "", shapeError("expected a string")
@@ -227,7 +233,7 @@ func nativeChoice(v jsontext.Value, f Format, dst requestObject, b *budget) erro
 	if err != nil {
 		return err
 	}
-	kind, err := requestString(o.take("type"))
+	kind, err := requestString(o.take("type"), b)
 	if err != nil {
 		return err
 	}
@@ -251,7 +257,10 @@ func messagesParallel(o, dst requestObject, b *budget) error {
 		return nil
 	}
 	var disabled bool
-	if err := jsonx.Unmarshal(parallel, &disabled); err != nil {
+	if err := unmarshalWithin(parallel, &disabled, b); err != nil {
+		if errors.Is(err, ErrMemory) {
+			return err
+		}
 		return shapeError("disable_parallel_tool_use must be boolean")
 	}
 	dst["parallel_tool_calls"] = jsonValueWithin(!disabled, b)
@@ -265,7 +274,7 @@ func nativeChoiceOf(o requestObject, f Format, kind string, b *budget) (jsontext
 	}
 	if f == Messages && kind == "tool" || f == Responses && kind == "function" {
 		name := o.take("name")
-		if _, err := requestString(name); err != nil {
+		if _, err := requestString(name, b); err != nil {
 			return nil, err
 		}
 		named := requestObject{"name": name}

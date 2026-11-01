@@ -10,12 +10,19 @@ import (
 
 // toMessages writes a Chat request as an Anthropic Messages request (Anthropic《Messages API reference》, read
 // 2026-10-14; README.md「跨格式转换」). Strings are copied as written.
-func toMessages(c *canon, t Target, w Rewrites, b *budget) ([]byte, error) {
+func toMessages(c *canon, t Target, w Rewrites, b *budget, body []byte) ([]byte, error) {
 	m := &messagesWriter{c: c, t: t, b: b}
 	if err := m.check(); err != nil {
 		return nil, err
 	}
-	out := appendQuoted(append([]byte(nil), `{"model":`...), t.Model)
+	// One output buffer, charged before it is made. The body plus a small syntax allowance holds the writers of
+	// the shapes a request of this size produces; PrepareBudgeted refunds what the output did not use.
+	reserve := int64(len(body)) + 64<<10
+	if err := b.draw(rounded(reserve)); err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, reserve)
+	out = appendQuoted(append(out, `{"model":`...), t.Model)
 	out = strconv.AppendInt(append(out, `,"max_tokens":`...), m.maxTokens, 10)
 	var err error
 	for _, write := range []func([]byte) ([]byte, error){
@@ -36,9 +43,6 @@ func toMessages(c *canon, t Target, w Rewrites, b *budget) ([]byte, error) {
 		out = append(out, '}')
 	}
 	out = append(out, '}')
-	if err := b.draw(rounded(int64(cap(out)))); err != nil {
-		return nil, err
-	}
 	return out, nil
 }
 

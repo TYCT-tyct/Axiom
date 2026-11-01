@@ -19,7 +19,7 @@ func rewriteWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) ([]
 	if err := b.draw(rounded(int64(size))); err != nil {
 		return nil, err
 	}
-	body, indexed, err := rewriteBody(r, body)
+	body, indexed, err := rewriteBody(r, body, b)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func rewriteWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) ([]
 		size = bigger
 	}
 	if f == Responses {
-		w.History, err = replayHistory(w.History)
+		w.History, err = replayHistory(w.History, b)
 		if err != nil {
 			return nil, err
 		}
@@ -64,15 +64,15 @@ func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
 }
 
 // rewriteBody invalidates Inspect's offsets whenever a compatibility rewrite changes the body.
-func rewriteBody(r *Request, body []byte) ([]byte, bool, error) {
+func rewriteBody(r *Request, body []byte, b *budget) ([]byte, bool, error) {
 	if r.Format == Chat && r.legacy {
-		body, err := rewriteLegacy(body)
+		body, err := rewriteLegacy(body, b)
 		return body, false, err
 	}
 	if r.positions.ready && r.positions.size == len(body) && !replayCandidate(r.Format, body) {
 		return body, true, nil
 	}
-	body, err := replayBody(r.Format, body, false)
+	body, err := replayBody(r.Format, body, false, b)
 	return body, false, err
 }
 

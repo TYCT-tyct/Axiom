@@ -44,9 +44,9 @@ func convert(body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
 		return nil, err
 	}
 	if t.Format == Messages {
-		return toMessages(c, t, w, b)
+		return toMessages(c, t, w, b, body)
 	}
-	return toResponses(c, t, w, b)
+	return toResponses(c, t, w, b, body)
 }
 
 // checkCalls holds the tool calls to what both other formats require: every call has a result and every result a

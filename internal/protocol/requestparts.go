@@ -28,6 +28,9 @@ func nativeContent(v jsontext.Value, f Format, role string, b *budget) (jsontext
 	if err != nil {
 		return nil, err
 	}
+	if err := b.draw(rounded(int64(len(parts)) * 128)); err != nil {
+		return nil, err
+	}
 	out := make([]requestObject, 0, len(parts))
 	for _, raw := range parts {
 		o, err := membersWithin(raw, b)
@@ -47,7 +50,7 @@ func nativeContent(v jsontext.Value, f Format, role string, b *budget) (jsontext
 }
 
 func nativePart(o requestObject, quotedKind string, f Format, role string, b *budget) (requestObject, error) {
-	chatKind, err := nativePartKind(o, quotedKind, f, role)
+	chatKind, err := nativePartKind(o, quotedKind, f, role, b)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +85,8 @@ func nativePart(o requestObject, quotedKind string, f Format, role string, b *bu
 	return part, nil
 }
 
-func nativePartKind(o requestObject, quotedKind string, f Format, role string) (string, error) {
-	kind, err := requestString(jsontext.Value(quotedKind))
+func nativePartKind(o requestObject, quotedKind string, f Format, role string, b *budget) (string, error) {
+	kind, err := requestString(jsontext.Value(quotedKind), b)
 	if err != nil {
 		return "", err
 	}
@@ -129,8 +132,11 @@ func nativeFile(o requestObject, f Format, b *budget) (requestObject, error) {
 	if string(source.take("type")) != `"base64"` || string(source.take("media_type")) != `"application/pdf"` {
 		return nil, &NotSupported{Reason: "only inline PDF documents convert to Chat"}
 	}
-	data, err := requestString(source.take("data"))
+	data, err := requestString(source.take("data"), b)
 	if err != nil {
+		return nil, err
+	}
+	if err := b.draw(rounded(int64(len(data) + 32))); err != nil {
 		return nil, err
 	}
 	file["file_data"] = jsonValueWithin("data:application/pdf;base64,"+data, b)
@@ -159,7 +165,7 @@ func nativeImage(o requestObject, f Format, b *budget) (requestObject, error) {
 	if f == Responses {
 		o.move(image, "image_url", "url")
 		o.move(image, "detail", "detail")
-		if _, err := requestString(image["url"]); err != nil {
+		if _, err := requestString(image["url"], b); err != nil {
 			return nil, err
 		}
 		return image, nil
@@ -171,16 +177,19 @@ func nativeImage(o requestObject, f Format, b *budget) (requestObject, error) {
 	switch string(source.take("type")) {
 	case `"url"`:
 		source.move(image, "url", "url")
-		if _, err := requestString(image["url"]); err != nil {
+		if _, err := requestString(image["url"], b); err != nil {
 			return nil, err
 		}
 	case `"base64"`:
-		media, err := requestString(source.take("media_type"))
+		media, err := requestString(source.take("media_type"), b)
 		if err != nil {
 			return nil, err
 		}
-		data, err := requestString(source.take("data"))
+		data, err := requestString(source.take("data"), b)
 		if err != nil {
+			return nil, err
+		}
+		if err := b.draw(rounded(int64(len(media) + len(data) + 32))); err != nil {
 			return nil, err
 		}
 		image["url"] = jsonValueWithin("data:"+media+";base64,"+data, b)

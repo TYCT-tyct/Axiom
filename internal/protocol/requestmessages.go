@@ -41,7 +41,7 @@ func messagesTurnToChat(raw jsontext.Value, b *budget) ([]requestObject, error) 
 	if err != nil {
 		return nil, err
 	}
-	role, err := requestString(o.take("role"))
+	role, err := requestString(o.take("role"), b)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +300,7 @@ func messagesToolResult(o requestObject, b *budget) (requestObject, error) {
 	if failed {
 		// Chat has no failure bit; preserve the tool's error signal in its text.
 		if content.Kind() == '"' {
-			text, err := requestString(content)
+			text, err := requestString(content, b)
 			if err != nil {
 				return nil, err
 			}

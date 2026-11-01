@@ -10,9 +10,12 @@ import (
 
 // replayBody removes artifacts a Chat conversion cannot make valid for a native provider.
 // The ordinary native path keeps its bytes and allocations; only candidate bodies need a filtering pass.
-func replayBody(f Format, body []byte, item bool) ([]byte, error) {
+func replayBody(f Format, body []byte, item bool, b *budget) ([]byte, error) {
 	if !replayCandidate(f, body) {
 		return body, nil
+	}
+	if err := b.draw(rounded(int64(len(body)))); err != nil {
+		return nil, err
 	}
 	p := &rewriter{body: body, out: make([]byte, 0, len(body))}
 	p.dec = jsontext.NewDecoder(bytes.NewReader(body))
@@ -26,7 +29,7 @@ func replayBody(f Format, body []byte, item bool) ([]byte, error) {
 	return p.out, nil
 }
 
-func replayHistory(history [][]byte) ([][]byte, error) {
+func replayHistory(history [][]byte, b *budget) ([][]byte, error) {
 	out, copied := history, false
 	for i, item := range history {
 		if !replayCandidate(Responses, item) {
@@ -36,7 +39,7 @@ func replayHistory(history [][]byte) ([][]byte, error) {
 			out, copied = slices.Clone(history), true
 		}
 		var err error
-		out[i], err = replayBody(Responses, item, true)
+		out[i], err = replayBody(Responses, item, true, b)
 		if err != nil {
 			return nil, err
 		}
