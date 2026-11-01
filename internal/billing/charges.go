@@ -29,14 +29,15 @@ type ChargeDetails struct {
 	Estimated     bool   `json:"estimated"`
 }
 
-// ChargeItem is one sampling's billed quantity at its effective sale price; it contains no supplier identity or cost.
+// ChargeItem is one sampling's billed quantity, or the attempt's request, at its effective sale price; it contains no
+// supplier identity or cost.
 type ChargeItem struct {
 	Item         string `json:"item"`
 	Quantity     int64  `json:"quantity"`
 	Unit         string `json:"unit"`
 	UnitPrice    string `json:"unit_price"`
 	Amount       string `json:"amount"`
-	Sampling     int    `json:"sampling"`
+	Sampling     int    `json:"sampling,omitempty"`
 	ServiceTier  string `json:"service_tier"`
 	ContextBand  int    `json:"context_band"`
 	PriceVersion string `json:"price_version,omitempty"`

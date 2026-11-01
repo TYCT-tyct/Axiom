@@ -1854,7 +1854,7 @@ export interface components {
             /** @description What failed, empty when the call succeeded. */
             error_kind: string;
         };
-        /** @description One billed item of a sampling at its frozen sale price; no supplier or cost information. */
+        /** @description One billed item of a sampling or the attempt's request, at its frozen sale price; no supplier or cost information. */
         ChargeItem: {
             /** @description Billing item, or unknown_tokens / unknown_uses for unmapped usage. */
             item?: string;
@@ -1866,6 +1866,7 @@ export interface components {
             unit_price?: string;
             /** @description Exact quantity times unit_price, before call-level rounding and balance adjustment. */
             amount?: string;
+            /** @description Which sampling of the attempt this item belongs to, from 1; absent for an attempt-level item such as request. */
             sampling?: number;
             service_tier?: string;
             /** @description Zero is the base band; subsequent bands follow the locked schedule's thresholds. */

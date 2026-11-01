@@ -87,6 +87,7 @@ func checkConsoleCharges(t *testing.T, f consoleFixture, s session, id string, w
 
 func checkChargeResponse(t *testing.T, call consoleapi.Call, want billing.ChargeDetails) {
 	t.Helper()
+	checkChargeItemContract(t, call.ChargeDetails)
 	gotRaw, err := jsonx.MarshalCanonical(call.ChargeDetails)
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +105,51 @@ func checkChargeResponse(t *testing.T, call consoleapi.Call, want billing.Charge
 	}
 	if call.Price.Amount != strconv.FormatInt(amount.CeilAmount(), 10) {
 		t.Errorf("invoice disagrees with call price: %+v", call)
+	}
+}
+
+// checkChargeItemContract checks the console's item shape where the generated client is weaker than the contract:
+// sampling, when present, starts at 1, and an attempt-level request item has none.
+func checkChargeItemContract(t *testing.T, details *consoleapi.ChargeDetails) {
+	t.Helper()
+	if details == nil || details.Items == nil {
+		return
+	}
+	for _, item := range *details.Items {
+		if item.Sampling != nil && *item.Sampling < 1 {
+			t.Errorf("charge item %v has sampling %d, want at least 1", item.Item, *item.Sampling)
+		}
+		if item.Item != nil && *item.Item == "request" && item.Sampling != nil {
+			t.Errorf("request charge has sampling %d, want it absent", *item.Sampling)
+		}
+	}
+}
+
+func TestChargeBodyOmitsSamplingForRequest(t *testing.T) {
+	t.Parallel()
+	d := billing.ChargeDetails{Items: []billing.ChargeItem{
+		{Item: "request", Quantity: 1, Unit: "use", UnitPrice: "1", Amount: "1"},
+		{Item: "input", Quantity: 10, Unit: "token", UnitPrice: "0.000001", Amount: "0.00001", Sampling: 1},
+	}}
+	body := chargeBody(d)
+	raw, err := jsonx.MarshalCanonical(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"sampling":0`) {
+		t.Fatalf("sampling zero in %s", raw)
+	}
+	var got struct {
+		Items []struct {
+			Item     string `json:"item"`
+			Sampling *int   `json:"sampling"`
+		} `json:"items"`
+	}
+	if err := jsonx.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 2 || got.Items[0].Sampling != nil || got.Items[1].Sampling == nil || *got.Items[1].Sampling != 1 {
+		t.Errorf("items %+v", got.Items)
 	}
 }
 

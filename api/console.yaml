@@ -3165,14 +3165,14 @@ components:
         error_kind: {type: string, description: "What failed, empty when the call succeeded."}
     ChargeItem:
       type: object
-      description: One billed item of a sampling at its frozen sale price; no supplier or cost information.
+      description: One billed item of a sampling or the attempt's request, at its frozen sale price; no supplier or cost information.
       properties:
         item: {type: string, description: "Billing item, or unknown_tokens / unknown_uses for unmapped usage."}
         quantity: {type: integer, format: int64, minimum: 0}
         unit: {type: string, enum: [token, use, piece, second, character]}
         unit_price: {type: string, description: "Exact currency units per billing unit (token, use, piece, second or character), decimal text with up to 15 fractional digits."}
         amount: {type: string, description: "Exact quantity times unit_price, before call-level rounding and balance adjustment."}
-        sampling: {type: integer, minimum: 1}
+        sampling: {type: integer, minimum: 1, description: "Which sampling of the attempt this item belongs to, from 1; absent for an attempt-level item such as request."}
         service_tier: {type: string}
         context_band: {type: integer, minimum: 0, description: "Zero is the base band; subsequent bands follow the locked schedule's thresholds."}
         price_version: {type: string, description: "Frozen published sale version; absent when not recorded."}
