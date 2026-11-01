@@ -186,3 +186,14 @@ func TestPrepareRefusesTheOutputCleanly(t *testing.T) {
 		}
 	}
 }
+
+// TestReplayRefusesWithErrMemory: replay's own unquoting draws from the budget, and a refusal there stays ErrMemory,
+// not the invalid replay a client is told of.
+func TestReplayRefusesWithErrMemory(t *testing.T) {
+	body := []byte(`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"},{"role":"assistant","content":[` +
+		`{"type":"thinking","thinking":"t","signature":"` + strings.Repeat(string(rune(0x5c))+"u0061", 1<<16) + `"}]}]}`)
+	b := &budget{m: NewMemory(rounded(int64(len(body))) + 1024)} // the output fits, the signature's unquoting does not
+	if _, err := replayBody(Messages, body, false, b); !errors.Is(err, ErrMemory) {
+		t.Fatalf("%v, want ErrMemory", err)
+	}
+}

@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"bytes"
+	"encoding/json/jsontext" //nolint:depguard // the thinking blocks are read without tracking names Inspect checked
+	"errors"
 	"slices"
 	"strconv"
 	"unsafe"
@@ -18,12 +20,15 @@ func replayBody(f Format, body []byte, item bool, b *budget) ([]byte, error) {
 		return nil, err
 	}
 	p := &rewriter{body: body, out: make([]byte, 0, len(body))}
-	p.dec = newDecoder(body)
+	p.dec, p.b = newDecoder(body), b
 	rules := replayRules[f]
 	if item {
 		rules = replayItemRules
 	}
 	if err := p.top(formatRules{members: rules}); err != nil {
+		if errors.Is(err, ErrMemory) {
+			return nil, err
+		}
 		return nil, shapeError("invalid native replay: " + err.Error())
 	}
 	return p.out, nil
@@ -207,9 +212,10 @@ func (p *rewriter) replayThinking() error {
 func (p *rewriter) unsignedThinking(v []byte) (bool, error) {
 	if p.replayMeta == nil {
 		p.replayMeta = &aggBase{}
+		p.replayMeta.b = p.b // its unquoting scratch is drawn from the preparation's budget
 	}
 	m := p.replayMeta
-	m.begin(v)
+	m.begin(v, jsontext.AllowDuplicateNames(true)) // a block of a body Inspect or this site checked
 	thinking, signed := false, false
 	err := m.eachMember(func() (err error) {
 		switch string(m.name) {

@@ -30,9 +30,10 @@ type budgetCase struct {
 // budgetShapes are the request shapes that cost the most per byte, written in each source format: many tiny parts and
 // messages, long and escaped strings, a base64 document, deep nesting, empty objects and nulls.
 func budgetShapes() map[string]map[Format]string {
+	const bs = string(rune(0x5c))
 	const many = 20000
 	long := strings.Repeat("x", 1<<20)
-	escaped := strings.Repeat(`A`, 1<<18)
+	escaped := strings.Repeat(bs+"u0041", 1<<18) // bs is the backslash: a JSON escape, not the letter
 	pdf := "data:application/pdf;base64," + strings.Repeat("QUJD", 1<<18)
 	deep := strings.Repeat(`{"type":"object","properties":{"a":`, 100) + `{"type":"string"}` + strings.Repeat(`}}`, 100)
 	repeat := func(s string, n int) string { return strings.TrimSuffix(strings.Repeat(s+",", n), ",") }
@@ -133,6 +134,12 @@ func budgetShapes() map[string]map[Format]string {
 		},
 		"replay": {
 			Messages: messages(`{"role":"user","content":"x"},{"role":"assistant","content":[{"type":"thinking","thinking":"`+long+`","signature":""},{"type":"text","text":"a"}]},{"role":"user","content":"y"}`, ""),
+		},
+		"replay escapes": {
+			Messages: messages(`{"role":"user","content":"x"},`+
+				`{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"`+strings.Repeat(`\u0061`, 1<<18)+`"}]},{"role":"user","content":"y"},`+
+				`{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"s","`+strings.Repeat(`\u0062`, 1<<18)+`":1}]},{"role":"user","content":"z"},`+
+				`{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"s",`+members+`}]},{"role":"user","content":"w"}`, ""),
 		},
 		"empty objects": {
 			Chat:      chat(repeat(`{}`, many), ""),
