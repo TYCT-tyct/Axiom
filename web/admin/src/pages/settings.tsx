@@ -11,6 +11,7 @@ import { Facts, PageBody, State } from "../parts";
 import { PaymentsSettings } from "../payments-settings";
 import { accountQuery, siteKeyLimitsQuery, siteSettingsQuery } from "../queries";
 import { SiteRegistration } from "../registration";
+import { FileParserSettings } from "../file-parser-settings";
 import { SearchSettings } from "../search-settings";
 import { SiteSignIn } from "../sign-in";
 import { SiteInformation } from "../site-info";
@@ -46,6 +47,7 @@ export default function SettingsPage() {
               <SiteSignIn siteId={account.site_id} />
               <MailSettings />
               <SearchSettings />
+              <FileParserSettings />
               <PaymentsSettings siteId={account.site_id} currency={account.balance.balance.currency} />
             </>
           )}

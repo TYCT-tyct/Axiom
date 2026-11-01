@@ -19,6 +19,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/fileparse"
 	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
@@ -357,6 +358,8 @@ type options struct {
 	memory       int64              // the node's budget; memorySize when zero
 	price        string             // the entries' price schedule; cheap when empty
 	search       websearch.Searcher // the web plugin's backend; nil means the feature is off
+	parser       fileparse.Parser   // the file-parser plugin's backend; nil means the OCR engines are off
+	fileParses   int64              // the files the gateway parsed before admission, charged per use
 	logs         *bytes.Buffer      // the node's log, discarded when nil
 	health       *quality.Monitor   // what the attempts tell; a new one when nil
 }
@@ -447,7 +450,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: logger,
 		Ledger: &fakeLedger{h: h, o: o}, Costs: costs,
 		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health, Outstanding: NewOutstanding(),
-		Search: o.search,
+		Search: o.search, Parser: o.parser,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -471,6 +474,7 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		h.t.Fatal(err)
 	}
 	req.ServiceTiers = 1 << catalog.ServiceTierStandard // the schedule prices that tier only
+	req.FileParses = o.fileParses                       // the parse step ran before admission, so the quote sees it
 	request = setStream(&req, request, o.stream)
 	var quotes []billing.Quotable
 	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}

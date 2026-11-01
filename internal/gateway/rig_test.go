@@ -21,6 +21,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/fileparse"
 	"axiom/internal/observability"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/httpserver"
@@ -112,6 +113,7 @@ type rigOptions struct {
 	conns     int                // the most connections the database pool opens; the driver's own limit when zero
 	body      time.Duration      // how long Public gives a request to send its body; a minute when zero
 	search    websearch.Searcher // the web plugin's backend, nil when the node has none
+	parser    fileparse.Parser   // the file-parser plugin's backend, nil when the node has none
 	price     string             // the model's sale schedule, the cheap one when empty
 	suppliers bool               // the suppliers tables too, for a real suppliers service to price attempts
 	lifetime  time.Duration      // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
@@ -186,7 +188,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if r.handler, err = NewHandler(Deps{
 		Accounts: r.accounts, Catalog: r.catalog, Router: r.router, Billing: r.billing, Limits: r.limits, Memory: r.memory,
 		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Models: r.models, Proxies: o.proxies, KV: o.cache,
-		Outstanding: NewOutstanding(), Search: o.search,
+		Outstanding: NewOutstanding(), Search: o.search, Parser: o.parser,
 	}); err != nil {
 		t.Fatal(err)
 	}
