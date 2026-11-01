@@ -81,6 +81,24 @@ export function useShowRecoveryCodes() {
   return useShowCodes();
 }
 
+// A factor change replaces the session it was asked under before its answer is read, so its codes belong to the person
+// who asked, claimed when the request starts; an answer that lands after another person signed in is dropped.
+function useFactorCodes<TVariables>(change: (variables: TVariables) => Promise<Change>, onClose: () => void) {
+  const client = useQueryClient();
+  const show = useShowCodes();
+  return useMutation({
+    mutationFn: change,
+    onMutate: () => claimSession(client),
+    onSuccess: (codes, _variables, claim) => {
+      if (!claim || !holdsIdentity(client, claim.identity)) {
+        return;
+      }
+      show(codes, claim.identity);
+      onClose();
+    },
+  });
+}
+
 // Starting to enable asks for a new secret and opens the dialog that proves it; nothing is stored until it is proved.
 export function useBeginTotp() {
   const { api } = useAuth();
@@ -92,19 +110,7 @@ export function TotpSetupDialog({ setup, onClose }: { setup: Schemas["TotpSetup"
   const { t } = useTranslation("common");
   const errors = useErrors();
   const { api } = useAuth();
-  const client = useQueryClient();
-  const show = useShowCodes();
-  const confirm = useMutation({
-    mutationFn: api.confirmTotpSetup,
-    onMutate: () => claimSession(client),
-    onSuccess: (change, _variables, claim) => {
-      if (!claim || !holdsIdentity(client, claim.identity)) {
-        return;
-      }
-      show(change, claim.identity);
-      onClose();
-    },
-  });
+  const confirm = useFactorCodes(api.confirmTotpSetup, onClose);
   return (
     <Dialog title={t("security.setup.title")} onClose={onClose} dismissible={!confirm.isPending}>
       <div className="space-y-4">
@@ -158,19 +164,7 @@ export function RecoveryDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation("common");
   const errors = useErrors();
   const { api } = useAuth();
-  const client = useQueryClient();
-  const show = useShowCodes();
-  const regenerate = useMutation({
-    mutationFn: api.regenerateRecoveryCodes,
-    onMutate: () => claimSession(client),
-    onSuccess: (change, _variables, claim) => {
-      if (!claim || !holdsIdentity(client, claim.identity)) {
-        return;
-      }
-      show(change, claim.identity);
-      onClose();
-    },
-  });
+  const regenerate = useFactorCodes(api.regenerateRecoveryCodes, onClose);
   return (
     <Dialog title={t("security.regenerate.title")} onClose={onClose} dismissible={!regenerate.isPending}>
       <form
