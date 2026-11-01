@@ -155,7 +155,7 @@ func (a *attempt) sendNext(ctx context.Context) *ended {
 		// The next sampling is new paid work: it follows the client even when the endpoint's policy kept the first one
 		// reading after the client left. It stays on the attempt's context, so the deadline, the idle and header waits
 		// and the node's shutdown stop it as they stop the first.
-		context.AfterFunc(s.req.Context(), func() { a.cancel(errClientGone) })
+		context.AfterFunc(s.req.Context(), func() { a.cancel(errClientGone) }) //nolint:contextcheck // the client leaving ends the attempt; the attempt never ends the client
 	}
 	a.conn = conn
 	a.i = s.begin(a.entry, s.ends[a.i].Entry, true)

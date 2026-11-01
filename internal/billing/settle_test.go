@@ -433,6 +433,27 @@ func loop(t *testing.T, result Result, finish FinishReason, fallback bool) Outco
 	return o
 }
 
+// settleEntries are the two ways a settlement is written: alone, and in a batch.
+var settleEntries = map[string]func(*testing.T, *bank, *Hold, Outcome) Final{
+	"single": func(t *testing.T, b *bank, h *Hold, o Outcome) Final {
+		f, err := b.billing.Settle(t.Context(), h, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	},
+	"batch": func(t *testing.T, b *bank, h *Hold, o Outcome) Final {
+		fs, afters, err := b.billing.SettleBatch(t.Context(), b.admitted.Scope, []Settlement{{Hold: h, Outcome: o}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, after := range afters {
+			after()
+		}
+		return fs[0]
+	},
+}
+
 // TestSettleChargesTheLoopTogether: each sampling of a model-side loop is an attempt of its own for suppliers, one row
 // and one cost each, while the user is charged for the loop's samplings together under 免单规则 judged by the last. A
 // charge of several attempts records no charged attempt, so a supplier's record of one cannot correct it. Both
@@ -440,25 +461,6 @@ func loop(t *testing.T, result Result, finish FinishReason, fallback bool) Outco
 func TestSettleChargesTheLoopTogether(t *testing.T) {
 	t.Parallel()
 
-	entries := map[string]func(*testing.T, *bank, *Hold, Outcome) Final{
-		"single": func(t *testing.T, b *bank, h *Hold, o Outcome) Final {
-			f, err := b.billing.Settle(t.Context(), h, o)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return f
-		},
-		"batch": func(t *testing.T, b *bank, h *Hold, o Outcome) Final {
-			fs, afters, err := b.billing.SettleBatch(t.Context(), b.admitted.Scope, []Settlement{{Hold: h, Outcome: o}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, after := range afters {
-				after()
-			}
-			return fs[0]
-		},
-	}
 	for _, tc := range []struct {
 		name     string
 		o        Outcome
@@ -472,28 +474,32 @@ func TestSettleChargesTheLoopTogether(t *testing.T) {
 		{"the client left mid-loop: never waived", loop(t, FailedBeforeCommit, FinishCancelled, false), 160, 0},
 		{"a fallback after the loop answers alone", loop(t, FailedBeforeCommit, FinishError, true), 80, 1},
 	} {
-		for name, settle := range entries {
+		for name, settle := range settleEntries {
 			t.Run(tc.name+"/"+name, func(t *testing.T) {
 				b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
 				h := b.hold(1000)
-				f := settle(t, b, h, tc.o)
-				if f.Charged != platform.AmountExact(tc.want) {
+				if f := settle(t, b, h, tc.o); f.Charged != platform.AmountExact(tc.want) {
 					t.Fatalf("charged %+v, want %d", f.Charged, tc.want)
 				}
-				rows := b.supplies.attempts[h.id]
-				if len(rows) != len(tc.o.Attempts) {
-					t.Fatalf("suppliers got %d rows, want one per attempt", len(rows))
-				}
-				for i, row := range rows {
-					if int(row.Seq) != i+1 || len(row.Usage) != len(tc.o.Attempts[i].Segments) {
-						t.Fatalf("row %d = %+v, want attempt %d with its own usage", i, row, i+1)
-					}
-				}
+				checkAttemptRows(t, b.supplies.attempts[h.id], tc.o)
 				if n := b.count("SELECT count(*) FROM billing.reservations WHERE charged_seq IS NOT NULL"); n != tc.chargedQ {
 					t.Fatalf("%d reservations name a charged attempt, want %d", n, tc.chargedQ)
 				}
 				b.balanced()
 			})
+		}
+	}
+}
+
+// checkAttemptRows: suppliers got one row per attempt, in order, each with its own usage.
+func checkAttemptRows(t *testing.T, rows []suppliers.AttemptRecord, o Outcome) {
+	t.Helper()
+	if len(rows) != len(o.Attempts) {
+		t.Fatalf("suppliers got %d rows, want one per attempt", len(rows))
+	}
+	for i, row := range rows {
+		if int(row.Seq) != i+1 || len(row.Usage) != len(o.Attempts[i].Segments) {
+			t.Fatalf("row %d = %+v, want attempt %d with its own usage", i, row, i+1)
 		}
 	}
 }
