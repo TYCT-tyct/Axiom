@@ -99,7 +99,7 @@ func (a *attempt) search(ctx context.Context, turn protocol.ServerTurn) *ended {
 		// The search is new paid work: the attempt's end (the call's deadline, the node's shutdown) stops it, and so does
 		// the client leaving, even when the endpoint's policy kept the first sampling reading after it.
 		searchCtx, cancel := context.WithTimeout(ctx, websearch.Timeout)
-		stop := context.AfterFunc(s.req.Context(), cancel)
+		stop := context.AfterFunc(s.req.Context(), cancel) //nolint:contextcheck // the client leaving ends the search; the search never ends the client
 		found, err := loop.backend.Search(searchCtx, websearch.Query{
 			Text: query, MaxResults: int(remaining),
 			IncludeDomains: loop.tool.IncludeDomains, ExcludeDomains: loop.tool.ExcludeDomains,

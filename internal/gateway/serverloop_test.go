@@ -287,10 +287,14 @@ func TestServerToolConflicts(t *testing.T) {
 	r := newRig(t)
 	a := r.newAccount(1e18)
 	for _, tc := range []struct{ path, body, want string }{
-		{"/v1/chat/completions", `{"model":"acme/beta","plugins":[{"id":"web"}],"tools":[{"type":"openrouter:web_search"}],"messages":[{"role":"user","content":"hello"}]}`,
-			"cannot be combined with the web plugin"},
-		{"/v1/responses", `{"model":"acme/beta","max_tool_calls":1,"tools":[{"type":"openrouter:web_search"},{"type":"code_interpreter","container":{"type":"auto"}}],"input":"hello"}`,
-			"cannot be combined with the provider's code execution tool"},
+		{
+			"/v1/chat/completions", `{"model":"acme/beta","plugins":[{"id":"web"}],"tools":[{"type":"openrouter:web_search"}],"messages":[{"role":"user","content":"hello"}]}`,
+			"cannot be combined with the web plugin",
+		},
+		{
+			"/v1/responses", `{"model":"acme/beta","max_tool_calls":1,"tools":[{"type":"openrouter:web_search"},{"type":"code_interpreter","container":{"type":"auto"}}],"input":"hello"}`,
+			"cannot be combined with the provider's code execution tool",
+		},
 	} {
 		resp, out := r.do(http.MethodPost, tc.path, a.key, strings.NewReader(tc.body))
 		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, tc.want) {

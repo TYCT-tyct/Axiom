@@ -229,17 +229,7 @@ func TestServerLoopSearchStopsWithTheAttempt(t *testing.T) {
 					h.exec.Limits.cfg.MaxCall = websearch.Timeout / 3
 				}
 				h.run()
-				if h.w.status != http.StatusRequestTimeout || searcher.calls != 1 || len(h.up.endpoint(1).calls) != 1 {
-					t.Fatalf("status = %d, searches = %d, upstream calls = %d; want a timeout after one search and one sampling",
-						h.w.status, searcher.calls, len(h.up.endpoint(1).calls))
-				}
-				if searcher.waited >= websearch.Timeout {
-					t.Fatalf("the search ran %s, to its own timeout: the attempt's end did not reach it", searcher.waited)
-				}
-				attempts := h.settlements[0].outcome.Attempts
-				if len(attempts) != 1 || attempts[0].Segments[0].Usage.Count(catalog.ItemWebSearch) != tc.charged {
-					t.Fatalf("attempts = %+v, want %d search charged", attempts, tc.charged)
-				}
+				checkCutSearch(t, h, searcher, tc.charged)
 			})
 		})
 	}
@@ -286,5 +276,22 @@ func TestHeldEventsAreChargedByCapacity(t *testing.T) {
 	s.dropOut()
 	if s.out != nil || s.outHeld != 0 || !mem.Charge(budget) {
 		t.Fatalf("after the drop: buffer %d, charged %d; want both gone and the budget whole", cap(s.out), s.outHeld)
+	}
+}
+
+// checkCutSearch: the call timed out after one search and one sampling, the search was stopped by the attempt's end
+// rather than its own timeout, and charged searches were charged.
+func checkCutSearch(t *testing.T, h *harness, searcher *cutSearcher, charged int64) {
+	t.Helper()
+	if h.w.status != http.StatusRequestTimeout || searcher.calls != 1 || len(h.up.endpoint(1).calls) != 1 {
+		t.Fatalf("status = %d, searches = %d, upstream calls = %d; want a timeout after one search and one sampling",
+			h.w.status, searcher.calls, len(h.up.endpoint(1).calls))
+	}
+	if searcher.waited >= websearch.Timeout {
+		t.Fatalf("the search ran %s, to its own timeout: the attempt's end did not reach it", searcher.waited)
+	}
+	attempts := h.settlements[0].outcome.Attempts
+	if len(attempts) != 1 || attempts[0].Segments[0].Usage.Count(catalog.ItemWebSearch) != charged {
+		t.Fatalf("attempts = %+v, want %d search charged", attempts, charged)
 	}
 }
