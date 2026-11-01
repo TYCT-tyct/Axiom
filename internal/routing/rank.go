@@ -133,10 +133,26 @@ func (r *Router) score(c *candidate, n *need, strategy Strategy, price *candidat
 }
 
 // slow reports whether c misses a performance wish of the request. An unmeasured endpoint (0) misses neither: it is not
-// known to be slow, and it is to be measured.
+// known to be slow, and it is to be measured. A number is compared with the moving average; a percentile cutoff with the
+// same percentile of the endpoint's rolling window, and every cutoff the request named has to hold.
 func slow(c *candidate, o *Override) bool {
-	return (o.MinThroughput > 0 && c.Throughput > 0 && c.Throughput < o.MinThroughput) ||
-		(o.MaxLatency > 0 && c.Latency > o.MaxLatency)
+	if o.MinThroughput > 0 && c.Throughput > 0 && c.Throughput < o.MinThroughput ||
+		o.MaxLatency > 0 && c.Latency > o.MaxLatency {
+		return true
+	}
+	for i := range o.MinThroughputPercentiles.Values {
+		if o.MinThroughputPercentiles.Has(i) && c.ThroughputPercentiles[i] > 0 &&
+			c.ThroughputPercentiles[i] < o.MinThroughputPercentiles.Values[i] {
+			return true
+		}
+	}
+	for i := range o.MaxLatencyPercentiles.Values {
+		if o.MaxLatencyPercentiles.Has(i) && c.LatencyPercentiles[i] > 0 &&
+			c.LatencyPercentiles[i].Seconds() > o.MaxLatencyPercentiles.Values[i] {
+			return true
+		}
+	}
+	return false
 }
 
 // weight is the chance a candidate is given: cheaper is more likely, scaled by the quality score—which already includes

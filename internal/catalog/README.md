@@ -129,6 +129,7 @@
 | `image_in_piece` / `image_out_piece` | 张 | —（尚无端点） | — | — |
 | `audio_in_second` / `audio_out_second` | 秒 | —（尚无端点） | — | — |
 | `character_in` | 字符 | —（尚无端点） | — | — |
+| `request` | 次 | 网关每个生成请求记一次，上游不报告 | —（上游不报告） | —（上游不报告） |
 | `web_search` | 次 | 待核对 | `server_tool_use.web_search_requests` | 待核对 |
 | `code_execution` | 次 | 待核对 | `server_tool_use.code_execution_requests` | 待核对 |
 
@@ -140,6 +141,7 @@
 - 已核对（2026-10-14）：Gemini 的 `promptTokenCount` 包含缓存的内容（Gemini API《UsageMetadata》："this includes the number of tokens in the cached content"），所以 `input` 是两者之差；OpenAI Responses 的字段是 `usage.input_tokens_details.cached_tokens` 和 `cache_write_tokens`（OpenAI《Prompt caching》）。其余（联网搜索的计数字段、Gemini 按模态的明细是否包含缓存）由 `protocol` 实现这张表时按各家的接口参考核对，并写进它的测试：折算的代码在 `protocol`，本模块只接收 `Usage`。
 - **代码执行按次计**，是[计费的「定价」](../../docs/domains/billing.md#定价)列出的按次工具，缺价时用站点级默认单价（[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)），不进 `Unknown()`。厂商不按次收费：Anthropic 按容器的运行小时（每小时 $0.05，与 `web_search_20260209` / `web_fetch_20260209` 同用时免费），OpenAI 按 20 分钟的容器会话（按分钟计、最少 5 分钟），Gemini 只按 token（Anthropic、OpenAI、Gemini 的定价页，2026-10-14），用量里也没有时长；所以每次的单价是近似值。站点默认价取一小时容器价（$0.05）作为保守的上限：短调用会多收，超过一小时的调用会少收，模型知道自己的典型时长时应写自己的按次价；取 5 分钟最低价会低于多数调用的实际成本。
 - **按张、按秒、按字符**：这三类是独立的计费项，单价按每个计费单位（一张、一秒、一个字符），不是 token 价，所以永不与 token 项重叠。数量必须是整数：张数和字符数是数出来的，秒数是上游报告的最小单位，端点在报告时取整（不足一秒向上取整，与取整方向一致）。`Item.Unit()` 给出每项的单位，`CountedItems` 是这三类的集合；`protocol` 目前没有端点报告它们（图片、语音生成属于产品的「以后」），报价与结算已经支持，见[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)。
+- **按请求**：`request` 每个生成请求记一次，不论大小；它由网关和计费记，不由上游报告，所以不在 `CountedItems` 和 `Reportable` 里。价目表有这项时，预留固定加一个请求的价，结算对收费的那次尝试加一次，免单时照收（[计费的「预留与结算」](../../docs/domains/billing.md#预留与结算)）。new-api 的 `tier("request", fixed(...))` 和 sub2api 的 `per_request_price` 都按请求计价（2026-11-01 只读核对）。
 - **不认识的用量**：上游报告了映射表里没有、数值不为零的用量字段时，`protocol` 把字段名和数量放进 `Usage.Unknown()`，不丢弃，也不归进已有的项。计费据此按[计费的「价目表缺项」](../../docs/domains/billing.md#价目表缺项)处理：模型停止接受新请求，在途请求按兜底价暂估。
 - **服务等级**：`Usage` 的服务等级 是这次实际服务的等级，封闭枚举 `ServiceTier`（standard、flex、priority、fast），`protocol` 按每家的取值表从响应里读（OpenAI 的 `service_tier`，Anthropic 的 `usage.service_tier` 和快速模式，Gemini 待核对）；响应没有回报时取请求里明确写的等级，都没有就是标准档。认不出的取值同样放进 `Unknown()`，不猜成标准档：这时 `ServiceTier` 填标准档只是占位，`Unknown()` 不为空，计费就按「价目表缺项」处理，不只看 `Cost` 的结果。`UnknownUsage{Field, Value}` 是上游的字段路径和原样的取值：数量不一定是整数，等级是字符串，由计费解读。
 - **输出的三个口径**：`Usage.OutputTotal()` 是计量、预留的计费输出（普通、推理、音频、图片之和）；OpenAI 客户端总数也显式加这四项；billing 的免单判断检查普通、推理、音频和图片，加上交付的图片张数与音频输出秒数（`deliveredOutputs`），纯图片或纯音频回复都不免单。不能由一个总数函数隐式决定所有政策。

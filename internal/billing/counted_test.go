@@ -364,3 +364,58 @@ func TestCountedOnlyNeedsTokenPrices(t *testing.T) {
 		t.Errorf("a text model without an output price: %v, want ErrUnpriced", err)
 	}
 }
+
+// tryDemand reserves a call of q with the demand as given.
+func (b *bank) tryDemand(q Quotable, d Demand) (*Hold, error) {
+	b.t.Helper()
+	var h *Hold
+	err := b.app.Tx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
+		var err error
+		h, err = b.billing.reserveOne(b.t.Context(), tx, b.admitted, uuid.NewV7(), d, []Quotable{q})
+		return err
+	})
+	return h, err
+}
+
+// TestRequestPrice: a schedule that prices the per-request item charges one request whatever its size, and its charge
+// details name the use. A request count of zero, as a probe's estimate, charges no request.
+func TestRequestPrice(t *testing.T) {
+	t.Parallel()
+	q := Quotable{
+		Price: mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0","output":"0","request":"1.5"}}`),
+		Model: Model{ContextLength: 1000}, MaxOutput: 10, Endpoint: uuid.NewV7(),
+	}
+	if res, err := Quote(Demand{TextBytes: 10, Requests: 0}, []Quotable{q}, Segments{}, nil); err != nil || res.Amount.CeilAmount() != 0 {
+		t.Errorf("no request: %v, %v; want nothing reserved", res.Amount.CeilAmount(), err)
+	}
+	b := newBank(t, 10_000_000_000, 0, Config{})
+	h, err := b.tryDemand(q, Demand{TextBytes: 10, Requests: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.Amount.CeilAmount(); got != 1_500_000_000 {
+		t.Fatalf("reserved %d, want 1500000000", got)
+	}
+	f := b.settleWith(h, outcome(Committed, FinishStop, reported(t, map[catalog.Item]int64{catalog.ItemOutput: 10})))
+	if want := platform.AmountExact(1_500_000_000); f.Charged != want || f.Estimated || f.Waived {
+		t.Fatalf("Settle = %+v, want %v, not estimated, not waived", f, want)
+	}
+	checkCharges(t, b.charges(h.id).Items, map[string]wantCharge{
+		"request": {1, "use", "1.5"}, "output": {10, "token", "0"},
+	})
+	b.balanced()
+
+	// The served tier has no request price, but the schedule has one on another tier. The request is charged at the
+	// highest request price, not at the price of another per-use item.
+	only := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0","output":"0","request":"2","web_search":"0.01"}}`)
+	seg := chargeTestSegment(t, map[catalog.Item]int64{catalog.ItemOutput: 10}, catalog.ServiceTierPriority, nil, nil)
+	priced, err := priceSegments(only, fallbacks{perUse: map[catalog.Item]platform.UnitPrice{
+		catalog.ItemWebSearch: mustUnitPrice("0.01"), catalog.ItemCodeExecution: mustUnitPrice("0.02"),
+	}}, []Segment{seg}, false, 1<<catalog.ServiceTierStandard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if priced.price != 2_000_000_000 {
+		t.Errorf("an undeclared tier's request = %d, want 2000000000", priced.price)
+	}
+}

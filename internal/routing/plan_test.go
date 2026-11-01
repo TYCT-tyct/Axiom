@@ -246,6 +246,40 @@ func TestSortAndPerformance(t *testing.T) {
 	}
 }
 
+// TestPerformancePercentiles: the percentile form of the performance wishes reads the endpoint's rolling window, not
+// the moving average, and an endpoint with no percentile measured misses neither.
+func TestPerformancePercentiles(t *testing.T) {
+	t.Parallel()
+	p := openPreset()
+	p.Strategy = routing.Cheapest
+	h := newHarness(t, routing.Config{}, p,
+		endpoint(t, 1, func(e *routing.Endpoint) {
+			e.ThroughputPercentiles = [4]float64{500, 500, 500, 500}
+			e.LatencyPercentiles = [4]time.Duration{time.Second, time.Second, time.Second, 5 * time.Second}
+		}),
+		endpoint(t, 2, func(e *routing.Endpoint) {
+			e.ThroughputPercentiles = [4]float64{10, 10, 10, 10}
+			e.LatencyPercentiles = [4]time.Duration{100 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond}
+		}),
+		endpoint(t, 3))
+	in := input()
+	in.Override.MinThroughputPercentiles = routing.Cutoffs{Values: [4]float64{100}, Set: 1 << routing.P50}
+	if got := h.plan(in).Entries; len(got) != 3 || got[2].Endpoint != ep(2) {
+		t.Errorf("a throughput percentile wish: %+v", got)
+	}
+	in.Override.MinThroughputPercentiles = routing.Cutoffs{
+		Values: [4]float64{100, 0, 0, 1000}, Set: 1<<routing.P50 | 1<<routing.P99,
+	}
+	if got := h.plan(in).Entries; got[0].Endpoint != ep(3) {
+		t.Errorf("every named cutoff must hold; an unmeasured endpoint still misses none: %+v", got)
+	}
+	in.Override.MinThroughputPercentiles = routing.Cutoffs{}
+	in.Override.MaxLatencyPercentiles = routing.Cutoffs{Values: [4]float64{0, 0, 0, 1}, Set: 1 << routing.P99}
+	if got := h.plan(in).Entries; len(got) != 3 || got[2].Endpoint != ep(1) {
+		t.Errorf("a latency percentile wish: %+v", got)
+	}
+}
+
 // checkLimits checks the limits an entry carries are its endpoint's, as the helper endpoint has them.
 func checkLimits(t *testing.T, i int, e routing.Entry) {
 	t.Helper()

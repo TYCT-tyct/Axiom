@@ -169,6 +169,7 @@ export default {
     model: "上游模型",
     group: "分组",
     formats: "调用格式",
+    quantization: "精度",
     state: {
       off: "已关闭",
       unknown: "成本未知",
@@ -182,6 +183,20 @@ export default {
         body: "回答这个页面的服务器还是发布前的版本，不会列出端点。发布完成后刷新页面再试。",
       },
     },
+  },
+  quantization: {
+    open: "设置精度",
+    title: "设置 {{name}} 的精度",
+    body: "这个端点提供模型时使用的精度，名称与 OpenRouter 的等级一致。请求按量化筛选时匹配的就是它：没有记录的端点不会匹配，而“没有记录”也不是“unknown”这一级。",
+    precision: "精度",
+    levels: {
+      int4: "int4", int8: "int8", fp4: "fp4", mxfp4: "mxfp4", nvfp4: "nvfp4", fp6: "fp6",
+      fp8: "fp8", mxfp8: "mxfp8", fp16: "fp16", bf16: "bf16", fp32: "fp32", unknown: "unknown",
+    },
+    none: "未记录",
+    action: "保存精度",
+    done: "精度已设为 {{level}}。",
+    cleared: "精度已清除。",
   },
   test: {
     open: "测试",

@@ -339,6 +339,17 @@ func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOn
 		}
 		p.estimated = p.estimated || guessed(seg, charged, missing)
 	}
+	if len(segments) > 0 {
+		if rate, _, ok := requestRate(s, f, segments[len(segments)-1], tiers); ok {
+			// A schedule that prices the per-request item charges one request for the attempt, whatever its usage and
+			// even when the model usage is waived. The upstream reports no count of it, so this is its whole charge.
+			next, err := total.Add(rate.Mul(1))
+			if err != nil {
+				return priced{}, fmt.Errorf("billing: price the request: %w", err)
+			}
+			total = next
+		}
+	}
 	p.price = ceilAmount(total)
 	return p, nil
 }

@@ -2342,7 +2342,7 @@ components:
       enum: [standard, flex, priority, fast]
     ModelItem:
       type: string
-      enum: [input, cache_read, cache_write, cache_write_1h, audio_in, image_in, output, reasoning, audio_out, image_out, web_search, code_execution, image_in_piece, image_out_piece, audio_in_second, audio_out_second, character_in]
+      enum: [input, cache_read, cache_write, cache_write_1h, audio_in, image_in, output, reasoning, audio_out, image_out, web_search, code_execution, image_in_piece, image_out_piece, audio_in_second, audio_out_second, character_in, request]
     ModelUnit:
       type: string
       enum: [token, use, piece, second, character]

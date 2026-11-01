@@ -43,6 +43,21 @@ func checkRandomCharge(t *testing.T, r *rand.Rand) {
 			t.Fatal(err)
 		}
 	}
+	if len(segments) > 0 {
+		if rate, band, ok := requestRate(s, defaults, segments[len(segments)-1], tiers); ok {
+			last := segments[len(segments)-1]
+			d.Items = append(d.Items, ChargeItem{
+				Item: catalog.ItemRequest.String(), Quantity: 1, Unit: catalog.ItemRequest.Unit().String(),
+				UnitPrice: rate.String(), Amount: chargeDecimal(rate.Mul(1)), ServiceTier: last.Usage.ServiceTier().String(),
+				ContextBand: band,
+			})
+			amount, err := exact.Add(rate.Mul(1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			exact = amount
+		}
+	}
 	p, err := priceSegments(s, defaults, segments, waived, tiers)
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +119,9 @@ func randomChargeSegment(t *testing.T, r *rand.Rand) Segment {
 	var reported catalog.ItemSet
 	extreme := r.IntN(8) == 0
 	for it := range catalog.NumItems {
+		if it == catalog.ItemRequest {
+			continue // the gateway charges it once per call, never as upstream-reported usage
+		}
 		counts[it] = r.Int64N(4097)
 		if r.IntN(3) == 0 {
 			counts[it] = 0

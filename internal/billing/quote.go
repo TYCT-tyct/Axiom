@@ -42,6 +42,9 @@ type Demand struct {
 	// own unit: the images to generate, the seconds of audio, the characters to read aloud. A count of a token or
 	// per-use item here is ignored, because those are bounded by TextBytes, the output limit and ServerTools.
 	Counts map[catalog.Item]int64
+	// Requests is how many generation requests this call is: 1 for an ordinary call, and 0 only where there is none to
+	// charge, as a probe's cost estimate. It is billed at the per-request item when the schedule prices one.
+	Requests int64
 }
 
 // ServerTool is a server tool and the most uses the request allows it; 0 means the request set none, so the entry's
@@ -265,6 +268,13 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	}
 	if err := q.priceCounted(d, &prices, tiers, longest, samplings); err != nil {
 		return q, err
+	}
+	if d.Requests > 0 && prices.schedule.Priced(1<<catalog.ItemRequest) {
+		price, ok := prices.ceiling(1<<catalog.ItemRequest, tiers, longest)
+		if !ok {
+			return q, ErrUnpriced
+		}
+		q.fixed = sum(q.fixed, price.Mul(d.Requests))
 	}
 	q.allowance = q.output.Mul(allowance)
 	q.amount = sum(q.fixed, q.allowance, q.output.Mul(output))

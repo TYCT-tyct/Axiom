@@ -29,7 +29,17 @@ func endpointBody(e suppliers.Endpoint) adminapi.SupplierEndpoint {
 	return adminapi.SupplierEndpoint{
 		Id: e.ID.String(), GroupId: e.Group.String(), ModelId: e.Model.String(), UpstreamName: e.UpstreamName,
 		Formats: modelFormats(e.Formats), CostState: adminapi.SupplierEndpointCostState(e.CostState), Enabled: e.Enabled,
+		Quantization: quantizationBody(e.Quantization),
 	}
+}
+
+// quantizationBody is the level an endpoint records, absent when it records none.
+func quantizationBody(q suppliers.Quantization) *adminapi.SupplierEndpointQuantization {
+	if q == "" {
+		return nil
+	}
+	level := adminapi.SupplierEndpointQuantization(q)
+	return &level
 }
 
 // modelFormats are the call formats as the store names them, which are the contract's names.

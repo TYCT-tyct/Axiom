@@ -122,3 +122,22 @@ func TestSessionKeyOfALongStringInput(t *testing.T) {
 		t.Error("two long first messages with different starts have one key")
 	}
 }
+
+// TestRequestPriceLimitIsNotATokenLimit: a request price missing at the served tier is charged at the schedule's
+// highest request price, so a cheap per-request cap must not be compared with a token price.
+func TestRequestPriceLimitIsNotATokenLimit(t *testing.T) {
+	t.Parallel()
+	s, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"1000","output":"0","request":"0.000005"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, routing.Config{}, openPreset(), endpoint(t, 1, func(e *routing.Endpoint) {
+		e.Price.Schedule, e.ServiceTiers = s, 1<<catalog.ServiceTierStandard|1<<catalog.ServiceTierPriority
+	}))
+	in := input()
+	in.Req.ServiceTiers = 1 << catalog.ServiceTierPriority
+	in.Override.MaxPrice = limitOn(t, catalog.ItemRequest, "0.00001")
+	if _, _, err := h.r.Plan(in); err != nil {
+		t.Errorf("a request cap above the request price but below the token price: %v", err)
+	}
+}

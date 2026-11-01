@@ -49,6 +49,7 @@ type Routable struct {
 	Upstream            string
 	Codename            string // the group's immutable public codename
 	Formats             []protocol.Format
+	Quantization        Quantization // the level an admin recorded; empty is unrecorded
 	Schedule            catalog.Schedule
 	Streams, Cancels    bool
 	// PoolLow says the group's pool has little capacity left: routing halves this endpoint's weight. Only a pool whose
@@ -296,6 +297,7 @@ type endpoint struct {
 	upstream               string
 	codename               string
 	formats                []protocol.Format
+	quantization           Quantization
 	unitValueID            uuid.UUID
 	origin                 string
 	quirks                 adapter.CallQuirks
@@ -424,7 +426,8 @@ func (s *Service) Routable() ([]Routable, error) {
 			Credentials: s.availableCredentials(ep), Capacity: &Capacity{s: s, id: ep.id},
 			Funds: ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
 			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Codename: ep.codename, Formats: slices.Clone(ep.formats),
-			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels, PoolLow: ep.poolLow,
+			Quantization: ep.quantization,
+			Schedule:     *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels, PoolLow: ep.poolLow,
 		})
 	}
 	slices.SortFunc(out, func(a, b Routable) int { return a.ID.Compare(b.ID) })
@@ -450,6 +453,12 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
 	}
+	var quantization Quantization
+	if r.Quantization != nil {
+		if quantization, err = ParseQuantization(*r.Quantization); err != nil {
+			return nil, fmt.Errorf("endpoint %s: %w", r.EndpointID, err)
+		}
+	}
 	currency, err := platform.ParseCurrency(r.SettlementCurrency)
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %s: its supplier's settlement currency: %w", r.EndpointID, err)
@@ -464,7 +473,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	}
 	ep := &endpoint{
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName, codename: *r.Codename,
-		formats: formats, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
+		formats: formats, quantization: quantization, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
 		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt),
 		poolLow: r.PoolLow.Bool,
 	}

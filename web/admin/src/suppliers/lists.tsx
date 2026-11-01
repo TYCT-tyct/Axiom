@@ -221,6 +221,7 @@ export function Endpoints({
           [t("suppliers.endpoints.model")],
           [t("suppliers.endpoints.group"), "hidden md:table-cell"],
           [t("suppliers.endpoints.formats"), "hidden lg:table-cell"],
+          [t("suppliers.endpoints.quantization"), "hidden xl:table-cell"],
           [t("suppliers.col.status"), "whitespace-nowrap"],
         ]}
         action={onOpen !== undefined}
@@ -270,20 +271,35 @@ function EndpointRow({
           ))}
         </div>
       </Td>
+      <Td className="hidden whitespace-nowrap xl:table-cell">
+        {endpoint.quantization
+          ? t(`suppliers.quantization.levels.${endpoint.quantization}`)
+          : t("suppliers.quantization.none")}
+      </Td>
       <Td className="whitespace-nowrap">
         <State tone={endpointTones[state]}>{t(`suppliers.endpoints.state.${state}`)}</State>
       </Td>
       {onOpen ? (
         <Td className="whitespace-nowrap">
-          {state === "ready" && testFormats(endpoint.formats).length > 0 ? (
+          <div className="flex justify-end gap-1">
+            {state === "ready" && testFormats(endpoint.formats).length > 0 ? (
+              <Button
+                size="sm"
+                aria-label={t("suppliers.test.title", { name: endpoint.upstream_name, group })}
+                onClick={() => onOpen({ kind: "test", endpoint, group })}
+              >
+                {t("suppliers.test.open")}
+              </Button>
+            ) : null}
             <Button
               size="sm"
-              aria-label={t("suppliers.test.title", { name: endpoint.upstream_name, group })}
-              onClick={() => onOpen({ kind: "test", endpoint, group })}
+              variant="secondary"
+              aria-label={t("suppliers.quantization.title", { name: endpoint.upstream_name })}
+              onClick={() => onOpen({ kind: "quantization", endpoint })}
             >
-              {t("suppliers.test.open")}
+              {t("suppliers.quantization.open")}
             </Button>
-          ) : null}
+          </div>
         </Td>
       ) : null}
     </tr>

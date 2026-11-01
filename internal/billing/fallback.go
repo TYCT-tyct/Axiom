@@ -214,6 +214,13 @@ func missingRate(s catalog.Schedule, f fallbacks, it catalog.Item) platform.Unit
 	if perUseItems.Has(it) {
 		return f.perUse[it]
 	}
+	if it == catalog.ItemRequest {
+		// A request has no configured default: when the served tier has no request price, charge the highest request
+		// price the schedule does have, never another per-use item's price.
+		if highest, priced := itemPrice(s, it); priced {
+			return highest
+		}
+	}
 	if unit := it.Unit(); unit != catalog.UnitToken {
 		if highest, priced := unitPrice(s, unit); priced {
 			return highest
@@ -225,6 +232,17 @@ func missingRate(s catalog.Schedule, f fallbacks, it catalog.Item) platform.Unit
 // unitPrice is the dearest price the schedule has for a unit, over every tier and band, and whether it prices the unit
 // at all. Any price counts, including an explicit zero: a unit priced nowhere is the only reason to charge it as tokens,
 // so existence is Priced's question, not Highest's missing, which only says every tier and band has a price.
+// itemPrice is the dearest price the schedule has for one item over every tier and band, and whether it prices it at
+// all. Any price counts, including zero.
+func itemPrice(s catalog.Schedule, it catalog.Item) (platform.UnitPrice, bool) {
+	items := catalog.ItemSet(1) << it
+	if !s.Priced(items) {
+		return platform.UnitPrice{}, false
+	}
+	highest, _ := s.Highest(items, ^catalog.ServiceTierSet(0), math.MaxInt64)
+	return highest, true
+}
+
 func unitPrice(s catalog.Schedule, unit catalog.Unit) (platform.UnitPrice, bool) {
 	items := itemsOfUnit(unit)
 	if !s.Priced(items) {

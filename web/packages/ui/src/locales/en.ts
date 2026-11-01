@@ -160,6 +160,7 @@ export default {
       image_out_piece: "Output image",
       audio_in_second: "Audio input (second)",
       audio_out_second: "Audio output (second)",
+      request: "Request",
       character_in: "Characters",
     },
     unit: { token: "token", use: "use", piece: "piece", second: "second", character: "character" },

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
+	"axiom/internal/suppliers"
 )
 
 // TestOverride: each member of the provider object either narrows the route or is refused by name; none is dropped.
@@ -53,11 +55,14 @@ func TestOverride(t *testing.T) {
 		"every parameter required": {`{"require_parameters":true}`, routing.Override{RequireParameters: true}},
 		"empty quantizations":      {`{"quantizations":[]}`, routing.Override{}},
 		"null quantizations":       {`{"quantizations":null}`, routing.Override{}},
+		"quantization levels":      {`{"quantizations":["fp8","unknown","fp8"]}`, routing.Override{Quantizations: []suppliers.Quantization{suppliers.QuantizationFP8, suppliers.QuantizationUnknown}}},
 		"data collection denied":   {`{"data_collection":"deny"}`, routing.Override{Policies: noRetention}},
 		"data collection allowed":  {`{"data_collection":"allow"}`, routing.Override{}},
 		"zero data retention":      {`{"zdr":true}`, routing.Override{Policies: noRetention}},
 		"no zero data retention":   {`{"zdr":false}`, routing.Override{}},
 		"performance wishes":       {`{"preferred_min_throughput":50.5,"preferred_max_latency":1.5}`, routing.Override{MinThroughput: 50.5, MaxLatency: 1500 * time.Millisecond}},
+		"throughput percentiles":   {`{"preferred_min_throughput":{"p50":100,"p99":10}}`, routing.Override{MinThroughputPercentiles: routing.Cutoffs{Values: [4]float64{100, 0, 0, 10}, Set: 1<<routing.P50 | 1<<routing.P99}}},
+		"latency percentiles":      {`{"preferred_max_latency":{"p75":2,"p90":1.5}}`, routing.Override{MaxLatencyPercentiles: routing.Cutoffs{Values: [4]float64{0, 2, 1.5, 0}, Set: 1<<routing.P75 | 1<<routing.P90}}},
 		"the defaults, written":    {`{"order":[],"only":[],"ignore":[],"allow_fallbacks":true,"require_parameters":false}`, routing.Override{}},
 		"a prompt price":           {`{"max_price":{"prompt":1.5}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "0.0000015")}},
 		"a price with an exponent": {`{"max_price":{"completion":2e-1}}`, routing.Override{MaxPrice: limit(catalog.ItemOutput, "0.0000002")}},
@@ -67,6 +72,7 @@ func TestOverride(t *testing.T) {
 		"the dearest price":        {`{"max_price":{"prompt":1E+9}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "1000")}},
 		"a long fraction of zeros": {`{"max_price":{"prompt":1.500000000e0}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "0.0000015")}},
 		"zero with an exponent":    {`{"max_price":{"prompt":0e999}}`, routing.Override{MaxPrice: limit(catalog.ItemInput, "0")}},
+		"a request price":          {`{"max_price":{"request":1.5}}`, routing.Override{MaxPrice: limit(catalog.ItemRequest, "1.5")}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -89,10 +95,13 @@ func TestOverride(t *testing.T) {
 func TestOverrideRefuses(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct{ provider, named string }{
-		"quantizations":                                 {`{"quantizations":["fp8"]}`, "provider.quantizations"},
+		"a quantization level nobody knows":             {`{"quantizations":["fp8","int3"]}`, "provider.quantizations"},
+		"a quantization that is not a name":             {`{"quantizations":[8]}`, "provider.quantizations"},
 		"a member nobody knows":                         {`{"colour":"red"}`, "provider.colour"},
-		"a price of a request":                          {`{"max_price":{"request":1}}`, "provider.max_price.request"},
 		"a price of an image":                           {`{"max_price":{"image":1}}`, "provider.max_price.image"},
+		"a negative request price":                      {`{"max_price":{"request":-1}}`, "provider.max_price.request"},
+		"a request price finer than the unit":           {`{"max_price":{"request":0.0000000000000001}}`, "provider.max_price.request"},
+		"a request price too dear to be one":            {`{"max_price":{"request":1000.1}}`, "provider.max_price.request"},
 		"a price in text":                               {`{"max_price":{"prompt":"1"}}`, "provider.max_price.prompt"},
 		"a negative price":                              {`{"max_price":{"prompt":-1}}`, "provider.max_price.prompt"},
 		"a price finer than the unit":                   {`{"max_price":{"prompt":0.0000000001}}`, "provider.max_price.prompt"},
@@ -111,8 +120,9 @@ func TestOverrideRefuses(t *testing.T) {
 		"nonstring provider name":                       {`{"ignore":[1]}`, "provider.ignore"},
 		"fallbacks as text":                             {`{"allow_fallbacks":"false"}`, "provider.allow_fallbacks"},
 		"parameters as text":                            {`{"require_parameters":"true"}`, "provider.require_parameters"},
-		"percentile latency":                            {`{"preferred_max_latency":{"p50":1,"p99":2}}`, "provider.preferred_max_latency"},
-		"percentile throughput":                         {`{"preferred_min_throughput":{"p90":10}}`, "provider.preferred_min_throughput"},
+		"a percentile nobody knows":                     {`{"preferred_max_latency":{"p95":1}}`, "provider.preferred_max_latency.p95"},
+		"a percentile that is not a number":             {`{"preferred_min_throughput":{"p50":"10"}}`, "provider.preferred_min_throughput.p50"},
+		"an empty percentile object":                    {`{"preferred_max_latency":{}}`, "provider.preferred_max_latency"},
 		"negative latency":                              {`{"preferred_max_latency":-1}`, "provider.preferred_max_latency"},
 		"a data collection of maybe":                    {`{"data_collection":"maybe"}`, "provider.data_collection"},
 		"zdr as text":                                   {`{"zdr":"yes"}`, "provider.zdr"},
@@ -135,30 +145,15 @@ var quantizationLevels = []string{
 }
 
 // TestProviderRefusalsNameTheMissingData: a constraint the snapshot cannot keep says what it lacks, not just which
-// member was refused: quantization levels, percentile windows and per-request/per-image price items are absent data,
-// not values to guess.
+// member was refused. Quantization, the percentile windows and the per-request price are served now; the per-image
+// price and the price sort's percentile are still absent data.
 func TestProviderRefusalsNameTheMissingData(t *testing.T) {
 	t.Parallel()
-	type refusal struct{ provider, want string }
-	cases := map[string]refusal{
-		"sort percentile":    {`{"sort":{"by":"price","percentile":"p90"}}`, "a sort object takes by and partition"},
-		"request price":      {`{"max_price":{"request":1}}`, "no per-request item"},
-		"zero request price": {`{"max_price":{"request":0}}`, "no per-request item"},
-		"image price":        {`{"max_price":{"image":1}}`, "item to compare is undecided"},
-		"zero image price":   {`{"max_price":{"image":0}}`, "item to compare is undecided"},
-	}
-	for _, level := range quantizationLevels {
-		cases["quantization "+level] = refusal{fmt.Sprintf(`{"quantizations":[%q]}`, level), "no endpoint records a quantization level"}
-	}
-	for _, percentile := range []string{"p50", "p75", "p90", "p99"} {
-		cases["throughput "+percentile] = refusal{
-			fmt.Sprintf(`{"preferred_min_throughput":{%q:10}}`, percentile), "rolling five-minute p50/p75/p90/p99",
-		}
-		cases["latency "+percentile] = refusal{
-			fmt.Sprintf(`{"preferred_max_latency":{%q:1}}`, percentile), "rolling five-minute p50/p75/p90/p99",
-		}
-	}
-	for name, tc := range cases {
+	for name, tc := range map[string]struct{ provider, want string }{
+		"sort percentile":  {`{"sort":{"by":"price","percentile":"p90"}}`, "a sort object takes by and partition"},
+		"image price":      {`{"max_price":{"image":1}}`, "item to compare is undecided"},
+		"zero image price": {`{"max_price":{"image":0}}`, "item to compare is undecided"},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			_, err := override([]byte(tc.provider))
@@ -167,6 +162,18 @@ func TestProviderRefusalsNameTheMissingData(t *testing.T) {
 				t.Errorf("got %v, want a refusal saying %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestQuantizationLevels: every level OpenRouter documents is a name this Axiom knows, so a request naming one is kept
+// for routing to match.
+func TestQuantizationLevels(t *testing.T) {
+	t.Parallel()
+	for _, level := range quantizationLevels {
+		o, err := override([]byte(fmt.Sprintf(`{"quantizations":[%q]}`, level)))
+		if err != nil || !slices.Equal(o.Quantizations, []suppliers.Quantization{suppliers.Quantization(level)}) {
+			t.Errorf("%s: %v %v", level, o.Quantizations, err)
+		}
 	}
 }
 
@@ -309,6 +316,44 @@ func TestProviderRequiresEveryParameterNoEndpoint(t *testing.T) {
 	r.idle(1 << 30)
 }
 
+// TestProviderServesQuantizationAndPerformanceWindows: the members that used to be refused now narrow the route by
+// the level an admin recorded and by the rolling-window percentiles, and a level nobody recorded matches nothing.
+func TestProviderServesQuantizationAndPerformanceWindows(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, func(o *rigOptions) {
+		o.endpoints = func(name string, e *routing.Endpoint) {
+			switch name {
+			case "alpha-1":
+				e.Quantization = suppliers.QuantizationFP8
+				e.ThroughputPercentiles = [4]float64{500, 500, 500, 500}
+				e.LatencyPercentiles = [4]time.Duration{time.Second, time.Second, time.Second, 5 * time.Second}
+			case "alpha-2":
+				e.Quantization = suppliers.QuantizationFP16
+				e.ThroughputPercentiles = [4]float64{10, 10, 10, 10}
+				e.LatencyPercentiles = [4]time.Duration{100 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond}
+			}
+		}
+	})
+	a := r.newAccount(1e9)
+	one, two := r.endpoints["alpha-1"].ID, r.endpoints["alpha-2"].ID
+	for provider, want := range map[string][]routing.EndpointID{
+		`{"quantizations":["fp8"]}`:                {one},
+		`{"quantizations":["fp8","fp16"]}`:         {one, two},
+		`{"preferred_min_throughput":{"p50":100}}`: {one, two},
+		`{"preferred_max_latency":{"p99":1}}`:      {two, one},
+	} {
+		if route, resp, body := r.sendWith(a, provider); resp.StatusCode != http.StatusOK || !cmp.Equal(route, want) {
+			t.Errorf("%s: %d, route %v, want %v: %s", provider, resp.StatusCode, route, want, body)
+		}
+	}
+	for _, provider := range []string{`{"quantizations":["int8"]}`, `{"quantizations":["unknown"]}`} {
+		if _, resp, body := r.sendWith(a, provider); resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "override_filter") {
+			t.Errorf("%s: %d %s", provider, resp.StatusCode, body)
+		}
+	}
+	r.idle(1 << 30)
+}
+
 // TestProviderRequireParametersReadsResponsesText: Responses carries verbosity inside text, which Inspect reads only
 // for format. The guarantee must see it in every format, and leave text.format to the capability filter.
 func TestProviderRequireParametersReadsResponsesText(t *testing.T) {
@@ -346,9 +391,7 @@ func TestProviderRefusedMembersReserveNothing(t *testing.T) {
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	for _, provider := range []string{
-		`{"quantizations":["fp8"]}`, `{"quantizations":["unknown"]}`,
-		`{"preferred_min_throughput":{"p90":10}}`, `{"preferred_max_latency":{"p99":1}}`,
-		`{"max_price":{"request":0}}`, `{"max_price":{"image":0}}`,
+		`{"max_price":{"image":0}}`,
 	} {
 		_, resp, body := r.sendWith(a, provider)
 		if code, _ := errorOf(t, body); resp.StatusCode != http.StatusBadRequest || code != "invalid_request" {
@@ -379,7 +422,7 @@ func TestPriceParsingIsBounded(t *testing.T) {
 func checkPriceBounds(t *testing.T, huge []string) {
 	t.Helper()
 	for _, number := range huge {
-		if _, ok := readPrice([]byte(number)); ok {
+		if _, ok := readPrice([]byte(number), 9); ok {
 			t.Errorf("%s passed the bound check", number)
 		}
 		if _, ok := perToken([]byte(number)); ok {
@@ -387,7 +430,7 @@ func checkPriceBounds(t *testing.T, huge []string) {
 		}
 	}
 	for _, number := range []string{"1e3", "0e999", "0", "0.0000015"} {
-		if _, ok := readPrice([]byte(number)); !ok {
+		if _, ok := readPrice([]byte(number), 9); !ok {
 			t.Errorf("%s was refused by the bound check", number)
 		}
 	}
@@ -455,14 +498,14 @@ func TestSortRanksAsAsked(t *testing.T) {
 
 func TestProviderErrorsKeepStringCodes(t *testing.T) {
 	t.Parallel()
-	r := newRig(t)
+	// A request that names no tier may be served at priority, so the sale schedule prices it: these requests must reach
+	// the member under test, not fail quoting the route they share.
+	const bothTiers = `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001"},
+		"service_tiers":{"priority":{"rates":{"input":"0.000002","output":"0.000003","cache_write":"0.000001"}}}}`
+	r := newRig(t, func(o *rigOptions) { o.price = bothTiers })
 	a := r.newAccount(1e9)
 	for _, tc := range []struct{ provider, members, member string }{
 		{`{"require_parameters":true}`, `"seed":7,`, "require_parameters"},
-		{`{"quantizations":["fp8"]}`, "", "quantizations"},
-		{`{"preferred_min_throughput":{"p90":10}}`, "", "preferred_min_throughput"},
-		{`{"preferred_max_latency":{"p99":1}}`, "", "preferred_max_latency"},
-		{`{"max_price":{"request":0}}`, "", "max_price.request"},
 		{`{"max_price":{"image":0.01}}`, "", "max_price.image"},
 		{`{"sort":{"by":"price","percentile":"p90"}}`, "", "sort.percentile"},
 	} {

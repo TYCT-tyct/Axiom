@@ -116,6 +116,67 @@ export function ReplaceLoginDialog({ supplier, onClose }: { supplier: Supplier; 
   );
 }
 
+// The precision an endpoint serves at, which only a person records: no reference system reports it. A request's
+// quantization filter matches only a level recorded here; none recorded is not the level unknown.
+export function QuantizationDialog({
+  supplier,
+  endpoint,
+  onClose,
+}: {
+  supplier: Supplier;
+  endpoint: AdminSchemas["SupplierEndpoint"];
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  type Level = NonNullable<AdminSchemas["SupplierEndpoint"]["quantization"]>;
+  const levels = [
+    "int4", "int8", "fp4", "mxfp4", "nvfp4", "fp6", "fp8", "mxfp8", "fp16", "bf16", "fp32", "unknown",
+  ] as const satisfies readonly Level[];
+  return (
+    <ChangeDialog
+      operation={`supplier-endpoint-quantization:${endpoint.id}`}
+      title={t("suppliers.quantization.title", { name: endpoint.upstream_name })}
+      intro={<p>{t("suppliers.quantization.body")}</p>}
+      action={t("suppliers.quantization.action")}
+      fields={() => (
+        <SelectField
+          label={t("suppliers.quantization.precision")}
+          hint={t("suppliers.quantization.body")}
+          name="quantization"
+          defaultValue={endpoint.quantization ?? ""}
+        >
+          <option value="">{t("suppliers.quantization.none")}</option>
+          {levels.map((level) => (
+            <option key={level} value={level}>
+              {t(`suppliers.quantization.levels.${level}`)}
+            </option>
+          ))}
+        </SelectField>
+      )}
+      read={(values) => values.quantization ?? ""}
+      send={(level, { reason, key }) =>
+        unwrapChange(
+          adminApi.PUT("/api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/quantization", {
+            params: {
+              path: { supplier_id: supplier.id, endpoint_id: endpoint.id },
+              header: { "Idempotency-Key": key },
+            },
+            body: { quantization: level === "" ? null : (level as Level), reason },
+          }),
+        )
+      }
+      done={(changed) =>
+        <p>
+          {changed.quantization
+            ? t("suppliers.quantization.done", { level: t(`suppliers.quantization.levels.${changed.quantization}`) })
+            : t("suppliers.quantization.cleared")}
+        </p>
+      }
+      onClose={onClose}
+    />
+  );
+}
+
 // What one unit of the supplier's balance is worth, in the currency Axiom pays it in: the answer that turns its costs
 // into money.
 export function UnitValueDialog({ supplier, onClose }: { supplier: Supplier; onClose: () => void }) {

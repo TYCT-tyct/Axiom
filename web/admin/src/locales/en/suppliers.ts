@@ -183,6 +183,7 @@ export default {
     model: "Upstream model",
     group: "Group",
     formats: "Formats",
+    quantization: "Precision",
     state: {
       off: "Switched off",
       unknown: "Cost unknown",
@@ -199,6 +200,20 @@ export default {
         body: "The server answering this page still runs the release before endpoints were listed. Reload once the release has finished.",
       },
     },
+  },
+  quantization: {
+    open: "Set precision",
+    title: "Set precision for {{name}}",
+    body: "The precision this endpoint serves the model at, as OpenRouter names the levels. It is what a request’s quantization filter matches: an endpoint with none recorded does not match one, and none is not the level “unknown”.",
+    precision: "Precision",
+    levels: {
+      int4: "int4", int8: "int8", fp4: "fp4", mxfp4: "mxfp4", nvfp4: "nvfp4", fp6: "fp6",
+      fp8: "fp8", mxfp8: "mxfp8", fp16: "fp16", bf16: "bf16", fp32: "fp32", unknown: "unknown",
+    },
+    none: "Not recorded",
+    action: "Save precision",
+    done: "Precision set to {{level}}.",
+    cleared: "Precision cleared.",
   },
   test: {
     open: "Test",

@@ -111,6 +111,18 @@ func chargeDetails(r ReadChargesRow) (ChargeDetails, error) {
 			}
 			d.Items = append(d.Items, items...)
 		}
+		if len(segments) > 0 {
+			if rate, band, ok := requestRate(s, f, segments[len(segments)-1], tiers); ok {
+				// One request per attempt, charged whether or not its model usage was waived, and reported by the
+				// schedule rather than the upstream: the charge details name it once, with no sampling.
+				last := segments[len(segments)-1]
+				d.Items = append(d.Items, ChargeItem{
+					Item: catalog.ItemRequest.String(), Quantity: 1, Unit: catalog.ItemRequest.Unit().String(),
+					UnitPrice: rate.String(), Amount: chargeDecimal(rate.Mul(1)), ServiceTier: last.Usage.ServiceTier().String(),
+					ContextBand: band, PriceVersion: r.PriceVersion,
+				})
+			}
+		}
 	}
 	return reconcileCharges(d, r.Price, r.Charged)
 }
@@ -161,6 +173,16 @@ func chargeItems(s catalog.Schedule, f fallbacks, seg Segment, waived bool, tier
 		items = append(items, unknownChargeItem(seg.Usage.ServiceTier(), rate, count, tokens))
 	}
 	return items
+}
+
+// requestRate is the price of one generation request, or false when the schedule prices none. It is charged once per
+// attempt, not per sampling, and is not usage the upstream reports.
+func requestRate(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet) (platform.UnitPrice, int, bool) {
+	if !s.Priced(1 << catalog.ItemRequest) {
+		return platform.UnitPrice{}, 0, false
+	}
+	_, band, _ := s.Rate(seg.Usage, catalog.ItemRequest)
+	return itemRate(s, f, seg, tiers, catalog.ItemRequest), band, true
 }
 
 func knownChargeItem(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, it catalog.Item) ChargeItem {
