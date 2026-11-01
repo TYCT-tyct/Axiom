@@ -54,13 +54,21 @@ export function MerchantFields({
     merchant?.methods?.length ? merchant.methods.map((method) => draftOf(method)) : [draftOf(undefined)],
   );
   const [paidIn, setPaidIn] = useState(merchant?.currency ?? merchantCurrency(currency));
+  const [kind, setKind] = useState(merchant?.kind ?? "easypay");
   const update: Update = (key, change) =>
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
   return (
     <>
-      <MerchantBasics merchant={merchant} paidIn={paidIn} setPaidIn={setPaidIn} error={error} />
+      <MerchantBasics
+        merchant={merchant}
+        kind={kind}
+        setKind={setKind}
+        paidIn={paidIn}
+        setPaidIn={setPaidIn}
+        error={error}
+      />
       <MerchantFlags merchant={merchant} />
-      <MerchantSecrets merchant={merchant} error={error} />
+      <MerchantSecrets merchant={merchant} kind={kind} error={error} />
       <MethodsEditor rows={rows} setRows={setRows} update={update} paidIn={paidIn} error={error} />
     </>
   );
@@ -68,11 +76,15 @@ export function MerchantFields({
 
 function MerchantBasics({
   merchant,
+  kind,
+  setKind,
   paidIn,
   setPaidIn,
   error,
 }: {
   merchant: Merchant | undefined;
+  kind: string;
+  setKind: (kind: string) => void;
   paidIn: string;
   setPaidIn: (currency: string) => void;
   error: unknown;
@@ -85,10 +97,13 @@ function MerchantBasics({
         label={t("settings.payments.kind")}
         hint={t("settings.payments.kindHint")}
         name="kind"
-        defaultValue={merchant?.kind ?? "easypay"}
+        value={kind}
+        onChange={(event) => setKind(event.target.value)}
+        disabled={merchant !== undefined}
         error={errors.field(error, "merchant/kind")}
       >
         <option value="easypay">{t("settings.payments.kinds.easypay")}</option>
+        <option value="stripe">{t("settings.payments.kinds.stripe")}</option>
       </SelectField>
       <TextField
         label={t("settings.payments.name")}
@@ -161,34 +176,70 @@ function MerchantFlags({ merchant }: { merchant: Merchant | undefined }) {
   );
 }
 
-function MerchantSecrets({ merchant, error }: { merchant: Merchant | undefined; error: unknown }) {
+function MerchantSecrets({ merchant, kind, error }: { merchant: Merchant | undefined; kind: string; error: unknown }) {
   const { t } = useTranslation();
   const errors = useErrors();
+  const stripe = kind === "stripe";
   return (
     <>
       <TextAreaField
+        key={kind}
         label={t("settings.payments.settings")}
-        hint={t("settings.payments.settingsHint")}
+        hint={stripe ? t("settings.payments.stripeSettingsHint") : t("settings.payments.settingsHint")}
         name="settings"
         className="min-h-40"
-        defaultValue={JSON.stringify(merchant?.settings ?? { gateway: "https://", pid: "", mode: "redirect" }, null, 2)}
+        defaultValue={JSON.stringify(
+          merchant?.settings ?? (stripe ? {} : { gateway: "https://", pid: "", mode: "redirect" }),
+          null,
+          2,
+        )}
         error={errors.field(error, "merchant/settings")}
       />
-      <TextField
-        label={t("settings.payments.key")}
-        hint={merchant ? t("settings.payments.keyKeep") : t("settings.payments.keyNew")}
-        name="key"
-        type="password"
-        autoComplete="new-password"
-        error={errors.field(error, "merchant/secrets")}
-      />
-      <TextField
-        label={t("settings.payments.oldKey")}
-        hint={t("settings.payments.oldKeyHint")}
-        name="old_key"
-        type="password"
-        autoComplete="new-password"
-      />
+      {stripe ? (
+        <>
+          <TextField
+            label={t("settings.payments.stripeSecretKey")}
+            hint={merchant ? t("settings.payments.stripeSecretKeep") : t("settings.payments.stripeSecretNew")}
+            name="secret_key"
+            type="password"
+            autoComplete="new-password"
+            error={errors.field(error, "merchant/secrets")}
+          />
+          <TextField
+            label={t("settings.payments.stripeWebhookSecret")}
+            hint={merchant ? t("settings.payments.stripeWebhookKeep") : t("settings.payments.stripeWebhookNew")}
+            name="webhook_secret"
+            type="password"
+            autoComplete="new-password"
+            error={errors.field(error, "merchant/secrets")}
+          />
+          <TextField
+            label={t("settings.payments.stripeOldWebhookSecret")}
+            hint={t("settings.payments.stripeOldWebhookHint")}
+            name="old_webhook_secret"
+            type="password"
+            autoComplete="new-password"
+          />
+        </>
+      ) : (
+        <>
+          <TextField
+            label={t("settings.payments.key")}
+            hint={merchant ? t("settings.payments.keyKeep") : t("settings.payments.keyNew")}
+            name="key"
+            type="password"
+            autoComplete="new-password"
+            error={errors.field(error, "merchant/secrets")}
+          />
+          <TextField
+            label={t("settings.payments.oldKey")}
+            hint={t("settings.payments.oldKeyHint")}
+            name="old_key"
+            type="password"
+            autoComplete="new-password"
+          />
+        </>
+      )}
     </>
   );
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"axiom/internal/platform"
 	"axiom/internal/platform/egress"
@@ -75,6 +76,7 @@ const NotifyPath = "/api/payments/v1/notify/"
 // CreateRequest carries the merchant mapping and server-generated addresses to the channel.
 type CreateRequest struct {
 	Order     OrderID
+	Merchant  MerchantID
 	Method    Method
 	Upstream  string // the configured merchant method mapping
 	Total     Money
@@ -83,6 +85,7 @@ type CreateRequest struct {
 	NotifyURL string // built by the core from the server-provided site origin
 	ClientIP  netip.Addr
 	Mobile    bool
+	ExpiresAt time.Time // when the order stops being payable; a channel may clamp it to its own limits
 }
 
 // Checkout is where the user pays. ClientSecret goes to the browser only, never to the database.
@@ -108,6 +111,33 @@ type Notice struct {
 	Order, TradeNo    string
 	Paid              Money
 	Raw               string
+	// Dispute is set when the event is a chargeback. It takes precedence over Success and Paid; the core books it
+	// against the order the payment intent belongs to.
+	Dispute *DisputeNotice
+}
+
+// DisputeAction is what a channel's chargeback event says happened, normalized so the core never parses channel
+// status strings.
+type DisputeAction uint8
+
+// The dispute actions. Open and Lost both take the money; Won gives it back; Warning records the event only.
+const (
+	DisputeWarning DisputeAction = iota
+	DisputeOpen
+	DisputeLost
+	DisputeWon
+)
+
+// DisputeNotice is one verified chargeback event.
+type DisputeNotice struct {
+	Provider      string // the channel plugin kind, such as "stripe"
+	ID            string // the channel's dispute ID, unique per merchant
+	PaymentIntent string // the payment's trade number
+	Order         string // the order the channel says it is, if any; the core still checks it against the payment
+	Status        string // the channel's status, for the record and the page
+	Reason        string
+	Amount        Money // the net cash the channel pulled back, in the payment currency
+	Action        DisputeAction
 }
 
 // PayState is a payment's state at the channel.

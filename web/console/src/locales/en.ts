@@ -280,6 +280,8 @@ export default {
       reversal: "Call refund",
       freeze: "Refund hold",
       unfreeze: "Hold released",
+      chargeback: "Chargeback",
+      chargeback_reversal: "Chargeback reversed",
     },
     frozenChange: "Change in held credits",
     frozenAfter: "Held: {{amount}}",

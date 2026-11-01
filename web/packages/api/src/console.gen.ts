@@ -1552,10 +1552,10 @@ export interface components {
             expires_at?: string;
         };
         /**
-         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze.
+         * @description What a statement row did to the account's credits: credit bought with a payment or an offline channel, credit given, credit a redeem code gave, a call's charge or reversal, expiry, cash refund (negative balance change), freeze or unfreeze, a chargeback's debit or the reversal of that debit after a won dispute.
          * @enum {string}
          */
-        StatementKind: "top_up" | "gift" | "redeem" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze";
+        StatementKind: "top_up" | "gift" | "redeem" | "spend" | "expiry" | "refund" | "reversal" | "freeze" | "unfreeze" | "chargeback" | "chargeback_reversal";
         /** @description One movement of the account's credits. `amount` is positive when the balance rose, so a charge is negative, and `balance_after` is the account's balance once this movement was recorded, or null for a movement recorded before the ledger numbered them: those are listed by their timestamps, which do not prove the order they were posted in, so the balance between two of them is not known. */
         StatementRow: {
             /** @description The row's own identity, to tell two rows apart; it names no ledger entry. */

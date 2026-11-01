@@ -89,7 +89,7 @@ export default {
     emptyTitle: "这个时间范围内没有现金流水",
     emptyBody: "充值入账或退款时，会按账本记录的时间出现在这里。",
     col: { at: "时间", kind: "类型", account: "账户", amount: "现金", source: "来源" },
-    kind: { credit: "充值", refund: "退款" },
+    kind: { credit: "充值", refund: "退款", chargeback: "拒付", chargeback_reverse: "拒付冲正" },
     online: "订单 {{order}}",
     offline: "线下：{{channel}}",
   },

@@ -27,6 +27,9 @@ const (
 	StatementReversal StatementKind = "reversal"
 	StatementFreeze   StatementKind = "freeze"
 	StatementUnfreeze StatementKind = "unfreeze"
+	// A chargeback took the credit back; its reversal gave it back after the dispute was won.
+	StatementChargeback         StatementKind = "chargeback"
+	StatementChargebackReversal StatementKind = "chargeback_reversal"
 )
 
 // MaxStatementPage is the most movements one page of a statement holds.
@@ -220,6 +223,10 @@ func statementKind(kind, source string) (StatementKind, error) {
 		return StatementFreeze, nil
 	case "unfreeze":
 		return StatementUnfreeze, nil
+	case "chargeback":
+		return StatementChargeback, nil
+	case "chargeback_reverse":
+		return StatementChargebackReversal, nil
 	}
 	return "", fmt.Errorf("a %s transaction is not a statement kind", kind)
 }

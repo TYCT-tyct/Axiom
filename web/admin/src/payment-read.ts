@@ -209,7 +209,39 @@ function readMethods(
   return methods;
 }
 
-function readSecrets(values: Record<string, string>, creating: boolean): { [key: string]: string } | null | undefined {
+function readSecrets(
+  values: Record<string, string>,
+  creating: boolean,
+  kind: string,
+): { [key: string]: string } | null | undefined {
+  return kind === "stripe" ? readStripeSecrets(values, creating) : readKeySecrets(values, creating);
+}
+
+function readStripeSecrets(
+  values: Record<string, string>,
+  creating: boolean,
+): { [key: string]: string } | null | undefined {
+  const secretKey = (values.secret_key ?? "").trim();
+  const webhook = (values.webhook_secret ?? "").trim();
+  const oldWebhook = (values.old_webhook_secret ?? "").trim();
+  if (!secretKey && !webhook && !oldWebhook) {
+    return creating ? null : undefined;
+  }
+  // The server replaces the sealed map rather than merging into it, so a partial rotation would drop the other secret.
+  if (!secretKey || !webhook) {
+    return null;
+  }
+  return {
+    ...(secretKey ? { secret_key: secretKey } : {}),
+    ...(webhook ? { webhook_secret: webhook } : {}),
+    ...(oldWebhook ? { old_webhook_secret: oldWebhook } : {}),
+  };
+}
+
+function readKeySecrets(
+  values: Record<string, string>,
+  creating: boolean,
+): { [key: string]: string } | null | undefined {
   const key = (values.key ?? "").trim();
   const oldKey = (values.old_key ?? "").trim();
   if ((creating || oldKey) && !key) {
@@ -283,7 +315,8 @@ export function readMerchant(
   if ("problem" in methods) {
     return methods;
   }
-  const secrets = readSecrets(values, merchant === undefined);
+  // Changing the plugin changes which secret names the server can bind; the old ones cannot carry over.
+  const secrets = readSecrets(values, merchant === undefined || merchant.kind !== basics.kind, basics.kind);
   if (secrets === null) {
     return { problem: words.secret };
   }

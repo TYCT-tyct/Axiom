@@ -93,6 +93,9 @@ func (p *Payments) writeAck(w http.ResponseWriter, msg []byte) {
 }
 
 func (p *Payments) notify(ctx context.Context, ch Channel, merchant MerchantID, n Notice) error {
+	if n.Dispute != nil {
+		return p.dispute(ctx, merchant, n)
+	}
 	state := PayPending
 	if n.Success {
 		state = PayPaid

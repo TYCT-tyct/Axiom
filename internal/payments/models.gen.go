@@ -56,6 +56,30 @@ type PaymentsMerchantMethod struct {
 	Enabled    bool
 }
 
+type PaymentsOrderDispute struct {
+	ID                 uuid.UUID
+	SiteID             uuid.UUID
+	AccountID          uuid.UUID
+	OrderID            uuid.UUID
+	MerchantID         uuid.UUID
+	Provider           string
+	ProviderID         string
+	PaymentIntent      string
+	Amount             int64
+	Currency           string
+	Reason             string
+	Status             string
+	State              string
+	Credits            int64
+	Cash               int64
+	Fee                int64
+	ChargebackRevision int64
+	OpenedAt           time.Time
+	AppliedAt          pgtype.Timestamptz
+	ReversedAt         pgtype.Timestamptz
+	UpdatedAt          time.Time
+}
+
 type PaymentsRedeemCode struct {
 	ID         uuid.UUID
 	SiteID     uuid.UUID

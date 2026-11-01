@@ -24,7 +24,7 @@ CROSS JOIN LATERAL (
 ) e
 JOIN billing.credit_batches b ON b.id = t.request_id
 WHERE t.site_id = $1 AND t.created_at >= $2 AND t.created_at < $3
-    AND t.kind IN ('credit', 'refund')
+    AND t.kind IN ('credit', 'refund', 'chargeback', 'chargeback_reverse')
     AND ($4::uuid IS NULL OR t.account_id = $4)
     AND (t.created_at, t.id) < ($5::timestamptz, $6::uuid)
 ORDER BY t.created_at DESC, t.id DESC
@@ -54,7 +54,7 @@ type ListCashMovementsRow struct {
 }
 
 // The cash behind the dashboard figure, by transaction time, with the batch that says whether it came through an order
-// or an offline channel. Refunds keep their own time, so a refund of an older order is in this window.
+// or an offline channel. Refunds and chargebacks keep their own time, so one of an older order is in this window.
 func (q *Queries) ListCashMovements(ctx context.Context, db DBTX, arg ListCashMovementsParams) ([]ListCashMovementsRow, error) {
 	rows, err := db.Query(ctx, listCashMovements,
 		arg.SiteID,
@@ -134,7 +134,7 @@ CROSS JOIN LATERAL (
     OFFSET 0
 ) e
 WHERE t.site_id = $1 AND t.created_at >= $2 AND t.created_at < $3
-    AND t.kind IN ('credit', 'refund')
+    AND t.kind IN ('credit', 'refund', 'chargeback', 'chargeback_reverse')
 GROUP BY e.currency
 ORDER BY e.currency NULLS FIRST
 `
@@ -150,8 +150,9 @@ type PlatformCashRow struct {
 	Amount   string
 }
 
-// The cash that moved for one site in a window, by payment currency: paid credits in, refunds out. The kinds keep the
-// scan to those few transactions; a NULL currency is the site's accounting currency.
+// The cash that moved for one site in a window, by payment currency: paid credits in, refunds and chargebacks out,
+// chargeback reversals in. The kinds keep the scan to those few transactions; a NULL currency is the site's accounting
+// currency.
 // OFFSET 0 keeps this a loop over the window's few cash transactions: without it the planner may hash away the
 // subquery and read every entry, which is the call volume.
 func (q *Queries) PlatformCash(ctx context.Context, db DBTX, arg PlatformCashParams) ([]PlatformCashRow, error) {

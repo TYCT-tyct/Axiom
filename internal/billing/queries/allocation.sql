@@ -17,7 +17,7 @@ SELECT coalesce(max(seq), 0)::bigint FROM billing.transactions WHERE account_id 
 -- for one from before the sequence). A fully spent batch stays here because a correction can give its credit back
 -- (#277); consumption, expiry and freeze totals are the replay cache, and trail the ledger until the account is
 -- replayed. Served by credit_batches_by_account.
-SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded,
+SELECT b.id, b.site_id, b.source, b.expires_at, b.amount, b.consumed, b.expired, b.freeze_total, b.unfreeze_total, b.refunded, b.charged_back,
     coalesce(t.seq, 0)::bigint AS opened_seq, t.created_at AS opened_at, t.id AS opened_id
 FROM billing.credit_batches b
 JOIN billing.transactions t ON t.request_id = b.id AND t.attempt_seq = 0 AND t.kind = 'credit' AND t.revision = 0
@@ -59,10 +59,11 @@ ORDER BY p.seq;
 
 -- name: SaveBatches :exec
 UPDATE billing.credit_batches b SET consumed = v.consumed, expired = v.expired,
-    freeze_total = v.freeze_total, unfreeze_total = v.unfreeze_total, refunded = v.refunded
+    freeze_total = v.freeze_total, unfreeze_total = v.unfreeze_total, refunded = v.refunded,
+    charged_back = v.charged_back
 FROM (SELECT unnest(@ids::uuid[]) AS id, unnest(@consumed::bigint[]) AS consumed, unnest(@expired::bigint[]) AS expired,
     unnest(@freeze_total::bigint[]) AS freeze_total, unnest(@unfreeze_total::bigint[]) AS unfreeze_total,
-    unnest(@refunded::bigint[]) AS refunded) v
+    unnest(@refunded::bigint[]) AS refunded, unnest(@charged_back::bigint[]) AS charged_back) v
 WHERE b.id = v.id;
 
 -- name: SaveAllocation :execrows

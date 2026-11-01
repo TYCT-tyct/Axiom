@@ -19,8 +19,9 @@ WHERE site_id = @site_id AND created_at >= @since AND created_at < @until
     AND state IN ('settled', 'cleanup_settled');
 
 -- name: PlatformCash :many
--- The cash that moved for one site in a window, by payment currency: paid credits in, refunds out. The kinds keep the
--- scan to those few transactions; a NULL currency is the site's accounting currency.
+-- The cash that moved for one site in a window, by payment currency: paid credits in, refunds and chargebacks out,
+-- chargeback reversals in. The kinds keep the scan to those few transactions; a NULL currency is the site's accounting
+-- currency.
 SELECT coalesce(e.currency, '')::text AS currency, coalesce(sum(e.amount::numeric), 0)::text AS amount
 FROM billing.transactions t
 -- OFFSET 0 keeps this a loop over the window's few cash transactions: without it the planner may hash away the
@@ -31,14 +32,14 @@ CROSS JOIN LATERAL (
     OFFSET 0
 ) e
 WHERE t.site_id = @site_id AND t.created_at >= @since AND t.created_at < @until
-    AND t.kind IN ('credit', 'refund')
+    AND t.kind IN ('credit', 'refund', 'chargeback', 'chargeback_reverse')
 GROUP BY e.currency
 ORDER BY e.currency NULLS FIRST;
 
 
 -- name: ListCashMovements :many
 -- The cash behind the dashboard figure, by transaction time, with the batch that says whether it came through an order
--- or an offline channel. Refunds keep their own time, so a refund of an older order is in this window.
+-- or an offline channel. Refunds and chargebacks keep their own time, so one of an older order is in this window.
 SELECT t.id, t.created_at, t.account_id, t.request_id AS batch_id, t.kind,
     coalesce(e.currency, b.currency, '')::text AS currency, e.amount::text AS amount,
     coalesce(b.offline_channel, '')::text AS offline_channel, (b.merchant_id IS NOT NULL)::boolean AS online
@@ -50,7 +51,7 @@ CROSS JOIN LATERAL (
 ) e
 JOIN billing.credit_batches b ON b.id = t.request_id
 WHERE t.site_id = @site_id AND t.created_at >= @since AND t.created_at < @until
-    AND t.kind IN ('credit', 'refund')
+    AND t.kind IN ('credit', 'refund', 'chargeback', 'chargeback_reverse')
     AND (sqlc.narg(account_id)::uuid IS NULL OR t.account_id = sqlc.narg(account_id))
     AND (t.created_at, t.id) < (@after_at::timestamptz, @after_id::uuid)
 ORDER BY t.created_at DESC, t.id DESC

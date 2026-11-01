@@ -8,7 +8,8 @@ WITH cash AS (
     SELECT coalesce(e.currency,b.currency)::text AS currency, e.amount
     FROM billing.transactions t JOIN billing.credit_batches b ON b.id = t.request_id
     JOIN billing.entries e ON e.transaction_id = t.id AND e.book = 'cash'
-    WHERE t.kind = 'refund' AND t.created_at >= @since AND t.created_at < @until AND b.merchant_id = @merchant_id
+    WHERE t.kind IN ('refund', 'chargeback', 'chargeback_reverse')
+        AND t.created_at >= @since AND t.created_at < @until AND b.merchant_id = @merchant_id
 )
 SELECT currency, sum(amount)::text AS amount FROM cash GROUP BY currency;
 

@@ -87,11 +87,25 @@ type Channel interface {
 	QueryRefund(ctx context.Context, r RefundCall) (RefundState, error)
 	Ack(ok bool) (status int, body []byte) // 渠道要求的应答，sub2api handler/payment_webhook_handler.go:215-226；ok 只在事务提交后为真
 }
-type CreateRequest struct{ Order OrderID; Method Method; Upstream string; Total Money; Subject, ReturnURL, NotifyURL string; ClientIP netip.Addr; Mobile bool } // ReturnURL 由控制台处理器按站点登记的 origin 生成（`accounts.Origin`），核心校验 https；NotifyURL 由核心按同一 origin 和 NotifyPath 生成
+type CreateRequest struct{ Order OrderID; Merchant MerchantID; Method Method; Upstream string; Total Money; Subject, ReturnURL, NotifyURL string; ClientIP netip.Addr; Mobile bool; ExpiresAt time.Time } // ReturnURL 由控制台处理器按站点登记的 origin 生成（`accounts.Origin`），核心校验 https；NotifyURL 由核心按同一 origin 和 NotifyPath 生成；Merchant 是商户账户，ExpiresAt 是订单的本地有效期
 type Checkout struct{ TradeNo, PayURL, QRCode, ClientSecret string } // 存库前去掉 NUL（sub2api payment_order.go:509-523）；ClientSecret 只交给浏览器，不存库
 type Callback struct{ Method string; RawQuery string; Body []byte; Header http.Header }
-type Notice struct{ Relevant, Success bool; Order, TradeNo string; Paid Money; Raw string }
+type Notice struct {
+	Relevant, Success bool
+	Order, TradeNo    string
+	Paid              Money
+	Raw               string
+	Dispute           *DisputeNotice // 非 nil 时是一次拒付，Payments 不走付款入账；此时 Paid、TradeNo 不读
+}
+type DisputeNotice struct {
+	ID, PaymentIntent, Order string // Order 可空：核心按（商户账户，PaymentIntent）从 order_payments 找回订单
+	Status, Reason           string // 渠道的原始状态和原因，只用于记录和展示
+	Amount                   Money  // 渠道这次拉回的净额，付款币种最小单位
+	Action                   DisputeAction
+}
+type DisputeAction uint8 // Open | Lost | Won | Warning：Open/Lost 扣钱，Won 冲正，Warning 只记录
 type Payment struct{ State PayState; TradeNo string; Paid Money } // Pending | Paid | Closed
+```
 type RefundCall struct{ Refund RefundID; Order OrderID; TradeNo, ProviderRef string; Amount Money; Reason string }
 type RefundState struct{ State RefundOutcome; ProviderRef string } // Succeeded | Failed | Pending
 type Rejected struct{ Code, Message string }                      // 渠道明确拒绝；实现 error
@@ -100,6 +114,7 @@ type Rejected struct{ Code, Message string }                      // 渠道明�
 - **错误只分两种**：`*Rejected` 是确定的失败（下单被拒、退款被拒）；其他任何错误都是"结果未知"，调用方不得据此改订单或退款为失败。超时、断连、5xx、HTML 或解析不了的响应都是未知。
 - **用能力集合而不是可选接口**：sub2api 用类型断言判断扩展接口（`payment_fulfillment.go:65-69`），能力随插件种类固定；易支付是否能查单、能退款取决于这家网关，是商户账户的配置，所以由 `Caps` 声明。调用没有声明的能力是程序错误，panic。
 - **`RefundKey`**：渠道把 `RefundCall.Refund` 当作退款单号，同一单号重发只退一次（Stripe 的幂等键、支付宝的 `out_request_no`、微信的 `out_refund_no`）。只有声明了它，结果未知的退款才能重发；易支付不声明。
+- **拒付是回调的一种**：`Notice.Dispute != nil` 时核心只走拒付流程（找订单、记 `order_disputes`、按规则扣钱或记差异），不看 `Success`/`Paid`。插件把渠道状态归一成 `DisputeAction`，核心不解析 Stripe 的状态字符串；`Warning` 只记录，`Open`/`Lost` 扣钱，`Won` 对已扣的钱做反向分录。订单是否进入被拒付、钱扣多少，由核心和 billing 决定，插件不碰数据库。
 - **链接**：核心在存库和返回之前检查 `PayURL`、`QRCode` 里的链接，只放行 `https` 和 `alipays://`、`weixin://`、`wxp://`，以 `//` 开头的和其他协议当作 `*Rejected`。插件只负责把以单个 `/` 开头的相对链接按网关地址补全。
 - **金额**：`Notice.Paid`、`Payment.Paid` 由插件把网关的十进制文本精确解析成最小单位。`Minor == 0` 表示缺失，`Minor == -1` 表示无效付款并转待处理；不做容差。没有币种字段的渠道填商户账户的币种。具体规则见[易支付配置与边界](#易支付配置与边界)。
 - **插件拿不到数据库**：只拿到配置、密钥和出站客户端；状态和钱都在核心里。插件的错误和日志不带请求的查询串和表单（易支付把密钥放在查询串里）。
@@ -119,6 +134,26 @@ type Rejected struct{ Code, Message string }                      // 渠道明�
 插件只持有不可变的商户绑定，每次调用创建自己的参数表。核心按服务端生成的返回地址同源域名和唯一的 `NotifyPath` 生成 `CreateRequest.NotifyURL`，运行程序也用这个常量登记 GET/POST 路由，插件直接使用该地址。GET 只读查询串，POST 只读表单并拒绝非空查询串，重复字段一律拒绝；`Notice.Raw` 只写固定协议描述。响应 JSON 使用平台严格解析，字符串或数字标量以原文读取，避免经过浮点。
 
 只有缺失或空的金额文本用 `Minor == 0` 表示，仍由核心补查；非空金额的零值、格式非法、精度超限和整数溢出统一用 `Minor == -1` 表示，保留为无效付款并转待处理。不接受千分位、指数、分数或符号，也不将它们误报为验签失败。所有网关响应、解析和网络错误仅给出固定上下文及 HTTP 状态，不能回显网关返回的消息。
+
+### Stripe 配置与边界
+
+`Stripe{}` 只接 Checkout 托管页面，`Caps` 固定为 `Query | Close | Refund | QueryRefund | RefundKey`；不声明 `Statements`（接口和表都还没有）。`Settings` 是空对象 `{}`，严格解析，未知成员拒绝；付款币种来自 `MerchantConfig.Currency`。`Secrets` 只接受 `secret_key`（`sk_`/`rk_`）、`webhook_secret`（`whsec_`）、`old_webhook_secret`（轮换期间），其他名字拒绝。示例：
+
+```json
+{}
+```
+
+密钥只用于构造 Stripe SDK 的客户端；`Open` 不打印、不返回密钥。出站请求走 `MerchantConfig.Client`，SDK 的 `HTTPClient` 用一个把 `RoundTrip` 交给 `egress.Client.Do` 的适配器，期限由调用上下文保证（没有期限时补 10 秒；SDK 自身不重试、不记日志）。Stripe 的 API 地址固定，测试才能注入本地假服务；管理员改不了。
+
+`Create` 用内联 `price_data`：`unit_amount` 是 `Total.Minor`，币种小写，`quantity=1`，`client_reference_id`/`metadata.order` 是订单 TypeID，`metadata.merchant` 是商户 TypeID，`payment_intent_data.metadata` 写同样两项；`success_url`/`cancel_url` 都是 `ReturnURL`；`mode=payment`；`payment_method_types` 取 `Upstream`（只允许 `card`、`alipay`、`wechat_pay`、`link`，保存时校验），`wechat_pay` 加 `client=web`；`expires_at` 取 `ExpiresAt`，夹在 Stripe 的 30 分钟到 24 小时之内。幂等键 `cs_<订单 TypeID>`，`TradeNo` 是 Session ID，`PayURL` 是 Session 的 `url`，`ClientSecret` 留空。金额不是正数、币种与商户不符、`ReturnURL` 不是 https 都是 `*Rejected`。
+
+`Verify` 只收 POST，按 `Stripe-Signature` 用官方 `webhook.ConstructEventWithOptions` 验签（`IgnoreAPIVersionMismatch`，默认 300 秒容差；当前密钥失败再试 `old_webhook_secret`），失败返回错误（核心回 400，不写库）。事件映射：`checkout.session.completed` 只在 `status=complete && payment_status=paid` 时成功，`async_payment_succeeded` 成功，`async_payment_failed`/`expired` 相关但失败（核心只记事件），其他类型 `Relevant=false`。付款的 `TradeNo` 是 PaymentIntent ID，`Paid` 是 `amount_total`/`currency`，`Order` 是 `client_reference_id`（回退 `metadata.order`）。`charge.dispute.created`/`funds_withdrawn` 归一成 `DisputeOpen`，`closed`/`funds_reinstated` 按状态归一成 `DisputeWon`/`DisputeLost`，`warning_*`/`prevented` 归一成 `DisputeWarning`；`DisputeNotice.PaymentIntent` 用于核心找订单，`Order` 取 `charge.metadata.order`（有就带，核心仍核对）。
+
+`Query` 对 Session ID 取回 Session（`complete`+`paid` 已支付，`expired` 已关闭，其余待支付），对入账后的 PaymentIntent ID 直接取回 PaymentIntent（`succeeded` 已支付、`canceled` 已关闭），两种都用 PaymentIntent ID 作为交易号；金额 0 或币种缺失用无效哨兵。`Close` 先读 Session，已过期视为成功，已完成返回确定拒绝，只有未完成才调 `expire`。`Refund` 先按 `TradeNo` 解析 PaymentIntent（`pi_` 直接使用，否则取回 Session），再创建退款：金额是 `RefundCall.Amount.Minor`，`metadata.refund`/`metadata.order` 用于查回，理由截到 500 字放 `metadata.reason`，幂等键 `re_<退款 TypeID>`；`succeeded` 成功，`pending`/`requires_action` 待确认，`failed`/`canceled` 失败，4xx 是确定拒绝。`QueryRefund` 有 `ProviderRef` 就取回它并核对金额和币种；否则列出 PaymentIntent 的退款，按 `metadata.refund` 找本笔，找不到回待确认，金额不符或列表出错回未知。
+
+`probe` 调 Stripe 的余额接口（只读，10 秒），不建单、不转钱、不记录响应正文；受限密钥需要 `balance_read`。保存时只能验证 API 密钥，webhook 密钥的正确性要到第一条回调才知道。
+
+`order_disputes` 表：`id`、`site_id`、`account_id`、`order_id`、`merchant_id`、`provider`（`stripe`）、`provider_id`（Dispute ID）、`payment_intent`、`amount`、`currency`、`reason`、`status`、`state`（`recorded`/`applied`/`reversed`）、`credits`、`cash`、`fee`（实际扣回的三项，`applied` 时写）、`opened_at`、`applied_at`、`reversed_at`、`updated_at`；唯一 `(merchant_id, provider, provider_id)`，订单/商户复合外键，账户数据策略。核心按 `order_payments` 的 `(merchant_id, trade_no=PaymentIntent)` 找订单；找不到、金额不等于实付减退款、有在途退款、订单没有付费批次、同一订单已有扣款，都记 `dispute_*` 差异并告警，不动钱。
 
 ### Epusdt 预设与兼容门槛
 
@@ -175,6 +210,8 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 | 一笔订单的已冻结、发送中、待确认、成功的退款额度之和 ≤ 入账额度 | 退款在订单行锁下插入并检查；数据库 CHECK 管单行，合计由锁和性质测试守 |
 | 一笔订单的退款金额之和 ≤ 净付款额，退完时恰好相等 | 金额 = ⌊额度 × 净付款额 ÷ 入账额度⌋，让累计额度达到入账额度的那一笔取余数；退不退手续费由第一笔退款成功时在 billing 批次上固定，订单在同一事务保存相同政策（`refund_with_fee`；第一笔失败则解冻，该字段保持未设，下次重试按当时的政策重新定），净付款额不随政策变；订单行锁保证一笔在途，billing 在余额行锁内按批次和账本计算并核对累计现金；性质测试：任意汇率序列（锁定、宽限期内、到账汇率）和任意部分退款拆分下，Σ退款 ≤ Σ实付 |
 | 退款只按"已冻结 → 发送中 → 成功 / 失败 / 待确认 → 成功 / 失败"变化，转分录、解冻各在一个事务里 | 状态的条件更新与 billing 的调用同事务；"发送中"在调渠道之前单独提交；测试注入渠道超时、渠道失败、提交失败，不出现"扣了没退"或"退了没扣" |
+| 一笔拒付至多扣一次，胜诉至多冲正一次，扣回的额度加成功退款的额度 ≤ 入账额度 | `order_disputes` 的 `(商户账户, 渠道, Dispute ID)` 唯一键和 `state` 条件更新；只有 `recorded` 能变 `applied`、只有 `applied` 能变 `reversed`；扣钱前检查批次存在、没有在途退款、净额相符；billing 的 `chargeback`/`chargeback_reverse` 以 `(批次, revision)` 为账本幂等键；重复事件由 `order_disputes` 的行状态挡住，billing 不按 Dispute ID 去重 |
+| 拒付不会和退款同时动同一笔冻结 | 扣钱前在订单行锁下检查该订单所有退款的 `frozen`/`sending`/`pending`；有在途就只记 `dispute_refund_in_flight`，不扣钱；退款入口只接受已支付/部分退款订单，被拒付的订单不能新开退款 |
 | 渠道不认退款单号时，结果未知的退款从不重发 | 只有 `Caps` 含 `RefundKey` 时，任务才对发送中、待确认的退款再调 `Refund`；测试：第一个事务后崩溃，退款恰好发一次；发送中崩溃，不认单号的渠道一次也不重发、进待处理；同一订单的第二笔退款在第一笔落定前被拒 |
 | 一个人不能把未知退款标为失败 | `Resolve` 标失败要求凭证和另一个人的批准；测试：同一人发起并批准被拒；渠道其实已退时，只按凭证落定为成功 |
 | 渠道的未知结果从不变成失败 | 只有 `*Rejected` 能让下单变失败、退款变失败；测试把超时、5xx、HTML 响应逐个喂给核心 |
@@ -206,6 +243,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | `orders` | `id`、`site_id`、`account_id`、`user_id`、`merchant_id`、`method`、`state`、`idem_key`、`fingerprint`、`credits`、`site_currency`、`pay_currency`、`total`、`fee`、`fee_ppm`、`fee_fixed`、`rate_id`、`ref_num`/`ref_den`、`applied_num`/`applied_den`、`arrival_rate_id`、`arrival_ref_num`/`arrival_ref_den`、`arrival_num`/`arrival_den`、`trade_no`（下单时网关给的，可空）、`checkout`（支付链接或二维码，不含 `ClientSecret`）、`expires_at`、`paid_total`、`paid_fee`、`credited`、`paid_at`、`refund_with_fee`（第一笔成功退款按冻结报价的政策定下，之后沿用，失败不设）、`next_query_at`、`query_delay_seconds`、`next_verify_at`（E1-2c）、`client_ip`、`created_at`、`updated_at` | `credits > 0`；`total > 0`；`0 ≤ fee ≤ total`；`(rate_id IS NULL) = (pay_currency = site_currency)`；`arrival_*` 同空同非空；`state` 枚举；`state = 'paid' → paid_at, paid_total, paid_fee, credited` 非空、`credited > 0`、`0 ≤ paid_fee ≤ paid_total`；唯一 `(account_id, idem_key)`；`(merchant_id, trade_no)` 普通索引；部分索引 `(expires_at) WHERE state = 'pending'`；`(account_id, created_at DESC)`；`(merchant_id, created_at)` 供对账复算用量 | 账户数据：读写由 [pg 的账户范围表达式](../platform/pg/README.md#决策与理由)限制 |
 | `order_payments` | `id`、`order_id`、`site_id`、`account_id`、`merchant_id`、`trade_no`、`amount`、`currency`、`source`（notify、query、admin）、`at` | 唯一 `(merchant_id, trade_no)`，冲突时进待处理记录、不报错；`amount > 0`；`(order_id)` | 账户数据 |
 | `order_events` | `id`、`order_id`、`site_id`、`account_id`、`at`、`source`（notify、query、user、admin、job）、`kind`、`from_state`、`to_state`、`trade_no`、`amount`、`raw`（截到 8 KiB） | 只插入：`axiom_app` 只有 INSERT、SELECT；`(order_id, at)` | 账户数据 |
+| `order_disputes` | `id`、`site_id`、`account_id`、`order_id`、`merchant_id`、`provider`（stripe）、`provider_id`（Dispute ID）、`payment_intent`、`amount`/`currency`（渠道净额）、`reason`、`status`（渠道状态）、`state`（recorded、applied、reversed）、`credits`/`cash`/`fee`（实际扣回）、`opened_at`、`applied_at`、`reversed_at`、`updated_at` | 唯一 `(merchant_id, provider, provider_id)`；`amount > 0`；`applied`/`reversed` 与时间戳一致；订单/商户复合外键；`(order_id, opened_at)`、`(merchant_id, applied_at)`、`(merchant_id, reversed_at)` | 账户数据：平台范围和账户范围可读，写只允许平台范围（回调） |
 | `refunds` | `id`、`order_id`、`site_id`、`account_id`、`state`（frozen、sending、pending、succeeded、failed）、`via`（channel、offline）、`credits`（实际冻结）、`requested_credits`（原请求，重放比较）、`amount`（报价）、`with_fee`、`refund_key`（冻结时的能力快照）、`manual_only`（差异已记录且只能人工落定）、`provider_ref`、`reason`、`requested_by`、`approved_by`、`idem_key`、`attempts`（尝试栅栏）、`sent_at`、`next_query_at`、`created_at`、`finished_at`（成功时取 billing 退款分录的时间） | `0 < credits ≤ requested_credits`；`amount > 0`；`state IN ('sending','pending') → sent_at` 非空；终态等价于有 `finished_at`；审批者不等于申请人；唯一 `(order_id, idem_key)`；部分唯一索引确保每单至多一笔在途，另有只含已批准且仍可自动处理的渠道退款的到期索引和成功现金日期索引 | 账户数据可读；只允许站点和平台范围写，用户申请经范围检查后由核心事务写入 |
 | `resolutions` | `id`、`order_id`、`site_id`、`account_id`、`refund_id`（退款结论时，与 `order_id` 共同引用退款）、`outcome`（succeeded、failed、credit）、`trade_no`、`amount`（人工入账时）、`evidence`、`reason`、`requested_by`、`approved_by`、`idem_key`、`created_at` | 唯一 `(order_id, idem_key)`；提案内容不可修改，应用只有 `approved_by` 的列更新权限；审批者不等于提出人；退款和入账目标互斥 | 站点数据，只允许站点和平台范围读写；审批前可经 `GetResolution` 检视原提案 |
 | `query_health` | `merchant_id`、`site_id`、`failures`（0…4）、`paused_until`、两组查询令牌及期限 | 商户主键与同站外键；单条条件 UPDATE 原子取两者之一；查询有 5 秒期限，租约 10 秒；连续 5 次网关未知暂停 5 分钟，旧令牌完成不改新令牌；暂停时钟在状态行锁取得后读取 | 站点数据，用策略级 InitPlan 读取范围，仅站点/平台范围可读写；用户核验经账户授权后用平台范围占名额 |
@@ -230,9 +268,10 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 - **窗口不变量**：`order_windows` 视图（调用者权限与原表 RLS）统一商户身份保护、用户核验、队列发现和排期的可查条件与默认值；待支付始终保护，待处理另行保护，已过期/已取消/有网关单号的失败单保护到过期时间加 `max(宽限期, 自动入账期限, 补查窗口)`。默认宽限 300 秒，后两项共用 604800 秒；即使补查配置较短，也不能先释放可自动入账订单的商户身份。
 - **补单容量**：每轮最多发现 100 笔，待支付优先，组内按商户交错取单，同商户最多两个工作者；查询阶段最多 10 秒，下一阶段的本地过期和关单仍有预算。只看批量上限，每天理论上不超过 144000 次查询，实际还受网关往返、数据库开销、暂停和晚付积压影响，不作为吞吐承诺。默认 30 分钟有效期约查 7 次，过期后仍按最长 1 小时退避；上线前须按真实延迟与未付量评估。
 - **入账**（回调、补单、"我已付款"、人工）：平台范围的一个事务，`SELECT … FOR UPDATE` 订单行 → 插入 `order_payments`（冲突写待处理记录）→ 条件转移 → `CreditPaid` → 事件；过期后到账的同时加回用量计数。事务里不做网络调用。
+- **拒付**（Stripe 回调）：平台范围的一个事务，取商户身份共享锁 → 按 `order_payments`（商户，PaymentIntent）找订单，并用 Dispute 里带的订单号核对 → `SELECT … FOR UPDATE` 订单行 → 按 `(商户账户, 渠道, Dispute ID)` 锁/插入 `order_disputes` → `Warning` 只记录，`Open`/`Lost` 在行状态 `recorded` 时检查批次、在途退款和净额，调 `billing.ChargeBack`（返回 credits/cash/fee 并写 `chargeback` 分录），`Won` 在 `applied` 时调 `billing.ReverseChargeBack`（`chargeback_reverse`）→ 订单条件转移 `paid/partially_refunded/refunded → charged_back`（胜诉不回转）→ 订单事件。找不到订单、订单未入账、金额不符、有在途退款、第二笔拒付都写 `dispute_*` 待处理并告警，提交后回 200。
 - **退款**：账户范围只在商户允许用户申请时请求渠道退款；管理员可请求渠道或线下退款，所有请求先冻结待审。先经原范围确认订单归属，再在订单事务之前 `PrepareRefund` 无锁分页预放；事务 1 取商户身份共享锁、订单行锁，检查在途与额度上限，`FreezeRefund`、`QuoteRefund` 保存实际冻结与原币现金报价。零现金报价回滚整个冻结。`ApproveRefund` 只接受原申请人以外的站点/平台操作者，终态拒绝再次批准且不写审批或审计，审批和审计同事务；已冻结但还未审批的请求可由 `RejectRefund` 拒绝并原子解冻。批准提交后，事务 2 锁订单、退款行，将已冻结变发送中、设尝试序号与一分钟租约、记首次 `sent_at`；认领前剩余轮次预算必须足够五秒；独立于调用方的五秒调用期限在这个事务之前开始，过期发送者不能醒来后重新发送。认领后即使请求断开或轮询发现预算到期，也用独立的最多三十秒完成窗口保存结果、准备账本和落定，保留请求 ID；轮询的十秒预算只决定是否继续认领。渠道绑定打开失败一律不认领；已冻结但退款能力被停用的保持未发送，不误报渠道未知。每次落定、拒绝或人工解冻前也先 `PrepareRefund` 无锁预放等待期间新增的账本历史，再进入事务 3 同序加锁，只有匹配尝试序号且非终态的结果才能 `SettleRefund` 或 `ReleaseRefund`，成功时再按成功额度合计更新订单与手续费政策；退款引用只写退款行，不覆盖订单原网关单号；格式非法或过长时仅丢弃该引用，不丢失已确认的成功或失败。成功的 `finished_at` 经 `billing.RefundRecordedAt` 取刚写入账本的同一时间，跨 UTC 午夜也归同一现金日。
 - **`payments.poll`**（每分钟，队列的周期任务，只有领导节点插入）：一轮有时间预算，查询先按未过期待支付、刚到期待支付、晚付窗口排序，组内按 `next_query_at` 依次处理 (1) 待支付订单：查单；(2) 已过有效期的待支付订单：查单、关单、过期、减回用量；(3) 已过期、已取消及有网关单号的失败订单：在补查窗口内按退避查单；(4) 已审批、停在已冻结且排期到期的渠道退款：置发送中再发；(5) 发送中、待确认的退款优先查退款；没有查询能力时，只有冻结快照和当前能力都含 `RefundKey` 才用原单号重发，其余不重发并立即记待处理，同时设 `manual_only`，从到期索引和自动认领中退出、保留冻结供人工落定；仍能自动查询或重发的超过 24 小时也记待处理。退款每次尝试间隔一分钟、最多发现 100 笔；本地过期提交后给退款最多 10 秒预算，再关过期订单，避免慢关单饿死退款。未批准、线下和已停用自动处理的未知退款不在自动发现队列里。退款查询与查单共用健康判定：明确拒绝是已知，请求取消或轮次截断不计失败，核心自己的五秒网关期限仍计未知。每次查询后按退避写下一次的 `next_query_at`；同一商户账户跨节点同时最多 2 个查询、连续 5 次网关未知暂停这个账户 5 分钟并告警。失败的不挡后面的（与 billing 的到期任务同一做法）。
-- **`payments.reconcile`**（每天，启动时也运行）：协调作业固定前一个 UTC 日，分页发现包括已停用的商户，再派生商户作业，商户核对与差异落库合计最多 5 分钟。作业走独立的 `pg.QueueReconcile`，单节点一个工作者，不占 money 队列。在 `ReadTx` 的一致快照内按日索引核对现金、当日变更订单与当日批次，并复算当天及这些变更影响的创建日日用量；现金和订单共用批次创建日，避免跨午夜入账的假差额，按币种换成十亿分之一精确比较，大数合计不截成 int64。借助 billing 的 `MerchantCash`、`MerchantBatches`、`ReadCredits` 按页批量读账，不直接访问 billing 表；同时检查缺批次、孤立批次及 paid_total/paid_fee/credited/账户/币种/商户不符。按成功退款的账本日期从订单侧扣除原付款币种的现金；没有对应成功支付退款记录的现金冲出仍进差异。迁移 00006 的订单日期/游标索引并发构建，之前的表与列步骤可在失败后重入，避免加索引阻塞已有订单写入。对账差额按商户、类别、日期/订单及规范化明细的指纹去重，与 `payments.discrepancy` 平台信号在同一事务提交，回滚没有独立告警。当前编入的易支付不声明 `Statements`，所以按前一天非终态/变化订单及补查窗口里的订单再查；每个查询作业只处理一单，成功后持久派生带日与游标的下一单；跨节点仅使用商户第一个名额，给回调、轮询和用户核验保留第二个。名额忙返回 `ErrQueryBusy`，通过 River 的有次数上限重试和抖动避开轮询；仅熔断 `ErrQueryPaused` 延后一分钟，不重做成功前缀；查询失败或付款信息仍不完整时重试当前单。`Statements` 的下载接口和明细表随第一个支持它的插件交付。
+- **`payments.reconcile`**（每天，启动时也运行）：协调作业固定前一个 UTC 日，分页发现包括已停用的商户，再派生商户作业，商户核对与差异落库合计最多 5 分钟。作业走独立的 `pg.QueueReconcile`，单节点一个工作者，不占 money 队列。在 `ReadTx` 的一致快照内按日索引核对现金、当日变更订单与当日批次，并复算当天及这些变更影响的创建日日用量；现金和订单共用批次创建日，避免跨午夜入账的假差额，按币种换成十亿分之一精确比较，大数合计不截成 int64。借助 billing 的 `MerchantCash`、`MerchantBatches`、`ReadCredits` 按页批量读账，不直接访问 billing 表；同时检查缺批次、孤立批次及 paid_total/paid_fee/credited/账户/币种/商户不符。按成功退款的账本日期从订单侧扣除原付款币种的现金；拒付的扣款按 `applied_at`、胜诉冲正按 `reversed_at` 加回同币种的预期现金；没有对应成功支付退款记录的现金冲出仍进差异。迁移 00006 的订单日期/游标索引并发构建，之前的表与列步骤可在失败后重入，避免加索引阻塞已有订单写入。对账差额按商户、类别、日期/订单及规范化明细的指纹去重，与 `payments.discrepancy` 平台信号在同一事务提交，回滚没有独立告警。当前编入的易支付不声明 `Statements`，所以按前一天非终态/变化订单及补查窗口里的订单再查；每个查询作业只处理一单，成功后持久派生带日与游标的下一单；跨节点仅使用商户第一个名额，给回调、轮询和用户核验保留第二个。名额忙返回 `ErrQueryBusy`，通过 River 的有次数上限重试和抖动避开轮询；仅熔断 `ErrQueryPaused` 延后一分钟，不重做成功前缀；查询失败或付款信息仍不完整时重试当前单。`Statements` 的下载接口和明细表随第一个支持它的插件交付。
 - **管理调查**：`ListDiscrepancies`、`GetDiscrepancy`、`InvestigateDiscrepancy` 经调用方的范围事务读取；调查写入 `resolved`、操作者、时间和说明并记审计、清除平台告警，不触碰订单、余额和退款。管理 API 的三项操作都需 MFA 和平台 `sites.manage`；变更需 CSRF、理由和幂等键。响应的新字段全部可选；旧付款差异中的 JSON 整数金额读取时转成十进制文本，避免大于 2^53 的最小单位值被舍入。列表一页最多 100 行，以最后一行 UUID 的 `before` 继续；记录本身用 UUID，站点、账户、商户、订单引用沿用各自的 TypeID。资金结论需调用独立的提案与审批接口。
 - **范围**：回调和两个任务用 `cmd/axiom` 交来的平台范围；控制台用 accounts 交出的账户范围，站长后台用站点范围。
 
@@ -272,6 +311,9 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | 报价和下单用同一条选择规则：轮询按（站点，付款方式）各自计数，取能接这笔的候选中的第 n 个；当天已用最少按参考汇率把各账户的用量精确换成站点货币再比 | 页面显示的就是订单落下的那个账户和总额；各站点、各付款方式的轮询互不干扰；不同币种的最小单位不能直接比较 | 页面显示最便宜的、下单另选（显示与扣款不一致）；全进程一个轮询计数（两个站点交替下单时各自永远落在同一个账户上）；按最小单位整数比较用量（100000 分人民币被当成比 18000 美分多） |
 | 商户当天额度用一行计数守 | 账户范围读不到别的账户的订单，也锁不了商户行（加锁要过 UPDATE 策略）；一行计数既是读数又是串行点 | 每次按订单求和（sub2api `load_balancer.go:167-246`）：账户范围求不出，读后写也挡不住并发；咨询锁加平台范围求和：下单事务就得用平台范围 |
 | 每 IP 的下单与失败限额用一行计数守：键是（站点，IP 分组），固定一小时窗口，在下单的事务里占名额 | 与商户当天额度同一个道理：账户范围读不到同 IP 其他账户的订单，行计数既是读数又是串行点；名额随订单一起提交或回滚，被账户自己的限额拒绝的请求不占；计数出错就上抛、不放行，多节点自然一致。固定窗口在边界上最多放行限额的两倍，换来的是一行一个 IP、不随事件增长；IPv6 按 /64 归并，换地址买不到新名额 | 进程内令牌桶（回调入口用）：N 个节点各放一份，故障注入测不到；Valkey 计数（登录前的限额用）：Valkey 不可用时按那边的设计退回进程内、会放行，与这里「计数故障不放行」相反（登录为了不把用户锁在门外，支付为了不放开试卡）；对 `orders.client_ip` 求和：账户范围读不到别人的订单，换平台范围就得让下单事务换范围 |
+| Stripe 用 Checkout 托管页和内联 `price_data`，`TradeNo` 是 PaymentIntent ID；下单幂等键按订单、退款幂等键按退款 | 卡号只在 Stripe 页面里输入；内联价格才能把按最小单位算出的总额原样交给 Stripe，new-api 的固定 Price ID 乘数量（`controller/topup_stripe.go:358-395`）表达不了。PaymentIntent 是退款和拒付的共同入口；sub2api 的退款键 `re-<订单>-<金额>`（`provider/stripe.go:233`）会让同订单同金额的两笔部分退款撞键，按退款 ID 才能区分 |
+| Stripe 拒付只自动处理净额相符、无在途退款的全额扣款；其余进待处理；胜诉只冲正分录、订单保持被拒付；余额可为负但不自动暂停 | 部分拒付、按全额拉回或和退款同时发生会把同一笔额度扣两次；约束是扣回额度加成功退款不超过入账额度。风控状态还没实现，不能假装账户已暂停；负余额已经让准入拒绝新消费，待处理告警兜住人工。胜诉后订单仍是拒付历史，避免重复回调把状态改回已支付或再退一次 |
+| Stripe 回调端点由管理员在 Stripe 后台按商户账户登记；验签用官方 SDK，保留旧 webhook 密钥一轮 | Stripe 不能按 Session 指定 webhook 地址，`NotifyURL` 只能提示；自动建端点要额外的 webhook 管理权限和密钥回写，超出收款密钥的最小权限。官方 SDK 处理时间戳/签名/API 版本（new-api 同样，`controller/topup_stripe.go:181-184`）；旧密钥让轮换期间在途事件还能验过。API 密钥不保留旧值，因为它不再用于请求 |
 | 控制台充值操作用 `balance.top_up`，余额与订单读取用 `balance.view` | accounts 00010 给 owner、admin、finance 充值权限，viewer 仍只读；报价涉及付款选择，与创建、取消、补查共四项需要购买权限，见 [账户模块权限表](../accounts/README.md#管理接口) | 读写共用 balance.view：观察者会获得付款能力 |
 | 回调地址带商户账户 ID，按它找配置 | 验签前不用解析请求体去猜订单（sub2api `handler/payment_webhook_handler.go:155-179` 先解析 `out_trade_no` 再找商户），同一渠道多个商户账户时没有歧义 | 每种渠道一个回调地址加"只有一个账户时才允许回退"（`service/payment_webhook_provider.go:96-113`） |
 | 回调与任务用平台范围 | 回调没有操作者；`CreditPaid` 写 billing 的表，跨模块授权会打破"只写自己的表" | 每个站点一个任务角色 |
@@ -294,6 +336,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | E1-5 `feat(payments): reconcile unfinished orders and daily channel statements` | `payments.poll` 的商户并发上限与熔断（每单退避和过期后补查由 E1-2c 提供）；`payments.reconcile`；待处理记录的管理页与告警 | 丢回调由补单入账；一笔订单在有效期内的查询次数符合退避；一个商户账户超时不挡其他账户，连续未知触发暂停和告警；不能关单的渠道过期后付款，在补查窗口内补到；现金分录与订单不符、用量计数与订单复算不符时出现待处理记录并告警；同一差额重复上报只留一行 |
 | E1-6a `feat(billing): freeze paid credit as replayed events` | billing：冻结、解冻、退款三种带序号的交易，批次的冻结状态，重放、准入、到期都按冻结额处理；`FreezeRefund`、`SettleRefund`、`ReleaseRefund`（[billing 的「额度批次的分配与到期」](../billing/README.md#额度批次的分配与到期)） | 随机冻结、解冻、退款、扣费、到期，从头重放等于现场，且从任意位置续放相同（扩展 `TestReplayProperty`）；冻结期间并发调用花不掉冻结的额度；到期不作废冻结的额度；冻结后余额底线以下的扣费不动冻结额度；billing 不变量①–⑦（⑦ 随本 PR 加入）在冻结后成立 |
 | E1-6b `feat(payments): refund through channels with a sending state` | 表 `refunds` 和迁移；发起、审批、发送中、查询、人工结论（凭证、第二人批准）与金额不符策略（默认人工，可选按实付折算）；`payments.poll` 的第 4、5 步；订单状态按成功退款合计 | 渠道超时 → 待确认 → 查询收敛到成功或失败；第一个事务后崩溃只发一次；发送中崩溃时不认单号的渠道不重发、进待处理，认单号的用同一单号重发；不认单号的渠道同一订单只有一笔在途；同一人不能把未知退款标为失败；同一幂等键只退一次；多次部分退款合计不超过入账额度；性质测试：任意汇率序列和拆分下 Σ退款 ≤ Σ实付，全退恰好等于净付款额；退不退手续费两种策略；失败在一个事务里解冻 |
+| E1-7 `feat(payments): add the stripe checkout channel` | Stripe 插件（Checkout 托管页、内联价格、PaymentIntent 交易号、幂等键、官方 SDK 验签、查单/关单、退款/查退款、只读探测）；`order_disputes` 表和拒付核心；billing 的 `ChargeBack`/`ReverseChargeBack`、`chargeback` 分录和流水种类；`CreateRequest.ExpiresAt`；后台渠道种类和密钥字段 | 签名向量（官方 SDK 生成的签名、坏签名、缺头、过期时间戳、旧密钥轮换）；回调事件表（completed paid/unpaid、async succeeded/failed、expired、dispute created/won/lost/warning）；重复/乱序/晚回调不重复入账；查单金额与通知不符转待处理；退款幂等键、状态映射和按元数据查回；拒付全额扣款、胜诉冲正、重复拒付、在途退款/金额不符/未入账进差异；余额为负后准入拒绝；本地假 Stripe 服务的端到端；日对账含拒付现金；日志/事件/错误不含密钥；滚动发布门禁记录 |
 | E1-8 `feat(payments): redeem codes into credit` | 表 `redeem_codes`、`redeem_redemptions`、`redeem_attempts` 与迁移；`IssueCodes`、`Redeem`、`ListCodes`、`DisableCode`、`ListRedemptions`；billing 的 `CreditRedeem`（来源 `redeem`，迁移 billing 00033）；管理与控制台契约和页面 | 只存哈希、明文只在生成应答；一个码并发只兑一次（两个账户、一个账户两次）；同键重放回同一笔；已用、过期、已停用、无效各自被拒；账户 30/31、IP 100/101 的边界与计数故障拒绝；停用幂等且写审计；列表/历史不含码；站点与账户隔离 |
 
-**上线门槛**：主站打开"是否开放充值"之前，E1-3 在负责人提供的真实网关上做小额实测（下单、回调、查单确认、关单、退款、手续费的舍入、币种配置），结果记在 [#309](https://github.com/TYCT-tyct/Axiom/issues/309)；没有这份记录不打开。USDT 另需一个提供商户查单的易支付兼容网关，按 E1-4 跑通下单、GET 回调、查单确认、入账后才开放；Epusdt 已发布版本不满足（见上）。
+**上线门槛**：主站打开"是否开放充值"之前，E1-3 在负责人提供的真实网关上做小额实测（下单、回调、查单确认、关单、退款、手续费的舍入、币种配置），结果记在 [#309](https://github.com/TYCT-tyct/Axiom/issues/309)；没有这份记录不打开。USDT 另需一个提供商户查单的易支付兼容网关，按 E1-4 跑通下单、GET 回调、查单确认、入账后才开放；Epusdt 已发布版本不满足（见上）。Stripe 的商户凭证和真实沙箱小额实测（Checkout 下单、真实 webhook 端点、`checkout.session.completed`/异步付款、退款、拒付、币种与手续费）由负责人在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497) 记录，代码只对官方协议、官方 SDK 和本地假 Stripe 服务验证；没有这份记录不创建生产 Stripe 商户账户。上线顺序是先让所有节点和页面升级，再建第一个 Stripe 商户账户。

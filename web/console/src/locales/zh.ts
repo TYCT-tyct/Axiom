@@ -263,6 +263,8 @@ export default {
       reversal: "调用退费",
       freeze: "退款冻结",
       unfreeze: "退款解冻",
+      chargeback: "拒付",
+      chargeback_reversal: "拒付冲正",
     },
     frozenChange: "冻结额变动",
     frozenAfter: "冻结：{{amount}}",
