@@ -237,7 +237,7 @@ function OrderState({ order, allowed, onRefund }: { order: Schemas["Order"]; all
         <div className="mt-2 flex flex-wrap gap-1.5">
           {order.checkout?.pay_url ? (
             <Button asChild>
-              <a href={order.checkout.pay_url} rel="noreferrer">
+              <a href={order.checkout.pay_url} rel="noopener" referrerPolicy="origin">
                 {t("orders.pay")}
               </a>
             </Button>

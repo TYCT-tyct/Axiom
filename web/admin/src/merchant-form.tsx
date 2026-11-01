@@ -5,7 +5,7 @@ import type React from "react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { paymentCurrencies } from "./credit-read";
-import { formatPercent } from "./payment-read";
+import { defaultMethodRows, formatPercent, methodFallback } from "./payment-read";
 
 type Merchant = AdminSchemas["Merchant"];
 type Draft = {
@@ -22,8 +22,7 @@ type Draft = {
 type Update = (key: string, change: Partial<Draft>) => void;
 
 function draftOf(method: AdminSchemas["MerchantMethod"] | undefined, kind: string): Draft {
-  const fallback =
-    kind === "wechatpay" ? { method: "wxpay", upstream: "native" } : { method: "alipay", upstream: "alipay" };
+  const fallback = methodFallback(kind);
   return {
     key: crypto.randomUUID(),
     method: method?.method ?? fallback.method,
@@ -59,6 +58,10 @@ export function MerchantFields({
       : [draftOf(undefined, merchant?.kind ?? "easypay")],
   );
   const [paidIn, setPaidIn] = useState(merchant?.currency ?? merchantCurrency(currency));
+  const changeKind = (next: string) => {
+    setKind(next);
+    setRows((current) => defaultMethodRows(current, kind, next));
+  };
   const update: Update = (key, change) =>
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
   return (
@@ -66,7 +69,7 @@ export function MerchantFields({
       <MerchantBasics
         merchant={merchant}
         kind={kind}
-        setKind={setKind}
+        setKind={changeKind}
         paidIn={paidIn}
         setPaidIn={setPaidIn}
         error={error}

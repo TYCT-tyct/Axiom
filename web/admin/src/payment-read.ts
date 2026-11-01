@@ -19,6 +19,22 @@ export function parseBufferPercent(text: string): number | null {
   return parsePercent(text, 100_000);
 }
 
+export function methodFallback(kind: string): { method: string; upstream: string } {
+  return kind === "wechatpay" ? { method: "wxpay", upstream: "native" } : { method: "alipay", upstream: "alipay" };
+}
+
+// defaultMethodRows follows a kind change only for rows still holding the old kind's untouched defaults. A row the
+// operator has edited stays as it is, even when it happens to be editable for the new kind too.
+export function defaultMethodRows<T extends { method: string; upstream: string }>(
+  rows: T[],
+  from: string,
+  to: string,
+): T[] {
+  const old = methodFallback(from);
+  const next = methodFallback(to);
+  return rows.map((row) => (row.method === old.method && row.upstream === old.upstream ? { ...row, ...next } : row));
+}
+
 export function formatPercent(ppm: number): string {
   const whole = Math.floor(ppm / 10_000);
   const fraction = ppm % 10_000;

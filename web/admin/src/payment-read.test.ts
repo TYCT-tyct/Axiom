@@ -4,7 +4,9 @@ import { isProblem } from "./change";
 import { mailSavedRestart } from "./mail-settings";
 import {
   bufferRefused,
+  defaultMethodRows,
   formatPercent,
+  methodFallback,
   parseBufferPercent,
   parsePercent,
   readMerchant,
@@ -250,6 +252,18 @@ it("reads a WeChat Pay rotation with the old certificate", () => {
     platform_certificate: "platform-certificate",
     old_platform_certificate: "old-certificate",
   });
+});
+
+it("moves untouched method defaults when a new merchant switches to WeChat Pay", () => {
+  expect(methodFallback("wechatpay")).toEqual({ method: "wxpay", upstream: "native" });
+  const rows = [
+    { key: "default", method: "alipay", upstream: "alipay" },
+    { key: "edited", method: "alipay", upstream: "h5" },
+  ];
+  expect(defaultMethodRows(rows, "easypay", "wechatpay")).toEqual([
+    { key: "default", method: "wxpay", upstream: "native" },
+    { key: "edited", method: "alipay", upstream: "h5" },
+  ]);
 });
 
 it("refuses a merchant the contract or the plugin would refuse", () => {
