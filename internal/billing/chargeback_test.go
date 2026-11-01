@@ -25,20 +25,21 @@ func (b *bank) reverseChargeback(amounts ChargebackAmounts) error {
 	})
 }
 
-func (b *bank) paidBatch(credited, paid, fee int64) PaidCredit {
+func (b *bank) paidBatch(credited, paid int64) PaidCredit {
 	b.t.Helper()
-	p := b.paid(credited, Payment{Currency: currency(b.t, "USD"), Paid: paid, Fee: fee}, uuid.UUID{})
+	p := b.paid(credited, Payment{Currency: currency(b.t, "USD"), Paid: paid, Fee: 0}, uuid.UUID{})
 	if err := b.creditPaid(p); err != nil {
 		b.t.Fatal(err)
 	}
 	return p
 }
 
+//nolint:cyclop // the test walks the chargeback, its ledger and its reversal in one story
 func TestChargebackTakesOnlyItsBatchAndReverses(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 0, 0, Config{})
-	first := b.paidBatch(500, 500, 0)
-	second := b.paidBatch(500, 500, 0)
+	first := b.paidBatch(500, 500)
+	second := b.paidBatch(500, 500)
 	if got := b.balanceOf(b.admitted.Account); got != 1000 {
 		t.Fatalf("balance = %d, want 1000", got)
 	}
@@ -89,7 +90,7 @@ func TestChargebackTakesOnlyItsBatchAndReverses(t *testing.T) {
 func TestChargebackRefusesRefundInFlight(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 0, 0, Config{})
-	p := b.paidBatch(500, 500, 0)
+	p := b.paidBatch(500, 500)
 	f := Freeze{Account: p.Account, Batch: p.ID, Amount: 100}
 	b.freeze(f)
 	if _, err := b.chargeback(p.ID, 500); !errors.Is(err, ErrRefundInFlight) {
@@ -103,7 +104,7 @@ func TestChargebackRefusesRefundInFlight(t *testing.T) {
 func TestChargebackAfterPartialRefundAndWrongCash(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 0, 0, Config{})
-	p := b.paidBatch(1000, 1000, 0)
+	p := b.paidBatch(1000, 1000)
 	f := Freeze{Account: p.Account, Batch: p.ID, Amount: 400}
 	b.freeze(f)
 	b.finishRefund(f, false, false)
@@ -126,7 +127,7 @@ func TestChargebackAfterPartialRefundAndWrongCash(t *testing.T) {
 func TestChargebackCanMakeTheBalanceNegative(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 0, 0, Config{})
-	p := b.paidBatch(1000, 1000, 0)
+	p := b.paidBatch(1000, 1000)
 	// Spend most of the credit; the chargeback still takes the whole paid credit back, so the balance may be negative.
 	h := b.holdOn(b.exact, 900)
 	b.settleWith(h, outcome(Committed, FinishStop, used(t, 900, 0, 1)))
@@ -145,7 +146,7 @@ func TestChargebackCanMakeTheBalanceNegative(t *testing.T) {
 func TestChargebackAfterTheBatchExpired(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 0, 0, Config{})
-	p := b.paidBatch(500, 500, 0)
+	p := b.paidBatch(500, 500)
 	b.sql("UPDATE billing.credit_batches SET expires_at = now() - interval '1 day' WHERE id = '" + p.ID.String() + "'")
 	if wrote := b.expire(); wrote != 500 {
 		t.Fatalf("expiry wrote off %d, want 500", wrote)

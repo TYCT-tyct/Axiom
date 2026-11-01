@@ -128,13 +128,13 @@ func (t stripeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.client.Do(req)
 }
 
-func (c *stripeChannel) Caps() Caps {
+func (*stripeChannel) Caps() Caps {
 	return CapQuery | CapClose | CapRefund | CapQueryRefund | CapRefundKey
 }
 
 // Methods is nil: the site may name any method, and Create checks the merchant's upstream mapping against the four
 // payment methods this channel can present.
-func (c *stripeChannel) Methods() []Method { return nil }
+func (*stripeChannel) Methods() []Method { return nil }
 
 func (c *stripeChannel) Create(ctx context.Context, r CreateRequest) (Checkout, error) {
 	ctx, cancel := stripeDeadline(ctx)
@@ -162,10 +162,10 @@ func (c *stripeChannel) Create(ctx context.Context, r CreateRequest) (Checkout, 
 		PaymentIntentData:  &stripe.CheckoutSessionCreatePaymentIntentDataParams{Metadata: md},
 		PaymentMethodTypes: []*string{stripe.String(upstream)},
 		LineItems: []*stripe.CheckoutSessionCreateLineItemParams{{
-			Quantity: stripe.Int64(1),
+			Quantity: new(int64(1)),
 			PriceData: &stripe.CheckoutSessionCreateLineItemPriceDataParams{
 				Currency:    stripe.String(strings.ToLower(c.currency.String())),
-				UnitAmount:  stripe.Int64(r.Total.Minor),
+				UnitAmount:  new(r.Total.Minor),
 				ProductData: &stripe.CheckoutSessionCreateLineItemPriceDataProductDataParams{Name: stripe.String(stripeSubject(r.Subject))},
 			},
 		}},
@@ -200,10 +200,12 @@ func (c *stripeChannel) Query(ctx context.Context, outTradeNo, tradeNo string) (
 		if err != nil {
 			return Payment{}, stripeFailure(err)
 		}
-		switch intent.Status {
+		switch intent.Status { //nolint:exhaustive // only succeeded and canceled are terminal here
 		case stripe.PaymentIntentStatusSucceeded:
-			return Payment{State: PayPaid, TradeNo: intent.ID,
-				Paid: stripeMoney(c.currency, intent.Amount, intent.Currency)}, nil
+			return Payment{
+				State: PayPaid, TradeNo: intent.ID,
+				Paid: stripeMoney(c.currency, intent.Amount, intent.Currency),
+			}, nil
 		case stripe.PaymentIntentStatusCanceled:
 			return Payment{State: PayClosed, TradeNo: intent.ID}, nil
 		}
@@ -214,7 +216,7 @@ func (c *stripeChannel) Query(ctx context.Context, outTradeNo, tradeNo string) (
 		return Payment{}, stripeFailure(err)
 	}
 	p := Payment{TradeNo: stripePaymentIntent(session)}
-	switch session.Status {
+	switch session.Status { //nolint:exhaustive // open is the pending default
 	case stripe.CheckoutSessionStatusExpired:
 		return Payment{State: PayClosed, TradeNo: p.TradeNo}, nil
 	case stripe.CheckoutSessionStatusComplete:
@@ -237,7 +239,7 @@ func (c *stripeChannel) Close(ctx context.Context, order OrderID, tradeNo string
 	if err != nil {
 		return stripeFailure(err)
 	}
-	switch session.Status {
+	switch session.Status { //nolint:exhaustive // open is the pending default
 	case stripe.CheckoutSessionStatusExpired:
 		return nil
 	case stripe.CheckoutSessionStatusComplete:
@@ -261,7 +263,7 @@ func (c *stripeChannel) Refund(ctx context.Context, r RefundCall) (RefundState, 
 	}
 	params := &stripe.RefundCreateParams{
 		PaymentIntent: stripe.String(pi),
-		Amount:        stripe.Int64(r.Amount.Minor),
+		Amount:        new(r.Amount.Minor),
 		Metadata: map[string]string{
 			"refund": r.Refund.TypeID(),
 			"order":  r.Order.TypeID(),
@@ -334,7 +336,7 @@ func (c *stripeChannel) paymentIntent(ctx context.Context, sessionID string) (st
 	return pi, nil
 }
 
-func (c *stripeChannel) Ack(ok bool) (int, []byte) {
+func (*stripeChannel) Ack(ok bool) (int, []byte) {
 	if ok {
 		return http.StatusOK, []byte("{\"received\":true}")
 	}
@@ -381,8 +383,7 @@ func stripeDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
 }
 
 func stripeFailure(err error) error {
-	var se *stripe.Error
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*stripe.Error](err); ok {
 		code := string(se.Code)
 		if code == "" {
 			code = string(se.Type)
@@ -429,7 +430,7 @@ func stripeExpiry(want time.Time) *int64 {
 	if max := now.Add(24*time.Hour - time.Minute); at.After(max) {
 		at = max
 	}
-	return stripe.Int64(at.Unix())
+	return new(at.Unix())
 }
 
 func stripeSubject(s string) string {

@@ -27,6 +27,7 @@ func Dispute(provider, id, intent string, amount Money, action DisputeAction, st
 	}, Raw: "evt " + id}
 }
 
+//nolint:cyclop // the dispute lifecycle and its ledger assertions are one test
 func TestDisputeAppliesOnceAndWinsBack(t *testing.T) {
 	w, merchant, o := disputeWorld(t)
 	before := int64(w.count(w.p.platform, "SELECT balance FROM billing.balances WHERE account_id = $1", o.AccountID))

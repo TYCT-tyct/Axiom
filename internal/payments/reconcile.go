@@ -9,7 +9,7 @@ import (
 	"time"
 	"uuid"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgtype" //nolint:depguard // sqlc's nullable timestamp fields; no query is issued here
 	"github.com/riverqueue/river"
 
 	"axiom/internal/billing"
@@ -118,6 +118,7 @@ func (p *Payments) reconcileMerchant(ctx context.Context, merchant uuid.UUID, da
 	return nil
 }
 
+//nolint:cyclop,gocognit // the day's order, refund and dispute checks are one reconciliation
 func checkMerchant(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.Time) ([]RecordDiscrepancyParams, error) {
 	expected := make(map[string]*big.Int)
 	differences, err := checkBatches(ctx, tx, merchant, day, expected)

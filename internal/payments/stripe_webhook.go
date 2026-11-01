@@ -1,21 +1,25 @@
 package payments
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/stripe/stripe-go/v85"
+
+	"axiom/internal/platform/jsonx"
 )
 
 // notice turns a verified Stripe event into the core's payment or dispute notice. An event the channel sends but this
 // module does not act on is Relevant false, so Stripe gets a 2xx and stops retrying it.
+//
+//nolint:gocognit // one branch per event family; the payload mapping is the function
 func (c *stripeChannel) notice(event stripe.Event) (Notice, error) {
-	switch event.Type {
+	switch event.Type { //nolint:exhaustive // only subscribed event families are mapped
+
 	case stripe.EventTypeCheckoutSessionCompleted, stripe.EventTypeCheckoutSessionAsyncPaymentSucceeded,
 		stripe.EventTypeCheckoutSessionAsyncPaymentFailed, stripe.EventTypeCheckoutSessionExpired:
 		var session stripe.CheckoutSession
-		if err := json.Unmarshal(event.Data.Raw, &session); err != nil {
+		if err := jsonx.Unmarshal(event.Data.Raw, &session); err != nil {
 			return Notice{}, fmt.Errorf("stripe: decode the checkout session: %w", err)
 		}
 		order := session.ClientReferenceID
@@ -24,7 +28,7 @@ func (c *stripeChannel) notice(event stripe.Event) (Notice, error) {
 		}
 		tradeNo := stripePaymentIntent(&session)
 		raw := stripeRaw(event, session.ID)
-		switch event.Type {
+		switch event.Type { //nolint:exhaustive // the remaining checkout events are async completion
 		case stripe.EventTypeCheckoutSessionAsyncPaymentFailed, stripe.EventTypeCheckoutSessionExpired:
 			// A failed or expired session changes no state here: the order's own expiry and the query job decide, and
 			// a later successful payment must still be able to credit it.
@@ -43,7 +47,7 @@ func (c *stripeChannel) notice(event stripe.Event) (Notice, error) {
 	case stripe.EventTypeChargeDisputeCreated, stripe.EventTypeChargeDisputeClosed,
 		stripe.EventTypeChargeDisputeFundsWithdrawn, stripe.EventTypeChargeDisputeFundsReinstated:
 		var dispute stripe.Dispute
-		if err := json.Unmarshal(event.Data.Raw, &dispute); err != nil {
+		if err := jsonx.Unmarshal(event.Data.Raw, &dispute); err != nil {
 			return Notice{}, fmt.Errorf("stripe: decode the dispute: %w", err)
 		}
 		paymentIntent := ""
@@ -68,13 +72,13 @@ func (c *stripeChannel) notice(event stripe.Event) (Notice, error) {
 }
 
 func stripeDisputeAction(kind stripe.EventType, status stripe.DisputeStatus) DisputeAction {
-	switch kind {
+	switch kind { //nolint:exhaustive // only the two money-moving kinds override status
 	case stripe.EventTypeChargeDisputeFundsWithdrawn:
 		return DisputeOpen
 	case stripe.EventTypeChargeDisputeFundsReinstated:
 		return DisputeWon
 	}
-	switch status {
+	switch status { //nolint:exhaustive // every other status is warning-only
 	case stripe.DisputeStatusWon:
 		return DisputeWon
 	case stripe.DisputeStatusLost:

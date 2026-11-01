@@ -199,6 +199,8 @@ func (c StatementCursor) advance(r StatementPageRow) StatementCursor {
 // statementKind is what the ledger's kind of a transaction, and the source of the batch a credit opened, reads as on a
 // statement. A kind with no card-facing meaning is an error rather than a row: skipping it would leave the balance column
 // disagreeing with the money.
+//
+//nolint:cyclop // one ledger kind per case; adding a kind is the switch's purpose
 func statementKind(kind, source string) (StatementKind, error) {
 	switch kind {
 	case "credit":

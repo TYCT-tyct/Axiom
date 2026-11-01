@@ -1,17 +1,18 @@
 package payments
 
 import (
-	"encoding/json"
+	"maps"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/stripe/stripe-go/v85/webhook"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 )
 
-const stripeTestWebhookSecret = "whsec_test_secret_0123456789"
+const stripeTestWebhookSecret = "whsec_test_secret_0123456789" //nolint:gosec // test-only signing secret
 
 func stripeSigned(t *testing.T, payload []byte, secretValue string) Callback {
 	t.Helper()
@@ -21,10 +22,10 @@ func stripeSigned(t *testing.T, payload []byte, secretValue string) Callback {
 	return Callback{Method: http.MethodPost, Body: payload, Header: http.Header{"Stripe-Signature": []string{signed.Header}}}
 }
 
-func stripeEvent(t *testing.T, object map[string]any, kind, apiVersion string) []byte {
+func stripeEvent(t *testing.T, object map[string]any, kind string) []byte {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{
-		"id": "evt_1", "object": "event", "type": kind, "api_version": apiVersion,
+	raw, err := jsonx.MarshalCanonical(map[string]any{
+		"id": "evt_1", "object": "event", "type": kind, "api_version": "2020-08-27",
 		"created": time.Now().Unix(), "livemode": false, "data": map[string]any{"object": object},
 	})
 	if err != nil {
@@ -41,6 +42,7 @@ func stripeTestChannel(t *testing.T) *stripeChannel {
 	}
 }
 
+//nolint:cyclop,gocognit // the event table and its notices are the test
 func TestStripeWebhookCheckoutEvents(t *testing.T) {
 	c := stripeTestChannel(t)
 	object := map[string]any{
@@ -61,7 +63,7 @@ func TestStripeWebhookCheckoutEvents(t *testing.T) {
 		{"async succeeded", "checkout.session.async_payment_succeeded", object, true, 1234, "ord_1", "pi_1", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			n, err := c.Verify(t.Context(), stripeSigned(t, stripeEvent(t, tc.object, tc.kind, "2020-08-27"), stripeTestWebhookSecret))
+			n, err := c.Verify(t.Context(), stripeSigned(t, stripeEvent(t, tc.object, tc.kind), stripeTestWebhookSecret))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,7 +76,7 @@ func TestStripeWebhookCheckoutEvents(t *testing.T) {
 
 	// An asynchronous method has completed checkout but not paid yet; the async_payment_succeeded event follows.
 	unpaid := map[string]any{"id": "cs_2", "status": "complete", "payment_status": "unpaid", "payment_intent": "pi_2", "client_reference_id": "ord_2", "amount_total": 500, "currency": "usd"}
-	n, err := c.Verify(t.Context(), stripeSigned(t, stripeEvent(t, unpaid, "checkout.session.completed", "2020-08-27"), stripeTestWebhookSecret))
+	n, err := c.Verify(t.Context(), stripeSigned(t, stripeEvent(t, unpaid, "checkout.session.completed"), stripeTestWebhookSecret))
 	if err != nil || n.Relevant || n.Success {
 		t.Fatalf("unpaid completed = %+v, %v; want not relevant", n, err)
 	}
@@ -82,17 +84,18 @@ func TestStripeWebhookCheckoutEvents(t *testing.T) {
 	for _, kind := range []string{"checkout.session.expired", "checkout.session.async_payment_failed"} {
 		n, err := c.Verify(t.Context(), stripeSigned(t, stripeEvent(t, map[string]any{
 			"id": "cs_3", "payment_intent": "pi_3", "client_reference_id": "ord_3",
-		}, kind, "2020-08-27"), stripeTestWebhookSecret))
+		}, kind), stripeTestWebhookSecret))
 		if err != nil || !n.Relevant || n.Success || n.Order != "ord_3" || n.TradeNo != "pi_3" {
 			t.Fatalf("%s = %+v, %v", kind, n, err)
 		}
 	}
 
-	if n, err := c.Verify(t.Context(), stripeSigned(t, stripeEvent(t, object, "customer.created", "2020-08-27"), stripeTestWebhookSecret)); err != nil || n.Relevant {
+	if n, err := c.Verify(t.Context(), stripeSigned(t, stripeEvent(t, object, "customer.created"), stripeTestWebhookSecret)); err != nil || n.Relevant {
 		t.Fatalf("unrelated event = %+v, %v; want ignored", n, err)
 	}
 }
 
+//nolint:cyclop,gocognit // the dispute table and its actions are the test
 func TestStripeWebhookDisputes(t *testing.T) {
 	c := stripeTestChannel(t)
 	base := map[string]any{
@@ -117,11 +120,9 @@ func TestStripeWebhookDisputes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			object := make(map[string]any, len(base)+1)
-			for k, v := range base {
-				object[k] = v
-			}
+			maps.Copy(object, base)
 			object["status"] = tc.status
-			payload := stripeEvent(t, object, tc.kind, "2020-08-27")
+			payload := stripeEvent(t, object, tc.kind)
 			if tc.kind == "charge.dispute.updated" {
 				// updated is not subscribed; Verify must not claim it.
 				if n, err := c.Verify(t.Context(), stripeSigned(t, payload, stripeTestWebhookSecret)); err != nil || n.Relevant {
@@ -151,7 +152,7 @@ func TestStripeWebhookDisputeWithStringReferences(t *testing.T) {
 		"id": "dp_2", "object": "dispute", "amount": 500, "currency": "usd", "reason": "fraudulent",
 		"status": "needs_response", "charge": "ch_2", "payment_intent": "pi_2",
 	}
-	n, err := c.Verify(t.Context(), stripeSigned(t, stripeEvent(t, object, "charge.dispute.created", "2020-08-27"), stripeTestWebhookSecret))
+	n, err := c.Verify(t.Context(), stripeSigned(t, stripeEvent(t, object, "charge.dispute.created"), stripeTestWebhookSecret))
 	if err != nil || n.Dispute == nil || n.Dispute.PaymentIntent != "pi_2" || n.Dispute.Order != "" {
 		t.Fatalf("string references = %+v, %v", n, err)
 	}
@@ -159,7 +160,7 @@ func TestStripeWebhookDisputeWithStringReferences(t *testing.T) {
 
 func TestStripeWebhookSignatureAndRotation(t *testing.T) {
 	c := stripeTestChannel(t)
-	payload := stripeEvent(t, map[string]any{"id": "cs_1", "status": "complete", "payment_status": "paid", "amount_total": 1, "currency": "usd", "payment_intent": "pi_1", "client_reference_id": "o_1"}, "checkout.session.completed", "2020-08-27")
+	payload := stripeEvent(t, map[string]any{"id": "cs_1", "status": "complete", "payment_status": "paid", "amount_total": 1, "currency": "usd", "payment_intent": "pi_1", "client_reference_id": "o_1"}, "checkout.session.completed")
 
 	if _, err := c.Verify(t.Context(), stripeSigned(t, payload, "whsec_wrong")); err == nil {
 		t.Fatal("a wrong secret verified")

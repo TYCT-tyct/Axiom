@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"uuid"
 
 	"axiom/internal/platform/pg"
-	"uuid"
 )
 
 // ErrRefundInFlight means a refund still holds credit of the batch, so a chargeback would take the same credit twice.
@@ -37,6 +37,8 @@ type ChargebackAmounts struct {
 // payment supports. A refund in flight returns ErrRefundInFlight; a cash amount that does not match returns
 // ErrChargebackCash. Payments guards retries with its dispute row update in this same transaction; this function does
 // not deduplicate calls.
+//
+//nolint:cyclop // validation, replay and posting are one money transaction
 func ChargeBack(ctx context.Context, tx pg.Tx, c Chargeback) (ChargebackAmounts, error) {
 	credit, a, b, err := c.load(ctx, tx)
 	if err != nil {
@@ -60,7 +62,7 @@ func ChargeBack(ctx context.Context, tx pg.Tx, c Chargeback) (ChargebackAmounts,
 	amounts := ChargebackAmounts{
 		Batch:         credit.ID,
 		Credits:       credit.Amount - b.refunded - b.chargedBack,
-		RefundAmounts: RefundAmounts{Returned: credit.Payment.Paid - returned, Fee: credit.Payment.Fee - fee},
+		RefundAmounts: RefundAmounts{Returned: credit.Payment.Paid - returned, Fee: credit.Payment.Fee - fee}, //nolint:modernize // the embedded type is required in a keyed literal
 	}
 	if amounts.Credits < 0 || amounts.Returned < 0 || amounts.Fee < 0 || amounts.Fee > amounts.Returned {
 		return ChargebackAmounts{}, fmt.Errorf("billing: payment of %s has %d credits, %d cash and %d fee left",
@@ -87,6 +89,8 @@ func ChargeBack(ctx context.Context, tx pg.Tx, c Chargeback) (ChargebackAmounts,
 // ReverseChargeBack gives back a chargeback's credit after the dispute is won. It posts the negation of the original
 // entries with the original revision, so it can run once and cannot reverse a different dispute. The order and its
 // state stay with payments; this only moves the money.
+//
+//nolint:cyclop // the same validation and replay as ChargeBack, in the other direction
 func ReverseChargeBack(ctx context.Context, tx pg.Tx, amounts ChargebackAmounts) error {
 	if amounts.Revision <= 0 || amounts.Credits < 0 || amounts.Returned < 0 || amounts.Fee < 0 || amounts.Fee > amounts.Returned {
 		return fmt.Errorf("billing: reverse chargeback revision %d with %d credits", amounts.Revision, amounts.Credits)

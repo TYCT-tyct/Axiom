@@ -92,6 +92,7 @@ func (p *Payments) writeAck(w http.ResponseWriter, msg []byte) {
 	}
 }
 
+//nolint:cyclop // payment and dispute notices share the one callback transaction
 func (p *Payments) notify(ctx context.Context, ch Channel, merchant MerchantID, n Notice) error {
 	if n.Dispute != nil {
 		return p.dispute(ctx, merchant, n)

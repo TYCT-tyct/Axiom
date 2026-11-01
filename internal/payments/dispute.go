@@ -6,18 +6,19 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+	"uuid"
 
 	"axiom/internal/billing"
 	"axiom/internal/platform/idem"
 	"axiom/internal/platform/pg"
-	"github.com/jackc/pgx/v5"
-	"uuid"
 )
 
 // dispute books a verified chargeback. The channel's event is already authentic; the order, the amounts and whether
 // the money may move are this module's decisions, never the channel's. Every case that cannot be booked automatically
 // becomes a discrepancy and still acknowledges the event, so a channel does not retry a decision only a person can
 // make.
+//
+//nolint:cyclop,gocognit // the event-to-payment lookup and the decision table are one transaction
 func (p *Payments) dispute(ctx context.Context, merchant MerchantID, n Notice) error {
 	d := n.Dispute
 	if d == nil {
@@ -34,7 +35,7 @@ func (p *Payments) dispute(ctx context.Context, merchant MerchantID, n Notice) e
 			return p.disputeDifference(ctx, tx, merchant, nil, d, kind)
 		}
 		payment, err := queries.DisputeOrder(ctx, tx, DisputeOrderParams{MerchantID: uuid.UUID(merchant), TradeNo: d.PaymentIntent})
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, pg.ErrNoRows) {
 			return p.disputeDifference(ctx, tx, merchant, nil, d, "dispute_unmatched")
 		}
 		if err != nil {
@@ -74,6 +75,8 @@ func (p *Payments) dispute(ctx context.Context, merchant MerchantID, n Notice) e
 
 // applyDispute moves the row and the money according to the action. The row is locked, so two events for one dispute
 // serialize here: a later "money taken" cannot overwrite a won dispute.
+//
+//nolint:cyclop,gocognit,funlen // every action is one branch of the dispute state machine, in one transaction
 func (p *Payments) applyDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, row PaymentsOrderDispute,
 	d *DisputeNotice, fresh bool, raw string,
 ) error {
@@ -93,7 +96,7 @@ func (p *Payments) applyDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 		if row.State == "applied" {
 			if err := billing.ReverseChargeBack(ctx, tx, billing.ChargebackAmounts{
 				Batch: row.OrderID, Credits: row.Credits, Revision: row.ChargebackRevision,
-				RefundAmounts: billing.RefundAmounts{Returned: row.Cash, Fee: row.Fee},
+				RefundAmounts: billing.RefundAmounts{Returned: row.Cash, Fee: row.Fee}, //nolint:modernize // the embedded type is required in a keyed literal
 			}); err != nil {
 				return fmt.Errorf("payments: reverse the dispute: %w", err)
 			}
@@ -200,7 +203,7 @@ func (p *Payments) applyDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 	return fmt.Errorf("payments: unknown dispute action %d", d.Action)
 }
 
-func (p *Payments) touchDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, row PaymentsOrderDispute,
+func (*Payments) touchDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, row PaymentsOrderDispute,
 	d *DisputeNotice, status, reason string,
 ) error {
 	changed, err := queries.TouchDispute(ctx, tx, TouchDisputeParams{Status: status, Reason: reason, ID: row.ID})
@@ -253,6 +256,7 @@ func disputeEvent(ctx context.Context, tx pg.Tx, o LockOrderRow, d *DisputeNotic
 	})
 }
 
+//nolint:cyclop // every field of the notice is a separate boundary check
 func invalidDispute(d *DisputeNotice) string {
 	if d == nil || invalidPaymentText(d.Provider) || invalidPaymentText(d.ID) ||
 		invalidPaymentText(d.PaymentIntent) || d.Provider == "" || d.ID == "" || len(d.ID) > 255 ||
@@ -265,7 +269,7 @@ func invalidDispute(d *DisputeNotice) string {
 }
 
 func chargeable(o LockOrderRow) bool {
-	switch State(o.State) {
+	switch State(o.State) { //nolint:exhaustive // only these states can hold paid credit
 	case Paid, PartiallyRefunded, Refunded:
 		return true
 	}

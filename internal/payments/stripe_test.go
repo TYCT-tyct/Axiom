@@ -1,7 +1,6 @@
 package payments
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +12,7 @@ import (
 
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 
 	"github.com/stripe/stripe-go/v85"
@@ -40,19 +40,25 @@ func stripeTestServer(t *testing.T, handle http.HandlerFunc) (*stripeChannel, *[
 func writeStripeJSON(t *testing.T, w http.ResponseWriter, v any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	raw, err := jsonx.MarshalCanonical(v)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if _, err := w.Write(raw); err != nil {
 		t.Error(err)
 	}
 }
 
-func stripeSession(id, status, paymentStatus string, amount int64) map[string]any {
+func stripeSession(id, status, paymentStatus string) map[string]any {
 	return map[string]any{
 		"id": id, "object": "checkout.session", "status": status, "payment_status": paymentStatus,
-		"amount_total": amount, "currency": "usd", "payment_intent": map[string]any{"id": "pi_1"},
+		"amount_total": 1234, "currency": "usd", "payment_intent": map[string]any{"id": "pi_1"},
 		"client_reference_id": "ord_1", "metadata": map[string]string{"order": "ord_1"},
 	}
 }
 
+//nolint:cyclop // the test checks the request form, idempotency and expiry in one scenario
 func TestStripeCreateCheckout(t *testing.T) {
 	var form url.Values
 	var idempotency, method string
@@ -67,7 +73,7 @@ func TestStripeCreateCheckout(t *testing.T) {
 			t.Error(err)
 		}
 		form = r.PostForm
-		session := stripeSession("cs_1", "open", "unpaid", 1234)
+		session := stripeSession("cs_1", "open", "unpaid")
 		session["url"] = "https://checkout.stripe.com/c/pay/cs_1"
 		session["expires_at"] = time.Now().Add(time.Hour).Unix()
 		writeStripeJSON(t, w, session)
@@ -132,21 +138,22 @@ func TestStripeCreateRejectsUnsafeInputs(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // the test walks the session states and probe in one fake server
 func TestStripeQueryCloseAndProbe(t *testing.T) {
 	var expired, probed bool
 	c, _ := stripeTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/v1/checkout/sessions/cs_open") && strings.HasSuffix(r.URL.Path, "/expire"):
 			expired = true
-			writeStripeJSON(t, w, stripeSession("cs_open", "expired", "unpaid", 1234))
+			writeStripeJSON(t, w, stripeSession("cs_open", "expired", "unpaid"))
 		case r.URL.Path == "/v1/checkout/sessions/cs_open":
-			writeStripeJSON(t, w, stripeSession("cs_open", "open", "unpaid", 1234))
+			writeStripeJSON(t, w, stripeSession("cs_open", "open", "unpaid"))
 		case r.URL.Path == "/v1/checkout/sessions/cs_expired":
-			writeStripeJSON(t, w, stripeSession("cs_expired", "expired", "unpaid", 1234))
+			writeStripeJSON(t, w, stripeSession("cs_expired", "expired", "unpaid"))
 		case r.URL.Path == "/v1/payment_intents/pi_1":
 			writeStripeJSON(t, w, map[string]any{"id": "pi_1", "object": "payment_intent", "status": "succeeded", "amount": 1234, "currency": "usd"})
 		case strings.HasPrefix(r.URL.Path, "/v1/checkout/sessions/cs_"):
-			writeStripeJSON(t, w, stripeSession("cs_1", "complete", "paid", 1234))
+			writeStripeJSON(t, w, stripeSession("cs_1", "complete", "paid"))
 		case r.URL.Path == "/v1/balance":
 			probed = true
 			writeStripeJSON(t, w, map[string]any{"object": "balance", "available": []any{}, "pending": []any{}})
@@ -175,6 +182,7 @@ func TestStripeQueryCloseAndProbe(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,gocognit // the refund table and its provider queries are the test
 func TestStripeRefunds(t *testing.T) {
 	var created url.Values
 	var idempotency string
@@ -200,7 +208,7 @@ func TestStripeRefunds(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/refunds":
 			writeStripeJSON(t, w, map[string]any{"object": "list", "url": "/v1/refunds", "has_more": false, "data": []any{refund}})
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/checkout/sessions/"):
-			writeStripeJSON(t, w, stripeSession("cs_1", "complete", "paid", 1234))
+			writeStripeJSON(t, w, stripeSession("cs_1", "complete", "paid"))
 		default:
 			http.NotFound(w, r)
 		}
