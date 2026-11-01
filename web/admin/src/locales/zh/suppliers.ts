@@ -186,7 +186,7 @@ export default {
   },
   quantization: {
     open: "设置精度",
-    title: "设置 {{name}} 的精度",
+    title: "设置精度：{{name}}",
     body: "这个端点提供模型时使用的精度，名称与 OpenRouter 的等级一致。请求按量化筛选时匹配的就是它：没有记录的端点不会匹配，而“没有记录”也不是“unknown”这一级。",
     precision: "精度",
     none: "未记录",

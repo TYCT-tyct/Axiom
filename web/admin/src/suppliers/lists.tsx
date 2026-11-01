@@ -279,7 +279,7 @@ function EndpointRow({
       </Td>
       {onOpen ? (
         <Td className="whitespace-nowrap">
-          <div className="flex justify-end gap-1">
+          <div className="flex flex-col items-end gap-1 sm:flex-row sm:justify-end">
             {state === "ready" && testFormats(endpoint.formats).length > 0 ? (
               <Button
                 size="sm"
