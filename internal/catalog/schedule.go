@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
-	"strings"
 
 	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
@@ -293,13 +292,10 @@ func lookup[T ~uint8](names []string, name string) (T, error) {
 	return T(i), nil
 }
 
-// priceUnits is the finest price a schedule holds: a UnitPrice counts 10⁻¹⁵ of a currency unit.
-const priceUnits = 1_000_000_000_000_000
-
 // Scaled is every price times multiplier, in currency: a sale price, which is a reference price times the site's
 // multiplier (docs/domains/billing.md「定价」), or a supplier's cost plan in its own unit ("XXX"). Each price is rounded
-// up at priceUnits, once: a multiplier is usually no finite decimal, and a price left too low is the mistake to avoid.
-// An item without a price stays without one.
+// up at one unit price, 10⁻¹⁵, once: a multiplier is usually no finite decimal, and a price left too low is the
+// mistake to avoid. An item without a price stays without one.
 func (s Schedule) Scaled(multiplier string, currency platform.Currency) (Schedule, error) {
 	m, ok := new(big.Rat).SetString(multiplier)
 	if !ok || m.Sign() < 0 {
@@ -361,28 +357,13 @@ func (r rates) scaled(m *big.Rat) (rates, error) {
 		if !r.priced.Has(it) {
 			continue
 		}
-		p, err := scaledUnitPrice(r.price[it], m)
+		p, err := r.price[it].Scale(m)
 		if err != nil {
 			return rates{}, err
 		}
 		r.price[it] = p
 	}
 	return r, nil
-}
-
-// scaledUnitPrice is p × m rounded up at priceUnits. A price past 1000 leaves the range a price has, which ParseUnitPrice
-// reports: a multiplier that large is a mistake, not a price.
-func scaledUnitPrice(p platform.UnitPrice, m *big.Rat) (platform.UnitPrice, error) {
-	product := new(big.Rat).Mul(p.Rat(), m)
-	units := new(big.Int).Mul(product.Num(), big.NewInt(priceUnits))
-	var remainder big.Int
-	units.QuoRem(units, product.Denom(), &remainder)
-	if remainder.Sign() != 0 {
-		units.Add(units, big.NewInt(1))
-	}
-	text := new(big.Rat).SetFrac(units, big.NewInt(priceUnits)).FloatString(15) // exact: the fraction is in priceUnits
-	text = strings.TrimRight(strings.TrimRight(text, "0"), ".")
-	return platform.ParseUnitPrice(text)
 }
 
 // MarshalJSON writes the canonical form (jsonx.MarshalCanonical): prices in UnitPrice's canonical text, lists in

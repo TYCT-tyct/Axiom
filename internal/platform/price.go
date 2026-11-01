@@ -20,8 +20,8 @@ const (
 )
 
 // UnitPrice is a price per billing unit (a token, a request) in units of 10⁻¹⁵ of a currency, from 0 to 1000. An
-// entered price is made only from decimal text, so it is exactly what an operator or an official page wrote; a price
-// computed from a fraction rounds up instead (docs/domains/billing.md「钱的表示」); that constructor does not exist yet.
+// entered price is made only from decimal text, so it is exactly what an operator or an official page wrote; Scale
+// computes one from a fraction and rounds up instead (docs/domains/billing.md「钱的表示」).
 type UnitPrice struct{ n int64 }
 
 var errUnitPrice = errors.New("unit price: want a decimal from 0 to 1000 with at most 15 decimals, such as 0.000003")
