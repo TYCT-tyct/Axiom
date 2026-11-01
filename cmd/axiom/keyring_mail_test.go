@@ -50,12 +50,12 @@ func TestKeyringRewrapsSMTPConfig(t *testing.T) {
 	}
 }
 
-func TestKeyringRewrapsSearchConfig(t *testing.T) {
+func TestKeyringRewrapsSearchEngines(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
-	settings := websearch.Settings{URL: "https://search.example.com", Key: new("rotation search value")}
-	saveSearchSettings(t, f, settings, websearch.Config{}, "save")
-	row := rotationEnvelope{store: secret.EnvelopeStore{Schema: "platform", Table: "search_config", ID: "id", Purpose: "config"}, id: uuid.Nil().String()}
+	id := uuid.NewV7()
+	saveSearchEngine(t, f, id, "rotation search value", websearch.Config{})
+	row := rotationEnvelope{store: secret.EnvelopeStore{Schema: "platform", Table: "search_engines", ID: "id", Purpose: "config"}, id: id.String()}
 	before := f.read(row)
 	f.run("add", "--version", "2")
 	f.run("activate", "--version", "2")
@@ -73,9 +73,9 @@ func TestKeyringRewrapsSearchConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		cfg, found, err := websearch.StoredConfig(t.Context(), tx, ring)
-		if err == nil && (!found || cfg.Key.Reveal() != *settings.Key || cfg.URL != settings.URL) {
-			t.Fatal("search config did not survive rotation")
+		loaded, err := websearch.Load(t.Context(), tx, ring, websearch.Config{})
+		if err == nil && (len(loaded.Engines) != 1 || loaded.Engines[0].Key.Reveal() != "rotation search value") {
+			t.Fatal("the search engine did not survive rotation")
 		}
 		return err
 	}); err != nil {
@@ -83,46 +83,68 @@ func TestKeyringRewrapsSearchConfig(t *testing.T) {
 	}
 }
 
-// TestSearchConfigFirstSaveKeepsEnvironmentKey: before the first database row, the environment's configuration is
-// what an omitted key means. Keeping the URL and leaving the key out must carry that key into the row rather than
-// write an empty one; clearing the URL still disables the feature, and the empty row stays authoritative.
-func TestSearchConfigFirstSaveKeepsEnvironmentKey(t *testing.T) {
+// TestSearchEnginesFirstSaveKeepsEnvironmentKey: before the first engine row, the environment's backend is what the
+// admin sees. Saving it under its own name without retyping the key must carry that key into the row rather than write
+// an empty one.
+func TestSearchEnginesFirstSaveKeepsEnvironmentKey(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
 	environment := websearch.Config{URL: "https://search.example.com", Key: secret.New("environment search value")}
-	saveSearchSettings(t, f, websearch.Settings{URL: environment.URL}, environment, "first save")
-	cfg, found := storedSearchSettings(t, f)
-	if !found || cfg.URL != environment.URL || cfg.Key.Reveal() != environment.Key.Reveal() {
-		t.Fatalf("first saved config = %+v, found %v; want the environment key retained", cfg, found)
-	}
-	saveSearchSettings(t, f, websearch.Settings{}, environment, "disable")
-	cfg, found = storedSearchSettings(t, f)
-	if !found || cfg.Configured() {
-		t.Fatalf("after clearing, config = %+v, found %v; want an authoritative disabled row", cfg, found)
-	}
-}
-
-// saveSearchSettings saves a search configuration as the admin does, with the environment as the configuration a node
-// without a row has.
-func saveSearchSettings(t *testing.T, f rotationFixture, s websearch.Settings, environment websearch.Config, reason string) {
-	t.Helper()
-	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		_, err := websearch.SaveConfig(t.Context(), tx, masterKeys(t), audit.System("platform.keyring.test"), s, environment, reason)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// storedSearchSettings reads the saved search configuration; found is false before the first save.
-func storedSearchSettings(t *testing.T, f rotationFixture) (cfg websearch.Config, found bool) {
-	t.Helper()
+	saveSearchEngine(t, f, uuid.Nil(), "", environment)
+	var loaded websearch.Loaded
 	if err := f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
 		var err error
-		cfg, found, err = websearch.StoredConfig(t.Context(), tx, masterKeys(t))
+		loaded, err = websearch.Load(t.Context(), tx, masterKeys(t), environment)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return cfg, found
+	if len(loaded.Engines) != 1 || loaded.Engines[0].Key.Reveal() != environment.Key.Reveal() {
+		t.Fatalf("first saved engines = %+v, want the environment key retained", loaded.Engines)
+	}
+	// Clearing the list must stay cleared even though the environment still names a backend.
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := websearch.Save(t.Context(), tx, masterKeys(t), audit.System("platform.keyring.test"),
+			websearch.Settings{}, environment, "disable")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		var err error
+		loaded, err = websearch.Load(t.Context(), tx, masterKeys(t), environment)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Source != "none" || len(loaded.Engines) != 0 {
+		t.Fatalf("after clearing = %+v, want no engines even with the environment configured", loaded)
+	}
+}
+
+// saveSearchEngine saves one SearXNG engine as the admin does. An empty id creates one; key overrides the environment
+// key the new engine would otherwise inherit at the same URL.
+func saveSearchEngine(t *testing.T, f rotationFixture, id uuid.UUID, key string, environment websearch.Config) {
+	t.Helper()
+	url := environment.URL
+	if url == "" {
+		url = "https://search.example.com"
+	}
+	settings := websearch.EngineSettings{
+		Name: "searxng", Kind: "searxng", URL: url, Enabled: true, Default: true,
+		CostSearch: "0", CostResult: "0", Markup: "0",
+	}
+	if id != uuid.Nil() {
+		settings.ID = id.String()
+	}
+	if key != "" {
+		settings.Key = &key
+	}
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := websearch.Save(t.Context(), tx, masterKeys(t), audit.System("platform.keyring.test"),
+			websearch.Settings{Engines: []websearch.EngineSettings{settings}}, environment, "save")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

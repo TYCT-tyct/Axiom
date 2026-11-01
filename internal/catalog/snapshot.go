@@ -61,23 +61,24 @@ const (
 
 // Model is a listed or retired model as a snapshot holds it.
 type Model struct {
-	ID           ModelID
-	Slug         string
-	Author       string
-	AuthorName   string // the author's display name, for checks that ask a model who made it; the slug when it has none
-	Status       Status
-	VersionBasis VersionBasis
-	PriceSource  PriceSource
-	Rev          int64
-	spec         string // the baseline's JSON, kept as a string so no caller can change what a snapshot holds
-	reportable   Reportable
-	serving      Serving
-	serves       bool // the spec declares everything Serving reads
-	directServes bool // context is declared; a direct-only format needs neither an output limit nor streaming
-	toolUses     map[Item]int64
-	dialect      Dialect
-	speed        int64     // the fastest output, in tokens per second; 0 when the spec does not say
-	reasoning    FormatSet // the call formats in which the model's stream shows reasoning progress
+	ID             ModelID
+	Slug           string
+	Author         string
+	AuthorName     string // the author's display name, for checks that ask a model who made it; the slug when it has none
+	Status         Status
+	VersionBasis   VersionBasis
+	PriceSource    PriceSource
+	Rev            int64
+	spec           string // the baseline's JSON, kept as a string so no caller can change what a snapshot holds
+	reportable     Reportable
+	serving        Serving
+	serves         bool // the spec declares everything Serving reads
+	directServes   bool // context is declared; a direct-only format needs neither an output limit nor streaming
+	toolUses       map[Item]int64
+	dialect        Dialect
+	speed          int64     // the fastest output, in tokens per second; 0 when the spec does not say
+	reasoning      FormatSet // the call formats in which the model's stream shows reasoning progress
+	alwaysSearches bool      // the model searches without a tool
 }
 
 // Spec is a copy of the baseline's JSON.
@@ -93,6 +94,11 @@ func (m Model) Reportable() Reportable { return m.reportable }
 // a segment's overshoot allowance from it, and routing reserves an entry whole while it is 0, which is a spec that does
 // not say (README.md「规格」).
 func (m Model) OutputSpeed() int64 { return m.speed }
+
+// AlwaysSearches reports whether the model searches the web on every call without a tool, from its spec. A request
+// that asks for the gateway's web plugin must not also run a backend search for such a model: it would search twice
+// (docs/domains/gateway.md「联网搜索」).
+func (m Model) AlwaysSearches() bool { return m.alwaysSearches }
 
 // ReasoningVisible are the call formats in which the model's stream shows its reasoning as it is produced, from its
 // spec, for a model whose spec lists the reasoning ability: one that does not reason has nothing to hide. The gateway

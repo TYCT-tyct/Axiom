@@ -15,6 +15,7 @@ import (
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/webui"
+	"axiom/internal/websearch"
 )
 
 // consoleAPI implements the console's API (api/console.yaml). It stands behind the guard, which has found the site,
@@ -29,6 +30,8 @@ type consoleAPI struct {
 	db       *pg.DB
 	// models is the public projection built with the last routing snapshot, so the page and a call charge one price.
 	models modelProjection
+	// search is the node's enabled engines: the model pages show what one search through each costs.
+	search []websearch.Engine
 }
 
 // GetVersion tells the console which build answers, uncached, so a page left open across a deployment notices it.

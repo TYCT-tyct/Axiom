@@ -31,8 +31,8 @@ type converted struct {
 // chatDelta is the delta a chunk is built from: content, refusal and reasoning as JSON strings, each the
 // concatenation of its pieces, and the entries of the reasoning details and tool calls, comma-separated.
 type chatDelta struct {
-	role                                        bool
-	content, refusal, reasoning, details, tools []byte
+	role                                                   bool
+	content, refusal, reasoning, details, tools, citations []byte
 }
 
 // done is the data of the event that ends a Chat stream.
@@ -81,6 +81,12 @@ func (c *converted) text() ([]byte, error) {
 	return c.value()
 }
 
+// addCitation adds one Chat url_citation annotation entry. The gateway uses it when an upstream reports its own web
+// search's citations, which a Chat client can read as annotations (docs/domains/gateway.md「联网搜索」).
+func (c *converted) addCitation(entry []byte) error {
+	return c.addEntry(&c.draft.citations, entry)
+}
+
 // addText adds piece, a JSON string, to the string in dst: the two concatenated are one JSON string, as each escape
 // lies whole within a piece.
 func (c *converted) addText(dst *[]byte, piece []byte) error {
@@ -127,8 +133,9 @@ func (c *converted) render() (data []byte, content bool, err error) {
 		name string
 		v    []byte
 	}{{"content", d.content}, {"refusal", d.refusal}, {"reasoning", d.reasoning}, {"reasoning_content", d.reasoning}}
-	n := len(c.head) + len(d.content) + len(d.refusal) + 2*len(d.reasoning) + len(d.details) + len(d.tools) + 160
-	content = n > len(c.head)+160
+	n := len(c.head) + len(d.content) + len(d.refusal) + 2*len(d.reasoning) + len(d.details) + len(d.tools) +
+		len(d.citations) + 192
+	content = n > len(c.head)+192
 	if !content && !d.role {
 		return nil, false, nil
 	}
@@ -150,6 +157,9 @@ func (c *converted) render() (data []byte, content bool, err error) {
 	}
 	if len(d.details) > 0 {
 		out, sep = append(append(append(out, sep+`"reasoning_details":[`...), d.details...), ']'), ","
+	}
+	if len(d.citations) > 0 {
+		out, sep = append(append(append(out, sep+`"annotations":[`...), d.citations...), ']'), ","
 	}
 	if len(d.tools) > 0 {
 		out = append(append(append(out, sep+`"tool_calls":[`...), d.tools...), ']')

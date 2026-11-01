@@ -27,7 +27,7 @@ export function SettingsPage<T>({
   query: UseQueryResult<T>;
   labels: SettingsLabels;
   facts: ComponentType<{ view: T; action: ReactNode }>;
-  dialogs: { edit: ComponentType<{ view: T; onClose: () => void }>; test: ComponentType<{ onClose: () => void }> };
+  dialogs: { edit: ComponentType<{ view: T; onClose: () => void }>; test: ComponentType<{ view: T; onClose: () => void }> };
 }) {
   const [editing, setEditing] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -57,7 +57,7 @@ export function SettingsPage<T>({
             }
           />
           {editing ? <Edit view={view} onClose={() => setEditing(false)} /> : null}
-          {testing ? <Test onClose={() => setTesting(false)} /> : null}
+          {testing ? <Test view={view} onClose={() => setTesting(false)} /> : null}
         </>
       )}
     </DataState>

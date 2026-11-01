@@ -129,8 +129,20 @@ func TestConvertMessages(t *testing.T) {
 				stopWith("end_turn"), nil,
 		},
 		"a citation": {
-			startBlock(0, `{"type":"text","text":""}`) + deltaOf(0, `{"type":"citations_delta","citation":{}}`) +
-				stopBlock(0) + stopWith("end_turn"), nil,
+			startBlock(0, `{"type":"text","text":""}`) + deltaOf(0, `{"type":"citations_delta","citation":{"type":"web_search_result_location","url":"https://example.com","title":"Example"}}`) +
+				stopBlock(0) + stopWith("end_turn"),
+			map[string]string{
+				"0/role": "assistant", "0/annotations": "[map[type:url_citation url_citation:map[title:Example url:https://example.com]]]",
+				"0/finish_reason": "stop",
+			},
+		},
+		"another citation type": {
+			startBlock(0, `{"type":"text","text":""}`) + deltaOf(0, `{"type":"citations_delta","citation":{"type":"page_location","url":"https://example.com"}}`) +
+				stopBlock(0) + stopWith("end_turn"),
+			map[string]string{
+				"0/role": "assistant", "0/annotations": "[map[type:url_citation url_citation:map[title:<nil> url:https://example.com]]]",
+				"0/finish_reason": "stop",
+			},
 		},
 		"content after the stop reason": {
 			textBlockAt(0, "x") + ev(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{}}`) +
@@ -245,9 +257,19 @@ func TestConvertResponses(t *testing.T) {
 		"incomplete for another reason": {
 			messageDone("x") + ended("response.incomplete", `,"incomplete_details":{"reason":"interrupted"}`), nil,
 		},
-		"an annotation": {
+		"a citation": {
 			rev("response.output_item.added", messageAdded) + textDelta("x") +
-				rev("response.output_text.annotation.added", `,"output_index":0,"content_index":0,"annotation":{}`) + completed, nil,
+				rev("response.output_text.annotation.added", `,"output_index":0,"content_index":0,"annotation":{"type":"url_citation","url":"https://example.com","title":"Example"}`) + completed,
+			map[string]string{
+				"0/role": "assistant", "0/content": "x",
+				"0/annotations":   "[map[type:url_citation url_citation:map[title:Example url:https://example.com]]]",
+				"0/finish_reason": "stop",
+			},
+		},
+		"an unknown annotation": {
+			rev("response.output_item.added", messageAdded) + textDelta("x") +
+				rev("response.output_text.annotation.added", `,"output_index":0,"content_index":0,"annotation":{"type":"file_citation","file_id":"f"}`) + completed,
+			map[string]string{"0/role": "assistant", "0/content": "x", "0/finish_reason": "stop"},
 		},
 		"a server tool's item": {
 			rev("response.output_item.added", `,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"in_progress"}`) +

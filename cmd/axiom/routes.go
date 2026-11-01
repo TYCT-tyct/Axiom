@@ -69,14 +69,12 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if err != nil {
 		return nodeRoutes{}, err
 	}
-	var searcher websearch.Searcher
-	if search.Configured() {
-		if searcher, err = websearch.Open(search, exit); err != nil {
-			return nodeRoutes{}, err
-		}
+	engines, err := websearch.OpenEngines(search.Engines, exit)
+	if err != nil {
+		return nodeRoutes{}, err
 	}
 	calls, err := startCallPath(ctx, callDeps{
-		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, search: searcher,
+		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, search: engines,
 		gate: gate, limits: limits,
 		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger, proxies: p.cfg.trustedProxies,
 		kv:     cache,
@@ -100,7 +98,7 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 		return nodeRoutes{}, err
 	}
 	public := withModelCalls(
-		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, catalog: cat, db: db, models: calls.models},
+		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, catalog: cat, db: db, models: calls.models, search: calls.search.List()},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
 	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger})
@@ -112,16 +110,12 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
 }
 
-// search reads the backend this node searches through: the admin's saved configuration when there is one, the
-// environment's otherwise.
-func (p consoleParts) search(ctx context.Context, db *pg.DB) (websearch.Config, error) {
-	cfg := p.cfg.search
-	err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
-		stored, found, err := websearch.StoredConfig(ctx, tx, p.master)
-		if found {
-			cfg = stored
-		}
-		return err
+// search reads the node's engine list, falling back to the old single-backend row and then the environment.
+func (p consoleParts) search(ctx context.Context, db *pg.DB) (loaded websearch.Loaded, err error) {
+	err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		var e error
+		loaded, e = websearch.Load(ctx, tx, p.master, p.cfg.search)
+		return e
 	})
-	return cfg, err
+	return loaded, err
 }

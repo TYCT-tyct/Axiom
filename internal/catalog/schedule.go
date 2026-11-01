@@ -320,6 +320,29 @@ func (s Schedule) Scaled(multiplier string, currency platform.Currency) (Schedul
 	return out, nil
 }
 
+// WithRate sets one item's price at every band of every offered service tier, adding the item where the schedule did
+// not price it. The gateway uses it to price a plugin search at the selected backend's published rate rather than at
+// the model's: the reservation locks the returned schedule, so the search is charged exactly what was reserved
+// (docs/domains/gateway.md「联网搜索」).
+func (s Schedule) WithRate(item Item, price platform.UnitPrice) Schedule {
+	for st := range numServiceTiers {
+		if !s.offered.Has(st) {
+			continue
+		}
+		l := &s.levels[st]
+		// The tier rates are a slice shared with the schedule this one was copied from; changing them in place would
+		// reprice every call that holds the same snapshot schedule.
+		l.tiers = slices.Clone(l.tiers)
+		l.base.price[item] = price
+		l.base.priced.Add(item)
+		for i := range l.tiers {
+			l.tiers[i].price[item] = price
+			l.tiers[i].priced.Add(item)
+		}
+	}
+	return s
+}
+
 func (l *level) scaled(m *big.Rat) (out level, err error) {
 	if out.base, err = l.base.scaled(m); err != nil {
 		return level{}, err

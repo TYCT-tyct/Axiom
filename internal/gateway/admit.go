@@ -10,8 +10,11 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
+	"axiom/internal/protocol"
 	"axiom/internal/routing"
+	"axiom/internal/websearch"
 )
 
 // errWait is what the admission's function returns when every candidate endpoint is full: Admit rolls back, with
@@ -135,7 +138,7 @@ func (h *Handler) reserveBatch(ctx context.Context, tx pg.Tx, live []*admissionI
 		}
 		reqs = append(reqs, billing.ReserveRequest{
 			Admitted: it.admitted, ID: it.call.ID, At: it.call.At,
-			Demand: routing.DemandOf(&it.call.Request), Quotables: quotables(it.plan.Entries),
+			Demand: routing.DemandOf(&it.call.Request), Quotables: quotables(it.plan.Entries, it.call),
 		})
 		quoted = append(quoted, it)
 	}
@@ -188,7 +191,113 @@ func (h *Handler) planAdmission(it *admissionItem) error {
 	}
 	h.outage.recovered(depRouting)
 	it.plan, it.admitted = plan, billingAdmitted(it.admission, c)
+	return h.resolveSearch(c, plan)
+}
+
+// resolveSearch decides the request's one search path, now that routing has chosen the entry whose model and format
+// decide what the provider can do. The plugin is one search, never two (docs/domains/gateway.md「联网搜索」): a request
+// that already declares the provider's own search tool, and a model that searches on every call, keep that path and
+// drop the plugin; otherwise the plugin is either the provider's tool or one backend, and never both.
+func (h *Handler) resolveSearch(c *Call, plan routing.Plan) error {
+	if c.Request.Web == nil || len(plan.Entries) == 0 {
+		return nil
+	}
+	entry := plan.Entries[0]
+	choice := searchChoice{MaxUses: entry.Limits.MaxUses[catalog.ItemWebSearch]}
+	if model, ok := c.snap.Model(entry.Model); ok {
+		choice.Native = servesWebSearch(model) && protocol.NativeSearchSupported(entry.Target.Format)
+		choice.Always = model.AlwaysSearches()
+	}
+	decision, err := chooseSearch(c.Request.Web, choice, c.Request.Needs.Has(protocol.WebSearch), h.Search)
+	if err != nil {
+		return err
+	}
+	if decision.native > 0 {
+		c.nativeSearch = decision.native
+		c.Request.Needs |= protocol.WebSearch
+		c.Request.WebSearches = int64(decision.native)
+	}
+	if decision.backend != nil {
+		// The backend search still runs before the attempt, so the request keeps its plugin (and the input bound the
+		// injected results reserve) for DemandOf and webSearch; only its price changes.
+		c.searchBackend, c.searchPrice = decision.backend, decision.price
+		return nil
+	}
+	c.Request.Web = nil
+	c.Request.SearchBytes = 0
 	return nil
+}
+
+// maxNativeSearches bounds what one plugin request may turn on at a provider; a model's spec may allow more, but one
+// plugin search should not spend an unbounded amount of the account's money.
+const maxNativeSearches = 10
+
+// searchChoice is what the routed entry's model and format allow: its own web search, and the model's default most
+// searches. Always is a model that searches without a tool, which the plugin must not search again.
+type searchChoice struct {
+	Native  bool
+	Always  bool
+	MaxUses int64
+}
+
+// searchDecision is the one path a plugin request takes: native searches at the provider, or one backend, never both.
+type searchDecision struct {
+	native  int
+	backend *websearch.Backend
+	price   platform.UnitPrice
+}
+
+// chooseSearch is resolveSearch's decision, apart from the catalog it reads: declared is a request that already turns
+// the provider's own search on, and all are the node's enabled engines.
+//
+//nolint:gocognit // one branch per engine choice, which is the rule being expressed
+func chooseSearch(web *protocol.WebPlugin, choice searchChoice, declared bool, all SearchBackends) (searchDecision, error) {
+	if declared || choice.Always {
+		return searchDecision{}, nil
+	}
+	native := func() (searchDecision, error) {
+		uses := max(choice.MaxUses, 1)
+		uses = min(uses, maxNativeSearches)
+		return searchDecision{native: int(uses)}, nil
+	}
+	backend := func(b *websearch.Backend) (searchDecision, error) {
+		price, err := b.Price(web.MaxResults)
+		if err != nil {
+			return searchDecision{}, invalid("the search engine's published price is out of range")
+		}
+		return searchDecision{backend: b, price: price}, nil
+	}
+	switch web.Engine {
+	case "native":
+		if !choice.Native {
+			return searchDecision{}, invalid("plugin option \"native\" is not supported: the selected model has no native web search on this endpoint")
+		}
+		return native()
+	case "":
+		if choice.Native {
+			return native()
+		}
+		b, ok := defaultBackend(all)
+		if !ok {
+			if web.Online {
+				return searchDecision{}, invalid(errOnline)
+			}
+			return searchDecision{}, invalid(fmt.Sprintf("plugin %q is not supported: %s", "web", protocol.NoWebSearch))
+		}
+		return backend(b)
+	default:
+		b, ok := findBackend(all, web.Engine)
+		if !ok {
+			return searchDecision{}, invalid(fmt.Sprintf("plugin option %q is not an enabled search engine", web.Engine))
+		}
+		return backend(b)
+	}
+}
+
+// servesWebSearch reports whether the model's spec declares the provider's web search ability.
+func servesWebSearch(m catalog.Model) bool {
+	serving, ok := m.Serving()
+	return ok && serving.Abilities.Has(catalog.AbilityWebSearch)
 }
 
 // routingAdmission is what routing reads of the admission. A key with no preset is routed by the preset with the zero
@@ -230,12 +339,18 @@ func limitOf(amount int64, reset string, ok bool) *billing.Limit {
 	return &billing.Limit{Amount: amount, Reset: billing.Reset(reset)}
 }
 
-func quotables(entries []routing.Entry) []billing.Quotable {
+func quotables(entries []routing.Entry, c *Call) []billing.Quotable {
 	q := make([]billing.Quotable, len(entries))
 	for i, e := range entries {
+		price := e.Price.Schedule
+		if c.searchBackend != nil && !c.searchPrice.IsZero() {
+			// The backend's published per-search price replaces the model's web_search rate for this call. The
+			// reservation locks the schedule it quotes, so settlement charges exactly the price reserved.
+			price = price.WithRate(catalog.ItemWebSearch, c.searchPrice)
+		}
 		q[i] = billing.Quotable{
 			Exchange: e.Exchange,
-			Version:  e.Price.Version, Price: e.Price.Schedule, Model: e.Limits, MaxOutput: e.MaxOutput, Segmentable: e.Segmentable,
+			Version:  e.Price.Version, Price: price, Model: e.Limits, MaxOutput: e.MaxOutput, Segmentable: e.Segmentable,
 			Endpoint: uuid.UUID(e.Endpoint),
 		}
 	}

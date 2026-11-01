@@ -287,3 +287,24 @@ func TestServingDirect(t *testing.T) {
 		t.Error("ServingDirect accepted a spec without context_length")
 	}
 }
+
+func TestSpecAlwaysSearches(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+		bad  bool
+	}{
+		{`{}`, false, false},
+		{`{"always_searches":false}`, false, false},
+		{`{"always_searches":true}`, true, false},
+		{`{"always_searches":"true"}`, false, true},
+	} {
+		s, err := parseSpec([]byte(tc.body))
+		if (err != nil) != tc.bad {
+			t.Fatalf("parseSpec(%s) = %v", tc.body, err)
+		}
+		if !tc.bad && s.alwaysSearches != tc.want {
+			t.Errorf("parseSpec(%s).alwaysSearches = %v, want %v", tc.body, s.alwaysSearches, tc.want)
+		}
+	}
+}

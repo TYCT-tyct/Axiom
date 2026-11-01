@@ -211,12 +211,15 @@ func TestSMTPDestinationBoundary(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // the steps are the admin flow and each assertion is one step
 func TestAdminSearchSettings(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	path := "/settings/search"
-	body := `{"settings":{"url":"https://8.8.8.8","key":"search-test-value"},"reason":"configure"}`
+	engine := `{"name":"searxng","kind":"searxng","url":"https://8.8.8.8","key":"search-test-value","enabled":true,"default":true,` +
+		`"cost_per_search":"0.005","cost_per_extra_result":"0.002","markup":"0.2"}`
+	body := `{"engines":[` + engine + `],"reason":"configure"}`
 	rec := f.change(s, http.MethodPut, path, body, newKey())
 	expectAdmin(t, "save search", rec, 200, "")
 	if strings.Contains(rec.Body.String(), "search-test-value") {
@@ -224,23 +227,38 @@ func TestAdminSearchSettings(t *testing.T) {
 	}
 	var got adminapi.SearchSettings
 	decode(t, rec, &got)
-	if got.HasKey == nil || !*got.HasKey || got.RestartRequired == nil || !*got.RestartRequired ||
-		got.Source == nil || *got.Source != "database" {
+	if len(got.Engines) != 1 || !got.Engines[0].HasKey || !got.Engines[0].Default || !got.Engines[0].Enabled ||
+		got.Engines[0].PricePerSearch != "0.006" || got.Engines[0].PricePerExtraResult != "0.0024" {
+		t.Fatalf("saved engine = %+v", got.Engines)
+	}
+	if got.RestartRequired == nil || !*got.RestartRequired || got.Source != adminapi.SearchSettingsSourceDatabase {
 		t.Fatalf("missing metadata: %+v", got)
 	}
-	body = strings.Replace(body, `,"key":"search-test-value"`, "", 1)
-	expectAdmin(t, "retain key", f.change(s, http.MethodPut, path, body, newKey()), 200, "")
-	expectAdmin(t, "destination change", f.change(s, http.MethodPut, path, strings.Replace(body, "8.8.8.8", "8.8.4.4", 1), newKey()), 400, "")
+	// The key stays when the backend does, and is dropped when the destination changes rather than sent to a new host.
+	noKey := strings.Replace(body, `,"key":"search-test-value"`, "", 1)
+	rec = f.change(s, http.MethodPut, path, noKey, newKey())
+	expectAdmin(t, "retain key", rec, 200, "")
+	decode(t, rec, &got)
+	if !got.Engines[0].HasKey {
+		t.Fatal("the saved key was not retained")
+	}
+	rec = f.change(s, http.MethodPut, path, strings.Replace(noKey, "8.8.8.8", "8.8.4.4", 1), newKey())
+	expectAdmin(t, "destination change", rec, 200, "")
+	decode(t, rec, &got)
+	if got.Engines[0].HasKey {
+		t.Fatal("the old key was reused for a new destination")
+	}
 	rec = f.do(http.MethodGet, path, "", as(s))
 	expectAdmin(t, "read search", rec, 200, "")
-	if !strings.Contains(rec.Body.String(), "8.8.8.8") || strings.Contains(rec.Body.String(), "search-test-value") {
+	if !strings.Contains(rec.Body.String(), "8.8.4.4") || strings.Contains(rec.Body.String(), "search-test-value") {
 		t.Fatal(rec.Body.String())
 	}
-	if strings.Contains(f.text("SELECT detail::text FROM platform.audit_log WHERE action='search_config.update' LIMIT 1"), "search-test-value") {
+	if strings.Contains(f.text("SELECT detail::text FROM platform.audit_log WHERE action='search_engines.update' LIMIT 1"), "search-test-value") {
 		t.Fatal("secret in audit")
 	}
-	expectAdmin(t, "disable", f.change(s, http.MethodPut, path, `{"settings":{"url":""},"reason":"disable"}`, newKey()), 200, "")
-	rec = f.change(s, http.MethodPost, path+"/tests", `{"reason":"probe"}`, newKey())
+	expectAdmin(t, "disable", f.change(s, http.MethodPut, path, `{"engines":[],"reason":"disable"}`, newKey()), 200, "")
+	rec = f.change(s, http.MethodPost, path+"/tests",
+		`{"engine":{"name":"searxng","kind":"searxng","enabled":true,"default":true,"cost_per_search":"0","cost_per_extra_result":"0","markup":"0"},"reason":"probe"}`, newKey())
 	expectAdmin(t, "test disabled", rec, 200, "")
 	if !strings.Contains(rec.Body.String(), "disabled") {
 		t.Fatal(rec.Body.String())

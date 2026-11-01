@@ -30,6 +30,7 @@ type messagesEvent struct {
 	index                       int64
 	block, delta                blockKind
 	id, name, input, text, sign []byte
+	url, title                  []byte
 	data, partial               []byte
 	stop                        string // the finish reason the stop reason maps to, "" for none
 	badStop                     string // a stop reason with no finish reason
@@ -45,18 +46,19 @@ const (
 	toolBlock
 	inputDelta
 	signatureDelta
+	citationDelta
 )
 
 // blockKinds and deltaKinds are the kinds of the block and delta types a converted request can bring about; any other is the
-// upstream's failure, such as a server tool's block, which the request has none of, or a citation, which Chat has
-// no place for.
+// upstream's failure, such as a server tool's block, which the request has none of. A citation is not one: a
+// url_citation becomes a Chat annotation.
 var (
 	blockKinds = map[string]blockKind{
 		"text": textBlock, "thinking": thinkingBlock, "redacted_thinking": redactedBlock, "tool_use": toolBlock,
 	}
 	deltaKinds = map[string]blockKind{
 		"text_delta": textBlock, "thinking_delta": thinkingBlock, "signature_delta": signatureDelta,
-		"input_json_delta": inputDelta,
+		"input_json_delta": inputDelta, "citations_delta": citationDelta,
 	}
 )
 
@@ -80,6 +82,10 @@ func newMessagesToChat(u UsageContext, o RelayOptions, charge func(int) error) u
 }
 
 var (
+	messagesChatCitation = map[string]func(*messagesToChat) error{
+		"url":   func(s *messagesToChat) error { return s.read(&s.ev.url) },
+		"title": func(s *messagesToChat) error { return s.read(&s.ev.title) },
+	}
 	messagesChatFields = map[string]func(*messagesToChat) error{
 		"index": func(s *messagesToChat) error {
 			n, err := s.walk.count()
@@ -105,6 +111,7 @@ var (
 		"thinking":     func(s *messagesToChat) error { return s.read(&s.ev.text) },
 		"signature":    func(s *messagesToChat) error { return s.read(&s.ev.sign) },
 		"partial_json": func(s *messagesToChat) error { return s.read(&s.ev.partial) },
+		"citation":     func(s *messagesToChat) error { return walk(&s.walk, s, messagesChatCitation) },
 		"stop_reason":  (*messagesToChat).stopReason,
 	}
 )
@@ -181,7 +188,7 @@ func (s *messagesToChat) blockStart() error {
 		return fmt.Errorf("block %d started before block %d stopped", s.ev.index, s.open)
 	}
 	s.open, s.kind, s.deltas, s.stash = s.ev.index, s.ev.block, false, s.stash[:0]
-	switch s.kind {
+	switch s.kind { //nolint:exhaustive // a citation is a delta, not a block that starts
 	case textBlock:
 		s.leading = false
 		return s.addText(&s.draft.content, nonEmpty(s.ev.text))
@@ -206,6 +213,25 @@ func (s *messagesToChat) blockStart() error {
 	return fmt.Errorf("block %d of a type a converted request does not ask for", s.ev.index)
 }
 
+// citation writes a citation delta's url_citation as the Chat annotation of the same name. A citation without a URL
+// (a character or page location) has no Chat counterpart and is left out.
+func (s *messagesToChat) citation() error {
+	if len(s.ev.url) == 0 {
+		return nil
+	}
+	b := make([]byte, 0, len(s.ev.url)+len(s.ev.title)+48)
+	b = append(b, `{"type":"url_citation","url_citation":{"url":`...)
+	b = append(b, s.ev.url...)
+	b = append(b, `,"title":`...)
+	if len(s.ev.title) == 0 {
+		b = append(b, `null`...)
+	} else {
+		b = append(b, s.ev.title...)
+	}
+	b = append(b, `}}`...)
+	return s.addCitation(b)
+}
+
 // toolStart starts a tool call, which needs the id and the name it is written with.
 func (s *messagesToChat) toolStart() error {
 	if nonEmpty(s.ev.id) == nil || nonEmpty(s.ev.name) == nil {
@@ -222,6 +248,7 @@ func (s *messagesToChat) toolStart() error {
 		[]byte(`,"type":"function","function":{"name":`), s.ev.name, []byte(`,"arguments":""}}`))
 }
 
+//nolint:cyclop // one delta kind per block kind is the grammar
 func (s *messagesToChat) blockDelta() error {
 	if s.open < 0 || s.ev.index != s.open {
 		return fmt.Errorf("a delta for block %d, which is not open", s.ev.index)
@@ -236,6 +263,8 @@ func (s *messagesToChat) blockDelta() error {
 	case s.ev.delta == inputDelta && s.kind == toolBlock:
 		s.deltas = true
 		return s.arguments(nonEmpty(s.ev.partial))
+	case s.ev.delta == citationDelta && s.kind == textBlock:
+		return s.citation()
 	}
 	return fmt.Errorf("block %d gets a delta of a type it does not take", s.open)
 }

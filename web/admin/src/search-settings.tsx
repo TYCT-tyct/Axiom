@@ -9,140 +9,264 @@ import { Facts, State } from "./parts";
 import { searchSettingsQuery } from "./queries";
 import { SettingsPage } from "./settings-page";
 
-type Settings = AdminSchemas["SearchSettingsUpdate"]["settings"];
+type Engine = AdminSchemas["SearchEngineInput"];
+type Settings = AdminSchemas["SearchSettings"];
 
-const optional = (text: string) => (text === "" ? undefined : text);
+const optional = (text: string): string | undefined => (text.trim() === "" ? undefined : text.trim());
 
-function readSearch(values: Record<string, string>, keyWithoutURL: string): Settings | Problem {
-  const url = (values.url ?? "").trim();
-  const key = (values.key ?? "").trim();
-  if (url === "" && key !== "") {
-    return { problem: keyWithoutURL };
-  }
-  return { url: optional(url), key: optional(key) };
+// readEngines turns the indexed fields into the list the API takes. A row whose name is empty is a row the person did
+// not fill in, not an engine without a name; the server checks the rest.
+function readEngines(values: Record<string, string>): Engine[] | Problem {
+	const engines: Engine[] = [];
+	for (let i = 0; values[`name.${i}`] !== undefined; i++) {
+		const name = (values[`name.${i}`] ?? "").trim();
+		if (name === "") {
+			continue;
+		}
+		engines.push({
+			id: optional(values[`id.${i}`] ?? ""),
+			name,
+			kind: (values[`kind.${i}`] ?? "searxng") as Engine["kind"],
+			url: optional(values[`url.${i}`] ?? ""),
+			key: optional(values[`key.${i}`] ?? ""),
+			enabled: values[`enabled.${i}`] === "on",
+			default: values[`default.${i}`] === "on",
+			cost_per_search: (values[`cost.${i}`] ?? "0").trim(),
+			cost_per_extra_result: (values[`result.${i}`] ?? "0").trim(),
+			markup: (values[`markup.${i}`] ?? "0").trim(),
+		});
+	}
+	return engines;
 }
 
 export function SearchSettings() {
-  const query = useQuery(searchSettingsQuery);
-  const { t } = useTranslation();
-  return (
-    <SettingsPage
-      query={query}
-      labels={{
-        title: t("settings.search.title"),
-        unavailableLabel: t("settings.search.unavailableLabel"),
-        unavailable: t("settings.search.unavailable"),
-        edit: t("settings.search.edit"),
-        test: t("settings.search.test"),
-      }}
-      facts={SearchFacts}
-      dialogs={{ edit: SearchEditDialog, test: SearchTestDialog }}
-    />
-  );
+	const query = useQuery(searchSettingsQuery);
+	const { t } = useTranslation();
+	return (
+		<SettingsPage
+			query={query}
+			labels={{
+				title: t("settings.search.title"),
+				unavailableLabel: t("settings.search.unavailableLabel"),
+				unavailable: t("settings.search.unavailable"),
+				edit: t("settings.search.edit"),
+				test: t("settings.search.test"),
+			}}
+			facts={SearchFacts}
+			dialogs={{ edit: SearchEditDialog, test: SearchTestDialog }}
+		/>
+	);
 }
 
-function SearchFacts({ view, action }: { view: AdminSchemas["SearchSettings"]; action: ReactNode }) {
-  const { t } = useTranslation();
-  const configured = Boolean(view.url);
-  const source = view.source === "database" ? "database" : "environment";
-  const rows: [string, ReactNode][] = [
-    [
-      t("settings.search.state"),
-      <State key="state" tone={configured ? "good" : "neutral"}>
-        {t(configured ? "settings.search.on" : "settings.search.off")}
-      </State>,
-    ],
-    [t("settings.search.url"), view.url || "—"],
-    [t("settings.search.key"), t(view.has_key ? "settings.search.keySet" : "settings.search.keyMissing")],
-    [t("settings.search.source"), t(`settings.search.sources.${source}`)],
-  ];
-  if (view.restart_required) {
-    rows.push([t("settings.search.restart"), t("settings.search.restartBody")]);
-  }
-  return <Facts title={t("settings.search.title")} rows={rows} action={action} />;
+function SearchFacts({ view, action }: { view: Settings; action: ReactNode }) {
+	const { t } = useTranslation();
+	const source = view.source === "database" ? "database" : view.source;
+	const rows: [string, ReactNode][] = [
+		[
+			t("settings.search.state"),
+			<State key="state" tone={view.engines.length > 0 ? "good" : "neutral"}>
+				{t(view.engines.length > 0 ? "settings.search.on" : "settings.search.off")}
+			</State>,
+		],
+		[t("settings.search.source"), t(`settings.search.sources.${source}`)],
+	];
+	for (const engine of view.engines) {
+		rows.push([
+			`${engine.name} · ${engine.kind}`,
+			<span key={engine.id}>
+				{engine.enabled ? t("settings.search.enabled") : t("settings.search.disabled")}
+				{engine.default ? ` · ${t("settings.search.default")}` : ""} ·{" "}
+				{t("settings.search.price", {
+					search: engine.price_per_search,
+					result: engine.price_per_extra_result,
+				})}
+			</span>,
+		]);
+	}
+	if (view.engines.length === 0) {
+		rows.push([t("settings.search.engines"), t("settings.search.none")]);
+	}
+	if (view.restart_required) {
+		rows.push([t("settings.search.restart"), t("settings.search.restartBody")]);
+	}
+	return <Facts title={t("settings.search.title")} rows={rows} action={action} />;
 }
 
-function SearchEditDialog({ view, onClose }: { view: AdminSchemas["SearchSettings"]; onClose: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <ChangeDialog
-      operation="search-settings"
-      title={t("settings.search.edit")}
-      intro={<p>{t("settings.search.intro")}</p>}
-      action={t("settings.search.save")}
-      fields={(error) => <SearchFields view={view} error={error} />}
-      read={(values) => readSearch(values, t("settings.search.keyWithoutURL"))}
-      send={(settings, { reason, key }) =>
-        unwrapChange(
-          adminApi.PUT("/api/admin/v1/settings/search", {
-            params: { header: { "Idempotency-Key": key } },
-            body: { settings, reason },
-          }),
-        )
-      }
-      done={(saved) => <SearchSaved saved={saved} />}
-      onClose={onClose}
-    />
-  );
+function SearchEditDialog({ view, onClose }: { view: Settings; onClose: () => void }) {
+	const { t } = useTranslation();
+	// One empty row after the saved ones, for a new engine.
+	const rows = [...view.engines, undefined];
+	return (
+		<ChangeDialog
+			operation="search-settings"
+			title={t("settings.search.edit")}
+			intro={<p>{t("settings.search.intro")}</p>}
+			action={t("settings.search.save")}
+			fields={(error) => <SearchFields rows={rows} error={error} />}
+			read={(values) => readEngines(values)}
+			send={(engines, { reason, key }) =>
+				unwrapChange(
+					adminApi.PUT("/api/admin/v1/settings/search", {
+						params: { header: { "Idempotency-Key": key } },
+						body: { engines, reason },
+					}),
+				)
+			}
+			done={(saved) => <SearchSaved saved={saved} />}
+			onClose={onClose}
+		/>
+	);
 }
 
-function SearchFields({ view, error }: { view: AdminSchemas["SearchSettings"]; error: unknown }) {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  return (
-    <>
-      <TextField
-        label={t("settings.search.url")}
-        hint={t("settings.search.urlHint")}
-        name="url"
-        inputMode="url"
-        autoComplete="off"
-        defaultValue={view.url ?? ""}
-        error={errors.field(error, "settings/url")}
-      />
-      <TextField
-        label={t("settings.search.key")}
-        hint={t("settings.search.keyHint")}
-        name="key"
-        type="password"
-        autoComplete="new-password"
-        error={errors.field(error, "settings")}
-      />
-    </>
-  );
+function SearchFields({ rows, error }: { rows: (Settings["engines"][number] | undefined)[]; error: unknown }) {
+	const { t } = useTranslation();
+	const errors = useErrors();
+	return (
+		<div className="flex flex-col gap-6">
+			{rows.map((engine, i) => (
+				<fieldset key={engine?.id ?? `new-${i}`} className="flex flex-col gap-3 border-t pt-4">
+					<legend className="text-sm font-medium">
+						{engine?.name || t("settings.search.newEngine")}
+					</legend>
+					{engine ? <input type="hidden" name={`id.${i}`} value={engine.id} /> : null}
+					<div className="grid grid-cols-2 gap-3">
+						<TextField
+							label={t("settings.search.name")}
+							hint={t("settings.search.nameHint")}
+							name={`name.${i}`}
+							autoComplete="off"
+							defaultValue={engine?.name ?? ""}
+							error={errors.field(error, "settings/engines")}
+						/>
+						<label className="flex flex-col gap-1 text-sm">
+							<span>{t("settings.search.kind")}</span>
+							<select name={`kind.${i}`} defaultValue={engine?.kind ?? "searxng"} className="rounded border p-2">
+								<option value="searxng">SearXNG</option>
+								<option value="firecrawl">Firecrawl</option>
+							</select>
+						</label>
+					</div>
+					<TextField
+						label={t("settings.search.url")}
+						hint={t("settings.search.urlHint")}
+						name={`url.${i}`}
+						inputMode="url"
+						autoComplete="off"
+						defaultValue={engine?.url ?? ""}
+						error={errors.field(error, "settings/engines/url")}
+					/>
+					<TextField
+						label={t("settings.search.key")}
+						hint={t("settings.search.keyHint")}
+						name={`key.${i}`}
+						type="password"
+						autoComplete="new-password"
+						error={errors.field(error, "settings")}
+					/>
+					<div className="grid grid-cols-3 gap-3">
+						<TextField
+							label={t("settings.search.cost")}
+							name={`cost.${i}`}
+							inputMode="decimal"
+							defaultValue={engine?.cost_per_search ?? "0"}
+						/>
+						<TextField
+							label={t("settings.search.resultCost")}
+							name={`result.${i}`}
+							inputMode="decimal"
+							defaultValue={engine?.cost_per_extra_result ?? "0"}
+						/>
+						<TextField
+							label={t("settings.search.markup")}
+							hint={t("settings.search.markupHint")}
+							name={`markup.${i}`}
+							inputMode="decimal"
+							defaultValue={engine?.markup ?? "0"}
+						/>
+					</div>
+					<div className="flex gap-6 text-sm">
+						<label className="flex items-center gap-2">
+							<input type="checkbox" name={`enabled.${i}`} defaultChecked={engine?.enabled ?? true} />
+							{t("settings.search.enabled")}
+						</label>
+						<label className="flex items-center gap-2">
+							<input type="checkbox" name={`default.${i}`} defaultChecked={engine?.default ?? false} />
+							{t("settings.search.default")}
+						</label>
+					</div>
+					{engine ? (
+						<p className="text-xs opacity-70">
+							{t("settings.search.published", {
+								search: engine.price_per_search,
+								result: engine.price_per_extra_result,
+							})}
+						</p>
+					) : null}
+				</fieldset>
+			))}
+		</div>
+	);
 }
 
-function SearchSaved({ saved }: { saved: AdminSchemas["SearchSettings"] }) {
-  const { t } = useTranslation();
-  return (
-    <>
-      <p>{t("settings.search.saved")}</p>
-      {saved.restart_required === true ? <p>{t("settings.search.restartSaved")}</p> : null}
-    </>
-  );
+function SearchSaved({ saved }: { saved: Settings }) {
+	const { t } = useTranslation();
+	return (
+		<>
+			<p>{t("settings.search.saved")}</p>
+			{saved.restart_required === true ? <p>{t("settings.search.restartSaved")}</p> : null}
+		</>
+	);
 }
 
-function SearchTestDialog({ onClose }: { onClose: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <ChangeDialog
-      operation="search-settings-test"
-      title={t("settings.search.testTitle")}
-      intro={<p>{t("settings.search.testIntro")}</p>}
-      action={t("settings.search.send")}
-      verdict
-      fields={() => null}
-      read={() => ({})}
-      send={(_, { reason, key }) =>
-        unwrapChange(
-          adminApi.POST("/api/admin/v1/settings/search/tests", {
-            params: { header: { "Idempotency-Key": key } },
-            body: { reason },
-          }),
-        )
-      }
-      done={(result) => <p>{t(`settings.search.status.${result.status ?? "failed"}`)}</p>}
-      onClose={onClose}
-    />
-  );
+function SearchTestDialog({ view, onClose }: { view: Settings; onClose: () => void }) {
+	const { t } = useTranslation();
+	const engine = view.engines.find((e) => e.default) ?? view.engines[0];
+	if (!engine) {
+		return (
+			<ChangeDialog
+				operation="search-settings-test"
+				title={t("settings.search.testTitle")}
+				intro={<p>{t("settings.search.testNone")}</p>}
+				action={t("settings.search.send")}
+				verdict
+				fields={() => null}
+				read={() => ({})}
+				send={async () => ({ data: { status: "disabled" as const }, replayed: false })}
+				done={(result) => <p>{t(`settings.search.status.${result.status ?? "failed"}`)}</p>}
+				onClose={onClose}
+			/>
+		);
+	}
+	const input: Engine = {
+		id: engine.id,
+		name: engine.name,
+		kind: engine.kind,
+		url: engine.url,
+		enabled: engine.enabled,
+		default: engine.default,
+		cost_per_search: engine.cost_per_search,
+		cost_per_extra_result: engine.cost_per_extra_result,
+		markup: engine.markup,
+	};
+	return (
+		<ChangeDialog
+			operation="search-settings-test"
+			title={t("settings.search.testTitle")}
+			intro={<p>{t("settings.search.testIntro", { name: engine.name })}</p>}
+			action={t("settings.search.send")}
+			verdict
+			fields={() => null}
+			read={() => ({})}
+			send={(_, { reason, key }) =>
+				unwrapChange(
+					adminApi.POST("/api/admin/v1/settings/search/tests", {
+						params: { header: { "Idempotency-Key": key } },
+						body: { engine: input, reason },
+					}),
+				)
+			}
+			done={(result) => <p>{t(`settings.search.status.${result.status ?? "failed"}`)}</p>}
+			onClose={onClose}
+		/>
+	);
 }

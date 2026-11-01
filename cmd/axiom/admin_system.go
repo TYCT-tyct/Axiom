@@ -16,8 +16,11 @@ import (
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 	"axiom/internal/platform/typeid"
 	"axiom/internal/websearch"
+
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 func (a adminAPI) GetSystemSettings(ctx context.Context, r adminapi.GetSystemSettingsRequestObject) (adminapi.GetSystemSettingsResponseObject, error) {
@@ -221,55 +224,91 @@ func (a adminAPI) SetMailSettings(ctx context.Context, r adminapi.SetMailSetting
 	return adminapi.SetMailSettings200JSONResponse{Body: body, Headers: adminapi.SetMailSettings200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
-func searchSettingsBody(cfg websearch.Config, source string, restart *bool) (adminapi.SearchSettings, error) {
-	return adminJSON[adminapi.SearchSettings](map[string]any{"url": cfg.URL, "has_key": cfg.Key.Reveal() != "", "source": source, "restart_required": restart})
+// engineBody is one engine as the admin reads it: the prices are the published ones, and the key is only a flag.
+func engineBody(e websearch.Engine) adminapi.SearchEngine {
+	return adminapi.SearchEngine{
+		Id: openapi_types.UUID(e.ID), Name: e.Name, Kind: adminapi.SearchEngineKind(e.Kind), Url: e.URL,
+		HasKey: e.Key.Reveal() != "", Enabled: e.Enabled, Default: e.Default,
+		CostPerSearch: e.CostSearch.String(), CostPerExtraResult: e.CostResult.String(), Markup: e.Markup,
+		PricePerSearch: e.PriceSearch.String(), PricePerExtraResult: e.PriceResult.String(), PriceVersion: e.PriceVersion,
+	}
+}
+
+func searchSettingsBody(l websearch.Loaded, restart *bool) adminapi.SearchSettings {
+	body := adminapi.SearchSettings{
+		Engines: make([]adminapi.SearchEngine, 0, len(l.Engines)),
+		Source:  adminapi.SearchSettingsSource(l.Source),
+	}
+	for _, e := range l.Engines {
+		body.Engines = append(body.Engines, engineBody(e))
+	}
+	if restart != nil {
+		body.RestartRequired = restart
+	}
+	return body
 }
 
 func (a adminAPI) GetSearchSettings(ctx context.Context, _ adminapi.GetSearchSettingsRequestObject) (adminapi.GetSearchSettingsResponseObject, error) {
-	cfg, found, err := a.savedSearch(ctx)
+	loaded, err := a.savedEngines(ctx)
 	if err != nil {
 		return nil, err
 	}
-	source := "environment"
-	if found {
-		source = "database"
-	}
-	body, err := searchSettingsBody(cfg, source, nil)
-	return adminapi.GetSearchSettings200JSONResponse(body), err
+	return adminapi.GetSearchSettings200JSONResponse(searchSettingsBody(loaded, nil)), nil
 }
 
-func (a adminAPI) savedSearch(ctx context.Context) (cfg websearch.Config, found bool, err error) {
-	cfg = a.search
+func (a adminAPI) savedEngines(ctx context.Context) (loaded websearch.Loaded, err error) {
 	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
-		var stored websearch.Config
-		stored, found, err = websearch.StoredConfig(ctx, tx, a.keys)
-		if found {
-			cfg = stored
-		}
-		return err
+		var e error
+		loaded, e = websearch.Load(ctx, tx, a.keys, a.search)
+		return e
 	})
-	return cfg, found, err
+	return loaded, err
+}
+
+// engineSettings is one input in the form the module validates, without its key.
+func engineSettings(e adminapi.SearchEngineInput) websearch.EngineSettings {
+	s := websearch.EngineSettings{
+		Name: strings.TrimSpace(e.Name), Kind: string(e.Kind), Enabled: e.Enabled, Default: e.Default,
+		CostSearch: strings.TrimSpace(e.CostPerSearch), CostResult: strings.TrimSpace(e.CostPerExtraResult),
+		Markup: strings.TrimSpace(e.Markup), Key: e.Key,
+	}
+	if e.Id != nil {
+		s.ID = e.Id.String()
+	}
+	if e.Url != nil {
+		s.URL = strings.TrimSpace(*e.Url)
+	}
+	return s
 }
 
 func (a adminAPI) SetSearchSettings(ctx context.Context, r adminapi.SetSearchSettingsRequestObject) (adminapi.SetSearchSettingsResponseObject, error) {
-	v := r.Body.Settings
-	s := websearch.Settings{URL: strings.TrimSpace(textValue(v.Url)), Key: v.Key}
-	// Credentials never enter the persisted, unkeyed idempotency fingerprint.
-	identity := []any{s.URL, r.Body.Reason, s.Key != nil}
+	in := websearch.Settings{Engines: make([]websearch.EngineSettings, len(r.Body.Engines))}
+	// The idempotency fingerprint keeps names and destinations, never a key.
+	identity := make([]any, 0, 2*len(r.Body.Engines)+1)
+	identity = append(identity, r.Body.Reason)
+	for i, e := range r.Body.Engines {
+		in.Engines[i] = engineSettings(e)
+		identity = append(identity, in.Engines[i].ID, in.Engines[i].Name, in.Engines[i].Kind, in.Engines[i].URL,
+			in.Engines[i].Enabled, in.Engines[i].Default, in.Engines[i].CostSearch, in.Engines[i].CostResult,
+			in.Engines[i].Markup, in.Engines[i].Key != nil)
+	}
 	body, replayed, err := idempotently(ctx, a.db, "setSearchSettings", r.Params.IdempotencyKey, identity, func(tx pg.Tx) (adminapi.SearchSettings, error) {
-		if s.URL != "" {
-			if err := a.checkSearchURL(ctx, s.URL); err != nil {
+		for _, e := range in.Engines {
+			if e.URL == "" {
+				continue
+			}
+			if err := a.checkSearchURL(ctx, e.URL); err != nil {
 				return adminapi.SearchSettings{}, err
 			}
 		}
-		cfg, err := websearch.SaveConfig(ctx, tx, a.keys, actor(ctx), s, a.search, r.Body.Reason)
+		loaded, err := websearch.Save(ctx, tx, a.keys, actor(ctx), in, a.search, r.Body.Reason)
 		if errors.Is(err, websearch.ErrInvalidConfig) {
-			return adminapi.SearchSettings{}, invalidField("/settings", "invalid search backend configuration; verify the URL and reenter the key after a URL change")
+			return adminapi.SearchSettings{}, invalidField("/settings/engines", "invalid search engine configuration; verify each name, kind, URL, cost, markup and key, and reenter the key after a URL or kind change")
 		}
 		if err != nil {
 			return adminapi.SearchSettings{}, err
 		}
-		return searchSettingsBody(cfg, "database", new(true))
+		return searchSettingsBody(loaded, new(true)), nil
 	})
 	if err != nil {
 		return nil, err
@@ -282,33 +321,67 @@ func (a adminAPI) SetSearchSettings(ctx context.Context, r adminapi.SetSearchSet
 func (a adminAPI) checkSearchURL(ctx context.Context, raw string) error {
 	cfg, err := websearch.Parse(raw, "")
 	if err != nil {
-		return invalidField("/settings/url", "the search backend must be an http(s) base URL with a host and no credentials, query or fragment")
+		return invalidField("/settings/engines/url", "the search backend must be an http(s) base URL with a host and no credentials, query or fragment")
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	host, err := url.Parse(cfg.URL)
 	if err != nil {
-		return invalidField("/settings/url", "the search backend must be an http(s) base URL with a host")
+		return invalidField("/settings/engines/url", "the search backend must be an http(s) base URL with a host")
 	}
 	if err := a.exit.Check(checkCtx, host.Hostname()); err != nil {
-		return invalidField("/settings/url", "the search backend could not be validated as public")
+		return invalidField("/settings/engines/url", "the search backend could not be validated as public")
 	}
 	return nil
+}
+
+// testEngine fills a key the admin omitted from the saved engine the input names, so a test uses the same credential
+// a call would.
+func (a adminAPI) testEngine(ctx context.Context, in adminapi.SearchEngineInput) (websearch.Engine, error) {
+	s := engineSettings(in)
+	loaded, err := a.savedEngines(ctx)
+	if err != nil {
+		return websearch.Engine{}, err
+	}
+	var saved *websearch.Engine
+	for i := range loaded.Engines {
+		e := &loaded.Engines[i]
+		if s.ID != "" && e.ID.String() == s.ID || s.ID == "" && e.Name == s.Name {
+			saved = e
+			break
+		}
+	}
+	key := ""
+	if s.Key != nil {
+		key = strings.TrimSpace(*s.Key)
+	} else if saved != nil {
+		key = saved.Key.Reveal()
+	}
+	kind, err := websearch.ParseKind(s.Kind)
+	if err != nil {
+		return websearch.Engine{}, invalidField("/settings/engines/kind", "kind must be searxng or firecrawl")
+	}
+	url := s.URL
+	if url == "" && kind == websearch.KindFirecrawl {
+		url = "https://api.firecrawl.dev/v2"
+	}
+	engine := websearch.Engine{Name: s.Name, Kind: kind, URL: url, Key: secret.New(key), Enabled: true}
+	return engine, nil
 }
 
 func (a adminAPI) TestSearchSettings(ctx context.Context, r adminapi.TestSearchSettingsRequestObject) (adminapi.TestSearchSettingsResponseObject, error) {
 	if err := a.tests.allow(uuid.UUID(callOf(ctx).principal.SessionID())); err != nil {
 		return nil, err
 	}
-	cfg, _, err := a.savedSearch(ctx)
-	if err != nil {
-		return nil, err
-	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 	defer cancel()
 	body, replayed, err := idempotently(ctx, a.db, "testSearchSettings", r.Params.IdempotencyKey, r.Body, func(tx pg.Tx) (adminapi.ConfigTestResult, error) {
-		result := websearch.TestConfig(ctx, cfg, a.exit, a.logger)
-		err := audit.Record(ctx, tx, audit.Event{Actor: actor(ctx), Action: "search_config.test", Reason: r.Body.Reason, Target: audit.Target{Module: "platform", Kind: "search_config", ID: uuid.Nil().String()}, Detail: map[string]any{"status": result}})
+		engine, err := a.testEngine(ctx, r.Body.Engine)
+		if err != nil {
+			return adminapi.ConfigTestResult{}, err
+		}
+		result := websearch.TestEngine(ctx, engine, a.exit, a.logger)
+		err = audit.Record(ctx, tx, audit.Event{Actor: actor(ctx), Action: "search_engines.test", Reason: r.Body.Reason, Target: audit.Target{Module: "platform", Kind: "search_engines", ID: uuid.Nil().String()}, Detail: map[string]any{"status": result, "engine": engine.Name}})
 		body, e := adminJSON[adminapi.ConfigTestResult](map[string]string{"status": result})
 		if err != nil {
 			return body, err

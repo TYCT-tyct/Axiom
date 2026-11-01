@@ -304,13 +304,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Saved web search backend override; the key is never returned. Environment remains authoritative when absent.
-         * @description Saved web search backend override; the key is never returned. Environment remains authoritative when absent.
+         * The configured search engines, their published prices and where the list came from. Keys are never returned.
+         * @description The configured search engines, their published prices and where the list came from. Keys are never returned.
          */
         get: operations["getSearchSettings"];
         /**
-         * Save an encrypted web search backend override. Restart nodes to apply. An omitted key retains the saved key; a URL change requires reentry.
-         * @description Save an encrypted web search backend override. Restart nodes to apply. An omitted key retains the saved key; a URL change requires reentry.
+         * Replace the search engine list. Restart nodes to apply. An omitted key retains the saved key; a URL or kind change requires reentry.
+         * @description Replace the search engine list. Restart nodes to apply. An omitted key retains the saved key; a URL or kind change requires reentry.
          */
         put: operations["setSearchSettings"];
         post?: never;
@@ -330,8 +330,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Run one fixed search using the saved backend. Accepted means the backend answered with usable results. Ten tests per session per minute.
-         * @description Run one fixed search using the saved backend. Accepted means the backend answered with usable results. Ten tests per session per minute.
+         * Run one fixed search using the engine as it is given, or the saved key when it is omitted. Accepted means the backend answered with usable results. Ten tests per session per minute.
+         * @description Run one fixed search using the engine as it is given, or the saved key when it is omitted. Accepted means the backend answered with usable results. Ten tests per session per minute.
          */
         post: operations["testSearchSettings"];
         delete?: never;
@@ -2114,20 +2114,65 @@ export interface components {
             /** @enum {string} */
             status?: "accepted" | "rejected" | "failed" | "disabled" | "unsupported";
         };
-        SearchSettings: {
+        /** @description One configured search backend. Costs, markup and the published prices are exact decimal text, per search and per extra result; the key itself is never returned. */
+        SearchEngine: {
+            /** Format: uuid */
+            id: string;
+            /** @description The name a request's web plugin names as its engine; "native" is reserved for the provider's own search. */
+            name: string;
+            /** @enum {string} */
+            kind: "searxng" | "firecrawl";
+            url: string;
+            has_key: boolean;
+            enabled: boolean;
+            /** @description The backend a request that names none falls back to when the model has no native search. */
+            default: boolean;
+            cost_per_search: string;
+            cost_per_extra_result: string;
+            /** @description The cost-plus ratio the published price is derived at, like a model price's markup_ratio. */
+            markup: string;
+            /** @description The published sale price of one search; zero means the model's web_search price applies. */
+            price_per_search: string;
+            price_per_extra_result: string;
+            /**
+             * Format: int64
+             * @description Increments when a save changes the cost, markup or published price; a call locks it with its reservation.
+             */
+            price_version: number;
+        };
+        SearchEngineInput: {
+            /**
+             * Format: uuid
+             * @description The engine being edited; absent creates one.
+             */
+            id?: string;
+            name: string;
+            /** @enum {string} */
+            kind: "searxng" | "firecrawl";
             url?: string;
-            has_key?: boolean;
+            /** @description Omitted keeps the saved key while the URL and kind are unchanged; a new destination needs it again. Never returned. */
+            key?: string;
+            enabled: boolean;
+            default: boolean;
+            cost_per_search: string;
+            cost_per_extra_result: string;
+            markup: string;
+        };
+        SearchSettings: {
+            engines: components["schemas"]["SearchEngine"][];
+            /**
+             * @description Where the list came from. "saved" is the old single-backend row and "environment" is AXIOM_SEARCH_URL; both apply until an engine list is saved.
+             * @enum {string}
+             */
+            source: "database" | "saved" | "environment" | "none";
             restart_required?: boolean;
-            source?: string;
         };
         SearchSettingsUpdate: {
-            settings: {
-                url?: string;
-                key?: string;
-            };
+            engines: components["schemas"]["SearchEngineInput"][];
             reason: components["schemas"]["Reason"];
         };
         SearchConfigTest: {
+            engine: components["schemas"]["SearchEngineInput"];
             reason: components["schemas"]["Reason"];
         };
         MailConfigTest: {

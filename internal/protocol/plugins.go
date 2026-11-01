@@ -80,6 +80,8 @@ func (s *scanner) plugin() error {
 }
 
 // webOption reads one of the web plugin's options. It is apart from plugin so only a web plugin is read into WebPlugin.
+//
+//nolint:cyclop // one option per plugin member; splitting hides the allowed set
 func (s *scanner) webOption(web *WebPlugin, name string) error {
 	switch name {
 	case "max_results":
@@ -96,13 +98,28 @@ func (s *scanner) webOption(web *WebPlugin, name string) error {
 		return s.domains(&web.IncludeDomains)
 	case "exclude_domains":
 		return s.domains(&web.ExcludeDomains)
-	case "engine", "mode":
-		// A value here would pick among OpenRouter's engines; this deployment has one configured backend, so the
-		// option is refused rather than silently ignored.
+	case "engine":
+		// "native" is the model provider's own search; any other value names a backend this deployment configures.
+		// An unknown name is refused when the request is routed, where the enabled backends are known.
+		v, err := s.str()
+		if err == nil {
+			switch {
+			case string(v) == "native":
+				web.Engine = "native"
+			case !ValidEngineName(string(v)):
+				return fmt.Errorf("plugin option %q is not a search engine name", name)
+			default:
+				web.Engine = string(v)
+			}
+		}
+		return err
+	case "mode":
+		// A mode selects a variant of an engine OpenRouter runs; a backend here has no modes, so the option is
+		// refused rather than silently ignored.
 		if err := s.skip(); err != nil {
 			return err
 		}
-		return fmt.Errorf("plugin option %q is not supported: this deployment searches through its configured backend", name)
+		return fmt.Errorf("plugin option %q is not supported: a configured search backend has no modes", name)
 	default:
 		return fmt.Errorf("plugin option %.64q is not supported", s.name)
 	}

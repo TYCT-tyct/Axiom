@@ -8,6 +8,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/gateway"
 	"axiom/internal/platform/consoleapi"
+	"axiom/internal/websearch"
 )
 
 // modelProjection is the public model list the node last built: *gateway.ModelList in a node, a fake in a test.
@@ -52,7 +53,7 @@ func (c consoleAPI) publicModels(params consoleapi.ListPublicModelsParams, audie
 		if params.Ability != nil && !slices.Contains(m.Abilities, string(*params.Ability)) {
 			continue
 		}
-		list.Data = append(list.Data, publicModelBody(m))
+		list.Data = append(list.Data, publicModelBody(m, c.search))
 	}
 	return list
 }
@@ -62,7 +63,7 @@ func modelMatches(q string, m gateway.PublicModel) bool {
 	return q == "" || strings.Contains(strings.ToLower(m.ID), q) || strings.Contains(strings.ToLower(m.Name), q)
 }
 
-func publicModelBody(m gateway.PublicModel) consoleapi.PublicModel {
+func publicModelBody(m gateway.PublicModel, engines []websearch.Engine) consoleapi.PublicModel {
 	abilities := make([]consoleapi.ModelAbility, len(m.Abilities))
 	for i, ability := range m.Abilities {
 		abilities[i] = consoleapi.ModelAbility(ability)
@@ -85,14 +86,25 @@ func publicModelBody(m gateway.PublicModel) consoleapi.PublicModel {
 		}
 		rates[i] = body
 	}
+	pricing := consoleapi.ModelPricing{
+		Currency: m.Pricing.Currency.String(),
+		Basis:    basis,
+		Rates:    rates,
+	}
+	if len(engines) > 0 {
+		prices := make([]consoleapi.ModelSearchEnginePrice, 0, len(engines))
+		for _, e := range engines {
+			prices = append(prices, consoleapi.ModelSearchEnginePrice{
+				Name: e.Name, PricePerSearch: e.PriceSearch.String(),
+				PricePerExtraResult: e.PriceResult.String(), Default: e.Default,
+			})
+		}
+		pricing.SearchEngines = &prices
+	}
 	return consoleapi.PublicModel{
 		Id: m.ID, Name: m.Name, Author: m.Author,
 		ContextLength: m.ContextLength, MaxOutput: m.MaxOutput, Streams: m.Streams,
 		Abilities: abilities,
-		Pricing: consoleapi.ModelPricing{
-			Currency: m.Pricing.Currency.String(),
-			Basis:    basis,
-			Rates:    rates,
-		},
+		Pricing:   pricing,
 	}
 }

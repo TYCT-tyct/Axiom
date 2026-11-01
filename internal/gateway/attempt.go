@@ -173,7 +173,7 @@ func (s *session) skipUnsupported(entry routing.Entry, unsupported *protocol.Not
 // name, the identifiers, the routing parameters) and nothing else (protocol's Target.Compact).
 func (s *session) prepare(entry routing.Entry) (up protocol.Upstream, held int64, err error) {
 	account := uuid.UUID(s.c.caller.AccountID())
-	w := protocol.Rewrites{Identity: s.x.identity(account), Device: s.x.deviceID(account)}
+	w := protocol.Rewrites{Identity: s.x.identity(account), Device: s.x.deviceID(account), NativeSearch: s.c.nativeSearch}
 	target := entry.Target
 	target.Compact = s.c.Compact
 	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, target, w)

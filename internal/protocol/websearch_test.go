@@ -33,7 +33,7 @@ func TestInspectRefusesBadWebPlugins(t *testing.T) {
 		{"too many results", `{"id":"web","max_results":11}`},
 		{"wildcard", `{"id":"web","include_domains":["*.example.com"]}`},
 		{"a path", `{"id":"web","exclude_domains":["example.com/path"]}`},
-		{"an unknown option", `{"id":"web","engine":"exa"}`},
+		{"a bad engine name", `{"id":"web","engine":"Native"}`},
 		{"a bad prompt", `{"id":"web","search_prompt":"` + strings.Repeat("x", 513) + `"}`},
 	} {
 		t.Run(bad.name, func(t *testing.T) {

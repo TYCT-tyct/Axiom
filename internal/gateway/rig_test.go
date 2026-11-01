@@ -112,6 +112,7 @@ type rigOptions struct {
 	conns     int                // the most connections the database pool opens; the driver's own limit when zero
 	body      time.Duration      // how long Public gives a request to send its body; a minute when zero
 	search    websearch.Searcher // the web plugin's backend, nil when the node has none
+	backends  SearchBackends     // the whole engine set, when a test needs names and prices; search is used otherwise
 	price     string             // the model's sale schedule, the cheap one when empty
 	suppliers bool               // the suppliers tables too, for a real suppliers service to price attempts
 	lifetime  time.Duration      // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
@@ -186,7 +187,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if r.handler, err = NewHandler(Deps{
 		Accounts: r.accounts, Catalog: r.catalog, Router: r.router, Billing: r.billing, Limits: r.limits, Memory: r.memory,
 		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Models: r.models, Proxies: o.proxies, KV: o.cache,
-		Outstanding: NewOutstanding(), Search: o.search,
+		Outstanding: NewOutstanding(), Search: cmpOr(o.backends, SearchBackends(singleSearch{o.search})),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -443,3 +444,19 @@ func (noSuppliers) EndRequest(context.Context, pg.Tx, uuid.UUID, uuid.UUID, uuid
 }
 
 func (noSuppliers) EndRequests(context.Context, pg.Tx, []suppliers.EndedRequest) error { return nil }
+
+// singleSearch is one test searcher as the engine set a handler reads, under the name "test".
+type singleSearch struct{ websearch.Searcher }
+
+func (s singleSearch) Find(name string) (*websearch.Backend, bool) {
+	if s.Searcher == nil || name != "test" {
+		return nil, false
+	}
+	return &websearch.Backend{Name: "test", Searcher: s.Searcher}, true
+}
+
+func (s singleSearch) Default() (*websearch.Backend, bool) { return s.Find("test") }
+
+func (singleSearch) List() []websearch.Engine { return nil }
+
+func (s singleSearch) Configured() bool { return s.Searcher != nil }
