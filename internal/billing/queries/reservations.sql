@@ -49,16 +49,19 @@ FROM d;
 -- node was lost.
 -- Let the insert columns type the UUID parameters, so sqlc retains their typed array codec overrides.
 -- name: InsertReservationAt :exec
+-- A plan-funded reservation freezes its subscription window instead of the wallet's reserved counter: the window's own
+-- update follows in the same pipeline (AddWindowReserved), under the same balance row lock.
 WITH reservation AS (
     INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
         workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates,
-        price_versions, created_at)
+        price_versions, created_at, funding, subscription_id, window_seq)
     VALUES (@request_id, @site_id, @account_id, @workspace_id, @key_id, @holder_id,
         @workspace_window, @key_window, 1, @amount, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, @lifetime_seconds::float8),
         @prices::text[], @fallbacks::text[], @models, @endpoints, @exchange_rates::jsonb, @price_versions,
-        to_timestamp(sqlc.arg(created_at_us)::bigint / 1000000.0))
+        to_timestamp(sqlc.arg(created_at_us)::bigint / 1000000.0), @funding, @subscription_id, @window_seq)
 ), balance AS (
-    UPDATE billing.balances b SET reserved = b.reserved + @amount WHERE b.account_id = @account_id
+    UPDATE billing.balances b SET reserved = b.reserved + CASE WHEN @funding::text = 'plan' THEN 0 ELSE @amount END
+    WHERE b.account_id = @account_id
 )
 INSERT INTO billing.spend AS s (subject, window_start, site_id, account_id, reserved)
 VALUES (@workspace_id, @workspace_window, @site_id, @account_id, @amount),
@@ -66,7 +69,8 @@ VALUES (@workspace_id, @workspace_window, @site_id, @account_id, @amount),
 ON CONFLICT (subject, window_start) DO UPDATE SET reserved = s.reserved + excluded.reserved;
 
 -- name: GetReservation :one
-SELECT segment, amount, state, workspace_window, key_window FROM billing.reservations WHERE request_id = @request_id;
+SELECT segment, amount, state, workspace_window, key_window, funding, subscription_id, window_seq
+FROM billing.reservations WHERE request_id = @request_id;
 
 -- Compare and write on the segment read under the lock.
 -- name: ExtendReservation :execrows
@@ -76,12 +80,13 @@ WHERE request_id = @request_id AND segment = @previous_segment AND state = 'pend
 -- name: ReleaseReservation :execrows
 UPDATE billing.reservations SET state = 'released' WHERE request_id = @request_id AND state = 'pending';
 
--- Moves the three counters of a reservation by delta, negative to release.
+-- Moves the counters of a reservation by delta, negative to release. A plan-funded hold leaves the balance's reserved
+-- alone (the window carries it) but still counts against the workspace and key limits.
 -- name: AddReserved :exec
 WITH balance AS (
-    UPDATE billing.balances b SET reserved = b.reserved + @delta WHERE b.account_id = @account_id
+    UPDATE billing.balances b SET reserved = b.reserved + @balance_delta WHERE b.account_id = @account_id
 )
-UPDATE billing.spend s SET reserved = s.reserved + @delta
+UPDATE billing.spend s SET reserved = s.reserved + @spend_delta
 WHERE s.subject = @workspace_id AND s.window_start = @workspace_window
     OR s.subject = @key_id AND s.window_start = @key_window;
 

@@ -32,6 +32,7 @@ func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 		"billing.expire_credit":           QueueMoney,
 		"billing.publish_prices":          QueueMoney,
 		"billing.reconcile":               QueueMoney,
+		"billing.subscription_windows":    QueueMoney,
 		"catalog.pages":                   QueueSyncs,
 		"catalog.sync":                    QueueSyncs,
 		"mail.send":                       QueueNotifications,

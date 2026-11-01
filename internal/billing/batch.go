@@ -2,7 +2,6 @@ package billing
 
 import (
 	"context"
-	"fmt"
 	"uuid"
 
 	"axiom/internal/platform/pg"
@@ -10,44 +9,15 @@ import (
 
 // A reservation is read in a new statement after locking its balance, including on cleanup's path.
 func settlementRows(ctx context.Context, tx pg.Tx, id, account uuid.UUID) (balance LockBalanceRow, r LockReservationRow, err error) {
-	err = tx.Batch(ctx, []pg.Statement{
-		{SQL: lockBalance, Args: []any{account}},
-		{SQL: lockReservation, Args: []any{id}},
-	}, func(batch pg.BatchResults) error {
-		if err = balanceErr(batch.QueryRow().Scan(&balance.Balance, &balance.Floor, &balance.Reserved, &balance.Frozen)); err != nil {
-			return err
-		}
-		err = batch.QueryRow().Scan(
-			&r.SiteID,
-			&r.AccountID,
-			&r.WorkspaceID,
-			&r.KeyID,
-			&r.WorkspaceWindow,
-			&r.KeyWindow,
-			&r.Amount,
-			&r.State,
-			&r.Prices,
-			&r.PriceVersions,
-			&r.ChargedSeq,
-			&r.Entry,
-			&r.Charged,
-			&r.Price,
-			&r.Waived,
-			&r.Estimated,
-			&r.FinalUsage,
-			&r.Fallbacks,
-			&r.Models,
-			&r.AttemptEntries,
-			&r.Endpoints,
-			&r.Profit,
-			&r.PricingTiers,
-		)
-		if err != nil {
-			err = fmt.Errorf("billing: read the reservation: %w", err)
-		}
-		return err
-	})
-	return balance, r, err
+	balance, err = queries.LockBalance(ctx, tx, account)
+	if err != nil {
+		return balance, r, balanceErr(err)
+	}
+	r, err = queries.LockReservation(ctx, tx, id)
+	if err != nil {
+		return balance, r, err
+	}
+	return balance, r, nil
 }
 
 // SettleIn settles h in tx, a transaction of the account's scope that may hold other settlements (internal/gateway's

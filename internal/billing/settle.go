@@ -234,256 +234,6 @@ func attemptEntries(attempts []AttemptResult) []int32 {
 
 // priced is what 免单规则 charges: the price, whether it rests on usage the upstream did not report or only a fallback
 // price covers, and whether only the per-use items were charged.
-type priced struct {
-	price             int64
-	serverTool        platform.Exact
-	cacheDiscount     platform.Exact
-	hasServerTool     bool
-	estimated, waived bool
-	tiers             int16
-}
-
-// price applies 免单规则 to the outcome at the locked price of the last attempt's entry. A waivable call is waived, with
-// no limit on how many an account may have: the rules are what decides, and nothing else.
-func (c *locked) price(last AttemptResult) (priced, error) {
-	if last.Result == NotExecuted {
-		return priced{tiers: -1}, nil
-	}
-	s, f, err := c.pricing(last.Entry)
-	if err != nil {
-		return priced{}, err
-	}
-	waived := waivable(last)
-	p, err := priceSegments(s, f, last.Segments, waived, c.quotes[last.Entry].tiers)
-	p.waived = waived
-	p.tiers = int16(c.quotes[last.Entry].tiers) //nolint:gosec // a model declares only the four catalog service tiers
-	return p, err
-}
-
-// waivable: an attempt the platform may not charge for its model usage. One that ended because the client left never
-// is, whether or not anything was delivered; the judgement is of the charged attempt, so an attempt that failed first
-// and was followed by the client leaving is judged by its failure. One whose content never reached the client is; one
-// that did is only when the upstream reported no output and an empty or error finish (the zero-output waiver).
-func waivable(last AttemptResult) bool {
-	delivered := last.Result == Committed || last.Result == Aggregated
-	return last.Finish != FinishCancelled && (!delivered || zeroOutput(last))
-}
-
-// deliveredOutputs are the items that show a reply reached the client as billable output: the token outputs and the
-// pieces and seconds an image or speech endpoint delivers instead of tokens.
-const deliveredOutputs = catalog.OutputSide | 1<<catalog.ItemImageOutPiece | 1<<catalog.ItemAudioOutSecond
-
-// zeroOutput is OpenRouter's zero-completion condition: every sampling reported its output, which with reasoning, audio
-// and images, in tokens and in pieces and seconds, adds up to zero, and the finish was empty or an error. An output
-// count the upstream never reported is a default zero, not a reported one, so it proves nothing.
-func zeroOutput(last AttemptResult) bool {
-	var output int64
-	for _, s := range last.Segments {
-		if !s.Reported.Has(catalog.ItemOutput) {
-			return false
-		}
-		for it := range catalog.NumItems {
-			if deliveredOutputs.Has(it) {
-				output += s.Usage.Count(it)
-			}
-		}
-	}
-	return len(last.Segments) > 0 && output == 0 && (last.Finish == FinishNone || last.Finish == FinishError)
-}
-
-// perUseItems are the items charged even when a call is waived (「按次计费的项目照常收费」), the ones a fallback row must
-// price for every currency (parseFallbacks), and the ones the listing gate leaves out because admission fills them in
-// (Unpriced). Adding an item here adds it to all three. A piece, second or character is not one: it is output the call
-// delivers, so a waived call does not charge it.
-const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution
-
-func chargedItems(perUseOnly bool) catalog.ItemSet {
-	if perUseOnly {
-		return perUseItems
-	}
-	return ^catalog.ItemSet(0)
-}
-
-func unknownCharged(tokens bool, charged catalog.ItemSet) bool {
-	if tokens {
-		return charged&catalog.TokenItems != 0
-	}
-	return charged&perUseItems != 0
-}
-
-// priceSegments prices each sampling at its own band, sums them exactly and rounds up once; perUseOnly charges only
-// the per-use items, still at the band the whole sampling falls in, as the cost of the sampling less its cost without
-// them. s is the schedule admission filled with the per-use defaults. Charged items with usage the upstream did not
-// report or the schedule cannot price, or any usage protocol could not map, make the charge estimated; usage protocol
-// could not map, and an item the schedule prices nowhere, are charged at their fallback prices
-// (docs/domains/billing.md「价目表缺项」).
-func priceSegments(s catalog.Schedule, f fallbacks, segments []Segment, perUseOnly bool, tiers catalog.ServiceTierSet) (priced, error) {
-	var p priced
-	total := platform.Exact{}
-	charged := chargedItems(perUseOnly)
-	var err error
-	for _, seg := range segments {
-		if total, err = p.addSegment(total, s, f, seg, perUseOnly, tiers, charged); err != nil {
-			return priced{}, fmt.Errorf("billing: price the usage: %w", err)
-		}
-	}
-	request := requestChargeOf(s, f, segments, tiers)
-	p.estimated = p.estimated || request.fallback
-	if total, err = total.Add(request.amount); err != nil {
-		return priced{}, fmt.Errorf("billing: price the request: %w", err)
-	}
-	p.price = ceilAmount(total)
-	return p, nil
-}
-
-// addSegment prices one sampling and adds it to the total: the usage at its band, then the per-use items the client's
-// usage shows, the unknown usage and the items the schedule prices nowhere, each at its fallback, and reports that the
-// charge is estimated when any of it was guessed.
-func (p *priced) addSegment(total platform.Exact, s catalog.Schedule, f fallbacks, seg Segment, perUseOnly bool, tiers catalog.ServiceTierSet, charged catalog.ItemSet) (platform.Exact, error) {
-	cost, missing, err := segmentCost(s, seg.Usage, perUseOnly)
-	if undeclaredTier(tiers, seg.Usage.ServiceTier()) {
-		cost, missing, err = platform.Exact{}, ^catalog.ItemSet(0), nil
-		p.estimated = true
-	}
-	if err == nil {
-		err = p.addExtras(s, f, seg, tiers, perUseOnly)
-	}
-	if err == nil {
-		cost, err = addFallbacks(s, f, cost, seg.Usage.Unknown(), charged)
-	}
-	if err == nil {
-		cost, err = addMissing(s, f, cost, seg.Usage, missing, charged)
-	}
-	if err != nil {
-		return platform.Exact{}, err
-	}
-	p.estimated = p.estimated || guessed(seg, charged, missing)
-	return total.Add(cost)
-}
-
-// addExtras computes the two amounts the client's usage shows beyond its token counts: the sale price of the per-use
-// items and what cache reads saved against the input price. Both use the same rate a charge item would, including the
-// fallback rate of a tier the schedule does not declare.
-func (p *priced) addExtras(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, waived bool) error {
-	var err error
-	for it := range catalog.NumItems {
-		if !perUseItems.Has(it) {
-			continue
-		}
-		n := seg.Usage.Count(it)
-		if n == 0 {
-			continue
-		}
-		p.hasServerTool = true
-		if p.serverTool, err = p.serverTool.Add(itemRate(s, f, seg, tiers, it).Mul(n)); err != nil {
-			return err
-		}
-	}
-	cached := seg.Usage.Count(catalog.ItemCacheRead)
-	if cached == 0 || waived {
-		return nil
-	}
-	input := itemRate(s, f, seg, tiers, catalog.ItemInput)
-	cache := itemRate(s, f, seg, tiers, catalog.ItemCacheRead)
-	saved, err := input.Mul(cached).Add(cache.Mul(cached).Neg())
-	if err != nil || saved.Cmp(platform.Exact{}) <= 0 {
-		return err
-	}
-	p.cacheDiscount, err = p.cacheDiscount.Add(saved)
-	return err
-}
-
-// itemRate is the rate a charge item uses: the schedule's rate when the tier is declared and priced, else the fallback.
-func itemRate(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, it catalog.Item) platform.UnitPrice {
-	rate, _, ok := s.Rate(seg.Usage, it)
-	if !ok || undeclaredTier(tiers, seg.Usage.ServiceTier()) {
-		rate = missingRate(s, f, it)
-	}
-	return rate
-}
-
-// guessed: the sampling's charge rests on usage the upstream did not report, an item without a price, or usage
-// protocol could not map.
-func guessed(seg Segment, charged, missing catalog.ItemSet) bool {
-	if len(seg.Usage.Unknown()) > 0 {
-		return true
-	}
-	for it := range catalog.NumItems {
-		if charged.Has(it) && seg.Usage.Count(it) > 0 && (!seg.Reported.Has(it) || missing.Has(it)) {
-			return true
-		}
-	}
-	return false
-}
-
-// addFallbacks adds the fallback price of unknown usage within the same charged classes as known items.
-func addFallbacks(s catalog.Schedule, f fallbacks, cost platform.Exact, unknown []catalog.UnknownUsage, charged catalog.ItemSet) (platform.Exact, error) {
-	for _, u := range unknown {
-		price, tokens := unknownCost(s, f, u)
-		if !unknownCharged(tokens, charged) {
-			continue
-		}
-		var err error
-		if cost, err = cost.Add(price); err != nil {
-			return platform.Exact{}, err
-		}
-	}
-	return cost, nil
-}
-
-// addMissing adds to cost the fallback price of each charged item the schedule prices nowhere, which Cost leaves out of
-// its total rather than failing: an upstream that reports a service tier no price list has, or a price list that leaves
-// an item out, is charged at the fallback prices instead of nothing (docs/domains/billing.md「价目表缺项」). A token is
-// charged at tokenPrice, the highest price of a token anywhere; a per-use item at its default, the price admission would
-// have filled in every tier the schedule offers. Only items with usage are in missing, and charged is what a waiver
-// leaves chargeable.
-func addMissing(s catalog.Schedule, f fallbacks, cost platform.Exact, u catalog.Usage, missing, charged catalog.ItemSet) (platform.Exact, error) {
-	charged &= missing // nothing short of it: the schedule priced what it could and it was all priced
-	if charged == 0 {
-		return cost, nil
-	}
-	for it := range catalog.NumItems {
-		if !charged.Has(it) {
-			continue
-		}
-		rate := missingRate(s, f, it)
-		var err error
-		if cost, err = cost.Add(rate.Mul(u.Count(it))); err != nil {
-			return platform.Exact{}, err
-		}
-	}
-	return cost, nil
-}
-
-// segmentCost is one sampling's cost, of its per-use items alone when perUseOnly, and the items without a price.
-func segmentCost(s catalog.Schedule, u catalog.Usage, perUseOnly bool) (platform.Exact, catalog.ItemSet, error) {
-	cost, missing, err := s.Cost(u)
-	if err != nil || !perUseOnly {
-		return cost, missing, err
-	}
-	rest, err := costWithout(s, u, perUseItems)
-	if err == nil {
-		cost, err = cost.Add(rest.Neg())
-	}
-	return cost, missing, err
-}
-
-// costWithout is the cost of u with items left out; no per-use item counts toward the band, so the band stays.
-func costWithout(s catalog.Schedule, u catalog.Usage, items catalog.ItemSet) (platform.Exact, error) {
-	counts := map[catalog.Item]int64{}
-	for it := range catalog.NumItems {
-		if !items.Has(it) {
-			counts[it] = u.Count(it)
-		}
-	}
-	rest, err := u.Recount(counts, nil)
-	if err != nil {
-		return platform.Exact{}, err
-	}
-	cost, _, err := s.Cost(rest)
-	return cost, err
-}
-
 // pricing is what admission locked for the entry: its schedule, filled with the per-use defaults, and its fallbacks.
 func (c *locked) pricing(entry int) (catalog.Schedule, fallbacks, error) {
 	r := c.row
@@ -588,20 +338,32 @@ func (c *locked) event(kind string, revision int64) event {
 // holding part of the reservation for a record that will not come would only shrink what the account may spend.
 func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult) error {
 	held := c.row.Amount - c.row.Charged
-	c.owed, c.charged = p.price, min(p.price, c.cap(held))
 	c.settlement = c.event("settle", 0)
-	if _, err := post(ctx, tx, c.settlement, charge(p.price, c.charged)...); err != nil {
+	var lines []line
+	if c.plan() { // the window froze the whole hold and pays what was charged, up to it
+		c.owed, c.charged = p.price, min(p.price, c.row.Amount)
+		lines = planCharge(p.price, c.charged)
+	} else {
+		c.owed, c.charged = p.price, min(p.price, c.cap(held))
+		lines = charge(p.price, c.charged)
+	}
+	if _, err := post(ctx, tx, c.settlement, lines...); err != nil {
 		return err
 	}
 	w, err := result(p, last)
 	if err != nil {
 		return err
 	}
-	return c.write(ctx, tx, w, -held, c.charged)
+	if c.plan() {
+		return c.write(ctx, tx, w, 0, -c.row.Amount, c.charged, &windowSettle{held: c.row.Amount, charged: c.charged})
+	}
+	return c.write(ctx, tx, w, -held, -held, c.charged, nil)
 }
 
 // late replaces what cleanup charged with what the full outcome charges: a refund, or a makeup capped at the floor.
 func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResult) error {
+	// A plan hold cleanup released has no window left to charge: its credit went back and may have lapsed, so the
+	// usage is the wallet's to pay, as a wallet hold's late settlement is (docs/domains/billing.md「订阅套餐」).
 	c.owed, c.charged = p.price, min(p.price, add(c.row.Charged, c.cap(0)))
 	if _, err := post(ctx, tx, c.event("reverse", lateRevision), reversal(c.row.Price, c.row.Charged)...); err != nil {
 		return err
@@ -614,13 +376,28 @@ func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResul
 	if err != nil {
 		return err
 	}
-	return c.write(ctx, tx, w, 0, c.charged-c.row.Charged)
+	w.wallet = true // the window's hold is gone and its credit may have lapsed: the wallet pays, and the row says so
+	return c.write(ctx, tx, w, 0, 0, c.charged-c.row.Charged, nil)
 }
 
 // release ends a reservation in state, giving back what it held and keeping what was charged.
 func (c *locked) release(ctx context.Context, tx pg.Tx, state string, held int64) error {
-	return c.write(ctx, tx, c.kept(state), -max(held, 0), 0)
+	if c.plan() {
+		if held > 0 {
+			if err := moveWindowReserved(ctx, tx, c.row.SubscriptionID, c.row.WindowSeq, -held); err != nil {
+				return err
+			}
+		}
+		return c.write(ctx, tx, c.kept(state), 0, -max(held, 0), 0, nil)
+	}
+	return c.write(ctx, tx, c.kept(state), -max(held, 0), -max(held, 0), 0, nil)
 }
+
+// plan reports whether the reservation's money was frozen in a subscription window.
+func (c *locked) plan() bool { return c.row.SubscriptionID != (uuid.UUID{}) }
+
+// windowSettle is what a plan settlement moves in its frozen window: the hold goes back and the charge is used.
+type windowSettle struct{ held, charged int64 }
 
 // written is what write records on the reservation.
 type written struct {
@@ -630,6 +407,7 @@ type written struct {
 	waived, estimated bool
 	usage             []byte
 	tiers             int16
+	wallet            bool // the settlement paid from the wallet though the reservation was frozen in a plan window
 }
 
 // kept moves the reservation to state and keeps what it records.
@@ -645,9 +423,14 @@ var terminal = map[string]bool{"settled": true, "released": true, "cleanup_settl
 
 // write records w on the reservation, and the end of the request when its state is terminal, at the same moment of
 // the database's clock.
-func (c *locked) write(ctx context.Context, tx pg.Tx, w written, reserved, spent int64) error {
+func (c *locked) write(ctx context.Context, tx pg.Tx, w written, balanceReserved, spendReserved, spent int64, win *windowSettle) error {
+	if w.wallet {
+		if err := markLateWallets(ctx, tx, []*reservationEnd{{c: c, w: w}}); err != nil {
+			return err
+		}
+	}
 	at, err := queries.EndReservation(ctx, tx, EndReservationParams{
-		Profit: c.profit(), Reserved: reserved, Spent: spent, AccountID: c.row.AccountID,
+		Profit: c.profit(), BalanceReserved: balanceReserved, SpendReserved: spendReserved, Spent: spent, AccountID: c.row.AccountID,
 		WorkspaceID: c.row.WorkspaceID, WorkspaceWindow: c.row.WorkspaceWindow, KeyID: c.row.KeyID, KeyWindow: c.row.KeyWindow,
 		RequestID: c.id, State: w.state, ChargedSeq: w.seq, Entry: w.entry, Charged: c.charged, Price: w.price,
 		Waived: w.waived, Estimated: w.estimated, FinalUsage: w.usage, AttemptEntries: c.entries,
@@ -655,6 +438,11 @@ func (c *locked) write(ctx context.Context, tx pg.Tx, w written, reserved, spent
 	})
 	if err != nil {
 		return fmt.Errorf("billing: end the reservation: %w", err)
+	}
+	if win != nil {
+		if err := moveSettledWindow(ctx, tx, c.row.SubscriptionID, c.row.WindowSeq, *win); err != nil {
+			return err
+		}
 	}
 	if terminal[w.state] {
 		if err := c.b.suppliers.EndRequest(ctx, tx, c.id, c.row.SiteID, c.row.AccountID, at); err != nil {
