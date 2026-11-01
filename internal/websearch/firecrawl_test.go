@@ -118,3 +118,19 @@ func TestFirecrawlRefusesAPreconditionAtTheBoundary(t *testing.T) {
 	}
 	server.Close()
 }
+
+func TestFirecrawlUpstreamFailure(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "upstream is down", http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+	client := egress.NewForTesting(egresstest.Loopback(t, server.Certificate()))
+	searcher, err := websearch.OpenFirecrawl(websearch.Config{URL: server.URL, Key: secret.New("fc-key")}, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = searcher.Search(t.Context(), websearch.Query{Text: "axiom"})
+	if !errors.Is(err, websearch.ErrUpstream) {
+		t.Fatalf("Search() error = %v, want ErrUpstream", err)
+	}
+}
