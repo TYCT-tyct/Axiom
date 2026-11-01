@@ -53,14 +53,22 @@ export function MerchantFields({
   const [rows, setRows] = useState<Draft[]>(() =>
     merchant?.methods?.length ? merchant.methods.map((method) => draftOf(method)) : [draftOf(undefined)],
   );
+  const [kind, setKind] = useState(merchant?.kind ?? "easypay");
   const [paidIn, setPaidIn] = useState(merchant?.currency ?? merchantCurrency(currency));
   const update: Update = (key, change) =>
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...change } : row)));
   return (
     <>
-      <MerchantBasics merchant={merchant} paidIn={paidIn} setPaidIn={setPaidIn} error={error} />
+      <MerchantBasics
+        merchant={merchant}
+        kind={kind}
+        setKind={setKind}
+        paidIn={paidIn}
+        setPaidIn={setPaidIn}
+        error={error}
+      />
       <MerchantFlags merchant={merchant} />
-      <MerchantSecrets merchant={merchant} error={error} />
+      <MerchantSecrets key={kind} merchant={merchant} kind={kind} error={error} />
       <MethodsEditor rows={rows} setRows={setRows} update={update} paidIn={paidIn} error={error} />
     </>
   );
@@ -68,11 +76,15 @@ export function MerchantFields({
 
 function MerchantBasics({
   merchant,
+  kind,
+  setKind,
   paidIn,
   setPaidIn,
   error,
 }: {
   merchant: Merchant | undefined;
+  kind: string;
+  setKind: (kind: string) => void;
   paidIn: string;
   setPaidIn: (currency: string) => void;
   error: unknown;
@@ -85,10 +97,13 @@ function MerchantBasics({
         label={t("settings.payments.kind")}
         hint={t("settings.payments.kindHint")}
         name="kind"
-        defaultValue={merchant?.kind ?? "easypay"}
+        value={kind}
+        onChange={(event) => setKind(event.target.value)}
+        disabled={merchant !== undefined}
         error={errors.field(error, "merchant/kind")}
       >
         <option value="easypay">{t("settings.payments.kinds.easypay")}</option>
+        <option value="alipay">{t("settings.payments.kinds.alipay")}</option>
       </SelectField>
       <TextField
         label={t("settings.payments.name")}
@@ -161,9 +176,13 @@ function MerchantFlags({ merchant }: { merchant: Merchant | undefined }) {
   );
 }
 
-function MerchantSecrets({ merchant, error }: { merchant: Merchant | undefined; error: unknown }) {
+function MerchantSecrets({ merchant, kind, error }: { merchant: Merchant | undefined; kind: string; error: unknown }) {
   const { t } = useTranslation();
   const errors = useErrors();
+  const defaults =
+    kind === "alipay"
+      ? { app_id: "", seller_id: "", gateway: "https://openapi.alipay.com/gateway.do" }
+      : { gateway: "https://", pid: "", mode: "redirect" };
   return (
     <>
       <TextAreaField
@@ -171,9 +190,55 @@ function MerchantSecrets({ merchant, error }: { merchant: Merchant | undefined; 
         hint={t("settings.payments.settingsHint")}
         name="settings"
         className="min-h-40"
-        defaultValue={JSON.stringify(merchant?.settings ?? { gateway: "https://", pid: "", mode: "redirect" }, null, 2)}
+        defaultValue={JSON.stringify(merchant?.settings ?? defaults, null, 2)}
         error={errors.field(error, "merchant/settings")}
       />
+      {kind === "alipay" ? (
+        <AlipaySecrets merchant={merchant} error={error} />
+      ) : (
+        <EasyPaySecrets merchant={merchant} error={error} />
+      )}
+    </>
+  );
+}
+
+function AlipaySecrets({ merchant, error }: { merchant: Merchant | undefined; error: unknown }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return (
+    <>
+      <TextAreaField
+        label={t("settings.payments.privateKey")}
+        hint={merchant ? t("settings.payments.privateKeyKeep") : t("settings.payments.privateKeyNew")}
+        name="private_key"
+        className="min-h-32"
+        autoComplete="off"
+        spellCheck={false}
+        error={errors.field(error, "merchant/secrets")}
+      />
+      <TextAreaField
+        label={t("settings.payments.publicKey")}
+        hint={t("settings.payments.publicKeyHint")}
+        name="public_key"
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <TextAreaField
+        label={t("settings.payments.oldPublicKey")}
+        hint={t("settings.payments.oldPublicKeyHint")}
+        name="old_public_key"
+        autoComplete="off"
+        spellCheck={false}
+      />
+    </>
+  );
+}
+
+function EasyPaySecrets({ merchant, error }: { merchant: Merchant | undefined; error: unknown }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return (
+    <>
       <TextField
         label={t("settings.payments.key")}
         hint={merchant ? t("settings.payments.keyKeep") : t("settings.payments.keyNew")}
@@ -192,7 +257,6 @@ function MerchantSecrets({ merchant, error }: { merchant: Merchant | undefined; 
     </>
   );
 }
-
 function MethodsEditor({
   rows,
   setRows,
