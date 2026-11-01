@@ -119,6 +119,7 @@ var adminOperations = []adminOperation{
 	{"selectSupplierGroup", http.MethodPut, someSupplier + "/groups/0198c0a8-0000-7000-8000-000000000004", `{"selected":true,"reason":"r"}`, "suppliers.manage", true},
 	{"bindSupplierKey", http.MethodPost, someSupplier + "/credentials", `{}`, "suppliers.manage", true},
 	{"setSupplierCredentialLimits", http.MethodPut, someSupplier + "/credentials/0198c0a8-0000-7000-8000-000000000005/limits", `{"max_concurrency":8,"requests_per_minute":null,"reason":"r"}`, "suppliers.manage", true},
+	{"setSupplierEndpointQuantization", http.MethodPut, someSupplier + "/endpoints/0198c0a8-0000-7000-8000-000000000006/quantization", `{"quantization":"fp8","reason":"r"}`, "suppliers.manage", true},
 	{"listPendingMappings", http.MethodGet, "/pending-mappings", "", "suppliers.view", false},
 	{"mapSupplierModel", http.MethodPost, someSupplier + "/model-mappings", `{}`, "suppliers.manage", true},
 	{"listAuthors", http.MethodGet, "/authors", "", "catalog.view", false},
