@@ -167,43 +167,7 @@ func (a adminAPI) GrantSubscription(ctx context.Context, r adminapi.GrantSubscri
 	}
 	body, replayed, err := idempotently(ctx, a.db, "grantSubscription", r.Params.IdempotencyKey, []any{r.AccountId, r.Body},
 		func(tx pg.Tx) (adminapi.Subscription, error) {
-			account, err := a.accounts.Account(ctx, tx, id)
-			if err != nil {
-				return adminapi.Subscription{}, err
-			}
-			currency, err := a.currencyOf(account.Site)
-			if err != nil {
-				return adminapi.Subscription{}, err
-			}
-			g := billing.SubscriptionGrant{
-				ID: uuid.NewV7(), Site: uuid.UUID(account.Site), Account: uuid.UUID(id),
-				Plan: plan, SiteCurrency: currency, Source: source, Actor: actor(ctx), Reason: r.Body.Reason,
-			}
-			if source == "paid" {
-				if r.Body.Payment == nil {
-					return adminapi.Subscription{}, unprocessableFields("/payment", "an offline payment says what was paid and where")
-				}
-				payment, channel, err := offlinePayment(r.Body.Payment)
-				if err != nil {
-					return adminapi.Subscription{}, err
-				}
-				g.Payment, g.Channel = *payment, billing.Channel{Offline: channel}
-				g.RateID, err = rateFor(ctx, tx, currency, payment.Currency)
-				if err != nil {
-					return adminapi.Subscription{}, err
-				}
-			}
-			if err := billing.CreditSubscription(ctx, tx, g); err != nil {
-				return adminapi.Subscription{}, planProblem(err)
-			}
-			subs, err := billing.Subscriptions(ctx, tx, uuid.UUID(id), maximumSubscriptions)
-			if err != nil {
-				return adminapi.Subscription{}, err
-			}
-			if len(subs) == 0 {
-				return adminapi.Subscription{}, errNoSubscription
-			}
-			return subscriptionBody(subs[0], currency) // the grant's subscription: a new one is newest, a renewal is the only active
+			return a.grantSubscription(ctx, tx, id, plan, source, r.Body)
 		})
 	if err != nil {
 		return nil, err
@@ -212,6 +176,49 @@ func (a adminAPI) GrantSubscription(ctx context.Context, r adminapi.GrantSubscri
 		Body:    body,
 		Headers: adminapi.GrantSubscription201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
 	}, nil
+}
+
+// grantSubscription writes the grant inside the caller's transaction and reads back the subscription it made.
+func (a adminAPI) grantSubscription(ctx context.Context, tx pg.Tx, id accounts.AccountID, plan uuid.UUID, source string,
+	in *adminapi.GrantSubscriptionJSONRequestBody,
+) (adminapi.Subscription, error) {
+	account, err := a.accounts.Account(ctx, tx, id)
+	if err != nil {
+		return adminapi.Subscription{}, err
+	}
+	currency, err := a.currencyOf(account.Site)
+	if err != nil {
+		return adminapi.Subscription{}, err
+	}
+	g := billing.SubscriptionGrant{
+		ID: uuid.NewV7(), Site: uuid.UUID(account.Site), Account: uuid.UUID(id),
+		Plan: plan, SiteCurrency: currency, Source: source, Actor: actor(ctx), Reason: in.Reason,
+	}
+	if source == "paid" {
+		if in.Payment == nil {
+			return adminapi.Subscription{}, unprocessableFields("/payment", "an offline payment says what was paid and where")
+		}
+		payment, channel, err := offlinePayment(in.Payment)
+		if err != nil {
+			return adminapi.Subscription{}, err
+		}
+		g.Payment, g.Channel = *payment, billing.Channel{Offline: channel}
+		g.RateID, err = rateFor(ctx, tx, currency, payment.Currency)
+		if err != nil {
+			return adminapi.Subscription{}, err
+		}
+	}
+	if err := billing.CreditSubscription(ctx, tx, g); err != nil {
+		return adminapi.Subscription{}, planProblem(err)
+	}
+	subs, err := billing.Subscriptions(ctx, tx, uuid.UUID(id), maximumSubscriptions)
+	if err != nil {
+		return adminapi.Subscription{}, err
+	}
+	if len(subs) == 0 {
+		return adminapi.Subscription{}, errNoSubscription
+	}
+	return subscriptionBody(subs[0]) // the grant's subscription: a new one is newest, a renewal is the only active
 }
 
 // rateFor is the exchange rate a payment in its own currency is converted at: none in the site's currency, else the
@@ -240,13 +247,8 @@ func (a adminAPI) ListSubscriptions(ctx context.Context, r adminapi.ListSubscrip
 		return nil, err
 	}
 	var subs []billing.Subscription
-	var currency platform.Currency
 	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
-		account, err := a.accounts.Account(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if currency, err = a.currencyOf(account.Site); err != nil {
+		if _, err := a.accounts.Account(ctx, tx, id); err != nil {
 			return err
 		}
 		subs, err = billing.Subscriptions(ctx, tx, uuid.UUID(id), maximumSubscriptions)
@@ -257,7 +259,7 @@ func (a adminAPI) ListSubscriptions(ctx context.Context, r adminapi.ListSubscrip
 	}
 	list := adminapi.SubscriptionList{Data: make([]adminapi.Subscription, len(subs))}
 	for i, s := range subs {
-		if list.Data[i], err = subscriptionBody(s, currency); err != nil {
+		if list.Data[i], err = subscriptionBody(s); err != nil {
 			return nil, err
 		}
 	}
@@ -268,7 +270,7 @@ func (a adminAPI) ListSubscriptions(ctx context.Context, r adminapi.ListSubscrip
 const maximumSubscriptions = 100
 
 // subscriptionBody is a subscription as the contract shows it.
-func subscriptionBody(s billing.Subscription, currency platform.Currency) (adminapi.Subscription, error) {
+func subscriptionBody(s billing.Subscription) (adminapi.Subscription, error) {
 	return adminapi.Subscription{
 		Id: s.ID.String(), AccountId: accounts.AccountID(s.Account).TypeID(), PlanId: s.PlanID.String(),
 		PlanName: s.PlanName, State: adminapi.SubscriptionStanding(s.State), StartsAt: s.StartsAt, EndsAt: s.EndsAt,
@@ -285,7 +287,7 @@ func subscriptionBody(s billing.Subscription, currency platform.Currency) (admin
 
 // planID reads a plan's UUID from a path; a malformed one is an unknown plan.
 func planID(s adminapi.Uuid) (uuid.UUID, error) {
-	id, err := uuid.Parse(string(s))
+	id, err := uuid.Parse(s)
 	if err != nil {
 		return uuid.UUID{}, pg.ErrNoRows
 	}
@@ -294,15 +296,16 @@ func planID(s adminapi.Uuid) (uuid.UUID, error) {
 
 // planProblem maps the module's plan errors to the contract's refusals.
 func planProblem(err error) error {
-	switch {
-	case errors.Is(err, billing.ErrPlanConflict):
-		return &apiError{status: http.StatusConflict, code: codeConflict,
-			message: "another subscription plan is in force for the account, or the plan cannot be sold"}
-	case errors.As(err, new(*billing.PaidError)):
-		return unprocessableFields("/payment", err.Error())
+	if errors.Is(err, billing.ErrPlanConflict) {
+		return &apiError{
+			status: http.StatusConflict, code: codeConflict,
+			message: "another subscription plan is in force for the account, or the plan cannot be sold",
+		}
 	}
-	var e *billing.PlanError
-	if errors.As(err, &e) {
+	if paid, ok := errors.AsType[*billing.PaidError](err); ok {
+		return unprocessableFields("/payment", paid.Error())
+	}
+	if e, ok := errors.AsType[*billing.PlanError](err); ok {
 		return unprocessable(e.Reason)
 	}
 	return err
