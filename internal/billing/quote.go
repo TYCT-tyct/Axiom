@@ -270,9 +270,15 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 		return q, err
 	}
 	if d.Requests > 0 && prices.schedule.Priced(1<<catalog.ItemRequest) {
-		price, ok := prices.ceiling(1<<catalog.ItemRequest, tiers, longest)
-		if !ok {
-			return q, ErrUnpriced
+		price, missing := prices.schedule.Highest(1<<catalog.ItemRequest, tiers, longest)
+		if missing {
+			// Settlement charges a request missing at the served tier at the highest request price in the schedule,
+			// never at a token or another per-use price. Reserve the same amount, so admission and settlement agree
+			// when a model prices only some service tiers per request.
+			var ok bool
+			if price, ok = itemPrice(*prices.schedule, catalog.ItemRequest); !ok {
+				return q, ErrUnpriced
+			}
 		}
 		q.fixed = sum(q.fixed, price.Mul(d.Requests))
 	}

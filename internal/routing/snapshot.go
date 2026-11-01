@@ -239,9 +239,18 @@ func (p PriceLimit) within(s catalog.Schedule, tiers catalog.ServiceTierSet, len
 		if highest.Cmp(p.Max[it]) > 0 {
 			return false
 		}
-		if missing && tokenItems.Has(it) {
-			if fallback, _ := s.Highest(tokenItems, allTiers, math.MaxInt64); fallback.Cmp(p.Max[it]) > 0 {
-				return false
+		if missing {
+			switch {
+			case tokenItems.Has(it):
+				if fallback, _ := s.Highest(tokenItems, allTiers, math.MaxInt64); fallback.Cmp(p.Max[it]) > 0 {
+					return false
+				}
+			case it == catalog.ItemRequest:
+				// A request missing at every eligible tier is charged at the highest request price the schedule has,
+				// matching settlement and the quote. Other call items keep the site default, which routing cannot know.
+				if fallback, _ := s.Highest(one, allTiers, math.MaxInt64); fallback.Cmp(p.Max[it]) > 0 {
+					return false
+				}
 			}
 		}
 	}

@@ -405,6 +405,20 @@ func TestRequestPrice(t *testing.T) {
 	})
 	b.balanced()
 
+	// A request price only on standard, with complete token prices on priority, must still be admitted for a priority
+	// request. Admission reserves the same highest request price settlement charges, instead of rejecting a price table
+	// the listing gate accepted.
+	mixed := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","request":"1"},
+		"service_tiers":{"priority":{"rates":{"input":"0.000002","output":"0.000004"}}}}`)
+	res, err := Quote(Demand{TextBytes: 10, Requests: 1, ServiceTiers: 1 << catalog.ServiceTierPriority},
+		[]Quotable{{Price: mixed, Model: Model{ContextLength: 1000}, MaxOutput: 10, Endpoint: uuid.NewV7()}}, Segments{}, nil)
+	if err != nil {
+		t.Fatalf("a priority request with a standard-only request price: %v", err)
+	}
+	if got := res.Amount.CeilAmount(); got < 1_000_000_000 {
+		t.Errorf("reserved %d, want at least the request price", got)
+	}
+
 	// The served tier has no request price, but the schedule has one on another tier. The request is charged at the
 	// highest request price, not at the price of another per-use item.
 	only := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0","output":"0","request":"2","web_search":"0.01"}}`)
