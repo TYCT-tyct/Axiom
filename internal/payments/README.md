@@ -2,7 +2,7 @@
 
 订单、收款渠道、回调、补单、退款与对账在代码层面的接口、不变量和数据。行为和理由见[支付](../../docs/domains/payments.md)，记账、额度批次和冻结见[计费](../../docs/domains/billing.md)。
 
-> 本文先于代码写成，是 [Issue #309](https://github.com/TYCT-tyct/Axiom/issues/309) E1-2 至 E1-6 的设计；各部分随「实现拆分」里的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。引用的 sub2api 源码都是 `backend/internal/` 下的路径（提交 `8f2cbb5`，2026-10-19 查）。
+> 本文先于代码写成，是 [Issue #309](https://github.com/TYCT-tyct/Axiom/issues/309) E1-2 至 E1-8 的设计，并随 [Issue #310](https://github.com/TYCT-tyct/Axiom/issues/310) 的支付宝渠道扩展；各部分随「实现拆分」里的 PR 落地，代码与本文不一致时，在同一个 PR 里改本文。引用的 sub2api 源码都是 `backend/internal/` 下的路径（提交 `8f2cbb5`，2026-10-19 查；支付宝按提交 `a3298b46` 核对）。
 
 ## 接口（草图）
 
@@ -77,7 +77,7 @@ type MerchantConfig struct {
 	Client   *egress.Client
 }
 type Channel interface {
-	Caps() Caps // Query | Close | Refund | QueryRefund | RefundKey | Statements；易支付按商户配置声明
+	Caps() Caps // Query | Close | Refund | QueryRefund | RefundKey | Statements；易支付按商户配置声明，支付宝固定声明除 Statements 以外的五项
 	Methods() []Method
 	Create(ctx context.Context, r CreateRequest) (Checkout, error)
 	Verify(ctx context.Context, c Callback) (Notice, error)      // 验签加商户身份；不相关的事件返回 Notice{Relevant: false}
@@ -92,7 +92,7 @@ type Checkout struct{ TradeNo, PayURL, QRCode, ClientSecret string } // 存库�
 type Callback struct{ Method string; RawQuery string; Body []byte; Header http.Header }
 type Notice struct{ Relevant, Success bool; Order, TradeNo string; Paid Money; Raw string }
 type Payment struct{ State PayState; TradeNo string; Paid Money } // Pending | Paid | Closed
-type RefundCall struct{ Refund RefundID; Order OrderID; TradeNo, ProviderRef string; Amount Money; Reason string }
+type RefundCall struct{ Refund RefundID; Order OrderID; TradeNo, ProviderRef string; Amount Money; Reason string; SentAt time.Time } // SentAt 是第一次发送的时间；查询"渠道没有这笔退款"多久算失败时用，零值表示不知道
 type RefundState struct{ State RefundOutcome; ProviderRef string } // Succeeded | Failed | Pending
 type Rejected struct{ Code, Message string }                      // 渠道明确拒绝；实现 error
 ```
@@ -101,8 +101,26 @@ type Rejected struct{ Code, Message string }                      // 渠道明�
 - **用能力集合而不是可选接口**：sub2api 用类型断言判断扩展接口（`payment_fulfillment.go:65-69`），能力随插件种类固定；易支付是否能查单、能退款取决于这家网关，是商户账户的配置，所以由 `Caps` 声明。调用没有声明的能力是程序错误，panic。
 - **`RefundKey`**：渠道把 `RefundCall.Refund` 当作退款单号，同一单号重发只退一次（Stripe 的幂等键、支付宝的 `out_request_no`、微信的 `out_refund_no`）。只有声明了它，结果未知的退款才能重发；易支付不声明。
 - **链接**：核心在存库和返回之前检查 `PayURL`、`QRCode` 里的链接，只放行 `https` 和 `alipays://`、`weixin://`、`wxp://`，以 `//` 开头的和其他协议当作 `*Rejected`。插件只负责把以单个 `/` 开头的相对链接按网关地址补全。
-- **金额**：`Notice.Paid`、`Payment.Paid` 由插件把网关的十进制文本精确解析成最小单位。`Minor == 0` 表示缺失，`Minor == -1` 表示无效付款并转待处理；不做容差。没有币种字段的渠道填商户账户的币种。具体规则见[易支付配置与边界](#易支付配置与边界)。
+- **金额**：`Notice.Paid`、`Payment.Paid` 由插件把网关的十进制文本精确解析成最小单位。`Minor == 0` 表示缺失，`Minor == -1` 表示无效付款并转待处理；不做容差。没有币种字段的渠道填商户账户的币种。具体规则见[支付宝配置与边界](#支付宝配置与边界)和[易支付配置与边界](#易支付配置与边界)。
 - **插件拿不到数据库**：只拿到配置、密钥和出站客户端；状态和钱都在核心里。插件的错误和日志不带请求的查询串和表单（易支付把密钥放在查询串里）。
+
+### 支付宝配置与边界
+
+`Alipay{}` 实现 `Plugin`，由 `cmd/axiom` 的插件清单登记，`Kind()` 是 `alipay`。非密配置严格读取三个成员：`app_id`（必填，数字，最多 32 位）、`seller_id`（可省略，填了必须是数字）、`gateway`（可省略，默认 `https://openapi.alipay.com/gateway.do`，只接受无用户信息、查询串和片段的 HTTPS 地址）。`Secrets` 只接受 `private_key`（应用私钥，PKCS#8 或 PKCS#1 PEM，RSA 至少 2048 位）、`public_key`（支付宝公钥，PEM 或裸 base64）和可选的 `old_public_key`（轮换期间旧公钥），其他名称拒绝保存。付款币种固定 `CNY`；示例：
+
+```json
+{"app_id":"2021000000000000","seller_id":"2088000000000000","gateway":"https://openapi.alipay.com/gateway.do"}
+```
+
+付款方式映射 `MethodInput.Upstream` 是产品代码，只接受 `FAST_INSTANT_TRADE_PAY`（电脑网站支付）、`QUICK_WAP_WAY`（手机网站支付）和 `FACE_TO_FACE_PAYMENT`（当面付）；`Create` 按它选择 `alipay.trade.page.pay`、`alipay.trade.wap.pay` 或 `alipay.trade.precreate`，不按 `Mobile` 猜，也不在一种产品失败后改试另一种。电脑和手机网站支付在本地拼参数并签名，返回网关 URL；当面付 POST 后返回应答里的 `qr_code`。`Methods()` 返回 `nil`，方式是否出现由管理员配置。
+
+签名和验签只用标准库：请求排除 `sign`、按键名 ASCII 升序、值不转义，`k=v` 以 `&` 连接，用应用私钥做 SHA256withRSA 后 base64；请求签名保留 `sign_type`。回调是 POST 表单，排除 `sign`、`sign_type` 和空值后同样排序拼接，用支付宝公钥验签，`sign_type` 必须是 `RSA2`；`app_id` 必须等于配置，配置了 `seller_id` 时也必须一致。JSON 应答的 `sign` 是对 `alipay_<method>_response` 节点原文字节的签名，先取原文验签再解析；`error_response` 没有签名，资金操作把它当作结果未知，商户测试才用它的错误码判断凭证是否可用。旧公钥只参与验签，新请求永远用当前私钥。签名比较走 `rsa.VerifyPKCS1v15`，没有自写的比较。
+
+能力固定为 `CapQuery|CapClose|CapRefund|CapQueryRefund|CapRefundKey`，不声明 `CapStatements`：核心还没有对账单接口和 `statement_lines` 表。查单、关单、退款和退款查询都按「支付宝官方插件」的错误分类：只有签过名的 `ACQ.TRADE_NOT_EXIST` 等确定业务错误才转成 `*Rejected` 或对应状态，网络错误、非 2xx、HTML、验签失败和无法解析的应答都是结果未知。退款用 `RefundCall.Refund` 的 `rfd_` 作为 `out_request_no`，所以同一笔退款重发只退一次；退款查询没有记录时，只有 `SentAt` 非零且已满 10 分钟才判失败，否则保持待确认。
+
+`identitySettings` 只比较 `app_id`、`seller_id`、`gateway`；`normalizeSettings` 补默认网关、去空白并写成规范 JSON，所以等价的网关写法不会改变已封装的哈希。`app_id`、`gateway`、币种和密钥在订单在途时受身份保护；退款和回调仍用停用商户的原配置。`TestMerchant` 用 `alipay.trade.query` 查一个随机不存在的 `out_trade_no`，只有签过名的 `ACQ.TRADE_NOT_EXIST` 回 `accepted`，其他回 `failed`；不建单、不转钱，也不返回应答原文。保存本身不做网络探测（与普通易支付一致），启用与否不取决于网关当时的健康。
+
+测试：`TestAlipaySignatureAndNotification`（排序、空值、`sign_type` 取舍、篡改、旧公钥）、`TestAlipayConfiguration`（默认网关、密钥格式与位数、未知密钥名、CNY、身份字段）、`TestAlipayCreate`（三种产品、参数与签名、金额文本、非法链接）、`TestAlipayQueryCloseRefund`（各状态、错误分类、金额精度、退款单号）、`TestAlipayLocalGatewayEndToEnd`（本地 TLS 网关：下单、POST 回调、查单确认、重复回调、关单、退款、退款查询）、`TestAlipayLostCallbackThenPoll`（丢回调后补单入账）、`TestAlipayRefundUnknownConvergesByQuery`（未知退款用同一单号查询收敛）。这些是本机协议样本，不等于真实商户验收；后者见 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)。
 
 ### 易支付配置与边界
 
@@ -265,6 +283,10 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | 退款金额按订单上的实付、手续费、入账额度之比算，最后一笔取余数 | 入账可能按实付或到账汇率折算，比例跟着实际入账走才不会多退；取余数让全额退款没有舍入误差 | 按订单报价的比例（sub2api `service/payment_amounts.go:35-48`）：换汇率入账后多退 |
 | 金额是最小单位的整数，汇率是精确分数，总额只取整一次 | 负责人要求；相等比较不会把少付当作付清 | `decimal(20,2)` 加 `float64` 和 0.01 容差（sub2api `ent/schema/payment_order.go:46-56`、`service/payment_service.go:47`） |
 | 一个 `Channel` 接口加 `Caps` | 易支付的能力取决于网关，是配置而不是插件种类 | 每种能力一个可选接口（sub2api）：同一个易支付插件要么全有、要么全无 |
+| 支付宝用标准库实现 RSA2 和应答验签，不引入 smartwalle/alipay SDK | 需要的是 PKCS#1 v1.5、PEM 和 JSON，标准库都覆盖；签名原文和应答节点的取舍由我们控制，钱路径上没有一层不透明的库。sub2api 用 SDK（`provider/alipay.go:14`、`:81-96`），遇到签名原文的边界仍要读 SDK 源码 | 加 SDK 依赖：多一版升级风险和一层自己的参数排序、应答错误分类 |
+| 支付宝的产品由付款方式映射的 `upstream` 决定，不在失败后改试另一种 | 三个产品要在开放平台分别签约，是配置事实；按设备猜会猜错，失败后改试会多一次网络调用，还可能把一个已建好的交易留在网关。sub2api 桌面默认先当面付再回退电脑网站支付（`alipay.go:173-211`） | 按 `Mobile` 自动选产品；一种失败后静默改试另一种 |
+| 支付宝的 `out_request_no` 就是退款 ID，退款查询在发送满 10 分钟仍无记录时判失败 | `rfd_` 已持久化且一笔退款一个，重发同一单号只退一次，所以能声明 `RefundKey`；sub2api 用订单号加时间戳（`alipay.go:508-523`），重发会生成新单号。没有记录不能立刻判失败，10 分钟宽限来自 sub2api（`alipay.go:30-31`、`:548-573`），发送时间用新增的 `RefundCall.SentAt`；没有它就只能永远待确认到 24 小时人工 | 每次重发生成新单号；没有记录就判失败（可能把还在处理的退款解冻） |
+| 支付宝不声明 `CapStatements`，账单逐笔比对等核心的接口和表 | 核心没有 `Statements` 方法和 `statement_lines` 表，声明一个没有实现的 `Caps` 位会让对账以为自己有账单。当前每日对账仍逐单复查并核对现金、批次和用量；渠道手续费的实数暂按商户账户费率记，差距写进 #310 | 在插件里偷偷下载账单却无处落库；只打印差额（丢待办） |
 | 插件编译进程序，易支付做成通用协议加配置 | 不同网关只差配置；代码审得到、测得到 | 动态插件或脚本：多一种运行时，签名逻辑跑在审不到的地方；每家网关一个插件：重复 |
 | 商户订单号就是订单 ID | 唯一、30 个字符、只有字母数字下划线 | 前缀加日期加随机数再查重（sub2api `service/payment_order.go:238-251`） |
 | 非密的商户信息、付款方式、站点设置给所属站点的范围读；密文和网关配置单独一张表，只给站点和平台范围 | 账户范围的充值页要读付款方式和限额；行级安全按行不按列，密文必须在另一张表才读不到 | 整表仅按站点范围限制：账户范围读到 0 行，充值页没法用；整表放宽：用户读得到密文 |
@@ -295,5 +317,6 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | E1-6a `feat(billing): freeze paid credit as replayed events` | billing：冻结、解冻、退款三种带序号的交易，批次的冻结状态，重放、准入、到期都按冻结额处理；`FreezeRefund`、`SettleRefund`、`ReleaseRefund`（[billing 的「额度批次的分配与到期」](../billing/README.md#额度批次的分配与到期)） | 随机冻结、解冻、退款、扣费、到期，从头重放等于现场，且从任意位置续放相同（扩展 `TestReplayProperty`）；冻结期间并发调用花不掉冻结的额度；到期不作废冻结的额度；冻结后余额底线以下的扣费不动冻结额度；billing 不变量①–⑦（⑦ 随本 PR 加入）在冻结后成立 |
 | E1-6b `feat(payments): refund through channels with a sending state` | 表 `refunds` 和迁移；发起、审批、发送中、查询、人工结论（凭证、第二人批准）与金额不符策略（默认人工，可选按实付折算）；`payments.poll` 的第 4、5 步；订单状态按成功退款合计 | 渠道超时 → 待确认 → 查询收敛到成功或失败；第一个事务后崩溃只发一次；发送中崩溃时不认单号的渠道不重发、进待处理，认单号的用同一单号重发；不认单号的渠道同一订单只有一笔在途；同一人不能把未知退款标为失败；同一幂等键只退一次；多次部分退款合计不超过入账额度；性质测试：任意汇率序列和拆分下 Σ退款 ≤ Σ实付，全退恰好等于净付款额；退不退手续费两种策略；失败在一个事务里解冻 |
 | E1-8 `feat(payments): redeem codes into credit` | 表 `redeem_codes`、`redeem_redemptions`、`redeem_attempts` 与迁移；`IssueCodes`、`Redeem`、`ListCodes`、`DisableCode`、`ListRedemptions`；billing 的 `CreditRedeem`（来源 `redeem`，迁移 billing 00033）；管理与控制台契约和页面 | 只存哈希、明文只在生成应答；一个码并发只兑一次（两个账户、一个账户两次）；同键重放回同一笔；已用、过期、已停用、无效各自被拒；账户 30/31、IP 100/101 的边界与计数故障拒绝；停用幂等且写审计；列表/历史不含码；站点与账户隔离 |
+| #310 `feat(payments): take Alipay through the official channel protocol` | `Alipay{}` 插件（配置、三种下单产品、RSA2 签名与官方验签、查单、关单、退款、退款查询、商户测试）与 `cmd/axiom` 的登记；`RefundCall.SentAt`；无迁移、无契约字段 | 签名原文与应答节点原文、篡改/换钥/旧公钥、`app_id`/`seller_id` 绑定、三种产品与非法链接、金额缺失/无效/精度、`ACQ.TRADE_NOT_EXIST` 与其他业务错误的分类、退款成功/待查/确定失败/无记录满 10 分钟、丢回调后补单入账、未知退款用同一 `rfd_` 查询收敛；本地 TLS 网关覆盖下单 → POST 回调 → 查单确认 → 重复回调 → 关单 → 退款 → 退款查询 |
 
-**上线门槛**：主站打开"是否开放充值"之前，E1-3 在负责人提供的真实网关上做小额实测（下单、回调、查单确认、关单、退款、手续费的舍入、币种配置），结果记在 [#309](https://github.com/TYCT-tyct/Axiom/issues/309)；没有这份记录不打开。USDT 另需一个提供商户查单的易支付兼容网关，按 E1-4 跑通下单、GET 回调、查单确认、入账后才开放；Epusdt 已发布版本不满足（见上）。
+**上线门槛**：主站打开"是否开放充值"之前，E1-3 在负责人提供的真实网关上做小额实测（下单、回调、查单确认、关单、退款、手续费的舍入、币种配置），结果记在 [#309](https://github.com/TYCT-tyct/Axiom/issues/309)；没有这份记录不打开。USDT 另需一个提供商户查单的易支付兼容网关，按 E1-4 跑通下单、GET 回调、查单确认、入账后才开放；Epusdt 已发布版本不满足（见上）。支付宝同样要等负责人的真实商户和 ICP 备案，用官方沙箱协议与录制样本只能证明代码行为；真实商户的下单、回调、查单、关单、退款和手续费实测记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有这份记录前不创建生产商户账户。
