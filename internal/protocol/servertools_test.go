@@ -207,6 +207,10 @@ func TestRemoveLoopControls(t *testing.T) {
 		{`{"model":"m","max_tool_calls":3,"messages":[]}`, `{"model":"m","messages":[]}`},
 		{`{"max_tool_calls":3}`, `{}`},
 		{`{"model":"m","max_tool_calls":3,"tool_choice":"required","messages":[]}`, `{"model":"m","messages":[]}`},
+		{"{\"model\":\"m\",  \"max_tool_calls\":1}", `{"model":"m"}`},
+		{"{\"model\":\"m\" ,\n\"max_tool_calls\":1}", `{"model":"m" }`},
+		{"{\n  \"max_tool_calls\" : 1 ,\n  \"model\":\"m\"\n}", "{\n  \n  \"model\":\"m\"\n}"},
+		{"{\"model\":\"m\", \"tool_choice\" : \"required\" }", `{"model":"m" }`},
 	} {
 		body, err := protocol.RemoveMaxToolCalls([]byte(tc.body))
 		if err != nil {
@@ -220,5 +224,26 @@ func TestRemoveLoopControls(t *testing.T) {
 	withTool := []byte(`{"model":"m","tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required","messages":[]}`)
 	if out, err := protocol.DropForcedToolChoice(protocol.Chat, withTool); err != nil || !strings.Contains(string(out), "tool_choice") {
 		t.Fatalf("a client's forced choice was removed: %s (%v)", out, err)
+	}
+}
+
+// TestDropForcedToolChoiceKeepsWhitespaceValid: the forced choice may follow a space or newline and be the last member;
+// removal must leave valid JSON, not a dangling comma.
+func TestDropForcedToolChoiceKeepsWhitespaceValid(t *testing.T) {
+	for _, body := range []string{
+		`{"model":"m", "tool_choice":"required"}`,
+		"{\"model\":\"m\"\n,\t\"tool_choice\" : \"required\"\n}",
+		`{"model":"m", "function_call":{"name":"client_tool"}}`,
+	} {
+		out, err := protocol.DropForcedToolChoice(protocol.Chat, []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(out), "tool_choice") || strings.Contains(string(out), "function_call") {
+			t.Errorf("out = %s", out)
+		}
+		if _, err := protocol.Inspect(protocol.Chat, out); err != nil {
+			t.Errorf("out = %s is invalid: %v", out, err)
+		}
 	}
 }

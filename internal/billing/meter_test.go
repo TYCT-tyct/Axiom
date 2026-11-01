@@ -404,4 +404,22 @@ func TestMeterCompletedHopsStock(t *testing.T) {
 	if step := m.Observe(Progress{ContentBytes: 5}); !step.Extend || !step.Exhausted || step.Left != 0 {
 		t.Fatalf("step = %+v after a completed hop of 4 tokens and 5 more bytes, want an exhausted extension", step)
 	}
+
+	// A completed hop's final token count is added without comparing its byte bound with the next hop's bytes.
+	hidden := meter(t, Demand{TextBytes: 80}, entry(t, true, 3))
+	hidden.Complete(Progress{
+		ContentBytes: 10,
+		Reported:     usage(t, map[catalog.Item]int64{catalog.ItemOutput: 100}),
+		Final:        1 << catalog.ItemOutput,
+	})
+	if out, _ := hidden.used(Progress{ContentBytes: 20}); out != 120 {
+		t.Fatalf("used = %d after a 100-token hop and 20 current bytes, want 120", out)
+	}
+	if out, _ := hidden.used(Progress{
+		ContentBytes: 5,
+		Final:        1 << catalog.ItemOutput,
+		Reported:     usage(t, map[catalog.Item]int64{catalog.ItemOutput: 5}),
+	}); out != 105 {
+		t.Fatalf("used = %d after a final 5-token hop, want 105", out)
+	}
 }

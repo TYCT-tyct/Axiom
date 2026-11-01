@@ -146,6 +146,7 @@ func usedItems(u catalog.Usage) (items catalog.ItemSet) {
 type AttemptRecord struct {
 	Request       platform.RequestID
 	Seq           platform.AttemptSeq
+	Hop           int16
 	Site, Account uuid.UUID
 	Receipt       AttemptReceipt
 	Usage         []catalog.Usage
@@ -180,6 +181,9 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) err
 		if !a.Seq.Valid() {
 			return fmt.Errorf("record attempts: attempt number %d of request %s", a.Seq, a.Request)
 		}
+		if a.Hop < 0 || a.Hop > 255 {
+			return fmt.Errorf("record attempts: hop %d of attempt %d of request %s", a.Hop, a.Seq, a.Request)
+		}
 		usage, err := usageOf(a.Usage)
 		if err != nil {
 			return err
@@ -189,7 +193,7 @@ func RecordAttempts(ctx context.Context, tx pg.Tx, attempts []AttemptRecord) err
 			return err
 		}
 		row := store.AttemptCostRow{
-			RequestID: uuid.UUID(a.Request), AttemptSeq: int16(a.Seq), SiteID: tenant(&a.Site), AccountID: tenant(&a.Account),
+			RequestID: uuid.UUID(a.Request), AttemptSeq: int16(a.Seq), Hop: a.Hop, SiteID: tenant(&a.Site), AccountID: tenant(&a.Account),
 			SupplierID: a.Receipt.supplier, CredentialID: a.Receipt.credential, EndpointID: a.Receipt.endpoint,
 			ScheduleID: a.Receipt.schedule, Usage: usage, PricedAt: a.Receipt.pricedAt, FinishedAt: a.FinishedAt,
 			CostFlag: a.Cost.Flag.String(), EstimatedNative: estimate, Test: a.Test,

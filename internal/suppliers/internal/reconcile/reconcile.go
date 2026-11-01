@@ -62,12 +62,14 @@ type Cursor struct {
 	At      time.Time
 	Request uuid.UUID
 	Seq     int16
+	Hop     int16
 }
 
 // Unmatched is an attempt with a key and no charge.
 type Unmatched struct {
 	Request uuid.UUID
 	Seq     int16
+	Hop     int16
 	Ref     string
 }
 
@@ -151,17 +153,17 @@ func Run(ctx context.Context, tx store.DBTX, now time.Time, cfg Config) (Report,
 	}
 	waiting, err := q.ListUnmatchedAttempts(ctx, tx, store.ListUnmatchedAttemptsParams{
 		Before: now.Add(-cfg.Grace), AfterAt: cfg.After.At, AfterRequest: cfg.After.Request, AfterSeq: cfg.After.Seq,
-		Batch: int32(cfg.Batch), //nolint:gosec // a batch size set in configuration
+		AfterHop: cfg.After.Hop, Batch: int32(cfg.Batch), //nolint:gosec // a batch size set in configuration
 	})
 	if err != nil {
 		return report, fmt.Errorf("list unmatched attempts: %w", err)
 	}
 	for _, w := range waiting {
-		report.Unmatched = append(report.Unmatched, Unmatched{Request: w.RequestID, Seq: w.AttemptSeq, Ref: *w.ChargeRef})
+		report.Unmatched = append(report.Unmatched, Unmatched{Request: w.RequestID, Seq: w.AttemptSeq, Hop: w.Hop, Ref: *w.ChargeRef})
 	}
 	if len(waiting) == cfg.Batch {
 		last := waiting[len(waiting)-1]
-		report.Next = Cursor{At: last.FinishedAt, Request: last.RequestID, Seq: last.AttemptSeq}
+		report.Next = Cursor{At: last.FinishedAt, Request: last.RequestID, Seq: last.AttemptSeq, Hop: last.Hop}
 		report.More = true
 	}
 	return report, nil

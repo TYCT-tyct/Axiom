@@ -148,11 +148,14 @@ func (m *Meter) Observe(p Progress) MeterStep {
 }
 
 func (m *Meter) used(p Progress) (out, excess int64) {
-	out = m.done.output + p.Reported.OutputTotal()
+	// Each relay reports only its own hop. A completed hop's final token count is added as it is; its byte bound must
+	// not be compared with the current hop's bytes, or hidden reasoning and visible output would be mixed.
+	current := p.Reported.OutputTotal()
 	if !p.Final.Has(catalog.ItemOutput) {
-		out = max(out, add(add(m.done.contentBytes, add(p.ContentBytes, p.PartialBytes)),
-			mul(add(m.done.toolCalls, max(p.ToolCalls, 0)), max(p.ToolCallTokens, 0))))
+		current = max(current, add(add(p.ContentBytes, p.PartialBytes),
+			mul(max(p.ToolCalls, 0), max(p.ToolCallTokens, 0))))
 	}
+	out = m.done.output + current
 	searches := m.done.searches + max(p.Searches, p.Reported.Count(catalog.ItemWebSearch))
 	return min(out, m.q.outputCap), max(searches-m.q.searches, 0)
 }

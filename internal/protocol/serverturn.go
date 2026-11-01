@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // the turns are spliced into the body as written
 	"fmt"
 
@@ -76,6 +75,10 @@ func serverAssistant(f Format, calls []ServerToolCall) ([]byte, error) {
 	default:
 		return nil, &NotSupported{Reason: fmt.Sprintf("format %d has no tools", f)}
 	}
+	if f == Responses {
+		// Responses' conversation is an array of output items; the fallback is the array AppendServerTurn flattens.
+		assistant = append(append([]byte{'['}, assistant...), ']')
+	}
 	return assistant, nil
 }
 
@@ -88,32 +91,51 @@ func removeTopMember(body []byte, member string) ([]byte, error) {
 	if err != nil || !ok {
 		return body, err
 	}
-	left := bytes.LastIndexByte(body[:start], ':')
-	if left < 0 {
+	// Walk back over the whitespace around the key (never the value's), so a space before the key or colon cannot
+	// hide the separator.
+	i := start
+	for i > 0 && isSpaceByte(body[i-1]) {
+		i--
+	}
+	if i == 0 || body[i-1] != ':' {
 		return nil, fmt.Errorf("%w: %s has no value", ErrInvalid, member)
 	}
-	for left > 0 && isSpaceByte(body[left-1]) {
-		left--
+	i--
+	for i > 0 && isSpaceByte(body[i-1]) {
+		i--
 	}
-	if left > 0 && body[left-1] == '"' {
-		left--
-		for left > 0 && body[left-1] != '"' {
-			left--
+	if i == 0 || body[i-1] != '"' {
+		return nil, fmt.Errorf("%w: %s has no key", ErrInvalid, member)
+	}
+	i--
+	for i > 0 {
+		i--
+		if body[i] == '"' {
+			break
 		}
-		left--
 	}
-	if left > 0 && body[left-1] == ',' {
-		left--
+	removeStart, removeEnd := i, end
+	before := i
+	for before > 0 && isSpaceByte(body[before-1]) {
+		before--
+	}
+	if before == 0 {
+		return nil, fmt.Errorf("%w: %s is outside an object", ErrInvalid, member)
+	}
+	if body[before-1] == ',' {
+		// A member after the first: remove the comma before it; the next member's whitespace stays.
+		removeStart = before - 1
 	} else {
-		for end < len(body) && isSpaceByte(body[end]) {
-			end++
+		// The first member: remove the comma after it, which is the one that would otherwise lead the object.
+		for removeEnd < len(body) && isSpaceByte(body[removeEnd]) {
+			removeEnd++
 		}
-		if end < len(body) && body[end] == ',' {
-			end++
+		if removeEnd < len(body) && body[removeEnd] == ',' {
+			removeEnd++
 		}
 	}
-	out := make([]byte, 0, len(body)-(end-left))
-	out = append(out, body[:left]...)
-	out = append(out, body[end:]...)
+	out := make([]byte, 0, len(body)-(removeEnd-removeStart))
+	out = append(out, body[:removeStart]...)
+	out = append(out, body[removeEnd:]...)
 	return out, nil
 }

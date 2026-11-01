@@ -331,3 +331,28 @@ func TestTwoRunsAtOnceMatchEachPairOnce(t *testing.T) {
 		t.Errorf("%d events, want 30", n)
 	}
 }
+
+// TestLoopHopsAreRecordedAndMatchedIndependently: each supplier request behind a model-side loop has its own attempt
+// cost row and charge attribution, even though they share one gateway attempt number.
+func TestLoopHopsAreRecordedAndMatchedIndependently(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	req := newRequest()
+	first, second := w.attempt(req, 1, "hop-a"), w.attempt(req, 1, "hop-b")
+	second.Hop = 1
+	w.record(first, second)
+	w.ingest(w.charge("hop-a", "23", w.clock.now()), w.charge("hop-b", "23", w.clock.now()))
+	report := w.reconcile(w.clock.now())
+	if report.Matched != 2 {
+		t.Fatalf("matched %d charges, want one for each hop: %+v", report.Matched, report)
+	}
+	for ref, want := range map[string]int16{"hop-a": 0, "hop-b": 1} {
+		var got int16
+		w.tx(func(ctx context.Context, tx pg.Tx) error {
+			return tx.QueryRow(ctx, `SELECT attempt_hop FROM suppliers.charge_records WHERE charge_ref = $1`, ref).Scan(&got)
+		})
+		if got != want {
+			t.Errorf("%s attributed to hop %d, want %d", ref, got, want)
+		}
+	}
+}

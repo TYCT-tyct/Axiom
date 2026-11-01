@@ -26,7 +26,7 @@ internal/suppliers/internal/
 
 ## 表
 
-schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）；`00011` 在 `pg.Migrate` 提供的平台范围里把高于 100,000 的旧值降到上界；拒绝新写入的上限 CHECK 待旧节点退出后再加（[检查清单](../../CONTRIBUTING.md#检查清单)）。`00012` 将范围读取改为策略级 InitPlan，权限边界不变，表达式与可重跑方式见 [pg](../platform/pg/README.md#决策与理由)。`00013` 是清单读取进度；`00014` 固定单位价值的币种和原生单位，回填历史行并用插入触发器兼容旧节点的写入（不提升权限，仍受供应商可见范围限制）。`00015` 增加凭证的上游模型清单和分组别名修订（原别名行是第 1 版，纠错从第 2 版追加，收回应用角色改写原别名的 UPDATE 授权；`00022` 只补授 `formats` 一列）；`00020` 把 `embeddings`、`rerank` 加进 `supplier_models.formats` 与 `endpoints.formats` 的 CHECK，new-api 的 `embeddings`、`rerank`、`jina-rerank` 端点类型映射到对应的调用格式；`00021` 再把 `completions` 加进同样的两处 CHECK；`00022` 给 `supplier_aliases` 加可空的 `formats` 声明（适配器推不出的调用格式，未知格式在管理接口写之前拒绝）。迁移只增不改。`00020` 的 Down 在表里还有这两种格式的行时会明确报错并列出要先删端点/供应商模型或改写格式，而不是让 CHECK 失败；滚动升级时旧节点读到一个不认识的格式只跳过那一个端点（日志 `suppliers.unsupported_format`），不把整个供应商摘掉。写新格式由 `AXIOM_DIRECT_FORMATS` 控制，默认 `off`：这个版本先在全部节点以 `off` 发布，兼容读取先落地；关闭时同步引擎（`syncer.Settings.DirectFormats`）就不让新格式进入持久化的同步状态，模型只保留 messages、responses、chat，`completions` 与 `embeddings`、`rerank` 一样被拿掉，被闸门拿掉全部格式的模型暂不列出。闸门放在状态而不只是投影表上，是因为旧节点接手任何同步任务时都会载入这份状态并重新投影，状态里一个它不认识的格式编号会让它整个提交回滚。确认没有旧节点后再在全部节点设 `on`，下一次同步才写入这些新格式。回滚前先按 Down 的提示清掉或改写新格式的行。
+schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）；`00011` 在 `pg.Migrate` 提供的平台范围里把高于 100,000 的旧值降到上界；拒绝新写入的上限 CHECK 待旧节点退出后再加（[检查清单](../../CONTRIBUTING.md#检查清单)）。`00012` 将范围读取改为策略级 InitPlan，权限边界不变，表达式与可重跑方式见 [pg](../platform/pg/README.md#决策与理由)。`00013` 是清单读取进度；`00014` 固定单位价值的币种和原生单位，回填历史行并用插入触发器兼容旧节点的写入（不提升权限，仍受供应商可见范围限制）。`00015` 增加凭证的上游模型清单和分组别名修订（原别名行是第 1 版，纠错从第 2 版追加，收回应用角色改写原别名的 UPDATE 授权；`00022` 只补授 `formats` 一列）；`00020` 把 `embeddings`、`rerank` 加进 `supplier_models.formats` 与 `endpoints.formats` 的 CHECK，new-api 的 `embeddings`、`rerank`、`jina-rerank` 端点类型映射到对应的调用格式；`00021` 再把 `completions` 加进同样的两处 CHECK；`00022` 给 `supplier_aliases` 加可空的 `formats` 声明（适配器推不出的调用格式，未知格式在管理接口写之前拒绝）；`00023` 给 `attempt_costs` 和 `charge_records` 加 hop 维度，循环的每一跳有自己的成本行和扣费归属。迁移只增不改。`00020` 的 Down 在表里还有这两种格式的行时会明确报错并列出要先删端点/供应商模型或改写格式，而不是让 CHECK 失败；滚动升级时旧节点读到一个不认识的格式只跳过那一个端点（日志 `suppliers.unsupported_format`），不把整个供应商摘掉。写新格式由 `AXIOM_DIRECT_FORMATS` 控制，默认 `off`：这个版本先在全部节点以 `off` 发布，兼容读取先落地；关闭时同步引擎（`syncer.Settings.DirectFormats`）就不让新格式进入持久化的同步状态，模型只保留 messages、responses、chat，`completions` 与 `embeddings`、`rerank` 一样被拿掉，被闸门拿掉全部格式的模型暂不列出。闸门放在状态而不只是投影表上，是因为旧节点接手任何同步任务时都会载入这份状态并重新投影，状态里一个它不认识的格式编号会让它整个提交回滚。确认没有旧节点后再在全部节点设 `on`，下一次同步才写入这些新格式。回滚前先按 Down 的提示清掉或改写新格式的行。
 
 | 表 | 内容 | 键与约束 |
 |---|---|---|
@@ -40,7 +40,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `endpoints` | 分组 × 模型：格式、成本状态（已知 / 未知 / 冲突）、成本计划编号、是否启用 | `UNIQUE (supplier_group_id, model_id)`；成本状态为已知必有成本计划编号 |
 | `cost_schedules` | 端点的成本计划，`catalog.Schedule` 的规范 JSON，币种 `XXX`；`endpoints.cost_schedule_id` 指向当前的一版 | 只追加；`UNIQUE (endpoint_id, fingerprint)` |
 | `attempt_journal` | 旧的对账日志（「没有对账日志」）：没有代码再读写，表按收缩规则留到下一个发布删 | PK `(request_id, attempt_seq)`；平台范围 |
-| `attempt_costs` | 每次尝试的成本和对账键，billing 在结算事务里写；`usage` 在各项数量旁存 `physical_input`（OpenAI 上游报告的提示词总数，各采样相加；缺失表示上游没报），因为 OpenAI 的缓存读写可重叠，各项之和可大于提示词；`test` 标记检测的成本行（平台自己付，见「用真实生成测试端点」） | PK `(request_id, attempt_seq)`；`charge_record_id` 唯一；行带请求所属的租户，检测的行两列都为空 |
+| `attempt_costs` | 每次供应商请求的成本和对账键，billing 在结算事务里写；循环的每次采样各一行（`hop` 从 0 起），普通尝试只有一行；`usage` 在各项数量旁存 `physical_input`（OpenAI 上游报告的提示词总数，各采样相加；缺失表示上游没报），因为 OpenAI 的缓存读写可重叠，各项之和可大于提示词；`test` 标记检测的成本行（平台自己付，见「用真实生成测试端点」） | PK `(request_id, attempt_seq, hop)`；`charge_record_id` 唯一；扣费按 `(attempt_request_id, attempt_seq, attempt_hop)` 归属；行带请求所属的租户，检测的行两列都为空 |
 | `ended_requests` | billing 告知的请求终结时刻与到达终态的时间 | PK `request_id`；只插入；行带请求所属的租户 |
 | `lost_requests`、`lost_request_resolutions` | 节点失联的请求，和节点带着真实尝试回来 | 只插入；行带请求所属的租户 |
 | `charge_records` | 供应商的扣费记录：状态 `new/matched/held/assigned`、归属、版本 | `UNIQUE (supplier_id, charge_ref)`；归属和状态的 CHECK；平台范围 |
@@ -51,7 +51,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `unit_values` | 供应商的单位余额价值：1 单位余额值多少结算币种，确认时的 `currency` 与 `native_unit`、管理员确认的值、操作人、理由 | 只插入，币种与原生单位均匹配的最新一行生效；`value` 在 (0, 1000] 且小数不超过 15 位；行级安全随所属供应商可见 |
 | `rate_buckets` | 供应商的限速桶：窗口起点、已用次数、封到何时 | PK `(scope, name)`；平台范围 |
 
-- **授权的偏差**：设计里这几张表只有对账角色能改，那个后台任务角色还没有（security.md 的角色表），所以应用角色现在能改 `attempt_costs` 的 `charge_record_id`、`state` 和 `charge_records` 的状态与归属列，别的列、DELETE 都没有；`attempt_journal` 的授权还在（连同它的 DELETE），但没有代码用它，删表时一起删；角色隔离随后台任务角色加入。
+- **授权的偏差**：设计里这几张表只有对账角色能改，那个后台任务角色还没有（security.md 的角色表），所以应用角色现在能改 `attempt_costs` 的 `charge_record_id`、`state` 和 `charge_records` 的状态、归属及 `attempt_hop` 列，别的列、DELETE 都没有；`attempt_journal` 的授权还在（连同它的 DELETE），但没有代码用它，删表时一起删；角色隔离随后台任务角色加入。
 - **行级安全**：`suppliers` 的策略用本行的站点、账户与 [pg 的 InitPlan 范围参数](../platform/pg/README.md#决策与理由)比较，平台的供应商只有平台范围看得见；其余各表不存归属列，只存 `supplier_id`，策略是"这个供应商对本事务可见"，所以插入也挡住"挂到看不见的供应商下"，也不会有与父对象不一致的标签。
 - **复合外键**：凡同时存 `supplier_id` 和 `supplier_group_id` 的表，用 `(supplier_group_id, supplier_id) → supplier_groups (id, supplier_id)`，分组与行不可能属于不同供应商。别名的分组可空，空表示整个供应商。
 - **授权**：应用角色对配置表没有 DELETE，只有 `supplier_logins` 有（移除供应商时删封存的登录，没有外键指向它，迁移 `00006`）；旧的对账日志还留着 DELETE，但没有代码用它（「没有对账日志」）；UPDATE 按列授予，不含 `id`、`supplier_id`、归属列、`kind`、`origin`、`upstream_account`：身份和凭证发往的地址不能改。
@@ -364,7 +364,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 
 崩溃留下的预留改用两件东西收尾，都在 database 里、都与结算同一次提交：
 
-- **尝试的成本行**（`attempt_costs`）：结算事务里写，与账本的 `supplier_cost` 分录同成同败，所以「这次尝试花了多少钱、对账键是什么、用的是哪个端点」不会只留在崩溃的进程里（[计费的「结算与账本」](../billing/README.md#结算与账本)）。
+- **尝试的成本行**（`attempt_costs`）：结算事务里写，与账本的 `supplier_cost` 分录同成同败；循环每次采样一行，所以「这一跳花了多少钱、对账键是什么、用的是哪个端点」不会只留在崩溃的进程里（[计费的「结算与账本」](../billing/README.md#结算与账本)）。
 - **丢失的请求**（`lost_requests`）：清理接管预留时写一行，带 `route_endpoint_ids`——预留冻结的路线里保留条目的端点（`billing.reservations.endpoints`，与 `prices` 等长同序）。没有尝试行时这是唯一可用的信息：这个请求可能被上游收过钱，钱最可能落在这些端点上。迟到的结算带着真实尝试回来时写 `lost_request_resolutions`。
 
 代价是崩溃前那一刻的尝试没有任何记账：进程没来得及结算，就只有丢失的请求，没有成本行。原来的日志只是把这个窗口从「整个请求」缩到「最近一次写入之后」，而这个写入本身也在请求路径之外；M1 用「崩溃的请求记成丢失、对不上尝试的扣费暂挂后由人归属」接受这个窗口（[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。

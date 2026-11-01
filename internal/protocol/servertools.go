@@ -221,7 +221,7 @@ func AppendServerTurn(f Format, body []byte, turn ServerTurn, results []string) 
 			if err != nil {
 				return nil, err
 			}
-			following = appendResult(following, i, `{"role":"tool","tool_call_id":`, id, `,"content":`, results[i], `}`)
+			following = appendResult(following, i, `{"role":"tool","tool_call_id":`, id, `,"content":`, results[i], `}`) //nolint:gosec // results has one entry per server call, checked above
 		}
 	case Messages:
 		for i, call := range calls {
@@ -230,7 +230,7 @@ func AppendServerTurn(f Format, body []byte, turn ServerTurn, results []string) 
 				return nil, err
 			}
 			following = appendResult(following, i, `{"role":"user","content":[{"type":"tool_result","tool_use_id":`, id,
-				`,"content":[{"type":"text","text":`, results[i], `}]}]}`)
+				`,"content":[{"type":"text","text":`, results[i], `}]}]}`) //nolint:gosec // results has one entry per server call, checked above
 		}
 	case Responses:
 		for i, call := range calls {
@@ -239,7 +239,7 @@ func AppendServerTurn(f Format, body []byte, turn ServerTurn, results []string) 
 				return nil, err
 			}
 			following = appendResult(following, i, `{"type":"function_call_output","call_id":`, id, `,"output":`,
-				results[i], `}`)
+				results[i], `}`) //nolint:gosec // results has one entry per server call, checked above
 		}
 	default:
 		return nil, &NotSupported{Reason: fmt.Sprintf("format %d has no tools", f)}
@@ -269,9 +269,12 @@ func AppendServerTurn(f Format, body []byte, turn ServerTurn, results []string) 
 			return nil, err
 		}
 	}
+	parts, err := serverTurnParts(f, assistant, following)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
-		added := append(append(append([]byte{'['}, assistant...), ','), following...)
-		added = append(added, ']')
+		added := append(append([]byte{'['}, parts...), ']')
 		return insertMember(body, member, added)
 	}
 	var elems []jsontext.Value
@@ -279,17 +282,46 @@ func AppendServerTurn(f Format, body []byte, turn ServerTurn, results []string) 
 		return nil, fmt.Errorf("%w: %s is not an array", ErrInvalid, member)
 	}
 	at := end - 1
-	out := make([]byte, 0, len(body)+len(assistant)+len(following)+2)
+	out := make([]byte, 0, len(body)+len(parts)+2)
 	out = append(out, body[:at]...)
 	if len(elems) > 0 {
 		out = append(out, ',')
 	}
-	out = append(out, assistant...)
-	if len(following) > 0 {
+	out = append(out, parts...)
+	out = append(out, body[at:]...)
+	return out, nil
+}
+
+// serverTurnParts produces the array elements to append to the conversation. Responses' captured turn is already an
+// array of output items: its elements are flattened into input, never inserted as one nested array. The other formats
+// have one assistant object followed by their tool results.
+func serverTurnParts(f Format, assistant, following []byte) ([]byte, error) {
+	if f != Responses {
+		if len(following) == 0 {
+			return assistant, nil
+		}
+		out := make([]byte, 0, len(assistant)+len(following)+1)
+		out = append(out, assistant...)
 		out = append(out, ',')
+		return append(out, following...), nil
+	}
+	var items []jsontext.Value
+	if err := jsonx.Unmarshal(assistant, &items); err != nil {
+		return nil, fmt.Errorf("%w: the Responses assistant turn is not an array", ErrInvalid)
+	}
+	out := make([]byte, 0, len(assistant)+len(following)+1)
+	for i, item := range items {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, item...)
+	}
+	if len(following) > 0 {
+		if len(items) > 0 {
+			out = append(out, ',')
+		}
 		out = append(out, following...)
 	}
-	out = append(out, body[at:]...)
 	return out, nil
 }
 

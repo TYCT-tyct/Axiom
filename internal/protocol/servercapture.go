@@ -73,6 +73,7 @@ type serverEvent struct {
 		Thinking  string          `json:"thinking"`
 		Signature string          `json:"signature"`
 		Text      string          `json:"text"`
+		Data      json.RawMessage `json:"data"`
 	} `json:"content_block"`
 	Delta       json.RawMessage `json:"delta"`
 	OutputIndex int64           `json:"output_index"`
@@ -135,6 +136,11 @@ func (c *serverCapture) event(data []byte) error {
 			b := capturedBlock{
 				kind: e.ContentBlock.Type, text: e.ContentBlock.Text, thinking: e.ContentBlock.Thinking,
 				signature: e.ContentBlock.Signature, id: e.ContentBlock.ID, name: e.ContentBlock.Name,
+			}
+			if b.kind != "text" && b.kind != "thinking" && b.kind != "tool_use" {
+				if raw, err := json.Marshal(e.ContentBlock); err == nil {
+					b.raw = raw
+				}
 			}
 			if b.kind == "tool_use" {
 				if len(e.ContentBlock.Input) > 0 && string(e.ContentBlock.Input) != "{}" {

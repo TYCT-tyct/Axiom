@@ -540,11 +540,11 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 }
 
 const listUnmatchedAttempts = `-- name: ListUnmatchedAttempts :many
-SELECT request_id, attempt_seq, charge_ref, finished_at FROM suppliers.attempt_costs
+SELECT request_id, attempt_seq, hop, charge_ref, finished_at FROM suppliers.attempt_costs
 WHERE state = 'pending' AND charge_ref IS NOT NULL AND finished_at < $1 AND NOT test
-    AND (finished_at, request_id, attempt_seq) > ($2::timestamptz, $3::uuid, $4::smallint)
-ORDER BY finished_at, request_id, attempt_seq
-LIMIT $5::int
+    AND (finished_at, request_id, attempt_seq, hop) > ($2::timestamptz, $3::uuid, $4::smallint, $5::smallint)
+ORDER BY finished_at, request_id, attempt_seq, hop
+LIMIT $6::int
 `
 
 type ListUnmatchedAttemptsParams struct {
@@ -552,12 +552,14 @@ type ListUnmatchedAttemptsParams struct {
 	AfterAt      time.Time
 	AfterRequest uuid.UUID
 	AfterSeq     int16
+	AfterHop     int16
 	Batch        int32
 }
 
 type ListUnmatchedAttemptsRow struct {
 	RequestID  uuid.UUID
 	AttemptSeq int16
+	Hop        int16
 	ChargeRef  *string
 	FinishedAt time.Time
 }
@@ -571,6 +573,7 @@ func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUn
 		arg.AfterAt,
 		arg.AfterRequest,
 		arg.AfterSeq,
+		arg.AfterHop,
 		arg.Batch,
 	)
 	if err != nil {
@@ -583,6 +586,7 @@ func (q *Queries) ListUnmatchedAttempts(ctx context.Context, db DBTX, arg ListUn
 		if err := rows.Scan(
 			&i.RequestID,
 			&i.AttemptSeq,
+			&i.Hop,
 			&i.ChargeRef,
 			&i.FinishedAt,
 		); err != nil {
@@ -611,7 +615,7 @@ func (q *Queries) LockChargeEvents(ctx context.Context, db DBTX) error {
 
 const matchCharges = `-- name: MatchCharges :many
 WITH pairs AS (
-    SELECT cr.id AS charge_id, ac.request_id, ac.attempt_seq
+    SELECT cr.id AS charge_id, ac.request_id, ac.attempt_seq, ac.hop
     FROM suppliers.charge_records cr
     JOIN suppliers.attempt_costs ac ON ac.supplier_id = cr.supplier_id AND ac.charge_ref = cr.charge_ref
     WHERE cr.state <> 'matched' AND cr.funding = 'wallet' AND ac.charge_record_id IS NULL
@@ -622,11 +626,11 @@ WITH pairs AS (
 ), claimed AS (
     UPDATE suppliers.attempt_costs ac SET charge_record_id = p.charge_id, state = 'matched'
     FROM pairs p
-    WHERE ac.request_id = p.request_id AND ac.attempt_seq = p.attempt_seq AND ac.charge_record_id IS NULL
-    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.endpoint_id, ac.cost_schedule_id, ac.estimated_native, ac.cost_flag, ac.test
+    WHERE ac.request_id = p.request_id AND ac.attempt_seq = p.attempt_seq AND ac.hop = p.hop AND ac.charge_record_id IS NULL
+    RETURNING p.charge_id, ac.request_id, ac.attempt_seq, ac.hop, ac.endpoint_id, ac.cost_schedule_id, ac.estimated_native, ac.cost_flag, ac.test
 )
 UPDATE suppliers.charge_records cr SET state = 'matched', attribution = 'attempt', attempt_request_id = claimed.request_id,
-    attempt_seq = claimed.attempt_seq, lost_request_id = NULL, revision = cr.revision + 1
+    attempt_seq = claimed.attempt_seq, attempt_hop = claimed.hop, lost_request_id = NULL, revision = cr.revision + 1
 FROM claimed
 WHERE cr.id = claimed.charge_id AND cr.state <> 'matched'
 RETURNING cr.id AS charge_id, cr.revision, cr.amount_native AS actual_native, claimed.estimated_native, claimed.cost_flag,

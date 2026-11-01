@@ -231,16 +231,12 @@ func (c *locked) planCharge(ctx context.Context, tx pg.Tx, o Outcome) (settlemen
 // the next settlement to restore.
 func (c *locked) attemptWrites(o Outcome) ([]PostLedgerParams, []suppliers.AttemptRecord) {
 	c.costKnown = true
-	records := make([]suppliers.AttemptRecord, len(o.Attempts))
+	records := make([]suppliers.AttemptRecord, 0, len(o.Attempts))
 	posts := make([]PostLedgerParams, 0, len(o.Attempts))
-	for i, at := range o.Attempts {
+	for _, at := range o.Attempts {
 		c.costKnown = c.costKnown && at.CostKnown
 		c.cost = sum(c.cost, platform.AmountExact(at.Cost))
-		records[i] = suppliers.AttemptRecord{
-			Request: platform.RequestID(c.id), Seq: platform.AttemptSeq(at.Seq), //nolint:gosec // at most platform.MaxAttempts
-			Site: c.row.SiteID, Account: c.row.AccountID,
-			Receipt: at.Receipt, Usage: usages(at.Segments), Cost: at.Estimate, FinishedAt: at.FinishedAt,
-		}
+		records = append(records, attemptRecords(c, at)...)
 		e := c.event("attempt_cost", 0)
 		e.seq = *int32p(at.Seq)
 		posts = append(posts, ledgerParams(e, []line{{bookSupplierCost, at.Cost, siteCredits}, {bookSupplierPrepaid, -at.Cost, siteCredits}}))

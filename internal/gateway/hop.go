@@ -136,16 +136,18 @@ func (a *attempt) sendNext(ctx context.Context) *ended {
 	if s.isGone() {
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
 	}
-	// Each hop is its own supplier request, so it takes its own slot and rolling-minute quota. The previous
-	// credential is released only after the next one is acquired, so a failure here still has a live connection to
-	// close and its receipt.
+	// Each hop is its own supplier request, so it takes its own slot and rolling-minute quota. Release the finished
+	// request first: with a credential capacity of one, acquiring while the old slot is held would fail even though
+	// this call is entitled to reuse it. conn is cleared so a failed acquire cannot call Done twice.
+	prev := s.done(a.conn).WithExchange(a.entry.Exchange)
+	a.receipts = append(a.receipts, prev)
+	a.hopReceipts = append(a.hopReceipts, prev)
+	a.conn = nil
 	conn, err := s.x.Upstreams.Acquire(uuid.UUID(a.entry.Endpoint))
 	if err != nil {
 		s.x.Limits.Queue.Wake()
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
 	}
-	prev := s.done(a.conn).WithExchange(a.entry.Exchange)
-	a.receipts = append(a.receipts, prev)
 	a.conn = conn
 	up, held, err := s.prepare(a.entry)
 	if err != nil {

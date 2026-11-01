@@ -286,6 +286,7 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		// The model-side loop sampled the model once per hop; each hop's usage is its own segment (docs/domains/billing.md
 		// 「预留与结算」).
 		rec.Segments = a.hops
+		a.recordHops(rec)
 	} else {
 		rec.Segments = estimated(a.usage, a.seen, a.demand(), a.entry.Limits, a.meter.OutputCap(),
 			billing.TokenizerOf(a.entry.Target.Model))
@@ -307,6 +308,35 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 	// not a cost known to be what the supplier charged, whatever it converted to.
 	rec.CostKnown = known && err == nil && c.Flag == suppliers.CostComplete
 	rec.Cost, rec.Estimate = credits, c
+}
+
+// recordHops gives suppliers one cost and receipt per supplier request. The aggregate Estimate and Cost stay the
+// gateway attempt's own numbers; a charge is reconciled against the hop that produced it.
+func (a *attempt) recordHops(rec *billing.AttemptResult) {
+	if len(a.hopEnds) == 0 || len(a.hopReceipts) < len(a.hopEnds) {
+		return
+	}
+	from := 0
+	for i, end := range a.hopEnds {
+		if end < from || end > len(a.hops) {
+			return
+		}
+		segs := a.hops[from:end]
+		from = end
+		receipt := a.hopReceipts[i].WithExchange(a.entry.Exchange)
+		usage := make([]catalog.Usage, len(segs))
+		for j, seg := range segs {
+			usage[j] = seg.Usage
+		}
+		c, _, _, err := a.s.x.Costs.Credits(receipt, usage, a.entry.Price.Schedule.Currency())
+		if err != nil {
+			c.Flag = suppliers.CostUnpriced
+		}
+		c.Flag = costFlag(segs, c.Flag)
+		rec.Hops = append(rec.Hops, billing.AttemptHop{
+			Segments: segs, Receipt: receipt, Estimate: c, FinishedAt: time.Now(),
+		})
+	}
 }
 
 // addSearchUsage adds the call's external searches and file parses to the user's side of the charged attempt after the

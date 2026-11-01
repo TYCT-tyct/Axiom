@@ -271,4 +271,5 @@ func (a *attempt) hopDone(relay *protocol.Relay) {
 	a.seen = relay.Progress()
 	d := routing.DemandOf(&s.c.Request)
 	a.hops = append(a.hops, estimated(u, a.seen, d, a.entry.Limits, a.hopCap(), billing.TokenizerOf(a.entry.Target.Model))...)
+	a.hopEnds = append(a.hopEnds, len(a.hops))
 }

@@ -240,6 +240,8 @@ type attempt struct {
 	nextBody    io.ReadCloser
 	nextUsage   protocol.UsageContext
 	receipts    []suppliers.AttemptReceipt // one per supplier request: a loop hop acquires its own slot and RPM
+	hopEnds     []int                      // a.hops index after each finished hop
+	hopReceipts []suppliers.AttemptReceipt // receipt of each finished hop, parallel to hopEnds
 
 	asked   billing.ExtendRequest
 	landing chan error // the outcome of the extension asked for, nil when none is in flight
@@ -283,9 +285,15 @@ func (a *attempt) close(ctx context.Context) {
 	a.cancel(nil)
 	a.release()
 	a.s.x.Router.End(a.entry.Endpoint) // before the wake: a waiter must find both the endpoint's count and the slot free
-	receipt := a.s.done(a.conn)
-	receipt = receipt.WithExchange(a.entry.Exchange)
-	a.receipts = append(a.receipts, receipt)
+	receipt := suppliers.AttemptReceipt{}
+	if len(a.receipts) > 0 {
+		receipt = a.receipts[len(a.receipts)-1]
+	}
+	if a.conn != nil {
+		receipt = a.s.done(a.conn).WithExchange(a.entry.Exchange)
+		a.receipts = append(a.receipts, receipt)
+		a.hopReceipts = append(a.hopReceipts, receipt)
+	}
 	a.obs.Credential = receipt.CredentialID()
 	a.result(receipt)
 	a.observe(ctx)

@@ -1,6 +1,11 @@
 package protocol
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+
+	"axiom/internal/platform/jsonx"
+)
 
 func TestServerCaptureChat(t *testing.T) {
 	c := newServerCapture(Chat)
@@ -63,4 +68,59 @@ func TestServerCaptureIgnoresOtherTools(t *testing.T) {
 	if len(c.serverCalls()) != 0 || !c.client || len(c.calls) != 1 {
 		t.Fatalf("calls = %+v, client = %v", c.calls, c.client)
 	}
+}
+
+func TestAppendCapturedResponsesTurnFlattensItems(t *testing.T) {
+	c := newServerCapture(Responses)
+	for _, event := range []string{
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}`,
+		`{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_1","name":"openrouter_web_search","arguments":"{}"}}`,
+	} {
+		if err := c.event([]byte(event)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, err := AppendServerTurn(Responses, []byte(`{"model":"m","input":[{"role":"user","content":"q"}]}`), c.turn(), []string{"result"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var input []struct {
+		Type   string `json:"type"`
+		CallID string `json:"call_id"`
+	}
+	if err := jsonx.Unmarshal(mustTop(t, body, "input"), &input); err != nil {
+		t.Fatalf("input is not a flat array: %v: %s", err, body)
+	}
+	if len(input) != 4 || input[1].Type != "message" || input[2].Type != "function_call" || input[3].Type != "function_call_output" {
+		t.Fatalf("input = %+v: %s", input, body)
+	}
+}
+
+func TestAppendCapturedMessagesRedactedThinking(t *testing.T) {
+	c := newServerCapture(Messages)
+	for _, event := range []string{
+		`{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"ciphertext"}}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_1","name":"openrouter_web_search","input":{}}}`,
+	} {
+		if err := c.event([]byte(event)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	turn := c.turn()
+	if !bytes.Contains(turn.Assistant, []byte(`"data":"ciphertext"`)) {
+		t.Fatalf("redacted_thinking.data was lost: %s", turn.Assistant)
+	}
+	body, err := AppendServerTurn(Messages, []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`), turn, []string{"result"})
+	if err != nil || !bytes.Contains(body, []byte(`"data":"ciphertext"`)) {
+		t.Fatalf("append = %s, %v", body, err)
+	}
+}
+
+func mustTop(t *testing.T, body []byte, member string) []byte {
+	t.Helper()
+	value, _, _, ok, err := topMember(body, member)
+	if err != nil || !ok {
+		t.Fatalf("missing %s: %s, %v", member, body, err)
+	}
+	return value
 }

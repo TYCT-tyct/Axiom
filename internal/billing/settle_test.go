@@ -416,3 +416,45 @@ func TestCreditOnce(t *testing.T) {
 	}
 	b.balanced()
 }
+
+// TestSettlementsKeepEveryLoopHop: both settlement entries persist each supplier request behind a model-side loop,
+// with its own hop number and receipt, while the ledger still books the gateway attempt once.
+func TestSettlementsKeepEveryLoopHop(t *testing.T) {
+	t.Parallel()
+
+	hop := func() AttemptHop {
+		return AttemptHop{Segments: []Segment{used(t, 50, 20, 1)}, FinishedAt: time.Now()}
+	}
+	for name, settle := range map[string]func(*testing.T, *bank, *Hold, Outcome){
+		"single": func(t *testing.T, b *bank, h *Hold, o Outcome) {
+			if _, err := b.billing.Settle(t.Context(), h, o); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"batch": func(t *testing.T, b *bank, h *Hold, o Outcome) {
+			_, afters, err := b.billing.SettleBatch(t.Context(), b.admitted.Scope, []Settlement{{Hold: h, Outcome: o}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, after := range afters {
+				after()
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
+			h := b.hold(1000)
+			o := outcome(Committed, FinishStop, used(t, 50, 20, 1))
+			o.Attempts[0].Hops = []AttemptHop{hop(), hop()}
+			settle(t, b, h, o)
+			rows := b.supplies.attempts[h.id]
+			if len(rows) != 2 || rows[0].Hop != 0 || rows[1].Hop != 1 {
+				t.Fatalf("suppliers got %+v, want one row for each loop hop", rows)
+			}
+			if len(rows[0].Usage) == 0 || len(rows[1].Usage) == 0 {
+				t.Fatalf("a hop was stored without its usage: %+v", rows)
+			}
+			b.balanced()
+		})
+	}
+}
