@@ -10,6 +10,7 @@ import { type SupplierView, supplierQuery } from "../queries";
 import { Checklist } from "../suppliers/checklist";
 import {
   BindKeyDialog,
+  QuantizationDialog,
   RemoveDialog,
   ReplaceLoginDialog,
   SelectGroupDialog,
@@ -149,6 +150,8 @@ function Dialogs({ detail, open, onClose }: { detail: Detail; open: Open | null;
       );
     case "test":
       return <EndpointTestDialog endpoint={open.endpoint} group={open.group} onClose={onClose} />;
+    case "quantization":
+      return <QuantizationDialog supplier={supplier} endpoint={open.endpoint} onClose={onClose} />;
     default:
       return null;
   }

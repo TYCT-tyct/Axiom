@@ -349,6 +349,8 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		// fingerprint check, which real traffic does not count for (docs/domains/quality.md「真伪检测」).
 		Quality: measured.Quality, Confidence: measured.Confidence, Health: measured.Health,
 		Throughput: measured.Throughput, Latency: measured.Latency, Verified: measured.Verified,
+		LatencyPercentiles: measured.LatencyPercentiles, ThroughputPercentiles: measured.ThroughputPercentiles,
+		Quantization: r.Quantization,
 		ServiceTiers: tiers,
 		Native:       native, Served: served,
 		Caps:       capabilities(serving.Abilities),

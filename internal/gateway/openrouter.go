@@ -271,6 +271,7 @@ type orPricing struct {
 	Audio             string `json:"audio,omitempty"`
 	AudioOutput       string `json:"audio_output,omitempty"`
 	WebSearch         string `json:"web_search,omitempty"`
+	Request           string `json:"request,omitempty"`
 }
 
 // orArchitecture is OpenRouter's modalities (spec `ModelArchitecture`). tokenizer and instruct_type are left out: the
@@ -377,6 +378,7 @@ func newORPricing(p catalog.Schedule, a catalog.AbilitySet) orPricing {
 		Audio:             orPrice(p, catalog.ItemAudioIn),
 		AudioOutput:       orPrice(p, catalog.ItemAudioOut),
 		WebSearch:         orPrice(p, catalog.ItemWebSearch),
+		Request:           orPrice(p, catalog.ItemRequest),
 	}
 	if a.Has(catalog.AbilityImages) {
 		price.Image = orPrice(p, catalog.ItemImageInPiece)

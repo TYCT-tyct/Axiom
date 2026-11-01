@@ -9,6 +9,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/suppliers"
 )
 
 // need is everything a candidate is held against, worked out once per request.
@@ -156,7 +157,7 @@ func DemandOf(req *protocol.Request) billing.Demand {
 	d := billing.Demand{
 		TextBytes: req.TextBytes + req.SearchBytes, Images: req.Images, Documents: req.Documents, Choices: req.Choices,
 		Direct: req.Format.Direct(), InputBytes: req.MaxInputBytes,
-		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers,
+		Compaction: req.Compacts, InputItems: req.InputItems, ServiceTiers: req.ServiceTiers, Requests: 1,
 	}
 	if req.Needs.Has(protocol.WebSearch) || req.Format == protocol.Rerank {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.WebSearches})
@@ -455,10 +456,16 @@ func (n *need) presetAllows(c *candidate, price *candidatePrice) bool {
 // and an endpoint must pass both.
 func (n *need) overrideAllows(c *candidate, price *candidatePrice) bool {
 	o := n.over
-	return o.allowsName(c.Codename) &&
+	return o.allowsName(c.Codename) && o.allowsQuantization(c.Quantization) &&
 		(o.Classes == 0 || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
 		(!o.RequireParameters || c.Parameters.HasAll(o.RequiredParameters)) &&
 		n.withinLimit(o.MaxPrice, c, price)
+}
+
+// allowsQuantization: an endpoint with no level recorded never matches a request that names levels, because a missing
+// record cannot stand for one (docs/domains/gateway.md「与 OpenRouter 的偏离」).
+func (o *Override) allowsQuantization(q suppliers.Quantization) bool {
+	return len(o.Quantizations) == 0 || q != "" && slices.Contains(o.Quantizations, q)
 }
 
 func (o *Override) allowsName(name string) bool {

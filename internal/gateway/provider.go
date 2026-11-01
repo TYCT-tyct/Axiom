@@ -14,6 +14,7 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/routing"
+	"axiom/internal/suppliers"
 )
 
 // override validates the provider object before admission. A constraint is either enforced by the route or refused
@@ -46,19 +47,16 @@ func override(raw []byte) (routing.Override, error) {
 // providerMembers reads each member of the provider object. The names are OpenRouter's (OpenRouter《Provider Routing》,
 // 2026-10); docs/domains/routing.md「请求覆盖」 says what each does.
 var providerMembers = map[string]func(o *routing.Override, name string, value []byte) error{
-	"sort":            readSort,
-	"data_collection": readDataCollection,
-	"zdr":             readZDR,
-	"max_price":       readMaxPrice,
-	"preferred_min_throughput": func(o *routing.Override, name string, v []byte) (err error) {
-		o.MinThroughput, err = jsonNumber(name, v, 1e9)
-		return err
-	},
-	"preferred_max_latency": readMaxLatency,
-	"order":                 readCodenames,
-	"only":                  readCodenames,
-	"ignore":                readCodenames,
-	"quantizations":         readQuantizations,
+	"sort":                     readSort,
+	"data_collection":          readDataCollection,
+	"zdr":                      readZDR,
+	"max_price":                readMaxPrice,
+	"preferred_min_throughput": readMinThroughput,
+	"preferred_max_latency":    readMaxLatency,
+	"order":                    readCodenames,
+	"only":                     readCodenames,
+	"ignore":                   readCodenames,
+	"quantizations":            readQuantizations,
 	"allow_fallbacks": func(o *routing.Override, name string, v []byte) error {
 		var allow bool
 		if err := jsonx.Unmarshal(v, &allow); err != nil {
@@ -87,13 +85,23 @@ func readRequireParameters(o *routing.Override, name string, value []byte) error
 	return nil
 }
 
-func readQuantizations(_ *routing.Override, name string, value []byte) error {
+func readQuantizations(o *routing.Override, name string, value []byte) error {
 	var names []string
 	if err := jsonx.Unmarshal(value, &names); err != nil {
-		return mismatch(name, "a list of names")
+		return mismatch(name, "a list of OpenRouter's quantization levels")
 	}
-	if len(names) > 0 {
-		return invalid("provider." + name + " is not supported: no endpoint records a quantization level; catalog specs and the supplier model projection carry none, and a missing record cannot stand for a requested level.")
+	levels := make([]suppliers.Quantization, 0, len(names))
+	for _, levelName := range names {
+		level, err := suppliers.ParseQuantization(levelName)
+		if err != nil {
+			return mismatch(name, "a list of OpenRouter's quantization levels")
+		}
+		if !slices.Contains(levels, level) {
+			levels = append(levels, level)
+		}
+	}
+	if len(levels) > 0 {
+		o.Quantizations = levels
 	}
 	return nil
 }
@@ -176,7 +184,7 @@ func readSortMember(o *routing.Override, name, member string, value []byte, by *
 		o.SortGlobal = partition == "none"
 	default:
 		if member == "percentile" {
-			return invalid("provider." + name + ".percentile is not supported: a sort object takes by and partition; percentile cutoffs belong to preferred_min_throughput and preferred_max_latency, which quality cannot compare without rolling five-minute p50/p75/p90/p99 samples.")
+			return invalid("provider." + name + ".percentile is not supported: a sort object takes by and partition; percentile cutoffs belong to preferred_min_throughput and preferred_max_latency, which compare the rolling five-minute p50/p75/p90/p99 samples.")
 		}
 		return unsupported(name + "." + member)
 	}
@@ -213,24 +221,74 @@ func readZDR(o *routing.Override, name string, value []byte) error {
 func jsonNumber(name string, value []byte, hi float64) (float64, error) {
 	var v float64
 	if err := jsonx.Unmarshal(value, &v); err != nil || v < 0 || v > hi {
-		if trimmed := bytes.TrimSpace(value); len(trimmed) > 0 && trimmed[0] == '{' {
-			return 0, invalid("provider." + name + " percentile objects are not supported: quality keeps one EWMA latency and throughput per endpoint (at least 5 samples, fresh for 30 minutes), not the rolling five-minute p50/p75/p90/p99 samples a cutoff needs.")
-		}
 		return 0, mismatch(name, "a number")
 	}
 	return v, nil
 }
 
-// readMaxLatency reads seconds, as OpenRouter does.
+// readMinThroughput reads tokens a second as OpenRouter does: a number for the moving average, or an object of
+// percentile cutoffs for the rolling five-minute window.
+func readMinThroughput(o *routing.Override, name string, value []byte) error {
+	if isObject(value) {
+		return readCutoffs(name, value, 1e9, &o.MinThroughputPercentiles)
+	}
+	v, err := jsonNumber(name, value, 1e9)
+	o.MinThroughput = v
+	return err
+}
+
+// readMaxLatency reads seconds, as OpenRouter does, in either form.
 func readMaxLatency(o *routing.Override, name string, value []byte) error {
+	if isObject(value) {
+		return readCutoffs(name, value, 1e6, &o.MaxLatencyPercentiles)
+	}
 	seconds, err := jsonNumber(name, value, 1e6)
 	o.MaxLatency = time.Duration(seconds * float64(time.Second))
 	return err
 }
 
-// maxPriceItems maps token-denominated OpenRouter caps to Axiom's billing items. Per-request and per-image prices
-// have no corresponding billing unit here; treating image tokens as images would promise the wrong cap.
-var maxPriceItems = map[string]catalog.Item{"prompt": catalog.ItemInput, "completion": catalog.ItemOutput}
+func isObject(value []byte) bool {
+	trimmed := bytes.TrimSpace(value)
+	return len(trimmed) > 0 && trimmed[0] == '{'
+}
+
+// percentileIndex names the percentiles an object cutoff can set, as OpenRouter documents them.
+var percentileIndex = map[string]int{"p50": routing.P50, "p75": routing.P75, "p90": routing.P90, "p99": routing.P99}
+
+// readCutoffs reads one object of percentile cutoffs. A cutoff of 0 is a threshold, so an object with no members is
+// refused rather than read as none: OpenRouter names all four percentiles in one object, and every one given must hold.
+func readCutoffs(name string, value []byte, hi float64, c *routing.Cutoffs) error {
+	var members map[string]jsonx.Raw
+	if err := jsonx.Unmarshal(value, &members); err != nil {
+		return mismatch(name, "a number or an object of p50, p75, p90 and p99")
+	}
+	for _, member := range slices.Sorted(maps.Keys(members)) {
+		v := bytes.TrimSpace(members[member])
+		if string(v) == "null" {
+			continue
+		}
+		i, known := percentileIndex[member]
+		if !known {
+			return mismatch(name+"."+member, "one of p50, p75, p90 or p99")
+		}
+		cutoff, err := jsonNumber(name+"."+member, v, hi)
+		if err != nil {
+			return err
+		}
+		c.Values[i], c.Set = cutoff, c.Set|1<<i
+	}
+	if c.Set == 0 {
+		return mismatch(name, "an object with at least one of p50, p75, p90 or p99")
+	}
+	return nil
+}
+
+// maxPriceItems maps OpenRouter caps to Axiom's billing items. Prompt and completion are per million tokens; request
+// is one generation, charged whatever its size. A per-image cap stays refused: treating image tokens as images would
+// promise the wrong cap.
+var maxPriceItems = map[string]catalog.Item{
+	"prompt": catalog.ItemInput, "completion": catalog.ItemOutput, "request": catalog.ItemRequest,
+}
 
 // readMaxPrice reads max_price, in credits of the site per million tokens like the prices of the model list: the
 // site's currency is its unit of account (docs/domains/billing.md「钱的表示」), which for the main site is OpenRouter's
@@ -247,17 +305,19 @@ func readMaxPrice(o *routing.Override, name string, value []byte) error {
 		}
 		item, ok := maxPriceItems[member]
 		if !ok {
-			switch member {
-			case "request":
-				return invalid("provider." + name + ".request is not supported: the published price version has no per-request item; it prices tokens and per-use server tools only, and OpenRouter's pricing.request is not imported.")
-			case "image":
+			if member == "image" {
 				return invalid("provider." + name + ".image is not supported: the price version has per-piece image items, but OpenRouter's single image cap does not say whether it covers input images, generated images or token-priced images, and no endpoint reports image pieces; the item to compare is undecided.")
 			}
 			return unsupported(name + "." + member)
 		}
 		price, ok := perToken(v)
+		message := "a number of credits per million tokens with at most 9 decimals, from 0 to 1000000000"
+		if item == catalog.ItemRequest {
+			price, ok = perRequest(v)
+			message = "a number of credits per request with at most 15 decimals, from 0 to 1000"
+		}
 		if !ok {
-			return mismatch(name+"."+member, "a number of credits per million tokens with at most 9 decimals, from 0 to 1000000000")
+			return mismatch(name+"."+member, message)
 		}
 		o.MaxPrice.Set.Add(item)
 		o.MaxPrice.Max[item] = price
@@ -275,7 +335,17 @@ var priceNumber = regexp.MustCompile(`^([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]
 // has to be a whole number and at most 10¹⁸ (UnitPrice's limit). The digits and the power are checked to be within
 // those bounds before the big integer is made, so what an exponent such as 1e1000000 asks for is never computed.
 func perToken(number []byte) (platform.UnitPrice, bool) {
-	units, ok := readPrice(number)
+	units, ok := readPrice(number, 9)
+	if !ok {
+		return platform.UnitPrice{}, false
+	}
+	return units.price()
+}
+
+// perRequest turns a JSON number of credits per request into the price of one request: no million-token scaling, so a
+// number is multiplied by 10¹⁵ units, and its 15 decimals are all the unit price has.
+func perRequest(number []byte) (platform.UnitPrice, bool) {
+	units, ok := readPrice(number, 15)
 	if !ok {
 		return platform.UnitPrice{}, false
 	}
@@ -292,7 +362,7 @@ type priceUnits struct {
 
 // readPrice reads a JSON number as the price units it asks for, or reports that it is not one. It is string work only:
 // a huge exponent or a long run of digits is refused here, before any big-integer arithmetic.
-func readPrice(number []byte) (priceUnits, bool) {
+func readPrice(number []byte, extra int) (priceUnits, bool) {
 	m := priceNumber.FindSubmatch(number)
 	if m == nil {
 		return priceUnits{}, false
@@ -310,7 +380,7 @@ func readPrice(number []byte) (priceUnits, bool) {
 	if digits == "" {
 		return priceUnits{}, true // the zero value is the price of nothing, whatever the exponent says
 	}
-	shift := scale + 9
+	shift := scale + extra
 	if len(digits) > 19 || shift < 0 || shift+len(digits) > 19 {
 		return priceUnits{}, false
 	}

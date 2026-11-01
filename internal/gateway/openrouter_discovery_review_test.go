@@ -122,3 +122,29 @@ func TestOpenRouterEndpointTagsHideIdentifiers(t *testing.T) {
 		t.Error(diff)
 	}
 }
+
+// TestOpenRouterEndpointPublishesQuantizationAndRequestPrice: the public endpoint shows the precision a person recorded
+// and omits it when none is, and the model's price list shows a per-request price when the schedule has one.
+func TestOpenRouterEndpointPublishesQuantizationAndRequestPrice(t *testing.T) {
+	model := orEntry{ID: "acme/model", Name: "model", Pricing: orPricing{Request: "1.5"}}
+	endpoints := []routing.Endpoint{
+		{ID: routing.EndpointID(uuid.NewV7()), Context: 1, MaxOutput: 1, Quantization: "fp8"},
+		{ID: routing.EndpointID(uuid.NewV7()), Context: 1, MaxOutput: 1},
+	}
+	body, err := encodeOREndpoints(model, endpoints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply struct {
+		Data orEndpointModel `json:"data"`
+	}
+	if err := jsonx.Unmarshal(body, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.Data.Endpoints) != 2 || reply.Data.Endpoints[0].Quantization != "fp8" || reply.Data.Endpoints[1].Quantization != nil {
+		t.Errorf("quantization: %+v", reply.Data.Endpoints)
+	}
+	if reply.Data.Endpoints[0].Pricing.Request != "1.5" {
+		t.Errorf("request price: %q", reply.Data.Endpoints[0].Pricing.Request)
+	}
+}

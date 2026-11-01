@@ -121,6 +121,11 @@ type Endpoint struct {
 	ToolErrorRate float64       // 0 to 1, measured on real traffic
 	Throughput    float64       // output tokens per second, measured
 	Latency       time.Duration // time to first token, measured
+	// The same two measures over a rolling five-minute window, p50/p75/p90/p99, 0 when not measured. They are copied
+	// from quality when the snapshot is built so the routing path reads no lock.
+	LatencyPercentiles    [4]time.Duration
+	ThroughputPercentiles [4]float64
+	Quantization          suppliers.Quantization // the level an admin recorded for this endpoint; empty is unrecorded
 
 	ServiceTiers     catalog.ServiceTierSet // the service tiers it offers; standard is one of them unless it offers only others
 	Native           FormatSet              // formats it speaks itself
@@ -170,11 +175,37 @@ type Override struct {
 	MaxPrice      PriceLimit
 	MinThroughput float64
 	MaxLatency    time.Duration
+	// The percentile forms of the same two preferences: a number applies to the moving average, while each cutoff here
+	// applies to that percentile of the endpoint's rolling five-minute window (OpenRouter《Provider Routing》
+	// 「Performance Thresholds」). Cutoffs of 0 are thresholds, so presence is a bit.
+	MinThroughputPercentiles Cutoffs
+	MaxLatencyPercentiles    Cutoffs
+	// Quantizations keeps only endpoints whose admin-recorded level is one of these. An endpoint with no level recorded
+	// never matches: a missing record is not fp16 and not the level named 'unknown'.
+	Quantizations []suppliers.Quantization
 	// RequireParameters is provider.require_parameters: every parameter in RequiredParameters must be declared by the
 	// endpoint. The gateway fills both only when the member is true.
 	RequireParameters  bool
 	RequiredParameters protocol.ParameterSet
 }
+
+// The percentiles a Cutoffs may set, in the order their values are stored.
+const (
+	P50 = iota
+	P75
+	P90
+	P99
+)
+
+// Cutoffs are percentile thresholds in the measure's own unit (tokens a second, or seconds), p50, p75, p90 and p99 in
+// that order. Set has a bit per percentile the request named.
+type Cutoffs struct {
+	Values [4]float64
+	Set    uint8
+}
+
+// Has reports whether the request set the cutoff of percentile i.
+func (c Cutoffs) Has(i int) bool { return c.Set&(1<<i) != 0 }
 
 // PriceLimit caps the sale price per billing item; an item not in Set has no limit. It compares the standard tier's
 // base rate, which is what a typical request pays.
@@ -183,8 +214,9 @@ type PriceLimit struct {
 	Max [catalog.NumItems]platform.UnitPrice
 }
 
-// tokenItems are the billing items counted in tokens; the others are counted in calls.
-const tokenItems = catalog.ItemSet(1<<catalog.NumItems-1) &^ (1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution)
+// tokenItems are the billing items counted in tokens; a missing one is charged at the highest token price. A request,
+// a call of another unit, has its own highest price and is never compared with a token price.
+const tokenItems = catalog.TokenItems
 
 // allTiers are every service tier.
 const allTiers = catalog.ServiceTierSet(1<<catalog.ServiceTierStandard | 1<<catalog.ServiceTierFlex | 1<<catalog.ServiceTierPriority |
@@ -193,25 +225,38 @@ const allTiers = catalog.ServiceTierSet(1<<catalog.ServiceTierStandard | 1<<cata
 // within reports whether what a request may be charged per item is within the limit: the highest price over the service
 // tiers it may be served at and the context tiers a prompt of at most length tokens can fall in, so a priority or
 // long-context price above the limit counts. A tier without a price does not hide the ones that have: the known prices
-// are held to the limit, and a token item missing a price is held at the highest token price of the schedule, which is
-// what billing charges it (docs/domains/billing.md「价目表缺项」). A call item missing a price has the site's default price,
-// which routing does not know, so it is not compared.
+// are held to the limit, and one missing everywhere is held at the fallback billing charges it
+// (docs/domains/billing.md「价目表缺项」).
 func (p PriceLimit) within(s catalog.Schedule, tiers catalog.ServiceTierSet, length int64) bool {
 	for it := range catalog.NumItems {
-		if !p.Set.Has(it) {
-			continue
-		}
-		var one catalog.ItemSet
-		one.Add(it)
-		highest, missing := s.Highest(one, tiers, length)
-		if highest.Cmp(p.Max[it]) > 0 {
+		if p.Set.Has(it) && !p.itemWithin(s, tiers, length, it) {
 			return false
 		}
-		if missing && tokenItems.Has(it) {
-			if fallback, _ := s.Highest(tokenItems, allTiers, math.MaxInt64); fallback.Cmp(p.Max[it]) > 0 {
-				return false
-			}
-		}
+	}
+	return true
+}
+
+// itemWithin holds one item to the limit: the highest price over the eligible tiers and contexts, then, for an item the
+// schedule prices nowhere, the fallback billing charges it. A token item is held at the highest token price of the
+// schedule. A request is held at the highest request price of any tier, which is what settlement and the quote charge.
+// Another call item missing a price has the site's default price, which routing does not know, so it is not compared.
+func (p PriceLimit) itemWithin(s catalog.Schedule, tiers catalog.ServiceTierSet, length int64, it catalog.Item) bool {
+	var one catalog.ItemSet
+	one.Add(it)
+	highest, missing := s.Highest(one, tiers, length)
+	if highest.Cmp(p.Max[it]) > 0 {
+		return false
+	}
+	if !missing {
+		return true
+	}
+	switch {
+	case tokenItems.Has(it):
+		fallback, _ := s.Highest(tokenItems, allTiers, math.MaxInt64)
+		return fallback.Cmp(p.Max[it]) <= 0
+	case it == catalog.ItemRequest:
+		fallback, _ := s.Highest(one, allTiers, math.MaxInt64)
+		return fallback.Cmp(p.Max[it]) <= 0
 	}
 	return true
 }

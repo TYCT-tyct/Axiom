@@ -139,6 +139,56 @@ func (q *Queries) GetCredentialOf(ctx context.Context, db DBTX, arg GetCredentia
 	return items, nil
 }
 
+const getEndpointOf = `-- name: GetEndpointOf :many
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
+FROM suppliers.endpoints WHERE supplier_id = $1 AND id = $2
+`
+
+type GetEndpointOfParams struct {
+	SupplierID uuid.UUID
+	ID         uuid.UUID
+}
+
+type GetEndpointOfRow struct {
+	ID              uuid.UUID
+	SupplierGroupID uuid.UUID
+	ModelID         uuid.UUID
+	UpstreamName    string
+	Formats         []string
+	CostState       string
+	Enabled         bool
+	Quantization    *string
+}
+
+func (q *Queries) GetEndpointOf(ctx context.Context, db DBTX, arg GetEndpointOfParams) ([]GetEndpointOfRow, error) {
+	rows, err := db.Query(ctx, getEndpointOf, arg.SupplierID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetEndpointOfRow
+	for rows.Next() {
+		var i GetEndpointOfRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SupplierGroupID,
+			&i.ModelID,
+			&i.UpstreamName,
+			&i.Formats,
+			&i.CostState,
+			&i.Enabled,
+			&i.Quantization,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getGroupOf = `-- name: GetGroupOf :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
@@ -414,7 +464,7 @@ func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uui
 }
 
 const listEndpointsOf = `-- name: ListEndpointsOf :many
-SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled
+SELECT id, supplier_group_id, model_id, upstream_name, formats, cost_state, enabled, quantization
 FROM suppliers.endpoints WHERE supplier_id = $1 ORDER BY upstream_name, id
 `
 
@@ -426,6 +476,7 @@ type ListEndpointsOfRow struct {
 	Formats         []string
 	CostState       string
 	Enabled         bool
+	Quantization    *string
 }
 
 func (q *Queries) ListEndpointsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListEndpointsOfRow, error) {
@@ -445,6 +496,7 @@ func (q *Queries) ListEndpointsOf(ctx context.Context, db DBTX, supplierID uuid.
 			&i.Formats,
 			&i.CostState,
 			&i.Enabled,
+			&i.Quantization,
 		); err != nil {
 			return nil, err
 		}
@@ -820,6 +872,24 @@ func (q *Queries) SetCredentialLimits(ctx context.Context, db DBTX, arg SetCrede
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setEndpointQuantization = `-- name: SetEndpointQuantization :exec
+UPDATE suppliers.endpoints SET quantization = $1
+WHERE supplier_id = $2 AND id = $3
+`
+
+type SetEndpointQuantizationParams struct {
+	Quantization *string
+	SupplierID   uuid.UUID
+	ID           uuid.UUID
+}
+
+// The level an admin recorded for this endpoint. The sync never writes it; NULL is "not recorded", which is not the
+// level unknown.
+func (q *Queries) SetEndpointQuantization(ctx context.Context, db DBTX, arg SetEndpointQuantizationParams) error {
+	_, err := db.Exec(ctx, setEndpointQuantization, arg.Quantization, arg.SupplierID, arg.ID)
+	return err
 }
 
 const setSupplierStatusBumpingConfigGen = `-- name: SetSupplierStatusBumpingConfigGen :exec

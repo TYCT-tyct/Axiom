@@ -100,9 +100,14 @@ func encodeOREndpoints(m orEntry, endpoints []routing.Endpoint) ([]byte, error) 
 	endpoints = slices.Clone(endpoints)
 	slices.SortFunc(endpoints, func(a, b routing.Endpoint) int { return bytes.Compare(a.ID[:], b.ID[:]) })
 	for i, e := range endpoints {
+		var quantization any
+		if e.Quantization != "" {
+			quantization = string(e.Quantization)
+		}
 		data.Endpoints = append(data.Endpoints, orEndpoint{
 			Name: "Axiom: " + m.Name, ModelID: m.ID, ModelName: m.Name, ProviderName: "Axiom", Tag: "axiom/" + strconv.Itoa(i+1),
 			ContextLength: e.Context, MaxCompletionTokens: e.MaxOutput, Pricing: m.Pricing, SupportedParameters: m.SupportedParameters,
+			Quantization: quantization,
 		})
 	}
 	return jsonx.MarshalCanonical(struct {

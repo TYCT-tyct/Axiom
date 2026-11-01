@@ -24,7 +24,7 @@ type CostFlag uint8
 const (
 	CostComplete CostFlag = iota // every item with usage has a price
 	CostUnpriced                 // some item with usage has none: the estimate holds only the priced part
-	CostNoUsage                  // the supplier reported no usage, so any estimate rests on guessed counts or is zero
+	CostNoUsage                  // the supplier reported no usage and the schedule prices no request, so the estimate rests on guessed counts or is zero
 )
 
 func (f CostFlag) String() string { return [...]string{"complete", "unpriced", "no_usage"}[f] }
@@ -66,29 +66,27 @@ type AttemptCost struct {
 
 // Cost prices the usage of an attempt, one entry per segment, with the schedule its receipt names. It reads memory
 // only. A schedule it does not hold, which can only be from a database that changed under a receipt, prices nothing and
-// says so with the flag, so that the cost is never taken for zero.
+// says so with the flag, so that the cost is never taken for zero. A schedule that prices the request item charges one
+// request for the attempt, however many internal samplings it had; the item is not in the upstream usage, so it is
+// added once here. The caller passes no usage for a NotExecuted attempt and skips this function for it.
 func (s *Service) Cost(r AttemptReceipt, usage []catalog.Usage) (AttemptCost, error) {
 	schedule := (*s.schedules.Load())[r.schedule]
 	var cost AttemptCost
+	var last catalog.Usage
 	used := false
 	for _, u := range usage {
-		items := usedItems(u)
-		unknown := len(u.Unknown()) > 0
-		cost.Unknown = cost.Unknown || unknown
-		used = used || items != 0 || unknown
-		if schedule == nil {
-			cost.Missing |= items
-			continue
-		}
-		total, missing, err := schedule.Cost(u)
+		last = u
+		reported, err := cost.add(schedule, u)
 		if err != nil {
-			return AttemptCost{}, fmt.Errorf("price the usage of an attempt: %w", err)
+			return AttemptCost{}, err
 		}
-		if cost.Native, err = cost.Native.Add(total); err != nil {
-			return AttemptCost{}, fmt.Errorf("add the cost of an attempt: %w", err)
-		}
-		cost.Missing |= missing
+		used = used || reported
 	}
+	charged, err := cost.chargeRequest(schedule, last)
+	if err != nil {
+		return AttemptCost{}, err
+	}
+	used = used || charged
 	switch {
 	case !used:
 		cost.Flag = CostNoUsage
@@ -96,6 +94,47 @@ func (s *Service) Cost(r AttemptReceipt, usage []catalog.Usage) (AttemptCost, er
 		cost.Flag = CostUnpriced
 	}
 	return cost, nil
+}
+
+// add prices one entry of the attempt's usage. It reports whether the upstream reported anything to charge, and a
+// schedule the service does not hold records the items as missing, so that the cost is never taken for zero.
+func (c *AttemptCost) add(schedule *catalog.Schedule, u catalog.Usage) (bool, error) {
+	items := usedItems(u)
+	unknown := len(u.Unknown()) > 0
+	c.Unknown = c.Unknown || unknown
+	if schedule == nil {
+		c.Missing |= items
+		return items != 0 || unknown, nil
+	}
+	total, missing, err := schedule.Cost(u)
+	if err != nil {
+		return false, fmt.Errorf("price the usage of an attempt: %w", err)
+	}
+	if c.Native, err = c.Native.Add(total); err != nil {
+		return false, fmt.Errorf("add the cost of an attempt: %w", err)
+	}
+	c.Missing |= missing
+	return items != 0 || unknown, nil
+}
+
+// chargeRequest adds the attempt's one request, or records that the schedule prices the item nowhere. It reports whether
+// the schedule prices a request item, which is a charge of the attempt even when the upstream reported no usage. The
+// upstream reports no count of it, and it is charged at the band of the last segment, which carries the tier it ran on.
+func (c *AttemptCost) chargeRequest(schedule *catalog.Schedule, last catalog.Usage) (bool, error) {
+	if schedule == nil || !schedule.Priced(1<<catalog.ItemRequest) {
+		return false, nil
+	}
+	price, _, ok := schedule.Rate(last, catalog.ItemRequest)
+	if !ok {
+		c.Missing.Add(catalog.ItemRequest)
+		return true, nil
+	}
+	native, err := c.Native.Add(price.Mul(1))
+	if err != nil {
+		return false, fmt.Errorf("add the request cost of an attempt: %w", err)
+	}
+	c.Native = native
+	return true, nil
 }
 
 // Credits multiplies native cost, the attempt's unit value and the reservation's exchange rate, rounding up once to

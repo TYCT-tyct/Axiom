@@ -8,6 +8,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
+	"axiom/internal/suppliers"
 )
 
 func TestProviderGroupFilters(t *testing.T) {
@@ -61,6 +62,43 @@ func checkProviderExcluded(t *testing.T, h *harness, in routing.Input, private b
 	}
 	if private && slices.ContainsFunc(got.Reasons, func(e routing.Excluded) bool { return e.Endpoint == ep(2) }) {
 		t.Fatal("private endpoint appeared in exclusions")
+	}
+}
+
+// sameIDs reports whether two routes name the same endpoints, whatever order the plan put them in.
+func sameIDs(a, b []routing.EndpointID) bool {
+	return len(a) == len(b) && !slices.ContainsFunc(a, func(id routing.EndpointID) bool { return !slices.Contains(b, id) })
+}
+
+// TestProviderQuantization: a request that names levels keeps only endpoints an admin recorded one of. An endpoint with
+// none recorded does not match, because a missing record cannot stand for a level.
+func TestProviderQuantization(t *testing.T) {
+	t.Parallel()
+	p := openPreset()
+	h := newHarness(t, routing.Config{}, p,
+		endpoint(t, 1, func(e *routing.Endpoint) { e.Quantization = suppliers.QuantizationFP8 }),
+		endpoint(t, 2, func(e *routing.Endpoint) { e.Quantization = suppliers.QuantizationFP16 }),
+		endpoint(t, 3))
+	for _, tc := range []struct {
+		name   string
+		levels []suppliers.Quantization
+		want   []routing.EndpointID
+	}{
+		{name: "no filter", want: []routing.EndpointID{ep(1), ep(2), ep(3)}},
+		{name: "one level", levels: []suppliers.Quantization{suppliers.QuantizationFP8}, want: []routing.EndpointID{ep(1)}},
+		{name: "two levels", levels: []suppliers.Quantization{suppliers.QuantizationFP16, suppliers.QuantizationFP8}, want: []routing.EndpointID{ep(1), ep(2)}},
+		{name: "a level nobody records", levels: []suppliers.Quantization{suppliers.QuantizationInt8}},
+		{name: "unknown is a level, not a missing record", levels: []suppliers.Quantization{suppliers.QuantizationUnknown}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := input()
+			in.Override.Quantizations = tc.levels
+			if len(tc.want) == 0 {
+				checkProviderExcluded(t, h, in, false)
+			} else if got := endpoints(h.plan(in)); !sameIDs(got, tc.want) {
+				t.Errorf("route %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

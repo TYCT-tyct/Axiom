@@ -172,7 +172,7 @@ func (c *Catalog) PublishPrice(ctx context.Context, r PublishPriceRequest) (Resu
 	if err != nil {
 		return Result{}, err
 	}
-	if err := c.allowCounted(n.schedule); err != nil {
+	if err := c.allowPrices(n.schedule); err != nil {
 		return Result{}, err
 	}
 	if err := requireEvidence(r.Evidence); err != nil {
@@ -189,6 +189,23 @@ func (c *Catalog) allowCounted(s Schedule) error {
 		return ErrCountedItems
 	}
 	return nil
+}
+
+// allowRequest refuses a per-request price while this release does not publish it. The request item is not a counted
+// item: it is recorded by the gateway, not reported by the upstream, so it needs its own compatibility switch.
+func (c *Catalog) allowRequest(s Schedule) error {
+	if !c.cfg.RequestPrices && s.Priced(1<<ItemRequest) {
+		return ErrRequestPrices
+	}
+	return nil
+}
+
+// allowPrices applies every new-item compatibility switch before a price is written to the catalog.
+func (c *Catalog) allowPrices(s Schedule) error {
+	if err := c.allowCounted(s); err != nil {
+		return err
+	}
+	return c.allowRequest(s)
 }
 
 func publishIn(ctx context.Context, tx pg.Tx, r PublishPriceRequest, n newPrice) (outcome, error) {
@@ -276,7 +293,7 @@ func (c *Catalog) selectSource(ctx context.Context, r SelectPriceSourceRequest) 
 		return Result{}, err
 	}
 	for _, n := range news {
-		if err := c.allowCounted(n.schedule); err != nil {
+		if err := c.allowPrices(n.schedule); err != nil {
 			return Result{}, err
 		}
 	}

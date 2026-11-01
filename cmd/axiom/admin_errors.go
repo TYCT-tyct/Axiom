@@ -50,6 +50,7 @@ var adminRefusals = []refusal{
 	{suppliers.ErrNoSupplier, http.StatusNotFound, codeNotFound, "no such resource"},
 	{suppliers.ErrNoGroup, http.StatusNotFound, codeNotFound, "no such resource"},
 	{suppliers.ErrNoCredential, http.StatusNotFound, codeNotFound, "no such resource"},
+	{suppliers.ErrNoSupplierEndpoint, http.StatusNotFound, codeNotFound, "no such resource"},
 	{suppliers.ErrSupplierExists, http.StatusConflict, codeConflict, "that origin and account are already connected"},
 	{suppliers.ErrStatusLocked, http.StatusConflict, codeConflict, "the supplier's status does not allow this"},
 	{suppliers.ErrGroupGone, http.StatusConflict, codeConflict, "the supplier no longer lists that group"},

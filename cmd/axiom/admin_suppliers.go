@@ -312,6 +312,33 @@ func (a adminAPI) SetSupplierStatus(ctx context.Context, request adminapi.SetSup
 	return adminapi.SetSupplierStatus200JSONResponse{Body: supplier, Headers: adminapi.SetSupplierStatus200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
+// SetSupplierEndpointQuantization records the precision an endpoint serves at, or clears it.
+func (a adminAPI) SetSupplierEndpointQuantization(ctx context.Context, request adminapi.SetSupplierEndpointQuantizationRequestObject) (adminapi.SetSupplierEndpointQuantizationResponseObject, error) {
+	supplier, err := supplierIDOf(request.SupplierId)
+	if err != nil {
+		return nil, err
+	}
+	endpoint, err := supplierIDOf(request.EndpointId)
+	if err != nil {
+		return nil, suppliers.ErrNoSupplierEndpoint
+	}
+	var level *suppliers.Quantization
+	if request.Body.Quantization != nil {
+		q := suppliers.Quantization(*request.Body.Quantization)
+		level = &q
+	}
+	changed, replayed, err := idempotently(ctx, a.db, "setSupplierEndpointQuantization", request.Params.IdempotencyKey,
+		[]any{request.SupplierId, request.EndpointId, request.Body},
+		func(tx pg.Tx) (adminapi.SupplierEndpoint, error) {
+			e, err := a.suppliers.SetEndpointQuantization(ctx, tx, actor(ctx), supplier, endpoint, level, request.Body.Reason)
+			return endpointBody(e), err
+		})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetSupplierEndpointQuantization200JSONResponse{Body: changed, Headers: adminapi.SetSupplierEndpointQuantization200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
 // RemoveSupplier removes a supplier: out of routing, its login deleted and its keys erased, in one transaction.
 func (a adminAPI) RemoveSupplier(ctx context.Context, request adminapi.RemoveSupplierRequestObject) (adminapi.RemoveSupplierResponseObject, error) {
 	id, err := supplierIDOf(request.SupplierId)
