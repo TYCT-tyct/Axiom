@@ -70,7 +70,7 @@ func wechatCode(code string) string {
 }
 
 func (f *wechatFailure) rejected() *Rejected {
-	return &Rejected{Code: "wechatpay." + f.Code, Message: "the gateway refused the refund"}
+	return &Rejected{Code: "wechatpay." + f.Code, Message: "the gateway refused the request"}
 }
 
 // do signs one API v3 request, verifies the response's platform signature before returning its body, and bounds the
@@ -226,7 +226,13 @@ func (c *wechatChannel) query(ctx context.Context, outTradeNo string) (Payment, 
 	if status != http.StatusOK {
 		return Payment{}, wechatFailureOf(status, body)
 	}
+	return c.parseQuery(outTradeNo, body)
+}
+
+func (c *wechatChannel) parseQuery(outTradeNo string, body []byte) (Payment, error) {
 	var response struct {
+		AppID         string `json:"appid"`
+		MchID         string `json:"mchid"`
 		OutTradeNo    string `json:"out_trade_no"`
 		TransactionID string `json:"transaction_id"`
 		TradeState    string `json:"trade_state"`
@@ -237,6 +243,9 @@ func (c *wechatChannel) query(ctx context.Context, outTradeNo string) (Payment, 
 	}
 	if err := jsonx.Unmarshal(body, &response); err != nil {
 		return Payment{}, errors.New("wechatpay: invalid query response")
+	}
+	if response.MchID != c.settings.MchID || response.AppID != c.settings.AppID {
+		return Payment{}, errors.New("wechatpay: query belongs to another merchant")
 	}
 	if response.OutTradeNo != outTradeNo {
 		return Payment{}, errors.New("wechatpay: query echoed another order")
@@ -330,7 +339,8 @@ func (c *wechatChannel) refundTotal(ctx context.Context, r RefundCall) (int64, e
 		if errors.Is(err, errWechatOrderMissing) {
 			return 0, &Rejected{Code: "wechatpay.ORDER_NOT_EXIST", Message: "the order does not exist"}
 		}
-		return 0, err
+		// The refund request is sent only after this query, so none of its failures can have moved money.
+		return 0, &Rejected{Code: "wechatpay.REFUND_NOT_SENT", Message: "the order query failed before the refund was sent"}
 	}
 	switch {
 	case payment.State == PayClosed:

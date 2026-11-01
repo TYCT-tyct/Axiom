@@ -449,6 +449,9 @@ func (c *wechatChannel) create(ctx context.Context, path string, body map[string
 	if err != nil {
 		return Checkout{}, err
 	}
+	if status >= 400 && status < 500 && status != http.StatusTooManyRequests {
+		return Checkout{}, wechatFailureOf(status, response).rejected()
+	}
 	if status != http.StatusOK {
 		return Checkout{}, wechatFailureOf(status, response)
 	}

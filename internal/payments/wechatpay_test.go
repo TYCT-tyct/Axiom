@@ -284,8 +284,12 @@ func TestWechatPayCreate(t *testing.T) {
 	mu.Unlock()
 
 	reply.status, reply.body = http.StatusBadRequest, `{"code":"PARAM_ERROR","message":"the secret echo"}`
-	if _, err := channel.Create(t.Context(), r); err == nil || strings.Contains(err.Error(), "secret echo") || !strings.Contains(err.Error(), "PARAM_ERROR") {
+	if _, err := channel.Create(t.Context(), r); err == nil || !wpTestRejected(err) || strings.Contains(err.Error(), "secret echo") || !strings.Contains(err.Error(), "PARAM_ERROR") {
 		t.Fatalf("gateway error %v", err)
+	}
+	reply.status = http.StatusTooManyRequests
+	if _, err := channel.Create(t.Context(), r); err == nil || wpTestRejected(err) {
+		t.Fatalf("rate limit became %v", err)
 	}
 	reply.status, reply.body = http.StatusOK, `{"code_url":"https://evil.example/pay"}`
 	if _, err := channel.Create(t.Context(), r); err == nil {

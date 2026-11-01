@@ -94,10 +94,10 @@ type Notice struct{ Relevant, Success bool; Order, TradeNo string; Paid Money; R
 type Payment struct{ State PayState; TradeNo string; Paid Money } // Pending | Paid | Closed
 type RefundCall struct{ Refund RefundID; Order OrderID; TradeNo, ProviderRef string; Amount Money; Reason string; SentAt time.Time } // SentAt 是第一次发送的时间；查询"渠道没有这笔退款"多久算失败时用，零值表示不知道
 type RefundState struct{ State RefundOutcome; ProviderRef string } // Succeeded | Failed | Pending
-type Rejected struct{ Code, Message string }                      // 渠道明确拒绝；实现 error
+type Rejected struct{ Code, Message string }                      // 渠道明确拒绝或确定未执行；实现 error
 ```
 
-- **错误只分两种**：`*Rejected` 是确定的失败（下单被拒、退款被拒）；其他任何错误都是"结果未知"，调用方不得据此改订单或退款为失败。超时、断连、5xx、HTML 或解析不了的响应都是未知。
+- **错误只分两种**：`*Rejected` 是确定的失败（下单被拒、退款被拒，或退款请求在发出前已经确定没有发）；其他任何错误都是"结果未知"，调用方不得据此改订单或退款为失败。超时、断连、5xx、HTML 或解析不了的响应都是未知。
 - **用能力集合而不是可选接口**：sub2api 用类型断言判断扩展接口（`payment_fulfillment.go:65-69`），能力随插件种类固定；易支付是否能查单、能退款取决于这家网关，是商户账户的配置，所以由 `Caps` 声明。调用没有声明的能力是程序错误，panic。
 - **`RefundKey`**：渠道把 `RefundCall.Refund` 当作退款单号，同一单号重发只退一次（Stripe 的幂等键、支付宝的 `out_request_no`、微信的 `out_refund_no`）。只有声明了它，结果未知的退款才能重发；易支付不声明。
 - **链接**：核心在存库和返回之前检查 `PayURL`、`QRCode` 里的链接，只放行 `https` 和 `alipays://`、`weixin://`、`wxp://`，以 `//` 开头的和其他协议当作 `*Rejected`。插件只负责把以单个 `/` 开头的相对链接按网关地址补全。
@@ -164,11 +164,11 @@ type Rejected struct{ Code, Message string }                      // 渠道明�
 {"app_id":"wx1234567890abcdef","mch_id":"1900000001","serial_no":"408B07E79B8269FEC3D5D3E6AB8ED163A6A380DB","gateway":"https://api.mch.weixin.qq.com"}
 ```
 
-付款方式映射只存于 `MethodInput.Upstream`，只接受 `native` 和 `h5`：Native 向 `/v3/pay/transactions/native` 下单，返回 `weixin://` 的 `code_url`；H5 向 `/v3/pay/transactions/h5` 下单，要求服务端客户端 IP 有效，带 `scene_info.payer_client_ip` 和 `h5_info.type = Wap`，返回的 `h5_url` 追加 URL 编码的 `redirect_url`。`Channel.Methods()` 返回 `nil`，付款方式（如 `wxpay`）由管理员配置。`normalizeSettings` 去掉首尾空白、把证书序列号转成大写、补默认网关并去掉末尾 `/`；`identitySettings` 比较 `app_id`、`mch_id`、`serial_no`、`platform_public_key_id`、`old_platform_public_key_id` 和 `gateway`，订单在途时这些和密钥都不能改，付款方式映射和 `upstream` 可以改。所有设置仍整体参与密钥封装的哈希校验。
+付款方式映射只存于 `MethodInput.Upstream`，只接受 `native` 和 `h5`：Native 向 `/v3/pay/transactions/native` 下单，返回 `weixin://` 的 `code_url`；H5 向 `/v3/pay/transactions/h5` 下单，要求服务端客户端 IP 有效，带 `scene_info.payer_client_ip` 和 `h5_info.type = Wap`，返回的 `h5_url` 追加 URL 编码的 `redirect_url`。签过名的 4xx（429 除外）是明确拒绝，返回 `*Rejected`；429、5xx、超时、断连和验签失败是结果未知。`Channel.Methods()` 返回 `nil`，付款方式（如 `wxpay`）由管理员配置。`normalizeSettings` 去掉首尾空白、把证书序列号转成大写、补默认网关并去掉末尾 `/`；`identitySettings` 比较 `app_id`、`mch_id`、`serial_no`、`platform_public_key_id`、`old_platform_public_key_id` 和 `gateway`，订单在途时这些和密钥都不能改，付款方式映射和 `upstream` 可以改。所有设置仍整体参与密钥封装的哈希校验。
 
 请求签名只用标准库：`Authorization: WECHATPAY2-SHA256-RSA2048 mchid="…",nonce_str="…",signature="…",timestamp="…",serial_no="…"`，签名串是 `方法\nURL（含查询串）\n时间戳\n随机串\n正文\n`。应答和回调先按 `Wechatpay-Serial` 选公钥，对 `时间戳\n随机串\n正文\n` 验 SHA256withRSA，再解析正文；`204` 无正文不验。没配置的序列号、缺签名头或坏签名都返回错误，不解析正文；错误信息只带 HTTP 状态和微信的业务码，不带正文、请求头或任何密钥。回调另外拒绝 5 分钟以外的时间戳，并要求 `application/json`、无查询串、`event_type = TRANSACTION.SUCCESS`、`resource_type = encrypt-resource`、`algorithm = AEAD_AES_256_GCM`、`original_type = transaction`；正文用 APIv3 密钥、`resource.nonce` 和 `resource.associated_data` 做 AES-256-GCM 解密，明文里的 `mchid`、`appid` 必须与配置一致。
 
-金额是微信的整数分：`Payment.Paid`、`Notice.Paid` 的 `Minor` 直接取 `amount.total`，缺失或空为 0（留给查单），非法、负数、溢出或币种不是 CNY 为 -1（待处理）。查单 `SUCCESS`、`REFUND` 为已支付，`NOTPAY`、`USERPAYING` 为待支付，`CLOSED`、`REVOKED`、`PAYERROR` 为已关闭，其他状态是结果未知；签名正确的 404 `ORDER_NOT_EXIST` 是待支付。关单成功是 204，其他错误交给核心记日志。退款先按订单号查询取原单 `amount.total`；查单显示未支付、已关闭或拿不到原单金额时还没发退款请求，按明确拒绝处理（否则之后按 `rfd_…` 查退款只会得到 404，退款会一直待确认）。再以 `rfd_…` 为 `out_refund_no` 调 `/v3/refund/domestic/refunds`；`SUCCESS` 为成功，`PROCESSING` 和 `ABNORMAL` 为待确认，`CLOSED` 为失败，退款申请的 429 `FREQUENCY_LIMITED`（文档说可能已受理）和 `QueryRefund` 的 404 `RESOURCE_NOT_EXISTS` 也是待确认，这几种都等核心的 24 小时人工结论。查退款也只按 `rfd_…` 查，`ProviderRef` 存微信退款单号供展示。退款申请的应答回显的单号、退款额和原单额不一致时按结果未知处理；查退款同样核对单号和退款额。`Caps()` 是 `CapQuery | CapClose | CapRefund | CapQueryRefund | CapRefundKey`，不声明 `CapStatements`。
+金额是微信的整数分：`Payment.Paid`、`Notice.Paid` 的 `Minor` 直接取 `amount.total`，缺失或空为 0（留给查单），非法、负数、溢出或币种不是 CNY 为 -1（待处理）。查单应答的 `appid`、`mchid` 必须与配置一致，缺失或不同都是结果未知，不能只凭平台签名把另一商户的订单记到本账户；`SUCCESS`、`REFUND` 为已支付，`NOTPAY`、`USERPAYING` 为待支付，`CLOSED`、`REVOKED`、`PAYERROR` 为已关闭，其他状态是结果未知；签名正确的 404 `ORDER_NOT_EXIST` 是待支付。关单成功是 204，其他错误交给核心记日志。退款先按订单号查询取原单 `amount.total`；查单请求本身失败、查单显示未支付、已关闭或拿不到原单金额时退款请求都还没发出，按明确拒绝处理，让核心解冻（否则之后按 `rfd_…` 查退款只会得到 404，退款会一直待确认）；只有退款 POST 已经发出后的超时、5xx、429 和坏应答才是结果未知。再以 `rfd_…` 为 `out_refund_no` 调 `/v3/refund/domestic/refunds`；`SUCCESS` 为成功，`PROCESSING` 和 `ABNORMAL` 为待确认，`CLOSED` 为失败，退款申请的 429 `FREQUENCY_LIMITED`（文档说可能已受理）和 `QueryRefund` 的 404 `RESOURCE_NOT_EXISTS` 也是待确认，这几种都等核心的 24 小时人工结论。查退款也只按 `rfd_…` 查，`ProviderRef` 存微信退款单号供展示。退款申请的应答回显的单号、退款额和原单额不一致时按结果未知处理；查退款同样核对单号和退款额。`Caps()` 是 `CapQuery | CapClose | CapRefund | CapQueryRefund | CapRefundKey`，不声明 `CapStatements`。
 
 `testConfig` 用商户配置查一个随机不存在的订单号，只有签名正确的 `ORDER_NOT_EXIST` 算通过；不建单、不转钱、不返回渠道正文。`Ack` 成功回 200 和空正文，失败回 500 和 `{"code":"FAIL","message":"失败"}`。`Open` 只做本地校验，保存不做网络探测。十秒出站期限、1 MiB 响应上限和错误脱敏沿用核心的出站客户端。滚动发布：旧节点不认识 `kind = "wechatpay"`，不选中这个商户、回调回 503；微信支付重试约 24 小时，所以所有节点升级后再创建微信商户。没有迁移和契约变化。
 

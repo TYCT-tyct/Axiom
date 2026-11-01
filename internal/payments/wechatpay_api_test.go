@@ -59,6 +59,24 @@ func TestWechatPayQueryStates(t *testing.T) {
 		})
 	}
 
+	for name, change := range map[string]func(map[string]any){
+		"another merchant": func(m map[string]any) { m["mchid"] = "1900000002" },
+		"another app":      func(m map[string]any) { m["appid"] = "wx0000000000000000" },
+		"missing merchant": func(m map[string]any) { delete(m, "mchid") },
+		"missing app":      func(m map[string]any) { delete(m, "appid") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := wpTransaction(order, "T-"+order, 12345, "SUCCESS")
+			change(body)
+			mu.Lock()
+			reply.status, reply.body = http.StatusOK, wpTestJSONBody(body)
+			mu.Unlock()
+			if _, err := channel.Query(t.Context(), order, ""); err == nil {
+				t.Fatal("query from another app or merchant accepted")
+			}
+		})
+	}
+
 	mu.Lock()
 	reply.status, reply.body = http.StatusNotFound, []byte(`{"code":"ORDER_NOT_EXIST","message":"no"}`)
 	mu.Unlock()
@@ -76,7 +94,7 @@ func TestWechatPayQueryStates(t *testing.T) {
 
 	mu.Lock()
 	reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"out_trade_no": "ord_OTHER", "trade_state": "SUCCESS",
+		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": "ord_OTHER", "trade_state": "SUCCESS",
 	})
 	mu.Unlock()
 	if _, err := channel.Query(t.Context(), order, ""); err == nil {
@@ -85,7 +103,7 @@ func TestWechatPayQueryStates(t *testing.T) {
 
 	mu.Lock()
 	reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"out_trade_no": order, "trade_state": "SUCCESS",
+		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": order, "trade_state": "SUCCESS",
 		"amount": map[string]any{"total": "12345", "currency": "CNY"},
 	})
 	mu.Unlock()
@@ -96,7 +114,7 @@ func TestWechatPayQueryStates(t *testing.T) {
 
 	mu.Lock()
 	reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"out_trade_no": order, "trade_state": "SUCCESS",
+		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": order, "trade_state": "SUCCESS",
 		"amount": map[string]any{"total": 12345, "currency": "USD"},
 	})
 	mu.Unlock()
@@ -107,7 +125,7 @@ func TestWechatPayQueryStates(t *testing.T) {
 
 	mu.Lock()
 	reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"out_trade_no": order, "trade_state": "SUCCESS",
+		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": order, "trade_state": "SUCCESS",
 	})
 	mu.Unlock()
 	payment, err = channel.Query(t.Context(), order, "")
@@ -117,7 +135,7 @@ func TestWechatPayQueryStates(t *testing.T) {
 
 	mu.Lock()
 	reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"out_trade_no": order, "trade_state": "WAIT",
+		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": order, "trade_state": "WAIT",
 	})
 	mu.Unlock()
 	if _, err := channel.Query(t.Context(), order, ""); err == nil {
@@ -143,10 +161,8 @@ func TestWechatPayQueryStates(t *testing.T) {
 
 func TestWechatPayQueryWithPublicKey(t *testing.T) {
 	gateway := &wpTestGateway{t: t, serial: wpTestKeyID, respond: func(r *http.Request, _ []byte) (int, []byte) {
-		return http.StatusOK, wpTestJSONBody(map[string]any{
-			"out_trade_no": "ord_01ARZ3NDEKTSV4RRFFQ69G5FAV", "trade_state": "SUCCESS",
-			"transaction_id": "T", "amount": map[string]any{"total": 1, "currency": "CNY"},
-		})
+		return http.StatusOK, wpQueryJSON("ord_01ARZ3NDEKTSV4RRFFQ69G5FAV", "SUCCESS",
+			map[string]any{"total": 1, "currency": "CNY"})
 	}}
 	server := wpTestServer(t, gateway)
 	channel := wpOpen(t, wpPublicConfig(t, server.URL, server.Certificate(), false))
@@ -174,7 +190,7 @@ func TestWechatPayTestConfig(t *testing.T) {
 	if err := channel.testConfig(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	reply.status, reply.body = http.StatusOK, []byte(`{"out_trade_no":"probe_x","trade_state":"SUCCESS"}`)
+	reply.status, reply.body = http.StatusOK, wpQueryJSON("probe_x", "SUCCESS", nil)
 	if err := channel.testConfig(t.Context()); err == nil {
 		t.Fatal("test accepted a found order")
 	}
@@ -265,10 +281,7 @@ func TestWechatPayRefund(t *testing.T) {
 	channel := wpOpen(t, wpCertConfig(t, server.URL, server.Certificate(), false))
 	order := OrderID(uuid.NewV7())
 	refund := RefundID(uuid.NewV7())
-	queryBody = wpTestJSONBody(map[string]any{
-		"out_trade_no": order.TypeID(), "trade_state": "SUCCESS",
-		"transaction_id": "T", "amount": map[string]any{"total": 10000, "currency": "CNY"},
-	})
+	queryBody = wpQueryJSON(order.TypeID(), "SUCCESS", map[string]any{"total": 10000, "currency": "CNY"})
 	mu.Lock()
 	refundEcho = struct {
 		outRefundNo, outTradeNo string
@@ -354,6 +367,17 @@ func TestWechatPayRefund(t *testing.T) {
 		t.Fatalf("500 became %v", err)
 	}
 
+	// If the original-order query fails before the refund request, nothing was sent: fail the first attempt.
+	gateway.respond = func(r *http.Request, body []byte) (int, []byte) {
+		if r.Method == http.MethodGet {
+			return http.StatusInternalServerError, []byte(`{"code":"SYSTEM_ERROR"}`)
+		}
+		return http.StatusOK, nil
+	}
+	if _, err := channel.Refund(t.Context(), call); !wpTestRejected(err) {
+		t.Fatalf("pre-send query failure became %v", err)
+	}
+
 	// The original total and the echoed refund come from the order and the response, not from the caller.
 	gateway.respond = func(r *http.Request, body []byte) (int, []byte) {
 		if r.Method == http.MethodGet {
@@ -380,19 +404,19 @@ func TestWechatPayRefund(t *testing.T) {
 		t.Fatal("wrong echoed refund accepted")
 	}
 
-	queryBody = wpTestJSONBody(map[string]any{"out_trade_no": order.TypeID(), "trade_state": "CLOSED"})
+	queryBody = wpQueryJSON(order.TypeID(), "CLOSED", nil)
 	if _, err := channel.Refund(t.Context(), call); !wpTestRejected(err) {
 		t.Fatalf("closed order refund %v", err)
 	}
-	queryBody = wpTestJSONBody(map[string]any{"out_trade_no": order.TypeID(), "trade_state": "NOTPAY"})
+	queryBody = wpQueryJSON(order.TypeID(), "NOTPAY", nil)
 	if _, err := channel.Refund(t.Context(), call); !wpTestRejected(err) {
 		t.Fatalf("unpaid order refund %v", err)
 	}
-	queryBody = wpTestJSONBody(map[string]any{"out_trade_no": order.TypeID(), "trade_state": "SUCCESS"})
+	queryBody = wpQueryJSON(order.TypeID(), "SUCCESS", nil)
 	if _, err := channel.Refund(t.Context(), call); !wpTestRejected(err) {
 		t.Fatalf("refund without an original total %v", err)
 	}
-	queryBody = wpTestJSONBody(map[string]any{"out_trade_no": order.TypeID(), "trade_state": "SUCCESS", "amount": map[string]any{"total": 10000, "currency": "CNY"}})
+	queryBody = wpQueryJSON(order.TypeID(), "SUCCESS", map[string]any{"total": 10000, "currency": "CNY"})
 	tooMuch := call
 	tooMuch.Amount.Minor = 10001
 	if _, err := channel.Refund(t.Context(), tooMuch); !wpTestRejected(err) {
@@ -484,10 +508,8 @@ func TestWechatPayRefundErrorCodes(t *testing.T) {
 	var call RefundCall
 	gateway := &wpTestGateway{t: t, respond: func(r *http.Request, _ []byte) (int, []byte) {
 		if r.Method == http.MethodGet {
-			return http.StatusOK, wpTestJSONBody(map[string]any{
-				"out_trade_no": call.Order.TypeID(), "trade_state": "SUCCESS",
-				"amount": map[string]any{"total": 100, "currency": "CNY"},
-			})
+			return http.StatusOK, wpQueryJSON(call.Order.TypeID(), "SUCCESS",
+				map[string]any{"total": 100, "currency": "CNY"})
 		}
 		return http.StatusBadRequest, []byte(`{"code":"USER_ACCOUNT_ABNORMAL","message":"do not log this"}`)
 	}}
@@ -502,12 +524,4 @@ func TestWechatPayRefundErrorCodes(t *testing.T) {
 	if !errors.As(err, &rejected) || strings.Contains(err.Error(), "do not log this") {
 		t.Fatalf("refund error %v", err)
 	}
-}
-
-func wpTestJSONBody(v any) []byte {
-	body, err := jsonx.MarshalCanonical(v)
-	if err != nil {
-		panic(err)
-	}
-	return body
 }

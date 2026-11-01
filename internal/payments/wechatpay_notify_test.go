@@ -82,18 +82,6 @@ func TestWechatPayVerify(t *testing.T) {
 		})
 	}
 
-	oldTime := base
-	oldTime.Header = base.Header.Clone()
-	oldTime.Header.Set("Wechatpay-Timestamp", strconv.FormatInt(time.Now().Add(-6*time.Minute).Unix(), 10))
-	if _, err := channel.Verify(t.Context(), oldTime); err == nil {
-		t.Fatal("old callback verified")
-	}
-	future := base
-	future.Header = base.Header.Clone()
-	future.Header.Set("Wechatpay-Timestamp", strconv.FormatInt(time.Now().Add(6*time.Minute).Unix(), 10))
-	if _, err := channel.Verify(t.Context(), future); err == nil {
-		t.Fatal("future callback verified")
-	}
 	repeated := base
 	repeated.Header = base.Header.Clone()
 	repeated.Header.Add("Wechatpay-Timestamp", repeated.Header.Get("Wechatpay-Timestamp"))
@@ -179,6 +167,36 @@ func TestWechatPayVerify(t *testing.T) {
 	status, body := channel.Ack(false)
 	if status != http.StatusInternalServerError || string(body) != `{"code":"FAIL","message":"失败"}` {
 		t.Fatalf("failure ack %d %s", status, body)
+	}
+}
+
+func TestWechatPayCallbackTimestampWindow(t *testing.T) {
+	server := wpTestServer(t, http.NotFoundHandler())
+	keys := wpKeys(t)
+	channel := wpOpen(t, wpCertConfig(t, server.URL, server.Certificate(), true)).(*wechatChannel)
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	channel.now = func() time.Time { return now }
+	order, trade := "ord_01ARZ3NDEKTSV4RRFFQ69G5FAV", "4200000000202401011234567890"
+	transaction := wpTransaction(order, trade, 12345, "SUCCESS")
+	// Each callback is re-signed over its target timestamp, so the out-of-window cases fail only on the time check.
+
+	for _, tc := range []struct {
+		name string
+		at   time.Time
+		ok   bool
+	}{
+		{"inside past", now.Add(-5 * time.Minute), true},
+		{"past edge", now.Add(-5*time.Minute - time.Second), false},
+		{"inside future", now.Add(5 * time.Minute), true},
+		{"future edge", now.Add(5*time.Minute + time.Second), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			callback := wpTestCallbackAt(t, transaction, keys.platform, wpTestPlatformSerial(t), tc.at)
+			_, err := channel.Verify(t.Context(), callback)
+			if (err == nil) != tc.ok {
+				t.Fatalf("verified=%v, want %v: %v", err == nil, tc.ok, err)
+			}
+		})
 	}
 }
 

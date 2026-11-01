@@ -308,10 +308,20 @@ func wpTestVerifyRequest(r *http.Request, body []byte, key *rsa.PublicKey) error
 // wpTestCallback builds the encrypted, signed callback WeChat would send.
 func wpTestCallback(t *testing.T, transaction map[string]any, signer *rsa.PrivateKey, serial string) Callback {
 	t.Helper()
-	return wpTestCallbackEvent(t, "TRANSACTION.SUCCESS", transaction, signer, serial)
+	return wpTestCallbackAt(t, transaction, signer, serial, time.Now())
+}
+
+func wpTestCallbackAt(t *testing.T, transaction map[string]any, signer *rsa.PrivateKey, serial string, at time.Time) Callback {
+	t.Helper()
+	return wpTestCallbackEventAt(t, "TRANSACTION.SUCCESS", transaction, signer, serial, at)
 }
 
 func wpTestCallbackEvent(t *testing.T, eventType string, transaction map[string]any, signer *rsa.PrivateKey, serial string) Callback {
+	t.Helper()
+	return wpTestCallbackEventAt(t, eventType, transaction, signer, serial, time.Now())
+}
+
+func wpTestCallbackEventAt(t *testing.T, eventType string, transaction map[string]any, signer *rsa.PrivateKey, serial string, at time.Time) Callback {
 	t.Helper()
 	plaintext, err := jsonx.MarshalCanonical(transaction)
 	if err != nil {
@@ -344,7 +354,7 @@ func wpTestCallbackEvent(t *testing.T, eventType string, transaction map[string]
 	if err != nil {
 		t.Fatal(err)
 	}
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	timestamp := strconv.FormatInt(at.Unix(), 10)
 	nonceHeader := "headernonce12345"
 	signature := wpTestSign(timestamp+"\n"+nonceHeader+"\n"+string(envelope)+"\n", signer)
 	header := make(http.Header)
@@ -365,6 +375,22 @@ func wpTransaction(order, trade string, total int64, state string) map[string]an
 		"trade_state":    state,
 		"amount":         map[string]any{"total": total, "currency": "CNY"},
 	}
+}
+
+func wpTestJSONBody(v any) []byte {
+	body, err := jsonx.MarshalCanonical(v)
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+func wpQueryJSON(order, state string, amount map[string]any) []byte {
+	body := map[string]any{"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": order, "trade_state": state}
+	if amount != nil {
+		body["amount"] = amount
+	}
+	return wpTestJSONBody(body)
 }
 
 func wpTestServer(t *testing.T, gateway http.Handler) *httptest.Server {

@@ -2,6 +2,7 @@ package payments
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,9 @@ type wpE2EState struct {
 	orders     map[string]*wpE2EOrder
 	refunds    map[string]*wpE2ERefund
 	refundMode string // "", "unknown" or "success"
+	queryFail  bool
+	queryMchid string
+	createFail bool
 }
 
 func (s *wpE2EState) settle(id string, total int64) {
@@ -66,6 +70,9 @@ func (s *wpE2EState) respond(t *testing.T, r *http.Request, body []byte) (int, [
 	defer s.mu.Unlock()
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == "/v3/pay/transactions/native":
+		if s.createFail {
+			return http.StatusBadRequest, []byte(`{"code":"PARAM_ERROR","message":"refused"}`)
+		}
 		var request struct {
 			OutTradeNo string `json:"out_trade_no"`
 			Amount     struct {
@@ -79,6 +86,9 @@ func (s *wpE2EState) respond(t *testing.T, r *http.Request, body []byte) (int, [
 		s.orders[request.OutTradeNo] = &wpE2EOrder{total: request.Amount.Total, state: "NOTPAY"}
 		return http.StatusOK, wpTestJSONBody(map[string]any{"code_url": "weixin://wxpay/bizpayurl?pr=" + request.OutTradeNo})
 	case r.Method == http.MethodPost && r.URL.Path == "/v3/pay/transactions/h5":
+		if s.createFail {
+			return http.StatusBadRequest, []byte(`{"code":"PARAM_ERROR","message":"refused"}`)
+		}
 		var request struct {
 			OutTradeNo string `json:"out_trade_no"`
 			Amount     struct {
@@ -101,12 +111,19 @@ func (s *wpE2EState) respond(t *testing.T, r *http.Request, body []byte) (int, [
 		})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v3/pay/transactions/out-trade-no/"):
 		id := strings.TrimPrefix(r.URL.Path, "/v3/pay/transactions/out-trade-no/")
+		if s.queryFail {
+			return http.StatusInternalServerError, []byte(`{"code":"SYSTEM_ERROR","message":"query failed"}`)
+		}
 		o := s.orders[id]
 		if o == nil {
 			return http.StatusNotFound, []byte(`{"code":"ORDER_NOT_EXIST","message":"no such order"}`)
 		}
+		mchid := wpTestMchID
+		if s.queryMchid != "" {
+			mchid = s.queryMchid
+		}
 		return http.StatusOK, wpTestJSONBody(map[string]any{
-			"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": id,
+			"appid": wpTestAppID, "mchid": mchid, "out_trade_no": id,
 			"transaction_id": o.trade, "trade_state": o.state,
 			"amount": map[string]any{"total": o.total, "currency": "CNY"},
 		})
@@ -195,6 +212,27 @@ func TestWechatPayLocalGatewayEndToEnd(t *testing.T) {
 		return o, checkout
 	}
 
+	// A signed 4xx refusal is definite: the order fails and gives its daily reservation back.
+	state.mu.Lock()
+	state.createFail = true
+	state.mu.Unlock()
+	refused, _, err := w.placeAs(w.accountA(), CreateOrder{
+		Site: w.site(w.siteA, "CNY"), Account: w.account, User: w.user, Method: "wxpay", Credits: yuan,
+		Key: "wechat-refused", ReturnURL: "https://console.example.com/topup", ClientIP: netip.MustParseAddr("203.0.113.7"),
+	})
+	state.mu.Lock()
+	state.createFail = false
+	state.mu.Unlock()
+	if !errors.Is(err, ErrRefused) {
+		t.Fatalf("create refusal error %v", err)
+	}
+	if got, _, _ := w.stored(refused.ID); got != "failed" {
+		t.Fatalf("create refusal state %s", got)
+	}
+	if used := w.count(w.p.platform, "SELECT coalesce(sum(used), 0) FROM payments.merchant_usage WHERE merchant_id=$1", merchant.ID); used != 0 {
+		t.Fatalf("create refusal left %d in daily usage", used)
+	}
+
 	// Native order, encrypted callback, query-confirmed credit.
 	paid, checkout := place("wxpay", 10*yuan, "wechat-native")
 	if !strings.HasPrefix(checkout.QRCode, "weixin://wxpay/bizpayurl?pr=") {
@@ -255,6 +293,36 @@ func TestWechatPayLocalGatewayEndToEnd(t *testing.T) {
 	if got, _, _ := w.stored(lost.ID); got != "paid" {
 		t.Fatalf("lost callback state %s", got)
 	}
+
+	// A signed query for another merchant must not credit the local order.
+	wrongMerchant, _ := place("wxpay", yuan, "wechat-wrong-merchant")
+	state.settle(wrongMerchant.ID.TypeID(), wrongMerchant.Total.Minor)
+	state.mu.Lock()
+	state.queryMchid = "1900000002"
+	state.mu.Unlock()
+	w.p.pollOrder(t.Context(), wrongMerchant.ID)
+	w.assertCredit(wrongMerchant, 0)
+	if got, _, _ := w.stored(wrongMerchant.ID); got != "pending" {
+		t.Fatalf("wrong-merchant query state %s", got)
+	}
+	state.mu.Lock()
+	state.queryMchid = ""
+	state.mu.Unlock()
+
+	// A failed pre-refund order query sent no refund: the first attempt must fail and release the freeze.
+	state.mu.Lock()
+	state.queryFail = true
+	state.mu.Unlock()
+	noSend := w.mustRefund(lost, lost.Credits, "wechat-refund-not-sent")
+	if got := w.approve(noSend); got.State != "failed" {
+		t.Fatalf("pre-send failure state %s", got.State)
+	}
+	if frozen := w.count(w.p.platform, "SELECT frozen FROM billing.balances WHERE account_id=$1", w.account); frozen != 0 {
+		t.Fatalf("pre-send failure left %d frozen", frozen)
+	}
+	state.mu.Lock()
+	state.queryFail = false
+	state.mu.Unlock()
 
 	// Close a waiting order, then refund the paid one through the core.
 	cancelled, _ := place("wxpay", yuan, "wechat-cancel")
