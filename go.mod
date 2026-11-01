@@ -3,13 +3,13 @@ module axiom
 go 1.27.3
 
 require (
-	github.com/fxamacker/cbor/v2 v2.9.4
-	github.com/getkin/kin-openapi v0.151.0
+	github.com/fxamacker/cbor/v2 v2.9.6
+	github.com/getkin/kin-openapi v0.152.0
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/google/go-cmp v0.7.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/moby/moby/api v1.56.1
-	github.com/oapi-codegen/runtime v1.7.0
+	github.com/oapi-codegen/runtime v1.8.0
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/riverqueue/river v0.49.0
@@ -18,7 +18,7 @@ require (
 	github.com/temoto/robotstxt v1.1.2
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
-	github.com/tiktoken-go/tokenizer v0.8.1
+	github.com/tiktoken-go/tokenizer v0.10.0
 	github.com/valkey-io/valkey-go v1.0.79
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/prometheus v0.69.0
