@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"unicode/utf8"
 
 	"axiom/internal/catalog"
 )
@@ -369,4 +370,38 @@ func appendCount(dst []byte, name string, n int64) []byte {
 func appendQuoted(dst []byte, s string) []byte {
 	dst, _ = jsontext.AppendQuote(dst, s) //nolint:errcheck // invalid UTF-8 is written as U+FFFD, and that is all the error says
 	return dst
+}
+
+// quotedLength is how many bytes appendQuoted writes for s, counted without encoding it: RFC 8785's minimal quoting, as
+// jsontext writes it. Budgets are charged by it before a string is encoded, so a test holds it to appendQuoted's own
+// output, and a change in that escaping fails there rather than growing a buffer past what was charged.
+func quotedLength(s string) int {
+	n := 2 // the quotes
+	for i := 0; i < len(s); {
+		switch {
+		case s[i] == '"' || s[i] == '\\':
+			n += 2
+			i++
+		case s[i] < 0x20:
+			n += controlEscapeLen(s[i])
+			i++
+		default:
+			r, size := utf8.DecodeRuneInString(s[i:])
+			if r == utf8.RuneError && size == 1 {
+				n += 3 // an invalid byte is written as the replacement character
+			} else {
+				n += size
+			}
+			i += size
+		}
+	}
+	return n
+}
+
+// controlEscapeLen is what a control byte is written as: the short escapes take two bytes, the rest \u00XX six.
+func controlEscapeLen(c byte) int {
+	if c == '\b' || c == '\t' || c == '\n' || c == '\f' || c == '\r' {
+		return 2
+	}
+	return 6
 }

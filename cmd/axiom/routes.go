@@ -8,6 +8,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/fileparse"
 	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/payments"
@@ -23,6 +24,32 @@ import (
 type nodeRoutes struct {
 	public, admin http.Handler
 	calls         callNode
+}
+
+// plugins opens the self-hosted backends the plugins call, each only when the deployment configured one: without a
+// backend the plugin keeps the refusal it has always answered.
+func (p consoleParts) plugins(ctx context.Context, db *pg.DB, exit *egress.Client) (websearch.Searcher, fileparse.Parser, error) {
+	search, err := p.search(ctx, db)
+	if err != nil {
+		return nil, nil, err
+	}
+	var searcher websearch.Searcher
+	if search.Configured() {
+		if searcher, err = websearch.Open(search, exit); err != nil {
+			return nil, nil, err
+		}
+	}
+	parser, err := p.fileParser(ctx, db)
+	if err != nil {
+		return nil, nil, err
+	}
+	var fileParser fileparse.Parser
+	if parser.Configured() {
+		if fileParser, err = fileparse.Open(parser, exit); err != nil {
+			return nil, nil, err
+		}
+	}
+	return searcher, fileParser, nil
 }
 
 // routes starts the accounts module on this node, which loads the sites, domains and roles and keeps them fresh until
@@ -65,19 +92,14 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if !p.cfg.modelVerification {
 		verify = nil
 	}
-	search, err := p.search(ctx, db)
+	searcher, fileParser, err := p.plugins(ctx, db, exit)
 	if err != nil {
 		return nodeRoutes{}, err
 	}
-	var searcher websearch.Searcher
-	if search.Configured() {
-		if searcher, err = websearch.Open(search, exit); err != nil {
-			return nodeRoutes{}, err
-		}
-	}
 	calls, err := startCallPath(ctx, callDeps{
 		db: db, keys: p.master, identity: p.identity, accounts: service, catalog: cat, egress: exit, search: searcher,
-		gate: gate, limits: limits,
+		fileParser: fileParser,
+		gate:       gate, limits: limits,
 		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger, proxies: p.cfg.trustedProxies,
 		kv:     cache,
 		alerts: p.alerts, healthMode: p.cfg.healthMode, nodeID: p.cfg.valkey.NodeID, verify: verify,
@@ -107,9 +129,24 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 	public = withPaymentCallbacks(public, pay.Notify())
 	adminAPI := newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger)
 	adminAPI.keys, adminAPI.exit, adminAPI.smtp, adminAPI.search = p.master, exit, p.cfg.smtp, p.cfg.search
+	adminAPI.fileParser = p.cfg.fileParser
 	admin := adminRoutes(adminAPI,
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
+}
+
+// fileParser reads the parser backend this node converts files through: the admin's saved configuration when there is
+// one, the environment's otherwise.
+func (p consoleParts) fileParser(ctx context.Context, db *pg.DB) (fileparse.Config, error) {
+	cfg := p.cfg.fileParser
+	err := db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+		stored, found, err := fileparse.StoredConfig(ctx, tx, p.master)
+		if found {
+			cfg = stored
+		}
+		return err
+	})
+	return cfg, err
 }
 
 // search reads the backend this node searches through: the admin's saved configuration when there is one, the

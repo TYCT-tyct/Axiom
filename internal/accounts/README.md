@@ -138,7 +138,7 @@
 
 1. **认出**（`AuthenticateKey`，内存）：解析并核对校验位，用 `(site_id, 当前版本的哈希)` 查缓存。条目里只有 `key_id`、`account_id`、`workspace_id`、`site_id`，建后永不改变。未命中时按 `(site, 哈希)` 合并并发的查找：配了 `Config.LookupSlot` 时，这次共享的查找先取一个名额、查完才还（发起它的请求走了也不提前还，等它的请求不另取），名额取不到就按查找失败处理、不写负缓存；无范围调用 `key_tenant`，无结果写负缓存、返回 401；有结果写入缓存。
 2. **准入**（`Admit`，数据库）：gateway 的单请求路径调用 `accounts.Admit(ctx, caller, req, fn)`（并发路径是下面的 `AdmitBatch`），`req` 带请求的域名、可信解析的客户端 IP。本模块用 key 所属账户的范围打开事务，执行一条查询：key ⨝ 工作区 ⨝ 账户，条件为 `domain_site(请求的域名, 'api') = key.site_id`，key、工作区、账户都启用，key 与工作区未删除，未过期，`kind = call`，`ip_allow` 为空或包含客户端 IP。其他条件有效而账户停用时回滚并返回 `ErrAccountSuspended`（403）；其余条件不满足返回与"key 不存在"相同的 `ErrUnknownKey`（401）。满足就把当前的 `preset_id`、`models`、`tier_id`、`spend_limit`、`limit_reset`、工作区预算放进 `Admission` 交给 `fn`。`fn` 由 gateway 组装：用 `Admission` 定规则、路由（认模型里名字解析在准入之前做，key 的可用模型这一半在 `fn` 里按 `Admission.models` 约束，不允许返回 403），再调 billing 的准入在同一个事务里预留（批量路径是 `ReserveMany`）。`fn` 里只有对内存快照的有界计算和预留的数据库语句，不访问缓存、不等待：限流计数和会话粘性在 `Admit` 之前取好，端点负载在进程内，都作为路由的输入（见[路由的「容量感知」](../../docs/domains/routing.md#容量感知)）；候选都满载时 `fn` 返回"需要等待"，`Admit` 回滚（这时还没有预留），gateway 在事务之外等，醒来后只重新调 `Admit`，不再访问缓存、不重复计限流；权限、预设、可用模型、等级都重新读库，路线也重新计算。
-3. 不预留的 key 接口（`GET /api/v1/key`、`/credits`）同样经 `Admit` 打开事务，`fn` 只读。
+3. 不预留的 key 接口（`GET /api/v1/key`、`/credits`）同样经 `Admit` 打开事务，`fn` 只读。gateway 的 `file-parser` 在把文件发给后端之前调 `Check`：同一条查询、同样的拒绝，不跑 `fn` 也不预留，只用来把明显不能用的 key 挡在解析工作之前；准入仍然自己再查一次，`Check` 的答案不作为放行依据。
 
 **批量准入**（`AdmitBatch`，数据库）：同一账户的并发调用合并成一个事务。`tx.Batch` 一次发出每个调用的准入查询，每个调用各自成功、得到 `ErrAccountSuspended` 或 `ErrUnknownKey`；成功的调用连同 `Admission` 按原顺序交给 `fn`，`fn` 的错误回滚整批。调用方保证批内是同一个账户、调用者非零；混合账户是程序错误，直接报错而不是跨租户开事务。`TestAdmitBatchChecksEveryCallAndKeepsTheRest` 守住一个被拒的调用不影响同批其他调用。
 

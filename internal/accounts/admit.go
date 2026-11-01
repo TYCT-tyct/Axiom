@@ -21,7 +21,7 @@ type AdmitRequest struct {
 }
 
 // Admission is what a call with the key may do, read from the database in the admission transaction: routing and
-// billing take their rules from it, never from a cache. Only Admit makes one.
+// billing take their rules from it, never from a cache. Only Admit and Check make one.
 type Admission struct {
 	accountRate, keyRate int
 	owner                UserID
@@ -104,6 +104,30 @@ func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(t
 		}
 		return fn(tx, a)
 	})
+}
+
+// Check reads what Admit reads and stops there, without a callback and without reserving anything: the file parser
+// asks before it sends a document to a backend, so a key that may not call is refused before that work. The answer is
+// a moment old, so the admission checks again; only its transaction decides what a call may do.
+func (s *Service) Check(ctx context.Context, c Caller, r AdmitRequest) (Admission, error) {
+	if c == (Caller{}) {
+		return Admission{}, ErrUnknownKey
+	}
+	var a Admission
+	err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(c.account)), func(tx pg.Tx) error {
+		rows, err := s.queries.AdmitKey(ctx, tx, AdmitKeyParams{
+			KeyID: uuid.UUID(c.key), Domain: strings.ToLower(r.Domain), ClientIp: r.ClientIP,
+		})
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return ErrUnknownKey
+		}
+		a, err = admitRow(c, rows[0])
+		return err
+	})
+	return a, err
 }
 
 // AdmitCall is one call of an admission batch: the key that made it and what the gateway knows of the request.

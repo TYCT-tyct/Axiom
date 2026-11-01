@@ -25,6 +25,12 @@ var (
 	errNoModel      = &Refusal{Status: http.StatusNotFound, Code: "model_not_found"}
 	errTooLarge     = &Refusal{Status: http.StatusRequestEntityTooLarge, Code: "payload_too_large"}
 	errBodyTimeout  = &Refusal{Status: http.StatusRequestTimeout, Code: "timeout"}
+	// errParseFailed is the file parser backend failing before an attempt, the same 502 the web plugin's search gives
+	// (docs/domains/gateway.md「错误」).
+	errParseFailed = &Refusal{
+		Status: http.StatusBadGateway, Code: "upstream_error",
+		Message: "The file-parser plugin could not parse the request's file.",
+	}
 )
 
 func invalid(message string) *Refusal {
@@ -88,6 +94,7 @@ var messages = map[string]string{
 	"payload_too_large":    "The request body is larger than the limit.",
 	"timeout":              "The request body was not received in time.",
 	"generation_not_found": "No call with this ID is visible to this key.",
+	"upstream_error":       "The upstream failed; retry shortly.",
 }
 
 // errorTypes are the Messages `type` of a status; Chat's `type` uses the same words (protocol's errorTypes, which the
@@ -98,7 +105,7 @@ var errorTypes = map[int]string{
 	http.StatusPaymentRequired: "billing_error", http.StatusNotFound: "not_found_error",
 	http.StatusRequestTimeout: "timeout_error", http.StatusRequestEntityTooLarge: "request_too_large",
 	http.StatusTooManyRequests: "rate_limit_error", http.StatusServiceUnavailable: "overloaded_error",
-	http.StatusMethodNotAllowed: "invalid_request_error",
+	http.StatusBadGateway: "api_error", http.StatusMethodNotAllowed: "invalid_request_error",
 }
 
 // maxRetryAfter is the longest Retry-After sent: Claude Code does not retry after more than 60 seconds.

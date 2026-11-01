@@ -709,3 +709,32 @@ func TestRerankDemandReservesItsSearchUnit(t *testing.T) {
 		t.Errorf("a chat request without web search demand got %+v", chat.ServerTools)
 	}
 }
+
+// TestFileParsesAreFlatSearches: each file the gateway parses before admission is one per-use web_search unit that does
+// not add a sampling, so the reservation covers it and the request's own search count is left alone.
+func TestFileParsesAreFlatSearches(t *testing.T) {
+	d := routing.DemandOf(&protocol.Request{Format: protocol.Chat, FileParses: 3, Needs: protocol.WebSearch, WebSearches: 2})
+	var flat, native int
+	for _, tool := range d.ServerTools {
+		if tool.Item != catalog.ItemWebSearch {
+			t.Fatalf("server tool %+v, want web_search", tool)
+		}
+		if tool.Flat {
+			flat++
+			if tool.MaxUses != 3 {
+				t.Errorf("flat uses = %d, want 3", tool.MaxUses)
+			}
+			continue
+		}
+		native++
+		if tool.MaxUses != 2 {
+			t.Errorf("native uses = %d, want 2", tool.MaxUses)
+		}
+	}
+	if flat != 1 || native != 1 {
+		t.Fatalf("server tools = %+v, want one flat parse unit and the native search", d.ServerTools)
+	}
+	if d.Documents != 0 {
+		t.Errorf("documents = %d, want none after parsing", d.Documents)
+	}
+}

@@ -166,6 +166,12 @@ func DemandOf(req *protocol.Request) billing.Demand {
 		// The gateway's web plugin runs one external search before the completion; it is a flat per-use charge.
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: 1, Flat: true})
 	}
+	if req.FileParses > 0 {
+		// Each file the gateway parsed before admission is one flat per-use charge. It is billed under the search item
+		// because a new per-use item would have to appear in every stored fallback row at once, which a rolling release
+		// cannot do (docs/domains/billing.md「服务器工具」).
+		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, Flat: true, MaxUses: req.FileParses})
+	}
 	if req.Needs.Has(protocol.CodeExecution) {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemCodeExecution, MaxUses: req.CodeExecutions})
 	}

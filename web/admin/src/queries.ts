@@ -321,6 +321,11 @@ export const searchSettingsQuery = queryOptions({
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/search`, { signal })),
 });
 
+export const fileParserSettingsQuery = queryOptions({
+  queryKey: [accountKey, "file-parser-settings"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/file-parser`, { signal })),
+});
+
 export const paymentSettingsQuery = (siteId: AdminSchemas["SiteId"]) =>
   queryOptions({
     queryKey: [accountKey, "payment-settings", siteId],

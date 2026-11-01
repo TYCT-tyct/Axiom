@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
+import { FileParserSettings } from "../file-parser-settings";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { MailSettings } from "../mail-settings";
 import { Facts, PageBody, State } from "../parts";
@@ -46,6 +47,7 @@ export default function SettingsPage() {
               <SiteSignIn siteId={account.site_id} />
               <MailSettings />
               <SearchSettings />
+              <FileParserSettings />
               <PaymentsSettings siteId={account.site_id} currency={account.balance.balance.currency} />
             </>
           )}

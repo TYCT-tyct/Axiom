@@ -15,6 +15,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/fileparse"
 	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/platform/alert"
@@ -61,6 +62,7 @@ type callDeps struct {
 	catalog    *catalog.Catalog
 	egress     *egress.Client
 	search     websearch.Searcher
+	fileParser fileparse.Parser
 	gate       gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
 	limits     *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
 	records    *observability.Recorder // the call log, which the settlements write to
@@ -183,7 +185,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
-		Outstanding: outstanding, Search: d.search,
+		Outstanding: outstanding, Search: d.search, Parser: d.fileParser,
 	})
 	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models}, err
 }
