@@ -71,6 +71,34 @@ func TestTheAttemptCostIsTheSuppliersKnownCost(t *testing.T) {
 	}
 }
 
+// TestTheRequestCostIsBookedOnce: a supplier schedule that prices only the request charges one unit of its native
+// currency for the attempt, even though the upstream reports tokens that its zero token prices cost nothing. The
+// supplier row is complete, the supplier-cost ledger gets the converted amount, and the call's profit is known.
+func TestTheRequestCostIsBookedOnce(t *testing.T) {
+	t.Parallel()
+	r, receipt := costedRigWith(t, `{"v":1,"currency":"XXX","rates":{"input":"0","output":"0","request":"1"}}`)
+	sample, _ := sample(t, protocol.Messages)
+	up := withCosts(r, r.billing, r.suppliers)
+	up.setReceipt(receipt)
+	up.setScript(costedScript(sample, true))
+	a := r.funded(1e12)
+	r.do("POST", "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
+	id := r.lastCall().ID
+	row, ok := r.supplierRow(id)
+	if !ok || row.native != "1" || row.flag != "complete" || row.items["input"] != supplierInput {
+		t.Fatalf("supplier row %+v, %v; want one request with the reported input", row, ok)
+	}
+	cost := r.count(`SELECT coalesce(sum(e.amount),0)::bigint FROM billing.entries e
+		JOIN billing.transactions t ON t.id=e.transaction_id WHERE t.request_id=$1 AND e.book='supplier_cost'`, id)
+	if cost != 1_000_000 {
+		t.Errorf("supplier cost %d, want 1000000", cost)
+	}
+	if profit := r.count("SELECT coalesce(profit,0)::bigint FROM billing.reservations WHERE request_id=$1", id); profit != r.charged(id)-cost {
+		t.Errorf("profit %d, want charged %d - cost %d", profit, r.charged(id), cost)
+	}
+	r.ledgerBalanced()
+}
+
 // checkTheSuppliersCost checks what a costed call left in the books and on the supplier's side. The books hold the
 // supplier's own amount for what the attempt used — the reported tokens, and any the relay had to count itself — and
 // never the sale price, a hundred times more; no cap counts a waiver. The supplier's row is the same attempt, written in
@@ -98,8 +126,13 @@ func (r *rig) checkTheSuppliersCost(id uuid.UUID) {
 // (suppliers.CallWrites).
 func costedRig(t *testing.T) (*rig, suppliers.AttemptReceipt) {
 	t.Helper()
+	return costedRigWith(t, supplierSchedule)
+}
+
+func costedRigWith(t *testing.T, prices string) (*rig, suppliers.AttemptReceipt) {
+	t.Helper()
 	r := newRig(t, func(o *rigOptions) { o.suppliers = true })
-	receipt, endpoint := r.seedSupplierCost()
+	receipt, endpoint := r.seedSupplierWith(prices)
 	e := r.endpoints["alpha-1"]
 	e.ID = routing.EndpointID(endpoint)
 	r.endpoints["alpha-1"] = e

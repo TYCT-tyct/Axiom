@@ -24,7 +24,7 @@ type CostFlag uint8
 const (
 	CostComplete CostFlag = iota // every item with usage has a price
 	CostUnpriced                 // some item with usage has none: the estimate holds only the priced part
-	CostNoUsage                  // the supplier reported no usage, so any estimate rests on guessed counts or is zero
+	CostNoUsage                  // the supplier reported no usage and the schedule prices no request, so the estimate rests on guessed counts or is zero
 )
 
 func (f CostFlag) String() string { return [...]string{"complete", "unpriced", "no_usage"}[f] }
@@ -66,12 +66,16 @@ type AttemptCost struct {
 
 // Cost prices the usage of an attempt, one entry per segment, with the schedule its receipt names. It reads memory
 // only. A schedule it does not hold, which can only be from a database that changed under a receipt, prices nothing and
-// says so with the flag, so that the cost is never taken for zero.
+// says so with the flag, so that the cost is never taken for zero. A schedule that prices the request item charges one
+// request for the attempt, however many internal samplings it had; the item is not in the upstream usage, so it is
+// added once here. The caller passes no usage for a NotExecuted attempt and skips this function for it.
 func (s *Service) Cost(r AttemptReceipt, usage []catalog.Usage) (AttemptCost, error) {
 	schedule := (*s.schedules.Load())[r.schedule]
 	var cost AttemptCost
+	var last catalog.Usage
 	used := false
 	for _, u := range usage {
+		last = u
 		items := usedItems(u)
 		unknown := len(u.Unknown()) > 0
 		cost.Unknown = cost.Unknown || unknown
@@ -88,6 +92,18 @@ func (s *Service) Cost(r AttemptReceipt, usage []catalog.Usage) (AttemptCost, er
 			return AttemptCost{}, fmt.Errorf("add the cost of an attempt: %w", err)
 		}
 		cost.Missing |= missing
+	}
+	if schedule != nil && schedule.Priced(1<<catalog.ItemRequest) {
+		used = true
+		price, _, ok := schedule.Rate(last, catalog.ItemRequest)
+		if !ok {
+			cost.Missing.Add(catalog.ItemRequest)
+		} else {
+			var addErr error
+			if cost.Native, addErr = cost.Native.Add(price.Mul(1)); addErr != nil {
+				return AttemptCost{}, fmt.Errorf("add the request cost of an attempt: %w", addErr)
+			}
+		}
 	}
 	switch {
 	case !used:
