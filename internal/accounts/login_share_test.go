@@ -214,7 +214,7 @@ func TestLoginLimitsFallBackToTheShare(t *testing.T) {
 // scan of it finds the site and an HMAC, and no personal data (internal/platform/kv/README.md「键」).
 func TestLoginKeysCarryNoPersonalData(t *testing.T) {
 	t.Parallel()
-	server := kvtest.Own(t) // the admin user, to read every key
+	server := kvtest.New(t) // the read-only admin user, to read every key
 	x := newTestSite(t)
 	namespace := kvtest.Namespace()
 	s := cachedNode(t, x.db, server.OpenIn(t, namespace, kv.Deps{Now: clientClock(x.clock)}), x.clock.Now)
@@ -227,7 +227,7 @@ func TestLoginKeysCarryNoPersonalData(t *testing.T) {
 	var keys []string
 	var cursor uint64
 	for {
-		page, err := server.Do(t, t.Context(), server.Admin.B().Scan().Cursor(cursor).Match("ax:"+namespace+":*").Build())[0].AsScanEntry()
+		page, err := server.Read(t, t.Context(), server.Admin.B().Scan().Cursor(cursor).Match("ax:"+namespace+":*").Build())[0].AsScanEntry()
 		if err != nil {
 			t.Fatal(err)
 		}

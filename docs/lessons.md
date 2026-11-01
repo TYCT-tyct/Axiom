@@ -90,3 +90,19 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 证据：PR #462 的列车构建 [40914818602](https://github.com/TYCT-tyct/Axiom/actions/runs/40914818602) 在健康探测恢复断言失败，并在第二份大账本夹具播种时达到 billing 包的十分钟期限。
 哪一层没拦住：健康测试从组装前冻结的时钟推进 31 秒，实际熔断时间却由网关按真实时钟记录；两种账本计划测试分别播种 200 万笔数据，单包累计成本没有被局部测试暴露。集成测试应从实际事件时刻推进受控时钟，并用时钟偏移复现组装延迟；同模块同量级的计划验证共用大夹具，保留每种查询的完整计划断言。`TestGatewayHealthRemoveProbeRestore` 固定模拟两分钟时钟落后；`TestLedgerReadsGrowWithThePage` 同时验证 movements 和 statement，后续此类计划用例加在同一夹具下。
 出现：2026-10-29
+
+## 只读状态和故障兜底的测试也为容器排队
+
+证据：合并车构建 [41341652838](https://github.com/TYCT-tyct/Axiom/actions/runs/41341652838) 的 go-test 里，`TestStickyDoesNotRenewOnUse`、`TestKeyRateHoldsWhileTheCacheIsDown`、`TestSharedNodeRejectionsPreserveAccountHistory` 都在 120 秒时以 `Post .../containers/create: context deadline exceeded` 失败；同一个运行已经共享一个 Valkey，它们却各自又起容器，Docker 在负载下两分钟没有返回。
+
+哪一层没拦住：`kvtest.Own` 被用来读 TTL、键列表和制造故障，而共享 Valkey 的 admin 用户当时不允许读；时序清单只写了不按墙钟、睡眠和重试判成败，没有说测试不该在只读或故障场景起容器。现在共享容器的只读 admin 由 `KVTEST_ADMIN_PASSWORD_FILE` 传入，只读用例走 `Server.Read`/`Server.TTL`，故障用例用 `kvtest.Down` 或关闭客户端。
+
+出现：2026-11-01
+
+## 请求期限被当成整个节点的期限
+
+证据：同一构建里 `TestRequestsHaveADeadline` 的第一次请求按 300 ms 期限返回 503，下一次正常请求也返回 503「the request took too long」；300 ms 是通过 `withDeadline` 设在节点上的，节点上的每个请求都只有 300 ms，负载下正常请求也会超时。
+
+哪一层没拦住：测试把「被阻塞的请求有短期限」写成了「节点有短期限」，而时序清单只要求不按墙钟判成败，没有指出期限应该属于哪一次请求。现在 300 ms 放在等待中的那次请求的 context 上，节点的下一次请求用各自的正常期限；只为测试存在的节点期限字段随之删除。
+
+出现：2026-11-01

@@ -22,7 +22,7 @@ func TestSiteLogoIsPublicAndLongCached(t *testing.T) {
 	rec := f.change(s, http.MethodPut, "/sites/"+site+"/logo", body, newKey())
 	expectAdmin(t, "updateSiteLogo", rec, http.StatusOK, "")
 
-	c := startNode(f.commandLine, f.clock, 0)
+	c := startNode(f.commandLine, f.clock)
 	var got consoleapi.Site
 	decode(t, c.do(http.MethodGet, "/site", ""), &got)
 	if got.LogoUrl == nil || !strings.HasPrefix(*got.LogoUrl, "/api/console/v1/site/logo/") {
@@ -48,7 +48,7 @@ func TestSiteLogoIsPublicAndLongCached(t *testing.T) {
 	// Clearing the site's logo changes what getSite says; the old URL still names the bytes it named.
 	rec = f.change(s, http.MethodPut, "/sites/"+site+"/logo", `{"reason":"remove"}`, newKey())
 	expectAdmin(t, "clear the logo", rec, http.StatusOK, "")
-	c2 := startNode(f.commandLine, f.clock, 0)
+	c2 := startNode(f.commandLine, f.clock)
 	var cleared consoleapi.Site
 	decode(t, c2.do(http.MethodGet, "/site", ""), &cleared)
 	if cleared.LogoUrl != nil {

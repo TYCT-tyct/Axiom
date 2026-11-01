@@ -75,7 +75,7 @@ func TestAnnouncementPublishReadWithdrawAndReplay(t *testing.T) {
 		t.Fatal("replay changed announcement")
 	}
 	f.addUser("reader@example.com", "")
-	console := startNode(f.commandLine, &testClock{now: now}, 0)
+	console := startNode(f.commandLine, &testClock{now: now})
 	signedIn := console.do(http.MethodPost, "/auth/sign-in", `{"email":"reader@example.com","password":"`+ownerPassword+`"}`)
 	expect(t, "reader sign-in", signedIn, http.StatusOK, "")
 	user := console.sessionOf(signedIn)

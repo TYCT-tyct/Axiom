@@ -38,7 +38,7 @@ if [ -n "${PGTEST_CLUSTER_URL:-}" ]; then
   password_dir=$(dirname "$KVTEST_PASSWORD_FILE")
   shared=(--volume "$password_dir:$password_dir:ro"
     --env "PGTEST_CLUSTER_URL=$(inside "$PGTEST_CLUSTER_URL" 5432)" --env "KVTEST_URL=$(inside "$KVTEST_URL" 6379)"
-    --env KVTEST_PASSWORD_FILE)
+    --env KVTEST_PASSWORD_FILE --env KVTEST_ADMIN_PASSWORD_FILE)
 fi
 # The shared 80-core budget / eight runners allows ten cores each; eight leaves room for host-side setup.
 # A private cgroup namespace lets Node count this quota, rather than the parent's 80 cores.
