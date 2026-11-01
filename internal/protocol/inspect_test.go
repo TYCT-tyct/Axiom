@@ -285,6 +285,17 @@ var inspectCases = []struct {
 		},
 	},
 	{
+		// Prepare drops max_tool_calls for Messages, so the tools' own max_uses is what runs and what is quoted.
+		"messages tool limits are the tools' own", protocol.Messages, `{"model":"m","max_tokens":1,"max_tool_calls":1,
+		"messages":[{"role":"user","content":"q"}],
+		"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":10},{"type":"code_execution_20250825","name":"code_execution"}]}`,
+		func(r *protocol.Request) {
+			r.Model, r.MaxOutput, r.WebSearches = "m", 1, 10
+			r.NativeWeb, r.MaxToolCalls, r.HasMaxToolCalls = true, 1, true
+			r.Needs = protocol.WebSearch | protocol.CodeExecution
+		},
+	},
+	{
 		"responses call limit only for enabled tools", protocol.Responses, `{"model":"m",
 		"tools":[{"type":"web_search"},{"type":"function","name":"f"}],"max_tool_calls":4}`,
 		func(r *protocol.Request) {

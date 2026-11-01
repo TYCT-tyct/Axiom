@@ -211,10 +211,12 @@ func Inspect(f Format, body []byte) (Request, error) {
 	if s.r.ServiceTiers == 0 {
 		s.r.ServiceTiers = anyTier
 	}
-	if s.r.HasMaxToolCalls && s.r.Needs.Has(CodeExecution) {
+	// Only Responses sends max_tool_calls upstream, where it caps the provider's tools; Chat and Messages lose it in
+	// Prepare (it is OpenRouter's loop control there), so a quote that counted it would cover fewer uses than run.
+	if f == Responses && s.r.HasMaxToolCalls && s.r.Needs.Has(CodeExecution) {
 		s.r.CodeExecutions = s.r.MaxToolCalls
 	}
-	if s.r.HasMaxToolCalls && s.r.Needs.Has(WebSearch) && s.r.ServerSearch == nil {
+	if f == Responses && s.r.HasMaxToolCalls && s.r.Needs.Has(WebSearch) && s.r.ServerSearch == nil {
 		s.r.WebSearches = s.r.MaxToolCalls
 	}
 	return s.r, nil
