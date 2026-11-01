@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"axiom/internal/platform/pg"
 
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/idem"
 )
 
 func TestAdminSystemSettings(t *testing.T) {
@@ -246,6 +248,30 @@ func TestAdminFileParserSettings(t *testing.T) {
 	expectAdmin(t, "test disabled", rec, 200, "")
 	if !strings.Contains(rec.Body.String(), "disabled") {
 		t.Fatal(rec.Body.String())
+	}
+}
+
+// TestSearchFingerprintKeepsItsShape: a client retries a save under the same Idempotency-Key after a restart, possibly on
+// another node. The retry is a replay only if the fingerprint covers the same three things as before: the destination,
+// the reason, and whether a credential came with the body — not the credential itself, and not the key the retry
+// arrives under. A fingerprint that drifted would answer 409 instead of the stored response.
+func TestSearchFingerprintKeepsItsShape(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	body := `{"settings":{"url":"https://8.8.8.8","key":"search-test-value"},"reason":"configure"}`
+	expectAdmin(t, "save", f.change(s, http.MethodPut, "/settings/search", body, newKey()), 200, "")
+	want, err := idem.Fingerprint([]any{"https://8.8.8.8", "configure", true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.text("SELECT fingerprint::text FROM platform.idempotency WHERE operation='setSearchSettings'"); got != `\x`+hex.EncodeToString(want[:]) {
+		t.Fatalf("fingerprint = %s, want the destination, the reason and the credential's presence", got)
+	}
+	retained := strings.Replace(body, `,"key":"search-test-value"`, "", 1)
+	expectAdmin(t, "retain", f.change(s, http.MethodPut, "/settings/search", retained, newKey()), 200, "")
+	if got := f.text("SELECT count(DISTINCT fingerprint)::text FROM platform.idempotency WHERE operation='setSearchSettings'"); got != "2" {
+		t.Fatalf("dropping the credential left %s fingerprints, want a second", got)
 	}
 }
 

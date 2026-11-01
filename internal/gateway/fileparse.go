@@ -6,10 +6,32 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
+	"axiom/internal/accounts"
 	"axiom/internal/fileparse"
 	"axiom/internal/protocol"
+	"axiom/internal/routing"
 )
+
+// gateParsing refuses, before the parser sends a document to a backend, what the admission would refuse after it: a
+// key that is disabled, expired, off its address or over its rate is answered here rather than after a parse. The
+// check reads the database once, as the admission does, and the admission still makes its own: this answer is old by
+// the time the reservation is written, and only there is anything reserved.
+func (h *Handler) gateParsing(r *http.Request, c *Call, sessionBody []byte, req protocol.Request) error {
+	if h.Parser == nil || req.File == nil || !req.File.Parsed() || req.Documents == 0 {
+		return nil
+	}
+	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &req, sessionBody, strings.TrimSpace(r.Header.Get("X-Session-Id")))
+	c.rate = h.precheck(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller),
+		c, r.Header.Get("X-Claude-Code-Context-Compacted") != "")
+	c.gated = true
+	a, err := h.Accounts.Check(r.Context(), c.caller, accounts.AdmitRequest{Domain: c.host, ClientIP: c.ip})
+	if err != nil {
+		return err
+	}
+	return h.judgeRate(a, c, callDimension)
+}
 
 // parseFiles replaces the request's inline files with the text of the node's parser, before anything is reserved: the
 // quote is then the body that is forwarded, and routing no longer needs an endpoint that accepts documents. It runs
@@ -25,6 +47,7 @@ func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req prot
 	if h.Parser == nil {
 		return nil, req, invalid(fmt.Sprintf("plugin %q is not supported: %s", "file-parser", protocol.NoFileParser))
 	}
+	web := req.Web // a model suffix like :online is not a body member, so a re-inspection cannot see it
 	ctx, cancel := context.WithTimeout(ctx, fileparse.Timeout)
 	defer cancel()
 	count := &parseCount{}
@@ -32,23 +55,36 @@ func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req prot
 	if err != nil {
 		return nil, req, parseRefusal(ctx, h.Logger, c, err)
 	}
+	parsed, refs, err := inspectParsed(req.Format, newBody)
+	if err != nil {
+		h.Logger.ErrorContext(ctx, "the parsed file body is invalid", "request_id", c.ID.String(), "err", err)
+		return nil, req, errParseFailed
+	}
+	// Every file the rewrite did not replace must be one it may leave: a reference by id, which routing pins to one
+	// provider, rather than content it could not parse.
+	if parsed.Documents > int64(refs) {
+		return nil, req, invalid("The file-parser plugin can only parse files sent inline in the message content.")
+	}
 	if len(files) == 0 {
 		return body, req, nil // the plugin asked, but the request carries no file content to parse
 	}
 	if err := h.chargeGrowth(c, len(body), len(newBody)); err != nil {
 		return nil, req, err
 	}
-	parsed, err := protocol.Inspect(req.Format, newBody)
-	if err != nil {
-		h.Logger.ErrorContext(ctx, "the parsed file body is invalid", "request_id", c.ID.String(), "err", err)
-		return nil, req, errParseFailed
-	}
-	if parsed.Documents != 0 {
-		return nil, req, invalid("The file-parser plugin cannot parse a file outside the message content.")
-	}
 	parsed.File, parsed.FileParses = file, count.n
+	parsed.Web = web
 	c.files = annotations(files)
 	return newBody, parsed, nil
+}
+
+// inspectParsed reads the rewritten body, and counts the file references it still carries.
+func inspectParsed(f protocol.Format, body []byte) (protocol.Request, int, error) {
+	parsed, err := protocol.Inspect(f, body)
+	if err != nil {
+		return parsed, 0, err
+	}
+	refs, err := protocol.FileReferences(f, body)
+	return parsed, refs, err
 }
 
 // parseCount is one request's parsing: the files it has parsed so far, which bounds a runaway history, and the parser it
@@ -108,7 +144,7 @@ func parseRefusal(ctx context.Context, logger *slog.Logger, c *Call, err error) 
 	case errors.Is(err, protocol.ErrFileTooLarge), errors.Is(err, protocol.ErrTooManyFiles),
 		errors.Is(err, fileparse.ErrTooLarge):
 		return errParseTooLarge
-	case errors.Is(err, protocol.ErrInvalid), errors.Is(err, fileparse.ErrEmpty):
+	case errors.Is(err, protocol.ErrInvalid), errors.Is(err, fileparse.ErrEmptyFile):
 		return invalid("The file-parser plugin could not read a file in this request.")
 	}
 	logger.WarnContext(ctx, "the file parser backend failed", "request_id", c.ID.String(), "err", err)

@@ -14,7 +14,6 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
-	"axiom/internal/fileparse"
 	"axiom/internal/observability"
 	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
@@ -100,9 +99,6 @@ type ExecDeps struct {
 	Outstanding *Outstanding
 	// Search runs the web plugin through the deployment's backend; nil means no backend is configured.
 	Search websearch.Searcher
-	// Parser runs the file-parser plugin's OCR engines through the deployment's backend; nil means no backend is
-	// configured.
-	Parser fileparse.Parser
 }
 
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.

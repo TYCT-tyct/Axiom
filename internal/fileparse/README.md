@@ -41,14 +41,14 @@ docker run -p 5001:5001 ghcr.io/docling-project/docling-serve
 ## 测试
 
 - `fileparse_test.go` 用 `httptest` TLS 服务器验证请求形状（路径、`X-Api-Key`、base64、文件名、`to_formats`、`do_ocr`）和文本读取；失败用例覆盖非 200、非 JSON、`failure`、非 UTF-8、空文本、文本超限、正文超限、超时，并断言文件和正文不回显。`TestConfig` 覆盖 `/health`。
-- 网关的 `TestParseFiles*` 覆盖替换、注解跳过、`native` 不解析、无后端 400、后端失败 502、超限 413、文件数上限；`TestParsesAreChargedAsSearches` 覆盖按次计费；`TestFileParserThroughTheHandler` 和 `TestFileParserUnconfiguredThroughTheHandler` 经真实 handler 验证准入前的替换与拒绝。
+- 网关的 `TestParseFiles*` 覆盖替换、注解跳过、`native` 不解析、无后端 400、后端失败 502、超限 413、文件数上限、不可解析位置 400 和 `file_id` 引用保留；`TestParsesAreChargedAsSearches` 覆盖按次计费；`TestFileParserThroughTheHandler` 经真实 handler（数据库、准入、结算）验证转发正文、一次预留、一次结算、`server_tool_cost` 与回复注记，`TestFileParserUnconfiguredThroughTheHandler` 验证未配置后端的 400，`TestAParseIsRefusedBeforeTheBackend` 验证 key 检查在解析之前。
 - 真实 Docling 的容器测试没有做：镜像要下载数百 MB 到数 GB 的模型，按仓库规则不适合放进 `just test`。上线前对真实 Docling serve 的活检查：后台填地址、保存并重启，用一个带扫描 PDF 的 `plugins:[{id:"file-parser","pdf":{"engine":"mistral-ocr"}}]` Chat 请求确认回复正常、上游正文里是文本而不是文件、调用记录里 `web_search` 计一次；再把注解放回历史确认不再计费。
 
 ## 已知边界
 
-- 只解析消息顶层的文件部件：Chat 的 `file`、Responses 的 `input_file`、Messages 的 `document`。工具结果里的文档、`file_id` 引用的文件不解析；请求要求解析却仍有文件留在正文里时 400，而不是把文件悄悄转发。
+- 只解析消息顶层的文件部件：Chat 的 `file`、Responses 的 `input_file`、Messages 的 `document` 的 base64 源。工具结果里的文档、`source.type` 为 `url` 或 `text` 的 Messages 文档不解析，请求要求解析却仍有这类文件时 400，而不是把文件悄悄转发；只带 `file_id` 的引用原样保留，由路由按 `provider.only` 固定供应商。
 - 只接受内联的 base64 或 data URL；同时带 `file_data` 和 `file_id` 的部件拒绝，和格式转换的规则一致。
-- 一次请求最多 8 个文件、每个 20 MiB，替换出的文本合计最多 2 MiB；网关按 `2×文件大小 + ResponseLimit` 和正文增量计入节点预算，申请不到 503。
-- 解析在准入之前：解析失败或超限不会调用模型，也不会预留；反过来，准入被拒（余额不足等）时解析已经发生，这部分工作不收钱，靠 key 的速率上限和节点预算兜底。
+- 一次请求最多 8 个文件、每个 20 MiB，替换进正文的文本合计最多 2 MiB，同一个文件每出现一次都算一份；网关按 `2×文件大小 + ResponseLimit` 和正文增量计入节点预算，申请不到 503。
+- 解析在准入与预留之前，所以解析失败或超限不会调用模型，也不会预留。发文件之前网关先做一次只读的 key 检查（停用、过期、IP 白名单、速率），明显不能用的 key 在解析前就被拒绝；余额和预算要看报价，只能在准入里判断，所以余额不足时解析已经发生，这部分工作不收钱。
 - 只在非流式 Chat 回复里返回 `file` 注解（成功和失败体都带）；流式回复到结束才知道整条消息，`file-parser` 的流式请求不返回注解，客户端要跳过一次解析需用非流式回复里的注解。
 - 引擎名沿用 OpenRouter 的 `mistral-ocr` / `cloudflare-ai`，但两者都落到本站配置的同一个后端：本站没有 Mistral 和 Cloudflare 的账户，也不把文件发给它们。

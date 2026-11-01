@@ -195,7 +195,9 @@ func (a *chatAggregate) annotateFiles(files []FileAnnotation) {
 		return
 	}
 	entries := FileAnnotationEntries(files)
-	if len(entries) == 0 || a.take(len(entries)+len(a.choices), 2) != nil {
+	// The entries are appended to every choice, so each one holds as many copies as the reply has choices, beside the
+	// separators the appending writes.
+	if len(entries) == 0 || a.take((len(entries)+1)*len(a.choices), 2) != nil {
 		return
 	}
 	for i := range a.choices {

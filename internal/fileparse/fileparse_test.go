@@ -147,6 +147,7 @@ func TestParseBackendFailures(t *testing.T) {
 		name   string
 		status int
 		body   string
+		empty  bool
 		want   error
 	}{
 		{name: "status", status: http.StatusInternalServerError, body: `{"status":"failure"}`, want: fileparse.ErrUpstream},
@@ -155,6 +156,7 @@ func TestParseBackendFailures(t *testing.T) {
 		{name: "no document", status: http.StatusOK, body: `{"status":"skipped"}`, want: fileparse.ErrUpstream},
 		{name: "not utf-8", status: http.StatusOK, body: `{"status":"success","document":{"md_content":"\ud800"}}`, want: fileparse.ErrUpstream},
 		{name: "empty", status: http.StatusOK, body: `{"status":"success","document":{"md_content":"  \n"}}`, want: fileparse.ErrEmpty},
+		{name: "an empty file", empty: true, status: http.StatusOK, want: fileparse.ErrEmptyFile},
 		{name: "too large", status: http.StatusOK, body: `{"status":"success","document":{"md_content":"` + strings.Repeat("x", fileparse.MaxTextBytes+1) + `"}}`, want: fileparse.ErrTooLarge},
 		{name: "body too large", status: http.StatusOK, body: strings.Repeat("x", fileparse.ResponseLimit+1), want: fileparse.ErrTooLarge},
 	} {
@@ -167,7 +169,11 @@ func TestParseBackendFailures(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
-			_, err = parser.Parse(ctx, fileparse.Document{Name: "scan.pdf", Data: document})
+			data := document
+			if tc.empty {
+				data = nil
+			}
+			_, err = parser.Parse(ctx, fileparse.Document{Name: "scan.pdf", Data: data})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Parse() error = %v, want %v", err, tc.want)
 			}

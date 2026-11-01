@@ -61,11 +61,11 @@ func TestParseFilesReplacesTheFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, req, err := h.parseFiles(t.Context(), c, body, req)
+	out, parsed, err := h.parseFiles(t.Context(), c, body, req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkParse(t, parser, req, out, c)
+	checkParse(t, parser, parsed, out, c)
 	c.Done()
 }
 
@@ -101,7 +101,7 @@ func TestParseFilesSkipsAnAnnotatedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, req, err := h.parseFiles(t.Context(), c, body, req)
+	out, _, err := h.parseFiles(t.Context(), c, body, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestParseFilesNativeSendsTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	h, c := parseHarness(t, nil)
-	out, req, err := h.parseFiles(t.Context(), c, body, req)
+	out, _, err := h.parseFiles(t.Context(), c, body, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,6 +155,10 @@ func TestParseFilesRefusals(t *testing.T) {
 		},
 		{
 			name: "empty text", parser: &recordingParser{err: fileparse.ErrEmpty}, engine: "cloudflare-ai",
+			status: http.StatusBadGateway, want: "could not parse",
+		},
+		{
+			name: "an empty file", parser: &recordingParser{err: fileparse.ErrEmptyFile}, engine: "cloudflare-ai",
 			status: http.StatusBadRequest, want: "could not read",
 		},
 		{
@@ -252,3 +256,187 @@ func refusalMessage(r *Refusal) string {
 }
 
 // replyFileAnnotations reads the file annotations of the reply's first choice.
+
+// parseSpec and parsePrice are a model that may search and see files, priced for every item the OpenAI formats may
+// report: a parse is charged as a flat search, and the sale schedule has to price it for the reservation to hold.
+const (
+	parseSpec = `{"items":["input","output","cache_write","image_in","web_search"],"tiers":[],` +
+		`"context_length":128000,"max_output_tokens":1000,"streams":true,"abilities":["tools","web_search","documents"]}`
+	parsePrice = `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002",` +
+		`"cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},` +
+		`"service_tiers":{"priority":{"rates":{"input":"0.000001","output":"0.000002",` +
+		`"cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"}}}}`
+)
+
+// TestFileParserThroughTheHandler: a request with an inline file goes through the handler, is parsed before admission,
+// reaches the upstream as the parsed text, reserves one call with the parse's per-use charge in it, settles once, and
+// comes back with the annotation the client can send to skip reparsing, its cost naming the parse's one per-use
+// charge. One call, one reservation, one settlement: the parse is billed inside the call it was made for.
+func TestFileParserThroughTheHandler(t *testing.T) {
+	parser := &recordingParser{text: "The parsed page."}
+	r := newRig(t, func(o *rigOptions) {
+		o.spec, o.parser = parseSpec, parser
+		o.price = parsePrice
+	})
+	up := withCosts(r, r.billing, fakeCosts{cost: 1000, known: true})
+	replies, _ := sample(t, protocol.Chat)
+	for _, e := range up.eps {
+		e.script = []scripted{wholeAnswer(strings.Join(replies, ""))}
+	}
+	a := r.newAccount(1e9)
+	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, bytes.NewReader(fileBody("cloudflare-ai")))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
+	}
+	checkParseReply(t, out)
+	if len(parser.docs) != 1 || string(parser.docs[0].Data) != "%PDF-1.7 a scanned page" {
+		t.Fatalf("the parser was given %d documents, want the request's one file", len(parser.docs))
+	}
+	checkParsedForward(t, up)
+	checkParseBilling(t, r, r.admits[0])
+	r.idle(1 << 30)
+}
+
+// checkParseReply: the reply carries the annotation of the parsed file — its hash of the bytes the client sent, its
+// name and the text — and the usage names the parse's one per-use charge.
+func checkParseReply(t *testing.T, out string) {
+	t.Helper()
+	hash := fileHash([]byte("%PDF-1.7 a scanned page"))
+	for _, want := range []string{
+		`"annotations":[{`, `"type":"file"`, `"hash":"` + hash + `"`, `"text":"The parsed page."`,
+		`"web_search_requests":1`, `"server_tool_cost":0.01`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the reply has no %s:\n%s", want, out)
+		}
+	}
+}
+
+// checkParsedForward: the upstream got the text where the file was, and none of the file's bytes.
+func checkParsedForward(t *testing.T, up *fakeUpstreams) {
+	t.Helper()
+	var forwarded string
+	for _, e := range up.eps {
+		if len(e.calls) > 0 {
+			forwarded = string(e.calls[0].Body)
+		}
+	}
+	if forwarded == "" {
+		t.Fatal("the call never reached the upstream")
+	}
+	if !strings.Contains(forwarded, `"text":"The parsed page."`) || strings.Contains(forwarded, "JVBERi0") {
+		t.Fatalf("the upstream got %s, want the parsed text in the file's place", forwarded)
+	}
+}
+
+// checkParseBilling: the parse is one reservation and one settlement, the call's own, and what it settles includes the
+// parse's flat price.
+func checkParseBilling(t *testing.T, r *rig, c *Call) {
+	t.Helper()
+	if n := r.count("SELECT count(*) FROM billing.reservations WHERE request_id = $1", c.ID); n != 1 {
+		t.Fatalf("the parse wrote %d reservations, want the call's one", n)
+	}
+	if n := r.count("SELECT count(*) FROM billing.transactions WHERE request_id = $1 AND kind = 'settle'", c.ID); n != 1 {
+		t.Fatalf("the call settled %d times, want once", n)
+	}
+	if n := r.count("SELECT coalesce(sum(e.amount), 0) FROM billing.entries e JOIN billing.transactions t ON t.id = e.transaction_id "+
+		"WHERE t.request_id = $1 AND t.kind = 'settle' AND e.book = 'user_balance'", c.ID); n < 10_000_000 {
+		t.Fatalf("the call settled %d, less than the parse's own 0.01 credit", n)
+	}
+}
+
+// TestParseFilesRefusesAFileItCannotParse: only a reference by id may stay in the body; a document anywhere else — a
+// tool result, a URL source — is a file the plugin cannot parse, and the request is refused rather than forwarded with
+// its document intact.
+func TestParseFilesRefusesAFileItCannotParse(t *testing.T) {
+	h, c := parseHarness(t, &recordingParser{text: "unused"})
+	for name, body := range map[string]string{
+		"tool result": `{"model":"acme/alpha","plugins":[{"id":"file-parser","pdf":{"engine":"cloudflare-ai"}}],` +
+			`"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":[` +
+			`{"type":"document","source":{"type":"file","file_id":"file-1"}}]}]}]}`,
+		"url document": `{"model":"acme/alpha","plugins":[{"id":"file-parser","pdf":{"engine":"cloudflare-ai"}}],` +
+			`"messages":[{"role":"user","content":[{"type":"document","source":{"type":"url","url":"https://example.com/scan.pdf"}}]}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			req, err := protocol.Inspect(protocol.Messages, []byte(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = h.parseFiles(t.Context(), c, []byte(body), req)
+			ref, ok := errors.AsType[*Refusal](err)
+			if !ok || ref.Status != http.StatusBadRequest {
+				t.Fatalf("parseFiles() error = %v, want a 400", err)
+			}
+		})
+	}
+}
+
+// TestParseFilesLeavesAReference: a file the client named by id is routing's to pin, not content to parse; the inline
+// file beside it is parsed, and the request is not refused for the reference.
+func TestParseFilesLeavesAReference(t *testing.T) {
+	parser := &recordingParser{text: "The parsed page."}
+	h, c := parseHarness(t, parser)
+	body := []byte(`{"model":"acme/alpha","plugins":[{"id":"file-parser","pdf":{"engine":"cloudflare-ai"}}],` +
+		`"messages":[{"role":"user","content":[{"type":"file","file":{"file_id":"file-1"}},` +
+		`{"type":"file","file":{"file_data":"` + base64.StdEncoding.EncodeToString([]byte("%PDF-1.7 a scan")) + `"}}]}]}`)
+	req, err := protocol.Inspect(protocol.Chat, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := h.parseFiles(t.Context(), c, body, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parser.docs) != 1 || !strings.Contains(string(out), `"file_id":"file-1"`) {
+		t.Fatalf("the reference was not left in place: %s", out)
+	}
+	c.Done()
+}
+
+// TestOnlineSurvivesParsing: the model suffix is not a body member, so the re-inspection after a parse cannot see it.
+// The web plugin the suffix asked for is kept, and its reserved input with it.
+func TestOnlineSurvivesParsing(t *testing.T) {
+	parser := &recordingParser{text: "The parsed page."}
+	r := newRig(t, func(o *rigOptions) {
+		o.spec, o.parser = parseSpec, parser
+		o.price = parsePrice
+		o.search = &recordingSearcher{}
+	})
+	a := r.newAccount(1e9)
+	body := strings.Replace(string(fileBody("cloudflare-ai")), `"model":"acme/alpha"`, `"model":"acme/alpha:online"`, 1)
+	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, strings.NewReader(body))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
+	}
+	admitted := r.admits[0]
+	if admitted.Request.Web == nil || !admitted.Request.Web.Online {
+		t.Fatalf("admitted %+v, want the suffix's web plugin kept", admitted.Request.Web)
+	}
+	if admitted.Request.SearchBytes != protocol.WebSearchMaxBytes || admitted.Request.FileParses != 1 {
+		t.Fatalf("search bytes = %d, parses = %d", admitted.Request.SearchBytes, admitted.Request.FileParses)
+	}
+	r.idle(1 << 30)
+}
+
+// TestAParseIsRefusedBeforeTheBackend: the parser's work happens before the reservation, so the key is checked before
+// the document is sent anywhere. A key whose address is not allowed gets the refusal it would get at admission, and
+// the backend is never called.
+func TestAParseIsRefusedBeforeTheBackend(t *testing.T) {
+	parser := &recordingParser{text: "The parsed page."}
+	r := newRig(t, func(o *rigOptions) {
+		o.spec, o.parser = parseSpec, parser
+		o.price = parsePrice
+	})
+	a := r.newAccount(1e9)
+	r.sql("UPDATE accounts.api_keys SET ip_allow = '{10.0.0.0/8}' WHERE id = '" + uuid.UUID(a.keyID).String() + "'")
+	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, bytes.NewReader(fileBody("cloudflare-ai")))
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, body = %s, want 401", resp.StatusCode, out)
+	}
+	if len(parser.docs) != 0 {
+		t.Fatalf("the backend was asked to parse %d documents, want none", len(parser.docs))
+	}
+	if n := r.count("SELECT count(*) FROM billing.reservations"); n != 0 {
+		t.Fatalf("the refusal reserved %d calls", n)
+	}
+}

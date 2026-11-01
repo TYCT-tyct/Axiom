@@ -256,7 +256,9 @@ func (a adminAPI) savedSearch(ctx context.Context) (cfg websearch.Config, found 
 func (a adminAPI) SetSearchSettings(ctx context.Context, r adminapi.SetSearchSettingsRequestObject) (adminapi.SetSearchSettingsResponseObject, error) {
 	v := r.Body.Settings
 	s := websearch.Settings{URL: strings.TrimSpace(textValue(v.Url)), Key: v.Key}
-	body, replayed, err := setBackendSettings(ctx, a.db, "setSearchSettings", s.URL, r.Body.Reason, r.Params.IdempotencyKey,
+	// Credentials never enter the persisted, unkeyed fingerprint: whether the request carried one does.
+	identity := []any{s.URL, r.Body.Reason, s.Key != nil}
+	body, replayed, err := setBackendSettings(ctx, a.db, "setSearchSettings", s.URL, identity, r.Params.IdempotencyKey,
 		a.checkSearchURL, websearch.ErrInvalidConfig, "invalid search backend configuration; verify the URL and reenter the key after a URL change",
 		func(tx pg.Tx) (adminapi.SearchSettings, error) { return a.saveSearch(ctx, tx, s, r.Body.Reason) })
 	if err != nil {
@@ -284,11 +286,10 @@ func (a adminAPI) saveFileParser(ctx context.Context, tx pg.Tx, s fileparse.Sett
 
 // setBackendSettings runs one backend's save: the URL must pass the egress check, credentials never enter the persisted,
 // unkeyed idempotency fingerprint, and the module's invalid-configuration error becomes the field error its message names.
-func setBackendSettings[T any](ctx context.Context, db *pg.DB, operation, rawURL, reason, key string,
+func setBackendSettings[T any](ctx context.Context, db *pg.DB, operation, rawURL string, request any, key string,
 	check func(context.Context, string) error, invalid error, message string, save func(pg.Tx) (T, error),
 ) (response T, replayed bool, err error) {
-	identity := []any{rawURL, reason, key != ""}
-	return idempotently(ctx, db, operation, key, identity, func(tx pg.Tx) (T, error) {
+	return idempotently(ctx, db, operation, key, request, func(tx pg.Tx) (T, error) {
 		if rawURL != "" {
 			if err := check(ctx, rawURL); err != nil {
 				return response, err
@@ -305,7 +306,7 @@ func setBackendSettings[T any](ctx context.Context, db *pg.DB, operation, rawURL
 // testBackendSettings runs one backend's connectivity test and records it: the rate limit is checked first, the test
 // runs outside the request's cancellation, and a replayed key does not call the backend again.
 func testBackendSettings[T any](ctx context.Context, a adminAPI, operation, kind, action, key, reason string,
-	lookup func(context.Context) (T, error), test func(context.Context, T) string,
+	request any, lookup func(context.Context) (T, error), test func(context.Context, T) string,
 ) (adminapi.ConfigTestResult, bool, error) {
 	if err := a.tests.allow(uuid.UUID(callOf(ctx).principal.SessionID())); err != nil {
 		return adminapi.ConfigTestResult{}, false, err
@@ -316,7 +317,7 @@ func testBackendSettings[T any](ctx context.Context, a adminAPI, operation, kind
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 	defer cancel()
-	return idempotently(ctx, a.db, operation, key, reason, func(tx pg.Tx) (adminapi.ConfigTestResult, error) {
+	return idempotently(ctx, a.db, operation, key, request, func(tx pg.Tx) (adminapi.ConfigTestResult, error) {
 		result := test(ctx, cfg)
 		err := audit.Record(ctx, tx, audit.Event{
 			Actor: actor(ctx), Action: action, Reason: reason,
@@ -366,7 +367,7 @@ func (a adminAPI) checkBackendURL(ctx context.Context, raw, what string, parse f
 //nolint:dupl // the file parser's handler mirrors this one but answers with its own generated type
 func (a adminAPI) TestSearchSettings(ctx context.Context, r adminapi.TestSearchSettingsRequestObject) (adminapi.TestSearchSettingsResponseObject, error) {
 	body, replayed, err := testBackendSettings(ctx, a, "testSearchSettings", "search_config", "search_config.test",
-		r.Params.IdempotencyKey, r.Body.Reason, func(ctx context.Context) (websearch.Config, error) {
+		r.Params.IdempotencyKey, r.Body.Reason, r.Body, func(ctx context.Context) (websearch.Config, error) {
 			cfg, _, err := a.savedSearch(ctx)
 			return cfg, err
 		},
@@ -413,7 +414,8 @@ func (a adminAPI) savedFileParser(ctx context.Context) (cfg fileparse.Config, fo
 func (a adminAPI) SetFileParserSettings(ctx context.Context, r adminapi.SetFileParserSettingsRequestObject) (adminapi.SetFileParserSettingsResponseObject, error) {
 	v := r.Body.Settings
 	s := fileparse.Settings{URL: strings.TrimSpace(textValue(v.Url)), Key: v.Key}
-	body, replayed, err := setBackendSettings(ctx, a.db, "setFileParserSettings", s.URL, r.Body.Reason, r.Params.IdempotencyKey,
+	identity := []any{s.URL, r.Body.Reason, s.Key != nil}
+	body, replayed, err := setBackendSettings(ctx, a.db, "setFileParserSettings", s.URL, identity, r.Params.IdempotencyKey,
 		a.checkFileParserURL, fileparse.ErrInvalidConfig, "invalid file parser backend configuration; verify the URL and reenter the key after a URL change",
 		func(tx pg.Tx) (adminapi.FileParserSettings, error) {
 			return a.saveFileParser(ctx, tx, s, r.Body.Reason)
@@ -427,7 +429,7 @@ func (a adminAPI) SetFileParserSettings(ctx context.Context, r adminapi.SetFileP
 //nolint:dupl // the search backend's handler mirrors this one but answers with its own generated type
 func (a adminAPI) TestFileParserSettings(ctx context.Context, r adminapi.TestFileParserSettingsRequestObject) (adminapi.TestFileParserSettingsResponseObject, error) {
 	body, replayed, err := testBackendSettings(ctx, a, "testFileParserSettings", "file_parser_config", "file_parser_config.test",
-		r.Params.IdempotencyKey, r.Body.Reason, func(ctx context.Context) (fileparse.Config, error) {
+		r.Params.IdempotencyKey, r.Body.Reason, r.Body, func(ctx context.Context) (fileparse.Config, error) {
 			cfg, _, err := a.savedFileParser(ctx)
 			return cfg, err
 		},

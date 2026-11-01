@@ -177,7 +177,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
 		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,
 		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
-		Records: d.records, Quality: health, Outstanding: outstanding, Search: d.search, Parser: d.fileParser,
+		Records: d.records, Quality: health, Outstanding: outstanding, Search: d.search,
 	})
 	if err != nil {
 		return callNode{}, err

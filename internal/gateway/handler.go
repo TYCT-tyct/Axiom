@@ -205,7 +205,8 @@ type Call struct {
 	over        routing.Override // what the request's provider object narrows the route by
 	accountRate int
 	rateReset   int64
-	rate        int // requests of the key in the rate window, counted before admission
+	rate        int  // requests of the key in the rate window, counted before admission
+	gated       bool // the file parser's gate counted the call already; fillCall does not count it again
 
 	mu       sync.Mutex
 	releases []func()
@@ -411,6 +412,9 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 		return ref
 	}
 	c.search = query
+	if err := h.gateParsing(r, c, sessionBody, req); err != nil {
+		return err
+	}
 	body, req, err = h.parseFiles(r.Context(), c, body, req)
 	if err != nil {
 		return err
@@ -445,6 +449,9 @@ func (h *Handler) fillCall(c *Call, r *http.Request, sessionBody, body []byte, r
 	headerSession := strings.TrimSpace(r.Header.Get("X-Session-Id"))
 	if !utf8.ValidString(headerSession) || utf8.RuneCountInString(headerSession) > 256 {
 		return invalid("x-session-id must be valid UTF-8 with at most 256 characters.")
+	}
+	if c.gated {
+		return nil // the file parser's gate counted this call before parsing; the session and rate are already set
 	}
 	c.Session = h.Router.SessionKey(routing.AccountID(c.caller.AccountID()), &c.Request, sessionBody, headerSession)
 	c.rate = h.precheck(r.Context(), c.site.ID, callDimension, keyKey(c.caller), keyHex(c.caller),

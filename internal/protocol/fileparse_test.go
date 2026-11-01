@@ -22,11 +22,15 @@ func fileHash(data []byte) string {
 type parsedRecords struct {
 	calls int
 	names []string
+	text  string // what every file parses to; the name's when empty
 }
 
 func (p *parsedRecords) parse(f File) (string, error) {
 	p.calls++
 	p.names = append(p.names, f.Name)
+	if p.text != "" {
+		return p.text, nil
+	}
 	return "parsed " + f.Name, nil
 }
 
@@ -232,5 +236,87 @@ func TestFileAnnotationEntries(t *testing.T) {
 	unnamed := string(FileAnnotationEntries([]FileAnnotation{{Hash: "h", Text: "text"}}))
 	if strings.Contains(unnamed, `"name"`) {
 		t.Fatalf("an unnamed file carries a name: %s", unnamed)
+	}
+}
+
+// TestRewriteFilesKeepsTheBytesItDoesNotReplace: a member the rewrite knows nothing about is copied as the client wrote
+// it, including a number the encoder cannot hold. Rewriting one content array must not re-encode the message.
+func TestRewriteFilesKeepsTheBytesItDoesNotReplace(t *testing.T) {
+	data := []byte("%PDF-1.7 a scan")
+	body := `{"model":"a","messages":[{"role":"user","content":[{"type":"file","file":{"file_data":"` +
+		testDataURL(data) + `"}}],"seed":1e9999,"note":"kept"}]}`
+	if _, err := Inspect(Chat, []byte(body)); err != nil {
+		t.Fatalf("Inspect refused the request: %v", err)
+	}
+	out, files, err := RewriteFiles(Chat, []byte(body), (&parsedRecords{}).parse)
+	if err != nil {
+		t.Fatalf("RewriteFiles() error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files = %d, want 1", len(files))
+	}
+	for _, want := range []string{`"seed":1e9999`, `"note":"kept"`, `"role":"user"`} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("the rewrite lost %s:\n%s", want, out)
+		}
+	}
+}
+
+// TestRewriteFilesCountsEveryCopyOfAText: a history that repeats one file writes the settled text beside every copy of
+// it, so the copies are held to the request's total, not the parse's one.
+func TestRewriteFilesCountsEveryCopyOfAText(t *testing.T) {
+	rec := &parsedRecords{text: strings.Repeat("x", MaxParsedBytes/2)}
+	file := `{"type":"file","file":{"file_data":"` + testDataURL([]byte("%PDF-1.7 a scan")) + `"}}`
+	body := `{"model":"a","messages":[{"role":"user","content":[` + file + `,` + file + `,` + file + `]}]}`
+	if _, _, err := RewriteFiles(Chat, []byte(body), rec.parse); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("RewriteFiles() error = %v, want %v", err, ErrFileTooLarge)
+	}
+	if rec.calls != 1 {
+		t.Fatalf("the file was parsed %d times, want once", rec.calls)
+	}
+}
+
+// TestFileReferences: only a part that names a supplier's file without carrying one is a reference a rewrite may leave;
+// anything else that still counts as a document is a file it could not parse.
+func TestFileReferences(t *testing.T) {
+	ref := `{"type":"file","file":{"file_id":"file-1"}}`
+	inline := `{"type":"file","file":{"file_data":"` + testDataURL([]byte("%PDF-1.7 a scan")) + `"}}`
+	for _, tc := range []struct {
+		name, body string
+		format     Format
+		want       int
+	}{
+		{
+			name: "chat reference", format: Chat, want: 1,
+			body: `{"model":"a","messages":[{"role":"user","content":[` + ref + `]}]}`,
+		},
+		{name: "chat inline", format: Chat, body: `{"model":"a","messages":[{"role":"user","content":[` + inline + `]}]}`},
+		{
+			name: "chat both", format: Chat, want: 1,
+			body: `{"model":"a","messages":[{"role":"user","content":[` + ref + `,` + inline + `]}]}`,
+		},
+		{
+			name: "responses reference", format: Responses, want: 1,
+			body: `{"model":"a","input":[{"role":"user","content":[{"type":"input_file","file_id":"file-1"}]}]}`,
+		},
+		{
+			name: "messages reference", format: Messages, want: 1,
+			body: `{"model":"a","messages":[{"role":"user","content":[{"type":"document","source":{"type":"file","file_id":"file-1"}}]}]}`,
+		},
+		{
+			name: "messages tool result", format: Messages,
+			body: `{"model":"a","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t",` +
+				`"content":[{"type":"document","source":{"type":"file","file_id":"file-1"}}]}]}]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FileReferences(tc.format, []byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("FileReferences() = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

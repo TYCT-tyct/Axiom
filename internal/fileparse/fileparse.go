@@ -46,9 +46,11 @@ var (
 	ErrUpstream = errors.New("fileparse: the backend failed")
 	// ErrTooLarge is a backend answer, or the text in it, over the cap. The gateway answers it as payload_too_large.
 	ErrTooLarge = errors.New("fileparse: the parsed text is larger than the limit")
-	// ErrEmpty is a document the backend found no text in. Parsing cannot stand in for the file, so the request is
-	// refused before a call that would answer a prompt without its document.
+	// ErrEmpty is an answer the backend returned with no text in it: the file is fine but parsing cannot stand in for
+	// it. The gateway answers it as an upstream failure, because nothing about the request was wrong.
 	ErrEmpty = errors.New("fileparse: the backend found no text")
+	// ErrEmptyFile is a file with no bytes, which no backend can read. The gateway answers it as a malformed request.
+	ErrEmptyFile = errors.New("fileparse: the file is empty")
 )
 
 // Config is the backend one node parses through. The zero value means file parsing is disabled.
@@ -157,7 +159,7 @@ type convertResponse struct {
 // file is user content, and the body may repeat it.
 func (d *Docling) Parse(ctx context.Context, doc Document) (string, error) {
 	if len(doc.Data) == 0 {
-		return "", fmt.Errorf("%w: an empty file", ErrEmpty)
+		return "", ErrEmptyFile
 	}
 	name := doc.Name
 	if name == "" {

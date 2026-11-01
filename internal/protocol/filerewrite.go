@@ -50,7 +50,7 @@ func RewriteFiles(f Format, body []byte, parse func(File) (string, error)) ([]by
 	if !changed {
 		return body, nil, nil
 	}
-	root[key] = jsonValue(items)
+	root[key] = arrayValue(items) // as written: jsonValue would re-encode every item's numbers
 	out, err := replaceRequestMember(body, key, root[key])
 	if err != nil {
 		return nil, nil, err
@@ -66,6 +66,7 @@ type fileRewrite struct {
 	replayed map[string]string // the annotations' texts, by hash
 	texts    map[string]string // the texts this rewrite settled, by hash
 	files    []ParsedFile
+	written  int64 // bytes of text this rewrite has put in the body, every occurrence counted
 }
 
 // item rewrites one message or input item. ok is false when it carries no file.
@@ -78,8 +79,99 @@ func (w *fileRewrite) item(raw jsontext.Value) (jsontext.Value, bool, error) {
 	if !replaced || err != nil {
 		return nil, false, err
 	}
-	item["content"] = jsonValue(rebuilt)
-	return jsonValue(item), true, nil
+	// Only the content member is replaced: every other byte of the item, numbers included, is the client's own and
+	// is copied as written. jsonValue would re-encode it, and the encoding cannot hold a number like 1e9999 that
+	// jsontext accepts.
+	content, err := replaceRequestMember(raw, "content", arrayValue(rebuilt))
+	if err != nil {
+		return nil, false, err
+	}
+	return jsontext.Value(content), true, nil
+}
+
+// arrayValue joins JSON values into an array, as they are written.
+func arrayValue(elems []jsontext.Value) []byte {
+	out := make([]byte, 0, 2+len(elems)*16)
+	out = append(out, '[')
+	for i, e := range elems {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, e...)
+	}
+	return append(out, ']')
+}
+
+// FileReferences counts the file parts that refer to a file by id rather than carrying its bytes: the references a
+// rewrite leaves as they are, for routing to pin to one provider.
+func FileReferences(f Format, body []byte) (int, error) {
+	key, err := fileItemsKey(f)
+	if err != nil {
+		return 0, err
+	}
+	root, err := requestMembers(body)
+	if err != nil {
+		return 0, err
+	}
+	raw, ok := root[key]
+	if !ok || raw.Kind() != '[' {
+		return 0, nil
+	}
+	items, err := requestArray(raw)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, item := range items {
+		refs, err := itemReferences(f, item)
+		if err != nil {
+			return 0, err
+		}
+		n += refs
+	}
+	return n, nil
+}
+
+// itemReferences counts the references among one item's content parts.
+func itemReferences(f Format, item jsontext.Value) (int, error) {
+	_, parts, ok, err := itemParts(item)
+	if err != nil || !ok {
+		return 0, err
+	}
+	n := 0
+	for _, part := range parts {
+		if fileReference(f, part) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// fileReference reports whether a part is a file the client referred to by id, which a rewrite leaves untouched.
+func fileReference(f Format, raw jsontext.Value) bool {
+	part, err := requestMembers(raw)
+	if err != nil {
+		return false // a part that is not an object is no reference
+	}
+	switch f {
+	case Chat:
+		file, err := requestMembers(part["file"])
+		return err == nil && optionalString(part["type"]) == "file" && nestedReference(file)
+	case Responses:
+		return optionalString(part["type"]) == "input_file" && nestedReference(part)
+	case Messages:
+		source, err := requestMembers(part["source"])
+		return err == nil && optionalString(part["type"]) == "document" &&
+			optionalString(source["type"]) == "file" && !isNull(source["file_id"])
+	case Embeddings, Rerank, Completions:
+		return false // no content parts, so no references
+	}
+	return false
+}
+
+// nestedReference reports whether an object carries a file id and no data: a reference, not content.
+func nestedReference(obj requestObject) bool {
+	return isNull(obj["file_data"]) && !isNull(obj["file_id"])
 }
 
 // itemParts reads an item's content parts. ok is false for an item that carries none.
@@ -116,6 +208,12 @@ func (w *fileRewrite) parts(role string, parts []jsontext.Value) ([]jsontext.Val
 		text, err := w.text(file)
 		if err != nil {
 			return nil, false, err
+		}
+		// A text that a repeated file reuses is written beside every one of its files, so each occurrence is counted
+		// against the same budget: a history that repeats a parsed file cannot multiply it into a body no budget holds.
+		w.written += int64(len(text))
+		if w.written > MaxParsedBytes {
+			return nil, false, fmt.Errorf("%w: the parsed text passes %d bytes", ErrFileTooLarge, MaxParsedBytes)
 		}
 		if !cloned {
 			rebuilt, cloned = slices.Clone(parts), true
