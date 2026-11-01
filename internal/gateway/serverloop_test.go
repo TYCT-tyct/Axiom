@@ -513,25 +513,32 @@ func TestServerLoopChargesEverySupplierRequest(t *testing.T) {
 	})
 }
 
-// TestServerLoopKeepsAFailedRequest: the second hop can fail before it reaches a Relay, but the supplier may still have
-// charged it. Its receipt must be a row with the first hop's, and an explicit refusal must be distinguished from an
-// execution whose usage is unknown.
-func TestServerLoopKeepsAFailedRequest(t *testing.T) {
+// failedLoop runs a two-hop loop whose second request fails before a Relay. executed says whether the supplier may
+// have run it; otherwise it refused it outright.
+func failedLoop(t *testing.T, ctx context.Context, executed bool) (*harness, *perCallCosts) {
+	t.Helper()
+	costs := &perCallCosts{}
+	upstream := protocol.Chat
+	h := newHarness(t, ctx, options{
+		client: protocol.Chat, upstream: &upstream, request: []byte(searchTool),
+		price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
+		search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
+		server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+		costs:  costs,
+		script: map[int][]scripted{1: {serve(beat{data: chatToolCall}), failure(routing.ScopeEndpoint, executed)}},
+	})
+	h.run()
+	if h.w.status != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s, want 502", h.w.status, h.w.body())
+	}
+	return h, costs
+}
+
+// TestServerLoopKeepsAnUnknownFailedRequest: the second hop can fail before it reaches a Relay, but the supplier may
+// still have charged it. Its receipt and its own row must survive, with the execution marked unknown.
+func TestServerLoopKeepsAnUnknownFailedRequest(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		costs := &perCallCosts{}
-		upstream := protocol.Chat
-		h := newHarness(t, ctx, options{
-			client: protocol.Chat, upstream: &upstream, request: []byte(searchTool),
-			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
-			search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
-			server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
-			costs:  costs,
-			script: map[int][]scripted{1: {serve(beat{data: chatToolCall}), failure(routing.ScopeEndpoint, false)}},
-		})
-		h.run()
-		if h.w.status != http.StatusBadGateway {
-			t.Fatalf("status = %d, body = %s, want 502", h.w.status, h.w.body())
-		}
+		h, costs := failedLoop(t, ctx, false)
 		rec := h.settlements[0].outcome.Attempts[0]
 		if len(rec.Hops) != 2 || len(rec.Hops[1].Segments) != 0 {
 			t.Fatalf("hops = %+v, want the failed request as the second hop", rec.Hops)
@@ -542,18 +549,15 @@ func TestServerLoopKeepsAFailedRequest(t *testing.T) {
 		if rec.Hops[1].CostKnown {
 			t.Fatalf("a request whose execution is unknown was priced as known: %+v", rec.Hops[1])
 		}
+	})
+}
 
-		costs = &perCallCosts{}
-		h = newHarness(t, ctx, options{
-			client: protocol.Chat, upstream: &upstream, request: []byte(searchTool),
-			price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
-			search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
-			server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
-			costs:  costs,
-			script: map[int][]scripted{1: {serve(beat{data: chatToolCall}), failure(routing.ScopeEndpoint, true)}},
-		})
-		h.run()
-		rec = h.settlements[0].outcome.Attempts[0]
+// TestServerLoopDoesNotPriceARefusedRequest: an explicit refusal is not an unknown execution, so the failed hop is
+// recorded as not executed and costs nothing.
+func TestServerLoopDoesNotPriceARefusedRequest(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		h, costs := failedLoop(t, ctx, true)
+		rec := h.settlements[0].outcome.Attempts[0]
 		if len(rec.Hops) != 2 || rec.Hops[1].Estimate.Conversion != suppliers.ConversionNotRun || rec.Hops[1].Cost != 0 {
 			t.Fatalf("a refused request = %+v, want a zero-cost not-executed hop", rec.Hops)
 		}
