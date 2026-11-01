@@ -114,6 +114,61 @@ it("reads a new merchant with its methods and sealed key", () => {
   });
 });
 
+const alipayValues = {
+  ...merchantValues,
+  kind: "alipay",
+  settings: '{"app_id":"2021000000000001","seller_id":"2088000000000001"}',
+  key: "",
+  private_key: "app-private-key",
+  public_key: "alipay-public-key",
+  old_public_key: "",
+};
+
+it("reads a new Alipay merchant with its key pair", () => {
+  const read = readMerchant(alipayValues, undefined, merchantWords);
+  if (isProblem(read)) {
+    throw new Error(read.problem);
+  }
+  expect(read.kind).toBe("alipay");
+  expect(read.settings).toEqual({ app_id: "2021000000000001", seller_id: "2088000000000001" });
+  expect(read.secrets).toEqual({ private_key: "app-private-key", public_key: "alipay-public-key" });
+});
+
+it("requires both Alipay keys when any secret is supplied", () => {
+  expect(readMerchant({ ...alipayValues, private_key: "" }, undefined, merchantWords)).toEqual({ problem: "secret" });
+  expect(readMerchant({ ...alipayValues, public_key: "" }, undefined, merchantWords)).toEqual({ problem: "secret" });
+  expect(
+    readMerchant({ ...alipayValues, private_key: "", public_key: "", old_public_key: "" }, undefined, merchantWords),
+  ).toEqual({ problem: "secret" });
+});
+
+it("keeps an Alipay merchant's channel and sealed secrets on edit", () => {
+  const { kind: _kind, ...withoutKind } = alipayValues;
+  const read = readMerchant(
+    { ...withoutKind, private_key: "", public_key: "", old_public_key: "" },
+    { rev: 4, kind: "alipay" },
+    merchantWords,
+  );
+  if (isProblem(read)) {
+    throw new Error(read.problem);
+  }
+  expect(read.kind).toBe("alipay");
+  expect(read.rev).toBe(4);
+  expect(read.secrets).toBeUndefined();
+});
+
+it("reads an Alipay rotation with the old public key", () => {
+  const read = readMerchant({ ...alipayValues, old_public_key: "old-public-key" }, undefined, merchantWords);
+  if (isProblem(read)) {
+    throw new Error(read.problem);
+  }
+  expect(read.secrets).toEqual({
+    private_key: "app-private-key",
+    public_key: "alipay-public-key",
+    old_public_key: "old-public-key",
+  });
+});
+
 it("refuses a merchant the contract or the plugin would refuse", () => {
   const edit = (change: Record<string, string>) =>
     readMerchant({ ...merchantValues, ...change }, undefined, merchantWords);
