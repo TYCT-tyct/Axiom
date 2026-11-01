@@ -118,6 +118,7 @@ func TestAlipayRefund(t *testing.T) {
 		state      RefundOutcome
 		rejected   bool
 		wantErr    bool
+		refundFee  string
 	}{
 		"succeeded":    {fundChange: "Y", signed: true, state: RefundSucceeded},
 		"pending":      {fundChange: "N", signed: true, state: RefundPending},
@@ -126,6 +127,7 @@ func TestAlipayRefund(t *testing.T) {
 		"amount error": {failure: "ACQ.REFUND_AMT_NOT_EQUAL_TOTAL", signed: true, rejected: true},
 		"system error": {failure: "ACQ.SYSTEM_ERROR", signed: true, wantErr: true},
 		"unsigned":     {failure: "ACQ.TRADE_NOT_EXIST", wantErr: true},
+		"wrong amount": {fundChange: "Y", signed: true, wantErr: true, refundFee: "12.35"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := call()
@@ -143,8 +145,12 @@ func TestAlipayRefund(t *testing.T) {
 				if tc.failure != "" {
 					return fmt.Sprintf(`{"code":"40004","msg":"Business Failed","sub_code":%q}`, tc.failure), tc.signed
 				}
-				return fmt.Sprintf(`{"code":"10000","msg":"Success","out_trade_no":%q,"trade_no":"T1","fund_change":%q,"refund_fee":"12.34"}`,
-					r.Order.TypeID(), tc.fundChange), tc.signed
+				fee := tc.refundFee
+				if fee == "" {
+					fee = "12.34"
+				}
+				return fmt.Sprintf(`{"code":"10000","msg":"Success","out_trade_no":%q,"trade_no":"T1","fund_change":%q,"refund_fee":%q}`,
+					r.Order.TypeID(), tc.fundChange, fee), tc.signed
 			})
 			state, err := ch.Refund(t.Context(), r)
 			var rejected *Rejected
@@ -233,6 +239,7 @@ func TestAlipayQueryRefund(t *testing.T) {
 		"system error":  {node: `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.SYSTEM_ERROR"}`, signed: true, wantErr: true},
 		"unsigned":      {node: `{"code":"10000","msg":"Success"}`, wantErr: true},
 		"other request": {node: `{"code":"10000","msg":"Success","out_request_no":"rfd_other","refund_status":"REFUND_SUCCESS"}`, signed: true, wantErr: true},
+		"other amount":  {node: `{"code":"10000","msg":"Success","out_request_no":"%s","refund_status":"REFUND_SUCCESS","refund_amount":"12.35"}`, signed: true, wantErr: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := makeCall(t)

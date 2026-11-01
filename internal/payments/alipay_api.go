@@ -225,15 +225,23 @@ func (c *alipayChannel) Refund(ctx context.Context, r RefundCall) (RefundState, 
 		}
 		return RefundState{}, failure
 	}
+	return c.refundResponse(node, r, outRequestNo)
+}
+
+func (c *alipayChannel) refundResponse(node jsonx.Raw, r RefundCall, outRequestNo string) (RefundState, error) {
 	var result struct {
 		OutTradeNo string `json:"out_trade_no"`
 		FundChange string `json:"fund_change"`
+		RefundFee  string `json:"refund_fee"`
 	}
-	if err = jsonx.Unmarshal(node, &result); err != nil {
+	if err := jsonx.Unmarshal(node, &result); err != nil {
 		return RefundState{}, errors.New("alipay: invalid refund response")
 	}
 	if result.OutTradeNo != r.Order.TypeID() {
 		return RefundState{}, errors.New("alipay: refund echoed another order")
+	}
+	if result.RefundFee != "" && parseMinorText(result.RefundFee, digits(c.currency)) != r.Amount.Minor {
+		return RefundState{}, errors.New("alipay: refund echoed another amount")
 	}
 	state := RefundPending
 	if result.FundChange == "Y" {
@@ -260,10 +268,10 @@ func (c *alipayChannel) QueryRefund(ctx context.Context, r RefundCall) (RefundSt
 		}
 		return RefundState{}, failure
 	}
-	return c.refundQueryResult(node, outRequestNo, r.SentAt)
+	return c.refundQueryResult(node, outRequestNo, r.Amount, r.SentAt)
 }
 
-func (c *alipayChannel) refundQueryResult(node jsonx.Raw, outRequestNo string, sentAt time.Time) (RefundState, error) {
+func (c *alipayChannel) refundQueryResult(node jsonx.Raw, outRequestNo string, amount Money, sentAt time.Time) (RefundState, error) {
 	var result struct {
 		OutRequestNo string `json:"out_request_no"`
 		RefundStatus string `json:"refund_status"`
@@ -274,6 +282,9 @@ func (c *alipayChannel) refundQueryResult(node jsonx.Raw, outRequestNo string, s
 	}
 	if result.OutRequestNo != "" && result.OutRequestNo != outRequestNo {
 		return RefundState{}, errors.New("alipay: refund query echoed another request")
+	}
+	if result.RefundAmount != "" && parseMinorText(result.RefundAmount, digits(c.currency)) != amount.Minor {
+		return RefundState{}, errors.New("alipay: refund query echoed another amount")
 	}
 	if result.RefundStatus == "REFUND_SUCCESS" {
 		return RefundState{State: RefundSucceeded, ProviderRef: outRequestNo}, nil

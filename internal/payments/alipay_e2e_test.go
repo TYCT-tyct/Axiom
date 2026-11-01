@@ -21,7 +21,8 @@ type alipayE2EOrder struct {
 type alipayE2EState struct {
 	mu         sync.Mutex
 	orders     map[string]*alipayE2EOrder
-	refundMode string // "", "unknown" or "success"
+	refunds    map[string]string // out_request_no to refund_amount
+	refundMode string            // "", "unknown" or "success"
 }
 
 func (s *alipayE2EState) settle(id, money, trade string) {
@@ -64,24 +65,28 @@ func alipayE2EGateway(t *testing.T, state *alipayE2EState) *alipayTestGateway {
 		case "alipay.trade.refund":
 			state.mu.Lock()
 			mode := state.refundMode
-			o := state.orders[id]
+			amount := alipayBiz(t, biz, "refund_amount")
+			state.refunds[alipayBiz(t, biz, "out_request_no")] = amount
 			state.mu.Unlock()
 			if mode == "unknown" {
 				return `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.SYSTEM_ERROR"}`, true
 			}
+			state.mu.Lock()
 			trade := ""
-			if o != nil {
+			if o := state.orders[id]; o != nil {
 				trade = o.trade
 			}
+			state.mu.Unlock()
 			return fmt.Sprintf(`{"code":"10000","msg":"Success","out_trade_no":%q,"trade_no":%q,"fund_change":"Y","refund_fee":%q}`,
-				id, trade, alipayBiz(t, biz, "refund_amount")), true
+				id, trade, amount), true
 		case "alipay.trade.fastpay.refund.query":
 			state.mu.Lock()
 			mode := state.refundMode
+			amount := state.refunds[alipayBiz(t, biz, "out_request_no")]
 			state.mu.Unlock()
 			if mode == "success" {
 				return fmt.Sprintf(`{"code":"10000","msg":"Success","out_request_no":%q,"refund_status":"REFUND_SUCCESS","refund_amount":%q}`,
-					alipayBiz(t, biz, "out_request_no"), "0.00"), true
+					alipayBiz(t, biz, "out_request_no"), amount), true
 			}
 			return `{"code":"10000","msg":"Success"}`, true
 		default:
@@ -94,7 +99,7 @@ func alipayE2EGateway(t *testing.T, state *alipayE2EState) *alipayTestGateway {
 //nolint:cyclop,gocognit // one protocol walk: each step's settled state is the next step's input
 func TestAlipayLocalGatewayEndToEnd(t *testing.T) {
 	w := newTestWorld(t, Alipay{})
-	state := &alipayE2EState{orders: map[string]*alipayE2EOrder{}}
+	state := &alipayE2EState{orders: map[string]*alipayE2EOrder{}, refunds: map[string]string{}}
 	gateway := alipayE2EGateway(t, state)
 	server := httptest.NewTLSServer(gateway)
 	t.Cleanup(server.Close)
