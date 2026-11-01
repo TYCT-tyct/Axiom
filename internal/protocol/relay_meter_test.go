@@ -7,7 +7,6 @@ import (
 	"io"
 	"runtime"
 	"runtime/debug"
-	"slices"
 	"strings"
 	"testing"
 
@@ -519,16 +518,10 @@ const (
 	warmUp       = 10
 )
 
-// raceDetector reports whether the test binary was built with the race detector.
-func raceDetector() bool {
-	info, ok := debug.ReadBuildInfo()
-	return ok && slices.ContainsFunc(info.Settings, func(s debug.BuildSetting) bool { return s.Key == "-race" && s.Value == "true" })
-}
-
 func BenchmarkRelay(b *testing.B) {
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	warm := warmUp
-	if raceDetector() { // `just bench-once` runs every benchmark once under the race detector, whose counts nobody compares
+	if protocol.RaceDetector() { // `just bench-once` runs every benchmark once under the race detector, whose counts nobody compares
 		warm = 0
 	}
 	for _, format := range formats {

@@ -136,7 +136,7 @@
 - 进程内的内存预算与数据库资金预留是两件事：前者限制这次准备和发送的峰值，后者保证账户余额；`ErrMemory` 不写账本，也不把这次 503 当成一次上游调用。
 - 钱：这条路径不写预留、账本或调用记录。被 503 拒绝的请求不计模型用量，也不产生供应商费用；成功的请求按原来的结算路径计费，内存预算不是资金。
 
-测试：`TestPrepareAllocatesOnlyWhatItDrew` 对每一对源、目标格式和最坏形状，在子进程里测准备分配的总字节数不超过申请总量加 64 KiB，再把预算随机压到峰值以下，核对每次都是 `ErrMemory` 且拒绝前的分配不超过已申请的；`TestPrepareLargeRequestReservesAboutItsBody` 核对 Chat 转出的大请求申请量不超过请求体的五倍；`TestPrepareConcurrentLargeRequests` 核对并发准备时失败方不占预算、成功方只留输出容量；`TestMemoryErrorKeepsItsType` 核对旧版函数调用和 thinking 预算处耗尽预算仍是 `ErrMemory`；gateway 的 `TestMemoryIsAskedForBeforePrepareAllocates`、`TestMemoryHoldsARequestByItsCapacityWhileItIsSent`、`TestMemoryHoldsConcurrentRequestsToTheBudget` 核对预算的申请、持有和退还。
+测试：`TestPrepareAllocatesOnlyWhatItDrew` 对每一对源、目标格式和最坏形状，在子进程里测准备分配的总字节数不超过申请总量加 32 KiB，再把预算随机压到峰值以下，核对每次都是 `ErrMemory` 且拒绝前的分配不超过已申请的（竞态构建里只核对拒绝）；`TestPrepareLargeRequestReservesAboutItsBody` 核对 Chat 转出的大请求申请量不超过请求体的五倍；`TestPrepareConcurrentLargeRequests` 核对并发准备时失败方不占预算、成功方只留输出容量；`TestMemoryErrorKeepsItsType` 核对旧版函数调用和 thinking 预算处耗尽预算仍是 `ErrMemory`；gateway 的 `TestMemoryIsAskedForBeforePrepareAllocates`、`TestMemoryHoldsARequestByItsCapacityWhileItIsSent`、`TestMemoryHoldsConcurrentRequestsToTheBudget` 核对预算的申请、持有和退还。
 
 ### 用量与费用
 

@@ -59,9 +59,10 @@ func (b *budget) fast() bool { return b == nil || b.m == nil }
 const bodyDecoderMemory = 4 << 10
 
 // mapEntryMemory is what an entry of a map with a string key and a value of up to 24 bytes takes, its share of every
-// table the map grows through included; the key's own bytes are charged beside it. Measured 2026-11-01 at about 165
-// bytes for 20,000 members of a request the decoder does not know; TestPrepareAllocatesOnlyWhatItDrew holds it.
-const mapEntryMemory = 192
+// table the map grows through included; the key's own bytes are charged beside it. That share depends on where the
+// count falls between the table's doublings: measured 2026-11-02 at about 165 bytes for 20,000 members of a request
+// the decoder does not know and 197 for 4,000; TestPrepareAllocatesOnlyWhatItDrew holds it.
+const mapEntryMemory = 256
 
 // mapMemory is what a map takes before its first entry is charged: its header and the first group of eight slots,
 // which the first insertion allocates.

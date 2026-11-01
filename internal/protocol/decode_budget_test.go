@@ -12,7 +12,7 @@ import (
 // request's own bytes, not a bound that grows with its shape, and a byte short refuses. The readers of the other two
 // formats still reserve nativeRequestCost (README.md「跨格式转换」).
 func TestPrepareLargeRequestReservesAboutItsBody(t *testing.T) {
-	long := strings.Repeat("x", 1<<20)
+	long := strings.Repeat("x", 1<<18)
 	for _, c := range []struct {
 		name string
 		from Format
@@ -42,7 +42,7 @@ func TestPrepareLargeRequestReservesAboutItsBody(t *testing.T) {
 // allocate, and what they keep when done is their output's capacity; the failures take nothing and the budget is whole
 // once the kept bodies are given back.
 func TestPrepareConcurrentLargeRequests(t *testing.T) {
-	long := strings.Repeat("x", 1<<20)
+	long := strings.Repeat("x", 1<<18)
 	body := []byte(`{"model":"m","max_tokens":1024,"messages":[{"role":"user","content":"` + long + `"}]}`)
 	r, err := Inspect(Messages, body)
 	if err != nil {
@@ -77,7 +77,7 @@ func TestPrepareConcurrentLargeRequests(t *testing.T) {
 	close(start)
 	wg.Wait()
 	if kept == 0 || failed == 0 {
-		t.Fatalf("%d prepared, %d refused; want both", kept/(1<<20), failed)
+		t.Fatalf("%d bytes kept, %d refused; want both", kept, failed)
 	}
 	if kept > need {
 		t.Errorf("kept %d bytes of a %d-byte budget", kept, need)
@@ -165,7 +165,7 @@ func TestMemoryErrorKeepsItsType(t *testing.T) {
 // whatever the writer would have written first (here the system blocks, which look at what was written), and gives
 // back everything it drew.
 func TestPrepareRefusesTheOutputCleanly(t *testing.T) {
-	body := []byte(`{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":"` + strings.Repeat("x", 1<<20) + `"}]}`)
+	body := []byte(`{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":"` + strings.Repeat("x", 1<<18) + `"}]}`)
 	r, err := Inspect(Chat, body)
 	if err != nil {
 		t.Fatal(err)

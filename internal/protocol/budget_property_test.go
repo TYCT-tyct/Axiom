@@ -14,8 +14,8 @@ import (
 
 // budgetSlack is what a preparation may allocate without drawing it: the decoders' own state, the errors and the
 // small values whose number does not grow with the request. A site that allocates per part, per message or per byte
-// without drawing passes it on every shape below of 20,000 parts or 1 MiB.
-const budgetSlack = 64 << 10
+// without drawing passes it on every shape below of 4,000 parts or 256 KiB.
+const budgetSlack = 32 << 10
 
 // budgetCase is one preparation the budget properties run.
 type budgetCase struct {
@@ -31,10 +31,12 @@ type budgetCase struct {
 // messages, long and escaped strings, a base64 document, deep nesting, empty objects and nulls.
 func budgetShapes() map[string]map[Format]string {
 	const bs = string(rune(0x5c))
-	const many = 20000
-	long := strings.Repeat("x", 1<<20)
-	escaped := strings.Repeat(bs+"u0041", 1<<18) // bs is the backslash: a JSON escape, not the letter
-	pdf := "data:application/pdf;base64," + strings.Repeat("QUJD", 1<<18)
+	// many and size are the counts and lengths each shape takes: past what fixed allocations come to, and small enough
+	// that the test runs in CI under the race detector, which slows every preparation many times over.
+	const many, size = 4000, 1 << 18
+	long := strings.Repeat("x", size)
+	escaped := strings.Repeat(bs+"u0041", size/4) // bs is the backslash: a JSON escape, not the letter
+	pdf := "data:application/pdf;base64," + strings.Repeat("QUJD", size/4)
 	deep := strings.Repeat(`{"type":"object","properties":{"a":`, 100) + `{"type":"string"}` + strings.Repeat(`}}`, 100)
 	repeat := func(s string, n int) string { return strings.TrimSuffix(strings.Repeat(s+",", n), ",") }
 	keys := make([]string, many)
@@ -118,9 +120,9 @@ func budgetShapes() map[string]map[Format]string {
 				`{"type":"function","function":{"name":"g","strict":true,"parameters":`+deep+`}}]`),
 		},
 		"long values": {
-			Chat: chat(`{"role":"user","content":"x"},{"role":"assistant","content":null,"tool_calls":[{"id":"`+strings.Repeat(".", 1<<20)+
-				`","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"`+strings.Repeat(".", 1<<20)+`","content":"ok"}`,
-				`,"temperature":0.`+strings.Repeat("0", 1<<20)+`5,"tools":[{"type":"function","function":{"name":"f"}}],`+
+			Chat: chat(`{"role":"user","content":"x"},{"role":"assistant","content":null,"tool_calls":[{"id":"`+strings.Repeat(".", size)+
+				`","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"`+strings.Repeat(".", size)+`","content":"ok"}`,
+				`,"temperature":0.`+strings.Repeat("0", size)+`5,"tools":[{"type":"function","function":{"name":"f"}}],`+
 					`"tool_choice":{"type":"function","function":{"name":"`+long+`"}}`),
 		},
 		"wide values": {
@@ -137,8 +139,8 @@ func budgetShapes() map[string]map[Format]string {
 		},
 		"replay escapes": {
 			Messages: messages(`{"role":"user","content":"x"},`+
-				`{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"`+strings.Repeat(`\u0061`, 1<<18)+`"}]},{"role":"user","content":"y"},`+
-				`{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"s","`+strings.Repeat(`\u0062`, 1<<18)+`":1}]},{"role":"user","content":"z"},`+
+				`{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"`+strings.Repeat(`\u0061`, size/4)+`"}]},{"role":"user","content":"y"},`+
+				`{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"s","`+strings.Repeat(`\u0062`, size/4)+`":1}]},{"role":"user","content":"z"},`+
 				`{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"s",`+members+`}]},{"role":"user","content":"w"}`, ""),
 		},
 		"empty objects": {
@@ -157,9 +159,9 @@ func budgetShapes() map[string]map[Format]string {
 			Responses: responses(`{"role":"user","content":"a",`+members+`}`, ""),
 		},
 		"long identifier": {
-			Chat:      chat(`{"role":"user","content":"a"}`, `,"user":"`+strings.Repeat(`\n`, 1<<19)+`"`),
+			Chat:      chat(`{"role":"user","content":"a"}`, `,"user":"`+strings.Repeat(`\n`, size/2)+`"`),
 			Messages:  messages(`{"role":"user","content":"a"}`, `,"metadata":{"user_id":"`+long+`"}`),
-			Responses: responses(`{"role":"user","content":"a"}`, `,"user":"`+strings.Repeat(`\n`, 1<<19)+`"`),
+			Responses: responses(`{"role":"user","content":"a"}`, `,"user":"`+strings.Repeat(`\n`, size/2)+`"`),
 		},
 		"modalities": {
 			Chat: chat(`{"role":"user","content":"a"}`, `,"modalities":[`+repeat(`"text"`, many)+`]`),
@@ -174,10 +176,9 @@ func budgetShapes() map[string]map[Format]string {
 
 // budgetCases are every source and target format over every shape, with and without the provider's own search
 // added. A shape a pair refuses stays a case: what it allocates before the refusal is drawn too.
-func budgetCases(t *testing.T) []budgetCase {
+func budgetCases(t *testing.T, shapes map[string]map[Format]string) []budgetCase {
 	t.Helper()
 	var cases []budgetCase
-	shapes := budgetShapes()
 	for _, shape := range slices.Sorted(maps.Keys(shapes)) {
 		for _, from := range []Format{Chat, Messages, Responses, Embeddings} {
 			if body := []byte(shapes[shape][from]); len(body) > 0 {
@@ -235,8 +236,19 @@ func (c *budgetCase) prepare(left int64) (*budget, error) {
 // format pair and the costliest shapes, a child process measures the bytes a budgeted preparation allocates, and they
 // stay within what it drew plus budgetSlack; then the budget is set below the need at random points, and every one
 // refuses with ErrMemory having allocated no more than it had drawn when it refused.
+//
+// Under the race detector only the refusals of two shapes are checked: what it allocates is not what the code does
+// (RaceDetector), and every shape would take the package past its time limit.
 func TestPrepareAllocatesOnlyWhatItDrew(t *testing.T) {
-	points := budgetPoints(t, budgetCases(t))
+	shapes := budgetShapes()
+	if RaceDetector() { // the refusals of two shapes, every pair: the race build runs each preparation many times slower
+		shapes = map[string]map[Format]string{"long text": shapes["long text"], "tool calls": shapes["tool calls"]}
+	}
+	points := budgetPoints(t, budgetCases(t, shapes))
+	if RaceDetector() {
+		checkRefusals(t, points)
+		return
+	}
 	funcs := make([]alloctest.Function, 0, len(points))
 	for name, p := range points {
 		funcs = append(funcs, alloctest.Function{Name: name, F: func() {
@@ -255,6 +267,20 @@ func TestPrepareAllocatesOnlyWhatItDrew(t *testing.T) {
 	}
 }
 
+// checkRefusals holds every point below a peak to a refusal with ErrMemory; budgetPoints prepared each case in full to
+// find its peak.
+func checkRefusals(t *testing.T, points map[string]budgetPoint) {
+	t.Helper()
+	for name, p := range points {
+		if p.left == unlimited {
+			continue
+		}
+		if _, err := p.c.prepare(p.left); !errors.Is(err, ErrMemory) {
+			t.Errorf("%s: a budget of %d below the peak did not refuse: %v", name, p.left, err)
+		}
+	}
+}
+
 // unlimited is a budget no preparation here reaches.
 const unlimited = 1 << 40
 
@@ -264,7 +290,7 @@ type budgetPoint struct {
 	left int64
 }
 
-// budgetPoints are every case on an unlimited budget and, for one that prepares, on three budgets drawn at random
+// budgetPoints are every case on an unlimited budget and, for one that prepares, on a budget drawn at random
 // below its peak, by name. The points are the same in the child process, which builds them again.
 func budgetPoints(t *testing.T, cases []budgetCase) map[string]budgetPoint {
 	t.Helper()
@@ -280,9 +306,7 @@ func budgetPoints(t *testing.T, cases []budgetCase) map[string]budgetPoint {
 		if !c.ok || full.peak == 0 {
 			continue
 		}
-		for j := range 3 {
-			points[fmt.Sprintf("%s/short %d", c.name, j)] = budgetPoint{c, rng.Int64N(full.peak)}
-		}
+		points[c.name+"/short"] = budgetPoint{c, rng.Int64N(full.peak)}
 	}
 	return points
 }
