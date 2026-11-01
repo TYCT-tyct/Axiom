@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"axiom/internal/platform/alloctest"
+	"axiom/internal/platform/jsonx"
 )
 
 // TestDecodeChargesWhatItAllocates: the decode of the shapes that cost the most asks the budget for what it takes
@@ -359,5 +360,49 @@ func TestPrepareRefusesAfterBodyFits(t *testing.T) {
 		if got := int64(measured[c.name].Bytes); got > 2*int64(len(c.body)) {
 			t.Errorf("%s: allocated %d bytes after the body check but before refusing", c.name, got)
 		}
+	}
+}
+
+// TestRequestStringChargesBothCopies: AppendUnquote makes a byte buffer and string(s) copies it. A budget that covers
+// only one copy must refuse before either allocation.
+func TestRequestStringChargesBothCopies(t *testing.T) {
+	v := jsonx.Raw(`"` + strings.Repeat("x", 1<<20) + `"`)
+	b := &budget{m: NewMemory(int64(len(v)) + 1)}
+	if _, err := requestString(v, b); !errors.Is(err, ErrMemory) {
+		t.Fatalf("one copy of %d bytes: %v, want ErrMemory", len(v), err)
+	}
+}
+
+// TestResponsesRefusesPartExpansion: Responses' input_text is longer than Chat's text. The writer reserves that
+// expansion before it appends, so a budget that covered the old fixed allowance refuses before the growth.
+func TestResponsesRefusesPartExpansion(t *testing.T) {
+	part := `{"type":"text","text":"x"},`
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":[` + strings.Repeat(part, 20000) + `{"type":"text","text":"x"}]}]}`)
+	r, err := Inspect(Chat, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := int64(len(body))
+	func() {
+		_, _, err := PrepareBudgeted(NewMemory(budget), &r, body, Target{Format: Responses, Model: "up", MaxOutput: 4096}, Rewrites{})
+		if !errors.Is(err, ErrMemory) {
+			t.Fatalf("a %d-byte body on a %d-byte budget: %v, want ErrMemory", len(body), budget, err)
+		}
+	}()
+}
+
+// TestMessagesReservesTheBlockBuffer: the main output reserve can fit while the per-message blocks buffer cannot; the
+// writer must refuse before blocks builds the second copy.
+func TestMessagesReservesTheBlockBuffer(t *testing.T) {
+	long := strings.Repeat("x", 1<<20)
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"` + long + `"}]}`)
+	c, err := decodeCanon(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &budget{m: NewMemory(int64(len(body)) + 64<<10 + 1)}
+	_, err = toMessages(c, Target{Format: Messages, Model: "up", MaxOutput: 4096}, Rewrites{}, b, body)
+	if !errors.Is(err, ErrMemory) {
+		t.Fatalf("a budget past the main reserve but short of the block buffer: %v, want ErrMemory", err)
 	}
 }

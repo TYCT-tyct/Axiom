@@ -184,7 +184,7 @@ func (m *messagesWriter) system(out []byte) ([]byte, error) {
 	}
 	out = append(out, `,"system":[`...)
 	for _, msg := range m.c.Messages[:m.firstTurn] {
-		b, err := blocks(msg, true)
+		b, err := blocks(msg, true, m.b)
 		if err != nil {
 			return nil, err
 		}
@@ -212,12 +212,12 @@ func (m *messagesWriter) messages(out []byte) ([]byte, error) {
 			for i+n < len(msgs) && msgs[i+n].Role == "tool" {
 				n++
 			}
-			out, err = toolResults(out, msgs[i:i+n])
+			out, err = toolResults(out, msgs[i:i+n], m.b)
 			i += n - 1
 		case "assistant":
-			out, err = assistantTurn(out, msg)
+			out, err = assistantTurn(out, msg, m.b)
 		case "user":
-			out, err = turn(out, "user", msg)
+			out, err = turn(out, "user", msg, m.b)
 		default:
 			out, err = m.midSystem(out, msgs, i)
 		}
@@ -231,13 +231,13 @@ func (m *messagesWriter) messages(out []byte) ([]byte, error) {
 	return append(out, ']'), nil
 }
 
-func turn(out []byte, role string, msg canonMessage) ([]byte, error) {
-	b, err := blocks(msg, role != "user")
+func turn(out []byte, role string, msg canonMessage, b *budget) ([]byte, error) {
+	content, err := blocks(msg, role != "user", b)
 	if err != nil {
 		return nil, err
 	}
 	out = append(append(append(out, `{"role":"`...), role...), `","content":[`...)
-	return append(append(out, b...), "]}"...), nil
+	return append(append(out, content...), "]}"...), nil
 }
 
 // midSystem writes a system message after the conversation started, in place, where Anthropic allows one: right
@@ -264,12 +264,12 @@ func (m *messagesWriter) midSystem(out []byte, msgs []canonMessage, i int) ([]by
 	case prev == "tool" && m.t.UntrustedSystemAfterTools == catalog.ClaimUnset:
 		return nil, unspecified("a system message right after tool results", "whether the model trusts one (untrusted_system_after_tools)")
 	}
-	return turn(out, "system", msgs[i])
+	return turn(out, "system", msgs[i], m.b)
 }
 
 // assistantTurn writes an assistant message: the reasoning to replay first, then its text and tool calls. One with
 // none of them writes nothing.
-func assistantTurn(out []byte, msg canonMessage) ([]byte, error) {
+func assistantTurn(out []byte, msg canonMessage, b *budget) ([]byte, error) {
 	begin := len(out)
 	out = append(out, `{"role":"assistant","content":[`...)
 	first := len(out)
@@ -282,12 +282,12 @@ func assistantTurn(out []byte, msg canonMessage) ([]byte, error) {
 		out = append(append(append(out, `{"type":"thinking","thinking":`...), d.Text...), `,"signature":`...)
 		out = append(append(out, d.Signature...), '}')
 	}
-	b, err := blocks(msg, true)
+	content, err := blocks(msg, true, b)
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > 0 {
-		out = append(commaAfter(out, first), b...)
+	if len(content) > 0 {
+		out = append(commaAfter(out, first), content...)
 	}
 	for _, call := range msg.ToolCalls {
 		input, err := arguments(call.Function.Arguments)
@@ -313,7 +313,7 @@ func commaAfter(out []byte, first int) []byte {
 }
 
 // toolResults writes consecutive tool messages as one user message of tool_result blocks.
-func toolResults(out []byte, msgs []canonMessage) ([]byte, error) {
+func toolResults(out []byte, msgs []canonMessage, b *budget) ([]byte, error) {
 	out = append(out, `{"role":"user","content":[`...)
 	for i, msg := range msgs {
 		if i > 0 {
@@ -324,7 +324,7 @@ func toolResults(out []byte, msgs []canonMessage) ([]byte, error) {
 		if msg.Content.Kind() == '"' {
 			out = append(out, msg.Content...)
 		} else {
-			b, err := blocks(msg, false)
+			b, err := blocks(msg, false, b)
 			if err != nil {
 				return nil, err
 			}
@@ -337,7 +337,11 @@ func toolResults(out []byte, msgs []canonMessage) ([]byte, error) {
 
 // blocks writes a message's content parts as content blocks, comma-separated; text alone when textOnly. Empty text
 // writes nothing, as Anthropic refuses an empty text block.
-func blocks(msg canonMessage, textOnly bool) ([]byte, error) {
+func blocks(msg canonMessage, textOnly bool, b *budget) ([]byte, error) {
+	// The parts are built in a buffer of their own and then copied into the message; reserve it before it grows.
+	if err := b.draw(rounded(int64(blocksSize(msg)))); err != nil {
+		return nil, err
+	}
 	var out []byte
 	var err error
 	for _, p := range msg.Parts {

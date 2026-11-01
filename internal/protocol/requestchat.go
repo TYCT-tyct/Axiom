@@ -46,7 +46,8 @@ func requestArray(v jsontext.Value) ([]jsontext.Value, error) { return arrayWith
 
 func requestString(v jsontext.Value, budgets ...*budget) (string, error) {
 	if len(budgets) > 0 {
-		if err := budgets[0].draw(int64(len(v))); err != nil {
+		// AppendUnquote builds a byte buffer and string(s) copies it; charge both before either is made.
+		if err := budgets[0].draw(int64(2 * len(v))); err != nil {
 			return "", err
 		}
 	}

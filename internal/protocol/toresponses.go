@@ -20,7 +20,7 @@ func toResponses(c *canon, t Target, w Rewrites, b *budget, body []byte) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	reserve := int64(len(body)) + 64<<10
+	reserve := int64(len(body)) + 64<<10 + responsesPartsSlack(c)
 	if err := b.draw(rounded(reserve)); err != nil {
 		return nil, err
 	}
@@ -53,6 +53,20 @@ func toResponses(c *canon, t Target, w Rewrites, b *budget, body []byte) ([]byte
 }
 
 // input writes the messages as input items; breakpoints says whether the model takes OpenAI's cache breakpoints.
+// responsesPartsSlack is the bytes the Responses spelling adds to one Chat text part: input_text is six bytes longer
+// than text. The writer reserves it before it copies the part.
+func responsesPartsSlack(c *canon) int64 {
+	var n int64
+	for _, msg := range c.Messages {
+		for _, p := range msg.Parts {
+			if p.Type == "text" || p.Type == "refusal" {
+				n += 6
+			}
+		}
+	}
+	return n
+}
+
 func input(out []byte, c *canon, breakpoints bool) ([]byte, error) {
 	var err error
 	for i, msg := range c.Messages {
