@@ -1,60 +1,58 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go
 	"slices"
 	"strconv"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/jsonx"
 )
 
 // toMessages writes a Chat request as an Anthropic Messages request (Anthropic《Messages API reference》, read
-// 2026-10-14; README.md「跨格式转换」). Strings are copied as written.
+// 2026-10-14; README.md「跨格式转换」). Strings are copied as written. The body is written into one writer, which
+// starts at the size of the Chat body and draws every growth from b first.
 func toMessages(c *canon, t Target, w Rewrites, b *budget, body []byte) ([]byte, error) {
-	m := &messagesWriter{c: c, t: t, b: b}
+	m := &messagesWriter{c: c, t: t, o: newWriter(len(body)+4096, b)}
 	if err := m.check(); err != nil {
 		return nil, err
 	}
-	// One output buffer, charged before it is made. The body plus a small syntax allowance holds the writers of
-	// the shapes a request of this size produces; PrepareBudgeted refunds what the output did not use.
-	reserve := int64(len(body)) + 64<<10
-	if err := b.draw(rounded(reserve)); err != nil {
-		return nil, err
-	}
-	out := make([]byte, 0, reserve)
-	out = appendQuoted(append(out, `{"model":`...), t.Model)
-	out = strconv.AppendInt(append(out, `,"max_tokens":`...), m.maxTokens, 10)
-	var err error
-	for _, write := range []func([]byte) ([]byte, error){
-		m.system, m.messages, m.tools, m.toolChoice, m.thinking, m.sampling,
-	} {
-		if out, err = write(out); err != nil {
+	o := m.o
+	o.str(`{"model":`).quoted(t.Model).str(`,"max_tokens":`).int(m.maxTokens)
+	for _, write := range []func() error{m.system, m.messages, m.tools, m.toolChoice, m.thinking, m.sampling} {
+		if err := write(); err != nil {
 			return nil, err
 		}
 	}
 	if t.Streams { // the gateway reads every answer as a stream, and routing sends a conversion only to an endpoint that streams
-		out = append(out, `,"stream":true`...)
+		o.str(`,"stream":true`)
 	}
 	if c.User != nil {
-		out, err = appendMetadataUserID(append(out, `,"metadata":{"user_id":`...), w, *c.User)
-		if err != nil {
-			return nil, err
+		o.str(`,"metadata":{"user_id":`)
+		// appendMetadataUserID writes the identifier and its outer quoting in place, within this.
+		if o.room(3 * (quoted(w.withDefaults().IdentityLen) + quoted(len(w.Device)))) {
+			var err error
+			if o.buf, err = appendMetadataUserID(o.buf, w, *c.User); err != nil {
+				return nil, err
+			}
 		}
-		out = append(out, '}')
+		o.byte('}')
 	}
-	out = append(out, '}')
-	return out, nil
+	o.byte('}')
+	return o.buf, o.err
 }
 
 type messagesWriter struct {
 	c          *canon
 	t          Target
+	o          *writer
 	maxTokens  int64
 	budget     int64 // the thinking budget of a manual-thinking model, 0 for none
 	effort     string
 	firstTurn  int // where the leading system messages end
 	thinkingOn bool
-	b          *budget
+	args       jsonx.Validator // a tool call's arguments are checked through it, reusing its decoder
 }
 
 // manualRatios are OpenRouter's shares of max_tokens for a thinking budget by effort (OpenRouter《Reasoning
@@ -151,7 +149,7 @@ func (m *messagesWriter) checkManual() error {
 	}
 	for _, msg := range slices.Backward(m.c.Messages) {
 		if msg.Role == "assistant" {
-			if len(msg.ToolCalls) > 0 && len(replayable(msg.ReasoningDetails)) == 0 {
+			if len(msg.ToolCalls) > 0 && !slices.ContainsFunc(msg.ReasoningDetails, replayable) {
 				return &NotSupported{Reason: "manual thinking after a tool call without its reasoning to replay"}
 			}
 			break
@@ -160,50 +158,54 @@ func (m *messagesWriter) checkManual() error {
 	return nil
 }
 
-// replayable are the reasoning entries an assistant message can hand back to Anthropic: its own format, signed or
-// redacted. They go first in the message: Anthropic binds each thinking block to everything before it, and a Chat
+// replayable reports whether an assistant message can hand a reasoning entry back to Anthropic: its own format, signed
+// or redacted. They go first in the message: Anthropic binds each thinking block to everything before it, and a Chat
 // message cannot say where between its text and calls the reasoning was (README.md「跨格式转换」).
-func replayable(details []canonReasoningDetail) []canonReasoningDetail {
-	var out []canonReasoningDetail
-	for _, d := range details {
-		switch {
-		case d.Format != "anthropic-claude-v1":
-		case d.Type == "reasoning.text" && !isNull(d.Signature) && !isNull(d.Text):
-			out = append(out, d)
-		case d.Type == "reasoning.encrypted" && !isNull(d.Data):
-			out = append(out, d)
-		}
+func replayable(d canonReasoningDetail) bool {
+	switch {
+	case d.Format != "anthropic-claude-v1":
+		return false
+	case d.Type == "reasoning.text":
+		return !isNull(d.Signature) && !isNull(d.Text)
+	case d.Type == "reasoning.encrypted":
+		return !isNull(d.Data)
 	}
-	return out
+	return false
 }
 
 // system writes the leading system and developer messages as the system blocks.
-func (m *messagesWriter) system(out []byte) ([]byte, error) {
+func (m *messagesWriter) system() error {
 	if m.firstTurn == 0 {
-		return out, nil
+		return nil
 	}
-	out = append(out, `,"system":[`...)
+	o := m.o
+	o.str(`,"system":[`)
 	for _, msg := range m.c.Messages[:m.firstTurn] {
-		b, err := blocks(msg, true, m.b)
-		if err != nil {
-			return nil, err
+		mark := len(o.buf)
+		if o.last() != '[' {
+			o.byte(',')
 		}
-		if len(b) > 0 && out[len(out)-1] != '[' {
-			out = append(out, ',')
+		at := len(o.buf)
+		if err := m.blocks(msg, true); err != nil {
+			return err
 		}
-		out = append(out, b...)
+		if len(o.buf) == at { // nothing to send: no comma either
+			o.cut(mark)
+		}
 	}
-	return append(out, ']'), nil
+	o.byte(']')
+	return o.err
 }
 
 // messages writes the conversation: consecutive tool results become one user message, as Anthropic wants them.
-func (m *messagesWriter) messages(out []byte) ([]byte, error) {
-	out = append(out, `,"messages":[`...)
+func (m *messagesWriter) messages() error {
+	o := m.o
+	o.str(`,"messages":[`)
 	msgs := m.c.Messages[m.firstTurn:]
-	for i := 0; i < len(msgs); i++ {
-		mark := len(out)
-		if out[len(out)-1] != '[' {
-			out = append(out, ',')
+	for i := 0; i < len(msgs) && o.err == nil; i++ {
+		mark := len(o.buf)
+		if o.last() != '[' {
+			o.byte(',')
 		}
 		var err error
 		switch msg := msgs[i]; msg.Role {
@@ -212,40 +214,41 @@ func (m *messagesWriter) messages(out []byte) ([]byte, error) {
 			for i+n < len(msgs) && msgs[i+n].Role == "tool" {
 				n++
 			}
-			out, err = toolResults(out, msgs[i:i+n], m.b)
+			err = m.toolResults(msgs[i : i+n])
 			i += n - 1
 		case "assistant":
-			out, err = assistantTurn(out, msg, m.b)
+			err = m.assistantTurn(msg)
 		case "user":
-			out, err = turn(out, "user", msg, m.b)
+			err = m.turn("user", msg)
 		default:
-			out, err = m.midSystem(out, msgs, i)
+			err = m.midSystem(msgs, i)
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if len(out) <= mark+1 { // an assistant turn with nothing to send, which Messages refuses
-			out = out[:mark]
+		if len(o.buf) <= mark+1 { // an assistant turn with nothing to send, which Messages refuses
+			o.cut(mark)
 		}
 	}
-	return append(out, ']'), nil
+	o.byte(']')
+	return o.err
 }
 
-func turn(out []byte, role string, msg canonMessage, b *budget) ([]byte, error) {
-	content, err := blocks(msg, role != "user", b)
-	if err != nil {
-		return nil, err
+func (m *messagesWriter) turn(role string, msg canonMessage) error {
+	m.o.str(`{"role":"`).str(role).str(`","content":[`)
+	if err := m.blocks(msg, role != "user"); err != nil {
+		return err
 	}
-	out = append(append(append(out, `{"role":"`...), role...), `","content":[`...)
-	return append(append(out, content...), "]}"...), nil
+	m.o.str("]}")
+	return nil
 }
 
 // midSystem writes a system message after the conversation started, in place, where Anthropic allows one: right
 // after a user turn, results included, and before the next assistant turn or at the end (《Mid-conversation system
 // messages》"Limitations", read 2026-10-13).
-func (m *messagesWriter) midSystem(out []byte, msgs []canonMessage, i int) ([]byte, error) {
+func (m *messagesWriter) midSystem(msgs []canonMessage, i int) error {
 	if !isSystem(msgs[i].Role) {
-		return nil, &NotSupported{Reason: "role " + msgs[i].Role + " has no Messages counterpart"}
+		return &NotSupported{Reason: "role " + msgs[i].Role + " has no Messages counterpart"}
 	}
 	prev := msgs[i-1].Role
 	next := ""
@@ -254,264 +257,224 @@ func (m *messagesWriter) midSystem(out []byte, msgs []canonMessage, i int) ([]by
 	}
 	switch {
 	case m.t.MidSystem == catalog.ClaimNo:
-		return nil, &NotSupported{Reason: "the model takes no system message after the conversation started"}
+		return &NotSupported{Reason: "the model takes no system message after the conversation started"}
 	case m.t.MidSystem == catalog.ClaimUnset:
-		return nil, unspecified("a system message after the conversation started", "whether the model takes one (mid_system)")
+		return unspecified("a system message after the conversation started", "whether the model takes one (mid_system)")
 	case prev != "user" && prev != "tool", next != "" && next != "assistant":
-		return nil, &NotSupported{Reason: "a system message where Anthropic does not allow one"}
+		return &NotSupported{Reason: "a system message where Anthropic does not allow one"}
 	case prev == "tool" && m.t.UntrustedSystemAfterTools == catalog.ClaimYes:
-		return nil, &NotSupported{Reason: "the model does not trust a system message right after tool results"}
+		return &NotSupported{Reason: "the model does not trust a system message right after tool results"}
 	case prev == "tool" && m.t.UntrustedSystemAfterTools == catalog.ClaimUnset:
-		return nil, unspecified("a system message right after tool results", "whether the model trusts one (untrusted_system_after_tools)")
+		return unspecified("a system message right after tool results", "whether the model trusts one (untrusted_system_after_tools)")
 	}
-	return turn(out, "system", msgs[i], m.b)
+	return m.turn("system", msgs[i])
 }
 
 // assistantTurn writes an assistant message: the reasoning to replay first, then its text and tool calls. One with
 // none of them writes nothing.
-func assistantTurn(out []byte, msg canonMessage, b *budget) ([]byte, error) {
-	begin := len(out)
-	out = append(out, `{"role":"assistant","content":[`...)
-	first := len(out)
-	for _, d := range replayable(msg.ReasoningDetails) {
-		out = commaAfter(out, first)
-		if d.Type == "reasoning.encrypted" {
-			out = append(append(append(out, `{"type":"redacted_thinking","data":`...), d.Data...), '}')
-			continue
+func (m *messagesWriter) assistantTurn(msg canonMessage) error {
+	o := m.o
+	begin := len(o.buf)
+	o.str(`{"role":"assistant","content":[`)
+	first := len(o.buf)
+	for _, d := range msg.ReasoningDetails {
+		switch {
+		case !replayable(d):
+		case d.Type == "reasoning.encrypted":
+			o.commaAfter(first).str(`{"type":"redacted_thinking","data":`).raw(d.Data).byte('}')
+		default:
+			o.commaAfter(first).str(`{"type":"thinking","thinking":`).raw(d.Text).str(`,"signature":`).raw(d.Signature).byte('}')
 		}
-		out = append(append(append(out, `{"type":"thinking","thinking":`...), d.Text...), `,"signature":`...)
-		out = append(append(out, d.Signature...), '}')
 	}
-	content, err := blocks(msg, true, b)
-	if err != nil {
-		return nil, err
+	mark := len(o.buf)
+	o.commaAfter(first)
+	at := len(o.buf)
+	if err := m.blocks(msg, true); err != nil {
+		return err
 	}
-	if len(content) > 0 {
-		out = append(commaAfter(out, first), content...)
+	if len(o.buf) == at {
+		o.cut(mark)
 	}
 	for _, call := range msg.ToolCalls {
-		input, err := arguments(call.Function.Arguments)
-		if err != nil {
-			return nil, err
+		o.commaAfter(first).str(`{"type":"tool_use","id":`).toolUseID(call.ID)
+		o.str(`,"name":`).raw(call.Function.Name).str(`,"input":`)
+		if err := m.arguments(call.Function.Arguments); err != nil {
+			return err
 		}
-		out = appendQuoted(append(commaAfter(out, first), `{"type":"tool_use","id":`...), toolUseID(call.ID))
-		out = append(append(append(append(out, `,"name":`...), call.Function.Name...), `,"input":`...), input...)
-		out = append(out, '}')
+		o.byte('}')
+		if o.err != nil {
+			return o.err
+		}
 	}
-	if len(out) == first {
-		return out[:begin], nil
+	if len(o.buf) == first {
+		o.cut(begin)
+		return nil
 	}
-	return append(out, "]}"...), nil
+	o.str("]}")
+	return nil
 }
 
-// commaAfter appends a comma when out holds something after first.
-func commaAfter(out []byte, first int) []byte {
-	if len(out) > first {
-		return append(out, ',')
+// arguments writes a call's arguments, a JSON string holding a JSON object, as the object, unquoted in place; empty
+// arguments are an empty object, as models that call a function without parameters may send.
+func (m *messagesWriter) arguments(v jsontext.Value) error {
+	o := m.o
+	if !o.room(len(v)) {
+		return o.err
 	}
-	return out
+	at := len(o.buf)
+	s, err := jsontext.AppendUnquote(o.buf, v) // never longer than v: it fits in the room made for it
+	if err != nil {
+		return &NotSupported{Reason: "a tool call's arguments are not a string"}
+	}
+	args := bytes.TrimSpace(s[at:])
+	switch {
+	case len(args) == 0:
+		o.buf = append(s[:at], "{}"...)
+	case args[0] != '{' || m.args.Validate(args) != nil:
+		return &NotSupported{Reason: "a tool call's arguments are not a JSON object"}
+	default:
+		o.buf = append(s[:at], args...) // copy within the array: args lies in it, at or after at
+	}
+	return nil
 }
 
 // toolResults writes consecutive tool messages as one user message of tool_result blocks.
-func toolResults(out []byte, msgs []canonMessage, b *budget) ([]byte, error) {
-	out = append(out, `{"role":"user","content":[`...)
+func (m *messagesWriter) toolResults(msgs []canonMessage) error {
+	o := m.o
+	o.str(`{"role":"user","content":[`)
 	for i, msg := range msgs {
 		if i > 0 {
-			out = append(out, ',')
+			o.byte(',')
 		}
-		out = appendQuoted(append(out, `{"type":"tool_result","tool_use_id":`...), toolUseID(*msg.ToolCallID))
-		out = append(out, `,"content":`...)
+		o.str(`{"type":"tool_result","tool_use_id":`).toolUseID(*msg.ToolCallID).str(`,"content":`)
 		if msg.Content.Kind() == '"' {
-			out = append(out, msg.Content...)
+			o.raw(msg.Content)
 		} else {
-			b, err := blocks(msg, false, b)
-			if err != nil {
-				return nil, err
+			o.byte('[')
+			if err := m.blocks(msg, false); err != nil {
+				return err
 			}
-			out = append(append(append(out, '['), b...), ']')
+			o.byte(']')
 		}
-		out = append(out, '}')
+		o.byte('}')
 	}
-	return append(out, "]}"...), nil
-}
-
-// blocks writes a message's content parts as content blocks, comma-separated; text alone when textOnly. Empty text
-// writes nothing, as Anthropic refuses an empty text block.
-func blocks(msg canonMessage, textOnly bool, b *budget) ([]byte, error) {
-	// The parts are built in a buffer of their own and then copied into the message; reserve it before it grows.
-	if err := b.draw(rounded(int64(blocksSize(msg)))); err != nil {
-		return nil, err
-	}
-	var out []byte
-	var err error
-	for _, p := range msg.Parts {
-		if (p.Type == "text" || p.Type == "refusal") && (string(p.Text) == `""` || isNull(p.Text)) {
-			continue
-		}
-		if len(out) > 0 {
-			out = append(out, ',')
-		}
-		if out, err = block(out, p, textOnly); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func block(out []byte, p canonPart, textOnly bool) ([]byte, error) {
-	var err error
-	switch {
-	case p.Type == "text", p.Type == "refusal": // a refusal is text the assistant said: Anthropic's own come as text
-		out = append(append(out, messagesTextHead...), p.Text...)
-	case textOnly:
-		return nil, &NotSupported{Reason: "a " + p.Type + " part where Messages takes text only"}
-	case p.Type == "image_url" && p.ImageURL != nil:
-		out, err = imageBlock(out, p)
-	case p.Type == "file" && p.File != nil && p.File.FileData != nil:
-		out, err = documentBlock(out, *p.File.FileData, p.File.Filename)
-	default:
-		return nil, &NotSupported{Reason: "a " + p.Type + " part has no Messages counterpart"}
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !isNull(p.CacheControl) {
-		out = append(append(out, `,"cache_control":`...), p.CacheControl...)
-	}
-	return append(out, '}'), nil
-}
-
-// imageBlock writes an image block but its closing brace: base64 for a data URL, a URL otherwise; Anthropic has no
-// low detail.
-func imageBlock(out []byte, p canonPart) ([]byte, error) {
-	if p.ImageURL.Detail == "low" {
-		return nil, &NotSupported{Reason: "image detail low has no Messages counterpart"}
-	}
-	out = append(out, messagesImageHead...)
-	if media, data, ok := dataURL(p.ImageURL.URL); ok {
-		out = appendQuoted(append(out, `{"type":"base64","media_type":`...), media)
-		out = appendQuoted(append(out, `,"data":`...), data)
-	} else {
-		out = appendQuoted(append(out, `{"type":"url","url":`...), p.ImageURL.URL)
-	}
-	return append(out, '}'), nil
-}
-
-// documentBlock writes a PDF's data URL as a document block but its closing brace. Chat calls the file's name what
-// Anthropic calls the document's title.
-func documentBlock(out []byte, fileData string, filename jsontext.Value) ([]byte, error) {
-	media, data, ok := dataURL(fileData)
-	if !ok || media != "application/pdf" {
-		return nil, &NotSupported{Reason: "a file that is not PDF data"}
-	}
-	out = append(out, messagesFileHead...)
-	out = append(appendQuoted(out, data), '}')
-	if !isNull(filename) {
-		out = append(append(out, `,"title":`...), filename...)
-	}
-	return out, nil
+	o.str("]}")
+	return nil
 }
 
 // tools writes the function tools.
-func (m *messagesWriter) tools(out []byte) ([]byte, error) {
+func (m *messagesWriter) tools() error {
 	if len(m.c.Tools) == 0 {
-		return out, nil
+		return nil
 	}
-	out = append(out, `,"tools":[`...)
+	m.o.str(`,"tools":[`)
 	for i, tool := range m.c.Tools {
 		if i > 0 {
-			out = append(out, ',')
+			m.o.byte(',')
 		}
-		var err error
-		if out, err = messagesTool(out, tool, m.b); err != nil {
-			return nil, err
+		if err := m.tool(tool); err != nil {
+			return err
 		}
 	}
-	return append(out, ']'), nil
+	m.o.byte(']')
+	return m.o.err
 }
 
-// messagesTool writes a function tool; a strict one only with a schema in Anthropic's subset.
-func messagesTool(out []byte, tool canonTool, b *budget) ([]byte, error) {
+// tool writes a function tool; a strict one only with a schema in Anthropic's subset.
+func (m *messagesWriter) tool(tool canonTool) error {
 	if tool.Type != "function" {
-		return nil, &NotSupported{Reason: "a " + tool.Type + " tool has no Messages counterpart"}
+		return &NotSupported{Reason: "a " + tool.Type + " tool has no Messages counterpart"}
 	}
+	o := m.o
 	f := tool.Function
-	out = append(append(out, `{"name":`...), f.Name...)
+	o.str(`{"name":`).raw(f.Name)
 	if !isNull(f.Description) {
-		out = append(append(out, `,"description":`...), f.Description...)
+		o.str(`,"description":`).raw(f.Description)
 	}
 	schema := f.Parameters
 	if isNull(schema) {
 		schema = jsontext.Value(`{"type":"object","properties":{}}`)
 	}
-	out = append(append(out, `,"input_schema":`...), schema...)
+	o.str(`,"input_schema":`).raw(schema)
 	if f.Strict != nil && *f.Strict {
-		if err := anthropicSchema(schema, b); err != nil {
-			return nil, err
+		if err := anthropicSchema(schema, o.b); err != nil {
+			return err
 		}
-		out = append(out, `,"strict":true`...)
+		o.str(`,"strict":true`)
 	}
 	if !isNull(tool.CacheControl) {
-		out = append(append(out, `,"cache_control":`...), tool.CacheControl...)
+		o.str(`,"cache_control":`).raw(tool.CacheControl)
 	}
-	return append(out, '}'), nil
+	o.byte('}')
+	return nil
 }
 
-func (m *messagesWriter) thinkingSetting(out []byte) []byte {
+func (m *messagesWriter) thinkingSetting() {
+	o := m.o
 	adaptive := m.thinkingOn && m.t.Thinking == catalog.ThinkingAdaptive
 	switch {
 	case adaptive:
-		out = append(out, `,"thinking":{"type":"adaptive"}`...)
+		o.str(`,"thinking":{"type":"adaptive"}`)
 	case m.thinkingOn:
-		out = strconv.AppendInt(append(out, `,"thinking":{"type":"enabled","budget_tokens":`...), m.budget, 10)
-		out = append(out, '}')
+		o.str(`,"thinking":{"type":"enabled","budget_tokens":`).int(m.budget).byte('}')
 	}
 	if m.thinkingOn && m.c.Reasoning != nil && m.c.Reasoning.Exclude != nil {
-		out = out[:len(out)-1]
+		if o.err != nil {
+			return
+		}
+		o.cut(len(o.buf) - 1)
 		if *m.c.Reasoning.Exclude {
-			out = append(out, `,"display":"omitted"}`...)
+			o.str(`,"display":"omitted"}`)
 		} else {
-			out = append(out, `,"display":"summarized"}`...)
+			o.str(`,"display":"summarized"}`)
 		}
 	} else if m.effort == "none" {
-		out = append(out, `,"thinking":{"type":"disabled"}`...)
+		o.str(`,"thinking":{"type":"disabled"}`)
 	}
-	return out
 }
 
 // thinking writes the thinking setting and output_config, including a structured reply schema.
-func (m *messagesWriter) thinking(out []byte) ([]byte, error) {
-	out = m.thinkingSetting(out)
+func (m *messagesWriter) thinking() error {
+	m.thinkingSetting()
+	o := m.o
 	adaptive := m.thinkingOn && m.t.Thinking == catalog.ThinkingAdaptive
-	format, err := m.replyFormat()
+	schema, err := m.replyFormat()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	switch {
-	case adaptive && format != "":
-		out = append(append(append(out, `,"output_config":{"effort":"`...), m.effort...), `",`...)
-		out = append(append(out, format...), '}')
+	case adaptive && schema != nil:
+		o.str(`,"output_config":{"effort":"`).str(m.effort).str(`",`)
+		m.writeFormat(schema)
+		o.byte('}')
 	case adaptive:
-		out = append(append(append(out, `,"output_config":{"effort":"`...), m.effort...), `"}`...)
-	case format != "":
-		out = append(append(append(out, `,"output_config":{`...), format...), '}')
+		o.str(`,"output_config":{"effort":"`).str(m.effort).str(`"}`)
+	case schema != nil:
+		o.str(`,"output_config":{`)
+		m.writeFormat(schema)
+		o.byte('}')
 	}
-	return out, nil
+	return o.err
 }
 
-// replyFormat is output_config's format member for a structured reply, "" for none.
-func (m *messagesWriter) replyFormat() (string, error) {
+// writeFormat writes output_config's format member for a structured reply.
+func (m *messagesWriter) writeFormat(schema jsontext.Value) {
+	m.o.str(`"format":{"type":"json_schema","schema":`).raw(schema).byte('}')
+}
+
+// replyFormat is the schema of a structured reply, nil for none.
+func (m *messagesWriter) replyFormat() (jsontext.Value, error) {
 	f := m.c.ResponseFormat
 	switch {
 	case f == nil || f.Type == "text":
-		return "", nil
+		return nil, nil
 	case f.Type != "json_schema" || f.JSONSchema == nil:
-		return "", &NotSupported{Reason: "response_format " + f.Type + " has no Messages counterpart"}
+		return nil, &NotSupported{Reason: "response_format " + f.Type + " has no Messages counterpart"}
 	}
-	if err := anthropicSchema(f.JSONSchema.Schema, m.b); err != nil {
-		return "", err
+	if err := anthropicSchema(f.JSONSchema.Schema, m.o.b); err != nil {
+		return nil, err
 	}
-	return `"format":{"type":"json_schema","schema":` + string(f.JSONSchema.Schema) + `}`, nil
+	return f.JSONSchema.Schema, nil
 }
 
 // samplingRefusal is why the model cannot take what, a sampling other than the default, nil when it can: thinking
@@ -542,8 +505,8 @@ func (m *messagesWriter) forcedRefusal() error {
 
 // sampling writes temperature, top_p, stop sequences and the service tier. A value other than the default is refused
 // where the model or thinking refuses it, and one outside Anthropic's 0 to 1.
-func (m *messagesWriter) sampling(out []byte) ([]byte, error) {
-	c := m.c
+func (m *messagesWriter) sampling() error {
+	c, o := m.c, m.o
 	for _, s := range []struct {
 		name string
 		v    jsontext.Value
@@ -552,24 +515,27 @@ func (m *messagesWriter) sampling(out []byte) ([]byte, error) {
 			continue
 		}
 		if err := m.samplingRefusal(s.name + " other than the default"); err != nil {
-			return nil, err
+			return err
+		}
+		if err := o.b.draw(rounded(int64(len(s.v)))); err != nil { // string(s.v)
+			return err
 		}
 		if f, err := strconv.ParseFloat(string(s.v), 64); err != nil || f > 1 || f < 0 {
-			return nil, &NotSupported{Reason: s.name + " outside 0 to 1"}
+			return &NotSupported{Reason: s.name + " outside 0 to 1"}
 		}
-		out = append(append(append(append(out, ',', '"'), s.name...), `":`...), s.v...)
+		o.str(`,"`).str(s.name).str(`":`).raw(s.v)
 	}
 	if c.Stop.Kind() == '"' {
-		out = append(append(append(out, `,"stop_sequences":[`...), c.Stop...), ']')
+		o.str(`,"stop_sequences":[`).raw(c.Stop).byte(']')
 	} else if c.Stop.Kind() == '[' {
-		out = append(append(out, `,"stop_sequences":`...), c.Stop...)
+		o.str(`,"stop_sequences":`).raw(c.Stop)
 	}
 	if c.ServiceTier != nil {
 		tier := `"auto"`
 		if *c.ServiceTier == "default" {
 			tier = `"standard_only"`
 		}
-		out = append(append(out, `,"service_tier":`...), tier...)
+		o.str(`,"service_tier":`).str(tier)
 	}
-	return out, nil
+	return o.err
 }

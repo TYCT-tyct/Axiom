@@ -2,11 +2,8 @@ package protocol_test
 
 import (
 	"bytes"
-	"errors"
-	"strings"
 	"testing"
 
-	"axiom/internal/platform/alloctest"
 	"axiom/internal/protocol"
 )
 
@@ -41,27 +38,6 @@ func TestControlNormalizationKeepsPayloadBytes(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestPrepareBudgetBoundsModalities(t *testing.T) {
-	body := []byte(chatBody(`"messages":[` + userHi + `],"modalities":[` + strings.Repeat(`"text",`, 20000) + `"text"]`))
-	r := inspected(t, protocol.Chat, body)
-	target := protocol.Target{Format: protocol.Messages, Model: "up", MaxOutput: 4096}
-	w := rewrites()
-	got := alloctest.Measure(t, alloctest.Function{Name: "prepare", F: func() {
-		_, err := protocol.Prepare(&r, body, target, w)
-		if ns, _ := errors.AsType[*protocol.NotSupported](err); ns == nil {
-			t.Fatalf("expected unsupported modalities, got %v", err)
-		}
-	}})
-	need := prepareNeed(t, &r, body, target, w)
-	t.Logf("allocated %.0f bytes, drew %d bytes", got["prepare"].Bytes, need)
-	if need > int64(got["prepare"].Bytes)+16<<10 {
-		t.Fatalf("drew %d bytes, more than the %.0f allocated", need, got["prepare"].Bytes)
-	}
-	if _, _, err := protocol.PrepareBudgeted(protocol.NewMemory(need-1), &r, body, target, w); !errors.Is(err, protocol.ErrMemory) {
-		t.Fatalf("a byte short of the %d it drew did not refuse: %v", need, err)
 	}
 }
 

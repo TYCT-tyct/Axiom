@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"bytes"
-	"encoding/json"          //nolint:depguard // the tools array is decoded into a small typed value, not edited in place
 	"encoding/json/jsontext" //nolint:depguard // the body is edited in place, keeping unknown members as written
 	"fmt"
 	"strconv"
@@ -23,31 +22,21 @@ func PrepareBudgeted(m *Memory, r *Request, body []byte, t Target, w Rewrites) (
 	if m != nil {
 		b = &budget{m: m}
 	}
+	return b.prepare(r, body, t, w)
+}
+
+// prepare is PrepareBudgeted on a budget of the caller's, which the tests read what it drew from.
+func (b *budget) prepare(r *Request, body []byte, t Target, w Rewrites) (u Upstream, held int64, err error) {
 	u, err = prepareWithin(r, body, t, w, b)
 	if err != nil {
 		b.give(b.held)
 		return u, 0, err
 	}
 	if w.NativeSearch > 0 {
-		old := int64(cap(u.Body))
-		// Responses may hold the source body, the injected body and withMaxToolCalls' copy at once, and the scan
-		// clones the tools array. Reserve that whole working set before injectNativeSearch builds it, so a budget
-		// too small refuses without first making the copies.
-		reserved := rounded(3*int64(len(u.Body)) + nativeSearchCost(w.NativeSearch))
-		if err := b.draw(reserved); err != nil {
+		if u.Body, err = injectNativeSearch(t.Format, u.Body, w.NativeSearch, b); err != nil {
 			b.give(b.held)
 			return u, 0, err
 		}
-		if u.Body, err = injectNativeSearch(t.Format, u.Body, w.NativeSearch); err != nil {
-			b.give(b.held)
-			return u, 0, err
-		}
-		b.give(reserved)
-		if err := b.draw(rounded(int64(cap(u.Body)))); err != nil {
-			b.give(b.held)
-			return u, 0, err
-		}
-		b.give(rounded(old))
 	}
 	held = int64(cap(u.Body))
 	if b.held < held { // a path that wrote its body without drawing for it, as the direct rewrites do
@@ -71,8 +60,10 @@ func NativeSearchSupported(f Format) bool {
 // endpoint's format, so the tool is written the way that format names it. A body that already turns the provider's
 // search on is returned as it is, so one request can never search twice.
 //
+// Each body it makes is drawn from b before it is made, and the one it replaces given back; the decoders read in place.
+//
 //nolint:cyclop,gocognit,funlen // one member per format and the tools splice are the grammar; splitting hides the order
-func injectNativeSearch(format Format, body []byte, maxUses int) ([]byte, error) {
+func injectNativeSearch(format Format, body []byte, maxUses int, b *budget) ([]byte, error) {
 	if maxUses < 1 {
 		maxUses = 1
 	}
@@ -84,7 +75,7 @@ func injectNativeSearch(format Format, body []byte, maxUses int) ([]byte, error)
 		return nil, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
 	}
 	close := len(trimmed) - 1
-	dec := jsontext.NewDecoder(bytes.NewReader(body))
+	dec := jsontext.NewDecoder(bytes.NewBuffer(body))
 	if dec.PeekKind() != '{' {
 		return nil, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
 	}
@@ -108,7 +99,7 @@ func injectNativeSearch(format Format, body []byte, maxUses int) ([]byte, error)
 		switch key {
 		case "tools":
 			toolsStart, toolsEnd = end-len(value), end
-			tools = bytes.Clone(bytes.TrimSpace(value)) // valid only until the next ReadValue
+			tools = bytes.TrimSpace(value) // a slice of body: the decoder reads a bytes.Buffer in place
 		case "web_search_options":
 			hasOptions = true
 		}
@@ -117,15 +108,16 @@ func injectNativeSearch(format Format, body []byte, maxUses int) ([]byte, error)
 		if hasOptions || (toolsStart >= 0 && hasWebSearchTool(Chat, tools)) {
 			return body, nil
 		}
-		return insertBefore(body, close, []byte(`,"web_search_options":{}`)), nil
+		return splice(body, close, close, []byte(`,"web_search_options":{}`), b)
 	}
 	tool := nativeSearchTool(format, maxUses)
 	var out []byte
+	var err error
 	switch {
 	case toolsStart < 0:
-		out = insertBefore(body, close, append(append([]byte(`,"tools":[`), tool...), ']'))
+		out, err = splice(body, close, close, append(append([]byte(`,"tools":[`), tool...), ']'), b)
 	case bytes.Equal(tools, []byte("null")):
-		out = splice(body, toolsStart, toolsEnd, append(append([]byte{'['}, tool...), ']'))
+		out, err = splice(body, toolsStart, toolsEnd, append(append([]byte{'['}, tool...), ']'), b)
 	case len(tools) == 0 || tools[0] != '[' || tools[len(tools)-1] != ']':
 		return nil, fmt.Errorf("%w: tools is not an array", ErrInvalid)
 	case hasWebSearchTool(format, tools):
@@ -137,12 +129,12 @@ func injectNativeSearch(format Format, body []byte, maxUses int) ([]byte, error)
 		if len(bytes.TrimSpace(tools[1:len(tools)-1])) == 0 {
 			insert = tool
 		}
-		out = splice(body, at, at, insert)
+		out, err = splice(body, at, at, insert, b)
 	}
-	if format == Responses {
-		return withMaxToolCalls(out, maxUses)
+	if err != nil || format != Responses {
+		return out, err
 	}
-	return out, nil
+	return withMaxToolCalls(out, maxUses, b)
 }
 
 // ResponsesMaxToolCalls reads Responses' max_tool_calls without rewriting the body. The gateway uses it to clamp a
@@ -183,7 +175,7 @@ func ResponsesMaxToolCalls(body []byte) (int64, error) {
 // withMaxToolCalls puts the effective search bound into Responses' max_tool_calls, the only member that limits how
 // many server tools one response may call. A stricter limit already in the body wins; anything else is replaced, so
 // the upstream limit is never looser than the reservation.
-func withMaxToolCalls(body []byte, maxUses int) ([]byte, error) {
+func withMaxToolCalls(body []byte, maxUses int, b *budget) ([]byte, error) {
 	start, end, existing, err := maxToolCalls(body)
 	if err != nil {
 		return nil, err
@@ -193,9 +185,10 @@ func withMaxToolCalls(body []byte, maxUses int) ([]byte, error) {
 	}
 	limit := strconv.AppendInt(nil, int64(maxUses), 10)
 	if start >= 0 {
-		return splice(body, start, end, limit), nil
+		return splice(body, start, end, limit, b)
 	}
-	return insertBefore(body, len(bytes.TrimRight(body, " \t\r\n"))-1, append([]byte(`,"max_tool_calls":`), limit...)), nil
+	at := len(bytes.TrimRight(body, " \t\r\n")) - 1
+	return splice(body, at, at, append([]byte(`,"max_tool_calls":`), limit...), b)
 }
 
 // maxToolCalls returns the value's span and value, or -1 when the body has no max_tool_calls.
@@ -204,7 +197,7 @@ func maxToolCalls(body []byte) (start, end, value int, err error) {
 	if len(trimmed) == 0 || trimmed[len(trimmed)-1] != '}' {
 		return 0, 0, 0, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
 	}
-	dec := jsontext.NewDecoder(bytes.NewReader(trimmed))
+	dec := jsontext.NewDecoder(bytes.NewBuffer(trimmed))
 	if dec.PeekKind() != '{' {
 		return 0, 0, 0, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
 	}
@@ -243,26 +236,27 @@ func nativeSearchTool(format Format, maxUses int) []byte {
 	return nil
 }
 
-// hasWebSearchTool reports whether a tools array already turns the provider's web search on.
+// hasWebSearchTool reports whether a tools array already turns the provider's web search on. It reads the array in
+// place and each tool's type into a small array of its own, so it allocates nothing however many tools there are; a
+// member name matches as encoding/json matched it, whatever its case.
 func hasWebSearchTool(format Format, tools []byte) bool {
-	dec := json.NewDecoder(bytes.NewReader(tools))
-	if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
+	dec := jsontext.NewDecoder(bytes.NewBuffer(tools), jsontext.AllowDuplicateNames(true))
+	if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '[' {
 		return false
 	}
-	for dec.More() {
-		var tool struct {
-			Type string `json:"type"`
-		}
-		if err := dec.Decode(&tool); err != nil {
+	var name, value [32]byte
+	for dec.PeekKind() != ']' {
+		kind, ok := toolType(dec, &name, &value)
+		if !ok {
 			return false
 		}
 		switch format { //nolint:exhaustive // only the two tool-bearing formats reach here
 		case Chat, Responses:
-			if tool.Type == "web_search" || tool.Type == "web_search_preview" {
+			if string(kind) == "web_search" || string(kind) == "web_search_preview" {
 				return true
 			}
 		case Messages:
-			if len(tool.Type) >= len("web_search") && tool.Type[:len("web_search")] == "web_search" {
+			if bytes.HasPrefix(kind, []byte("web_search")) {
 				return true
 			}
 		}
@@ -270,11 +264,52 @@ func hasWebSearchTool(format Format, tools []byte) bool {
 	return false
 }
 
-func splice(body []byte, start, end int, with []byte) []byte {
-	out := make([]byte, 0, len(body)-(end-start)+len(with))
-	out = append(out, body[:start]...)
-	out = append(out, with...)
-	return append(out, body[end:]...)
+// toolType reads one tool and returns its type, the last one given, unquoted into value; nil when it has none or one
+// too long to be a web search tool's. It reports false for an element that is not an object.
+func toolType(dec *jsontext.Decoder, name, value *[32]byte) ([]byte, bool) {
+	if dec.PeekKind() != '{' {
+		return nil, false
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, false
+	}
+	var kind []byte
+	for dec.PeekKind() != '}' {
+		n, err := dec.ReadValue()
+		if err != nil {
+			return nil, false
+		}
+		v, err := dec.ReadValue()
+		if err != nil {
+			return nil, false
+		}
+		if len(n) > len(name) {
+			continue
+		}
+		unquoted, _ := jsontext.AppendUnquote(name[:0], n) //nolint:errcheck // a member name is a valid string
+		if !bytes.EqualFold(unquoted, []byte("type")) {
+			continue
+		}
+		kind = nil
+		if v.Kind() == '"' && len(v) <= len(value) {
+			kind, _ = jsontext.AppendUnquote(value[:0], v) //nolint:errcheck // the kind says it is a string
+		}
+	}
+	_, err := dec.ReadToken()
+	return kind, err == nil
 }
 
-func insertBefore(body []byte, at int, with []byte) []byte { return splice(body, at, at, with) }
+// splice is body with its bytes from start to end replaced by with, in a body of its own drawn from b before it is made;
+// body, which it replaces, is given back.
+func splice(body []byte, start, end int, with []byte, b *budget) ([]byte, error) {
+	size := len(body) - (end - start) + len(with)
+	if err := b.draw(rounded(int64(size))); err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, size)
+	out = append(out, body[:start]...)
+	out = append(out, with...)
+	out = append(out, body[end:]...)
+	b.give(rounded(int64(cap(body))))
+	return out, nil
+}

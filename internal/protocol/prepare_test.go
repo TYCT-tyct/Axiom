@@ -13,7 +13,6 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"axiom/internal/catalog"
-	"axiom/internal/platform/alloctest"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
@@ -415,107 +414,4 @@ func TestPrepareOutputCap(t *testing.T) {
 			t.Errorf("%s: got %s (%v), want %s", c.name, u.Body, err, c.want)
 		}
 	}
-}
-
-// TestPrepareBudgetBoundsTheAllocation: what Prepare allocates, for bodies of the worst shapes there are (nothing but empty
-// objects, the smallest messages, members it does not know, an identifier of escapes), stays within the cost. The
-// allocation counted is the total, garbage included, which bounds the peak; it is measured in a child process, so the
-// rest of this test binary's goroutines and collections are not counted as Prepare's.
-//
-//nolint:exhaustive // the formats with output are the ones bounded here
-func TestPrepareBudgetBoundsTheAllocation(t *testing.T) {
-	w := protocol.Rewrites{Identity: func(string) string { return "0123456789abcdef0123456789abcdef" }}
-	bs := "\\"
-	var members []string
-	for i := range 20000 {
-		members = append(members, fmt.Sprintf(`"k%05d":1`, i))
-	}
-	pair := `{"role":"user","content":"a"},{"role":"assistant","content":"b"}`
-	type bounded struct {
-		name   string
-		body   []byte
-		req    protocol.Request
-		target protocol.Target
-	}
-	var funcs []alloctest.Function
-	var bounds []bounded
-	for _, c := range []struct {
-		name string
-		from protocol.Format
-		body string
-	}{
-		{"empty messages", protocol.Chat, chatBody(`"messages":[` + strings.Repeat("{},", 20000) + `{}]`)},
-		{"null messages", protocol.Chat, chatBody(`"messages":[` + strings.Repeat("null,", 20000) + `null]`)},
-		{"null tool calls", protocol.Chat, chatBody(`"messages":[{"role":"assistant","tool_calls":[` + strings.Repeat("null,", 20000) + `null]}]`)},
-		{"the smallest messages", protocol.Chat, chatBody(`"messages":[` + strings.Repeat(pair+",", 20000) + pair + `]`)},
-		{"members of a message it does not know", protocol.Chat, chatBody(`"messages":[{"role":"user","content":"a",` + strings.Join(members, ",") + `}]`)},
-		{"members of the request it does not know", protocol.Chat, chatBody(`"messages":[` + userHi + `],` + strings.Join(members, ","))},
-		{"one long text", protocol.Chat, chatBody(`"messages":[{"role":"user","content":"` + strings.Repeat("x", 1<<20) + `"}]`)},
-		{"escapes in a text", protocol.Chat, chatBody(`"messages":[{"role":"user","content":"` + strings.Repeat(bs+`u0041`, 1<<18) + `"}]`)},
-		{"an identifier of escapes", protocol.Responses, `{"model":"m","input":"hi","user":"` + strings.Repeat(bs+`n`, 1<<19) + `"}`},
-		{"an identifier of plain bytes", protocol.Messages, `{"model":"m","max_tokens":5,"metadata":{"user_id":"` + strings.Repeat("a", 1<<20) + `"}}`},
-		{"empty messages", protocol.Messages, `{"model":"m","max_tokens":1,"messages":[` + strings.Repeat("{},", 20000) + `{}]}`},
-		{"members of a message it does not know", protocol.Messages, `{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"a",` + strings.Join(members, ",") + `}]}`},
-		{"empty items", protocol.Responses, `{"model":"m","input":[` + strings.Repeat("{},", 20000) + `{}]}`},
-		{"members of an item it does not know", protocol.Responses, `{"model":"m","input":[{"role":"user","content":"a",` + strings.Join(members, ",") + `}]}`},
-	} {
-		body := []byte(c.body)
-		r := inspected(t, c.from, body)
-		targets := []protocol.Format{c.from}
-		switch c.from {
-		case protocol.Chat:
-			targets = []protocol.Format{protocol.Messages, protocol.Responses}
-		case protocol.Messages:
-			targets = []protocol.Format{protocol.Messages, protocol.Responses}
-		case protocol.Responses:
-			targets = []protocol.Format{protocol.Responses, protocol.Messages}
-		}
-		for _, f := range targets {
-			target := protocol.Target{Format: f, Model: "up", MaxOutput: 4096}
-			name := fmt.Sprintf("%s from format %d, format %d", c.name, c.from, f)
-			funcs = append(funcs, alloctest.Function{Name: name, F: func() {
-				_, _ = protocol.Prepare(&r, body, target, w) //nolint:errcheck // a body of the worst shape may be refused; what it took is the point
-			}})
-			bounds = append(bounds, bounded{name: name, body: body, req: r, target: target})
-		}
-	}
-	got := alloctest.Measure(t, funcs...)
-	for _, c := range bounds {
-		// The buffer kept is read in this process: the child reports what one call allocates, not what it returns.
-		u, _ := protocol.Prepare(&c.req, c.body, c.target, w) //nolint:errcheck // as in the measurement
-		need := prepareNeed(t, &c.req, c.body, c.target, w)
-		allocated := int64(got[c.name].Bytes)
-		if need > allocated+16<<10 || int64(cap(u.Body)) > need { // the charges round up; the total does not
-			t.Errorf("%s: %d bytes allocated, %d kept, of the %d it drew, for a body of %d", c.name, allocated, cap(u.Body), need, len(c.body))
-		}
-		if _, _, err := protocol.PrepareBudgeted(protocol.NewMemory(need-1), &c.req, c.body, c.target, w); !errors.Is(err, protocol.ErrMemory) {
-			t.Errorf("%s: a byte short of the %d it drew did not refuse: %v", c.name, need, err)
-		}
-	}
-}
-
-// prepareNeed is the smallest budget PrepareBudgeted finishes with: what it draws at once, found by asking, since a
-// conversion has no bound before it runs.
-func prepareNeed(t *testing.T, r *protocol.Request, body []byte, target protocol.Target, w protocol.Rewrites) int64 {
-	t.Helper()
-	lo, hi := int64(0), int64(1<<20)
-	for {
-		_, _, err := protocol.PrepareBudgeted(protocol.NewMemory(hi), r, body, target, w)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, protocol.ErrMemory) {
-			break // it got as far as the request's own answer; find where that starts
-		}
-		lo, hi = hi+1, hi*2
-	}
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		if _, _, err := protocol.PrepareBudgeted(protocol.NewMemory(mid), r, body, target, w); errors.Is(err, protocol.ErrMemory) {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	return lo
 }

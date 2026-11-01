@@ -16,6 +16,9 @@ func (p *rewriter) userID() error {
 	if err != nil {
 		return err
 	}
+	if err := p.b.draw(rounded(int64(len(s)))); err != nil { // string(s)
+		return err
+	}
 	p.replace(len(v), "")
 	p.out, err = appendMetadataUserID(p.out, p.w, string(s))
 	return err

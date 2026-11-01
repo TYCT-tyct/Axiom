@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"unsafe"
 )
 
 // upgradeLegacy normalizes Chat's deprecated function calling before shape and pairing checks.
@@ -131,6 +132,9 @@ type legacyCalls struct {
 }
 
 func newLegacyCalls(messages []canonMessage, b *budget) (*legacyCalls, error) {
+	if err := b.draw(2*mapMemory + rounded(int64(unsafe.Sizeof(legacyCalls{})))); err != nil {
+		return nil, err
+	}
 	calls := &legacyCalls{used: map[string]bool{}, pending: map[string][]string{}}
 	for _, m := range messages {
 		for _, call := range m.ToolCalls {
@@ -167,7 +171,10 @@ func (c *legacyCalls) add(m *canonMessage, b *budget) error {
 	if call.Function.Name.Kind() != '"' {
 		return shapeError("a function_call without a name")
 	}
-	name, _ := jsontext.AppendUnquote(nil, call.Function.Name) //nolint:errcheck // Unmarshal validated JSON and Name's kind above
+	if err := b.draw(2 * rounded(int64(len(call.Function.Name)))); err != nil { // the name unquoted, and as a string
+		return err
+	}
+	name, _ := jsontext.AppendUnquote(make([]byte, 0, len(call.Function.Name)), call.Function.Name) //nolint:errcheck // Unmarshal validated JSON and Name's kind above
 	call.ID, call.Type = "", "function"
 	var err error
 	if call.ID, err = c.assign(string(name), b); err != nil {
@@ -190,13 +197,13 @@ func (c *legacyCalls) answer(m *canonMessage, b *budget) error {
 	if m.Name.Kind() != '"' {
 		return shapeError("a function result without a name")
 	}
-	name, _ := jsontext.AppendUnquote(nil, m.Name) //nolint:errcheck // decodeCanon validated JSON and Name's kind above
+	if err := b.draw(rounded(int64(len(m.Name))) + rounded(int64(unsafe.Sizeof("")))); err != nil { // the name unquoted, and &id
+		return err
+	}
+	name, _ := jsontext.AppendUnquote(make([]byte, 0, len(m.Name)), m.Name) //nolint:errcheck // decodeCanon validated JSON and Name's kind above
 	id, ok := c.claim(string(name))
 	if !ok {
 		return &NotSupported{Reason: "a function result that answers no call"}
-	}
-	if err := b.draw(int64(len(id)) + 8); err != nil {
-		return err
 	}
 	m.Role, m.ToolCallID, m.Name = "tool", &id, nil
 	return nil
@@ -207,15 +214,23 @@ func (c *legacyCalls) answer(m *canonMessage, b *budget) error {
 func (c *legacyCalls) assign(name string, b *budget) (string, error) {
 	for {
 		c.next++
+		if err := b.draw(2 * rounded(int64(len("call_legacy_")+20))); err != nil { // the number, and the ID
+			return "", err
+		}
 		id := "call_legacy_" + strconv.Itoa(c.next)
 		if c.used[id] {
 			continue
 		}
-		if err := b.draw(mapEntryMemory + int64(len(id)) + int64(len(name))); err != nil {
+		if err := b.draw(2 * mapEntryMemory); err != nil { // its entry in used, and its name's in pending
 			return "", err
 		}
 		c.used[id] = true
-		c.pending[name] = append(c.pending[name], id)
+		queue, err := growWithin(c.pending[name], b)
+		if err != nil {
+			return "", err
+		}
+		queue[len(queue)-1] = id
+		c.pending[name] = queue
 		return id, nil
 	}
 }

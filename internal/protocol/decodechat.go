@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // the request tree is decoded token by token
 	"unsafe"
 )
@@ -181,7 +180,7 @@ func (d *decoder) parts(v jsontext.Value) ([]canonPart, error) {
 	case 'n':
 		return nil, nil
 	case '"':
-		if err := d.b.draw(int64(unsafe.Sizeof(canonPart{}))); err != nil {
+		if err := d.b.draw(rounded(int64(unsafe.Sizeof(canonPart{})))); err != nil {
 			return nil, err
 		}
 		return []canonPart{{Type: "text", Text: v}}, nil
@@ -192,7 +191,7 @@ func (d *decoder) parts(v jsontext.Value) ([]canonPart, error) {
 	if err := d.b.draw(subDecoderMemory); err != nil {
 		return nil, err
 	}
-	pd := &decoder{dec: jsontext.NewDecoder(bytes.NewBuffer(v)), b: d.b, parent: d}
+	pd := &decoder{dec: newDecoder(v), b: d.b, parent: d}
 	var parts []canonPart
 	if err := pd.array(func() error {
 		var err error

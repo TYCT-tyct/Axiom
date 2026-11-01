@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go
 	"errors"
 	"fmt"
@@ -16,8 +17,11 @@ import (
 // $ref only to the schema's own definitions, none of them recursive. A schema outside it is not approximated by
 // dropping what it cannot keep: the request goes to an endpoint that can (README.md「跨格式转换」).
 func anthropicSchema(raw jsontext.Value, b *budget) error {
-	// The schema is read into Go values, whose maps and slices take a few times the schema's own bytes.
-	if err := b.draw(8*int64(len(raw)) + 2048); err != nil {
+	// The schema is read into Go values: a map for every object and an entry for every member, which take far more
+	// than their bytes when they are empty (about 545 bytes a member, measured 2026-11-01 for 20,000 empty properties);
+	// TestPrepareAllocatesOnlyWhatItDrew holds the bound to it.
+	cost := 8*int64(len(raw)) + 512*int64(bytes.Count(raw, []byte("{"))) + 256*int64(bytes.Count(raw, []byte(":"))) + 2048
+	if err := b.draw(cost); err != nil {
 		return err
 	}
 	var root any

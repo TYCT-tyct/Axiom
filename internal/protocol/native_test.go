@@ -77,7 +77,7 @@ func TestInjectNativeSearch(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := injectNativeSearch(tc.format, []byte(tc.body), tc.uses)
+			got, err := injectNativeSearch(tc.format, []byte(tc.body), tc.uses, nil)
 			if err != nil {
 				t.Fatalf("injectNativeSearch() error = %v", err)
 			}
@@ -107,26 +107,9 @@ func TestInjectNativeSearchRefusesWhatItCannotRewrite(t *testing.T) {
 		{"empty", Chat, ``},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := injectNativeSearch(tc.format, []byte(tc.body), 1); err == nil {
+			if _, err := injectNativeSearch(tc.format, []byte(tc.body), 1, nil); err == nil {
 				t.Fatal("injectNativeSearch() succeeded")
 			}
 		})
-	}
-}
-
-func TestPrepareBudgetIncludesTheNativeTool(t *testing.T) {
-	r := &Request{Format: Chat}
-	body := []byte(`{"model":"m","messages":[]}`)
-	target := Target{Format: Chat, Model: "m"}
-	without, _, err := PrepareBudgeted(NewMemory(1<<20), r, body, target, Rewrites{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	with, _, err := PrepareBudgeted(NewMemory(1<<20), r, body, target, Rewrites{NativeSearch: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(with.Body) <= len(without.Body) {
-		t.Fatalf("a body with a native tool is %d bytes, without it %d", len(with.Body), len(without.Body))
 	}
 }

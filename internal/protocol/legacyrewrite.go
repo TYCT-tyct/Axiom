@@ -24,7 +24,7 @@ func rewriteLegacy(body []byte, b *budget) ([]byte, error) {
 	if err := c.checkShape(); err != nil {
 		return nil, err
 	}
-	if err := c.checkCalls(); err != nil {
+	if err := c.checkCalls(b); err != nil {
 		return nil, err
 	}
 	raw := &legacyRequest{canon: c}

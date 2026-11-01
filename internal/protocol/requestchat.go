@@ -3,7 +3,8 @@ package protocol
 import (
 	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go: preserve strings and schemas as written
-	"errors"
+	"fmt"
+	"slices"
 
 	"axiom/internal/platform/jsonx"
 )
@@ -12,7 +13,35 @@ import (
 // canon.Unknown; unknown nested members are rejected instead of silently lost.
 type requestObject map[string]jsontext.Value
 
-func requestMembers(v []byte) (requestObject, error) { return membersWithin(v, nil) }
+// requestMembers reads an object of the canonical request into its members. The values are slices of v, clipped so
+// that an append to one never writes into v: a reader that copied them would copy every value once more at each level
+// of nesting, as deep as the request goes.
+func requestMembers(v []byte) (requestObject, error) {
+	dec := newDecoder(v)
+	if dec.PeekKind() != '{' {
+		return nil, shapeError("expected a request object")
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, shapeError("expected a request object")
+	}
+	o := requestObject{}
+	for dec.PeekKind() != '}' {
+		name, err := dec.ReadToken()
+		if err != nil {
+			return nil, shapeError("expected a request object")
+		}
+		key := name.String() // before ReadValue, which voids the token
+		value, err := dec.ReadValue()
+		if err != nil {
+			return nil, shapeError("expected a request object")
+		}
+		o[key] = slices.Clip(value)
+	}
+	if _, err := dec.ReadToken(); err != nil || dec.PeekKind() != 0 {
+		return nil, shapeError("expected a request object")
+	}
+	return o, nil
+}
 
 func (o requestObject) take(name string) jsontext.Value {
 	v := o[name]
@@ -42,15 +71,33 @@ func (o requestObject) move(to requestObject, from, name string) {
 	}
 }
 
-func requestArray(v jsontext.Value) ([]jsontext.Value, error) { return arrayWithin(v, nil) }
-
-func requestString(v jsontext.Value, budgets ...*budget) (string, error) {
-	if len(budgets) > 0 {
-		// AppendUnquote builds a byte buffer and string(s) copies it; charge both before either is made.
-		if err := budgets[0].draw(int64(2 * len(v))); err != nil {
-			return "", err
-		}
+// requestArray reads an array of the canonical request into its elements, slices of v as requestMembers's values are.
+func requestArray(v jsontext.Value) ([]jsontext.Value, error) {
+	if isNull(v) {
+		return nil, nil
 	}
+	dec := newDecoder(v)
+	if dec.PeekKind() != '[' {
+		return nil, shapeError("expected an array")
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, shapeError("expected an array")
+	}
+	var out []jsontext.Value
+	for dec.PeekKind() != ']' {
+		value, err := dec.ReadValue()
+		if err != nil {
+			return nil, shapeError("expected an array")
+		}
+		out = append(out, slices.Clip(value))
+	}
+	if _, err := dec.ReadToken(); err != nil || dec.PeekKind() != 0 {
+		return nil, shapeError("expected an array")
+	}
+	return out, nil
+}
+
+func requestString(v jsontext.Value) (string, error) {
 	s, err := jsontext.AppendUnquote(nil, v)
 	if err != nil {
 		return "", shapeError("expected a string")
@@ -59,40 +106,63 @@ func requestString(v jsontext.Value, budgets ...*budget) (string, error) {
 }
 
 // jsonValue only accepts structures built here from validated JSON values.
-func jsonValue(v any) jsontext.Value { return jsonValueWithin(v, nil) }
+func jsonValue(v any) jsontext.Value {
+	b, err := jsonx.MarshalCanonical(v)
+	if err != nil {
+		panic(fmt.Sprintf("protocol: invalid constructed JSON: %v", err))
+	}
+	return b
+}
 
 // requestToChat adapts new-api's claude_messages/to_oai_chat_req.go and
 // oai_responses/to_oai_chat_req.go (relaykit/relayconvert/internal, 603a5ce).
 // The canonical model and Prepare's Chat rewrite own validation and identity/cap
 // policy; unlike the reference, unsupported members are never silently discarded.
 func requestToChat(f Format, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
-	chat, err := nativeChatRequest(f, body, t, w, b)
+	chat, err := nativeChatWithin(f, body, t, w, true, b)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkNativeChat(chat, b); err != nil {
+	out, err := rewriteWithin(&Request{Format: Chat}, chat, t, w, b)
+	b.give(rounded(int64(cap(chat)))) // the canonical request is rewritten into out and no longer needed
+	return out, err
+}
+
+// nativeChatWithin is nativeChatRequest, checked by checkNativeChat when check is set, under a reservation of
+// nativeRequestCost drawn before it starts. The readers build maps and re-encode them through encoding/json, whose
+// allocations cannot be drawn one by one, so the stage reserves the bound TestPrepareAllocatesOnlyWhatItDrew holds it
+// to; of the reservation only the canonical request it returns stays drawn.
+func nativeChatWithin(f Format, body []byte, t Target, w Rewrites, check bool, b *budget) ([]byte, error) {
+	reserve := nativeRequestCost(body)
+	for _, item := range w.History {
+		reserve += nativeRequestCost(item)
+	}
+	if err := b.draw(reserve); err != nil {
 		return nil, err
 	}
-	return rewriteWithin(&Request{Format: Chat}, chat, t, w, b)
+	chat, err := nativeChatRequest(f, body, t, w)
+	if err == nil && check {
+		err = checkNativeChat(chat)
+	}
+	if err != nil {
+		b.give(reserve)
+		return nil, err
+	}
+	b.give(reserve - min(reserve, rounded(int64(cap(chat)))))
+	return chat, nil
 }
 
 // nativeChatRequest writes a Messages or Responses request as the canonical Chat-shaped request, before anything the
 // target adds: the model's name, the identifiers' derived values and the endpoint's settings. A conversion to the other
 // of the two formats reads it (convertNative) instead of the endpoint's rewrite.
-//
-//nolint:cyclop,gocognit // one branch per source format and member, in the order the conversion reads them
-func nativeChatRequest(f Format, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
+func nativeChatRequest(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
 	// Dispatch on JSON values, independent of escaped enum spelling or whitespace
 	// in empty arrays. Same-format rewrites still preserve the original bytes.
-	source := len(body)
-	if err := b.draw(rounded(int64(source))); err != nil {
-		return nil, err
-	}
 	body, err := jsonx.MarshalCanonical(jsontext.Value(body))
 	if err != nil {
 		return nil, shapeError("invalid request JSON")
 	}
-	src, err := membersWithin(body, b)
+	src, err := requestMembers(body)
 	if err != nil {
 		return nil, err
 	}
@@ -105,85 +175,66 @@ func nativeChatRequest(f Format, body []byte, t Target, w Rewrites, b *budget) (
 	}
 	var messages []requestObject
 	if f == Messages {
-		messages, err = messagesRequestToChat(src, dst, t.MaxOutput, b)
+		messages, err = messagesRequestToChat(src, dst, t.MaxOutput)
 	} else {
-		messages, err = responsesRequestToChat(src, dst, w, b)
+		messages, err = responsesRequestToChat(src, dst, w)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := nativeTools(src.take("tools"), f, dst, b); err != nil {
+	if err := nativeTools(src.take("tools"), f, dst); err != nil {
 		return nil, err
 	}
-	if err := nativeChoice(src.take("tool_choice"), f, dst, b); err != nil {
+	if err := nativeChoice(src.take("tool_choice"), f, dst); err != nil {
 		return nil, err
 	}
 	if err := src.remainingDefaults(); err != nil {
 		return nil, err
 	}
-	encoded := jsonValueWithin(messages, b)
-	if b != nil && b.err != nil {
-		return nil, b.err
-	}
-	dst["messages"] = encoded
-	chat := jsonValueWithin(dst, b)
-	if b != nil && b.err != nil {
-		return nil, b.err
-	}
-	b.give(rounded(int64(source))) // the canonical source is copied into chat and no longer needed
-	if !b.fast() {
-		b.give(encodedSize(messages) + structureMemory(messages)) // and so is the messages array chat now holds a copy of
-	}
-	if b != nil && b.err != nil {
-		return nil, b.err
-	}
-	return chat, nil
+	dst["messages"] = jsonValue(messages)
+	return jsonValue(dst), nil
 }
 
 // checkNativeChat applies the shared Chat invariants to a constructed native request.
-func checkNativeChat(chat []byte, b *budget) error {
-	before := b.held
-	c, err := decodeCanonWithin(chat, b)
+func checkNativeChat(chat []byte) error {
+	c, err := decodeCanon(chat)
 	if err != nil {
-		b.give(b.held - before)
 		return err
 	}
 	if err := c.checkShape(); err != nil {
-		b.give(b.held - before)
 		return err
 	}
-	err = c.checkCalls()
-	b.give(b.held - before) // the tree is read only to check the request
-	return err
+	return c.checkCalls(nil) // under nativeChatWithin's reservation
 }
 
-// nativeRequestCost is what a request converted to Chat may hold at once: the consumed input maps, the canonical Chat
-// encoding they are written into, and the structures validating it, all alive together; history sums one per item
-// (PrepareCost).
+// nativeRequestCost is what a request converted to Chat allocates, garbage included: the consumed input maps, the
+// canonical Chat encoding they are written into, and the structures validating it; history sums one per item
+// (nativeChatWithin). A member of an object the readers do not know costs about 610 bytes beside its bytes, measured
+// 2026-11-01 for 20,000 of them; TestPrepareAllocatesOnlyWhatItDrew holds every constant to the worst shapes.
 func nativeRequestCost(body []byte) int64 {
 	return 12*int64(len(body)) + 3072*int64(bytes.Count(body, []byte("{"))+bytes.Count(body, []byte("null"))) +
-		512*int64(bytes.Count(body, []byte(":")))
+		768*int64(bytes.Count(body, []byte(":")))
 }
 
-func nativeTools(v jsontext.Value, f Format, dst requestObject, b *budget) error {
-	tools, err := arrayWithin(v, b)
+func nativeTools(v jsontext.Value, f Format, dst requestObject) error {
+	tools, err := requestArray(v)
 	if err != nil || isNull(v) {
 		return err
 	}
 	out := make([]requestObject, 0, len(tools))
 	for _, raw := range tools {
-		tool, err := nativeTool(raw, f, b)
+		tool, err := nativeTool(raw, f)
 		if err != nil {
 			return err
 		}
 		out = append(out, tool)
 	}
-	dst["tools"] = jsonValueWithin(out, b)
+	dst["tools"] = jsonValue(out)
 	return nil
 }
 
-func nativeTool(raw jsontext.Value, f Format, b *budget) (requestObject, error) {
-	o, err := membersWithin(raw, b)
+func nativeTool(raw jsontext.Value, f Format) (requestObject, error) {
+	o, err := requestMembers(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +254,7 @@ func nativeTool(raw jsontext.Value, f Format, b *budget) (requestObject, error) 
 	if f == Responses && isNull(fn["strict"]) {
 		fn["strict"] = jsontext.Value("false") // Chat cannot promise Responses' implicit schema normalization.
 	}
-	tool := requestObject{"type": jsontext.Value(`"function"`), "function": jsonValueWithin(fn, b)}
+	tool := requestObject{"type": jsontext.Value(`"function"`), "function": jsonValue(fn)}
 	o.move(tool, "cache_control", "cache_control")
 	return tool, o.remaining()
 }
@@ -222,7 +273,7 @@ func inverseName(names map[string]string, value string) string {
 	return found
 }
 
-func nativeChoice(v jsontext.Value, f Format, dst requestObject, b *budget) error {
+func nativeChoice(v jsontext.Value, f Format, dst requestObject) error {
 	if isNull(v) {
 		return nil
 	}
@@ -230,20 +281,20 @@ func nativeChoice(v jsontext.Value, f Format, dst requestObject, b *budget) erro
 		dst["tool_choice"] = v
 		return nil
 	}
-	o, err := membersWithin(v, b)
+	o, err := requestMembers(v)
 	if err != nil {
 		return err
 	}
-	kind, err := requestString(o.take("type"), b)
+	kind, err := requestString(o.take("type"))
 	if err != nil {
 		return err
 	}
 	if f == Messages {
-		if err := messagesParallel(o, dst, b); err != nil {
+		if err := messagesParallel(o, dst); err != nil {
 			return err
 		}
 	}
-	choice, err := nativeChoiceOf(o, f, kind, b)
+	choice, err := nativeChoiceOf(o, f, kind)
 	if err != nil {
 		return err
 	}
@@ -252,34 +303,31 @@ func nativeChoice(v jsontext.Value, f Format, dst requestObject, b *budget) erro
 }
 
 // messagesParallel turns Anthropic's disable_parallel_tool_use into Chat's opposite member.
-func messagesParallel(o, dst requestObject, b *budget) error {
+func messagesParallel(o, dst requestObject) error {
 	parallel := o.take("disable_parallel_tool_use")
 	if isNull(parallel) {
 		return nil
 	}
 	var disabled bool
-	if err := unmarshalWithin(parallel, &disabled, b); err != nil {
-		if errors.Is(err, ErrMemory) {
-			return err
-		}
+	if err := jsonx.Unmarshal(parallel, &disabled); err != nil {
 		return shapeError("disable_parallel_tool_use must be boolean")
 	}
-	dst["parallel_tool_calls"] = jsonValueWithin(!disabled, b)
+	dst["parallel_tool_calls"] = jsonValue(!disabled)
 	return nil
 }
 
 // nativeChoiceOf is a tool choice in Chat's terms: one of the three scalar choices, or the function it names.
-func nativeChoiceOf(o requestObject, f Format, kind string, b *budget) (jsontext.Value, error) {
+func nativeChoiceOf(o requestObject, f Format, kind string) (jsontext.Value, error) {
 	if f == Messages && inverseName(choiceNames, kind) != "" {
-		return jsonValueWithin(inverseName(choiceNames, kind), b), nil
+		return jsonValue(inverseName(choiceNames, kind)), nil
 	}
 	if f == Messages && kind == "tool" || f == Responses && kind == "function" {
 		name := o.take("name")
-		if _, err := requestString(name, b); err != nil {
+		if _, err := requestString(name); err != nil {
 			return nil, err
 		}
 		named := requestObject{"name": name}
-		return jsonValueWithin(requestObject{"type": jsonValueWithin("function", b), "function": jsonValueWithin(named, b)}, b), nil
+		return jsonValue(requestObject{"type": jsonValue("function"), "function": jsonValue(named)}), nil
 	}
 	return nil, &NotSupported{Reason: "tool_choice has no Chat counterpart"}
 }

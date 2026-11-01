@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext" //nolint:depguard // the request tree is decoded token by token, so each allocation can be charged first
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -52,29 +53,23 @@ func (b *budget) give(n int64) {
 // fast reports whether nothing is drawn: a nil budget, or the shared noBudget of a Prepare outside a node.
 func (b *budget) fast() bool { return b == nil || b.m == nil }
 
-// checkBody refuses a request whose body alone cannot fit, before a reader or writer allocates its output.
-func (b *budget) checkBody(n int) error {
-	if !b.fast() && int64(n) > b.m.left.Load() {
-		b.err = ErrMemory
-		return ErrMemory
-	}
-	return nil
-}
-
 // What a decoder of its own holds beyond the values it reads: jsontext's decoder and the bytes.Buffer it reads from,
 // and the scratch a member name or an escaped string is unquoted into. Measured 2026-11-01 at 1.2 KiB for a decoder
 // over a 1 MiB body; the allowance leaves room for the runtime's own buffers.
 const decoderMemory = 4 << 10
 
-// mapEntryMemory is what an entry of a map with a string key and a 24-byte value takes, buckets and load factor
-// included: each entry is charged before it is inserted. Measured 2026-11-01: 100,000 unknown members of a request
-// take 48.5 MiB, 509 bytes each including their keys; an entry of a decoded map is far smaller, and this covers the
-// bucket it is inserted into as well.
-const mapEntryMemory = 128
+// mapEntryMemory is what an entry of a map with a string key and a value of up to 24 bytes takes, its share of every
+// table the map grows through included; the key's own bytes are charged beside it. Measured 2026-11-01 at about 165
+// bytes for 20,000 members of a request the decoder does not know; TestPrepareAllocatesOnlyWhatItDrew holds it.
+const mapEntryMemory = 192
 
-// subDecoderMemory is what a decoder over one value of the body, a message's content or an object of a conversion, holds:
-// its state and the buffer it reads from.
-const subDecoderMemory = 256
+// mapMemory is what a map takes before its first entry is charged: its header and the first group of eight slots,
+// which the first insertion allocates.
+const mapMemory = 512
+
+// subDecoderMemory is what a decoder over one value of the body, a message's content, holds: its state and the buffer
+// it reads from, about 400 bytes measured 2026-11-01 over 10,000 messages of one part each.
+const subDecoderMemory = 512
 
 // invaliderr is a body the decoder cannot read, in the words bodyFault gives the client.
 func invaliderr(err error) error {
@@ -93,10 +88,7 @@ func decodeCanonWithin(body []byte, b *budget) (*canon, error) {
 	if err := b.draw(decoderMemory); err != nil {
 		return nil, err
 	}
-	if err := jsonx.Validate(body); err != nil {
-		return nil, invaliderr(err)
-	}
-	d := &decoder{dec: jsontext.NewDecoder(bytes.NewBuffer(body)), b: b}
+	d := &decoder{dec: newDecoder(body), b: b}
 	c := &canon{}
 	if err := d.top(c); err != nil {
 		return nil, d.fault(err)
@@ -113,6 +105,13 @@ func decodeCanonWithin(body []byte, b *budget) (*canon, error) {
 		return nil, b.err
 	}
 	return c, nil
+}
+
+// newDecoder reads v, a value of a body Inspect accepted, in place. Inspect has checked its names for duplicates, so
+// the decoder does not track them again: jsontext records every name of an object past 64 of them and every level of
+// nesting for that, which no draw sees.
+func newDecoder(v []byte) *jsontext.Decoder {
+	return jsontext.NewDecoder(bytes.NewBuffer(v), jsontext.AllowDuplicateNames(true))
 }
 
 // decoder reads one JSON value into the request tree, charging b for every array it grows, every map entry it adds and
@@ -359,13 +358,25 @@ func growBytes(b []byte, n int, budget *budget) ([]byte, error) {
 	return out, nil
 }
 
-// rounded rounds an allocation up to the granularity of the runtime's size classes, so that what is charged covers
-// what the runtime allocates for the request.
+// rounded is what the runtime allocates for n bytes, so that what is charged covers it: the smallest of its size classes
+// that holds n (runtime/sizeclasses.go), and whole 8 KiB pages past the largest. TestRoundedIsWhatTheRuntimeAllocates
+// holds the table to the runtime the binary is built with.
 func rounded(n int64) int64 {
 	if n <= 0 {
 		return 0
 	}
-	return (n + 15) &^ 15
+	if n > sizeClasses[len(sizeClasses)-1] {
+		return (n + 8191) &^ 8191
+	}
+	i, _ := slices.BinarySearch(sizeClasses[:], n)
+	return sizeClasses[i]
+}
+
+var sizeClasses = [...]int64{
+	8, 16, 24, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 288, 320, 352, 384, 416, 448, 480,
+	512, 576, 640, 704, 768, 896, 1024, 1152, 1280, 1408, 1536, 1792, 2048, 2304, 2688, 3072, 3200, 3456, 4096, 4864,
+	5376, 6144, 6528, 6784, 6912, 8192, 9472, 9728, 10240, 10880, 12288, 13568, 14336, 16384, 18432, 19072, 20480,
+	21760, 24576, 27264, 28672, 32768,
 }
 
 // unknown adds a member the tree does not name to its unknown map, charging the entry first.
@@ -389,3 +400,11 @@ func (d *decoder) unknown(m *map[string]jsontext.Value) error {
 
 // top reads the Chat request's members.
 //
+
+// unmarshalWithin decodes a small value of a request, drawing its allocation from b first.
+func unmarshalWithin(v []byte, dst any, b *budget) error {
+	if err := b.draw(int64(len(v)) + 512); err != nil {
+		return err
+	}
+	return jsonx.Unmarshal(v, dst)
+}

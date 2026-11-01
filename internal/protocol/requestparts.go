@@ -20,24 +20,21 @@ var (
 	responsesRefusalHead = `{"type":"` + contentNames[Responses]["refusal"] + `","refusal":`
 )
 
-func nativeContent(v jsontext.Value, f Format, role string, b *budget) (jsontext.Value, error) {
+func nativeContent(v jsontext.Value, f Format, role string) (jsontext.Value, error) {
 	if v.Kind() == '"' || isNull(v) {
 		return v, nil
 	}
-	parts, err := arrayWithin(v, b)
+	parts, err := requestArray(v)
 	if err != nil {
-		return nil, err
-	}
-	if err := b.draw(rounded(int64(len(parts)) * 128)); err != nil {
 		return nil, err
 	}
 	out := make([]requestObject, 0, len(parts))
 	for _, raw := range parts {
-		o, err := membersWithin(raw, b)
+		o, err := requestMembers(raw)
 		if err != nil {
 			return nil, err
 		}
-		part, err := nativePart(o, string(o.take("type")), f, role, b)
+		part, err := nativePart(o, string(o.take("type")), f, role)
 		if err != nil {
 			return nil, err
 		}
@@ -46,15 +43,15 @@ func nativeContent(v jsontext.Value, f Format, role string, b *budget) (jsontext
 		}
 		out = append(out, part)
 	}
-	return jsonValueWithin(out, b), nil
+	return jsonValue(out), nil
 }
 
-func nativePart(o requestObject, quotedKind string, f Format, role string, b *budget) (requestObject, error) {
-	chatKind, err := nativePartKind(o, quotedKind, f, role, b)
+func nativePart(o requestObject, quotedKind string, f Format, role string) (requestObject, error) {
+	chatKind, err := nativePartKind(o, quotedKind, f, role)
 	if err != nil {
 		return nil, err
 	}
-	part := requestObject{"type": jsonValueWithin(chatKind, b)}
+	part := requestObject{"type": jsonValue(chatKind)}
 	switch chatKind {
 	case "text":
 		part["text"] = o.take("text")
@@ -64,17 +61,17 @@ func nativePart(o requestObject, quotedKind string, f Format, role string, b *bu
 		if role != "user" {
 			return nil, &NotSupported{Reason: "an image outside user content"}
 		}
-		url, err := nativeImage(o, f, b)
+		url, err := nativeImage(o, f)
 		if err != nil {
 			return nil, err
 		}
-		part["image_url"] = jsonValueWithin(url, b)
+		part["image_url"] = jsonValue(url)
 	case "file":
-		file, err := nativeFile(o, f, b)
+		file, err := nativeFile(o, f)
 		if err != nil {
 			return nil, err
 		}
-		part["file"] = jsonValueWithin(file, b)
+		part["file"] = jsonValue(file)
 	default:
 		return nil, &NotSupported{Reason: "content part has no Chat counterpart"}
 	}
@@ -85,8 +82,8 @@ func nativePart(o requestObject, quotedKind string, f Format, role string, b *bu
 	return part, nil
 }
 
-func nativePartKind(o requestObject, quotedKind string, f Format, role string, b *budget) (string, error) {
-	kind, err := requestString(jsontext.Value(quotedKind), b)
+func nativePartKind(o requestObject, quotedKind string, f Format, role string) (string, error) {
+	kind, err := requestString(jsontext.Value(quotedKind))
 	if err != nil {
 		return "", err
 	}
@@ -108,7 +105,7 @@ func nativePartKind(o requestObject, quotedKind string, f Format, role string, b
 	return chatKind, nil
 }
 
-func nativeFile(o requestObject, f Format, b *budget) (requestObject, error) {
+func nativeFile(o requestObject, f Format) (requestObject, error) {
 	file := requestObject{}
 	if f == Responses {
 		if err := fileDetail(o); err != nil {
@@ -125,21 +122,18 @@ func nativeFile(o requestObject, f Format, b *budget) (requestObject, error) {
 		}
 		return file, nil
 	}
-	source, err := membersWithin(o.take("source"), b)
+	source, err := requestMembers(o.take("source"))
 	if err != nil {
 		return nil, err
 	}
 	if string(source.take("type")) != `"base64"` || string(source.take("media_type")) != `"application/pdf"` {
 		return nil, &NotSupported{Reason: "only inline PDF documents convert to Chat"}
 	}
-	data, err := requestString(source.take("data"), b)
+	data, err := requestString(source.take("data"))
 	if err != nil {
 		return nil, err
 	}
-	if err := b.draw(rounded(int64(len(data) + 32))); err != nil {
-		return nil, err
-	}
-	file["file_data"] = jsonValueWithin("data:application/pdf;base64,"+data, b)
+	file["file_data"] = jsonValue("data:application/pdf;base64," + data)
 	// Anthropic's title is the document's name, which Chat calls the file's name.
 	o.move(file, "title", "filename")
 	return file, source.remaining()
@@ -160,39 +154,36 @@ func fileDetail(o requestObject) error {
 	}
 }
 
-func nativeImage(o requestObject, f Format, b *budget) (requestObject, error) {
+func nativeImage(o requestObject, f Format) (requestObject, error) {
 	image := requestObject{}
 	if f == Responses {
 		o.move(image, "image_url", "url")
 		o.move(image, "detail", "detail")
-		if _, err := requestString(image["url"], b); err != nil {
+		if _, err := requestString(image["url"]); err != nil {
 			return nil, err
 		}
 		return image, nil
 	}
-	source, err := membersWithin(o.take("source"), b)
+	source, err := requestMembers(o.take("source"))
 	if err != nil {
 		return nil, err
 	}
 	switch string(source.take("type")) {
 	case `"url"`:
 		source.move(image, "url", "url")
-		if _, err := requestString(image["url"], b); err != nil {
+		if _, err := requestString(image["url"]); err != nil {
 			return nil, err
 		}
 	case `"base64"`:
-		media, err := requestString(source.take("media_type"), b)
+		media, err := requestString(source.take("media_type"))
 		if err != nil {
 			return nil, err
 		}
-		data, err := requestString(source.take("data"), b)
+		data, err := requestString(source.take("data"))
 		if err != nil {
 			return nil, err
 		}
-		if err := b.draw(rounded(int64(len(media) + len(data) + 32))); err != nil {
-			return nil, err
-		}
-		image["url"] = jsonValueWithin("data:"+media+";base64,"+data, b)
+		image["url"] = jsonValue("data:" + media + ";base64," + data)
 	default:
 		return nil, &NotSupported{Reason: "image source has no Chat counterpart"}
 	}

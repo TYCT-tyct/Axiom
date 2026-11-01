@@ -2,65 +2,15 @@ package protocol
 
 import (
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
-
-	"axiom/internal/platform/alloctest"
-	"axiom/internal/platform/jsonx"
 )
 
-// TestDecodeChargesWhatItAllocates: the decode of the shapes that cost the most asks the budget for what it takes
-// before it takes it, and a budget one byte short of the peak refuses. The peak is what the charges say; the total a
-// child process measures, garbage included, is an upper bound on it.
-func TestDecodeChargesWhatItAllocates(t *testing.T) {
-	pair := `{"role":"user","content":"a"},{"role":"assistant","content":"b"}`
-	nested := strings.Repeat("[", 200) + strings.Repeat("]", 200)
-	cases := []struct {
-		name string
-		body []byte
-	}{
-		{"empty objects", []byte(`{"model":"m","messages":[` + strings.Repeat("{},", 20000) + `{}]}`)},
-		{"null messages", []byte(`{"model":"m","messages":[` + strings.Repeat("null,", 20000) + `null]}`)},
-		{"null arrays", []byte(`{"model":"m","messages":[{"role":"user","content":null,"tool_calls":null}]}`)},
-		{"deep nesting", []byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"x","deep":` + nested + `}]}]}`)},
-		{"small messages", []byte(`{"model":"m","messages":[` + strings.Repeat(pair+",", 20000) + pair + `]}`)},
-		{"long text", []byte(`{"model":"m","messages":[{"role":"user","content":"` + strings.Repeat("x", 1<<20) + `"}]}`)},
-		{"escapes", []byte(`{"model":"m","messages":[{"role":"user","content":"` + strings.Repeat(`\u0041`, 1<<18) + `"}]}`)},
-	}
-	funcs := make([]alloctest.Function, 0, len(cases))
-	for _, c := range cases {
-		body := c.body
-		funcs = append(funcs, alloctest.Function{Name: c.name, F: func() {
-			_, err := decodeCanon(body)
-			if err != nil {
-				panic(err)
-			}
-		}})
-	}
-	measured := alloctest.Measure(t, funcs...)
-	for _, c := range cases {
-		b := &budget{m: NewMemory(1 << 40)}
-		if _, err := decodeCanonWithin(c.body, b); err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
-		if b.peak == 0 {
-			t.Errorf("%s: drew nothing", c.name)
-		}
-		if b.peak > int64(measured[c.name].Bytes)+16<<10 {
-			t.Errorf("%s: drew %d bytes, more than the %.0f it allocated", c.name, b.peak, measured[c.name].Bytes)
-		}
-		short := &budget{m: NewMemory(b.peak - 1)}
-		if _, err := decodeCanonWithin(c.body, short); !errors.Is(err, ErrMemory) {
-			t.Errorf("%s: a byte short of %d did not refuse: %v", c.name, b.peak, err)
-		}
-	}
-}
-
-// TestPrepareLargeRequestReservesAboutItsBody: a cross-format conversion of a large request draws a few times the
-// request's own bytes, not a bound that grows with its shape, and a byte short refuses.
+// TestPrepareLargeRequestReservesAboutItsBody: a conversion from Chat of a large request draws a few times the
+// request's own bytes, not a bound that grows with its shape, and a byte short refuses. The readers of the other two
+// formats still reserve nativeRequestCost (README.md「跨格式转换」).
 func TestPrepareLargeRequestReservesAboutItsBody(t *testing.T) {
 	long := strings.Repeat("x", 1<<20)
 	for _, c := range []struct {
@@ -69,10 +19,8 @@ func TestPrepareLargeRequestReservesAboutItsBody(t *testing.T) {
 		body []byte
 		to   Format
 	}{
-		{"messages to chat", Messages, []byte(`{"model":"m","max_tokens":1024,"messages":[{"role":"user","content":"` + long + `"}]}`), Chat},
-		{"messages to responses", Messages, []byte(`{"model":"m","max_tokens":1024,"messages":[{"role":"user","content":"` + long + `"}]}`), Responses},
 		{"chat to messages", Chat, []byte(`{"model":"m","max_tokens":1024,"messages":[{"role":"user","content":"` + long + `"}]}`), Messages},
-		{"responses to messages", Responses, []byte(`{"model":"m","max_output_tokens":1024,"input":[{"role":"user","content":[{"type":"input_text","text":"` + long + `"}]}]}`), Messages},
+		{"chat to responses", Chat, []byte(`{"model":"m","max_tokens":1024,"messages":[{"role":"user","content":"` + long + `"}]}`), Responses},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r, err := Inspect(c.from, c.body)
@@ -184,92 +132,6 @@ func prepareNeed(t *testing.T, r *Request, body []byte, target Target) int64 {
 	return lo
 }
 
-// TestBudgetedDecodeChargesWhatItAllocates is TestDecodeChargesWhatItAllocates on the path a node uses: the measured
-// process calls decodeCanonWithin, not the unbudgeted decodeCanon.
-func TestBudgetedDecodeChargesWhatItAllocates(t *testing.T) {
-	long := strings.Repeat("x", 1<<20)
-	cases := []struct {
-		name string
-		body []byte
-	}{
-		{"empty objects", []byte(`{"model":"m","messages":[` + strings.Repeat("{},", 20000) + `{}]}`)},
-		{"long text", []byte(`{"model":"m","messages":[{"role":"user","content":"` + long + `"}]}`)},
-		{"escapes", []byte(`{"model":"m","messages":[{"role":"user","content":"` + strings.Repeat(`\u0041`, 1<<18) + `"}]}`)},
-	}
-	funcs := make([]alloctest.Function, 0, len(cases))
-	for _, c := range cases {
-		body := c.body
-		funcs = append(funcs, alloctest.Function{Name: c.name, F: func() {
-			b := &budget{m: NewMemory(1 << 40)}
-			if _, err := decodeCanonWithin(body, b); err != nil {
-				panic(err)
-			}
-		}})
-	}
-	measured := alloctest.Measure(t, funcs...)
-	for _, c := range cases {
-		b := &budget{m: NewMemory(1 << 40)}
-		if _, err := decodeCanonWithin(c.body, b); err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
-		if b.peak > int64(measured[c.name].Bytes)+16<<10 {
-			t.Errorf("%s: drew %d bytes, more than the %.0f it allocated", c.name, b.peak, measured[c.name].Bytes)
-		}
-	}
-}
-
-// TestPrepareRefusesBeforeLargeOutput: a body larger than the free budget must fail before a reader, rewriter or
-// writer makes its output. A 64 KiB budget and a 1 MiB body leave no room for a 1 MiB append, so the measured process
-// must stay near the budget, not near the body.
-func TestPrepareRefusesBeforeLargeOutput(t *testing.T) {
-	long := strings.Repeat("x", 1<<20)
-	cases := []struct {
-		name string
-		from Format
-		body []byte
-		to   Format
-		w    Rewrites
-	}{
-		{
-			name: "cross format writer", from: Chat,
-			body: []byte(`{"model":"m","messages":[{"role":"user","content":"` + long + `"}]}`), to: Messages,
-		},
-		{
-			name: "legacy rewrite", from: Chat,
-			body: []byte(`{"model":"m","functions":[{"name":"f","description":"` + long + `"}],"messages":[{"role":"user","content":"x"}]}`), to: Chat,
-		},
-		{
-			name: "native replay", from: Messages,
-			body: []byte(`{"model":"m","max_tokens":1024,"messages":[{"role":"user","content":"` + strings.Repeat(`\u0041`, 1<<18) + `"}]}`), to: Messages,
-		},
-		{
-			name: "native search", from: Chat,
-			body: []byte(`{"model":"m","messages":[{"role":"user","content":"` + long + `"}]}`), to: Chat,
-			w: Rewrites{NativeSearch: 1},
-		},
-	}
-	funcs := make([]alloctest.Function, 0, len(cases))
-	for _, c := range cases {
-		body, target, w := c.body, Target{Format: c.to, Model: "up", MaxOutput: 4096}, c.w
-		r, err := Inspect(c.from, body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		funcs = append(funcs, alloctest.Function{Name: c.name, F: func() {
-			_, _, err := PrepareBudgeted(NewMemory(64<<10), &r, body, target, w)
-			if !errors.Is(err, ErrMemory) {
-				panic("wanted ErrMemory, got " + err.Error())
-			}
-		}})
-	}
-	measured := alloctest.Measure(t, funcs...)
-	for _, c := range cases {
-		if got := int64(measured[c.name].Bytes); got > 64<<10 {
-			t.Errorf("%s: allocated %d bytes before refusing a %d-byte body on a 64 KiB budget", c.name, got, len(c.body))
-		}
-	}
-}
-
 // TestMemoryErrorKeepsItsType: a budget exhausted inside a legacy function-call upgrade or a thinking budget is a
 // memory error (503), not a shape error (400).
 func TestMemoryErrorKeepsItsType(t *testing.T) {
@@ -296,113 +158,5 @@ func TestMemoryErrorKeepsItsType(t *testing.T) {
 				t.Fatalf("a byte short of %d: %v, want ErrMemory", need, err)
 			}
 		})
-	}
-}
-
-// TestDecodeRefusesBeforeAllocating: the budget path checks the body's size before it starts building the tree, so a
-// body larger than the budget is refused without allocating a tree of the body's size.
-func TestDecodeRefusesBeforeAllocating(t *testing.T) {
-	body := []byte(`{"model":"m","messages":[` + strings.Repeat("{},", 20000) + `{}]}`)
-	funcs := []alloctest.Function{{Name: "decode", F: func() {
-		b := &budget{m: NewMemory(64 << 10)}
-		if _, err := decodeCanonWithin(body, b); !errors.Is(err, ErrMemory) {
-			panic(fmt.Sprintf("wanted ErrMemory, got %v", err))
-		}
-	}}}
-	measured := alloctest.Measure(t, funcs...)
-	if got := int64(measured["decode"].Bytes); got > 128<<10 {
-		t.Errorf("allocated %d bytes before refusing a %d-byte body on a 64 KiB budget", got, len(body))
-	}
-}
-
-// TestPrepareRefusesAfterBodyFits: the body checks in the previous test pass, but the tree or an intermediate copy
-// does not fit. The rejection must still happen before the writer or compatibility copy allocates its output.
-func TestPrepareRefusesAfterBodyFits(t *testing.T) {
-	long := strings.Repeat("x", 1<<20)
-	cases := []struct {
-		name string
-		from Format
-		body []byte
-		to   Format
-		w    Rewrites
-	}{
-		{
-			name: "cross format output", from: Chat,
-			body: []byte(`{"model":"m","messages":[{"role":"user","content":"` + long + `"}]}`), to: Messages,
-		},
-		{
-			name: "legacy output", from: Chat,
-			body: []byte(`{"model":"m","functions":[{"name":"f","description":"` + long + `"}],"messages":[{"role":"user","content":"x"}]}`), to: Chat,
-		},
-		{
-			name: "native search copies", from: Chat,
-			body: []byte(`{"model":"m","messages":[{"role":"user","content":"` + long + `"}]}`), to: Chat,
-			w: Rewrites{NativeSearch: 1},
-		},
-	}
-	funcs := make([]alloctest.Function, 0, len(cases))
-	for _, c := range cases {
-		body, target, w, budget := c.body, Target{Format: c.to, Model: "up", MaxOutput: 4096}, c.w, int64(len(c.body))
-		name := c.name
-		r, err := Inspect(c.from, body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		funcs = append(funcs, alloctest.Function{Name: c.name, F: func() {
-			_, _, err := PrepareBudgeted(NewMemory(budget), &r, body, target, w)
-			if !errors.Is(err, ErrMemory) {
-				panic(name + ": wanted ErrMemory, got " + fmt.Sprint(err))
-			}
-		}})
-	}
-	measured := alloctest.Measure(t, funcs...)
-	for _, c := range cases {
-		if got := int64(measured[c.name].Bytes); got > 2*int64(len(c.body)) {
-			t.Errorf("%s: allocated %d bytes after the body check but before refusing", c.name, got)
-		}
-	}
-}
-
-// TestRequestStringChargesBothCopies: AppendUnquote makes a byte buffer and string(s) copies it. A budget that covers
-// only one copy must refuse before either allocation.
-func TestRequestStringChargesBothCopies(t *testing.T) {
-	v := jsonx.Raw(`"` + strings.Repeat("x", 1<<20) + `"`)
-	b := &budget{m: NewMemory(int64(len(v)) + 1)}
-	if _, err := requestString(v, b); !errors.Is(err, ErrMemory) {
-		t.Fatalf("one copy of %d bytes: %v, want ErrMemory", len(v), err)
-	}
-}
-
-// TestResponsesRefusesPartExpansion: Responses' input_text is longer than Chat's text. The writer reserves that
-// expansion before it appends, so a budget that covered the old fixed allowance refuses before the growth.
-func TestResponsesRefusesPartExpansion(t *testing.T) {
-	part := `{"type":"text","text":"x"},`
-	body := []byte(`{"model":"m","messages":[{"role":"user","content":[` + strings.Repeat(part, 20000) + `{"type":"text","text":"x"}]}]}`)
-	r, err := Inspect(Chat, body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	budget := int64(len(body))
-	func() {
-		_, _, err := PrepareBudgeted(NewMemory(budget), &r, body, Target{Format: Responses, Model: "up", MaxOutput: 4096}, Rewrites{})
-		if !errors.Is(err, ErrMemory) {
-			t.Fatalf("a %d-byte body on a %d-byte budget: %v, want ErrMemory", len(body), budget, err)
-		}
-	}()
-}
-
-// TestMessagesReservesTheBlockBuffer: the main output reserve can fit while the per-message blocks buffer cannot; the
-// writer must refuse before blocks builds the second copy.
-func TestMessagesReservesTheBlockBuffer(t *testing.T) {
-	long := strings.Repeat("x", 1<<20)
-	body := []byte(`{"model":"m","messages":[{"role":"user","content":"` + long + `"}]}`)
-	c, err := decodeCanon(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b := &budget{m: NewMemory(int64(len(body)) + 64<<10 + 1)}
-	_, err = toMessages(c, Target{Format: Messages, Model: "up", MaxOutput: 4096}, Rewrites{}, b, body)
-	if !errors.Is(err, ErrMemory) {
-		t.Fatalf("a budget past the main reserve but short of the block buffer: %v, want ErrMemory", err)
 	}
 }

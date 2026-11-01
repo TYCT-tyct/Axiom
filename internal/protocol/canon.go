@@ -1,11 +1,11 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: strings are kept as written, never decoded and encoded again
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 
 	"axiom/internal/platform/jsonx"
 )
@@ -315,34 +315,33 @@ func mergeDetailsWithin(details []canonReasoningDetail, b *budget) ([]canonReaso
 				m.Format = d.Format
 			}
 		}
-		if err := text[i].addWithin(d.Text, b); err != nil {
+		text[i].b, summary[i].b = b, b
+		if err := text[i].add(d.Text); err != nil {
 			return nil, err
 		}
-		if err := summary[i].addWithin(d.Summary, b); err != nil {
+		if err := summary[i].add(d.Summary); err != nil {
 			return nil, err
 		}
 	}
 	for i := range out {
-		var err error
-		if out[i].Text, err = text[i].valueWithin(out[i].Text, b); err != nil {
-			return nil, err
-		}
-		if out[i].Summary, err = summary[i].valueWithin(out[i].Summary, b); err != nil {
-			return nil, err
-		}
+		out[i].Text, out[i].Summary = text[i].value(out[i].Text), summary[i].value(out[i].Summary)
+	}
+	if b != nil && b.err != nil {
+		return nil, b.err
 	}
 	return out, nil
 }
 
 // joined gathers the pieces of a JSON string: their contents, quotes off, one after another, as each escape lies
-// whole within its piece.
+// whole within its piece. Its growth is drawn from b; a draw that fails is left in b.err for the caller to check.
 type joined struct {
 	pieces int
 	only   jsontext.Value // the piece, while there is one
 	body   []byte
+	b      *budget
 }
 
-func (j *joined) addWithin(piece jsontext.Value, b *budget) error {
+func (j *joined) add(piece jsontext.Value) error {
 	switch {
 	case isNull(piece):
 		return nil
@@ -352,24 +351,25 @@ func (j *joined) addWithin(piece jsontext.Value, b *budget) error {
 	j.pieces++
 	j.only = piece
 	var err error
-	if j.body, err = growBytes(j.body, len(piece)-2, b); err != nil {
+	if j.body, err = growBytes(j.body, len(piece)-2, j.b); err != nil {
 		return err
 	}
 	j.body = append(j.body, piece[1:len(piece)-1]...)
 	return nil
 }
 
-func (j *joined) valueWithin(unset jsontext.Value, b *budget) (jsontext.Value, error) {
+// value is the joined string: the piece as written when there was one, unset as it was when none.
+func (j *joined) value(unset jsontext.Value) jsontext.Value {
 	switch j.pieces {
 	case 0:
-		return unset, nil
+		return unset
 	case 1:
-		return j.only, nil
+		return j.only
 	}
-	if err := b.draw(int64(len(j.body) + 2)); err != nil {
-		return nil, err
+	if j.b.draw(rounded(int64(len(j.body)+2))) != nil {
+		return nil
 	}
-	return slices.Concat([]byte{'"'}, j.body, []byte{'"'}), nil
+	return slices.Concat([]byte{'"'}, j.body, []byte{'"'})
 }
 
 // given is b when it was given, else a.
@@ -475,25 +475,56 @@ func isDefault(name string, v jsontext.Value) bool {
 	if v.Kind() == 'n' {
 		return true
 	}
-	s := string(v)
+	// v is compared in place, never copied: a value may be as long as the body.
 	switch name {
 	case "frequency_penalty", "presence_penalty":
-		f, err := strconv.ParseFloat(s, 64)
-		return err == nil && f == 0
+		return zeroNumber(v)
 	case "n":
-		return s == "1"
+		return string(v) == "1"
 	case "logprobs", "store":
-		return s == "false"
+		return string(v) == "false"
 	case "modalities":
-		if s == `["text"]` { // keep the common default allocation-free; equivalent spellings decode below
+		if string(v) == `["text"]` { // keep the common default allocation-free; equivalent spellings decode below
 			return true
 		}
-		var only [1]string // excess elements must be rejected without allocating an unbounded list
-		return jsonx.Unmarshal(v, &only) == nil && only[0] == "text"
+		return onlyText(v)
 	case "metadata", "logit_bias":
-		return strings.TrimSpace(strings.Trim(s, "{}")) == ""
+		return len(bytes.TrimSpace(bytes.Trim(v, "{}"))) == 0
 	}
 	return false
+}
+
+// onlyText reports whether v is an array of the one string "text", in any spelling. The element is unquoted into a small
+// array of its own, so neither a long element nor many of them allocate.
+func onlyText(v jsontext.Value) bool {
+	dec := newDecoder(v)
+	if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '[' {
+		return false
+	}
+	s, err := dec.ReadValue()
+	if err != nil || s.Kind() != '"' || len(s) > 32 {
+		return false
+	}
+	var buf [32]byte
+	text, err := jsontext.AppendUnquote(buf[:0], s)
+	return err == nil && string(text) == "text" && dec.PeekKind() == ']'
+}
+
+// zeroNumber reports whether v is a JSON number whose value is zero: every digit of its mantissa is 0, whatever its
+// sign and exponent. It is what ParseFloat(v) == 0 says of a valid number, without copying v to a string.
+func zeroNumber(v jsontext.Value) bool {
+	if v.Kind() != '0' {
+		return false
+	}
+	for _, c := range bytes.TrimPrefix(v, []byte("-")) {
+		switch {
+		case c == 'e' || c == 'E':
+			return true
+		case c != '0' && c != '.':
+			return false
+		}
+	}
+	return true
 }
 
 // numberIs reports whether v is absent, null or the number want.
