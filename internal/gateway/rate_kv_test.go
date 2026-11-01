@@ -136,16 +136,17 @@ func TestSharedCountMatchesTheProcessCount(t *testing.T) {
 // 「时钟」「不变量」).
 func TestRateKeysExpireWhateverTheClock(t *testing.T) {
 	t.Parallel()
-	server := kvtest.Own(t)
+	server := kvtest.New(t)
+	namespace := kvtest.Namespace()
 	clock := newFrozenClock()
-	h := node(t, server, kvtest.Namespace(), clock)
+	h := node(t, server, namespace, clock)
 	here := h.KV.Now()
 	offsets := []time.Duration{0, time.Hour, -time.Hour}
 	for _, ahead := range offsets {
 		clock.place(h.KV, here.Add(ahead))
 		h.countRate(t.Context(), rateSite, callDimension, "local", strconv.FormatInt(int64(ahead), 10))
 	}
-	keys, err := server.Do(t, t.Context(), server.Admin.B().Keys().Pattern("ax:*").Build())[0].AsStrSlice()
+	keys, err := server.Read(t, t.Context(), server.Admin.B().Keys().Pattern("ax:"+namespace+":*").Build())[0].AsStrSlice()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +158,7 @@ func TestRateKeysExpireWhateverTheClock(t *testing.T) {
 		if strings.Contains(key, "@") {
 			t.Errorf("%q carries an address", key)
 		}
-		ttl, err := server.Do(t, t.Context(), server.Admin.B().Pttl().Key(key).Build())[0].ToInt64()
+		ttl, err := server.TTL(t, t.Context(), key)
 		if err != nil || ttl <= 0 || ttl > (2*window).Milliseconds() {
 			t.Errorf("%q has %d ms to live (%v), want up to two windows", key, ttl, err)
 		}
@@ -169,15 +170,17 @@ func TestRateKeysExpireWhateverTheClock(t *testing.T) {
 // (internal/platform/kv/README.md「不变量」).
 func TestRateFallsBackToTheProcessCount(t *testing.T) {
 	t.Parallel()
-	server := kvtest.Own(t)
+	server := kvtest.New(t)
 	clock := newFrozenClock()
 	h := node(t, server, kvtest.Namespace(), clock)
 	clock.midWindow(h.KV, h.Limits.cfg.RateWindow)
 	if got := h.countRate(t.Context(), rateSite, callDimension, "local", "one"); got != 1 {
 		t.Fatalf("first call = %d", got)
 	}
-	server.Stop(t)
-	// The first call after the server is gone counted in the process too, and those that follow count on from it.
+	if err := h.KV.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// The first call after the client is gone counted in the process too, and those that follow count on from it.
 	for want := 2; want <= 30; want++ {
 		if got := h.countRate(t.Context(), rateSite, callDimension, "local", "one"); got != want {
 			t.Fatalf("call %d with the server gone = %d", want, got)
@@ -254,13 +257,12 @@ func TestKeyRateIsJudgedOnTheSharedCount(t *testing.T) {
 // number, so the outage refuses nothing a single node would have let in (internal/platform/kv/README.md「不变量」).
 func TestKeyRateHoldsWhileTheCacheIsDown(t *testing.T) {
 	t.Parallel()
-	server := kvtest.Own(t)
 	r := newRig(t, func(o *rigOptions) {
 		o.config = func(c *Config) { c.KeyRate = 3 }
-		o.cache = server.Open(t, kv.Deps{})
+		// A client of an address nothing listens on is the outage, without a container to stop.
+		o.cache = kvtest.Down(t)
 	})
 	a := r.newAccount(100_000_000)
-	server.Stop(t)
 	var codes []int
 	for range 4 {
 		resp, _ := r.message(a, "acme/beta")
@@ -280,7 +282,7 @@ func (h *Handler) countRate(ctx context.Context, site accounts.SiteID, dimension
 
 func TestSharedNodeRejectionsPreserveAccountHistory(t *testing.T) {
 	t.Parallel()
-	server := kvtest.Own(t)
+	server := kvtest.New(t)
 	clock := newFrozenClock()
 	namespace := kvtest.Namespace()
 	a, b := node(t, server, namespace, clock), node(t, server, namespace, clock)
@@ -308,7 +310,9 @@ func TestSharedNodeRejectionsPreserveAccountHistory(t *testing.T) {
 	if allowed.accountRate != 2 {
 		t.Fatalf("sibling charged for rejected attempts: %d", allowed.accountRate)
 	}
-	server.Stop(t)
+	if err := b.KV.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	fallback := &Call{}
 	b.precheck(t.Context(), rateSite, countDimension, "C", "C", fallback, false)
 	if fallback.accountRate != 2 {
