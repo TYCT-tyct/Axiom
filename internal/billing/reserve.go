@@ -185,8 +185,10 @@ func (b *Billing) ExtendIn(ctx context.Context, tx pg.Tx, h *Hold, r ExtendReque
 		return fmt.Errorf("billing: the extension of %s changed %d rows under the lock", h.id, n)
 	}
 	// Book to the windows the row holds, the same ones the limits were just checked in.
-	booked := Hold{id: h.id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow,
-		funding: row.Funding, subscription: derefUUID(row.SubscriptionID), windowSeq: derefInt32(row.WindowSeq)}
+	booked := Hold{
+		id: h.id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow,
+		funding: row.Funding, subscription: derefUUID(row.SubscriptionID), windowSeq: derefInt32(row.WindowSeq),
+	}
 	return booked.addReserved(ctx, tx, delta)
 }
 
@@ -211,8 +213,10 @@ func (b *Billing) SettleOrphanIn(ctx context.Context, tx pg.Tx, a Admitted, id u
 			RequestID: id, SiteID: a.Site, AccountID: a.Account, WorkspaceID: a.Workspace, KeyID: a.Key, HolderID: b.holder,
 		})
 	case err == nil && row.State == "pending":
-		h := &Hold{id: id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow,
-			funding: row.Funding, subscription: derefUUID(row.SubscriptionID), windowSeq: derefInt32(row.WindowSeq)}
+		h := &Hold{
+			id: id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow,
+			funding: row.Funding, subscription: derefUUID(row.SubscriptionID), windowSeq: derefInt32(row.WindowSeq),
+		}
 		if _, err = queries.ReleaseReservation(ctx, tx, id); err == nil {
 			err = h.addReserved(ctx, tx, -row.Amount)
 		}

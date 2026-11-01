@@ -263,13 +263,13 @@ func (c *locked) planRelease(state string, held int64) *reservationEnd {
 func (c *locked) planEnd(p priced, last AttemptResult) (*reservationEnd, []PostLedgerParams, error) {
 	held := c.row.Amount - c.row.Charged
 	c.settlement = c.event("settle", 0)
-	lines := charge(p.price, 0)
+	var lines []line
 	if c.plan() { // the window froze the whole hold and pays what was charged, up to it
 		c.owed, c.charged = p.price, min(p.price, c.row.Amount)
 		lines = planCharge(p.price, c.charged)
 	} else {
+		lines = charge(p.price, 0)
 		c.owed, c.charged = p.price, min(p.price, c.cap(held))
-		lines = charge(p.price, c.charged)
 	}
 	w, err := result(p, last)
 	if err != nil {
@@ -277,8 +277,10 @@ func (c *locked) planEnd(p priced, last AttemptResult) (*reservationEnd, []PostL
 	}
 	posts := []PostLedgerParams{ledgerParams(c.settlement, lines)}
 	if c.plan() {
-		return &reservationEnd{c: c, w: w, spendReserved: -c.row.Amount, spent: c.charged,
-			window: &windowSettle{held: c.row.Amount, charged: c.charged}}, posts, nil
+		return &reservationEnd{
+			c: c, w: w, spendReserved: -c.row.Amount, spent: c.charged,
+			window: &windowSettle{held: c.row.Amount, charged: c.charged},
+		}, posts, nil
 	}
 	return &reservationEnd{c: c, w: w, balanceReserved: -held, spendReserved: -held, spent: c.charged}, posts, nil
 }

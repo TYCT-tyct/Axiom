@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strconv"
-
 	"uuid"
 
 	"axiom/internal/accounts"
@@ -45,8 +44,10 @@ func planInput(in adminapi.SubscriptionPlanInput, currency platform.Currency) (b
 		return billing.PlanInput{}, unprocessableFields("/quota", "a window's credit is a positive amount that fits 64 bits")
 	}
 	active := in.Active == nil || *in.Active
-	return billing.PlanInput{Name: in.Name, Reason: in.Reason, Currency: currency, Price: price, Quota: quota,
-		WindowSeconds: int64(in.WindowSeconds), TermSeconds: int64(in.TermSeconds), Active: active}, nil
+	return billing.PlanInput{
+		Name: in.Name, Reason: in.Reason, Currency: currency, Price: price, Quota: quota,
+		WindowSeconds: int64(in.WindowSeconds), TermSeconds: int64(in.TermSeconds), Active: active,
+	}, nil
 }
 
 // planBody is a plan as the contract shows it: the price in the site's currency, the quota in billionths.
@@ -56,8 +57,8 @@ func planBody(p billing.Plan, currency platform.Currency) (adminapi.Subscription
 		return adminapi.SubscriptionPlan{}, err
 	}
 	return adminapi.SubscriptionPlan{
-		Id: adminapi.Uuid(p.ID.String()), Name: p.Name, Price: adminMoney(price, currency),
-		Quota: adminapi.CreditAmount(strconv.FormatInt(p.Quota, 10)), WindowSeconds: int(p.WindowSeconds),
+		Id: p.ID.String(), Name: p.Name, Price: adminMoney(price, currency),
+		Quota: strconv.FormatInt(p.Quota, 10), WindowSeconds: int(p.WindowSeconds),
 		TermSeconds: int(p.TermSeconds), Active: p.Active, Rev: int(p.Rev),
 	}, nil
 }
@@ -107,8 +108,10 @@ func (a adminAPI) CreateSubscriptionPlan(ctx context.Context, r adminapi.CreateS
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.CreateSubscriptionPlan201JSONResponse{Body: body,
-		Headers: adminapi.CreateSubscriptionPlan201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+	return adminapi.CreateSubscriptionPlan201JSONResponse{
+		Body:    body,
+		Headers: adminapi.CreateSubscriptionPlan201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
+	}, nil
 }
 
 // UpdateSubscriptionPlan saves a plan at the revision it was read.
@@ -124,9 +127,11 @@ func (a adminAPI) UpdateSubscriptionPlan(ctx context.Context, r adminapi.UpdateS
 	update := r.Body
 	body, replayed, err := idempotently(ctx, a.db, "updateSubscriptionPlan", r.Params.IdempotencyKey,
 		[]any{r.PlanId, r.Body}, func(tx pg.Tx) (adminapi.SubscriptionPlan, error) {
-			in, err := planInput(adminapi.SubscriptionPlanInput{Name: update.Name, Price: update.Price, Quota: update.Quota,
+			in, err := planInput(adminapi.SubscriptionPlanInput{
+				Name: update.Name, Price: update.Price, Quota: update.Quota,
 				WindowSeconds: update.WindowSeconds, TermSeconds: update.TermSeconds, Active: update.Active,
-				Reason: update.Reason}, currency)
+				Reason: update.Reason,
+			}, currency)
 			if err != nil {
 				return adminapi.SubscriptionPlan{}, err
 			}
@@ -139,8 +144,10 @@ func (a adminAPI) UpdateSubscriptionPlan(ctx context.Context, r adminapi.UpdateS
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.UpdateSubscriptionPlan200JSONResponse{Body: body,
-		Headers: adminapi.UpdateSubscriptionPlan200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+	return adminapi.UpdateSubscriptionPlan200JSONResponse{
+		Body:    body,
+		Headers: adminapi.UpdateSubscriptionPlan200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
+	}, nil
 }
 
 // GrantSubscription sells or gives the plan, or renews the one in force, and answers the subscription it made.
@@ -167,8 +174,10 @@ func (a adminAPI) GrantSubscription(ctx context.Context, r adminapi.GrantSubscri
 			if err != nil {
 				return adminapi.Subscription{}, err
 			}
-			g := billing.SubscriptionGrant{ID: uuid.NewV7(), Site: uuid.UUID(account.Site), Account: uuid.UUID(id),
-				Plan: plan, SiteCurrency: currency, Source: source, Actor: actor(ctx), Reason: r.Body.Reason}
+			g := billing.SubscriptionGrant{
+				ID: uuid.NewV7(), Site: uuid.UUID(account.Site), Account: uuid.UUID(id),
+				Plan: plan, SiteCurrency: currency, Source: source, Actor: actor(ctx), Reason: r.Body.Reason,
+			}
 			if source == "offline_payment" {
 				if r.Body.Payment == nil {
 					return adminapi.Subscription{}, unprocessableFields("/payment", "an offline payment says what was paid and where")
@@ -198,8 +207,10 @@ func (a adminAPI) GrantSubscription(ctx context.Context, r adminapi.GrantSubscri
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.GrantSubscription201JSONResponse{Body: body,
-		Headers: adminapi.GrantSubscription201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+	return adminapi.GrantSubscription201JSONResponse{
+		Body:    body,
+		Headers: adminapi.GrantSubscription201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
+	}, nil
 }
 
 // rateFor is the exchange rate a payment in its own currency is converted at: none in the site's currency, else the
@@ -258,15 +269,15 @@ const maximumSubscriptions = 100
 // subscriptionBody is a subscription as the contract shows it.
 func subscriptionBody(s billing.Subscription, currency platform.Currency) (adminapi.Subscription, error) {
 	return adminapi.Subscription{
-		Id: adminapi.Uuid(s.ID.String()), AccountId: accounts.AccountID(s.Account).TypeID(), PlanId: adminapi.Uuid(s.PlanID.String()),
+		Id: s.ID.String(), AccountId: accounts.AccountID(s.Account).TypeID(), PlanId: s.PlanID.String(),
 		PlanName: s.PlanName, State: adminapi.SubscriptionStanding(s.State), StartsAt: s.StartsAt, EndsAt: s.EndsAt,
 		ClosedAt: s.ClosedAt, CreatedAt: s.CreatedAt,
 		CurrentWindow: adminapi.SubscriptionWindow{
 			Seq: int(s.Window.Seq), StartsAt: s.Window.StartsAt, EndsAt: s.Window.EndsAt,
-			Quota:     adminapi.CreditAmount(strconv.FormatInt(s.Window.Quota, 10)),
-			Used:      adminapi.CreditAmount(strconv.FormatInt(s.Window.Used, 10)),
-			Reserved:  adminapi.CreditAmount(strconv.FormatInt(s.Window.Reserved, 10)),
-			Remaining: adminapi.CreditAmount(strconv.FormatInt(s.Window.Remaining(), 10)),
+			Quota:     strconv.FormatInt(s.Window.Quota, 10),
+			Used:      strconv.FormatInt(s.Window.Used, 10),
+			Reserved:  strconv.FormatInt(s.Window.Reserved, 10),
+			Remaining: strconv.FormatInt(s.Window.Remaining(), 10),
 		},
 	}, nil
 }

@@ -76,9 +76,11 @@ func (b *Billing) ReserveMany(ctx context.Context, tx pg.Tx, reqs []ReserveReque
 		return nil, nil, nil, err
 	}
 	for _, p := range quoted {
-		holds[p.at] = &Hold{Reservation: p.quote, id: reqs[p.at].ID, admitted: reqs[p.at].Admitted, workspaceWindow: src.day,
+		holds[p.at] = &Hold{
+			Reservation: p.quote, id: reqs[p.at].ID, admitted: reqs[p.at].Admitted, workspaceWindow: src.day,
 			keyWindow: src.day, funding: p.params.Funding, subscription: derefUUID(p.params.SubscriptionID),
-			windowSeq: derefInt32(p.params.WindowSeq)}
+			windowSeq: derefInt32(p.params.WindowSeq),
+		}
 		kept[p.at] = p.quote.Kept
 	}
 	return holds, kept, errs, nil

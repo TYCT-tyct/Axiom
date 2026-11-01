@@ -4,15 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"time"
 	"uuid"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/riverqueue/river"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
+	"github.com/jackc/pgx/v5/pgtype" //nolint:depguard // sqlc's row types spell a nullable column as pgtype.Text
 
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
@@ -129,8 +125,10 @@ func CreatePlan(ctx context.Context, tx pg.Tx, site uuid.UUID, p PlanInput, acto
 		return Plan{}, err
 	}
 	id := uuid.NewV7()
-	plan := Plan{ID: id, Site: site, Name: p.Name, Currency: p.Currency, Price: p.Price, Quota: p.Quota,
-		WindowSeconds: p.WindowSeconds, TermSeconds: p.TermSeconds, Active: p.Active, Rev: 1}
+	plan := Plan{
+		ID: id, Site: site, Name: p.Name, Currency: p.Currency, Price: p.Price, Quota: p.Quota,
+		WindowSeconds: p.WindowSeconds, TermSeconds: p.TermSeconds, Active: p.Active, Rev: 1,
+	}
 	err := queries.InsertPlan(ctx, tx, InsertPlanParams{
 		ID: id, SiteID: site, Name: p.Name, Currency: p.Currency.String(), Price: p.Price, Quota: p.Quota,
 		WindowSeconds: p.WindowSeconds, TermSeconds: p.TermSeconds,
@@ -139,8 +137,10 @@ func CreatePlan(ctx context.Context, tx pg.Tx, site uuid.UUID, p PlanInput, acto
 		return Plan{}, fmt.Errorf("billing: create the subscription plan: %w", err)
 	}
 	if !p.Active {
-		if _, err := queries.UpdatePlan(ctx, tx, UpdatePlanParams{ID: id, Rev: 1, Name: p.Name, Price: p.Price,
-			Quota: p.Quota, WindowSeconds: p.WindowSeconds, TermSeconds: p.TermSeconds, Active: false}); err != nil {
+		if _, err := queries.UpdatePlan(ctx, tx, UpdatePlanParams{
+			ID: id, Rev: 1, Name: p.Name, Price: p.Price,
+			Quota: p.Quota, WindowSeconds: p.WindowSeconds, TermSeconds: p.TermSeconds, Active: false,
+		}); err != nil {
 			return Plan{}, fmt.Errorf("billing: disable the subscription plan: %w", err)
 		}
 		plan.Rev = 2
@@ -154,8 +154,10 @@ func UpdatePlan(ctx context.Context, tx pg.Tx, id uuid.UUID, rev int32, p PlanIn
 	if err := p.check(); err != nil {
 		return Plan{}, err
 	}
-	n, err := queries.UpdatePlan(ctx, tx, UpdatePlanParams{ID: id, Rev: rev, Name: p.Name, Price: p.Price, Quota: p.Quota,
-		WindowSeconds: p.WindowSeconds, TermSeconds: p.TermSeconds, Active: p.Active})
+	n, err := queries.UpdatePlan(ctx, tx, UpdatePlanParams{
+		ID: id, Rev: rev, Name: p.Name, Price: p.Price, Quota: p.Quota,
+		WindowSeconds: p.WindowSeconds, TermSeconds: p.TermSeconds, Active: p.Active,
+	})
 	if err != nil {
 		return Plan{}, fmt.Errorf("billing: update the subscription plan: %w", err)
 	}
@@ -173,8 +175,10 @@ func auditPlan(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, 
 	return audit.Record(ctx, tx, audit.Event{
 		Actor: actor, Action: action, Reason: reason,
 		Target: audit.Target{Module: "billing", Kind: "subscription_plan", ID: p.ID.String()},
-		Detail: map[string]any{"name": p.Name, "currency": p.Currency.String(), "price": p.Price, "quota": p.Quota,
-			"window_seconds": p.WindowSeconds, "term_seconds": p.TermSeconds, "active": p.Active},
+		Detail: map[string]any{
+			"name": p.Name, "currency": p.Currency.String(), "price": p.Price, "quota": p.Quota,
+			"window_seconds": p.WindowSeconds, "term_seconds": p.TermSeconds, "active": p.Active,
+		},
 	})
 }
 
@@ -203,10 +207,12 @@ func Plans(ctx context.Context, tx pg.Tx, site uuid.UUID, includeInactive bool) 
 func planOf(p BillingSubscriptionPlan) Plan {
 	currency, err := platform.ParseCurrency(p.Currency)
 	if err != nil {
-		return Plan{} //nolint:nilerr // the column's check admits three upper-case letters only
+		return Plan{}
 	}
-	return Plan{ID: p.ID, Site: p.SiteID, Name: p.Name, Currency: currency, Price: p.Price,
-		Quota: p.Quota, WindowSeconds: p.WindowSeconds, TermSeconds: p.TermSeconds, Active: p.Active, Rev: p.Rev}
+	return Plan{
+		ID: p.ID, Site: p.SiteID, Name: p.Name, Currency: currency, Price: p.Price,
+		Quota: p.Quota, WindowSeconds: p.WindowSeconds, TermSeconds: p.TermSeconds, Active: p.Active, Rev: p.Rev,
+	}
 }
 
 // Subscription is what the console and the administrator read of an account's subscription: its terms as sold, its
@@ -296,13 +302,17 @@ func CreditSubscription(ctx context.Context, tx pg.Tx, g SubscriptionGrant) erro
 	if err != nil {
 		return err
 	}
-	if _, err := post(ctx, tx, event{site: g.Site, account: g.Account, kind: "plan_credit", request: sub.ID,
-		revision: int64(first)}, lines...); err != nil {
+	if _, err := post(ctx, tx, event{
+		site: g.Site, account: g.Account, kind: "plan_credit", request: sub.ID,
+		revision: int64(first),
+	}, lines...); err != nil {
 		return err
 	}
-	detail := map[string]any{"grant": g.ID.String(), "plan": plan.ID.String(), "plan_name": plan.Name,
+	detail := map[string]any{
+		"grant": g.ID.String(), "plan": plan.ID.String(), "plan_name": plan.Name,
 		"source": g.Source, "windows": planWindowsOf(plan), "face": face, "quota": plan.Quota,
-		"window_seconds": plan.WindowSeconds, "term_seconds": plan.TermSeconds}
+		"window_seconds": plan.WindowSeconds, "term_seconds": plan.TermSeconds,
+	}
 	if g.Source == "paid" {
 		detail["currency"], detail["paid"], detail["fee"] = g.Payment.Currency.String(), g.Payment.Paid, g.Payment.Fee
 	}
@@ -313,17 +323,21 @@ func CreditSubscription(ctx context.Context, tx pg.Tx, g SubscriptionGrant) erro
 }
 
 func planWindowsOf(p Plan) int32 {
-	n, _ := planWindows(p.TermSeconds, p.WindowSeconds) // checked when the plan was saved
+	// The plan was checked when it was saved, so its term divides into windows here.
+	n, err := planWindows(p.TermSeconds, p.WindowSeconds)
+	if err != nil {
+		panic("billing: a saved plan window: " + err.Error())
+	}
 	return n
 }
 
 func (g SubscriptionGrant) check() error {
-	switch {
-	case g.Source == "gift":
+	switch g.Source {
+	case "gift":
 		if g.Payment != (Payment{}) || g.Channel != (Channel{}) || g.RateID != (uuid.UUID{}) {
 			return &PlanError{"gift carries a payment"}
 		}
-	case g.Source == "paid":
+	case "paid":
 		if (g.Channel.Merchant == uuid.UUID{}) == (g.Channel.Offline == "") {
 			return &PaidError{"names no channel, or both a merchant account and an offline channel"}
 		}
@@ -463,9 +477,11 @@ func extendSubscription(ctx context.Context, tx pg.Tx, g SubscriptionGrant, plan
 	}
 	n := planWindowsOf(plan)
 	first := last + 1
-	if err := insertWindows(ctx, tx, windowBlock{subscription: cur.ID, site: g.Site, account: g.Account, first: first,
+	if err := insertWindows(ctx, tx, windowBlock{
+		subscription: cur.ID, site: g.Site, account: g.Account, first: first,
 		start: cur.EndsAt, end: cur.EndsAt.Add(time.Duration(plan.TermSeconds) * time.Second), quota: plan.Quota,
-		window: plan.WindowSeconds, count: n}); err != nil {
+		window: plan.WindowSeconds, count: n,
+	}); err != nil {
 		return Subscription{}, 0, err
 	}
 	ends := cur.EndsAt.Add(time.Duration(plan.TermSeconds) * time.Second)
@@ -487,8 +503,10 @@ func newSubscription(ctx context.Context, tx pg.Tx, g SubscriptionGrant, plan Pl
 	}); err != nil {
 		return Subscription{}, 0, fmt.Errorf("billing: create the subscription: %w", err)
 	}
-	if err := insertWindows(ctx, tx, windowBlock{subscription: id, site: g.Site, account: g.Account, first: 1,
-		start: now, end: ends, quota: plan.Quota, window: plan.WindowSeconds, count: planWindowsOf(plan)}); err != nil {
+	if err := insertWindows(ctx, tx, windowBlock{
+		subscription: id, site: g.Site, account: g.Account, first: 1,
+		start: now, end: ends, quota: plan.Quota, window: plan.WindowSeconds, count: planWindowsOf(plan),
+	}); err != nil {
 		return Subscription{}, 0, err
 	}
 	return sub, 1, nil
@@ -511,7 +529,7 @@ func insertWindows(ctx context.Context, tx pg.Tx, b windowBlock) error {
 		if to.After(b.end) {
 			to = b.end
 		}
-		statements[i] = pg.Statement{SQL: insertWindow, Args: []any{b.subscription, b.first + int32(i), b.site, b.account, from, to, b.quota}} //nolint:gosec // G115: i is below count
+		statements[i] = pg.Statement{SQL: insertWindow, Args: []any{b.subscription, b.first + int32(i), b.site, b.account, from, to, b.quota}}
 	}
 	if err := tx.Batch(ctx, statements, func(batch pg.BatchResults) error {
 		for range statements {
@@ -535,8 +553,10 @@ func readActiveSubscription(ctx context.Context, tx pg.Tx, account uuid.UUID) (S
 		}
 		return Subscription{}, fmt.Errorf("billing: read the active subscription: %w", err)
 	}
-	return Subscription{ID: r.ID, Site: r.SiteID, Account: r.AccountID, PlanID: r.PlanID, PlanName: r.PlanName,
-		StartsAt: r.StartsAt, EndsAt: r.EndsAt, State: r.State, CurrentSeq: r.CurrentSeq, ClosedAt: r.ClosedAt}, nil
+	return Subscription{
+		ID: r.ID, Site: r.SiteID, Account: r.AccountID, PlanID: r.PlanID, PlanName: r.PlanName,
+		StartsAt: r.StartsAt, EndsAt: r.EndsAt, State: r.State, CurrentSeq: r.CurrentSeq, ClosedAt: r.ClosedAt,
+	}, nil
 }
 
 // expireSubscription marks a subscription whose term ended as expired, so no window of it funds a new reservation.
@@ -599,15 +619,17 @@ func (w *planWindow) remaining() int64 { return w.quota - w.used - w.reserved }
 func (w *planWindow) due(now time.Time) bool { return !now.Before(w.ends) || !now.Before(w.termEnds) }
 
 func planWindowOf(r AvailablePlanRow) *planWindow {
-	return &planWindow{subscription: r.SubscriptionID, site: r.SiteID, account: r.AccountID, seq: r.Seq,
-		termEnds: r.TermEnds, starts: r.WindowStarts, ends: r.WindowEnds, quota: r.Quota, used: r.Used, reserved: r.Reserved}
+	return &planWindow{
+		subscription: r.SubscriptionID, site: r.SiteID, account: r.AccountID, seq: r.Seq,
+		termEnds: r.TermEnds, starts: r.WindowStarts, ends: r.WindowEnds, quota: r.Quota, used: r.Used, reserved: r.Reserved,
+	}
 }
 
 // readPlanWindow reads the current window as it is, without advancing it.
 func readPlanWindow(ctx context.Context, tx pg.Tx, account uuid.UUID) (*planWindow, error) {
 	r, err := queries.AvailablePlan(ctx, tx, account)
 	if errors.Is(err, pg.ErrNoRows) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // no subscription in force is not an error
 	}
 	if err != nil {
 		return nil, fmt.Errorf("billing: read the subscription window: %w", err)
@@ -657,109 +679,14 @@ func Subscriptions(ctx context.Context, tx pg.Tx, account uuid.UUID, max int32) 
 	}
 	subs := make([]Subscription, len(rows))
 	for i, r := range rows {
-		subs[i] = Subscription{ID: r.ID, Site: r.SiteID, Account: r.AccountID, PlanID: r.PlanID, PlanName: r.PlanName,
+		subs[i] = Subscription{
+			ID: r.ID, Site: r.SiteID, Account: r.AccountID, PlanID: r.PlanID, PlanName: r.PlanName,
 			StartsAt: r.StartsAt, EndsAt: r.EndsAt, State: r.State, CurrentSeq: r.CurrentSeq, ClosedAt: r.ClosedAt, CreatedAt: r.CreatedAt,
-			Window: Window{Seq: r.WindowSeq, StartsAt: r.WindowStart, EndsAt: r.WindowEnd, Quota: r.Quota, Used: r.Used,
-				Reserved: r.Reserved}}
+			Window: Window{
+				Seq: r.WindowSeq, StartsAt: r.WindowStart, EndsAt: r.WindowEnd, Quota: r.Quota, Used: r.Used,
+				Reserved: r.Reserved,
+			},
+		}
 	}
 	return subs, nil
-}
-
-// The subscription job (docs/domains/billing.md「订阅套餐」): a run passes the windows whose time came for accounts that
-// stay idle, expires terms that ended, and writes off what is left of an expired subscription's liability once its
-// holds have all ended. Admission does the same for a window it finds due, so a busy account never waits for the run.
-const (
-	subscriptionEvery = time.Minute
-	subscriptionPage  = 50
-)
-
-// subscriptionArgs is the job of one run.
-type subscriptionArgs struct{ singleRun }
-
-// Kind implements river.JobArgs.
-func (subscriptionArgs) Kind() string { return "billing.subscription_windows" }
-
-// SubscriptionConfig is what the subscription job needs: the database, the platform scope that only cmd/ builds, the
-// queue the job runs on, where its log goes and the meter of its counters (nil for none).
-type SubscriptionConfig struct {
-	DB     *pg.DB
-	Scope  pg.Scope
-	Queue  *pg.Queue
-	Logger *slog.Logger
-	Meter  metric.Meter
-}
-
-// RegisterSubscriptions adds the subscription job to the queue, before it starts: a run every minute, on whichever node
-// leads the queue. A subscription that cannot be closed is counted and logged and the run goes on, as the expiry does:
-// a failed job would back off and hold the next run back.
-func RegisterSubscriptions(cfg SubscriptionConfig) error {
-	if cfg.Meter == nil {
-		cfg.Meter = noop.NewMeterProvider().Meter("billing")
-	}
-	failures := counter(cfg.Meter, "axiom.billing.subscription.failures", "Subscriptions a run could not pass, expire or close.")
-	work := func(ctx context.Context, _ *river.Job[subscriptionArgs]) error {
-		if err := runSubscriptions(ctx, cfg, failures); err != nil {
-			cfg.Logger.Error("billing: the subscription run stopped", "err", err)
-		}
-		return nil
-	}
-	if err := river.AddWorkerSafely(cfg.Queue.Workers(), river.WorkFunc(work)); err != nil {
-		return fmt.Errorf("billing: %w", err)
-	}
-	cfg.Queue.Every(subscriptionEvery, func() river.JobArgs { return subscriptionArgs{} })
-	return nil
-}
-
-func runSubscriptions(ctx context.Context, cfg SubscriptionConfig, failures metric.Int64Counter) error {
-	var due []DueSubscriptionsRow
-	if err := cfg.DB.Tx(ctx, cfg.Scope, func(tx pg.Tx) error {
-		var err error
-		due, err = queries.DueSubscriptions(ctx, tx, subscriptionPage)
-		return err
-	}); err != nil {
-		return fmt.Errorf("billing: find the subscriptions that are due: %w", err)
-	}
-	for _, d := range due {
-		if ctx.Err() != nil {
-			return nil // the node is stopping; the next run finds it again
-		}
-		if err := visitSubscription(ctx, cfg, d.ID, d.AccountID); err != nil {
-			failures.Add(ctx, 1)
-			cfg.Logger.Error("billing: a subscription could not be passed or closed", "subscription", d.ID.String(),
-				"account", d.AccountID.String(), "err", err)
-		}
-	}
-	return nil
-}
-
-// visitSubscription brings one due subscription up to date in its own transaction under its account's balance lock.
-func visitSubscription(ctx context.Context, cfg SubscriptionConfig, id, account uuid.UUID) error {
-	return cfg.DB.Tx(ctx, cfg.Scope, func(tx pg.Tx) error {
-		if _, err := lockAccount(ctx, tx, account); err != nil {
-			return err
-		}
-		sub, err := subscriptionOf(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if sub.State == "active" {
-			if _, err := planWindowNow(ctx, tx, account); err != nil {
-				return err
-			}
-			if sub, err = subscriptionOf(ctx, tx, id); err != nil {
-				return err
-			}
-		}
-		return writeOffSubscription(ctx, tx, sub)
-	})
-}
-
-// subscriptionOf reads one subscription by ID.
-func subscriptionOf(ctx context.Context, tx pg.Tx, id uuid.UUID) (Subscription, error) {
-	r, err := queries.Subscription(ctx, tx, id)
-	if err != nil {
-		return Subscription{}, fmt.Errorf("billing: read the subscription: %w", err)
-	}
-	return Subscription{ID: r.ID, Site: r.SiteID, Account: r.AccountID, PlanID: r.PlanID, PlanName: r.PlanName,
-		StartsAt: r.StartsAt, EndsAt: r.EndsAt, State: r.State, CurrentSeq: r.CurrentSeq, ClosedAt: r.ClosedAt}, nil
 }

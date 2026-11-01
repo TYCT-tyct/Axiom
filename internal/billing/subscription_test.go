@@ -20,8 +20,10 @@ func (b *bank) makePlan(quota, window, term int64) Plan {
 	var p Plan
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
 		var err error
-		p, err = CreatePlan(b.t.Context(), tx, b.admitted.Site, PlanInput{Name: "Monthly " + uuid.NewV7().String(), Reason: "test",
-			Currency: usd, Price: 2_000_000_000, Quota: quota, WindowSeconds: window, TermSeconds: term, Active: true},
+		p, err = CreatePlan(b.t.Context(), tx, b.admitted.Site, PlanInput{
+			Name: "Monthly " + uuid.NewV7().String(), Reason: "test",
+			Currency: usd, Price: 2_000_000_000, Quota: quota, WindowSeconds: window, TermSeconds: term, Active: true,
+		},
 			audit.System("billing.test"))
 		return err
 	}); err != nil {
@@ -35,9 +37,11 @@ func (b *bank) subscribe(p Plan, id uuid.UUID) Subscription {
 	b.t.Helper()
 	var sub Subscription
 	if err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
-		if err := CreditSubscription(b.t.Context(), tx, SubscriptionGrant{ID: id, Site: b.admitted.Site,
+		if err := CreditSubscription(b.t.Context(), tx, SubscriptionGrant{
+			ID: id, Site: b.admitted.Site,
 			Account: b.admitted.Account, Plan: p.ID, SiteCurrency: usd, Source: "gift", Actor: audit.System("billing.test"),
-			Reason: "test"}); err != nil {
+			Reason: "test",
+		}); err != nil {
 			return err
 		}
 		subs, err := Subscriptions(b.t.Context(), tx, b.admitted.Account, 10)
@@ -273,8 +277,10 @@ func TestSubscriptionGrantIsIdempotent(t *testing.T) {
 	}
 	other := b.makePlan(1000, 3600, 7200)
 	err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
-		return CreditSubscription(t.Context(), tx, SubscriptionGrant{ID: id, Site: b.admitted.Site,
-			Account: b.admitted.Account, Plan: other.ID, SiteCurrency: usd, Source: "gift", Reason: "test"})
+		return CreditSubscription(t.Context(), tx, SubscriptionGrant{
+			ID: id, Site: b.admitted.Site,
+			Account: b.admitted.Account, Plan: other.ID, SiteCurrency: usd, Source: "gift", Reason: "test",
+		})
 	})
 	if !errors.Is(err, ErrCreditConflict) {
 		t.Fatalf("the same key with another plan = %v, want ErrCreditConflict", err)

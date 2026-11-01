@@ -33,10 +33,10 @@ func (c consoleAPI) ListAccountSubscriptions(ctx context.Context, _ consoleapi.L
 			StartsAt: s.StartsAt, EndsAt: s.EndsAt, ClosedAt: s.ClosedAt,
 			CurrentWindow: consoleapi.AccountSubscriptionWindow{
 				Seq: int(s.Window.Seq), StartsAt: s.Window.StartsAt, EndsAt: s.Window.EndsAt,
-				Quota:     consoleapi.SubscriptionCredit(strconv.FormatInt(s.Window.Quota, 10)),
-				Used:      consoleapi.SubscriptionCredit(strconv.FormatInt(s.Window.Used, 10)),
-				Reserved:  consoleapi.SubscriptionCredit(strconv.FormatInt(s.Window.Reserved, 10)),
-				Remaining: consoleapi.SubscriptionCredit(strconv.FormatInt(s.Window.Remaining(), 10)),
+				Quota:     strconv.FormatInt(s.Window.Quota, 10),
+				Used:      strconv.FormatInt(s.Window.Used, 10),
+				Reserved:  strconv.FormatInt(s.Window.Reserved, 10),
+				Remaining: strconv.FormatInt(s.Window.Remaining(), 10),
 			},
 		}
 	}

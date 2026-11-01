@@ -123,7 +123,8 @@ func charge(price, charged int64) []line {
 // platform bears the rest, revenue takes the price. The user's balance does not move.
 func planCharge(price, charged int64) []line {
 	return []line{
-		{bookPlanLiability, charged, siteCredits}, {bookPlatformBorne, price - charged, siteCredits},
+		{bookPlanLiability, charged, siteCredits},
+		{bookPlatformBorne, price - charged, siteCredits},
 		{bookRevenue, -price, siteCredits},
 	}
 }
@@ -131,7 +132,8 @@ func planCharge(price, charged int64) []line {
 // planReversal undoes a plan charge, as a correction does before it posts the new one.
 func planReversal(price, charged int64) []line {
 	return []line{
-		{bookPlanLiability, -charged, siteCredits}, {bookPlatformBorne, charged - price, siteCredits},
+		{bookPlanLiability, -charged, siteCredits},
+		{bookPlatformBorne, charged - price, siteCredits},
 		{bookRevenue, price, siteCredits},
 	}
 }
