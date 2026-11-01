@@ -27,6 +27,9 @@ const (
 	StatementReversal StatementKind = "reversal"
 	StatementFreeze   StatementKind = "freeze"
 	StatementUnfreeze StatementKind = "unfreeze"
+	// A chargeback took the credit back; its reversal gave it back after the dispute was won.
+	StatementChargeback         StatementKind = "chargeback"
+	StatementChargebackReversal StatementKind = "chargeback_reversal"
 )
 
 // MaxStatementPage is the most movements one page of a statement holds.
@@ -196,6 +199,8 @@ func (c StatementCursor) advance(r StatementPageRow) StatementCursor {
 // statementKind is what the ledger's kind of a transaction, and the source of the batch a credit opened, reads as on a
 // statement. A kind with no card-facing meaning is an error rather than a row: skipping it would leave the balance column
 // disagreeing with the money.
+//
+//nolint:cyclop // one ledger kind per case; adding a kind is the switch's purpose
 func statementKind(kind, source string) (StatementKind, error) {
 	switch kind {
 	case "credit":
@@ -220,6 +225,10 @@ func statementKind(kind, source string) (StatementKind, error) {
 		return StatementFreeze, nil
 	case "unfreeze":
 		return StatementUnfreeze, nil
+	case "chargeback":
+		return StatementChargeback, nil
+	case "chargeback_reverse":
+		return StatementChargebackReversal, nil
 	}
 	return "", fmt.Errorf("a %s transaction is not a statement kind", kind)
 }

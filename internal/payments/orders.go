@@ -398,8 +398,8 @@ func (p *Payments) checkout(ctx context.Context, s pg.Scope, o *Order, r CreateO
 		return Checkout{}, fmt.Errorf("%w: open the channel before creating an order: %w", ErrRefused, err)
 	}
 	c, err := ch.Create(ctx, CreateRequest{
-		Order: o.ID, Method: o.Method, Upstream: upstream, Total: o.Total, Subject: "Top-up", ReturnURL: r.ReturnURL, NotifyURL: paymentNotifyURL(r.ReturnURL, o.MerchantID),
-		ClientIP: r.ClientIP, Mobile: r.Mobile,
+		Order: o.ID, Merchant: o.MerchantID, Method: o.Method, Upstream: upstream, Total: o.Total, Subject: "Top-up", ReturnURL: r.ReturnURL, NotifyURL: paymentNotifyURL(r.ReturnURL, o.MerchantID),
+		ClientIP: r.ClientIP, Mobile: r.Mobile, ExpiresAt: o.ExpiresAt,
 	})
 	if rejected, ok := errors.AsType[*Rejected](err); ok {
 		return Checkout{}, fmt.Errorf("%w: %s %s", ErrRefused, rejected.Code, rejected.Message)

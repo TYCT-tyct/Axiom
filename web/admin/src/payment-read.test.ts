@@ -169,6 +169,66 @@ it("reads an Alipay rotation with the old public key", () => {
   });
 });
 
+const stripeValues = {
+  ...merchantValues,
+  kind: "stripe",
+  settings: "{}",
+  key: "",
+  secret_key: "sk_test_key",
+  webhook_secret: "whsec_webhook",
+  old_webhook_secret: "",
+  "method-0-method": "card",
+  "method-0-upstream": "card",
+};
+
+it("reads a new Stripe merchant with both required secrets", () => {
+  const read = readMerchant(stripeValues, undefined, merchantWords);
+  if (isProblem(read)) {
+    throw new Error(read.problem);
+  }
+  expect(read.kind).toBe("stripe");
+  expect(read.settings).toEqual({});
+  expect(read.secrets).toEqual({ secret_key: "sk_test_key", webhook_secret: "whsec_webhook" });
+});
+
+it("requires both Stripe secrets when any is supplied", () => {
+  expect(readMerchant({ ...stripeValues, secret_key: "" }, undefined, merchantWords)).toEqual({ problem: "secret" });
+  expect(readMerchant({ ...stripeValues, webhook_secret: "" }, undefined, merchantWords)).toEqual({
+    problem: "secret",
+  });
+  expect(
+    readMerchant(
+      { ...stripeValues, secret_key: "", webhook_secret: "", old_webhook_secret: "" },
+      undefined,
+      merchantWords,
+    ),
+  ).toEqual({ problem: "secret" });
+});
+
+it("keeps a Stripe merchant's sealed secrets on edit and reads a webhook rotation", () => {
+  const { kind: _kind, ...withoutKind } = stripeValues;
+  const kept = readMerchant(
+    { ...withoutKind, secret_key: "", webhook_secret: "", old_webhook_secret: "" },
+    { rev: 4, kind: "stripe" },
+    merchantWords,
+  );
+  if (isProblem(kept)) {
+    throw new Error(kept.problem);
+  }
+  expect(kept.kind).toBe("stripe");
+  expect(kept.rev).toBe(4);
+  expect(kept.secrets).toBeUndefined();
+  const rotated = readMerchant({ ...stripeValues, old_webhook_secret: "whsec_old" }, undefined, merchantWords);
+  if (isProblem(rotated)) {
+    throw new Error(rotated.problem);
+  }
+  expect(rotated.secrets).toEqual({
+    secret_key: "sk_test_key",
+    webhook_secret: "whsec_webhook",
+    old_webhook_secret: "whsec_old",
+  });
+});
+
 it("refuses a merchant the contract or the plugin would refuse", () => {
   const edit = (change: Record<string, string>) =>
     readMerchant({ ...merchantValues, ...change }, undefined, merchantWords);

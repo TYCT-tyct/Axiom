@@ -10,3 +10,11 @@ useDefault = true
 [[allowlists]]
 description = "embedded OpenAPI contract in generated code"
 paths = ['''internal/platform/(adminapi|consoleapi)/[^/]+\.gen\.go''']
+
+# The Stripe webhook tests sign fixtures with a placeholder secret. It is not a credential: only
+# webhook.GenerateTestSignedPayload uses it, no live endpoint sees it, and the channel verifies with the merchant's own
+# secret. It is already in this branch's history, where this file cannot reach it, so the value is allowed by exact
+# match rather than replaced; a real whsec_ key still fails, as does any other value in the same tests.
+[[allowlists]]
+description = "placeholder Stripe webhook secret in the payments tests"
+regexes = ['''^whsec_test_secret_0123456789$''']
