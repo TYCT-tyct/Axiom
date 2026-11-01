@@ -647,16 +647,16 @@ func (e LoginField) Valid() bool {
 
 // Defines values for MailSettingsSource.
 const (
-	Database    MailSettingsSource = "database"
-	Environment MailSettingsSource = "environment"
+	MailSettingsSourceDatabase    MailSettingsSource = "database"
+	MailSettingsSourceEnvironment MailSettingsSource = "environment"
 )
 
 // Valid indicates whether the value is a known member of the MailSettingsSource enum.
 func (e MailSettingsSource) Valid() bool {
 	switch e {
-	case Database:
+	case MailSettingsSourceDatabase:
 		return true
-	case Environment:
+	case MailSettingsSourceEnvironment:
 		return true
 	default:
 		return false
@@ -1128,6 +1128,66 @@ func (e RegistrationPolicyMode) Valid() bool {
 	case RegistrationPolicyModeInvite:
 		return true
 	case RegistrationPolicyModeOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SearchEngineKind.
+const (
+	SearchEngineKindFirecrawl SearchEngineKind = "firecrawl"
+	SearchEngineKindSearxng   SearchEngineKind = "searxng"
+)
+
+// Valid indicates whether the value is a known member of the SearchEngineKind enum.
+func (e SearchEngineKind) Valid() bool {
+	switch e {
+	case SearchEngineKindFirecrawl:
+		return true
+	case SearchEngineKindSearxng:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SearchEngineInputKind.
+const (
+	SearchEngineInputKindFirecrawl SearchEngineInputKind = "firecrawl"
+	SearchEngineInputKindSearxng   SearchEngineInputKind = "searxng"
+)
+
+// Valid indicates whether the value is a known member of the SearchEngineInputKind enum.
+func (e SearchEngineInputKind) Valid() bool {
+	switch e {
+	case SearchEngineInputKindFirecrawl:
+		return true
+	case SearchEngineInputKindSearxng:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SearchSettingsSource.
+const (
+	SearchSettingsSourceDatabase    SearchSettingsSource = "database"
+	SearchSettingsSourceEnvironment SearchSettingsSource = "environment"
+	SearchSettingsSourceNone        SearchSettingsSource = "none"
+	SearchSettingsSourceSaved       SearchSettingsSource = "saved"
+)
+
+// Valid indicates whether the value is a known member of the SearchSettingsSource enum.
+func (e SearchSettingsSource) Valid() bool {
+	switch e {
+	case SearchSettingsSourceDatabase:
+		return true
+	case SearchSettingsSourceEnvironment:
+		return true
+	case SearchSettingsSourceNone:
+		return true
+	case SearchSettingsSourceSaved:
 		return true
 	default:
 		return false
@@ -3493,26 +3553,95 @@ type RetentionRequest struct {
 
 // SearchConfigTest defines model for SearchConfigTest.
 type SearchConfigTest struct {
+	// Engine The engine to test. Absent tests the saved default, which is what a page built before engines existed asks for.
+	Engine *SearchEngineInput `json:"engine,omitempty"`
+
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 }
 
+// SearchEngine One configured search backend. Costs, markup and the published prices are exact decimal text, per search and per extra result; the key itself is never returned.
+type SearchEngine struct {
+	CostPerExtraResult string `json:"cost_per_extra_result"`
+	CostPerSearch      string `json:"cost_per_search"`
+
+	// Default The backend a request that names none falls back to when the model has no native search.
+	Default bool               `json:"default"`
+	Enabled bool               `json:"enabled"`
+	HasKey  bool               `json:"has_key"`
+	Id      openapi_types.UUID `json:"id"`
+	Kind    SearchEngineKind   `json:"kind"`
+
+	// Markup The cost-plus ratio the published price is derived at, like a model price's markup_ratio.
+	Markup string `json:"markup"`
+
+	// Name The name a request's web plugin names as its engine; "native" is reserved for the provider's own search.
+	Name                string `json:"name"`
+	PricePerExtraResult string `json:"price_per_extra_result"`
+
+	// PricePerSearch The published sale price of one search; zero means the model's web_search price applies.
+	PricePerSearch string `json:"price_per_search"`
+
+	// PriceVersion Increments when a save changes the cost, markup or published price; a call locks it with its reservation.
+	PriceVersion int64  `json:"price_version"`
+	Url          string `json:"url"`
+}
+
+// SearchEngineKind defines model for SearchEngine.Kind.
+type SearchEngineKind string
+
+// SearchEngineInput defines model for SearchEngineInput.
+type SearchEngineInput struct {
+	CostPerExtraResult string `json:"cost_per_extra_result"`
+	CostPerSearch      string `json:"cost_per_search"`
+	Default            bool   `json:"default"`
+	Enabled            bool   `json:"enabled"`
+
+	// Id The engine being edited; absent creates one.
+	Id *openapi_types.UUID `json:"id,omitempty"`
+
+	// Key Omitted keeps the saved key while the URL and kind are unchanged; a new destination needs it again. Never returned.
+	Key    *string               `json:"key,omitempty"`
+	Kind   SearchEngineInputKind `json:"kind"`
+	Markup string                `json:"markup"`
+	Name   string                `json:"name"`
+	Url    *string               `json:"url,omitempty"`
+}
+
+// SearchEngineInputKind defines model for SearchEngineInput.Kind.
+type SearchEngineInputKind string
+
 // SearchSettings defines model for SearchSettings.
 type SearchSettings struct {
-	HasKey          *bool   `json:"has_key,omitempty"`
-	RestartRequired *bool   `json:"restart_required,omitempty"`
-	Source          *string `json:"source,omitempty"`
-	Url             *string `json:"url,omitempty"`
+	// Engines Present on a node that supports multiple engines. A page talking to an older node sees url and has_key instead and sends the old single-backend shape.
+	Engines *[]SearchEngine `json:"engines,omitempty"`
+
+	// HasKey Whether the default engine has a key, for a page built before engines existed.
+	HasKey          *bool `json:"has_key,omitempty"`
+	RestartRequired *bool `json:"restart_required,omitempty"`
+
+	// Source Where the list came from. "saved" is the old single-backend row and "environment" is AXIOM_SEARCH_URL; both apply until an engine list is saved.
+	Source *SearchSettingsSource `json:"source,omitempty"`
+
+	// Url The default engine's URL, for a page built before engines existed.
+	Url *string `json:"url,omitempty"`
 }
+
+// SearchSettingsSource Where the list came from. "saved" is the old single-backend row and "environment" is AXIOM_SEARCH_URL; both apply until an engine list is saved.
+type SearchSettingsSource string
 
 // SearchSettingsUpdate defines model for SearchSettingsUpdate.
 type SearchSettingsUpdate struct {
+	Engines *[]SearchEngineInput `json:"engines,omitempty"`
+
 	// Reason Why the person is doing this. It goes to the audit log.
-	Reason   Reason `json:"reason"`
-	Settings struct {
+	Reason Reason `json:"reason"`
+
+	// Settings The old single-backend shape, still accepted from a page built before engines existed.
+	Settings *struct {
 		Key *string `json:"key,omitempty"`
 		Url *string `json:"url,omitempty"`
-	} `json:"settings"`
+	} `json:"settings,omitempty"`
 }
 
 // ServiceTier defines model for ServiceTier.

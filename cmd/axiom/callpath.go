@@ -28,7 +28,6 @@ import (
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
-	"axiom/internal/websearch"
 )
 
 const (
@@ -61,7 +60,7 @@ type callDeps struct {
 	accounts   *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
 	catalog    *catalog.Catalog
 	egress     *egress.Client
-	search     websearch.Searcher
+	search     gateway.SearchBackends
 	fileParser fileparse.Parser
 	gate       gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
 	limits     *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
@@ -91,6 +90,8 @@ type callNode struct {
 	reaped    <-chan error       // carries what billing.Run ended with, when it is not a shutdown
 	// models is the list the route builder publishes with each snapshot, also read by the public models and prices page.
 	models *gateway.ModelList
+	// search is the node's enabled engines, also read by the public model pages to show what a search costs.
+	search gateway.SearchBackends
 }
 
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
@@ -187,7 +188,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
 		Outstanding: outstanding, Search: d.search, Parser: d.fileParser,
 	})
-	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models}, err
+	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models, search: d.search}, err
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and

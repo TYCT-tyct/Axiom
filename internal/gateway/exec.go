@@ -21,7 +21,6 @@ import (
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
-	"axiom/internal/websearch"
 )
 
 // Conn is one attempt's connection to a credential of an endpoint, held from Acquire to Done. *suppliers.Attempt is one.
@@ -97,8 +96,8 @@ type ExecDeps struct {
 	// Outstanding counts the calls and the settlements they leave in the background, and is what the node drains: the
 	// node's Handler shares it, so a request is counted from the gate.
 	Outstanding *Outstanding
-	// Search runs the web plugin through the deployment's backend; nil means no backend is configured.
-	Search websearch.Searcher
+	// Search is the deployment's search engines; nil means none is configured.
+	Search SearchBackends
 }
 
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.

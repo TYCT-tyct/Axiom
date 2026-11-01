@@ -23,7 +23,7 @@ const (
 // working set is bounded by the body's size, braces and colons (above). What stays is the capacity of Upstream.Body,
 // which is never more than the cost.
 func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
-	n := int64(len(body))
+	n := int64(len(body)) + nativeSearchCost(w.NativeSearch)
 	if r.Format == t.Format {
 		cost := int64(rewriteSize(rulesFor(r.Format, t), len(body), t, w)) + 3*n + replayCost(r.Format, body)
 		if r.Format == Responses {
@@ -57,6 +57,15 @@ func PrepareCost(r *Request, body []byte, t Target, w Rewrites) int64 {
 	}
 	cost := convertPerByte*n + convertPerObject*int64(objects) + convertPerMember*int64(bytes.Count(body, []byte(":")))
 	return cost
+}
+
+// nativeSearchCost bounds what adding the target format's web search tool costs: the tool object and its member name.
+// It is charged before the body is prepared, so the estimate includes it even though the tool is written afterwards.
+func nativeSearchCost(uses int) int64 {
+	if uses <= 0 {
+		return 0
+	}
+	return 256
 }
 
 // quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that

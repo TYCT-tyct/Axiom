@@ -252,7 +252,7 @@ func (a *messagesAggregate) openBlock(special *[specials][]byte) error {
 			a.out = append(append(appendQuoted(comma(a.out), specialNames[i]), ':'), v...)
 		}
 	}
-	switch a.cur.kind {
+	switch a.cur.kind { //nolint:exhaustive // a citation is a delta, not a block
 	case textBlock:
 		a.openString("text", special[specText])
 	case thinkingBlock:
@@ -381,7 +381,7 @@ func (a *messagesAggregate) closeBlock() error {
 	if a.out, err = grow(&a.aggBase, a.out, len(b.signature)+len(b.citations)+64, 1); err != nil {
 		return err
 	}
-	switch b.kind {
+	switch b.kind { //nolint:exhaustive // a citation is a delta, not a block
 	case textBlock:
 		a.out = append(a.out, '"')
 		if len(b.citations) > 0 {

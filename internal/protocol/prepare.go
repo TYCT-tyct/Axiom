@@ -73,6 +73,9 @@ type Rewrites struct {
 	// History is the stored input and output items, oldest first, of the response a Responses request continues
 	// with previous_response_id, each one JSON object; empty when it continues none.
 	History [][]byte
+	// NativeSearch is the most searches the gateway turns on at the model provider for this request, 0 for none. The
+	// target format's own search tool is added to the prepared body (docs/domains/gateway.md「联网搜索」).
+	NativeSearch int
 }
 
 // defaultIdentityLen is what a derived value may take when Rewrites.IdentityLen is 0: derived identifiers are short
@@ -121,7 +124,9 @@ var errHistory = errors.New("protocol: previous_response_id and the history pass
 // only the members README.md「同格式改写」 lists: every other byte, signatures and encrypted items included, is copied
 // as it is. A compaction request (Target.Compact) is rewritten by a smaller set of members, and nothing is added to it.
 // The three formats convert in either direction (README.md「跨格式转换」).
-func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
+// prepare is Prepare without the native search tool, which is added after the target format's body exists: a
+// conversion writes the body first, then the tool goes into the format the endpoint speaks.
+func prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u := Upstream{Usage: usageContext(r)}
 	u.Usage.CacheTTL1h = u.Usage.CacheTTL1h && t.Format == Messages // only Anthropic keeps a 1-hour TTL
 	var err error

@@ -288,3 +288,26 @@ func TestScheduleScaled(t *testing.T) {
 		t.Error("a price past 1000 was taken")
 	}
 }
+
+func TestWithRateReplacesEveryBandWithoutChangingTheOriginal(t *testing.T) {
+	original, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001","web_search":"0.01"},` +
+		`"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":1000,"rates":{"output":"0.000002"}}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	price, err := platform.ParseUnitPrice("0.03")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := original.WithRate(catalog.ItemWebSearch, price)
+	for _, r := range changed.View().Rates {
+		if r.Item == catalog.ItemWebSearch && r.Price != price {
+			t.Errorf("changed web_search rate at %v above %d = %s, want %s", r.ServiceTier, r.Above, r.Price, price)
+		}
+	}
+	for _, r := range original.View().Rates {
+		if r.Item == catalog.ItemWebSearch && r.Price.String() != "0.01" {
+			t.Errorf("the original web_search rate = %s, want it unchanged at 0.01", r.Price)
+		}
+	}
+}

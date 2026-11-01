@@ -756,10 +756,10 @@ paths:
       operationId: getSearchSettings
       tags:
       - Site
-      summary: Saved web search backend override; the key is never returned. Environment remains authoritative when
-        absent.
-      description: Saved web search backend override; the key is never returned. Environment remains authoritative
-        when absent.
+      summary: The configured search engines, their published prices and where the list came from. Keys are never
+        returned.
+      description: The configured search engines, their published prices and where the list came from. Keys are never
+        returned.
       security:
       - session: []
       x-axiom-level: mfa
@@ -785,10 +785,10 @@ paths:
       operationId: setSearchSettings
       tags:
       - Site
-      summary: Save an encrypted web search backend override. Restart nodes to apply. An omitted key retains the saved
-        key; a URL change requires reentry.
-      description: Save an encrypted web search backend override. Restart nodes to apply. An omitted key retains the
-        saved key; a URL change requires reentry.
+      summary: Replace the search engine list. Restart nodes to apply. An omitted key retains the saved key; a URL or
+        kind change requires reentry.
+      description: Replace the search engine list. Restart nodes to apply. An omitted key retains the saved key; a URL
+        or kind change requires reentry.
       security:
       - session: []
         csrf: []
@@ -829,10 +829,10 @@ paths:
       operationId: testSearchSettings
       tags:
       - Site
-      summary: Run one fixed search using the saved backend. Accepted means the backend answered with usable results.
-        Ten tests per session per minute.
-      description: Run one fixed search using the saved backend. Accepted means the backend answered with usable
-        results. Ten tests per session per minute.
+      summary: Run one fixed search using the engine as it is given, or the saved key when it is omitted. Accepted
+        means the backend answered with usable results. Ten tests per session per minute.
+      description: Run one fixed search using the engine as it is given, or the saved key when it is omitted.
+        Accepted means the backend answered with usable results. Ten tests per session per minute.
       security:
       - session: []
         csrf: []
@@ -4582,25 +4582,153 @@ components:
           - failed
           - disabled
           - unsupported
+    SearchEngine:
+      type: object
+      additionalProperties: false
+      description: One configured search backend. Costs, markup and the published prices are exact decimal text, per
+        search and per extra result; the key itself is never returned.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9_-]{0,31}$'
+          description: The name a request's web plugin names as its engine; "native" is reserved for the provider's
+            own search.
+        kind:
+          type: string
+          enum: [searxng, firecrawl]
+        url:
+          type: string
+          maxLength: 2048
+        has_key:
+          type: boolean
+        enabled:
+          type: boolean
+        default:
+          type: boolean
+          description: The backend a request that names none falls back to when the model has no native search.
+        cost_per_search:
+          type: string
+          maxLength: 32
+          pattern: '^[0-9]+(\.[0-9]{1,15})?$'
+        cost_per_extra_result:
+          type: string
+          maxLength: 32
+          pattern: '^[0-9]+(\.[0-9]{1,15})?$'
+        markup:
+          type: string
+          maxLength: 32
+          pattern: '^[0-9]+(\.[0-9]{1,15})?$'
+          description: The cost-plus ratio the published price is derived at, like a model price's markup_ratio.
+        price_per_search:
+          type: string
+          description: The published sale price of one search; zero means the model's web_search price applies.
+        price_per_extra_result:
+          type: string
+        price_version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Increments when a save changes the cost, markup or published price; a call locks it with its
+            reservation.
+      required:
+      - id
+      - name
+      - kind
+      - url
+      - has_key
+      - enabled
+      - default
+      - cost_per_search
+      - cost_per_extra_result
+      - markup
+      - price_per_search
+      - price_per_extra_result
+      - price_version
+    SearchEngineInput:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The engine being edited; absent creates one.
+        name:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9_-]{0,31}$'
+        kind:
+          type: string
+          enum: [searxng, firecrawl]
+        url:
+          type: string
+          maxLength: 2048
+        key:
+          type: string
+          maxLength: 4096
+          description: Omitted keeps the saved key while the URL and kind are unchanged; a new destination needs it
+            again. Never returned.
+        enabled:
+          type: boolean
+        default:
+          type: boolean
+        cost_per_search:
+          type: string
+          maxLength: 32
+          pattern: '^[0-9]+(\.[0-9]{1,15})?$'
+        cost_per_extra_result:
+          type: string
+          maxLength: 32
+          pattern: '^[0-9]+(\.[0-9]{1,15})?$'
+        markup:
+          type: string
+          maxLength: 32
+          pattern: '^[0-9]+(\.[0-9]{1,15})?$'
+      required:
+      - name
+      - kind
+      - enabled
+      - default
+      - cost_per_search
+      - cost_per_extra_result
+      - markup
     SearchSettings:
       type: object
       additionalProperties: false
       properties:
-        url:
-          type: string
-        has_key:
-          type: boolean
-        restart_required:
-          type: boolean
+        engines:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchEngine'
+          description: Present on a node that supports multiple engines. A page talking to an older node sees url and
+            has_key instead and sends the old single-backend shape.
         source:
           type: string
+          enum: [database, saved, environment, none]
+          description: Where the list came from. "saved" is the old single-backend row and "environment" is
+            AXIOM_SEARCH_URL; both apply until an engine list is saved.
+        url:
+          type: string
+          description: The default engine's URL, for a page built before engines existed.
+        has_key:
+          type: boolean
+          description: Whether the default engine has a key, for a page built before engines existed.
+        restart_required:
+          type: boolean
     SearchSettingsUpdate:
       type: object
       additionalProperties: false
       properties:
+        engines:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/SearchEngineInput'
         settings:
           type: object
           additionalProperties: false
+          description: The old single-backend shape, still accepted from a page built before engines existed.
           properties:
             url:
               type: string
@@ -4611,12 +4739,16 @@ components:
         reason:
           $ref: '#/components/schemas/Reason'
       required:
-      - settings
       - reason
     SearchConfigTest:
       type: object
       additionalProperties: false
       properties:
+        engine:
+          description: The engine to test. Absent tests the saved default, which is what a page built before engines
+            existed asks for.
+          allOf:
+          - $ref: '#/components/schemas/SearchEngineInput'
         reason:
           $ref: '#/components/schemas/Reason'
       required:

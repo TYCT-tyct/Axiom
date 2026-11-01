@@ -1251,6 +1251,18 @@ export interface components {
             /** @description The items whose counts add up to the prompt length the context bands compare; empty when the schedule has no context tiers. */
             basis: components["schemas"]["ModelItem"][];
             rates: components["schemas"]["ModelRate"][];
+            /** @description What one web search through each enabled backend costs, per search plus each result after the first. A backend whose published per-search price is zero sells at the model's web_search rate instead. Absent from a node that serves no backend. */
+            search_engines?: components["schemas"]["ModelSearchEnginePrice"][];
+        };
+        ModelSearchEnginePrice: {
+            /** @description The engine a request's web plugin names; "native" is the provider's own search. */
+            name: string;
+            /** @description Decimal currency units per search; zero means the model's web_search price. */
+            price_per_search: string;
+            /** @description Decimal currency units for each result after the first. */
+            price_per_extra_result: string;
+            /** @description The backend a request that names none falls back to. */
+            default: boolean;
         };
         ModelRate: {
             service_tier: components["schemas"]["ModelServiceTier"];

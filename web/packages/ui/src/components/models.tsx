@@ -18,10 +18,18 @@ type PublicModelRate = {
   amount: string;
 };
 
+type PublicSearchEnginePrice = {
+  name: string;
+  price_per_search: string;
+  price_per_extra_result: string;
+  default: boolean;
+};
+
 type PublicModelPricing = {
   currency: string;
   basis?: string[];
   rates?: PublicModelRate[];
+  search_engines?: PublicSearchEnginePrice[];
 };
 
 export type PublicModel = {
@@ -305,6 +313,9 @@ function ModelDetails({ id, model }: { id: string; model: PublicModel }) {
         ) : (
           <RateTable model={model} currency={pricing.currency} rates={rates} />
         )}
+        {pricing?.search_engines?.length ? (
+          <SearchEnginePrices model={model} currency={pricing.currency} engines={pricing.search_engines} />
+        ) : null}
       </div>
     </section>
   );
@@ -361,6 +372,52 @@ function RateTable({ model, currency, rates }: { model: PublicModel; currency: s
               <span className="block text-label text-t3">
                 {rate.unit === "token" ? t("publicModels.perMillion") : `/ ${label(t, "unit", rate.unit)}`}
               </span>
+            </Td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  );
+}
+
+// SearchEnginePrices is what one web search through each enabled backend costs: per search plus each result after
+// the first. A zero search price is the model's web_search rate, which the rate table already shows.
+function SearchEnginePrices({
+  model,
+  currency,
+  engines,
+}: {
+  model: PublicModel;
+  currency: string;
+  engines: PublicSearchEnginePrice[];
+}) {
+  const { t } = useTranslation("common");
+  const format = useFormat();
+  return (
+    <Table label={`${model.name} ${t("publicModels.searchEngines")}`}>
+      <thead>
+        <tr>
+          <Th>{t("publicModels.engine")}</Th>
+          <Th className="text-right">{t("publicModels.perSearch")}</Th>
+          <Th className="text-right">{t("publicModels.perResult")}</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {engines.map((engine) => (
+          <tr key={engine.name}>
+            <Td>
+              {engine.name}
+              {engine.default ? (
+                <span className="block text-label text-t3">{t("publicModels.defaultEngine")}</span>
+              ) : null}
+            </Td>
+            <Td className="text-right whitespace-nowrap tabular-nums">
+              {engine.price_per_search === "0"
+                ? t("publicModels.modelWebSearchRate")
+                : `${format.decimal(engine.price_per_search)} ${currency}`}
+            </Td>
+            <Td className="text-right whitespace-nowrap tabular-nums">
+              {format.decimal(engine.price_per_extra_result)} {currency}
             </Td>
           </tr>
         ))}

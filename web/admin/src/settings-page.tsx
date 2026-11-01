@@ -31,7 +31,8 @@ export function SettingsPage<T>({
   facts: (props: { view: T; action: ReactNode }) => ReactNode;
   dialogs: {
     edit: (props: { view: T; onClose: () => void }) => ReactNode;
-    test: (props: { onClose: () => void }) => ReactNode;
+    // A test dialog may show what it is testing: the search page names the default engine.
+    test: (props: { view: T; onClose: () => void }) => ReactNode;
   };
 }) {
   const [editing, setEditing] = useState(false);
@@ -61,7 +62,7 @@ export function SettingsPage<T>({
             ),
           })}
           {editing ? dialogs.edit({ view, onClose: () => setEditing(false) }) : null}
-          {testing ? dialogs.test({ onClose: () => setTesting(false) }) : null}
+          {testing ? dialogs.test({ view, onClose: () => setTesting(false) }) : null}
         </>
       )}
     </DataState>

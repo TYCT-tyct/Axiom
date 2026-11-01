@@ -20,8 +20,8 @@ const (
 )
 
 // UnitPrice is a price per billing unit (a token, a request) in units of 10⁻¹⁵ of a currency, from 0 to 1000. An
-// entered price is made only from decimal text, so it is exactly what an operator or an official page wrote; a price
-// computed from a fraction rounds up instead (docs/domains/billing.md「钱的表示」); that constructor does not exist yet.
+// entered price is made only from decimal text, so it is exactly what an operator or an official page wrote; Scale
+// computes one from a fraction and rounds up instead (docs/domains/billing.md「钱的表示」).
 type UnitPrice struct{ n int64 }
 
 var errUnitPrice = errors.New("unit price: want a decimal from 0 to 1000 with at most 15 decimals, such as 0.000003")
@@ -68,11 +68,45 @@ func (p UnitPrice) String() string {
 	return whole + "." + strings.TrimRight(digits, "0")
 }
 
+// IsZero reports the price 0, which a configured sale price uses to mean "no engine price" rather than "free".
+func (p UnitPrice) IsZero() bool { return p.n == 0 }
+
 // Cmp returns -1, 0 or +1 as p is less than, equal to or greater than q.
 func (p UnitPrice) Cmp(q UnitPrice) int { return cmp.Compare(p.n, q.n) }
 
 // Rat returns the price as an exact fraction of a currency unit.
 func (p UnitPrice) Rat() *big.Rat { return big.NewRat(p.n, priceScale) }
+
+// Scale returns p × r rounded up to one unit price. It is how a sale price is computed from a supplier cost and a
+// markup (docs/domains/billing.md「钱的表示」): exact until the final rounding, and never below the product. A ratio
+// that would take the price above the ceiling is an error, not a wrapped price. A negative ratio is a caller's bug.
+func (p UnitPrice) Scale(r *big.Rat) (UnitPrice, error) {
+	if r.Sign() < 0 {
+		panic("platform: UnitPrice.Scale with a negative ratio")
+	}
+	if p.n == 0 || r.Sign() == 0 {
+		return UnitPrice{}, nil
+	}
+	scaled := new(big.Rat).Mul(p.Rat(), r)
+	num := new(big.Int).Mul(scaled.Num(), big.NewInt(priceScale))
+	units, rem := new(big.Int).QuoRem(num, scaled.Denom(), new(big.Int))
+	if rem.Sign() > 0 {
+		units.Add(units, big.NewInt(1))
+	}
+	if !units.IsInt64() || units.Int64() > maxUnitPrice {
+		return UnitPrice{}, errUnitPrice
+	}
+	return UnitPrice{units.Int64()}, nil
+}
+
+// Add returns p + q. The sum of two prices cannot overflow an int64 (each is at most 1000 × 10¹⁵), but it can exceed
+// the unit-price ceiling, which is an error rather than a price the database cannot hold.
+func (p UnitPrice) Add(q UnitPrice) (UnitPrice, error) {
+	if p.n > maxUnitPrice-q.n {
+		return UnitPrice{}, errUnitPrice
+	}
+	return UnitPrice{p.n + q.n}, nil
+}
 
 // Mul returns the exact cost of count billing units. It cannot overflow: the price is below 2⁶⁰ and the count below
 // 2⁶³, so the product is below 2¹²³. A negative count is a bug in the caller, which validates usage first.

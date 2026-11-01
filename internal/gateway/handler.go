@@ -20,6 +20,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/fileparse"
+	"axiom/internal/platform"
 	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
@@ -57,9 +58,9 @@ type Deps struct {
 	// Outstanding is the node's drain counter, the one its Executor counts on: a request is counted from the gate until
 	// ServeHTTP returns, and the settlement of a lost admission until it is written.
 	Outstanding *Outstanding
-	// Search runs the web plugin through the deployment's backend; nil means no backend is configured, and every
-	// request that asks for web search keeps its documented refusal.
-	Search websearch.Searcher
+	// Search is the deployment's search engines; nil means none is configured, and every request that asks for web
+	// search keeps its documented refusal.
+	Search SearchBackends
 	// Parser runs the file-parser plugin's OCR engines through the deployment's backend; nil means no backend is
 	// configured, and a request that asks for one keeps its documented refusal.
 	Parser fileparse.Parser
@@ -176,20 +177,25 @@ func isMessagesPath(path string) bool {
 // Call is a request that has been admitted: its reservation is committed and its route is cut to the entries that
 // reservation covers. Run gets it; nothing in it changes after that but what Run does through its methods.
 type Call struct {
-	ID        uuid.UUID // the request ID, which is also the call number
-	At        time.Time // one start for the call log and the reservation: the request's arrival, before admission
-	Format    protocol.Format
-	Compact   bool // the Responses compact endpoint: the upstream answers whole and its body is passed through
-	Request   protocol.Request
-	Body      []byte
-	search    string                    // the web plugin's query, read before admission and never logged
-	files     []protocol.FileAnnotation // the annotations a parsed Chat reply returns, so the client can skip reparsing
-	Header    http.Header               // the client's values of the headers that may go upstream, which headers.go derives per attempt
-	Session   routing.SessionKey
-	Admission accounts.Admission
-	Admitted  billing.Admitted
-	Hold      *billing.Hold
-	Plan      routing.Plan
+	ID      uuid.UUID // the request ID, which is also the call number
+	At      time.Time // one start for the call log and the reservation: the request's arrival, before admission
+	Format  protocol.Format
+	Compact bool // the Responses compact endpoint: the upstream answers whole and its body is passed through
+	Request protocol.Request
+	Body    []byte
+	search  string // the web plugin's query, read before admission and never logged
+	// searchBackend is the backend the plugin's one search runs through, nil when the plugin uses the model's own
+	// search instead. nativeSearch is the most searches the gateway turns on upstream, 0 when it turns on none.
+	searchBackend *websearch.Backend
+	nativeSearch  int
+	searchPrice   platform.UnitPrice        // the backend's published price per search, zero to use the model's
+	files         []protocol.FileAnnotation // the annotations a parsed Chat reply returns, so the client can skip reparsing
+	Header        http.Header               // the client's values of the headers that may go upstream, which headers.go derives per attempt
+	Session       routing.SessionKey
+	Admission     accounts.Admission
+	Admitted      billing.Admitted
+	Hold          *billing.Hold
+	Plan          routing.Plan
 
 	site        accounts.Site
 	caller      accounts.Caller
@@ -407,11 +413,9 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 		return err
 	}
 	onlineWebPlugin(&req, names.online)
-	query, ref := h.checkWebSearch(&req, body)
-	if ref != nil {
+	if ref := h.checkWebSearch(&req); ref != nil {
 		return ref
 	}
-	c.search = query
 	if err := h.gateParsing(r, c, sessionBody, req); err != nil {
 		return err
 	}

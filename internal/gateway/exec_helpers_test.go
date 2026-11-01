@@ -448,7 +448,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 		Router: h.router, Upstreams: h.up, Limits: limits, Memory: h.memory, Logger: logger,
 		Ledger: &fakeLedger{h: h, o: o}, Costs: costs,
 		Alive: alive, IdentitySecret: []byte("0123456789abcdef"), Quality: h.health, Outstanding: NewOutstanding(),
-		Search: o.search,
+		Search: singleSearch{o.search},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -460,6 +460,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	return h
 }
 
+//nolint:cyclop,gocognit // the harness fills every request field the scenario may need
 func (h *harness) newCall(o options, request []byte, client, upstream protocol.Format) *Call {
 	h.t.Helper()
 	n := max(o.entries, 1)
@@ -512,6 +513,14 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 	if req.Web != nil {
 		if c.search, err = protocol.ChatSearchQuery(request); err != nil {
 			h.t.Fatal(err)
+		}
+		// Admission resolves the engine in production; the harness builds its plan directly, so it resolves the one
+		// backend it was given here.
+		if backend, ok := (singleSearch{o.search}).Default(); ok {
+			c.searchBackend = backend
+			if c.searchPrice, err = backend.Price(req.Web.MaxResults); err != nil {
+				h.t.Fatal(err)
+			}
 		}
 	}
 	c.hold(func() { close(h.released) })

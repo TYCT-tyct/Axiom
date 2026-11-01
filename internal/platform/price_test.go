@@ -109,6 +109,72 @@ func TestMulRejectsNegativeCount(t *testing.T) {
 	UnitPrice{1}.Mul(-1)
 }
 
+// TestUnitPriceScale checks the two ways an engine price is derived from a cost: an exact product stays exact, one
+// with more than 15 decimals rounds up once, and one past the price ceiling is an error rather than a price.
+func TestUnitPriceScale(t *testing.T) {
+	price := func(s string) UnitPrice {
+		p, err := ParseUnitPrice(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, tc := range []struct {
+		name    string
+		price   UnitPrice
+		ratio   *big.Rat
+		want    string
+		wantErr bool
+	}{
+		{"exact", price("0.005"), big.NewRat(6, 5), "0.006", false},
+		{"halves a unit", price("0.000000000000001"), big.NewRat(1, 2), "0.000000000000001", false},
+		{"rounds up once", price("0.1"), big.NewRat(1, 3), "0.033333333333334", false},
+		{"zero cost", UnitPrice{}, big.NewRat(2, 1), "0", false},
+		{"zero ratio", price("1"), big.NewRat(0, 1), "0", false},
+		{"above the ceiling", price("1000"), big.NewRat(2, 1), "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.price.Scale(tc.ratio)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("Scale(%s) = %s, want an error", tc.ratio, got)
+				}
+				return
+			}
+			if err != nil || got.String() != tc.want {
+				t.Fatalf("Scale(%s) = %s, %v; want %s", tc.ratio, got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestUnitPriceScaleRejectsNegativeRatio(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("Scale(-1) did not panic")
+		}
+	}()
+	_, _ = UnitPrice{1}.Scale(big.NewRat(-1, 1)) //nolint:errcheck // the call panics before it can return
+}
+
+// TestUnitPriceAdd checks the sum of a search price and its extra-result prices, including the ceiling the database
+// cannot hold.
+func TestUnitPriceAdd(t *testing.T) {
+	price := func(s string) UnitPrice {
+		p, err := ParseUnitPrice(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if got, err := price("0.005").Add(price("0.0125")); err != nil || got.String() != "0.0175" {
+		t.Fatalf("0.005 + 0.0125 = %s, %v; want 0.0175", got, err)
+	}
+	if _, err := price("1000").Add(price("0.000000000000001")); err == nil {
+		t.Fatal("a sum past the price ceiling was accepted")
+	}
+}
+
 var (
 	maxExact = Exact{math.MaxInt64, math.MaxUint64}
 	minExact = Exact{math.MinInt64, 0}

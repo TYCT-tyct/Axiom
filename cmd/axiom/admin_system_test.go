@@ -14,6 +14,7 @@ import (
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/idem"
@@ -252,16 +253,16 @@ func TestAdminFileParserSettings(t *testing.T) {
 }
 
 // TestSearchFingerprintKeepsItsShape: a client retries a save under the same Idempotency-Key after a restart, possibly on
-// another node. The retry is a replay only if the fingerprint covers the same three things as before: the destination,
-// the reason, and whether a credential came with the body — not the credential itself, and not the key the retry
-// arrives under. A fingerprint that drifted would answer 409 instead of the stored response.
+// another node. The retry is a replay only if the fingerprint covers the same engine list, the reason, and whether a
+// credential came with the body — not the credential itself, and not the key the retry arrives under. A fingerprint
+// that drifted would answer 409 instead of the stored response.
 func TestSearchFingerprintKeepsItsShape(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	body := `{"settings":{"url":"https://8.8.8.8","key":"search-test-value"},"reason":"configure"}`
 	expectAdmin(t, "save", f.change(s, http.MethodPut, "/settings/search", body, newKey()), 200, "")
-	want, err := idem.Fingerprint([]any{"https://8.8.8.8", "configure", true})
+	want, err := idem.Fingerprint([]any{"configure", "", "searxng", "searxng", "https://8.8.8.8", true, true, "0", "0", "0", true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,12 +276,15 @@ func TestSearchFingerprintKeepsItsShape(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,gocognit // the steps are the admin flow and each assertion is one step
 func TestAdminSearchSettings(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	path := "/settings/search"
-	body := `{"settings":{"url":"https://8.8.8.8","key":"search-test-value"},"reason":"configure"}`
+	engine := `{"name":"searxng","kind":"searxng","url":"https://8.8.8.8","key":"search-test-value","enabled":true,"default":true,` +
+		`"cost_per_search":"0.005","cost_per_extra_result":"0.002","markup":"0.2"}`
+	body := `{"engines":[` + engine + `],"reason":"configure"}`
 	rec := f.change(s, http.MethodPut, path, body, newKey())
 	expectAdmin(t, "save search", rec, 200, "")
 	if strings.Contains(rec.Body.String(), "search-test-value") {
@@ -288,25 +292,120 @@ func TestAdminSearchSettings(t *testing.T) {
 	}
 	var got adminapi.SearchSettings
 	decode(t, rec, &got)
-	if got.HasKey == nil || !*got.HasKey || got.RestartRequired == nil || !*got.RestartRequired ||
-		got.Source == nil || *got.Source != "database" {
+	if got.Engines == nil || len(*got.Engines) != 1 {
+		t.Fatalf("saved engines = %+v", got.Engines)
+	}
+	engines := *got.Engines
+	if !engines[0].HasKey || !engines[0].Default || !engines[0].Enabled ||
+		engines[0].PricePerSearch != "0.006" || engines[0].PricePerExtraResult != "0.0024" {
+		t.Fatalf("saved engine = %+v", engines[0])
+	}
+	if got.RestartRequired == nil || !*got.RestartRequired || got.Source == nil || *got.Source != adminapi.SearchSettingsSourceDatabase {
 		t.Fatalf("missing metadata: %+v", got)
 	}
-	body = strings.Replace(body, `,"key":"search-test-value"`, "", 1)
-	expectAdmin(t, "retain key", f.change(s, http.MethodPut, path, body, newKey()), 200, "")
-	expectAdmin(t, "destination change", f.change(s, http.MethodPut, path, strings.Replace(body, "8.8.8.8", "8.8.4.4", 1), newKey()), 400, "")
+	// The key stays when the backend does, and is dropped when the destination changes rather than sent to a new host.
+	noKey := strings.Replace(body, `,"key":"search-test-value"`, "", 1)
+	rec = f.change(s, http.MethodPut, path, noKey, newKey())
+	expectAdmin(t, "retain key", rec, 200, "")
+	decode(t, rec, &got)
+	engines = *got.Engines
+	if !engines[0].HasKey {
+		t.Fatal("the saved key was not retained")
+	}
+	rec = f.change(s, http.MethodPut, path, strings.Replace(noKey, "8.8.8.8", "8.8.4.4", 1), newKey())
+	expectAdmin(t, "destination change", rec, 200, "")
+	decode(t, rec, &got)
+	engines = *got.Engines
+	if engines[0].HasKey {
+		t.Fatal("the old key was reused for a new destination")
+	}
 	rec = f.do(http.MethodGet, path, "", as(s))
 	expectAdmin(t, "read search", rec, 200, "")
-	if !strings.Contains(rec.Body.String(), "8.8.8.8") || strings.Contains(rec.Body.String(), "search-test-value") {
+	if !strings.Contains(rec.Body.String(), "8.8.4.4") || strings.Contains(rec.Body.String(), "search-test-value") {
 		t.Fatal(rec.Body.String())
 	}
-	if strings.Contains(f.text("SELECT detail::text FROM platform.audit_log WHERE action='search_config.update' LIMIT 1"), "search-test-value") {
+	if strings.Contains(f.text("SELECT detail::text FROM platform.audit_log WHERE action='search_engines.update' LIMIT 1"), "search-test-value") {
 		t.Fatal("secret in audit")
 	}
-	expectAdmin(t, "disable", f.change(s, http.MethodPut, path, `{"settings":{"url":""},"reason":"disable"}`, newKey()), 200, "")
-	rec = f.change(s, http.MethodPost, path+"/tests", `{"reason":"probe"}`, newKey())
+	expectAdmin(t, "disable", f.change(s, http.MethodPut, path, `{"engines":[],"reason":"disable"}`, newKey()), 200, "")
+	rec = f.change(s, http.MethodPost, path+"/tests",
+		`{"engine":{"name":"searxng","kind":"searxng","enabled":true,"default":true,"cost_per_search":"0","cost_per_extra_result":"0","markup":"0"},"reason":"probe"}`, newKey())
 	expectAdmin(t, "test disabled", rec, 200, "")
 	if !strings.Contains(rec.Body.String(), "disabled") {
 		t.Fatal(rec.Body.String())
+	}
+	// A page built before engines sends only the reason and tests the saved backend; with the list cleared that is
+	// the documented "disabled" answer, not a schema failure.
+	rec = f.change(s, http.MethodPost, path+"/tests", `{"reason":"probe old page"}`, newKey())
+	expectAdmin(t, "test old page", rec, 200, "")
+	if !strings.Contains(rec.Body.String(), "disabled") {
+		t.Fatal(rec.Body.String())
+	}
+	// The old single-backend write shape still saves, and the old read fields describe the default engine.
+	rec = f.change(s, http.MethodPut, path, `{"settings":{"url":"https://8.8.8.8"},"reason":"old page"}`, newKey())
+	expectAdmin(t, "save old page", rec, 200, "")
+	var old adminapi.SearchSettings
+	decode(t, rec, &old)
+	if old.Url == nil || *old.Url != "https://8.8.8.8" || old.HasKey == nil || *old.HasKey {
+		t.Fatalf("old page view = %+v", old)
+	}
+}
+
+// TestAdminSearchLegacyGetThenSaveKeepsKey is the old page's first round trip: GET returns the legacy config with a
+// zero UUID, the page submits it back without a key, and the save must create a new engine rather than look up a row
+// that cannot exist and drop the credential.
+func TestAdminSearchLegacyGetThenSaveKeepsKey(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	sealed := masterKeys(t).Seal(secret.New(`{"url":"https://8.8.8.8","key":"legacy-key"}`), secret.Location{
+		Table: "platform.search_config", RowID: "00000000-0000-0000-0000-000000000000", Purpose: "config",
+	})
+	f.run(fmt.Sprintf(`INSERT INTO platform.search_config (id,ciphertext,nonce,wrapped_dek,key_version)
+VALUES ('00000000-0000-0000-0000-000000000000','\x%x','\x%x','\x%x',%d)`,
+		sealed.Ciphertext, sealed.Nonce, sealed.WrappedDEK, sealed.KeyVersion))
+	rec := f.do(http.MethodGet, "/settings/search", "", as(s))
+	expectAdmin(t, "legacy read", rec, 200, "")
+	var view adminapi.SearchSettings
+	decode(t, rec, &view)
+	if view.Engines == nil || len(*view.Engines) != 1 || (*view.Engines)[0].Id != (adminapi.SearchEngine{}).Id ||
+		view.Url == nil || *view.Url != "https://8.8.8.8" || view.HasKey == nil || !*view.HasKey {
+		t.Fatalf("legacy view = %+v", view)
+	}
+	body := fmt.Sprintf(`{"engines":[{"id":"%s","name":"searxng","kind":"searxng","url":"https://8.8.8.8",`+
+		`"enabled":true,"default":true,"cost_per_search":"0","cost_per_extra_result":"0","markup":"0"}],"reason":"first save"}`,
+		(*view.Engines)[0].Id)
+	rec = f.change(s, http.MethodPut, "/settings/search", body, newKey())
+	expectAdmin(t, "first save", rec, 200, "")
+	var saved adminapi.SearchSettings
+	decode(t, rec, &saved)
+	if saved.Engines == nil || len(*saved.Engines) != 1 || !(*saved.Engines)[0].HasKey {
+		t.Fatalf("first save = %+v", saved)
+	}
+}
+
+// TestAdminSearchTestRefusesToMoveAKey: a test request that names an existing engine but a new destination must not
+// send the saved credential to that destination.
+func TestAdminSearchTestRefusesToMoveAKey(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	path := "/settings/search"
+	body := `{"engines":[{"name":"paid","kind":"firecrawl","url":"https://8.8.8.8","key":"old-key","enabled":true,"default":true,` +
+		`"cost_per_search":"0.005","cost_per_extra_result":"0.002","markup":"0.2"}],"reason":"configure"}`
+	rec := f.change(s, http.MethodPut, path, body, newKey())
+	expectAdmin(t, "save", rec, 200, "")
+	var saved adminapi.SearchSettings
+	decode(t, rec, &saved)
+	if saved.Engines == nil || len(*saved.Engines) != 1 {
+		t.Fatalf("saved = %+v", saved)
+	}
+	id := (*saved.Engines)[0].Id
+	test := `{"engine":{"id":"` + id.String() + `","name":"paid","kind":"firecrawl","url":"https://8.8.4.4",` +
+		`"enabled":true,"default":true,"cost_per_search":"0.005","cost_per_extra_result":"0.002","markup":"0.2"},"reason":"probe"}`
+	rec = f.change(s, http.MethodPost, path+"/tests", test, newKey())
+	expectAdmin(t, "moved destination", rec, 400, "")
+	if strings.Contains(rec.Body.String(), "old-key") {
+		t.Fatal("the response leaked the key")
 	}
 }

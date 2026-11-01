@@ -30,7 +30,7 @@ func (r *rig) seedCatalog() {
 	if r.catalog, err = catalog.Open(r.db, platformScope, catalog.Config{MaxStale: time.Hour, CountedItems: true}); err != nil {
 		r.t.Fatal(err)
 	}
-	r.alpha = r.model("acme/alpha")
+	r.alpha = r.listed("acme/alpha", cmpOr(r.alphaSpec, basicSpec), r.price)
 	r.beta = r.model("acme/beta")
 	r.bare = r.model("anthropic/claude-test", "claude-test")
 	r.claude = r.model("anthropic/claude-live", "claude-live")
