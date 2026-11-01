@@ -104,7 +104,7 @@ func (b *Billing) planSettlements(ctx context.Context, tx pg.Tx, items []Settlem
 		plans[i] = plan
 		if plan.end != nil {
 			balance.Balance = addClamp(balance.Balance, -plan.end.spent)
-			balance.Reserved = addClamp(balance.Reserved, plan.end.reserved)
+			balance.Reserved = addClamp(balance.Reserved, plan.end.balanceReserved)
 		}
 	}
 	return plans, nil
@@ -146,12 +146,14 @@ type settlementPlan struct {
 // reservationEnd is the EndReservation of one plan, its counters in the plan's order for the next item's cap, and the
 // database time the batch reads back.
 type reservationEnd struct {
-	c        *locked
-	index    int
-	w        written
-	reserved int64
-	spent    int64
-	at       time.Time
+	c               *locked
+	index           int
+	w               written
+	balanceReserved int64
+	spendReserved   int64
+	spent           int64
+	window          *windowSettle // the plan window's move, nil for a wallet hold or a late settlement
+	at              time.Time
 }
 
 // planSettlement is settle's branch on the reservation's state, with the writes kept instead of executed. It is
@@ -251,20 +253,34 @@ func (c *locked) attemptWrites(o Outcome) ([]PostLedgerParams, []suppliers.Attem
 
 // planRelease is release with its write kept.
 func (c *locked) planRelease(state string, held int64) *reservationEnd {
-	return &reservationEnd{c: c, w: c.kept(state), reserved: -max(held, 0)}
+	if c.plan() {
+		return &reservationEnd{c: c, w: c.kept(state), spendReserved: -max(held, 0), window: &windowSettle{held: held}}
+	}
+	return &reservationEnd{c: c, w: c.kept(state), balanceReserved: -max(held, 0), spendReserved: -max(held, 0)}
 }
 
 // planEnd is end with its writes kept: the charge is capped by the balance the earlier items of the batch leave.
 func (c *locked) planEnd(p priced, last AttemptResult) (*reservationEnd, []PostLedgerParams, error) {
 	held := c.row.Amount - c.row.Charged
-	c.owed, c.charged = p.price, min(p.price, c.cap(held))
 	c.settlement = c.event("settle", 0)
+	lines := charge(p.price, 0)
+	if c.plan() { // the window froze the whole hold and pays what was charged, up to it
+		c.owed, c.charged = p.price, min(p.price, c.row.Amount)
+		lines = planCharge(p.price, c.charged)
+	} else {
+		c.owed, c.charged = p.price, min(p.price, c.cap(held))
+		lines = charge(p.price, c.charged)
+	}
 	w, err := result(p, last)
 	if err != nil {
 		return nil, nil, err
 	}
-	posts := []PostLedgerParams{ledgerParams(c.settlement, charge(p.price, c.charged))}
-	return &reservationEnd{c: c, w: w, reserved: -held, spent: c.charged}, posts, nil
+	posts := []PostLedgerParams{ledgerParams(c.settlement, lines)}
+	if c.plan() {
+		return &reservationEnd{c: c, w: w, spendReserved: -c.row.Amount, spent: c.charged,
+			window: &windowSettle{held: c.row.Amount, charged: c.charged}}, posts, nil
+	}
+	return &reservationEnd{c: c, w: w, balanceReserved: -held, spendReserved: -held, spent: c.charged}, posts, nil
 }
 
 // planLate is late with its writes kept: the refund and the new charge, and the difference as the spent counter.
@@ -280,6 +296,7 @@ func (c *locked) planLate(p priced, last AttemptResult) (*reservationEnd, []Post
 		ledgerParams(reversalEvent, reversal(c.row.Price, c.row.Charged)),
 		ledgerParams(c.settlement, charge(p.price, c.charged)),
 	}
+	// A plan hold cleanup released has no window left to charge: the usage is the wallet's to pay, as late does.
 	return &reservationEnd{c: c, w: w, spent: c.charged - c.row.Charged}, posts, nil
 }
 
@@ -302,6 +319,9 @@ func writeSettlements(ctx context.Context, tx pg.Tx, s Suppliers, plans []settle
 	}
 	ends, err := endSettlementReservations(ctx, tx, plans)
 	if err != nil {
+		return err
+	}
+	if err := settlePlanWindows(ctx, tx, ends); err != nil {
 		return err
 	}
 	var ending []suppliers.EndedRequest
@@ -459,7 +479,8 @@ func (params *EndReservationBatchParams) add(p EndReservationParams) {
 	params.Profits = append(params.Profits, orElse(p.Profit, 0))
 	params.ProfitSet = append(params.ProfitSet, p.Profit != nil)
 	params.PricingTiers = append(params.PricingTiers, p.PricingTiers)
-	params.Reserved = append(params.Reserved, p.Reserved)
+	params.BalanceReserved = append(params.BalanceReserved, p.BalanceReserved)
+	params.Reserved = append(params.Reserved, p.SpendReserved)
 	params.Spent = append(params.Spent, p.Spent)
 	params.WorkspaceIds = append(params.WorkspaceIds, p.WorkspaceID)
 	params.WorkspaceWindows = append(params.WorkspaceWindows, p.WorkspaceWindow)
@@ -490,7 +511,7 @@ func intsJSON(xs []int32) string {
 func (e *reservationEnd) params() EndReservationParams {
 	c := e.c
 	return EndReservationParams{
-		Profit: c.profit(), Reserved: e.reserved, Spent: e.spent, AccountID: c.row.AccountID,
+		Profit: c.profit(), BalanceReserved: e.balanceReserved, SpendReserved: e.spendReserved, Spent: e.spent, AccountID: c.row.AccountID,
 		WorkspaceID: c.row.WorkspaceID, WorkspaceWindow: c.row.WorkspaceWindow, KeyID: c.row.KeyID, KeyWindow: c.row.KeyWindow,
 		RequestID: c.id, State: e.w.state, ChargedSeq: e.w.seq, Entry: e.w.entry, Charged: c.charged, Price: e.w.price,
 		Waived: e.w.waived, Estimated: e.w.estimated, FinalUsage: e.w.usage, AttemptEntries: c.entries,
@@ -532,6 +553,7 @@ func (r LockReservationsRow) lockRow() LockReservationRow {
 		Prices: r.Prices, PriceVersions: r.PriceVersions, ChargedSeq: r.ChargedSeq, Entry: r.Entry,
 		Charged: r.Charged, Price: r.Price, Waived: r.Waived, Estimated: r.Estimated, FinalUsage: r.FinalUsage,
 		Fallbacks: r.Fallbacks, Models: r.Models, AttemptEntries: r.AttemptEntries, Endpoints: r.Endpoints,
-		Profit: r.Profit, PricingTiers: r.PricingTiers,
+		Profit: r.Profit, Funding: r.Funding, SubscriptionID: r.SubscriptionID, WindowSeq: r.WindowSeq,
+		PricingTiers: r.PricingTiers,
 	}
 }

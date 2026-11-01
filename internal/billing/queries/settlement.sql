@@ -2,7 +2,7 @@
 -- Run after the account's balance row is locked: every change to a reservation happens under that lock.
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.price_versions, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit,
+    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit, r.funding, r.subscription_id, r.window_seq,
     coalesce(r.pricing_tiers, -2)::smallint AS pricing_tiers
 FROM billing.reservations r
 WHERE r.request_id = @request_id;
@@ -12,7 +12,7 @@ WHERE r.request_id = @request_id;
 -- the caller keeps its items' order by request id.
 SELECT r.request_id, r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.price_versions, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit,
+    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit, r.funding, r.subscription_id, r.window_seq,
     coalesce(r.pricing_tiers, -2)::smallint AS pricing_tiers
 FROM billing.reservations r
 WHERE r.request_id = ANY(@request_ids::uuid[]);
@@ -44,13 +44,14 @@ UPDATE billing.balances SET balance = @balance WHERE account_id = @account_id;
 SELECT account_id FROM billing.reservations WHERE request_id = @request_id;
 
 -- name: EndReservation :one
--- Moves the reservation's three counters and writes its outcome together. The charged attempt and entry, and the
+-- Moves the reservation's three counters and writes its outcome together. A plan-funded hold moves the balance's
+-- reserved by 0 and its own window instead (SettleWindow follows). The charged attempt and entry, and the
 -- attempts' entries, stay as they were when none is given. It returns the database's time, which a terminal state's EndRequest records, so every clock the request's end
 -- is judged by is the database's.
 WITH balance AS (
-    UPDATE billing.balances b SET reserved = b.reserved + @reserved WHERE b.account_id = @account_id
+    UPDATE billing.balances b SET reserved = b.reserved + @balance_reserved WHERE b.account_id = @account_id
 ), spend AS (
-    UPDATE billing.spend s SET reserved = s.reserved + @reserved, spent = s.spent + @spent
+    UPDATE billing.spend s SET reserved = s.reserved + @spend_reserved, spent = s.spent + @spent
     WHERE s.subject = @workspace_id AND s.window_start = @workspace_window
         OR s.subject = @key_id AND s.window_start = @key_window
 )
@@ -64,7 +65,9 @@ RETURNING clock_timestamp()::timestamptz AS ended_at;
 
 -- name: EndReservationBatch :many
 -- The batch form of EndReservation: every reservation of one completion batch ends in one statement. The balance gets
--- one sum and each spend window its own, so a batch's counters move exactly as its items' would one by one. final_usage
+-- one sum of its own reserved deltas (0 for plan-funded holds) and each spend window the spend deltas, so a batch's
+-- counters move exactly as its items' would one by one. A plan-funded hold's window is settled by SettleWindows after
+-- this. final_usage
 -- is the JSON text, NULL to keep what the row has; attempt_entries is a JSON array, NULL to keep the row's.
 WITH input AS (
     SELECT i AS ord, (@request_ids::uuid[])[i] AS request_id, (@states::text[])[i] AS state,
@@ -75,13 +78,14 @@ WITH input AS (
         (@attempt_entries::text[])[i] AS attempt_entries, (@attempt_entries_set::boolean[])[i] AS attempt_entries_set,
         (@profits::bigint[])[i] AS profit, (@profit_set::boolean[])[i] AS profit_set,
         (@pricing_tiers::smallint[])[i] AS pricing_tiers,
-        (@reserved::bigint[])[i] AS reserved, (@spent::bigint[])[i] AS spent,
+        (@reserved::bigint[])[i] AS reserved, (@balance_reserved::bigint[])[i] AS balance_reserved,
+        (@spent::bigint[])[i] AS spent,
         (@workspace_ids::uuid[])[i] AS workspace_id, (@workspace_windows::timestamptz[])[i] AS workspace_window,
         (@key_ids::uuid[])[i] AS key_id, (@key_windows::timestamptz[])[i] AS key_window
     FROM generate_subscripts(@request_ids::uuid[], 1) AS i
 ),
 balance AS (
-    UPDATE billing.balances b SET reserved = b.reserved + (SELECT sum(reserved) FROM input)
+    UPDATE billing.balances b SET reserved = b.reserved + (SELECT sum(balance_reserved) FROM input)
     WHERE b.account_id = @account_id
 ),
 spend AS (
@@ -113,6 +117,17 @@ updated AS (
     RETURNING r.request_id, clock_timestamp()::timestamptz AS ended_at
 )
 SELECT request_id, ended_at FROM updated;
+
+-- name: SettleWindows :exec
+-- The plan windows of a batch's settlements: each hold goes back and its charge is used, in one statement under the
+-- balance row lock the batch already holds.
+WITH input AS (
+    SELECT i AS ord, (@subscriptions::uuid[])[i] AS subscription_id, (@seqs::integer[])[i] AS seq,
+        (@helds::bigint[])[i] AS held, (@chargeds::bigint[])[i] AS charged
+    FROM generate_subscripts(@subscriptions::uuid[], 1) AS i
+)
+UPDATE billing.subscription_windows w SET reserved = w.reserved - i.held, used = w.used + i.charged
+FROM input i WHERE w.subscription_id = i.subscription_id AND w.seq = i.seq;
 
 -- name: PostLedger :execrows
 -- Lock before allocating the transaction sequence. Every write depends on the inserted event, so a duplicate

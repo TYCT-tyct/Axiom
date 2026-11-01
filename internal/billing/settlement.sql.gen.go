@@ -158,9 +158,9 @@ const endReservation = `-- name: EndReservation :one
 WITH balance AS (
     UPDATE billing.balances b SET reserved = b.reserved + $13 WHERE b.account_id = $14
 ), spend AS (
-    UPDATE billing.spend s SET reserved = s.reserved + $13, spent = s.spent + $15
-    WHERE s.subject = $16 AND s.window_start = $17
-        OR s.subject = $18 AND s.window_start = $19
+    UPDATE billing.spend s SET reserved = s.reserved + $15, spent = s.spent + $16
+    WHERE s.subject = $17 AND s.window_start = $18
+        OR s.subject = $19 AND s.window_start = $20
 )
 UPDATE billing.reservations
 SET state = $1, charged_seq = coalesce($2, charged_seq), entry = coalesce($3, entry),
@@ -184,8 +184,9 @@ type EndReservationParams struct {
 	Profit          *int64
 	PricingTiers    int16
 	RequestID       uuid.UUID
-	Reserved        int64
+	BalanceReserved int64
 	AccountID       uuid.UUID
+	SpendReserved   int64
 	Spent           int64
 	WorkspaceID     uuid.UUID
 	WorkspaceWindow time.Time
@@ -193,7 +194,8 @@ type EndReservationParams struct {
 	KeyWindow       time.Time
 }
 
-// Moves the reservation's three counters and writes its outcome together. The charged attempt and entry, and the
+// Moves the reservation's three counters and writes its outcome together. A plan-funded hold moves the balance's
+// reserved by 0 and its own window instead (SettleWindow follows). The charged attempt and entry, and the
 // attempts' entries, stay as they were when none is given. It returns the database's time, which a terminal state's EndRequest records, so every clock the request's end
 // is judged by is the database's.
 func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservationParams) (time.Time, error) {
@@ -210,8 +212,9 @@ func (q *Queries) EndReservation(ctx context.Context, db DBTX, arg EndReservatio
 		arg.Profit,
 		arg.PricingTiers,
 		arg.RequestID,
-		arg.Reserved,
+		arg.BalanceReserved,
 		arg.AccountID,
+		arg.SpendReserved,
 		arg.Spent,
 		arg.WorkspaceID,
 		arg.WorkspaceWindow,
@@ -233,14 +236,15 @@ WITH input AS (
         ($11::text[])[i] AS attempt_entries, ($12::boolean[])[i] AS attempt_entries_set,
         ($13::bigint[])[i] AS profit, ($14::boolean[])[i] AS profit_set,
         ($15::smallint[])[i] AS pricing_tiers,
-        ($16::bigint[])[i] AS reserved, ($17::bigint[])[i] AS spent,
-        ($18::uuid[])[i] AS workspace_id, ($19::timestamptz[])[i] AS workspace_window,
-        ($20::uuid[])[i] AS key_id, ($21::timestamptz[])[i] AS key_window
+        ($16::bigint[])[i] AS reserved, ($17::bigint[])[i] AS balance_reserved,
+        ($18::bigint[])[i] AS spent,
+        ($19::uuid[])[i] AS workspace_id, ($20::timestamptz[])[i] AS workspace_window,
+        ($21::uuid[])[i] AS key_id, ($22::timestamptz[])[i] AS key_window
     FROM generate_subscripts($1::uuid[], 1) AS i
 ),
 balance AS (
-    UPDATE billing.balances b SET reserved = b.reserved + (SELECT sum(reserved) FROM input)
-    WHERE b.account_id = $22
+    UPDATE billing.balances b SET reserved = b.reserved + (SELECT sum(balance_reserved) FROM input)
+    WHERE b.account_id = $23
 ),
 spend AS (
     UPDATE billing.spend s SET reserved = s.reserved + v.reserved, spent = s.spent + v.spent
@@ -290,6 +294,7 @@ type EndReservationBatchParams struct {
 	ProfitSet         []bool
 	PricingTiers      []int16
 	Reserved          []int64
+	BalanceReserved   []int64
 	Spent             []int64
 	WorkspaceIds      []uuid.UUID
 	WorkspaceWindows  []time.Time
@@ -304,7 +309,9 @@ type EndReservationBatchRow struct {
 }
 
 // The batch form of EndReservation: every reservation of one completion batch ends in one statement. The balance gets
-// one sum and each spend window its own, so a batch's counters move exactly as its items' would one by one. final_usage
+// one sum of its own reserved deltas (0 for plan-funded holds) and each spend window the spend deltas, so a batch's
+// counters move exactly as its items' would one by one. A plan-funded hold's window is settled by SettleWindows after
+// this. final_usage
 // is the JSON text, NULL to keep what the row has; attempt_entries is a JSON array, NULL to keep the row's.
 func (q *Queries) EndReservationBatch(ctx context.Context, db DBTX, arg EndReservationBatchParams) ([]EndReservationBatchRow, error) {
 	rows, err := db.Query(ctx, endReservationBatch,
@@ -324,6 +331,7 @@ func (q *Queries) EndReservationBatch(ctx context.Context, db DBTX, arg EndReser
 		arg.ProfitSet,
 		arg.PricingTiers,
 		arg.Reserved,
+		arg.BalanceReserved,
 		arg.Spent,
 		arg.WorkspaceIds,
 		arg.WorkspaceWindows,
@@ -405,7 +413,7 @@ func (q *Queries) LockChargeEvents(ctx context.Context, db DBTX) error {
 const lockReservation = `-- name: LockReservation :one
 SELECT r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.price_versions, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit,
+    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit, r.funding, r.subscription_id, r.window_seq,
     coalesce(r.pricing_tiers, -2)::smallint AS pricing_tiers
 FROM billing.reservations r
 WHERE r.request_id = $1
@@ -434,6 +442,9 @@ type LockReservationRow struct {
 	AttemptEntries  []int32
 	Endpoints       pgtype.FlatArray[uuid.UUID]
 	Profit          *int64
+	Funding         string
+	SubscriptionID  *uuid.UUID
+	WindowSeq       *int32
 	PricingTiers    int16
 }
 
@@ -464,6 +475,9 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 		&i.AttemptEntries,
 		&i.Endpoints,
 		&i.Profit,
+		&i.Funding,
+		&i.SubscriptionID,
+		&i.WindowSeq,
 		&i.PricingTiers,
 	)
 	return i, err
@@ -472,7 +486,7 @@ func (q *Queries) LockReservation(ctx context.Context, db DBTX, requestID uuid.U
 const lockReservations = `-- name: LockReservations :many
 SELECT r.request_id, r.site_id, r.account_id, r.workspace_id, r.key_id, r.workspace_window, r.key_window, r.amount, r.state,
     r.prices, r.price_versions, r.charged_seq, r.entry, r.charged, r.price, r.waived, r.estimated, r.final_usage,
-    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit,
+    r.fallbacks, r.models, r.attempt_entries, r.endpoints, r.profit, r.funding, r.subscription_id, r.window_seq,
     coalesce(r.pricing_tiers, -2)::smallint AS pricing_tiers
 FROM billing.reservations r
 WHERE r.request_id = ANY($1::uuid[])
@@ -502,6 +516,9 @@ type LockReservationsRow struct {
 	AttemptEntries  []int32
 	Endpoints       pgtype.FlatArray[uuid.UUID]
 	Profit          *int64
+	Funding         string
+	SubscriptionID  *uuid.UUID
+	WindowSeq       *int32
 	PricingTiers    int16
 }
 
@@ -540,6 +557,9 @@ func (q *Queries) LockReservations(ctx context.Context, db DBTX, requestIds []uu
 			&i.AttemptEntries,
 			&i.Endpoints,
 			&i.Profit,
+			&i.Funding,
+			&i.SubscriptionID,
+			&i.WindowSeq,
 			&i.PricingTiers,
 		); err != nil {
 			return nil, err
@@ -707,6 +727,35 @@ func (q *Queries) SetBalance(ctx context.Context, db DBTX, arg SetBalanceParams)
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const settleWindows = `-- name: SettleWindows :exec
+WITH input AS (
+    SELECT i AS ord, ($1::uuid[])[i] AS subscription_id, ($2::integer[])[i] AS seq,
+        ($3::bigint[])[i] AS held, ($4::bigint[])[i] AS charged
+    FROM generate_subscripts($1::uuid[], 1) AS i
+)
+UPDATE billing.subscription_windows w SET reserved = w.reserved - i.held, used = w.used + i.charged
+FROM input i WHERE w.subscription_id = i.subscription_id AND w.seq = i.seq
+`
+
+type SettleWindowsParams struct {
+	Subscriptions []uuid.UUID
+	Seqs          []int32
+	Helds         []int64
+	Chargeds      []int64
+}
+
+// The plan windows of a batch's settlements: each hold goes back and its charge is used, in one statement under the
+// balance row lock the batch already holds.
+func (q *Queries) SettleWindows(ctx context.Context, db DBTX, arg SettleWindowsParams) error {
+	_, err := db.Exec(ctx, settleWindows,
+		arg.Subscriptions,
+		arg.Seqs,
+		arg.Helds,
+		arg.Chargeds,
+	)
+	return err
 }
 
 const unbalanced = `-- name: Unbalanced :many

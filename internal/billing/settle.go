@@ -583,20 +583,32 @@ func (c *locked) event(kind string, revision int64) event {
 // holding part of the reservation for a record that will not come would only shrink what the account may spend.
 func (c *locked) end(ctx context.Context, tx pg.Tx, p priced, last AttemptResult) error {
 	held := c.row.Amount - c.row.Charged
-	c.owed, c.charged = p.price, min(p.price, c.cap(held))
 	c.settlement = c.event("settle", 0)
-	if _, err := post(ctx, tx, c.settlement, charge(p.price, c.charged)...); err != nil {
+	var lines []line
+	if c.plan() { // the window froze the whole hold and pays what was charged, up to it
+		c.owed, c.charged = p.price, min(p.price, c.row.Amount)
+		lines = planCharge(p.price, c.charged)
+	} else {
+		c.owed, c.charged = p.price, min(p.price, c.cap(held))
+		lines = charge(p.price, c.charged)
+	}
+	if _, err := post(ctx, tx, c.settlement, lines...); err != nil {
 		return err
 	}
 	w, err := result(p, last)
 	if err != nil {
 		return err
 	}
-	return c.write(ctx, tx, w, -held, c.charged)
+	if c.plan() {
+		return c.write(ctx, tx, w, 0, -c.row.Amount, c.charged, &windowSettle{held: c.row.Amount, charged: c.charged})
+	}
+	return c.write(ctx, tx, w, -held, -held, c.charged, nil)
 }
 
 // late replaces what cleanup charged with what the full outcome charges: a refund, or a makeup capped at the floor.
 func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResult) error {
+	// A plan hold cleanup released has no window left to charge: its credit went back and may have lapsed, so the
+	// usage is the wallet's to pay, as a wallet hold's late settlement is (docs/domains/billing.md「订阅套餐」).
 	c.owed, c.charged = p.price, min(p.price, add(c.row.Charged, c.cap(0)))
 	if _, err := post(ctx, tx, c.event("reverse", lateRevision), reversal(c.row.Price, c.row.Charged)...); err != nil {
 		return err
@@ -609,13 +621,27 @@ func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResul
 	if err != nil {
 		return err
 	}
-	return c.write(ctx, tx, w, 0, c.charged-c.row.Charged)
+	return c.write(ctx, tx, w, 0, 0, c.charged-c.row.Charged, nil)
 }
 
 // release ends a reservation in state, giving back what it held and keeping what was charged.
 func (c *locked) release(ctx context.Context, tx pg.Tx, state string, held int64) error {
-	return c.write(ctx, tx, c.kept(state), -max(held, 0), 0)
+	if c.plan() {
+		if held > 0 {
+			if err := moveWindowReserved(ctx, tx, *c.row.SubscriptionID, *c.row.WindowSeq, -held); err != nil {
+				return err
+			}
+		}
+		return c.write(ctx, tx, c.kept(state), 0, -max(held, 0), 0, nil)
+	}
+	return c.write(ctx, tx, c.kept(state), -max(held, 0), -max(held, 0), 0, nil)
 }
+
+// plan reports whether the reservation's money was frozen in a subscription window.
+func (c *locked) plan() bool { return c.row.Funding == "plan" }
+
+// windowSettle is what a plan settlement moves in its frozen window: the hold goes back and the charge is used.
+type windowSettle struct{ held, charged int64 }
 
 // written is what write records on the reservation.
 type written struct {
@@ -649,9 +675,9 @@ var terminal = map[string]bool{"settled": true, "released": true, "cleanup_settl
 
 // write records w on the reservation, and the end of the request when its state is terminal, at the same moment of
 // the database's clock.
-func (c *locked) write(ctx context.Context, tx pg.Tx, w written, reserved, spent int64) error {
+func (c *locked) write(ctx context.Context, tx pg.Tx, w written, balanceReserved, spendReserved, spent int64, win *windowSettle) error {
 	at, err := queries.EndReservation(ctx, tx, EndReservationParams{
-		Profit: c.profit(), Reserved: reserved, Spent: spent, AccountID: c.row.AccountID,
+		Profit: c.profit(), BalanceReserved: balanceReserved, SpendReserved: spendReserved, Spent: spent, AccountID: c.row.AccountID,
 		WorkspaceID: c.row.WorkspaceID, WorkspaceWindow: c.row.WorkspaceWindow, KeyID: c.row.KeyID, KeyWindow: c.row.KeyWindow,
 		RequestID: c.id, State: w.state, ChargedSeq: w.seq, Entry: w.entry, Charged: c.charged, Price: w.price,
 		Waived: w.waived, Estimated: w.estimated, FinalUsage: w.usage, AttemptEntries: c.entries,
@@ -659,6 +685,11 @@ func (c *locked) write(ctx context.Context, tx pg.Tx, w written, reserved, spent
 	})
 	if err != nil {
 		return fmt.Errorf("billing: end the reservation: %w", err)
+	}
+	if win != nil {
+		if err := moveSettledWindow(ctx, tx, *c.row.SubscriptionID, *c.row.WindowSeq, *win); err != nil {
+			return err
+		}
 	}
 	if terminal[w.state] {
 		if err := c.b.suppliers.EndRequest(ctx, tx, c.id, c.row.SiteID, c.row.AccountID, at); err != nil {

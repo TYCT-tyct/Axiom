@@ -321,6 +321,13 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, ca
 	}); err != nil {
 		return nil, nil, nil, err
 	}
+	// A subscription's windows pass, its term ends and what is left of its liability is written off every minute, by
+	// whichever node leads the queue (docs/domains/billing.md「订阅套餐」).
+	if err := billing.RegisterSubscriptions(billing.SubscriptionConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
+	}); err != nil {
+		return nil, nil, nil, err
+	}
 	// Estimated charges are corrected from the suppliers' records by whichever node leads the queue
 	// (docs/domains/billing.md「用量来源与暂估」).
 	if err := billing.RegisterCorrections(billing.CorrectConfig{

@@ -15,7 +15,7 @@ import (
 
 const addReserved = `-- name: AddReserved :exec
 WITH balance AS (
-    UPDATE billing.balances b SET reserved = b.reserved + $1 WHERE b.account_id = $6
+    UPDATE billing.balances b SET reserved = b.reserved + $6 WHERE b.account_id = $7
 )
 UPDATE billing.spend s SET reserved = s.reserved + $1
 WHERE s.subject = $2 AND s.window_start = $3
@@ -23,22 +23,25 @@ WHERE s.subject = $2 AND s.window_start = $3
 `
 
 type AddReservedParams struct {
-	Delta           int64
+	SpendDelta      int64
 	WorkspaceID     uuid.UUID
 	WorkspaceWindow time.Time
 	KeyID           uuid.UUID
 	KeyWindow       time.Time
+	BalanceDelta    int64
 	AccountID       uuid.UUID
 }
 
-// Moves the three counters of a reservation by delta, negative to release.
+// Moves the counters of a reservation by delta, negative to release. A plan-funded hold leaves the balance's reserved
+// alone (the window carries it) but still counts against the workspace and key limits.
 func (q *Queries) AddReserved(ctx context.Context, db DBTX, arg AddReservedParams) error {
 	_, err := db.Exec(ctx, addReserved,
-		arg.Delta,
+		arg.SpendDelta,
 		arg.WorkspaceID,
 		arg.WorkspaceWindow,
 		arg.KeyID,
 		arg.KeyWindow,
+		arg.BalanceDelta,
 		arg.AccountID,
 	)
 	return err
@@ -79,7 +82,8 @@ func (q *Queries) FenceHolder(ctx context.Context, db DBTX, id uuid.UUID) (uuid.
 }
 
 const getReservation = `-- name: GetReservation :one
-SELECT segment, amount, state, workspace_window, key_window FROM billing.reservations WHERE request_id = $1
+SELECT segment, amount, state, workspace_window, key_window, funding, subscription_id, window_seq
+FROM billing.reservations WHERE request_id = $1
 `
 
 type GetReservationRow struct {
@@ -88,6 +92,9 @@ type GetReservationRow struct {
 	State           string
 	WorkspaceWindow time.Time
 	KeyWindow       time.Time
+	Funding         string
+	SubscriptionID  *uuid.UUID
+	WindowSeq       *int32
 }
 
 func (q *Queries) GetReservation(ctx context.Context, db DBTX, requestID uuid.UUID) (GetReservationRow, error) {
@@ -99,6 +106,9 @@ func (q *Queries) GetReservation(ctx context.Context, db DBTX, requestID uuid.UU
 		&i.State,
 		&i.WorkspaceWindow,
 		&i.KeyWindow,
+		&i.Funding,
+		&i.SubscriptionID,
+		&i.WindowSeq,
 	)
 	return i, err
 }
@@ -154,13 +164,14 @@ const insertReservationAt = `-- name: InsertReservationAt :exec
 WITH reservation AS (
     INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
         workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, models, endpoints, exchange_rates,
-        price_versions, created_at)
+        price_versions, created_at, funding, subscription_id, window_seq)
     VALUES ($8, $3, $4, $1, $6, $9,
         $2, $7, 1, $5, 'pending', clock_timestamp() + make_interval(0, 0, 0, 0, 0, 0, $10::float8),
         $11::text[], $12::text[], $13, $14, $15::jsonb, $16,
-        to_timestamp($17::bigint / 1000000.0))
+        to_timestamp($17::bigint / 1000000.0), $18, $19, $20)
 ), balance AS (
-    UPDATE billing.balances b SET reserved = b.reserved + $5 WHERE b.account_id = $4
+    UPDATE billing.balances b SET reserved = b.reserved + CASE WHEN $18::text = 'plan' THEN 0 ELSE $5 END
+    WHERE b.account_id = $4
 )
 INSERT INTO billing.spend AS s (subject, window_start, site_id, account_id, reserved)
 VALUES ($1, $2, $3, $4, $5),
@@ -186,12 +197,17 @@ type InsertReservationAtParams struct {
 	ExchangeRates   []byte
 	PriceVersions   pgtype.FlatArray[uuid.UUID]
 	CreatedAtUs     int64
+	Funding         string
+	SubscriptionID  *uuid.UUID
+	WindowSeq       *int32
 }
 
 // One statement writes the reservation and its three counters. prices, fallbacks, models and endpoints are by route
 // index, the zero UUID for a dropped entry: endpoints are what cleanup hands suppliers as the route of a request whose
 // node was lost.
 // Let the insert columns type the UUID parameters, so sqlc retains their typed array codec overrides.
+// A plan-funded reservation freezes its subscription window instead of the wallet's reserved counter: the window's own
+// update follows in the same pipeline (AddWindowReserved), under the same balance row lock.
 func (q *Queries) InsertReservationAt(ctx context.Context, db DBTX, arg InsertReservationAtParams) error {
 	_, err := db.Exec(ctx, insertReservationAt,
 		arg.WorkspaceID,
@@ -211,6 +227,9 @@ func (q *Queries) InsertReservationAt(ctx context.Context, db DBTX, arg InsertRe
 		arg.ExchangeRates,
 		arg.PriceVersions,
 		arg.CreatedAtUs,
+		arg.Funding,
+		arg.SubscriptionID,
+		arg.WindowSeq,
 	)
 	return err
 }

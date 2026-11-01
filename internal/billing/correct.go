@@ -232,24 +232,55 @@ func replaceCharge(ctx context.Context, tx pg.Tx, ev suppliers.ChargeEvent) (int
 	}
 	charged := &locked{id: ev.Request, row: row, balance: balance}
 	charged.owed = price.price
-	charged.charged = min(price.price, add(row.Charged, room(balance, 0)))
+	plan := row.Funding == "plan"
+	var closed bool
+	if plan {
+		// A plan charge is capped by the frozen window, whose room is read afresh: a later request may have taken what
+		// this one released, and the window's quota bounds every charge into it (docs/domains/billing.md「订阅套餐」).
+		left, sub, err := planRoom(ctx, tx, *row.SubscriptionID, *row.WindowSeq)
+		if err != nil {
+			return 0, err
+		}
+		closed = sub.ClosedAt != nil
+		charged.charged = min(price.price, min(row.Amount, add(row.Charged, left)))
+	} else {
+		charged.charged = min(price.price, add(row.Charged, room(balance, 0)))
+	}
 	borne := max(price.price-charged.charged, 0)
 	revision := int64(ev.Revision)
-	reversed, err := post(ctx, tx, charged.event("reverse", revision), reversal(row.Price, row.Charged)...)
+	reverse, settle := reversal(row.Price, row.Charged), charge(price.price, charged.charged)
+	if plan {
+		reverse, settle = planReversal(row.Price, row.Charged), planCharge(price.price, charged.charged)
+		if delta := charged.charged - row.Charged; closed && delta != 0 {
+			// The subscription was written off, so its liability is zero: the difference comes back out of the expired
+			// income that write-off booked, and the pair leaves the liability at zero and never negative.
+			settle = append(settle, line{bookCreditExpired, delta, siteCredits}, line{bookPlanLiability, -delta, siteCredits})
+		}
+	}
+	reversed, err := post(ctx, tx, charged.event("reverse", revision), reverse...)
 	if err != nil {
 		return 0, err
 	}
-	settled, err := post(ctx, tx, charged.event("settle", revision), charge(price.price, charged.charged)...)
+	settled, err := post(ctx, tx, charged.event("settle", revision), settle...)
 	if err != nil {
 		return 0, err
 	}
 	if !reversed && !settled {
 		return 0, errNoCorrection
 	}
+	if plan {
+		if err := correctPlanWindow(ctx, tx, ev.Request, row, charged.charged-row.Charged); err != nil {
+			return 0, err
+		}
+	}
 	if err := writeCorrection(ctx, tx, charged, segments, price.tiers); err != nil {
 		return 0, err
 	}
-	if err := realignAllocation(ctx, tx, ev.Request, row, balance, charged.charged); err != nil {
+	wallet := charged.charged
+	if plan {
+		wallet = 0 // the user's balance did not move for a plan charge, so the allocation has nothing to realign
+	}
+	if err := realignAllocation(ctx, tx, ev.Request, row, balance, wallet); err != nil {
 		return 0, err
 	}
 	if borne > 0 {
@@ -291,7 +322,7 @@ func writeCorrection(ctx context.Context, tx pg.Tx, charged *locked, segments []
 	}
 	row := charged.row
 	if _, err := queries.EndReservation(ctx, tx, EndReservationParams{
-		Profit: correctedProfit(row, charged.charged), Reserved: 0, Spent: charged.charged - row.Charged,
+		Profit: correctedProfit(row, charged.charged), BalanceReserved: 0, SpendReserved: 0, Spent: charged.charged - row.Charged,
 		AccountID: row.AccountID, WorkspaceID: row.WorkspaceID, WorkspaceWindow: row.WorkspaceWindow,
 		KeyID: row.KeyID, KeyWindow: row.KeyWindow, RequestID: charged.id, State: "settled",
 		Charged: charged.charged, Price: charged.owed, Waived: row.Waived, Estimated: false,
@@ -323,6 +354,21 @@ func realignAllocation(ctx context.Context, tx pg.Tx, request uuid.UUID, row Loc
 		return fmt.Errorf("%w: the allocation moved while correcting %s", errNotReady, request)
 	} else if err != nil {
 		return err
+	}
+	return nil
+}
+
+// correctPlanWindow moves the corrected charge into the frozen window's used amount.
+func correctPlanWindow(ctx context.Context, tx pg.Tx, request uuid.UUID, row LockReservationRow, delta int64) error {
+	if delta == 0 {
+		return nil
+	}
+	if n, err := queries.ChargeWindowUsed(ctx, tx, ChargeWindowUsedParams{
+		SubscriptionID: *row.SubscriptionID, Seq: *row.WindowSeq, Delta: delta,
+	}); err != nil {
+		return fmt.Errorf("billing: move the window's usage: %w", err)
+	} else if n != 1 {
+		return fmt.Errorf("billing: the window of %s cannot take a correction of %d", request, delta)
 	}
 	return nil
 }

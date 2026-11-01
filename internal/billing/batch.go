@@ -40,6 +40,9 @@ func settlementRows(ctx context.Context, tx pg.Tx, id, account uuid.UUID) (balan
 			&r.AttemptEntries,
 			&r.Endpoints,
 			&r.Profit,
+			&r.Funding,
+			&r.SubscriptionID,
+			&r.WindowSeq,
 			&r.PricingTiers,
 		)
 		if err != nil {

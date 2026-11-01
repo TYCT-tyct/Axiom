@@ -9,6 +9,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
 )
 
@@ -64,12 +65,20 @@ func (b *Billing) ReserveMany(ctx context.Context, tx pg.Tx, reqs []ReserveReque
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	if src.plan != nil && src.plan.due(src.day) {
+		// A window or the term ended: pass the window first, so the batch quotes against the one that holds now.
+		if src.plan, err = planWindowNow(ctx, tx, account); err != nil {
+			return nil, nil, nil, err
+		}
+	}
 	quoted := b.quoteBatch(reqs, src, usage, errs)
 	if err := insertBatch(ctx, tx, quoted); err != nil {
 		return nil, nil, nil, err
 	}
 	for _, p := range quoted {
-		holds[p.at] = &Hold{Reservation: p.quote, id: reqs[p.at].ID, admitted: reqs[p.at].Admitted, workspaceWindow: src.day, keyWindow: src.day}
+		holds[p.at] = &Hold{Reservation: p.quote, id: reqs[p.at].ID, admitted: reqs[p.at].Admitted, workspaceWindow: src.day,
+			keyWindow: src.day, funding: p.params.Funding, subscription: derefUUID(p.params.SubscriptionID),
+			windowSeq: derefInt32(p.params.WindowSeq)}
 		kept[p.at] = p.quote.Kept
 	}
 	return holds, kept, errs, nil
@@ -79,6 +88,7 @@ func (b *Billing) ReserveMany(ctx context.Context, tx pg.Tx, reqs []ReserveReque
 type batchSources struct {
 	balance LockBalanceRow
 	day     time.Time
+	plan    *planWindow // the account's subscription window, nil when no plan may fund a request
 	found   map[string]fallbacks
 	bodies  map[string]string
 }
@@ -92,6 +102,7 @@ func (b *Billing) lockBatch(ctx context.Context, tx pg.Tx, account uuid.UUID, re
 		{SQL: readFallbacks, Args: []any{batchCurrencies(reqs)}},
 		{SQL: lockBalance, Args: []any{account}},
 		{SQL: fenceHolder, Args: []any{b.holder}},
+		{SQL: availablePlan, Args: []any{account}},
 		{SQL: now, Args: nil},
 	}, func(batch pg.BatchResults) error {
 		read, err := scanFallbacks(batch)
@@ -109,6 +120,11 @@ func (b *Billing) lockBatch(ctx context.Context, tx pg.Tx, account uuid.UUID, re
 		if err := batch.QueryRow().Scan(&holder); err != nil {
 			return fenceErr(err)
 		}
+		plan, err := scanPlan(batch)
+		if err != nil {
+			return err
+		}
+		src.plan = plan
 		if err := batch.QueryRow().Scan(&src.day); err != nil {
 			return fmt.Errorf("billing: read the clock: %w", err)
 		}
@@ -181,12 +197,30 @@ type quotedReservation struct {
 	quote  Reservation
 }
 
+// scanPlan reads the plan window of the batch's statement, nil when the account has none in force.
+func scanPlan(batch pg.BatchResults) (*planWindow, error) {
+	var r AvailablePlanRow
+	err := batch.QueryRow().Scan(&r.SubscriptionID, &r.SiteID, &r.AccountID, &r.TermEnds, &r.Seq, &r.WindowStarts,
+		&r.WindowEnds, &r.Quota, &r.Used, &r.Reserved)
+	if errors.Is(err, pg.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("billing: read the subscription window: %w", err)
+	}
+	return planWindowOf(r), nil
+}
+
 // quoteBatch quotes the requests in order. Each quote sees the amounts the earlier quoted requests add to the balance's
 // reserved total and to their workspace's and key's counters, so the batch cannot reserve more than the account may
 // hold. A refused request gets its error in errs and adds nothing.
 func (b *Billing) quoteBatch(reqs []ReserveRequest, src batchSources, usage []ReadUsageRow, errs []error) []quotedReservation {
 	reserved := src.balance.Reserved
 	workspaceUsed, keyUsed := map[uuid.UUID]int64{}, map[uuid.UUID]int64{}
+	planLeft := int64(0)
+	if src.plan != nil {
+		planLeft = src.plan.remaining()
+	}
 	quoted := make([]quotedReservation, 0, len(reqs))
 	for i, r := range reqs {
 		a := r.Admitted
@@ -195,6 +229,11 @@ func (b *Billing) quoteBatch(reqs []ReserveRequest, src batchSources, usage []Re
 		avail := a.available(bal,
 			addClamp(usage[i].WorkspaceUsed, workspaceUsed[a.Workspace]),
 			addClamp(usage[i].KeyUsed, keyUsed[a.Key]))
+		if src.plan != nil && avail[0].Amount.Cmp(platform.AmountExact(planLeft)) < 0 {
+			// The balance source covers what the wallet or the window covers, whichever is larger: a request is refused
+			// only when neither can fund it, and the choice between them comes after the quote.
+			avail[0].Amount = platform.AmountExact(planLeft)
+		}
 		q, err := b.quoteOne(r, src, avail)
 		if err != nil {
 			errs[i] = err
@@ -202,7 +241,13 @@ func (b *Billing) quoteBatch(reqs []ReserveRequest, src batchSources, usage []Re
 		}
 		q.at = i
 		amount := q.quote.Amount.CeilAmount()
-		reserved = addClamp(reserved, amount)
+		if src.plan != nil && planLeft >= amount {
+			// The window covers the whole request, so it funds it: one source per reservation, plan first.
+			q.params.Funding, q.params.SubscriptionID, q.params.WindowSeq = "plan", &src.plan.subscription, &src.plan.seq
+			planLeft -= amount
+		} else {
+			reserved = addClamp(reserved, amount)
+		}
 		workspaceUsed[a.Workspace] = addClamp(workspaceUsed[a.Workspace], amount)
 		keyUsed[a.Key] = addClamp(keyUsed[a.Key], amount)
 		quoted = append(quoted, q)
@@ -233,9 +278,15 @@ func insertBatch(ctx context.Context, tx pg.Tx, quoted []quotedReservation) erro
 	if len(quoted) == 0 {
 		return nil
 	}
-	statements := make([]pg.Statement, len(quoted))
-	for i, p := range quoted {
-		statements[i] = pg.Statement{SQL: insertReservationAt, Args: insertReservationArgs(p.params)}
+	statements := make([]pg.Statement, 0, 2*len(quoted))
+	for _, p := range quoted {
+		statements = append(statements, pg.Statement{SQL: insertReservationAt, Args: insertReservationArgs(p.params)})
+		if p.params.Funding == "plan" {
+			// The window's hold follows its reservation in the same pipeline, under the same balance row lock.
+			statements = append(statements, pg.Statement{SQL: addWindowReserved, Args: []any{
+				p.params.Amount, *p.params.SubscriptionID, *p.params.WindowSeq,
+			}})
+		}
 	}
 	return tx.Batch(ctx, statements, func(batch pg.BatchResults) error {
 		for range statements {
@@ -250,10 +301,14 @@ func insertBatch(ctx context.Context, tx pg.Tx, quoted []quotedReservation) erro
 // insertReservationArgs passes InsertReservationAt's parameters in the order its generated function does. The insert
 // is pipelined, so it cannot go through that function; the batch reservation test compares both paths' rows.
 func insertReservationArgs(p InsertReservationAtParams) []any {
+	funding := p.Funding
+	if funding == "" {
+		funding = "wallet" // the column's default, which a caller that names no source means
+	}
 	return []any{
 		p.WorkspaceID, p.WorkspaceWindow, p.SiteID, p.AccountID, p.Amount, p.KeyID, p.KeyWindow, p.RequestID,
 		p.HolderID, p.LifetimeSeconds, p.Prices, p.Fallbacks, p.Models, p.Endpoints, p.ExchangeRates, p.PriceVersions,
-		p.CreatedAtUs,
+		p.CreatedAtUs, funding, p.SubscriptionID, p.WindowSeq,
 	}
 }
 

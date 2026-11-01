@@ -1299,6 +1299,42 @@ func (e SiteLogoUploadContentType) Valid() bool {
 	}
 }
 
+// Defines values for SubscriptionSource.
+const (
+	SubscriptionSourceGift           SubscriptionSource = "gift"
+	SubscriptionSourceOfflinePayment SubscriptionSource = "offline_payment"
+)
+
+// Valid indicates whether the value is a known member of the SubscriptionSource enum.
+func (e SubscriptionSource) Valid() bool {
+	switch e {
+	case SubscriptionSourceGift:
+		return true
+	case SubscriptionSourceOfflinePayment:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SubscriptionStanding.
+const (
+	SubscriptionActive  SubscriptionStanding = "active"
+	SubscriptionExpired SubscriptionStanding = "expired"
+)
+
+// Valid indicates whether the value is a known member of the SubscriptionStanding enum.
+func (e SubscriptionStanding) Valid() bool {
+	switch e {
+	case SubscriptionActive:
+		return true
+	case SubscriptionExpired:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SupplierNativeUnit.
 const (
 	SupplierNativeUnitQuota SupplierNativeUnit = "quota"
@@ -2070,6 +2106,11 @@ type CredentialLimits struct {
 	// RequestsPerMinute Stop selecting this credential when the shared upstream account's rolling-minute count reaches this; absent or null clears the ceiling. At most 100000.
 	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
 }
+
+// CreditAmount An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+//
+// Example: 5000000000
+type CreditAmount = string
 
 // CreditBatch Credit added in one grant or payment, what is left of it, and how much of that is frozen for refunds. Spending takes the earliest expiry first and a batch without `expires_at` last, so `remaining` is what is still in this batch, not what the next charge will take.
 type CreditBatch struct {
@@ -3881,6 +3922,158 @@ type SpendDetection struct {
 	WindowSeconds int `json:"window_seconds"`
 }
 
+// Subscription defines model for Subscription.
+type Subscription struct {
+	// AccountId An account's ID (TypeID).
+	AccountId AccountId `json:"account_id"`
+
+	// ClosedAt When the remaining liability was written off; absent until then.
+	ClosedAt      *time.Time         `json:"closed_at,omitempty"`
+	CreatedAt     time.Time          `json:"created_at"`
+	CurrentWindow SubscriptionWindow `json:"current_window"`
+	EndsAt        time.Time          `json:"ends_at"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id Uuid `json:"id"`
+
+	// PlanId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	PlanId Uuid `json:"plan_id"`
+
+	// PlanName The plan's name when it was sold; a later rename does not change it.
+	PlanName string    `json:"plan_name"`
+	StartsAt time.Time `json:"starts_at"`
+
+	// State `expired`: the term ended; `closed_at` is when what was left of it was written off.
+	State SubscriptionStanding `json:"state"`
+}
+
+// SubscriptionGrantInput A gift needs only `plan_id`; an offline payment needs `payment` too, and `source` set to it.
+type SubscriptionGrantInput struct {
+	// Payment Money received outside the payment channels. `amount` is what was paid, in its own currency, one an exchange rate can be kept for, and in whole minor units of it.
+	Payment *OfflinePayment `json:"payment,omitempty"`
+
+	// PlanId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	PlanId Uuid `json:"plan_id"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Source How the plan was paid for. Absent in a request: gift.
+	Source *SubscriptionSource `json:"source,omitempty"`
+}
+
+// SubscriptionList defines model for SubscriptionList.
+type SubscriptionList struct {
+	Data []Subscription `json:"data"`
+}
+
+// SubscriptionPlan defines model for SubscriptionPlan.
+type SubscriptionPlan struct {
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id   Uuid   `json:"id"`
+	Name string `json:"name"`
+
+	// Price An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Price Money `json:"price"`
+
+	// Quota An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Quota         CreditAmount `json:"quota"`
+	Rev           int          `json:"rev"`
+	TermSeconds   int          `json:"term_seconds"`
+	UpdatedAt     time.Time    `json:"updated_at"`
+	WindowSeconds int          `json:"window_seconds"`
+}
+
+// SubscriptionPlanInput A plan as an administrator sets it. `price` is the list price in whole minor units of the site's currency.
+type SubscriptionPlanInput struct {
+	// Active Absent: true.
+	Active *bool  `json:"active,omitempty"`
+	Name   string `json:"name"`
+
+	// Price An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Price Money `json:"price"`
+
+	// Quota An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Quota CreditAmount `json:"quota"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// TermSeconds How long the whole subscription lasts, at least one window.
+	TermSeconds int `json:"term_seconds"`
+
+	// WindowSeconds How long one window lasts, at least an hour.
+	WindowSeconds int `json:"window_seconds"`
+}
+
+// SubscriptionPlanList defines model for SubscriptionPlanList.
+type SubscriptionPlanList struct {
+	Data []SubscriptionPlan `json:"data"`
+}
+
+// SubscriptionPlanUpdate defines model for SubscriptionPlanUpdate.
+type SubscriptionPlanUpdate struct {
+	// Active Absent: true.
+	Active *bool  `json:"active,omitempty"`
+	Name   string `json:"name"`
+
+	// Price An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Price Money `json:"price"`
+
+	// Quota An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Quota CreditAmount `json:"quota"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Rev The revision the caller read.
+	Rev           int `json:"rev"`
+	TermSeconds   int `json:"term_seconds"`
+	WindowSeconds int `json:"window_seconds"`
+}
+
+// SubscriptionSource How the plan was paid for. Absent in a request: gift.
+type SubscriptionSource string
+
+// SubscriptionStanding `expired`: the term ended; `closed_at` is when what was left of it was written off.
+type SubscriptionStanding string
+
+// SubscriptionWindow defines model for SubscriptionWindow.
+type SubscriptionWindow struct {
+	EndsAt time.Time `json:"ends_at"`
+
+	// Quota An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Quota CreditAmount `json:"quota"`
+
+	// Remaining An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Remaining CreditAmount `json:"remaining"`
+
+	// Reserved An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Reserved CreditAmount `json:"reserved"`
+	Seq      int          `json:"seq"`
+	StartsAt time.Time    `json:"starts_at"`
+
+	// Used An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Used CreditAmount `json:"used"`
+}
+
 // Supplier defines model for Supplier.
 type Supplier struct {
 	// BalanceNative An exact decimal number in text, never a JSON number, so no digit is lost on the way.
@@ -4271,6 +4464,12 @@ type GrantCreditParams struct {
 
 // UpdateAccountKeyLimitsParams defines parameters for UpdateAccountKeyLimits.
 type UpdateAccountKeyLimitsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// GrantSubscriptionParams defines parameters for GrantSubscription.
+type GrantSubscriptionParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -4750,6 +4949,23 @@ type SetPaymentSettingsParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ListSubscriptionPlansParams defines parameters for ListSubscriptionPlans.
+type ListSubscriptionPlansParams struct {
+	IncludeInactive *bool `form:"include_inactive,omitempty" json:"include_inactive,omitempty"`
+}
+
+// CreateSubscriptionPlanParams defines parameters for CreateSubscriptionPlan.
+type CreateSubscriptionPlanParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// UpdateSubscriptionPlanParams defines parameters for UpdateSubscriptionPlan.
+type UpdateSubscriptionPlanParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListSuppliersParams defines parameters for ListSuppliers.
 type ListSuppliersParams struct {
 	Status *SupplierStatus `form:"status,omitempty" json:"status,omitempty"`
@@ -4862,6 +5078,9 @@ type GrantCreditJSONRequestBody = CreditGrantRequest
 
 // UpdateAccountKeyLimitsJSONRequestBody defines body for UpdateAccountKeyLimits for application/json ContentType.
 type UpdateAccountKeyLimitsJSONRequestBody = KeyLimitsUpdate
+
+// GrantSubscriptionJSONRequestBody defines body for GrantSubscription for application/json ContentType.
+type GrantSubscriptionJSONRequestBody = SubscriptionGrantInput
 
 // SetAccountSuspensionJSONRequestBody defines body for SetAccountSuspension for application/json ContentType.
 type SetAccountSuspensionJSONRequestBody = AccountSuspension
@@ -5024,6 +5243,12 @@ type SetSystemSettingsJSONRequestBody = SystemSettingsUpdate
 
 // SetPaymentSettingsJSONRequestBody defines body for SetPaymentSettings for application/json ContentType.
 type SetPaymentSettingsJSONRequestBody = PaymentSettingsUpdate
+
+// CreateSubscriptionPlanJSONRequestBody defines body for CreateSubscriptionPlan for application/json ContentType.
+type CreateSubscriptionPlanJSONRequestBody = SubscriptionPlanInput
+
+// UpdateSubscriptionPlanJSONRequestBody defines body for UpdateSubscriptionPlan for application/json ContentType.
+type UpdateSubscriptionPlanJSONRequestBody = SubscriptionPlanUpdate
 
 // CreateSupplierJSONRequestBody defines body for CreateSupplier for application/json ContentType.
 type CreateSupplierJSONRequestBody = SupplierCreate

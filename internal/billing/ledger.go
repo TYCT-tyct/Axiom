@@ -23,6 +23,8 @@ const (
 	bookCash            = "cash"
 	bookFeeIncome       = "fee_income"
 	bookExchange        = "exchange_gain_loss"
+	bookPlanLiability   = "plan_liability"
+	bookPlanDiscount    = "plan_discount"
 )
 
 // event names one ledger transaction: its tenant and its idempotency key.
@@ -114,6 +116,23 @@ func wrapPost(e event, err error) error {
 func charge(price, charged int64) []line {
 	return []line{
 		{bookUserBalance, charged, siteCredits}, {bookPlatformBorne, price - charged, siteCredits}, {bookRevenue, -price, siteCredits},
+	}
+}
+
+// planCharge is a request settled from a subscription window: the window's liability pays what was charged, the
+// platform bears the rest, revenue takes the price. The user's balance does not move.
+func planCharge(price, charged int64) []line {
+	return []line{
+		{bookPlanLiability, charged, siteCredits}, {bookPlatformBorne, price - charged, siteCredits},
+		{bookRevenue, -price, siteCredits},
+	}
+}
+
+// planReversal undoes a plan charge, as a correction does before it posts the new one.
+func planReversal(price, charged int64) []line {
+	return []line{
+		{bookPlanLiability, -charged, siteCredits}, {bookPlatformBorne, charged - price, siteCredits},
+		{bookRevenue, price, siteCredits},
 	}
 }
 
