@@ -26,6 +26,11 @@ var ErrTooManyPasskeys = errors.New("accounts: too many passkeys")
 // ErrPasskeysOff is a passkey ceremony on a site or domain that cannot run one.
 var ErrPasskeysOff = errors.New("accounts: passkeys are not enabled")
 
+// errPasskeyAssertion is an assertion that parsed but did not verify against a live flow of this session: the one
+// passkey failure that is a guessed factor. ErrPasskeyFailed also covers an unknown or expired flow and a malformed
+// ceremony, which are not attacks and must not reach the failure counter.
+var errPasskeyAssertion = errors.New("accounts: the passkey assertion did not verify")
+
 // Passkey is one credential as the account page shows it.
 type Passkey struct {
 	ID             PasskeyID
@@ -367,12 +372,14 @@ func (s *Service) BeginPasskeyMFA(ctx context.Context, r *http.Request, p Princi
 	return PasskeyChallenge{PublicKey: options, FlowID: flow}, nil
 }
 
-// FinishPasskeyMFA turns the pending session into a verified one after the assertion. A failed ceremony counts one of
-// the pending session's attempts, as a wrong code does, so one challenge cannot be retried without bound.
-func (s *Service) FinishPasskeyMFA(ctx context.Context, r *http.Request, p Principal, flowID string, ip netip.Addr, userAgent string) (Issued, error) {
+// FinishPasskeyMFA turns the pending session into a verified one after the assertion. A failed assertion counts one of
+// the pending session's attempts and one of the site's failures, as a wrong code does: one challenge cannot be retried
+// without bound, and the failure is audited as security.mfa_failed.
+func (s *Service) FinishPasskeyMFA(ctx context.Context, r *http.Request, p Principal, flowID string, ip netip.Addr, userAgent string) (out Issued, err error) {
 	if !p.Pending() {
 		return Issued{}, ErrNoSession
 	}
+	defer func() { s.failed(ctx, p.securityAttempt(), "security.mfa_failed", &err) }()
 	site, wa, err := s.passkeySite(r.Host)
 	if err != nil {
 		return Issued{}, err
@@ -390,11 +397,17 @@ func (s *Service) FinishPasskeyMFA(ctx context.Context, r *http.Request, p Princ
 	if err != nil {
 		return Issued{}, err
 	}
-	credential, err := wa.FinishLogin(user, sessionData(flow, uuid.UUID(p.user)), r)
+	// A body that does not parse is a form error, not a guessed factor, so it is refused without a failure record.
+	// Only an assertion that parsed but did not verify against this session's live flow counts.
+	parsed, err := protocol.ParseCredentialRequestResponse(r)
+	if err != nil {
+		return Issued{}, fmt.Errorf("%w: %w", ErrPasskeyFailed, err)
+	}
+	credential, err := wa.ValidateLogin(user, sessionData(flow, uuid.UUID(p.user)), parsed)
 	if err != nil {
 		// One challenge is one attempt: a failed assertion spends the same budget a wrong code does. The assertion's
 		// error is what the caller acts on; a failure to record the attempt is joined so it is not silently lost.
-		return Issued{}, errors.Join(fmt.Errorf("%w: %w", ErrPasskeyFailed, err), s.spendMFAAttempt(ctx, p))
+		return Issued{}, errors.Join(fmt.Errorf("%w: %w", ErrPasskeyFailed, err), errPasskeyAssertion, s.spendMFAAttempt(ctx, p))
 	}
 	if err := s.usePasskey(ctx, user.account, user.user, credential); err != nil {
 		return Issued{}, err

@@ -2,7 +2,18 @@ import type { Page } from "@playwright/test";
 import type { paths } from "../packages/api/src/console.gen.ts";
 import { aKey, emptyState, goodInvite, type MockState, type Schemas, usualState, worstState } from "./console-data.ts";
 import { type Ctx as CoreCtx, createRoute, fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
-import { confirmTotp, knownEmail, regenerate, session, signIn, signOut, totpSetup, verifyMfa } from "./mock-auth.ts";
+import {
+  confirmTotp,
+  grant,
+  knownEmail,
+  recoveryCodes,
+  regenerate,
+  session,
+  signIn,
+  signOut,
+  totpSetup,
+  verifyMfa,
+} from "./mock-auth.ts";
 
 // The console API (api/console.yaml), answered from memory (mock.ts) with the data of console-data.ts.
 
@@ -168,6 +179,20 @@ function deleteKey({ params, state }: Ctx<"/api/console/v1/keys/{key_id}", "dele
   return state.keys.length < before ? ({ status: 204, json: undefined } as const) : fail(404, "not_found");
 }
 
+// Removing a passkey raises the factor version and hands this browser a new session, with fresh codes when TOTP is on.
+function deletePasskey({ body, params, state }: Ctx<"/api/console/v1/auth/passkeys/{id}", "delete">) {
+  if (body.password !== state.user.password) {
+    return fail(401, "invalid_credentials");
+  }
+  const before = state.passkeys.length;
+  state.passkeys = state.passkeys.filter((passkey) => passkey.id !== params.id);
+  if (state.passkeys.length === before) {
+    return fail(404, "not_found");
+  }
+  const { csrf_token } = grant(state, "signed_in");
+  return { status: 200, json: { csrf_token, recovery_codes: state.mfaEnabled ? recoveryCodes : undefined } } as const;
+}
+
 function getCall({ params, state }: Ctx<"/api/console/v1/calls/{call_id}", "get">) {
   const call = state.calls.find((candidate) => candidate.id === params.call_id);
   return call ? ({ status: 200, json: call } as const) : fail(404, "not_found");
@@ -229,7 +254,8 @@ const handlers: Handler<MockState>[] = [
   route("post", `${base}/auth/totp/confirm`, signedIn, confirmTotp),
   route("post", `${base}/auth/recovery-codes`, { level: "mfa" }, regenerate),
   route("post", `${base}/auth/recovery-codes/take`, signedIn, () => ok({ recovery_codes: [] })),
-  route("get", `${base}/auth/passkeys`, signedIn, () => ok({ passkeys: [] })),
+  route("get", `${base}/auth/passkeys`, signedIn, ({ state }) => ok({ passkeys: state.passkeys })),
+  route("delete", `${base}/auth/passkeys/{id}`, signedIn, deletePasskey),
   route("get", `${base}/auth/identities`, signedIn, () => ok({ identities: [] })),
   route("get", `${base}/keys`, { ...signedIn, permission: "api_keys.view" }, listKeys),
   route("post", `${base}/keys`, { ...signedIn, permission: "api_keys.manage" }, createKey),
