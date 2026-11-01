@@ -846,6 +846,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's subscription
+         * @description The account's subscriptions, newest first, each with its current window: what the window holds, what it has used, what is held by calls in flight, and what is left (docs/domains/billing.md「订阅套餐」). A window's unused credit does not carry over. Calls draw on the plan first and on the balance when the window cannot cover them.
+         */
+        get: operations["listAccountSubscriptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/statement": {
         parameters: {
             query?: never;
@@ -1346,6 +1366,47 @@ export interface components {
          * @enum {string}
          */
         ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        /**
+         * @description An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it.
+         * @example 5000000000
+         */
+        SubscriptionCredit: string;
+        AccountSubscriptionWindow: {
+            seq: number;
+            /** Format: date-time */
+            starts_at: string;
+            /** Format: date-time */
+            ends_at: string;
+            quota: components["schemas"]["SubscriptionCredit"];
+            used: components["schemas"]["SubscriptionCredit"];
+            reserved: components["schemas"]["SubscriptionCredit"];
+            remaining: components["schemas"]["SubscriptionCredit"];
+        };
+        /**
+         * @description `expired`: the term ended; `closed_at` is when what was left of it was written off.
+         * @enum {string}
+         */
+        AccountSubscriptionStanding: "active" | "expired";
+        AccountSubscription: {
+            /** Format: uuid */
+            id: string;
+            /** @description The plan's name when it was bought; a later rename does not change it. */
+            plan_name: string;
+            state: components["schemas"]["AccountSubscriptionStanding"];
+            /** Format: date-time */
+            starts_at: string;
+            /** Format: date-time */
+            ends_at: string;
+            /**
+             * Format: date-time
+             * @description When what was left was written off; absent until then.
+             */
+            closed_at?: string;
+            current_window: components["schemas"]["AccountSubscriptionWindow"];
+        };
+        AccountSubscriptionList: {
+            data: components["schemas"]["AccountSubscription"][];
+        };
         /** @description An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits. */
         Money: {
             /** @example 1500000000 */
@@ -3508,6 +3569,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Balance"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listAccountSubscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The subscriptions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSubscriptionList"];
                 };
             };
             401: components["responses"]["Unauthenticated"];
