@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"axiom/internal/platform"
 	"axiom/internal/platform/egress"
@@ -134,6 +135,7 @@ type RefundCall struct {
 	TradeNo, ProviderRef string
 	Amount               Money
 	Reason               string
+	SentAt               time.Time // when the refund was first sent; zero when unknown
 }
 
 // RefundOutcome is a refund's state at the channel.

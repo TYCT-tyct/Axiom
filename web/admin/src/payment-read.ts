@@ -209,7 +209,30 @@ function readMethods(
   return methods;
 }
 
-function readSecrets(values: Record<string, string>, creating: boolean): { [key: string]: string } | null | undefined {
+function readAlipaySecrets(
+  values: Record<string, string>,
+  creating: boolean,
+): { [key: string]: string } | null | undefined {
+  const privateKey = (values.private_key ?? "").trim();
+  const publicKey = (values.public_key ?? "").trim();
+  const oldPublicKey = (values.old_public_key ?? "").trim();
+  if (!privateKey && !publicKey && !oldPublicKey) {
+    return creating ? null : undefined;
+  }
+  if (!privateKey || !publicKey) {
+    return null;
+  }
+  return {
+    private_key: privateKey,
+    public_key: publicKey,
+    ...(oldPublicKey ? { old_public_key: oldPublicKey } : {}),
+  };
+}
+
+function readEasyPaySecrets(
+  values: Record<string, string>,
+  creating: boolean,
+): { [key: string]: string } | null | undefined {
   const key = (values.key ?? "").trim();
   const oldKey = (values.old_key ?? "").trim();
   if ((creating || oldKey) && !key) {
@@ -221,6 +244,13 @@ function readSecrets(values: Record<string, string>, creating: boolean): { [key:
   return { ...(key ? { key } : {}), ...(oldKey ? { old_key: oldKey } : {}) };
 }
 
+function readSecrets(
+  values: Record<string, string>,
+  creating: boolean,
+  kind: string,
+): { [key: string]: string } | null | undefined {
+  return kind === "alipay" ? readAlipaySecrets(values, creating) : readEasyPaySecrets(values, creating);
+}
 function withChangeFields(
   input: AdminSchemas["MerchantInput"],
   rev: number | undefined,
@@ -255,7 +285,7 @@ function readMerchantBasics(
     return { problem: words.number };
   }
   return {
-    kind: values.kind ?? merchant?.kind ?? "easypay",
+    kind: merchant?.kind ?? (values.kind || "easypay"),
     name,
     enabled: values.enabled === "true",
     currency: values.currency ?? "",
@@ -283,7 +313,7 @@ export function readMerchant(
   if ("problem" in methods) {
     return methods;
   }
-  const secrets = readSecrets(values, merchant === undefined);
+  const secrets = readSecrets(values, merchant === undefined, basics.kind);
   if (secrets === null) {
     return { problem: words.secret };
   }
