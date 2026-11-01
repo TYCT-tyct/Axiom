@@ -189,9 +189,10 @@ type RefundState struct {
 	ProviderRef string
 }
 
-// Rejected is the channel's definite refusal, the only error that may fail an order or a refund.
+// Rejected is a definite failure: the channel refused the request or it was certainly not executed. It is the only
+// error that may fail an order or a refund.
 type Rejected struct{ Code, Message string }
 
 func (e *Rejected) Error() string {
-	return "payments: the channel rejected it: " + e.Code + " " + e.Message
+	return "payments: the channel rejected it or did not execute it: " + e.Code + " " + e.Message
 }

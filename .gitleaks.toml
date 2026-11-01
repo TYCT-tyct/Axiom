@@ -18,3 +18,12 @@ paths = ['''internal/platform/(adminapi|consoleapi)/[^/]+\.gen\.go''']
 [[allowlists]]
 description = "placeholder Stripe webhook secret in the payments tests"
 regexes = ['''^whsec_test_secret_0123456789$''']
+
+# The WeChat Pay tests encrypt their fixtures with a placeholder APIv3 key. It is not a credential: only the tests use
+# it, and the channel encrypts and decrypts with the merchant's own key. The first version was a 32-character hex
+# string, the shape of a real key, and it is already in an earlier commit of this branch, which cannot be rewritten;
+# the tests now use a value no scanner can mistake for a key. Allow that exact string and nothing else: any other
+# high-entropy value in the same tests still fails.
+[[allowlists]]
+description = "placeholder WeChat Pay APIv3 key in an earlier commit of the payments tests"
+regexes = ['''^0123456789abcdef0123456789abcdef$''']
