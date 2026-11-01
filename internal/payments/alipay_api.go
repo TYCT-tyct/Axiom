@@ -240,7 +240,7 @@ func (c *alipayChannel) refundResponse(node jsonx.Raw, r RefundCall, outRequestN
 	if result.OutTradeNo != r.Order.TypeID() {
 		return RefundState{}, errors.New("alipay: refund echoed another order")
 	}
-	if result.RefundFee != "" && parseMinorText(result.RefundFee, digits(c.currency)) != r.Amount.Minor {
+	if result.FundChange == "Y" && result.RefundFee != "" && parseMinorText(result.RefundFee, digits(c.currency)) != r.Amount.Minor {
 		return RefundState{}, errors.New("alipay: refund echoed another amount")
 	}
 	state := RefundPending
@@ -283,17 +283,34 @@ func (c *alipayChannel) refundQueryResult(node jsonx.Raw, outRequestNo string, a
 	if result.OutRequestNo != "" && result.OutRequestNo != outRequestNo {
 		return RefundState{}, errors.New("alipay: refund query echoed another request")
 	}
-	if result.RefundAmount != "" && parseMinorText(result.RefundAmount, digits(c.currency)) != amount.Minor {
+	if result.RefundStatus == "REFUND_SUCCESS" && result.RefundAmount != "" && parseMinorText(result.RefundAmount, digits(c.currency)) != amount.Minor {
 		return RefundState{}, errors.New("alipay: refund query echoed another amount")
 	}
 	if result.RefundStatus == "REFUND_SUCCESS" {
 		return RefundState{State: RefundSucceeded, ProviderRef: outRequestNo}, nil
 	}
-	empty := result.OutRequestNo == "" && result.RefundAmount == ""
-	if empty && !sentAt.IsZero() && c.now().Sub(sentAt) >= alipayRefundGrace {
+	if alipayEmptyRefundQuery(result.OutRequestNo, result.RefundStatus, result.RefundAmount) &&
+		!sentAt.IsZero() && c.now().Sub(sentAt) >= alipayRefundGrace {
 		return RefundState{State: RefundFailed, ProviderRef: outRequestNo}, nil
 	}
 	return RefundState{State: RefundPending, ProviderRef: outRequestNo}, nil
+}
+
+// emptyRefundQuery recognises the no-record answer; some gateways still echo a zero refund amount.
+func alipayEmptyRefundQuery(outRequestNo, refundStatus, refundAmount string) bool {
+	if outRequestNo != "" || refundStatus != "" {
+		return false
+	}
+	return refundAmount == "" || alipayZeroAmount(refundAmount)
+}
+
+// alipayZeroAmount accepts a zero such as 0.00 without treating a malformed amount as a no-record answer.
+func alipayZeroAmount(text string) bool {
+	whole, fraction, err := decimalParts(text)
+	if err != nil {
+		return false
+	}
+	return strings.Trim(whole, "0") == "" && strings.Trim(fraction, "0") == ""
 }
 
 // testConfig proves the application credentials with a read-only query for an order number that cannot exist.

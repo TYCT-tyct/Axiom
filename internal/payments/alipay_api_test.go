@@ -234,6 +234,8 @@ func TestAlipayQueryRefund(t *testing.T) {
 		"recent empty":  {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAt: time.Now(), state: RefundPending},
 		"no send time":  {node: `{"code":"10000","msg":"Success"}`, signed: true, state: RefundPending},
 		"old empty":     {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAt: time.Now().Add(-11 * time.Minute), state: RefundFailed},
+		"old zero":      {node: `{"code":"10000","msg":"Success","refund_amount":"0.00"}`, signed: true, sentAt: time.Now().Add(-11 * time.Minute), state: RefundFailed},
+		"old invalid":   {node: `{"code":"10000","msg":"Success","refund_amount":"oops"}`, signed: true, sentAt: time.Now().Add(-11 * time.Minute), state: RefundPending},
 		"grace edge":    {node: `{"code":"10000","msg":"Success"}`, signed: true, sentAt: time.Now().Add(-9*time.Minute - 59*time.Second), state: RefundPending},
 		"not exists":    {node: `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`, signed: true, state: RefundFailed},
 		"system error":  {node: `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.SYSTEM_ERROR"}`, signed: true, wantErr: true},
