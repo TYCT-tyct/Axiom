@@ -15,7 +15,7 @@ type Demand struct { // gateway 由 protocol.Request 填写；只放请求里的
 	InputItems catalog.ItemSet; ServiceTiers catalog.ServiceTierSet
 	TextTokens int64 // 文本按模型族的计数（分词器或形状估计）得出的 token 数，暂估用；0 表示没数，按字节比例估
 }
-type ServerTool struct{ Item catalog.Item; MaxUses int64; Flat bool } // MaxUses 0：请求没写，报价时用该条目模型的默认最大次数；Flat：在模型调用之前执行，不增加采样次数（`web` 插件、`file-parser` 的解析）
+type ServerTool struct{ Item catalog.Item; MaxUses int64; Flat, Repeats bool } // MaxUses 0：请求没写，报价时用该条目模型的默认最大次数；Flat：在模型调用之前执行，不增加采样次数（`web` 插件、`file-parser` 的解析）；Repeats：每一次使用都是一次独立采样、各有自己的输出上限（`openrouter:web_search` 的循环），输出预留乘 1+MaxUses
 type Quotable struct{ Price catalog.Schedule; Model Model; MaxOutput int64; Segmentable bool; Endpoint uuid.UUID } // 已实现；Endpoint：预留作为丢失的请求的路线记下的端点；价格版本 `PriceRef` 在 routing 的条目里，不在这里
 type Model struct{ ID catalog.ModelID; ContextLength, ImageTokens, PageTokens, FilePages, OutputSpeed int64; MaxUses map[catalog.Item]int64; Reports catalog.ItemSet } // 调用方从目录快照填；ImageTokens、PageTokens、FilePages 为 0 表示不知道，报价按上下文长度
 type Segments struct{ Output int64; Overshoot time.Duration } // 节点设置：每段输出 token；追加等待加取消生效的延迟上限

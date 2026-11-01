@@ -76,6 +76,9 @@ type Rewrites struct {
 	// NativeSearch is the most searches the gateway turns on at the model provider for this request, 0 for none. The
 	// target format's own search tool is added to the prepared body (docs/domains/gateway.md「联网搜索」).
 	NativeSearch int
+	// ServerFunction adds the gateway's web search function to the prepared body, for the model-side loop the
+	// openrouter:web_search tool stands for. The tool's own declaration was removed from the client's body.
+	ServerFunction bool
 }
 
 // defaultIdentityLen is what a derived value may take when Rewrites.IdentityLen is 0: derived identifiers are short

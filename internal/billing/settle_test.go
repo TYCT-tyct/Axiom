@@ -170,6 +170,8 @@ func TestSettleWaivers(t *testing.T) {
 		want int64
 	}{
 		{"delivered and finished", outcome(Committed, FinishStop, full), 80},
+		{"two samplings, each with a search", outcome(Committed, FinishStop, full, full), 160},
+		{"two samplings, failed before commit: both searches", outcome(FailedBeforeCommit, FinishError, full, full), 20},
 		{"aggregated", outcome(Aggregated, FinishStop, full), 80},
 		{"delivered, no output, no finish: only the search", outcome(Committed, FinishNone, zero), 10},
 		{"delivered, no output, an error finish", outcome(Committed, FinishError, zero), 10},

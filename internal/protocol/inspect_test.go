@@ -150,6 +150,7 @@ var inspectCases = []struct {
 		"speed":"fast","service_tier":"standard_only"}`,
 		func(r *protocol.Request) {
 			r.Model, r.Stream, r.WebSearches, r.HidesReasoning = "m", true, 5, true
+			r.NativeWeb = true
 			r.ServiceTiers = 1 << catalog.ServiceTierFast
 			r.Needs = protocol.WebSearch | protocol.CodeExecution | protocol.Tools | protocol.Reasoning |
 				protocol.StructuredOutput
@@ -161,13 +162,17 @@ var inspectCases = []struct {
 		"thinking":{"type":"disabled"},"cache\u005fcontrol":{"type":"ephemeral"},"service_tier":"\u0061uto"}`,
 		func(r *protocol.Request) {
 			r.Model, r.Needs = "m", protocol.WebSearch|protocol.PromptCache
+			r.NativeWeb = true
 			r.InputItems = items(catalog.ItemInput, catalog.ItemCacheWrite)
 		},
 	},
 	{
 		"messages search limits adding up to the largest count", protocol.Messages, `{"model":"m",
 		"tools":[{"type":"web_search_20260209","max_uses":9223372036854775806},{"type":"web_search_20250305","max_uses":1}]}`,
-		func(r *protocol.Request) { r.Model, r.WebSearches, r.Needs = "m", math.MaxInt64, protocol.WebSearch },
+		func(r *protocol.Request) {
+			r.Model, r.WebSearches, r.Needs = "m", math.MaxInt64, protocol.WebSearch
+			r.NativeWeb = true
+		},
 	},
 	{
 		// Anthropic《Search results》(https://platform.claude.com/docs/en/build-with-claude/search-results, read
@@ -226,6 +231,7 @@ var inspectCases = []struct {
 		func(r *protocol.Request) {
 			r.MessageCount = 1
 			r.Model, r.MaxOutput, r.Choices, r.Images, r.Documents, r.HidesReasoning = "m", 200, 3, 2, 1, true
+			r.NativeWeb = true
 			r.TextBytes -= int64(len(pngURL) + len(pdfURL))
 			r.InputItems = items(catalog.ItemInput, catalog.ItemCacheWrite, catalog.ItemCacheWrite1h)
 			r.ServiceTiers = 1 << catalog.ServiceTierFlex
@@ -262,6 +268,7 @@ var inspectCases = []struct {
 		"text":{"format":{"type":"json_schema","name":"x","schema":{}}}}`,
 		func(r *protocol.Request) {
 			r.Model, r.MaxOutput, r.Previous, r.Images, r.Documents = "m", 50, "resp_1", 2, 1
+			r.NativeWeb, r.MaxToolCalls, r.HasMaxToolCalls = true, 4, true
 			r.TextBytes -= int64(len(pngURL) + len(pdfData))
 			r.WebSearches, r.CodeExecutions = 4, 4
 			r.ServiceTiers = 1 << catalog.ServiceTierPriority
@@ -280,7 +287,10 @@ var inspectCases = []struct {
 	{
 		"responses call limit only for enabled tools", protocol.Responses, `{"model":"m",
 		"tools":[{"type":"web_search"},{"type":"function","name":"f"}],"max_tool_calls":4}`,
-		func(r *protocol.Request) { r.Model, r.WebSearches, r.Needs = "m", 4, protocol.WebSearch|protocol.Tools },
+		func(r *protocol.Request) {
+			r.Model, r.WebSearches, r.Needs = "m", 4, protocol.WebSearch|protocol.Tools
+			r.NativeWeb, r.MaxToolCalls, r.HasMaxToolCalls = true, 4, true
+		},
 	},
 }
 

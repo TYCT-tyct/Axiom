@@ -104,7 +104,10 @@ type RelayOptions struct {
 	Echo *EchoPrompts
 	// ZeroOutput is set when the request capped its output at 0, as legacy completions' max_tokens 0 does: a choice that
 	// finishes without text is then the whole answer, not an empty response.
-	ZeroOutput      bool
+	ZeroOutput bool
+	// ServerTool makes the relay record the calls of the gateway's web search function. A gateway call that runs no
+	// loop leaves it false, so it allocates nothing for this.
+	ServerTool      bool
 	legacyFunctions bool
 }
 
@@ -181,6 +184,7 @@ type Relay struct {
 	lines  []byte
 	status int
 	legacy *rewriter
+	srv    *serverCapture // the gateway server tool's calls, nil when none is captured
 }
 
 // relayFormat is what the relay needs to know of a format.
@@ -230,6 +234,9 @@ func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOp
 		r.free += nativeConversionMemory
 	}
 	r.initReply(u, o)
+	if o.ServerTool {
+		r.srv = newServerCapture(client)
+	}
 	r.meter.tier = u.Tier
 	r.events = sse.NewReader(body, r.format.limit)
 	r.events.ChargeGrowth(r.charge)
@@ -267,6 +274,7 @@ func (r *Relay) Next() (Step, error) {
 	return step, nil
 }
 
+//nolint:gocognit // one branch per event role
 func (r *Relay) event(data []byte) (Step, error) {
 	e, err := r.up.event(data, &r.meter)
 	if err != nil {
@@ -279,6 +287,11 @@ func (r *Relay) event(data []byte) (Step, error) {
 	if e.role != skipped && e.role != heartbeat {
 		if data, err = r.legacyReply(data); err != nil {
 			return Step{}, err
+		}
+		if r.srv != nil {
+			if err = r.capture(data); err != nil {
+				return Step{}, err
+			}
 		}
 	}
 	step := Step{Kind: StepBuffered} // what a skipped event takes

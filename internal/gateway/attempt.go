@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -173,7 +174,10 @@ func (s *session) skipUnsupported(entry routing.Entry, unsupported *protocol.Not
 // name, the identifiers, the routing parameters) and nothing else (protocol's Target.Compact).
 func (s *session) prepare(entry routing.Entry) (up protocol.Upstream, held int64, err error) {
 	account := uuid.UUID(s.c.caller.AccountID())
-	w := protocol.Rewrites{Identity: s.x.identity(account), Device: s.x.deviceID(account), NativeSearch: s.c.nativeSearch}
+	w := protocol.Rewrites{
+		Identity: s.x.identity(account), Device: s.x.deviceID(account), NativeSearch: s.c.nativeSearch,
+		ServerFunction: s.serverFunction,
+	}
 	target := entry.Target
 	target.Compact = s.c.Compact
 	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, target, w)
@@ -227,10 +231,14 @@ type attempt struct {
 	release context.CancelFunc
 	unhook  func() bool // of the node's shutdown, which cancels the attempt
 
-	content bool              // the upstream sent content: the commit point came
-	state   string            // the turn state the upstream set, passed on with the answer (headers.go)
-	usage   protocol.Usage    // what the stream reported, once it is over
-	seen    protocol.Progress // what the relay had seen last
+	content     bool              // the upstream sent content: the commit point came
+	state       string            // the turn state the upstream set, passed on with the answer (headers.go)
+	usage       protocol.Usage    // every hop's report, appended as the loop reads them
+	seen        protocol.Progress // what the relay had seen last
+	hops        []billing.Segment // each hop's usage, estimated where the upstream did not report it
+	hopRecorded bool              // whether this hop's usage is in hops
+	nextBody    io.ReadCloser
+	nextUsage   protocol.UsageContext
 
 	asked   billing.ExtendRequest
 	landing chan error // the outcome of the extension asked for, nil when none is in flight
@@ -316,6 +324,9 @@ func cutOf(ctx context.Context) quality.Cut {
 // whole body for one that is passed through.
 func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn Conn, up protocol.Upstream, held int64) (step, ended) {
 	s.let() // another attempt answers the call: the reply kept before it is not part of it
+	if s.c.serverLoop && s.loop == nil {
+		s.loop = newServerLoop(s.c)
+	}
 	a, ctx := s.bind(ctx, i, entry, conn)
 	defer a.close(ctx)
 	resp, fail := a.send(ctx, up, held)
@@ -352,6 +363,8 @@ func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*
 // failed decides what to do after an attempt the supplier answered with a failure, or did not answer: whether the
 // request ran is the adapter's word (NotExecuted) or unknown, and routing says whether to try another credential, the
 // next entry, or give the client the error.
+//
+//nolint:cyclop // one branch for the search no-retry rule
 func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 	s.ends[a.i].Result = billing.Unknown
 	if s.isGone() { // the client left while the request was out: the failure is the cancel's, and cancelling is never free
@@ -373,9 +386,19 @@ func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
 		s.skips.failedSuppliers = append(s.skips.failedSuppliers, a.entry.Supplier)
 	}
 	next := routing.Decide(routing.Failure{Scope: scope})
+	searchEnded := s.searched && (next == routing.NextEntry || next == routing.OtherCredential)
+	if searchEnded {
+		// A search already ran on this call's account: another entry or credential would have to run it again, and the
+		// searches already run stay charged. A request-scoped refusal keeps its meaning; anything else is the upstream
+		// failing mid-loop, which the client sees as 502 rather than a 400 made from an empty rejection.
+		next = routing.ReturnToClient
+	}
 	s.record(a, true, scope, next)
 	switch next {
 	case routing.ReturnToClient: // the request itself is refused: the client gets what the supplier said of it, cleaned of its name
+		if searchEnded && scope != routing.ScopeRequest {
+			return over, ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
+		}
 		return over, ended{err: requestFailure(f)}
 	case routing.OtherCredential:
 		return sameEntry, ended{}

@@ -51,6 +51,10 @@ type ServerTool struct {
 	Item    catalog.Item
 	MaxUses int64
 	Flat    bool
+	// Repeats says each use samples the model again as its own upstream call, with its own output limit, as the
+	// gateway's web search loop does. A provider's own server tool keeps one output limit for the whole reply, so it
+	// leaves this false; a flat tool samples nothing.
+	Repeats bool
 }
 
 // Model is the model data a quote needs, filled by the caller from the catalog snapshot.
@@ -238,7 +242,7 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	if err := boundedServerTools(d, e.Model); err != nil {
 		return q, err
 	}
-	uses, samplings := serverToolUses(d, e.Model)
+	uses, samplings, repeats := serverToolUses(d, e.Model)
 	first, longest := inputBound(d, e.Model, samplings)
 	searchable := slices.ContainsFunc(d.ServerTools, func(t ServerTool) bool { return t.Item == catalog.ItemWebSearch })
 	rest := mul(samplings-1, window)
@@ -246,6 +250,9 @@ func quoteEntry(d Demand, e Quotable, s Segments, estimateCost bool) (q quote, e
 	if d.Direct {
 		q.outputCap = 0 // a direct call generates nothing, whatever its batch or cap says
 	}
+	// Each repeated sampling is a separate upstream call under the output limit: the reservation covers the worst case
+	// of every one of them generating it (docs/domains/billing.md「预留与结算」).
+	q.outputCap = mul(q.outputCap, add(1, repeats))
 	output, allowance, overshoot := q.outputCap, int64(0), int64(0) // overshoot in token-nanoseconds
 	if e.Segmentable && !d.Direct {
 		q.segment, output = s.Output, min(output, s.Output)
@@ -478,7 +485,7 @@ func (prices *quotePrices) inputCeiling(items catalog.ItemSet, tiers catalog.Ser
 // have, which is what bounds the context tier a charge falls in. Quote prices with them, and routing holds a price limit
 // against the same bound, so the two never read a request's length differently.
 func InputBound(d Demand, m Model) (first, longest int64) {
-	_, samplings := serverToolUses(d, m)
+	_, samplings, _ := serverToolUses(d, m)
 	return inputBound(d, m, samplings)
 }
 
@@ -565,7 +572,7 @@ func boundedServerTools(d Demand, m Model) error {
 // serverToolUses returns each server tool's most uses, the request's or else the model's default, totalled per item so
 // a quote adds at most NumItems products however many tools the request lists; and the samplings: one, plus
 // one per use, doubled when compaction may summarise and sample again.
-func serverToolUses(d Demand, m Model) (uses [catalog.NumItems]int64, samplings int64) {
+func serverToolUses(d Demand, m Model) (uses [catalog.NumItems]int64, samplings, repeats int64) {
 	samplings = 1
 	for _, t := range d.ServerTools {
 		n := t.MaxUses
@@ -575,12 +582,15 @@ func serverToolUses(d Demand, m Model) (uses [catalog.NumItems]int64, samplings 
 		uses[t.Item] = add(uses[t.Item], n)
 		if !d.Direct && !t.Flat { // a direct call's or a flat tool's charge is per use, without sampling the model again
 			samplings = add(samplings, n)
+			if t.Repeats {
+				repeats = add(repeats, n)
+			}
 		}
 	}
 	if d.Compaction {
 		samplings = mul(samplings, 2)
 	}
-	return uses, samplings
+	return uses, samplings, repeats
 }
 
 // sum adds amounts that cannot overflow: each is a price below 2⁶⁰ times a count below 2⁶³, so below 2¹²³, and a quote

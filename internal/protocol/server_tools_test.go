@@ -48,9 +48,11 @@ func TestInspectRefusesUnpricedServerTools(t *testing.T) {
 // TestInspectRefusesOpenRouterServerTools: every server tool OpenRouter documents is recognized by its own name in
 // every format and refused before admission, whether or not the request caps its calls; a name the namespace does not
 // document is refused as unknown rather than as an unsupported tool.
+//
+//nolint:cyclop // a table of refusals
 func TestInspectRefusesOpenRouterServerTools(t *testing.T) {
 	tools := []string{
-		"openrouter:web_search", "openrouter:web_fetch", "openrouter:datetime", "openrouter:image_generation",
+		"openrouter:web_fetch", "openrouter:datetime", "openrouter:image_generation",
 		"openrouter:apply_patch", "openrouter:shell", "openrouter:bash", "openrouter:fusion", "openrouter:advisor",
 		"openrouter:subagent", "openrouter:experimental__search_models", "openrouter:tool_search", "openrouter:files",
 	}
@@ -59,16 +61,19 @@ func TestInspectRefusesOpenRouterServerTools(t *testing.T) {
 			refusedTool(t, format, name)
 		}
 	}
-	_, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","tools":[{"type":"openrouter:web_search"}]}`))
-	if !strings.Contains(err.Error(), protocol.NoWebSearch) {
-		t.Errorf("openrouter:web_search: %v does not say %q", err, protocol.NoWebSearch)
+	// The web search tool is this gateway's to run now: Inspect keeps it for the gateway, which either runs the loop
+	// or maps it to the provider's own search, and refuses it only while no way to search is configured.
+	req, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","tools":[{"type":"openrouter:web_search"}]}`))
+	if err != nil || req.ServerSearch == nil || req.ServerSearch.MaxResults != protocol.DefaultWebSearchResults ||
+		req.Needs != protocol.Tools|protocol.WebSearch || req.NativeWeb {
+		t.Errorf("openrouter:web_search: %+v, %v", req.ServerSearch, err)
 	}
 	_, err = protocol.Inspect(protocol.Chat, []byte(`{"model":"m","tools":[{"type":"openrouter:teleport"}]}`))
 	if err == nil || !strings.Contains(err.Error(), "not an OpenRouter server tool") {
 		t.Errorf("openrouter:teleport: %v, want an unknown-tool refusal", err)
 	}
 	// The web plugin is read into the request; the gateway refuses it while no backend is configured.
-	req, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","plugins":[{"id":"web"}]}`))
+	req, err = protocol.Inspect(protocol.Chat, []byte(`{"model":"m","plugins":[{"id":"web"}]}`))
 	if err != nil || req.Web == nil || req.Web.MaxResults != protocol.DefaultWebSearchResults {
 		t.Errorf("the web plugin: %+v, %v", req.Web, err)
 	}

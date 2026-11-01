@@ -35,7 +35,6 @@ func TestUnpricedServerToolsNeverReachAdmission(t *testing.T) {
 		{"responses", `"tools":[{"type":"shell","environment":{"type":"container_auto"}}],"max_tool_calls":2`, "shell"},
 		{"responses", `"tools":[{"type":"tool_search"}],"max_tool_calls":2`, "tool_search"},
 		{"responses", `"tools":[{"type":"programmatic_tool_calling"}],"max_tool_calls":2`, "programmatic_tool_calling"},
-		{"chat/completions", `"tools":[{"type":"openrouter:web_search"}]`, "openrouter:web_search"},
 		{"messages", `"tools":[{"type":"openrouter:web_fetch"}]`, "openrouter:web_fetch"},
 		{"messages", `"tools":[{"type":"openrouter:tool_search"}]`, "openrouter:tool_search"},
 		{"responses", `"tools":[{"type":"openrouter:shell"}],"max_tool_calls":2`, "openrouter:shell"},
@@ -51,15 +50,14 @@ func TestUnpricedServerToolsNeverReachAdmission(t *testing.T) {
 }
 
 // TestWebSearchIsOneRefusal: on a node without a search backend, the deprecated web plugin and :online variant get the
-// same 400 as the openrouter:web_search server tool, before anything is reserved. The first two run once a backend is
-// configured; the tool keeps this reason because it needs the model-side loop.
+// same 400 before anything is reserved; they run once a backend is configured. The openrouter:web_search tool has the
+// same answer while nothing can search, tested where its loop is.
 func TestWebSearchIsOneRefusal(t *testing.T) {
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	for name, body := range map[string]string{
 		"web plugin":     `{"model":"acme/beta","plugins":[{"id":"web"}],"messages":[{"role":"user","content":"hello"}]}`,
 		"online variant": `{"model":"acme/beta:online","messages":[{"role":"user","content":"hello"}]}`,
-		"server tool":    `{"model":"acme/beta","tools":[{"type":"openrouter:web_search"}],"messages":[{"role":"user","content":"hello"}]}`,
 	} {
 		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, strings.NewReader(body))
 		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, protocol.NoWebSearch) ||

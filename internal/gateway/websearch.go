@@ -75,6 +75,19 @@ func restoreWeb(req *protocol.Request, web *protocol.WebPlugin) {
 	req.Web = web
 }
 
+// restoreServer puts back the fields a re-Inspection of a rewritten body cannot see: the server tool was removed from
+// the body before parsing or compression, so the new Request knows nothing of it, and the loop or native mapping would
+// be lost (docs/domains/gateway.md「服务端工具」).
+func restoreServer(req *protocol.Request, old protocol.Request) {
+	req.ServerSearch = old.ServerSearch
+	req.NativeWeb = old.NativeWeb
+	req.MaxToolCalls, req.HasMaxToolCalls = old.MaxToolCalls, old.HasMaxToolCalls
+	req.WebSearches = old.WebSearches
+	if old.ServerSearch != nil {
+		req.Needs |= protocol.WebSearch | protocol.Tools
+	}
+}
+
 // webSearch runs the request's one search and injects its results before the first user turn. It must run after
 // admission, so a call that cannot pay searches nothing, and before an attempt, so a failed search is an upstream
 // failure rather than a charge. The query is client content and is never logged.
@@ -160,4 +173,69 @@ func webSearchMessage(web *protocol.WebPlugin, results []websearch.Result, at ti
 		fmt.Fprintf(&b, "[%d] %s\n%s\n%s\n\n", i+1, r.Title, r.URL, r.Content)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// checkServerTool refuses an openrouter:web_search tool the node cannot serve, before anything is reserved. The
+// engine name is checked here, where the configured engines are known; the default engine is only known against the
+// routed entry, so resolveSearch decides that after routing.
+//
+//nolint:cyclop // one refusal per invalid combination
+func (h *Handler) checkServerTool(req *protocol.Request, body []byte) *Refusal {
+	t := req.ServerSearch
+	if t == nil {
+		return nil
+	}
+	if req.Web != nil {
+		return invalid("openrouter:web_search cannot be combined with the web plugin: one request runs one search path.")
+	}
+	if req.NativeWeb {
+		return invalid("openrouter:web_search cannot be combined with the provider's own web search tool.")
+	}
+	if !req.Format.Convertible() {
+		return invalid("openrouter:web_search is only supported for the chat formats.")
+	}
+	if req.Choices > 1 {
+		return invalid("openrouter:web_search does not support more than one choice.")
+	}
+	if req.HasMaxToolCalls && req.MaxToolCalls == 0 {
+		return invalid("max_tool_calls is 0: the web search tool would have no step to run.")
+	}
+	if t.Engine != "" && t.Engine != "auto" && t.Engine != "native" {
+		if _, ok := findBackend(h.Search, t.Engine); !ok {
+			return invalid(fmt.Sprintf("tool option %q is not an enabled search engine", t.Engine))
+		}
+	}
+	if protocol.ServerFunctionDeclared(req.Format, body) {
+		return invalid(fmt.Sprintf("the request already declares a function named %q", protocol.ServerToolName))
+	}
+	return nil
+}
+
+// stripServerTool removes the tool's declaration from the body before admission and keeps what the gateway read of it.
+// The body is what routing, the quote and Prepare see from here on, so the model-side loop's function declaration is
+// added per endpoint later, after conversion, and no converter meets a tool it cannot express.
+func (h *Handler) stripServerTool(c *Call, body []byte, req protocol.Request) ([]byte, protocol.Request, error) {
+	stripped, err := protocol.RemoveServerTool(req.Format, body)
+	if err != nil {
+		return nil, req, invalid(err.Error())
+	}
+	if len(stripped) == len(body) {
+		return body, req, nil // no declaration found: Inspect would not have set ServerSearch
+	}
+	held := int64(cap(stripped))
+	if !h.Memory.Charge(held) {
+		return nil, req, ErrOverloaded
+	}
+	next, err := protocol.Inspect(req.Format, stripped)
+	if err != nil {
+		h.Memory.Refund(held)
+		return nil, req, invalid(err.Error())
+	}
+	c.hold(func() { h.Memory.Refund(held) })
+	next.ServerSearch, next.NativeWeb = req.ServerSearch, req.NativeWeb
+	next.MaxToolCalls, next.HasMaxToolCalls = req.MaxToolCalls, req.HasMaxToolCalls
+	// The server tool is a tool declaration even after its own object is gone: the loop it stands for needs the
+	// endpoint's tool-calling ability, and routing must not choose a model that lacks it.
+	next.Needs |= protocol.Tools
+	return stripped, next, nil
 }

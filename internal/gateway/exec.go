@@ -207,6 +207,15 @@ type session struct {
 	searches   int64
 	citations  []protocol.Citation
 	searchHeld int64
+	// loop is the openrouter:web_search model-side loop, nil for a request without the tool. serverFunction says the
+	// next hop still declares the function: it is false once the step or result cap was reached, so the final sampling
+	// is asked to answer with what it has. out is the client-format stream held back while a hop may still be a tool
+	// call; outHeld is what it holds of the node's budget until the call is over.
+	loop           *serverLoop
+	serverFunction bool
+	searched       bool
+	out            []byte
+	outHeld        int64
 	// parses is how many files the call's parser read before its attempt, charged per use like a search, and files are
 	// the annotations its reply returns so a client can reuse the text instead of the file.
 	parses int64
@@ -235,7 +244,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 		x: x, w: w, rc: http.NewResponseController(w), c: c, req: r, start: now, currency: c.site.Currency,
 		deadline: now.Add(x.Limits.cfg.MaxCall), logger: x.Logger.With("request_id", c.ID.String()),
 		writeFor: x.Limits.cfg.WriteTimeout, aggregate: !c.Request.Stream && !c.Compact,
-		files: c.files, parses: c.Request.FileParses,
+		files: c.files, parses: c.Request.FileParses, serverFunction: c.serverLoop,
 	}
 }
 
@@ -379,6 +388,8 @@ func (s *session) release() {
 	s.searchHeld = 0
 	s.x.Memory.Refund(s.echoHeld)
 	s.echoHeld = 0
+	s.x.Memory.Refund(s.outHeld)
+	s.outHeld, s.out = 0, nil
 }
 
 // readEcho reads the prompt sizes of a completion that echoes, once for all its attempts, charged to the node's budget

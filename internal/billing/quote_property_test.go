@@ -178,7 +178,7 @@ func (c quoteCase) call(tb testing.TB, r *rand.Rand) *big.Rat {
 		}
 		return r.Int64N(n + 1)
 	}
-	uses, samplings := serverToolUses(c.d, c.e.Model)
+	uses, samplings, _ := serverToolUses(c.d, c.e.Model)
 	counts := c.prompts(samplings, upTo)
 	output := mul(c.e.MaxOutput, max(c.d.Choices, 1))
 	if c.e.Segmentable {

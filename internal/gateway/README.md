@@ -161,6 +161,8 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 
 **转发**（`attempt.stream`，所有者 goroutine 的读循环）：每次 `Relay.Next` 之后，按步的种类写：`StepCommit` 是提交点（写 200、`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`X-Accel-Buffering: no`、上游这次响应带的 `X-Codex-Turn-State` 和暂存的开头，起保活计时器），`StepData`、`StepHeartbeat` 照写，`StepUpstreamDone` 结束。空闲计时从响应头到达起，遇到“新数据”就重置：提交点、`StepData`、正文字节或搜索数变化、一个事件的字节在到（`PartialBytes` 增长）；心跳、注释、没有内容的完整事件都不算（`TestAnUpstreamThatSaysNothingNewBeforeTheCommitPointIsTriedElsewhere`）。只有作答的那次尝试的上游能写这个状态头：它随尝试记下，换端点时跟着有内容的那一次走，客户端自己发的值从不回显（`TestTheTurnStateComesBackFromTheUpstream`）。
 
+**服务端搜索循环**（`openrouter:web_search`，`serverloop.go`）：`resolveServerTool` 决定走厂商原生搜索（`nativeSearch`，无循环）还是网关循环；循环的每一跳仍是一个 `attempt.stream`，但 `RelayOptions.ServerTool` 让 `Relay` 从客户端格式的事件里捕获 `openrouter_web_search` 的调用。每一跳的客户端事件先经 `holdOut` 留在 `session.out`（按节点预算记账），`StepUpstreamDone` 时读 `Relay.ServerCalls()`：有调用且未到上限，`search` 跑后端、`AppendServerTurn` 追加工具结果、`prepare` 带 `Rewrites.ServerFunction` 重发同一个条目，然后丢弃这一跳的输出并读下一跳；没有调用或到上限，`flush` 一次写出，再由 `complete` 收尾。到上限后 `s.serverFunction=false`，最后一跳不再声明函数。客户端只看到一条流；断开取消当前跳和搜索。每次搜索走 `websearch.Searcher`，成功才 `s.searches++`，`addSearchUsage` 把次数加到结算段；`attempt.hopDone` 把每一跳的 `estimated` 追加到 `a.hops`，`result` 用它们而不是把整次当一段，因为每次采样各有输入输出。中途失败走 `abort`：`FailedBeforeCommit`、`FinishError`，模型用量免单、已执行搜索照收，`s.searched` 让 `failed` 不再换端点。
+
 读结束的各种情况（`broke`、`complete`）：
 
 | 情况 | 提交前 | 提交后 |

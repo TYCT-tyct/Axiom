@@ -12,8 +12,16 @@ import (
 // the endpoint's format expects. The tool goes in after conversion, so the body it edits is the one that is sent.
 func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 	u, err := prepare(r, body, t, w)
-	if err != nil || w.NativeSearch <= 0 {
+	if err != nil {
 		return u, err
+	}
+	if w.ServerFunction {
+		if u.Body, err = injectServerFunction(t.Format, u.Body); err != nil {
+			return u, err
+		}
+	}
+	if w.NativeSearch <= 0 {
+		return u, nil
 	}
 	if u.Body, err = injectNativeSearch(t.Format, u.Body, w.NativeSearch); err != nil {
 		return u, err

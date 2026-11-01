@@ -279,8 +279,14 @@ func (a *attempt) result(receipt suppliers.AttemptReceipt) {
 		rec.Estimate.Currency = a.entry.Price.Schedule.Currency()
 		return
 	}
-	rec.Segments = estimated(a.usage, a.seen, a.demand(), a.entry.Limits, a.meter.OutputCap(),
-		billing.TokenizerOf(a.entry.Target.Model))
+	if len(a.hops) > 0 {
+		// The model-side loop sampled the model once per hop; each hop's usage is its own segment (docs/domains/billing.md
+		// 「预留与结算」).
+		rec.Segments = a.hops
+	} else {
+		rec.Segments = estimated(a.usage, a.seen, a.demand(), a.entry.Limits, a.meter.OutputCap(),
+			billing.TokenizerOf(a.entry.Target.Model))
+	}
 	usage := make([]catalog.Usage, len(rec.Segments))
 	for i, seg := range rec.Segments {
 		usage[i] = seg.Usage
