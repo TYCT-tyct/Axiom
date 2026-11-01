@@ -7,7 +7,7 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-// TestSubscriptionMigrationReruns: migration 00034 is nontransactional, so a failure after one policy exists must
+// TestSubscriptionMigrationReruns: migration 00035 is nontransactional, so a failure after one policy exists must
 // leave a state the next run can pass. Every object is guarded and every policy is dropped before it is created; a
 // second run of the whole Up section proves the guards, including the one at the first policy.
 func TestSubscriptionMigrationReruns(t *testing.T) {
