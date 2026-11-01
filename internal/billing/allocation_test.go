@@ -228,7 +228,9 @@ func checkInvariants(t testing.TB, live *allocation, balance int64, m movement) 
 		t.Fatalf("after %+v the allocation funds %d of a balance of %d", m, live.funded(), balance)
 	}
 	for _, b := range live.batches {
-		if b.consumed < 0 || b.expired < 0 || b.remaining() < b.frozen() || b.frozen() < 0 {
+		// A chargeback may leave the batch below zero, but only by its own charged-back amount; the credit itself
+		// must still cover consumption, expiry and refunds.
+		if b.consumed < 0 || b.expired < 0 || b.remaining()+b.chargedBack < b.frozen() || b.remaining() < -b.chargedBack || b.frozen() < 0 {
 			t.Fatalf("batch %+v over-spent", *b)
 		}
 		if live.unfunded > 0 && b.opened.compare(live.at) <= 0 && b.available() > 0 {
@@ -291,7 +293,7 @@ func sameAllocation(t *testing.T, name string, got, live *allocation) {
 		switch {
 		case !ok && b.remaining() != 0: // a batch that holds nothing is not loaded again
 			t.Errorf("%s: batch %s with %d left is gone", name, id, b.remaining())
-		case ok && (g.consumed != b.consumed || g.expired != b.expired || g.freezeTotal != b.freezeTotal || g.unfreezeTotal != b.unfreezeTotal || g.refunded != b.refunded):
+		case ok && (g.consumed != b.consumed || g.expired != b.expired || g.freezeTotal != b.freezeTotal || g.unfreezeTotal != b.unfreezeTotal || g.refunded != b.refunded || g.chargedBack != b.chargedBack):
 			t.Errorf("%s: batch %s got %+v, live %+v", name, id, *g, *b)
 		}
 	}

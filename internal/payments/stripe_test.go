@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -227,6 +228,34 @@ func TestStripeRefunds(t *testing.T) {
 	call.ProviderRef = ""
 	if state, err := c.QueryRefund(t.Context(), call); err != nil || state.State != RefundSucceeded || state.ProviderRef != "re_1" {
 		t.Fatalf("query by intent = %+v, %v", state, err)
+	}
+}
+
+func TestStripeQueryRefundNotFound(t *testing.T) {
+	call := RefundCall{
+		Refund: RefundID(uuid.NewV7()), Order: OrderID(uuid.NewV7()), TradeNo: "cs_1",
+		Amount: Money{Currency: currency(t, "USD"), Minor: 500},
+	}
+	c, _ := stripeTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/refunds/re_"):
+			w.WriteHeader(http.StatusNotFound)
+			writeStripeJSON(t, w, map[string]any{"error": map[string]any{
+				"type": "invalid_request_error", "message": "No such refund", "code": "resource_missing",
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/refunds":
+			writeStripeJSON(t, w, map[string]any{"object": "list", "url": "/v1/refunds", "has_more": false, "data": []any{}})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/checkout/sessions/"):
+			writeStripeJSON(t, w, stripeSession("cs_1", "complete", "paid"))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	if _, err := c.QueryRefund(t.Context(), RefundCall{Refund: call.Refund, TradeNo: call.TradeNo, ProviderRef: "re_missing", Amount: call.Amount}); !errors.Is(err, ErrRefundNotFound) {
+		t.Fatalf("query by a missing ref = %v, want ErrRefundNotFound", err)
+	}
+	if _, err := c.QueryRefund(t.Context(), call); !errors.Is(err, ErrRefundNotFound) {
+		t.Fatalf("query with no matching list entry = %v, want ErrRefundNotFound", err)
 	}
 }
 

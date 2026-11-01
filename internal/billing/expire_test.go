@@ -50,12 +50,12 @@ func (b *bank) checkStored(account uuid.UUID) {
 			b.t.Errorf("stored allocation at %v unfunded %d, a replay from nothing gives %v %d", stored.at, stored.unfunded, fresh.at, fresh.unfunded)
 		}
 		for id, batch := range fresh.batches {
-			var consumed, expired, frozen, released, refunded int64
-			if err := tx.QueryRow(b.t.Context(), "SELECT consumed, expired, freeze_total, unfreeze_total, refunded FROM billing.credit_batches WHERE id = $1", id).Scan(&consumed, &expired, &frozen, &released, &refunded); err != nil {
+			var consumed, expired, frozen, released, refunded, chargedBack int64
+			if err := tx.QueryRow(b.t.Context(), "SELECT consumed, expired, freeze_total, unfreeze_total, refunded, charged_back FROM billing.credit_batches WHERE id = $1", id).Scan(&consumed, &expired, &frozen, &released, &refunded, &chargedBack); err != nil {
 				return err
 			}
-			if consumed != batch.consumed || expired != batch.expired || frozen != batch.freezeTotal || released != batch.unfreezeTotal || refunded != batch.refunded {
-				b.t.Errorf("batch %s stores consumed %d expired %d freeze %d release %d refund %d, replay gives %+v", id, consumed, expired, frozen, released, refunded, *batch)
+			if consumed != batch.consumed || expired != batch.expired || frozen != batch.freezeTotal || released != batch.unfreezeTotal || refunded != batch.refunded || chargedBack != batch.chargedBack {
+				b.t.Errorf("batch %s stores consumed %d expired %d freeze %d release %d refund %d charged back %d, replay gives %+v", id, consumed, expired, frozen, released, refunded, chargedBack, *batch)
 			}
 		}
 		return nil

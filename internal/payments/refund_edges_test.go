@@ -220,3 +220,57 @@ func TestRefundFrozenQuoteSurvivesPolicyChanges(t *testing.T) {
 		t.Fatal(n)
 	}
 }
+
+func TestRefundNotFoundIsResentWithinTheKeyWindow(t *testing.T) {
+	var sends, queries atomic.Int32
+	plugin := fakePlugin{
+		create: goodCheckout, caps: CapRefund | CapQueryRefund | CapRefundKey,
+		refund: func(context.Context, RefundCall) (RefundState, error) {
+			sends.Add(1)
+			return RefundState{State: RefundSucceeded, ProviderRef: "re_resent"}, nil
+		},
+		queryRefund: func(context.Context, RefundCall) (RefundState, error) {
+			queries.Add(1)
+			return RefundState{}, ErrRefundNotFound
+		},
+	}
+	w, o := refundWorld(t, plugin)
+	r := w.mustRefund(o, o.Credits, "missing")
+	// The process died after committing "sending" and before the request reached Stripe.
+	w.exec("UPDATE payments.refunds SET approved_by='" + uuid.NewV7().String() + "',state='sending',sent_at=clock_timestamp(),attempts=1 WHERE id='" + uuid.UUID(r.ID).String() + "'")
+	w.dueRefunds()
+	if sends.Load() != 1 || queries.Load() != 1 {
+		t.Fatalf("sends=%d queries=%d, want one of each", sends.Load(), queries.Load())
+	}
+	if got := w.mustGetRefund(r.ID); got.State != "succeeded" || got.ProviderRef != "re_resent" {
+		t.Fatalf("refund = %+v", got)
+	}
+}
+
+func TestRefundNotFoundAfterTheKeyWindowIsNotResent(t *testing.T) {
+	var sends, queries atomic.Int32
+	plugin := fakePlugin{
+		create: goodCheckout, caps: CapRefund | CapQueryRefund | CapRefundKey,
+		refund: func(context.Context, RefundCall) (RefundState, error) {
+			sends.Add(1)
+			return RefundState{State: RefundSucceeded}, nil
+		},
+		queryRefund: func(context.Context, RefundCall) (RefundState, error) {
+			queries.Add(1)
+			return RefundState{}, ErrRefundNotFound
+		},
+	}
+	w, o := refundWorld(t, plugin)
+	r := w.mustRefund(o, o.Credits, "old")
+	w.exec("UPDATE payments.refunds SET approved_by='" + uuid.NewV7().String() + "',state='sending',sent_at=clock_timestamp()-interval '25 hours',attempts=1 WHERE id='" + uuid.UUID(r.ID).String() + "'")
+	w.dueRefunds()
+	if sends.Load() != 0 || queries.Load() != 1 {
+		t.Fatalf("sends=%d queries=%d, want no resend after the key window", sends.Load(), queries.Load())
+	}
+	if got := w.mustGetRefund(r.ID); got.State != "pending" {
+		t.Fatalf("refund = %+v, want pending", got)
+	}
+	if got := w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies WHERE state='open' AND kind='refund_unknown'"); got != 1 {
+		t.Fatalf("unknown refund discrepancies = %d, want 1", got)
+	}
+}

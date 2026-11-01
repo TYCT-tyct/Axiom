@@ -11,6 +11,8 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/platform/idem"
 	"axiom/internal/platform/pg"
+
+	"github.com/jackc/pgx/v5/pgtype" //nolint:depguard // sqlc's timestamp parameters; the value itself comes from the billing ledger
 )
 
 // dispute books a verified chargeback. The channel's event is already authentic; the order, the amounts and whether
@@ -100,7 +102,13 @@ func (p *Payments) applyDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 			}); err != nil {
 				return fmt.Errorf("payments: reverse the dispute: %w", err)
 			}
-			n, err := queries.ReverseDispute(ctx, tx, ReverseDisputeParams{Status: status, ID: row.ID})
+			reversedAt, err := billing.TransactionCreatedAt(ctx, tx, row.OrderID, "chargeback_reverse", row.ChargebackRevision)
+			if err != nil {
+				return fmt.Errorf("payments: read the reversal time: %w", err)
+			}
+			n, err := queries.ReverseDispute(ctx, tx, ReverseDisputeParams{
+				Status: status, ReversedAt: pgtype.Timestamptz{Time: reversedAt, Valid: true}, ID: row.ID,
+			})
 			if err != nil {
 				return fmt.Errorf("payments: record the won dispute: %w", err)
 			}
@@ -179,9 +187,13 @@ func (p *Payments) applyDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 		if err != nil {
 			return fmt.Errorf("payments: book the dispute: %w", err)
 		}
+		appliedAt, err := billing.TransactionCreatedAt(ctx, tx, o.ID, "chargeback", amounts.Revision)
+		if err != nil {
+			return fmt.Errorf("payments: read the chargeback time: %w", err)
+		}
 		n, err := queries.ApplyDispute(ctx, tx, ApplyDisputeParams{
 			Status: status, Reason: reason, Credits: amounts.Credits, Cash: amounts.Returned, Fee: amounts.Fee,
-			Revision: amounts.Revision, ID: row.ID,
+			Revision: amounts.Revision, AppliedAt: pgtype.Timestamptz{Time: appliedAt, Valid: true}, ID: row.ID,
 		})
 		if err != nil {
 			return fmt.Errorf("payments: apply the dispute: %w", err)

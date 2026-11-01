@@ -2,10 +2,13 @@ package billing
 
 import (
 	"errors"
+	"os"
+	"strings"
 	"testing"
 	"uuid"
 
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 )
 
 func (b *bank) chargeback(batch uuid.UUID, cash int64) (ChargebackAmounts, error) {
@@ -85,6 +88,40 @@ func TestChargebackTakesOnlyItsBatchAndReverses(t *testing.T) {
 		t.Fatalf("second revision = %d, want 2", again.Revision)
 	}
 	b.balanced()
+}
+
+// A charged-back batch can hold a negative remainder. It must still count in the balance, but it must not absorb a
+// later charge by making another batch's consumed amount larger. That mismatch between the stored cache and a replay
+// was the bug this test pins: the negative batch was not marked touched and was never saved.
+func TestChargebackNegativeBatchDoesNotFundSpend(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	first := b.paidBatch(100, 100)
+	b.charge(50) // the user spent half before the chargeback took the whole payment back
+	if _, err := b.chargeback(first.ID, 100); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.balanceOf(b.admitted.Account); got != -50 {
+		t.Fatalf("balance after chargeback = %d, want -50", got)
+	}
+	second := b.paidBatch(200, 200)
+	b.charge(10)
+	if ready, err := AdvanceCreditBatches(b.t.Context(), b.app, b.admitted.Scope, b.admitted.Account, 8); err != nil || !ready {
+		t.Fatalf("advance the allocation = %v, %v", ready, err)
+	}
+	if got := b.balanceOf(b.admitted.Account); got != 140 {
+		t.Fatalf("balance after spending = %d, want 140", got)
+	}
+	if got := b.count("SELECT consumed FROM billing.credit_batches WHERE id = '" + first.ID.String() + "'"); got != 50 {
+		t.Fatalf("the negative batch consumed %d, want its original 50", got)
+	}
+	if got := b.count("SELECT amount - consumed - expired - refunded - charged_back FROM billing.credit_batches WHERE id = '" + first.ID.String() + "'"); got != -50 {
+		t.Fatalf("the negative batch remaining = %d, want -50", got)
+	}
+	if got := b.count("SELECT consumed FROM billing.credit_batches WHERE id = '" + second.ID.String() + "'"); got != 10 {
+		t.Fatalf("the later batch consumed %d, want 10", got)
+	}
+	b.checkStored(b.admitted.Account)
 }
 
 func TestChargebackRefusesRefundInFlight(t *testing.T) {
@@ -169,4 +206,23 @@ func TestChargebackAfterTheBatchExpired(t *testing.T) {
 		t.Fatalf("balance after reversal = %d, want 0", got)
 	}
 	b.balanced()
+}
+
+func TestChargebackMigrationReruns(t *testing.T) {
+	db := pgtest.New(t, Migrations())
+	raw, err := os.ReadFile("migrations/00034_chargeback.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	up, _, ok := strings.Cut(string(raw), "-- +goose Down")
+	if !ok {
+		t.Fatal("the migration has no Down section")
+	}
+	// The first add of the two constraints can fail after an earlier statement committed (the file is NO TRANSACTION).
+	// Replaying the Up must replace the constraints rather than meet them by name.
+	for range 2 {
+		if err := pgtest.Run(t.Context(), db.Superuser, up); err != nil {
+			t.Fatalf("replay the chargeback migration: %v", err)
+		}
+	}
 }

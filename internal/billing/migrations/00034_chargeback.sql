@@ -6,6 +6,7 @@ ALTER TABLE billing.credit_batches
     ADD COLUMN IF NOT EXISTS charged_back bigint NOT NULL DEFAULT 0;
 GRANT UPDATE (charged_back) ON billing.credit_batches TO axiom_app;
 ALTER TABLE billing.credit_batches
+    DROP CONSTRAINT IF EXISTS credit_batches_charged_back_check,
     DROP CONSTRAINT IF EXISTS credit_batches_freezes_check,
     ADD CONSTRAINT credit_batches_charged_back_check CHECK (
         charged_back >= 0 AND refunded + charged_back <= amount) NOT VALID,

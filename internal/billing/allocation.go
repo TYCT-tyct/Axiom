@@ -360,9 +360,18 @@ func (a *allocation) writeOff(m movement) error {
 // 「额度批次」「到期」).
 func (a *allocation) spend(n int64) {
 	for _, b := range a.open {
-		take := min(b.available(), n)
+		if n == 0 {
+			break
+		}
+		// A charged-back batch may hold a negative remainder. It stays in the balance, but it cannot fund a later
+		// charge: giving it a negative "take" would spend another batch's credit to cancel the debt in this cache.
+		available := b.available()
+		if available <= 0 {
+			continue
+		}
+		take := min(available, n)
 		b.consumed += take
-		b.touched = b.touched || take > 0
+		b.touched = true
 		n -= take
 	}
 	a.dropSpent()

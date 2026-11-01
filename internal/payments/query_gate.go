@@ -53,6 +53,9 @@ func queryHealthOutcome(ctx context.Context, err error, incomplete bool) queryOu
 		return queryUnused
 	}
 	var refused *Rejected
+	if errors.Is(err, ErrRefundNotFound) {
+		return queryKnown
+	}
 	if err != nil && !errors.As(err, &refused) || incomplete {
 		return queryUnknown
 	}

@@ -284,6 +284,9 @@ func (c *stripeChannel) QueryRefund(ctx context.Context, r RefundCall) (RefundSt
 	if r.ProviderRef != "" {
 		refund, err := c.client.V1Refunds.Retrieve(ctx, r.ProviderRef, nil)
 		if err != nil {
+			if stripeNotFound(err) {
+				return RefundState{}, ErrRefundNotFound
+			}
 			return RefundState{}, stripeFailure(err)
 		}
 		if !stripeRefundMatches(refund, r) {
@@ -310,7 +313,7 @@ func (c *stripeChannel) QueryRefund(ctx context.Context, r RefundCall) (RefundSt
 		found = refund
 	}
 	if found == nil {
-		return RefundState{State: RefundPending}, nil
+		return RefundState{}, ErrRefundNotFound
 	}
 	if !stripeRefundMatches(found, r) {
 		return RefundState{}, errors.New("stripe: the refund found does not match its amount or currency")
@@ -380,6 +383,11 @@ func stripeDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
 		return context.WithCancel(ctx)
 	}
 	return context.WithTimeout(ctx, 10*time.Second)
+}
+
+func stripeNotFound(err error) bool {
+	se, ok := errors.AsType[*stripe.Error](err)
+	return ok && se.HTTPStatusCode == http.StatusNotFound
 }
 
 func stripeFailure(err error) error {

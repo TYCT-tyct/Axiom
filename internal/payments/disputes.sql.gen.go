@@ -15,18 +15,19 @@ import (
 
 const applyDispute = `-- name: ApplyDispute :execrows
 UPDATE payments.order_disputes SET state = 'applied', status = $1, reason = $2, credits = $3,
-    cash = $4, fee = $5, chargeback_revision = $6, applied_at = clock_timestamp(), updated_at = clock_timestamp()
-WHERE id = $7 AND state = 'recorded'
+    cash = $4, fee = $5, chargeback_revision = $6, applied_at = $7, updated_at = clock_timestamp()
+WHERE id = $8 AND state = 'recorded'
 `
 
 type ApplyDisputeParams struct {
-	Status   string
-	Reason   string
-	Credits  int64
-	Cash     int64
-	Fee      int64
-	Revision int64
-	ID       uuid.UUID
+	Status    string
+	Reason    string
+	Credits   int64
+	Cash      int64
+	Fee       int64
+	Revision  int64
+	AppliedAt pgtype.Timestamptz
+	ID        uuid.UUID
 }
 
 func (q *Queries) ApplyDispute(ctx context.Context, db DBTX, arg ApplyDisputeParams) (int64, error) {
@@ -37,6 +38,7 @@ func (q *Queries) ApplyDispute(ctx context.Context, db DBTX, arg ApplyDisputePar
 		arg.Cash,
 		arg.Fee,
 		arg.Revision,
+		arg.AppliedAt,
 		arg.ID,
 	)
 	if err != nil {
@@ -260,18 +262,19 @@ func (q *Queries) ReconcileDisputes(ctx context.Context, db DBTX, arg ReconcileD
 }
 
 const reverseDispute = `-- name: ReverseDispute :execrows
-UPDATE payments.order_disputes SET state = 'reversed', status = $1, reversed_at = clock_timestamp(),
+UPDATE payments.order_disputes SET state = 'reversed', status = $1, reversed_at = $2,
     updated_at = clock_timestamp()
-WHERE id = $2 AND state = 'applied'
+WHERE id = $3 AND state = 'applied'
 `
 
 type ReverseDisputeParams struct {
-	Status string
-	ID     uuid.UUID
+	Status     string
+	ReversedAt pgtype.Timestamptz
+	ID         uuid.UUID
 }
 
 func (q *Queries) ReverseDispute(ctx context.Context, db DBTX, arg ReverseDisputeParams) (int64, error) {
-	result, err := db.Exec(ctx, reverseDispute, arg.Status, arg.ID)
+	result, err := db.Exec(ctx, reverseDispute, arg.Status, arg.ReversedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -280,7 +283,7 @@ func (q *Queries) ReverseDispute(ctx context.Context, db DBTX, arg ReverseDisput
 
 const touchDispute = `-- name: TouchDispute :execrows
 UPDATE payments.order_disputes SET status = $1, reason = $2, updated_at = clock_timestamp()
-WHERE id = $3 AND (status <> $1 OR reason <> $2)
+WHERE id = $3 AND status <> 'won' AND (status <> $1 OR reason <> $2)
 `
 
 type TouchDisputeParams struct {

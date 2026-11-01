@@ -22,15 +22,15 @@ SELECT * FROM payments.order_disputes WHERE id = @id FOR UPDATE;
 
 -- name: TouchDispute :execrows
 UPDATE payments.order_disputes SET status = @status, reason = @reason, updated_at = clock_timestamp()
-WHERE id = @id AND (status <> @status OR reason <> @reason);
+WHERE id = @id AND status <> 'won' AND (status <> @status OR reason <> @reason);
 
 -- name: ApplyDispute :execrows
 UPDATE payments.order_disputes SET state = 'applied', status = @status, reason = @reason, credits = @credits,
-    cash = @cash, fee = @fee, chargeback_revision = @revision, applied_at = clock_timestamp(), updated_at = clock_timestamp()
+    cash = @cash, fee = @fee, chargeback_revision = @revision, applied_at = @applied_at, updated_at = clock_timestamp()
 WHERE id = @id AND state = 'recorded';
 
 -- name: ReverseDispute :execrows
-UPDATE payments.order_disputes SET state = 'reversed', status = @status, reversed_at = clock_timestamp(),
+UPDATE payments.order_disputes SET state = 'reversed', status = @status, reversed_at = @reversed_at,
     updated_at = clock_timestamp()
 WHERE id = @id AND state = 'applied';
 

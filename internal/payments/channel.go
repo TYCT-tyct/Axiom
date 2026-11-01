@@ -2,6 +2,7 @@ package payments
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/netip"
 	"time"
@@ -69,6 +70,11 @@ type Channel interface {
 	QueryRefund(ctx context.Context, r RefundCall) (RefundState, error)
 	Ack(ok bool) (status int, body []byte)
 }
+
+// ErrRefundNotFound means QueryRefund found no refund with the call's provider reference or metadata. The core may
+// send the refund again with the same idempotency key only within the channel's key window; an error is not *Rejected,
+// because absence of a refund does not prove the first request never reached the channel.
+var ErrRefundNotFound = errors.New("payments: the channel has no such refund")
 
 // NotifyPath is shared by core URL generation and the running program's callback routes.
 const NotifyPath = "/api/payments/v1/notify/"

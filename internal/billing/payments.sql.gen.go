@@ -153,3 +153,23 @@ func (q *Queries) ReadCreditBatches(ctx context.Context, db DBTX, ids []uuid.UUI
 	}
 	return items, nil
 }
+
+const transactionCreatedAt = `-- name: TransactionCreatedAt :one
+SELECT created_at FROM billing.transactions
+WHERE request_id = $1 AND attempt_seq = 0 AND kind = $2 AND revision = $3
+`
+
+type TransactionCreatedAtParams struct {
+	RequestID uuid.UUID
+	Kind      string
+	Revision  int64
+}
+
+// The ledger is the one clock for a channel movement: the dispute row records the same instant, so reconciliation on
+// either side of UTC midnight puts the cash on the same day.
+func (q *Queries) TransactionCreatedAt(ctx context.Context, db DBTX, arg TransactionCreatedAtParams) (time.Time, error) {
+	row := db.QueryRow(ctx, transactionCreatedAt, arg.RequestID, arg.Kind, arg.Revision)
+	var created_at time.Time
+	err := row.Scan(&created_at)
+	return created_at, err
+}
