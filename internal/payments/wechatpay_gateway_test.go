@@ -37,7 +37,8 @@ const (
 	wpTestSerial = "408B07E79B8269FEC3D5D3E6AB8ED163A6A380DB"
 	wpTestKeyID  = "PUB_KEY_ID_0123456789ABCDEF0123456789ABCDEF"
 	wpTestOldKey = "PUB_KEY_ID_FEDCBA9876543210FEDCBA9876543210"
-	wpTestAPIKey = "0123456789abcdef0123456789abcdef"
+	// Exactly 32 bytes, as the channel requires; the value is a placeholder and deliberately not the shape of a key.
+	wpTestAPIKey = "wechatpay-test-key-wechatpay-key"
 )
 
 type wpTestKeys struct {
