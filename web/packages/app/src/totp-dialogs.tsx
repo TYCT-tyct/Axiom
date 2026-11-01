@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useErrors } from "./errors";
 import { readForm } from "./forms";
 import { QrCode } from "./qr";
-import { currentSession, identityOf, useAuth, useCachedSession, useStartSession } from "./session";
+import { claimSession, holdsIdentity, identityOf, useAuth, useCachedSession, useStartSession } from "./session";
 
 type Change = Schemas["FactorChange"];
 
@@ -43,23 +43,21 @@ function RecoveryCodes({ change, onClose }: { change: Change; onClose: () => voi
   );
 }
 
-const ShowCodes = createContext<((change: Change) => void) | null>(null);
+const ShowCodes = createContext<((change: Change, identity: string) => void) | null>(null);
 
 // RecoveryCodesHost shows the recovery codes of a changed factor above everything in it. The codes belong to the person
 // signed in: when the browser passes to another person (another tab signs out and someone else signs in), the dialog
 // closes and the codes leave memory, because this host outlives the pages. The session itself rotating is how these
-// codes were made, so the host follows the person, not the token.
+// codes were made, so the host follows the person, not the token. The caller names the person it asked for the change
+// as, captured before the request went out: this host must not read the session when the answer lands, because by then
+// another tab may have signed someone else in.
 export function RecoveryCodesHost({ children }: { children: ReactNode }) {
-  const client = useQueryClient();
   const identity = identityOf(useCachedSession());
   const [shown, setShown] = useState<{ change: Change; identity: string } | null>(null);
   useEffect(() => {
     setShown((held) => (held && held.identity !== identity ? null : held));
   }, [identity]);
-  const show = useCallback(
-    (change: Change) => setShown({ change, identity: identityOf(currentSession(client)) }),
-    [client],
-  );
+  const show = useCallback((change: Change, asked: string) => setShown({ change, identity: asked }), []);
   const visible = shown && shown.identity === identity ? shown.change : null;
   return (
     <ShowCodes value={show}>
@@ -83,6 +81,24 @@ export function useShowRecoveryCodes() {
   return useShowCodes();
 }
 
+// A factor change replaces the session it was asked under before its answer is read, so its codes belong to the person
+// who asked, claimed when the request starts; an answer that lands after another person signed in is dropped.
+function useFactorCodes<TVariables>(change: (variables: TVariables) => Promise<Change>, onClose: () => void) {
+  const client = useQueryClient();
+  const show = useShowCodes();
+  return useMutation({
+    mutationFn: change,
+    onMutate: () => claimSession(client),
+    onSuccess: (codes, _variables, claim) => {
+      if (!claim || !holdsIdentity(client, claim.identity)) {
+        return;
+      }
+      show(codes, claim.identity);
+      onClose();
+    },
+  });
+}
+
 // Starting to enable asks for a new secret and opens the dialog that proves it; nothing is stored until it is proved.
 export function useBeginTotp() {
   const { api } = useAuth();
@@ -94,14 +110,7 @@ export function TotpSetupDialog({ setup, onClose }: { setup: Schemas["TotpSetup"
   const { t } = useTranslation("common");
   const errors = useErrors();
   const { api } = useAuth();
-  const show = useShowCodes();
-  const confirm = useMutation({
-    mutationFn: api.confirmTotpSetup,
-    onSuccess: (change) => {
-      show(change);
-      onClose();
-    },
-  });
+  const confirm = useFactorCodes(api.confirmTotpSetup, onClose);
   return (
     <Dialog title={t("security.setup.title")} onClose={onClose} dismissible={!confirm.isPending}>
       <div className="space-y-4">
@@ -155,14 +164,7 @@ export function RecoveryDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation("common");
   const errors = useErrors();
   const { api } = useAuth();
-  const show = useShowCodes();
-  const regenerate = useMutation({
-    mutationFn: api.regenerateRecoveryCodes,
-    onSuccess: (change) => {
-      show(change);
-      onClose();
-    },
-  });
+  const regenerate = useFactorCodes(api.regenerateRecoveryCodes, onClose);
   return (
     <Dialog title={t("security.regenerate.title")} onClose={onClose} dismissible={!regenerate.isPending}>
       <form

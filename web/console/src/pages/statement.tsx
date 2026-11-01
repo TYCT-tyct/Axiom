@@ -1,5 +1,5 @@
 import type { Schemas } from "@axiom/api";
-import { LoadMore, useErrors } from "@axiom/app";
+import { LoadMore, useErrors, useSessionBound } from "@axiom/app";
 import { Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Th, useFormat } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -49,15 +49,21 @@ function NoMovements({ more }: { more: boolean }) {
 }
 
 // Export downloads the statement as a CSV file. The request is the page's own, not a query: it runs once, when asked
-// for, and a second press waits for the first.
+// for, and a second press waits for the first. The download is bound to the session that asked, so another tab passing
+// the browser to someone else abandons it instead of saving one account's statement into the other's.
 function Export({ onFailed }: { onFailed: (error: unknown) => void }) {
   const { t } = useTranslation();
+  const bound = useSessionBound();
   const [busy, setBusy] = useState(false);
   const start = () => {
     setBusy(true);
     onFailed(null);
-    statementCsv()
-      .then((csv) => save(statementFile(csv)))
+    void bound(async (signal) => statementFile(await statementCsv(signal)))
+      .then((answer) => {
+        if (answer) {
+          save(answer.value);
+        }
+      })
       .catch(onFailed)
       .finally(() => setBusy(false));
   };
