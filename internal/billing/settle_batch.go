@@ -579,7 +579,7 @@ func (r LockReservationsRow) lockRow() LockReservationRow {
 		Prices: r.Prices, PriceVersions: r.PriceVersions, ChargedSeq: r.ChargedSeq, Entry: r.Entry,
 		Charged: r.Charged, Price: r.Price, Waived: r.Waived, Estimated: r.Estimated, FinalUsage: r.FinalUsage,
 		Fallbacks: r.Fallbacks, Models: r.Models, AttemptEntries: r.AttemptEntries, Endpoints: r.Endpoints,
-		Profit: r.Profit, Funding: r.Funding, SubscriptionID: r.SubscriptionID, WindowSeq: r.WindowSeq,
+		Profit: r.Profit, SubscriptionID: derefUUID(r.SubscriptionID), WindowSeq: derefInt32(r.WindowSeq),
 		PricingTiers: r.PricingTiers,
 	}
 }

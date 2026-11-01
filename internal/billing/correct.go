@@ -295,10 +295,10 @@ func chargeCorrection(ctx context.Context, tx pg.Tx, row LockReservationRow, bal
 // correctionLines prices the corrected charge against the source the reservation records and returns the two ledger
 // entries and the counters they move.
 func correctionLines(ctx context.Context, tx pg.Tx, row LockReservationRow, balance LockBalanceRow, charged *locked, price priced) ([]line, []line, int64, int64, error) {
-	if row.Funding == "plan" {
+	if row.SubscriptionID != (uuid.UUID{}) {
 		// A plan charge is capped by the frozen window, whose room is read afresh: a later request may have taken what
 		// this one released, and the window's quota bounds every charge into it (docs/domains/billing.md「订阅套餐」).
-		left, sub, err := planRoom(ctx, tx, *row.SubscriptionID, *row.WindowSeq)
+		left, sub, err := planRoom(ctx, tx, row.SubscriptionID, row.WindowSeq)
 		if err != nil {
 			return nil, nil, 0, 0, err
 		}
@@ -386,7 +386,7 @@ func correctPlanWindow(ctx context.Context, tx pg.Tx, request uuid.UUID, row Loc
 		return nil
 	}
 	if n, err := queries.ChargeWindowUsed(ctx, tx, ChargeWindowUsedParams{
-		SubscriptionID: *row.SubscriptionID, Seq: *row.WindowSeq, Delta: delta,
+		SubscriptionID: row.SubscriptionID, Seq: row.WindowSeq, Delta: delta,
 	}); err != nil {
 		return fmt.Errorf("billing: move the window's usage: %w", err)
 	} else if n != 1 {

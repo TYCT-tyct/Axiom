@@ -379,7 +379,7 @@ func (c *locked) late(ctx context.Context, tx pg.Tx, p priced, last AttemptResul
 func (c *locked) release(ctx context.Context, tx pg.Tx, state string, held int64) error {
 	if c.plan() {
 		if held > 0 {
-			if err := moveWindowReserved(ctx, tx, *c.row.SubscriptionID, *c.row.WindowSeq, -held); err != nil {
+			if err := moveWindowReserved(ctx, tx, c.row.SubscriptionID, c.row.WindowSeq, -held); err != nil {
 				return err
 			}
 		}
@@ -389,7 +389,7 @@ func (c *locked) release(ctx context.Context, tx pg.Tx, state string, held int64
 }
 
 // plan reports whether the reservation's money was frozen in a subscription window.
-func (c *locked) plan() bool { return c.row.Funding == "plan" }
+func (c *locked) plan() bool { return c.row.SubscriptionID != (uuid.UUID{}) }
 
 // windowSettle is what a plan settlement moves in its frozen window: the hold goes back and the charge is used.
 type windowSettle struct{ held, charged int64 }
@@ -444,7 +444,7 @@ func (c *locked) write(ctx context.Context, tx pg.Tx, w written, balanceReserved
 		return fmt.Errorf("billing: end the reservation: %w", err)
 	}
 	if win != nil {
-		if err := moveSettledWindow(ctx, tx, *c.row.SubscriptionID, *c.row.WindowSeq, *win); err != nil {
+		if err := moveSettledWindow(ctx, tx, c.row.SubscriptionID, c.row.WindowSeq, *win); err != nil {
 			return err
 		}
 	}

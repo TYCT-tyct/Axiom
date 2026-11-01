@@ -286,6 +286,37 @@ func (q *Queries) LockBalance(ctx context.Context, db DBTX, accountID uuid.UUID)
 	return i, err
 }
 
+const lockBalancePlan = `-- name: LockBalancePlan :one
+SELECT b.balance, b.floor, b.reserved, b.frozen,
+    EXISTS (SELECT 1 FROM billing.subscriptions s
+        JOIN billing.subscription_windows w ON w.subscription_id = s.id AND w.seq = s.current_seq
+        WHERE s.account_id = b.account_id AND s.state = 'active')::boolean AS has_plan
+FROM billing.balances b WHERE b.account_id = $1 FOR UPDATE OF b
+`
+
+type LockBalancePlanRow struct {
+	Balance  int64
+	Floor    int64
+	Reserved int64
+	Frozen   int64
+	HasPlan  bool
+}
+
+// The balance row and whether the account has a plan window in force, in one statement. Admission reads the plan only
+// when the flag is true, so a wallet-only account pays no second plan query.
+func (q *Queries) LockBalancePlan(ctx context.Context, db DBTX, accountID uuid.UUID) (LockBalancePlanRow, error) {
+	row := db.QueryRow(ctx, lockBalancePlan, accountID)
+	var i LockBalancePlanRow
+	err := row.Scan(
+		&i.Balance,
+		&i.Floor,
+		&i.Reserved,
+		&i.Frozen,
+		&i.HasPlan,
+	)
+	return i, err
+}
+
 const lockExpiredHolders = `-- name: LockExpiredHolders :many
 SELECT id FROM billing.holders
 WHERE reaped_at IS NULL AND expires_at < clock_timestamp() - make_interval(0, 0, 0, 0, 0, 0, $1::float8)

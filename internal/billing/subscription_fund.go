@@ -30,11 +30,11 @@ func settlePlanWindows(ctx context.Context, tx pg.Tx, ends []*reservationEnd) er
 		if e.window == nil {
 			continue
 		}
-		if e.c.row.SubscriptionID == nil || e.c.row.WindowSeq == nil {
+		if e.c.row.SubscriptionID == (uuid.UUID{}) || e.c.row.WindowSeq == 0 {
 			return fmt.Errorf("billing: the plan hold %s names no window", e.c.id)
 		}
-		params.Subscriptions = append(params.Subscriptions, *e.c.row.SubscriptionID)
-		params.Seqs = append(params.Seqs, *e.c.row.WindowSeq)
+		params.Subscriptions = append(params.Subscriptions, e.c.row.SubscriptionID)
+		params.Seqs = append(params.Seqs, e.c.row.WindowSeq)
 		params.Helds = append(params.Helds, e.window.held)
 		params.Chargeds = append(params.Chargeds, e.window.charged)
 	}
