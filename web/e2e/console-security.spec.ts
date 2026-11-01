@@ -166,3 +166,137 @@ test.describe("two-step verification settings", () => {
     });
   }
 });
+
+test.describe("passkey changes and the session that asked", () => {
+  test("a removal that finishes after another account signs in shows no codes", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.mfaEnabled = true;
+    state.passkeys = [
+      {
+        id: "pk_00000000000000000000000000",
+        name: "Laptop",
+        created_at: "2026-10-01T08:00:00Z",
+        backup_eligible: true,
+      },
+    ];
+    signedInAs(state, "mfa");
+    await page.goto("/console/security");
+    await page.getByLabel("当前密码").fill(knownPassword);
+
+    // Hold the removal itself, not the list read.
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/api/console/v1/auth/passkeys/*", async (route) => {
+      if (route.request().method() !== "DELETE") {
+        return route.fallback();
+      }
+      await held;
+      await route.fallback().catch(() => {});
+    });
+    const sent = page.waitForRequest((request) => request.method() === "DELETE");
+    const abandoned = page.waitForEvent("requestfailed", {
+      predicate: (request) => request.method() === "DELETE",
+    });
+    await page.getByRole("button", { name: "移除", exact: true }).click();
+    await sent;
+
+    // Another tab signs someone else in; this page reads the new session when its window comes back.
+    state.account = 2;
+    state.user.email = "other@example.com";
+    await returnToWindow(page);
+    await expect(page.getByRole("navigation", { name: "主导航" }).getByText("other@example.com")).toBeVisible();
+    await abandoned;
+    answer();
+    await expect(page.getByRole("dialog", { name: "保存你的恢复码" })).toHaveCount(0);
+  });
+
+  test("the codes still show when this person's session refreshes before the removal's answer", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.mfaEnabled = true;
+    state.passkeys = [
+      {
+        id: "pk_00000000000000000000000000",
+        name: "Laptop",
+        created_at: "2026-10-01T08:00:00Z",
+        backup_eligible: true,
+      },
+    ];
+    signedInAs(state, "mfa");
+    await page.goto("/console/security");
+    await page.getByLabel("当前密码").fill(knownPassword);
+
+    // The server rotated this person's session before the removal's answer is read. Only the token changes; the new
+    // codes still belong to this person and must be shown.
+    await page.route("**/api/console/v1/auth/passkeys/*", async (route) => {
+      if (route.request().method() !== "DELETE") {
+        return route.fallback();
+      }
+      state.csrf = "csrf-rotated";
+      const refreshed = page.waitForResponse((response) => response.url().endsWith("/api/console/v1/session"));
+      await returnToWindow(page);
+      await refreshed;
+      await route.fallback({ headers: { ...route.request().headers(), "x-csrf-token": state.csrf } });
+    });
+    await page.getByRole("button", { name: "移除", exact: true }).click();
+
+    const codes = page.getByRole("dialog", { name: "保存你的恢复码" });
+    await expect(codes.getByRole("listitem")).toHaveCount(10);
+  });
+});
+
+test.describe("factor changes and their own session rotation", () => {
+  test("recovery codes still show when the session refreshes before the answer", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.mfaEnabled = true;
+    signedInAs(state, "mfa");
+    await page.goto("/console/security");
+    await page.getByRole("button", { name: "重新生成恢复码" }).click();
+    const dialog = page.getByRole("dialog", { name: "重新生成恢复码" });
+    await dialog.getByLabel("验证器里的 6 位验证码").fill("123456");
+
+    await page.route("**/api/console/v1/auth/recovery-codes", async (route) => {
+      if (route.request().method() !== "POST") {
+        return route.fallback();
+      }
+      state.csrf = "csrf-rotated";
+      const refreshed = page.waitForResponse((response) => response.url().endsWith("/api/console/v1/session"));
+      await returnToWindow(page);
+      await refreshed;
+      await route.fallback({ headers: { ...route.request().headers(), "x-csrf-token": state.csrf } });
+    });
+    await dialog.getByRole("button", { name: "重新生成" }).click();
+
+    const codes = page.getByRole("dialog", { name: "保存你的恢复码" });
+    await expect(codes.getByRole("listitem")).toHaveCount(10);
+  });
+
+  test("a cancelled OAuth link frees the buttons when only this session rotated", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.site = { ...state.site, oauth_providers: ["github"] };
+    signedInAs(state);
+    await page.goto("/console/security");
+    const link = page.getByRole("button", { name: "绑定" });
+    await expect(link).toBeEnabled();
+
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/api/console/v1/auth/oauth/link/start", async (route) => {
+      state.csrf = "csrf-rotated";
+      const refreshed = page.waitForResponse((response) => response.url().endsWith("/api/console/v1/session"));
+      await returnToWindow(page);
+      await refreshed;
+      await held;
+      await route.fallback().catch(() => {});
+    });
+    const abandoned = page.waitForEvent("requestfailed", {
+      predicate: (request) => request.url().includes("/auth/oauth/link/start"),
+    });
+    await link.click();
+    await abandoned;
+    release();
+
+    // The person did not change, so the page stays; the refused request must not leave its buttons disabled.
+    await expect(link).toBeEnabled();
+    await expect(page).toHaveURL(/\/console\/security$/);
+  });
+});

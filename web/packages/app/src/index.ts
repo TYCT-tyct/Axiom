@@ -13,10 +13,13 @@ export {
   can,
   currentSession,
   Gate,
+  holdsSession,
+  identityOf,
   safeNext,
   sessionBinding,
   useCachedSession,
   useSession,
+  useSessionBound,
   useSignIn,
   useStartSession,
 } from "./session";

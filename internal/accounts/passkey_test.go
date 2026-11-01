@@ -296,8 +296,8 @@ func pendingPasskeySignIn(t *testing.T, x site, s *accounts.Service) (accounts.P
 	return p, cookie
 }
 
-// assertWrongAssertionSpendsAttempt checks that a failed assertion spends one of the pending session's attempts, like a
-// wrong code does.
+// assertWrongAssertionSpendsAttempt checks that a failed assertion spends one of the pending session's attempts and
+// records one guessed factor, like a wrong code does.
 func assertWrongAssertionSpendsAttempt(t *testing.T, x site, s *accounts.Service, auth *softAuthenticator, p accounts.Principal, cookie *http.Cookie) {
 	t.Helper()
 	flow, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p)
@@ -316,6 +316,49 @@ func assertWrongAssertionSpendsAttempt(t *testing.T, x site, s *accounts.Service
 	if got := texts(t, x.db, platform, "SELECT mfa_attempts::text FROM accounts.sessions WHERE user_id = (SELECT id FROM accounts.users WHERE email = 'someone@example.com') AND level = 'pending_mfa' ORDER BY created_at DESC LIMIT 1"); got[0] != "1" {
 		t.Errorf("attempts after a wrong assertion: %v", got)
 	}
+	assertPasskeyFailures(t, x, "1")
+}
+
+// assertPasskeyFailures checks the unified security record a rejected assertion leaves: one security.mfa_failed entry
+// and one counted failure per guessed factor.
+func assertPasskeyFailures(t *testing.T, x site, want string) {
+	t.Helper()
+	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action = 'security.mfa_failed' AND detail->>'outcome' = 'bad_passkey'"); got[0] != want {
+		t.Errorf("security.mfa_failed entries: %v, want %s", got, want)
+	}
+	if got := texts(t, x.db, platform, "SELECT coalesce(sum(failures + completed_peak), 0)::text FROM accounts.security_failures"); got[0] != want {
+		t.Errorf("counted failures: %v, want %s", got, want)
+	}
+}
+
+// assertPasskeyFlowErrorsAreNotFailures checks that only a parsed assertion against a live flow is a guessed factor:
+// an expired flow and a body that does not parse are refused without an audit entry or a counted failure.
+func assertPasskeyFlowErrorsAreNotFailures(t *testing.T, x site, s *accounts.Service, auth *softAuthenticator, p accounts.Principal, cookie *http.Cookie) {
+	t.Helper()
+	expired, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pgtest.Run(t.Context(), x.database.Superuser,
+		"UPDATE accounts.webauthn_flows SET expires_at = now() - interval '1 minute' WHERE id = '"+expired.FlowID+"'"); err != nil {
+		t.Fatal(err)
+	}
+	r := passkeyRequest(t, auth.assert(t, expired.PublicKey))
+	r.AddCookie(cookie)
+	if _, err := s.FinishPasskeyMFA(t.Context(), r, p, expired.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+		t.Errorf("an expired flow: %v", err)
+	}
+
+	malformed, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = passkeyRequest(t, []byte("{}"))
+	r.AddCookie(cookie)
+	if _, err := s.FinishPasskeyMFA(t.Context(), r, p, malformed.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
+		t.Errorf("a body that does not parse: %v", err)
+	}
+	assertPasskeyFailures(t, x, "1")
 }
 
 // completePasskeyMFA finishes the pending sign-in with a passkey and returns the verified session.
@@ -435,10 +478,13 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	assertPasskeysStayOn(t, x, s)
 	pendingPrincipal, pendingCookie := pendingPasskeySignIn(t, x, s)
 	assertWrongAssertionSpendsAttempt(t, x, s, auth, pendingPrincipal, pendingCookie)
+	assertPasskeyFlowErrorsAreNotFailures(t, x, s, auth, pendingPrincipal, pendingCookie)
 	verified := completePasskeyMFA(t, s, auth, pendingPrincipal, pendingCookie)
 	assertDiscoverableSignIn(t, x, s, auth)
 	assertCounterRefusals(t, x, s, auth)
 	assertTamperedAssertion(t, s, auth)
+	// Spent and unknown flows, a sign-in whose signature is wrong, and the credential's counter are not MFA guesses.
+	assertPasskeyFailures(t, x, "1")
 	removePasskey(t, x, s, verified, passkey)
 }
 
