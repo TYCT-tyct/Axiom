@@ -88,7 +88,7 @@ func TestParseAbility(t *testing.T) {
 	t.Parallel()
 	for _, a := range []Ability{
 		AbilityTools, AbilityImages, AbilityDocuments, AbilityReasoning, AbilityPromptCache,
-		AbilityStructuredOutput, AbilityWebSearch, AbilityCodeExecution,
+		AbilityStructuredOutput, AbilityWebSearch, AbilityCodeExecution, AbilityFileSearch,
 	} {
 		got, err := ParseAbility(a.String())
 		if err != nil || got != a {

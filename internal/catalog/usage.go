@@ -12,7 +12,8 @@ import (
 type Item uint8
 
 // The billing items, in the order stored lists name them: the token items, the per-use items, then the items counted
-// per piece, second or character.
+// per piece, second or character. A new item is appended after ItemRequest, because that index is its bit in stored
+// prices and usage.
 const (
 	ItemInput Item = iota
 	ItemCacheRead
@@ -34,6 +35,9 @@ const (
 	// ItemRequest is one generation request, charged whatever its size: a provider's per-request price. It is appended
 	// after the items above so the indices of counts stored before it never move.
 	ItemRequest
+	// ItemFileSearch is one call of OpenAI's file_search tool: the vendor bills each call and reports no count in its
+	// usage, so the gateway counts the call items. It is appended for the same reason as ItemRequest.
+	ItemFileSearch
 	NumItems
 )
 
@@ -42,6 +46,7 @@ var itemNames = [NumItems]string{
 	"input", "cache_read", "cache_write", "cache_write_1h", "audio_in", "image_in",
 	"output", "reasoning", "audio_out", "image_out", "web_search", "code_execution",
 	"image_in_piece", "image_out_piece", "audio_in_second", "audio_out_second", "character_in", "request",
+	"file_search",
 }
 
 func (it Item) String() string { return itemNames[it] }
@@ -69,7 +74,7 @@ func (u Unit) String() string { return unitNames[u] }
 // item has a case, so a new one must state its unit here, and the return after the switch is only for the compiler.
 func (it Item) Unit() Unit {
 	switch it {
-	case ItemWebSearch, ItemCodeExecution, ItemRequest:
+	case ItemWebSearch, ItemCodeExecution, ItemRequest, ItemFileSearch:
 		return UnitUse
 	case ItemImageInPiece, ItemImageOutPiece:
 		return UnitPiece

@@ -263,17 +263,18 @@ var inspectCases = []struct {
 		"input":[{"role":"user","content":[{"type":"input_image","image_url":` + pngURL + `},
 				{"type":"input_file","file_data":` + pdfData + `}]},
 			{"type":"function_call_output","call_id":"c","output":[{"type":"input_image","image_url":"https://example.com/a.png"}]}],
-		"tools":[{"type":"web_search"},{"type":"code_interpreter","container":{"type":"auto"}},{"type":"function","name":"f"}],
+		"tools":[{"type":"web_search"},{"type":"code_interpreter","container":{"type":"auto"}},
+			{"type":"file_search","vector_store_ids":["vs_1"]},{"type":"function","name":"f"}],
 		"max_tool_calls":4,"reasoning":{"effort":"high","summary":"auto"},
 		"text":{"format":{"type":"json_schema","name":"x","schema":{}}}}`,
 		func(r *protocol.Request) {
 			r.Model, r.MaxOutput, r.Previous, r.Images, r.Documents = "m", 50, "resp_1", 2, 1
 			r.NativeWeb, r.MaxToolCalls, r.HasMaxToolCalls = true, 4, true
 			r.TextBytes -= int64(len(pngURL) + len(pdfData))
-			r.WebSearches, r.CodeExecutions = 4, 4
+			r.WebSearches, r.CodeExecutions, r.FileSearches = 4, 4, 4
 			r.ServiceTiers = 1 << catalog.ServiceTierPriority
-			r.Needs = protocol.Images | protocol.Documents | protocol.WebSearch | protocol.CodeExecution | protocol.Tools |
-				protocol.Reasoning | protocol.StructuredOutput
+			r.Needs = protocol.Images | protocol.Documents | protocol.WebSearch | protocol.CodeExecution | protocol.FileSearch |
+				protocol.Tools | protocol.Reasoning | protocol.StructuredOutput
 		},
 	},
 	{

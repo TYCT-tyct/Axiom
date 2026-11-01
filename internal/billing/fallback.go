@@ -206,24 +206,25 @@ func tokenPrice(s catalog.Schedule) platform.UnitPrice {
 	return price
 }
 
-// missingRate is the rate an item without a price is charged at. A per-use item takes its configured default. An item
-// counted per piece, second or character takes the dearest price the schedule has for the same unit over every tier and
-// band, so a piece is never priced as a token; a unit the schedule prices nowhere falls back to the token price, as
-// every unpriced item did before, and the charge is estimated.
+// missingRate is the rate an item without a price is charged at. A per-use item with a site-wide default takes it. Any
+// other item takes the dearest price the schedule has for the item itself over every tier and band, so a request is
+// never charged another per-use item's price and a piece is never priced as a token; an item the schedule prices
+// nowhere takes the dearest price of its unit, and a unit it prices nowhere the token price, as every unpriced item did
+// before. The charge is estimated.
 func missingRate(s catalog.Schedule, f fallbacks, it catalog.Item) platform.UnitPrice {
 	if perUseItems.Has(it) {
 		return f.perUse[it]
 	}
-	if it == catalog.ItemRequest {
-		// A request has no configured default: when the served tier has no request price, charge the highest request
-		// price the schedule does have, never another per-use item's price.
+	if unit := it.Unit(); unit != catalog.UnitToken {
 		if highest, priced := itemPrice(s, it); priced {
 			return highest
 		}
-	}
-	if unit := it.Unit(); unit != catalog.UnitToken {
-		if highest, priced := unitPrice(s, unit); priced {
-			return highest
+		// A per-use item without a site default (a request or a file search) is never charged another tool's price: only
+		// its own price is comparable, so without one it falls through to the token price like any unpriced item.
+		if unit != catalog.UnitUse {
+			if highest, priced := unitPrice(s, unit); priced {
+				return highest
+			}
 		}
 	}
 	return tokenPrice(s)

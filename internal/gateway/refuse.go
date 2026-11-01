@@ -185,9 +185,12 @@ func refusal(f protocol.Format, err error) (r *Refusal, expected bool) {
 // refusal is read by the client, who looks for that word in its request. Chat has no code tool, and its search is the
 // web_search_options field.
 var toolNames = map[protocol.Format]map[catalog.Item]string{
-	protocol.Messages:  {catalog.ItemWebSearch: "the web_search tool", catalog.ItemCodeExecution: "the code_execution tool"},
-	protocol.Responses: {catalog.ItemWebSearch: "the web_search tool", catalog.ItemCodeExecution: "the code_interpreter tool"},
-	protocol.Chat:      {catalog.ItemWebSearch: "the web_search_options setting"},
+	protocol.Messages: {catalog.ItemWebSearch: "the web_search tool", catalog.ItemCodeExecution: "the code_execution tool"},
+	protocol.Responses: {
+		catalog.ItemWebSearch: "the web_search tool", catalog.ItemCodeExecution: "the code_interpreter tool",
+		catalog.ItemFileSearch: "the file_search tool",
+	},
+	protocol.Chat: {catalog.ItemWebSearch: "the web_search_options setting"},
 }
 
 // unbounded tells a client what to do about a server tool it enabled without a limit on its uses: write the limit where

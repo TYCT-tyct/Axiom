@@ -78,7 +78,7 @@ var grammars = [...]grammar{
 			"environment": func(s *scanner) error { return s.object(shellEnvironmentFields) },
 		},
 		parts:   map[string]Capabilities{"input_image": Images, "computer_screenshot": Images, "input_file": Documents},
-		servers: []serverTool{{"web_search", WebSearch, false}, {"code_interpreter", CodeExecution, false}, {"mcp", 0, true}, {"file_search", 0, true}, {"image_generation", 0, true}, {"programmatic_tool_calling", 0, true}},
+		servers: []serverTool{{"web_search", WebSearch, false}, {"code_interpreter", CodeExecution, false}, {"mcp", 0, true}, {"file_search", FileSearch, false}, {"image_generation", 0, true}, {"programmatic_tool_calling", 0, true}},
 		tiers:   openAITiers,
 		input:   openAIInput, compaction: "compaction",
 	},

@@ -280,6 +280,7 @@ func TestEstimated(t *testing.T) {
 		return v
 	}
 	const in, out, cached, search = catalog.ItemInput, catalog.ItemOutput, catalog.ItemCacheRead, catalog.ItemWebSearch
+	const file, code = catalog.ItemFileSearch, catalog.ItemCodeExecution
 	all := catalog.ItemSet(1<<in | 1<<out | 1<<search)
 	for _, tc := range []struct {
 		name     string
@@ -294,6 +295,12 @@ func TestEstimated(t *testing.T) {
 			map[catalog.Item]int64{in: 10, out: 3},
 		},
 		{"nothing", protocol.Usage{}, protocol.Progress{ContentBytes: 50, Searches: 2}, map[catalog.Item]int64{in: 900, out: 17, search: 2}},
+		{
+			"calls counted from the reply's items",
+			protocol.Usage{Segments: []protocol.Segment{{Usage: usage(map[catalog.Item]int64{in: 10, out: 3}), Reported: all}}},
+			protocol.Progress{ContentBytes: 50, FileSearches: 2, CodeExecutions: 1},
+			map[catalog.Item]int64{in: 10, out: 3, file: 2, code: 1},
+		},
 		{"no bytes", protocol.Usage{}, protocol.Progress{}, map[catalog.Item]int64{in: 900}},
 		{"bytes that divide", protocol.Usage{}, protocol.Progress{ContentBytes: 51}, map[catalog.Item]int64{in: 900, out: 17}},
 		{

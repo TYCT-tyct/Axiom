@@ -71,7 +71,7 @@ func (s *scanner) tool() error {
 	} else if s.p.kind&WebSearch != 0 {
 		s.r.NativeWeb = true
 	}
-	if s.p.kind&(WebSearch|CodeExecution) != 0 {
+	if s.p.kind&(WebSearch|CodeExecution|FileSearch) != 0 {
 		if err := s.addCalls(); err != nil {
 			return err
 		}
@@ -84,8 +84,13 @@ func (s *scanner) tool() error {
 // one leaves the total to the model's default. A total past int64 is refused: wrapped, it would bound nothing.
 func (s *scanner) addCalls() error {
 	n := &s.r.WebSearches
-	if s.p.kind == CodeExecution {
+	switch s.p.kind {
+	case CodeExecution:
 		n = &s.r.CodeExecutions
+	case FileSearch:
+		n = &s.r.FileSearches
+	case WebSearch, Tools, Images, Documents, Reasoning, PromptCache, StructuredOutput:
+		// WebSearch keeps the default count above; the rest add no calls, and addCalls is not reached for them.
 	}
 	switch {
 	case s.r.Needs.Has(s.p.kind) && (*n == 0 || s.p.max == 0):

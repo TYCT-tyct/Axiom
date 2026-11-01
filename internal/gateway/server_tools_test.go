@@ -27,7 +27,6 @@ func TestUnpricedServerToolsNeverReachAdmission(t *testing.T) {
 		{"messages", `"tools":[{"type":"web_fetch_20250910","max_uses":2}]`, "web_fetch"},
 		{"messages", `"mcp_servers":[{"type":"url","name":"m","url":"https://example.com/mcp"}]`, "mcp_servers"},
 		{"responses", `"tools":[{"type":"mcp"}],"max_tool_calls":2`, "mcp"},
-		{"responses", `"tools":[{"type":"file_search"}],"max_tool_calls":2`, "file_search"},
 		{"responses", `"tools":[{"type":"image_generation"}],"max_tool_calls":2`, "image_generation"},
 		{"messages", `"tools":[{"type":"tool_search_tool_regex_20251119","name":"tool_search_tool_regex"}]`, "tool_search_tool_"},
 		{"messages", `"tools":[{"type":"tool_search_tool_bm25_20251119","name":"tool_search_tool_bm25"}]`, "tool_search_tool_"},

@@ -392,9 +392,7 @@ func estimated(u protocol.Usage, p protocol.Progress, d billing.Demand, m billin
 		estimateInput(counts, input)
 	}
 	counts[catalog.ItemOutput] = estimateOutput(*reply, p, outputCap, tok)
-	if !reply.Reported.Has(catalog.ItemWebSearch) {
-		counts[catalog.ItemWebSearch] = max(counts[catalog.ItemWebSearch], p.Searches)
-	}
+	raiseCalls(counts, *reply, p)
 	for it, n := range d.Counts {
 		if catalog.CountedItems.Has(it) && !reply.Reported.Has(it) {
 			counts[it] = max(counts[it], n)
@@ -445,6 +443,24 @@ func estimateOutput(reply billing.Segment, p protocol.Progress, outputCap int64,
 	out = min(out, outputCap)
 	return max(reply.Usage.OutputTotal(), out) - reply.Usage.Count(catalog.ItemReasoning) -
 		reply.Usage.Count(catalog.ItemAudioOut) - reply.Usage.Count(catalog.ItemImageOut)
+}
+
+// raiseCalls raises each per-use count the upstream did not report to the calls the reply's events show. OpenAI reports
+// neither web search, code interpreter nor file search calls in its usage object; they are counted from the reply's
+// call items, so a reply that reported a smaller count, or none, is raised to the events seen.
+func raiseCalls(counts map[catalog.Item]int64, reply billing.Segment, p protocol.Progress) {
+	for _, c := range [...]struct {
+		item catalog.Item
+		n    int64
+	}{
+		{catalog.ItemWebSearch, p.Searches},
+		{catalog.ItemCodeExecution, p.CodeExecutions},
+		{catalog.ItemFileSearch, p.FileSearches},
+	} {
+		if !reply.Reported.Has(c.item) {
+			counts[c.item] = max(counts[c.item], c.n)
+		}
+	}
 }
 
 // recountCapped holds every count to maxCount, the largest catalog.NewUsage takes, and recounts the reply with its own

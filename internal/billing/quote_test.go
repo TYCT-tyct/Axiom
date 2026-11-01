@@ -14,13 +14,15 @@ import (
 // prices: a context tier above 100 input tokens and a priority service tier, in whole currency units so every quote
 // below can be checked by hand.
 const prices = `{"v":1,"currency":"USD",
-	"rates":{"input":"1","cache_write":"2","cache_write_1h":"3","output":"10","web_search":"100","code_execution":"50"},
+	"rates":{"input":"1","cache_write":"2","cache_write_1h":"3","output":"10","web_search":"100","code_execution":"50",
+		"file_search":"25"},
 	"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":100,"rates":{"input":"4","output":"20"}}]},
 	"service_tiers":{"priority":{"context_tiers":[{"above":100,"rates":{}}],"rates":{"input":"6","output":"30"}}}}`
 
 const (
 	in, cacheWrite, cacheWrite1h = catalog.ItemInput, catalog.ItemCacheWrite, catalog.ItemCacheWrite1h
 	webSearch, codeExec          = catalog.ItemWebSearch, catalog.ItemCodeExecution
+	fileSearch                   = catalog.ItemFileSearch
 )
 
 func mustSchedule(tb testing.TB, s string) catalog.Schedule {
@@ -170,6 +172,11 @@ func TestQuoteEntryModel(t *testing.T) {
 			Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: webSearch, MaxUses: 1}}},
 			entry(t, false, 0), "14180",
 		},
+		{
+			"two file searches with a limit of their own: 80 + 2×1000 at 4 + 2×25 + 500 at 20",
+			Demand{TextBytes: 80, ServerTools: []ServerTool{{Item: fileSearch, MaxUses: 2}}},
+			entry(t, false, 0), "18130",
+		},
 	} {
 		got, err := quoteEntry(tc.d, tc.e, segments, false)
 		if err != nil || units(t, got.amount) != tc.want {
@@ -201,6 +208,7 @@ func TestQuoteEntryRefuses(t *testing.T) {
 		},
 		{"a search with no limit of its own, on a model with no default", Demand{ServerTools: []ServerTool{{Item: webSearch}}}, entry(t, false, 0)},
 		{"a code execution with no limit of its own, on a model with none by default", Demand{ServerTools: []ServerTool{{Item: codeExec}}}, noCodeDefault},
+		{"a file search with no limit of its own, on a model with none by default", Demand{ServerTools: []ServerTool{{Item: fileSearch}}}, entry(t, false, 0)},
 		{"a model without a context length", Demand{}, noContext},
 		{"an output limit past int64 behind a small first segment", Demand{Choices: 2}, hugeOutput},
 	} {

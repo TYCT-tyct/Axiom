@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: events are read token by token, in place
 	"errors"
 	"fmt"
@@ -30,12 +31,12 @@ var messagesEvents = [...]struct {
 // messagesStream reads one Messages stream's events.
 type messagesStream struct {
 	eventReader
-	// The content block being read: whether its type holds text that may be empty, whether it is a web search, and
-	// whether it is a client tool call, whose framework the estimate adds.
-	textBlock, serverTool, webSearch, toolUse bool
-	failed                                    bool // the event is the upstream's error
-	report                                    *messagesUsage
-	reportErr                                 error // the usage object is not one messagesUsage can hold
+	// The content block being read: whether its type holds text that may be empty, whether it runs a web search or
+	// code execution, and whether it is a client tool call, whose framework the estimate adds.
+	textBlock, serverTool, webSearch, codeExecution, toolUse bool
+	failed                                                   bool // the event is the upstream's error
+	report                                                   *messagesUsage
+	reportErr                                                error // the usage object is not one messagesUsage can hold
 }
 
 func newMessagesStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
@@ -69,8 +70,8 @@ var (
 
 func (s *messagesStream) event(data []byte, m *meter) (event, error) {
 	s.start(data)
-	s.textBlock, s.serverTool, s.webSearch, s.toolUse, s.failed, s.report, s.reportErr =
-		false, false, false, false, false, nil, nil
+	s.textBlock, s.serverTool, s.webSearch, s.codeExecution, s.toolUse, s.failed, s.report, s.reportErr =
+		false, false, false, false, false, false, nil, nil
 	if err := walk(&s.reader, s, messagesFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
@@ -102,6 +103,9 @@ func (s *messagesStream) settle() {
 	}
 	if s.serverTool && s.webSearch {
 		s.e.searches = 1
+	}
+	if s.serverTool && s.codeExecution {
+		s.e.codeExecutions = 1
 	}
 	if s.e.name == "content_block_start" && s.toolUse {
 		s.e.toolCalls = 1
@@ -147,9 +151,17 @@ func (s *messagesStream) blockType() error {
 	return err
 }
 
+// The server tool names Messages gives a server_tool_use block, compared as bytes so a stream pays no allocation for
+// the two tests every block start makes.
+var (
+	webSearchName     = []byte("web_search")
+	codeExecutionName = []byte("code_execution")
+)
+
 func (s *messagesStream) toolName() error {
-	is, err := s.is("web_search")
-	s.webSearch = is
+	v, err := s.str()
+	s.webSearch = bytes.Equal(v, webSearchName)
+	s.codeExecution = bytes.Equal(v, codeExecutionName)
 	return err
 }
 

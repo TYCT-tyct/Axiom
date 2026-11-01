@@ -62,3 +62,65 @@ func TestAllowRequest(t *testing.T) {
 		t.Errorf("request price with only counted items open: %v, want ErrRequestPrices", err)
 	}
 }
+
+// TestAllowFileSearch: the file_search item and ability are new names in two closed enumerations, so they pass the same
+// rolling-upgrade gate: a price, a spec or a max_uses entry that names them is refused until every node reads them.
+func TestAllowFileSearch(t *testing.T) {
+	t.Parallel()
+	withItem, err := ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"1","file_search":"0.0025"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"1","output":"2"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Catalog{}).allowPrices(withItem); !errors.Is(err, ErrFileSearch) {
+		t.Errorf("a file_search price while off: %v, want ErrFileSearch", err)
+	}
+	if err := (&Catalog{cfg: Config{FileSearch: true}}).allowPrices(withItem); err != nil {
+		t.Errorf("a file_search price while on: %v", err)
+	}
+	if err := (&Catalog{}).allowPrices(token); err != nil {
+		t.Errorf("a token price while off: %v", err)
+	}
+	// It has a switch of its own: the other two do not open it, and it opens neither of them.
+	request, err := ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"1","request":"2"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Catalog{cfg: Config{FileSearch: true}}).allowPrices(request); !errors.Is(err, ErrRequestPrices) {
+		t.Errorf("a request price with only file search open: %v, want ErrRequestPrices", err)
+	}
+	if err := (&Catalog{cfg: Config{RequestPrices: true, CountedItems: true}}).allowPrices(withItem); !errors.Is(err, ErrFileSearch) {
+		t.Errorf("a file_search price with the other gates open: %v, want ErrFileSearch", err)
+	}
+}
+
+// TestAllowFileSearchSpec: the spec's new names — the item, the ability and the max_uses key — pass the same gate, and
+// an ability without the item it bills is refused whatever the gate says.
+func TestAllowFileSearchSpec(t *testing.T) {
+	t.Parallel()
+	spec, err := parseSavedSpec([]byte(`{"items":["input","file_search"],"tiers":["standard"],
+		"abilities":["file_search"],"max_uses":{"file_search":3}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Catalog{}).allowSpec(spec); !errors.Is(err, ErrFileSearch) {
+		t.Errorf("a file_search spec while off: %v, want ErrFileSearch", err)
+	}
+	if err := (&Catalog{cfg: Config{FileSearch: true}}).allowSpec(spec); err != nil {
+		t.Errorf("a file_search spec while on: %v", err)
+	}
+	uses, err := parseSavedSpec([]byte(`{"items":["input"],"tiers":["standard"],"max_uses":{"file_search":3}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Catalog{}).allowSpec(uses); !errors.Is(err, ErrFileSearch) {
+		t.Errorf("a file_search max_uses while off: %v, want ErrFileSearch", err)
+	}
+	// The ability runs calls billed as the item, so a spec that lists it without the item is refused whatever the gate.
+	if _, err := parseSavedSpec([]byte(`{"items":["input"],"tiers":["standard"],"abilities":["file_search"]}`)); err == nil {
+		t.Error("an ability without its item was accepted")
+	}
+}

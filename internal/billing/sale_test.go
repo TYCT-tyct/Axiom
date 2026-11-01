@@ -213,6 +213,7 @@ func TestSellRefusesConstraints(t *testing.T) {
 func TestUnpriced(t *testing.T) {
 	t.Parallel()
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"2"}}`)
+	priced := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"2","file_search":"0.0025"}}`)
 	for _, tc := range []struct {
 		name string
 		r    catalog.Reportable
@@ -221,6 +222,7 @@ func TestUnpriced(t *testing.T) {
 		{"everything it reports, priced", catalog.Reportable{Items: 1<<in | 1<<catalog.ItemOutput}, catalog.Reportable{}},
 		{"a token item it lacks", catalog.Reportable{Items: 1<<in | 1<<catalog.ItemCacheRead}, catalog.Reportable{Items: 1 << catalog.ItemCacheRead}},
 		{"a per-use item it lacks is the site's default", catalog.Reportable{Items: 1<<in | 1<<webSearch | 1<<codeExec}, catalog.Reportable{}},
+		{"a file search it lacks is not the site's default", catalog.Reportable{Items: 1 << catalog.ItemFileSearch}, catalog.Reportable{Items: 1 << catalog.ItemFileSearch}},
 		{"a service tier it does not offer", catalog.Reportable{ServiceTiers: 1 << catalog.ServiceTierPriority}, catalog.Reportable{ServiceTiers: 1 << catalog.ServiceTierPriority}},
 		{"reasoning falls back to output", catalog.Reportable{Items: 1 << catalog.ItemReasoning}, catalog.Reportable{}},
 		{
@@ -232,6 +234,9 @@ func TestUnpriced(t *testing.T) {
 		if got := Unpriced(s, tc.r); got != tc.want {
 			t.Errorf("%s: Unpriced = %+v, want %+v", tc.name, got, tc.want)
 		}
+	}
+	if got := Unpriced(priced, catalog.Reportable{Items: 1 << catalog.ItemFileSearch}); got != (catalog.Reportable{}) {
+		t.Errorf("a priced file search: Unpriced = %+v, want nothing", got)
 	}
 }
 

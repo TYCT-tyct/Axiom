@@ -67,15 +67,20 @@ func zeroOutput(last AttemptResult) bool {
 	return len(last.Segments) > 0 && output == 0 && (last.Finish == FinishNone || last.Finish == FinishError)
 }
 
-// perUseItems are the items charged even when a call is waived (「按次计费的项目照常收费」), the ones a fallback row must
-// price for every currency (parseFallbacks), and the ones the listing gate leaves out because admission fills them in
-// (Unpriced). Adding an item here adds it to all three. A piece, second or character is not one: it is output the call
-// delivers, so a waived call does not charge it.
+// perUseItems are the per-use items a fallback row must price for every currency (parseFallbacks), and the ones the
+// listing gate leaves out because admission fills them in (Unpriced). They have a site-wide default price instead of a
+// price in every model's schedule.
 const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution
+
+// waivedPerUseItems are the per-use items charged even when a call is waived (「按次计费的项目照常收费」). A file search
+// is one too, but it is priced by the model's schedule rather than a fallback row, so it is not in perUseItems: a
+// per-use price is not a site default, and a model sells the tool only with a price the listing gate has checked. A
+// piece, second or character is not one: it is output the call delivers, so a waived call does not charge it.
+const waivedPerUseItems catalog.ItemSet = perUseItems | 1<<catalog.ItemFileSearch
 
 func chargedItems(perUseOnly bool) catalog.ItemSet {
 	if perUseOnly {
-		return perUseItems
+		return waivedPerUseItems
 	}
 	return ^catalog.ItemSet(0)
 }
@@ -84,7 +89,7 @@ func unknownCharged(tokens bool, charged catalog.ItemSet) bool {
 	if tokens {
 		return charged&catalog.TokenItems != 0
 	}
-	return charged&perUseItems != 0
+	return charged&waivedPerUseItems != 0
 }
 
 // priceSegments prices each sampling at its own band, sums them exactly and rounds up once; perUseOnly charges only
@@ -143,7 +148,7 @@ func (p *priced) addSegment(total platform.Exact, s catalog.Schedule, f fallback
 func (p *priced) addExtras(s catalog.Schedule, f fallbacks, seg Segment, tiers catalog.ServiceTierSet, waived bool) error {
 	var err error
 	for it := range catalog.NumItems {
-		if !perUseItems.Has(it) {
+		if !waivedPerUseItems.Has(it) {
 			continue
 		}
 		n := seg.Usage.Count(it)
@@ -237,7 +242,7 @@ func segmentCost(s catalog.Schedule, u catalog.Usage, perUseOnly bool) (platform
 	if err != nil || !perUseOnly {
 		return cost, missing, err
 	}
-	rest, err := costWithout(s, u, perUseItems)
+	rest, err := costWithout(s, u, waivedPerUseItems)
 	if err == nil {
 		cost, err = cost.Add(rest.Neg())
 	}

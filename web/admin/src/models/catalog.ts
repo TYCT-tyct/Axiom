@@ -17,6 +17,7 @@ export const billingItems = [
   "image_out",
   "web_search",
   "code_execution",
+  "file_search",
 ] as const satisfies readonly AdminSchemas["BillingItem"][];
 
 export const serviceTiers = [
@@ -70,7 +71,7 @@ export function perUnit(million: string) {
   return fraction ? `${integer}.${fraction}` : integer;
 }
 
-// Two items are priced per use, not per token, and are shown and typed as the contract has them.
+// Three items are priced per use, not per token, and are shown and typed as the contract has them.
 export function isPerUse(item: AdminSchemas["BillingItem"]) {
-  return item === "web_search" || item === "code_execution";
+  return item === "web_search" || item === "code_execution" || item === "file_search";
 }

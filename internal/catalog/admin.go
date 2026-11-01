@@ -220,8 +220,12 @@ type CreateModelRequest struct {
 
 // CreateModel adds a draft model, visible only to the platform until it is listed.
 func (c *Catalog) CreateModel(ctx context.Context, r CreateModelRequest) (Result, error) {
-	if _, err := parseSavedSpec(r.Spec); err != nil {
+	spec, err := parseSavedSpec(r.Spec)
+	if err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := c.allowSpec(spec); err != nil {
+		return Result{}, err
 	}
 	return c.apply(ctx, r.Op, "model.create", func(tx pg.Tx) (outcome, error) {
 		author, _, _ := strings.Cut(r.Slug, "/")
@@ -312,6 +316,9 @@ func (c *Catalog) UpdateSpec(ctx context.Context, r UpdateSpecRequest) (Result, 
 	spec, err := parseSavedSpec(r.Spec)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if err := c.allowSpec(spec); err != nil {
+		return Result{}, err
 	}
 	return c.apply(ctx, r.Op, "model.update_spec", func(tx pg.Tx) (outcome, error) {
 		row, err := lockReviewed(ctx, tx, r.Model, r.Rev)
@@ -450,6 +457,18 @@ func requireFreeBase(ctx context.Context, tx pg.Tx, standard string, prices pric
 
 // requireDeclared refuses a spec that leaves out what the upstream may report: absent or null reads as nothing
 // declared, which would make every later coverage check pass vacuously. An explicit empty list is a declaration.
+// allowSpec refuses a spec that names the file_search item or ability while this release does not publish it: both are
+// new entries in closed enumerations an older release cannot parse, so the fleet must read them first.
+func (c *Catalog) allowSpec(s spec) error {
+	if c.cfg.FileSearch {
+		return nil
+	}
+	if s.serving.Abilities.Has(AbilityFileSearch) || s.reportable.Items.Has(ItemFileSearch) || s.toolUses[ItemFileSearch] > 0 {
+		return ErrFileSearch
+	}
+	return nil
+}
+
 func requireDeclared(s spec) error {
 	if !s.declared {
 		return errors.New(`the spec must declare "items" and "tiers", even if empty: what the upstream may report`)

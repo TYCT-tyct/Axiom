@@ -60,10 +60,10 @@ type Usage struct {
 // counts reported so far, and Final those that are final: the input side once reported, the rest from the format's
 // last usage event on; until then an output count only bounds the output from below (README.md「转发（草图）」).
 type Progress struct {
-	ContentBytes, PartialBytes, Searches, ToolCalls int64
-	Text                                            textshape.Shape
-	Reported                                        Segment
-	Final                                           catalog.ItemSet
+	ContentBytes, PartialBytes, Searches, CodeExecutions, FileSearches, ToolCalls int64
+	Text                                                                          textshape.Shape
+	Reported                                                                      Segment
+	Final                                                                         catalog.ItemSet
 }
 
 // UsageContext carries the upstream request's metering context and the original client's reply contract.
@@ -368,6 +368,8 @@ func (r *Relay) observe(e event) {
 	r.progress.ContentBytes += e.content
 	r.progress.Text.Merge(e.shape)
 	r.progress.Searches += e.searches
+	r.progress.CodeExecutions += e.codeExecutions
+	r.progress.FileSearches += e.fileSearches
 	r.progress.ToolCalls += e.toolCalls
 	if e.usage || e.final {
 		r.meter.final = r.meter.final || e.final

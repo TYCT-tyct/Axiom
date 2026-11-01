@@ -141,12 +141,14 @@ const (
 	AbilityStructuredOutput
 	AbilityWebSearch
 	AbilityCodeExecution
+	AbilityFileSearch
 	NumAbilities
 )
 
 // abilityNames are the abilities' names in a spec, so they never change.
 var abilityNames = [NumAbilities]string{
 	"tools", "images", "documents", "reasoning", "prompt_cache", "structured_output", "web_search", "code_execution",
+	"file_search",
 }
 
 func (a Ability) String() string { return abilityNames[a] }

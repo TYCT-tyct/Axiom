@@ -54,6 +54,7 @@ export default {
     image_out: "图片输出",
     web_search: "联网搜索",
     code_execution: "代码执行",
+    file_search: "文件搜索",
   },
   tier: { standard: "标准", flex: "弹性", priority: "优先", fast: "快速" },
   spec: {

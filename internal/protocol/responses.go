@@ -18,12 +18,12 @@ type responsesStream struct {
 	seq     int64 // the last sequence_number, which the failure we write follows
 	created bool  // response.created came, so the failure is response.failed
 	// The event being read.
-	index                                int64 // its output_index, or -1
-	itemBytes                            int64 // the raw bytes of its item
-	webSearch, functionCall, hasResponse bool
-	report                               *openAIUsage
-	reportErr                            error
-	topReport                            []byte // borrowed from this event; only failures may use it when response.usage is absent
+	index                                                             int64 // its output_index, or -1
+	itemBytes                                                         int64 // the raw bytes of its item
+	webSearch, codeInterpreter, fileSearch, functionCall, hasResponse bool
+	report                                                            *openAIUsage
+	reportErr                                                         error
+	topReport                                                         []byte // borrowed from this event; only failures may use it when response.usage is absent
 	// items is, for each output item added so far, the content its deltas carried: an item that completes counts only
 	// what it adds to them, so the bound never counts the same text twice.
 	items []int64
@@ -73,8 +73,8 @@ var (
 
 func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	s.start(data)
-	s.index, s.itemBytes, s.webSearch, s.functionCall, s.hasResponse, s.report, s.reportErr =
-		-1, 0, false, false, false, nil, nil
+	s.index, s.itemBytes, s.webSearch, s.codeInterpreter, s.fileSearch, s.functionCall, s.hasResponse, s.report, s.reportErr =
+		-1, 0, false, false, false, false, false, nil, nil
 	s.topReport = nil
 	if err := walk(&s.reader, s, responsesFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
@@ -148,6 +148,12 @@ func (s *responsesStream) itemAdded() error {
 	}
 	if s.webSearch {
 		s.e.searches = 1
+	}
+	if s.codeInterpreter {
+		s.e.codeExecutions = 1
+	}
+	if s.fileSearch {
+		s.e.fileSearches = 1
 	}
 	if s.functionCall {
 		s.e.toolCalls = 1
@@ -223,6 +229,8 @@ func (s *responsesStream) itemType() error {
 		return err
 	}
 	s.webSearch = string(v) == "web_search_call"
+	s.codeInterpreter = string(v) == "code_interpreter_call"
+	s.fileSearch = string(v) == "file_search_call"
 	s.functionCall = string(v) == "function_call"
 	return nil
 }

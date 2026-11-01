@@ -3695,7 +3695,7 @@ export interface components {
         /** @enum {string} */
         PriceSource: "litellm" | "openrouter" | "official" | "manual";
         /** @enum {string} */
-        BillingItem: "input" | "cache_read" | "cache_write" | "cache_write_1h" | "output" | "reasoning" | "audio_in" | "audio_out" | "image_in" | "image_out" | "web_search" | "code_execution";
+        BillingItem: "input" | "cache_read" | "cache_write" | "cache_write_1h" | "output" | "reasoning" | "audio_in" | "audio_out" | "image_in" | "image_out" | "web_search" | "code_execution" | "file_search";
         /** @enum {string} */
         ServiceTier: "standard" | "flex" | "priority" | "fast";
         /** @description The baseline facts about a model (context length, modalities, …), which are open for now, plus the two lists the review needs. `items` and `tiers` say which billing items and service tiers the upstream may report; a model goes on sale only if both are present, even if empty. */
@@ -3719,6 +3719,7 @@ export interface components {
             image_out?: components["schemas"]["UnitPrice"];
             web_search?: components["schemas"]["UnitPrice"];
             code_execution?: components["schemas"]["UnitPrice"];
+            file_search?: components["schemas"]["UnitPrice"];
         };
         ContextTier: {
             /**
