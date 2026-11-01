@@ -1,3 +1,4 @@
+import type { AdminSchemas } from "@axiom/api";
 import { createInstance } from "i18next";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
@@ -11,7 +12,7 @@ beforeAll(async () => {
 });
 
 it("starts a new WeChat Pay merchant with wxpay mapped to native", () => {
-  const merchant = {
+  const merchant: AdminSchemas["Merchant"] = {
     kind: "wechatpay",
     name: "",
     enabled: true,
@@ -25,7 +26,7 @@ it("starts a new WeChat Pay merchant with wxpay mapped to native", () => {
   };
   const html = renderToStaticMarkup(
     <I18nextProvider i18n={i18n}>
-      <MerchantFields merchant={merchant as never} currency="CNY" error={undefined} />
+      <MerchantFields merchant={merchant} currency="CNY" error={undefined} />
     </I18nextProvider>,
   );
   expect(html).toContain('name="method-0-method"');
