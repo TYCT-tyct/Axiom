@@ -321,7 +321,7 @@ export function Gate({ stage, children }: { stage: Stage; children: ReactNode })
   // a gate that read the new address would redirect again from there.
   const here = useRouterState({ select: (state) => (state.resolvedLocation ?? state.location).href });
   return (
-    <DataState query={session}>
+    <DataState query={session} page>
       {(data) =>
         stageOf(data, requiresMfa) === stage ? (
           <SessionContext key={identityOf(data)} value={data}>
