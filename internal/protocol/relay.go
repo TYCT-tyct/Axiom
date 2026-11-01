@@ -503,6 +503,16 @@ func (r *Relay) charge(n int) error {
 	return nil
 }
 
+// uncharge accounts for n fewer bytes held, giving back to the node's budget what was drawn past the base allowance and
+// is no longer held.
+func (r *Relay) uncharge(n int) {
+	r.held -= int64(n)
+	if back := r.charged - max(r.held-r.free, 0); back > 0 {
+		r.o.Memory.Refund(back)
+		r.charged -= back
+	}
+}
+
 // Release gives back what the relay drew on the node's budget, at its end: its buffers go with it. Finish and Fail
 // call it, but for a relay that aggregates, whose body is those buffers: the gateway holds the budget until the body
 // is written and calls Release then. Further calls do nothing.

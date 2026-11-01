@@ -3,7 +3,9 @@ package protocol
 import (
 	"bytes"
 	"encoding/json" //nolint:depguard // a whole event is decoded into a small typed value; the relay already read it
+	"errors"
 	"fmt"
+	"unsafe"
 )
 
 // serverCapture records the assistant turn and the calls of the gateway's web search tool as the client-format events
@@ -20,6 +22,7 @@ type serverCapture struct {
 	details   []byte // Chat's reasoning_details entries as the chunks gave them, comma-separated, merged by turn
 	args      int
 	client    bool
+	held      int // the footprint the relay has charged for this capture
 }
 
 // ServerTurn is the assistant turn one loop hop produced, in the client's format, together with every call it made.
@@ -299,6 +302,31 @@ func (c *serverCapture) size() int {
 	return n
 }
 
+// mapEntry is what one entry of the capture's index maps holds, key, value and bucket share, rounded up.
+const mapEntry = 48
+
+// footprint is the memory the capture keeps: the capacity of its byte buffers, its blocks and calls with the strings
+// they hold, and its index maps. The relay charges it as it grows.
+func (c *serverCapture) footprint() int {
+	n := cap(c.text) + cap(c.reasoning) + cap(c.details)
+	n += cap(c.blocks)*int(unsafe.Sizeof(capturedBlock{})) + cap(c.calls)*int(unsafe.Sizeof(ServerToolCall{}))
+	n += (len(c.index) + len(c.blockAt)) * mapEntry
+	for _, b := range c.blocks {
+		n += len(b.text) + len(b.thinking) + len(b.signature) + len(b.id) + len(b.name) + cap(b.input) + cap(b.raw)
+	}
+	for _, call := range c.calls {
+		n += len(call.ID) + len(call.Name) + len(call.Arguments)
+	}
+	return n
+}
+
+// growthBound is the most one event of n bytes can add to the footprint while it is read: its decoded copy, a few
+// times n at most, and the copy of whatever it grows, a buffer doubling or a string rewritten with its addition, which
+// is never more than what the capture already holds; one more block, call and two index entries besides.
+func (c *serverCapture) growthBound(n int) int {
+	return c.footprint() + 4*n + int(unsafe.Sizeof(capturedBlock{})+unsafe.Sizeof(ServerToolCall{})) + 2*mapEntry
+}
+
 // turnBound is the most turn writes: every string it holds escaped, six bytes a byte at worst (\u00XX), and the
 // members and quotes around each block and call.
 func (c *serverCapture) turnBound() int {
@@ -447,19 +475,12 @@ func blockJSON(b capturedBlock) []byte {
 }
 
 // capture reads the client-format events a step carries, which a conversion may frame several of.
-func (r *Relay) capture(data []byte) (err error) {
+func (r *Relay) capture(data []byte) error {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil
 	}
-	before := r.srv.size()
-	defer func() {
-		if err == nil {
-			// What the capture kept grows by appending, which may double a buffer: twice the growth bounds it.
-			err = r.charge(2 * (r.srv.size() - before))
-		}
-	}()
 	if bytes.TrimSpace(data)[0] == '{' {
-		return r.srv.event(data)
+		return r.captureEvent(data)
 	}
 	for len(data) > 0 {
 		ev, rest, err := r.unframe(data)
@@ -467,13 +488,33 @@ func (r *Relay) capture(data []byte) (err error) {
 			return err
 		}
 		if len(bytes.TrimSpace(ev)) > 0 {
-			if err := r.srv.event(ev); err != nil {
+			if err := r.captureEvent(ev); err != nil {
 				return err
 			}
 		}
 		data = rest
 	}
 	return nil
+}
+
+// captureEvent reads one event into the capture within the node's budget: what the event may grow the capture by is
+// charged before it is read, so nothing is allocated uncounted, and the charge is then brought to what the capture
+// holds. An event the budget cannot cover is not read.
+func (r *Relay) captureEvent(ev []byte) error {
+	c := r.srv
+	bound := c.growthBound(len(ev))
+	if err := r.charge(bound); err != nil {
+		return err
+	}
+	err := c.event(ev)
+	held := c.footprint()
+	if over := held - (c.held + bound); over > 0 {
+		err = errors.Join(err, r.charge(over)) // unreachable while growthBound bounds event; kept honest if it does not
+	} else {
+		r.uncharge(-over)
+	}
+	c.held = held
+	return err
 }
 
 // ServerCalls are the web search tool's calls the relay has read, with their arguments as the client-format events
