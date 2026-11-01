@@ -84,11 +84,7 @@ func TestAppendCapturedResponsesTurnFlattensItems(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	turn, err := c.turn()
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := AppendServerTurn(Responses, []byte(`{"model":"m","input":[{"role":"user","content":"q"}]}`), turn, []string{"result"})
+	body, err := AppendServerTurn(Responses, []byte(`{"model":"m","input":[{"role":"user","content":"q"}]}`), c.turn(), []string{"result"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,8 +110,8 @@ func TestAppendCapturedMessagesRedactedThinking(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	turn, err := c.turn()
-	if err != nil || !bytes.Contains(turn.Assistant, []byte(`"data":"ciphertext"`)) {
+	turn := c.turn()
+	if !bytes.Contains(turn.Assistant, []byte(`"data":"ciphertext"`)) {
 		t.Fatalf("redacted_thinking.data was lost: %s", turn.Assistant)
 	}
 	body, err := AppendServerTurn(Messages, []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`), turn, []string{"result"})

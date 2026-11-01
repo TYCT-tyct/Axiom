@@ -2,9 +2,9 @@ package protocol
 
 import (
 	"bytes"
-	"encoding/json" //nolint:depguard // a whole event is decoded into a small typed value; the relay already read it
 	"errors"
 	"fmt"
+	"slices"
 	"unsafe"
 )
 
@@ -23,6 +23,10 @@ type serverCapture struct {
 	args      int
 	client    bool
 	held      int // the footprint the relay has charged for this capture
+	nDetails  int // the reasoning_details entries in details, which turn decodes one by one
+
+	levels [walkDepth]walkLevel // the token walk's decoders and buffers, kept between events (servercapture_read.go)
+	scr    [11][]byte           // the members an event is read into before it is acted on
 }
 
 // ServerTurn is the assistant turn one loop hop produced, in the client's format, together with every call it made.
@@ -38,7 +42,7 @@ type ServerTurn struct {
 type capturedBlock struct {
 	kind, text, thinking, signature, id, name string
 	input                                     []byte
-	raw                                       json.RawMessage
+	raw                                       []byte
 	client                                    bool
 }
 
@@ -50,236 +54,13 @@ func newServerCapture(f Format) *serverCapture {
 // something this gateway will not copy or run.
 const maxServerCallArguments = 64 << 10
 
-type serverEvent struct {
-	Type    string `json:"type"`
-	Index   int64  `json:"index"`
-	Choices []struct {
-		Index int64 `json:"index"`
-		Delta struct {
-			Content          string            `json:"content"`
-			ReasoningContent string            `json:"reasoning_content"`
-			Reasoning        string            `json:"reasoning"`
-			ReasoningDetails []json.RawMessage `json:"reasoning_details"`
-			ToolCalls        []struct {
-				Index    int64  `json:"index"`
-				ID       string `json:"id"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
-		} `json:"delta"`
-	} `json:"choices"`
-	ContentBlock struct {
-		Type      string          `json:"type"`
-		ID        string          `json:"id"`
-		Name      string          `json:"name"`
-		Input     json.RawMessage `json:"input"`
-		Thinking  string          `json:"thinking"`
-		Signature string          `json:"signature"`
-		Text      string          `json:"text"`
-		Data      json.RawMessage `json:"data"`
-	} `json:"content_block"`
-	Delta       json.RawMessage `json:"delta"`
-	OutputIndex int64           `json:"output_index"`
-	ItemRaw     json.RawMessage `json:"item"`
-	Arguments   string          `json:"arguments"`
-}
-
-// event reads one client-format event. An event it cannot decode is left to the relay, which will refuse it if it
-// matters; only a matching call that grows past its bound fails here.
-//
-//nolint:cyclop,funlen,gocognit // one branch per format's event shape
-func (c *serverCapture) event(data []byte) error {
-	var e serverEvent
-	if err := json.Unmarshal(data, &e); err != nil {
-		return nil //nolint:nilerr // an event this capture cannot read is left to the relay
-	}
-	//nolint:exhaustive // only the three chat formats carry tool calls
-	switch c.format {
-	case Chat:
-		for _, choice := range e.Choices {
-			if choice.Index == 0 {
-				c.text = append(c.text, choice.Delta.Content...)
-				if choice.Delta.ReasoningContent != "" {
-					c.reasoning = append(c.reasoning, choice.Delta.ReasoningContent...)
-				} else {
-					c.reasoning = append(c.reasoning, choice.Delta.Reasoning...)
-				}
-				// The signatures and encrypted data a Messages or Responses upstream gave travel here; without them the
-				// next hop cannot replay the reasoning its tool call depends on.
-				for _, d := range choice.Delta.ReasoningDetails {
-					if len(c.details) > 0 {
-						c.details = append(c.details, ',')
-					}
-					c.details = append(c.details, d...)
-				}
-			}
-			for _, call := range choice.Delta.ToolCalls {
-				key := choice.Index<<32 | call.Index
-				at, ok := c.index[key]
-				switch {
-				case call.Function.Name != "":
-					if !ok {
-						at = len(c.calls)
-						c.index[key] = at
-						c.calls = append(c.calls, ServerToolCall{Name: call.Function.Name, Client: call.Function.Name != ServerToolName})
-					}
-					c.calls[at].Name = call.Function.Name
-					c.calls[at].Client = call.Function.Name != ServerToolName
-					c.client = c.client || c.calls[at].Client
-					if call.ID != "" {
-						c.calls[at].ID = call.ID
-					}
-				case !ok:
-					continue
-				}
-				if call.Function.Arguments != "" {
-					if err := c.append(at, call.Function.Arguments); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	case Messages:
-		switch e.Type {
-		case "content_block_start":
-			at := len(c.blocks)
-			c.blockAt[e.Index] = at
-			b := capturedBlock{
-				kind: e.ContentBlock.Type, text: e.ContentBlock.Text, thinking: e.ContentBlock.Thinking,
-				signature: e.ContentBlock.Signature, id: e.ContentBlock.ID, name: e.ContentBlock.Name,
-			}
-			if b.kind != "text" && b.kind != "thinking" && b.kind != "tool_use" {
-				if raw, err := json.Marshal(e.ContentBlock); err == nil {
-					b.raw = raw
-				}
-			}
-			if b.kind == "tool_use" {
-				if len(e.ContentBlock.Input) > 0 && string(e.ContentBlock.Input) != "{}" {
-					b.input = bytes.Clone(e.ContentBlock.Input)
-				}
-				b.client = b.name != ServerToolName
-				c.client = c.client || b.client
-				if !b.client {
-					c.index[e.Index] = len(c.calls)
-					c.calls = append(c.calls, ServerToolCall{ID: b.id, Name: b.name})
-					if len(b.input) > 0 {
-						c.calls[len(c.calls)-1].Arguments = string(b.input)
-						c.args += len(b.input)
-					}
-				}
-			}
-			c.blocks = append(c.blocks, b)
-			if b.kind == "tool_use" && len(b.input) > 0 {
-				return c.bound()
-			}
-		case "content_block_delta":
-			at, ok := c.blockAt[e.Index]
-			if !ok {
-				return nil
-			}
-			var d struct {
-				Type        string `json:"type"`
-				Text        string `json:"text"`
-				Thinking    string `json:"thinking"`
-				Signature   string `json:"signature"`
-				PartialJSON string `json:"partial_json"`
-			}
-			if err := json.Unmarshal(e.Delta, &d); err != nil {
-				return nil //nolint:nilerr // a delta this capture cannot read is left to the relay
-			}
-			switch d.Type {
-			case "text_delta":
-				c.blocks[at].text += d.Text
-			case "thinking_delta":
-				c.blocks[at].thinking += d.Thinking
-			case "signature_delta":
-				c.blocks[at].signature += d.Signature
-			case "input_json_delta":
-				if c.blocks[at].kind != "tool_use" {
-					return nil
-				}
-				c.blocks[at].input = append(c.blocks[at].input, d.PartialJSON...)
-				if call, ok := c.index[e.Index]; ok {
-					return c.append(call, d.PartialJSON)
-				}
-			}
-		}
-	case Responses:
-		switch e.Type {
-		case "response.output_item.added":
-			var item struct {
-				Type      string `json:"type"`
-				CallID    string `json:"call_id"`
-				Name      string `json:"name"`
-				Arguments string `json:"arguments"`
-			}
-			if err := json.Unmarshal(e.ItemRaw, &item); err != nil {
-				return nil //nolint:nilerr // an item this capture cannot read is left to the relay
-			}
-			at := len(c.blocks)
-			c.blockAt[e.OutputIndex] = at
-			c.blocks = append(c.blocks, capturedBlock{kind: item.Type, raw: bytes.Clone(e.ItemRaw)})
-			if item.Type != "function_call" {
-				return nil
-			}
-			c.client = c.client || item.Name != ServerToolName
-			if item.Name != ServerToolName {
-				return nil
-			}
-			c.index[e.OutputIndex] = len(c.calls)
-			c.calls = append(c.calls, ServerToolCall{ID: item.CallID, Name: item.Name, Arguments: item.Arguments})
-			c.args += len(item.Arguments)
-			return c.bound()
-		case "response.function_call_arguments.delta":
-			at, ok := c.index[e.OutputIndex]
-			if !ok {
-				return nil
-			}
-			var fragment string
-			if err := json.Unmarshal(e.Delta, &fragment); err != nil {
-				return nil //nolint:nilerr // a delta this capture cannot read is left to the relay
-			}
-			return c.append(at, fragment)
-		case "response.function_call_arguments.done", "response.output_item.done":
-			if e.Type == "response.output_item.done" {
-				if at, ok := c.blockAt[e.OutputIndex]; ok {
-					c.blocks[at].raw = bytes.Clone(e.ItemRaw)
-				}
-			}
-			at, ok := c.index[e.OutputIndex]
-			if !ok {
-				return nil
-			}
-			args := e.Arguments
-			if e.Type == "response.output_item.done" {
-				var item struct {
-					Arguments string `json:"arguments"`
-				}
-				if err := json.Unmarshal(e.ItemRaw, &item); err != nil {
-					return nil //nolint:nilerr // an item this capture cannot read is left to the relay
-				}
-				args = item.Arguments
-			}
-			if args == "" {
-				return nil
-			}
-			c.args += len(args) - len(c.calls[at].Arguments)
-			c.calls[at].Arguments = args
-			return c.bound()
-		}
-	}
-	return nil
-}
-
 // append adds an argument fragment to one call.
-func (c *serverCapture) append(at int, fragment string) error {
-	if fragment == "" {
+func (c *serverCapture) append(at int, fragment []byte) error {
+	if len(fragment) == 0 {
 		return nil
 	}
 	c.args += len(fragment)
-	c.calls[at].Arguments += fragment
+	c.calls[at].Arguments += string(fragment)
 	return c.bound()
 }
 
@@ -294,7 +75,7 @@ func (c *serverCapture) bound() error {
 func (c *serverCapture) size() int {
 	n := len(c.text) + len(c.reasoning) + len(c.details) + c.args
 	for _, b := range c.blocks {
-		n += len(b.text) + len(b.thinking) + len(b.signature) + len(b.id) + len(b.name) + len(b.input) + len(b.raw)
+		n += len(b.kind) + len(b.text) + len(b.thinking) + len(b.signature) + len(b.id) + len(b.name) + len(b.input) + len(b.raw)
 	}
 	for _, call := range c.calls {
 		n += len(call.ID) + len(call.Name)
@@ -317,92 +98,106 @@ func (c *serverCapture) footprint() int {
 	for _, call := range c.calls {
 		n += len(call.ID) + len(call.Name) + len(call.Arguments)
 	}
+	for i := range c.levels {
+		l := &c.levels[i]
+		n += cap(l.name) // buf holds the event's own bytes, which the relay counts
+		if l.dec != nil {
+			n += decoderMemory
+		}
+	}
+	for _, b := range c.scr {
+		n += cap(b)
+	}
 	return n
 }
 
-// growthBound is the most one event of n bytes can add to the footprint while it is read: its decoded copy, a few
-// times n at most, and the copy of whatever it grows, a buffer doubling or a string rewritten with its addition, which
-// is never more than what the capture already holds; one more block, call and two index entries besides.
+// growthBound is the most reading one event of n bytes can allocate (TestCaptureAllocatesWithinItsCharge measures it
+// against hostile events). The walk allocates nothing per element it skips (servercapture_read.go), so what remains
+// is what it keeps and how its buffers grow:
+//   - what the event adds, its strings and raw values, each copied once: at most n;
+//   - one growth of a buffer, slice or string it adds to, which copies what is there into a larger one: append grows
+//     by up to twice what it holds, so 2×footprint covers it, and a string rewritten with its addition is no more;
+//   - the decoders' state for the event's nesting, a few bytes a level, so under 3n with the n above inside 4n;
+//   - one more block, call and two index entries.
 func (c *serverCapture) growthBound(n int) int {
-	return c.footprint() + 4*n + int(unsafe.Sizeof(capturedBlock{})+unsafe.Sizeof(ServerToolCall{})) + 2*mapEntry
+	return 2*c.footprint() + 4*n + int(unsafe.Sizeof(capturedBlock{})+unsafe.Sizeof(ServerToolCall{})) + 2*mapEntry
 }
 
-// turnBound is the most turn writes: every string it holds escaped, six bytes a byte at worst (\u00XX), and the
-// members and quotes around each block and call.
-func (c *serverCapture) turnBound() int {
+// turnSize is the most turn writes: every string escaped, six bytes a byte at worst (\u00XX, or an invalid byte's
+// replacement), the raw values as they are, and the members and quotes around the message, each block and each call.
+func (c *serverCapture) turnSize() int {
 	return 6*c.size() + 128*(len(c.blocks)+len(c.calls)+1)
+}
+
+// turnBound is what building the turn allocates: one buffer of turnSize, which the appends never outgrow, and the copy
+// of the calls (TestTurnAllocatesWithinItsCharge).
+func (c *serverCapture) turnBound() int {
+	return allocated(c.turnSize()) + allocated(len(c.calls)*int(unsafe.Sizeof(ServerToolCall{})))
+}
+
+// allocated is the most the runtime takes for an allocation of n bytes: a size class wastes at most an eighth of it,
+// and an object past the largest class is rounded up to whole 8 KiB pages.
+func allocated(n int) int {
+	return n + n/8 + 8<<10
 }
 
 // turn builds the assistant turn the client format expects, so the next hop can replay it unchanged. Chat and Messages
 // get one assistant message; Responses gets the array of output items. A block this capture did not understand keeps
-// its raw start object rather than being dropped.
-//
-//nolint:gocognit,cyclop // one branch per format and block kind
-func (c *serverCapture) turn() (ServerTurn, error) {
-	t := ServerTurn{Client: c.client, Calls: append([]ServerToolCall(nil), c.calls...)}
+// its raw start object rather than being dropped. Chat's reasoning_details go back as the chunks gave them, an entry a
+// chunk, as an OpenRouter client hands them back: Prepare merges them by type and index (mergeDetails) for whatever
+// format the next hop is converted to.
+func (c *serverCapture) turn() ServerTurn {
+	b := make([]byte, 0, c.turnSize())
 	//nolint:exhaustive // only the three chat formats carry tools
 	switch c.format {
 	case Chat:
-		t.Assistant = append(t.Assistant, `{"role":"assistant","content":`...)
-		if len(c.text) == 0 {
-			t.Assistant = append(t.Assistant, "null"...)
-		} else {
-			quoted := jsonString(string(c.text))
-			t.Assistant = append(t.Assistant, quoted...)
-		}
-		if len(c.reasoning) > 0 {
-			quoted := jsonString(string(c.reasoning))
-			t.Assistant = append(t.Assistant, `,"reasoning_content":`...)
-			t.Assistant = append(t.Assistant, quoted...)
-		}
-		if len(c.details) > 0 {
-			var err error
-			if t.Assistant, err = appendDetails(append(t.Assistant, `,"reasoning_details":`...), c.details); err != nil {
-				return ServerTurn{}, err
-			}
-		}
-		server := c.serverCalls()
-		if len(server) > 0 {
-			t.Assistant = append(t.Assistant, `,"tool_calls":`...)
-			t.Assistant = append(t.Assistant, toolCallsJSON(server)...)
-		}
-		t.Assistant = append(t.Assistant, '}')
+		b = c.chatTurn(b)
 	case Messages:
-		t.Assistant = append(t.Assistant, `{"role":"assistant","content":[`...)
-		first := true
-		for _, b := range c.blocks {
-			if !first {
-				t.Assistant = append(t.Assistant, ',')
-			}
-			first = false
-			t.Assistant = append(t.Assistant, blockJSON(b)...)
-		}
-		t.Assistant = append(t.Assistant, `]}`...)
-	case Responses:
-		t.Assistant = append(t.Assistant, '[')
-		for i, b := range c.blocks {
+		b = append(b, `{"role":"assistant","content":[`...)
+		for i, blk := range c.blocks {
 			if i > 0 {
-				t.Assistant = append(t.Assistant, ',')
+				b = append(b, ',')
 			}
-			if len(b.raw) > 0 {
-				t.Assistant = append(t.Assistant, b.raw...)
-			} else {
-				t.Assistant = append(t.Assistant, `{"type":"`+b.kind+`"}`...)
-			}
+			b = appendBlock(b, &blk)
 		}
-		t.Assistant = append(t.Assistant, ']')
+		b = append(b, `]}`...)
+	case Responses:
+		b = c.responsesTurn(b)
 	}
-	return t, nil
+	return ServerTurn{Assistant: b, Calls: slices.Clone(c.calls), Client: c.client}
 }
 
-// jsonString quotes a Go string for a JSON body. A string always encodes; the empty fallback is unreachable and keeps
-// the helper free of an error path at every call site.
-func jsonString(s string) []byte {
-	b, err := json.Marshal(s)
-	if err != nil {
-		return []byte(`""`)
+// chatTurn is the assistant message: text, reasoning and the server calls.
+func (c *serverCapture) chatTurn(b []byte) []byte {
+	b = append(b, `{"role":"assistant","content":`...)
+	if len(c.text) == 0 {
+		b = append(b, "null"...)
+	} else {
+		b = appendQuoted(b, c.text)
 	}
-	return b
+	if len(c.reasoning) > 0 {
+		b = appendQuoted(append(b, `,"reasoning_content":`...), c.reasoning)
+	}
+	if len(c.details) > 0 {
+		b = append(append(append(b, `,"reasoning_details":[`...), c.details...), ']')
+	}
+	return append(c.appendToolCalls(b), '}')
+}
+
+// responsesTurn is the output items as the stream finished them.
+func (c *serverCapture) responsesTurn(b []byte) []byte {
+	b = append(b, '[')
+	for i, blk := range c.blocks {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		if len(blk.raw) > 0 {
+			b = append(b, blk.raw...)
+		} else {
+			b = append(appendQuoted(append(b, `{"type":`...), blk.kind), '}')
+		}
+	}
+	return append(b, ']')
 }
 
 func (c *serverCapture) serverCalls() []ServerToolCall {
@@ -415,63 +210,58 @@ func (c *serverCapture) serverCalls() []ServerToolCall {
 	return out
 }
 
-func toolCallsJSON(calls []ServerToolCall) []byte {
-	out := []byte{'['}
-	for i, call := range calls {
-		if i > 0 {
-			out = append(out, ',')
+// appendToolCalls appends Chat's tool_calls member with the server calls, none when there are none.
+func (c *serverCapture) appendToolCalls(b []byte) []byte {
+	first := true
+	for _, call := range c.calls {
+		if call.Client {
+			continue
 		}
-		id := jsonString(call.ID)
-		args := jsonString(call.Arguments)
-		out = append(out, `{"id":`...)
-		out = append(out, id...)
-		out = append(out, `,"type":"function","function":{"name":`...)
-		nameValue := call.Name
-		if nameValue == "" {
-			nameValue = ServerToolName
+		if first {
+			b = append(b, `,"tool_calls":[`...)
+		} else {
+			b = append(b, ',')
 		}
-		name := jsonString(nameValue)
-		out = append(out, name...)
-		out = append(out, `,"arguments":`...)
-		out = append(out, args...)
-		out = append(out, `}}`...)
+		first = false
+		name := call.Name
+		if name == "" {
+			name = ServerToolName
+		}
+		b = appendQuoted(append(b, `{"id":`...), call.ID)
+		b = appendQuoted(append(b, `,"type":"function","function":{"name":`...), name)
+		b = appendQuoted(append(b, `,"arguments":`...), call.Arguments)
+		b = append(b, `}}`...)
 	}
-	return append(out, ']')
+	if !first {
+		b = append(b, ']')
+	}
+	return b
 }
 
-func blockJSON(b capturedBlock) []byte {
-	switch b.kind {
+func appendBlock(b []byte, blk *capturedBlock) []byte {
+	switch blk.kind {
 	case "text":
-		text := jsonString(b.text)
-		return append(append([]byte(`{"type":"text","text":`), text...), '}')
+		b = appendQuoted(append(b, `{"type":"text","text":`...), blk.text)
 	case "thinking":
-		thinking := jsonString(b.thinking)
-		out := append([]byte(`{"type":"thinking","thinking":`), thinking...)
-		if b.signature != "" {
-			sig := jsonString(b.signature)
-			out = append(out, `,"signature":`...)
-			out = append(out, sig...)
+		b = appendQuoted(append(b, `{"type":"thinking","thinking":`...), blk.thinking)
+		if blk.signature != "" {
+			b = appendQuoted(append(b, `,"signature":`...), blk.signature)
 		}
-		return append(out, '}')
 	case "tool_use":
-		input := b.input
+		input := blk.input
 		if len(input) == 0 {
 			input = []byte("{}")
 		}
-		id := jsonString(b.id)
-		name := jsonString(b.name)
-		out := append([]byte(`{"type":"tool_use","id":`), id...)
-		out = append(out, `,"name":`...)
-		out = append(out, name...)
-		out = append(out, `,"input":`...)
-		out = append(out, input...)
-		return append(out, '}')
+		b = appendQuoted(append(b, `{"type":"tool_use","id":`...), blk.id)
+		b = appendQuoted(append(b, `,"name":`...), blk.name)
+		b = append(append(b, `,"input":`...), input...)
 	default:
-		if len(b.raw) > 0 {
-			return b.raw
+		if len(blk.raw) > 0 {
+			return append(b, blk.raw...)
 		}
-		return []byte(`{}`)
+		return append(b, `{}`...)
 	}
+	return append(b, '}')
 }
 
 // capture reads the client-format events a step carries, which a conversion may frame several of.
@@ -528,7 +318,7 @@ func (r *Relay) ServerCalls() []ServerToolCall {
 
 // ServerTurn is the assistant turn behind ServerCalls, for replay in the loop's next request. Its bound is charged to
 // the relay before it is built, and given back with the relay's: the turn is copied into the next request before the
-// relay is released. A turn over the node's budget is ErrMemory; reasoning details that do not merge, ErrUpstream.
+// relay is released. A turn over the node's budget is ErrMemory.
 func (r *Relay) ServerTurn() (ServerTurn, error) {
 	if r.srv == nil {
 		return ServerTurn{}, nil
@@ -536,5 +326,5 @@ func (r *Relay) ServerTurn() (ServerTurn, error) {
 	if err := r.charge(r.srv.turnBound()); err != nil {
 		return ServerTurn{}, err
 	}
-	return r.srv.turn()
+	return r.srv.turn(), nil
 }
