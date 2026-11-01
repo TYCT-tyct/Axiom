@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useErrors } from "./errors";
 import { readForm } from "./forms";
 import { QrCode } from "./qr";
-import { claimSession, holdsSession, identityOf, useAuth, useCachedSession, useStartSession } from "./session";
+import { claimSession, holdsIdentity, identityOf, useAuth, useCachedSession, useStartSession } from "./session";
 
 type Change = Schemas["FactorChange"];
 
@@ -98,7 +98,7 @@ export function TotpSetupDialog({ setup, onClose }: { setup: Schemas["TotpSetup"
     mutationFn: api.confirmTotpSetup,
     onMutate: () => claimSession(client),
     onSuccess: (change, _variables, claim) => {
-      if (!claim || !holdsSession(client, claim.binding)) {
+      if (!claim || !holdsIdentity(client, claim.identity)) {
         return;
       }
       show(change, claim.identity);
@@ -164,7 +164,7 @@ export function RecoveryDialog({ onClose }: { onClose: () => void }) {
     mutationFn: api.regenerateRecoveryCodes,
     onMutate: () => claimSession(client),
     onSuccess: (change, _variables, claim) => {
-      if (!claim || !holdsSession(client, claim.binding)) {
+      if (!claim || !holdsIdentity(client, claim.identity)) {
         return;
       }
       show(change, claim.identity);

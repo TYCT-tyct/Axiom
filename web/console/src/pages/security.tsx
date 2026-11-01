@@ -209,12 +209,12 @@ function AddPasskey({ actions }: { actions: PasskeyActions }) {
 type PasskeyActions = ReturnType<typeof usePasskeyActions>;
 
 // usePasskeyChange runs one passkey change: shared busy and failure state, the session the change issued, the recovery
-// codes it made (when TOTP is on) and the reloaded list. The change is bound to the session that asked for it: if another
-// tab signs someone else in while it is out, the answer is dropped, so the codes are never labelled with the new person.
+// codes it made (when TOTP is on) and the reloaded list. The change is bound to the person who asked for it: the change
+// rotates the session itself, so only another person, not the new token, may drop its answer.
 function usePasskeyChange() {
   const start = useStartSession();
   const show = useShowRecoveryCodes();
-  const bound = useSessionBound();
+  const bound = useSessionBound("identity");
   const client = useQueryClient();
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -381,6 +381,7 @@ function useIdentityActions() {
   const start = useStartSession();
   const show = useShowRecoveryCodes();
   const bound = useSessionBound();
+  const change = useSessionBound("identity");
   const queryClient = useQueryClient();
   const [failure, setFailure] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -392,6 +393,7 @@ function useIdentityActions() {
         unwrap(consoleApi.POST("/api/console/v1/auth/oauth/link/start", { body: { provider }, signal })),
       );
       if (!answer) {
+        setBusy(false);
         return;
       }
       window.location.assign(answer.value.authorize_url);
@@ -404,7 +406,7 @@ function useIdentityActions() {
     setBusy(true);
     setFailure(null);
     try {
-      const answer = await bound((signal) =>
+      const answer = await change((signal) =>
         unwrap(
           consoleApi.DELETE("/api/console/v1/auth/identities/{provider}", {
             params: { path: { provider } },

@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { claimSession, holdsSession, type Session, safeNext, sessionBinding } from "./session";
+import { claimSession, holdsIdentity, holdsSession, type Session, safeNext, sessionBinding } from "./session";
 
 const session = (over: Partial<Session> = {}) =>
   ({
@@ -45,6 +45,26 @@ describe("a session claim", () => {
 
   it("never holds an answer nobody claimed", () => {
     expect(holdsSession(withSession(session()), "")).toBe(false);
+  });
+
+  it("keeps a factor change's answer across the session that change rotates", () => {
+    const client = withSession(session());
+    const claim = claimSession(client);
+    if (!claim) {
+      throw new Error("expected a session claim");
+    }
+    // The server rotated this person's session before the answer was read; only the token changed.
+    client.setQueryData(["session"], session({ csrf_token: "csrf-2" }));
+    expect(holdsIdentity(client, claim.identity)).toBe(true);
+    expect(holdsSession(client, claim.binding)).toBe(false);
+  });
+
+  it.each([
+    ["another account", session({ user: { id: "user_b", email: "b@example.com", invite_code: "x" } })],
+    ["no session", null],
+  ])("drops a factor change's answer once the browser passes to %s", (_, now) => {
+    const client = withSession(now);
+    expect(holdsIdentity(client, "user_a/acct_a")).toBe(false);
   });
 });
 

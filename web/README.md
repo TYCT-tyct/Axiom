@@ -55,7 +55,7 @@
 | 登录状态只由服务端说了算：页面启动时问 `getSession`，401 就是没登录（不是故障）；CSRF 令牌只放内存（Cookie 是 HttpOnly），每个改数据的请求自动带它和 JSON 内容类型，登录、第二步和改认证因素的响应换新令牌 | `@axiom/api` 的 `setCsrfToken` 与客户端中间件，`packages/app/src/session.tsx`；端到端的接口模拟按契约校验会话、等级、权限、CSRF、Origin，缺一个就拒绝 |
 | 会话中途失效（任何请求得到 `unauthenticated`）：清掉会话和账户的缓存，去登录页，登录后回到原来的页面（路径加查询）；只有登录流程的页面（登录、第二步、开启两步验证、注册）沿用它地址里经过校验的 `next`，受保护页面地址里的 `next` 是页面自己的参数；`next` 按浏览器的 URL 规则（含编码的 `..`）解析，只收落在本应用路径范围内的地址 | `createQueryClient`（`packages/app/src/providers.tsx`）里 `QueryCache`/`MutationCache` 的 `onError`、`Gate`、`safeNext`、`endUnauthenticated`；`safeNext` 的单元测试和 `e2e/console-pages.spec.ts` |
 | 浏览器的会话由所有标签页共用：页面重新读到的会话换了用户或账户时，取消并清掉上一个账户加载的数据，页面从头开始（打开着的对话框和填了一半的表单不留）；同一账户的权限变了时页面保留（恢复码对话框不丢），但没人看的账户数据清掉、正在看的重新请求，失去权限的按「没有权限」显示；重新读会话失败时保留已有的会话，不把正在用的页面换成错误页 | `packages/app/src/session.tsx` 的 `sessionQuery`（比较前后会话的身份）、`Gate`（按身份重建、失败时保留）；端到端测试覆盖 |
-| 只显示一次的内容和导出只回到发起请求的会话：发起时记下当时的用户、账户和会话，回答到达时任一项变了就不显示、不下载，并取消请求；因素变更自己换会话，恢复码只按人判断 | `packages/app/src/session.tsx` 的 `claimSession`/`holdsSession`/`useSessionBound`；`totp-dialogs.tsx`、`console/src/pages/security.tsx`、`calls.tsx`、`statement.tsx`；端到端测试覆盖换人后不显示、不下载 |
+| 只显示一次的内容和导出只回到发起请求的会话：发起时记下当时的用户、账户和会话，回答到达时绑定的对象变了就不显示、不下载，并取消请求；因素变更自己换会话，恢复码只按人判断 | `packages/app/src/session.tsx` 的 `claimSession`/`holdsSession`/`holdsIdentity`/`useSessionBound`；`totp-dialogs.tsx`、`console/src/pages/security.tsx`、`calls.tsx`、`statement.tsx`；端到端测试覆盖换人后不显示、不下载 |
 | 退出登录失败要说清：没有退出、原因、可以重试 | `packages/app/src/parts.tsx` 的 `SignOutError`，侧栏和第二步页都用；端到端测试覆盖 |
 | 失败只按契约的错误码翻译，服务端的英文 `message` 不给用户看；每个错误码都有译文 | `packages/ui/src/locales/zh.ts` 的 `satisfies Record<ErrorCode, string>`：契约加一个码，不写译文就编译不过 |
 | 金额是精确的整数文本，显示和输入都不经过浮点数 | `useFormat().money`、`parseMoney`、`moneyInput`；单元测试含 int64 的上下界 |

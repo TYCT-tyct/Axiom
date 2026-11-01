@@ -74,6 +74,13 @@ export function holdsSession(client: QueryClient, binding: string): boolean {
   return binding !== "" && sessionBinding(currentSession(client)) === binding;
 }
 
+// holdsIdentity reports whether an answer claimed by identity still belongs on the page: the same person, whatever
+// session they hold now. A factor change rotates the session before its answer is read, so its answer compares the
+// person, not the token.
+export function holdsIdentity(client: QueryClient, identity: string): boolean {
+  return identity !== "" && identityOf(currentSession(client)) === identity;
+}
+
 // endUnauthenticated ends the session when a call was refused for want of one. Queries and mutations reach it through
 // their caches; work outside them, such as a file download, calls it too.
 export function endUnauthenticated(client: QueryClient, error: unknown) {
@@ -82,17 +89,20 @@ export function endUnauthenticated(client: QueryClient, error: unknown) {
   }
 }
 
-// useSessionBound runs work for the session that is current when it starts. The work gets a signal that ends when that
-// session ends, changes, or the page goes away; an answer that arrives after either is dropped instead of handed to
-// the caller. The caller also gets the claim, so something only one person may see is labelled with the person who
-// asked, not whoever is on the page when it lands.
-export function useSessionBound() {
+// useSessionBound runs work for the session that is current when it starts. The work gets a signal that ends when what
+// the answer belongs to ends, changes, or the page goes away; an answer that arrives after either is dropped instead of
+// handed to the caller. scope is what the answer belongs to: the exact session that asked, or the person (a factor
+// change replaces that person's session with a new one, so its answer cannot be tied to the token it was asked under).
+// The caller also gets the claim, so something only one person may see is labelled with the person who asked, not
+// whoever is on the page when it lands.
+export function useSessionBound(scope: "session" | "identity" = "session") {
   const client = useQueryClient();
-  const binding = sessionBinding(useCachedSession());
+  const held = useCachedSession();
+  const belonging = scope === "identity" ? identityOf(held) : sessionBinding(held);
   const running = useRef(new Set<AbortController>());
   useEffect(() => {
     return () => {
-      if (!binding) {
+      if (!belonging) {
         return;
       }
       for (const controller of running.current) {
@@ -100,7 +110,7 @@ export function useSessionBound() {
       }
       running.current.clear();
     };
-  }, [binding]);
+  }, [belonging]);
   return useCallback(
     async <T,>(
       request: (signal: AbortSignal) => Promise<T>,
@@ -113,7 +123,9 @@ export function useSessionBound() {
       running.current.add(controller);
       try {
         const value = await request(controller.signal);
-        return holdsSession(client, claim.binding) ? { value, claim } : undefined;
+        const belongs =
+          scope === "identity" ? holdsIdentity(client, claim.identity) : holdsSession(client, claim.binding);
+        return belongs ? { value, claim } : undefined;
       } catch (error) {
         if (controller.signal.aborted) {
           return undefined;
@@ -124,7 +136,7 @@ export function useSessionBound() {
         running.current.delete(controller);
       }
     },
-    [client],
+    [client, scope],
   );
 }
 
