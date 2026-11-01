@@ -234,7 +234,8 @@ export default {
     key: "API 密钥",
     keySet: "已设置，不会读出来",
     keyMissing: "未设置",
-    keyHint: "Docling serve 启动时设了 DOCLING_SERVE_API_KEY 才需要，按 X-Api-Key 发送。地址不变时，留空就沿用已保存的密钥。",
+    keyHint:
+      "Docling serve 启动时设了 DOCLING_SERVE_API_KEY 才需要，按 X-Api-Key 发送。地址不变时，留空就沿用已保存的密钥。",
     keyWithoutURL: "填了密钥就要填解析服务地址；两个都清空即可关闭文件解析。",
     source: "配置来源",
     sources: { environment: "环境变量", database: "在本站保存" },

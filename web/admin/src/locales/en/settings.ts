@@ -243,7 +243,8 @@ export default {
     key: "API key",
     keySet: "Set; it is never read back",
     keyMissing: "Not set",
-    keyHint: "Docling serve's X-Api-Key, when it was started with DOCLING_SERVE_API_KEY. Leave empty to keep the saved key while the URL stays the same.",
+    keyHint:
+      "Docling serve's X-Api-Key, when it was started with DOCLING_SERVE_API_KEY. Leave empty to keep the saved key while the URL stays the same.",
     keyWithoutURL: "A key needs a parser URL. Clear both to turn file parsing off.",
     source: "Configuration",
     sources: { environment: "Environment", database: "Saved here" },
