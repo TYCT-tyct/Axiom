@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"axiom/internal/platform/consoleapi"
@@ -328,6 +329,56 @@ func holdRow(t *testing.T, db *pg.DB, statement string) (free func(), freed <-ch
 		t.Fatal(err)
 	}
 	return sync.OnceFunc(func() { close(release) }), done
+}
+
+// TestTheGuardGivesEachSurfaceItsDeadline: a request that brings no deadline of its own gets the surface's production
+// deadline from the guard, which is what bounds a handler waiting on another transaction's row. synctest advances the
+// clock to that deadline; removing the guard's context.WithTimeout, or replacing it with WithCancel, fails here.
+func TestTheGuardGivesEachSurfaceItsDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		admin bool
+		want  time.Duration
+	}{
+		{"console", false, consoleDeadline},
+		{"admin", true, adminDeadline},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				g := &guard{
+					contract: &contract{byPattern: map[string]*rules{
+						"GET /version": {operation: "GetVersion"},
+					}},
+					admin: tc.admin,
+				}
+				got, served := make(chan time.Duration, 1), make(chan struct{})
+				routes := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+					deadline, ok := r.Context().Deadline()
+					if !ok {
+						got <- -1
+						return
+					}
+					got <- time.Until(deadline)
+					<-r.Context().Done()
+				})
+				go func() {
+					defer close(served)
+					g.serve(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil), "GET /version", routes)
+				}()
+				synctest.Wait()
+				if d := <-got; d != tc.want {
+					t.Fatalf("the request's deadline is %s, want %s", d, tc.want)
+				}
+				time.Sleep(tc.want)
+				synctest.Wait()
+				select {
+				case <-served:
+				default:
+					t.Fatal("the request outlived the surface's deadline")
+				}
+			})
+		})
+	}
 }
 
 // TestRequestsHaveADeadline: a request that waits for a row another transaction holds ends at the deadline with a 503
