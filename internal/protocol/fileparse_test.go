@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"axiom/internal/platform/alloctest"
 )
 
 func testDataURL(data []byte) string {
@@ -318,5 +320,30 @@ func TestFileReferences(t *testing.T) {
 				t.Fatalf("FileReferences() = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestQuotedLength: the budget a text is charged by is what the encoder actually writes. A change in the escaping
+// would grow the buffer past what was charged before the text reached the reply, so the two are compared here.
+func TestQuotedLength(t *testing.T) {
+	for _, s := range []string{
+		"", "plain markdown", `a "quoted" word`, `back\slash`, "tab\tnewline\ncarriage\r", "\x00\x01\x1f",
+		"unicode: 世界, emoji 🙂", "line separator", "\xff\xfe invalid", strings.Repeat(`"\\`, 200),
+	} {
+		if got, want := quotedLength(s), len(appendQuoted(nil, s)); got != want {
+			t.Errorf("quotedLength(%q) = %d, appendQuoted writes %d", s, got, want)
+		}
+	}
+}
+
+// TestAnnotationRefusedForBudgetAllocatesNothing: a reply whose budget cannot hold the annotations goes without them,
+// and it decides that before encoding a megabyte of text into an entry it would throw away.
+func TestAnnotationRefusedForBudgetAllocatesNothing(t *testing.T) {
+	files := []FileAnnotation{{Hash: strings.Repeat("a", 64), Name: "scan.pdf", Text: strings.Repeat("x", 1<<20)}}
+	a := &chatAggregate{}
+	a.init(func(int) error { return ErrMemory })
+	got := alloctest.Measure(t, alloctest.Function{Name: "annotate", F: func() { a.annotateFiles(files) }})
+	if bytes := got["annotate"].Bytes; bytes > 8<<10 {
+		t.Fatalf("a refused annotation allocated %v bytes, want the bound's scan only", bytes)
 	}
 }

@@ -194,14 +194,31 @@ func (a *chatAggregate) annotateFiles(files []FileAnnotation) {
 	if len(files) == 0 || a.sealed {
 		return
 	}
-	entries := FileAnnotationEntries(files)
-	// The entries are appended to every choice, so each one holds as many copies as the reply has choices, beside the
-	// separators the appending writes.
-	if len(entries) == 0 || a.take((len(entries)+1)*len(a.choices), 2) != nil {
+	// The entries are encoded before any choice holds them, and the encoding is larger than the text it carries: reserve
+	// its bound — every string's quoted length and the entry's own syntax — before FileAnnotationEntries allocates it.
+	// Each choice's copy is charged by grow as it takes capacity, and take's second factor covers the body the choices
+	// are written into.
+	bound := 0
+	for _, f := range files {
+		bound += quotedLength(f.Text) + quotedLength(f.Hash) + quotedLength(f.Name) + 128
+	}
+	if a.take(bound, 2) != nil {
 		return
+	}
+	entries := FileAnnotationEntries(files)
+	if len(entries) == 0 || len(entries) > bound {
+		return // an encoding that grew past its bound is not appended: better no annotation than an uncharged copy
 	}
 	for i := range a.choices {
 		c := &a.choices[i]
+		n := len(entries)
+		if len(c.annotations) > 0 {
+			n++
+		}
+		var err error
+		if c.annotations, err = grow(&a.aggBase, c.annotations, n, 1); err != nil {
+			return
+		}
 		if len(c.annotations) > 0 {
 			c.annotations = append(c.annotations, ',')
 		}

@@ -47,13 +47,30 @@ func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req prot
 	if h.Parser == nil {
 		return nil, req, invalid(fmt.Sprintf("plugin %q is not supported: %s", "file-parser", protocol.NoFileParser))
 	}
+	if req.Documents == 0 {
+		return body, req, nil // only references: a rewrite would copy the history's annotations for nothing
+	}
 	web := req.Web // a model suffix like :online is not a body member, so a re-inspection cannot see it
 	ctx, cancel := context.WithTimeout(ctx, fileparse.Timeout)
 	defer cancel()
+	// The rewrite holds the body, the arrays it joins and the new body before the call's quote exists, and encodes every
+	// text into its part: a byte of text escapes to six bytes, and a request writes at most MaxParsedBytes of it, in the
+	// parts and again in the new body. Charge that bound before RewriteFiles allocates any of it, then keep only the new
+	// body's growth, which the call holds until it ends. A body it cannot hold is refused here, allocating nothing.
+	const rewriteCopies = 3 // the body, the spliced items and the new body; the decoded files fit in the body's size
+	const escape = 6        // a byte of text, escaped in its part and again in the new body
+	work := int64(rewriteCopies*len(body)) + 2*escape*int64(protocol.MaxParsedBytes)
+	if !h.Memory.Charge(work) {
+		return nil, req, ErrOverloaded
+	}
 	count := &parseCount{}
 	newBody, files, err := protocol.RewriteFiles(req.Format, body, count.parse(ctx, h, c))
 	if err != nil {
+		h.Memory.Refund(work)
 		return nil, req, parseRefusal(ctx, h.Logger, c, err)
+	}
+	if err := h.chargeGrowth(c, len(body), len(newBody), work); err != nil {
+		return nil, req, err
 	}
 	parsed, refs, err := inspectParsed(req.Format, newBody)
 	if err != nil {
@@ -67,9 +84,6 @@ func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req prot
 	}
 	if len(files) == 0 {
 		return body, req, nil // the plugin asked, but the request carries no file content to parse
-	}
-	if err := h.chargeGrowth(c, len(body), len(newBody)); err != nil {
-		return nil, req, err
 	}
 	parsed.File, parsed.FileParses = file, count.n
 	parsed.Web = web
@@ -113,13 +127,20 @@ func (p *parseCount) parse(ctx context.Context, h *Handler, c *Call) func(protoc
 	}
 }
 
-// chargeGrowth charges the body's growth to the node's budget: the parsed text replaces the file after admission has
-// counted the original body, so holding the new one is accounted for like the one it replaces.
-func (h *Handler) chargeGrowth(c *Call, before, after int) error {
-	if grow := int64(after) - int64(before); grow > 0 {
+// chargeGrowth turns the rewrite's work set, charged before it ran, into what the call keeps: the new body's growth,
+// which replaces the file bytes admission counted. The rest is given back now that the rewrite's copies are gone, so
+// the growth stays charged across the exchange.
+func (h *Handler) chargeGrowth(c *Call, before, after int, work int64) error {
+	grow := max(0, int64(after)-int64(before))
+	if grow > work {
+		h.Memory.Refund(work)
 		if !h.Memory.Charge(grow) {
 			return ErrOverloaded
 		}
+	} else {
+		h.Memory.Refund(work - grow)
+	}
+	if grow > 0 {
 		c.hold(func() { h.Memory.Refund(grow) })
 	}
 	return nil
