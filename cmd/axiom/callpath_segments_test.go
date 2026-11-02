@@ -10,15 +10,15 @@ import (
 
 // TestSegmentSettingsComeFromOneSource: routing and billing are configured apart, in startCallPath and startLedger, and
 // the failure #229 found was one of them taking the segment settings while the other did not: an entry marked
-// segmentable with no sizes to reserve it by. Both build their configuration from gateway.Config.Segments().
+// segmentable with no sizes to reserve it by. Both read the one live policy the ledger loaded.
 func TestSegmentSettingsComeFromOneSource(t *testing.T) {
-	gate := gateway.DefaultConfig()
-	gate.SegmentOutput, gate.SegmentOvershoot = 321, 7*time.Second
 	want := billing.Segments{Output: 321, Overshoot: 7 * time.Second}
-	if got := routingConfig(gate).Segments; got != want {
-		t.Errorf("routing's segments = %+v, want %+v from gateway.Config.Segments()", got, want)
+	policy := billing.NewSegmentPolicy(want)
+	gate := gateway.DefaultConfig()
+	if got := routingConfig(gate, policy).Segments; got != policy {
+		t.Errorf("routing's policy = %p, want the same policy billing gets %p", got, policy)
 	}
-	if got := ledgerConfig(gate, nil, nil, nil).Segments; got != want {
-		t.Errorf("billing's segments = %+v, want %+v from gateway.Config.Segments()", got, want)
+	if got := ledgerConfig(gate, policy, nil, nil, nil).Segments; got != policy {
+		t.Errorf("billing's policy = %p, want the same policy routing reads %p", got, policy)
 	}
 }

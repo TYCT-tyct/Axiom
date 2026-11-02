@@ -76,8 +76,9 @@ func compareNextVerification(a, b *State) int {
 // scheduleVerification starts a check for each due endpoint the budget and the concurrency allow, after the recovery
 // probes of the same tick have had their share.
 func (l *Loop) scheduleVerification(ctx context.Context, due []*State, endpoints []suppliers.Routable, now time.Time) {
+	settings := l.currentSettings()
 	for _, e := range due {
-		if l.active >= probeConcurrency || l.spent(now) {
+		if l.active >= settings.Concurrency || l.spent(now) {
 			l.verifyMetric(ctx, "deferred")
 			return
 		}
@@ -90,7 +91,8 @@ func (l *Loop) scheduleVerification(ctx context.Context, due []*State, endpoints
 		if !ok || claimed.Author == "" {
 			// Nothing to compare an answer with; a catalog that has not loaded is retried soon.
 			e.mu.Lock()
-			e.verify.next = now.Add(l.spread(verifyRetry))
+			e.verify.attempted = now
+			e.verify.next = now.Add(l.spread(settings.VerifyRetry))
 			e.mu.Unlock()
 			continue
 		}
@@ -102,8 +104,7 @@ func (l *Loop) scheduleVerification(ctx context.Context, due []*State, endpoints
 		}
 		e.verifying = true
 		e.mu.Unlock()
-		l.budget[l.used%len(l.budget)] = now
-		l.used++
+		l.budget.spend(now)
 		l.active++
 		go l.verify(context.WithoutCancel(ctx), ep, want, newChallenge(l.rand, claimed))
 	}
@@ -165,18 +166,22 @@ func (l *Loop) verificationApplies(e *State, end verifyEnd, current claim, ok bo
 
 // applyVerification records the outcome of a check about the current claim. The caller holds e.mu.
 func (l *Loop) applyVerification(ctx context.Context, e *State, end verifyEnd, now time.Time) {
+	settings := l.currentSettings()
+	e.verify.attempted = now
 	switch end.outcome {
 	case verifyPassed:
 		if e.verify.failed() {
 			l.resolveFake(e.id)
 		}
+		e.verify.outcome = verifyPassed
 		e.verify.passed, e.verify.failures, e.verify.checked = true, 0, now
-		e.verify.next = now.Add(l.spread(verifyEvery))
+		e.verify.next = now.Add(l.spread(settings.VerifyEvery))
 	case verifyContradicted:
 		was := e.verify.failures
+		e.verify.outcome = verifyContradicted
 		e.verify.passed = false
 		e.verify.failures++
-		e.verify.next = now.Add(l.spread(backoff(e.verify.failures)))
+		e.verify.next = now.Add(l.spread(backoff(e.verify.failures, settings.VerifyRetry, settings.VerifyEvery)))
 		if was < verifyFailures && e.verify.failures >= verifyFailures {
 			l.raiseFake(e.id, end.claimed.Author, e.verify.failures, now)
 		}
@@ -184,7 +189,8 @@ func (l *Loop) applyVerification(ctx context.Context, e *State, end verifyEnd, n
 			"endpoint", e.id.String(), "author", end.claimed.Author, "failures", e.verify.failures,
 			"request", end.result.Request.String())
 	case verifyUnknown:
-		e.verify.next = now.Add(l.spread(verifyRetry))
+		e.verify.outcome = verifyUnknown
+		e.verify.next = now.Add(l.spread(settings.VerifyRetry))
 	}
 	l.verifyMetric(ctx, end.outcome.String())
 }

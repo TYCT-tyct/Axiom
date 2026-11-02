@@ -201,3 +201,16 @@ func TestPresetMessagesFallbackOverride(t *testing.T) {
 		}
 	}
 }
+
+func TestPresetCacheControlDoesNotReachUpstream(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"@preset/support","messages":[{"role":"user","content":"hi"}]}`)
+	config := []byte(`{"model":"m","cache_enabled":true,"cache_ttl_seconds":60}`)
+	got, err := protocol.MergePreset(protocol.Chat, body, config, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "cache_enabled") || strings.Contains(string(got), "cache_ttl_seconds") {
+		t.Fatalf("cache control reached the upstream body: %s", got)
+	}
+}

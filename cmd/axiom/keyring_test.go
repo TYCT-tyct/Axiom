@@ -285,7 +285,7 @@ func TestKeyringCheckMissingAndMismatchedVersions(t *testing.T) {
 			// This replacement file simulates a node that was missed during distribution.
 			environ := []string{
 				pg.DatabaseURLVar + "=" + f.database.App, masterKeyFileVar + "=" + tc.path,
-				keyHashFileVar + "=" + keyFile(t, 'h'), identityKeyFileVar + "=" + keyFile(t, 'i'),
+				keyHashFileVar + "=" + keyFile(t, 'h'), identityKeyFileVar + "=" + keyFile(t, 'i'), callLogDirVar + "=" + t.TempDir(),
 			}
 			var out bytes.Buffer
 			err := keyringCommand(t.Context(), environ, []string{"check"}, &out)
@@ -367,7 +367,7 @@ func TestKeyringCheckFitsTheStartupTimeout(t *testing.T) {
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_STARTUP_TIMEOUT=1s",
 		pg.DatabaseURLVar + "=" + f.database.App, masterKeyFileVar + "=" + f.path,
-		keyHashFileVar + "=" + keyFile(t, 'h'), identityKeyFileVar + "=" + keyFile(t, 'i'),
+		keyHashFileVar + "=" + keyFile(t, 'h'), identityKeyFileVar + "=" + keyFile(t, 'i'), callLogDirVar + "=" + t.TempDir(),
 	}
 	served := make(chan error, 1)
 	go func() { served <- serve(t.Context(), environ, slog.New(slog.DiscardHandler)) }()

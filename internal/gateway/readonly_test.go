@@ -110,7 +110,11 @@ var auxEndpoints = map[string]endpoint{
 }
 
 // TestAuxJudgeTheKeyAsACallDoes: every auxiliary endpoint asks the database whether the key may be used, so a key
-// disabled, expired, deleted, of another kind or limited to other addresses is 401 whatever the cache holds.
+// disabled, expired, deleted or limited to other addresses is 401 whatever the cache holds. A management key may read
+// `/key` and `/credits`, as OpenRouter's may, and nothing else: it cannot make a call, and the endpoints that report
+// what a call did are for call keys.
+//
+//nolint:gocognit // the endpoint table and its assertions are the test
 func TestAuxJudgeTheKeyAsACallDoes(t *testing.T) {
 	t.Parallel()
 	for name, change := range map[string]string{
@@ -127,6 +131,15 @@ func TestAuxJudgeTheKeyAsACallDoes(t *testing.T) {
 			r.sql("UPDATE accounts.api_keys " + change)
 			for endpoint, e := range auxEndpoints {
 				resp, body := r.do(e.method, e.path, a.key, strings.NewReader(e.body))
+				managementRead := name == "a management key" && (endpoint == "key" || endpoint == "credits")
+				if managementRead {
+					if resp.StatusCode != http.StatusOK {
+						t.Errorf("%s: %d %s", endpoint, resp.StatusCode, body)
+					} else if endpoint == "key" && data(t, body)["is_management_key"] != true {
+						t.Errorf("%s does not say it is a management key: %s", endpoint, body)
+					}
+					continue
+				}
 				if code, _ := errorOf(t, body); resp.StatusCode != http.StatusUnauthorized || code != "authentication" {
 					t.Errorf("%s: %d %s", endpoint, resp.StatusCode, body)
 				}
@@ -486,10 +499,14 @@ func TestGenerationReportsTheCacheDiscount(t *testing.T) {
 	up := withCosts(r, r.billing, r.suppliers)
 	up.setReceipt(receipt)
 	up.setScript(serve(beat{data: threeSegments(sample)}))
-	r.exec.Records = observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
-		QueueSize: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
+	records, err := observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
+		Dir: t.TempDir(), Capacity: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
 		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
 	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.exec.Records = records
 	a := r.funded(1e12)
 	r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
 	if err := r.exec.Records.Close(t.Context()); err != nil {

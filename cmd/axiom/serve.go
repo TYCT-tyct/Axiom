@@ -13,6 +13,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
+	"axiom/internal/payments"
 	"axiom/internal/platform/alert"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
@@ -26,12 +27,12 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// The call-record writer's sizes. The queue holds about what the node's in-flight limit admits (internal/gateway
-// README「并发、背压与共享状态」); when it is full the recorder drops the new record rather than slow a call, so the
-// queue only bounds memory and loss. Batches of 500 records or 200 ms keep the insert rate low (internal/observability
-// README「写入」).
+// The call-record writer's sizes. Capacity is about the node's in-flight limit (internal/gateway README「并发、背压与
+// 共享状态」): every admitted call reserves one record, so a full spill refuses new calls instead of dropping a record.
+// Batches of 500 records or 200 ms keep the insert rate low (internal/observability README「写入」). Dir comes from
+// AXIOM_CALL_LOG_DIR; cmd/axiom/settings.go defaults it to ./call-log.
 var callRecords = observability.Config{
-	QueueSize: 5000, BatchSize: 500, FlushInterval: 200 * time.Millisecond, RetryBase: 100 * time.Millisecond,
+	Capacity: 5000, BatchSize: 500, FlushInterval: 200 * time.Millisecond, RetryBase: 100 * time.Millisecond,
 	RetryMax:     5 * time.Second,
 	WriteTimeout: 10 * time.Second,
 }
@@ -69,7 +70,7 @@ func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
 //
 //nolint:funlen,cyclop // startup order is the contract: listeners drain before the recorder, the queue, the cache and the database.
 func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
-	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
+	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
 	prices func(*egress.Client) *catalog.Fetcher,
 ) error {
 	cfg, err := readSettings(environ)
@@ -121,11 +122,12 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer stopCache()
-	queue, recorder, recovery, registration, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, tel, logger, cfg.shutdownTimeout, record)
+	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, tel, logger, cfg.valkey.NodeID, cfg.shutdownTimeout, cfg.callLogDir, record)
 	if err != nil {
 		return err
 	}
-	defer startAlerts(ctx, db, recorder, &console, logger)()
+	console.paymentSignals = paymentSignals
+	defer startAlerts(ctx, db, recorder, &console, logger, signals)()
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
 	// returns at once. It runs before db.Close, which was deferred first.
@@ -228,16 +230,17 @@ func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error, los
 // enforces. The master key file is read once here; the database check (openCheckedDatabase) gives that one ring the
 // write version the database chose, and the login and mail keys were derived from the same snapshot.
 type consoleParts struct {
-	cfg           nodeSettings
-	masterKeys    *secret.MasterKeys // the one master-key read; the mail worker derives the recipient key from it
-	master        *secret.Keyring    // seals users' TOTP secrets and suppliers' credentials; openCheckedDatabase sets its write version
-	loginKey      secret.LoginKey    // from the same master-key snapshot, under the login label
-	hashes        *secret.MACKeys    // keys API keys are hashed with
-	identity      []byte             // derives what replaces the client's identifiers upstream
-	contract      *contract
-	adminContract *contract
-	frontend      *webui.Frontend // the pages of the three apps
-	alerts        alert.Sink
+	cfg            nodeSettings
+	masterKeys     *secret.MasterKeys // the one master-key read; the mail worker derives the recipient key from it
+	master         *secret.Keyring    // seals users' TOTP secrets and suppliers' credentials; openCheckedDatabase sets its write version
+	loginKey       secret.LoginKey    // from the same master-key snapshot, under the login label
+	hashes         *secret.MACKeys    // keys API keys are hashed with
+	identity       []byte             // derives what replaces the client's identifiers upstream
+	contract       *contract
+	adminContract  *contract
+	frontend       *webui.Frontend // the pages of the three apps
+	alerts         alert.Sink
+	paymentSignals *payments.SignalState
 }
 
 func loadConsole(cfg nodeSettings) (consoleParts, error) {
@@ -286,6 +289,7 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
 	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
 	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger,
+	signals *alert.Bus, paymentSignals *payments.SignalState, nodeID string,
 ) (*pg.Queue, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	recovery, registration, err := registerNotifications(ctx, db, queue, smtp, cache, master, keys, exit, logger)
@@ -348,7 +352,7 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, ca
 	}
 	// Orders past their deadline expire every minute, on whichever node leads the queue
 	// (docs/domains/payments.md「补单与过期」). Callbacks and polling register the same protocol plugins.
-	if err = registerPaymentJobs(db, keys, exit, logger, queue); err != nil {
+	if err = registerPaymentJobs(db, keys, exit, logger, queue, signals, paymentSignals, nodeID); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := queue.Start(ctx); err != nil {
@@ -458,21 +462,33 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 // the recorder it had already started, since the caller has no defer of its own yet.
 func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger, timeout time.Duration,
-	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
-) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, error) {
-	recorder := record(ctx, db, tel, logger)
-	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, directFormats, archive, tel, logger)
+	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger, nodeID string,
+	timeout time.Duration, callLogDir string,
+	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
+) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, *alert.Bus, *payments.SignalState, error) {
+	recorder, err := record(ctx, db, tel, callLogDir, logger)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, err
+	}
+	signals := alert.New(ctx, db, pg.PlatformScope(), logger)
+	paymentSignals := payments.NewSignalState()
+	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, directFormats, archive, tel, logger, signals, paymentSignals, nodeID)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
-		return nil, nil, nil, nil, err
+		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		if closeErr := signals.Close(drain); closeErr != nil {
+			logger.Error("closing alert signals", "err", closeErr)
+		}
+		cancel()
+		return nil, nil, nil, nil, nil, nil, err
 	}
-	return queue, recorder, recovery, registration, nil
+	return queue, recorder, recovery, registration, signals, paymentSignals, nil
 }
 
 // startRecorder starts the call-record writer, reporting to the node's metrics.
-func startRecorder(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) *observability.Recorder {
+func startRecorder(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, dir string, logger *slog.Logger) (*observability.Recorder, error) {
 	cfg := callRecords
+	cfg.Dir = dir
 	cfg.Meter = tel.Metrics.Meter("axiom/observability")
 	return observability.NewRecorder(ctx, db, pg.PlatformScope(), cfg, logger)
 }

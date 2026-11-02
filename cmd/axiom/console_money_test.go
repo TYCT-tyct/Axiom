@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log/slog"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -158,7 +157,7 @@ func newCall(account uuid.UUID, at time.Time, model, app string) observability.C
 // record writes calls through the recorder and waits for them to be stored.
 func (f consoleFixture) record(calls ...observability.CallRecord) {
 	f.t.Helper()
-	r := observability.NewRecorder(f.t.Context(), f.db, pg.PlatformScope(), callRecords, slog.New(slog.DiscardHandler))
+	r := testRecorder(f.t, f.db, pg.PlatformScope(), testCallRecords(f.t))
 	for _, c := range calls {
 		if err := r.Enqueue(c); err != nil {
 			f.t.Fatal(err)
@@ -211,8 +210,10 @@ func TestCallsPage(t *testing.T) {
 	if diff := cmp.Diff([]string{c.recent.ID.String(), c.mid.ID.String()}, callIDs(page)); diff != "" || page.NextCursor == nil {
 		t.Fatalf("the first page (-want +got):\n%s\ncursor %v", diff, page.NextCursor)
 	}
+	notCached := false
 	want := consoleapi.Call{
 		Id: c.recent.ID.String(), At: c.recent.At, Model: "gpt-5", ClientApp: "claude-code", RequestClass: "chat", Ip: "203.0.113.7",
+		CacheHit:   &notCached,
 		AppReferer: optionalText("https://app.example.com"), AppTitle: optionalText("Example Chat"), AppCategories: optionalText("cli-agent,cloud-agent"),
 		Usage: map[string]int64{"input": 120, "output": 30}, Price: consoleapi.Money{Amount: "5000000", Currency: "USD"},
 		LatencyMs: 1200, FirstTokenMs: 300, FinishReason: "stop", ServiceTier: "standard", KeyId: page.Data[0].KeyId, WorkspaceId: page.Data[0].WorkspaceId,

@@ -52,6 +52,14 @@ func healthSignal(c change) alert.Signal {
 	}
 	key := c.record.ID.String()
 	source := "quality:" + key + ":" + strconv.FormatInt(c.record.Epoch, 10)
+	if c.kind == "offline" {
+		// Reuse the kind every released version already resolves. A new endpoint_offline would stay unresolved when an
+		// old node restores the endpoint during a rolling upgrade, because resolution is by exact (kind, key).
+		kind = "endpoint_still_down"
+		// One signal per incident: the source stays the same while the endpoint is out, so a later failed probe or a
+		// restart that replays the transition does not send it twice.
+		source = "quality:" + key + ":offline:" + strconv.FormatInt(c.record.Opened, 10)
+	}
 	return alert.Signal{Source: source, Kind: kind, Key: key, Severity: severity, Fields: map[string]string{"cause": c.record.Cause}}
 }
 
@@ -98,6 +106,11 @@ func (l *Loop) checkModels(endpoints []suppliers.Routable) error {
 }
 
 func persistHealthSignal(ctx context.Context, tx pg.Tx, c change) error {
+	if c.kind == "removed" {
+		// The trip has already taken the endpoint out of the route; the alert waits for the failed re-check, so a
+		// transient blip that the probe clears never pages operations (docs/product.md「端点属性」).
+		return nil
+	}
 	signal := healthSignal(c)
 	if err := alert.Persist(ctx, tx, uuid.NewV7(), signal); err != nil {
 		return err
@@ -105,7 +118,7 @@ func persistHealthSignal(ctx context.Context, tx pg.Tx, c change) error {
 	if c.kind != "restored" {
 		return nil
 	}
-	for _, kind := range []string{"endpoint_removed", "owned_endpoint_removed", "endpoint_still_down", "endpoint_restored"} {
+	for _, kind := range []string{"endpoint_offline", "endpoint_removed", "owned_endpoint_removed", "endpoint_still_down", "endpoint_restored"} {
 		recovery := alert.Signal{Source: signal.Source + ":" + kind + ":resolved", Kind: kind, Key: signal.Key, Severity: "info", Resolved: true}
 		if err := alert.Persist(ctx, tx, uuid.NewV7(), recovery); err != nil {
 			return err

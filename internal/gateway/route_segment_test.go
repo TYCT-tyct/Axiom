@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"testing"
+	"time"
 
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
@@ -59,6 +61,9 @@ func TestRouteBuildCarriesWhatSegmentingNeeds(t *testing.T) {
 		}
 		if got := plan.Entries[0].Segmentable; got != c.want {
 			t.Errorf("%s: segmentable=%t, want %t", c.name, got, c.want)
+		}
+		if got := plan.Segments; got != (billing.Segments{Output: 1000, Overshoot: 2 * time.Second}) {
+			t.Errorf("%s: the plan froze %+v, want the router's segment policy", c.name, got)
 		}
 	}
 }

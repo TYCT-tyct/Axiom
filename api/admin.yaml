@@ -985,6 +985,121 @@ paths:
           $ref: '#/components/responses/Conflict'
         default:
           $ref: '#/components/responses/Failure'
+  /api/admin/v1/settings/segments:
+    get:
+      operationId: getSegmentSettings
+      tags: [Site]
+      summary: The saved segment settings and the defaults in code.
+      description: >-
+        How many output tokens a reservation segment covers, and how much time its overshoot allowance covers. An
+        absent value is the default in code. Every node reloads the record within 30 seconds, without a restart, and
+        routing and billing read the same value.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The settings and defaults.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SegmentSettingsView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setSegmentSettings
+      tags: [Site]
+      summary: Save the segment settings, validated and audited.
+      description: >-
+        Replaces the record: a value left out falls back to the default in code, and a record with no value is deleted.
+        The overshoot allowance must cover the node's extension wait. Nodes apply the saved value within 30 seconds
+        without a restart; a record a node cannot use keeps that node's previous value and is logged there.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SegmentSettingsUpdate"}
+      responses:
+        "200":
+          description: The settings as stored.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SegmentSettingsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/settings/quality-probes:
+    get:
+      operationId: getQualityProbeSettings
+      tags: [Site]
+      summary: The saved probe settings and the defaults in code.
+      description: >-
+        The hourly budget and concurrency of recovery probes, the fingerprint check's interval, retry, and how long a
+        pass counts, and the first probe delay. An absent value is the default in code. Every node reloads the record
+        within 30 seconds, without a restart.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The settings and defaults.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProbeSettingsView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setQualityProbeSettings
+      tags: [Site]
+      summary: Save the probe settings, validated and audited.
+      description: >-
+        Replaces the record: a value left out falls back to the default in code, and a record with no value is deleted.
+        The maximum age of a pass must be at least the check interval, and the first retry at most it. Nodes apply the
+        saved value within 30 seconds without a restart; a record a node cannot use keeps that node's previous value
+        and is logged there.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProbeSettingsUpdate"}
+      responses:
+        "200":
+          description: The settings as stored.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProbeSettingsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/payments/merchants:
     get:
       operationId: listMerchants
@@ -5890,6 +6005,55 @@ components:
       properties:
         settings: {$ref: "#/components/schemas/SiteSettings"}
         reason: {$ref: "#/components/schemas/Reason"}
+    SegmentSettings:
+      type: object
+      description: >-
+        How a reservation is split into segments. A value that is absent is the default in code. `output_tokens` is
+        the output a segment covers; `overshoot_seconds` is the time the allowance covers at the endpoint's speed,
+        and must be at least the node's extension wait (1 second).
+      properties:
+        output_tokens: {type: integer, format: int64, minimum: 1, maximum: 1000000}
+        overshoot_seconds: {type: integer, minimum: 1, maximum: 600}
+    SegmentSettingsView:
+      type: object
+      required: [settings, defaults]
+      properties:
+        settings: {$ref: "#/components/schemas/SegmentSettings"}
+        defaults:
+          description: What applies where `settings` has no value.
+          allOf: [{$ref: "#/components/schemas/SegmentSettings"}]
+    SegmentSettingsUpdate:
+      type: object
+      required: [settings, reason]
+      properties:
+        settings: {$ref: "#/components/schemas/SegmentSettings"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    ProbeSettings:
+      type: object
+      description: >-
+        The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent
+        is the default in code. Times are seconds.
+      properties:
+        hourly_budget: {type: integer, minimum: 1, maximum: 100000}
+        concurrency: {type: integer, minimum: 1, maximum: 64}
+        verify_every_seconds: {type: integer, minimum: 60, maximum: 2592000}
+        verify_max_age_seconds: {type: integer, minimum: 60, maximum: 2592000}
+        verify_retry_seconds: {type: integer, minimum: 60, maximum: 86400}
+        probe_base_seconds: {type: integer, minimum: 1, maximum: 600}
+    ProbeSettingsView:
+      type: object
+      required: [settings, defaults]
+      properties:
+        settings: {$ref: "#/components/schemas/ProbeSettings"}
+        defaults:
+          description: What applies where `settings` has no value.
+          allOf: [{$ref: "#/components/schemas/ProbeSettings"}]
+    ProbeSettingsUpdate:
+      type: object
+      required: [settings, reason]
+      properties:
+        settings: {$ref: "#/components/schemas/ProbeSettings"}
+        reason: {$ref: "#/components/schemas/Reason"}
     LoginLimits:
       type: object
       description: Site overrides. Absence selects code defaults. Refills use the existing IP, email and user windows.
@@ -6773,6 +6937,10 @@ components:
             flex: {$ref: "#/components/schemas/ServiceTierRates"}
             priority: {$ref: "#/components/schemas/ServiceTierRates"}
             fast: {$ref: "#/components/schemas/ServiceTierRates"}
+    PriceEndpointMap:
+      type: object
+      description: Per-endpoint prices, keyed by endpoint UUID.
+      additionalProperties: {$ref: "#/components/schemas/PriceSchedule"}
     ModelName:
       type: object
       required: [name, visibility]
@@ -6982,6 +7150,24 @@ components:
         requested: {$ref: "#/components/schemas/PriceSchedule"}
         schedule: {$ref: "#/components/schemas/PriceSchedule"}
         floor: {$ref: "#/components/schemas/PriceSchedule"}
+        endpoints:
+          description: The proposed price of each endpoint for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        requested_endpoints:
+          description: The rule price of each endpoint before the site floor, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        current_endpoints:
+          description: The price each endpoint currently serves, when the current version prices endpoints separately.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        current_schedule:
+          description: The current model-level price schedule, including the envelope of a per-endpoint version.
+          allOf: [{$ref: "#/components/schemas/PriceSchedule"}]
+        costs:
+          description: The proposal's cost of each endpoint in the site currency, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        floors:
+          description: The proposal's break-even price of each endpoint in the site currency, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
         problem: {type: string}
     PricePublishInput:
       type: object

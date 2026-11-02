@@ -35,7 +35,7 @@ func audienceBenchmark(b *testing.B) (*Router, []*candidate, *need, *billing.Aud
 		if err != nil {
 			b.Fatal(err)
 		}
-		c.prices, err = compileAudiencePrices(compiled, priceCache, false)
+		c.prices, err = compileAudiencePrices(compiled, uuid.UUID(c.ID), priceCache, false)
 		if err != nil {
 			b.Fatal(err)
 		}

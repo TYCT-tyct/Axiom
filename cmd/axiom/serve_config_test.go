@@ -285,3 +285,32 @@ func TestDirectFormatsRejectsUnknownValues(t *testing.T) {
 		t.Fatalf("direct-format gate validation: %v", err)
 	}
 }
+
+func TestResponseCacheContentIsOffUntilThePlatformAllowsIt(t *testing.T) {
+	t.Parallel()
+	off, err := readSettings(coreEnviron())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.responseCache {
+		t.Error("reply content is allowed without the platform saying so")
+	}
+	empty, err := readSettings(coreEnviron("AXIOM_RESPONSE_CACHE_CONTENT="))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.responseCache {
+		t.Error("an empty setting enabled reply content")
+	}
+	on, err := readSettings(coreEnviron("AXIOM_RESPONSE_CACHE_CONTENT=on"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !on.responseCache {
+		t.Error("the platform's on was not read")
+	}
+	if _, err := readSettings([]string{"AXIOM_RESPONSE_CACHE_CONTENT=maybe"}); err == nil ||
+		!strings.Contains(err.Error(), "AXIOM_RESPONSE_CACHE_CONTENT: want on or off") {
+		t.Fatalf("content-retention validation: %v", err)
+	}
+}

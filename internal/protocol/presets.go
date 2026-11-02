@@ -103,6 +103,9 @@ func presetDefaults(f Format, request, defaults map[string]jsonx.Raw, model stri
 		return err
 	}
 	delete(request, "preset")
+	// Cache settings are the gateway's, not the model's: they must not reach an upstream that would reject or ignore them.
+	delete(defaults, "cache_enabled")
+	delete(defaults, "cache_ttl_seconds")
 	if f == Messages && !isNull(request["fallbacks"]) {
 		// Resolve the configured primary before replacing its alternate-model defaults.
 		if err := presetPrimary(defaults); err != nil {

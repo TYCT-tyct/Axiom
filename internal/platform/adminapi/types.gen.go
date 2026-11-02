@@ -3120,6 +3120,9 @@ type PlatformGrantList struct {
 	Data *[]PlatformGrant `json:"data,omitempty"`
 }
 
+// PriceEndpointMap Per-endpoint prices, keyed by endpoint UUID.
+type PriceEndpointMap map[string]PriceSchedule
+
 // PricePolicy defines model for PricePolicy.
 type PricePolicy struct {
 	ChangeRatio      *string `json:"change_ratio,omitempty"`
@@ -3147,11 +3150,26 @@ type PricePublication struct {
 	// CandidateId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	CandidateId *Uuid `json:"candidate_id,omitempty"`
 
+	// Costs The proposal's cost of each endpoint in the site currency, for a cost-plus proposal.
+	Costs *PriceEndpointMap `json:"costs,omitempty"`
+
+	// CurrentEndpoints The price each endpoint currently serves, when the current version prices endpoints separately.
+	CurrentEndpoints *PriceEndpointMap `json:"current_endpoints,omitempty"`
+
 	// CurrentId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	CurrentId *Uuid `json:"current_id,omitempty"`
 
+	// CurrentSchedule The current model-level price schedule, including the envelope of a per-endpoint version.
+	CurrentSchedule *PriceSchedule `json:"current_schedule,omitempty"`
+
+	// Endpoints The proposed price of each endpoint for a cost-plus proposal.
+	Endpoints *PriceEndpointMap `json:"endpoints,omitempty"`
+
 	// Floor A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
 	Floor *PriceSchedule `json:"floor,omitempty"`
+
+	// Floors The proposal's break-even price of each endpoint in the site currency, for a cost-plus proposal.
+	Floors *PriceEndpointMap `json:"floors,omitempty"`
 
 	// ModelId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	ModelId *Uuid   `json:"model_id,omitempty"`
@@ -3159,6 +3177,9 @@ type PricePublication struct {
 
 	// Requested A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
 	Requested *PriceSchedule `json:"requested,omitempty"`
+
+	// RequestedEndpoints The rule price of each endpoint before the site floor, for a cost-plus proposal.
+	RequestedEndpoints *PriceEndpointMap `json:"requested_endpoints,omitempty"`
 
 	// Schedule A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
 	Schedule *PriceSchedule          `json:"schedule,omitempty"`
@@ -3414,6 +3435,34 @@ type PricingTarget struct {
 
 // PricingTargetKind defines model for PricingTarget.Kind.
 type PricingTargetKind string
+
+// ProbeSettings The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds.
+type ProbeSettings struct {
+	Concurrency         *int `json:"concurrency,omitempty"`
+	HourlyBudget        *int `json:"hourly_budget,omitempty"`
+	ProbeBaseSeconds    *int `json:"probe_base_seconds,omitempty"`
+	VerifyEverySeconds  *int `json:"verify_every_seconds,omitempty"`
+	VerifyMaxAgeSeconds *int `json:"verify_max_age_seconds,omitempty"`
+	VerifyRetrySeconds  *int `json:"verify_retry_seconds,omitempty"`
+}
+
+// ProbeSettingsUpdate defines model for ProbeSettingsUpdate.
+type ProbeSettingsUpdate struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Settings The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds.
+	Settings ProbeSettings `json:"settings"`
+}
+
+// ProbeSettingsView defines model for ProbeSettingsView.
+type ProbeSettingsView struct {
+	// Defaults What applies where `settings` has no value.
+	Defaults ProbeSettings `json:"defaults"`
+
+	// Settings The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds.
+	Settings ProbeSettings `json:"settings"`
+}
 
 // RateLimitView defines model for RateLimitView.
 type RateLimitView struct {
@@ -3695,6 +3744,30 @@ type SearchSettingsUpdate struct {
 		Key *string `json:"key,omitempty"`
 		Url *string `json:"url,omitempty"`
 	} `json:"settings,omitempty"`
+}
+
+// SegmentSettings How a reservation is split into segments. A value that is absent is the default in code. `output_tokens` is the output a segment covers; `overshoot_seconds` is the time the allowance covers at the endpoint's speed, and must be at least the node's extension wait (1 second).
+type SegmentSettings struct {
+	OutputTokens     *int64 `json:"output_tokens,omitempty"`
+	OvershootSeconds *int   `json:"overshoot_seconds,omitempty"`
+}
+
+// SegmentSettingsUpdate defines model for SegmentSettingsUpdate.
+type SegmentSettingsUpdate struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Settings How a reservation is split into segments. A value that is absent is the default in code. `output_tokens` is the output a segment covers; `overshoot_seconds` is the time the allowance covers at the endpoint's speed, and must be at least the node's extension wait (1 second).
+	Settings SegmentSettings `json:"settings"`
+}
+
+// SegmentSettingsView defines model for SegmentSettingsView.
+type SegmentSettingsView struct {
+	// Defaults What applies where `settings` has no value.
+	Defaults SegmentSettings `json:"defaults"`
+
+	// Settings How a reservation is split into segments. A value that is absent is the default in code. `output_tokens` is the output a segment covers; `overshoot_seconds` is the time the allowance covers at the endpoint's speed, and must be at least the node's extension wait (1 second).
+	Settings SegmentSettings `json:"settings"`
 }
 
 // ServiceTier defines model for ServiceTier.
@@ -4868,6 +4941,12 @@ type TestMailSettingsParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetQualityProbeSettingsParams defines parameters for SetQualityProbeSettings.
+type SetQualityProbeSettingsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetSearchSettingsParams defines parameters for SetSearchSettings.
 type SetSearchSettingsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -4876,6 +4955,12 @@ type SetSearchSettingsParams struct {
 
 // TestSearchSettingsParams defines parameters for TestSearchSettings.
 type TestSearchSettingsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetSegmentSettingsParams defines parameters for SetSegmentSettings.
+type SetSegmentSettingsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -5214,11 +5299,17 @@ type SetMailSettingsJSONRequestBody = MailSettingsUpdate
 // TestMailSettingsJSONRequestBody defines body for TestMailSettings for application/json ContentType.
 type TestMailSettingsJSONRequestBody = MailConfigTest
 
+// SetQualityProbeSettingsJSONRequestBody defines body for SetQualityProbeSettings for application/json ContentType.
+type SetQualityProbeSettingsJSONRequestBody = ProbeSettingsUpdate
+
 // SetSearchSettingsJSONRequestBody defines body for SetSearchSettings for application/json ContentType.
 type SetSearchSettingsJSONRequestBody = SearchSettingsUpdate
 
 // TestSearchSettingsJSONRequestBody defines body for TestSearchSettings for application/json ContentType.
 type TestSearchSettingsJSONRequestBody = SearchConfigTest
+
+// SetSegmentSettingsJSONRequestBody defines body for SetSegmentSettings for application/json ContentType.
+type SetSegmentSettingsJSONRequestBody = SegmentSettingsUpdate
 
 // UpdateSiteBrandJSONRequestBody defines body for UpdateSiteBrand for application/json ContentType.
 type UpdateSiteBrandJSONRequestBody = SiteBrandUpdate

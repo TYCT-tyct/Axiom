@@ -107,6 +107,7 @@ type CallRecord struct {
 	ConsentVersion                   string
 	TrainingAllowed                  bool
 	Streamed                         bool
+	CacheHit                         bool   // answered from the response cache, with no upstream attempt
 	PhysicalInput                    *int64 // the upstream's prompt total, nil when it reported none
 }
 
@@ -151,6 +152,7 @@ type row struct {
 	ConsentVersion  string           `json:"consent_version"`
 	TrainingAllowed bool             `json:"training_allowed"`
 	Streamed        bool             `json:"streamed"`
+	CacheHit        bool             `json:"cache_hit"`
 	PhysicalInput   int64            `json:"physical_input"`
 }
 
@@ -195,6 +197,18 @@ func newRows(r CallRecord) (row, []attemptRow, error) {
 	return call, attempts, err
 }
 
+// maxRouteText is the route column's limit on its jsonb text (migrations/00001_call_log.sql). A record over it is
+// refused here, before it reaches the spill: once there, PostgreSQL would refuse its batch on every replay and hold
+// every later record behind it. routing.Record.JSON is bounded well below it, so only a bug reaches the refusal.
+const maxRouteText = 8192
+
+// jsonbTextLen bounds the length of canonical JSON once PostgreSQL prints it as jsonb text, which adds a space after
+// every ':' and ',' between tokens, escapes strings as canonical JSON does and prints small integers unchanged (the
+// route holds no others). Counting every ':' and ',' byte, also those inside strings, can only overcount.
+func jsonbTextLen(compact string) int {
+	return len(compact) + strings.Count(compact, ":") + strings.Count(compact, ",")
+}
+
 // newCallRow converts the call's own fields. It derives what each attempt already says.
 func newCallRow(r CallRecord) (row, error) {
 	route := string(r.Route)
@@ -202,6 +216,9 @@ func newCallRow(r CallRecord) (row, error) {
 		route = "{}"
 	} else if err := jsonx.Validate(r.Route); err != nil {
 		return row{}, fmt.Errorf("route: %w", err)
+	}
+	if n := jsonbTextLen(route); n > maxRouteText {
+		return row{}, fmt.Errorf("route: %d bytes as jsonb text, at most %d", n, maxRouteText)
 	}
 	usage := make(map[string]int64, len(r.Usage))
 	for item, n := range r.Usage {
@@ -244,7 +261,7 @@ func newCallRow(r CallRecord) (row, error) {
 		CostNano: r.CostNano, Currency: r.Currency.String(), FreeOfCharge: r.Free, LatencyMs: r.Latency.Milliseconds(),
 		FirstTokenMs: r.FirstToken.Milliseconds(), FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
 		ConsentVersion: r.ConsentVersion, TrainingAllowed: r.TrainingAllowed, Streamed: r.Streamed,
-		PhysicalInput: physicalInput(r.PhysicalInput),
+		CacheHit: r.CacheHit, PhysicalInput: physicalInput(r.PhysicalInput),
 	}, nil
 }
 

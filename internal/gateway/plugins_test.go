@@ -26,14 +26,14 @@ func TestUnsupportedPluginsAreRejectedBeforeAdmission(t *testing.T) {
 		resp, body := r.do(http.MethodPost, "/api/v1/chat/completions", a.key, strings.NewReader(`{"model":"acme/alpha",`+members+`,"messages":[{"role":"user","content":"hello"}]}`))
 		var envelope struct {
 			Error struct {
-				Code    string `json:"code"`
+				Code    int    `json:"code"`
 				Message string `json:"message"`
 			} `json:"error"`
 		}
 		if err := jsonx.Unmarshal([]byte(body), &envelope); err != nil {
 			t.Fatalf("%s: %v", body, err)
 		}
-		if resp.StatusCode != http.StatusBadRequest || envelope.Error.Code != "invalid_request" || !strings.Contains(envelope.Error.Message, "not supported") {
+		if resp.StatusCode != http.StatusBadRequest || envelope.Error.Code != http.StatusBadRequest || !strings.Contains(envelope.Error.Message, "not supported") {
 			t.Fatalf("%d %s", resp.StatusCode, body)
 		}
 	}

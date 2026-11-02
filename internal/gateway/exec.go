@@ -98,6 +98,9 @@ type ExecDeps struct {
 	Outstanding *Outstanding
 	// Search is the deployment's search engines; nil means none is configured.
 	Search SearchBackends
+	// Cache is the response cache. It is optional: nil leaves every call uncached, and a node that has one still caches
+	// only the calls whose request asks for it (docs/domains/gateway.md「响应缓存」).
+	Cache *ResponseCache
 }
 
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.
@@ -167,6 +170,10 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 		s.conclude(ctx, *e)
 		return
 	}
+	if e, ok := s.cached(ctx); ok {
+		s.conclude(ctx, e)
+		return
+	}
 	s.conclude(ctx, s.attempts(ctx))
 }
 
@@ -225,6 +232,19 @@ type session struct {
 	echo     *protocol.EchoPrompts
 	echoHeld int64
 
+	// The response cache's share of this call. cacheHit says the answer was replayed; cacheAge, cacheTTL and cacheSource
+	// are the headers that go with it. cacheBody is the upstream reply a successful attempt captured, ready to be
+	// written after this call's settlement; cacheHeld is the node's budget it occupies until release.
+	cacheHit               bool
+	cacheAge, cacheTTL     time.Duration
+	cacheSource            uuid.UUID
+	cacheBody              []byte
+	cacheHeld              int64
+	cacheReady             bool
+	cacheFormat            protocol.Format
+	cacheModel, cacheState string
+	cacheEndpoint          uuid.UUID
+
 	concluded bool
 	handedOff bool // the call's slots are the background's to give back
 
@@ -245,15 +265,18 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 		deadline: now.Add(x.Limits.cfg.MaxCall), logger: x.Logger.With("request_id", c.ID.String()),
 		writeFor: x.Limits.cfg.WriteTimeout, aggregate: !c.Request.Stream && !c.Compact,
 		files: c.files, parses: c.Request.FileParses, serverFunction: c.serverLoop,
+		cacheTTL: c.cache.ttl,
 	}
 }
 
 // conclude settles the call and writes what is left to tell the client. The order is the one that keeps the money
 // right: the attempt is over (its upstream cancelled, its read returned) before Settle, and Settle is committed before
-// the ending that reports the cost is written (I3). A settlement not written in time goes on in the background once
-// the ending is out.
+// the ending that reports the cost is written (I3). The call's record enters the spill after the settlement and before
+// the ending, so a crash after the client has the answer cannot leave that call unrecorded when the settlement was
+// written here. A settlement not written in time goes on in the background once the ending is out; its record is
+// written after that settlement commits, so a kill between the two leaves a charged, pending call without a record.
 //
-//nolint:cyclop // the settlement order is the invariant; each branch is one ending
+//nolint:cyclop,gocognit // the settlement order is the invariant; each branch is one ending
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
@@ -263,20 +286,29 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
-	if err == nil && len(o.Attempts) > 0 {
+	if err == nil && (len(o.Attempts) > 0 || s.cacheHit) {
 		fin = s.final(f)
+	}
+	// The record is in the spill before the ending is written when the settlement was written here: a process crash
+	// after the client sees the answer cannot leave that call unrecorded. The settlement committed first, so the
+	// record's amounts are final. A settlement left for the background records itself only after it commits there.
+	if err == nil {
+		s.x.log(ctx, s.trail(), o, f, time.Now())
 	}
 	switch {
 	case e.reply != nil:
+		var failure protocol.Error
+		var failed bool
 		if s.c.Format.Direct() {
-			body, failure, failed := s.rewriteDirect(e.reply, fin)
-			if failed {
-				s.answer(ctx, ended{err: failure}, fin)
-				break
-			}
-			e.reply = body
+			e.reply, failure, failed = s.rewriteDirect(e.reply, fin)
+		} else {
+			e.reply, failure, failed = s.rewriteCompact(e.reply, fin)
 		}
-		s.respond(e.status, e.reply) // as it came, after the settlement (docs/domains/gateway.md「转发规则」)
+		if failed {
+			s.answer(ctx, ended{err: failure}, fin)
+			break
+		}
+		s.respond(e.status, e.reply) // with the usage and cost of the settlement (docs/domains/gateway.md「转发规则」)
 	case e.relay == nil:
 		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
 			fin = nil // an error that cost nothing says nothing of the charge
@@ -295,8 +327,22 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	}
 	s.handedOff = s.x.settled(ctx, s, o, err)
 	if err == nil {
-		s.x.log(ctx, s.trail(), o, f, time.Now())
+		s.storeCache(ctx)
 	}
+}
+
+// storeCache offers the reply this call captured after its settlement succeeded. It is asynchronous and bounded: the
+// call has already been answered, so a full queue or a slow database can only lose the cache entry.
+func (s *session) storeCache(ctx context.Context) {
+	if s.x.Cache == nil || !s.cacheReady || !s.c.cache.enabled || len(s.cacheBody) == 0 {
+		return
+	}
+	s.x.Cache.Offer(ctx, cacheEntry{
+		scope: s.c.Admitted.Scope, site: uuid.UUID(s.c.site.ID), account: uuid.UUID(s.c.caller.AccountID()),
+		key: s.c.cache.key, source: s.c.ID, format: s.cacheFormat, model: s.cacheModel, state: s.cacheState,
+		endpoint: s.cacheEndpoint, body: s.cacheBody, ttl: s.c.cache.ttl,
+	})
+	s.cacheBody = nil
 }
 
 // closeLoop gives every attempt of the model-side loop the last attempt belongs to how the loop ended: its answer
@@ -360,6 +406,21 @@ func (s *session) rewriteDirect(reply []byte, fin *protocol.Final) ([]byte, prot
 	return body, protocol.Error{}, false
 }
 
+// rewriteCompact rewrites the usage of a compact reply after settlement, so the call reports what it used and was
+// charged like every other call. Its copy was charged to the node's budget in pass, and the body was validated there,
+// so the settlement is never followed by a failure of the call's own making.
+func (s *session) rewriteCompact(reply []byte, fin *protocol.Final) ([]byte, protocol.Error, bool) {
+	var seen protocol.Usage
+	if s.last != nil {
+		seen = s.last.usage
+	}
+	body, err := protocol.RewriteCompactReply(reply, seen, fin)
+	if err != nil {
+		return nil, protocol.Error{Type: protocol.UpstreamFailed}, true
+	}
+	return body, protocol.Error{}, false
+}
+
 // answerAggregate writes the whole body of a call that did not stream, after its settlement (I3): the reply the relay
 // aggregated, or the failure, which carries what was generated and the error for a Chat or Responses client and is the
 // error alone for a Messages one (docs/domains/gateway.md「错误」). Finish and Fail return the body and the status of a
@@ -406,6 +467,8 @@ func (s *session) release() {
 	s.echoHeld = 0
 	s.x.Memory.Refund(s.outHeld)
 	s.outHeld, s.out = 0, nil
+	s.x.Memory.Refund(s.cacheHeld)
+	s.cacheHeld = 0
 }
 
 // readEcho reads the prompt sizes of a completion that echoes, once for all its attempts, charged to the node's budget
