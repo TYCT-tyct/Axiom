@@ -90,7 +90,7 @@
 ### API key
 
 - **调用 key**用来调模型。可以设置：名称、所属工作区、创建人、花费上限（可按日、周、月在 UTC 零点自动重置；新建的 key 默认带每日花费上限，金额是站点设置，可以修改）、过期时间（只能在创建时设）、可用模型、预设、IP 白名单、速率限制、启用或停用。业务速率限制由后台配置，见下文。
-- **管理 key** 是独立的程序化操作者，由控制台的 `api_keys.manage` 与 `api_keys.view` 权限共同签发（创建参数 `kind: management`），必须在将来到期。范围固定为本站自己的账户，角色固定为调用 key 管理员；不能调用模型、创建或修改管理 key、修改账户或工作区预算、访问账单或支付。
+- **管理 key** 是独立的程序化操作者，由控制台的 `api_keys.manage` 与 `api_keys.view` 权限共同签发（创建参数 `kind: management`），必须在将来到期。范围固定为本站自己的账户，角色固定为调用 key 管理员；不能调用模型、创建或修改管理 key、修改账户或工作区预算、访问控制台的账单或支付；只读的 `/api/v1/key` 和 `/api/v1/credits` 例外，OpenRouter 的管理 key 也读这两个接口（见[接入的决策](gateway.md#决策与理由)）。
   - `/api/v1/keys` 的 GET/POST 和 `/api/v1/keys/{hash}` 的 GET/PATCH/DELETE 使用 Bearer 管理 key，不接受调用 key 或登录 Cookie。创建只返回一次明文；hash 是非秘密的、不带连字符的 key UUID，客户端应当作不透明标识保存。
   - 新调用 key 默认继承管理 key 的花费上限及重置周期、可用模型、IP 白名单、到期时间。显式设置只能收紧；有花费上限的管理 key 不允许清除上限或改变重置周期（不同窗口不能简单比较大小）。过期时间不能晚于管理 key，不能指定其他账户的工作区或伪造创建人。修改已有调用 key 时，纯收紧允许保留原有到期等上界之外的设置（例如停用旧的永久 key），因为不新增授权；扩大权限或重新启用仍须满足全部边界。管理 key 的上限是每把调用 key 的签发上界，不是额外的汇总消费池；所有调用仍受账户余额和工作区预算约束。之后由控制台收紧管理 key 不追溯撤销已签发的调用 key，需显式停用或删除调用 key。
   - 所有操作每次读库验证站点、域名、账户、工作区、状态、到期和 IP；更改与管理 key 行锁内的授权、审计同事务，审计主体为 `management_key:<uuid>`。每把管理 key 每个数据库 UTC 分钟最多 60 个请求，跨节点共享；无效操作也消耗次数，429 带 `Retry-After`，数据库故障不放行。创建管理 key 与调用 key 共用账户数量和每小时创建上限。
@@ -244,7 +244,7 @@ E4-6/7/8 与充值权限依据同一[负责人授权记录](https://github.com/T
 | 每站点一行安全计数，保存当前 UTC 分钟与尚未采样的完整窗口峰值；后台每站点每分钟至多一条信号 | 请求不持久化平台信号，不争用全局消费锁；固定内存保留完整窗口峰值，避免窗口复位吞掉攻击。积压时合并峰值而非无限保存历史；消费时逐条评估完整样本，后续恢复不能抹掉首通知。只计猜凭证，限流拒绝、表单错误和正常会话失效不计 |
 | 新权限由迁移写入角色的 additional_permissions，旧 permissions 投影不变；新快照合并两列并忽略未知名字 | 仅修改新版本加载器不能保护仍运行的旧二进制。新增列使旧查询不见新名字，避免迁移先行造成全站快照过期；迁移权限拼写由测试核对。待旧节点退场前不合并两列 |
 | `balance.top_up` 给 owner、admin、finance，viewer 只读 | 财务可以买额度，普通成员和观察者不能发起支付；getOrder 与余额仍用 balance.view。listPaymentMethods 会创建报价，故也属于四个受保护操作 |
-| 账户暂停用 403 与 OpenRouter 错误外壳 | 2026-10-29 核实 [OpenRouter 官方错误文档](https://github.com/OpenRouterTeam/docs/blob/main/api_reference/errors-and-debugging.mdx)：403 用于权限拒绝，Messages 用 permission_error；Axiom 的统一分类及 Chat/Responses 字符串 code 为 permission_denied，有意偏离数字码的理由见[接入的错误决策](gateway.md#决策与理由) |
+| 账户暂停用 403 与 OpenRouter 错误外壳 | 2026-10-29 核实 [OpenRouter 官方错误文档](https://github.com/OpenRouterTeam/docs/blob/main/api_reference/errors-and-debugging.mdx)：403 用于权限拒绝，Messages 用 permission_error；Axiom 统一分类为 `permission_denied`，Chat/Responses 的 `error.code` 是数字 403，与 OpenRouter 一致，见[接入的错误决策](gateway.md#决策与理由) |
 
 
 E4-11 的第三方登录与通行密钥按[负责人授权记录](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)落地：数据模型、对外接口和保存规则由编排者决定并写在这里，独立评审照常进行。
