@@ -281,9 +281,8 @@ func (l *Loop) due(ctx context.Context, endpoints []suppliers.Routable, now time
 		e := l.monitor.Live(ep.ID, ep.Credentials)
 		e.mu.Lock()
 		e.lastSeen = now
-		l.warnDown(e, now)
 		r := e.record
-		if l.monitor.mode == Enforce && ep.Platform() && r.Opened != 0 && r.Next <= now.UnixNano() && r.Lease <= now.UnixNano() && e.pending == 0 {
+		if l.monitor.mode == Enforce && ep.Platform() && e.probeable && r.Opened != 0 && r.Next <= now.UnixNano() && r.Lease <= now.UnixNano() && e.pending == 0 {
 			if ep.Funds != nil && !ep.Funds.CanPay(platform.Exact{}) {
 				l.probeMetric(ctx, "deferred")
 			} else if until := l.pauses.PausedUntil(ep.ID, ep.Supplier); until.After(now) {
@@ -316,20 +315,17 @@ func compareNextProbe(a, b *State) int {
 	return a.id.Compare(b.id)
 }
 
-func (l *Loop) warnDown(e *State, now time.Time) {
-	r := e.record
-	if r.Opened != 0 && !r.Warned && now.Sub(time.Unix(0, r.Opened)) >= time.Hour && r.Lease <= now.UnixNano() && e.pending == 0 {
-		r.Warned = true
-		l.monitor.transition(e, r, "still_down", false)
-	}
-}
-
 func (l *Loop) probe(ctx context.Context, claim healthRecord, ep suppliers.Routable, prompt string) {
 	end := probeEnd{claim: claim}
+	format, ok := probeFormat(ep.Formats)
+	if !ok {
+		l.done <- end // a direct-format endpoint cannot be re-checked by a generation; due never schedules one
+		return
+	}
 	ctx, cancel := context.WithTimeout(ctx, suppliers.TestDeadline+2*probeCommitGrace)
 	defer cancel()
 	end.err = l.db.Tx(ctx, l.scope, func(tx pg.Tx) error {
-		result, err := l.generate(ctx, tx, suppliers.TestRequest{Endpoint: ep.ID, Format: ep.Formats[0], Prompt: prompt, AvoidCredential: claim.Credential}, "automatic health recovery")
+		result, err := l.generate(ctx, tx, suppliers.TestRequest{Endpoint: ep.ID, Format: format, Prompt: prompt, AvoidCredential: claim.Credential}, "automatic health recovery")
 		end.result = result
 		return err
 	})
@@ -379,10 +375,17 @@ func (l *Loop) finish(ctx context.Context, end probeEnd) {
 		r.Opened = 0
 		r.Restored = now.UnixNano()
 		r.Next = 0
+		r.Warned = false
 		kind = "restored"
 	case suppliers.TestFailed:
 		e.count(failure, now)
 		r.Backoff = min(r.Backoff+1, 5)
+		if !r.Warned {
+			// The trip only took the endpoint out; this failed re-check is what marks it offline and tells operations.
+			// A later failed probe keeps the state without repeating the signal (docs/domains/quality.md「恢复」).
+			r.Warned = true
+			kind = "offline"
+		}
 	case suppliers.TestInconclusive:
 	}
 	l.reschedule(&r, end.result.Failure, now)
