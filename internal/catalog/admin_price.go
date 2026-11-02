@@ -200,12 +200,28 @@ func (c *Catalog) allowRequest(s Schedule) error {
 	return nil
 }
 
+// allowFileSearch refuses a price on the file_search item while this release does not publish it: the item's name and
+// ability are new entries in closed enumerations, so a node running an older release cannot read either.
+func (c *Catalog) allowFileSearch(s Schedule) error {
+	if !c.cfg.FileSearch && s.Priced(1<<ItemFileSearch) {
+		return ErrFileSearch
+	}
+	return nil
+}
+
+// AllowSchedule applies the same new-item switches to a price list stored outside the catalog, such as a billing rule's
+// fixed price: that price reaches the same published versions, so the switch must be checked before the rule is saved.
+func (c *Catalog) AllowSchedule(s Schedule) error { return c.allowPrices(s) }
+
 // allowPrices applies every new-item compatibility switch before a price is written to the catalog.
 func (c *Catalog) allowPrices(s Schedule) error {
 	if err := c.allowCounted(s); err != nil {
 		return err
 	}
-	return c.allowRequest(s)
+	if err := c.allowRequest(s); err != nil {
+		return err
+	}
+	return c.allowFileSearch(s)
 }
 
 func publishIn(ctx context.Context, tx pg.Tx, r PublishPriceRequest, n newPrice) (outcome, error) {

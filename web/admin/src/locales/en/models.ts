@@ -56,6 +56,7 @@ export default {
     image_out: "Image out",
     web_search: "Web search",
     code_execution: "Code execution",
+    file_search: "File search",
   },
   tier: { standard: "Standard", flex: "Flex", priority: "Priority", fast: "Fast" },
   spec: {

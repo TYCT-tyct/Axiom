@@ -21,7 +21,6 @@ func TestInspectRefusesUnpricedServerTools(t *testing.T) {
 		{protocol.Messages, `"tools":[{"type":"tool_search_tool_bm25_20251119","name":"tool_search_tool_bm25"}]`, "tool_search_tool_"},
 		{protocol.Messages, `"tools":[{"type":"advisor_20260301","name":"advisor"}]`, "advisor_"},
 		{protocol.Responses, `"tools":[{"type":"mcp","server_label":"m","server_url":"https://example.com/mcp"}]`, "mcp"},
-		{protocol.Responses, `"tools":[{"type":"file_search","vector_store_ids":["vs_test"]}]`, "file_search"},
 		{protocol.Responses, `"tools":[{"type":"image_generation"}]`, "image_generation"},
 		{protocol.Responses, `"tools":[{"type":"programmatic_tool_calling"}]`, "programmatic_tool_calling"},
 		{protocol.Responses, `"tools":[{"type":"shell","environment":{"type":"container_auto"}}]`, "shell"},

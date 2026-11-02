@@ -49,10 +49,11 @@ func (e *RuleRefusal) Error() string {
 func (*RuleRefusal) Unwrap() error { return ErrRuleRefuses }
 
 // Unpriced is the part of r the sale price s does not price, which keeps the model off routing: the listing threshold of
-// docs/domains/billing.md「定价」. The known per-use items are not part of it: every currency has a default price for each
-// of them, which admission fills in (docs/domains/billing.md「价目表缺项」), so a fixed price list that leaves one out still
-// prices it. What is left is what no default covers, and a call the schedule prices nowhere is charged at the fallback
-// prices rather than nothing.
+// docs/domains/billing.md「定价」. The per-use items with a site-wide default (perUseItems) are not part of it: every
+// currency has a default price for each of them, which admission fills in (docs/domains/billing.md「价目表缺项」), so a
+// fixed price list that leaves one out still prices it. A file search has no default: its schedule must price it, and
+// leaving it out keeps the model unlisted. What is left is what no default covers, and a call the schedule prices
+// nowhere is charged at the fallback prices rather than nothing.
 func Unpriced(s catalog.Schedule, r catalog.Reportable) catalog.Reportable {
 	r.Items &^= perUseItems
 	return s.Missing(r)

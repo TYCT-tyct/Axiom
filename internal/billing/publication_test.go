@@ -69,7 +69,7 @@ func (f *priceFixture) multiplier(value string) {
 	in := f.rule.RuleInput
 	in.Method = faced(value)
 	if err := f.tx(func(tx pg.Tx) (err error) {
-		f.rule, err = UpdateRule(f.t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, "price test", nil)
+		f.rule, err = UpdateRule(f.t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, nil, "price test", nil)
 		return err
 	}); err != nil {
 		f.t.Fatal(err)
@@ -214,7 +214,7 @@ func TestCostPlusAndUnknownCosts(t *testing.T) {
 	in := f.rule.RuleInput
 	in.Method = plus("0.25")
 	if err := f.tx(func(tx pg.Tx) (err error) {
-		f.rule, err = UpdateRule(t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, "cost plus", nil)
+		f.rule, err = UpdateRule(t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, nil, "cost plus", nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)

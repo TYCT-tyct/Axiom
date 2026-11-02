@@ -53,6 +53,7 @@ const (
 	StructuredOutput                          // a JSON schema or JSON mode for the reply
 	WebSearch                                 // the vendor's web search, billed per call
 	CodeExecution                             // the vendor's code execution, billed per call
+	FileSearch                                // the vendor's file search, billed per call
 )
 
 // Has reports whether s holds every capability in c.
@@ -120,10 +121,10 @@ type Request struct {
 	InputItems catalog.ItemSet
 	// ServiceTiers are the service tiers the request may be served at.
 	ServiceTiers catalog.ServiceTierSet
-	// WebSearches and CodeExecutions are the most calls the request allows of each such tool it enables, 0 when it
-	// sets no limit and the model's default applies. A rerank request sets WebSearches to one: its search unit is
-	// priced as a web search, though the request does not ask for the model's web_search ability.
-	WebSearches, CodeExecutions int64
+	// WebSearches, CodeExecutions and FileSearches are the most calls the request allows of each such tool it
+	// enables, 0 when it sets no limit and the model's default applies. A rerank request sets WebSearches to one: its
+	// search unit is priced as a web search, though the request does not ask for the model's web_search ability.
+	WebSearches, CodeExecutions, FileSearches int64
 	// ServerSearch is OpenRouter's openrouter:web_search server tool, nil when the request declares none. The gateway
 	// runs the loop it stands for, or maps it to the provider's own search, and removes the declaration before an
 	// endpoint sees it (docs/domains/gateway.md「服务端工具」).
@@ -218,6 +219,9 @@ func Inspect(f Format, body []byte) (Request, error) {
 	}
 	if f == Responses && s.r.HasMaxToolCalls && s.r.Needs.Has(WebSearch) && s.r.ServerSearch == nil {
 		s.r.WebSearches = s.r.MaxToolCalls
+	}
+	if f == Responses && s.r.HasMaxToolCalls && s.r.Needs.Has(FileSearch) {
+		s.r.FileSearches = s.r.MaxToolCalls
 	}
 	return s.r, nil
 }

@@ -106,6 +106,7 @@ export const modelAbilities = [
   "structured_output",
   "web_search",
   "code_execution",
+  "file_search",
 ] as const;
 
 type ModelAbility = (typeof modelAbilities)[number];

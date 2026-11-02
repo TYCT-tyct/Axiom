@@ -161,6 +161,7 @@ const (
 	CacheWrite    BillingItem = "cache_write"
 	CacheWrite1h  BillingItem = "cache_write_1h"
 	CodeExecution BillingItem = "code_execution"
+	FileSearch    BillingItem = "file_search"
 	ImageIn       BillingItem = "image_in"
 	ImageOut      BillingItem = "image_out"
 	Input         BillingItem = "input"
@@ -183,6 +184,8 @@ func (e BillingItem) Valid() bool {
 	case CacheWrite1h:
 		return true
 	case CodeExecution:
+		return true
+	case FileSearch:
 		return true
 	case ImageIn:
 		return true
@@ -3437,6 +3440,9 @@ type Rates struct {
 
 	// CodeExecution A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at most 15 decimals and at most 1000 per unit.
 	CodeExecution *UnitPrice `json:"code_execution,omitempty"`
+
+	// FileSearch A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at most 15 decimals and at most 1000 per unit.
+	FileSearch *UnitPrice `json:"file_search,omitempty"`
 
 	// ImageIn A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at most 15 decimals and at most 1000 per unit.
 	ImageIn *UnitPrice `json:"image_in,omitempty"`

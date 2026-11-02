@@ -406,6 +406,7 @@ func capabilities(abilities catalog.AbilitySet) (c protocol.Capabilities) {
 		{catalog.AbilityStructuredOutput, protocol.StructuredOutput},
 		{catalog.AbilityWebSearch, protocol.WebSearch},
 		{catalog.AbilityCodeExecution, protocol.CodeExecution},
+		{catalog.AbilityFileSearch, protocol.FileSearch},
 	} {
 		if abilities.Has(a.ability) {
 			c |= a.bit

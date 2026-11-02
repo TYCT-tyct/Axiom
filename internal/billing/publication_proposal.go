@@ -48,10 +48,18 @@ func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catal
 		return p, err
 	}
 	if matched != nil && p.Problem == "" {
-		if err := p.protectPrice(input, envelope, costErr, policy, defaults, m.Free()); err != nil {
-			p.Problem = err.Error()
-			p.Schedule = nil
-			p.Floor = nil
+		switch {
+		case input.Priced(1<<catalog.ItemFileSearch) && !m.Reportable().Items.Has(catalog.ItemFileSearch):
+			// A rule or reference may price an item the model does not sell. Publishing that price would put a new
+			// item's name into a version every node reads, for a model that never serves it.
+			p.Problem = "the price names file_search, which the model does not declare"
+			p.Schedule, p.Floor = nil, nil
+		default:
+			if err := p.protectPrice(input, envelope, costErr, policy, defaults, m.Free()); err != nil {
+				p.Problem = err.Error()
+				p.Schedule = nil
+				p.Floor = nil
+			}
 		}
 	}
 	raw, err := jsonx.MarshalCanonical(p)

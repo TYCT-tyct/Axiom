@@ -65,6 +65,21 @@ func TestFreeModelPublicationStaysZero(t *testing.T) {
 	}
 }
 
+// TestFileSearchPriceNeedsTheModelToSellIt: a rule that prices file_search for a model whose spec does not declare it
+// leaves the model unpriced rather than publishing a name every node would read for a tool the model never serves.
+func TestFileSearchPriceNeedsTheModelToSellIt(t *testing.T) {
+	t.Parallel()
+	schedule := `{"v":1,"currency":"USD","rates":{"input":"0.000001","file_search":"0.0025"}}`
+	rule := Rule{Enabled: true, Target: Selector{Kind: "all"}, Method: Method{Kind: "fixed", Schedule: jsonx.Raw(schedule)}, ID: uuid.NewV7(), Rev: 1}
+	p, err := proposePrice(defaultPricePolicy(), []Rule{rule}, catalog.Model{Slug: "acme/alpha"}, nil, usd, nil, fallbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Problem == "" || len(p.Schedule) != 0 {
+		t.Errorf("problem %q, schedule %s; want the model unpriced", p.Problem, p.Schedule)
+	}
+}
+
 // TestSoldZeroChecksEveryAudience: a :free model is safe only if no published layer, not just the default, has a
 // non-zero price.
 func TestSoldZeroChecksEveryAudience(t *testing.T) {
@@ -213,6 +228,7 @@ func TestSellRefusesConstraints(t *testing.T) {
 func TestUnpriced(t *testing.T) {
 	t.Parallel()
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"2"}}`)
+	priced := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"2","file_search":"0.0025"}}`)
 	for _, tc := range []struct {
 		name string
 		r    catalog.Reportable
@@ -221,6 +237,7 @@ func TestUnpriced(t *testing.T) {
 		{"everything it reports, priced", catalog.Reportable{Items: 1<<in | 1<<catalog.ItemOutput}, catalog.Reportable{}},
 		{"a token item it lacks", catalog.Reportable{Items: 1<<in | 1<<catalog.ItemCacheRead}, catalog.Reportable{Items: 1 << catalog.ItemCacheRead}},
 		{"a per-use item it lacks is the site's default", catalog.Reportable{Items: 1<<in | 1<<webSearch | 1<<codeExec}, catalog.Reportable{}},
+		{"a file search it lacks is not the site's default", catalog.Reportable{Items: 1 << catalog.ItemFileSearch}, catalog.Reportable{Items: 1 << catalog.ItemFileSearch}},
 		{"a service tier it does not offer", catalog.Reportable{ServiceTiers: 1 << catalog.ServiceTierPriority}, catalog.Reportable{ServiceTiers: 1 << catalog.ServiceTierPriority}},
 		{"reasoning falls back to output", catalog.Reportable{Items: 1 << catalog.ItemReasoning}, catalog.Reportable{}},
 		{
@@ -232,6 +249,9 @@ func TestUnpriced(t *testing.T) {
 		if got := Unpriced(s, tc.r); got != tc.want {
 			t.Errorf("%s: Unpriced = %+v, want %+v", tc.name, got, tc.want)
 		}
+	}
+	if got := Unpriced(priced, catalog.Reportable{Items: 1 << catalog.ItemFileSearch}); got != (catalog.Reportable{}) {
+		t.Errorf("a priced file search: Unpriced = %+v, want nothing", got)
 	}
 }
 

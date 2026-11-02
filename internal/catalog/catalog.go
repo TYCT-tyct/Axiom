@@ -31,6 +31,10 @@ type Config struct {
 	// request prices is not the release that opened counted items; the same rolling-upgrade rule applies: keep it off
 	// until every node runs a release that reads "request" (README.md「新增计费项与滚动升级」).
 	RequestPrices bool
+	// FileSearch allows the file_search item and ability, which add names to both closed enumerations a spec and a
+	// price schedule carry. It has its own switch because the release that first reads them is not the release that
+	// publishes them: keep it off until every node runs a release that reads them, like RequestPrices.
+	FileSearch bool
 }
 
 // ErrStale is what Current returns when the snapshot is missing, or the database has not confirmed it for longer than
@@ -45,6 +49,10 @@ var ErrCountedItems = errors.New("catalog: prices for counted items wait until e
 // ErrRequestPrices is what a publish or a source switch returns for a per-request price while Config.RequestPrices is
 // off: an older release's parser rejects the name and would drop the whole snapshot.
 var ErrRequestPrices = errors.New("catalog: request prices wait until every node reads them")
+
+// ErrFileSearch is what a publish, a spec save or a source switch returns for the file_search item or ability while
+// Config.FileSearch is off: an older release's parser rejects the names and would drop the whole snapshot.
+var ErrFileSearch = errors.New("catalog: file search waits until every node reads it")
 
 // Catalog holds the node's snapshot and runs the admin operations. The platform scope is given by cmd/axiom.
 type Catalog struct {
@@ -402,7 +410,7 @@ func parseToolUses(w map[string]int64) (map[Item]int64, error) {
 	}
 	for name, n := range w {
 		it, err := ParseItem(name)
-		if err != nil || (it != ItemWebSearch && it != ItemCodeExecution) || n <= 0 || n > 1e10 {
+		if err != nil || (it != ItemWebSearch && it != ItemCodeExecution && it != ItemFileSearch) || n <= 0 || n > 1e10 {
 			return nil, fmt.Errorf("spec max_uses: %s must name a supported server tool with an integer from 1 to 10000000000", name)
 		}
 		uses[it] = n
@@ -470,6 +478,8 @@ func parseSavedSpec(raw []byte) (spec, error) {
 		return spec{}, errors.New("spec says the model thinks (thinking) and does not list reasoning in its abilities")
 	case !reasons && s.reasoning != 0:
 		return spec{}, errors.New("spec says reasoning shows in a stream (reasoning_visible) and does not list reasoning in its abilities")
+	case s.serving.Abilities.Has(AbilityFileSearch) && !s.reportable.Items.Has(ItemFileSearch):
+		return spec{}, errors.New("spec lists the file_search ability but not the file_search item its calls are billed as")
 	}
 	return s, nil
 }

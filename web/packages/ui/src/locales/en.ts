@@ -162,6 +162,7 @@ export default {
       image_out: "Image output",
       web_search: "Web search",
       code_execution: "Code execution",
+      file_search: "File search",
       image_in_piece: "Input image",
       image_out_piece: "Output image",
       audio_in_second: "Audio input (second)",
@@ -180,6 +181,7 @@ export default {
       structured_output: "Structured output",
       web_search: "Web search",
       code_execution: "Code execution",
+      file_search: "File search",
     },
   },
   state: {

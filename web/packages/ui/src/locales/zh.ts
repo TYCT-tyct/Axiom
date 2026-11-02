@@ -162,6 +162,7 @@ export default {
       image_out: "图片输出",
       web_search: "联网搜索",
       code_execution: "代码执行",
+      file_search: "文件搜索",
       image_in_piece: "输入图片",
       image_out_piece: "输出图片",
       audio_in_second: "音频输入（秒）",
@@ -180,6 +181,7 @@ export default {
       structured_output: "结构化输出",
       web_search: "联网搜索",
       code_execution: "代码执行",
+      file_search: "文件搜索",
     },
   },
   state: {

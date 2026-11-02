@@ -15,7 +15,7 @@ import (
 func TestItemizedSalePrices(t *testing.T) {
 	t.Parallel()
 
-	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.0000000001","output":"0.0000000002","cache_read":"0.00000000003","cache_write":"0.0000000004","cache_write_1h":"0.0000000005","web_search":"0.01","code_execution":"0.02"},"context_tiers":{"basis":["input","cache_read","cache_write","cache_write_1h"],"method":"whole","tiers":[{"above":100,"rates":{"output":"0.0000000007"}}]},"service_tiers":{"priority":{"rates":{"input":"0.0000000008","output":"0.0000000009"},"context_tiers":[{"above":100,"rates":{"output":"0.000000001"}}]}}}`)
+	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.0000000001","output":"0.0000000002","cache_read":"0.00000000003","cache_write":"0.0000000004","cache_write_1h":"0.0000000005","web_search":"0.01","code_execution":"0.02","file_search":"0.0025"},"context_tiers":{"basis":["input","cache_read","cache_write","cache_write_1h"],"method":"whole","tiers":[{"above":100,"rates":{"output":"0.0000000007"}}]},"service_tiers":{"priority":{"rates":{"input":"0.0000000008","output":"0.0000000009"},"context_tiers":[{"above":100,"rates":{"output":"0.000000001"}}]}}}`)
 	f := fallbacks{perUse: map[catalog.Item]platform.UnitPrice{catalog.ItemWebSearch: mustUnitPrice("0.01"), catalog.ItemCodeExecution: mustUnitPrice("0.02")}}
 	for _, tc := range []struct {
 		name         string
@@ -36,6 +36,9 @@ func TestItemizedSalePrices(t *testing.T) {
 		{name: "undeclared priority uses highest token price", counts: map[catalog.Item]int64{catalog.ItemInput: 1, catalog.ItemOutput: 1}, tier: catalog.ServiceTierPriority, tiers: 1 << catalog.ServiceTierStandard, wantItems: 2, wantSubtotal: "0.000000002", wantOutput: "0.000000001", fallback: true},
 		{name: "missing cache price in priority", counts: map[catalog.Item]int64{catalog.ItemCacheWrite1h: 2}, tier: catalog.ServiceTierPriority, wantItems: 1, wantSubtotal: "0.000000002", fallback: true},
 		{name: "waived model still charges per use", counts: map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 20, catalog.ItemWebSearch: 2, catalog.ItemCodeExecution: 3}, waived: true, wantItems: 2, wantSubtotal: "0.08"},
+		{name: "waived model still charges file search", counts: map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 20, catalog.ItemFileSearch: 2}, waived: true, wantItems: 1, wantSubtotal: "0.005"},
+		{name: "file search is charged beside tokens", counts: map[catalog.Item]int64{catalog.ItemInput: 10, catalog.ItemOutput: 20, catalog.ItemFileSearch: 1}, wantItems: 3, wantSubtotal: "0.002500005", wantOutput: "0.0000000002"},
+		{name: "file search at a tier that does not price it uses its own dearest price", counts: map[catalog.Item]int64{catalog.ItemFileSearch: 1}, tier: catalog.ServiceTierPriority, wantItems: 1, wantSubtotal: "0.0025", fallback: true},
 		{name: "unknowns hide upstream field names", unknown: []catalog.UnknownUsage{{Field: "supplier.secret_tokens", Value: "2"}, {Field: "supplier.secret", Value: "1.1"}, {Field: "prompt_tokens_details.cached_tokens_details.audio_tokens", Value: "9"}}, wantItems: 2, wantSubtotal: "0.040000002", fallback: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,6 +57,33 @@ func TestItemizedSalePrices(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCountedItemMissingAtATierUsesItsUnitPrice: a piece the served tier does not price is charged at the dearest piece
+// price of the schedule, not at the same item's price in another tier, which would undercharge an output image reported
+// as an input image.
+func TestCountedItemMissingAtATierUsesItsUnitPrice(t *testing.T) {
+	t.Parallel()
+	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.0000000001","output":"0.0000000002","image_in_piece":"0.01","image_out_piece":"0.10"},"service_tiers":{"priority":{"rates":{"input":"0.0000000008","output":"0.0000000009"}}}}`)
+	seg := chargeTestSegment(t, map[catalog.Item]int64{catalog.ItemImageInPiece: 1}, catalog.ServiceTierPriority, nil, nil)
+	items := chargeItems(s, fallbacks{}, seg, false, 0)
+	if len(items) != 1 || items[0].Item != "image_in_piece" || items[0].UnitPrice != "0.1" {
+		t.Fatalf("items: %+v", items)
+	}
+	checkChargePrices(t, items, "0.1", "", true)
+}
+
+// TestFileSearchWithoutAnyPriceFallsBackToTokens: a per-use item with no site default is never charged another tool's
+// price; a schedule that prices no file search at all charges it at the dearest token price and marks it estimated.
+func TestFileSearchWithoutAnyPriceFallsBackToTokens(t *testing.T) {
+	t.Parallel()
+	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.0000000001","output":"0.0000000002"}}`)
+	seg := chargeTestSegment(t, map[catalog.Item]int64{catalog.ItemFileSearch: 2}, catalog.ServiceTierStandard, nil, nil)
+	items := chargeItems(s, fallbacks{}, seg, false, 0)
+	if len(items) != 1 || items[0].Item != "file_search" || items[0].UnitPrice != "0.0000000002" {
+		t.Fatalf("items: %+v", items)
+	}
+	checkChargePrices(t, items, "0.0000000004", "", true)
 }
 
 func TestReadChargesLocksSaleAndReconcilesDebit(t *testing.T) {

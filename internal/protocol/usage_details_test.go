@@ -103,7 +103,7 @@ func TestMessagesUsageKeepsItsOwnMembers(t *testing.T) {
 			t.Errorf("Messages shows %q: %s", member, body)
 		}
 	}
-	if !strings.Contains(string(body), `"server_tool_use":{"web_search_requests":2}`) {
+	if !strings.Contains(string(body), `"server_tool_use":{"web_search_requests":2,"code_execution_requests":1}`) {
 		t.Errorf("Messages server_tool_use: %s", body)
 	}
 }

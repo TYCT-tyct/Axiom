@@ -6686,6 +6686,7 @@ components:
         - image_out
         - web_search
         - code_execution
+        - file_search
     ServiceTier:
       type: string
       enum: [standard, flex, priority, fast]
@@ -6720,6 +6721,7 @@ components:
         image_out: {$ref: "#/components/schemas/UnitPrice"}
         web_search: {$ref: "#/components/schemas/UnitPrice"}
         code_execution: {$ref: "#/components/schemas/UnitPrice"}
+        file_search: {$ref: "#/components/schemas/UnitPrice"}
     ContextTier:
       type: object
       required: [above, rates]
