@@ -506,6 +506,8 @@ func checkAttemptRows(t *testing.T, rows []suppliers.AttemptRecord, o Outcome) {
 
 // TestServingEndpointSetsTheCharge: the hold covers the dearest endpoint the plan may try, and settlement charges the
 // price of the endpoint that actually served the attempt, not the model's envelope (docs/domains/billing.md「预留与结算」).
+//
+//nolint:cyclop,gocognit // one reservation and settlement through two endpoint prices
 func TestServingEndpointSetsTheCharge(t *testing.T) {
 	t.Parallel()
 

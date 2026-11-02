@@ -154,19 +154,27 @@ func readPublishedPrice(row ReadPublicationsRow, policy PricePolicy) (Sold, erro
 // endpoint the node cannot serve rather than the whole model (WithCosts).
 func (s Sold) AllowsCosts(model catalog.Model, costs []PriceCost) bool {
 	if s.Endpoints != nil {
-		seen := 0
-		for _, c := range costs {
-			price, ok := s.Endpoints[c.Endpoint]
-			if !ok {
-				continue
-			}
-			seen++
-			if !s.endpointAllows(model, c, price) {
-				return false
-			}
-		}
-		return seen == len(s.Endpoints)
+		return s.allowsEndpointCosts(model, costs)
 	}
+	return s.allowsSharedCosts(model, costs)
+}
+
+func (s Sold) allowsEndpointCosts(model catalog.Model, costs []PriceCost) bool {
+	seen := 0
+	for _, c := range costs {
+		price, ok := s.Endpoints[c.Endpoint]
+		if !ok {
+			continue
+		}
+		seen++
+		if !s.endpointAllows(model, c, price) {
+			return false
+		}
+	}
+	return seen == len(s.Endpoints)
+}
+
+func (s Sold) allowsSharedCosts(model catalog.Model, costs []PriceCost) bool {
 	for _, c := range costs {
 		if Unpriced(c.Schedule, model.Reportable()) != (catalog.Reportable{}) {
 			return false
@@ -238,28 +246,36 @@ func (s Sold) WithCosts(model catalog.Model, costs []PriceCost) Sold {
 		s.Audiences = CompilePrices(layers)
 	}
 	if s.Endpoints != nil {
-		kept := make(EndpointPrices, len(s.Endpoints))
-		for _, c := range costs {
-			if price, ok := s.Endpoints[c.Endpoint]; ok && s.endpointAllows(model, c, price) {
-				kept[c.Endpoint] = price
-			}
+		return s.withEndpointCosts(model, costs)
+	}
+	return s.withSharedCosts(model, costs)
+}
+
+func (s Sold) withEndpointCosts(model catalog.Model, costs []PriceCost) Sold {
+	kept := make(EndpointPrices, len(s.Endpoints))
+	for _, c := range costs {
+		if price, ok := s.Endpoints[c.Endpoint]; ok && s.endpointAllows(model, c, price) {
+			kept[c.Endpoint] = price
 		}
-		if len(kept) == 0 {
-			s.Version = uuid.Nil()
-			s.Schedule = catalog.Schedule{}
-			s.Endpoints = nil
-			return s
-		}
-		// Keep the model-level envelope the envelope of the endpoints this node can serve, so a reader that falls back
-		// to it does not see a price for an endpoint this node withheld. A schedule that cannot be enclosed leaves the
-		// published envelope in place: no charge reads it for an endpoint in the map.
-		if envelope, err := envelopeOf(kept); err == nil {
-			s.Schedule = envelope
-		}
-		s.Endpoints = kept
+	}
+	if len(kept) == 0 {
+		s.Version = uuid.Nil()
+		s.Schedule = catalog.Schedule{}
+		s.Endpoints = nil
 		return s
 	}
-	if !s.AllowsCosts(model, costs) || Unpriced(s.Schedule, model.Reportable()) != (catalog.Reportable{}) {
+	// Keep the model-level envelope the envelope of the endpoints this node can serve, so a reader that falls back to
+	// it does not see a price for an endpoint this node withheld. A schedule that cannot be enclosed leaves the published
+	// envelope in place: no charge reads it for an endpoint in the map.
+	if envelope, err := envelopeOf(kept); err == nil {
+		s.Schedule = envelope
+	}
+	s.Endpoints = kept
+	return s
+}
+
+func (s Sold) withSharedCosts(model catalog.Model, costs []PriceCost) Sold {
+	if !s.allowsSharedCosts(model, costs) || Unpriced(s.Schedule, model.Reportable()) != (catalog.Reportable{}) {
 		s.Version = uuid.Nil()
 		s.Schedule = catalog.Schedule{}
 	}

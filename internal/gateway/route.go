@@ -255,6 +255,26 @@ func (d *RouteDeps) report(left map[catalog.ModelID]*leftOut) {
 	}
 }
 
+// endpointPrice is the price routing holds for one endpoint before the call's audience is selected. The default layer
+// may price fewer endpoints than an audience layer, and the reverse: the endpoint is served only if some layer has a
+// price for it. The default PriceRef is then that layer's, though routing reads the audience's own version for the call.
+func endpointPrice(sold billing.Sold, endpoint uuid.UUID) (routing.PriceRef, string) {
+	price := routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule}
+	if schedule, ok := sold.PriceFor(endpoint); ok {
+		price.Schedule = schedule
+		return price, ""
+	}
+	if sold.Audiences == nil {
+		return price, "no published sale price for this endpoint; check the price publication list and local costs"
+	}
+	for _, layer := range sold.Audiences.Layers() {
+		if schedule, ok := layer.Sold.PriceFor(endpoint); ok {
+			return routing.PriceRef{Version: layer.Sold.Version, Schedule: schedule}, ""
+		}
+	}
+	return price, "no published sale price for this endpoint; check the price publication list and local costs"
+}
+
 // endpointOf is one supplier endpoint as routing holds it, or the reason it cannot be one. The rules are the assembly
 // ones of docs/domains/routing.md「快照从哪来」: nothing is guessed — a model without a spec has no routing entry at all;
 // an endpoint with no sale price for it has none, while another endpoint of the same model can still build.
@@ -296,6 +316,7 @@ func listedModelOf(snap *catalog.Snapshot, id catalog.ModelID) (catalog.Model, s
 	return model, ""
 }
 
+//nolint:cyclop,funlen // one endpoint's routing fields are set once, in the order routing reads them
 func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable,
 	measured quality.Measures,
 ) (routing.Endpoint, string) {
@@ -315,28 +336,9 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		return routing.Endpoint{}, "a :free model has a non-zero sale price for some audience"
 	}
 	reportable := model.Reportable()
-	price := routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule}
-	endpoint := uuid.UUID(r.ID)
-	if schedule, ok := sold.PriceFor(endpoint); ok {
-		price.Schedule = schedule
-	} else {
-		// The default layer may price fewer endpoints than an audience layer, and the reverse: the endpoint is served
-		// only if some layer has a price for it. Its default PriceRef is then that layer's, though routing reads the
-		// audience's own version for the call.
-		if sold.Audiences == nil {
-			return routing.Endpoint{}, "no published sale price for this endpoint; check the price publication list and local costs"
-		}
-		found := false
-		for _, layer := range sold.Audiences.Layers() {
-			if schedule, ok := layer.Sold.PriceFor(endpoint); ok {
-				price = routing.PriceRef{Version: layer.Sold.Version, Schedule: schedule}
-				found = true
-				break
-			}
-		}
-		if !found {
-			return routing.Endpoint{}, "no published sale price for this endpoint; check the price publication list and local costs"
-		}
+	price, why := endpointPrice(sold, r.ID)
+	if why != "" {
+		return routing.Endpoint{}, why
 	}
 	if sold.Audiences == nil && billing.Unpriced(price.Schedule, reportable) != (catalog.Reportable{}) {
 		// Only a reference price was checked against what the model reports when it was listed; a fixed price was not.

@@ -154,6 +154,8 @@ func (l *openRouterListing) shows(v visibility, m catalog.ModelID) bool {
 // model without a sale price is left out for the reason routing leaves its endpoints out, and one whose spec does not
 // declare its limits or whose price cannot fill prompt and completion is left out because OpenRouter's object cannot be
 // written without them.
+//
+//nolint:gocognit // one model at a time: catalog, published price and served endpoints are one publication
 func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	endpoints []routing.Endpoint,
 ) (*openRouterListing, error) {

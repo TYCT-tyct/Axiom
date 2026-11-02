@@ -368,6 +368,8 @@ func TestPricingRuleEditValidatesDisabledChanges(t *testing.T) {
 
 // TestPreviewEndpointRows: a cost-plus proposal shows one row per endpoint, each with its own sale, cost, floor status
 // and margin. The model-level envelope would show only the dearest endpoint and hide the other's price.
+//
+//nolint:cyclop // one cost-plus preview through every endpoint row
 func TestPreviewEndpointRows(t *testing.T) {
 	t.Parallel()
 	f := newPreview(t)

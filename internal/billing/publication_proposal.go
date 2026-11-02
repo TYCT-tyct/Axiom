@@ -43,7 +43,7 @@ type saleProposal struct {
 func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks, rates ...platform.ExchangeRate) (Publication, error) {
 	p := Publication{Model: m.ID, Status: "unpriced"}
 	converted, envelope, costErr := modelPriceCost(costs, m, currency)
-	input, matched, ref, err := priceFromRules(rules, m, snap, converted, envelope, costErr, currency, rates)
+	input, matched, ref, err := priceFromRules(rules, m, snap, converted, costErr, currency, rates)
 	p.matched = matched != nil
 	if matched != nil && matched.Method.Kind != "reference_multiplier" {
 		ref.ID = uuid.Nil()
@@ -95,26 +95,15 @@ func modelPriceCost(costs []PriceCost, m catalog.Model, currency platform.Curren
 	return converted, envelope, nil
 }
 
-func priceFromRules(rules []Rule, m catalog.Model, snap *catalog.Snapshot, converted EndpointPrices, envelope catalog.Schedule, costErr error, currency platform.Currency, rates []platform.ExchangeRate) (saleProposal, *Rule, catalog.ReferencePrice, error) {
+func priceFromRules(rules []Rule, m catalog.Model, snap *catalog.Snapshot, converted EndpointPrices, costErr error, currency platform.Currency, rates []platform.ExchangeRate) (saleProposal, *Rule, catalog.ReferencePrice, error) {
 	for _, r := range rules {
 		if !r.Enabled || !pricesModel(r.Target, m) {
 			continue
 		}
 		ref := saleReference(snap, m.ID, currency, r.Method)
 		if r.Method.Kind == "cost_plus" && r.Constraints == (Constraints{}) {
-			if costErr != nil {
-				return saleProposal{}, &r, ref, costErr
-			}
-			endpoints := make(EndpointPrices, len(converted))
-			for endpoint, cost := range converted {
-				s, err := costPrice(r.Method, cost, currency)
-				if err != nil {
-					return saleProposal{}, &r, ref, err
-				}
-				endpoints[endpoint] = s
-			}
-			requested, err := envelopeOf(endpoints)
-			return saleProposal{requested: requested, endpoints: endpoints, costs: converted}, &r, ref, err
+			proposal, err := costPlusPrice(r, converted, costErr, currency)
+			return proposal, &r, ref, err
 		}
 		s, err := Sell(r, ref, currency, rates...)
 		if errors.Is(err, ErrUnpriced) {
@@ -126,6 +115,23 @@ func priceFromRules(rules []Rule, m catalog.Model, snap *catalog.Snapshot, conve
 		return saleProposal{requested: s}, &r, ref, err
 	}
 	return saleProposal{}, nil, catalog.ReferencePrice{}, ErrUnpriced
+}
+
+// costPlusPrice prices every converted endpoint from its own cost and returns the model-level envelope of the result.
+func costPlusPrice(r Rule, converted EndpointPrices, costErr error, currency platform.Currency) (saleProposal, error) {
+	if costErr != nil {
+		return saleProposal{}, costErr
+	}
+	endpoints := make(EndpointPrices, len(converted))
+	for endpoint, cost := range converted {
+		price, err := costPrice(r.Method, cost, currency)
+		if err != nil {
+			return saleProposal{}, err
+		}
+		endpoints[endpoint] = price
+	}
+	requested, err := envelopeOf(endpoints)
+	return saleProposal{requested: requested, endpoints: endpoints, costs: converted}, err
 }
 
 func saleReference(snap *catalog.Snapshot, model catalog.ModelID, currency platform.Currency, method Method) catalog.ReferencePrice {
@@ -175,6 +181,10 @@ func (p *Publication) protectPrice(input saleProposal, envelope catalog.Schedule
 	if input.endpoints != nil {
 		return p.protectEndpointPrices(input, envelope, costErr, policy, defaults, free)
 	}
+	return p.protectSharedPrice(input, envelope, costErr, policy, defaults, free)
+}
+
+func (p *Publication) protectSharedPrice(input saleProposal, envelope catalog.Schedule, costErr error, policy PricePolicy, defaults fallbacks, free bool) error {
 	input.requested = input.requested.Fill(defaults.perUse)
 	if free && !input.requested.IsZero() {
 		return ErrFreePrice
@@ -214,10 +224,36 @@ func (p *Publication) protectPrice(input saleProposal, envelope catalog.Schedule
 	return nil
 }
 
+// endpointPriceFloors floors every requested endpoint price against its own converted cost and returns the prices and
+// the floors they were checked against.
+func endpointPriceFloors(requested, costs EndpointPrices, policy PricePolicy) (EndpointPrices, EndpointPrices, error) {
+	prices := make(EndpointPrices, len(requested))
+	floors := make(EndpointPrices, len(requested))
+	for endpoint, schedule := range requested {
+		cost, ok := costs[endpoint]
+		if !ok {
+			return nil, nil, ErrUnpriced
+		}
+		floor, err := cost.Scaled(policy.FloorMultiplier, schedule.Currency())
+		if err != nil {
+			return nil, nil, err
+		}
+		floors[endpoint] = floor
+		price, err := schedule.Aligned(floor, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		prices[endpoint] = price
+	}
+	return prices, floors, nil
+}
+
 // protectEndpointPrices floors each endpoint's own price against that endpoint's own converted cost and publishes the
 // dearest of them as the model-level schedule. The model-level schedule is the envelope of the endpoint prices rather
 // than the envelope cost scaled: a node that reads only it then charges exactly the most any endpoint charges, whatever
 // markup, fixed markup, bands or service tiers the endpoints have.
+//
+//nolint:cyclop // the publication fields are written in the order a reader needs them, not in branches
 func (p *Publication) protectEndpointPrices(input saleProposal, envelope catalog.Schedule, costErr error, policy PricePolicy, defaults fallbacks, free bool) error {
 	requested := make(EndpointPrices, len(input.endpoints))
 	for endpoint, schedule := range input.endpoints {
@@ -251,23 +287,9 @@ func (p *Publication) protectEndpointPrices(input saleProposal, envelope catalog
 	if err != nil {
 		return err
 	}
-	prices := make(EndpointPrices, len(requested))
-	floors := make(EndpointPrices, len(requested))
-	for endpoint, schedule := range requested {
-		cost, ok := input.costs[endpoint]
-		if !ok {
-			return ErrUnpriced
-		}
-		floor, err := cost.Scaled(policy.FloorMultiplier, schedule.Currency())
-		if err != nil {
-			return err
-		}
-		floors[endpoint] = floor
-		price, err := schedule.Aligned(floor, false)
-		if err != nil {
-			return err
-		}
-		prices[endpoint] = price
+	prices, floors, err := endpointPriceFloors(requested, input.costs, policy)
+	if err != nil {
+		return err
 	}
 	modelPrice, err := envelopeOf(prices)
 	if err != nil {

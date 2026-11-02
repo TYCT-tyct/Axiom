@@ -57,7 +57,7 @@ func (e *EndpointPrices) UnmarshalJSON(body []byte) error {
 
 func parseEndpointPrices(raw []byte) (EndpointPrices, error) {
 	if len(raw) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // an empty column is no endpoint map, not a failed read
 	}
 	var prices EndpointPrices
 	if err := jsonx.Unmarshal(raw, &prices); err != nil {

@@ -1,10 +1,11 @@
 package gateway
 
 import (
+	"uuid"
+
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/routing"
-	"uuid"
 )
 
 func newAudienceORModel(id string, m catalog.Model, serving catalog.Serving, sold billing.Sold, served []uuid.UUID) (orModel, bool, error) {
