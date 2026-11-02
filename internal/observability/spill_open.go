@@ -33,8 +33,8 @@ func openSpill(dir string, capacity int) (*spill, error) {
 	if dir == "" {
 		return nil, errors.New("observability: the call log needs a spill directory")
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // dir is the operator's AXIOM_CALL_LOG_DIR
-		return nil, fmt.Errorf("observability: call log spill directory: %w", err)
+	if err := makeDir(dir); err != nil {
+		return nil, err
 	}
 	lock, err := lockDir(dir)
 	if err != nil {
@@ -54,7 +54,7 @@ func openSpill(dir string, capacity int) (*spill, error) {
 	}
 	s := &spill{
 		dir: dir, lock: lock, maxBytes: int64(capacity)*(maxRecordBytes+recordHeaderBytes) + spillSegmentBytes,
-		nextSeq: 1, wake: make(chan struct{}, 1), stop: make(chan struct{}),
+		nextSeq: 1, wake: make(chan struct{}, 1), stop: make(chan struct{}), syncDir: syncDir,
 	}
 	if err := s.loadSegments(files, checkpoint); err != nil {
 		return fail(err)
@@ -74,6 +74,32 @@ func openSpill(dir string, capacity int) (*spill, error) {
 		}
 	}
 	return s, nil
+}
+
+// makeDir creates dir and the parents it lacks, then makes each new directory's link durable in its parent: a power
+// loss must not take away a spill directory whose segments already hold records that were served.
+func makeDir(dir string) error {
+	var created []string
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("observability: call log spill directory: %w", err)
+		}
+		created = append(created, d)
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // dir is the operator's AXIOM_CALL_LOG_DIR
+		return fmt.Errorf("observability: call log spill directory: %w", err)
+	}
+	for _, d := range created {
+		if err := syncDir(filepath.Dir(d)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // listSegments reads the directory and returns the segment files in sequence order.

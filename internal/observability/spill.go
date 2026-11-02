@@ -134,7 +134,8 @@ type syncWaiter struct {
 type spill struct {
 	dir      string
 	maxBytes int64
-	lock     *os.File // held for the life of the spill; closing it lets the next process take the directory
+	lock     *os.File               // held for the life of the spill; closing it lets the next process take the directory
+	syncDir  func(dir string) error // syncDir, or a test's failure
 
 	mu       sync.Mutex
 	segments []*spillSegment // oldest first, including the active one
@@ -200,6 +201,13 @@ func (s *spill) createSegmentLocked(seq uint64) error {
 		closeQuietly(file)
 		removeQuietly(path)
 		return fmt.Errorf("observability: sync call log segment header: %w", err)
+	}
+	// The file's fsync does not make its directory entry durable: without this a power loss could drop the whole
+	// segment, records whose Commit returned included.
+	if err := s.syncDir(s.dir); err != nil {
+		closeQuietly(file)
+		removeQuietly(path)
+		return err
 	}
 	segment := &spillSegment{seq: seq, path: path, size: int64(len(spillHeader)), file: file}
 	s.segments = append(s.segments, segment)
@@ -621,13 +629,18 @@ func (s *spill) writeCheckpoint(pos position) error {
 	if err := os.Rename(name, filepath.Join(s.dir, spillPosName)); err != nil {
 		return fmt.Errorf("observability: replace call log checkpoint: %w", err)
 	}
-	dir, err := os.Open(s.dir)
+	return s.syncDir(s.dir)
+}
+
+// syncDir makes the entries of dir durable: the files created, renamed or removed in it.
+func syncDir(dir string) error {
+	file, err := os.Open(dir) //nolint:gosec // dir is the operator's AXIOM_CALL_LOG_DIR or one of its parents
 	if err != nil {
 		return fmt.Errorf("observability: open call log directory: %w", err)
 	}
-	defer closeQuietly(dir)
-	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("observability: sync call log directory: %w", err)
+	defer closeQuietly(file)
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("observability: sync call log directory %s: %w", dir, err)
 	}
 	return nil
 }

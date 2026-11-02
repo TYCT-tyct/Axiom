@@ -136,14 +136,7 @@ func TestCompleteTailCorruptionRefusesStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, attempts, err := newRows(record(uuid.NewV7(), now))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := encodeRecord(call, attempts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := encodedRecord(t)
 	if err := sp.appendSynced(body); err != nil {
 		t.Fatal(err)
 	}
@@ -277,14 +270,7 @@ func TestWriterReadsOnlyDurableRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sp.finish()
-	call, attempts, err := newRows(record(uuid.NewV7(), now))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := encodeRecord(call, attempts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := encodedRecord(t)
 	pos, err := sp.append(body)
 	if err != nil {
 		t.Fatal(err)
@@ -303,4 +289,62 @@ func TestWriterReadsOnlyDurableRecords(t *testing.T) {
 	if !readable() {
 		t.Fatal("the writer cannot read a record after its fsync")
 	}
+}
+
+// TestNewSegmentIsDurableInItsDirectory: a segment's file fsync does not make its directory entry durable, so a power
+// loss could drop a new segment with records whose Commit returned. Its directory is synced after the segment exists
+// and before any Commit can land in it; a failed directory sync fails that Commit instead of reporting it kept.
+func TestNewSegmentIsDurableInItsDirectory(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "spill", "nested") // makeDir creates both levels
+	sp, err := openSpill(dir, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sp.finish()
+	body := encodedRecord(t)
+	var synced []string
+	sp.syncDir = func(d string) error {
+		// The segment being created must already be in the directory when it is synced.
+		if _, err := os.Stat(filepath.Join(d, spillPrefix+fmt.Sprintf("%016d", sp.nextSeq)+spillSuffix)); err != nil {
+			t.Errorf("the directory was synced before its new segment existed: %v", err)
+		}
+		synced = append(synced, d)
+		return nil
+	}
+	sp.mu.Lock()
+	err = sp.rotateLocked()
+	sp.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(synced, []string{dir}) {
+		t.Fatalf("directory syncs = %v, want one of %s for the new segment", synced, dir)
+	}
+
+	failure := errors.New("directory sync failed")
+	sp.syncDir = func(string) error { return failure }
+	sp.mu.Lock()
+	sp.active.size = spillSegmentBytes // the next append must rotate
+	sp.mu.Unlock()
+	if err := sp.appendSynced(body); !errors.Is(err, failure) {
+		t.Fatalf("Commit into a segment whose directory sync failed = %v, want the failure", err)
+	}
+	if err := sp.appendSynced(body); err == nil {
+		t.Fatal("the spill took another record after a failed directory sync")
+	}
+}
+
+// encodedRecord is one valid record as Commit appends it.
+func encodedRecord(t *testing.T) []byte {
+	t.Helper()
+	call, attempts, err := newRows(record(uuid.NewV7(), now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := encodeRecord(call, attempts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }
