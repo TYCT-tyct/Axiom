@@ -114,7 +114,7 @@ func (h *Handler) keyInfo(ctx context.Context, tx pg.Tx, a accounts.Admission, _
 	data := map[string]any{
 		"label": info.Label, "name": info.Name, "usage": credits(use.Total), "usage_daily": credits(use.Day),
 		"usage_weekly": credits(use.Week), "usage_monthly": credits(use.Month), "limit": nil, "limit_remaining": nil,
-		"limit_reset": nil, "expires_at": nil, "is_free_tier": false, "is_management_key": a.Kind() == accounts.ManagementKey,
+		"limit_reset": nil, "expires_at": nil, "is_free_tier": false, "is_management_key": a.KeyKind() == accounts.ManagementKey,
 		"budgets": []budgetView{}, "effective_budget": nil, "rate_limit": h.keyRateLimit(a),
 	}
 	if limited {

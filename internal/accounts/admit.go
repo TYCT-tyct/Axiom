@@ -42,8 +42,9 @@ func (a Admission) OwnerID() UserID { return a.owner }
 // Caller is the key admitted.
 func (a Admission) Caller() Caller { return a.caller }
 
-// Kind is the kind of key admitted: CallKey, or ManagementKey for the read-only endpoints OpenRouter opens to them.
-func (a Admission) Kind() string { return a.kind }
+// KeyKind is the kind of key admitted: CallKey, or ManagementKey for the read-only endpoints OpenRouter opens to
+// them. It is not named Kind: that method belongs to River job arguments, and the queue table reads every Kind.
+func (a Admission) KeyKind() string { return a.kind }
 
 // Scope is the key's account: the scope of the call's later transactions (extending, settling). It comes only from an
 // Admission, so only an admitted call has it.
@@ -113,7 +114,7 @@ func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(t
 
 // AdmitRead is Admit for the read-only endpoints OpenRouter opens to management keys as well as call keys. A
 // management key stays unable to make a model call, which asks for a call key alone, and a call key sees what it
-// always saw; the ManagementKey in Admission.Kind tells the reader which one asked.
+// always saw; the ManagementKey in Admission.KeyKind tells the reader which one asked.
 func (s *Service) AdmitRead(ctx context.Context, c Caller, r AdmitRequest, fn func(tx pg.Tx, a Admission) error) error {
 	if c == (Caller{}) {
 		return ErrUnknownKey
