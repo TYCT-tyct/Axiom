@@ -3,6 +3,8 @@ package observability
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -10,7 +12,6 @@ import (
 	"time"
 	"uuid"
 
-	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
 )
 
@@ -90,14 +91,62 @@ func (s *sink) open() {
 	s.gate = nil
 }
 
-func recorderOf(s *sink, cfg Config) *Recorder {
+// recorderOf starts a recorder on a sink. Every test gets its own spill directory; Capacity defaults to 100 for tests
+// that want only the batching behavior.
+func recorderOf(t *testing.T, s *sink, cfg Config) *Recorder {
+	t.Helper()
+	if cfg.Dir == "" {
+		cfg.Dir = t.TempDir()
+	}
+	if cfg.Capacity == 0 {
+		cfg.Capacity = 100
+	}
 	if cfg.RetryBase == 0 {
 		cfg.RetryBase, cfg.RetryMax = time.Millisecond, 4*time.Millisecond
 	}
 	if cfg.WriteTimeout == 0 {
 		cfg.WriteTimeout = 5 * time.Second
 	}
-	return newRecorder(context.Background(), cfg, s.write, func(err error) bool { return errors.Is(err, errPoison) }, quiet)
+	r, err := newRecorder(context.Background(), cfg, s.write, func(err error) bool { return errors.Is(err, errPoison) }, quiet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { crash(r) })
+	return r
+}
+
+// recorderOfDB is recorderOf on the real database.
+func recorderOfDB(t *testing.T, db *pg.DB, cfg Config) *Recorder {
+	t.Helper()
+	if cfg.Dir == "" {
+		cfg.Dir = t.TempDir()
+	}
+	if cfg.Capacity == 0 {
+		cfg.Capacity = 100
+	}
+	if cfg.RetryBase == 0 {
+		cfg.RetryBase, cfg.RetryMax = time.Millisecond, 4*time.Millisecond
+	}
+	if cfg.WriteTimeout == 0 {
+		cfg.WriteTimeout = 5 * time.Second
+	}
+	r, err := newRecorder(context.Background(), cfg, dbWriter(db, platformScope), isBadRow, quiet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { crash(r) })
+	return r
+}
+
+// crash stops a recorder the way a killed process would: no drain and no close, only the files on disk. It is also
+// the cleanup for a test that already closed the recorder, where everything is a no-op.
+func crash(r *Recorder) {
+	r.mu.Lock()
+	r.closing = true
+	r.mu.Unlock()
+	r.spill.stopNow()
+	r.giveUp()
+	<-r.Done()
 }
 
 func calls(n int) []CallRecord {
@@ -119,7 +168,7 @@ func ids(records []CallRecord) []string {
 // eventually waits for cond, which the writer goroutine makes true.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
 		if cond() {
 			return
 		}
@@ -141,7 +190,7 @@ func enqueueAll(t *testing.T, r *Recorder, records []CallRecord) {
 func TestBatchesFlushOnSizeAndOnTime(t *testing.T) {
 	t.Parallel()
 	s := &sink{}
-	r := recorderOf(s, Config{QueueSize: 100, BatchSize: 3, FlushInterval: time.Hour})
+	r := recorderOf(t, s, Config{Capacity: 100, BatchSize: 3, FlushInterval: time.Hour})
 	records := calls(3)
 	enqueueAll(t, r, records)
 	eventually(t, "a full batch to be written without waiting for the interval", func() bool {
@@ -158,7 +207,7 @@ func TestBatchesFlushOnSizeAndOnTime(t *testing.T) {
 	// A partial batch waits for its interval: with an interval this test cannot outlast, nothing is written before
 	// Close, which writes it.
 	s = &sink{}
-	r = recorderOf(s, Config{QueueSize: 100, BatchSize: 100, FlushInterval: time.Hour})
+	r = recorderOf(t, s, Config{Capacity: 100, BatchSize: 100, FlushInterval: time.Hour})
 	one := calls(1)
 	enqueueAll(t, r, one)
 	if got, _ := s.stored(); len(got) != 0 {
@@ -173,7 +222,7 @@ func TestBatchesFlushOnSizeAndOnTime(t *testing.T) {
 
 	// ...and the interval writes it when it passes.
 	s = &sink{}
-	r = recorderOf(s, Config{QueueSize: 100, BatchSize: 100, FlushInterval: 30 * time.Millisecond})
+	r = recorderOf(t, s, Config{Capacity: 100, BatchSize: 100, FlushInterval: 30 * time.Millisecond})
 	enqueueAll(t, r, one)
 	eventually(t, "the interval to flush a partial batch", func() bool { got, _ := s.stored(); return len(got) == 1 })
 	if got := s.attemptsStored(); got != 2 {
@@ -184,60 +233,87 @@ func TestBatchesFlushOnSizeAndOnTime(t *testing.T) {
 	}
 }
 
-// TestFullQueueDropsWithoutBlocking: with the writer stuck and the queue full, Enqueue returns at once and says the
-// record was dropped; it never waits for room. The records accepted before it are still written, and Close reports the
-// lost call and its attempts.
-func TestFullQueueDropsWithoutBlocking(t *testing.T) {
+// TestFullSpillRefusesWithoutBlocking: with the writer stuck and every reservation taken, Admit and Enqueue return at
+// once and lose no record; the two calls already admitted are still written when the writer recovers.
+func TestFullSpillRefusesWithoutBlocking(t *testing.T) {
 	t.Parallel()
 	s := &sink{gate: make(chan struct{})}
-	r := recorderOf(s, Config{QueueSize: 2, BatchSize: 1, FlushInterval: time.Millisecond})
-	records := calls(6)
+	r := recorderOf(t, s, Config{Capacity: 2, BatchSize: 1, FlushInterval: time.Millisecond})
+	records := calls(4)
 	enqueueAll(t, r, records[:1])
-	eventually(t, "the writer to take the first record", func() bool { depth, _ := r.AlertSample(); return len(r.queue) == 0 && depth == 1 })
-	enqueueAll(t, r, records[1:3]) // two fill the queue behind the stuck write
-	eventually(t, "the queue to fill", func() bool { return len(r.queue) == 2 })
+	eventually(t, "the writer to take the first record", func() bool { return r.spill.pendingCount() == 1 })
+	enqueueAll(t, r, records[1:2])
 
 	done := make(chan error, 1)
-	go func() { done <- r.Enqueue(records[3]) }()
+	go func() { done <- r.Enqueue(records[2]) }()
 	select {
 	case err := <-done:
-		if !errors.Is(err, ErrQueueFull) {
-			t.Fatalf("Enqueue on a full queue = %v, want ErrQueueFull", err)
+		if !errors.Is(err, ErrBacklog) {
+			t.Fatalf("Enqueue with every reservation taken = %v, want ErrBacklog", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Enqueue blocked on a full queue")
+		t.Fatal("Enqueue blocked on a full spill")
+	}
+	if lost := r.lost.Load(); lost != 0 {
+		t.Fatalf("%d records lost when admission refused one; refusal must not drop an existing record", lost)
+	}
+	if got := r.spill.pendingCount(); got != 2 {
+		t.Fatalf("%d records in the spill, want 2", got)
 	}
 
-	if depth, lost := r.AlertSample(); depth != 3 || lost != 1 {
-		t.Fatalf("alert sample depth=%d lost=%d", depth, lost)
-	}
 	s.open()
-	err := r.Close(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "1 call records") || !strings.Contains(err.Error(), "2 attempts") {
-		t.Errorf("Close = %v, want it to report the one dropped call and its two attempts", err)
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
 	}
-	got, _ := s.stored()
-	if !slices.Equal(got, ids(records[:3])) {
-		t.Errorf("stored %v, want the three records queued before the drop", got)
-	}
-	if got := s.attemptsStored(); got != 6 {
-		t.Errorf("%d attempts stored, want 6", got)
+	if got, _ := s.stored(); !slices.Equal(got, ids(records[:2])) {
+		t.Errorf("stored %v, want the two records accepted before the refusal", got)
 	}
 }
 
-// TestCloseDrainsTheQueue: every queued call and its attempts are written before Close returns, although the interval
-// is long and the batch not full, and Enqueue refuses afterwards.
-func TestCloseDrainsTheQueue(t *testing.T) {
+// TestReservationRelease: a call that ends without a record gives its room back; a committed record keeps the room
+// until the writer acknowledges it.
+func TestReservationRelease(t *testing.T) {
+	t.Parallel()
+	s := &sink{gate: make(chan struct{})}
+	r := recorderOf(t, s, Config{Capacity: 1, BatchSize: 1, FlushInterval: time.Hour})
+	first, err := r.Admit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Admit(); !errors.Is(err, ErrBacklog) {
+		t.Fatalf("second Admit = %v, want ErrBacklog", err)
+	}
+	first.Release()
+	second, err := r.Admit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Commit(record(uuid.NewV7(), now)); err != nil {
+		t.Fatal(err)
+	}
+	second.Release() // after Commit this must not free the writer's room
+	if _, err := r.Admit(); !errors.Is(err, ErrBacklog) {
+		t.Fatalf("Admit after a committed Release = %v, want ErrBacklog until the write", err)
+	}
+	s.open()
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCloseDrainsTheSpill: every call and its attempts are written before Close returns, although the interval is
+// long and the batch not full, and Enqueue refuses afterwards.
+func TestCloseDrainsTheSpill(t *testing.T) {
 	t.Parallel()
 	s := &sink{}
-	r := recorderOf(s, Config{QueueSize: 100, BatchSize: 1000, FlushInterval: time.Hour})
+	r := recorderOf(t, s, Config{Capacity: 100, BatchSize: 1000, FlushInterval: time.Hour})
 	records := calls(7)
 	enqueueAll(t, r, records)
 	if err := r.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.stored(); !slices.Equal(got, ids(records)) {
-		t.Errorf("stored %d of %d records after Close", len(got), len(records))
+		t.Errorf("stored %v after Close, want %v", got, ids(records))
 	}
 	if got := s.attemptsStored(); got != 2*len(records) {
 		t.Errorf("%d attempts stored after Close, want %d", got, 2*len(records))
@@ -255,10 +331,8 @@ func TestCloseDrainsTheQueue(t *testing.T) {
 func TestFailedWritesRetryUntilTheyWork(t *testing.T) {
 	t.Parallel()
 	s := &sink{failing: 4}
-	// One batch of exactly the three records, so the four failures and the success are the same write: a short
-	// interval would let a loaded machine split them, and each write would then fail and retry on its own.
-	r := recorderOf(s, Config{
-		QueueSize: 10, BatchSize: 3, FlushInterval: time.Hour, RetryBase: time.Millisecond,
+	r := recorderOf(t, s, Config{
+		Capacity: 10, BatchSize: 3, FlushInterval: time.Hour, RetryBase: time.Millisecond,
 		RetryMax: 4 * time.Millisecond,
 	})
 	records := calls(3)
@@ -277,237 +351,149 @@ func TestFailedWritesRetryUntilTheyWork(t *testing.T) {
 	}
 }
 
-// TestCloseGivesUpWhenItsTimeRunsOut: a database that stays down cannot hold shutdown past its deadline; Close says
-// how many calls and attempts were lost.
-func TestCloseGivesUpWhenItsTimeRunsOut(t *testing.T) {
+// TestCloseDeadlineLeavesTheSpill: a database that stays down cannot hold shutdown past its deadline; Close says how
+// many calls remain, and the next process replays them.
+func TestCloseDeadlineLeavesTheSpill(t *testing.T) {
 	t.Parallel()
+	dir := t.TempDir()
 	s := &sink{failing: 1 << 30}
-	r := recorderOf(s, Config{
-		QueueSize: 10, BatchSize: 2, FlushInterval: time.Millisecond, RetryBase: time.Millisecond,
+	r := recorderOf(t, s, Config{
+		Dir: dir, Capacity: 10, BatchSize: 2, FlushInterval: time.Millisecond, RetryBase: time.Millisecond,
 		RetryMax: 2 * time.Millisecond,
 	})
-	enqueueAll(t, r, calls(5))
+	records := calls(5)
+	enqueueAll(t, r, records)
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	err := r.Close(ctx)
-	if err == nil {
-		t.Fatal("Close reported success with every write failing")
+	if !errors.Is(err, ErrPending) || !strings.Contains(err.Error(), "5 calls remain") {
+		t.Fatalf("Close = %v, want ErrPending with 5 calls", err)
 	}
-	if want := "5 call records"; !strings.Contains(err.Error(), want) {
-		t.Errorf("Close = %q, want it to count %s", err, want)
+
+	// The process gets a healthy database: opening the same directory replays the five records, in order.
+	next := recorderOf(t, &sink{}, Config{
+		Dir: dir, Capacity: 10, BatchSize: 2, FlushInterval: time.Hour,
+	})
+	if got := next.spill.pendingCount(); got != 5 {
+		t.Fatalf("the next recorder found %d records, want 5", got)
 	}
-	if want := "10 attempts"; !strings.Contains(err.Error(), want) {
-		t.Errorf("Close = %q, want it to count %s", err, want)
+	if err := next.Close(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 
-// TestMalformedRecordDoesNotBlockTheRest: a record the database refuses is found by splitting the batch, logged and
-// left out with its attempts; every other call, before and after it, is written.
-func TestMalformedRecordDoesNotBlockTheRest(t *testing.T) {
+// TestDataErrorStopsAdmissionWithoutDropping: a record the database refuses (the fake sink's poison) is a bug or an
+// impossible value, not a reason to serve later calls without a log. Everything stays in the spill and admission
+// refuses until an operator fixes it.
+func TestDataErrorStopsAdmissionWithoutDropping(t *testing.T) {
 	t.Parallel()
-	records := calls(6)
-	s := &sink{poison: records[2].ID.String()}
-	r := recorderOf(s, Config{
-		QueueSize: 10, BatchSize: 6, FlushInterval: time.Hour, RetryBase: time.Millisecond,
+	records := calls(3)
+	s := &sink{poison: records[1].ID.String()}
+	r := recorderOf(t, s, Config{
+		Capacity: 10, BatchSize: 3, FlushInterval: time.Hour, RetryBase: time.Millisecond,
 		RetryMax: time.Millisecond,
 	})
 	enqueueAll(t, r, records)
-	err := r.Close(t.Context())
-	if err == nil {
-		t.Error("Close hid the lost record")
+	eventually(t, "the data error to stop the writer", func() bool { return r.broken.Load() })
+	if _, err := r.Admit(); !errors.Is(err, ErrBroken) {
+		t.Fatalf("Admit after a data error = %v, want ErrBroken", err)
 	}
-	got, _ := s.stored()
-	want := slices.Delete(slices.Clone(ids(records)), 2, 3)
-	slices.Sort(got)
-	slices.Sort(want)
-	if !slices.Equal(got, want) {
-		t.Errorf("stored %d records, want the other 5", len(got))
+	if got := r.spill.pendingCount(); got != 3 {
+		t.Fatalf("%d records in the spill, want 3: a bad row must not be dropped", got)
 	}
-	if n := s.attemptsStored(); n != 10 {
-		t.Errorf("%d attempts stored, want the 10 of the good calls", n)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := r.Close(ctx); !errors.Is(err, ErrPending) || !strings.Contains(err.Error(), "3 calls remain") {
+		t.Fatalf("Close = %v, want ErrPending with 3 calls", err)
 	}
 }
 
-// TestRecorderWritesThroughTheDatabase: the whole path, on a real database, in the platform scope.
-func TestRecorderWritesThroughTheDatabase(t *testing.T) {
+// TestCrashReplaysTheSpillInOrder: records appended before the process dies are written by the next process, in the
+// order they were appended, with their attempts.
+func TestCrashReplaysTheSpillInOrder(t *testing.T) {
 	t.Parallel()
-	db := openDB(t)
-	a := uuid.NewV7()
-	records := []CallRecord{record(a, now), record(a, now.Add(-time.Second)), record(uuid.NewV7(), now)}
-	keep(t, db, records...)
-	if got := list(t, db, accountScope(a), day(a)); len(got) != 2 {
-		t.Errorf("account A has %d calls stored, want 2", len(got))
-	}
-}
-
-// TestEndUserHashIsKeyed: the hash depends on the key and on the identifier, is stable, and is what the row holds.
-func TestEndUserHashIsKeyed(t *testing.T) {
-	t.Parallel()
-	a, b := HashEndUser([]byte("key one"), "user-1"), HashEndUser([]byte("key two"), "user-1")
-	if a == b || a == HashEndUser([]byte("key one"), "user-2") || a != HashEndUser([]byte("key one"), "user-1") || a == (EndUserHash{}) {
-		t.Error("the end-user hash is not a stable function of the key and the identifier")
-	}
-	rec := record(uuid.NewV7(), now)
-	rec.EndUser = a
-	r, attempts, err := newRows(rec)
-	if err != nil || len(r.EndUserHash) != 64 || strings.Contains(r.EndUserHash, "user-1") || len(attempts) != 2 {
-		t.Errorf("row hash %q, %d attempts (%v)", r.EndUserHash, len(attempts), err)
-	}
-}
-
-// TestBadRowDoesNotBlockTheQueueThroughTheRealEncoder: a row the encoder refuses (invalid UTF-8) between good ones is
-// found by splitting, left out with its attempts and counted; the good rows reach the database. The row is put on the
-// queue directly, because Enqueue rejects such text at the boundary (TestEnqueueRejectsText).
-func TestBadRowDoesNotBlockTheQueueThroughTheRealEncoder(t *testing.T) {
-	t.Parallel()
-	db := openDB(t)
-	a := uuid.NewV7()
-	r := newRecorder(t.Context(), Config{
-		QueueSize: 10, BatchSize: 3, FlushInterval: time.Hour, RetryBase: time.Millisecond,
-		RetryMax: time.Millisecond, WriteTimeout: 5 * time.Second,
-	}, dbWriter(db, platformScope), isBadRow, quiet)
-	var records []queued
-	for _, rec := range []CallRecord{record(a, now), record(a, now.Add(-time.Second)), record(a, now.Add(-2*time.Second))} {
-		call, attempts, err := newRows(rec)
-		if err != nil {
-			t.Fatal(err)
-		}
-		records = append(records, queued{call: call, attempts: attempts})
-	}
-	records[1].call.ClientApp = "\xff\xfe"
-	for _, q := range records {
-		r.queue <- q
-	}
-	if err := r.Close(t.Context()); err == nil || !strings.Contains(err.Error(), "1 call records") {
-		t.Errorf("Close = %v, want it to report the one lost row", err)
-	}
-	if got := list(t, db, accountScope(a), day(a)); len(got) != 2 {
-		t.Errorf("%d rows stored, want the 2 good ones", len(got))
-	}
-	if n := attemptsOf(t, db, a); n != 4 {
-		t.Errorf("%d attempts stored, want the 4 of the good calls", n)
-	}
-}
-
-// TestBadAttemptRollsBackItsCallAndIsIsolated: the attempt insert refuses a 65-character error_kind. Because the call
-// and its attempts share one transaction, the call insert rolls back too; splitting the batch then leaves out exactly
-// that call and its attempts, while both neighbours are written whole.
-func TestBadAttemptRollsBackItsCallAndIsIsolated(t *testing.T) {
-	t.Parallel()
-	db := openDB(t)
-	a := uuid.NewV7()
-	before, bad, after := record(a, now), record(a, now.Add(-time.Second)), record(a, now.Add(-2*time.Second))
-	bad.Attempts[0].ErrorKind = strings.Repeat("x", 65)
-	r := newRecorder(t.Context(), Config{
-		QueueSize: 10, BatchSize: 10, FlushInterval: time.Hour, RetryBase: time.Millisecond,
-		RetryMax: time.Millisecond, WriteTimeout: 5 * time.Second,
-	}, dbWriter(db, platformScope), isBadRow, quiet)
-	enqueueAll(t, r, []CallRecord{before, bad, after})
-	err := r.Close(t.Context())
-	if err == nil || err.Error() != "observability: 1 call records were not written (2 attempts lost)" {
-		t.Errorf("Close = %v, want exactly one call and its two attempts lost", err)
-	}
-
-	count := func(table, column string, id uuid.UUID) int {
-		t.Helper()
-		var n int
-		if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
-			return tx.QueryRow(t.Context(), "SELECT count(*) FROM observability."+table+" WHERE "+column+" = $1", id).Scan(&n)
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
-	for _, rec := range []CallRecord{before, after} {
-		if n := count("call_log", "id", rec.ID); n != 1 {
-			t.Errorf("the good call %s has %d rows, want 1", rec.ID, n)
-		}
-		if n := count("call_attempt", "request_id", rec.ID); n != 2 {
-			t.Errorf("the good call %s has %d attempts, want 2", rec.ID, n)
-		}
-	}
-	if n := count("call_log", "id", bad.ID); n != 0 {
-		t.Errorf("the refused call has %d rows, want 0 after the rollback", n)
-	}
-	if n := count("call_attempt", "request_id", bad.ID); n != 0 {
-		t.Errorf("the refused call has %d attempts, want 0 after the rollback", n)
-	}
-}
-
-// TestEnqueueRejectsText: text that cannot be stored is refused when it is queued, so it never reaches a batch, and
-// the same holds for an attempt's text.
-func TestEnqueueRejectsText(t *testing.T) {
-	t.Parallel()
-	r := recorderOf(&sink{}, Config{QueueSize: 1, BatchSize: 1, FlushInterval: time.Millisecond})
-	defer r.Close(t.Context()) //nolint:errcheck // nothing was queued
-	for name, edit := range map[string]func(*CallRecord){
-		"bad UTF-8 in the client app":        func(c *CallRecord) { c.ClientApp = "\xff" },
-		"a NUL in the model":                 func(c *CallRecord) { c.Model = "a\x00b" },
-		"bad UTF-8 in an attempt's egress":   func(c *CallRecord) { c.Attempts[0].Egress = "\xff" },
-		"a NUL in an attempt's error kind":   func(c *CallRecord) { c.Attempts[1].ErrorKind = "a\x00b" },
-		"an attempt with an unknown outcome": func(c *CallRecord) { c.Attempts[0].Outcome = "maybe" },
-	} {
-		rec := record(uuid.NewV7(), now)
-		edit(&rec)
-		if err := r.Enqueue(rec); err == nil {
-			t.Errorf("%s was queued", name)
-		}
-	}
-}
-
-// TestEnqueueRejectsAnIncompleteAttempt: the logs cannot say what happened without an endpoint, a supplier, times or
-// a sequence that runs from one; such a record is refused before it reaches the queue.
-func TestEnqueueRejectsAnIncompleteAttempt(t *testing.T) {
-	t.Parallel()
-	r := recorderOf(&sink{}, Config{QueueSize: 1, BatchSize: 1, FlushInterval: time.Millisecond})
-	defer r.Close(t.Context()) //nolint:errcheck // nothing was queued
-	for name, edit := range map[string]func(*CallRecord){
-		"a nil endpoint":      func(c *CallRecord) { c.Attempts[0].Endpoint = uuid.Nil() },
-		"a nil supplier":      func(c *CallRecord) { c.Attempts[1].Supplier = uuid.Nil() },
-		"no start time":       func(c *CallRecord) { c.Attempts[0].StartedAt = time.Time{} },
-		"finish before start": func(c *CallRecord) { c.Attempts[1].FinishedAt = c.Attempts[1].StartedAt.Add(-time.Second) },
-		"a sequence gap":      func(c *CallRecord) { c.Attempts[1].Seq = 3 },
-		"too many attempts":   func(c *CallRecord) { *c = withAttempts(*c, platform.MaxAttemptSeq+1) },
-	} {
-		rec := record(uuid.NewV7(), now)
-		edit(&rec)
-		if err := r.Enqueue(rec); err == nil {
-			t.Errorf("%s was queued", name)
-		}
-	}
-}
-
-// TestHungWriteTimesOutAndRecovers: a write that never answers is cut off after WriteTimeout and retried, so the writer
-// is not held for good by one dead connection.
-func TestHungWriteTimesOutAndRecovers(t *testing.T) {
-	t.Parallel()
-	hung := make(chan struct{})
-	var once sync.Once
-	s := &sink{}
-	write := func(ctx context.Context, batch []queued) error {
-		blocked := false
-		once.Do(func() { blocked = true })
-		if blocked {
-			close(hung)
-			<-ctx.Done()
-			return ctx.Err()
-		}
-		return s.write(ctx, batch)
-	}
-	r := newRecorder(t.Context(), Config{
-		QueueSize: 4, BatchSize: 2, FlushInterval: time.Millisecond, RetryBase: time.Millisecond,
-		RetryMax: 2 * time.Millisecond, WriteTimeout: 30 * time.Millisecond,
-	}, write, func(error) bool { return false }, quiet)
-	records := calls(2)
+	dir := t.TempDir()
+	first := &sink{failing: 1 << 30}
+	r := recorderOf(t, first, Config{
+		Dir: dir, Capacity: 10, BatchSize: 2, FlushInterval: time.Hour,
+	})
+	records := calls(5)
 	enqueueAll(t, r, records)
-	<-hung
-	if err := r.Close(t.Context()); err != nil {
+	eventually(t, "all five records in the spill", func() bool { return r.spill.pendingCount() == 5 })
+	crash(r)
+
+	nextSink := &sink{}
+	next := recorderOf(t, nextSink, Config{
+		Dir: dir, Capacity: 10, BatchSize: 2, FlushInterval: time.Hour,
+	})
+	if err := next.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.stored(); !slices.Equal(got, ids(records)) {
-		t.Errorf("stored %v after the hung write, want %v", got, ids(records))
+	got, _ := nextSink.stored()
+	if !slices.Equal(got, ids(records)) {
+		t.Errorf("replayed %v, want %v in order", got, ids(records))
 	}
-	if n := s.attemptsStored(); n != 4 {
-		t.Errorf("%d attempts stored after the hung write, want 4", n)
+	if n := nextSink.attemptsStored(); n != 2*len(records) {
+		t.Errorf("%d attempts replayed, want %d", n, 2*len(records))
+	}
+}
+
+// TestTornTailIsDropped: a crash in the middle of the last append leaves a partial record, which the next open
+// truncates; the complete records before it still replay.
+func TestTornTailIsDropped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	r := recorderOf(t, &sink{failing: 1 << 30}, Config{
+		Dir: dir, Capacity: 10, BatchSize: 10, FlushInterval: time.Hour,
+	})
+	records := calls(2)
+	enqueueAll(t, r, records)
+	eventually(t, "both records in the spill", func() bool { return r.spill.pendingCount() == 2 })
+	crash(r)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("%d segments, want 1", len(entries))
+	}
+	path := filepath.Join(dir, entries[0].Name())
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, info.Size()-3); err != nil {
+		t.Fatal(err)
+	}
+
+	nextSink := &sink{}
+	next := recorderOf(t, nextSink, Config{Dir: dir, Capacity: 10, BatchSize: 10, FlushInterval: time.Hour})
+	if got := next.spill.pendingCount(); got != 1 {
+		t.Fatalf("the torn tail left %d records, want 1", got)
+	}
+	if err := next.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := nextSink.stored(); !slices.Equal(got, ids(records[:1])) {
+		t.Errorf("replayed %v, want only the complete first record", got)
+	}
+}
+
+// TestTornSegmentHeaderIsDropped: a crash while a segment's header was being written leaves a prefix with no record
+// behind it; the next open drops it instead of refusing to start over something no caller was ever told was kept.
+func TestTornSegmentHeaderIsDropped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "call-0000000000000001.wal"), []byte("AXIOM-WAL"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sp, err := openSpill(dir, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sp.finish()
+	if got := sp.pendingCount(); got != 0 {
+		t.Errorf("%d records, want none from a torn header", got)
 	}
 }

@@ -250,8 +250,9 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 
 // conclude settles the call and writes what is left to tell the client. The order is the one that keeps the money
 // right: the attempt is over (its upstream cancelled, its read returned) before Settle, and Settle is committed before
-// the ending that reports the cost is written (I3). A settlement not written in time goes on in the background once
-// the ending is out.
+// the ending that reports the cost is written (I3). The call's record enters the spill after the settlement and before
+// the ending, so a crash after the client has the answer cannot leave the call unrecorded. A settlement not written in
+// time goes on in the background once the ending is out.
 //
 //nolint:cyclop // the settlement order is the invariant; each branch is one ending
 func (s *session) conclude(ctx context.Context, e ended) {
@@ -265,6 +266,11 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	var fin *protocol.Final
 	if err == nil && len(o.Attempts) > 0 {
 		fin = s.final(f)
+	}
+	// The record is in the spill before the ending is written: a process crash after the client sees the answer
+	// cannot leave that call unrecorded. The settlement committed first, so the record's amounts are final.
+	if err == nil {
+		s.x.log(ctx, s.trail(), o, f, time.Now())
 	}
 	switch {
 	case e.reply != nil:
@@ -294,9 +300,6 @@ func (s *session) conclude(ctx context.Context, e ended) {
 		s.finish(e.relay.Fail(e.err, fin))
 	}
 	s.handedOff = s.x.settled(ctx, s, o, err)
-	if err == nil {
-		s.x.log(ctx, s.trail(), o, f, time.Now())
-	}
 }
 
 // closeLoop gives every attempt of the model-side loop the last attempt belongs to how the loop ended: its answer

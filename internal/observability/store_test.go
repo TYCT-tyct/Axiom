@@ -21,11 +21,13 @@ var now = time.Now().UTC().Truncate(time.Millisecond)
 // keep writes records through a real Recorder and waits for them to be stored.
 func keep(t *testing.T, db *pg.DB, records ...CallRecord) {
 	t.Helper()
-	r := NewRecorder(t.Context(), db, platformScope, Config{
-		// A fixture enqueues its rows in one burst; the queue holds the burst while the first batch waits on the database.
-		QueueSize: 64, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
+	r, err := NewRecorder(t.Context(), db, platformScope, Config{
+		Dir: t.TempDir(), Capacity: 64, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
 		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
 	}, quiet)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, rec := range records {
 		if err := r.Enqueue(rec); err != nil {
 			t.Fatal(err)
@@ -51,18 +53,6 @@ func list(t *testing.T, db *pg.DB, scope pg.Scope, q OwnQuery) []OwnCall {
 // day is every call of account in the day around now.
 func day(account uuid.UUID) OwnQuery {
 	return OwnQuery{Account: account, Since: now.Add(-24 * time.Hour), Until: now.Add(24 * time.Hour)}
-}
-
-// attemptsOf is how many attempt rows the account has visible to the platform scope.
-func attemptsOf(t *testing.T, db *pg.DB, account uuid.UUID) int {
-	t.Helper()
-	var n int
-	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), "SELECT count(*) FROM observability.call_attempt WHERE account_id = $1", account).Scan(&n)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return n
 }
 
 // TestTenantsReadOnlyTheirOwnCalls: an account's scope shows its own calls and attempts, in full, and nobody else's; an

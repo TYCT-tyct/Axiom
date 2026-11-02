@@ -7,7 +7,6 @@ import (
 	"time"
 	"uuid"
 
-	"axiom/internal/observability"
 	"axiom/internal/platform/alert"
 	"axiom/internal/platform/pg"
 )
@@ -40,7 +39,7 @@ func TestWriterAlertDebouncesEmptySamples(t *testing.T) {
 func TestAlertGracefulStopResolvesDrainedWriter(t *testing.T) {
 	f := newAdminFixture(t)
 	logger := slog.New(slog.DiscardHandler)
-	recorder := observability.NewRecorder(t.Context(), f.db, pg.PlatformScope(), callRecords, logger)
+	recorder := testRecorder(t, f.db, pg.PlatformScope(), testCallRecords(t))
 	t.Cleanup(func() {
 		if err := recorder.Close(t.Context()); err != nil {
 			t.Error(err)

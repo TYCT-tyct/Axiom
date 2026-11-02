@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +20,28 @@ import (
 )
 
 // serveForTest keeps the entry's admission checks, with periodic downloads disabled unless a test supplies local data.
+// The recorder gets a temporary spill directory: the production default is relative to the working directory, and a
+// test must not leave call-log/ in the package tree.
 func serveForTest(ctx context.Context, environ []string, logger *slog.Logger) error {
+	dir, err := os.MkdirTemp("", "axiom-call-log-")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := os.RemoveAll(dir); err != nil {
+			logger.Warn("removing the test call log failed", "dir", dir, "err", err)
+		}
+	}()
+	hasDir := false
+	for _, kv := range environ {
+		if strings.HasPrefix(kv, callLogDirVar+"=") {
+			hasDir = true
+			break
+		}
+	}
+	if !hasDir {
+		environ = append(environ, callLogDirVar+"="+dir)
+	}
 	return serveWith(ctx, environ, logger, directEgress, startRecorder, nil)
 }
 
