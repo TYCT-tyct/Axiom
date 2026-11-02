@@ -192,12 +192,13 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and
-// models collects the model list published with it. The wiring itself reads nothing: every source is deferred into a
-// closure, so a test that holds only the suppliers service builds it (callpath_test.go).
+// models collects the model list published with it. Apart from the main site's currency, every source is read through a
+// closure, so a test that holds only the suppliers service builds the wiring (callpath_test.go).
 func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, health *quality.Monitor, routable *atomic.Bool,
 	prices func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error), models *gateway.ModelList,
 ) *gateway.RouteDeps {
-	// The currency only denominates BYOK prices; the accounts snapshot is not otherwise a routing source.
+	// The currency only denominates BYOK prices; no other routing source needs the accounts service, which a caller
+	// may not hold.
 	var siteCurrency platform.Currency
 	if d.accounts != nil {
 		if site, ok := d.accounts.MainSite(); ok {
