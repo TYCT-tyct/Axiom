@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,30 +17,45 @@ import (
 
 // post never wraps network or decoder errors: both may quote the secret-bearing URL or echoed response body.
 func (c *easyPayChannel) post(ctx context.Context, path string, v url.Values, query bool) ([]byte, error) {
+	return c.request(ctx, http.MethodPost, path, v, query)
+}
+
+// get keeps the merchant key in the query string, as EzPay's order query expects.
+func (c *easyPayChannel) get(ctx context.Context, path string, v url.Values) ([]byte, error) {
+	return c.request(ctx, http.MethodGet, path, v, true)
+}
+
+func (c *easyPayChannel) request(ctx context.Context, method, path string, v url.Values, query bool) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	target := c.settings.Gateway + path
 	if query {
 		target += "?" + v.Encode()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(v.Encode()))
+	var body io.Reader
+	if method == http.MethodPost {
+		body = strings.NewReader(v.Encode())
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
 		return nil, errors.New("easypay: cannot construct request")
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, errors.New("easypay: gateway request failed")
 	}
 	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // reading the bounded response below determines the result
-	body, err := egress.ReadBody(resp.Body, 1<<20)
+	data, err := egress.ReadBody(resp.Body, 1<<20)
 	if err != nil {
 		return nil, errors.New("easypay: cannot read bounded gateway response")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("easypay: gateway HTTP %d", resp.StatusCode)
 	}
-	return body, nil
+	return data, nil
 }
 
 func (c *easyPayChannel) credentials(act string) url.Values {
@@ -105,6 +121,9 @@ func easyPayPick(top, nested jsonx.Raw) jsonx.Raw {
 func (c *easyPayChannel) Query(ctx context.Context, order, _ string) (Payment, error) {
 	if !c.Caps().Has(CapQuery) {
 		panic("easypay: query is not declared")
+	}
+	if c.settings.Preset == "ezpay" {
+		return c.ezPayQuery(ctx, order)
 	}
 	v := c.credentials("order")
 	v.Set("out_trade_no", order)
@@ -240,7 +259,7 @@ func (*easyPayChannel) QueryRefund(context.Context, RefundCall) (RefundState, er
 
 // testConfig queries merchant metadata without creating a payment or returning gateway data.
 func (c *easyPayChannel) testConfig(ctx context.Context) error {
-	if c.settings.Preset == "epusdt" {
+	if c.settings.Preset == "epusdt" || c.settings.Preset == "ezpay" {
 		return c.probe(ctx)
 	}
 	body, err := c.post(ctx, "/api.php", c.credentials("query"), true)

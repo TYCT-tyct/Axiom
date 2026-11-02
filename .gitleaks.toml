@@ -27,3 +27,11 @@ regexes = ['''^whsec_test_secret_0123456789$''']
 [[allowlists]]
 description = "placeholder WeChat Pay APIv3 key in an earlier commit of the payments tests"
 regexes = ['''^0123456789abcdef0123456789abcdef$''']
+
+# The EzPay signature vectors fix the MD5 digest of the canonical query strings signed with the placeholder key. A
+# 32-character hex digest has the shape of a generic API key, but it is the expected output of the test, not a
+# credential: no live endpoint sees it. The values are already in commit b00beb8b, which cannot be rewritten, so allow
+# those two exact digests and nothing else; a real key in the same tests still fails.
+[[allowlists]]
+description = "EzPay signature digest vectors in an earlier commit of the payments tests"
+regexes = ['''^a044d7461cfe6481920ca58ce533adf7$''', '''^b7338b55a6e7bc634a11dddf98134824$''']
