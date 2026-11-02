@@ -67,7 +67,7 @@ test("the website lists models and prices and filters them in the address", asyn
   await page.getByRole("button", { name: "重置" }).click();
   await expect(table.getByRole("row")).toHaveCount(5);
   await table.getByRole("button", { name: "详情" }).first().click();
-  await expect(page.getByRole("table", { name: /gpt-5/ })).toBeVisible();
+  await expect(page.getByRole("table", { name: /模型价格/ })).toBeVisible();
 });
 
 test("the website's buttons open the console", async ({ page }) => {

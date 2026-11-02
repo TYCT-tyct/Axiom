@@ -20,7 +20,7 @@ test.describe("models and prices", () => {
     await expect(table.getByRole("row")).toHaveCount(2);
 
     await table.getByRole("button", { name: "详情" }).first().click();
-    const endpoints = page.getByRole("table", { name: "端点" });
+    const endpoints = page.getByRole("table", { name: "端点", exact: true });
     await expect(endpoints).toBeVisible();
     await expect(endpoints.getByRole("row")).toHaveCount(5);
     // The codename also appears in the closed details summary; scope the identity check to the endpoint row.
@@ -52,7 +52,7 @@ test.describe("models and prices", () => {
     signedInAs(state);
     await page.goto("/console/models");
     await page.getByRole("button", { name: "详情" }).first().click();
-    const endpoints = page.getByRole("table", { name: "端点" });
+    const endpoints = page.getByRole("table", { name: "端点", exact: true });
     for (const width of [390, 800, 1280, 1600]) {
       await page.setViewportSize({ width, height: 900 });
       await expect(endpoints.getByText("200,000").filter({ visible: true })).toHaveCount(1);
