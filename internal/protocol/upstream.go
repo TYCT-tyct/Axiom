@@ -95,7 +95,9 @@ type eventReader struct {
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
 	s.ctx, s.charge, s.rw.charge, s.capture = u, charge, charge, o.Capture
 	s.rw.hidesReasoning, s.rw.cached = u.HidesReasoning, o.Cached
-	s.rw.cacheCreated = strconv.FormatInt(o.Created, 10)
+	if o.Cached {
+		s.rw.cacheCreated = strconv.FormatInt(o.Created, 10)
+	}
 	s.rw.w.Identity = func(string) string { return o.ID }
 	s.rw.t.Model = o.modelName()
 	s.rw.usageMembers = usageMembers
