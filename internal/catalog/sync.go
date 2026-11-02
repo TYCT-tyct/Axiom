@@ -222,7 +222,7 @@ func (c *Catalog) publishSynced(ctx context.Context, f Fetched, bodySum string, 
 		r.Outcome = OutcomePublished
 	case errors.Is(err, ErrPriceChanged), errors.Is(err, ErrSourceMismatch), errors.Is(err, ErrPriceLost),
 		errors.Is(err, ErrIncomplete), errors.Is(err, ErrTierBasisChanged), errors.Is(err, ErrCountedItems), errors.Is(err, ErrRequestPrices),
-		errors.Is(err, ErrFileSearch):
+		errors.Is(err, ErrFileSearch), errors.Is(err, ErrFileParse):
 		return r.heldBy(err, n.canonical), nil
 	default:
 		return r, fmt.Errorf("catalog sync: publish %s: %w", m.row.Slug, err)

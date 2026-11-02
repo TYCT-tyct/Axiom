@@ -163,6 +163,7 @@ export default {
       web_search: "联网搜索",
       code_execution: "代码执行",
       file_search: "文件搜索",
+      file_parse: "文件解析",
       image_in_piece: "输入图片",
       image_out_piece: "输出图片",
       audio_in_second: "音频输入（秒）",

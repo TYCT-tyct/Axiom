@@ -3494,6 +3494,9 @@ type Rates struct {
 	// CodeExecution A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at most 15 decimals and at most 1000 per unit.
 	CodeExecution *UnitPrice `json:"code_execution,omitempty"`
 
+	// FileParse A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at most 15 decimals and at most 1000 per unit.
+	FileParse *UnitPrice `json:"file_parse,omitempty"`
+
 	// FileSearch A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at most 15 decimals and at most 1000 per unit.
 	FileSearch *UnitPrice `json:"file_search,omitempty"`
 

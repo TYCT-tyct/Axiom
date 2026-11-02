@@ -39,7 +39,7 @@ func (h *Handler) gateParsing(r *http.Request, c *Call, sessionBody []byte, req 
 //
 // A file the request carries an annotation for is not parsed again: the text the client sent back stands in for it, so
 // a client that reuses a parsed file pays no second time (OpenRouter《PDF Inputs》, read 2026-11-01).
-func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req protocol.Request) ([]byte, protocol.Request, error) {
+func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req protocol.Request, fileBilling bool) ([]byte, protocol.Request, error) {
 	file := req.File
 	if file == nil || !file.Parsed() {
 		return body, req, nil
@@ -63,7 +63,7 @@ func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req prot
 	if !h.Memory.Charge(work) {
 		return nil, req, ErrOverloaded
 	}
-	count := &parseCount{}
+	count := &parseCount{countPages: fileBilling && req.File.Engine == protocol.FileEngineMistralOCR}
 	newBody, files, err := protocol.RewriteFiles(req.Format, body, count.parse(ctx, h, c))
 	if err != nil {
 		h.Memory.Refund(work)
@@ -85,7 +85,7 @@ func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req prot
 	if len(files) == 0 {
 		return body, req, nil // the plugin asked, but the request carries no file content to parse
 	}
-	parsed.File, parsed.FileParses = file, count.n
+	parsed.File, parsed.FileParses, parsed.FilePages, parsed.FileBilling = file, count.n, count.pages, fileBilling
 	parsed.Web = web
 	restoreServer(&parsed, req)
 	c.files = annotations(files)
@@ -102,9 +102,13 @@ func inspectParsed(f protocol.Format, body []byte) (protocol.Request, int, error
 	return parsed, refs, err
 }
 
-// parseCount is one request's parsing: the files it has parsed so far, which bounds a runaway history, and the parser it
-// calls. It is the backend RewriteFiles is given.
-type parseCount struct{ n int64 }
+// parseCount is one request's parsing: the files it has parsed so far, which bounds a runaway history, the pages a paid
+// engine produced, and the parser it calls. It is the backend RewriteFiles is given.
+type parseCount struct {
+	n          int64
+	pages      int64
+	countPages bool
+}
 
 // parse returns the parse function RewriteFiles calls for each file.
 func (p *parseCount) parse(ctx context.Context, h *Handler, c *Call) func(protocol.File) (string, error) {
@@ -119,11 +123,17 @@ func (p *parseCount) parse(ctx context.Context, h *Handler, c *Call) func(protoc
 			return "", ErrOverloaded
 		}
 		c.hold(func() { h.Memory.Refund(held) })
-		text, err := h.Parser.Parse(ctx, fileparse.Document{Name: f.Name, Data: f.Data})
+		text, pages, err := h.Parser.Parse(ctx, fileparse.Document{Name: f.Name, Data: f.Data}, p.countPages)
 		if err != nil {
 			return "", err
 		}
+		if p.countPages && pages < 1 {
+			return "", fmt.Errorf("%w: the backend returned %d pages", fileparse.ErrUpstream, pages)
+		}
 		p.n++
+		if p.countPages {
+			p.pages += int64(pages)
+		}
 		return text, nil
 	}
 }
@@ -180,8 +190,12 @@ var errParseTooLarge = &Refusal{
 	Message: "A file is larger than the file parser's limit.",
 }
 
-// restoreFile puts back what compression removed: the plugin and its count are routing and billing settings, not body
-// members (docs/domains/billing.md「预留与结算」).
-func restoreFile(req *protocol.Request, file *protocol.FileParser, parses int64) {
-	req.File, req.FileParses = file, parses
+// restoreFile puts back what compression removed: the plugin, its file count, its page count and the billing switch are
+// routing and billing settings, not body members (docs/domains/billing.md「预留与结算」).
+func restoreFile(req *protocol.Request, file *protocol.FileParser, parses, pages int64, billing bool) {
+	req.File, req.FileParses, req.FilePages, req.FileBilling = file, parses, pages, billing
 }
+
+// fileBilling reports the catalog switch that moves parses from the old web_search unit to file_parse. A handler built
+// without a catalog is a unit test and keeps the old unit.
+func (h *Handler) fileBilling() bool { return h.Catalog != nil && h.Catalog.FileParse() }
