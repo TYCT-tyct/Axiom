@@ -22,7 +22,7 @@
 
 ## 固定交付物与 digest
 
-`ci.yml` 的 `deploy` 作业在列车和 `main`（push 运行，或落地退回逐个合并后调起的 dispatch）上都运行 `release-check.sh`，所以只在 `main` 上会跑的发布步骤会先在列车里失败、退回弄坏它的 PR；只有 `main` 保留发布交付物，PR 不生成。runner 由 `runner-host.sh` 安装固定版本（当前 v0.38.0）、按发布页 `checksums.txt` 校验 SHA-256 的 buildx CLI 插件，`check` 运行 `docker buildx version`；缺少它时 `docker buildx create --name …` 会落到 `docker --name` 并以 125 退出（2026-10-29 `main` 的 `deploy`）。
+`ci.yml` 的 `deploy` 作业在列车和 `main`（push 运行，或收尾旧版逐个合并的记录时调起的 dispatch）上都运行 `release-check.sh`，所以只在 `main` 上会跑的发布步骤会先在列车里失败、退回弄坏它的 PR；只有 `main` 保留发布交付物，PR 不生成。runner 由 `runner-host.sh` 安装固定版本（当前 v0.38.0）、按发布页 `checksums.txt` 校验 SHA-256 的 buildx CLI 插件，`check` 运行 `docker buildx version`；缺少它时 `docker buildx create --name …` 会落到 `docker --name` 并以 125 退出（2026-10-29 `main` 的 `deploy`）。
 `release-check.sh` 构建一次 Linux/amd64 程序和 scratch 镜像，通过同一次 [Buildx 多 exporter 构建](https://docs.docker.com/build/exporters/#multiple-exporters)导出 OCI 归档并写入临时的 loopback
 registry（仅绑定 `127.0.0.1`，不上传外部仓库）。它按归档的 manifest digest 拉取镜像，迁移和服务都消费同一个
 `repository@sha256:…`，包括旧迁移角色升级后的再次启动；重启不重新构建。其他 CI 作业仍会构建自己的测试程序和前端。
