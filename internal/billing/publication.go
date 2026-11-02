@@ -39,10 +39,19 @@ type Publication struct {
 	Status    string          `json:"status"`
 	Requested jsonx.Raw       `json:"requested,omitempty"`
 	Schedule  jsonx.Raw       `json:"schedule,omitempty"`
-	Cost      jsonx.Raw       `json:"cost,omitempty"`
-	Floor     jsonx.Raw       `json:"floor,omitempty"`
-	Basis     jsonx.Raw       `json:"basis,omitempty"`
-	Problem   string          `json:"problem,omitempty"`
+	// Endpoints and RequestedEndpoints are the per-endpoint prices of a cost-plus proposal, before and after the floor.
+	// They are absent for a rule whose price is the same for every endpoint; an old candidate without them is read as
+	// the shared price it was.
+	Endpoints          EndpointPrices `json:"endpoints,omitempty"`
+	RequestedEndpoints EndpointPrices `json:"requested_endpoints,omitempty"`
+	CurrentEndpoints   EndpointPrices `json:"current_endpoints,omitempty"`
+	CurrentSchedule    jsonx.Raw      `json:"current_schedule,omitempty"`
+	Costs              EndpointPrices `json:"costs,omitempty"`
+	Floors             EndpointPrices `json:"floors,omitempty"`
+	Cost               jsonx.Raw      `json:"cost,omitempty"`
+	Floor              jsonx.Raw      `json:"floor,omitempty"`
+	Basis              jsonx.Raw      `json:"basis,omitempty"`
+	Problem            string         `json:"problem,omitempty"`
 }
 
 // ErrStalePrice refuses a confirmation decided against superseded price evidence.
@@ -66,6 +75,13 @@ func PriceState(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy, []P
 		}
 		p.Audience = Selector{Kind: r.AudienceKind, ID: r.AudienceID}
 		p.Current, p.Status = r.CurrentID, r.Status
+		// The current columns, not a view field a candidate may carry from an older release, decide what is shown.
+		p.CurrentSchedule, p.CurrentEndpoints = r.Schedule, nil
+		if len(r.Endpoints) > 0 {
+			if err := jsonx.Unmarshal(r.Endpoints, &p.CurrentEndpoints); err != nil {
+				return PricePolicy{}, nil, err
+			}
+		}
 		out = append(out, p)
 	}
 	return policy, out, nil
@@ -255,13 +271,49 @@ func publicationDecision(policy PricePolicy, p Publication, old ReadPublications
 		if err != nil {
 			return Sold{}, "", err
 		}
+		// A shared version has no endpoint map, so its cost evidence is the only record of which endpoints it
+		// prices. It is read only on this decision path, not when routing loads every published price.
+		if current.Endpoints == nil {
+			current.endpointCosts = endpointCostsFromBasis(old.Basis, current.Schedule.Currency())
+		}
 		previous = current.Schedule
 	}
-	status := automaticPriceStatus(policy, previous, next, floor, old.CurrentID != nil)
+	status := publicationStatus(policy, p, current, previous, next, floor, old.CurrentID != nil)
 	if status == "blocked" {
 		current = Sold{}
 	}
 	return current, status, nil
+}
+
+// publicationStatus classifies a proposal against the current version. A per-endpoint proposal gets the endpoint gate;
+// a return from endpoint prices to one shared price compares every current endpoint; a shared proposal that does not
+// move still waits when its cost evidence shows an endpoint added or removed.
+func publicationStatus(policy PricePolicy, p Publication, current Sold, previous, next, floor catalog.Schedule, hasHead bool) string {
+	status := automaticPriceStatus(policy, previous, next, floor, hasHead)
+	switch {
+	case p.Endpoints != nil:
+		return automaticEndpointPriceStatus(policy, current, p.Endpoints, p.Floors, hasHead)
+	case hasHead && current.Endpoints != nil:
+		// The proposal goes back to a shared fixed or reference price. Every endpoint's current price is a real old
+		// charge, so compare each one with the shared proposal rather than only the model envelope, which may not move.
+		// The proposal's own cost evidence recovers its endpoint floors; an old candidate without it falls back to
+		// the ordinary move gate, which still holds any change for confirmation.
+		return automaticSharedEndpointPriceStatus(policy, current, next, endpointFloorsFromBasis(p.Basis, next.Currency(), policy.FloorMultiplier))
+	case hasHead && status == "published" && sharedMembershipMoved(current, p.Basis, next.Currency()):
+		return "pending"
+	}
+	return status
+}
+
+// sharedMembershipMoved reports whether a shared proposal changes the endpoint set recorded in the current version's
+// cost evidence. The price itself does not move, but adding or removing an endpoint changes what the shared price covers.
+func sharedMembershipMoved(current Sold, nextBasis jsonx.Raw, currency platform.Currency) bool {
+	if current.Endpoints != nil {
+		return false
+	}
+	nextCosts := endpointCostsFromBasis(nextBasis, currency)
+	return len(current.endpointCosts) > 0 && len(nextCosts) > 0 &&
+		endpointMembershipMoved(endpointSet(current.endpointCosts), endpointSet(nextCosts))
 }
 
 func automaticPriceStatus(policy PricePolicy, previous, next, floor catalog.Schedule, hasHead bool) string {
@@ -293,10 +345,21 @@ func soldPublication(r ReadPublicationsRow) (Sold, error) {
 		return Sold{}, nil
 	}
 	s, err := catalog.ParseSchedule(r.Schedule)
-	return Sold{Version: *r.CurrentID, Schedule: s}, err
+	if err != nil {
+		return Sold{}, err
+	}
+	endpoints, err := parseEndpointPrices(r.Endpoints)
+	if err != nil {
+		return Sold{}, err
+	}
+	return Sold{Version: *r.CurrentID, Schedule: s, Endpoints: endpoints}, nil
 }
 
 func persistPublication(ctx context.Context, tx pg.Tx, site uuid.UUID, p Publication) error {
+	// CurrentEndpoints and CurrentSchedule are a read view of the joined current version, not part of the proposal.
+	// PublishPrice reads them from PriceState and persists the candidate afterwards; keeping them would make an old
+	// view override the row's actual current version after the next publication.
+	p.CurrentEndpoints, p.CurrentSchedule = nil, nil
 	raw, err := jsonx.MarshalCanonical(p)
 	if err != nil {
 		return err
@@ -359,15 +422,27 @@ func priceReason(reason string) error {
 
 func publishVersion(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, p Publication, override bool, reason string) (Sold, error) {
 	raw := p.Schedule
+	endpoints := p.Endpoints
 	if override {
+		if p.Endpoints != nil && p.RequestedEndpoints == nil {
+			return Sold{}, &RuleError{"candidate_id", "has no requested endpoint prices; refresh before confirming"}
+		}
 		raw = p.Requested
+		endpoints = p.RequestedEndpoints
 	}
 	s, err := catalog.ParseSchedule(raw)
 	if err != nil {
 		return Sold{}, err
 	}
+	var endpointBody []byte
+	if endpoints != nil {
+		endpointBody, err = jsonx.MarshalCanonical(endpoints)
+		if err != nil {
+			return Sold{}, err
+		}
+	}
 	id := uuid.NewV7()
-	if err := queries.InsertPriceVersion(ctx, tx, InsertPriceVersionParams{ID: id, SiteID: site, ModelID: uuid.UUID(p.Model), AudienceKind: p.Audience.Kind, AudienceID: p.Audience.ID, CandidateID: p.Candidate, Schedule: raw, Basis: p.Basis, Overridden: override, Actor: actor.String(), Reason: reason}); err != nil {
+	if err := queries.InsertPriceVersion(ctx, tx, InsertPriceVersionParams{ID: id, SiteID: site, ModelID: uuid.UUID(p.Model), AudienceKind: p.Audience.Kind, AudienceID: p.Audience.ID, CandidateID: p.Candidate, Schedule: raw, Basis: p.Basis, Endpoints: endpointBody, Overridden: override, Actor: actor.String(), Reason: reason}); err != nil {
 		return Sold{}, err
 	}
 	raised, err := priceRaised(p)
@@ -375,7 +450,7 @@ func publishVersion(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.
 		return Sold{}, err
 	}
 	err = priceAudit(ctx, tx, actor, id, "price.publish", reason, map[string]any{"model": p.Model, "audience": p.Audience, "candidate": p.Candidate, "overridden": override, "raised_to_floor": raised && !override})
-	return Sold{Version: id, Schedule: s}, err
+	return Sold{Version: id, Schedule: s, Endpoints: endpoints}, err
 }
 
 func priceAudit(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, action, reason string, detail map[string]any) error {
@@ -450,6 +525,21 @@ func priceRaised(p Publication) (bool, error) {
 	protected, err := catalog.ParseSchedule(p.Schedule)
 	if err != nil {
 		return false, err
+	}
+	if p.Endpoints != nil && p.RequestedEndpoints != nil {
+		// The model-level envelope can stay the same while one endpoint is raised to its own floor. The audit and the
+		// review signal are about every price this version publishes, so compare the endpoint schedules too.
+		for endpoint, wanted := range p.RequestedEndpoints {
+			protected, ok := p.Endpoints[endpoint]
+			if !ok {
+				continue
+			}
+			raised, err := wanted.PriceChange(protected, big.NewRat(0, 1))
+			if err != nil || raised {
+				return raised, err
+			}
+		}
+		return false, nil
 	}
 	return requested.PriceChange(protected, big.NewRat(0, 1))
 }

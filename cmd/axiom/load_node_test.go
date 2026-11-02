@@ -116,7 +116,7 @@ func (lw *loadWorld) startLoadNode(databaseURL string) *loadNode {
 		"AXIOM_DATABASE_URL=" + databaseURL,
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_SHUTDOWN_TIMEOUT=30s", "AXIOM_MASTER_KEY_FILE=" + lw.keyFiles[0], "AXIOM_KEY_HASH_FILE=" + lw.keyFiles[1],
-		"AXIOM_IDENTITY_KEY_FILE=" + lw.keyFiles[2],
+		"AXIOM_IDENTITY_KEY_FILE=" + lw.keyFiles[2], "AXIOM_CALL_LOG_DIR=" + t.TempDir(),
 	}
 	cmd := exec.CommandContext(context.WithoutCancel(t.Context()), os.Args[0], "-test.run=^TestLoadNodeProcess$", "-test.count=1", "-test.timeout=2h") //nolint:gosec // this very binary, run again
 	cmd.Env = append(os.Environ(), loadNodeEnv+"="+strings.Join(environ, "\n"))

@@ -478,7 +478,7 @@ func TestStartChecksFallbacks(t *testing.T) {
 			b := newBank(t, 0, 0, Config{})
 			b.sql(statement)
 			holders := b.count("SELECT count(*) FROM billing.holders")
-			if _, err := Start(t.Context(), b.app, b.platform, Config{HolderTTL: time.Minute}, b.supplies); !errors.Is(err, errFallbacks) {
+			if _, err := Start(t.Context(), b.app, b.platform, Config{HolderTTL: time.Minute, Segments: NewSegmentPolicy(DefaultSegments())}, b.supplies); !errors.Is(err, errFallbacks) {
 				t.Errorf("Start = %v, want errFallbacks", err)
 			}
 			if n := b.count("SELECT count(*) FROM billing.holders"); n != holders {

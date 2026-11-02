@@ -435,7 +435,7 @@ func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrice
 		return nil, err
 	}
 	if e.AudiencePrices != nil {
-		c.prices, err = compileAudiencePrices(e.AudiencePrices, prices, directOnly(e.Native))
+		c.prices, err = compileAudiencePrices(e.AudiencePrices, uuid.UUID(e.ID), prices, directOnly(e.Native))
 		if err != nil {
 			return nil, err
 		}
@@ -443,21 +443,31 @@ func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrice
 	return c, nil
 }
 
-func compileAudiencePrices(table *billing.AudiencePrices, cache map[*billing.AudiencePrices][]candidatePrice, direct bool) ([]candidatePrice, error) {
-	if !direct {
+func compileAudiencePrices(table *billing.AudiencePrices, endpoint uuid.UUID, cache map[*billing.AudiencePrices][]candidatePrice, direct bool) ([]candidatePrice, error) {
+	// A table whose every layer has one price for every endpoint compiles the same for every endpoint that shares it.
+	// A per-endpoint layer does not: the table is shared, but each endpoint reads its own schedule from it.
+	shared := true
+	for _, layer := range table.Layers() {
+		shared = shared && layer.Sold.Endpoints == nil
+	}
+	if !direct && shared {
 		if prices, ok := cache[table]; ok {
 			return prices, nil
 		}
 	}
 	compiled := make([]candidatePrice, len(table.Layers()))
 	for i, layer := range table.Layers() {
-		price, err := priceOf(PriceRef{Version: layer.Sold.Version, Schedule: layer.Sold.Schedule}, direct)
+		schedule, ok := layer.Sold.PriceFor(endpoint)
+		if !ok {
+			continue // this audience has no price for this endpoint: routing excludes it with NoPrice
+		}
+		price, err := priceOf(PriceRef{Version: layer.Sold.Version, Schedule: schedule}, direct)
 		if err != nil {
 			return nil, err
 		}
 		compiled[i] = price
 	}
-	if !direct {
+	if !direct && shared {
 		cache[table] = compiled
 	}
 	return compiled, nil

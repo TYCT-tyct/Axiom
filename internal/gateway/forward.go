@@ -40,6 +40,11 @@ func (a *attempt) stream(ctx context.Context, body io.ReadCloser, uc protocol.Us
 	idleFor := s.x.Limits.cfg.IdleTimeout
 	defer a.landed(true) //nolint:errcheck // see the extension's goroutine
 	defer s.setWriteFor(s.x.Limits.cfg.WriteTimeout)
+	if s.x.Cache != nil && s.c.cache.enabled {
+		if capture := newCacheCapture(s, body); capture != nil {
+			a.capture, body = capture, capture
+		}
+	}
 	for {
 		relay := protocol.NewRelay(s.c.Format, a.entry.Target.Format, body, uc, protocol.RelayOptions{
 			ID: s.c.ID.String(), Model: s.c.Request.Model, ActualModel: s.servedModel(a), Created: s.start.Unix(),
@@ -81,16 +86,27 @@ func (s *session) commit(a *attempt, out []byte) {
 		return
 	}
 	a.obs.Delivered = true
-	if s.aggregate {
+	s.beginReply(out)
+}
+
+// beginReply writes the status and the first bytes of an answer that is not a whole body. A cache replay calls it too:
+// its answer has a fresh call ID and its own headers, but the same 200 and the same stream framing.
+func (s *session) beginReply(out []byte) {
+	if s.isGone() || s.aggregate {
 		return
 	}
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	h := s.w.Header()
 	h.Set("Content-Type", "text/event-stream; charset=utf-8")
-	h.Set("Cache-Control", "no-cache")
+	if s.cacheHit {
+		h.Set("Cache-Control", "no-store") // an account's cached answer must not be stored by a shared proxy
+	} else {
+		h.Set("Cache-Control", "no-cache")
+	}
 	h.Set("X-Accel-Buffering", "no") // an nginx in front would otherwise hold the events back until its buffer fills
 	s.relayState()
+	s.cacheHeaders(h)
 	s.w.WriteHeader(http.StatusOK)
 	if !s.put(out) {
 		return
@@ -180,7 +196,13 @@ func (s *session) respond(status int, body []byte) {
 	s.started = true
 	h := s.w.Header()
 	h.Set("Content-Type", "application/json")
+	if s.cacheHit {
+		h.Set("Cache-Control", "no-store")
+	}
 	s.relayState()
+	if status == http.StatusOK {
+		s.cacheHeaders(h)
+	}
 	s.w.WriteHeader(status)
 	until := time.Now().Add(max(s.writeFor, time.Duration(int64(len(body))*int64(time.Second)/respondRate)))
 	for b := body; len(b) > 0; {
@@ -425,6 +447,8 @@ func (s *session) left(e ended) ended {
 // ends. Before it, there was no content: a 200 with nothing in it is a failure and the next entry is tried, unless the
 // client is gone, whose upstream was read to the end for the usage it will be billed. A call that did not stream has
 // its whole reply at its end, and answers with it.
+//
+//nolint:funlen // the aggregate and stream endings are one settlement order
 func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 	s := a.s
 	rec := &s.ends[a.i]
@@ -449,6 +473,7 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 			return nextEntry, ended{}
 		}
 		rec.Result = billing.Aggregated
+		s.capture(a, a.capture)
 		s.record(a, false, 0, 0)
 		return over, ended{relay: relay, done: true}
 	}
@@ -457,6 +482,7 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 		if s.isGone() {
 			rec.Finish = billing.FinishCancelled
 		}
+		s.capture(a, a.capture)
 		s.record(a, false, 0, 0)
 		return over, ended{relay: relay, done: true}
 	}

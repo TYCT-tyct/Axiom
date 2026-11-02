@@ -3,6 +3,7 @@ package protocol
 import (
 	"cmp"
 	"fmt"
+	"strconv"
 
 	"axiom/internal/catalog"
 )
@@ -57,12 +58,24 @@ var errorTypes = [...]struct {
 
 // Error is an error to answer or to end a stream with. Details are members of a JSON object that say more, such as
 // "limit_source":"balance" for a 402, each led by a comma; they go next to the error type. Rejection, when set, is
-// what the upstream said of a request it refused.
+// what the upstream said of a request it refused. Status, when set, is the HTTP status and the numeric code this error
+// answers with where its type alone has another: a key or workspace budget is a 403 to the balance's 402 (OpenRouter
+// 《Errors and Debugging》的 budget errors，2026-11-02 核对).
 type Error struct {
 	Type      ErrorType
 	Message   string
 	Details   string
 	Rejection *Rejection
+	Status    int
+}
+
+// status is the HTTP status the error answers with, and so the number its code is: the caller's when it names one,
+// otherwise the type's.
+func (e Error) status() int {
+	if e.Status != 0 {
+		return e.Status
+	}
+	return errorTypes[e.Type].status
 }
 
 // Rejection is how an upstream said it refused a request: the words of its error and the members OpenAI's and
@@ -88,27 +101,30 @@ func appendErrorType(dst []byte, e Error) []byte {
 	return append(append(dst, `"error_type":"`+errorTypes[e.Type].name+`"`...), e.Details...)
 }
 
-// appendOpenAIError appends the error object of Chat's shell, which Responses uses before a stream starts: new-api's
-// and OpenAI's members message, type, param and code, and metadata with the unified error type and the details. Our own
-// error has the unified error type as its string code and "" as param; a rejection retains its param and code. Typed
-// request errors keep the status table's type and use their canonical code when absent; a generic invalid request
-// retains the upstream's type and a missing code stays null (docs/domains/gateway.md「错误」).
+// appendOpenAIError appends the error object of Chat's shell, which Responses uses before a stream starts: OpenAI's
+// members message, type and param, OpenRouter's numeric code, and metadata with the unified error type, the details and
+// the upstream's own code. The code is the response's status, as OpenRouter's is, so the body and the status line say
+// the same thing; a rejection retains its param and its upstream code, which goes in metadata.provider_code
+// (OpenRouter《Errors and Debugging》, read 2026-11-02; docs/domains/gateway.md「错误」).
 func appendOpenAIError(dst []byte, e Error) []byte {
 	t := errorTypes[e.Type]
-	typ, param, code := t.messages, "", appendQuoted(nil, t.name)
+	typ, param := t.messages, ""
 	if r := e.Rejection; r != nil {
 		param = r.Param
 		if e.Type == InvalidRequest {
-			typ, code = cmp.Or(r.Type, typ), []byte("null")
-		}
-		if r.Code != "" {
-			code = appendQuoted(nil, r.Code)
+			typ = cmp.Or(r.Type, typ)
 		}
 	}
 	dst = append(appendQuoted(append(dst, `{"message":`...), e.message()), `,"type":`...)
 	dst = append(appendQuoted(dst, typ), `,"param":`...)
-	dst = append(append(append(appendQuoted(dst, param), `,"code":`...), code...), `,"metadata":{`...)
-	return append(appendErrorType(dst, e), "}}"...)
+	dst = append(appendQuoted(dst, param), `,"code":`...)
+	dst = strconv.AppendInt(dst, int64(e.status()), 10)
+	dst = append(dst, `,"metadata":{`...)
+	dst = appendErrorType(dst, e)
+	if r := e.Rejection; r != nil && r.Code != "" {
+		dst = appendQuoted(append(dst, `,"provider_code":`...), r.Code)
+	}
+	return append(dst, "}}"...)
 }
 
 // RenderError returns the status and the body of an error answered before any stream starts, in format f's own
@@ -142,7 +158,7 @@ func renderError(f Format, e Error, charged *charges) (status int, body []byte) 
 	if charged != nil {
 		body = append(appendCharged(append(body, `,"axiom":{"usage":`...), f, charged), '}')
 	}
-	return t.status, append(body, '}')
+	return e.status(), append(body, '}')
 }
 
 // appendCharged appends the reply's usage of fin in format f's fields, with its cost, and the pending flag when the

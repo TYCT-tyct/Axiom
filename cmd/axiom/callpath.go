@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/netip"
 	"sync/atomic"
@@ -52,24 +53,25 @@ const (
 // callDeps is what a node's call path is built from: the modules it orchestrates, the secret it derives the
 // identifiers sent upstream from, and the reverse proxies the deployment trusts (AXIOM_TRUSTED_PROXIES).
 type callDeps struct {
-	nodeID     string
-	healthMode quality.Mode
-	db         *pg.DB
-	keys       *secret.Keyring   // unseals suppliers' credentials
-	identity   []byte            // the identity key file's newest key
-	accounts   *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
-	catalog    *catalog.Catalog
-	egress     *egress.Client
-	search     gateway.SearchBackends
-	fileParser fileparse.Parser
-	gate       gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
-	limits     *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
-	records    *observability.Recorder // the call log, which the settlements write to
-	meter      metric.Meter            // where the call path's counters go
-	logger     *slog.Logger
-	proxies    []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
-	kv         *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
-	alerts     alert.Sink
+	nodeID        string
+	healthMode    quality.Mode
+	db            *pg.DB
+	keys          *secret.Keyring   // unseals suppliers' credentials
+	identity      []byte            // the identity key file's newest key
+	accounts      *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
+	catalog       *catalog.Catalog
+	egress        *egress.Client
+	search        gateway.SearchBackends
+	fileParser    fileparse.Parser
+	gate          gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
+	limits        *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
+	records       *observability.Recorder // the call log, which the settlements write to
+	meter         metric.Meter            // where the call path's counters go
+	logger        *slog.Logger
+	proxies       []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
+	kv            *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
+	responseCache bool           // whether the platform permits the response cache to store reply content
+	alerts        alert.Sink
 	// verify answers what an endpoint claims to serve, for model verification. Production sets it unless
 	// AXIOM_MODEL_VERIFICATION=off; a test whose fake upstream counts every generation leaves it nil, and the
 	// endpoint then stays unverified.
@@ -92,6 +94,7 @@ type callNode struct {
 	models *gateway.ModelList
 	// search is the node's enabled engines, also read by the public model pages to show what a search costs.
 	search gateway.SearchBackends
+	cache  *gateway.ResponseCache // the response cache's writer and expiry loop, started with the other loops
 }
 
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
@@ -100,15 +103,10 @@ type callNode struct {
 // and answering 503. A node that can route nothing starts too, but stays not ready: a
 // fresh deployment gets its first supplier through the admin listener (see announceReady).
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
-	billing.WarmTokenizers()
-	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
-	// stamps it on every plan and the executor reads it from there, not from the configuration. The segment settings
-	// are the gateway's too, and billing takes the same ones in startLedger, so routing never marks an entry segmentable
-	// with no sizes to reserve it by (#229).
-	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy, Segments: d.gate.Segments()})
-	if err != nil {
-		return callNode{}, err
+	if d.records == nil {
+		return callNode{}, errors.New("the call path needs the call log recorder")
 	}
+	billing.WarmTokenizers()
 	var nodes suppliers.ShareRegistry
 	if d.kv != nil {
 		nodes = d.kv
@@ -117,7 +115,15 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err != nil {
 		return callNode{}, err
 	}
+	// The ledger reads the segment settings first, then routing takes the same live policy: an entry is never marked
+	// segmentable with no sizes for billing to reserve it by (#229).
 	ledger, err := startLedger(ctx, d.db, d.gate, d.meter, d.logger, d.alerts)
+	if err != nil {
+		return callNode{}, err
+	}
+	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
+	// stamps it on every plan and the executor reads it from there, not from the configuration.
+	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy, Segments: ledger.Segments()})
 	if err != nil {
 		return callNode{}, err
 	}
@@ -156,17 +162,22 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	loops, stop := context.WithCancel(context.WithoutCancel(ctx))
 	healthDone := make(chan struct{})
 	go func() { defer close(healthDone); healthLoop.Run(loops) }()
-	n.ready, n.reaped, n.stop = func() bool { return routable.Load() && router.Fresh() }, startLoops(loops, d, ledger, upstreams, routes), func() { stop(); <-healthDone }
+	n.ready, n.reaped, n.stop = func() bool { return routable.Load() && router.Fresh() }, startLoops(loops, d, n.cache, ledger, upstreams, routes), func() { stop(); <-healthDone }
 	return n, nil
 }
 
-// startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call.
+// startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call and the
+// segment settings the administrator saved. The policy is shared with routing through Billing.Segments.
 func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metric.Meter, logger *slog.Logger, signals alert.Sink) (*billing.Billing, error) {
+	segments, err := billing.LoadSegmentPolicy(ctx, db, pg.PlatformScope(), gate.ExtendWait, logger)
+	if err != nil {
+		return nil, err
+	}
 	return billing.Start(ctx, db, pg.PlatformScope(), billing.Config{
 		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
 		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
 		// what no settlement will only once the call cannot still be running.
-		Lifetime: gate.MaxCall + gate.SettleGrace, Segments: gate.Segments(), Logger: logger, Meter: meter, Alerts: signals,
+		Lifetime: gate.MaxCall + gate.SettleGrace, Segments: segments, Logger: logger, Meter: meter, Alerts: signals,
 	}, suppliers.CallWrites{})
 }
 
@@ -175,10 +186,20 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	models *gateway.ModelList,
 ) (callNode, error) {
 	memory, outstanding := protocol.NewMemory(nodeMemory), gateway.NewOutstanding()
+	var (
+		cache *gateway.ResponseCache
+		err   error
+	)
+	if d.responseCache {
+		cache, err = gateway.NewResponseCache(d.db, d.keys, pg.PlatformScope(), d.logger, d.meter)
+		if err != nil {
+			return callNode{}, err
+		}
+	}
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
 		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,
 		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
-		Records: d.records, Quality: health, Outstanding: outstanding, Search: d.search,
+		Records: d.records, Quality: health, Outstanding: outstanding, Search: d.search, Cache: cache,
 	})
 	if err != nil {
 		return callNode{}, err
@@ -186,9 +207,9 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
-		Outstanding: outstanding, Search: d.search, Parser: d.fileParser,
+		Outstanding: outstanding, Search: d.search, Parser: d.fileParser, Records: d.records,
 	})
-	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models, search: d.search}, err
+	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models, search: d.search, cache: cache}, err
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and
@@ -229,7 +250,7 @@ func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service,
 // startLoops starts the loops that keep the call path's inputs fresh. The holder's is the only one that can end the
 // node: once it has been reaped nothing this process writes is fenced in, so it must be restarted with a new one
 // (#205). Its end is what the channel carries.
-func startLoops(ctx context.Context, d callDeps, ledger *billing.Billing, upstreams *suppliers.Service, routes *gateway.RouteDeps) <-chan error {
+func startLoops(ctx context.Context, d callDeps, cache *gateway.ResponseCache, ledger *billing.Billing, upstreams *suppliers.Service, routes *gateway.RouteDeps) <-chan error {
 	reaped := make(chan error, 1)
 	go func() {
 		if err := ledger.Run(ctx); err != nil {
@@ -243,6 +264,9 @@ func startLoops(ctx context.Context, d callDeps, ledger *billing.Billing, upstre
 	}()
 	go reloadEndpoints(ctx, upstreams, d.logger)
 	go routes.Run(ctx)
+	if cache != nil {
+		go cache.Run(ctx)
+	}
 	return reaped
 }
 
@@ -317,7 +341,7 @@ func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Log
 	}
 }
 
-// salePrices only reads published heads. Local cost checks may withhold a model, but never change shared publication
+// salePrices only reads published heads. Local cost checks may withhold an endpoint, but never change shared publication
 // state: nodes with different adapters or key versions must not publish different evidence.
 func salePrices(db *pg.DB, sites *accounts.Service) func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
 	return func(ctx context.Context, snap *catalog.Snapshot, endpoints []suppliers.Routable, rates []platform.ExchangeRate) (sold map[catalog.ModelID]billing.Sold, err error) {

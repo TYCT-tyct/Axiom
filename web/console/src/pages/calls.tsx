@@ -426,7 +426,13 @@ const CallRow = memo(function CallRow({ call }: { call: Schemas["Call"] }) {
         {t("calls.ms", { value: format.number(call.latency_ms) })}
       </Td>
       <Td className="min-w-28 text-right tabular-nums [overflow-wrap:anywhere] sm:whitespace-nowrap">
-        {call.free ? <Badge tone="ok">{t("calls.free")}</Badge> : format.money(call.price)}
+        {call.cache_hit ? (
+          <Badge tone="ok">{t("calls.cacheHit")}</Badge>
+        ) : call.free ? (
+          <Badge tone="ok">{t("calls.free")}</Badge>
+        ) : (
+          format.money(call.price)
+        )}
         <p className="mt-1 max-w-44 truncate text-label text-t3" title={call.price_version}>
           {call.price_version
             ? t("calls.priceVersion", { version: call.price_version })

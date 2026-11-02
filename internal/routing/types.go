@@ -72,6 +72,7 @@ type Input struct {
 // were left out. The gateway may shorten the plan after reserving, never lengthen it.
 type Plan struct {
 	Entries     []Entry
+	Segments    billing.Segments // the segment settings this plan used, frozen for the reservation that follows it
 	MaxAttempts int
 	StartBy     time.Time
 	StickyTTL   time.Duration // how long the session sticks to the endpoint that serves it; the preset's, 0 for the router's default
@@ -88,17 +89,16 @@ const MaxEntries = 3
 // both: a request that sets no cap is sent with Target.MaxOutput, which is MaxOutput, so what is quoted is what the
 // upstream may produce (I1).
 type Entry struct {
-	BreakerFallback bool
-	Exchange        platform.ExchangeRate
-	Endpoint        EndpointID
-	Supplier        SupplierID
-	Target          protocol.Target
-	Model           catalog.ModelID
-	ModelSlug       string
-	Price           PriceRef
-	Limits          billing.Model
-	MaxOutput       int64
-	Segmentable     bool
+	Exchange    platform.ExchangeRate
+	Endpoint    EndpointID
+	Supplier    SupplierID
+	Target      protocol.Target
+	Model       catalog.ModelID
+	ModelSlug   string
+	Price       PriceRef
+	Limits      billing.Model
+	MaxOutput   int64
+	Segmentable bool
 	// Byok says the entry serves on the account's own provider key, which the reply reports as usage.is_byok.
 	Byok bool
 }

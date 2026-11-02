@@ -4,6 +4,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/payments"
 	"axiom/internal/platform/pg"
@@ -15,6 +16,6 @@ import (
 func modules() []pg.Module {
 	return []pg.Module{
 		accounts.Module(), catalog.Migrations, observability.Module(), suppliers.Module(), billing.Migrations(),
-		payments.Migrations(), quality.Module(),
+		payments.Migrations(), quality.Module(), gateway.Module(),
 	}
 }

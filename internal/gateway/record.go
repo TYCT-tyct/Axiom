@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -37,6 +36,7 @@ type trail struct {
 	currency  platform.Currency
 	clientApp string
 	app       appAttribution
+	cacheHit  bool
 }
 
 func (s *session) trail() trail {
@@ -46,7 +46,7 @@ func (s *session) trail() trail {
 	}
 	return trail{
 		call: s.c, tries: s.tries, at: at, start: s.start, currency: s.currency,
-		clientApp: clientAppOf(s.req.Header), app: attributionOf(s.req.Header),
+		clientApp: clientAppOf(s.req.Header), app: attributionOf(s.req.Header), cacheHit: s.cacheHit,
 	}
 }
 
@@ -173,8 +173,9 @@ func validCategory(c string) bool {
 
 // log writes the call into the call log. The record's amounts are the settlement's, so it is written once that is: the
 // ledger's charge is what the call cost, and a record that said zero while the settlement was still to come would
-// disagree with it (docs/domains/observability.md「追溯」). A record the recorder will not take is dropped and
-// counted there: the log is observation, and a call never fails or waits for it.
+// disagree with it (docs/domains/observability.md「追溯」). The gateway reserved the record's room before admitting the
+// call, so Commit appends it to the node's spill before the ending is written; a failure here is a bug or a dead disk,
+// and the recorder refuses every further call until an operator fixes it.
 func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billing.Final, end time.Time) {
 	if x.Records == nil {
 		return
@@ -183,9 +184,16 @@ func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billin
 	if err != nil {
 		x.Logger.ErrorContext(ctx, "a call's route could not be recorded", "request_id", t.call.ID.String(), "err", err)
 	}
-	err = x.Records.Enqueue(recordOf(t, route, o, f, end)) //nolint:contextcheck // the hand-off never waits, and the record outlives the request
-	if err != nil && !errors.Is(err, observability.ErrQueueFull) && !errors.Is(err, observability.ErrClosed) {
-		x.Logger.ErrorContext(ctx, "a call's record could not be written", "request_id", t.call.ID.String(), "err", err)
+	rec := recordOf(t, route, o, f, end)
+	if t.call.record != nil {
+		err = t.call.record.Commit(rec)
+	} else {
+		// A call run without the handler, as the executor's tests do: it has no admission reservation, so the record
+		// takes its own room. Production always goes through the handler and the slot.
+		err = x.Records.Enqueue(rec)
+	}
+	if err != nil {
+		x.Logger.ErrorContext(ctx, "a call's record could not be kept", "request_id", t.call.ID.String(), "err", err)
 	}
 }
 
@@ -217,6 +225,7 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 		Latency:       end.Sub(t.start),
 		Route:         route,
 		Streamed:      c.Request.Stream,
+		CacheHit:      t.cacheHit,
 		PhysicalInput: physicalInputOf(f),
 	}
 	if f.PriceVersion != nil {

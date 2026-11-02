@@ -105,6 +105,9 @@ type RelayOptions struct {
 	// ZeroOutput is set when the request capped its output at 0, as legacy completions' max_tokens 0 does: a choice that
 	// finishes without text is then the whole answer, not an empty response.
 	ZeroOutput bool
+	// Cached is set when the upstream bytes are a response-cache replay: the answer was not generated for this call, so
+	// every usage count in it is zero, as OpenRouter bills a hit (docs/domains/gateway.md「响应缓存」).
+	Cached bool
 	// ServerTool makes the relay record the calls of the gateway's web search function. A gateway call that runs no
 	// loop leaves it false, so it allocates nothing for this.
 	ServerTool      bool
@@ -662,21 +665,4 @@ var keepAlives = [...][]byte{
 	Responses:   []byte(": keep-alive\n\n"),
 	Chat:        []byte(": keep-alive\n\n"),
 	Completions: []byte(": keep-alive\n\n"),
-}
-
-// initReply keeps the response representation tied to the original client's request.
-func (r *Relay) initReply(u UsageContext, o RelayOptions) {
-	if o.legacyFunctions && !o.Aggregate {
-		r.legacy = &rewriter{legacyDelta: &legacyReplyDelta{}}
-		r.legacy.charge = r.charge
-	}
-	r.up = r.format.newUpstream(u, o, r.charge)
-	if o.Aggregate {
-		r.agg = newAggregator(r.client, r.charge)
-		if a, ok := r.agg.(*chatAggregate); ok {
-			a.legacy = o.legacyFunctions
-			a.healing = u.ResponseHealing
-			a.cited = len(o.Citations) > 0
-		}
-	}
 }

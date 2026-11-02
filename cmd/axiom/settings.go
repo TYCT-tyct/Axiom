@@ -35,6 +35,7 @@ type nodeSettings struct {
 	modelVerification                 bool // whether the health loop verifies endpoints as the models they claim
 	directFormats                     bool // whether supplier syncing may write embeddings and rerank
 	byok                              bool // whether accounts may create provider keys; off until every node knows them
+	responseCache                     bool // whether the platform permits storing reply content in the response cache
 	publicAddr, adminAddr, probesAddr string
 	nodeAddr                          string
 	coreURL                           *url.URL
@@ -45,6 +46,7 @@ type nodeSettings struct {
 	completionReserve                 int
 	masterKeyFile, keyHashFile        string
 	identityKeyFile                   string
+	callLogDir                        string
 	webAssetsDir                      string
 	hashConcurrency                   int
 	hashWait                          time.Duration
@@ -87,6 +89,19 @@ func readSettings(environ []string) (nodeSettings, error) {
 	return s, nil
 }
 
+// readResponseCacheContent reads the platform's permission to store reply content. It is off by default: the content
+// policy belongs to the platform, not to a request or an account preset.
+func readResponseCacheContent(env *config.Env, s *nodeSettings) error {
+	switch content := env.String("AXIOM_RESPONSE_CACHE_CONTENT", "off"); content {
+	case "on":
+		s.responseCache = true
+	case "", "off": // compose passes an unset variable as an empty string
+	default:
+		return fmt.Errorf("AXIOM_RESPONSE_CACHE_CONTENT: want on or off, got %q", content)
+	}
+	return nil
+}
+
 // readCoreSettings reads what only the node that owns the state uses. Everything here is required or has a default that
 // keeps a single machine working; the node roles decide whether this function runs at all.
 func readCoreSettings(env *config.Env, s *nodeSettings) []error {
@@ -104,7 +119,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		errs = append(errs, fmt.Errorf("AXIOM_MODEL_VERIFICATION: want on or off, got %q", verify))
 	}
 	s.exchangeSource = env.String("AXIOM_EXCHANGE_SOURCE", "manual")
-	errs = append(errs, readDirectFormats(env, s), readByok(env, s))
+	errs = append(errs, readResponseCacheContent(env, s), readDirectFormats(env, s), readByok(env, s))
 	s.databaseURL = env.Required(pg.DatabaseURLVar)
 	s.completionReserve = env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1)
 	s.masterKeyFile = env.Required(masterKeyFileVar)
@@ -112,7 +127,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 	// The identity key stands in for the client's session and end-user identifiers upstream, so rotating the key
 	// hashes must not rotate it: the upstream's prompt caches are keyed by them (#205).
 	s.identityKeyFile = env.Required(identityKeyFileVar)
-	s.webAssetsDir = env.String(webAssetsDirVar, "")
+	s.callLogDir, s.webAssetsDir = readCallLogDir(env), env.String(webAssetsDirVar, "")
 	// The node's argon2id computations at once, and how long a sign-in waits for a turn (0: the module's defaults,
 	// GOMAXPROCS and 2 seconds).
 	s.hashConcurrency = env.Int(hashConcurrencyVar, 0, 1)
@@ -152,6 +167,16 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		errs = append(errs, err)
 	}
 	return append(errs, mailErr, searchErr, fileParserErr, archiveErr, s.valkey.Resolve(), healthErr, exchangeErr)
+}
+
+// readCallLogDir is the spill directory. .env.example carries the line with no value, so unset and empty both mean
+// the default beside the working directory; deployment mounts a writable volume over it.
+func readCallLogDir(env *config.Env) string {
+	dir := env.String(callLogDirVar, "call-log")
+	if dir == "" {
+		return "call-log"
+	}
+	return dir
 }
 
 // readSearchSettings reads the web search backend. It is optional: with no URL the feature is off, and every web plugin

@@ -44,6 +44,7 @@ func (w *callWorld) controlledCallPath(clock *testClock) (callNode, *routing.Rou
 	}
 	ledger, err := billing.Start(w.t.Context(), w.db, pg.PlatformScope(), billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour,
+		Segments: billing.NewSegmentPolicy(billing.DefaultSegments()),
 	}, suppliers.CallWrites{})
 	if err != nil {
 		w.t.Fatal(err)

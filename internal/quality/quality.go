@@ -60,8 +60,6 @@ type Observation struct {
 	Fault protocol.Fault
 	Cut   Cut
 	Gone  bool // the client had left
-	// BreakerFallback says routing deliberately admitted this attempt as a breaker last resort.
-	BreakerFallback bool
 	// Delivered is set when the commit point came while the client was still there: the first content was the
 	// client's. A client that left before it may still have its upstream read on, for the usage, without it.
 	Delivered bool
@@ -93,10 +91,10 @@ type Measures struct {
 	ThroughputPercentiles [4]float64
 	Quality               float64 // 0 to 1: reliability and the measured time to first token and speed
 	Confidence            float64 // 0 to 1: 0 when nothing was counted; decays after the last counted outcome
-	// Verified is set when a fingerprint check passed and is still recent (verifyMaxAge), with no contradiction
+	// Verified is set when a fingerprint check passed and is still recent (the configured maximum age), with no contradiction
 	// since. An endpoint never checked is not verified; neither is one concluded fake (docs/domains/quality.md
 	//「真伪检测」). VerifiedAt is when the last check passed, kept after it ages out or is contradicted, and
-	// VerifyConfidence how much the pass still counts: 1 then, 0 at verifyMaxAge, and 0 whenever Verified is false.
+	// VerifyConfidence how much the pass still counts: 1 then, 0 at the maximum age, and 0 whenever Verified is false.
 	Verified         bool
 	VerifiedAt       time.Time
 	VerifyConfidence float64
@@ -111,6 +109,7 @@ type Monitor struct {
 	collected map[suppliers.EndpointID]struct{}
 
 	unclassified   metric.Int64Counter // failures the adapters could not classify, which are not counted
+	verifyAge      atomic.Int64        // how long a verification pass counts, in nanoseconds, from the probe settings
 	mode           Mode
 	changes        chan change
 	loop           *Loop
@@ -126,6 +125,7 @@ type State struct {
 	window      window
 	record      healthRecord
 	owned       bool
+	probeable   bool // a platform endpoint with a generation format: the only kind the loop can re-check
 	loaded      bool
 	pending     int
 	successes   int
@@ -179,8 +179,14 @@ func New(meter metric.Meter) *Monitor {
 		suspectedBlock: counter(meter, "axiom.quality.suspected_block",
 			"HTML answers taken for a firewall on the route, which count against neither the endpoint nor the route."),
 	}
+	m.verifyAge.Store(int64(defaultVerifyMaxAge))
 	m.register(meter)
 	return m
+}
+
+// verificationAge is how long a pass counts, from the live probe settings.
+func (m *Monitor) verificationAge() time.Duration {
+	return time.Duration(m.verifyAge.Load())
 }
 
 func counter(m metric.Meter, name, description string) metric.Int64Counter {
@@ -264,7 +270,7 @@ func (e *State) quality(now time.Time) (score, confidence float64) {
 }
 
 // measures is what the endpoint's numbers are now; the caller holds e.mu.
-func (e *State) measures(now time.Time) Measures {
+func (e *State) measures(now time.Time, verifyMaxAge time.Duration) Measures {
 	out := Measures{Health: 1 - e.errorRate}
 	out.Quality, out.Confidence = e.quality(now)
 	if v, ok := e.latency.measured(now); ok {
@@ -281,8 +287,8 @@ func (e *State) measures(now time.Time) Measures {
 	if v, ok := e.speedWindow.percentiles(now); ok {
 		out.ThroughputPercentiles = v
 	}
-	out.Verified = e.verify.verified(now)
-	out.VerifyConfidence = e.verify.confidence(now)
+	out.Verified = e.verify.verified(now, verifyMaxAge)
+	out.VerifyConfidence = e.verify.confidence(now, verifyMaxAge)
 	if !e.verify.checked.IsZero() {
 		out.VerifiedAt = e.verify.checked
 	}
@@ -307,11 +313,24 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	out := e.measures(now)
+	out := e.measures(now, m.verificationAge())
 	if out.Verified && (!has || e.verify.claim != want) {
 		out.Verified, out.VerifyConfidence, out.VerifiedAt = false, 0, time.Time{}
 	}
 	return out
+}
+
+// probeFormat picks the call format a health probe uses: the first generation format the endpoint serves. Embeddings,
+// rerank and other direct formats cannot answer a generation probe, so an endpoint that serves only those is not probed.
+func probeFormat(formats []protocol.Format) (protocol.Format, bool) {
+	for _, f := range formats {
+		switch f {
+		case protocol.Messages, protocol.Responses, protocol.Chat, protocol.Completions:
+			return f, true
+		case protocol.Embeddings, protocol.Rerank: // direct formats cannot answer a generation
+		}
+	}
+	return 0, false
 }
 
 func (m *Monitor) of(id suppliers.EndpointID) *State {
@@ -326,7 +345,7 @@ func (m *Monitor) of(id suppliers.EndpointID) *State {
 	if e = m.endpoints[id]; e == nil {
 		_, collected := m.collected[id]
 		delete(m.collected, id)
-		e = &State{id: id, mode: m.mode, loaded: !collected}
+		e = &State{id: id, mode: m.mode, probeable: true, loaded: !collected}
 		m.endpoints[id] = e
 	}
 	return e

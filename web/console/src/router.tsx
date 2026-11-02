@@ -111,6 +111,11 @@ const routeTree = root.addChildren([
     }),
     createRoute({
       getParentRoute: () => app,
+      path: "/orders/$orderId/receipt",
+      component: lazyRouteComponent(() => import("./pages/receipt")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
       path: "/statement",
       component: lazyRouteComponent(() => import("./pages/statement")),
     }),

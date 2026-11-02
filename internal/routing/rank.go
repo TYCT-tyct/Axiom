@@ -18,6 +18,7 @@ type ranked struct {
 	price *candidatePrice
 	*candidate
 	opened    time.Time
+	offline   bool // a failed re-check: no traffic at all, not even as a last resort
 	slowFull  bool
 	order     int  // index of its supplier in the named order; after all of them when not named
 	slow      bool // misses a performance wish
@@ -74,6 +75,7 @@ func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 			if c.LiveHealth != nil {
 				var limit int64
 				s.opened, limit = c.LiveHealth.Routing(n.now)
+				s.offline = c.LiveHealth.Offline(n.now)
 				s.slowFull = limit > 0 && c.state.inflight.Load() >= limit
 			}
 			out = append(out, s)

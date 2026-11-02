@@ -182,6 +182,8 @@ func (q *Queries) InsertOrder(ctx context.Context, db DBTX, arg InsertOrderParam
 const listOrders = `-- name: ListOrders :many
 SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.fingerprint, o.credits,
     o.site_currency, o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
+    -- The same paid facts as ReadOrder, so a page shows the same receipt whichever read it came from.
+    o.paid_at, o.paid_total, o.paid_fee, o.credited,
     (m.user_refund AND m.refund_enabled)::boolean AS refund_allowed
 FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id
 WHERE o.account_id = $1 AND (o.created_at, o.id) < ($2::timestamptz, $3::uuid)
@@ -215,6 +217,10 @@ type ListOrdersRow struct {
 	ExpiresAt     time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	PaidAt        pgtype.Timestamptz
+	PaidTotal     *int64
+	PaidFee       *int64
+	Credited      *int64
 	RefundAllowed bool
 }
 
@@ -253,6 +259,10 @@ func (q *Queries) ListOrders(ctx context.Context, db DBTX, arg ListOrdersParams)
 			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PaidAt,
+			&i.PaidTotal,
+			&i.PaidFee,
+			&i.Credited,
 			&i.RefundAllowed,
 		); err != nil {
 			return nil, err
@@ -629,6 +639,9 @@ func (q *Queries) OrderEvent(ctx context.Context, db DBTX, arg OrderEventParams)
 const readOrder = `-- name: ReadOrder :many
 SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.fingerprint, o.credits,
     o.site_currency, o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
+    -- What the channel took and what has been credited, which a partial or late payment makes differ from the quote.
+    -- NULL until the order is paid.
+    o.paid_at, o.paid_total, o.paid_fee, o.credited,
     (m.user_refund AND m.refund_enabled)::boolean AS refund_allowed
 FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id WHERE o.id = $1
 `
@@ -652,6 +665,10 @@ type ReadOrderRow struct {
 	ExpiresAt     time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	PaidAt        pgtype.Timestamptz
+	PaidTotal     *int64
+	PaidFee       *int64
+	Credited      *int64
 	RefundAllowed bool
 }
 
@@ -687,6 +704,10 @@ func (q *Queries) ReadOrder(ctx context.Context, db DBTX, id uuid.UUID) ([]ReadO
 			&i.ExpiresAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PaidAt,
+			&i.PaidTotal,
+			&i.PaidFee,
+			&i.Credited,
 			&i.RefundAllowed,
 		); err != nil {
 			return nil, err
