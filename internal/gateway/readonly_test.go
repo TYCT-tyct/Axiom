@@ -1,13 +1,16 @@
 package gateway
 
 import (
+	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
+	"axiom/internal/observability"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
@@ -482,6 +485,44 @@ func TestGenerationShowsHowTheCallRan(t *testing.T) {
 		if !near(d[field], want) {
 			t.Errorf("%s: %v, want %v", field, d[field], want)
 		}
+	}
+}
+
+// TestGenerationReportsTheCacheDiscount: /api/v1/generation reports what cache reads saved against the input price,
+// computed from the frozen sale schedule and the usage settlement stored, not read from the call log's snapshot. The
+// call reports 143 input, 77 cached and 84 output tokens over its three samplings; the sale price is a millionth of a
+// credit an input token and half that a cached one, so the reads saved 77 × 0.0000005 credits.
+func TestGenerationReportsTheCacheDiscount(t *testing.T) {
+	t.Parallel()
+	r, receipt, _ := supplierEveryItemRig(t, supplierScheduleEvery)
+	sample, _ := sample(t, protocol.Messages)
+	up := withCosts(r, r.billing, r.suppliers)
+	up.setReceipt(receipt)
+	up.setScript(serve(beat{data: threeSegments(sample)}))
+	records, err := observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
+		Dir: t.TempDir(), Capacity: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
+		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
+	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.exec.Records = records
+	a := r.funded(1e12)
+	r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
+	if err := r.exec.Records.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := r.do(http.MethodGet, "/api/v1/generation?id="+r.lastCall().ID.String(), a.key, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	d := data(t, body)
+	if !near(d["cache_discount"], float64(everyCacheRead)*(1e-6-0.5e-6)) {
+		t.Errorf("cache_discount = %v, want %v (%d cached tokens at the sale price)", d["cache_discount"],
+			float64(everyCacheRead)*(1e-6-0.5e-6), everyCacheRead)
+	}
+	if !near(d["total_cost"], float64(everyInput)*1e-6+float64(everyCacheRead)*0.5e-6+float64(everyOutput)*2e-6) {
+		t.Errorf("total_cost = %v, want the settled charge", d["total_cost"])
 	}
 }
 

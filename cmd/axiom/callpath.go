@@ -123,7 +123,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	}
 	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
 	// stamps it on every plan and the executor reads it from there, not from the configuration.
-	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy, Segments: ledger.Segments()})
+	router, err := routing.New(routingConfig(d.gate, ledger.Segments()))
 	if err != nil {
 		return callNode{}, err
 	}
@@ -166,6 +166,24 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	return n, nil
 }
 
+// routingConfig is what the router gets from the node's settings and the live segment policy the ledger loaded. The
+// policy is the one ledgerConfig hands billing, so routing never marks an entry segmentable with no sizes for billing
+// to reserve it by (#229).
+func routingConfig(gate gateway.Config, segments *billing.SegmentPolicy) routing.Config {
+	return routing.Config{AttemptWindow: gate.StartBy, Segments: segments}
+}
+
+// ledgerConfig is what billing gets from the node's settings; it holds the same live policy routingConfig reads, so an
+// entry one of them segments is one the other can reserve.
+func ledgerConfig(gate gateway.Config, segments *billing.SegmentPolicy, logger *slog.Logger, meter metric.Meter, signals alert.Sink) billing.Config {
+	return billing.Config{
+		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
+		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
+		// what no settlement will only once the call cannot still be running.
+		Lifetime: gate.MaxCall + gate.SettleGrace, Segments: segments, Logger: logger, Meter: meter, Alerts: signals,
+	}
+}
+
 // startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call and the
 // segment settings the administrator saved. The policy is shared with routing through Billing.Segments.
 func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metric.Meter, logger *slog.Logger, signals alert.Sink) (*billing.Billing, error) {
@@ -173,12 +191,7 @@ func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metr
 	if err != nil {
 		return nil, err
 	}
-	return billing.Start(ctx, db, pg.PlatformScope(), billing.Config{
-		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
-		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
-		// what no settlement will only once the call cannot still be running.
-		Lifetime: gate.MaxCall + gate.SettleGrace, Segments: segments, Logger: logger, Meter: meter, Alerts: signals,
-	}, suppliers.CallWrites{})
+	return billing.Start(ctx, db, pg.PlatformScope(), ledgerConfig(gate, segments, logger, meter, signals), suppliers.CallWrites{})
 }
 
 // newCallNode makes the executor that runs admitted calls and the handler that admits them.

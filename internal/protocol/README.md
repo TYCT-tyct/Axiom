@@ -337,7 +337,7 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 
 ## 录制样本
 
-协议的测试用固定样本回放（[总体架构的「协议转换」](../../docs/architecture.md#协议转换)）。样本放在 `testdata/<上游格式>/<场景>/`，上游格式是 `messages`、`responses`、`chat`、`completions`，场景名用英文小写和连字符。每个场景三个文件，已实现的转发方向再加一个黄金输出：
+协议的测试用固定样本回放（[总体架构的「协议转换」](../../docs/architecture.md#协议转换)）。样本放在 `testdata/<上游格式>/<场景>/`，上游格式是 `messages`、`responses`、`chat`、`completions`，场景名用英文小写和连字符。每个场景三个文件，录制的 Chat 场景再加 `usage.json`，已实现的转发方向再加一个黄金输出：
 
 | 文件 | 内容 |
 |---|---|
@@ -348,8 +348,9 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 | `aggregate-<客户端格式>.json` | `Relay` 把这个流聚合给不要流的该格式客户端的响应体，条件同上；Messages、Responses 的流给 Chat 客户端的叫 `aggregate-to-chat.json`；`go test ./internal/protocol -update` 重写 |
 | `response.json` | 只有 `embeddings`、`rerank` 的直接格式有：上游返回的整份 JSON 回复；`TestDirectSamples` 用它核对 `DirectUsage`、`ValidateDirectReply` 和 `RewriteDirectReply` |
 | `meta.json` | `source`：官方样本是来源的网址，录制的是 `recorded from a live upstream: POST <官方端点>`，不写上游的地址；`date`：取得的日期（`YYYY-MM-DD`）；`note`：与上游原样不同的地方，没有就不写 |
+| `usage.json` | 只在 Chat 样本里：这条流必须计成哪些项和数量，按 `catalog.Item` 的名字写（`{"input": 25, "cache_read": 40, "output": 15}`），各段合计，未写的项为 0；`TestChatUpstreamSamples` 用它核对流式与聚合两条路径。录制工具写下场景后由录制者按上游报告的用量和 [catalog 的「计费项与用量」](../catalog/README.md#计费项与用量) 填写；录制场景没有它测试就失败，所以真实上游不会被静默跳过。官方转写的场景（如 `chat/text`）没有用量可写，不写 |
 
-- `testdata/assembled` 里是按官方事件形状组装的流，不是样本，只给转换的黄金输出和往返测试用：`responses-reasoning-tool.sse` 是一个带摘要和密文的推理项、一个函数调用，官方没有带这两样的 Responses 完整流。它的非流式黄金输出是 `responses-reasoning-tool.aggregate-to-chat.json`、`responses-reasoning-tool.aggregate-to-messages.json` 和 `responses-reasoning-tool.aggregate-responses.json`，流式的 `responses-reasoning-tool.to-messages.sse` 是给 Messages 客户端的转换。`chat-tool-calls`、`chat-reasoning-cache`、`chat-image` 是 Chat 端点（DeepSeek、Qwen 一类）的三段对话：请求，按 DeepSeek《Create Chat Completion》、OpenAI《Create chat completion》和阿里云百炼 OpenAI 兼容接口（用量块没有选项，读取于 2026-10-19；`prompt_tokens_details` 的图片明细该页没有列，照 OpenAI 的用量口径写）的形状组装的流（含空 id 的工具碎片、`reasoning_content`、`prompt_cache_hit_tokens`、没有选项的用量块），以及黄金输出 `.to-chat.json`（请求改写给 Chat 端点）、`.client-chat.sse`、`.aggregate-chat.json`，`go test -update` 重写。它们不是录制的：没有那类上游的 key，有了之后用 `just record chat` 换成真实样本。
+- `testdata/assembled` 里是按官方事件形状组装的流，不是样本，只给转换的黄金输出和往返测试用：`responses-reasoning-tool.sse` 是一个带摘要和密文的推理项、一个函数调用，官方没有带这两样的 Responses 完整流。它的非流式黄金输出是 `responses-reasoning-tool.aggregate-to-chat.json`、`responses-reasoning-tool.aggregate-to-messages.json` 和 `responses-reasoning-tool.aggregate-responses.json`，流式的 `responses-reasoning-tool.to-messages.sse` 是给 Messages 客户端的转换。`chat-tool-calls`、`chat-reasoning-cache`、`chat-image` 是 Chat 端点（DeepSeek、Qwen 一类）的三段对话：请求，按 DeepSeek《Create Chat Completion》、OpenAI《Create chat completion》和阿里云百炼 OpenAI 兼容接口（用量块没有选项，读取于 2026-10-19；`prompt_tokens_details` 的图片明细该页没有列，照 OpenAI 的用量口径写）的形状组装的流（含空 id 的工具碎片、`reasoning_content`、`prompt_cache_hit_tokens`、没有选项的用量块），以及黄金输出 `.to-chat.json`（请求改写给 Chat 端点）、`.client-chat.sse`、`.aggregate-chat.json`，`go test -update` 重写。它们不是录制的：没有那类上游的 key，有了之后用 `just record chat` 换成真实样本，再补上 `usage.json`。
 - 直接格式（`embeddings`、`rerank`）的场景目录用 `request.json`、`response.json`、`meta.json`，没有 `upstream.sse`：它们不流式，`streamcheck.Sample` 的 SSE 检查不适用，由 `TestDirectSamples` 单独回放。
 - 旧版补全的样本还没有自己的 `streamcheck`：`TestSamples` 不遍历这个目录，`TestCompletionsSample` 用 `Relay` 的读取器（同一套严格校验）回放它，并核对改写、聚合和费用。
 - 只收两种来源：官方文档里的完整流，以及用合成提示词录制的真实上游。官方示例常把中间事件省略成一行注释（`:` 开头），读 SSE 时注释本来就跳过，所以原样保留，在 `note` 里写明省略了什么；网页渲染改动过的空白按接口的原样还原，同样写进 `note`。
@@ -358,7 +359,7 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 
 ### 录制
 
-`just record <格式> <场景> <请求文件>`：把请求文件原样发给上游，流读完后在 `testdata/<格式>/<场景>/` 写下三个文件。请求文件的路径从仓库根目录算起，写进 `request.json` 前同样替换 ID。
+`just record <格式> <场景> <请求文件>`：把请求文件原样发给上游，流读完后在 `testdata/<格式>/<场景>/` 写下三个文件。请求文件的路径从仓库根目录算起，写进 `request.json` 前同样替换 ID。Chat 场景还要紧接着写 `usage.json`：录制工具不知道本站的计费映射，预期用量由录制者按上游报告的 `usage` 和计费项的映射填写；漏写时 `TestChatUpstreamSamples` 会失败并指出是哪个场景，而不是把它跳过。
 
 - **上游**：地址和 key 取自环境变量，没设的再从仓库根目录的 `.env` 读（git 忽略它，变量见 `.env.example`）。变量名和地址写法与两家 SDK 相同：`messages` 用 `ANTHROPIC_BASE_URL`（主机，路径补 `/v1/messages`）、`ANTHROPIC_API_KEY`；`responses`、`chat` 用 `OPENAI_BASE_URL`（以 `/v1` 结尾，路径补 `/responses`、`/chat/completions`）、`OPENAI_API_KEY`。
 - **发出前拒绝**：格式不认识、场景名不合规、样本目录已存在（从不覆盖）、没有地址或 key、请求不是严格 JSON 或没有 `"stream": true`、请求里有 key。
@@ -412,7 +413,7 @@ Chat 上游的反向转换由 `streamfromchat.go`、`streamchatmessages.go`、`s
 | 一个流聚合的片段不超过 16 MiB，超出和节点预算不够都以 `ErrMemory` 结束而不是 `ErrUpstream`，结束时节点预算回到原值，聚合器持有的不超过已记账的 | `TestAggregateBudget`（三种格式的上限内、上限外、节点预算不够，Responses 超限的结尾）；`TestAggregateChatHeld`（每块都远小于事件上限、合起来超过上限的纯结束选项，在 `Next` 里就以 `ErrMemory` 失败并归还预算）；`TestRelayMemoryHeld` 的聚合变体：五百个选项、五百个 Responses 项、五百个函数调用、工具的长输入，每一步和失败之后（每一步都要数一遍持有量，代价随个数平方增长，所以比非聚合的 5000 个少） |
 | 聚合每个事件不比读 SSE 多分配 | `TestAggregateAllocs` 对三种格式比较 10 个与 200 个增量、1 KiB 与 64 KiB 的增量；`BenchmarkAggregate` |
 | Chat 请求发给 Chat 端点时，流式的端点总收到 `stream: true` 和 `stream_options.include_usage: true`，没写输出上限的带 `Target.MaxOutput`，且不出现重复的成员 | `TestPrepareChat` 整份请求体逐字节比较（`stream_options` 缺、`null`、空、`false`、带别的选项、上限为 `null`、0、两个上限取小、没有上限、模型方言成员原样）；`TestPrepareChatWritesTheCapTheEndpointReads` 逐个模型名核对输出上限写进哪个成员且只有一个；网关层 `TestAChatCapTheEndpointIgnoresIsNotTheBound`：只写 `max_completion_tokens:1` 的客户端，发给只认 `max_tokens` 的端点的请求里是 `max_tokens:1`，成本等于缓冲容量加三倍请求体；`FuzzPrepareChatStream` 对 `Inspect` 接受的请求核对摘要不变、只有类型不对才 `ErrInvalid`、没有重复成员 |
-| Chat 端点的回复按样本回放：流逐字节与黄金输出相同（整段读与逐字节读一致），整份回复与流的内容一致，用量只算一次 | `TestChatUpstreamSamples` 对 `testdata/assembled/chat-*`（工具调用与空 id 碎片、DeepSeek 推理与缓存字段、Qwen 图片与无选项的用量块）核对请求、客户端流、聚合回复的黄金输出和三条路径上的计费项；`TestOpenAIDeepSeekCache` 核对缓存字段的映射 |
+| Chat 端点的回复按样本回放：流逐字节与黄金输出相同（整段读与逐字节读一致），整份回复与流的内容一致，用量只算一次 | `TestChatUpstreamSamples` 对 `testdata/assembled/chat-*`（工具调用与空 id 碎片、DeepSeek 推理与缓存字段、Qwen 图片与无选项的用量块）核对请求、客户端流、聚合回复的黄金输出和两条转发路径上的计费项；对 `testdata/chat/*` 里录制工具写下的场景回放请求、流式与聚合两条路径，并核对 `usage.json` 的计费项合计（没有 `usage.json` 的录制场景直接失败，官方转写场景不计量），`TestChatSceneUsage` 核对这份期望的读取与拒绝；`TestOpenAIDeepSeekCache` 核对缓存字段的映射 |
 | Messages、Responses 到 Chat 的请求遵循同一映射、原生端点选择与输出上限规则 | `TestMessagesRequestsToChat`、`TestResponsesRequestsToChat` 整份请求黄金表；`TestNativeChatRejectsUnrepresentableMembers`、`TestNativeChatCapAndContinuation`；gateway 的 `TestRouteBuildConvertsNativeClientsToChat`、`TestNativeClientsUseChatEndpoints` |
 | Chat 流转换保留文本、推理和工具参数，计费与同格式一致，失败不写成功结尾 | `TestChatToNativeSamples` 三份 part-A 样本 × 两种客户端 × 整段/逐字节/聚合；`TestChatParallelToolsAreStreamedWithoutMixingArguments`、`TestChatToNativeStopReasons`、`TestChatToNativeFailures`、`TestChatConversionFailureBeforeClientPrelude`、`TestChatToMessagesRejectsInvalidToolInput`、`TestChatConversionCannotOutgrowTheNodeBudget`、`FuzzChatToNative`；新方向基准 `BenchmarkRequestsToChat`、`BenchmarkChatToNative`，既有基准继续比较分配 |
 | Chat 回复的推理文本在每一块里有两个名字，上游只写一个也一样 | `TestRelayChatWritesReasoningUnderBothNames`（只有一个名字、另一个为 `null`、两个都有文本、`finish_reason` 在同一块里在 `delta` 之前或之后）；`TestAggregateChat` 整份回复两个名字都有 |
