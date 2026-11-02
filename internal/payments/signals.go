@@ -91,10 +91,7 @@ func (p *Payments) countSignal(kind, source string) {
 // afterReport flushes the window at its end so a burst that stops is still reported. A later event on the next window
 // also reports it, whichever comes first; the start time makes the two paths idempotent.
 func (p *Payments) afterReport(k signalKey, start time.Time) {
-	delay := start.Add(signalWindow).Sub(p.now())
-	if delay < 0 {
-		delay = 0
-	}
+	delay := max(start.Add(signalWindow).Sub(p.now()), 0)
 	p.after(delay, func() { p.flush(k, start) })
 }
 
@@ -125,10 +122,7 @@ func (p *Payments) report(k signalKey, c *signalCounter) {
 	}
 	c.reported, c.firing = true, true
 	start := c.start
-	delay := start.Add(2 * signalWindow).Sub(p.now())
-	if delay < 0 {
-		delay = 0
-	}
+	delay := max(start.Add(2*signalWindow).Sub(p.now()), 0)
 	p.after(delay, func() { p.recover(k, start) })
 }
 

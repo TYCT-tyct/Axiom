@@ -131,6 +131,8 @@ func TestSecondarySitePaymentSaveNotifiesOwnerOncePerChange(t *testing.T) {
 
 // TestSitePaymentNoticeNamesTheChangedChild: one owner with two secondary sites gets a notice that names the site that
 // changed, through the real dispatcher and mail outbox, not just a row with the parent site.
+//
+//nolint:cyclop,gocognit // one end-to-end scenario: save two sites, dispatch, then inspect both mails.
 func TestSitePaymentNoticeNamesTheChangedChild(t *testing.T) {
 	w := newWorld(t)
 	main, childA, owner, user := w.ownerSite()

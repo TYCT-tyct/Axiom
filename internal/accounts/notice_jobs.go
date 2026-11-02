@@ -147,10 +147,7 @@ func noticeEnabled(kind string, p NotificationPreferences) bool {
 }
 
 func noticeMail(n userNotice) mail.Message {
-	names := map[string]string{"low_balance": "Low balance", "top_up": "Top-up credited", "factor_changed": "Authentication factors changed", "spend_anomaly": "Unusual account activity", "site_payment_changed": "Payment settings changed"}
-	if n.language == "zh" {
-		names = map[string]string{"low_balance": "余额不足", "top_up": "充值到账", "factor_changed": "认证因素已变更", "spend_anomaly": "账户异常活动", "site_payment_changed": "收款配置已变更"}
-	}
+	names := noticeNames(n.language)
 	brand := strings.Map(func(r rune) rune {
 		if r < ' ' || r == 127 {
 			return -1
@@ -162,19 +159,10 @@ func noticeMail(n userNotice) mail.Message {
 		amount, _ := new(big.Int).SetString(n.Value, 10)
 		value = new(big.Rat).SetFrac(amount, big.NewInt(1_000_000_000)).FloatString(9) + " " + n.Currency
 	}
-	detail := strings.Map(func(r rune) rune {
-		if r < ' ' || r == 127 {
-			return -1
-		}
-		return r
-	}, n.Detail)
+	detail := noticeDetail(n)
 	text := brand + "\n\n" + names[n.Kind]
-	if n.Kind == "site_payment_changed" && detail != "" {
-		if n.language == "zh" {
-			text += "\n站点：" + detail
-		} else {
-			text += "\nSite: " + detail
-		}
+	if detail != "" {
+		text += noticeDetailLine(n.language, detail)
 	}
 	if (n.Kind != "spend_anomaly" && n.Kind != "site_payment_changed") || n.Value != "0" {
 		text += "\n" + value
@@ -182,11 +170,44 @@ func noticeMail(n userNotice) mail.Message {
 	if advice := noticeAdvice(n); advice != "" {
 		text += "\n" + advice
 	}
-	subject := brand + " — " + names[n.Kind]
-	if n.Kind == "site_payment_changed" && detail != "" {
-		subject += " (" + detail + ")"
+	return mail.Message{To: n.email, Subject: noticeSubject(brand, names[n.Kind], detail), Text: text, HTML: "<p>" + html.EscapeString(text) + "</p>"}
+}
+
+// noticeDetail is the changed secondary site's name for a site payment notice; other kinds have none.
+func noticeDetail(n userNotice) string {
+	if n.Kind != "site_payment_changed" {
+		return ""
 	}
-	return mail.Message{To: n.email, Subject: subject, Text: text, HTML: "<p>" + html.EscapeString(text) + "</p>"}
+	return strings.Map(func(r rune) rune {
+		if r < ' ' || r == 127 {
+			return -1
+		}
+		return r
+	}, n.Detail)
+}
+
+// noticeDetailLine names the changed site after the notice title.
+func noticeDetailLine(language, detail string) string {
+	if language == "zh" {
+		return "\n站点：" + detail
+	}
+	return "\nSite: " + detail
+}
+
+// noticeSubject adds the changed site to the subject so two child sites do not look identical in a mailbox.
+func noticeSubject(brand, title, detail string) string {
+	if detail == "" {
+		return brand + " — " + title
+	}
+	return brand + " — " + title + " (" + detail + ")"
+}
+
+// noticeNames is the localized title of every notice kind.
+func noticeNames(language string) map[string]string {
+	if language == "zh" {
+		return map[string]string{"low_balance": "余额不足", "top_up": "充值到账", "factor_changed": "认证因素已变更", "spend_anomaly": "账户异常活动", "site_payment_changed": "收款配置已变更"}
+	}
+	return map[string]string{"low_balance": "Low balance", "top_up": "Top-up credited", "factor_changed": "Authentication factors changed", "spend_anomaly": "Unusual account activity", "site_payment_changed": "Payment settings changed"}
 }
 
 // noticeAdvice is the one line a security reminder adds after its facts; other notices have none.
