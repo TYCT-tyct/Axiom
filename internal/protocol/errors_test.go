@@ -52,7 +52,7 @@ func TestRenderError(t *testing.T) {
 				var got map[string]any
 				err := jsonx.Unmarshal(body, &got)
 				axiom, _ := got["axiom"].(map[string]any)
-				switch diff := cmp.Diff(wantError(f, row.name, row.messages), typedError(got)); {
+				switch diff := cmp.Diff(wantError(f, row.name, row.messages, row.status), typedError(got)); {
 				case err != nil || status != row.status:
 					t.Errorf("status %d, want %d; %v:\n%s", status, row.status, err, body)
 				case diff != "":
@@ -97,11 +97,12 @@ func chargedUsage(f protocol.Format) map[string]any {
 	return u
 }
 
-// wantError is what typedError should find in an error of type name in format f.
-func wantError(f protocol.Format, name, messages string) map[string]any {
+// wantError is what typedError should find in an error of type name in format f: Chat and Responses carry the status as
+// the numeric code, as OpenRouter does.
+func wantError(f protocol.Format, name, messages string, status int) map[string]any {
 	want := map[string]any{"error_type": name, "limit_source": "balance", "has_message": true, "type": messages}
 	if f != protocol.Messages {
-		want["code"], want["param"] = name, ""
+		want["code"], want["param"] = float64(status), ""
 	}
 	return want
 }
@@ -124,7 +125,8 @@ func typedError(body map[string]any) map[string]any {
 }
 
 // TestRenderRejection: what the upstream said of a request it refused reaches the client in its own words, with the
-// type, param and code it gave (null when it gave no code), in the shells that have them; Messages keeps its own type.
+// type and param it gave, its code in metadata.provider_code (omitted when it gave none) and the numeric status as the
+// code, in the shells that have them; Messages keeps its own type.
 func TestRenderRejection(t *testing.T) {
 	openAI := &protocol.Rejection{
 		Message: "Invalid value for 'max_tokens': expected a value above 0.", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value",
@@ -138,17 +140,17 @@ func TestRenderRejection(t *testing.T) {
 	}{
 		{"OpenAI's error in Chat", protocol.Chat, openAI, []string{
 			`"message":"Invalid value for 'max_tokens': expected a value above 0."`, `"type":"invalid_request_error"`,
-			`"param":"max_tokens"`, `"code":"invalid_value"`, `"error_type":"invalid_request"`,
+			`"param":"max_tokens"`, `"code":400`, `"provider_code":"invalid_value"`, `"error_type":"invalid_request"`,
 		}},
-		{"OpenAI's error before a Responses stream", protocol.Responses, openAI, []string{`"param":"max_tokens"`, `"code":"invalid_value"`}},
+		{"OpenAI's error before a Responses stream", protocol.Responses, openAI, []string{`"param":"max_tokens"`, `"code":400`, `"provider_code":"invalid_value"`}},
 		{"Anthropic's error in Chat", protocol.Chat, claude, []string{
-			`"message":"max_tokens: Input should be greater than 0"`, `"type":"invalid_request_error"`, `"param":""`, `"code":null`,
+			`"message":"max_tokens: Input should be greater than 0"`, `"type":"invalid_request_error"`, `"param":""`, `"code":400`,
 		}},
 		{"OpenAI's error in Messages", protocol.Messages, openAI, []string{
 			`"message":"Invalid value for 'max_tokens': expected a value above 0."`, `"type":"invalid_request_error"`, `"error_type":"invalid_request"`,
 		}},
 		{"a type of the upstream's own in Chat", protocol.Chat, &protocol.Rejection{Message: "m", Type: "image_parse_error", Code: "bad_image"}, []string{
-			`"type":"image_parse_error"`, `"code":"bad_image"`,
+			`"type":"image_parse_error"`, `"code":400`, `"provider_code":"bad_image"`,
 		}},
 		{"a type of the upstream's own in Messages", protocol.Messages, &protocol.Rejection{Message: "m", Type: "weird"}, []string{`"type":"invalid_request_error"`}},
 	} {
@@ -165,14 +167,20 @@ func TestRenderRejection(t *testing.T) {
 			if c.f == protocol.Messages && strings.Contains(string(body), "param") {
 				t.Errorf("a param in Anthropic's shell: %s", body)
 			}
+			if c.r.Code == "" && strings.Contains(string(body), "provider_code") {
+				t.Errorf("a provider_code for an upstream that gave none: %s", body)
+			}
 		})
 	}
 }
 
-func TestTypedRejectionUsesCanonicalCodeWhenAbsent(t *testing.T) {
+// TestTypedRejection: a request error the gateway classified keeps its unified type and the status table's status as
+// the numeric code, whatever the upstream called it, and the upstream's own code stays in metadata.provider_code when
+// it gave one (docs/domains/gateway.md「错误」).
+func TestTypedRejection(t *testing.T) {
 	for _, row := range []struct {
 		typ    protocol.ErrorType
-		code   string
+		name   string
 		status int
 		kind   string
 	}{
@@ -182,18 +190,42 @@ func TestTypedRejectionUsesCanonicalCodeWhenAbsent(t *testing.T) {
 		{protocol.RequestTooLarge, "payload_too_large", 413, "request_too_large"},
 	} {
 		for _, f := range []protocol.Format{protocol.Chat, protocol.Responses} {
-			status, body := protocol.RenderError(f, protocol.Error{Type: row.typ, Rejection: &protocol.Rejection{
-				Type: "invalid_request_error", Message: "upstream words", Param: "input",
-			}}, nil)
-			var got map[string]any
-			if err := jsonx.Unmarshal(body, &got); err != nil {
-				t.Fatal(err)
-			}
-			e := got["error"].(map[string]any)
-			if status != row.status || e["code"] != row.code || e["type"] != row.kind || e["param"] != "input" || e["message"] != "upstream words" {
-				t.Errorf("%s: %d %s", row.code, status, body)
+			for _, code := range []string{"", "upstream_code"} {
+				status, body := protocol.RenderError(f, protocol.Error{Type: row.typ, Rejection: &protocol.Rejection{
+					Type: "invalid_request_error", Message: "upstream words", Param: "input", Code: code,
+				}}, nil)
+				var got map[string]any
+				if err := jsonx.Unmarshal(body, &got); err != nil {
+					t.Fatal(err)
+				}
+				e := got["error"].(map[string]any)
+				meta := e["metadata"].(map[string]any)
+				if status != row.status || e["code"] != float64(row.status) || e["type"] != row.kind ||
+					e["param"] != "input" || e["message"] != "upstream words" || meta["error_type"] != row.name {
+					t.Errorf("%s: %d %s", row.name, status, body)
+				}
+				if prov, ok := meta["provider_code"]; code == "" && ok || code != "" && prov != code {
+					t.Errorf("%s: provider_code %v, upstream code %q in %s", row.name, prov, code, body)
+				}
 			}
 		}
+	}
+}
+
+// TestErrorStatusOverride: a key or workspace budget is a 403 where its type's status is a 402, and the numeric code
+// follows the status the caller named, so the body and the status line still say the same thing.
+func TestErrorStatusOverride(t *testing.T) {
+	for _, f := range []protocol.Format{protocol.Chat, protocol.Responses} {
+		status, body := protocol.RenderError(f, protocol.Error{Type: protocol.CreditsInsufficient, Status: 403, Details: `,"limit_source":"openrouter_key_limit"`}, nil)
+		if status != 403 || !strings.Contains(string(body), `"code":403`) ||
+			!strings.Contains(string(body), `"limit_source":"openrouter_key_limit"`) {
+			t.Errorf("format %d: %d %s", f, status, body)
+		}
+	}
+	ending := protocol.NewRelay(protocol.Chat, protocol.Chat, strings.NewReader(""), protocol.UsageContext{}, options).
+		Fail(protocol.Error{Type: protocol.CreditsInsufficient, Status: 403}, nil)
+	if !strings.Contains(string(ending), `"code":403`) {
+		t.Errorf("a Chat stream's error ending: %s", ending)
 	}
 }
 

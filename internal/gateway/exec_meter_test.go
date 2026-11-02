@@ -120,12 +120,12 @@ func TestARefusedExtensionCutsTheStream(t *testing.T) {
 	}
 	db := errors.New("connection refused")
 	for _, tc := range []cutCase{
-		{"a key limit", refuse(&billing.Insufficient{Source: billing.SourceKey}), true, "credits_insufficient", "key_limit", 200, "", 0},
+		{"a key limit", refuse(&billing.Insufficient{Source: billing.SourceKey}), true, "credits_insufficient", "openrouter_key_limit", 200, "", 0},
 		{"a holder reaped", refuse(billing.ErrTerminated), true, "billing_unavailable", "", 200, "", 0},
 		{"the database failing", refuse(db), true, "billing_unavailable", "", 200, "", 0},
 		{"the database too slow", slow, true, "billing_unavailable", "", 200, "", time.Second},
 		{"the balance, before the commit point", refuse(&billing.Insufficient{Source: billing.SourceBalance}), false, "credits_insufficient", "balance", 402, "", 0},
-		{"a limit that resets, before the commit point", refuse(&billing.Insufficient{Source: billing.SourceWorkspace, Transient: true}), false, "credits_insufficient", "workspace_budget", 402, "60", 0},
+		{"a limit that resets, before the commit point", refuse(&billing.Insufficient{Source: billing.SourceWorkspace, Transient: true}), false, "credits_insufficient", "openrouter_workspace_budget", 403, "60", 0},
 		{"the database, before the commit point", refuse(db), false, "billing_unavailable", "", 503, "", 0},
 	} {
 		run(t, func(t *testing.T, ctx context.Context) {
@@ -146,7 +146,12 @@ func checkCut(t *testing.T, h *harness, tc cutCase) {
 	t.Helper()
 	body := h.w.body()
 	limit := tc.limit == "" || strings.Contains(body, `"limit_source":"`+tc.limit+`"`)
-	if !strings.Contains(body, `"error_type":"`+tc.code+`"`) || !limit || strings.Contains(body, strings.Repeat("x", 250)) {
+	typ := "api_error"
+	if tc.code == "credits_insufficient" {
+		typ = "billing_error"
+	}
+	if !strings.Contains(body, `"type":"`+typ+`"`) || !strings.Contains(body, `"error_type":"`+tc.code+`"`) ||
+		!limit || strings.Contains(body, strings.Repeat("x", 250)) {
 		t.Errorf("%s: the client got:\n%s", tc.name, body)
 	}
 	if h.w.status != tc.status || h.w.header.Get("Retry-After") != tc.retryAfter || h.up.endpoint(2).sends != 0 {
