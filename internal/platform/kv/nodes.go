@@ -94,10 +94,11 @@ func (h *heartbeat) start(ctx context.Context, nodes int, live *atomic.Int64, m 
 		}
 		versions, active := h.report()
 		_, err = tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active,
-    supports_billing_preference)
-   VALUES ($1, $2, '{}', $3, $4, true)
+    supports_billing_preference, billing_preference_session)
+   VALUES ($1, $2, '{}', $3, $4, true, $2)
    ON CONFLICT (id) DO UPDATE SET seen_at = now(), share_session = excluded.share_session, share_view = '{}', share_joining = true,
     key_versions = excluded.key_versions, key_active = excluded.key_active, supports_billing_preference = true,
+    billing_preference_session = excluded.billing_preference_session,
     key_active_since = CASE WHEN platform.nodes.key_active IS DISTINCT FROM excluded.key_active
      THEN now() ELSE platform.nodes.key_active_since END`, h.id, h.session, versions, active)
 		if err != nil {
@@ -144,7 +145,8 @@ func (h *heartbeat) beat(ctx context.Context) (int, error) {
 // every beat; an old node's row stays false, so a mixed deployment keeps the safe default until the old node is gone.
 func (*heartbeat) recordReadiness(ctx context.Context, tx pg.Tx) error {
 	_, err := tx.Exec(ctx, `INSERT INTO platform.billing_preference_readiness (id, enabled)
-  SELECT true, coalesce(bool_and(supports_billing_preference), true)
+  SELECT true, coalesce(bool_and(coalesce(supports_billing_preference, false)
+    AND billing_preference_session IS NOT NULL AND billing_preference_session = share_session), true)
   FROM platform.nodes WHERE seen_at > now() - make_interval(secs => $1)
   ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled, updated_at = clock_timestamp()`, AliveFor.Seconds())
 	return err
@@ -155,11 +157,12 @@ func (*heartbeat) recordReadiness(ctx context.Context, tx pg.Tx) error {
 func (h *heartbeat) write(ctx context.Context, tx pg.Tx) error {
 	versions, active := h.report()
 	_, err := tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active,
-    supports_billing_preference)
-  VALUES ($1, $2, '{}', $3, $4, true)
+    supports_billing_preference, billing_preference_session)
+  VALUES ($1, $2, '{}', $3, $4, true, $2)
   ON CONFLICT (id) DO UPDATE SET seen_at = now(),
    share_joining = platform.nodes.share_joining OR platform.nodes.seen_at <= now() - make_interval(secs => $5),
    key_versions = excluded.key_versions, key_active = excluded.key_active, supports_billing_preference = true,
+   billing_preference_session = excluded.billing_preference_session,
    key_active_since = CASE WHEN platform.nodes.key_active IS DISTINCT FROM excluded.key_active
     THEN now() ELSE platform.nodes.key_active_since END
   WHERE platform.nodes.share_session = excluded.share_session`,

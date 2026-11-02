@@ -305,19 +305,21 @@ func correctionLines(ctx context.Context, tx pg.Tx, row LockReservationRow, bala
 		charged.charged = min(price.price, min(row.Amount, add(row.Charged, left)))
 		delta := charged.charged - row.Charged
 		reverse, settle := planReversal(row.Price, row.Charged), planCharge(price.price, charged.charged)
-		if sub.ClosedAt != nil && delta != 0 {
+		if delta != 0 {
 			voided, err := queries.WindowVoided(ctx, tx, WindowVoidedParams{SubscriptionID: row.SubscriptionID, Seq: row.WindowSeq})
 			if err != nil {
 				return nil, nil, 0, 0, fmt.Errorf("billing: read whether the refunded window was voided: %w", err)
 			}
 			if voided {
-				// A refund, not expiry, closed this window: it already reversed the call's revenue and left no expired
+				// A refund, not expiry, voided this window: it already reversed the call's revenue and left no expired
 				// income. The correction still updates the reservation and window counters, but books no money.
 				return nil, nil, delta, 0, nil
 			}
-			// The subscription was written off, so its liability is zero: the difference comes back out of the expired
-			// income that write-off booked, and the pair leaves the liability at zero and never negative.
-			settle = append(settle, line{bookCreditExpired, delta, siteCredits}, line{bookPlanLiability, -delta, siteCredits})
+			if sub.ClosedAt != nil {
+				// The subscription was written off, so its liability is zero: the difference comes back out of the expired
+				// income that write-off booked, and the pair leaves the liability at zero and never negative.
+				settle = append(settle, line{bookCreditExpired, delta, siteCredits}, line{bookPlanLiability, -delta, siteCredits})
+			}
 		}
 		return reverse, settle, delta, 0, nil
 	}

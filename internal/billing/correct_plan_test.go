@@ -175,3 +175,90 @@ func TestCorrectionAfterAFullRefundBooksNothingButTheCounters(t *testing.T) {
 	}
 	b.balanced()
 }
+
+// TestCorrectionOnARefundedRenewalWithAnOlderHold: a full refund of the renewal expires the subscription, but an older
+// window's in-flight hold keeps the subscription open. The renewal's window is nevertheless voided, so correcting its
+// estimate must book no money even though ClosedAt is still nil; the old hold later releases and the write-off lapses
+// the older grant.
+//
+//nolint:cyclop,gocognit // one journey through the refund, correction and write-off states
+func TestCorrectionOnARefundedRenewalWithAnOlderHold(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, fallbackBankConfig)
+	plan := b.makePlan(1_000_000_000, 2*3600)
+	firstGrant := uuid.NewV7()
+	sub := b.subscribePaid(plan, firstGrant, 200)
+	old := b.holdOn(b.exact, 100)
+
+	// Window 1 ended while its hold is still in flight; the subscription itself still has a live term for the renewal.
+	b.sql(
+		"UPDATE billing.subscriptions SET starts_at = now() - interval '3 hours', ends_at = now() + interval '1 hour' "+
+			"WHERE id = '"+sub.ID.String()+"'",
+		"UPDATE billing.subscription_windows SET starts_at = now() - interval '3 hours', ends_at = now() - interval '2 hours' "+
+			"WHERE subscription_id = '"+sub.ID.String()+"' AND seq = 1",
+		"UPDATE billing.subscription_windows SET starts_at = now() - interval '2 hours', ends_at = now() - interval '1 hour' "+
+			"WHERE subscription_id = '"+sub.ID.String()+"' AND seq = 2")
+
+	secondGrant := uuid.NewV7()
+	renewed := b.subscribePaid(plan, secondGrant, 200)
+	if renewed.ID != sub.ID {
+		t.Fatalf("renewal made subscription %s, want the existing %s", renewed.ID, sub.ID)
+	}
+	// The renewal's first window is the one in force when the estimate is charged.
+	b.sql(
+		"UPDATE billing.subscriptions SET current_seq = 3, ends_at = now() + interval '3 hours' WHERE id = '"+sub.ID.String()+"'",
+		"UPDATE billing.subscription_windows SET starts_at = now() - interval '10 minutes', ends_at = now() + interval '50 minutes' "+
+			"WHERE subscription_id = '"+sub.ID.String()+"' AND seq = 3")
+	h := b.holdOn(b.exact, 40)
+	if f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 40, 0, 0, in, catalog.ItemOutput, webSearch))); !f.Estimated || f.Charged.CeilAmount() != 40 {
+		t.Fatalf("renewal estimate = %+v, want an estimated 40", f)
+	}
+
+	if _, err := b.refund(SubscriptionRefundRequest{
+		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Grant: secondGrant, SiteCurrency: usd,
+		Credits: 2_000_000_000, Reason: "renewal refund", Actor: audit.System("billing.test"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := b.subscriptionByID(sub.ID)
+	if got.State != "expired" || got.ClosedAt != nil {
+		t.Fatalf("subscription after the renewal refund = %+v, want expired and held open by the old reservation", got)
+	}
+	beforeLiability, beforeRevenue, beforeExpired := b.book(bookPlanLiability), b.book(bookRevenue), b.book(bookCreditExpired)
+	ev := planCorrectionEvent(t, h)
+	ev.Usage = usageOf(t, map[catalog.Item]int64{in: 20})
+
+	c := &corrector{db: b.app, scope: b.platform}
+	if borne, err := c.correct(t.Context(), ev); err != nil || borne != 0 {
+		t.Fatalf("correct = %d borne, %v", borne, err)
+	}
+	if after := b.book(bookPlanLiability); after != beforeLiability {
+		t.Errorf("plan liability %d after the correction, want unchanged %d", after, beforeLiability)
+	}
+	if after := b.book(bookRevenue); after != beforeRevenue {
+		t.Errorf("revenue %d after the correction, want unchanged %d: the renewal already reversed its charge", after, beforeRevenue)
+	}
+	if after := b.book(bookCreditExpired); after != beforeExpired {
+		t.Errorf("expired credit %d after the correction, want unchanged %d", after, beforeExpired)
+	}
+
+	// The old window's hold is the only thing keeping the write-off open. Releasing it lets the old grant lapse.
+	b.sql("UPDATE billing.reservations SET deadline = now() - interval '1 minute' WHERE request_id = '" + old.id.String() + "'")
+	if n, err := b.billing.Cleanup(t.Context(), 10); err != nil || n != 1 {
+		t.Fatalf("Cleanup = %d, %v; want the old hold released", n, err)
+	}
+	b.writeOff()
+	if got := b.subscribed(); got.ClosedAt == nil {
+		t.Fatal("the subscription did not close after the old hold released")
+	}
+	if after := b.book(bookPlanLiability); after != 0 {
+		t.Errorf("plan liability %d after write-off, want 0", after)
+	}
+	if after := b.book(bookCreditExpired); after != -2_000_000_000 {
+		t.Errorf("expired credit %d after write-off, want the old grant's -2000000000", after)
+	}
+	if after := b.book(bookRevenue); after != 0 {
+		t.Errorf("revenue %d after write-off, want 0", after)
+	}
+	b.balanced()
+}
