@@ -313,7 +313,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 ## 定价规则
 
-**BYOK 服务费**：`price_policies.byok_fee_bps` 是账户自带 key 服务时按模型正常售价比收取的比例，基数点，0 到 10000，默认 500（5%，OpenRouter 2026-11-02 的费率）。它是站点数据，管理接口 `GET/PUT /api/admin/v1/pricing/policy` 读写；路由构建时把发布售价的 schedule 按 `billing.ByokFee` 缩放一次，预留、结算和退款都用这同一份金额。OpenRouter 每月 25,000 美元以内免收的部分属于订阅维度，本期不做。
+**BYOK 服务费**：`price_policies.byok_fee_bps` 是账户自带 key 服务时按模型参考价比收取的比例，基数点，0 到 10000，默认 500（5%，OpenRouter 2026-11-02 的费率）。它是站点数据，管理接口 `GET/PUT /api/admin/v1/pricing/policy` 读写；路由构建时把参考价表按 `billing.ByokFee` 缩放一次，得到这条端点自己的售价表，预留、结算和退款都用这同一份金额。OpenRouter 每月 25,000 美元以内免收的部分属于订阅维度，本期不做。
 
 规则输入与售价发布分开：`pricing.go` 保存规则及其历史；`Sell` 是参考价与固定价的纯算价，提案选价由发布和预览共用；`publication.go` 的 `RefreshPrices` 在平台事务里读取规则、锁站点政策行，生成提案并追加已发布版本。`CostEnvelope` 把同次数据库读取的原生成本、单位价值及汇率合成各端点的保守成本，成本加成给每个端点各算一份售价；`EndpointPrices` 是端点 UUID 到售价的不可变映射，模型级 `Schedule` 是这些售价的逐项上包络；`Sold.PriceFor` 取一个端点自己的价，`Sold.ModelPrice` 在可服务端点里取最便宜的一个供模型列表使用。目录的 `Schedule.Aligned`、`Schedule.CoversCost`、`Schedule.PriceChange` 按两张表的门槛并集比较有效单价，推理及图片回落和计费相同，口径不兼容返回错误。任一可调用端点成本未知或口径不兼容时整个模型不发布，不能让只读模型价的旧节点按不足的价格服务。
 

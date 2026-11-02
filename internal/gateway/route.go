@@ -363,8 +363,6 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		currency := siteCurrency
 		if ok && sold.Available() {
 			currency = sold.Schedule.Currency()
-		} else {
-			sold = billing.Sold{}
 		}
 		// The account pays its provider; Axiom charges the site's share of the model's reference price, the approved
 		// rule for a source the platform does not buy. The schedule is scaled here, once, so the reservation,
@@ -381,7 +379,10 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		if err != nil {
 			return routing.Endpoint{}, "the site's BYOK fee cannot price the reference schedule"
 		}
-		sold.Schedule, sold.Audiences, sold.Version = scaled, nil, ref.ID
+		// The endpoint is the key's own, so the site's Sold says nothing about it: a version priced from each endpoint's
+		// cost has no price for an endpoint it did not publish, and endpointPrice would leave the key out
+		// (billing.Sold.PriceFor). The scaled reference schedule is the whole of this endpoint's price.
+		sold = billing.Sold{Version: ref.ID, Schedule: scaled}
 	}
 	reportable := model.Reportable()
 	price, why := endpointPrice(sold, r.ID)

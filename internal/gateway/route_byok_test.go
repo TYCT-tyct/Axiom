@@ -6,6 +6,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
@@ -101,5 +102,60 @@ func TestByokPriceWithoutSharedSale(t *testing.T) {
 	}
 	if e.Price.Schedule.IsZero() {
 		t.Error("the key's fee is zero, want the reference price times 5%")
+	}
+}
+
+// TestByokPriceKeepsTheKeysEndpointWhenTheSitePricesEachEndpoint: a version that prices the site's endpoints one by one
+// (billing.Sold.Endpoints) has no price for the account's own endpoint, which is not in that table. The key's fee is
+// the whole of its price, so the endpoint must still be routed, at the reference price times the fee.
+//
+//nolint:cyclop // the assertions are one price comparison each
+func TestByokPriceKeepsTheKeysEndpointWhenTheSitePricesEachEndpoint(t *testing.T) {
+	t.Parallel()
+	f := newRouteFixture(t)
+	f.byokFee = "0.05"
+	shared := routable(f.served, protocol.Messages, protocol.Responses)
+	own := routable(f.served, protocol.Messages, protocol.Responses)
+	own.Byok, own.ByokFallback = true, true
+	sold := f.prices[f.served]
+	sold.Endpoints = billing.EndpointPrices{shared.ID: sold.Schedule}
+	f.prices[f.served] = sold
+	f.build([]suppliers.Routable{shared, own})
+
+	plan, wait, err := f.router.Plan(call(f.served))
+	if err != nil || wait != nil {
+		t.Fatalf("Plan = %v, %v", wait, err)
+	}
+	if len(plan.Entries) != 2 || uuid.UUID(plan.Entries[0].Endpoint) != own.ID {
+		t.Fatalf("the plan is %+v, want the account's key %s first and the site's endpoint after it", plan.Entries, own.ID)
+	}
+	snap, err := f.cat.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, ok := snap.ReferencePrice(f.served, "USD")
+	if !ok {
+		t.Fatal("the fixture model has no reference price")
+	}
+	base, ok := ref.Schedule.BaseRate(catalog.ItemInput)
+	if !ok {
+		t.Fatal("the fixture price has no input rate")
+	}
+	want, err := base.Scale(big.NewRat(5, 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := plan.Entries[0].Price.Schedule.BaseRate(catalog.ItemInput); got.Cmp(want) != 0 {
+		t.Errorf("the key's input price is %s, want 5%% of %s = %s", got, base, want)
+	}
+	if plan.Entries[0].Price.Version != ref.ID {
+		t.Errorf("the key's price version is %s, want the reference's %s", plan.Entries[0].Price.Version, ref.ID)
+	}
+	saleBase, ok := sold.Schedule.BaseRate(catalog.ItemInput)
+	if !ok {
+		t.Fatal("the published price has no input rate")
+	}
+	if got, _ := plan.Entries[1].Price.Schedule.BaseRate(catalog.ItemInput); got.Cmp(saleBase) != 0 {
+		t.Errorf("the site's endpoint is priced %s, want the published %s", got, saleBase)
 	}
 }
