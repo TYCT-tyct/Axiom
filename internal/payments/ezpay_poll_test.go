@@ -62,3 +62,55 @@ func TestEzPayPollCreditsALostCallback(t *testing.T) {
 		t.Fatal("EzPay must confirm payments and leave close and refund offline", ch.Caps())
 	}
 }
+
+func TestEzPayPollDoesNotCreditWithoutOrderEcho(t *testing.T) {
+	w := newTestWorld(t, EasyPay{})
+	var order string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(wr http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api.php" || r.URL.Query().Get("act") != "order" {
+			http.Error(wr, "wrong query", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.URL.Query().Get("out_trade_no") != order {
+			ezPayWrite(wr, `{"code":-1,"msg":"订单不存在"}`)
+			return
+		}
+		ezPayWrite(wr, `{"code":1,"trade_status":"TRADE_SUCCESS","money":"10.00","trade_no":"T-no-echo","type":"usdt_trc20","currency":"USD"}`)
+	}))
+	t.Cleanup(server.Close)
+	w.p.client = ezPayConfig(t, server.URL, server.Certificate()).Client
+	w.open(w.siteA, RoundRobin)
+	in := w.input(w.siteA, MethodInput{Method: "usdt.tron", Upstream: "usdt_trc20", Enabled: true})
+	in.Kind, in.Settings, in.Currency = "easypay", ezPaySettingsJSON(t, server.URL, "1001"), currency(t, "USD")
+	w.mustSave(siteScope(w.siteA), in)
+
+	o, _, err := w.placeAs(w.accountA(), CreateOrder{
+		Site: w.site(w.siteA, "USD"), Account: w.account, User: w.user, Method: "usdt.tron",
+		Credits: 10 * yuan, Key: "ezpay-no-echo", ReturnURL: "https://console.example.com/topup",
+		ClientIP: netip.MustParseAddr("203.0.113.7"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	order = o.ID.TypeID()
+	w.exec(fmt.Sprintf("UPDATE payments.orders SET next_query_at = transaction_timestamp() - interval '1 minute' WHERE id = '%s'", uuid.UUID(o.ID)))
+	if err := w.p.poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	w.assertCredit(o, 0)
+	if n := w.count(w.accountA(), "SELECT count(*) FROM payments.order_payments WHERE order_id = $1", uuid.UUID(o.ID)); n != 0 {
+		t.Fatal("a payment without an order echo was recorded", n)
+	}
+	if n := w.count(w.accountA(), "SELECT count(*) FROM billing.credit_batches WHERE id = $1", uuid.UUID(o.ID)); n != 0 {
+		t.Fatal("a payment without an order echo was credited", n)
+	}
+	if n := w.count(w.accountA(), "SELECT count(*) FROM billing.entries WHERE account_id = $1", o.AccountID); n != 0 {
+		t.Fatal("a payment without an order echo wrote a ledger entry", n)
+	}
+	if n := w.count(w.accountA(), "SELECT count(*) FROM billing.balances WHERE account_id = $1 AND balance <> 0", o.AccountID); n != 0 {
+		t.Fatal("a payment without an order echo changed the balance", n)
+	}
+	if state, _, _ := w.stored(o.ID); state != "pending" {
+		t.Fatal("a payment without an order echo changed the order state", state)
+	}
+}

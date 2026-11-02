@@ -218,6 +218,12 @@ func TestEzPayQueryShapes(t *testing.T) {
 			ezPayWrite(w, `{"code":1,"trade_status":"TRADE_SUCCESS","money":"70.00","trade_no":"T-cny","out_trade_no":"ord-cny","currency":"CNY"}`)
 		case "ord-type":
 			ezPayWrite(w, `{"code":1,"trade_status":"TRADE_SUCCESS","money":"10.00","trade_no":"T-type","out_trade_no":"ord-type","type":"usdt_erc20","currency":"USD"}`)
+		case "ord-no-echo":
+			ezPayWrite(w, `{"code":1,"trade_status":"TRADE_SUCCESS","money":"10.00","trade_no":"T-no-echo","type":"usdt_trc20","currency":"USD"}`)
+		case "ord-null-echo":
+			ezPayWrite(w, `{"code":1,"trade_status":"TRADE_SUCCESS","money":"10.00","trade_no":"T-null-echo","out_trade_no":null,"type":"usdt_trc20","currency":"USD"}`)
+		case "ord-blank-echo":
+			ezPayWrite(w, `{"code":1,"trade_status":"TRADE_SUCCESS","money":"10.00","trade_no":"T-blank-echo","out_trade_no":"   ","type":"usdt_trc20","currency":"USD"}`)
 		case "ord-missing":
 			ezPayWrite(w, `{"code":-1,"msg":"订单不存在"}`)
 		case "ord-wrong-key":
@@ -253,6 +259,11 @@ func TestEzPayQueryShapes(t *testing.T) {
 	}
 	if got, err := c.Query(t.Context(), "ord-type", ""); err != nil || got.State != PayPaid || got.Paid.Minor != -1 {
 		t.Fatalf("other chain: %+v, %v", got, err)
+	}
+	for _, order := range []string{"ord-no-echo", "ord-null-echo", "ord-blank-echo"} {
+		if got, err := c.Query(t.Context(), order, ""); err == nil {
+			t.Fatalf("%s: missing echo was accepted: %+v", order, got)
+		}
 	}
 	if got, err := c.Query(t.Context(), "ord-missing", ""); err != nil || got.State != PayPending {
 		t.Fatalf("missing order: %+v, %v", got, err)

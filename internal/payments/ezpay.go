@@ -145,7 +145,7 @@ func (c *easyPayChannel) ezPayQuery(ctx context.Context, order string) (Payment,
 
 func (c *easyPayChannel) ezPayPayment(r ezPayOrderResponse, order string) (Payment, error) {
 	echo, err := easyPayScalar(r.OutTradeNo)
-	if err != nil || (echo != "" && echo != order) {
+	if err != nil || echo == "" || echo != order {
 		return Payment{}, errors.New("easypay: echoed order mismatch")
 	}
 	state, err := ezPayState(r.TradeStatus)
