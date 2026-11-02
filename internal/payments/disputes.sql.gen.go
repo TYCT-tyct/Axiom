@@ -48,7 +48,7 @@ func (q *Queries) ApplyDispute(ctx context.Context, db DBTX, arg ApplyDisputePar
 }
 
 const disputeByProvider = `-- name: DisputeByProvider :one
-SELECT id, site_id, account_id, order_id, merchant_id, provider, provider_id, payment_intent, amount, currency, reason, status, state, credits, cash, fee, chargeback_revision, opened_at, applied_at, reversed_at, updated_at FROM payments.order_disputes
+SELECT id, site_id, account_id, order_id, merchant_id, provider, provider_id, payment_intent, amount, currency, reason, status, state, credits, cash, fee, chargeback_revision, opened_at, applied_at, reversed_at, updated_at, suspended_at FROM payments.order_disputes
 WHERE merchant_id = $1 AND provider = $2 AND provider_id = $3
 FOR UPDATE
 `
@@ -84,6 +84,7 @@ func (q *Queries) DisputeByProvider(ctx context.Context, db DBTX, arg DisputeByP
 		&i.AppliedAt,
 		&i.ReversedAt,
 		&i.UpdatedAt,
+		&i.SuspendedAt,
 	)
 	return i, err
 }
@@ -111,6 +112,35 @@ func (q *Queries) DisputeOrder(ctx context.Context, db DBTX, arg DisputeOrderPar
 	var i DisputeOrderRow
 	err := row.Scan(&i.OrderID, &i.SiteID, &i.AccountID)
 	return i, err
+}
+
+const disputesWithoutSuspension = `-- name: DisputesWithoutSuspension :many
+SELECT id FROM payments.order_disputes
+WHERE state = 'applied' AND suspended_at IS NULL
+ORDER BY applied_at
+LIMIT $1
+`
+
+// Applied disputes an older node booked without recording this release's suspension; the poll suspends their accounts
+// until the mixed-version window's rows are drained.
+func (q *Queries) DisputesWithoutSuspension(ctx context.Context, db DBTX, batch int32) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, disputesWithoutSuspension, batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertDispute = `-- name: InsertDispute :execrows
@@ -159,7 +189,7 @@ func (q *Queries) InsertDispute(ctx context.Context, db DBTX, arg InsertDisputeP
 }
 
 const lockDispute = `-- name: LockDispute :one
-SELECT id, site_id, account_id, order_id, merchant_id, provider, provider_id, payment_intent, amount, currency, reason, status, state, credits, cash, fee, chargeback_revision, opened_at, applied_at, reversed_at, updated_at FROM payments.order_disputes WHERE id = $1 FOR UPDATE
+SELECT id, site_id, account_id, order_id, merchant_id, provider, provider_id, payment_intent, amount, currency, reason, status, state, credits, cash, fee, chargeback_revision, opened_at, applied_at, reversed_at, updated_at, suspended_at FROM payments.order_disputes WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockDispute(ctx context.Context, db DBTX, id uuid.UUID) (PaymentsOrderDispute, error) {
@@ -187,8 +217,24 @@ func (q *Queries) LockDispute(ctx context.Context, db DBTX, id uuid.UUID) (Payme
 		&i.AppliedAt,
 		&i.ReversedAt,
 		&i.UpdatedAt,
+		&i.SuspendedAt,
 	)
 	return i, err
+}
+
+const markDisputeSuspended = `-- name: MarkDisputeSuspended :execrows
+UPDATE payments.order_disputes SET suspended_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE id = $1 AND suspended_at IS NULL
+`
+
+// The dispute that suspended the account is marked once, so a repeated event cannot suspend it again after an operator
+// lifts it.
+func (q *Queries) MarkDisputeSuspended(ctx context.Context, db DBTX, id uuid.UUID) (int64, error) {
+	result, err := db.Exec(ctx, markDisputeSuspended, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const otherDispute = `-- name: OtherDispute :one

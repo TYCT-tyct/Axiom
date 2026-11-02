@@ -4870,8 +4870,8 @@ components:
         refund_second_approval_credits:
           allOf: [{$ref: "#/components/schemas/Money"}]
           description: >-
-            Refunds above this amount need two operators; at or below it one operator releases them. The default is
-            100 credits. A node of the previous release does not return it.
+            Refunds above this amount need two operators; at or below it one operator releases them. 0 means no
+            limit, so every refund keeps the one-operator rule. A node of the previous release does not return it.
     PaymentSettingsUpdate:
       type: object
       additionalProperties: false
@@ -4894,8 +4894,8 @@ components:
             refund_second_approval_credits:
               allOf: [{$ref: "#/components/schemas/Money"}]
               description: >-
-                Refunds above this amount need two operators; 0 makes every refund need two. Omit to keep the current
-                value; a node of the previous release refuses the field.
+                Refunds above this amount need two operators; 0 removes the limit. Omit to keep the current value; a
+                node of the previous release refuses the field.
           required:
           - open
         reason:

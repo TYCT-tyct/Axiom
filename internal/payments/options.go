@@ -38,27 +38,27 @@ type settings struct {
 	first            int64
 	// The limits of one IP group (clientip.Group) on the site over ipWindow: orders placed, and orders that failed.
 	ipOrders, ipFailures int64
-	// The refund amount at or below which one operator may release a refund; above it two are required.
+	// The refund amount at or below which one operator may release a refund; above it two are required. Zero leaves
+	// every refund on the one-approver rule.
 	refundSecond int64
 }
 
 // The limits of a site that sets none (docs/domains/payments.md「后台配置」): 3 orders waiting, 5 cancellations an hour,
-// no daily limit, 100 credits for a first top-up, from one IP group 20 orders and 10 failed orders an hour, and one
-// operator up to 100 credits of refunds.
+// no daily limit, 100 credits for a first top-up, from one IP group 20 orders and 10 failed orders an hour, and no
+// refund limit, which keeps the one-approver rule.
 const (
-	defaultPending      = 3
-	defaultCancels      = 5
-	defaultFirstTop     = 100 * creditScale
-	defaultIPOrders     = 20
-	defaultIPFailures   = 10
-	defaultRefundSecond = 100 * creditScale
+	defaultPending    = 3
+	defaultCancels    = 5
+	defaultFirstTop   = 100 * creditScale
+	defaultIPOrders   = 20
+	defaultIPFailures = 10
 )
 
 func readSettings(ctx context.Context, tx pg.Tx, site uuid.UUID) (settings, error) {
 	rows, err := queries.SiteSettings(ctx, tx, site)
 	s := settings{
 		strategy: RoundRobin, pending: defaultPending, cancels: defaultCancels, cancelWindow: time.Hour,
-		first: defaultFirstTop, ipOrders: defaultIPOrders, ipFailures: defaultIPFailures, refundSecond: defaultRefundSecond,
+		first: defaultFirstTop, ipOrders: defaultIPOrders, ipFailures: defaultIPFailures,
 	}
 	if err != nil || len(rows) == 0 {
 		return s, err
@@ -94,6 +94,12 @@ func readSettings(ctx context.Context, tx pg.Tx, site uuid.UUID) (settings, erro
 		s.refundSecond = *r.RefundSecondApprovalCredits
 	}
 	return s, nil
+}
+
+// needsSecondApproval reports whether a refund of amount needs a second operator: only a positive site limit turns the
+// rule on.
+func (s settings) needsSecondApproval(amount int64) bool {
+	return s.refundSecond > 0 && amount > s.refundSecond
 }
 
 // admits refuses a top-up the site's settings do not take.

@@ -213,7 +213,7 @@ func (p *Payments) freezeRefund(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 	row, err := queries.InsertRefund(ctx, tx, InsertRefundParams{
 		ID: uuid.NewV7(), OrderID: o.ID, SiteID: o.SiteID, AccountID: o.AccountID,
 		Via: r.Via, Credits: f.Amount, RequestedCredits: r.Credits, Amount: amount.Returned, WithFee: withFee, RefundKey: caps.Has(CapRefundKey),
-		Reason: r.Reason, RequestedBy: r.User, IdemKey: r.Key, SecondRequired: f.Amount > limits.refundSecond,
+		Reason: r.Reason, RequestedBy: r.User, IdemKey: r.Key, SecondRequired: limits.needsSecondApproval(f.Amount),
 	})
 	if err != nil {
 		return row, err

@@ -78,6 +78,7 @@ type PaymentsOrderDispute struct {
 	AppliedAt          pgtype.Timestamptz
 	ReversedAt         pgtype.Timestamptz
 	UpdatedAt          time.Time
+	SuspendedAt        pgtype.Timestamptz
 }
 
 type PaymentsRedeemCode struct {

@@ -10,7 +10,8 @@ import (
 )
 
 // SiteSettings is the system page's collection switch, accepted credit range and refund approval limit, in billionths
-// of a credit. RefundSecondApproval nil on write keeps the stored value; on read it is always the effective value.
+// of a credit. RefundSecondApproval nil on write keeps the stored value; on read it is always the effective value, where
+// zero means no limit and every refund stays on the one-approver rule.
 type SiteSettings struct {
 	Open                 bool   `json:"open"`
 	Min                  *int64 `json:"credits_min"`

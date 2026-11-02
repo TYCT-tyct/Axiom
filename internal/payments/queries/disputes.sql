@@ -49,3 +49,17 @@ WHERE merchant_id = @merchant_id
 -- reversed money makes the next one manual, even if the first was won and its cash came back.
 SELECT count(*) FROM payments.order_disputes
 WHERE order_id = @order_id AND id <> @id AND state IN ('applied', 'reversed');
+
+-- name: MarkDisputeSuspended :execrows
+-- The dispute that suspended the account is marked once, so a repeated event cannot suspend it again after an operator
+-- lifts it.
+UPDATE payments.order_disputes SET suspended_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE id = @id AND suspended_at IS NULL;
+
+-- name: DisputesWithoutSuspension :many
+-- Applied disputes an older node booked without recording this release's suspension; the poll suspends their accounts
+-- until the mixed-version window's rows are drained.
+SELECT id FROM payments.order_disputes
+WHERE state = 'applied' AND suspended_at IS NULL
+ORDER BY applied_at
+LIMIT @batch;

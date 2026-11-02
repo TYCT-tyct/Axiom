@@ -80,7 +80,7 @@ func (p *Payments) dispute(ctx context.Context, merchant MerchantID, n Notice) e
 // applyDispute moves the row and the money according to the action. The row is locked, so two events for one dispute
 // serialize here: a later "money taken" cannot overwrite a won dispute.
 //
-//nolint:cyclop,gocognit,funlen // every action is one branch of the dispute state machine, in one transaction
+//nolint:cyclop,gocognit // every action is one branch of the dispute state machine, in one transaction
 func (p *Payments) applyDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, row PaymentsOrderDispute,
 	d *DisputeNotice, fresh bool, raw string,
 ) error {
@@ -130,100 +130,133 @@ func (p *Payments) applyDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 		return nil
 
 	case DisputeOpen, DisputeLost:
-		if row.State == "reversed" {
-			return p.touchDispute(ctx, tx, o, row, d, status, reason)
-		}
-		if row.State == "applied" {
-			return p.touchDispute(ctx, tx, o, row, d, status, reason)
-		}
-		// A won event may arrive before the open event that it settles. Its row is still "recorded" because there was
-		// nothing to reverse, but a late "money taken" must not book the chargeback the win already refused.
-		if row.Status == "won" {
-			return p.touchDispute(ctx, tx, o, row, d, status, reason)
-		}
-		if d.Action == DisputeOpen || d.Action == DisputeLost {
-			if p.accounts == nil {
-				return errors.New("payments: account suspension is not configured")
-			}
-			if err := p.accounts.SetAccountSuspended(ctx, tx, audit.System("payments.dispute"), accounts.AccountID(o.AccountID), true,
-				"chargeback "+d.Provider+"/"+d.ID); err != nil {
-				return fmt.Errorf("payments: suspend the disputed account: %w", err)
-			}
-		}
-		other, err := queries.OtherDispute(ctx, tx, OtherDisputeParams{OrderID: o.ID, ID: row.ID})
-		if err != nil {
-			return fmt.Errorf("payments: read the other disputes of the order: %w", err)
-		}
-		if other > 0 {
-			if err := p.disputeDifference(ctx, tx, MerchantID(o.MerchantID), &o, d, "dispute_second"); err != nil {
-				return err
-			}
-			return p.touchDispute(ctx, tx, o, row, d, status, reason)
-		}
-		if !chargeable(o) {
-			if err := p.disputeDifference(ctx, tx, MerchantID(o.MerchantID), &o, d, "dispute_unpaid"); err != nil {
-				return err
-			}
-			return p.touchDispute(ctx, tx, o, row, d, status, reason)
-		}
-		if d.Amount.Currency.String() != o.PayCurrency || d.Amount.Minor <= 0 {
-			if err := p.disputeDifference(ctx, tx, MerchantID(o.MerchantID), &o, d, "dispute_amount"); err != nil {
-				return err
-			}
-			return p.touchDispute(ctx, tx, o, row, d, status, reason)
-		}
-		terms, err := queries.RefundTerms(ctx, tx, o.ID)
-		if err != nil {
-			return fmt.Errorf("payments: read the refunds of the disputed order: %w", err)
-		}
-		if terms.Inflight {
-			if err := p.disputeDifference(ctx, tx, MerchantID(o.MerchantID), &o, d, "dispute_refund_in_flight"); err != nil {
-				return err
-			}
-			return p.touchDispute(ctx, tx, o, row, d, status, reason)
-		}
-		amounts, err := billing.ChargeBack(ctx, tx, billing.Chargeback{Batch: o.ID, Cash: d.Amount.Minor})
-		if errors.Is(err, billing.ErrRefundInFlight) {
-			if err := p.disputeDifference(ctx, tx, MerchantID(o.MerchantID), &o, d, "dispute_refund_in_flight"); err != nil {
-				return err
-			}
-			return p.touchDispute(ctx, tx, o, row, d, status, reason)
-		}
-		if errors.Is(err, billing.ErrChargebackCash) {
-			if err := p.disputeDifference(ctx, tx, MerchantID(o.MerchantID), &o, d, "dispute_amount"); err != nil {
-				return err
-			}
-			return p.touchDispute(ctx, tx, o, row, d, status, reason)
-		}
-		if err != nil {
-			return fmt.Errorf("payments: book the dispute: %w", err)
-		}
-		appliedAt, err := billing.TransactionCreatedAt(ctx, tx, o.ID, "chargeback", amounts.Revision)
-		if err != nil {
-			return fmt.Errorf("payments: read the chargeback time: %w", err)
-		}
-		n, err := queries.ApplyDispute(ctx, tx, ApplyDisputeParams{
-			Status: status, Reason: reason, Credits: amounts.Credits, Cash: amounts.Returned, Fee: amounts.Fee,
-			Revision: amounts.Revision, AppliedAt: pgtype.Timestamptz{Time: appliedAt, Valid: true}, ID: row.ID,
-		})
-		if err != nil {
-			return fmt.Errorf("payments: apply the dispute: %w", err)
-		}
-		if n != 1 {
-			return fmt.Errorf("payments: dispute %s was applied by someone else", row.ID)
-		}
-		moved, err := queries.MoveOrder(ctx, tx, MoveOrderParams{
-			State: string(ChargedBack), TradeNo: "", ID: o.ID, FromStates: predecessors(ChargedBack),
-		})
-		if err != nil {
-			return fmt.Errorf("payments: charge back the order: %w", err)
-		}
-		if moved != 1 {
-			return fmt.Errorf("payments: order %s cannot be charged back from %s", OrderID(o.ID).TypeID(), o.State)
-		}
-		return disputeEvent(ctx, tx, o, d, "dispute", ChargedBack, raw)
+		return p.applyOpenDispute(ctx, tx, o, row, d, status, reason, raw)
 	}
 	return fmt.Errorf("payments: unknown dispute action %d", d.Action)
+}
+
+// applyOpenDispute books a "money taken" event and then suspends the account. The money moves before the suspension and
+// the suspension before any discrepancy signal, so this transaction takes the balance lock, then the account row and
+// only then the global alert lock; a billing correction takes the balance and alert locks in that order, and an
+// operator's own suspension takes the account row and then the alert lock. The dispute records that it suspended the
+// account, so a repeated event cannot suspend an account an operator has already lifted.
+func (p *Payments) applyOpenDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, row PaymentsOrderDispute,
+	d *DisputeNotice, status, reason, raw string,
+) error {
+	difference, err := p.openDisputeMoney(ctx, tx, o, row, d, status, reason, raw)
+	if err != nil {
+		return err
+	}
+	if err := p.suspendForDispute(ctx, tx, row, o.AccountID, d.Provider, d.ID); err != nil {
+		return err
+	}
+	if difference != nil {
+		return persistPending(ctx, tx, *difference)
+	}
+	return nil
+}
+
+// openDisputeMoney applies the money side of an open or lost dispute. It returns the discrepancy it recorded when the
+// chargeback cannot be booked automatically; its signal waits for the caller's suspension, for the lock order above.
+//
+//nolint:cyclop,gocognit,funlen // one branch per automatic-chargeback rule, kept together so their order stays visible
+func (p *Payments) openDisputeMoney(ctx context.Context, tx pg.Tx, o LockOrderRow, row PaymentsOrderDispute,
+	d *DisputeNotice, status, reason, raw string,
+) (*RecordDiscrepancyParams, error) {
+	switch {
+	case row.State == "reversed", row.State == "applied":
+		return nil, p.touchDispute(ctx, tx, o, row, d, status, reason)
+	case row.Status == "won":
+		// A won event may arrive before the open event that it settles. Its row is still "recorded" because there was
+		// nothing to reverse, but a late "money taken" must not book the chargeback the win already refused.
+		return nil, p.touchDispute(ctx, tx, o, row, d, status, reason)
+	}
+	difference := func(kind string) (*RecordDiscrepancyParams, error) {
+		recorded, inserted, err := p.recordDisputeDifference(ctx, tx, MerchantID(o.MerchantID), &o, d, kind)
+		if err != nil {
+			return nil, err
+		}
+		if !inserted {
+			return nil, p.touchDispute(ctx, tx, o, row, d, status, reason)
+		}
+		return &recorded, p.touchDispute(ctx, tx, o, row, d, status, reason)
+	}
+	other, err := queries.OtherDispute(ctx, tx, OtherDisputeParams{OrderID: o.ID, ID: row.ID})
+	if err != nil {
+		return nil, fmt.Errorf("payments: read the other disputes of the order: %w", err)
+	}
+	if other > 0 {
+		return difference("dispute_second")
+	}
+	if !chargeable(o) {
+		return difference("dispute_unpaid")
+	}
+	if d.Amount.Currency.String() != o.PayCurrency || d.Amount.Minor <= 0 {
+		return difference("dispute_amount")
+	}
+	terms, err := queries.RefundTerms(ctx, tx, o.ID)
+	if err != nil {
+		return nil, fmt.Errorf("payments: read the refunds of the disputed order: %w", err)
+	}
+	if terms.Inflight {
+		return difference("dispute_refund_in_flight")
+	}
+	amounts, err := billing.ChargeBack(ctx, tx, billing.Chargeback{Batch: o.ID, Cash: d.Amount.Minor})
+	if errors.Is(err, billing.ErrRefundInFlight) {
+		return difference("dispute_refund_in_flight")
+	}
+	if errors.Is(err, billing.ErrChargebackCash) {
+		return difference("dispute_amount")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("payments: book the dispute: %w", err)
+	}
+	appliedAt, err := billing.TransactionCreatedAt(ctx, tx, o.ID, "chargeback", amounts.Revision)
+	if err != nil {
+		return nil, fmt.Errorf("payments: read the chargeback time: %w", err)
+	}
+	n, err := queries.ApplyDispute(ctx, tx, ApplyDisputeParams{
+		Status: status, Reason: reason, Credits: amounts.Credits, Cash: amounts.Returned, Fee: amounts.Fee,
+		Revision: amounts.Revision, AppliedAt: pgtype.Timestamptz{Time: appliedAt, Valid: true}, ID: row.ID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("payments: apply the dispute: %w", err)
+	}
+	if n != 1 {
+		return nil, fmt.Errorf("payments: dispute %s was applied by someone else", row.ID)
+	}
+	moved, err := queries.MoveOrder(ctx, tx, MoveOrderParams{
+		State: string(ChargedBack), TradeNo: "", ID: o.ID, FromStates: predecessors(ChargedBack),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("payments: charge back the order: %w", err)
+	}
+	if moved != 1 {
+		return nil, fmt.Errorf("payments: order %s cannot be charged back from %s", OrderID(o.ID).TypeID(), o.State)
+	}
+	return nil, disputeEvent(ctx, tx, o, d, "dispute", ChargedBack, raw)
+}
+
+// suspendForDispute suspends the account and marks the dispute once. The mark keeps a repeated callback from
+// suspending an account an operator has already lifted; a dispute an older node applied carries no mark and is
+// repaired here or by the poll.
+func (p *Payments) suspendForDispute(ctx context.Context, tx pg.Tx, row PaymentsOrderDispute, account uuid.UUID,
+	provider, providerID string,
+) error {
+	if row.SuspendedAt.Valid {
+		return nil
+	}
+	if p.accounts == nil {
+		return errors.New("payments: account suspension is not configured")
+	}
+	if err := p.accounts.SetAccountSuspended(ctx, tx, audit.System("payments.dispute"), accounts.AccountID(account), true,
+		"chargeback "+provider+"/"+providerID); err != nil {
+		return fmt.Errorf("payments: suspend the disputed account: %w", err)
+	}
+	if _, err := queries.MarkDisputeSuspended(ctx, tx, row.ID); err != nil {
+		return fmt.Errorf("payments: record the dispute suspension: %w", err)
+	}
+	return nil
 }
 
 func (*Payments) touchDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, row PaymentsOrderDispute,
@@ -239,11 +272,24 @@ func (*Payments) touchDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, row
 	return nil
 }
 
-// disputeDifference records a chargeback that cannot be booked automatically. The record names the dispute, so a
-// repeated event does not make another row; a changed amount or status is a new fact and gets its own row.
+// disputeDifference records and signals a chargeback that cannot be booked automatically.
 func (p *Payments) disputeDifference(ctx context.Context, tx pg.Tx, merchant MerchantID, o *LockOrderRow,
 	d *DisputeNotice, kind string,
 ) error {
+	r, inserted, err := p.recordDisputeDifference(ctx, tx, merchant, o, d, kind)
+	if err != nil || !inserted {
+		return err
+	}
+	return persistPending(ctx, tx, r)
+}
+
+// recordDisputeDifference inserts a chargeback that cannot be booked automatically, leaving its signal to the caller.
+// The record names the dispute, so a repeated event does not make another row; a changed amount or status is a new fact
+// and gets its own row.
+func (p *Payments) recordDisputeDifference(ctx context.Context, tx pg.Tx, merchant MerchantID, o *LockOrderRow,
+	d *DisputeNotice, kind string,
+) (RecordDiscrepancyParams, bool, error) {
+	var zero RecordDiscrepancyParams
 	detail := map[string]any{
 		"dispute": d.ID, "provider": d.Provider, "payment_intent": d.PaymentIntent, "claimed_order": d.Order,
 		"status": d.Status, "reason": d.Reason, "action": d.Action.String(), "kind": kind,
@@ -251,24 +297,25 @@ func (p *Payments) disputeDifference(ctx context.Context, tx pg.Tx, merchant Mer
 	}
 	key, err := idem.Fingerprint(d.Provider, d.ID)
 	if err != nil {
-		return err
+		return zero, false, err
 	}
 	r, err := pendingDifference(uuid.UUID(merchant), kind, fmt.Sprintf("%s/%x", d.Provider, key), detail)
 	if err != nil {
-		return err
+		return zero, false, err
 	}
 	if o != nil {
 		r.OrderID, r.AccountID = &o.ID, &o.AccountID
 	}
-	inserted, err := recordPending(ctx, tx, r)
+	inserted, err := insertPending(ctx, tx, r)
 	if err != nil {
-		return fmt.Errorf("payments: record the dispute discrepancy: %w", err)
+		return zero, false, fmt.Errorf("payments: record the dispute discrepancy: %w", err)
 	}
-	if inserted {
-		p.logger.Warn("payments: dispute needs attention", "merchant", merchant.TypeID(), "kind", kind,
-			"dispute", d.ID, "payment_intent", d.PaymentIntent, "discrepancy", r.ID)
+	if !inserted {
+		return zero, false, nil
 	}
-	return nil
+	p.logger.Warn("payments: dispute needs attention", "merchant", merchant.TypeID(), "kind", kind,
+		"dispute", d.ID, "payment_intent", d.PaymentIntent, "discrepancy", r.ID)
+	return r, true, nil
 }
 
 func disputeEvent(ctx context.Context, tx pg.Tx, o LockOrderRow, d *DisputeNotice, kind string, to State, raw string) error {

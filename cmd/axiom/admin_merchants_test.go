@@ -297,8 +297,8 @@ func TestAdminPaymentSettingsTopUpBuffer(t *testing.T) {
 	if view.TopUpBufferPpm == nil || *view.TopUpBufferPpm != 20_000 {
 		t.Fatalf("default buffer %s", rec.Body)
 	}
-	if view.RefundSecondApprovalCredits == nil || view.RefundSecondApprovalCredits.Amount != "100000000000" {
-		t.Fatalf("default refund limit %s", rec.Body)
+	if view.RefundSecondApprovalCredits == nil || view.RefundSecondApprovalCredits.Amount != "0" {
+		t.Fatalf("default refund limit (no limit) %s", rec.Body)
 	}
 
 	body := `{"settings":{"open":true,"top_up_buffer_ppm":35000,"refund_second_approval_credits":{"amount":"250000000000","currency":"USD"}},"reason":"a wider buffer for this site"}`

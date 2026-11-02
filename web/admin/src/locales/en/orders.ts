@@ -76,7 +76,7 @@ export default {
     approvedOffline: "Approved. The offline refund waits for its transfer to be concluded.",
     approved: "Approved. The channel flow has started.",
     firstApprovalIntro:
-      "This records the first of two approvals because the refund is above the site's limit. Another administrator must approve it again before the channel flow starts. Your reason is audited; nothing is sent yet.",
+      "This records the first of two approvals because the refund is above the site's limit. Another administrator must approve it again before the channel flow starts; if one already did while this dialog was open, your approval releases it now. Your reason is audited.",
     firstApprovalAction: "Record first approval",
     firstApproved: "You recorded the first approval. Another administrator must release it.",
     firstApprovedDone: "First approval recorded. Another administrator must release the refund.",

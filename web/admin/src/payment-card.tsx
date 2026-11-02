@@ -53,8 +53,10 @@ function PaymentFacts({
           ],
           [
             t("settings.payments.refundLimit"),
-            refundLimitKnown && view.refund_second_approval_credits
-              ? format.money(view.refund_second_approval_credits)
+            refundLimitKnown
+              ? view.refund_second_approval_credits && Number(view.refund_second_approval_credits.amount) > 0
+                ? format.money(view.refund_second_approval_credits)
+                : t("settings.payments.refundLimitNone")
               : t("settings.payments.bufferUnavailable"),
           ],
         ]}

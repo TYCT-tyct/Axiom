@@ -102,8 +102,8 @@ func TestAdminPaymentSettings(t *testing.T) {
 	if p.Open == nil || *p.Open || p.CreditsMin != nil || p.CreditsMax != nil {
 		t.Fatalf("limits not cleared: %+v", p)
 	}
-	if p.RefundSecondApprovalCredits == nil || p.RefundSecondApprovalCredits.Amount != "100000000000" {
-		t.Fatalf("refund approval limit not at its default: %+v", p)
+	if p.RefundSecondApprovalCredits == nil || p.RefundSecondApprovalCredits.Amount != "0" {
+		t.Fatalf("refund approval limit not at its default (no limit): %+v", p)
 	}
 }
 

@@ -16,6 +16,7 @@ func refundWorldAmount(t *testing.T, plugin fakePlugin, credits int64) (*world, 
 	m := w.waiting()
 	w.exec("UPDATE payments.settings SET first_credits = 1000000000000 WHERE site_id = '" + w.siteA.String() + "'")
 	w.exec("UPDATE payments.merchants SET refund_enabled = true, user_refund = true WHERE id = '" + m.ID.String() + "'")
+	w.setRefundLimit(100 * yuan)
 	o := w.mustPlace(credits, "paid")
 	if err := w.p.receive(t.Context(), receipt(o)); err != nil {
 		t.Fatal(err)
@@ -140,7 +141,8 @@ func TestRefundApprovalRuleIsSnapshotted(t *testing.T) {
 		}
 	})
 	t.Run("within stays within when the limit falls", func(t *testing.T) {
-		w, o := refundWorld(t, fakePlugin{caps: CapRefund, refund: refundSucceeds})
+		w, o := refundWorldAmount(t, fakePlugin{caps: CapRefund, refund: refundSucceeds}, 150*yuan)
+		w.setRefundLimit(o.Credits)
 		r := w.mustRefund(o, o.Credits, "snapshot-low")
 		if r.SecondRequired {
 			t.Fatal(r)
@@ -154,6 +156,22 @@ func TestRefundApprovalRuleIsSnapshotted(t *testing.T) {
 			t.Fatalf("a lowered limit added a second approval: %+v", got)
 		}
 	})
+}
+
+func TestNoRefundLimitKeepsOneOperator(t *testing.T) {
+	w, o := refundWorldAmount(t, fakePlugin{caps: CapRefund, refund: refundSucceeds}, 150*yuan)
+	w.setRefundLimit(0)
+	r := w.mustRefund(o, o.Credits, "no-limit")
+	if r.SecondRequired {
+		t.Fatal(r)
+	}
+	got, err := w.p.ApproveRefund(t.Context(), siteScope(w.siteA), r.ID, uuid.NewV7(), "one check")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Approved || got.State != "succeeded" {
+		t.Fatalf("a refund with no limit needed two operators: %+v", got)
+	}
 }
 
 func TestSecondApprovalCannotBeBypassedInTheDatabase(t *testing.T) {

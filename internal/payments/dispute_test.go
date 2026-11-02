@@ -1,14 +1,20 @@
 package payments
 
 import (
+	"context"
+	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 	"uuid"
 
 	"axiom/internal/accounts"
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 )
 
 func disputeWorld(t *testing.T) (*world, Merchant, Order) {
@@ -276,5 +282,208 @@ func TestDisputeLostSuspendsTheAccount(t *testing.T) {
 	got := w.states.recorded()
 	if len(got) != 1 || got[0].account != accounts.AccountID(o.AccountID) || !got[0].suspended {
 		t.Fatalf("lost dispute suspension = %+v", got)
+	}
+}
+
+// realAccounts returns the accounts module's service, so a suspension takes the real account row and alert locks
+// instead of the recording fake.
+func (w *world) realAccounts() *accounts.Service {
+	w.t.Helper()
+	path := filepath.Join(w.t.TempDir(), "mac-key")
+	line := "1:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat("m", 32))) + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		w.t.Fatal(err)
+	}
+	hashes, err := secret.LoadMAC(path)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	service, err := accounts.NewService(w.db, accounts.Config{Platform: w.p.platform, Hashes: hashes})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return service
+}
+
+// createDisputeAccount gives the test world's account a row the accounts module can suspend.
+func (w *world) createDisputeAccount() {
+	w.t.Helper()
+	tier := uuid.NewV7()
+	// The site's default tier points at a tier of the same site, so the two references are inserted in one transaction
+	// and checked together.
+	err := w.tx(pg.PlatformScope(), func(tx pg.Tx) error {
+		statements := []struct {
+			sql  string
+			args []any
+		}{
+			{`INSERT INTO accounts.sites(id,name,status,key_prefix,registration,default_tier_id)
+			 VALUES($1,'Pay','active','pay-','invite',$2)`, []any{w.siteA, tier}},
+			{`INSERT INTO accounts.tiers(id,site_id,name) VALUES($1,$2,'Default')`, []any{tier, w.siteA}},
+			{`INSERT INTO accounts.accounts(id,site_id,kind,name,status,tier_id)
+			 VALUES($1,$2,'personal','Payer','active',$3)`, []any{w.account, w.siteA, tier}},
+		}
+		for _, statement := range statements {
+			if _, err := tx.Exec(w.t.Context(), statement.sql, statement.args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func (w *world) accountStatus() string {
+	w.t.Helper()
+	var status string
+	err := w.db.ReadTx(w.t.Context(), w.p.platform, func(tx pg.Tx) error {
+		return tx.QueryRow(w.t.Context(), `SELECT status FROM accounts.accounts WHERE id=$1`, w.account).Scan(&status)
+	})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return status
+}
+
+// waitForBlocker waits until a session is queued behind blocker's transaction. A row lock wait usually shows up as a
+// wait for the locking transaction, not as a lock on the table, so this asks which sessions blocker blocks.
+func waitForBlocker(t *testing.T, w *world, blocker int32, disputed <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-disputed:
+			t.Fatalf("the dispute finished before it waited for the balance row: %v", err)
+		default:
+		}
+		var waiting int
+		err := w.db.ReadTx(t.Context(), w.p.platform, func(tx pg.Tx) error {
+			return tx.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity
+				WHERE $1 = ANY(pg_blocking_pids(pid))`, blocker).Scan(&waiting)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the dispute never waited for the balance row")
+}
+
+// TestDisputeTakesTheBalanceLockBeforeTheAlertLock interleaves a billing correction (balance, then alert) with a dispute
+// (money, then suspension, then alert). A dispute that suspends before it books the chargeback would hold the alert
+// lock while waiting for the balance the correction holds, and neither transaction could finish.
+func TestDisputeTakesTheBalanceLockBeforeTheAlertLock(t *testing.T) {
+	w, merchant, o := disputeWorld(t)
+	w.createDisputeAccount()
+	w.p.accounts = w.realAccounts()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	held := make(chan int32, 1)
+	release := make(chan struct{})
+	correction := make(chan error, 1)
+	go func() {
+		correction <- w.db.Tx(ctx, w.p.platform, func(tx pg.Tx) error {
+			var pid int32
+			if err := tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM billing.balances WHERE account_id=$1 FOR UPDATE`,
+				w.account); err != nil {
+				return err
+			}
+			held <- pid
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{
+				Kind: "billing.charge_correction_borne", Key: "review", Severity: "critical",
+				Fields: map[string]string{"value": "1"},
+			})
+		})
+	}()
+	blocker := <-held
+
+	disputed := make(chan error, 1)
+	go func() {
+		disputed <- w.p.dispute(ctx, MerchantID(merchant.ID),
+			Dispute("stripe", "dp_order", o.TradeNo, o.Total, DisputeOpen, "needs_response"))
+	}()
+	waitForBlocker(t, w, blocker, disputed)
+	close(release)
+	if err := <-correction; err != nil {
+		t.Fatalf("the correction could not persist while the dispute held the balance row: %v", err)
+	}
+	if err := <-disputed; err != nil {
+		t.Fatal(err)
+	}
+	if got := w.accountStatus(); got != "disabled" {
+		t.Fatalf("account status = %s", got)
+	}
+}
+
+// TestOldNodeDisputeSuspendsWhenANewNodeSeesIt covers the mixed-version window: an older node books the chargeback
+// without recording a suspension, so a later event on a new node must still suspend the account, once.
+func TestOldNodeDisputeSuspendsWhenANewNodeSeesIt(t *testing.T) {
+	w, merchant, o := disputeWorld(t)
+	w.createDisputeAccount()
+	w.p.accounts = w.realAccounts()
+	open := Dispute("stripe", "dp_old", o.TradeNo, o.Total, DisputeOpen, "needs_response")
+	if err := w.p.dispute(t.Context(), MerchantID(merchant.ID), open); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.accountStatus(); got != "disabled" {
+		t.Fatalf("account status = %s", got)
+	}
+	// The row looks like an old node's: applied without a mark. An operator lifted the account in the meantime.
+	w.exec("UPDATE payments.order_disputes SET suspended_at = NULL WHERE provider_id = 'dp_old'")
+	w.exec(fmt.Sprintf("UPDATE accounts.accounts SET status = 'active' WHERE id = '%s'", w.account))
+	if err := w.p.dispute(t.Context(), MerchantID(merchant.ID), open); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.accountStatus(); got != "disabled" {
+		t.Fatalf("a repeat did not repair the old node's dispute: %s", got)
+	}
+	// The mark now keeps a repeat from suspending an account an operator lifted again.
+	w.exec(fmt.Sprintf("UPDATE accounts.accounts SET status = 'active' WHERE id = '%s'", w.account))
+	if err := w.p.dispute(t.Context(), MerchantID(merchant.ID), open); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.accountStatus(); got != "active" {
+		t.Fatalf("a repeat suspended an account an operator had lifted: %s", got)
+	}
+}
+
+func TestPollRepairsADisputeAnOldNodeAppliedWithoutSuspension(t *testing.T) {
+	w, merchant, o := disputeWorld(t)
+	w.createDisputeAccount()
+	w.p.accounts = w.realAccounts()
+	if err := w.p.dispute(t.Context(), MerchantID(merchant.ID),
+		Dispute("stripe", "dp_sweep", o.TradeNo, o.Total, DisputeOpen, "needs_response")); err != nil {
+		t.Fatal(err)
+	}
+	w.exec("UPDATE payments.order_disputes SET suspended_at = NULL WHERE provider_id = 'dp_sweep'")
+	w.exec(fmt.Sprintf("UPDATE accounts.accounts SET status = 'active' WHERE id = '%s'", w.account))
+	if err := w.p.poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.accountStatus(); got != "disabled" {
+		t.Fatalf("the poll did not repair the dispute: %s", got)
+	}
+	var marked bool
+	if err := w.db.ReadTx(t.Context(), w.p.platform, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT suspended_at IS NOT NULL FROM payments.order_disputes
+			WHERE provider_id = 'dp_sweep'`).Scan(&marked)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !marked {
+		t.Fatal("the repaired dispute was not marked")
 	}
 }

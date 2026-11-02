@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
 import { orderAmounts } from "../orders/amounts";
 import { CashMovements } from "../orders/cash";
+import { approvalOutcome } from "../orders/refund-approval";
 import { orderTone, paymentOrderState, paymentOrderStates, refundTone, shortId } from "../orders/states";
 import {
   ChoiceFilter,
@@ -242,19 +243,22 @@ function RefundDecision({ kind, refund, onClose }: Decision & { onClose: () => v
           ),
         )
       }
-      done={() => (
-        <p>
-          {t(
-            approve
-              ? first
-                ? "orders.refund.firstApprovedDone"
-                : offline
-                  ? "orders.refund.approvedOffline"
-                  : "orders.refund.approved"
-              : "orders.refund.rejected",
-          )}
-        </p>
-      )}
+      done={(out) => {
+        const outcome = approvalOutcome(out);
+        return (
+          <p>
+            {t(
+              approve
+                ? outcome === "first"
+                  ? "orders.refund.firstApprovedDone"
+                  : outcome === "offline"
+                    ? "orders.refund.approvedOffline"
+                    : "orders.refund.approved"
+                : "orders.refund.rejected",
+            )}
+          </p>
+        );
+      }}
       onClose={onClose}
     />
   );

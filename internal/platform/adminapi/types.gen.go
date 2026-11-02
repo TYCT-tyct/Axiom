@@ -3114,7 +3114,7 @@ type PaymentSettings struct {
 	CreditsMin *Money `json:"credits_min,omitempty"`
 	Open       *bool  `json:"open,omitempty"`
 
-	// RefundSecondApprovalCredits Refunds above this amount need two operators; at or below it one operator releases them. The default is 100 credits. A node of the previous release does not return it.
+	// RefundSecondApprovalCredits Refunds above this amount need two operators; at or below it one operator releases them. 0 means no limit, so every refund keeps the one-operator rule. A node of the previous release does not return it.
 	RefundSecondApprovalCredits *Money `json:"refund_second_approval_credits,omitempty"`
 
 	// TopUpBufferPpm The buffer on a top-up in millionths: the site's own value, or the default 2% (20000) when it set none. A node of the previous release does not return it.
@@ -3133,7 +3133,7 @@ type PaymentSettingsUpdate struct {
 		CreditsMin *Money `json:"credits_min,omitempty"`
 		Open       bool   `json:"open"`
 
-		// RefundSecondApprovalCredits Refunds above this amount need two operators; 0 makes every refund need two. Omit to keep the current value; a node of the previous release refuses the field.
+		// RefundSecondApprovalCredits Refunds above this amount need two operators; 0 removes the limit. Omit to keep the current value; a node of the previous release refuses the field.
 		RefundSecondApprovalCredits *Money `json:"refund_second_approval_credits,omitempty"`
 
 		// TopUpBufferPpm The buffer in millionths, 0 to 10%. Omit to keep the current one.

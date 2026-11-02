@@ -351,6 +351,7 @@ export default {
     none: "No limit",
     buffer: "Top-up buffer",
     refundLimit: "Refund approval limit",
+    refundLimitNone: "No limit",
     bufferUnavailable: "Not available on this server yet",
     bufferSkipped: "Saved; this server does not accept the top-up buffer yet, so it was left unchanged.",
     fieldsSkipped: "Saved; this server does not accept one of the newer fields yet, so it was left unchanged.",
@@ -362,7 +363,8 @@ export default {
     openHint: "Off refuses new top-ups; saved orders keep their rate.",
     amountHint: "An amount in {{currency}}, up to 9 decimals. Empty means no limit.",
     bufferHint: "A percentage from 0 to 10, at most 4 decimals; 2 is the default.",
-    refundLimitHint: "In {{currency}}. Refunds above it need two administrators; at or below it one releases them.",
+    refundLimitHint:
+      "In {{currency}}. Refunds above it need two administrators; at or below it one releases them. 0 means no limit, so every refund keeps the one-administrator rule.",
     invalidAmount: "Amounts are in {{currency}}, with up to 9 decimals.",
     invalidRange: "The minimum must not be above the maximum.",
     invalidBuffer: "The buffer is a percentage from 0 to 10.",

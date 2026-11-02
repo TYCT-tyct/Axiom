@@ -2312,7 +2312,7 @@ export interface components {
             credits_max?: components["schemas"]["Money"];
             /** @description The buffer on a top-up in millionths: the site's own value, or the default 2% (20000) when it set none. A node of the previous release does not return it. */
             top_up_buffer_ppm?: number;
-            /** @description Refunds above this amount need two operators; at or below it one operator releases them. The default is 100 credits. A node of the previous release does not return it. */
+            /** @description Refunds above this amount need two operators; at or below it one operator releases them. 0 means no limit, so every refund keeps the one-operator rule. A node of the previous release does not return it. */
             refund_second_approval_credits?: components["schemas"]["Money"];
         };
         PaymentSettingsUpdate: {
@@ -2322,7 +2322,7 @@ export interface components {
                 credits_max?: components["schemas"]["Money"];
                 /** @description The buffer in millionths, 0 to 10%. Omit to keep the current one. */
                 top_up_buffer_ppm?: number;
-                /** @description Refunds above this amount need two operators; 0 makes every refund need two. Omit to keep the current value; a node of the previous release refuses the field. */
+                /** @description Refunds above this amount need two operators; 0 removes the limit. Omit to keep the current value; a node of the previous release refuses the field. */
                 refund_second_approval_credits?: components["schemas"]["Money"];
             };
             reason: components["schemas"]["Reason"];
