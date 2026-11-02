@@ -177,8 +177,12 @@ func evaluateRule(ctx context.Context, tx pg.Tx, e AlertEvent, r AlertRule, ch A
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO observability.alert_receipts(id,event_id,rule_id,sequence,channel,quiet_start,quiet_end,at)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(event_id,rule_id,sequence) DO NOTHING`, uuid.NewV7(), e.ID, r.ID, seq, raw, r.QuietStart, r.QuietEnd, now)
+	fields, err := jsonx.MarshalCanonical(e.Fields)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO observability.alert_receipts(id,event_id,rule_id,sequence,channel,quiet_start,quiet_end,fields,at)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(event_id,rule_id,sequence) DO NOTHING`, uuid.NewV7(), e.ID, r.ID, seq, raw, r.QuietStart, r.QuietEnd, fields, now)
 	return err
 }
 
@@ -222,7 +226,7 @@ type alertDelivery struct {
 }
 
 func pendingAlertDeliveries(ctx context.Context, tx pg.Tx, now time.Time) ([]alertDelivery, error) {
-	rows, err := tx.Query(ctx, `SELECT r.id,e.id,r.channel,r.quiet_start,r.quiet_end,e.kind,e.key,r.sequence,e.severity,e.fields FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id WHERE r.state='pending' AND r.not_before<=$1 ORDER BY r.at,r.id LIMIT 100 FOR UPDATE OF r SKIP LOCKED`, now)
+	rows, err := tx.Query(ctx, `SELECT r.id,e.id,r.channel,r.quiet_start,r.quiet_end,e.kind,e.key,r.sequence,e.severity,coalesce(r.fields,e.fields) FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id WHERE r.state='pending' AND r.not_before<=$1 ORDER BY r.at,r.id LIMIT 100 FOR UPDATE OF r SKIP LOCKED`, now)
 	if err != nil {
 		return nil, err
 	}
@@ -305,9 +309,10 @@ func recoverAlerts(ctx context.Context, tx pg.Tx, e AlertEvent, now time.Time) e
 	if e.Kind == "alert.test" {
 		return nil
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO observability.alert_receipts(id,event_id,rule_id,sequence,channel,quiet_start,quiet_end,at,state)
- SELECT uuidv7(),event_id,rule_id,-1,channel,quiet_start,quiet_end,$2,CASE WHEN state='delivered' THEN 'pending' ELSE 'failed' END
- FROM observability.alert_receipts r WHERE event_id=$1 AND sequence=0 AND state IN ('delivered','failed')
+	_, err := tx.Exec(ctx, `INSERT INTO observability.alert_receipts(id,event_id,rule_id,sequence,channel,quiet_start,quiet_end,fields,at,state)
+ SELECT uuidv7(),r.event_id,r.rule_id,-1,r.channel,r.quiet_start,r.quiet_end,e.fields,$2,CASE WHEN r.state='delivered' THEN 'pending' ELSE 'failed' END
+ FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id
+ WHERE r.event_id=$1 AND r.sequence=0 AND r.state IN ('delivered','failed')
  AND NOT EXISTS(SELECT FROM observability.alert_receipts pending WHERE pending.event_id=r.event_id AND pending.rule_id=r.rule_id AND pending.sequence>=0 AND pending.state IN ('pending','queued'))
  ON CONFLICT(event_id,rule_id,sequence) DO NOTHING`, e.ID, now)
 	return err
