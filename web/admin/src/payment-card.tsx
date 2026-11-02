@@ -155,14 +155,7 @@ function PaymentDialog({
       title={t("settings.payments.edit")}
       intro={<p>{t("settings.payments.intro")}</p>}
       action={t("settings.payments.save")}
-      fields={(error) => (
-        <PaymentFields
-          view={view}
-          currency={currency}
-          bufferKnown={bufferKnown}
-          error={error}
-        />
-      )}
+      fields={(error) => <PaymentFields view={view} currency={currency} bufferKnown={bufferKnown} error={error} />}
       read={(values) =>
         readPayments(values, currency, bufferKnown, {
           amount: t("settings.payments.invalidAmount", { currency }),
