@@ -231,7 +231,7 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 
 // entry works out what billing needs for one endpoint and this request: the output limit and whether the reservation can
 // be made in segments.
-func (r *Router) entry(c *candidate, n *need) Entry {
+func (*Router) entry(c *candidate, n *need) Entry {
 	out, _ := c.outputLimit(n.req, n.tokens)
 	format, _ := c.callFormat(n)
 	// Without a known output speed the overshoot allowance of a segmented reservation would be nothing, so an entry

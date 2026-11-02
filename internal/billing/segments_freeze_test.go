@@ -13,8 +13,10 @@ import (
 func TestReserveQuotesTheSegmentsTheRoutePlannedWith(t *testing.T) {
 	t.Parallel()
 
-	b := newBank(t, 1e9, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour,
-		Segments: NewSegmentPolicy(Segments{Output: 1000, Overshoot: 2 * time.Second})})
+	b := newBank(t, 1e9, 0, Config{
+		HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour,
+		Segments: NewSegmentPolicy(Segments{Output: 1000, Overshoot: 2 * time.Second}),
+	})
 	frozen := b.billing.Segments().Load()
 	segmented := b.exact
 	segmented.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`)

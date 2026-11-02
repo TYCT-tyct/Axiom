@@ -145,7 +145,7 @@ func (l *Loop) rescheduleVerifications(s ProbeSettings) {
 				e.verify.next = e.verify.checked.Add(l.spread(s.VerifyEvery))
 			case verifyContradicted:
 				e.verify.next = e.verify.checked.Add(l.spread(backoff(e.verify.failures, s.VerifyRetry, s.VerifyEvery)))
-			default:
+			case verifyUnknown:
 				at := e.verify.attempted
 				if at.IsZero() {
 					at = e.verify.checked
