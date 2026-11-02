@@ -208,6 +208,8 @@ func (p *rewriter) members(rules map[string]rule, other rule) error {
 		do := rules[string(p.name)]
 		if do == nil {
 			do = other
+		} else if p.zeroUsage {
+			do = (*rewriter).zeroCounts
 		}
 		n := len(p.out)
 		if err := do(p); err != nil {

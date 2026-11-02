@@ -91,6 +91,8 @@ var presetFields = map[string]bool{
 	"context_management":    true,
 	"plugins":               true,
 	"transforms":            true,
+	"cache_enabled":         true,
+	"cache_ttl_seconds":     true,
 }
 
 func validatePresetMember(key string, raw jsonx.Raw) error {
@@ -98,22 +100,40 @@ func validatePresetMember(key string, raw jsonx.Raw) error {
 	case "model":
 		return validatePresetModel(raw)
 	case "models":
-		var models []jsonx.Raw
-		if jsonx.Unmarshal(raw, &models) != nil || len(models) > 8 {
-			return ErrPreset
-		}
-		for _, model := range models {
-			if err := validatePresetModel(model); err != nil {
-				return err
-			}
-		}
+		return validatePresetModels(raw)
 	case "system":
 		var system string
 		if len(raw) == 0 || raw[0] != '"' || jsonx.Unmarshal(raw, &system) != nil {
 			return ErrPreset
 		}
+	case "cache_enabled":
+		return validatePresetCacheEnabled(raw)
+	case "cache_ttl_seconds":
+		return validatePresetCacheTTL(raw)
 	}
 	return nil
+}
+
+// PresetCache reads the response-cache settings a preset carries. enabled is nil when the preset does not decide the
+// switch; ttl is zero when it sets no lifetime. The members are server-side settings and never reach an upstream body.
+func PresetCache(config []byte) (enabled *bool, ttl int64, err error) {
+	var fields map[string]jsonx.Raw
+	if jsonx.Unmarshal(config, &fields) != nil {
+		return nil, 0, ErrPreset
+	}
+	if raw, ok := fields["cache_enabled"]; ok {
+		var value bool
+		if jsonx.Unmarshal(raw, &value) != nil {
+			return nil, 0, ErrPreset
+		}
+		enabled = &value
+	}
+	if raw, ok := fields["cache_ttl_seconds"]; ok {
+		if jsonx.Unmarshal(raw, &ttl) != nil || ttl < 1 || ttl > 86400 {
+			return nil, 0, ErrPreset
+		}
+	}
+	return enabled, ttl, nil
 }
 
 func validatePresetModel(raw jsonx.Raw) error {
@@ -294,4 +314,33 @@ func (s *Service) PresetConfig(site SiteID, account AccountID, slug string) (str
 		return "", ErrNotFound
 	}
 	return config, nil
+}
+
+func validatePresetCacheEnabled(raw jsonx.Raw) error {
+	var enabled bool
+	if jsonx.Unmarshal(raw, &enabled) != nil {
+		return ErrPreset
+	}
+	return nil
+}
+
+func validatePresetCacheTTL(raw jsonx.Raw) error {
+	var seconds int64
+	if jsonx.Unmarshal(raw, &seconds) != nil || seconds < 1 || seconds > 86400 {
+		return ErrPreset
+	}
+	return nil
+}
+
+func validatePresetModels(raw jsonx.Raw) error {
+	var models []jsonx.Raw
+	if jsonx.Unmarshal(raw, &models) != nil || len(models) > 8 {
+		return ErrPreset
+	}
+	for _, model := range models {
+		if err := validatePresetModel(model); err != nil {
+			return err
+		}
+	}
+	return nil
 }

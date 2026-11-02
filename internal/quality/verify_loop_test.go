@@ -111,7 +111,7 @@ func verificationContradictionFailsClosed(t *testing.T) {
 	m, l, f, now, id := verificationWorld(t)
 	c := newChallenge(func() float64 { return .5 }, stated)
 	passVerification(t, l, f, c)
-	*now = now.Add(verifyEvery)
+	*now = now.Add(l.currentSettings().VerifyEvery)
 	contradictVerification(t, l, f, c)
 	got := measured(m, id, *now)
 	if got.Verified {
@@ -133,7 +133,7 @@ func verificationFakeThenRestored(t *testing.T) {
 	m, l, f, now, id := verificationWorld(t)
 	c := newChallenge(func() float64 { return .5 }, stated)
 	passVerification(t, l, f, c)
-	for i, retry := range []time.Duration{verifyEvery, verifyRetry, 2 * verifyRetry} {
+	for i, retry := range []time.Duration{l.currentSettings().VerifyEvery, l.currentSettings().VerifyRetry, 2 * l.currentSettings().VerifyRetry} {
 		*now = now.Add(retry)
 		contradictVerification(t, l, f, c)
 		if v := verificationOf(m, id); v.failures != i+1 {
@@ -143,7 +143,7 @@ func verificationFakeThenRestored(t *testing.T) {
 	if v := verificationOf(m, id); !v.failed() {
 		t.Fatalf("three contradictions are not a fake: %+v", v)
 	}
-	*now = now.Add(backoff(verifyFailures))
+	*now = now.Add(backoff(verifyFailures, l.currentSettings().VerifyRetry, l.currentSettings().VerifyEvery))
 	passVerification(t, l, f, c)
 	if got := measured(m, id, *now); !got.Verified {
 		t.Fatalf("after a later pass: %+v", got)
@@ -166,7 +166,7 @@ func TestInconclusiveVerificationKeepsThePass(t *testing.T) {
 	tick(t, l)
 	collectVerification(t, l, f)
 
-	*now = now.Add(verifyEvery)
+	*now = now.Add(l.currentSettings().VerifyEvery)
 	f.result = suppliers.TestResult{Streamed: true, Reply: "I cannot answer that."}
 	tick(t, l)
 	collectVerification(t, l, f)
@@ -174,8 +174,8 @@ func TestInconclusiveVerificationKeepsThePass(t *testing.T) {
 	if !got.Verified || got.VerifyConfidence != .75 {
 		t.Fatalf("after an inconclusive check: %+v, want the pass still counting at 0.75", got)
 	}
-	if v := verificationOf(m, id); v.failures != 0 || !v.next.Equal(now.Add(verifyRetry)) {
-		t.Fatalf("after an inconclusive check: %+v, want a retry at %v", v, now.Add(verifyRetry))
+	if v := verificationOf(m, id); v.failures != 0 || !v.next.Equal(now.Add(l.currentSettings().VerifyRetry)) {
+		t.Fatalf("after an inconclusive check: %+v, want a retry at %v", v, now.Add(l.currentSettings().VerifyRetry))
 	}
 }
 
@@ -188,7 +188,7 @@ func TestVerificationChecksOnlyPlatformEndpoints(t *testing.T) {
 	if l.active != 0 {
 		t.Fatal("an unidentified endpoint was checked")
 	}
-	if v := verificationOf(m, id); !v.next.Equal(now.Add(verifyRetry)) {
+	if v := verificationOf(m, id); !v.next.Equal(now.Add(l.currentSettings().VerifyRetry)) {
 		t.Fatalf("an unidentified endpoint is not retried soon: %+v", v)
 	}
 
@@ -283,9 +283,9 @@ func TestVerificationAlertsAFakeOnce(t *testing.T) {
 
 	for i := range verifyFailures + 1 {
 		if i == 0 {
-			*now = now.Add(verifyEvery) // the pass scheduled the next check six hours out
+			*now = now.Add(l.currentSettings().VerifyEvery) // the pass scheduled the next check six hours out
 		} else {
-			*now = now.Add(backoff(i))
+			*now = now.Add(backoff(i, l.currentSettings().VerifyRetry, l.currentSettings().VerifyEvery))
 		}
 		contradictVerification(t, l, f, c)
 	}
@@ -301,7 +301,7 @@ func TestVerificationAlertsAFakeOnce(t *testing.T) {
 		t.Fatal("a fake concluded endpoint is still verified")
 	}
 
-	*now = now.Add(backoff(verifyFailures + 1))
+	*now = now.Add(backoff(verifyFailures+1, l.currentSettings().VerifyRetry, l.currentSettings().VerifyEvery))
 	passVerification(t, l, f, c)
 	if _, resolved = fakeSignals(rec, id); resolved != 1 {
 		t.Fatalf("fake alerts resolved after a pass: %d, want 1", resolved)

@@ -20,9 +20,10 @@ const (
 const (
 	windowSize = 32
 	windowIdle = 10 * time.Minute
-	probeBase  = 30 * time.Second
 	probeMax   = 10 * time.Minute
-	slowStart  = time.Minute
+	// maxProbeBackoff is enough doublings for the smallest allowed base (1s) to reach probeMax: 1, 2, ... 512, 600.
+	maxProbeBackoff = 10
+	slowStart       = time.Minute
 )
 
 type sample struct {
@@ -218,11 +219,15 @@ func (m *Monitor) transition(e *State, r healthRecord, kind string, probe bool) 
 }
 
 func (m *Monitor) delay(level int) time.Duration {
-	d := min(probeBase*time.Duration(1<<uint(min(level, 5))), probeMax)
+	base := defaultProbeBase
+	if m.loop != nil {
+		base = m.loop.currentSettings().ProbeBase
+	}
+	d := min(base*time.Duration(1<<uint(min(level, maxProbeBackoff))), probeMax)
 	if m.loop == nil {
 		return d
 	}
-	return max(probeBase, min(time.Duration(float64(d)*(.75+.5*m.loop.rand())), probeMax))
+	return max(base, min(time.Duration(float64(d)*(.75+.5*m.loop.rand())), probeMax))
 }
 
 // recover closes an observe-mode would-remove on a counted success. In enforce mode a probeable endpoint restores only

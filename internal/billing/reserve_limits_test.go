@@ -18,7 +18,7 @@ import (
 func TestExtendAcrossAttempts(t *testing.T) {
 	t.Parallel()
 
-	b := newBank(t, 1e6, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, Segments: Segments{Output: 100, Overshoot: time.Second}})
+	b := newBank(t, 1e6, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour, Segments: NewSegmentPolicy(Segments{Output: 100, Overshoot: time.Second})})
 	segmented := b.exact
 	segmented.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`)
 	segmented.MaxOutput, segmented.Segmentable = 1000, true

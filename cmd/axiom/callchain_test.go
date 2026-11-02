@@ -87,6 +87,7 @@ func newChainFixtureWith(t *testing.T, cfg billing.Config, suppliers billing.Sup
 		t.Fatal(err)
 	}
 	cfg.Logger = slog.New(slog.DiscardHandler)
+	cfg.Segments = billing.NewSegmentPolicy(billing.DefaultSegments())
 	if f.billing, err = billing.Start(ctx, app, f.platformScope, cfg, suppliers); err != nil {
 		t.Fatal(err)
 	}
