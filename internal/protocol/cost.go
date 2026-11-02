@@ -6,6 +6,8 @@ import (
 
 // cost is the members an ending's usage gets for f, each led by a comma: none without a settled cost. Chat and
 // Responses also get the parts OpenRouter reports beside the price: the server tools' cost and the cache discount.
+//
+//nolint:cyclop // one function decides the members every format's usage gets; the branches are the formats
 func cost(f *Final, format Format) string {
 	byok := ""
 	if format != Messages { // Messages' usage has no such member (docs/domains/gateway.md「用量与费用」)
@@ -17,16 +19,14 @@ func cost(f *Final, format Format) string {
 	if f == nil || f.Pending {
 		return byok
 	}
-	amount, currency := decimal(f.Cost), f.Currency.String()
 	// The account's flag leads the price for the formats the relay assembles and trails it for the direct writers.
-	// Either way it is an operand of the first concatenation: appending it afterwards costs one allocation per
-	// rendered usage, which the aggregate and relay benchmarks (scripts/ci/bench-compare.sh) count.
-	var s string
+	// Either way it is an operand of this concatenation: appending it afterwards costs one allocation per rendered
+	// usage, which the aggregate and relay benchmarks count (scripts/ci/bench-compare.sh).
+	lead, trail := byok, ""
 	if format == Embeddings || format == Rerank {
-		s = `,"cost":` + amount + `,"cost_currency":"` + currency + `"` + byok
-	} else {
-		s = byok + `,"cost":` + amount + `,"cost_currency":"` + currency + `"`
+		lead, trail = "", byok
 	}
+	s := lead + `,"cost":` + decimal(f.Cost) + `,"cost_currency":"` + f.Currency.String() + `"` + trail
 	if f.Estimated {
 		s += `,"cost_estimated":true`
 	}
