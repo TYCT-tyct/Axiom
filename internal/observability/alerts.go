@@ -248,16 +248,38 @@ func applyAlert(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) er
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO observability.alert_events(id,kind,key,severity,fields,state,fired_at)
  SELECT $1,$2,$3,$4,$5,'firing',$6 WHERE $7 OR EXISTS(SELECT FROM observability.alert_events WHERE kind=$2 AND key=$3 AND resolved_at IS NULL) ON CONFLICT(kind,key) WHERE resolved_at IS NULL
- DO UPDATE SET severity=EXCLUDED.severity,fields=EXCLUDED.fields,occurrences=observability.alert_events.occurrences+1`, uuid.NewV7(), s.Kind, s.Key, s.Severity, fields, now, create)
-	if err != nil || s.Kind != "accounts.authentication_failures" {
+ DO UPDATE SET severity=EXCLUDED.severity,
+ fields=CASE WHEN $8 AND coalesce((observability.alert_events.fields->>'value')::numeric,0)>coalesce((EXCLUDED.fields->>'value')::numeric,0) THEN observability.alert_events.fields ELSE EXCLUDED.fields END,
+ occurrences=observability.alert_events.occurrences+1`, uuid.NewV7(), s.Kind, s.Key, s.Severity, fields, now, create, paymentCount(s.Kind))
+	if err != nil || !sampleKind(s.Kind) {
 		return err
 	}
-	return evaluateSecuritySample(ctx, tx, s, now)
+	return evaluateSample(ctx, tx, s, now)
 }
 
-func evaluateSecuritySample(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) error {
-	// Completed security samples must be evaluated before a later sample replaces
-	// their value or resolves the incident, even when the consumer is catching up.
+// sampleKind reports the signals that carry one completed sample: a later sample must not replace the value before the
+// rules have seen it, and a resolution must not overtake an un-evaluated spike.
+func sampleKind(kind string) bool {
+	switch kind {
+	case "accounts.authentication_failures", "payments.verify_failed", "payments.query_failed", "payments.rate_limited", "payments.merchant_unreadable":
+		return true
+	}
+	return false
+}
+
+// paymentCount reports the payment signals whose value is a count. Their event keeps the highest value observed until
+// recovery, so a following quiet or low minute cannot hide a burst that is still waiting for dispatch.
+func paymentCount(kind string) bool {
+	switch kind {
+	case "payments.verify_failed", "payments.query_failed", "payments.rate_limited", "payments.merchant_unreadable":
+		return true
+	}
+	return false
+}
+
+func evaluateSample(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) error {
+	// Completed samples must be evaluated before a later sample replaces their value
+	// or resolves the incident, even when the consumer is catching up.
 	c, err := readAlertConfiguration(ctx, tx, false)
 	if err != nil {
 		return err

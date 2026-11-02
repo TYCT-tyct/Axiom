@@ -312,6 +312,49 @@ func TestSecuritySpikeUsesConfiguredThresholdAndRecovers(t *testing.T) {
 	}
 }
 
+//nolint:gocognit // one batch with a high window and either a low window or a recovery is the point.
+func TestPaymentCompletedWindowsSurviveConsumerDelay(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		next     string
+		resolved bool
+	}{
+		{name: "low value", next: "1"},
+		{name: "recovery", resolved: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openDB(t)
+			now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+			alertTx(t, db, func(tx pg.Tx) error {
+				c, err := GetAlertConfiguration(t.Context(), tx)
+				if err != nil {
+					return err
+				}
+				c.Channels = []AlertChannel{{ID: "ops", Email: "ops@example.com"}}
+				c.Rules = []AlertRule{{ID: "verify", Kind: "payments.verify_failed", MinimumSeverity: "warning", Threshold: 10, Channel: "ops"}}
+				return SetAlertConfiguration(t.Context(), tx, c)
+			})
+			alertTx(t, db, func(tx pg.Tx) error {
+				if err := alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Fields: map[string]string{"value": "12"}}); err != nil {
+					return err
+				}
+				next := alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Resolved: tc.resolved}
+				if !tc.resolved {
+					next.Fields = map[string]string{"value": tc.next}
+				}
+				return alert.Persist(t.Context(), tx, uuid.NewV7(), next)
+			})
+			got := alertCycle(t, db, now)
+			if len(got) != 1 || got[0].Fields["value"] != "12" || len(got[0].Receipts) != 1 || got[0].Receipts[0].Sequence != 0 {
+				t.Fatalf("completed window was lost: %+v", got)
+			}
+			if tc.resolved && got[0].State != "resolved" {
+				t.Fatalf("recovery did not resolve: %+v", got[0])
+			}
+		})
+	}
+}
+
 func TestSecurityCompletedSamplesSurviveConsumerDelay(t *testing.T) {
 	for _, next := range []string{"1", "0"} {
 		t.Run(next, func(t *testing.T) {
