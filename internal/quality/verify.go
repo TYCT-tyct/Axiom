@@ -40,7 +40,7 @@ type verification struct {
 	passed    bool          // the last conclusive check passed
 	failures  int           // consecutive contradictions
 	outcome   verifyOutcome // what the last check said, so a settings change can recompute its next time
-	attempted time.Time     // when the last check began, for a retry scheduled before any conclusive answer
+	attempted time.Time     // when the last check was scheduled or its result recorded, the retry time base
 }
 
 // claim is what a check's evidence is about: the catalog model it names, the upstream name that serves it, and the

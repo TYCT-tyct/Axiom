@@ -144,7 +144,9 @@ func (l *Loop) rescheduleVerifications(s ProbeSettings) {
 			case verifyPassed:
 				e.verify.next = e.verify.checked.Add(l.spread(s.VerifyEvery))
 			case verifyContradicted:
-				e.verify.next = e.verify.checked.Add(l.spread(backoff(e.verify.failures, s.VerifyRetry, s.VerifyEvery)))
+				// checked records only a pass. A contradiction uses the time its result was recorded, so a new
+				// endpoint is not retried from the zero time and an old pass does not set the base.
+				e.verify.next = e.verify.attempted.Add(l.spread(backoff(e.verify.failures, s.VerifyRetry, s.VerifyEvery)))
 			case verifyUnknown:
 				at := e.verify.attempted
 				if at.IsZero() {
