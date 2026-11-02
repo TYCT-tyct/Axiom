@@ -345,7 +345,7 @@ P15 的代码结构：`cacheplan.go` 在准入前决定开不开、TTL、清除�
 
 **键与范围**：SHA-256 的内容是 `axiom/response-cache/v1`、账户 UUID、客户端格式、是否流式、`normalizeJSON` 后的正文。规范化只删除字符串外的空白，保留属性顺序、重复键、数字写法和字符串内空白；账户进哈希，查询又在 `Call.Admitted.Scope` 里完成，所以不同账户永不共用一个条目。只缓存 Chat、Responses、Messages 的普通生成；直连格式、compact、`previous_response_id`、`web`/`file-parser`、服务端搜索、压缩和文件引用都不缓存（`cacheable`），它们的缓存头被忽略。
 
-**命中**：`cachehit.go` 从 `cache.go` 拿到已开封的正文和实际模型，用当前客户端格式、当前流式/聚合选项 `protocol.NewRelay`，`RelayOptions.Cached` 让 relay 把每个 usage 计数改写成 0（`protocol` 的 `zeroJSONNumbers`），`Finish` 只写零费用。每个命中用新的调用 ID 和 `created`，保留条目里的 `X-Codex-Turn-State`；`beginReply`/`respond` 写 `Cache-Control: no-store`，共享代理不会缓存一个账户的回复。重放在提交点之前失败时删掉条目并退回正常 MISS，之后失败按普通断流结束，仍免费。
+**命中**：`cachehit.go` 从 `cache.go` 拿到已开封的正文和实际模型，用当前客户端格式、当前流式/聚合选项 `protocol.NewRelay`，`RelayOptions.Cached` 让 relay 把每个 usage 计数改写成 0（`protocol` 的 `zeroJSONNumbers`），`Finish` 只写零费用。每个命中用新的调用 ID 和 `created`，保留条目里的 `X-Codex-Turn-State`（它和正文一起放在同一份加密载荷里，表里没有明文状态列）；`beginReply`/`respond` 写 `Cache-Control: no-store`，共享代理不会缓存一个账户的回复。重放在提交点之前失败时删掉条目并退回正常 MISS，之后失败按普通断流结束，仍免费。
 
 **未命中、写入与边界**：只写上游 `200`、回复完整、结算成功的尝试；`newCacheCapture` 在读到上游字节时复制并计入节点内存预算，超过 `maxCacheEntry`（1 MiB）就放弃，流照常转发。`Offer` 复制正文后立即返回，队列满就丢弃并计数；写库在独立 goroutine 上用 5 秒期限，失败只记日志。每个账户最多 64 MiB 或 1024 条，超出按 `created_at` 淘汰最旧的；`Lookup` 把过期、损坏、打不开或格式不认识的行当 MISS 并删掉，2 秒期限。`cleanup` 每分钟用平台范围分批删除过期行（每次至多 1000 行、10 批）。
 

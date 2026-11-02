@@ -1,8 +1,8 @@
 -- +goose Up
 
--- A cached reply is conversation content: the body is sealed with the platform keyring, and every row is scoped to one
--- account by RLS. cache_key is the SHA-256 of the account, format, streaming mode and normalized request, never a raw
--- request or a provider's identifier (docs/domains/gateway.md「响应缓存」).
+-- A cached reply is conversation content: the body and the turn state are sealed together with the platform keyring,
+-- and every row is scoped to one account by RLS. cache_key is the SHA-256 of the account, format, streaming mode and
+-- normalized request, never a raw request or a provider's identifier (docs/domains/gateway.md「响应缓存」).
 GRANT USAGE ON SCHEMA gateway TO axiom_app;
 
 CREATE TABLE gateway.response_cache (
@@ -13,7 +13,6 @@ CREATE TABLE gateway.response_cache (
     source_id uuid NOT NULL,
     format smallint NOT NULL CHECK (format BETWEEN 0 AND 255),
     model text NOT NULL CHECK (octet_length(model) <= 200),
-    state text NOT NULL DEFAULT '' CHECK (octet_length(state) <= 8192),
     ciphertext bytea NOT NULL,
     nonce bytea NOT NULL CHECK (octet_length(nonce) = 12),
     wrapped_dek bytea NOT NULL CHECK (octet_length(wrapped_dek) = 60),

@@ -259,10 +259,18 @@ func TestTheCachedReplyIsEncryptedAtRest(t *testing.T) {
 	}
 	opened, err := r.keys.Open(secret.Sealed{Ciphertext: ciphertext, Nonce: nonce, WrappedDEK: wrappedDEK, KeyVersion: keyVersion},
 		secret.Location{Table: "gateway.response_cache", RowID: id.String(), Purpose: "body"})
-	if err != nil || len(opened.Reveal()) != size || size == 0 {
-		t.Fatalf("open: %d bytes, %v, size %d", len(opened.Reveal()), err, size)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(opened.Reveal(), "message_start") {
+	payload := opened.Reveal()
+	if len(payload) < 4 {
+		t.Fatalf("opened payload is %d bytes", len(payload))
+	}
+	sep := bytes.IndexByte([]byte(payload), 0)
+	if sep < 0 || sep+1+size != len(payload) || size == 0 {
+		t.Fatalf("open: separator %d, payload %d, size %d", sep, len(payload), size)
+	}
+	if !strings.Contains(payload[sep+1:], "message_start") {
 		t.Error("the opened reply is not the upstream's stream")
 	}
 }
@@ -357,6 +365,39 @@ func TestCacheCaptureStopsAtTheEntryLimit(t *testing.T) {
 	}
 	if !c.overflow || len(c.buf) != 0 || s.cacheHeld != 0 {
 		t.Errorf("overflow %v, held %d, buffer %d; want the whole charge back", c.overflow, s.cacheHeld, len(c.buf))
+	}
+}
+
+// TestTheCachedStateIsEncryptedWithTheBody: the turn state is content-adjacent, so it travels in the same sealed
+// payload as the upstream bytes and never appears as a plaintext column.
+func TestTheCachedStateIsEncryptedWithTheBody(t *testing.T) {
+	t.Parallel()
+	r := ledgerRig(t)
+	a := r.newAccount(0)
+	scope := pg.NewScope(false, nil, []uuid.UUID{a.id})
+	key := [32]byte{3}
+	r.cache.store(t.Context(), cacheEntry{
+		scope: scope, site: siteID, account: a.id, key: key, source: uuid.NewV7(),
+		format: protocol.Chat, model: "m", state: "secret-turn-state", body: []byte("upstream-bytes"), ttl: time.Minute,
+	})
+	if n := r.count("SELECT count(*) FROM gateway.response_cache"); n != 1 {
+		t.Fatalf("%d entries, want one", n)
+	}
+	var ciphertext []byte
+	if err := r.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT ciphertext FROM gateway.response_cache`).Scan(&ciphertext)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(ciphertext, []byte("secret-turn-state")) || bytes.Contains(ciphertext, []byte("upstream-bytes")) {
+		t.Fatal("the cache row contains plaintext content or state")
+	}
+	got, ok := r.cache.Lookup(t.Context(), scope, a.id, key)
+	if !ok {
+		t.Fatal("the entry was not readable")
+	}
+	if got.state != "secret-turn-state" || string(got.body) != "upstream-bytes" {
+		t.Fatalf("got state %q body %q", got.state, got.body)
 	}
 }
 

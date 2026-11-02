@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -23,6 +24,7 @@ const (
 	// cacheAccountBytes and cacheAccountEntries bound one account's stored replies. The oldest rows are evicted first.
 	cacheAccountBytes   = 64 << 20
 	cacheAccountEntries = 1024
+	cacheStateLimit     = 8192
 	// cacheLookupTimeout keeps a slow database from turning a cache lookup into a slow call: a timeout is a miss.
 	cacheLookupTimeout = 2 * time.Second
 	cacheWriteTimeout  = 5 * time.Second
@@ -154,22 +156,21 @@ func (c *ResponseCache) Lookup(ctx context.Context, scope pg.Scope, account uuid
 	ctx, cancel := context.WithTimeout(ctx, cacheLookupTimeout)
 	defer cancel()
 	var (
-		row    cachedResponse
-		seal   secret.Sealed
-		body   []byte
-		size   int
-		model  string
-		state  string
-		format int16
+		row     cachedResponse
+		seal    secret.Sealed
+		size    int
+		model   string
+		payload []byte
+		format  int16
 	)
 	err := c.db.ReadTx(ctx, scope, func(tx pg.Tx) error {
 		return tx.QueryRow(ctx, `
-			SELECT id, source_id, format, model, state, ciphertext, nonce, wrapped_dek, key_version, body_size,
+			SELECT id, source_id, format, model, ciphertext, nonce, wrapped_dek, key_version, body_size,
 			       created_at, expires_at
 			FROM gateway.response_cache
 			WHERE account_id = $1 AND cache_key = $2 AND expires_at > $3`,
 			account, key[:], c.now(),
-		).Scan(&row.id, &row.source, &format, &model, &state, &seal.Ciphertext, &seal.Nonce, &seal.WrappedDEK,
+		).Scan(&row.id, &row.source, &format, &model, &seal.Ciphertext, &seal.Nonce, &seal.WrappedDEK,
 			&seal.KeyVersion, &size, &row.createdAt, &row.expiresAt)
 	})
 	if errors.Is(err, pg.ErrNoRows) {
@@ -184,9 +185,10 @@ func (c *ResponseCache) Lookup(ctx context.Context, scope pg.Scope, account uuid
 	loc := secret.Location{Table: "gateway.response_cache", RowID: row.id.String(), Purpose: "body"}
 	opened, err := c.keys.Open(seal, loc)
 	if err == nil {
-		body = []byte(opened.Reveal())
+		payload = []byte(opened.Reveal())
 	}
-	if err != nil || len(body) != size || len(body) == 0 || len(body) > maxCacheEntry || !cacheFormat(format) {
+	state, body, ok := decodeCachedPayload(payload, size)
+	if err != nil || !ok || !cacheFormat(format) {
 		c.count(ctx, "lookup_error")
 		c.logger.Warn("a response-cache entry could not be opened; treating it as a miss",
 			"row_id", row.id, "err", err)
@@ -197,6 +199,20 @@ func (c *ResponseCache) Lookup(ctx context.Context, scope pg.Scope, account uuid
 	row.model, row.state, row.body = model, state, body
 	c.count(ctx, "hit")
 	return &row, true
+}
+
+// decodeCachedPayload splits the sealed payload into the turn state and the upstream bytes, checking both bounds before
+// either is used. A malformed payload is a miss, never an error of the call.
+func decodeCachedPayload(payload []byte, size int) (state string, body []byte, ok bool) {
+	sep := bytes.IndexByte(payload, 0)
+	if sep < 0 || sep > cacheStateLimit {
+		return "", nil, false
+	}
+	body = payload[sep+1:]
+	if len(body) != size || len(body) == 0 || len(body) > maxCacheEntry {
+		return "", nil, false
+	}
+	return string(payload[:sep]), body, true
 }
 
 // Delete removes one account's entry for key. A missing entry is success: the caller is about to overwrite it anyway.
@@ -230,12 +246,16 @@ func (c *ResponseCache) deleteRow(ctx context.Context, scope pg.Scope, id uuid.U
 // store seals and writes one reply, evicting this account's oldest rows to stay inside its bounds. It runs on the cache's
 // own goroutine, never on a call's.
 func (c *ResponseCache) store(ctx context.Context, entry cacheEntry) {
-	if len(entry.body) == 0 || len(entry.body) > maxCacheEntry || entry.ttl < time.Second || entry.ttl > cacheMaxTTL {
+	if len(entry.body) == 0 || len(entry.body) > maxCacheEntry || len(entry.state) > cacheStateLimit ||
+		entry.ttl < time.Second || entry.ttl > cacheMaxTTL {
 		return
 	}
 	id := uuid.NewV7()
 	loc := secret.Location{Table: "gateway.response_cache", RowID: id.String(), Purpose: "body"}
-	seal := c.keys.Seal(secret.New(string(entry.body)), loc)
+	// The state is an HTTP header value, so it cannot contain NUL: the first NUL separates it from the body.
+	payload := make([]byte, 0, len(entry.state)+1+len(entry.body))
+	payload = append(append(append(payload, entry.state...), 0), entry.body...)
+	seal := c.keys.Seal(secret.New(string(payload)), loc)
 	now := c.now()
 	expires := now.Add(entry.ttl)
 	ctx, cancel := context.WithTimeout(ctx, cacheWriteTimeout)
@@ -267,10 +287,10 @@ func (c *ResponseCache) store(ctx context.Context, entry cacheEntry) {
 		}
 		_, err := tx.Exec(ctx, `
 			INSERT INTO gateway.response_cache
-				(id, site_id, account_id, cache_key, source_id, format, model, state, ciphertext, nonce, wrapped_dek,
+				(id, site_id, account_id, cache_key, source_id, format, model, ciphertext, nonce, wrapped_dek,
 				 key_version, body_size, created_at, expires_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-			id, entry.site, entry.account, entry.key[:], entry.source, int16(entry.format), entry.model, entry.state,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+			id, entry.site, entry.account, entry.key[:], entry.source, int16(entry.format), entry.model,
 			seal.Ciphertext, seal.Nonce, seal.WrappedDEK, seal.KeyVersion, len(entry.body), now, expires)
 		return err
 	})
