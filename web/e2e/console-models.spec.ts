@@ -23,12 +23,14 @@ test.describe("models and prices", () => {
     const endpoints = page.getByRole("table", { name: "端点" });
     await expect(endpoints).toBeVisible();
     await expect(endpoints.getByRole("row")).toHaveCount(5);
-    await expect(endpoints.getByText("ga2b3c4d3", { exact: true })).toBeVisible();
-    await expect(endpoints.getByText("已验证", { exact: true })).toBeVisible();
-    await expect(endpoints.getByText("流式输出 是", { exact: true })).toBeVisible();
+    // The codename also appears in the closed details summary; scope the identity check to the endpoint row.
+    const firstEndpoint = endpoints.getByRole("row").nth(1);
+    await expect(firstEndpoint.getByText("ga2b3c4d3", { exact: true })).toBeVisible();
+    await expect(firstEndpoint.getByText("已验证", { exact: true })).toBeVisible();
+    await expect(firstEndpoint.getByText("流式输出 是", { exact: true })).toBeVisible();
     await expect(endpoints.getByText("流式输出 否", { exact: true })).toBeVisible();
 
-    await endpoints.getByText("完整价目", { exact: false }).first().click();
+    await endpoints.getByText("完整价目 ga2b3c4d3", { exact: true }).click();
     const endpointRates = page.getByRole("table", { name: "gpt-5 ga2b3c4d3 端点价格" });
     await expect(endpointRates).toBeVisible();
     await expect(endpointRates.getByText("分档口径", { exact: true })).toBeVisible();
