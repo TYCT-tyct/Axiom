@@ -116,6 +116,7 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 ) (nodeRoutes, error) {
 	pay, err := payments.Open(payments.Config{
 		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: paymentPlugins, Proxies: p.cfg.trustedProxies,
+		Alerts: p.alerts, Instance: p.cfg.valkey.NodeID, Signals: p.paymentSignals,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
@@ -128,6 +129,7 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 	public = withPaymentCallbacks(public, pay.Notify())
 	adminAPI := newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger)
 	adminAPI.keys, adminAPI.exit, adminAPI.smtp, adminAPI.search = p.master, exit, p.cfg.smtp, p.cfg.search
+	adminAPI.alerts, adminAPI.instance, adminAPI.paymentSignals = p.alerts, p.cfg.valkey.NodeID, p.paymentSignals
 	adminAPI.fileParser = p.cfg.fileParser
 	admin := adminRoutes(adminAPI,
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)

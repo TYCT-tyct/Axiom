@@ -92,7 +92,7 @@
 | 调用方 | 位置 | 目的地由谁决定 |
 |---|---|---|
 | 告警 Webhook | `internal/observability/webhook.go:91` | 负责人；保存时 `egress.Check`（`cmd/axiom/admin_alerts.go:70`） |
-| 用户通知 Webhook | `internal/accounts/notice_jobs.go:272` | 账户自己；保存时 `egress.Check`（`cmd/axiom/user_notices.go:39`） |
+| 用户通知 Webhook | `internal/accounts/notice_jobs.go:265` | 账户自己；保存时 `egress.Check`（`cmd/axiom/user_notices.go:39`） |
 | OAuth 提供方 | `internal/accounts/oauth_provider.go:160` | 程序里的常量 |
 | 数据集与价格页 | `internal/catalog/fetch.go:51`、`internal/catalog/page_fetch.go:180` | 数据集是常量；价格页是运维命令保存的 https 地址，拨号时校验（发现 8） |
 | 供应商接口 | `internal/suppliers/internal/client/client.go:71` | 管理员保存的 origin，保存时 `egress.Check`（`internal/suppliers/admin_write.go:63`），路径只来自适配器常量 |

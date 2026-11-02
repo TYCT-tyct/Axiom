@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -22,8 +23,8 @@ func withPaymentCallbacks(public, notify http.Handler) http.Handler {
 	return mux
 }
 
-func registerPaymentJobs(db *pg.DB, keys *secret.Keyring, exit *egress.Client, logger *slog.Logger, queue *pg.Queue) error {
-	store, err := payments.Open(payments.Config{DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger, Plugins: paymentPlugins})
+func registerPaymentJobs(db *pg.DB, keys *secret.Keyring, exit *egress.Client, logger *slog.Logger, queue *pg.Queue, signals alert.Sink, paymentSignals *payments.SignalState, nodeID string) error {
+	store, err := payments.Open(payments.Config{DB: db, Platform: pg.PlatformScope(), Keyring: keys, Client: exit, Logger: logger, Plugins: paymentPlugins, Alerts: signals, Instance: nodeID, Signals: paymentSignals})
 	if err != nil {
 		return err
 	}
