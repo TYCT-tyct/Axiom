@@ -182,8 +182,10 @@ func TestShapeEstimate(t *testing.T) {
 		{TokenizerClaude, "Hello, world!", 4},
 		// 2×1.52 + 2×0.89 + 0.21 = 5.03
 		{TokenizerClaude47, "Hello, world!", 6},
-		// 9 CJK characters at 1.40
-		{TokenizerClaude47, "今天天气很好我们去", 13},
+		// 9 CJK characters at 1.24
+		{TokenizerClaude47, "今天天气很好我们去", 12},
+		// 9 CJK characters at 1.38: the pre-4.7 family keeps new-api's weight until it has usage to measure
+		{TokenizerClaude, "今天天气很好我们去", 13},
 		// 2×0.75 + 2×0.60 + 0.17 = 2.87, against o200k's own 4
 		{TokenizerO200k, "Hello, world!", 3},
 		{TokenizerClaude, "", 0},

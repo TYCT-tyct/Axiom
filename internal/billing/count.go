@@ -117,13 +117,16 @@ func claudeVersion(rest string) (major, minor int, ok bool) {
 
 // shapeWeights are each family's tokens per feature of a text, in hundredths. They are new-api's, calibrated against
 // the usage Anthropic and OpenAI reported for 54 pieces of Claude Code and Codex sessions (new-api tokenkit/tokenkit.go,
-// e449cc7, 2026-10-28); docs/domains/billing.md「用量来源与暂估」 has the error measured here.
+// e449cc7, 2026-10-28), except Claude 4.7+'s CJK weight: that family overcharged Chinese text on this project's own
+// corpus, so it is measured here rather than copied (docs/domains/billing.md 决策与理由). The pre-4.7 family keeps
+// new-api's weight until a corpus has usage for it. docs/domains/billing.md「用量来源与暂估」 has the error measured
+// here.
 var shapeWeights = [NumTokenizers]textshape.Weights{
 	//                  Word Number CJK Symbol Math URL  At   Emoji Newline Space
 	TokenizerO200k:    {75, 186, 96, 60, 268, 77, 200, 212, 95, 17},
 	TokenizerCl100k:   {75, 186, 96, 60, 268, 77, 200, 212, 95, 17},
 	TokenizerClaude:   {124, 153, 138, 66, 452, 74, 282, 260, 119, 14},
-	TokenizerClaude47: {152, 177, 140, 89, 452, 145, 282, 260, 138, 21},
+	TokenizerClaude47: {152, 177, 124, 89, 452, 145, 282, 260, 138, 21},
 }
 
 // toolCallTokens is what each family's framework adds to a tool call beyond the name, arguments and input the text
