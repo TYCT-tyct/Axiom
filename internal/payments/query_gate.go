@@ -74,6 +74,9 @@ func (p *Payments) finishQuery(ctx context.Context, merchant MerchantID, token u
 		if (h.FirstToken == nil || *h.FirstToken != token) && (h.SecondToken == nil || *h.SecondToken != token) {
 			return nil
 		}
+		if outcome == queryUnknown {
+			p.queryFailed()
+		}
 		changed, resolved := advanceQueryHealth(&h, outcome)
 		if err = queries.FinishQuery(ctx, tx, FinishQueryParams{MerchantID: uuid.UUID(merchant), Token: token, Failures: h.Failures, PausedUntil: h.PausedUntil}); err != nil {
 			return err

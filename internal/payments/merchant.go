@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/jsonx"
@@ -337,6 +338,9 @@ func recordSave(ctx context.Context, tx pg.Tx, actor audit.Actor, in MerchantInp
 	for i, m := range in.Methods {
 		methods[i] = string(m.Method)
 	}
+	if err := accounts.RecordSitePaymentNotice(ctx, tx, in.Site); err != nil {
+		return Merchant{}, err
+	}
 	err := audit.Record(ctx, tx, audit.Event{
 		Actor: actor, Action: action, Reason: reason,
 		Target: audit.Target{Module: "payments", Kind: "merchant", ID: in.ID.TypeID(), Site: in.Site},
@@ -391,6 +395,7 @@ func (p *Payments) unseal(id MerchantID, sealed secret.Sealed, settings string) 
 	plain, err := p.keyring.Open(sealed, configAt(id))
 	if err != nil {
 		p.logger.Error("payments: a merchant account's secrets do not open", "merchant", id.TypeID())
+		p.merchantUnreadable(id)
 		return nil, fmt.Errorf("payments: open merchant secrets: %w", err)
 	}
 	var c sealedConfig
@@ -400,8 +405,10 @@ func (p *Payments) unseal(id MerchantID, sealed secret.Sealed, settings string) 
 	sum := sha256.Sum256([]byte(settings))
 	if subtle.ConstantTimeCompare(sum[:], c.SettingsSHA256) != 1 {
 		p.logger.Error("payments: a merchant account's settings were changed outside a save", "merchant", id.TypeID())
+		p.merchantUnreadable(id)
 		return nil, ErrTampered
 	}
+	p.merchantReadable(id)
 	secrets := make(map[string]secret.Secret, len(c.Secrets))
 	for name, s := range c.Secrets {
 		secrets[name] = secret.New(s)

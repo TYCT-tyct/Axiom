@@ -10,8 +10,9 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
 	"axiom/internal/fileparse"
-	"axiom/internal/gateway"
+	"axiom/internal/payments"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
@@ -25,19 +26,19 @@ import (
 // the session of two-step verification and its permission on the platform before a method runs, and kept the request
 // to the contract's schemas.
 type adminAPI struct {
-	smtp       mail.Config
-	search     websearch.Config
-	fileParser fileparse.Config
-	// gate supplies the extension wait segment settings are validated against; it is the node default because
-	// that deadline is not configurable.
-	gate     gateway.Config
-	version  string
-	accounts *accounts.Service
-	catalog  *catalog.Catalog
-	db       *pg.DB
-	logger   *slog.Logger
-	keys     *secret.Keyring
-	exit     *egress.Client
+	smtp           mail.Config
+	search         websearch.Config
+	fileParser     fileparse.Config
+	version        string
+	accounts       *accounts.Service
+	catalog        *catalog.Catalog
+	db             *pg.DB
+	logger         *slog.Logger
+	keys           *secret.Keyring
+	exit           *egress.Client
+	alerts         alert.Sink
+	instance       string
+	paymentSignals *payments.SignalState
 	// suppliers is what the admin does with suppliers; calls is the node's call path, which a test generation goes
 	// through, and detections and tests limit how often a session may ask a third party's site what it runs and may
 	// make it generate.
@@ -55,9 +56,9 @@ const (
 )
 
 // newAdminAPI is the admin's handlers on the modules and the database of the node.
-func newAdminAPI(version string, gate gateway.Config, a *accounts.Service, c *catalog.Catalog, s *suppliers.Admin, calls *suppliers.Service, db *pg.DB, logger *slog.Logger) adminAPI {
+func newAdminAPI(version string, a *accounts.Service, c *catalog.Catalog, s *suppliers.Admin, calls *suppliers.Service, db *pg.DB, logger *slog.Logger) adminAPI {
 	return adminAPI{
-		version: version, gate: gate, accounts: a, catalog: c, suppliers: s, calls: calls, db: db, logger: logger,
+		version: version, accounts: a, catalog: c, suppliers: s, calls: calls, db: db, logger: logger,
 		detections: newWindowLimiter(detectionsPerMinute, time.Minute, time.Now),
 		tests:      newWindowLimiter(testsPerMinute, time.Minute, time.Now),
 	}

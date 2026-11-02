@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"axiom/internal/billing"
+	"axiom/internal/gateway"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/pg"
 )
@@ -24,7 +25,7 @@ func (a adminAPI) GetSegmentSettings(ctx context.Context, _ adminapi.GetSegmentS
 func (a adminAPI) SetSegmentSettings(ctx context.Context, r adminapi.SetSegmentSettingsRequestObject) (adminapi.SetSegmentSettingsResponseObject, error) {
 	v := segmentSettingsInput(r.Body.Settings)
 	body, replayed, err := idempotently(ctx, a.db, "setSegmentSettings", r.Params.IdempotencyKey, []any{r.Body}, func(tx pg.Tx) (adminapi.SegmentSettingsView, error) {
-		if err := billing.SetSegmentSettings(ctx, tx, actor(ctx), v, a.gate.ExtendWait, r.Body.Reason); err != nil {
+		if err := billing.SetSegmentSettings(ctx, tx, actor(ctx), v, gateway.DefaultConfig().ExtendWait, r.Body.Reason); err != nil {
 			return adminapi.SegmentSettingsView{}, segmentProblem(err)
 		}
 		saved, err := billing.ReadSegmentSettings(ctx, tx)

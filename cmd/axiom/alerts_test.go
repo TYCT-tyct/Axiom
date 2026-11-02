@@ -48,7 +48,8 @@ func TestAlertGracefulStopResolvesDrainedWriter(t *testing.T) {
 	})
 	console := consoleParts{cfg: nodeSettings{shutdownTimeout: 5 * time.Second}}
 	console.cfg.valkey.NodeID = "drained-node"
-	stopAlerts := startAlerts(t.Context(), f.db, recorder, &console, logger)
+	signals := alert.New(t.Context(), f.db, pg.PlatformScope(), logger)
+	stopAlerts := startAlerts(t.Context(), f.db, recorder, &console, logger, signals)
 	stop := sync.OnceFunc(stopAlerts)
 	t.Cleanup(stop)
 	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {

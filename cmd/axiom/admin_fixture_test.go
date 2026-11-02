@@ -13,8 +13,9 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
-	"axiom/internal/gateway"
+	"axiom/internal/payments"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -83,6 +84,13 @@ func startAdminNode(c commandLine, clock *testClock) adminFixture {
 // startAdminNodeVia is startAdminNode with the outbound client the node's suppliers go through.
 func startAdminNodeVia(c commandLine, clock *testClock, exit *egress.Client) adminFixture {
 	c.t.Helper()
+	return startAdminNodeWithSignals(c, clock, exit, nil, "")
+}
+
+// startAdminNodeWithSignals is startAdminNodeVia with the node's alert sink and identity, for the tests that prove the
+// admin's payments instance is wired to the same signals as the listener.
+func startAdminNodeWithSignals(c commandLine, clock *testClock, exit *egress.Client, signals alert.Sink, instance string) adminFixture {
+	c.t.Helper()
 	svc, err := accounts.NewService(c.db, accounts.Config{
 		Platform: pg.PlatformScope(), Hashes: macKeys(c.t), Keyring: masterKeys(c.t), Now: clock.Now, OnAccountOpened: openBalance,
 	})
@@ -115,8 +123,9 @@ func startAdminNodeVia(c commandLine, clock *testClock, exit *egress.Client) adm
 	if err := upstreams.Reload(c.t.Context()); err != nil {
 		c.t.Fatal(err)
 	}
-	api := newAdminAPI("test", gateway.DefaultConfig(), svc, cat, supplierAdmin, upstreams, c.db, logger)
+	api := newAdminAPI("test", svc, cat, supplierAdmin, upstreams, c.db, logger)
 	api.keys, api.exit = masterKeys(c.t), exit
+	api.alerts, api.instance, api.paymentSignals = signals, instance, payments.NewSignalState()
 	routes := adminRoutes(api, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
 	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, upstreams: upstreams}
 }
