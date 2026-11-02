@@ -22,7 +22,8 @@ import (
 func TestSpillDirectoryIsLockedByOneProcess(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestSpillLockHelper$", "-test.timeout=30s")
+	// The context kills the helper if the test ends early; the test kills it itself on the normal path.
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSpillLockHelper$", "-test.timeout=30s") //nolint:gosec // this very test binary, run again
 	cmd.Env = append(os.Environ(), spillLockHelperEnv+"="+dir)
 	// The helper holds the spill until its stdin closes; the pipe stays open until the kill below.
 	if _, err := cmd.StdinPipe(); err != nil {
@@ -35,13 +36,8 @@ func TestSpillDirectoryIsLockedByOneProcess(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	killed := false
-	t.Cleanup(func() {
-		if !killed {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-		}
-	})
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
 	ready, err := bufio.NewReader(stdout).ReadString('\n')
 	if err != nil || ready != "ready\n" {
 		t.Fatalf("the lock helper said %q (%v), want ready", ready, err)
@@ -55,8 +51,10 @@ func TestSpillDirectoryIsLockedByOneProcess(t *testing.T) {
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	killed = true
-	_ = cmd.Wait()
+	var exit *exec.ExitError
+	if err := <-waited; !errors.As(err, &exit) {
+		t.Fatalf("the killed helper ended with %v, want its kill", err)
+	}
 	sp, err := openSpill(dir, 4)
 	if err != nil {
 		t.Fatalf("opening the spill after the owner exited: %v", err)
@@ -77,11 +75,12 @@ func TestSpillLockHelper(t *testing.T) {
 		fmt.Fprintf(os.Stderr, "the helper could not open the spill: %v\n", err)
 		os.Exit(2)
 	}
-	fmt.Println("ready")
-	if err := os.Stdout.Sync(); err != nil {
+	if _, err := os.Stdout.WriteString("ready\n"); err != nil {
 		os.Exit(2)
 	}
-	_, _ = io.Copy(io.Discard, os.Stdin)
+	if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+		os.Exit(2)
+	}
 }
 
 // TestInFlightCommitSurvivesFatalBatch: A's record makes the database refuse the batch after B has already reserved a
@@ -155,12 +154,12 @@ func TestCompleteTailCorruptionRefusesStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // the test's own temporary spill
 	if err != nil {
 		t.Fatal(err)
 	}
 	data[len(data)-1] ^= 0xff
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // the test's own temporary spill
 		t.Fatal(err)
 	}
 	if _, err := openSpill(dir, 4); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {

@@ -35,12 +35,7 @@ func TestRecordIsBounded(t *testing.T) {
 		Attempts:   attempts(platform.MaxAttemptSeq),
 		Unmeasured: true,
 	}
-	for i := 0; i < 1000; i++ {
-		record.Excluded = append(record.Excluded, routing.Excluded{
-			Endpoint: routing.EndpointID(uuid.NewV7()),
-			Reason:   routing.Reason(i%len(reasonNames) + 1),
-		})
-	}
+	record.Excluded = excluded(1000)
 	body, err := record.JSON()
 	if err != nil {
 		t.Fatal(err)
@@ -75,13 +70,6 @@ func TestRecordIsBounded(t *testing.T) {
 
 // maxRecorded mirrors routing's unexported cap; the test names the number it expects in the stored route.
 const maxRecorded = 16
-
-// reasonNames are all the exclusion reasons, so the summary map has every key.
-var reasonNames = []string{
-	"no_candidates", "model_not_allowed", "disabled", "breaker_open", "supplier_balance", "missing_capability",
-	"context_too_small", "format_not_served", "service_tier_not_served", "preset_filter", "override_filter",
-	"not_verified", "no_price", "no_egress", "retry_budget", "full", "unknown_item", "cooling_down", "unquotable_cost",
-}
 
 // TestRecordKeepsTheSelectedRoute: a short exclusion list is stored in full, with every reason counted, so a trace can
 // still say why each candidate was left out.
@@ -131,6 +119,18 @@ func attempts(n int) []routing.Attempt {
 		out[i] = routing.Attempt{
 			Endpoint: routing.EndpointID(uuid.NewV7()), Failed: true, Scope: 255, Action: 255,
 		}
+	}
+	return out
+}
+
+// excluded is n candidates left out, cycling through every reason.
+func excluded(n int) []routing.Excluded {
+	out := make([]routing.Excluded, 0, n)
+	for reason := routing.NoCandidates; len(out) < n; reason++ {
+		if reason > routing.UnquotableCost {
+			reason = routing.NoCandidates
+		}
+		out = append(out, routing.Excluded{Endpoint: routing.EndpointID(uuid.NewV7()), Reason: reason})
 	}
 	return out
 }

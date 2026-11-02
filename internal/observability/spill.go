@@ -169,11 +169,11 @@ type spill struct {
 // lockDir takes the directory's exclusive lock. flock is released by the kernel when the process dies, so a crashed
 // node never leaves its spill locked; a second live process is refused instead of appending over the first.
 func lockDir(dir string) (*os.File, error) {
-	file, err := os.OpenFile(filepath.Join(dir, spillLockName), os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(filepath.Join(dir, spillLockName), os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // dir is the operator's AXIOM_CALL_LOG_DIR
 	if err != nil {
 		return nil, fmt.Errorf("observability: open call log spill lock: %w", err)
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { //nolint:gosec // a file descriptor fits int on the platforms this node runs on
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		closeQuietly(file)
 		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
 			return nil, fmt.Errorf("%w: %s", errSpillLocked, dir)

@@ -33,7 +33,7 @@ func openSpill(dir string, capacity int) (*spill, error) {
 	if dir == "" {
 		return nil, errors.New("observability: the call log needs a spill directory")
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // dir is the operator's AXIOM_CALL_LOG_DIR
 		return nil, fmt.Errorf("observability: call log spill directory: %w", err)
 	}
 	lock, err := lockDir(dir)
@@ -44,7 +44,7 @@ func openSpill(dir string, capacity int) (*spill, error) {
 		closeQuietly(lock)
 		return nil, err
 	}
-	checkpoint, haveCheckpoint, err := readCheckpoint(dir)
+	checkpoint, err := readCheckpoint(dir)
 	if err != nil {
 		return fail(err)
 	}
@@ -56,16 +56,16 @@ func openSpill(dir string, capacity int) (*spill, error) {
 		dir: dir, lock: lock, maxBytes: int64(capacity)*(maxRecordBytes+recordHeaderBytes) + spillSegmentBytes,
 		nextSeq: 1, wake: make(chan struct{}, 1), stop: make(chan struct{}),
 	}
-	if err := s.loadSegments(files, checkpoint, haveCheckpoint); err != nil {
+	if err := s.loadSegments(files, checkpoint); err != nil {
 		return fail(err)
 	}
-	if err := s.openActive(checkpoint, haveCheckpoint); err != nil {
+	if err := s.openActive(checkpoint); err != nil {
 		return fail(err)
 	}
 	if len(s.segments) > 0 {
 		s.read = s.segments[0]
 		s.readOffset = int64(len(spillHeader))
-		if haveCheckpoint && s.read.seq == checkpoint.seq {
+		if s.read.seq == checkpoint.seq {
 			s.readOffset = checkpoint.offset
 		}
 		if s.readOffset > s.read.size {
@@ -95,38 +95,32 @@ func listSegments(dir string) ([]segmentFile, error) {
 	return files, nil
 }
 
-// loadSegments validates the files and records how many records the writer must replay. A segment entirely before the
-// acknowledged position is dropped without being read: its records are already in the database, and replaying them
-// after the month's partition has been archived would insert them into the default partition as duplicates.
-func (s *spill) loadSegments(files []segmentFile, checkpoint position, haveCheckpoint bool) error {
+// loadSegments validates the files and counts the records the writer must replay: those at or after checkpoint. A
+// segment entirely before it is dropped without being read: its records are already in the database, and replaying
+// them after the month's partition has been archived would insert them into the default partition as duplicates.
+func (s *spill) loadSegments(files []segmentFile, checkpoint position) error {
 	for i, f := range files {
 		if i > 0 && f.seq == files[i-1].seq {
 			return fmt.Errorf("observability: two call log segments numbered %d", f.seq)
 		}
-		if haveCheckpoint && f.seq < checkpoint.seq {
+		if f.seq < checkpoint.seq {
 			removeQuietly(f.path)
 			continue
 		}
 		from := int64(len(spillHeader))
-		if haveCheckpoint && f.seq == checkpoint.seq {
+		if f.seq == checkpoint.seq {
 			from = checkpoint.offset
 		}
-		size, records, after, err := scanSegment(f.path, i == len(files)-1, from)
+		size, after, err := scanSegment(f.path, i == len(files)-1, from)
 		if err != nil {
 			return err
 		}
 		if size == 0 {
 			continue // scanSegment removed an empty or torn-header last segment
 		}
-		if haveCheckpoint && f.seq == checkpoint.seq && from > size {
-			return fmt.Errorf("observability: call log checkpoint %d/%d is past the end of %s", checkpoint.seq, from, f.path)
-		}
 		s.segments = append(s.segments, &spillSegment{seq: f.seq, path: f.path, size: size})
 		s.totalBytes += size
 		s.pending += after
-		if records < after {
-			return fmt.Errorf("observability: call log segment %s: %d records after the checkpoint of %d", f.path, after, records)
-		}
 	}
 	return nil
 }
@@ -134,11 +128,8 @@ func (s *spill) loadSegments(files []segmentFile, checkpoint position, haveCheck
 // openActive opens the last segment for appends, or starts a fresh one when the last is full or fully acknowledged. A
 // fully acknowledged segment is rotated away without waiting for it to fill: otherwise a quiet node would keep months
 // of already-stored records in its active segment and replay them after a restart.
-func (s *spill) openActive(checkpoint position, haveCheckpoint bool) error {
-	next := uint64(1)
-	if haveCheckpoint && checkpoint.seq >= next {
-		next = checkpoint.seq + 1
-	}
+func (s *spill) openActive(checkpoint position) error {
+	next := checkpoint.seq + 1
 	if len(s.segments) == 0 {
 		s.nextSeq = next
 		return s.createSegmentLocked(next)
@@ -147,7 +138,7 @@ func (s *spill) openActive(checkpoint position, haveCheckpoint bool) error {
 	if last.seq >= next {
 		next = last.seq + 1
 	}
-	ackedToEnd := haveCheckpoint && last.seq == checkpoint.seq && checkpoint.offset >= last.size
+	ackedToEnd := last.seq == checkpoint.seq && checkpoint.offset >= last.size
 	if last.size >= spillSegmentBytes || ackedToEnd {
 		if ackedToEnd {
 			// The segment holds only acknowledged records; drop it now, or leave it for the next ack if the disk
@@ -175,34 +166,34 @@ func (s *spill) openActive(checkpoint position, haveCheckpoint bool) error {
 	return nil
 }
 
-// readCheckpoint reads the last acknowledged position. A missing file means nothing has been acknowledged; a malformed
-// one refuses startup, because guessing would either replay already-archived records or skip records the database
-// never saw.
-func readCheckpoint(dir string) (position, bool, error) {
-	data, err := os.ReadFile(filepath.Join(dir, spillPosName))
+// readCheckpoint reads the last acknowledged position. A missing file means nothing has been acknowledged, which is the
+// zero position: segments are numbered from 1, so it is before every one of them. A malformed file refuses startup,
+// because guessing would either replay already-archived records or skip records the database never saw.
+func readCheckpoint(dir string) (position, error) {
+	data, err := os.ReadFile(filepath.Join(dir, spillPosName)) //nolint:gosec // dir is the operator's AXIOM_CALL_LOG_DIR
 	if errors.Is(err, os.ErrNotExist) {
-		return position{}, false, nil
+		return position{}, nil
 	}
 	if err != nil {
-		return position{}, false, fmt.Errorf("observability: read call log checkpoint: %w", err)
+		return position{}, fmt.Errorf("observability: read call log checkpoint: %w", err)
 	}
 	body, ok := strings.CutPrefix(string(data), spillPosHeader)
 	if !ok {
-		return position{}, false, fmt.Errorf("observability: call log checkpoint has no %q header", spillPosHeader)
+		return position{}, fmt.Errorf("observability: call log checkpoint has no %q header", spillPosHeader)
 	}
 	fields := strings.Fields(body)
 	if len(fields) != 2 {
-		return position{}, false, fmt.Errorf("observability: call log checkpoint %q is not a segment and offset", body)
+		return position{}, fmt.Errorf("observability: call log checkpoint %q is not a segment and offset", body)
 	}
 	seq, err := strconv.ParseUint(fields[0], 10, 64)
 	if err != nil || seq == 0 {
-		return position{}, false, fmt.Errorf("observability: call log checkpoint has an invalid segment %q", fields[0])
+		return position{}, fmt.Errorf("observability: call log checkpoint has an invalid segment %q", fields[0])
 	}
 	offset, err := strconv.ParseInt(fields[1], 10, 64)
 	if err != nil || offset < int64(len(spillHeader)) {
-		return position{}, false, fmt.Errorf("observability: call log checkpoint has an invalid offset %q", fields[1])
+		return position{}, fmt.Errorf("observability: call log checkpoint has an invalid offset %q", fields[1])
 	}
-	return position{seq: seq, offset: offset}, true, nil
+	return position{seq: seq, offset: offset}, nil
 }
 
 // spillSeq recognizes one segment's name and returns its number.
@@ -218,62 +209,58 @@ func spillSeq(name string) (uint64, bool) {
 	return seq, true
 }
 
-// scanSegment validates one segment and returns its complete prefix, its record count and the records at or after from.
+// scanSegment validates one segment and returns its complete prefix and the number of records at or after from.
 // A torn tail is allowed only on the last segment, where it is what a crash during Commit leaves; it is truncated away.
 // Any other damage stops startup instead of being repaired: losing a complete record would be worse than refusing to
 // start.
-func scanSegment(path string, last bool, from int64) (size, records, after int64, err error) {
+func scanSegment(path string, last bool, from int64) (size, after int64, err error) {
 	file, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // path is the configured spill directory plus a validated segment name
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("observability: open call log segment %s: %w", path, err)
+		return 0, 0, fmt.Errorf("observability: open call log segment %s: %w", path, err)
 	}
 	defer closeQuietly(file)
 	info, err := file.Stat()
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("observability: stat call log segment %s: %w", path, err)
+		return 0, 0, fmt.Errorf("observability: stat call log segment %s: %w", path, err)
 	}
 	size = info.Size()
 	if size < int64(len(spillHeader)) {
-		size, records, err = dropHeaderlessSegment(path, size, last)
-		return size, records, 0, err
+		return 0, 0, dropHeaderlessSegment(path, size, last)
 	}
 	if err := checkSegmentHeader(file, path); err != nil {
-		return 0, 0, 0, err
+		return 0, 0, err
 	}
-	valid, records, after, err := scanRecords(file, path, last, size, from)
+	valid, after, err := scanRecords(file, path, last, size, from)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, err
 	}
-	if valid != size {
-		if !last {
-			return 0, 0, 0, fmt.Errorf("%w in %s at %d", errTornTail, path, valid)
-		}
+	if valid != size { // only the last segment may have a torn tail: scanRecords refuses one elsewhere
 		if err := truncateSegment(file, valid); err != nil {
-			return 0, 0, 0, err
+			return 0, 0, err
 		}
 	} else if last {
 		// A process crash leaves the last Commits' bytes in the page cache, maybe unsynced; make them durable before
 		// the writer stores them and checkpoints past them.
 		if err := file.Sync(); err != nil {
-			return 0, 0, 0, fmt.Errorf("observability: sync call log segment %s: %w", path, err)
+			return 0, 0, fmt.Errorf("observability: sync call log segment %s: %w", path, err)
 		}
 	}
-	return valid, records, after, nil
+	return valid, after, nil
 }
 
 // dropHeaderlessSegment removes a segment a crash left before its header was durable. Only the last one can be in that
 // state; an earlier one means data is missing, not just unfinished.
-func dropHeaderlessSegment(path string, size int64, last bool) (int64, int64, error) {
+func dropHeaderlessSegment(path string, size int64, last bool) error {
 	if !last {
 		if size == 0 {
-			return 0, 0, fmt.Errorf("observability: call log segment %s is empty", path)
+			return fmt.Errorf("observability: call log segment %s is empty", path)
 		}
-		return 0, 0, fmt.Errorf("observability: call log segment %s has no %q header", path, spillHeader)
+		return fmt.Errorf("observability: call log segment %s has no %q header", path, spillHeader)
 	}
 	if err := os.Remove(path); err != nil {
-		return 0, 0, fmt.Errorf("observability: remove headerless call log segment %s: %w", path, err)
+		return fmt.Errorf("observability: remove headerless call log segment %s: %w", path, err)
 	}
-	return 0, 0, nil
+	return nil
 }
 
 // checkSegmentHeader reads and verifies the fixed header.
@@ -285,38 +272,33 @@ func checkSegmentHeader(file *os.File, path string) error {
 	return nil
 }
 
-// scanRecords validates complete records until the first torn one, which is allowed only at the tail. after counts the
-// records at or after from, the position the database acknowledged before this start.
-func scanRecords(file *os.File, path string, last bool, size, from int64) (valid, records, after int64, err error) {
+// scanRecords validates complete records until the first torn one, which is allowed only at the tail of the last
+// segment, and returns where the complete records end and how many are at or after from. from is where the database's
+// acknowledged position falls in this segment: it must be the start of a record or the end of the complete ones.
+func scanRecords(file *os.File, path string, last bool, size, from int64) (valid, after int64, err error) {
 	valid = int64(len(spillHeader))
-	boundary := from == valid || from == size
+	boundary := from == valid
 	for valid < size {
 		n, err := scanRecord(file, path, valid)
-		if err != nil {
-			if errors.Is(err, errTornTail) {
-				if from > valid || !boundary {
-					return 0, 0, 0, fmt.Errorf("observability: call log segment %s: checkpoint at %d is not on a complete record boundary", path, from)
-				}
-				if !last {
-					return 0, 0, 0, fmt.Errorf("%w in %s at %d", errTornTail, path, valid)
-				}
-				return valid, records, after, nil
+		if errors.Is(err, errTornTail) {
+			if !last {
+				return 0, 0, fmt.Errorf("%w in %s at %d", errTornTail, path, valid)
 			}
-			return 0, 0, 0, err
+			break
 		}
-		if valid == from {
-			boundary = true
+		if err != nil {
+			return 0, 0, err
 		}
+		boundary = boundary || valid == from
 		if valid >= from {
 			after++
 		}
 		valid += recordHeaderBytes + n
-		records++
 	}
-	if from != int64(len(spillHeader)) && from != size && !boundary {
-		return 0, 0, 0, fmt.Errorf("observability: call log segment %s: checkpoint at %d is not on a record boundary", path, from)
+	if !boundary && from != valid {
+		return 0, 0, fmt.Errorf("observability: call log segment %s: checkpoint at %d is not on a complete record boundary", path, from)
 	}
-	return valid, records, after, nil
+	return valid, after, nil
 }
 
 // scanRecord validates one record's length and body. A final record whose body is short is a write that did not finish;
