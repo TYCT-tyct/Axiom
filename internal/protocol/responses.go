@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -345,4 +346,41 @@ func UsageOf(body []byte) Usage {
 		}
 	}
 	return m.result()
+}
+
+// ValidateCompactReply checks that a compact reply is one JSON object, whose usage the gateway replaces before the
+// client sees it: a reply the upstream broke is given up on for another entry while nothing has been committed.
+func ValidateCompactReply(body []byte) error {
+	_, err := topReply(body, "usage")
+	return err
+}
+
+// RewriteCompactReply writes the reply a compact call's client gets, from the settlement fin: the upstream's object as
+// it came, except that its usage is Axiom's usage and cost, so a compact call reports what it used and was charged
+// like every other call. A pending settlement has no cost and says so, as the streams' endings do
+// (docs/domains/gateway.md「转发规则」).
+func RewriteCompactReply(body []byte, seen Usage, fin *Final) ([]byte, error) {
+	u, costString, top := reply(seen), "", ""
+	if fin == nil || fin.Pending {
+		top = `,"axiom":{"billing_pending":true}`
+	} else {
+		u, costString = reply(fin.Usage), cost(fin, Responses)
+	}
+	members, err := topReply(body, "usage")
+	if err != nil {
+		return nil, err
+	}
+	usage := appendOpenAIUsage(make([]byte, 0, 512), responsesNames, u, costString)
+	end := bytes.LastIndexByte(body, '}') // topReply accepted the object, so it is closed
+	out := make([]byte, 0, len(body)+len(usage)+len(top))
+	if m, ok := members["usage"]; ok {
+		out = append(out, body[:m.off]...)
+		out = append(out, usage...)
+		out = append(out, body[m.off+m.n:end]...)
+	} else {
+		out = append(out, body[:end]...)
+		out = append(append(out, `,"usage":`...), usage...)
+	}
+	out = append(out, top...)
+	return append(out, body[end:]...), nil
 }

@@ -17,11 +17,12 @@ import (
 const compactLimit = 16 << 20
 
 // pass reads the whole reply of an endpoint that does not stream — the compact endpoint and the direct formats — and
-// makes it the call's answer: the body goes to the client as it came, after the settlement, and its usage is what the
-// call is charged by. A direct format's body is checked, its usage read and the memory of its rewritten copy charged
-// before the settlement, so that what can fail fails while the attempt still counts as delivering nothing; the gateway
-// rewrites it afterwards (conclude). Nothing of it reaches the client before it is whole, so an attempt that fails here
-// is still one the call may give up on for another entry.
+// makes it the call's answer: its usage is what the call is charged by, and after the settlement the gateway writes
+// Axiom's usage and cost into the body, the direct formats' and the compact one's alike. A direct format's body is
+// checked and its usage read before the settlement, and the memory of its rewritten copy charged, so that what can fail
+// fails while the attempt still counts as delivering nothing; the compact reply is checked the same way, since the
+// gateway replaces its usage. Nothing of it reaches the client before it is whole, so an attempt that fails here is
+// still one the call may give up on for another entry.
 func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 	s := a.s
 	idleFor := s.x.Limits.cfg.IdleTimeout
@@ -52,7 +53,23 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 		}
 		s.replyHeld += extra
 	} else {
+		if s.c.Compact {
+			// The client reads a usage the gateway writes, so the reply must be the one object it can rewrite.
+			if err := protocol.ValidateCompactReply(body); err != nil {
+				s.dropReply()
+				return s.failedReply(a, ctx, err)
+			}
+		}
 		a.usage = protocol.UsageOf(body)
+		if s.c.Compact {
+			// As for a direct format, the rewrite holds a second copy beside the upstream's, with room for Axiom's members.
+			extra := int64(len(body)) + 64<<10
+			if !s.x.Memory.Charge(extra) {
+				s.dropReply()
+				return s.failedReply(a, ctx, protocol.ErrMemory)
+			}
+			s.replyHeld += extra
+		}
 	}
 	a.obs.Done, a.obs.Empty = true, len(body) == 0
 	rec := &s.ends[a.i]
