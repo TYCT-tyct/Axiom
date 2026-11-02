@@ -710,25 +710,25 @@ func TestRerankDemandReservesItsSearchUnit(t *testing.T) {
 	}
 }
 
-// TestFileParsesAreFlatSearches: each file the gateway parses before admission is one per-use web_search unit that does
-// not add a sampling, so the reservation covers it and the request's own search count is left alone.
-func TestFileParsesAreFlatSearches(t *testing.T) {
+// TestFileParsesAreFlatFileParses: each file the gateway parses before admission is one per-use file_parse unit that
+// does not add a sampling, so the reservation covers it and the request's own search count is left alone.
+func TestFileParsesAreFlatFileParses(t *testing.T) {
 	d := routing.DemandOf(&protocol.Request{Format: protocol.Chat, FileParses: 3, Needs: protocol.WebSearch, WebSearches: 2})
 	var flat, native int
 	for _, tool := range d.ServerTools {
-		if tool.Item != catalog.ItemWebSearch {
-			t.Fatalf("server tool %+v, want web_search", tool)
-		}
-		if tool.Flat {
+		switch {
+		case tool.Item == catalog.ItemFileParse && tool.Flat:
 			flat++
 			if tool.MaxUses != 3 {
 				t.Errorf("flat uses = %d, want 3", tool.MaxUses)
 			}
-			continue
-		}
-		native++
-		if tool.MaxUses != 2 {
-			t.Errorf("native uses = %d, want 2", tool.MaxUses)
+		case tool.Item == catalog.ItemWebSearch && !tool.Flat:
+			native++
+			if tool.MaxUses != 2 {
+				t.Errorf("native uses = %d, want 2", tool.MaxUses)
+			}
+		default:
+			t.Fatalf("server tool %+v, want a flat file_parse and the native web_search", tool)
 		}
 	}
 	if flat != 1 || native != 1 {

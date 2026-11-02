@@ -6,12 +6,13 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// addSearchUsage adds the call's external searches and file parses to the user's side of the charged attempt after the
+// addToolUsage adds the call's external searches and file parses to the user's side of the charged attempt after the
 // supplier's cost was computed from the supplier's own usage. The work is ours, not the supplier's: one explicit zero
 // report cannot hide it, and a retry does not put it in another attempt's supplier price. Only the last attempt is
-// charged, with the loop it ends (billing.Settle), so the loop's first attempt carries the count (closeLoop).
-func addSearchUsage(rec *billing.AttemptResult, searches int64) {
-	if searches <= 0 || len(rec.Segments) == 0 {
+// charged, with the loop it ends (billing.Settle), so the loop's first attempt carries the count (closeLoop). The two
+// counts keep their own items: a parse is not a search and is not priced at the search item's rate.
+func addToolUsage(rec *billing.AttemptResult, searches, parses int64) {
+	if searches <= 0 && parses <= 0 || len(rec.Segments) == 0 {
 		return
 	}
 	counts := make(map[catalog.Item]int64, catalog.NumItems)
@@ -19,6 +20,7 @@ func addSearchUsage(rec *billing.AttemptResult, searches int64) {
 		counts[it] = rec.Segments[0].Usage.Count(it)
 	}
 	counts[catalog.ItemWebSearch] += searches
+	counts[catalog.ItemFileParse] += parses
 	rec.Segments[0].Usage = recountCapped(rec.Segments[0].Usage, counts)
 }
 

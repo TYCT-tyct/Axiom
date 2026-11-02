@@ -35,6 +35,10 @@ type Config struct {
 	// price schedule carry. It has its own switch because the release that first reads them is not the release that
 	// publishes them: keep it off until every node runs a release that reads them, like RequestPrices.
 	FileSearch bool
+	// FileParse allows publishing a price for the file_parse item, a name a price schedule carries but a spec does
+	// not: file parsing is the gateway's own work, not an upstream tool. It has its own switch for the same reason as
+	// FileSearch: keep it off until every node runs a release that reads the name.
+	FileParse bool
 }
 
 // ErrStale is what Current returns when the snapshot is missing, or the database has not confirmed it for longer than
@@ -53,6 +57,10 @@ var ErrRequestPrices = errors.New("catalog: request prices wait until every node
 // ErrFileSearch is what a publish, a spec save or a source switch returns for the file_search item or ability while
 // Config.FileSearch is off: an older release's parser rejects the names and would drop the whole snapshot.
 var ErrFileSearch = errors.New("catalog: file search waits until every node reads it")
+
+// ErrFileParse is what a publish or a source switch returns for the file_parse item while Config.FileParse is off: an
+// older release's parser rejects the name and would drop the whole snapshot.
+var ErrFileParse = errors.New("catalog: file parsing waits until every node reads it")
 
 // Catalog holds the node's snapshot and runs the admin operations. The platform scope is given by cmd/axiom.
 type Catalog struct {

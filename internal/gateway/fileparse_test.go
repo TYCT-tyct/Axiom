@@ -189,21 +189,24 @@ func TestParseFilesRefusals(t *testing.T) {
 	}
 }
 
-// TestParsesAreChargedAsSearches: each parse is one per-use unit of the search item, charged on the attempt that
-// answered, like the web plugin's search.
-func TestParsesAreChargedAsSearches(t *testing.T) {
+// TestParsesAreChargedAsFileParses: each parse is one per-use unit of its own item, charged on the attempt that
+// answered, like the web plugin's search, and not folded into the search item.
+func TestParsesAreChargedAsFileParses(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		upstream := protocol.Chat
 		h := newHarness(t, t.Context(), options{
 			client: protocol.Chat, upstream: &upstream, fileParses: 2,
 			request: []byte(`{"model":"acme/alpha","messages":[{"role":"user","content":"hello"}],"stream":false}`),
-			price:   `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}`,
+			price:   `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01","file_parse":"0.02"}}`,
 			script:  map[int][]scripted{1: {serve(beat{data: chatCited})}},
 		})
 		h.run()
 		usage := h.settlements[0].outcome.Attempts[0].Segments[0].Usage
-		if got := usage.Count(catalog.ItemWebSearch); got != 2 {
+		if got := usage.Count(catalog.ItemFileParse); got != 2 {
 			t.Fatalf("settled parses = %d, want 2", got)
+		}
+		if got := usage.Count(catalog.ItemWebSearch); got != 0 {
+			t.Fatalf("settled parses added %d searches, want none", got)
 		}
 	})
 }
@@ -260,14 +263,14 @@ func refusalMessage(r *Refusal) string {
 // replyFileAnnotations reads the file annotations of the reply's first choice.
 
 // parseSpec and parsePrice are a model that may search and see files, priced for every item the OpenAI formats may
-// report: a parse is charged as a flat search, and the sale schedule has to price it for the reservation to hold.
+// report: a parse is charged as a flat file_parse, and the sale schedule has to price it for the reservation to hold.
 const (
 	parseSpec = `{"items":["input","output","cache_write","image_in","web_search"],"tiers":[],` +
 		`"context_length":128000,"max_output_tokens":1000,"streams":true,"abilities":["tools","web_search","documents"]}`
 	parsePrice = `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002",` +
-		`"cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},` +
+		`"cache_write":"0.000001","image_in":"0.000001","web_search":"0.01","file_parse":"0.01"},` +
 		`"service_tiers":{"priority":{"rates":{"input":"0.000001","output":"0.000002",` +
-		`"cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"}}}}`
+		`"cache_write":"0.000001","image_in":"0.000001","web_search":"0.01","file_parse":"0.01"}}}}`
 )
 
 // TestFileParserThroughTheHandler: a request with an inline file goes through the handler, is parsed before admission,
@@ -300,17 +303,21 @@ func TestFileParserThroughTheHandler(t *testing.T) {
 }
 
 // checkParseReply: the reply carries the annotation of the parsed file — its hash of the bytes the client sent, its
-// name and the text — and the usage names the parse's one per-use charge.
+// name and the text — and the usage names the parse's one per-use charge. A parse is not a search, so the search
+// counter stays absent; only the server-tool cost carries it.
 func checkParseReply(t *testing.T, out string) {
 	t.Helper()
 	hash := fileHash([]byte("%PDF-1.7 a scanned page"))
 	for _, want := range []string{
 		`"annotations":[{`, `"type":"file"`, `"hash":"` + hash + `"`, `"text":"The parsed page."`,
-		`"web_search_requests":1`, `"server_tool_cost":0.01`,
+		`"server_tool_cost":0.01`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("the reply has no %s:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, `"web_search_requests"`) {
+		t.Fatalf("the reply counts a parse as a search:\n%s", out)
 	}
 }
 
@@ -332,7 +339,7 @@ func checkParsedForward(t *testing.T, up *fakeUpstreams) {
 }
 
 // checkParseBilling: the parse is one reservation and one settlement, the call's own, and what it settles includes the
-// parse's flat price.
+// file_parse price.
 func checkParseBilling(t *testing.T, r *rig, c *Call) {
 	t.Helper()
 	if n := r.count("SELECT count(*) FROM billing.reservations WHERE request_id = $1", c.ID); n != 1 {

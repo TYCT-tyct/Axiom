@@ -259,7 +259,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
 	o := billing.Outcome{Attempts: s.ends}
 	if len(o.Attempts) > 0 {
-		addSearchUsage(&o.Attempts[s.closeLoop()], s.searches+s.parses)
+		addToolUsage(&o.Attempts[s.closeLoop()], s.searches, s.parses)
 	}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final

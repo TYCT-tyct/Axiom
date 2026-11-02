@@ -103,7 +103,7 @@ func TestUnits(t *testing.T) {
 		catalog.ItemOutput: catalog.UnitToken, catalog.ItemReasoning: catalog.UnitToken,
 		catalog.ItemAudioOut: catalog.UnitToken, catalog.ItemImageOut: catalog.UnitToken,
 		catalog.ItemWebSearch: catalog.UnitUse, catalog.ItemCodeExecution: catalog.UnitUse,
-		catalog.ItemFileSearch:   catalog.UnitUse,
+		catalog.ItemFileSearch: catalog.UnitUse, catalog.ItemFileParse: catalog.UnitUse,
 		catalog.ItemImageInPiece: catalog.UnitPiece, catalog.ItemImageOutPiece: catalog.UnitPiece,
 		catalog.ItemAudioInSecond: catalog.UnitSecond, catalog.ItemAudioOutSecond: catalog.UnitSecond,
 		catalog.ItemCharacterIn: catalog.UnitCharacter, catalog.ItemRequest: catalog.UnitUse,

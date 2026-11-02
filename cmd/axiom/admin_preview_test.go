@@ -318,6 +318,30 @@ func TestFileSearchRuleWaitsForEveryNode(t *testing.T) {
 	}
 }
 
+// TestFileParseRuleWaitsForEveryNode: a sale price naming file_parse is refused while the catalog's switch is off, in
+// both a fixed price list and a fixed markup, because the name would reach a price version an older node cannot read.
+func TestFileParseRuleWaitsForEveryNode(t *testing.T) {
+	t.Parallel()
+	f := newPreview(t)
+	for _, tc := range []struct {
+		name, method, field string
+	}{
+		{"a fixed price", `{"kind":"fixed","schedule":{"v":1,"currency":"USD","rates":{"input":"0.000001","file_parse":"0.002"}}}`, "/rule/method/schedule"},
+		{"a fixed markup", `{"kind":"cost_plus","markup_ratio":"0.1","fixed_markup":{"file_parse":"0.002"}}`, "/rule/method/fixed_markup"},
+	} {
+		rec := f.change(f.s, http.MethodPost, "/pricing/rules",
+			`{"rule":`+ruleJSON(everything, everything, tc.method)+`,"reason":"a new rule"}`, newKey())
+		expectAdmin(t, tc.name, rec, http.StatusUnprocessableEntity, codeUnprocessable)
+		if body := rec.Body.String(); !strings.Contains(body, tc.field) {
+			t.Errorf("%s: the refusal does not name %s: %s", tc.name, tc.field, body)
+		}
+	}
+	if got := f.text(`SELECT count(*)::text FROM billing.pricing_rules
+		WHERE method->'schedule'->'rates' ? 'file_parse' OR method->'fixed_markup' ? 'file_parse'`); got != "0" {
+		t.Errorf("%s rules naming file_parse after the refusals, want none", got)
+	}
+}
+
 func TestLegacyRuleRetirementAPI(t *testing.T) {
 	t.Parallel()
 	f := newPreview(t)

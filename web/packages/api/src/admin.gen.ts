@@ -3720,6 +3720,7 @@ export interface components {
             web_search?: components["schemas"]["UnitPrice"];
             code_execution?: components["schemas"]["UnitPrice"];
             file_search?: components["schemas"]["UnitPrice"];
+            file_parse?: components["schemas"]["UnitPrice"];
         };
         ContextTier: {
             /**

@@ -2,13 +2,13 @@ import type { AdminSchemas } from "@axiom/api";
 import { TextAreaField, TextField } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { isProblem, type Problem } from "../change";
-import { billingItems, isPerUse, perMillion, perUnit } from "./catalog";
+import { isPerUse, perMillion, perUnit, rateItems } from "./catalog";
 
 type Schedule = AdminSchemas["PriceSchedule"];
 type Rates = AdminSchemas["Rates"];
 
 // The price in the unit a person reads it in: per million tokens, or per use for the items priced that way.
-export function showRate(item: AdminSchemas["BillingItem"], price: string) {
+export function showRate(item: keyof AdminSchemas["Rates"], price: string) {
   return isPerUse(item) ? price : perMillion(price);
 }
 
@@ -34,7 +34,7 @@ export function RatesFields({ schedule, currency }: { schedule?: Schedule; curre
         <legend className="mb-1 text-ui font-medium text-t2">{t("models.price.rates")}</legend>
         <p className="text-label text-t4">{t("models.price.ratesHint")}</p>
         <div className="grid gap-x-4 gap-y-3 min-[480px]:grid-cols-2">
-          {billingItems.map((item) => {
+          {rateItems.map((item) => {
             const price = schedule?.rates[item];
             return (
               <TextField
@@ -100,7 +100,7 @@ export function useInvalid(): Invalid {
   };
 }
 
-function readRate(item: AdminSchemas["BillingItem"], typed: string) {
+function readRate(item: keyof Rates, typed: string) {
   if (isPerUse(item)) {
     return /^(0|[1-9]\d{0,2})(\.\d{1,15})?$/.test(typed) ? typed : null;
   }
@@ -119,7 +119,7 @@ export function readSchedule(
     return { problem: invalid.currency };
   }
   const rates: Record<string, string> = {};
-  for (const item of billingItems) {
+  for (const item of rateItems) {
     const typed = (values[`rate_${item}`] ?? "").trim();
     const price = typed === "" ? undefined : readRate(item, typed);
     if (price === null) {

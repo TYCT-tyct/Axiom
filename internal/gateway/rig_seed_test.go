@@ -25,9 +25,10 @@ const (
 
 func (r *rig) seedCatalog() {
 	var err error
-	// The rig serves the state after the release that opens the image and audio endpoints: CountedItems is on, so the
-	// golden price can carry per-piece prices (internal/catalog/README.md「新增计费项与滚动升级」).
-	if r.catalog, err = catalog.Open(r.db, platformScope, catalog.Config{MaxStale: time.Hour, CountedItems: true}); err != nil {
+	// The rig serves the state after the release that opens the image and audio endpoints, and after the one that reads
+	// file_parse: CountedItems and FileParse are on, so the golden price can carry per-piece and file-parse prices
+	// (internal/catalog/README.md「新增计费项与滚动升级」).
+	if r.catalog, err = catalog.Open(r.db, platformScope, catalog.Config{MaxStale: time.Hour, CountedItems: true, FileParse: true}); err != nil {
 		r.t.Fatal(err)
 	}
 	r.alpha = r.listed("acme/alpha", cmpOr(r.alphaSpec, basicSpec), r.price)
