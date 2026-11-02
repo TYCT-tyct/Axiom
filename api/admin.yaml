@@ -571,8 +571,8 @@ paths:
       operationId: getPaymentSettings
       tags:
       - Site
-      summary: Collection switch, accepted credit range and refund approval limit.
-      description: Collection switch, accepted credit range and refund approval limit; omitted top-up limits are unrestricted.
+      summary: Collection switch, accepted credit range and top-up buffer.
+      description: Collection switch, accepted credit range and top-up buffer; omitted top-up limits are unrestricted.
       security:
       - session: []
       x-axiom-level: mfa
@@ -598,8 +598,8 @@ paths:
       operationId: setPaymentSettings
       tags:
       - Site
-      summary: Collection switch, accepted credit range and refund approval limit.
-      description: Collection switch, accepted credit range and refund approval limit; omitted top-up limits are unrestricted.
+      summary: Collection switch, accepted credit range and top-up buffer.
+      description: Collection switch, accepted credit range and top-up buffer; omitted top-up limits are unrestricted.
       security:
       - session: []
         csrf: []
@@ -4867,11 +4867,6 @@ components:
           description: >-
             The buffer on a top-up in millionths: the site's own value, or the default 2% (20000) when it set none. A
             node of the previous release does not return it.
-        refund_second_approval_credits:
-          allOf: [{$ref: "#/components/schemas/Money"}]
-          description: >-
-            Refunds above this amount need two operators; at or below it one operator releases them. 0 means no
-            limit, so every refund keeps the one-operator rule. A node of the previous release does not return it.
     PaymentSettingsUpdate:
       type: object
       additionalProperties: false
@@ -4891,11 +4886,6 @@ components:
               minimum: 0
               maximum: 100000
               description: "The buffer in millionths, 0 to 10%. Omit to keep the current one."
-            refund_second_approval_credits:
-              allOf: [{$ref: "#/components/schemas/Money"}]
-              description: >-
-                Refunds above this amount need two operators; 0 removes the limit. Omit to keep the current value; a
-                node of the previous release refuses the field.
           required:
           - open
         reason:

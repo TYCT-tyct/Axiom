@@ -236,13 +236,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Collection switch, accepted credit range and refund approval limit.
-         * @description Collection switch, accepted credit range and refund approval limit; omitted top-up limits are unrestricted.
+         * Collection switch, accepted credit range and top-up buffer.
+         * @description Collection switch, accepted credit range and top-up buffer; omitted top-up limits are unrestricted.
          */
         get: operations["getPaymentSettings"];
         /**
-         * Collection switch, accepted credit range and refund approval limit.
-         * @description Collection switch, accepted credit range and refund approval limit; omitted top-up limits are unrestricted.
+         * Collection switch, accepted credit range and top-up buffer.
+         * @description Collection switch, accepted credit range and top-up buffer; omitted top-up limits are unrestricted.
          */
         put: operations["setPaymentSettings"];
         post?: never;
@@ -2312,8 +2312,6 @@ export interface components {
             credits_max?: components["schemas"]["Money"];
             /** @description The buffer on a top-up in millionths: the site's own value, or the default 2% (20000) when it set none. A node of the previous release does not return it. */
             top_up_buffer_ppm?: number;
-            /** @description Refunds above this amount need two operators; at or below it one operator releases them. 0 means no limit, so every refund keeps the one-operator rule. A node of the previous release does not return it. */
-            refund_second_approval_credits?: components["schemas"]["Money"];
         };
         PaymentSettingsUpdate: {
             settings: {
@@ -2322,8 +2320,6 @@ export interface components {
                 credits_max?: components["schemas"]["Money"];
                 /** @description The buffer in millionths, 0 to 10%. Omit to keep the current one. */
                 top_up_buffer_ppm?: number;
-                /** @description Refunds above this amount need two operators; 0 removes the limit. Omit to keep the current value; a node of the previous release refuses the field. */
-                refund_second_approval_credits?: components["schemas"]["Money"];
             };
             reason: components["schemas"]["Reason"];
         };

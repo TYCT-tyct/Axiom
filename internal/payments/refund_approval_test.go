@@ -24,10 +24,16 @@ func refundWorldAmount(t *testing.T, plugin fakePlugin, credits int64) (*world, 
 	return w, o
 }
 
+// setRefundLimit stages the refund policy in the database. The admin settings API does not expose this yet: turning the
+// two-operator rule on needs the owner's explicit approval of the policy, so only tests write the setting directly.
 func (w *world) setRefundLimit(limit int64) {
 	w.t.Helper()
-	if err := w.db.Tx(w.t.Context(), siteScope(w.siteA), func(tx pg.Tx) error {
-		return SetSiteSettings(w.t.Context(), tx, admin, w.siteA, SiteSettings{Open: true, RefundSecondApproval: &limit}, "limit")
+	if err := w.db.Tx(w.t.Context(), w.p.platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(w.t.Context(), `INSERT INTO payments.settings(site_id, refund_second_approval_credits)
+			VALUES($1, $2)
+			ON CONFLICT(site_id) DO UPDATE SET refund_second_approval_credits = excluded.refund_second_approval_credits`,
+			w.siteA, limit)
+		return err
 	}); err != nil {
 		w.t.Fatal(err)
 	}

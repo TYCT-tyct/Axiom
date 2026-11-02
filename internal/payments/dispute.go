@@ -118,6 +118,11 @@ func (p *Payments) applyDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 				return fmt.Errorf("payments: dispute %s was reversed by someone else", row.ID)
 			}
 			// The order stays charged back: the dispute did happen and the order must not become refundable again.
+			// A win does not lift a suspension, and an older node that booked the chargeback may have missed it, so
+			// record it now when this dispute has not suspended the account yet.
+			if err := p.suspendForDispute(ctx, tx, row, o.AccountID, d.Provider, d.ID); err != nil {
+				return err
+			}
 			return disputeEvent(ctx, tx, o, d, "dispute_won", State(o.State), raw)
 		}
 		changed, err := queries.TouchDispute(ctx, tx, TouchDisputeParams{Status: status, Reason: reason, ID: row.ID})
@@ -147,8 +152,11 @@ func (p *Payments) applyOpenDispute(ctx context.Context, tx pg.Tx, o LockOrderRo
 	if err != nil {
 		return err
 	}
-	if err := p.suspendForDispute(ctx, tx, row, o.AccountID, d.Provider, d.ID); err != nil {
-		return err
+	// A win that arrived before its open already refused the chargeback; a stale open must not suspend the account.
+	if row.Status != "won" {
+		if err := p.suspendForDispute(ctx, tx, row, o.AccountID, d.Provider, d.ID); err != nil {
+			return err
+		}
 	}
 	if difference != nil {
 		return persistPending(ctx, tx, *difference)

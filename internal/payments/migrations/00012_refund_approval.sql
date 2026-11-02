@@ -1,8 +1,9 @@
 -- +goose Up
 
--- A refund above the site's positive limit needs two operators. The limit is site data and starts at 0 (no limit), so
--- turning the rule on is an explicit operator action and no request frozen before that changes who may release it. The
--- first approval is kept apart from approved_by so the release stays the single field older nodes read.
+-- A refund above the site's positive limit needs two operators. The limit is site data and starts at 0 (no limit).
+-- The admin API does not read or write this column yet: enabling the rule is a refund-policy change that needs the
+-- owner's explicit approval, so the column and the checks below are staged until then. The first approval is kept apart
+-- from approved_by so the release stays the single field older nodes read.
 ALTER TABLE payments.settings ADD COLUMN refund_second_approval_credits bigint DEFAULT 0
     CHECK (refund_second_approval_credits >= 0);
 ALTER TABLE payments.refunds
@@ -45,13 +46,14 @@ ALTER TABLE payments.refunds ADD CONSTRAINT refunds_second_approval
     );
 
 -- A dispute records that it suspended the account, so a repeated callback cannot suspend again after an operator lifts
--- it. A dispute an older node applied without suspending has no mark, which the poll uses to repair it after the
--- mixed-version window.
+-- it. Rows present at upgrade are marked handled, so no account is suspended retroactively. A row an older node writes
+-- after this migration has no mark, and the poll or a later event repairs it.
 ALTER TABLE payments.order_disputes ADD COLUMN suspended_at timestamptz;
--- Disputes from before this rule keep today's behavior: no account is suspended retroactively.
-UPDATE payments.order_disputes SET suspended_at = updated_at;
+-- Only a dispute that took money had a suspension to record. A warning stays unmarked, so the open or lost event that
+-- follows it still suspends the account; nothing is suspended retroactively.
+UPDATE payments.order_disputes SET suspended_at = updated_at WHERE state IN ('applied', 'reversed');
 CREATE INDEX order_disputes_without_suspension ON payments.order_disputes (applied_at)
-    WHERE state = 'applied' AND suspended_at IS NULL;
+    WHERE state IN ('applied', 'reversed') AND suspended_at IS NULL;
 
 -- +goose Down
 

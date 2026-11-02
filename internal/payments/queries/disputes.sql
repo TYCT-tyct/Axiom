@@ -57,9 +57,9 @@ UPDATE payments.order_disputes SET suspended_at = clock_timestamp(), updated_at 
 WHERE id = @id AND suspended_at IS NULL;
 
 -- name: DisputesWithoutSuspension :many
--- Applied disputes an older node booked without recording this release's suspension; the poll suspends their accounts
--- until the mixed-version window's rows are drained.
+-- Disputes that took money (and may already have been reversed by a win) but have no suspension recorded: an older
+-- node booked them without this release's suspension. The poll suspends their accounts until the window is drained.
 SELECT id FROM payments.order_disputes
-WHERE state = 'applied' AND suspended_at IS NULL
+WHERE state IN ('applied', 'reversed') AND suspended_at IS NULL
 ORDER BY applied_at
 LIMIT @batch;

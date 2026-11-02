@@ -116,13 +116,13 @@ func (q *Queries) DisputeOrder(ctx context.Context, db DBTX, arg DisputeOrderPar
 
 const disputesWithoutSuspension = `-- name: DisputesWithoutSuspension :many
 SELECT id FROM payments.order_disputes
-WHERE state = 'applied' AND suspended_at IS NULL
+WHERE state IN ('applied', 'reversed') AND suspended_at IS NULL
 ORDER BY applied_at
 LIMIT $1
 `
 
-// Applied disputes an older node booked without recording this release's suspension; the poll suspends their accounts
-// until the mixed-version window's rows are drained.
+// Disputes that took money (and may already have been reversed by a win) but have no suspension recorded: an older
+// node booked them without this release's suspension. The poll suspends their accounts until the window is drained.
 func (q *Queries) DisputesWithoutSuspension(ctx context.Context, db DBTX, batch int32) ([]uuid.UUID, error) {
 	rows, err := db.Query(ctx, disputesWithoutSuspension, batch)
 	if err != nil {

@@ -1,5 +1,5 @@
 import type { AdminSchemas } from "@axiom/api";
-import { bufferRefused, refundLimitRefused, withoutBuffer, withoutRefundLimit } from "./payment-read";
+import { bufferRefused, withoutBuffer } from "./payment-read";
 
 type Update = AdminSchemas["PaymentSettingsUpdate"]["settings"];
 type Saved = { data: AdminSchemas["PaymentSettings"]; replayed: boolean };
@@ -27,17 +27,10 @@ export async function savePaymentSettings(
     return { ...saved, skipped: known?.skipped === true };
   } catch (error) {
     const dropBuffer = "top_up_buffer_ppm" in body && bufferRefused(error);
-    const dropRefundLimit = "refund_second_approval_credits" in body && refundLimitRefused(error);
-    if (!dropBuffer && !dropRefundLimit) {
+    if (!dropBuffer) {
       throw error;
     }
-    let downgraded = body;
-    if (dropBuffer) {
-      downgraded = withoutBuffer(downgraded);
-    }
-    if (dropRefundLimit) {
-      downgraded = withoutRefundLimit(downgraded);
-    }
+    const downgraded = withoutBuffer(body);
     attempted.set(key, { settings: downgraded, skipped: true });
     const saved = await put(downgraded, reason, key);
     return { ...saved, skipped: true };

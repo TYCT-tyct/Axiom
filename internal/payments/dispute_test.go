@@ -179,6 +179,9 @@ func TestWonDisputeBeforeOpenDoesNotBookMoney(t *testing.T) {
 	if got := w.count(w.p.platform, "SELECT count(*) FROM billing.transactions WHERE kind='chargeback'"); got != 0 {
 		t.Fatalf("late open booked %d chargebacks", got)
 	}
+	if got := w.states.recorded(); len(got) != 0 {
+		t.Fatalf("late open suspended the account: %+v", got)
+	}
 }
 
 func TestSecondDisputeOnOnePaymentNeedsAPerson(t *testing.T) {

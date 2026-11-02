@@ -67,7 +67,7 @@ function readSort(text: string): number | null {
   return typed === "" ? 0 : readWhole(typed, 0, 2_147_483_647);
 }
 
-export type PaymentWords = { amount: string; range: string; buffer: string; refundLimit: string };
+export type PaymentWords = { amount: string; range: string; buffer: string };
 
 // readPayments makes the payment settings from the dialog's fields. A buffer is only offered when the node answered
 // with one; an older node has no field for it, and leaving it out keeps whatever it has.
@@ -91,7 +91,6 @@ export function readPayments(
   values: Record<string, string>,
   currency: string,
   bufferOffered: boolean,
-  refundLimitOffered: boolean,
   words: PaymentWords,
 ): AdminSchemas["PaymentSettingsUpdate"]["settings"] | Problem {
   const min = readMoney(values.credits_min ?? "", currency, false);
@@ -106,18 +105,11 @@ export function readPayments(
   if (buffer.problem !== undefined) {
     return { problem: buffer.problem };
   }
-  const refundLimit = readMoney(values.refund_second_approval_credits ?? "", currency, false);
-  if (!refundLimit.ok) {
-    return { problem: words.refundLimit };
-  }
   return {
     open: values.open === "true",
     credits_min: min.value,
     credits_max: max.value,
     ...(buffer.ppm === undefined ? {} : { top_up_buffer_ppm: buffer.ppm }),
-    ...(refundLimitOffered && refundLimit.value !== undefined
-      ? { refund_second_approval_credits: refundLimit.value }
-      : {}),
   };
 }
 
@@ -413,22 +405,9 @@ export function withoutBuffer(
   return rest;
 }
 
-// withoutRefundLimit removes the refund-approval field an old node's contract refuses.
-export function withoutRefundLimit(
-  settings: AdminSchemas["PaymentSettingsUpdate"]["settings"],
-): AdminSchemas["PaymentSettingsUpdate"]["settings"] {
-  const { refund_second_approval_credits: _, ...rest } = settings;
-  return rest;
-}
-
 // bufferRefused is the old node's 400 for top_up_buffer_ppm under additionalProperties: false.
 export function bufferRefused(error: unknown): boolean {
   return fieldRefused(error, "top_up_buffer_ppm");
-}
-
-// refundLimitRefused is the same refusal for the refund-approval field.
-export function refundLimitRefused(error: unknown): boolean {
-  return fieldRefused(error, "refund_second_approval_credits");
 }
 
 function fieldRefused(error: unknown, field: string): boolean {

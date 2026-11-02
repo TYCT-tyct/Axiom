@@ -3114,9 +3114,6 @@ type PaymentSettings struct {
 	CreditsMin *Money `json:"credits_min,omitempty"`
 	Open       *bool  `json:"open,omitempty"`
 
-	// RefundSecondApprovalCredits Refunds above this amount need two operators; at or below it one operator releases them. 0 means no limit, so every refund keeps the one-operator rule. A node of the previous release does not return it.
-	RefundSecondApprovalCredits *Money `json:"refund_second_approval_credits,omitempty"`
-
 	// TopUpBufferPpm The buffer on a top-up in millionths: the site's own value, or the default 2% (20000) when it set none. A node of the previous release does not return it.
 	TopUpBufferPpm *int `json:"top_up_buffer_ppm,omitempty"`
 }
@@ -3132,9 +3129,6 @@ type PaymentSettingsUpdate struct {
 		// CreditsMin An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 		CreditsMin *Money `json:"credits_min,omitempty"`
 		Open       bool   `json:"open"`
-
-		// RefundSecondApprovalCredits Refunds above this amount need two operators; 0 removes the limit. Omit to keep the current value; a node of the previous release refuses the field.
-		RefundSecondApprovalCredits *Money `json:"refund_second_approval_credits,omitempty"`
 
 		// TopUpBufferPpm The buffer in millionths, 0 to 10%. Omit to keep the current one.
 		TopUpBufferPpm *int `json:"top_up_buffer_ppm,omitempty"`

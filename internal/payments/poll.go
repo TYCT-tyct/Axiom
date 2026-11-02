@@ -137,7 +137,7 @@ func (p *Payments) repairDisputeSuspensions(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if row.SuspendedAt.Valid || row.State != "applied" {
+			if row.SuspendedAt.Valid || (row.State != "applied" && row.State != "reversed") {
 				return nil
 			}
 			return p.suspendForDispute(ctx, tx, row, row.AccountID, row.Provider, row.ProviderID)

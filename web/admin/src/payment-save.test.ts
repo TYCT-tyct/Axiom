@@ -41,28 +41,3 @@ it("resends the downgraded body after its successful answer was lost", async () 
   expect(saved).toEqual({ data: { open: true }, replayed: true, skipped: true });
   expect(bodies).toEqual([buffered, unbuffered, unbuffered]);
 });
-
-it("drops the refund limit for a node whose contract refuses it", async () => {
-  const attempted = new Map();
-  const limited: Update = { open: true, refund_second_approval_credits: { amount: "100", currency: "USD" } };
-  const refusal = new ApiError(400, null, {
-    body: {
-      error: {
-        code: "invalid_request",
-        message: "the request breaks the contract",
-        fields: [{ pointer: "/settings/refund_second_approval_credits", message: "unknown field" }],
-      },
-    },
-  });
-  const bodies: Update[] = [];
-  const put = async (body: Update) => {
-    bodies.push(body);
-    if (bodies.length === 1) {
-      throw refusal;
-    }
-    return { data: { open: true }, replayed: false };
-  };
-  const saved = await savePaymentSettings(attempted, "limit", limited, "save", put);
-  expect(saved).toEqual({ data: { open: true }, replayed: false, skipped: true });
-  expect(bodies).toEqual([limited, { open: true }]);
-});

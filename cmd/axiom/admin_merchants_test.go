@@ -283,7 +283,6 @@ func TestAdminMerchantProbeDoesNotHoldTheWriteTransaction(t *testing.T) {
 	}
 }
 
-//nolint:cyclop // read, save both fields, and save without them are one settings journey with one assertion each.
 func TestAdminPaymentSettingsTopUpBuffer(t *testing.T) {
 	f := newAdminFixture(t)
 	s := f.owner()
@@ -297,17 +296,13 @@ func TestAdminPaymentSettingsTopUpBuffer(t *testing.T) {
 	if view.TopUpBufferPpm == nil || *view.TopUpBufferPpm != 20_000 {
 		t.Fatalf("default buffer %s", rec.Body)
 	}
-	if view.RefundSecondApprovalCredits == nil || view.RefundSecondApprovalCredits.Amount != "0" {
-		t.Fatalf("default refund limit (no limit) %s", rec.Body)
-	}
 
-	body := `{"settings":{"open":true,"top_up_buffer_ppm":35000,"refund_second_approval_credits":{"amount":"250000000000","currency":"USD"}},"reason":"a wider buffer for this site"}`
+	body := `{"settings":{"open":true,"top_up_buffer_ppm":35000},"reason":"a wider buffer for this site"}`
 	rec = f.change(s, http.MethodPut, path, body, newKey())
 	expectAdmin(t, "set payment settings", rec, http.StatusOK, "")
 	decode(t, rec, &view)
-	if view.TopUpBufferPpm == nil || *view.TopUpBufferPpm != 35_000 ||
-		view.RefundSecondApprovalCredits == nil || view.RefundSecondApprovalCredits.Amount != "250000000000" {
-		t.Fatalf("saved buffer and limit %s", rec.Body)
+	if view.TopUpBufferPpm == nil || *view.TopUpBufferPpm != 35_000 {
+		t.Fatalf("saved buffer %s", rec.Body)
 	}
 	f.expectAudit("billing.top_up_buffer.update", map[string]string{"detail::text": `{"after": 35000, "before": 20000}`})
 
@@ -315,9 +310,8 @@ func TestAdminPaymentSettingsTopUpBuffer(t *testing.T) {
 	rec = f.change(s, http.MethodPut, path, `{"settings":{"open":false},"reason":"close collection"}`, newKey())
 	expectAdmin(t, "set payment settings without buffer", rec, http.StatusOK, "")
 	decode(t, rec, &view)
-	if view.TopUpBufferPpm == nil || *view.TopUpBufferPpm != 35_000 ||
-		view.RefundSecondApprovalCredits == nil || view.RefundSecondApprovalCredits.Amount != "250000000000" {
-		t.Fatalf("buffer or limit after another save %s", rec.Body)
+	if view.TopUpBufferPpm == nil || *view.TopUpBufferPpm != 35_000 {
+		t.Fatalf("buffer after another save %s", rec.Body)
 	}
 }
 
