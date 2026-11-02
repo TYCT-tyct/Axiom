@@ -8,17 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 	"uuid"
 
-	"axiom/internal/platform"
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
-	"axiom/internal/routing"
 )
 
 // TestSpillDirectoryIsLockedByOneProcess: two nodes pointed at the same spill directory would append from the same
@@ -241,33 +237,21 @@ func onlySegmentNoFail(dir string) string {
 	return ""
 }
 
-// TestBoundedRouteFitsTheColumn: the largest route a legal request can produce, with every attempt and a summary of
-// many excluded candidates, must fit the call log's 8 KiB jsonb column. The bounded encoder is routing's; this checks
-// it against the database the record actually goes into.
+// TestBoundedRouteFitsTheColumn: the bound Commit checks is the column's. A route whose jsonb text is exactly the limit
+// is accepted by Commit and by PostgreSQL, and its stored text is what jsonbTextLen predicted; one byte more is refused
+// before the spill (TestEnqueueRejectsText). routing's TestRecordIsBounded keeps the largest legal route under the
+// same bound.
 func TestBoundedRouteFitsTheColumn(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
-	account := uuid.NewV7()
-	route := routing.Record{Unmeasured: true}
-	for range routing.MaxEntries {
-		route.Route = append(route.Route, routing.EndpointID(uuid.NewV7()))
+	// {"ab":[1,1,…]} with n members is 3n+8 bytes as jsonb text: ": " after the key, ", " between the members.
+	n := (maxRouteText - 8) / 3
+	route := []byte(`{"ab":[` + strings.Repeat(`1,`, n-1) + `1]}`)
+	if got := jsonbTextLen(string(route)); got != maxRouteText {
+		t.Fatalf("the test route is %d bytes as jsonb text, want exactly %d", got, maxRouteText)
 	}
-	for range platform.MaxAttemptSeq {
-		route.Attempts = append(route.Attempts, routing.Attempt{
-			Endpoint: routing.EndpointID(uuid.NewV7()), Failed: true, Scope: routing.ScopeEndpoint, Action: routing.NextEntry,
-		})
-	}
-	for i := 0; i < 1000; i++ {
-		route.Excluded = append(route.Excluded, routing.Excluded{
-			Endpoint: routing.EndpointID(uuid.NewV7()), Reason: routing.Reason(i%len(reasonNames) + 1),
-		})
-	}
-	encoded, err := route.JSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := record(account, now)
-	rec.Route = encoded
+	rec := record(uuid.NewV7(), now)
+	rec.Route = route
 	keep(t, db, rec)
 
 	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
@@ -275,32 +259,13 @@ func TestBoundedRouteFitsTheColumn(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		// jsonb reorders keys and prints a space after every ':' and ','; the value is the same, and its text stays
-		// within the bound Commit checks.
-		var stored, sent any
-		if err := jsonx.Unmarshal(got.Route, &stored); err != nil {
-			return err
-		}
-		if err := jsonx.Unmarshal(encoded, &sent); err != nil {
-			return err
-		}
-		if !reflect.DeepEqual(stored, sent) {
-			t.Error("the stored route differs from the encoded one")
-		}
-		if bound := jsonbTextLen(string(encoded)); len(got.Route) > bound || bound > maxRouteText {
-			t.Errorf("the stored route is %d bytes, the bound %d, the column %d", len(got.Route), bound, maxRouteText)
+		if len(got.Route) != maxRouteText {
+			t.Errorf("the stored route is %d bytes of jsonb text, want the predicted %d", len(got.Route), maxRouteText)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// reasonNames mirrors routing's unexported reason list, so the summary's map has every key.
-var reasonNames = []string{
-	"no_candidates", "model_not_allowed", "disabled", "breaker_open", "supplier_balance", "missing_capability",
-	"context_too_small", "format_not_served", "service_tier_not_served", "preset_filter", "override_filter",
-	"not_verified", "no_price", "no_egress", "retry_budget", "full", "unknown_item", "cooling_down", "unquotable_cost",
 }
 
 // TestWriterReadsOnlyDurableRecords: the writer must not store and checkpoint past a record whose fsync has not
