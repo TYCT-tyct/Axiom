@@ -74,7 +74,7 @@ func TestByokLifecycle(t *testing.T) {
 	same(t, "a disabled key", []any{"disabled", false}, []any{disabled.Status, disabled.Enabled})
 
 	rejected, err := inTx(a, func(ctx context.Context, tx pg.Tx) (ByokKey, error) {
-		return a.admin.SetByokTestResult(ctx, tx, site, account, key.ID, byokCredential(ctx, t, a, key.ID), false, a.actor)
+		return a.admin.SetByokTestResult(ctx, tx, site, account, key.ID, false, a.actor)
 	})
 	refuses(t, "a refused key", err, nil)
 	same(t, "a refused key", []any{"rejected", true}, []any{rejected.Status, rejected.Rejected})
@@ -86,7 +86,7 @@ func TestByokLifecycle(t *testing.T) {
 	same(t, "the switch cannot clear a refusal", "rejected", again.Status)
 
 	accepted, err := inTx(a, func(ctx context.Context, tx pg.Tx) (ByokKey, error) {
-		return a.admin.SetByokTestResult(ctx, tx, site, account, key.ID, byokCredential(ctx, t, a, key.ID), true, a.actor)
+		return a.admin.SetByokTestResult(ctx, tx, site, account, key.ID, true, a.actor)
 	})
 	refuses(t, "a key that works again", err, nil)
 	same(t, "a successful test makes it active", "active", accepted.Status)
@@ -168,14 +168,6 @@ func TestByokWritesInAccountScope(t *testing.T) {
 		t.Fatalf("create in the account's scope: %v", err)
 	}
 
-	var credential uuid.UUID
-	if err := a.db.ReadTx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
-		var err error
-		credential, err = store.New().CredentialOfByok(ctx, tx, key.ID)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
 	for _, step := range []struct {
 		name string
 		do   func(pg.Tx) error
@@ -185,7 +177,7 @@ func TestByokWritesInAccountScope(t *testing.T) {
 			return err
 		}},
 		{"test", func(tx pg.Tx) error {
-			_, err := a.admin.SetByokTestResult(ctx, tx, site, account, key.ID, credential, true, a.actor)
+			_, err := a.admin.SetByokTestResult(ctx, tx, site, account, key.ID, true, a.actor)
 			return err
 		}},
 		{"remove", func(tx pg.Tx) error {

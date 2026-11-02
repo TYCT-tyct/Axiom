@@ -374,7 +374,7 @@ func (a *Admin) RevealByok(ctx context.Context, tx pg.Tx, site, account, id uuid
 
 // SetByokTestResult records what a test found: a key the provider accepts becomes active, one it refuses becomes
 // rejected and stays out of routing until a later test succeeds. Nothing else changes it back.
-func (a *Admin) SetByokTestResult(ctx context.Context, tx pg.Tx, site, account, id, credential uuid.UUID, ok bool, actor audit.Actor) (ByokKey, error) {
+func (a *Admin) SetByokTestResult(ctx context.Context, tx pg.Tx, site, account, id uuid.UUID, ok bool, actor audit.Actor) (ByokKey, error) {
 	_, current, err := a.byokRow(ctx, tx, site, account, id)
 	if err != nil {
 		return ByokKey{}, err
@@ -391,7 +391,7 @@ func (a *Admin) SetByokTestResult(ctx context.Context, tx pg.Tx, site, account, 
 		status = "active"
 	}
 	if err := store.New().SetByokCredentialStatus(ctx, tx, store.SetByokCredentialStatusParams{
-		SupplierID: id, CredentialID: credential, Status: status,
+		SupplierID: id, CredentialID: current, Status: status,
 	}); err != nil {
 		return ByokKey{}, fmt.Errorf("record the test: %w", err)
 	}

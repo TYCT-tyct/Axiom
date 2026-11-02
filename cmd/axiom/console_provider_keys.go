@@ -116,10 +116,9 @@ func (c consoleAPI) TestProviderKey(ctx context.Context, request consoleapi.Test
 		return nil, err
 	}
 	var key suppliers.ByokKey
-	var credential uuid.UUID
 	var plain secret.Secret
 	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-		key, credential, plain, err = c.suppliers.RevealByok(ctx, tx, uuid.UUID(cl.site.ID), uuid.UUID(cl.principal.AccountID()), id)
+		key, _, plain, err = c.suppliers.RevealByok(ctx, tx, uuid.UUID(cl.site.ID), uuid.UUID(cl.principal.AccountID()), id)
 		return err
 	}); err != nil {
 		return nil, byokProblem(err)
@@ -132,7 +131,7 @@ func (c consoleAPI) TestProviderKey(ctx context.Context, request consoleapi.Test
 		}, nil
 	}
 	if err := c.db.Tx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-		key, err = c.suppliers.SetByokTestResult(ctx, tx, uuid.UUID(cl.site.ID), uuid.UUID(cl.principal.AccountID()), id, credential, ok, audit.User(uuid.UUID(cl.principal.UserID())))
+		key, err = c.suppliers.SetByokTestResult(ctx, tx, uuid.UUID(cl.site.ID), uuid.UUID(cl.principal.AccountID()), id, ok, audit.User(uuid.UUID(cl.principal.UserID())))
 		return err
 	}); err != nil {
 		return nil, byokProblem(err)
