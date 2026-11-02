@@ -81,9 +81,15 @@ type Request struct {
 	// with parsed text before admission when the engine is not native, and leaves them to an endpoint that accepts
 	// documents otherwise.
 	File *FileParser
-	// FileParses is how many files the gateway parsed for this request before admission: each is a per-use charge,
-	// which the admission reserves.
+	// FileParses is how many files the gateway parsed for this request before admission. It bounds the per-request file
+	// count and is the old web_search unit until FileBilling is on.
 	FileParses int64
+	// FilePages is how many pages those files became through a paid OCR engine. It is the file_parse unit when
+	// FileBilling is on; cloudflare-ai is free and leaves it zero.
+	FilePages int64
+	// FileBilling is the node's catalog switch for the file_parse item: true bills FilePages as file_parse, false keeps
+	// the pre-item behavior and bills FileParses as web_search. It is a rollout setting, not a member of the body.
+	FileBilling bool
 	// MessageCount is Chat conversation length for the vendor message cap.
 	MessageCount int64
 	// Previous is Responses' previous_response_id. The stored history it names is input too.

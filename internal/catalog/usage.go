@@ -38,8 +38,9 @@ const (
 	// ItemFileSearch is one call of OpenAI's file_search tool: the vendor bills each call and reports no count in its
 	// usage, so the gateway counts the call items. It is appended for the same reason as ItemRequest.
 	ItemFileSearch
-	// ItemFileParse is one file the gateway's file-parser plugin parsed before admission: one document, one use. The
-	// item is priced by the model's schedule, like file_search, and appended for the same reason.
+	// ItemFileParse is one page the gateway's file-parser plugin parsed through a paid OCR engine: one page, one use.
+	// The item is priced by the model's schedule, like file_search, and appended for the same reason. cloudflare-ai is
+	// free and native files are charged as input tokens, so neither adds this item.
 	ItemFileParse
 	NumItems
 )

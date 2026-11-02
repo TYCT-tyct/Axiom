@@ -223,9 +223,11 @@ type session struct {
 	searched       bool
 	out            []byte
 	outHeld        int64
-	// parses is how many files the call's parser read before its attempt, charged per use like a search, and files are
-	// the annotations its reply returns so a client can reuse the text instead of the file.
+	// parses is how many files the call's parser read before its attempt, and pages is how many pages a paid OCR engine
+	// produced. They are the old and the new file-parsing units; the catalog switch picks one. files are the annotations
+	// the reply returns so a client can reuse the text instead of the file.
 	parses int64
+	pages  int64
 	files  []protocol.FileAnnotation
 	// echo is the prompt sizes a legacy completion that echoes repeats at the start of its choices, nil without echo;
 	// echoHeld is the part of the node's budget they hold until the call is over.
@@ -264,7 +266,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 		x: x, w: w, rc: http.NewResponseController(w), c: c, req: r, start: now, currency: c.site.Currency,
 		deadline: now.Add(x.Limits.cfg.MaxCall), logger: x.Logger.With("request_id", c.ID.String()),
 		writeFor: x.Limits.cfg.WriteTimeout, aggregate: !c.Request.Stream && !c.Compact,
-		files: c.files, parses: c.Request.FileParses, serverFunction: c.serverLoop,
+		files: c.files, parses: c.Request.FileParses, pages: c.Request.FilePages, serverFunction: c.serverLoop,
 		cacheTTL: c.cache.ttl,
 	}
 }
@@ -280,7 +282,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
 	o := billing.Outcome{Attempts: s.ends}
 	if len(o.Attempts) > 0 {
-		addToolUsage(&o.Attempts[s.closeLoop()], s.searches, s.parses)
+		addToolUsage(&o.Attempts[s.closeLoop()], s.searches, s.parses, s.pages, s.c.Request.FileBilling)
 	}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final

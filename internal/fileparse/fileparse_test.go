@@ -76,7 +76,7 @@ func TestOpenRequiresAConfiguredBackend(t *testing.T) {
 
 func TestParseSendsTheDocumentAndReadsTheText(t *testing.T) {
 	document := []byte("%PDF-1.7 a scanned page")
-	server := httptest.NewTLSServer(conversion(t, document))
+	server := httptest.NewTLSServer(conversion(t, document, true))
 	t.Cleanup(server.Close)
 	client := egress.NewForTesting(egresstest.Loopback(t, server.Certificate()))
 	parser, err := fileparse.Open(fileparse.Config{URL: server.URL + "/docling", Key: secret.New("parse-key")}, client)
@@ -85,28 +85,61 @@ func TestParseSendsTheDocumentAndReadsTheText(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	text, err := parser.Parse(ctx, fileparse.Document{Name: "scan.pdf", Data: document})
+	text, pages, err := parser.Parse(ctx, fileparse.Document{Name: "scan.pdf", Data: document}, true)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if text != "# Report\n\nThe text." {
-		t.Fatalf("Parse() = %q", text)
+	if text != "# Report\n\nThe text.\n\nMore text.\n\nEnd." || pages != 3 {
+		t.Fatalf("Parse() = %q, %d pages", text, pages)
+	}
+}
+
+// TestParseWithoutPageCounting: the old billing path sends the request shape older Docling versions already accept and
+// reports one page; the gateway does not use the count while the switch is off.
+func TestParseWithoutPageCounting(t *testing.T) {
+	document := []byte("%PDF-1.7 a scanned page")
+	server := httptest.NewTLSServer(conversion(t, document, false))
+	t.Cleanup(server.Close)
+	client := egress.NewForTesting(egresstest.Loopback(t, server.Certificate()))
+	parser, err := fileparse.Open(fileparse.Config{URL: server.URL + "/docling", Key: secret.New("parse-key")}, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	text, pages, err := parser.Parse(ctx, fileparse.Document{Name: "scan.pdf", Data: document}, false)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if text != "# Report\n\nThe text." || pages != 1 {
+		t.Fatalf("Parse() = %q, %d pages", text, pages)
 	}
 }
 
 // conversion checks the request Docling serve is sent, and answers with a markdown document.
-func conversion(t *testing.T, document []byte) http.HandlerFunc {
+func conversion(t *testing.T, document []byte, countPages bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		checkConversion(t, r, document)
+		placeholder := checkConversion(t, r, document, countPages)
+		markdown := "# Report\n\nThe text."
+		if countPages {
+			markdown += placeholder + "More text." + placeholder + "End."
+		}
+		body, err := jsonx.MarshalCanonical(map[string]any{
+			"status": "success", "document": map[string]string{"md_content": markdown}, "processing_time": 1.5,
+		})
+		if err != nil {
+			t.Errorf("the test body is not JSON: %v", err)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		if _, err := w.Write([]byte(`{"status":"success","document":{"md_content":"# Report\n\nThe text."},"processing_time":1.5}`)); err != nil {
+		if _, err := w.Write(body); err != nil {
 			t.Errorf("the backend could not write its body: %v", err)
 		}
 	}
 }
 
 // checkConversion holds one conversion request to the shape Docling serve is called with.
-func checkConversion(t *testing.T, r *http.Request, document []byte) {
+func checkConversion(t *testing.T, r *http.Request, document []byte, countPages bool) string {
 	if r.URL.Path != "/docling/v1/convert/source" {
 		t.Errorf("path = %q, want /docling/v1/convert/source", r.URL.Path)
 	}
@@ -123,8 +156,18 @@ func checkConversion(t *testing.T, r *http.Request, document []byte) {
 	if got, err := base64.StdEncoding.DecodeString(sent.Sources[0].Base64); err != nil || string(got) != string(document) {
 		t.Errorf("the backend did not receive the document")
 	}
-	if len(sent.Options.ToFormats) != 1 || sent.Options.ToFormats[0] != "md" || !sent.Options.DoOCR {
-		t.Errorf("options = %+v", sent.Options)
+	checkConversionOptions(t, sent.Options, countPages)
+	return sent.Options.PageBreakPlaceholder
+}
+
+// checkConversionOptions holds the markdown and page-boundary options to the ones the parser needs.
+func checkConversionOptions(t *testing.T, o conversionOptions, countPages bool) {
+	t.Helper()
+	if len(o.ToFormats) != 1 || o.ToFormats[0] != "md" || !o.DoOCR {
+		t.Errorf("options = %+v", o)
+	}
+	if countPages != (o.PageBreakPlaceholder != "") {
+		t.Errorf("page boundary request = %q, want counted = %t", o.PageBreakPlaceholder, countPages)
 	}
 }
 
@@ -135,10 +178,13 @@ type convertRequest struct {
 		Base64   string `json:"base64_string"`
 		Filename string `json:"filename"`
 	} `json:"sources"`
-	Options struct {
-		ToFormats []string `json:"to_formats"`
-		DoOCR     bool     `json:"do_ocr"`
-	} `json:"options"`
+	Options conversionOptions `json:"options"`
+}
+
+type conversionOptions struct {
+	ToFormats            []string `json:"to_formats"`
+	DoOCR                bool     `json:"do_ocr"`
+	PageBreakPlaceholder string   `json:"md_page_break_placeholder"`
 }
 
 func TestParseBackendFailures(t *testing.T) {
@@ -173,7 +219,7 @@ func TestParseBackendFailures(t *testing.T) {
 			if tc.empty {
 				data = nil
 			}
-			_, err = parser.Parse(ctx, fileparse.Document{Name: "scan.pdf", Data: data})
+			_, _, err = parser.Parse(ctx, fileparse.Document{Name: "scan.pdf", Data: data}, true)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Parse() error = %v, want %v", err, tc.want)
 			}
@@ -204,7 +250,7 @@ func TestParseTimeout(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
-	_, err = parser.Parse(ctx, fileparse.Document{Name: "scan.pdf", Data: []byte("%PDF")})
+	_, _, err = parser.Parse(ctx, fileparse.Document{Name: "scan.pdf", Data: []byte("%PDF")}, true)
 	if !errors.Is(err, fileparse.ErrUpstream) || !strings.Contains(err.Error(), "in time") {
 		t.Fatalf("Parse() error = %v, want a timeout as ErrUpstream", err)
 	}

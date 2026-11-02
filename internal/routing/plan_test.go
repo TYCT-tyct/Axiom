@@ -710,17 +710,21 @@ func TestRerankDemandReservesItsSearchUnit(t *testing.T) {
 	}
 }
 
-// TestFileParsesAreFlatFileParses: each file the gateway parses before admission is one per-use file_parse unit that
-// does not add a sampling, so the reservation covers it and the request's own search count is left alone.
+// TestFileParsesAreFlatFileParses: when the catalog switch is on, each page a paid OCR engine parsed is one per-use
+// file_parse unit that does not add a sampling, so the reservation covers it and the request's own search count is left
+// alone.
 func TestFileParsesAreFlatFileParses(t *testing.T) {
-	d := routing.DemandOf(&protocol.Request{Format: protocol.Chat, FileParses: 3, Needs: protocol.WebSearch, WebSearches: 2})
+	d := routing.DemandOf(&protocol.Request{
+		Format: protocol.Chat, FileParses: 3, FilePages: 7, FileBilling: true,
+		Needs: protocol.WebSearch, WebSearches: 2,
+	})
 	var flat, native int
 	for _, tool := range d.ServerTools {
 		switch {
 		case tool.Item == catalog.ItemFileParse && tool.Flat:
 			flat++
-			if tool.MaxUses != 3 {
-				t.Errorf("flat uses = %d, want 3", tool.MaxUses)
+			if tool.MaxUses != 7 {
+				t.Errorf("flat uses = %d, want 7", tool.MaxUses)
 			}
 		case tool.Item == catalog.ItemWebSearch && !tool.Flat:
 			native++
@@ -736,6 +740,20 @@ func TestFileParsesAreFlatFileParses(t *testing.T) {
 	}
 	if d.Documents != 0 {
 		t.Errorf("documents = %d, want none after parsing", d.Documents)
+	}
+}
+
+// TestFileParsesKeepSearchBillingUntilEnabled: while the catalog switch is off, an upgraded node keeps the old unit, one
+// web_search per file. A site that was parsing before the upgrade does not become unpriced because file_parse is not
+// published yet.
+func TestFileParsesKeepSearchBillingUntilEnabled(t *testing.T) {
+	d := routing.DemandOf(&protocol.Request{Format: protocol.Chat, FileParses: 3, FilePages: 7})
+	if len(d.ServerTools) != 1 {
+		t.Fatalf("server tools = %+v, want one web search", d.ServerTools)
+	}
+	tool := d.ServerTools[0]
+	if tool.Item != catalog.ItemWebSearch || tool.Flat || tool.MaxUses != 3 {
+		t.Fatalf("server tool = %+v, want three native web searches", tool)
 	}
 }
 

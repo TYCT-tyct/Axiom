@@ -55,7 +55,7 @@ export default {
     web_search: "联网搜索",
     code_execution: "代码执行",
     file_search: "文件搜索",
-    file_parse: "文件解析",
+    file_parse: "文件解析（每页）",
   },
   tier: { standard: "标准", flex: "弹性", priority: "优先", fast: "快速" },
   spec: {

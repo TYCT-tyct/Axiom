@@ -35,9 +35,10 @@ type Config struct {
 	// price schedule carry. It has its own switch because the release that first reads them is not the release that
 	// publishes them: keep it off until every node runs a release that reads them, like RequestPrices.
 	FileSearch bool
-	// FileParse allows publishing a price for the file_parse item, a name a price schedule carries but a spec does
-	// not: file parsing is the gateway's own work, not an upstream tool. It has its own switch for the same reason as
-	// FileSearch: keep it off until every node runs a release that reads the name.
+	// FileParse allows publishing a price for the file_parse item and switches the gateway from the old web_search unit
+	// to per-page file_parse. The name is in a price schedule but not a spec: file parsing is the gateway's own work, not
+	// an upstream tool. It has its own switch for the same reason as FileSearch: keep it off until every node runs a
+	// release that reads the name and the existing models have a file_parse price.
 	FileParse bool
 }
 
@@ -509,3 +510,7 @@ func parseDialect(w DialectKeys) (Dialect, error) {
 	}
 	return d, nil
 }
+
+// FileParse reports whether this release publishes and bills the file_parse item. It is off until every node reads the
+// name; a false value keeps parses on the old web_search unit.
+func (c *Catalog) FileParse() bool { return c.cfg.FileParse }

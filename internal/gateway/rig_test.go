@@ -119,6 +119,7 @@ type rigOptions struct {
 	search        websearch.Searcher // the web plugin's backend, nil when the node has none
 	backends      SearchBackends     // the whole engine set, when a test needs names and prices; search is used otherwise
 	parser        fileparse.Parser   // the file-parser plugin's backend, nil when the node has none
+	fileParse     bool               // publish and bill file_parse; true unless a test turns it off
 	price         string             // the model's sale schedule, the cheap one when empty
 	alphaSpec     string             // alpha's spec, the basic one when empty
 	spec          string             // the model's spec, the basic one when empty
@@ -160,7 +161,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	t.Helper()
 	rigs <- struct{}{}
 	t.Cleanup(func() { <-rigs })
-	o := rigOptions{memory: 1 << 30}
+	o := rigOptions{memory: 1 << 30, fileParse: true}
 	for _, f := range opts {
 		if f != nil {
 			f(&o)
@@ -211,7 +212,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	startCacheWriter(r, o.noCacheWriter)
 	r.warmConnections(12)
 	r.seedSite()
-	r.seedCatalog()
+	r.seedCatalog(o.fileParse)
 	r.seedRouting(o)
 	sup := r.settlementSuppliers(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{

@@ -454,7 +454,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err := h.gateParsing(r, c, sessionBody, req); err != nil {
 		return err
 	}
-	body, req, err = h.parseFiles(r.Context(), c, body, req)
+	body, req, err = h.parseFiles(r.Context(), c, body, req, h.fileBilling())
 	if err != nil {
 		return err
 	}
@@ -469,14 +469,14 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	web, file, parses := req.Web, req.File, req.FileParses
+	web, file, parses, pages, billing := req.Web, req.File, req.FileParses, req.FilePages, req.FileBilling
 	server := req
 	body, req, err = h.compress(c, body, req, snap, models)
 	if err != nil {
 		return err
 	}
 	restoreWeb(&req, web)
-	restoreFile(&req, file, parses)
+	restoreFile(&req, file, parses, pages, billing)
 	restoreServer(&req, server)
 	return h.fillCall(c, r, sessionBody, body, req, snap, models, names, over)
 }

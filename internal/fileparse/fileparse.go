@@ -1,12 +1,14 @@
 // Package fileparse runs the gateway's file-parser plugin through a self-hosted Docling serve instance: one document
-// in, its text out, within the size and time bounds the gateway charges for. The backend is configured by the
+// in, its text and, when asked, its page count out, within the size and time bounds the gateway charges for. The backend is configured by the
 // deployment administrator and off by default; nothing here knows about a paid OCR service.
 package fileparse
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -95,7 +97,7 @@ type Document struct {
 // Parser is what the gateway runs. The interface exists for the one adapter below and for tests; there is no second
 // implementation to abstract over yet.
 type Parser interface {
-	Parse(ctx context.Context, doc Document) (string, error)
+	Parse(ctx context.Context, doc Document, countPages bool) (text string, pages int, err error)
 }
 
 // Docling parses through a Docling serve instance's v1 conversion API, which is self-hostable and MIT licensed
@@ -145,6 +147,9 @@ type convertSource struct {
 type convertOptions struct {
 	ToFormats []string `json:"to_formats"`
 	DoOCR     bool     `json:"do_ocr"`
+	// PageBreakPlaceholder marks every page boundary in the markdown. It is how a parse counts pages without asking
+	// Docling for its JSON document, which repeats the whole text and can be many times the markdown's size.
+	PageBreakPlaceholder string `json:"md_page_break_placeholder,omitempty"`
 }
 
 // convertResponse is what the endpoint returns: the converted document and how far the conversion got.
@@ -155,45 +160,70 @@ type convertResponse struct {
 	} `json:"document"`
 }
 
-// Parse sends one document to the backend and returns its text. Errors never quote the file or the backend's body: the
-// file is user content, and the body may repeat it.
-func (d *Docling) Parse(ctx context.Context, doc Document) (string, error) {
+// Parse sends one document to the backend and returns its text and, when countPages is set, its page count. The
+// placeholder is derived from the file's bytes, so it cannot be confused with the document's own text without a
+// deliberate hash collision. A backend that predates the placeholder still receives the old request when the billing
+// switch is off. Errors never quote the file or the backend's body: the file is user content, and the body may repeat it.
+func (d *Docling) Parse(ctx context.Context, doc Document, countPages bool) (string, int, error) {
 	if len(doc.Data) == 0 {
-		return "", ErrEmptyFile
+		return "", 0, ErrEmptyFile
 	}
 	name := doc.Name
 	if name == "" {
 		name = "document"
 	}
+	options, placeholder := conversionOptions(doc.Data, countPages)
 	body, err := jsonx.MarshalCanonical(convertRequest{
 		Sources: []convertSource{{Kind: "file", Base64: base64.StdEncoding.EncodeToString(doc.Data), Filename: name}},
-		Options: convertOptions{ToFormats: []string{"md"}, DoOCR: true},
+		Options: options,
 	})
 	if err != nil {
-		return "", fmt.Errorf("%w: the request could not be built", ErrUpstream)
+		return "", 0, fmt.Errorf("%w: the request could not be built", ErrUpstream)
 	}
 	raw, err := d.post(ctx, "/v1/convert/source", body)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	var out convertResponse
 	if err := jsonx.Unmarshal(raw, &out); err != nil {
-		return "", fmt.Errorf("%w: the backend answered invalid JSON", ErrUpstream)
+		return "", 0, fmt.Errorf("%w: the backend answered invalid JSON", ErrUpstream)
 	}
 	if out.Status == "failure" || out.Document == nil {
-		return "", fmt.Errorf("%w: the conversion ended %s", ErrUpstream, status(out.Status))
+		return "", 0, fmt.Errorf("%w: the conversion ended %s", ErrUpstream, status(out.Status))
 	}
 	text := out.Document.Markdown
 	if !utf8.ValidString(text) {
-		return "", fmt.Errorf("%w: the text is not UTF-8", ErrUpstream)
+		return "", 0, fmt.Errorf("%w: the text is not UTF-8", ErrUpstream)
 	}
+	text, pages := pageText(text, placeholder, countPages)
 	if len(text) > MaxTextBytes {
-		return "", fmt.Errorf("%w: the text is %d bytes, more than %d", ErrTooLarge, len(text), MaxTextBytes)
+		return "", 0, fmt.Errorf("%w: the text is %d bytes, more than %d", ErrTooLarge, len(text), MaxTextBytes)
 	}
 	if strings.TrimSpace(text) == "" {
-		return "", ErrEmpty
+		return "", 0, ErrEmpty
 	}
-	return text, nil
+	return text, pages, nil
+}
+
+// conversionOptions asks for markdown and, when pages are billed, a page-boundary placeholder unique to this file.
+func conversionOptions(data []byte, countPages bool) (convertOptions, string) {
+	options := convertOptions{ToFormats: []string{"md"}, DoOCR: true}
+	if !countPages {
+		return options, ""
+	}
+	sum := sha256.Sum256(data)
+	placeholder := "\n\n<!--axiom-page-" + hex.EncodeToString(sum[:8]) + "-->\n\n"
+	options.PageBreakPlaceholder = placeholder
+	return options, placeholder
+}
+
+// pageText counts the page boundaries and removes their placeholders; without counting it leaves the text alone.
+func pageText(text, placeholder string, countPages bool) (string, int) {
+	if !countPages {
+		return text, 1
+	}
+	pages := 1 + strings.Count(text, placeholder)
+	return strings.ReplaceAll(text, placeholder, "\n\n"), pages
 }
 
 // Health checks that the backend answers its health endpoint, which is all a configuration test can check without a

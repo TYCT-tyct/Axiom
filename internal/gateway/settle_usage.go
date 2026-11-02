@@ -9,18 +9,24 @@ import (
 // addToolUsage adds the call's external searches and file parses to the user's side of the charged attempt after the
 // supplier's cost was computed from the supplier's own usage. The work is ours, not the supplier's: one explicit zero
 // report cannot hide it, and a retry does not put it in another attempt's supplier price. Only the last attempt is
-// charged, with the loop it ends (billing.Settle), so the loop's first attempt carries the count (closeLoop). The two
-// counts keep their own items: a parse is not a search and is not priced at the search item's rate.
-func addToolUsage(rec *billing.AttemptResult, searches, parses int64) {
-	if searches <= 0 && parses <= 0 || len(rec.Segments) == 0 {
+// charged, with the loop it ends (billing.Settle), so the loop's first attempt carries the count (closeLoop). While the
+// catalog switch is off a parse keeps the old web_search unit; when it is on, pages are file_parse and cloudflare-ai is
+// free. A parse is never silently mixed into the search count when the new unit is on.
+func addToolUsage(rec *billing.AttemptResult, searches, parses, pages int64, fileBilling bool) {
+	if !fileBilling {
+		pages = 0
+	} else {
+		parses = 0
+	}
+	if searches <= 0 && parses <= 0 && pages <= 0 || len(rec.Segments) == 0 {
 		return
 	}
 	counts := make(map[catalog.Item]int64, catalog.NumItems)
 	for it := range catalog.NumItems {
 		counts[it] = rec.Segments[0].Usage.Count(it)
 	}
-	counts[catalog.ItemWebSearch] += searches
-	counts[catalog.ItemFileParse] += parses
+	counts[catalog.ItemWebSearch] += searches + parses
+	counts[catalog.ItemFileParse] += pages
 	rec.Segments[0].Usage = recountCapped(rec.Segments[0].Usage, counts)
 }
 
