@@ -110,6 +110,34 @@
 - **响应头按白名单放行**：只返回内容类型、我们自己的调用编号、我们计算的限流和重试信息。上游的 `x-request-id`、`openai-organization`、`cf-ray`、`server` 等会暴露上游身份的头一律删除；唯一的例外是上游铸造的 `x-codex-turn-state`，它只在作答的那次尝试的上游设了它时回传，客户端自己发的值不回显——那是厂商给下一轮的凭据，换一个出来没有意义。
 - **自己回显**：响应里的 `id` 用我们的调用编号，`model` 写实际服务的模型（备选 `models` 或别名解析之后），不是客户端请求的原名；供应商仍然不暴露。
 
+### 请求准备的内存预算
+
+`session.prepare` 先把请求交给 `protocol.PrepareBudgeted`，由它保证这次准备分配的每个字节都先记到节点的 `Memory` 上；记不到就返回 `ErrMemory`，网关回 503，不发起上游尝试。`Inspect` 读过的请求体在准入时已经计入预算，并一直留到调用结束（`Call.Done`）：解码后的树里，`jsontext.ReadValue` 返回的值是请求体的切片，不复制正文，所以请求体必须比树活得久。
+
+数据流：
+
+1. 同一格式：先按 `rewriteSize` 为输出缓冲申请容量，改写器去转义标识和 `previous_response_id` 时经同一个 budget 申请临时缓冲和字符串；结束后退回临时部分，只留输出缓冲的容量。
+2. Chat → Messages/Responses：解码 Chat 请求体时，每次切片增长、映射项、字符串和指针之前申请；写出只经一个 `writer`，它每次增长前申请新数组，复制期间新旧数组同时在账上，申请失败后不再写。解码树在转换返回前退回。
+3. Messages/Responses → Chat：读取经 `encoding/json` 构造映射和值，分配不经我们的缓冲，所以开始前按 `nativeRequestCost` 整段预留，结束时只留写出的 Chat 请求体；之后的同格式改写按第 1 步申请。
+4. Messages 与 Responses 之间：先走第 3 步得到 Chat 请求体，再走第 2 步；Chat 请求体在目标格式写出后退回。
+5. 联网搜索的注入原地读请求体，新请求体在生成前申请，旧的退回。
+6. 没有预算时（`Prepare` 在节点外调用）走同一套代码，只是不申请；解码走 `jsonx.Unmarshal` 的 `decodeCanon` 快路径，`TestBudgetedDecodeMatchesTheFastPath` 核对两者是同一棵树。
+
+不变量：
+
+- 分配之前已经申请：申请量按运行时的分配粒度算（`rounded`）；申请失败时已经申请的部分全部退回，`PrepareBudgeted` 返回 `ErrMemory`，之后不再分配。
+- 成功返回时只有 `Upstream.Body` 的容量还在账上，网关在 `Send` 返回后按这个值退还；失败返回时为 0。
+- 申请量：Chat 转出按实际，1 MiB 长文本约为请求体的 1.01 倍，base64 文件约 3 倍，2 万个小消息约 22 倍；Messages、Responses 转出仍是每字节 12、每个对象 3072、每个成员 768 的预留。
+
+发布与失败：
+
+- 没有存储或对外接口变化，新旧节点可以同时运行；同一请求在两种节点上写出的字节相同。旧节点在 Chat 转出时仍按形状上界申请，会比新节点更早地 503；滚动发布期间客户端可能遇到两种拒绝频率，这是唯一的可观察差异，不需要迁移或回滚脚本。
+- `ErrMemory` 只阻止**当前待发起的尝试**：它发生在这一次上游调用之前，所以这一次没有重试、没有供应商费用、没有迟到的回调。准入可能已经用 `ReserveMany` 写入了数据库资金预留；执行器仍会进入 `conclude`，已有尝试照常结算，预留按既有规则释放。若进程在准备期间退出，数据库预留不会随进程消失，由既有的过期预留清理机制处理。
+- 进程内的内存预算与数据库资金预留是两件事：前者限制这次准备和发送的峰值，后者保证账户余额；`ErrMemory` 不写账本，也不把这次 503 当成一次上游调用。
+- 钱：这条路径不写预留、账本或调用记录。被 503 拒绝的请求不计模型用量，也不产生供应商费用；成功的请求按原来的结算路径计费，内存预算不是资金。
+
+测试：`TestPrepareAllocatesOnlyWhatItDrew` 对每一对源、目标格式和最坏形状，在子进程里测准备分配的总字节数不超过申请总量加 32 KiB，再把预算随机压到峰值以下，核对每次都是 `ErrMemory` 且拒绝前的分配不超过已申请的（竞态构建里只核对拒绝）；`TestPrepareLargeRequestReservesAboutItsBody` 核对 Chat 转出的大请求申请量不超过请求体的五倍；`TestPrepareConcurrentLargeRequests` 核对并发准备时失败方不占预算、成功方只留输出容量；`TestMemoryErrorKeepsItsType` 核对旧版函数调用和 thinking 预算处耗尽预算仍是 `ErrMemory`；gateway 的 `TestMemoryIsAskedForBeforePrepareAllocates`、`TestMemoryHoldsARequestByItsCapacityWhileItIsSent`、`TestMemoryHoldsConcurrentRequestsToTheBudget` 核对预算的申请、持有和退还。
+
 ### 用量与费用
 
 - **每次调用都返回用量和费用**：输入、输出、缓存读、缓存写、推理 token 和费用，与 OpenRouter 的用量统计对齐（OpenRouter《Usage Accounting》，2026-10）。Chat/Responses 的用量块另带 `prompt_tokens_details` 的音频/视频、`completion_tokens_details` 的音频/接受/拒绝预测 token、`server_tool_use_details` 和 `is_byok:false`；`usage.cost_details.server_tool_cost` 只写按次工具的用户售价，供应商成本不写。用量块里的 `cache_discount` 是缓存读相对输入价省下的用户售价，只在为正时出现。`web` 插件的一次搜索和 `file-parser` 的每次解析都按同一个 `web_search` 按次项收费，计入 `server_tool_use.web_search_requests` 和 `cost_details.server_tool_cost`，上游自己的搜索次数另算；OpenAI 的 `file_search` 和代码解释器没有各自的计数字段，只计入 `server_tool_use_details.tool_calls_requested` / `tool_calls_executed` 的总数，费用同样进 `server_tool_cost`，次数由回复的调用项计数（见[计费的「用量来源与暂估」](billing.md#用量来源与暂估)）。

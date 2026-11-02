@@ -3,16 +3,15 @@ package protocol
 import (
 	"cmp"
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go: an ID is decoded only to match it
-	"strconv"
+	"errors"
 
 	"axiom/internal/catalog"
-	"axiom/internal/platform/jsonx"
 )
 
 // toResponses writes a Chat request as an OpenAI Responses request (OpenAI《Create a model response》, read
 // 2026-10-14; README.md「跨格式转换」). Strings are copied as written. The upstream stores nothing, as for a Responses
-// client (README.md「同格式改写」).
-func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
+// client (README.md「同格式改写」). The body is written into one writer, as toMessages's is.
+func toResponses(c *canon, t Target, w Rewrites, b *budget, body []byte) ([]byte, error) {
 	if !isNull(c.Stop) {
 		return nil, &NotSupported{Reason: "stop has no Responses counterpart"}
 	}
@@ -20,343 +19,399 @@ func toResponses(c *canon, t Target, w Rewrites) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := appendQuoted(append([]byte(nil), `{"model":`...), t.Model)
-	out, err = input(append(out, `,"input":[`...), c, t.CacheBreakpoints == catalog.ClaimYes)
-	if err != nil {
+	o := newWriter(len(body)+4096, b)
+	if o.err != nil {
+		return nil, o.err
+	}
+	o.str(`{"model":`).quoted(t.Model).str(`,"input":[`)
+	if err := input(o, c, t.CacheBreakpoints == catalog.ClaimYes); err != nil {
 		return nil, err
 	}
-	out = append(out, `],"store":false`...)
+	o.str(`],"store":false`)
 	if t.EncryptedReasoning == catalog.ClaimYes {
-		out = append(out, `,"include":["`+encrypted+`"]`...)
+		o.str(`,"include":["` + encrypted + `"]`)
 	}
-	for _, write := range []func([]byte, *canon) ([]byte, error){responsesTools, responsesChoice, responsesText} {
-		if out, err = write(out, c); err != nil {
+	for _, write := range []func(*writer, *canon) error{responsesTools, responsesChoice, responsesText} {
+		if err := write(o, c); err != nil {
 			return nil, err
 		}
 	}
-	out = responsesSettings(out, c, t, effort)
+	responsesSettings(o, c, t, effort)
 	for _, id := range []struct {
 		name  string
 		value *string
 	}{{"user", c.User}, {"safety_identifier", c.SafetyIdentifier}, {"prompt_cache_key", c.PromptCacheKey}} {
 		if id.value != nil {
-			out = appendQuoted(append(append(append(out, ',', '"'), id.name...), `":`...), w.Identity(*id.value))
+			o.str(`,"`).str(id.name).str(`":`).quoted(w.Identity(*id.value))
 		}
 	}
-	return append(out, '}'), nil
+	o.byte('}')
+	return o.buf, o.err
 }
 
 // input writes the messages as input items; breakpoints says whether the model takes OpenAI's cache breakpoints.
-func input(out []byte, c *canon, breakpoints bool) ([]byte, error) {
-	var err error
+func input(o *writer, c *canon, breakpoints bool) error {
 	for i, msg := range c.Messages {
 		if i > 0 {
-			out = append(out, ',')
+			o.byte(',')
 		}
-		if out, err = inputItems(out, msg, breakpoints); err != nil {
-			return nil, err
+		if err := inputItems(o, msg, breakpoints); err != nil {
+			return err
+		}
+		if o.err != nil {
+			return o.err
 		}
 	}
-	return out, nil
+	return nil
 }
 
 // responsesSettings writes the cap, sampling, reasoning, streaming and service tier. A request that sets no cap gets
 // t.MaxOutput, if there is one.
-func responsesSettings(out []byte, c *canon, t Target, effort string) []byte {
+func responsesSettings(o *writer, c *canon, t Target, effort string) {
 	if n := cmp.Or(c.maxOutput(), t.MaxOutput); n > 0 {
-		out = strconv.AppendInt(append(out, `,"max_output_tokens":`...), n, 10)
+		o.str(`,"max_output_tokens":`).int(n)
 	}
 	for _, member := range []struct {
 		name  string
 		value []byte
 	}{{"temperature", c.Temperature}, {"top_p", c.TopP}} {
 		if !isNull(member.value) {
-			out = append(append(append(append(out, ',', '"'), member.name...), `":`...), member.value...)
+			o.str(`,"`).str(member.name).str(`":`).raw(member.value)
 		}
 	}
-	out = writeResponsesReasoning(out, c, effort)
+	writeResponsesReasoning(o, c, effort)
 	if t.Streams { // the gateway reads every answer as a stream, and routing sends a conversion only to an endpoint that streams
-		out = append(out, `,"stream":true`...)
+		o.str(`,"stream":true`)
 	}
 	if c.ServiceTier != nil {
-		out = appendQuoted(append(out, `,"service_tier":`...), *c.ServiceTier)
+		o.str(`,"service_tier":`).quoted(*c.ServiceTier)
 	}
-	return out
 }
 
-func writeResponsesReasoning(out []byte, c *canon, effort string) []byte {
+func writeResponsesReasoning(o *writer, c *canon, effort string) {
 	if effort != "" {
-		out = appendQuoted(append(out, `,"reasoning":{"effort":`...), effort)
+		o.str(`,"reasoning":{"effort":`).quoted(effort)
 		if effort != "none" && (c.Reasoning == nil || c.Reasoning.Exclude == nil || !*c.Reasoning.Exclude) {
-			out = append(out, `,"summary":"auto"`...) // so that the client sees the reasoning, as Chat clients do
+			o.str(`,"summary":"auto"`) // so that the client sees the reasoning, as Chat clients do
 		}
-		out = append(out, '}')
+		o.byte('}')
 	}
 	if c.effort() == "" && c.Reasoning != nil && c.Reasoning.Exclude != nil && !*c.Reasoning.Exclude {
-		out = append(out, `,"reasoning":{"summary":"auto"}`...)
+		o.str(`,"reasoning":{"summary":"auto"}`)
 	}
-	return out
 }
 
 // inputItems writes one message as input items: system and developer messages in place, the reasoning an assistant
 // message hands back first, then its text and function calls.
-func inputItems(out []byte, msg canonMessage, breakpoints bool) ([]byte, error) {
+func inputItems(o *writer, msg canonMessage, breakpoints bool) error {
 	switch msg.Role {
 	case "system", "developer", "user":
-		out = append(append(append(out, `{"type":"message","role":"`...), msg.Role...), `","content":[`...)
-		out, err := inputParts(out, msg, breakpoints)
-		if err != nil {
-			return nil, err
+		o.str(`{"type":"message","role":"`).str(msg.Role).str(`","content":[`)
+		if err := inputParts(o, msg, breakpoints); err != nil {
+			return err
 		}
-		return append(out, "]}"...), nil
+		o.str("]}")
+		return nil
 	case "tool":
-		out = appendQuoted(append(out, `{"type":"function_call_output","call_id":`...), *msg.ToolCallID)
-		out = append(out, `,"output":`...)
+		o.str(`{"type":"function_call_output","call_id":`).quoted(*msg.ToolCallID).str(`,"output":`)
 		if msg.Content.Kind() == '"' {
-			return append(append(out, msg.Content...), '}'), nil
+			o.raw(msg.Content).byte('}')
+			return nil
 		}
-		parts, err := inputParts(nil, msg, breakpoints)
-		if err != nil {
-			return nil, err
+		o.byte('[')
+		if err := inputParts(o, msg, breakpoints); err != nil {
+			return err
 		}
-		return append(append(append(out, '['), parts...), "]}"...), nil
+		o.str("]}")
+		return nil
 	case "assistant":
-		return assistantItems(out, msg, breakpoints)
+		return assistantItems(o, msg, breakpoints)
 	}
-	return nil, &NotSupported{Reason: "role " + msg.Role + " has no Responses counterpart"}
+	return &NotSupported{Reason: "role " + msg.Role + " has no Responses counterpart"}
 }
 
 // inputParts writes a message's content parts as input content, comma-separated.
-func inputParts(out []byte, msg canonMessage, breakpoints bool) ([]byte, error) {
-	var err error
+func inputParts(o *writer, msg canonMessage, breakpoints bool) error {
 	for i, p := range msg.Parts {
 		if i > 0 {
-			out = append(out, ',')
+			o.byte(',')
 		}
-		if out, err = inputPart(out, p, breakpoints); err != nil {
-			return nil, err
+		if err := inputPart(o, p, breakpoints); err != nil {
+			return err
+		}
+		if o.err != nil {
+			return o.err
 		}
 	}
-	return out, nil
+	return nil
 }
 
-// appendBreakpoint appends the cache breakpoint a text part's cache_control becomes on a model that takes them. Its TTL
+// writeBreakpoint writes the cache breakpoint a text part's cache_control becomes on a model that takes them. Its TTL
 // and every other marker are left out, as OpenRouter does (docs/domains/gateway.md「转发规则」).
-func appendBreakpoint(out []byte, p canonPart, breakpoints bool) []byte {
+func writeBreakpoint(o *writer, p canonPart, breakpoints bool) {
 	if breakpoints && !isNull(p.CacheControl) {
-		out = append(out, `,"prompt_cache_breakpoint":{"mode":"explicit"}`...)
+		o.str(`,"prompt_cache_breakpoint":{"mode":"explicit"}`)
 	}
-	return out
 }
 
 // inputPart writes one part.
-func inputPart(out []byte, p canonPart, breakpoints bool) ([]byte, error) {
+func inputPart(o *writer, p canonPart, breakpoints bool) error {
 	switch {
 	case p.Type == "text":
-		out = append(append(out, responsesTextHead...), p.Text...)
-		return append(appendBreakpoint(out, p, breakpoints), '}'), nil
+		o.str(responsesTextHead).raw(p.Text)
+		writeBreakpoint(o, p, breakpoints)
+		o.byte('}')
+		return nil
 	case p.Type == "image_url" && p.ImageURL != nil:
-		out = appendQuoted(append(out, responsesImageHead...), p.ImageURL.URL)
+		o.str(responsesImageHead).quoted(p.ImageURL.URL)
 		if p.ImageURL.Detail != "" {
-			out = appendQuoted(append(out, `,"detail":`...), p.ImageURL.Detail)
+			o.str(`,"detail":`).quoted(p.ImageURL.Detail)
 		}
-		return append(out, '}'), nil
+		o.byte('}')
+		return nil
 	case p.Type == "file" && p.File != nil:
-		if out, ok, err := inputFilePart(out, p.File.FileData, p.File.FileID, p.File.Filename); ok || err != nil {
-			return out, err
+		if ok, err := inputFilePart(o, p.File.FileData, p.File.FileID, p.File.Filename); ok || err != nil {
+			return err
 		}
 	}
-	return nil, &NotSupported{Reason: "a " + p.Type + " part has no Responses counterpart"}
+	return &NotSupported{Reason: "a " + p.Type + " part has no Responses counterpart"}
 }
 
 // inputFilePart writes a file part: the data inline, or the id the upstream issued sent back as it is, never as content
 // and never to another provider (routing keeps it to the client's pin). It reports false when the part has neither.
-func inputFilePart(out []byte, data, id *string, filename jsontext.Value) ([]byte, bool, error) {
+func inputFilePart(o *writer, data, id *string, filename jsontext.Value) (bool, error) {
 	switch {
 	case data != nil && id != nil:
-		return nil, false, &NotSupported{Reason: "a file part carries both data and an id"}
+		return false, &NotSupported{Reason: "a file part carries both data and an id"}
 	case data != nil:
-		out = appendQuoted(append(out, responsesFileHead...), *data)
+		o.str(responsesFileHead).quoted(*data)
 	case id != nil:
-		out = appendQuoted(append(out, responsesFileIDHead...), *id)
+		o.str(responsesFileIDHead).quoted(*id)
 	default:
-		return nil, false, nil
+		return false, nil
 	}
 	if !isNull(filename) {
-		out = append(append(out, `,"filename":`...), filename...)
+		o.str(`,"filename":`).raw(filename)
 	}
-	return append(out, '}'), true, nil
+	o.byte('}')
+	return true, nil
 }
 
 // assistantItems writes an assistant message: each reasoning item it hands back with encrypted content, which is
 // all the upstream can use when it stores nothing, then its text and function calls. An empty turn still takes its
 // place in the conversation.
-func assistantItems(out []byte, msg canonMessage, breakpoints bool) ([]byte, error) {
-	start := len(out)
-	for _, item := range reasoningItems(msg.ReasoningDetails) {
-		out = append(commaAfter(out, start), item...)
+func assistantItems(o *writer, msg canonMessage, breakpoints bool) error {
+	start := len(o.buf)
+	if err := reasoningItems(o, msg.ReasoningDetails); err != nil {
+		return err
 	}
-	text, err := outputText(msg, breakpoints)
-	if err != nil {
-		return nil, err
+	mark := len(o.buf)
+	o.commaAfter(start).str(`{"type":"message","role":"assistant","content":[`)
+	at := len(o.buf)
+	if err := outputText(o, msg, breakpoints); err != nil {
+		return err
 	}
-	if len(text) == 0 && len(msg.ToolCalls) == 0 && len(out) == start {
-		text = []byte(`{"type":"output_text","text":""}`)
-	}
-	if len(text) > 0 {
-		out = append(commaAfter(out, start), `{"type":"message","role":"assistant","content":[`...)
-		out = append(append(out, text...), "]}"...)
+	switch {
+	case len(o.buf) > at:
+		o.str("]}")
+	case len(msg.ToolCalls) == 0 && mark == start:
+		o.str(`{"type":"output_text","text":""}]}`)
+	default:
+		o.cut(mark)
 	}
 	for _, call := range msg.ToolCalls {
-		out = appendQuoted(append(commaAfter(out, start), `{"type":"function_call","call_id":`...), call.ID)
-		out = append(append(append(append(out, `,"name":`...), call.Function.Name...), `,"arguments":`...), call.Function.Arguments...)
-		out = append(out, '}')
+		o.commaAfter(start).str(`{"type":"function_call","call_id":`).quoted(call.ID)
+		o.str(`,"name":`).raw(call.Function.Name).str(`,"arguments":`).raw(call.Function.Arguments).byte('}')
 	}
-	return out, nil
+	return o.err
 }
 
-// outputText is an assistant message's text as output_text parts, comma-separated; empty text writes nothing.
-func outputText(msg canonMessage, breakpoints bool) ([]byte, error) {
-	var text []byte
+// outputText writes an assistant message's text as output_text parts, comma-separated; empty text writes nothing.
+func outputText(o *writer, msg canonMessage, breakpoints bool) error {
+	start := len(o.buf)
 	for _, p := range msg.Parts {
 		switch {
 		case p.Type == "refusal":
-			text = append(append(append(commaAfter(text, 0), responsesRefusalHead...), p.Text...), '}')
+			o.commaAfter(start).str(responsesRefusalHead).raw(p.Text).byte('}')
 		case p.Type != "text":
-			return nil, &NotSupported{Reason: "a " + p.Type + " part in an assistant message"}
+			return &NotSupported{Reason: "a " + p.Type + " part in an assistant message"}
 		case string(p.Text) == `""`:
 		default:
-			text = append(append(commaAfter(text, 0), `{"type":"output_text","text":`...), p.Text...)
-			text = append(appendBreakpoint(text, p, breakpoints), '}')
+			o.commaAfter(start).str(`{"type":"output_text","text":`).raw(p.Text)
+			writeBreakpoint(o, p, breakpoints)
+			o.byte('}')
 		}
 	}
-	return text, nil
+	return nil
 }
 
-// reasoningItem gathers an item's summaries and encrypted content.
-type reasoningItem struct{ id, summary, encrypted []byte }
+// reasoningItems writes the reasoning items of OpenRouter's openai-responses-v1 entries, gathered by item ID in their
+// order, comma-separated. An item without encrypted content is left out: the upstream stores nothing to look its ID
+// up in. Each item's summary is gathered in a writer of its own, drawn from the same budget.
+func reasoningItems(o *writer, details []canonReasoningDetail) error {
+	gathered, err := gatherItems(details, o.b)
+	if err != nil {
+		return err
+	}
+	start := len(o.buf)
+	for _, item := range gathered {
+		if item.encrypted != nil {
+			o.commaAfter(start).str(`{"type":"reasoning","id":`).raw(item.id).str(`,"summary":[`).raw(item.summary.buf)
+			o.str(`],"encrypted_content":`).raw(item.encrypted).byte('}')
+		}
+		o.b.give(rounded(int64(cap(item.summary.buf))))
+	}
+	return o.err
+}
 
-// reasoningItems are the reasoning items of OpenRouter's openai-responses-v1 entries, gathered by item ID in their
-// order. An item without encrypted content is left out: the upstream stores nothing to look its ID up in.
-func reasoningItems(details []canonReasoningDetail) [][]byte {
-	var gathered []*reasoningItem
-	at := map[string]int{} // by the ID decoded, so that two ways of escaping it are one item
+// gatherItems gathers the entries of each item, by the ID decoded, so that two ways of escaping it are one item.
+func gatherItems(details []canonReasoningDetail, b *budget) ([]reasoningItem, error) {
+	var gathered []reasoningItem
+	var at map[string]int
 	for _, d := range details {
 		if d.Format != "openai-responses-v1" || isNull(d.ID) {
 			continue
 		}
-		key, err := jsontext.AppendUnquote(nil, d.ID)
+		i, err := itemIndex(&at, &gathered, d.ID, b)
 		if err != nil {
-			key = d.ID // not a string: matched as written
+			return nil, err
 		}
-		i, seen := at[string(key)]
-		if !seen {
-			i = len(gathered)
-			at[string(key)] = i
-			gathered = append(gathered, &reasoningItem{id: d.ID})
-		}
-		gathered[i].add(d)
-	}
-	var items [][]byte
-	for _, item := range gathered {
-		if item.encrypted != nil {
-			b := append(append(append([]byte(`{"type":"reasoning","id":`), item.id...), `,"summary":[`...), item.summary...)
-			items = append(items, append(append(append(b, `],"encrypted_content":`...), item.encrypted...), '}'))
+		item := &gathered[i]
+		switch {
+		case d.Type == "reasoning.summary" && !isNull(d.Summary):
+			item.summary.commaAfter(0).str(`{"type":"summary_text","text":`).raw(d.Summary).byte('}')
+			if item.summary.err != nil {
+				return nil, item.summary.err
+			}
+		case d.Type == "reasoning.encrypted" && !isNull(d.Data):
+			item.encrypted = d.Data
 		}
 	}
-	return items
+	return gathered, nil
 }
 
-func (item *reasoningItem) add(d canonReasoningDetail) {
-	switch {
-	case d.Type == "reasoning.summary" && !isNull(d.Summary):
-		item.summary = append(commaAfter(item.summary, 0), `{"type":"summary_text","text":`...)
-		item.summary = append(append(item.summary, d.Summary...), '}')
-	case d.Type == "reasoning.encrypted" && !isNull(d.Data):
-		item.encrypted = d.Data
+// itemIndex is where the item of id is in gathered, adding it when it is new.
+func itemIndex(at *map[string]int, gathered *[]reasoningItem, id jsontext.Value, b *budget) (int, error) {
+	if err := b.draw(rounded(int64(len(id)))); err != nil {
+		return 0, err
 	}
+	defer b.give(rounded(int64(len(id)))) // the decoded key is kept by the map, its scratch is not
+	key, err := jsontext.AppendUnquote(make([]byte, 0, len(id)), id)
+	if err != nil {
+		key = id // not a string: matched as written
+	}
+	if i, seen := (*at)[string(key)]; seen {
+		return i, nil
+	}
+	if *at == nil {
+		if err := b.draw(mapMemory); err != nil {
+			return 0, err
+		}
+		*at = map[string]int{}
+	}
+	if err := b.draw(mapEntryMemory + rounded(int64(len(key)))); err != nil {
+		return 0, err
+	}
+	i := len(*gathered)
+	(*at)[string(key)] = i
+	if *gathered, err = growWithin(*gathered, b); err != nil {
+		return 0, err
+	}
+	(*gathered)[i] = reasoningItem{id: id, summary: writer{b: b}}
+	return i, nil
+}
+
+// reasoningItem gathers an item's summaries and encrypted content.
+type reasoningItem struct {
+	id, encrypted jsontext.Value
+	summary       writer
 }
 
 // responsesTools writes the function tools. A tool's strict is written even when Chat leaves it out, as false, which
 // Chat's omission means: Responses would take its omission as true and rewrite the schema (OpenAI《Function calling》
 // "Strict mode", read 2026-10-14).
-func responsesTools(out []byte, c *canon) ([]byte, error) {
+func responsesTools(o *writer, c *canon) error {
 	if len(c.Tools) == 0 {
-		return out, nil
+		return nil
 	}
-	out = append(out, `,"tools":[`...)
+	o.str(`,"tools":[`)
 	for i, tool := range c.Tools {
 		if tool.Type != "function" {
-			return nil, &NotSupported{Reason: "a " + tool.Type + " tool has no Responses counterpart"}
+			return &NotSupported{Reason: "a " + tool.Type + " tool has no Responses counterpart"}
 		}
 		if i > 0 {
-			out = append(out, ',')
+			o.byte(',')
 		}
 		f := tool.Function
-		out = append(append(out, `{"type":"function","name":`...), f.Name...)
+		o.str(`{"type":"function","name":`).raw(f.Name)
 		if !isNull(f.Description) {
-			out = append(append(out, `,"description":`...), f.Description...)
+			o.str(`,"description":`).raw(f.Description)
 		}
 		if !isNull(f.Parameters) {
-			out = append(append(out, `,"parameters":`...), f.Parameters...)
+			o.str(`,"parameters":`).raw(f.Parameters)
 		}
-		out = strconv.AppendBool(append(out, `,"strict":`...), f.Strict != nil && *f.Strict)
-		out = append(out, '}')
+		o.str(`,"strict":`).bool(f.Strict != nil && *f.Strict).byte('}')
 	}
-	return append(out, ']'), nil
+	o.byte(']')
+	return o.err
 }
 
 // responsesChoice writes tool_choice and parallel_tool_calls.
-func responsesChoice(out []byte, c *canon) ([]byte, error) {
+func responsesChoice(o *writer, c *canon) error {
 	switch v := c.ToolChoice; {
 	case isNull(v):
 	case v.Kind() == '"':
-		out = append(append(out, `,"tool_choice":`...), v...)
+		o.str(`,"tool_choice":`).raw(v)
 	default:
 		var named struct {
 			Function struct {
 				Name *string `json:"name"`
 			} `json:"function"`
 		}
-		if err := jsonx.Unmarshal(v, &named); err != nil || named.Function.Name == nil {
-			return nil, &NotSupported{Reason: "a tool_choice Responses cannot express"}
+		if err := unmarshalWithin(v, &named, o.b); err != nil || named.Function.Name == nil {
+			if errors.Is(err, ErrMemory) {
+				return err
+			}
+			return &NotSupported{Reason: "a tool_choice Responses cannot express"}
 		}
-		out = appendQuoted(append(out, `,"tool_choice":{"type":"function","name":`...), *named.Function.Name)
-		out = append(out, '}')
+		o.str(`,"tool_choice":{"type":"function","name":`).quoted(*named.Function.Name).byte('}')
 	}
 	if c.ParallelToolCalls != nil {
-		out = strconv.AppendBool(append(out, `,"parallel_tool_calls":`...), *c.ParallelToolCalls)
+		o.str(`,"parallel_tool_calls":`).bool(*c.ParallelToolCalls)
 	}
-	return out, nil
+	return o.err
 }
 
 // responsesText writes the reply's format and verbosity as text.
-func responsesText(out []byte, c *canon) ([]byte, error) {
-	var members []byte
+func responsesText(o *writer, c *canon) error {
+	mark := len(o.buf)
+	o.str(`,"text":{`)
+	first := len(o.buf)
 	if f := c.ResponseFormat; f != nil && f.Type != "text" {
 		switch {
 		case f.Type == "json_object":
-			members = append(members, `"format":{"type":"json_object"}`...)
+			o.str(`"format":{"type":"json_object"}`)
 		case f.Type == "json_schema" && f.JSONSchema != nil:
 			s := f.JSONSchema
-			members = append(append(members, `"format":{"type":"json_schema","name":`...), s.Name...)
-			members = append(append(members, `,"schema":`...), s.Schema...)
+			o.str(`"format":{"type":"json_schema","name":`).raw(s.Name).str(`,"schema":`).raw(s.Schema)
 			if !isNull(s.Description) {
-				members = append(append(members, `,"description":`...), s.Description...)
+				o.str(`,"description":`).raw(s.Description)
 			}
 			if s.Strict != nil {
-				members = strconv.AppendBool(append(members, `,"strict":`...), *s.Strict)
+				o.str(`,"strict":`).bool(*s.Strict)
 			}
-			members = append(members, '}')
+			o.byte('}')
 		default:
-			return nil, &NotSupported{Reason: "response_format " + f.Type + " has no Responses counterpart"}
+			return &NotSupported{Reason: "response_format " + f.Type + " has no Responses counterpart"}
 		}
 	}
 	if !isNull(c.Verbosity) {
-		members = append(append(commaAfter(members, 0), `"verbosity":`...), c.Verbosity...)
+		o.commaAfter(first).str(`"verbosity":`).raw(c.Verbosity)
 	}
-	if len(members) == 0 {
-		return out, nil
+	if len(o.buf) == first {
+		o.cut(mark)
+		return o.err
 	}
-	return append(append(append(out, `,"text":{`...), members...), '}'), nil
+	o.byte('}')
+	return o.err
 }

@@ -87,12 +87,12 @@ func grow[T any](a *aggBase, b []T, n, factor int) ([]T, error) {
 }
 
 // begin starts reading v, a value of the event's data or the data itself.
-func (a *aggBase) begin(v []byte) {
+func (a *aggBase) begin(v []byte, opts ...jsontext.Options) {
 	a.data, a.src = v, *bytes.NewBuffer(v)
 	if a.dec == nil {
-		a.dec = jsontext.NewDecoder(&a.src)
+		a.dec = jsontext.NewDecoder(&a.src, opts...)
 	} else {
-		a.dec.Reset(&a.src)
+		a.dec.Reset(&a.src, opts...) // Reset forgets the options it was made with
 	}
 }
 

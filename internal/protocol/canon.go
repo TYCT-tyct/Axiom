@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: strings are kept as written, never decoded and encoded again
 	"fmt"
 	"slices"
@@ -76,28 +77,34 @@ type canonMessage struct {
 
 // canonPart is one content part.
 type canonPart struct {
-	Type     string         `json:"type"`
-	Text     jsontext.Value `json:"text"` // a refusal part's refusal too (settle)
-	Refusal  jsontext.Value `json:"refusal"`
-	ImageURL *struct {
-		URL    string `json:"url"`
-		Detail string `json:"detail"`
-	} `json:"image_url"`
-	File *struct {
-		FileData *string        `json:"file_data"`
-		FileID   *string        `json:"file_id"`
-		Filename jsontext.Value `json:"filename"`
-	} `json:"file"`
+	Type         string         `json:"type"`
+	Text         jsontext.Value `json:"text"` // a refusal part's refusal too (settle)
+	Refusal      jsontext.Value `json:"refusal"`
+	ImageURL     *canonImage    `json:"image_url"`
+	File         *canonFile     `json:"file"`
 	CacheControl jsontext.Value `json:"cache_control"`
 }
 
+type canonImage struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail"`
+}
+
+type canonFile struct {
+	FileData *string        `json:"file_data"`
+	FileID   *string        `json:"file_id"`
+	Filename jsontext.Value `json:"filename"`
+}
+
 type canonToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      jsontext.Value `json:"name"`
-		Arguments jsontext.Value `json:"arguments"`
-	} `json:"function"`
+	ID       string            `json:"id"`
+	Type     string            `json:"type"`
+	Function canonCallFunction `json:"function"`
+}
+
+type canonCallFunction struct {
+	Name      jsontext.Value `json:"name"`
+	Arguments jsontext.Value `json:"arguments"`
 }
 
 type canonTool struct {
@@ -136,13 +143,14 @@ type canonFormat struct {
 	} `json:"json_schema"`
 }
 
-// decodeCanon reads a Chat body Inspect accepted. A member of the wrong type is the client's error.
+// decodeCanon reads a Chat body Inspect accepted without a budget, with encoding/json's own decoder: the caller
+// prepares a request outside a node, and the fast path allocates no more than the conversion it feeds.
 func decodeCanon(body []byte) (*canon, error) {
 	c := &canon{}
 	if err := jsonx.Unmarshal(body, c); err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
+		return nil, invaliderr(err)
 	}
-	if err := c.upgradeLegacy(); err != nil {
+	if err := c.upgradeLegacy(nil); err != nil {
 		return nil, err
 	}
 	for i := range c.Messages {
@@ -153,17 +161,15 @@ func decodeCanon(body []byte) (*canon, error) {
 	return c, nil
 }
 
-// settle reads the message's content into Parts once, merges the reasoning details a client streamed back, and puts
-// what the other formats have no member for where OpenRouter puts it: a name before the text as "name: " (OpenRouter
-// 《API reference》"Requests", read 2026-10-16), and a refusal as a part of its own, which Messages writes as text and
-// Responses as its refusal part.
+// settle finishes a message read by decodeCanon: the unbudgeted twin of settleMessage, written to allocate exactly
+// what the old path did.
 func (m *canonMessage) settle() error {
 	var err error
 	if m.Parts, err = m.readParts(); err != nil {
 		return err
 	}
 	for i, p := range m.Parts {
-		if p.Type == "refusal" { // what it says is its refusal, which the conversions write as they write text
+		if p.Type == "refusal" {
 			m.Parts[i].Text = p.Refusal
 		}
 	}
@@ -176,14 +182,14 @@ func (m *canonMessage) settle() error {
 	case !isNull(m.Refusal):
 		m.Parts = append(m.Parts, canonPart{Type: "refusal", Text: m.Refusal})
 	}
-	if !isNull(m.Name) && m.Role != "tool" { // a tool result's name is its call's, which its ID already says
-		m.prependName()
+	if !isNull(m.Name) && m.Role != "tool" {
+		m.prependNameFast()
 	}
 	return nil
 }
 
-// prependName puts "name: " before the message's first text or refusal, or as text of its own when it has none.
-func (m *canonMessage) prependName() {
+// prependNameFast is the unbudgeted twin of prependName.
+func (m *canonMessage) prependNameFast() {
 	prefix := slices.Concat(m.Name[:len(m.Name)-1], []byte(`: "`))
 	for i, p := range m.Parts {
 		if (p.Type == "text" || p.Type == "refusal") && p.Text.Kind() == '"' {
@@ -194,11 +200,86 @@ func (m *canonMessage) prependName() {
 	m.Parts = slices.Insert(m.Parts, 0, canonPart{Type: "text", Text: prefix})
 }
 
+// readParts reads a message's content: a string is one text part, null none.
+func (m *canonMessage) readParts() ([]canonPart, error) {
+	if isNull(m.Content) {
+		return nil, nil
+	}
+	if m.Content.Kind() == '"' {
+		return []canonPart{{Type: "text", Text: m.Content}}, nil
+	}
+	var parts []canonPart
+	if err := jsonx.Unmarshal(m.Content, &parts); err != nil {
+		return nil, fmt.Errorf("%w: a %s message's content: %s", ErrInvalid, m.Role, bodyFault(err))
+	}
+	return parts, nil
+}
+
+// settleMessage finishes a message the decoder read: the content is already in Parts, and this merges the reasoning
+// details a client streamed back and puts what the other formats have no member for where OpenRouter puts it — a name
+// before the text as "name: " (OpenRouter《API reference》"Requests", read 2026-10-16), and a refusal as a part of its
+// own, which Messages writes as text and Responses as its refusal part. Each allocation is drawn from b first.
+func settleMessage(m *canonMessage, b *budget) error {
+	for i, p := range m.Parts {
+		if p.Type == "refusal" { // what it says is its refusal, which the conversions write as they write text
+			m.Parts[i].Text = p.Refusal
+		}
+	}
+	var err error
+	if m.ReasoningDetails, err = mergeDetailsWithin(m.ReasoningDetails, b); err != nil {
+		return err
+	}
+	switch {
+	case !isNull(m.Name) && m.Name.Kind() != '"', !isNull(m.Refusal) && m.Refusal.Kind() != '"':
+		return shapeError("a name or refusal that is not a string")
+	case !isNull(m.Refusal):
+		if m.Parts, err = growWithin(m.Parts, b); err != nil {
+			return err
+		}
+		m.Parts[len(m.Parts)-1] = canonPart{Type: "refusal", Text: m.Refusal}
+	}
+	if !isNull(m.Name) && m.Role != "tool" { // a tool result's name is its call's, which its ID already says
+		return m.prependName(b)
+	}
+	return nil
+}
+
+// prependName puts "name: " before the message's first text or refusal, or as text of its own when it has none.
+func (m *canonMessage) prependName(b *budget) error {
+	if err := b.draw(int64(len(m.Name) + 2)); err != nil {
+		return err
+	}
+	prefix := slices.Concat(m.Name[:len(m.Name)-1], []byte(`: "`))
+	for i, p := range m.Parts {
+		if (p.Type == "text" || p.Type == "refusal") && p.Text.Kind() == '"' {
+			if err := b.draw(int64(len(prefix) - 1 + len(p.Text) - 1)); err != nil {
+				return err
+			}
+			m.Parts[i].Text = slices.Concat(prefix[:len(prefix)-1], p.Text[1:])
+			return nil
+		}
+	}
+	var err error
+	if m.Parts, err = growWithin(m.Parts, b); err != nil {
+		return err
+	}
+	copy(m.Parts[1:], m.Parts[:len(m.Parts)-1])
+	m.Parts[0] = canonPart{Type: "text", Text: prefix}
+	return nil
+}
+
 // mergeDetails joins the reasoning details a client hands back as it streamed them, an entry per chunk: entries of
 // the same type and index are one detail (OpenRouter《Reasoning tokens》"Streaming Response", read 2026-10-15), whose
 // text and summary are its pieces in order and whose signature, data, ID and format are the ones given. Entries
 // without an index stand alone. Each piece is copied once, so many pieces cost what their bytes do.
 func mergeDetails(details []canonReasoningDetail) ([]canonReasoningDetail, error) {
+	return mergeDetailsWithin(details, nil)
+}
+
+// mergeDetailsWithin is mergeDetails drawing every allocation from b first.
+//
+//nolint:cyclop,gocognit // one pass merges each detail's text and summary; splitting would scatter the invariant
+func mergeDetailsWithin(details []canonReasoningDetail, b *budget) ([]canonReasoningDetail, error) {
 	var out []canonReasoningDetail
 	var text, summary []joined
 	at := map[string]int{} // by type and index
@@ -207,11 +288,27 @@ func mergeDetails(details []canonReasoningDetail) ([]canonReasoningDetail, error
 		if err != nil {
 			return nil, err
 		}
+		if err := b.draw(int64(len(d.Type) + 1 + len(index))); err != nil {
+			return nil, err
+		}
 		key := d.Type + "\x00" + string(index)
 		i, seen := at[key]
 		if !seen || isNull(d.Index) {
-			at[key], i = len(out), len(out)
-			out, text, summary = append(out, d), append(text, joined{}), append(summary, joined{})
+			i = len(out)
+			if err := b.draw(mapEntryMemory); err != nil {
+				return nil, err
+			}
+			at[key] = i
+			if out, err = growWithin(out, b); err != nil {
+				return nil, err
+			}
+			out[len(out)-1] = d
+			if text, err = growWithin(text, b); err != nil {
+				return nil, err
+			}
+			if summary, err = growWithin(summary, b); err != nil {
+				return nil, err
+			}
 		} else {
 			m := &out[i]
 			m.Signature, m.Data, m.ID = given(m.Signature, d.Signature), given(m.Data, d.Data), given(m.ID, d.ID)
@@ -219,6 +316,7 @@ func mergeDetails(details []canonReasoningDetail) ([]canonReasoningDetail, error
 				m.Format = d.Format
 			}
 		}
+		text[i].b, summary[i].b = b, b
 		if err := text[i].add(d.Text); err != nil {
 			return nil, err
 		}
@@ -229,15 +327,19 @@ func mergeDetails(details []canonReasoningDetail) ([]canonReasoningDetail, error
 	for i := range out {
 		out[i].Text, out[i].Summary = text[i].value(out[i].Text), summary[i].value(out[i].Summary)
 	}
+	if b != nil && b.err != nil {
+		return nil, b.err
+	}
 	return out, nil
 }
 
 // joined gathers the pieces of a JSON string: their contents, quotes off, one after another, as each escape lies
-// whole within its piece.
+// whole within its piece. Its growth is drawn from b; a draw that fails is left in b.err for the caller to check.
 type joined struct {
 	pieces int
 	only   jsontext.Value // the piece, while there is one
 	body   []byte
+	b      *budget
 }
 
 func (j *joined) add(piece jsontext.Value) error {
@@ -249,6 +351,10 @@ func (j *joined) add(piece jsontext.Value) error {
 	}
 	j.pieces++
 	j.only = piece
+	var err error
+	if j.body, err = growBytes(j.body, len(piece)-2, j.b); err != nil {
+		return err
+	}
 	j.body = append(j.body, piece[1:len(piece)-1]...)
 	return nil
 }
@@ -260,6 +366,9 @@ func (j *joined) value(unset jsontext.Value) jsontext.Value {
 		return unset
 	case 1:
 		return j.only
+	}
+	if j.b.draw(rounded(int64(len(j.body)+2))) != nil {
+		return nil
 	}
 	return slices.Concat([]byte{'"'}, j.body, []byte{'"'})
 }
@@ -334,21 +443,6 @@ func checkPart(p canonPart, role string) error {
 
 func shapeError(what string) error { return fmt.Errorf("%w: %s", ErrInvalid, what) }
 
-// readParts reads a message's content: a string is one text part, null none.
-func (m *canonMessage) readParts() ([]canonPart, error) {
-	if isNull(m.Content) {
-		return nil, nil
-	}
-	if m.Content.Kind() == '"' {
-		return []canonPart{{Type: "text", Text: m.Content}}, nil
-	}
-	var parts []canonPart
-	if err := jsonx.Unmarshal(m.Content, &parts); err != nil {
-		return nil, fmt.Errorf("%w: a %s message's content: %s", ErrInvalid, m.Role, bodyFault(err))
-	}
-	return parts, nil
-}
-
 // maxOutput is the output cap the request sets, 0 for none.
 func (c *canon) maxOutput() int64 {
 	var n int64
@@ -364,12 +458,12 @@ func (c *canon) maxOutput() int64 {
 func (c *canon) unsupported() error {
 	for name, v := range c.Unknown {
 		if !isDefault(name, v) {
-			return &NotSupported{Reason: name + " is not converted"}
+			return &NotSupported{Reason: notConverted(name)}
 		}
 	}
 	for _, m := range c.Messages {
 		for name := range m.Unknown {
-			return &NotSupported{Reason: "a message's " + name + " is not converted"}
+			return &NotSupported{Reason: "a message's " + notConverted(name)}
 		}
 	}
 	return nil
@@ -378,29 +472,69 @@ func (c *canon) unsupported() error {
 // isDefault reports whether a member the conversion does not express is absent in effect: null, or the value Chat
 // takes when it is left out (OpenAI《Create chat completion》, read 2026-10-14), so a client that writes the default
 // is not refused.
+// notConverted is the reason a member is refused, naming it by its first 64 bytes at most: a name may be as long as
+// the body, and the refusal is not drawn from the budget.
+func notConverted(name string) string {
+	if len(name) > 64 {
+		name = strings.ToValidUTF8(name[:64], "") + "…"
+	}
+	return name + " is not converted"
+}
+
 func isDefault(name string, v jsontext.Value) bool {
 	if v.Kind() == 'n' {
 		return true
 	}
-	s := string(v)
+	// v is compared in place, never copied: a value may be as long as the body.
 	switch name {
 	case "frequency_penalty", "presence_penalty":
-		f, err := strconv.ParseFloat(s, 64)
-		return err == nil && f == 0
+		return zeroNumber(v)
 	case "n":
-		return s == "1"
+		return string(v) == "1"
 	case "logprobs", "store":
-		return s == "false"
+		return string(v) == "false"
 	case "modalities":
-		if s == `["text"]` { // keep the common default allocation-free; equivalent spellings decode below
+		if string(v) == `["text"]` { // keep the common default allocation-free; equivalent spellings decode below
 			return true
 		}
-		var only [1]string // excess elements must be rejected without allocating an unbounded list
-		return jsonx.Unmarshal(v, &only) == nil && only[0] == "text"
+		return onlyText(v)
 	case "metadata", "logit_bias":
-		return strings.TrimSpace(strings.Trim(s, "{}")) == ""
+		return len(bytes.TrimSpace(bytes.Trim(v, "{}"))) == 0
 	}
 	return false
+}
+
+// onlyText reports whether v is an array of the one string "text", in any spelling. The element is unquoted into a small
+// array of its own, so neither a long element nor many of them allocate.
+func onlyText(v jsontext.Value) bool {
+	dec := newDecoder(v)
+	if tok, err := dec.ReadToken(); err != nil || tok.Kind() != '[' {
+		return false
+	}
+	s, err := dec.ReadValue()
+	if err != nil || s.Kind() != '"' || len(s) > 32 {
+		return false
+	}
+	var buf [32]byte
+	text, err := jsontext.AppendUnquote(buf[:0], s)
+	return err == nil && string(text) == "text" && dec.PeekKind() == ']'
+}
+
+// zeroNumber reports whether v is a JSON number whose value is zero: every digit of its mantissa is 0, whatever its
+// sign and exponent. It is what ParseFloat(v) == 0 says of a valid number, without copying v to a string.
+func zeroNumber(v jsontext.Value) bool {
+	if v.Kind() != '0' {
+		return false
+	}
+	for _, c := range bytes.TrimPrefix(v, []byte("-")) {
+		switch {
+		case c == 'e' || c == 'E':
+			return true
+		case c != '0' && c != '.':
+			return false
+		}
+	}
+	return true
 }
 
 // numberIs reports whether v is absent, null or the number want.

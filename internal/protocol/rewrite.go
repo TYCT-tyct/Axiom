@@ -1,40 +1,49 @@
 package protocol
 
 import (
-	"bytes"
-	"encoding/json/jsontext" //nolint:depguard // same-format rewrites preserve raw request members
 	"errors"
 	"fmt"
 )
 
-// rewrite is Prepare for an endpoint of the request's format.
-func rewrite(r *Request, body []byte, t Target, w Rewrites) ([]byte, error) {
+//nolint:cyclop // one branch per preparation stage, kept in one place so the order stays visible
+func rewriteWithin(r *Request, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
 	f := r.Format
 	rules := rulesFor(f, t)
 	if rules.members == nil {
 		return nil, &NotSupported{Reason: fmt.Sprintf("format %d is not rewritten yet", f)}
 	}
-	body, indexed, err := rewriteBody(r, body)
+	w = w.withDefaults()
+	size := rewriteSize(rules, len(body), t, w)
+	if err := b.draw(rounded(int64(size))); err != nil {
+		return nil, err
+	}
+	body, indexed, err := rewriteBody(r, body, b)
 	if err != nil {
 		return nil, err
 	}
+	if bigger := rewriteSize(rules, len(body), t, w); bigger > size {
+		if err := b.draw(rounded(int64(bigger - size))); err != nil {
+			return nil, err
+		}
+		size = bigger
+	}
 	if f == Responses {
-		w.History, err = replayHistory(w.History)
+		w.History, err = replayHistory(w.History, b)
 		if err != nil {
 			return nil, err
 		}
 	}
-	w = w.withDefaults()
 	p := &rewriter{
-		dec: jsontext.NewDecoder(bytes.NewBuffer(body)), body: body, out: make([]byte, 0, rewriteSize(rules, len(body), t, w)), t: t, w: w,
+		dec: newDecoder(body), body: body, out: make([]byte, 0, size), t: t, w: w,
 	}
+	p.b = b
 	if indexed {
 		err = p.indexedTop(&r.positions, rules)
 	} else {
 		err = p.top(rules)
 	}
 	if err != nil {
-		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) {
+		if errors.Is(err, errHistory) || errors.Is(err, errIdentity) || errors.Is(err, ErrMemory) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
@@ -53,14 +62,18 @@ func rewriteSize(rules formatRules, n int, t Target, w Rewrites) int {
 }
 
 // rewriteBody invalidates Inspect's offsets whenever a compatibility rewrite changes the body.
-func rewriteBody(r *Request, body []byte) ([]byte, bool, error) {
+func rewriteBody(r *Request, body []byte, b *budget) ([]byte, bool, error) {
 	if r.Format == Chat && r.legacy {
-		body, err := rewriteLegacy(body)
+		body, err := rewriteLegacy(body, b)
 		return body, false, err
 	}
 	if r.positions.ready && r.positions.size == len(body) && !replayCandidate(r.Format, body) {
 		return body, true, nil
 	}
-	body, err := replayBody(r.Format, body, false)
+	body, err := replayBody(r.Format, body, false, b)
 	return body, false, err
 }
+
+// quoted is the most bytes a string of n bytes takes as a JSON string: the quotes, and six bytes for each byte that
+// needs escaping, the longest escape there is.
+func quoted(n int) int { return 6*n + len(`""`) }

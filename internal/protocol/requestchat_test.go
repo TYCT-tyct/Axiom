@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"axiom/internal/platform/alloctest"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 )
@@ -217,43 +216,6 @@ func TestNativeChatCapAndContinuation(t *testing.T) {
 	sameJSON(t, `{"model":"up","stream":true,"stream_options":{"include_usage":true},"max_tokens":4096,"messages":[{"role":"system","content":"new"},{"role":"user","content":"old"},{"role":"assistant","content":[{"type":"text","text":"answer"}]},{"role":"user","content":"next"}]}`, up.Body)
 	if _, err := prepareNativeChat(protocol.Responses, body, "up", nil); err == nil {
 		t.Fatal("continuation without resolved history accepted")
-	}
-}
-
-func TestNativeChatPrepareCostBoundsAllocations(t *testing.T) {
-	if raceDetector() {
-		// The race build randomly discards sync.Pool entries, including the JSON
-		// decoder's buffers. This bounds production memory, measured without -race.
-		t.Skip("production allocation bound; run without the race detector")
-	}
-	for _, c := range []struct {
-		name, members string
-		f             protocol.Format
-	}{
-		{"messages/long text", `"messages":[{"role":"user","content":"` + strings.Repeat("x", 1<<16) + `"}]`, protocol.Messages},
-		{"messages/many turns", `"messages":[` + strings.Repeat(`{"role":"user","content":"a"},`, 1000) + `{"role":"user","content":"b"}]`, protocol.Messages},
-		{"responses/long text", `"input":"` + strings.Repeat("x", 1<<16) + `"`, protocol.Responses},
-		{"responses/many turns", `"input":[` + strings.Repeat(`{"role":"user","content":"a"},`, 1000) + `{"role":"user","content":"b"}]`, protocol.Responses},
-		{"messages/large conversation", `"messages":[` + strings.Repeat(`{"role":"user","content":[{"type":"text","text":"a"}]},`, 10000) + `{"role":"user","content":"b"}]`, protocol.Messages},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			body := []byte(chatBody(c.members))
-			r := inspected(t, c.f, body)
-			target, w := chatTarget(4096), protocol.Rewrites{Identity: derive}
-			cost := protocol.PrepareCost(&r, body, target, w)
-			got := alloctest.Measure(t, alloctest.Function{Name: "prepare", F: func() {
-				if _, err := protocol.Prepare(&r, body, target, w); err != nil {
-					t.Fatal(err)
-				}
-			}})
-			t.Logf("allocated %.0f bytes; budget %d bytes", got["prepare"].Bytes, cost)
-			if got["prepare"].Bytes > float64(cost) {
-				t.Fatalf("allocated %.0f bytes within a %d-byte budget", got["prepare"].Bytes, cost)
-			}
-			if float64(cost) > 2*got["prepare"].Bytes {
-				t.Fatalf("budget %d exceeds twice the measured %.0f bytes", cost, got["prepare"].Bytes)
-			}
-		})
 	}
 }
 

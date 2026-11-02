@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -77,7 +78,7 @@ func TestInjectNativeSearch(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := injectNativeSearch(tc.format, []byte(tc.body), tc.uses)
+			got, err := injectNativeSearch(tc.format, []byte(tc.body), tc.uses, nil)
 			if err != nil {
 				t.Fatalf("injectNativeSearch() error = %v", err)
 			}
@@ -107,19 +108,66 @@ func TestInjectNativeSearchRefusesWhatItCannotRewrite(t *testing.T) {
 		{"empty", Chat, ``},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := injectNativeSearch(tc.format, []byte(tc.body), 1); err == nil {
+			if _, err := injectNativeSearch(tc.format, []byte(tc.body), 1, nil); err == nil {
 				t.Fatal("injectNativeSearch() succeeded")
 			}
 		})
 	}
 }
 
-func TestPrepareCostIncludesTheNativeTool(t *testing.T) {
-	r := &Request{Format: Chat}
-	body := []byte(`{"model":"m","messages":[]}`)
-	without := PrepareCost(r, body, Target{Format: Chat, Model: "m"}, Rewrites{})
-	with := PrepareCost(r, body, Target{Format: Chat, Model: "m"}, Rewrites{NativeSearch: 1})
-	if with <= without {
-		t.Fatalf("PrepareCost() with a native tool = %d, want more than %d", with, without)
+// TestInjectNativeSearchKnowsEveryEscape: a tool already searching is one whatever the escapes of its type, so the
+// search is never added twice; a Messages type longer than the scan's own array is decoded too.
+func TestInjectNativeSearchKnowsEveryEscape(t *testing.T) {
+	escaped := func(s string) string {
+		var b strings.Builder
+		for _, c := range []byte(s) {
+			fmt.Fprintf(&b, `\u%04x`, c)
+		}
+		return b.String()
+	}
+	for _, tc := range []struct {
+		format       Format
+		kind, tool   string
+		maxUses, use int
+	}{
+		{Responses, "web_search", `{"type":"web_search"}`, 1, 1},
+		{Responses, "web_search_preview", `{"type":"web_search"}`, 1, 1},
+		{Chat, "web_search", `"web_search_options"`, 0, 1},
+		{Messages, "web_search_20250305", `"max_uses":2`, 0, 2},
+		{Messages, "web_search_" + strings.Repeat("9", 200), `"max_uses":2`, 0, 2},
+	} {
+		for _, spelling := range []string{tc.kind, escaped(tc.kind), escaped(tc.kind[:5]) + tc.kind[5:]} {
+			body := `{"model":"m","tools":[{"type":"function","name":"f"},{"type":"` + spelling + `","name":"web_search"}]}`
+			got, err := injectNativeSearch(tc.format, []byte(body), tc.use, nil)
+			if err != nil {
+				t.Fatalf("%v %s: %v", tc.format, spelling, err)
+			}
+			if n := strings.Count(string(got), tc.tool); n != strings.Count(body, tc.tool) {
+				t.Errorf("%v %s: the search was added again: %s", tc.format, spelling, got)
+			}
+		}
+	}
+}
+
+// TestResponsesMaxToolCalls: the limit is found wherever it sits, including after whitespace long enough that reading
+// the value refills the decoder's buffer over the member name.
+func TestResponsesMaxToolCalls(t *testing.T) {
+	gap := strings.Repeat(" ", 1<<20)
+	for _, tc := range []struct {
+		name, body string
+		want       int64
+	}{
+		{"absent", `{"model":"m","input":"hi"}`, 0},
+		{"set", `{"model":"m","max_tool_calls":3}`, 3},
+		{"zero means none", `{"max_tool_calls":0}`, 0},
+		{"after other members", `{"input":[{"type":"text"}],"tools":[],"max_tool_calls":2}`, 2},
+		{"whitespace between name and value", `{"model":"m","max_tool_calls":` + gap + `1}`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResponsesMaxToolCalls([]byte(tc.body))
+			if err != nil || got != tc.want {
+				t.Fatalf("ResponsesMaxToolCalls = %d, %v; want %d", got, err, tc.want)
+			}
+		})
 	}
 }

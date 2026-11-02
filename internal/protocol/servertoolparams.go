@@ -18,7 +18,6 @@ func topMember(body []byte, member string) (value []byte, start, end int, ok boo
 	// The body is parsed in place, and names are not collected for a duplicate check (Inspect made it): a body of many
 	// members costs this scan nothing per member.
 	dec := jsontext.NewDecoder(bytes.NewBuffer(body), walkOptions[0], walkOptions[1])
-	var name []byte
 	if k := dec.PeekKind(); k != '{' {
 		return nil, 0, 0, false, fmt.Errorf("%w: the request is not an object", ErrInvalid)
 	}
@@ -30,12 +29,11 @@ func topMember(body []byte, member string) (value []byte, start, end int, ok boo
 		if err != nil {
 			return nil, 0, 0, false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 		}
-		name = unquote(name[:0], key)
 		from := int(dec.InputOffset())
 		if err := dec.SkipValue(); err != nil {
 			return nil, 0, 0, false, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 		}
-		if string(name) != member {
+		if !nameIs(key, member) {
 			continue
 		}
 		to := int(dec.InputOffset())
@@ -51,6 +49,21 @@ func topMember(body []byte, member string) (value []byte, start, end int, ok boo
 	}
 	return nil, 0, 0, false, nil
 }
+
+// nameIs reports whether a member name as written, quotes and escapes included, is member. A name longer than member
+// with every byte escaped is not it and is not unquoted; one that may be is unquoted into an array of its own, so a scan
+// of the body allocates nothing for its names, however long they are. member is at most 32 bytes.
+func nameIs(raw jsontext.Value, member string) bool {
+	if len(raw) > quoted(len(member)) {
+		return false
+	}
+	var buf [quotedNameRoom]byte
+	name, err := jsontext.AppendUnquote(buf[:0], raw)
+	return err == nil && string(name) == member
+}
+
+// quotedNameRoom holds a name of up to 32 bytes with every byte escaped.
+const quotedNameRoom = 6*32 + 2
 
 // insertMember adds a top-level member before the body's closing brace. The body has no such member.
 func insertMember(body []byte, member string, value []byte) ([]byte, error) {

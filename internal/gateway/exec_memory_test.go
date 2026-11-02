@@ -56,7 +56,7 @@ func TestMemoryIsAskedForBeforePrepareAllocates(t *testing.T) {
 		run(t, func(t *testing.T, ctx context.Context) {
 			mutate := func(call *Call) { chatForResponses(t, call) }
 			probe := newHarness(t, ctx, options{mutate: mutate}) // only to see what the request costs
-			cost := protocol.PrepareCost(&probe.call.Request, probe.call.Body, probe.call.Plan.Entries[0].Target, protocol.Rewrites{})
+			cost := neededBudget(t, &probe.call.Request, probe.call.Body, probe.call.Plan.Entries[0].Target, protocol.Rewrites{})
 			h := newHarness(t, ctx, options{mutate: mutate, memory: cost + c.spare})
 			h.run()
 			if h.w.status != c.status {
@@ -81,8 +81,10 @@ func TestMemoryHoldsARequestByItsCapacityWhileItIsSent(t *testing.T) {
 		}}
 		h.run()
 		sent := h.up.endpoint(1).calls[0].Body
-		// A rewrite's cost is its buffer and three times the body, which is given back once the buffer is made.
-		capacity := protocol.PrepareCost(&h.call.Request, h.call.Body, h.call.Plan.Entries[0].Target, protocol.Rewrites{}) - 3*int64(len(h.call.Body))
+		_, capacity, err := protocol.PrepareBudgeted(nil, &h.call.Request, h.call.Body, h.call.Plan.Entries[0].Target, protocol.Rewrites{})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if during != capacity || during <= int64(len(sent)) {
 			t.Errorf("%d bytes were held while a request of %d bytes was sent, want its capacity, %d", during, len(sent), capacity)
 		}
@@ -99,10 +101,14 @@ func TestMemoryHoldsConcurrentRequestsToTheBudget(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		probe := newHarness(t, ctx, options{})
 		entry := probe.call.Plan.Entries[0]
-		cost := protocol.PrepareCost(&probe.call.Request, probe.call.Body, entry.Target, protocol.Rewrites{})
+		w := protocol.Rewrites{}
+		_, buffer, err := protocol.PrepareBudgeted(nil, &probe.call.Request, probe.call.Body, entry.Target, w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cost := neededBudget(t, &probe.call.Request, probe.call.Body, entry.Target, w)
 		h := newHarness(t, ctx, options{memory: 3 * cost})
 		s := &session{x: h.exec, c: h.call}
-		buffer := cost - 3*int64(len(h.call.Body))
 		var wg sync.WaitGroup
 		var made, refused atomic.Int64
 		for range 8 {
@@ -163,4 +169,29 @@ func TestMemoryHoldsEchoPromptSizes(t *testing.T) {
 			t.Errorf("a byte short: status %d, %d sends", h.w.status, h.up.endpoint(1).sends)
 		}
 	})
+}
+
+// neededBudget is the smallest budget PrepareBudgeted finishes with: what preparing the request draws at once.
+func neededBudget(t *testing.T, r *protocol.Request, body []byte, target protocol.Target, w protocol.Rewrites) int64 {
+	t.Helper()
+	lo, hi := int64(0), int64(1<<20)
+	for {
+		_, _, err := protocol.PrepareBudgeted(protocol.NewMemory(hi), r, body, target, w)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, protocol.ErrMemory) {
+			break
+		}
+		lo, hi = hi+1, hi*2
+	}
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if _, _, err := protocol.PrepareBudgeted(protocol.NewMemory(mid), r, body, target, w); errors.Is(err, protocol.ErrMemory) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
 }

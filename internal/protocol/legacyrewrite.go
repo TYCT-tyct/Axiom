@@ -1,10 +1,8 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // preserve caller-owned payload bytes while upgrading the envelope
-
-	"axiom/internal/platform/jsonx"
+	"errors"
 )
 
 // legacyRequest keeps the raw declarations alongside the shared call pairing. A full
@@ -17,23 +15,30 @@ type legacyRequest struct {
 	toolSeen, choiceSeen bool
 }
 
-func rewriteLegacy(body []byte) ([]byte, error) {
-	c, err := decodeCanon(body)
+func rewriteLegacy(body []byte, b *budget) ([]byte, error) {
+	c, err := decodeCanonWithin(body, b)
 	if err != nil {
 		return nil, err
 	}
 	if err := c.checkShape(); err != nil {
 		return nil, err
 	}
-	if err := c.checkCalls(); err != nil {
+	if err := c.checkCalls(b); err != nil {
 		return nil, err
 	}
 	raw := &legacyRequest{canon: c}
-	if err := jsonx.Unmarshal(body, raw); err != nil {
+	if err := unmarshalWithin(body, raw, b); err != nil {
+		if errors.Is(err, ErrMemory) {
+			return nil, err
+		}
 		return nil, shapeError("invalid legacy tools")
 	}
-	p := &rewriter{body: body, out: make([]byte, 0, 4*len(body)+256), legacy: raw}
-	p.dec = jsontext.NewDecoder(bytes.NewBuffer(body))
+	size := 4*len(body) + 256
+	if err := b.draw(rounded(int64(size))); err != nil {
+		return nil, err
+	}
+	p := &rewriter{body: body, out: make([]byte, 0, size), legacy: raw}
+	p.dec = newDecoder(body)
 	if err := p.top(legacyRequestRules); err != nil {
 		return nil, err
 	}

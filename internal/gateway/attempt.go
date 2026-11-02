@@ -180,16 +180,10 @@ func (s *session) prepare(entry routing.Entry) (up protocol.Upstream, held int64
 	}
 	target := entry.Target
 	target.Compact = s.c.Compact
-	cost := protocol.PrepareCost(&s.c.Request, s.c.Body, target, w)
-	if !s.x.Memory.Charge(cost) {
+	up, held, err = protocol.PrepareBudgeted(s.x.Memory, &s.c.Request, s.c.Body, target, w)
+	if errors.Is(err, protocol.ErrMemory) {
 		return up, 0, ErrOverloaded
 	}
-	up, err = protocol.Prepare(&s.c.Request, s.c.Body, target, w)
-	held = min(cost, int64(cap(up.Body)))
-	if err != nil {
-		held = 0
-	}
-	s.x.Memory.Refund(cost - held)
 	return up, held, err
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go: preserve strings and schemas as written
 	"fmt"
+	"slices"
 
 	"axiom/internal/platform/jsonx"
 )
@@ -12,9 +13,31 @@ import (
 // canon.Unknown; unknown nested members are rejected instead of silently lost.
 type requestObject map[string]jsontext.Value
 
+// requestMembers reads an object of the canonical request into its members. The values are slices of v, clipped so
+// that an append to one never writes into v: a reader that copied them would copy every value once more at each level
+// of nesting, as deep as the request goes.
 func requestMembers(v []byte) (requestObject, error) {
-	var o requestObject
-	if err := jsonx.Unmarshal(v, &o); err != nil || o == nil {
+	dec := newDecoder(v)
+	if dec.PeekKind() != '{' {
+		return nil, shapeError("expected a request object")
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, shapeError("expected a request object")
+	}
+	o := requestObject{}
+	for dec.PeekKind() != '}' {
+		name, err := dec.ReadToken()
+		if err != nil {
+			return nil, shapeError("expected a request object")
+		}
+		key := name.String() // before ReadValue, which voids the token
+		value, err := dec.ReadValue()
+		if err != nil {
+			return nil, shapeError("expected a request object")
+		}
+		o[key] = slices.Clip(value)
+	}
+	if _, err := dec.ReadToken(); err != nil || dec.PeekKind() != 0 {
 		return nil, shapeError("expected a request object")
 	}
 	return o, nil
@@ -28,7 +51,7 @@ func (o requestObject) take(name string) jsontext.Value {
 
 func (o requestObject) remaining() error {
 	for name := range o {
-		return &NotSupported{Reason: name + " is not converted"}
+		return &NotSupported{Reason: notConverted(name)}
 	}
 	return nil
 }
@@ -36,7 +59,7 @@ func (o requestObject) remaining() error {
 func (o requestObject) remainingDefaults() error {
 	for name, v := range o {
 		if !isDefault(name, v) {
-			return &NotSupported{Reason: name + " is not converted"}
+			return &NotSupported{Reason: notConverted(name)}
 		}
 	}
 	return nil
@@ -48,12 +71,27 @@ func (o requestObject) move(to requestObject, from, name string) {
 	}
 }
 
+// requestArray reads an array of the canonical request into its elements, slices of v as requestMembers's values are.
 func requestArray(v jsontext.Value) ([]jsontext.Value, error) {
 	if isNull(v) {
 		return nil, nil
 	}
+	dec := newDecoder(v)
+	if dec.PeekKind() != '[' {
+		return nil, shapeError("expected an array")
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return nil, shapeError("expected an array")
+	}
 	var out []jsontext.Value
-	if err := jsonx.Unmarshal(v, &out); err != nil {
+	for dec.PeekKind() != ']' {
+		value, err := dec.ReadValue()
+		if err != nil {
+			return nil, shapeError("expected an array")
+		}
+		out = append(out, slices.Clip(value))
+	}
+	if _, err := dec.ReadToken(); err != nil || dec.PeekKind() != 0 {
 		return nil, shapeError("expected an array")
 	}
 	return out, nil
@@ -80,15 +118,38 @@ func jsonValue(v any) jsontext.Value {
 // oai_responses/to_oai_chat_req.go (relaykit/relayconvert/internal, 603a5ce).
 // The canonical model and Prepare's Chat rewrite own validation and identity/cap
 // policy; unlike the reference, unsupported members are never silently discarded.
-func requestToChat(f Format, body []byte, t Target, w Rewrites) ([]byte, error) {
-	chat, err := nativeChatRequest(f, body, t, w)
+func requestToChat(f Format, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
+	chat, err := nativeChatWithin(f, body, t, w, true, b)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkNativeChat(chat); err != nil {
+	out, err := rewriteWithin(&Request{Format: Chat}, chat, t, w, b)
+	b.give(rounded(int64(cap(chat)))) // the canonical request is rewritten into out and no longer needed
+	return out, err
+}
+
+// nativeChatWithin is nativeChatRequest, checked by checkNativeChat when check is set, under a reservation of
+// nativeRequestCost drawn before it starts. The readers build maps and re-encode them through encoding/json, whose
+// allocations cannot be drawn one by one, so the stage reserves the bound TestPrepareAllocatesOnlyWhatItDrew holds it
+// to; of the reservation only the canonical request it returns stays drawn.
+func nativeChatWithin(f Format, body []byte, t Target, w Rewrites, check bool, b *budget) ([]byte, error) {
+	reserve := nativeRequestCost(body)
+	for _, item := range w.History {
+		reserve += nativeRequestCost(item)
+	}
+	if err := b.draw(reserve); err != nil {
 		return nil, err
 	}
-	return rewrite(&Request{Format: Chat}, chat, t, w)
+	chat, err := nativeChatRequest(f, body, t, w)
+	if err == nil && check {
+		err = checkNativeChat(chat)
+	}
+	if err != nil {
+		b.give(reserve)
+		return nil, err
+	}
+	b.give(reserve - min(reserve, rounded(int64(cap(chat)))))
+	return chat, nil
 }
 
 // nativeChatRequest writes a Messages or Responses request as the canonical Chat-shaped request, before anything the
@@ -143,15 +204,16 @@ func checkNativeChat(chat []byte) error {
 	if err := c.checkShape(); err != nil {
 		return err
 	}
-	return c.checkCalls()
+	return c.checkCalls(nil) // under nativeChatWithin's reservation
 }
 
-// nativeRequestCost is what a request converted to Chat may hold at once: the consumed input maps, the canonical Chat
-// encoding they are written into, and the structures validating it, all alive together; history sums one per item
-// (PrepareCost).
+// nativeRequestCost is what a request converted to Chat allocates, garbage included: the consumed input maps, the
+// canonical Chat encoding they are written into, and the structures validating it; history sums one per item
+// (nativeChatWithin). A member of an object the readers do not know costs about 610 bytes beside its bytes, measured
+// 2026-11-01 for 20,000 of them; TestPrepareAllocatesOnlyWhatItDrew holds every constant to the worst shapes.
 func nativeRequestCost(body []byte) int64 {
 	return 12*int64(len(body)) + 3072*int64(bytes.Count(body, []byte("{"))+bytes.Count(body, []byte("null"))) +
-		512*int64(bytes.Count(body, []byte(":")))
+		768*int64(bytes.Count(body, []byte(":")))
 }
 
 func nativeTools(v jsontext.Value, f Format, dst requestObject) error {

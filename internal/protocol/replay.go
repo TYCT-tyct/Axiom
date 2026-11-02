@@ -2,41 +2,52 @@ package protocol
 
 import (
 	"bytes"
-	"encoding/json/jsontext" //nolint:depguard // native replay preserves every member except converted artifacts
+	"encoding/json/jsontext" //nolint:depguard // the thinking blocks are read without tracking names Inspect checked
+	"errors"
 	"slices"
 	"strconv"
+	"unsafe"
 	"uuid"
 )
 
 // replayBody removes artifacts a Chat conversion cannot make valid for a native provider.
 // The ordinary native path keeps its bytes and allocations; only candidate bodies need a filtering pass.
-func replayBody(f Format, body []byte, item bool) ([]byte, error) {
+func replayBody(f Format, body []byte, item bool, b *budget) ([]byte, error) {
 	if !replayCandidate(f, body) {
 		return body, nil
 	}
+	if err := b.draw(rounded(int64(len(body)))); err != nil {
+		return nil, err
+	}
 	p := &rewriter{body: body, out: make([]byte, 0, len(body))}
-	p.dec = jsontext.NewDecoder(bytes.NewReader(body))
+	p.dec, p.b = newDecoder(body), b
 	rules := replayRules[f]
 	if item {
 		rules = replayItemRules
 	}
 	if err := p.top(formatRules{members: rules}); err != nil {
+		if errors.Is(err, ErrMemory) {
+			return nil, err
+		}
 		return nil, shapeError("invalid native replay: " + err.Error())
 	}
 	return p.out, nil
 }
 
-func replayHistory(history [][]byte) ([][]byte, error) {
+func replayHistory(history [][]byte, b *budget) ([][]byte, error) {
 	out, copied := history, false
 	for i, item := range history {
 		if !replayCandidate(Responses, item) {
 			continue
 		}
 		if !copied {
+			if err := b.draw(rounded(int64(len(history)) * int64(unsafe.Sizeof([]byte(nil))))); err != nil {
+				return nil, err
+			}
 			out, copied = slices.Clone(history), true
 		}
 		var err error
-		out[i], err = replayBody(Responses, item, true)
+		out[i], err = replayBody(Responses, item, true, b)
 		if err != nil {
 			return nil, err
 		}
@@ -201,9 +212,10 @@ func (p *rewriter) replayThinking() error {
 func (p *rewriter) unsignedThinking(v []byte) (bool, error) {
 	if p.replayMeta == nil {
 		p.replayMeta = &aggBase{}
+		p.replayMeta.b = p.b // its unquoting scratch is drawn from the preparation's budget
 	}
 	m := p.replayMeta
-	m.begin(v)
+	m.begin(v, jsontext.AllowDuplicateNames(true)) // a block of a body Inspect or this site checked
 	thinking, signed := false, false
 	err := m.eachMember(func() (err error) {
 		switch string(m.name) {

@@ -13,22 +13,24 @@ import (
 // convertNative writes a Messages or Responses request for an endpoint of the other of the two (README.md
 // 「跨格式转换」): the request is read into the canonical model by its own format's reader and written by the target
 // format's writer, so both directions share Chat's mapping and cannot drift from it.
-func convertNative(from Format, body []byte, t Target, w Rewrites) ([]byte, error) {
-	chat, err := nativeChatRequest(from, body, t, w)
+func convertNative(from Format, body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
+	chat, err := nativeChatWithin(from, body, t, w, false, b)
 	if err != nil {
 		return nil, err
 	}
 	if from == Messages { // a Messages reply hands back thinking signatures, not the encrypted content include asks for
 		t.EncryptedReasoning = catalog.ClaimNo
 	}
-	return convert(chat, t, w)
+	out, err := convert(chat, t, w, b)
+	b.give(rounded(int64(cap(chat)))) // the canonical Chat request is read into the target format and no longer needed
+	return out, err
 }
 
 // convert writes a Chat request for a Messages or Responses endpoint (README.md「跨格式转换」): what the endpoint's
 // format can express is written; reasoning uses the documented approximations in README.md,
 // and other unrepresentable settings are *NotSupported.
-func convert(body []byte, t Target, w Rewrites) ([]byte, error) {
-	c, err := decodeCanon(body)
+func convert(body []byte, t Target, w Rewrites, b *budget) ([]byte, error) {
+	c, err := decodeCanonWithin(body, b)
 	if err != nil {
 		return nil, err
 	}
@@ -38,20 +40,26 @@ func convert(body []byte, t Target, w Rewrites) ([]byte, error) {
 	if err := c.unsupported(); err != nil {
 		return nil, err
 	}
-	if err := c.checkCalls(); err != nil {
+	if err := c.checkCalls(b); err != nil {
 		return nil, err
 	}
 	if t.Format == Messages {
-		return toMessages(c, t, w)
+		return toMessages(c, t, w, b, body)
 	}
-	return toResponses(c, t, w)
+	return toResponses(c, t, w, b, body)
 }
 
 // checkCalls holds the tool calls to what both other formats require: every call has a result and every result a
 // call, and no two calls share an ID. OpenAI refuses the first two itself.
-func (c *canon) checkCalls() error {
+func (c *canon) checkCalls(b *budget) error {
+	if err := b.draw(mapMemory); err != nil {
+		return err
+	}
 	calls := map[string]bool{} // answered
 	for _, m := range c.Messages {
+		if err := b.draw(mapEntryMemory * int64(len(m.ToolCalls))); err != nil {
+			return err
+		}
 		if err := m.checkCalls(calls); err != nil {
 			return err
 		}
@@ -100,10 +108,14 @@ func dataURL(url string) (media, data string, ok bool) {
 // ID that matches and does not start with axid_ stays; any other is axid_ and the hex of its bytes. The two sets do
 // not meet and hex is one to one, so distinct IDs stay distinct, and calls and results map alike.
 func toolUseID(id string) string {
-	if id != "" && !strings.HasPrefix(id, "axid_") && strings.Trim(id, idChars) == "" {
+	if validToolUseID(id) {
 		return id
 	}
 	return "axid_" + hex.EncodeToString([]byte(id))
+}
+
+func validToolUseID(id string) bool {
+	return id != "" && !strings.HasPrefix(id, "axid_") && strings.Trim(id, idChars) == ""
 }
 
 const idChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
