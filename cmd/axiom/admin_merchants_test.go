@@ -281,6 +281,7 @@ func TestAdminMerchantProbeDoesNotHoldTheWriteTransaction(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // read, save both fields, and save without them are one settings journey with one assertion each.
 func TestAdminPaymentSettingsTopUpBuffer(t *testing.T) {
 	f := newAdminFixture(t)
 	s := f.owner()

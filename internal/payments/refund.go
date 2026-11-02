@@ -380,39 +380,46 @@ func ApproveRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID,
 	}
 	updated := row
 	err = changeRefundTx(ctx, tx, OrderID(row.OrderID), row.ID, func(tx pg.Tx, _ LockOrderRow, locked PaymentsRefund) error {
-		updated = locked
-		if refundTerminal(locked.State) {
-			return ErrRefundForbidden
-		}
-		if locked.ApprovedBy != nil {
-			return nil
-		}
-		if locked.SecondRequired && locked.FirstApprovedBy == nil {
-			if err := queries.FirstApproveRefund(ctx, tx, FirstApproveRefundParams{ID: row.ID, FirstApprovedBy: &user}); err != nil {
-				return err
-			}
-			if err := refundAudit(ctx, tx, locked, user, "refund.approve", reason, "first"); err != nil {
-				return err
-			}
-			updated.FirstApprovedBy = &user
-			return nil
-		}
-		if locked.SecondRequired && *locked.FirstApprovedBy == user {
-			return nil
-		}
-		if err := queries.ApproveRefund(ctx, tx, ApproveRefundParams{ID: row.ID, ApprovedBy: &user}); err != nil {
-			return err
-		}
-		if err := refundAudit(ctx, tx, locked, user, "refund.approve", reason, "final"); err != nil {
-			return err
-		}
-		updated.ApprovedBy = &user
-		return nil
+		var err error
+		updated, err = approveRefundRow(ctx, tx, row.ID, locked, user, reason)
+		return err
 	})
 	if err != nil {
 		return Refund{}, err
 	}
 	return refundOf(updated, o.Total.Currency), nil
+}
+
+// approveRefundRow applies one approval decision to a locked refund. The database row is changed only after the
+// second-approval rule has been checked, so a second-required refund never gets approved_by without a first approver.
+func approveRefundRow(ctx context.Context, tx pg.Tx, id uuid.UUID, locked PaymentsRefund, user uuid.UUID, reason string) (PaymentsRefund, error) {
+	if refundTerminal(locked.State) {
+		return PaymentsRefund{}, ErrRefundForbidden
+	}
+	if locked.ApprovedBy != nil {
+		return locked, nil
+	}
+	if locked.SecondRequired && locked.FirstApprovedBy == nil {
+		if err := queries.FirstApproveRefund(ctx, tx, FirstApproveRefundParams{ID: id, FirstApprovedBy: &user}); err != nil {
+			return PaymentsRefund{}, err
+		}
+		if err := refundAudit(ctx, tx, locked, user, "refund.approve", reason, "first"); err != nil {
+			return PaymentsRefund{}, err
+		}
+		locked.FirstApprovedBy = &user
+		return locked, nil
+	}
+	if locked.SecondRequired && *locked.FirstApprovedBy == user {
+		return locked, nil
+	}
+	if err := queries.ApproveRefund(ctx, tx, ApproveRefundParams{ID: id, ApprovedBy: &user}); err != nil {
+		return PaymentsRefund{}, err
+	}
+	if err := refundAudit(ctx, tx, locked, user, "refund.approve", reason, "final"); err != nil {
+		return PaymentsRefund{}, err
+	}
+	locked.ApprovedBy = &user
+	return locked, nil
 }
 
 // SendRefund starts or resumes a channel refund that is already approved. It is separate from the local decision so the

@@ -15,7 +15,7 @@ func refundWorldAmount(t *testing.T, plugin fakePlugin, credits int64) (*world, 
 	w := newTestWorld(t, plugin)
 	m := w.waiting()
 	w.exec("UPDATE payments.settings SET first_credits = 1000000000000 WHERE site_id = '" + w.siteA.String() + "'")
-	w.exec("UPDATE payments.merchants SET refund_enabled = true, user_refund = true WHERE id = '" + uuid.UUID(m.ID).String() + "'")
+	w.exec("UPDATE payments.merchants SET refund_enabled = true, user_refund = true WHERE id = '" + m.ID.String() + "'")
 	o := w.mustPlace(credits, "paid")
 	if err := w.p.receive(t.Context(), receipt(o)); err != nil {
 		t.Fatal(err)
@@ -54,6 +54,7 @@ func TestRefundAtTheApprovalLimitNeedsOneOperator(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // one refund crosses two approvals and each assertion is a step of that journey.
 func TestRefundAboveLimitNeedsTwoDifferentOperators(t *testing.T) {
 	var sends atomic.Int32
 	w, o := refundWorldAmount(t, fakePlugin{caps: CapRefund, refund: func(context.Context, RefundCall) (RefundState, error) {

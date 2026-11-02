@@ -25,8 +25,8 @@ func ReadSiteSettings(ctx context.Context, tx pg.Tx, site uuid.UUID) (SiteSettin
 	return SiteSettings{Open: s.open, Min: s.creditsMin, Max: s.creditsMax, RefundSecondApproval: &second}, err
 }
 
-// SetSiteSettings changes only collection controls and records their previous values atomically.
-func SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, s SiteSettings, reason string) error {
+// validate answers the fields that are wrong, in the order the admin form presents them.
+func (s SiteSettings) validate() error {
 	switch {
 	case s.Min != nil && *s.Min <= 0:
 		return &FieldError{"/credits_min", "must be positive"}
@@ -36,6 +36,14 @@ func SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid
 		return &FieldError{"/credits_max", "must be no less than credits_min"}
 	case s.RefundSecondApproval != nil && *s.RefundSecondApproval < 0:
 		return &FieldError{"/refund_second_approval_credits", "must not be negative"}
+	}
+	return nil
+}
+
+// SetSiteSettings changes only collection controls and records their previous values atomically.
+func SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, s SiteSettings, reason string) error {
+	if err := s.validate(); err != nil {
+		return err
 	}
 
 	// Serialize this resource even before the first payments.settings row exists.
