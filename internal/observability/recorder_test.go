@@ -389,13 +389,16 @@ func TestCloseDeadlineLeavesTheSpill(t *testing.T) {
 		t.Fatalf("Close = %v, want ErrPending with 5 calls", err)
 	}
 
-	// The process gets a healthy database: opening the same directory replays the five records, in order.
-	next := recorderOf(t, &sink{}, Config{
+	// The process gets a healthy database: opening the same directory replays the five records, in order. Its writer
+	// waits at the gate until the count is read, or a first batch could already be acknowledged.
+	healthy := &sink{gate: make(chan struct{})}
+	next := recorderOf(t, healthy, Config{
 		Dir: dir, Capacity: 10, BatchSize: 2, FlushInterval: time.Hour,
 	})
 	if got := next.spill.pendingCount(); got != 5 {
 		t.Fatalf("the next recorder found %d records, want 5", got)
 	}
+	healthy.open()
 	if err := next.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}

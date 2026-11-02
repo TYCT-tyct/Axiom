@@ -190,11 +190,12 @@ func TestCheckpointSkipsAcknowledgedRecordsOnRestart(t *testing.T) {
 	eventually(t, "the second batch to be refused", func() bool { return first.broken.Load() })
 	crash(first)
 
-	nextSink := &sink{}
+	nextSink := &sink{gate: make(chan struct{})} // held until the count is read, so no batch is acknowledged first
 	next := recorderOf(t, nextSink, Config{Dir: dir, Capacity: 10, BatchSize: 2, FlushInterval: time.Millisecond})
 	if got := next.spill.pendingCount(); got != 2 {
 		t.Fatalf("%d records pending after restart, want the 2 unacknowledged ones", got)
 	}
+	nextSink.open()
 	if err := next.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
