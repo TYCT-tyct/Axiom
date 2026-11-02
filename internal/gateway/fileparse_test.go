@@ -54,7 +54,8 @@ func fileHash(data []byte) string {
 // parseHarness is the handler the parse step needs: the parser and the node's memory, and a call to hold them for.
 func parseHarness(t *testing.T, parser fileparse.Parser) (*Handler, *Call) {
 	t.Helper()
-	deps := Deps{Parser: parser, Memory: protocol.NewMemory(64 << 20), Logger: slog.New(slog.DiscardHandler)}
+	// Eight PDF parses each hold the 8 MiB response cap at once, so the harness needs room for all of them.
+	deps := Deps{Parser: parser, Memory: protocol.NewMemory(128 << 20), Logger: slog.New(slog.DiscardHandler)}
 	return &Handler{Deps: deps}, &Call{ID: uuid.NewV7()}
 }
 

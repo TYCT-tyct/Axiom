@@ -36,7 +36,9 @@ const (
 	// and the parse runs before the model call it serves, so it must not spend the call's whole budget.
 	Timeout = 60 * time.Second
 	// ResponseLimit bounds the backend's answer. The gateway charges it to the node's budget while the call runs.
-	ResponseLimit = 4 << 20
+	// A paid PDF answer also carries Docling's JSON document, whose page dictionary supplies the physical page count;
+	// the markdown itself remains capped at MaxTextBytes.
+	ResponseLimit = 8 << 20
 	// MaxTextBytes is the most text one document may become. The text replaces the file in the body the call is
 	// quoted at, so a parse that finds more is refused rather than silently cut.
 	MaxTextBytes = 2 << 20
@@ -147,23 +149,31 @@ type convertSource struct {
 type convertOptions struct {
 	ToFormats []string `json:"to_formats"`
 	DoOCR     bool     `json:"do_ocr"`
-	// PageBreakPlaceholder marks every page boundary in the markdown. It is how a parse counts pages without asking
-	// Docling for its JSON document, which repeats the whole text and can be many times the markdown's size.
+	// PageBreakPlaceholder marks every page boundary in the markdown. It is only used for non-PDF inputs; a PDF's
+	// physical pages come from json_content.pages.
 	PageBreakPlaceholder string `json:"md_page_break_placeholder,omitempty"`
+}
+
+// convertDocument is the converted document: its markdown and, for a paid PDF, the page dictionary.
+type convertDocument struct {
+	Markdown    string `json:"md_content"`
+	JSONContent *struct {
+		Pages map[string]struct{} `json:"pages"`
+	} `json:"json_content"`
 }
 
 // convertResponse is what the endpoint returns: the converted document and how far the conversion got.
 type convertResponse struct {
-	Status   string `json:"status"`
-	Document *struct {
-		Markdown string `json:"md_content"`
-	} `json:"document"`
+	Status   string           `json:"status"`
+	Document *convertDocument `json:"document"`
 }
 
-// Parse sends one document to the backend and returns its text and, when countPages is set, its page count. The
-// placeholder is derived from the file's bytes, so it cannot be confused with the document's own text without a
-// deliberate hash collision. A backend that predates the placeholder still receives the old request when the billing
-// switch is off. Errors never quote the file or the backend's body: the file is user content, and the body may repeat it.
+// Parse sends one document to the backend and returns its text and, when countPages is set, its page count. A PDF's
+// count is the number of entries in Docling's page dictionary, so a page with no markdown still counts. A non-PDF
+// input has no PDF page tree, so its count comes from a placeholder derived from the file's bytes; the placeholder
+// cannot be confused with the document's own text without a deliberate hash collision. A backend that predates the
+// placeholder still receives the old request when the billing switch is off. Errors never quote the file or the
+// backend's body: the file is user content, and the body may repeat it.
 func (d *Docling) Parse(ctx context.Context, doc Document, countPages bool) (string, int, error) {
 	if len(doc.Data) == 0 {
 		return "", 0, ErrEmptyFile
@@ -172,6 +182,7 @@ func (d *Docling) Parse(ctx context.Context, doc Document, countPages bool) (str
 	if name == "" {
 		name = "document"
 	}
+	pdf := countPages && looksPDF(doc.Data)
 	options, placeholder := conversionOptions(doc.Data, countPages)
 	body, err := jsonx.MarshalCanonical(convertRequest{
 		Sources: []convertSource{{Kind: "file", Base64: base64.StdEncoding.EncodeToString(doc.Data), Filename: name}},
@@ -191,11 +202,10 @@ func (d *Docling) Parse(ctx context.Context, doc Document, countPages bool) (str
 	if out.Status == "failure" || out.Document == nil {
 		return "", 0, fmt.Errorf("%w: the conversion ended %s", ErrUpstream, status(out.Status))
 	}
-	text := out.Document.Markdown
-	if !utf8.ValidString(text) {
-		return "", 0, fmt.Errorf("%w: the text is not UTF-8", ErrUpstream)
+	text, pages, err := documentText(out.Document, placeholder, countPages, pdf)
+	if err != nil {
+		return "", 0, err
 	}
-	text, pages := pageText(text, placeholder, countPages)
 	if len(text) > MaxTextBytes {
 		return "", 0, fmt.Errorf("%w: the text is %d bytes, more than %d", ErrTooLarge, len(text), MaxTextBytes)
 	}
@@ -205,10 +215,36 @@ func (d *Docling) Parse(ctx context.Context, doc Document, countPages bool) (str
 	return text, pages, nil
 }
 
-// conversionOptions asks for markdown and, when pages are billed, a page-boundary placeholder unique to this file.
+// documentText validates and counts the backend's markdown: a PDF uses the page dictionary, a non-PDF input uses the
+// markdown's page placeholder.
+func documentText(doc *convertDocument, placeholder string, countPages, pdf bool) (string, int, error) {
+	text := doc.Markdown
+	if !utf8.ValidString(text) {
+		return "", 0, fmt.Errorf("%w: the text is not UTF-8", ErrUpstream)
+	}
+	if !pdf {
+		text, pages := pageText(text, placeholder, countPages)
+		return text, pages, nil
+	}
+	if doc.JSONContent == nil {
+		return "", 0, fmt.Errorf("%w: the backend did not report the PDF's pages", ErrUpstream)
+	}
+	pages, err := physicalPages(doc.JSONContent.Pages)
+	if err != nil {
+		return "", 0, err
+	}
+	return text, pages, nil
+}
+
+// conversionOptions asks for markdown and, when pages are billed, either Docling's JSON pages for a PDF or a page
+// boundary placeholder unique to this file for a non-PDF input.
 func conversionOptions(data []byte, countPages bool) (convertOptions, string) {
 	options := convertOptions{ToFormats: []string{"md"}, DoOCR: true}
 	if !countPages {
+		return options, ""
+	}
+	if looksPDF(data) {
+		options.ToFormats = []string{"md", "json"}
 		return options, ""
 	}
 	sum := sha256.Sum256(data)
