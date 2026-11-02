@@ -36,7 +36,7 @@ func Decide(f Failure) Action // NextEntry | OtherCredential | ReturnToClient
 
 `Endpoint.Codename` 由供应商分组不可变的公开代号传入，`Override.OrderNames`、`OnlyNames`、`ExcludeNames` 直接在该快照上精确匹配；请求只有这一套名称选择器。预设的供应商顺序仍独立使用 `Preset.Order`。不能先把代号转成供应商 ID：同一家多个组的货源与倍率不同，按 ID 会扩大请求的允许集合。私有端点先做归属过滤，不进入排除原因。
 
-`Override.SortGlobal` 对应 `sort.partition: none`，跨模型整体排序后再处理实时健康；`Input.Auto`、`Input.Free` 也强制跨模型整体排序，所有熔断时的最后备选仍保留指定顺序和性能偏好的优先级。`NoFallbacks` 有非空请求顺序时限制命名集合；没有顺序时每个模型仅保留健康排序后的首条，跨模型备选仍保留，整体排序也按模型去重。为自带端点保留试探条目前先按模型去重，同模型已有健康首选时不加入试探，避免挤掉跨模型备选；`TestProviderModelFallbackSurvivesOwnedProbe` 覆盖这一边界。预设的关闭回退与请求限制各自检查，不可互相放宽。`Override.Quantizations` 按端点 `Quantization` 精确匹配，空列表不限制，未记录不匹配非空列表；`Override.MinThroughputPercentiles`/`MaxLatencyPercentiles` 用 quality 的滚动五分钟 p50/p75/p90/p99，写出的截断全满足才进偏好组，未测过的端点不判为不满足。`Override.RequireParameters`/`RequiredParameters` 来自网关的 `protocol.RequestParameters`，只含采样、输出上限和停止；能力参数已由 `Needs` 先过滤。候选的 `Endpoint.Parameters` 是模型规格的能力和方言推出的参数集合（与发现接口的 `supported_parameters` 同一份），`HasAll` 不过就记 `OverrideFilter`。清单外的参数网关在预留前 400，不进入这里。`Override.VerifiedOnly`（`:exacto` 设它）只保留 `Endpoint.Verified` 的候选：它在预设过滤之后、请求覆盖过滤之前判定，落选的记 `NotVerified`，是暂时原因，下一次真伪检测通过就会重新进入路线。`TestProviderGroupFilters`、`TestProviderSortPartition`、`TestProviderLowestLatency`、`TestProviderRequireParameters`、`TestProviderQuantization`、`TestPerformancePercentiles` 覆盖分组、权限、预设、跨模型、独立延迟排序、参数要求、量化匹配和百分位偏好。
+`Override.SortGlobal` 对应 `sort.partition: none`，跨模型整体排序后再处理实时健康；`Input.Auto`、`Input.Free` 也强制跨模型整体排序。`NoFallbacks` 有非空请求顺序时限制命名集合；没有顺序时每个模型仅保留健康排序后的首条，跨模型备选仍保留，整体排序也按模型去重。熔断只在请求自己的过滤与排序之后处理，不改变模型、供应商顺序和性能偏好已经排好的先后。预设的关闭回退与请求限制各自检查，不可互相放宽。`Override.Quantizations` 按端点 `Quantization` 精确匹配，空列表不限制，未记录不匹配非空列表；`Override.MinThroughputPercentiles`/`MaxLatencyPercentiles` 用 quality 的滚动五分钟 p50/p75/p90/p99，写出的截断全满足才进偏好组，未测过的端点不判为不满足。`Override.RequireParameters`/`RequiredParameters` 来自网关的 `protocol.RequestParameters`，只含采样、输出上限和停止；能力参数已由 `Needs` 先过滤。候选的 `Endpoint.Parameters` 是模型规格的能力和方言推出的参数集合（与发现接口的 `supported_parameters` 同一份），`HasAll` 不过就记 `OverrideFilter`。清单外的参数网关在预留前 400，不进入这里。`Override.VerifiedOnly`（`:exacto` 设它）只保留 `Endpoint.Verified` 的候选：它在预设过滤之后、请求覆盖过滤之前判定，落选的记 `NotVerified`，是暂时原因，下一次真伪检测通过就会重新进入路线。`TestProviderGroupFilters`、`TestProviderSortPartition`、`TestProviderLowestLatency`、`TestProviderRequireParameters`、`TestProviderQuantization`、`TestPerformancePercentiles` 覆盖分组、权限、预设、跨模型、独立延迟排序、参数要求、量化匹配和百分位偏好。
 
 ## 现在的输入类型
 
@@ -57,9 +57,9 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 
 ## 健康闭环
 
-`Owner.Platform` 从站点与账户所有者均为空推导平台归属，不另存可矛盾的布尔字段。`Endpoint.LiveHealth` 指向 quality 的实时状态，独立于 `BreakerOpen` 静态排除字段；`Plan` 先做权限、能力、价格、资金、暂停与硬并发过滤，再在所有主模型和备选模型之间处理实时熔断。只因熔断落选的平台端点在没有健康备选时回到路线，保留模型、供应商顺序和性能要求的优先级，只在同一模型的同档内最近熔断优先；自带端点冷却十分钟后占最后一个可重试条目。`Entry.BreakerFallback` 让 `Blocked` 复查保留这条特意选出的备选，但仍复查暂停；路由记录用 `breaker_open_fallback` 标记。
+`Owner.Platform` 从站点与账户所有者均为空推导平台归属，不另存可矛盾的布尔字段。`Endpoint.LiveHealth` 指向 quality 的实时状态，独立于 `BreakerOpen` 静态排除字段；`Plan` 先做权限、能力、价格、资金、暂停与硬并发过滤，再在所有主模型和备选模型之间处理实时熔断。熔断的端点一律排除，记 `breaker_open`；候选全部熔断时返回暂时性的 `NoEndpoint`，gateway 回 503，等试探通过。`Blocked` 在发出前复查熔断和暂停，所以熔断前排进路线的条目也不会发给已经熔断的端点。路由记录把排除的原因记在 `excluded` 里。
 
-恢复后的临时并发上限通过已有在途数检查。没有其他健康且有容量的候选时忽略慢启动上限，单端点不因慢启动等待。`PausedUntil` 只向 quality 暴露端点与供应商暂停的较晚时刻；两种暂停和熔断各自维护，互不清除。行为由 `TestLiveHealthLastResortAndSlowStart` 、`TestOwnedFallbackDoesNotBypassOtherFilters` 与 `TestLastResortPreservesRequestPriorities` 覆盖。
+恢复后的临时并发上限通过已有在途数检查。没有其他健康且有容量的候选时忽略慢启动上限，单端点不因慢启动等待。`PausedUntil` 只向 quality 暴露端点与供应商暂停的较晚时刻；两种暂停和熔断各自维护，互不清除。行为由 `TestTrippedEndpointsTakeNoTraffic`、`TestProbeRestoresAndSlowStart` 与 `TestFastestUnmeasuredAfterTheBreakers` 覆盖。
 
 ## 决策与理由
 

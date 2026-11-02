@@ -173,8 +173,8 @@ func exerciseProbeRecovery(t *testing.T, winner *Loop, f *probeFixture, now *tim
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if occurrences != 2 {
-		t.Fatalf("transition count %d, want remove and restore exactly once", occurrences)
+	if occurrences != 3 {
+		t.Fatalf("transition count %d, want a trip, an offline and a restore", occurrences)
 	}
 }
 
@@ -261,7 +261,7 @@ func checkDisabledPersistence(t *testing.T, m *Monitor, l *Loop, now *time.Time,
 	}
 }
 
-func TestProbeConcurrencyAndStaleResult(t *testing.T) {
+func TestProbeConcurrencyCap(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Enforce)
 	for range 8 {
 		removeEndpoint(t, m, addProbeEndpoint(f), *now)
@@ -278,38 +278,6 @@ func TestProbeConcurrencyAndStaleResult(t *testing.T) {
 	tick(t, l)
 	if l.active != 4 || l.used != 4 {
 		t.Fatal("concurrency cap exceeded")
-	}
-	checkSupersededProbes(t, m, l, f, *now)
-}
-
-func checkSupersededProbes(t *testing.T, m *Monitor, l *Loop, f *probeFixture, now time.Time) {
-	t.Helper()
-	// A last-resort success supersedes its in-flight probe's epoch.
-	for _, e := range m.endpoints {
-		e.mu.Lock()
-		active := e.record.Owner == l.owner
-		e.mu.Unlock()
-		if active {
-			m.Observe(t.Context(), Observation{Endpoint: e.id, Sent: now, Ended: now.Add(time.Second), Done: true, BreakerFallback: true})
-		}
-	}
-	if err := l.flush(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	f.mu.Lock()
-	f.result = suppliers.TestResult{Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.UpstreamError{}}}
-	f.mu.Unlock()
-	for range 4 {
-		finishProbe(t, l, f)
-	}
-	restored := 0
-	for _, e := range m.endpoints {
-		if at, _ := e.Routing(now); at.IsZero() {
-			restored++
-		}
-	}
-	if restored != 4 {
-		t.Fatalf("stale probe changed restored states: %d restored", restored)
 	}
 }
 
@@ -342,24 +310,44 @@ func TestCommittedSignalSurvivesRestart(t *testing.T) {
 	id := addProbeEndpoint(f)
 	removeEndpoint(t, m, id, *now)
 	tick(t, l)
+	if signals := offlineSignals(t, l); signals != 0 {
+		t.Fatalf("a trip alone sent %d offline signals", signals)
+	}
+	*now = now.Add(30 * time.Second)
+	tick(t, l)
+	f.mu.Lock()
+	f.result = suppliers.TestResult{Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.UpstreamError{}}}
+	f.mu.Unlock()
+	finishProbe(t, l, f)
+	if signals := offlineSignals(t, l); signals != 1 {
+		t.Fatalf("the failed re-check persisted %d offline signals", signals)
+	}
 	restarted, other, err := Start(t.Context(), Config{DB: l.db, Scope: l.scope, Mode: Enforce, Source: f, Pauses: f, Now: l.now, Rand: l.rand})
 	if err != nil {
 		t.Fatal(err)
 	}
+	*now = now.Add(2 * time.Minute)
 	tick(t, other)
-	tick(t, other)
-	var signals int
-	if err := l.db.ReadTx(t.Context(), l.scope, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='endpoint_removed'`).Scan(&signals)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if signals != 1 {
-		t.Fatalf("persisted %d removal signals", signals)
+	f.mu.Lock()
+	f.result = suppliers.TestResult{Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.UpstreamError{}}}
+	f.mu.Unlock()
+	finishProbe(t, other, f)
+	if signals := offlineSignals(t, l); signals != 1 {
+		t.Fatalf("a repeated failed probe persisted %d offline signals", signals)
 	}
 	if at, _ := restarted.Live(id, 1).Routing(*now); at.IsZero() {
 		t.Fatal("restart lost durable breaker")
 	}
+}
+
+func offlineSignals(t *testing.T, l *Loop) (signals int) {
+	t.Helper()
+	if err := l.db.ReadTx(t.Context(), l.scope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='endpoint_offline'`).Scan(&signals)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return signals
 }
 
 func TestLosingEpochDiscardsDependentTransitions(t *testing.T) {
@@ -371,7 +359,13 @@ func TestLosingEpochDiscardsDependentTransitions(t *testing.T) {
 	}
 	removeEndpoint(t, m, id, *now)
 	removeEndpoint(t, other, id, now.Add(time.Second))
-	other.Observe(t.Context(), Observation{Endpoint: id, Sent: now.Add(2 * time.Second), Ended: now.Add(3 * time.Second), Done: true, BreakerFallback: true})
+	e := second.monitor.of(id)
+	e.mu.Lock()
+	e.record.Owner = uuid.NewV7()
+	e.record.Lease = now.Add(2 * time.Minute).UnixNano()
+	claim := e.record
+	e.mu.Unlock()
+	second.finish(t.Context(), probeEnd{claim: claim, result: suppliers.TestResult{Streamed: true}})
 	tick(t, l)
 	tick(t, second)
 	if at, _ := other.Live(id, 1).Routing(*now); at.IsZero() {
@@ -421,34 +415,6 @@ func TestExpiredLeaseCannotRestoreNewProbeRound(t *testing.T) {
 	}
 }
 
-func TestLeaseDoesNotInvalidateRealRecovery(t *testing.T) {
-	m, l, f, now := fixtureLoop(t, Enforce)
-	id := addProbeEndpoint(f)
-	removeEndpoint(t, m, id, *now)
-	tick(t, l)
-	// Another node claims between this node reading its state and completing a last-resort request.
-	if err := l.db.Tx(t.Context(), l.scope, func(tx pg.Tx) error {
-		_, err := tx.Exec(t.Context(), `UPDATE quality.endpoint_health SET probe_owner=$2,probe_lease_until=$3 WHERE endpoint_id=$1`, id, uuid.NewV7(), now.Add(2*time.Minute).UnixNano())
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	m.Observe(t.Context(), Observation{Endpoint: id, Sent: now.Add(time.Second), Ended: now.Add(2 * time.Second), Done: true, BreakerFallback: true})
-	tick(t, l)
-	if at, _ := m.Live(id, 1).Routing(*now); !at.IsZero() {
-		t.Fatal("lease invalidated a valid real recovery")
-	}
-	var opened int64
-	if err := l.db.ReadTx(t.Context(), l.scope, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT opened_at FROM quality.endpoint_health WHERE endpoint_id=$1`, id).Scan(&opened)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if opened != 0 {
-		t.Fatal("real recovery was not persisted")
-	}
-}
-
 func TestQueuedProbeCannotOverwriteNewLease(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Enforce)
 	id := addProbeEndpoint(f)
@@ -493,7 +459,7 @@ func TestProbeLeavesTimeToPersistCost(t *testing.T) {
 	}
 }
 
-func TestHealthMaintenanceRetentionAndStillDown(t *testing.T) {
+func TestHealthMaintenanceRetention(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Enforce)
 	id := addProbeEndpoint(f)
 	removeEndpoint(t, m, id, *now)
@@ -510,13 +476,13 @@ func TestHealthMaintenanceRetentionAndStillDown(t *testing.T) {
 	for range 4 {
 		tick(t, l)
 	}
-	var expired, retained, down int
+	var expired, retained int
 	if err := l.db.ReadTx(t.Context(), l.scope, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT count(*) FILTER (WHERE epoch=100),count(*) FILTER (WHERE epoch=101),count(*) FILTER (WHERE kind='still_down') FROM quality.health_events`).Scan(&expired, &retained, &down)
+		return tx.QueryRow(t.Context(), `SELECT count(*) FILTER (WHERE epoch=100),count(*) FILTER (WHERE epoch=101) FROM quality.health_events`).Scan(&expired, &retained)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if expired != 0 || retained != 1 || down != 1 {
-		t.Fatalf("retention/still-down: %d/%d/%d", expired, retained, down)
+	if expired != 0 || retained != 1 {
+		t.Fatalf("retention: %d/%d", expired, retained)
 	}
 }

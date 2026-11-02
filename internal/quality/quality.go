@@ -60,8 +60,6 @@ type Observation struct {
 	Fault protocol.Fault
 	Cut   Cut
 	Gone  bool // the client had left
-	// BreakerFallback says routing deliberately admitted this attempt as a breaker last resort.
-	BreakerFallback bool
 	// Delivered is set when the commit point came while the client was still there: the first content was the
 	// client's. A client that left before it may still have its upstream read on, for the usage, without it.
 	Delivered bool

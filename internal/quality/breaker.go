@@ -217,17 +217,20 @@ func (m *Monitor) delay(level int) time.Duration {
 	return max(probeBase, min(time.Duration(float64(d)*(.75+.5*m.loop.rand())), probeMax))
 }
 
+// recover closes an observe-mode would-remove on a counted success. Enforce mode restores only through a probe: a real
+// request is never sent to a tripped endpoint, and one admitted before the trip says nothing about the endpoint now.
 func (m *Monitor) recover(e *State, v verdict, o *Observation) {
-	r := e.record
-	if v != success || m.mode == Enforce && (!o.BreakerFallback || o.Sent.UnixNano() <= r.Opened) {
+	if v != success || m.mode == Enforce {
 		return
 	}
+	r := e.record
 	r.Opened = 0
 	r.Restored = o.Ended.UnixNano()
 	r.Next = 0
 	r.Owner = uuid.UUID{}
 	r.Lease = 0
 	r.Request = o.Request
+	r.Warned = false
 	if m.transition(e, r, "restored", false) {
 		e.window = window{}
 		e.successes = 0

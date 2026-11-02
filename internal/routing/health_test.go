@@ -2,38 +2,87 @@ package routing_test
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 	"uuid"
 
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/protocol"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
 
-type unusedProbe struct{}
-
-func (unusedProbe) Routable() ([]suppliers.Routable, error) { return nil, nil }
-func (unusedProbe) TestEndpoint(context.Context, suppliers.TestRequest) (suppliers.TestResult, error) {
-	panic("routing does not probe")
+// probeSource is quality's real probe path with a fixed answer: the test controls the clock and the answer, so no
+// supplier is involved.
+type probeSource struct {
+	mu        sync.Mutex
+	endpoints []suppliers.Routable
+	result    suppliers.TestResult
+	answered  chan struct{}
 }
 
-func routingHealth(t *testing.T, h *harness) *quality.Monitor {
+func (p *probeSource) Routable() ([]suppliers.Routable, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]suppliers.Routable(nil), p.endpoints...), nil
+}
+
+func (p *probeSource) TestEndpoint(context.Context, suppliers.TestRequest) (suppliers.TestResult, error) {
+	p.mu.Lock()
+	result := p.result
+	p.mu.Unlock()
+	p.answered <- struct{}{}
+	return result, nil
+}
+
+// healthy starts the health loop on the given endpoints of the test's clock.
+func healthy(t *testing.T, h *harness, endpoints ...routing.Endpoint) (*quality.Monitor, *quality.Loop, *probeSource) {
 	t.Helper()
 	db, err := pg.Open(t.Context(), pgtest.New(t, quality.Module()).App)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	m, _, err := quality.Start(t.Context(), quality.Config{DB: db, Scope: pg.PlatformScope(), Mode: quality.Enforce, Source: unusedProbe{}, Pauses: h.r, Now: func() time.Time { return h.now }})
+	src := &probeSource{answered: make(chan struct{}, 8)}
+	for _, e := range endpoints {
+		src.endpoints = append(src.endpoints, suppliers.Routable{
+			ID: suppliers.EndpointID(e.ID), Credentials: 1, Formats: []protocol.Format{protocol.Messages},
+		})
+	}
+	m, l, err := quality.Start(t.Context(), quality.Config{
+		DB: db, Scope: pg.PlatformScope(), Mode: quality.Enforce, Source: src, Pauses: h.r,
+		Now: func() time.Time { return h.now }, Rand: func() float64 { return .5 },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return m
+	return m, l, src
 }
+
+// probe runs one due probe with the given answer and waits until its result is persisted.
+func probe(t *testing.T, l *quality.Loop, src *probeSource, result suppliers.TestResult) {
+	t.Helper()
+	src.mu.Lock()
+	src.result = result
+	src.mu.Unlock()
+	if err := l.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	<-src.answered
+	if err := l.Drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+var (
+	probeFailed = suppliers.TestResult{Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.UpstreamError{}}}
+	probePassed = suppliers.TestResult{Streamed: true}
+)
 
 func trip(t *testing.T, m *quality.Monitor, n int, now time.Time) {
 	t.Helper()
@@ -42,114 +91,86 @@ func trip(t *testing.T, m *quality.Monitor, n int, now time.Time) {
 	}
 }
 
-func TestLiveHealthLastResortAndSlowStart(t *testing.T) {
+// TestTrippedEndpointsTakeNoTraffic: a tripped endpoint leaves the route at once, even when it is the only candidate,
+// and Plan says the request has nowhere to go instead of handing it to the broken endpoint.
+func TestTrippedEndpointsTakeNoTraffic(t *testing.T) {
 	h := newHarness(t, routing.Config{MaxStale: time.Hour}, openPreset())
-	m := routingHealth(t, h)
+	m, _, _ := healthy(t, h)
 	a, b := endpoint(t, 1), endpoint(t, 2)
 	a.LiveHealth = m.Live(uuid.UUID(a.ID), 1)
 	b.LiveHealth = m.Live(uuid.UUID(b.ID), 1)
 	h.replace(openPreset(), a, b)
 	in := input()
-	before := h.plan(in).Entries[0]
 	trip(t, m, 1, h.now)
 	plan := h.plan(in)
 	if len(plan.Entries) != 1 || plan.Entries[0].Endpoint != b.ID {
-		t.Fatalf("live removal: %+v", plan.Entries)
+		t.Fatalf("after one trip: %+v", plan.Entries)
 	}
-	if before.Endpoint == a.ID && !h.r.Blocked(before) {
-		t.Fatal("Blocked ignored live state")
+	if h.r.Blocked(plan.Entries[0]) {
+		t.Fatal("Blocked split a healthy entry")
 	}
 	h.now = h.now.Add(time.Second)
 	trip(t, m, 2, h.now)
-	plan = h.plan(in)
-	if len(plan.Entries) != 2 || plan.Entries[0].Endpoint != b.ID || !plan.Entries[0].BreakerFallback || h.r.Blocked(plan.Entries[0]) {
-		t.Fatalf("last resort: %+v", plan.Entries)
+	p, wait, err := h.r.Plan(in)
+	if wait != nil {
+		t.Fatal("queued a request whose candidates are all tripped")
 	}
-	h.now = h.now.Add(time.Second)
-	m.Observe(t.Context(), quality.Observation{Endpoint: uuid.UUID(a.ID), Done: true, BreakerFallback: true, Sent: h.now, Ended: h.now})
-	m.Observe(t.Context(), quality.Observation{Endpoint: uuid.UUID(b.ID), Done: true, BreakerFallback: true, Sent: h.now, Ended: h.now})
-	h.r.Begin(a.ID)
-	plan = h.plan(in)
-	if len(plan.Entries) != 1 || plan.Entries[0].Endpoint != b.ID {
-		t.Fatalf("slow start: %+v", plan.Entries)
+	var none *routing.NoEndpoint
+	if !errors.As(err, &none) || none.Permanent || len(p.Entries) != 0 {
+		t.Fatalf("all tripped: plan %+v, wait %v, error %v; want a temporary NoEndpoint", p.Entries, wait, err)
 	}
-	h.replace(openPreset(), a)
-	if len(h.plan(in).Entries) != 1 {
-		t.Fatal("slow start queued the only endpoint")
+	if len(none.Reasons) != 2 || none.Reasons[0].Reason != routing.BreakerOpen || none.Reasons[1].Reason != routing.BreakerOpen {
+		t.Fatalf("reasons %+v, want both breaker_open", none.Reasons)
 	}
-	h.r.End(a.ID)
+	// The entry planned before the trip is refused before it is sent.
+	first := routing.Entry{Endpoint: a.ID, Supplier: a.Supplier, Model: a.Model}
+	if !h.r.Blocked(first) {
+		t.Fatal("Blocked let a tripped endpoint receive the attempt")
+	}
 }
 
-func TestOwnedFallbackDoesNotBypassOtherFilters(t *testing.T) {
+// TestProbeRestoresAndSlowStart: only a passing probe brings a tripped endpoint back; its first requests go through a
+// slow-start window, which is ignored when the recovering endpoint is the only candidate.
+func TestProbeRestoresAndSlowStart(t *testing.T) {
 	h := newHarness(t, routing.Config{MaxStale: time.Hour}, openPreset())
-	m := routingHealth(t, h)
 	a, b := endpoint(t, 1), endpoint(t, 2)
+	m, l, src := healthy(t, h, a, b)
 	a.LiveHealth = m.Live(uuid.UUID(a.ID), 1)
-	a.Owner = routing.Owner{Account: acct}
+	b.LiveHealth = m.Live(uuid.UUID(b.ID), 1)
 	h.replace(openPreset(), a, b)
 	trip(t, m, 1, h.now)
 	if len(h.plan(input()).Entries) != 1 {
-		t.Fatal("owned endpoint bypassed cooldown")
+		t.Fatal("a tripped endpoint stayed in the route")
 	}
-	h.now = h.now.Add(10 * time.Minute)
-	plan := h.plan(input())
-	if len(plan.Entries) != 2 || plan.Entries[1].Endpoint != a.ID || !plan.Entries[1].BreakerFallback {
-		t.Fatalf("owned last slot: %+v", plan.Entries)
-	}
-	a.Enabled = false
-	h.replace(openPreset(), a, b)
+	h.now = h.now.Add(30 * time.Second)
+	probe(t, l, src, probeFailed)
 	if len(h.plan(input()).Entries) != 1 {
-		t.Fatal("disabled endpoint became last resort")
+		t.Fatal("a failed re-check put the endpoint back")
 	}
-}
-
-func TestLastResortPreservesRequestPriorities(t *testing.T) {
-	for _, tc := range []string{"model", "global model", "codename", "slow", "same tier"} {
-		t.Run(tc, func(t *testing.T) {
-			h := newHarness(t, routing.Config{MaxStale: time.Hour}, openPreset())
-			m := routingHealth(t, h)
-			a, b := endpoint(t, 1), endpoint(t, 2)
-			a.LiveHealth = m.Live(uuid.UUID(a.ID), 1)
-			b.LiveHealth = m.Live(uuid.UUID(b.ID), 1)
-			in := input()
-			want := a.ID
-			switch tc {
-			case "model":
-				b.Model = other
-				in.Models = append(in.Models, other)
-			case "global model":
-				b.Model = other
-				in.Models = append(in.Models, other)
-				in.Override.SortGlobal = true
-				want = b.ID
-			case "codename":
-				a.Codename, b.Codename = "g1", "g2"
-				in.Override.OrderNames = []string{"g1", "g2"}
-			case "slow":
-				b.Throughput = 1
-				in.Override.MinThroughput = 50
-			case "same tier":
-				want = b.ID
-			}
-			h.replace(openPreset(), a, b)
-			trip(t, m, 1, h.now)
-			h.now = h.now.Add(time.Second)
-			trip(t, m, 2, h.now)
-			plan := h.plan(in)
-			if len(plan.Entries) != 2 || plan.Entries[0].Endpoint != want || !plan.Entries[0].BreakerFallback {
-				t.Fatalf("%s priority: %+v", tc, plan.Entries)
-			}
-		})
+	h.now = h.now.Add(time.Minute)
+	probe(t, l, src, probePassed)
+	if got := endpoints(h.plan(input())); len(got) != 2 || !slices.Contains(got, a.ID) || !slices.Contains(got, b.ID) {
+		t.Fatalf("route after recovery %v, want both endpoints", got)
 	}
+	h.r.Begin(a.ID)
+	if got := endpoints(h.plan(input())); !slices.Contains(got, b.ID) || slices.Contains(got, a.ID) {
+		t.Fatalf("slow start let %v through, want only the healthy endpoint", got)
+	}
+	h.replace(openPreset(), a)
+	if got := endpoints(h.plan(input())); !slices.Equal(got, []routing.EndpointID{a.ID}) {
+		t.Fatalf("single endpoint queued behind its own slow start: %v", got)
+	}
+	h.r.End(a.ID)
 }
 
 // TestFastestUnmeasuredAfterTheBreakers: when the only measured endpoint's breaker is open and unmeasured ones remain,
 // the route is ranked without any measurement, and the record says so.
 func TestFastestUnmeasuredAfterTheBreakers(t *testing.T) {
 	h := newHarness(t, routing.Config{MaxStale: time.Hour}, fastestPreset())
-	m := routingHealth(t, h)
 	a, b := endpoint(t, 1, speed(100, time.Second)), endpoint(t, 2, unmeasured)
+	m, _, _ := healthy(t, h, a, b)
 	a.LiveHealth = m.Live(uuid.UUID(a.ID), 1)
+	b.LiveHealth = m.Live(uuid.UUID(b.ID), 1)
 	h.replace(fastestPreset(), a, b)
 	if h.plan(input()).Record.Unmeasured {
 		t.Fatal("marked unmeasured while a measured endpoint is in the route")

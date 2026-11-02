@@ -107,9 +107,6 @@ func (r *Router) Blocked(e Entry) bool {
 	if r.state.of(e.Endpoint).blocked.active(now) || r.state.supplier(e.Supplier).active(now) {
 		return true
 	}
-	if e.BreakerFallback {
-		return false
-	}
 	snap := r.snap.Load()
 	if snap != nil {
 		for _, c := range snap.byModel[e.Model] {
