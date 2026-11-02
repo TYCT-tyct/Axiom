@@ -30,7 +30,7 @@
 | 供应商在调用路径上的代码接口：挑凭证、发请求、记尝试 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
 | 端点评估：检测、线上观测、外部评测、属性合并、熔断 | [domains/quality.md](domains/quality.md) | 改动 `quality` 模块或新增检测项之前 |
 | 端点评估在调用路径上的代码接口：判定表、`Observe`、健康度与实测的延迟和吞吐 | [internal/quality/README.md](../internal/quality/README.md) | 实现或调用 `quality` 之前，或改动尝试的结束路径之前 |
-| 路由：候选与过滤、排序策略、会话粘性、回退与重试、容量感知 | [domains/routing.md](domains/routing.md) | 改动 `routing` 模块或调整路由策略之前 |
+| 路由：挂 key 的路由预设与默认链、候选与过滤、排序策略、会话粘性、回退与重试、容量感知 | [domains/routing.md](domains/routing.md) | 改动 `routing` 模块或调整路由策略之前 |
 | 路由在调用路径上的代码接口：会话标识、回退路线、换不换端点 | [internal/routing/README.md](../internal/routing/README.md) | 实现或调用 `routing` 的路由接口之前 |
 | 接入与对外接口：路径与格式、转发规则、用量与费用、错误、路由参数、对接接口、会话状态、版本 | [domains/gateway.md](domains/gateway.md) | 改动 `gateway` 模块、对外接口或兼容行为之前 |
 | 联网搜索：一次查询、SearXNG 适配器、配置与覆盖、结果上限、失败与测试 | [internal/websearch/README.md](../internal/websearch/README.md) | 改 `web` 插件、换搜索后端或部署 SearXNG 之前 |
