@@ -20,83 +20,37 @@ export type ValueField = {
   format: (value: number) => string;
 };
 
+// ValueForm is what the card and its dialog need to show and change a record: the words, the fields, and the write.
+type ValueForm<T extends ValueView> = {
+  operation: string;
+  title: string;
+  edit: string;
+  intro: string;
+  save: string;
+  saved: string;
+  invalid: string;
+  fields: ValueField[];
+  send: (settings: Record<string, number | undefined>, reason: string, key: string) => Promise<Sent<T>>;
+};
+
 // ValueSettings is a settings card whose values are all numbers. The view says what is set and what the defaults are;
 // the dialog writes only the values the person typed, so an empty field goes back to the default in code.
 export function ValueSettings<T extends ValueView>({
   query,
-  operation,
-  title,
   unavailableLabel,
   unavailable,
-  edit,
-  intro,
-  save: saveLabel,
-  saved,
-  invalid,
-  fields,
-  send,
-}: {
-  query: UseQueryResult<T>;
-  operation: string;
-  title: string;
-  unavailableLabel: string;
-  unavailable: string;
-  edit: string;
-  intro: string;
-  save: string;
-  saved: string;
-  invalid: string;
-  fields: ValueField[];
-  send: (settings: Record<string, number | undefined>, reason: string, key: string) => Promise<Sent<T>>;
-}) {
+  ...form
+}: ValueForm<T> & { query: UseQueryResult<T>; unavailableLabel: string; unavailable: string }) {
   if (query.error instanceof ApiError && query.error.status === 404) {
-    return <Facts title={title} rows={[[unavailableLabel, unavailable]]} />;
+    return <Facts title={form.title} rows={[[unavailableLabel, unavailable]]} />;
   }
-  return (
-    <DataState query={query}>
-      {(view) => (
-        <Values
-          view={view}
-          operation={operation}
-          title={title}
-          edit={edit}
-          intro={intro}
-          save={saveLabel}
-          saved={saved}
-          invalid={invalid}
-          fields={fields}
-          send={send}
-        />
-      )}
-    </DataState>
-  );
+  return <DataState query={query}>{(view) => <Values view={view} {...form} />}</DataState>;
 }
 
-function Values<T extends ValueView>({
-  view,
-  operation,
-  title,
-  edit,
-  intro,
-  save,
-  saved,
-  invalid,
-  fields,
-  send,
-}: {
-  view: T;
-  operation: string;
-  title: string;
-  edit: string;
-  intro: string;
-  save: string;
-  saved: string;
-  invalid: string;
-  fields: ValueField[];
-  send: (settings: Record<string, number | undefined>, reason: string, key: string) => Promise<Sent<T>>;
-}) {
+function Values<T extends ValueView>({ view, ...form }: ValueForm<T> & { view: T }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const { title, edit, fields } = form;
   const settings = view.settings as Record<string, number | undefined>;
   const defaults = view.defaults as Record<string, number | undefined>;
   const own = <State tone="neutral">{t("settings.setHere")}</State>;
@@ -123,53 +77,29 @@ function Values<T extends ValueView>({
         }
         rows={rows}
       />
-      {open ? (
-        <EditDialog
-          view={view}
-          operation={operation}
-          title={edit}
-          intro={intro}
-          save={save}
-          saved={saved}
-          invalid={invalid}
-          fields={fields}
-          send={send}
-          onClose={() => setOpen(false)}
-        />
-      ) : null}
+      {open ? <EditDialog view={view} {...form} onClose={() => setOpen(false)} /> : null}
     </>
   );
 }
 
 function EditDialog<T extends ValueView>({
   view,
+  onClose,
   operation,
-  title,
+  edit,
   intro,
   save,
   saved,
   invalid,
   fields,
   send,
-  onClose,
-}: {
-  view: T;
-  operation: string;
-  title: string;
-  intro: string;
-  save: string;
-  saved: string;
-  invalid: string;
-  fields: ValueField[];
-  send: (settings: Record<string, number | undefined>, reason: string, key: string) => Promise<Sent<T>>;
-  onClose: () => void;
-}) {
+}: ValueForm<T> & { view: T; onClose: () => void }) {
   const settings = view.settings as Record<string, number | undefined>;
   const read = (values: Record<string, string>) => readValues(fields, values, invalid);
   return (
     <ChangeDialog
       operation={operation}
-      title={title}
+      title={edit}
       intro={<p>{intro}</p>}
       action={save}
       fields={(error) => <Fields fields={fields} settings={settings} error={error} />}
