@@ -26,7 +26,7 @@ func (w *callWorld) healthCallPath(clock *testClock, mode quality.Mode) (callNod
 	if err := w.db.Tx(w.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error { return refreshSalePrices(w.t.Context(), tx, w.site, site.Currency) }); err != nil {
 		w.t.Fatal(err)
 	}
-	ledger, err := billing.Start(w.t.Context(), w.db, pg.PlatformScope(), billing.Config{HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour}, suppliers.CallWrites{})
+	ledger, err := billing.Start(w.t.Context(), w.db, pg.PlatformScope(), billing.Config{HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour, Segments: billing.NewSegmentPolicy(billing.DefaultSegments())}, suppliers.CallWrites{})
 	if err != nil {
 		w.t.Fatal(err)
 	}
@@ -89,8 +89,8 @@ func runGatewayHealth(t *testing.T, mode quality.Mode) {
 	if len(after.Entries) != 1 || after.Entries[0].Endpoint == first.Endpoint {
 		t.Fatal("next Plan did not remove endpoint")
 	}
-	if !router.Blocked(first) {
-		t.Fatal("reservation recheck missed live breaker")
+	if router.Blocked(first) {
+		t.Fatal("reservation recheck refused a degraded last resort")
 	}
 	// Gateway observations use wall time; model slow fixture setup without sleeping.
 	clock.Advance(-2 * time.Minute)

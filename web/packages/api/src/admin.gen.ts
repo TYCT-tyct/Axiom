@@ -384,6 +384,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/settings/segments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The saved segment settings and the defaults in code.
+         * @description How many output tokens a reservation segment covers, and how much time its overshoot allowance covers. An absent value is the default in code. Every node reloads the record within 30 seconds, without a restart, and routing and billing read the same value.
+         */
+        get: operations["getSegmentSettings"];
+        /**
+         * Save the segment settings, validated and audited.
+         * @description Replaces the record: a value left out falls back to the default in code, and a record with no value is deleted. The overshoot allowance must cover the node's extension wait. Nodes apply the saved value within 30 seconds without a restart; a record a node cannot use keeps that node's previous value and is logged there.
+         */
+        put: operations["setSegmentSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/settings/quality-probes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The saved probe settings and the defaults in code.
+         * @description The hourly budget and concurrency of recovery probes, the fingerprint check's interval, retry, and how long a pass counts, and the first probe delay. An absent value is the default in code. Every node reloads the record within 30 seconds, without a restart.
+         */
+        get: operations["getQualityProbeSettings"];
+        /**
+         * Save the probe settings, validated and audited.
+         * @description Replaces the record: a value left out falls back to the default in code, and a record with no value is deleted. The maximum age of a pass must be at least the check interval, and the first retry at most it. Nodes apply the saved value within 30 seconds without a restart; a record a node cannot use keeps that node's previous value and is logged there.
+         */
+        put: operations["setQualityProbeSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/payments/merchants": {
         parameters: {
             query?: never;
@@ -3155,6 +3203,39 @@ export interface components {
             settings: components["schemas"]["SiteSettings"];
             reason: components["schemas"]["Reason"];
         };
+        /** @description How a reservation is split into segments. A value that is absent is the default in code. `output_tokens` is the output a segment covers; `overshoot_seconds` is the time the allowance covers at the endpoint's speed, and must be at least the node's extension wait (1 second). */
+        SegmentSettings: {
+            /** Format: int64 */
+            output_tokens?: number;
+            overshoot_seconds?: number;
+        };
+        SegmentSettingsView: {
+            settings: components["schemas"]["SegmentSettings"];
+            /** @description What applies where `settings` has no value. */
+            defaults: components["schemas"]["SegmentSettings"];
+        };
+        SegmentSettingsUpdate: {
+            settings: components["schemas"]["SegmentSettings"];
+            reason: components["schemas"]["Reason"];
+        };
+        /** @description The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds. */
+        ProbeSettings: {
+            hourly_budget?: number;
+            concurrency?: number;
+            verify_every_seconds?: number;
+            verify_max_age_seconds?: number;
+            verify_retry_seconds?: number;
+            probe_base_seconds?: number;
+        };
+        ProbeSettingsView: {
+            settings: components["schemas"]["ProbeSettings"];
+            /** @description What applies where `settings` has no value. */
+            defaults: components["schemas"]["ProbeSettings"];
+        };
+        ProbeSettingsUpdate: {
+            settings: components["schemas"]["ProbeSettings"];
+            reason: components["schemas"]["Reason"];
+        };
         /** @description Site overrides. Absence selects code defaults. Refills use the existing IP, email and user windows. */
         LoginLimits: {
             ip_attempt_burst?: number;
@@ -3835,6 +3916,10 @@ export interface components {
                 fast?: components["schemas"]["ServiceTierRates"];
             };
         };
+        /** @description Per-endpoint prices, keyed by endpoint UUID. */
+        PriceEndpointMap: {
+            [key: string]: components["schemas"]["PriceSchedule"];
+        };
         ModelName: {
             name: string;
             /**
@@ -3999,6 +4084,18 @@ export interface components {
             requested?: components["schemas"]["PriceSchedule"];
             schedule?: components["schemas"]["PriceSchedule"];
             floor?: components["schemas"]["PriceSchedule"];
+            /** @description The proposed price of each endpoint for a cost-plus proposal. */
+            endpoints?: components["schemas"]["PriceEndpointMap"];
+            /** @description The rule price of each endpoint before the site floor, for a cost-plus proposal. */
+            requested_endpoints?: components["schemas"]["PriceEndpointMap"];
+            /** @description The price each endpoint currently serves, when the current version prices endpoints separately. */
+            current_endpoints?: components["schemas"]["PriceEndpointMap"];
+            /** @description The current model-level price schedule, including the envelope of a per-endpoint version. */
+            current_schedule?: components["schemas"]["PriceSchedule"];
+            /** @description The proposal's cost of each endpoint in the site currency, for a cost-plus proposal. */
+            costs?: components["schemas"]["PriceEndpointMap"];
+            /** @description The proposal's break-even price of each endpoint in the site currency, for a cost-plus proposal. */
+            floors?: components["schemas"]["PriceEndpointMap"];
             problem?: string;
         };
         PricePublishInput: {
@@ -4896,6 +4993,122 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSegmentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The settings and defaults. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SegmentSettingsView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSegmentSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SegmentSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The settings as stored. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SegmentSettingsView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getQualityProbeSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The settings and defaults. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeSettingsView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setQualityProbeSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProbeSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The settings as stored. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProbeSettingsView"];
                 };
             };
             400: components["responses"]["BadRequest"];

@@ -149,6 +149,7 @@ API key → 路由按预设选端点 → 供应商选凭证 → 尝试（失败�
 | 商户账户 | merchant | 站点在某个收款渠道上配置的一个收款账号（商户号、密钥、网关地址），一个渠道可以有多个；二级站点用站长自己的 |
 | 付款方式 | payment_method | 用户充值时选的一项，如支付宝、微信、`usdt.tron`；一个商户账户可以支持多种 |
 | 订单 | order | 一次充值，记录充值金额、付款币种、渠道、手续费和锁定的汇率，见[支付](domains/payments.md#订单) |
+| 收据 | receipt | 已付订单的只读呈现：支付时间、实付、入账额度和成功退回的退款，在控制台打印或存为 PDF；不是发票（发票是税务凭证，以后再做），见[支付](domains/payments.md#收据与发票) |
 | 用户提醒 | user_notice | 面向用户的低余额、充值到账和认证因素变更消息；与运维告警分开，代码使用 notice |
 | 提醒偏好 | notification_preferences | 用户提醒的开关、阈值、语言与可选 Webhook；现有契约与 Go 类型沿用 NotificationPreferences |
 | 公告 | announcement | 管理员发布的有有效期、可撤下的站点一般信息，对外使用 ann_ TypeID |

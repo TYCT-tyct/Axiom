@@ -149,13 +149,46 @@ func readPublishedPrice(row ReadPublicationsRow, policy PricePolicy) (Sold, erro
 }
 
 // AllowsCosts checks this node's costs before it serves a published price. An override permits only its exact audited
-// endpoint evidence; a new or more expensive local endpoint cannot borrow another endpoint's exception.
+// endpoint evidence; a new or more expensive local endpoint cannot borrow another endpoint's exception. A per-endpoint
+// version is safe only when every endpoint it prices has this node's cost and that price covers it; routing filters an
+// endpoint the node cannot serve rather than the whole model (WithCosts).
 func (s Sold) AllowsCosts(model catalog.Model, costs []PriceCost) bool {
-	cost, err := modelPriceCost(costs, model, s.Schedule.Currency())
+	if s.Endpoints != nil {
+		return s.allowsEndpointCosts(model, costs)
+	}
+	return s.allowsSharedCosts(model, costs)
+}
+
+func (s Sold) allowsEndpointCosts(model catalog.Model, costs []PriceCost) bool {
+	seen := 0
+	for _, c := range costs {
+		price, ok := s.Endpoints[c.Endpoint]
+		if !ok {
+			continue
+		}
+		seen++
+		if !s.endpointAllows(model, c, price) {
+			return false
+		}
+	}
+	return seen == len(s.Endpoints)
+}
+
+func (s Sold) allowsSharedCosts(model catalog.Model, costs []PriceCost) bool {
+	for _, c := range costs {
+		if Unpriced(c.Schedule, model.Reportable()) != (catalog.Reportable{}) {
+			return false
+		}
+	}
+	cost, err := convertedCosts(costs, s.Schedule.Currency())
 	if err != nil {
 		return false
 	}
-	floor, err := cost.Scaled(s.floor, s.Schedule.Currency())
+	floor, err := envelopeOf(cost)
+	if err != nil {
+		return false
+	}
+	floor, err = floor.Scaled(s.floor, s.Schedule.Currency())
 	if err != nil {
 		return false
 	}
@@ -177,7 +210,33 @@ func (s Sold) AllowsCosts(model catalog.Model, costs []PriceCost) bool {
 	return true
 }
 
-// WithCosts withholds unsafe audience layers while retaining their targets, so they cannot fall back.
+// endpointAllows is one endpoint's local cost against the price this version set for it, including an override audited
+// for that exact cost.
+func (s Sold) endpointAllows(model catalog.Model, c PriceCost, price catalog.Schedule) bool {
+	if Unpriced(price, model.Reportable()) != (catalog.Reportable{}) ||
+		Unpriced(c.Schedule, model.Reportable()) != (catalog.Reportable{}) {
+		return false
+	}
+	cost, err := c.converted(price.Currency())
+	if err != nil {
+		return false
+	}
+	floor, err := cost.Scaled(s.floor, price.Currency())
+	if err != nil {
+		return false
+	}
+	if safe, err := price.CoversCost(floor); err == nil && safe {
+		return true
+	}
+	if len(s.overrideCosts) == 0 {
+		return false
+	}
+	raw, err := jsonx.MarshalCanonical(c)
+	return err == nil && bytes.Equal(raw, s.overrideCosts[c.Endpoint])
+}
+
+// WithCosts withholds unsafe audience layers while retaining their targets, so they cannot fall back. A per-endpoint
+// version keeps the endpoints this node can serve safely and drops the rest; a shared version is all or nothing.
 func (s Sold) WithCosts(model catalog.Model, costs []PriceCost) Sold {
 	if s.Audiences != nil {
 		layers := slices.Clone(s.Audiences.Layers())
@@ -186,7 +245,37 @@ func (s Sold) WithCosts(model catalog.Model, costs []PriceCost) Sold {
 		}
 		s.Audiences = CompilePrices(layers)
 	}
-	if !s.AllowsCosts(model, costs) || Unpriced(s.Schedule, model.Reportable()) != (catalog.Reportable{}) {
+	if s.Endpoints != nil {
+		return s.withEndpointCosts(model, costs)
+	}
+	return s.withSharedCosts(model, costs)
+}
+
+func (s Sold) withEndpointCosts(model catalog.Model, costs []PriceCost) Sold {
+	kept := make(EndpointPrices, len(s.Endpoints))
+	for _, c := range costs {
+		if price, ok := s.Endpoints[c.Endpoint]; ok && s.endpointAllows(model, c, price) {
+			kept[c.Endpoint] = price
+		}
+	}
+	if len(kept) == 0 {
+		s.Version = uuid.Nil()
+		s.Schedule = catalog.Schedule{}
+		s.Endpoints = nil
+		return s
+	}
+	// Keep the model-level envelope the envelope of the endpoints this node can serve, so a reader that falls back to
+	// it does not see a price for an endpoint this node withheld. A schedule that cannot be enclosed leaves the published
+	// envelope in place: no charge reads it for an endpoint in the map.
+	if envelope, err := envelopeOf(kept); err == nil {
+		s.Schedule = envelope
+	}
+	s.Endpoints = kept
+	return s
+}
+
+func (s Sold) withSharedCosts(model catalog.Model, costs []PriceCost) Sold {
+	if !s.allowsSharedCosts(model, costs) || Unpriced(s.Schedule, model.Reportable()) != (catalog.Reportable{}) {
 		s.Version = uuid.Nil()
 		s.Schedule = catalog.Schedule{}
 	}

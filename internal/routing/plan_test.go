@@ -351,7 +351,7 @@ func TestSegmentable(t *testing.T) {
 	}
 	for _, c := range cases {
 		// 1000 output tokens a segment, with an allowance of 500 at the endpoint's 100 tokens a second: 5 seconds.
-		h := newHarness(t, routing.Config{Segments: billing.Segments{Output: 1000, Overshoot: 5 * time.Second}}, openPreset(), endpoint(t, 1, func(e *routing.Endpoint) {
+		h := newHarness(t, routing.Config{Segments: billing.NewSegmentPolicy(billing.Segments{Output: 1000, Overshoot: 5 * time.Second})}, openPreset(), endpoint(t, 1, func(e *routing.Endpoint) {
 			if c.e != nil {
 				c.e(e)
 			}
@@ -647,7 +647,7 @@ func TestCompletionsNeverSegment(t *testing.T) {
 		MaxOutput: 4096, MaxOutputSet: true, Stream: true, ServiceTiers: 1 << catalog.ServiceTierStandard,
 	}
 	in.NativeOnly = true
-	h := newHarness(t, routing.Config{Segments: billing.Segments{Output: 512, Overshoot: time.Second}}, openPreset(), e)
+	h := newHarness(t, routing.Config{Segments: billing.NewSegmentPolicy(billing.Segments{Output: 512, Overshoot: time.Second})}, openPreset(), e)
 	entry := h.plan(in).Entries[0]
 	if entry.Segmentable {
 		t.Error("a completion entry is segmentable: its output would be reserved one segment at a time")
@@ -736,5 +736,37 @@ func TestFileParsesAreFlatSearches(t *testing.T) {
 	}
 	if d.Documents != 0 {
 		t.Errorf("documents = %d, want none after parsing", d.Documents)
+	}
+}
+
+// TestEachEndpointIsFilteredOnItsOwnPrice: provider.max_price and provider.sort compare the price of the endpoint being
+// considered, not a model-wide price that no endpoint charges (docs/domains/billing.md「定价」; OpenRouter《Provider
+// Routing》「Price Limits」).
+func TestEachEndpointIsFilteredOnItsOwnPrice(t *testing.T) {
+	t.Parallel()
+
+	cheap := endpoint(t, 1)
+	dear := endpoint(t, 2, func(e *routing.Endpoint) {
+		e.Price.Schedule = schedule(t, "0.000003", "0.000004", "")
+	})
+	h := newHarness(t, routing.Config{}, openPreset(), cheap, dear)
+	in := input()
+	cheapest := routing.Cheapest
+	in.Override.Sort = &cheapest
+	p := h.plan(in)
+	if len(p.Entries) != 2 || p.Entries[0].Endpoint != cheap.ID {
+		t.Fatalf("cheapest order: %v", p.Entries)
+	}
+	if got := p.Entries[0].Price.Version; got != cheap.Price.Version {
+		t.Errorf("the cheap endpoint carries version %s, want %s", got, cheap.Price.Version)
+	}
+	in.Override.MaxPrice = limitOn(t, catalog.ItemInput, "0.000002")
+	p = h.plan(in)
+	if len(p.Entries) != 1 || p.Entries[0].Endpoint != cheap.ID {
+		t.Fatalf("the cap kept %v, want only the cheap endpoint", p.Entries)
+	}
+	in.Override.MaxPrice = limitOn(t, catalog.ItemOutput, "0.000003")
+	if p := h.plan(in); len(p.Entries) != 1 || p.Entries[0].Endpoint != cheap.ID {
+		t.Fatalf("the output cap kept %v, want only the cheap endpoint", p.Entries)
 	}
 }

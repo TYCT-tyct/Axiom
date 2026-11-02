@@ -28,7 +28,7 @@
 - **直接格式**：`/v1/embeddings`、`/v1/rerank` 与其余调用路径一样，同时以 `/v1/...` 和 `/api/v1/...` 提供。embeddings、rerank 是“直接格式”：上游回一份 JSON，不流式，网关读完整份、结算后原样改写回复（见「转发规则」）。两者都只走原生端点，不做格式转换；一个供应商模型记录必须把 `embeddings` 或 `rerank` 写进 `formats` 才会被路由到，端点路径分别是 `/v1/embeddings`、`/v1/rerank`。同步写入 embeddings、rerank 由 `AXIOM_DIRECT_FORMATS` 控制（默认 `off`，关闭时同步状态和投影都只有 messages、responses、chat）：先把兼容读取的版本铺到所有节点并保持关闭，确认旧节点退出后再在全部节点开启，避免旧版本读到不认识的格式而摘掉整家供应商（[suppliers 的 README](../../internal/suppliers/README.md)）。
 - **旧版补全**：`/v1/completions` 也是生成格式，但和直接格式一样只走原生端点：`prompt`（字符串、字符串数组、token 数组或 token 数组的数组）与原样返回 `text` 的 choice 没有对应的 Chat 转换，请求里的 `n`、`best_of`、`echo`、`logprobs` 也不能在不改变语义的情况下改写成 `messages`。一个供应商模型记录必须把 `completions` 写进 `formats` 才会被路由到，端点路径是 `/v1/completions`；同步写入同样受 `AXIOM_DIRECT_FORMATS` 控制，适配器推不出的格式由管理接口的映射声明（见[决策与理由](#决策与理由)），格式名和迁移见同一节。上游一律按流式调用（`stream:true`，并强制 `stream_options.include_usage:true`），非流式客户端由网关把每个 choice 的 `text` 和四个 `logprobs` 数组聚合后一次返回；`prompt` 数组是一次请求里的多份补全，输入按整批预留（含 `suffix`）、上下文按最长的一份检查，输出按 `n × prompt 数` 一次预留（见[计费](billing.md#预留与结算)）。`best_of > 1` 在准入前以 400 拒绝（OpenAI 不能流式返回它）；超过报价上限的 `max_tokens` 按报价上限发送；`max_tokens: 0` 是明确的零输出，结束的空 choice 就是它的回答，`echo` 回显的 prompt 不计入输出。
 - **`/embeddings/models` 没有提供**：OpenRouter 另有这个列表，但本站在模型目录里还没有“输出模态”这一事实，嵌入模型没有输出价，默认也不会出现在 `/api/v1/models`，更没有单独列表。调用按请求里的 `model` 走，见「待定问题」。
-- **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 与 `GET /api/v1/models/{model}` 返回 OpenRouter 的模型对象（价格取准入账户及当前等级的主站发布售价，带 `context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning`，外壳是 `data`/`links.next`/`total_count`），并读 OpenRouter 文档里的查询参数；`/v1/models` 仍是 OpenAI 与 Anthropic 的合并形，两种客户端各读各的。逐项的差距见 [OpenRouter 能力对照表](../openrouter-parity.md)。
+- **兼容 OpenRouter 的路径**：以上路径同时以 `/api/v1/...` 的形式提供。`GET /api/v1/models` 与 `GET /api/v1/models/{model}` 返回 OpenRouter 的模型对象（价格取准入账户及当前等级下实际可服务端点中最便宜的一个主站发布售价，带 `context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning`，外壳是 `data`/`links.next`/`total_count`），并读 OpenRouter 文档里的查询参数；`/v1/models` 仍是 OpenAI 与 Anthropic 的合并形，两种客户端各读各的。逐项的差距见 [OpenRouter 能力对照表](../openrouter-parity.md)。
 - **挂载**：`/v1/` 与 `/api/v1/` 只挂在节点的公开监听上，管理端监听不提供；它们在控制台的 API 和网站页面之前截走，不经过控制台那一层的响应压缩（网关自己写应答、自己决定何时 flush），也不会被控制台 API 的 404 回答。所以客户端只需要知道站点的 API 域名，认 key 的规则见下文「鉴权」。节点在路由快照可用之前不报告就绪（见[运维的「节点启动自检」](operations.md#部署与节点管理)）。
 - **`GET /v1/models` 与 `GET /v1/models/{model}`**：
   - 返回一个同时满足 OpenAI 和 Anthropic 两种格式的列表；只列这把 key 能调用、且有端点可走的模型，权限用的是与调用相同的判断，不能用的模型、没有端点的模型和不存在的模型一样回 404 `model_not_found`（不是 403）；
@@ -39,7 +39,7 @@
   - 响应带 `Cache-Control: no-store`：列表是这把 key 的，不能进共享缓存；
   - Claude Code 启动时用它发现模型，超时只有 3 秒，任何跳转都算失败，所以必须在原地址直接、快速地返回（Claude Code《Gateway compatibility guide》，2026-10）。
 - **`GET /api/v1/models` 与 `GET /api/v1/models/{model}`**：
-  - 模型对象是 OpenRouter 的形状：`id`、`canonical_slug` 都是这个模型的公开标准 ID（`author/slug`，即目录名去掉内部版本后缀，`acme/claude@20250929` 按 `acme/claude` 列出），`name` 是去掉作者的部分，`created` 恒为 0；`pricing` 的每个成员都是字符串，取准入账户及当前等级发布售价的标准服务等级、第一档（美元 / token，`web_search` 每次，`image`、`image_output` 每张），售价表没有的单位（价目表没有按张价时的 `image`、`image_output`，`request` 按次，`discount`、`overrides`）省略而不是写 0，`image_token`、`internal_reasoning` 只给能收图片、会推理的模型（价目表对这两项会用所在侧的原价兜底，纯文本模型不该出现）；`context_length` 与 `top_provider.*` 取规格，`architecture` 的模态取规格声明的能力，`supported_parameters`、`reasoning` 按能力与方言给出（未知 mandatory 不声称）；`default_parameters`、`per_request_limits`、`supported_voices` 是 null，`description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`、`alias_target`、`benchmarks` 不输出（目录没有这些数据）。`id` 只用能解析回这个模型的公开名字：标准 ID 解析不到它（目录不该出现）就整个不列，因为那个名字既取不到详情也调不通。只列 key 能调用、路由快照里有公共端点、有售价的模型；私有端点不进入这份共享投影。
+  - 模型对象是 OpenRouter 的形状：`id`、`canonical_slug` 都是这个模型的公开标准 ID（`author/slug`，即目录名去掉内部版本后缀，`acme/claude@20250929` 按 `acme/claude` 列出），`name` 是去掉作者的部分，`created` 恒为 0；`pricing` 的每个成员都是字符串，取准入账户及当前等级发布售价中实际可服务端点里最便宜的一个，标准服务等级、第一档（美元 / token，`web_search` 每次，`image`、`image_output` 每张），售价表没有的单位（价目表没有按张价时的 `image`、`image_output`，`request` 按次，`discount`、`overrides`）省略而不是写 0，`image_token`、`internal_reasoning` 只给能收图片、会推理的模型（价目表对这两项会用所在侧的原价兜底，纯文本模型不该出现）；`context_length` 与 `top_provider.*` 取规格，`architecture` 的模态取规格声明的能力，`supported_parameters`、`reasoning` 按能力与方言给出（未知 mandatory 不声称）；`default_parameters`、`per_request_limits`、`supported_voices` 是 null，`description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`、`alias_target`、`benchmarks` 不输出（目录没有这些数据）。`id` 只用能解析回这个模型的公开名字：标准 ID 解析不到它（目录不该出现）就整个不列，因为那个名字既取不到详情也调不通。只列 key 能调用、路由快照里有公共端点、有售价的模型；私有端点不进入这份共享投影。
   - 列表读 `offset`、`limit`、`q`、`context`、`min_price`/`max_price`、`min_output_price`/`max_output_price`、`input_modalities`、`output_modalities`、`supported_parameters`、`model_authors`，`sort` 支持 `pricing-low-to-high`、`pricing-high-to-low`、`context-high-to-low`；OpenRouter 文档里有而 Axiom 没有数据的参数按名字回 400 并说明缺什么，文档之外的参数（缓存参数、`utm_*`）忽略。查询串本身解不开（`%ZZ`、用 `;` 分隔）也回 400：标准库会静默丢掉解不开的那一项，过滤条件就这样变成「整个列表」。`links.next` 是同一个查询把 `offset` 往后挪一格，只在这页之后还有模型时给出。
   - 单模型按调用路径的方式解析别名（`claude-live` 与 `anthropic/claude-live` 是同一个模型），返回 `{data: 模型对象}`，`id` 是标准 ID 而不是请求里的名字：OpenRouter 的形状里一个模型只有一个 `id`。
   - 列表与路由快照是同一次构建的产物，一起发布；每个受众的模型与端点条目预先编码，价格过滤、排序、计数及分页使用同一受众选择器，没有可服务版本的受众不列出该模型：同一次读目录、同一次读售价，所以列表上的价格就是快照里那个售价版本的收费价格，两者不会各读各的（`RouteDeps.Build` 同时产出 `*routing.Snapshot` 与列表，`Publish` 在同一发布锁内一起换；取列表和调用规划持该锁的读锁，锁内只读内存，不包住鉴权事务、编码或网络写入；构建失败或迟到则两者都不换）。请求路径上没有读价：列表和它服务的模型集合都在构建时定下来，一次响应里的 `total_count`、这一页和它之后的链接因此都属于同一次构建，写响应时路由怎么变都不会让它们互相矛盾。
@@ -76,7 +76,7 @@
 | `offset`、`limit`、`category`、`supported_parameters`、`output_modalities`、`sort`、`use_rss`、`use_rss_chat_links`、`q`、`input_modalities`、`context`、`min_price`、`max_price`、`arch`、`model_authors`、`providers`、`distillable`、`zdr`、`region`、`min_output_price`、`max_output_price`、`min_age_days`、`max_age_days`、`min_intelligence_index`、`max_intelligence_index`、`min_coding_index`、`max_coding_index`、`min_agentic_index`、`max_agentic_index`、`min_tool_success_rate`、`max_tool_success_rate`；`data`、`links.next`、`total_count` | [模型列表查询](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | 支持和拒绝列表见上文；每个官方参数都由行为测试核对。价格过滤为美元/百万 token；无分页参数返回全量，只有 offset 时采用官方 limit 默认 500；未知非官方参数忽略 |
 | `GET /api/v1/models/user` 的 `data`、`links.next`、`total_count` 与 `offset`、`limit`、`output_modalities`、`sort` | [用户模型](https://openrouter.ai/docs/api/api-reference/models/list-models-filtered-by-user-provider-preferences-privacy-settings-and-guardrails) | 复用 key 的模型权限与同一份列表；支持同样的模型过滤，下一页保留 user 路径；尚无账户供应商偏好、隐私设置和护栏层，不假装已过滤这些条件 |
 | `GET /api/v1/models/count` 的 `data.count`、`output_modalities` | [模型计数](https://openrouter.ai/docs/api/api-reference/models/get-total-count-of-available-models) | 本 key 在同一次发布中可见的公共模型总数，output_modalities 与列表采用同一模态语义（默认 text，all 不限模态）；非法值、重复参数和解不开的查询串回 400，不应用分页与其他列表过滤 |
-| `GET /api/v1/models/{author}/{slug}/endpoints` 的 `data.id`、`name`、`created`、`description`、`architecture`、`endpoints`；端点 `name`、`model_id`、`model_name`、`provider_name`、`tag`、`context_length`、`max_completion_tokens`、`max_prompt_tokens`、`pricing`、`supported_parameters`、`service_tier`、`quantization`、`uptime_last_5m`、`uptime_last_30m`、`uptime_last_1d`、`latency_last_30m`、`throughput_last_30m` | [模型端点](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model) | 仅按路由构建留下的公共端点（Owner 为零）列项，站点与账户私有端点不进入这份 OpenRouter 共享发现投影；tag 为模型内序号 axiom/1、axiom/2 等，不公开内部 UUID 或创建时间，端点集合变化时可能重新编号，不是持久路由标识，provider_name 为 Axiom。上下文、输出上限、售价和参数取该构建。标准服务等级为 null；量化为管理员记录的级别，没有记录为 null；独立提示词上限、窗口可用率和性能百分位仍为 null；描述省略，architecture 的 tokenizer/instruct_type 也省略（官方在此要求这三个成员） |
+| `GET /api/v1/models/{author}/{slug}/endpoints` 的 `data.id`、`name`、`created`、`description`、`architecture`、`endpoints`；端点 `name`、`model_id`、`model_name`、`provider_name`、`tag`、`context_length`、`max_completion_tokens`、`max_prompt_tokens`、`pricing`、`supported_parameters`、`service_tier`、`quantization`、`uptime_last_5m`、`uptime_last_30m`、`uptime_last_1d`、`latency_last_30m`、`throughput_last_30m` | [模型端点](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model) | 仅按路由构建留下的公共端点（Owner 为零）列项，站点与账户私有端点不进入这份 OpenRouter 共享发现投影；tag 为模型内序号 axiom/1、axiom/2 等，不公开内部 UUID 或创建时间，端点集合变化时可能重新编号，不是持久路由标识，provider_name 为 Axiom。上下文、输出上限和参数取该构建；售价取这个端点自己的版本价（成本加成时端点间可不同，固定价和参考价倍率时相同）。标准服务等级为 null；量化为管理员记录的级别，没有记录为 null；独立提示词上限、窗口可用率和性能百分位仍为 null；描述省略，architecture 的 tokenizer/instruct_type 也省略（官方在此要求这三个成员） |
 | 端点 `status`、`supports_implicit_caching`、`supports_tool_choice`、`native_tools`、`supports_diarization`、`supports_image_reference`、`supports_multiple_audio_references`、`supports_voice_cloning`、`perf_last_30m_by_workload` | [模型端点 PublicEndpoint](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model) | 没有窗口统计、逐值测试、原生工具映射或相关能力数据，省略而非把未知写成 false 或空集合；前四项能力字段（supports_implicit_caching、supports_tool_choice、native_tools、supports_diarization）在官方为必填，这是有意的契约偏离。实时暂停、满载和熔断不改变发现列表 |
 | `GET /api/v1/providers` 的 `data[].name`、`slug`、`privacy_policy_url`、`terms_of_service_url`、`status_page_url`、`headquarters`、`datacenters` | [供应商列表](https://openrouter.ai/docs/api/api-reference/providers/list-all-providers) | 有可见端点时给公开聚合供应商 Axiom/axiom；没有则空数组。不暴露货源、凭证、上游名字和成本；没有登记的政策链接和地域均为 null |
 
@@ -163,6 +163,47 @@
 
   端点是否传递取消，按[计费的「客户端断开」](billing.md#客户端断开)判断。客户端取消从不免单。客户端自行重试视为新的请求。
 
+### 响应缓存
+
+基线是 OpenRouter 的[响应缓存](https://openrouter.ai/docs/guides/features/response-caching)（2026-11-02 核对）：它按 key、模型、端点类型、流式与否和规范化后的请求体缓存**成功**回复，命中时重放、换新的 `id`、用量清零、免费，TTL 默认 300 秒、范围 1–86400 秒。Axiom 照这套语义，但有五处有意不同，理由在「决策与理由」：按**账户**而不是按 API key 隔离，命中再用当前 key 的模型和端点权限复核；命中仍先走正常准入与预留，结算时释放；不做并发相同请求的合并；只缓存 Chat、Responses、Messages 的生成回复，不缓存直连格式、compact 和带状态的请求；**平台未明确允许前，持久化默认由平台开关关闭**。
+
+**开关与优先级。** 缓存默认关闭，只有平台允许且请求明确要求才开。`AXIOM_RESPONSE_CACHE_CONTENT` 是平台对「保存回复正文」的决定，默认 `off`；为 `off` 时网关根本不建缓存，缓存头被忽略，为 `on` 时才看下面的请求级开关。这遵守 `docs/product.md` 的「对话内容保存由平台统一决定」，在 #325 的数据保留、删除和导出流程落地前不打开：
+
+| 来源 | 值 | 结果 |
+|---|---|---|
+| 平台 `AXIOM_RESPONSE_CACHE_CONTENT` | `off`（默认） | 关闭，任何请求头和预设都不能打开 |
+| 平台 `AXIOM_RESPONSE_CACHE_CONTENT` | `on` | 允许保存，以下开关决定本次调用 |
+| 预设 `cache_enabled` | `false` | 关闭，请求头 `true` 也不能打开 |
+| 请求头 `X-OpenRouter-Cache` | `false` | 关闭 |
+| 预设 `cache_enabled` 缺省 | — | 请求头 `true` 才开；头缺省或不是 `true`/`false` 时关闭 |
+| 预设 `cache_enabled` | `true` | 打开 |
+| 请求头 `X-OpenRouter-Cache-TTL` | 1–86400 | 覆盖预设的 `cache_ttl_seconds`；只在缓存打开时有意义 |
+| 预设 `cache_ttl_seconds` | 1–86400 | 请求头没有有效 TTL 时用它 |
+| 两处都没有 | — | 300 秒 |
+
+TTL 按 OpenRouter 的读法：以开头的十进制数字为准，小数截断，后面的字符忽略（`60abc` 读作 60，`1.5` 读作 1），小于 1 按 1、大于 86400 按 86400，开头不是数字则忽略这个头。预设里的 `cache_enabled` 必须是布尔值、`cache_ttl_seconds` 必须是 1–86400 的整数，保存在 `accounts.presets` 的既有校验里，且这两个成员不会并进发给上游的请求体。
+
+**键与隔离。** 键是账户 ID、客户端格式（生成格式之间分别区分）、是否流式和规范化请求体的 SHA-256。规范化只删字符串外的空白（空格、制表、回车、换行），保留属性顺序、重复键、数字写法和字符串里的空白——与 OpenRouter 一致，属性顺序不同就是不同的键。账户 ID 进哈希且查询在账户的 RLS 范围内完成，所以同一账户的不同 key 共用，不同账户即使请求字节完全相同也不共用。同一账户的 key 权限可以不同，因此条目还保存写入时的服务模型与端点；命中前用**当前** key 的准入结果重新算出的路由复核，服务模型或端点不在当前路由里就按 MISS 处理，权限收窄后旧条目不会被重放。请求在准入前已按预设合并、压缩和解析文件，哈希的是最终发给上游的那份正文；带 `previous_response_id`、文件解析、`web` 插件、服务端搜索、服务端原生工具、服务端压缩或文件引用的请求不缓存，因为这些内容不在正文里或不适合跨请求复用。
+
+**响应头。** 缓存开启且回复成功时：
+
+| 头 | MISS | HIT |
+|---|---|---|
+| `X-OpenRouter-Cache-Status` | `MISS` | `HIT` |
+| `X-OpenRouter-Cache-TTL` | 本次请求的 TTL | 条目剩余秒数 |
+| `X-OpenRouter-Cache-Age` | 不出现 | 条目已存秒数 |
+| `X-OpenRouter-Cache-Source-Id` | 不出现 | 写入该条目的原调用 ID |
+
+`X-OpenRouter-Cache-Clear: true` 在缓存打开时先删掉这个账户、这个键的条目，再按 MISS 处理；删除失败只记日志，不失败调用，本次成功回复会覆盖它。缓存头不转发给上游，也不出现在错误响应上。
+
+**命中。** 命中在准入之后、第一次上游尝试之前判断。缓存里存的是上游的原始回复字节（SSE 或整份 JSON）和实际服务的模型；命中时用**当前**客户端格式重新走一遍 `protocol.Relay`，所以格式转换、流式/非流式、推理隐藏和结束事件都与正常回复同一条路径，但调用 ID、`created` 和响应头 `X-Generation-Id` 是新的，用量和费用清零，`X-Codex-Turn-State` 用条目里保存的值。结算没有尝试，预留全额释放，账本不产生扣费；调用记录写 `cache_hit=true`、价格和成本为 0。命中不占供应商的速率和凭证槽。并发相同请求不合并：两个都 MISS、都调用上游、都各自计费，后写入的覆盖先写入的。
+
+**未命中与写入。** 只有上游 `200` 且回复完整、结算成功的调用才写入，错误、限流、半截流、客户端断开、结算失败的都不写。写入在回复交付之后异步进行，有界队列满了就丢弃并计数；写缓存失败只记日志，永远不失败或拖慢调用。条目在写入时按本次请求的 TTL 定过期时间，命中不会延长它。每个条目最多 1 MiB（上游原始回复字节），每个账户最多 64 MiB 或 1024 条，超出时按创建时间删最旧的；过期的条目由每分钟一次的清理删除，查询到过期条目也当未命中。
+
+**加密与保留。** 正文用信封加密保存（`secret.Keyring`，AAD 绑定 `gateway.response_cache` 的表、行和 `body` 用途），表按账户 RLS 隔离；数据库里没有明文正文。TTL 上限 24 小时，到期删除，`X-OpenRouter-Cache-Clear` 和未来的账户数据删除流程可以按账户删。现在没有按账户的数据保留设置：`docs/product.md` 规定对话正文保存由平台统一决定，`docs/security.md` 的保留与导出流程（#325）尚未实现；因此平台开关默认关闭，只有平台明确允许才写入，写入时也只保留 TTL 这么短，正文不进入调用记录、导出或内容接口。账户数据删除流程实现时必须把 `gateway.response_cache` 纳入删除和导出范围。
+
+**不缓存的路径。** 直连格式（Embeddings、Rerank、Completions）、`/responses/compact`、带 `previous_response_id` 的 Responses、`web`/`file-parser` 插件、`openrouter:web_search` 循环、服务端压缩和文件引用都不缓存。Embeddings 的整份 JSON 重放要另写一条不经 relay 的路径，等有需求时再加；在此之前，这些请求即使带缓存头也没有缓存响应头。
+
 ### 错误
 
 - **外壳与类型**：Messages 用 Anthropic 的外壳；Chat、Responses、Embeddings、Rerank 用 new-api 与 OpenAI 的 `error` 对象：`message`、`type`、`param`、`code`，另带统一的错误类型字段 `error_type`，程序判断它就够了（与 OpenRouter 一致，见 OpenRouter《Errors and Debugging》，2026-10）。
@@ -195,7 +236,7 @@
 | 节点满载、准入超时、路由快照过旧、数据库不可用、本节点的持有者失效 | 503 `overloaded`，`Retry-After: 1` | `overloaded_error` | — |
 | 模型不存在；key 不允许用这个模型 | 404 `model_not_found`，不返回 403 | `not_found_error` | — |
 | 没有可用端点，永久性的：能力、上下文、格式、预设或请求覆盖过滤掉了全部端点，或没有售价 | 404 `no_endpoint`，附过滤原因 | `not_found_error` | — |
-| 没有可用端点，暂时性的：全部熔断、供应商余额不足、重试预算用完，或 `:exacto` 没有已验证的端点 | 503 `no_endpoint`，附原因和 `Retry-After` | `overloaded_error` | — |
+| 没有可用端点，暂时性的：全部离线（第一次重新检测仍失败）、供应商余额不足、重试预算用完，或 `:exacto` 没有已验证的端点 | 503 `no_endpoint`，附原因和 `Retry-After` | `overloaded_error` | — |
 | 每个端点都不支持这个请求的写法 | 400 `invalid_request`，附原因 | `invalid_request_error` | — |
 | 开启了联网搜索或代码执行，却没写最多用几次，而模型也没有默认次数（费用没有上界，预留不了） | 400 `invalid_request`，说明要写 `max_uses`（Messages 联网搜索）或 `max_tool_calls`（Responses）；没有上限字段的（Chat 的工具、Messages 的代码执行）说明该格式暂不支持，不调用上游 | `invalid_request_error` | — |
 | 上游拒绝上下文过长（HTTP 或流内错误） | 400 `context_length_exceeded`，保留脱敏原话、`param` 和上游的 code（Chat 在 `metadata.provider_code`，Responses 原生流在 `response.error.code`）；不重试 | `invalid_request_error` | 同一 `error_type`，保留已转发内容 |
@@ -259,7 +300,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
   | `require_parameters: true` | 只保证上面公布的参数；`seed`、`logprobs`、`frequency_penalty`、`verbosity`（含 Responses 的 `text.verbosity`）和供应商专有参数不在清单里，请求写了这些就 400 并点名，因为供应商同步的模型记录和目录规格没有逐端点的采样/提供商参数清单。清单内的采样、输出上限或 `stop` 没有端点满足时按覆盖过滤 404；能力参数没有端点时仍按能力缺失 404。`false` 或未写仍强制已有能力匹配 | 逐端点的采样和供应商专有参数清单 |
   | `sort` 对象的 `percentile` 与其他未知成员 | 400；OpenRouter 的排序对象只有 `by` 和 `partition`（2026-11-01 核对），`percentile` 不是排序成员；百分位截断属于 `preferred_min_throughput` / `preferred_max_latency`，已按滚动五分钟窗口支持。其他未知成员也按名字拒绝，不静默忽略 | 无；若 OpenRouter 将来把分位数加进排序对象，还要定义它和 `by` 的组合语义 |
   | `max_price.image` | 400；价目表已有按张的图片项（`image_in_piece`、`image_out_piece`，#320，模型列表的 `pricing.image` 也从前者发布），但 OpenRouter 的单个 `image` 上限没有说管输入图、生成图还是按 token 计价的图；没有端点报告按张的图片用量，本站也不输出生成的图，该比哪一项未定，所以不拿 `image_in`/`image_out` 的 token 价冒充 | 先定 `max_price.image` 管输入、生成还是两者，并让端点报告按张的图片用量；在那之前保持 400 |
-  | `max_price.prompt` / `completion` | 本站记账货币每百万 token，比较实际受众售价的适用服务等级与上下文档位最高价；只接收可精确表示的十进制数，不四舍五入。非美元站点不声称美元上限 | 无；已实现 |
+  | `max_price.prompt` / `completion` | 本站记账货币每百万 token，比较每个端点自己的受众售价的适用服务等级与上下文档位最高价；同一模型的不同端点各自过滤；只接收可精确表示的十进制数，不四舍五入。非美元站点不声称美元上限 | 无；已实现 |
   | `max_price` 的其他成员 | 400；不认识就不静默忽略 | 对应的计费单位与来源价 |
 
 - **我们自己的扩展**：放在单独的 `axiom` 对象里，也可以用 `x-axiom-*` 请求头传，方便无法修改请求体的工具。
@@ -435,7 +476,13 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | 只给请求速率 429 发窗口额度头，Reset 给保守清空时刻，Retry-After 保留 60 秒上限 | 并发/排队不是请求窗口，不伪造 Limit；滑动近似没有固定桶的精确重置时刻，两个窗口的上界不冒充剩余精确秒数；沿用既有客户端兼容的 60 秒 Retry-After 上限，有意差异和基线见上文 |
 | 推理开关、展示和强度分开，隐藏在计量之后执行 | [OpenRouter Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)（2026-10-29）规定 exclude 不减费用、预算与 effort 可换算；隐藏明文仍保留工具续聊必需的签名/密文，不以显示要求推断启用模式；[Anthropic Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) 的 omitted 保留签名且收费，[OpenAI Reasoning models](https://developers.openai.com/api/docs/guides/reasoning) 当前包含 minimal/xhigh/max。复用规范请求、UsageContext 与现有流读取器，不另建协议树；相比只信上游隐藏，在本地计量后过滤能防忽略隐藏的端点漏出明文。无法精确表达预算时按公开比例取最近档，同距取低，不承诺近似是硬上限；不按模型名猜 supported_efforts/mandatory。换算表在 protocol README。依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，独立评审由流水线安排 |
 | Chat 旧客户端的回复恢复旧函数表示，现代客户端保持工具数组 | [OpenAI Chat reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) 明确 `functions` → `tools`、`function_call` → `tool_choice`，消息中的旧调用由 `tool_calls` 取代。[OpenRouter 的工具规范化说明](https://openrouter.ai/blog/insights/agent-frameworks-compared-tool-calling-schema-handling/)和 [API reference](https://openrouter.ai/docs/api/reference/overview) 只承诺现代 `tool_calls`，未说明旧请求的回映射（2026-10-29 核实，未花费调用实测）。本任务要求兼容旧客户端，因此有意增加只针对旧请求的回映射，并在有工具声明时关闭并行；不采用对所有回复统一降级，因为会破坏现代客户端和并行调用。既有稳定 ID 配对逻辑同时用于同格式与转换；不重编码整份请求，以保留工具参数、签名和供应商扩展。此对外兼容决策依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，仍需独立评审 |
-| 模型发现复用路由构建并按分组端点给匿名 tag，公开 provider 为 Axiom | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落实 #311 P5/P10。比较逐请求读 suppliers 与构建时投影，选择后者：一份响应的价格、端点和计数一致，构建失败保留整份旧投影；不选把全部端点合成一个，因为产品要求逐端点列出，也不公开供应商名字与政策猜测。共享投影在分组前排除非零 Owner，未来自带端点不能使别的账户看出其存在。代号选模型内序号而不选带时间戳的 UUID；相比 HMAC 不引入密钥管理，代价是集合变化时可能重新编号，只用于发现展示。保留实时准入，避免缓存身份误放行已撤销的 key；独立评审仍由流水线执行 |
+| 模型发现复用路由构建并按分组端点给匿名 tag，公开 provider 为 Axiom | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落实 #311 P5/P10。比较逐请求读 suppliers 与构建时投影，选择后者：一份响应的价格、端点和计数一致，构建失败保留整份旧投影；不选把全部端点合成一个，因为产品要求逐端点列出，也不公开供应商名字与政策猜测。每个端点的 `pricing` 取它自己的售价，模型 `pricing` 取这些端点里最便宜的一个；价格版本和端点集合都来自同一次构建。共享投影在分组前排除非零 Owner，未来自带端点不能使别的账户看出其存在。代号选模型内序号而不选带时间戳的 UUID；相比 HMAC 不引入密钥管理，代价是集合变化时可能重新编号，只用于发现展示。保留实时准入，避免缓存身份误放行已撤销的 key；独立评审仍由流水线执行 |
+| 响应缓存按账户隔离，不按 API key | 卡片的验收写的是「keyed per account（never shared across accounts）」，比 OpenRouter 的按 key 更严：同一账户的 key 轮换后仍能命中，账户管理员本来就能看到该账户的调用；不同账户的哈希都带账户 ID 且查询受 RLS 约束，不可能共用。代价：一个 key 写入的缓存，同账户的另一个 key 能读到；因此条目保存服务模型与端点，命中前按当前 key 的准入路由复核，权限不同或收窄时不重放 |
+| 缓存存上游原始回复，命中时重放进 `protocol.Relay` | 直接存客户端回复要为三种格式、流式/非流式、聚合和每块的 id/usage 各写一套重放；存上游字节让现有 relay 做格式转换、推理隐藏、结束事件和用量清零，命中与正常回复走同一条经过测试的路径。新调用 ID、`created`、`X-Generation-Id` 由 relay 的选项给出，`X-Codex-Turn-State` 与正文一起放在同一份加密载荷里。代价：条目与上游格式绑定，格式编号变化或 relay 不再支持该组合时按未命中处理并删除 |
+| 命中仍走正常准入和预留，结算时全额释放 | 钱和并发的不变量（I1/I3）都在准入与结算里；在准入前查缓存能省一次预留，但要另开一条不预留、不结算、不写调用记录的路径，余额不足的账户会因此绕开准入。选择保持一条路径：命中免费、账本不扣、调用记录写命中，但账户仍需先有这次调用的预留额度。代价是低余额账户可能明明有缓存也拿不到 |
+| 响应缓存默认关闭，且先由平台 `AXIOM_RESPONSE_CACHE_CONTENT` 放行，再只由请求头或预设打开，TTL 1–86400 秒、条目 1 MiB、账户 64 MiB/1024 条 | 缓存保存对话正文；`docs/product.md` 把内容保存交给平台统一决定，所以先用平台开关默认关闭，避免请求自己绕过产品决定。OpenRouter 的默认 TTL 是 300 秒、上限 86400，照它让客户端可预期。1 MiB 覆盖正常的整条回复，64 MiB/1024 条把单账户最坏占用限住；超出按最旧删除，过期每分钟清理。不选无限 TTL 或按磁盘配额，那会把内容保留交给运维而不是请求 |
+| 正文信封加密、按账户 RLS、AAD 绑表行和用途 | 与供应商凭证、SMTP 密钥同一套 `secret.Keyring`；AAD 让一行密文不能被搬到另一行或另一个账户下解开，RLS 让查询在数据库层就看不到别的账户。缓存是临时内容，仍按 `docs/security.md` 的租户隔离和静态加密要求处理；密钥轮换把 `gateway.response_cache` 登记进 `keyRotation` 并加 fence 触发器 |
+| 只缓存生成格式的完整成功回复，不缓存直连格式、插件和服务端工具路径 | 这些路径的正文之外还有文件解析、搜索、历史或上游资源引用，重放会漏掉按次费用或让另一请求读到不属于它的上下文；直连格式还要另写一条不经 relay 的重放。先只做 Chat、Responses、Messages 的普通调用，范围小、每条路径都能用同一套 relay 测试；Embeddings 等有需求再加 |
 | 同时提供 `/v1` 和 `/api/v1` 路径 | 负责人同意。OpenRouter 的客户端只改地址就能接入 |
 | 请求头按白名单转发，`anthropic-beta` 不筛选具体的值 | Claude Code 官方的网关兼容指南明确要求原样转发协议头；客户端的凭证和身份信息不能流向上游 |
 | 上游 4xx 保留原文，只抹掉供应商身份 | Claude Code 依赖上游错误的原话自动恢复；同时不能暴露货源。负责人 2026-10-18：影响兼容的行为照 new-api、sub2api。实现见「错误」：适配器仍只读代码、不留文字，共用的调用代码在拒绝请求的失败上另存一份清洗过的 `Rejection`，只给这次回复用。不选让适配器带原文：每个适配器各清洗一遍，漏一个就泄露 |
@@ -493,6 +540,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | 适配器推不出的格式由模型映射的 `formats` 声明，投影取并集 | 生产代码里没有任何适配器会产出 `completions`：new-api 的 `/v1/completions` 路由存在，但它的端点类型没有旧补全类型（`relaykit/types/endpoint_type.go`），OpenAI 类型既可能是 gpt-4o 也可能是旧模型，按类型猜会把所有 OpenAI 模型都标成支持旧补全；sub2api 没有这条路径。另一个做法是直接改 `supplier_models.formats`，但同步每次都会按适配器重写，改动会被覆盖且没有审计。选：`POST /api/admin/v1/suppliers/{id}/model-mappings` 的 `formats` 字段（可省略=不改、`[]`=清除），存在 `supplier_aliases.formats`，投影把它与适配器的格式取并集，写入 `supplier_models` 和 `endpoints` 的 `formats`，因此下一次同步不会覆盖；未知格式在写之前以 422 拒绝。代价：声明要等下一次同步和快照重载才生效；`AXIOM_DIRECT_FORMATS` 未开时，旧节点读到这一行只会跳过这个端点（`suppliers.unsupported_format`），不会摘掉整家供应商，但该格式的端点对旧节点暂时不可用，所以仍要等全部节点都认识它再声明。测试：`TestDeclaredFormatsSurviveSync`（两次同步）与 `TestDeclaredFormats`（规范化、收窄、清除、未知格式） |
 ## 待定问题
 
+- 响应缓存没有按账户的数据保留设置可遵守：`docs/product.md` 说对话正文保存由平台统一决定，`docs/security.md` 的删除与导出流程（#325）还没有实现。现在用「平台开关默认关闭 + 请求级开关 + 最长 24 小时 TTL + 按账户清理」代替；#325 落地时要把 `gateway.response_cache` 纳入账户删除、导出和保留策略，并决定是否允许账户关闭缓存；在此之前 `AXIOM_RESPONSE_CACHE_CONTENT` 不应打开。
 - 各字段的最终名称和结构写入接口契约时确定
 - 官方供应商名称的可信映射、逐端点的采样/提供商参数清单仍缺数据；量化事实、五分钟窗口性能分位数和按请求计价已落地；按张的图片价已有目录项，但 `max_price.image` 管输入还是生成、端点按张用量怎么报还没定。每项缺的具体字段和补上后能支持什么，见上文「路由参数」偏离表的第三列。`require_parameters` 目前用模型规格推出的公开参数清单，清单外的参数明确 400；`max_price` 在非美元站点是否统一换成美元待定。
 - 402/403 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`openrouter_workspace_budget`、`openrouter_key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）

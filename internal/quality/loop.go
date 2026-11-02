@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"time"
 	"uuid"
 
@@ -21,8 +22,6 @@ import (
 )
 
 const (
-	probeConcurrency = 4
-	probeHourlyLimit = 600
 	probeLease       = 2 * time.Minute
 	probeCommitGrace = 5 * time.Second
 )
@@ -73,8 +72,9 @@ type Loop struct {
 	owner               uuid.UUID
 	retry               *change
 	active              int
-	budget              [probeHourlyLimit]time.Time
-	used                int
+	budget              probeBudget
+	settings            atomic.Pointer[ProbeSettings]
+	settingsAt          time.Time
 	done                chan probeEnd
 	verifyDone          chan verifyEnd
 	stale               bool
@@ -121,12 +121,15 @@ func Start(ctx context.Context, c Config) (*Monitor, *Loop, error) {
 	l := &Loop{
 		monitor: m, db: c.DB, scope: c.Scope, source: c.Source, pauses: c.Pauses, alerts: c.Alerts, logger: c.Logger,
 		node: c.Node, now: c.Now, rand: c.Rand, identity: c.Identity, unavailable: map[uuid.UUID]bool{}, owner: uuid.NewV7(),
-		done: make(chan probeEnd, probeConcurrency), verifyDone: make(chan verifyEnd, probeConcurrency),
+		done: make(chan probeEnd, maxProbeConcurrency), verifyDone: make(chan verifyEnd, maxProbeConcurrency),
 	}
 	m.loop = l
 
 	l.instrument(c.Meter)
 	if err := l.load(ctx); err != nil {
+		return nil, nil, err
+	}
+	if err := l.loadSettings(ctx, c.Now()); err != nil {
 		return nil, nil, err
 	}
 	return m, l, nil
@@ -216,6 +219,8 @@ func (l *Loop) Tick(ctx context.Context) error {
 	if err := l.flush(ctx); err != nil {
 		return err
 	}
+	now := l.now()
+	l.refreshSettings(ctx, now)
 	endpoints, err := l.source.Routable()
 	if err != nil {
 		l.stale = true
@@ -224,14 +229,13 @@ func (l *Loop) Tick(ctx context.Context) error {
 	if err := l.monitor.Prepare(ctx, endpoints); err != nil {
 		return err
 	}
-	now := l.now()
 	due := l.due(ctx, endpoints, now)
 	if l.stale {
 		l.stale = false
 		for _, e := range due {
 			e.mu.Lock()
 			r := e.record
-			r.Next = now.Add(time.Duration(1 + l.rand()*float64(probeBase))).UnixNano()
+			r.Next = now.Add(time.Duration(1 + l.rand()*float64(l.currentSettings().ProbeBase))).UnixNano()
 			l.monitor.transition(e, r, "", false)
 			e.mu.Unlock()
 		}
@@ -251,7 +255,8 @@ func (l *Loop) Tick(ctx context.Context) error {
 
 func (l *Loop) schedule(ctx context.Context, due []*State, endpoints []suppliers.Routable, now time.Time) error {
 	for _, e := range due {
-		if l.active >= probeConcurrency {
+		settings := l.currentSettings()
+		if l.active >= settings.Concurrency {
 			l.probeMetric(ctx, "deferred")
 			return l.budgetSignal(true)
 		}
@@ -267,8 +272,7 @@ func (l *Loop) schedule(ctx context.Context, due []*State, endpoints []suppliers
 			continue
 		}
 		ep := endpoints[slices.IndexFunc(endpoints, func(ep suppliers.Routable) bool { return ep.ID == claim.ID })]
-		l.budget[l.used%len(l.budget)] = now
-		l.used++
+		l.budget.spend(now)
 		l.active++
 		go l.probe(context.WithoutCancel(ctx), claim, ep, probePrompt(l.rand()))
 	}
@@ -281,9 +285,8 @@ func (l *Loop) due(ctx context.Context, endpoints []suppliers.Routable, now time
 		e := l.monitor.Live(ep.ID, ep.Credentials)
 		e.mu.Lock()
 		e.lastSeen = now
-		l.warnDown(e, now)
 		r := e.record
-		if l.monitor.mode == Enforce && ep.Platform() && r.Opened != 0 && r.Next <= now.UnixNano() && r.Lease <= now.UnixNano() && e.pending == 0 {
+		if l.monitor.mode == Enforce && ep.Platform() && e.probeable && r.Opened != 0 && r.Next <= now.UnixNano() && r.Lease <= now.UnixNano() && e.pending == 0 {
 			if ep.Funds != nil && !ep.Funds.CanPay(platform.Exact{}) {
 				l.probeMetric(ctx, "deferred")
 			} else if until := l.pauses.PausedUntil(ep.ID, ep.Supplier); until.After(now) {
@@ -316,20 +319,17 @@ func compareNextProbe(a, b *State) int {
 	return a.id.Compare(b.id)
 }
 
-func (l *Loop) warnDown(e *State, now time.Time) {
-	r := e.record
-	if r.Opened != 0 && !r.Warned && now.Sub(time.Unix(0, r.Opened)) >= time.Hour && r.Lease <= now.UnixNano() && e.pending == 0 {
-		r.Warned = true
-		l.monitor.transition(e, r, "still_down", false)
-	}
-}
-
 func (l *Loop) probe(ctx context.Context, claim healthRecord, ep suppliers.Routable, prompt string) {
 	end := probeEnd{claim: claim}
+	format, ok := probeFormat(ep.Formats)
+	if !ok {
+		l.done <- end // a direct-format endpoint cannot be re-checked by a generation; due never schedules one
+		return
+	}
 	ctx, cancel := context.WithTimeout(ctx, suppliers.TestDeadline+2*probeCommitGrace)
 	defer cancel()
 	end.err = l.db.Tx(ctx, l.scope, func(tx pg.Tx) error {
-		result, err := l.generate(ctx, tx, suppliers.TestRequest{Endpoint: ep.ID, Format: ep.Formats[0], Prompt: prompt, AvoidCredential: claim.Credential}, "automatic health recovery")
+		result, err := l.generate(ctx, tx, suppliers.TestRequest{Endpoint: ep.ID, Format: format, Prompt: prompt, AvoidCredential: claim.Credential}, "automatic health recovery")
 		end.result = result
 		return err
 	})
@@ -379,10 +379,17 @@ func (l *Loop) finish(ctx context.Context, end probeEnd) {
 		r.Opened = 0
 		r.Restored = now.UnixNano()
 		r.Next = 0
+		r.Warned = false
 		kind = "restored"
 	case suppliers.TestFailed:
 		e.count(failure, now)
-		r.Backoff = min(r.Backoff+1, 5)
+		r.Backoff = min(r.Backoff+1, maxProbeBackoff)
+		if !r.Warned {
+			// The trip only took the endpoint out; this failed re-check is what marks it offline and tells operations.
+			// A later failed probe keeps the state without repeating the signal (docs/domains/quality.md「恢复」).
+			r.Warned = true
+			kind = "offline"
+		}
 	case suppliers.TestInconclusive:
 	}
 	l.reschedule(&r, end.result.Failure, now)
@@ -398,8 +405,7 @@ func (l *Loop) finish(ctx context.Context, end probeEnd) {
 
 // spent says this hour's probe budget is used up.
 func (l *Loop) spent(now time.Time) bool {
-	at := l.budget[l.used%len(l.budget)]
-	return !at.IsZero() && now.Sub(at) < time.Hour
+	return l.budget.spent(now, l.currentSettings().HourlyBudget)
 }
 
 // spread is d with up to a tenth of jitter either way, so checks due together do not all go at once.

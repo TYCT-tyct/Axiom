@@ -27,15 +27,10 @@ type OrderQuery struct {
 }
 
 // SiteOrder is one of a site's orders with what its operator's list shows beside the order: the merchant account's
-// name as the channel, and what the channel actually took and credited, which a partial or mismatched payment makes
-// different from the quote.
+// name as the channel.
 type SiteOrder struct {
 	Order
 	MerchantName string
-	PaidAt       *time.Time
-	Credited     *int64
-	PaidTotal    *int64
-	PaidFee      *int64
 }
 
 // ListSiteOrders is one page of a site's orders, newest first, and the cursor of the next page, nil at the end. The
@@ -107,18 +102,15 @@ func siteOrderOf(r ListSiteOrdersRow) (SiteOrder, error) {
 	if err != nil {
 		return SiteOrder{}, fmt.Errorf("payments: order %s is paid in %q: %w", OrderID(r.ID).TypeID(), r.PayCurrency, err)
 	}
-	o := SiteOrder{
+	order := Order{
 		ID: OrderID(r.ID), SiteID: r.SiteID, AccountID: r.AccountID, UserID: r.UserID,
 		MerchantID: MerchantID(r.MerchantID), Method: Method(r.Method), State: State(r.State),
 		Credits: r.Credits, Total: Money{Currency: pay, Minor: r.Total}, Fee: r.Fee, TradeNo: r.TradeNo,
-		ExpiresAt: r.ExpiresAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, RefundAllowed: r.RefundAllowed,
-		MerchantName: r.MerchantName, Credited: r.Credited, PaidTotal: r.PaidTotal, PaidFee: r.PaidFee,
+		ExpiresAt: r.ExpiresAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		PaidAt: optionalTimestamp(r.PaidAt), PaidTotal: r.PaidTotal, PaidFee: r.PaidFee, Credited: r.Credited,
+		RefundAllowed: r.RefundAllowed,
 	}
-	if r.PaidAt.Valid {
-		at := r.PaidAt.Time
-		o.PaidAt = &at
-	}
-	return o, nil
+	return SiteOrder{Order: order, MerchantName: r.MerchantName}, nil
 }
 
 // RefundQuery narrows one site's refunds. State is an internal state; empty does not narrow, and Site is required.

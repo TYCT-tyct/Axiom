@@ -176,10 +176,13 @@ func holdReserveBackgroundTables(t *testing.T, ctx context.Context, r *rig) func
 	t.Cleanup(admin.Close)
 	unlock := holdReserveTransaction(t, ctx, admin, "LOCK TABLE observability.call_log IN ACCESS EXCLUSIVE MODE")
 	logger := slog.New(slog.DiscardHandler)
-	recorder := observability.NewRecorder(ctx, r.db, platformScope, observability.Config{
-		QueueSize: 1, BatchSize: 1, FlushInterval: time.Hour, WriteTimeout: time.Minute,
+	recorder, err := observability.NewRecorder(ctx, r.db, platformScope, observability.Config{
+		Dir: t.TempDir(), Capacity: 1, BatchSize: 1, FlushInterval: time.Hour, WriteTimeout: time.Minute,
 		RetryBase: time.Second, RetryMax: time.Second,
 	}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		unlock()
 		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -192,7 +195,7 @@ func holdReserveBackgroundTables(t *testing.T, ctx context.Context, r *rig) func
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.Enqueue(observability.CallRecord{ //nolint:contextcheck // Enqueue takes no context: the hand-off never waits
+	if err := recorder.Enqueue(observability.CallRecord{
 		ID: uuid.NewV7(), At: time.Now(), Site: siteID, Account: uuid.NewV7(),
 		IP: netip.MustParseAddr("203.0.113.1"), Class: "chat", Model: "acme/alpha",
 		Currency: currency, ConsentVersion: "test",

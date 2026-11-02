@@ -229,6 +229,7 @@ type attempt struct {
 	unhook  func() bool // of the node's shutdown, which cancels the attempt
 
 	content     bool              // the upstream sent content: the commit point came
+	capture     *cacheCapture     // the upstream body's bounded copy, nil when this call does not cache
 	state       string            // the turn state the upstream set, passed on with the answer (headers.go)
 	usage       protocol.Usage    // what the stream reported, once it is over
 	seen        protocol.Progress // what the relay had seen last
@@ -254,7 +255,6 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	}
 	a.obs.Endpoint, a.obs.Sent = uuid.UUID(entry.Endpoint), time.Now()
 	a.obs.Source = uuid.UUID(s.c.Admission.OwnerID())
-	a.obs.BreakerFallback = entry.BreakerFallback
 	a.obs.Request = s.c.ID
 	a.first = s.begin(entry, kept, false)
 	a.i = a.first

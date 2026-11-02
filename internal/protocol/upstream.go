@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: events are read token by token, in place
 	"fmt"
+	"strconv"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -93,7 +94,10 @@ type eventReader struct {
 
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
 	s.ctx, s.charge, s.rw.charge, s.capture = u, charge, charge, o.Capture
-	s.rw.hidesReasoning = u.HidesReasoning
+	s.rw.hidesReasoning, s.rw.cached = u.HidesReasoning, o.Cached
+	if o.Cached {
+		s.rw.cacheCreated = strconv.FormatInt(o.Created, 10)
+	}
 	s.rw.w.Identity = func(string) string { return o.ID }
 	s.rw.t.Model = o.modelName()
 	s.rw.usageMembers = usageMembers
@@ -344,6 +348,8 @@ func hex4(h []byte) rune {
 // before the response ends (response.created); the ending's is dropped, since the settlement writes the usage object
 // there and a second member of the name would be a duplicate.
 func (p *rewriter) usage() error {
+	p.zeroUsage = p.cached
+	defer func() { p.zeroUsage = false }()
 	if ok, err := p.open('{', "an object"); !ok {
 		if err == nil && !p.ending {
 			return nil
@@ -388,4 +394,86 @@ func keep(names ...string) map[string]rule {
 		m[name] = (*rewriter).skip
 	}
 	return m
+}
+
+// cachedCreated puts this call's start in a cached reply's created member, which would otherwise name the generation it
+// was stored from. A live reply keeps the upstream's value.
+func (p *rewriter) cachedCreated() error {
+	v, err := p.value()
+	if err != nil || !p.cached {
+		return err
+	}
+	p.replace(len(v), p.cacheCreated)
+	return nil
+}
+
+// zeroCounts replaces every number in a usage member's value with 0, keeping its shape, strings and booleans. A cache
+// hit reports the same members the upstream did, all zero: it generated nothing and is billed nothing.
+func (p *rewriter) zeroCounts() error {
+	v, err := p.value()
+	if err != nil {
+		return err
+	}
+	p.replace(len(v), string(zeroJSONNumbers(v)))
+	return nil
+}
+
+// zeroJSONNumbers replaces every number in a usage value with 0, keeping its shape, strings and booleans. A cache hit
+// reports the same members the upstream did, all zero: it generated nothing and is billed nothing. It scans the value
+// rather than decoding it, so an empty or nested array or object cannot recurse or lose its delimiters.
+func zeroJSONNumbers(v jsontext.Value) jsontext.Value {
+	out := make([]byte, 0, len(v))
+	inString, escaped := false, false
+	for i := 0; i < len(v); {
+		switch c := v[i]; {
+		case inString:
+			out = append(out, c)
+			i++
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+		case c == '"':
+			inString = true
+			out = append(out, c)
+			i++
+		case c == '-' || c >= '0' && c <= '9':
+			i = jsonNumberEnd(v, i)
+			out = append(out, '0')
+		default:
+			out = append(out, c)
+			i++
+		}
+	}
+	return out
+}
+
+// jsonNumberEnd returns the offset just past the JSON number at i. The caller has checked that a number starts there.
+func jsonNumberEnd(v []byte, i int) int {
+	if v[i] == '-' {
+		i++
+	}
+	i = digitsEnd(v, i)
+	if i < len(v) && v[i] == '.' {
+		i = digitsEnd(v, i+1)
+	}
+	if i < len(v) && (v[i] == 'e' || v[i] == 'E') {
+		i++
+		if i < len(v) && (v[i] == '+' || v[i] == '-') {
+			i++
+		}
+		i = digitsEnd(v, i)
+	}
+	return i
+}
+
+func digitsEnd(v []byte, i int) int {
+	for i < len(v) && v[i] >= '0' && v[i] <= '9' {
+		i++
+	}
+	return i
 }

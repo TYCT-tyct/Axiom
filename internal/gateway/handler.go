@@ -20,6 +20,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/fileparse"
+	"axiom/internal/observability"
 	"axiom/internal/platform"
 	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/httpserver"
@@ -64,6 +65,10 @@ type Deps struct {
 	// Parser runs the file-parser plugin's OCR engines through the deployment's backend; nil means no backend is
 	// configured, and a request that asks for one keeps its documented refusal.
 	Parser fileparse.Parser
+	// Records is the call log the handler reserves a record in before admitting a call, so a call is never served when
+	// its record cannot be kept (docs/domains/observability.md「写入路径」). nil is for tests that do not exercise the
+	// call log; the production node always sets it.
+	Records *observability.Recorder
 }
 
 // Handler serves the model API: the call paths in both prefixes, and the model list.
@@ -196,6 +201,9 @@ type Call struct {
 	searchPrice   platform.UnitPrice        // the backend's published price per search, zero to use the model's
 	files         []protocol.FileAnnotation // the annotations a parsed Chat reply returns, so the client can skip reparsing
 	Header        http.Header               // the client's values of the headers that may go upstream, which headers.go derives per attempt
+	cache         cachePlan                 // the response cache this call may read or write, zero when it did not ask
+	presetCache   *bool                     // the preset's cache_enabled, nil when it does not decide the switch
+	presetTTL     int64                     // the preset's cache_ttl_seconds, 0 when absent
 	Session       routing.SessionKey
 	Admission     accounts.Admission
 	Admitted      billing.Admitted
@@ -218,6 +226,8 @@ type Call struct {
 	rateReset   int64
 	rate        int  // requests of the key in the rate window, counted before admission
 	gated       bool // the file parser's gate counted the call already; fillCall does not count it again
+
+	record *observability.Slot // this call's room in the call log, taken before admission
 
 	mu       sync.Mutex
 	releases []func()
@@ -322,13 +332,25 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol
 	return c, nil
 }
 
-// take takes the call's slots, reads its body and admits it.
+// take takes the call's slots, reads its body and admits it. The record's room is taken with the in-flight slots: an
+// admitted call that cannot be recorded would be a call served without its log, so the node refuses it instead.
 func (h *Handler) take(w http.ResponseWriter, r *http.Request, c *Call) error {
 	release, err := h.Limits.InFlight.Acquire(accountKey(c.caller), 0)
 	if err != nil {
 		return err
 	}
 	c.hold(release)
+	if h.Records != nil {
+		slot, err := h.Records.Admit()
+		if err != nil {
+			if errors.Is(err, observability.ErrBacklog) || errors.Is(err, observability.ErrBroken) {
+				return errRecordBacklog
+			}
+			return err
+		}
+		c.record = slot
+		c.hold(slot.Release)
+	}
 	if err := h.read(w, r, c); err != nil {
 		return err
 	}
@@ -484,6 +506,7 @@ func (h *Handler) fillCall(c *Call, r *http.Request, sessionBody, body []byte, r
 	models []catalog.ModelID, names variantNames, over routing.Override,
 ) error {
 	c.Body, c.Request, c.snap, c.models, c.auto, c.free, c.over = body, req, snap, models, names.auto, names.free, over
+	c.cache = cachePlanFor(c, r.Header)
 	headerSession := strings.TrimSpace(r.Header.Get("X-Session-Id"))
 	if !utf8.ValidString(headerSession) || utf8.RuneCountInString(headerSession) > 256 {
 		return invalid("x-session-id must be valid UTF-8 with at most 256 characters.")

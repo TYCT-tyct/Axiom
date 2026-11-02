@@ -6,6 +6,8 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 )
@@ -15,6 +17,39 @@ func (p *Payments) GetOrder(ctx context.Context, s pg.Scope, id OrderID) (Order,
 	var o Order
 	err := p.db.ReadTx(ctx, s, func(tx pg.Tx) (err error) { o, err = loadOrder(ctx, tx, id); return err })
 	return o, err
+}
+
+// readOrder reads one order of the transaction's scope.
+func loadOrder(ctx context.Context, tx pg.Tx, id OrderID) (Order, error) {
+	rows, err := queries.ReadOrder(ctx, tx, uuid.UUID(id))
+	if err != nil {
+		return Order{}, fmt.Errorf("payments: read order %s: %w", id.TypeID(), err)
+	}
+	if len(rows) == 0 {
+		return Order{}, ErrNotFound
+	}
+	return orderOf(rows[0])
+}
+
+// orderOf is a stored order as the module passes it around.
+func orderOf(r ReadOrderRow) (Order, error) {
+	pay, err := platform.ParseCurrency(r.PayCurrency)
+	if err != nil {
+		return Order{}, fmt.Errorf("payments: order %s is paid in %q: %w", OrderID(r.ID).TypeID(), r.PayCurrency, err)
+	}
+	var c Checkout
+	if len(r.Checkout) > 0 {
+		if err = jsonx.UnmarshalKnown(r.Checkout, &c); err != nil {
+			return Order{}, fmt.Errorf("payments: order %s has a checkout that does not parse: %w", OrderID(r.ID).TypeID(), err)
+		}
+	}
+	return Order{
+		ID: OrderID(r.ID), SiteID: r.SiteID, AccountID: r.AccountID, UserID: r.UserID, MerchantID: MerchantID(r.MerchantID),
+		Method: Method(r.Method), State: State(r.State), Credits: r.Credits, Total: Money{pay, r.Total}, Fee: r.Fee,
+		TradeNo: r.TradeNo, Checkout: c, ExpiresAt: r.ExpiresAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		PaidAt: optionalTimestamp(r.PaidAt), PaidTotal: r.PaidTotal, PaidFee: r.PaidFee, Credited: r.Credited,
+		RefundAllowed: r.RefundAllowed,
+	}, nil
 }
 
 // ListOrders is one page of the account's orders, newest first, and the cursor of the next page, nil at the end. The

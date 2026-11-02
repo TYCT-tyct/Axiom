@@ -1,4 +1,5 @@
 import type { Messages } from "@axiom/ui";
+import receipt from "./en/receipt";
 import { en as statement } from "./statement";
 import type zh from "./zh";
 
@@ -204,6 +205,8 @@ export default {
     verify: "I have paid",
     cancelOrder: "Cancel order",
     refund: "Request refund",
+    receipt: "Receipt",
+    receiptsUnavailable: "This server doesn’t report receipts yet; reload after it is upgraded.",
     refundsUnavailable: "This server doesn’t report refunds yet; reload after it is upgraded.",
     unavailable: "Unavailable",
     noRefunds: "None",
@@ -242,6 +245,7 @@ export default {
     saved: "Saved.",
     dismiss: "Close",
   },
+  receipt,
   notifications: {
     description: "When Axiom emails you or calls your webhook.",
     title: "Alerts",
@@ -417,6 +421,7 @@ export default {
     ok: "Succeeded",
     failed: "Failed",
     free: "Free",
+    cacheHit: "Cached",
     ms: "{{value}} ms",
     tokens: "{{input}} / {{output}}",
   },
@@ -437,6 +442,10 @@ export default {
     finish: "Finish reason",
     latency: "Total time",
     firstToken: "Time to first token",
+    cache: "Response cache",
+    cacheHit: "Hit",
+    cacheHitBody:
+      "This call was answered from the response cache: no upstream request was made and nothing was charged.",
     session: "Session",
     subagent: "Subagent",
     key: "Key used",

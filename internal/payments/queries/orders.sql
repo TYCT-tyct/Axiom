@@ -5,6 +5,9 @@
 -- itself still checks that (refund.go).
 SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.fingerprint, o.credits,
     o.site_currency, o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
+    -- What the channel took and what has been credited, which a partial or late payment makes differ from the quote.
+    -- NULL until the order is paid.
+    o.paid_at, o.paid_total, o.paid_fee, o.credited,
     (m.user_refund AND m.refund_enabled)::boolean AS refund_allowed
 FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id WHERE o.id = @id;
 
@@ -13,6 +16,8 @@ FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id WHERE o
 -- DESC), which this reads in order and then filters by the cursor's id within the same microsecond.
 SELECT o.id, o.site_id, o.account_id, o.user_id, o.merchant_id, o.method, o.state, o.fingerprint, o.credits,
     o.site_currency, o.pay_currency, o.total, o.fee, o.trade_no, o.checkout, o.expires_at, o.created_at, o.updated_at,
+    -- The same paid facts as ReadOrder, so a page shows the same receipt whichever read it came from.
+    o.paid_at, o.paid_total, o.paid_fee, o.credited,
     (m.user_refund AND m.refund_enabled)::boolean AS refund_allowed
 FROM payments.orders o JOIN payments.merchants m ON m.id = o.merchant_id
 WHERE o.account_id = @account_id AND (o.created_at, o.id) < (@after_at::timestamptz, @after_id::uuid)

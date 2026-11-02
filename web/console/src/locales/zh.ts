@@ -1,5 +1,6 @@
 // The console's messages in Chinese, the source every other language follows.
 import { zh as statement } from "./statement";
+import receipt from "./zh/receipt";
 
 export default {
   announcements: {
@@ -195,6 +196,8 @@ export default {
     verify: "我已付款",
     cancelOrder: "取消订单",
     refund: "申请退款",
+    receipt: "收据",
+    receiptsUnavailable: "当前服务节点暂不支持收据，升级后刷新即可。",
     refundsUnavailable: "当前服务节点暂不支持退款信息，升级后刷新即可。",
     unavailable: "不可用",
     noRefunds: "无",
@@ -231,6 +234,7 @@ export default {
     saved: "已保存。",
     dismiss: "关闭",
   },
+  receipt,
   notifications: {
     description: "Axiom 什么时候给你发邮件或调用你的 webhook。",
     title: "提醒",
@@ -404,6 +408,7 @@ export default {
     ok: "成功",
     failed: "失败",
     free: "免单",
+    cacheHit: "缓存",
     ms: "{{value}} 毫秒",
     tokens: "{{input}} / {{output}}",
   },
@@ -424,6 +429,9 @@ export default {
     finish: "结束原因",
     latency: "总耗时",
     firstToken: "首个 token 耗时",
+    cache: "响应缓存",
+    cacheHit: "命中",
+    cacheHitBody: "这次调用由响应缓存作答，没有请求上游，也没有计费。",
     session: "会话",
     subagent: "子 agent",
     key: "使用的 key",

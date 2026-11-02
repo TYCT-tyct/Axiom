@@ -43,7 +43,7 @@ func TestLedgerProperty(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, ^seed)) //nolint:gosec // G404: test data
 			b := fallbackBank(t, 5000, -500, Config{
 				HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: 20 * time.Millisecond,
-				Segments: Segments{Output: segmentTokens, Overshoot: time.Second},
+				Segments: NewSegmentPolicy(Segments{Output: segmentTokens, Overshoot: time.Second}),
 			})
 			var holds []*Hold
 			for range 40 {
