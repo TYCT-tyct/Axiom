@@ -45,6 +45,8 @@ type Config struct {
 	Logger   *slog.Logger   // diagnostics; durable alerts use platform signals; default slog.Default()
 	Proxies  []netip.Prefix // only these peers may supply a callback's source address
 	Alerts   alert.Sink     // where the per-event signals go; nil means only logs and the durable signals
+	Instance string         // this node's identity, the first part of every signal key; required with Alerts
+	Signals  *SignalState   // the node's shared counters and unresolved incidents; nil makes a new one
 }
 
 // Payments is the module's service.
@@ -63,10 +65,10 @@ type Payments struct {
 	callbacks   map[callbackKey]*list.Element
 	callbackLRU list.List
 	alerts      alert.Sink
-	now         func() time.Time // time.Now; tests replace it to drive the signal windows
-	signalMu    sync.Mutex
-	signals     map[signalKey]*signalCounter
-	unreadable  map[MerchantID]struct{} // merchants whose configuration did not open, for the unresolved signal
+	instance    string
+	signals     *SignalState
+	now         func() time.Time            // time.Now; tests replace it to drive the signal windows
+	after       func(time.Duration, func()) // time.AfterFunc; tests replace it to flush windows by hand
 }
 
 // Open checks the plugins: two plugins of one kind are a mistake in assembling the program and fail the start.
@@ -74,10 +76,15 @@ func Open(c Config) (*Payments, error) {
 	if c.DB == nil || c.Keyring == nil {
 		return nil, errors.New("payments: a database and a keyring are required")
 	}
-	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger, valid: map[uuid.UUID]validity{}, alerts: c.Alerts, now: time.Now}
+	if c.Alerts != nil && c.Instance == "" {
+		return nil, errors.New("payments: an instance is required with alerts")
+	}
+	state := c.Signals
+	if state == nil {
+		state = NewSignalState()
+	}
+	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger, valid: map[uuid.UUID]validity{}, alerts: c.Alerts, instance: c.Instance, signals: state, now: time.Now, after: func(d time.Duration, f func()) { time.AfterFunc(d, f) }}
 	p.channels = make(map[MerchantID]channelBinding)
-	p.signals = make(map[signalKey]*signalCounter)
-	p.unreadable = make(map[MerchantID]struct{})
 	p.proxies = slices.Clone(c.Proxies)
 	p.callbacks = make(map[callbackKey]*list.Element)
 	if p.logger == nil {

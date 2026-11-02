@@ -49,6 +49,7 @@ type userNotice struct {
 	Value                       string    `json:"value"`
 	At                          time.Time `json:"at"`
 	Currency                    string    `json:"currency,omitempty"`
+	Detail                      string    `json:"detail,omitempty"`
 	site, account, user         uuid.UUID
 	email, brand, url, language string
 	emailDone                   bool
@@ -63,7 +64,7 @@ var noticeKinds = []string{"low_balance", "top_up", "factor_changed", "spend_ano
 // DispatchUserNotices freezes destinations for at most 100 notices and returns how many were dispatched.
 func DispatchUserNotices(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mailer) (int, error) {
 	p := notificationDefaults()
-	rows, err := tx.Query(ctx, `SELECT n.id,n.site_id,n.account_id,n.user_id,n.kind,n.value::text,n.at,n.email_done,u.email,s.name,s.currency,coalesce(p.low_balance,$1),coalesce(p.top_up,$2),coalesce(p.factor_changed,$3),coalesce(p.spend_anomaly,$4),coalesce(p.webhook_url,''),coalesce(p.language,$5)
+	rows, err := tx.Query(ctx, `SELECT n.id,n.site_id,n.account_id,n.user_id,n.kind,n.value::text,n.detail,n.at,n.email_done,u.email,s.name,s.currency,coalesce(p.low_balance,$1),coalesce(p.top_up,$2),coalesce(p.factor_changed,$3),coalesce(p.spend_anomaly,$4),coalesce(p.webhook_url,''),coalesce(p.language,$5)
  FROM accounts.user_notices n JOIN accounts.users u ON u.id=n.user_id JOIN accounts.sites s ON s.id=n.site_id LEFT JOIN accounts.notification_preferences p ON p.user_id=n.user_id
  WHERE NOT n.dispatched AND n.kind = ANY($6) ORDER BY n.id FOR UPDATE OF n SKIP LOCKED LIMIT 100`, p.LowBalance, p.TopUp, p.FactorChanged, p.SpendAnomaly, p.Language, noticeKinds)
 	if err != nil {
@@ -72,7 +73,7 @@ func DispatchUserNotices(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mai
 	var notices []userNotice
 	for rows.Next() {
 		var n userNotice
-		if err = rows.Scan(&n.ID, &n.site, &n.account, &n.user, &n.Kind, &n.Value, &n.At, &n.emailDone, &n.email, &n.brand, &n.Currency, &n.preferences.LowBalance, &n.preferences.TopUp, &n.preferences.FactorChanged, &n.preferences.SpendAnomaly, &n.preferences.WebhookURL, &n.preferences.Language); err != nil {
+		if err = rows.Scan(&n.ID, &n.site, &n.account, &n.user, &n.Kind, &n.Value, &n.Detail, &n.At, &n.emailDone, &n.email, &n.brand, &n.Currency, &n.preferences.LowBalance, &n.preferences.TopUp, &n.preferences.FactorChanged, &n.preferences.SpendAnomaly, &n.preferences.WebhookURL, &n.preferences.Language); err != nil {
 			break
 		}
 		notices = append(notices, n)
@@ -161,14 +162,31 @@ func noticeMail(n userNotice) mail.Message {
 		amount, _ := new(big.Int).SetString(n.Value, 10)
 		value = new(big.Rat).SetFrac(amount, big.NewInt(1_000_000_000)).FloatString(9) + " " + n.Currency
 	}
+	detail := strings.Map(func(r rune) rune {
+		if r < ' ' || r == 127 {
+			return -1
+		}
+		return r
+	}, n.Detail)
 	text := brand + "\n\n" + names[n.Kind]
+	if n.Kind == "site_payment_changed" && detail != "" {
+		if n.language == "zh" {
+			text += "\n站点：" + detail
+		} else {
+			text += "\nSite: " + detail
+		}
+	}
 	if (n.Kind != "spend_anomaly" && n.Kind != "site_payment_changed") || n.Value != "0" {
 		text += "\n" + value
 	}
 	if advice := noticeAdvice(n); advice != "" {
 		text += "\n" + advice
 	}
-	return mail.Message{To: n.email, Subject: brand + " — " + names[n.Kind], Text: text, HTML: "<p>" + html.EscapeString(text) + "</p>"}
+	subject := brand + " — " + names[n.Kind]
+	if n.Kind == "site_payment_changed" && detail != "" {
+		subject += " (" + detail + ")"
+	}
+	return mail.Message{To: n.email, Subject: subject, Text: text, HTML: "<p>" + html.EscapeString(text) + "</p>"}
 }
 
 // noticeAdvice is the one line a security reminder adds after its facts; other notices have none.

@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
+	"axiom/internal/platform/typeid"
 )
 
 const merchantSecret = "fake-gateway-key-0123456789"
@@ -310,5 +312,71 @@ func TestAdminPaymentSettingsTopUpBuffer(t *testing.T) {
 	decode(t, rec, &view)
 	if view.TopUpBufferPpm == nil || *view.TopUpBufferPpm != 35_000 {
 		t.Fatalf("buffer after another save %s", rec.Body)
+	}
+}
+
+type merchantSignals struct {
+	mu       sync.Mutex
+	raised   []alert.Signal
+	resolved []alert.Signal
+}
+
+func (s *merchantSignals) Raise(kind, key, severity string, fields map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.raised = append(s.raised, alert.Signal{Kind: kind, Key: key, Severity: severity, Fields: fields})
+	return nil
+}
+
+func (s *merchantSignals) RaiseOnce(_, kind, key, severity string, fields map[string]string) error {
+	return s.Raise(kind, key, severity, fields)
+}
+
+func (s *merchantSignals) Resolve(kind, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolved = append(s.resolved, alert.Signal{Kind: kind, Key: key, Resolved: true})
+	return nil
+}
+
+// TestAdminMerchantUnreadableUsesTheNodesSignals proves the admin's paymentsService is constructed with the node's
+// alert sink and identity, not a private instance that silently drops a decryption failure.
+func TestAdminMerchantUnreadableUsesTheNodesSignals(t *testing.T) {
+	c, _ := ownerFixture.get(t, buildOwnerDatabase)
+	exit, err := egress.New(egress.Direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &merchantSignals{}
+	f := startAdminNodeWithSignals(c, &testClock{now: time.Now()}, exit, sink, "test-node")
+	if _, err = f.user("", "grant-platform", "--email", ownerEmail, "--role", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	s := f.owner()
+	created := createMerchant(t, f, s, f.siteID())
+	id, err := typeid.MustPrefix("mch").Decode(*created.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.run(fmt.Sprintf("UPDATE payments.merchant_configs SET nonce = set_byte(nonce, 0, (get_byte(nonce, 0) + 1) %% 256) WHERE merchant_id = '%s'", id))
+	rec := f.change(s, http.MethodPut, "/payments/merchants/"+*created.Id, merchantJSON("", "Renamed", true, 1, "0", false), newKey())
+	if rec.Code == http.StatusOK {
+		t.Fatalf("a merchant with a changed nonce saved: %s", rec.Body)
+	}
+	sink.mu.Lock()
+	if len(sink.raised) != 1 || sink.raised[0].Kind != "payments.merchant_unreadable" || sink.raised[0].Key != "test-node/"+*created.Id {
+		sink.mu.Unlock()
+		t.Fatalf("raised %+v", sink.raised)
+	}
+	sink.mu.Unlock()
+	// A later admin request is a new Payments; the shared node state must let its successful save resolve the event.
+	rec = f.change(s, http.MethodPut, "/payments/merchants/"+*created.Id, merchantJSON("", "Renamed", true, 1, "0", true), newKey())
+	expectAdmin(t, "save a readable merchant", rec, http.StatusOK, "")
+	rec = f.change(s, http.MethodPost, "/payments/merchants/"+*created.Id+"/tests", `{"reason":"prove the new secrets open"}`, newKey())
+	expectAdmin(t, "test the readable merchant", rec, http.StatusOK, "")
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.resolved) != 1 || sink.resolved[0].Key != "test-node/"+*created.Id {
+		t.Fatalf("resolved %+v", sink.resolved)
 	}
 }

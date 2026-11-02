@@ -193,18 +193,19 @@ func TestSpendAnomalyNoticeMail(t *testing.T) {
 // points at the platform operator rather than the site.
 func TestSitePaymentNoticeMail(t *testing.T) {
 	t.Parallel()
-	n := userNotice{Kind: "site_payment_changed", Value: "0", Currency: "CNY", language: "en", brand: "Site", email: "owner@example.com"}
+	n := userNotice{Kind: "site_payment_changed", Value: "0", Currency: "CNY", Detail: "Child A", language: "en", brand: "Site", email: "owner@example.com"}
 	if !noticeEnabled(n.Kind, NotificationPreferences{}) {
 		t.Fatal("the site payment notice is optional")
 	}
 	m := noticeMail(n)
-	if m.Subject != "Site — Payment settings changed" || strings.Contains(m.Text, "CNY") || strings.Contains(m.Text, "0.000000000") ||
-		!strings.Contains(m.Text, "contact the platform operator") {
+	if m.Subject != "Site — Payment settings changed (Child A)" || !strings.Contains(m.Text, "Site: Child A") ||
+		strings.Contains(m.Text, "CNY") || strings.Contains(m.Text, "0.000000000") || !strings.Contains(m.Text, "contact the platform operator") {
 		t.Fatalf("English: %q", m.Text)
 	}
 	n.language = "zh"
 	m = noticeMail(n)
-	if !strings.Contains(m.Text, "收款配置已变更") || !strings.Contains(m.Text, "联系平台运营") || strings.Contains(m.Text, "CNY") {
+	if !strings.Contains(m.Subject, "Child A") || !strings.Contains(m.Text, "站点：Child A") ||
+		!strings.Contains(m.Text, "收款配置已变更") || !strings.Contains(m.Text, "联系平台运营") || strings.Contains(m.Text, "CNY") {
 		t.Fatalf("Chinese: %q", m.Text)
 	}
 }

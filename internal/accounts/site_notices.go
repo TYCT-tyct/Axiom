@@ -14,8 +14,8 @@ import (
 // back together. A fresh source makes each save one notice; the admin endpoint's idempotency key makes a retried request
 // reuse that save rather than record a second change.
 func RecordSitePaymentNotice(ctx context.Context, tx pg.Tx, site uuid.UUID) error {
-	_, err := tx.Exec(ctx, `INSERT INTO accounts.user_notices(site_id,account_id,user_id,source,kind,value)
- SELECT a.site_id,a.id,u.id,$2,'site_payment_changed',0
+	_, err := tx.Exec(ctx, `INSERT INTO accounts.user_notices(site_id,account_id,user_id,source,kind,value,detail)
+ SELECT a.site_id,a.id,u.id,$2,'site_payment_changed',0,s.name
  FROM accounts.sites s
  JOIN accounts.accounts a ON a.id=s.owner_account_id
  JOIN accounts.users u ON u.site_id=a.site_id AND u.account_id=a.id AND u.status='active'

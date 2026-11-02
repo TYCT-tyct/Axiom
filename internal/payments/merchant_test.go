@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"axiom/internal/accounts"
@@ -35,6 +36,7 @@ type world struct {
 	account, acctB uuid.UUID
 	user           uuid.UUID
 	alerts         *recordingSink
+	timers         []testTimer
 }
 
 func newWorld(t *testing.T) *world {
@@ -69,11 +71,12 @@ func newTestWorldWithPool(t *testing.T, plugin Plugin, suffix string, opts ...pg
 		w.siteA, w.account, w.siteB, w.acctB))
 	w.p, err = Open(Config{
 		DB: db, Platform: pg.NewScope(true, nil, nil), Keyring: masterKey(t), Plugins: []Plugin{plugin},
-		Logger: slog.New(slog.NewTextHandler(w.logs, nil)), Alerts: w.alerts,
+		Logger: slog.New(slog.NewTextHandler(w.logs, nil)), Alerts: w.alerts, Instance: "test-node",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.p.after = func(d time.Duration, f func()) { w.timers = append(w.timers, testTimer{at: w.p.now().Add(d), f: f}) }
 	return w
 }
 
