@@ -1,37 +1,18 @@
-import type { TFunction } from "i18next";
 import { type ReactNode, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useFormat } from "../format";
 import { Button } from "./button";
 import { SelectField, TextField } from "./form";
 import { Icon } from "./icon";
+import { EndpointSection } from "./model-endpoints";
+import { label, PricingPrice, type PublicModelPricing, RateTable, SearchEnginePrices } from "./model-pricing";
 import { Badge, Table, Td, Th } from "./panel";
+
+export { baseRate, perMillionBillionths } from "./model-pricing";
 
 // The public models and prices page: what a visitor may see of the catalog, at the price of the audience that asked.
 // Every member but the identity is optional, so a page served by an older node shows what it has and marks the rest
 // unavailable instead of failing (docs/frontend.md「滚动发布」).
-type PublicModelRate = {
-  service_tier: string;
-  above?: number; // absent is the base band; 0 is an explicit first band above 0
-  item: string;
-  unit: string;
-  amount: string;
-};
-
-type PublicSearchEnginePrice = {
-  name: string;
-  price_per_search: string;
-  price_per_extra_result: string;
-  default: boolean;
-};
-
-type PublicModelPricing = {
-  currency: string;
-  basis?: string[];
-  rates?: PublicModelRate[];
-  search_engines?: PublicSearchEnginePrice[];
-};
-
 export type PublicModel = {
   id: string;
   name: string;
@@ -56,60 +37,6 @@ export type PublicEndpoint = {
   verified?: boolean;
   pricing?: PublicModelPricing;
 };
-
-// perMillionBillionths turns a price per token into billionths of a currency unit per million tokens, without a
-// floating point number: a UnitPrice has at most 15 decimals, and moving the point six places leaves at most nine.
-export function perMillionBillionths(amount: string): string | null {
-  const [whole = "0", fraction = ""] = amount.split(".");
-  if (fraction.length > 15) {
-    return null;
-  }
-  const digits = (whole + fraction).replace(/^0+(?=\d)/, "");
-  return (digits + "0".repeat(15 - fraction.length)).replace(/^0+(?=\d)/, "");
-}
-
-const label = (t: TFunction<"common">, group: string, name: string) =>
-  (t as unknown as (key: string, options?: { defaultValue?: string }) => string)(`publicModels.${group}.${name}`, {
-    defaultValue: name,
-  });
-
-function priceText(format: ReturnType<typeof useFormat>, rate: PublicModelRate, currency: string): string {
-  if (rate.unit === "token") {
-    const perMillion = perMillionBillionths(rate.amount);
-    if (perMillion !== null) {
-      return format.money({ amount: perMillion, currency });
-    }
-  }
-  return `${format.decimal(rate.amount)} ${currency}`;
-}
-
-// baseRate is the headline price: the standard tier's price in the base band. An explicit above: 0 tier is a different
-// band even though its threshold is zero, so it must not stand in for the base price.
-export function baseRate<T extends Pick<PublicModelRate, "item" | "above" | "service_tier">>(
-  rates: T[],
-  item: string,
-): T | undefined {
-  return (
-    rates.find(
-      (candidate) => candidate.item === item && candidate.above === undefined && candidate.service_tier === "standard",
-    ) ?? rates.find((candidate) => candidate.item === item && candidate.above === undefined)
-  );
-}
-
-function PricingPrice({ pricing, item }: { pricing?: PublicModelPricing; item: "input" | "output" }) {
-  const { t } = useTranslation("common");
-  const format = useFormat();
-  const rate = pricing?.rates ? baseRate(pricing.rates, item) : undefined;
-  if (!pricing || !rate) {
-    return <span className="text-t3">{t("publicModels.priceUnavailable")}</span>;
-  }
-  return (
-    <>
-      <span className="whitespace-nowrap">{priceText(format, rate, pricing.currency)}</span>
-      {rate.unit === "token" ? <span className="block text-label text-t3">{t("publicModels.perMillion")}</span> : null}
-    </>
-  );
-}
 
 function Price({ model, item }: { model: PublicModel; item: "input" | "output" }) {
   return <PricingPrice pricing={model.pricing} item={item} />;
@@ -335,102 +262,22 @@ function ModelDetails({ id, model }: { id: string; model: PublicModel }) {
         ) : rates.length === 0 ? (
           <p className="px-4 py-3 text-t3">{t("publicModels.noRates")}</p>
         ) : (
-          <RateTable model={model} currency={pricing.currency} rates={rates} />
+          <RateTable
+            title={`${model.name} ${t("publicModels.modelPrice")}`}
+            currency={pricing.currency}
+            basis={pricing.basis}
+            rates={rates}
+          />
         )}
         {pricing?.search_engines?.length ? (
-          <SearchEnginePrices model={model} currency={pricing.currency} engines={pricing.search_engines} />
+          <SearchEnginePrices
+            title={`${model.name} ${t("publicModels.searchEngines")}`}
+            currency={pricing.currency}
+            engines={pricing.search_engines}
+          />
         ) : null}
       </div>
     </section>
-  );
-}
-
-// EndpointSection lists every group that serves the model under the codename routing accepts. The per-endpoint prices
-// sit beside the model's cheapest price below, so a reader can see that the headline is the cheapest endpoint, not the
-// only one.
-function EndpointSection({ model }: { model: PublicModel }) {
-  const { t } = useTranslation("common");
-  const format = useFormat();
-  if (model.endpoints === undefined) {
-    return <p className="mt-4 border-t border-b1 px-4 pt-4 text-ui text-t3">{t("publicModels.endpointsUnavailable")}</p>;
-  }
-  if (model.endpoints.length === 0) {
-    return <p className="mt-4 border-t border-b1 px-4 pt-4 text-ui text-t3">{t("publicModels.noEndpoints")}</p>;
-  }
-  return (
-    <div className="mt-4 border-t border-b1">
-      <div className="px-4 pt-4">
-        <h3 className="text-ui text-t1">{t("publicModels.endpoints")}</h3>
-        <p className="mt-1 text-label text-t3">{t("publicModels.endpointsNote")}</p>
-      </div>
-      <Table label={t("publicModels.endpoints")}>
-        <thead>
-          <tr>
-            <Th>{t("publicModels.endpoint")}</Th>
-            <Th className="hidden text-right md:table-cell">{t("publicModels.context")}</Th>
-            <Th className="hidden text-right lg:table-cell">{t("publicModels.maxOutput")}</Th>
-            <Th className="hidden 2xl:table-cell">{t("publicModels.ability")}</Th>
-            <Th className="hidden text-right sm:table-cell">{t("publicModels.item.input")}</Th>
-            <Th className="hidden text-right sm:table-cell">{t("publicModels.item.output")}</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {model.endpoints.map((endpoint) => (
-            <tr key={endpoint.name}>
-              <Td className="max-w-56">
-                <p className="truncate font-mono text-t1" title={endpoint.name}>
-                  {endpoint.name}
-                </p>
-                <span className="mt-1 flex flex-wrap gap-1">
-                  <Badge tone={endpoint.verified ? "ok" : "neutral"} icon={endpoint.verified ? "check" : undefined}>
-                    {t(endpoint.verified ? "publicModels.verified" : "publicModels.unverified")}
-                  </Badge>
-                  {endpoint.quantization ? (
-                    <Badge>
-                      {t("publicModels.quantization")}: {endpoint.quantization}
-                    </Badge>
-                  ) : null}
-                </span>
-                {/* Below md the attributes and prices have no column of their own; keep them with the codename. */}
-                <p className="mt-1 text-label text-t3 tabular-nums md:hidden">
-                  {t("publicModels.context")} {endpoint.context_length ? format.number(endpoint.context_length) : "—"} ·{" "}
-                  {t("publicModels.maxOutput")} {endpoint.max_output ? format.number(endpoint.max_output) : "—"}
-                </p>
-                <div className="mt-1 grid grid-cols-2 gap-x-3 text-label tabular-nums sm:hidden">
-                  <span>
-                    <span className="text-t3">{t("publicModels.item.input")} </span>
-                    <PricingPrice pricing={endpoint.pricing} item="input" />
-                  </span>
-                  <span>
-                    <span className="text-t3">{t("publicModels.item.output")} </span>
-                    <PricingPrice pricing={endpoint.pricing} item="output" />
-                  </span>
-                </div>
-              </Td>
-              <Td className="hidden text-right whitespace-nowrap tabular-nums md:table-cell">
-                {endpoint.context_length ? format.number(endpoint.context_length) : "—"}
-              </Td>
-              <Td className="hidden text-right whitespace-nowrap tabular-nums lg:table-cell">
-                {endpoint.max_output ? format.number(endpoint.max_output) : "—"}
-              </Td>
-              <Td className="hidden 2xl:table-cell">
-                <span className="flex max-w-64 flex-wrap gap-1">
-                  {(endpoint.abilities ?? []).map((ability) => (
-                    <Badge key={ability}>{label(t, "abilityNames", ability)}</Badge>
-                  ))}
-                </span>
-              </Td>
-              <Td className="hidden text-right tabular-nums sm:table-cell">
-                <PricingPrice pricing={endpoint.pricing} item="input" />
-              </Td>
-              <Td className="hidden text-right tabular-nums sm:table-cell">
-                <PricingPrice pricing={endpoint.pricing} item="output" />
-              </Td>
-            </tr>
-          ))}
-        </tbody>
-      </Table>
-    </div>
   );
 }
 
@@ -454,87 +301,5 @@ function ModelFacts({ model }: { model: PublicModel }) {
           : (model.abilities ?? []).map((ability) => <Badge key={ability}>{label(t, "abilityNames", ability)}</Badge>)}
       </dd>
     </dl>
-  );
-}
-
-function RateTable({ model, currency, rates }: { model: PublicModel; currency: string; rates: PublicModelRate[] }) {
-  const { t } = useTranslation("common");
-  const format = useFormat();
-  return (
-    <Table label={`${model.name} ${t("publicModels.modelPrice")}`}>
-      <thead>
-        <tr>
-          <Th>{t("publicModels.service")}</Th>
-          <Th>{t("publicModels.band")}</Th>
-          <Th>{t("publicModels.itemName")}</Th>
-          <Th className="text-right">{t("publicModels.price")}</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rates.map((rate, i) => (
-          <tr key={`${rate.service_tier}:${rate.above ?? "base"}:${rate.item}:${i}`}>
-            <Td>{label(t, "serviceTier", rate.service_tier)}</Td>
-            <Td className="whitespace-nowrap tabular-nums">
-              {rate.above === undefined
-                ? t("publicModels.base")
-                : t("publicModels.above", { tokens: format.number(rate.above) })}
-            </Td>
-            <Td>{label(t, "item", rate.item)}</Td>
-            <Td className="text-right whitespace-nowrap tabular-nums">
-              {priceText(format, rate, currency)}
-              <span className="block text-label text-t3">
-                {rate.unit === "token" ? t("publicModels.perMillion") : `/ ${label(t, "unit", rate.unit)}`}
-              </span>
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
-  );
-}
-
-// SearchEnginePrices is what one web search through each enabled backend costs: per search plus each result after
-// the first. A zero search price is the model's web_search rate, which the rate table already shows.
-function SearchEnginePrices({
-  model,
-  currency,
-  engines,
-}: {
-  model: PublicModel;
-  currency: string;
-  engines: PublicSearchEnginePrice[];
-}) {
-  const { t } = useTranslation("common");
-  const format = useFormat();
-  return (
-    <Table label={`${model.name} ${t("publicModels.searchEngines")}`}>
-      <thead>
-        <tr>
-          <Th>{t("publicModels.engine")}</Th>
-          <Th className="text-right">{t("publicModels.perSearch")}</Th>
-          <Th className="text-right">{t("publicModels.perResult")}</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {engines.map((engine) => (
-          <tr key={engine.name}>
-            <Td>
-              {engine.name}
-              {engine.default ? (
-                <span className="block text-label text-t3">{t("publicModels.defaultEngine")}</span>
-              ) : null}
-            </Td>
-            <Td className="text-right whitespace-nowrap tabular-nums">
-              {engine.price_per_search === "0"
-                ? t("publicModels.modelWebSearchRate")
-                : `${format.decimal(engine.price_per_search)} ${currency}`}
-            </Td>
-            <Td className="text-right whitespace-nowrap tabular-nums">
-              {format.decimal(engine.price_per_extra_result)} {currency}
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
   );
 }

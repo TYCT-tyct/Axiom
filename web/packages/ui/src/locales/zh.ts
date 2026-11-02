@@ -112,7 +112,8 @@ export default {
   copy: { copy: "复制", copied: "已复制", failed: "没能复制，请手动选中" },
   publicModels: {
     title: "模型与价格",
-    description: "已发布的模型、它的限制、提供服务的端点和你要付的价格。价格是精确的；中转端点用稳定的匿名代号，不显示供应商名称、上游或成本数据。",
+    description:
+      "已发布的模型、它的限制、提供服务的端点和你要付的价格。价格是精确的；中转端点用稳定的匿名代号，不显示供应商名称、上游或成本数据。",
     search: "模型",
     searchHint: "ID 或名称",
     author: "厂商",
@@ -136,6 +137,7 @@ export default {
     base: "基础档",
     service: "服务等级",
     band: "档位",
+    tierBasis: "分档口径",
     itemName: "计费项",
     price: "价格",
     above: "超过 {{tokens}}",
@@ -153,6 +155,8 @@ export default {
     endpoint: "公开名称",
     endpointsNote:
       "在 provider.only、provider.ignore 或预设里用这里的公开名称指定或排除端点；中转分组的名称是匿名代号，同一分组在所有模型上相同。",
+    endpointPrice: "端点价格",
+    endpointPriceDetails: "完整价目",
     endpointsUnavailable: "这台服务器的旧版本还没有端点列表，更新后可看到。",
     noEndpoints: "这个模型还没有可用的端点。",
     verified: "已验证",

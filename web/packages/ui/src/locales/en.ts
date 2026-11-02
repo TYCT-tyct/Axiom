@@ -136,6 +136,7 @@ export default {
     base: "Base",
     service: "Service tier",
     band: "Band",
+    tierBasis: "Tier basis",
     itemName: "Item",
     price: "Price",
     above: "Above {{tokens}}",
@@ -153,6 +154,8 @@ export default {
     endpoint: "Public name",
     endpointsNote:
       "Name an endpoint here in provider.only, provider.ignore or a preset to require or exclude it. A reseller group’s name is an anonymous codename, the same on every model.",
+    endpointPrice: "Endpoint price",
+    endpointPriceDetails: "Full price schedule",
     endpointsUnavailable: "This server’s older version doesn’t list endpoints yet; they appear after it updates.",
     noEndpoints: "No endpoints are available for this model.",
     verified: "Verified",

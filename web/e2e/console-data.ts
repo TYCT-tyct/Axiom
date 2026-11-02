@@ -80,12 +80,14 @@ function aModel(n: number, over: Partial<Schemas["PublicModel"]> = {}): Schemas[
     basis: ["input", "output"],
     rates: [
       { service_tier: "standard", item: "input", unit: "token", amount: `0.00000${1 + (n % 9)}` },
+      { service_tier: "standard", above: 128000, item: "input", unit: "token", amount: "0.00001" },
       { service_tier: "standard", item: "output", unit: "token", amount: `0.00000${2 + (n % 9)}` },
       { service_tier: "priority", above: 200000, item: "output", unit: "token", amount: "0.00002" },
     ],
+    search_engines: [{ name: "exa", price_per_search: "0", price_per_extra_result: "0.001", default: true }],
   };
-  // Two groups serve every model under the stable codenames a provider filter names; the second is dearer, unverified
-  // and has no recorded quantization, so both the badge and the per-endpoint prices have something to show.
+  // Two groups serve every model under the stable codenames a provider filter names. The second is dearer, unverified,
+  // does not stream and has no recorded quantization or band price, so the per-endpoint schedule and attributes differ.
   const endpoints: Schemas["PublicEndpoint"][] = [
     {
       name: `ga2b3c4d${"234567"[n % 6]}`,
@@ -101,7 +103,7 @@ function aModel(n: number, over: Partial<Schemas["PublicModel"]> = {}): Schemas[
       name: `ga2b3c4d${"234567"[(n + 10) % 6]}`,
       context_length: 100000,
       max_output: 32000,
-      streams: true,
+      streams: false,
       abilities,
       verified: false,
       pricing: {
