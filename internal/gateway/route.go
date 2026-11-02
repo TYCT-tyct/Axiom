@@ -33,6 +33,16 @@ type RouteDeps struct {
 	// One build's reading prices both the routing snapshot and the model list, so
 	// the price a client reads is the price a call is charged at.
 	Prices func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error)
+	// ByokFee is the site's share of a model's reference price, charged when the account's own key serves it, as a
+	// multiplier (billing.ByokFee). Nil is no fee; a node that cannot read it fails the build, because serving a key at a
+	// price nobody confirmed is worse than not serving it.
+	ByokFee func(context.Context) (string, error)
+	// ByokRules are the accounts' no-fallback choices. They are read apart from the endpoints, so a rejected credential
+	// does not lift the choice. Nil means none.
+	ByokRules func(context.Context) ([]routing.ByokRule, error)
+	// SiteCurrency is the main site's currency. A BYOK endpoint may serve a model the site does not sell, so it has no
+	// shared sale price to read the currency from; its fee is still in the site's currency.
+	SiteCurrency platform.Currency
 	// Models is where each published snapshot's model list in OpenRouter's shape goes: the handler serves it,
 	// and it is built in the same build as the snapshot from the same reading (docs/domains/gateway.md「模型列表」).
 	Models *ModelList
@@ -77,6 +87,8 @@ func (c Count) Routable() bool { return c.Endpoints > 0 || c.Offered == 0 }
 // The model list comes from this same reading — the endpoints that made the snapshot, the catalog they were read from and
 // the sale prices they were priced with — so the price a client reads is the price routing charges, and a build that fails
 // publishes neither (Publish).
+//
+//nolint:cyclop,funlen,gocognit // the build is one linear pass over its sources; splitting it would hide the order
 func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterListing, Count, error) {
 	// Start time bounds freshness even if reading a source stalls during the build.
 	builtAt := time.Now()
@@ -96,6 +108,18 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 	if err != nil {
 		return nil, nil, Count{}, fmt.Errorf("gateway: the sale prices: %w", err)
 	}
+	byokFee := "0"
+	if d.ByokFee != nil {
+		if byokFee, err = d.ByokFee(ctx); err != nil {
+			return nil, nil, Count{}, fmt.Errorf("gateway: the BYOK fee: %w", err)
+		}
+	}
+	var byokRules []routing.ByokRule
+	if d.ByokRules != nil {
+		if byokRules, err = d.ByokRules(ctx); err != nil {
+			return nil, nil, Count{}, fmt.Errorf("gateway: the provider keys' fallback rules: %w", err)
+		}
+	}
 	items, err := d.UnknownItems(ctx)
 	if err != nil {
 		return nil, nil, Count{}, fmt.Errorf("gateway: the unknown billing items: %w", err)
@@ -110,7 +134,7 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 	built := make([]routing.Endpoint, 0, len(routable))
 	left := map[catalog.ModelID]*leftOut{}
 	for _, r := range routable {
-		e, why := endpointOf(catalogSnap, prices, blocked, r, d.Quality.MeasuredFor(r, time.Now()))
+		e, why := endpointOf(catalogSnap, prices, blocked, byokFee, rates, d.SiteCurrency, r, d.Quality.MeasuredFor(r, time.Now()))
 		if why != "" {
 			note(left, catalog.ModelID(r.Model), why)
 			continue
@@ -123,7 +147,7 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 	// with a failed endpoint, whether it still serves others or has no route at all, so an endpoint's absence has a
 	// cause in the log too.
 	d.report(left)
-	snap, err := d.Router.NewSnapshot(builtAt, built, presets())
+	snap, err := d.Router.NewSnapshot(builtAt, built, presets(), byokRules...)
 	if err != nil {
 		return nil, nil, Count{}, err
 	}
@@ -316,8 +340,8 @@ func listedModelOf(snap *catalog.Snapshot, id catalog.ModelID) (catalog.Model, s
 	return model, ""
 }
 
-//nolint:cyclop,funlen // one endpoint's routing fields are set once, in the order routing reads them
-func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable,
+//nolint:cyclop,funlen,gocognit // one endpoint's routing fields are set once, in the order routing reads them
+func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, byokFee string, rates []platform.ExchangeRate, siteCurrency platform.Currency, r suppliers.Routable,
 	measured quality.Measures,
 ) (routing.Endpoint, string) {
 	model, why := listedModelOf(snap, catalog.ModelID(r.Model))
@@ -329,11 +353,36 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		return routing.Endpoint{}, "its spec declares no context length, output limit, streaming or abilities"
 	}
 	sold, ok := prices[catalog.ModelID(r.Model)]
-	if !ok || !sold.Available() {
+	if !r.Byok && (!ok || !sold.Available()) {
 		return routing.Endpoint{}, "no published sale price is available for this node; check the price publication list and local costs"
 	}
-	if model.Free() && !sold.Zero() {
+	if model.Free() && ok && !sold.Zero() {
 		return routing.Endpoint{}, "a :free model has a non-zero sale price for some audience"
+	}
+	if r.Byok {
+		currency := siteCurrency
+		if ok && sold.Available() {
+			currency = sold.Schedule.Currency()
+		}
+		// The account pays its provider; Axiom charges the site's share of the model's reference price, the approved
+		// rule for a source the platform does not buy. The schedule is scaled here, once, so the reservation,
+		// settlement and refund all use the same amounts.
+		ref := billing.ReferenceFor(snap, catalog.ModelID(r.Model), currency, "exchange")
+		if ref.ID == uuid.Nil() {
+			return routing.Endpoint{}, "no reference price is available for the BYOK fee"
+		}
+		multiplier := byokFee
+		rule := billing.Rule{Enabled: true, Method: billing.Method{
+			Kind: "reference_multiplier", Multiplier: &multiplier, CurrencyConversion: "exchange",
+		}}
+		scaled, err := billing.Sell(rule, ref, currency, rates...)
+		if err != nil {
+			return routing.Endpoint{}, "the site's BYOK fee cannot price the reference schedule"
+		}
+		// The endpoint is the key's own, so the site's Sold says nothing about it: a version priced from each endpoint's
+		// cost has no price for an endpoint it did not publish, and endpointPrice would leave the key out
+		// (billing.Sold.PriceFor). The scaled reference schedule is the whole of this endpoint's price.
+		sold = billing.Sold{Version: ref.ID, Schedule: scaled}
 	}
 	reportable := model.Reportable()
 	price, why := endpointPrice(sold, r.ID)
@@ -365,7 +414,8 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		Free: model.Free(),
 		// The platform's own: M1's suppliers are the platform's (suppliers' owner scope is not part of Routable), and
 		// the node reaches every one of them from its own address.
-		Owner:   routing.Owner{Site: routing.SiteID(r.Site), Account: routing.AccountID(r.Account)},
+		Owner: routing.Owner{Site: routing.SiteID(r.Site), Account: routing.AccountID(r.Account)},
+		Byok:  r.Byok, ByokFallback: r.ByokFallback,
 		Enabled: true, BalanceOK: r.Funds != nil, Funds: r.Funds, Cost: r.Schedule, Egresses: 1, PoolLow: r.PoolLow,
 		// Every supplier M1 buys from is a relay or reseller, which is what its adapter talks to; nothing records what
 		// one does with the data it is sent, so an endpoint is taken to be the worst case rather than the best: a preset

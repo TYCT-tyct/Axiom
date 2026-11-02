@@ -5,6 +5,7 @@ import (
 	"iter"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 	"uuid"
 )
@@ -299,6 +300,7 @@ type Snapshot struct {
 }
 
 type nameEntry struct {
+	name     string
 	model    ModelID
 	public   bool
 	retired  bool
@@ -372,6 +374,7 @@ func (s *Snapshot) addNames(rows []CatalogName) {
 	for _, n := range rows {
 		m := s.models[ModelID(n.ModelID)]
 		s.names[n.Norm] = nameEntry{
+			name:     n.Name,
 			model:    m.ID,
 			public:   Visibility(n.Visibility) == VisibilityPublic,
 			retired:  m.Status == StatusRetired,
@@ -390,6 +393,42 @@ func (s *Snapshot) addAliases(rows []ListAliasesForSnapshotRow) {
 			s.aliases[a.Name] = id
 		}
 	}
+}
+
+// OfficialName is the name the vendor's own API knows a model by, from the catalog's public names. A fixed model only
+// accepts an exact name—one that carries the version—because an undated name may be moved to another version by the
+// vendor; the longest exact name is taken. A floating model takes the shortest name: its version is meant to move.
+// Names with an author prefix, a :free suffix or an @ version are catalog names, not names the vendor would accept, so
+// they are not chosen. A model with no such name is not one a provider key can call by guessing its slug.
+func (s *Snapshot) OfficialName(id ModelID) (string, bool) {
+	m, ok := s.models[id]
+	if !ok {
+		return "", false
+	}
+	best := ""
+	for _, e := range s.names {
+		if !officialNameCandidate(e, id, m.VersionBasis) {
+			continue
+		}
+		switch {
+		case best == "":
+			best = e.name
+		case m.VersionBasis == VersionDated && len(e.name) > len(best):
+			best = e.name
+		case m.VersionBasis != VersionDated && len(e.name) < len(best):
+			best = e.name
+		}
+	}
+	return best, best != ""
+}
+
+// officialNameCandidate says a catalog name can be sent to the vendor for this model. A fixed model needs an exact name:
+// an undated one may be moved to another version, while the endpoint's spec and reference price stay those of this one.
+func officialNameCandidate(e nameEntry, id ModelID, basis VersionBasis) bool {
+	if e.model != id || !e.public || strings.ContainsAny(e.name, "/:@") || strings.HasSuffix(e.name, "-latest") {
+		return false
+	}
+	return basis != VersionDated || e.exact
 }
 
 // Model returns a listed or retired model.

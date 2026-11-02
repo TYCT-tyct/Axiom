@@ -446,3 +446,48 @@ func TestCostPlusMarginAndMarkup(t *testing.T) {
 		}
 	}
 }
+
+// TestByokFee: the site's BYOK share defaults to 5%, is changed as administrator data, is refused outside 0 to 100%,
+// and reads as the multiplier the route build scales a published schedule by.
+func TestByokFee(t *testing.T) {
+	t.Parallel()
+	f := newPrices(t)
+	read := func() (string, PricePolicy) {
+		t.Helper()
+		var rate string
+		var policy PricePolicy
+		if err := f.tx(func(tx pg.Tx) error {
+			var err error
+			if rate, err = ByokFee(t.Context(), tx, f.site); err != nil {
+				return err
+			}
+			policy, err = PricePolicyOf(t.Context(), tx, f.site)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return rate, policy
+	}
+	if rate, policy := read(); rate != "0.0500" || policy.ByokFeeBPS != 500 {
+		t.Fatalf("the default is %q at %d bps, want 0.0500 at 500", rate, policy.ByokFeeBPS)
+	}
+	if err := f.tx(func(tx pg.Tx) error {
+		return SetPricePolicy(t.Context(), tx, system, f.site, PricePolicy{
+			FloorMultiplier: "1", ChangeRatio: "0.1", MaxIncreaseRatio: "1", ByokFeeBPS: 250,
+		}, "a lower BYOK share")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rate, policy := read(); rate != "0.0250" || policy.ByokFeeBPS != 250 {
+		t.Fatalf("the site's rate is %q at %d bps, want 0.0250 at 250", rate, policy.ByokFeeBPS)
+	}
+	for _, bps := range []int32{-1, 10001} {
+		if err := f.tx(func(tx pg.Tx) error {
+			return SetPricePolicy(t.Context(), tx, system, f.site, PricePolicy{
+				FloorMultiplier: "1", ChangeRatio: "0.1", MaxIncreaseRatio: "1", ByokFeeBPS: bps,
+			}, "outside the range")
+		}); err == nil {
+			t.Errorf("%d bps was accepted", bps)
+		}
+	}
+}

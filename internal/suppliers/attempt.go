@@ -13,8 +13,10 @@ import (
 	"uuid"
 
 	"axiom/internal/platform"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
+	"axiom/internal/suppliers/internal/store"
 )
 
 // Failure is a failed attempt, as the adapter classified it: who is at fault (Scope), what went wrong (Cause) and
@@ -298,7 +300,7 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	if f.Scope == adapter.ScopeRequest {
 		f.Rejection = rejectionOf(body, a.ep.origin, a.cred.key.Reveal())
 	}
-	a.rest(f)
+	a.rest(f) //nolint:contextcheck // the rejection worker outlives the request; its own timeout bounds the write
 	return nil, &f
 }
 
@@ -343,10 +345,44 @@ func (a *Attempt) rest(f Failure) {
 	case adapter.CredentialRejected, adapter.Overloaded, adapter.UpstreamError, adapter.SupplierBalanceLow, adapter.NotPermitted,
 		adapter.ContextTooLong, adapter.BadRequest, adapter.ContentRejected, adapter.ModelNotFound, adapter.Unknown, adapter.Transport:
 	}
+	if _, refused := f.Cause.(adapter.CredentialRejected); refused {
+		a.s.reportRejected(a.ep.supplier, a.cred)
+	}
 	for {
 		cur := a.cred.rt.restUnix.Load()
 		if until.UnixNano() <= cur || a.cred.rt.restUnix.CompareAndSwap(cur, until.UnixNano()) {
 			return
 		}
+	}
+}
+
+// reportRejected asks the worker to mark a key the provider refused. A credential has at most one report in flight: the
+// call path stays free of the database, and a revoked key found by a thousand requests writes its row once. The mark is
+// cleared when the write ends, so a write that failed is tried again and a key that a test restored can be marked again.
+func (s *Service) reportRejected(supplier uuid.UUID, cred *credential) {
+	if s.cfg.DB == nil || !cred.rt.reporting.CompareAndSwap(false, true) {
+		return
+	}
+	s.rejectOnce.Do(func() { go s.markRejected() })
+	select {
+	case s.rejected <- rejection{supplier: supplier, credential: cred.id, runtime: cred.rt}:
+	default:
+		cred.rt.reporting.Store(false) // the queue is full; a later rejection tries again
+	}
+}
+
+// markRejected writes the rejected status until the queue is empty. An error is logged and not retried: the credential
+// is resting in this node anyway, and the next rejection after a restart tries again.
+func (s *Service) markRejected() {
+	for r := range s.rejected {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := s.cfg.DB.Tx(ctx, s.cfg.Scope, func(tx pg.Tx) error {
+			return store.New().SetByokRejected(ctx, tx, r.credential)
+		})
+		if err != nil {
+			s.cfg.Logger.Error("marking a refused provider key", "supplier", r.supplier.String(), "err", err)
+		}
+		r.runtime.reporting.Store(false)
+		cancel()
 	}
 }

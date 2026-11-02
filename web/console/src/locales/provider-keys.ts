@@ -1,0 +1,75 @@
+// The provider keys page's messages. Moving them here keeps the English root locale file under the code-line limit in
+// scripts/limits.ts; a label and its translation are edited as a pair, so both languages stay together.
+import type { Messages } from "@axiom/ui";
+
+export const zh = {
+  description: "使用你自己的 OpenAI key：路由优先用它，保存后不会再显示。",
+  add: "添加供应商 key",
+  name: "名称",
+  provider: "供应商",
+  openai: "OpenAI",
+  key: "Key",
+  keyHint: "保存时密封，列表只留最后四个字符。",
+  fallback: "这个 key 无法服务某个模型时，回退到站点的端点",
+  save: "保存 key",
+  required: "名称和 key 都必须填写。",
+  status: "状态",
+  added: "添加时间",
+  enable: "启用",
+  disable: "停用",
+  remove: "删除",
+  removeBody: "删除 {{name}}？已经发生的调用保留记录，key 会被抹掉。",
+  noFallback: "不回退",
+  rejected: "已被拒绝",
+  testing: "测试中…",
+  test: {
+    action: "测试",
+    ok: "供应商接受了这个 key。",
+    refused: "供应商拒绝了这个 key，路由会跳过它。",
+    inconclusive: "联系不上供应商，key 的状态没有改变。",
+  },
+  noPermission: {
+    title: "没有供应商 key 的权限",
+    body: "向工作区管理员申请 api_keys.view 权限。",
+  },
+  empty: {
+    title: "还没有供应商 key",
+    body: "添加你自己的 OpenAI key，让这些模型走你的 key。",
+  },
+};
+
+export const en: Messages<typeof zh> = {
+  description: "Use your own OpenAI key: routing prefers it, and it is never shown again after saving.",
+  add: "Add provider key",
+  name: "Name",
+  provider: "Provider",
+  openai: "OpenAI",
+  key: "Key",
+  keyHint: "Sealed when saved. Only the last four characters are kept for the list.",
+  fallback: "Fall back to Axiom's endpoints if this key cannot serve a model",
+  save: "Save key",
+  required: "A name and a key are both required.",
+  status: "Status",
+  added: "Added",
+  enable: "Enable",
+  disable: "Disable",
+  remove: "Remove",
+  removeBody: "Remove {{name}}? Calls already made keep their records; the key is erased.",
+  noFallback: "No fallback",
+  rejected: "Rejected",
+  testing: "Testing…",
+  test: {
+    action: "Test",
+    ok: "The provider accepted the key.",
+    refused: "The provider refused the key; routing skips it.",
+    inconclusive: "The provider could not be reached; the key's status did not change.",
+  },
+  noPermission: {
+    title: "No access to provider keys",
+    body: "Ask an admin of the workspace for the api_keys.view permission.",
+  },
+  empty: {
+    title: "No provider keys",
+    body: "Add your own OpenAI key to route those models through it.",
+  },
+};

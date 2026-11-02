@@ -874,6 +874,9 @@ func RewriteDirectReply(f Format, body []byte, id, model string, seen Usage, fin
 	u, costString, top := reply(seen), "", ""
 	if fin == nil || fin.Pending {
 		top = `,"axiom":{"billing_pending":true}`
+		if fin != nil { // the account's key is worth reporting even before the settlement is written
+			costString = cost(fin, f)
+		}
 	} else {
 		u, costString = reply(fin.Usage), cost(fin, f)
 	}

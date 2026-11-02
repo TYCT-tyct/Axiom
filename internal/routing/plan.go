@@ -14,17 +14,18 @@ import (
 
 // need is everything a candidate is held against, worked out once per request.
 type need struct {
-	in       *Input
-	req      *protocol.Request
-	preset   *Preset
-	over     *Override
-	auto     bool                   // rank across every model: the request named openrouter/auto
-	free     bool                   // rank across the free models: the request named openrouter/free
-	tokens   int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
-	segments billing.Segments       // the segment settings this plan marks entries with, read once from the live policy
-	demand   billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
-	tiers    catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
-	now      time.Time
+	in         *Input
+	req        *protocol.Request
+	preset     *Preset
+	over       *Override
+	auto       bool                   // rank across every model: the request named openrouter/auto
+	free       bool                   // rank across the free models: the request named openrouter/free
+	tokens     int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
+	segments   billing.Segments       // the segment settings this plan marks entries with, read once from the live policy
+	demand     billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
+	tiers      catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
+	now        time.Time
+	noFallback bool // the account forbade fallback for the model being ranked
 }
 
 // attempts is how many endpoints a plan may try: the preset's or the router's default, and one for a file reference,
@@ -63,6 +64,7 @@ func (r *Router) rankModels(snap *Snapshot, n *need, rec *Record) []ranked {
 		if len(cands) == 0 {
 			rec.Excluded = append(rec.Excluded, Excluded{Reason: NoCandidates})
 		}
+		_, n.noFallback = snap.noFallback[n.in.Admission.Account][m]
 		order = append(order, r.rank(cands, n, rec)...)
 	}
 	return order
@@ -258,7 +260,7 @@ func (*Router) entry(c *candidate, n *need) Entry {
 	return Entry{
 		Exchange: c.Exchange,
 		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, ModelSlug: c.ModelSlug, Price: c.Price, Limits: limits, MaxOutput: out,
-		Segmentable: segmentable,
+		Segmentable: segmentable, Byok: c.Byok,
 	}
 }
 
@@ -298,9 +300,12 @@ func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 
 // check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0. An endpoint
 // the account cannot see is not left out, it is not there: no reason is given, so no existence is revealed.
-func check(c *candidate, n *need, price *candidatePrice) (reason Reason, visible bool) {
+func check(c *candidate, n *need, price *candidatePrice, noShared bool) (reason Reason, visible bool) {
 	if !c.Owner.visibleTo(n.in.Admission) {
 		return 0, false
+	}
+	if noShared && !c.Byok {
+		return ByokNoFallback, true
 	}
 	if reason = c.unavailable(); reason != 0 {
 		return reason, true

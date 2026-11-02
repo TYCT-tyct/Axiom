@@ -78,6 +78,19 @@ func (a adminAPI) UpdatePricePolicy(ctx context.Context, r adminapi.UpdatePriceP
 	}
 	body, replayed, err := idempotently(ctx, a.db, "updatePricePolicy", r.Params.IdempotencyKey, r.Body, func(tx pg.Tx) (adminapi.PricePublicationList, error) {
 		in := billing.PricePolicy{Rev: r.Body.Rev, FloorMultiplier: r.Body.FloorMultiplier, ChangeRatio: r.Body.ChangeRatio, MaxIncreaseRatio: r.Body.MaxIncreaseRatio}
+		if r.Body.ByokFeeBps != nil {
+			if *r.Body.ByokFeeBps < 0 || *r.Body.ByokFeeBps > 10000 {
+				return adminapi.PricePublicationList{}, invalidField("/byok_fee_bps", "0 to 10000 basis points")
+			}
+			in.ByokFeeBPS = int32(*r.Body.ByokFeeBps)
+		} else {
+			// A page that predates the field must not reset a rate an administrator set.
+			current, err := billing.PricePolicyOf(ctx, tx, uuid.UUID(site.ID))
+			if err != nil {
+				return adminapi.PricePublicationList{}, err
+			}
+			in.ByokFeeBPS = current.ByokFeeBPS
+		}
 		if err := billing.SetPricePolicy(ctx, tx, actor(ctx), uuid.UUID(site.ID), in, r.Body.Reason); err != nil {
 			return adminapi.PricePublicationList{}, pricingProblem(err, "/")
 		}
