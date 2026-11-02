@@ -38,8 +38,10 @@ export function AppShell({
   const { t } = useTranslation("common");
   const drawer = useRef<HTMLDialogElement>(null);
   useBrandStyle(brandColor);
+  // Paper gets the page alone: one column (with the sidebar gone, the grid would squeeze the page into its 216px) and
+  // none of the app's notices, whose reload button is no part of a receipt (docs/frontend.md「打印」).
   return (
-    <div className="min-h-dvh text-ui lg:grid lg:grid-cols-[216px_minmax(0,1fr)]">
+    <div className="min-h-dvh text-ui lg:grid lg:grid-cols-[216px_minmax(0,1fr)] print:block">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-btn focus:bg-s2 focus:px-3 focus:py-2"
@@ -55,7 +57,7 @@ export function AppShell({
       </nav>
       <NavDrawer ref={drawer}>{sidebar}</NavDrawer>
       <div className="flex min-w-0 flex-col">
-        {banner}
+        {banner && <div className="print:hidden">{banner}</div>}
         <header
           className={cn(
             "sticky top-0 z-10 flex h-12 items-center gap-2 border-b border-b1 bg-bg px-4 print:hidden",

@@ -78,9 +78,19 @@ describe("a receipt", () => {
     expect(html).not.toContain("Amount paid");
   });
 
-  it("does not present a charged-back payment as a receipt", () => {
+  // A chargeback does not undo the payment: the receipt records what was paid and refunded and says nothing about the
+  // dispute, whose outcome the balance and the statement carry (docs/domains/payments.md「收据与发票」).
+  it("still has a receipt for a payment that was later charged back", () => {
     const html = render({ ...order, state: "charged_back" });
-    expect(html).toContain("No receipt");
+    expect(html).toContain("73.73");
+    expect(html).toContain("2.50");
+  });
+
+  // A read that does not carry the refunds cannot say whether money came back, so it is no receipt at all rather than a
+  // receipt claiming no refunds (a mutated order entry once answered without them).
+  it("is not drawn from a record without the refunds", () => {
+    const html = render({ ...order, refunds: undefined });
+    expect(html).toContain("Receipts are unavailable");
     expect(html).not.toContain("Amount paid");
   });
 });

@@ -243,11 +243,7 @@ export default {
       },
       unavailable: {
         title: "Receipts are unavailable",
-        body: "This server doesn’t report receipts yet; reload after it is upgraded.",
-      },
-      reversed: {
-        title: "No receipt",
-        body: "This payment was charged back and its money taken back, so the site issues no receipt for it.",
+        body: "This order’s record is incomplete, so its receipt cannot be drawn yet; reload in a moment.",
       },
     },
   },

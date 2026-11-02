@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { orderQuery, siteQuery } from "../queries";
+import { receiptQuery, siteQuery } from "../queries";
 import { receiptState } from "../receipt";
 
 // Receipt is one paid top-up as a printable page: the site's name, the order, when it was paid and in which zone the
@@ -13,7 +13,7 @@ import { receiptState } from "../receipt";
 export default function Receipt() {
   const { t } = useTranslation();
   const { orderId } = useParams({ from: "/app/orders/$orderId/receipt" });
-  const order = useQuery(orderQuery(orderId));
+  const order = useQuery(receiptQuery(orderId));
   const site = useQuery(siteQuery);
   return (
     <>
@@ -35,7 +35,7 @@ export default function Receipt() {
 }
 
 // ReceiptBody is the document itself, or the sentence for an order that has none. It is separate from the page so a
-// test can render a paid order, an unpaid one and one the site charged back without a server.
+// test can render a paid order, an unpaid one and one whose record is incomplete without a server.
 export function ReceiptBody({ order, site }: { order: Schemas["Order"]; site: string }) {
   const { t } = useTranslation();
   const format = useFormat();
@@ -46,7 +46,7 @@ export function ReceiptBody({ order, site }: { order: Schemas["Order"]; site: st
     );
   }
   // Only refunds that returned the money belong on a receipt: a declined or still running request moved nothing.
-  const refunds = (order.refunds ?? []).filter((refund) => refund.state === "succeeded");
+  const refunds = state.refunds.filter((refund) => refund.state === "succeeded");
   return (
     <>
       <div className="flex justify-end print:hidden">
