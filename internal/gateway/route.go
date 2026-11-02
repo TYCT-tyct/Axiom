@@ -408,17 +408,17 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	// the gateway reads every answer as one, so an endpoint lacking either cannot serve a generation.
 	streams := serving.Streams && r.Streams
 	dialect := model.Dialect()
-	// Detection can only narrow what the catalog declares: a capability or request parameter measured lacking is
-	// removed, and a measured context or output ceiling replaces the catalog's when it is shorter. Supported only lifts
-	// an earlier lack inside quality, because expressing a capability still needs the catalog's dialect
-	// (docs/domains/quality.md「实测的能力与上限」).
-	caps := capabilities(serving.Abilities) &^ measured.Facts.Unsupported
-	params := parameterSupport(serving, dialect) &^ measured.Facts.UnsupportedParameters
+	// A measurement replaces the catalog's value for the field it covers: detection runs through the same protocol the
+	// gateway uses, so a capability or request parameter it found working is added and one it found lacking is removed;
+	// a measured context or output ceiling replaces the catalog's, higher or lower. A field nothing measured keeps the
+	// catalog's value (docs/domains/quality.md「实测的能力与上限」).
+	caps := (capabilities(serving.Abilities) &^ measured.Facts.Unsupported) | measured.Facts.Supported
+	params := (parameterSupport(serving, dialect) &^ measured.Facts.UnsupportedParameters) | measured.Facts.SupportedParameters
 	context, maxOutput := serving.Context, serving.MaxOutput
-	if measured.Facts.Context > 0 && measured.Facts.Context < context {
+	if measured.Facts.Context > 0 {
 		context = measured.Facts.Context
 	}
-	if measured.Facts.MaxOutput > 0 && measured.Facts.MaxOutput < maxOutput {
+	if measured.Facts.MaxOutput > 0 {
 		maxOutput = measured.Facts.MaxOutput
 	}
 	e := routing.Endpoint{

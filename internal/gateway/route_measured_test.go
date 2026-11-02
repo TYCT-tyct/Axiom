@@ -15,6 +15,7 @@ import (
 // with a shorter context takes no request that needs the catalog's longer one, and an endpoint with no measurement
 // keeps both. A measured max output and parameter lack reach the plan the same way.
 func TestRoutePlansOnMeasuredFacts(t *testing.T) {
+	const temperature = protocol.ParameterSet(1) << protocol.ParamTemperature
 	f := newRouteFixture(t)
 	r := routable(f.served, protocol.Messages)
 	withTools := call(f.served, func(req *protocol.Request) { req.Needs = protocol.Tools })
@@ -50,12 +51,57 @@ func TestRoutePlansOnMeasuredFacts(t *testing.T) {
 		t.Errorf("the plan's output limit = %+v, %v, want the measured 2048", plan.Entries, err)
 	}
 
-	f.health.Measure(r, quality.Facts{UnsupportedParameters: protocol.ParameterSet(1) << protocol.ParamTemperature})
+	f.health.Measure(r, quality.Facts{UnsupportedParameters: temperature})
 	f.build([]suppliers.Routable{r})
 	requiresTemperature := call(f.served)
 	requiresTemperature.Override.RequireParameters = true
-	requiresTemperature.Override.RequiredParameters = protocol.ParameterSet(1) << protocol.ParamTemperature
+	requiresTemperature.Override.RequiredParameters = temperature
 	excludedFor(t, f, requiresTemperature, routing.OverrideFilter)
+}
+
+// TestRoutePlansOnMeasuredFactsReplacingTheCatalog: a measurement also replaces the catalog upward. A measured
+// capability or parameter the catalog did not declare is added, a lack is flipped back to working, and a measured
+// ceiling higher than the catalog's is used.
+func TestRoutePlansOnMeasuredFactsReplacingTheCatalog(t *testing.T) {
+	const temperature = protocol.ParameterSet(1) << protocol.ParamTemperature
+	f := newRouteFixture(t)
+	r := routable(f.served, protocol.Messages)
+	withTools := call(f.served, func(req *protocol.Request) { req.Needs = protocol.Tools })
+	fileSearch := call(f.served, func(req *protocol.Request) { req.Needs = protocol.FileSearch })
+	longer := call(f.served, func(req *protocol.Request) { req.TextBytes = 300_000 * 4 })
+	requiresTemperature := call(f.served)
+	requiresTemperature.Override.RequireParameters = true
+	requiresTemperature.Override.RequiredParameters = temperature
+
+	// Start from measured lacks and a low ceiling, so the second measurement has something to flip and raise.
+	f.health.Measure(r, quality.Facts{Unsupported: protocol.Tools, UnsupportedParameters: temperature, Context: 32_000, MaxOutput: 2048})
+	f.build([]suppliers.Routable{r})
+	excludedFor(t, f, withTools, routing.MissingCapability)
+	excludedFor(t, f, fileSearch, routing.MissingCapability)
+	excludedFor(t, f, longer, routing.ContextTooSmall)
+	excludedFor(t, f, requiresTemperature, routing.OverrideFilter)
+
+	f.health.Measure(r, quality.Facts{
+		Supported: protocol.Tools | protocol.FileSearch, SupportedParameters: temperature,
+		Context: 400_000, MaxOutput: 16_000,
+	})
+	f.build([]suppliers.Routable{r})
+	if got := f.planned(withTools); len(got) != 1 || got[0] != r.ID {
+		t.Errorf("a measured working tool capability planned to %v, want the endpoint %s", got, r.ID)
+	}
+	if got := f.planned(fileSearch); len(got) != 1 || got[0] != r.ID {
+		t.Errorf("a measured file search capability planned to %v, want the endpoint %s", got, r.ID)
+	}
+	if got := f.planned(longer); len(got) != 1 || got[0] != r.ID {
+		t.Errorf("a 300000-token request planned to %v, want the endpoint measured at 400000 tokens %s", got, r.ID)
+	}
+	if got := f.planned(requiresTemperature); len(got) != 1 || got[0] != r.ID {
+		t.Errorf("a measured working temperature planned to %v, want the endpoint %s", got, r.ID)
+	}
+	plan, _, err := f.router.Plan(call(f.served))
+	if err != nil || len(plan.Entries) != 1 || plan.Entries[0].MaxOutput != 16_000 {
+		t.Errorf("the plan's output limit = %+v, %v, want the measured 16000", plan.Entries, err)
+	}
 }
 
 // excludedFor: Plan leaves the only candidate out for reason and says the reason is permanent.

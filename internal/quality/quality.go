@@ -104,17 +104,16 @@ type Measures struct {
 }
 
 // Facts are what detection found out about an endpoint's structure, as opposed to how well it performs: a capability
-// or a request parameter that works or does not, and the context and output ceilings it enforces. Supported only
-// lifts an earlier lack: a measurement never adds a capability or parameter the catalog does not declare, because a
-// measured endpoint still needs the catalog's dialect to express it. A zero field was not measured and the catalog's
-// value stands. Supported and Unsupported are disjoint: a measurement of one clears the same bit from the other, so a
-// later measurement can flip an earlier one.
+// or a request parameter that works or does not, and the context and output ceilings it enforces. A measured value
+// replaces the catalog's: Supported adds a capability or parameter the catalog did not declare, Unsupported removes
+// one it did, and a non-zero Context or MaxOutput replaces the catalog's ceiling. A zero field was not measured and
+// the catalog's value stands. Supported and Unsupported are disjoint: a measurement of one clears the same bit from
+// the other, so a later measurement can flip an earlier one.
 type Facts struct {
 	Supported, Unsupported                     protocol.Capabilities
 	SupportedParameters, UnsupportedParameters protocol.ParameterSet
-	// Context and MaxOutput are the ceilings measurement found, in tokens; 0 is unmeasured. The snapshot takes one only
-	// when it is lower than the catalog's: the catalog is the model's own ceiling, and one endpoint cannot prove the
-	// model serves more than its spec says.
+	// Context and MaxOutput are the ceilings measurement found, in tokens; 0 is unmeasured. A measured ceiling replaces
+	// the catalog's, higher or lower: the catalog is a baseline, and detection is the evidence for this endpoint.
 	Context, MaxOutput int64
 }
 
