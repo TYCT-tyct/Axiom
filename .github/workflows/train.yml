@@ -87,9 +87,9 @@ jobs:
     # PR branch or any other ref cannot read it, so no workflow but the train can push main.
     environment: train
     permissions:
-      contents: write # push train branches; merge
-      pull-requests: write # merge, comment
-      issues: write # labels; the alarm issue
+      contents: write # push train branches and the landing record
+      pull-requests: write # read the queue, comment on PRs
+      issues: write # labels and comments
       statuses: write # the train status on PR heads, train/verified on the train
       actions: write # dispatch ci.yml, rerun a flaky build, read its log, cancel a stale one
       checks: read # the PRs' own checks
@@ -97,8 +97,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      # The deploy key authenticates the one push the ruleset lets past: the fast-forward of the base. The other pushes
-      # and the fallback's API merges stay on GITHUB_TOKEN.
+      # The deploy key authenticates the one push the ruleset lets past: the fast-forward of the base. The train branch
+      # and landing record pushes stay on GITHUB_TOKEN.
       - name: Set up the landing key
         env:
           TRAIN_DEPLOY_KEY: ${{ secrets.TRAIN_DEPLOY_KEY }}
