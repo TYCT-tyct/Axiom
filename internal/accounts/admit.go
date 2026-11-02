@@ -20,12 +20,13 @@ type AdmitRequest struct {
 	ClientIP netip.Addr
 }
 
-// Admission is what a call with the key may do, read from the database in the admission transaction: routing and
-// billing take their rules from it, never from a cache. Only Admit and Check make one.
+// Admission is what a key may do, read from the database in the admission transaction: routing and billing take their
+// rules from it, never from a cache. Only Admit, AdmitRead and Check make one.
 type Admission struct {
 	accountRate, keyRate int
 	owner                UserID
 	caller               Caller
+	kind                 string
 	tier                 TierID
 	preset               *uuid.UUID
 	models               []string
@@ -40,6 +41,10 @@ func (a Admission) OwnerID() UserID { return a.owner }
 
 // Caller is the key admitted.
 func (a Admission) Caller() Caller { return a.caller }
+
+// KeyKind is the kind of key admitted: CallKey, or ManagementKey for the read-only endpoints OpenRouter opens to
+// them. It is not named Kind: that method belongs to River job arguments, and the queue table reads every Kind.
+func (a Admission) KeyKind() string { return a.kind }
 
 // Scope is the key's account: the scope of the call's later transactions (extending, settling). It comes only from an
 // Admission, so only an admitted call has it.
@@ -81,9 +86,10 @@ func limit(amount *int64, reset *string) (int64, string, bool) {
 
 // Admit opens the call's admission transaction in the key's account scope, checks in one query that the key may be
 // used now (on an enabled API domain of its site; key, workspace and account enabled; key and workspace not deleted;
-// key not expired, a call key, and the client's address allowed), and hands what it read to fn in the same
-// transaction. An otherwise usable key on a suspended account is ErrAccountSuspended; other refusals are ErrUnknownKey. Every node reads the database here, so a
-// change committed before the call starts refuses it whatever the nodes have cached. fn's error rolls back.
+// key not expired, a call key, and the client's address allowed), and hands what it read to fn in
+// the same transaction. An otherwise usable key on a suspended account is ErrAccountSuspended; other refusals are
+// ErrUnknownKey. Every node reads the database here, so a change committed before the call starts refuses it whatever
+// the nodes have cached. fn's error rolls back.
 func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(tx pg.Tx, a Admission) error) error {
 	if c == (Caller{}) {
 		return ErrUnknownKey
@@ -98,12 +104,51 @@ func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(t
 		if len(rows) == 0 {
 			return ErrUnknownKey
 		}
-		a, err := admitRow(c, rows[0])
+		a, err := admitRow(c, rows[0], CallKey)
 		if err != nil {
 			return err
 		}
 		return fn(tx, a)
 	})
+}
+
+// AdmitRead is Admit for the read-only endpoints OpenRouter opens to management keys as well as call keys. A
+// management key stays unable to make a model call, which asks for a call key alone, and a call key sees what it
+// always saw; the ManagementKey in Admission.KeyKind tells the reader which one asked.
+func (s *Service) AdmitRead(ctx context.Context, c Caller, r AdmitRequest, fn func(tx pg.Tx, a Admission) error) error {
+	if c == (Caller{}) {
+		return ErrUnknownKey
+	}
+	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(c.account)), func(tx pg.Tx) error {
+		rows, err := s.queries.AdmitReadKey(ctx, tx, AdmitReadKeyParams{
+			KeyID: uuid.UUID(c.key), Domain: strings.ToLower(r.Domain), ClientIp: r.ClientIP,
+		})
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return ErrUnknownKey
+		}
+		a, err := admitRow(c, admitKeyRow(rows[0]), rows[0].Kind)
+		if err != nil {
+			return err
+		}
+		return fn(tx, a)
+	})
+}
+
+// checkKey is one call's admission check in the caller's transaction: the key's row must come back as a call key.
+func (s *Service) checkKey(ctx context.Context, tx pg.Tx, c Caller, r AdmitRequest) (Admission, error) {
+	rows, err := s.queries.AdmitKey(ctx, tx, AdmitKeyParams{
+		KeyID: uuid.UUID(c.key), Domain: strings.ToLower(r.Domain), ClientIp: r.ClientIP,
+	})
+	if err != nil {
+		return Admission{}, err
+	}
+	if len(rows) == 0 {
+		return Admission{}, ErrUnknownKey
+	}
+	return admitRow(c, rows[0], CallKey)
 }
 
 // Check reads what Admit reads and stops there, without a callback and without reserving anything: the file parser
@@ -115,16 +160,8 @@ func (s *Service) Check(ctx context.Context, c Caller, r AdmitRequest) (Admissio
 	}
 	var a Admission
 	err := s.db.Tx(ctx, pg.AccountScope(uuid.UUID(c.account)), func(tx pg.Tx) error {
-		rows, err := s.queries.AdmitKey(ctx, tx, AdmitKeyParams{
-			KeyID: uuid.UUID(c.key), Domain: strings.ToLower(r.Domain), ClientIp: r.ClientIP,
-		})
-		if err != nil {
-			return err
-		}
-		if len(rows) == 0 {
-			return ErrUnknownKey
-		}
-		a, err = admitRow(c, rows[0])
+		var err error
+		a, err = s.checkKey(ctx, tx, c, r)
 		return err
 	})
 	return a, err
@@ -189,7 +226,7 @@ func checkKeys(ctx context.Context, tx pg.Tx, calls []AdmitCall) ([]Admission, [
 			case err != nil:
 				return fmt.Errorf("accounts: check the key: %w", err)
 			default:
-				admissions[i], refusals[i] = admitRow(calls[i].Caller, row)
+				admissions[i], refusals[i] = admitRow(calls[i].Caller, row, CallKey)
 			}
 		}
 		return nil
@@ -197,8 +234,17 @@ func checkKeys(ctx context.Context, tx pg.Tx, calls []AdmitCall) ([]Admission, [
 	return admissions, refusals, err
 }
 
-// admitRow turns the row an admission check read into what a call may do.
-func admitRow(c Caller, row AdmitKeyRow) (Admission, error) {
+// admitKeyRow drops the kind a read's row carries, so both rows share the admission conversion.
+func admitKeyRow(row AdmitReadKeyRow) AdmitKeyRow {
+	return AdmitKeyRow{
+		PresetID: row.PresetID, Models: row.Models, SpendLimit: row.SpendLimit, LimitReset: row.LimitReset,
+		Budget: row.Budget, BudgetReset: row.BudgetReset, AdmissionIds: row.AdmissionIds, AccountActive: row.AccountActive,
+	}
+}
+
+// admitRow turns the row an admission check read into what a call may do; kind is the key's, which a call's query
+// leaves out so that its row costs the same as before management keys could read.
+func admitRow(c Caller, row AdmitKeyRow, kind string) (Admission, error) {
 	if !row.AccountActive {
 		return Admission{}, ErrAccountSuspended
 	}
@@ -210,7 +256,7 @@ func admitRow(c Caller, row AdmitKeyRow) (Admission, error) {
 	return Admission{
 		accountRate: admissionRate(row.AdmissionIds[32:36]),
 		keyRate:     admissionRate(row.AdmissionIds[36:40]),
-		owner:       owner, caller: c, tier: tier, preset: row.PresetID, models: row.Models,
+		owner:       owner, caller: c, kind: kind, tier: tier, preset: row.PresetID, models: row.Models,
 		spendLimit: row.SpendLimit, limitReset: row.LimitReset, budget: row.Budget, budgetReset: row.BudgetReset,
 	}, nil
 }

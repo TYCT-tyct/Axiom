@@ -164,10 +164,10 @@ func TestRefusals(t *testing.T) {
 		}, 401, "authentication", "authentication_error", "", ""},
 		"a key whose daily limit is spent": {"acme/alpha", nil, func(r *rig, _ account) {
 			r.sql("UPDATE accounts.api_keys SET spend_limit = 1000")
-		}, 402, "credits_insufficient", "billing_error", "60", "key_limit"},
+		}, 403, "credits_insufficient", "billing_error", "60", "openrouter_key_limit"},
 		"a workspace budget that is a total": {"acme/alpha", nil, func(r *rig, a account) {
 			r.sql("UPDATE accounts.workspaces SET budget = 1000 WHERE id = '" + a.workspace.String() + "'")
-		}, 402, "credits_insufficient", "billing_error", "", "workspace_budget"},
+		}, 403, "credits_insufficient", "billing_error", "", "openrouter_workspace_budget"},
 		"a model the key may not use": {"acme/alpha", nil, func(r *rig, _ account) {
 			r.sql("UPDATE accounts.api_keys SET models = '{acme/beta}'")
 		}, 404, "model_not_found", "not_found_error", "", ""},

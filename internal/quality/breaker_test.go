@@ -68,20 +68,32 @@ func TestWindowAndLateSuccess(t *testing.T) {
 		fail(i)
 	}
 	open, _ := s.Routing(now)
-	m.Observe(context.Background(), Observation{Endpoint: id, Done: true, BreakerFallback: true, Sent: now.Add(-time.Second), Ended: now.Add(2 * time.Second)})
+	// A normal attempt admitted just before the trip and finishing after it is not a re-check: only a probe restores.
+	m.Observe(context.Background(), Observation{Endpoint: id, Done: true, Sent: now.Add(-time.Second), Ended: now.Add(2 * time.Second)})
 	if at, _ := s.Routing(now); at.IsZero() {
-		t.Fatal("pre-breaker success restored endpoint")
+		t.Fatal("a late success restored the breaker")
 	}
-	now = open.Add(time.Second)
-	m.Observe(context.Background(), Observation{Endpoint: id, Done: true, BreakerFallback: true, Sent: now, Ended: now.Add(time.Second)})
-	if at, limit := s.Routing(now.Add(time.Second)); !at.IsZero() || limit != 1 {
-		t.Fatalf("recovery: %v limit %d", at, limit)
+	if at, _ := s.Routing(open.Add(time.Second)); at.IsZero() {
+		t.Fatal("the breaker closed without a probe")
 	}
-	if _, limit := s.Routing(now.Add(6 * time.Second)); limit != 2 {
-		t.Fatalf("slow start limit %d", limit)
-	}
-	if _, limit := s.Routing(now.Add(61 * time.Second)); limit != 0 {
-		t.Fatalf("slow start did not end: %d", limit)
+}
+
+func TestSlowStartRamp(t *testing.T) {
+	m := New(nil)
+	m.mode = Enforce
+	id := uuid.NewV7()
+	e := m.Live(id, 1)
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	e.mu.Lock()
+	e.record = healthRecord{ID: id, Mode: Enforce, Restored: now.UnixNano()}
+	e.mu.Unlock()
+	for _, tc := range []struct {
+		after time.Duration
+		limit int64
+	}{{0, 1}, {6 * time.Second, 2}, {61 * time.Second, 0}} {
+		if _, limit := e.Routing(now.Add(tc.after)); limit != tc.limit {
+			t.Fatalf("limit after %v = %d, want %d", tc.after, limit, tc.limit)
+		}
 	}
 }
 
@@ -94,7 +106,7 @@ func TestObserveModeAndHealthyTraffic(t *testing.T) {
 		now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 		rng := rand.New(rand.NewPCG(42, 313)) //nolint:gosec // fixed statistical regression stream, not a secret
 		for i := range 360000 {
-			o := Observation{Endpoint: id, Source: uuid.UUID{byte(i%2 + 1)}, Sent: now, Ended: now.Add(time.Millisecond), Done: true, BreakerFallback: true}
+			o := Observation{Endpoint: id, Source: uuid.UUID{byte(i%2 + 1)}, Sent: now, Ended: now.Add(time.Millisecond), Done: true}
 			if rng.Float64() < .1 {
 				o.Done = false
 				o.Failure = &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.UpstreamError{}}
@@ -137,7 +149,9 @@ func TestRecoveryIgnoresPriorGenerationFailures(t *testing.T) {
 	for i := range 5 {
 		m.Observe(t.Context(), Observation{Endpoint: id, Source: uuid.UUID{byte(i%2 + 1)}, Sent: sent, Ended: sent.Add(time.Second), Failure: failed500})
 	}
-	m.Observe(t.Context(), Observation{Endpoint: id, Sent: sent.Add(2 * time.Second), Ended: sent.Add(3 * time.Second), Done: true, BreakerFallback: true})
+	e.mu.Lock()
+	e.record = healthRecord{ID: id, Mode: Enforce, Restored: sent.Add(3 * time.Second).UnixNano()}
+	e.mu.Unlock()
 	for i := range 10 {
 		m.Observe(t.Context(), Observation{Endpoint: id, Source: uuid.UUID{byte(i%2 + 1)}, Sent: sent, Ended: sent.Add(4 * time.Second), Failure: failed500})
 	}
@@ -152,7 +166,7 @@ func TestRemovalCauses(t *testing.T) {
 		last Observation
 	}{
 		{"upstream_error", Observation{Failure: failed500}},
-		{"empty_stream", Observation{Done: true, BreakerFallback: true, Empty: true}},
+		{"empty_stream", Observation{Done: true, Empty: true}},
 		{"broken_stream", Observation{Fault: protocol.FaultBroken}},
 		{"timeout", Observation{Cut: Idle}},
 	} {
@@ -254,7 +268,7 @@ func TestMissingOwnerDoesNotSupplyBreakerEvidence(t *testing.T) {
 	}
 }
 
-func TestOnlyDeliberateLastResortSuccessRestores(t *testing.T) {
+func TestNormalSuccessDoesNotRestoreTheBreaker(t *testing.T) {
 	m := New(nil)
 	m.mode = Enforce
 	id := uuid.NewV7()
@@ -262,7 +276,7 @@ func TestOnlyDeliberateLastResortSuccessRestores(t *testing.T) {
 	for i := range 5 {
 		m.Observe(t.Context(), Observation{Endpoint: id, Source: uuid.UUID{byte(i%2 + 1)}, Sent: t0, Ended: t0, Failure: failed500})
 	}
-	// A normally reserved attempt can pass Blocked just before another attempt trips the breaker.
+	// An attempt admitted before the trip can pass Blocked just before another attempt trips the breaker.
 	m.Observe(t.Context(), Observation{Endpoint: id, Sent: t0.Add(time.Second), Ended: t0.Add(2 * time.Second), Done: true})
 	if at, _ := e.Routing(t0.Add(2 * time.Second)); at.IsZero() {
 		t.Fatal("a stale normal route restored the breaker")

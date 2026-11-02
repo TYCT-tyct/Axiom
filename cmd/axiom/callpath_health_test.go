@@ -89,8 +89,8 @@ func runGatewayHealth(t *testing.T, mode quality.Mode) {
 	if len(after.Entries) != 1 || after.Entries[0].Endpoint == first.Endpoint {
 		t.Fatal("next Plan did not remove endpoint")
 	}
-	if !router.Blocked(first) {
-		t.Fatal("reservation recheck missed live breaker")
+	if router.Blocked(first) {
+		t.Fatal("reservation recheck refused a degraded last resort")
 	}
 	// Gateway observations use wall time; model slow fixture setup without sleeping.
 	clock.Advance(-2 * time.Minute)
