@@ -103,6 +103,7 @@ func TestSiteSettings(t *testing.T) {
 // setting from a page built before the field existed and checks the stored false survives.
 func checkModelPricesVisibility(t *testing.T, f adminFixture, s session, site string, defaults adminapi.SiteSettings) {
 	t.Helper()
+	setModelPricesPublicReady(t, f.db, true)
 	hidden := false
 	rec := f.change(s, http.MethodPut, "/sites/"+site+"/settings", `{"settings":{"model_prices_public":false},"reason":"members only"}`, newKey())
 	expectAdmin(t, "prices kept to members", rec, http.StatusOK, "")
@@ -118,6 +119,9 @@ func checkModelPricesVisibility(t *testing.T, f adminFixture, s session, site st
 		WHERE action = 'site_settings.update' ORDER BY id DESC LIMIT 1`); got != "members only" {
 		t.Errorf("the audit entry's reason is %q, want members only", got)
 	}
+	// An old page's omitted field is a preserved value, not a new choice: it may still save another setting while
+	// an old node is live.
+	setModelPricesPublicReady(t, f.db, false)
 	rec = f.change(s, http.MethodPut, "/sites/"+site+"/settings", `{"settings":{"admin_idle_timeout_seconds":900},"reason":"an old page"}`, newKey())
 	expectAdmin(t, "an old page's replacement", rec, http.StatusOK, "")
 	wantOld := adminapi.SiteSettingsView{
@@ -130,6 +134,30 @@ func checkModelPricesVisibility(t *testing.T, f adminFixture, s session, site st
 	if f.auditCount("site_settings.update") != "4" {
 		t.Errorf("%s audit entries, want 4", f.auditCount("site_settings.update"))
 	}
+}
+
+// TestSiteSettingsRefusePricesWhileAnOldNodeIsLive: hiding prices while a node of the previous release, which returns
+// them unconditionally, is live is refused and changes nothing; making them public is always allowed.
+func TestSiteSettingsRefusePricesWhileAnOldNodeIsLive(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	site := f.siteID()
+	setModelPricesPublicReady(t, f.db, false)
+	rec := f.change(s, http.MethodPut, "/sites/"+site+"/settings", `{"settings":{"model_prices_public":false},"reason":"members only"}`, newKey())
+	expectAdmin(t, "hiding prices with an old node live", rec, http.StatusBadRequest, codeInvalidRequest)
+	fields := errorDetailOf(t, rec).Fields
+	if fields == nil || len(*fields) == 0 || (*fields)[0].Pointer != "/settings/model_prices_public" {
+		t.Errorf("fields %v, want /settings/model_prices_public", fields)
+	}
+	if f.auditCount("site_settings.update") != "0" {
+		t.Error("a refused price visibility change was audited")
+	}
+	if got := f.getSettings(s, site); got.Settings.ModelPricesPublic != nil {
+		t.Errorf("a refused hide stored %v", got.Settings.ModelPricesPublic)
+	}
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/settings", `{"settings":{"model_prices_public":true},"reason":"public"}`, newKey())
+	expectAdmin(t, "making prices public with an old node live", rec, http.StatusOK, "")
 }
 
 // TestSiteSettingsRefusals: a setting outside its bounds, in a currency that is not the site's, or for a site that is

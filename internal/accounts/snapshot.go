@@ -43,6 +43,10 @@ type Site struct {
 	// ModelPricesPublic is whether anonymous visitors see the site's model prices (docs/domains/gateway.md). A site
 	// that sets nothing is public.
 	ModelPricesPublic bool
+	// ModelPricesPublicReady is whether every live node supports hiding prices. It is the same for every site: a
+	// previous-release node returns prices unconditionally, so the anonymous projection stays public while one is
+	// live, even if the site stored false.
+	ModelPricesPublicReady bool
 	// Open registration's human check and email domain policy. The check is a proof of work the page solves; the
 	// lists are lower-case domains, and the deny list wins over the allow list.
 	RegistrationHumanCheck     bool
@@ -233,6 +237,7 @@ func readSite(r ListSitesRow) (Site, error) {
 	site.MaxKeysPerAccount = setting(r.MaxKeysPerAccount, defaultMaxKeysPerAccount)
 	site.KeyCreationsPerHour = setting(r.KeyCreationsPerHour, defaultKeyCreationsPerHour)
 	site.ModelPricesPublic = r.ModelPricesPublic
+	site.ModelPricesPublicReady = r.ModelPricesPublicReady
 	site.RegistrationHumanCheck = boolSetting(r.RegistrationHumanCheck, defaultHumanCheck)
 	site.RegistrationHumanCheckBits = setting(r.RegistrationHumanCheckBits, defaultHumanCheckBits)
 	site.RegistrationDomainAllow = lowerDomains(r.RegistrationDomainAllow)

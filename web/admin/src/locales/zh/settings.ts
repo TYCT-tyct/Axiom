@@ -24,6 +24,7 @@ export default {
   invalidLimit: "新 key 的每日上限要填 0 到 1,000,000 之间的{{currency}}金额，最多 9 位小数。",
   publicPrices: {
     hint: "未登录的访客能在模型页看到本站价格；登录用户始终能看到自己账户的价格。",
+    notSaved: "服务器没有确认模型价格设置，这一项没有保存。请关闭此窗口后重试。",
     values: {
       public: "公开",
       private: "仅登录用户可见",

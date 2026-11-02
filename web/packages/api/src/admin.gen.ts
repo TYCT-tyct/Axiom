@@ -1052,7 +1052,7 @@ export interface paths {
         get: operations["getSiteSettings"];
         /**
          * Set a site's session, key and model-price settings
-         * @description Replaces the site's own values: a setting left out falls back to the default in code, except `billing_preference` and `model_prices_public`, whose stored value is kept so a page built before the field cannot clear it. Each value has the bounds `SiteSettings` states, and a request outside them is a 400. Shorter sessions take effect on the next request of every session; the change is audited.
+         * @description Replaces the site's own values: a setting left out falls back to the default in code, except `billing_preference` and `model_prices_public`, whose stored value is kept so a page built before the field cannot clear it. Each value has the bounds `SiteSettings` states, and a request outside them is a 400. Turning `model_prices_public` off while a gateway node of a previous release is live is a 400 naming it; until that node leaves, the anonymous models list keeps prices public. Shorter sessions take effect on the next request of every session; the change is audited.
          */
         put: operations["updateSiteSettings"];
         post?: never;
@@ -3095,14 +3095,14 @@ export interface components {
             client_secret: string;
             reason: string;
         };
-        /** @description A site's own values for the sessions and keys its users get, and whether its model prices are public. An absent value is unset: the view's `defaults` says what applies, and a write that leaves out `model_prices_public` or `billing_preference` keeps the stored value. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units. */
+        /** @description A site's own values for the sessions and keys its users get, and whether its model prices are public. An absent value is unset: the view's `defaults` says what applies, and a write that leaves out `model_prices_public` or `billing_preference` keeps the stored value. Turning `model_prices_public` off waits until every live gateway node supports hiding prices. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units. */
         SiteSettings: {
             console_idle_timeout_seconds?: number;
             console_max_age_seconds?: number;
             admin_idle_timeout_seconds?: number;
             admin_max_age_seconds?: number;
             new_key_daily_limit?: components["schemas"]["Money"];
-            /** @description Whether visitors who are not signed in see the site's model prices; absent is `true`. When false, the anonymous models endpoint leaves every model's and endpoint's price out, and a signed-in member still sees the account's prices. A page built before this field leaves it out, and the server keeps the stored value rather than clearing it. */
+            /** @description Whether visitors who are not signed in see the site's model prices; absent is `true`. When false, the anonymous models endpoint leaves every model's and endpoint's price out, and a signed-in member still sees the account's prices. A page built before this field leaves it out, and the server keeps the stored value rather than clearing it. Turning it off while a gateway node of a previous release is live is a 400 naming this field; until every live node supports it, the anonymous list keeps prices public. */
             model_prices_public?: boolean;
             /** @description The funding order an account gets until it chooses its own; absent is `subscription_first`. A page built before this field leaves it out, and the server keeps the stored value rather than clearing it. */
             billing_preference?: components["schemas"]["BillingPreferenceName"];

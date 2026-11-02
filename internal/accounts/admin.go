@@ -166,6 +166,9 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 	if set.KeepModelPricesPublic {
 		set.ModelPricesPublic = before.ModelPricesPublic
 	}
+	if err := requireModelPricesPublicReady(ctx, tx, before, set); err != nil {
+		return err
+	}
 	if set.KeepBillingPreference {
 		set.BillingPreference = before.BillingPreference
 	}
@@ -195,6 +198,26 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 		Target: audit.Target{Module: "accounts", Kind: "site", ID: site.TypeID(), Site: uuid.UUID(site)},
 		Detail: map[string]any{"before": before.detail(), "after": set.detail()},
 	})
+}
+
+// requireModelPricesPublicReady refuses to hide prices while a node of the previous release, which returns them
+// unconditionally, is live. Keeping the stored value is not a new choice, so an old page or a page that repeats an
+// already-hidden value may still save other fields.
+func requireModelPricesPublicReady(ctx context.Context, tx pg.Tx, before, set SiteSettings) error {
+	if set.KeepModelPricesPublic || set.ModelPricesPublic == nil || *set.ModelPricesPublic {
+		return nil
+	}
+	if before.ModelPricesPublic != nil && !*before.ModelPricesPublic {
+		return nil
+	}
+	ready, err := New().ModelPricesPublicReady(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return &SettingError{"model_prices_public", "waits for every gateway node to support it"}
+	}
+	return nil
 }
 
 // writeBillingPreference clears or writes the site's default order after checking the rollout gate.

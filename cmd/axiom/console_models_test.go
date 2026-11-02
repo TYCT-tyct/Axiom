@@ -60,7 +60,7 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 		},
 	}}
 	api := consoleAPI{models: fake}
-	ctx := context.WithValue(context.Background(), callKey{}, call{site: accounts.Site{DefaultTier: tier, ModelPricesPublic: true}})
+	ctx := context.WithValue(context.Background(), callKey{}, call{site: accounts.Site{DefaultTier: tier, ModelPricesPublic: true, ModelPricesPublicReady: true}})
 	call := func(params consoleapi.ListPublicModelsParams) consoleapi.PublicModelList {
 		t.Helper()
 		response, err := api.ListPublicModels(ctx, consoleapi.ListPublicModelsRequestObject{Params: params})
@@ -216,6 +216,18 @@ func pricesShown(list consoleapi.PublicModelList) bool {
 	return list.Data[0].Pricing != nil && (*list.Data[0].Endpoints)[0].Pricing != nil
 }
 
+// setModelPricesPublicReady publishes whether every live node can hide prices.
+func setModelPricesPublicReady(t *testing.T, db *pg.DB, ready bool) {
+	t.Helper()
+	if err := db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO platform.model_prices_public_readiness (id, enabled)
+			VALUES (true, $1) ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled, updated_at = clock_timestamp()`, ready)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // setModelPricesPublic stores the site's choice and reloads this node's snapshot.
 func setModelPricesPublic(t *testing.T, c consoleFixture, v bool) {
 	t.Helper()
@@ -241,6 +253,7 @@ func TestModelPricesFollowTheSiteSetting(t *testing.T) {
 		t.Fatal("a site that sets nothing: the anonymous page has no prices, want public")
 	}
 
+	setModelPricesPublicReady(t, c.db, true)
 	setModelPricesPublic(t, c, false)
 	hidden := readModelList(t, c, "/models")
 	if pricesShown(hidden) {
@@ -252,6 +265,26 @@ func TestModelPricesFollowTheSiteSetting(t *testing.T) {
 	s := c.signIn(ownerEmail, ownerPassword)
 	if !pricesShown(readModelList(t, c, "/models/account", as(s))) {
 		t.Fatal("prices kept to members: the signed-in account lost its prices")
+	}
+
+	// An old node that cannot hide prices is live: every node falls back to public, so a request served by either
+	// node gives the same answer instead of leaking on one.
+	setModelPricesPublicReady(t, c.db, false)
+	if err := c.svc.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !pricesShown(readModelList(t, c, "/models")) {
+		t.Fatal("with an old node live: the anonymous page hid prices that node still returns")
+	}
+	if !pricesShown(readModelList(t, c, "/models/account", as(s))) {
+		t.Fatal("with an old node live: the signed-in account lost its prices")
+	}
+	setModelPricesPublicReady(t, c.db, true)
+	if err := c.svc.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if pricesShown(readModelList(t, c, "/models")) {
+		t.Fatal("after the old node left: the anonymous page still has prices")
 	}
 
 	setModelPricesPublic(t, c, true)

@@ -26,6 +26,8 @@ export default {
   invalidLimit: "The daily limit of a new key is an amount in {{currency}} from 0 to 1,000,000, with up to 9 decimals.",
   publicPrices: {
     hint: "Visitors who are not signed in see the site's prices on the models page. Signed-in members always see their account's prices.",
+    notSaved:
+      "The server did not confirm the model-price setting, so it was not saved. Close this dialog and try again.",
     values: {
       public: "Public",
       private: "Signed-in members only",

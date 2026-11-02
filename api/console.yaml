@@ -1890,7 +1890,9 @@ paths:
         prices of the site's default tier. It is the price a visitor pays after registering, and the same data the
         website's models and prices page shows. A site may keep its prices to signed-in members
         (`model_prices_public` in the admin settings): this anonymous projection then leaves every `pricing` out and
-        still lists the models and their endpoints, so the page shows a no-price state rather than an error. Each
+        still lists the models and their endpoints, so the page shows a no-price state rather than an error. While a
+        gateway node of a previous release is live, every node keeps prices public; the setting applies only after
+        every live node supports it. Each
         endpoint carries the group's stable public codename — the identity `provider.only`, `provider.ignore` and
         presets accept — its attributes and, when prices are published, its own price; a directly connected official
         API shows its real name. It carries no supplier name, upstream name, route, cost, internal name, price source

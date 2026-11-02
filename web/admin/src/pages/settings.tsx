@@ -20,6 +20,7 @@ import { useDuration } from "../durations";
 import { FileParserSettings } from "../file-parser-settings";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { MailSettings } from "../mail-settings";
+import { modelPricesChangeUnconfirmed } from "../model-prices";
 import { Facts, PageBody, State } from "../parts";
 import { PaymentsSettings } from "../payments-settings";
 import { ProbeSettings } from "../probe-settings";
@@ -300,15 +301,26 @@ function EditDialog({
       action={t("settings.save")}
       fields={(error) => <SettingsFields view={view} currency={currency} error={error} />}
       read={(values) => readSettings(values, currency, words, view.defaults.model_prices_public !== undefined)}
-      send={(settings, { reason, key }) =>
-        unwrapChange(
+      send={async (settings, { reason, key }) => {
+        const result = await unwrapChange(
           adminApi.PUT("/api/admin/v1/sites/{site_id}/settings", {
             params: { path: { site_id: siteId }, header: { "Idempotency-Key": key } },
             body: { settings, reason },
           }),
-        )
-      }
-      done={() => <p>{t("settings.saved")}</p>}
+        );
+        const unconfirmed = modelPricesChangeUnconfirmed(view, settings, result.data);
+        return { ...result, data: { ...result.data, modelPricesSaved: !unconfirmed } };
+      }}
+      verdict
+      done={(out) => (
+        <p role="status" className="flex items-start gap-2 text-t1">
+          <Icon
+            name={out.modelPricesSaved ? "check" : "alert"}
+            className={out.modelPricesSaved ? "mt-0.5 shrink-0 text-ok" : "mt-0.5 shrink-0 text-bad"}
+          />
+          <span>{t(out.modelPricesSaved ? "settings.saved" : "settings.publicPrices.notSaved")}</span>
+        </p>
+      )}
       onClose={onClose}
     />
   );

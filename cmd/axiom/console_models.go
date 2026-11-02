@@ -19,10 +19,12 @@ type modelProjection interface {
 
 // ListPublicModels answers the website's models and prices page, anonymously, at the site's default tier: the price a
 // visitor pays after registering. A site may keep its prices to signed-in members; the models, their limits and
-// endpoints stay public, only the prices are left out.
+// endpoints stay public, only the prices are left out. While a previous-release node, which cannot hide prices, is
+// live, every node keeps them public so the same site does not answer with prices on one node and without on another.
 func (c consoleAPI) ListPublicModels(ctx context.Context, request consoleapi.ListPublicModelsRequestObject) (consoleapi.ListPublicModelsResponseObject, error) {
 	site := callOf(ctx).site
-	return consoleapi.ListPublicModels200JSONResponse(c.publicModels(request.Params, billing.Audience{Tier: site.DefaultTier}, site.ModelPricesPublic)), nil
+	prices := site.ModelPricesPublic || !site.ModelPricesPublicReady
+	return consoleapi.ListPublicModels200JSONResponse(c.publicModels(request.Params, billing.Audience{Tier: site.DefaultTier}, prices)), nil
 }
 
 // ListAccountModels answers the console's models and prices page at the signed-in account's current tier. The account

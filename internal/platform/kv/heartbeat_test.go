@@ -421,9 +421,56 @@ func TestHeartbeatReportsTheKeyRing(t *testing.T) {
 	}
 }
 
+// TestModelPricesReadinessNeedsEveryLiveNode: a new node may hide prices only while every live node declares support.
+// Adding a previous-release row makes the readiness false, and removing it makes it true again.
+func TestModelPricesReadinessNeedsEveryLiveNode(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	scope := pg.PlatformScope()
+	node, err := openNamed(t, db, scope, "node-a")
+	if err != nil {
+		t.Fatalf("open the new node: %v", err)
+	}
+	ready := func() bool {
+		t.Helper()
+		var enabled bool
+		if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+			return tx.QueryRow(t.Context(), `SELECT enabled FROM platform.model_prices_public_readiness WHERE id`).Scan(&enabled)
+		}); err != nil {
+			t.Fatalf("read model-price readiness: %v", err)
+		}
+		return enabled
+	}
+	if !ready() {
+		t.Fatal("one new node: model prices are not ready, want ready")
+	}
+	old := uuid.NewV7()
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active)
+   VALUES ('node-old', $1, '{}', '{}', 0)`, old)
+		return err
+	}); err != nil {
+		t.Fatalf("register the old node: %v", err)
+	}
+	node.Beat(t.Context())
+	if ready() {
+		t.Fatal("an old node is live: model prices are ready, want not ready")
+	}
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `DELETE FROM platform.nodes WHERE id = 'node-old'`)
+		return err
+	}); err != nil {
+		t.Fatalf("remove the old node: %v", err)
+	}
+	node.Beat(t.Context())
+	if !ready() {
+		t.Fatal("the old node left: model prices are not ready, want ready")
+	}
+}
+
 // TestAReusedNodeIDFromAnOldBinaryDoesNotSupportThePreference: an old binary can start under a new node's ID and
 // update share_session without knowing the capability columns. The old row's true must not survive that process
-// change; only a declaration whose session is the live session counts.
+// change; only a declaration whose session is the live session counts, for either capability.
 func TestAReusedNodeIDFromAnOldBinaryDoesNotSupportThePreference(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
@@ -432,19 +479,24 @@ func TestAReusedNodeIDFromAnOldBinaryDoesNotSupportThePreference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the new node: %v", err)
 	}
-	var shareSession, declaredSession uuid.UUID
-	var supported, ready bool
+	var shareSession, declaredSession, priceSession uuid.UUID
+	var supported, ready, pricesSupported, pricesReady bool
 	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
 		if err := tx.QueryRow(t.Context(), `SELECT share_session, billing_preference_session,
-   supports_billing_preference FROM platform.nodes WHERE id = 'node-a'`).Scan(&shareSession, &declaredSession, &supported); err != nil {
+   supports_billing_preference, model_prices_public_session, supports_model_prices_public
+   FROM platform.nodes WHERE id = 'node-a'`).Scan(&shareSession, &declaredSession, &supported, &priceSession, &pricesSupported); err != nil {
 			return err
 		}
-		return tx.QueryRow(t.Context(), `SELECT enabled FROM platform.billing_preference_readiness WHERE id`).Scan(&ready)
+		if err := tx.QueryRow(t.Context(), `SELECT enabled FROM platform.billing_preference_readiness WHERE id`).Scan(&ready); err != nil {
+			return err
+		}
+		return tx.QueryRow(t.Context(), `SELECT enabled FROM platform.model_prices_public_readiness WHERE id`).Scan(&pricesReady)
 	}); err != nil {
 		t.Fatalf("read the new node: %v", err)
 	}
-	if !supported || !ready || shareSession != declaredSession {
-		t.Fatalf("new node: supported=%v ready=%v session=%s declared=%s, want true/true/equal", supported, ready, shareSession, declaredSession)
+	if !supported || !ready || !pricesSupported || !pricesReady || shareSession != declaredSession || shareSession != priceSession {
+		t.Fatalf("new node: supported=%v/%v ready=%v/%v session=%s declared=%s/%s, want true/true/true/true/equal",
+			supported, pricesSupported, ready, pricesReady, shareSession, declaredSession, priceSession)
 	}
 
 	// The old binary's start: it updates share_session and leaves both capability columns alone.
@@ -468,11 +520,14 @@ func TestAReusedNodeIDFromAnOldBinaryDoesNotSupportThePreference(t *testing.T) {
 	}
 	node.Beat(t.Context())
 	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT enabled FROM platform.billing_preference_readiness WHERE id`).Scan(&ready)
+		if err := tx.QueryRow(t.Context(), `SELECT enabled FROM platform.billing_preference_readiness WHERE id`).Scan(&ready); err != nil {
+			return err
+		}
+		return tx.QueryRow(t.Context(), `SELECT enabled FROM platform.model_prices_public_readiness WHERE id`).Scan(&pricesReady)
 	}); err != nil {
 		t.Fatalf("read readiness: %v", err)
 	}
-	if ready {
+	if ready || pricesReady {
 		t.Fatal("readiness stayed true across an old binary's reuse of the node ID")
 	}
 }

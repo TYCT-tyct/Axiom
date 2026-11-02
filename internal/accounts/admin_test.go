@@ -104,6 +104,18 @@ func (o settingsOf) mustRead(site uuid.UUID) accounts.SiteSettings {
 	return v
 }
 
+// setModelPricesReady publishes whether every live node supports hiding prices.
+func setModelPricesReady(t *testing.T, db *pg.DB, ready bool) {
+	t.Helper()
+	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO platform.model_prices_public_readiness (id, enabled)
+			VALUES (true, $1) ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled, updated_at = clock_timestamp()`, ready)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestSiteSettingsAreWrittenWhole: a site's settings are read as they were set, a write replaces them all, and each
 // change is audited.
 func TestSiteSettingsAreWrittenWhole(t *testing.T) {
@@ -166,6 +178,7 @@ func TestSiteSettingsKeepModelPricesPublic(t *testing.T) {
 	if !ok || !site.ModelPricesPublic {
 		t.Fatalf("a site with no settings row: %+v, want prices public", site)
 	}
+	setModelPricesReady(t, o.db, true)
 	hidden := false
 	if err := o.write(s1, accounts.SiteSettings{ModelPricesPublic: &hidden}); err != nil {
 		t.Fatal(err)
@@ -173,14 +186,63 @@ func TestSiteSettingsKeepModelPricesPublic(t *testing.T) {
 	if err := o.s.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if site, _ = o.s.Site(accounts.SiteID(s1)); site.ModelPricesPublic {
-		t.Fatal("the snapshot still publishes prices after the site hid them")
+	if site, _ = o.s.Site(accounts.SiteID(s1)); site.ModelPricesPublic || !site.ModelPricesPublicReady {
+		t.Fatalf("the snapshot after hiding prices: %+v, want hidden and ready", site)
 	}
 	if err := o.write(s1, accounts.SiteSettings{AdminIdle: time.Hour, KeepModelPricesPublic: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got := o.mustRead(s1); got.ModelPricesPublic == nil || *got.ModelPricesPublic {
 		t.Errorf("prices public after an omitted field: %v, want the stored false", got.ModelPricesPublic)
+	}
+}
+
+// TestModelPricesReadinessFallsBackWhenAnOldNodeAppears: the stored choice stays, but the snapshot reports that
+// several nodes cannot agree on it while a previous-release node is live; the anonymous projection then keeps prices
+// public.
+func TestModelPricesReadinessFallsBackWhenAnOldNodeAppears(t *testing.T) {
+	t.Parallel()
+	o := newSettingsOf(t)
+	setModelPricesReady(t, o.db, true)
+	hidden := false
+	if err := o.write(s1, accounts.SiteSettings{ModelPricesPublic: &hidden}); err != nil {
+		t.Fatal(err)
+	}
+	setModelPricesReady(t, o.db, false)
+	if err := o.s.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if site, _ := o.s.Site(accounts.SiteID(s1)); site.ModelPricesPublic || site.ModelPricesPublicReady {
+		t.Fatalf("the snapshot with an old node: %+v, want the stored false and not ready", site)
+	}
+}
+
+// TestSiteSettingsRefuseModelPricesWhileAnOldNodeIsLive: hiding prices is a new choice, so an old node that returns
+// them unconditionally blocks it; making them public is always safe, and keeping the stored value is not blocked.
+func TestSiteSettingsRefuseModelPricesWhileAnOldNodeIsLive(t *testing.T) {
+	t.Parallel()
+	o := newSettingsOf(t)
+	setModelPricesReady(t, o.db, false)
+	hidden := false
+	if err := o.write(s1, accounts.SiteSettings{ModelPricesPublic: &hidden}); !refuses(err, "model_prices_public") || o.entries() != 0 {
+		t.Fatalf("hiding prices with an old node: %v, %d audit entries", err, o.entries())
+	}
+	if got := o.mustRead(s1); got.ModelPricesPublic != nil {
+		t.Fatalf("a refused hide changed the setting: %v", got.ModelPricesPublic)
+	}
+	public := true
+	if err := o.write(s1, accounts.SiteSettings{ModelPricesPublic: &public}); err != nil {
+		t.Fatalf("making prices public with an old node: %v", err)
+	}
+	// A page repeats the already-hidden value while saving another setting: it is not a new choice, so it is allowed.
+	setModelPricesReady(t, o.db, true)
+	hidden = false
+	if err := o.write(s1, accounts.SiteSettings{ModelPricesPublic: &hidden}); err != nil {
+		t.Fatal(err)
+	}
+	setModelPricesReady(t, o.db, false)
+	if err := o.write(s1, accounts.SiteSettings{ModelPricesPublic: &hidden, AdminIdle: time.Hour}); err != nil {
+		t.Fatalf("repeating the stored false with an old node: %v", err)
 	}
 }
 
