@@ -111,8 +111,7 @@ func (r *Router) Blocked(e Entry) bool {
 	if snap != nil {
 		for _, c := range snap.byModel[e.Model] {
 			if c.ID == e.Endpoint && c.LiveHealth != nil {
-				open, _ := c.LiveHealth.Routing(now)
-				return !open.IsZero()
+				return c.LiveHealth.Offline(now)
 			}
 		}
 	}

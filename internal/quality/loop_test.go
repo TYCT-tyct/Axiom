@@ -338,12 +338,15 @@ func TestCommittedSignalSurvivesRestart(t *testing.T) {
 	if at, _ := restarted.Live(id, 1).Routing(*now); at.IsZero() {
 		t.Fatal("restart lost durable breaker")
 	}
+	if !restarted.Live(id, 1).Offline(*now) {
+		t.Fatal("restart lost the offline state")
+	}
 }
 
 func offlineSignals(t *testing.T, l *Loop) (signals int) {
 	t.Helper()
 	if err := l.db.ReadTx(t.Context(), l.scope, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='endpoint_offline'`).Scan(&signals)
+		return tx.QueryRow(t.Context(), `SELECT count(*) FROM platform.alert_signals WHERE body->>'kind'='endpoint_still_down'`).Scan(&signals)
 	}); err != nil {
 		t.Fatal(err)
 	}

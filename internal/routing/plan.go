@@ -502,23 +502,30 @@ func clearSlowFull(order []ranked) {
 }
 
 // healthOrder applies breakers after every request-specific filter, across primary and alternate models. A tripped
-// endpoint takes no traffic until a probe restores it (docs/domains/quality.md「恢复」); when nothing is left, Plan
-// returns a temporary NoEndpoint and the gateway refuses the request rather than sending it to a broken endpoint.
+// endpoint is degraded: out of the normal route, but still the last resort while its re-check is pending. Only one whose
+// re-check failed (offline) takes no traffic at all; when every candidate is offline, Plan returns a temporary
+// NoEndpoint and the gateway refuses the request (docs/domains/quality.md「恢复」).
 func healthOrder(order []ranked, rec *Record) []ranked {
 	clearSlowFull(order)
+	var degraded []ranked
 	out := order[:0]
 	for _, c := range order {
-		reason := Reason(0)
-		if !c.opened.IsZero() {
-			reason = BreakerOpen
-		} else if c.slowFull {
-			reason = Full
-		}
-		if reason != 0 {
-			rec.Excluded = append(rec.Excluded, Excluded{c.ID, reason})
-		} else {
+		switch {
+		case !c.opened.IsZero() && c.offline:
+			rec.Excluded = append(rec.Excluded, Excluded{c.ID, BreakerOpen})
+		case !c.opened.IsZero():
+			degraded = append(degraded, c)
+		case c.slowFull:
+			rec.Excluded = append(rec.Excluded, Excluded{c.ID, Full})
+		default:
 			out = append(out, c)
 		}
+	}
+	if len(out) == 0 && len(degraded) > 0 {
+		return append(out, degraded...)
+	}
+	for _, c := range degraded {
+		rec.Excluded = append(rec.Excluded, Excluded{c.ID, BreakerOpen})
 	}
 	return out
 }

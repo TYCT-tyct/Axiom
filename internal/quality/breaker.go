@@ -124,6 +124,14 @@ func (m *Monitor) Live(id suppliers.EndpointID, credentials int) *State {
 	return e
 }
 
+// Offline reports whether a failed re-check has taken the endpoint out of service, not merely out of the normal route.
+// A tripped endpoint that has not failed its re-check yet is only degraded: routing may use it as a last resort.
+func (e *State) Offline(time.Time) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.mode == Enforce && e.probeable && e.record.Opened != 0 && e.record.Warned
+}
+
 // Routing reads the live breaker and the temporary concurrency ceiling; zero means closed/unlimited.
 func (e *State) Routing(now time.Time) (opened time.Time, limit int64) {
 	e.mu.Lock()
@@ -217,10 +225,12 @@ func (m *Monitor) delay(level int) time.Duration {
 	return max(probeBase, min(time.Duration(float64(d)*(.75+.5*m.loop.rand())), probeMax))
 }
 
-// recover closes an observe-mode would-remove on a counted success. Enforce mode restores only through a probe: a real
-// request is never sent to a tripped endpoint, and one admitted before the trip says nothing about the endpoint now.
+// recover closes an observe-mode would-remove on a counted success. In enforce mode a probeable endpoint restores only
+// through a passing probe; a real success can only come from a degraded endpoint, and restores one that has no probe at
+// all (an owned endpoint or one with no generation format), where a real request is the only re-check available. An
+// offline endpoint takes no real traffic, so its only way back is a probe.
 func (m *Monitor) recover(e *State, v verdict, o *Observation) {
-	if v != success || m.mode == Enforce {
+	if v != success || (m.mode == Enforce && (e.record.Warned || e.probeable)) {
 		return
 	}
 	r := e.record

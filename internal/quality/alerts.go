@@ -53,6 +53,9 @@ func healthSignal(c change) alert.Signal {
 	key := c.record.ID.String()
 	source := "quality:" + key + ":" + strconv.FormatInt(c.record.Epoch, 10)
 	if c.kind == "offline" {
+		// Reuse the kind every released version already resolves. A new endpoint_offline would stay unresolved when an
+		// old node restores the endpoint during a rolling upgrade, because resolution is by exact (kind, key).
+		kind = "endpoint_still_down"
 		// One signal per incident: the source stays the same while the endpoint is out, so a later failed probe or a
 		// restart that replays the transition does not send it twice.
 		source = "quality:" + key + ":offline:" + strconv.FormatInt(c.record.Opened, 10)

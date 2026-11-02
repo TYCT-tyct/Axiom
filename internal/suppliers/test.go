@@ -377,6 +377,8 @@ func testCall(f protocol.Format, model, prompt string, output int64) ([]byte, er
 			"model": model, "stream": true, "max_tokens": output, "messages": []any{message},
 			"stream_options": map[string]any{"include_usage": true},
 		}
+	case protocol.Completions:
+		body = map[string]any{"model": model, "stream": true, "max_tokens": output, "prompt": prompt}
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrNoFormat, f)
 	}

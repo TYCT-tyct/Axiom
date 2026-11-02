@@ -191,6 +191,8 @@ func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) e
 		e.mu.Lock()
 		loaded := e.loaded
 		e.owned = !ep.Platform()
+		_, generation := probeFormat(ep.Formats)
+		e.probeable = ep.Platform() && generation
 		e.lastSeen = m.loop.now()
 		e.mu.Unlock()
 		if loaded {

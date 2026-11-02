@@ -91,9 +91,10 @@ func trip(t *testing.T, m *quality.Monitor, n int, now time.Time) {
 	}
 }
 
-// TestTrippedEndpointsTakeNoTraffic: a tripped endpoint leaves the route at once, even when it is the only candidate,
-// and Plan says the request has nowhere to go instead of handing it to the broken endpoint.
-func TestTrippedEndpointsTakeNoTraffic(t *testing.T) {
+// TestTrippedEndpointsAreLastResort: a tripped endpoint leaves the normal route but is still the last resort while its
+// re-check is pending, because a real success is the only other evidence and stopping before the re-check would make a
+// transient blip a hard outage.
+func TestTrippedEndpointsAreLastResort(t *testing.T) {
 	h := newHarness(t, routing.Config{MaxStale: time.Hour}, openPreset())
 	m, _, _ := healthy(t, h)
 	a, b := endpoint(t, 1), endpoint(t, 2)
@@ -106,26 +107,80 @@ func TestTrippedEndpointsTakeNoTraffic(t *testing.T) {
 	if len(plan.Entries) != 1 || plan.Entries[0].Endpoint != b.ID {
 		t.Fatalf("after one trip: %+v", plan.Entries)
 	}
-	if h.r.Blocked(plan.Entries[0]) {
-		t.Fatal("Blocked split a healthy entry")
+	first := routing.Entry{Endpoint: a.ID, Supplier: a.Supplier, Model: a.Model}
+	if h.r.Blocked(first) {
+		t.Fatal("Blocked refused a degraded endpoint before its re-check")
 	}
 	h.now = h.now.Add(time.Second)
 	trip(t, m, 2, h.now)
-	p, wait, err := h.r.Plan(in)
+	p := h.plan(in)
+	if got := endpoints(p); len(got) != 2 || !slices.Contains(got, a.ID) || !slices.Contains(got, b.ID) {
+		t.Fatalf("all tripped: route %v, want both as the last resort", got)
+	}
+	if h.r.Blocked(first) {
+		t.Fatal("Blocked refused a degraded endpoint after both tripped")
+	}
+}
+
+// TestOfflineEndpointsTakeNoTraffic: only a failed re-check takes an endpoint out of service. Then even the only
+// candidate is not sent traffic, and Plan returns a temporary NoEndpoint for the gateway's 503.
+func TestOfflineEndpointsTakeNoTraffic(t *testing.T) {
+	h := newHarness(t, routing.Config{MaxStale: time.Hour}, openPreset())
+	a := endpoint(t, 1)
+	m, l, src := healthy(t, h, a)
+	a.LiveHealth = m.Live(uuid.UUID(a.ID), 1)
+	h.replace(openPreset(), a)
+	trip(t, m, 1, h.now)
+	if got := endpoints(h.plan(input())); !slices.Equal(got, []routing.EndpointID{a.ID}) {
+		t.Fatalf("a degraded endpoint was not the last resort: %v", got)
+	}
+	h.now = h.now.Add(30 * time.Second)
+	probe(t, l, src, probeFailed)
+	p, wait, err := h.r.Plan(input())
 	if wait != nil {
-		t.Fatal("queued a request whose candidates are all tripped")
+		t.Fatal("queued a request whose only endpoint is offline")
 	}
 	var none *routing.NoEndpoint
 	if !errors.As(err, &none) || none.Permanent || len(p.Entries) != 0 {
-		t.Fatalf("all tripped: plan %+v, wait %v, error %v; want a temporary NoEndpoint", p.Entries, wait, err)
+		t.Fatalf("offline: plan %+v, wait %v, error %v; want a temporary NoEndpoint", p.Entries, wait, err)
 	}
-	if len(none.Reasons) != 2 || none.Reasons[0].Reason != routing.BreakerOpen || none.Reasons[1].Reason != routing.BreakerOpen {
-		t.Fatalf("reasons %+v, want both breaker_open", none.Reasons)
+	if len(none.Reasons) != 1 || none.Reasons[0].Reason != routing.BreakerOpen {
+		t.Fatalf("reasons %+v, want breaker_open", none.Reasons)
 	}
-	// The entry planned before the trip is refused before it is sent.
 	first := routing.Entry{Endpoint: a.ID, Supplier: a.Supplier, Model: a.Model}
 	if !h.r.Blocked(first) {
-		t.Fatal("Blocked let a tripped endpoint receive the attempt")
+		t.Fatal("Blocked let an offline endpoint receive the attempt")
+	}
+	h.now = h.now.Add(time.Minute)
+	probe(t, l, src, probePassed)
+	if got := endpoints(h.plan(input())); !slices.Equal(got, []routing.EndpointID{a.ID}) {
+		t.Fatalf("restored endpoint missing: %v", got)
+	}
+	if h.r.Blocked(first) {
+		t.Fatal("Blocked refused a restored endpoint")
+	}
+}
+
+// TestDegradedEndpointRecoversOnItsProbe: a transient trip does not turn into a hard outage when the upstream is back
+// before the first re-check. The endpoint keeps serving as the last resort, and a passing probe restores it.
+func TestDegradedEndpointRecoversOnItsProbe(t *testing.T) {
+	h := newHarness(t, routing.Config{MaxStale: time.Hour}, openPreset())
+	a := endpoint(t, 1)
+	m, l, src := healthy(t, h, a)
+	a.LiveHealth = m.Live(uuid.UUID(a.ID), 1)
+	h.replace(openPreset(), a)
+	trip(t, m, 1, h.now)
+	if got := endpoints(h.plan(input())); !slices.Equal(got, []routing.EndpointID{a.ID}) {
+		t.Fatalf("a degraded endpoint was not the last resort: %v", got)
+	}
+	h.now = h.now.Add(30 * time.Second)
+	probe(t, l, src, probePassed)
+	if got := endpoints(h.plan(input())); !slices.Equal(got, []routing.EndpointID{a.ID}) {
+		t.Fatalf("a passing probe did not restore the endpoint: %v", got)
+	}
+	first := routing.Entry{Endpoint: a.ID, Supplier: a.Supplier, Model: a.Model}
+	if h.r.Blocked(first) {
+		t.Fatal("Blocked refused a restored endpoint")
 	}
 }
 
@@ -140,12 +195,19 @@ func TestProbeRestoresAndSlowStart(t *testing.T) {
 	h.replace(openPreset(), a, b)
 	trip(t, m, 1, h.now)
 	if len(h.plan(input()).Entries) != 1 {
-		t.Fatal("a tripped endpoint stayed in the route")
+		t.Fatal("a tripped endpoint stayed in the normal route")
+	}
+	first := routing.Entry{Endpoint: a.ID, Supplier: a.Supplier, Model: a.Model}
+	if h.r.Blocked(first) {
+		t.Fatal("Blocked refused a degraded endpoint before its re-check")
 	}
 	h.now = h.now.Add(30 * time.Second)
 	probe(t, l, src, probeFailed)
 	if len(h.plan(input()).Entries) != 1 {
-		t.Fatal("a failed re-check put the endpoint back")
+		t.Fatal("an offline endpoint came back without a passing probe")
+	}
+	if !h.r.Blocked(first) {
+		t.Fatal("Blocked let an offline endpoint receive the attempt")
 	}
 	h.now = h.now.Add(time.Minute)
 	probe(t, l, src, probePassed)

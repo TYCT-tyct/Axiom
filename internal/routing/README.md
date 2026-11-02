@@ -57,9 +57,9 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 
 ## 健康闭环
 
-`Owner.Platform` 从站点与账户所有者均为空推导平台归属，不另存可矛盾的布尔字段。`Endpoint.LiveHealth` 指向 quality 的实时状态，独立于 `BreakerOpen` 静态排除字段；`Plan` 先做权限、能力、价格、资金、暂停与硬并发过滤，再在所有主模型和备选模型之间处理实时熔断。熔断的端点一律排除，记 `breaker_open`；候选全部熔断时返回暂时性的 `NoEndpoint`，gateway 回 503，等试探通过。`Blocked` 在发出前复查熔断和暂停，所以熔断前排进路线的条目也不会发给已经熔断的端点。路由记录把排除的原因记在 `excluded` 里。
+`Owner.Platform` 从站点与账户所有者均为空推导平台归属，不另存可矛盾的布尔字段。`Endpoint.LiveHealth` 指向 quality 的实时状态，独立于 `BreakerOpen` 静态排除字段；`Plan` 先做权限、能力、价格、资金、暂停与硬并发过滤，再在所有主模型和备选模型之间处理实时熔断。熔断的端点从正常路线降权，记 `breaker_open`；有别的候选时不接，候选全部熔断时保留原有排序作为最后备选。第一次试探仍失败的端点离线（`Offline`），一律排除；候选全部离线时返回暂时性的 `NoEndpoint`，gateway 回 503，等试探通过。`Blocked` 在发出前复查离线状态和暂停，离线的端点不会收到熔断前排进路线的条目，降权中的最后备选仍可发出。路由记录把排除的原因记在 `excluded` 里。
 
-恢复后的临时并发上限通过已有在途数检查。没有其他健康且有容量的候选时忽略慢启动上限，单端点不因慢启动等待。`PausedUntil` 只向 quality 暴露端点与供应商暂停的较晚时刻；两种暂停和熔断各自维护，互不清除。行为由 `TestTrippedEndpointsTakeNoTraffic`、`TestProbeRestoresAndSlowStart` 与 `TestFastestUnmeasuredAfterTheBreakers` 覆盖。
+恢复后的临时并发上限通过已有在途数检查。没有其他健康且有容量的候选时忽略慢启动上限，单端点不因慢启动等待。`PausedUntil` 只向 quality 暴露端点与供应商暂停的较晚时刻；两种暂停和熔断各自维护，互不清除。行为由 `TestTrippedEndpointsAreLastResort`、`TestOfflineEndpointsTakeNoTraffic`、`TestProbeRestoresAndSlowStart` 与 `TestFastestUnmeasuredAfterTheBreakers` 覆盖。
 
 ## 决策与理由
 
