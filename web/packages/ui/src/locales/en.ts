@@ -177,6 +177,7 @@ export default {
       web_search: "Web search",
       code_execution: "Code execution",
       file_search: "File search",
+      file_parse: "File parsing",
       image_in_piece: "Input image",
       image_out_piece: "Output image",
       audio_in_second: "Audio input (second)",

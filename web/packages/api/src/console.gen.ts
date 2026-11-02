@@ -1407,7 +1407,7 @@ export interface components {
         /** @enum {string} */
         ModelServiceTier: "standard" | "flex" | "priority" | "fast";
         /** @enum {string} */
-        ModelItem: "input" | "cache_read" | "cache_write" | "cache_write_1h" | "audio_in" | "image_in" | "output" | "reasoning" | "audio_out" | "image_out" | "web_search" | "code_execution" | "file_search" | "image_in_piece" | "image_out_piece" | "audio_in_second" | "audio_out_second" | "character_in" | "request";
+        ModelItem: "input" | "cache_read" | "cache_write" | "cache_write_1h" | "audio_in" | "image_in" | "output" | "reasoning" | "audio_out" | "image_out" | "web_search" | "code_execution" | "file_search" | "file_parse" | "image_in_piece" | "image_out_piece" | "audio_in_second" | "audio_out_second" | "character_in" | "request";
         /** @enum {string} */
         ModelUnit: "token" | "use" | "piece" | "second" | "character";
         /** @description A site's ID (TypeID). */

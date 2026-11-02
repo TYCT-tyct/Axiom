@@ -358,7 +358,9 @@ type options struct {
 	price        string                    // the entries' price schedule; cheap when empty
 	search       websearch.Searcher        // the web plugin's backend; nil means the feature is off
 	server       *protocol.ServerWebSearch // openrouter:web_search's tool, run through search; nil means none
-	fileParses   int64                     // the files the gateway parsed before admission, charged per use
+	fileParses   int64                     // the files the gateway parsed before admission
+	filePages    int64                     // the pages a paid OCR engine produced, the new file_parse unit
+	fileBilling  bool                      // whether the catalog switch bills file_parse instead of web_search
 	logs         *bytes.Buffer             // the node's log, discarded when nil
 	health       *quality.Monitor          // what the attempts tell; a new one when nil
 }
@@ -501,6 +503,8 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 	}
 	req.ServiceTiers = 1 << catalog.ServiceTierStandard // the schedule prices that tier only
 	req.FileParses = o.fileParses                       // the parse step ran before admission, so the quote sees it
+	req.FilePages = o.filePages
+	req.FileBilling = o.fileBilling
 	request = setStream(&req, request, o.stream)
 	var quotes []billing.Quotable
 	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}

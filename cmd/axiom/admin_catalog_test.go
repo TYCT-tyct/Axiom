@@ -309,6 +309,29 @@ func TestSelectPriceSource(t *testing.T) {
 	expectAdmin(t, "the same switch on stale bases", f.change(f.s, http.MethodPut, "/models/"+m.Id+"/price-source", body, newKey()), http.StatusConflict, codeStaleRevision)
 }
 
+// TestFileParsePriceWaitsForEveryNode: both directory entry points that can publish a file_parse price answer a refusal,
+// not a 500, while the catalog switch is off. An operator learns that the release cannot publish the item yet.
+func TestFileParsePriceWaitsForEveryNode(t *testing.T) {
+	t.Parallel()
+	f := newCatalogFixture(t)
+	m := f.ready("acme/alpha")
+	parse := `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","file_parse":"0.002"}}`
+	rec := f.change(f.s, http.MethodPost, "/models/"+m.Id+"/prices",
+		`{"base":"`+m.Prices[0].Id+`","source":"manual","schedule":`+parse+`,"evidence":`+proof+`,"reason":"a file parse price"}`, newKey())
+	expectAdmin(t, "publish a file parse price", rec, http.StatusUnprocessableEntity, codeUnprocessable)
+	if body := rec.Body.String(); !strings.Contains(body, "file_parse") {
+		t.Errorf("the refusal does not name the item: %s", body)
+	}
+
+	body := `{"rev":` + strconv.FormatInt(m.Rev, 10) + `,"source":"manual","bases":{"USD":"` + m.Prices[0].Id +
+		`"},"prices":[{"schedule":` + parse + `,"evidence":` + proof + `}],"reason":"switch to file parse"}`
+	rec = f.change(f.s, http.MethodPut, "/models/"+m.Id+"/price-source", body, newKey())
+	expectAdmin(t, "switch a price source to file parse", rec, http.StatusUnprocessableEntity, codeUnprocessable)
+	if body := rec.Body.String(); !strings.Contains(body, "file_parse") {
+		t.Errorf("the refusal does not name the item: %s", body)
+	}
+}
+
 // TestModelPages: models by slug in pages, drafts included, filtered; a cursor this API did not give out is a 400, and
 // a model is read by its ID.
 func TestModelPages(t *testing.T) {
