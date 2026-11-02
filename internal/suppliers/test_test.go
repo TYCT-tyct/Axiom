@@ -417,3 +417,18 @@ func TestATestIgnoresAnAlreadyCancelledCaller(t *testing.T) {
 		t.Errorf("the caller's cancellation reached the paid generation: %+v", result)
 	}
 }
+
+func TestTestCallCoversEveryGenerationFormat(t *testing.T) {
+	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat, protocol.Completions} {
+		body, err := testCall(f, "model", "hi", 16)
+		if err != nil {
+			t.Fatalf("format %d: %v", f, err)
+		}
+		if len(body) == 0 {
+			t.Fatalf("format %d: empty body", f)
+		}
+	}
+	if _, err := testCall(protocol.Embeddings, "model", "hi", 16); !errors.Is(err, ErrNoFormat) {
+		t.Fatalf("embeddings: %v", err)
+	}
+}
