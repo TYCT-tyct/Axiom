@@ -64,24 +64,25 @@
 
 #### 易支付协议插件
 
-易支付没有统一标准，彩虹易支付及其分支、Epusdt 等在细节上各不相同。插件只实现协议，差异全部做成商户账户的配置项，不为某一家写分支：
+易支付没有统一标准，彩虹易支付及其分支、Epusdt、EzPay 等在细节上各不相同。插件只实现协议，差异做成商户账户的预设和配置项，不新增渠道种类：
 
 | 配置项 | 含义 | 来源 |
 |---|---|---|
+| 预设 | 空为通用易支付；`epusdt` 固定跳转、CNY/USD、`usdt.tron`；`ezpay` 固定跳转、USD、`usdt.tron` 到 `usdt_trc20`、GET 查单和额外回调字段 | [模块 README 的「Epusdt 预设」](../../internal/payments/README.md#epusdt-预设与兼容门槛)与[「EzPay 预设」](../../internal/payments/README.md#ezpay-预设) |
 | 网关地址 | 只接受 HTTPS，去掉 `submit.php`、`mapi.php`、`api.php` 后缀后保存 | sub2api `easypay.go:72-96` |
 | 商户号 `pid`、密钥 `key` | 密钥加密保存 | `easypay.go:54-59` |
-| 付款币种 | 易支付的回调和查单都不带币种，币种只来自这项配置；保存时让管理员再确认一次 | 偏离 sub2api（它按全站币种处理）：配错币种会让每笔入账差一个汇率 |
+| 付款币种 | 通用易支付的查单不带币种，币种只来自这项配置；Epusdt 显式传 CNY/USD，EzPay 只收 USD，回调必须带 `currency`；缺失时进入待处理，币种不是 USD 时按回调币种和金额交给核心转待处理，无法解析的金额也转待处理 | 偏离 sub2api（它按全站币种处理）：配错币种会让每笔入账差一个汇率 |
 | 下单方式 | 跳转（`submit.php`，本地签名拼 URL）或接口（`mapi.php`，返回支付链接或二维码） | `easypay.go:128-214` |
 | 付款方式映射 | 本站付款方式 → 网关的 `type`（如 `alipay`、`wxpay`、`usdt.tron`），可增删 | `easypay.go:271-304` |
 | 通道号 `cid` | 可按付款方式分别设置 | `easypay.go:637-648` |
-| 签名方式 | 目前只有 MD5：非空参数按键名排序、`k=v` 用 `&` 连接、末尾接密钥、取 MD5 小写十六进制；比较用常量时间 | `easypay.go:681-704` |
+| 签名方式 | 目前只有 MD5。通用与 Epusdt 用参数到达时的值、不再重新编码：非空参数按键名排序、`k=v` 用 `&` 连接、末尾接密钥、取 MD5 小写十六进制；EzPay 创建按它的 RFC 3986 路径（先解码、再编码、排序），回调仍用原始值；比较用常量时间 | `easypay.go:681-704`、EzPay `internal/util/sign.go:42` 与 `:269` |
 | 关单 | 支持与否；仅给实测支持 `api.php?act=close` 的网关开启，商户凭证及我们的订单号同时放在 URL 和表单里 | 插件能力按商户声明，不假定所有易支付分支都支持 |
-| 查单 | 支持与否；支持时 `act=order` 的参数同时放在 URL 和表单里（彩虹易支付只读 URL），错误信息里去掉带密钥的 URL | `easypay.go:332-352` |
+| 查单 | 支持与否；通用与 Epusdt 把 `act=order` 的参数同时放在 URL 和表单里（彩虹易支付只读 URL），EzPay 必须用 GET；错误信息里去掉带密钥的 URL | `easypay.go:332-352`、EzPay `internal/handler/epay.go:475` |
 | 退款 | 支持与否；先按我们的订单号退，网关明确回"订单不存在"再按网关订单号退。易支付没有退款单号，不声明"认我们的退款单号"，退款结果未知时不再发（见「退款」） | `easypay.go:508-574` |
 
 配置 JSON 的字段、默认值、密钥名称和能力限制见[模块 README 的「易支付配置与边界」](../../internal/payments/README.md#易支付配置与边界)。
 
-- **回调参数白名单**：只接受 `pid`、`trade_no`、`out_trade_no`、`type`、`name`、`money`、`trade_status`、`param`、`sign`、`sign_type`，出现别的参数一律拒绝；除商品名外，参数值含 `&` 或 `=` 也拒绝。签名串把值直接拼接、不转义，下单参数里嵌着的 `trade_status=TRADE_SUCCESS` 能被重放成一条伪造的到账通知，白名单把这一类整体堵住（`easypay.go:464-506`、`:706-727`，sub2api issue #7881）。
+- **回调参数白名单**：只接受 `pid`、`trade_no`、`out_trade_no`、`type`、`name`、`money`、`trade_status`、`param`、`sign`、`sign_type`，出现别的参数一律拒绝；除商品名外，参数值含 `&` 或 `=` 也拒绝。EzPay 预设额外允许 `currency`、`pay_currency`、`pay_amount`，三者同样参与签名；其他额外字段仍拒绝。签名串把值直接拼接、不转义，下单参数里嵌着的 `trade_status=TRADE_SUCCESS` 能被重放成一条伪造的到账通知，白名单把这一类整体堵住（`easypay.go:464-506`、`:706-727`，sub2api issue #7881）。
 - **回调绑定商户**：验签通过后 `pid` 必须等于这个商户账户的商户号（`easypay.go:491-495`）。
 - **返回的支付链接**：以单个 `/` 开头时按网关地址补全（`easypay.go:216-255`）；补全后和带协议的链接一样，只放行 `https` 和明确列出的 `alipays://`、`weixin://`、`wxp://`，以 `//` 开头的和其他协议（`javascript:`、`data:`、`http:`）一律当作下单失败。二维码内容同样检查。偏离 sub2api 的原样保留：它把 `//evil.com/x` 当作相对链接补全成别的主机，`javascript:` 原样交给浏览器。
 - **返回地址**由服务端生成，不接受浏览器传入的地址：取请求的控制台域名登记的 origin（不是请求头里的 `Host` 或 `Origin`）加 `/console/balance`（控制台挂载在 `/console`，余额页）。订单号下单时才有，地址里放不下它，页面回来后用订单接口取订单；控制台域名登记的不是 https（本机开发）时不能下单。
@@ -294,10 +295,10 @@
 
 ### 加密货币
 
-- **接入方式：自托管的易支付兼容网关**，例如 [Epusdt](https://www.epusdt.com/api/payment)：它提供易支付兼容的 `/payments/epay/v1/order/create-transaction/submit.php`，`type` 写 `usdt.tron` 这样的"代币.网络"，MD5 签名，到账时 GET 回调，`money` 是法币金额（Epusdt 文档《Payment API》，2026-08-22 版，2026-10-29 复核）；彩虹易支付推荐的 BEpusdt 插件同样把 USDT 直接收进商户自己的钱包，不经第三方（maajiko/Epay 的 README，2026-10-19 查）。所以 USDT 就是「易支付协议插件」的一个商户账户，不另写插件。sub2api 和 new-api 都没有加密货币渠道（源码，2026-10-19 查）。
-- **链上的事归网关**：每笔订单的收款地址或唯一金额、只认登记的代币合约、区块确认数、少付和充错网络，都由网关按它自己的配置处理；Axiom 只看到一笔法币订单（金额按付款币种，如人民币或美元），照常验签、查询确认、入账。服务器上不保存任何私钥，归集也在网关和钱包那边。
-- **前提**：这类网关必须支持查单，否则不能满足"查询确认"；接入前实测（见[模块 README 的「Epusdt 预设与兼容门槛」](../../internal/payments/README.md#epusdt-预设与兼容门槛)）。不支持退款，退款只能线下，见下文。Epusdt 预设仍是 `easypay` 商户账户，固定跳转下单、查单确认、`usdt.tron` 映射与线下退款；数字 PID 必须是无前导零的正 int64，避免网关回调转成数字后改变商户身份。保存为启用（包括更新与重新启用）前，在数据库事务之外用随机不存在的订单号探测带 PID 和密钥的 `api.php?act=order`，只有明确的“订单不存在”协议响应才通过；404、HTML、超时、凭证错误及不明确的 JSON 一律拒绝启用，不写商户；停用只做本地校验，不依赖网关健康。探测之后的写事务重新检查修订号与身份，并发修改一律返回过期修订错误。公开收银台状态接口不能代替带商户身份、订单号、法币金额的查单。
-- **当前兼容性**：Epusdt 的已发布版本（v0.0.1 至 v2.0.0）都没有易支付商户查单，唯一的公开查询接口是 `/pay/check-status/{trade_id}`，只有网关交易号和状态，没有商户身份、我们的订单号和法币金额；逐版源码、官方文档、镜像摘要和测试见[模块 README](../../internal/payments/README.md#epusdt-预设与兼容门槛)。因此官方镜像的下单 → GET 回调 → 查单确认 → 入账验收不通过，预设只能保存为停用；USDT 充值等待一个提供商户查单的网关，由负责人选择，选定并实测通过前不开放。
+- **接入方式：自托管的易支付兼容网关 EzPay v1.1.9**（[发布](https://github.com/opinework/ezpay/releases/tag/v1.1.9)，2026-10-18；GPL-3.0）：它提供易支付兼容的 `submit.php` 下单，`type` 写 `usdt_trc20`，到账时 GET 回调，`money` 是法币金额；另有带商户 PID、密钥和 `out_trade_no` 的 `GET /api.php?act=order` 查单，返回 `money` 和 `trade_status`。所以 USDT 仍是「易支付协议插件」的一个商户账户，配置 `preset=ezpay`，不另写插件。候选比较和选择理由见「决策与理由」的「USDT 网关选择」。
+- **链上的事归网关**：每笔订单的收款地址或唯一金额、只认登记的代币合约、区块确认数、少付和充错网络，都由网关按它自己的配置处理；Axiom 只看到一笔法币订单（EzPay 预设只收美元），照常验签、查询确认、入账。服务器上不保存任何私钥，归集也在网关和钱包那边。
+- **前提**：网关必须支持带商户身份的查单，否则不能满足「查询确认」。EzPay 预设固定跳转下单、`usdt.tron` 映射到上游 `usdt_trc20`、只收 USD，`Caps` 只有查单，退款只能线下；保存为启用（包括更新与重新启用）前，在数据库事务之外用随机不存在的订单号 GET `api.php?act=order`，只有 `code=-1` 且明确「订单不存在」才通过；404、HTML、超时、密钥错误、商户不存在及不明确的 JSON 一律拒绝启用，不写商户；停用只做本地校验，不依赖网关健康。Epusdt 预设保持原样：固定跳转、`usdt.tron` 映射、CNY/USD、数字 PID 必须是无前导零的正 int64，避免网关回调转成数字后改变商户身份；它同样在保存为启用前探测查单，但已发布版本没有该接口，所以只能保存为停用。
+- **当前兼容性**：Epusdt 的已发布版本（v0.0.1 至 v2.0.0）都没有易支付商户查单，唯一的公开查询接口是 `/pay/check-status/{trade_id}`，只有网关交易号和状态，没有商户身份、我们的订单号和法币金额；逐版源码、官方文档、镜像摘要和测试见[模块 README](../../internal/payments/README.md#epusdt-预设与兼容门槛)。EzPay v1.1.9 的查单已按官方镜像实测：下单 → GET 回调 → 查单确认 → 入账，保存探测、丢回调补单和真实回调验签都有测试（见[模块 README](../../internal/payments/README.md#ezpay-预设)）。USDT 可以在负责人提供服务器、收款钱包和商户号后开放；真实链上小额实测记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有记录前不创建生产商户账户。
 - **换算与币价风险**：订单是法币，按「金额与汇率」锁定；下单时网关按它的价格把法币金额换成 USDT 数量。USDT 收进钱包之后、换成法币之前，币价波动和稳定币脱锚的风险由平台承担；什么时候、按什么节奏换成法币由负责人定（见「待定问题」）。
 
 ### 退款
@@ -395,6 +396,24 @@
 
 E1-5 的表和管理操作按负责人记录的授权落地：「遇到问题自己解决问题和判断最优而不是问我。」（[2026-10-28 原文](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)）；涉及钱，仍需流水线安排独立深评审。
 
+### USDT 网关选择
+
+2026-10-29 按源码、README 和发布页比较了以下自托管网关。「商户查单」指网关提供带商户身份（PID/密钥）、我们的订单号和法币金额的查询接口，能在下单应答丢失后按我们的订单号补单。
+
+| 网关 | 版本与日期 | 协议 | 商户查单 | 结论 |
+|---|---|---|---|---|
+| [Epusdt](https://github.com/GMWalletApp/epusdt/releases/tag/v2.0.0) | v2.0.0，2026-07-23 | 易支付 `submit.php` | 无；只有公开的 `GET /pay/check-status/{trade_id}`，不验商户、不认我们的订单号、不带法币金额 | 不满足 |
+| [BEpusdt](https://github.com/v03413/BEpusdt/releases/tag/v1.24.3) | v1.24.3，2026-10-21 发布（源码 2026-10-19） | 易支付 `submit.php` 与自有 `/api/v1/order/*` | 无；`POST /api/v1/pay/info` 只按 `trade_id` 读单，且不验商户 | 不满足 |
+| [UPAY_PRO](https://github.com/wangegou/UPAY_PRO/releases/tag/v1.1.27) | v1.1.27，2026-02-09 | 自有 `/create_order` | 无；只有公开的 `GET /pay/check-status/:trade_id` | 不满足 |
+| [UPay](https://github.com/UPay-USDT/USDT-Payment-Gateway/releases/tag/v1.1.2) | v1.1.2，2024-01-15（唯一提交 2024-10-25） | 自有 | 有 `search`，但项目停更 | 不选 |
+| [EzPay](https://github.com/opinework/ezpay/releases/tag/v1.1.9) | v1.1.9，2026-10-18 | 易支付 `submit.php` | `GET /api.php?act=order`，`pid`+`key`+`out_trade_no`，返回 `money`、`trade_status`、`trade_no` | 选用 |
+
+选择 EzPay v1.1.9：它是唯一同时满足自托管、持续维护、易支付兼容和商户查单的候选；GPL-3.0，仓库自带 Dockerfile 与 docker-compose，SQLite/MySQL 均可，USD 统一结算，支持 TRC20。查单返回法币 `money` 和 `trade_status`，能覆盖「下单应答丢失后按我们的订单号补单」和「回调金额再确认」。代价是只支持 USD 法币、没有退款和关单接口、回调多三个签名字段、查单必须是 GET；这些都在 `preset=ezpay` 里固化，退款走线下。
+
+源码核对（2026-10-29）：EzPay v1.1.9 的 `submit.php` 在 [`main.go:165`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/main.go#L165)，`GET /api.php` 在 [`main.go:173`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/main.go#L173)，查单处理在 [`internal/handler/epay.go:475`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/handler/epay.go#L475)，响应里的 `money`/`trade_status` 在 [`internal/handler/epay.go:545`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/handler/epay.go#L545)；`api.php?act=refund` 明确拒绝退款（[`internal/handler/epay.go:297`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/handler/epay.go#L297)）。创建签名按 RFC 3986（[`internal/util/sign.go:42`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/util/sign.go#L42)），回调签名用原始值（[`internal/util/sign.go:269`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/util/sign.go#L269)），回调参数在 [`internal/service/notify.go:82`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/service/notify.go#L82)，回调地址的 SSRF 限制在 [`internal/service/notify.go:132`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/service/notify.go#L132)。BEpusdt 的 EPay 路由只有 `submit.php`（[`app/router/epay.go:8`](https://github.com/v03413/bepusdt/blob/07164853c38ed43700d3abcaab78e832782d36fa/app/router/epay.go#L8)），自有 API 在 [`app/router/epusdt.go:15`](https://github.com/v03413/bepusdt/blob/07164853c38ed43700d3abcaab78e832782d36fa/app/router/epusdt.go#L15)，`Info` 只按 `trade_id` 读单（[`app/handler/epusdt/epusdt.go:388`](https://github.com/v03413/bepusdt/blob/07164853c38ed43700d3abcaab78e832782d36fa/app/handler/epusdt/epusdt.go#L388)）。UPAY_PRO 只有下单和公开状态（[`web/web.go:731`](https://github.com/wangegou/UPAY_PRO/blob/a232783682f9617bcc772e1e2c404ae809475c84/web/web.go#L731)、[`:739`](https://github.com/wangegou/UPAY_PRO/blob/a232783682f9617bcc772e1e2c404ae809475c84/web/web.go#L739)）。Epusdt 的逐版证据见[模块 README](../../internal/payments/README.md#epusdt-预设与兼容门槛)。
+
+EzPay 仍走 `EasyPay{}` 的 `kind=easypay`，只新增 `preset=ezpay`，不新增插件种类、表或凭证格式；理由见下表的「易支付是一个通用协议插件」和「E1-4 选 EzPay v1.1.9…」两行。
+
 | 决策 | 理由 |
 |---|---|
 | 管理接口新增显式的订单与退款路径，不把筛选加进已有的订单读取 | 按 [#309 授权记录](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地：这是新增的对外接口，路径与字段一旦发布就要兼容。管理端要跨账户读一页订单并带上退款；控制台的订单读取是账户作用域，混进管理筛选会让两边的授权和字段互相牵制。显式路径也让新旧节点在滚动发布时各自忽略不认识的参数，不改变已有调用的含义 |
@@ -414,8 +433,9 @@ E1-5 的表和管理操作按负责人记录的授权落地：「遇到问题自
 | 渠道全部做成插件，配置预留，开通由各站点自行配置 | 负责人决定。能开哪些渠道取决于主体情况，插件化后不改代码 |
 | 支付行为照搬 sub2api，只在欠款上限、精确金额、行级安全三处坚持 Axiom 的规则；逐条注明来源和偏离 | 负责人决定（2026-10-18/19）。sub2api 的支付包处理过大量真实网关的怪癖（易支付参数走私、PHP 字符串整数、相对支付链接），重写它的逻辑最不容易出错；按[工程原则](../architecture.md#工程原则)允许复用自包含的协议代码并注明来源，金额、商户边界和出站路径按 Axiom 的规则实现 |
 | 易支付是一个通用协议插件，分支间的差异是商户账户的配置项 | 负责人要求不绑定某一家。sub2api 的差异处理已经覆盖彩虹易支付、ZPay 等分支，做成配置后接新网关不改代码 |
-| 支持加密货币充值，经自托管的易支付兼容网关（如 Epusdt）接入，不自建链上监听 | 负责人决定支持加密货币；OpenRouter 也接受（OpenRouter《Terms of Service》，2026-10）。接入方式由开发者决定：网关已处理地址分配、确认数、合约校验，钱直接进自己的钱包，Axiom 不保存私钥，也不用写第二个插件。代价：依赖网关的正确性，且必须实测它支持查单；收到的 USDT 换成法币之前的币价风险由平台承担。没选自建监听：要自己处理重组、确认数、多网络和私钥，工作量与风险都大，sub2api、new-api 都没有做 |
-| Epusdt 预设保持启用时在事务外探测查单，停用与运行时绑定仍不发网络请求；不为兼容网关放宽确认入账 | 按 [#309 授权记录](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地已有查询确认设计。只相信 `query=true` 会把不兼容配置留到用户付款后才发现；每次绑定都探测会拖慢回调与后台任务。保存接口接收范围并管理自己的短事务，避免调用者已开事务而让探测占着连接；写入前再查修订号与身份，避免网络等待中的配置变更被覆盖。未选只在身份配置变化时探测：保持启用的保存仍要确认可用；停用跳过网络，以保留故障时的止损入口。预设参与商户身份保护，防止在途订单被切回可关闭查单的普通易支付配置。初始只收 CNY/USD，签名请求显式传币种，避免依赖网关的默认人民币设置；其他法币待实测后扩展。未选另写 Epusdt 插件或使用无金额的公开状态接口：前者重复协议，后者不能核对实付。也不把网关管理员 JWT 当成商户查单凭证，它会扩大凭证权限与保管范围，超出本次易支付商户接入。上游已发布版本都没有这个商户查单接口（逐版证据见[模块 README](../../internal/payments/README.md#epusdt-预设与兼容门槛)），公开状态只有交易号和状态，所以 Epusdt 预设只能停用；USDT 等一个支持商户查单的网关，由负责人选择。 |
+| 支持加密货币充值，经自托管的易支付兼容网关（EzPay v1.1.9）接入，不自建链上监听 | 负责人决定支持加密货币；OpenRouter 也接受（OpenRouter《Terms of Service》，2026-10）。接入方式由开发者决定：EzPay 已处理地址分配、确认数、合约校验，钱直接进自己的钱包，Axiom 不保存私钥，也不用写第二个插件（`preset=ezpay`）。代价：只收 USD，依赖网关的正确性，且必须实测它支持查单；收到的 USDT 换成法币之前的币价风险由平台承担。Epusdt 没有商户查单，不能作为收款网关；比较见上节「USDT 网关选择」。没选自建监听：要自己处理重组、确认数、多网络和私钥，工作量与风险都大，sub2api、new-api 都没有做 |
+| Epusdt 预设保持启用时在事务外探测查单，停用与运行时绑定仍不发网络请求；不为兼容网关放宽确认入账 | 按 [#309 授权记录](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地已有查询确认设计。只相信 `query=true` 会把不兼容配置留到用户付款后才发现；每次绑定都探测会拖慢回调与后台任务。保存接口接收范围并管理自己的短事务，避免调用者已开事务而让探测占着连接；写入前再查修订号与身份，避免网络等待中的配置变更被覆盖。未选只在身份配置变化时探测：保持启用的保存仍要确认可用；停用跳过网络，以保留故障时的止损入口。预设参与商户身份保护，防止在途订单被切回可关闭查单的普通易支付配置。初始只收 CNY/USD，签名请求显式传币种，避免依赖网关的默认人民币设置；其他法币待实测后扩展。未选另写 Epusdt 插件或使用无金额的公开状态接口：前者重复协议，后者不能核对实付。也不把网关管理员 JWT 当成商户查单凭证，它会扩大凭证权限与保管范围，超出本次易支付商户接入。上游已发布版本都没有这个商户查单接口（逐版证据见[模块 README](../../internal/payments/README.md#epusdt-预设与兼容门槛)），公开状态只有交易号和状态，所以 Epusdt 预设只能停用。EzPay 作为同一个 `EasyPay{}` 插件的 `preset=ezpay` 接入，查单走 GET，多币种回调字段和 USD 限制在预设里固化；它满足查单后，USDT 才有可开放的网关。 |
+| E1-4 选 EzPay v1.1.9 作为 USDT 网关，作为 `EasyPay{}` 的 `preset=ezpay`，不新增插件种类 | 2026-10-29 比较 Epusdt v2.0.0、BEpusdt v1.24.3、UPAY_PRO v1.1.27 和 UPay v1.1.2：只有 EzPay 同时自托管、维护中、易支付兼容、有带商户身份的订单查询。它的 `GET /api.php?act=order` 用 `pid`+`key`+`out_trade_no`，返回 `money` 和 `trade_status`，能在下单应答丢失后按我们的订单号补单；Epusdt、BEpusdt、UPAY_PRO 的公开接口只认网关交易号，UPay 停更。预设而不是新插件，是因为协议仍是易支付，差异只有 GET 查单、三个回调字段、USD 和签名编码；复用已验证的验签、回调、补单和白名单路径。代价是退款只能线下、不能关单、只收 USD，这些写进预设校验和文档。 |
 | 手续费由用户支付，按总额反推，按商户账户和付款方式分别设置 | 负责人决定由用户支付，OpenRouter 也在充值时收取手续费（OpenRouter《FAQ》，2026-10）。渠道按总额扣费，直接用充值金额乘比例会少收；不同商户的费率不同 |
 | 金额一律是整数最小单位，总额先按精确分数求和、只取整一次，比较用相等 | 负责人要求的精确金额。sub2api 的浮点和 0.01 元容差只是在掩盖浮点误差，容差内的少付会被当作付清 |
 | 只认渠道回调和主动查询；回调验签后，支持查单的渠道一律再查一次，入账用查单的金额 | 跳转页面可以被伪造；new-api 曾出现 Stripe 回调验签可被绕过的漏洞（见[安全基线](../security.md#安全基线)）；sub2api 因易支付参数走私补上了"查询确认"。对所有渠道都查，代价只是一次往返 |
@@ -464,7 +484,7 @@ E1-5 的表和管理操作按负责人记录的授权落地：「遇到问题自
 ## 待定问题
 
 - 主站先接哪一家易支付网关、用哪个商户号，由负责人在接入时决定并提供凭证（E1-3）
-- 用哪一个自托管 USDT 网关（需要一台服务器、一个收款钱包，并提供商户查单），由负责人决定；Epusdt 已发布版本没有该接口（见[模块 README](../../internal/payments/README.md#epusdt-预设与兼容门槛)），选定前 USDT 不开放（E1-4）
+- EzPay 的服务器、收款钱包、商户号和可公网访问的回调地址由负责人在接入时提供；真实链上小额实测（下单、GET 回调、查单确认、入账、手续费与汇率、退款走线下）记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有记录前不创建生产商户账户（E1-4）
 - Stripe 的商户凭证（`sk_`/`rk_`、`whsec_`）和真实沙箱小额实测由负责人在接入时提供并执行；代码层只对官方协议和本地假 Stripe 服务验证，真实商户号、webhook 端点和结算币种确认记在[#497](https://github.com/TYCT-tyct/Axiom/issues/497)
 - Stripe 的 Balance Transactions 账单下载、渠道实际手续费与逐笔对账，等第一个 `Statements` 插件一起定义接口和 `statement_lines` 表；在那之前 Stripe 只走现有日对账
 - 账户的风控状态与自动暂停（拒付后暂停账户）尚未实现，当前只有负余额、准入拒绝和待处理告警；接入时把 Stripe 的 `dispute_open`/`dispute_lost` 作为触发条件
