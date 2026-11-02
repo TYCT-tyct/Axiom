@@ -126,6 +126,34 @@ export function Publications() {
   );
 }
 
+// A current version without per-endpoint prices (or an old node) has only current_schedule.
+function PublishPrices({ price }: { price: Publication }) {
+  const { t } = useTranslation();
+  const hasCurrentEndpoints = !!price.current_endpoints && Object.keys(price.current_endpoints).length > 0;
+  return (
+    <>
+      <EndpointPriceList
+        label={t("pricing.publish.currentEndpoints")}
+        prices={hasCurrentEndpoints ? price.current_endpoints : undefined}
+      />
+      {!hasCurrentEndpoints && price.current_schedule ? (
+        <>
+          <p className="text-label text-t3">{t("pricing.publish.currentSchedule")}</p>
+          <pre className="max-h-48 overflow-auto text-label">{JSON.stringify(price.current_schedule, null, 2)}</pre>
+        </>
+      ) : null}
+      <p className="text-label text-t3">{t("pricing.publish.requested")}</p>
+      <pre className="max-h-48 overflow-auto text-label">{JSON.stringify(price.requested, null, 2)}</pre>
+      <EndpointPriceList label={t("pricing.publish.requestedEndpoints")} prices={price.requested_endpoints} />
+      <p className="text-label text-t3">{t("pricing.publish.safe")}</p>
+      <pre className="max-h-48 overflow-auto text-label">{JSON.stringify(price.schedule, null, 2)}</pre>
+      <EndpointPriceList label={t("pricing.publish.safeEndpoints")} prices={price.endpoints} />
+      <EndpointPriceList label={t("pricing.publish.endpointCosts")} prices={price.costs} />
+      <EndpointPriceList label={t("pricing.publish.endpointFloors")} prices={price.floors} />
+    </>
+  );
+}
+
 function PublishDialog({ live, onClose }: { live: Publication; onClose: () => void }) {
   const { t } = useTranslation();
   const [price, reload] = useSnapshot(live);
@@ -134,7 +162,6 @@ function PublishDialog({ live, onClose }: { live: Publication; onClose: () => vo
   if (!model || !candidate) {
     return null;
   }
-  const hasCurrentEndpoints = !!price.current_endpoints && Object.keys(price.current_endpoints).length > 0;
   return (
     <ChangeDialog
       operation={`price-publication:${publicationKey(price)}`}
@@ -150,24 +177,7 @@ function PublishDialog({ live, onClose }: { live: Publication; onClose: () => vo
       reload={reload}
       fields={() => (
         <>
-          <EndpointPriceList
-            label={t("pricing.publish.currentEndpoints")}
-            prices={hasCurrentEndpoints ? price.current_endpoints : undefined}
-          />
-          {!hasCurrentEndpoints && price.current_schedule ? (
-            <>
-              <p className="text-label text-t3">{t("pricing.publish.currentSchedule")}</p>
-              <pre className="max-h-48 overflow-auto text-label">{JSON.stringify(price.current_schedule, null, 2)}</pre>
-            </>
-          ) : null}
-          <p className="text-label text-t3">{t("pricing.publish.requested")}</p>
-          <pre className="max-h-48 overflow-auto text-label">{JSON.stringify(price.requested, null, 2)}</pre>
-          <EndpointPriceList label={t("pricing.publish.requestedEndpoints")} prices={price.requested_endpoints} />
-          <p className="text-label text-t3">{t("pricing.publish.safe")}</p>
-          <pre className="max-h-48 overflow-auto text-label">{JSON.stringify(price.schedule, null, 2)}</pre>
-          <EndpointPriceList label={t("pricing.publish.safeEndpoints")} prices={price.endpoints} />
-          <EndpointPriceList label={t("pricing.publish.endpointCosts")} prices={price.costs} />
-          <EndpointPriceList label={t("pricing.publish.endpointFloors")} prices={price.floors} />
+          <PublishPrices price={price} />
           <CheckField name="override" label={t("pricing.publish.override")} />
         </>
       )}
