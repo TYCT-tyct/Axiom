@@ -4,6 +4,7 @@ import { isProblem } from "./change";
 import { mailSavedRestart } from "./mail-settings";
 import {
   bufferRefused,
+  refundLimitRefused,
   defaultMethodRows,
   formatPercent,
   methodFallback,
@@ -12,10 +13,11 @@ import {
   readMerchant,
   readPayments,
   withoutBuffer,
+  withoutRefundLimit,
 } from "./payment-read";
 import { nameEditable, siteSettingsInput } from "./site-info";
 
-const paymentWords = { amount: "amount", range: "range", buffer: "buffer" };
+const paymentWords = { amount: "amount", range: "range", buffer: "buffer", refundLimit: "refundLimit" };
 const merchantWords = {
   name: "name",
   number: "number",
@@ -63,8 +65,15 @@ it("writes a percentage without a floating point", () => {
 it("reads the payment settings with exact amounts and the buffer", () => {
   expect(
     readPayments(
-      { open: "true", credits_min: "1.5", credits_max: "20", top_up_buffer_ppm: "3.5" },
+      {
+        open: "true",
+        credits_min: "1.5",
+        credits_max: "20",
+        top_up_buffer_ppm: "3.5",
+        refund_second_approval_credits: "100",
+      },
       "USD",
+      true,
       true,
       paymentWords,
     ),
@@ -73,15 +82,17 @@ it("reads the payment settings with exact amounts and the buffer", () => {
     credits_min: { amount: "1500000000", currency: "USD" },
     credits_max: { amount: "20000000000", currency: "USD" },
     top_up_buffer_ppm: 35_000,
+    refund_second_approval_credits: { amount: "100000000000", currency: "USD" },
   });
-  expect(readPayments({ open: "true", credits_min: "2", credits_max: "1" }, "USD", true, paymentWords)).toEqual({
+  expect(readPayments({ open: "true", credits_min: "2", credits_max: "1" }, "USD", true, true, paymentWords)).toEqual({
     problem: "range",
   });
-  expect(readPayments({ open: "true", credits_min: "1.0000000001" }, "USD", true, paymentWords)).toEqual({
+  expect(readPayments({ open: "true", credits_min: "1.0000000001" }, "USD", true, true, paymentWords)).toEqual({
     problem: "amount",
   });
-  // An older node has no buffer field: the dialog leaves it out instead of sending a value it cannot read back.
-  expect(readPayments({ open: "false" }, "USD", false, paymentWords)).toEqual({ open: false });
+  // An older node has no buffer or refund-limit fields: the dialog leaves them out instead of sending values it cannot
+  // read back.
+  expect(readPayments({ open: "false" }, "USD", false, false, paymentWords)).toEqual({ open: false });
 });
 
 it("reads a new merchant with its methods and sealed key", () => {
@@ -365,6 +376,21 @@ it("drops only the buffer for a node whose contract refuses it", () => {
   expect(bufferRefused(new ApiError(422, null, { body: { error: { code: "unprocessable", message: "no" } } }))).toBe(
     false,
   );
+  const limit = { open: true, refund_second_approval_credits: { amount: "100", currency: "USD" } };
+  expect(withoutRefundLimit(limit)).toEqual({ open: true });
+  expect(
+    refundLimitRefused(
+      new ApiError(400, null, {
+        body: {
+          error: {
+            code: "invalid_request",
+            message: "the settings are invalid",
+            fields: [{ pointer: "/settings/refund_second_approval_credits", message: "unknown field" }],
+          },
+        },
+      }),
+    ),
+  ).toBe(true);
 });
 
 it("sends only the name so a registration change made meanwhile survives", () => {

@@ -82,6 +82,10 @@ func paymentSettingsBody(v payments.SiteSettings, c platform.Currency, buffer in
 		m := adminMoney(*v.Max, c)
 		body.CreditsMax = &m
 	}
+	if v.RefundSecondApproval != nil {
+		m := adminMoney(*v.RefundSecondApproval, c)
+		body.RefundSecondApprovalCredits = &m
+	}
 	ppm := int(buffer)
 	body.TopUpBufferPpm = &ppm
 	return body
@@ -115,7 +119,8 @@ func paymentSettingsInput(body adminapi.PaymentSettingsUpdate, currency platform
 		name string
 		in   *adminapi.Money
 		out  **int64
-	}{{"credits_min", body.Settings.CreditsMin, &v.Min}, {"credits_max", body.Settings.CreditsMax, &v.Max}} {
+	}{{"credits_min", body.Settings.CreditsMin, &v.Min}, {"credits_max", body.Settings.CreditsMax, &v.Max},
+		{"refund_second_approval_credits", body.Settings.RefundSecondApprovalCredits, &v.RefundSecondApproval}} {
 		if f.in != nil {
 			n, ok := moneyIn(*f.in, currency, "/settings/"+f.name, &p)
 			if ok {
@@ -148,11 +153,15 @@ func (a adminAPI) SetPaymentSettings(ctx context.Context, r adminapi.SetPaymentS
 				return adminapi.PaymentSettings{}, err
 			}
 		}
+		saved, err := payments.ReadSiteSettings(ctx, tx, uuid.UUID(id))
+		if err != nil {
+			return adminapi.PaymentSettings{}, err
+		}
 		buffer, err := billing.TopUpBufferPPM(ctx, tx, uuid.UUID(id))
 		if err != nil {
 			return adminapi.PaymentSettings{}, err
 		}
-		return paymentSettingsBody(v, site.Currency, buffer), nil
+		return paymentSettingsBody(saved, site.Currency, buffer), nil
 	})
 	if err != nil {
 		return nil, err

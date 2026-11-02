@@ -33,6 +33,7 @@ function PaymentFacts({
   const format = useFormat();
   const [open, setOpen] = useState(false);
   const bufferKnown = view.top_up_buffer_ppm !== undefined;
+  const refundLimitKnown = view.refund_second_approval_credits !== undefined;
   return (
     <>
       <Facts
@@ -49,6 +50,12 @@ function PaymentFacts({
           [
             t("settings.payments.buffer"),
             bufferKnown ? `${formatPercent(view.top_up_buffer_ppm ?? 0)}%` : t("settings.payments.bufferUnavailable"),
+          ],
+          [
+            t("settings.payments.refundLimit"),
+            refundLimitKnown && view.refund_second_approval_credits
+              ? format.money(view.refund_second_approval_credits)
+              : t("settings.payments.bufferUnavailable"),
           ],
         ]}
         action={
@@ -67,11 +74,13 @@ function PaymentFields({
   view,
   currency,
   bufferKnown,
+  refundLimitKnown,
   error,
 }: {
   view: Settings;
   currency: string;
   bufferKnown: boolean;
+  refundLimitKnown: boolean;
   error: unknown;
 }) {
   const { t } = useTranslation();
@@ -114,6 +123,21 @@ function PaymentFields({
           error={errors.field(error, "settings/top_up_buffer_ppm")}
         />
       ) : null}
+      {refundLimitKnown ? (
+        <TextField
+          label={t("settings.payments.refundLimit")}
+          hint={t("settings.payments.refundLimitHint", { currency })}
+          name="refund_second_approval_credits"
+          inputMode="decimal"
+          autoComplete="off"
+          defaultValue={
+            view.refund_second_approval_credits
+              ? moneyInput(view.refund_second_approval_credits.amount)
+              : ""
+          }
+          error={errors.field(error, "settings/refund_second_approval_credits")}
+        />
+      ) : null}
     </>
   );
 }
@@ -131,6 +155,7 @@ function PaymentDialog({
 }) {
   const { t } = useTranslation();
   const bufferKnown = view.top_up_buffer_ppm !== undefined;
+  const refundLimitKnown = view.refund_second_approval_credits !== undefined;
   const skipped = useRef(false);
   const attempted = useRef(new Map<string, PaymentAttempt>());
   const put = (settings: Update, reason: string, key: string) =>
@@ -155,19 +180,28 @@ function PaymentDialog({
       title={t("settings.payments.edit")}
       intro={<p>{t("settings.payments.intro")}</p>}
       action={t("settings.payments.save")}
-      fields={(error) => <PaymentFields view={view} currency={currency} bufferKnown={bufferKnown} error={error} />}
+      fields={(error) => (
+        <PaymentFields
+          view={view}
+          currency={currency}
+          bufferKnown={bufferKnown}
+          refundLimitKnown={refundLimitKnown}
+          error={error}
+        />
+      )}
       read={(values) =>
-        readPayments(values, currency, bufferKnown, {
+        readPayments(values, currency, bufferKnown, refundLimitKnown, {
           amount: t("settings.payments.invalidAmount", { currency }),
           range: t("settings.payments.invalidRange"),
           buffer: t("settings.payments.invalidBuffer"),
+          refundLimit: t("settings.payments.invalidRefundLimit", { currency }),
         })
       }
       send={send}
       done={() => (
         <>
           <p>{t("settings.payments.saved")}</p>
-          {skipped.current ? <p>{t("settings.payments.bufferSkipped")}</p> : null}
+          {skipped.current ? <p>{t("settings.payments.fieldsSkipped")}</p> : null}
         </>
       )}
       onClose={onClose}

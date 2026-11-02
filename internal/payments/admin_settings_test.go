@@ -26,6 +26,7 @@ func TestPaymentSettingsBoundsAndIsolation(t *testing.T) {
 		{SiteSettings{Min: new(int64(0))}, "/credits_min"},
 		{SiteSettings{Max: new(int64(-1))}, "/credits_max"},
 		{SiteSettings{Min: new(int64(2)), Max: new(int64(1))}, "/credits_max"},
+		{SiteSettings{RefundSecondApproval: new(int64(-1))}, "/refund_second_approval_credits"},
 	} {
 		err := w.db.Tx(ctx, scope, func(tx pg.Tx) error { return SetSiteSettings(ctx, tx, admin, w.siteA, tc.settings, "invalid") })
 		field, ok := errors.AsType[*FieldError](err)

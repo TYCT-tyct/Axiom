@@ -2,10 +2,12 @@ package payments
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform/pg"
 )
 
@@ -233,5 +235,46 @@ func TestDisputeTimestampsUseTheLedgerDayAcrossMidnight(t *testing.T) {
 	}
 	if got := w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies WHERE state='open'"); got != 0 {
 		t.Fatalf("the reversal's ledger day opened %d discrepancies", got)
+	}
+}
+
+func TestDisputeSuspendsTheAccountUntilAnOperatorLiftsIt(t *testing.T) {
+	w, merchant, o := disputeWorld(t)
+	warning := Dispute("stripe", "dp_suspend", o.TradeNo, o.Total, DisputeWarning, "warning_needs_response")
+	if err := w.p.dispute(t.Context(), MerchantID(merchant.ID), warning); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.states.recorded(); len(got) != 0 {
+		t.Fatalf("a warning suspended the account: %+v", got)
+	}
+	open := Dispute("stripe", "dp_suspend", o.TradeNo, o.Total, DisputeOpen, "needs_response")
+	for range 2 {
+		if err := w.p.dispute(t.Context(), MerchantID(merchant.ID), open); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := w.states.recorded()
+	if len(got) != 1 || got[0].account != accounts.AccountID(o.AccountID) || !got[0].suspended ||
+		!strings.Contains(got[0].reason, "stripe/dp_suspend") {
+		t.Fatalf("suspension calls = %+v", got)
+	}
+	// A win reverses the money but does not lift the suspension: only an operator does.
+	if err := w.p.dispute(t.Context(), MerchantID(merchant.ID), Dispute("stripe", "dp_suspend", o.TradeNo, o.Total, DisputeWon, "won")); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.states.recorded(); len(got) != 1 {
+		t.Fatalf("a win changed the suspension: %+v", got)
+	}
+}
+
+func TestDisputeLostSuspendsTheAccount(t *testing.T) {
+	w, merchant, o := disputeWorld(t)
+	lost := Dispute("stripe", "dp_lost", o.TradeNo, o.Total, DisputeLost, "lost")
+	if err := w.p.dispute(t.Context(), MerchantID(merchant.ID), lost); err != nil {
+		t.Fatal(err)
+	}
+	got := w.states.recorded()
+	if len(got) != 1 || got[0].account != accounts.AccountID(o.AccountID) || !got[0].suspended {
+		t.Fatalf("lost dispute suspension = %+v", got)
 	}
 }

@@ -3015,6 +3015,9 @@ type PaymentRefund struct {
 	Credits    *Money     `json:"credits,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 
+	// FirstApprovedBy The first of the two operators, when the refund is above the site's approval limit.
+	FirstApprovedBy *UserId `json:"first_approved_by,omitempty"`
+
 	// Id A refund's ID (TypeID), the refund number of channels that take one.
 	Id *RefundId `json:"id,omitempty"`
 
@@ -3030,7 +3033,10 @@ type PaymentRefund struct {
 	// RequestedBy A user's ID (TypeID).
 	RequestedBy *UserId `json:"requested_by,omitempty"`
 
-	// State The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
+	// SecondRequired Whether this refund needs two operators; the first is in `first_approved_by`.
+	SecondRequired *bool `json:"second_required,omitempty"`
+
+	// State The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent), for a second approval when `second_required` is set, or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
 	State *PaymentRefundState `json:"state,omitempty"`
 
 	// Via channel sends the cash back; offline waits for a manual conclusion.
@@ -3048,7 +3054,7 @@ type PaymentRefundList struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
-// PaymentRefundState The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
+// PaymentRefundState The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent), for a second approval when `second_required` is set, or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
 type PaymentRefundState string
 
 // PaymentSettings defines model for PaymentSettings.
@@ -3059,6 +3065,9 @@ type PaymentSettings struct {
 	// CreditsMin An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	CreditsMin *Money `json:"credits_min,omitempty"`
 	Open       *bool  `json:"open,omitempty"`
+
+	// RefundSecondApprovalCredits Refunds above this amount need two operators; at or below it one operator releases them. The default is 100 credits. A node of the previous release does not return it.
+	RefundSecondApprovalCredits *Money `json:"refund_second_approval_credits,omitempty"`
 
 	// TopUpBufferPpm The buffer on a top-up in millionths: the site's own value, or the default 2% (20000) when it set none. A node of the previous release does not return it.
 	TopUpBufferPpm *int `json:"top_up_buffer_ppm,omitempty"`
@@ -3075,6 +3084,9 @@ type PaymentSettingsUpdate struct {
 		// CreditsMin An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 		CreditsMin *Money `json:"credits_min,omitempty"`
 		Open       bool   `json:"open"`
+
+		// RefundSecondApprovalCredits Refunds above this amount need two operators; 0 makes every refund need two. Omit to keep the current value; a node of the previous release refuses the field.
+		RefundSecondApprovalCredits *Money `json:"refund_second_approval_credits,omitempty"`
 
 		// TopUpBufferPpm The buffer in millionths, 0 to 10%. Omit to keep the current one.
 		TopUpBufferPpm *int `json:"top_up_buffer_ppm,omitempty"`

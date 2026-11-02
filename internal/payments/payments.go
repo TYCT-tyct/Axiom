@@ -4,6 +4,7 @@ package payments
 
 import (
 	"container/list"
+	"context"
 	"embed"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"uuid"
 
+	"axiom/internal/accounts"
+	"axiom/internal/platform/audit"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -33,6 +36,13 @@ func Migrations() pg.Module {
 
 var queries = New()
 
+// AccountStates is the accounts module's suspension operation. It is separate from the module's other reads because a
+// dispute must change the account in the same transaction that books the chargeback; nil is accepted only by nodes that
+// never receive callbacks.
+type AccountStates interface {
+	SetAccountSuspended(context.Context, pg.Tx, audit.Actor, accounts.AccountID, bool, string) error
+}
+
 // Config is what Open needs.
 type Config struct {
 	DB       *pg.DB
@@ -42,6 +52,7 @@ type Config struct {
 	Plugins  []Plugin       // one per kind, compiled in
 	Logger   *slog.Logger   // diagnostics; durable alerts use platform signals; default slog.Default()
 	Proxies  []netip.Prefix // only these peers may supply a callback's source address
+	Accounts AccountStates  // suspends an account when a chargeback opens or is lost
 }
 
 // Payments is the module's service.
@@ -59,6 +70,7 @@ type Payments struct {
 	proxies     []netip.Prefix
 	callbacks   map[callbackKey]*list.Element
 	callbackLRU list.List
+	accounts    AccountStates
 }
 
 // Open checks the plugins: two plugins of one kind are a mistake in assembling the program and fail the start.
@@ -66,7 +78,7 @@ func Open(c Config) (*Payments, error) {
 	if c.DB == nil || c.Keyring == nil {
 		return nil, errors.New("payments: a database and a keyring are required")
 	}
-	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger, valid: map[uuid.UUID]validity{}}
+	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger, valid: map[uuid.UUID]validity{}, accounts: c.Accounts}
 	p.channels = make(map[MerchantID]channelBinding)
 	p.proxies = slices.Clone(c.Proxies)
 	p.callbacks = make(map[callbackKey]*list.Element)

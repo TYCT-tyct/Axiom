@@ -35,24 +35,25 @@ type RefundRequest struct {
 }
 
 // Refund is the durable state, including the actual frozen credits and original-payment cash quote. Approved says
-// whether an administrator has released it to the channel, which the console shows as review versus processing.
-// RequestedBy and ApprovedBy are the people on its two sides: the requester never approves, and the operator's list
-// shows a frozen refund without an approver as the one waiting for review.
+// whether the refund may be sent; SecondRequired is the approval rule snapshotted when it was frozen, and
+// FirstApprovedBy is the first of the two operators on a refund above the limit. RequestedBy never approves.
 type Refund struct {
-	ID          RefundID
-	Order       OrderID
-	SiteID      uuid.UUID
-	AccountID   uuid.UUID
-	State, Via  string
-	Credits     int64
-	Amount      Money
-	Reason      string
-	RequestedBy uuid.UUID
-	ApprovedBy  *uuid.UUID
-	ProviderRef string
-	Approved    bool
-	CreatedAt   time.Time
-	FinishedAt  *time.Time
+	ID              RefundID
+	Order           OrderID
+	SiteID          uuid.UUID
+	AccountID       uuid.UUID
+	State, Via      string
+	Credits         int64
+	Amount          Money
+	Reason          string
+	RequestedBy     uuid.UUID
+	ApprovedBy      *uuid.UUID
+	FirstApprovedBy *uuid.UUID
+	SecondRequired  bool
+	ProviderRef     string
+	Approved        bool
+	CreatedAt       time.Time
+	FinishedAt      *time.Time
 }
 
 func (r RefundRequest) check() error {
@@ -93,8 +94,9 @@ func (p *Payments) paymentAccess(ctx context.Context, s pg.Scope, id OrderID, re
 	return o, err
 }
 
-// Refund freezes and quotes atomically. It returns frozen for review: until the operations approval policy is wired
-// in, every refund requires a separate administrator's approval. Replays do not refreeze or depend on today's policy.
+// Refund freezes and quotes atomically. It returns frozen for review: one operator releases a refund within the site's
+// limit, and two distinct operators are required above it. The rule is snapshotted with the refund, so replays and
+// later limit changes do not refreeze or change an existing request.
 func (p *Payments) Refund(ctx context.Context, s pg.Scope, r RefundRequest) (Refund, error) {
 	if err := r.check(); err != nil {
 		return Refund{}, err
@@ -197,6 +199,10 @@ func (p *Payments) freezeRefund(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 	if terms.RefundWithFee != nil {
 		withFee = *terms.RefundWithFee
 	}
+	limits, err := readSettings(ctx, tx, o.SiteID)
+	if err != nil {
+		return PaymentsRefund{}, err
+	}
 	amount, err := billing.QuoteRefund(ctx, tx, billing.Refund{Freeze: f, WithFee: withFee})
 	if err != nil {
 		return PaymentsRefund{}, err
@@ -207,12 +213,12 @@ func (p *Payments) freezeRefund(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 	row, err := queries.InsertRefund(ctx, tx, InsertRefundParams{
 		ID: uuid.NewV7(), OrderID: o.ID, SiteID: o.SiteID, AccountID: o.AccountID,
 		Via: r.Via, Credits: f.Amount, RequestedCredits: r.Credits, Amount: amount.Returned, WithFee: withFee, RefundKey: caps.Has(CapRefundKey),
-		Reason: r.Reason, RequestedBy: r.User, IdemKey: r.Key,
+		Reason: r.Reason, RequestedBy: r.User, IdemKey: r.Key, SecondRequired: f.Amount > limits.refundSecond,
 	})
 	if err != nil {
 		return row, err
 	}
-	return row, refundAudit(ctx, tx, row, r.User, "refund.request", r.Reason)
+	return row, refundAudit(ctx, tx, row, r.User, "refund.request", r.Reason, "")
 }
 
 func checkRefundTerms(t RefundTermsRow, o LockOrderRow, r RefundRequest, isAdmin bool) error {
@@ -258,8 +264,9 @@ func refundOf(row PaymentsRefund, currency platform.Currency) Refund {
 	return Refund{
 		ID: RefundID(row.ID), Order: OrderID(row.OrderID), SiteID: row.SiteID, AccountID: row.AccountID, State: row.State, Via: row.Via,
 		Credits: row.Credits, Amount: Money{Currency: currency, Minor: row.Amount}, Reason: row.Reason,
-		RequestedBy: row.RequestedBy, ApprovedBy: row.ApprovedBy, ProviderRef: row.ProviderRef,
-		Approved: row.ApprovedBy != nil, CreatedAt: row.CreatedAt, FinishedAt: finished,
+		RequestedBy: row.RequestedBy, ApprovedBy: row.ApprovedBy, FirstApprovedBy: row.FirstApprovedBy,
+		SecondRequired: row.SecondRequired, ProviderRef: row.ProviderRef, Approved: row.ApprovedBy != nil,
+		CreatedAt: row.CreatedAt, FinishedAt: finished,
 	}
 }
 
@@ -334,8 +341,10 @@ func refundAccessTx(ctx context.Context, tx pg.Tx, id RefundID, admin bool) (Pay
 	return rows[0], o, nil
 }
 
-// ApproveRefund records an independent administrator and then starts the channel flow. Repeating approval never
-// causes another send. Offline refunds remain frozen until an evidenced, separately approved manual conclusion.
+// ApproveRefund records an independent administrator and then starts the channel flow. Within the limit one approval
+// releases it; above the limit the first approval is recorded and a different administrator must approve again.
+// Repeating approval never causes another send. Offline refunds remain frozen until an evidenced, separately approved
+// manual conclusion.
 func (p *Payments) ApproveRefund(ctx context.Context, s pg.Scope, id RefundID, user uuid.UUID, reason string) (Refund, error) {
 	var refund Refund
 	err := p.db.Tx(ctx, s, func(tx pg.Tx) (err error) {
@@ -354,8 +363,10 @@ func (p *Payments) ApproveRefund(ctx context.Context, s pg.Scope, id RefundID, u
 }
 
 // ApproveRefundTx records an independent administrator and the audit entry in tx, without sending anything to the
-// channel. The caller must commit tx before SendRefund: the local decision and its audit are the idempotent effect, and
-// the channel call is recoverable by the refund poller if the process dies between the two.
+// channel. Above the limit the first call records only the first approver, so ApprovedBy stays nil and the poller does
+// not send; a different operator must call again. The caller must commit tx before SendRefund: the local decision and
+// its audit are the idempotent effect, and the channel call is recoverable by the refund poller if the process dies
+// between the two.
 func ApproveRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID, reason string) (Refund, error) {
 	if user == (uuid.UUID{}) || !validReason(reason, 1000) {
 		return Refund{}, &FieldError{"/reason", "a reason of 1 to 1000 characters is required"}
@@ -376,10 +387,23 @@ func ApproveRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID,
 		if locked.ApprovedBy != nil {
 			return nil
 		}
+		if locked.SecondRequired && locked.FirstApprovedBy == nil {
+			if err := queries.FirstApproveRefund(ctx, tx, FirstApproveRefundParams{ID: row.ID, FirstApprovedBy: &user}); err != nil {
+				return err
+			}
+			if err := refundAudit(ctx, tx, locked, user, "refund.approve", reason, "first"); err != nil {
+				return err
+			}
+			updated.FirstApprovedBy = &user
+			return nil
+		}
+		if locked.SecondRequired && *locked.FirstApprovedBy == user {
+			return nil
+		}
 		if err := queries.ApproveRefund(ctx, tx, ApproveRefundParams{ID: row.ID, ApprovedBy: &user}); err != nil {
 			return err
 		}
-		if err := refundAudit(ctx, tx, locked, user, "refund.approve", reason); err != nil {
+		if err := refundAudit(ctx, tx, locked, user, "refund.approve", reason, "final"); err != nil {
 			return err
 		}
 		updated.ApprovedBy = &user
@@ -401,11 +425,15 @@ func (p *Payments) SendRefund(ctx context.Context, s pg.Scope, id RefundID, init
 	return p.driveRefund(ctx, uuid.UUID(id), initial)
 }
 
-func refundAudit(ctx context.Context, tx pg.Tx, r PaymentsRefund, user uuid.UUID, action, reason string) error {
+func refundAudit(ctx context.Context, tx pg.Tx, r PaymentsRefund, user uuid.UUID, action, reason, stage string) error {
+	detail := map[string]any{"credits": r.Credits, "amount": r.Amount, "with_fee": r.WithFee, "via": r.Via}
+	if stage != "" {
+		detail["stage"] = stage
+	}
 	return audit.Record(ctx, tx, audit.Event{
 		Actor: audit.User(user), Action: action, Reason: reason,
 		Target: audit.Target{Module: "payments", Kind: "refund", ID: RefundID(r.ID).TypeID(), Site: r.SiteID, Account: r.AccountID},
-		Detail: map[string]any{"credits": r.Credits, "amount": r.Amount, "with_fee": r.WithFee, "via": r.Via},
+		Detail: detail,
 	})
 }
 
@@ -480,7 +508,7 @@ func RejectRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID, 
 		if err := finishRefundTx(ctx, tx, o, locked, "failed", "", "admin"); err != nil {
 			return err
 		}
-		return refundAudit(ctx, tx, locked, user, "refund.reject", reason)
+		return refundAudit(ctx, tx, locked, user, "refund.reject", reason, "")
 	})
 	if err != nil {
 		return Refund{}, err

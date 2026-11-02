@@ -8,7 +8,9 @@ import (
 	"unicode/utf8"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
+	"axiom/internal/platform/audit"
 	"axiom/internal/platform/idem"
 	"axiom/internal/platform/pg"
 
@@ -138,6 +140,15 @@ func (p *Payments) applyDispute(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 		// nothing to reverse, but a late "money taken" must not book the chargeback the win already refused.
 		if row.Status == "won" {
 			return p.touchDispute(ctx, tx, o, row, d, status, reason)
+		}
+		if d.Action == DisputeOpen || d.Action == DisputeLost {
+			if p.accounts == nil {
+				return errors.New("payments: account suspension is not configured")
+			}
+			if err := p.accounts.SetAccountSuspended(ctx, tx, audit.System("payments.dispute"), accounts.AccountID(o.AccountID), true,
+				"chargeback "+d.Provider+"/"+d.ID); err != nil {
+				return fmt.Errorf("payments: suspend the disputed account: %w", err)
+			}
 		}
 		other, err := queries.OtherDispute(ctx, tx, OtherDisputeParams{OrderID: o.ID, ID: row.ID})
 		if err != nil {

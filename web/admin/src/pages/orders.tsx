@@ -90,6 +90,7 @@ function RefundQueue({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
                   key={refund.id ?? index}
                   refund={refund}
                   self={refund.requested_by !== undefined && refund.requested_by === session.user.id}
+                  firstBySelf={refund.first_approved_by !== undefined && refund.first_approved_by === session.user.id}
                   onDecide={(kind) => setDecision({ kind, refund })}
                 />
               ))}
@@ -103,20 +104,24 @@ function RefundQueue({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   );
 }
 
-// A refund frozen without an approver is the one waiting for review; the approval is a second person's, so the person
-// who asked never sees the button here.
+// A refund frozen without a releasing approver is waiting for review. The requester never sees the button, and on a
+// refund above the limit the operator who recorded the first approval waits for a different person too.
 function RefundRow({
   refund,
   self,
+  firstBySelf,
   onDecide,
 }: {
   refund: Refund;
   self: boolean;
+  firstBySelf: boolean;
   onDecide: (kind: Decision["kind"]) => void;
 }) {
   const { t } = useTranslation();
   const format = useFormat();
   const waiting = refund.state === "frozen" && !refund.approved_by;
+  const second = refund.second_required === true && refund.first_approved_by !== undefined;
+  const blocked = self || firstBySelf;
   const credits = refund.credits ? format.money(refund.credits) : "—";
   return (
     <tr className="align-top hover:bg-s2">
@@ -159,11 +164,13 @@ function RefundRow({
       <Td>
         {waiting ? (
           <div className="flex flex-col items-end gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
-            {self ? (
-              <span className="text-label text-t3">{t("orders.refund.secondPerson")}</span>
+            {blocked ? (
+              <span className="text-label text-t3">
+                {t(firstBySelf ? "orders.refund.firstApproved" : "orders.refund.secondPerson")}
+              </span>
             ) : (
               <Button size="sm" onClick={() => onDecide("approve")}>
-                {t("orders.refund.approve")}
+                {t(second ? "orders.refund.secondApprove" : "orders.refund.approve")}
               </Button>
             )}
             <Button size="sm" variant="ghost" onClick={() => onDecide("reject")}>
@@ -179,7 +186,10 @@ function RefundRow({
 function refundStateText(t: TFunction, refund: Refund): string {
   switch (refund.state) {
     case "frozen":
-      return refund.approved_by ? t("orders.refund.state.approved") : t("orders.refund.state.pendingReview");
+      if (refund.approved_by) {
+        return t("orders.refund.state.approved");
+      }
+      return t(refund.first_approved_by ? "orders.refund.state.firstApproved" : "orders.refund.state.pendingReview");
     case "sending":
       return t("orders.refund.state.sending");
     case "pending":
@@ -197,6 +207,7 @@ function RefundDecision({ kind, refund, onClose }: Decision & { onClose: () => v
   const { t } = useTranslation();
   const approve = kind === "approve";
   const offline = refund.via === "offline";
+  const first = approve && refund.second_required === true && refund.first_approved_by === undefined;
   const id = refund.id ?? "";
   return (
     <ChangeDialog
@@ -207,16 +218,18 @@ function RefundDecision({ kind, refund, onClose }: Decision & { onClose: () => v
           <p>
             {t(
               approve
-                ? offline
-                  ? "orders.refund.approveIntroOffline"
-                  : "orders.refund.approveIntro"
+                ? first
+                  ? "orders.refund.firstApprovalIntro"
+                  : offline
+                    ? "orders.refund.approveIntroOffline"
+                    : "orders.refund.approveIntro"
                 : "orders.refund.rejectIntro",
             )}
           </p>
           <RefundFacts refund={refund} />
         </>
       }
-      action={t(approve ? "orders.refund.approveAction" : "orders.refund.rejectAction")}
+      action={t(approve ? (first ? "orders.refund.firstApprovalAction" : "orders.refund.approveAction") : "orders.refund.rejectAction")}
       danger={approve}
       read={() => ({})}
       send={(_, { reason, key }) =>
@@ -232,7 +245,13 @@ function RefundDecision({ kind, refund, onClose }: Decision & { onClose: () => v
       done={() => (
         <p>
           {t(
-            approve ? (offline ? "orders.refund.approvedOffline" : "orders.refund.approved") : "orders.refund.rejected",
+            approve
+              ? first
+                ? "orders.refund.firstApprovedDone"
+                : offline
+                  ? "orders.refund.approvedOffline"
+                  : "orders.refund.approved"
+              : "orders.refund.rejected",
           )}
         </p>
       )}
@@ -268,6 +287,14 @@ function RefundFacts({ refund }: { refund: Refund }) {
         <dd>
           <Code title={refund.requested_by}>{refund.requested_by ?? "—"}</Code>
         </dd>
+        {refund.first_approved_by ? (
+          <>
+            <dt className="text-label text-t3">{t("orders.refund.col.firstApproved")}</dt>
+            <dd>
+              <Code title={refund.first_approved_by}>{refund.first_approved_by}</Code>
+            </dd>
+          </>
+        ) : null}
       </dl>
     </div>
   );

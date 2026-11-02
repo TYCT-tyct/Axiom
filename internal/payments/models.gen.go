@@ -119,6 +119,8 @@ type PaymentsRefund struct {
 	NextQueryAt      time.Time
 	CreatedAt        time.Time
 	FinishedAt       pgtype.Timestamptz
+	SecondRequired   bool
+	FirstApprovedBy  *uuid.UUID
 }
 
 type PaymentsResolution struct {
@@ -139,21 +141,22 @@ type PaymentsResolution struct {
 }
 
 type PaymentsSetting struct {
-	SiteID                 uuid.UUID
-	Open                   *bool
-	CreditsMin             *int64
-	CreditsMax             *int64
-	Strategy               *string
-	PendingLimit           *int64
-	CancelLimit            *int64
-	CancelWindowSeconds    *int64
-	DailyCredits           *int64
-	FirstCredits           *int64
-	GraceSeconds           *int64
-	AutoCreditSeconds      *int64
-	PostExpiryQuerySeconds *int64
-	IpOrderLimit           *int64
-	IpFailureLimit         *int64
-	RefundWithFee          *bool
-	AmountMismatchPolicy   *string
+	SiteID                      uuid.UUID
+	Open                        *bool
+	CreditsMin                  *int64
+	CreditsMax                  *int64
+	Strategy                    *string
+	PendingLimit                *int64
+	CancelLimit                 *int64
+	CancelWindowSeconds         *int64
+	DailyCredits                *int64
+	FirstCredits                *int64
+	GraceSeconds                *int64
+	AutoCreditSeconds           *int64
+	PostExpiryQuerySeconds      *int64
+	IpOrderLimit                *int64
+	IpFailureLimit              *int64
+	RefundWithFee               *bool
+	AmountMismatchPolicy        *string
+	RefundSecondApprovalCredits *int64
 }

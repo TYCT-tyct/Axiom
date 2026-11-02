@@ -236,13 +236,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Collection switch and accepted credit range. Omitted limits are unrestricted.
-         * @description Collection switch and accepted credit range. Omitted limits are unrestricted.
+         * Collection switch, accepted credit range and refund approval limit.
+         * @description Collection switch, accepted credit range and refund approval limit; omitted top-up limits are unrestricted.
          */
         get: operations["getPaymentSettings"];
         /**
-         * Collection switch and accepted credit range. Omitted limits are unrestricted.
-         * @description Collection switch and accepted credit range. Omitted limits are unrestricted.
+         * Collection switch, accepted credit range and refund approval limit.
+         * @description Collection switch, accepted credit range and refund approval limit; omitted top-up limits are unrestricted.
          */
         put: operations["setPaymentSettings"];
         post?: never;
@@ -662,7 +662,7 @@ export interface paths {
         };
         /**
          * A site's refunds, newest first, for review and follow-up
-         * @description The admin's refund list. `state` is the internal state: `frozen` is held after the request and waits for an administrator's approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash; `failed` returned the frozen credits. Filters left out do not narrow. The page asks with `state=frozen` for the review queue. Money is exact text: `credits` is in the site's accounting currency (billionths), `amount` in the currency the order was paid in (minor units).
+         * @description The admin's refund list. `state` is the internal state: `frozen` is held after the request and waits for an administrator's approval (`approved_by` absent), a second approval when `second_required` is set, or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash; `failed` returned the frozen credits. Filters left out do not narrow. The page asks with `state=frozen` for the review queue. Money is exact text: `credits` is in the site's accounting currency (billionths), `amount` in the currency the order was paid in (minor units).
          */
         get: operations["listPaymentRefunds"];
         put?: never;
@@ -683,8 +683,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Approve a refund as a second person and start its channel flow
-         * @description Releases a frozen refund. The approver must be a different person from the one who requested it, and the reason goes to the audit log. A channel refund is sent after the approval commits; an offline refund stays frozen for a separate manual conclusion. Repeating the approval with the same `Idempotency-Key` returns the stored answer and sends nothing again; a refund that is already approved is returned unchanged.
+         * Approve a refund and release it when its approval rule is met
+         * @description Approves a frozen refund. The approver must be a different person from the one who requested it, and the reason goes to the audit log. Within the site's refund limit one approval releases it; above the limit the first approval records `first_approved_by` and a different person must approve again before it can be sent. A channel refund is sent after the releasing approval commits; an offline refund stays frozen for a separate manual conclusion. Repeating the approval with the same `Idempotency-Key` returns the stored answer and sends nothing again; a refund that is already released is returned unchanged.
          */
         post: operations["approvePaymentRefund"];
         delete?: never;
@@ -703,8 +703,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Decline a refund that no one approved and no channel saw
-         * @description Returns the frozen credits and moves no cash. Only a refund still waiting for review, with no approver and nothing sent to a channel, can be rejected (`conflict` means it is past that point; a definitive channel outcome is resolved instead). The reason goes to the audit log. Repeating the rejection with the same `Idempotency-Key` returns the stored answer and unfreezes nothing again; an already declined refund is returned unchanged.
+         * Decline a refund before it is released
+         * @description Returns the frozen credits and moves no cash. Only a refund still waiting for release, with no releasing approver and nothing sent to a channel, can be rejected (`conflict` means it is past that point; a definitive channel outcome is resolved instead). A first approval above the limit does not prevent rejection: the credits return and nothing is sent. The reason goes to the audit log. Repeating the rejection with the same `Idempotency-Key` returns the stored answer and unfreezes nothing again; an already declined refund is returned unchanged.
          */
         post: operations["rejectPaymentRefund"];
         delete?: never;
@@ -2224,6 +2224,8 @@ export interface components {
             credits_max?: components["schemas"]["Money"];
             /** @description The buffer on a top-up in millionths: the site's own value, or the default 2% (20000) when it set none. A node of the previous release does not return it. */
             top_up_buffer_ppm?: number;
+            /** @description Refunds above this amount need two operators; at or below it one operator releases them. The default is 100 credits. A node of the previous release does not return it. */
+            refund_second_approval_credits?: components["schemas"]["Money"];
         };
         PaymentSettingsUpdate: {
             settings: {
@@ -2232,6 +2234,8 @@ export interface components {
                 credits_max?: components["schemas"]["Money"];
                 /** @description The buffer in millionths, 0 to 10%. Omit to keep the current one. */
                 top_up_buffer_ppm?: number;
+                /** @description Refunds above this amount need two operators; 0 makes every refund need two. Omit to keep the current value; a node of the previous release refuses the field. */
+                refund_second_approval_credits?: components["schemas"]["Money"];
             };
             reason: components["schemas"]["Reason"];
         };
@@ -2400,7 +2404,7 @@ export interface components {
          */
         PaymentOrderState: "pending" | "paid" | "expired" | "cancelled" | "failed" | "review" | "partially_refunded" | "refunded" | "charged_back";
         /**
-         * @description The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
+         * @description The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent), for a second approval when `second_required` is set, or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
          * @enum {string}
          */
         PaymentRefundState: "frozen" | "sending" | "pending" | "succeeded" | "failed";
@@ -2420,6 +2424,10 @@ export interface components {
             /** @description Why the user asked for the refund. */
             reason?: string;
             requested_by?: components["schemas"]["UserId"];
+            /** @description The first of the two operators, when the refund is above the site's approval limit. */
+            first_approved_by?: components["schemas"]["UserId"];
+            /** @description Whether this refund needs two operators; the first is in `first_approved_by`. */
+            second_required?: boolean;
             approved_by?: components["schemas"]["UserId"];
             /** @description The channel's own refund number, once it has one. */
             provider_ref?: string;
