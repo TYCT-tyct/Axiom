@@ -90,6 +90,8 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 **容量和磁盘上限。** `Capacity`（cmd 里 5000）是在途调用和未写记录的合计上限：`Admit` 的原子计数到顶就返回 `ErrBacklog`，gateway 在准入前答 503 `overloaded`，既不服务无记录的调用，也不把数据库的慢传成无界磁盘增长。单条记录编码上限 64 KiB，所以磁盘上限约 `Capacity × (64 KiB + 8) + 8 MiB`；超过时 `Commit` 失败、计入 `records.lost{reason="spill"}` 并标记不可记录。已准入的调用如果在本机磁盘写失败或 fsync 失败，记录无法确认保存，节点会拒绝后续调用；fsync 失败后内核可能已丢掉脏页、之后的 fsync 却照样成功，所以 spill 同时停止追加和读取，留给下一次启动按磁盘上的内容恢复；这是无法从事后补救的尾部窗口，日志和 `records.lost` 会指出请求 ID。
 
+**基准。** `BenchmarkEnqueue` 与 `BenchmarkEnqueueParallel` 量的是调用付的这一段：准入、校验、规范 JSON 编码、追加和组提交 fsync。两个基准在计时前先写一条记录，等后台写库者把它读走、停在一次数据库写入上（基准里写库是 sink），计时区间里于是没有写库者的工作：否则它会按调度读走并解码计时区间开头的一批记录，这些后台工作除以固定迭代数，让同一提交的 allocs/op 在运行之间跳动。写库者自己的分配不属于调用路径的预算；`BenchmarkEncodeRecord` 和 `BenchmarkSpillAppend` 分别定位编码与追加加 fsync。四个基准的 allocs/op 都由合并队列的基准门槛比较（[性能的「怎么验证」](../../docs/performance.md#怎么验证)）。
+
 指标：`axiom.observability.records.pending`（spill 里尚未确认的调用数）、`records.written`、`attempts.written`、`write.retries`、`records.lost`、`attempts.lost`；丢失的计数器带 `reason`（`invalid`、`spill`、`shutdown`），没有账户、key 或用户标签。保留任务另有 `axiom.observability.retention.partitions{action,table}`（`archived`、`dropped`）。`AlertSample` 返回 `records.pending` 和累计丢失数，供 `observability.write_lag` 与 `observability.records_lost` 使用。
 
 ## 读
