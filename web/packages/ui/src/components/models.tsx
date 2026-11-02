@@ -41,6 +41,20 @@ export type PublicModel = {
   streams?: boolean;
   abilities?: string[];
   pricing?: PublicModelPricing;
+  endpoints?: PublicEndpoint[];
+};
+
+// PublicEndpoint is one group that serves a model: the codename a provider filter or preset names, the attributes it
+// serves and its own price. Missing endpoints mean an older node, not a model without endpoints.
+export type PublicEndpoint = {
+  name: string;
+  context_length?: number;
+  max_output?: number;
+  streams?: boolean;
+  abilities?: string[];
+  quantization?: string;
+  verified?: boolean;
+  pricing?: PublicModelPricing;
 };
 
 // perMillionBillionths turns a price per token into billionths of a currency unit per million tokens, without a
@@ -82,19 +96,23 @@ export function baseRate<T extends Pick<PublicModelRate, "item" | "above" | "ser
   );
 }
 
-function Price({ model, item }: { model: PublicModel; item: "input" | "output" }) {
+function PricingPrice({ pricing, item }: { pricing?: PublicModelPricing; item: "input" | "output" }) {
   const { t } = useTranslation("common");
   const format = useFormat();
-  const rate = model.pricing?.rates ? baseRate(model.pricing.rates, item) : undefined;
-  if (!model.pricing || !rate) {
+  const rate = pricing?.rates ? baseRate(pricing.rates, item) : undefined;
+  if (!pricing || !rate) {
     return <span className="text-t3">{t("publicModels.priceUnavailable")}</span>;
   }
   return (
     <>
-      <span className="whitespace-nowrap">{priceText(format, rate, model.pricing.currency)}</span>
+      <span className="whitespace-nowrap">{priceText(format, rate, pricing.currency)}</span>
       {rate.unit === "token" ? <span className="block text-label text-t3">{t("publicModels.perMillion")}</span> : null}
     </>
   );
+}
+
+function Price({ model, item }: { model: PublicModel; item: "input" | "output" }) {
+  return <PricingPrice pricing={model.pricing} item={item} />;
 }
 
 export const modelAbilities = [
@@ -306,7 +324,12 @@ function ModelDetails({ id, model }: { id: string; model: PublicModel }) {
     // w-0 min-w-full: the details take the table's width without widening it on a narrow screen.
     <section id={id} aria-label={model.name} className="w-0 min-w-full pb-1">
       <ModelFacts model={model} />
+      <EndpointSection model={model} />
       <div className="mt-4 border-t border-b1">
+        <div className="px-4 pt-4">
+          <h3 className="text-ui text-t1">{t("publicModels.modelPrice")}</h3>
+          <p className="mt-1 text-label text-t3">{t("publicModels.modelPriceNote")}</p>
+        </div>
         {!pricing ? (
           <p className="px-4 py-3 text-t3">{t("publicModels.priceUnavailable")}</p>
         ) : rates.length === 0 ? (
@@ -319,6 +342,95 @@ function ModelDetails({ id, model }: { id: string; model: PublicModel }) {
         ) : null}
       </div>
     </section>
+  );
+}
+
+// EndpointSection lists every group that serves the model under the codename routing accepts. The per-endpoint prices
+// sit beside the model's cheapest price below, so a reader can see that the headline is the cheapest endpoint, not the
+// only one.
+function EndpointSection({ model }: { model: PublicModel }) {
+  const { t } = useTranslation("common");
+  const format = useFormat();
+  if (model.endpoints === undefined) {
+    return <p className="mt-4 border-t border-b1 px-4 pt-4 text-ui text-t3">{t("publicModels.endpointsUnavailable")}</p>;
+  }
+  if (model.endpoints.length === 0) {
+    return <p className="mt-4 border-t border-b1 px-4 pt-4 text-ui text-t3">{t("publicModels.noEndpoints")}</p>;
+  }
+  return (
+    <div className="mt-4 border-t border-b1">
+      <div className="px-4 pt-4">
+        <h3 className="text-ui text-t1">{t("publicModels.endpoints")}</h3>
+        <p className="mt-1 text-label text-t3">{t("publicModels.endpointsNote")}</p>
+      </div>
+      <Table label={t("publicModels.endpoints")}>
+        <thead>
+          <tr>
+            <Th>{t("publicModels.endpoint")}</Th>
+            <Th className="hidden text-right md:table-cell">{t("publicModels.context")}</Th>
+            <Th className="hidden text-right lg:table-cell">{t("publicModels.maxOutput")}</Th>
+            <Th className="hidden 2xl:table-cell">{t("publicModels.ability")}</Th>
+            <Th className="hidden text-right sm:table-cell">{t("publicModels.item.input")}</Th>
+            <Th className="hidden text-right sm:table-cell">{t("publicModels.item.output")}</Th>
+          </tr>
+        </thead>
+        <tbody>
+          {model.endpoints.map((endpoint) => (
+            <tr key={endpoint.name}>
+              <Td className="max-w-56">
+                <p className="truncate font-mono text-t1" title={endpoint.name}>
+                  {endpoint.name}
+                </p>
+                <span className="mt-1 flex flex-wrap gap-1">
+                  <Badge tone={endpoint.verified ? "ok" : "neutral"} icon={endpoint.verified ? "check" : undefined}>
+                    {t(endpoint.verified ? "publicModels.verified" : "publicModels.unverified")}
+                  </Badge>
+                  {endpoint.quantization ? (
+                    <Badge>
+                      {t("publicModels.quantization")}: {endpoint.quantization}
+                    </Badge>
+                  ) : null}
+                </span>
+                {/* Below md the attributes and prices have no column of their own; keep them with the codename. */}
+                <p className="mt-1 text-label text-t3 tabular-nums md:hidden">
+                  {t("publicModels.context")} {endpoint.context_length ? format.number(endpoint.context_length) : "—"} ·{" "}
+                  {t("publicModels.maxOutput")} {endpoint.max_output ? format.number(endpoint.max_output) : "—"}
+                </p>
+                <div className="mt-1 grid grid-cols-2 gap-x-3 text-label tabular-nums sm:hidden">
+                  <span>
+                    <span className="text-t3">{t("publicModels.item.input")} </span>
+                    <PricingPrice pricing={endpoint.pricing} item="input" />
+                  </span>
+                  <span>
+                    <span className="text-t3">{t("publicModels.item.output")} </span>
+                    <PricingPrice pricing={endpoint.pricing} item="output" />
+                  </span>
+                </div>
+              </Td>
+              <Td className="hidden text-right whitespace-nowrap tabular-nums md:table-cell">
+                {endpoint.context_length ? format.number(endpoint.context_length) : "—"}
+              </Td>
+              <Td className="hidden text-right whitespace-nowrap tabular-nums lg:table-cell">
+                {endpoint.max_output ? format.number(endpoint.max_output) : "—"}
+              </Td>
+              <Td className="hidden 2xl:table-cell">
+                <span className="flex max-w-64 flex-wrap gap-1">
+                  {(endpoint.abilities ?? []).map((ability) => (
+                    <Badge key={ability}>{label(t, "abilityNames", ability)}</Badge>
+                  ))}
+                </span>
+              </Td>
+              <Td className="hidden text-right tabular-nums sm:table-cell">
+                <PricingPrice pricing={endpoint.pricing} item="input" />
+              </Td>
+              <Td className="hidden text-right tabular-nums sm:table-cell">
+                <PricingPrice pricing={endpoint.pricing} item="output" />
+              </Td>
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </div>
   );
 }
 
@@ -349,7 +461,7 @@ function RateTable({ model, currency, rates }: { model: PublicModel; currency: s
   const { t } = useTranslation("common");
   const format = useFormat();
   return (
-    <Table label={`${model.name} ${t("publicModels.title")}`}>
+    <Table label={`${model.name} ${t("publicModels.modelPrice")}`}>
       <thead>
         <tr>
           <Th>{t("publicModels.service")}</Th>

@@ -112,7 +112,7 @@ export default {
   copy: { copy: "复制", copied: "已复制", failed: "没能复制，请手动选中" },
   publicModels: {
     title: "模型与价格",
-    description: "已发布的模型、它的限制和你要付的价格。价格是精确的；不显示供应商、端点或成本数据。",
+    description: "已发布的模型、它的限制、提供服务的端点和你要付的价格。价格是精确的；中转端点用稳定的匿名代号，不显示供应商名称、上游或成本数据。",
     search: "模型",
     searchHint: "ID 或名称",
     author: "厂商",
@@ -147,7 +147,18 @@ export default {
     perResult: "每条额外结果",
     defaultEngine: "默认",
     noRates: "这个模型还没有发布价格。",
-    note: "这是本站的售价；不显示供应商、端点或成本数据。",
+    modelPrice: "模型价格（最便宜端点）",
+    modelPriceNote: "这份完整价目取自最便宜的端点；其他端点各有各的价格，见上表。",
+    endpoints: "端点",
+    endpoint: "公开名称",
+    endpointsNote:
+      "在 provider.only、provider.ignore 或预设里用这里的公开名称指定或排除端点；中转分组的名称是匿名代号，同一分组在所有模型上相同。",
+    endpointsUnavailable: "这台服务器的旧版本还没有端点列表，更新后可看到。",
+    noEndpoints: "这个模型还没有可用的端点。",
+    verified: "已验证",
+    unverified: "未验证",
+    quantization: "量化",
+    note: "这是本站的售价；中转端点用匿名代号，不显示供应商名称、上游或成本数据。",
     tierNote: "这是你的账户在当前等级下的价格。",
     item: {
       input: "输入",

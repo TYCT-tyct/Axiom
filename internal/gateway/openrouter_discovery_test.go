@@ -11,6 +11,7 @@ import (
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
+	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 
 	"github.com/google/go-cmp/cmp"
@@ -163,6 +164,7 @@ func TestOpenRouterEndpointBuild(t *testing.T) {
 	f := newRouteFixture(t)
 	first, second := routable(f.served, protocol.Messages), routable(f.served, protocol.Responses)
 	first.Upstream, second.Upstream = "private-first", "private-second"
+	first.Codename, second.Codename = "g-first", "g-second"
 	f.build([]suppliers.Routable{second, first, routable(f.nospec), routable(f.unpriced)})
 	old := f.models.published()
 	entry, err := old.find(visibility{}, "acme/served")
@@ -179,7 +181,7 @@ func TestOpenRouterEndpointBuild(t *testing.T) {
 	if len(result.Data.Endpoints) != 2 || old.count(visibility{}, orQuery{}) != 1 {
 		t.Fatalf("%s", before)
 	}
-	tags := []string{"axiom/1", "axiom/2"}
+	tags := []string{"g-first", "g-second"}
 	for i, e := range result.Data.Endpoints {
 		want := []any{tags[i], "0.0000045", int64(200000), int64(8192)}
 		got := []any{e.Tag, e.Pricing.Prompt, e.ContextLength, e.MaxCompletionTokens}
@@ -199,4 +201,37 @@ func TestOpenRouterEndpointBuild(t *testing.T) {
 	if string(latest.endpoints) == before || string(entry.endpoints) != before {
 		t.Error("endpoint publication did not preserve independent builds")
 	}
+}
+
+// TestDiscoveryTagIsTheRoutingIdentity: the tag a client reads from the public endpoint list is the same codename
+// provider.only accepts. A client can therefore discover an endpoint and require it without a second identity.
+func TestDiscoveryTagIsTheRoutingIdentity(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	resp, body := r.do(http.MethodGet, "/api/v1/models/acme/alpha/endpoints", a.key, nil)
+	var got struct {
+		Data orEndpointModel `json:"data"`
+	}
+	if resp.StatusCode != http.StatusOK || jsonx.Unmarshal([]byte(body), &got) != nil || len(got.Data.Endpoints) != 2 {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	want := map[string]routing.EndpointID{
+		"alpha-1": r.endpoints["alpha-1"].ID,
+		"alpha-2": r.endpoints["alpha-2"].ID,
+	}
+	if len(want) != len(got.Data.Endpoints) {
+		t.Fatalf("endpoints: %s", body)
+	}
+	for _, e := range got.Data.Endpoints {
+		id, ok := want[e.Tag]
+		if !ok {
+			t.Fatalf("tag %q is not a group codename: %s", e.Tag, body)
+		}
+		route, resp, body := r.sendWith(a, `{"only":["`+e.Tag+`"]}`)
+		if resp.StatusCode != http.StatusOK || !cmp.Equal(route, []routing.EndpointID{id}) {
+			t.Errorf("only %q: %d, route %v, want %v: %s", e.Tag, resp.StatusCode, route, []routing.EndpointID{id}, body)
+		}
+	}
+	r.idle(1 << 30)
 }
