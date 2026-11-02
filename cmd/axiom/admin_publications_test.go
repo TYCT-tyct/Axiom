@@ -5,7 +5,10 @@ import (
 	"testing"
 	"uuid"
 
+	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
 
@@ -51,6 +54,51 @@ func TestPricePolicyAPIAndUnknownCostPublication(t *testing.T) {
 	}
 	rec = f.change(f.s, http.MethodPost, "/pricing/publications/"+f.model, `{"candidate_id":"`+*p.CandidateId+`","confirmed":true,"override_floor":true,"reason":"cannot override unknown cost"}`, newKey())
 	expectAdmin(t, "unknown cost override", rec, http.StatusUnprocessableEntity, codeUnprocessable)
+}
+
+func TestPricePublicationConversionKeepsEndpointPrices(t *testing.T) {
+	t.Parallel()
+
+	schedule, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000002"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := uuid.NewV7()
+	prices := billing.EndpointPrices{endpoint: schedule}
+	p := billing.Publication{
+		Model:              catalog.ModelID(uuid.NewV7()),
+		Endpoints:          prices,
+		RequestedEndpoints: prices,
+		CurrentEndpoints:   prices,
+		CurrentSchedule:    jsonx.Raw(`{"v":1,"currency":"USD","rates":{"input":"0.000002"}}`),
+		Costs:              prices,
+		Floors:             prices,
+	}
+	out, err := converted[adminapi.PricePublicationList](struct {
+		Policy billing.PricePolicy   `json:"policy"`
+		Data   []billing.Publication `json:"data"`
+	}{billing.PricePolicy{}, []billing.Publication{p}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Data == nil || len(*out.Data) != 1 {
+		t.Fatalf("publication conversion returned %+v", out.Data)
+	}
+	row := (*out.Data)[0]
+	if row.CurrentSchedule == nil || row.CurrentSchedule.Currency != "USD" {
+		t.Fatalf("current schedule did not survive the publication conversion: %+v", row.CurrentSchedule)
+	}
+	for name, prices := range map[string]*adminapi.PriceEndpointMap{
+		"endpoints":           row.Endpoints,
+		"requested_endpoints": row.RequestedEndpoints,
+		"current_endpoints":   row.CurrentEndpoints,
+		"costs":               row.Costs,
+		"floors":              row.Floors,
+	} {
+		if prices == nil || (*prices)[endpoint.String()].Currency != "USD" {
+			t.Fatalf("%s did not survive the publication conversion: %+v", name, prices)
+		}
+	}
 }
 
 func seedUnpricedPublication(t *testing.T, f adminFixture) {

@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"uuid"
 
+	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/routing"
 )
@@ -92,21 +95,46 @@ type orEndpointModel struct {
 }
 
 func encodeOREndpoints(m orEntry, endpoints []routing.Endpoint) ([]byte, error) {
+	return encodeOREndpointList(m, endpoints, func(routing.Endpoint) (orPricing, bool) {
+		return m.Pricing, true // a shared price version: every endpoint charges the model's price
+	})
+}
+
+// encodeOREndpointPrices is the list for a version that prices each endpoint from its own cost: each endpoint's own
+// published schedule, and an endpoint this version has no price for is left out. Supplier identity and cost never enter.
+func encodeOREndpointPrices(m orEntry, sold billing.Sold, abilities catalog.AbilitySet, endpoints []routing.Endpoint) ([]byte, error) {
+	return encodeOREndpointList(m, endpoints, func(e routing.Endpoint) (orPricing, bool) {
+		price, ok := sold.PriceFor(uuid.UUID(e.ID))
+		if !ok {
+			return orPricing{}, false
+		}
+		return newORPricing(price, abilities), true
+	})
+}
+
+func encodeOREndpointList(m orEntry, endpoints []routing.Endpoint, pricing func(routing.Endpoint) (orPricing, bool)) ([]byte, error) {
 	data := orEndpointModel{
 		ID: m.ID, Name: m.Name, Created: m.Created, Architecture: m.Architecture,
 		Endpoints: make([]orEndpoint, 0, len(endpoints)),
 	}
-	// Sort a copy: the route builder owns the input. Only ordinals cross the public boundary.
+	// Sort a copy: the route builder owns the input. Only ordinals cross the public boundary, and an endpoint the
+	// version has no price for takes no ordinal: tags stay contiguous over the endpoints actually listed.
 	endpoints = slices.Clone(endpoints)
 	slices.SortFunc(endpoints, func(a, b routing.Endpoint) int { return bytes.Compare(a.ID[:], b.ID[:]) })
-	for i, e := range endpoints {
+	tag := 0
+	for _, e := range endpoints {
+		price, ok := pricing(e)
+		if !ok {
+			continue
+		}
+		tag++
 		var quantization any
 		if e.Quantization != "" {
 			quantization = string(e.Quantization)
 		}
 		data.Endpoints = append(data.Endpoints, orEndpoint{
-			Name: "Axiom: " + m.Name, ModelID: m.ID, ModelName: m.Name, ProviderName: "Axiom", Tag: "axiom/" + strconv.Itoa(i+1),
-			ContextLength: e.Context, MaxCompletionTokens: e.MaxOutput, Pricing: m.Pricing, SupportedParameters: m.SupportedParameters,
+			Name: "Axiom: " + m.Name, ModelID: m.ID, ModelName: m.Name, ProviderName: "Axiom", Tag: "axiom/" + strconv.Itoa(tag),
+			ContextLength: e.Context, MaxCompletionTokens: e.MaxOutput, Pricing: price, SupportedParameters: m.SupportedParameters,
 			Quantization: quantization,
 		})
 	}

@@ -7,6 +7,7 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 )
 
 // PriceCost is one endpoint's immutable cost evidence from the same reading that builds routing.
@@ -23,24 +24,28 @@ type PriceCost struct {
 
 // CostEnvelope expresses known native costs in the site's currency with one upward rounding after all factors.
 func CostEnvelope(costs []PriceCost, currency platform.Currency) (catalog.Schedule, error) {
-	envelope, err := catalog.ParseSchedule(fmt.Appendf(nil, `{"v":1,"currency":%q,"rates":{}}`, currency.String()))
+	converted, err := convertedCosts(costs, currency)
 	if err != nil {
 		return catalog.Schedule{}, err
 	}
+	return envelopeOf(converted)
+}
+
+// convertedCosts is each endpoint's native cost in the site's currency: the cost a per-endpoint sale price is computed
+// from, and the map CostEnvelope takes the dearest of.
+func convertedCosts(costs []PriceCost, currency platform.Currency) (EndpointPrices, error) {
 	if len(costs) == 0 {
-		return catalog.Schedule{}, ErrUnpriced
+		return nil, ErrUnpriced
 	}
+	converted := make(EndpointPrices, len(costs))
 	for _, c := range costs {
-		converted, err := c.converted(currency)
+		schedule, err := c.converted(currency)
 		if err != nil {
-			return catalog.Schedule{}, err
+			return nil, err
 		}
-		envelope, err = envelope.Aligned(converted, false)
-		if err != nil {
-			return catalog.Schedule{}, err
-		}
+		converted[c.Endpoint] = schedule
 	}
-	return envelope, nil
+	return converted, nil
 }
 
 func costPrice(m Method, cost catalog.Schedule, currency platform.Currency) (catalog.Schedule, error) {
@@ -80,4 +85,90 @@ func (c PriceCost) converted(currency platform.Currency) (catalog.Schedule, erro
 		factor.Mul(factor, rate)
 	}
 	return c.Schedule.Scaled(factor.RatString(), currency)
+}
+
+// parsePriceCosts reads the cost evidence stored with a price version. PriceCost keeps the currency out of its ordinary
+// JSON because its plan uses the supplier's own unit; set it from the code before converting. Schedule has a custom
+// marshaler but no unmarshaler, so its evidence is kept raw and parsed here rather than decoded into the struct.
+func parsePriceCosts(raw []jsonx.Raw) ([]PriceCost, error) {
+	out := make([]PriceCost, 0, len(raw))
+	for _, item := range raw {
+		var wire struct {
+			Endpoint     uuid.UUID             `json:"endpoint"`
+			Model        catalog.ModelID       `json:"model"`
+			Schedule     jsonx.Raw             `json:"schedule"`
+			UnitValue    string                `json:"unit_value"`
+			UnitValueID  uuid.UUID             `json:"unit_value_id"`
+			CurrencyCode string                `json:"currency"`
+			Exchange     platform.ExchangeRate `json:"exchange"`
+		}
+		if err := jsonx.Unmarshal(item, &wire); err != nil {
+			return nil, err
+		}
+		schedule, err := catalog.ParseSchedule(wire.Schedule)
+		if err != nil {
+			return nil, err
+		}
+		c := PriceCost{
+			Endpoint: wire.Endpoint, Model: wire.Model, Schedule: schedule, UnitValue: wire.UnitValue,
+			UnitValueID: wire.UnitValueID, CurrencyCode: wire.CurrencyCode, Exchange: wire.Exchange,
+		}
+		if c.CurrencyCode != "" {
+			currency, err := platform.ParseCurrency(c.CurrencyCode)
+			if err != nil {
+				return nil, err
+			}
+			c.Currency = currency
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// basisCosts reads the cost evidence a candidate or version stores in its basis.
+func basisCosts(raw jsonx.Raw) ([]PriceCost, error) {
+	var basis struct {
+		Costs []jsonx.Raw `json:"costs"`
+	}
+	if err := jsonx.Unmarshal(raw, &basis); err != nil {
+		return nil, err
+	}
+	return parsePriceCosts(basis.Costs)
+}
+
+// endpointCostsFromBasis recovers the endpoint membership of a version from its cost evidence. A missing or unreadable
+// record returns nil; the confirmation gate then falls back to the version's own price map.
+func endpointCostsFromBasis(raw jsonx.Raw, currency platform.Currency) EndpointPrices {
+	costs, err := basisCosts(raw)
+	if err != nil {
+		return nil
+	}
+	converted, err := convertedCosts(costs, currency)
+	if err != nil {
+		return nil
+	}
+	return converted
+}
+
+// endpointFloorsFromBasis is a proposal's break-even price per endpoint, recovered from the same cost evidence that
+// priced it. The decision reads it only when a separately priced version returns to one shared price; an unreadable
+// basis returns nil so the caller falls back to the ordinary move gate.
+func endpointFloorsFromBasis(raw jsonx.Raw, currency platform.Currency, multiplier string) EndpointPrices {
+	costs, err := basisCosts(raw)
+	if err != nil {
+		return nil
+	}
+	converted, err := convertedCosts(costs, currency)
+	if err != nil {
+		return nil
+	}
+	floors := make(EndpointPrices, len(converted))
+	for endpoint, cost := range converted {
+		floor, err := cost.Scaled(multiplier, currency)
+		if err != nil {
+			return nil
+		}
+		floors[endpoint] = floor
+	}
+	return floors
 }

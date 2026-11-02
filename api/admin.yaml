@@ -6937,6 +6937,10 @@ components:
             flex: {$ref: "#/components/schemas/ServiceTierRates"}
             priority: {$ref: "#/components/schemas/ServiceTierRates"}
             fast: {$ref: "#/components/schemas/ServiceTierRates"}
+    PriceEndpointMap:
+      type: object
+      description: Per-endpoint prices, keyed by endpoint UUID.
+      additionalProperties: {$ref: "#/components/schemas/PriceSchedule"}
     ModelName:
       type: object
       required: [name, visibility]
@@ -7146,6 +7150,24 @@ components:
         requested: {$ref: "#/components/schemas/PriceSchedule"}
         schedule: {$ref: "#/components/schemas/PriceSchedule"}
         floor: {$ref: "#/components/schemas/PriceSchedule"}
+        endpoints:
+          description: The proposed price of each endpoint for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        requested_endpoints:
+          description: The rule price of each endpoint before the site floor, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        current_endpoints:
+          description: The price each endpoint currently serves, when the current version prices endpoints separately.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        current_schedule:
+          description: The current model-level price schedule, including the envelope of a per-endpoint version.
+          allOf: [{$ref: "#/components/schemas/PriceSchedule"}]
+        costs:
+          description: The proposal's cost of each endpoint in the site currency, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        floors:
+          description: The proposal's break-even price of each endpoint in the site currency, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
         problem: {type: string}
     PricePublishInput:
       type: object
