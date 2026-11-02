@@ -96,18 +96,18 @@ func (p *Payments) merchantUnreadable(id MerchantID) {
 	}
 }
 
-// merchantReadable resolves an open unreadable signal after the merchant's configuration opens again.
+// merchantReadable resolves an open unreadable signal after the merchant's configuration opens again. The lock is held
+// across Resolve so a concurrent failure cannot raise a new incident that this stale success then resolves.
 func (p *Payments) merchantReadable(id MerchantID) {
 	if p.alerts == nil {
 		return
 	}
 	p.signalMu.Lock()
-	_, raised := p.unreadable[id]
-	delete(p.unreadable, id)
-	p.signalMu.Unlock()
-	if raised && p.alerts.Resolve(signalMerchantUnreadable, id.TypeID()) != nil {
-		p.signalMu.Lock()
-		p.unreadable[id] = struct{}{}
-		p.signalMu.Unlock()
+	defer p.signalMu.Unlock()
+	if _, ok := p.unreadable[id]; !ok {
+		return
+	}
+	if p.alerts.Resolve(signalMerchantUnreadable, id.TypeID()) == nil {
+		delete(p.unreadable, id)
 	}
 }
