@@ -67,7 +67,7 @@ type verificationView struct {
 }
 
 func (v verification) view(at time.Time) verificationView {
-	return verificationView{verified: v.verified(at), due: v.due(at), failed: v.failed(), confidence: v.confidence(at)}
+	return verificationView{verified: v.verified(at, defaultVerifyMaxAge), due: v.due(at), failed: v.failed(), confidence: v.confidence(at, defaultVerifyMaxAge)}
 }
 
 func (v verificationView) want(t *testing.T, at time.Time, want verificationView) {
@@ -84,10 +84,10 @@ func TestVerificationConfidenceAndDue(t *testing.T) {
 	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	var v verification
 	v.view(at).want(t, at, verificationView{due: true})
-	v.passed, v.checked, v.next = true, at, at.Add(verifyEvery)
+	v.passed, v.checked, v.next = true, at, at.Add(defaultVerifyEvery)
 	v.view(at).want(t, at, verificationView{verified: true, confidence: 1})
-	v.view(at.Add(verifyEvery)).want(t, at.Add(verifyEvery), verificationView{verified: true, confidence: .75, due: true})
-	v.view(at.Add(verifyMaxAge+time.Second)).want(t, at.Add(verifyMaxAge+time.Second), verificationView{due: true})
+	v.view(at.Add(defaultVerifyEvery)).want(t, at.Add(defaultVerifyEvery), verificationView{verified: true, confidence: .75, due: true})
+	v.view(at.Add(defaultVerifyMaxAge+time.Second)).want(t, at.Add(defaultVerifyMaxAge+time.Second), verificationView{due: true})
 	v.passed = false // one contradiction clears it at once, but is not yet a fake
 	v.failures = 1
 	v.view(at).want(t, at, verificationView{})

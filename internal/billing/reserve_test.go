@@ -52,6 +52,9 @@ func newBank(t testing.TB, balance, floor int64, config Config) *bank {
 	if config == (Config{}) {
 		config = Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour}
 	}
+	if config.Segments == nil {
+		config.Segments = NewSegmentPolicy(DefaultSegments())
+	}
 	b.supplies = newSupplies()
 	if b.billing, err = Start(t.Context(), app, b.platform, config, b.supplies); err != nil {
 		t.Fatal(err)

@@ -26,7 +26,7 @@ func (w *callWorld) healthCallPath(clock *testClock, mode quality.Mode) (callNod
 	if err := w.db.Tx(w.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error { return refreshSalePrices(w.t.Context(), tx, w.site, site.Currency) }); err != nil {
 		w.t.Fatal(err)
 	}
-	ledger, err := billing.Start(w.t.Context(), w.db, pg.PlatformScope(), billing.Config{HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour}, suppliers.CallWrites{})
+	ledger, err := billing.Start(w.t.Context(), w.db, pg.PlatformScope(), billing.Config{HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: time.Hour, Segments: billing.NewSegmentPolicy(billing.DefaultSegments())}, suppliers.CallWrites{})
 	if err != nil {
 		w.t.Fatal(err)
 	}

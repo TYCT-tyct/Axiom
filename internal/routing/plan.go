@@ -14,16 +14,17 @@ import (
 
 // need is everything a candidate is held against, worked out once per request.
 type need struct {
-	in     *Input
-	req    *protocol.Request
-	preset *Preset
-	over   *Override
-	auto   bool                   // rank across every model: the request named openrouter/auto
-	free   bool                   // rank across the free models: the request named openrouter/free
-	tokens int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
-	demand billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
-	tiers  catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
-	now    time.Time
+	in       *Input
+	req      *protocol.Request
+	preset   *Preset
+	over     *Override
+	auto     bool                   // rank across every model: the request named openrouter/auto
+	free     bool                   // rank across the free models: the request named openrouter/free
+	tokens   int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
+	segments billing.Segments       // the segment settings this plan marks entries with, read once from the live policy
+	demand   billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
+	tiers    catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
+	now      time.Time
 }
 
 // attempts is how many endpoints a plan may try: the preset's or the router's default, and one for a file reference,
@@ -107,6 +108,9 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	n := &need{
 		in: &in, req: in.Req, preset: &preset, over: &in.Override, auto: in.Auto, free: in.Free, now: now,
 		tokens: inputTokens(in.Req), demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
+	}
+	if r.cfg.Segments != nil {
+		n.segments = r.cfg.Segments.Load()
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
@@ -221,7 +225,7 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 			rec.Excluded = append(rec.Excluded, Excluded{c.ID, RetryBudget})
 			continue
 		}
-		entry := r.entry(c.candidate, n)
+		entry := entry(c.candidate, n)
 		entry.BreakerFallback = !c.opened.IsZero()
 		entry.Price = c.price.PriceRef
 		entries = append(entries, entry)
@@ -231,13 +235,13 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 
 // entry works out what billing needs for one endpoint and this request: the output limit and whether the reservation can
 // be made in segments.
-func (r *Router) entry(c *candidate, n *need) Entry {
+func entry(c *candidate, n *need) Entry {
 	out, _ := c.outputLimit(n.req, n.tokens)
 	format, _ := c.callFormat(n)
 	// Without a known output speed the overshoot allowance of a segmented reservation would be nothing, so an entry
 	// whose speed is unknown is reserved in full; so is one whose call the gateway cannot meter (Input.NoSegments), and
 	// every entry while no segment size is configured: a segment of 0 tokens would reserve no output at all.
-	allowance, _ := r.cfg.Segments.Allowance(c.OutputSpeed)
+	allowance, _ := n.segments.Allowance(c.OutputSpeed)
 	// Reasoning counts against a segment while it streams, so a model that reasons must show it in the stream the
 	// gateway reads: the format the endpoint is called in, not the client's, since a converted call is metered where it
 	// is made. A model without the ability has no reasoning to miss.
@@ -246,7 +250,7 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	// would reserve a fraction of an amount the documentation promises whole (docs/domains/billing.md「决策与理由」).
 	segmentable := !n.in.NoSegments && n.req.Format != protocol.Completions && c.Streams && c.Cancels &&
 		(!reasoning || c.ReasoningVisible.Has(format)) && !n.req.HidesReasoning && c.OutputSpeed > 0 &&
-		r.cfg.Segments.Output > 0 && out > r.cfg.Segments.Output+allowance
+		n.segments.Output > 0 && out > n.segments.Output+allowance
 	target := c.Target
 	target.Format = format
 	target.Streams = c.Streams // the request sent asks for a stream, which the gateway relays or aggregates

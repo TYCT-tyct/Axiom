@@ -125,7 +125,7 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 		calls.handler)
 	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger})
 	public = withPaymentCallbacks(public, pay.Notify())
-	adminAPI := newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger)
+	adminAPI := newAdminAPI(version(), gateway.DefaultConfig(), service, cat, supplierAdmin, calls.upstreams, db, logger)
 	adminAPI.keys, adminAPI.exit, adminAPI.smtp, adminAPI.search = p.master, exit, p.cfg.smtp, p.cfg.search
 	adminAPI.fileParser = p.cfg.fileParser
 	admin := adminRoutes(adminAPI,

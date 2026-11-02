@@ -13,6 +13,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
+	"axiom/internal/gateway"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
@@ -114,7 +115,7 @@ func startAdminNodeVia(c commandLine, clock *testClock, exit *egress.Client) adm
 	if err := upstreams.Reload(c.t.Context()); err != nil {
 		c.t.Fatal(err)
 	}
-	api := newAdminAPI("test", svc, cat, supplierAdmin, upstreams, c.db, logger)
+	api := newAdminAPI("test", gateway.DefaultConfig(), svc, cat, supplierAdmin, upstreams, c.db, logger)
 	api.keys, api.exit = masterKeys(c.t), exit
 	routes := adminRoutes(api, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
 	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, upstreams: upstreams}

@@ -5,14 +5,17 @@ import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
+import { useDuration } from "../durations";
 import { FileParserSettings } from "../file-parser-settings";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { MailSettings } from "../mail-settings";
 import { Facts, PageBody, State } from "../parts";
 import { PaymentsSettings } from "../payments-settings";
+import { ProbeSettings } from "../probe-settings";
 import { accountQuery, siteKeyLimitsQuery, siteSettingsQuery } from "../queries";
 import { SiteRegistration } from "../registration";
 import { SearchSettings } from "../search-settings";
+import { SegmentSettings } from "../segment-settings";
 import { SiteSignIn } from "../sign-in";
 import { SiteInformation } from "../site-info";
 import { SiteLogo } from "../site-logo";
@@ -48,6 +51,8 @@ export default function SettingsPage() {
               <MailSettings />
               <SearchSettings />
               <FileParserSettings />
+              <SegmentSettings />
+              <ProbeSettings />
               <PaymentsSettings siteId={account.site_id} currency={account.balance.balance.currency} />
             </>
           )}
@@ -90,29 +95,6 @@ function SiteKeyLimits({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
       )}
     </DataState>
   );
-}
-
-// seconds as the largest units that hold it: 172800 as "2 days".
-function useDuration() {
-  const { i18n } = useTranslation();
-  return (seconds: number) => {
-    const units = [
-      ["day", 86_400],
-      ["hour", 3_600],
-      ["minute", 60],
-      ["second", 1],
-    ] as const;
-    let rest = seconds;
-    const parts: string[] = [];
-    for (const [unit, size] of units) {
-      const count = Math.floor(rest / size);
-      rest -= count * size;
-      if (count > 0) {
-        parts.push(new Intl.NumberFormat(i18n.language, { style: "unit", unit, unitDisplay: "long" }).format(count));
-      }
-    }
-    return parts.join(" ");
-  };
 }
 
 function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: AdminSchemas["SiteSettingsView"] }) {

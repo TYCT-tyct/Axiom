@@ -152,7 +152,7 @@ func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 
 func ledgerRig(t *testing.T) *rig {
 	return newRig(t, func(o *rigOptions) {
-		o.config = func(c *Config) { c.SegmentOutput, c.SegmentOvershoot = 100, time.Second }
+		o.segments = billing.Segments{Output: 100, Overshoot: time.Second}
 		o.endpoints = func(_ string, e *routing.Endpoint) {
 			e.OutputSpeed, e.Target = 100, protocol.Target{Model: "up"}
 		}

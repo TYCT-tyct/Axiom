@@ -207,7 +207,7 @@ func TestProbeBackoffIsBoundedWithJitter(t *testing.T) {
 		previous := time.Duration(0)
 		for level := range 20 {
 			d := m.delay(level)
-			if d < probeBase || d > probeMax || d < previous {
+			if d < defaultProbeBase || d > probeMax || d < previous {
 				t.Fatalf("jitter=%v level=%d delay=%v", u, level, d)
 			}
 			previous = d

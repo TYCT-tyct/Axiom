@@ -311,6 +311,16 @@ export const systemSettingsQuery = (siteId: AdminSchemas["SiteId"]) =>
       ),
   });
 
+export const segmentSettingsQuery = queryOptions({
+  queryKey: [accountKey, "segment-settings"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/segments`, { signal })),
+});
+
+export const probeSettingsQuery = queryOptions({
+  queryKey: [accountKey, "probe-settings"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/quality-probes`, { signal })),
+});
+
 export const mailSettingsQuery = queryOptions({
   queryKey: [accountKey, "mail-settings"],
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/mail`, { signal })),

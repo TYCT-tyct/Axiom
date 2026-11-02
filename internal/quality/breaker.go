@@ -20,7 +20,6 @@ const (
 const (
 	windowSize = 32
 	windowIdle = 10 * time.Minute
-	probeBase  = 30 * time.Second
 	probeMax   = 10 * time.Minute
 	slowStart  = time.Minute
 )
@@ -210,11 +209,15 @@ func (m *Monitor) transition(e *State, r healthRecord, kind string, probe bool) 
 }
 
 func (m *Monitor) delay(level int) time.Duration {
-	d := min(probeBase*time.Duration(1<<uint(min(level, 5))), probeMax)
+	base := defaultProbeBase
+	if m.loop != nil {
+		base = m.loop.currentSettings().ProbeBase
+	}
+	d := min(base*time.Duration(1<<uint(min(level, 5))), probeMax)
 	if m.loop == nil {
 		return d
 	}
-	return max(probeBase, min(time.Duration(float64(d)*(.75+.5*m.loop.rand())), probeMax))
+	return max(base, min(time.Duration(float64(d)*(.75+.5*m.loop.rand())), probeMax))
 }
 
 func (m *Monitor) recover(e *State, v verdict, o *Observation) {

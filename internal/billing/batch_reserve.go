@@ -281,7 +281,7 @@ func (b *Billing) quoteOne(r ReserveRequest, src batchSources, avail []Available
 	if err != nil {
 		return quotedReservation{}, err
 	}
-	quote, err := Quote(r.Demand, q, b.config.Segments, avail)
+	quote, err := Quote(r.Demand, q, b.config.Segments.Load(), avail)
 	if insufficient, ok := errors.AsType[*Insufficient](err); ok {
 		return quotedReservation{}, r.Admitted.transient(insufficient)
 	} else if err != nil {
