@@ -128,22 +128,21 @@ func recordEvent(ctx context.Context, tx pg.Tx, c change) error {
 	if at == 0 {
 		at = c.record.Restored
 	}
-	if c.kind != "still_down" {
-		// Retain the first transition and coalesce further flapping in its ten-minute group.
-		tag, err := tx.Exec(ctx, `UPDATE quality.health_events SET occurrences=occurrences+1,signal_epoch=$3,signal_kind=$4
+	// Retain the first transition and coalesce further changes in its ten-minute group. The group's kind says what the
+	// endpoint is doing now: offline once a failed re-check confirms it, flapping once it came back.
+	tag, err := tx.Exec(ctx, `UPDATE quality.health_events SET occurrences=occurrences+1,signal_epoch=$3,signal_kind=$4,
+   kind=CASE WHEN $4='offline' THEN 'offline' ELSE 'flapping' END
    WHERE endpoint_id=$1 AND epoch=(SELECT max(epoch) FROM quality.health_events WHERE endpoint_id=$1)
-   AND at >= $2 AND mode=$5 AND kind IN ('removed','owned_endpoint_removed','restored','would_remove','would_restore','flapping')`, c.record.ID, at-int64(windowIdle), c.record.Epoch, c.kind, c.record.Mode)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() > 0 {
-			_, err = tx.Exec(ctx, `UPDATE quality.health_events SET kind='flapping' WHERE endpoint_id=$1
-    AND epoch=(SELECT max(epoch) FROM quality.health_events WHERE endpoint_id=$1)`, c.record.ID)
-			return err
-		}
+   AND at >= $2 AND mode=$5 AND kind IN ('removed','owned_endpoint_removed','offline','restored','would_remove','would_restore','flapping')`,
+		c.record.ID, at-int64(windowIdle), c.record.Epoch, c.kind, c.record.Mode)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
 	}
 
-	_, err := tx.Exec(ctx, `INSERT INTO quality.health_events (endpoint_id,epoch,at,kind,cause,failures,sources,request_id,signal_epoch,signal_kind,mode)
+	_, err = tx.Exec(ctx, `INSERT INTO quality.health_events (endpoint_id,epoch,at,kind,cause,failures,sources,request_id,signal_epoch,signal_kind,mode)
    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$2,$4,$9)`, c.record.ID, c.record.Epoch, at, c.kind, c.record.Cause, c.record.Failures, c.record.Sources, c.record.Request, c.record.Mode)
 	return err
 }
@@ -192,6 +191,8 @@ func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) e
 		e.mu.Lock()
 		loaded := e.loaded
 		e.owned = !ep.Platform()
+		_, generation := probeFormat(ep.Formats)
+		e.probeable = ep.Platform() && generation
 		e.lastSeen = m.loop.now()
 		e.mu.Unlock()
 		if loaded {

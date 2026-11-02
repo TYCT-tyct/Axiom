@@ -60,8 +60,6 @@ type Observation struct {
 	Fault protocol.Fault
 	Cut   Cut
 	Gone  bool // the client had left
-	// BreakerFallback says routing deliberately admitted this attempt as a breaker last resort.
-	BreakerFallback bool
 	// Delivered is set when the commit point came while the client was still there: the first content was the
 	// client's. A client that left before it may still have its upstream read on, for the usage, without it.
 	Delivered bool
@@ -126,6 +124,7 @@ type State struct {
 	window      window
 	record      healthRecord
 	owned       bool
+	probeable   bool // a platform endpoint with a generation format: the only kind the loop can re-check
 	loaded      bool
 	pending     int
 	successes   int
@@ -314,6 +313,19 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	return out
 }
 
+// probeFormat picks the call format a health probe uses: the first generation format the endpoint serves. Embeddings,
+// rerank and other direct formats cannot answer a generation probe, so an endpoint that serves only those is not probed.
+func probeFormat(formats []protocol.Format) (protocol.Format, bool) {
+	for _, f := range formats {
+		switch f {
+		case protocol.Messages, protocol.Responses, protocol.Chat, protocol.Completions:
+			return f, true
+		case protocol.Embeddings, protocol.Rerank: // direct formats cannot answer a generation
+		}
+	}
+	return 0, false
+}
+
 func (m *Monitor) of(id suppliers.EndpointID) *State {
 	m.mu.RLock()
 	e := m.endpoints[id]
@@ -326,7 +338,7 @@ func (m *Monitor) of(id suppliers.EndpointID) *State {
 	if e = m.endpoints[id]; e == nil {
 		_, collected := m.collected[id]
 		delete(m.collected, id)
-		e = &State{id: id, mode: m.mode, loaded: !collected}
+		e = &State{id: id, mode: m.mode, probeable: true, loaded: !collected}
 		m.endpoints[id] = e
 	}
 	return e

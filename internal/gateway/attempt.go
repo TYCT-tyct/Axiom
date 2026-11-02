@@ -255,7 +255,6 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	}
 	a.obs.Endpoint, a.obs.Sent = uuid.UUID(entry.Endpoint), time.Now()
 	a.obs.Source = uuid.UUID(s.c.Admission.OwnerID())
-	a.obs.BreakerFallback = entry.BreakerFallback
 	a.obs.Request = s.c.ID
 	a.first = s.begin(entry, kept, false)
 	a.i = a.first

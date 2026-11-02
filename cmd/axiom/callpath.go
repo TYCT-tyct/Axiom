@@ -320,7 +320,7 @@ func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Log
 	}
 }
 
-// salePrices only reads published heads. Local cost checks may withhold a model, but never change shared publication
+// salePrices only reads published heads. Local cost checks may withhold an endpoint, but never change shared publication
 // state: nodes with different adapters or key versions must not publish different evidence.
 func salePrices(db *pg.DB, sites *accounts.Service) func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
 	return func(ctx context.Context, snap *catalog.Snapshot, endpoints []suppliers.Routable, rates []platform.ExchangeRate) (sold map[catalog.ModelID]billing.Sold, err error) {
