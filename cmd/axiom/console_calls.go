@@ -106,7 +106,7 @@ func callBody(c observability.OwnCall) consoleapi.Call {
 		Model: c.Model, Usage: usage, ServiceTier: c.ServiceTier,
 		PriceVersion: optionalText(c.PriceVersion), Price: consoleapi.Money{Amount: strconv.FormatInt(c.PriceNano, 10), Currency: c.Currency},
 		Free: c.Free, LatencyMs: int(c.Latency.Milliseconds()), FirstTokenMs: int(c.FirstToken.Milliseconds()),
-		FinishReason: c.FinishReason, ErrorKind: c.ErrorKind,
+		FinishReason: c.FinishReason, ErrorKind: c.ErrorKind, CacheHit: &c.CacheHit,
 	}
 }
 

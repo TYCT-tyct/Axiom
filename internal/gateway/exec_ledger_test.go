@@ -139,6 +139,7 @@ func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 		Router: r.router, Upstreams: up, Limits: r.limits, Memory: r.memory, Logger: slog.New(slog.NewTextHandler(logWriter{r.t}, nil)),
 		Ledger: ledger, Costs: costs, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
 		Outstanding: r.handler.Outstanding, // one node: the handler's requests and the executor's calls on one count
+		Cache:       r.cache,
 	})
 	if err != nil {
 		r.t.Fatal(err)
@@ -150,12 +151,19 @@ func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 	return up
 }
 
-func ledgerRig(t *testing.T) *rig {
+func ledgerRig(t *testing.T) *rig { return ledgerRigWith(t, false) }
+
+// ledgerRigNoCacheWriter leaves the response-cache writer stopped, so a test can inspect the queue directly after the
+// request handler has finished.
+func ledgerRigNoCacheWriter(t *testing.T) *rig { return ledgerRigWith(t, true) }
+
+func ledgerRigWith(t *testing.T, noCacheWriter bool) *rig {
 	return newRig(t, func(o *rigOptions) {
 		o.config = func(c *Config) { c.SegmentOutput, c.SegmentOvershoot = 100, time.Second }
 		o.endpoints = func(_ string, e *routing.Endpoint) {
 			e.OutputSpeed, e.Target = 100, protocol.Target{Model: "up"}
 		}
+		o.noCacheWriter = noCacheWriter
 	})
 }
 
