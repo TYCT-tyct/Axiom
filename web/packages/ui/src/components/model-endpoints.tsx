@@ -6,8 +6,9 @@ import { Badge, Table, Td, Th } from "./panel";
 
 // EndpointSection lists every group that serves the model under the codename routing accepts. Each row carries the
 // attributes that have no column at this width, its own base prices and a full schedule, so a reader can see that the
-// headline is the cheapest endpoint, not the only one.
-export function EndpointSection({ model }: { model: PublicModel }) {
+// headline is the cheapest endpoint, not the only one. showPrices is false when the site keeps its prices to signed-in
+// members: the endpoints and their attributes stay, the price columns and schedules go.
+export function EndpointSection({ model, showPrices }: { model: PublicModel; showPrices: boolean }) {
   const { t } = useTranslation("common");
   if (model.endpoints === undefined) {
     return (
@@ -30,13 +31,17 @@ export function EndpointSection({ model }: { model: PublicModel }) {
             <Th className="hidden text-right md:table-cell">{t("publicModels.context")}</Th>
             <Th className="hidden text-right lg:table-cell">{t("publicModels.maxOutput")}</Th>
             <Th className="hidden 2xl:table-cell">{t("publicModels.ability")}</Th>
-            <Th className="hidden text-right sm:table-cell">{t("publicModels.item.input")}</Th>
-            <Th className="hidden text-right sm:table-cell">{t("publicModels.item.output")}</Th>
+            {showPrices ? (
+              <>
+                <Th className="hidden text-right sm:table-cell">{t("publicModels.item.input")}</Th>
+                <Th className="hidden text-right sm:table-cell">{t("publicModels.item.output")}</Th>
+              </>
+            ) : null}
           </tr>
         </thead>
         <tbody>
           {model.endpoints.map((endpoint) => (
-            <EndpointRow key={endpoint.name} model={model} endpoint={endpoint} />
+            <EndpointRow key={endpoint.name} model={model} endpoint={endpoint} showPrices={showPrices} />
           ))}
         </tbody>
       </Table>
@@ -44,12 +49,20 @@ export function EndpointSection({ model }: { model: PublicModel }) {
   );
 }
 
-function EndpointRow({ model, endpoint }: { model: PublicModel; endpoint: PublicEndpoint }) {
+function EndpointRow({
+  model,
+  endpoint,
+  showPrices,
+}: {
+  model: PublicModel;
+  endpoint: PublicEndpoint;
+  showPrices: boolean;
+}) {
   const format = useFormat();
   return (
     <>
       <tr>
-        <EndpointIdentity endpoint={endpoint} />
+        <EndpointIdentity endpoint={endpoint} showPrices={showPrices} />
         <Td className="hidden text-right whitespace-nowrap tabular-nums md:table-cell">
           {endpoint.context_length ? format.number(endpoint.context_length) : "—"}
         </Td>
@@ -59,19 +72,23 @@ function EndpointRow({ model, endpoint }: { model: PublicModel; endpoint: Public
         <Td className="hidden 2xl:table-cell">
           <EndpointAbilities endpoint={endpoint} />
         </Td>
-        <Td className="hidden text-right tabular-nums sm:table-cell">
-          <PricingPrice pricing={endpoint.pricing} item="input" />
-        </Td>
-        <Td className="hidden text-right tabular-nums sm:table-cell">
-          <PricingPrice pricing={endpoint.pricing} item="output" />
-        </Td>
+        {showPrices ? (
+          <>
+            <Td className="hidden text-right tabular-nums sm:table-cell">
+              <PricingPrice pricing={endpoint.pricing} item="input" />
+            </Td>
+            <Td className="hidden text-right tabular-nums sm:table-cell">
+              <PricingPrice pricing={endpoint.pricing} item="output" />
+            </Td>
+          </>
+        ) : null}
       </tr>
-      <EndpointPriceDetails model={model} endpoint={endpoint} />
+      {showPrices ? <EndpointPriceDetails model={model} endpoint={endpoint} /> : null}
     </>
   );
 }
 
-function EndpointIdentity({ endpoint }: { endpoint: PublicEndpoint }) {
+function EndpointIdentity({ endpoint, showPrices }: { endpoint: PublicEndpoint; showPrices: boolean }) {
   const { t } = useTranslation("common");
   const format = useFormat();
   return (
@@ -108,16 +125,18 @@ function EndpointIdentity({ endpoint }: { endpoint: PublicEndpoint }) {
         <span>{t("publicModels.ability")}</span>
         <EndpointAbilities endpoint={endpoint} fallback />
       </div>
-      <div className="mt-1 grid grid-cols-2 gap-x-3 text-label tabular-nums sm:hidden">
-        <span>
-          <span className="text-t3">{t("publicModels.item.input")} </span>
-          <PricingPrice pricing={endpoint.pricing} item="input" />
-        </span>
-        <span>
-          <span className="text-t3">{t("publicModels.item.output")} </span>
-          <PricingPrice pricing={endpoint.pricing} item="output" />
-        </span>
-      </div>
+      {showPrices ? (
+        <div className="mt-1 grid grid-cols-2 gap-x-3 text-label tabular-nums sm:hidden">
+          <span>
+            <span className="text-t3">{t("publicModels.item.input")} </span>
+            <PricingPrice pricing={endpoint.pricing} item="input" />
+          </span>
+          <span>
+            <span className="text-t3">{t("publicModels.item.output")} </span>
+            <PricingPrice pricing={endpoint.pricing} item="output" />
+          </span>
+        </div>
+      ) : null}
     </Td>
   );
 }

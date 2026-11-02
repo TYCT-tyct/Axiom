@@ -157,6 +157,33 @@ func TestSiteSettingsKeepPreferenceReadsUnderTheLock(t *testing.T) {
 	}
 }
 
+// TestSiteSettingsKeepModelPricesPublic: a site that sets nothing is public, the setting reaches the snapshot, and an
+// older page that omits it keeps the stored false instead of making prices public again.
+func TestSiteSettingsKeepModelPricesPublic(t *testing.T) {
+	t.Parallel()
+	o := newSettingsOf(t)
+	site, ok := o.s.Site(accounts.SiteID(s1))
+	if !ok || !site.ModelPricesPublic {
+		t.Fatalf("a site with no settings row: %+v, want prices public", site)
+	}
+	hidden := false
+	if err := o.write(s1, accounts.SiteSettings{ModelPricesPublic: &hidden}); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.s.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if site, _ = o.s.Site(accounts.SiteID(s1)); site.ModelPricesPublic {
+		t.Fatal("the snapshot still publishes prices after the site hid them")
+	}
+	if err := o.write(s1, accounts.SiteSettings{AdminIdle: time.Hour, KeepModelPricesPublic: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := o.mustRead(s1); got.ModelPricesPublic == nil || *got.ModelPricesPublic {
+		t.Errorf("prices public after an omitted field: %v, want the stored false", got.ModelPricesPublic)
+	}
+}
+
 func TestSiteSettingsRefusals(t *testing.T) {
 	t.Parallel()
 	o := newSettingsOf(t)

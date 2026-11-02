@@ -36,6 +36,7 @@ func TestSiteSettings(t *testing.T) {
 		ConsoleIdleTimeoutSeconds: new(7 * 24 * 3600), ConsoleMaxAgeSeconds: new(30 * 24 * 3600),
 		AdminIdleTimeoutSeconds: new(1800), AdminMaxAgeSeconds: new(12 * 3600),
 		NewKeyDailyLimit:  &adminapi.Money{Amount: "10000000000", Currency: "USD"},
+		ModelPricesPublic: new(true),
 		BillingPreference: new(adminapi.BillingPreferenceName("subscription_first")),
 	}
 	if diff := cmp.Diff(adminapi.SiteSettingsView{Defaults: defaults}, f.getSettings(s, site)); diff != "" {
@@ -67,6 +68,7 @@ func TestSiteSettings(t *testing.T) {
 		"coalesce(detail->'after'->>'admin_max_age_seconds', 'none')":      "7200",
 		"coalesce(detail->'after'->>'new_key_daily_limit', 'none')":        "5000000000",
 		"coalesce(detail->'after'->>'admin_idle_timeout_seconds', 'none')": "none",
+		"coalesce(detail->'after'->>'model_prices_public', 'none')":        "none",
 		"coalesce(detail->'before'->>'admin_max_age_seconds', 'none')":     "none",
 	})
 
@@ -92,6 +94,41 @@ func TestSiteSettings(t *testing.T) {
 	}
 	if f.auditCount("site_settings.update") != "2" {
 		t.Errorf("%s audit entries, want 2", f.auditCount("site_settings.update"))
+	}
+
+	checkModelPricesVisibility(t, f, s, site, defaults)
+}
+
+// checkModelPricesVisibility hides the site's prices, checks the stored value and the audit entry, then saves another
+// setting from a page built before the field existed and checks the stored false survives.
+func checkModelPricesVisibility(t *testing.T, f adminFixture, s session, site string, defaults adminapi.SiteSettings) {
+	t.Helper()
+	hidden := false
+	rec := f.change(s, http.MethodPut, "/sites/"+site+"/settings", `{"settings":{"model_prices_public":false},"reason":"members only"}`, newKey())
+	expectAdmin(t, "prices kept to members", rec, http.StatusOK, "")
+	wantHidden := adminapi.SiteSettingsView{Settings: adminapi.SiteSettings{ModelPricesPublic: &hidden}, Defaults: defaults}
+	if diff := cmp.Diff(wantHidden, f.getSettings(s, site)); diff != "" {
+		t.Errorf("the settings after hiding prices (-want +got):\n%s", diff)
+	}
+	if got := f.text(`SELECT coalesce(detail->'after'->>'model_prices_public', 'none') FROM platform.audit_log
+		WHERE action = 'site_settings.update' ORDER BY id DESC LIMIT 1`); got != "false" {
+		t.Errorf("the audit entry says model_prices_public %q, want false", got)
+	}
+	if got := f.text(`SELECT reason FROM platform.audit_log
+		WHERE action = 'site_settings.update' ORDER BY id DESC LIMIT 1`); got != "members only" {
+		t.Errorf("the audit entry's reason is %q, want members only", got)
+	}
+	rec = f.change(s, http.MethodPut, "/sites/"+site+"/settings", `{"settings":{"admin_idle_timeout_seconds":900},"reason":"an old page"}`, newKey())
+	expectAdmin(t, "an old page's replacement", rec, http.StatusOK, "")
+	wantOld := adminapi.SiteSettingsView{
+		Settings: adminapi.SiteSettings{AdminIdleTimeoutSeconds: new(900), ModelPricesPublic: &hidden},
+		Defaults: defaults,
+	}
+	if diff := cmp.Diff(wantOld, f.getSettings(s, site)); diff != "" {
+		t.Errorf("the settings after an old page's replacement (-want +got):\n%s", diff)
+	}
+	if f.auditCount("site_settings.update") != "4" {
+		t.Errorf("%s audit entries, want 4", f.auditCount("site_settings.update"))
 	}
 }
 

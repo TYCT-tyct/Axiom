@@ -365,7 +365,7 @@ SELECT coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint A
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
-    t.new_key_daily_limit, p.preference AS billing_preference
+    t.new_key_daily_limit, t.model_prices_public, p.preference AS billing_preference
 FROM accounts.sites s
 LEFT JOIN accounts.site_settings t ON t.site_id = s.id
 LEFT JOIN accounts.site_billing_preferences p ON p.site_id = s.id
@@ -378,6 +378,7 @@ type ReadSiteSettingsRow struct {
 	AdminIdleSeconds     int64
 	AdminMaxAgeSeconds   int64
 	NewKeyDailyLimit     *int64
+	ModelPricesPublic    *bool
 	BillingPreference    *string
 }
 
@@ -398,6 +399,7 @@ func (q *Queries) ReadSiteSettings(ctx context.Context, db DBTX, siteID uuid.UUI
 			&i.AdminIdleSeconds,
 			&i.AdminMaxAgeSeconds,
 			&i.NewKeyDailyLimit,
+			&i.ModelPricesPublic,
 			&i.BillingPreference,
 		); err != nil {
 			return nil, err
@@ -545,14 +547,16 @@ func (q *Queries) WriteSiteRegistrationSettings(ctx context.Context, db DBTX, ar
 
 const writeSiteSettings = `-- name: WriteSiteSettings :exec
 INSERT INTO accounts.site_settings (site_id, console_idle_timeout, console_max_age, admin_idle_timeout, admin_max_age,
-    new_key_daily_limit)
+    new_key_daily_limit, model_prices_public)
 VALUES ($1, make_interval(secs => $2::bigint),
     make_interval(secs => $3::bigint),
     make_interval(secs => $4::bigint),
-    make_interval(secs => $5::bigint), $6::bigint)
+    make_interval(secs => $5::bigint), $6::bigint,
+    $7::boolean)
 ON CONFLICT (site_id) DO UPDATE SET console_idle_timeout = excluded.console_idle_timeout,
     console_max_age = excluded.console_max_age, admin_idle_timeout = excluded.admin_idle_timeout,
-    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit
+    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit,
+    model_prices_public = excluded.model_prices_public
 `
 
 type WriteSiteSettingsParams struct {
@@ -562,6 +566,7 @@ type WriteSiteSettingsParams struct {
 	AdminIdleSeconds     *int64
 	AdminMaxAgeSeconds   *int64
 	NewKeyDailyLimit     *int64
+	ModelPricesPublic    *bool
 }
 
 // Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
@@ -574,6 +579,7 @@ func (q *Queries) WriteSiteSettings(ctx context.Context, db DBTX, arg WriteSiteS
 		arg.AdminIdleSeconds,
 		arg.AdminMaxAgeSeconds,
 		arg.NewKeyDailyLimit,
+		arg.ModelPricesPublic,
 	)
 	return err
 }

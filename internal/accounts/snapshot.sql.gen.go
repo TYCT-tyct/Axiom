@@ -88,7 +88,8 @@ SELECT s.id, s.is_main, s.name, s.status, s.key_prefix, s.registration, s.curren
     t.ip_attempt_burst, t.ip_attempts_per_minute, t.email_sign_in_failures, t.user_code_failures,
     t.challenge_code_attempts, t.max_keys_per_account, t.key_creations_per_hour,
     t.registration_human_check, t.registration_human_check_bits, t.registration_domain_burst,
-    t.registration_domain_per_hour, t.registration_domain_allow, t.registration_domain_deny
+    t.registration_domain_per_hour, t.registration_domain_allow, t.registration_domain_deny,
+    coalesce(t.model_prices_public, true) AS model_prices_public
 FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id
 `
 
@@ -123,6 +124,7 @@ type ListSitesRow struct {
 	RegistrationDomainPerHour  *int32
 	RegistrationDomainAllow    []string
 	RegistrationDomainDeny     []string
+	ModelPricesPublic          bool
 }
 
 // The snapshot's tables, read whole in the platform scope (README.md「快照」). A session length of 0 is unset: the
@@ -167,6 +169,7 @@ func (q *Queries) ListSites(ctx context.Context, db DBTX) ([]ListSitesRow, error
 			&i.RegistrationDomainPerHour,
 			&i.RegistrationDomainAllow,
 			&i.RegistrationDomainDeny,
+			&i.ModelPricesPublic,
 		); err != nil {
 			return nil, err
 		}

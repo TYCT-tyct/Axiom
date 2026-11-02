@@ -38,6 +38,7 @@ func settingsBody(v accounts.SiteSettings, currency platform.Currency) adminapi.
 	body := adminapi.SiteSettings{
 		ConsoleIdleTimeoutSeconds: seconds(v.ConsoleIdle), ConsoleMaxAgeSeconds: seconds(v.ConsoleMaxAge),
 		AdminIdleTimeoutSeconds: seconds(v.AdminIdle), AdminMaxAgeSeconds: seconds(v.AdminMaxAge),
+		ModelPricesPublic: v.ModelPricesPublic,
 	}
 	if v.NewKeyDailyLimit != nil {
 		limit := adminMoney(*v.NewKeyDailyLimit, currency)
@@ -68,6 +69,7 @@ func settingsOf(b adminapi.SiteSettings, currency platform.Currency) (accounts.S
 	v := accounts.SiteSettings{
 		ConsoleIdle: duration(b.ConsoleIdleTimeoutSeconds), ConsoleMaxAge: duration(b.ConsoleMaxAgeSeconds),
 		AdminIdle: duration(b.AdminIdleTimeoutSeconds), AdminMaxAge: duration(b.AdminMaxAgeSeconds),
+		ModelPricesPublic: b.ModelPricesPublic,
 	}
 	if b.BillingPreference != nil {
 		v.BillingPreference = string(*b.BillingPreference)
@@ -97,8 +99,9 @@ func (a adminAPI) GetSiteSettings(ctx context.Context, request adminapi.GetSiteS
 	return adminapi.GetSiteSettings200JSONResponse(settingsView(own, site.Currency)), nil
 }
 
-// UpdateSiteSettings replaces a site's own settings. Sessions shorter than before end on their next request: this node
-// reloads the sites at once, the others within their reload interval.
+// UpdateSiteSettings replaces a site's own settings. A field a page built before it existed omits keeps its stored
+// value: the page would otherwise make a site's prices public again by saving an unrelated setting. Sessions shorter
+// than before end on their next request; this node reloads the sites at once, the others within their reload interval.
 func (a adminAPI) UpdateSiteSettings(ctx context.Context, request adminapi.UpdateSiteSettingsRequestObject) (adminapi.UpdateSiteSettingsResponseObject, error) {
 	id, site, err := a.siteOf(request.SiteId)
 	if err != nil {
@@ -108,6 +111,7 @@ func (a adminAPI) UpdateSiteSettings(ctx context.Context, request adminapi.Updat
 	if err != nil {
 		return nil, err
 	}
+	set.KeepModelPricesPublic = request.Body.Settings.ModelPricesPublic == nil
 	set.KeepBillingPreference = request.Body.Settings.BillingPreference == nil
 	view, replayed, err := idempotently(ctx, a.db, "updateSiteSettings", request.Params.IdempotencyKey, []any{request.SiteId, request.Body},
 		func(tx pg.Tx) (adminapi.SiteSettingsView, error) {

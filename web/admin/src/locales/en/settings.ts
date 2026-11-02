@@ -17,12 +17,20 @@ export default {
     admin_idle_timeout_seconds: "Admin: idle time before a session ends",
     admin_max_age_seconds: "Admin: longest a session lasts",
     new_key_daily_limit: "Daily spend limit of a new key",
+    model_prices_public: "Model prices are public",
     billing_preference: "Default funding order",
   },
   hint: "In seconds, from {{min}} to {{max}}. Empty uses the default ({{default}}).",
   limitHint: "An amount in {{currency}}, 0 to 1,000,000, up to 9 decimals. Empty uses the default.",
   invalidRange: "Times are whole seconds within the range shown.",
   invalidLimit: "The daily limit of a new key is an amount in {{currency}} from 0 to 1,000,000, with up to 9 decimals.",
+  publicPrices: {
+    hint: "Visitors who are not signed in see the site's prices on the models page. Signed-in members always see their account's prices.",
+    values: {
+      public: "Public",
+      private: "Signed-in members only",
+    },
+  },
   billing: {
     title: "Funding order",
     hint: 'What an account uses until it chooses its own. A request uses one source; the two "only" orders do not fall back.',

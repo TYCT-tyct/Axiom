@@ -15,12 +15,20 @@ export default {
     admin_idle_timeout_seconds: "管理后台：闲置多久后会话失效",
     admin_max_age_seconds: "管理后台：会话最长保持多久",
     new_key_daily_limit: "新 key 的每日花费上限",
+    model_prices_public: "公开模型价格",
     billing_preference: "默认扣费顺序",
   },
   hint: "单位是秒，范围 {{min}} 到 {{max}}。留空用默认值（{{default}}）。",
   limitHint: "金额（{{currency}}），0 到 1,000,000，最多 9 位小数。留空用默认值。",
   invalidRange: "时间要填整数秒，并且在提示的范围内。",
   invalidLimit: "新 key 的每日上限要填 0 到 1,000,000 之间的{{currency}}金额，最多 9 位小数。",
+  publicPrices: {
+    hint: "未登录的访客能在模型页看到本站价格；登录用户始终能看到自己账户的价格。",
+    values: {
+      public: "公开",
+      private: "仅登录用户可见",
+    },
+  },
   billing: {
     title: "扣费顺序",
     hint: "账户自己选择之前用的顺序。一次调用只用一个来源；两个「只扣」的顺序不会改用另一个来源。",
