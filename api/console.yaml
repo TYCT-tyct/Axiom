@@ -341,6 +341,57 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/billing-preference:
+    get:
+      operationId: getBillingPreference
+      tags: [Session]
+      summary: Read your funding order
+      description: >-
+        Which source your calls use first, and whether you chose it or the site's default applies
+        (docs/domains/billing.md「资金来源」).
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The funding order in force.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BillingPreference"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setBillingPreference
+      tags: [Session]
+      summary: Choose your funding order
+      description: >-
+        Sets your account's own order. `site` clears it so the site's default applies again. A value outside the enum
+        is a 400.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BillingPreferenceRequest"}
+      responses:
+        "200":
+          description: The funding order now in force.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BillingPreference"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/announcements:
     get:
       operationId: listAnnouncements
@@ -2567,6 +2618,31 @@ components:
       enum: [token, use, piece, second, character]
     SiteId: {type: string, pattern: '^site_[0-9a-hjkmnp-tv-z]{26}$', description: "A site's ID (TypeID)."}
     AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
+    BillingPreferenceName:
+      type: string
+      enum: [subscription_first, wallet_first, subscription_only, wallet_only]
+      description: >-
+        Which source a call uses first. `subscription_first` uses the plan and falls back to the wallet; `wallet_first`
+        the reverse; `subscription_only` and `wallet_only` do not fall back (docs/domains/billing.md「资金来源」).
+    BillingPreference:
+      type: object
+      required: [preference, source, site_default]
+      properties:
+        preference: {$ref: "#/components/schemas/BillingPreferenceName"}
+        source:
+          type: string
+          enum: [account, site]
+          description: "`account` when you chose it; `site` when the site's default applies."
+        site_default: {$ref: "#/components/schemas/BillingPreferenceName"}
+    BillingPreferenceRequest:
+      type: object
+      additionalProperties: false
+      required: [preference]
+      properties:
+        preference:
+          type: string
+          enum: [site, subscription_first, wallet_first, subscription_only, wallet_only]
+          description: "`site` clears your choice."
     Announcement:
       type: object
       additionalProperties: false

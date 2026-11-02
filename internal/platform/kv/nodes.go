@@ -93,13 +93,18 @@ func (h *heartbeat) start(ctx context.Context, nodes int, live *atomic.Int64, m 
 			return err
 		}
 		versions, active := h.report()
-		_, err = tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active)
-   VALUES ($1, $2, '{}', $3, $4)
+		_, err = tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active,
+    supports_billing_preference, billing_preference_session)
+   VALUES ($1, $2, '{}', $3, $4, true, $2)
    ON CONFLICT (id) DO UPDATE SET seen_at = now(), share_session = excluded.share_session, share_view = '{}', share_joining = true,
-    key_versions = excluded.key_versions, key_active = excluded.key_active,
+    key_versions = excluded.key_versions, key_active = excluded.key_active, supports_billing_preference = true,
+    billing_preference_session = excluded.billing_preference_session,
     key_active_since = CASE WHEN platform.nodes.key_active IS DISTINCT FROM excluded.key_active
      THEN now() ELSE platform.nodes.key_active_since END`, h.id, h.session, versions, active)
-		return err
+		if err != nil {
+			return err
+		}
+		return h.recordReadiness(ctx, tx)
 	})
 	if errors.Is(err, errTooMany) {
 		return fmt.Errorf("%s: %d nodes are alive besides this one, which is not fewer than the %d configured: either "+
@@ -121,6 +126,9 @@ func (h *heartbeat) beat(ctx context.Context) (int, error) {
 		if err := h.write(ctx, tx); err != nil {
 			return err
 		}
+		if err := h.recordReadiness(ctx, tx); err != nil {
+			return err
+		}
 		if err := forget(ctx, tx); err != nil {
 			return err
 		}
@@ -133,15 +141,28 @@ func (h *heartbeat) beat(ctx context.Context) (int, error) {
 	return alive, nil
 }
 
+// recordReadiness republishes whether every live node supports the funding preference. Every new node does this on
+// every beat; an old node's row stays false, so a mixed deployment keeps the safe default until the old node is gone.
+func (*heartbeat) recordReadiness(ctx context.Context, tx pg.Tx) error {
+	_, err := tx.Exec(ctx, `INSERT INTO platform.billing_preference_readiness (id, enabled)
+  SELECT true, coalesce(bool_and(coalesce(supports_billing_preference, false)
+    AND billing_preference_session IS NOT NULL AND billing_preference_session = share_session), true)
+  FROM platform.nodes WHERE seen_at > now() - make_interval(secs => $1)
+  ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled, updated_at = clock_timestamp()`, AliveFor.Seconds())
+	return err
+}
+
 // write is this node's row, made or refreshed. now() is the database's clock, so every node's row is aged by one clock
 // and a node's own clock being wrong cannot make it look alive or gone.
 func (h *heartbeat) write(ctx context.Context, tx pg.Tx) error {
 	versions, active := h.report()
-	_, err := tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active)
-  VALUES ($1, $2, '{}', $3, $4)
+	_, err := tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active,
+    supports_billing_preference, billing_preference_session)
+  VALUES ($1, $2, '{}', $3, $4, true, $2)
   ON CONFLICT (id) DO UPDATE SET seen_at = now(),
    share_joining = platform.nodes.share_joining OR platform.nodes.seen_at <= now() - make_interval(secs => $5),
-   key_versions = excluded.key_versions, key_active = excluded.key_active,
+   key_versions = excluded.key_versions, key_active = excluded.key_active, supports_billing_preference = true,
+   billing_preference_session = excluded.billing_preference_session,
    key_active_since = CASE WHEN platform.nodes.key_active IS DISTINCT FROM excluded.key_active
     THEN now() ELSE platform.nodes.key_active_since END
   WHERE platform.nodes.share_session = excluded.share_session`,

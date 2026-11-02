@@ -33,7 +33,9 @@ sql:
         overrides:
           - {db_type: uuid, go_type: {import: uuid, type: UUID}}
   - engine: postgresql
-    schema: [sqlc/schemas.sql, internal/accounts/migrations]
+    # accounts reads the readiness flag the platform heartbeat publishes; the rest of platform's tables stay outside
+    # its queries by convention.
+    schema: [sqlc/schemas.sql, internal/platform/pg/migrations, internal/accounts/migrations]
     queries: internal/accounts/queries
     gen:
       go:

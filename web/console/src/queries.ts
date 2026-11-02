@@ -199,6 +199,11 @@ export const paymentMethodsQuery = (credits: string) =>
     enabled: credits !== "",
   });
 
+export const billingPreferenceQuery = queryOptions({
+  queryKey: [accountKey, "billing-preference"],
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/billing-preference", { signal })),
+});
+
 export const notificationPreferencesQuery = queryOptions({
   queryKey: [accountKey, "notification-preferences"],
   queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/notification-preferences", { signal })),

@@ -29,6 +29,12 @@ type SiteSettings struct {
 	AdminIdle, AdminMaxAge     time.Duration
 	// NewKeyDailyLimit is the daily spend limit a new key gets, in billionths of a credit.
 	NewKeyDailyLimit *int64
+	// BillingPreference is the funding order an account gets until it chooses its own (docs/domains/billing.md
+	// 「资金来源」); empty is unset, which means subscription_first.
+	BillingPreference string
+	// KeepBillingPreference preserves the stored value when an older client omits the field. It is decided under the
+	// site lock, not by a read before it, so a concurrent change cannot be overwritten.
+	KeepBillingPreference bool
 }
 
 // DefaultSiteSettings are the values that apply where a site sets none.
@@ -37,7 +43,7 @@ func DefaultSiteSettings() SiteSettings {
 	return SiteSettings{
 		ConsoleIdle: defaultLifetimes[Console].idle, ConsoleMaxAge: defaultLifetimes[Console].max,
 		AdminIdle: defaultLifetimes[Admin].idle, AdminMaxAge: defaultLifetimes[Admin].max,
-		NewKeyDailyLimit: &limit,
+		NewKeyDailyLimit: &limit, BillingPreference: BillingSubscriptionFirst,
 	}
 }
 
@@ -74,6 +80,9 @@ func (v SiteSettings) Check() error {
 	if l := v.NewKeyDailyLimit; l != nil && (*l < 0 || *l > maxNewKeyDaily) {
 		return &SettingError{"new_key_daily_limit", fmt.Sprintf("must be from 0 to %d billionths of a credit", int64(maxNewKeyDaily))}
 	}
+	if v.BillingPreference != "" && !ValidBillingPreference(v.BillingPreference) {
+		return &SettingError{"billing_preference", "must be subscription_first, wallet_first, subscription_only or wallet_only"}
+	}
 	return nil
 }
 
@@ -87,7 +96,7 @@ func (v SiteSettings) detail() map[string]any {
 	return map[string]any{
 		"console_idle_timeout_seconds": seconds(v.ConsoleIdle), "console_max_age_seconds": seconds(v.ConsoleMaxAge),
 		"admin_idle_timeout_seconds": seconds(v.AdminIdle), "admin_max_age_seconds": seconds(v.AdminMaxAge),
-		"new_key_daily_limit": v.NewKeyDailyLimit,
+		"new_key_daily_limit": v.NewKeyDailyLimit, "billing_preference": v.BillingPreference,
 	}
 }
 
@@ -124,7 +133,7 @@ func (s *Service) SiteSettings(ctx context.Context, tx pg.Tx, site SiteID) (Site
 	return SiteSettings{
 		ConsoleIdle: time.Duration(r.ConsoleIdleSeconds) * time.Second, ConsoleMaxAge: time.Duration(r.ConsoleMaxAgeSeconds) * time.Second,
 		AdminIdle: time.Duration(r.AdminIdleSeconds) * time.Second, AdminMaxAge: time.Duration(r.AdminMaxAgeSeconds) * time.Second,
-		NewKeyDailyLimit: r.NewKeyDailyLimit,
+		NewKeyDailyLimit: r.NewKeyDailyLimit, BillingPreference: derefString(r.BillingPreference),
 	}, nil
 }
 
@@ -144,6 +153,12 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 	}
 	before, err := s.SiteSettings(ctx, tx, site)
 	if err != nil {
+		return err
+	}
+	if set.KeepBillingPreference {
+		set.BillingPreference = before.BillingPreference
+	}
+	if err := s.writeBillingPreference(ctx, tx, site, set.BillingPreference, !set.KeepBillingPreference); err != nil {
 		return err
 	}
 	if err := s.queries.WriteSiteSettings(ctx, tx, WriteSiteSettingsParams{
@@ -168,6 +183,31 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 		Target: audit.Target{Module: "accounts", Kind: "site", ID: site.TypeID(), Site: uuid.UUID(site)},
 		Detail: map[string]any{"before": before.detail(), "after": set.detail()},
 	})
+}
+
+// writeBillingPreference clears or writes the site's default order after checking the rollout gate.
+func (s *Service) writeBillingPreference(ctx context.Context, tx pg.Tx, site SiteID, preference string, enforce bool) error {
+	if enforce && preference != "" && preference != BillingSubscriptionFirst {
+		ready, err := New().BillingPreferenceReady(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			return &SettingError{"billing_preference", "waits for every gateway node to support it"}
+		}
+	}
+	if preference == "" {
+		if err := s.queries.ClearSiteBillingPreference(ctx, tx, uuid.UUID(site)); err != nil {
+			return fmt.Errorf("clear the site's billing preference: %w", err)
+		}
+		return nil
+	}
+	if err := s.queries.SetSiteBillingPreference(ctx, tx, SetSiteBillingPreferenceParams{
+		SiteID: uuid.UUID(site), Preference: preference,
+	}); err != nil {
+		return fmt.Errorf("write the site's billing preference: %w", err)
+	}
+	return nil
 }
 
 // seconds64 is d in whole seconds, nil when it is not set.
@@ -415,4 +455,12 @@ func (s *Service) SetSiteRegistration(ctx context.Context, tx pg.Tx, actor audit
 		Target: audit.Target{Module: "accounts", Kind: "site", ID: site.TypeID(), Site: uuid.UUID(site)},
 		Detail: map[string]any{"before": before.detail(), "after": set.detail()},
 	})
+}
+
+// derefString reads an optional text setting, empty when unset.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

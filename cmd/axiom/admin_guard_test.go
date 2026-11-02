@@ -115,6 +115,8 @@ var adminOperations = []adminOperation{
 	{"updateAccountKeyLimits", http.MethodPut, someAccount + "/key-limits", `{"limits":{},"reason":"r"}`, "sites.manage", true},
 	{"grantCredit", http.MethodPost, someAccount + "/credit-grants", `{"amount":{"amount":"1","currency":"USD"},"reason":"r"}`, "credits.grant", true},
 	{"grantSubscription", http.MethodPost, someAccount + "/subscription-grants", `{"plan_id":"0198c0a8-0000-7000-8000-000000000001","reason":"r"}`, "credits.grant", true},
+	{"refundSubscriptionGrant", http.MethodPost, someAccount + "/subscription-grants/0198c0a8-0000-7000-8000-000000000001/refunds", `{"credits":"1000000000","reason":"r"}`, "credits.grant", true},
+	{"approveSubscriptionRefund", http.MethodPost, someAccount + "/subscription-refunds/0198c0a8-0000-7000-8000-000000000001/approve", `{"reason":"checked"}`, "credits.grant", true},
 	{"listSubscriptions", http.MethodGet, someAccount + "/subscriptions", "", "users.view", false},
 	{"listSubscriptionPlans", http.MethodGet, "/subscription-plans", "", "pricing.view", false},
 	{"createSubscriptionPlan", http.MethodPost, "/subscription-plans", `{"name":"Monthly","price":{"amount":"2000000000","currency":"USD"},"quota":"5000000000","window_seconds":2592000,"term_seconds":2592000,"reason":"r"}`, "pricing.manage", true},

@@ -130,6 +130,33 @@ func TestSiteSettingsAreWrittenWhole(t *testing.T) {
 
 // TestSiteSettingsRefusals: a refused change writes neither the settings nor the entry, and a site that is not there is
 // ErrNotFound for the read and the write alike.
+// TestSiteSettingsKeepPreferenceReadsUnderTheLock: an older page that omits the funding order must not put back a
+// value read before the site lock. The preserve decision is made after the lock, so a concurrent write wins.
+func TestSiteSettingsKeepPreferenceReadsUnderTheLock(t *testing.T) {
+	t.Parallel()
+	o := newSettingsOf(t)
+	stale := o.mustRead(s1) // what a handler that reads before locking would keep
+	if err := o.write(s1, accounts.SiteSettings{BillingPreference: accounts.BillingWalletOnly}); err != nil {
+		t.Fatal(err)
+	}
+	// An old node is live now. An old page that omits the field must still be able to change another setting: the
+	// preserved value is not a new choice, so the rollout gate does not apply to it.
+	if err := o.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO platform.billing_preference_readiness (id, enabled) VALUES (true, false)`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	keep := stale
+	keep.KeepBillingPreference = true
+	if err := o.write(s1, keep); err != nil {
+		t.Fatal(err)
+	}
+	if got := o.mustRead(s1); got.BillingPreference != accounts.BillingWalletOnly {
+		t.Errorf("preference %q after an omitted field, want the concurrent wallet_only", got.BillingPreference)
+	}
+}
+
 func TestSiteSettingsRefusals(t *testing.T) {
 	t.Parallel()
 	o := newSettingsOf(t)

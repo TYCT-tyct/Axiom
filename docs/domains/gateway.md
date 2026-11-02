@@ -228,6 +228,7 @@ TTL 按 OpenRouter 的读法：以开头的十进制数字为准，小数截断�
 | 账户暂停调用，其余 key 条件有效 | 403 `permission_denied`，说明账户暂停调用 | `permission_error` | — |
 | 余额（账户或站点）不够 | 402 `credits_insufficient`，`limit_source` 为 `balance`；会重置的带 `Retry-After` | `billing_error` | 追加预留失败，截断，类型同左 |
 | 工作区预算或 key 上限不够 | 403 `credits_insufficient`，`limit_source` 为 `openrouter_workspace_budget` 或 `openrouter_key_limit`（OpenRouter 的取值）；会重置的带 `Retry-After` | `billing_error` | 同上 |
+| 套餐不够（`subscription_only`，没有套餐也算；或 `wallet_first` 先试过钱包再试套餐） | 402 `credits_insufficient`，`limit_source` 为 `subscription`（本站的名字，OpenRouter 没有套餐）；不带 `Retry-After` | `billing_error` | 追加预留失败，截断，`limit_source` 为 `balance`（窗口不够按余额不足处理，见[计费的「订阅套餐」](billing.md#订阅套餐)） |
 | 进行中的请求暂时占满了余额 | 402 同余额，`limit_source` 现在也是 `balance`；`Retry-After` 是最早释放的时间（待定：见「待定问题」） | `billing_error` | 同上 |
 | 追加预留时数据库出错 | 503 `billing_unavailable`（转发开始前就用完了第一段） | `api_error` | `billing_unavailable`，不带费用 |
 | 结算写不进，内容完整 | 200，带 `axiom.billing_pending: true`，不带费用 | 同左 | 同左 |
@@ -501,7 +502,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | 会话、用户标识换成派生值，而不是删除 | 删除会让上游缓存失效；原样转发会串租户、泄露标识 |
 | 响应头按白名单放行 | 上游的请求 ID、组织名等头会暴露货源 |
 | 开始转发内容之前不发保活 | 此时还可能换端点；提前发出任何字节，状态码就无法再改 |
-| 余额 402、工作区预算和 key 上限 403，按来源区分，只有暂时性的带 `Retry-After` | 与 OpenRouter 一致（它的预算错误是 403，`metadata.limit_source` 为 `openrouter_workspace_budget` 或 `openrouter_key_limit`；账户余额不足是 402，2026-11-02 核对）；客户端据此判断该等待重试还是去充值 |
+| 余额 402、工作区预算和 key 上限 403，按来源区分，只有暂时性的带 `Retry-After` | 与 OpenRouter 一致（它的预算错误是 403，`metadata.limit_source` 为 `openrouter_workspace_budget` 或 `openrouter_key_limit`；账户余额不足是 402，2026-11-02 核对）；客户端据此判断该等待重试还是去充值。套餐窗口不够同样是 402，`limit_source` 为 `subscription`；OpenRouter 没有套餐，这是本站自己的取值（见[计费的「资金来源」](billing.md#资金来源)） |
 | 计费类问题不返回 401，避开自动禁用措辞，并写成测试 | 把我们当上游的 new-api 收到 401 或特定措辞会自动禁用渠道，临时问题会被放大成停用 |
 | 生成查询补原生 token、流式/取消/会话，内容接口不保存内容；活动按日与模型汇总 | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落实 #319 P10/P11。对照 [OpenRouter 生成查询](https://openrouter.ai/docs/api/api-reference/generations/get-request-&-usage-metadata-for-a-generation)、[内容](https://openrouter.ai/docs/api/api-reference/generations/get-stored-prompt-completion-and-error-content-for-a-generation)、[活动](https://openrouter.ai/docs/api/api-reference/analytics/get-user-activity-grouped-by-endpoint) 和[官方 OpenAPI](https://openrouter.ai/docs/openapi/openapi.yaml)（2026-10-30）。原生 prompt 取调用写入时已存的物理输入（迁移 `00012_streamed.sql`），不从缓存读写反推，避免把重叠的 token 相加；内容接口对已有调用也返回 404 `content_not_available`，因为 observability 有意不保存对话内容，新增留存面需要单独的产品决定；活动只算最近 30 个完整 UTC 日，`endpoint_id` 写零、`provider_name` 写 Axiom，避免暴露端点与货源，`api_key_hash` 暂按 key UUID 接受而官方是 SHA-256（keys API 未暴露该哈希），这是已记下的偏离。独立评审仍由流水线执行 |
 | 响应 `model` 写实际服务的模型，用量只暴露用户售价 | #319 P11 与 OpenRouter 的 [model fallbacks](https://openrouter.ai/docs/guides/routing/model-fallbacks) 和 [Usage Accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting)（2026-10-30）：`models` 回退后回显请求名会让客户端以为原模型回答，故 `RelayOptions.ActualModel` 由 routing 解析后的条目给出；`cost_details.server_tool_cost` 只写按次工具售价，`cache_discount` 按锁定输入价与缓存读价之差计算，均不含供应商成本。`is_byok` 由实际服务的条目给出（账户自带的 key 为 `true`），见[账户](accounts.md#自带的供应商-keybyok)。独立评审仍由流水线执行 |
@@ -544,7 +545,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 - 响应缓存没有按账户的数据保留设置可遵守：`docs/product.md` 说对话正文保存由平台统一决定，`docs/security.md` 的删除与导出流程（#325）还没有实现。现在用「平台开关默认关闭 + 请求级开关 + 最长 24 小时 TTL + 按账户清理」代替；#325 落地时要把 `gateway.response_cache` 纳入账户删除、导出和保留策略，并决定是否允许账户关闭缓存；在此之前 `AXIOM_RESPONSE_CACHE_CONTENT` 不应打开。
 - 各字段的最终名称和结构写入接口契约时确定
 - 官方供应商名称的可信映射、逐端点的采样/提供商参数清单仍缺数据；量化事实、五分钟窗口性能分位数和按请求计价已落地；按张的图片价已有目录项，但 `max_price.image` 管输入还是生成、端点按张用量怎么报还没定。每项缺的具体字段和补上后能支持什么，见上文「路由参数」偏离表的第三列。`require_parameters` 目前用模型规格推出的公开参数清单，清单外的参数明确 400；`max_price` 在非美元站点是否统一换成美元待定。
-- 402/403 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`openrouter_workspace_budget`、`openrouter_key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
+- 402/403 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`subscription`、`openrouter_workspace_budget`、`openrouter_key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）
 - 准入后不再发起新尝试的窗口（默认 120 秒）与上游空闲超时（默认 180 秒）：提交前的空闲超时要超过窗口才到，所以默认值下它不触发换端点，只返回最后一次尝试的错误；要换端点，空闲超时按模型调到窗口以内。上文的限制表和错误表对窗口到期是“返回最后一次尝试的错误”还是 408 说法不一，gateway 照限制表：有过尝试返回 502，一次也没发出过才是 408
 - `~作者/系列-latest` 的别名表已经落地；后续只缺后台界面：现在由 `axiom catalog save-alias` 写。发现和调用用同一次快照的目标、规格与价格，响应 `model` 是具体标准 ID。价格与能力变化仍遵循[目录的切换与迁移](catalog.md#模型的生命周期)。
 - `:nitro`、`:floor` 的层级准入：为 `:floor` 准入 flex 层要决定是否改写发给上游的 `service_tier`，及其对预留和计费的影响

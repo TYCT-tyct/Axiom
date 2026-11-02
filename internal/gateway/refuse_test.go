@@ -173,6 +173,32 @@ func TestRefusalOfAnError(t *testing.T) {
 	}
 }
 
+// TestAnInsufficientNamesItsSource: limit_source is a map lookup, so a source nobody named writes an empty string and no
+// error. Every source billing reports is pinned, including the plan window, which is Axiom's own name because
+// OpenRouter has no plans.
+func TestAnInsufficientNamesItsSource(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		source billing.Source
+		limit  string
+		status int
+	}{
+		"the balance":          {billing.SourceBalance, "balance", 402},
+		"a second-level site":  {billing.SourceSiteBalance, "balance", 402},
+		"the workspace budget": {billing.SourceWorkspace, "openrouter_workspace_budget", 403},
+		"the key limit":        {billing.SourceKey, "openrouter_key_limit", 403},
+		"the plan window":      {billing.SourceSubscription, "subscription", 402},
+	} {
+		r := insufficient(&billing.Insufficient{Source: tc.source})
+		if r.Status != tc.status || r.Details["limit_source"] != tc.limit {
+			t.Errorf("%s: %d %v, want %d %q", name, r.Status, r.Details["limit_source"], tc.status, tc.limit)
+		}
+		if r.RetryAfter != 0 {
+			t.Errorf("%s: Retry-After %d for a refusal billing did not mark transient", name, r.RetryAfter)
+		}
+	}
+}
+
 // A client is told to write a limit only where its format has a field for one, and the tool is named as the client's
 // format calls it; a tool the refusal cannot name is "a server tool".
 func TestUnboundedSaysWhatToDo(t *testing.T) {

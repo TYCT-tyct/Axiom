@@ -12,6 +12,16 @@ import (
 	"uuid"
 )
 
+const clearSiteBillingPreference = `-- name: ClearSiteBillingPreference :exec
+DELETE FROM accounts.site_billing_preferences WHERE site_id = $1
+`
+
+// No row means the code default; deleting is how a site goes back to it.
+func (q *Queries) ClearSiteBillingPreference(ctx context.Context, db DBTX, siteID uuid.UUID) error {
+	_, err := db.Exec(ctx, clearSiteBillingPreference, siteID)
+	return err
+}
+
 const cutSessions = `-- name: CutSessions :exec
 UPDATE accounts.sessions
 SET expires_at = least(expires_at, created_at + make_interval(secs => $1::bigint)),
@@ -355,8 +365,11 @@ SELECT coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint A
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
-    t.new_key_daily_limit
-FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = $1
+    t.new_key_daily_limit, p.preference AS billing_preference
+FROM accounts.sites s
+LEFT JOIN accounts.site_settings t ON t.site_id = s.id
+LEFT JOIN accounts.site_billing_preferences p ON p.site_id = s.id
+WHERE s.id = $1
 `
 
 type ReadSiteSettingsRow struct {
@@ -365,6 +378,7 @@ type ReadSiteSettingsRow struct {
 	AdminIdleSeconds     int64
 	AdminMaxAgeSeconds   int64
 	NewKeyDailyLimit     *int64
+	BillingPreference    *string
 }
 
 // A site with no settings row has none of its own; a site that does not exist has no row at all. A length of 0 is unset:
@@ -384,6 +398,7 @@ func (q *Queries) ReadSiteSettings(ctx context.Context, db DBTX, siteID uuid.UUI
 			&i.AdminIdleSeconds,
 			&i.AdminMaxAgeSeconds,
 			&i.NewKeyDailyLimit,
+			&i.BillingPreference,
 		); err != nil {
 			return nil, err
 		}
@@ -393,6 +408,23 @@ func (q *Queries) ReadSiteSettings(ctx context.Context, db DBTX, siteID uuid.UUI
 		return nil, err
 	}
 	return items, nil
+}
+
+const setSiteBillingPreference = `-- name: SetSiteBillingPreference :exec
+INSERT INTO accounts.site_billing_preferences (site_id, preference) VALUES ($1, $2)
+ON CONFLICT (site_id) DO UPDATE SET preference = excluded.preference
+`
+
+type SetSiteBillingPreferenceParams struct {
+	SiteID     uuid.UUID
+	Preference string
+}
+
+// The site's default order for accounts that have not chosen one. Kept apart from WriteSiteSettings because it lives in
+// its own table, which an account may read in its own scope.
+func (q *Queries) SetSiteBillingPreference(ctx context.Context, db DBTX, arg SetSiteBillingPreferenceParams) error {
+	_, err := db.Exec(ctx, setSiteBillingPreference, arg.SiteID, arg.Preference)
+	return err
 }
 
 const writeAccountKeyLimits = `-- name: WriteAccountKeyLimits :exec

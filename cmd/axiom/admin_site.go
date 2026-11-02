@@ -43,6 +43,10 @@ func settingsBody(v accounts.SiteSettings, currency platform.Currency) adminapi.
 		limit := adminMoney(*v.NewKeyDailyLimit, currency)
 		body.NewKeyDailyLimit = &limit
 	}
+	if v.BillingPreference != "" {
+		p := adminapi.BillingPreferenceName(v.BillingPreference)
+		body.BillingPreference = &p
+	}
 	return body
 }
 
@@ -64,6 +68,9 @@ func settingsOf(b adminapi.SiteSettings, currency platform.Currency) (accounts.S
 	v := accounts.SiteSettings{
 		ConsoleIdle: duration(b.ConsoleIdleTimeoutSeconds), ConsoleMaxAge: duration(b.ConsoleMaxAgeSeconds),
 		AdminIdle: duration(b.AdminIdleTimeoutSeconds), AdminMaxAge: duration(b.AdminMaxAgeSeconds),
+	}
+	if b.BillingPreference != nil {
+		v.BillingPreference = string(*b.BillingPreference)
 	}
 	var p problems
 	if b.NewKeyDailyLimit != nil {
@@ -101,6 +108,7 @@ func (a adminAPI) UpdateSiteSettings(ctx context.Context, request adminapi.Updat
 	if err != nil {
 		return nil, err
 	}
+	set.KeepBillingPreference = request.Body.Settings.BillingPreference == nil
 	view, replayed, err := idempotently(ctx, a.db, "updateSiteSettings", request.Params.IdempotencyKey, []any{request.SiteId, request.Body},
 		func(tx pg.Tx) (adminapi.SiteSettingsView, error) {
 			if err := a.accounts.SetSiteSettings(ctx, tx, actor(ctx), id, set, request.Body.Reason); err != nil {

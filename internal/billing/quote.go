@@ -111,10 +111,11 @@ type Source uint8
 
 // The sources, in the order a refusal names the first that runs out.
 const (
-	SourceBalance     Source = iota // the account's balance less its pending reservations, above its floor
-	SourceSiteBalance               // the same for a second-level site's owner
-	SourceWorkspace                 // the workspace budget
-	SourceKey                       // the key's limit
+	SourceBalance      Source = iota // the account's balance less its pending reservations, above its floor
+	SourceSiteBalance                // the same for a second-level site's owner
+	SourceWorkspace                  // the workspace budget
+	SourceKey                        // the key's limit
+	SourceSubscription               // the subscription window, when the preference does not allow the wallet
 )
 
 // Available is the amount one source still allows.

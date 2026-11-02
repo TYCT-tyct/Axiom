@@ -1,6 +1,7 @@
 import type { Messages } from "@axiom/ui";
 import { en as providerKeys } from "./provider-keys";
 import { en as receipt } from "./receipt";
+import { en as settings } from "./settings";
 import { en as statement } from "./statement";
 import type zh from "./zh";
 
@@ -27,6 +28,7 @@ export default {
     orders: "Orders",
     statement: "Statement",
     notifications: "Notifications",
+    settings: "Settings",
     security: "Account & security",
   },
   auth: {
@@ -226,6 +228,7 @@ export default {
       "This request key was already used. Check the refunds below before sending another; nothing new was sent.",
     close: "Cancel",
   },
+  settings,
   receipt,
   notifications: {
     description: "When Axiom emails you or calls your webhook.",

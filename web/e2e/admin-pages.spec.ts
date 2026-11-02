@@ -192,6 +192,7 @@ test.describe("site settings", () => {
     await dialog(page).locator("button[type=submit]").click();
     await expect(done(page)).toBeVisible();
     expect(state.settings.settings).toEqual({
+      billing_preference: "subscription_first",
       admin_idle_timeout_seconds: 7200,
       new_key_daily_limit: { amount: "20000000000", currency: "USD" },
     });

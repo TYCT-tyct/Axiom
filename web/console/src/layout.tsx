@@ -17,6 +17,7 @@ const nav = [
   { to: "/statement", label: "nav.statement", icon: "chart", permission: "balance.view" },
   { to: "/security", label: "nav.security", icon: "shield" },
   { to: "/notifications", label: "nav.notifications", icon: "sliders" },
+  { to: "/settings", label: "nav.settings", icon: "sliders" },
 ] as const satisfies readonly { to: string; label: string; icon: IconName; permission?: string }[];
 
 export function Layout() {

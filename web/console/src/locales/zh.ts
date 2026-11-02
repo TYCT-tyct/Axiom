@@ -1,6 +1,7 @@
 // The console's messages in Chinese, the source every other language follows.
 import { zh as providerKeys } from "./provider-keys";
 import { zh as receipt } from "./receipt";
+import { zh as settings } from "./settings";
 import { zh as statement } from "./statement";
 
 export default {
@@ -26,6 +27,7 @@ export default {
     orders: "订单",
     statement: "额度流水",
     notifications: "通知",
+    settings: "设置",
     security: "账户与安全",
   },
   auth: {
@@ -215,6 +217,7 @@ export default {
     refundReused: "这个请求的键已经被使用过。请先查看下面的退款，再决定是否再次申请；没有发送新的请求。",
     close: "取消",
   },
+  settings,
   receipt,
   notifications: {
     description: "Axiom 什么时候给你发邮件或调用你的 webhook。",

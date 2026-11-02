@@ -204,6 +204,30 @@ func (e BillingItem) Valid() bool {
 	}
 }
 
+// Defines values for BillingPreferenceName.
+const (
+	SubscriptionFirst BillingPreferenceName = "subscription_first"
+	SubscriptionOnly  BillingPreferenceName = "subscription_only"
+	WalletFirst       BillingPreferenceName = "wallet_first"
+	WalletOnly        BillingPreferenceName = "wallet_only"
+)
+
+// Valid indicates whether the value is a known member of the BillingPreferenceName enum.
+func (e BillingPreferenceName) Valid() bool {
+	switch e {
+	case SubscriptionFirst:
+		return true
+	case SubscriptionOnly:
+		return true
+	case WalletFirst:
+		return true
+	case WalletOnly:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CashMovementKind.
 const (
 	Chargeback        CashMovementKind = "chargeback"
@@ -1308,6 +1332,27 @@ func (e SiteLogoUploadContentType) Valid() bool {
 	}
 }
 
+// Defines values for SubscriptionRefundProposalState.
+const (
+	SubscriptionRefundProposalStateApproved SubscriptionRefundProposalState = "approved"
+	SubscriptionRefundProposalStatePending  SubscriptionRefundProposalState = "pending"
+	SubscriptionRefundProposalStateRejected SubscriptionRefundProposalState = "rejected"
+)
+
+// Valid indicates whether the value is a known member of the SubscriptionRefundProposalState enum.
+func (e SubscriptionRefundProposalState) Valid() bool {
+	switch e {
+	case SubscriptionRefundProposalStateApproved:
+		return true
+	case SubscriptionRefundProposalStatePending:
+		return true
+	case SubscriptionRefundProposalStateRejected:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SubscriptionSource.
 const (
 	SubscriptionSourceGift           SubscriptionSource = "gift"
@@ -2019,6 +2064,9 @@ type Balance struct {
 
 // BillingItem defines model for BillingItem.
 type BillingItem string
+
+// BillingPreferenceName Which source a call uses first. `subscription_first` uses the plan and falls back to the wallet; `wallet_first` the reverse; `subscription_only` and `wallet_only` do not fall back (docs/domains/billing.md「资金来源」).
+type BillingPreferenceName string
 
 // BindKey defines model for BindKey.
 type BindKey struct {
@@ -3931,10 +3979,13 @@ type SiteOAuthProviderUpdate struct {
 
 // SiteSettings A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units.
 type SiteSettings struct {
-	AdminIdleTimeoutSeconds   *int `json:"admin_idle_timeout_seconds,omitempty"`
-	AdminMaxAgeSeconds        *int `json:"admin_max_age_seconds,omitempty"`
-	ConsoleIdleTimeoutSeconds *int `json:"console_idle_timeout_seconds,omitempty"`
-	ConsoleMaxAgeSeconds      *int `json:"console_max_age_seconds,omitempty"`
+	AdminIdleTimeoutSeconds *int `json:"admin_idle_timeout_seconds,omitempty"`
+	AdminMaxAgeSeconds      *int `json:"admin_max_age_seconds,omitempty"`
+
+	// BillingPreference The funding order an account gets until it chooses its own; absent is `subscription_first`. A page built before this field leaves it out, and the server keeps the stored value rather than clearing it.
+	BillingPreference         *BillingPreferenceName `json:"billing_preference,omitempty"`
+	ConsoleIdleTimeoutSeconds *int                   `json:"console_idle_timeout_seconds,omitempty"`
+	ConsoleMaxAgeSeconds      *int                   `json:"console_max_age_seconds,omitempty"`
 
 	// NewKeyDailyLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	NewKeyDailyLimit *Money `json:"new_key_daily_limit,omitempty"`
@@ -4132,6 +4183,76 @@ type SubscriptionPlanUpdate struct {
 	TermSeconds   int `json:"term_seconds"`
 	WindowSeconds int `json:"window_seconds"`
 }
+
+// SubscriptionRefund defines model for SubscriptionRefund.
+type SubscriptionRefund struct {
+	// Amount An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Amount    Money     `json:"amount"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// Credits An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Credits CreditAmount `json:"credits"`
+
+	// GrantId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	GrantId Uuid `json:"grant_id"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id      Uuid `json:"id"`
+	Revoked bool `json:"revoked"`
+
+	// Unused An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Unused CreditAmount `json:"unused"`
+
+	// Windows Windows voided by this refund.
+	Windows int `json:"windows"`
+}
+
+// SubscriptionRefundApprovalInput defines model for SubscriptionRefundApprovalInput.
+type SubscriptionRefundApprovalInput struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// SubscriptionRefundInput defines model for SubscriptionRefundInput.
+type SubscriptionRefundInput struct {
+	// Credits An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Credits CreditAmount `json:"credits"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// SubscriptionRefundProposal defines model for SubscriptionRefundProposal.
+type SubscriptionRefundProposal struct {
+	// ApprovedBy An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	ApprovedBy *Uuid     `json:"approved_by,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	// Credits An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Credits    CreditAmount `json:"credits"`
+	FinishedAt *time.Time   `json:"finished_at,omitempty"`
+
+	// GrantId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	GrantId Uuid `json:"grant_id"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id Uuid `json:"id"`
+
+	// RequestedBy An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	RequestedBy Uuid                            `json:"requested_by"`
+	State       SubscriptionRefundProposalState `json:"state"`
+}
+
+// SubscriptionRefundProposalState defines model for SubscriptionRefundProposal.State.
+type SubscriptionRefundProposalState string
 
 // SubscriptionSource How the plan was paid for. Absent in a request: gift.
 type SubscriptionSource string
@@ -4562,6 +4683,18 @@ type UpdateAccountKeyLimitsParams struct {
 
 // GrantSubscriptionParams defines parameters for GrantSubscription.
 type GrantSubscriptionParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// RefundSubscriptionGrantParams defines parameters for RefundSubscriptionGrant.
+type RefundSubscriptionGrantParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ApproveSubscriptionRefundParams defines parameters for ApproveSubscriptionRefund.
+type ApproveSubscriptionRefundParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -5185,6 +5318,12 @@ type UpdateAccountKeyLimitsJSONRequestBody = KeyLimitsUpdate
 
 // GrantSubscriptionJSONRequestBody defines body for GrantSubscription for application/json ContentType.
 type GrantSubscriptionJSONRequestBody = SubscriptionGrantInput
+
+// RefundSubscriptionGrantJSONRequestBody defines body for RefundSubscriptionGrant for application/json ContentType.
+type RefundSubscriptionGrantJSONRequestBody = SubscriptionRefundInput
+
+// ApproveSubscriptionRefundJSONRequestBody defines body for ApproveSubscriptionRefund for application/json ContentType.
+type ApproveSubscriptionRefundJSONRequestBody = SubscriptionRefundApprovalInput
 
 // SetAccountSuspensionJSONRequestBody defines body for SetAccountSuspension for application/json ContentType.
 type SetAccountSuspensionJSONRequestBody = AccountSuspension
