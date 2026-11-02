@@ -12,6 +12,8 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
 )
@@ -54,6 +56,29 @@ func bigCompacted(n int) string {
 		`"output_tokens":10,"output_tokens_details":{"reasoning_tokens":4}}}`
 }
 
+// compactFinal is billing's answer after settling the reply's usage: its segment, charging nothing in USD.
+func compactFinal(t *testing.T, reply string) billing.Final {
+	t.Helper()
+	u := protocol.UsageOf([]byte(reply))
+	return billing.Final{Segments: []billing.Segment{{Usage: u.Segments[0].Usage, Reported: u.Segments[0].Reported}}}
+}
+
+// compactReply is the body a settled compact call writes for an upstream reply, the settlement charging nothing in
+// USD: the reply with Axiom's usage and cost.
+func compactReply(t *testing.T, reply string) string {
+	t.Helper()
+	usd, err := platform.ParseCurrency("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := protocol.UsageOf([]byte(reply))
+	body, err := protocol.RewriteCompactReply([]byte(reply), seen, &protocol.Final{Usage: seen, Currency: usd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
 // wholeAnswer is an upstream that answers with a whole body, as the compact endpoint does.
 func wholeAnswer(body string) scripted {
 	return func(context.Context) (*http.Response, *suppliers.Failure) {
@@ -62,11 +87,12 @@ func wholeAnswer(body string) scripted {
 }
 
 // TestTheCompactEndpointIsPassedThrough: the upstream gets the request rewritten — the endpoint's model, derived
-// identifiers, no routing parameters — at the compact path, and the client gets its answer as it came, in one write,
-// after the settlement, which is charged for the usage the reply reports.
+// identifiers, no routing parameters — at the compact path, and the client gets its answer in one write, after the
+// settlement, with Axiom's usage and cost in place of the upstream's and every other member as it came; the
+// settlement is charged for the usage the reply reports.
 func TestTheCompactEndpointIsPassedThrough(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
+		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }, final: compactFinal(t, compacted)})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(compacted)}
 		h.run()
 		checkCompactReply(t, h)
@@ -75,10 +101,16 @@ func TestTheCompactEndpointIsPassedThrough(t *testing.T) {
 	})
 }
 
-// checkCompactReply: the reply reached the client as it came, in one write, as JSON.
+// compactedRewritten is what the client gets for compacted once the settlement is written: the upstream's object with
+// Axiom's usage and cost in its own usage's place. The harness settles nothing, in USD.
+const compactedRewritten = `{"object":"response.compaction","output":[{"type":"compaction","id":"cmp_1","encrypted_content":"enc"}],` +
+	`"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"cache_write_tokens":0},"output_tokens":10,` +
+	`"output_tokens_details":{"reasoning_tokens":4},"total_tokens":110,"is_byok":false,"cost":0,"cost_currency":"USD"}}`
+
+// checkCompactReply: the reply reached the client with Axiom's usage and cost, in one write, as JSON.
 func checkCompactReply(t *testing.T, h *harness) {
 	t.Helper()
-	if h.w.status != http.StatusOK || h.w.header.Get("Content-Type") != "application/json" || h.w.body() != compacted ||
+	if h.w.status != http.StatusOK || h.w.header.Get("Content-Type") != "application/json" || h.w.body() != compactedRewritten ||
 		h.w.wrote() != 1 {
 		t.Fatalf("status %d, %d writes:\n%s", h.w.status, h.w.wrote(), h.w.body())
 	}
@@ -132,12 +164,22 @@ func TestACompactReplyThatNamesNoUsageIsEstimated(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		const noUsage = `{"object":"response.compaction","output":[]}`
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
+		input := estimatedInput(t, h, 0)
+		h.settleAs(billing.Final{Segments: []billing.Segment{{Usage: usage(t, map[catalog.Item]int64{catalog.ItemInput: input})}}})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(noUsage)}
 		h.run()
-		if h.w.status != http.StatusOK || h.w.body() != noUsage {
+		if h.w.status != http.StatusOK || !strings.Contains(h.w.body(), `"output":[]`) {
 			t.Fatalf("status %d:\n%s", h.w.status, h.w.body())
 		}
-		input := estimatedInput(t, h, 0)
+		var reply map[string]any
+		if err := jsonx.Unmarshal([]byte(h.w.body()), &reply); err != nil {
+			t.Fatal(err)
+		}
+		usage, _ := reply["usage"].(map[string]any)
+		if usage["input_tokens"] != float64(input) || usage["output_tokens"] != 0.0 || usage["total_tokens"] != float64(input) ||
+			usage["cost"] != 0.0 || usage["cost_currency"] != "USD" {
+			t.Errorf("the client's usage is %v, want the estimate of %d tokens and the settlement's cost", usage, input)
+		}
 		u := h.ended().outcome.Attempts[0].Segments[0]
 		if u.Usage.Count(catalog.ItemInput) != input || u.Reported.Has(catalog.ItemInput) {
 			t.Errorf("the input is %d (reported %t), want %d estimated", u.Usage.Count(catalog.ItemInput),
@@ -169,7 +211,7 @@ func TestTheCompactEndpointWaitsItsOwnTimeForTheAnswer(t *testing.T) {
 // on for the next entry.
 func TestACompactReplyThatBreaksIsTriedElsewhere(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
-		h := newHarness(t, ctx, options{entries: 2, mutate: func(c *Call) { compact(t, c) }})
+		h := newHarness(t, ctx, options{entries: 2, mutate: func(c *Call) { compact(t, c) }, final: compactFinal(t, compacted)})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) {
 			body := io.MultiReader(strings.NewReader(`{"object":`), iotestErr{io.ErrUnexpectedEOF})
 			return &http.Response{
@@ -180,7 +222,7 @@ func TestACompactReplyThatBreaksIsTriedElsewhere(t *testing.T) {
 		}}
 		h.up.eps[uuidOf(ep(2))].script = []scripted{wholeAnswer(compacted)}
 		h.run()
-		if h.w.status != http.StatusOK || h.w.body() != compacted {
+		if h.w.status != http.StatusOK || h.w.body() != compactedRewritten {
 			t.Fatalf("status %d:\n%s", h.w.status, h.w.body())
 		}
 		a := h.ended().outcome.Attempts
@@ -292,15 +334,16 @@ func TestACompactReplyReadForAClientThatLeft(t *testing.T) {
 func TestASlowClientGetsItsWholeReply(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		reply := bigCompacted(1 << 20)
-		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
+		want := compactReply(t, reply)
+		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }, final: compactFinal(t, reply)})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(reply)}
 		h.w.rate = 96 << 10 // 96 KiB a second: a 64 KiB chunk takes 0.68s, the 1 MiB reply 10.9s
 		h.run()
-		if h.w.status != http.StatusOK || h.w.body() != reply {
+		if h.w.status != http.StatusOK || h.w.body() != want {
 			t.Fatalf("status %d, %d of %d bytes:\n%s", h.w.status, len(h.w.body()), len(reply), h.w.body())
 		}
-		if want := (len(reply) + respondChunk - 1) / respondChunk; h.w.wrote() != want {
-			t.Errorf("%d writes for a reply of %d bytes, want %d chunks", h.w.wrote(), len(reply), want)
+		if chunks := (len(want) + respondChunk - 1) / respondChunk; h.w.wrote() != chunks {
+			t.Errorf("%d writes for a reply of %d bytes, want %d chunks", h.w.wrote(), len(want), chunks)
 		}
 		if h.elapsed() <= h.cfg.WriteTimeout {
 			t.Errorf("the reply took %v, no longer than one write deadline", h.elapsed())
@@ -317,11 +360,12 @@ func TestASlowClientGetsItsWholeReply(t *testing.T) {
 func TestAWholeReplyIsStoppedWhenItTakesTooLong(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		reply := bigCompacted(256 << 10)
-		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
+		want := compactReply(t, reply)
+		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }, final: compactFinal(t, reply)})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(reply)}
 		h.w.rate = 8 << 10 // 8 KiB a second: a chunk in 8s, the 256 KiB reply in 32s against a total of 16s
 		h.run()
-		if h.w.status != http.StatusOK || h.w.wrote() != 1 || h.w.body() != reply[:respondChunk] {
+		if h.w.status != http.StatusOK || h.w.wrote() != 1 || h.w.body() != want[:respondChunk] {
 			t.Fatalf("status %d, %d writes, %d bytes:\n%s", h.w.status, h.w.wrote(), len(h.w.body()), h.w.body())
 		}
 		s := h.ended()
@@ -341,11 +385,12 @@ func TestAWholeReplyIsStoppedWhenItTakesTooLong(t *testing.T) {
 func TestAClientThatStopsReadingAWholeReply(t *testing.T) {
 	run(t, func(t *testing.T, ctx context.Context) {
 		reply := bigCompacted(256 << 10)
-		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
+		want := compactReply(t, reply)
+		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }, final: compactFinal(t, reply)})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(reply)}
 		h.w.failFrom = 2 // the second chunk's write fails, as a client that stopped reading
 		h.run()
-		if h.w.status != http.StatusOK || h.w.wrote() != 1 || h.w.body() != reply[:respondChunk] {
+		if h.w.status != http.StatusOK || h.w.wrote() != 1 || h.w.body() != want[:respondChunk] {
 			t.Fatalf("status %d, %d writes, %d bytes", h.w.status, h.w.wrote(), len(h.w.body()))
 		}
 		s := h.ended()
