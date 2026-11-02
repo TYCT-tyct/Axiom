@@ -32,7 +32,7 @@
   --accent-soft: light-dark(rgb(51 93 223 / 0.09), rgb(122 162 255 / 0.13));
   --accent-line: light-dark(rgb(51 93 223 / 0.4), rgb(122 162 255 / 0.42));
   /* states, always paired with words */
-  --ok: light-dark(#16754c, #4cc38a);
+  --ok: light-dark(#146b45, #4cc38a);
   --warn: light-dark(#8e5d16, #e5b44c);
   --bad: light-dark(#c2262a, #f2555a);
   --ok-soft: light-dark(rgb(22 117 76 / 0.1), rgb(76 195 138 / 0.12));
