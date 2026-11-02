@@ -340,7 +340,6 @@ func appendOpenAIUsage(dst []byte, n openAINames, u catalog.Usage, cost string) 
 	dst = appendCount(dst, "rejected_prediction_tokens", native.RejectedPrediction)
 	dst = append(dst, `},"total_tokens":`...)
 	dst = strconv.AppendInt(dst, in+out, 10)
-	dst = append(dst, `,"is_byok":false`...)
 	if searches, calls := u.Count(catalog.ItemWebSearch), u.Count(catalog.ItemCodeExecution)+u.Count(catalog.ItemFileSearch); searches > 0 || calls > 0 {
 		dst = append(dst, `,"server_tool_use_details":{"tool_calls_requested":`...)
 		dst = strconv.AppendInt(dst, searches+calls, 10)

@@ -35,6 +35,9 @@ func TestTheEndpointSourcePassesTheSnapshotsStaleness(t *testing.T) {
 	if got, err := deps.Endpoints(t.Context()); !errors.Is(err, suppliers.ErrStale) || got != nil {
 		t.Errorf("the endpoint source = %v, %v; want no endpoint and suppliers.ErrStale", got, err)
 	}
+	if got := deps.SiteCurrency.String(); got != "" {
+		t.Errorf("site currency without an accounts service = %q, want none", got)
+	}
 }
 
 // TestTheCallPathIsWhatBillingWritesSuppliersThrough: the suppliers.CallWrites billing is handed is the suppliers

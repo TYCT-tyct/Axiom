@@ -3986,6 +3986,8 @@ export interface components {
             floor_multiplier?: string;
             change_ratio?: string;
             max_increase_ratio?: string;
+            /** @description The share of a model's normal sale price charged when an account's own provider key serves the request, in basis points (500 is 5%, docs/domains/billing.md「定价」). */
+            byok_fee_bps?: number;
         };
         PricePolicyInput: {
             /** Format: int64 */
@@ -3993,6 +3995,8 @@ export interface components {
             floor_multiplier: string;
             change_ratio: string;
             max_increase_ratio: string;
+            /** @description The BYOK fee in basis points. Omitted keeps the site's current value, so a page that predates the field does not reset it. */
+            byok_fee_bps?: number;
             reason: components["schemas"]["Reason"];
         };
         PricePublication: {

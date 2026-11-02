@@ -187,7 +187,7 @@ func appendEmbeddingUsage(dst []byte, u catalog.Usage, cost string) []byte {
 	dst = append(dst, '{')
 	dst = appendIntMember(dst, "prompt_tokens", u.Count(catalog.ItemInput))
 	dst = appendIntMember(append(dst, ','), "total_tokens", u.InputTotal())
-	return append(append(dst, cost...), `,"is_byok":false}`...)
+	return append(append(dst, cost...), '}')
 }
 
 // appendRerankUsage appends u in the usage fields OpenRouter documents for rerank.
@@ -197,7 +197,7 @@ func appendRerankUsage(dst []byte, u catalog.Usage, cost string) []byte {
 	if n := u.Count(catalog.ItemWebSearch); n > 0 {
 		dst = appendIntMember(append(dst, ','), "search_units", n)
 	}
-	return append(append(dst, cost...), `,"is_byok":false}`...)
+	return append(append(dst, cost...), '}')
 }
 
 // appendMessagesUsage appends u in Messages' usage fields, with cost, which is empty or members each led by a comma.

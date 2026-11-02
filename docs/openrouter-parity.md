@@ -135,9 +135,9 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| 在工作区里保存自己的供应商 key，请求优先走自己的 key，失败后可回落共享容量；每个 key 可设「不用共享容量」 | 优先区/回退区、可限定模型 | docs/guides/overview/auth/byok | 没有（范围声明：用户自带厂商 key 在「以后」，`docs/product.md:96`） | 渠道本身就是自带 key（管理员侧） | 账号池（管理员侧） | 只有管理员侧号池，用户侧 BYOK 没有；归「新建」 |
-| `/api/v1/byok` CRUD（`CreateBYOKKeyRequest`/`UpdateBYOKKeyRequest`） | 管理 BYOK 凭据 | api/byok/* | 没有 | 无 | 无 | 同上 |
-| BYOK 手续费（按同模型正常价的百分比）与响应里 `usage.is_byok`、`cost_details.upstream_inference_cost` | 计费 | docs/guides/overview/auth/byok | 没有（`proto/openai.go:29` 只解析不输出） | 无 | 无 | 同上 |
+| 在工作区里保存自己的供应商 key，请求优先走自己的 key，失败后可回落共享容量；每个 key 可设「不用共享容量」 | 优先区/回退区、可限定模型 | docs/guides/overview/auth/byok | 有（#330 P16）：一个 key 是一个账户归属的供应商，路由先试它，`fallback=false` 时这个模型不再用共享容量；只支持 OpenAI 官方 key | 渠道本身就是自带 key（管理员侧） | 账号池（管理员侧） | 尚未支持 Anthropic、Google 和按 provider 关闭共享容量（按模型关闭），见[账户](domains/accounts.md#自带的供应商-keybyok) |
+| `/api/v1/byok` CRUD（`CreateBYOKKeyRequest`/`UpdateBYOKKeyRequest`） | 管理 BYOK 凭据 | api/byok/* | 有控制台 `provider-keys` 的增删改查与测试（`internal/suppliers`），对外 `/api/v1/byok` 管理 API 没有 | 无 | 无 | OpenRouter 的对外 API 与工作区维度未做；Axiom 的按账户 |
+| BYOK 手续费（按同模型正常价的百分比）与响应里 `usage.is_byok`、`cost_details.upstream_inference_cost` | 计费 | docs/guides/overview/auth/byok | 有服务费（站点费率，默认 5%）和 `usage.is_byok`；`upstream_inference_cost` 不输出 | 无 | 无 | 供应商成本三项有意不输出，见[接入](domains/gateway.md#决策与理由) |
 
 ## 8. 提示缓存、结构化输出、工具调用、推理
 
@@ -292,7 +292,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 13. 【限流】E4-2/P13 已实现：共享账户/key 计数、等级默认与账户覆盖、请求速率 429 的 `X-RateLimit-*` 头、`GET /key` 的 `rate_limit`、`budgets`、`effective_budget`；付费模型平台限流等有意差异见[接入](domains/gateway.md#业务速率与-openrouter-的差异)。→ #315
 14. 【管理 API】`/api/v1/keys` 系列已提供管理 key 认证的调用 key CRUD（E4-9/P14）；限制与 OpenRouter 的差异见[账户域](domains/accounts.md#api-key)；`/workspaces`、`/guardrails`、`/organization` 管理 API 没有。→ #315（key）、#317（工作区/护栏的界面）
 15. 【响应缓存，已补】`X-OpenRouter-Cache*` 请求/响应头和预设里的缓存配置已随 #330 实现（三种生成格式，平台开关 `AXIOM_RESPONSE_CACHE_CONTENT` 默认关闭）；按账户隔离并用当前 key 的模型/端点权限复核、不支持 Embeddings/Rerank/Completions/compact，保留政策仍挂 #325。→ #330
-16. 【BYOK】用户自带供应商 key（`/byok`、优先/回退区、手续费）没有；范围里在「以后」。管理员侧号池已有。→ 新建
+16. 【BYOK，部分已补】用户自带供应商 key 已有（#330 P16）：OpenAI 官方 key、优先/回落、按模型关闭共享容量、站点服务费与 `usage.is_byok`；Anthropic/Google、对外 `/api/v1/byok` 与工作区维度没有。→ 新建（剩余部分）
 17. 【路由器】`openrouter/auto`、`openrouter/free` 已实现（按现有路由排序选具体模型，free 只在 `:free` 目录条目里选）；`auto-beta`、`pareto-code`、`bodybuilder`、`fusion`、`switchyard`、`jev` 都没有。→ 新建
 18. 【产品线】P18 已补 `/embeddings`、`/rerank`、`/completions`（§1）；仍缺 `/embeddings/models`、`/images`、`/videos`、`/audio/speech`、`/audio/transcriptions`、音频/视频输入输出、Files API、Batch API、`/moderations`。图片/视频/语音与按次/按时长/按字符计价相关，要先有 #320；`/embeddings/models` 要目录先有输出模态；`/moderations` 没有模型与策略数据。→ 批量/Files：#312 或新建；图片/视频/语音：#320
 19. 【认证与企业】OAuth PKCE 换 key、Workload Identity、SSO/SCIM、私有端点、终端用户登记、Broadcast 可观测性集成、护栏内容策略：不影响基本迁移。→ #315 / #316 / 新建

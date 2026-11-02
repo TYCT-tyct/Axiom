@@ -34,6 +34,7 @@ type nodeSettings struct {
 	healthMode                        quality.Mode
 	modelVerification                 bool // whether the health loop verifies endpoints as the models they claim
 	directFormats                     bool // whether supplier syncing may write embeddings and rerank
+	byok                              bool // whether accounts may create provider keys; off until every node knows them
 	responseCache                     bool // whether the platform permits storing reply content in the response cache
 	publicAddr, adminAddr, probesAddr string
 	nodeAddr                          string
@@ -118,7 +119,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		errs = append(errs, fmt.Errorf("AXIOM_MODEL_VERIFICATION: want on or off, got %q", verify))
 	}
 	s.exchangeSource = env.String("AXIOM_EXCHANGE_SOURCE", "manual")
-	errs = append(errs, readResponseCacheContent(env, s), readDirectFormats(env, s))
+	errs = append(errs, readResponseCacheContent(env, s), readDirectFormats(env, s), readByok(env, s))
 	s.databaseURL = env.Required(pg.DatabaseURLVar)
 	s.completionReserve = env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1)
 	s.masterKeyFile = env.Required(masterKeyFileVar)
@@ -203,6 +204,19 @@ func readArchiveSettings(env *config.Env, s *nodeSettings) error {
 	store, err := objectstore.ReadConfig(env)
 	s.objectstore = store
 	return err
+}
+
+// readByok reads the gate on creating provider keys. Like the direct formats, it is off until every node knows the
+// openai adapter and the byok status: an old node that finds one at startup refuses to start.
+func readByok(env *config.Env, s *nodeSettings) error {
+	switch byok := env.String("AXIOM_BYOK", "off"); byok {
+	case "on":
+		s.byok = true
+	case "off":
+	default:
+		return fmt.Errorf("AXIOM_BYOK: want on or off, got %q", byok)
+	}
+	return nil
 }
 
 // readDirectFormats reads the gate on writing the formats added after P18: the direct formats and legacy completions.

@@ -4,6 +4,96 @@
  */
 
 export interface paths {
+    "/api/console/v1/provider-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's own provider keys
+         * @description The provider keys the account saved, newest first. A key is never returned: only its last four characters are, so two keys of the same provider can be told apart. `status`, `enabled` and `rejected` say whether routing may use it; `fallback` says whether it may fall back to Axiom's endpoints for a model it covers (docs/domains/accounts.md「自带的供应商 key（BYOK）」).
+         */
+        get: operations["listProviderKeys"];
+        put?: never;
+        /**
+         * Add a provider key
+         * @description Saves the account's own key for one provider. The key is sealed with the same envelope encryption as a supplier credential and is never returned, logged or shown again; only its last four characters are. A provider this node cannot call answers 422 in `fields./provider`. Taking no idempotency key matches creating an API key: a lost response leaves a key the account can see and delete.
+         */
+        post: operations["createProviderKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/provider-keys/{provider_key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a provider key
+         * @description Takes the key out of routing and erases its sealed value. Attempts already made keep their rows. Another account's key is 404, the same answer as a key that does not exist.
+         */
+        delete: operations["deleteProviderKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/provider-keys/{provider_key_id}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Switch a provider key on or off
+         * @description A disabled key is not picked by routing and its sealed value stays. Enabling a key a provider refused does not make it work; only a successful test clears `rejected`.
+         */
+        put: operations["setProviderKeyEnabled"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/provider-keys/{provider_key_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a provider key
+         * @description Asks the provider whether the key works, with one small request. Success makes the key usable again, a refusal marks it rejected and routing skips it. A provider that is merely unreachable leaves the status as it was and answers `ok: false` with `inconclusive: true`, so an outage does not break a working key.
+         */
+        post: operations["testProviderKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/presets": {
         parameters: {
             query?: never;
@@ -1897,6 +1987,47 @@ export interface components {
             /** @description The key's text, to copy now: it is never shown again. */
             secret: string;
         };
+        ProviderKey: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            provider: string;
+            /** @description The last four characters of the key, and never more. */
+            hint?: string;
+            /** @enum {string} */
+            status: "active" | "disabled" | "rejected";
+            enabled: boolean;
+            /** @description The provider refused this key; routing skips it until a test succeeds. */
+            rejected: boolean;
+            /** @description Whether the key may fall back to Axiom's endpoints for a model it covers. */
+            fallback: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ProviderKeyList: {
+            data: components["schemas"]["ProviderKey"][];
+        };
+        ProviderKeyCreate: {
+            name: string;
+            /** @enum {string} */
+            provider: "openai";
+            key: string;
+            /**
+             * @description Whether routing may use Axiom's endpoints for a model this key covers when the key cannot serve it.
+             * @default true
+             */
+            fallback: boolean;
+        };
+        ProviderKeyEnabled: {
+            enabled: boolean;
+        };
+        ProviderKeyTest: {
+            ok: boolean;
+            /** @enum {string} */
+            status: "active" | "disabled" | "rejected";
+            /** @description The provider could not be asked; the key's status did not change. */
+            inconclusive?: boolean;
+        };
         KeyList: {
             filters?: components["schemas"]["KeyFilterEcho"];
             data: components["schemas"]["Key"][];
@@ -2205,6 +2336,138 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listProviderKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account's provider keys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKeyList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderKeyCreate"];
+            };
+        };
+        responses: {
+            /** @description The key as it is stored. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKey"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    deleteProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setProviderKeyEnabled: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderKeyEnabled"];
+            };
+        };
+        responses: {
+            /** @description The key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKey"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    testProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What the test found. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKeyTest"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
     listPresets: {
         parameters: {
             query?: {
