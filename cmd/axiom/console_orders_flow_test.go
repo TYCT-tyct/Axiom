@@ -106,6 +106,51 @@ func TestTopUpVerifyCreditsTheBalance(t *testing.T) {
 	expect(t, "cancel a paid order", f.post(s, "/orders/"+o.Id+"/cancel"), http.StatusConflict, consoleapi.ErrorCodeConflict)
 }
 
+// receiptFacts reports whether the order carries what its receipt renders.
+func receiptFacts(o consoleapi.Order) bool {
+	return o.PaidAt != nil && o.PaidTotal != nil && o.Credited != nil
+}
+
+// TestReceiptFacts: a paid order carries what a receipt renders — when it was paid, what the channel took and what was
+// credited — while a waiting one carries none of it, and another account's read is a 404 like one that does not exist.
+// The receipt page shows these facts and its own refunds, never a second record (docs/domains/payments.md「收据与发票」).
+func TestReceiptFacts(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	f.openTopUps()
+	s := f.owner()
+	o := f.order(s, "receipt-1", http.StatusCreated)
+	if waiting := f.read(s, o.Id); receiptFacts(waiting) {
+		t.Errorf("an unpaid order carries receipt facts: %+v", waiting)
+	}
+	total, err := strconv.ParseInt(o.Total.Amount, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currency, err := platform.ParseCurrency(o.Total.Currency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.gateway.pays(o.Id, payments.Money{Currency: currency, Minor: total})
+	f.run("UPDATE payments.orders SET next_verify_at = transaction_timestamp() - interval '1 minute'")
+	expect(t, "verify", f.post(s, "/orders/"+o.Id+"/verify"), http.StatusOK, "")
+
+	paid := f.read(s, o.Id)
+	if paid.State != consoleapi.Paid || !receiptFacts(paid) {
+		t.Fatalf("a paid order without its receipt facts: %+v", paid)
+	}
+	if paid.PaidTotal.Amount != o.Total.Amount || paid.PaidTotal.Currency != o.Total.Currency {
+		t.Errorf("the receipt says %s %s was paid, the quote said %s %s",
+			paid.PaidTotal.Amount, paid.PaidTotal.Currency, o.Total.Amount, o.Total.Currency)
+	}
+	if paid.Credited.Amount != tenCredits || paid.Credited.Currency != "USD" {
+		t.Errorf("the receipt credits %s %s, want %s USD", paid.Credited.Amount, paid.Credited.Currency, tenCredits)
+	}
+	other := f.registered(s, "receipt-other@example.com")
+	expect(t, "another account's receipt", f.do(http.MethodGet, "/orders/"+o.Id, "", as(other)),
+		http.StatusNotFound, consoleapi.ErrorCodeNotFound)
+}
+
 // TestReplayOfAWaitingOrder: the same key returns the same order with its page and asks the channel once; the same key
 // for another amount is a conflict; once the order is cancelled the replay says so and has nothing to pay on.
 func TestReplayOfAWaitingOrder(t *testing.T) {

@@ -8,7 +8,11 @@ import { balanceQuery } from "./queries";
 export function useOrderActions(id: string) {
   const client = useQueryClient();
   const settle = (order: Schemas["Order"]) => {
-    client.setQueryData([accountKey, "order", id], order);
+    // A verified or cancelled order answers without its refunds. Keeping the ones the page already holds avoids turning a
+    // list that was read into "none": these calls do not move refunds, so what was read earlier is still true.
+    client.setQueryData<Schemas["Order"]>([accountKey, "order", id], (held) =>
+      order.refunds === undefined && held?.refunds !== undefined ? { ...order, refunds: held.refunds } : order,
+    );
     void client.invalidateQueries({ queryKey: [accountKey, "orders"] });
     void client.invalidateQueries({ queryKey: balanceQuery.queryKey });
   };
