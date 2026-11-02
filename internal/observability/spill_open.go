@@ -81,7 +81,7 @@ func openSpill(dir string, capacity int) (*spill, error) {
 func makeDir(dir string) error {
 	var created []string
 	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
-		if _, err := os.Stat(d); err == nil {
+		if _, err := os.Stat(d); err == nil { //nolint:gosec // d is the operator's AXIOM_CALL_LOG_DIR or one of its parents
 			break
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("observability: call log spill directory: %w", err)
