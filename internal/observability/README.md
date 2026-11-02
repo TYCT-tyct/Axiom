@@ -189,9 +189,9 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 账户的 `accounts.authentication_failures` 是账户后台按站点每分钟至多上报一次的完整分钟峰值，只有达到已配置规则阈值才创建事件。消费每条样本时立即评估该事件并持久安排符合规则的首通知，再处理后续低值或恢复；因此消费积压不会把已完成的攻击窗口覆盖掉。低于所有阈值的样本或零窗口结束事件，实际通知派发仍在消费事务之后。账户负责限速、计数和脱敏，本模块沿用持续时间、静默、重复和通知机制。
 
-`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者（告警、Webhook 和 `observability.spend`）；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执，`00008` 扩展冻结的 Webhook 正文、封存签名密钥和渠道测试位置，`00014` 保存检测状态、阈值和按时间取账户的索引；platform `00015` 保存来源消费位置。
+`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者（告警、Webhook 和 `observability.spend`）；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执，`00008` 扩展冻结的 Webhook 正文、封存签名密钥和渠道测试位置，`00014` 保存检测状态、阈值和按时间取账户的索引，`00017` 保存回执的展示字段快照；platform `00015` 保存来源消费位置。
 
-比较方案：直接让模块引用 observability 并同步建事件，接口较少，但倒置模块依赖且故障进入业务事务；选择平台信号表和 observability 消费，增加一跳延迟，换来独立事务和跨节点接管。消费锁覆盖信号转事件的有界数据库批次及完整安全样本的即时评估；常规周期评估、派发和保留清理另开事务，待发回执用 FOR UPDATE SKIP LOCKED 认领，邮件和 Webhook 网络请求在事务之外。Webhook 的 10 秒期限只包出站请求，回执读写使用外层作业期限。邮件回执由 mail 的注入回调写入本模块，mail 不引用 observability。
+比较方案：直接让模块引用 observability 并同步建事件，接口较少，但倒置模块依赖且故障进入业务事务；选择平台信号表和 observability 消费，增加一跳延迟，换来独立事务和跨节点接管。消费锁覆盖信号转事件的有界数据库批次及完整安全样本和支付窗口样本的即时评估；事件字段保留当前样本供规则判断，回执在创建时冻结展示字段，后续低值可重置持续条件而不改写待发通知；常规周期评估、派发和保留清理另开事务，待发回执用 FOR UPDATE SKIP LOCKED 认领，邮件和 Webhook 网络请求在事务之外。Webhook 的 10 秒期限只包出站请求，回执读写使用外层作业期限。邮件回执由 mail 的注入回调写入本模块，mail 不引用 observability。
 
 不变量：同一种类和键只有一个未恢复事件（部分唯一索引）；同一事件、规则和通知序号只有一条回执（唯一约束）；基础设施失败回滚当前阶段，已提交事件仍在待评估索引中；无效信号留在信号表的 quarantined 行供排查，不堵后续信号；发送成功后才写 delivered；恢复通知等之前的发送进入终态；首通知失败则只留 failed 恢复回执；静默只推迟发送，不删除事件；无渠道不丢事件；所有新表 FORCE RLS，仅平台范围可见。`webhook_keys` 的触发器 `fence_envelope_key_version` 拒绝写入已退役的 `key_version`（见[平台的凭证加密](../platform/README.md#凭证加密)）。评估读配置时持有 FOR SHARE，替换配置的 UPDATE 与其互斥，避免旧规则留下新窗口。管理替换配置以 rev 做乐观锁，拒绝悬空渠道引用。同一种类不能有两条规则指向同一渠道。待发通知保留渠道快照，后续配置替换不改变它的收件人。
 
@@ -199,6 +199,6 @@ var ErrClosed, ErrQueueFull error                         // Enqueue 在 Close �
 
 每分钟在消费者阶段读取最新周期测试的终态回执，以渠道测试行的锁和 reported_state 去重发布健康信号，删除渠道时同阶段发恢复并删除探测位置，再消费信号；发送回调只写回执，不在持有事件锁时获取信号锁。评估阶段先独占配置，再安排到期的小时探测、评估并派发；这避免并发节点同时排探测以及回执/消费锁反序。探测失败和恢复也走普通规则，但不发送到自身故障渠道。超过 24 小时、已没有存活 River 任务的 queued 回执会转 failed；用尽重试且被 River 救援直接丢弃的作业由既有丢弃扫描完成回执。事务执行测试使用 `pgtest.WorkJob` 包装 River 官方测试执行器，真实提交重试状态并注入时钟，不依赖后台调度轮询；端到端供应商测试另运行真实队列。测试覆盖重试后一次接受、错误密钥与正文篡改、轮换到期、私有地址/重定向拒绝、并发探测和晚到结果；测试按明确数据库状态和受控时钟推进，无固定睡眠。
 
-支付和账户暂停通知没有预置规则。启用时在现有配置中追加 `payments.discrepancy`、`payments.query_paused` 与 `accounts.account_suspended` 三条规则，各用唯一 id，最低严重度 warning（账户暂停可设 critical）、threshold=1、duration_seconds=0、repeat_seconds=0，channel 指向已测试的邮件渠道；使用当前 rev 保存并保留其余配置。仅绑定五条默认规则不会发送这些通知。事件持久化与渠道启用是两步，未配置不丢事件。
+支付差异、查单暂停和账户暂停通知没有预置规则。启用时在现有配置中追加 `payments.discrepancy`、`payments.query_paused` 与 `accounts.account_suspended` 三条规则，各用唯一 id，最低严重度 warning（账户暂停可设 critical）、threshold=1、duration_seconds=0、repeat_seconds=0，channel 指向已测试的邮件渠道；使用当前 rev 保存并保留其余配置。另外四类支付信号 `payments.verify_failed`、`payments.query_failed`、`payments.rate_limited` 与 `payments.merchant_unreadable` 的规则见上文。仅绑定五条默认规则不会发送这些通知。事件持久化与渠道启用是两步，未配置不丢事件。
 
 `pending_recovery` 表示恢复及其投递尚未收尾；部分索引 `(checked_at,id)` 只含未恢复或待收尾事件。收尾后进入按 `(resolved_at,id)` 排序的清理索引，30 天后由周期任务每批删 100 个，外键级联删除回执和窗口。回执按页内事件 ID 一次查询，每个事件沿索引最多取最近 100 条。
