@@ -44,6 +44,21 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 // Text a call did not have is the empty string in the contract, and 0 for a first token that never came.
 const orDash = (value: string) => value || "—";
 
+function CostPanel({ call }: { call: Schemas["Call"] }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <Panel title={t("call.cost")}>
+      <p className="px-4 pt-4 text-xl text-t1 tabular-nums [overflow-wrap:anywhere]">{format.money(call.price)}</p>
+      {call.cache_hit ? (
+        <p className="px-4 pt-1 pb-4 text-ui text-t3">{t("call.cacheHitBody")}</p>
+      ) : call.free ? (
+        <p className="px-4 pt-1 pb-4 text-ui text-t3">{t("call.free")}</p>
+      ) : null}
+    </Panel>
+  );
+}
+
 function Details({ call }: { call: Schemas["Call"] }) {
   const { t } = useTranslation();
   const format = useFormat();
@@ -82,14 +97,7 @@ function Details({ call }: { call: Schemas["Call"] }) {
         </dl>
       </Panel>
       <div className="space-y-4">
-        <Panel title={t("call.cost")}>
-          <p className="px-4 pt-4 text-xl text-t1 tabular-nums [overflow-wrap:anywhere]">{format.money(call.price)}</p>
-          {call.cache_hit ? (
-            <p className="px-4 pt-1 pb-4 text-ui text-t3">{t("call.cacheHitBody")}</p>
-          ) : call.free ? (
-            <p className="px-4 pt-1 pb-4 text-ui text-t3">{t("call.free")}</p>
-          ) : null}
-        </Panel>
+        <CostPanel call={call} />
         <Panel title={t("call.usage")}>
           {usage.length === 0 ? (
             <p className="px-4 py-3 text-t3">{t("call.noUsage")}</p>

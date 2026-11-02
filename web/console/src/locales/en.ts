@@ -419,7 +419,8 @@ export default {
     firstToken: "Time to first token",
     cache: "Response cache",
     cacheHit: "Hit",
-    cacheHitBody: "This call was answered from the response cache: no upstream request was made and nothing was charged.",
+    cacheHitBody:
+      "This call was answered from the response cache: no upstream request was made and nothing was charged.",
     session: "Session",
     subagent: "Subagent",
     key: "Key used",
