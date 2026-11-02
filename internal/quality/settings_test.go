@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 	"time"
+	"uuid"
 
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
@@ -80,5 +81,41 @@ func TestProbeSettingsReload(t *testing.T) {
 	tick(t, l)
 	if got := l.currentSettings(); got.HourlyBudget != 120 || got.Concurrency != 2 {
 		t.Fatalf("after the reload: %+v", got)
+	}
+}
+
+// TestProbeSettingsReplanVerifications: a changed interval or first retry moves the checks already scheduled, not
+// just the values a later check would read.
+func TestProbeSettingsReplanVerifications(t *testing.T) {
+	m, l, _, now := fixtureLoop(t, Enforce)
+	checked := *now
+	passed := m.Live(uuid.NewV7(), 1)
+	contradicted := m.Live(uuid.NewV7(), 1)
+	passed.mu.Lock()
+	passed.verify = verification{checked: checked, next: checked.Add(6 * time.Hour), passed: true, outcome: verifyPassed}
+	passed.mu.Unlock()
+	contradicted.mu.Lock()
+	contradicted.verify = verification{checked: checked, next: checked.Add(6 * time.Hour), failures: 2, outcome: verifyContradicted}
+	contradicted.mu.Unlock()
+	if err := l.db.Tx(t.Context(), l.scope, func(tx pg.Tx) error {
+		return SetProbeSettings(t.Context(), tx, audit.System("test"), ProbeSettings{
+			VerifyEvery: 15 * time.Minute, VerifyMaxAge: 30 * time.Minute, VerifyRetry: 5 * time.Minute,
+		}, "shorter checks")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(time.Minute)
+	tick(t, l)
+	passed.mu.Lock()
+	gotPassed := passed.verify.next
+	passed.mu.Unlock()
+	if want := checked.Add(15 * time.Minute); !gotPassed.Equal(want) {
+		t.Fatalf("pass rescheduled to %v, want %v", gotPassed, want)
+	}
+	contradicted.mu.Lock()
+	gotContradicted := contradicted.verify.next
+	contradicted.mu.Unlock()
+	if want := checked.Add(10 * time.Minute); !gotContradicted.Equal(want) {
+		t.Fatalf("contradiction rescheduled to %v, want %v", gotContradicted, want)
 	}
 }

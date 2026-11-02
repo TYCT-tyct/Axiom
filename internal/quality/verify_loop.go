@@ -91,6 +91,7 @@ func (l *Loop) scheduleVerification(ctx context.Context, due []*State, endpoints
 		if !ok || claimed.Author == "" {
 			// Nothing to compare an answer with; a catalog that has not loaded is retried soon.
 			e.mu.Lock()
+			e.verify.attempted = now
 			e.verify.next = now.Add(l.spread(settings.VerifyRetry))
 			e.mu.Unlock()
 			continue
@@ -166,15 +167,18 @@ func (l *Loop) verificationApplies(e *State, end verifyEnd, current claim, ok bo
 // applyVerification records the outcome of a check about the current claim. The caller holds e.mu.
 func (l *Loop) applyVerification(ctx context.Context, e *State, end verifyEnd, now time.Time) {
 	settings := l.currentSettings()
+	e.verify.attempted = now
 	switch end.outcome {
 	case verifyPassed:
 		if e.verify.failed() {
 			l.resolveFake(e.id)
 		}
+		e.verify.outcome = verifyPassed
 		e.verify.passed, e.verify.failures, e.verify.checked = true, 0, now
 		e.verify.next = now.Add(l.spread(settings.VerifyEvery))
 	case verifyContradicted:
 		was := e.verify.failures
+		e.verify.outcome = verifyContradicted
 		e.verify.passed = false
 		e.verify.failures++
 		e.verify.next = now.Add(l.spread(backoff(e.verify.failures, settings.VerifyRetry, settings.VerifyEvery)))
@@ -185,6 +189,7 @@ func (l *Loop) applyVerification(ctx context.Context, e *State, end verifyEnd, n
 			"endpoint", e.id.String(), "author", end.claimed.Author, "failures", e.verify.failures,
 			"request", end.result.Request.String())
 	case verifyUnknown:
+		e.verify.outcome = verifyUnknown
 		e.verify.next = now.Add(l.spread(settings.VerifyRetry))
 	}
 	l.verifyMetric(ctx, end.outcome.String())

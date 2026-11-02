@@ -386,7 +386,7 @@ func (l *Loop) finish(ctx context.Context, end probeEnd) {
 		kind = "restored"
 	case suppliers.TestFailed:
 		e.count(failure, now)
-		r.Backoff = min(r.Backoff+1, 5)
+		r.Backoff = min(r.Backoff+1, maxProbeBackoff)
 	case suppliers.TestInconclusive:
 	}
 	l.reschedule(&r, end.result.Failure, now)

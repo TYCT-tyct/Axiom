@@ -21,6 +21,9 @@ type ReserveRequest struct {
 	At        time.Time // the call's start, also the call log's; zero means now
 	Demand    Demand
 	Quotables []Quotable
+	// Segments is the live policy frozen by the route that set Quotables' Segmentable flags. A reservation must quote
+	// with the same values it was planned with, even if the policy reloads between planning and quoting.
+	Segments Segments
 }
 
 // ReserveMany reserves for every request in one transaction, under one lock of the account's balance row
@@ -281,7 +284,7 @@ func (b *Billing) quoteOne(r ReserveRequest, src batchSources, avail []Available
 	if err != nil {
 		return quotedReservation{}, err
 	}
-	quote, err := Quote(r.Demand, q, b.config.Segments.Load(), avail)
+	quote, err := Quote(r.Demand, q, r.Segments, avail)
 	if insufficient, ok := errors.AsType[*Insufficient](err); ok {
 		return quotedReservation{}, r.Admitted.transient(insufficient)
 	} else if err != nil {

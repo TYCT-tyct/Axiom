@@ -123,8 +123,40 @@ func (l *Loop) currentSettings() ProbeSettings {
 }
 
 func (l *Loop) setSettings(s ProbeSettings) {
+	old := l.currentSettings()
 	l.settings.Store(&s)
 	l.monitor.verifyAge.Store(int64(s.VerifyMaxAge))
+	if old.VerifyEvery != s.VerifyEvery || old.VerifyRetry != s.VerifyRetry {
+		l.rescheduleVerifications(s)
+	}
+}
+
+// rescheduleVerifications rebuilds the next check from the last check's time and outcome after the administrator
+// changes the interval or the first retry. It keeps the jitter and leaves an in-flight check alone: that check
+// schedules itself with the value in force when it finishes.
+func (l *Loop) rescheduleVerifications(s ProbeSettings) {
+	l.monitor.mu.Lock()
+	defer l.monitor.mu.Unlock()
+	for _, e := range l.monitor.endpoints {
+		e.mu.Lock()
+		if !e.verifying {
+			switch e.verify.outcome {
+			case verifyPassed:
+				e.verify.next = e.verify.checked.Add(l.spread(s.VerifyEvery))
+			case verifyContradicted:
+				e.verify.next = e.verify.checked.Add(l.spread(backoff(e.verify.failures, s.VerifyRetry, s.VerifyEvery)))
+			default:
+				at := e.verify.attempted
+				if at.IsZero() {
+					at = e.verify.checked
+				}
+				if !at.IsZero() {
+					e.verify.next = at.Add(l.spread(s.VerifyRetry))
+				}
+			}
+		}
+		e.mu.Unlock()
+	}
 }
 
 // loadSettings reads the record at startup; a value this node cannot run fails the start rather than being replaced

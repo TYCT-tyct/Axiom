@@ -134,7 +134,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		}
 	}
 	return Plan{
-		Entries: entries, MaxAttempts: attempts,
+		Entries: entries, Segments: n.segments, MaxAttempts: attempts,
 		StartBy: now.Add(orDefault(preset.AttemptWindow, r.cfg.AttemptWindow)), StickyTTL: preset.StickyTTL, Record: rec,
 	}, nil, nil
 }

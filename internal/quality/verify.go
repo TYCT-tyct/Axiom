@@ -34,11 +34,13 @@ type Claimed struct {
 // answer; a contradiction clears passed at once, so routing fails closed, and verifyFailures of them in a row are the
 // conclusion that the endpoint is fake.
 type verification struct {
-	claim    claim     // the configuration the evidence is about
-	checked  time.Time // the last conclusive check
-	next     time.Time // when the next check is due
-	passed   bool      // the last conclusive check passed
-	failures int       // consecutive contradictions
+	claim     claim         // the configuration the evidence is about
+	checked   time.Time     // the last conclusive check
+	next      time.Time     // when the next check is due
+	passed    bool          // the last conclusive check passed
+	failures  int           // consecutive contradictions
+	outcome   verifyOutcome // what the last check said, so a settings change can recompute its next time
+	attempted time.Time     // when the last check began, for a retry scheduled before any conclusive answer
 }
 
 // claim is what a check's evidence is about: the catalog model it names, the upstream name that serves it, and the

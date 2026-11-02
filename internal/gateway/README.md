@@ -227,7 +227,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 - **所有权**：`Meter` 只归所有者 goroutine。`Observe` 返回 `ExtendNow(req)` 时，`req` 是这一刻的不可变快照，`Meter` 进入"追加中"，在途期间不再返回它。所有者在另一个 goroutine 里以新建的、1s 期限、不随 `clientCtx` 取消的 context 调 `Extend(ctx, h, req)`，结果经通道送回，所有者在两次 `Next` 之间取走、调 `Meter.Extended(seq, err)`。后台的 `Extend` 从不读 `Meter`。每个请求最多一个追加在途；停用 key 不中断在途请求。
 - **何时追加**：当前段用掉 40%–60% 时，比例每个请求随机取一次，避免同时开始的请求一起追加。
 - **写阻塞**：可分段的尝试，客户端单次写的期限 = min(10s, 当前段余量 ÷ 模型最快输出速度)，到期按断开处理，所以停读期间上游的生成也不越过当前段加超额额度。
-- **分段与超额额度**：一段的大小与超额额度来自后台记录（`billing.segment_settings`，默认值在 `billing.DefaultSegments()`），`cmd/axiom` 把同一个 `billing.SegmentPolicy` 交给路由和计费，节点每 30 秒重读；超额额度的 token 数是 `Segments.Allowance(速度)`，速度取端点规格里的最快输出速度（[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)）。
+- **分段与超额额度**：一段的大小与超额额度来自后台记录（`billing.segment_settings`，默认值在 `billing.DefaultSegments()`），`cmd/axiom` 把同一个 `billing.SegmentPolicy` 交给路由和计费，节点每 30 秒重读；路由在计划时读一次并冻结进 `routing.Plan`，随预留请求交给计费，计划后的热更新不会改变这笔报价；超额额度的 token 数是 `Segments.Allowance(速度)`，速度取端点规格里的最快输出速度（[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)）。
 - **当前段先用完**（`Observe` 返回 `Exhausted`）：停止调 `Next`，空闲计时暂停，最多等追加 1s。`*Insufficient` 截断为 `credits_insufficient`；数据库失败、超时、`ErrTerminated` 截断为 `billing_unavailable`。截断 = 取消上游 → 等 `Next` 返回 → `Settle` → `Relay.Fail`。
 - 达到用户设的输出上限是正常结束（`length`、`max_tokens`、`response.incomplete`），不是截断。
 

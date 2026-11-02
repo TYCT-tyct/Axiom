@@ -21,7 +21,9 @@ const (
 	windowSize = 32
 	windowIdle = 10 * time.Minute
 	probeMax   = 10 * time.Minute
-	slowStart  = time.Minute
+	// maxProbeBackoff is enough doublings for the smallest allowed base (1s) to reach probeMax: 1, 2, ... 512, 600.
+	maxProbeBackoff = 10
+	slowStart       = time.Minute
 )
 
 type sample struct {
@@ -213,7 +215,7 @@ func (m *Monitor) delay(level int) time.Duration {
 	if m.loop != nil {
 		base = m.loop.currentSettings().ProbeBase
 	}
-	d := min(base*time.Duration(1<<uint(min(level, 5))), probeMax)
+	d := min(base*time.Duration(1<<uint(min(level, maxProbeBackoff))), probeMax)
 	if m.loop == nil {
 		return d
 	}
