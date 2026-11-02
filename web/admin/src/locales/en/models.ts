@@ -57,6 +57,7 @@ export default {
     web_search: "Web search",
     code_execution: "Code execution",
     file_search: "File search",
+    file_parse: "File parsing (per page)",
   },
   tier: { standard: "Standard", flex: "Flex", priority: "Priority", fast: "Fast" },
   spec: {

@@ -4,7 +4,7 @@
 
 ## 职责与边界
 
-只有一件事：一个文档进，有界的文本出。`Parser` 是网关看到的全部；`Docling` 是当前唯一的实现。网关负责插件选项、文件定位与替换、内存预留、注解和计费；本包负责 URL、密钥、请求形状、响应大小、文本上限和失败分类。
+只有一件事：一个文档进，有界的文本和页数出。`Parser` 是网关看到的全部；`Docling` 是当前唯一的实现。网关负责插件选项、文件定位与替换、内存预留、注解和计费（`mistral-ocr` 的每一页一个 `file_parse` 按次单位，`cloudflare-ai` 免费，`native` 按输入 token；开关关闭时仍按旧规则每个文件一次 `web_search`）；本包负责 URL、密钥、请求形状、页数与文本上限、响应大小和失败分类。
 
 不在这里：`native` 引擎（文件原样发给接受文档的端点，见 [protocol 的「请求摘要」](../protocol/README.md)）、把解析结果写回各格式的正文（`protocol.RewriteFiles`）、按次收费（[billing 的「预留与结算」](../../docs/domains/billing.md#预留与结算)）、后台配置的存取（`settings.go`，与搜索后端同一套）。
 
@@ -21,8 +21,8 @@
 
 ## 一次解析
 
-- 请求：`POST {base}/v1/convert/source`，`Content-Type: application/json`，配了 key 时带 `X-Api-Key`。正文是 `{"sources":[{"kind":"file","base64_string":"…","filename":"scan.pdf"}],"options":{"to_formats":["md"],"do_ocr":true}}`；`target` 省略即 `inbody`，文本在响应里回来。图片不导出：模型读的是文本，页面图片只会按输入 token 收费。
-- 响应：`{"status":"success","document":{"md_content":"…"}}`。`status` 是 `failure` 或没有 `document` 算失败；正文最多 4 MiB（`ResponseLimit`），文本最多 2 MiB（`MaxTextBytes`），不是合法 UTF-8 或去掉空白后为空也拒绝（`ErrUpstream`、`ErrTooLarge`、`ErrEmpty`）。
+- 请求：`POST {base}/v1/convert/source`，`Content-Type: application/json`，配了 key 时带 `X-Api-Key`。开关打开时，PDF 请求 `to_formats:["md","json"]`、`do_ocr:true`，不带 `md_page_break_placeholder`；页数是 `document.json_content.pages` 的条目数（DoclingDocument 的 `pages` 为每个物理页保存一个 `PageItem`，[Docling Document](https://docling-project.github.io/docling/concepts/docling_document/)，2026-11-02 查），空页也计入，和 OpenRouter 按 PDF 物理页一致。非 PDF 输入没有 PDF 页树，才退回 Docling 的 `md_page_break_placeholder`：占位符由文件字节的 SHA-256 前缀生成，出现次数加一，数完从正文里删掉；参考只定义 PDF，这是非 PDF 的 fallback。关闭时请求不带页数选项，`Parse` 返回一页，网关不使用这个计数。JSON 会重复正文和版面，`ResponseLimit` 因此从 4 MiB 提到 8 MiB；PDF 应答没有 `pages` 或页码不连续时按上游失败拒绝，不会退回 markdown 边界少计。没有为页数引入 PDF 解析依赖。图片不导出：模型读的是文本，页面图片只会按输入 token 收费。
+- 响应：`{"status":"success","document":{"md_content":"…","json_content":{"pages":{…}}}}`（`json_content` 只在 PDF 计费时请求）。`status` 是 `failure` 或没有 `document` 算失败；正文最多 8 MiB（`ResponseLimit`），文本最多 2 MiB（`MaxTextBytes`），不是合法 UTF-8 或去掉空白后为空也拒绝（`ErrUpstream`、`ErrTooLarge`、`ErrEmpty`）。
 - 行为参考 Docling serve 的 v1 API（Docling serve《Usage》《v1 migration》，读于 2026-11-01）：`kind:"file"` 的内联来源、`to_formats`、`do_ocr`、`target:"inbody"`。文件名带扩展名，Docling 按扩展名选转换器；网关在没有文件名时按媒体类型补（`protocol` 的 `fileExt`）。
 - 健康检查是 `GET {base}/health`，后台的「运行测试」只做这一件事：配置测试没有文档可转，造一个合成文档测的是 Docling 的模型而不是部署的接线。
 - 文件内容、文本、响应正文和密钥都不进错误和日志；错误只说明类别（`ErrUpstream`、`ErrTooLarge`、`ErrEmpty`、超时）。超时由调用方设置，网关用 `Timeout`（60 秒，整个解析步骤共用）。
@@ -40,15 +40,15 @@ docker run -p 5001:5001 ghcr.io/docling-project/docling-serve
 
 ## 测试
 
-- `fileparse_test.go` 用 `httptest` TLS 服务器验证请求形状（路径、`X-Api-Key`、base64、文件名、`to_formats`、`do_ocr`）和文本读取；失败用例覆盖非 200、非 JSON、`failure`、非 UTF-8、空文本、文本超限、正文超限、超时，并断言文件和正文不回显。`TestConfig` 覆盖 `/health`。
-- 网关的 `TestParseFiles*` 覆盖替换、注解跳过、`native` 不解析、无后端 400、后端失败 502、超限 413、文件数上限、不可解析位置 400 和 `file_id` 引用保留；`TestParsesAreChargedAsSearches` 覆盖按次计费；`TestFileParserThroughTheHandler` 经真实 handler（数据库、准入、结算）验证转发正文、一次预留、一次结算、`server_tool_cost` 与回复注记，`TestFileParserUnconfiguredThroughTheHandler` 验证未配置后端的 400，`TestAParseIsRefusedBeforeTheBackend` 验证 key 检查在解析之前。
-- 真实 Docling 的容器测试没有做：镜像要下载数百 MB 到数 GB 的模型，按仓库规则不适合放进 `just test`。上线前对真实 Docling serve 的活检查：后台填地址、保存并重启，用一个带扫描 PDF 的 `plugins:[{id:"file-parser","pdf":{"engine":"mistral-ocr"}}]` Chat 请求确认回复正常、上游正文里是文本而不是文件、调用记录里 `web_search` 计一次；再把注解放回历史确认不再计费。
+- `fileparse_test.go` 用 `httptest` TLS 服务器验证请求形状（路径、`X-Api-Key`、base64、文件名、`to_formats`、`do_ocr`）和文本读取；`TestParseCountsPhysicalPDFPages` 验证 PDF 从 `json_content.pages` 数出全部物理页（包括没有 markdown 的页），`TestParseRefusesAPDFWithoutPages` / `TestParseRefusesAPDFWithAMissingPage` 验证缺页字典或页码不连续时拒绝；失败用例覆盖非 200、非 JSON、`failure`、非 UTF-8、空文本、文本超限、正文超限、超时，并断言文件和正文不回显。`TestConfig` 覆盖 `/health`。
+- 网关的 `TestParseFiles*` 覆盖替换、注解跳过、`native` 不解析、无后端 400、后端失败 502、超限 413、文件数上限、不可解析位置 400 和 `file_id` 引用保留；`TestParsesAreChargedAsFileParses` 覆盖按页 `file_parse` 计费，`TestFileParseKeepsSearchBillingUntilTheSwitchIsOn` 覆盖开关关闭时的旧 `web_search` 单位，`TestCloudflareParsingIsFree` 覆盖免费引擎；`TestFileParserThroughTheHandler` 经真实 handler（数据库、准入、结算）验证转发正文、一次预留、一次结算、`server_tool_cost` 与回复注记，`TestFileParserUnconfiguredThroughTheHandler` 验证未配置后端的 400，`TestAParseIsRefusedBeforeTheBackend` 验证 key 检查在解析之前。
+- 真实 Docling 的容器测试没有做：镜像要下载数百 MB 到数 GB 的模型，按仓库规则不适合放进 `just test`。上线前对真实 Docling serve 的活检查：后台填地址、保存并重启，用一个带扫描 PDF 的 `plugins:[{id:"file-parser","pdf":{"engine":"mistral-ocr"}}]` Chat 请求确认回复正常、上游正文里是文本而不是文件、调用记录里 `file_parse` 的页数与 PDF 物理页数一致（包括没有内容的页；非 PDF 用 Docling 边界，见上）；再把注解放回历史确认不再计费。
 
 ## 已知边界
 
 - 只解析消息顶层的文件部件：Chat 的 `file`、Responses 的 `input_file`、Messages 的 `document` 的 base64 源。工具结果里的文档、`source.type` 为 `url` 或 `text` 的 Messages 文档不解析，请求要求解析却仍有这类文件时 400，而不是把文件悄悄转发；只带 `file_id` 的引用原样保留，由路由按 `provider.only` 固定供应商。
 - 只接受内联的 base64 或 data URL；同时带 `file_data` 和 `file_id` 的部件拒绝，和格式转换的规则一致。
-- 一次请求最多 8 个文件、每个 20 MiB，替换进正文的文本合计最多 2 MiB，同一个文件每出现一次都算一份；网关按 `2×文件大小 + ResponseLimit` 和正文增量计入节点预算，申请不到 503。
+- 一次请求最多 8 个文件、每个 20 MiB，替换进正文的文本合计最多 2 MiB，同一个文件每出现一次都算一份；PDF 的 JSON 与 markdown 共享 8 MiB 的 `ResponseLimit`，超过按 413 拒绝，不会少算页；网关按 `2×文件大小 + ResponseLimit` 和正文增量计入节点预算，申请不到 503。
 - 解析在准入与预留之前，所以解析失败或超限不会调用模型，也不会预留。发文件之前网关先做一次只读的 key 检查（停用、过期、IP 白名单、速率），明显不能用的 key 在解析前就被拒绝；余额和预算要看报价，只能在准入里判断，所以余额不足时解析已经发生，这部分工作不收钱。
 - 只在非流式 Chat 回复里返回 `file` 注解（成功和失败体都带）；流式回复到结束才知道整条消息，`file-parser` 的流式请求不返回注解，客户端要跳过一次解析需用非流式回复里的注解。
 - 引擎名沿用 OpenRouter 的 `mistral-ocr` / `cloudflare-ai`，但两者都落到本站配置的同一个后端：本站没有 Mistral 和 Cloudflare 的账户，也不把文件发给它们。

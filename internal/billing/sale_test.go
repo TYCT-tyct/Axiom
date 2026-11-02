@@ -80,6 +80,30 @@ func TestFileSearchPriceNeedsTheModelToSellIt(t *testing.T) {
 	}
 }
 
+// TestFileParsePriceReachesAModelWithoutASpecItem: file_parse is the gateway's own item, not a spec item, so a fixed
+// rule that names it must price every model it matches rather than dropping the name as the file_search check does.
+func TestFileParsePriceReachesAModelWithoutASpecItem(t *testing.T) {
+	t.Parallel()
+	schedule := `{"v":1,"currency":"USD","rates":{"input":"0.000001","file_parse":"0.002"}}`
+	m := catalog.Model{Slug: "acme/alpha"}
+	cost, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.0000005"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	costs := []PriceCost{{Endpoint: uuid.NewV7(), Model: m.ID, Schedule: cost, UnitValue: "1", UnitValueID: uuid.NewV7(), Currency: usd, CurrencyCode: "USD"}}
+	rule := Rule{Enabled: true, Target: Selector{Kind: "all"}, Method: Method{Kind: "fixed", Schedule: jsonx.Raw(schedule)}, ID: uuid.NewV7(), Rev: 1}
+	p, err := proposePrice(defaultPricePolicy(), []Rule{rule}, m, nil, usd, costs, fallbacks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Problem != "" || p.Status != "pending" {
+		t.Fatalf("problem %q, status %q; want a pending price", p.Problem, p.Status)
+	}
+	if !strings.Contains(string(p.Schedule), `"file_parse":"0.002"`) {
+		t.Errorf("schedule %s does not carry file_parse", p.Schedule)
+	}
+}
+
 // TestSoldZeroChecksEveryAudience: a :free model is safe only if no published layer, not just the default, has a
 // non-zero price.
 func TestSoldZeroChecksEveryAudience(t *testing.T) {

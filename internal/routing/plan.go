@@ -174,11 +174,16 @@ func DemandOf(req *protocol.Request) billing.Demand {
 		// The gateway's web plugin runs one external search before the completion; it is a flat per-use charge.
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: 1, Flat: true})
 	}
-	if req.FileParses > 0 {
-		// Each file the gateway parsed before admission is one flat per-use charge. It is billed under the search item
-		// because a new per-use item would have to appear in every stored fallback row at once, which a rolling release
-		// cannot do (docs/domains/billing.md「预留与结算」).
-		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, Flat: true, MaxUses: req.FileParses})
+	if req.FileBilling {
+		if req.FilePages > 0 {
+			// Each page the gateway parsed through a paid OCR engine is one flat per-use charge of its own item: parsing
+			// is the gateway's work, not a search, and the model's schedule prices it (docs/domains/billing.md「预留与结算」).
+			d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemFileParse, Flat: true, MaxUses: req.FilePages})
+		}
+	} else if req.FileParses > 0 {
+		// Until the catalog switch is on, a parse keeps the old unit: one web_search per file, with the sampling the
+		// search loop adds. The rollout reading the new item does not change what a site already charges.
+		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.FileParses})
 	}
 	if req.Needs.Has(protocol.CodeExecution) {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemCodeExecution, MaxUses: req.CodeExecutions})

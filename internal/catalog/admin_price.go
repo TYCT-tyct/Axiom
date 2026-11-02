@@ -209,6 +209,15 @@ func (c *Catalog) allowFileSearch(s Schedule) error {
 	return nil
 }
 
+// allowFileParse refuses a price on the file_parse item while this release does not publish it. The item adds only a
+// price-schedule name: the gateway records it, so it has no spec item or ability to gate as well.
+func (c *Catalog) allowFileParse(s Schedule) error {
+	if !c.cfg.FileParse && s.Priced(1<<ItemFileParse) {
+		return ErrFileParse
+	}
+	return nil
+}
+
 // AllowSchedule applies the same new-item switches to a price list stored outside the catalog, such as a billing rule's
 // fixed price: that price reaches the same published versions, so the switch must be checked before the rule is saved.
 func (c *Catalog) AllowSchedule(s Schedule) error { return c.allowPrices(s) }
@@ -221,7 +230,10 @@ func (c *Catalog) allowPrices(s Schedule) error {
 	if err := c.allowRequest(s); err != nil {
 		return err
 	}
-	return c.allowFileSearch(s)
+	if err := c.allowFileSearch(s); err != nil {
+		return err
+	}
+	return c.allowFileParse(s)
 }
 
 func publishIn(ctx context.Context, tx pg.Tx, r PublishPriceRequest, n newPrice) (outcome, error) {
