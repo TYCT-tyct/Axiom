@@ -9,6 +9,7 @@ import (
 	"uuid"
 
 	"axiom/internal/platform/alert"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -309,6 +310,93 @@ func TestSecuritySpikeUsesConfiguredThresholdAndRecovers(t *testing.T) {
 	got = alertCycle(t, db, now)
 	if len(got) != 1 || got[0].State != "resolved" {
 		t.Fatal("not recovered", got)
+	}
+}
+
+//nolint:cyclop,gocognit // one batch with a high window and either a low window or a recovery is the point.
+func TestPaymentCompletedWindowsSurviveConsumerDelay(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		next     string
+		resolved bool
+	}{
+		{name: "low value", next: "1"},
+		{name: "recovery", resolved: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openDB(t)
+			now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+			alertTx(t, db, func(tx pg.Tx) error {
+				c, err := GetAlertConfiguration(t.Context(), tx)
+				if err != nil {
+					return err
+				}
+				c.Channels = []AlertChannel{{ID: "ops", Email: "ops@example.com"}}
+				c.Rules = []AlertRule{{ID: "verify", Kind: "payments.verify_failed", MinimumSeverity: "warning", Threshold: 10, Channel: "ops"}}
+				return SetAlertConfiguration(t.Context(), tx, c)
+			})
+			alertTx(t, db, func(tx pg.Tx) error {
+				if err := alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Fields: map[string]string{"value": "12"}}); err != nil {
+					return err
+				}
+				next := alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Resolved: tc.resolved}
+				if !tc.resolved {
+					next.Fields = map[string]string{"value": tc.next}
+				}
+				return alert.Persist(t.Context(), tx, uuid.NewV7(), next)
+			})
+			got := alertCycle(t, db, now)
+			if len(got) != 1 || len(got[0].Receipts) != 1 || got[0].Receipts[0].Sequence != 0 {
+				t.Fatalf("completed window was lost: %+v", got)
+			}
+			eventValue := "1"
+			if tc.resolved {
+				eventValue = "12"
+			}
+			if got[0].Fields["value"] != eventValue {
+				t.Fatalf("event did not keep the current sample: %+v", got[0])
+			}
+			var raw []byte
+			alertTx(t, db, func(tx pg.Tx) error {
+				return tx.QueryRow(t.Context(), `SELECT fields FROM observability.alert_receipts WHERE event_id=$1 AND sequence=0`, got[0].ID).Scan(&raw)
+			})
+			var display map[string]string
+			if err := jsonx.Unmarshal(raw, &display); err != nil || display["value"] != "12" {
+				t.Fatalf("receipt did not freeze the burst: %s %v", raw, err)
+			}
+			if tc.resolved && got[0].State != "resolved" {
+				t.Fatalf("recovery did not resolve: %+v", got[0])
+			}
+		})
+	}
+}
+
+func TestPaymentLowWindowResetsDuration(t *testing.T) {
+	db := openDB(t)
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	alertTx(t, db, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		c.Channels = []AlertChannel{{ID: "ops", Email: "ops@example.com"}}
+		c.Rules = []AlertRule{{ID: "verify", Kind: "payments.verify_failed", MinimumSeverity: "warning", Threshold: 10, DurationSeconds: 60, Channel: "ops"}}
+		return SetAlertConfiguration(t.Context(), tx, c)
+	})
+	write := func(value string, at time.Time) []AlertEvent {
+		t.Helper()
+		alertTx(t, db, func(tx pg.Tx) error {
+			return alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Fields: map[string]string{"value": value}})
+		})
+		return alertCycle(t, db, at)
+	}
+	got := write("12", now)
+	if len(got) != 1 || len(got[0].Receipts) != 0 {
+		t.Fatalf("duration fired early: %+v", got)
+	}
+	got = write("1", now.Add(time.Minute))
+	if len(got) != 1 || len(got[0].Receipts) != 0 {
+		t.Fatalf("low window kept the historical duration: %+v", got)
 	}
 }
 

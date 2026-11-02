@@ -103,7 +103,7 @@ func (EasyPay) Open(c MerchantConfig) (Channel, error) {
 }
 
 func (s easyPaySettings) withDefaults() easyPaySettings {
-	if s.Preset == "epusdt" {
+	if s.Preset == "epusdt" || s.Preset == "ezpay" {
 		if s.Mode == "" {
 			s.Mode = "redirect"
 		}
@@ -165,14 +165,14 @@ func (c *easyPayChannel) Caps() Caps {
 }
 
 func (c *easyPayChannel) Methods() []Method {
-	if c.settings.Preset == "epusdt" {
+	if c.settings.Preset == "epusdt" || c.settings.Preset == "ezpay" {
 		return []Method{"usdt.tron"}
 	}
 	return nil
 }
 
 func (c *easyPayChannel) Create(ctx context.Context, r CreateRequest) (Checkout, error) {
-	if !easyPayToken(r.Upstream) || r.Total.Currency != c.currency || r.Total.Minor <= 0 || !easyPayHTTPS(r.ReturnURL) {
+	if !easyPayToken(r.Upstream) || (c.settings.Preset == "ezpay" && r.Upstream != "usdt_trc20") || r.Total.Currency != c.currency || r.Total.Minor <= 0 || !easyPayHTTPS(r.ReturnURL) {
 		return Checkout{}, &Rejected{Code: "invalid_order", Message: "invalid method, amount or return URL"}
 	}
 	v := c.createParams(r)
@@ -189,8 +189,11 @@ func (c *easyPayChannel) Create(ctx context.Context, r CreateRequest) (Checkout,
 
 func (c *easyPayChannel) createParams(r CreateRequest) url.Values {
 	v := url.Values{"pid": {c.settings.PID}, "type": {r.Upstream}, "out_trade_no": {r.Order.TypeID()}, "notify_url": {r.NotifyURL}, "return_url": {r.ReturnURL}, "name": {r.Subject}, "money": {formatMinorText(r.Total)}}
-	if c.settings.Preset == "epusdt" {
+	switch c.settings.Preset {
+	case "epusdt":
 		v.Set("currency", strings.ToLower(c.currency.String()))
+	case "ezpay":
+		v.Set("currency", "USD")
 	}
 	if cid := c.settings.CIDs[r.Method]; cid != "" {
 		v.Set("cid", cid)
@@ -201,7 +204,11 @@ func (c *easyPayChannel) createParams(r CreateRequest) url.Values {
 	if c.settings.Mode == "api" && r.ClientIP.IsValid() {
 		v.Set("clientip", r.ClientIP.String())
 	}
-	v.Set("sign", easyPaySign(v, c.key.Reveal()))
+	if c.settings.Preset == "ezpay" {
+		v.Set("sign", ezPayCreateSign(v, c.key.Reveal()))
+	} else {
+		v.Set("sign", easyPaySign(v, c.key.Reveal()))
+	}
 	v.Set("sign_type", "MD5")
 	return v
 }
