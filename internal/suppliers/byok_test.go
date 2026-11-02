@@ -260,3 +260,56 @@ func TestByokNoFallbackSurvivesRejection(t *testing.T) {
 		t.Fatalf("the rules after a 401 are %+v, want the account's no-fallback rule for %s", rules, model)
 	}
 }
+
+// TestByokSwitchCannotOverwriteARejection: a switch and a rejection that cross must not end with the switch putting
+// back a status the rejection just wrote. The switch reads the credential again under its row lock, so the later
+// writer's view wins instead of the status it read before waiting.
+func TestByokSwitchCannotOverwriteARejection(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	site, account := uuid.NewV7(), uuid.NewV7()
+	key := byokFixture(t, a, site, account)
+	credential := byokCredential(t.Context(), t, a, key.ID)
+	if _, err := inTx(a, func(ctx context.Context, tx pg.Tx) (ByokKey, error) {
+		return a.admin.SetByokEnabled(ctx, tx, site, account, key.ID, false, a.actor)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	locked := make(chan struct{})
+	release := make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		first <- a.db.Tx(t.Context(), pg.AccountScope(account), func(tx pg.Tx) error {
+			if _, err := tx.Exec(t.Context(), `SELECT id FROM suppliers.credentials WHERE id = $1 FOR UPDATE`, credential); err != nil {
+				return err
+			}
+			close(locked)
+			<-release
+			_, err := tx.Exec(t.Context(), `UPDATE suppliers.credentials SET status = 'rejected' WHERE id = $1`, credential)
+			return err
+		})
+	}()
+	<-locked
+
+	started := make(chan struct{})
+	switched := make(chan error, 1)
+	go func() {
+		switched <- a.db.Tx(t.Context(), pg.AccountScope(account), func(tx pg.Tx) error {
+			close(started)
+			_, err := a.admin.SetByokEnabled(t.Context(), tx, site, account, key.ID, true, a.actor)
+			return err
+		})
+	}()
+	<-started
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-switched; err != nil {
+		t.Fatal(err)
+	}
+	if status := a.text(`SELECT status FROM suppliers.credentials WHERE id = '` + credential.String() + `'`); status != "rejected" {
+		t.Fatalf("the switch left the credential %q, want rejected", status)
+	}
+}
