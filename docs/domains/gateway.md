@@ -163,6 +163,47 @@
 
   端点是否传递取消，按[计费的「客户端断开」](billing.md#客户端断开)判断。客户端取消从不免单。客户端自行重试视为新的请求。
 
+### 响应缓存
+
+基线是 OpenRouter 的[响应缓存](https://openrouter.ai/docs/guides/features/response-caching)（2026-11-02 核对）：它按 key、模型、端点类型、流式与否和规范化后的请求体缓存**成功**回复，命中时重放、换新的 `id`、用量清零、免费，TTL 默认 300 秒、范围 1–86400 秒。Axiom 照这套语义，但有五处有意不同，理由在「决策与理由」：按**账户**而不是按 API key 隔离，命中再用当前 key 的模型和端点权限复核；命中仍先走正常准入与预留，结算时释放；不做并发相同请求的合并；只缓存 Chat、Responses、Messages 的生成回复，不缓存直连格式、compact 和带状态的请求；**平台未明确允许前，持久化默认由平台开关关闭**。
+
+**开关与优先级。** 缓存默认关闭，只有平台允许且请求明确要求才开。`AXIOM_RESPONSE_CACHE_CONTENT` 是平台对「保存回复正文」的决定，默认 `off`；为 `off` 时网关根本不建缓存，缓存头被忽略，为 `on` 时才看下面的请求级开关。这遵守 `docs/product.md` 的「对话内容保存由平台统一决定」，在 #325 的数据保留、删除和导出流程落地前不打开：
+
+| 来源 | 值 | 结果 |
+|---|---|---|
+| 平台 `AXIOM_RESPONSE_CACHE_CONTENT` | `off`（默认） | 关闭，任何请求头和预设都不能打开 |
+| 平台 `AXIOM_RESPONSE_CACHE_CONTENT` | `on` | 允许保存，以下开关决定本次调用 |
+| 预设 `cache_enabled` | `false` | 关闭，请求头 `true` 也不能打开 |
+| 请求头 `X-OpenRouter-Cache` | `false` | 关闭 |
+| 预设 `cache_enabled` 缺省 | — | 请求头 `true` 才开；头缺省或不是 `true`/`false` 时关闭 |
+| 预设 `cache_enabled` | `true` | 打开 |
+| 请求头 `X-OpenRouter-Cache-TTL` | 1–86400 | 覆盖预设的 `cache_ttl_seconds`；只在缓存打开时有意义 |
+| 预设 `cache_ttl_seconds` | 1–86400 | 请求头没有有效 TTL 时用它 |
+| 两处都没有 | — | 300 秒 |
+
+TTL 按 OpenRouter 的读法：以开头的十进制数字为准，小数截断，后面的字符忽略（`60abc` 读作 60，`1.5` 读作 1），小于 1 按 1、大于 86400 按 86400，开头不是数字则忽略这个头。预设里的 `cache_enabled` 必须是布尔值、`cache_ttl_seconds` 必须是 1–86400 的整数，保存在 `accounts.presets` 的既有校验里，且这两个成员不会并进发给上游的请求体。
+
+**键与隔离。** 键是账户 ID、客户端格式（生成格式之间分别区分）、是否流式和规范化请求体的 SHA-256。规范化只删字符串外的空白（空格、制表、回车、换行），保留属性顺序、重复键、数字写法和字符串里的空白——与 OpenRouter 一致，属性顺序不同就是不同的键。账户 ID 进哈希且查询在账户的 RLS 范围内完成，所以同一账户的不同 key 共用，不同账户即使请求字节完全相同也不共用。同一账户的 key 权限可以不同，因此条目还保存写入时的服务模型与端点；命中前用**当前** key 的准入结果重新算出的路由复核，服务模型或端点不在当前路由里就按 MISS 处理，权限收窄后旧条目不会被重放。请求在准入前已按预设合并、压缩和解析文件，哈希的是最终发给上游的那份正文；带 `previous_response_id`、文件解析、`web` 插件、服务端搜索、服务端原生工具、服务端压缩或文件引用的请求不缓存，因为这些内容不在正文里或不适合跨请求复用。
+
+**响应头。** 缓存开启且回复成功时：
+
+| 头 | MISS | HIT |
+|---|---|---|
+| `X-OpenRouter-Cache-Status` | `MISS` | `HIT` |
+| `X-OpenRouter-Cache-TTL` | 本次请求的 TTL | 条目剩余秒数 |
+| `X-OpenRouter-Cache-Age` | 不出现 | 条目已存秒数 |
+| `X-OpenRouter-Cache-Source-Id` | 不出现 | 写入该条目的原调用 ID |
+
+`X-OpenRouter-Cache-Clear: true` 在缓存打开时先删掉这个账户、这个键的条目，再按 MISS 处理；删除失败只记日志，不失败调用，本次成功回复会覆盖它。缓存头不转发给上游，也不出现在错误响应上。
+
+**命中。** 命中在准入之后、第一次上游尝试之前判断。缓存里存的是上游的原始回复字节（SSE 或整份 JSON）和实际服务的模型；命中时用**当前**客户端格式重新走一遍 `protocol.Relay`，所以格式转换、流式/非流式、推理隐藏和结束事件都与正常回复同一条路径，但调用 ID、`created` 和响应头 `X-Generation-Id` 是新的，用量和费用清零，`X-Codex-Turn-State` 用条目里保存的值。结算没有尝试，预留全额释放，账本不产生扣费；调用记录写 `cache_hit=true`、价格和成本为 0。命中不占供应商的速率和凭证槽。并发相同请求不合并：两个都 MISS、都调用上游、都各自计费，后写入的覆盖先写入的。
+
+**未命中与写入。** 只有上游 `200` 且回复完整、结算成功的调用才写入，错误、限流、半截流、客户端断开、结算失败的都不写。写入在回复交付之后异步进行，有界队列满了就丢弃并计数；写缓存失败只记日志，永远不失败或拖慢调用。条目在写入时按本次请求的 TTL 定过期时间，命中不会延长它。每个条目最多 1 MiB（上游原始回复字节），每个账户最多 64 MiB 或 1024 条，超出时按创建时间删最旧的；过期的条目由每分钟一次的清理删除，查询到过期条目也当未命中。
+
+**加密与保留。** 正文用信封加密保存（`secret.Keyring`，AAD 绑定 `gateway.response_cache` 的表、行和 `body` 用途），表按账户 RLS 隔离；数据库里没有明文正文。TTL 上限 24 小时，到期删除，`X-OpenRouter-Cache-Clear` 和未来的账户数据删除流程可以按账户删。现在没有按账户的数据保留设置：`docs/product.md` 规定对话正文保存由平台统一决定，`docs/security.md` 的保留与导出流程（#325）尚未实现；因此平台开关默认关闭，只有平台明确允许才写入，写入时也只保留 TTL 这么短，正文不进入调用记录、导出或内容接口。账户数据删除流程实现时必须把 `gateway.response_cache` 纳入删除和导出范围。
+
+**不缓存的路径。** 直连格式（Embeddings、Rerank、Completions）、`/responses/compact`、带 `previous_response_id` 的 Responses、`web`/`file-parser` 插件、`openrouter:web_search` 循环、服务端压缩和文件引用都不缓存。Embeddings 的整份 JSON 重放要另写一条不经 relay 的路径，等有需求时再加；在此之前，这些请求即使带缓存头也没有缓存响应头。
+
 ### 错误
 
 - **外壳与类型**：Messages 用 Anthropic 的外壳；Chat、Responses、Embeddings、Rerank 用 new-api 与 OpenAI 的 `error` 对象：`message`、`type`、`param`、`code`，另带统一的错误类型字段 `error_type`，程序判断它就够了（与 OpenRouter 一致，见 OpenRouter《Errors and Debugging》，2026-10）。
@@ -436,6 +477,12 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | 推理开关、展示和强度分开，隐藏在计量之后执行 | [OpenRouter Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)（2026-10-29）规定 exclude 不减费用、预算与 effort 可换算；隐藏明文仍保留工具续聊必需的签名/密文，不以显示要求推断启用模式；[Anthropic Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) 的 omitted 保留签名且收费，[OpenAI Reasoning models](https://developers.openai.com/api/docs/guides/reasoning) 当前包含 minimal/xhigh/max。复用规范请求、UsageContext 与现有流读取器，不另建协议树；相比只信上游隐藏，在本地计量后过滤能防忽略隐藏的端点漏出明文。无法精确表达预算时按公开比例取最近档，同距取低，不承诺近似是硬上限；不按模型名猜 supported_efforts/mandatory。换算表在 protocol README。依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，独立评审由流水线安排 |
 | Chat 旧客户端的回复恢复旧函数表示，现代客户端保持工具数组 | [OpenAI Chat reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) 明确 `functions` → `tools`、`function_call` → `tool_choice`，消息中的旧调用由 `tool_calls` 取代。[OpenRouter 的工具规范化说明](https://openrouter.ai/blog/insights/agent-frameworks-compared-tool-calling-schema-handling/)和 [API reference](https://openrouter.ai/docs/api/reference/overview) 只承诺现代 `tool_calls`，未说明旧请求的回映射（2026-10-29 核实，未花费调用实测）。本任务要求兼容旧客户端，因此有意增加只针对旧请求的回映射，并在有工具声明时关闭并行；不采用对所有回复统一降级，因为会破坏现代客户端和并行调用。既有稳定 ID 配对逻辑同时用于同格式与转换；不重编码整份请求，以保留工具参数、签名和供应商扩展。此对外兼容决策依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，仍需独立评审 |
 | 模型发现复用路由构建并按分组端点给匿名 tag，公开 provider 为 Axiom | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落实 #311 P5/P10。比较逐请求读 suppliers 与构建时投影，选择后者：一份响应的价格、端点和计数一致，构建失败保留整份旧投影；不选把全部端点合成一个，因为产品要求逐端点列出，也不公开供应商名字与政策猜测。每个端点的 `pricing` 取它自己的售价，模型 `pricing` 取这些端点里最便宜的一个；价格版本和端点集合都来自同一次构建。共享投影在分组前排除非零 Owner，未来自带端点不能使别的账户看出其存在。代号选模型内序号而不选带时间戳的 UUID；相比 HMAC 不引入密钥管理，代价是集合变化时可能重新编号，只用于发现展示。保留实时准入，避免缓存身份误放行已撤销的 key；独立评审仍由流水线执行 |
+| 响应缓存按账户隔离，不按 API key | 卡片的验收写的是「keyed per account（never shared across accounts）」，比 OpenRouter 的按 key 更严：同一账户的 key 轮换后仍能命中，账户管理员本来就能看到该账户的调用；不同账户的哈希都带账户 ID 且查询受 RLS 约束，不可能共用。代价：一个 key 写入的缓存，同账户的另一个 key 能读到；因此条目保存服务模型与端点，命中前按当前 key 的准入路由复核，权限不同或收窄时不重放 |
+| 缓存存上游原始回复，命中时重放进 `protocol.Relay` | 直接存客户端回复要为三种格式、流式/非流式、聚合和每块的 id/usage 各写一套重放；存上游字节让现有 relay 做格式转换、推理隐藏、结束事件和用量清零，命中与正常回复走同一条经过测试的路径。新调用 ID、`created`、`X-Generation-Id` 由 relay 的选项给出，`X-Codex-Turn-State` 与正文一起放在同一份加密载荷里。代价：条目与上游格式绑定，格式编号变化或 relay 不再支持该组合时按未命中处理并删除 |
+| 命中仍走正常准入和预留，结算时全额释放 | 钱和并发的不变量（I1/I3）都在准入与结算里；在准入前查缓存能省一次预留，但要另开一条不预留、不结算、不写调用记录的路径，余额不足的账户会因此绕开准入。选择保持一条路径：命中免费、账本不扣、调用记录写命中，但账户仍需先有这次调用的预留额度。代价是低余额账户可能明明有缓存也拿不到 |
+| 响应缓存默认关闭，且先由平台 `AXIOM_RESPONSE_CACHE_CONTENT` 放行，再只由请求头或预设打开，TTL 1–86400 秒、条目 1 MiB、账户 64 MiB/1024 条 | 缓存保存对话正文；`docs/product.md` 把内容保存交给平台统一决定，所以先用平台开关默认关闭，避免请求自己绕过产品决定。OpenRouter 的默认 TTL 是 300 秒、上限 86400，照它让客户端可预期。1 MiB 覆盖正常的整条回复，64 MiB/1024 条把单账户最坏占用限住；超出按最旧删除，过期每分钟清理。不选无限 TTL 或按磁盘配额，那会把内容保留交给运维而不是请求 |
+| 正文信封加密、按账户 RLS、AAD 绑表行和用途 | 与供应商凭证、SMTP 密钥同一套 `secret.Keyring`；AAD 让一行密文不能被搬到另一行或另一个账户下解开，RLS 让查询在数据库层就看不到别的账户。缓存是临时内容，仍按 `docs/security.md` 的租户隔离和静态加密要求处理；密钥轮换把 `gateway.response_cache` 登记进 `keyRotation` 并加 fence 触发器 |
+| 只缓存生成格式的完整成功回复，不缓存直连格式、插件和服务端工具路径 | 这些路径的正文之外还有文件解析、搜索、历史或上游资源引用，重放会漏掉按次费用或让另一请求读到不属于它的上下文；直连格式还要另写一条不经 relay 的重放。先只做 Chat、Responses、Messages 的普通调用，范围小、每条路径都能用同一套 relay 测试；Embeddings 等有需求再加 |
 | 同时提供 `/v1` 和 `/api/v1` 路径 | 负责人同意。OpenRouter 的客户端只改地址就能接入 |
 | 请求头按白名单转发，`anthropic-beta` 不筛选具体的值 | Claude Code 官方的网关兼容指南明确要求原样转发协议头；客户端的凭证和身份信息不能流向上游 |
 | 上游 4xx 保留原文，只抹掉供应商身份 | Claude Code 依赖上游错误的原话自动恢复；同时不能暴露货源。负责人 2026-10-18：影响兼容的行为照 new-api、sub2api。实现见「错误」：适配器仍只读代码、不留文字，共用的调用代码在拒绝请求的失败上另存一份清洗过的 `Rejection`，只给这次回复用。不选让适配器带原文：每个适配器各清洗一遍，漏一个就泄露 |
@@ -493,6 +540,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | 适配器推不出的格式由模型映射的 `formats` 声明，投影取并集 | 生产代码里没有任何适配器会产出 `completions`：new-api 的 `/v1/completions` 路由存在，但它的端点类型没有旧补全类型（`relaykit/types/endpoint_type.go`），OpenAI 类型既可能是 gpt-4o 也可能是旧模型，按类型猜会把所有 OpenAI 模型都标成支持旧补全；sub2api 没有这条路径。另一个做法是直接改 `supplier_models.formats`，但同步每次都会按适配器重写，改动会被覆盖且没有审计。选：`POST /api/admin/v1/suppliers/{id}/model-mappings` 的 `formats` 字段（可省略=不改、`[]`=清除），存在 `supplier_aliases.formats`，投影把它与适配器的格式取并集，写入 `supplier_models` 和 `endpoints` 的 `formats`，因此下一次同步不会覆盖；未知格式在写之前以 422 拒绝。代价：声明要等下一次同步和快照重载才生效；`AXIOM_DIRECT_FORMATS` 未开时，旧节点读到这一行只会跳过这个端点（`suppliers.unsupported_format`），不会摘掉整家供应商，但该格式的端点对旧节点暂时不可用，所以仍要等全部节点都认识它再声明。测试：`TestDeclaredFormatsSurviveSync`（两次同步）与 `TestDeclaredFormats`（规范化、收窄、清除、未知格式） |
 ## 待定问题
 
+- 响应缓存没有按账户的数据保留设置可遵守：`docs/product.md` 说对话正文保存由平台统一决定，`docs/security.md` 的删除与导出流程（#325）还没有实现。现在用「平台开关默认关闭 + 请求级开关 + 最长 24 小时 TTL + 按账户清理」代替；#325 落地时要把 `gateway.response_cache` 纳入账户删除、导出和保留策略，并决定是否允许账户关闭缓存；在此之前 `AXIOM_RESPONSE_CACHE_CONTENT` 不应打开。
 - 各字段的最终名称和结构写入接口契约时确定
 - 官方供应商名称的可信映射、逐端点的采样/提供商参数清单仍缺数据；量化事实、五分钟窗口性能分位数和按请求计价已落地；按张的图片价已有目录项，但 `max_price.image` 管输入还是生成、端点按张用量怎么报还没定。每项缺的具体字段和补上后能支持什么，见上文「路由参数」偏离表的第三列。`require_parameters` 目前用模型规格推出的公开参数清单，清单外的参数明确 400；`max_price` 在非美元站点是否统一换成美元待定。
 - 402/403 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`openrouter_workspace_budget`、`openrouter_key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）

@@ -70,7 +70,7 @@ var (
 	responsesRewrites = formatRules{members: map[string]rule{
 		"item":     hiddenResponseItem,
 		"part":     hidden((*rewriter).hiddenResponsePart),
-		"response": object(map[string]rule{"id": (*rewriter).ourID, "model": (*rewriter).ourModel, "usage": (*rewriter).usage, "output": hidden(arrayObjects(map[string]rule{"summary": (*rewriter).emptyArray, "content": (*rewriter).hiddenReasoningParts}))}),
+		"response": object(map[string]rule{"id": (*rewriter).ourID, "model": (*rewriter).ourModel, "created_at": (*rewriter).cachedCreated, "usage": (*rewriter).usage, "output": hidden(arrayObjects(map[string]rule{"summary": (*rewriter).emptyArray, "content": (*rewriter).hiddenReasoningParts}))}),
 		"axiom":    (*rewriter).drop,
 	}}
 )

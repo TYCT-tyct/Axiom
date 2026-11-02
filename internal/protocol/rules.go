@@ -6,6 +6,10 @@ import (
 	"axiom/internal/catalog"
 )
 
+// UsageContextOf is the metering context a relay of r needs. The gateway also uses it when replaying a cached upstream
+// reply, so the replay sees the same request facts as the attempt that stored it.
+func UsageContextOf(r *Request) UsageContext { return usageContext(r) }
+
 func usageContext(r *Request) UsageContext {
 	u := UsageContext{HidesReasoning: r.HidesReasoning, CacheTTL1h: r.InputItems.Has(catalog.ItemCacheWrite1h), LegacyFunctions: r.legacy && !r.modernTools}
 	u.ResponseHealing = r.ResponseHealing && !r.Stream && r.Format == Chat && r.Needs.Has(StructuredOutput)
@@ -158,6 +162,8 @@ type rewriter struct {
 	hidesReasoning                        bool
 	chatPayload, chatOpaque               bool
 	legacyDelta                           *legacyReplyDelta
+	cached, zeroUsage                     bool
+	cacheCreated                          string
 }
 
 func (p *rewriter) copyTo(off int) {

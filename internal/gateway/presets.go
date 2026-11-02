@@ -16,11 +16,11 @@ func (h *Handler) expandPreset(c *Call, body []byte) ([]byte, protocol.Request, 
 	if err != nil || slug == "" {
 		return body, req, err
 	}
-	config, err := h.Accounts.PresetConfig(c.site.ID, c.caller.AccountID(), slug)
-	if errors.Is(err, accounts.ErrNotFound) {
-		return nil, req, &Refusal{Status: 404, Code: "not_found", Message: "No such preset."}
-	}
+	config, err := h.presetConfig(c, slug)
 	if err != nil {
+		return nil, req, err
+	}
+	if err := setPresetCache(c, config); err != nil {
 		return nil, req, err
 	}
 	// Maps and JSON merge buffers exist only for requests using a preset; reserve their bounded working set first.
@@ -45,4 +45,24 @@ func (h *Handler) expandPreset(c *Call, body []byte) ([]byte, protocol.Request, 
 	}
 	c.hold(func() { h.Memory.Refund(held) })
 	return merged, req, nil
+}
+
+// setPresetCache records the response-cache settings a preset carries; they are server-side and never reach the
+// upstream body (protocol/presets.go).
+func setPresetCache(c *Call, config string) error {
+	enabled, ttl, err := accounts.PresetCache([]byte(config))
+	if err != nil {
+		return err
+	}
+	c.presetCache, c.presetTTL = enabled, ttl
+	return nil
+}
+
+// presetConfig reads the preset a request names. A preset that disappeared is the client's 404, not a server failure.
+func (h *Handler) presetConfig(c *Call, slug string) (string, error) {
+	config, err := h.Accounts.PresetConfig(c.site.ID, c.caller.AccountID(), slug)
+	if errors.Is(err, accounts.ErrNotFound) {
+		return "", &Refusal{Status: 404, Code: "not_found", Message: "No such preset."}
+	}
+	return config, err
 }

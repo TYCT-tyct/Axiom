@@ -34,6 +34,7 @@ type nodeSettings struct {
 	healthMode                        quality.Mode
 	modelVerification                 bool // whether the health loop verifies endpoints as the models they claim
 	directFormats                     bool // whether supplier syncing may write embeddings and rerank
+	responseCache                     bool // whether the platform permits storing reply content in the response cache
 	publicAddr, adminAddr, probesAddr string
 	nodeAddr                          string
 	coreURL                           *url.URL
@@ -87,6 +88,19 @@ func readSettings(environ []string) (nodeSettings, error) {
 	return s, nil
 }
 
+// readResponseCacheContent reads the platform's permission to store reply content. It is off by default: the content
+// policy belongs to the platform, not to a request or an account preset.
+func readResponseCacheContent(env *config.Env, s *nodeSettings) error {
+	switch content := env.String("AXIOM_RESPONSE_CACHE_CONTENT", "off"); content {
+	case "on":
+		s.responseCache = true
+	case "", "off": // compose passes an unset variable as an empty string
+	default:
+		return fmt.Errorf("AXIOM_RESPONSE_CACHE_CONTENT: want on or off, got %q", content)
+	}
+	return nil
+}
+
 // readCoreSettings reads what only the node that owns the state uses. Everything here is required or has a default that
 // keeps a single machine working; the node roles decide whether this function runs at all.
 func readCoreSettings(env *config.Env, s *nodeSettings) []error {
@@ -104,7 +118,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		errs = append(errs, fmt.Errorf("AXIOM_MODEL_VERIFICATION: want on or off, got %q", verify))
 	}
 	s.exchangeSource = env.String("AXIOM_EXCHANGE_SOURCE", "manual")
-	errs = append(errs, readDirectFormats(env, s))
+	errs = append(errs, readResponseCacheContent(env, s), readDirectFormats(env, s))
 	s.databaseURL = env.Required(pg.DatabaseURLVar)
 	s.completionReserve = env.Int(pg.CompletionReserveVar, pg.CompletionReserve, 1)
 	s.masterKeyFile = env.Required(masterKeyFileVar)

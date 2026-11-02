@@ -99,8 +99,9 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 		fileParser: fileParser,
 		gate:       gate, limits: limits,
 		records: recorder, meter: tel.Metrics.Meter("axiom/billing"), logger: logger, proxies: p.cfg.trustedProxies,
-		kv:     cache,
-		alerts: p.alerts, healthMode: p.cfg.healthMode, nodeID: p.cfg.valkey.NodeID, verify: verify,
+		kv:            cache,
+		responseCache: p.cfg.responseCache,
+		alerts:        p.alerts, healthMode: p.cfg.healthMode, nodeID: p.cfg.valkey.NodeID, verify: verify,
 	})
 	if err != nil {
 		return nodeRoutes{}, err
