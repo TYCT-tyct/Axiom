@@ -13,6 +13,7 @@ const (
 	retentionDatabaseURLVar  = "AXIOM_RETENTION_DATABASE_URL"
 	keyHashFileVar           = "AXIOM_KEY_HASH_FILE"
 	identityKeyFileVar       = "AXIOM_IDENTITY_KEY_FILE"
+	callLogDirVar            = "AXIOM_CALL_LOG_DIR"
 	webAssetsDirVar          = "AXIOM_WEB_ASSETS_DIR"
 	hashConcurrencyVar       = "AXIOM_HASH_CONCURRENCY"
 	hashWaitVar              = "AXIOM_HASH_WAIT"

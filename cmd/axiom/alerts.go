@@ -14,7 +14,7 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// Sampling never adds database work or signal validation to Enqueue's call path.
+// Sampling never adds database work or signal validation to Commit's call path.
 func sampleAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, sink alert.Sink, node string, logger *slog.Logger) func() {
 	run, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})

@@ -122,7 +122,7 @@ func checkMetrics(t *testing.T, addrs addresses) {
 		`axiom_http_server_requests_total{outcome="completed",route="/",status_class="4xx"} 2`,
 		`axiom_http_server_requests_total{outcome="completed",route="/api/",status_class="4xx"} 2`,
 		`axiom_http_server_duration_seconds_count{outcome="completed",route="GET /api/console/v1/version",status_class="2xx"} 1`,
-		"axiom_observability_queue_depth 0",
+		"axiom_observability_records_pending 0",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the metrics lack %q:\n%s", want, text)
@@ -401,12 +401,13 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	defer taken.Close() //nolint:errcheck // a test listener
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + taken.Addr().String(), "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'),
-		"AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App,
+		"AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_CALL_LOG_DIR=" + t.TempDir(),
 	}
 	var recorder *observability.Recorder
-	record := func(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) *observability.Recorder {
-		recorder = startRecorder(ctx, db, tel, logger)
-		return recorder
+	record := func(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, dir string, logger *slog.Logger) (*observability.Recorder, error) {
+		var err error
+		recorder, err = startRecorder(ctx, db, tel, dir, logger)
+		return recorder, err
 	}
 	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil); err == nil {
 		t.Fatal("the node started on a taken address")
@@ -419,4 +420,31 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	default:
 		t.Fatal("the call-record writer is still running after serve returned")
 	}
+}
+
+// testCallRecords is the production writer's sizes with a spill the test owns. The directory is the only thing every
+// test must set: the production default is a relative path.
+func testCallRecords(t testing.TB) observability.Config {
+	t.Helper()
+	cfg := callRecords
+	cfg.Dir = t.TempDir()
+	return cfg
+}
+
+// testRecorder starts a recorder for a test. A test that cares about the writer closes it itself; the cleanup is
+// idempotent and catches one that forgot.
+func testRecorder(t testing.TB, db *pg.DB, scope pg.Scope, cfg observability.Config) *observability.Recorder {
+	t.Helper()
+	r, err := observability.NewRecorder(t.Context(), db, scope, cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+		defer cancel()
+		if err := r.Close(ctx); err != nil {
+			t.Errorf("close recorder: %v", err)
+		}
+	})
+	return r
 }

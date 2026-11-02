@@ -84,7 +84,7 @@ func newRouteFixture(t *testing.T) *routeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router, err := routing.New(routing.Config{MaxStale: time.Hour, Segments: billing.Segments{Output: 1000, Overshoot: 2 * time.Second}})
+	router, err := routing.New(routing.Config{MaxStale: time.Hour, Segments: billing.NewSegmentPolicy(billing.Segments{Output: 1000, Overshoot: 2 * time.Second})})
 	if err != nil {
 		t.Fatal(err)
 	}

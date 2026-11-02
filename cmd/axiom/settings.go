@@ -45,6 +45,7 @@ type nodeSettings struct {
 	completionReserve                 int
 	masterKeyFile, keyHashFile        string
 	identityKeyFile                   string
+	callLogDir                        string
 	webAssetsDir                      string
 	hashConcurrency                   int
 	hashWait                          time.Duration
@@ -125,7 +126,7 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 	// The identity key stands in for the client's session and end-user identifiers upstream, so rotating the key
 	// hashes must not rotate it: the upstream's prompt caches are keyed by them (#205).
 	s.identityKeyFile = env.Required(identityKeyFileVar)
-	s.webAssetsDir = env.String(webAssetsDirVar, "")
+	s.callLogDir, s.webAssetsDir = readCallLogDir(env), env.String(webAssetsDirVar, "")
 	// The node's argon2id computations at once, and how long a sign-in waits for a turn (0: the module's defaults,
 	// GOMAXPROCS and 2 seconds).
 	s.hashConcurrency = env.Int(hashConcurrencyVar, 0, 1)
@@ -165,6 +166,16 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		errs = append(errs, err)
 	}
 	return append(errs, mailErr, searchErr, fileParserErr, archiveErr, s.valkey.Resolve(), healthErr, exchangeErr)
+}
+
+// readCallLogDir is the spill directory. .env.example carries the line with no value, so unset and empty both mean
+// the default beside the working directory; deployment mounts a writable volume over it.
+func readCallLogDir(env *config.Env) string {
+	dir := env.String(callLogDirVar, "call-log")
+	if dir == "" {
+		return "call-log"
+	}
+	return dir
 }
 
 // readSearchSettings reads the web search backend. It is optional: with no URL the feature is off, and every web plugin

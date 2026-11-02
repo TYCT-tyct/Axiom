@@ -110,6 +110,7 @@ func (r *rig) publish() {
 
 type rigOptions struct {
 	config        func(*Config)
+	segments      billing.Segments // how reservations segment; the defaults when zero
 	endpoints     func(name string, e *routing.Endpoint)
 	routing       routing.Config
 	prefer        string // the endpoint the preset puts first; the cheapest comes first when empty
@@ -182,9 +183,10 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if o.config != nil {
 		o.config(&r.cfg)
 	}
-	// One source, as cmd/axiom wires it: the routing snapshot and billing reserve by the gateway's segment settings,
+	// One live policy, as cmd/axiom wires it: the routing snapshot and billing reserve by the same segment settings,
 	// so a rig that segments in one of them segments in both.
-	o.routing.Segments = r.cfg.Segments()
+	segments := billing.NewSegmentPolicy(cmpOr(o.segments, billing.DefaultSegments()))
+	o.routing.Segments = segments
 	mods := []pg.Module{accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module(), Module()}
 	if o.suppliers {
 		mods = append(mods, suppliers.Module())
@@ -217,7 +219,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	sup := r.settlementSuppliers(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: cmp.Or(o.lifetime, time.Hour), // nothing renews the holder while a test runs
-		Segments: r.cfg.Segments(),
+		Segments: segments,
 	}, sup); err != nil {
 		t.Fatal(err)
 	}

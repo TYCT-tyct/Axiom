@@ -196,8 +196,8 @@ func configureDeferral(reason string, l *Loop, f *probeFixture, now time.Time) {
 		f.stale = true
 	case "observe":
 	case "budget":
-		for i := range l.budget {
-			l.budget[i] = now
+		for range l.currentSettings().HourlyBudget {
+			l.budget.spend(now)
 		}
 	}
 }
@@ -228,7 +228,7 @@ func checkProbeDeferral(t *testing.T, reason string) {
 	if reason == "manual" {
 		checkDisabledPersistence(t, m, l, now, id)
 	}
-	if reason == "pause" && l.used != 0 {
+	if reason == "pause" && l.budget.count() != 0 {
 		t.Fatal("pause consumed budget")
 	}
 	if reason == "stale" {
@@ -269,14 +269,14 @@ func TestProbeConcurrencyCap(t *testing.T) {
 	tick(t, l)
 	*now = now.Add(30 * time.Second)
 	tick(t, l)
-	if l.active != 4 || l.used != 4 {
-		t.Fatalf("active=%d budget=%d", l.active, l.used)
+	if l.active != 4 || l.budget.count() != 4 {
+		t.Fatalf("active=%d budget=%d", l.active, l.budget.count())
 	}
 	for range 4 {
 		<-f.calls
 	}
 	tick(t, l)
-	if l.active != 4 || l.used != 4 {
+	if l.active != 4 || l.budget.count() != 4 {
 		t.Fatal("concurrency cap exceeded")
 	}
 }

@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -163,10 +165,14 @@ func TestAttributionHeadersAreRecorded(t *testing.T) {
 	t.Parallel()
 	r := ledgerRig(t)
 	up := withExecutor(r, &flakyLedger{})
-	r.exec.Records = observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
-		QueueSize: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
+	records, err := observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
+		Dir: t.TempDir(), Capacity: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
 		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
 	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.exec.Records = records
 	a := r.funded(1e12)
 	sample, _ := sample(t, protocol.Messages)
 	for _, e := range up.eps {
@@ -194,6 +200,60 @@ func TestAttributionHeadersAreRecorded(t *testing.T) {
 		t.Errorf("recorded (%q, %q, %q), want %+v", referer, title, categories, want)
 	}
 	assertAttributionNotForwarded(t, up)
+}
+
+// TestFullCallLogRefusesNewCalls: a record is reserved before the call is admitted. When every reservation is already
+// held by a record waiting for the database, the next call is refused before it reaches an upstream rather than being
+// served without a record; draining the spill writes the first call's record.
+//
+//nolint:cyclop // the first call, the refusal and the drain are one overload contract.
+func TestFullCallLogRefusesNewCalls(t *testing.T) {
+	t.Parallel()
+	r := ledgerRig(t)
+	up := withExecutor(r, &flakyLedger{})
+	records, err := observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
+		Dir: t.TempDir(), Capacity: 1, BatchSize: 10, FlushInterval: time.Hour,
+		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
+	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+		defer cancel()
+		if err := records.Close(ctx); err != nil && !errors.Is(err, observability.ErrClosed) {
+			t.Errorf("closing the recorder: %v", err)
+		}
+	})
+	r.exec.Records, r.handler.Records = records, records
+	a := r.funded(1e12)
+	sample, _ := sample(t, protocol.Messages)
+	for _, e := range up.eps {
+		e.script = []scripted{streamed(sample, 1, 10, false)}
+	}
+	if resp, body := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(stream("acme/beta"))); resp.StatusCode != http.StatusOK {
+		t.Fatalf("first call: %d: %s", resp.StatusCode, body)
+	}
+	if pending, _ := records.AlertSample(); pending != 1 {
+		t.Fatalf("%d records pending, want the first call's one", pending)
+	}
+	resp, body := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(stream("acme/beta")))
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"overloaded_error"`) {
+		t.Fatalf("second call: %d: %s, want 503 overloaded", resp.StatusCode, body)
+	}
+	sent := 0
+	for _, e := range up.eps {
+		sent += len(e.calls)
+	}
+	if sent != 1 {
+		t.Errorf("%d calls reached an upstream, want only the first", sent)
+	}
+	if err := records.Close(context.WithoutCancel(t.Context())); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.count("SELECT count(*) FROM observability.call_log"); got != 1 {
+		t.Errorf("%d call records stored, want 1", got)
+	}
 }
 
 // assertAttributionNotForwarded: the upstream saw the one call, and none of the client's attribution headers.
@@ -225,10 +285,14 @@ func TestACallWithNoAttemptIsRecorded(t *testing.T) {
 	for _, e := range up.eps {
 		e.noSlot = true
 	}
-	r.exec.Records = observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
-		QueueSize: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
+	records, err := observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
+		Dir: t.TempDir(), Capacity: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
 		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
 	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.exec.Records = records
 	a := r.funded(1e12)
 	resp, body := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(stream("acme/beta")))
 	if resp.StatusCode != http.StatusTooManyRequests {

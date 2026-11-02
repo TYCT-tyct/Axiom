@@ -12,7 +12,7 @@ M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在
 
 | 不变量 | 靠什么保证 |
 |---|---|
-| I1 先落库再花钱：上游请求发出前，已提交的预留覆盖本次尝试当前允许执行的费用上界，加上停止前的最大额外消耗（超额额度 = 端点规格的最快输出速度 × 节点设置的 `SegmentOvershoot`，后者不短于追加等待）；不可分段的尝试就是整次的最大花费 | 准入提交后才进入尝试；`Bind` 只接受准入时报过价的条目；追加没批准就停读（「计量与追加」）；启动时拒绝 `SegmentOvershoot` 短于 `ExtendWait` 的设置 |
+| I1 先落库再花钱：上游请求发出前，已提交的预留覆盖本次尝试当前允许执行的费用上界，加上停止前的最大额外消耗（超额额度 = 端点规格的最快输出速度 × 后台分段设置的 `Overshoot`，后者不短于追加等待）；不可分段的尝试就是整次的最大花费 | 准入提交后才进入尝试；`Bind` 只接受准入时报过价的条目；追加没批准就停读（「计量与追加」）；保存时拒绝超额额度短于 `ExtendWait` 的设置；节点重读到不可用的记录时保留旧值并记日志 |
 | I2 恰好一次终结：每个准入的请求恰好落到一个终态，经 `billing.Settle`（只释放也走它），或由清理按截止时间、持有者回收接管 | 每条退出路径（含 `recover` 之后）都调 `Settle`；预留"比较后再写"；清理见 [billing 的「预留的状态」](../billing/README.md#预留的状态) |
 | I3 先入账再报费用：带费用的结尾只在结算提交后发出 | Relay 扣住成功结尾，所有者在 `Settle` 返回后才调 `Finish` |
 | I4 提交后不换尝试：向客户端写出正文、推理或工具调用之后，不再换端点 | Relay 返回 `Commit` 之后不再调用 `routing.Decide` |
@@ -187,7 +187,7 @@ G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个
 - `Costs`：尝试的成本，按这次尝试的价格币种计的十亿分之一额度，以及供应商单位下的估算（同一次定价）；生产实现是 `*suppliers.Service` 的 `Credits`（[suppliers 的「调用面」](../suppliers/README.md#调用面)），接线时把服务直接交给 `ExecDeps.Costs`，不加包装。`costs_test.go` 用真实的服务和账本跑通一次调用：账上是成本计划 × 单位价值，这次尝试的成本就是那个已知值（`TestTheAttemptCostIsTheSuppliersKnownCost`，同时核对 `billing.waivers` 里一行也没有），其余用例仍用固定值。
 - `Alive` 是 `billing.Alive`，`Upstreams` 是 `NewUpstreams(*suppliers.Service)`，`Ledger` 是 `*billing.Billing`；billing 的 `Suppliers` 是 suppliers 自己的 `CallWrites`，节点直接把它交给 `billing.Start`：结算事务里的写入因此落进 suppliers 的表，与账本同成同败。
 - `Endpoint.Target` 由 `route.go` 的 `RouteDeps` 填：`Model` 是端点的 `upstream_name`，`Streams` 是规格与供应商策略的交集；其余改写项（思考、加密推理、对话中途的系统消息、采样、缓存断点）原样取自规格的 `Model.Dialect()`（`targetOf`），规格没写的键留作未设置，不在这里补默认，由 `protocol` 按请求是否要用来决定（见 protocol README 的「`Target` 里的模型数据」）。生产装配的验收是 `route_target_test.go`：真实目录、`Build`、`Plan` 和 `Prepare` 走一遍，不手工构造 `Target`。`ExecDeps.IdentitySecret` 由节点从 `AXIOM_IDENTITY_KEY_FILE` 读出，所有节点必须相同，否则会话的上游缓存换节点就断。
-- `ExecDeps.Records` 是调用记录（`*observability.Recorder`）：每次调用在结算写成之后入队一条，金额用账本实收的数，所以记录与账本一致；结算在后台重试的，成功时才记。记录是观测，入队不等写库，队列满了丢弃并计数，调用从不因它失败。是否免单取结算里已算好的 `Final.Waived`（只由三条免单规则决定），不是“实收为 0”；客户端应用在请求到达时从 `User-Agent` 认（Claude Code 记 `claude-code`，Codex 记 `codex`，其余为空）；来源类别一律 `relay`（`route.go` 给每个端点的类别）。网关不知道的字段（客户端自己的会话与子 agent 标识、语言、终端用户）留空不猜，用户协议版本写 `none`（还没有协议可记，见 observability 的「用户同意」）、类别一律 `chat`，首字时间还没有量。映射在 `record.go`。`Records` 为空时调用不记录，账本测试因此不需要记录器。
+- `Deps.Records` / `ExecDeps.Records` 是调用记录（`*observability.Recorder`）：准入时 `Handler.take` 调 `Admit` 为这次调用预占一条记录的位置，结算写成之后、响应结束之前 `Executor.log` 用这个位置 `Commit`，金额用账本实收的数，所以记录与账本一致；结算在后台重试的，成功时才记。记录先落本机 spill 并 fsync，写库由后台按批做，调用不等待数据库；spill 满或 recorder 已坏时 `Admit` 返回错误，handler 在准入前答 503 `overloaded`，不服务无记录的调用。结算在后台重试时，记录在后台结算成功后才写；节点在这两步之间被杀，这次已扣费的调用没有记录，窗口见[记录与告警的「写入路径」](../../docs/domains/observability.md#写入路径)。是否免单取结算里已算好的 `Final.Waived`（只由三条免单规则决定），不是“实收为 0”；客户端应用在请求到达时从 `User-Agent` 认（Claude Code 记 `claude-code`，Codex 记 `codex`，其余为空）；来源类别一律 `relay`（`route.go` 给每个端点的类别）。网关不知道的字段（客户端自己的会话与子 agent 标识、语言、终端用户）留空不猜，用户协议版本写 `none`（还没有协议可记，见 observability 的「用户同意」）、类别一律 `chat`，首字时间还没有量。映射在 `record.go`。`Records` 为空时调用不记录，账本测试因此不需要记录器；生产由 `newCallNode` 同时接到 handler 和 executor。
 - 响应头等待和空闲超时“按端点、按模型可调”还没有：routing 的 `Endpoint` 没有这两项，现在全站一个值（`Config`）。
 - `ExecDeps.Quality` 是 `*quality.Monitor`，与 `RouteDeps.Quality` 是同一个：每次尝试在 `close` 里把它怎么结束的（`quality.Observation`：适配器的失败、流读失败的 `protocol.Fault`、`cutOf` 从 context 原因读出的超时或我们自己的原因、客户端是否已走、是否正常结束或 200 无正文、预估输入、结算用的输出 token、发出和首段内容的时刻）报一次，判定在 quality（[internal/quality/README.md](../quality/README.md)）。
 - 结尾的结束原因：`Relay` 不交出上游的 `stop_reason`，正常结束一律记 `FinishStop`；零输出免单要的“结束原因为空”因此只有出错的情形，protocol 补上后再接；零输出把普通输出、推理、音频输出、图片一起算，有音频输出就不免单。零输出这条规则本身没有上限，连续多少次都按它免。
@@ -227,7 +227,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 - **所有权**：`Meter` 只归所有者 goroutine。`Observe` 返回 `ExtendNow(req)` 时，`req` 是这一刻的不可变快照，`Meter` 进入"追加中"，在途期间不再返回它。所有者在另一个 goroutine 里以新建的、1s 期限、不随 `clientCtx` 取消的 context 调 `Extend(ctx, h, req)`，结果经通道送回，所有者在两次 `Next` 之间取走、调 `Meter.Extended(seq, err)`。后台的 `Extend` 从不读 `Meter`。每个请求最多一个追加在途；停用 key 不中断在途请求。
 - **何时追加**：当前段用掉 40%–60% 时，比例每个请求随机取一次，避免同时开始的请求一起追加。
 - **写阻塞**：可分段的尝试，客户端单次写的期限 = min(10s, 当前段余量 ÷ 模型最快输出速度)，到期按断开处理，所以停读期间上游的生成也不越过当前段加超额额度。
-- **分段与超额额度**：一段的大小与超额额度只来自节点设置（`SegmentOutput`、`SegmentOvershoot` → `Config.Segments()`），`cmd/axiom` 把同一个值交给路由和计费；超额额度的 token 数是 `Segments.Allowance(速度)`，速度取端点规格里的最快输出速度（[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)）。
+- **分段与超额额度**：一段的大小与超额额度来自后台记录（`billing.segment_settings`，默认值在 `billing.DefaultSegments()`），`cmd/axiom` 把同一个 `billing.SegmentPolicy` 交给路由和计费，节点每 30 秒重读；路由在计划时读一次并冻结进 `routing.Plan`，随预留请求交给计费，计划后的热更新不会改变这笔报价；超额额度的 token 数是 `Segments.Allowance(速度)`，速度取端点规格里的最快输出速度（[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)）。
 - **当前段先用完**（`Observe` 返回 `Exhausted`）：停止调 `Next`，空闲计时暂停，最多等追加 1s。`*Insufficient` 截断为 `credits_insufficient`；数据库失败、超时、`ErrTerminated` 截断为 `billing_unavailable`。截断 = 取消上游 → 等 `Next` 返回 → `Settle` → `Relay.Fail`。
 - 达到用户设的输出上限是正常结束（`length`、`max_tokens`、`response.incomplete`），不是截断。
 
@@ -293,13 +293,14 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 | 向客户端写一次（`WriteTimeout`） | 10s；可分段的取 min(10s, 当前段余量 ÷ 最快输出速度) | 按客户端已走处理 |
 | 向客户端写一整份回复（`respond`） | 每块 64 KiB，期限取 min(10s, 距总期限还剩)；总期限取 max(`WriteTimeout`, 回复字节数 ÷ 64 KiB/s)，16 MiB 约 4 分 16 秒 | 到期不再写，按客户端已走处理（结算已提交，金额不变） |
 | 追加（`ExtendWait`） | 1s，含等账户闸 | 截断 |
-| 一段与超额额度（`SegmentOutput`、`SegmentOvershoot`） | 一段 1000 个输出 token，超额额度 2s（是追加等待的两倍，没有模型标出速度时用不到） | 不是一个期限：额度盖住截断前上游最多再生成的量 |
+| 一段与超额额度（后台分段设置） | 默认一段 1000 个输出 token、超额额度 2s（是追加等待的两倍，没有模型标出速度时用不到）；保存后 30 秒内生效 | 不是一个期限：额度盖住截断前上游最多再生成的量 |
 | 结算（`SettleRetry`、`SettleBackground`） | 单次 2s，退避重试 10s 后改为后台重试 20 分钟 | 「计量、追加与结算」 |
 | 持有者 | TTL 60s，心跳 10s，回收宽限 60s | billing 的「持有者与截止时间」 |
 | 预留截止时间 | 准入 + 单次调用最长 + 30 分钟结算宽限 | 清理接管 |
 | 优雅退出 | 监听、调用和结算共用 `AXIOM_SHUTDOWN_TIMEOUT`（默认 30s）；监听与调用同时等这个期限，到期限前 `abortGrace`（5s）取消全部上游，结算等到期限，不追加 grace | 交给清理 |
 
-- 默认值是后台配置的种子，保存时校验下列关系，不满足拒绝保存，启动时不满足不启动（`gateway.New` 先 `Config.Validate`，一次报出全部问题；数值都须为正；入口的数值是 `IPInFlight`、`MaxBody`、`KeyRate`、`CountRate`、`RateWindow`、`KeyLookup`，默认 500、32 MiB、每 key 每分钟 6000 次（调用）、每 key 每分钟 6000 次（计数）、1 分钟、1s）：`lock_timeout`、`statement_timeout` < 准入合计；排队 ≤ `StartBy` < 单次调用最长；响应头等待、空闲 < 单次调用最长，保活 < 空闲；TTL ≥ 3 × 心跳，宽限 ≥ TTL；`SegmentOvershoot` ≥ `ExtendWait`（截断前上游最迟在这段时间里还在生成，额度要盖住它）；结算宽限 > 结算的前台加后台重试（`SettleRetry` + `SettleBackground`，默认 10s + 20 分钟，给清理接管留约 10 分钟）；0 < 保留数 < N；每 key 等待者 ≤ 全局等待者；`RateWindow` 是整毫秒、1 秒到 24 小时（共享计数的窗口按毫秒从纪元算，键活两个窗口）。
+- 这些是节点启动时的值，保存配置时校验下列关系，不满足拒绝保存，启动时不满足不启动（`gateway.New` 先 `Config.Validate`，一次报出全部问题；数值都须为正；入口的数值是 `IPInFlight`、`MaxBody`、`KeyRate`、`CountRate`、`RateWindow`、`KeyLookup`，默认 500、32 MiB、每 key 每分钟 6000 次（调用）、每 key 每分钟 6000 次（计数）、1 分钟、1s）：`lock_timeout`、`statement_timeout` < 准入合计；排队 ≤ `StartBy` < 单次调用最长；响应头等待、空闲 < 单次调用最长，保活 < 空闲；TTL ≥ 3 × 心跳，宽限 ≥ TTL；结算宽限 > 结算的前台加后台重试（`SettleRetry` + `SettleBackground`，默认 10s + 20 分钟，给清理接管留约 10 分钟）；0 < 保留数 < N；每 key 等待者 ≤ 全局等待者；`RateWindow` 是整毫秒、1 秒到 24 小时（共享计数的窗口按毫秒从纪元算，键活两个窗口）。
+- **分段设置的下限**：超额额度必须 ≥ `ExtendWait`（截断前上游最迟在这段时间里还在生成，额度要盖住它），由 billing 在保存和重读时校验，不在 `gateway.Config` 里。
 - **限额**：每个请求最多 3 次路由尝试（含结果未知的；模型侧循环的每次采样也计入：回退的尝试序号因此不超过 3），共享期限，换端点不重置时钟。重试预算按供应商、在进程内：1 分钟内重试不超过首次请求数的 10%，保底每分钟 5 次；用完跳过该供应商并写进路由记录。凭证范围的失败在同端点换凭证，也算一次尝试；疑似出口拦截在 M1 按端点处理并报告 quality。suppliers、egress 不暗中重试 POST。
 
 ## 并发、背压与共享状态
@@ -311,7 +312,7 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 - **内存**：每路 64 KiB（原生两格式之间的转发另加 16 KiB，两层转换同时持有缓冲，见 protocol README 的「内存」）加节点预算 2 GiB，由 protocol 记账，请求体、转换（分配之前按上界申请，见「尝试与转发」）、暂存、聚合都计入。
 - **连接池**：gateway 的准入类许可最多 N−R 个，完成类最多 R 个，分别计数；完成类占满或排队时，其他账户的准入仍能取满 N−R 个许可。完成类只在账户闸上优先，两个许可队列互不挤占。物理隔离由 [platform 的连接池](../platform/README.md#连接池)保证：普通池 N−R 条，完成池 R 条；N 由数据库预算和节点数在启动时算出（算出的上限最多 64，显式 `pool_max_conns` 可在份额内改），R 默认 16。追加、结算、孤儿结算在进入 billing 前用 `pg.CompletionContext` 选择完成池。recorder、River、控制台即使不经 gateway 许可也只能使用普通池。冷 key 查找和只读 key 端点仍领取准入许可；`NewHandler` 检查 `Service.GatesLookups`，没配就不启动。类内先到先得，等待者不占连接，期限来自调用者 context。持有者心跳与回收不占任何一个池，走它自己的专用连接（[platform 的连接池](../platform/README.md#连接池)）。
 - **排队**：只在候选端点都满载时，在事务之外；全局最多 256、每 key 最多 16 个等待者，满了 429；FIFO，每释放一个名额调一次 `Queue.Wake`，唤醒一个；醒来的人用不上（它等的是别的端点）就 `Pass`，唤醒只交给这次释放时已在排的人，重排的人排在它们后面、不再被同一次唤醒叫醒，所以一次释放至多引起当时排队人数那么多次准入。调用者在看负载之前先取 `Queue.Epoch()` 并传给 `Wait`：看负载和入队之间释放的名额没有等待者可唤醒，`Epoch` 会记下这种释放，`Wait` 见到就直接返回让调用者重做，不会睡到 20 秒期限；有人在排队时的释放归队首，不计入，新来的不会插队。醒来时 context 已结束的等待者把唤醒转给下一个。排队期限是 `QueueWait`，从调用第一次排队起算一次，之后再排队共用剩余时间，到期 429；调用者的 context 结束则返回它的错误，什么都不写。
-- **调用记录与观测**：`observability.Recorder.Enqueue(CallRecord)` 非阻塞，记录里带这次调用的每次尝试；队列满时丢掉新记录并计数，从不等待，所以在释放名额之前或之后调用都可以，规则见[记录与告警的「写入路径」](../../docs/domains/observability.md#写入路径)；`quality.Monitor.Observe` 同步更新固定大小的端点窗口，不分配、不访问数据库；观察带准入里的账户所有者与关闭回执里的凭证 ID。只有健康状态变化异步交接，缓冲满时推迟该变化、计数，已有变化不丢。试探、持久化与运行模式见 [quality](../quality/README.md)。`CallRecord` 只用 observability、catalog、protocol、accounts 的类型和跨层 ID，由本模块转换。
+- **调用记录与观测**：准入时预占一条记录的位置，结算后的 `Commit` 把调用和每次尝试追加到本机 spill；响应在 `Commit` 之后才写出，进程崩溃后由下一次启动重放；结算留给后台重试的，记录在后台结算成功后写，节点在后台结算提交与写记录之间被杀仍有缺口。spill 满或 recorder 坏时准入直接拒绝新调用，不丢已接受的记录，规则见[记录与告警的「写入路径」](../../docs/domains/observability.md#写入路径)；`quality.Monitor.Observe` 同步更新固定大小的端点窗口，不分配、不访问数据库；观察带准入里的账户所有者与关闭回执里的凭证 ID。只有健康状态变化异步交接，缓冲满时推迟该变化、计数，已有变化不丢。试探、持久化与运行模式见 [quality](../quality/README.md)。`CallRecord` 只用 observability、catalog、protocol、accounts 的类型和跨层 ID，由本模块转换。
 - **预检计数**：`RateCounter` 按键做滑动窗口计数（当前窗口加上一窗口按重叠比例折算的部分），只计数不判定，不需要释放；两张轮换的表使内存只与最近两个窗口出现过的键成正比。配了 Valkey 时（M2），预检把各维度的计数交给 `count` 脚本，一次往返，粘性的 `GET`/`DEL` 在同一批，本地 key 始终计数、账户只在未超节点保护时计数作为兜底（见「预检计数」）：Valkey 不可用（出错、超过 20ms、熔断打开）时，用进程内的计数与全额限额比较，不乘 N：故障期间一个 key 合计至多放大到 N 倍，但不会因 Valkey 抖动而误拒流量集中在一个核心的 key（[platform/kv 的设计](../platform/kv/README.md)）。`count_tokens` 的预检只有计数。
 - **粘性**：排序第 2 位用预检取到的端点；成功端点不同时，结束后写回。收费那次尝试交付了内容（`Committed` 或 `Aggregated`），且它的端点不是预检取到的那个，就 `Stick(会话, 端点, 路线的粘性时间)`，时间取预设的 `StickyTTL`（`Plan.StickyTTL`），预设没设就用路由的默认值；一次尝试都没交付内容的调用什么都不写，也不忘记。在结算和结尾之前更新本地表或投递后台队列；异步写入可能晚于紧跟结尾的下一个请求，只损失粘性命中。M1 的粘性表在进程内，写一次是一次 map 写入，不另起协程；M2 配了 Valkey 后经 `kv` 的后台队列写，队列满就丢弃并计数，不等待。请求带 `x-claude-code-context-compacted` 时，读粘性前先 `Forget`，旧缓存已经作废；配了 Valkey 时这一步就是预检那一批里的 `DEL`，代替读取。Valkey 不可用时不粘、写入丢弃，不退回进程内的表。
 
@@ -377,7 +378,7 @@ P15 的代码结构：`cacheplan.go` 在准入前决定开不开、TTL、清除�
 | — | 数据库不可用短于 TTL + 宽限（120s） | 新准入 503；恢复后心跳续上，在途照常结算 |
 | — | 数据库不可用达到 TTL + 宽限 | 持有者被回收，在途的追加得 `ErrTerminated` 截断；迟到的 `Settle` 按终态分支，钱不重复 |
 | — | 主备切换 | 已确认的提交不丢，靠[运营的复制要求](../../docs/domains/operations.md#部署与节点管理)；切换演练在 G11 |
-| 10 | 调用记录写不进 | 队列满即丢弃新记录并计数，不阻塞调用；崩溃丢最近一次成功写入之后的记录。记录不在时 `generation` 返回 404 `generation_not_found`，不提供账本精简版（见[「辅助接口」的 `generation`](#辅助接口)） |
+| 10 | 调用记录写不进 | 准入时预占失败就拒绝新调用；已接受但尚未入库的记录留在本机 spill，崩溃后重放，不丢。数据库不可用时记录积压到容量上限后拒绝新调用；已服务的记录在写入数据库前，`generation` 仍返回 404 `generation_not_found`，写入后即可查。 |
 | 暂估 | 上游没报告的用量、价目表缺的项、价目表定价不了的等级 | 按锁定价格和兜底价收，标暂估；预留里没用掉的部分随结算一起释放，没有后续校正 |
 | 对账 | 某供应商持续缺逐笔记录 | 停止向它路由并告警 |
 | 退出 | 优雅退出到期 | 取消全部上游（不传递取消的因此暂估），结算到期限，之后的交给回收 |

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log/slog"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -158,7 +157,7 @@ func newCall(account uuid.UUID, at time.Time, model, app string) observability.C
 // record writes calls through the recorder and waits for them to be stored.
 func (f consoleFixture) record(calls ...observability.CallRecord) {
 	f.t.Helper()
-	r := observability.NewRecorder(f.t.Context(), f.db, pg.PlatformScope(), callRecords, slog.New(slog.DiscardHandler))
+	r := testRecorder(f.t, f.db, pg.PlatformScope(), testCallRecords(f.t))
 	for _, c := range calls {
 		if err := r.Enqueue(c); err != nil {
 			f.t.Fatal(err)

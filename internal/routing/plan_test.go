@@ -351,7 +351,7 @@ func TestSegmentable(t *testing.T) {
 	}
 	for _, c := range cases {
 		// 1000 output tokens a segment, with an allowance of 500 at the endpoint's 100 tokens a second: 5 seconds.
-		h := newHarness(t, routing.Config{Segments: billing.Segments{Output: 1000, Overshoot: 5 * time.Second}}, openPreset(), endpoint(t, 1, func(e *routing.Endpoint) {
+		h := newHarness(t, routing.Config{Segments: billing.NewSegmentPolicy(billing.Segments{Output: 1000, Overshoot: 5 * time.Second})}, openPreset(), endpoint(t, 1, func(e *routing.Endpoint) {
 			if c.e != nil {
 				c.e(e)
 			}
@@ -647,7 +647,7 @@ func TestCompletionsNeverSegment(t *testing.T) {
 		MaxOutput: 4096, MaxOutputSet: true, Stream: true, ServiceTiers: 1 << catalog.ServiceTierStandard,
 	}
 	in.NativeOnly = true
-	h := newHarness(t, routing.Config{Segments: billing.Segments{Output: 512, Overshoot: time.Second}}, openPreset(), e)
+	h := newHarness(t, routing.Config{Segments: billing.NewSegmentPolicy(billing.Segments{Output: 512, Overshoot: time.Second})}, openPreset(), e)
 	entry := h.plan(in).Entries[0]
 	if entry.Segmentable {
 		t.Error("a completion entry is segmentable: its output would be reserved one segment at a time")

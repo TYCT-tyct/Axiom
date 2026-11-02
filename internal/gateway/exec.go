@@ -273,8 +273,10 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 
 // conclude settles the call and writes what is left to tell the client. The order is the one that keeps the money
 // right: the attempt is over (its upstream cancelled, its read returned) before Settle, and Settle is committed before
-// the ending that reports the cost is written (I3). A settlement not written in time goes on in the background once
-// the ending is out.
+// the ending that reports the cost is written (I3). The call's record enters the spill after the settlement and before
+// the ending, so a crash after the client has the answer cannot leave that call unrecorded when the settlement was
+// written here. A settlement not written in time goes on in the background once the ending is out; its record is
+// written after that settlement commits, so a kill between the two leaves a charged, pending call without a record.
 //
 //nolint:cyclop,gocognit // the settlement order is the invariant; each branch is one ending
 func (s *session) conclude(ctx context.Context, e ended) {
@@ -288,6 +290,12 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	var fin *protocol.Final
 	if err == nil && (len(o.Attempts) > 0 || s.cacheHit) {
 		fin = s.final(f)
+	}
+	// The record is in the spill before the ending is written when the settlement was written here: a process crash
+	// after the client sees the answer cannot leave that call unrecorded. The settlement committed first, so the
+	// record's amounts are final. A settlement left for the background records itself only after it commits there.
+	if err == nil {
+		s.x.log(ctx, s.trail(), o, f, time.Now())
 	}
 	switch {
 	case e.reply != nil:
@@ -322,7 +330,6 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	s.handedOff = s.x.settled(ctx, s, o, err)
 	if err == nil {
 		s.storeCache(ctx)
-		s.x.log(ctx, s.trail(), o, f, time.Now())
 	}
 }
 
