@@ -24,17 +24,36 @@ func (s *session) cached(ctx context.Context) (ended, bool) {
 		s.x.Cache.Delete(ctx, s.c.Admitted.Scope, account, s.c.cache.key)
 		return ended{}, false
 	}
-	entry, ok := s.x.Cache.Lookup(ctx, s.c.Admitted.Scope, account, s.c.cache.key)
+	entry, ok := s.x.Cache.Lookup(ctx, s.c.Admitted.Scope, account, s.c.cache.key, s.x.Memory)
 	if !ok {
 		return ended{}, false
 	}
+	if !s.cacheAuthorized(entry) {
+		entry.release(s.x.Memory)
+		s.x.Cache.count(ctx, "miss")
+		return ended{}, false
+	}
+	s.x.Cache.count(ctx, "hit")
 	return s.replayCached(ctx, account, entry)
+}
+
+// cacheAuthorized reports whether this call's current route still serves the entry's source model at the endpoint that
+// produced it. The cache is shared by an account's keys, so an entry written under one key's model or endpoint
+// permission must not answer a key that may not use that model or endpoint now.
+func (s *session) cacheAuthorized(entry *cachedResponse) bool {
+	for _, p := range s.c.Plan.Entries {
+		if uuid.UUID(p.Endpoint) == entry.endpoint && s.servedModel(&attempt{entry: p}) == entry.model {
+			return true
+		}
+	}
+	return false
 }
 
 // replayCached runs a stored answer through the ordinary relay. The stored bytes are the upstream's own, so the client
 // gets the same conversion, framing and fresh identifiers it would get from a live attempt; only the usage and cost are
 // zero, which RelayOptions.Cached makes the relay write.
 func (s *session) replayCached(ctx context.Context, account uuid.UUID, entry *cachedResponse) (ended, bool) {
+	defer entry.release(s.x.Memory)
 	now := s.x.Cache.now()
 	u := protocol.UsageContextOf(&s.c.Request)
 	relay := protocol.NewRelay(s.c.Format, entry.format, bytes.NewReader(entry.body), u, protocol.RelayOptions{
@@ -167,6 +186,7 @@ func (s *session) capture(a *attempt, c *cacheCapture) {
 	s.cacheFormat = a.entry.Target.Format
 	s.cacheModel = s.servedModel(a)
 	s.cacheState = a.state
+	s.cacheEndpoint = uuid.UUID(a.entry.Endpoint)
 }
 
 // replayFailure turns a relay error into a miss before the commit point and a broken stream after it.

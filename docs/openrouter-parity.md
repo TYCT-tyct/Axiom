@@ -291,7 +291,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 12. 【会话与归因】会话请求头（`x-session-id` 等）转发给 Responses、Chat 端点并换成分值（`gw/headers.go`），Axiom 自己的粘性已按 x-session-id 分组，请求体 session_id 优先；`X-OpenRouter-Title`/`HTTP-Referer`/`X-OpenRouter-Categories` 已记入调用记录并出现在控制台的调用列表与详情，但没有应用页和排名；Anthropic Messages 的 `fallbacks` 已映射到路由备选模型。→ #313（session 头、fallbacks）
 13. 【限流】E4-2/P13 已实现：共享账户/key 计数、等级默认与账户覆盖、请求速率 429 的 `X-RateLimit-*` 头、`GET /key` 的 `rate_limit`、`budgets`、`effective_budget`；付费模型平台限流等有意差异见[接入](domains/gateway.md#业务速率与-openrouter-的差异)。→ #315
 14. 【管理 API】`/api/v1/keys` 系列已提供管理 key 认证的调用 key CRUD（E4-9/P14）；限制与 OpenRouter 的差异见[账户域](domains/accounts.md#api-key)；`/workspaces`、`/guardrails`、`/organization` 管理 API 没有。→ #315（key）、#317（工作区/护栏的界面）
-15. 【响应缓存，已补】`X-OpenRouter-Cache*` 请求/响应头和预设里的缓存配置已随 #330 实现（三种生成格式，默认关闭）；按账户隔离、不支持 Embeddings/Rerank/Completions/compact，保留政策仍挂 #325。→ #330
+15. 【响应缓存，已补】`X-OpenRouter-Cache*` 请求/响应头和预设里的缓存配置已随 #330 实现（三种生成格式，平台开关 `AXIOM_RESPONSE_CACHE_CONTENT` 默认关闭）；按账户隔离并用当前 key 的模型/端点权限复核、不支持 Embeddings/Rerank/Completions/compact，保留政策仍挂 #325。→ #330
 16. 【BYOK】用户自带供应商 key（`/byok`、优先/回退区、手续费）没有；范围里在「以后」。管理员侧号池已有。→ 新建
 17. 【路由器】`openrouter/auto`、`openrouter/free` 已实现（按现有路由排序选具体模型，free 只在 `:free` 目录条目里选）；`auto-beta`、`pareto-code`、`bodybuilder`、`fusion`、`switchyard`、`jev` 都没有。→ 新建
 18. 【产品线】P18 已补 `/embeddings`、`/rerank`、`/completions`（§1）；仍缺 `/embeddings/models`、`/images`、`/videos`、`/audio/speech`、`/audio/transcriptions`、音频/视频输入输出、Files API、Batch API、`/moderations`。图片/视频/语音与按次/按时长/按字符计价相关，要先有 #320；`/embeddings/models` 要目录先有输出模态；`/moderations` 没有模型与策略数据。→ 批量/Files：#312 或新建；图片/视频/语音：#320

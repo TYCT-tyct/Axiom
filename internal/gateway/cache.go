@@ -54,6 +54,7 @@ type cacheEntry struct {
 	source        uuid.UUID
 	format        protocol.Format
 	model, state  string
+	endpoint      uuid.UUID
 	body          []byte
 	ttl           time.Duration
 }
@@ -64,8 +65,19 @@ type cachedResponse struct {
 	source               uuid.UUID
 	format               protocol.Format
 	model, state         string
+	endpoint             uuid.UUID
 	body                 []byte
+	held                 int64
 	createdAt, expiresAt time.Time
+}
+
+// release gives back the node's budget the lookup charged for this entry. The caller must hold it until the replay has
+// consumed the body.
+func (r *cachedResponse) release(memory *protocol.Memory) {
+	if r.held > 0 && memory != nil {
+		memory.Refund(r.held)
+		r.held = 0
+	}
 }
 
 // NewResponseCache builds the cache and its counters. It does not start the writer; Run owns it.
@@ -149,29 +161,65 @@ func (c *ResponseCache) count(ctx context.Context, result string) {
 
 // Lookup opens one account's entry. A missing, expired, corrupt or unreadable row is a miss, not a failure of the call:
 // the cache may only make a reply cheaper, never turn a valid request into an error.
-func (c *ResponseCache) Lookup(ctx context.Context, scope pg.Scope, account uuid.UUID, key [32]byte) (*cachedResponse, bool) {
-	if c == nil {
+//
+//nolint:cyclop,funlen // one lookup: metadata, memory admission, decrypt, bounds check
+func (c *ResponseCache) Lookup(ctx context.Context, scope pg.Scope, account uuid.UUID, key [32]byte, memory *protocol.Memory) (*cachedResponse, bool) {
+	if c == nil || memory == nil {
 		return nil, false
 	}
 	ctx, cancel := context.WithTimeout(ctx, cacheLookupTimeout)
 	defer cancel()
 	var (
-		row     cachedResponse
-		seal    secret.Sealed
-		size    int
-		model   string
-		payload []byte
-		format  int16
+		row       cachedResponse
+		size      int
+		cipherLen int
+		format    int16
 	)
+	// Read only the metadata first: the node's budget is charged before the ciphertext and the plaintext are allocated.
 	err := c.db.ReadTx(ctx, scope, func(tx pg.Tx) error {
 		return tx.QueryRow(ctx, `
-			SELECT id, source_id, format, model, ciphertext, nonce, wrapped_dek, key_version, body_size,
-			       created_at, expires_at
+			SELECT id, source_id, format, model, endpoint, body_size, octet_length(ciphertext), created_at, expires_at
 			FROM gateway.response_cache
 			WHERE account_id = $1 AND cache_key = $2 AND expires_at > $3`,
 			account, key[:], c.now(),
-		).Scan(&row.id, &row.source, &format, &model, &seal.Ciphertext, &seal.Nonce, &seal.WrappedDEK,
-			&seal.KeyVersion, &size, &row.createdAt, &row.expiresAt)
+		).Scan(&row.id, &row.source, &format, &row.model, &row.endpoint, &size, &cipherLen,
+			&row.createdAt, &row.expiresAt)
+	})
+	if errors.Is(err, pg.ErrNoRows) {
+		c.count(ctx, "miss")
+		return nil, false
+	}
+	if err != nil {
+		c.count(ctx, "lookup_error")
+		c.logger.Warn("a response-cache lookup failed; treating it as a miss", "err", err)
+		return nil, false
+	}
+	// ciphertext, the opened payload and its []byte copy are all alive together; the state and the decoder are bounded
+	// by cacheStateLimit. Charge for that whole peak, not for the plaintext alone.
+	hold := int64(cipherLen + 2*size + 2*cacheStateLimit + 64<<10)
+	if !memory.Charge(hold) {
+		c.count(ctx, "miss")
+		return nil, false
+	}
+	kept := false
+	defer func() {
+		if !kept {
+			memory.Refund(hold)
+		}
+	}()
+	var (
+		seal    secret.Sealed
+		payload []byte
+		again   uuid.UUID
+		againN  int
+	)
+	err = c.db.ReadTx(ctx, scope, func(tx pg.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT id, body_size, ciphertext, nonce, wrapped_dek, key_version
+			FROM gateway.response_cache
+			WHERE account_id = $1 AND cache_key = $2 AND expires_at > $3`,
+			account, key[:], c.now(),
+		).Scan(&again, &againN, &seal.Ciphertext, &seal.Nonce, &seal.WrappedDEK, &seal.KeyVersion)
 	})
 	if errors.Is(err, pg.ErrNoRows) {
 		c.count(ctx, "miss")
@@ -195,9 +243,9 @@ func (c *ResponseCache) Lookup(ctx context.Context, scope pg.Scope, account uuid
 		c.deleteRow(ctx, scope, row.id)
 		return nil, false
 	}
-	row.format = protocol.Format(format) //nolint:gosec // cacheFormat accepted only the three known formats, all below 256
-	row.model, row.state, row.body = model, state, body
-	c.count(ctx, "hit")
+	row.format, row.state, row.body = protocol.Format(uint8(format)), state, body //nolint:gosec // cacheFormat bounds format to the three known formats
+	row.held = hold
+	kept = true
 	return &row, true
 }
 
@@ -276,8 +324,8 @@ func (c *ResponseCache) store(ctx context.Context, entry cacheEntry) {
 		if _, err := tx.Exec(ctx, `
 			WITH doomed AS (
 				SELECT id, body_size,
-				       row_number() OVER (ORDER BY created_at, id) AS rn,
-				       sum(body_size) OVER (ORDER BY created_at, id ROWS UNBOUNDED PRECEDING) AS used
+				       row_number() OVER (ORDER BY created_at DESC, id DESC) AS rn,
+				       sum(body_size) OVER (ORDER BY created_at DESC, id DESC ROWS UNBOUNDED PRECEDING) AS used
 				FROM gateway.response_cache WHERE account_id = $1
 			)
 			DELETE FROM gateway.response_cache WHERE id IN (
@@ -287,11 +335,12 @@ func (c *ResponseCache) store(ctx context.Context, entry cacheEntry) {
 		}
 		_, err := tx.Exec(ctx, `
 			INSERT INTO gateway.response_cache
-				(id, site_id, account_id, cache_key, source_id, format, model, ciphertext, nonce, wrapped_dek,
-				 key_version, body_size, created_at, expires_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+				(id, site_id, account_id, cache_key, source_id, format, model, endpoint, ciphertext, nonce,
+				 wrapped_dek, key_version, body_size, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 			id, entry.site, entry.account, entry.key[:], entry.source, int16(entry.format), entry.model,
-			seal.Ciphertext, seal.Nonce, seal.WrappedDEK, seal.KeyVersion, len(entry.body), now, expires)
+			entry.endpoint, seal.Ciphertext, seal.Nonce, seal.WrappedDEK, seal.KeyVersion, len(entry.body), now,
+			expires)
 		return err
 	})
 	if err != nil {

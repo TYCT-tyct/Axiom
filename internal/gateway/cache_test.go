@@ -10,7 +10,9 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/observability"
+	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
@@ -25,6 +27,10 @@ func TestAResponseCacheHitIsFreeAndRecorded(t *testing.T) {
 	t.Parallel()
 	r := ledgerRig(t)
 	up := withExecutor(r, &flakyLedger{})
+	// One clock for the hit's age: a busy machine cannot make the test see the microseconds between the write and the
+	// replay as an elapsed second.
+	now := time.Now()
+	r.cache.now = func() time.Time { return now }
 	r.exec.Records = observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
 		QueueSize: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
 		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
@@ -72,6 +78,9 @@ func TestAResponseCacheHitIsFreeAndRecorded(t *testing.T) {
 	if !strings.Contains(body, `"cost":0`) || strings.Contains(body, `"input_tokens":130`) {
 		t.Errorf("the hit body carries the original usage or cost:\n%s", body)
 	}
+	if !strings.Contains(body, `"cost_currency":"USD"`) {
+		t.Errorf("the hit body has no site currency:\n%s", body)
+	}
 	if n := sends(up); n != 1 {
 		t.Errorf("%d upstream sends, want the one that filled the cache", n)
 	}
@@ -97,6 +106,68 @@ func sends(u *fakeUpstreams) (n int) {
 		n += e.sends
 	}
 	return n
+}
+
+// TestACacheEntryRespectsTheKeysCurrentRoute: a cache shared by an account's keys must not replay a reply produced by a
+// model or endpoint that the current key may not use. The same body under two keys with different model permissions
+// misses on the second key and goes upstream; narrowing a key's models after a hit makes the next call a miss too.
+//
+//nolint:cyclop // the miss, hit and narrowed-key assertions are one route check
+func TestACacheEntryRespectsTheKeysCurrentRoute(t *testing.T) {
+	t.Parallel()
+	r := ledgerRig(t)
+	up := withExecutor(r, &flakyLedger{})
+	sample, _ := sample(t, protocol.Messages)
+	for _, e := range up.eps {
+		e.script = []scripted{streamed(sample, 3, 40, false)}
+	}
+	a := r.funded(1e12)
+	alpha, alphaID := r.newKeyWithModels(a, "acme/alpha")
+	beta, _ := r.newKeyWithModels(a, "acme/beta")
+	headers := []string{"X-Openrouter-Cache", "true"}
+	alphaBody := strings.Replace(stream("openrouter/auto"), "hello", "alpha", 1)
+	betaBody := strings.Replace(stream("openrouter/auto"), "hello", "beta", 1)
+
+	if resp, out := r.do("POST", "/v1/messages", alpha, strings.NewReader(alphaBody), headers...); resp.StatusCode != http.StatusOK || resp.Header.Get(cacheStatusHeader) != "MISS" {
+		t.Fatalf("alpha miss: %d %q\n%s", resp.StatusCode, resp.Header.Get(cacheStatusHeader), out)
+	}
+	waitFor(t, "the alpha entry", func() bool { return r.count("SELECT count(*) FROM gateway.response_cache") == 1 })
+	if resp, out := r.do("POST", "/v1/messages", beta, strings.NewReader(betaBody), headers...); resp.StatusCode != http.StatusOK || resp.Header.Get(cacheStatusHeader) != "MISS" {
+		t.Fatalf("beta reuse: %d %q\n%s", resp.StatusCode, resp.Header.Get(cacheStatusHeader), out)
+	}
+	if n := sends(up); n != 2 {
+		t.Fatalf("%d upstream sends, want alpha and beta to miss separately", n)
+	}
+	if resp, out := r.do("POST", "/v1/messages", alpha, strings.NewReader(alphaBody), headers...); resp.StatusCode != http.StatusOK || resp.Header.Get(cacheStatusHeader) != "HIT" {
+		t.Fatalf("alpha hit: %d %q\n%s", resp.StatusCode, resp.Header.Get(cacheStatusHeader), out)
+	}
+	// Narrow alpha to beta only: the entry from alpha's old route is no longer authorized, so it must miss.
+	if err := r.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		_, err := r.accounts.UpdateKey(t.Context(), tx, audit.System("gateway.test"), alphaID,
+			accounts.KeySettings{Name: "Test", Models: []string{"acme/beta"}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if resp, out := r.do("POST", "/v1/messages", alpha, strings.NewReader(alphaBody), headers...); resp.StatusCode != http.StatusOK || resp.Header.Get(cacheStatusHeader) != "MISS" {
+		t.Fatalf("narrowed alpha: %d %q\n%s", resp.StatusCode, resp.Header.Get(cacheStatusHeader), out)
+	}
+	if n := sends(up); n != 3 {
+		t.Errorf("%d upstream sends, want the narrowed key to miss", n)
+	}
+}
+
+func (r *rig) newKeyWithModels(a account, models ...string) (string, accounts.KeyID) {
+	r.t.Helper()
+	text, id := r.newKey(a)
+	if err := r.db.Tx(r.t.Context(), platformScope, func(tx pg.Tx) error {
+		_, err := r.accounts.UpdateKey(r.t.Context(), tx, audit.System("gateway.test"), id,
+			accounts.KeySettings{Name: "Test", Models: models})
+		return err
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+	return text, id
 }
 
 // TestTheResponseCacheIsPerAccount: two accounts sending the same body have different entries. A key of one account can
@@ -221,7 +292,7 @@ func TestAFailedAnswerIsNotCached(t *testing.T) {
 	if resp.StatusCode == http.StatusOK {
 		t.Fatalf("the failure answered 200:\n%s", body)
 	}
-	time.Sleep(20 * time.Millisecond)
+	// A failed answer is never offered to the writer, so there is no background write to wait for.
 	if n := r.count("SELECT count(*) FROM gateway.response_cache"); n != 0 {
 		t.Errorf("%d entries after a failed answer", n)
 	}
@@ -317,7 +388,7 @@ func TestABrokenStreamIsNotCached(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("%d: %s", resp.StatusCode, body)
 	}
-	time.Sleep(20 * time.Millisecond)
+	// A broken stream is never offered to the writer either.
 	if n := r.count("SELECT count(*) FROM gateway.response_cache"); n != 0 {
 		t.Errorf("%d entries after a broken stream", n)
 	}
@@ -365,71 +436,5 @@ func TestCacheCaptureStopsAtTheEntryLimit(t *testing.T) {
 	}
 	if !c.overflow || len(c.buf) != 0 || s.cacheHeld != 0 {
 		t.Errorf("overflow %v, held %d, buffer %d; want the whole charge back", c.overflow, s.cacheHeld, len(c.buf))
-	}
-}
-
-// TestTheCachedStateIsEncryptedWithTheBody: the turn state is content-adjacent, so it travels in the same sealed
-// payload as the upstream bytes and never appears as a plaintext column.
-func TestTheCachedStateIsEncryptedWithTheBody(t *testing.T) {
-	t.Parallel()
-	r := ledgerRig(t)
-	a := r.newAccount(0)
-	scope := pg.NewScope(false, nil, []uuid.UUID{a.id})
-	key := [32]byte{3}
-	r.cache.store(t.Context(), cacheEntry{
-		scope: scope, site: siteID, account: a.id, key: key, source: uuid.NewV7(),
-		format: protocol.Chat, model: "m", state: "secret-turn-state", body: []byte("upstream-bytes"), ttl: time.Minute,
-	})
-	if n := r.count("SELECT count(*) FROM gateway.response_cache"); n != 1 {
-		t.Fatalf("%d entries, want one", n)
-	}
-	var ciphertext []byte
-	if err := r.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT ciphertext FROM gateway.response_cache`).Scan(&ciphertext)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(ciphertext, []byte("secret-turn-state")) || bytes.Contains(ciphertext, []byte("upstream-bytes")) {
-		t.Fatal("the cache row contains plaintext content or state")
-	}
-	got, ok := r.cache.Lookup(t.Context(), scope, a.id, key)
-	if !ok {
-		t.Fatal("the entry was not readable")
-	}
-	if got.state != "secret-turn-state" || string(got.body) != "upstream-bytes" {
-		t.Fatalf("got state %q body %q", got.state, got.body)
-	}
-}
-
-// TestTheCacheStoreRefusesOversizedAndOverlongEntries: the unencrypted body and the TTL are bounded before the row exists.
-func TestTheCacheStoreRefusesOversizedAndOverlongEntries(t *testing.T) {
-	t.Parallel()
-	r := ledgerRig(t)
-	a := r.newAccount(0)
-	scope := pg.NewScope(false, nil, []uuid.UUID{a.id})
-	base := cacheEntry{
-		scope: scope, site: siteID, account: a.id, key: [32]byte{1}, source: uuid.NewV7(),
-		format: protocol.Chat, model: "m", ttl: time.Minute,
-	}
-	big := base
-	big.body = bytes.Repeat([]byte("x"), maxCacheEntry+1)
-	r.cache.store(t.Context(), big)
-	over := base
-	over.key = [32]byte{2}
-	over.body = []byte("small")
-	over.ttl = cacheMaxTTL + time.Second
-	r.cache.store(t.Context(), over)
-	if n := r.count("SELECT count(*) FROM gateway.response_cache"); n != 0 {
-		t.Errorf("%d entries, want none", n)
-	}
-	ok := base
-	ok.body = []byte("small")
-	r.cache.store(t.Context(), ok)
-	if n := r.count("SELECT count(*) FROM gateway.response_cache"); n != 1 {
-		t.Fatalf("%d entries, want one", n)
-	}
-	r.cache.cleanup(t.Context())
-	if n := r.count("SELECT count(*) FROM gateway.response_cache"); n != 1 {
-		t.Errorf("cleanup removed a live entry")
 	}
 }

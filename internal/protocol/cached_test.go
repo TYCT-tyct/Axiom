@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 )
 
@@ -70,6 +71,68 @@ func TestCachedReplayZeroesUsage(t *testing.T) {
 				}
 				if m := nonzero.FindString(string(out)); m != "" {
 					t.Errorf("a cache replay reports %s:\n%s", m, out)
+				}
+			})
+		}
+	}
+}
+
+// TestACachedReplayUsesThisCallsTimestampAndCurrency: a hit is a new call, not the generation it was stored from. Chat
+// and Responses name this call's start, in both streams and aggregates, and every format reports the site's currency
+// with its zero cost.
+//
+//nolint:gocognit // the table runs every format through both stream and aggregate
+func TestACachedReplayUsesThisCallsTimestampAndCurrency(t *testing.T) {
+	t.Parallel()
+	usd, err := platform.ParseCurrency("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat := strings.Join([]string{
+		`data: {"id":"c","object":"chat.completion.chunk","created":1741290958,"model":"m","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}`,
+		`data: {"id":"c","object":"chat.completion.chunk","created":1741290958,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`,
+		`data: [DONE]`, "", "",
+	}, "\n\n")
+	for _, tc := range []struct {
+		name string
+		f    protocol.Format
+		body string
+		time string
+	}{
+		{"chat", protocol.Chat, chat, `"created":1760000000`},
+		{"responses", protocol.Responses, string(sample(t, "responses/text/upstream.sse")), `"created_at":1760000000`},
+		{"messages", protocol.Messages, string(sample(t, "messages/text/upstream.sse")), ""},
+	} {
+		for _, aggregate := range []bool{false, true} {
+			name := tc.name
+			if aggregate {
+				name += "/aggregate"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				r := protocol.NewRelay(tc.f, tc.f, strings.NewReader(tc.body), protocol.UsageContext{}, protocol.RelayOptions{
+					ID: "gen", Model: "m", Created: 1760000000, Memory: protocol.NewMemory(1 << 20), Cached: true, Aggregate: aggregate,
+				})
+				var out []byte
+				for {
+					st, err := r.Next()
+					if err != nil {
+						t.Fatal(err)
+					}
+					out = append(out, st.Out...)
+					if st.Kind == protocol.StepUpstreamDone {
+						out = append(out, r.Finish(protocol.Final{Currency: usd})...)
+						break
+					}
+				}
+				if tc.time != "" && !strings.Contains(string(out), tc.time) {
+					t.Errorf("a cached %s replay does not name this call's time:\n%s", tc.name, out)
+				}
+				if strings.Contains(string(out), "1741290958") {
+					t.Errorf("a cached %s replay kept the stored generation's time:\n%s", tc.name, out)
+				}
+				if !strings.Contains(string(out), `"cost_currency":"USD"`) {
+					t.Errorf("a cached %s replay has no currency:\n%s", tc.name, out)
 				}
 			})
 		}

@@ -52,24 +52,25 @@ const (
 // callDeps is what a node's call path is built from: the modules it orchestrates, the secret it derives the
 // identifiers sent upstream from, and the reverse proxies the deployment trusts (AXIOM_TRUSTED_PROXIES).
 type callDeps struct {
-	nodeID     string
-	healthMode quality.Mode
-	db         *pg.DB
-	keys       *secret.Keyring   // unseals suppliers' credentials
-	identity   []byte            // the identity key file's newest key
-	accounts   *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
-	catalog    *catalog.Catalog
-	egress     *egress.Client
-	search     gateway.SearchBackends
-	fileParser fileparse.Parser
-	gate       gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
-	limits     *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
-	records    *observability.Recorder // the call log, which the settlements write to
-	meter      metric.Meter            // where the call path's counters go
-	logger     *slog.Logger
-	proxies    []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
-	kv         *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
-	alerts     alert.Sink
+	nodeID        string
+	healthMode    quality.Mode
+	db            *pg.DB
+	keys          *secret.Keyring   // unseals suppliers' credentials
+	identity      []byte            // the identity key file's newest key
+	accounts      *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
+	catalog       *catalog.Catalog
+	egress        *egress.Client
+	search        gateway.SearchBackends
+	fileParser    fileparse.Parser
+	gate          gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
+	limits        *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
+	records       *observability.Recorder // the call log, which the settlements write to
+	meter         metric.Meter            // where the call path's counters go
+	logger        *slog.Logger
+	proxies       []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
+	kv            *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
+	responseCache bool           // whether the platform permits the response cache to store reply content
+	alerts        alert.Sink
 	// verify answers what an endpoint claims to serve, for model verification. Production sets it unless
 	// AXIOM_MODEL_VERIFICATION=off; a test whose fake upstream counts every generation leaves it nil, and the
 	// endpoint then stays unverified.
@@ -176,9 +177,15 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	models *gateway.ModelList,
 ) (callNode, error) {
 	memory, outstanding := protocol.NewMemory(nodeMemory), gateway.NewOutstanding()
-	cache, err := gateway.NewResponseCache(d.db, d.keys, pg.PlatformScope(), d.logger, d.meter)
-	if err != nil {
-		return callNode{}, err
+	var (
+		cache *gateway.ResponseCache
+		err   error
+	)
+	if d.responseCache {
+		cache, err = gateway.NewResponseCache(d.db, d.keys, pg.PlatformScope(), d.logger, d.meter)
+		if err != nil {
+			return callNode{}, err
+		}
 	}
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
 		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,

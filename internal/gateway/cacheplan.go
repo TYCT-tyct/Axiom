@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"crypto/sha256"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -65,6 +66,8 @@ func cachePlanFor(c *Call, header http.Header) cachePlan {
 // cacheable is the paths this first version caches: a plain generation whose answer the request body alone determines.
 // Direct formats need their own replay path; plugins, history and server-side tools add charges or context outside the
 // body, so a hit would skip them (docs/domains/gateway.md「响应缓存」).
+//
+//nolint:cyclop // the exclusions are one declarative predicate
 func cacheable(c *Call) bool {
 	if c.Compact || c.Format.Direct() {
 		return false
@@ -78,7 +81,8 @@ func cacheable(c *Call) bool {
 	}
 	r := &c.Request
 	return r.Previous == "" && r.Web == nil && r.File == nil && r.FileParses == 0 && r.ServerSearch == nil &&
-		!r.Compacts && r.FileRefs == 0
+		!r.Compacts && r.FileRefs == 0 && !r.Needs.Has(protocol.WebSearch) &&
+		!r.Needs.Has(protocol.CodeExecution) && !r.Needs.Has(protocol.FileSearch)
 }
 
 // responseCacheKey is never shared across accounts: the account ID is hashed into it, and every lookup runs in that
@@ -90,7 +94,7 @@ func responseCacheKey(c *Call) [sha256.Size]byte {
 	account := uuid.UUID(c.caller.AccountID())
 	h.Write(account[:])
 	h.Write([]byte{byte(c.Format), boolByte(c.Request.Stream)})
-	h.Write(normalizeJSON(c.Body))
+	writeNormalized(h, c.Body)
 	var sum [sha256.Size]byte
 	copy(sum[:], h.Sum(nil))
 	return sum
@@ -103,14 +107,14 @@ func boolByte(v bool) byte {
 	return 0
 }
 
-// normalizeJSON removes whitespace outside strings and changes nothing else: property order, duplicate keys, number
-// spellings and the whitespace inside a string are all significant (OpenRouter《Response Caching》, 2026-11-02).
-func normalizeJSON(body []byte) []byte {
-	out := make([]byte, 0, len(body))
+// writeNormalized writes body without whitespace outside strings. It changes nothing else: property order, duplicate
+// keys, number spellings and the whitespace inside a string are all significant (OpenRouter《Response Caching》,
+// 2026-11-02). It streams the bytes, so hashing a request does not copy its body.
+func writeNormalized(w io.Writer, body []byte) {
+	start := 0
 	inString, escaped := false, false
-	for _, b := range body {
+	for i, b := range body {
 		if inString {
-			out = append(out, b)
 			switch {
 			case escaped:
 				escaped = false
@@ -123,13 +127,17 @@ func normalizeJSON(body []byte) []byte {
 		}
 		switch b {
 		case ' ', '\t', '\r', '\n':
-			continue
+			if start < i {
+				_, _ = w.Write(body[start:i]) //nolint:errcheck // a hash never fails
+			}
+			start = i + 1
 		case '"':
 			inString = true
 		}
-		out = append(out, b)
 	}
-	return out
+	if start < len(body) {
+		_, _ = w.Write(body[start:]) //nolint:errcheck // a hash never fails
+	}
 }
 
 // parseCacheSwitch reads the OpenRouter switch. A value that is neither true nor false is absent, so it cannot enable the

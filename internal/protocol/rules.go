@@ -163,6 +163,7 @@ type rewriter struct {
 	chatPayload, chatOpaque               bool
 	legacyDelta                           *legacyReplyDelta
 	cached, zeroUsage                     bool
+	cacheCreated                          string
 }
 
 func (p *rewriter) copyTo(off int) {

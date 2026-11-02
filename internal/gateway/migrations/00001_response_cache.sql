@@ -13,6 +13,7 @@ CREATE TABLE gateway.response_cache (
     source_id uuid NOT NULL,
     format smallint NOT NULL CHECK (format BETWEEN 0 AND 255),
     model text NOT NULL CHECK (octet_length(model) <= 200),
+    endpoint uuid NOT NULL,
     ciphertext bytea NOT NULL,
     nonce bytea NOT NULL CHECK (octet_length(nonce) = 12),
     wrapped_dek bytea NOT NULL CHECK (octet_length(wrapped_dek) = 60),

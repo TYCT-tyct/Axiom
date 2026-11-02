@@ -243,6 +243,7 @@ type session struct {
 	cacheReady             bool
 	cacheFormat            protocol.Format
 	cacheModel, cacheState string
+	cacheEndpoint          uuid.UUID
 
 	concluded bool
 	handedOff bool // the call's slots are the background's to give back
@@ -273,7 +274,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 // the ending that reports the cost is written (I3). A settlement not written in time goes on in the background once
 // the ending is out.
 //
-//nolint:cyclop // the settlement order is the invariant; each branch is one ending
+//nolint:cyclop,gocognit // the settlement order is the invariant; each branch is one ending
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
@@ -283,7 +284,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	}
 	f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
 	var fin *protocol.Final
-	if err == nil && len(o.Attempts) > 0 {
+	if err == nil && (len(o.Attempts) > 0 || s.cacheHit) {
 		fin = s.final(f)
 	}
 	switch {
@@ -329,7 +330,7 @@ func (s *session) storeCache(ctx context.Context) {
 	s.x.Cache.Offer(ctx, cacheEntry{
 		scope: s.c.Admitted.Scope, site: uuid.UUID(s.c.site.ID), account: uuid.UUID(s.c.caller.AccountID()),
 		key: s.c.cache.key, source: s.c.ID, format: s.cacheFormat, model: s.cacheModel, state: s.cacheState,
-		body: s.cacheBody, ttl: s.c.cache.ttl,
+		endpoint: s.cacheEndpoint, body: s.cacheBody, ttl: s.c.cache.ttl,
 	})
 	s.cacheBody = nil
 }

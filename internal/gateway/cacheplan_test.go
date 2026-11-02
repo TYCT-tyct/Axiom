@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"axiom/internal/protocol"
@@ -48,11 +49,14 @@ func TestCachePlanLeavesUncacheableRequestsOff(t *testing.T) {
 	t.Parallel()
 	h := http.Header{"X-Openrouter-Cache": {"true"}}
 	for name, c := range map[string]*Call{
-		"direct":    {Format: protocol.Embeddings},
-		"compact":   {Format: protocol.Responses, Compact: true},
-		"previous":  {Format: protocol.Responses, Request: protocol.Request{Previous: "resp_1"}},
-		"compacts":  {Format: protocol.Responses, Request: protocol.Request{Compacts: true}},
-		"file refs": {Format: protocol.Chat, Request: protocol.Request{FileRefs: 1}},
+		"direct":        {Format: protocol.Embeddings},
+		"compact":       {Format: protocol.Responses, Compact: true},
+		"previous":      {Format: protocol.Responses, Request: protocol.Request{Previous: "resp_1"}},
+		"compacts":      {Format: protocol.Responses, Request: protocol.Request{Compacts: true}},
+		"file refs":     {Format: protocol.Chat, Request: protocol.Request{FileRefs: 1}},
+		"native search": {Format: protocol.Responses, Request: protocol.Request{Needs: protocol.WebSearch}},
+		"native code":   {Format: protocol.Responses, Request: protocol.Request{Needs: protocol.CodeExecution}},
+		"native file":   {Format: protocol.Responses, Request: protocol.Request{Needs: protocol.FileSearch}},
 	} {
 		if got := cachePlanFor(c, h); got.enabled {
 			t.Errorf("%s was cacheable", name)
@@ -86,7 +90,7 @@ func TestParseCacheTTL(t *testing.T) {
 	}
 }
 
-func TestNormalizeJSON(t *testing.T) {
+func TestWriteNormalized(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ in, want string }{
 		{` { "a" : 1 , "b" : [ 2, 3 ] } `, `{"a":1,"b":[2,3]}`},
@@ -96,8 +100,10 @@ func TestNormalizeJSON(t *testing.T) {
 		{`{"a":1,"a":2}`, `{"a":1,"a":2}`},
 		{`{"a":1.0}`, `{"a":1.0}`},
 	} {
-		if got := string(normalizeJSON([]byte(tc.in))); got != tc.want {
-			t.Errorf("normalize %q = %q, want %q", tc.in, got, tc.want)
+		var got strings.Builder
+		writeNormalized(&got, []byte(tc.in))
+		if got.String() != tc.want {
+			t.Errorf("normalize %q = %q, want %q", tc.in, got.String(), tc.want)
 		}
 	}
 }
