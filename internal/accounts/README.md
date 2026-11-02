@@ -446,4 +446,6 @@ func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时�
 
 组装层的周期任务按活跃状态去重，避免重试占满通知队列；每分钟先调用一次 `MaintainUserNotices`，再在每批平台事务内调用 billing 的集合 journal 消费（最多 1000 行）与 `RecordBalanceNotices`，再调用 `DispatchUserNotices`（最多 100 条）；即使 journal 为空也继续派发积压，直到没有进展或 30 秒预算不足以开始下一批，预算耗尽正常完成；多个节点使用 `FOR UPDATE SKIP LOCKED`，事件/派发标记、outbox、River 任务全成全败。邮件未配置的节点保留待派发，不影响原账本或因素写入；密码修改原有的 SMTP 就绪要求保持。邮件与 Webhook 最多五次持久尝试，Webhook 最后一次失败记 failed 后完成，异常丢弃/取消由下一轮检查持久任务收尾；通知 30 天后分批清理，排队 Webhook 受保护。SMTP 结果仍查 mail outbox、River 与日志；不能入 outbox 的历史非法邮箱记 email_failed，不悄悄略过，也不堵住整个批次。低余额是已过账钱包余额穿越，不是可用余额，也不是盗刷检测。
 
+`RecordSitePaymentNotice` 在商户配置保存的同一事务里，为二级站点的 owner account 的活跃用户写一条 `site_payment_changed`，主站没有 owner，不写；这一条在 `noticeEnabled` 里恒为开，不受偏好影响，正文只有站点名称、标题和处置建议，不含商户号、密钥或网关地址。保存失败时它和审计一起回滚，每次改动的新来源让唯一键只挡住同一次改动的重放。
+
 `announcements` 对外使用 `AnnouncementID`（`ann_` TypeID），是站点公开数据，账户范围通过 home_site 读取本站；发布/撤下只限平台，内容不可更新，撤下为终态。控制台按服务端时间取 `[starts_at,ends_at)` 的前 100 条。管理写入经 MFA、sites.manage、幂等与审计；控制台不接受选择另一个站点。文本只渲染为 React 文本节点。

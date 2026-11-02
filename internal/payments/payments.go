@@ -12,8 +12,10 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"time"
 	"uuid"
 
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -42,6 +44,7 @@ type Config struct {
 	Plugins  []Plugin       // one per kind, compiled in
 	Logger   *slog.Logger   // diagnostics; durable alerts use platform signals; default slog.Default()
 	Proxies  []netip.Prefix // only these peers may supply a callback's source address
+	Alerts   alert.Sink     // where the per-event signals go; nil means only logs and the durable signals
 }
 
 // Payments is the module's service.
@@ -59,6 +62,11 @@ type Payments struct {
 	proxies     []netip.Prefix
 	callbacks   map[callbackKey]*list.Element
 	callbackLRU list.List
+	alerts      alert.Sink
+	now         func() time.Time // time.Now; tests replace it to drive the signal windows
+	signalMu    sync.Mutex
+	signals     map[signalKey]*signalCounter
+	unreadable  map[MerchantID]struct{} // merchants whose configuration did not open, for the unresolved signal
 }
 
 // Open checks the plugins: two plugins of one kind are a mistake in assembling the program and fail the start.
@@ -66,8 +74,10 @@ func Open(c Config) (*Payments, error) {
 	if c.DB == nil || c.Keyring == nil {
 		return nil, errors.New("payments: a database and a keyring are required")
 	}
-	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger, valid: map[uuid.UUID]validity{}}
+	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger, valid: map[uuid.UUID]validity{}, alerts: c.Alerts, now: time.Now}
 	p.channels = make(map[MerchantID]channelBinding)
+	p.signals = make(map[signalKey]*signalCounter)
+	p.unreadable = make(map[MerchantID]struct{})
 	p.proxies = slices.Clone(c.Proxies)
 	p.callbacks = make(map[callbackKey]*list.Element)
 	if p.logger == nil {

@@ -16,7 +16,7 @@ type State string    // 订单状态："pending"、"paid"……；转移表是 p
 type Order struct{}  // ID、站点、账户、用户、商户账户、付款方式、状态、额度、总额、手续费、网关订单号、checkout、有效期、时间戳；RefundAllowed 是商户账户此刻是否允许用户申请退款
 type CreateOrder struct{} // Site、Account、User、Method、Credits、Key（幂等键）、ReturnURL、ClientIP、Mobile
 
-func Open(c Config) (*Payments, error) // Plugins（按 Kind 登记）、*pg.DB、平台范围、Keyring、egress.Client；告警经平台事务信号
+func Open(c Config) (*Payments, error) // Plugins（按 Kind 登记）、*pg.DB、平台范围、Keyring、egress.Client；持久告警经平台事务信号，突增信号经 Config.Alerts
 func (p *Payments) Options(ctx context.Context, s pg.Scope, site accounts.Site, credits int64) ([]Option, error) // 充值页：每种付款方式的总额、手续费、币种；显示的是此刻下单会选中的商户账户的报价：与 `choose` 共用一条选择规则（`ranked`），中间没有别的订单插进来时，订单就落在页面显示的那个账户上
 func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (Order, Checkout, error)  // 账户范围；事务、渠道调用、事务
 func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, error)                     // 待支付 → 已取消，减回用量，之后请渠道关单
@@ -308,6 +308,11 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 - **`payments.reconcile`**（每天，启动时也运行）：协调作业固定前一个 UTC 日，分页发现包括已停用的商户，再派生商户作业，商户核对与差异落库合计最多 5 分钟。作业走独立的 `pg.QueueReconcile`，单节点一个工作者，不占 money 队列。在 `ReadTx` 的一致快照内按日索引核对现金、当日变更订单与当日批次，并复算当天及这些变更影响的创建日日用量；现金和订单共用批次创建日，避免跨午夜入账的假差额，按币种换成十亿分之一精确比较，大数合计不截成 int64。借助 billing 的 `MerchantCash`、`MerchantBatches`、`ReadCredits` 按页批量读账，不直接访问 billing 表；同时检查缺批次、孤立批次及 paid_total/paid_fee/credited/账户/币种/商户不符。按成功退款的账本日期从订单侧扣除原付款币种的现金；拒付的扣款按 `applied_at`、胜诉冲正按 `reversed_at` 加回同币种的预期现金；没有对应成功支付退款记录的现金冲出仍进差异。迁移 00006 的订单日期/游标索引并发构建，之前的表与列步骤可在失败后重入，避免加索引阻塞已有订单写入。对账差额按商户、类别、日期/订单及规范化明细的指纹去重，与 `payments.discrepancy` 平台信号在同一事务提交，回滚没有独立告警。当前编入的易支付不声明 `Statements`，所以按前一天非终态/变化订单及补查窗口里的订单再查；每个查询作业只处理一单，成功后持久派生带日与游标的下一单；跨节点仅使用商户第一个名额，给回调、轮询和用户核验保留第二个。名额忙返回 `ErrQueryBusy`，通过 River 的有次数上限重试和抖动避开轮询；仅熔断 `ErrQueryPaused` 延后一分钟，不重做成功前缀；查询失败或付款信息仍不完整时重试当前单。`Statements` 的下载接口和明细表随第一个支持它的插件交付。
 - **管理调查**：`ListDiscrepancies`、`GetDiscrepancy`、`InvestigateDiscrepancy` 经调用方的范围事务读取；调查写入 `resolved`、操作者、时间和说明并记审计、清除平台告警，不触碰订单、余额和退款。管理 API 的三项操作都需 MFA 和平台 `sites.manage`；变更需 CSRF、理由和幂等键。响应的新字段全部可选；旧付款差异中的 JSON 整数金额读取时转成十进制文本，避免大于 2^53 的最小单位值被舍入。列表一页最多 100 行，以最后一行 UUID 的 `before` 继续；记录本身用 UUID，站点、账户、商户、订单引用沿用各自的 TypeID。资金结论需调用独立的提案与审批接口。
 - **范围**：回调和两个任务用 `cmd/axiom` 交来的平台范围；控制台用 accounts 交出的账户范围，站长后台用站点范围。
+
+### 告警与站长通知
+
+- `payments.verify_failed`、`payments.query_failed`、`payments.rate_limited` 在 `Payments` 内按 UTC 分钟窗口计数（分别 10、5、20 次），达到下限才通过 `Config.Alerts` 的非阻塞 `Sink` 发一条，每请求只加一个整数，不写数据库；`payments.merchant_unreadable` 按商户首次解不开立即发，配置重新打开时 `Resolve`。计数只有每种信号每个键一个，内存有界；信号名、合并键和恢复见[告警信号](../../docs/domains/observability.md#告警信号事件与规则e5-3)。
+- `recordSave` 在审计前调用 accounts 的 `RecordSitePaymentNotice`，同一事务为二级站点 owner account 的活跃用户排一条 `site_payment_changed`；主站没有 owner，不排。通知或审计任一步失败都回滚整次保存，每次改动生成新来源；保存事务和幂等键保证同一次改动只排一条。
 
 ### 兑换码
 

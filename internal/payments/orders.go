@@ -194,6 +194,9 @@ func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (
 	}
 	order, placed, err := p.reserveOrder(ctx, s, r, m)
 	if err != nil {
+		if errors.Is(err, ErrTooManyIPOrders) || errors.Is(err, ErrTooManyIPFailures) {
+			p.rateLimited("orders")
+		}
 		return Order{}, Checkout{}, err
 	}
 	if !placed {

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
@@ -33,6 +34,7 @@ type world struct {
 	siteA, siteB   uuid.UUID
 	account, acctB uuid.UUID
 	user           uuid.UUID
+	alerts         *recordingSink
 }
 
 func newWorld(t *testing.T) *world {
@@ -50,7 +52,7 @@ func newTestWorld(t *testing.T, plugin Plugin) *world {
 // newTestWorldWithPool is newTestWorld with pool settings, for the tests that need to exhaust the ordinary pool.
 func newTestWorldWithPool(t *testing.T, plugin Plugin, suffix string, opts ...pg.Option) *world {
 	t.Helper()
-	d := pgtest.New(t, billing.Migrations(), Migrations())
+	d := pgtest.New(t, accounts.Module(), billing.Migrations(), Migrations())
 	db, err := pg.Open(t.Context(), d.App+suffix, opts...)
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +61,7 @@ func newTestWorldWithPool(t *testing.T, plugin Plugin, suffix string, opts ...pg
 	w := &world{
 		t: t, db: db, super: d.Superuser, logs: &telemetrytest.Buffer{},
 		siteA: uuid.NewV7(), siteB: uuid.NewV7(), account: uuid.NewV7(), acctB: uuid.NewV7(), user: uuid.NewV7(),
+		alerts: &recordingSink{},
 	}
 	w.exec(fmt.Sprintf("INSERT INTO platform.tenants VALUES ('%s','%[1]s'), ('%[1]s','%s'), ('%s','%[3]s'), ('%[3]s','%s')",
 		w.siteA, w.account, w.siteB, w.acctB))
@@ -66,7 +69,7 @@ func newTestWorldWithPool(t *testing.T, plugin Plugin, suffix string, opts ...pg
 		w.siteA, w.account, w.siteB, w.acctB))
 	w.p, err = Open(Config{
 		DB: db, Platform: pg.NewScope(true, nil, nil), Keyring: masterKey(t), Plugins: []Plugin{plugin},
-		Logger: slog.New(slog.NewTextHandler(w.logs, nil)),
+		Logger: slog.New(slog.NewTextHandler(w.logs, nil)), Alerts: w.alerts,
 	})
 	if err != nil {
 		t.Fatal(err)

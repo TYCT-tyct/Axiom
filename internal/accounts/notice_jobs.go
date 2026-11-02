@@ -58,7 +58,7 @@ type userNotice struct {
 // noticeKinds are the notice kinds this code can render. A dispatcher claims only these: during a rolling release a
 // newer node may write a kind this node does not know, and marking it dispatched without sending it would lose the
 // notice for good. It waits for a node that understands it.
-var noticeKinds = []string{"low_balance", "top_up", "factor_changed", "spend_anomaly"}
+var noticeKinds = []string{"low_balance", "top_up", "factor_changed", "spend_anomaly", "site_payment_changed"}
 
 // DispatchUserNotices freezes destinations for at most 100 notices and returns how many were dispatched.
 func DispatchUserNotices(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mailer) (int, error) {
@@ -125,8 +125,9 @@ func dispatchUserNotice(ctx context.Context, tx pg.Tx, q *pg.Queue, m *mail.Mail
 	return err == nil, err
 }
 
-// noticeEnabled answers whether the account wants this kind. A kind this code does not know is off: it is never claimed
-// (see noticeKinds), and if it ever reached here it must not be marked sent.
+// noticeEnabled answers whether the account wants this kind; the mandatory site payment notice has no switch. A kind
+// this code does not know is off: it is never claimed (see noticeKinds), and if it ever reached here it must not be
+// marked sent.
 func noticeEnabled(kind string, p NotificationPreferences) bool {
 	switch kind {
 	case "low_balance":
@@ -137,15 +138,17 @@ func noticeEnabled(kind string, p NotificationPreferences) bool {
 		return p.FactorChanged
 	case "spend_anomaly":
 		return p.SpendAnomaly
+	case "site_payment_changed":
+		return true // a site owner's record of who changed its payment settings is not optional
 	default:
 		return false
 	}
 }
 
 func noticeMail(n userNotice) mail.Message {
-	names := map[string]string{"low_balance": "Low balance", "top_up": "Top-up credited", "factor_changed": "Authentication factors changed", "spend_anomaly": "Unusual account activity"}
+	names := map[string]string{"low_balance": "Low balance", "top_up": "Top-up credited", "factor_changed": "Authentication factors changed", "spend_anomaly": "Unusual account activity", "site_payment_changed": "Payment settings changed"}
 	if n.language == "zh" {
-		names = map[string]string{"low_balance": "余额不足", "top_up": "充值到账", "factor_changed": "认证因素已变更", "spend_anomaly": "账户异常活动"}
+		names = map[string]string{"low_balance": "余额不足", "top_up": "充值到账", "factor_changed": "认证因素已变更", "spend_anomaly": "账户异常活动", "site_payment_changed": "收款配置已变更"}
 	}
 	brand := strings.Map(func(r rune) rune {
 		if r < ' ' || r == 127 {
@@ -154,12 +157,12 @@ func noticeMail(n userNotice) mail.Message {
 		return r
 	}, n.brand)
 	value := n.Value
-	if n.Kind != "factor_changed" && (n.Kind != "spend_anomaly" || n.Value != "0") {
+	if n.Kind != "factor_changed" && n.Kind != "site_payment_changed" && (n.Kind != "spend_anomaly" || n.Value != "0") {
 		amount, _ := new(big.Int).SetString(n.Value, 10)
 		value = new(big.Rat).SetFrac(amount, big.NewInt(1_000_000_000)).FloatString(9) + " " + n.Currency
 	}
 	text := brand + "\n\n" + names[n.Kind]
-	if n.Kind != "spend_anomaly" || n.Value != "0" {
+	if (n.Kind != "spend_anomaly" && n.Kind != "site_payment_changed") || n.Value != "0" {
 		text += "\n" + value
 	}
 	if advice := noticeAdvice(n); advice != "" {
@@ -181,6 +184,11 @@ func noticeAdvice(n userNotice) string {
 			return "如果不是您本人操作，请立即联系站点管理员。"
 		}
 		return "If this was not you, contact the site operator immediately."
+	case "site_payment_changed":
+		if n.language == "zh" {
+			return "如果不是您本人操作，请立即联系平台运营。"
+		}
+		return "If you did not make this change, contact the platform operator immediately."
 	}
 	return ""
 }

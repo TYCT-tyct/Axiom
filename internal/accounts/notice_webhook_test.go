@@ -188,3 +188,23 @@ func TestSpendAnomalyNoticeMail(t *testing.T) {
 		t.Fatalf("Chinese: %q", m.Text)
 	}
 }
+
+// TestSitePaymentNoticeMail: a secondary site's payment change is a mandatory notice with no amount, and its advice
+// points at the platform operator rather than the site.
+func TestSitePaymentNoticeMail(t *testing.T) {
+	t.Parallel()
+	n := userNotice{Kind: "site_payment_changed", Value: "0", Currency: "CNY", language: "en", brand: "Site", email: "owner@example.com"}
+	if !noticeEnabled(n.Kind, NotificationPreferences{}) {
+		t.Fatal("the site payment notice is optional")
+	}
+	m := noticeMail(n)
+	if m.Subject != "Site — Payment settings changed" || strings.Contains(m.Text, "CNY") || strings.Contains(m.Text, "0.000000000") ||
+		!strings.Contains(m.Text, "contact the platform operator") {
+		t.Fatalf("English: %q", m.Text)
+	}
+	n.language = "zh"
+	m = noticeMail(n)
+	if !strings.Contains(m.Text, "收款配置已变更") || !strings.Contains(m.Text, "联系平台运营") || strings.Contains(m.Text, "CNY") {
+		t.Fatalf("Chinese: %q", m.Text)
+	}
+}
