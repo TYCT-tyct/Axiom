@@ -269,7 +269,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	if fin == nil && s.isByok() {
 		// The settlement did not reach the response in time, but who served the call is known from the attempt. Without
 		// this the pending ending would report is_byok false (docs/domains/gateway.md「用量与费用」).
-		fin = &protocol.Final{Pending: true, IsBYOK: true}
+		fin = &protocol.Final{Pending: true, IsBYOK: true, Files: s.files}
 	}
 	switch {
 	case e.reply != nil:

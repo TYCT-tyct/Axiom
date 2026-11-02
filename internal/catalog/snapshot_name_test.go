@@ -16,7 +16,7 @@ func TestOfficialName(t *testing.T) {
 			floating: {ID: floating, VersionBasis: VersionFloating},
 		},
 		names: map[string]nameEntry{
-			"gpt-4o-2024-08-06":      {name: "gpt-4o-2024-08-06", model: dated, public: true},
+			"gpt-4o-2024-08-06":      {name: "gpt-4o-2024-08-06", model: dated, public: true, exact: true},
 			"gpt-4o":                 {name: "gpt-4o", model: dated, public: true},
 			"openai/gpt-4o":          {name: "openai/gpt-4o", model: dated, public: true},
 			"gpt-4o@20240806":        {name: "gpt-4o@20240806", model: dated, public: true},
@@ -33,5 +33,12 @@ func TestOfficialName(t *testing.T) {
 	}
 	if _, ok := s.OfficialName(ModelID(uuid.NewV7())); ok {
 		t.Error("an unknown model has a name")
+	}
+	undated := ModelID(uuid.NewV7())
+	s.models[undated] = Model{ID: undated, VersionBasis: VersionDated}
+	s.names["gpt-4o-moving"] = nameEntry{name: "gpt-4o-moving", model: undated, public: true}
+	s.names["gpt-4o"] = nameEntry{name: "gpt-4o", model: undated, public: true}
+	if got, ok := s.OfficialName(undated); ok {
+		t.Errorf("a fixed model with only undated names got %q; want no endpoint", got)
 	}
 }

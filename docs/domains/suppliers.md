@@ -102,7 +102,7 @@
 
 ### 自带的供应商 key
 
-账户自带 key 在 suppliers 里是一行账户归属的供应商（建它要求 `AXIOM_BYOK=on`，默认关闭）：`owner_scope='account'`、`status='byok'`、`kind='openai'`、地址 `https://api.openai.com`，没有登录行，不参与同步。一个分组（倍率 1）装着该 key 能用的目录模型（作者为 `openai`、已上架、非 `:free`），每个模型一个端点和一份全零成本计划；一条 `active` 凭证存着信封加密的 key（`hint` 是末四位，供控制台显示）；一条原生单位 `usd`、金额 1 的余额和一条值 1 的单位价值，让 `ListRoutable` 的余额和单位价值条件成立，而成本计划为 0 使实际成本为 0。端点的上游名字取目录里厂商自己的公开模型名（`catalog.name`）：带日期的模型取最长、不浮动的名字，浮动的取最短，排除带作者前缀、`:free` 或 `@` 的目录名；没有这样的名字的模型不建端点，避免把目录 slug 猜成厂商不认的名字。
+账户自带 key 在 suppliers 里是一行账户归属的供应商（建它要求 `AXIOM_BYOK=on`，默认关闭）：`owner_scope='account'`、`status='byok'`、`kind='openai'`、地址 `https://api.openai.com`，没有登录行，不参与同步。一个分组（倍率 1）装着该 key 能用的目录模型（作者为 `openai`、已上架、非 `:free`），每个模型一个端点和一份全零成本计划；一条 `active` 凭证存着信封加密的 key（`hint` 是末四位，供控制台显示）；一条原生单位 `usd`、金额 1 的余额和一条值 1 的单位价值，让 `ListRoutable` 的余额和单位价值条件成立，而成本计划为 0 使实际成本为 0。端点的上游名字取目录里厂商自己的公开模型名（`catalog.name`）：固定版本只接受能证明版本的名字（带日期，或名字本身等于版本），取最长的那个；浮动的模型取最短的名字；排除带作者前缀、`:free` 或 `@` 的目录名。固定版本只有不带日期的移动名字时不建端点，避免厂商把移动名字切到别的版本后按旧规格和旧参考价调用；没有可确认的名字的模型也不建端点，避免把目录 slug 猜成厂商不认的名字。
 
 - **接口**：`Admin` 的 `CreateByok`、`ListByok`、`SetByokEnabled`、`RemoveByok`、`RevealByok`、`SetByokTestResult`，由 `cmd/axiom` 的控制台处理器用账户范围的 `pg.Tx` 调用；控制台 API 见[账户](accounts.md#自带的供应商-keybyok)。`Create` 在一个事务里写齐上述行（供应商、分组、模型、端点、成本计划、凭证、余额、单位价值），任一失败整体回滚；key 只在 `CreateByok` 的入参里出现一次。
 - **测试**：用 egress 客户端向 `GET /v1/models` 发一次带 `Authorization: Bearer` 的请求，10 秒期限；200 恢复 `active`，401 标 `rejected`，403 可能是地区封锁，和其余失败一样返回不可判定且不改状态。测试不写尝试成本，也不占用凭证的并发位。

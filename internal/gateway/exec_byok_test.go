@@ -35,3 +35,27 @@ func TestPendingEndingKeepsBYOK(t *testing.T) {
 		})
 	}
 }
+
+// TestPendingAggregateKeepsFiles: a file annotation is not part of the settlement, so a pending ending must keep the
+// parsed files the aggregate would otherwise attach, exactly as a settled one does.
+func TestPendingAggregateKeepsFiles(t *testing.T) {
+	run(t, func(t *testing.T, ctx context.Context) {
+		no := false
+		h := newHarness(t, ctx, options{
+			client: protocol.Chat, stream: &no, settleErr: io.ErrUnexpectedEOF,
+			mutate: func(c *Call) {
+				c.Plan.Entries[0].Byok = true
+				c.files = []protocol.FileAnnotation{{Hash: "abc123", Name: "scan.pdf", Text: "parsed page"}}
+			},
+		})
+		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
+		h.run()
+		body := h.w.body()
+		if !strings.Contains(body, `"billing_pending":true`) || !strings.Contains(body, `"is_byok":true`) {
+			t.Errorf("the pending aggregate lost its flags:\n%s", body)
+		}
+		if !strings.Contains(body, `"annotations"`) || !strings.Contains(body, "scan.pdf") || !strings.Contains(body, "parsed page") {
+			t.Errorf("the pending aggregate lost the parsed files:\n%s", body)
+		}
+	})
+}
