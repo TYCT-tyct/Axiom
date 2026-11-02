@@ -163,12 +163,12 @@ func TestRecordJSON(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, routing.Config{}, openPreset(), endpoint(t, 1), endpoint(t, 2, func(e *routing.Endpoint) { e.BreakerOpen = true }))
 	p := h.plan(input())
-	p.Record.Attempts = append(p.Record.Attempts, routing.Attempt{Endpoint: ep(1), Egress: "direct", Failed: true, Scope: routing.ScopeEndpoint, Action: routing.NextEntry})
+	p.Record.Attempts = append(p.Record.Attempts, routing.Attempt{Endpoint: ep(1), Failed: true, Scope: routing.ScopeEndpoint, Action: routing.NextEntry})
 	got, err := p.Record.JSON()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"reason":"breaker_open"`, `"endpoint":"10000000-0000-0000-0000-000000000002"`, `"route":["10000000-0000-0000-0000-000000000001"]`, `"egress":"direct"`, `"failed":true`} {
+	for _, want := range []string{`"reason":"breaker_open"`, `"endpoint":"10000000-0000-0000-0000-000000000002"`, `"route":["10000000-0000-0000-0000-000000000001"]`, `"failed":true`} {
 		if !strings.Contains(string(got), want) {
 			t.Errorf("%s lacks %s", got, want)
 		}

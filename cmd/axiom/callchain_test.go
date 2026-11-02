@@ -190,7 +190,7 @@ func callRecord(t *testing.T, f chainFixture, c chain) observability.CallRecord 
 		},
 		Route: []routing.EndpointID{routing.EndpointID(c.first), routing.EndpointID(c.second)},
 		Attempts: []routing.Attempt{
-			{Endpoint: routing.EndpointID(c.first), Egress: "direct", Failed: true, Scope: routing.ScopeEndpoint, Action: routing.NextEntry},
+			{Endpoint: routing.EndpointID(c.first), Failed: true, Scope: routing.ScopeEndpoint, Action: routing.NextEntry},
 		},
 	}.JSON()
 	if err != nil {

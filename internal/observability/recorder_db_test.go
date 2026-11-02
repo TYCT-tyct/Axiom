@@ -3,15 +3,18 @@ package observability
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 	"uuid"
+
+	"axiom/internal/platform/pgtest"
 )
 
-// TestRestartDoesNotDuplicateCommittedRecords: the active segment keeps records the writer has already acknowledged
-// (it is not deleted until it is full), so a crash makes the next process replay them. The inserts' ON CONFLICT makes
-// that replay harmless.
+// TestRestartDoesNotDuplicateCommittedRecords: the writer records the acknowledged position and deletes a drained
+// segment, so a crash after the records reached the database normally replays nothing. Should a prefix still replay
+// (a crash between the commit and the checkpoint), the inserts' ON CONFLICT makes it harmless.
 func TestRestartDoesNotDuplicateCommittedRecords(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
@@ -87,5 +90,34 @@ func TestBadAttemptStopsWritesAndKeepsTheSpill(t *testing.T) {
 	}
 	if got := list(t, db, accountScope(a), day(a)); len(got) != 0 {
 		t.Errorf("%d calls stored, want 0 while the batch cannot commit", len(got))
+	}
+}
+
+// TestArchivedRecordIsNotReplayed: a record already stored must not be replayed after its month was archived and the
+// partition dropped. The original key is gone, so ON CONFLICT no longer deduplicates and the replay would land in the
+// default partition, which retention never archives or cleans.
+func TestArchivedRecordIsNotReplayed(t *testing.T) {
+	t.Parallel()
+	db, database := openDBWithURL(t)
+	a := uuid.NewV7()
+	rec := record(a, now)
+	dir := t.TempDir()
+	r := recorderOfDB(t, db, Config{Dir: dir, Capacity: 10, BatchSize: 10, FlushInterval: time.Millisecond})
+	enqueueAll(t, r, []CallRecord{rec})
+	eventually(t, "the record to reach the database", func() bool { return r.spill.pendingCount() == 0 })
+	crash(r)
+
+	// The month's archive committed and its partition was dropped: the row is no longer in the hot table.
+	if err := pgtest.Run(t.Context(), database.Superuser,
+		fmt.Sprintf(`DELETE FROM observability.call_log WHERE id = '%s'`, rec.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	next := recorderOfDB(t, db, Config{Dir: dir, Capacity: 10, BatchSize: 10, FlushInterval: time.Millisecond})
+	if err := next.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := list(t, db, accountScope(a), day(a)); len(got) != 0 {
+		t.Errorf("%d rows after the restart, want 0: an acknowledged record was inserted again", len(got))
 	}
 }

@@ -70,9 +70,16 @@ type Recorder struct {
 	done   chan struct{}      // closed when the writer has exited
 	// outstanding is the calls admitted but not yet written: those still running plus the records in the spill. It
 	// is the admission bound, so a burst cannot grow the spill past Capacity.
-	outstanding  atomic.Int64
-	broken       atomic.Bool
-	lost         atomic.Int64 // calls not in the spill: unencodable or the spill refused them
+	outstanding atomic.Int64
+	// active is the calls admitted and not yet past Commit or Release: their records may still be appended. A writer
+	// that stops because the database refuses a row waits for it, so a call that already reserved a place can still
+	// put its record in the spill before the append file closes.
+	active  atomic.Int64
+	broken  atomic.Bool
+	quiet   chan struct{} // closed once broken and active is zero: the last in-flight call has appended or released
+	quietON sync.Once
+	lost    atomic.Int64 // calls not in the spill: unencodable or the spill refused them
+	// The attempts of the calls above, for the same reasons.
 	lostAttempts atomic.Int64
 
 	written, attemptsWritten, retries, lostMetric, attemptsLostMetric metric.Int64Counter
@@ -162,7 +169,7 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 	run, giveUp := context.WithCancel(context.WithoutCancel(ctx))
 	r := &Recorder{
 		cfg: cfg, write: write, fatal: fatal, logger: logger, spill: sp, ctx: context.WithoutCancel(ctx),
-		giveUp: giveUp, done: make(chan struct{}),
+		giveUp: giveUp, done: make(chan struct{}), quiet: make(chan struct{}),
 	}
 	r.outstanding.Store(sp.pendingCount())
 	r.written = counter(cfg.Meter, "axiom.observability.records.written", "Call records stored.")
@@ -212,8 +219,10 @@ func (r *Recorder) Admit() (*Slot, error) {
 			return nil, ErrBacklog
 		}
 		if r.outstanding.CompareAndSwap(n, n+1) {
+			r.active.Add(1)
 			if r.broken.Load() {
 				r.outstanding.Add(-1)
+				r.finishSlot()
 				return nil, ErrBroken
 			}
 			return &Slot{r: r}, nil
@@ -221,8 +230,8 @@ func (r *Recorder) Admit() (*Slot, error) {
 	}
 }
 
-// Commit puts the call's record in the spill. The response may be served after this returns: the record survives a
-// process crash from here on, and the writer replays it from the spill on the next start.
+// Commit puts the call's record in the spill and makes it durable before returning: it survives the process and the
+// host from here on, and the writer replays it on the next start. The response may be served after this returns.
 func (s *Slot) Commit(rec CallRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -234,6 +243,7 @@ func (s *Slot) Commit(rec CallRecord) error {
 		s.state = 2
 		s.r.outstanding.Add(-1)
 		s.r.reject(rec, "invalid", err)
+		s.r.finishSlot()
 		return fmt.Errorf("call record %s: %w", rec.ID, err)
 	}
 	body, err := encodeRecord(call, attempts)
@@ -241,9 +251,10 @@ func (s *Slot) Commit(rec CallRecord) error {
 		s.state = 2
 		s.r.outstanding.Add(-1)
 		s.r.reject(rec, "invalid", err)
+		s.r.finishSlot()
 		return fmt.Errorf("call record %s: %w", rec.ID, err)
 	}
-	if err := s.r.spill.append(body); err != nil {
+	if err := s.r.spill.appendSynced(body); err != nil {
 		s.state = 2
 		s.r.outstanding.Add(-1)
 		reason := "spill"
@@ -251,9 +262,11 @@ func (s *Slot) Commit(rec CallRecord) error {
 			reason = "shutdown"
 		}
 		s.r.reject(rec, reason, err)
+		s.r.finishSlot()
 		return fmt.Errorf("call record %s: %w", rec.ID, err)
 	}
 	s.state = 1
+	s.r.finishSlot()
 	return nil
 }
 
@@ -264,6 +277,15 @@ func (s *Slot) Release() {
 	if s.state == 0 {
 		s.state = 2
 		s.r.outstanding.Add(-1)
+		s.r.finishSlot()
+	}
+}
+
+// finishSlot marks one admitted call done with the append path. Once a failure has stopped admission and the last call
+// has finished, the writer may close the append file: no call that reserved room can still need it.
+func (r *Recorder) finishSlot() {
+	if r.active.Add(-1) == 0 && r.broken.Load() {
+		r.quietON.Do(func() { close(r.quiet) })
 	}
 }
 
@@ -326,8 +348,9 @@ func (r *Recorder) writer(ctx context.Context) {
 	for {
 		batch, end, open, err := r.spill.nextBatch(r.cfg.BatchSize, r.cfg.FlushInterval)
 		if err != nil {
-			r.broken.Store(true)
+			r.markBroken()
 			r.logger.Error("the call log spill cannot be read; the node refuses new calls", "err", err)
+			r.stopDraining(ctx)
 			return
 		}
 		if len(batch) > 0 && !r.flush(ctx, batch, end) {
@@ -336,6 +359,26 @@ func (r *Recorder) writer(ctx context.Context) {
 		if !open {
 			return
 		}
+	}
+}
+
+// stopDraining keeps the append file open after the database stopped accepting rows until every call that already
+// reserved room has appended or released. Those calls finish their upstream work after the bad row was found; closing
+// the file under them would lose records that had room and a healthy disk.
+func (r *Recorder) stopDraining(ctx context.Context) {
+	select {
+	case <-r.quiet:
+	case <-ctx.Done():
+	}
+}
+
+// markBroken stops admission and, when no admitted call is still appending, releases a writer waiting to close the
+// append file. The check after the store is what orders it against finishSlot: either the decrement sees broken, or
+// this load sees the decremented count.
+func (r *Recorder) markBroken() {
+	r.broken.Store(true)
+	if r.active.Load() == 0 {
+		r.quietON.Do(func() { close(r.quiet) })
 	}
 }
 
@@ -357,6 +400,7 @@ func (r *Recorder) flush(ctx context.Context, batch []queued, end position) bool
 			return false
 		}
 		if r.fatalBatch(err, batch) {
+			r.stopDraining(ctx)
 			return false
 		}
 		if !logged {
@@ -385,7 +429,11 @@ func waitRetry(ctx context.Context, delay time.Duration) bool {
 
 // accepted records a committed batch and frees its segment space.
 func (r *Recorder) accepted(ctx context.Context, batch []queued, end position) {
-	r.spill.ack(end, len(batch))
+	if err := r.spill.ack(end, len(batch)); err != nil {
+		// The records are in the database; only their segment and checkpoint could not be reclaimed. Keeping them
+		// means the next start replays them, which ON CONFLICT makes harmless.
+		r.logger.Warn("acknowledged call records could not be reclaimed; they stay in the spill", "records", len(batch), "err", err)
+	}
 	r.outstanding.Add(-int64(len(batch)))
 	r.written.Add(ctx, int64(len(batch)))
 	var attempts int64
@@ -396,7 +444,8 @@ func (r *Recorder) accepted(ctx context.Context, batch []queued, end position) {
 }
 
 // fatalBatch stops admission for a failure the same rows will repeat. The batch stays in the spill so an operator can
-// repair it; later records must not pass a missing one.
+// repair it; later records must not pass a missing one. The append path stays open until the calls that already
+// reserved room have finished, so their records are kept too.
 func (r *Recorder) fatalBatch(err error, batch []queued) bool {
 	if !r.fatal(err) {
 		return false
@@ -404,6 +453,9 @@ func (r *Recorder) fatalBatch(err error, batch []queued) bool {
 	if r.broken.CompareAndSwap(false, true) {
 		r.logger.Error("call records refused by the database; the node refuses new calls",
 			"request_id", batch[0].call.ID, "records", len(batch), "err", err)
+	}
+	if r.active.Load() == 0 {
+		r.quietON.Do(func() { close(r.quiet) })
 	}
 	return true
 }

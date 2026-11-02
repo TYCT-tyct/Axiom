@@ -20,8 +20,9 @@ import (
 )
 
 // serveForTest keeps the entry's admission checks, with periodic downloads disabled unless a test supplies local data.
-// The recorder gets a temporary spill directory: the production default is relative to the working directory, and a
-// test must not leave call-log/ in the package tree.
+// A core node's recorder gets a temporary spill directory: the production default is relative to the working
+// directory, and a test must not leave call-log/ in the package tree. A node without the core role reads no call log
+// and refuses the variable, so it gets none.
 func serveForTest(ctx context.Context, environ []string, logger *slog.Logger) error {
 	dir, err := os.MkdirTemp("", "axiom-call-log-")
 	if err != nil {
@@ -32,14 +33,17 @@ func serveForTest(ctx context.Context, environ []string, logger *slog.Logger) er
 			logger.Warn("removing the test call log failed", "dir", dir, "err", err)
 		}
 	}()
-	hasDir := false
+	hasDir, core := false, true
 	for _, kv := range environ {
 		if strings.HasPrefix(kv, callLogDirVar+"=") {
 			hasDir = true
-			break
+		}
+		if value, ok := strings.CutPrefix(kv, nodeRolesVar+"="); ok {
+			roles, err := parseRoles(value)
+			core = err != nil || roles.has(roleCore) // a refused value fails in serveWith with its own message
 		}
 	}
-	if !hasDir {
+	if !hasDir && core {
 		environ = append(environ, callLogDirVar+"="+dir)
 	}
 	return serveWith(ctx, environ, logger, directEgress, startRecorder, nil)
@@ -82,7 +86,7 @@ func checkPriceFetchShutdown(t *testing.T, body bool) {
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_SHUTDOWN_TIMEOUT=3s", "AXIOM_DATABASE_URL=" + database.App,
 		"AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
-		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_CALL_LOG_DIR=" + t.TempDir(),
 	}
 	loopback := func(*telemetry.Telemetry) (*egress.Client, error) { //nolint:unparam // serveWith's production client can fail
 		return egress.NewForTesting(egresstest.Loopback(t)), nil

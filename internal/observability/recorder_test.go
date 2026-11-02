@@ -157,6 +157,25 @@ func calls(n int) []CallRecord {
 	return out
 }
 
+// onlySegment returns the one segment file in dir, ignoring the lock and checkpoint files.
+func onlySegment(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var segments []string
+	for _, entry := range entries {
+		if _, ok := spillSeq(entry.Name()); ok {
+			segments = append(segments, filepath.Join(dir, entry.Name()))
+		}
+	}
+	if len(segments) != 1 {
+		t.Fatalf("%d segments, want 1: %v", len(segments), segments)
+	}
+	return segments[0]
+}
+
 func ids(records []CallRecord) []string {
 	out := make([]string, len(records))
 	for i, r := range records {
@@ -451,14 +470,7 @@ func TestTornTailIsDropped(t *testing.T) {
 	eventually(t, "both records in the spill", func() bool { return r.spill.pendingCount() == 2 })
 	crash(r)
 
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("%d segments, want 1", len(entries))
-	}
-	path := filepath.Join(dir, entries[0].Name())
+	path := onlySegment(t, dir)
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)

@@ -19,7 +19,7 @@ func (s *spill) availableLocked() bool {
 			s.read = s.segments[0]
 			s.readOffset = int64(len(spillHeader))
 		}
-		if s.readOffset < s.read.size {
+		if s.readOffset < s.readableLocked(s.read) {
 			return true
 		}
 		if s.read == s.active {
@@ -32,7 +32,7 @@ func (s *spill) availableLocked() bool {
 }
 
 // readLocked reads up to max complete records from the current segment, then the next, and returns the position of the
-// last one. It stops at the end of the active segment while the spill is open: more records may still be appended.
+// last one. It stops at the durable end of the active segment: more records may still be appended or synced.
 func (s *spill) readLocked(max int) ([]queued, position, error) {
 	var out []queued
 	var end position
@@ -44,7 +44,7 @@ func (s *spill) readLocked(max int) ([]queued, position, error) {
 			s.read = s.segments[0]
 			s.readOffset = int64(len(spillHeader))
 		}
-		if s.readOffset >= s.read.size {
+		if s.readOffset >= s.readableLocked(s.read) {
 			if s.read == s.active || !s.advanceReadLocked() {
 				break
 			}

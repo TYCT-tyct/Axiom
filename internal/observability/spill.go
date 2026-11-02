@@ -9,25 +9,34 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"axiom/internal/platform/jsonx"
 )
 
-// The call log's write-ahead spill. An Enqueue appends the record to a segment file before it returns, so a record the
-// caller was told is kept survives the process that wrote it: the page cache outlives the process. The writer reads the
-// segments in append order, writes them to the database in batches, and deletes a segment only after the batch that
-// covered it committed. A record whose write was torn by a crash is the last one of the last segment; opening the spill
-// drops it, because Enqueue never returned for it.
+// The call log's write-ahead spill. A Commit appends the record to a segment file and fsyncs it before it returns, so a
+// record the caller was told is kept survives the process and the host: the writer reads the segments in append order,
+// writes them to the database in batches, and deletes a segment only after the batch that covered it committed and the
+// position was made durable. A crash during an append can leave only a short header or body at the end of the last
+// segment; opening the spill drops that, because Commit never returned for it. A complete record that fails its
+// checksum is damage and refuses startup instead (spill_open.go).
+//
+// One process owns a directory: opening it takes an exclusive lock and a second process is refused, because two writers
+// appending to the same segment would overwrite each other without either noticing. Nodes therefore never share a spill
+// directory (docs/domains/observability.md「写入路径」).
 //
 // The spill is bounded by the number of records admitted but not yet written (Recorder.Capacity). A record's encoding is
 // capped at maxRecordBytes, so the disk bound is Capacity*(maxRecordBytes+recordHeaderBytes) plus one active segment.
-// When the next record would exceed the bound, Enqueue returns ErrBacklog and the gateway refuses new calls instead of
+// When the next record would exceed the bound, Commit returns ErrBacklog and the gateway refuses new calls instead of
 // serving one it cannot record.
 const (
 	spillHeader       = "AXIOM-WAL-1\n"
 	spillPrefix       = "call-"
 	spillSuffix       = ".wal"
+	spillLockName     = "call-log.lock"
+	spillPosName      = "call-log.pos"
+	spillPosHeader    = "AXIOM-WAL-POS-1\n"
 	spillSegmentBytes = 8 << 20
 	maxRecordBytes    = 64 << 10
 	recordHeaderBytes = 8
@@ -40,6 +49,9 @@ var (
 	// errRecordTooLarge is a record whose encoding exceeds maxRecordBytes. It cannot be kept; the recorder marks
 	// itself unrecordable so no further call is served without a record.
 	errRecordTooLarge = errors.New("observability: the call record is larger than the spill allows")
+	// errSpillLocked is a spill directory another process holds. Starting anyway would let two processes append from
+	// the same offset and overwrite each other's records, so the second node refuses to start.
+	errSpillLocked = errors.New("observability: the call log spill directory is in use by another process")
 )
 
 // crcTable detects a torn or corrupted segment record. Castagnoli is in the standard library and has hardware support.
@@ -100,20 +112,37 @@ type spillSegment struct {
 	file *os.File // the append handle, only on the active segment
 }
 
-// position is the end of a batch in the spill: the segment and offset after its last record. The writer acknowledges a
-// batch with it, and the spill deletes every complete segment before it.
+// position is a point in the spill: a segment and the offset after a record in it. The writer acknowledges a batch with
+// one, the spill records it durably, and it deletes every complete segment before it.
 type position struct {
 	seq    uint64
 	offset int64
 }
 
+// covers reports whether p is at or after q.
+func (p position) covers(q position) bool {
+	return p.seq > q.seq || (p.seq == q.seq && p.offset >= q.offset)
+}
+
+// syncWaiter is one Commit waiting for its record's fsync. The leader syncs the active segment and releases every
+// waiter the sync covered.
+type syncWaiter struct {
+	pos  position
+	done chan error
+}
+
 type spill struct {
 	dir      string
 	maxBytes int64
+	lock     *os.File // held for the life of the spill; closing it lets the next process take the directory
 
-	mu         sync.Mutex
-	segments   []*spillSegment // oldest first, including the active one
-	active     *spillSegment
+	mu       sync.Mutex
+	segments []*spillSegment // oldest first, including the active one
+	active   *spillSegment
+	// synced is how much of the active segment is durable; every segment before it is durable whole. The writer reads
+	// no further: a record it stored and checkpointed past before its fsync could vanish in a power loss, leaving a
+	// checkpoint beyond the segment's end that the next start must refuse.
+	synced     int64
 	nextSeq    uint64
 	totalBytes int64
 	pending    int64 // records written and not yet acknowledged
@@ -127,6 +156,31 @@ type spill struct {
 	wake     chan struct{} // wakes the writer when a record arrives
 	stop     chan struct{} // tells the writer to exit without draining, for a shutdown deadline
 	stopOnce sync.Once
+
+	// syncMu guards the group commit: one Commit fsyncs the segment that received its record, and every other Commit
+	// that appended before that fsync shares its result instead of paying another.
+	syncMu      sync.Mutex
+	syncing     bool
+	waiters     []syncWaiter
+	durable     position
+	haveDurable bool
+}
+
+// lockDir takes the directory's exclusive lock. flock is released by the kernel when the process dies, so a crashed
+// node never leaves its spill locked; a second live process is refused instead of appending over the first.
+func lockDir(dir string) (*os.File, error) {
+	file, err := os.OpenFile(filepath.Join(dir, spillLockName), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("observability: open call log spill lock: %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil { //nolint:gosec // a file descriptor fits int on the platforms this node runs on
+		closeQuietly(file)
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, fmt.Errorf("%w: %s", errSpillLocked, dir)
+		}
+		return nil, fmt.Errorf("observability: lock call log spill: %w", err)
+	}
+	return file, nil
 }
 
 // createSegmentLocked creates the next segment and makes it active. The header is written before any record and the
@@ -150,6 +204,7 @@ func (s *spill) createSegmentLocked(seq uint64) error {
 	segment := &spillSegment{seq: seq, path: path, size: int64(len(spillHeader)), file: file}
 	s.segments = append(s.segments, segment)
 	s.active = segment
+	s.synced = segment.size
 	s.totalBytes += int64(len(spillHeader))
 	if seq >= s.nextSeq {
 		s.nextSeq = seq + 1
@@ -172,27 +227,26 @@ func (s *spill) rotateLocked() error {
 	return s.createSegmentLocked(s.nextSeq)
 }
 
-// append writes one encoded record and returns after the page cache has it, so a process crash from this point on
-// leaves the record in the segment. It does not fsync per record: the active segment is synced at rotation and before
-// Close, so a host power loss can lose the newest records, which are exactly the ones not yet in the database.
-func (s *spill) append(record []byte) error {
+// append writes one encoded record and returns its position. It does not sync: Commit calls sync before it returns, so
+// the bytes survive a host power loss by then.
+func (s *spill) append(record []byte) (position, error) {
 	if len(record) > maxRecordBytes {
-		return errRecordTooLarge
+		return position{}, errRecordTooLarge
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.broken != nil {
-		return s.broken
+		return position{}, s.broken
 	}
 	if s.closed || (s.active != nil && s.active.file == nil) {
-		return ErrClosed
+		return position{}, ErrClosed
 	}
 	need := int64(recordHeaderBytes + len(record))
 	if err := s.ensureSegmentLocked(need); err != nil {
-		return err
+		return position{}, err
 	}
 	if s.totalBytes+need > s.maxBytes {
-		return errSpillFull
+		return position{}, errSpillFull
 	}
 	recordBytes := make([]byte, recordHeaderBytes+len(record))
 	binary.BigEndian.PutUint32(recordBytes[:4], uint32(len(record))) //nolint:gosec // len(record) <= maxRecordBytes is checked above
@@ -204,16 +258,129 @@ func (s *spill) append(record []byte) error {
 		// append starts at a complete boundary.
 		if resetErr := resetAppend(s.active.file, before); resetErr != nil {
 			s.broken = resetErr
-			return resetErr
+			return position{}, resetErr
 		}
 		s.broken = err
-		return fmt.Errorf("observability: write call log segment: %w", err)
+		return position{}, fmt.Errorf("observability: write call log segment: %w", err)
 	}
 	s.active.size += need
 	s.totalBytes += need
 	s.pending++
 	s.notify()
-	return nil
+	return position{seq: s.active.seq, offset: s.active.size}, nil
+}
+
+// appendSynced appends one record and makes it durable before returning. Commit calls it: once it returns, the record
+// survives a host power loss, not only a process crash (docs/domains/observability.md「写入路径」).
+func (s *spill) appendSynced(record []byte) error {
+	pos, err := s.append(record)
+	if err != nil {
+		return err
+	}
+	return s.sync(pos)
+}
+
+// sync makes pos durable. Commits that appended while another fsync was running share that fsync: the leader syncs the
+// active segment and releases every waiter the segment now covers.
+func (s *spill) sync(pos position) error {
+	s.syncMu.Lock()
+	if s.haveDurable && s.durable.covers(pos) {
+		s.syncMu.Unlock()
+		return nil
+	}
+	done := make(chan error, 1)
+	s.waiters = append(s.waiters, syncWaiter{pos: pos, done: done})
+	leader := !s.syncing
+	if leader {
+		s.syncing = true
+	}
+	s.syncMu.Unlock()
+	if leader {
+		s.runSyncs()
+	}
+	return <-done
+}
+
+// runSyncs is the group-commit leader: it fsyncs until every registered waiter is covered or the sync fails. A waiter
+// that arrived during the fsync is covered by the next round.
+func (s *spill) runSyncs() {
+	for {
+		end, err := s.syncActive()
+		s.syncMu.Lock()
+		if err == nil {
+			s.durable, s.haveDurable = end, true
+		}
+		remaining := s.waiters[:0]
+		for _, w := range s.waiters {
+			if err != nil || s.durable.covers(w.pos) {
+				w.done <- err
+				continue
+			}
+			remaining = append(remaining, w)
+		}
+		s.waiters = remaining
+		if len(remaining) == 0 {
+			s.syncing = false
+			s.syncMu.Unlock()
+			return
+		}
+		s.syncMu.Unlock()
+	}
+}
+
+// syncActive fsyncs the active segment and returns the position it made durable. It releases the append lock before
+// the fsync: records that arrive during it append normally and are covered by the next round, which is what lets one
+// fsync serve a whole group of concurrent Commits. Rotation syncs a segment before it closes, so a waiter whose
+// segment is already behind the active one is covered by that rotation.
+func (s *spill) syncActive() (position, error) {
+	s.mu.Lock()
+	if s.active == nil || s.active.file == nil {
+		s.mu.Unlock()
+		return position{}, ErrClosed
+	}
+	file, end := s.active.file, position{seq: s.active.seq, offset: s.active.size}
+	s.mu.Unlock()
+	if err := file.Sync(); err != nil {
+		// A rotation may have closed the segment after we captured it. It synced the segment before closing, so the
+		// record is durable even though this handle lost the race; any other error is a real sync failure.
+		s.mu.Lock()
+		rotated := s.active != nil && s.active.seq != end.seq
+		s.mu.Unlock()
+		if rotated && errors.Is(err, os.ErrClosed) {
+			return end, nil
+		}
+		// After a failed fsync the kernel may have dropped the pages, and a later fsync can succeed without them: the
+		// segment can no longer be trusted, so the spill stops taking and reading records.
+		err = fmt.Errorf("observability: sync call log segment: %w", err)
+		s.mu.Lock()
+		if s.broken == nil {
+			s.broken = err
+		}
+		s.mu.Unlock()
+		s.notify()
+		return position{}, err
+	}
+	s.mu.Lock()
+	if s.active != nil && s.active.seq == end.seq && end.offset > s.synced {
+		s.synced = end.offset
+	}
+	s.mu.Unlock()
+	s.notify() // the writer reads only what is durable
+	return end, nil
+}
+
+// readableLocked is how far the writer may read seg: the durable part of the active segment, any other whole.
+func (s *spill) readableLocked(seg *spillSegment) int64 {
+	if seg == s.active {
+		return s.synced
+	}
+	return seg.size
+}
+
+// awaitingSyncLocked reports records appended to a healthy spill whose fsync has not finished yet: a draining writer
+// waits for them instead of exiting before they are readable.
+func (s *spill) awaitingSyncLocked() bool {
+	return s.broken == nil && s.active != nil && s.active.file != nil && s.active.size > s.synced
 }
 
 // ensureSegmentLocked rotates when the active segment cannot hold the next record. A rotation failure makes the spill
@@ -269,10 +436,9 @@ func (s *spill) stopped() bool {
 	}
 }
 
-// finish closes the files the writer borrowed. Records left in a segment stay on disk.
+// finish closes the files the writer borrowed and releases the directory lock. Records left in a segment stay on disk.
 func (s *spill) finish() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.readFile != nil {
 		closeQuietly(s.readFile)
 		s.readFile = nil
@@ -287,6 +453,19 @@ func (s *spill) finish() {
 		closeQuietly(s.active.file)
 		s.active.file = nil
 	}
+	if s.lock != nil {
+		closeQuietly(s.lock)
+		s.lock = nil
+	}
+	s.mu.Unlock()
+	// No Commit may keep waiting for a sync whose file is gone.
+	s.syncMu.Lock()
+	for _, w := range s.waiters {
+		w.done <- ErrClosed
+	}
+	s.waiters = nil
+	s.syncing = false
+	s.syncMu.Unlock()
 }
 
 // pendingCount is the number of records in the segments the database has not acknowledged.
@@ -313,7 +492,7 @@ func (s *spill) nextBatch(max int, flush time.Duration) (batch []queued, end pos
 func (s *spill) firstBatch(max int) (batch []queued, end position, err error) {
 	s.mu.Lock()
 	for !s.availableLocked() {
-		if s.closed || s.stopped() {
+		if s.stopped() || (s.closed && !s.awaitingSyncLocked()) {
 			broken := s.broken
 			s.mu.Unlock()
 			return nil, position{}, broken
@@ -364,16 +543,37 @@ func (s *spill) fillBatch(batch []queued, end position, max int, flush time.Dura
 	return batch, end, true, nil
 }
 
-// ack records that the batch ending at end committed. It frees every complete segment before end; the active segment
-// stays because it may still receive records. A failed removal leaves the segment for the next ack: replaying it is
-// harmless because the inserts are idempotent.
-func (s *spill) ack(end position, records int) {
+// ack records that the batch ending at end committed. It first makes that position durable in the spill's checkpoint,
+// then frees every complete segment before it; the active segment stays because it may still receive records. An
+// acknowledged segment with no unacknowledged records behind it is rotated away even when it never filled, so a quiet
+// node does not keep months of already-stored records in its active segment. A failed checkpoint write leaves the
+// segments for the next ack: replaying them is harmless because the inserts are idempotent.
+func (s *spill) ack(end position, records int) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.pending -= int64(records)
 	if s.pending < 0 {
 		s.pending = 0
 	}
+	if s.pending == 0 && !s.closed && !s.stopped() && s.active != nil &&
+		s.active.size > int64(len(spillHeader)) {
+		if err := s.rotateLocked(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+	}
+	s.mu.Unlock()
+	if err := s.writeCheckpoint(end); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reclaimLocked(end)
+	return nil
+}
+
+// reclaimLocked deletes every segment entirely covered by end. The active segment is never deleted: it may still
+// receive records.
+func (s *spill) reclaimLocked(end position) {
 	for len(s.segments) > 0 {
 		segment := s.segments[0]
 		if segment == s.active {
@@ -396,6 +596,40 @@ func (s *spill) ack(end position, records int) {
 		s.totalBytes -= segment.size
 		s.segments = s.segments[1:]
 	}
+}
+
+// writeCheckpoint makes the acknowledged position durable. It is written to a temporary file and renamed, so a crash
+// leaves either the old position or the new one, never a partial value that would skip a record.
+func (s *spill) writeCheckpoint(pos position) error {
+	tmp, err := os.CreateTemp(s.dir, ".pos-")
+	if err != nil {
+		return fmt.Errorf("observability: create call log checkpoint: %w", err)
+	}
+	name := tmp.Name()
+	defer removeQuietly(name)
+	if _, err := fmt.Fprintf(tmp, "%s%d %d\n", spillPosHeader, pos.seq, pos.offset); err != nil {
+		closeQuietly(tmp)
+		return fmt.Errorf("observability: write call log checkpoint: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		closeQuietly(tmp)
+		return fmt.Errorf("observability: sync call log checkpoint: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("observability: close call log checkpoint: %w", err)
+	}
+	if err := os.Rename(name, filepath.Join(s.dir, spillPosName)); err != nil {
+		return fmt.Errorf("observability: replace call log checkpoint: %w", err)
+	}
+	dir, err := os.Open(s.dir)
+	if err != nil {
+		return fmt.Errorf("observability: open call log directory: %w", err)
+	}
+	defer closeQuietly(dir)
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("observability: sync call log directory: %w", err)
+	}
+	return nil
 }
 
 // encodeRecord turns a validated record into the bytes one segment record carries.

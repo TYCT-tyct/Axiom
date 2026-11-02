@@ -8,9 +8,9 @@
 
 ```go
 func Module() pg.Module                                   // 迁移，交给 cmd/axiom
-func NewRecorder(ctx, db *pg.DB, scope pg.Scope, cfg Config, logger *slog.Logger) (*Recorder, error) // 打开或校验 spill；目录不可写、段损坏时启动失败
+func NewRecorder(ctx, db *pg.DB, scope pg.Scope, cfg Config, logger *slog.Logger) (*Recorder, error) // 锁定并校验 spill；目录被占用、不可写、段损坏时启动失败
 func (r *Recorder) Admit() (*Slot, error)                 // 调用准入前预占一条记录的位置；spill 满返回 ErrBacklog，已坏返回 ErrBroken
-func (s *Slot) Commit(rec CallRecord) error               // 把记录追加到本机 spill；返回后进程崩溃也能重放
+func (s *Slot) Commit(rec CallRecord) error               // 把记录追加到本机 spill 并 fsync；返回后进程崩溃、主机断电也能重放
 func (s *Slot) Release()                                  // 调用结束但没有记录时归还位置；Commit 之后是空操作
 func (r *Recorder) Enqueue(rec CallRecord) error          // Admit + Commit 的便捷入口，给测试和非 gateway 调用方
 func (r *Recorder) Close(ctx context.Context) error       // 写完 spill；ctx 到期则报告还留在磁盘上的条数
@@ -65,30 +65,30 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 | 账本、汇总和审计不随调用日志删除 | 保留任务只拼 `observability.call_log_*` 与 `call_attempt_*` 的分区名，从不写 `billing` 的语句；测试在一个已归档月份旁边放另一 schema 的行，运行后仍在 |
 | 分区的建与删只由专用角色做 | 两张父表和全部分区归 `axiom_retention_job`（NOLOGIN）；`axiom_owner` 继承它，部署建的 `axiom_retention` 登录是它的成员，`axiom_app` 不是。应用仍只有 SELECT/INSERT，保留任务用 `AXIOM_RETENTION_DATABASE_URL` 独立连接，拿到分区 DDL 所需的所有权。测试：任务在独立登录下能建、删分区，应用不能改表 |
 | 用户看不到成本、端点和路由 | `OwnCall` 没有这些字段；尝试表不向用户开放，查询也不选尝试（[接入与对外接口的「用量与费用」](../../docs/domains/gateway.md#用量与费用)） |
-| 文字能存进库 | `Commit` 在写 spill 前拒绝不合法的 UTF-8 和 NUL，包括每次尝试的文字；这是 bug 或上游脏数据，不是可以跳过的行。记录计入 `records.lost{reason="invalid"}`，recorder 标记为不可记录，准入从此拒绝。测试：非法 UTF-8、NUL、未知 outcome 都被拒绝，下一次 `Admit` 返回 `ErrBroken` |
+| 文字能存进库 | `Commit` 在写 spill 前拒绝不合法的 UTF-8、NUL 和打印成 jsonb 文本后超过 8192 字节的路由 JSON（每个 `:`、`,` 后多一个空格，按此上界计），包括每次尝试的文字；这是 bug 或上游脏数据，不是可以跳过的行，进了 spill 它会在每次重放时被数据库拒绝。路由由 routing 有界编码：选定的路线、断路兜底、尝试（只有端点和结果，出口在 `call_attempt`）和每个原因的数量完整，被排除的端点最多逐个记 16 个，最坏情况约 5.4 KB，所以合法的 `openrouter/auto` 记录总能写进 `call_log.route`。记录计入 `records.lost{reason="invalid"}`，recorder 标记为不可记录，准入从此拒绝。测试：非法 UTF-8、NUL、未知 outcome、超过 jsonb 上限的路由（`TestEnqueueRejectsText`），逐项排除上千个候选的最大路由（`TestRecordIsBounded`）并写进真实数据库（`TestBoundedRouteFitsTheColumn`） |
 | 终端用户标识只以带密钥的哈希存放 | `EndUserHash` 是带私有数组的结构，包外无法构造非零值 |
 | 没有对话正文、密钥或凭证 | 两张表的列里没有这样的名字或字节类型，文字和 JSON 列都有长度或格式检查；测试读 `information_schema` 核对两张表。请求头只记应用归因的三个，由 gateway 去控制字符、按列宽截断（`app_referer` 另去掉 userinfo、查询串和片段）后放入 `app_referer`、`app_title`、`app_categories`；其余请求头一律不记 |
 | 每次尝试有且只有一行，且能从调用找到 | `call_attempt` 的主键 `(request_id, at, attempt_seq)`；`Seq` 必须从 1 连续递增，最多 `platform.MaxAttemptSeq` 次（`TestALoopsAttemptsAreKept`）；调用行的端点、来源类别、出口和次数由最后一个尝试算出。测试：写两次只有一行，按序号读回每次尝试，调用行与最后尝试一致 |
 | 同一个请求写两次是一行 | 两张表都是 `ON CONFLICT … DO NOTHING`；`at` 是请求开始时间，不是写入时间，所以重试的是同一个键。测试：同一个 `CallRecord` 写两次，调用一行、每次尝试一行 |
 | 写入从不因没有分区而失败 | 两张表都有默认分区兜底；测试写入 2001 年和 2090 年的调用和尝试 |
-| 记录不在过载时丢失 | 调用准入前 `Admit` 预占一条记录的位置；记录在响应结束前追加到本机 spill，满时 `Admit` 返回 `ErrBacklog`，gateway 答 503 并拒绝新调用，不丢已接受的记录。测试：写协程卡住、两个位置占满时第三次 `Enqueue` 立即返回 `ErrBacklog`，前两条照常写入；崩溃后重启按顺序重放；同一批重放不重复 |
+| 记录不在过载时丢失 | 调用准入前 `Admit` 预占一条记录的位置；记录在响应结束前追加到本机 spill 并 fsync，满时 `Admit` 返回 `ErrBacklog`，gateway 答 503 并拒绝新调用，不丢已接受的记录。测试：写协程卡住、两个位置占满时第三次 `Enqueue` 立即返回 `ErrBacklog`，前两条照常写入；崩溃后重启按顺序重放；同一批重放不重复；坏行之后在途的调用仍能写入 |
 | 所有表和分区都过启动检查 | 每个分区各自强制行级安全并有策略（分区不继承）；测试 `DB.Check` 通过 |
 | 一次异常只通知一次 | `spend_anomalies` 的 `(account_id, kind)` 主键让重复检测 `ON CONFLICT DO NOTHING`，只有首次插入才持久化信号和用户提醒；异常消失后删除状态并只发一次恢复。测试：连续两轮同一异常只有一条 raise，窗口移走后一条 resolve |
 | 阈值不随旧节点替换丢失 | `spend_detection` 独立于 `alert_configuration.body`；管理 PUT 省略 `spend_detection` 时保留已存值，管理 GET 合并返回默认值或已存值。测试：保存后模拟旧节点替换，阈值不变 |
 
 ## 写入
 
-**记录先落本机，再异步入库。** gateway 在准入时调用 `Admit`，为这次调用预占一条记录的位置；调用结算后、响应结束前，`Executor` 用这个位置 `Commit`：记录先校验、编码成一行 JSON，再追加到 `AXIOM_CALL_LOG_DIR` 下的段文件。`Commit` 返回后，记录已经在操作系统的页缓存里，进程被杀也还在；写协程按段内顺序读出来，批量写数据库，写成功才删段。这样调用路径不等待数据库，但也不会因为积压到上限而把已服务的调用丢掉。
+**记录先落本机并持久化，再异步入库。** gateway 在准入时调用 `Admit`，为这次调用预占一条记录的位置；调用结算后、响应结束前，`Executor` 用这个位置 `Commit`：记录先校验、编码成一行 JSON，追加到 `AXIOM_CALL_LOG_DIR` 下的段文件，并 `fsync` 后才返回。并发的 `Commit` 登记位置后共用一次 `file.Sync()`：一个领导者 sync 活动段到当前末尾，释放所有被覆盖的等待者，sync 期间到达的留给下一轮；顺序调用仍各付一次，并发调用把这段固定成本摊薄。`Commit` 返回后记录已经在磁盘上，进程崩溃和主机断电都不会丢。写协程按段内顺序读出来，只读到已经 fsync 的位置，批量写数据库，写成功才删段：否则它可能把一条还没 fsync 的记录写进库并把确认位置记到它后面，断电后段比确认位置短，下一次启动只能拒绝。这样调用路径不等待数据库，也不会因为积压到上限而把已服务的调用丢掉。
 
-**spill 的格式与恢复。** 目录里是 `call-<16 位序号>.wal`，每个段以 `AXIOM-WAL-1\n` 开头，之后每条记录是 4 字节长度、4 字节 CRC32C（Castagnoli）和 JSON 正文字节。一个段 8 MiB，写满就换下一个；活动段只在换段和 `Close` 时 `fsync`，不按条 fsync——按条 fsync 在本机约 1.4 ms，5000 并发的调用路径付不起。启动时按序号读所有段，逐条校验长度和 CRC：最后一段末尾不完整的记录是崩溃时还没返回的 `Commit`，截掉；中间段损坏或不是末尾的坏记录会让启动失败，不会悄悄跳过一条已经确认的记录。恢复后写协程从最老的段开始重放，已经提交过但没来得及删段的批次会再次插入，`ON CONFLICT DO NOTHING` 保证不重复。
+**spill 的格式、所有权与恢复。** 目录里是 `call-<16 位序号>.wal`，每个段以 `AXIOM-WAL-1\n` 开头，之后每条记录是 4 字节长度、4 字节 CRC32C（Castagnoli）和 JSON 正文字节。一个段 8 MiB，写满就换下一个。打开目录时先对 `call-log.lock` 取 `flock` 排他锁，第二个进程直接拒绝启动：两个进程从同一偏移追加会互相覆盖，而两次 `Commit` 都会看起来成功。节点必须各用各的目录（`.env.example` 与 `deploy/compose.yaml` 的说明）。启动时先读 `call-log.pos`：写协程每次确认一批，就把它原子替换地写成新的已确认位置，然后删掉整段已确认的段；排空时把活动段也换掉，所以低流量节点的段不会长期留着已经入库的记录。之后按序号读所有段，逐条校验长度和 CRC：最后一段末尾短头或短正文是崩溃时还没返回的 `Commit`，截掉；长度完整但 CRC 不匹配的记录是损坏，中间段损坏也一样，启动失败而不是静默丢掉一条可能已经服务的记录。错误信息给出段文件和偏移，文件保持原样，由运维判断后修复或截断再启动。已确认位置之前的记录不重放、也不计入 `pending`；崩溃恰在数据库提交与位置写入之间时，下一段会重放一小段已提交记录，`ON CONFLICT DO NOTHING` 仍然去重，归档并删除分区后的重放因此不会把旧记录插回默认分区。
 
 **写入数据库。** 写协程走 [platform 的普通连接池](../platform/README.md#连接池)，不占完成类预留。每批最多 500 条调用，或从第一条起最多等 200 ms：一个事务里先写 `call_log`，再写 `call_attempt`，各是一条 `INSERT … SELECT FROM jsonb_array_elements($1)`，参数是整批行的一个 JSON 数组，成员名就是列名，类型和检查由表来做。先写调用再写尝试，重试也按这个顺序，所以不会出现有尝试、没有调用的批次；同一次写入里两者一起提交，调用总能找到它的尝试。每次写入有自己的期限（`WriteTimeout`，cmd 里 10 s），超时后算失败，退避重试（100 ms 起翻倍，上限 5 s，带抖动），重试到成功为止；超时的那次结果不明，重写同一批由 `ON CONFLICT` 兜底。一个不再应答的连接因此拖不住唯一的写入协程；整体仍由 `Close` 的期限控制。
 
-**数据错误不跳过。** 数据库说数据本身有问题（`pg.IsDataError`：SQLSTATE 22、23），或编码这批行失败（同样的行每次都失败）时，写协程保留整批、标记 recorder 不可记录并停止写入；`Admit` 从此返回 `ErrBroken`，gateway 答 503。以前的做法是把批一分为二、找到坏行丢掉再写后面的；那会让一条坏记录之后的所有调用都无记录地服务，违反「全部保存」。现在的代价是一条坏记录会挡住后面所有记录，但节点同时停止接新调用，坏行留在 spill，请求 ID 和错误在日志里等运维修，不会静默丢。
+**数据错误不跳过，也不连带丢掉在途调用。** 数据库说数据本身有问题（`pg.IsDataError`：SQLSTATE 22、23），或编码这批行失败（同样的行每次都失败）时，写协程保留整批、标记 recorder 不可记录并停止写数据库；`Admit` 从此返回 `ErrBroken`，gateway 答 503。已经预占位置、还在上游或结算中的调用仍可 `Commit`：追加文件保持打开，直到在途调用全部写入或释放后才关，否则一条坏行会让随后完成的调用拿到 `ErrClosed` 并永久丢掉记录。坏行留在 spill，请求 ID 和错误在日志里等运维修；代价是它挡住后面的记录，但节点同时停止接新调用，不会静默丢。
 
 **关闭。** `Close` 先拒绝新的 `Admit`，让写协程把 spill 写完；ctx 到期就停止重试和读取，`Done` 关闭，记录留在段文件里，下一次启动接着写。cmd 的退出顺序是：监听停止并排空，`Close`，最后关数据库；启动失败等其他返回路径也会关闭它，不留写入协程。`Close` 返回 `ErrPending` 时报告还留在磁盘上的条数，不把它们算成丢失。
 
-**容量和磁盘上限。** `Capacity`（cmd 里 5000）是在途调用和未写记录的合计上限：`Admit` 的原子计数到顶就返回 `ErrBacklog`，gateway 在准入前答 503 `overloaded`，既不服务无记录的调用，也不把数据库的慢传成无界磁盘增长。单条记录编码上限 64 KiB，所以磁盘上限约 `Capacity × (64 KiB + 8) + 8 MiB`；超过时 `Commit` 失败、计入 `records.lost{reason="spill"}` 并标记不可记录。已准入的调用如果在本机磁盘写失败，记录无法保存，节点会拒绝后续调用；这是无法从事后补救的尾部窗口，日志和 `records.lost` 会指出请求 ID。
+**容量和磁盘上限。** `Capacity`（cmd 里 5000）是在途调用和未写记录的合计上限：`Admit` 的原子计数到顶就返回 `ErrBacklog`，gateway 在准入前答 503 `overloaded`，既不服务无记录的调用，也不把数据库的慢传成无界磁盘增长。单条记录编码上限 64 KiB，所以磁盘上限约 `Capacity × (64 KiB + 8) + 8 MiB`；超过时 `Commit` 失败、计入 `records.lost{reason="spill"}` 并标记不可记录。已准入的调用如果在本机磁盘写失败或 fsync 失败，记录无法确认保存，节点会拒绝后续调用；fsync 失败后内核可能已丢掉脏页、之后的 fsync 却照样成功，所以 spill 同时停止追加和读取，留给下一次启动按磁盘上的内容恢复；这是无法从事后补救的尾部窗口，日志和 `records.lost` 会指出请求 ID。
 
 指标：`axiom.observability.records.pending`（spill 里尚未确认的调用数）、`records.written`、`attempts.written`、`write.retries`、`records.lost`、`attempts.lost`；丢失的计数器带 `reason`（`invalid`、`spill`、`shutdown`），没有账户、key 或用户标签。保留任务另有 `axiom.observability.retention.partitions{action,table}`（`archived`、`dropped`）。`AlertSample` 返回 `records.pending` 和累计丢失数，供 `observability.write_lag` 与 `observability.records_lost` 使用。
 
@@ -179,7 +179,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 | 另建 `call_attempt`，每次尝试一行 | 调用记录要能串起每次尝试（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）；suppliers 的 `attempt_costs` 只在结算事务里写，失败或崩溃的请求可能没有可查的尝试；单独的表让尝试有类型、时间和结果，并按 `(request_id, attempt_seq)` 连到供应商的扣费。负责人已在对话中把设计决定交给开发者（Issue #29） | 只存 `route` JSON：没有类型和耗时，查一次尝试要解 JSON；把尝试嵌进 `call_log`：一个请求一行会被撑大，按尝试查询和保留都更难；让 suppliers 直写：跨模块写同一张表，违反模块边界 |
 | 调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 取自最后一个尝试 | 一处事实：调用行与尝试表不可能不一致；网关也不用把同样的值填两遍 | 调用记录再带一份端点、来源和出口：两套值迟早对不上 |
 | 调用、尝试和账本交易只用请求 ID 关联，`ledger_entry_ids` 不再读写 | 分录没有 ID，这一列从来没有写入方；请求 ID 已经是账本自己的键，照抄一份会在调用记录丢失或校正追加交易时与账本不一致。列按平台的迁移规则留到停止使用它的版本之后删除 | 抄交易 ID：要结算把 ID 带进异步记录，仍会缺、会旧；让 observability 查 billing 的表：违反模块边界 |
-| 准入预占 + 本机 WAL + 顺序批量入库，spill 满时拒绝新调用 | 记录在响应结束前已追加到本机段文件，进程崩溃可重放，数据库慢不拖慢已完成调用；磁盘和接收量都有硬上限，满了拒绝而不是丢。实测 `Commit` 不逐条 fsync，调用路径只付编码和一次 write（见[性能](../../docs/performance.md#怎么验证)）。否决在结算事务里写调用记录：它虽然和结算同一原子提交，但会让一条日志记录的约束或磁盘故障失败整笔钱的结算，`SettleBatch` 还要为每笔调用多带一行日志，日志表因此进入钱的临界路径；也否决同步数据库插入：同样把数据库延迟放进调用路径，且崩溃会丢掉已结算未插入的记录。否决无界队列：内存无上限；否决队列满丢新记录：违反「全部保存」 |
+| 准入预占 + 本机 WAL + 顺序批量入库，spill 满时拒绝新调用 | 记录在响应结束前已追加到本机段文件，进程崩溃可重放，数据库慢不拖慢已完成调用；磁盘和接收量都有硬上限，满了拒绝而不是丢。`Commit` 等一轮组提交 fsync 才返回，主机断电也不丢已回复的调用；并发调用共用一次 fsync，调用路径的实测代价见[性能的「调用路径上的规则」](../../docs/performance.md#调用路径上的规则)。否决在结算事务里写调用记录：它虽然和结算同一原子提交，但会让一条日志记录的约束或磁盘故障失败整笔钱的结算，`SettleBatch` 还要为每笔调用多带一行日志，日志表因此进入钱的临界路径；也否决同步数据库插入：同样把数据库延迟放进调用路径，且崩溃会丢掉已结算未插入的记录。否决无界队列：内存无上限；否决队列满丢新记录：违反「全部保存」 |
 | 整批行作为一个 JSON 数组传给一条 `INSERT … SELECT` | 一次往返、一个参数；类型转换和检查留给表。sqlc 不认 30 多个参数的 `unnest`，也没有 `:copyfrom`（`pg.Tx` 没有 `CopyFrom`） | 逐行 `INSERT`：每条一次往返；列式 `unnest`：生成不了 |
 | 金额存最小单位的整数，币种单列 | 与 billing 的存储一致（[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)），汇总不丢精度 | 浮点数、字符串 |
 | 默认分区加预建月分区 | 记录不能丢，写入不能因缺分区失败；预建的月数让保留任务有时间落地 | 调用路径上建分区：`axiom_app` 没有权限，也会在热路径上拿锁；没有默认分区：缺分区时 INSERT 失败并退避重试，积压到容量上限后拒绝新调用，不能把记录当坏行丢掉 |

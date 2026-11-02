@@ -35,6 +35,34 @@ func BenchmarkEnqueue(b *testing.B) {
 	}
 }
 
+// BenchmarkEnqueueParallel measures the same path under concurrency, where the group commit shares one fsync between
+// the calls that appended before it. The writer drains into a sink; the capacity leaves room for the in-flight calls.
+func BenchmarkEnqueueParallel(b *testing.B) {
+	s := &sink{gate: make(chan struct{})} // the writer waits, so this is only admission, encoding and the group commit
+	r, err := newRecorder(context.Background(), Config{
+		Dir: b.TempDir(), Capacity: b.N + 1, BatchSize: 500, FlushInterval: time.Millisecond,
+		RetryBase: time.Millisecond, RetryMax: time.Millisecond, WriteTimeout: time.Second,
+	}, s.write, func(error) bool { return false }, quiet)
+	if err != nil {
+		b.Fatal(err)
+	}
+	rec := record(uuid.NewV7(), now)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if err := r.Enqueue(rec); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.StopTimer()
+	s.open()
+	if err := r.Close(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+}
+
 // BenchmarkEncodeRecord is the CPU half of Commit: validation and canonical JSON, without the segment write.
 func BenchmarkEncodeRecord(b *testing.B) {
 	rec := record(uuid.NewV7(), now)
@@ -51,7 +79,7 @@ func BenchmarkEncodeRecord(b *testing.B) {
 	}
 }
 
-// BenchmarkSpillAppend is the I/O half of Commit: one write to the active segment, no sync.
+// BenchmarkSpillAppend is the I/O half of Commit: one append and its group-commit fsync.
 func BenchmarkSpillAppend(b *testing.B) {
 	sp, err := openSpill(b.TempDir(), b.N+1)
 	if err != nil {
@@ -71,7 +99,7 @@ func BenchmarkSpillAppend(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := sp.append(body); err != nil {
+		if err := sp.appendSynced(body); err != nil {
 			b.Fatal(err)
 		}
 	}

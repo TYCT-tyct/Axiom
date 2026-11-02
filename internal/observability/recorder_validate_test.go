@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,10 @@ func TestEnqueueRejectsText(t *testing.T) {
 		"bad UTF-8 in an attempt's egress":   func(c *CallRecord) { c.Attempts[0].Egress = "\xff" },
 		"a NUL in an attempt's error kind":   func(c *CallRecord) { c.Attempts[1].ErrorKind = "a\x00b" },
 		"an attempt with an unknown outcome": func(c *CallRecord) { c.Attempts[0].Outcome = "maybe" },
+		// 6009 compact bytes fit the column; the 3001 spaces jsonb prints after ':' and ',' do not.
+		"a route over the column's jsonb limit": func(c *CallRecord) {
+			c.Route = []byte(`{"a":[` + strings.Repeat(`1,`, 3000) + `1]}`)
+		},
 	} {
 		r := recorderOf(t, &sink{}, Config{Capacity: 1, BatchSize: 1, FlushInterval: time.Millisecond})
 		rec := record(uuid.NewV7(), now)
@@ -107,7 +112,7 @@ func TestStopRefusesFurtherAppends(t *testing.T) {
 	}
 	t.Cleanup(s.finish)
 	s.stopNow()
-	if err := s.append([]byte("{}")); !errors.Is(err, ErrClosed) {
+	if _, err := s.append([]byte("{}")); !errors.Is(err, ErrClosed) {
 		t.Errorf("append after stop = %v, want ErrClosed", err)
 	}
 }
