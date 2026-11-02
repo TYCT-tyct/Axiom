@@ -227,10 +227,11 @@ func (m *Monitor) delay(level int) time.Duration {
 
 // recover closes an observe-mode would-remove on a counted success. In enforce mode a probeable endpoint restores only
 // through a passing probe; a real success can only come from a degraded endpoint, and restores one that has no probe at
-// all (an owned endpoint or one with no generation format), where a real request is the only re-check available. An
-// offline endpoint takes no real traffic, so its only way back is a probe.
+// all (an owned endpoint or one with no generation format), where a real request is the only re-check available; that
+// request must have been sent after the trip, or it says nothing about the endpoint now. An offline endpoint takes no
+// real traffic, so its only way back is a probe.
 func (m *Monitor) recover(e *State, v verdict, o *Observation) {
-	if v != success || (m.mode == Enforce && (e.record.Warned || e.probeable)) {
+	if v != success || (m.mode == Enforce && (e.record.Warned || e.probeable || o.Sent.UnixNano() <= e.record.Opened)) {
 		return
 	}
 	r := e.record

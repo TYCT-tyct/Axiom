@@ -83,6 +83,38 @@ func checkUnprobeable(t *testing.T, ep suppliers.Routable) {
 	}
 }
 
+func TestLateSuccessDoesNotRestoreUnprobeable(t *testing.T) {
+	for name, ep := range map[string]suppliers.Routable{
+		"owned":  {Site: uuid.NewV7(), Credentials: 1, Formats: []protocol.Format{protocol.Chat}},
+		"direct": {Credentials: 1, Formats: []protocol.Format{protocol.Embeddings}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			checkLateSuccess(t, ep)
+		})
+	}
+}
+
+func checkLateSuccess(t *testing.T, ep suppliers.Routable) {
+	t.Helper()
+	m, _, f, now := fixtureLoop(t, Enforce)
+	id := uuid.NewV7()
+	ep.ID = id
+	f.endpoints = append(f.endpoints, ep)
+	if err := m.Prepare(t.Context(), f.endpoints); err != nil {
+		t.Fatal(err)
+	}
+	removeEndpoint(t, m, id, *now)
+	e := m.Live(id, 1)
+	m.Observe(t.Context(), Observation{Endpoint: id, Source: uuid.NewV7(), Sent: now.Add(-2 * time.Second), Ended: now.Add(time.Second), Done: true})
+	if at, _ := e.Routing(*now); at.IsZero() {
+		t.Fatal("a success sent before the trip restored the endpoint")
+	}
+	m.Observe(t.Context(), Observation{Endpoint: id, Source: uuid.NewV7(), Sent: now.Add(2 * time.Second), Ended: now.Add(3 * time.Second), Done: true})
+	if at, _ := e.Routing(*now); !at.IsZero() {
+		t.Fatal("a success sent after the trip did not restore the endpoint")
+	}
+}
+
 func TestProbeUsesAGenerationFormat(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Enforce)
 	id := uuid.NewV7()
