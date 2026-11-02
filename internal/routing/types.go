@@ -72,6 +72,7 @@ type Input struct {
 // were left out. The gateway may shorten the plan after reserving, never lengthen it.
 type Plan struct {
 	Entries     []Entry
+	Segments    billing.Segments // the segment settings this plan used, frozen for the reservation that follows it
 	MaxAttempts int
 	StartBy     time.Time
 	StickyTTL   time.Duration // how long the session sticks to the endpoint that serves it; the preset's, 0 for the router's default

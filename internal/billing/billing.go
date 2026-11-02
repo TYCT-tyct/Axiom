@@ -32,15 +32,15 @@ func Migrations() pg.Module {
 	return pg.Module{Name: "billing", Migrations: files}
 }
 
-// Config is what billing's database work needs from the site's settings (internal/gateway/README.md「超时与限额」).
+// Config is what billing's database work needs; Segments is the live platform record shared with routing.
 type Config struct {
-	HolderTTL time.Duration // how long a heartbeat keeps the holder alive
-	Heartbeat time.Duration // how often Run pushes the holder's expiry out; default a third of the TTL
-	ReapGrace time.Duration // how long past its expiry a holder is reaped
-	Lifetime  time.Duration // a reservation's deadline after admission: the longest call plus the settlement grace
-	Segments  Segments
-	Logger    *slog.Logger // where alerts go; default slog.Default()
-	Meter     metric.Meter // where the platform-borne counters go; nil for none
+	HolderTTL time.Duration  // how long a heartbeat keeps the holder alive
+	Heartbeat time.Duration  // how often Run pushes the holder's expiry out; default a third of the TTL
+	ReapGrace time.Duration  // how long past its expiry a holder is reaped
+	Lifetime  time.Duration  // a reservation's deadline after admission: the longest call plus the settlement grace
+	Segments  *SegmentPolicy // the live segment settings, shared with routing; required
+	Logger    *slog.Logger   // where alerts go; default slog.Default()
+	Meter     metric.Meter   // where the platform-borne counters go; nil for none
 	Alerts    alert.Sink
 }
 
@@ -64,6 +64,9 @@ type Billing struct {
 	borne, borneAmount metric.Int64Counter
 }
 
+// Segments is the live segment policy this ledger reserves by, the same value routing marks entries with.
+func (b *Billing) Segments() *SegmentPolicy { return b.config.Segments }
+
 // holderMargin is how much of the holder's TTL Alive keeps back: a write that starts inside it may find the holder
 // expired by the time it is fenced.
 const holderMargin = 5 * time.Second
@@ -83,6 +86,12 @@ func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s S
 	if config.Heartbeat <= 0 || config.Heartbeat > config.heartbeatLimit() {
 		return nil, fmt.Errorf("billing: the heartbeat %v must be above 0 and at most a third of the holder's TTL %v",
 			config.Heartbeat, config.HolderTTL)
+	}
+	if config.Segments == nil {
+		return nil, errors.New("billing: the segment settings are required")
+	}
+	if err := config.Segments.check(); err != nil {
+		return nil, fmt.Errorf("billing: the segment settings are not usable: %w", err)
 	}
 	b := &Billing{
 		db: db, platform: platform, holder: uuid.NewV7(), config: config, suppliers: s,
@@ -256,6 +265,7 @@ func (b *Billing) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	wg.Go(func() { reaped <- b.beats(ctx) })
 	wg.Go(func() { b.sweeps(ctx) })
+	wg.Go(func() { b.config.Segments.watch(ctx) })
 	err := <-reaped
 	cancel()
 	wg.Wait()

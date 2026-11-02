@@ -103,14 +103,6 @@ type callNode struct {
 // fresh deployment gets its first supplier through the admin listener (see announceReady).
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	billing.WarmTokenizers()
-	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
-	// stamps it on every plan and the executor reads it from there, not from the configuration. The segment settings
-	// are the gateway's too, and billing takes the same ones in startLedger, so routing never marks an entry segmentable
-	// with no sizes to reserve it by (#229).
-	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy, Segments: d.gate.Segments()})
-	if err != nil {
-		return callNode{}, err
-	}
 	var nodes suppliers.ShareRegistry
 	if d.kv != nil {
 		nodes = d.kv
@@ -119,7 +111,15 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	if err != nil {
 		return callNode{}, err
 	}
+	// The ledger reads the segment settings first, then routing takes the same live policy: an entry is never marked
+	// segmentable with no sizes for billing to reserve it by (#229).
 	ledger, err := startLedger(ctx, d.db, d.gate, d.meter, d.logger, d.alerts)
+	if err != nil {
+		return callNode{}, err
+	}
+	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
+	// stamps it on every plan and the executor reads it from there, not from the configuration.
+	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy, Segments: ledger.Segments()})
 	if err != nil {
 		return callNode{}, err
 	}
@@ -162,13 +162,18 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	return n, nil
 }
 
-// startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call.
+// startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call and the
+// segment settings the administrator saved. The policy is shared with routing through Billing.Segments.
 func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metric.Meter, logger *slog.Logger, signals alert.Sink) (*billing.Billing, error) {
+	segments, err := billing.LoadSegmentPolicy(ctx, db, pg.PlatformScope(), gate.ExtendWait, logger)
+	if err != nil {
+		return nil, err
+	}
 	return billing.Start(ctx, db, pg.PlatformScope(), billing.Config{
 		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
 		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
 		// what no settlement will only once the call cannot still be running.
-		Lifetime: gate.MaxCall + gate.SettleGrace, Segments: gate.Segments(), Logger: logger, Meter: meter, Alerts: signals,
+		Lifetime: gate.MaxCall + gate.SettleGrace, Segments: segments, Logger: logger, Meter: meter, Alerts: signals,
 	}, suppliers.CallWrites{})
 }
 

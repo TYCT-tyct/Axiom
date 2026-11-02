@@ -83,7 +83,7 @@ func TestRecoveryClosesIncidentSignals(t *testing.T) {
 
 func TestProbeBudgetSignalsFollowCapacityAndNodeIdentity(t *testing.T) {
 	sink := &signalRecorder{}
-	l := &Loop{node: "core-a", alerts: sink, active: probeConcurrency}
+	l := &Loop{node: "core-a", alerts: sink, active: DefaultProbeSettings().Concurrency}
 	for range 5 {
 		if err := l.schedule(t.Context(), []*State{{}}, nil, time.Now()); err != nil {
 			t.Fatal(err)
@@ -224,12 +224,12 @@ func TestFundsDeferralDoesNotConsumeProbeBudget(t *testing.T) {
 	*now = now.Add(time.Minute)
 	tick(t, l)
 	tick(t, l)
-	if l.used != 0 || l.active != 0 {
-		t.Fatalf("funds pause consumed probes: used=%d active=%d", l.used, l.active)
+	if l.budget.count() != 0 || l.active != 0 {
+		t.Fatalf("funds pause consumed probes: used=%d active=%d", l.budget.count(), l.active)
 	}
 	f.endpoints[0].Funds.Balance = platform.Exact{}
 	tick(t, l)
-	if l.used != 1 || l.active != 1 {
+	if l.budget.count() != 1 || l.active != 1 {
 		t.Fatal("funds recovery did not resume due probe")
 	}
 	finishProbe(t, l, f)

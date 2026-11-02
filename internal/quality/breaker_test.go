@@ -214,6 +214,29 @@ func TestFailuresNeedIndependentOwners(t *testing.T) {
 	}
 }
 
+func TestProbeBackoffReachesTheCapFromTheSmallestBase(t *testing.T) {
+	m := New(nil)
+	l := &Loop{rand: func() float64 { return .5 }}
+	settings := DefaultProbeSettings()
+	settings.ProbeBase = time.Second
+	l.settings.Store(&settings)
+	m.loop = l
+	if got := m.delay(0); got != time.Second {
+		t.Fatalf("first delay %v, want one second", got)
+	}
+	if got := m.delay(maxProbeBackoff); got != probeMax {
+		t.Fatalf("delay at level %d = %v, want the %v cap", maxProbeBackoff, got, probeMax)
+	}
+	previous := time.Duration(0)
+	for level := range maxProbeBackoff + 3 {
+		d := m.delay(level)
+		if d < previous || d > probeMax {
+			t.Fatalf("level %d delay %v after %v", level, d, previous)
+		}
+		previous = d
+	}
+}
+
 func TestProbeBackoffIsBoundedWithJitter(t *testing.T) {
 	for _, u := range []float64{0, .5, .999999} {
 		m := New(nil)
@@ -221,7 +244,7 @@ func TestProbeBackoffIsBoundedWithJitter(t *testing.T) {
 		previous := time.Duration(0)
 		for level := range 20 {
 			d := m.delay(level)
-			if d < probeBase || d > probeMax || d < previous {
+			if d < defaultProbeBase || d > probeMax || d < previous {
 				t.Fatalf("jitter=%v level=%d delay=%v", u, level, d)
 			}
 			previous = d

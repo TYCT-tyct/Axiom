@@ -41,7 +41,7 @@ func TestSupplierAffordabilityUsesNativeFullCost(t *testing.T) {
 			e.Price.Schedule = schedule(t, "100", "100", "1")
 			// The supplier's balance must cover the whole generation, not a segment of it, so no segment fits 100
 			// output tokens here: the reservation is whole.
-			h := newHarness(t, routing.Config{Segments: billing.Segments{Output: 1, Overshoot: time.Second}}, openPreset(), e)
+			h := newHarness(t, routing.Config{Segments: billing.NewSegmentPolicy(billing.Segments{Output: 1, Overshoot: time.Second})}, openPreset(), e)
 			in := input()
 			in.Req.TextBytes, in.Req.MaxOutput, in.Req.Choices = 1, tc.output, int64(tc.choices)
 			in.Req.ServiceTiers = 1 << catalog.ServiceTierStandard
