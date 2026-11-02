@@ -37,6 +37,7 @@ import { useTranslation } from "react-i18next";
 import { clearAttempt, readAttempt, unanswered, writeAttempt } from "../attempt-store";
 import { useOrderActions } from "../order-actions";
 import { balanceQuery, ordersQuery } from "../queries";
+import { receiptState } from "../receipt";
 
 // RefundRequest is what a refund asks for; the key and this body are sent together every time.
 type RefundRequest = { credits: string; reason: string };
@@ -151,6 +152,9 @@ function OrdersTable({
   onRefund: (order: Schemas["Order"]) => void;
 }) {
   const { t } = useTranslation();
+  // A paid order from a node that predates the paid facts has no receipt to offer: say so once, rather than leaving a
+  // reader to wonder why the action is missing (docs/domains/payments.md「收据与发票」).
+  const receiptsKnown = orders.every((order) => receiptState(order).kind !== "unavailable");
   return (
     <>
       <Table label={t("nav.orders")}>
@@ -169,6 +173,7 @@ function OrdersTable({
           ))}
         </tbody>
       </Table>
+      {receiptsKnown ? null : <p className="px-4 py-3 text-label text-t3">{t("orders.receiptsUnavailable")}</p>}
       {refundsKnown ? null : <p className="px-4 py-3 text-label text-t3">{t("orders.refundsUnavailable")}</p>}
     </>
   );
@@ -255,6 +260,15 @@ export function OrderState({
           </Button>
           <Button variant="ghost" disabled={actions.cancel.isPending} onClick={() => actions.cancel.mutate()}>
             {t("orders.cancelOrder")}
+          </Button>
+        </div>
+      ) : null}
+      {receiptState(order).kind === "ready" ? (
+        <div className="mt-2">
+          <Button asChild variant="secondary">
+            <Link to="/orders/$orderId/receipt" params={{ orderId: order.id }}>
+              {t("orders.receipt")}
+            </Link>
           </Button>
         </div>
       ) : null}

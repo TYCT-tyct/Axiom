@@ -159,10 +159,10 @@ func makeChainWith(t *testing.T, f chainFixture, estimated bool) chain {
 	}
 	c.charged, c.estimated = final.Charged.CeilAmount(), final.Estimated
 	c.call = callRecord(t, f, c)
-	recorder := observability.NewRecorder(ctx, f.app, f.platformScope, observability.Config{
-		QueueSize: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
+	recorder := testRecorder(t, f.app, f.platformScope, observability.Config{
+		Dir: t.TempDir(), Capacity: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
 		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
-	}, slog.New(slog.DiscardHandler))
+	})
 	if err := recorder.Enqueue(c.call); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func callRecord(t *testing.T, f chainFixture, c chain) observability.CallRecord 
 		},
 		Route: []routing.EndpointID{routing.EndpointID(c.first), routing.EndpointID(c.second)},
 		Attempts: []routing.Attempt{
-			{Endpoint: routing.EndpointID(c.first), Egress: "direct", Failed: true, Scope: routing.ScopeEndpoint, Action: routing.NextEntry},
+			{Endpoint: routing.EndpointID(c.first), Failed: true, Scope: routing.ScopeEndpoint, Action: routing.NextEntry},
 		},
 	}.JSON()
 	if err != nil {

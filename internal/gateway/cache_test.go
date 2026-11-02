@@ -31,10 +31,14 @@ func TestAResponseCacheHitIsFreeAndRecorded(t *testing.T) {
 	// replay as an elapsed second.
 	now := time.Now()
 	r.cache.now = func() time.Time { return now }
-	r.exec.Records = observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
-		QueueSize: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
+	records, err := observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
+		Dir: t.TempDir(), Capacity: 8, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
 		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
 	}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.exec.Records = records
 	sample, _ := sample(t, protocol.Messages)
 	for _, e := range up.eps {
 		e.script = []scripted{streamed(sample, 3, 40, false)}

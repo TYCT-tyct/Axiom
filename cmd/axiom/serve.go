@@ -27,12 +27,12 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// The call-record writer's sizes. The queue holds about what the node's in-flight limit admits (internal/gateway
-// README「并发、背压与共享状态」); when it is full the recorder drops the new record rather than slow a call, so the
-// queue only bounds memory and loss. Batches of 500 records or 200 ms keep the insert rate low (internal/observability
-// README「写入」).
+// The call-record writer's sizes. Capacity is about the node's in-flight limit (internal/gateway README「并发、背压与
+// 共享状态」): every admitted call reserves one record, so a full spill refuses new calls instead of dropping a record.
+// Batches of 500 records or 200 ms keep the insert rate low (internal/observability README「写入」). Dir comes from
+// AXIOM_CALL_LOG_DIR; cmd/axiom/settings.go defaults it to ./call-log.
 var callRecords = observability.Config{
-	QueueSize: 5000, BatchSize: 500, FlushInterval: 200 * time.Millisecond, RetryBase: 100 * time.Millisecond,
+	Capacity: 5000, BatchSize: 500, FlushInterval: 200 * time.Millisecond, RetryBase: 100 * time.Millisecond,
 	RetryMax:     5 * time.Second,
 	WriteTimeout: 10 * time.Second,
 }
@@ -70,7 +70,7 @@ func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
 //
 //nolint:funlen,cyclop // startup order is the contract: listeners drain before the recorder, the queue, the cache and the database.
 func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
-	record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
+	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
 	prices func(*egress.Client) *catalog.Fetcher,
 ) error {
 	cfg, err := readSettings(environ)
@@ -122,7 +122,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer stopCache()
-	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, tel, logger, cfg.valkey.NodeID, cfg.shutdownTimeout, record)
+	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, tel, logger, cfg.valkey.NodeID, cfg.shutdownTimeout, cfg.callLogDir, record)
 	if err != nil {
 		return err
 	}
@@ -463,9 +463,13 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
 	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger, nodeID string,
-	timeout time.Duration, record func(context.Context, *pg.DB, *telemetry.Telemetry, *slog.Logger) *observability.Recorder,
+	timeout time.Duration, callLogDir string,
+	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, *alert.Bus, *payments.SignalState, error) {
-	recorder := record(ctx, db, tel, logger)
+	recorder, err := record(ctx, db, tel, callLogDir, logger)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, err
+	}
 	signals := alert.New(ctx, db, pg.PlatformScope(), logger)
 	paymentSignals := payments.NewSignalState()
 	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, directFormats, archive, tel, logger, signals, paymentSignals, nodeID)
@@ -482,8 +486,9 @@ func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.K
 }
 
 // startRecorder starts the call-record writer, reporting to the node's metrics.
-func startRecorder(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger) *observability.Recorder {
+func startRecorder(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, dir string, logger *slog.Logger) (*observability.Recorder, error) {
 	cfg := callRecords
+	cfg.Dir = dir
 	cfg.Meter = tel.Metrics.Meter("axiom/observability")
 	return observability.NewRecorder(ctx, db, pg.PlatformScope(), cfg, logger)
 }

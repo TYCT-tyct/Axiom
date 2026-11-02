@@ -174,6 +174,16 @@ export const orderQuery = (id: string) =>
     refetchInterval: (query) => (query.state.data?.state === "pending" ? 15_000 : false),
   });
 
+// The order as its receipt shows it. It has its own cache entry and always reads: a mutation writes the answer it got
+// into the order entry above, and that answer does not carry the refunds, which a receipt cannot do without.
+export const receiptQuery = (id: string) =>
+  queryOptions({
+    queryKey: [accountKey, "receipt", id],
+    queryFn: ({ signal }) =>
+      unwrap(consoleApi.GET("/api/console/v1/orders/{order_id}", { params: { path: { order_id: id } }, signal })),
+    staleTime: 0,
+  });
+
 // What an amount costs through each method. The amount is part of the key: a quote is only good for the amount it was
 // asked for. No amount means no request.
 export const paymentMethodsQuery = (credits: string) =>

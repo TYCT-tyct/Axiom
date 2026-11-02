@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/netip"
 	"sync/atomic"
@@ -102,6 +103,9 @@ type callNode struct {
 // and answering 503. A node that can route nothing starts too, but stays not ready: a
 // fresh deployment gets its first supplier through the admin listener (see announceReady).
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
+	if d.records == nil {
+		return callNode{}, errors.New("the call path needs the call log recorder")
+	}
 	billing.WarmTokenizers()
 	var nodes suppliers.ShareRegistry
 	if d.kv != nil {
@@ -203,7 +207,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	handler, err := gateway.NewHandler(gateway.Deps{
 		Accounts: d.accounts, Catalog: d.catalog, Router: router, Billing: ledger, Limits: d.limits,
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
-		Outstanding: outstanding, Search: d.search, Parser: d.fileParser,
+		Outstanding: outstanding, Search: d.search, Parser: d.fileParser, Records: d.records,
 	})
 	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models, search: d.search, cache: cache}, err
 }
