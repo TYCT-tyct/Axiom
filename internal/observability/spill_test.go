@@ -42,7 +42,7 @@ func TestSpillDirectoryIsLockedByOneProcess(t *testing.T) {
 	if err != nil || ready != "ready\n" {
 		t.Fatalf("the lock helper said %q (%v), want ready", ready, err)
 	}
-	if sp, err := openSpill(dir, 4); !errors.Is(err, errSpillLocked) {
+	if sp, err := openSpill(dir, 4, syncDir); !errors.Is(err, errSpillLocked) {
 		if sp != nil {
 			sp.finish()
 		}
@@ -55,7 +55,7 @@ func TestSpillDirectoryIsLockedByOneProcess(t *testing.T) {
 	if err := <-waited; !errors.As(err, &exit) {
 		t.Fatalf("the killed helper ended with %v, want its kill", err)
 	}
-	sp, err := openSpill(dir, 4)
+	sp, err := openSpill(dir, 4, syncDir)
 	if err != nil {
 		t.Fatalf("opening the spill after the owner exited: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestSpillLockHelper(t *testing.T) {
 	if dir == "" {
 		t.Skip("only runs as the helper process of TestSpillDirectoryIsLockedByOneProcess")
 	}
-	if _, err := openSpill(dir, 4); err != nil {
+	if _, err := openSpill(dir, 4, syncDir); err != nil {
 		fmt.Fprintf(os.Stderr, "the helper could not open the spill: %v\n", err)
 		os.Exit(2)
 	}
@@ -132,7 +132,7 @@ func TestInFlightCommitSurvivesFatalBatch(t *testing.T) {
 func TestCompleteTailCorruptionRefusesStartup(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	sp, err := openSpill(dir, 4)
+	sp, err := openSpill(dir, 4, syncDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestCompleteTailCorruptionRefusesStartup(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // the test's own temporary spill
 		t.Fatal(err)
 	}
-	if _, err := openSpill(dir, 4); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+	if _, err := openSpill(dir, 4, syncDir); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("opening a spill whose complete last record is corrupt = %v, want a checksum refusal", err)
 	}
 	if after, err := os.Stat(path); err != nil || after.Size() != info.Size() {
@@ -265,7 +265,7 @@ func TestBoundedRouteFitsTheColumn(t *testing.T) {
 // beyond it, and the next start would have to refuse.
 func TestWriterReadsOnlyDurableRecords(t *testing.T) {
 	t.Parallel()
-	sp, err := openSpill(t.TempDir(), 4)
+	sp, err := openSpill(t.TempDir(), 4, syncDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,8 +296,8 @@ func TestWriterReadsOnlyDurableRecords(t *testing.T) {
 // and before any Commit can land in it; a failed directory sync fails that Commit instead of reporting it kept.
 func TestNewSegmentIsDurableInItsDirectory(t *testing.T) {
 	t.Parallel()
-	dir := filepath.Join(t.TempDir(), "spill", "nested") // makeDir creates both levels
-	sp, err := openSpill(dir, 4)
+	dir := filepath.Join(t.TempDir(), "spill", "nested") // openSpill creates both levels
+	sp, err := openSpill(dir, 4, syncDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestNewSegmentIsDurableInItsDirectory(t *testing.T) {
 	var synced []string
 	sp.syncDir = func(d string) error {
 		// The segment being created must already be in the directory when it is synced.
-		if _, err := os.Stat(filepath.Join(d, spillPrefix+fmt.Sprintf("%016d", sp.nextSeq)+spillSuffix)); err != nil {
+		if _, err := os.Stat(filepath.Join(d, spillPrefix+fmt.Sprintf("%016d", sp.nextSeq)+spillSuffix)); err != nil { //nolint:gosec // the test's own temporary spill
 			t.Errorf("the directory was synced before its new segment existed: %v", err)
 		}
 		synced = append(synced, d)
@@ -347,4 +347,50 @@ func encodedRecord(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return body
+}
+
+// TestRestartSyncsTheDirectoryChain: a crash after a segment's file fsync but before its directory sync, or after the
+// spill directory was created but before its parents were synced, leaves links the next start sees in the page cache
+// that a later power loss could still remove. The restart syncs the spill directory and every directory above it
+// before it takes a Commit, reusing the segment the crash left; a sync that fails refuses startup.
+func TestRestartSyncsTheDirectoryChain(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dir := filepath.Join(root, "spill", "nested")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	segment := filepath.Join(dir, spillPrefix+fmt.Sprintf("%016d", 1)+spillSuffix)
+	if err := os.WriteFile(segment, []byte(spillHeader), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	failure := errors.New("directory sync failed")
+	parent := filepath.Dir(dir)
+	if _, err := openSpill(dir, 4, func(d string) error {
+		if d == parent {
+			return failure
+		}
+		return nil
+	}); !errors.Is(err, failure) {
+		t.Fatalf("a start whose parent directory sync failed = %v, want the failure", err)
+	}
+
+	var synced []string
+	sp, err := openSpill(dir, 4, func(d string) error { synced = append(synced, d); return nil })
+	if err != nil {
+		t.Fatalf("restarting after the refused start: %v", err)
+	}
+	defer sp.finish()
+	if sp.active == nil || sp.active.seq != 1 {
+		t.Fatalf("the restart did not reuse the segment the crash left: %+v", sp.active)
+	}
+	for _, want := range []string{dir, parent, filepath.Dir(parent), root, string(filepath.Separator)} {
+		if !slices.Contains(synced, want) {
+			t.Errorf("the restart did not sync %s (synced %v)", want, synced)
+		}
+	}
+	if err := sp.appendSynced(encodedRecord(t)); err != nil {
+		t.Fatalf("Commit after the restart: %v", err)
+	}
 }

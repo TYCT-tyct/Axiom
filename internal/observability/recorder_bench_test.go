@@ -81,7 +81,7 @@ func BenchmarkEncodeRecord(b *testing.B) {
 
 // BenchmarkSpillAppend is the I/O half of Commit: one append and its group-commit fsync.
 func BenchmarkSpillAppend(b *testing.B) {
-	sp, err := openSpill(b.TempDir(), b.N+1)
+	sp, err := openSpill(b.TempDir(), b.N+1, syncDir)
 	if err != nil {
 		b.Fatal(err)
 	}

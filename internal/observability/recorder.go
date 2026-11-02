@@ -159,7 +159,7 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 	if logger == nil {
 		logger = slog.Default()
 	}
-	sp, err := openSpill(cfg.Dir, cfg.Capacity)
+	sp, err := openSpill(cfg.Dir, cfg.Capacity, syncDir)
 	if err != nil {
 		return nil, err
 	}

@@ -28,13 +28,14 @@ type segmentFile struct {
 // openSpill locks and opens dir, then validates every segment it finds, dropping a torn tail from the last one and
 // starting after the last acknowledged position. The writer replays every record after the checkpoint, including
 // records whose database write committed before the process died; the inserts are idempotent, so replaying them cannot
-// duplicate a row.
-func openSpill(dir string, capacity int) (*spill, error) {
+// duplicate a row. Before it returns, and so before any Commit, the directory chain is made durable (syncDirChain); sync
+// is syncDir, or a test's observer.
+func openSpill(dir string, capacity int, sync func(string) error) (*spill, error) {
 	if dir == "" {
 		return nil, errors.New("observability: the call log needs a spill directory")
 	}
-	if err := makeDir(dir); err != nil {
-		return nil, err
+	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // dir is the operator's AXIOM_CALL_LOG_DIR
+		return nil, fmt.Errorf("observability: call log spill directory: %w", err)
 	}
 	lock, err := lockDir(dir)
 	if err != nil {
@@ -54,7 +55,7 @@ func openSpill(dir string, capacity int) (*spill, error) {
 	}
 	s := &spill{
 		dir: dir, lock: lock, maxBytes: int64(capacity)*(maxRecordBytes+recordHeaderBytes) + spillSegmentBytes,
-		nextSeq: 1, wake: make(chan struct{}, 1), stop: make(chan struct{}), syncDir: syncDir,
+		nextSeq: 1, wake: make(chan struct{}, 1), stop: make(chan struct{}), syncDir: sync,
 	}
 	if err := s.loadSegments(files, checkpoint); err != nil {
 		return fail(err)
@@ -73,33 +74,31 @@ func openSpill(dir string, capacity int) (*spill, error) {
 				checkpoint.seq, checkpoint.offset, s.read.path))
 		}
 	}
+	if err := syncDirChain(dir, sync); err != nil {
+		closeQuietly(s.active.file)
+		return fail(err)
+	}
 	return s, nil
 }
 
-// makeDir creates dir and the parents it lacks, then makes each new directory's link durable in its parent: a power
-// loss must not take away a spill directory whose segments already hold records that were served.
-func makeDir(dir string) error {
-	var created []string
-	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
-		if _, err := os.Stat(d); err == nil { //nolint:gosec // d is the operator's AXIOM_CALL_LOG_DIR or one of its parents
-			break
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("observability: call log spill directory: %w", err)
-		}
-		created = append(created, d)
-		if filepath.Dir(d) == d {
-			break
-		}
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // dir is the operator's AXIOM_CALL_LOG_DIR
+// syncDirChain makes dir and every directory above it durable in its parent. It runs on every start, not only when
+// this process created the directories: a crash between creating a segment or a directory and syncing it leaves a
+// link that the next start sees in the page cache but that a later power loss could still remove.
+func syncDirChain(dir string, sync func(string) error) error {
+	d, err := filepath.Abs(dir)
+	if err != nil {
 		return fmt.Errorf("observability: call log spill directory: %w", err)
 	}
-	for _, d := range created {
-		if err := syncDir(filepath.Dir(d)); err != nil {
+	for {
+		if err := sync(d); err != nil {
 			return err
 		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return nil
+		}
+		d = parent
 	}
-	return nil
 }
 
 // listSegments reads the directory and returns the segment files in sequence order.

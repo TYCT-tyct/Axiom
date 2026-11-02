@@ -503,7 +503,7 @@ func TestTornSegmentHeaderIsDropped(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "call-0000000000000001.wal"), []byte("AXIOM-WAL"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sp, err := openSpill(dir, 10)
+	sp, err := openSpill(dir, 10, syncDir)
 	if err != nil {
 		t.Fatal(err)
 	}

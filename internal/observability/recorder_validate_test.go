@@ -106,7 +106,7 @@ func TestHungWriteTimesOutAndRecovers(t *testing.T) {
 // TestStopRefusesFurtherAppends guards the shutdown deadline: once the writer is told to stop, a commit that was
 // admitted earlier must get ErrClosed instead of touching the files the writer closed.
 func TestStopRefusesFurtherAppends(t *testing.T) {
-	s, err := openSpill(t.TempDir(), 1)
+	s, err := openSpill(t.TempDir(), 1, syncDir)
 	if err != nil {
 		t.Fatal(err)
 	}
