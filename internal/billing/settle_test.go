@@ -503,3 +503,58 @@ func checkAttemptRows(t *testing.T, rows []suppliers.AttemptRecord, o Outcome) {
 		}
 	}
 }
+
+// TestServingEndpointSetsTheCharge: the hold covers the dearest endpoint the plan may try, and settlement charges the
+// price of the endpoint that actually served the attempt, not the model's envelope (docs/domains/billing.md「预留与结算」).
+func TestServingEndpointSetsTheCharge(t *testing.T) {
+	t.Parallel()
+
+	b := newBank(t, 10_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
+	cheap, dear := metered(t), metered(t)
+	cheap.Version, dear.Version = uuid.NewV7(), uuid.NewV7()
+	cheap.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`)
+	dear.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000003","output":"0.000000003"}}`)
+	var h *Hold
+	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
+		h, err = b.billing.reserveOne(t.Context(), tx, b.admitted, uuid.NewV7(), Demand{TextBytes: 1000}, []Quotable{cheap, dear})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 1000 input and the 100-token output bound at three billionths each: 3300 billionths, the dearest entry's quote.
+	if h.Amount.Cmp(platform.AmountExact(3300)) < 0 {
+		t.Fatalf("held %v, want at least the dearest endpoint's 3300", h.Amount)
+	}
+	out := outcome(FailedBeforeCommit, FinishError)
+	out.Attempts = append(out.Attempts, AttemptResult{Seq: 2, Entry: 1, Result: Committed, Finish: FinishStop, Segments: []Segment{used(t, 100, 10, 0)}})
+	final, err := b.billing.Settle(t.Context(), h, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Charged != platform.AmountExact(330) {
+		t.Fatalf("charged %v, want the dear endpoint's 330", final.Charged)
+	}
+	if final.PriceVersion == nil || *final.PriceVersion != dear.Version {
+		t.Fatalf("settled version %v, want the dear endpoint's %s", final.PriceVersion, dear.Version)
+	}
+	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
+		var endpoints []uuid.UUID
+		if err := tx.QueryRow(t.Context(), "SELECT endpoints FROM billing.reservations WHERE request_id = $1", h.id).Scan(&endpoints); err != nil {
+			return err
+		}
+		if len(endpoints) != 2 || endpoints[0] != cheap.Endpoint || endpoints[1] != dear.Endpoint {
+			t.Fatalf("reservation endpoints: %v", endpoints)
+		}
+		var entries []int
+		if err := tx.QueryRow(t.Context(), "SELECT attempt_entries FROM billing.reservations WHERE request_id = $1", h.id).Scan(&entries); err != nil {
+			return err
+		}
+		if len(entries) != 2 || entries[0] != 0 || entries[1] != 1 {
+			t.Fatalf("attempt entries %v, want the cheap endpoint then the dear one", entries)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.balanced()
+}

@@ -23,24 +23,28 @@ type PriceCost struct {
 
 // CostEnvelope expresses known native costs in the site's currency with one upward rounding after all factors.
 func CostEnvelope(costs []PriceCost, currency platform.Currency) (catalog.Schedule, error) {
-	envelope, err := catalog.ParseSchedule(fmt.Appendf(nil, `{"v":1,"currency":%q,"rates":{}}`, currency.String()))
+	converted, err := convertedCosts(costs, currency)
 	if err != nil {
 		return catalog.Schedule{}, err
 	}
+	return envelopeOf(converted)
+}
+
+// convertedCosts is each endpoint's native cost in the site's currency: the cost a per-endpoint sale price is computed
+// from, and the map CostEnvelope takes the dearest of.
+func convertedCosts(costs []PriceCost, currency platform.Currency) (EndpointPrices, error) {
 	if len(costs) == 0 {
-		return catalog.Schedule{}, ErrUnpriced
+		return nil, ErrUnpriced
 	}
+	converted := make(EndpointPrices, len(costs))
 	for _, c := range costs {
-		converted, err := c.converted(currency)
+		schedule, err := c.converted(currency)
 		if err != nil {
-			return catalog.Schedule{}, err
+			return nil, err
 		}
-		envelope, err = envelope.Aligned(converted, false)
-		if err != nil {
-			return catalog.Schedule{}, err
-		}
+		converted[c.Endpoint] = schedule
 	}
-	return envelope, nil
+	return converted, nil
 }
 
 func costPrice(m Method, cost catalog.Schedule, currency platform.Currency) (catalog.Schedule, error) {

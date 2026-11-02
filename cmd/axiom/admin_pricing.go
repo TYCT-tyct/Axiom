@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"slices"
+	"strings"
 	"uuid"
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
@@ -175,11 +178,20 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 func previewRows(body adminapi.PricingPreviewRequest, snap *catalog.Snapshot, models []catalog.ModelID, proposals map[catalog.ModelID]billing.Publication, current map[catalog.ModelID]billing.Sold, audience audience) (adminapi.PreviewPricing200JSONResponse, error) {
 	rows := adminapi.PricingPreview{Data: make([]adminapi.PricingPreviewRow, 0, len(models))}
 	for i, id := range body.ModelIds {
+		p := proposals[models[i]]
+		if len(p.Endpoints) > 0 {
+			endpoints, err := previewEndpointRows(id, snap, models[i], p, current[models[i]], audience, body.Rule == nil)
+			if err != nil {
+				return adminapi.PreviewPricing200JSONResponse{}, err
+			}
+			rows.Data = append(rows.Data, endpoints...)
+			continue
+		}
 		row, err := previewRow(id, snap, models[i], proposals)
 		if err != nil {
 			return adminapi.PreviewPricing200JSONResponse{}, err
 		}
-		if err := previewCurrent(&row, current[models[i]], audience, body.Rule == nil); err != nil {
+		if err := previewCurrent(&row, current[models[i]], audience, body.Rule == nil, uuid.Nil()); err != nil {
 			return adminapi.PreviewPricing200JSONResponse{}, err
 		}
 		rows.Data = append(rows.Data, row)
@@ -187,12 +199,75 @@ func previewRows(body adminapi.PricingPreviewRequest, snap *catalog.Snapshot, mo
 	return adminapi.PreviewPricing200JSONResponse(rows), nil
 }
 
-func previewCurrent(row *adminapi.PricingPreviewRow, price billing.Sold, audience audience, serving bool) error {
+// previewEndpointRows is one row per endpoint of a cost-plus proposal: each endpoint's own sale, cost and floor. The
+// model-level row would hide exactly the difference endpoint pricing exists for. Endpoints sort by ID, so a page is
+// stable across requests.
+func previewEndpointRows(id string, snap *catalog.Snapshot, model catalog.ModelID, p billing.Publication, current billing.Sold, audience audience, serving bool) ([]adminapi.PricingPreviewRow, error) {
+	m, ok := snap.Model(model)
+	if !ok {
+		return nil, catalog.ErrModelNotFound
+	}
+	endpoints := make([]uuid.UUID, 0, len(p.Endpoints))
+	for endpoint := range p.Endpoints {
+		endpoints = append(endpoints, endpoint)
+	}
+	slices.SortFunc(endpoints, func(a, b uuid.UUID) int { return a.Compare(b) })
+	out := make([]adminapi.PricingPreviewRow, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		row := adminapi.PricingPreviewRow{ModelId: id, Slug: m.Slug, Status: adminapi.PricingPreviewRowStatusUnpriced}
+		endpointID := endpoint.String()
+		row.EndpointId = &endpointID
+		sale, ok := p.Endpoints[endpoint]
+		if !ok {
+			out = append(out, row)
+			continue
+		}
+		var err error
+		row.Sale, err = scheduleBody(sale)
+		if err != nil {
+			return nil, err
+		}
+		if cost, ok := p.Costs[endpoint]; ok {
+			body, err := scheduleBody(cost)
+			if err != nil {
+				return nil, err
+			}
+			row.Cost = body
+			row.MarginRatio = marginOf(sale, cost)
+		}
+		requested, ok := p.RequestedEndpoints[endpoint]
+		if !ok {
+			requested = sale
+		}
+		if floor, ok := p.Floors[endpoint]; ok {
+			row.Status, err = previewFloorStatusOf(requested, floor)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			row.Status = adminapi.PricingPreviewRowStatusCostUnknown
+		}
+		if err := previewCurrent(&row, current, audience, serving, endpoint); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func previewCurrent(row *adminapi.PricingPreviewRow, price billing.Sold, audience audience, serving bool, endpoint uuid.UUID) error {
 	price = price.For(billing.Audience{Account: audience.account, Tier: audience.tier})
 	if price.Version == uuid.Nil() {
 		return nil
 	}
-	sale, err := scheduleBody(price.Schedule)
+	schedule := price.Schedule
+	if endpoint != uuid.Nil() {
+		var ok bool
+		if schedule, ok = price.PriceFor(endpoint); !ok {
+			return nil // this version has no price for the endpoint: there is no current sale to show
+		}
+	}
+	sale, err := scheduleBody(schedule)
 	if err != nil {
 		return err
 	}
@@ -202,6 +277,42 @@ func previewCurrent(row *adminapi.PricingPreviewRow, price billing.Sold, audienc
 		row.Sale = sale
 	}
 	return nil
+}
+
+// marginOf is the lowest margin of sale over cost across the items, service tiers and context bands both schedules
+// price: (sale - cost) / sale, as the preview contract defines it. A rate the sale prices and the cost does not is a
+// hundred percent margin, and a zero sale rate is skipped rather than divided by zero.
+func marginOf(sale, cost catalog.Schedule) *string {
+	type key struct {
+		tier  catalog.ServiceTier
+		above int64
+		item  catalog.Item
+	}
+	costs := map[key]platform.UnitPrice{}
+	for _, r := range cost.View().Rates {
+		costs[key{r.ServiceTier, r.Above, r.Item}] = r.Price
+	}
+	var lowest *big.Rat
+	for _, r := range sale.View().Rates {
+		price := r.Price.Rat()
+		if price.Sign() == 0 {
+			continue
+		}
+		c := costs[key{r.ServiceTier, r.Above, r.Item}]
+		margin := new(big.Rat).Sub(price, c.Rat())
+		margin.Quo(margin, price)
+		if lowest == nil || margin.Cmp(lowest) < 0 {
+			lowest = margin
+		}
+	}
+	if lowest == nil {
+		return nil
+	}
+	text := strings.TrimRight(strings.TrimRight(lowest.FloatString(15), "0"), ".")
+	if text == "" || text == "-" || text == "-0" {
+		text = "0"
+	}
+	return &text
 }
 
 func (a adminAPI) reportPriceProblems(proposals map[catalog.ModelID]billing.Publication) {
@@ -272,6 +383,10 @@ func previewFloorStatus(s catalog.Schedule, raw []byte) (adminapi.PricingPreview
 	if err != nil {
 		return "", err
 	}
+	return previewFloorStatusOf(s, floor)
+}
+
+func previewFloorStatusOf(s, floor catalog.Schedule) (adminapi.PricingPreviewRowStatus, error) {
 	safe, err := s.CoversCost(floor)
 	if err != nil {
 		return "", err

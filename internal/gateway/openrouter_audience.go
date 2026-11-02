@@ -4,20 +4,35 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/routing"
+	"uuid"
 )
 
-func newAudienceORModel(id string, m catalog.Model, serving catalog.Serving, sold billing.Sold) (orModel, bool, error) {
+func newAudienceORModel(id string, m catalog.Model, serving catalog.Serving, sold billing.Sold, served []uuid.UUID) (orModel, bool, error) {
 	if sold.Audiences == nil {
-		return newORModel(id, m, serving, sold.Schedule)
+		price, ok := sold.ModelPrice(served)
+		if !ok {
+			return orModel{}, false, nil
+		}
+		e, ok, err := newORModel(id, m, serving, price)
+		if err != nil || !ok {
+			return orModel{}, ok, err
+		}
+		e.sold, e.served, e.serving = sold, served, serving
+		return e, true, nil
 	}
 	variants := make([]orModel, len(sold.Audiences.Layers()))
 	var base orModel
 	for i, price := range sold.Audiences.Layers() {
-		e, ok, err := newORModel(id, m, serving, price.Sold.Schedule)
+		schedule, ok := price.Sold.ModelPrice(served)
+		if !ok {
+			continue
+		}
+		e, ok, err := newORModel(id, m, serving, schedule)
 		if err != nil {
 			return orModel{}, false, err
 		}
 		if ok {
+			e.sold, e.served, e.serving = price.Sold, served, serving
 			variants[i] = e
 			base = orModel{model: e.model, author: e.author, search: e.search}
 			// The public page shows the model once, not once per audience layer: its name and limits do not change with
@@ -29,6 +44,7 @@ func newAudienceORModel(id string, m catalog.Model, serving catalog.Serving, sol
 		return orModel{}, false, nil
 	}
 	base.audiences, base.variants = sold.Audiences, variants
+	base.sold, base.served, base.serving = sold, served, serving
 	return base, true, nil
 }
 
@@ -44,18 +60,24 @@ func (m *orModel) forAudience(a billing.Audience) *orModel {
 }
 
 func (m *orModel) encodeEndpoints(endpoints []routing.Endpoint) error {
-	var err error
-	if m.audiences == nil {
-		m.endpoints, err = encodeOREndpoints(m.orEntry, endpoints)
+	encode := func(e *orModel) error {
+		var err error
+		if e.sold.Endpoints == nil {
+			e.endpoints, err = encodeOREndpoints(e.orEntry, endpoints)
+		} else {
+			e.endpoints, err = encodeOREndpointPrices(e.orEntry, e.sold, e.serving.Abilities, endpoints)
+		}
 		return err
+	}
+	if m.audiences == nil {
+		return encode(m)
 	}
 	for i := range m.variants {
 		variant := &m.variants[i]
 		if len(variant.body) == 0 {
 			continue
 		}
-		variant.endpoints, err = encodeOREndpoints(variant.orEntry, endpoints)
-		if err != nil {
+		if err := encode(variant); err != nil {
 			return err
 		}
 	}

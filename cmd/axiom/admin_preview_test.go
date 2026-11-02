@@ -9,7 +9,10 @@ import (
 	"uuid"
 
 	"axiom/internal/accounts"
+	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/pg"
 )
 
 // preview asks for the prices of models, with an optional rule and replacements, and returns the rows.
@@ -360,5 +363,56 @@ func TestPricingRuleEditValidatesDisabledChanges(t *testing.T) {
 				t.Fatal(rec.Body.String())
 			}
 		}
+	}
+}
+
+// TestPreviewEndpointRows: a cost-plus proposal shows one row per endpoint, each with its own sale, cost, floor status
+// and margin. The model-level envelope would show only the dearest endpoint and hide the other's price.
+func TestPreviewEndpointRows(t *testing.T) {
+	t.Parallel()
+	f := newPreview(t)
+	var snap *catalog.Snapshot
+	var err error
+	if err := f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) (err error) {
+		snap, err = catalog.ReadSnapshot(t.Context(), tx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	model, err := modelIDOf(f.model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule := func(input, output string) catalog.Schedule {
+		s, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"` + input + `","output":"` + output + `"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	first, second := uuid.MustParse("00000000-0000-7000-8000-000000000001"), uuid.MustParse("00000000-0000-7000-8000-000000000002")
+	p := billing.Publication{
+		Model:              model,
+		Endpoints:          billing.EndpointPrices{first: schedule("0.0000015", "0.000003"), second: schedule("0.000004", "0.000008")},
+		RequestedEndpoints: billing.EndpointPrices{first: schedule("0.0000012", "0.0000024"), second: schedule("0.000004", "0.000008")},
+		Costs:              billing.EndpointPrices{first: schedule("0.000001", "0.000002"), second: schedule("0.000002", "0.000004")},
+		Floors:             billing.EndpointPrices{first: schedule("0.0000015", "0.000003"), second: schedule("0.000003", "0.000006")},
+	}
+	rows, err := previewRows(adminapi.PricingPreviewRequest{ModelIds: []string{f.model}}, snap, []catalog.ModelID{model}, map[catalog.ModelID]billing.Publication{model: p}, nil, audience{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Data) != 2 || rows.Data[0].EndpointId == nil || *rows.Data[0].EndpointId != first.String() ||
+		rows.Data[1].EndpointId == nil || *rows.Data[1].EndpointId != second.String() {
+		t.Fatalf("the rows: %+v", rows.Data)
+	}
+	if rows.Data[0].Status != adminapi.PricingPreviewRowStatusBelowFloor || rows.Data[1].Status != adminapi.PricingPreviewRowStatusPriced {
+		t.Errorf("statuses %s, %s", rows.Data[0].Status, rows.Data[1].Status)
+	}
+	if rows.Data[0].MarginRatio == nil || *rows.Data[0].MarginRatio != "0.333333333333333" {
+		t.Errorf("the first endpoint's margin: %v", rows.Data[0].MarginRatio)
+	}
+	if rows.Data[1].MarginRatio == nil || *rows.Data[1].MarginRatio != "0.5" {
+		t.Errorf("the second endpoint's margin: %v", rows.Data[1].MarginRatio)
 	}
 }

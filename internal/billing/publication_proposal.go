@@ -32,10 +32,18 @@ func proposeAudiencePrice(audience Selector, policy PricePolicy, rules []Rule, m
 	return p, nil
 }
 
+// saleProposal is what a rule asked for before the floor: the model-level price, and, when it prices each endpoint
+// from that endpoint's own cost, every endpoint's price and the converted cost it came from.
+type saleProposal struct {
+	requested catalog.Schedule
+	endpoints EndpointPrices
+	costs     EndpointPrices
+}
+
 func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks, rates ...platform.ExchangeRate) (Publication, error) {
 	p := Publication{Model: m.ID, Status: "unpriced"}
-	envelope, costErr := modelPriceCost(costs, m, currency)
-	input, matched, ref, err := priceFromRules(rules, m, snap, envelope, costErr, currency, rates)
+	converted, envelope, costErr := modelPriceCost(costs, m, currency)
+	input, matched, ref, err := priceFromRules(rules, m, snap, converted, envelope, costErr, currency, rates)
 	p.matched = matched != nil
 	if matched != nil && matched.Method.Kind != "reference_multiplier" {
 		ref.ID = uuid.Nil()
@@ -49,7 +57,7 @@ func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catal
 	}
 	if matched != nil && p.Problem == "" {
 		switch {
-		case input.Priced(1<<catalog.ItemFileSearch) && !m.Reportable().Items.Has(catalog.ItemFileSearch):
+		case input.requested.Priced(1<<catalog.ItemFileSearch) && !m.Reportable().Items.Has(catalog.ItemFileSearch):
 			// A rule or reference may price an item the model does not sell. Publishing that price would put a new
 			// item's name into a version every node reads, for a model that never serves it.
 			p.Problem = "the price names file_search, which the model does not declare"
@@ -57,8 +65,8 @@ func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catal
 		default:
 			if err := p.protectPrice(input, envelope, costErr, policy, defaults, m.Free()); err != nil {
 				p.Problem = err.Error()
-				p.Schedule = nil
-				p.Floor = nil
+				p.Schedule, p.Floor = nil, nil
+				p.Endpoints, p.RequestedEndpoints, p.Costs, p.Floors = nil, nil, nil, nil
 			}
 		}
 	}
@@ -70,16 +78,24 @@ func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catal
 	return p, nil
 }
 
-func modelPriceCost(costs []PriceCost, m catalog.Model, currency platform.Currency) (catalog.Schedule, error) {
+func modelPriceCost(costs []PriceCost, m catalog.Model, currency platform.Currency) (EndpointPrices, catalog.Schedule, error) {
 	for _, c := range costs {
 		if Unpriced(c.Schedule, m.Reportable()) != (catalog.Reportable{}) {
-			return catalog.Schedule{}, ErrUnpriced
+			return nil, catalog.Schedule{}, ErrUnpriced
 		}
 	}
-	return CostEnvelope(costs, currency)
+	converted, err := convertedCosts(costs, currency)
+	if err != nil {
+		return nil, catalog.Schedule{}, err
+	}
+	envelope, err := envelopeOf(converted)
+	if err != nil {
+		return nil, catalog.Schedule{}, err
+	}
+	return converted, envelope, nil
 }
 
-func priceFromRules(rules []Rule, m catalog.Model, snap *catalog.Snapshot, envelope catalog.Schedule, costErr error, currency platform.Currency, rates []platform.ExchangeRate) (catalog.Schedule, *Rule, catalog.ReferencePrice, error) {
+func priceFromRules(rules []Rule, m catalog.Model, snap *catalog.Snapshot, converted EndpointPrices, envelope catalog.Schedule, costErr error, currency platform.Currency, rates []platform.ExchangeRate) (saleProposal, *Rule, catalog.ReferencePrice, error) {
 	for _, r := range rules {
 		if !r.Enabled || !pricesModel(r.Target, m) {
 			continue
@@ -87,21 +103,29 @@ func priceFromRules(rules []Rule, m catalog.Model, snap *catalog.Snapshot, envel
 		ref := saleReference(snap, m.ID, currency, r.Method)
 		if r.Method.Kind == "cost_plus" && r.Constraints == (Constraints{}) {
 			if costErr != nil {
-				return catalog.Schedule{}, &r, ref, costErr
+				return saleProposal{}, &r, ref, costErr
 			}
-			s, err := costPrice(r.Method, envelope, currency)
-			return s, &r, ref, err
+			endpoints := make(EndpointPrices, len(converted))
+			for endpoint, cost := range converted {
+				s, err := costPrice(r.Method, cost, currency)
+				if err != nil {
+					return saleProposal{}, &r, ref, err
+				}
+				endpoints[endpoint] = s
+			}
+			requested, err := envelopeOf(endpoints)
+			return saleProposal{requested: requested, endpoints: endpoints, costs: converted}, &r, ref, err
 		}
 		s, err := Sell(r, ref, currency, rates...)
 		if errors.Is(err, ErrUnpriced) {
 			continue
 		}
 		if errors.Is(err, ErrRuleRefuses) {
-			return catalog.Schedule{}, &r, ref, &RuleRefusal{Rule: r.ID, Model: m.ID}
+			return saleProposal{}, &r, ref, &RuleRefusal{Rule: r.ID, Model: m.ID}
 		}
-		return s, &r, ref, err
+		return saleProposal{requested: s}, &r, ref, err
 	}
-	return catalog.Schedule{}, nil, catalog.ReferencePrice{}, ErrUnpriced
+	return saleProposal{}, nil, catalog.ReferencePrice{}, ErrUnpriced
 }
 
 func saleReference(snap *catalog.Snapshot, model catalog.ModelID, currency platform.Currency, method Method) catalog.ReferencePrice {
@@ -147,13 +171,16 @@ func priceEvidence(policy PricePolicy, rule *Rule, reference uuid.UUID, costs []
 	}{policy, rule, reference, costs, exchange})
 }
 
-func (p *Publication) protectPrice(input, envelope catalog.Schedule, costErr error, policy PricePolicy, defaults fallbacks, free bool) error {
-	input = input.Fill(defaults.perUse)
-	if free && !input.IsZero() {
+func (p *Publication) protectPrice(input saleProposal, envelope catalog.Schedule, costErr error, policy PricePolicy, defaults fallbacks, free bool) error {
+	if input.endpoints != nil {
+		return p.protectEndpointPrices(input, envelope, costErr, policy, defaults, free)
+	}
+	input.requested = input.requested.Fill(defaults.perUse)
+	if free && !input.requested.IsZero() {
 		return ErrFreePrice
 	}
 	var err error
-	p.Requested, err = input.MarshalJSON()
+	p.Requested, err = input.requested.MarshalJSON()
 	if err != nil {
 		return err
 	}
@@ -164,7 +191,7 @@ func (p *Publication) protectPrice(input, envelope catalog.Schedule, costErr err
 	if err != nil {
 		return err
 	}
-	floor, err := envelope.Scaled(policy.FloorMultiplier, input.Currency())
+	floor, err := envelope.Scaled(policy.FloorMultiplier, input.requested.Currency())
 	if err != nil {
 		return err
 	}
@@ -172,17 +199,88 @@ func (p *Publication) protectPrice(input, envelope catalog.Schedule, costErr err
 	if err != nil {
 		return err
 	}
-	input, err = input.Aligned(floor, false)
+	input.requested, err = input.requested.Aligned(floor, false)
 	if err != nil {
 		return err
 	}
-	if free && !input.IsZero() {
+	if free && !input.requested.IsZero() {
 		return ErrFreePrice
 	}
-	p.Schedule, err = input.MarshalJSON()
+	p.Schedule, err = input.requested.MarshalJSON()
 	if err != nil {
 		return err
 	}
+	p.Status = "pending"
+	return nil
+}
+
+// protectEndpointPrices floors each endpoint's own price against that endpoint's own converted cost and publishes the
+// dearest of them as the model-level schedule. The model-level schedule is the envelope of the endpoint prices rather
+// than the envelope cost scaled: a node that reads only it then charges exactly the most any endpoint charges, whatever
+// markup, fixed markup, bands or service tiers the endpoints have.
+func (p *Publication) protectEndpointPrices(input saleProposal, envelope catalog.Schedule, costErr error, policy PricePolicy, defaults fallbacks, free bool) error {
+	requested := make(EndpointPrices, len(input.endpoints))
+	for endpoint, schedule := range input.endpoints {
+		requested[endpoint] = schedule.Fill(defaults.perUse)
+	}
+	modelRequested, err := envelopeOf(requested)
+	if err != nil {
+		return err
+	}
+	p.Requested, err = modelRequested.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	if free && !modelRequested.IsZero() {
+		return ErrFreePrice
+	}
+	if costErr != nil {
+		return costErr
+	}
+	p.RequestedEndpoints = requested
+	p.Costs = input.costs
+	p.Cost, err = envelope.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	modelFloor, err := envelope.Scaled(policy.FloorMultiplier, modelRequested.Currency())
+	if err != nil {
+		return err
+	}
+	p.Floor, err = modelFloor.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	prices := make(EndpointPrices, len(requested))
+	floors := make(EndpointPrices, len(requested))
+	for endpoint, schedule := range requested {
+		cost, ok := input.costs[endpoint]
+		if !ok {
+			return ErrUnpriced
+		}
+		floor, err := cost.Scaled(policy.FloorMultiplier, schedule.Currency())
+		if err != nil {
+			return err
+		}
+		floors[endpoint] = floor
+		price, err := schedule.Aligned(floor, false)
+		if err != nil {
+			return err
+		}
+		prices[endpoint] = price
+	}
+	modelPrice, err := envelopeOf(prices)
+	if err != nil {
+		return err
+	}
+	if free && !modelPrice.IsZero() {
+		return ErrFreePrice
+	}
+	p.Schedule, err = modelPrice.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	p.Endpoints, p.Floors = prices, floors
 	p.Status = "pending"
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
@@ -176,7 +177,11 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 		if !ok {
 			continue
 		}
-		e, ok, err := newAudienceORModel(id, m, serving, sold)
+		servedIDs := make([]uuid.UUID, len(byModel[m.ID]))
+		for i, ep := range byModel[m.ID] {
+			servedIDs[i] = uuid.UUID(ep.ID)
+		}
+		e, ok, err := newAudienceORModel(id, m, serving, sold, servedIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +192,7 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 		if err != nil {
 			return nil, err
 		}
-		e.sold, e.serving = sold, serving
+		e.sold, e.served, e.serving = sold, servedIDs, serving
 		l.models = append(l.models, e)
 	}
 	return l, nil
@@ -217,10 +222,11 @@ type orModel struct {
 	prompt    platform.UnitPrice
 	output    platform.UnitPrice
 	average   platform.Exact // prompt + completion: the average the price orderings compare, undivided
-	// sold and serving are what the public models and prices page needs from the same build: the audience price layers
-	// and the limits and abilities the catalog declared. They are set on the base entry, before the variants split, so
-	// the page and the OpenRouter list describe one model with one price version.
+	// sold, served and serving are what the public models and prices page needs from the same build: the audience price
+	// layers, the endpoints this node serves and the limits and abilities the catalog declared. They are set on the base
+	// entry, before the variants split, so the page and the OpenRouter list describe one model with one price version.
 	sold    billing.Sold
+	served  []uuid.UUID
 	serving catalog.Serving
 }
 

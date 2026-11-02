@@ -37,10 +37,17 @@ type Publication struct {
 	Status    string          `json:"status"`
 	Requested jsonx.Raw       `json:"requested,omitempty"`
 	Schedule  jsonx.Raw       `json:"schedule,omitempty"`
-	Cost      jsonx.Raw       `json:"cost,omitempty"`
-	Floor     jsonx.Raw       `json:"floor,omitempty"`
-	Basis     jsonx.Raw       `json:"basis,omitempty"`
-	Problem   string          `json:"problem,omitempty"`
+	// Endpoints and RequestedEndpoints are the per-endpoint prices of a cost-plus proposal, before and after the floor.
+	// They are absent for a rule whose price is the same for every endpoint; an old candidate without them is read as
+	// the shared price it was.
+	Endpoints          EndpointPrices `json:"endpoints,omitempty"`
+	RequestedEndpoints EndpointPrices `json:"requested_endpoints,omitempty"`
+	Costs              EndpointPrices `json:"costs,omitempty"`
+	Floors             EndpointPrices `json:"floors,omitempty"`
+	Cost               jsonx.Raw      `json:"cost,omitempty"`
+	Floor              jsonx.Raw      `json:"floor,omitempty"`
+	Basis              jsonx.Raw      `json:"basis,omitempty"`
+	Problem            string         `json:"problem,omitempty"`
 }
 
 // ErrStalePrice refuses a confirmation decided against superseded price evidence.
@@ -288,7 +295,11 @@ func soldPublication(r ReadPublicationsRow) (Sold, error) {
 		return Sold{}, nil
 	}
 	s, err := catalog.ParseSchedule(r.Schedule)
-	return Sold{Version: *r.CurrentID, Schedule: s}, err
+	if err != nil {
+		return Sold{}, err
+	}
+	endpoints, err := parseEndpointPrices(r.Endpoints)
+	return Sold{Version: *r.CurrentID, Schedule: s, Endpoints: endpoints}, err
 }
 
 func persistPublication(ctx context.Context, tx pg.Tx, site uuid.UUID, p Publication) error {
@@ -354,15 +365,27 @@ func priceReason(reason string) error {
 
 func publishVersion(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, p Publication, override bool, reason string) (Sold, error) {
 	raw := p.Schedule
+	endpoints := p.Endpoints
 	if override {
+		if p.Endpoints != nil && p.RequestedEndpoints == nil {
+			return Sold{}, &RuleError{"candidate_id", "has no requested endpoint prices; refresh before confirming"}
+		}
 		raw = p.Requested
+		endpoints = p.RequestedEndpoints
 	}
 	s, err := catalog.ParseSchedule(raw)
 	if err != nil {
 		return Sold{}, err
 	}
+	var endpointBody []byte
+	if endpoints != nil {
+		endpointBody, err = jsonx.MarshalCanonical(endpoints)
+		if err != nil {
+			return Sold{}, err
+		}
+	}
 	id := uuid.NewV7()
-	if err := queries.InsertPriceVersion(ctx, tx, InsertPriceVersionParams{ID: id, SiteID: site, ModelID: uuid.UUID(p.Model), AudienceKind: p.Audience.Kind, AudienceID: p.Audience.ID, CandidateID: p.Candidate, Schedule: raw, Basis: p.Basis, Overridden: override, Actor: actor.String(), Reason: reason}); err != nil {
+	if err := queries.InsertPriceVersion(ctx, tx, InsertPriceVersionParams{ID: id, SiteID: site, ModelID: uuid.UUID(p.Model), AudienceKind: p.Audience.Kind, AudienceID: p.Audience.ID, CandidateID: p.Candidate, Schedule: raw, Basis: p.Basis, Endpoints: endpointBody, Overridden: override, Actor: actor.String(), Reason: reason}); err != nil {
 		return Sold{}, err
 	}
 	raised, err := priceRaised(p)
@@ -370,7 +393,7 @@ func publishVersion(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.
 		return Sold{}, err
 	}
 	err = priceAudit(ctx, tx, actor, id, "price.publish", reason, map[string]any{"model": p.Model, "audience": p.Audience, "candidate": p.Candidate, "overridden": override, "raised_to_floor": raised && !override})
-	return Sold{Version: id, Schedule: s}, err
+	return Sold{Version: id, Schedule: s, Endpoints: endpoints}, err
 }
 
 func priceAudit(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, action, reason string, detail map[string]any) error {
@@ -445,6 +468,21 @@ func priceRaised(p Publication) (bool, error) {
 	protected, err := catalog.ParseSchedule(p.Schedule)
 	if err != nil {
 		return false, err
+	}
+	if p.Endpoints != nil && p.RequestedEndpoints != nil {
+		// The model-level envelope can stay the same while one endpoint is raised to its own floor. The audit and the
+		// review signal are about every price this version publishes, so compare the endpoint schedules too.
+		for endpoint, wanted := range p.RequestedEndpoints {
+			protected, ok := p.Endpoints[endpoint]
+			if !ok {
+				continue
+			}
+			raised, err := wanted.PriceChange(protected, big.NewRat(0, 1))
+			if err != nil || raised {
+				return raised, err
+			}
+		}
+		return false, nil
 	}
 	return requested.PriceChange(protected, big.NewRat(0, 1))
 }

@@ -19,8 +19,13 @@ type Sold struct {
 	Audiences *AudiencePrices
 	// Version identifies the immutable published row.
 	Version uuid.UUID
-	// Schedule is the price itself, in the site's currency.
-	Schedule      catalog.Schedule
+	// Schedule is the price itself, in the site's currency. When Endpoints is set it is the envelope of their prices:
+	// the one price a node that does not read Endpoints charges, and what a local cost check compares before Endpoints is
+	// filtered endpoint by endpoint.
+	Schedule catalog.Schedule
+	// Endpoints is each endpoint's price when the version was priced from each endpoint's own cost; nil when Schedule is
+	// every endpoint's price (a fixed or reference-multiplier rule, and every version published before endpoint prices).
+	Endpoints     EndpointPrices
 	floor         string
 	overrideCosts map[uuid.UUID][]byte
 }
