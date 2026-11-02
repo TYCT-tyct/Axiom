@@ -38,7 +38,7 @@ DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同�
 | 9 | 上游正常结束：结算批提交 → `Relay.Finish` 写最后一个事件 | billing、suppliers、protocol | 单请求一次尝试 9 DB，每多一次尝试多 1；同批结算的锁、读、账本、结束和 `EndRequest` 每批一次，批内多一次尝试不再多一次往返 | 2s × 重试 | 「结束与结算」 |
 | 10 | 每条退出路径释放凭证、名额；异步写调用记录、quality 观测、粘性 | gateway、observability、quality | 0 | — | 「并发、背压与共享状态」 |
 
-`Call.At` 在 `accept` 里取一次，是请求到达的时刻，早于读体和准入；`reserveBatch` 把它交给 `billing.ReserveMany`（`created_at` 按微秒），`trail` 用它写调用记录的 `at`，所以一次调用和它的钱落在同一个窗口里，不会因为准入跨过窗口边界而分开。执行耗时仍从 `newSession` 的开始算，准入耗时不计入上游延迟。升级前写入的预留保留当时的 `created_at`，口径见[运营的「运营看板」](../../docs/domains/operations.md#运营看板)；`TestAdmissionReservesTheDearestKeptEntry` 读回预留的 `created_at` 与 `Call.At` 比较，`TestTrailUsesTheCallStart` 守住记录不退回执行开始。
+响应缓存的命中在第 7 步的尝试之前判断，但仍在第 6 步准入之后：没有尝试，结算只释放预留（「响应缓存」）。`Call.At` 在 `accept` 里取一次，是请求到达的时刻，早于读体和准入；`reserveBatch` 把它交给 `billing.ReserveMany`（`created_at` 按微秒），`trail` 用它写调用记录的 `at`，所以一次调用和它的钱落在同一个窗口里，不会因为准入跨过窗口边界而分开。执行耗时仍从 `newSession` 的开始算，准入耗时不计入上游延迟。升级前写入的预留保留当时的 `created_at`，口径见[运营的「运营看板」](../../docs/domains/operations.md#运营看板)；`TestAdmissionReservesTheDearestKeptEntry` 读回预留的 `created_at` 与 `Call.At` 比较，`TestTrailUsesTheCallStart` 守住记录不退回执行开始。
 
 ## 准入
 
@@ -337,6 +337,24 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 - **表项生命周期**：一个账户的表项只在有等待者或批次时存在；领头 goroutine 在锁内确认队列为空并删除，刚到的请求看到空账户就自己开一个，所以删除不会丢唤醒。领头 goroutine 独立于发起请求，即使发起者的请求取消也继续服务队列，直到队列为空；每个请求在自己的批结束时返回，不会被后续批次拖住。批次开始前发现客户端已走的准入被剔除，不写库。
 - **期限的容量含义**：闸每秒放行约 batch ÷ 持锁时间个准入；批越大，同样 5s 能容纳的排队越长。压测 #295 里持锁 50–100ms（共享 CI 机器，比 `docs/performance.md` 估的 5ms 慢一个量级），批大小为 1 时 200ms 只容 2–4 个，1 秒内每账户 20 个新请求就有六成回 429；5s 容 50–100 个。合成批次后每个请求的固定成本按 1/批摊薄，闸的放行速率随之上升；实际能排多长仍由整批持闸时间和数据库执行决定，压测必须按批大小报告。等闸的请求不占连接，只占在途名额和请求体内存；再多的由按账户在途上限（默认 500）截住。sub2api 对账号和用户并发名额也是有界等待加长期限（`maxConcurrencyWait` 30s），队列满或超时才回 429（`backend/internal/handler/gateway_helper.go`，2026-10-18）。
 
+## 响应缓存
+
+P15 的代码结构：`cacheplan.go` 在准入前决定开不开、TTL、清除和键，`cache.go` 负责加密、存储、查询、淘汰和清理，`cachehit.go` 负责把命中的上游字节重新走 `protocol.Relay`。对外语义见[接入的「响应缓存」](../../docs/domains/gateway.md#响应缓存)。
+
+**顺序与钱**：`fillCall` 在预设、压缩、文件解析都完成之后调用 `cachePlanFor`，键因此是最终发给上游的正文；`Run` 在 `webSearch`、`readEcho` 之后、第一次尝试之前调用 `cached`。命中仍走完整的准入和预留，只是没有尝试：`conclude` 用 `billing.Outcome{Attempts: nil}` 结算，`billing.Settle` 把预留全额释放，不写账本；调用记录写 `cache_hit=true`、价格和成本为 0。未命中照常尝试，结算成功后才异步写入。
+
+**键与范围**：SHA-256 的内容是 `axiom/response-cache/v1`、账户 UUID、客户端格式、是否流式、`writeNormalized` 后的正文。规范化逐段只删除字符串外的空白，不先复制整份正文；它保留属性顺序、重复键、数字写法和字符串内空白。账户进哈希，查询又在 `Call.Admitted.Scope` 里完成，所以不同账户永不共用一个条目；条目还记下写入时的服务模型与端点，命中前按当前 key 的准入路由复核，权限收窄后旧条目不会被重放。只缓存 Chat、Responses、Messages 的普通生成；直连格式、compact、`previous_response_id`、`web`/`file-parser`、服务端搜索、服务端原生工具、压缩和文件引用都不缓存（`cacheable`），它们的缓存头被忽略。平台开关 `AXIOM_RESPONSE_CACHE_CONTENT` 默认 `off`，关闭时 `cmd/axiom` 不构造缓存，请求级开关不起作用。
+
+**命中**：`cachehit.go` 从 `cache.go` 拿到已开封的正文和实际模型，先用当前 key 的路由复核模型与端点，再用当前客户端格式、当前流式/聚合选项 `protocol.NewRelay`；`RelayOptions.Cached` 让 relay 把每个 usage 计数改写成 0（`protocol` 的 `zeroJSONNumbers`），并把 Chat 的 `created`、Responses 的 `created_at` 换成这次调用的时间。`Finish` 用站点的币种写零费用，命中不再出现空的 `cost_currency`。每个命中用新的调用 ID，保留条目里的 `X-Codex-Turn-State`（它和正文一起放在同一份加密载荷里，表里没有明文状态列）；`beginReply`/`respond` 写 `Cache-Control: no-store`，共享代理不会缓存一个账户的回复。重放在提交点之前失败时删掉条目并退回正常 MISS，之后失败按普通断流结束，仍免费。`Lookup` 在读取密文和明文之前按密文、两份明文和固定开销计入节点内存预算，读不到就释放并当 MISS，不会为一条命中透支内存。
+
+**未命中、写入与边界**：只写上游 `200`、回复完整、结算成功的尝试；`newCacheCapture` 在读到上游字节时复制并计入节点内存预算，超过 `maxCacheEntry`（1 MiB）就放弃，流照常转发。`Offer` 复制正文后立即返回，队列满就丢弃并计数；写库在独立 goroutine 上用 5 秒期限，失败只记日志。每个账户最多 64 MiB 或 1024 条，超出按 `created_at` 从旧到新淘汰，最后写入的一条不会被删；`Lookup` 把过期、损坏、打不开或格式不认识的行当 MISS 并删掉，2 秒期限。`cleanup` 每分钟用平台范围分批删除过期行（每次至多 1000 行、10 批）。平台开关关闭时整张表和写入路径都不被使用。
+
+**加密与运维**：每条正文用 `secret.Keyring` 信封加密，AAD 绑定 `gateway.response_cache` 的行 ID 和 `body`；迁移开 RLS，四个策略都走语句级 InitPlan（`platform.in_platform_scope`、`allowed_sites`、`allowed_accounts`），不按候选行调用 `in_scope`。`cmd/axiom/keyring.go` 的轮换清单登记这张表，迁移带 `platform.fence_envelope_key_version` 触发器，旧密钥版本的行会在轮换时被栅栏挡住。新增的 `observability.call_log.cache_hit` 是 `NOT NULL DEFAULT false`，旧节点写调用记录时 JSON 里没有这个成员，插入用 `coalesce(..., false)` 兜底；缓存表只被新节点使用。滚动升级期间旧节点不认识这张表，密钥轮换可能让只被缓存引用的版本先退役，新节点读到不可解的行时按 MISS 删除——缓存可丢，不影响调用和账本。
+
+**并发**：相同的并发请求不合并，两个都 MISS、都调用上游、各自计费，后写覆盖先写；这是[接入的决策](../../docs/domains/gateway.md#决策与理由)里写明的偏离。命中不占供应商凭证和速率槽，但仍占节点和账户的在途名额，所以不会绕过入口保护。
+
+测试：`cacheplan_test.go` 覆盖优先级、TTL 读法、键规范化和不可缓存路径；`cache_test.go` 覆盖命中免费与记录、按账户隔离、当前 key 的模型/端点权限、流式区分、清除、过期、失败不写、加密、损坏、断流、捕获上限、内存准入和两种存储上限；`protocol/cached_test.go` 覆盖三种格式重放的 usage 清零、时间戳和币种。
+
 ## 故障矩阵
 
 "钱守恒"：账本平衡、余额等于分录之和、不重复扣、收费不越底线；平台承担只出现在[计费](../../docs/domains/billing.md#预留与结算)列出的情况里，且有记录。
@@ -347,6 +365,9 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 | 1 | 慢速请求体攻击 | 未认证的不读体；有 key 的受按 IP、按账户上限约束 |
 | 6 | 数据库慢、锁等待 / 持有者失效 | 1s 内回滚 503 / 写入 0 行 503；都没有预留 |
 | 6 | COMMIT 确认丢失 | 503 不发上游；`SettleOrphan` 锁余额行后释放或写墓碑；进程死了由清理释放 |
+| 7 | 缓存查询慢、打不开或损坏 | 当 MISS，调用照常走上游；损坏行删掉，2 秒期限不拖慢调用 |
+| 7 | 缓存正文重放在提交点前失败 | 删条目、当 MISS 重走上游；提交点后失败按断流结束，免费 |
+| 7 | 缓存写入慢、队列满或数据库出错 | 只丢缓存条目并计数，调用已答完，钱不受影响 |
 | 7–8 | 节点崩溃（已发出、结算前） | 回收后按[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)收尾：清理释放并记丢失的请求，带预留冻结的路线，不向用户收费；崩溃前那次尝试没有成本行，也没有保存对账键，成本由平台承担，由供应商的逐笔记录补齐 |
 | 7 | 上游连不上、出错 | 换条目；失败尝试的成本在最后结算里记 |
 | 8 | 追加时数据库慢 | 等满 1s 截断为 `billing_unavailable`；消耗不超过超额额度 |

@@ -247,6 +247,8 @@ services:
       AXIOM_KEY_HASH_FILE: /keys/hash
       AXIOM_IDENTITY_KEY_FILE: /keys/identity
       AXIOM_HEALTH_MODE: ${AXIOM_HEALTH_MODE-}
+      # Off unless the platform permits reply content in the response cache (docs/domains/gateway.md「响应缓存」).
+      AXIOM_RESPONSE_CACHE_CONTENT: ${AXIOM_RESPONSE_CACHE_CONTENT-}
       AXIOM_EXCHANGE_SOURCE: ${AXIOM_EXCHANGE_SOURCE-}
       # The shared cache, in this single-core deployment too: a rate count that survives this process is one more thing
       # a restart does not take, and it is what `AXIOM_CORE_NODES` above 1 will need (internal/platform/kv/README.md

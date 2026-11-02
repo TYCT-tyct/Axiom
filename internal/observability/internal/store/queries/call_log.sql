@@ -6,7 +6,7 @@ INSERT INTO observability.call_log (id, at, site_id, account_id, workspace_id, k
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, language, used_tools, has_image,
     has_file, model, endpoint_id, source_class, egress, attempt_count, route, usage, service_tier, price_version, price_nano,
     cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, consent_version,
-    training_allowed, streamed, physical_input)
+    training_allowed, streamed, cache_hit, physical_input)
 SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (r ->> 'account_id')::uuid,
     (r ->> 'workspace_id')::uuid, (r ->> 'key_id')::uuid, r ->> 'end_user_hash', (r ->> 'ip')::inet,
     r ->> 'client_app', r ->> 'session_id', r ->> 'subagent_id', r ->> 'app_referer', r ->> 'app_title',
@@ -17,7 +17,7 @@ SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (
     nullif(r ->> 'price_version', '')::uuid, (r ->> 'price_nano')::bigint, (r ->> 'cost_nano')::bigint, r ->> 'currency', (r ->> 'free_of_charge')::boolean,
     (r ->> 'latency_ms')::integer, (r ->> 'first_token_ms')::integer, r ->> 'finish_reason', r ->> 'error_kind',
     r ->> 'consent_version', (r ->> 'training_allowed')::boolean, (r ->> 'streamed')::boolean,
-    (r ->> 'physical_input')::bigint
+    coalesce((r ->> 'cache_hit')::boolean, false), (r ->> 'physical_input')::bigint
 FROM jsonb_array_elements(@rows::jsonb) AS r
 ON CONFLICT (id, at) DO NOTHING;
 
@@ -28,7 +28,7 @@ ON CONFLICT (id, at) DO NOTHING;
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, physical_input
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input
 FROM observability.call_log
 WHERE account_id = (@account_id::text)::uuid
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
@@ -84,7 +84,7 @@ LIMIT @group_limit;
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, physical_input
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input
 FROM observability.call_log
 WHERE id = (@id::text)::uuid;
 

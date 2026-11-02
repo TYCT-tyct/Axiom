@@ -30,6 +30,7 @@ type OwnCall struct {
 	Latency, FirstToken                 time.Duration
 	FinishReason, ErrorKind             string
 	Streamed                            bool
+	CacheHit                            bool
 	PhysicalInput                       *int64 // the upstream's prompt total, nil when it reported none
 }
 
@@ -148,7 +149,7 @@ func ownCall(r store.ListOwnCallsRow) (OwnCall, error) {
 		PriceVersion: r.PriceVersion, Class: r.RequestClass, Model: r.Model, ServiceTier: r.ServiceTier, PriceNano: r.PriceNano,
 		Currency: r.Currency, Free: r.FreeOfCharge, Latency: time.Duration(r.LatencyMs) * time.Millisecond,
 		FirstToken: time.Duration(r.FirstTokenMs) * time.Millisecond, FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
-		Streamed: r.Streamed,
+		Streamed: r.Streamed, CacheHit: r.CacheHit,
 	}
 	if r.PhysicalInput >= 0 {
 		c.PhysicalInput = &r.PhysicalInput
