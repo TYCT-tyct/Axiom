@@ -14,9 +14,11 @@ Invariants:
   commit per PR, and GitHub marks the PR merged because its head is now on main. The push goes through the deploy key
   main's ruleset lets through; its push event starts main's build, so landing starts none.
 - Landing is resumable: the verified train is kept as the branch train/<base>/land, whose first-parent merges record
-  each PR, its SHA and the train's base in a Train trailer, with the status train/verified on its tip. It is deleted
-  only once the base is at that tip (an earlier run's push went through) or the landing failed, so a run stopped before
-  the push retries it instead of rebuilding the train.
+  each PR, its SHA and the train's base in a Train trailer, with the status train/verified on its tip. A run stopped
+  before the push retries it instead of rebuilding the train. The record is deleted once the base is at that tip, once a
+  record the old squash path left has all its PRs on the base (after starting the base's build its API merges never
+  started), or once the landing failed; a record with only a prefix on the base is kept and stops the run, because only
+  a squash landing or a hand merge puts a prefix there and that work may be untested.
 - No PR code runs here: assembly only merges commits; the builds are separate ci.yml runs on the train branches,
   dispatched with inputs.base, so ci.yml's own md-only, deploy and bench rules see the train's whole change.
 
@@ -441,27 +443,40 @@ class Train:
 
     def land_verified(self):
         """Fast-forward the base to the whole verified train, or land nothing. Return the new base commit, or None when
-        nothing landed (the PRs wait for the next train); raise Abort when the push fails, so this run fails and the
-        PRs are queued again for the next one."""
+        nothing landed (the PRs wait for the next train); raise Abort when the push fails or the base holds a prefix no
+        atomic landing can explain, so this run fails and the PRs are queued again for the next one. A record the old
+        squash path left on the way in is finished (all its PRs on the base) or kept for a check (only a prefix), never
+        silently dropped."""
         cars = self.read_land_ref()
         tip = cars[-1].commit
-        if self.base_head() == tip:  # an earlier run's push went through and started the base's build by itself
+        head = self.base_head()
+        if head == tip:  # an earlier run's push went through and started the base's build by itself
             log(f"{self.base} is already at the verified train {tip[:7]}")
         else:
             steps = [landing_step(car.entry, self.pr(car.entry.number), self.base) for car in cars]
             landed, problem = landing_plan(steps)
-            if problem:
-                log(f"nothing lands: #{cars[steps.index(problem, landed)].entry.number} {problem}; "
-                    "the train's PRs wait for the next one")
-                self.drop_land_ref()
-                return None
-            if landed == len(cars):  # an earlier run's push landed the train and the base moved on since
-                log(f"{self.base} already holds the verified train; it moved on since {tip[:7]}")
+            if landed == len(cars):
+                if self.base_contains(tip, head):  # an earlier run's push landed it and the base moved on since
+                    log(f"{self.base} already holds the verified train; it moved on since {tip[:7]}")
+                else:
+                    # the squash path left this after its last merge and before starting the base's build: its API merges
+                    # start no push workflow, so nothing has built the landed tree on the base yet
+                    log(f"{self.base} holds the verified train without its tip: it was squash-merged; starting its build")
+                    if self.base == "main":
+                        self.dispatch_main()
                 self.drop_land_ref()
                 return self.base_head()
-            if landed:  # part of the train is on the base but not its tip: it cannot take the rest as one push
-                log(f"nothing lands: {self.base} already holds {landed} of the verified train's {len(cars)} PRs, so it "
-                    "cannot take the rest as one push; they wait for the next train")
+            if landed:
+                # the squash path (or a hand merge) left a prefix on the base, not the tested tip: main may hold work no
+                # build tested, so the record stays as the stop and the next runs keep failing until someone clears it
+                changed = f"; #{cars[steps.index(problem, landed)].entry.number} {problem}" if problem else ""
+                log(f"the train stops: {self.base} holds {landed} of the verified train's {len(cars)} PRs but not its tip"
+                    f"{changed}. Only a squash landing or a hand merge does that: check {self.base}, revert any work no "
+                    f"build tested, then delete {self.land_ref} to let trains run again (docs/ops/merge-train.md)")
+                raise Abort(f"{self.base} holds a prefix of the verified train without its tip")
+            if problem:
+                log(f"nothing lands: #{cars[steps.index(problem)].entry.number} {problem}; "
+                    "the train's PRs wait for the next one")
                 self.drop_land_ref()
                 return None
             if not self.fast_forward(tip):
@@ -471,6 +486,16 @@ class Train:
             self.changed += len(cars)
         self.drop_land_ref()
         return self.base_head()
+
+    def base_contains(self, commit, head):
+        """Whether head has commit in its history: true when the train got there by the fast-forward push, false when its
+        PRs were squash-merged by the old path (or merged by hand)."""
+        return sh("git", "merge-base", "--is-ancestor", commit, head, check=False).returncode == 0
+
+    def dispatch_main(self):
+        """Start the base's full build and release artifact. Only a record the old squash path left needs it: that path's
+        API merges start no push workflow, so its dispatch was the only build of the tree it landed."""
+        sh("gh", "workflow", "run", "ci.yml", "-R", self.repo, "--ref", self.base)
 
     def fast_forward(self, tip):
         """Move the base to the tested tip in one ref update; return whether it got there. Judged by reading the base back,

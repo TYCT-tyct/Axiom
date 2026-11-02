@@ -76,11 +76,14 @@ def ready(number):
 class FakeLand(train.Train):
     """train/main/land holding PRs 1..n, landed by the real land_verified: main's head is m<k> after k of them."""
 
-    def __init__(self, n, landed=0, ff=True):
-        self.base, self.dry_run, self.changed, self.ff = "main", False, 0, ff  # ff: the ruleset lets the train push main
+    def __init__(self, n, landed=0, ff=True, contains=True):
+        # ff: the ruleset lets the train push main; contains: the base's history has the train's tip (a fast-forward,
+        # not the old path's squash merges)
+        self.base, self.dry_run, self.changed, self.ff, self.contains = "main", False, 0, ff, contains
         self.cars = [Car(Entry(number, SHA), f"c{number}") for number in range(1, n + 1)]
         self.prs = {number: ready(number) | ({"state": "MERGED"} if number <= landed else {}) for number in range(1, n + 1)}
         self.on_main, self.actions = landed, []
+        self.land_ref = "train/main/land"
 
     def read_land_ref(self):
         return self.cars
@@ -98,8 +101,14 @@ class FakeLand(train.Train):
         self.tried_ff = True
         if self.ff:
             self.actions.append("fast-forward")
-            self.on_main = "tip"
+            self.on_main, self.contains = "tip", True
         return self.ff
+
+    def base_contains(self, commit, head):
+        return self.contains
+
+    def dispatch_main(self):
+        self.actions.append("dispatch")
 
     def drop_land_ref(self):
         self.actions.append("drop")
@@ -141,10 +150,26 @@ class Landing(unittest.TestCase):
         self.assertEqual(fake.land_verified(), "m3")
         self.assertEqual((fake.actions, fake.changed), (["drop"], 0))
 
-    def test_a_partly_landed_train_lands_nothing(self):
-        fake = FakeLand(3, landed=1)  # the base holds a prefix but not the tip, so it cannot take the rest as one push
-        self.assertIsNone(fake.land_verified())
-        self.assertEqual((fake.actions, fake.changed), (["drop"], 0))
+    def test_a_record_the_old_squash_path_left_after_every_merge_starts_mains_build(self):
+        # the old path's API merges start no push workflow, so its record may be the only thing that would have started
+        # the base's build: finish that before dropping it
+        fake = FakeLand(3, landed=3, contains=False)
+        self.assertEqual(fake.land_verified(), "m3")
+        self.assertEqual((fake.actions, fake.changed), (["dispatch", "drop"], 0))
+
+    def test_a_record_the_old_squash_path_left_part_way_keeps_it_and_stops(self):
+        # the base holds a prefix no build tested: dropping the record would hide that, so it stays as the stop
+        fake = FakeLand(3, landed=1, contains=False)
+        with self.assertRaises(train.Abort):
+            fake.land_verified()
+        self.assertEqual((fake.actions, fake.changed), ([], 0))
+
+    def test_a_record_whose_landed_prefix_lost_a_pr_keeps_it_and_stops(self):
+        fake = FakeLand(3, landed=2, contains=False)
+        fake.prs[3] |= {"labels": []}  # the PR after the landed prefix left the queue while the old path was landing
+        with self.assertRaises(train.Abort):
+            fake.land_verified()
+        self.assertEqual(fake.actions, [])
 
     def test_a_fast_forward_counts_by_where_the_base_is_after_the_push(self):
         # a refused push (the ruleset) leaves the base; a push whose reply was lost may still have moved it
