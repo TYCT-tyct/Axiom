@@ -4311,6 +4311,52 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/subscription-grants/{grant_id}/refunds:
+    post:
+      operationId: refundSubscriptionGrant
+      tags: [Users]
+      summary: Refund a subscription grant
+      description: >-
+        Returns part or all of a paid grant in site credits and takes back the term it bought, from the end
+        (docs/domains/billing.md「订阅套餐」). A refund of everything left revokes the subscription; a partial one only
+        removes whole future windows. The grant must be the newest of the subscription, a window with a pending
+        reservation is refused, and a gift cannot be refunded. The ID is the idempotency key; the same key with the
+        same grant and credits returns the stored refund.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: credits.grant
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+        - name: grant_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SubscriptionRefundInput"}
+      responses:
+        "201":
+          description: Refunded.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SubscriptionRefund"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/accounts/{account_id}/subscriptions:
     get:
       operationId: listSubscriptions
@@ -5802,6 +5848,36 @@ components:
         admin_idle_timeout_seconds: {type: integer, minimum: 300, maximum: 43200}
         admin_max_age_seconds: {type: integer, minimum: 300, maximum: 86400}
         new_key_daily_limit: {$ref: "#/components/schemas/Money"}
+        billing_preference:
+          allOf: [{$ref: "#/components/schemas/BillingPreferenceName"}]
+          description: >-
+            The funding order an account gets until it chooses its own; absent is `subscription_first`. A page built
+            before this field leaves it out, and the server keeps the stored value rather than clearing it.
+    BillingPreferenceName:
+      type: string
+      enum: [subscription_first, wallet_first, subscription_only, wallet_only]
+      description: >-
+        Which source a call uses first. `subscription_first` uses the plan and falls back to the wallet; `wallet_first`
+        the reverse; `subscription_only` and `wallet_only` do not fall back (docs/domains/billing.md「资金来源」).
+    SubscriptionRefundInput:
+      type: object
+      additionalProperties: false
+      required: [credits, reason]
+      properties:
+        credits: {$ref: "#/components/schemas/CreditAmount"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SubscriptionRefund:
+      type: object
+      required: [id, grant_id, credits, amount, windows, unused, revoked, created_at]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        grant_id: {$ref: "#/components/schemas/Uuid"}
+        credits: {$ref: "#/components/schemas/CreditAmount"}
+        amount: {$ref: "#/components/schemas/Money"}
+        windows: {type: integer, minimum: 0, description: "Windows voided by this refund."}
+        unused: {$ref: "#/components/schemas/CreditAmount"}
+        revoked: {type: boolean}
+        created_at: {type: string, format: date-time}
     SiteLogoView:
       type: object
       properties:

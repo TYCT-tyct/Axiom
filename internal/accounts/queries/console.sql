@@ -193,3 +193,16 @@ SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa,
 FROM accounts.sessions s
 JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
 WHERE s.id = @id;
+
+-- name: BillingPreference :one
+-- The funding order calls of this account use: its own choice, or the site's default, or subscription_first. The
+-- account's row is the only one the console scope can read; own says whether the account chose it.
+SELECT coalesce(a.billing_preference, p.preference, 'subscription_first')::text AS preference,
+    (a.billing_preference IS NOT NULL)::boolean AS own,
+    coalesce(p.preference, 'subscription_first')::text AS site_default
+FROM accounts.accounts a LEFT JOIN accounts.site_billing_preferences p ON p.site_id = a.site_id
+WHERE a.id = @account_id;
+
+-- name: SetBillingPreference :exec
+-- A NULL clears the account's choice, so the site's default applies again.
+UPDATE accounts.accounts SET billing_preference = sqlc.narg('preference')::text WHERE id = @account_id;

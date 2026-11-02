@@ -510,6 +510,7 @@ func billingAdmitted(a accounts.Admission, c *Call) billing.Admitted {
 		Scope: a.Scope(), Site: uuid.UUID(c.site.ID), Account: uuid.UUID(c.caller.AccountID()),
 		Workspace: uuid.UUID(c.caller.WorkspaceID()), Key: uuid.UUID(c.caller.KeyID()),
 		WorkspaceBudget: limitOf(a.Budget()), KeyLimit: limitOf(a.SpendLimit()),
+		Preference: a.BillingPreference(),
 	}
 }
 

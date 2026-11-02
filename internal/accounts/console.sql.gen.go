@@ -43,6 +43,29 @@ func (q *Queries) AdvanceTOTP(ctx context.Context, db DBTX, arg AdvanceTOTPParam
 	return result.RowsAffected(), nil
 }
 
+const billingPreference = `-- name: BillingPreference :one
+SELECT coalesce(a.billing_preference, p.preference, 'subscription_first')::text AS preference,
+    (a.billing_preference IS NOT NULL)::boolean AS own,
+    coalesce(p.preference, 'subscription_first')::text AS site_default
+FROM accounts.accounts a LEFT JOIN accounts.site_billing_preferences p ON p.site_id = a.site_id
+WHERE a.id = $1
+`
+
+type BillingPreferenceRow struct {
+	Preference  string
+	Own         bool
+	SiteDefault string
+}
+
+// The funding order calls of this account use: its own choice, or the site's default, or subscription_first. The
+// account's row is the only one the console scope can read; own says whether the account chose it.
+func (q *Queries) BillingPreference(ctx context.Context, db DBTX, accountID uuid.UUID) (BillingPreferenceRow, error) {
+	row := db.QueryRow(ctx, billingPreference, accountID)
+	var i BillingPreferenceRow
+	err := row.Scan(&i.Preference, &i.Own, &i.SiteDefault)
+	return i, err
+}
+
 const bumpFactorVersion = `-- name: BumpFactorVersion :exec
 UPDATE accounts.users SET factor_version = factor_version + 1 WHERE id = $1
 `
@@ -763,6 +786,21 @@ func (q *Queries) SessionTenant(ctx context.Context, db DBTX, arg SessionTenantP
 		return nil, err
 	}
 	return items, nil
+}
+
+const setBillingPreference = `-- name: SetBillingPreference :exec
+UPDATE accounts.accounts SET billing_preference = $1::text WHERE id = $2
+`
+
+type SetBillingPreferenceParams struct {
+	Preference *string
+	AccountID  uuid.UUID
+}
+
+// A NULL clears the account's choice, so the site's default applies again.
+func (q *Queries) SetBillingPreference(ctx context.Context, db DBTX, arg SetBillingPreferenceParams) error {
+	_, err := db.Exec(ctx, setBillingPreference, arg.Preference, arg.AccountID)
+	return err
 }
 
 const setSessionRecoveryCodes = `-- name: SetSessionRecoveryCodes :exec

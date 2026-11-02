@@ -178,6 +178,78 @@ func (a adminAPI) GrantSubscription(ctx context.Context, r adminapi.GrantSubscri
 	}, nil
 }
 
+// RefundSubscriptionGrant returns part or all of a paid grant and takes back the term it bought.
+func (a adminAPI) RefundSubscriptionGrant(ctx context.Context, r adminapi.RefundSubscriptionGrantRequestObject) (adminapi.RefundSubscriptionGrantResponseObject, error) {
+	id, err := accountID(r.AccountId)
+	if err != nil {
+		return nil, err
+	}
+	grant, err := uuid.Parse(r.GrantId)
+	if err != nil {
+		return nil, accounts.ErrNotFound
+	}
+	credits, err := strconv.ParseInt(r.Body.Credits, 10, 64)
+	if err != nil || credits <= 0 {
+		return nil, unprocessableFields("/credits", "a refund is a positive amount of site credits")
+	}
+	body, replayed, err := idempotently(ctx, a.db, "refundSubscriptionGrant", r.Params.IdempotencyKey,
+		[]any{r.AccountId, r.GrantId, r.Body},
+		func(tx pg.Tx) (adminapi.SubscriptionRefund, error) {
+			account, err := a.accounts.Account(ctx, tx, id)
+			if err != nil {
+				return adminapi.SubscriptionRefund{}, err
+			}
+			currency, err := a.currencyOf(account.Site)
+			if err != nil {
+				return adminapi.SubscriptionRefund{}, err
+			}
+			refund, err := billing.RefundSubscriptionGrant(ctx, tx, billing.SubscriptionRefundRequest{
+				ID: uuid.NewV7(), Site: uuid.UUID(account.Site), Account: uuid.UUID(id), Grant: grant,
+				SiteCurrency: currency, Credits: credits, Reason: r.Body.Reason, Actor: actor(ctx),
+			})
+			if err != nil {
+				return adminapi.SubscriptionRefund{}, refundProblem(err)
+			}
+			amount, err := billing.FromMinor(refund.Currency, refund.Paid)
+			if err != nil {
+				return adminapi.SubscriptionRefund{}, err
+			}
+			return adminapi.SubscriptionRefund{
+				Id: refund.ID.String(), GrantId: refund.Grant.String(),
+				Credits: strconv.FormatInt(refund.Credits, 10), Amount: adminMoney(amount, refund.Currency),
+				Windows: int(refund.Windows), Unused: strconv.FormatInt(refund.Unused, 10), Revoked: refund.Revoked,
+				CreatedAt: refund.CreatedAt,
+			}, nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.RefundSubscriptionGrant201JSONResponse{
+		Body:    body,
+		Headers: adminapi.RefundSubscriptionGrant201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
+	}, nil
+}
+
+// refundProblem names a refusal of a subscription refund.
+func refundProblem(err error) error {
+	switch {
+	case errors.Is(err, billing.ErrRefundHeld):
+		return &apiError{
+			status: http.StatusConflict, code: codeConflict,
+			message: "a window of the grant still has a pending reservation; refund it after the call settles",
+		}
+	case errors.Is(err, billing.ErrNotRefundable):
+		return &apiError{status: http.StatusConflict, code: codeConflict, message: err.Error()}
+	}
+	if e, ok := errors.AsType[*billing.PlanError](err); ok {
+		return unprocessable(e.Reason)
+	}
+	if e, ok := errors.AsType[*billing.PaidError](err); ok {
+		return unprocessable(e.Error())
+	}
+	return err
+}
+
 // grantSubscription writes the grant inside the caller's transaction and reads back the subscription it made.
 func (a adminAPI) grantSubscription(ctx context.Context, tx pg.Tx, id accounts.AccountID, plan uuid.UUID, source string,
 	in *adminapi.GrantSubscriptionJSONRequestBody,

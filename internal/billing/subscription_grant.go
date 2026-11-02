@@ -80,7 +80,7 @@ func (g SubscriptionGrant) sellablePlan(ctx context.Context, tx pg.Tx) (Plan, in
 
 // credit writes the grant row, its liability and its audit entry into the subscription extendSubscription wrote.
 func (g SubscriptionGrant) credit(ctx context.Context, tx pg.Tx, plan Plan, sub Subscription, first int32, face int64) error {
-	if n, err := queries.InsertGrant(ctx, tx, g.params(sub.ID, plan, face)); err != nil {
+	if n, err := queries.InsertGrant(ctx, tx, g.params(sub.ID, plan, first, face)); err != nil {
 		return fmt.Errorf("billing: write the subscription grant: %w", err)
 	} else if n != 1 {
 		return fmt.Errorf("%w: grant %s", ErrCreditConflict, g.ID)
@@ -156,19 +156,19 @@ func (g SubscriptionGrant) same(ctx context.Context, tx pg.Tx) (bool, error) {
 }
 
 // matches reports whether old is the grant g would write.
-func (g SubscriptionGrant) matches(old BillingSubscriptionGrant) bool {
+func (g SubscriptionGrant) matches(old ReadGrantRow) bool {
 	return g.sameTerms(old) && g.samePayment(old) && g.sameChannel(old)
 }
 
-func (g SubscriptionGrant) sameTerms(old BillingSubscriptionGrant) bool {
+func (g SubscriptionGrant) sameTerms(old ReadGrantRow) bool {
 	return old.SiteID == g.Site && old.AccountID == g.Account && old.PlanID == g.Plan && old.Source == g.Source
 }
 
-func (g SubscriptionGrant) samePayment(old BillingSubscriptionGrant) bool {
+func (g SubscriptionGrant) samePayment(old ReadGrantRow) bool {
 	return old.Currency == currencyOf(g) && eqInt(old.Paid, g.Payment.Paid) && eqInt(old.Fee, g.Payment.Fee)
 }
 
-func (g SubscriptionGrant) sameChannel(old BillingSubscriptionGrant) bool {
+func (g SubscriptionGrant) sameChannel(old ReadGrantRow) bool {
 	return eqUUID(old.MerchantID, g.Channel.Merchant) && old.OfflineChannel == offlineOf(g) && eqUUID(old.RateID, g.RateID)
 }
 
@@ -232,12 +232,12 @@ func (g SubscriptionGrant) entries(ctx context.Context, tx pg.Tx, face int64) ([
 }
 
 // params is the grant's row, with the plan's terms as they were at the grant.
-func (g SubscriptionGrant) params(subscription uuid.UUID, plan Plan, face int64) InsertGrantParams {
+func (g SubscriptionGrant) params(subscription uuid.UUID, plan Plan, first int32, face int64) InsertGrantParams {
 	n := planWindowsOf(plan)
 	p := InsertGrantParams{
 		ID: g.ID, SiteID: g.Site, AccountID: g.Account, SubscriptionID: subscription, PlanID: plan.ID, PlanName: plan.Name,
 		Source: g.Source, Quota: plan.Quota, WindowSeconds: plan.WindowSeconds, TermSeconds: plan.TermSeconds,
-		Windows: n, Face: face, Currency: currencyOf(g),
+		Windows: n, FirstWindow: first, Face: face, Currency: currencyOf(g),
 	}
 	if g.Source == "paid" {
 		p.Paid, p.Fee = &g.Payment.Paid, &g.Payment.Fee

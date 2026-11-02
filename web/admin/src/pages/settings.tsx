@@ -1,6 +1,16 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors, useSession } from "@axiom/app";
-import { Button, DataState, Icon, moneyInput, PageHeader, parseMoney, TextField, useFormat } from "@axiom/ui";
+import {
+  Button,
+  DataState,
+  Icon,
+  moneyInput,
+  PageHeader,
+  parseMoney,
+  SelectField,
+  TextField,
+  useFormat,
+} from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -141,6 +151,13 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
       {limit ? format.money(limit) : "—"} {settings.new_key_daily_limit ? own : standard}
     </span>,
   ]);
+  const preference = settings.billing_preference ?? defaults.billing_preference ?? "subscription_first";
+  rows.push([
+    t("settings.field.billing_preference"),
+    <span key="preference">
+      {t(`settings.billing.values.${preference}`)} {settings.billing_preference ? own : standard}
+    </span>,
+  ]);
   return (
     <>
       <Facts
@@ -159,12 +176,8 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
 }
 
 // The settings as typed: a value left empty is left out (the default applies), and one outside its bounds is a problem.
-function readSettings(
-  values: Record<string, string>,
-  limitCurrency: string | undefined,
-  words: { range: string; limit: string },
-): Settings | Problem {
-  const settings: Record<string, unknown> = {};
+function readDurations(values: Record<string, string>, problem: string): Settings | Problem {
+  const settings: Record<string, number> = {};
   for (const { name, min, max } of durations) {
     const typed = (values[name] ?? "").trim();
     if (typed === "") {
@@ -172,9 +185,25 @@ function readSettings(
     }
     const seconds = Number(typed);
     if (!/^\d+$/.test(typed) || seconds < min || seconds > max) {
-      return { problem: words.range };
+      return { problem };
     }
     settings[name] = seconds;
+  }
+  return settings as Settings;
+}
+
+function readSettings(
+  values: Record<string, string>,
+  limitCurrency: string | undefined,
+  words: { range: string; limit: string },
+): Settings | Problem {
+  const settings = readDurations(values, words.range);
+  if ("problem" in settings) {
+    return settings;
+  }
+  const preference = (values.billing_preference ?? "").trim();
+  if (preference !== "") {
+    settings.billing_preference = preference as Settings["billing_preference"];
   }
   const limit = (values.new_key_daily_limit ?? "").trim();
   if (limit !== "") {
@@ -184,7 +213,61 @@ function readSettings(
     }
     settings.new_key_daily_limit = { amount, currency: limitCurrency };
   }
-  return settings as Settings;
+  return settings;
+}
+
+function SettingsFields({
+  view,
+  currency,
+  error,
+}: {
+  view: AdminSchemas["SiteSettingsView"];
+  currency: string | undefined;
+  error: unknown;
+}) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const duration = useDuration();
+  return (
+    <>
+      {durations.map(({ name, min, max }) => (
+        <TextField
+          key={name}
+          label={t(`settings.field.${name}`)}
+          hint={t("settings.hint", {
+            min: duration(min),
+            max: duration(max),
+            default: duration(view.defaults[name] ?? 0),
+          })}
+          name={name}
+          inputMode="numeric"
+          autoComplete="off"
+          defaultValue={view.settings[name]}
+          error={errors.field(error, name)}
+        />
+      ))}
+      <SelectField
+        label={t("settings.field.billing_preference")}
+        hint={t("settings.billing.hint")}
+        name="billing_preference"
+        defaultValue={view.settings.billing_preference ?? view.defaults.billing_preference ?? "subscription_first"}
+      >
+        <option value="subscription_first">{t("settings.billing.values.subscription_first")}</option>
+        <option value="wallet_first">{t("settings.billing.values.wallet_first")}</option>
+        <option value="subscription_only">{t("settings.billing.values.subscription_only")}</option>
+        <option value="wallet_only">{t("settings.billing.values.wallet_only")}</option>
+      </SelectField>
+      <TextField
+        label={t("settings.field.new_key_daily_limit")}
+        hint={t("settings.limitHint", { currency: currency ?? "" })}
+        name="new_key_daily_limit"
+        inputMode="decimal"
+        autoComplete="off"
+        defaultValue={view.settings.new_key_daily_limit ? moneyInput(view.settings.new_key_daily_limit.amount) : ""}
+        error={errors.field(error, "new_key_daily_limit")}
+      />
+    </>
+  );
 }
 
 function EditDialog({
@@ -197,8 +280,6 @@ function EditDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const errors = useErrors();
-  const duration = useDuration();
   const currency = view.defaults.new_key_daily_limit?.currency;
   const words = { range: t("settings.invalidRange"), limit: t("settings.invalidLimit", { currency: currency ?? "" }) };
   return (
@@ -207,35 +288,7 @@ function EditDialog({
       title={t("settings.edit")}
       intro={<p>{t("settings.intro")}</p>}
       action={t("settings.save")}
-      fields={(error) => (
-        <>
-          {durations.map(({ name, min, max }) => (
-            <TextField
-              key={name}
-              label={t(`settings.field.${name}`)}
-              hint={t("settings.hint", {
-                min: duration(min),
-                max: duration(max),
-                default: duration(view.defaults[name] ?? 0),
-              })}
-              name={name}
-              inputMode="numeric"
-              autoComplete="off"
-              defaultValue={view.settings[name]}
-              error={errors.field(error, name)}
-            />
-          ))}
-          <TextField
-            label={t("settings.field.new_key_daily_limit")}
-            hint={t("settings.limitHint", { currency: currency ?? "" })}
-            name="new_key_daily_limit"
-            inputMode="decimal"
-            autoComplete="off"
-            defaultValue={view.settings.new_key_daily_limit ? moneyInput(view.settings.new_key_daily_limit.amount) : ""}
-            error={errors.field(error, "new_key_daily_limit")}
-          />
-        </>
-      )}
+      fields={(error) => <SettingsFields view={view} currency={currency} error={error} />}
       read={(values) => readSettings(values, currency, words)}
       send={(settings, { reason, key }) =>
         unwrapChange(

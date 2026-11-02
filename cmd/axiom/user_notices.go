@@ -48,6 +48,40 @@ func (c consoleAPI) SetNotificationPreferences(ctx context.Context, r consoleapi
 	return consoleapi.SetNotificationPreferences200JSONResponse(preferencesJSON(p)), nil
 }
 
+// GetBillingPreference reads the funding order in force for the signed-in user's account.
+func (c consoleAPI) GetBillingPreference(ctx context.Context, _ consoleapi.GetBillingPreferenceRequestObject) (consoleapi.GetBillingPreferenceResponseObject, error) {
+	p, err := c.accounts.BillingPreference(ctx, callOf(ctx).principal)
+	if err != nil {
+		return nil, err
+	}
+	return consoleapi.GetBillingPreference200JSONResponse(billingPreferenceJSON(p)), nil
+}
+
+// SetBillingPreference sets the account's own order; "site" clears it.
+func (c consoleAPI) SetBillingPreference(ctx context.Context, r consoleapi.SetBillingPreferenceRequestObject) (consoleapi.SetBillingPreferenceResponseObject, error) {
+	var preference *string
+	if r.Body.Preference != "site" {
+		v := string(r.Body.Preference)
+		preference = &v
+	}
+	p, err := c.accounts.UpdateBillingPreference(ctx, callOf(ctx).principal, preference)
+	if err != nil {
+		return nil, err
+	}
+	return consoleapi.SetBillingPreference200JSONResponse(billingPreferenceJSON(p)), nil
+}
+
+func billingPreferenceJSON(p accounts.BillingPreference) consoleapi.BillingPreference {
+	source := consoleapi.BillingPreferenceSource("site")
+	if p.Own {
+		source = consoleapi.BillingPreferenceSourceAccount
+	}
+	return consoleapi.BillingPreference{
+		Preference: consoleapi.BillingPreferenceName(p.Preference), Source: source,
+		SiteDefault: consoleapi.BillingPreferenceName(p.SiteDefault),
+	}
+}
+
 func (c consoleAPI) ListAnnouncements(ctx context.Context, _ consoleapi.ListAnnouncementsRequestObject) (consoleapi.ListAnnouncementsResponseObject, error) {
 	data, err := c.accounts.Announcements(ctx, callOf(ctx).principal, time.Now())
 	if err != nil {

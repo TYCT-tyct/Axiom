@@ -25,7 +25,8 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"site_settings":            {"console_idle_timeout", "console_max_age", "admin_idle_timeout", "admin_max_age", "new_key_daily_limit", "ip_attempt_burst", "ip_attempts_per_minute", "email_sign_in_failures", "user_code_failures", "challenge_code_attempts", "max_keys_per_account", "key_creations_per_hour", "registration_human_check", "registration_human_check_bits", "registration_domain_burst", "registration_domain_per_hour", "registration_domain_allow", "registration_domain_deny", "passkeys_enabled"},
 		"tiers":                    {"name", "rate_requests"},
 		"roles":                    {"permissions", "additional_permissions"},
-		"accounts":                 {"name", "status", "tier_id", "max_keys", "key_creations_per_hour", "rate_requests"},
+		"accounts":                 {"name", "status", "tier_id", "max_keys", "key_creations_per_hour", "rate_requests", "billing_preference"},
+		"site_billing_preferences": {"preference"},
 		"workspaces":               {"name", "status", "budget", "budget_reset", "deleted_at"},
 		"users": {
 			"password_hash", "factor_version", "status", "totp_ciphertext", "totp_nonce", "totp_wrapped_dek",
@@ -84,7 +85,7 @@ func assertDeniedDeletes(t *testing.T, db *pg.DB, updatable map[string][]string)
 func deletable(table string) bool {
 	return strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" ||
 		table == "site_oauth_providers" || table == "user_identities" || table == "passkey_credentials" ||
-		table == "oauth_flows" || table == "webauthn_flows"
+		table == "oauth_flows" || table == "webauthn_flows" || table == "site_billing_preferences"
 }
 
 // TestOnePolicyPerCommand: every table has exactly one policy for everyone for each of SELECT, INSERT and UPDATE,
@@ -101,7 +102,7 @@ func TestOnePolicyPerCommand(t *testing.T) {
 	for _, table := range []string{
 		"accounts", "announcements", "api_keys", "legal_acceptances", "legal_documents", "members", "notification_preferences", "oauth_flows", "passkey_credentials",
 		"password_reset_requests", "password_reset_tokens", "platform_grants", "presets", "recovery_codes",
-		"registration_requests", "roles", "security_failures", "sessions", "site_domains", "site_logos",
+		"registration_requests", "roles", "security_failures", "sessions", "site_billing_preferences", "site_domains", "site_logos",
 		"site_oauth_providers", "site_settings", "sites", "tiers", "user_identities", "user_notices", "users",
 		"webauthn_flows", "workspaces",
 	} {

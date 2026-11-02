@@ -61,6 +61,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/billing-preference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read your funding order
+         * @description Which source your calls use first, and whether you chose it or the site's default applies (docs/domains/billing.md「资金来源」).
+         */
+        get: operations["getBillingPreference"];
+        /**
+         * Choose your funding order
+         * @description Sets your account's own order. `site` clears it so the site's default applies again. A value outside the enum is a 400.
+         */
+        put: operations["setBillingPreference"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/announcements": {
         parameters: {
             query?: never;
@@ -1306,6 +1330,27 @@ export interface components {
         SiteId: string;
         /** @description A site announcement's ID (TypeID). */
         AnnouncementId: string;
+        /**
+         * @description Which source a call uses first. `subscription_first` uses the plan and falls back to the wallet; `wallet_first` the reverse; `subscription_only` and `wallet_only` do not fall back (docs/domains/billing.md「资金来源」).
+         * @enum {string}
+         */
+        BillingPreferenceName: "subscription_first" | "wallet_first" | "subscription_only" | "wallet_only";
+        BillingPreference: {
+            preference: components["schemas"]["BillingPreferenceName"];
+            /**
+             * @description `account` when you chose it; `site` when the site's default applies.
+             * @enum {string}
+             */
+            source: "account" | "site";
+            site_default: components["schemas"]["BillingPreferenceName"];
+        };
+        BillingPreferenceRequest: {
+            /**
+             * @description `site` clears your choice.
+             * @enum {string}
+             */
+            preference: "site" | "subscription_first" | "wallet_first" | "subscription_only" | "wallet_only";
+        };
         Announcement: {
             id?: components["schemas"]["AnnouncementId"];
             site_id?: components["schemas"]["SiteId"];
@@ -2379,6 +2424,60 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getBillingPreference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The funding order in force. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingPreference"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setBillingPreference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingPreferenceRequest"];
+            };
+        };
+        responses: {
+            /** @description The funding order now in force. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingPreference"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };

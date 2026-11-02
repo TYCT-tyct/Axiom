@@ -119,6 +119,11 @@ const routeTree = root.addChildren([
       path: "/notifications",
       component: lazyRouteComponent(() => import("./pages/notifications")),
     }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/settings",
+      component: lazyRouteComponent(() => import("./pages/settings")),
+    }),
     createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),
   ]),
 ]);

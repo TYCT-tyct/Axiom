@@ -15,12 +15,13 @@ import (
 )
 
 const admitKey = `-- name: AdmitKey :many
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)))::bytea AS admission_ids, a.status = 'active' AS account_active
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE coalesce(a.billing_preference, p.preference, 'subscription_first') WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
 JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
 LEFT JOIN accounts.users owner ON owner.account_id=a.id
+LEFT JOIN accounts.site_billing_preferences p ON p.site_id = a.site_id
 WHERE k.id = $1
     AND accounts.domain_site($2::text, 'api') = k.site_id
     AND k.kind = 'call' AND k.status = 'active' AND k.deleted_at IS NULL
@@ -79,12 +80,13 @@ func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]
 }
 
 const admitReadKey = `-- name: AdmitReadKey :many
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, k.kind, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)))::bytea AS admission_ids, a.status = 'active' AS account_active
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, k.kind, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE coalesce(a.billing_preference, p.preference, 'subscription_first') WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
 JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
 LEFT JOIN accounts.users owner ON owner.account_id=a.id
+LEFT JOIN accounts.site_billing_preferences p ON p.site_id = a.site_id
 WHERE k.id = $1
     AND accounts.domain_site($2::text, 'api') = k.site_id
     AND k.kind IN ('call', 'management') AND k.status = 'active' AND k.deleted_at IS NULL

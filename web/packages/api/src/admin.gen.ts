@@ -2088,6 +2088,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/accounts/{account_id}/subscription-grants/{grant_id}/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refund a subscription grant
+         * @description Returns part or all of a paid grant in site credits and takes back the term it bought, from the end (docs/domains/billing.md「订阅套餐」). A refund of everything left revokes the subscription; a partial one only removes whole future windows. The grant must be the newest of the subscription, a window with a pending reservation is refused, and a gift cannot be refunded. The ID is the idempotency key; the same key with the same grant and credits returns the stored refund.
+         */
+        post: operations["refundSubscriptionGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/accounts/{account_id}/subscriptions": {
         parameters: {
             query?: never;
@@ -3014,6 +3034,29 @@ export interface components {
             admin_idle_timeout_seconds?: number;
             admin_max_age_seconds?: number;
             new_key_daily_limit?: components["schemas"]["Money"];
+            /** @description The funding order an account gets until it chooses its own; absent is `subscription_first`. A page built before this field leaves it out, and the server keeps the stored value rather than clearing it. */
+            billing_preference?: components["schemas"]["BillingPreferenceName"];
+        };
+        /**
+         * @description Which source a call uses first. `subscription_first` uses the plan and falls back to the wallet; `wallet_first` the reverse; `subscription_only` and `wallet_only` do not fall back (docs/domains/billing.md「资金来源」).
+         * @enum {string}
+         */
+        BillingPreferenceName: "subscription_first" | "wallet_first" | "subscription_only" | "wallet_only";
+        SubscriptionRefundInput: {
+            credits: components["schemas"]["CreditAmount"];
+            reason: components["schemas"]["Reason"];
+        };
+        SubscriptionRefund: {
+            id: components["schemas"]["Uuid"];
+            grant_id: components["schemas"]["Uuid"];
+            credits: components["schemas"]["CreditAmount"];
+            amount: components["schemas"]["Money"];
+            /** @description Windows voided by this refund. */
+            windows: number;
+            unused: components["schemas"]["CreditAmount"];
+            revoked: boolean;
+            /** Format: date-time */
+            created_at: string;
         };
         SiteLogoView: {
             /** @description The logo in force; absent when the site has none. */
@@ -8080,6 +8123,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Subscription"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    refundSubscriptionGrant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                account_id: components["schemas"]["AccountId"];
+                grant_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubscriptionRefundInput"];
+            };
+        };
+        responses: {
+            /** @description Refunded. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionRefund"];
                 };
             };
             400: components["responses"]["BadRequest"];

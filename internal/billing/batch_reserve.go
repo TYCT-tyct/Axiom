@@ -9,6 +9,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
 )
@@ -232,6 +233,67 @@ type quotedReservation struct {
 	quote  Reservation
 }
 
+// fundingQuote is a quoted reservation and the source that pays it: "plan" or "wallet".
+type fundingQuote struct {
+	q       quotedReservation
+	funding string
+}
+
+// quoteFunding quotes one request under the account's funding order. A preference that allows the other source falls
+// back only when the first is too small; the two "only" orders never do.
+func (b *Billing) quoteFunding(r ReserveRequest, src batchSources, base []Available, walletLeft platform.Exact, planLeft int64) (fundingQuote, error) {
+	quote := func(source Source, amount platform.Exact) (quotedReservation, error) {
+		base[0] = Available{Source: source, Amount: amount}
+		return b.quoteOne(r, src, base)
+	}
+	preference := r.Admitted.Preference
+	if preference == "" {
+		preference = accounts.BillingSubscriptionFirst
+	}
+	switch preference {
+	case accounts.BillingWalletOnly:
+		q, err := quote(SourceBalance, walletLeft)
+		return fundingQuote{q: q, funding: "wallet"}, err
+	case accounts.BillingSubscriptionOnly:
+		if src.plan == nil {
+			return fundingQuote{}, &Insufficient{Source: SourceSubscription}
+		}
+		q, err := quote(SourceSubscription, platform.AmountExact(planLeft))
+		return fundingQuote{q: q, funding: "plan"}, err
+	case accounts.BillingWalletFirst:
+		return quoteWalletFirst(quote, src, walletLeft, planLeft)
+	default:
+		// Subscription first: quote the larger source, then use the plan when it covers the whole request and the
+		// wallet otherwise. This is the default and the historical behavior.
+		left := walletLeft
+		if src.plan != nil && platform.AmountExact(planLeft).Cmp(left) > 0 {
+			left = platform.AmountExact(planLeft)
+		}
+		q, err := quote(SourceBalance, left)
+		if err != nil {
+			return fundingQuote{}, err
+		}
+		if src.plan != nil && planLeft >= q.quote.Amount.CeilAmount() {
+			return fundingQuote{q: q, funding: "plan"}, nil
+		}
+		return fundingQuote{q: q, funding: "wallet"}, nil
+	}
+}
+
+func quoteWalletFirst(quote func(Source, platform.Exact) (quotedReservation, error), src batchSources, walletLeft platform.Exact, planLeft int64) (fundingQuote, error) {
+	q, err := quote(SourceBalance, walletLeft)
+	if err == nil {
+		return fundingQuote{q: q, funding: "wallet"}, nil
+	}
+	if src.plan == nil || !isInsufficient(err) {
+		return fundingQuote{}, err
+	}
+	// The wallet is short, so the plan may fund the whole request instead. A refusal for any other reason is not
+	// retried: the plan cannot fix an unpriced request.
+	q, err = quote(SourceSubscription, platform.AmountExact(planLeft))
+	return fundingQuote{q: q, funding: "plan"}, err
+}
+
 // quoteBatch quotes the requests in order. Each quote sees the amounts the earlier quoted requests add to the balance's
 // reserved total and to their workspace's and key's counters, so the batch cannot reserve more than the account may
 // hold. A refused request gets its error in errs and adds nothing.
@@ -247,23 +309,19 @@ func (b *Billing) quoteBatch(reqs []ReserveRequest, src batchSources, usage []Re
 		a := r.Admitted
 		bal := src.balance
 		bal.Reserved = reserved
-		avail := a.available(bal,
+		base := a.available(bal,
 			addClamp(usage[i].WorkspaceUsed, workspaceUsed[a.Workspace]),
 			addClamp(usage[i].KeyUsed, keyUsed[a.Key]))
-		if src.plan != nil && avail[0].Amount.Cmp(platform.AmountExact(planLeft)) < 0 {
-			// The balance source covers what the wallet or the window covers, whichever is larger: a request is refused
-			// only when neither can fund it, and the choice between them comes after the quote.
-			avail[0].Amount = platform.AmountExact(planLeft)
-		}
-		q, err := b.quoteOne(r, src, avail)
+		walletLeft := base[0].Amount
+		choice, err := b.quoteFunding(r, src, base, walletLeft, planLeft)
 		if err != nil {
 			errs[i] = err
 			continue
 		}
+		q := choice.q
 		q.at = i
 		amount := q.quote.Amount.CeilAmount()
-		if src.plan != nil && planLeft >= amount {
-			// The window covers the whole request, so it funds it: one source per reservation, plan first.
+		if choice.funding == "plan" {
 			q.params.Funding, q.params.SubscriptionID, q.params.WindowSeq = "plan", &src.plan.subscription, &src.plan.seq
 			planLeft -= amount
 		} else {
@@ -274,6 +332,12 @@ func (b *Billing) quoteBatch(reqs []ReserveRequest, src batchSources, usage []Re
 		quoted = append(quoted, q)
 	}
 	return quoted
+}
+
+// isInsufficient reports whether err is a source being too small, the only refusal a second source can cure.
+func isInsufficient(err error) bool {
+	var short *Insufficient
+	return errors.As(err, &short)
 }
 
 func (b *Billing) quoteOne(r ReserveRequest, src batchSources, avail []Available) (quotedReservation, error) {
