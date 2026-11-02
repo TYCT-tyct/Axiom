@@ -107,6 +107,7 @@ type CallRecord struct {
 	ConsentVersion                   string
 	TrainingAllowed                  bool
 	Streamed                         bool
+	CacheHit                         bool   // answered from the response cache, with no upstream attempt
 	PhysicalInput                    *int64 // the upstream's prompt total, nil when it reported none
 }
 
@@ -151,6 +152,7 @@ type row struct {
 	ConsentVersion  string           `json:"consent_version"`
 	TrainingAllowed bool             `json:"training_allowed"`
 	Streamed        bool             `json:"streamed"`
+	CacheHit        bool             `json:"cache_hit"`
 	PhysicalInput   int64            `json:"physical_input"`
 }
 
@@ -244,7 +246,7 @@ func newCallRow(r CallRecord) (row, error) {
 		CostNano: r.CostNano, Currency: r.Currency.String(), FreeOfCharge: r.Free, LatencyMs: r.Latency.Milliseconds(),
 		FirstTokenMs: r.FirstToken.Milliseconds(), FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
 		ConsentVersion: r.ConsentVersion, TrainingAllowed: r.TrainingAllowed, Streamed: r.Streamed,
-		PhysicalInput: physicalInput(r.PhysicalInput),
+		CacheHit: r.CacheHit, PhysicalInput: physicalInput(r.PhysicalInput),
 	}, nil
 }
 

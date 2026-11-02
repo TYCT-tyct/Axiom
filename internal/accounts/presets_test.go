@@ -114,3 +114,38 @@ func TestPresetConfigBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestPresetCache(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		config string
+		on     bool
+		ttl    int64
+		bad    bool
+		absent bool
+	}{
+		{`{}`, false, 0, false, true},
+		{`{"cache_enabled":true,"cache_ttl_seconds":60}`, true, 60, false, false},
+		{`{"cache_enabled":false,"cache_ttl_seconds":86400}`, false, 86400, false, false},
+		{`{"cache_ttl_seconds":0}`, false, 0, true, true},
+		{`{"cache_ttl_seconds":86401}`, false, 0, true, true},
+		{`{"cache_enabled":"yes"}`, false, 0, true, true},
+	} {
+		on, ttl, err := accounts.PresetCache([]byte(tc.config))
+		if tc.bad {
+			if err == nil {
+				t.Errorf("%s: accepted", tc.config)
+			}
+			continue
+		}
+		if tc.absent {
+			if err != nil || on != nil || ttl != 0 {
+				t.Errorf("%s: %v, %d, %v; want absent", tc.config, on, ttl, err)
+			}
+			continue
+		}
+		if err != nil || on == nil || *on != tc.on || ttl != tc.ttl {
+			t.Errorf("%s: %v, %d, %v; want %v, %d", tc.config, on, ttl, err, tc.on, tc.ttl)
+		}
+	}
+}

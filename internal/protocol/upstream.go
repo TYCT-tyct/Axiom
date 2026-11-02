@@ -93,7 +93,7 @@ type eventReader struct {
 
 func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[string]rule, charge func(int) error) {
 	s.ctx, s.charge, s.rw.charge, s.capture = u, charge, charge, o.Capture
-	s.rw.hidesReasoning = u.HidesReasoning
+	s.rw.hidesReasoning, s.rw.cached = u.HidesReasoning, o.Cached
 	s.rw.w.Identity = func(string) string { return o.ID }
 	s.rw.t.Model = o.modelName()
 	s.rw.usageMembers = usageMembers
@@ -344,6 +344,8 @@ func hex4(h []byte) rune {
 // before the response ends (response.created); the ending's is dropped, since the settlement writes the usage object
 // there and a second member of the name would be a duplicate.
 func (p *rewriter) usage() error {
+	p.zeroUsage = p.cached
+	defer func() { p.zeroUsage = false }()
 	if ok, err := p.open('{', "an object"); !ok {
 		if err == nil && !p.ending {
 			return nil
@@ -388,4 +390,69 @@ func keep(names ...string) map[string]rule {
 		m[name] = (*rewriter).skip
 	}
 	return m
+}
+
+// zeroCounts replaces every number in a usage member's value with 0, keeping its shape, strings and booleans. A cache
+// hit reports the same members the upstream did, all zero: it generated nothing and is billed nothing.
+func (p *rewriter) zeroCounts() error {
+	v, err := p.value()
+	if err != nil {
+		return err
+	}
+	p.replace(len(v), string(zeroJSONNumbers(v)))
+	return nil
+}
+
+// zeroJSONNumbers replaces every number in a usage value with 0, keeping its shape, strings and booleans. A cache hit
+// reports the same members the upstream did, all zero: it generated nothing and is billed nothing.
+func zeroJSONNumbers(v jsontext.Value) jsontext.Value {
+	switch v.Kind() {
+	case jsontext.KindNumber:
+		return jsontext.Value("0")
+	case jsontext.KindBeginArray:
+		return zeroJSONArray(v)
+	case jsontext.KindBeginObject:
+		return zeroJSONObject(v)
+	case jsontext.KindInvalid, jsontext.KindNull, jsontext.KindFalse, jsontext.KindTrue,
+		jsontext.KindString, jsontext.KindEndObject, jsontext.KindEndArray:
+		return v
+	default:
+		return v
+	}
+}
+
+func zeroJSONArray(v jsontext.Value) jsontext.Value {
+	dec := jsontext.NewDecoder(bytes.NewReader(v))
+	out := []byte{'['}
+	for first := true; dec.PeekKind() != jsontext.KindEndArray; first = false {
+		if !first {
+			out = append(out, ',')
+		}
+		item, err := dec.ReadValue()
+		if err != nil {
+			return v
+		}
+		out = append(out, zeroJSONNumbers(item)...)
+	}
+	return append(out, ']')
+}
+
+func zeroJSONObject(v jsontext.Value) jsontext.Value {
+	dec := jsontext.NewDecoder(bytes.NewReader(v))
+	out := []byte{'{'}
+	for first := true; dec.PeekKind() != jsontext.KindEndObject; first = false {
+		if !first {
+			out = append(out, ',')
+		}
+		name, err := dec.ReadValue()
+		if err != nil {
+			return v
+		}
+		item, err := dec.ReadValue()
+		if err != nil {
+			return v
+		}
+		out = append(append(append(out, name...), ':'), zeroJSONNumbers(item)...)
+	}
+	return append(out, '}')
 }

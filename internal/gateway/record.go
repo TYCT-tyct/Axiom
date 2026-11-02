@@ -37,6 +37,7 @@ type trail struct {
 	currency  platform.Currency
 	clientApp string
 	app       appAttribution
+	cacheHit  bool
 }
 
 func (s *session) trail() trail {
@@ -46,7 +47,7 @@ func (s *session) trail() trail {
 	}
 	return trail{
 		call: s.c, tries: s.tries, at: at, start: s.start, currency: s.currency,
-		clientApp: clientAppOf(s.req.Header), app: attributionOf(s.req.Header),
+		clientApp: clientAppOf(s.req.Header), app: attributionOf(s.req.Header), cacheHit: s.cacheHit,
 	}
 }
 
@@ -217,6 +218,7 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 		Latency:       end.Sub(t.start),
 		Route:         route,
 		Streamed:      c.Request.Stream,
+		CacheHit:      t.cacheHit,
 		PhysicalInput: physicalInputOf(f),
 	}
 	if f.PriceVersion != nil {

@@ -70,6 +70,7 @@ function Details({ call }: { call: Schemas["Call"] }) {
           <Row label={t("call.requestClass")}>{orDash(call.request_class)}</Row>
           <Row label={t("call.serviceTier")}>{orDash(call.service_tier)}</Row>
           <Row label={t("call.finish")}>{orDash(call.finish_reason)}</Row>
+          {call.cache_hit ? <Row label={t("call.cache")}>{t("call.cacheHit")}</Row> : null}
           <Row label={t("call.latency")}>{t("calls.ms", { value: format.number(call.latency_ms) })}</Row>
           <Row label={t("call.firstToken")}>
             {call.first_token_ms === 0 ? "—" : t("calls.ms", { value: format.number(call.first_token_ms) })}
@@ -83,7 +84,11 @@ function Details({ call }: { call: Schemas["Call"] }) {
       <div className="space-y-4">
         <Panel title={t("call.cost")}>
           <p className="px-4 pt-4 text-xl text-t1 tabular-nums [overflow-wrap:anywhere]">{format.money(call.price)}</p>
-          {call.free ? <p className="px-4 pt-1 pb-4 text-ui text-t3">{t("call.free")}</p> : null}
+          {call.cache_hit ? (
+            <p className="px-4 pt-1 pb-4 text-ui text-t3">{t("call.cacheHitBody")}</p>
+          ) : call.free ? (
+            <p className="px-4 pt-1 pb-4 text-ui text-t3">{t("call.free")}</p>
+          ) : null}
         </Panel>
         <Panel title={t("call.usage")}>
           {usage.length === 0 ? (

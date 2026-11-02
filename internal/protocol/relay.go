@@ -105,6 +105,9 @@ type RelayOptions struct {
 	// ZeroOutput is set when the request capped its output at 0, as legacy completions' max_tokens 0 does: a choice that
 	// finishes without text is then the whole answer, not an empty response.
 	ZeroOutput bool
+	// Cached is set when the upstream bytes are a response-cache replay: the answer was not generated for this call, so
+	// every usage count in it is zero, as OpenRouter bills a hit (docs/domains/gateway.md「响应缓存」).
+	Cached bool
 	// ServerTool makes the relay record the calls of the gateway's web search function. A gateway call that runs no
 	// loop leaves it false, so it allocates nothing for this.
 	ServerTool      bool

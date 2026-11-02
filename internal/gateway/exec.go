@@ -98,6 +98,9 @@ type ExecDeps struct {
 	Outstanding *Outstanding
 	// Search is the deployment's search engines; nil means none is configured.
 	Search SearchBackends
+	// Cache is the response cache. It is optional: nil leaves every call uncached, and a node that has one still caches
+	// only the calls whose request asks for it (docs/domains/gateway.md「响应缓存」).
+	Cache *ResponseCache
 }
 
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.
@@ -167,6 +170,10 @@ func (x *Executor) Run(w http.ResponseWriter, r *http.Request, c *Call) {
 		s.conclude(ctx, *e)
 		return
 	}
+	if e, ok := s.cached(ctx); ok {
+		s.conclude(ctx, e)
+		return
+	}
 	s.conclude(ctx, s.attempts(ctx))
 }
 
@@ -225,6 +232,18 @@ type session struct {
 	echo     *protocol.EchoPrompts
 	echoHeld int64
 
+	// The response cache's share of this call. cacheHit says the answer was replayed; cacheAge, cacheTTL and cacheSource
+	// are the headers that go with it. cacheBody is the upstream reply a successful attempt captured, ready to be
+	// written after this call's settlement; cacheHeld is the node's budget it occupies until release.
+	cacheHit               bool
+	cacheAge, cacheTTL     time.Duration
+	cacheSource            uuid.UUID
+	cacheBody              []byte
+	cacheHeld              int64
+	cacheReady             bool
+	cacheFormat            protocol.Format
+	cacheModel, cacheState string
+
 	concluded bool
 	handedOff bool // the call's slots are the background's to give back
 
@@ -245,6 +264,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 		deadline: now.Add(x.Limits.cfg.MaxCall), logger: x.Logger.With("request_id", c.ID.String()),
 		writeFor: x.Limits.cfg.WriteTimeout, aggregate: !c.Request.Stream && !c.Compact,
 		files: c.files, parses: c.Request.FileParses, serverFunction: c.serverLoop,
+		cacheTTL: c.cache.ttl,
 	}
 }
 
@@ -295,8 +315,23 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	}
 	s.handedOff = s.x.settled(ctx, s, o, err)
 	if err == nil {
+		s.storeCache(ctx)
 		s.x.log(ctx, s.trail(), o, f, time.Now())
 	}
+}
+
+// storeCache offers the reply this call captured after its settlement succeeded. It is asynchronous and bounded: the
+// call has already been answered, so a full queue or a slow database can only lose the cache entry.
+func (s *session) storeCache(ctx context.Context) {
+	if s.x.Cache == nil || !s.cacheReady || !s.c.cache.enabled || len(s.cacheBody) == 0 {
+		return
+	}
+	s.x.Cache.Offer(ctx, cacheEntry{
+		scope: s.c.Admitted.Scope, site: uuid.UUID(s.c.site.ID), account: uuid.UUID(s.c.caller.AccountID()),
+		key: s.c.cache.key, source: s.c.ID, format: s.cacheFormat, model: s.cacheModel, state: s.cacheState,
+		body: s.cacheBody, ttl: s.c.cache.ttl,
+	})
+	s.cacheBody = nil
 }
 
 // closeLoop gives every attempt of the model-side loop the last attempt belongs to how the loop ended: its answer
@@ -406,6 +441,8 @@ func (s *session) release() {
 	s.echoHeld = 0
 	s.x.Memory.Refund(s.outHeld)
 	s.outHeld, s.out = 0, nil
+	s.x.Memory.Refund(s.cacheHeld)
+	s.cacheHeld = 0
 }
 
 // readEcho reads the prompt sizes of a completion that echoes, once for all its attempts, charged to the node's budget

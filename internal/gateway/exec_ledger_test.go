@@ -139,6 +139,7 @@ func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 		Router: r.router, Upstreams: up, Limits: r.limits, Memory: r.memory, Logger: slog.New(slog.NewTextHandler(logWriter{r.t}, nil)),
 		Ledger: ledger, Costs: costs, Alive: r.billing.Alive, IdentitySecret: []byte("0123456789abcdef"), Quality: quality.New(nil),
 		Outstanding: r.handler.Outstanding, // one node: the handler's requests and the executor's calls on one count
+		Cache:       r.cache,
 	})
 	if err != nil {
 		r.t.Fatal(err)

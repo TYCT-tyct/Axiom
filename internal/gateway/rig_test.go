@@ -65,6 +65,8 @@ type rig struct {
 	memory   *protocol.Memory
 	handler  *Handler
 	server   *httptest.Server
+	keys     *secret.Keyring
+	cache    *ResponseCache
 
 	cfg       Config
 	price     string                           // every model's sale schedule, unless a test lists another
@@ -131,6 +133,21 @@ type rigOptions struct {
 // the clock allows and they fail for that alone.
 var rigs = make(chan struct{}, 3)
 
+// testKeyring is a loaded ring for the cache's envelope encryption: one key, version 1.
+func testKeyring(t *testing.T) *secret.Keyring {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "keys")
+	line := "1:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))) + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := secret.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys
+}
+
 func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	t.Helper()
 	rigs <- struct{}{}
@@ -159,7 +176,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	// One source, as cmd/axiom wires it: the routing snapshot and billing reserve by the gateway's segment settings,
 	// so a rig that segments in one of them segments in both.
 	o.routing.Segments = r.cfg.Segments()
-	mods := []pg.Module{accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module()}
+	mods := []pg.Module{accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module(), Module()}
 	if o.suppliers {
 		mods = append(mods, suppliers.Module())
 	}
@@ -178,6 +195,12 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if r.limits, err = New(r.cfg, meter.Meter("test")); err != nil {
 		t.Fatal(err)
 	}
+	r.keys = testKeyring(t)
+	r.cache, err = NewResponseCache(r.db, r.keys, platformScope, slog.New(slog.DiscardHandler), meter.Meter("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go r.cache.Run(t.Context())
 	r.warmConnections(12)
 	r.seedSite()
 	r.seedCatalog()
