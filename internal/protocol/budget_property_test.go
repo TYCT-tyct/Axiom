@@ -35,7 +35,8 @@ func budgetShapes() map[string]map[Format]string {
 	// that the test runs in CI under the race detector, which slows every preparation many times over.
 	const many, size = 4000, 1 << 18
 	long := strings.Repeat("x", size)
-	escaped := strings.Repeat(bs+"u0041", size/4) // bs is the backslash: a JSON escape, not the letter
+	escaped := strings.Repeat(bs+"u0041", size/4)
+	escapedName := strings.Repeat(bs+"u0062", size/4) // a member name the scans must not unquote // bs is the backslash: a JSON escape, not the letter
 	pdf := "data:application/pdf;base64," + strings.Repeat("QUJD", size/4)
 	deep := strings.Repeat(`{"type":"object","properties":{"a":`, 100) + `{"type":"string"}` + strings.Repeat(`}}`, 100)
 	repeat := func(s string, n int) string { return strings.TrimSuffix(strings.Repeat(s+",", n), ",") }
@@ -163,6 +164,16 @@ func budgetShapes() map[string]map[Format]string {
 			Messages:  messages(`{"role":"user","content":"a"}`, `,"metadata":{"user_id":"`+long+`"}`),
 			Responses: responses(`{"role":"user","content":"a"}`, `,"user":"`+strings.Repeat(`\n`, size/2)+`"`),
 		},
+		"long names": {
+			Chat:      chat(`{"role":"user","content":"x"}`, `,"`+long+`":1,"`+escapedName+`":2`),
+			Messages:  messages(`{"role":"user","content":"x"}`, `,"`+long+`":1,"`+escapedName+`":2`),
+			Responses: responses(`{"role":"user","content":"x"}`, `,"`+long+`":1,"`+escapedName+`":2`),
+		},
+		"forced choice": {
+			Chat:      chat(`{"role":"user","content":"x"}`, `,"`+long+`":1,"tools":[],"tool_choice":"required","max_tool_calls":3`),
+			Messages:  messages(`{"role":"user","content":"x"}`, `,"`+long+`":1,"tools":[],"tool_choice":{"type":"any"},"max_tool_calls":3`),
+			Responses: responses(`{"role":"user","content":"x"}`, `,"`+long+`":1,"tools":[],"tool_choice":"required","max_tool_calls":3`),
+		},
 		"modalities": {
 			Chat: chat(`{"role":"user","content":"a"}`, `,"modalities":[`+repeat(`"text"`, many)+`]`),
 		},
@@ -211,17 +222,24 @@ func shapeCases(t *testing.T, shape string, from Format, body []byte) []budgetCa
 			t: Target{Format: to, Model: "up", MaxOutput: 4096}, w: Rewrites{Identity: derived},
 		}
 		cases = append(cases, c)
-		if shape == "long text" || shape == "tiny parts" || shape == "tool calls" {
-			search, loop := c, c
-			search.name += " searching"
-			search.w.NativeSearch = 1
-			loop.name += " in a server loop"
-			loop.w.ServerLoop, loop.w.ServerFunction, loop.w.HasMaxToolCalls = true, true, true
-			cases = append(cases, search, loop)
+		if !slices.Contains(toolShapes, shape) {
+			continue
 		}
+		search, loop, last := c, c, c
+		search.name += " searching"
+		search.w.NativeSearch = 1
+		loop.name += " in a server loop" // its function goes in, the client's max_tool_calls out
+		loop.w.ServerLoop, loop.w.ServerFunction, loop.w.HasMaxToolCalls = true, true, true
+		last.name += " at the loop's last step" // its function is gone: a choice that forces it goes too
+		last.w.ServerLoop, last.w.HasMaxToolCalls = true, true
+		cases = append(cases, search, loop, last)
 	}
 	return cases
 }
+
+// toolShapes are the shapes the provider's search and the server loop are added to: the edits splice the body's top
+// level, so long bodies, many tools, long member names and a choice left forcing nothing are the ones that cost.
+var toolShapes = []string{"long text", "tiny parts", "tool calls", "long names", "forced choice"}
 
 // derived is an identifier's derived value, as long as a real one.
 func derived(string) string { return "0123456789abcdef0123456789abcdef" }

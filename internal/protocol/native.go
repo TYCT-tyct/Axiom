@@ -58,31 +58,33 @@ func (b *budget) prepare(r *Request, body []byte, t Target, w Rewrites) (u Upstr
 func (b *budget) serverRewrites(body []byte, t Target, w Rewrites) ([]byte, error) {
 	var err error
 	if w.ServerLoop || w.HasMaxToolCalls && (t.Format == Chat || t.Format == Messages) {
-		if body, err = b.within(body, RemoveMaxToolCalls); err != nil {
+		if body, err = b.within(body, 1, RemoveMaxToolCalls); err != nil {
 			return nil, err
 		}
 	}
 	if w.ServerLoop && !w.ServerFunction {
 		drop := func(body []byte) ([]byte, error) { return DropForcedToolChoice(t.Format, body) }
-		if body, err = b.within(body, drop); err != nil {
+		// Chat loses function_call too, into a body of its own.
+		if body, err = b.within(body, 2, drop); err != nil {
 			return nil, err
 		}
 	}
 	if w.ServerFunction {
 		inject := func(body []byte) ([]byte, error) { return injectServerFunction(t.Format, body) }
-		if body, err = b.within(body, inject); err != nil {
+		if body, err = b.within(body, 1, inject); err != nil {
 			return nil, err
 		}
 	}
 	return body, nil
 }
 
-// within runs step, which splices a member in or out of body and may scan it, under a reservation drawn before it
-// starts: a body of the input's size, the room the server function takes and a decoder's state. Of the reservation
-// only the output's capacity stays drawn; the input stays drawn too until prepare settles what it holds.
+// within runs step, which splices members in or out of body, making at most bodies new bodies, and scans it, under a
+// reservation drawn before it starts: that many bodies of the input's size, the room the server function takes and a
+// decoder's state. The scans allocate nothing that grows with the body (topMember). Of the reservation only the
+// output's capacity stays drawn; the input stays drawn too until prepare settles what it holds.
 // TestPrepareAllocatesOnlyWhatItDrew holds the bound.
-func (b *budget) within(body []byte, step func([]byte) ([]byte, error)) ([]byte, error) {
-	reserve := rounded(int64(len(body))+serverFunctionCost(true)) + bodyDecoderMemory
+func (b *budget) within(body []byte, bodies int, step func([]byte) ([]byte, error)) ([]byte, error) {
+	reserve := int64(bodies)*rounded(int64(len(body))+serverFunctionCost(true)) + bodyDecoderMemory
 	if err := b.draw(reserve); err != nil {
 		return nil, err
 	}
@@ -138,21 +140,20 @@ func injectNativeSearch(format Format, body []byte, maxUses int, b *budget) ([]b
 	var tools []byte
 	var hasOptions bool
 	for dec.PeekKind() != '}' {
-		name, err := dec.ReadToken()
+		name, err := dec.ReadValue()
 		if err != nil {
 			return nil, err
 		}
-		key := name.String() // before ReadValue, which voids the token
 		value, err := dec.ReadValue()
 		if err != nil {
 			return nil, err
 		}
 		end := int(dec.InputOffset())
-		switch key {
-		case "tools":
+		switch {
+		case nameIs(name, "tools"):
 			toolsStart, toolsEnd = end-len(value), end
 			tools = bytes.TrimSpace(value) // a slice of body: the decoder reads a bytes.Buffer in place
-		case "web_search_options":
+		case nameIs(name, "web_search_options"):
 			hasOptions = true
 		}
 	}
@@ -207,16 +208,15 @@ func ResponsesMaxToolCalls(body []byte) (int64, error) {
 		return 0, err
 	}
 	for dec.PeekKind() != '}' {
-		name, err := dec.ReadToken()
+		name, err := dec.ReadValue()
 		if err != nil {
 			return 0, err
 		}
-		key := name.String()
 		value, err := dec.ReadValue()
 		if err != nil {
 			return 0, err
 		}
-		if key != "max_tool_calls" {
+		if !nameIs(name, "max_tool_calls") {
 			continue
 		}
 		n, err := strconv.ParseInt(string(bytes.TrimSpace(value)), 10, 64)
@@ -265,23 +265,34 @@ func maxToolCalls(body []byte) (start, end, value int, err error) {
 	}
 	start, end = -1, -1
 	for dec.PeekKind() != '}' {
-		name, err := dec.ReadToken()
+		name, err := dec.ReadValue()
 		if err != nil {
 			return 0, 0, 0, err
 		}
-		key := name.String()
 		v, err := dec.ReadValue()
 		if err != nil {
 			return 0, 0, 0, err
 		}
-		if key == "max_tool_calls" {
+		if nameIs(name, "max_tool_calls") {
 			start, end = int(dec.InputOffset())-len(v), int(dec.InputOffset())
-			if n, parseErr := strconv.Atoi(string(bytes.TrimSpace(v))); parseErr == nil {
-				value = n
-			}
+			value = smallInt(v, value)
 		}
 	}
 	return start, end, value, nil
+}
+
+// smallInt is v as an int, or otherwise when it is not one. No int is longer than 20 digits: a longer value is not
+// one, and is not copied to a string to learn so.
+func smallInt(v []byte, otherwise int) int {
+	digits := bytes.TrimSpace(v)
+	if len(digits) > 20 {
+		return otherwise
+	}
+	n, err := strconv.Atoi(string(digits))
+	if err != nil {
+		return otherwise
+	}
+	return n
 }
 
 // nativeSearchTool is the tool object a format adds, maxUses searches at most. Chat's switch is a member, not a tool.

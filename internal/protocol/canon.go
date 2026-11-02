@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"axiom/internal/platform/jsonx"
 )
@@ -457,12 +458,12 @@ func (c *canon) maxOutput() int64 {
 func (c *canon) unsupported() error {
 	for name, v := range c.Unknown {
 		if !isDefault(name, v) {
-			return &NotSupported{Reason: name + " is not converted"}
+			return &NotSupported{Reason: notConverted(name)}
 		}
 	}
 	for _, m := range c.Messages {
 		for name := range m.Unknown {
-			return &NotSupported{Reason: "a message's " + name + " is not converted"}
+			return &NotSupported{Reason: "a message's " + notConverted(name)}
 		}
 	}
 	return nil
@@ -471,6 +472,15 @@ func (c *canon) unsupported() error {
 // isDefault reports whether a member the conversion does not express is absent in effect: null, or the value Chat
 // takes when it is left out (OpenAI《Create chat completion》, read 2026-10-14), so a client that writes the default
 // is not refused.
+// notConverted is the reason a member is refused, naming it by its first 64 bytes at most: a name may be as long as
+// the body, and the refusal is not drawn from the budget.
+func notConverted(name string) string {
+	if len(name) > 64 {
+		name = strings.ToValidUTF8(name[:64], "") + "…"
+	}
+	return name + " is not converted"
+}
+
 func isDefault(name string, v jsontext.Value) bool {
 	if v.Kind() == 'n' {
 		return true

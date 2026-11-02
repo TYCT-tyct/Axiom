@@ -51,7 +51,7 @@ func (o requestObject) take(name string) jsontext.Value {
 
 func (o requestObject) remaining() error {
 	for name := range o {
-		return &NotSupported{Reason: name + " is not converted"}
+		return &NotSupported{Reason: notConverted(name)}
 	}
 	return nil
 }
@@ -59,7 +59,7 @@ func (o requestObject) remaining() error {
 func (o requestObject) remainingDefaults() error {
 	for name, v := range o {
 		if !isDefault(name, v) {
-			return &NotSupported{Reason: name + " is not converted"}
+			return &NotSupported{Reason: notConverted(name)}
 		}
 	}
 	return nil
