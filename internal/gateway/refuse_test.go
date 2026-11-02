@@ -23,18 +23,18 @@ import (
 // before its stream uses Chat's.
 func TestErrorShells(t *testing.T) {
 	t.Parallel()
-	refusal := &Refusal{Status: 402, Code: "credits_insufficient", RetryAfter: 600, Details: map[string]any{"limit_source": "key_limit"}}
+	refusal := &Refusal{Status: 403, Code: "credits_insufficient", RetryAfter: 600, Details: map[string]any{"limit_source": "openrouter_key_limit"}}
 	for _, tc := range []struct {
 		format protocol.Format
 		want   string
 	}{
-		{protocol.Chat, `{"error":{"code":"credits_insufficient","message":"The credits available are not enough for this request.","metadata":{"error_type":"credits_insufficient","limit_source":"key_limit"},"param":"","type":"billing_error"}}`},
-		{protocol.Responses, `{"error":{"code":"credits_insufficient","message":"The credits available are not enough for this request.","metadata":{"error_type":"credits_insufficient","limit_source":"key_limit"},"param":"","type":"billing_error"}}`},
-		{protocol.Messages, `{"error":{"error_type":"credits_insufficient","limit_source":"key_limit","message":"The credits available are not enough for this request.","type":"billing_error"},"type":"error"}`},
+		{protocol.Chat, `{"error":{"code":403,"message":"The credits available are not enough for this request.","metadata":{"error_type":"credits_insufficient","limit_source":"openrouter_key_limit"},"param":"","type":"billing_error"}}`},
+		{protocol.Responses, `{"error":{"code":403,"message":"The credits available are not enough for this request.","metadata":{"error_type":"credits_insufficient","limit_source":"openrouter_key_limit"},"param":"","type":"billing_error"}}`},
+		{protocol.Messages, `{"error":{"error_type":"credits_insufficient","limit_source":"openrouter_key_limit","message":"The credits available are not enough for this request.","type":"billing_error"},"type":"error"}`},
 	} {
 		rec := httptest.NewRecorder()
 		writeRefusal(rec, tc.format, refusal)
-		if rec.Code != 402 || rec.Body.String() != tc.want || rec.Header().Get("Content-Type") != "application/json" {
+		if rec.Code != 403 || rec.Body.String() != tc.want || rec.Header().Get("Content-Type") != "application/json" {
 			t.Errorf("format %d: %d %s", tc.format, rec.Code, rec.Body)
 		}
 		if rec.Header().Get("Retry-After") != "60" || rec.Header().Get("Connection") != "" {
@@ -52,28 +52,30 @@ func TestARefusalIsAnErrorOfProtocol(t *testing.T) {
 	for _, tc := range []struct {
 		refusal *Refusal
 		typ     protocol.ErrorType
+		status  int
 	}{
-		{errUnauthorized, protocol.Authentication},
-		{&Refusal{Status: 402, Code: "credits_insufficient"}, protocol.CreditsInsufficient},
-		{errKeyRate, protocol.RateLimited},
-		{ErrOverloaded, protocol.Overloaded},
-		{errNoModel, protocol.ModelNotFound},
-		{&Refusal{Status: 404, Code: "no_endpoint"}, protocol.NoEndpoint},
-		{&Refusal{Status: 503, Code: "no_endpoint"}, protocol.NoEndpointForNow},
-		{invalid("x"), protocol.InvalidRequest},
-		{unsupported("colour"), protocol.InvalidRequest},
-		{errTooLarge, protocol.RequestTooLarge},
-		{&Refusal{Status: 400, Code: "context_length_exceeded"}, protocol.ContextLengthExceeded},
-		{&Refusal{Status: 403, Code: "permission_denied"}, protocol.PermissionDenied},
-		{&Refusal{Status: 403, Code: "content_policy_violation"}, protocol.ContentPolicyViolation},
-		{errBodyTimeout, protocol.Timeout},
+		{errUnauthorized, protocol.Authentication, 0},
+		{&Refusal{Status: 402, Code: "credits_insufficient"}, protocol.CreditsInsufficient, 0},
+		{&Refusal{Status: 403, Code: "credits_insufficient"}, protocol.CreditsInsufficient, 403},
+		{errKeyRate, protocol.RateLimited, 0},
+		{ErrOverloaded, protocol.Overloaded, 0},
+		{errNoModel, protocol.ModelNotFound, 0},
+		{&Refusal{Status: 404, Code: "no_endpoint"}, protocol.NoEndpoint, 0},
+		{&Refusal{Status: 503, Code: "no_endpoint"}, protocol.NoEndpointForNow, 0},
+		{invalid("x"), protocol.InvalidRequest, 0},
+		{unsupported("colour"), protocol.InvalidRequest, 0},
+		{errTooLarge, protocol.RequestTooLarge, 0},
+		{&Refusal{Status: 400, Code: "context_length_exceeded"}, protocol.ContextLengthExceeded, 0},
+		{&Refusal{Status: 403, Code: "permission_denied"}, protocol.PermissionDenied, 0},
+		{&Refusal{Status: 403, Code: "content_policy_violation"}, protocol.ContentPolicyViolation, 0},
+		{errBodyTimeout, protocol.Timeout, 0},
 	} {
 		for _, f := range []protocol.Format{protocol.Chat, protocol.Responses, protocol.Messages} {
 			rec := httptest.NewRecorder()
 			r := *tc.refusal
 			r.Message = "m"
 			writeRefusal(rec, f, &r)
-			status, body := protocol.RenderError(f, protocol.Error{Type: tc.typ, Message: "m"}, nil)
+			status, body := protocol.RenderError(f, protocol.Error{Type: tc.typ, Message: "m", Status: tc.status}, nil)
 			if rec.Code != status {
 				t.Errorf("%s, format %d: status %d, protocol's %d", r.Code, f, rec.Code, status)
 			}
@@ -137,6 +139,8 @@ func TestRefusalOfAnError(t *testing.T) {
 	}{
 		"a refusal, wrapped":                     {wrapped(errAccountGate), 429, "rate_limited", false},
 		"a balance too small":                    {wrapped(&billing.Insufficient{Source: billing.SourceBalance}), 402, "credits_insufficient", false},
+		"a key limit too small":                  {wrapped(&billing.Insufficient{Source: billing.SourceKey}), 403, "credits_insufficient", false},
+		"a workspace budget too small":           {wrapped(&billing.Insufficient{Source: billing.SourceWorkspace}), 403, "credits_insufficient", false},
 		"a model that is not there":              {catalog.ErrModelNotFound, 404, "model_not_found", false},
 		"a retired model":                        {catalog.ErrRetired, 404, "model_not_found", false},
 		"a catalog gone stale":                   {catalog.ErrStale, 503, "overloaded", false},
@@ -213,8 +217,8 @@ func TestAccountSuspensionErrorEnvelopes(t *testing.T) {
 		if rec.Code != 403 || detail["type"] != "permission_error" {
 			t.Fatal(rec.Code, body)
 		}
-		if format != protocol.Messages && detail["code"] != "permission_denied" {
-			t.Fatal("403 must keep a string code", body)
+		if format != protocol.Messages && detail["code"] != float64(403) {
+			t.Fatal("403 must be the numeric code", body)
 		}
 	}
 }

@@ -268,15 +268,18 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	}
 	switch {
 	case e.reply != nil:
+		var failure protocol.Error
+		var failed bool
 		if s.c.Format.Direct() {
-			body, failure, failed := s.rewriteDirect(e.reply, fin)
-			if failed {
-				s.answer(ctx, ended{err: failure}, fin)
-				break
-			}
-			e.reply = body
+			e.reply, failure, failed = s.rewriteDirect(e.reply, fin)
+		} else {
+			e.reply, failure, failed = s.rewriteCompact(e.reply, fin)
 		}
-		s.respond(e.status, e.reply) // as it came, after the settlement (docs/domains/gateway.md「转发规则」)
+		if failed {
+			s.answer(ctx, ended{err: failure}, fin)
+			break
+		}
+		s.respond(e.status, e.reply) // with the usage and cost of the settlement (docs/domains/gateway.md「转发规则」)
 	case e.relay == nil:
 		if fin != nil && fin.Cost.Cmp(platform.Exact{}) == 0 {
 			fin = nil // an error that cost nothing says nothing of the charge
@@ -354,6 +357,21 @@ func (s *session) rewriteDirect(reply []byte, fin *protocol.Final) ([]byte, prot
 		model = s.servedModel(s.last)
 	}
 	body, err := protocol.RewriteDirectReply(s.c.Format, reply, s.c.ID.String(), model, seen, fin)
+	if err != nil {
+		return nil, protocol.Error{Type: protocol.UpstreamFailed}, true
+	}
+	return body, protocol.Error{}, false
+}
+
+// rewriteCompact rewrites the usage of a compact reply after settlement, so the call reports what it used and was
+// charged like every other call. Its copy was charged to the node's budget in pass, and the body was validated there,
+// so the settlement is never followed by a failure of the call's own making.
+func (s *session) rewriteCompact(reply []byte, fin *protocol.Final) ([]byte, protocol.Error, bool) {
+	var seen protocol.Usage
+	if s.last != nil {
+		seen = s.last.usage
+	}
+	body, err := protocol.RewriteCompactReply(reply, seen, fin)
 	if err != nil {
 		return nil, protocol.Error{Type: protocol.UpstreamFailed}, true
 	}

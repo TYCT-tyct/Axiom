@@ -46,9 +46,9 @@ type AdmitKeyRow struct {
 	AccountActive bool
 }
 
-// What a call with the key may do, read in the key's account scope in the admission transaction: no row unless the
-// request came to an enabled API domain of the key's site and the key and workspace are usable. The account state
-// comes with the same row so suspension is distinguishable without another query.
+// What a call key may do, read in the key's account scope in the admission transaction: no row unless the request came
+// to an enabled API domain of the key's site and the key and workspace are usable. The account state comes with the
+// same row so suspension is distinguishable without another query. A model call admits a call key alone.
 func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]AdmitKeyRow, error) {
 	rows, err := db.Query(ctx, admitKey, arg.KeyID, arg.Domain, arg.ClientIp)
 	if err != nil {
@@ -65,6 +65,71 @@ func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]
 			&i.LimitReset,
 			&i.Budget,
 			&i.BudgetReset,
+			&i.AdmissionIds,
+			&i.AccountActive,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const admitReadKey = `-- name: AdmitReadKey :many
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, k.kind, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)))::bytea AS admission_ids, a.status = 'active' AS account_active
+FROM accounts.api_keys k
+JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
+JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
+JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
+LEFT JOIN accounts.users owner ON owner.account_id=a.id
+WHERE k.id = $1
+    AND accounts.domain_site($2::text, 'api') = k.site_id
+    AND k.kind IN ('call', 'management') AND k.status = 'active' AND k.deleted_at IS NULL
+    AND (k.expires_at IS NULL OR k.expires_at > now())
+    AND (k.ip_allow IS NULL OR $3::inet <<= ANY (k.ip_allow))
+    AND w.status = 'active' AND w.deleted_at IS NULL
+`
+
+type AdmitReadKeyParams struct {
+	KeyID    uuid.UUID
+	Domain   string
+	ClientIp netip.Addr
+}
+
+type AdmitReadKeyRow struct {
+	PresetID      *uuid.UUID
+	Models        []string
+	SpendLimit    *int64
+	LimitReset    *string
+	Budget        *int64
+	BudgetReset   *string
+	Kind          string
+	AdmissionIds  []byte
+	AccountActive bool
+}
+
+// What a key may do for the read-only endpoints OpenRouter opens to management keys as well as call keys, read in the
+// key's account scope in the admission transaction. The checks and the row are AdmitKey's; only the kinds differ.
+func (q *Queries) AdmitReadKey(ctx context.Context, db DBTX, arg AdmitReadKeyParams) ([]AdmitReadKeyRow, error) {
+	rows, err := db.Query(ctx, admitReadKey, arg.KeyID, arg.Domain, arg.ClientIp)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdmitReadKeyRow
+	for rows.Next() {
+		var i AdmitReadKeyRow
+		if err := rows.Scan(
+			&i.PresetID,
+			&i.Models,
+			&i.SpendLimit,
+			&i.LimitReset,
+			&i.Budget,
+			&i.BudgetReset,
+			&i.Kind,
 			&i.AdmissionIds,
 			&i.AccountActive,
 		); err != nil {
