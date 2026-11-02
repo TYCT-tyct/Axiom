@@ -102,10 +102,8 @@ type callNode struct {
 func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	billing.WarmTokenizers()
 	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
-	// stamps it on every plan and the executor reads it from there, not from the configuration. The segment settings
-	// are the gateway's too, and billing takes the same ones in startLedger, so routing never marks an entry segmentable
-	// with no sizes to reserve it by (#229).
-	router, err := routing.New(routing.Config{AttemptWindow: d.gate.StartBy, Segments: d.gate.Segments()})
+	// stamps it on every plan and the executor reads it from there, not from the configuration.
+	router, err := routing.New(routingConfig(d.gate))
 	if err != nil {
 		return callNode{}, err
 	}
@@ -160,14 +158,27 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	return n, nil
 }
 
-// startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call.
-func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metric.Meter, logger *slog.Logger, signals alert.Sink) (*billing.Billing, error) {
-	return billing.Start(ctx, db, pg.PlatformScope(), billing.Config{
+// routingConfig is what the router gets from the node's settings. Its segment settings are the gateway's, the same
+// ones ledgerConfig hands billing, so routing never marks an entry segmentable with no sizes for billing to reserve it
+// by (#229).
+func routingConfig(gate gateway.Config) routing.Config {
+	return routing.Config{AttemptWindow: gate.StartBy, Segments: gate.Segments()}
+}
+
+// ledgerConfig is what billing gets from the node's settings; routingConfig takes the same segment settings from
+// gate.Segments(), so an entry one of them segments is one the other can reserve.
+func ledgerConfig(gate gateway.Config, logger *slog.Logger, meter metric.Meter, signals alert.Sink) billing.Config {
+	return billing.Config{
 		HolderTTL: gate.HolderTTL, Heartbeat: gate.HolderHeartbeat, ReapGrace: gate.ReclaimGrace,
 		// A reservation lives as long as a call may take plus the grace its settlement has: the cleanup takes over
 		// what no settlement will only once the call cannot still be running.
 		Lifetime: gate.MaxCall + gate.SettleGrace, Segments: gate.Segments(), Logger: logger, Meter: meter, Alerts: signals,
-	}, suppliers.CallWrites{})
+	}
+}
+
+// startLedger starts billing under a new holder, with the lifetimes the gateway's configuration gives a call.
+func startLedger(ctx context.Context, db *pg.DB, gate gateway.Config, meter metric.Meter, logger *slog.Logger, signals alert.Sink) (*billing.Billing, error) {
+	return billing.Start(ctx, db, pg.PlatformScope(), ledgerConfig(gate, logger, meter, signals), suppliers.CallWrites{})
 }
 
 // newCallNode makes the executor that runs admitted calls and the handler that admits them.
