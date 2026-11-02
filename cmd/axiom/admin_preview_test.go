@@ -366,6 +366,65 @@ func TestPricingRuleEditValidatesDisabledChanges(t *testing.T) {
 	}
 }
 
+// TestPreviewMarginUsesEffectivePrices checks the margin against the prices a request actually pays: fallback items
+// (reasoning from output) are included, the base band and an explicit above:0 tier stay distinct, and an item the cost
+// does not price is unknown rather than free.
+func TestPreviewMarginUsesEffectivePrices(t *testing.T) {
+	t.Parallel()
+	schedule := func(body string) catalog.Schedule {
+		t.Helper()
+		s, err := catalog.ParseSchedule([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	sale := schedule(`{"v":1,"currency":"USD","rates":{"input":"2","output":"2","reasoning":"1"}}`)
+	cost := schedule(`{"v":1,"currency":"USD","rates":{"input":"1","output":"1"}}`)
+	if got := marginOf(sale, cost); got == nil || *got != "0" {
+		t.Errorf("reasoning fallback margin = %v, want 0", got)
+	}
+	sale = schedule(`{"v":1,"currency":"USD","rates":{"input":"2","output":"2"},"context_tiers":{"method":"whole","basis":["input"],"tiers":[{"above":0,"rates":{"input":"4","output":"4"}}]}}`)
+	cost = schedule(`{"v":1,"currency":"USD","rates":{"input":"1","output":"1"},"context_tiers":{"method":"whole","basis":["input"],"tiers":[{"above":0,"rates":{"input":"2","output":"2"}}]}}`)
+	if got := marginOf(sale, cost); got == nil || *got != "0.5" {
+		t.Errorf("base and above:0 margins = %v, want 0.5", got)
+	}
+}
+
+// TestPreviewEndpointUsesCurrentSaleForMargin: when serving endpoints show the current published price, the margin is
+// that price's margin, not the margin of a proposal waiting for confirmation.
+func TestPreviewEndpointUsesCurrentSaleForMargin(t *testing.T) {
+	t.Parallel()
+	endpoint := uuid.NewV7()
+	schedule := func(body string) catalog.Schedule {
+		t.Helper()
+		s, err := catalog.ParseSchedule([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	cost := schedule(`{"v":1,"currency":"USD","rates":{"input":"1","output":"1"}}`)
+	proposed := schedule(`{"v":1,"currency":"USD","rates":{"input":"4","output":"4"}}`)
+	current := schedule(`{"v":1,"currency":"USD","rates":{"input":"2","output":"2"}}`)
+	p := billing.Publication{
+		Endpoints:          billing.EndpointPrices{endpoint: proposed},
+		RequestedEndpoints: billing.EndpointPrices{endpoint: proposed},
+		Costs:              billing.EndpointPrices{endpoint: cost},
+		Floors:             billing.EndpointPrices{endpoint: cost},
+	}
+	row, err := previewEndpointRow("model", "slug", endpoint, p, billing.Sold{Version: uuid.NewV7(), Schedule: current}, audience{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Sale == nil || row.Sale.Rates.Input == nil || *row.Sale.Rates.Input != "2" {
+		t.Errorf("shown sale = %+v, want the current 2", row.Sale)
+	}
+	if row.MarginRatio == nil || *row.MarginRatio != "0.5" {
+		t.Errorf("margin = %v, want 0.5 (current sale 2 over cost 1)", row.MarginRatio)
+	}
+}
+
 // TestPreviewEndpointRows: a cost-plus proposal shows one row per endpoint, each with its own sale, cost, floor status
 // and margin. The model-level envelope would show only the dearest endpoint and hide the other's price.
 //

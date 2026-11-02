@@ -260,6 +260,9 @@ func publicationDecision(policy PricePolicy, p Publication, old ReadPublications
 		previous = current.Schedule
 	}
 	status := automaticPriceStatus(policy, previous, next, floor, old.CurrentID != nil)
+	if p.Endpoints != nil {
+		status = automaticEndpointPriceStatus(policy, current, p.Endpoints, p.Floors, old.CurrentID != nil)
+	}
 	if status == "blocked" {
 		current = Sold{}
 	}
@@ -276,6 +279,62 @@ func automaticPriceStatus(policy PricePolicy, previous, next, floor catalog.Sche
 		return "published"
 	}
 	return "pending"
+}
+
+// automaticEndpointPriceStatus applies the same change and floor gates to every endpoint's own price. A model-level
+// envelope can stay unchanged while one endpoint's cost, and so its price, moves; comparing only the envelope would
+// publish that move without confirmation. A missing head is a first publication; a version that has no price for an
+// endpoint being published now is a new charge and waits for the same confirmation as any other move.
+func automaticEndpointPriceStatus(policy PricePolicy, current Sold, next, floors EndpointPrices, hasHead bool) string {
+	if !hasHead {
+		return "published"
+	}
+	if len(next) == 0 || len(floors) == 0 {
+		return "blocked"
+	}
+	unsafe, overCap, moved, ok := endpointChanges(policy, current, next, floors)
+	if !ok {
+		return "blocked"
+	}
+	switch {
+	case unsafe && overCap:
+		return "blocked"
+	case unsafe:
+		return "published"
+	case overCap || moved:
+		return "pending"
+	default:
+		return "published"
+	}
+}
+
+func endpointChanges(policy PricePolicy, current Sold, next, floors EndpointPrices) (unsafe, overCap, moved, ok bool) {
+	for endpoint, price := range next {
+		previous, exists := current.PriceFor(endpoint)
+		if !exists {
+			return false, false, false, false
+		}
+		floor, exists := floors[endpoint]
+		if !exists {
+			return false, false, false, false
+		}
+		safe, over, changed, ok := endpointChange(policy, previous, price, floor)
+		if !ok {
+			return false, false, false, false
+		}
+		unsafe = unsafe || !safe
+		overCap = overCap || over
+		moved = moved || changed
+	}
+	return unsafe, overCap, moved, true
+}
+
+func endpointChange(policy PricePolicy, previous, next, floor catalog.Schedule) (safe, overCap, moved, ok bool) {
+	safe, err := previous.CoversCost(floor)
+	if err != nil {
+		return false, false, false, false
+	}
+	return safe, priceIncreased(previous, next, policy.MaxIncreaseRatio), priceMoved(previous, next, policy.ChangeRatio), true
 }
 
 func priceIncreased(previous, next catalog.Schedule, ratio string) bool {

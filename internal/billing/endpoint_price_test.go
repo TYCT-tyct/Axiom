@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"bytes"
 	"testing"
 	"uuid"
 
@@ -15,6 +16,45 @@ func rateOf(t *testing.T, schedule catalog.Schedule, item catalog.Item) string {
 		t.Fatalf("%s is not priced", item)
 	}
 	return rate.String()
+}
+
+// TestEnvelopeKeepsSingleEndpointFallbacks pins the canonical envelope of one endpoint to the empty-schedule fold the
+// shared-price path used before endpoint prices. That fold expands reasoning and image fallbacks, so a candidate built
+// after an upgrade keeps the bytes it had before and an administrator's existing exception is not re-decided.
+func TestEnvelopeKeepsSingleEndpointFallbacks(t *testing.T) {
+	t.Parallel()
+
+	c := priceCost(t, catalog.ModelID(uuid.NewV7()), "0.000001")
+	converted, err := c.converted(usd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := envelopeOf(EndpointPrices{c.Endpoint: converted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := empty.Aligned(converted, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotJSON, err := got.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantJSON, err := want.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotJSON, wantJSON) {
+		t.Fatalf("single-endpoint envelope changed its canonical form:\n got %s\nwant %s", gotJSON, wantJSON)
+	}
+	if _, ok := got.BaseRate(catalog.ItemReasoning); !ok {
+		t.Fatal("the envelope did not expand the reasoning fallback")
+	}
 }
 
 //nolint:cyclop,gocognit // one publication through its per-endpoint prices, the model envelope and an old version
@@ -100,6 +140,26 @@ func TestCostPlusPricesEachEndpoint(t *testing.T) {
 		if !ok || rateOf(t, got, catalog.ItemInput) != rateOf(t, old.Schedule, catalog.ItemInput) {
 			t.Errorf("an old version did not serve endpoint %s at its one price", id)
 		}
+	}
+}
+
+// TestEndpointRaiseInsideTheEnvelopeBlocks: the dearest endpoint keeps the model envelope unchanged while a cheaper
+// endpoint's cost rises threefold. The model-level gate would publish the cheaper endpoint's new price without
+// confirmation; the endpoint gate must stop it.
+func TestEndpointRaiseInsideTheEnvelopeBlocks(t *testing.T) {
+	t.Parallel()
+
+	f := newPrices(t)
+	f.method(plus("0"))
+	second := priceCost(t, f.model, "0.000002")
+	f.costs = append(f.costs, second)
+	if sold := f.refresh()[f.model]; sold.Version == uuid.Nil() {
+		t.Fatal("the first publication has no version")
+	}
+	f.costs[0].UnitValue = "3"
+	f.refresh()
+	if got := f.state().Status; got != "blocked" {
+		t.Fatalf("status after a cheaper endpoint's cost rose = %s, want blocked", got)
 	}
 }
 

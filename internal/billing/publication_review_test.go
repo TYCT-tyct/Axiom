@@ -45,6 +45,30 @@ func TestFloorCapIgnoresDecreases(t *testing.T) {
 	}
 }
 
+// TestEndpointChangeGateCatchesMovesInsideTheEnvelope covers the case the model-level gate cannot see: one endpoint's
+// price moves while the dearest endpoint keeps the model envelope unchanged.
+func TestEndpointChangeGateCatchesMovesInsideTheEnvelope(t *testing.T) {
+	t.Parallel()
+
+	endpoint := uuid.NewV7()
+	previous := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"1"}}`)
+	moved := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"2","output":"1"}}`)
+	floor := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"1"}}`)
+	current := Sold{Version: uuid.NewV7(), Schedule: previous, Endpoints: EndpointPrices{endpoint: previous}}
+	policy := PricePolicy{ChangeRatio: "0.1", MaxIncreaseRatio: "1"}
+	if got := automaticEndpointPriceStatus(policy, current, EndpointPrices{endpoint: moved}, EndpointPrices{endpoint: floor}, true); got != "pending" {
+		t.Fatalf("endpoint move status = %s, want pending", got)
+	}
+	aboveCap := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"5","output":"1"}}`)
+	if got := automaticEndpointPriceStatus(policy, current, EndpointPrices{endpoint: aboveCap}, EndpointPrices{endpoint: floor}, true); got != "pending" {
+		t.Fatalf("safe endpoint above cap status = %s, want pending", got)
+	}
+	floor = moved
+	if got := automaticEndpointPriceStatus(policy, current, EndpointPrices{endpoint: aboveCap}, EndpointPrices{endpoint: floor}, true); got != "blocked" {
+		t.Fatalf("unsafe endpoint above cap status = %s, want blocked", got)
+	}
+}
+
 func TestCostPlusIgnoresReferenceRevision(t *testing.T) {
 	t.Parallel()
 

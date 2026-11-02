@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"uuid"
@@ -129,13 +130,13 @@ func envelopeOf(prices EndpointPrices) (catalog.Schedule, error) {
 	if len(prices) == 0 {
 		return catalog.Schedule{}, ErrUnpriced
 	}
-	var envelope catalog.Schedule
-	for i, id := range slices.SortedFunc(maps.Keys(prices), func(a, b uuid.UUID) int { return a.Compare(b) }) {
-		if i == 0 {
-			envelope = prices[id]
-			continue
-		}
-		var err error
+	ids := slices.SortedFunc(maps.Keys(prices), func(a, b uuid.UUID) int { return a.Compare(b) })
+	empty, err := catalog.ParseSchedule(fmt.Appendf(nil, `{"v":1,"currency":%q,"rates":{}}`, prices[ids[0]].Currency().String()))
+	if err != nil {
+		return catalog.Schedule{}, err
+	}
+	envelope := empty
+	for _, id := range ids {
 		envelope, err = envelope.Aligned(prices[id], false)
 		if err != nil {
 			return catalog.Schedule{}, err
