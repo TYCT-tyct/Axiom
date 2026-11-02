@@ -62,9 +62,10 @@ type routeFixture struct {
 	health *quality.Monitor
 	models *ModelList
 
-	logs  *strings.Builder
-	deps  RouteDeps
-	count Count
+	logs    *strings.Builder
+	deps    RouteDeps
+	count   Count
+	byokFee string // the site's multiplier for an account's own key, empty for none
 
 	served     catalog.ModelID // listed, priced, and its spec declares everything
 	nospec     catalog.ModelID // listed and priced, but its spec says nothing of what an endpoint offers
@@ -196,7 +197,13 @@ func (f *routeFixture) build(endpoints []suppliers.Routable) *routing.Snapshot {
 		Prices: func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
 			return f.prices, nil
 		},
-		Models:       f.models,
+		Models: f.models,
+		ByokFee: func(context.Context) (string, error) {
+			if f.byokFee == "" {
+				return "0", nil
+			}
+			return f.byokFee, nil
+		},
 		UnknownItems: func(context.Context) ([]billing.UnknownItem, error) { return f.items, nil },
 		Quality:      f.health,
 		Router:       f.router,

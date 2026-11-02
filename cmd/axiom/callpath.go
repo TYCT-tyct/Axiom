@@ -213,15 +213,27 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and
-// models collects the model list published with it.
+// models collects the model list published with it. Apart from the main site's currency, every source is read through a
+// closure, so a test that holds only the suppliers service builds the wiring (callpath_test.go).
 func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service, health *quality.Monitor, routable *atomic.Bool,
 	prices func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error), models *gateway.ModelList,
 ) *gateway.RouteDeps {
+	// The currency only denominates BYOK prices; no other routing source needs the accounts service, which a caller
+	// may not hold.
+	var siteCurrency platform.Currency
+	if d.accounts != nil {
+		if site, ok := d.accounts.MainSite(); ok {
+			siteCurrency = site.Currency
+		}
+	}
 	return &gateway.RouteDeps{
 		ExchangeRates: exchangeRates(d),
 		Endpoints:     func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
 		Catalog:       d.catalog,
 		Prices:        prices,
+		ByokFee:       byokFee(d),
+		ByokRules:     byokRules(d),
+		SiteCurrency:  siteCurrency,
 		Models:        models,
 		UnknownItems:  unknownItems(d.db),
 		Quality:       health,
@@ -373,6 +385,10 @@ func filterPriceCosts(sold map[catalog.ModelID]billing.Sold, snap *catalog.Snaps
 func priceCosts(endpoints []suppliers.Routable, rates []platform.ExchangeRate, currency platform.Currency) []billing.PriceCost {
 	costs := make([]billing.PriceCost, 0, len(endpoints))
 	for _, e := range endpoints {
+		if e.Byok {
+			// A key's zero cost is the account's, not the platform's: it must not set the floor of a shared sale price.
+			continue
+		}
 		var rate platform.ExchangeRate
 		if e.Currency != currency {
 			for _, r := range rates {
@@ -437,5 +453,37 @@ func claimedByCatalog(cat *catalog.Catalog) func(catalog.ModelID) (quality.Claim
 			others = append(others, name)
 		}
 		return quality.Claimed{Author: m.AuthorName, Others: others}, true
+	}
+}
+
+// byokRules reads the accounts' no-fallback choices on every build. They come from the key rows, not from the routable
+// endpoints, so a key the provider refused keeps its rule (docs/domains/routing.md「自带的供应商 key」).
+func byokRules(d callDeps) func(context.Context) ([]routing.ByokRule, error) {
+	return func(ctx context.Context) ([]routing.ByokRule, error) {
+		rules, err := suppliers.ByokRules(ctx, d.db, pg.PlatformScope())
+		if err != nil {
+			return nil, err
+		}
+		out := make([]routing.ByokRule, 0, len(rules))
+		for _, r := range rules {
+			out = append(out, routing.ByokRule{Account: routing.AccountID(r.Account), Model: catalog.ModelID(r.Model)})
+		}
+		return out, nil
+	}
+}
+
+// byokFee reads the main site's BYOK rate on every build. The route build is the main site's, so the rate is its: a
+// secondary site's own rate governs calls made against that site, which this node does not serve.
+func byokFee(d callDeps) func(context.Context) (string, error) {
+	return func(ctx context.Context) (rate string, err error) {
+		site, ok := d.accounts.MainSite()
+		if !ok {
+			return "0", nil
+		}
+		err = d.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
+			rate, err = billing.ByokFee(ctx, tx, uuid.UUID(site.ID))
+			return err
+		})
+		return rate, err
 	}
 }

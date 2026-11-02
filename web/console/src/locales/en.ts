@@ -1,5 +1,6 @@
 import type { Messages } from "@axiom/ui";
-import receipt from "./en/receipt";
+import { en as providerKeys } from "./provider-keys";
+import { en as receipt } from "./receipt";
 import { en as statement } from "./statement";
 import type zh from "./zh";
 
@@ -19,6 +20,7 @@ export default {
     models: "Models & prices",
     overview: "Overview",
     keys: "API keys",
+    providerKeys: "Provider keys",
     calls: "Calls",
     balance: "Balance",
     redeem: "Redeem",
@@ -370,6 +372,7 @@ export default {
       copy: "Copy {{name}}",
     },
   },
+  providerKeys,
   calls: {
     priceVersion: "Price version {{version}}",
     priceVersionUnavailable: "Price version unavailable",

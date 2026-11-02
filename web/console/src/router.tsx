@@ -60,6 +60,11 @@ const routeTree = root.addChildren([
     }),
     createRoute({
       getParentRoute: () => app,
+      path: "/provider-keys",
+      component: lazyRouteComponent(() => import("./pages/provider-keys")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
       path: "/models",
       validateSearch: (search: Record<string, unknown>) => ({
         q: text(search.q),

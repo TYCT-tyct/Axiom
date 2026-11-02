@@ -85,7 +85,7 @@ func newAdmins(t *testing.T, list ...adapter.Adapter) admins {
 	}
 	keys := newKeys(t)
 	clock := &testClock{t: time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)}
-	admin, err := NewAdmin(AdminConfig{Keys: keys, Egress: egress.NewForTesting(egresstest.Loopback(t)), Registry: r, Clock: clock.now})
+	admin, err := NewAdmin(AdminConfig{Keys: keys, Egress: egress.NewForTesting(egresstest.Loopback(t)), Registry: r, Clock: clock.now, Byok: true})
 	if err != nil {
 		t.Fatal(err)
 	}

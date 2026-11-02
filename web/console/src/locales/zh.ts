@@ -1,6 +1,7 @@
 // The console's messages in Chinese, the source every other language follows.
+import { zh as providerKeys } from "./provider-keys";
+import { zh as receipt } from "./receipt";
 import { zh as statement } from "./statement";
-import receipt from "./zh/receipt";
 
 export default {
   announcements: {
@@ -18,6 +19,7 @@ export default {
     models: "模型与价格",
     overview: "概览",
     keys: "API key",
+    providerKeys: "供应商 key",
     calls: "调用记录",
     balance: "余额",
     redeem: "兑换",
@@ -357,6 +359,7 @@ export default {
       copy: "复制 {{name}}",
     },
   },
+  providerKeys,
   calls: {
     priceVersion: "价格版本 {{version}}",
     priceVersionUnavailable: "价格版本不可用",

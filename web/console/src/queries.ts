@@ -71,6 +71,11 @@ export const keysQuery = (filters: KeyFilters = {}) =>
     getNextPageParam: nextCursor,
   });
 
+export const providerKeysQuery = queryOptions({
+  queryKey: [accountKey, "provider-keys"],
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/provider-keys", { signal })),
+});
+
 export const redemptionsQuery = infiniteQueryOptions({
   queryKey: [accountKey, "redemptions"],
   queryFn: ({ pageParam, signal }) =>

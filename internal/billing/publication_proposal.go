@@ -134,6 +134,13 @@ func costPlusPrice(r Rule, converted EndpointPrices, costErr error, currency pla
 	return saleProposal{requested: requested, endpoints: endpoints, costs: converted}, err
 }
 
+// ReferenceFor is the reference price a reference-multiplier rule reads for a model: the site's currency first, then
+// USD or the supported currencies when conversion is allowed. It is exported so a caller outside billing can price the
+// same row the sale rules read.
+func ReferenceFor(snap *catalog.Snapshot, model catalog.ModelID, currency platform.Currency, conversion string) catalog.ReferencePrice {
+	return saleReference(snap, model, currency, Method{Kind: "reference_multiplier", CurrencyConversion: conversion})
+}
+
 func saleReference(snap *catalog.Snapshot, model catalog.ModelID, currency platform.Currency, method Method) catalog.ReferencePrice {
 	if method.Kind != "reference_multiplier" {
 		return catalog.ReferencePrice{}
