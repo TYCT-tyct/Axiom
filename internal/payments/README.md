@@ -282,7 +282,7 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 | 一笔订单的已冻结、发送中、待确认、成功的退款额度之和 ≤ 入账额度 | 退款在订单行锁下插入并检查；数据库 CHECK 管单行，合计由锁和性质测试守 |
 | 一笔订单的退款金额之和 ≤ 净付款额，退完时恰好相等 | 金额 = ⌊额度 × 净付款额 ÷ 入账额度⌋，让累计额度达到入账额度的那一笔取余数；退不退手续费由第一笔退款成功时在 billing 批次上固定，订单在同一事务保存相同政策（`refund_with_fee`；第一笔失败则解冻，该字段保持未设，下次重试按当时的政策重新定），净付款额不随政策变；订单行锁保证一笔在途，billing 在余额行锁内按批次和账本计算并核对累计现金；性质测试：任意汇率序列（锁定、宽限期内、到账汇率）和任意部分退款拆分下，Σ退款 ≤ Σ实付 |
 | 退款只按"已冻结 → 发送中 → 成功 / 失败 / 待确认 → 成功 / 失败"变化，转分录、解冻各在一个事务里 | 状态的条件更新与 billing 的调用同事务；"发送中"在调渠道之前单独提交；测试注入渠道超时、渠道失败、提交失败，不出现"扣了没退"或"退了没扣" |
-| 超过站点额度的退款必须两名不同的人批准，请求人不能批准自己的退款 | 冻结时把 `second_required` 快照到退款行；第一次批准只写 `first_approved_by`，第二次才写 `approved_by`；`refunds_second_approval` 和 `refunds_first_approver` 两个 CHECK 让旧节点直接写 `approved_by` 也失败；测试覆盖额度边界、同一人重复批准不发送、冻结后改额度不影响在途申请 |
+| 超过站点额度的退款必须两名不同的人批准，请求人不能批准自己的退款 | 冻结时把 `second_required` 快照到退款行；第一次批准只写 `first_approved_by`，第二次才写 `approved_by`；`refunds_second_approval` 和 `refunds_first_approver` 两个 CHECK 让旧节点直接写 `approved_by` 也失败；旧节点插入时不带新列，`BEFORE INSERT` 触发器按当前额度补快照，随后旧节点写 `approved_by` 仍被 CHECK 拒绝；测试覆盖额度边界、同一人重复批准不发送、冻结后改额度不影响在途申请、旧节点插入和一步批准 |
 | 拒付暂停账户，胜诉不自动解除 | `open`/`lost` 在记拒付的事务里调 `accounts.SetAccountSuspended`；账户模块同事务写审计和 `accounts.account_suspended` 信号，准入拒绝该账户的新调用；测试：打开两次只暂停一次，胜诉不改变，解除只能由操作员发起 |
 | 一笔拒付至多扣一次，胜诉至多冲正一次，扣回的额度加成功退款的额度 ≤ 入账额度 | `order_disputes` 的 `(商户账户, 渠道, Dispute ID)` 唯一键和 `state` 条件更新；只有 `recorded` 能变 `applied`、只有 `applied` 能变 `reversed`；`won` 状态不可被后到事件覆盖；扣钱前检查批次存在、没有在途退款、净额相符；billing 的 `chargeback`/`chargeback_reverse` 以 `(批次, revision)` 为账本幂等键；重复事件由 `order_disputes` 的行状态挡住，billing 不按 Dispute ID 去重 |
 | 拒付不会和退款同时动同一笔冻结 | 扣钱前在订单行锁下检查该订单所有退款的 `frozen`/`sending`/`pending`；有在途就只记 `dispute_refund_in_flight`，不扣钱；退款入口只接受已支付/部分退款订单，被拒付的订单不能新开退款 |
