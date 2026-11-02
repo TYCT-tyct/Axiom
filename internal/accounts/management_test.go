@@ -241,6 +241,34 @@ func TestManagementRevalidatesOnEveryNode(t *testing.T) {
 	}
 }
 
+// TestManagementKeyReads: the read-only endpoints OpenRouter opens to management keys admit one, and Admission.Kind
+// says which kind the key is; a call key is admitted as before, and the management key is still no call key.
+func TestManagementKeyReads(t *testing.T) {
+	t.Parallel()
+	db, _, s, callKey := callSetup(t)
+	manager := managementKey(t, db, s, accounts.KeySettings{Name: "manager"})
+	for _, tc := range []struct {
+		name, key, want string
+	}{
+		{"a management key", manager.Text.Reveal(), accounts.ManagementKey},
+		{"a call key", callKey, accounts.CallKey},
+	} {
+		c, err := s.AuthenticateKey(t.Context(), accounts.SiteID(s1), tc.key)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var kind string
+		err = s.AdmitRead(t.Context(), c, accounts.AdmitRequest{Domain: apiDomain, ClientIP: client},
+			func(_ pg.Tx, a accounts.Admission) error { kind = a.Kind(); return nil })
+		if err != nil || kind != tc.want {
+			t.Errorf("%s: kind %q, error %v, want %q", tc.name, kind, err, tc.want)
+		}
+	}
+	if err := call(t, s, s1, manager.Text.Reveal(), apiDomain); !errors.Is(err, accounts.ErrUnknownKey) {
+		t.Errorf("a management key made a call: %v", err)
+	}
+}
+
 func TestManagementCeilingIsIndependent(t *testing.T) {
 	t.Parallel()
 	db, _, s, _ := callSetup(t)

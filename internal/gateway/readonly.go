@@ -35,23 +35,25 @@ func totalCredits(f billing.Funds) float64 { return credits(f.Balance) + credits
 
 // auxRoutes adds the endpoints that are not calls: the token count and the read-only account endpoints
 // (docs/domains/gateway.md「给其他中转站对接的接口」). Every one needs a usable key, and the reads happen in the same
-// transaction that checks it, so the key's account is the only data they can see.
+// transaction that checks it, so the key's account is the only data they can see. `/key` and `/credits` take a
+// management key too, as OpenRouter's do; the rest are for call keys.
 func (h *Handler) auxRoutes(prefix string) {
 	h.mux.HandleFunc("POST "+prefix+"/messages/count_tokens", h.countTokens)
-	h.mux.HandleFunc("GET "+prefix+"/key", h.reading(h.keyInfo))
-	h.mux.HandleFunc("GET "+prefix+"/credits", h.reading(h.accountCredits))
-	h.mux.HandleFunc("GET "+prefix+"/generation", h.reading(h.generation))
-	h.mux.HandleFunc("GET "+prefix+"/generation/content", h.reading(h.generationContent))
-	h.mux.HandleFunc("GET "+prefix+"/activity", h.reading(h.activity))
-	h.mux.HandleFunc("GET "+prefix+"/dashboard/billing/subscription", h.reading(h.subscription))
-	h.mux.HandleFunc("GET "+prefix+"/dashboard/billing/usage", h.reading(h.legacyUsage))
+	h.mux.HandleFunc("GET "+prefix+"/key", h.reading(h.keyInfo, true))
+	h.mux.HandleFunc("GET "+prefix+"/credits", h.reading(h.accountCredits, true))
+	h.mux.HandleFunc("GET "+prefix+"/generation", h.reading(h.generation, false))
+	h.mux.HandleFunc("GET "+prefix+"/generation/content", h.reading(h.generationContent, false))
+	h.mux.HandleFunc("GET "+prefix+"/activity", h.reading(h.activity, false))
+	h.mux.HandleFunc("GET "+prefix+"/dashboard/billing/subscription", h.reading(h.subscription, false))
+	h.mux.HandleFunc("GET "+prefix+"/dashboard/billing/usage", h.reading(h.legacyUsage, false))
 }
 
 // reader produces the body of a read-only endpoint from the key's admission, inside its transaction.
 type reader func(ctx context.Context, tx pg.Tx, a accounts.Admission, q url.Values) (any, error)
 
 // reading serves a GET that shows the key's own account. Errors take Chat's shell, which OpenRouter's clients read.
-func (h *Handler) reading(serve reader) http.HandlerFunc {
+// anyKey admits a management key as well as a call key, for the two endpoints OpenRouter opens to both.
+func (h *Handler) reading(serve reader, anyKey bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		release, ok := h.ipSlot(w, r, protocol.Chat)
 		if !ok {
@@ -61,7 +63,11 @@ func (h *Handler) reading(serve reader) http.HandlerFunc {
 		_, caller, err := h.authenticate(r)
 		var out any
 		if err == nil {
-			err = h.authorise(r, caller, func(ctx context.Context, tx pg.Tx, a accounts.Admission) (err error) {
+			authorise := h.authorise
+			if anyKey {
+				authorise = h.authoriseRead
+			}
+			err = authorise(r, caller, func(ctx context.Context, tx pg.Tx, a accounts.Admission) (err error) {
 				out, err = serve(ctx, tx, a, r.URL.Query())
 				return err
 			})
@@ -108,7 +114,7 @@ func (h *Handler) keyInfo(ctx context.Context, tx pg.Tx, a accounts.Admission, _
 	data := map[string]any{
 		"label": info.Label, "name": info.Name, "usage": credits(use.Total), "usage_daily": credits(use.Day),
 		"usage_weekly": credits(use.Week), "usage_monthly": credits(use.Month), "limit": nil, "limit_remaining": nil,
-		"limit_reset": nil, "expires_at": nil, "is_free_tier": false, "is_management_key": false,
+		"limit_reset": nil, "expires_at": nil, "is_free_tier": false, "is_management_key": a.Kind() == accounts.ManagementKey,
 		"budgets": []budgetView{}, "effective_budget": nil, "rate_limit": h.keyRateLimit(a),
 	}
 	if limited {

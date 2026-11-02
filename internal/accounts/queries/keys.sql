@@ -5,10 +5,11 @@ SELECT k.key_id::uuid AS key_id, k.account_id::uuid AS account_id, k.workspace_i
 FROM accounts.key_tenant(@site_id::uuid, @hashes::bytea[]) AS k (key_id, account_id, workspace_id);
 
 -- name: AdmitKey :many
--- What a call with the key may do, read in the key's account scope in the admission transaction: no row unless the
+-- What a key of one of kinds may do, read in the key's account scope in the admission transaction: no row unless the
 -- request came to an enabled API domain of the key's site and the key and workspace are usable. The account state
--- comes with the same row so suspension is distinguishable without another query.
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)))::bytea AS admission_ids, a.status = 'active' AS account_active
+-- comes with the same row so suspension is distinguishable without another query. A model call asks for a call key
+-- alone; the read-only endpoints OpenRouter opens to management keys ask for both.
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, k.kind, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)))::bytea AS admission_ids, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
@@ -16,7 +17,7 @@ JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
 LEFT JOIN accounts.users owner ON owner.account_id=a.id
 WHERE k.id = @key_id
     AND accounts.domain_site(@domain::text, 'api') = k.site_id
-    AND k.kind = 'call' AND k.status = 'active' AND k.deleted_at IS NULL
+    AND k.kind = ANY(@kinds::text[]) AND k.status = 'active' AND k.deleted_at IS NULL
     AND (k.expires_at IS NULL OR k.expires_at > now())
     AND (k.ip_allow IS NULL OR @client_ip::inet <<= ANY (k.ip_allow))
     AND w.status = 'active' AND w.deleted_at IS NULL;
