@@ -31,7 +31,8 @@ func (m *ModelList) Public(a billing.Audience) []PublicModel {
 	for i := range l.models {
 		entry := &l.models[i]
 		sold := entry.sold.For(a)
-		if !sold.Available() {
+		price, ok := sold.ModelPrice(entry.served)
+		if !sold.Available() || !ok {
 			continue
 		}
 		abilities := make([]string, 0, len(entry.serving.Abilities.List()))
@@ -46,7 +47,7 @@ func (m *ModelList) Public(a billing.Audience) []PublicModel {
 			MaxOutput:     entry.serving.MaxOutput,
 			Streams:       entry.serving.Streams,
 			Abilities:     abilities,
-			Pricing:       sold.Schedule.View(),
+			Pricing:       price.View(),
 		})
 	}
 	slices.SortFunc(models, func(a, b PublicModel) int {
