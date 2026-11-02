@@ -408,6 +408,19 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	// the gateway reads every answer as one, so an endpoint lacking either cannot serve a generation.
 	streams := serving.Streams && r.Streams
 	dialect := model.Dialect()
+	// Detection can only narrow what the catalog declares: a capability or request parameter measured lacking is
+	// removed, and a measured context or output ceiling replaces the catalog's when it is shorter. Supported only lifts
+	// an earlier lack inside quality, because expressing a capability still needs the catalog's dialect
+	// (docs/domains/quality.md「实测的能力与上限」).
+	caps := capabilities(serving.Abilities) &^ measured.Facts.Unsupported
+	params := parameterSupport(serving, dialect) &^ measured.Facts.UnsupportedParameters
+	context, maxOutput := serving.Context, serving.MaxOutput
+	if measured.Facts.Context > 0 && measured.Facts.Context < context {
+		context = measured.Facts.Context
+	}
+	if measured.Facts.MaxOutput > 0 && measured.Facts.MaxOutput < maxOutput {
+		maxOutput = measured.Facts.MaxOutput
+	}
 	e := routing.Endpoint{
 		ID: routing.EndpointID(r.ID), Supplier: routing.SupplierID(r.Supplier), Codename: r.Codename, Model: catalog.ModelID(r.Model), ModelSlug: model.Slug,
 		// openrouter/free chooses only these: the catalog's :free entry, whose sale price the check above pins at zero.
@@ -432,10 +445,10 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		Quantization: r.Quantization,
 		ServiceTiers: tiers,
 		Native:       native, Served: served,
-		Caps:       capabilities(serving.Abilities),
-		Parameters: parameterSupport(serving, dialect),
-		Context:    serving.Context,
-		MaxOutput:  serving.MaxOutput,
+		Caps:       caps,
+		Parameters: params,
+		Context:    context,
+		MaxOutput:  maxOutput,
 		// The spec records no image size and no page limit, so ImageTokens, PageTokens and FilePages stay 0: billing
 		// takes an image or a file of unknown size to fill the whole window when it reserves, which must never be below
 		// what a request spends, and charges an estimate when the upstream reports no input (billing.InputEstimate).

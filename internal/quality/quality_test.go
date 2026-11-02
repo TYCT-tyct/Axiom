@@ -232,12 +232,18 @@ func TestProbeResultsScoreTheEndpoint(t *testing.T) {
 func TestObserveConcurrently(t *testing.T) {
 	m := New(nil)
 	ids := [2]suppliers.EndpointID{{1}, {2}}
+	eps := [2]suppliers.Routable{
+		{ID: ids[0], Model: uuid.NewV7(), Upstream: "a", Formats: []protocol.Format{protocol.Chat}},
+		{ID: ids[1], Model: uuid.NewV7(), Upstream: "b", Formats: []protocol.Format{protocol.Chat}},
+	}
 	var wg sync.WaitGroup
 	for g := range 8 {
 		wg.Go(func() {
 			for range 100 {
 				m.Observe(t.Context(), Observation{Endpoint: ids[g%2], Failure: failed500, Ended: t0})
+				m.Measure(eps[g%2], Facts{Context: int64(1000 + g)})
 				_ = measured(m, ids[g%2], t0)
+				_ = m.MeasuredFor(eps[g%2], t0)
 			}
 		})
 	}
