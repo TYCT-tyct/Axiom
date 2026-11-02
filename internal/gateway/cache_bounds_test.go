@@ -3,6 +3,8 @@ package gateway
 import (
 	"bytes"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
@@ -64,6 +66,40 @@ func (r *rig) insertResponseCacheRows(a account, n, size int) {
 		       0, 'm', gen_random_uuid(), decode('00', 'hex'), decode(repeat('00', 12), 'hex'),
 		       decode(repeat('00', 60), 'hex'), 1, %d, now() - make_interval(secs => g), now() + interval '1 hour'
 		FROM generate_series(1, %d) AS g`, siteID, a.id, size, n))
+}
+
+// TestAReplacementBetweenTheTwoReadsIsAMiss: the metadata read reserves the budget, so a store that replaces the row
+// before the payload read must not fetch the replacement's larger ciphertext. The hook interleaves exactly there.
+func TestAReplacementBetweenTheTwoReadsIsAMiss(t *testing.T) {
+	t.Parallel()
+	r := ledgerRig(t)
+	a := r.newAccount(0)
+	scope := pg.NewScope(false, nil, []uuid.UUID{a.id})
+	key := [32]byte{8}
+	small := bytes.Repeat([]byte("s"), 256)
+	r.cache.store(t.Context(), cacheEntry{
+		scope: scope, site: siteID, account: a.id, key: key, source: uuid.NewV7(),
+		format: protocol.Chat, model: "m", endpoint: uuid.NewV7(), body: small, ttl: time.Minute,
+	})
+	var logged bytes.Buffer
+	r.cache.logger = slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	r.cache.afterMetadata = func() {
+		r.cache.afterMetadata = nil
+		r.cache.store(t.Context(), cacheEntry{
+			scope: scope, site: siteID, account: a.id, key: key, source: uuid.NewV7(),
+			format: protocol.Chat, model: "m", endpoint: uuid.NewV7(),
+			body: bytes.Repeat([]byte("l"), 256<<10), ttl: time.Minute,
+		})
+	}
+	mem := protocol.NewMemory(1 << 20)
+	got, ok := r.cache.Lookup(t.Context(), scope, a.id, key, mem)
+	if ok {
+		got.release(mem)
+		t.Fatal("the replacement was returned as a hit")
+	}
+	if strings.Contains(logged.String(), "could not be opened") {
+		t.Fatalf("the replacement's ciphertext was read and failed to open:\n%s", logged.String())
+	}
 }
 
 // TestACacheLookupReservesTheNodesMemory: a hit charges the ciphertext, plaintext and copy it holds before allocating

@@ -109,23 +109,24 @@ func (r *rig) publish() {
 }
 
 type rigOptions struct {
-	config    func(*Config)
-	endpoints func(name string, e *routing.Endpoint)
-	routing   routing.Config
-	prefer    string // the endpoint the preset puts first; the cheapest comes first when empty
-	memory    int64
-	conns     int                // the most connections the database pool opens; the driver's own limit when zero
-	body      time.Duration      // how long Public gives a request to send its body; a minute when zero
-	search    websearch.Searcher // the web plugin's backend, nil when the node has none
-	backends  SearchBackends     // the whole engine set, when a test needs names and prices; search is used otherwise
-	parser    fileparse.Parser   // the file-parser plugin's backend, nil when the node has none
-	price     string             // the model's sale schedule, the cheap one when empty
-	alphaSpec string             // alpha's spec, the basic one when empty
-	spec      string             // the model's spec, the basic one when empty
-	suppliers bool               // the suppliers tables too, for a real suppliers service to price attempts
-	lifetime  time.Duration      // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
-	proxies   []netip.Prefix     // the reverse proxies the handler believes, none when empty
-	cache     *kv.Client         // the shared cache the precheck counts in, none when nil
+	config        func(*Config)
+	endpoints     func(name string, e *routing.Endpoint)
+	routing       routing.Config
+	prefer        string // the endpoint the preset puts first; the cheapest comes first when empty
+	memory        int64
+	conns         int                // the most connections the database pool opens; the driver's own limit when zero
+	body          time.Duration      // how long Public gives a request to send its body; a minute when zero
+	search        websearch.Searcher // the web plugin's backend, nil when the node has none
+	backends      SearchBackends     // the whole engine set, when a test needs names and prices; search is used otherwise
+	parser        fileparse.Parser   // the file-parser plugin's backend, nil when the node has none
+	price         string             // the model's sale schedule, the cheap one when empty
+	alphaSpec     string             // alpha's spec, the basic one when empty
+	spec          string             // the model's spec, the basic one when empty
+	suppliers     bool               // the suppliers tables too, for a real suppliers service to price attempts
+	lifetime      time.Duration      // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
+	proxies       []netip.Prefix     // the reverse proxies the handler believes, none when empty
+	cache         *kv.Client         // the shared cache the precheck counts in, none when nil
+	noCacheWriter bool               // leave the response-cache writer stopped so a test can inspect its queue
 }
 
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
@@ -146,6 +147,13 @@ func testKeyring(t *testing.T) *secret.Keyring {
 		t.Fatal(err)
 	}
 	return keys
+}
+
+func startCacheWriter(r *rig, stopped bool) {
+	if stopped {
+		return
+	}
+	go r.cache.Run(r.t.Context())
 }
 
 func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
@@ -200,7 +208,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go r.cache.Run(t.Context())
+	startCacheWriter(r, o.noCacheWriter)
 	r.warmConnections(12)
 	r.seedSite()
 	r.seedCatalog()

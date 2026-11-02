@@ -282,7 +282,7 @@ func TestAnExpiredEntryIsAMiss(t *testing.T) {
 // TestAFailedAnswerIsNotCached: only a successful, complete upstream answer is stored.
 func TestAFailedAnswerIsNotCached(t *testing.T) {
 	t.Parallel()
-	r := ledgerRig(t)
+	r := ledgerRigNoCacheWriter(t)
 	up := withExecutor(r, &flakyLedger{})
 	for _, e := range up.eps {
 		e.script = []scripted{failure(routing.ScopeEndpoint, false)}
@@ -292,7 +292,11 @@ func TestAFailedAnswerIsNotCached(t *testing.T) {
 	if resp.StatusCode == http.StatusOK {
 		t.Fatalf("the failure answered 200:\n%s", body)
 	}
-	// A failed answer is never offered to the writer, so there is no background write to wait for.
+	r.handler.Outstanding.Drain(t.Context(), time.Minute)
+	// A failed answer is never offered to the writer: with the writer stopped, the queue itself proves it.
+	if n := len(r.cache.queue); n != 0 {
+		t.Errorf("%d queued writes after a failed answer", n)
+	}
 	if n := r.count("SELECT count(*) FROM gateway.response_cache"); n != 0 {
 		t.Errorf("%d entries after a failed answer", n)
 	}
@@ -377,7 +381,7 @@ func TestACorruptCacheEntryIsAMissAndIsDeleted(t *testing.T) {
 // TestABrokenStreamIsNotCached: only a stream the upstream ended normally is stored.
 func TestABrokenStreamIsNotCached(t *testing.T) {
 	t.Parallel()
-	r := ledgerRig(t)
+	r := ledgerRigNoCacheWriter(t)
 	up := withExecutor(r, &flakyLedger{})
 	sample, _ := sample(t, protocol.Messages)
 	for _, e := range up.eps {
@@ -388,7 +392,11 @@ func TestABrokenStreamIsNotCached(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("%d: %s", resp.StatusCode, body)
 	}
-	// A broken stream is never offered to the writer either.
+	r.handler.Outstanding.Drain(t.Context(), time.Minute)
+	// A broken stream is never offered to the writer either: the stopped writer leaves any offer in the queue.
+	if n := len(r.cache.queue); n != 0 {
+		t.Errorf("%d queued writes after a broken stream", n)
+	}
 	if n := r.count("SELECT count(*) FROM gateway.response_cache"); n != 0 {
 		t.Errorf("%d entries after a broken stream", n)
 	}

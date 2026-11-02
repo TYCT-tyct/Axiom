@@ -151,12 +151,19 @@ func withCosts(r *rig, ledger Ledger, costs Costs) *fakeUpstreams {
 	return up
 }
 
-func ledgerRig(t *testing.T) *rig {
+func ledgerRig(t *testing.T) *rig { return ledgerRigWith(t, false) }
+
+// ledgerRigNoCacheWriter leaves the response-cache writer stopped, so a test can inspect the queue directly after the
+// request handler has finished.
+func ledgerRigNoCacheWriter(t *testing.T) *rig { return ledgerRigWith(t, true) }
+
+func ledgerRigWith(t *testing.T, noCacheWriter bool) *rig {
 	return newRig(t, func(o *rigOptions) {
 		o.config = func(c *Config) { c.SegmentOutput, c.SegmentOvershoot = 100, time.Second }
 		o.endpoints = func(_ string, e *routing.Endpoint) {
 			e.OutputSpeed, e.Target = 100, protocol.Target{Model: "up"}
 		}
+		o.noCacheWriter = noCacheWriter
 	})
 }
 

@@ -43,6 +43,8 @@ type ResponseCache struct {
 	queue    chan cacheEntry
 	events   metric.Int64Counter
 	opts     map[string]metric.MeasurementOption
+	// afterMetadata is a test seam for interleaving a replacement between Lookup's two reads. Production leaves it nil.
+	afterMetadata func()
 }
 
 // cacheEntry is one reply waiting to be written, or read back. The body is the upstream's own reply, before this node
@@ -194,6 +196,9 @@ func (c *ResponseCache) Lookup(ctx context.Context, scope pg.Scope, account uuid
 		c.logger.Warn("a response-cache lookup failed; treating it as a miss", "err", err)
 		return nil, false
 	}
+	if c.afterMetadata != nil {
+		c.afterMetadata()
+	}
 	// ciphertext, the opened payload and its []byte copy are all alive together; the state and the decoder are bounded
 	// by cacheStateLimit. Charge for that whole peak, not for the plaintext alone.
 	hold := int64(cipherLen + 2*size + 2*cacheStateLimit + 64<<10)
@@ -210,16 +215,17 @@ func (c *ResponseCache) Lookup(ctx context.Context, scope pg.Scope, account uuid
 	var (
 		seal    secret.Sealed
 		payload []byte
-		again   uuid.UUID
-		againN  int
 	)
+	// Bind the row and its bounds from the first read: a concurrent store can replace the entry between them, and fetching
+	// the replacement's ciphertext would exceed the budget charged above. The replacement is a miss instead.
 	err = c.db.ReadTx(ctx, scope, func(tx pg.Tx) error {
 		return tx.QueryRow(ctx, `
-			SELECT id, body_size, ciphertext, nonce, wrapped_dek, key_version
+			SELECT ciphertext, nonce, wrapped_dek, key_version
 			FROM gateway.response_cache
-			WHERE account_id = $1 AND cache_key = $2 AND expires_at > $3`,
-			account, key[:], c.now(),
-		).Scan(&again, &againN, &seal.Ciphertext, &seal.Nonce, &seal.WrappedDEK, &seal.KeyVersion)
+			WHERE account_id = $1 AND cache_key = $2 AND expires_at > $3
+			  AND id = $4 AND body_size = $5 AND octet_length(ciphertext) = $6`,
+			account, key[:], c.now(), row.id, size, cipherLen,
+		).Scan(&seal.Ciphertext, &seal.Nonce, &seal.WrappedDEK, &seal.KeyVersion)
 	})
 	if errors.Is(err, pg.ErrNoRows) {
 		c.count(ctx, "miss")
