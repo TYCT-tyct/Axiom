@@ -20,9 +20,11 @@ FROM (
     FROM billing.subscription_grants
 ) AS x
 WHERE g.id = x.id;
+-- first_window stays nullable for the rolling release: a node of the previous release inserts grants without it.
+-- New grants always record it; refunds derive it for a grant written by an old node (GrantFirstWindow). A later
+-- migration may tighten the column after every node writes it.
 ALTER TABLE billing.subscription_grants
-    ALTER COLUMN first_window SET NOT NULL,
-    ADD CONSTRAINT subscription_grants_first_window_check CHECK (first_window >= 1),
+    ADD CONSTRAINT subscription_grants_first_window_check CHECK (first_window IS NULL OR first_window >= 1),
     ADD CONSTRAINT subscription_grants_refunded_check CHECK (
         refunded_paid <= coalesce(paid, 0) AND refunded_fee <= coalesce(fee, 0)),
     ADD CONSTRAINT subscription_grants_refunded_windows_limit CHECK (refunded_windows <= windows);
@@ -74,7 +76,63 @@ CREATE POLICY inserts ON billing.subscription_refunds FOR INSERT WITH CHECK (
     OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
     OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
 );
-GRANT SELECT, INSERT ON billing.subscription_refunds TO axiom_app;
+DROP POLICY IF EXISTS updates ON billing.subscription_refunds;
+CREATE POLICY updates ON billing.subscription_refunds FOR UPDATE USING (
+    (SELECT platform.in_platform_scope())
+    OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+    OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
+)
+    WITH CHECK (
+    (SELECT platform.in_platform_scope())
+    OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+    OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
+);
+GRANT SELECT, INSERT, UPDATE (revoked) ON billing.subscription_refunds TO axiom_app;
+
+-- A fund operation needs a second person: the request records who asked, and approval records who applied it. The
+-- actual refund row uses the request's ID only when approved.
+CREATE TABLE IF NOT EXISTS billing.subscription_refund_requests (
+    id uuid PRIMARY KEY,
+    grant_id uuid NOT NULL,
+    site_id uuid NOT NULL,
+    account_id uuid NOT NULL,
+    subscription_id uuid NOT NULL,
+    credits bigint NOT NULL CHECK (credits > 0),
+    site_currency text NOT NULL CHECK (site_currency ~ '^[A-Z]{3}$'),
+    requested_by uuid NOT NULL,
+    approved_by uuid,
+    state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'approved', 'rejected')),
+    reason text NOT NULL CHECK (reason <> ''),
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    finished_at timestamptz,
+    CHECK (approved_by IS NULL OR approved_by <> requested_by),
+    CHECK (state = 'pending' OR approved_by IS NOT NULL)
+);
+ALTER TABLE billing.subscription_refund_requests ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS reads ON billing.subscription_refund_requests;
+CREATE POLICY reads ON billing.subscription_refund_requests FOR SELECT USING (
+    (SELECT platform.in_platform_scope())
+    OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+    OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
+);
+DROP POLICY IF EXISTS inserts ON billing.subscription_refund_requests;
+CREATE POLICY inserts ON billing.subscription_refund_requests FOR INSERT WITH CHECK (
+    (SELECT platform.in_platform_scope())
+    OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+    OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
+);
+DROP POLICY IF EXISTS updates ON billing.subscription_refund_requests;
+CREATE POLICY updates ON billing.subscription_refund_requests FOR UPDATE USING (
+    (SELECT platform.in_platform_scope())
+    OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+    OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
+)
+    WITH CHECK (
+    (SELECT platform.in_platform_scope())
+    OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+    OR account_id = ANY ((SELECT platform.allowed_accounts())::uuid[])
+);
+GRANT SELECT, INSERT, UPDATE (approved_by, state, finished_at) ON billing.subscription_refund_requests TO axiom_app;
 
 ALTER TABLE billing.transactions
     DROP CONSTRAINT IF EXISTS transactions_kind_check,
@@ -89,6 +147,7 @@ ALTER TABLE billing.transactions
     ADD CONSTRAINT transactions_kind_check CHECK (kind IN ('credit', 'settle', 'reverse', 'attempt_cost',
         'cost_adjust', 'expire', 'freeze', 'unfreeze', 'refund', 'chargeback', 'chargeback_reverse',
         'plan_credit', 'plan_expire')) NOT VALID;
+DROP TABLE IF EXISTS billing.subscription_refund_requests;
 DROP TABLE IF EXISTS billing.subscription_refunds;
 ALTER TABLE billing.subscription_windows DROP COLUMN IF EXISTS voided_at;
 ALTER TABLE billing.subscription_grants

@@ -32,6 +32,9 @@ type SiteSettings struct {
 	// BillingPreference is the funding order an account gets until it chooses its own (docs/domains/billing.md
 	// 「资金来源」); empty is unset, which means subscription_first.
 	BillingPreference string
+	// KeepBillingPreference preserves the stored value when an older client omits the field. It is decided under the
+	// site lock, not by a read before it, so a concurrent change cannot be overwritten.
+	KeepBillingPreference bool
 }
 
 // DefaultSiteSettings are the values that apply where a site sets none.
@@ -152,20 +155,17 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 	if err != nil {
 		return err
 	}
+	if set.KeepBillingPreference {
+		set.BillingPreference = before.BillingPreference
+	}
+	if err := s.writeBillingPreference(ctx, tx, site, set.BillingPreference, !set.KeepBillingPreference); err != nil {
+		return err
+	}
 	if err := s.queries.WriteSiteSettings(ctx, tx, WriteSiteSettingsParams{
 		SiteID: uuid.UUID(site), ConsoleIdleSeconds: seconds64(set.ConsoleIdle), ConsoleMaxAgeSeconds: seconds64(set.ConsoleMaxAge),
 		AdminIdleSeconds: seconds64(set.AdminIdle), AdminMaxAgeSeconds: seconds64(set.AdminMaxAge), NewKeyDailyLimit: set.NewKeyDailyLimit,
 	}); err != nil {
 		return fmt.Errorf("write the site's settings: %w", err)
-	}
-	if set.BillingPreference == "" {
-		if err := s.queries.ClearSiteBillingPreference(ctx, tx, uuid.UUID(site)); err != nil {
-			return fmt.Errorf("clear the site's billing preference: %w", err)
-		}
-	} else if err := s.queries.SetSiteBillingPreference(ctx, tx, SetSiteBillingPreferenceParams{
-		SiteID: uuid.UUID(site), Preference: set.BillingPreference,
-	}); err != nil {
-		return fmt.Errorf("write the site's billing preference: %w", err)
 	}
 	for surface, life := range map[Surface]lifetime{
 		Console: {cmp.Or(set.ConsoleIdle, defaultLifetimes[Console].idle), cmp.Or(set.ConsoleMaxAge, defaultLifetimes[Console].max)},
@@ -183,6 +183,31 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 		Target: audit.Target{Module: "accounts", Kind: "site", ID: site.TypeID(), Site: uuid.UUID(site)},
 		Detail: map[string]any{"before": before.detail(), "after": set.detail()},
 	})
+}
+
+// writeBillingPreference clears or writes the site's default order after checking the rollout gate.
+func (s *Service) writeBillingPreference(ctx context.Context, tx pg.Tx, site SiteID, preference string, enforce bool) error {
+	if enforce && preference != "" && preference != BillingSubscriptionFirst {
+		ready, err := New().BillingPreferenceReady(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			return &SettingError{"billing_preference", "waits for every gateway node to support it"}
+		}
+	}
+	if preference == "" {
+		if err := s.queries.ClearSiteBillingPreference(ctx, tx, uuid.UUID(site)); err != nil {
+			return fmt.Errorf("clear the site's billing preference: %w", err)
+		}
+		return nil
+	}
+	if err := s.queries.SetSiteBillingPreference(ctx, tx, SetSiteBillingPreferenceParams{
+		SiteID: uuid.UUID(site), Preference: preference,
+	}); err != nil {
+		return fmt.Errorf("write the site's billing preference: %w", err)
+	}
+	return nil
 }
 
 // seconds64 is d in whole seconds, nil when it is not set.

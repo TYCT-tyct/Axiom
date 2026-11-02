@@ -72,6 +72,25 @@ func (q *Queries) AddWindowReserved(ctx context.Context, db DBTX, arg AddWindowR
 	return result.RowsAffected(), nil
 }
 
+const approveSubscriptionRefundRequest = `-- name: ApproveSubscriptionRefundRequest :execrows
+UPDATE billing.subscription_refund_requests SET approved_by = $1, state = 'approved',
+    finished_at = clock_timestamp()
+WHERE id = $2 AND state = 'pending' AND approved_by IS NULL
+`
+
+type ApproveSubscriptionRefundRequestParams struct {
+	ApprovedBy *uuid.UUID
+	ID         uuid.UUID
+}
+
+func (q *Queries) ApproveSubscriptionRefundRequest(ctx context.Context, db DBTX, arg ApproveSubscriptionRefundRequestParams) (int64, error) {
+	result, err := db.Exec(ctx, approveSubscriptionRefundRequest, arg.ApprovedBy, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const availablePlan = `-- name: AvailablePlan :one
 SELECT s.id AS subscription_id, s.site_id, s.account_id, s.ends_at AS term_ends, w.seq, w.starts_at AS window_starts,
     w.ends_at AS window_ends, w.quota, w.used, w.reserved
@@ -226,6 +245,48 @@ func (q *Queries) ExpireSubscription(ctx context.Context, db DBTX, id uuid.UUID)
 	return result.RowsAffected(), nil
 }
 
+const expireSubscriptionAt = `-- name: ExpireSubscriptionAt :execrows
+UPDATE billing.subscriptions SET state = 'expired', ends_at = $1
+WHERE id = $2 AND state = 'active' AND $1 > starts_at
+`
+
+type ExpireSubscriptionAtParams struct {
+	EndsAt time.Time
+	ID     uuid.UUID
+}
+
+// A refund removed the last live windows of a term whose earlier windows already ended: expire the term at that last
+// live window's end, then let writeOffSubscription lapse what remains once its holds are gone.
+func (q *Queries) ExpireSubscriptionAt(ctx context.Context, db DBTX, arg ExpireSubscriptionAtParams) (int64, error) {
+	result, err := db.Exec(ctx, expireSubscriptionAt, arg.EndsAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const grantFirstWindow = `-- name: GrantFirstWindow :one
+SELECT (1 + coalesce(sum(windows), 0))::integer AS first_window
+FROM billing.subscription_grants
+WHERE subscription_id = $1
+    AND (created_at < $2 OR (created_at = $2 AND id < $3))
+`
+
+type GrantFirstWindowParams struct {
+	SubscriptionID uuid.UUID
+	CreatedAt      time.Time
+	ID             uuid.UUID
+}
+
+// A grant written before first_window existed starts after every grant created before it. Grants append their windows
+// in creation order, so the running total is the position of this grant's block.
+func (q *Queries) GrantFirstWindow(ctx context.Context, db DBTX, arg GrantFirstWindowParams) (int32, error) {
+	row := db.QueryRow(ctx, grantFirstWindow, arg.SubscriptionID, arg.CreatedAt, arg.ID)
+	var first_window int32
+	err := row.Scan(&first_window)
+	return first_window, err
+}
+
 const insertGrant = `-- name: InsertGrant :execrows
 INSERT INTO billing.subscription_grants (id, site_id, account_id, subscription_id, plan_id, plan_name, source, quota,
     window_seconds, term_seconds, windows, first_window, face, currency, paid, fee, merchant_id, offline_channel, rate_id)
@@ -246,7 +307,7 @@ type InsertGrantParams struct {
 	WindowSeconds  int64
 	TermSeconds    int64
 	Windows        int32
-	FirstWindow    int32
+	FirstWindow    *int32
 	Face           int64
 	Currency       pgtype.Text
 	Paid           *int64
@@ -394,6 +455,43 @@ func (q *Queries) InsertSubscriptionRefund(ctx context.Context, db DBTX, arg Ins
 	return result.RowsAffected(), nil
 }
 
+const insertSubscriptionRefundRequest = `-- name: InsertSubscriptionRefundRequest :execrows
+INSERT INTO billing.subscription_refund_requests (id, grant_id, site_id, account_id, subscription_id, credits,
+    site_currency, requested_by, reason)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertSubscriptionRefundRequestParams struct {
+	ID             uuid.UUID
+	GrantID        uuid.UUID
+	SiteID         uuid.UUID
+	AccountID      uuid.UUID
+	SubscriptionID uuid.UUID
+	Credits        int64
+	SiteCurrency   string
+	RequestedBy    uuid.UUID
+	Reason         string
+}
+
+func (q *Queries) InsertSubscriptionRefundRequest(ctx context.Context, db DBTX, arg InsertSubscriptionRefundRequestParams) (int64, error) {
+	result, err := db.Exec(ctx, insertSubscriptionRefundRequest,
+		arg.ID,
+		arg.GrantID,
+		arg.SiteID,
+		arg.AccountID,
+		arg.SubscriptionID,
+		arg.Credits,
+		arg.SiteCurrency,
+		arg.RequestedBy,
+		arg.Reason,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertWindow = `-- name: InsertWindow :exec
 INSERT INTO billing.subscription_windows (subscription_id, seq, site_id, account_id, starts_at, ends_at, quota)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -453,8 +551,10 @@ SELECT coalesce(sum(e.amount), 0)::bigint AS credited
 FROM billing.entries e
 JOIN billing.transactions t ON t.id = e.transaction_id
 LEFT JOIN billing.reservations r ON r.request_id = t.request_id
+LEFT JOIN billing.subscription_refunds f ON f.id = t.request_id
 WHERE e.book = 'plan_liability'
-    AND (t.request_id = $1 OR r.subscription_id = $1)
+    AND (t.request_id = $1 OR r.subscription_id = $1
+        OR f.subscription_id = $1)
 `
 
 // What a subscription still owes: the sum of its plan_liability entries, which is negative while credit remains
@@ -585,7 +685,7 @@ type ReadGrantRow struct {
 	WindowSeconds   int64
 	TermSeconds     int64
 	Windows         int32
-	FirstWindow     int32
+	FirstWindow     *int32
 	Face            int64
 	Currency        pgtype.Text
 	Paid            *int64
@@ -710,6 +810,33 @@ func (q *Queries) ReadSubscriptionRefund(ctx context.Context, db DBTX, id uuid.U
 	return i, err
 }
 
+const readSubscriptionRefundRequest = `-- name: ReadSubscriptionRefundRequest :one
+SELECT id, grant_id, site_id, account_id, subscription_id, credits, site_currency, requested_by, approved_by, state,
+    reason, created_at, finished_at
+FROM billing.subscription_refund_requests WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) ReadSubscriptionRefundRequest(ctx context.Context, db DBTX, id uuid.UUID) (BillingSubscriptionRefundRequest, error) {
+	row := db.QueryRow(ctx, readSubscriptionRefundRequest, id)
+	var i BillingSubscriptionRefundRequest
+	err := row.Scan(
+		&i.ID,
+		&i.GrantID,
+		&i.SiteID,
+		&i.AccountID,
+		&i.SubscriptionID,
+		&i.Credits,
+		&i.SiteCurrency,
+		&i.RequestedBy,
+		&i.ApprovedBy,
+		&i.State,
+		&i.Reason,
+		&i.CreatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const refundGrant = `-- name: RefundGrant :execrows
 UPDATE billing.subscription_grants
 SET refunded_value = refunded_value + $1, refunded_paid = refunded_paid + $2,
@@ -807,8 +934,7 @@ func (q *Queries) RefundWindows(ctx context.Context, db DBTX, arg RefundWindowsP
 }
 
 const revokeSubscription = `-- name: RevokeSubscription :execrows
-UPDATE billing.subscriptions SET state = 'expired', ends_at = $1, current_seq = $2,
-    closed_at = clock_timestamp()
+UPDATE billing.subscriptions SET state = 'expired', ends_at = $1, current_seq = $2
 WHERE id = $3 AND state = 'active' AND $1 > starts_at
 `
 
@@ -818,8 +944,8 @@ type RevokeSubscriptionParams struct {
 	ID         uuid.UUID
 }
 
-// Nothing remains, so the subscription ends now. closed_at is set because the refund has already taken back the unused
-// liability; the expiry job must not write it off a second time.
+// Nothing remains, so the subscription ends now. closed_at is left to writeOffSubscription: the refund itself has
+// taken back its windows' liability, but an older window that already ended may still have some to lapse.
 func (q *Queries) RevokeSubscription(ctx context.Context, db DBTX, arg RevokeSubscriptionParams) (int64, error) {
 	result, err := db.Exec(ctx, revokeSubscription, arg.EndsAt, arg.CurrentSeq, arg.ID)
 	if err != nil {
@@ -856,6 +982,23 @@ WHERE request_id = ANY($1::uuid[]) AND funding <> 'wallet'
 func (q *Queries) SetReservationsWallet(ctx context.Context, db DBTX, requestIds []uuid.UUID) error {
 	_, err := db.Exec(ctx, setReservationsWallet, requestIds)
 	return err
+}
+
+const setSubscriptionRefundRevoked = `-- name: SetSubscriptionRefundRevoked :execrows
+UPDATE billing.subscription_refunds SET revoked = $1 WHERE id = $2
+`
+
+type SetSubscriptionRefundRevokedParams struct {
+	Revoked bool
+	ID      uuid.UUID
+}
+
+func (q *Queries) SetSubscriptionRefundRevoked(ctx context.Context, db DBTX, arg SetSubscriptionRefundRevokedParams) (int64, error) {
+	result, err := db.Exec(ctx, setSubscriptionRefundRevoked, arg.Revoked, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const settleWindow = `-- name: SettleWindow :execrows
@@ -1123,6 +1266,24 @@ func (q *Queries) Window(ctx context.Context, db DBTX, arg WindowParams) (Window
 		&i.Reserved,
 	)
 	return i, err
+}
+
+const windowVoided = `-- name: WindowVoided :one
+SELECT EXISTS (SELECT 1 FROM billing.subscription_windows
+    WHERE subscription_id = $1 AND seq = $2 AND voided_at IS NOT NULL)
+`
+
+type WindowVoidedParams struct {
+	SubscriptionID uuid.UUID
+	Seq            int32
+}
+
+// Whether a refund voided this window. A correction of a call it funded has no expiry income to draw on.
+func (q *Queries) WindowVoided(ctx context.Context, db DBTX, arg WindowVoidedParams) (bool, error) {
+	row := db.QueryRow(ctx, windowVoided, arg.SubscriptionID, arg.Seq)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const windows = `-- name: Windows :many

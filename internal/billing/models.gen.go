@@ -80,3 +80,19 @@ type BillingSubscriptionRefund struct {
 	Reason         string
 	CreatedAt      time.Time
 }
+
+type BillingSubscriptionRefundRequest struct {
+	ID             uuid.UUID
+	GrantID        uuid.UUID
+	SiteID         uuid.UUID
+	AccountID      uuid.UUID
+	SubscriptionID uuid.UUID
+	Credits        int64
+	SiteCurrency   string
+	RequestedBy    uuid.UUID
+	ApprovedBy     *uuid.UUID
+	State          string
+	Reason         string
+	CreatedAt      time.Time
+	FinishedAt     *time.Time
+}

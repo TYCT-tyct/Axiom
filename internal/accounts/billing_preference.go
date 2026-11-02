@@ -21,6 +21,10 @@ const (
 // ErrBillingPreference is an unknown funding order.
 var ErrBillingPreference = errors.New("accounts: unknown billing preference")
 
+// ErrBillingPreferenceRollout means a non-default order cannot be selected while a node of the previous release,
+// which does not read it, is still live.
+var ErrBillingPreferenceRollout = errors.New("accounts: billing preference waits for every gateway node to support it")
+
 // ValidBillingPreference reports whether p is one of the four orders.
 func ValidBillingPreference(p string) bool {
 	switch p {
@@ -77,6 +81,9 @@ func (s *Service) UpdateBillingPreference(ctx context.Context, p Principal, pref
 		return out, ErrBillingPreference
 	}
 	err = s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
+		if err := requireBillingPreferenceReady(ctx, tx, preference); err != nil {
+			return err
+		}
 		if err := SetBillingPreference(ctx, tx, p.account, preference); err != nil {
 			return err
 		}
@@ -89,4 +96,20 @@ func (s *Service) UpdateBillingPreference(ctx context.Context, p Principal, pref
 		})
 	})
 	return out, err
+}
+
+// requireBillingPreferenceReady refuses a non-default choice while a node of the previous release is live; clearing,
+// or choosing the default, is always safe.
+func requireBillingPreferenceReady(ctx context.Context, tx pg.Tx, preference *string) error {
+	if preference == nil || *preference == BillingSubscriptionFirst {
+		return nil
+	}
+	ready, err := New().BillingPreferenceReady(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return ErrBillingPreferenceRollout
+	}
+	return nil
 }

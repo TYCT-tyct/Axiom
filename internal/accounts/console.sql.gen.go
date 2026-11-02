@@ -44,8 +44,11 @@ func (q *Queries) AdvanceTOTP(ctx context.Context, db DBTX, arg AdvanceTOTPParam
 }
 
 const billingPreference = `-- name: BillingPreference :one
-SELECT coalesce(a.billing_preference, p.preference, 'subscription_first')::text AS preference,
-    (a.billing_preference IS NOT NULL)::boolean AS own,
+SELECT CASE WHEN coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true)
+        THEN coalesce(a.billing_preference, p.preference, 'subscription_first')
+        ELSE 'subscription_first' END::text AS preference,
+    (coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true)
+        AND a.billing_preference IS NOT NULL)::boolean AS own,
     coalesce(p.preference, 'subscription_first')::text AS site_default
 FROM accounts.accounts a LEFT JOIN accounts.site_billing_preferences p ON p.site_id = a.site_id
 WHERE a.id = $1
@@ -57,13 +60,25 @@ type BillingPreferenceRow struct {
 	SiteDefault string
 }
 
-// The funding order calls of this account use: its own choice, or the site's default, or subscription_first. The
-// account's row is the only one the console scope can read; own says whether the account chose it.
+// The funding order calls of this account use: its own choice, or the site's default, or subscription_first. While a
+// node of the previous release is live, the effective order is the safe default; own only says whether the account
+// chose a value that is currently in force.
 func (q *Queries) BillingPreference(ctx context.Context, db DBTX, accountID uuid.UUID) (BillingPreferenceRow, error) {
 	row := db.QueryRow(ctx, billingPreference, accountID)
 	var i BillingPreferenceRow
 	err := row.Scan(&i.Preference, &i.Own, &i.SiteDefault)
 	return i, err
+}
+
+const billingPreferenceReady = `-- name: BillingPreferenceReady :one
+SELECT coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true)::boolean AS ready
+`
+
+func (q *Queries) BillingPreferenceReady(ctx context.Context, db DBTX) (bool, error) {
+	row := db.QueryRow(ctx, billingPreferenceReady)
+	var ready bool
+	err := row.Scan(&ready)
+	return ready, err
 }
 
 const bumpFactorVersion = `-- name: BumpFactorVersion :exec

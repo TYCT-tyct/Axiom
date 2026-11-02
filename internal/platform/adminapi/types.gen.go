@@ -1332,6 +1332,27 @@ func (e SiteLogoUploadContentType) Valid() bool {
 	}
 }
 
+// Defines values for SubscriptionRefundProposalState.
+const (
+	SubscriptionRefundProposalStateApproved SubscriptionRefundProposalState = "approved"
+	SubscriptionRefundProposalStatePending  SubscriptionRefundProposalState = "pending"
+	SubscriptionRefundProposalStateRejected SubscriptionRefundProposalState = "rejected"
+)
+
+// Valid indicates whether the value is a known member of the SubscriptionRefundProposalState enum.
+func (e SubscriptionRefundProposalState) Valid() bool {
+	switch e {
+	case SubscriptionRefundProposalStateApproved:
+		return true
+	case SubscriptionRefundProposalStatePending:
+		return true
+	case SubscriptionRefundProposalStateRejected:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SubscriptionSource.
 const (
 	SubscriptionSourceGift           SubscriptionSource = "gift"
@@ -4110,6 +4131,12 @@ type SubscriptionRefund struct {
 	Windows int `json:"windows"`
 }
 
+// SubscriptionRefundApprovalInput defines model for SubscriptionRefundApprovalInput.
+type SubscriptionRefundApprovalInput struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
 // SubscriptionRefundInput defines model for SubscriptionRefundInput.
 type SubscriptionRefundInput struct {
 	// Credits An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
@@ -4120,6 +4147,32 @@ type SubscriptionRefundInput struct {
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 }
+
+// SubscriptionRefundProposal defines model for SubscriptionRefundProposal.
+type SubscriptionRefundProposal struct {
+	// ApprovedBy An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	ApprovedBy *Uuid     `json:"approved_by,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	// Credits An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Credits    CreditAmount `json:"credits"`
+	FinishedAt *time.Time   `json:"finished_at,omitempty"`
+
+	// GrantId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	GrantId Uuid `json:"grant_id"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id Uuid `json:"id"`
+
+	// RequestedBy An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	RequestedBy Uuid                            `json:"requested_by"`
+	State       SubscriptionRefundProposalState `json:"state"`
+}
+
+// SubscriptionRefundProposalState defines model for SubscriptionRefundProposal.State.
+type SubscriptionRefundProposalState string
 
 // SubscriptionSource How the plan was paid for. Absent in a request: gift.
 type SubscriptionSource string
@@ -4556,6 +4609,12 @@ type GrantSubscriptionParams struct {
 
 // RefundSubscriptionGrantParams defines parameters for RefundSubscriptionGrant.
 type RefundSubscriptionGrantParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ApproveSubscriptionRefundParams defines parameters for ApproveSubscriptionRefund.
+type ApproveSubscriptionRefundParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -5170,6 +5229,9 @@ type GrantSubscriptionJSONRequestBody = SubscriptionGrantInput
 
 // RefundSubscriptionGrantJSONRequestBody defines body for RefundSubscriptionGrant for application/json ContentType.
 type RefundSubscriptionGrantJSONRequestBody = SubscriptionRefundInput
+
+// ApproveSubscriptionRefundJSONRequestBody defines body for ApproveSubscriptionRefund for application/json ContentType.
+type ApproveSubscriptionRefundJSONRequestBody = SubscriptionRefundApprovalInput
 
 // SetAccountSuspensionJSONRequestBody defines body for SetAccountSuspension for application/json ContentType.
 type SetAccountSuspensionJSONRequestBody = AccountSuspension

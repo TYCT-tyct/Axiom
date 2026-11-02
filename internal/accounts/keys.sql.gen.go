@@ -15,7 +15,7 @@ import (
 )
 
 const admitKey = `-- name: AdmitKey :many
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE coalesce(a.billing_preference, p.preference, 'subscription_first') WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE CASE WHEN coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true) THEN coalesce(a.billing_preference, p.preference, 'subscription_first') ELSE 'subscription_first' END WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
@@ -80,7 +80,7 @@ func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]
 }
 
 const admitReadKey = `-- name: AdmitReadKey :many
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, k.kind, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE coalesce(a.billing_preference, p.preference, 'subscription_first') WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, k.kind, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE CASE WHEN coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true) THEN coalesce(a.billing_preference, p.preference, 'subscription_first') ELSE 'subscription_first' END WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id

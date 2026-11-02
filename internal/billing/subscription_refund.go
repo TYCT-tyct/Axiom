@@ -47,13 +47,14 @@ type SubscriptionRefund struct {
 	CreatedAt    time.Time
 }
 
-// RefundSubscriptionGrant refunds a paid grant in tx, which must be in the platform scope. It takes back the last
+// applySubscriptionRefund refunds a paid grant in tx, which must be in the platform scope. Only an approved request
+// reaches it; there is no direct API path that writes a refund. It takes back the last
 // whole windows of the grant's block, in proportion to the credits refunded, and refuses to touch a window that still
 // holds a reservation. A refund of everything left revokes the subscription; a partial one only removes future
 // windows, so a term in its current window cannot be partly refunded. The ledger reverses the unused liability, the
 // sale's discount or premium, and the revenue of what was used; the payment's cash and fee are returned in their own
 // currency.
-func RefundSubscriptionGrant(ctx context.Context, tx pg.Tx, req SubscriptionRefundRequest) (SubscriptionRefund, error) {
+func applySubscriptionRefund(ctx context.Context, tx pg.Tx, req SubscriptionRefundRequest) (SubscriptionRefund, error) {
 	if err := checkRefundRequest(req); err != nil {
 		return SubscriptionRefund{}, err
 	}
@@ -140,7 +141,19 @@ func readGrantRow(ctx context.Context, tx pg.Tx, req SubscriptionRefundRequest) 
 		return ReadGrantRow{}, fmt.Errorf("%w: grant %s is not this site's and account's", ErrNotRefundable, req.Grant)
 	case g.Source != "paid" || !g.Currency.Valid || g.Paid == nil || g.Fee == nil:
 		return ReadGrantRow{}, fmt.Errorf("%w: only a paid grant returns money", ErrNotRefundable)
-	case g.FirstWindow < 1:
+	}
+	if g.FirstWindow == nil {
+		// A node of the previous release wrote this grant before first_window existed. Grants append their windows, so
+		// the earlier grants' windows say where this one starts.
+		first, err := queries.GrantFirstWindow(ctx, tx, GrantFirstWindowParams{
+			SubscriptionID: g.SubscriptionID, CreatedAt: g.CreatedAt, ID: g.ID,
+		})
+		if err != nil {
+			return ReadGrantRow{}, fmt.Errorf("billing: read the grant's first window: %w", err)
+		}
+		g.FirstWindow = &first
+	}
+	if *g.FirstWindow < 1 {
 		return ReadGrantRow{}, fmt.Errorf("%w: the grant does not know its first window", ErrNotRefundable)
 	}
 	return g, nil
@@ -194,8 +207,8 @@ func readRefundSubscription(ctx context.Context, tx pg.Tx, req SubscriptionRefun
 	if sub.State != "active" || sub.ClosedAt != nil {
 		return BillingSubscription{}, fmt.Errorf("%w: the subscription is not in force", ErrNotRefundable)
 	}
-	last := g.FirstWindow + g.Windows - 1
-	if last < g.FirstWindow {
+	last := *g.FirstWindow + g.Windows - 1
+	if last < *g.FirstWindow {
 		return BillingSubscription{}, fmt.Errorf("%w: the grant's window block is malformed", ErrNotRefundable)
 	}
 	subLast, err := queries.LastWindowSeq(ctx, tx, g.SubscriptionID)
@@ -233,7 +246,7 @@ func planRefund(ctx context.Context, tx pg.Tx, req SubscriptionRefundRequest, rg
 
 func refundWindowBlock(ctx context.Context, tx pg.Tx, req SubscriptionRefundRequest, rg refundCase) ([]RefundWindowsRow, int64, int64, int64, time.Time, error) {
 	g := rg.grant
-	last := g.FirstWindow + g.Windows - 1
+	last := *g.FirstWindow + g.Windows - 1
 	want := min(ceilMulDiv(int64(g.Windows), g.RefundedValue+req.Credits, rg.value), int64(g.Windows))
 	remove := want - int64(g.RefundedWindows)
 	if remove < 1 {
@@ -244,7 +257,7 @@ func refundWindowBlock(ctx context.Context, tx pg.Tx, req SubscriptionRefundRequ
 	}
 	remove = min(remove, int64(g.Windows-g.RefundedWindows))
 	windows, err := queries.RefundWindows(ctx, tx, RefundWindowsParams{
-		SubscriptionID: g.SubscriptionID, First: g.FirstWindow, Last: last, Max: refundCount(remove),
+		SubscriptionID: g.SubscriptionID, First: *g.FirstWindow, Last: last, Max: refundCount(remove),
 	})
 	if err != nil {
 		return nil, 0, 0, 0, time.Time{}, fmt.Errorf("billing: read the windows to refund: %w", err)
@@ -278,10 +291,26 @@ func refundCash(req SubscriptionRefundRequest, rg refundCase) (int64, int64, err
 		return 0, 0, fmt.Errorf("%w: the grant's refunds exceed what was paid", ErrNotRefundable)
 	}
 	if rg.full {
+		// The last refund takes the remainder, so cumulative rounding can never leave cash behind.
 		return remainingPaid, remainingFee, nil
 	}
-	paid := max(1, min(ceilMulDiv(req.Credits, remainingPaid, rg.remaining), remainingPaid))
-	fee := mulDivFloor(remainingFee, paid, remainingPaid)
+	// Floor the cumulative share, never round each part up: a one-minor-unit refund must not consume the cash that
+	// later windows still represent. A refund whose share is still below the smallest currency unit is refused rather
+	// than giving away a window for no money; the account can ask for a larger refund.
+	cumulative := rg.grant.RefundedValue + req.Credits
+	targetPaid := refundShare(cumulative, *rg.grant.Paid, rg.value)
+	paid := targetPaid - rg.grant.RefundedPaid
+	if paid <= 0 {
+		return 0, 0, fmt.Errorf("%w: these credits are below one unit of the grant's payment currency", ErrNotRefundable)
+	}
+	if paid > remainingPaid {
+		return 0, 0, fmt.Errorf("%w: the grant's refunds exceed what was paid", ErrNotRefundable)
+	}
+	targetFee := refundShare(targetPaid, *rg.grant.Fee, *rg.grant.Paid)
+	fee := targetFee - rg.grant.RefundedFee
+	if fee < 0 || fee > paid {
+		return 0, 0, fmt.Errorf("%w: the grant's fee refund does not fit the cash returned", ErrNotRefundable)
+	}
 	return paid, fee, nil
 }
 
@@ -305,14 +334,17 @@ func applyRefund(ctx context.Context, tx pg.Tx, req SubscriptionRefundRequest, r
 	} else if n != 1 {
 		return fmt.Errorf("%w: grant %s changed under the lock", ErrNotRefundable, g.ID)
 	}
-	revoked, err := takeBackTerm(ctx, tx, rg.sub, plan.now)
-	if err != nil {
-		return err
-	}
+	return finishRefund(ctx, tx, req, rg, plan, lines)
+}
+
+// finishRefund writes the applied refund, posts its ledger entries, takes the term back and audits the result. The
+// refund entry must exist before the liability is read by takeBackTerm, so it is written before the term changes.
+func finishRefund(ctx context.Context, tx pg.Tx, req SubscriptionRefundRequest, rg refundCase, plan refundPlan, lines []line) error {
+	g := rg.grant
 	if n, err := queries.InsertSubscriptionRefund(ctx, tx, InsertSubscriptionRefundParams{
 		ID: req.ID, GrantID: g.ID, SiteID: g.SiteID, AccountID: g.AccountID, SubscriptionID: g.SubscriptionID,
 		Credits: req.Credits, Paid: plan.paid, Fee: plan.fee, Currency: rg.currency.String(),
-		Windows: refundCount(plan.remove), Unused: plan.unused, Revoked: revoked, Actor: req.Actor.String(), Reason: req.Reason,
+		Windows: refundCount(plan.remove), Unused: plan.unused, Revoked: false, Actor: req.Actor.String(), Reason: req.Reason,
 	}); err != nil {
 		return fmt.Errorf("billing: write the subscription refund: %w", err)
 	} else if n != 1 {
@@ -322,6 +354,17 @@ func applyRefund(ctx context.Context, tx pg.Tx, req SubscriptionRefundRequest, r
 		site: g.SiteID, account: g.AccountID, kind: "plan_refund", request: req.ID, revision: 1,
 	}, lines...); err != nil {
 		return err
+	}
+	// Post the refund before taking the term back: writeOffSubscription reads the liability, and it must see the
+	// refund's credit before it lapses what an older, already-ended window still owes.
+	revoked, err := takeBackTerm(ctx, tx, rg.sub, plan.now)
+	if err != nil {
+		return err
+	}
+	if n, err := queries.SetSubscriptionRefundRevoked(ctx, tx, SetSubscriptionRefundRevokedParams{ID: req.ID, Revoked: revoked}); err != nil {
+		return fmt.Errorf("billing: record whether the refund revoked the subscription: %w", err)
+	} else if n != 1 {
+		return fmt.Errorf("billing: refund %s was written under the lock", req.ID)
 	}
 	return audit.Record(ctx, tx, audit.Event{
 		Actor: req.Actor, Action: "subscription.refund", Reason: req.Reason,
@@ -367,31 +410,69 @@ func takeBackTerm(ctx context.Context, tx pg.Tx, sub BillingSubscription, now ti
 		return false, fmt.Errorf("billing: read the last window left: %w", err)
 	}
 	if lastLive == 0 {
-		ends := now
-		if !ends.After(sub.StartsAt) {
-			ends = sub.StartsAt.Add(time.Second)
-		}
-		n, err := queries.RevokeSubscription(ctx, tx, RevokeSubscriptionParams{ID: sub.ID, EndsAt: ends, CurrentSeq: 1})
-		if err != nil {
-			return false, fmt.Errorf("billing: revoke the subscription: %w", err)
-		}
-		if n != 1 {
-			return false, fmt.Errorf("billing: the subscription %s changed under the lock", sub.ID)
-		}
-		return true, nil
+		return true, revokeRefundedTerm(ctx, tx, sub, now)
 	}
 	lastWindow, err := queries.Window(ctx, tx, WindowParams{SubscriptionID: sub.ID, Seq: lastLive})
 	if err != nil {
 		return false, fmt.Errorf("billing: read the last window left: %w", err)
 	}
-	n, err := queries.ShortenSubscription(ctx, tx, ShortenSubscriptionParams{ID: sub.ID, EndsAt: lastWindow.EndsAt})
-	if err != nil {
-		return false, fmt.Errorf("billing: shorten the subscription: %w", err)
+	if !now.Before(lastWindow.EndsAt) {
+		return true, expireRefundedTerm(ctx, tx, sub, lastWindow)
 	}
-	if n != 1 {
+	if err := pointAtLiveWindow(ctx, tx, sub, lastLive); err != nil {
+		return false, err
+	}
+	if n, err := queries.ShortenSubscription(ctx, tx, ShortenSubscriptionParams{ID: sub.ID, EndsAt: lastWindow.EndsAt}); err != nil {
+		return false, fmt.Errorf("billing: shorten the subscription: %w", err)
+	} else if n != 1 {
 		return false, fmt.Errorf("billing: the subscription %s changed under the lock", sub.ID)
 	}
 	return false, nil
+}
+
+func revokeRefundedTerm(ctx context.Context, tx pg.Tx, sub BillingSubscription, now time.Time) error {
+	ends := now
+	if !ends.After(sub.StartsAt) {
+		ends = sub.StartsAt.Add(time.Second)
+	}
+	if n, err := queries.RevokeSubscription(ctx, tx, RevokeSubscriptionParams{ID: sub.ID, EndsAt: ends, CurrentSeq: 1}); err != nil {
+		return fmt.Errorf("billing: revoke the subscription: %w", err)
+	} else if n != 1 {
+		return fmt.Errorf("billing: the subscription %s changed under the lock", sub.ID)
+	}
+	return writeOffSubscription(ctx, tx, expiredSubscription(sub))
+}
+
+// expireRefundedTerm marks a term whose remaining live windows already ended as expired. writeOffSubscription waits
+// for any hold on those windows and then lapses what is left.
+func expireRefundedTerm(ctx context.Context, tx pg.Tx, sub BillingSubscription, last WindowRow) error {
+	if n, err := queries.ExpireSubscriptionAt(ctx, tx, ExpireSubscriptionAtParams{ID: sub.ID, EndsAt: last.EndsAt}); err != nil {
+		return fmt.Errorf("billing: expire the subscription: %w", err)
+	} else if n != 1 {
+		return fmt.Errorf("billing: the subscription %s changed under the lock", sub.ID)
+	}
+	return writeOffSubscription(ctx, tx, expiredSubscription(sub))
+}
+
+// pointAtLiveWindow repairs current_seq when a full refund voided it while an older window remains live.
+func pointAtLiveWindow(ctx context.Context, tx pg.Tx, sub BillingSubscription, lastLive int32) error {
+	voided, err := queries.WindowVoided(ctx, tx, WindowVoidedParams{SubscriptionID: sub.ID, Seq: sub.CurrentSeq})
+	if err != nil {
+		return fmt.Errorf("billing: read the current window: %w", err)
+	}
+	if !voided {
+		return nil
+	}
+	if n, err := queries.SetCurrentWindow(ctx, tx, SetCurrentWindowParams{ID: sub.ID, Seq: lastLive}); err != nil {
+		return fmt.Errorf("billing: point the subscription at its last live window: %w", err)
+	} else if n != 1 {
+		return fmt.Errorf("billing: the subscription %s changed under the lock", sub.ID)
+	}
+	return nil
+}
+
+func expiredSubscription(sub BillingSubscription) Subscription {
+	return Subscription{ID: sub.ID, Site: sub.SiteID, Account: sub.AccountID, State: "expired"}
 }
 
 // refundCount narrows a window count to the integer column; a plan has at most 400 windows.

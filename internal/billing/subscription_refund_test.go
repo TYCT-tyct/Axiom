@@ -37,7 +37,7 @@ func (b *bank) refund(req SubscriptionRefundRequest) (SubscriptionRefund, error)
 	b.t.Helper()
 	var out SubscriptionRefund
 	err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) (err error) {
-		out, err = RefundSubscriptionGrant(b.t.Context(), tx, req)
+		out, err = applySubscriptionRefund(b.t.Context(), tx, req)
 		return err
 	})
 	return out, err
@@ -217,4 +217,188 @@ func TestSubscriptionRefundReversesTheSalePrice(t *testing.T) {
 			b.balanced()
 		})
 	}
+}
+
+// TestSubscriptionRefundCashFloorsCumulatively: four windows paid two minor units are worth twenty million credits.
+// Refunding one window is below one minor unit and is refused; two windows return one unit, and the last two return
+// the remaining unit. No earlier round-up may consume cash that later windows still represent.
+func TestSubscriptionRefundCashFloorsCumulatively(t *testing.T) {
+	t.Parallel()
+	paid, fee := int64(2), int64(0)
+	g := ReadGrantRow{Paid: &paid, Fee: &fee}
+	rg := refundCase{grant: g, value: 20_000_000, remaining: 20_000_000}
+	if _, _, err := refundCash(SubscriptionRefundRequest{Credits: 5_000_000}, rg); !errors.Is(err, ErrNotRefundable) {
+		t.Fatalf("refund below one minor unit = %v, want ErrNotRefundable", err)
+	}
+	rg.grant.RefundedValue, rg.grant.RefundedPaid = 0, 0
+	rg.remaining = 10_000_000
+	rg.full = false
+	got, gotFee, err := refundCash(SubscriptionRefundRequest{Credits: 10_000_000}, rg)
+	if err != nil || got != 1 || gotFee != 0 {
+		t.Fatalf("first half = %d/%d, %v; want 1/0", got, gotFee, err)
+	}
+	rg.grant.RefundedValue, rg.grant.RefundedPaid = 10_000_000, 1
+	rg.remaining = 10_000_000
+	rg.full = true
+	got, gotFee, err = refundCash(SubscriptionRefundRequest{Credits: 10_000_000}, rg)
+	if err != nil || got != 1 || gotFee != 0 {
+		t.Fatalf("last half = %d/%d, %v; want the remaining 1/0", got, gotFee, err)
+	}
+}
+
+// TestSubscriptionRefundOfRenewalExpiresTheTerm: the first grant's windows ended and the current window belongs to the
+// renewal. Refunding the renewal in full must expire and write off the subscription, not shorten it to a past instant
+// while leaving state active and current_seq on a voided window.
+func TestSubscriptionRefundOfRenewalExpiresTheTerm(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	p := b.makePlan(1_000_000_000, 2*3600)
+	first := b.subscribePaid(p, uuid.NewV7(), 200)
+	second := uuid.NewV7()
+	b.subscribePaid(p, second, 200)
+	b.sql("UPDATE billing.subscription_windows SET starts_at = now() - interval '2 hours', "+
+		"ends_at = now() - interval '1 hour' WHERE subscription_id = '"+first.ID.String()+"' AND seq IN (1,2)",
+		"UPDATE billing.subscription_windows SET starts_at = now() - interval '1 minute', "+
+			"ends_at = now() + interval '59 minutes' WHERE subscription_id = '"+first.ID.String()+"' AND seq = 3",
+		"UPDATE billing.subscriptions SET starts_at = now() - interval '3 hours', ends_at = now() + interval '2 hours', "+
+			"current_seq = 3 WHERE id = '"+first.ID.String()+"'")
+	if _, err := b.refund(SubscriptionRefundRequest{
+		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Grant: second, SiteCurrency: usd,
+		Credits: 2_000_000_000, Reason: "refund the renewal", Actor: audit.System("billing.test"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := b.subscriptionByID(first.ID)
+	if got.State != "expired" || got.ClosedAt == nil {
+		t.Fatalf("subscription after refunding the renewal = %+v, want expired and closed", got)
+	}
+	if n := b.book(bookPlanLiability); n != 0 {
+		t.Errorf("plan liability = %d, want 0", n)
+	}
+	if n := b.book(bookCreditExpired); n != -2_000_000_000 {
+		t.Errorf("expired credit = %d, want the first grant's -2 credits", n)
+	}
+	b.balanced()
+}
+
+// TestSubscriptionRefundThenExpiry: a partial refund leaves the earlier windows' liability, which the expiry job
+// writes off once; the refund and write-off do not leave a positive liability.
+func TestSubscriptionRefundThenExpiry(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	grant := uuid.NewV7()
+	sub := b.subscribePaid(b.makePlan(1_000_000_000, 4*3600), grant, 400)
+	if _, err := b.refund(SubscriptionRefundRequest{
+		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Grant: grant, SiteCurrency: usd,
+		Credits: 2_000_000_000, Reason: "half", Actor: audit.System("billing.test"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.sql("UPDATE billing.subscriptions SET starts_at = now() - interval '5 hours', ends_at = now() - interval '1 hour' "+
+		"WHERE id = '"+sub.ID.String()+"'",
+		"UPDATE billing.subscription_windows SET starts_at = starts_at - interval '5 hours', "+
+			"ends_at = ends_at - interval '5 hours' WHERE subscription_id = '"+sub.ID.String()+"'")
+	if w := b.advance(); w != nil {
+		t.Fatalf("an ended term funded %+v", w)
+	}
+	b.writeOff()
+	if n := b.book(bookPlanLiability); n != 0 {
+		t.Errorf("plan liability after expiry = %d, want 0", n)
+	}
+	if n := b.book(bookCreditExpired); n != -2_000_000_000 {
+		t.Errorf("expired credit = %d, want the remaining -2 credits", n)
+	}
+	b.balanced()
+}
+
+// TestSubscriptionRefundNeedsASecondOperator: a request changes nothing until a different operator approves it; the
+// requester cannot approve, and replaying the approval returns the stored refund without moving the ledger again.
+func TestSubscriptionRefundNeedsASecondOperator(t *testing.T) { //nolint:cyclop,gocognit // request, refusal, approval and replay in one journey.
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	grant := uuid.NewV7()
+	sub := b.subscribePaid(b.makePlan(1_000_000_000, 3600), grant, 100)
+	requester, approver := uuid.NewV7(), uuid.NewV7()
+	proposalID := uuid.NewV7()
+	var proposal SubscriptionRefundProposal
+	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
+		var err error
+		proposal, err = RequestSubscriptionRefund(t.Context(), tx, SubscriptionRefundProposalRequest{
+			ID: proposalID, Site: b.admitted.Site, Account: b.admitted.Account, Grant: grant, SiteCurrency: usd,
+			Credits: 1_000_000_000, Reason: "customer asked", RequestedBy: requester, Actor: audit.System("billing.test"),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if proposal.State != "pending" || proposal.Credits != 1_000_000_000 {
+		t.Fatalf("proposal = %+v, want pending", proposal)
+	}
+	if n := b.book(bookPlanLiability); n != -1_000_000_000 {
+		t.Errorf("liability after the request = %d, want the untouched grant -1 credit", n)
+	}
+	if n := b.book(bookCash); n != 1_000_000_000 {
+		t.Errorf("cash after the request = %d, want the untouched payment 100", n)
+	}
+	if _, err := b.approve(proposalID, requester, "self"); !errors.Is(err, ErrRefundSecondPerson) {
+		t.Errorf("requester approval = %v, want ErrRefundSecondPerson", err)
+	}
+	out, err := b.approve(proposalID, approver, "checked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Revoked || out.Paid != 100 {
+		t.Errorf("approved refund = %+v", out)
+	}
+	if got := b.subscriptionByID(sub.ID); got.State != "expired" || got.ClosedAt == nil {
+		t.Errorf("subscription after approval = %+v, want expired and closed", got)
+	}
+	if n := b.book(bookPlanLiability); n != 0 {
+		t.Errorf("liability after approval = %d, want 0", n)
+	}
+	if n := b.book(bookCash); n != 0 {
+		t.Errorf("cash after approval = %d, want 0", n)
+	}
+	again, err := b.approve(proposalID, approver, "checked")
+	if err != nil || again != out {
+		t.Errorf("approval replay = %+v, %v; want %+v", again, err, out)
+	}
+	if n := b.book(bookCash); n != 0 {
+		t.Errorf("cash after the replay = %d, want 0", n)
+	}
+	b.balanced()
+}
+
+func (b *bank) approve(id, approver uuid.UUID, reason string) (SubscriptionRefund, error) {
+	b.t.Helper()
+	var out SubscriptionRefund
+	err := b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error {
+		var err error
+		out, err = ApproveSubscriptionRefund(b.t.Context(), tx, id, approver, audit.System("billing.test"), reason)
+		return err
+	})
+	return out, err
+}
+
+// TestSubscriptionRefundReadsAGrantWrittenBeforeFirstWindow: a node of the previous release inserts a grant without
+// first_window during the rolling release. Refunding it derives the block's start from the earlier grants.
+func TestSubscriptionRefundReadsAGrantWrittenBeforeFirstWindow(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	p := b.makePlan(1_000_000_000, 3600)
+	first := uuid.NewV7()
+	b.subscribePaid(p, first, 100)
+	second := uuid.NewV7()
+	b.subscribePaid(p, second, 100)
+	b.sql("UPDATE billing.subscription_grants SET first_window = NULL WHERE id = '" + second.String() + "'")
+	if _, err := b.refund(SubscriptionRefundRequest{
+		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Grant: second, SiteCurrency: usd,
+		Credits: 1_000_000_000, Reason: "old node's grant", Actor: audit.System("billing.test"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := b.book(bookPlanLiability); n != -1_000_000_000 {
+		t.Errorf("plan liability after refunding the old grant = %d, want the first grant still -1", n)
+	}
+	b.balanced()
 }

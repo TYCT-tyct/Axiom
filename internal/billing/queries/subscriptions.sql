@@ -136,8 +136,10 @@ SELECT coalesce(sum(e.amount), 0)::bigint AS credited
 FROM billing.entries e
 JOIN billing.transactions t ON t.id = e.transaction_id
 LEFT JOIN billing.reservations r ON r.request_id = t.request_id
+LEFT JOIN billing.subscription_refunds f ON f.id = t.request_id
 WHERE e.book = 'plan_liability'
-    AND (t.request_id = @subscription_id OR r.subscription_id = @subscription_id);
+    AND (t.request_id = @subscription_id OR r.subscription_id = @subscription_id
+        OR f.subscription_id = @subscription_id);
 
 -- name: PendingPlanHolds :one
 SELECT coalesce(sum(amount), 0)::bigint AS held
@@ -199,10 +201,15 @@ UPDATE billing.subscriptions SET ends_at = @ends_at
 WHERE id = @id AND state = 'active' AND @ends_at > starts_at;
 
 -- name: RevokeSubscription :execrows
--- Nothing remains, so the subscription ends now. closed_at is set because the refund has already taken back the unused
--- liability; the expiry job must not write it off a second time.
-UPDATE billing.subscriptions SET state = 'expired', ends_at = @ends_at, current_seq = @current_seq,
-    closed_at = clock_timestamp()
+-- Nothing remains, so the subscription ends now. closed_at is left to writeOffSubscription: the refund itself has
+-- taken back its windows' liability, but an older window that already ended may still have some to lapse.
+UPDATE billing.subscriptions SET state = 'expired', ends_at = @ends_at, current_seq = @current_seq
+WHERE id = @id AND state = 'active' AND @ends_at > starts_at;
+
+-- name: ExpireSubscriptionAt :execrows
+-- A refund removed the last live windows of a term whose earlier windows already ended: expire the term at that last
+-- live window's end, then let writeOffSubscription lapse what remains once its holds are gone.
+UPDATE billing.subscriptions SET state = 'expired', ends_at = @ends_at
 WHERE id = @id AND state = 'active' AND @ends_at > starts_at;
 
 -- name: InsertSubscriptionRefund :execrows
@@ -217,7 +224,39 @@ SELECT id, grant_id, site_id, account_id, subscription_id, credits, paid, fee, c
     actor, reason, created_at
 FROM billing.subscription_refunds WHERE id = @id;
 
+-- name: SetSubscriptionRefundRevoked :execrows
+UPDATE billing.subscription_refunds SET revoked = @revoked WHERE id = @id;
+
+-- name: InsertSubscriptionRefundRequest :execrows
+INSERT INTO billing.subscription_refund_requests (id, grant_id, site_id, account_id, subscription_id, credits,
+    site_currency, requested_by, reason)
+VALUES (@id, @grant_id, @site_id, @account_id, @subscription_id, @credits, @site_currency, @requested_by, @reason)
+ON CONFLICT (id) DO NOTHING;
+
+-- name: ReadSubscriptionRefundRequest :one
+SELECT id, grant_id, site_id, account_id, subscription_id, credits, site_currency, requested_by, approved_by, state,
+    reason, created_at, finished_at
+FROM billing.subscription_refund_requests WHERE id = @id FOR UPDATE;
+
+-- name: ApproveSubscriptionRefundRequest :execrows
+UPDATE billing.subscription_refund_requests SET approved_by = @approved_by, state = 'approved',
+    finished_at = clock_timestamp()
+WHERE id = @id AND state = 'pending' AND approved_by IS NULL;
+
 -- name: LastLiveWindow :one
 -- The highest window a refund did not void; 0 means the subscription has nothing left and is revoked.
 SELECT coalesce(max(seq), 0)::integer AS seq
 FROM billing.subscription_windows WHERE subscription_id = @subscription_id AND voided_at IS NULL;
+
+-- name: WindowVoided :one
+-- Whether a refund voided this window. A correction of a call it funded has no expiry income to draw on.
+SELECT EXISTS (SELECT 1 FROM billing.subscription_windows
+    WHERE subscription_id = @subscription_id AND seq = @seq AND voided_at IS NOT NULL);
+
+-- name: GrantFirstWindow :one
+-- A grant written before first_window existed starts after every grant created before it. Grants append their windows
+-- in creation order, so the running total is the position of this grant's block.
+SELECT (1 + coalesce(sum(windows), 0))::integer AS first_window
+FROM billing.subscription_grants
+WHERE subscription_id = @subscription_id
+    AND (created_at < @created_at OR (created_at = @created_at AND id < @id));

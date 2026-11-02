@@ -4315,13 +4315,14 @@ paths:
     post:
       operationId: refundSubscriptionGrant
       tags: [Users]
-      summary: Refund a subscription grant
+      summary: Request a subscription grant refund
       description: >-
-        Returns part or all of a paid grant in site credits and takes back the term it bought, from the end
-        (docs/domains/billing.md「订阅套餐」). A refund of everything left revokes the subscription; a partial one only
-        removes whole future windows. The grant must be the newest of the subscription, a window with a pending
-        reservation is refused, and a gift cannot be refunded. The ID is the idempotency key; the same key with the
-        same grant and credits returns the stored refund.
+        Requests part or all of a paid grant in site credits and, after a different operator approves it, takes back
+        the term it bought from the end (docs/domains/billing.md「订阅套餐」). A request changes no money or term. A refund
+        of everything left revokes the subscription; a partial one only removes whole future windows. The grant must
+        be the newest of the subscription, a window with a pending reservation is refused, and a gift cannot be
+        refunded. The ID is the idempotency key; the same key with the same grant and credits returns the stored
+        request.
       security:
         - session: []
           csrf: []
@@ -4343,7 +4344,52 @@ paths:
           application/json:
             schema: {$ref: "#/components/schemas/SubscriptionRefundInput"}
       responses:
-        "201":
+        "202":
+          description: Waiting for another operator's approval.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SubscriptionRefundProposal"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/subscription-refunds/{refund_id}/approve:
+    post:
+      operationId: approveSubscriptionRefund
+      tags: [Users]
+      summary: Approve a subscription grant refund
+      description: >-
+        Applies a pending subscription refund as an operator other than the requester, using the same second-person
+        rule as a payment refund. The refund takes back the grant's term and posts its ledger entries
+        (docs/domains/billing.md「订阅套餐」). The ID is the idempotency key; approval replay returns the stored refund
+        and posts nothing again.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: credits.grant
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+        - name: refund_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SubscriptionRefundApprovalInput"}
+      responses:
+        "200":
           description: Refunded.
           headers:
             Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
@@ -5865,6 +5911,24 @@ components:
       required: [credits, reason]
       properties:
         credits: {$ref: "#/components/schemas/CreditAmount"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SubscriptionRefundProposal:
+      type: object
+      required: [id, grant_id, credits, state, requested_by, created_at]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        grant_id: {$ref: "#/components/schemas/Uuid"}
+        credits: {$ref: "#/components/schemas/CreditAmount"}
+        state: {type: string, enum: [pending, approved, rejected]}
+        requested_by: {$ref: "#/components/schemas/Uuid"}
+        approved_by: {$ref: "#/components/schemas/Uuid"}
+        created_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+    SubscriptionRefundApprovalInput:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
         reason: {$ref: "#/components/schemas/Reason"}
     SubscriptionRefund:
       type: object

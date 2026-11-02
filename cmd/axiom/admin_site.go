@@ -108,16 +108,9 @@ func (a adminAPI) UpdateSiteSettings(ctx context.Context, request adminapi.Updat
 	if err != nil {
 		return nil, err
 	}
+	set.KeepBillingPreference = request.Body.Settings.BillingPreference == nil
 	view, replayed, err := idempotently(ctx, a.db, "updateSiteSettings", request.Params.IdempotencyKey, []any{request.SiteId, request.Body},
 		func(tx pg.Tx) (adminapi.SiteSettingsView, error) {
-			if request.Body.Settings.BillingPreference == nil {
-				// A page built before this setting leaves it out; keep the stored value rather than clearing it.
-				before, err := a.accounts.SiteSettings(ctx, tx, id)
-				if err != nil {
-					return adminapi.SiteSettingsView{}, err
-				}
-				set.BillingPreference = before.BillingPreference
-			}
 			if err := a.accounts.SetSiteSettings(ctx, tx, actor(ctx), id, set, request.Body.Reason); err != nil {
 				return adminapi.SiteSettingsView{}, settingProblem(err)
 			}

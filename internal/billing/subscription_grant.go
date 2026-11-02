@@ -237,7 +237,7 @@ func (g SubscriptionGrant) params(subscription uuid.UUID, plan Plan, first int32
 	p := InsertGrantParams{
 		ID: g.ID, SiteID: g.Site, AccountID: g.Account, SubscriptionID: subscription, PlanID: plan.ID, PlanName: plan.Name,
 		Source: g.Source, Quota: plan.Quota, WindowSeconds: plan.WindowSeconds, TermSeconds: plan.TermSeconds,
-		Windows: n, FirstWindow: first, Face: face, Currency: currencyOf(g),
+		Windows: n, FirstWindow: &first, Face: face, Currency: currencyOf(g),
 	}
 	if g.Source == "paid" {
 		p.Paid, p.Fee = &g.Payment.Paid, &g.Payment.Fee

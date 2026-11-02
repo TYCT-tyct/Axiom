@@ -5,6 +5,7 @@ import (
 	"uuid"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/audit"
 	"axiom/internal/suppliers"
 )
 
@@ -132,4 +133,45 @@ func correctionLateWallet(t *testing.T) {
 	}
 	b.balanced()
 	b.replayed(b.admitted.Account)
+}
+
+// TestCorrectionAfterAFullRefundBooksNothingButTheCounters: a refund already reversed the call's revenue and left no
+// expired income. A later correction changes what the reservation and window report, but must not invent a
+// credit_expired entry for a window that was voided rather than expired.
+func TestCorrectionAfterAFullRefundBooksNothingButTheCounters(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 1000, 0, fallbackBankConfig)
+	grant := uuid.NewV7()
+	sub := b.subscribePaid(b.makePlan(300, 3600), grant, 100)
+	h := b.holdOn(b.exact, 100)
+	f := b.settleWith(h, outcome(Committed, FinishStop, used(t, 100, 0, 0, in, catalog.ItemOutput, webSearch)))
+	if !f.Estimated || f.Charged.CeilAmount() != 100 {
+		t.Fatalf("estimate = %+v, want an estimated 100", f)
+	}
+	if _, err := b.refund(SubscriptionRefundRequest{
+		ID: uuid.NewV7(), Site: b.admitted.Site, Account: b.admitted.Account, Grant: grant, SiteCurrency: usd,
+		Credits: 1_000_000_000, Reason: "full", Actor: audit.System("billing.test"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.subscriptionByID(sub.ID); got.State != "expired" || got.ClosedAt == nil {
+		t.Fatalf("subscription after refund = %+v, want expired and closed", got)
+	}
+	c := &corrector{db: b.app, scope: b.platform}
+	if borne, err := c.correct(t.Context(), planCorrectionEvent(t, h)); err != nil || borne != 0 {
+		t.Fatalf("correct = %d borne, %v", borne, err)
+	}
+	if n := b.count("SELECT charged FROM billing.reservations WHERE request_id = '" + h.id.String() + "'"); n != 50 {
+		t.Errorf("charged %d after the correction, want 50", n)
+	}
+	if n := b.book(bookPlanLiability); n != 0 {
+		t.Errorf("plan liability = %d, want 0", n)
+	}
+	if n := b.book(bookRevenue); n != 0 {
+		t.Errorf("revenue = %d, want 0: the refund already reversed the charge", n)
+	}
+	if n := b.book(bookCreditExpired); n != 0 {
+		t.Errorf("expired credit = %d, want 0: no term expired", n)
+	}
+	b.balanced()
 }

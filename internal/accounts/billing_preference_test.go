@@ -11,7 +11,7 @@ import (
 // TestBillingPreferenceFollowsTheSiteUntilTheAccountChooses: the admission snapshot reads the account's choice, then
 // the site's default, then the code default, without another query in the gateway.
 //
-//nolint:cyclop // one admission-to-console journey: each step is a different source of the same preference.
+//nolint:cyclop,gocognit // one admission-to-console journey: each step is a different source of the same preference.
 func TestBillingPreferenceFollowsTheSiteUntilTheAccountChooses(t *testing.T) {
 	t.Parallel()
 	db, database, s, key := callSetup(t)
@@ -69,5 +69,16 @@ func TestBillingPreferenceFollowsTheSiteUntilTheAccountChooses(t *testing.T) {
 	}
 	if got := admit(); got != accounts.BillingWalletFirst {
 		t.Errorf("after clearing the account choice = %q, want the site default", got)
+	}
+	// A node of the previous release reports no support; while it is live every new node must use the safe default.
+	if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(
+		`INSERT INTO platform.billing_preference_readiness (id, enabled) VALUES (true, false)`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := admit(); got != accounts.BillingSubscriptionFirst {
+		t.Errorf("while an old node is live = %q, want the default", got)
+	}
+	if p := read(); p.Preference != accounts.BillingSubscriptionFirst || p.Own {
+		t.Errorf("console read while an old node is live = %+v, want the safe default", p)
 	}
 }

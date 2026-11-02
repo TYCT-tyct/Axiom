@@ -178,7 +178,8 @@ func (a adminAPI) GrantSubscription(ctx context.Context, r adminapi.GrantSubscri
 	}, nil
 }
 
-// RefundSubscriptionGrant returns part or all of a paid grant and takes back the term it bought.
+// RefundSubscriptionGrant requests part or all of a paid grant. A different operator approves it before any money or
+// term moves.
 func (a adminAPI) RefundSubscriptionGrant(ctx context.Context, r adminapi.RefundSubscriptionGrantRequestObject) (adminapi.RefundSubscriptionGrantResponseObject, error) {
 	id, err := accountID(r.AccountId)
 	if err != nil {
@@ -188,51 +189,117 @@ func (a adminAPI) RefundSubscriptionGrant(ctx context.Context, r adminapi.Refund
 	if err != nil {
 		return nil, accounts.ErrNotFound
 	}
+	if r.Body == nil {
+		return nil, unprocessableFields("/body", "a refund request needs credits and a reason")
+	}
 	credits, err := strconv.ParseInt(r.Body.Credits, 10, 64)
 	if err != nil || credits <= 0 {
 		return nil, unprocessableFields("/credits", "a refund is a positive amount of site credits")
 	}
 	body, replayed, err := idempotently(ctx, a.db, "refundSubscriptionGrant", r.Params.IdempotencyKey,
 		[]any{r.AccountId, r.GrantId, r.Body},
-		func(tx pg.Tx) (adminapi.SubscriptionRefund, error) {
+		func(tx pg.Tx) (adminapi.SubscriptionRefundProposal, error) {
 			account, err := a.accounts.Account(ctx, tx, id)
 			if err != nil {
-				return adminapi.SubscriptionRefund{}, err
+				return adminapi.SubscriptionRefundProposal{}, err
 			}
 			currency, err := a.currencyOf(account.Site)
 			if err != nil {
-				return adminapi.SubscriptionRefund{}, err
+				return adminapi.SubscriptionRefundProposal{}, err
 			}
-			refund, err := billing.RefundSubscriptionGrant(ctx, tx, billing.SubscriptionRefundRequest{
+			proposal, err := billing.RequestSubscriptionRefund(ctx, tx, billing.SubscriptionRefundProposalRequest{
 				ID: uuid.NewV7(), Site: uuid.UUID(account.Site), Account: uuid.UUID(id), Grant: grant,
-				SiteCurrency: currency, Credits: credits, Reason: r.Body.Reason, Actor: actor(ctx),
+				SiteCurrency: currency, Credits: credits, Reason: r.Body.Reason,
+				RequestedBy: uuid.UUID(callOf(ctx).principal.UserID()), Actor: actor(ctx),
 			})
 			if err != nil {
-				return adminapi.SubscriptionRefund{}, refundProblem(err)
+				return adminapi.SubscriptionRefundProposal{}, refundProblem(err)
 			}
-			amount, err := billing.FromMinor(refund.Currency, refund.Paid)
-			if err != nil {
-				return adminapi.SubscriptionRefund{}, err
+			by := proposal.RequestedBy
+			state := adminapi.SubscriptionRefundProposalState(proposal.State)
+			out := adminapi.SubscriptionRefundProposal{
+				Id: proposal.ID.String(), GrantId: proposal.Grant.String(), Credits: strconv.FormatInt(proposal.Credits, 10),
+				State: state, RequestedBy: by.String(), CreatedAt: proposal.CreatedAt,
 			}
-			return adminapi.SubscriptionRefund{
-				Id: refund.ID.String(), GrantId: refund.Grant.String(),
-				Credits: strconv.FormatInt(refund.Credits, 10), Amount: adminMoney(amount, refund.Currency),
-				Windows: int(refund.Windows), Unused: strconv.FormatInt(refund.Unused, 10), Revoked: refund.Revoked,
-				CreatedAt: refund.CreatedAt,
-			}, nil
+			if proposal.ApprovedBy != nil {
+				approved := proposal.ApprovedBy.String()
+				out.ApprovedBy = &approved
+			}
+			out.FinishedAt = proposal.FinishedAt
+			return out, nil
 		})
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.RefundSubscriptionGrant201JSONResponse{
+	return adminapi.RefundSubscriptionGrant202JSONResponse{
 		Body:    body,
-		Headers: adminapi.RefundSubscriptionGrant201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
+		Headers: adminapi.RefundSubscriptionGrant202ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
+	}, nil
+}
+
+// ApproveSubscriptionRefund applies a pending request as a second operator.
+func (a adminAPI) ApproveSubscriptionRefund(ctx context.Context, r adminapi.ApproveSubscriptionRefundRequestObject) (adminapi.ApproveSubscriptionRefundResponseObject, error) {
+	id, err := accountID(r.AccountId)
+	if err != nil {
+		return nil, err
+	}
+	refundID, err := uuid.Parse(r.RefundId)
+	if err != nil {
+		return nil, accounts.ErrNotFound
+	}
+	if r.Body == nil || r.Body.Reason == "" {
+		return nil, unprocessableFields("/reason", "an approval needs a reason")
+	}
+	body, replayed, err := idempotently(ctx, a.db, "approveSubscriptionRefund", r.Params.IdempotencyKey,
+		[]any{r.AccountId, r.RefundId, r.Body},
+		func(tx pg.Tx) (adminapi.SubscriptionRefund, error) {
+			return a.approveRefund(ctx, tx, id, refundID, r.Body.Reason)
+		})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.ApproveSubscriptionRefund200JSONResponse{
+		Body:    body,
+		Headers: adminapi.ApproveSubscriptionRefund200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
+	}, nil
+}
+
+func (a adminAPI) approveRefund(ctx context.Context, tx pg.Tx, id accounts.AccountID, refundID uuid.UUID, reason string) (adminapi.SubscriptionRefund, error) {
+	if _, err := a.accounts.Account(ctx, tx, id); err != nil {
+		return adminapi.SubscriptionRefund{}, err
+	}
+	proposal, ok, err := billing.ReadSubscriptionRefundProposal(ctx, tx, refundID)
+	if err != nil {
+		return adminapi.SubscriptionRefund{}, err
+	}
+	if !ok || proposal.Account != uuid.UUID(id) {
+		return adminapi.SubscriptionRefund{}, accounts.ErrNotFound
+	}
+	refund, err := billing.ApproveSubscriptionRefund(ctx, tx, refundID, uuid.UUID(callOf(ctx).principal.UserID()),
+		actor(ctx), reason)
+	if err != nil {
+		return adminapi.SubscriptionRefund{}, refundProblem(err)
+	}
+	amount, err := billing.FromMinor(refund.Currency, refund.Paid)
+	if err != nil {
+		return adminapi.SubscriptionRefund{}, err
+	}
+	return adminapi.SubscriptionRefund{
+		Id: refund.ID.String(), GrantId: refund.Grant.String(),
+		Credits: strconv.FormatInt(refund.Credits, 10), Amount: adminMoney(amount, refund.Currency),
+		Windows: int(refund.Windows), Unused: strconv.FormatInt(refund.Unused, 10), Revoked: refund.Revoked,
+		CreatedAt: refund.CreatedAt,
 	}, nil
 }
 
 // refundProblem names a refusal of a subscription refund.
 func refundProblem(err error) error {
 	switch {
+	case errors.Is(err, billing.ErrRefundSecondPerson):
+		return &apiError{
+			status: http.StatusConflict, code: codeConflict,
+			message: "a different operator must approve the refund",
+		}
 	case errors.Is(err, billing.ErrRefundHeld):
 		return &apiError{
 			status: http.StatusConflict, code: codeConflict,

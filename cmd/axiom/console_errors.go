@@ -47,6 +47,7 @@ var refusals = []refusal{
 	{accounts.ErrPresetConflict, http.StatusConflict, codeConflict, "preset slug exists or limit reached"},
 	{accounts.ErrNotificationPreferences, http.StatusUnprocessableEntity, codeUnprocessable, "invalid notification preferences"},
 	{accounts.ErrBillingPreference, http.StatusUnprocessableEntity, codeUnprocessable, "invalid billing preference"},
+	{accounts.ErrBillingPreferenceRollout, http.StatusConflict, codeConflict, "billing preference waits for every gateway node to support it"},
 	{accounts.ErrAnnouncement, http.StatusUnprocessableEntity, codeUnprocessable, "invalid announcement validity window"},
 	{accounts.ErrInvalidReset, http.StatusUnprocessableEntity, codeUnprocessable, "invalid or expired password reset link"},
 	{accounts.ErrOAuthNotConfigured, http.StatusNotFound, codeNotFound, "third-party sign-in is not configured"},

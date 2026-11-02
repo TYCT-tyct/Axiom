@@ -195,13 +195,20 @@ JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id A
 WHERE s.id = @id;
 
 -- name: BillingPreference :one
--- The funding order calls of this account use: its own choice, or the site's default, or subscription_first. The
--- account's row is the only one the console scope can read; own says whether the account chose it.
-SELECT coalesce(a.billing_preference, p.preference, 'subscription_first')::text AS preference,
-    (a.billing_preference IS NOT NULL)::boolean AS own,
+-- The funding order calls of this account use: its own choice, or the site's default, or subscription_first. While a
+-- node of the previous release is live, the effective order is the safe default; own only says whether the account
+-- chose a value that is currently in force.
+SELECT CASE WHEN coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true)
+        THEN coalesce(a.billing_preference, p.preference, 'subscription_first')
+        ELSE 'subscription_first' END::text AS preference,
+    (coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true)
+        AND a.billing_preference IS NOT NULL)::boolean AS own,
     coalesce(p.preference, 'subscription_first')::text AS site_default
 FROM accounts.accounts a LEFT JOIN accounts.site_billing_preferences p ON p.site_id = a.site_id
 WHERE a.id = @account_id;
+
+-- name: BillingPreferenceReady :one
+SELECT coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true)::boolean AS ready;
 
 -- name: SetBillingPreference :exec
 -- A NULL clears the account's choice, so the site's default applies again.
