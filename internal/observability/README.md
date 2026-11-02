@@ -65,7 +65,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 | 账本、汇总和审计不随调用日志删除 | 保留任务只拼 `observability.call_log_*` 与 `call_attempt_*` 的分区名，从不写 `billing` 的语句；测试在一个已归档月份旁边放另一 schema 的行，运行后仍在 |
 | 分区的建与删只由专用角色做 | 两张父表和全部分区归 `axiom_retention_job`（NOLOGIN）；`axiom_owner` 继承它，部署建的 `axiom_retention` 登录是它的成员，`axiom_app` 不是。应用仍只有 SELECT/INSERT，保留任务用 `AXIOM_RETENTION_DATABASE_URL` 独立连接，拿到分区 DDL 所需的所有权。测试：任务在独立登录下能建、删分区，应用不能改表 |
 | 用户看不到成本、端点和路由 | `OwnCall` 没有这些字段；尝试表不向用户开放，查询也不选尝试（[接入与对外接口的「用量与费用」](../../docs/domains/gateway.md#用量与费用)） |
-| 文字能存进库 | `Commit` 在写 spill 前拒绝不合法的 UTF-8、NUL 和打印成 jsonb 文本后超过 8192 字节的路由 JSON（每个 `:`、`,` 后多一个空格，按此上界计），包括每次尝试的文字；这是 bug 或上游脏数据，不是可以跳过的行，进了 spill 它会在每次重放时被数据库拒绝。路由由 routing 有界编码：选定的路线、断路兜底、尝试（只有端点和结果，出口在 `call_attempt`）和每个原因的数量完整，被排除的端点最多逐个记 16 个，最坏情况约 5.4 KB，所以合法的 `openrouter/auto` 记录总能写进 `call_log.route`。记录计入 `records.lost{reason="invalid"}`，recorder 标记为不可记录，准入从此拒绝。测试：非法 UTF-8、NUL、未知 outcome、超过 jsonb 上限的路由（`TestEnqueueRejectsText`），逐项排除上千个候选的最大路由（`TestRecordIsBounded`）并写进真实数据库（`TestBoundedRouteFitsTheColumn`） |
+| 文字能存进库 | `Commit` 在写 spill 前拒绝不合法的 UTF-8、NUL 和打印成 jsonb 文本后超过 8192 字节的路由 JSON（每个 `:`、`,` 后多一个空格，按此上界计），包括每次尝试的文字；这是 bug 或上游脏数据，不是可以跳过的行，进了 spill 它会在每次重放时被数据库拒绝。路由由 routing 有界编码：选定的路线、尝试（只有端点和结果，出口在 `call_attempt`）和每个原因的数量完整，被排除的端点最多逐个记 16 个，最坏情况约 5.2 KB，所以合法的 `openrouter/auto` 记录总能写进 `call_log.route`。记录计入 `records.lost{reason="invalid"}`，recorder 标记为不可记录，准入从此拒绝。测试：非法 UTF-8、NUL、未知 outcome、超过 jsonb 上限的路由（`TestEnqueueRejectsText`），逐项排除上千个候选的最大路由（`TestRecordIsBounded`）并写进真实数据库（`TestBoundedRouteFitsTheColumn`） |
 | 终端用户标识只以带密钥的哈希存放 | `EndUserHash` 是带私有数组的结构，包外无法构造非零值 |
 | 没有对话正文、密钥或凭证 | 两张表的列里没有这样的名字或字节类型，文字和 JSON 列都有长度或格式检查；测试读 `information_schema` 核对两张表。请求头只记应用归因的三个，由 gateway 去控制字符、按列宽截断（`app_referer` 另去掉 userinfo、查询串和片段）后放入 `app_referer`、`app_title`、`app_categories`；其余请求头一律不记 |
 | 每次尝试有且只有一行，且能从调用找到 | `call_attempt` 的主键 `(request_id, at, attempt_seq)`；`Seq` 必须从 1 连续递增，最多 `platform.MaxAttemptSeq` 次（`TestALoopsAttemptsAreKept`）；调用行的端点、来源类别、出口和次数由最后一个尝试算出。测试：写两次只有一行，按序号读回每次尝试，调用行与最后尝试一致 |
@@ -198,9 +198,9 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 账户的 `accounts.authentication_failures` 是账户后台按站点每分钟至多上报一次的完整分钟峰值，只有达到已配置规则阈值才创建事件。消费每条样本时立即评估该事件并持久安排符合规则的首通知，再处理后续低值或恢复；因此消费积压不会把已完成的攻击窗口覆盖掉。低于所有阈值的样本或零窗口结束事件，实际通知派发仍在消费事务之后。账户负责限速、计数和脱敏，本模块沿用持续时间、静默、重复和通知机制。
 
-`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者（告警、Webhook 和 `observability.spend`）；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执，`00008` 扩展冻结的 Webhook 正文、封存签名密钥和渠道测试位置，`00014` 保存检测状态、阈值和按时间取账户的索引；platform `00015` 保存来源消费位置。
+`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者（告警、Webhook 和 `observability.spend`）；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执，`00008` 扩展冻结的 Webhook 正文、封存签名密钥和渠道测试位置，`00014` 保存检测状态、阈值和按时间取账户的索引，`00017` 保存回执的展示字段快照；platform `00015` 保存来源消费位置。
 
-比较方案：直接让模块引用 observability 并同步建事件，接口较少，但倒置模块依赖且故障进入业务事务；选择平台信号表和 observability 消费，增加一跳延迟，换来独立事务和跨节点接管。消费锁覆盖信号转事件的有界数据库批次及完整安全样本的即时评估；常规周期评估、派发和保留清理另开事务，待发回执用 FOR UPDATE SKIP LOCKED 认领，邮件和 Webhook 网络请求在事务之外。Webhook 的 10 秒期限只包出站请求，回执读写使用外层作业期限。邮件回执由 mail 的注入回调写入本模块，mail 不引用 observability。
+比较方案：直接让模块引用 observability 并同步建事件，接口较少，但倒置模块依赖且故障进入业务事务；选择平台信号表和 observability 消费，增加一跳延迟，换来独立事务和跨节点接管。消费锁覆盖信号转事件的有界数据库批次及完整安全样本和支付窗口样本的即时评估；事件字段保留当前样本供规则判断，回执在创建时冻结展示字段，后续低值可重置持续条件而不改写待发通知；常规周期评估、派发和保留清理另开事务，待发回执用 FOR UPDATE SKIP LOCKED 认领，邮件和 Webhook 网络请求在事务之外。Webhook 的 10 秒期限只包出站请求，回执读写使用外层作业期限。邮件回执由 mail 的注入回调写入本模块，mail 不引用 observability。
 
 不变量：同一种类和键只有一个未恢复事件（部分唯一索引）；同一事件、规则和通知序号只有一条回执（唯一约束）；基础设施失败回滚当前阶段，已提交事件仍在待评估索引中；无效信号留在信号表的 quarantined 行供排查，不堵后续信号；发送成功后才写 delivered；恢复通知等之前的发送进入终态；首通知失败则只留 failed 恢复回执；静默只推迟发送，不删除事件；无渠道不丢事件；所有新表 FORCE RLS，仅平台范围可见。`webhook_keys` 的触发器 `fence_envelope_key_version` 拒绝写入已退役的 `key_version`（见[平台的凭证加密](../platform/README.md#凭证加密)）。评估读配置时持有 FOR SHARE，替换配置的 UPDATE 与其互斥，避免旧规则留下新窗口。管理替换配置以 rev 做乐观锁，拒绝悬空渠道引用。同一种类不能有两条规则指向同一渠道。待发通知保留渠道快照，后续配置替换不改变它的收件人。
 

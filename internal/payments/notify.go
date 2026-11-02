@@ -29,6 +29,7 @@ func (p *Payments) Notify() http.Handler {
 		defer cancel()
 		ip := clientip.Group(clientip.Addr(r, p.proxies))
 		if !p.allowCallback(callbackKey{ip: ip}, callbackIPLimit, time.Now()) {
+			p.rateLimited("callbacks")
 			http.Error(w, "callback rate exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -49,11 +50,13 @@ func (p *Payments) Notify() http.Handler {
 			return
 		}
 		if !p.allowCallback(callbackKey{MerchantID(id), ip}, callbackMerchantLimit, time.Now()) {
+			p.rateLimited("callbacks")
 			http.Error(w, "callback rate exceeded", http.StatusTooManyRequests)
 			return
 		}
 		n, err := ch.Verify(ctx, Callback{Method: r.Method, RawQuery: r.URL.RawQuery, Body: body, Header: r.Header})
 		if err != nil {
+			p.verificationFailed()
 			http.Error(w, "invalid signature", http.StatusBadRequest)
 			return
 		}

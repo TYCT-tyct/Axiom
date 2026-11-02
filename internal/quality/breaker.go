@@ -124,6 +124,14 @@ func (m *Monitor) Live(id suppliers.EndpointID, credentials int) *State {
 	return e
 }
 
+// Offline reports whether a failed re-check has taken the endpoint out of service, not merely out of the normal route.
+// A tripped endpoint that has not failed its re-check yet is only degraded: routing may use it as a last resort.
+func (e *State) Offline(time.Time) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.mode == Enforce && e.probeable && e.record.Opened != 0 && e.record.Warned
+}
+
 // Routing reads the live breaker and the temporary concurrency ceiling; zero means closed/unlimited.
 func (e *State) Routing(now time.Time) (opened time.Time, limit int64) {
 	e.mu.Lock()
@@ -217,17 +225,23 @@ func (m *Monitor) delay(level int) time.Duration {
 	return max(probeBase, min(time.Duration(float64(d)*(.75+.5*m.loop.rand())), probeMax))
 }
 
+// recover closes an observe-mode would-remove on a counted success. In enforce mode a probeable endpoint restores only
+// through a passing probe; a real success can only come from a degraded endpoint, and restores one that has no probe at
+// all (an owned endpoint or one with no generation format), where a real request is the only re-check available; that
+// request must have been sent after the trip, or it says nothing about the endpoint now. An offline endpoint takes no
+// real traffic, so its only way back is a probe.
 func (m *Monitor) recover(e *State, v verdict, o *Observation) {
-	r := e.record
-	if v != success || m.mode == Enforce && (!o.BreakerFallback || o.Sent.UnixNano() <= r.Opened) {
+	if v != success || (m.mode == Enforce && (e.record.Warned || e.probeable || o.Sent.UnixNano() <= e.record.Opened)) {
 		return
 	}
+	r := e.record
 	r.Opened = 0
 	r.Restored = o.Ended.UnixNano()
 	r.Next = 0
 	r.Owner = uuid.UUID{}
 	r.Lease = 0
 	r.Request = o.Request
+	r.Warned = false
 	if m.transition(e, r, "restored", false) {
 		e.window = window{}
 		e.successes = 0

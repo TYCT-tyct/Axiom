@@ -12,8 +12,7 @@ import (
 
 // storedRoute is the JSON the call log keeps, decoded for the assertions.
 type storedRoute struct {
-	BreakerFallback []string `json:"breaker_open_fallback"`
-	Excluded        []struct {
+	Excluded []struct {
 		Endpoint string `json:"endpoint"`
 		Reason   string `json:"reason"`
 	} `json:"excluded"`
@@ -26,16 +25,15 @@ type storedRoute struct {
 }
 
 // TestRecordIsBounded: the largest record a request can produce, one that weighs many candidates as openrouter/auto
-// does, with the most route entries, breaker fallbacks and attempts, must fit the call log's route column: 8192 bytes
+// does, with the most route entries and attempts, must fit the call log's route column: 8192 bytes
 // of jsonb text, which prints a space after every ':' and ','. The named exclusions stop at the cap; the reason counts
 // and the selected route remain complete.
 func TestRecordIsBounded(t *testing.T) {
 	t.Parallel()
 	record := routing.Record{
-		Route:           ids(routing.MaxEntries),
-		BreakerFallback: ids(routing.MaxEntries),
-		Attempts:        attempts(platform.MaxAttemptSeq),
-		Unmeasured:      true,
+		Route:      ids(routing.MaxEntries),
+		Attempts:   attempts(platform.MaxAttemptSeq),
+		Unmeasured: true,
 	}
 	for i := 0; i < 1000; i++ {
 		record.Excluded = append(record.Excluded, routing.Excluded{

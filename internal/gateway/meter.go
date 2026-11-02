@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"net/http"
 	"time"
 
 	"axiom/internal/billing"
@@ -111,15 +112,21 @@ func (a *attempt) writeFor(left int64) time.Duration {
 }
 
 // cut is how a call ends whose reservation could not be extended: a source that cannot pay says which, and when it is
-// a limit that resets, when to come back, as a 402 does; anything else is billing being unavailable
-// (docs/domains/gateway.md「错误」).
+// a limit that resets, when to come back; anything else is billing being unavailable (docs/domains/gateway.md「错误」).
+// The code is the status the same refusal would have answered before the stream: a key's or workspace's 403, the
+// balance's 402.
 func cut(err error) ended {
 	ins, ok := errors.AsType[*billing.Insufficient](err)
 	if !ok {
 		return ended{err: protocol.Error{Type: protocol.BillingUnavailable}}
 	}
+	status := 0
+	if ins.Source == billing.SourceWorkspace || ins.Source == billing.SourceKey {
+		status = http.StatusForbidden
+	}
 	e := ended{err: protocol.Error{
 		Type:    protocol.CreditsInsufficient,
+		Status:  status,
 		Message: "The credits available cannot cover the rest of this response, so it was cut short.",
 		Details: `,"limit_source":"` + limitSources[ins.Source] + `"`,
 	}}

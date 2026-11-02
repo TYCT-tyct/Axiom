@@ -356,12 +356,13 @@ var faultNames = map[protocol.Fault]string{
 // scopeName is a failure's scope in the admin contract's spelling.
 func scopeName(s Scope) string { return ProblemScopes[s] }
 
-// testCall is the body of a test in the format it tests. The bodies are new-api's channel test
-// (controller/channel-test.go:702-782, commit 7d8b912, 2026-10-22) with two changes: the output is capped in Responses too, which
-// new-api leaves uncapped, and no member asks for reasoning, which only adds to what the cap must cover. The Chat cap is
-// max_tokens, so a model that refuses it in favour of max_completion_tokens answers 400 and the
-// test is inconclusive rather than a failure the endpoint did not commit (internal/suppliers/README.md「用真实生成测试
-// 端点」).
+// testCall is the body of a test in the format it tests. The three Chat-shaped bodies are new-api's channel test
+// (controller/channel-test.go:702-782, commit 7d8b912, 2026-10-22) with two changes: the output is capped in Responses
+// too, which new-api leaves uncapped, and no member asks for reasoning, which only adds to what the cap must cover. The
+// legacy completion body is OpenAI's Create completion shape (streaming, prompt, max_tokens); new-api has no such
+// endpoint type, so its channel test has no branch for it. The Chat cap is max_tokens, so a model that refuses it in
+// favour of max_completion_tokens answers 400 and the test is inconclusive rather than a failure the endpoint did not
+// commit (internal/suppliers/README.md「用真实生成测试端点」).
 //
 //nolint:exhaustive // endpoint tests cover the generation formats; direct formats return ErrNoFormat
 func testCall(f protocol.Format, model, prompt string, output int64) ([]byte, error) {
@@ -377,6 +378,8 @@ func testCall(f protocol.Format, model, prompt string, output int64) ([]byte, er
 			"model": model, "stream": true, "max_tokens": output, "messages": []any{message},
 			"stream_options": map[string]any{"include_usage": true},
 		}
+	case protocol.Completions:
+		body = map[string]any{"model": model, "stream": true, "max_tokens": output, "prompt": prompt}
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrNoFormat, f)
 	}

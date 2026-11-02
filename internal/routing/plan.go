@@ -115,7 +115,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		r.sort(order, n.strategy())
 	}
 	attempts := r.attempts(n)
-	order = healthOrder(order, n, &rec, min(attempts, MaxEntries))
+	order = healthOrder(order, &rec)
 	rec.Unmeasured = unmeasured(order, n.strategy())
 	entries := r.entries(order, n, &rec)
 	entries = entries[:min(len(entries), attempts)] // an entry past the most attempts could never be reached
@@ -125,9 +125,6 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	for _, e := range entries {
 		rec.Route = append(rec.Route, e.Endpoint)
-		if e.BreakerFallback {
-			rec.BreakerFallback = append(rec.BreakerFallback, e.Endpoint)
-		}
 	}
 	return Plan{
 		Entries: entries, MaxAttempts: attempts,
@@ -222,7 +219,6 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 			continue
 		}
 		entry := r.entry(c.candidate, n)
-		entry.BreakerFallback = !c.opened.IsZero()
 		entry.Price = c.price.PriceRef
 		entries = append(entries, entry)
 	}
@@ -492,90 +488,44 @@ func (n *need) withinLimit(limit PriceLimit, c *candidate, price *candidatePrice
 
 func listed(ids []SupplierID, id SupplierID) bool { return slices.Contains(ids, id) }
 
-// serveable reports whether some endpoint can serve now. When only slow-full windows keep every other endpoint from
-// serving, their marks are cleared first: a route that starts when a window recovers beats no route at all.
-func serveable(order []ranked) bool {
-	if slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() && !c.slowFull }) {
-		return true
-	}
-	if !slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() }) {
-		return false
+// clearSlowFull drops slow-start marks when only those windows keep the untripped endpoints from serving: a
+// single-endpoint model does not queue behind its own recovery (docs/domains/quality.md「恢复」). A tripped endpoint is
+// never counted as serveable.
+func clearSlowFull(order []ranked) {
+	if slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() && !c.slowFull }) ||
+		!slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() }) {
+		return
 	}
 	for i := range order {
 		order[i].slowFull = false
 	}
-	return true
 }
 
-// healthOrder applies breakers after every request-specific filter, across primary and alternate models.
-func healthOrder(order []ranked, n *need, rec *Record, slots int) []ranked {
-	if !serveable(order) {
-		orderLastResorts(order, n.rankAll())
-		return order
-	}
-	owned, hasOwned := ownedFallback(order, n.now)
+// healthOrder applies breakers after every request-specific filter, across primary and alternate models. A tripped
+// endpoint is degraded: out of the normal route, but still the last resort while its re-check is pending. Only one whose
+// re-check failed (offline) takes no traffic at all; when every candidate is offline, Plan returns a temporary
+// NoEndpoint and the gateway refuses the request (docs/domains/quality.md「恢复」).
+func healthOrder(order []ranked, rec *Record) []ranked {
+	clearSlowFull(order)
+	var degraded []ranked
 	out := order[:0]
 	for _, c := range order {
-		reason := Reason(0)
-		if !c.opened.IsZero() {
-			reason = BreakerOpen
-		} else if c.slowFull {
-			reason = Full
-		}
-		if reason != 0 {
-			rec.Excluded = append(rec.Excluded, Excluded{c.ID, reason})
-		} else {
+		switch {
+		case !c.opened.IsZero() && c.offline:
+			rec.Excluded = append(rec.Excluded, Excluded{c.ID, BreakerOpen})
+		case !c.opened.IsZero():
+			degraded = append(degraded, c)
+		case c.slowFull:
+			rec.Excluded = append(rec.Excluded, Excluded{c.ID, Full})
+		default:
 			out = append(out, c)
 		}
 	}
-	if hasOwned {
-		out = includeOwnedFallback(out, owned, slots, n.over.NoFallbacks && len(n.over.OrderNames) == 0)
+	if len(out) == 0 && len(degraded) > 0 {
+		return append(out, degraded...)
+	}
+	for _, c := range degraded {
+		rec.Excluded = append(rec.Excluded, Excluded{c.ID, BreakerOpen})
 	}
 	return out
-}
-
-// Repeated suppliers of one model must not consume the slots reserved for alternate models before entries deduplicates.
-func includeOwnedFallback(order []ranked, owned ranked, slots int, perModel bool) []ranked {
-	if perModel {
-		if slices.ContainsFunc(order, func(c ranked) bool { return c.Model == owned.Model }) {
-			return order
-		}
-		kept := order[:0]
-		for _, c := range order {
-			if len(kept) == slots-1 {
-				break
-			}
-			if !slices.ContainsFunc(kept, func(previous ranked) bool { return previous.Model == c.Model }) {
-				kept = append(kept, c)
-			}
-		}
-		order = kept
-	}
-	order = order[:min(len(order), slots-1)]
-	return append(order, owned)
-}
-
-func ownedFallback(order []ranked, now time.Time) (owned ranked, found bool) {
-	for _, c := range order {
-		if c.Owner.Platform() || c.opened.IsZero() || now.Sub(c.opened) < 10*time.Minute {
-			continue
-		}
-		if !found || c.opened.After(owned.opened) {
-			owned = c
-			found = true
-		}
-	}
-	return
-}
-
-func orderLastResorts(order []ranked, global bool) {
-	// rank already groups each model by supplier order and slow status.
-	for start := 0; start < len(order); {
-		end := start + 1
-		for end < len(order) && (global || order[end].Model == order[start].Model) && order[end].order == order[start].order && order[end].slow == order[start].slow {
-			end++
-		}
-		slices.SortStableFunc(order[start:end], func(a, b ranked) int { return b.opened.Compare(a.opened) })
-		start = end
-	}
 }

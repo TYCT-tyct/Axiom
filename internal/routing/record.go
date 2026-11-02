@@ -10,10 +10,9 @@ import (
 // The gateway appends the attempts; observability stores it with the call, and the user and the operations agent read
 // it from there.
 type Record struct {
-	BreakerFallback []EndpointID
-	Excluded        []Excluded
-	Route           []EndpointID
-	Attempts        []Attempt
+	Excluded []Excluded
+	Route    []EndpointID
+	Attempts []Attempt
 	// Unmeasured: the request asked for the fastest endpoint first and none of its candidates is measured, so the route
 	// is in Balanced's price-weighted order and says nothing about speed (docs/domains/routing.md「排序的先后」).
 	Unmeasured bool
@@ -29,9 +28,8 @@ type Attempt struct {
 
 // recorded, JSON-ready: the identifiers as text, the reasons by name.
 type recordJSON struct {
-	BreakerFallback []string       `json:"breaker_open_fallback,omitzero"`
-	Unmeasured      bool           `json:"fastest_unmeasured,omitzero"`
-	Excluded        []excludedJSON `json:"excluded"`
+	Unmeasured bool           `json:"fastest_unmeasured,omitzero"`
+	Excluded   []excludedJSON `json:"excluded"`
 	// ExcludedMore counts the candidates left out beyond the ones named above; ExcludedReasons counts every one of
 	// them by reason. Together they keep the stored route a complete summary without letting openrouter/auto, which
 	// weighs every model the key may call, grow the record past the call log's column limit.
@@ -42,7 +40,7 @@ type recordJSON struct {
 }
 
 // maxRecordedExclusions bounds the individual candidates the stored route names. The reason counts cover all of them;
-// the route, the attempts and the breaker fallbacks are never omitted, because they explain what served the call.
+// the route and the attempts are never omitted, because they explain what served the call.
 const maxRecordedExclusions = 16
 
 type excludedJSON struct {
@@ -84,9 +82,6 @@ func (r Record) JSON() ([]byte, error) {
 	}
 	for _, id := range r.Route {
 		w.Route = append(w.Route, uuid.UUID(id).String())
-	}
-	for _, id := range r.BreakerFallback {
-		w.BreakerFallback = append(w.BreakerFallback, uuid.UUID(id).String())
 	}
 	for _, a := range r.Attempts {
 		w.Attempts = append(w.Attempts, attemptJSON{uuid.UUID(a.Endpoint).String(), a.Failed, uint8(a.Scope), uint8(a.Action)})

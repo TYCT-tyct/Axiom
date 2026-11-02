@@ -250,7 +250,6 @@ func TestBoundedRouteFitsTheColumn(t *testing.T) {
 	route := routing.Record{Unmeasured: true}
 	for range routing.MaxEntries {
 		route.Route = append(route.Route, routing.EndpointID(uuid.NewV7()))
-		route.BreakerFallback = append(route.BreakerFallback, routing.EndpointID(uuid.NewV7()))
 	}
 	for range platform.MaxAttemptSeq {
 		route.Attempts = append(route.Attempts, routing.Attempt{

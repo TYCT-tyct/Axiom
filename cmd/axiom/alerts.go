@@ -66,8 +66,7 @@ func collectAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, si
 	return previous
 }
 
-func startAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, console *consoleParts, logger *slog.Logger) func() {
-	signals := alert.New(ctx, db, pg.PlatformScope(), logger)
+func startAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, console *consoleParts, logger *slog.Logger, signals *alert.Bus) func() {
 	console.alerts = signals
 	stop := sampleAlerts(ctx, db, r, signals, console.cfg.valkey.NodeID, logger)
 	return func() {
