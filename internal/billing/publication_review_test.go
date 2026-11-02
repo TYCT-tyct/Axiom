@@ -67,6 +67,27 @@ func TestEndpointChangeGateCatchesMovesInsideTheEnvelope(t *testing.T) {
 	if got := automaticEndpointPriceStatus(policy, current, EndpointPrices{endpoint: aboveCap}, EndpointPrices{endpoint: floor}, true); got != "blocked" {
 		t.Fatalf("unsafe endpoint above cap status = %s, want blocked", got)
 	}
+
+	a, b := uuid.NewV7(), uuid.NewV7()
+	aOld := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"10","output":"1"}}`)
+	bOld := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"1"}}`)
+	aNew := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"12.5","output":"1"}}`)
+	bNew := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"2.5","output":"1"}}`)
+	aFloor := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"11","output":"1"}}`)
+	bFloor := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"1"}}`)
+	mixed := Sold{Version: uuid.NewV7(), Schedule: aOld, Endpoints: EndpointPrices{a: aOld, b: bOld}}
+	if got := automaticEndpointPriceStatus(policy, mixed, EndpointPrices{a: aNew, b: bNew}, EndpointPrices{a: aFloor, b: bFloor}, true); got != "pending" {
+		t.Fatalf("mixed safe and unsafe endpoints = %s, want pending (the safe endpoint needs confirmation, the unsafe one does not block)", got)
+	}
+	bNew = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"1"}}`)
+	onlyA := Sold{Version: uuid.NewV7(), Schedule: aOld, Endpoints: EndpointPrices{a: aOld}}
+	if got := automaticEndpointPriceStatus(policy, onlyA, EndpointPrices{a: aOld, b: bNew}, EndpointPrices{a: aFloor, b: bFloor}, true); got != "pending" {
+		t.Fatalf("new endpoint = %s, want pending rather than stopping existing endpoints", got)
+	}
+	shared := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"10","output":"1"}}`)
+	if got := automaticSharedEndpointPriceStatus(policy, mixed, shared, bFloor, true); got != "pending" {
+		t.Fatalf("switch to a shared price = %s, want pending for the endpoint that moved from 1 to 10", got)
+	}
 }
 
 func TestCostPlusIgnoresReferenceRevision(t *testing.T) {

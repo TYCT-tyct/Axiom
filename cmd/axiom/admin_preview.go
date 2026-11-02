@@ -97,29 +97,44 @@ type marginBand struct {
 	above int64
 }
 
-func marginBands(view catalog.ScheduleView) []marginBand {
+func marginBands(views ...catalog.ScheduleView) []marginBand {
 	seen := map[marginBand]struct{}{}
 	var bands []marginBand
-	for _, r := range view.Rates {
-		b := marginBand{tier: r.ServiceTier, base: r.Base, above: r.Above}
-		if _, ok := seen[b]; ok {
-			continue
+	for _, view := range views {
+		for _, r := range view.Rates {
+			b := marginBand{tier: r.ServiceTier, base: r.Base, above: r.Above}
+			if _, ok := seen[b]; ok {
+				continue
+			}
+			seen[b] = struct{}{}
+			bands = append(bands, b)
 		}
-		seen[b] = struct{}{}
-		bands = append(bands, b)
 	}
 	return bands
+}
+
+func marginBasis(sale, cost catalog.ScheduleView) ([]catalog.Item, bool) {
+	switch {
+	case len(sale.Basis) == 0:
+		return cost.Basis, true
+	case len(cost.Basis) == 0:
+		return sale.Basis, true
+	case slices.Equal(sale.Basis, cost.Basis):
+		return sale.Basis, true
+	default:
+		return nil, false
+	}
 }
 
 func marginAtBand(sale, cost catalog.Schedule, basis []catalog.Item, b marginBand) (*big.Rat, bool) {
 	counts := make(map[catalog.Item]int64, len(basis))
 	if !b.base {
-		if b.above >= 10_000_000_000 {
+		if b.above >= 10_000_000_000 || len(basis) == 0 {
 			return nil, false // a context tier above the usage domain cannot be sampled
 		}
-		for _, it := range basis {
-			counts[it] = b.above + 1
-		}
+		// The basis items sum to the prompt length. Put the whole threshold margin on one basis item; filling every
+		// item with above+1 would skip the bands between thresholds when the basis has more than one item.
+		counts[basis[0]] = b.above + 1
 	}
 	usage, err := catalog.NewUsage(counts, b.tier, nil)
 	if err != nil {
@@ -149,10 +164,14 @@ func marginAtBand(sale, cost catalog.Schedule, basis []catalog.Item, b marginBan
 // image fallbacks and a tier's inherited base rate; a rate whose cost is unknown makes the margin unknown rather than
 // a hundred percent, and a zero sale rate is skipped rather than divided by zero.
 func marginOf(sale, cost catalog.Schedule) *string {
-	view := sale.View()
+	saleView, costView := sale.View(), cost.View()
+	basis, ok := marginBasis(saleView, costView)
+	if !ok {
+		return nil // the two schedules count different prompt items, so a shared sample has no meaning
+	}
 	var lowest *big.Rat
-	for _, b := range marginBands(view) {
-		margin, ok := marginAtBand(sale, cost, view.Basis, b)
+	for _, b := range marginBands(saleView, costView) {
+		margin, ok := marginAtBand(sale, cost, basis, b)
 		if !ok {
 			return nil
 		}

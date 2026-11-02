@@ -389,6 +389,19 @@ func TestPreviewMarginUsesEffectivePrices(t *testing.T) {
 	if got := marginOf(sale, cost); got == nil || *got != "0.5" {
 		t.Errorf("base and above:0 margins = %v, want 0.5", got)
 	}
+	// The cost's context threshold is not in the sale's view; the lowest margin is at that threshold, not only at the
+	// sale's own base price.
+	sale = schedule(`{"v":1,"currency":"USD","rates":{"input":"2","output":"2"}}`)
+	cost = schedule(`{"v":1,"currency":"USD","rates":{"input":"1","output":"1"},"context_tiers":{"method":"whole","basis":["input"],"tiers":[{"above":100,"rates":{"input":"1.5","output":"1.5"}}]}}`)
+	if got := marginOf(sale, cost); got == nil || *got != "0.25" {
+		t.Errorf("cost-only tier margin = %v, want 0.25", got)
+	}
+	// A multi-item basis must land its sum on the threshold, not put above+1 in every item and skip a band.
+	sale = schedule(`{"v":1,"currency":"USD","rates":{"input":"4","cache_read":"4"},"context_tiers":{"method":"whole","basis":["input","cache_read"],"tiers":[{"above":10,"rates":{"input":"2","cache_read":"2"}},{"above":20,"rates":{"input":"4","cache_read":"4"}}]}}`)
+	cost = schedule(`{"v":1,"currency":"USD","rates":{"input":"1","cache_read":"1"}}`)
+	if got := marginOf(sale, cost); got == nil || *got != "0.5" {
+		t.Errorf("multi-item basis margin = %v, want 0.5", got)
+	}
 }
 
 // TestPreviewEndpointUsesCurrentSaleForMargin: when serving endpoints show the current published price, the margin is

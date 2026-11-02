@@ -6,6 +6,7 @@ import (
 	"uuid"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
 
@@ -152,14 +153,56 @@ func TestEndpointRaiseInsideTheEnvelopeBlocks(t *testing.T) {
 	f := newPrices(t)
 	f.method(plus("0"))
 	second := priceCost(t, f.model, "0.000002")
+	// Keep the dearest endpoint's output high enough that scaling the cheaper endpoint's whole cost does not move
+	// the model's output envelope either; otherwise the old model-level gate would also block and the test would not
+	// prove the endpoint gate is reached.
+	second.Schedule = mustSchedule(t, `{"v":1,"currency":"XXX","rates":{"input":"0.000002","output":"0.00001"}}`)
 	f.costs = append(f.costs, second)
 	if sold := f.refresh()[f.model]; sold.Version == uuid.Nil() {
 		t.Fatal("the first publication has no version")
 	}
+	before, err := f.published().Schedule.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.costs[0].UnitValue = "3"
 	f.refresh()
+	after, err := catalog.ParseSchedule(f.state().Schedule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterJSON, err := after.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, afterJSON) {
+		t.Fatalf("the model envelope moved, so this test would not isolate the endpoint gate:\nbefore %s\nafter  %s", before, afterJSON)
+	}
 	if got := f.state().Status; got != "blocked" {
 		t.Fatalf("status after a cheaper endpoint's cost rose = %s, want blocked", got)
+	}
+}
+
+// TestSharedPriceAfterEndpointPricesIsGated covers switching a model with separate endpoint prices back to one fixed
+// price. The model envelope is unchanged, but the cheaper endpoint's old price changes from 0.5e-6 to 2e-6, so the
+// shared model-level gate alone would publish it without confirmation.
+func TestSharedPriceAfterEndpointPricesIsGated(t *testing.T) {
+	t.Parallel()
+
+	f := newPrices(t)
+	f.method(plus("0"))
+	f.costs = append(f.costs, priceCost(t, f.model, "0.000002"))
+	before := f.refresh()[f.model]
+	if before.Version == uuid.Nil() {
+		t.Fatal("the first publication has no version")
+	}
+	f.method(Method{Kind: "fixed", Schedule: jsonx.Raw(`{"v":1,"currency":"USD","rates":{"input":"0.000002","output":"0.000001"}}`)})
+	f.refresh()
+	if got := f.state().Status; got != "pending" {
+		t.Fatalf("shared price after endpoint prices = %s, want pending", got)
+	}
+	if got := f.published().Version; got != before.Version {
+		t.Fatalf("pending publication replaced the current version: %s, want %s", got, before.Version)
 	}
 }
 
