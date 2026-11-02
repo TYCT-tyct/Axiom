@@ -73,8 +73,8 @@ func (q *Queries) FreshPricePolicy(ctx context.Context, db DBTX, arg FreshPriceP
 }
 
 const insertPriceVersion = `-- name: InsertPriceVersion :exec
-INSERT INTO billing.price_versions(id,site_id,model_id,audience_kind,audience_id,candidate_id,schedule,basis,overridden,actor,reason)
-VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+INSERT INTO billing.price_versions(id,site_id,model_id,audience_kind,audience_id,candidate_id,schedule,basis,endpoints,overridden,actor,reason)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 `
 
 type InsertPriceVersionParams struct {
@@ -86,6 +86,7 @@ type InsertPriceVersionParams struct {
 	CandidateID  uuid.UUID
 	Schedule     []byte
 	Basis        []byte
+	Endpoints    []byte
 	Overridden   bool
 	Actor        string
 	Reason       string
@@ -101,6 +102,7 @@ func (q *Queries) InsertPriceVersion(ctx context.Context, db DBTX, arg InsertPri
 		arg.CandidateID,
 		arg.Schedule,
 		arg.Basis,
+		arg.Endpoints,
 		arg.Overridden,
 		arg.Actor,
 		arg.Reason,
@@ -109,7 +111,7 @@ func (q *Queries) InsertPriceVersion(ctx context.Context, db DBTX, arg InsertPri
 }
 
 const lockPricePolicy = `-- name: LockPricePolicy :one
-SELECT rev,floor_multiplier,change_ratio,max_increase_ratio FROM billing.price_policies WHERE site_id= $1 FOR UPDATE
+SELECT rev,floor_multiplier,change_ratio,max_increase_ratio,byok_fee_bps FROM billing.price_policies WHERE site_id= $1 FOR UPDATE
 `
 
 type LockPricePolicyRow struct {
@@ -117,6 +119,7 @@ type LockPricePolicyRow struct {
 	FloorMultiplier  string
 	ChangeRatio      string
 	MaxIncreaseRatio string
+	ByokFeeBps       int32
 }
 
 func (q *Queries) LockPricePolicy(ctx context.Context, db DBTX, siteID uuid.UUID) (LockPricePolicyRow, error) {
@@ -127,12 +130,13 @@ func (q *Queries) LockPricePolicy(ctx context.Context, db DBTX, siteID uuid.UUID
 		&i.FloorMultiplier,
 		&i.ChangeRatio,
 		&i.MaxIncreaseRatio,
+		&i.ByokFeeBps,
 	)
 	return i, err
 }
 
 const readPricePolicy = `-- name: ReadPricePolicy :many
-SELECT rev,floor_multiplier,change_ratio,max_increase_ratio FROM billing.price_policies WHERE site_id= $1
+SELECT rev,floor_multiplier,change_ratio,max_increase_ratio,byok_fee_bps FROM billing.price_policies WHERE site_id= $1
 `
 
 type ReadPricePolicyRow struct {
@@ -140,6 +144,7 @@ type ReadPricePolicyRow struct {
 	FloorMultiplier  string
 	ChangeRatio      string
 	MaxIncreaseRatio string
+	ByokFeeBps       int32
 }
 
 func (q *Queries) ReadPricePolicy(ctx context.Context, db DBTX, siteID uuid.UUID) ([]ReadPricePolicyRow, error) {
@@ -156,6 +161,7 @@ func (q *Queries) ReadPricePolicy(ctx context.Context, db DBTX, siteID uuid.UUID
 			&i.FloorMultiplier,
 			&i.ChangeRatio,
 			&i.MaxIncreaseRatio,
+			&i.ByokFeeBps,
 		); err != nil {
 			return nil, err
 		}
@@ -168,7 +174,7 @@ func (q *Queries) ReadPricePolicy(ctx context.Context, db DBTX, siteID uuid.UUID
 }
 
 const readPublications = `-- name: ReadPublications :many
-SELECT p.audience_kind,p.audience_id,p.model_id,p.candidate_id,p.candidate,p.current_id,p.status,v.schedule,v.basis,v.overridden,v.candidate_id AS published_candidate
+SELECT p.audience_kind,p.audience_id,p.model_id,p.candidate_id,p.candidate,p.current_id,p.status,v.schedule,v.basis,v.overridden,v.endpoints,v.candidate_id AS published_candidate
 FROM (
  SELECT 'all'::text AS audience_kind,''::text AS audience_id,model_id,candidate_id,candidate,current_id,status FROM billing.price_publications d WHERE d.site_id= $1
  UNION ALL
@@ -187,6 +193,7 @@ type ReadPublicationsRow struct {
 	Schedule           []byte
 	Basis              []byte
 	Overridden         pgtype.Bool
+	Endpoints          []byte
 	PublishedCandidate *uuid.UUID
 }
 
@@ -210,6 +217,7 @@ func (q *Queries) ReadPublications(ctx context.Context, db DBTX, siteID uuid.UUI
 			&i.Schedule,
 			&i.Basis,
 			&i.Overridden,
+			&i.Endpoints,
 			&i.PublishedCandidate,
 		); err != nil {
 			return nil, err
@@ -281,13 +289,14 @@ func (q *Queries) SavePublication(ctx context.Context, db DBTX, arg SavePublicat
 }
 
 const updatePricePolicy = `-- name: UpdatePricePolicy :exec
-UPDATE billing.price_policies SET rev=rev+1,floor_multiplier= $1,change_ratio= $2,max_increase_ratio= $3 WHERE site_id= $4
+UPDATE billing.price_policies SET rev=rev+1,floor_multiplier= $1,change_ratio= $2,max_increase_ratio= $3,byok_fee_bps= $4 WHERE site_id= $5
 `
 
 type UpdatePricePolicyParams struct {
 	FloorMultiplier  string
 	ChangeRatio      string
 	MaxIncreaseRatio string
+	ByokFeeBps       int32
 	SiteID           uuid.UUID
 }
 
@@ -296,6 +305,7 @@ func (q *Queries) UpdatePricePolicy(ctx context.Context, db DBTX, arg UpdatePric
 		arg.FloorMultiplier,
 		arg.ChangeRatio,
 		arg.MaxIncreaseRatio,
+		arg.ByokFeeBps,
 		arg.SiteID,
 	)
 	return err

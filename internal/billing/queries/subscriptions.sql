@@ -63,13 +63,20 @@ SELECT s.id AS subscription_id, s.site_id, s.account_id, s.ends_at AS term_ends,
     w.ends_at AS window_ends, w.quota, w.used, w.reserved
 FROM billing.subscriptions s
 JOIN billing.subscription_windows w ON w.subscription_id = s.id AND w.seq = s.current_seq
-WHERE s.account_id = @account_id AND s.state = 'active';
+WHERE s.account_id = @account_id AND s.state = 'active' AND w.voided_at IS NULL;
 
 -- name: InsertWindow :exec
 -- One slice of the term: window seq starts at start and ends at end, clipped by the block's end so the last window may
 -- be shorter than the plan's. The grant writes them all in one pipeline, with quota copied from the plan it sold.
 INSERT INTO billing.subscription_windows (subscription_id, seq, site_id, account_id, starts_at, ends_at, quota)
 VALUES (@subscription_id, @seq, @site_id, @account_id, @starts_at, @ends_at, @quota);
+
+-- name: NextWindow :one
+-- The window after seq that still funds, so a refunded tail is never entered.
+SELECT subscription_id, seq, site_id, account_id, starts_at, ends_at, quota, used, reserved
+FROM billing.subscription_windows
+WHERE subscription_id = @subscription_id AND seq > @seq AND voided_at IS NULL
+ORDER BY seq LIMIT 1;
 
 -- name: Window :one
 SELECT subscription_id, seq, site_id, account_id, starts_at, ends_at, quota, used, reserved
@@ -110,14 +117,15 @@ WHERE request_id = ANY(@request_ids::uuid[]) AND funding <> 'wallet';
 
 -- name: InsertGrant :execrows
 INSERT INTO billing.subscription_grants (id, site_id, account_id, subscription_id, plan_id, plan_name, source, quota,
-    window_seconds, term_seconds, windows, face, currency, paid, fee, merchant_id, offline_channel, rate_id)
+    window_seconds, term_seconds, windows, first_window, face, currency, paid, fee, merchant_id, offline_channel, rate_id)
 VALUES (@id, @site_id, @account_id, @subscription_id, @plan_id, @plan_name, @source, @quota, @window_seconds,
-    @term_seconds, @windows, @face, @currency, @paid, @fee, @merchant_id, @offline_channel, @rate_id)
+    @term_seconds, @windows, @first_window, @face, @currency, @paid, @fee, @merchant_id, @offline_channel, @rate_id)
 ON CONFLICT (id) DO NOTHING;
 
 -- name: ReadGrant :one
 SELECT id, site_id, account_id, subscription_id, plan_id, plan_name, source, quota, window_seconds, term_seconds,
-    windows, face, currency, paid, fee, merchant_id, offline_channel, rate_id, created_at
+    windows, first_window, face, currency, paid, fee, merchant_id, offline_channel, rate_id,
+    refunded_value, refunded_paid, refunded_fee, refunded_windows, created_at
 FROM billing.subscription_grants WHERE id = @id;
 
 -- name: Liability :one
@@ -128,8 +136,10 @@ SELECT coalesce(sum(e.amount), 0)::bigint AS credited
 FROM billing.entries e
 JOIN billing.transactions t ON t.id = e.transaction_id
 LEFT JOIN billing.reservations r ON r.request_id = t.request_id
+LEFT JOIN billing.subscription_refunds f ON f.id = t.request_id
 WHERE e.book = 'plan_liability'
-    AND (t.request_id = @subscription_id OR r.subscription_id = @subscription_id);
+    AND (t.request_id = @subscription_id OR r.subscription_id = @subscription_id
+        OR f.subscription_id = @subscription_id);
 
 -- name: PendingPlanHolds :one
 SELECT coalesce(sum(amount), 0)::bigint AS held
@@ -158,3 +168,95 @@ JOIN billing.subscription_windows w ON w.subscription_id = s.id AND w.seq = s.cu
 WHERE s.account_id = @account_id
 ORDER BY s.created_at DESC, s.id
 LIMIT @max;
+
+-- name: ReadSubscription :one
+SELECT id, site_id, account_id, plan_id, plan_name, starts_at, ends_at, current_seq, state, closed_at, created_at
+FROM billing.subscriptions WHERE id = @id;
+
+-- name: RefundWindows :many
+-- The last windows of a grant's block, still in force, locked for the refund. The caller asks for at most the block's
+-- remaining windows and checks that none holds a reservation.
+SELECT subscription_id, seq, site_id, account_id, starts_at, ends_at, quota, used, reserved
+FROM billing.subscription_windows
+WHERE subscription_id = @subscription_id AND seq BETWEEN @first AND @last AND voided_at IS NULL
+ORDER BY seq DESC
+LIMIT @max
+FOR UPDATE;
+
+-- name: VoidWindow :execrows
+UPDATE billing.subscription_windows SET voided_at = clock_timestamp()
+WHERE subscription_id = @subscription_id AND seq = @seq AND voided_at IS NULL;
+
+-- name: RefundGrant :execrows
+-- The grant remembers what has been refunded, so a later partial refund takes back the rest and never more than was
+-- paid. The amounts are cumulative.
+UPDATE billing.subscription_grants
+SET refunded_value = refunded_value + @credits, refunded_paid = refunded_paid + @paid,
+    refunded_fee = refunded_fee + @fee, refunded_windows = refunded_windows + @windows
+WHERE id = @id;
+
+-- name: ShortenSubscription :execrows
+-- A partial refund takes back only whole future windows, so the term ends at the last one that remains.
+UPDATE billing.subscriptions SET ends_at = @ends_at
+WHERE id = @id AND state = 'active' AND @ends_at > starts_at;
+
+-- name: RevokeSubscription :execrows
+-- Nothing remains, so the subscription ends now. closed_at is left to writeOffSubscription: the refund itself has
+-- taken back its windows' liability, but an older window that already ended may still have some to lapse.
+UPDATE billing.subscriptions SET state = 'expired', ends_at = @ends_at, current_seq = @current_seq
+WHERE id = @id AND state = 'active' AND @ends_at > starts_at;
+
+-- name: ExpireSubscriptionAt :execrows
+-- A refund removed the last live windows of a term whose earlier windows already ended: expire the term at that last
+-- live window's end, then let writeOffSubscription lapse what remains once its holds are gone.
+UPDATE billing.subscriptions SET state = 'expired', ends_at = @ends_at
+WHERE id = @id AND state = 'active' AND @ends_at > starts_at;
+
+-- name: InsertSubscriptionRefund :execrows
+INSERT INTO billing.subscription_refunds (id, grant_id, site_id, account_id, subscription_id, credits, paid, fee,
+    currency, windows, unused, revoked, actor, reason)
+VALUES (@id, @grant_id, @site_id, @account_id, @subscription_id, @credits, @paid, @fee, @currency, @windows, @unused,
+    @revoked, @actor, @reason)
+ON CONFLICT (id) DO NOTHING;
+
+-- name: ReadSubscriptionRefund :one
+SELECT id, grant_id, site_id, account_id, subscription_id, credits, paid, fee, currency, windows, unused, revoked,
+    actor, reason, created_at
+FROM billing.subscription_refunds WHERE id = @id;
+
+-- name: SetSubscriptionRefundRevoked :execrows
+UPDATE billing.subscription_refunds SET revoked = @revoked WHERE id = @id;
+
+-- name: InsertSubscriptionRefundRequest :execrows
+INSERT INTO billing.subscription_refund_requests (id, grant_id, site_id, account_id, subscription_id, credits,
+    site_currency, requested_by, reason)
+VALUES (@id, @grant_id, @site_id, @account_id, @subscription_id, @credits, @site_currency, @requested_by, @reason)
+ON CONFLICT (id) DO NOTHING;
+
+-- name: ReadSubscriptionRefundRequest :one
+SELECT id, grant_id, site_id, account_id, subscription_id, credits, site_currency, requested_by, approved_by, state,
+    reason, created_at, finished_at
+FROM billing.subscription_refund_requests WHERE id = @id FOR UPDATE;
+
+-- name: ApproveSubscriptionRefundRequest :execrows
+UPDATE billing.subscription_refund_requests SET approved_by = @approved_by, state = 'approved',
+    finished_at = clock_timestamp()
+WHERE id = @id AND state = 'pending' AND approved_by IS NULL;
+
+-- name: LastLiveWindow :one
+-- The highest window a refund did not void; 0 means the subscription has nothing left and is revoked.
+SELECT coalesce(max(seq), 0)::integer AS seq
+FROM billing.subscription_windows WHERE subscription_id = @subscription_id AND voided_at IS NULL;
+
+-- name: WindowVoided :one
+-- Whether a refund voided this window. A correction of a call it funded has no expiry income to draw on.
+SELECT EXISTS (SELECT 1 FROM billing.subscription_windows
+    WHERE subscription_id = @subscription_id AND seq = @seq AND voided_at IS NOT NULL);
+
+-- name: GrantFirstWindow :one
+-- A grant written before first_window existed starts after every grant created before it. Grants append their windows
+-- in creation order, so the running total is the position of this grant's block.
+SELECT (1 + coalesce(sum(windows), 0))::integer AS first_window
+FROM billing.subscription_grants
+WHERE subscription_id = @subscription_id
+    AND (created_at < @created_at OR (created_at = @created_at AND id < @id));

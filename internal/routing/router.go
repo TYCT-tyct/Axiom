@@ -27,10 +27,11 @@ type Config struct {
 	RetryFloor    int64         // retries always allowed in a window, so a quiet supplier can be retried onto; default 3
 	RetryWindow   time.Duration // the budget's window; default 1m
 
-	// Segments are billing's settings for reserving in segments. An entry is reserved in segments only when its output
-	// limit leaves room for a first segment plus the overshoot allowance at its own fastest speed, and its call lets the
-	// gateway meter the output as it comes; otherwise it is reserved whole. A zero segment size segments none.
-	Segments billing.Segments
+	// Segments are billing's live settings for reserving in segments, the same policy billing reserves by. An entry is
+	// reserved in segments only when its output limit leaves room for a first segment plus the overshoot allowance at
+	// its own fastest speed, and its call lets the gateway meter the output as it comes; otherwise it is reserved
+	// whole. Nil, or a zero segment size, segments none.
+	Segments *billing.SegmentPolicy
 
 	Now  func() time.Time // default time.Now
 	Rand func() float64   // uniform in [0, 1); default math/rand/v2
@@ -86,13 +87,10 @@ func (c *Config) validate() error {
 			return errors.New("routing: a duration is negative")
 		}
 	}
-	for _, n := range []int64{int64(c.StickyMax), int64(c.SessionPrefix), int64(c.MaxAttempts), c.RetryFloor, c.Segments.Output} {
+	for _, n := range []int64{int64(c.StickyMax), int64(c.SessionPrefix), int64(c.MaxAttempts), c.RetryFloor} {
 		if n < 0 {
 			return errors.New("routing: a limit is negative")
 		}
-	}
-	if c.Segments.Overshoot < 0 {
-		return errors.New("routing: the overshoot allowance is negative")
 	}
 	if c.ThrottleFloor <= 0 || c.ThrottleFloor > 1 || c.RetryRatio < 0 {
 		return fmt.Errorf("routing: the throttle floor %v must be in (0, 1] and the retry ratio %v not negative", c.ThrottleFloor, c.RetryRatio)

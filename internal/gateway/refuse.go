@@ -225,6 +225,7 @@ var limitSources = map[billing.Source]string{
 	// OpenRouter's names for the two budget layers, which its clients branch on; the balance keeps ours, since its 402
 	// carries none (OpenRouter《Errors and Debugging》的 budget errors，2026-11-02 核对).
 	billing.SourceWorkspace: "openrouter_workspace_budget", billing.SourceKey: "openrouter_key_limit",
+	billing.SourceSubscription: "subscription",
 }
 
 // insufficient is the balance's 402, or a key's or workspace's 403, as OpenRouter answers a spent budget. Only a limit

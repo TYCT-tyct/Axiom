@@ -102,6 +102,9 @@ type Endpoint struct {
 	ModelSlug string // the model's catalog slug, frozen with the snapshot so a response names what the route chose
 	Free      bool   // the model is a :free catalog entry, the only kind openrouter/free may choose
 	Owner     Owner
+	// Byok is an endpoint of the account's own provider key, tried before the platform's; ByokFallback says the key
+	// still allows shared capacity for this model when it cannot serve the request.
+	Byok, ByokFallback bool
 
 	LiveHealth  *quality.State
 	Capacity    Capacity
@@ -295,11 +298,19 @@ type Preset struct {
 // Snapshot is the routing view of the world, built whole in the background and replaced whole: endpoints grouped by
 // model, and the presets. It never changes after it is built.
 type Snapshot struct {
-	built   time.Time
-	byModel map[catalog.ModelID][]*candidate
-	models  []catalog.ModelID // in id order, for openrouter/auto
-	free    []catalog.ModelID // the free ones, in id order, for openrouter/free
-	presets map[PresetID]Preset
+	built      time.Time
+	byModel    map[catalog.ModelID][]*candidate
+	models     []catalog.ModelID // in id order, for openrouter/auto
+	free       []catalog.ModelID // the free ones, in id order, for openrouter/free
+	presets    map[PresetID]Preset
+	noFallback map[AccountID]map[catalog.ModelID]struct{}
+}
+
+// ByokRule is an account's no-fallback choice for one model. It is kept apart from the key's endpoints: a key the
+// provider refused is not routable, but the account's choice must still keep the platform's endpoints out.
+type ByokRule struct {
+	Account AccountID
+	Model   catalog.ModelID
 }
 
 // candidate is an endpoint with what is worked out once at build: its price as a number for weighting, and its
@@ -351,8 +362,21 @@ func priceOf(p PriceRef, direct bool) (candidatePrice, error) {
 
 // NewSnapshot groups the endpoints by model and checks them: an endpoint twice, or a preset twice, is a mistake in
 // the data that would otherwise surface as a wrong choice.
-func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset) (*Snapshot, error) {
-	s := &Snapshot{built: built, byModel: map[catalog.ModelID][]*candidate{}, presets: make(map[PresetID]Preset, len(presets))}
+//
+//nolint:gocognit // one linear pass over the endpoints and the accounts' rules
+func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset, rules ...ByokRule) (*Snapshot, error) {
+	s := &Snapshot{
+		built:      built,
+		byModel:    map[catalog.ModelID][]*candidate{},
+		presets:    make(map[PresetID]Preset, len(presets)),
+		noFallback: map[AccountID]map[catalog.ModelID]struct{}{},
+	}
+	for _, rule := range rules {
+		if s.noFallback[rule.Account] == nil {
+			s.noFallback[rule.Account] = map[catalog.ModelID]struct{}{}
+		}
+		s.noFallback[rule.Account][rule.Model] = struct{}{}
+	}
 	seen := make(map[EndpointID]struct{}, len(endpoints))
 	prices := map[*billing.AudiencePrices][]candidatePrice{}
 	for _, e := range endpoints {
@@ -411,7 +435,7 @@ func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrice
 		return nil, err
 	}
 	if e.AudiencePrices != nil {
-		c.prices, err = compileAudiencePrices(e.AudiencePrices, prices, directOnly(e.Native))
+		c.prices, err = compileAudiencePrices(e.AudiencePrices, uuid.UUID(e.ID), prices, directOnly(e.Native))
 		if err != nil {
 			return nil, err
 		}
@@ -419,21 +443,31 @@ func (r *Router) snapshotCandidate(e Endpoint, prices map[*billing.AudiencePrice
 	return c, nil
 }
 
-func compileAudiencePrices(table *billing.AudiencePrices, cache map[*billing.AudiencePrices][]candidatePrice, direct bool) ([]candidatePrice, error) {
-	if !direct {
+func compileAudiencePrices(table *billing.AudiencePrices, endpoint uuid.UUID, cache map[*billing.AudiencePrices][]candidatePrice, direct bool) ([]candidatePrice, error) {
+	// A table whose every layer has one price for every endpoint compiles the same for every endpoint that shares it.
+	// A per-endpoint layer does not: the table is shared, but each endpoint reads its own schedule from it.
+	shared := true
+	for _, layer := range table.Layers() {
+		shared = shared && layer.Sold.Endpoints == nil
+	}
+	if !direct && shared {
 		if prices, ok := cache[table]; ok {
 			return prices, nil
 		}
 	}
 	compiled := make([]candidatePrice, len(table.Layers()))
 	for i, layer := range table.Layers() {
-		price, err := priceOf(PriceRef{Version: layer.Sold.Version, Schedule: layer.Sold.Schedule}, direct)
+		schedule, ok := layer.Sold.PriceFor(endpoint)
+		if !ok {
+			continue // this audience has no price for this endpoint: routing excludes it with NoPrice
+		}
+		price, err := priceOf(PriceRef{Version: layer.Sold.Version, Schedule: schedule}, direct)
 		if err != nil {
 			return nil, err
 		}
 		compiled[i] = price
 	}
-	if !direct {
+	if !direct && shared {
 		cache[table] = compiled
 	}
 	return compiled, nil

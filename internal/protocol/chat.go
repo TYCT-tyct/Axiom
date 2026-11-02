@@ -26,7 +26,7 @@ import (
 // the upstream's failure (OpenRouter《Errors》, read 2026-10-14).
 type chatStream struct {
 	eventReader
-	chatWriter // created is the upstream's first chunk's
+	chatWriter // created is the upstream's first chunk's, or this call's when replaying a cached answer
 	// choices are the choices started so far, each set once it gave a finish_reason.
 	choices map[int64]bool
 	// The chunk being read: the choice being read and its finish_reason, in the chunk's data; the finish signals split
@@ -61,7 +61,11 @@ func newChatStreamReader(u UsageContext, o RelayOptions, charge func(int) error)
 	s := &chatStream{choices: map[int64]bool{}}
 	s.pending = s.pendingBuf[:0]
 	s.init(u, o, nil, charge)
-	s.chatWriter = chatWriter{id: s.eventReader.id, model: s.eventReader.model, created: "0", legacy: o.legacyFunctions} // quoted by init already
+	created := "0"
+	if o.Cached {
+		created = s.rw.cacheCreated
+	}
+	s.chatWriter = chatWriter{id: s.eventReader.id, model: s.eventReader.model, created: created, legacy: o.legacyFunctions} // quoted by init already
 	return s
 }
 
@@ -247,10 +251,16 @@ func (s *chatStream) choiceIndex() error {
 
 func (s *chatStream) createdAt() error {
 	v, err := s.dec.ReadValue()
-	if err == nil && s.created == "0" && v.Kind() == '0' {
+	if err != nil {
+		return err
+	}
+	if s.rw.cached {
+		return s.edit(len(v), s.rw.cacheCreated)
+	}
+	if s.created == "0" && v.Kind() == '0' {
 		s.created = string(v)
 	}
-	return err
+	return nil
 }
 
 // finishReason takes a choice's finish_reason out of the chunk, leaving null in its place.

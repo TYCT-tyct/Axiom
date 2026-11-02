@@ -35,7 +35,7 @@ func measured(m *Monitor, id suppliers.EndpointID, now time.Time) Measures {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.measures(now)
+	return e.measures(now, m.verificationAge())
 }
 
 // TestHealth: health is 1 minus the moving average of failures with α 0.2, 1 before anything is counted, as sub2api's
@@ -78,7 +78,7 @@ func TestMeasuredVerification(t *testing.T) {
 	if got := measured(m, id, at); !got.Verified || got.VerifyConfidence != 1 || !got.VerifiedAt.Equal(at) {
 		t.Fatalf("a fresh pass: %+v", got)
 	}
-	if got := measured(m, id, at.Add(verifyMaxAge+time.Second)); got.Verified || got.VerifyConfidence != 0 || !got.VerifiedAt.Equal(at) {
+	if got := measured(m, id, at.Add(defaultVerifyMaxAge+time.Second)); got.Verified || got.VerifyConfidence != 0 || !got.VerifiedAt.Equal(at) {
 		t.Fatalf("an expired pass: %+v", got)
 	}
 	e.mu.Lock()

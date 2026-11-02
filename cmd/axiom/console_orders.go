@@ -90,6 +90,17 @@ func orderBody(o payments.Order, site platform.Currency, checkout payments.Check
 	if o.State == payments.Pending && hasCheckout(checkout) {
 		body.Checkout = checkoutBody(checkout)
 	}
+	// What the channel took and what was credited; absent until the order is paid. The page renders a receipt from
+	// these and the order's own fields, so they must come from every read of an order and never be guessed.
+	body.PaidAt = o.PaidAt
+	if o.PaidTotal != nil {
+		paid := payAmount(payments.Money{Currency: o.Total.Currency, Minor: *o.PaidTotal})
+		body.PaidTotal = &paid
+	}
+	if o.Credited != nil {
+		credited := moneyOf(*o.Credited, site)
+		body.Credited = &credited
+	}
 	return body
 }
 

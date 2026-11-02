@@ -35,7 +35,8 @@ func TestSiteSettings(t *testing.T) {
 	defaults := adminapi.SiteSettings{
 		ConsoleIdleTimeoutSeconds: new(7 * 24 * 3600), ConsoleMaxAgeSeconds: new(30 * 24 * 3600),
 		AdminIdleTimeoutSeconds: new(1800), AdminMaxAgeSeconds: new(12 * 3600),
-		NewKeyDailyLimit: &adminapi.Money{Amount: "10000000000", Currency: "USD"},
+		NewKeyDailyLimit:  &adminapi.Money{Amount: "10000000000", Currency: "USD"},
+		BillingPreference: new(adminapi.BillingPreferenceName("subscription_first")),
 	}
 	if diff := cmp.Diff(adminapi.SiteSettingsView{Defaults: defaults}, f.getSettings(s, site)); diff != "" {
 		t.Errorf("the settings of a site that sets none (-want +got):\n%s", diff)
@@ -107,6 +108,7 @@ func TestSiteSettingsRefusals(t *testing.T) {
 		{"a session shorter than 5 minutes", `{"settings":{"admin_idle_timeout_seconds":299},"reason":"r"}`, "/settings/admin_idle_timeout_seconds"},
 		{"an admin session longer than a day", `{"settings":{"admin_max_age_seconds":86401},"reason":"r"}`, "/settings/admin_max_age_seconds"},
 		{"a console idle time past 30 days", `{"settings":{"console_idle_timeout_seconds":2592001},"reason":"r"}`, "/settings/console_idle_timeout_seconds"},
+		{"a billing preference outside the four", `{"settings":{"billing_preference":"subscription"},"reason":"r"}`, "/settings/billing_preference"},
 		{"a limit in another currency", `{"settings":{"new_key_daily_limit":{"amount":"1","currency":"CNY"}},"reason":"r"}`, "/settings/new_key_daily_limit/currency"},
 		{"a limit over a million units", `{"settings":{"new_key_daily_limit":{"amount":"1000000000000001","currency":"USD"}},"reason":"r"}`, "/settings/new_key_daily_limit"},
 		{"a negative limit", `{"settings":{"new_key_daily_limit":{"amount":"-1","currency":"USD"}},"reason":"r"}`, "/settings/new_key_daily_limit"},

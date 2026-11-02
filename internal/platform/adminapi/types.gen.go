@@ -204,6 +204,30 @@ func (e BillingItem) Valid() bool {
 	}
 }
 
+// Defines values for BillingPreferenceName.
+const (
+	SubscriptionFirst BillingPreferenceName = "subscription_first"
+	SubscriptionOnly  BillingPreferenceName = "subscription_only"
+	WalletFirst       BillingPreferenceName = "wallet_first"
+	WalletOnly        BillingPreferenceName = "wallet_only"
+)
+
+// Valid indicates whether the value is a known member of the BillingPreferenceName enum.
+func (e BillingPreferenceName) Valid() bool {
+	switch e {
+	case SubscriptionFirst:
+		return true
+	case SubscriptionOnly:
+		return true
+	case WalletFirst:
+		return true
+	case WalletOnly:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CashMovementKind.
 const (
 	Chargeback        CashMovementKind = "chargeback"
@@ -1308,6 +1332,27 @@ func (e SiteLogoUploadContentType) Valid() bool {
 	}
 }
 
+// Defines values for SubscriptionRefundProposalState.
+const (
+	SubscriptionRefundProposalStateApproved SubscriptionRefundProposalState = "approved"
+	SubscriptionRefundProposalStatePending  SubscriptionRefundProposalState = "pending"
+	SubscriptionRefundProposalStateRejected SubscriptionRefundProposalState = "rejected"
+)
+
+// Valid indicates whether the value is a known member of the SubscriptionRefundProposalState enum.
+func (e SubscriptionRefundProposalState) Valid() bool {
+	switch e {
+	case SubscriptionRefundProposalStateApproved:
+		return true
+	case SubscriptionRefundProposalStatePending:
+		return true
+	case SubscriptionRefundProposalStateRejected:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SubscriptionSource.
 const (
 	SubscriptionSourceGift           SubscriptionSource = "gift"
@@ -2019,6 +2064,9 @@ type Balance struct {
 
 // BillingItem defines model for BillingItem.
 type BillingItem string
+
+// BillingPreferenceName Which source a call uses first. `subscription_first` uses the plan and falls back to the wallet; `wallet_first` the reverse; `subscription_only` and `wallet_only` do not fall back (docs/domains/billing.md「资金来源」).
+type BillingPreferenceName string
 
 // BindKey defines model for BindKey.
 type BindKey struct {
@@ -3132,8 +3180,13 @@ type PlatformGrantList struct {
 	Data *[]PlatformGrant `json:"data,omitempty"`
 }
 
+// PriceEndpointMap Per-endpoint prices, keyed by endpoint UUID.
+type PriceEndpointMap map[string]PriceSchedule
+
 // PricePolicy defines model for PricePolicy.
 type PricePolicy struct {
+	// ByokFeeBps The share of a model's normal sale price charged when an account's own provider key serves the request, in basis points (500 is 5%, docs/domains/billing.md「定价」).
+	ByokFeeBps       *int    `json:"byok_fee_bps,omitempty"`
 	ChangeRatio      *string `json:"change_ratio,omitempty"`
 	FloorMultiplier  *string `json:"floor_multiplier,omitempty"`
 	MaxIncreaseRatio *string `json:"max_increase_ratio,omitempty"`
@@ -3142,6 +3195,8 @@ type PricePolicy struct {
 
 // PricePolicyInput defines model for PricePolicyInput.
 type PricePolicyInput struct {
+	// ByokFeeBps The BYOK fee in basis points. Omitted keeps the site's current value, so a page that predates the field does not reset it.
+	ByokFeeBps       *int   `json:"byok_fee_bps,omitempty"`
 	ChangeRatio      string `json:"change_ratio"`
 	FloorMultiplier  string `json:"floor_multiplier"`
 	MaxIncreaseRatio string `json:"max_increase_ratio"`
@@ -3159,11 +3214,26 @@ type PricePublication struct {
 	// CandidateId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	CandidateId *Uuid `json:"candidate_id,omitempty"`
 
+	// Costs The proposal's cost of each endpoint in the site currency, for a cost-plus proposal.
+	Costs *PriceEndpointMap `json:"costs,omitempty"`
+
+	// CurrentEndpoints The price each endpoint currently serves, when the current version prices endpoints separately.
+	CurrentEndpoints *PriceEndpointMap `json:"current_endpoints,omitempty"`
+
 	// CurrentId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	CurrentId *Uuid `json:"current_id,omitempty"`
 
+	// CurrentSchedule The current model-level price schedule, including the envelope of a per-endpoint version.
+	CurrentSchedule *PriceSchedule `json:"current_schedule,omitempty"`
+
+	// Endpoints The proposed price of each endpoint for a cost-plus proposal.
+	Endpoints *PriceEndpointMap `json:"endpoints,omitempty"`
+
 	// Floor A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
 	Floor *PriceSchedule `json:"floor,omitempty"`
+
+	// Floors The proposal's break-even price of each endpoint in the site currency, for a cost-plus proposal.
+	Floors *PriceEndpointMap `json:"floors,omitempty"`
 
 	// ModelId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	ModelId *Uuid   `json:"model_id,omitempty"`
@@ -3171,6 +3241,9 @@ type PricePublication struct {
 
 	// Requested A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
 	Requested *PriceSchedule `json:"requested,omitempty"`
+
+	// RequestedEndpoints The rule price of each endpoint before the site floor, for a cost-plus proposal.
+	RequestedEndpoints *PriceEndpointMap `json:"requested_endpoints,omitempty"`
 
 	// Schedule A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
 	Schedule *PriceSchedule          `json:"schedule,omitempty"`
@@ -3427,6 +3500,34 @@ type PricingTarget struct {
 // PricingTargetKind defines model for PricingTarget.Kind.
 type PricingTargetKind string
 
+// ProbeSettings The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds.
+type ProbeSettings struct {
+	Concurrency         *int `json:"concurrency,omitempty"`
+	HourlyBudget        *int `json:"hourly_budget,omitempty"`
+	ProbeBaseSeconds    *int `json:"probe_base_seconds,omitempty"`
+	VerifyEverySeconds  *int `json:"verify_every_seconds,omitempty"`
+	VerifyMaxAgeSeconds *int `json:"verify_max_age_seconds,omitempty"`
+	VerifyRetrySeconds  *int `json:"verify_retry_seconds,omitempty"`
+}
+
+// ProbeSettingsUpdate defines model for ProbeSettingsUpdate.
+type ProbeSettingsUpdate struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Settings The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds.
+	Settings ProbeSettings `json:"settings"`
+}
+
+// ProbeSettingsView defines model for ProbeSettingsView.
+type ProbeSettingsView struct {
+	// Defaults What applies where `settings` has no value.
+	Defaults ProbeSettings `json:"defaults"`
+
+	// Settings The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds.
+	Settings ProbeSettings `json:"settings"`
+}
+
 // RateLimitView defines model for RateLimitView.
 type RateLimitView struct {
 	EffectiveRequests *int `json:"effective_requests,omitempty"`
@@ -3452,6 +3553,9 @@ type Rates struct {
 
 	// CodeExecution A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at most 15 decimals and at most 1000 per unit.
 	CodeExecution *UnitPrice `json:"code_execution,omitempty"`
+
+	// FileParse A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at most 15 decimals and at most 1000 per unit.
+	FileParse *UnitPrice `json:"file_parse,omitempty"`
 
 	// FileSearch A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with at most 15 decimals and at most 1000 per unit.
 	FileSearch *UnitPrice `json:"file_search,omitempty"`
@@ -3709,6 +3813,30 @@ type SearchSettingsUpdate struct {
 	} `json:"settings,omitempty"`
 }
 
+// SegmentSettings How a reservation is split into segments. A value that is absent is the default in code. `output_tokens` is the output a segment covers; `overshoot_seconds` is the time the allowance covers at the endpoint's speed, and must be at least the node's extension wait (1 second).
+type SegmentSettings struct {
+	OutputTokens     *int64 `json:"output_tokens,omitempty"`
+	OvershootSeconds *int   `json:"overshoot_seconds,omitempty"`
+}
+
+// SegmentSettingsUpdate defines model for SegmentSettingsUpdate.
+type SegmentSettingsUpdate struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Settings How a reservation is split into segments. A value that is absent is the default in code. `output_tokens` is the output a segment covers; `overshoot_seconds` is the time the allowance covers at the endpoint's speed, and must be at least the node's extension wait (1 second).
+	Settings SegmentSettings `json:"settings"`
+}
+
+// SegmentSettingsView defines model for SegmentSettingsView.
+type SegmentSettingsView struct {
+	// Defaults What applies where `settings` has no value.
+	Defaults SegmentSettings `json:"defaults"`
+
+	// Settings How a reservation is split into segments. A value that is absent is the default in code. `output_tokens` is the output a segment covers; `overshoot_seconds` is the time the allowance covers at the endpoint's speed, and must be at least the node's extension wait (1 second).
+	Settings SegmentSettings `json:"settings"`
+}
+
 // ServiceTier defines model for ServiceTier.
 type ServiceTier string
 
@@ -3863,10 +3991,13 @@ type SiteOAuthProviderUpdate struct {
 
 // SiteSettings A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units.
 type SiteSettings struct {
-	AdminIdleTimeoutSeconds   *int `json:"admin_idle_timeout_seconds,omitempty"`
-	AdminMaxAgeSeconds        *int `json:"admin_max_age_seconds,omitempty"`
-	ConsoleIdleTimeoutSeconds *int `json:"console_idle_timeout_seconds,omitempty"`
-	ConsoleMaxAgeSeconds      *int `json:"console_max_age_seconds,omitempty"`
+	AdminIdleTimeoutSeconds *int `json:"admin_idle_timeout_seconds,omitempty"`
+	AdminMaxAgeSeconds      *int `json:"admin_max_age_seconds,omitempty"`
+
+	// BillingPreference The funding order an account gets until it chooses its own; absent is `subscription_first`. A page built before this field leaves it out, and the server keeps the stored value rather than clearing it.
+	BillingPreference         *BillingPreferenceName `json:"billing_preference,omitempty"`
+	ConsoleIdleTimeoutSeconds *int                   `json:"console_idle_timeout_seconds,omitempty"`
+	ConsoleMaxAgeSeconds      *int                   `json:"console_max_age_seconds,omitempty"`
 
 	// NewKeyDailyLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	NewKeyDailyLimit *Money `json:"new_key_daily_limit,omitempty"`
@@ -4064,6 +4195,76 @@ type SubscriptionPlanUpdate struct {
 	TermSeconds   int `json:"term_seconds"`
 	WindowSeconds int `json:"window_seconds"`
 }
+
+// SubscriptionRefund defines model for SubscriptionRefund.
+type SubscriptionRefund struct {
+	// Amount An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Amount    Money     `json:"amount"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// Credits An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Credits CreditAmount `json:"credits"`
+
+	// GrantId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	GrantId Uuid `json:"grant_id"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id      Uuid `json:"id"`
+	Revoked bool `json:"revoked"`
+
+	// Unused An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Unused CreditAmount `json:"unused"`
+
+	// Windows Windows voided by this refund.
+	Windows int `json:"windows"`
+}
+
+// SubscriptionRefundApprovalInput defines model for SubscriptionRefundApprovalInput.
+type SubscriptionRefundApprovalInput struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// SubscriptionRefundInput defines model for SubscriptionRefundInput.
+type SubscriptionRefundInput struct {
+	// Credits An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Credits CreditAmount `json:"credits"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// SubscriptionRefundProposal defines model for SubscriptionRefundProposal.
+type SubscriptionRefundProposal struct {
+	// ApprovedBy An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	ApprovedBy *Uuid     `json:"approved_by,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+
+	// Credits An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
+	//
+	// Example: 5000000000
+	Credits    CreditAmount `json:"credits"`
+	FinishedAt *time.Time   `json:"finished_at,omitempty"`
+
+	// GrantId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	GrantId Uuid `json:"grant_id"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id Uuid `json:"id"`
+
+	// RequestedBy An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	RequestedBy Uuid                            `json:"requested_by"`
+	State       SubscriptionRefundProposalState `json:"state"`
+}
+
+// SubscriptionRefundProposalState defines model for SubscriptionRefundProposal.State.
+type SubscriptionRefundProposalState string
 
 // SubscriptionSource How the plan was paid for. Absent in a request: gift.
 type SubscriptionSource string
@@ -4498,6 +4699,18 @@ type GrantSubscriptionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// RefundSubscriptionGrantParams defines parameters for RefundSubscriptionGrant.
+type RefundSubscriptionGrantParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ApproveSubscriptionRefundParams defines parameters for ApproveSubscriptionRefund.
+type ApproveSubscriptionRefundParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetAccountSuspensionParams defines parameters for SetAccountSuspension.
 type SetAccountSuspensionParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -4880,6 +5093,12 @@ type TestMailSettingsParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetQualityProbeSettingsParams defines parameters for SetQualityProbeSettings.
+type SetQualityProbeSettingsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetSearchSettingsParams defines parameters for SetSearchSettings.
 type SetSearchSettingsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -4888,6 +5107,12 @@ type SetSearchSettingsParams struct {
 
 // TestSearchSettingsParams defines parameters for TestSearchSettings.
 type TestSearchSettingsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetSegmentSettingsParams defines parameters for SetSegmentSettings.
+type SetSegmentSettingsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -5106,6 +5331,12 @@ type UpdateAccountKeyLimitsJSONRequestBody = KeyLimitsUpdate
 // GrantSubscriptionJSONRequestBody defines body for GrantSubscription for application/json ContentType.
 type GrantSubscriptionJSONRequestBody = SubscriptionGrantInput
 
+// RefundSubscriptionGrantJSONRequestBody defines body for RefundSubscriptionGrant for application/json ContentType.
+type RefundSubscriptionGrantJSONRequestBody = SubscriptionRefundInput
+
+// ApproveSubscriptionRefundJSONRequestBody defines body for ApproveSubscriptionRefund for application/json ContentType.
+type ApproveSubscriptionRefundJSONRequestBody = SubscriptionRefundApprovalInput
+
 // SetAccountSuspensionJSONRequestBody defines body for SetAccountSuspension for application/json ContentType.
 type SetAccountSuspensionJSONRequestBody = AccountSuspension
 
@@ -5226,11 +5457,17 @@ type SetMailSettingsJSONRequestBody = MailSettingsUpdate
 // TestMailSettingsJSONRequestBody defines body for TestMailSettings for application/json ContentType.
 type TestMailSettingsJSONRequestBody = MailConfigTest
 
+// SetQualityProbeSettingsJSONRequestBody defines body for SetQualityProbeSettings for application/json ContentType.
+type SetQualityProbeSettingsJSONRequestBody = ProbeSettingsUpdate
+
 // SetSearchSettingsJSONRequestBody defines body for SetSearchSettings for application/json ContentType.
 type SetSearchSettingsJSONRequestBody = SearchSettingsUpdate
 
 // TestSearchSettingsJSONRequestBody defines body for TestSearchSettings for application/json ContentType.
 type TestSearchSettingsJSONRequestBody = SearchConfigTest
+
+// SetSegmentSettingsJSONRequestBody defines body for SetSegmentSettings for application/json ContentType.
+type SetSegmentSettingsJSONRequestBody = SegmentSettingsUpdate
 
 // UpdateSiteBrandJSONRequestBody defines body for UpdateSiteBrand for application/json ContentType.
 type UpdateSiteBrandJSONRequestBody = SiteBrandUpdate

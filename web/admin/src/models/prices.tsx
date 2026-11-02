@@ -4,7 +4,7 @@ import { Button, EmptyState, Icon, Panel, Table, Td, Th, useFormat } from "@axio
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Time } from "../parts";
-import { billingItems, isPerUse } from "./catalog";
+import { isPerUse, rateItems } from "./catalog";
 import { PublishPriceDialog, SourceDialog } from "./price-dialogs";
 import { showRate } from "./price-fields";
 
@@ -93,7 +93,7 @@ function PriceCard({ price, onPublish }: { price: Price; onPublish: (() => void)
 function Rates({ schedule }: { schedule: AdminSchemas["PriceSchedule"] }) {
   const { t } = useTranslation();
   const { decimal } = useFormat();
-  const priced = billingItems.filter((item) => schedule.rates[item] !== undefined);
+  const priced = rateItems.filter((item) => schedule.rates[item] !== undefined);
   const extra = [
     schedule.context_tiers ? t("models.prices.contextTiers", { count: schedule.context_tiers.tiers.length }) : null,
     schedule.service_tiers

@@ -13,7 +13,13 @@ export default {
     intro:
       "Review the requested and protected price schedules. Type the model ID to confirm this exact proposal. An exception applies only to this cost evidence.",
     requested: "Price from the rule",
+    requestedEndpoints: "Endpoint prices from the rule",
     safe: "Price with the site floor",
+    safeEndpoints: "Endpoint prices with the site floor",
+    currentEndpoints: "Endpoint prices currently served",
+    currentSchedule: "Current published price",
+    endpointCosts: "Endpoint costs in the site currency",
+    endpointFloors: "Endpoint break-even prices in the site currency",
     override: "Use the requested price even below the site floor (audited exception)",
     saved: "The price version has been published.",
   },

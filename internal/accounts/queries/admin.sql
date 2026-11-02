@@ -13,8 +13,11 @@ SELECT coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint A
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
-    t.new_key_daily_limit
-FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = @site_id;
+    t.new_key_daily_limit, p.preference AS billing_preference
+FROM accounts.sites s
+LEFT JOIN accounts.site_settings t ON t.site_id = s.id
+LEFT JOIN accounts.site_billing_preferences p ON p.site_id = s.id
+WHERE s.id = @site_id;
 
 -- name: WriteSiteSettings :exec
 -- Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
@@ -28,6 +31,16 @@ VALUES (@site_id, make_interval(secs => sqlc.narg(console_idle_seconds)::bigint)
 ON CONFLICT (site_id) DO UPDATE SET console_idle_timeout = excluded.console_idle_timeout,
     console_max_age = excluded.console_max_age, admin_idle_timeout = excluded.admin_idle_timeout,
     admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit;
+
+-- name: ClearSiteBillingPreference :exec
+-- No row means the code default; deleting is how a site goes back to it.
+DELETE FROM accounts.site_billing_preferences WHERE site_id = @site_id;
+
+-- name: SetSiteBillingPreference :exec
+-- The site's default order for accounts that have not chosen one. Kept apart from WriteSiteSettings because it lives in
+-- its own table, which an account may read in its own scope.
+INSERT INTO accounts.site_billing_preferences (site_id, preference) VALUES (@site_id, @preference)
+ON CONFLICT (site_id) DO UPDATE SET preference = excluded.preference;
 
 -- name: CutSessions :exec
 -- A site that shortens its sessions writes the shorter lifetimes into the ones already made, so that loosening it again

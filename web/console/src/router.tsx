@@ -60,6 +60,11 @@ const routeTree = root.addChildren([
     }),
     createRoute({
       getParentRoute: () => app,
+      path: "/provider-keys",
+      component: lazyRouteComponent(() => import("./pages/provider-keys")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
       path: "/models",
       validateSearch: (search: Record<string, unknown>) => ({
         q: text(search.q),
@@ -106,6 +111,11 @@ const routeTree = root.addChildren([
     }),
     createRoute({
       getParentRoute: () => app,
+      path: "/orders/$orderId/receipt",
+      component: lazyRouteComponent(() => import("./pages/receipt")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
       path: "/statement",
       component: lazyRouteComponent(() => import("./pages/statement")),
     }),
@@ -118,6 +128,11 @@ const routeTree = root.addChildren([
       getParentRoute: () => app,
       path: "/notifications",
       component: lazyRouteComponent(() => import("./pages/notifications")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/settings",
+      component: lazyRouteComponent(() => import("./pages/settings")),
     }),
     createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),
   ]),

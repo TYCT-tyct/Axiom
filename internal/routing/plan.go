@@ -14,16 +14,18 @@ import (
 
 // need is everything a candidate is held against, worked out once per request.
 type need struct {
-	in     *Input
-	req    *protocol.Request
-	preset *Preset
-	over   *Override
-	auto   bool                   // rank across every model: the request named openrouter/auto
-	free   bool                   // rank across the free models: the request named openrouter/free
-	tokens int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
-	demand billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
-	tiers  catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
-	now    time.Time
+	in         *Input
+	req        *protocol.Request
+	preset     *Preset
+	over       *Override
+	auto       bool                   // rank across every model: the request named openrouter/auto
+	free       bool                   // rank across the free models: the request named openrouter/free
+	tokens     int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
+	segments   billing.Segments       // the segment settings this plan marks entries with, read once from the live policy
+	demand     billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
+	tiers      catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
+	now        time.Time
+	noFallback bool // the account forbade fallback for the model being ranked
 }
 
 // attempts is how many endpoints a plan may try: the preset's or the router's default, and one for a file reference,
@@ -62,6 +64,7 @@ func (r *Router) rankModels(snap *Snapshot, n *need, rec *Record) []ranked {
 		if len(cands) == 0 {
 			rec.Excluded = append(rec.Excluded, Excluded{Reason: NoCandidates})
 		}
+		_, n.noFallback = snap.noFallback[n.in.Admission.Account][m]
 		order = append(order, r.rank(cands, n, rec)...)
 	}
 	return order
@@ -108,6 +111,9 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		in: &in, req: in.Req, preset: &preset, over: &in.Override, auto: in.Auto, free: in.Free, now: now,
 		tokens: inputTokens(in.Req), demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
+	if r.cfg.Segments != nil {
+		n.segments = r.cfg.Segments.Load()
+	}
 	n.tiers.Add(catalog.ServiceTierStandard)
 	var rec Record
 	order := r.rankModels(snap, n, &rec)
@@ -115,7 +121,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		r.sort(order, n.strategy())
 	}
 	attempts := r.attempts(n)
-	order = healthOrder(order, n, &rec, min(attempts, MaxEntries))
+	order = healthOrder(order, &rec)
 	rec.Unmeasured = unmeasured(order, n.strategy())
 	entries := r.entries(order, n, &rec)
 	entries = entries[:min(len(entries), attempts)] // an entry past the most attempts could never be reached
@@ -125,12 +131,9 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	for _, e := range entries {
 		rec.Route = append(rec.Route, e.Endpoint)
-		if e.BreakerFallback {
-			rec.BreakerFallback = append(rec.BreakerFallback, e.Endpoint)
-		}
 	}
 	return Plan{
-		Entries: entries, MaxAttempts: attempts,
+		Entries: entries, Segments: n.segments, MaxAttempts: attempts,
 		StartBy: now.Add(orDefault(preset.AttemptWindow, r.cfg.AttemptWindow)), StickyTTL: preset.StickyTTL, Record: rec,
 	}, nil, nil
 }
@@ -171,11 +174,16 @@ func DemandOf(req *protocol.Request) billing.Demand {
 		// The gateway's web plugin runs one external search before the completion; it is a flat per-use charge.
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: 1, Flat: true})
 	}
-	if req.FileParses > 0 {
-		// Each file the gateway parsed before admission is one flat per-use charge. It is billed under the search item
-		// because a new per-use item would have to appear in every stored fallback row at once, which a rolling release
-		// cannot do (docs/domains/billing.md「预留与结算」).
-		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, Flat: true, MaxUses: req.FileParses})
+	if req.FileBilling {
+		if req.FilePages > 0 {
+			// Each page the gateway parsed through a paid OCR engine is one flat per-use charge of its own item: parsing
+			// is the gateway's work, not a search, and the model's schedule prices it (docs/domains/billing.md「预留与结算」).
+			d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemFileParse, Flat: true, MaxUses: req.FilePages})
+		}
+	} else if req.FileParses > 0 {
+		// Until the catalog switch is on, a parse keeps the old unit: one web_search per file, with the sampling the
+		// search loop adds. The rollout reading the new item does not change what a site already charges.
+		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemWebSearch, MaxUses: req.FileParses})
 	}
 	if req.Needs.Has(protocol.CodeExecution) {
 		d.ServerTools = append(d.ServerTools, billing.ServerTool{Item: catalog.ItemCodeExecution, MaxUses: req.CodeExecutions})
@@ -222,7 +230,6 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 			continue
 		}
 		entry := r.entry(c.candidate, n)
-		entry.BreakerFallback = !c.opened.IsZero()
 		entry.Price = c.price.PriceRef
 		entries = append(entries, entry)
 	}
@@ -231,13 +238,13 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 
 // entry works out what billing needs for one endpoint and this request: the output limit and whether the reservation can
 // be made in segments.
-func (r *Router) entry(c *candidate, n *need) Entry {
+func (*Router) entry(c *candidate, n *need) Entry {
 	out, _ := c.outputLimit(n.req, n.tokens)
 	format, _ := c.callFormat(n)
 	// Without a known output speed the overshoot allowance of a segmented reservation would be nothing, so an entry
 	// whose speed is unknown is reserved in full; so is one whose call the gateway cannot meter (Input.NoSegments), and
 	// every entry while no segment size is configured: a segment of 0 tokens would reserve no output at all.
-	allowance, _ := r.cfg.Segments.Allowance(c.OutputSpeed)
+	allowance, _ := n.segments.Allowance(c.OutputSpeed)
 	// Reasoning counts against a segment while it streams, so a model that reasons must show it in the stream the
 	// gateway reads: the format the endpoint is called in, not the client's, since a converted call is metered where it
 	// is made. A model without the ability has no reasoning to miss.
@@ -246,7 +253,7 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	// would reserve a fraction of an amount the documentation promises whole (docs/domains/billing.md「决策与理由」).
 	segmentable := !n.in.NoSegments && n.req.Format != protocol.Completions && c.Streams && c.Cancels &&
 		(!reasoning || c.ReasoningVisible.Has(format)) && !n.req.HidesReasoning && c.OutputSpeed > 0 &&
-		r.cfg.Segments.Output > 0 && out > r.cfg.Segments.Output+allowance
+		n.segments.Output > 0 && out > n.segments.Output+allowance
 	target := c.Target
 	target.Format = format
 	target.Streams = c.Streams // the request sent asks for a stream, which the gateway relays or aggregates
@@ -258,7 +265,7 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	return Entry{
 		Exchange: c.Exchange,
 		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, ModelSlug: c.ModelSlug, Price: c.Price, Limits: limits, MaxOutput: out,
-		Segmentable: segmentable,
+		Segmentable: segmentable, Byok: c.Byok,
 	}
 }
 
@@ -298,9 +305,12 @@ func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 
 // check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0. An endpoint
 // the account cannot see is not left out, it is not there: no reason is given, so no existence is revealed.
-func check(c *candidate, n *need, price *candidatePrice) (reason Reason, visible bool) {
+func check(c *candidate, n *need, price *candidatePrice, noShared bool) (reason Reason, visible bool) {
 	if !c.Owner.visibleTo(n.in.Admission) {
 		return 0, false
+	}
+	if noShared && !c.Byok {
+		return ByokNoFallback, true
 	}
 	if reason = c.unavailable(); reason != 0 {
 		return reason, true
@@ -492,90 +502,44 @@ func (n *need) withinLimit(limit PriceLimit, c *candidate, price *candidatePrice
 
 func listed(ids []SupplierID, id SupplierID) bool { return slices.Contains(ids, id) }
 
-// serveable reports whether some endpoint can serve now. When only slow-full windows keep every other endpoint from
-// serving, their marks are cleared first: a route that starts when a window recovers beats no route at all.
-func serveable(order []ranked) bool {
-	if slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() && !c.slowFull }) {
-		return true
-	}
-	if !slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() }) {
-		return false
+// clearSlowFull drops slow-start marks when only those windows keep the untripped endpoints from serving: a
+// single-endpoint model does not queue behind its own recovery (docs/domains/quality.md「恢复」). A tripped endpoint is
+// never counted as serveable.
+func clearSlowFull(order []ranked) {
+	if slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() && !c.slowFull }) ||
+		!slices.ContainsFunc(order, func(c ranked) bool { return c.opened.IsZero() }) {
+		return
 	}
 	for i := range order {
 		order[i].slowFull = false
 	}
-	return true
 }
 
-// healthOrder applies breakers after every request-specific filter, across primary and alternate models.
-func healthOrder(order []ranked, n *need, rec *Record, slots int) []ranked {
-	if !serveable(order) {
-		orderLastResorts(order, n.rankAll())
-		return order
-	}
-	owned, hasOwned := ownedFallback(order, n.now)
+// healthOrder applies breakers after every request-specific filter, across primary and alternate models. A tripped
+// endpoint is degraded: out of the normal route, but still the last resort while its re-check is pending. Only one whose
+// re-check failed (offline) takes no traffic at all; when every candidate is offline, Plan returns a temporary
+// NoEndpoint and the gateway refuses the request (docs/domains/quality.md「恢复」).
+func healthOrder(order []ranked, rec *Record) []ranked {
+	clearSlowFull(order)
+	var degraded []ranked
 	out := order[:0]
 	for _, c := range order {
-		reason := Reason(0)
-		if !c.opened.IsZero() {
-			reason = BreakerOpen
-		} else if c.slowFull {
-			reason = Full
-		}
-		if reason != 0 {
-			rec.Excluded = append(rec.Excluded, Excluded{c.ID, reason})
-		} else {
+		switch {
+		case !c.opened.IsZero() && c.offline:
+			rec.Excluded = append(rec.Excluded, Excluded{c.ID, BreakerOpen})
+		case !c.opened.IsZero():
+			degraded = append(degraded, c)
+		case c.slowFull:
+			rec.Excluded = append(rec.Excluded, Excluded{c.ID, Full})
+		default:
 			out = append(out, c)
 		}
 	}
-	if hasOwned {
-		out = includeOwnedFallback(out, owned, slots, n.over.NoFallbacks && len(n.over.OrderNames) == 0)
+	if len(out) == 0 && len(degraded) > 0 {
+		return append(out, degraded...)
+	}
+	for _, c := range degraded {
+		rec.Excluded = append(rec.Excluded, Excluded{c.ID, BreakerOpen})
 	}
 	return out
-}
-
-// Repeated suppliers of one model must not consume the slots reserved for alternate models before entries deduplicates.
-func includeOwnedFallback(order []ranked, owned ranked, slots int, perModel bool) []ranked {
-	if perModel {
-		if slices.ContainsFunc(order, func(c ranked) bool { return c.Model == owned.Model }) {
-			return order
-		}
-		kept := order[:0]
-		for _, c := range order {
-			if len(kept) == slots-1 {
-				break
-			}
-			if !slices.ContainsFunc(kept, func(previous ranked) bool { return previous.Model == c.Model }) {
-				kept = append(kept, c)
-			}
-		}
-		order = kept
-	}
-	order = order[:min(len(order), slots-1)]
-	return append(order, owned)
-}
-
-func ownedFallback(order []ranked, now time.Time) (owned ranked, found bool) {
-	for _, c := range order {
-		if c.Owner.Platform() || c.opened.IsZero() || now.Sub(c.opened) < 10*time.Minute {
-			continue
-		}
-		if !found || c.opened.After(owned.opened) {
-			owned = c
-			found = true
-		}
-	}
-	return
-}
-
-func orderLastResorts(order []ranked, global bool) {
-	// rank already groups each model by supplier order and slow status.
-	for start := 0; start < len(order); {
-		end := start + 1
-		for end < len(order) && (global || order[end].Model == order[start].Model) && order[end].order == order[start].order && order[end].slow == order[start].slow {
-			end++
-		}
-		slices.SortStableFunc(order[start:end], func(a, b ranked) int { return b.opened.Compare(a.opened) })
-		start = end
-	}
 }

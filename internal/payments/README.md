@@ -13,7 +13,7 @@ type Method string   // 本站的付款方式代码："alipay"、"wxpay"、"usdt
 type MerchantID, OrderID, RefundID uuid.UUID // 对外写法 mch_、ord_、rfd_
 type Money struct{ Currency platform.Currency; Minor int64 } // 付款币种的最小单位；位数取 ISO 4217 表
 type State string    // 订单状态："pending"、"paid"……；转移表是 payments.transitions
-type Order struct{}  // ID、站点、账户、用户、商户账户、付款方式、状态、额度、总额、手续费、网关订单号、checkout、有效期、时间戳；RefundAllowed 是商户账户此刻是否允许用户申请退款
+type Order struct{}  // ID、站点、账户、用户、商户账户、付款方式、状态、额度、总额、手续费、网关订单号、checkout、有效期、时间戳；RefundAllowed 是商户账户此刻是否允许用户申请退款；PaidAt、PaidTotal、PaidFee、Credited 是付款落定时的实付事实（部分或晚付时与报价不同），未支付时为空，控制台的收据只由它们和退款渲染
 type CreateOrder struct{} // Site、Account、User、Method、Credits、Key（幂等键）、ReturnURL、ClientIP、Mobile
 
 func Open(c Config) (*Payments, error) // Plugins（按 Kind 登记）、*pg.DB、平台范围、Keyring、egress.Client；Accounts 在拒付时暂停账户；持久告警经平台事务信号，突增信号经 Config.Alerts，Config.Instance 是信号键里的节点身份，Config.Signals 是节点内共享的计数与未恢复状态

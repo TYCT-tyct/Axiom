@@ -15,6 +15,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
+	"axiom/internal/platform/config"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
@@ -283,5 +284,48 @@ func TestDirectFormatsRejectsUnknownValues(t *testing.T) {
 	_, err := readSettings([]string{"AXIOM_DIRECT_FORMATS=maybe"})
 	if err == nil || !strings.Contains(err.Error(), "AXIOM_DIRECT_FORMATS: want on or off") {
 		t.Fatalf("direct-format gate validation: %v", err)
+	}
+}
+
+func TestByokRejectsUnknownValues(t *testing.T) {
+	_, err := readSettings([]string{"AXIOM_BYOK=maybe"})
+	if err == nil || !strings.Contains(err.Error(), "AXIOM_BYOK: want on or off") {
+		t.Fatalf("BYOK gate validation: %v", err)
+	}
+	var s nodeSettings
+	if err := readByok(config.New(nil), &s); err != nil || s.byok {
+		t.Errorf("the BYOK gate defaults to %v, %v, want off", s.byok, err)
+	}
+	if err := readByok(config.New([]string{"AXIOM_BYOK=on"}), &s); err != nil || !s.byok {
+		t.Errorf("AXIOM_BYOK=on reads as %v, %v", s.byok, err)
+	}
+}
+
+func TestResponseCacheContentIsOffUntilThePlatformAllowsIt(t *testing.T) {
+	t.Parallel()
+	off, err := readSettings(coreEnviron())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.responseCache {
+		t.Error("reply content is allowed without the platform saying so")
+	}
+	empty, err := readSettings(coreEnviron("AXIOM_RESPONSE_CACHE_CONTENT="))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.responseCache {
+		t.Error("an empty setting enabled reply content")
+	}
+	on, err := readSettings(coreEnviron("AXIOM_RESPONSE_CACHE_CONTENT=on"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !on.responseCache {
+		t.Error("the platform's on was not read")
+	}
+	if _, err := readSettings([]string{"AXIOM_RESPONSE_CACHE_CONTENT=maybe"}); err == nil ||
+		!strings.Contains(err.Error(), "AXIOM_RESPONSE_CACHE_CONTENT: want on or off") {
+		t.Fatalf("content-retention validation: %v", err)
 	}
 }

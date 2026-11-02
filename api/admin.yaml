@@ -985,6 +985,121 @@ paths:
           $ref: '#/components/responses/Conflict'
         default:
           $ref: '#/components/responses/Failure'
+  /api/admin/v1/settings/segments:
+    get:
+      operationId: getSegmentSettings
+      tags: [Site]
+      summary: The saved segment settings and the defaults in code.
+      description: >-
+        How many output tokens a reservation segment covers, and how much time its overshoot allowance covers. An
+        absent value is the default in code. Every node reloads the record within 30 seconds, without a restart, and
+        routing and billing read the same value.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The settings and defaults.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SegmentSettingsView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setSegmentSettings
+      tags: [Site]
+      summary: Save the segment settings, validated and audited.
+      description: >-
+        Replaces the record: a value left out falls back to the default in code, and a record with no value is deleted.
+        The overshoot allowance must cover the node's extension wait. Nodes apply the saved value within 30 seconds
+        without a restart; a record a node cannot use keeps that node's previous value and is logged there.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SegmentSettingsUpdate"}
+      responses:
+        "200":
+          description: The settings as stored.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SegmentSettingsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/settings/quality-probes:
+    get:
+      operationId: getQualityProbeSettings
+      tags: [Site]
+      summary: The saved probe settings and the defaults in code.
+      description: >-
+        The hourly budget and concurrency of recovery probes, the fingerprint check's interval, retry, and how long a
+        pass counts, and the first probe delay. An absent value is the default in code. Every node reloads the record
+        within 30 seconds, without a restart.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The settings and defaults.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProbeSettingsView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setQualityProbeSettings
+      tags: [Site]
+      summary: Save the probe settings, validated and audited.
+      description: >-
+        Replaces the record: a value left out falls back to the default in code, and a record with no value is deleted.
+        The maximum age of a pass must be at least the check interval, and the first retry at most it. Nodes apply the
+        saved value within 30 seconds without a restart; a record a node cannot use keeps that node's previous value
+        and is logged there.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProbeSettingsUpdate"}
+      responses:
+        "200":
+          description: The settings as stored.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProbeSettingsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/payments/merchants:
     get:
       operationId: listMerchants
@@ -4315,6 +4430,98 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/subscription-grants/{grant_id}/refunds:
+    post:
+      operationId: refundSubscriptionGrant
+      tags: [Users]
+      summary: Request a subscription grant refund
+      description: >-
+        Requests part or all of a paid grant in site credits and, after a different operator approves it, takes back
+        the term it bought from the end (docs/domains/billing.md「订阅套餐」). A request changes no money or term. A refund
+        of everything left revokes the subscription; a partial one only removes whole future windows. The grant must
+        be the newest of the subscription, a window with a pending reservation is refused, and a gift cannot be
+        refunded. The ID is the idempotency key; the same key with the same grant and credits returns the stored
+        request.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: credits.grant
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+        - name: grant_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SubscriptionRefundInput"}
+      responses:
+        "202":
+          description: Waiting for another operator's approval.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SubscriptionRefundProposal"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/subscription-refunds/{refund_id}/approve:
+    post:
+      operationId: approveSubscriptionRefund
+      tags: [Users]
+      summary: Approve a subscription grant refund
+      description: >-
+        Applies a pending subscription refund as an operator other than the requester, using the same second-person
+        rule as a payment refund. The refund takes back the grant's term and posts its ledger entries
+        (docs/domains/billing.md「订阅套餐」). The ID is the idempotency key; approval replay returns the stored refund
+        and posts nothing again.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: credits.grant
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+        - name: refund_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SubscriptionRefundApprovalInput"}
+      responses:
+        "200":
+          description: Refunded.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SubscriptionRefund"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/accounts/{account_id}/subscriptions:
     get:
       operationId: listSubscriptions
@@ -5823,6 +6030,54 @@ components:
         admin_idle_timeout_seconds: {type: integer, minimum: 300, maximum: 43200}
         admin_max_age_seconds: {type: integer, minimum: 300, maximum: 86400}
         new_key_daily_limit: {$ref: "#/components/schemas/Money"}
+        billing_preference:
+          allOf: [{$ref: "#/components/schemas/BillingPreferenceName"}]
+          description: >-
+            The funding order an account gets until it chooses its own; absent is `subscription_first`. A page built
+            before this field leaves it out, and the server keeps the stored value rather than clearing it.
+    BillingPreferenceName:
+      type: string
+      enum: [subscription_first, wallet_first, subscription_only, wallet_only]
+      description: >-
+        Which source a call uses first. `subscription_first` uses the plan and falls back to the wallet; `wallet_first`
+        the reverse; `subscription_only` and `wallet_only` do not fall back (docs/domains/billing.md「资金来源」).
+    SubscriptionRefundInput:
+      type: object
+      additionalProperties: false
+      required: [credits, reason]
+      properties:
+        credits: {$ref: "#/components/schemas/CreditAmount"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SubscriptionRefundProposal:
+      type: object
+      required: [id, grant_id, credits, state, requested_by, created_at]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        grant_id: {$ref: "#/components/schemas/Uuid"}
+        credits: {$ref: "#/components/schemas/CreditAmount"}
+        state: {type: string, enum: [pending, approved, rejected]}
+        requested_by: {$ref: "#/components/schemas/Uuid"}
+        approved_by: {$ref: "#/components/schemas/Uuid"}
+        created_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+    SubscriptionRefundApprovalInput:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: {$ref: "#/components/schemas/Reason"}
+    SubscriptionRefund:
+      type: object
+      required: [id, grant_id, credits, amount, windows, unused, revoked, created_at]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        grant_id: {$ref: "#/components/schemas/Uuid"}
+        credits: {$ref: "#/components/schemas/CreditAmount"}
+        amount: {$ref: "#/components/schemas/Money"}
+        windows: {type: integer, minimum: 0, description: "Windows voided by this refund."}
+        unused: {$ref: "#/components/schemas/CreditAmount"}
+        revoked: {type: boolean}
+        created_at: {type: string, format: date-time}
     SiteLogoView:
       type: object
       properties:
@@ -5910,6 +6165,55 @@ components:
       required: [settings, reason]
       properties:
         settings: {$ref: "#/components/schemas/SiteSettings"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SegmentSettings:
+      type: object
+      description: >-
+        How a reservation is split into segments. A value that is absent is the default in code. `output_tokens` is
+        the output a segment covers; `overshoot_seconds` is the time the allowance covers at the endpoint's speed,
+        and must be at least the node's extension wait (1 second).
+      properties:
+        output_tokens: {type: integer, format: int64, minimum: 1, maximum: 1000000}
+        overshoot_seconds: {type: integer, minimum: 1, maximum: 600}
+    SegmentSettingsView:
+      type: object
+      required: [settings, defaults]
+      properties:
+        settings: {$ref: "#/components/schemas/SegmentSettings"}
+        defaults:
+          description: What applies where `settings` has no value.
+          allOf: [{$ref: "#/components/schemas/SegmentSettings"}]
+    SegmentSettingsUpdate:
+      type: object
+      required: [settings, reason]
+      properties:
+        settings: {$ref: "#/components/schemas/SegmentSettings"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    ProbeSettings:
+      type: object
+      description: >-
+        The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent
+        is the default in code. Times are seconds.
+      properties:
+        hourly_budget: {type: integer, minimum: 1, maximum: 100000}
+        concurrency: {type: integer, minimum: 1, maximum: 64}
+        verify_every_seconds: {type: integer, minimum: 60, maximum: 2592000}
+        verify_max_age_seconds: {type: integer, minimum: 60, maximum: 2592000}
+        verify_retry_seconds: {type: integer, minimum: 60, maximum: 86400}
+        probe_base_seconds: {type: integer, minimum: 1, maximum: 600}
+    ProbeSettingsView:
+      type: object
+      required: [settings, defaults]
+      properties:
+        settings: {$ref: "#/components/schemas/ProbeSettings"}
+        defaults:
+          description: What applies where `settings` has no value.
+          allOf: [{$ref: "#/components/schemas/ProbeSettings"}]
+    ProbeSettingsUpdate:
+      type: object
+      required: [settings, reason]
+      properties:
+        settings: {$ref: "#/components/schemas/ProbeSettings"}
         reason: {$ref: "#/components/schemas/Reason"}
     LoginLimits:
       type: object
@@ -6743,6 +7047,7 @@ components:
         web_search: {$ref: "#/components/schemas/UnitPrice"}
         code_execution: {$ref: "#/components/schemas/UnitPrice"}
         file_search: {$ref: "#/components/schemas/UnitPrice"}
+        file_parse: {$ref: "#/components/schemas/UnitPrice"}
     ContextTier:
       type: object
       required: [above, rates]
@@ -6794,6 +7099,10 @@ components:
             flex: {$ref: "#/components/schemas/ServiceTierRates"}
             priority: {$ref: "#/components/schemas/ServiceTierRates"}
             fast: {$ref: "#/components/schemas/ServiceTierRates"}
+    PriceEndpointMap:
+      type: object
+      description: Per-endpoint prices, keyed by endpoint UUID.
+      additionalProperties: {$ref: "#/components/schemas/PriceSchedule"}
     ModelName:
       type: object
       required: [name, visibility]
@@ -6982,6 +7291,13 @@ components:
         floor_multiplier: {type: string}
         change_ratio: {type: string}
         max_increase_ratio: {type: string}
+        byok_fee_bps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: >-
+            The share of a model's normal sale price charged when an account's own provider key serves the request,
+            in basis points (500 is 5%, docs/domains/billing.md「定价」).
     PricePolicyInput:
       type: object
       additionalProperties: false
@@ -6991,6 +7307,13 @@ components:
         floor_multiplier: {type: string, maxLength: 34}
         change_ratio: {type: string, maxLength: 34}
         max_increase_ratio: {type: string, maxLength: 34}
+        byok_fee_bps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: >-
+            The BYOK fee in basis points. Omitted keeps the site's current value, so a page that predates the field
+            does not reset it.
         reason: {$ref: "#/components/schemas/Reason"}
     PricePublication:
       type: object
@@ -7003,6 +7326,24 @@ components:
         requested: {$ref: "#/components/schemas/PriceSchedule"}
         schedule: {$ref: "#/components/schemas/PriceSchedule"}
         floor: {$ref: "#/components/schemas/PriceSchedule"}
+        endpoints:
+          description: The proposed price of each endpoint for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        requested_endpoints:
+          description: The rule price of each endpoint before the site floor, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        current_endpoints:
+          description: The price each endpoint currently serves, when the current version prices endpoints separately.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        current_schedule:
+          description: The current model-level price schedule, including the envelope of a per-endpoint version.
+          allOf: [{$ref: "#/components/schemas/PriceSchedule"}]
+        costs:
+          description: The proposal's cost of each endpoint in the site currency, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        floors:
+          description: The proposal's break-even price of each endpoint in the site currency, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
         problem: {type: string}
     PricePublishInput:
       type: object

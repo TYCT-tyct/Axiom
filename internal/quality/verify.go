@@ -15,15 +15,12 @@ import (
 // Verification is what the health loop knows about an endpoint's claim to serve the model its catalog entry names
 // (docs/domains/quality.md「真伪检测」). A check is a real generation with a random challenge: the answer must echo a
 // random string, give the sum of two random numbers, and name the model's author. Three outcomes stay apart: unknown
-// (never checked, or the last pass is older than verifyMaxAge), passed, and contradicted; verifyFailures consecutive
-// contradictions are what the docs call a fake.
+// (never checked, or the last pass is older than the configured maximum age), passed, and contradicted;
+// verifyFailures consecutive contradictions are what the docs call a fake.
 const (
-	verifyEvery    = 6 * time.Hour    // how long a pass stands before another check is due
-	verifyMaxAge   = 24 * time.Hour   // how long a pass counts at all
-	verifyRetry    = 15 * time.Minute // the first retry after a contradiction or an inconclusive answer
-	verifyFailures = 3                // consecutive contradictions that conclude an endpoint is fake
-	verifyOutput   = 48               // tokens an answer may use: three short lines
-	verifyReply    = 4 << 10          // bytes of the answer kept for judging
+	verifyFailures = 3       // consecutive contradictions that conclude an endpoint is fake
+	verifyOutput   = 48      // tokens an answer may use: three short lines
+	verifyReply    = 4 << 10 // bytes of the answer kept for judging
 )
 
 // Claimed is what the catalog says an endpoint serves: the author's display name, which a verification answer must
@@ -37,11 +34,13 @@ type Claimed struct {
 // answer; a contradiction clears passed at once, so routing fails closed, and verifyFailures of them in a row are the
 // conclusion that the endpoint is fake.
 type verification struct {
-	claim    claim     // the configuration the evidence is about
-	checked  time.Time // the last conclusive check
-	next     time.Time // when the next check is due
-	passed   bool      // the last conclusive check passed
-	failures int       // consecutive contradictions
+	claim     claim         // the configuration the evidence is about
+	checked   time.Time     // the last conclusive check
+	next      time.Time     // when the next check is due
+	passed    bool          // the last conclusive check passed
+	failures  int           // consecutive contradictions
+	outcome   verifyOutcome // what the last check said, so a settings change can recompute its next time
+	attempted time.Time     // when the last check was scheduled or its result recorded, the retry time base
 }
 
 // claim is what a check's evidence is about: the catalog model it names, the upstream name that serves it, and the
@@ -58,16 +57,16 @@ func claimOf(ep suppliers.Routable) claim {
 }
 
 // verified says the endpoint passed a check that is still recent and has not been contradicted since.
-func (v verification) verified(now time.Time) bool {
-	return v.passed && v.failures == 0 && !v.checked.IsZero() && now.Sub(v.checked) <= verifyMaxAge
+func (v verification) verified(now time.Time, maxAge time.Duration) bool {
+	return v.passed && v.failures == 0 && !v.checked.IsZero() && now.Sub(v.checked) <= maxAge
 }
 
-// confidence is how much a pass still counts: full at checked, 0 at verifyMaxAge.
-func (v verification) confidence(now time.Time) float64 {
-	if !v.verified(now) {
+// confidence is how much a pass still counts: full at checked, 0 at the maximum age.
+func (v verification) confidence(now time.Time, maxAge time.Duration) float64 {
+	if !v.verified(now, maxAge) {
 		return 0
 	}
-	return max(0, 1-now.Sub(v.checked).Seconds()/verifyMaxAge.Seconds())
+	return max(0, 1-now.Sub(v.checked).Seconds()/maxAge.Seconds())
 }
 
 // due reports whether a check is due: one never made, or one whose schedule has passed.
@@ -283,13 +282,13 @@ func nameRuns(s string) []string {
 	return runs
 }
 
-// backoff is verifyRetry doubled failures-1 times, capped at verifyEvery.
-func backoff(failures int) time.Duration {
+// backoff is retry doubled failures-1 times, capped at every.
+func backoff(failures int, retry, every time.Duration) time.Duration {
 	if failures < 1 {
-		return verifyRetry
+		return retry
 	}
 	if failures > 16 {
-		return verifyEvery
+		return every
 	}
-	return min(verifyRetry<<uint(failures-1), verifyEvery)
+	return min(retry<<uint(failures-1), every)
 }

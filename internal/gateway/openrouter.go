@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"uuid"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
@@ -153,6 +154,8 @@ func (l *openRouterListing) shows(v visibility, m catalog.ModelID) bool {
 // model without a sale price is left out for the reason routing leaves its endpoints out, and one whose spec does not
 // declare its limits or whose price cannot fill prompt and completion is left out because OpenRouter's object cannot be
 // written without them.
+//
+//nolint:gocognit // one model at a time: catalog, published price and served endpoints are one publication
 func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	endpoints []routing.Endpoint,
 ) (*openRouterListing, error) {
@@ -176,7 +179,12 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 		if !ok {
 			continue
 		}
-		e, ok, err := newAudienceORModel(id, m, serving, sold)
+		servedIDs := make([]uuid.UUID, len(byModel[m.ID]))
+		for i, ep := range byModel[m.ID] {
+			servedIDs[i] = uuid.UUID(ep.ID)
+		}
+		pageEndpoints := publicEndpointsOf(byModel[m.ID])
+		e, ok, err := newAudienceORModel(id, m, serving, sold, servedIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -187,10 +195,25 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 		if err != nil {
 			return nil, err
 		}
-		e.sold, e.serving = sold, serving
+		e.sold, e.served, e.serving, e.pageEndpoints = sold, servedIDs, serving, pageEndpoints
 		l.models = append(l.models, e)
 	}
 	return l, nil
+}
+
+// publicEndpointsOf keeps the audience-independent attributes of a model's served endpoints for the public page. The
+// codename is the public identity and cannot repeat within a model, so it gives the page one stable order that an
+// internal id never influences.
+func publicEndpointsOf(endpoints []routing.Endpoint) []publicEndpoint {
+	page := make([]publicEndpoint, len(endpoints))
+	for i, e := range endpoints {
+		page[i] = publicEndpoint{
+			id: uuid.UUID(e.ID), name: e.Codename, contextLength: e.Context, maxOutput: e.MaxOutput,
+			streams: e.Streams, quantization: string(e.Quantization), verified: e.Verified,
+		}
+	}
+	slices.SortFunc(page, func(a, b publicEndpoint) int { return strings.Compare(a.name, b.name) })
+	return page
 }
 
 // publicID is the name the model is served and fetched under: its standard ID, the slug without the internal version
@@ -217,11 +240,14 @@ type orModel struct {
 	prompt    platform.UnitPrice
 	output    platform.UnitPrice
 	average   platform.Exact // prompt + completion: the average the price orderings compare, undivided
-	// sold and serving are what the public models and prices page needs from the same build: the audience price layers
-	// and the limits and abilities the catalog declared. They are set on the base entry, before the variants split, so
-	// the page and the OpenRouter list describe one model with one price version.
-	sold    billing.Sold
-	serving catalog.Serving
+	// sold, served and serving are what the public models and prices page needs from the same build: the audience price
+	// layers, the endpoints this node serves and the limits and abilities the catalog declared. pageEndpoints carries
+	// the public identity and attributes of each served endpoint, in codename order. They are set on the base entry,
+	// before the variants split, so the page and the OpenRouter list describe one model with one price version.
+	sold          billing.Sold
+	served        []uuid.UUID
+	serving       catalog.Serving
+	pageEndpoints []publicEndpoint
 }
 
 // orModelResponse is OpenRouter's answer for one model (spec `ModelResponse`).

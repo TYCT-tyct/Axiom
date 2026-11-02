@@ -72,6 +72,7 @@ type Input struct {
 // were left out. The gateway may shorten the plan after reserving, never lengthen it.
 type Plan struct {
 	Entries     []Entry
+	Segments    billing.Segments // the segment settings this plan used, frozen for the reservation that follows it
 	MaxAttempts int
 	StartBy     time.Time
 	StickyTTL   time.Duration // how long the session sticks to the endpoint that serves it; the preset's, 0 for the router's default
@@ -88,17 +89,18 @@ const MaxEntries = 3
 // both: a request that sets no cap is sent with Target.MaxOutput, which is MaxOutput, so what is quoted is what the
 // upstream may produce (I1).
 type Entry struct {
-	BreakerFallback bool
-	Exchange        platform.ExchangeRate
-	Endpoint        EndpointID
-	Supplier        SupplierID
-	Target          protocol.Target
-	Model           catalog.ModelID
-	ModelSlug       string
-	Price           PriceRef
-	Limits          billing.Model
-	MaxOutput       int64
-	Segmentable     bool
+	Exchange    platform.ExchangeRate
+	Endpoint    EndpointID
+	Supplier    SupplierID
+	Target      protocol.Target
+	Model       catalog.ModelID
+	ModelSlug   string
+	Price       PriceRef
+	Limits      billing.Model
+	MaxOutput   int64
+	Segmentable bool
+	// Byok says the entry serves on the account's own provider key, which the reply reports as usage.is_byok.
+	Byok bool
 }
 
 // PriceRef is a price version of billing: its identifier and the schedule it locks.
@@ -159,6 +161,7 @@ const (
 	UnknownItem    // billing met a usage field on the model that it cannot price, until an admin prices it
 	CoolingDown    // the endpoint or its supplier is paused until its retry time, or this request already skipped the supplier after a supplier-scope failure
 	UnquotableCost // native cost cannot be bounded due to model data or count overflow
+	ByokNoFallback // the account's own key for this model refuses to fall back to shared capacity
 )
 
 var reasonNames = [...]string{
@@ -168,6 +171,7 @@ var reasonNames = [...]string{
 	NotVerified: "not_verified",
 	NoPrice:     "no_price", NoEgress: "no_egress", RetryBudget: "retry_budget", Full: "full",
 	UnknownItem: "unknown_item", CoolingDown: "cooling_down", UnquotableCost: "unquotable_cost",
+	ByokNoFallback: "byok_no_fallback",
 }
 
 func (r Reason) String() string { return reasonNames[r] }
@@ -176,7 +180,7 @@ func (r Reason) String() string { return reasonNames[r] }
 func (r Reason) Permanent() bool {
 	switch r {
 	case NoCandidates, NotAllowed, Disabled, MissingCapability, ContextTooSmall, FormatNotServed, ServiceTierNotServed,
-		PresetFilter, OverrideFilter, NoPrice, UnknownItem, UnquotableCost:
+		PresetFilter, OverrideFilter, NoPrice, UnknownItem, UnquotableCost, ByokNoFallback:
 		return true
 	case BreakerOpen, SupplierBalance, NoEgress, NotVerified, RetryBudget, Full, CoolingDown:
 		return false

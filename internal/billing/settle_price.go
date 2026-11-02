@@ -73,10 +73,10 @@ func zeroOutput(last AttemptResult) bool {
 const perUseItems catalog.ItemSet = 1<<catalog.ItemWebSearch | 1<<catalog.ItemCodeExecution
 
 // waivedPerUseItems are the per-use items charged even when a call is waived (「按次计费的项目照常收费」). A file search
-// is one too, but it is priced by the model's schedule rather than a fallback row, so it is not in perUseItems: a
-// per-use price is not a site default, and a model sells the tool only with a price the listing gate has checked. A
-// piece, second or character is not one: it is output the call delivers, so a waived call does not charge it.
-const waivedPerUseItems catalog.ItemSet = perUseItems | 1<<catalog.ItemFileSearch
+// or a file parse is one too, but both are priced by the model's schedule rather than a fallback row, so they are not
+// in perUseItems: a per-use price is not a site default, and a model sells the work only with a price its schedule
+// carries. A piece, second or character is not one: it is output the call delivers, so a waived call does not charge it.
+const waivedPerUseItems catalog.ItemSet = perUseItems | 1<<catalog.ItemFileSearch | 1<<catalog.ItemFileParse
 
 func chargedItems(perUseOnly bool) catalog.ItemSet {
 	if perUseOnly {

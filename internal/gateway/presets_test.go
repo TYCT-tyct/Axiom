@@ -122,6 +122,34 @@ func checkPresetSession(t *testing.T, r *rig, a account) {
 	}
 }
 
+func TestPresetProviderFiltersUseThePublicCodename(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	a := r.newAccount(1e9)
+	err := r.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		_, err := accounts.SavePreset(t.Context(), tx, audit.System("gateway.test"), accounts.SiteID(siteID), accounts.AccountID(a.id), accounts.Preset{
+			Slug: "alpha-one", Name: "Alpha one", Config: jsonx.Raw(`{"model":"acme/alpha","provider":{"only":["alpha-1"]}}`),
+		}, true)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.accounts.Load(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(messageBody("@preset/alpha-one")))
+	calls := r.calls()
+	if resp.StatusCode != http.StatusOK || len(calls) == 0 {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	route := calls[len(calls)-1].Plan.Entries
+	if len(route) != 1 || route[0].Endpoint != r.endpoints["alpha-1"].ID {
+		t.Errorf("route %v, want the endpoint the preset named by codename", route)
+	}
+	r.idle(1 << 30)
+}
+
 func TestSessionHeaderAndMessagesFallbackRoute(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)

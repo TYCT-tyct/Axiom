@@ -1,4 +1,7 @@
 import type { Messages } from "@axiom/ui";
+import { en as providerKeys } from "./provider-keys";
+import { en as receipt } from "./receipt";
+import { en as settings } from "./settings";
 import { en as statement } from "./statement";
 import type zh from "./zh";
 
@@ -18,12 +21,14 @@ export default {
     models: "Models & prices",
     overview: "Overview",
     keys: "API keys",
+    providerKeys: "Provider keys",
     calls: "Calls",
     balance: "Balance",
     redeem: "Redeem",
     orders: "Orders",
     statement: "Statement",
     notifications: "Notifications",
+    settings: "Settings",
     security: "Account & security",
   },
   auth: {
@@ -203,6 +208,8 @@ export default {
     verify: "I have paid",
     cancelOrder: "Cancel order",
     refund: "Request refund",
+    receipt: "Receipt",
+    receiptsUnavailable: "This server doesn’t report receipts yet; reload after it is upgraded.",
     refundsUnavailable: "This server doesn’t report refunds yet; reload after it is upgraded.",
     unavailable: "Unavailable",
     noRefunds: "None",
@@ -221,6 +228,8 @@ export default {
       "This request key was already used. Check the refunds below before sending another; nothing new was sent.",
     close: "Cancel",
   },
+  settings,
+  receipt,
   notifications: {
     description: "When Axiom emails you or calls your webhook.",
     title: "Alerts",
@@ -345,6 +354,7 @@ export default {
       copy: "Copy {{name}}",
     },
   },
+  providerKeys,
   calls: {
     priceVersion: "Price version {{version}}",
     priceVersionUnavailable: "Price version unavailable",
@@ -396,6 +406,7 @@ export default {
     ok: "Succeeded",
     failed: "Failed",
     free: "Free",
+    cacheHit: "Cached",
     ms: "{{value}} ms",
     tokens: "{{input}} / {{output}}",
   },
@@ -416,6 +427,10 @@ export default {
     finish: "Finish reason",
     latency: "Total time",
     firstToken: "Time to first token",
+    cache: "Response cache",
+    cacheHit: "Hit",
+    cacheHitBody:
+      "This call was answered from the response cache: no upstream request was made and nothing was charged.",
     session: "Session",
     subagent: "Subagent",
     key: "Key used",

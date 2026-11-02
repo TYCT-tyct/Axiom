@@ -358,9 +358,16 @@ type options struct {
 	price        string                    // the entries' price schedule; cheap when empty
 	search       websearch.Searcher        // the web plugin's backend; nil means the feature is off
 	server       *protocol.ServerWebSearch // openrouter:web_search's tool, run through search; nil means none
-	fileParses   int64                     // the files the gateway parsed before admission, charged per use
+	fileParses   int64                     // the files the gateway parsed before admission
+	filePages    int64                     // the pages a paid OCR engine produced, the new file_parse unit
+	fileBilling  bool                      // whether the catalog switch bills file_parse instead of web_search
 	logs         *bytes.Buffer             // the node's log, discarded when nil
 	health       *quality.Monitor          // what the attempts tell; a new one when nil
+}
+
+// optionSegments is the harness's segment settings: the test's, or a small segment that makes calls segment.
+func optionSegments(o options) billing.Segments {
+	return cmpOr(o.segments, billing.Segments{Output: 200, Overshoot: time.Second})
 }
 
 type harness struct {
@@ -414,10 +421,9 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	}
 	h.up = &fakeUpstreams{eps: map[uuid.UUID]*fakeEndpoint{}, client: h.w}
 	h.cfg = DefaultConfig()
-	// One source, as cmd/axiom wires it: the quote and the executor reserve by the same segment settings, so a test
+	// One live policy, as cmd/axiom wires it: the quote and the executor reserve by the same segment settings, so a test
 	// that changes how a call is segmented cannot leave one of them on the defaults.
-	segments := cmpOr(o.segments, billing.Segments{Output: 200, Overshoot: time.Second})
-	h.cfg.SegmentOutput, h.cfg.SegmentOvershoot = segments.Output, segments.Overshoot
+	o.routing.Segments = billing.NewSegmentPolicy(optionSegments(o))
 	if o.config != nil {
 		o.config(&h.cfg)
 	}
@@ -497,6 +503,8 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 	}
 	req.ServiceTiers = 1 << catalog.ServiceTierStandard // the schedule prices that tier only
 	req.FileParses = o.fileParses                       // the parse step ran before admission, so the quote sees it
+	req.FilePages = o.filePages
+	req.FileBilling = o.fileBilling
 	request = setStream(&req, request, o.stream)
 	var quotes []billing.Quotable
 	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}
@@ -524,8 +532,7 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		req.SearchBytes = protocol.WebSearchMaxBytes
 	}
 	// The same segment settings the harness gave the executor (newHarness), from the one place they are chosen.
-	segments := cmpOr(o.segments, billing.Segments{Output: 200, Overshoot: time.Second})
-	r, err := billing.Quote(routing.DemandOf(&req), quotes, segments, nil)
+	r, err := billing.Quote(routing.DemandOf(&req), quotes, optionSegments(o), nil)
 	if err != nil {
 		h.t.Fatal(err)
 	}

@@ -19,6 +19,8 @@ type Admitted struct {
 	Scope                         pg.Scope
 	Site, Account, Workspace, Key uuid.UUID
 	WorkspaceBudget, KeyLimit     *Limit // nil when there is none
+	// Preference is the account's funding order (docs/domains/billing.md「资金来源」); empty is subscription_first.
+	Preference string
 }
 
 // Limit is a spending limit in billionths of a credit over a window.
@@ -348,7 +350,7 @@ func (a Admitted) transient(e *Insufficient) *Insufficient {
 		e.Transient = reset(a.WorkspaceBudget) != ResetNever
 	case SourceKey:
 		e.Transient = reset(a.KeyLimit) != ResetNever
-	case SourceBalance, SourceSiteBalance:
+	case SourceBalance, SourceSiteBalance, SourceSubscription:
 	}
 	return e
 }

@@ -1,4 +1,7 @@
 // The console's messages in Chinese, the source every other language follows.
+import { zh as providerKeys } from "./provider-keys";
+import { zh as receipt } from "./receipt";
+import { zh as settings } from "./settings";
 import { zh as statement } from "./statement";
 
 export default {
@@ -17,12 +20,14 @@ export default {
     models: "模型与价格",
     overview: "概览",
     keys: "API key",
+    providerKeys: "供应商 key",
     calls: "调用记录",
     balance: "余额",
     redeem: "兑换",
     orders: "订单",
     statement: "额度流水",
     notifications: "通知",
+    settings: "设置",
     security: "账户与安全",
   },
   auth: {
@@ -194,6 +199,8 @@ export default {
     verify: "我已付款",
     cancelOrder: "取消订单",
     refund: "申请退款",
+    receipt: "收据",
+    receiptsUnavailable: "当前服务节点暂不支持收据，升级后刷新即可。",
     refundsUnavailable: "当前服务节点暂不支持退款信息，升级后刷新即可。",
     unavailable: "不可用",
     noRefunds: "无",
@@ -210,6 +217,8 @@ export default {
     refundReused: "这个请求的键已经被使用过。请先查看下面的退款，再决定是否再次申请；没有发送新的请求。",
     close: "取消",
   },
+  settings,
+  receipt,
   notifications: {
     description: "Axiom 什么时候给你发邮件或调用你的 webhook。",
     title: "提醒",
@@ -332,6 +341,7 @@ export default {
       copy: "复制 {{name}}",
     },
   },
+  providerKeys,
   calls: {
     priceVersion: "价格版本 {{version}}",
     priceVersionUnavailable: "价格版本不可用",
@@ -383,6 +393,7 @@ export default {
     ok: "成功",
     failed: "失败",
     free: "免单",
+    cacheHit: "缓存",
     ms: "{{value}} 毫秒",
     tokens: "{{input}} / {{output}}",
   },
@@ -403,6 +414,9 @@ export default {
     finish: "结束原因",
     latency: "总耗时",
     firstToken: "首个 token 耗时",
+    cache: "响应缓存",
+    cacheHit: "命中",
+    cacheHitBody: "这次调用由响应缓存作答，没有请求上游，也没有计费。",
     session: "会话",
     subagent: "子 agent",
     key: "使用的 key",

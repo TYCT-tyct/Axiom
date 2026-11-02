@@ -98,7 +98,7 @@ func planWindowNow(ctx context.Context, tx pg.Tx, account uuid.UUID) (*planWindo
 		if now.Before(w.ends) {
 			return w, nil // the current window is the one that holds now
 		}
-		next, err := queries.Window(ctx, tx, WindowParams{SubscriptionID: w.subscription, Seq: w.seq + 1})
+		next, err := queries.NextWindow(ctx, tx, NextWindowParams{SubscriptionID: w.subscription, Seq: w.seq})
 		if errors.Is(err, pg.ErrNoRows) {
 			return nil, expireTerm(ctx, tx, Subscription{ID: w.subscription, State: "active"})
 		}

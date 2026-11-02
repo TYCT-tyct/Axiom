@@ -102,7 +102,7 @@
 
 `serve` 在启动后台任务和监听前运行与 `check` 相同的校验：当前写版本、全部可读版本及数据库引用版本都必须在本机存在且摘要一致；缺失或错误只报告版本号，不报告路径、摘要或材料。文件里出现比写版本更高的可读版本不是错误：它要等全部在线节点报告后才激活。注册心跳后、开始服务前会再同步刷新一次，此后每 10 秒（与 `kv` 心跳同周期）刷新：若出现比写版本更高的可读版本，并且所有在线节点的心跳都报告了它，就把它设为写版本；仍有多个可读版本时按 100 个信封一批重包裹，之后所有引用消失、且所有在线节点写出当前版本超过 30 秒，就退役旧版本。退役在排他锁内重新检查引用并写标记，正在写的信封事务持共享锁，所以不会出现「检查时无引用、提交时多一行」的窗口。只剩写版本一个可读版本时不再扫描信封表。这些步骤都在同一把生命周期锁内，多个节点同时跑会依次收敛；等待条件（`ErrNotDistributed`、`ErrQuiet`、`ErrReferenced`）是「稍后再试」，不是失败。启动、激活和退役还会核对每个登记的信封表都有退役触发器，缺一就拒绝继续。启动、命令和循环的日志只含版本号、表名和数量。
 
-`platform.nodes` 的每行心跳同时带 `key_versions`（该节点已与数据库摘要核对通过的可读版本；失败的新增留在文件里的未登记版本不算）、`key_active`（写版本）和 `key_active_since`（写版本最近一次变化的时间，由数据库在变化时置为 `now()`）：激活和退役因此能等待每个在线节点，而不是要求停掉全部写入进程。在线但心跳超过 30 秒未更新的行不算在线。
+`platform.nodes` 的每行心跳同时带 `key_versions`（该节点已与数据库摘要核对通过的可读版本；失败的新增留在文件里的未登记版本不算）、`key_active`（写版本）和 `key_active_since`（写版本最近一次变化的时间，由数据库在变化时置为 `now()`）：激活和退役因此能等待每个在线节点，而不是要求停掉全部写入进程。在线但心跳超过 30 秒未更新的行不算在线。心跳还带 `supports_billing_preference` 和声明它的 `billing_preference_session`：新节点把两者写成自己的 `share_session`，旧节点不写这两列所以是假；只有声明会话与存活行一致才算支持，旧二进制复用节点 ID 时不会继承上一进程的真值。新节点每次心跳把存活节点的支持情况汇总到 `platform.billing_preference_readiness`，准入在还有旧节点时按默认扣费顺序。
 `Secret` 的所有输出方法都使用值接收者，嵌入结构体或通过指针输出也脱敏。明文保存在闭包中：`fmt` 的错误动词诊断会绕过格式化方法并递归输出私有字段，普通私有字符串字段仍会泄露；闭包不会被展开。`%T`、`%p` 和非法格式（如 `Sprintf` 的 `%w`）由 `fmt` 自行处理，输出类型、地址或诊断信息；交给 `Format` 的所有动词均输出固定脱敏值。它防止意外输出，不保证进程内存擦除，也不能保护已通过 `Reveal()` 取出的普通字符串。闭包也让 `Secret` 有意不可比较：不能做 map 的键，包含它的结构体不能用 `==`，非零值的 `reflect.DeepEqual` 为 false；比较时用 `Reveal()`，go-cmp 需要 `cmp.Comparer`。
 
 ## 出站 HTTP
@@ -234,7 +234,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
   | `axiom_gateway_rate_limited_total` | 计数 | `reason`：节点回 429 的次数，按拒绝的那道限制（`ip_in_flight`、`account_in_flight`、`key_rate`、`count_rate`、`account_gate`、`queue_full`、`queue_key_full`、`queue_wait`、`credentials_busy`，含义见 [gateway 的「并发、背压与共享状态」](../gateway/README.md#并发背压与共享状态)；#295；测试：`TestEachRateLimitIsCountedByItsReason` 等） |
   | `axiom_pg_queue_discarded_jobs_total` | 计数 | 任务类型：队列报告的被丢弃的任务（`pg.Queue`） |
   | `axiom_pg_queue_oldest_job_wait_seconds` | 仪表 | `queue`：每个队列最老的可用任务已经等了多久，没有在等的为 0（`pg.Queue`；它上升说明这个队列的 worker 跟不上；采集的数据库访问有 2 秒期限，超时这次采集报错、不报数（不伪报 0）。测试：`TestTheOldestWaitingJobOfEachQueueIsMeasured` 经 `telemetry.New` 的处理器读到这个名字和四个队列；`TestACollectionEndsWhileTheDatabaseBlocksAndRecovers` 锁住任务表，采集仍会结束，锁放开后恢复） |
-  | `axiom_observability_queue_depth` | 仪表 | 无 |
+  | `axiom_observability_records_pending` | 仪表 | 无（spill 中尚未写入数据库的调用数） |
 | `axiom_gateway_outage_refusals_total` | 计数 | `dependency`（`database`、`accounts`、`catalog`、`routing`）：因依赖故障被拒的请求数，日志只在故障开始和结束时各记一条（#294；测试：`TestAnOutageIsLoggedOnceNotPerRequest` 经 `telemetry.New` 的处理器读到这个名字） |
   | `axiom_billing_platform_borne_total`、`axiom_billing_platform_borne_amount_total`、`axiom_billing_reconcile_problems_total` | 计数 | 无：账户的余额底线没让它付清的结算次数和平台承担的金额（十亿分之一额度），账本每日自平找到的问题数（测试：`TestThePlatformBearingASettlementIsReported`、`TestTheReconciliationReportsWhatItRefuses` 经 `telemetry.New` 的处理器读到这些名字） |
   | `axiom_billing_expire_deferred_total`、`axiom_billing_expire_deferred_amount_total` | 计数 | 无：一轮到期作废里没能全部作废的批次数和剩下的金额（十亿分之一额度）——仍被冻结、被在途预留占着或超出余额的部分，每轮每个仍有剩余的到期批次各加一次；怎么读和处理见[计费的「额度批次」](../../docs/domains/billing.md#额度批次)（#308；测试：`TestTheWriteOffHeldBackIsCounted`、`TestTheWriteOffFrozenAtExpiryIsCounted` 经 `telemetry.New` 的处理器读到这两个名字） |

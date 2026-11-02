@@ -34,6 +34,34 @@ type Admission struct {
 	limitReset           *string
 	budget               *int64
 	budgetReset          *string
+	preference           FundingPreference
+}
+
+// FundingPreference is a funding order, encoded in the admission row as one number: the admission path is hot and a
+// text column would allocate on every call.
+type FundingPreference uint8
+
+// The funding orders, in the order the account settings and the admission row store them.
+const (
+	FundingSubscriptionFirst FundingPreference = iota
+	FundingWalletFirst
+	FundingSubscriptionOnly
+	FundingWalletOnly
+)
+
+// String is the order's name as the API and the database write it.
+func (p FundingPreference) String() string {
+	switch p {
+	case FundingSubscriptionFirst:
+		return BillingSubscriptionFirst
+	case FundingWalletFirst:
+		return BillingWalletFirst
+	case FundingSubscriptionOnly:
+		return BillingSubscriptionOnly
+	case FundingWalletOnly:
+		return BillingWalletOnly
+	}
+	return BillingSubscriptionFirst
 }
 
 // OwnerID is the account owner, used to deduplicate independent health evidence.
@@ -73,6 +101,9 @@ func (a Admission) RateLimits() (account, key int) { return a.accountRate, a.key
 
 // Budget is the workspace's budget, as SpendLimit is the key's.
 func (a Admission) Budget() (int64, string, bool) { return limit(a.budget, a.budgetReset) }
+
+// BillingPreference is the funding order the account's calls use (docs/domains/billing.md「资金来源」).
+func (a Admission) BillingPreference() string { return a.preference.String() }
 
 func limit(amount *int64, reset *string) (int64, string, bool) {
 	if amount == nil {
@@ -258,7 +289,25 @@ func admitRow(c Caller, row AdmitKeyRow, kind string) (Admission, error) {
 		keyRate:     admissionRate(row.AdmissionIds[36:40]),
 		owner:       owner, caller: c, kind: kind, tier: tier, preset: row.PresetID, models: row.Models,
 		spendLimit: row.SpendLimit, limitReset: row.LimitReset, budget: row.Budget, budgetReset: row.BudgetReset,
+		preference: admissionPreference(row.AdmissionIds),
 	}, nil
+}
+
+// admissionPreference reads the order appended to the admission row; a row an older node wrote has no byte for it and
+// takes the code default.
+func admissionPreference(data []byte) FundingPreference {
+	if len(data) < 42 {
+		return FundingSubscriptionFirst
+	}
+	switch binary.BigEndian.Uint16(data[40:42]) {
+	case uint16(FundingWalletFirst):
+		return FundingWalletFirst
+	case uint16(FundingSubscriptionOnly):
+		return FundingSubscriptionOnly
+	case uint16(FundingWalletOnly):
+		return FundingWalletOnly
+	}
+	return FundingSubscriptionFirst
 }
 
 func admissionRate(data []byte) int {

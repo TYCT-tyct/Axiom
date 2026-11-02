@@ -105,6 +105,9 @@ type RelayOptions struct {
 	// ZeroOutput is set when the request capped its output at 0, as legacy completions' max_tokens 0 does: a choice that
 	// finishes without text is then the whole answer, not an empty response.
 	ZeroOutput bool
+	// Cached is set when the upstream bytes are a response-cache replay: the answer was not generated for this call, so
+	// every usage count in it is zero, as OpenRouter bills a hit (docs/domains/gateway.md「响应缓存」).
+	Cached bool
 	// ServerTool makes the relay record the calls of the gateway's web search function. A gateway call that runs no
 	// loop leaves it false, so it allocates nothing for this.
 	ServerTool      bool
@@ -134,6 +137,9 @@ type Final struct {
 	// Files are the files the gateway parsed, which an aggregated Chat reply returns as annotations (fileparse.go).
 	Files              []FileAnnotation
 	Estimated, Pending bool
+	// IsBYOK says the attempt that served the call ran on the account's own provider key. It describes the account,
+	// so a pending settlement still reports it (docs/domains/gateway.md「用量与费用」).
+	IsBYOK bool
 }
 
 var (
@@ -591,29 +597,18 @@ func (r *Relay) Finish(f Final) []byte {
 // costed is the held ending with the members usage added to its usage object and top to the event: an ending
 // without a usage object gets one.
 func (r *Relay) costed(usage, top string) []byte {
-	extra := ""
-	if r.client == Responses {
-		// Responses' usage object is written by the upstream, so it bypasses appendOpenAIUsage. Add the one member
-		// that is ours and that OpenRouter promises, as Chat's usage event already does. It describes the account,
-		// not the settlement, so pending usage carries it too even when there is no cost string.
-		extra = `,"is_byok":false`
-	}
 	at := r.usageAt
 	if at < 0 { // no usage object: the ending gets one
 		at = bytes.LastIndexByte(r.ending, '}')
-		usage = `,"usage":{` + strings.TrimPrefix(usage, ",") + extra + "}"
-		extra = ""
+		usage = `,"usage":{` + strings.TrimPrefix(usage, ",") + "}"
 	} else if bytes.HasSuffix(bytes.TrimRight(r.ending[:at], " \t\r\n"), []byte("{")) {
-		// The usage object is empty: no leading comma, and is_byok takes the one if no cost member does.
-		if usage = strings.TrimPrefix(usage, ","); usage == "" {
-			usage, extra = strings.TrimPrefix(extra, ","), ""
-		}
+		// The usage object is empty: the members take no leading comma.
+		usage = strings.TrimPrefix(usage, ",")
 	}
 	last := bytes.LastIndexByte(r.ending, '}') // the data is a JSON object, which ends with its brace
-	out := make([]byte, 0, len(r.ending)+len(usage)+len(extra)+len(top))
+	out := make([]byte, 0, len(r.ending)+len(usage)+len(top))
 	out = append(out, r.ending[:at]...)
 	out = append(out, usage...)
-	out = append(out, extra...)
 	out = append(out, r.ending[at:last]...)
 	out = append(out, top...)
 	return append(out, r.ending[last:]...)
@@ -670,21 +665,4 @@ var keepAlives = [...][]byte{
 	Responses:   []byte(": keep-alive\n\n"),
 	Chat:        []byte(": keep-alive\n\n"),
 	Completions: []byte(": keep-alive\n\n"),
-}
-
-// initReply keeps the response representation tied to the original client's request.
-func (r *Relay) initReply(u UsageContext, o RelayOptions) {
-	if o.legacyFunctions && !o.Aggregate {
-		r.legacy = &rewriter{legacyDelta: &legacyReplyDelta{}}
-		r.legacy.charge = r.charge
-	}
-	r.up = r.format.newUpstream(u, o, r.charge)
-	if o.Aggregate {
-		r.agg = newAggregator(r.client, r.charge)
-		if a, ok := r.agg.(*chatAggregate); ok {
-			a.legacy = o.legacyFunctions
-			a.healing = u.ResponseHealing
-			a.cited = len(o.Citations) > 0
-		}
-	}
 }

@@ -296,23 +296,23 @@ func TestGateFailedCompletionReturnsWhileTheNextBatchRuns(t *testing.T) {
 
 // Waiters that give up while the gate is being handed on must neither keep a batch nor lose one: whatever happens, the
 // gate ends free. (The interleaving is the scheduler's, so this is a stress test of an invariant, not of one ordering.)
+// The bubble turns a wedged gate into a deadlock report, and synctest.Wait lets the leader finish: a request returns
+// when its batch ends, and only then does the leader find the queue empty and free the account (a check made right
+// after the last request returned failed the train on 2026-11-02, run 41467253974).
 func TestGateSurvivesCancellationsRacingBatches(t *testing.T) {
-	f := testFunds(time.Hour)
-	for round := range 20 {
-		done := make(chan struct{})
-		go func() { raceRound(t, f, round); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("round %d: the gate is wedged: a batch never finished", round)
+	synctest.Test(t, func(t *testing.T) {
+		f := testFunds(time.Hour)
+		for round := range 20 {
+			raceRound(t, f, round)
+			synctest.Wait()
+			f.gate.mu.Lock()
+			left := len(f.gate.accounts)
+			f.gate.mu.Unlock()
+			if left != 0 {
+				t.Fatalf("round %d: %d accounts still held", round, left)
+			}
 		}
-		f.gate.mu.Lock()
-		left := len(f.gate.accounts)
-		f.gate.mu.Unlock()
-		if left != 0 {
-			t.Fatalf("round %d: %d accounts still held", round, left)
-		}
-	}
+	})
 }
 
 // raceRound queues 100 requests behind a holder, cancels half of them while the holder lets go, and returns when all

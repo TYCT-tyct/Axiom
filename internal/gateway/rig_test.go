@@ -65,6 +65,8 @@ type rig struct {
 	memory   *protocol.Memory
 	handler  *Handler
 	server   *httptest.Server
+	keys     *secret.Keyring
+	cache    *ResponseCache
 
 	cfg       Config
 	price     string                           // every model's sale schedule, unless a test lists another
@@ -107,23 +109,26 @@ func (r *rig) publish() {
 }
 
 type rigOptions struct {
-	config    func(*Config)
-	endpoints func(name string, e *routing.Endpoint)
-	routing   routing.Config
-	prefer    string // the endpoint the preset puts first; the cheapest comes first when empty
-	memory    int64
-	conns     int                // the most connections the database pool opens; the driver's own limit when zero
-	body      time.Duration      // how long Public gives a request to send its body; a minute when zero
-	search    websearch.Searcher // the web plugin's backend, nil when the node has none
-	backends  SearchBackends     // the whole engine set, when a test needs names and prices; search is used otherwise
-	parser    fileparse.Parser   // the file-parser plugin's backend, nil when the node has none
-	price     string             // the model's sale schedule, the cheap one when empty
-	alphaSpec string             // alpha's spec, the basic one when empty
-	spec      string             // the model's spec, the basic one when empty
-	suppliers bool               // the suppliers tables too, for a real suppliers service to price attempts
-	lifetime  time.Duration      // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
-	proxies   []netip.Prefix     // the reverse proxies the handler believes, none when empty
-	cache     *kv.Client         // the shared cache the precheck counts in, none when nil
+	config        func(*Config)
+	segments      billing.Segments // how reservations segment; the defaults when zero
+	endpoints     func(name string, e *routing.Endpoint)
+	routing       routing.Config
+	prefer        string // the endpoint the preset puts first; the cheapest comes first when empty
+	memory        int64
+	conns         int                // the most connections the database pool opens; the driver's own limit when zero
+	body          time.Duration      // how long Public gives a request to send its body; a minute when zero
+	search        websearch.Searcher // the web plugin's backend, nil when the node has none
+	backends      SearchBackends     // the whole engine set, when a test needs names and prices; search is used otherwise
+	parser        fileparse.Parser   // the file-parser plugin's backend, nil when the node has none
+	fileParse     bool               // publish and bill file_parse; true unless a test turns it off
+	price         string             // the model's sale schedule, the cheap one when empty
+	alphaSpec     string             // alpha's spec, the basic one when empty
+	spec          string             // the model's spec, the basic one when empty
+	suppliers     bool               // the suppliers tables too, for a real suppliers service to price attempts
+	lifetime      time.Duration      // a reservation's deadline after admission, for a test that lets the cleanup take a call over; an hour when zero
+	proxies       []netip.Prefix     // the reverse proxies the handler believes, none when empty
+	cache         *kv.Client         // the shared cache the precheck counts in, none when nil
+	noCacheWriter bool               // leave the response-cache writer stopped so a test can inspect its queue
 }
 
 // rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
@@ -131,11 +136,33 @@ type rigOptions struct {
 // the clock allows and they fail for that alone.
 var rigs = make(chan struct{}, 3)
 
+// testKeyring is a loaded ring for the cache's envelope encryption: one key, version 1.
+func testKeyring(t *testing.T) *secret.Keyring {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "keys")
+	line := "1:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))) + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := secret.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys
+}
+
+func startCacheWriter(r *rig, stopped bool) {
+	if stopped {
+		return
+	}
+	go r.cache.Run(r.t.Context())
+}
+
 func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	t.Helper()
 	rigs <- struct{}{}
 	t.Cleanup(func() { <-rigs })
-	o := rigOptions{memory: 1 << 30}
+	o := rigOptions{memory: 1 << 30, fileParse: true}
 	for _, f := range opts {
 		if f != nil {
 			f(&o)
@@ -156,10 +183,11 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if o.config != nil {
 		o.config(&r.cfg)
 	}
-	// One source, as cmd/axiom wires it: the routing snapshot and billing reserve by the gateway's segment settings,
+	// One live policy, as cmd/axiom wires it: the routing snapshot and billing reserve by the same segment settings,
 	// so a rig that segments in one of them segments in both.
-	o.routing.Segments = r.cfg.Segments()
-	mods := []pg.Module{accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module()}
+	segments := billing.NewSegmentPolicy(cmpOr(o.segments, billing.DefaultSegments()))
+	o.routing.Segments = segments
+	mods := []pg.Module{accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module(), Module()}
 	if o.suppliers {
 		mods = append(mods, suppliers.Module())
 	}
@@ -178,14 +206,20 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if r.limits, err = New(r.cfg, meter.Meter("test")); err != nil {
 		t.Fatal(err)
 	}
+	r.keys = testKeyring(t)
+	r.cache, err = NewResponseCache(r.db, r.keys, platformScope, slog.New(slog.DiscardHandler), meter.Meter("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	startCacheWriter(r, o.noCacheWriter)
 	r.warmConnections(12)
 	r.seedSite()
-	r.seedCatalog()
+	r.seedCatalog(o.fileParse)
 	r.seedRouting(o)
 	sup := r.settlementSuppliers(o)
 	if r.billing, err = billing.Start(t.Context(), r.db, platformScope, billing.Config{
 		HolderTTL: time.Hour, ReapGrace: time.Hour, Lifetime: cmp.Or(o.lifetime, time.Hour), // nothing renews the holder while a test runs
-		Segments: r.cfg.Segments(),
+		Segments: segments,
 	}, sup); err != nil {
 		t.Fatal(err)
 	}

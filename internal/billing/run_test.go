@@ -142,7 +142,7 @@ func TestHeartbeatBeatsWhileThePoolIsExhausted(t *testing.T) {
 	}
 	defer app.Close()
 	platform := pg.NewScope(true, nil, nil)
-	config := Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour}
+	config := Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour, Segments: NewSegmentPolicy(DefaultSegments())}
 	b, err := Start(t.Context(), app, platform, config, newSupplies())
 	if err != nil {
 		t.Fatal(err)

@@ -9,7 +9,10 @@ import (
 	"uuid"
 
 	"axiom/internal/accounts"
+	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/pg"
 )
 
 // preview asks for the prices of models, with an optional rule and replacements, and returns the rows.
@@ -315,6 +318,30 @@ func TestFileSearchRuleWaitsForEveryNode(t *testing.T) {
 	}
 }
 
+// TestFileParseRuleWaitsForEveryNode: a sale price naming file_parse is refused while the catalog's switch is off, in
+// both a fixed price list and a fixed markup, because the name would reach a price version an older node cannot read.
+func TestFileParseRuleWaitsForEveryNode(t *testing.T) {
+	t.Parallel()
+	f := newPreview(t)
+	for _, tc := range []struct {
+		name, method, field string
+	}{
+		{"a fixed price", `{"kind":"fixed","schedule":{"v":1,"currency":"USD","rates":{"input":"0.000001","file_parse":"0.002"}}}`, "/rule/method/schedule"},
+		{"a fixed markup", `{"kind":"cost_plus","markup_ratio":"0.1","fixed_markup":{"file_parse":"0.002"}}`, "/rule/method/fixed_markup"},
+	} {
+		rec := f.change(f.s, http.MethodPost, "/pricing/rules",
+			`{"rule":`+ruleJSON(everything, everything, tc.method)+`,"reason":"a new rule"}`, newKey())
+		expectAdmin(t, tc.name, rec, http.StatusUnprocessableEntity, codeUnprocessable)
+		if body := rec.Body.String(); !strings.Contains(body, tc.field) {
+			t.Errorf("%s: the refusal does not name %s: %s", tc.name, tc.field, body)
+		}
+	}
+	if got := f.text(`SELECT count(*)::text FROM billing.pricing_rules
+		WHERE method->'schedule'->'rates' ? 'file_parse' OR method->'fixed_markup' ? 'file_parse'`); got != "0" {
+		t.Errorf("%s rules naming file_parse after the refusals, want none", got)
+	}
+}
+
 func TestLegacyRuleRetirementAPI(t *testing.T) {
 	t.Parallel()
 	f := newPreview(t)
@@ -360,5 +387,130 @@ func TestPricingRuleEditValidatesDisabledChanges(t *testing.T) {
 				t.Fatal(rec.Body.String())
 			}
 		}
+	}
+}
+
+// TestPreviewMarginUsesEffectivePrices checks the margin against the prices a request actually pays: fallback items
+// (reasoning from output) are included, the base band and an explicit above:0 tier stay distinct, and an item the cost
+// does not price is unknown rather than free.
+func TestPreviewMarginUsesEffectivePrices(t *testing.T) {
+	t.Parallel()
+	schedule := func(body string) catalog.Schedule {
+		t.Helper()
+		s, err := catalog.ParseSchedule([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	sale := schedule(`{"v":1,"currency":"USD","rates":{"input":"2","output":"2","reasoning":"1"}}`)
+	cost := schedule(`{"v":1,"currency":"USD","rates":{"input":"1","output":"1"}}`)
+	if got := marginOf(sale, cost); got == nil || *got != "0" {
+		t.Errorf("reasoning fallback margin = %v, want 0", got)
+	}
+	sale = schedule(`{"v":1,"currency":"USD","rates":{"input":"2","output":"2"},"context_tiers":{"method":"whole","basis":["input"],"tiers":[{"above":0,"rates":{"input":"4","output":"4"}}]}}`)
+	cost = schedule(`{"v":1,"currency":"USD","rates":{"input":"1","output":"1"},"context_tiers":{"method":"whole","basis":["input"],"tiers":[{"above":0,"rates":{"input":"2","output":"2"}}]}}`)
+	if got := marginOf(sale, cost); got == nil || *got != "0.5" {
+		t.Errorf("base and above:0 margins = %v, want 0.5", got)
+	}
+	// The cost's context threshold is not in the sale's view; the lowest margin is at that threshold, not only at the
+	// sale's own base price.
+	sale = schedule(`{"v":1,"currency":"USD","rates":{"input":"2","output":"2"}}`)
+	cost = schedule(`{"v":1,"currency":"USD","rates":{"input":"1","output":"1"},"context_tiers":{"method":"whole","basis":["input"],"tiers":[{"above":100,"rates":{"input":"1.5","output":"1.5"}}]}}`)
+	if got := marginOf(sale, cost); got == nil || *got != "0.25" {
+		t.Errorf("cost-only tier margin = %v, want 0.25", got)
+	}
+	// A multi-item basis must land its sum on the threshold, not put above+1 in every item and skip a band.
+	sale = schedule(`{"v":1,"currency":"USD","rates":{"input":"4","cache_read":"4"},"context_tiers":{"method":"whole","basis":["input","cache_read"],"tiers":[{"above":10,"rates":{"input":"2","cache_read":"2"}},{"above":20,"rates":{"input":"4","cache_read":"4"}}]}}`)
+	cost = schedule(`{"v":1,"currency":"USD","rates":{"input":"1","cache_read":"1"}}`)
+	if got := marginOf(sale, cost); got == nil || *got != "0.5" {
+		t.Errorf("multi-item basis margin = %v, want 0.5", got)
+	}
+}
+
+// TestPreviewEndpointUsesCurrentSaleForMargin: when serving endpoints show the current published price, the margin is
+// that price's margin, not the margin of a proposal waiting for confirmation.
+func TestPreviewEndpointUsesCurrentSaleForMargin(t *testing.T) {
+	t.Parallel()
+	endpoint := uuid.NewV7()
+	schedule := func(body string) catalog.Schedule {
+		t.Helper()
+		s, err := catalog.ParseSchedule([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	cost := schedule(`{"v":1,"currency":"USD","rates":{"input":"1","output":"1"}}`)
+	proposed := schedule(`{"v":1,"currency":"USD","rates":{"input":"4","output":"4"}}`)
+	current := schedule(`{"v":1,"currency":"USD","rates":{"input":"2","output":"2"}}`)
+	p := billing.Publication{
+		Endpoints:          billing.EndpointPrices{endpoint: proposed},
+		RequestedEndpoints: billing.EndpointPrices{endpoint: proposed},
+		Costs:              billing.EndpointPrices{endpoint: cost},
+		Floors:             billing.EndpointPrices{endpoint: cost},
+	}
+	row, err := previewEndpointRow("model", "slug", endpoint, p, billing.Sold{Version: uuid.NewV7(), Schedule: current}, audience{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Sale == nil || row.Sale.Rates.Input == nil || *row.Sale.Rates.Input != "2" {
+		t.Errorf("shown sale = %+v, want the current 2", row.Sale)
+	}
+	if row.MarginRatio == nil || *row.MarginRatio != "0.5" {
+		t.Errorf("margin = %v, want 0.5 (current sale 2 over cost 1)", row.MarginRatio)
+	}
+}
+
+// TestPreviewEndpointRows: a cost-plus proposal shows one row per endpoint, each with its own sale, cost, floor status
+// and margin. The model-level envelope would show only the dearest endpoint and hide the other's price.
+//
+//nolint:cyclop // one cost-plus preview through every endpoint row
+func TestPreviewEndpointRows(t *testing.T) {
+	t.Parallel()
+	f := newPreview(t)
+	var snap *catalog.Snapshot
+	var err error
+	if err := f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) (err error) {
+		snap, err = catalog.ReadSnapshot(t.Context(), tx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	model, err := modelIDOf(f.model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule := func(input, output string) catalog.Schedule {
+		s, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"` + input + `","output":"` + output + `"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	first, second := uuid.MustParse("00000000-0000-7000-8000-000000000001"), uuid.MustParse("00000000-0000-7000-8000-000000000002")
+	p := billing.Publication{
+		Model:              model,
+		Endpoints:          billing.EndpointPrices{first: schedule("0.0000015", "0.000003"), second: schedule("0.000004", "0.000008")},
+		RequestedEndpoints: billing.EndpointPrices{first: schedule("0.0000012", "0.0000024"), second: schedule("0.000004", "0.000008")},
+		Costs:              billing.EndpointPrices{first: schedule("0.000001", "0.000002"), second: schedule("0.000002", "0.000004")},
+		Floors:             billing.EndpointPrices{first: schedule("0.0000015", "0.000003"), second: schedule("0.000003", "0.000006")},
+	}
+	rows, err := previewRows(adminapi.PricingPreviewRequest{ModelIds: []string{f.model}}, snap, []catalog.ModelID{model}, map[catalog.ModelID]billing.Publication{model: p}, nil, audience{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Data) != 2 || rows.Data[0].EndpointId == nil || *rows.Data[0].EndpointId != first.String() ||
+		rows.Data[1].EndpointId == nil || *rows.Data[1].EndpointId != second.String() {
+		t.Fatalf("the rows: %+v", rows.Data)
+	}
+	if rows.Data[0].Status != adminapi.PricingPreviewRowStatusBelowFloor || rows.Data[1].Status != adminapi.PricingPreviewRowStatusPriced {
+		t.Errorf("statuses %s, %s", rows.Data[0].Status, rows.Data[1].Status)
+	}
+	if rows.Data[0].MarginRatio == nil || *rows.Data[0].MarginRatio != "0.333333333333333" {
+		t.Errorf("the first endpoint's margin: %v", rows.Data[0].MarginRatio)
+	}
+	if rows.Data[1].MarginRatio == nil || *rows.Data[1].MarginRatio != "0.5" {
+		t.Errorf("the second endpoint's margin: %v", rows.Data[1].MarginRatio)
 	}
 }

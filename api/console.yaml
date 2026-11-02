@@ -23,6 +23,146 @@ tags:
   - {name: Calls, description: "The account's call log."}
   - {name: Top-ups, description: "Buying credits through the site's payment channels."}
 paths:
+  /api/console/v1/provider-keys:
+    get:
+      operationId: listProviderKeys
+      tags: [Provider keys]
+      summary: The account's own provider keys
+      description: >-
+        The provider keys the account saved, newest first. A key is never returned: only its last four characters are,
+        so two keys of the same provider can be told apart. `status`, `enabled` and `rejected` say whether routing may
+        use it; `fallback` says whether it may fall back to Axiom's endpoints for a model it covers
+        (docs/domains/accounts.md「自带的供应商 key（BYOK）」).
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The account's provider keys.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProviderKeyList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createProviderKey
+      tags: [Provider keys]
+      summary: Add a provider key
+      description: >-
+        Saves the account's own key for one provider. The key is sealed with the same envelope encryption as a supplier
+        credential and is never returned, logged or shown again; only its last four characters are. A provider this node
+        cannot call answers 422 in `fields./provider`. Taking no idempotency key matches creating an API key: a lost
+        response leaves a key the account can see and delete.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProviderKeyCreate"}
+      responses:
+        "201":
+          description: The key as it is stored.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProviderKey"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/provider-keys/{provider_key_id}:
+    parameters:
+      - name: provider_key_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    delete:
+      operationId: deleteProviderKey
+      tags: [Provider keys]
+      summary: Remove a provider key
+      description: >-
+        Takes the key out of routing and erases its sealed value. Attempts already made keep their rows. Another
+        account's key is 404, the same answer as a key that does not exist.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      responses:
+        "204":
+          description: Removed.
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/provider-keys/{provider_key_id}/enabled:
+    parameters:
+      - name: provider_key_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    put:
+      operationId: setProviderKeyEnabled
+      tags: [Provider keys]
+      summary: Switch a provider key on or off
+      description: >-
+        A disabled key is not picked by routing and its sealed value stays. Enabling a key a provider refused does not
+        make it work; only a successful test clears `rejected`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProviderKeyEnabled"}
+      responses:
+        "200":
+          description: The key.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProviderKey"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/provider-keys/{provider_key_id}/test:
+    parameters:
+      - name: provider_key_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    post:
+      operationId: testProviderKey
+      tags: [Provider keys]
+      summary: Test a provider key
+      description: >-
+        Asks the provider whether the key works, with one small request. Success makes the key usable again, a refusal
+        marks it rejected and routing skips it. A provider that is merely unreachable leaves the status as it was and
+        answers `ok: false` with `inconclusive: true`, so an outage does not break a working key.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      responses:
+        "200":
+          description: What the test found.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProviderKeyTest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/presets:
     get:
       operationId: listPresets
@@ -199,6 +339,57 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/billing-preference:
+    get:
+      operationId: getBillingPreference
+      tags: [Session]
+      summary: Read your funding order
+      description: >-
+        Which source your calls use first, and whether you chose it or the site's default applies
+        (docs/domains/billing.md「资金来源」).
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The funding order in force.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BillingPreference"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setBillingPreference
+      tags: [Session]
+      summary: Choose your funding order
+      description: >-
+        Sets your account's own order. `site` clears it so the site's default applies again. A value outside the enum
+        is a 400.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BillingPreferenceRequest"}
+      responses:
+        "200":
+          description: The funding order now in force.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/BillingPreference"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/announcements:
@@ -1666,8 +1857,9 @@ paths:
       summary: List the published models at the signed-in account's prices
       description: >-
         The same projection as `listPublicModels`, priced for the session's account and its current tier. A signed-in user
-        sees the price a call would be charged at, so a tier change shows on the next request. The account is read in
-        the same scope as the rest of the console; no supplier, endpoint, route or cost is ever part of the answer.
+        sees the price a call would be charged at, so a tier change shows on the next request. The endpoints and their
+        prices are the account's own, exactly as a call from its key would see them. The account is read in the same
+        scope as the rest of the console; no supplier name, upstream name, route or cost is ever part of the answer.
       security:
         - session: []
       x-axiom-level: signed_in
@@ -1693,10 +1885,12 @@ paths:
       summary: List the published models and the site's sale prices
       description: >-
         The public projection of the catalog: the models the node serves and prices, under their public names, with
-        their limits, abilities and the sale prices of the site's default tier. It is the price a visitor pays after
-        registering, and the same data the website's models and prices page shows. It carries no supplier, endpoint,
-        route, cost, internal name, price source or evidence. An anonymous request is answered for the site of the
-        `Host`, like `getSite`; any other host is a 404.
+        their limits, abilities, the endpoints that serve each model and the sale prices of the site's default tier. It
+        is the price a visitor pays after registering, and the same data the website's models and prices page shows.
+        Each endpoint carries the group's stable public codename — the identity `provider.only`, `provider.ignore` and
+        presets accept — its attributes and its own price; a directly connected official API shows its real name. It
+        carries no supplier name, upstream name, route, cost, internal name, price source or evidence. An anonymous
+        request is answered for the site of the `Host`, like `getSite`; any other host is a 404.
       security: []
       parameters:
         - $ref: "#/components/parameters/ModelQuery"
@@ -1754,8 +1948,8 @@ paths:
       description: >-
         Newest first, `limit` per page, continued with `next_cursor`. Only the account's own orders; another account's
         never appear. Each order carries its refunds, oldest first, so the page can show where a request stands without
-        a second call. A node of the previous release sends no `refunds` and no `refund_allowed`; the page then shows
-        refunds as unavailable instead of guessing.
+        a second call. A node of the previous release sends no `refunds`, `refund_allowed` or paid facts; the page then
+        shows refunds and receipts as unavailable instead of guessing.
       security:
         - session: []
       x-axiom-level: signed_in
@@ -1853,7 +2047,8 @@ paths:
       summary: One top-up order
       description: >-
         The account's own order, as it is now. Only a waiting order has a `checkout`. An order of another account is
-        a 404 like one that does not exist.
+        a 404 like one that does not exist, so no one reads another account's receipt. Once paid it carries the facts a
+        receipt renders: `paid_at`, `paid_total`, `credited` and its refunds.
       security:
         - session: []
       x-axiom-level: signed_in
@@ -2308,8 +2503,9 @@ components:
       type: object
       additionalProperties: false
       description: >-
-        One published model as a visitor may see it: its public name and limits, the abilities its spec declares, and
-        the sale prices of the audience that asked. No supplier, endpoint, route, cost or internal name.
+        One published model as a visitor may see it: its public name and limits, the abilities its spec declares, the
+        sale prices of the audience that asked, and the endpoints that serve it with their own prices. No supplier
+        name, upstream name, route, cost or internal name.
       required: [id, name, author, context_length, max_output, streams, abilities, pricing]
       properties:
         id: {type: string, description: "The public model ID, such as acme/claude-sonnet."}
@@ -2321,6 +2517,42 @@ components:
         abilities:
           type: array
           items: {$ref: "#/components/schemas/ModelAbility"}
+        pricing: {$ref: "#/components/schemas/ModelPricing"}
+        endpoints:
+          type: array
+          description: >-
+            The endpoints that serve this model, in codename order, each at the price this audience pays at it. Absent
+            from a node that does not publish endpoints yet; a page shows that part as unavailable rather than as an
+            empty list.
+          items: {$ref: "#/components/schemas/PublicEndpoint"}
+    PublicEndpoint:
+      type: object
+      additionalProperties: false
+      description: >-
+        One endpoint of a published model: the group's public identity that routing accepts — its stable anonymous
+        codename for a reseller group, or the real name of a directly connected official API — with the limits and
+        abilities it serves and the sale price this audience pays at it. No supplier name, upstream name, internal id
+        or cost.
+      required: [name, context_length, max_output, streams, abilities, verified, pricing]
+      properties:
+        name:
+          type: string
+          description: >-
+            The group's public identity: its codename, the same value `provider.only`, `provider.ignore` and presets
+            accept. It is assigned once per group, stays the same on every model, and never changes when the endpoint
+            set does.
+        context_length: {type: integer, format: int64, minimum: 1}
+        max_output: {type: integer, format: int64, minimum: 1}
+        streams: {type: boolean}
+        abilities:
+          type: array
+          items: {$ref: "#/components/schemas/ModelAbility"}
+        quantization:
+          type: string
+          description: The level an operator recorded for the endpoint; absent when none is recorded.
+        verified:
+          type: boolean
+          description: Whether the endpoint passed the model-identity check.
         pricing: {$ref: "#/components/schemas/ModelPricing"}
     ModelAbility:
       type: string
@@ -2380,12 +2612,37 @@ components:
       enum: [standard, flex, priority, fast]
     ModelItem:
       type: string
-      enum: [input, cache_read, cache_write, cache_write_1h, audio_in, image_in, output, reasoning, audio_out, image_out, web_search, code_execution, file_search, image_in_piece, image_out_piece, audio_in_second, audio_out_second, character_in, request]
+      enum: [input, cache_read, cache_write, cache_write_1h, audio_in, image_in, output, reasoning, audio_out, image_out, web_search, code_execution, file_search, file_parse, image_in_piece, image_out_piece, audio_in_second, audio_out_second, character_in, request]
     ModelUnit:
       type: string
       enum: [token, use, piece, second, character]
     SiteId: {type: string, pattern: '^site_[0-9a-hjkmnp-tv-z]{26}$', description: "A site's ID (TypeID)."}
     AnnouncementId: {type: string, pattern: '^ann_[0-9a-hjkmnp-tv-z]{26}$', description: "A site announcement's ID (TypeID)."}
+    BillingPreferenceName:
+      type: string
+      enum: [subscription_first, wallet_first, subscription_only, wallet_only]
+      description: >-
+        Which source a call uses first. `subscription_first` uses the plan and falls back to the wallet; `wallet_first`
+        the reverse; `subscription_only` and `wallet_only` do not fall back (docs/domains/billing.md「资金来源」).
+    BillingPreference:
+      type: object
+      required: [preference, source, site_default]
+      properties:
+        preference: {$ref: "#/components/schemas/BillingPreferenceName"}
+        source:
+          type: string
+          enum: [account, site]
+          description: "`account` when you chose it; `site` when the site's default applies."
+        site_default: {$ref: "#/components/schemas/BillingPreferenceName"}
+    BillingPreferenceRequest:
+      type: object
+      additionalProperties: false
+      required: [preference]
+      properties:
+        preference:
+          type: string
+          enum: [site, subscription_first, wallet_first, subscription_only, wallet_only]
+          description: "`site` clears your choice."
     Announcement:
       type: object
       additionalProperties: false
@@ -3158,6 +3415,59 @@ components:
       properties:
         key: {$ref: "#/components/schemas/Key"}
         secret: {type: string, description: "The key's text, to copy now: it is never shown again."}
+    ProviderKey:
+      type: object
+      required: [id, name, provider, status, enabled, rejected, fallback, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        provider: {type: string}
+        hint:
+          type: string
+          description: The last four characters of the key, and never more.
+        status: {type: string, enum: [active, disabled, rejected]}
+        enabled: {type: boolean}
+        rejected:
+          type: boolean
+          description: The provider refused this key; routing skips it until a test succeeds.
+        fallback:
+          type: boolean
+          description: Whether the key may fall back to Axiom's endpoints for a model it covers.
+        created_at: {type: string, format: date-time}
+    ProviderKeyList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/ProviderKey"}
+    ProviderKeyCreate:
+      type: object
+      additionalProperties: false
+      required: [name, provider, key]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        provider: {type: string, enum: [openai]}
+        key: {type: string, minLength: 8, maxLength: 4096}
+        fallback:
+          type: boolean
+          default: true
+          description: Whether routing may use Axiom's endpoints for a model this key covers when the key cannot serve it.
+    ProviderKeyEnabled:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
+    ProviderKeyTest:
+      type: object
+      required: [ok, status]
+      properties:
+        ok: {type: boolean}
+        status: {type: string, enum: [active, disabled, rejected]}
+        inconclusive:
+          type: boolean
+          description: The provider could not be asked; the key's status did not change.
     KeyList:
       type: object
       required: [data, next_cursor]
@@ -3241,6 +3551,11 @@ components:
         first_token_ms: {type: integer, minimum: 0}
         finish_reason: {type: string}
         error_kind: {type: string, description: "What failed, empty when the call succeeded."}
+        cache_hit:
+          type: boolean
+          description: >-
+            The answer came from the response cache: no upstream attempt was made, so usage counts are zero and price is zero.
+            Different from `free`, which is a charge the free-of-charge rules waived.
     ChargeItem:
       type: object
       description: One billed item of a sampling or the attempt's request, at its frozen sale price; no supplier or cost information.
@@ -3332,6 +3647,9 @@ components:
         client_secret: {type: string}
     Order:
       type: object
+      description: >-
+        A top-up order, with the facts a receipt renders once it is paid. A receipt is this order read, not a second
+        record: nothing in it can change after the payment settles.
       required: [id, state, method, credits, total, fee, created_at, expires_at]
       properties:
         id: {$ref: "#/components/schemas/OrderId"}
@@ -3340,6 +3658,24 @@ components:
         credits: {$ref: "#/components/schemas/Money"}
         total: {$ref: "#/components/schemas/PayAmount"}
         fee: {$ref: "#/components/schemas/PayAmount"}
+        paid_at:
+          type: string
+          format: date-time
+          description: >-
+            When the payment was confirmed, the time a receipt shows. Absent while the order is unpaid, and on a node of
+            the previous release, where the page offers no receipt.
+        paid_total:
+          allOf: [{$ref: "#/components/schemas/PayAmount"}]
+          description: >-
+            What the channel took, in the payment currency. It differs from `total` when a payment arrived late and was
+            converted at the arrival rate, or when an amount that did not match the quote was credited as it came.
+            Absent while the order is unpaid, and on a node of the previous release.
+        credited:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: >-
+            The credits entered into the account, in the site's currency. It differs from `credits`, the amount asked
+            for, for the same reasons as `paid_total`. Absent while the order is unpaid, and on a node of the previous
+            release.
         created_at: {type: string, format: date-time}
         expires_at: {type: string, format: date-time, description: "When a waiting order stops being payable."}
         checkout: {$ref: "#/components/schemas/Checkout"}

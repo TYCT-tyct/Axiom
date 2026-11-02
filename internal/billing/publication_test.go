@@ -38,6 +38,15 @@ func newPrices(t testing.TB) *priceFixture {
 	return f
 }
 
+// reprice replaces one endpoint's cost plan while keeping its identity, as a supplier sync does. A membership change
+// would otherwise hold the version for confirmation.
+func (f *priceFixture) reprice(price string) {
+	f.t.Helper()
+	endpoint := f.costs[0].Endpoint
+	f.costs[0] = priceCost(f.t, f.model, price)
+	f.costs[0].Endpoint = endpoint
+}
+
 func (f *priceFixture) refresh() map[catalog.ModelID]Sold {
 	f.t.Helper()
 	var sold map[catalog.ModelID]Sold
@@ -68,6 +77,18 @@ func (f *priceFixture) multiplier(value string) {
 	f.t.Helper()
 	in := f.rule.RuleInput
 	in.Method = faced(value)
+	if err := f.tx(func(tx pg.Tx) (err error) {
+		f.rule, err = UpdateRule(f.t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, nil, "price test", nil)
+		return err
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *priceFixture) method(m Method) {
+	f.t.Helper()
+	in := f.rule.RuleInput
+	in.Method = m
 	if err := f.tx(func(tx pg.Tx) (err error) {
 		f.rule, err = UpdateRule(f.t.Context(), tx, system, f.site, usd, f.rule.ID, f.rule.Rev, in, nil, "price test", nil)
 		return err
@@ -134,7 +155,7 @@ func TestFloorPublicationAndScopedOverride(t *testing.T) {
 
 	f := newPrices(t)
 	first := f.refresh()[f.model]
-	f.costs[0] = priceCost(t, f.model, "0.0000015")
+	f.reprice("0.0000015")
 	raised := f.refresh()[f.model]
 	if raised.Version == uuid.Nil() || raised.Version == first.Version {
 		t.Fatal("floor increase waited for ordinary threshold")
@@ -146,7 +167,7 @@ func TestFloorPublicationAndScopedOverride(t *testing.T) {
 	if ok, err := raised.Schedule.CoversCost(cost); !ok || err != nil {
 		t.Fatalf("below floor: %v", err)
 	}
-	f.costs[0] = priceCost(t, f.model, "0.00001")
+	f.reprice("0.00001")
 	if _, ok := f.refresh()[f.model]; ok || f.state().Status != "blocked" {
 		t.Fatal("unsafe old price retained beyond automatic cap")
 	}
@@ -244,7 +265,7 @@ func TestNeverPublishBelowFloorProperty(t *testing.T) {
 	publishedCount := 0
 	for range 80 {
 		n := rng.IntN(50) + 1
-		f.costs[0] = priceCost(t, f.model, new(big.Rat).SetFrac64(int64(n), 10000000).FloatString(7))
+		f.reprice(new(big.Rat).SetFrac64(int64(n), 10000000).FloatString(7))
 		sold, ok := f.refresh()[f.model]
 		if !ok {
 			continue
@@ -422,6 +443,51 @@ func TestCostPlusMarginAndMarkup(t *testing.T) {
 		got, missing, err := price.Cost(u)
 		if err != nil || missing != 0 || got.Cmp(mustUnitPrice(c.want).Mul(1)) != 0 {
 			t.Fatalf("margin + fixed markup at %s: %v missing %v err %v", c.tier, got, missing, err)
+		}
+	}
+}
+
+// TestByokFee: the site's BYOK share defaults to 5%, is changed as administrator data, is refused outside 0 to 100%,
+// and reads as the multiplier the route build scales a published schedule by.
+func TestByokFee(t *testing.T) {
+	t.Parallel()
+	f := newPrices(t)
+	read := func() (string, PricePolicy) {
+		t.Helper()
+		var rate string
+		var policy PricePolicy
+		if err := f.tx(func(tx pg.Tx) error {
+			var err error
+			if rate, err = ByokFee(t.Context(), tx, f.site); err != nil {
+				return err
+			}
+			policy, err = PricePolicyOf(t.Context(), tx, f.site)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return rate, policy
+	}
+	if rate, policy := read(); rate != "0.0500" || policy.ByokFeeBPS != 500 {
+		t.Fatalf("the default is %q at %d bps, want 0.0500 at 500", rate, policy.ByokFeeBPS)
+	}
+	if err := f.tx(func(tx pg.Tx) error {
+		return SetPricePolicy(t.Context(), tx, system, f.site, PricePolicy{
+			FloorMultiplier: "1", ChangeRatio: "0.1", MaxIncreaseRatio: "1", ByokFeeBPS: 250,
+		}, "a lower BYOK share")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rate, policy := read(); rate != "0.0250" || policy.ByokFeeBPS != 250 {
+		t.Fatalf("the site's rate is %q at %d bps, want 0.0250 at 250", rate, policy.ByokFeeBPS)
+	}
+	for _, bps := range []int32{-1, 10001} {
+		if err := f.tx(func(tx pg.Tx) error {
+			return SetPricePolicy(t.Context(), tx, system, f.site, PricePolicy{
+				FloorMultiplier: "1", ChangeRatio: "0.1", MaxIncreaseRatio: "1", ByokFeeBPS: bps,
+			}, "outside the range")
+		}); err == nil {
+			t.Errorf("%d bps was accepted", bps)
 		}
 	}
 }

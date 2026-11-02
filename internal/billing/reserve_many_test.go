@@ -20,7 +20,7 @@ import (
 // does for a single admission. The per-request error is the batch's refusal for it; a database error takes the whole
 // batch down and comes back as err.
 func (b *Billing) reserveOne(ctx context.Context, tx pg.Tx, a Admitted, id uuid.UUID, d Demand, q []Quotable) (*Hold, error) {
-	holds, _, errs, err := b.ReserveMany(ctx, tx, []ReserveRequest{{Admitted: a, ID: id, Demand: d, Quotables: q}})
+	holds, _, errs, err := b.ReserveMany(ctx, tx, []ReserveRequest{{Admitted: a, ID: id, Demand: d, Quotables: q, Segments: b.config.Segments.Load()}})
 	if err != nil {
 		return nil, err
 	}

@@ -4,6 +4,96 @@
  */
 
 export interface paths {
+    "/api/console/v1/provider-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's own provider keys
+         * @description The provider keys the account saved, newest first. A key is never returned: only its last four characters are, so two keys of the same provider can be told apart. `status`, `enabled` and `rejected` say whether routing may use it; `fallback` says whether it may fall back to Axiom's endpoints for a model it covers (docs/domains/accounts.md「自带的供应商 key（BYOK）」).
+         */
+        get: operations["listProviderKeys"];
+        put?: never;
+        /**
+         * Add a provider key
+         * @description Saves the account's own key for one provider. The key is sealed with the same envelope encryption as a supplier credential and is never returned, logged or shown again; only its last four characters are. A provider this node cannot call answers 422 in `fields./provider`. Taking no idempotency key matches creating an API key: a lost response leaves a key the account can see and delete.
+         */
+        post: operations["createProviderKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/provider-keys/{provider_key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a provider key
+         * @description Takes the key out of routing and erases its sealed value. Attempts already made keep their rows. Another account's key is 404, the same answer as a key that does not exist.
+         */
+        delete: operations["deleteProviderKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/provider-keys/{provider_key_id}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Switch a provider key on or off
+         * @description A disabled key is not picked by routing and its sealed value stays. Enabling a key a provider refused does not make it work; only a successful test clears `rejected`.
+         */
+        put: operations["setProviderKeyEnabled"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/provider-keys/{provider_key_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a provider key
+         * @description Asks the provider whether the key works, with one small request. Success makes the key usable again, a refusal marks it rejected and routing skips it. A provider that is merely unreachable leaves the status as it was and answers `ok: false` with `inconclusive: true`, so an outage does not break a working key.
+         */
+        post: operations["testProviderKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/presets": {
         parameters: {
             query?: never;
@@ -54,6 +144,30 @@ export interface paths {
         get: operations["getNotificationPreferences"];
         /** Replace your notification preferences */
         put: operations["setNotificationPreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/billing-preference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read your funding order
+         * @description Which source your calls use first, and whether you chose it or the site's default applies (docs/domains/billing.md「资金来源」).
+         */
+        get: operations["getBillingPreference"];
+        /**
+         * Choose your funding order
+         * @description Sets your account's own order. `site` clears it so the site's default applies again. A value outside the enum is a 400.
+         */
+        put: operations["setBillingPreference"];
         post?: never;
         delete?: never;
         options?: never;
@@ -995,7 +1109,7 @@ export interface paths {
         };
         /**
          * List the published models at the signed-in account's prices
-         * @description The same projection as `listPublicModels`, priced for the session's account and its current tier. A signed-in user sees the price a call would be charged at, so a tier change shows on the next request. The account is read in the same scope as the rest of the console; no supplier, endpoint, route or cost is ever part of the answer.
+         * @description The same projection as `listPublicModels`, priced for the session's account and its current tier. A signed-in user sees the price a call would be charged at, so a tier change shows on the next request. The endpoints and their prices are the account's own, exactly as a call from its key would see them. The account is read in the same scope as the rest of the console; no supplier name, upstream name, route or cost is ever part of the answer.
          */
         get: operations["listAccountModels"];
         put?: never;
@@ -1015,7 +1129,7 @@ export interface paths {
         };
         /**
          * List the published models and the site's sale prices
-         * @description The public projection of the catalog: the models the node serves and prices, under their public names, with their limits, abilities and the sale prices of the site's default tier. It is the price a visitor pays after registering, and the same data the website's models and prices page shows. It carries no supplier, endpoint, route, cost, internal name, price source or evidence. An anonymous request is answered for the site of the `Host`, like `getSite`; any other host is a 404.
+         * @description The public projection of the catalog: the models the node serves and prices, under their public names, with their limits, abilities, the endpoints that serve each model and the sale prices of the site's default tier. It is the price a visitor pays after registering, and the same data the website's models and prices page shows. Each endpoint carries the group's stable public codename — the identity `provider.only`, `provider.ignore` and presets accept — its attributes and its own price; a directly connected official API shows its real name. It carries no supplier name, upstream name, route, cost, internal name, price source or evidence. An anonymous request is answered for the site of the `Host`, like `getSite`; any other host is a 404.
          */
         get: operations["listPublicModels"];
         put?: never;
@@ -1057,7 +1171,7 @@ export interface paths {
         };
         /**
          * The account's top-up orders
-         * @description Newest first, `limit` per page, continued with `next_cursor`. Only the account's own orders; another account's never appear. Each order carries its refunds, oldest first, so the page can show where a request stands without a second call. A node of the previous release sends no `refunds` and no `refund_allowed`; the page then shows refunds as unavailable instead of guessing.
+         * @description Newest first, `limit` per page, continued with `next_cursor`. Only the account's own orders; another account's never appear. Each order carries its refunds, oldest first, so the page can show where a request stands without a second call. A node of the previous release sends no `refunds`, `refund_allowed` or paid facts; the page then shows refunds and receipts as unavailable instead of guessing.
          */
         get: operations["listOrders"];
         put?: never;
@@ -1087,7 +1201,7 @@ export interface paths {
         };
         /**
          * One top-up order
-         * @description The account's own order, as it is now. Only a waiting order has a `checkout`. An order of another account is a 404 like one that does not exist.
+         * @description The account's own order, as it is now. Only a waiting order has a `checkout`. An order of another account is a 404 like one that does not exist, so no one reads another account's receipt. Once paid it carries the facts a receipt renders: `paid_at`, `paid_total`, `credited` and its refunds.
          */
         get: operations["getOrder"];
         put?: never;
@@ -1246,7 +1360,7 @@ export interface components {
         PublicModelList: {
             data: components["schemas"]["PublicModel"][];
         };
-        /** @description One published model as a visitor may see it: its public name and limits, the abilities its spec declares, and the sale prices of the audience that asked. No supplier, endpoint, route, cost or internal name. */
+        /** @description One published model as a visitor may see it: its public name and limits, the abilities its spec declares, the sale prices of the audience that asked, and the endpoints that serve it with their own prices. No supplier name, upstream name, route, cost or internal name. */
         PublicModel: {
             /** @description The public model ID, such as acme/claude-sonnet. */
             id: string;
@@ -1261,6 +1375,24 @@ export interface components {
             /** @description Whether the vendor streams the model's replies. */
             streams: boolean;
             abilities: components["schemas"]["ModelAbility"][];
+            pricing: components["schemas"]["ModelPricing"];
+            /** @description The endpoints that serve this model, in codename order, each at the price this audience pays at it. Absent from a node that does not publish endpoints yet; a page shows that part as unavailable rather than as an empty list. */
+            endpoints?: components["schemas"]["PublicEndpoint"][];
+        };
+        /** @description One endpoint of a published model: the group's public identity that routing accepts — its stable anonymous codename for a reseller group, or the real name of a directly connected official API — with the limits and abilities it serves and the sale price this audience pays at it. No supplier name, upstream name, internal id or cost. */
+        PublicEndpoint: {
+            /** @description The group's public identity: its codename, the same value `provider.only`, `provider.ignore` and presets accept. It is assigned once per group, stays the same on every model, and never changes when the endpoint set does. */
+            name: string;
+            /** Format: int64 */
+            context_length: number;
+            /** Format: int64 */
+            max_output: number;
+            streams: boolean;
+            abilities: components["schemas"]["ModelAbility"][];
+            /** @description The level an operator recorded for the endpoint; absent when none is recorded. */
+            quantization?: string;
+            /** @description Whether the endpoint passed the model-identity check. */
+            verified: boolean;
             pricing: components["schemas"]["ModelPricing"];
         };
         /** @enum {string} */
@@ -1299,13 +1431,34 @@ export interface components {
         /** @enum {string} */
         ModelServiceTier: "standard" | "flex" | "priority" | "fast";
         /** @enum {string} */
-        ModelItem: "input" | "cache_read" | "cache_write" | "cache_write_1h" | "audio_in" | "image_in" | "output" | "reasoning" | "audio_out" | "image_out" | "web_search" | "code_execution" | "file_search" | "image_in_piece" | "image_out_piece" | "audio_in_second" | "audio_out_second" | "character_in" | "request";
+        ModelItem: "input" | "cache_read" | "cache_write" | "cache_write_1h" | "audio_in" | "image_in" | "output" | "reasoning" | "audio_out" | "image_out" | "web_search" | "code_execution" | "file_search" | "file_parse" | "image_in_piece" | "image_out_piece" | "audio_in_second" | "audio_out_second" | "character_in" | "request";
         /** @enum {string} */
         ModelUnit: "token" | "use" | "piece" | "second" | "character";
         /** @description A site's ID (TypeID). */
         SiteId: string;
         /** @description A site announcement's ID (TypeID). */
         AnnouncementId: string;
+        /**
+         * @description Which source a call uses first. `subscription_first` uses the plan and falls back to the wallet; `wallet_first` the reverse; `subscription_only` and `wallet_only` do not fall back (docs/domains/billing.md「资金来源」).
+         * @enum {string}
+         */
+        BillingPreferenceName: "subscription_first" | "wallet_first" | "subscription_only" | "wallet_only";
+        BillingPreference: {
+            preference: components["schemas"]["BillingPreferenceName"];
+            /**
+             * @description `account` when you chose it; `site` when the site's default applies.
+             * @enum {string}
+             */
+            source: "account" | "site";
+            site_default: components["schemas"]["BillingPreferenceName"];
+        };
+        BillingPreferenceRequest: {
+            /**
+             * @description `site` clears your choice.
+             * @enum {string}
+             */
+            preference: "site" | "subscription_first" | "wallet_first" | "subscription_only" | "wallet_only";
+        };
         Announcement: {
             id?: components["schemas"]["AnnouncementId"];
             site_id?: components["schemas"]["SiteId"];
@@ -1879,6 +2032,47 @@ export interface components {
             /** @description The key's text, to copy now: it is never shown again. */
             secret: string;
         };
+        ProviderKey: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            provider: string;
+            /** @description The last four characters of the key, and never more. */
+            hint?: string;
+            /** @enum {string} */
+            status: "active" | "disabled" | "rejected";
+            enabled: boolean;
+            /** @description The provider refused this key; routing skips it until a test succeeds. */
+            rejected: boolean;
+            /** @description Whether the key may fall back to Axiom's endpoints for a model it covers. */
+            fallback: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ProviderKeyList: {
+            data: components["schemas"]["ProviderKey"][];
+        };
+        ProviderKeyCreate: {
+            name: string;
+            /** @enum {string} */
+            provider: "openai";
+            key: string;
+            /**
+             * @description Whether routing may use Axiom's endpoints for a model this key covers when the key cannot serve it.
+             * @default true
+             */
+            fallback: boolean;
+        };
+        ProviderKeyEnabled: {
+            enabled: boolean;
+        };
+        ProviderKeyTest: {
+            ok: boolean;
+            /** @enum {string} */
+            status: "active" | "disabled" | "rejected";
+            /** @description The provider could not be asked; the key's status did not change. */
+            inconclusive?: boolean;
+        };
         KeyList: {
             filters?: components["schemas"]["KeyFilterEcho"];
             data: components["schemas"]["Key"][];
@@ -1926,6 +2120,8 @@ export interface components {
             finish_reason: string;
             /** @description What failed, empty when the call succeeded. */
             error_kind: string;
+            /** @description The answer came from the response cache: no upstream attempt was made, so usage counts are zero and price is zero. Different from `free`, which is a charge the free-of-charge rules waived. */
+            cache_hit?: boolean;
         };
         /** @description One billed item of a sampling or the attempt's request, at its frozen sale price; no supplier or cost information. */
         ChargeItem: {
@@ -2008,6 +2204,7 @@ export interface components {
             qr_code?: string;
             client_secret?: string;
         };
+        /** @description A top-up order, with the facts a receipt renders once it is paid. A receipt is this order read, not a second record: nothing in it can change after the payment settles. */
         Order: {
             id: components["schemas"]["OrderId"];
             state: components["schemas"]["OrderState"];
@@ -2015,6 +2212,15 @@ export interface components {
             credits: components["schemas"]["Money"];
             total: components["schemas"]["PayAmount"];
             fee: components["schemas"]["PayAmount"];
+            /**
+             * Format: date-time
+             * @description When the payment was confirmed, the time a receipt shows. Absent while the order is unpaid, and on a node of the previous release, where the page offers no receipt.
+             */
+            paid_at?: string;
+            /** @description What the channel took, in the payment currency. It differs from `total` when a payment arrived late and was converted at the arrival rate, or when an amount that did not match the quote was credited as it came. Absent while the order is unpaid, and on a node of the previous release. */
+            paid_total?: components["schemas"]["PayAmount"];
+            /** @description The credits entered into the account, in the site's currency. It differs from `credits`, the amount asked for, for the same reasons as `paid_total`. Absent while the order is unpaid, and on a node of the previous release. */
+            credited?: components["schemas"]["Money"];
             /** Format: date-time */
             created_at: string;
             /**
@@ -2175,6 +2381,138 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listProviderKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account's provider keys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKeyList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderKeyCreate"];
+            };
+        };
+        responses: {
+            /** @description The key as it is stored. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKey"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    deleteProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setProviderKeyEnabled: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderKeyEnabled"];
+            };
+        };
+        responses: {
+            /** @description The key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKey"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    testProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What the test found. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKeyTest"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
     listPresets: {
         parameters: {
             query?: {
@@ -2379,6 +2717,60 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getBillingPreference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The funding order in force. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingPreference"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setBillingPreference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BillingPreferenceRequest"];
+            };
+        };
+        responses: {
+            /** @description The funding order now in force. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillingPreference"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };
