@@ -47,6 +47,9 @@ var (
 	errCredentialsBusy = rateLimited("credentials_busy") // every credential of the route is at its concurrency limit
 	// ErrOverloaded is a node that has no capacity left and does not queue: 503.
 	ErrOverloaded = &Refusal{Status: 503, Code: "overloaded", RetryAfter: 1}
+	// errRecordBacklog is a node whose call log cannot keep another record: serving the call would leave it unlogged,
+	// so it is refused before any work is done (docs/domains/observability.md「写入路径」).
+	errRecordBacklog = &Refusal{Status: 503, Code: "overloaded", RetryAfter: 1}
 )
 
 // AttemptContext bounds one attempt at the upstream by the call's deadline. An endpoint that does not carry a

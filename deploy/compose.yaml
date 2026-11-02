@@ -170,6 +170,7 @@ services:
         chown 0:0 /retention-tmp
         chmod 700 /retention-tmp
         chown 65532:65532 /retention-tmp
+        chown 65532:65532 /call-log
         # The directory stays traversable for root (its group, without the capability to read the files) and writable for
         # the program, which replaces the master file atomically when a rotation distributes or retires a version. Root
         # owns it while its mode is set: this container has CHOWN but not FOWNER, so `chmod` after handing it to 65532
@@ -185,6 +186,7 @@ services:
       - keys:/keys
       - cache:/cache
       - retention_tmp:/retention-tmp
+      - call_log:/call-log
     <<: *hardened
     cap_add: [CHOWN]
 
@@ -267,6 +269,12 @@ services:
       # any node starts, and each node serves another build's files from it while the old and new builds overlap
       # (docs/ops/release.md「滚动发布」). Without it a node serves only its embedded build.
       AXIOM_WEB_ASSETS_DIR: /assets
+      # The call log's local write-ahead spill: a call's record is fsynced here before its response ends, and the
+      # writer replays it after a crash. The root filesystem is read-only, so it must be a volume; keys chowns it to
+      # 65532. One node owns a call-log volume: the recorder locks it and a second process refuses to start, because two
+      # writers at the same offset would overwrite each other. This file runs one core; a scaled deployment needs a
+      # volume per node (or AXIOM_CALL_LOG_DIR on node-local durable storage), never one shared volume.
+      AXIOM_CALL_LOG_DIR: /call-log
       # One compressed month is written here before the archive uploads it. The root filesystem is read-only, so Go's
       # default /tmp is not available; keys chowns this volume to the program's user before the node starts.
       TMPDIR: /retention-tmp
@@ -276,6 +284,7 @@ services:
       - keys:/keys:rw
       - web_assets:/assets:rw
       - retention_tmp:/retention-tmp:rw
+      - call_log:/call-log:rw
     ports:
       # An empty DEPLOY_PORT or DEPLOY_ADMIN_PORT publishes a port the kernel picks, so two jobs on one host cannot take
       # each other's; local `just up` sets neither and gets 8080 and 8082. Both bind this machine only.
@@ -377,4 +386,8 @@ volumes:
   web_assets:
   # One archive month in flight. It needs room for the largest month's gzip; the data live only until the upload ends.
   retention_tmp:
+  # The call log's write-ahead spill: records a node accepted and fsynced but has not written to PostgreSQL yet.
+  # Losing it loses those records, so it is a persistent local volume, never tmpfs. One volume belongs to one node;
+  # the recorder's lock refuses a second process rather than letting two writers overwrite each other.
+  call_log:
   cache:

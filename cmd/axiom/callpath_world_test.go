@@ -394,9 +394,11 @@ func (w *callWorld) start(extra ...string) runningNode {
 	w.t.Helper()
 	// The fake upstream numbers every generation it answers, so model verification, which would take numbers of its
 	// own, stays off here; its adapter and the loop have their own tests.
+	// Each start gets its own call-log directory: the default is relative to the package, and the second node of the
+	// story would be refused the first one's lock.
 	environ := append(slices.Clone(w.environ), "AXIOM_MODEL_VERIFICATION=off", "AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		"AXIOM_SHUTDOWN_TIMEOUT=10s", "AXIOM_MASTER_KEY_FILE="+keyFile(w.t, 'm'), "AXIOM_KEY_HASH_FILE="+keyFile(w.t, 'h'),
-		"AXIOM_IDENTITY_KEY_FILE="+keyFile(w.t, 'i'))
+		"AXIOM_IDENTITY_KEY_FILE="+keyFile(w.t, 'i'), "AXIOM_CALL_LOG_DIR="+w.t.TempDir())
 	// The story has two nodes of one deployment (checkSecondNode), so this is one: N is 2, and the nodes share a Valkey
 	// for rate counts and stickiness. serveWith bypasses the production guard for unpartitioned supplier ceilings.
 	cache := kvtest.New(w.t)
