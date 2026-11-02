@@ -306,11 +306,19 @@ func TestGateSurvivesCancellationsRacingBatches(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatalf("round %d: the gate is wedged: a batch never finished", round)
 		}
-		f.gate.mu.Lock()
-		left := len(f.gate.accounts)
-		f.gate.mu.Unlock()
-		if left != 0 {
-			t.Fatalf("round %d: %d accounts still held", round, left)
+		// The last caller returns when its item is finished; the leader may still be closing the empty queue, so give
+		// it a moment to release the account instead of reading that hand-off as a leak.
+		for deadline := time.Now().Add(time.Second); ; {
+			f.gate.mu.Lock()
+			left := len(f.gate.accounts)
+			f.gate.mu.Unlock()
+			if left == 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("round %d: %d accounts still held", round, left)
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}
 }
