@@ -1,4 +1,5 @@
 import type { Messages } from "@axiom/ui";
+import { en as providerKeys } from "./provider-keys";
 import { en as statement } from "./statement";
 import type zh from "./zh";
 
@@ -346,41 +347,7 @@ export default {
       copy: "Copy {{name}}",
     },
   },
-  providerKeys: {
-    description: "Use your own OpenAI key: routing prefers it, and it is never shown again after saving.",
-    add: "Add provider key",
-    name: "Name",
-    provider: "Provider",
-    openai: "OpenAI",
-    key: "Key",
-    keyHint: "Sealed when saved. Only the last four characters are kept for the list.",
-    fallback: "Fall back to Axiom's endpoints if this key cannot serve a model",
-    save: "Save key",
-    required: "A name and a key are both required.",
-    status: "Status",
-    added: "Added",
-    enable: "Enable",
-    disable: "Disable",
-    remove: "Remove",
-    removeBody: "Remove {{name}}? Calls already made keep their records; the key is erased.",
-    noFallback: "No fallback",
-    rejected: "Rejected",
-    testing: "Testing…",
-    test: {
-      action: "Test",
-      ok: "The provider accepted the key.",
-      refused: "The provider refused the key; routing skips it.",
-      inconclusive: "The provider could not be reached; the key's status did not change.",
-    },
-    noPermission: {
-      title: "No access to provider keys",
-      body: "Ask an admin of the workspace for the api_keys.view permission.",
-    },
-    empty: {
-      title: "No provider keys",
-      body: "Add your own OpenAI key to route those models through it.",
-    },
-  },
+  providerKeys,
   calls: {
     priceVersion: "Price version {{version}}",
     priceVersionUnavailable: "Price version unavailable",

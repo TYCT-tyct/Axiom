@@ -57,29 +57,13 @@ export default function ProviderKeys() {
               empty={<EmptyState title={t("providerKeys.empty.title")}>{t("providerKeys.empty.body")}</EmptyState>}
             >
               {() => (
-                <Table label={t("nav.providerKeys")}>
-                  <thead>
-                    <tr>
-                      <Th>{t("providerKeys.name")}</Th>
-                      <Th>{t("providerKeys.provider")}</Th>
-                      <Th>{t("providerKeys.status")}</Th>
-                      <Th>{t("providerKeys.added")}</Th>
-                      <Th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((key) => (
-                      <Row
-                        key={key.id}
-                        providerKey={key}
-                        manage={manage}
-                        tested={tested[key.id]}
-                        onTested={(text) => setTested((all) => ({ ...all, [key.id]: text }))}
-                        onRemove={() => setRemoving(key)}
-                      />
-                    ))}
-                  </tbody>
-                </Table>
+                <KeyTable
+                  rows={rows}
+                  manage={manage}
+                  tested={tested}
+                  onTested={(id, text) => setTested((all) => ({ ...all, [id]: text }))}
+                  onRemove={setRemoving}
+                />
               )}
             </DataState>
           </Panel>
@@ -88,6 +72,48 @@ export default function ProviderKeys() {
       {adding ? <AddProviderKeyDialog onClose={() => setAdding(false)} /> : null}
       {removing ? <RemoveProviderKeyDialog providerKey={removing} onClose={() => setRemoving(null)} /> : null}
     </>
+  );
+}
+
+// KeyTable is the list itself: a row per key, with no state of its own, so the page stays about which states it shows.
+function KeyTable({
+  rows,
+  manage,
+  tested,
+  onTested,
+  onRemove,
+}: {
+  rows: ProviderKey[];
+  manage: boolean;
+  tested: Record<string, string>;
+  onTested: (id: string, text: string) => void;
+  onRemove: (providerKey: ProviderKey) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Table label={t("nav.providerKeys")}>
+      <thead>
+        <tr>
+          <Th>{t("providerKeys.name")}</Th>
+          <Th>{t("providerKeys.provider")}</Th>
+          <Th>{t("providerKeys.status")}</Th>
+          <Th>{t("providerKeys.added")}</Th>
+          <Th />
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((key) => (
+          <Row
+            key={key.id}
+            providerKey={key}
+            manage={manage}
+            tested={tested[key.id]}
+            onTested={(text) => onTested(key.id, text)}
+            onRemove={() => onRemove(key)}
+          />
+        ))}
+      </tbody>
+    </Table>
   );
 }
 
