@@ -229,6 +229,7 @@ type attempt struct {
 	unhook  func() bool // of the node's shutdown, which cancels the attempt
 
 	content     bool              // the upstream sent content: the commit point came
+	capture     *cacheCapture     // the upstream body's bounded copy, nil when this call does not cache
 	state       string            // the turn state the upstream set, passed on with the answer (headers.go)
 	usage       protocol.Usage    // what the stream reported, once it is over
 	seen        protocol.Progress // what the relay had seen last
