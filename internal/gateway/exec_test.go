@@ -156,9 +156,9 @@ func TestARefusedRequestIsAnsweredInTheUpstreamsWords(t *testing.T) {
 		rejection *protocol.Rejection
 		want      []string
 	}{
-		{"Chat", protocol.Chat, said, []string{`"message":"max_tokens: Input should be greater than 0"`, `"param":"max_tokens"`, `"code":"invalid_value"`, `"error_type":"invalid_request"`}},
+		{"Chat", protocol.Chat, said, []string{`"message":"max_tokens: Input should be greater than 0"`, `"param":"max_tokens"`, `"code":400`, `"provider_code":"invalid_value"`, `"error_type":"invalid_request"`}},
 		{"Messages", protocol.Messages, said, []string{`"message":"max_tokens: Input should be greater than 0"`, `"error_type":"invalid_request"`}},
-		{"nothing said", protocol.Chat, nil, []string{`"message":"The request is not valid."`, `"code":"invalid_request"`}},
+		{"nothing said", protocol.Chat, nil, []string{`"message":"The request is not valid."`, `"code":400`}},
 	} {
 		run(t, func(t *testing.T, ctx context.Context) {
 			h := newHarness(t, ctx, options{client: tc.client, upstream: &messages})

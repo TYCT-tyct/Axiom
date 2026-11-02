@@ -71,6 +71,7 @@ type Handler struct {
 	Deps
 	mux          *http.ServeMux
 	admitTx      func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
+	admitReadTx  func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
 	admitBatchTx func(context.Context, []accounts.AdmitCall, func(pg.Tx, []accounts.Admission, []error) error) error
 
 	charges  *billing.ChargeReader
@@ -92,7 +93,10 @@ func NewHandler(d Deps) (*Handler, error) {
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
 	}
-	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, admitBatchTx: d.Accounts.AdmitBatch, outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
+	h := &Handler{
+		Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, admitReadTx: d.Accounts.AdmitRead,
+		admitBatchTx: d.Accounts.AdmitBatch, outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter),
+	}
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
@@ -346,6 +350,15 @@ func (h *Handler) currentCatalog() (*catalog.Snapshot, error) {
 // admitDB runs an admission transaction; one that commits ends a database outage.
 func (h *Handler) admitDB(ctx context.Context, caller accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
 	err := h.admitTx(ctx, caller, req, fn)
+	if err == nil {
+		h.outage.recovered(depDatabase)
+	}
+	return err
+}
+
+// admitReadDB is admitDB for the reads a management key may also make; one that commits ends a database outage.
+func (h *Handler) admitReadDB(ctx context.Context, caller accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
+	err := h.admitReadTx(ctx, caller, req, fn)
 	if err == nil {
 		h.outage.recovered(depDatabase)
 	}

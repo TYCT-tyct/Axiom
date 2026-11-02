@@ -159,9 +159,10 @@ const (
 	number   = `\d+`
 )
 
-// missingMembersSaid are the values Axiom answers a request without its conversation with: the code, param and message of
-// the fake upstream's canned 400, which is the supplier's word on it (gateway.md「错误」).
-const missingMembersSaid = `null|"invalid_value"|"max_tokens"|"max_tokens: Input should be greater than 0"|` +
+// missingMembersSaid are the values Axiom answers a request without its conversation with: the status, the param and
+// the message of the fake upstream's canned 400, which is the supplier's word on it, and the supplier's code in
+// metadata.provider_code (gateway.md「错误」).
+const missingMembersSaid = `null|400|"max_tokens"|"max_tokens: Input should be greater than 0"|` +
 	`"Invalid value for 'max_tokens': expected a value above 0\."`
 
 // Axiom's own wording of the errors it makes, by the cases that give them (gateway.md「错误」).
@@ -190,17 +191,24 @@ func diffRules() []*diffRule {
 			"new-api answers a failed streaming request as an event stream, whose events are not compared here; Axiom's JSON error has these members"),
 		rule(`json\.error\.metadata\.error_type`, `(chat|responses)-.*`, all(newAPILacks, axiomIs(`"[a-z_]+"`)),
 			"the unified error_type (gateway.md「错误」), which new-api has no counterpart for"),
+		rule(`json\.error\.metadata\.provider_code`, `(chat|responses)-.*-(400-whole|missing-members)`,
+			all(newAPILacks, axiomIs(`"[^"]+"`)),
+			"the upstream's own code, which Axiom keeps in metadata.provider_code so error.code can stay the status (gateway.md「错误」)"),
 		rule(`json\.error\.type`, `(chat|responses)-.*-(invalid-json|missing-members|unknown-model|wrong-key)`,
 			all(newAPIIs(`"new_api_error"`), axiomIs(`"(invalid_request|authentication|not_found)_error"`)),
 			"new-api puts its own name, new_api_error, in the type of the errors it makes; Axiom's is the type of the format's clients, as Messages' (gateway.md「错误」)"),
-		rule(`json\.error\.code`, `(chat|responses)-.*-(invalid-json|wrong-key)`, all(newAPIIs(`""`), axiomIs(`"(invalid_request|authentication)"`)),
-			"new-api leaves the code empty for a body that is not JSON and for a wrong key; Axiom's is the unified error type"),
+		rule(`json\.error\.code`, `(chat|responses)-.*-(invalid-json|wrong-key)`, all(newAPIIs(`""`), axiomIs(`(400|401)`)),
+			"new-api leaves the code empty for a body that is not JSON and for a wrong key; Axiom's is the status, as OpenRouter's"),
 		rule(`json\.error\.param`, `(chat|responses)-.*-(invalid-json|unknown-model|wrong-key)`, values(absent, `""`),
 			"the errors new-api's middleware makes (a body that is not JSON, an unknown model, a wrong key) have no param member; Axiom's errors all have one"),
-		rule(`json\.error\.(type|code)`, `(chat|responses)-.*-(429|500)-whole`, axiomIs(`"(api_error|upstream_error)"`),
-			"an upstream's 429 or 5xx is Axiom's own 502 upstream_error, so its type and code are Axiom's; new-api passes the upstream's on"),
+		rule(`json\.error\.type`, `(chat|responses)-.*-(429|500)-whole`, axiomIs(`"(api_error|upstream_error)"`),
+			"an upstream's 429 or 5xx is Axiom's own 502 upstream_error, so its type is Axiom's; new-api passes the upstream's on"),
+		rule(`json\.error\.code`, `(chat|responses)-.*-(400-whole|missing-members)`, all(newAPIIs(`"invalid_value"`), axiomIs(`400`)),
+			"an upstream refusal's code: new-api passes the supplier's string code as its own, Axiom keeps the status in code and the supplier's in metadata.provider_code (gateway.md「错误」)"),
+		rule(`json\.error\.code`, `(chat|responses)-.*-(429|500)-whole`, axiomIs(`502`),
+			"an upstream's 429 or 5xx is Axiom's own 502, so its numeric code is Axiom's; new-api passes the upstream's on"),
 		rule(`json\.error\.(code|param|message)`, `(chat|responses|messages)-.*-missing-members`, axiomIs(missingMembersSaid),
-			"Axiom does not check that a request has its conversation: the supplier refuses it and the client reads the supplier's words (here the fake upstream's canned 400); new-api checks first and answers with its own"),
+			"Axiom does not check that a request has its conversation: the supplier refuses it and the client reads the supplier's words (here the fake upstream's canned 400), its code in metadata.provider_code; new-api checks first and answers with its own"),
 		rule(`json\.choices\[\]\.message\.reasoning|chat\.choices\[\]\.delta\.reasoning`, "", newAPILacks,
 			"Axiom writes reasoning, OpenRouter's name, beside reasoning_content, new-api's and DeepSeek's, with the same text, which reasoningNamesAgree checks (gateway.md「转发规则」)"),
 
