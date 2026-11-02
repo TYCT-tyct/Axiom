@@ -51,6 +51,11 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 				{ServiceTier: catalog.ServiceTierStandard, Above: 0, Item: catalog.ItemInput, Price: price("0.000003")},
 				{ServiceTier: catalog.ServiceTierPriority, Above: 100000, Item: catalog.ItemOutput, Price: price("0.000002")},
 			}},
+			Endpoints: []gateway.PublicEndpoint{{
+				Name: "g-haiku", ContextLength: 100000, MaxOutput: 8000, Streams: true,
+				Abilities: []string{"tools"}, Quantization: "fp8", Verified: true,
+				Pricing: catalog.ScheduleView{Currency: platform.CurrencyNone, Basis: []catalog.Item{catalog.ItemInput}},
+			}},
 		},
 	}}
 	api := consoleAPI{models: fake}
@@ -93,6 +98,16 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 
 	body := call(consoleapi.ListPublicModelsParams{Q: &other}).Data[0]
 	zero, above := int64(0), int64(100000)
+	quantization := "fp8"
+	endpoints := []consoleapi.PublicEndpoint{{
+		Name: "g-haiku", ContextLength: 100000, MaxOutput: 8000, Streams: true,
+		Abilities: []consoleapi.ModelAbility{consoleapi.ModelAbilityTools}, Quantization: &quantization, Verified: true,
+		Pricing: consoleapi.ModelPricing{
+			Currency: "XXX",
+			Basis:    []consoleapi.ModelItem{consoleapi.ModelItemInput},
+			Rates:    []consoleapi.ModelRate{},
+		},
+	}}
 	want := consoleapi.PublicModel{
 		Id: "other/haiku", Name: "haiku", Author: "other", ContextLength: 100000, MaxOutput: 8000,
 		Abilities: []consoleapi.ModelAbility{consoleapi.ModelAbilityTools},
@@ -105,6 +120,7 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 				{ServiceTier: consoleapi.Priority, Item: consoleapi.ModelItemOutput, Unit: consoleapi.ModelUnitToken, Amount: "0.000002", Above: &above},
 			},
 		},
+		Endpoints: &endpoints,
 	}
 	if diff := cmp.Diff(want, body); diff != "" {
 		t.Errorf("body (-want +got):\n%s", diff)

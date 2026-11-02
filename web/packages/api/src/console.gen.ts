@@ -1109,7 +1109,7 @@ export interface paths {
         };
         /**
          * List the published models at the signed-in account's prices
-         * @description The same projection as `listPublicModels`, priced for the session's account and its current tier. A signed-in user sees the price a call would be charged at, so a tier change shows on the next request. The account is read in the same scope as the rest of the console; no supplier, endpoint, route or cost is ever part of the answer.
+         * @description The same projection as `listPublicModels`, priced for the session's account and its current tier. A signed-in user sees the price a call would be charged at, so a tier change shows on the next request. The endpoints and their prices are the account's own, exactly as a call from its key would see them. The account is read in the same scope as the rest of the console; no supplier name, upstream name, route or cost is ever part of the answer.
          */
         get: operations["listAccountModels"];
         put?: never;
@@ -1129,7 +1129,7 @@ export interface paths {
         };
         /**
          * List the published models and the site's sale prices
-         * @description The public projection of the catalog: the models the node serves and prices, under their public names, with their limits, abilities and the sale prices of the site's default tier. It is the price a visitor pays after registering, and the same data the website's models and prices page shows. It carries no supplier, endpoint, route, cost, internal name, price source or evidence. An anonymous request is answered for the site of the `Host`, like `getSite`; any other host is a 404.
+         * @description The public projection of the catalog: the models the node serves and prices, under their public names, with their limits, abilities, the endpoints that serve each model and the sale prices of the site's default tier. It is the price a visitor pays after registering, and the same data the website's models and prices page shows. Each endpoint carries the group's stable public codename — the identity `provider.only`, `provider.ignore` and presets accept — its attributes and its own price; a directly connected official API shows its real name. It carries no supplier name, upstream name, route, cost, internal name, price source or evidence. An anonymous request is answered for the site of the `Host`, like `getSite`; any other host is a 404.
          */
         get: operations["listPublicModels"];
         put?: never;
@@ -1360,7 +1360,7 @@ export interface components {
         PublicModelList: {
             data: components["schemas"]["PublicModel"][];
         };
-        /** @description One published model as a visitor may see it: its public name and limits, the abilities its spec declares, and the sale prices of the audience that asked. No supplier, endpoint, route, cost or internal name. */
+        /** @description One published model as a visitor may see it: its public name and limits, the abilities its spec declares, the sale prices of the audience that asked, and the endpoints that serve it with their own prices. No supplier name, upstream name, route, cost or internal name. */
         PublicModel: {
             /** @description The public model ID, such as acme/claude-sonnet. */
             id: string;
@@ -1375,6 +1375,24 @@ export interface components {
             /** @description Whether the vendor streams the model's replies. */
             streams: boolean;
             abilities: components["schemas"]["ModelAbility"][];
+            pricing: components["schemas"]["ModelPricing"];
+            /** @description The endpoints that serve this model, in codename order, each at the price this audience pays at it. Absent from a node that does not publish endpoints yet; a page shows that part as unavailable rather than as an empty list. */
+            endpoints?: components["schemas"]["PublicEndpoint"][];
+        };
+        /** @description One endpoint of a published model: the group's public identity that routing accepts — its stable anonymous codename for a reseller group, or the real name of a directly connected official API — with the limits and abilities it serves and the sale price this audience pays at it. No supplier name, upstream name, internal id or cost. */
+        PublicEndpoint: {
+            /** @description The group's public identity: its codename, the same value `provider.only`, `provider.ignore` and presets accept. It is assigned once per group, stays the same on every model, and never changes when the endpoint set does. */
+            name: string;
+            /** Format: int64 */
+            context_length: number;
+            /** Format: int64 */
+            max_output: number;
+            streams: boolean;
+            abilities: components["schemas"]["ModelAbility"][];
+            /** @description The level an operator recorded for the endpoint; absent when none is recorded. */
+            quantization?: string;
+            /** @description Whether the endpoint passed the model-identity check. */
+            verified: boolean;
             pricing: components["schemas"]["ModelPricing"];
         };
         /** @enum {string} */

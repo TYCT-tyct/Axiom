@@ -1,10 +1,9 @@
 package gateway
 
 import (
-	"bytes"
 	"net/http"
 	"slices"
-	"strconv"
+	"strings"
 	"uuid"
 
 	"axiom/internal/billing"
@@ -14,7 +13,8 @@ import (
 )
 
 // Discovery shares the model list's admission and publication. Supplier identities, credentials, upstream model names
-// and costs never enter this projection; each public group endpoint has a model-local ordinal under the public provider Axiom.
+// and costs never enter this projection; each public group endpoint is named by the group's stable codename under the
+// public provider Axiom, the same identity provider.only, provider.ignore and presets route by.
 func (h *Handler) discoverOpenRouter(w http.ResponseWriter, r *http.Request) {
 	format := formatFor(r)
 	release, ok := h.ipSlot(w, r, format)
@@ -117,23 +117,21 @@ func encodeOREndpointList(m orEntry, endpoints []routing.Endpoint, pricing func(
 		ID: m.ID, Name: m.Name, Created: m.Created, Architecture: m.Architecture,
 		Endpoints: make([]orEndpoint, 0, len(endpoints)),
 	}
-	// Sort a copy: the route builder owns the input. Only ordinals cross the public boundary, and an endpoint the
-	// version has no price for takes no ordinal: tags stay contiguous over the endpoints actually listed.
+	// Sort a copy: the route builder owns the input. The codename is the public identity, so it orders the list and no
+	// internal id reaches the response; an endpoint the version has no price for is left out before it gets a place.
 	endpoints = slices.Clone(endpoints)
-	slices.SortFunc(endpoints, func(a, b routing.Endpoint) int { return bytes.Compare(a.ID[:], b.ID[:]) })
-	tag := 0
+	slices.SortFunc(endpoints, func(a, b routing.Endpoint) int { return strings.Compare(a.Codename, b.Codename) })
 	for _, e := range endpoints {
 		price, ok := pricing(e)
 		if !ok {
 			continue
 		}
-		tag++
 		var quantization any
 		if e.Quantization != "" {
 			quantization = string(e.Quantization)
 		}
 		data.Endpoints = append(data.Endpoints, orEndpoint{
-			Name: "Axiom: " + m.Name, ModelID: m.ID, ModelName: m.Name, ProviderName: "Axiom", Tag: "axiom/" + strconv.Itoa(tag),
+			Name: "Axiom: " + m.Name, ModelID: m.ID, ModelName: m.Name, ProviderName: "Axiom", Tag: e.Codename,
 			ContextLength: e.Context, MaxCompletionTokens: e.MaxOutput, Pricing: price, SupportedParameters: m.SupportedParameters,
 			Quantization: quantization,
 		})

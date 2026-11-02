@@ -73,6 +73,48 @@ function aCall(n: number, over: Partial<Schemas["Call"]> = {}): Schemas["Call"] 
 }
 
 function aModel(n: number, over: Partial<Schemas["PublicModel"]> = {}): Schemas["PublicModel"] {
+  const abilities: NonNullable<Schemas["PublicModel"]["abilities"]> =
+    n % 2 === 0 ? ["tools", "reasoning"] : ["tools", "images"];
+  const pricing: Schemas["ModelPricing"] = {
+    currency: "USD",
+    basis: ["input", "output"],
+    rates: [
+      { service_tier: "standard", item: "input", unit: "token", amount: `0.00000${1 + (n % 9)}` },
+      { service_tier: "standard", above: 128000, item: "input", unit: "token", amount: "0.00001" },
+      { service_tier: "standard", item: "output", unit: "token", amount: `0.00000${2 + (n % 9)}` },
+      { service_tier: "priority", above: 200000, item: "output", unit: "token", amount: "0.00002" },
+    ],
+    search_engines: [{ name: "exa", price_per_search: "0", price_per_extra_result: "0.001", default: true }],
+  };
+  // Two groups serve every model under the stable codenames a provider filter names. The second is dearer, unverified,
+  // does not stream and has no recorded quantization or band price, so the per-endpoint schedule and attributes differ.
+  const endpoints: Schemas["PublicEndpoint"][] = [
+    {
+      name: `ga2b3c4d${"234567"[n % 6]}`,
+      context_length: 200000,
+      max_output: 64000,
+      streams: true,
+      abilities,
+      quantization: "fp8",
+      verified: true,
+      pricing,
+    },
+    {
+      name: `ga2b3c4d${"234567"[(n + 10) % 6]}`,
+      context_length: 100000,
+      max_output: 32000,
+      streams: false,
+      abilities,
+      verified: false,
+      pricing: {
+        ...pricing,
+        rates: [
+          { service_tier: "standard", item: "input", unit: "token", amount: `0.00000${4 + (n % 9)}` },
+          { service_tier: "standard", item: "output", unit: "token", amount: `0.00000${5 + (n % 9)}` },
+        ],
+      },
+    },
+  ];
   return {
     id: models[n % models.length] ?? "",
     name: (models[n % models.length] ?? "").split("/")[1] ?? "",
@@ -80,16 +122,9 @@ function aModel(n: number, over: Partial<Schemas["PublicModel"]> = {}): Schemas[
     context_length: 200000,
     max_output: 64000,
     streams: true,
-    abilities: n % 2 === 0 ? ["tools", "reasoning"] : ["tools", "images"],
-    pricing: {
-      currency: "USD",
-      basis: ["input", "output"],
-      rates: [
-        { service_tier: "standard", item: "input", unit: "token", amount: `0.00000${1 + (n % 9)}` },
-        { service_tier: "standard", item: "output", unit: "token", amount: `0.00000${2 + (n % 9)}` },
-        { service_tier: "priority", above: 200000, item: "output", unit: "token", amount: "0.00002" },
-      ],
-    },
+    abilities,
+    pricing,
+    endpoints,
     ...over,
   };
 }
