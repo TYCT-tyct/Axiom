@@ -112,14 +112,18 @@ var errorTypes = map[int]string{
 const maxRetryAfter = 60
 
 // writeRefusal is the one error exit before a stream starts. Messages has its own shell; Chat's serves Responses too,
-// as docs/domains/gateway.md「错误」 says. A 401 closes the connection, so a client that keeps sending a body to an
-// address it may not use is not read; so does a 408, whose body stopped coming and is not worth waiting for again.
+// as docs/domains/gateway.md「错误」 says. The code is the numeric status, as OpenRouter's is; the unified error type is
+// metadata.error_type. A 401 closes the connection, so a client that keeps sending a body to an address it may not use
+// is not read; so does a 408, whose body stopped coming and is not worth waiting for again.
 func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 	message := r.Message
 	if message == "" {
 		message = messages[r.Code]
 	}
 	typ := errorTypes[r.Status]
+	if r.Code == "credits_insufficient" {
+		typ = "billing_error" // a budget is a billing problem whether it is the balance's 402 or a key's or workspace's 403
+	}
 	detail := map[string]any{"error_type": r.Code}
 	maps.Copy(detail, r.Details)
 	var body map[string]any
@@ -127,7 +131,7 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 		detail["type"], detail["message"] = typ, message
 		body = map[string]any{"type": "error", "error": detail}
 	} else {
-		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "param": "", "code": r.Code, "metadata": detail}}
+		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "param": "", "code": r.Status, "metadata": detail}}
 	}
 	out, _ := jsonx.MarshalCanonical(body) //nolint:errcheck // a map of strings and numbers always encodes
 	h := w.Header()
@@ -218,13 +222,20 @@ func unbounded(f protocol.Format, err error) *Refusal {
 
 var limitSources = map[billing.Source]string{
 	billing.SourceBalance: "balance", billing.SourceSiteBalance: "balance",
-	billing.SourceWorkspace: "workspace_budget", billing.SourceKey: "key_limit",
+	// OpenRouter's names for the two budget layers, which its clients branch on; the balance keeps ours, since its 402
+	// carries none (OpenRouter《Errors and Debugging》的 budget errors，2026-11-02 核对).
+	billing.SourceWorkspace: "openrouter_workspace_budget", billing.SourceKey: "openrouter_key_limit",
 }
 
-// insufficient is the 402. Only a limit that resets can pass later, so only that one says when to come back; billing
-// does not say when the window ends, so a client is told the longest wait it would honour.
+// insufficient is the balance's 402, or a key's or workspace's 403, as OpenRouter answers a spent budget. Only a limit
+// that resets can pass later, so only that one says when to come back; billing does not say when the window ends, so a
+// client is told the longest wait it would honour (docs/domains/gateway.md「错误」).
 func insufficient(e *billing.Insufficient) *Refusal {
-	r := &Refusal{Status: http.StatusPaymentRequired, Code: "credits_insufficient", Details: map[string]any{"limit_source": limitSources[e.Source]}}
+	status := http.StatusPaymentRequired
+	if e.Source == billing.SourceWorkspace || e.Source == billing.SourceKey {
+		status = http.StatusForbidden
+	}
+	r := &Refusal{Status: status, Code: "credits_insufficient", Details: map[string]any{"limit_source": limitSources[e.Source]}}
 	if e.Transient {
 		r.RetryAfter = maxRetryAfter
 	}

@@ -496,7 +496,7 @@ func TestSortRanksAsAsked(t *testing.T) {
 	r.idle(1 << 30)
 }
 
-func TestProviderErrorsKeepStringCodes(t *testing.T) {
+func TestProviderErrorsAreNumeric(t *testing.T) {
 	t.Parallel()
 	// A request that names no tier may be served at priority, so the sale schedule prices it: these requests must reach
 	// the member under test, not fail quoting the route they share.
@@ -513,7 +513,7 @@ func TestProviderErrorsKeepStringCodes(t *testing.T) {
 		resp, out := r.do(http.MethodPost, "/api/v1/chat/completions", a.key, strings.NewReader(body))
 		var got struct {
 			Error struct {
-				Code     string `json:"code"`
+				Code     int    `json:"code"`
 				Message  string `json:"message"`
 				Metadata struct {
 					Type string `json:"error_type"`
@@ -523,7 +523,7 @@ func TestProviderErrorsKeepStringCodes(t *testing.T) {
 		if err := jsonx.Unmarshal([]byte(out), &got); err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != http.StatusBadRequest || got.Error.Code != "invalid_request" || got.Error.Metadata.Type != "invalid_request" || !strings.Contains(got.Error.Message, "provider."+tc.member) {
+		if resp.StatusCode != http.StatusBadRequest || got.Error.Code != http.StatusBadRequest || got.Error.Metadata.Type != "invalid_request" || !strings.Contains(got.Error.Message, "provider."+tc.member) {
 			t.Errorf("%s: %d %s", tc.provider, resp.StatusCode, out)
 		}
 	}
