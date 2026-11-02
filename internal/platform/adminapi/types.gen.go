@@ -3125,6 +3125,8 @@ type PriceEndpointMap map[string]PriceSchedule
 
 // PricePolicy defines model for PricePolicy.
 type PricePolicy struct {
+	// ByokFeeBps The share of a model's normal sale price charged when an account's own provider key serves the request, in basis points (500 is 5%, docs/domains/billing.md「定价」).
+	ByokFeeBps       *int    `json:"byok_fee_bps,omitempty"`
 	ChangeRatio      *string `json:"change_ratio,omitempty"`
 	FloorMultiplier  *string `json:"floor_multiplier,omitempty"`
 	MaxIncreaseRatio *string `json:"max_increase_ratio,omitempty"`
@@ -3133,6 +3135,8 @@ type PricePolicy struct {
 
 // PricePolicyInput defines model for PricePolicyInput.
 type PricePolicyInput struct {
+	// ByokFeeBps The BYOK fee in basis points. Omitted keeps the site's current value, so a page that predates the field does not reset it.
+	ByokFeeBps       *int   `json:"byok_fee_bps,omitempty"`
 	ChangeRatio      string `json:"change_ratio"`
 	FloorMultiplier  string `json:"floor_multiplier"`
 	MaxIncreaseRatio string `json:"max_increase_ratio"`

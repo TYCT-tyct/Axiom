@@ -23,6 +23,146 @@ tags:
   - {name: Calls, description: "The account's call log."}
   - {name: Top-ups, description: "Buying credits through the site's payment channels."}
 paths:
+  /api/console/v1/provider-keys:
+    get:
+      operationId: listProviderKeys
+      tags: [Provider keys]
+      summary: The account's own provider keys
+      description: >-
+        The provider keys the account saved, newest first. A key is never returned: only its last four characters are,
+        so two keys of the same provider can be told apart. `status`, `enabled` and `rejected` say whether routing may
+        use it; `fallback` says whether it may fall back to Axiom's endpoints for a model it covers
+        (docs/domains/accounts.md「自带的供应商 key（BYOK）」).
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The account's provider keys.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProviderKeyList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createProviderKey
+      tags: [Provider keys]
+      summary: Add a provider key
+      description: >-
+        Saves the account's own key for one provider. The key is sealed with the same envelope encryption as a supplier
+        credential and is never returned, logged or shown again; only its last four characters are. A provider this node
+        cannot call answers 422 in `fields./provider`. Taking no idempotency key matches creating an API key: a lost
+        response leaves a key the account can see and delete.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProviderKeyCreate"}
+      responses:
+        "201":
+          description: The key as it is stored.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProviderKey"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/provider-keys/{provider_key_id}:
+    parameters:
+      - name: provider_key_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    delete:
+      operationId: deleteProviderKey
+      tags: [Provider keys]
+      summary: Remove a provider key
+      description: >-
+        Takes the key out of routing and erases its sealed value. Attempts already made keep their rows. Another
+        account's key is 404, the same answer as a key that does not exist.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      responses:
+        "204":
+          description: Removed.
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/provider-keys/{provider_key_id}/enabled:
+    parameters:
+      - name: provider_key_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    put:
+      operationId: setProviderKeyEnabled
+      tags: [Provider keys]
+      summary: Switch a provider key on or off
+      description: >-
+        A disabled key is not picked by routing and its sealed value stays. Enabling a key a provider refused does not
+        make it work; only a successful test clears `rejected`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ProviderKeyEnabled"}
+      responses:
+        "200":
+          description: The key.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProviderKey"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/provider-keys/{provider_key_id}/test:
+    parameters:
+      - name: provider_key_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    post:
+      operationId: testProviderKey
+      tags: [Provider keys]
+      summary: Test a provider key
+      description: >-
+        Asks the provider whether the key works, with one small request. Success makes the key usable again, a refusal
+        marks it rejected and routing skips it. A provider that is merely unreachable leaves the status as it was and
+        answers `ok: false` with `inconclusive: true`, so an outage does not break a working key.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      responses:
+        "200":
+          description: What the test found.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProviderKeyTest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/presets:
     get:
       operationId: listPresets
@@ -3159,6 +3299,59 @@ components:
       properties:
         key: {$ref: "#/components/schemas/Key"}
         secret: {type: string, description: "The key's text, to copy now: it is never shown again."}
+    ProviderKey:
+      type: object
+      required: [id, name, provider, status, enabled, rejected, fallback, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        provider: {type: string}
+        hint:
+          type: string
+          description: The last four characters of the key, and never more.
+        status: {type: string, enum: [active, disabled, rejected]}
+        enabled: {type: boolean}
+        rejected:
+          type: boolean
+          description: The provider refused this key; routing skips it until a test succeeds.
+        fallback:
+          type: boolean
+          description: Whether the key may fall back to Axiom's endpoints for a model it covers.
+        created_at: {type: string, format: date-time}
+    ProviderKeyList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/ProviderKey"}
+    ProviderKeyCreate:
+      type: object
+      additionalProperties: false
+      required: [name, provider, key]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        provider: {type: string, enum: [openai]}
+        key: {type: string, minLength: 8, maxLength: 4096}
+        fallback:
+          type: boolean
+          default: true
+          description: Whether routing may use Axiom's endpoints for a model this key covers when the key cannot serve it.
+    ProviderKeyEnabled:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
+    ProviderKeyTest:
+      type: object
+      required: [ok, status]
+      properties:
+        ok: {type: boolean}
+        status: {type: string, enum: [active, disabled, rejected]}
+        inconclusive:
+          type: boolean
+          description: The provider could not be asked; the key's status did not change.
     KeyList:
       type: object
       required: [data, next_cursor]

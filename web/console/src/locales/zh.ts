@@ -1,4 +1,6 @@
 // The console's messages in Chinese, the source every other language follows.
+import { zh as providerKeys } from "./provider-keys";
+import { zh as receipt } from "./receipt";
 import { zh as statement } from "./statement";
 
 export default {
@@ -17,6 +19,7 @@ export default {
     models: "模型与价格",
     overview: "概览",
     keys: "API key",
+    providerKeys: "供应商 key",
     calls: "调用记录",
     balance: "余额",
     redeem: "兑换",
@@ -212,30 +215,7 @@ export default {
     refundReused: "这个请求的键已经被使用过。请先查看下面的退款，再决定是否再次申请；没有发送新的请求。",
     close: "取消",
   },
-  receipt: {
-    title: "收据",
-    back: "返回订单",
-    print: "打印或存为 PDF",
-    order: "订单号",
-    paidAt: "支付时间",
-    method: "支付方式",
-    paid: "支付金额",
-    credited: "入账额度",
-    refunds: "退款",
-    noRefunds: "没有退款。",
-    refundLine: "退回 {{amount}}，扣回 {{credits}} 额度",
-    footnote: "本收据由 {{site}} 依据订单记录生成；付款以支付渠道的记录为准。",
-    none: {
-      unpaid: {
-        title: "还没有收据",
-        body: "这笔订单还没有完成支付。支付完成后，收据会出现在这里。",
-      },
-      unavailable: {
-        title: "暂时无法显示收据",
-        body: "这笔订单的记录还不完整，暂时出具不了收据；稍后刷新再试。",
-      },
-    },
-  },
+  receipt,
   notifications: {
     description: "Axiom 什么时候给你发邮件或调用你的 webhook。",
     title: "提醒",
@@ -358,6 +338,7 @@ export default {
       copy: "复制 {{name}}",
     },
   },
+  providerKeys,
   calls: {
     priceVersion: "价格版本 {{version}}",
     priceVersionUnavailable: "价格版本不可用",

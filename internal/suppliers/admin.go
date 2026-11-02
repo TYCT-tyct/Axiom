@@ -128,6 +128,7 @@ type Admin struct {
 	keys     *secret.Keyring
 	egress   *egress.Client
 	now      func() time.Time
+	byok     bool
 }
 
 // AdminConfig is what the admin side needs.
@@ -138,6 +139,9 @@ type AdminConfig struct {
 	Egress *egress.Client
 	// Registry is the adapters of the program; nil is registry.Default.
 	Registry *registry.Registry
+	// Byok allows accounts to create provider keys. It is off until every node knows the openai adapter and the byok
+	// status; a deployment turns it on only after the rollout (docs/domains/accounts.md「自带的供应商 key」).
+	Byok bool
 	// Clock is the time; nil is time.Now.
 	Clock func() time.Time
 }
@@ -154,7 +158,7 @@ func NewAdmin(cfg AdminConfig) (*Admin, error) {
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
-	return &Admin{registry: r, keys: cfg.Keys, egress: cfg.Egress, now: cfg.Clock}, nil
+	return &Admin{registry: r, keys: cfg.Keys, egress: cfg.Egress, now: cfg.Clock, byok: cfg.Byok}, nil
 }
 
 // onboarding is the adapter of kind, which a person can connect.
@@ -369,6 +373,16 @@ func (*Admin) record(ctx context.Context, tx pg.Tx, actor audit.Actor, action st
 	return audit.Record(ctx, tx, audit.Event{
 		Actor: actor, Action: action, Reason: reason,
 		Target: audit.Target{Module: "suppliers", Kind: "supplier", ID: id.String()}, Detail: detail,
+	})
+}
+
+// recordByok is record for a row an account owns: the audit row must carry the tenant, because the account's own
+// transaction is what writes it and platform.audit_log's row-level security refuses a row with no scope.
+func (*Admin) recordByok(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, site, account, id uuid.UUID, reason string, detail map[string]any) error {
+	return audit.Record(ctx, tx, audit.Event{
+		Actor: actor, Action: action, Reason: reason,
+		Target: audit.Target{Module: "suppliers", Kind: "supplier", ID: id.String(), Site: site, Account: account},
+		Detail: detail,
 	})
 }
 
