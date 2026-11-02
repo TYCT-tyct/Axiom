@@ -61,6 +61,10 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 
 恢复后的临时并发上限通过已有在途数检查。没有其他健康且有容量的候选时忽略慢启动上限，单端点不因慢启动等待。`PausedUntil` 只向 quality 暴露端点与供应商暂停的较晚时刻；两种暂停和熔断各自维护，互不清除。行为由 `TestTrippedEndpointsAreLastResort`、`TestOfflineEndpointsTakeNoTraffic`、`TestProbeRestoresAndSlowStart` 与 `TestFastestUnmeasuredAfterTheBreakers` 覆盖。
 
+## 账户自带的 key
+
+`Endpoint.Byok` 的候选排在站点端点之前，价格不参与这个先后。一个可见的 `Byok && !ByokFallback` 候选让同一模型的其他候选以 `ByokNoFallback` 出局：账户明确不许回落时，站点端点不能用；这个判断只针对该 key 覆盖的模型，别的模型照常走站点。被拒绝或停用的 key 不在快照里，所以不会挡住回落；没有可用候选时按 `NoEndpoint` 的永久/临时规则回答。
+
 ## 决策与理由
 
 | 决策 | 理由 | 不选 |

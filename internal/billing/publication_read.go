@@ -3,6 +3,7 @@ package billing
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"time"
 	"uuid"
@@ -13,7 +14,7 @@ import (
 )
 
 func defaultPricePolicy() PricePolicy {
-	return PricePolicy{FloorMultiplier: "1", ChangeRatio: "0.1", MaxIncreaseRatio: "1"}
+	return PricePolicy{FloorMultiplier: "1", ChangeRatio: "0.1", MaxIncreaseRatio: "1", ByokFeeBPS: 500}
 }
 
 func loadPricePolicy(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy, error) {
@@ -24,7 +25,10 @@ func loadPricePolicy(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy
 	if len(rows) == 0 {
 		return defaultPricePolicy(), nil
 	}
-	return PricePolicy(rows[0]), nil
+	return PricePolicy{
+		Rev: rows[0].Rev, FloorMultiplier: rows[0].FloorMultiplier, ChangeRatio: rows[0].ChangeRatio,
+		MaxIncreaseRatio: rows[0].MaxIncreaseRatio, ByokFeeBPS: rows[0].ByokFeeBps,
+	}, nil
 }
 
 // PublishedPrices reads the serving heads without creating policy rows or taking publication locks.
@@ -280,4 +284,21 @@ func (s Sold) withSharedCosts(model catalog.Model, costs []PriceCost) Sold {
 		s.Schedule = catalog.Schedule{}
 	}
 	return s
+}
+
+// ByokFee is the site's share of a model's reference price, charged when the account's own provider key serves the
+// request (docs/domains/billing.md「定价」). It is a decimal multiplier for a reference schedule: 500 basis points is
+// "0.0500". A site without a policy row has the default, the same value the column's default gives.
+func ByokFee(ctx context.Context, tx pg.Tx, site uuid.UUID) (string, error) {
+	policy, err := loadPricePolicy(ctx, tx, site)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d.%04d", policy.ByokFeeBPS/10000, policy.ByokFeeBPS%10000), nil
+}
+
+// PricePolicyOf reads the site's policy, with the defaults for a site that has none. A caller that changes one field
+// reads it first, so the fields it did not send keep their values.
+func PricePolicyOf(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy, error) {
+	return loadPricePolicy(ctx, tx, site)
 }
