@@ -222,6 +222,8 @@ func TestEzPayQueryShapes(t *testing.T) {
 			ezPayWrite(w, `{"code":1,"trade_status":"TRADE_SUCCESS","money":"10.00","trade_no":"T-no-echo","type":"usdt_trc20","currency":"USD"}`)
 		case "ord-null-echo":
 			ezPayWrite(w, `{"code":1,"trade_status":"TRADE_SUCCESS","money":"10.00","trade_no":"T-null-echo","out_trade_no":null,"type":"usdt_trc20","currency":"USD"}`)
+		case "ord-empty-echo":
+			ezPayWrite(w, `{"code":1,"trade_status":"TRADE_SUCCESS","money":"10.00","trade_no":"T-empty-echo","out_trade_no":"","type":"usdt_trc20","currency":"USD"}`)
 		case "ord-blank-echo":
 			ezPayWrite(w, `{"code":1,"trade_status":"TRADE_SUCCESS","money":"10.00","trade_no":"T-blank-echo","out_trade_no":"   ","type":"usdt_trc20","currency":"USD"}`)
 		case "ord-missing":
@@ -260,7 +262,7 @@ func TestEzPayQueryShapes(t *testing.T) {
 	if got, err := c.Query(t.Context(), "ord-type", ""); err != nil || got.State != PayPaid || got.Paid.Minor != -1 {
 		t.Fatalf("other chain: %+v, %v", got, err)
 	}
-	for _, order := range []string{"ord-no-echo", "ord-null-echo", "ord-blank-echo"} {
+	for _, order := range []string{"ord-no-echo", "ord-null-echo", "ord-empty-echo", "ord-blank-echo"} {
 		if got, err := c.Query(t.Context(), order, ""); err == nil {
 			t.Fatalf("%s: missing echo was accepted: %+v", order, got)
 		}
