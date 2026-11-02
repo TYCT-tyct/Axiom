@@ -456,17 +456,31 @@ func TestGenerationRefusals(t *testing.T) {
 }
 
 // TestGenerationShowsHowTheCallRan: the generation endpoint reports whether the client streamed, whether it left
-// before the end, the session, and the provider's native token counts, with the prompt total only when the upstream
-// reported one.
+// before the end, the session, the provider's native token counts, with the prompt total only when the upstream
+// reported one, and cache_discount, which OpenRouter defines as the discount caching gave (a nullable number; read
+// 2026-11-02 at
+// https://openrouter.ai/docs/client-sdks/go/models/components/generationresponsedata). A call that read cached prompt
+// tokens shows what they saved against the input price; one that read none shows no discount.
 func TestGenerationShowsHowTheCallRan(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
-	id := uuid.NewV7()
+	id, uncached := uuid.NewV7(), uuid.NewV7()
 	r.callRow(a, id)
-	r.sql("UPDATE observability.call_log SET streamed = true, physical_input = 100, finish_reason = 'cancelled', " +
-		"session_id = 'session-7', usage = '{\"input\":60,\"cache_read\":40,\"output\":20,\"reasoning\":5,\"image_out\":3}' " +
-		"WHERE id = '" + id.String() + "'")
+	r.callRow(a, uncached)
+	r.sql(
+		"UPDATE observability.call_log SET streamed = true, physical_input = 100, finish_reason = 'cancelled', "+
+			"session_id = 'session-7', usage = '{\"input\":60,\"cache_read\":40,\"output\":20,\"reasoning\":5,\"image_out\":3}' "+
+			"WHERE id = '"+id.String()+"'",
+		"UPDATE observability.call_log SET usage = '{\"input\":100,\"output\":20}' WHERE id = '"+uncached.String()+"'",
+	)
+	// Input at 0.000001, a cached input token at a quarter of it and an output at 0.000002: the cached call read 40
+	// tokens, so caching saved 40 × (0.000001 − 0.00000025) = 0.00003.
+	const schedule = `{"v":1,"currency":"USD","rates":{"input":"0.000001","cache_read":"0.00000025","output":"0.000002"}}`
+	// The last member is the set of items the upstream reported: input, cache_read, output, reasoning and image_out.
+	r.settledRow(a, id, schedule, `[{"counts":[60,40,0,0,0,0,20,5,0,3],"tier":0,"reported":707}]`, 126000)
+	// The same sale prices on a call that read no cache: its final usage names input and output only.
+	r.settledRow(a, uncached, schedule, `[{"counts":[100,0,0,0,0,0,20,0,0,0],"tier":0,"reported":65}]`, 140000)
 	resp, body := r.do(http.MethodGet, "/api/v1/generation?id="+id.String(), a.key, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("%d %s", resp.StatusCode, body)
@@ -478,11 +492,39 @@ func TestGenerationShowsHowTheCallRan(t *testing.T) {
 	for field, want := range map[string]float64{
 		"native_tokens_prompt": 100, "native_tokens_completion": 28, "native_tokens_reasoning": 5,
 		"native_tokens_cached": 40, "native_tokens_completion_images": 3, "tokens_prompt": 100,
+		"cache_discount": 0.00003, "total_cost": 0.000126,
 	} {
 		if !near(d[field], want) {
 			t.Errorf("%s: %v, want %v", field, d[field], want)
 		}
 	}
+	_, body = r.do(http.MethodGet, "/api/v1/generation?id="+uncached.String(), a.key, nil)
+	// total_cost proves the charge details of the cache-free call were found too, so the missing discount is a decision
+	// of the endpoint and not an unread row.
+	if d = data(t, body); !near(d["total_cost"], 0.00014) {
+		t.Errorf("total_cost: %v, want 0.00014 (%s)", d["total_cost"], body)
+	}
+	if v, ok := d["cache_discount"]; ok && v != nil && !near(v, 0) {
+		t.Errorf("a call that read no cache shows a discount: %v (%s)", v, body)
+	}
+}
+
+// settledRow writes the settled reservation of a call, as billing's settlement would: the sale schedule its route
+// entry locked, the final usage it charged and the amount it settled. The generation endpoint shows the itemization
+// rebuilt from this row, so a test can hold a call's usage and its sale prices still.
+func (r *rig) settledRow(a account, id uuid.UUID, schedule, usage string, price int64) {
+	r.t.Helper()
+	holder := uuid.NewV7()
+	r.sql(
+		"INSERT INTO billing.holders (id, expires_at) VALUES ('"+holder.String()+"', now() + interval '1 day')",
+		"INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id, "+
+			"workspace_window, key_window, segment, amount, state, deadline, prices, fallbacks, entry, pricing_tiers, "+
+			"final_usage, waived, estimated, price, charged) VALUES ('"+id.String()+"', '"+siteID.String()+"', '"+
+			a.id.String()+"', '"+a.workspace.String()+"', '"+uuid.UUID(a.keyID).String()+"', '"+holder.String()+"', "+
+			"now(), now(), 1, 0, 'settled', now() + interval '1 hour', ARRAY['"+schedule+"'], "+
+			`ARRAY['{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0.05","web_search":"0.025"}}'], `+
+			"0, 1, '"+usage+"', false, false, "+itoa(price)+", "+itoa(price)+")",
+	)
 }
 
 // TestGenerationContentIsNotRetained: an existing call of the account has no content to show and says so; another
