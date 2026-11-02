@@ -3120,6 +3120,9 @@ type PlatformGrantList struct {
 	Data *[]PlatformGrant `json:"data,omitempty"`
 }
 
+// PriceEndpointMap Per-endpoint prices, keyed by endpoint UUID.
+type PriceEndpointMap map[string]PriceSchedule
+
 // PricePolicy defines model for PricePolicy.
 type PricePolicy struct {
 	ChangeRatio      *string `json:"change_ratio,omitempty"`
@@ -3147,11 +3150,26 @@ type PricePublication struct {
 	// CandidateId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	CandidateId *Uuid `json:"candidate_id,omitempty"`
 
+	// Costs The proposal's cost of each endpoint in the site currency, for a cost-plus proposal.
+	Costs *PriceEndpointMap `json:"costs,omitempty"`
+
+	// CurrentEndpoints The price each endpoint currently serves, when the current version prices endpoints separately.
+	CurrentEndpoints *PriceEndpointMap `json:"current_endpoints,omitempty"`
+
 	// CurrentId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	CurrentId *Uuid `json:"current_id,omitempty"`
 
+	// CurrentSchedule The current model-level price schedule, including the envelope of a per-endpoint version.
+	CurrentSchedule *PriceSchedule `json:"current_schedule,omitempty"`
+
+	// Endpoints The proposed price of each endpoint for a cost-plus proposal.
+	Endpoints *PriceEndpointMap `json:"endpoints,omitempty"`
+
 	// Floor A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
 	Floor *PriceSchedule `json:"floor,omitempty"`
+
+	// Floors The proposal's break-even price of each endpoint in the site currency, for a cost-plus proposal.
+	Floors *PriceEndpointMap `json:"floors,omitempty"`
 
 	// ModelId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	ModelId *Uuid   `json:"model_id,omitempty"`
@@ -3159,6 +3177,9 @@ type PricePublication struct {
 
 	// Requested A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
 	Requested *PriceSchedule `json:"requested,omitempty"`
+
+	// RequestedEndpoints The rule price of each endpoint before the site floor, for a cost-plus proposal.
+	RequestedEndpoints *PriceEndpointMap `json:"requested_endpoints,omitempty"`
 
 	// Schedule A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
 	Schedule *PriceSchedule          `json:"schedule,omitempty"`

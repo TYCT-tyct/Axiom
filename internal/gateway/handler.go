@@ -71,6 +71,7 @@ type Handler struct {
 	Deps
 	mux          *http.ServeMux
 	admitTx      func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
+	admitReadTx  func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error
 	admitBatchTx func(context.Context, []accounts.AdmitCall, func(pg.Tx, []accounts.Admission, []error) error) error
 
 	charges  *billing.ChargeReader
@@ -92,7 +93,10 @@ func NewHandler(d Deps) (*Handler, error) {
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
 	}
-	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, admitBatchTx: d.Accounts.AdmitBatch, outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
+	h := &Handler{
+		Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, admitReadTx: d.Accounts.AdmitRead,
+		admitBatchTx: d.Accounts.AdmitBatch, outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter),
+	}
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,
@@ -192,6 +196,9 @@ type Call struct {
 	searchPrice   platform.UnitPrice        // the backend's published price per search, zero to use the model's
 	files         []protocol.FileAnnotation // the annotations a parsed Chat reply returns, so the client can skip reparsing
 	Header        http.Header               // the client's values of the headers that may go upstream, which headers.go derives per attempt
+	cache         cachePlan                 // the response cache this call may read or write, zero when it did not ask
+	presetCache   *bool                     // the preset's cache_enabled, nil when it does not decide the switch
+	presetTTL     int64                     // the preset's cache_ttl_seconds, 0 when absent
 	Session       routing.SessionKey
 	Admission     accounts.Admission
 	Admitted      billing.Admitted
@@ -349,6 +356,15 @@ func (h *Handler) admitDB(ctx context.Context, caller accounts.Caller, req accou
 	return err
 }
 
+// admitReadDB is admitDB for the reads a management key may also make; one that commits ends a database outage.
+func (h *Handler) admitReadDB(ctx context.Context, caller accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
+	err := h.admitReadTx(ctx, caller, req, fn)
+	if err == nil {
+		h.outage.recovered(depDatabase)
+	}
+	return err
+}
+
 // admitDBBatch runs an admission batch; one that commits ends a database outage.
 func (h *Handler) admitDBBatch(ctx context.Context, calls []accounts.AdmitCall, fn func(pg.Tx, []accounts.Admission, []error) error) error {
 	err := h.admitBatchTx(ctx, calls, fn)
@@ -471,6 +487,7 @@ func (h *Handler) fillCall(c *Call, r *http.Request, sessionBody, body []byte, r
 	models []catalog.ModelID, names variantNames, over routing.Override,
 ) error {
 	c.Body, c.Request, c.snap, c.models, c.auto, c.free, c.over = body, req, snap, models, names.auto, names.free, over
+	c.cache = cachePlanFor(c, r.Header)
 	headerSession := strings.TrimSpace(r.Header.Get("X-Session-Id"))
 	if !utf8.ValidString(headerSession) || utf8.RuneCountInString(headerSession) > 256 {
 		return invalid("x-session-id must be valid UTF-8 with at most 256 characters.")

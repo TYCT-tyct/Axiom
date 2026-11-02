@@ -422,6 +422,7 @@ export default {
     ok: "Succeeded",
     failed: "Failed",
     free: "Free",
+    cacheHit: "Cached",
     ms: "{{value}} ms",
     tokens: "{{input}} / {{output}}",
   },
@@ -442,6 +443,10 @@ export default {
     finish: "Finish reason",
     latency: "Total time",
     firstToken: "Time to first token",
+    cache: "Response cache",
+    cacheHit: "Hit",
+    cacheHitBody:
+      "This call was answered from the response cache: no upstream request was made and nothing was charged.",
     session: "Session",
     subagent: "Subagent",
     key: "Key used",

@@ -52,24 +52,25 @@ const (
 // callDeps is what a node's call path is built from: the modules it orchestrates, the secret it derives the
 // identifiers sent upstream from, and the reverse proxies the deployment trusts (AXIOM_TRUSTED_PROXIES).
 type callDeps struct {
-	nodeID     string
-	healthMode quality.Mode
-	db         *pg.DB
-	keys       *secret.Keyring   // unseals suppliers' credentials
-	identity   []byte            // the identity key file's newest key
-	accounts   *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
-	catalog    *catalog.Catalog
-	egress     *egress.Client
-	search     gateway.SearchBackends
-	fileParser fileparse.Parser
-	gate       gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
-	limits     *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
-	records    *observability.Recorder // the call log, which the settlements write to
-	meter      metric.Meter            // where the call path's counters go
-	logger     *slog.Logger
-	proxies    []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
-	kv         *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
-	alerts     alert.Sink
+	nodeID        string
+	healthMode    quality.Mode
+	db            *pg.DB
+	keys          *secret.Keyring   // unseals suppliers' credentials
+	identity      []byte            // the identity key file's newest key
+	accounts      *accounts.Service // the module the calls are admitted through, which took its lookups' slots from limits
+	catalog       *catalog.Catalog
+	egress        *egress.Client
+	search        gateway.SearchBackends
+	fileParser    fileparse.Parser
+	gate          gateway.Config          // the settings limits was made from, which the lifetimes and windows below follow
+	limits        *gateway.Backpressure   // the node's in-process limits, which the accounts module was given too
+	records       *observability.Recorder // the call log, which the settlements write to
+	meter         metric.Meter            // where the call path's counters go
+	logger        *slog.Logger
+	proxies       []netip.Prefix // whose X-Forwarded-For names the client, which the IP limit and the keys' allow-lists judge
+	kv            *kv.Client     // the shared cache the precheck counts in, nil in single-core mode
+	responseCache bool           // whether the platform permits the response cache to store reply content
+	alerts        alert.Sink
 	// verify answers what an endpoint claims to serve, for model verification. Production sets it unless
 	// AXIOM_MODEL_VERIFICATION=off; a test whose fake upstream counts every generation leaves it nil, and the
 	// endpoint then stays unverified.
@@ -92,6 +93,7 @@ type callNode struct {
 	models *gateway.ModelList
 	// search is the node's enabled engines, also read by the public model pages to show what a search costs.
 	search gateway.SearchBackends
+	cache  *gateway.ResponseCache // the response cache's writer and expiry loop, started with the other loops
 }
 
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
@@ -156,7 +158,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	loops, stop := context.WithCancel(context.WithoutCancel(ctx))
 	healthDone := make(chan struct{})
 	go func() { defer close(healthDone); healthLoop.Run(loops) }()
-	n.ready, n.reaped, n.stop = func() bool { return routable.Load() && router.Fresh() }, startLoops(loops, d, ledger, upstreams, routes), func() { stop(); <-healthDone }
+	n.ready, n.reaped, n.stop = func() bool { return routable.Load() && router.Fresh() }, startLoops(loops, d, n.cache, ledger, upstreams, routes), func() { stop(); <-healthDone }
 	return n, nil
 }
 
@@ -175,10 +177,20 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 	models *gateway.ModelList,
 ) (callNode, error) {
 	memory, outstanding := protocol.NewMemory(nodeMemory), gateway.NewOutstanding()
+	var (
+		cache *gateway.ResponseCache
+		err   error
+	)
+	if d.responseCache {
+		cache, err = gateway.NewResponseCache(d.db, d.keys, pg.PlatformScope(), d.logger, d.meter)
+		if err != nil {
+			return callNode{}, err
+		}
+	}
 	executor, err := gateway.NewExecutor(gateway.ExecDeps{
 		Router: router, Upstreams: gateway.NewUpstreams(upstreams), Limits: d.limits, Memory: memory,
 		Logger: d.logger, Ledger: ledger, Costs: upstreams, Alive: ledger.Alive, IdentitySecret: d.identity,
-		Records: d.records, Quality: health, Outstanding: outstanding, Search: d.search,
+		Records: d.records, Quality: health, Outstanding: outstanding, Search: d.search, Cache: cache,
 	})
 	if err != nil {
 		return callNode{}, err
@@ -188,7 +200,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
 		Outstanding: outstanding, Search: d.search, Parser: d.fileParser,
 	})
-	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models, search: d.search}, err
+	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models, search: d.search, cache: cache}, err
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and
@@ -217,7 +229,7 @@ func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service,
 // startLoops starts the loops that keep the call path's inputs fresh. The holder's is the only one that can end the
 // node: once it has been reaped nothing this process writes is fenced in, so it must be restarted with a new one
 // (#205). Its end is what the channel carries.
-func startLoops(ctx context.Context, d callDeps, ledger *billing.Billing, upstreams *suppliers.Service, routes *gateway.RouteDeps) <-chan error {
+func startLoops(ctx context.Context, d callDeps, cache *gateway.ResponseCache, ledger *billing.Billing, upstreams *suppliers.Service, routes *gateway.RouteDeps) <-chan error {
 	reaped := make(chan error, 1)
 	go func() {
 		if err := ledger.Run(ctx); err != nil {
@@ -231,6 +243,9 @@ func startLoops(ctx context.Context, d callDeps, ledger *billing.Billing, upstre
 	}()
 	go reloadEndpoints(ctx, upstreams, d.logger)
 	go routes.Run(ctx)
+	if cache != nil {
+		go cache.Run(ctx)
+	}
 	return reaped
 }
 
@@ -305,7 +320,7 @@ func reloadEndpoints(ctx context.Context, s *suppliers.Service, logger *slog.Log
 	}
 }
 
-// salePrices only reads published heads. Local cost checks may withhold a model, but never change shared publication
+// salePrices only reads published heads. Local cost checks may withhold an endpoint, but never change shared publication
 // state: nodes with different adapters or key versions must not publish different evidence.
 func salePrices(db *pg.DB, sites *accounts.Service) func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error) {
 	return func(ctx context.Context, snap *catalog.Snapshot, endpoints []suppliers.Routable, rates []platform.ExchangeRate) (sold map[catalog.ModelID]billing.Sold, err error) {

@@ -3756,6 +3756,10 @@ export interface components {
                 fast?: components["schemas"]["ServiceTierRates"];
             };
         };
+        /** @description Per-endpoint prices, keyed by endpoint UUID. */
+        PriceEndpointMap: {
+            [key: string]: components["schemas"]["PriceSchedule"];
+        };
         ModelName: {
             name: string;
             /**
@@ -3920,6 +3924,18 @@ export interface components {
             requested?: components["schemas"]["PriceSchedule"];
             schedule?: components["schemas"]["PriceSchedule"];
             floor?: components["schemas"]["PriceSchedule"];
+            /** @description The proposed price of each endpoint for a cost-plus proposal. */
+            endpoints?: components["schemas"]["PriceEndpointMap"];
+            /** @description The rule price of each endpoint before the site floor, for a cost-plus proposal. */
+            requested_endpoints?: components["schemas"]["PriceEndpointMap"];
+            /** @description The price each endpoint currently serves, when the current version prices endpoints separately. */
+            current_endpoints?: components["schemas"]["PriceEndpointMap"];
+            /** @description The current model-level price schedule, including the envelope of a per-endpoint version. */
+            current_schedule?: components["schemas"]["PriceSchedule"];
+            /** @description The proposal's cost of each endpoint in the site currency, for a cost-plus proposal. */
+            costs?: components["schemas"]["PriceEndpointMap"];
+            /** @description The proposal's break-even price of each endpoint in the site currency, for a cost-plus proposal. */
+            floors?: components["schemas"]["PriceEndpointMap"];
             problem?: string;
         };
         PricePublishInput: {

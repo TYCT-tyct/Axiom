@@ -66,10 +66,11 @@ func (c Count) Routable() bool { return c.Endpoints > 0 || c.Offered == 0 }
 // what it holds. Nothing is published: the caller either publishes it (Publish, which Run does) or decides from the count
 // whether the node may report itself ready (cmd/axiom).
 //
-// An endpoint whose model the catalog cannot describe is left out, and so are all of the model's endpoints: one whose
-// model has no spec, one with no published sale version safe for this node. A model whose upstream reported a field nothing prices is
-// in the snapshot, flagged, so that routing refuses it with a reason an administrator can read. Each of these is a line
-// in the log, since a model that cannot be routed is a price list or a spec to fix. A snapshot with no endpoint at all
+// An endpoint whose model the catalog cannot describe is left out, and so are all of the model's endpoints when its
+// spec is missing; an endpoint with no published sale version safe for this node is left out by itself, and the model
+// stays when another endpoint built. A model whose upstream reported a field nothing prices is in the snapshot, flagged,
+// so that routing refuses it with a reason an administrator can read. Each of these is a line in the log, since an
+// endpoint that cannot be routed is a price list or a spec to fix. A snapshot with no endpoint at all
 // is a valid one: every call is then answered 404 no_endpoint, which is what a node whose suppliers have not synced yet
 // has to say.
 //
@@ -118,6 +119,9 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 		e.Exchange = exchangeBasis(rates, r.Currency, routeCurrency(e))
 		built = append(built, e)
 	}
+	// A failed endpoint is left out by itself; the model stays when another endpoint built. report names every model
+	// with a failed endpoint, whether it still serves others or has no route at all, so an endpoint's absence has a
+	// cause in the log too.
 	d.report(left)
 	snap, err := d.Router.NewSnapshot(builtAt, built, presets())
 	if err != nil {
@@ -215,7 +219,7 @@ func (d *RouteDeps) Run(ctx context.Context) {
 	}
 }
 
-// leftOut is why a model takes no requests, and how many of its endpoints it takes with it.
+// leftOut is why some or all of a model's endpoints take no requests, and how many of them are left out.
 type leftOut struct {
 	reason    string
 	endpoints int
@@ -251,9 +255,29 @@ func (d *RouteDeps) report(left map[catalog.ModelID]*leftOut) {
 	}
 }
 
+// endpointPrice is the price routing holds for one endpoint before the call's audience is selected. The default layer
+// may price fewer endpoints than an audience layer, and the reverse: the endpoint is served only if some layer has a
+// price for it. The default PriceRef is then that layer's, though routing reads the audience's own version for the call.
+func endpointPrice(sold billing.Sold, endpoint uuid.UUID) (routing.PriceRef, string) {
+	price := routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule}
+	if schedule, ok := sold.PriceFor(endpoint); ok {
+		price.Schedule = schedule
+		return price, ""
+	}
+	if sold.Audiences == nil {
+		return price, "no published sale price for this endpoint; check the price publication list and local costs"
+	}
+	for _, layer := range sold.Audiences.Layers() {
+		if schedule, ok := layer.Sold.PriceFor(endpoint); ok {
+			return routing.PriceRef{Version: layer.Sold.Version, Schedule: schedule}, ""
+		}
+	}
+	return price, "no published sale price for this endpoint; check the price publication list and local costs"
+}
+
 // endpointOf is one supplier endpoint as routing holds it, or the reason it cannot be one. The rules are the assembly
-// ones of docs/domains/routing.md「快照从哪来」: nothing is guessed — a model without a spec, or without a sale price,
-// has no routing entry at all.
+// ones of docs/domains/routing.md「快照从哪来」: nothing is guessed — a model without a spec has no routing entry at all;
+// an endpoint with no sale price for it has none, while another endpoint of the same model can still build.
 // chatFormats are the formats that convert into each other: an endpoint speaking any of them serves all three.
 var chatFormats = routing.Of(protocol.Messages, protocol.Responses, protocol.Chat)
 
@@ -292,6 +316,7 @@ func listedModelOf(snap *catalog.Snapshot, id catalog.ModelID) (catalog.Model, s
 	return model, ""
 }
 
+//nolint:cyclop,funlen // one endpoint's routing fields are set once, in the order routing reads them
 func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable,
 	measured quality.Measures,
 ) (routing.Endpoint, string) {
@@ -311,7 +336,11 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		return routing.Endpoint{}, "a :free model has a non-zero sale price for some audience"
 	}
 	reportable := model.Reportable()
-	if sold.Audiences == nil && billing.Unpriced(sold.Schedule, reportable) != (catalog.Reportable{}) {
+	price, why := endpointPrice(sold, r.ID)
+	if why != "" {
+		return routing.Endpoint{}, why
+	}
+	if sold.Audiences == nil && billing.Unpriced(price.Schedule, reportable) != (catalog.Reportable{}) {
 		// Only a reference price was checked against what the model reports when it was listed; a fixed price was not.
 		return routing.Endpoint{}, "its sale price lacks a price for an item or a service tier the model reports"
 	}
@@ -371,7 +400,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		ToolUses:         model.ToolUses(),
 		UnknownItem:      blockedItem,
 		AudiencePrices:   sold.Audiences,
-		Price:            routing.PriceRef{Version: sold.Version, Schedule: sold.Schedule},
+		Price:            price,
 		Target:           targetOf(r.Upstream, streams, dialect),
 	}
 	if r.Capacity != nil { // a nil *suppliers.Capacity in the interface would read as an endpoint with no capacity

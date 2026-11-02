@@ -3242,6 +3242,11 @@ components:
         first_token_ms: {type: integer, minimum: 0}
         finish_reason: {type: string}
         error_kind: {type: string, description: "What failed, empty when the call succeeded."}
+        cache_hit:
+          type: boolean
+          description: >-
+            The answer came from the response cache: no upstream attempt was made, so usage counts are zero and price is zero.
+            Different from `free`, which is a charge the free-of-charge rules waived.
     ChargeItem:
       type: object
       description: One billed item of a sampling or the attempt's request, at its frozen sale price; no supplier or cost information.

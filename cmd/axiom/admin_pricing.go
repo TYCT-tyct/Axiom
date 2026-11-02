@@ -174,12 +174,22 @@ func (a adminAPI) PreviewPricing(ctx context.Context, request adminapi.PreviewPr
 
 func previewRows(body adminapi.PricingPreviewRequest, snap *catalog.Snapshot, models []catalog.ModelID, proposals map[catalog.ModelID]billing.Publication, current map[catalog.ModelID]billing.Sold, audience audience) (adminapi.PreviewPricing200JSONResponse, error) {
 	rows := adminapi.PricingPreview{Data: make([]adminapi.PricingPreviewRow, 0, len(models))}
-	for i, id := range body.ModelIds {
-		row, err := previewRow(id, snap, models[i], proposals)
+	for i, model := range models {
+		id := body.ModelIds[i]
+		p := proposals[model]
+		if len(p.Endpoints) > 0 {
+			endpoints, err := previewEndpointRows(id, snap, model, p, current[model], audience, body.Rule == nil)
+			if err != nil {
+				return adminapi.PreviewPricing200JSONResponse{}, err
+			}
+			rows.Data = append(rows.Data, endpoints...)
+			continue
+		}
+		row, err := previewRow(id, snap, model, proposals)
 		if err != nil {
 			return adminapi.PreviewPricing200JSONResponse{}, err
 		}
-		if err := previewCurrent(&row, current[models[i]], audience, body.Rule == nil); err != nil {
+		if err := previewCurrent(&row, current[model], audience, body.Rule == nil, uuid.Nil()); err != nil {
 			return adminapi.PreviewPricing200JSONResponse{}, err
 		}
 		rows.Data = append(rows.Data, row)
@@ -187,12 +197,19 @@ func previewRows(body adminapi.PricingPreviewRequest, snap *catalog.Snapshot, mo
 	return adminapi.PreviewPricing200JSONResponse(rows), nil
 }
 
-func previewCurrent(row *adminapi.PricingPreviewRow, price billing.Sold, audience audience, serving bool) error {
+func previewCurrent(row *adminapi.PricingPreviewRow, price billing.Sold, audience audience, serving bool, endpoint uuid.UUID) error {
 	price = price.For(billing.Audience{Account: audience.account, Tier: audience.tier})
 	if price.Version == uuid.Nil() {
 		return nil
 	}
-	sale, err := scheduleBody(price.Schedule)
+	schedule := price.Schedule
+	if endpoint != uuid.Nil() {
+		var ok bool
+		if schedule, ok = price.PriceFor(endpoint); !ok {
+			return nil // this version has no price for the endpoint: there is no current sale to show
+		}
+	}
+	sale, err := scheduleBody(schedule)
 	if err != nil {
 		return err
 	}
@@ -272,6 +289,10 @@ func previewFloorStatus(s catalog.Schedule, raw []byte) (adminapi.PricingPreview
 	if err != nil {
 		return "", err
 	}
+	return previewFloorStatusOf(s, floor)
+}
+
+func previewFloorStatusOf(s, floor catalog.Schedule) (adminapi.PricingPreviewRowStatus, error) {
 	safe, err := s.CoversCost(floor)
 	if err != nil {
 		return "", err

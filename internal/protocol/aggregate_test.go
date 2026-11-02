@@ -264,7 +264,7 @@ var failures = [...]func(*testing.T, aggregated, map[string]any) any{
 		if got.status != http.StatusOK || choice["finish_reason"] != "error" || obj(choice["message"])["content"] != "Hi" {
 			t.Errorf("status %d:\n%s", got.status, got.body)
 		}
-		if e := obj(m["error"]); e["code"] != "upstream_error" || e["type"] != "api_error" || obj(e["metadata"])["error_type"] != "upstream_error" || e["message"] != "upstream failed" {
+		if e := obj(m["error"]); e["code"] != 502.0 || e["type"] != "api_error" || obj(e["metadata"])["error_type"] != "upstream_error" || e["message"] != "upstream failed" {
 			t.Errorf("error %v", e)
 		}
 		return m["usage"]

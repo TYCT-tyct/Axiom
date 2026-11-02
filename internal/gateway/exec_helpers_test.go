@@ -697,6 +697,12 @@ func (h *harness) check() {
 	}
 }
 
+// settleAs makes the next settlement return f: for a test that learns what to settle only after the call is built.
+func (h *harness) settleAs(f billing.Final) {
+	h.t.Helper()
+	h.exec.Ledger.(*fakeLedger).o.final = f
+}
+
 // ended is the last try of the settlement, or fails.
 func (h *harness) ended() settlement {
 	h.t.Helper()

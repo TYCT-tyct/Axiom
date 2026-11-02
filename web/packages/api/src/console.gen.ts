@@ -1926,6 +1926,8 @@ export interface components {
             finish_reason: string;
             /** @description What failed, empty when the call succeeded. */
             error_kind: string;
+            /** @description The answer came from the response cache: no upstream attempt was made, so usage counts are zero and price is zero. Different from `free`, which is a charge the free-of-charge rules waived. */
+            cache_hit?: boolean;
         };
         /** @description One billed item of a sampling or the attempt's request, at its frozen sale price; no supplier or cost information. */
         ChargeItem: {
