@@ -33,6 +33,10 @@ type RouteDeps struct {
 	// One build's reading prices both the routing snapshot and the model list, so
 	// the price a client reads is the price a call is charged at.
 	Prices func(context.Context, *catalog.Snapshot, []suppliers.Routable, []platform.ExchangeRate) (map[catalog.ModelID]billing.Sold, error)
+	// ByokFee is the site's share of a model's normal sale price, charged when the account's own key serves it, as a
+	// multiplier of the published schedule (billing.ByokFee). Nil is no fee; a node that cannot read it fails the build,
+	// because serving a key at a price nobody confirmed is worse than not serving it.
+	ByokFee func(context.Context) (string, error)
 	// Models is where each published snapshot's model list in OpenRouter's shape goes: the handler serves it,
 	// and it is built in the same build as the snapshot from the same reading (docs/domains/gateway.md「模型列表」).
 	Models *ModelList
@@ -76,6 +80,8 @@ func (c Count) Routable() bool { return c.Endpoints > 0 || c.Offered == 0 }
 // The model list comes from this same reading — the endpoints that made the snapshot, the catalog they were read from and
 // the sale prices they were priced with — so the price a client reads is the price routing charges, and a build that fails
 // publishes neither (Publish).
+//
+//nolint:cyclop,funlen // the build is one linear pass over its sources; splitting it would hide the order
 func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterListing, Count, error) {
 	// Start time bounds freshness even if reading a source stalls during the build.
 	builtAt := time.Now()
@@ -95,6 +101,12 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 	if err != nil {
 		return nil, nil, Count{}, fmt.Errorf("gateway: the sale prices: %w", err)
 	}
+	byokFee := "0"
+	if d.ByokFee != nil {
+		if byokFee, err = d.ByokFee(ctx); err != nil {
+			return nil, nil, Count{}, fmt.Errorf("gateway: the BYOK fee: %w", err)
+		}
+	}
 	items, err := d.UnknownItems(ctx)
 	if err != nil {
 		return nil, nil, Count{}, fmt.Errorf("gateway: the unknown billing items: %w", err)
@@ -109,7 +121,7 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 	built := make([]routing.Endpoint, 0, len(routable))
 	left := map[catalog.ModelID]*leftOut{}
 	for _, r := range routable {
-		e, why := endpointOf(catalogSnap, prices, blocked, r, d.Quality.MeasuredFor(r, time.Now()))
+		e, why := endpointOf(catalogSnap, prices, blocked, byokFee, r, d.Quality.MeasuredFor(r, time.Now()))
 		if why != "" {
 			note(left, catalog.ModelID(r.Model), why)
 			continue
@@ -292,7 +304,8 @@ func listedModelOf(snap *catalog.Snapshot, id catalog.ModelID) (catalog.Model, s
 	return model, ""
 }
 
-func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, r suppliers.Routable,
+//nolint:cyclop,funlen // one endpoint is a long list of fields, read top to bottom
+func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold, blocked map[catalog.ModelID]struct{}, byokFee string, r suppliers.Routable,
 	measured quality.Measures,
 ) (routing.Endpoint, string) {
 	model, why := listedModelOf(snap, catalog.ModelID(r.Model))
@@ -309,6 +322,15 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	}
 	if model.Free() && !sold.Zero() {
 		return routing.Endpoint{}, "a :free model has a non-zero sale price for some audience"
+	}
+	if r.Byok {
+		// The account pays its provider; Axiom charges the site's share of what the model would normally cost. The
+		// schedule is scaled here, once, so the reservation, settlement and refund all use the same amounts.
+		scaled, err := sold.Schedule.Scaled(byokFee, sold.Schedule.Currency())
+		if err != nil {
+			return routing.Endpoint{}, "the site's BYOK fee is not a multiplier"
+		}
+		sold.Schedule, sold.Audiences = scaled, nil
 	}
 	reportable := model.Reportable()
 	if sold.Audiences == nil && billing.Unpriced(sold.Schedule, reportable) != (catalog.Reportable{}) {
@@ -336,7 +358,8 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		Free: model.Free(),
 		// The platform's own: M1's suppliers are the platform's (suppliers' owner scope is not part of Routable), and
 		// the node reaches every one of them from its own address.
-		Owner:   routing.Owner{Site: routing.SiteID(r.Site), Account: routing.AccountID(r.Account)},
+		Owner: routing.Owner{Site: routing.SiteID(r.Site), Account: routing.AccountID(r.Account)},
+		Byok:  r.Byok, ByokFallback: r.ByokFallback,
 		Enabled: true, BalanceOK: r.Funds != nil, Funds: r.Funds, Cost: r.Schedule, Egresses: 1, PoolLow: r.PoolLow,
 		// Every supplier M1 buys from is a relay or reseller, which is what its adapter talks to; nothing records what
 		// one does with the data it is sent, so an endpoint is taken to be the worst case rather than the best: a preset

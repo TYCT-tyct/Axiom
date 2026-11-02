@@ -372,6 +372,10 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 
 `ended_requests`（`EndRequest`）原先的读者是日志的清理 `PurgeJournal`，它删了以后这张表没有读者了：billing 仍在请求进入终态的事务里写它，但 M1 里没有代码读它（对账按尝试与扣费记录匹配，不读它）。它同日志表一起在收缩的发布里删，连同 `EndRequest` 的调用（[Issue #213](https://github.com/TYCT-tyct/Axiom/issues/213)）；若在那之前有代码要读请求的结束时刻，就保留表，并在这里写明谁读。
 
+## 账户自带的供应商 key
+
+账户的 BYOK key 是 `status='byok'` 的账户归属供应商，复用供应商、分组、凭证、端点、成本计划和行级安全，没有第二套加密或调用路径。`CreateByok` 在一个事务里写齐这些行：全零成本计划（用户自己付给供应商）、一条金额 1 的余额和值 1 的单位价值让路由能选到它，凭证用与供应商登录相同的信封加密，`hint` 只存末四位。`ListByok` 只返回名称、provider、末四位、状态、是否允许回落和创建时间，`RevealByok` 只在测试时打开一次明文。401 由适配器归为 `CredentialRejected`，调用路径用 `SetByokRejected` 把凭证写成 `rejected`；只有 `SetByokTestResult` 的成功能把它恢复成 `active`。旧节点按 `status IN ('active','low_balance')` 路由、按 `syncable` 同步，`byok` 不在两边，所以滚动发布不需要同时上线（[账户](../../docs/domains/accounts.md#自带的供应商-keybyok)）。
+
 ## 决策与理由
 
 | 决策 | 理由 | 不选 |

@@ -255,6 +255,10 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 - 不变量：调用拿到的每个 `Relay` 在每条退出路径上都归还节点预算，恰好一次，panic 也不例外。所有权从 `NewRelay` 起就在会话：`stream` 创建时记入 `session.live`（读到一半 panic 也找得到它），`part` 里留着的永远就是 `live`（下一次尝试在创建 `Relay` 之前先放掉它），所以 `left` 转交时 `part` 清空也不会漏，`Run` 退出时 `release` 统一 `Release`。`Relay.Release` 第二次起什么都不做；先行结束的路径（`Finish`、`Fail`）不必管 `live`，而确定丢弃一个 `Relay` 的路径一律经 `session.drop`（`Fail`、`Release` 做完才清 `live`）：丢弃的 `Relay` 缓冲不能因会话还指着它而一直可达，否则退还的预算被下一次尝试再用时（比如等响应头），旧缓冲仍占着内存而没有计数。`drop` 中途 panic 时 `live` 还在，由 `Run` 退出的 `release` 兜底，兜底只有这一条。compact 回复的 `held` 同理：`readWhole` 边读边记入 `session.replyHeld`（读到一半 panic 也找得到），读失败或客户端已走时 `dropReply` 立即退还，否则 `release` 一并归还。
 - 非流式客户端：`RelayOptions.Aggregate`，`Next` 不返回 `Out`，`Finish`、`Fail` 返回整个响应体，`Status()` 给它的状态码，没有内容时的失败是 `RenderError` 的答案，可以换端点（[protocol 的「非流式聚合」](../protocol/README.md#非流式聚合)）；每路输出预算 16 MiB；聚合内存申请不到（`ErrMemory`）是本地容量故障，按对外错误结束，不再回退。网关怎么用它见下文「非流式聚合与 compact」。
 
+## 账户自带的 key
+
+服务这次请求的 `routing.Entry.Byok` 写进 `protocol.Final.IsBYOK`，三种 OpenAI 形状的用量和直接用量的格式据此写 `usage.is_byok`；Messages 的用量没有这个成员，不写。`Pending` 也写，因为它描述的是账户而不是结算结果。路由按 `Entry.Price.Schedule` 收费，BYOK 的价格已在构建快照时按站点费率缩放（[计费](../billing/README.md#定价规则)）。
+
 ## 非流式聚合与 compact
 
 G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggregate`；compact 的回复在 `conclude` 里直接 `respond`）、`pass.go`（compact）。不要流的客户端仍以流调用上游、由网关聚合，compact 则上游不流式（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)），区别在答案怎么得到。

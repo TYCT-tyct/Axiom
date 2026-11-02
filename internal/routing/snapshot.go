@@ -102,6 +102,9 @@ type Endpoint struct {
 	ModelSlug string // the model's catalog slug, frozen with the snapshot so a response names what the route chose
 	Free      bool   // the model is a :free catalog entry, the only kind openrouter/free may choose
 	Owner     Owner
+	// Byok is an endpoint of the account's own provider key, tried before the platform's; ByokFallback says the key
+	// still allows shared capacity for this model when it cannot serve the request.
+	Byok, ByokFallback bool
 
 	LiveHealth  *quality.State
 	Capacity    Capacity

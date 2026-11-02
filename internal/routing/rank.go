@@ -25,6 +25,7 @@ type ranked struct {
 	weight    float64 // Balanced, and Fastest's unmeasured: the chance of being first is proportional to it
 	key       float64 // a random key whose order draws without replacement by weight
 	quality   float64
+	byok      bool // the account's own key: it goes before the platform's endpoints at the same order
 	known     bool // BestQuality: the endpoint has counted evidence, so its score is not unknown
 	explore   bool // Fastest: the unmeasured endpoint this request puts first, so that it gets measured
 }
@@ -41,6 +42,11 @@ const exploreShare = 0.05
 func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 	out := make([]ranked, 0, len(cands))
 	strategy := n.strategy()
+	// A key that refuses shared capacity takes this model's platform endpoints out before anything else looks at them.
+	// It is the account's own visible endpoint, so only the requests of that account are affected.
+	noShared := slices.ContainsFunc(cands, func(c *candidate) bool {
+		return c.Byok && !c.ByokFallback && c.Owner.visibleTo(n.in.Admission)
+	})
 	for _, c := range cands {
 		price := c.priceFor(billing.Audience{Account: accounts.AccountID(n.in.Admission.Account), Tier: n.in.Admission.Tier})
 		if price == nil {
@@ -49,7 +55,7 @@ func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 			}
 			continue
 		}
-		reason, visible := check(c, n, price)
+		reason, visible := check(c, n, price, noShared)
 		switch {
 		case !visible:
 		case reason != 0:
@@ -115,7 +121,7 @@ func (r *Router) explore(out []ranked) {
 // score works out what c is ordered by. Balanced draws its random key here, once, so the order is a sample without
 // replacement: the first is chosen with probability proportional to its weight, the second the same among the rest.
 func (r *Router) score(c *candidate, n *need, strategy Strategy, price *candidatePrice) ranked {
-	s := ranked{candidate: c, price: price, order: n.order(c), notSticky: !r.sticks(c, n, price)}
+	s := ranked{candidate: c, price: price, order: n.order(c), notSticky: !r.sticks(c, n, price), byok: c.Byok}
 	s.slow = slow(c, n.over)
 	s.known = c.Confidence > 0
 	tools := 1.0
@@ -189,6 +195,9 @@ func (r *Router) sticks(c *candidate, n *need, price *candidatePrice) bool {
 // compare orders two candidates; ties end on the endpoint id so the order is the same for the same inputs.
 func compare(a, b *ranked, strategy Strategy) int {
 	if c := cmp.Compare(a.order, b.order); c != 0 {
+		return c
+	}
+	if c := compareBool(!a.byok, !b.byok); c != 0 {
 		return c
 	}
 	if c := compareBool(a.slow, b.slow); c != 0 {

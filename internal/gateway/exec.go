@@ -435,6 +435,9 @@ func (s *session) final(f billing.Final) *protocol.Final {
 		Cost: f.Charged, Currency: s.currency, Estimated: f.Estimated,
 		ServerToolCost: f.ServerToolCost, CacheDiscount: f.CacheDiscount, Files: s.files,
 	}
+	if n := len(s.tries); n > 0 {
+		fin.IsBYOK = s.tries[n-1].entry.Byok
+	}
 	for _, seg := range f.Segments {
 		fin.Usage.Segments = append(fin.Usage.Segments, protocol.Segment{Usage: seg.Usage, Reported: seg.Reported})
 	}

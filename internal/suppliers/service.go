@@ -55,6 +55,9 @@ type Routable struct {
 	// PoolLow says the group's pool has little capacity left: routing halves this endpoint's weight. Only a pool whose
 	// management API reported a low reading sets it; a relay's endpoints keep false.
 	PoolLow bool
+	// Byok says the endpoint is the account's own provider key; routing tries it before the platform's endpoints.
+	// ByokFallback says that key may still use them when it is unusable (docs/domains/routing.md「自带的供应商 key」).
+	Byok, ByokFallback bool
 }
 
 // Platform reports whether the endpoint belongs to the platform rather than a tenant.
@@ -112,7 +115,15 @@ type Service struct {
 	minutes   map[uuid.UUID]*minuteRuntime
 	cancelsMu sync.RWMutex
 	cancels   map[EndpointID]bool // measured by quality: whether the supplier stops when the client does
+
+	// A key the provider refused is marked in its row, once, by a worker: the call path does not wait on a database
+	// write and a key that many requests find bad writes one row (docs/domains/suppliers.md「自带的供应商 key」).
+	rejected   chan rejection
+	rejectOnce sync.Once
 }
+
+// rejection is the credential a provider refused and the supplier it belongs to.
+type rejection struct{ supplier, credential uuid.UUID }
 
 // New makes a service with no endpoints; Reload fills it.
 func New(cfg Config) (*Service, error) {
@@ -147,7 +158,7 @@ func New(cfg Config) (*Service, error) {
 	}
 	s := &Service{
 		unloadable: counter, cfg: cfg, registry: r, now: cfg.Clock, runtime: map[uuid.UUID]*credRuntime{}, cancels: map[EndpointID]bool{},
-		minutes: map[uuid.UUID]*minuteRuntime{}, funds: map[uuid.UUID]*fundsState{},
+		minutes: map[uuid.UUID]*minuteRuntime{}, funds: map[uuid.UUID]*fundsState{}, rejected: make(chan rejection, 64),
 	}
 	s.snap.Store(&snapshot{endpoints: map[EndpointID]*endpoint{}})
 	s.schedules.Store(&map[uuid.UUID]*catalog.Schedule{})
@@ -159,6 +170,7 @@ type credRuntime struct {
 	configuredMax, configuredMinute int32 // last loaded limits, guarded by runtimeMu, retained when no endpoint routes it
 	inflight                        atomic.Int32
 	restUnix                        atomic.Int64 // unix nanoseconds until which the credential is not picked
+	reported                        atomic.Bool  // the provider refused it and the row is being, or was, marked
 	requests                        *minuteRuntime
 }
 
@@ -311,6 +323,7 @@ type endpoint struct {
 	ownerScope              string
 	ownerSite, ownerAccount uuid.UUID
 	poolLow                 bool
+	byok, byokFallback      bool
 }
 
 type credential struct {
@@ -428,6 +441,7 @@ func (s *Service) Routable() ([]Routable, error) {
 			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Codename: ep.codename, Formats: slices.Clone(ep.formats),
 			Quantization: ep.quantization,
 			Schedule:     *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels, PoolLow: ep.poolLow,
+			Byok: ep.byok, ByokFallback: ep.byokFallback,
 		})
 	}
 	slices.SortFunc(out, func(a, b Routable) int { return a.ID.Compare(b.ID) })
@@ -473,7 +487,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName, codename: *r.Codename,
 		formats: formats, quantization: quantization, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
 		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt),
-		poolLow: r.PoolLow.Bool,
+		poolLow: r.PoolLow.Bool, byok: r.Status == "byok", byokFallback: r.ByokFallback,
 	}
 	ep.ownerSite, ep.ownerAccount = owner(r.SiteID), owner(r.AccountID)
 	next.endpoints[r.EndpointID] = ep

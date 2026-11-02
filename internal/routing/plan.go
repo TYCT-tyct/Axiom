@@ -258,7 +258,7 @@ func (r *Router) entry(c *candidate, n *need) Entry {
 	return Entry{
 		Exchange: c.Exchange,
 		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, ModelSlug: c.ModelSlug, Price: c.Price, Limits: limits, MaxOutput: out,
-		Segmentable: segmentable,
+		Segmentable: segmentable, Byok: c.Byok,
 	}
 }
 
@@ -298,9 +298,12 @@ func (c *candidate) callFormat(n *need) (protocol.Format, bool) {
 
 // check holds an endpoint against the request, cheapest tests first, and returns why it is left out, or 0. An endpoint
 // the account cannot see is not left out, it is not there: no reason is given, so no existence is revealed.
-func check(c *candidate, n *need, price *candidatePrice) (reason Reason, visible bool) {
+func check(c *candidate, n *need, price *candidatePrice, noShared bool) (reason Reason, visible bool) {
 	if !c.Owner.visibleTo(n.in.Admission) {
 		return 0, false
+	}
+	if noShared && !c.Byok {
+		return ByokNoFallback, true
 	}
 	if reason = c.unavailable(); reason != 0 {
 		return reason, true

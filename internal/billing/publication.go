@@ -25,6 +25,8 @@ type PricePolicy struct {
 	FloorMultiplier  string `json:"floor_multiplier"`
 	ChangeRatio      string `json:"change_ratio"`
 	MaxIncreaseRatio string `json:"max_increase_ratio"`
+	// ByokFeeBPS is the share of the normal sale price charged on the account's own key, in basis points.
+	ByokFeeBPS int32 `json:"byok_fee_bps"`
 }
 
 // Publication keeps a proposal separately from its current immutable sale version. Empty schedules mean unavailable.
@@ -75,7 +77,7 @@ func LockPricePolicy(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy
 		return PricePolicy{}, err
 	}
 	r, err := queries.LockPricePolicy(ctx, tx, site)
-	return PricePolicy(r), err
+	return PricePolicy{Rev: r.Rev, FloorMultiplier: r.FloorMultiplier, ChangeRatio: r.ChangeRatio, MaxIncreaseRatio: r.MaxIncreaseRatio, ByokFeeBPS: r.ByokFeeBps}, err
 }
 
 // SetPricePolicy uses optimistic concurrency and audits the change in the caller's platform transaction.
@@ -94,6 +96,9 @@ func SetPricePolicy(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.
 			return &RuleError{f.name, "is outside the supported range"}
 		}
 	}
+	if in.ByokFeeBPS < 0 || in.ByokFeeBPS > 10000 {
+		return &RuleError{"byok_fee_bps", "is outside 0 to 10000"}
+	}
 	if err := priceReason(reason); err != nil {
 		return err
 	}
@@ -104,7 +109,7 @@ func SetPricePolicy(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.
 	if old.Rev != in.Rev {
 		return ErrStalePrice
 	}
-	if err := queries.UpdatePricePolicy(ctx, tx, UpdatePricePolicyParams{SiteID: site, FloorMultiplier: in.FloorMultiplier, ChangeRatio: in.ChangeRatio, MaxIncreaseRatio: in.MaxIncreaseRatio}); err != nil {
+	if err := queries.UpdatePricePolicy(ctx, tx, UpdatePricePolicyParams{SiteID: site, FloorMultiplier: in.FloorMultiplier, ChangeRatio: in.ChangeRatio, MaxIncreaseRatio: in.MaxIncreaseRatio, ByokFeeBps: in.ByokFeeBPS}); err != nil {
 		return err
 	}
 	in.Rev++

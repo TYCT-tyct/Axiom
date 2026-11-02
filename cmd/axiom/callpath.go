@@ -201,6 +201,7 @@ func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service,
 		Endpoints:     func(context.Context) ([]suppliers.Routable, error) { return upstreams.Routable() },
 		Catalog:       d.catalog,
 		Prices:        prices,
+		ByokFee:       byokFee(d),
 		Models:        models,
 		UnknownItems:  unknownItems(d.db),
 		Quality:       health,
@@ -413,5 +414,21 @@ func claimedByCatalog(cat *catalog.Catalog) func(catalog.ModelID) (quality.Claim
 			others = append(others, name)
 		}
 		return quality.Claimed{Author: m.AuthorName, Others: others}, true
+	}
+}
+
+// byokFee reads the main site's BYOK rate on every build. The route build is the main site's, so the rate is its: a
+// secondary site's own rate governs calls made against that site, which this node does not serve.
+func byokFee(d callDeps) func(context.Context) (string, error) {
+	return func(ctx context.Context) (rate string, err error) {
+		site, ok := d.accounts.MainSite()
+		if !ok {
+			return "0", nil
+		}
+		err = d.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
+			rate, err = billing.ByokFee(ctx, tx, uuid.UUID(site.ID))
+			return err
+		})
+		return rate, err
 	}
 }
