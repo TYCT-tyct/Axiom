@@ -46,9 +46,10 @@ export function AppShell({
       >
         {t("shell.skipToContent")}
       </a>
+      {/* The frame stays off paper: a printed receipt is the page, not the navigation that led to it. */}
       <nav
         aria-label={t("shell.navigation")}
-        className="sticky top-0 hidden h-dvh flex-col gap-0.5 border-r border-b1 bg-s1 p-3 lg:flex"
+        className="sticky top-0 hidden h-dvh flex-col gap-0.5 border-r border-b1 bg-s1 p-3 lg:flex print:hidden"
       >
         {sidebar}
       </nav>
@@ -57,7 +58,7 @@ export function AppShell({
         {banner}
         <header
           className={cn(
-            "sticky top-0 z-10 flex h-12 items-center gap-2 border-b border-b1 bg-bg px-4",
+            "sticky top-0 z-10 flex h-12 items-center gap-2 border-b border-b1 bg-bg px-4 print:hidden",
             !header && "lg:hidden",
           )}
         >

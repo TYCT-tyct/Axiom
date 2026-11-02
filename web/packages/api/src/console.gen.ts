@@ -1057,7 +1057,7 @@ export interface paths {
         };
         /**
          * The account's top-up orders
-         * @description Newest first, `limit` per page, continued with `next_cursor`. Only the account's own orders; another account's never appear. Each order carries its refunds, oldest first, so the page can show where a request stands without a second call. A node of the previous release sends no `refunds` and no `refund_allowed`; the page then shows refunds as unavailable instead of guessing.
+         * @description Newest first, `limit` per page, continued with `next_cursor`. Only the account's own orders; another account's never appear. Each order carries its refunds, oldest first, so the page can show where a request stands without a second call. A node of the previous release sends no `refunds`, `refund_allowed` or paid facts; the page then shows refunds and receipts as unavailable instead of guessing.
          */
         get: operations["listOrders"];
         put?: never;
@@ -1087,7 +1087,7 @@ export interface paths {
         };
         /**
          * One top-up order
-         * @description The account's own order, as it is now. Only a waiting order has a `checkout`. An order of another account is a 404 like one that does not exist.
+         * @description The account's own order, as it is now. Only a waiting order has a `checkout`. An order of another account is a 404 like one that does not exist, so no one reads another account's receipt. Once paid it carries the facts a receipt renders: `paid_at`, `paid_total`, `credited` and its refunds.
          */
         get: operations["getOrder"];
         put?: never;
@@ -2008,6 +2008,7 @@ export interface components {
             qr_code?: string;
             client_secret?: string;
         };
+        /** @description A top-up order, with the facts a receipt renders once it is paid. A receipt is this order read, not a second record: nothing in it can change after the payment settles. */
         Order: {
             id: components["schemas"]["OrderId"];
             state: components["schemas"]["OrderState"];
@@ -2015,6 +2016,15 @@ export interface components {
             credits: components["schemas"]["Money"];
             total: components["schemas"]["PayAmount"];
             fee: components["schemas"]["PayAmount"];
+            /**
+             * Format: date-time
+             * @description When the payment was confirmed, the time a receipt shows. Absent while the order is unpaid, and on a node of the previous release, where the page offers no receipt.
+             */
+            paid_at?: string;
+            /** @description What the channel took, in the payment currency. It differs from `total` when a payment arrived late and was converted at the arrival rate, or when an amount that did not match the quote was credited as it came. Absent while the order is unpaid, and on a node of the previous release. */
+            paid_total?: components["schemas"]["PayAmount"];
+            /** @description The credits entered into the account, in the site's currency. It differs from `credits`, the amount asked for, for the same reasons as `paid_total`. Absent while the order is unpaid, and on a node of the previous release. */
+            credited?: components["schemas"]["Money"];
             /** Format: date-time */
             created_at: string;
             /**

@@ -101,6 +101,12 @@ type Order struct {
 	ExpiresAt  time.Time
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// PaidAt, PaidTotal, PaidFee and Credited are what the channel took and what was credited, which a partial or late
+	// payment makes differ from the quote above. They are nil until the order is paid, and never change once it is.
+	PaidAt    *time.Time
+	PaidTotal *int64
+	PaidFee   *int64
+	Credited  *int64
 	// RefundAllowed is the merchant account's policy for user refund requests. The request itself still checks the
 	// channel's current capability; this only says whether the page should offer it.
 	RefundAllowed bool
@@ -323,38 +329,6 @@ func readPlacedOrder(ctx context.Context, tx pg.Tx, r CreateOrder) (Order, bool,
 		return Order{}, false, err
 	}
 	return order, true, nil
-}
-
-// readOrder reads one order of the transaction's scope.
-func loadOrder(ctx context.Context, tx pg.Tx, id OrderID) (Order, error) {
-	rows, err := queries.ReadOrder(ctx, tx, uuid.UUID(id))
-	if err != nil {
-		return Order{}, fmt.Errorf("payments: read order %s: %w", id.TypeID(), err)
-	}
-	if len(rows) == 0 {
-		return Order{}, ErrNotFound
-	}
-	return orderOf(rows[0])
-}
-
-// orderOf is a stored order as the module passes it around.
-func orderOf(r ReadOrderRow) (Order, error) {
-	pay, err := platform.ParseCurrency(r.PayCurrency)
-	if err != nil {
-		return Order{}, fmt.Errorf("payments: order %s is paid in %q: %w", OrderID(r.ID).TypeID(), r.PayCurrency, err)
-	}
-	var c Checkout
-	if len(r.Checkout) > 0 {
-		if err = jsonx.UnmarshalKnown(r.Checkout, &c); err != nil {
-			return Order{}, fmt.Errorf("payments: order %s has a checkout that does not parse: %w", OrderID(r.ID).TypeID(), err)
-		}
-	}
-	return Order{
-		ID: OrderID(r.ID), SiteID: r.SiteID, AccountID: r.AccountID, UserID: r.UserID, MerchantID: MerchantID(r.MerchantID),
-		Method: Method(r.Method), State: State(r.State), Credits: r.Credits, Total: Money{pay, r.Total}, Fee: r.Fee,
-		TradeNo: r.TradeNo, Checkout: c, ExpiresAt: r.ExpiresAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
-		RefundAllowed: r.RefundAllowed,
-	}, nil
 }
 
 func paymentNotifyURL(returnURL string, merchant MerchantID) string {

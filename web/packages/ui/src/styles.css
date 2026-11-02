@@ -176,3 +176,12 @@
     }
   }
 }
+
+/* Paper is light: a receipt printed from the dark scheme would be pale text on white. The selector carries the theme
+   attribute so that it also wins over an explicit dark choice made on screen. */
+@media print {
+  :root,
+  :root[data-theme="dark"] {
+    color-scheme: light;
+  }
+}
