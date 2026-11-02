@@ -212,11 +212,12 @@ func ResponsesMaxToolCalls(body []byte) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
+		limit := nameIs(name, "max_tool_calls") // name is only valid until the next read refills the buffer
 		value, err := dec.ReadValue()
 		if err != nil {
 			return 0, err
 		}
-		if !nameIs(name, "max_tool_calls") {
+		if !limit {
 			continue
 		}
 		n, err := strconv.ParseInt(string(bytes.TrimSpace(value)), 10, 64)

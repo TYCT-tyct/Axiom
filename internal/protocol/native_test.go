@@ -148,3 +148,26 @@ func TestInjectNativeSearchKnowsEveryEscape(t *testing.T) {
 		}
 	}
 }
+
+// TestResponsesMaxToolCalls: the limit is found wherever it sits, including after whitespace long enough that reading
+// the value refills the decoder's buffer over the member name.
+func TestResponsesMaxToolCalls(t *testing.T) {
+	gap := strings.Repeat(" ", 1<<20)
+	for _, tc := range []struct {
+		name, body string
+		want       int64
+	}{
+		{"absent", `{"model":"m","input":"hi"}`, 0},
+		{"set", `{"model":"m","max_tool_calls":3}`, 3},
+		{"zero means none", `{"max_tool_calls":0}`, 0},
+		{"after other members", `{"input":[{"type":"text"}],"tools":[],"max_tool_calls":2}`, 2},
+		{"whitespace between name and value", `{"model":"m","max_tool_calls":` + gap + `1}`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResponsesMaxToolCalls([]byte(tc.body))
+			if err != nil || got != tc.want {
+				t.Fatalf("ResponsesMaxToolCalls = %d, %v; want %d", got, err, tc.want)
+			}
+		})
+	}
+}
