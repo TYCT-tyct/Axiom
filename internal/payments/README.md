@@ -16,7 +16,7 @@ type State string    // 订单状态："pending"、"paid"……；转移表是 p
 type Order struct{}  // ID、站点、账户、用户、商户账户、付款方式、状态、额度、总额、手续费、网关订单号、checkout、有效期、时间戳；RefundAllowed 是商户账户此刻是否允许用户申请退款
 type CreateOrder struct{} // Site、Account、User、Method、Credits、Key（幂等键）、ReturnURL、ClientIP、Mobile
 
-func Open(c Config) (*Payments, error) // Plugins（按 Kind 登记）、*pg.DB、平台范围、Keyring、egress.Client；告警经平台事务信号
+func Open(c Config) (*Payments, error) // Plugins（按 Kind 登记）、*pg.DB、平台范围、Keyring、egress.Client；持久告警经平台事务信号，突增信号经 Config.Alerts，Config.Instance 是信号键里的节点身份，Config.Signals 是节点内共享的计数与未恢复状态
 func (p *Payments) Options(ctx context.Context, s pg.Scope, site accounts.Site, credits int64) ([]Option, error) // 充值页：每种付款方式的总额、手续费、币种；显示的是此刻下单会选中的商户账户的报价：与 `choose` 共用一条选择规则（`ranked`），中间没有别的订单插进来时，订单就落在页面显示的那个账户上
 func (p *Payments) CreateOrder(ctx context.Context, s pg.Scope, r CreateOrder) (Order, Checkout, error)  // 账户范围；事务、渠道调用、事务
 func (p *Payments) Cancel(ctx context.Context, s pg.Scope, id OrderID) (Order, error)                     // 待支付 → 已取消，减回用量，之后请渠道关单
@@ -189,7 +189,45 @@ type Rejected struct{ Code, Message string }                      // 渠道明�
 
 本机实测 `gmwallet/epusdt@sha256:9d2fef82fb875e83f968870bee010ce593ef7bcb5362d09ef1c7f871fa27c55e`（v2.0.0，源码提交 `619cecb11d6bbd1dcdd1b698ee08b37fc722d3e3`）：预设前缀下的 `api.php?act=order` 返回 HTTP 404，根路径的 `api.php` 返回 HTML；用镜像自带的默认商户凭证签名后结果相同。因此官方镜像的下单 → GET 回调 → 查单确认 → 入账无法通过，启用的商户保存按设计被拒绝；`TestEpusdtOfficialImageQueryGate` 重跑这条检查（先初始化镜像，再把 loopback HTTP 地址设进 `AXIOM_EPUSDT_TEST_URL`；代理原样转发，不补协议端点）。`TestEpusdtPublicStatusCannotAuthorizeSave` 用同一张路由表证明公开状态即使回答已支付也不能让商户保存，探测不会改问公开状态。
 
-结论：Epusdt 预设保留但只能保存为停用；开放 USDT 要等一个提供商户查单的易支付兼容网关，由负责人选定并实测后重新验收 E1-4（[支付的「加密货币」](../../docs/domains/payments.md#加密货币)）。真实钱包、正式商户、可公网访问的回调和生产部署仍由负责人提供与决定。
+结论：Epusdt 预设保留但只能保存为停用。开放 USDT 的网关已选 EzPay v1.1.9，作为同一个 `EasyPay{}` 插件的 `preset=ezpay` 接入，见下节；真实钱包、正式商户、可公网访问的回调和生产部署仍由负责人提供与决定（[支付的「加密货币」](../../docs/domains/payments.md#加密货币)）。
+
+### EzPay 预设
+
+`EasyPay{}` 的第二个预设，`kind` 仍是 `easypay`，不新增渠道种类、表或凭证格式。选择 [EzPay v1.1.9](https://github.com/opinework/ezpay/releases/tag/v1.1.9)（2026-10-18，GPL-3.0，源码提交 `0912d988146ea83a1946b5fd963d104ab111b088`）：它是自托管、易支付兼容的 USDT 网关，`submit.php` 下单，`GET /api.php?act=order` 用 `pid`、`key` 和 `out_trade_no` 查单，返回法币 `money` 与 `trade_status`；回调是 GET，除易支付字段外还带 `currency`、`pay_currency`、`pay_amount`。比较和选择理由见[支付的「USDT 网关选择」](../../docs/domains/payments.md#usdt-网关选择)。
+
+预设配置：
+
+```json
+{"preset":"ezpay","gateway":"https://pay.example.com","pid":"1001"}
+```
+
+`Settings` 只接受 `preset`、`gateway`、`pid`，严格解析，未知成员拒绝；`gateway` 必须是 HTTPS，去掉末尾 `/` 和 `/submit.php`、`/api.php` 别名，不能带用户信息、查询串或片段；`pid` 是 1–32 位的字母、数字、下划线或连字符，网关的 `p_id` 列就是 `varchar(32)`。`Secrets` 只接受 `key` 和轮换期的 `old_key`，其他名字拒绝。付款币种必须是 `USD`；方式固定为 `usdt.tron`，`MethodInput.Upstream` 必须是 `usdt_trc20`，`Methods()` 只返回 `usdt.tron`，由核心拒绝其他方式。预设默认并强制 `mode=redirect`、`query=true`，拒绝 API 下单、cid、关单和在线退款。`Caps` 只有 `CapQuery`；`Close`、`Refund`、`QueryRefund` 没有声明，核心不会调用。
+
+下单只生成跳转链接：`GET /submit.php?pid=…&type=usdt_trc20&out_trade_no=…&notify_url=…&return_url=…&name=…&money=…&currency=USD&sign=…&sign_type=MD5`，`money` 是按 USD 小数位格式化的法币金额，不是 USDT 数量，`out_trade_no` 是订单 TypeID。创建签名照 EzPay 文档的 RFC 3986 路径：先解码一次（`DecodeIfEncoded`），再编码并排序，末尾拼密钥取 MD5（[`internal/util/sign.go:42`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/util/sign.go#L42)）；回调签名不同，用解码后的原始值直接拼接（[`internal/util/sign.go:269`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/util/sign.go#L269)）。预设把两种签名分开实现，创建用 `ezPayCreateSign`，回调仍用 `easyPaySign`，不能用错。
+
+查单是 `GET /api.php?act=order&pid=…&key=…&out_trade_no=…`（[`internal/handler/epay.go:475`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/handler/epay.go#L475)），不是 POST。`code=1` 时按 `trade_status` 映射：`TRADE_SUCCESS` 已付、`WAIT_BUYER_PAY` 待付、`TRADE_CLOSED` 已关闭；`code=-1` 且 `msg` 明确“订单不存在”按待付处理，让下单应答丢失仍能继续查；其他 `code=-1`（密钥错误、商户不存在）是确定拒绝。`money` 用 USD 的小数位精确解析，回显的 `out_trade_no` 必须等于我们的订单号；`type` 非空且不是 `usdt_trc20` 时返回金额无效哨兵，让核心进入待处理而不是入账。v1.1.9 的查单响应没有 `currency` 字段，所以按配置的 USD 解析；回调有该字段。
+
+回调接受 GET 和 `application/x-www-form-urlencoded` POST，白名单在易支付字段上增加 `currency`、`pay_currency`、`pay_amount`，所有非空字段参与原始值 MD5，`sign_type` 只认 MD5；`pid` 必须等于配置。`currency` 为空时返回金额无效哨兵，进入待处理；非 USD 的三字母法币按回调的币种和金额返回 `Notice`，核心按币种不符转待处理，绝不把人民币金额当美元入账。`type` 非空且不是 `usdt_trc20` 时同样返回无效金额哨兵。回调签名可用当前或 `old_key` 验过，便于轮换期在途订单收敛。
+
+保存为启用（包括更新与重新启用）前，`SaveMerchant` 在数据库事务外发一次 GET，用随机不存在的订单号探测带 PID 和密钥的查单，只接受 `code=-1` 且明确“订单不存在”；404、HTML、超时、密钥错误、商户不存在及不明确的 JSON 都拒绝启用，不写商户；停用只做本地校验，不依赖网关健康。十秒出站期限、1 MiB 响应体上限、失败信息不带响应体、PID、查询串或密钥。预设参与商户身份保护：`preset`、`gateway`、`pid`、`sign_type` 在订单在途时不能改，密钥也不能换。查单在保存后失效时，核心仍要求确认后入账。
+
+滚动发布：`preset=ezpay` 是商户身份的一部分，旧节点不认识它，`Open` 会失败，回调返回 503，商户不可用。上线顺序是先让所有节点升级到认识该预设的版本，再创建或启用第一个 EzPay 商户；不能在新节点创建后把回调转到旧节点。没有迁移和契约字段变化。
+
+测试：`TestEzPayCreateSignatureVectors` 固定创建签名的两条向量，`TestEzPayConfiguration` 覆盖 USD、PID、模式、关单/退款/cid、密钥名，`TestEzPayCreateBuildsASignedRedirect` 覆盖跳转参数与金额，`TestEzPayQueryShapes` 覆盖待付、已付、关闭、缺失、错密钥、回显和未知状态，`TestEzPayVerify` 覆盖额外字段、错签、错商户、其他法币和其他链，`TestEzPaySaveRequiresAuthenticatedQuery` 覆盖保存探测与停用不依赖网关，`TestEzPayPollCreditsALostCallback` 覆盖丢回调后按查单入账。
+
+官方镜像测试 `TestEzPayOfficialImage` 是 opt-in：需要已初始化的 EzPay v1.1.9 镜像（有默认商户和至少一个 TRC20 钱包）监听 loopback HTTP，并让镜像能访问回调地址。
+
+```sh
+AXIOM_EZPAY_TEST_URL=http://127.0.0.1:6088 \
+AXIOM_EZPAY_TEST_PUBLIC_HOST=203.0.113.10 \
+AXIOM_EZPAY_TEST_KEY='<merchant-key>' \
+AXIOM_EZPAY_TEST_ADMIN_PASSWORD='<admin-password>' \
+go test ./internal/payments -run TestEzPayOfficialImage -count=1 -v
+```
+
+镜像需用 host 网络（或其它能到达 `AXIOM_EZPAY_TEST_PUBLIC_HOST` 的方式）；`AXIOM_EZPAY_TEST_PID` 默认 `1001`，`AXIOM_EZPAY_TEST_KEY` 和 `AXIOM_EZPAY_TEST_ADMIN_PASSWORD` 必须提供。测试用 TLS 反向代理只把 loopback 地址交给插件，原样转发协议；它验证保存探测、下单、查单、丢回调补单入账，以及另一笔直接下单的真实回调送达和验签。2026-11-02 在 `ezpay:test-v1.1.9`（tag `v1.1.9`，SQLite，host 网络）上通过。
+
+风险与边界：EzPay v1.1.9 没有关单和退款接口，`api.php?act=refund` 明确拒绝退款（[`internal/handler/epay.go:297`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/handler/epay.go#L297)），退款只能线下登记；只收 USD，其他法币需要网关实测后另加；回调地址会被网关的 SSRF 检查拒绝 localhost 和私网地址（[`internal/service/notify.go:132`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/service/notify.go#L132)），本机回调测试要用可公网访问的地址或 host 网络；没有“手动完成订单”的商户接口，补单只能依赖查单；网关自己的链上扫描器负责确认数，Axiom 看不到链上交易，只认它返回的法币金额与状态。
 
 ### 微信支付配置与边界
 
@@ -224,7 +262,7 @@ payments 引用 billing，在自己的事务里调用（[总体架构的规则 5
 
 `ReadSiteSettings`、`SetSiteSettings` 读写收款开关与额度上下限；复用 settings 表，省略上下限表示不限，其余付款规则不变。站点专属事务咨询锁串行化首次 upsert 与审计，修改和前后值审计同事务。管理 HTTP 入口负责 MFA、sites.manage、CSRF、理由、幂等和金额币种校验。
 
-`TestMerchant` 复用调用方的幂等认领事务及连接读取、解封既有商户，再在认领仍开启时调用渠道的只读测试；网络期限为 10 秒，不再嵌套打开第二个数据库连接。易支付用带认证的 `api.php?act=query` 检查商户，Epusdt 使用已有的不存在订单查询探测，微信支付用随机不存在的订单号查单并要求签名正确的 `ORDER_NOT_EXIST`；都不创建应付订单、不转钱、不返回网关正文；商户查询响应可能带回密钥和结算个人信息，因此只取状态码，不持久化或记录响应原文。无此能力的插件返回 unsupported；网络/认证失败返回 failed，并写含商户 ID、请求 ID 和渠道脱敏错误的 Warn 日志。`TestMerchantConfigQuery` 检查认证参数、成功/拒绝/非 JSON/HTTP 错误及响应脱敏，`TestPaymentSettingsBoundsAndIsolation` 检查精确大额、上下限与跨站拒绝。
+`TestMerchant` 复用调用方的幂等认领事务及连接读取、解封既有商户，再在认领仍开启时调用渠道的只读测试；网络期限为 10 秒，不再嵌套打开第二个数据库连接。易支付用带认证的 `api.php?act=query` 检查商户，Epusdt 使用已有的不存在订单查询探测，EzPay 用 `api.php?act=order` 的随机不存在订单查询探测，微信支付用随机不存在的订单号查单并要求签名正确的 `ORDER_NOT_EXIST`；都不创建应付订单、不转钱、不返回网关正文；商户查询响应可能带回密钥和结算个人信息，因此只取状态码，不持久化或记录响应原文。无此能力的插件返回 unsupported；网络/认证失败返回 failed，并写含商户 ID、请求 ID 和渠道脱敏错误的 Warn 日志。`TestMerchantConfigQuery` 检查认证参数、成功/拒绝/非 JSON/HTTP 错误及响应脱敏，`TestPaymentSettingsBoundsAndIsolation` 检查精确大额、上下限与跨站拒绝。
 
 ## 不变量
 
@@ -309,6 +347,11 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 - **管理调查**：`ListDiscrepancies`、`GetDiscrepancy`、`InvestigateDiscrepancy` 经调用方的范围事务读取；调查写入 `resolved`、操作者、时间和说明并记审计、清除平台告警，不触碰订单、余额和退款。管理 API 的三项操作都需 MFA 和平台 `sites.manage`；变更需 CSRF、理由和幂等键。响应的新字段全部可选；旧付款差异中的 JSON 整数金额读取时转成十进制文本，避免大于 2^53 的最小单位值被舍入。列表一页最多 100 行，以最后一行 UUID 的 `before` 继续；记录本身用 UUID，站点、账户、商户、订单引用沿用各自的 TypeID。资金结论需调用独立的提案与审批接口。
 - **范围**：回调和两个任务用 `cmd/axiom` 交来的平台范围；控制台用 accounts 交出的账户范围，站长后台用站点范围。
 
+### 告警与站长通知
+
+- `payments.verify_failed`、`payments.query_failed`、`payments.rate_limited` 在 `Payments` 内按 UTC 分钟窗口计数，每个完整窗口结束时通过 `Config.Alerts` 的非阻塞 `Sink` 发一条完整计数（1 次也发），是否通知由管理员规则的阈值决定；`payments.merchant_unreadable` 按商户首次解不开立即发，配置重新打开时 `Resolve`。每请求只加一个整数，不写数据库；计数只有每种信号每个键一个，内存有界。合并键是 `Config.Instance + "/" + 来源`，所以多节点互不恢复；节点身份必须和 `Alerts` 一起提供。同一节点的监听器、后台任务和管理入口传入同一个 `Config.Signals`，否则一分钟会被拆成几份计数，后台规则可能看不到合计。信号名、合并键和恢复见[告警信号](../../docs/domains/observability.md#告警信号事件与规则e5-3)。
+- `recordSave` 在审计前调用 accounts 的 `RecordSitePaymentNotice`，同一事务为二级站点 owner account 的活跃用户排一条 `site_payment_changed`；主站没有 owner，不排。通知或审计任一步失败都回滚整次保存，每次改动生成新来源；保存事务和幂等键保证同一次改动只排一条。
+
 ### 兑换码
 
 - **生成**：`IssueCodes` 在调用方（管理后台的幂等声明）事务里校验面额 > 0、数量 1–100、备注至多 200 字、有效期在将来，用 `crypto/rand` 取 20 位 Crockford Base32，逐条插入 `redeem_codes`（只存 SHA-256 和末四位），写一条 `redeem_code.issue` 审计，返回带明文的码。同一批的码面额、备注、有效期相同；生成是全部成功或全部回滚。幂等声明里保存的应答已经把 `code` 去掉：同键重放回同一批的 ID、面额和提示，不再有明文，这样库里任何一处都没有可用的码。
@@ -370,7 +413,7 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | E1-2d `feat(payments): expose the console order contract` | 控制台订单契约与处理器：按站点域名生成 https 返回地址，不收浏览器传入的返回地址；每 IP 下单/失败限流，默认每小时 20/10 次，计数故障不放行；按订单 `State` 与 `Checkout` 映射重放应答（#389 评审第 10 项） | IP 限流边界（20/21、10/11 次，同 /64 与映射 IPv4 归并，窗口到期重置）、十个账户同 IP 并发只放行限额、计数故障（表上的触发器）下单被拒且渠道没被问、失败计数故障时订单仍是待支付；服务器生成返回地址（请求带 `return_url` 被契约拒绝，渠道收到的是登记 origin 加 `/console/balance`，且该路径在公共路由上命中控制台页面）；失败单重放回 422、无 checkout 的待支付单（结果未知）重放回 202 且不带支付链接、已取消的回 200；同键并发只问一次渠道；CSRF、会话、别的账户的订单读/取消/核验一律 404、渠道不被问；`Retry-After` |
 | E1-2e `feat(payments): list orders and decide refunds in the admin API` | 管理端订单列表（用户、用户账户、状态、渠道、日期筛选与游标）与退款队列/批准/驳回；站点范围、金额单位、审计与幂等；批准要求另一人；本地决策与幂等答案同事务 | 筛选与游标分页；站点隔离；退款只列本站；金额文本精确；批准与驳回写审计，重放只做一次；自批 403，终态 409，字段错误 422；同一键不能用于两笔退款；答案写入失败时批准与审计一起回滚 |
 | E1-3 `feat(payments): add the easypay protocol channel` | 易支付插件：配置项（[支付的「易支付协议插件」](../../docs/domains/payments.md#易支付协议插件)）、跳转与接口两种下单、验签、白名单、查单确认、关单、退款 | 按协议自写的签名向量；参数走私（下单参数里嵌 `trade_status`）被拒；多余参数、`pid` 不符被拒；GET 与 POST 回调；PHP 风格的字符串整数、明确失败码优先、回显订单号不符；相对支付链接补全、`//` 开头被拒；退款响应是 HTML、空、字符串 `code`；退款先按订单号、明确"订单不存在"才按网关订单号；全部经出站客户端，日志和链路里没有查询串；本机假网关的端到端 |
-| E1-4 `feat(payments): take USDT through an easypay-compatible gateway` | Epusdt 作为易支付商户账户的接入与预设：`usdt.tron` 映射、数字 `pid`、法币金额；退款只能线下；接入前实测它的查单接口 | 用 Epusdt 官方镜像在本地部署后的下单、GET 回调、查单确认、入账；`money=100.0000` 精确解析；查单不可用时这个商户账户不能保存为启用，停用不依赖网关 |
+| E1-4 `feat(payments): take usdt through the ezpay preset` | EzPay v1.1.9 作为易支付商户账户的 `preset=ezpay`：`usdt.tron` 到 `usdt_trc20` 的映射、USD、GET 查单、额外回调字段、创建与回调两种签名；退款只能线下；Epusdt 预设保留但只能停用 | 用 EzPay 官方镜像在本地部署后的保存探测、下单、GET 回调、查单确认、丢回调补单入账；`money` 按 USD 精确解析；缺少查单、密钥错误或商户不存在时这个商户账户不能保存为启用，停用不依赖网关；`Caps` 只有查单，关单和退款不声明 |
 | E1-9 `feat(payments): take WeChat Pay through the official API v3` | 微信支付插件：配置（平台证书和微信支付公钥两种验签、APIv3 密钥、商户证书序列号）、Native 与 H5 下单、请求签名、应答与回调验签、AES-256-GCM 解密、查单、关单、退款与退款查询、后台只读测试；没有迁移和契约变化 | 请求签名串和应答/回调验签串逐字节向量；证书模式与公钥模式各验一次，旧证书/旧公钥可验；篡改正文、未知序列号、超 5 分钟的回调、错 `mchid`/`appid` 被拒；回调金额缺失/非法/非 CNY 的三种状态；Native/H5 下单回显校验；查单状态映射与签名正确的 `ORDER_NOT_EXIST`；退款先查原单、回显金额不符为未知、`CLOSED` 失败、`PROCESSING`/`ABNORMAL`/404 保持待确认；后台测试只认 `ORDER_NOT_EXIST`；本机 TLS 网关的端到端（下单、加密回调、查单确认入账、重放、丢回调补单、关单、退款、未知退款查询收敛、密钥不外泄） |
 | E1-5 `feat(payments): reconcile unfinished orders and daily channel statements` | `payments.poll` 的商户并发上限与熔断（每单退避和过期后补查由 E1-2c 提供）；`payments.reconcile`；待处理记录的管理页与告警 | 丢回调由补单入账；一笔订单在有效期内的查询次数符合退避；一个商户账户超时不挡其他账户，连续未知触发暂停和告警；不能关单的渠道过期后付款，在补查窗口内补到；现金分录与订单不符、用量计数与订单复算不符时出现待处理记录并告警；同一差额重复上报只留一行 |
 | E1-6a `feat(billing): freeze paid credit as replayed events` | billing：冻结、解冻、退款三种带序号的交易，批次的冻结状态，重放、准入、到期都按冻结额处理；`FreezeRefund`、`SettleRefund`、`ReleaseRefund`（[billing 的「额度批次的分配与到期」](../billing/README.md#额度批次的分配与到期)） | 随机冻结、解冻、退款、扣费、到期，从头重放等于现场，且从任意位置续放相同（扩展 `TestReplayProperty`）；冻结期间并发调用花不掉冻结的额度；到期不作废冻结的额度；冻结后余额底线以下的扣费不动冻结额度；billing 不变量①–⑦（⑦ 随本 PR 加入）在冻结后成立 |
@@ -379,4 +422,4 @@ schema `payments`，迁移在 `migrations/`，查询在 `queries/`。每张表 E
 | E1-8 `feat(payments): redeem codes into credit` | 表 `redeem_codes`、`redeem_redemptions`、`redeem_attempts` 与迁移；`IssueCodes`、`Redeem`、`ListCodes`、`DisableCode`、`ListRedemptions`；billing 的 `CreditRedeem`（来源 `redeem`，迁移 billing 00033）；管理与控制台契约和页面 | 只存哈希、明文只在生成应答；一个码并发只兑一次（两个账户、一个账户两次）；同键重放回同一笔；已用、过期、已停用、无效各自被拒；账户 30/31、IP 100/101 的边界与计数故障拒绝；停用幂等且写审计；列表/历史不含码；站点与账户隔离 |
 | #310 `feat(payments): take Alipay through the official channel protocol` | `Alipay{}` 插件（配置、三种下单产品、RSA2 签名与官方验签、查单、关单、退款、退款查询、商户测试）与 `cmd/axiom` 的登记；`RefundCall.SentAt`；无迁移、无契约字段 | 签名原文与应答节点原文、篡改/换钥/旧公钥、`app_id`/`seller_id` 绑定、三种产品与非法链接、金额缺失/无效/精度、`ACQ.TRADE_NOT_EXIST` 与其他业务错误的分类、退款成功/待查/确定失败/无记录满 10 分钟、丢回调后补单入账、未知退款用同一 `rfd_` 查询收敛；本地 TLS 网关覆盖下单 → POST 回调 → 查单确认 → 重复回调 → 关单 → 退款 → 退款查询 |
 
-**上线门槛**：主站打开"是否开放充值"之前，E1-3 在负责人提供的真实网关上做小额实测（下单、回调、查单确认、关单、退款、手续费的舍入、币种配置），结果记在 [#309](https://github.com/TYCT-tyct/Axiom/issues/309)；没有这份记录不打开。USDT 另需一个提供商户查单的易支付兼容网关，按 E1-4 跑通下单、GET 回调、查单确认、入账后才开放；Epusdt 已发布版本不满足（见上）。支付宝同样要等负责人的真实商户和 ICP 备案，用官方沙箱协议与录制样本只能证明代码行为；真实商户的下单、回调、查单、关单、退款和手续费实测记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有这份记录前不创建生产商户账户。Stripe 的商户凭证和真实沙箱小额实测（Checkout 下单、真实 webhook 端点、`checkout.session.completed`/异步付款、退款、拒付、币种与手续费）由负责人在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497) 记录，代码只对官方协议、官方 SDK 和本地假 Stripe 服务验证；没有这份记录不创建生产 Stripe 商户账户。微信支付在负责人提供商户号、APIv3 密钥、商户 API 证书和平台证书或公钥后，按 E1-9 在真实沙箱或商户上做小额实测（Native 扫码、H5、回调、查单、关单、退款、退款查询），结果记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)；没有这份记录不打开。上线顺序是先让所有节点和页面升级，再建第一个 Stripe 或微信支付商户账户。
+**上线门槛**：主站打开"是否开放充值"之前，E1-3 在负责人提供的真实网关上做小额实测（下单、回调、查单确认、关单、退款、手续费的舍入、币种配置），结果记在 [#309](https://github.com/TYCT-tyct/Axiom/issues/309)；没有这份记录不打开。USDT 使用 EzPay v1.1.9，按 E1-4 跑通保存探测、下单、GET 回调、查单确认、丢回调补单入账后才开放；Epusdt 已发布版本没有商户查单，只能停用（见上）。EzPay 的服务器、收款钱包、商户号和可公网访问的回调由负责人在接入时提供，真实链上小额实测记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有记录前不创建生产商户账户；所有节点先升级到认识 `preset=ezpay` 的版本，再创建第一个商户。支付宝同样要等负责人的真实商户和 ICP 备案，用官方沙箱协议与录制样本只能证明代码行为；真实商户的下单、回调、查单、关单、退款和手续费实测记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有这份记录前不创建生产商户账户。Stripe 的商户凭证和真实沙箱小额实测（Checkout 下单、真实 webhook 端点、`checkout.session.completed`/异步付款、退款、拒付、币种与手续费）由负责人在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497) 记录，代码只对官方协议、官方 SDK 和本地假 Stripe 服务验证；没有这份记录不创建生产 Stripe 商户账户。微信支付在负责人提供商户号、APIv3 密钥、商户 API 证书和平台证书或公钥后，按 E1-9 在真实沙箱或商户上做小额实测（Native 扫码、H5、回调、查单、关单、退款、退款查询），结果记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)；没有这份记录不打开。上线顺序是先让所有节点和页面升级，再建第一个 Stripe 或微信支付商户账户。

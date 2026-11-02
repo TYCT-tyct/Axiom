@@ -11,20 +11,26 @@ import (
 )
 
 func (c *easyPayChannel) validateMerchant(in MerchantInput) error {
-	if c.settings.Preset != "epusdt" {
-		return nil
-	}
-	for i, method := range in.Methods {
-		if method.Upstream != "usdt.tron" {
-			return &FieldError{Field: "/methods/" + strconv.Itoa(i) + "/upstream", Reason: "Epusdt requires usdt.tron"}
+	switch c.settings.Preset {
+	case "epusdt":
+		for i, method := range in.Methods {
+			if method.Upstream != "usdt.tron" {
+				return &FieldError{Field: "/methods/" + strconv.Itoa(i) + "/upstream", Reason: "Epusdt requires usdt.tron"}
+			}
 		}
+	case "ezpay":
+		return c.validateEzPayMerchant(in)
 	}
 	return nil
 }
 
 // Only save probes the gateway: opening a stored channel must not add network I/O to callbacks.
 func (c *easyPayChannel) probe(ctx context.Context) error {
-	if c.settings.Preset != "epusdt" {
+	switch c.settings.Preset {
+	case "ezpay":
+		return c.ezPayProbe(ctx)
+	case "epusdt":
+	default:
 		return nil
 	}
 	v := c.credentials("order")
@@ -53,6 +59,8 @@ func (s easyPaySettings) checkPreset(currency platform.Currency) error {
 	case "":
 		return nil
 	case "epusdt":
+	case "ezpay":
+		return s.checkEzPayPreset(currency)
 	default:
 		return errors.New("easypay: unknown preset")
 	}

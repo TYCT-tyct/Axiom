@@ -35,12 +35,15 @@ var easyPayNotifyParams = map[string]bool{
 	"money": true, "trade_status": true, "param": true, "sign": true, "sign_type": true,
 }
 
+// EzPay's callback adds the fiat and paid currency amounts to the EasyPay fields; all are signed.
+var ezPayNotifyParams = map[string]bool{"currency": true, "pay_currency": true, "pay_amount": true}
+
 func (c *easyPayChannel) Verify(_ context.Context, cb Callback) (Notice, error) {
 	raw, err := easyPayCallbackBody(cb)
 	if err != nil {
 		return Notice{}, err
 	}
-	v, err := easyPayNotifyValues(raw)
+	v, err := easyPayNotifyValues(raw, c.settings.Preset == "ezpay")
 	if err != nil {
 		return Notice{}, err
 	}
@@ -55,17 +58,21 @@ func (c *easyPayChannel) Verify(_ context.Context, cb Callback) (Notice, error) 
 	if v.Get("pid") != c.settings.PID {
 		return Notice{}, errors.New("easypay: merchant mismatch")
 	}
+	if c.settings.Preset == "ezpay" {
+		return c.ezPayNotice(v), nil
+	}
 	amount := parseMinorText(v.Get("money"), digits(c.currency))
 	return Notice{Relevant: true, Success: v.Get("trade_status") == "TRADE_SUCCESS", Order: v.Get("out_trade_no"), TradeNo: v.Get("trade_no"), Paid: Money{Currency: c.currency, Minor: amount}, Raw: "easypay notification"}, nil
 }
 
-func easyPayNotifyValues(raw string) (url.Values, error) {
+func easyPayNotifyValues(raw string, ezpay bool) (url.Values, error) {
 	v, err := url.ParseQuery(raw)
 	if err != nil {
 		return nil, errors.New("easypay: invalid callback encoding")
 	}
 	for k, values := range v {
-		if !easyPayNotifyParams[k] || len(values) != 1 || (k != "name" && strings.ContainsAny(values[0], "&=")) {
+		allowed := easyPayNotifyParams[k] || (ezpay && ezPayNotifyParams[k])
+		if !allowed || len(values) != 1 || (k != "name" && strings.ContainsAny(values[0], "&=")) {
 			return nil, errors.New("easypay: ambiguous callback parameters")
 		}
 	}

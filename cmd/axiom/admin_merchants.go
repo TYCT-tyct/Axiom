@@ -20,6 +20,7 @@ import (
 func (a adminAPI) paymentsService(ctx context.Context) (*payments.Payments, error) {
 	return payments.Open(payments.Config{
 		DB: a.db, Platform: callOf(ctx).scope, Keyring: a.keys, Client: a.exit, Logger: a.logger, Plugins: paymentPlugins,
+		Alerts: a.alerts, Instance: a.instance, Signals: a.paymentSignals,
 	})
 }
 
