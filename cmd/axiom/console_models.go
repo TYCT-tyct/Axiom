@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/gateway"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/websearch"
@@ -64,16 +65,55 @@ func modelMatches(q string, m gateway.PublicModel) bool {
 }
 
 func publicModelBody(m gateway.PublicModel, engines []websearch.Engine) consoleapi.PublicModel {
-	abilities := make([]consoleapi.ModelAbility, len(m.Abilities))
-	for i, ability := range m.Abilities {
-		abilities[i] = consoleapi.ModelAbility(ability)
+	abilities := modelAbilities(m.Abilities)
+	pricing := publicPricing(m.Pricing)
+	if len(engines) > 0 {
+		prices := make([]consoleapi.ModelSearchEnginePrice, 0, len(engines))
+		for _, e := range engines {
+			prices = append(prices, consoleapi.ModelSearchEnginePrice{
+				Name: e.Name, PricePerSearch: e.PriceSearch.String(),
+				PricePerExtraResult: e.PriceResult.String(), Default: e.Default,
+			})
+		}
+		pricing.SearchEngines = &prices
 	}
-	basis := make([]consoleapi.ModelItem, len(m.Pricing.Basis))
-	for i, item := range m.Pricing.Basis {
+	endpoints := make([]consoleapi.PublicEndpoint, len(m.Endpoints))
+	for i, e := range m.Endpoints {
+		endpoints[i] = consoleapi.PublicEndpoint{
+			Name: e.Name, ContextLength: e.ContextLength, MaxOutput: e.MaxOutput, Streams: e.Streams,
+			Abilities: modelAbilities(e.Abilities), Verified: e.Verified, Pricing: publicPricing(e.Pricing),
+		}
+		if e.Quantization != "" {
+			quantization := e.Quantization
+			endpoints[i].Quantization = &quantization
+		}
+	}
+	return consoleapi.PublicModel{
+		Id: m.ID, Name: m.Name, Author: m.Author,
+		ContextLength: m.ContextLength, MaxOutput: m.MaxOutput, Streams: m.Streams,
+		Abilities: abilities,
+		Pricing:   pricing,
+		Endpoints: &endpoints,
+	}
+}
+
+func modelAbilities(abilities []string) []consoleapi.ModelAbility {
+	out := make([]consoleapi.ModelAbility, len(abilities))
+	for i, ability := range abilities {
+		out[i] = consoleapi.ModelAbility(ability)
+	}
+	return out
+}
+
+// publicPricing writes a schedule view in the contract's shape. It is used for a model's cheapest endpoint and for each
+// endpoint's own price, so the two can never describe the same schedule differently.
+func publicPricing(pricing catalog.ScheduleView) consoleapi.ModelPricing {
+	basis := make([]consoleapi.ModelItem, len(pricing.Basis))
+	for i, item := range pricing.Basis {
 		basis[i] = consoleapi.ModelItem(item.String())
 	}
-	rates := make([]consoleapi.ModelRate, len(m.Pricing.Rates))
-	for i, rate := range m.Pricing.Rates {
+	rates := make([]consoleapi.ModelRate, len(pricing.Rates))
+	for i, rate := range pricing.Rates {
 		body := consoleapi.ModelRate{
 			ServiceTier: consoleapi.ModelServiceTier(rate.ServiceTier.String()),
 			Item:        consoleapi.ModelItem(rate.Item.String()),
@@ -86,25 +126,9 @@ func publicModelBody(m gateway.PublicModel, engines []websearch.Engine) consolea
 		}
 		rates[i] = body
 	}
-	pricing := consoleapi.ModelPricing{
-		Currency: m.Pricing.Currency.String(),
+	return consoleapi.ModelPricing{
+		Currency: pricing.Currency.String(),
 		Basis:    basis,
 		Rates:    rates,
-	}
-	if len(engines) > 0 {
-		prices := make([]consoleapi.ModelSearchEnginePrice, 0, len(engines))
-		for _, e := range engines {
-			prices = append(prices, consoleapi.ModelSearchEnginePrice{
-				Name: e.Name, PricePerSearch: e.PriceSearch.String(),
-				PricePerExtraResult: e.PriceResult.String(), Default: e.Default,
-			})
-		}
-		pricing.SearchEngines = &prices
-	}
-	return consoleapi.PublicModel{
-		Id: m.ID, Name: m.Name, Author: m.Author,
-		ContextLength: m.ContextLength, MaxOutput: m.MaxOutput, Streams: m.Streams,
-		Abilities: abilities,
-		Pricing:   pricing,
 	}
 }

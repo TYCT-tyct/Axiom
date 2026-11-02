@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -45,7 +46,7 @@ func TestOpenRouterDiscoveryExcludesPrivateOwners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	public := routing.Endpoint{ID: routing.EndpointID(uuid.NewV7()), Model: f.served, Context: 200000, MaxOutput: 8192}
+	public := routing.Endpoint{ID: routing.EndpointID(uuid.NewV7()), Codename: "g-public", Model: f.served, Context: 200000, MaxOutput: 8192}
 	site := routing.Owner{Site: routing.SiteID(uuid.NewV7())}
 	account := routing.Owner{Account: routing.AccountID(uuid.NewV7())}
 	for name, tc := range map[string]struct {
@@ -83,44 +84,65 @@ func TestOpenRouterDiscoveryExcludesPrivateOwners(t *testing.T) {
 	}
 }
 
-func TestOpenRouterEndpointTagsHideIdentifiers(t *testing.T) {
+func TestOpenRouterEndpointTagsAreStablePublicCodenames(t *testing.T) {
 	model := orEntry{ID: "acme/model", Name: "model"}
 	endpoints := []routing.Endpoint{
-		{ID: routing.EndpointID(uuid.NewV7()), Context: 200000, MaxOutput: 8192},
-		{ID: routing.EndpointID(uuid.NewV7()), Context: 200000, MaxOutput: 8192},
+		{ID: routing.EndpointID(uuid.NewV7()), Codename: "g-alpha", Context: 200000, MaxOutput: 8192},
+		{ID: routing.EndpointID(uuid.NewV7()), Codename: "g-beta", Context: 200000, MaxOutput: 8192},
 	}
 	original := slices.Clone(endpoints)
-	before, err := encodeOREndpoints(model, endpoints)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := mustEncodeEndpoints(t, model, endpoints)
 	if !reflect.DeepEqual(original, endpoints) {
 		t.Error("encoding mutated routing input")
+	}
+	// The tag is the group's persisted codename, the identity routing and provider filters accept.
+	if diff := cmp.Diff([]string{"g-alpha", "g-beta"}, endpointTags(t, before)); diff != "" {
+		t.Error(diff)
+	}
+	// Neither the internal id nor its ordering reaches the response: the same codenames in another input order, with
+	// fresh ids, encode byte for byte the same.
+	for _, e := range original {
+		if strings.Contains(string(before), uuid.UUID(e.ID).String()) {
+			t.Errorf("internal endpoint id in response: %s", before)
+		}
 	}
 	for i := range endpoints {
 		endpoints[i].ID = routing.EndpointID(uuid.NewV7())
 	}
 	slices.Reverse(endpoints)
-	after, err := encodeOREndpoints(model, endpoints)
+	if after := mustEncodeEndpoints(t, model, endpoints); string(before) != string(after) {
+		t.Errorf("identical public facts exposed different private IDs:\n%s\n%s", before, after)
+	}
+	// Adding a group never renumbers the groups already listed.
+	grown := mustEncodeEndpoints(t, model, append(slices.Clone(endpoints),
+		routing.Endpoint{ID: routing.EndpointID(uuid.NewV7()), Codename: "g-gamma", Context: 200000, MaxOutput: 8192}))
+	if diff := cmp.Diff([]string{"g-alpha", "g-beta", "g-gamma"}, endpointTags(t, grown)); diff != "" {
+		t.Error(diff)
+	}
+}
+
+func mustEncodeEndpoints(t *testing.T, model orEntry, endpoints []routing.Endpoint) []byte {
+	t.Helper()
+	body, err := encodeOREndpoints(model, endpoints)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(before) != string(after) {
-		t.Errorf("identical public facts exposed different private IDs:\n%s\n%s", before, after)
-	}
+	return body
+}
+
+func endpointTags(t *testing.T, body []byte) []string {
+	t.Helper()
 	var reply struct {
 		Data orEndpointModel `json:"data"`
 	}
-	if err := jsonx.Unmarshal(before, &reply); err != nil {
+	if err := jsonx.Unmarshal(body, &reply); err != nil {
 		t.Fatal(err)
 	}
-	var tags []string
-	for _, e := range reply.Data.Endpoints {
-		tags = append(tags, e.Tag)
+	tags := make([]string, len(reply.Data.Endpoints))
+	for i, e := range reply.Data.Endpoints {
+		tags[i] = e.Tag
 	}
-	if diff := cmp.Diff([]string{"axiom/1", "axiom/2"}, tags); diff != "" {
-		t.Error(diff)
-	}
+	return tags
 }
 
 // TestOpenRouterEndpointPublishesQuantizationAndRequestPrice: the public endpoint shows the precision a person recorded
@@ -128,8 +150,8 @@ func TestOpenRouterEndpointTagsHideIdentifiers(t *testing.T) {
 func TestOpenRouterEndpointPublishesQuantizationAndRequestPrice(t *testing.T) {
 	model := orEntry{ID: "acme/model", Name: "model", Pricing: orPricing{Request: "1.5"}}
 	endpoints := []routing.Endpoint{
-		{ID: routing.EndpointID(uuid.NewV7()), Context: 1, MaxOutput: 1, Quantization: "fp8"},
-		{ID: routing.EndpointID(uuid.NewV7()), Context: 1, MaxOutput: 1},
+		{ID: routing.EndpointID(uuid.NewV7()), Codename: "g-fp8", Context: 1, MaxOutput: 1, Quantization: "fp8"},
+		{ID: routing.EndpointID(uuid.NewV7()), Codename: "g-none", Context: 1, MaxOutput: 1},
 	}
 	body, err := encodeOREndpoints(model, endpoints)
 	if err != nil {

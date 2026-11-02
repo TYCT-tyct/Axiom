@@ -210,7 +210,7 @@ func TestModelNothingServesIsNotListed(t *testing.T) {
 func (r *rig) attachEndpoint(m catalog.ModelID) {
 	r.t.Helper()
 	e := r.endpoints["claude-1"]
-	e.ID, e.Supplier, e.Model = routing.EndpointID(uuid.NewV7()), routing.SupplierID(uuid.NewV7()), m
+	e.ID, e.Supplier, e.Model, e.Codename = routing.EndpointID(uuid.NewV7()), routing.SupplierID(uuid.NewV7()), m, "g-golden"
 	r.endpoints[m.String()] = e
 	endpoints := make([]routing.Endpoint, 0, len(r.endpoints))
 	for _, e := range r.endpoints {

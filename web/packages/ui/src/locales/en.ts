@@ -112,7 +112,7 @@ export default {
   publicModels: {
     title: "Models & prices",
     description:
-      "Every published model, its limits and the price you pay. Prices are exact; no supplier, endpoint or cost data is shown.",
+      "Every published model, its limits, the endpoints that serve it and the price you pay. Prices are exact; reseller endpoints use stable anonymous codenames, and no supplier, upstream or cost data is shown.",
     search: "Model",
     searchHint: "ID or name",
     author: "Author",
@@ -136,6 +136,7 @@ export default {
     base: "Base",
     service: "Service tier",
     band: "Band",
+    tierBasis: "Tier basis",
     itemName: "Item",
     price: "Price",
     above: "Above {{tokens}}",
@@ -147,7 +148,20 @@ export default {
     perResult: "Per extra result",
     defaultEngine: "Default",
     noRates: "This model has no published prices.",
-    note: "These are the site’s sale prices. No supplier, endpoint or cost data is shown.",
+    modelPrice: "Model price (cheapest endpoint)",
+    modelPriceNote: "This full schedule is the cheapest endpoint’s. Every endpoint has its own price above.",
+    endpoints: "Endpoints",
+    endpoint: "Public name",
+    endpointsNote:
+      "Name an endpoint here in provider.only, provider.ignore or a preset to require or exclude it. A reseller group’s name is an anonymous codename, the same on every model.",
+    endpointPrice: "Endpoint price",
+    endpointPriceDetails: "Full price schedule",
+    endpointsUnavailable: "This server’s older version doesn’t list endpoints yet; they appear after it updates.",
+    noEndpoints: "No endpoints are available for this model.",
+    verified: "Verified",
+    unverified: "Unverified",
+    quantization: "Quantization",
+    note: "These are the site’s sale prices. Reseller endpoints use anonymous codenames; no supplier, upstream or cost data is shown.",
     tierNote: "These are your account’s prices at its current tier.",
     item: {
       input: "Input",

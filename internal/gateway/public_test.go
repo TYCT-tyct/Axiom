@@ -38,14 +38,22 @@ func TestPublicModelsAreTheServedCatalogAtTheAudiencePrice(t *testing.T) {
 	if want := []string{"acme/alpha", "acme/beta", "anthropic/claude-live"}; !slices.Equal(ids, want) {
 		t.Fatalf("models: %v, want %v", ids, want)
 	}
+	wantPricing := catalog.ScheduleView{Currency: exchangeCurrency(t, "USD"), Rates: []catalog.ScheduleRate{
+		{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemInput, Price: price("0.000001")},
+		{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemCacheWrite, Price: price("0.000001")},
+		{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemOutput, Price: price("0.000002")},
+	}}
 	want := PublicModel{
 		ID: "acme/alpha", Name: "alpha", Author: "acme", ContextLength: 128000, MaxOutput: 1000, Streams: true,
 		Abilities: []string{},
-		Pricing: catalog.ScheduleView{Currency: exchangeCurrency(t, "USD"), Rates: []catalog.ScheduleRate{
-			{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemInput, Price: price("0.000001")},
-			{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemCacheWrite, Price: price("0.000001")},
-			{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemOutput, Price: price("0.000002")},
-		}},
+		Pricing:   wantPricing,
+		// The endpoints are the public groups that serve alpha, in codename order, each with the attributes routing
+		// serves and the price this audience pays. The model's context and max output stay the catalog's values; an
+		// endpoint may offer more.
+		Endpoints: []PublicEndpoint{
+			{Name: "alpha-1", ContextLength: 1_000_000, MaxOutput: 1000, Streams: true, Abilities: []string{}, Verified: true, Pricing: wantPricing},
+			{Name: "alpha-2", ContextLength: 1_000_000, MaxOutput: 1000, Streams: true, Abilities: []string{}, Verified: true, Pricing: wantPricing},
+		},
 	}
 	if diff := cmp.Diff(want, got[0], comparePrices); diff != "" {
 		t.Errorf("alpha (-want +got):\n%s", diff)
@@ -71,7 +79,10 @@ func TestPublicModelsSelectTheAccountThenTierThenDefaultPrice(t *testing.T) {
 		{"default", billing.Audience{}, "0.000001"},
 	} {
 		if got := publicInput(t, r, tc.audience); got != tc.want {
-			t.Errorf("%s: input %s, want %s", tc.name, got, tc.want)
+			t.Errorf("%s: model input %s, want %s", tc.name, got, tc.want)
+		}
+		if got := publicEndpointInputs(t, r, tc.audience); !cmp.Equal(got, map[string]string{"alpha-1": tc.want, "alpha-2": tc.want}) {
+			t.Errorf("%s: endpoint input %v, want every endpoint at %s", tc.name, got, tc.want)
 		}
 	}
 }
@@ -91,6 +102,27 @@ func publicInput(t *testing.T, r *rig, a billing.Audience) string {
 	}
 	t.Fatalf("no alpha input price for %+v", a)
 	return ""
+}
+
+// publicEndpointInputs is each alpha endpoint's input price below the first context threshold, by codename.
+func publicEndpointInputs(t *testing.T, r *rig, a billing.Audience) map[string]string {
+	t.Helper()
+	for _, m := range r.models.Public(a) {
+		if m.ID != "acme/alpha" {
+			continue
+		}
+		prices := make(map[string]string, len(m.Endpoints))
+		for _, e := range m.Endpoints {
+			for _, rate := range e.Pricing.Rates {
+				if rate.Item == catalog.ItemInput && rate.Above == 0 {
+					prices[e.Name] = rate.Price.String()
+				}
+			}
+		}
+		return prices
+	}
+	t.Fatalf("no alpha endpoints for %+v", a)
+	return nil
 }
 
 func publicLayer(t *testing.T, input, output string) billing.Sold {
