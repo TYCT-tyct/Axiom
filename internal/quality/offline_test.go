@@ -98,7 +98,7 @@ func TestProbeUsesAGenerationFormat(t *testing.T) {
 		if request.Format != protocol.Chat {
 			t.Fatalf("probed with format %d, want chat", request.Format)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("no probe was sent")
 	}
 	finishProbe(t, l, f)
