@@ -183,7 +183,7 @@ func signalFixture(t *testing.T, kind string) *priceFixture {
 	switch kind {
 	case "floor cap":
 		f.refresh()
-		f.reprice(0, "0.0001")
+		f.reprice("0.0001")
 	case "no endpoint":
 		f.costs = nil
 	case "no rule":
@@ -204,7 +204,7 @@ func TestPublishedOverrideOnlyAllowsAuditedLocalCosts(t *testing.T) {
 
 	f := newPrices(t)
 	f.refresh()
-	f.reprice(0, "0.0001")
+	f.reprice("0.0001")
 	f.refresh()
 	if err := f.publish(f.state(), true, true); err != nil {
 		t.Fatal(err)

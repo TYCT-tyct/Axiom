@@ -273,32 +273,42 @@ func publicationDecision(policy PricePolicy, p Publication, old ReadPublications
 		}
 		previous = current.Schedule
 	}
-	status := automaticPriceStatus(policy, previous, next, floor, old.CurrentID != nil)
-	if old.CurrentID != nil && current.Endpoints == nil && p.Endpoints == nil && status == "published" {
-		// The price itself did not move, but adding or removing an endpoint changes what the shared price covers.
-		// Cost evidence on both sides is the only record of the endpoint set; without it, a valid shared proposal
-		// could not have been built, so an unreadable side only leaves the ordinary gate in place.
-		nextCosts := endpointCostsFromBasis(p.Basis, next.Currency())
-		if len(current.endpointCosts) > 0 && len(nextCosts) > 0 &&
-			endpointMembershipMoved(endpointSet(current.endpointCosts), endpointSet(nextCosts)) {
-			status = "pending"
-		}
-	}
-	switch {
-	case p.Endpoints != nil:
-		status = automaticEndpointPriceStatus(policy, current, p.Endpoints, p.Floors, old.CurrentID != nil)
-	case old.CurrentID != nil && current.Endpoints != nil:
-		// The proposal goes back to a shared fixed or reference price. Every endpoint's current price is a real old
-		// charge, so compare each one with the shared proposal rather than only the model envelope, which may not move.
-		// The proposal's own cost evidence recovers its endpoint floors; an old candidate without it falls back to
-		// the ordinary move gate, which still holds any change for confirmation.
-		nextFloors, _ := endpointFloorsFromBasis(p.Basis, next.Currency(), policy.FloorMultiplier)
-		status = automaticSharedEndpointPriceStatus(policy, current, next, nextFloors)
-	}
+	status := publicationStatus(policy, p, current, previous, next, floor, old.CurrentID != nil)
 	if status == "blocked" {
 		current = Sold{}
 	}
 	return current, status, nil
+}
+
+// publicationStatus classifies a proposal against the current version. A per-endpoint proposal gets the endpoint gate;
+// a return from endpoint prices to one shared price compares every current endpoint; a shared proposal that does not
+// move still waits when its cost evidence shows an endpoint added or removed.
+func publicationStatus(policy PricePolicy, p Publication, current Sold, previous, next, floor catalog.Schedule, hasHead bool) string {
+	status := automaticPriceStatus(policy, previous, next, floor, hasHead)
+	switch {
+	case p.Endpoints != nil:
+		return automaticEndpointPriceStatus(policy, current, p.Endpoints, p.Floors, hasHead)
+	case hasHead && current.Endpoints != nil:
+		// The proposal goes back to a shared fixed or reference price. Every endpoint's current price is a real old
+		// charge, so compare each one with the shared proposal rather than only the model envelope, which may not move.
+		// The proposal's own cost evidence recovers its endpoint floors; an old candidate without it falls back to
+		// the ordinary move gate, which still holds any change for confirmation.
+		return automaticSharedEndpointPriceStatus(policy, current, next, endpointFloorsFromBasis(p.Basis, next.Currency(), policy.FloorMultiplier))
+	case hasHead && status == "published" && sharedMembershipMoved(current, p.Basis, next.Currency()):
+		return "pending"
+	}
+	return status
+}
+
+// sharedMembershipMoved reports whether a shared proposal changes the endpoint set recorded in the current version's
+// cost evidence. The price itself does not move, but adding or removing an endpoint changes what the shared price covers.
+func sharedMembershipMoved(current Sold, nextBasis jsonx.Raw, currency platform.Currency) bool {
+	if current.Endpoints != nil {
+		return false
+	}
+	nextCosts := endpointCostsFromBasis(nextBasis, currency)
+	return len(current.endpointCosts) > 0 && len(nextCosts) > 0 &&
+		endpointMembershipMoved(endpointSet(current.endpointCosts), endpointSet(nextCosts))
 }
 
 func automaticPriceStatus(policy PricePolicy, previous, next, floor catalog.Schedule, hasHead bool) string {

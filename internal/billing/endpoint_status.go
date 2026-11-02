@@ -28,31 +28,34 @@ func automaticEndpointPriceStatus(policy PricePolicy, current Sold, next, floors
 	// membership change is confirmed.
 	pending := endpointMembershipMoved(currentSet, nextSet)
 	for endpoint, price := range next {
-		if _, exists := currentSet[endpoint]; !exists {
-			pending = true
-			continue
-		}
-		floor, exists := floors[endpoint]
-		if !exists {
+		switch endpointProposalStatus(policy, current, currentSet, endpoint, price, floors) {
+		case "blocked":
 			return "blocked"
-		}
-		previous, exists := current.PriceFor(endpoint)
-		if !exists {
-			// The version being published adds an endpoint. Its price is a new charge; hold the old version, which
-			// keeps serving the other endpoints at their current prices, rather than stopping the whole model.
+		case "pending":
 			pending = true
-			continue
 		}
-		status := endpointPriceStatus(policy, previous, price, floor)
-		if status == "blocked" {
-			return "blocked"
-		}
-		pending = pending || status == "pending"
 	}
 	if pending {
 		return "pending"
 	}
 	return "published"
+}
+
+// endpointProposalStatus classifies one proposed endpoint. An endpoint absent from the current version is a new charge
+// and waits; a missing floor is malformed evidence and blocks.
+func endpointProposalStatus(policy PricePolicy, current Sold, currentSet map[uuid.UUID]struct{}, endpoint uuid.UUID, price catalog.Schedule, floors EndpointPrices) string {
+	if _, exists := currentSet[endpoint]; !exists {
+		return "pending"
+	}
+	floor, exists := floors[endpoint]
+	if !exists {
+		return "blocked"
+	}
+	previous, exists := current.PriceFor(endpoint)
+	if !exists {
+		return "pending"
+	}
+	return endpointPriceStatus(policy, previous, price, floor)
 }
 
 // automaticSharedEndpointPriceStatus applies the endpoint gate when the current version prices endpoints separately but

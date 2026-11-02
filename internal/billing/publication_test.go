@@ -40,11 +40,11 @@ func newPrices(t testing.TB) *priceFixture {
 
 // reprice replaces one endpoint's cost plan while keeping its identity, as a supplier sync does. A membership change
 // would otherwise hold the version for confirmation.
-func (f *priceFixture) reprice(index int, price string) {
+func (f *priceFixture) reprice(price string) {
 	f.t.Helper()
-	endpoint := f.costs[index].Endpoint
-	f.costs[index] = priceCost(f.t, f.model, price)
-	f.costs[index].Endpoint = endpoint
+	endpoint := f.costs[0].Endpoint
+	f.costs[0] = priceCost(f.t, f.model, price)
+	f.costs[0].Endpoint = endpoint
 }
 
 func (f *priceFixture) refresh() map[catalog.ModelID]Sold {
@@ -155,7 +155,7 @@ func TestFloorPublicationAndScopedOverride(t *testing.T) {
 
 	f := newPrices(t)
 	first := f.refresh()[f.model]
-	f.reprice(0, "0.0000015")
+	f.reprice("0.0000015")
 	raised := f.refresh()[f.model]
 	if raised.Version == uuid.Nil() || raised.Version == first.Version {
 		t.Fatal("floor increase waited for ordinary threshold")
@@ -167,7 +167,7 @@ func TestFloorPublicationAndScopedOverride(t *testing.T) {
 	if ok, err := raised.Schedule.CoversCost(cost); !ok || err != nil {
 		t.Fatalf("below floor: %v", err)
 	}
-	f.reprice(0, "0.00001")
+	f.reprice("0.00001")
 	if _, ok := f.refresh()[f.model]; ok || f.state().Status != "blocked" {
 		t.Fatal("unsafe old price retained beyond automatic cap")
 	}
@@ -265,7 +265,7 @@ func TestNeverPublishBelowFloorProperty(t *testing.T) {
 	publishedCount := 0
 	for range 80 {
 		n := rng.IntN(50) + 1
-		f.reprice(0, new(big.Rat).SetFrac64(int64(n), 10000000).FloatString(7))
+		f.reprice(new(big.Rat).SetFrac64(int64(n), 10000000).FloatString(7))
 		sold, ok := f.refresh()[f.model]
 		if !ok {
 			continue

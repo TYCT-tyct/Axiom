@@ -151,28 +151,24 @@ func endpointCostsFromBasis(raw jsonx.Raw, currency platform.Currency) EndpointP
 }
 
 // endpointFloorsFromBasis is a proposal's break-even price per endpoint, recovered from the same cost evidence that
-// priced it. The decision reads it only when a separately priced version returns to one shared price.
-func endpointFloorsFromBasis(raw jsonx.Raw, currency platform.Currency, multiplier string) (EndpointPrices, error) {
+// priced it. The decision reads it only when a separately priced version returns to one shared price; an unreadable
+// basis returns nil so the caller falls back to the ordinary move gate.
+func endpointFloorsFromBasis(raw jsonx.Raw, currency platform.Currency, multiplier string) EndpointPrices {
 	costs, err := basisCosts(raw)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 	converted, err := convertedCosts(costs, currency)
 	if err != nil {
-		return nil, err
+		return nil
 	}
-	return endpointFloorsFromConverted(converted, currency, multiplier)
-}
-
-// endpointFloorsFromConverted applies the site floor multiplier to costs already converted to the site currency.
-func endpointFloorsFromConverted(costs EndpointPrices, currency platform.Currency, multiplier string) (EndpointPrices, error) {
-	floors := make(EndpointPrices, len(costs))
-	for endpoint, cost := range costs {
+	floors := make(EndpointPrices, len(converted))
+	for endpoint, cost := range converted {
 		floor, err := cost.Scaled(multiplier, currency)
 		if err != nil {
-			return nil, err
+			return nil
 		}
 		floors[endpoint] = floor
 	}
-	return floors, nil
+	return floors
 }
