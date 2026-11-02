@@ -1,6 +1,10 @@
 package billing
 
-import "axiom/internal/catalog"
+import (
+	"uuid"
+
+	"axiom/internal/catalog"
+)
 
 // automaticEndpointPriceStatus applies the same change and floor gates to every endpoint's own price. A model-level
 // envelope can stay unchanged while one endpoint's cost, and so its price, moves; comparing only the envelope would
@@ -13,15 +17,21 @@ func automaticEndpointPriceStatus(policy PricePolicy, current Sold, next, floors
 	if len(next) == 0 || len(floors) == 0 {
 		return "blocked"
 	}
-	pending := false
-	for endpoint := range current.Endpoints {
-		if _, exists := next[endpoint]; !exists {
-			// Removing a priced endpoint also changes what the model can serve; hold the old version until the
-			// removal is confirmed, rather than silently dropping it while the envelope stays the same.
-			pending = true
-		}
+	currentSet := soldEndpointSet(current)
+	nextSet := endpointSet(next)
+	if current.Endpoints == nil && len(currentSet) == 0 {
+		// An old shared version without cost evidence cannot say which endpoints it already priced. Treating every
+		// proposed endpoint as an old one could publish a new charge without confirmation, so wait.
+		return "pending"
 	}
+	// Removing a priced endpoint or adding one also changes what the model can serve; hold the old version until the
+	// membership change is confirmed.
+	pending := endpointMembershipMoved(currentSet, nextSet)
 	for endpoint, price := range next {
+		if _, exists := currentSet[endpoint]; !exists {
+			pending = true
+			continue
+		}
 		floor, exists := floors[endpoint]
 		if !exists {
 			return "blocked"
@@ -48,18 +58,27 @@ func automaticEndpointPriceStatus(policy PricePolicy, current Sold, next, floors
 // automaticSharedEndpointPriceStatus applies the endpoint gate when the current version prices endpoints separately but
 // the proposal returns to one shared fixed or reference price. The old version charged each endpoint its own price, so
 // each of those prices is compared with the shared proposal; the model envelope alone can hide an endpoint's move.
-func automaticSharedEndpointPriceStatus(policy PricePolicy, current Sold, next, floor catalog.Schedule, hasHead bool) string {
-	if !hasHead {
-		return "published"
-	}
-	if len(current.Endpoints) == 0 {
-		return automaticPriceStatus(policy, current.Schedule, next, floor, hasHead)
-	}
-	pending := false
-	for _, previous := range current.Endpoints {
-		// The shared version stores no per-endpoint floor; comparing an old endpoint price with the model envelope
-		// would wrongly treat a cheap endpoint as unsafe. The local cost filter drops an old endpoint that no longer
-		// covers its own cost, while every actual move still needs confirmation.
+// nextFloors is the proposal's own floor per endpoint; when old evidence lacks it, a move still waits for confirmation.
+func automaticSharedEndpointPriceStatus(policy PricePolicy, current Sold, next catalog.Schedule, nextFloors EndpointPrices) string {
+	currentSet := soldEndpointSet(current)
+	nextSet := endpointSet(nextFloors)
+	pending := endpointMembershipMoved(currentSet, nextSet)
+	for endpoint := range currentSet {
+		previous, exists := current.PriceFor(endpoint)
+		if !exists {
+			pending = true
+			continue
+		}
+		if endpointFloor, exists := nextFloors[endpoint]; exists {
+			status := endpointPriceStatus(policy, previous, next, endpointFloor)
+			if status == "blocked" {
+				return "blocked"
+			}
+			pending = pending || status == "pending"
+			continue
+		}
+		// Without the proposal's per-endpoint cost evidence, any move still needs confirmation; no move retains the
+		// old price. The local cost filter drops an old endpoint that no longer covers its own cost.
 		if priceIncreased(previous, next, policy.MaxIncreaseRatio) || priceMoved(previous, next, policy.ChangeRatio) {
 			pending = true
 		}
@@ -68,6 +87,34 @@ func automaticSharedEndpointPriceStatus(policy PricePolicy, current Sold, next, 
 		return "pending"
 	}
 	return "published"
+}
+
+func endpointMembershipMoved(current, next map[uuid.UUID]struct{}) bool {
+	for endpoint := range current {
+		if _, exists := next[endpoint]; !exists {
+			return true
+		}
+	}
+	for endpoint := range next {
+		if _, exists := current[endpoint]; !exists {
+			return true
+		}
+	}
+	return false
+}
+
+func soldEndpointSet(s Sold) map[uuid.UUID]struct{} {
+	return endpointSet(s.Endpoints, s.endpointCosts)
+}
+
+func endpointSet(maps ...EndpointPrices) map[uuid.UUID]struct{} {
+	set := map[uuid.UUID]struct{}{}
+	for _, prices := range maps {
+		for endpoint := range prices {
+			set[endpoint] = struct{}{}
+		}
+	}
+	return set
 }
 
 // endpointPriceStatus classifies one endpoint's move. An old price below its floor may rise to the floor without a

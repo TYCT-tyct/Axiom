@@ -85,8 +85,35 @@ func TestEndpointChangeGateCatchesMovesInsideTheEnvelope(t *testing.T) {
 		t.Fatalf("new endpoint = %s, want pending rather than stopping existing endpoints", got)
 	}
 	shared := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"10","output":"1"}}`)
-	if got := automaticSharedEndpointPriceStatus(policy, mixed, shared, bFloor, true); got != "pending" {
+	if got := automaticSharedEndpointPriceStatus(policy, mixed, shared, EndpointPrices{a: aFloor, b: bFloor}); got != "pending" {
 		t.Fatalf("switch to a shared price = %s, want pending for the endpoint that moved from 1 to 10", got)
+	}
+	// A necessary floor raise within the automatic cap must publish even when the proposal returns to a shared price.
+	one := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"1"}}`)
+	floorRaise := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1.2","output":"1"}}`)
+	onlyOne := Sold{Version: uuid.NewV7(), Schedule: one, Endpoints: EndpointPrices{a: one}}
+	if got := automaticSharedEndpointPriceStatus(policy, onlyOne, floorRaise, EndpointPrices{a: floorRaise}); got != "published" {
+		t.Fatalf("necessary floor raise to a shared price = %s, want published", got)
+	}
+	// The floor raise on one endpoint must not approve an ordinary move on another in the same shared proposal.
+	twoOld := Sold{Version: uuid.NewV7(), Schedule: one, Endpoints: EndpointPrices{a: one, b: one}}
+	if got := automaticSharedEndpointPriceStatus(policy, twoOld, floorRaise, EndpointPrices{a: floorRaise, b: one}); got != "pending" {
+		t.Fatalf("floor raise plus another endpoint's move = %s, want pending", got)
+	}
+	// A new endpoint is a new charge in either direction, even when the shared price itself does not move.
+	nextFloors := EndpointPrices{a: one, b: one}
+	if got := automaticSharedEndpointPriceStatus(policy, onlyOne, one, nextFloors); got != "pending" {
+		t.Fatalf("new endpoint behind a shared price = %s, want pending", got)
+	}
+	sharedCurrent := Sold{Version: uuid.NewV7(), Schedule: one, endpointCosts: EndpointPrices{a: one}}
+	if got := automaticEndpointPriceStatus(policy, sharedCurrent, EndpointPrices{a: one, b: one}, EndpointPrices{a: one, b: one}, true); got != "pending" {
+		t.Fatalf("new endpoint from a shared price = %s, want pending", got)
+	}
+	// Without cost evidence an old shared version cannot tell an existing endpoint from a new one; wait rather than
+	// publish a new charge silently.
+	noEvidence := Sold{Version: uuid.NewV7(), Schedule: one}
+	if got := automaticEndpointPriceStatus(policy, noEvidence, EndpointPrices{a: one}, EndpointPrices{a: one}, true); got != "pending" {
+		t.Fatalf("endpoint proposal from a shared version without cost evidence = %s, want pending", got)
 	}
 }
 
@@ -156,7 +183,7 @@ func signalFixture(t *testing.T, kind string) *priceFixture {
 	switch kind {
 	case "floor cap":
 		f.refresh()
-		f.costs[0] = priceCost(t, f.model, "0.0001")
+		f.reprice(0, "0.0001")
 	case "no endpoint":
 		f.costs = nil
 	case "no rule":
@@ -177,7 +204,7 @@ func TestPublishedOverrideOnlyAllowsAuditedLocalCosts(t *testing.T) {
 
 	f := newPrices(t)
 	f.refresh()
-	f.costs[0] = priceCost(t, f.model, "0.0001")
+	f.reprice(0, "0.0001")
 	f.refresh()
 	if err := f.publish(f.state(), true, true); err != nil {
 		t.Fatal(err)

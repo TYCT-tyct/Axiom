@@ -25,8 +25,11 @@ type Sold struct {
 	Schedule catalog.Schedule
 	// Endpoints is each endpoint's price when the version was priced from each endpoint's own cost; nil when Schedule is
 	// every endpoint's price (a fixed or reference-multiplier rule, and every version published before endpoint prices).
-	Endpoints     EndpointPrices
-	floor         string
+	Endpoints EndpointPrices
+	floor     string
+	// endpointCosts is the old version's converted cost per endpoint, read from its cost evidence only on the
+	// publication-decision path. It recovers the endpoint membership of a shared version, which stores no endpoint map.
+	endpointCosts EndpointPrices
 	overrideCosts map[uuid.UUID][]byte
 }
 

@@ -42,6 +42,8 @@ type Publication struct {
 	// the shared price it was.
 	Endpoints          EndpointPrices `json:"endpoints,omitempty"`
 	RequestedEndpoints EndpointPrices `json:"requested_endpoints,omitempty"`
+	CurrentEndpoints   EndpointPrices `json:"current_endpoints,omitempty"`
+	CurrentSchedule    jsonx.Raw      `json:"current_schedule,omitempty"`
 	Costs              EndpointPrices `json:"costs,omitempty"`
 	Floors             EndpointPrices `json:"floors,omitempty"`
 	Cost               jsonx.Raw      `json:"cost,omitempty"`
@@ -71,6 +73,13 @@ func PriceState(ctx context.Context, tx pg.Tx, site uuid.UUID) (PricePolicy, []P
 		}
 		p.Audience = Selector{Kind: r.AudienceKind, ID: r.AudienceID}
 		p.Current, p.Status = r.CurrentID, r.Status
+		// The current columns, not a view field a candidate may carry from an older release, decide what is shown.
+		p.CurrentSchedule, p.CurrentEndpoints = r.Schedule, nil
+		if len(r.Endpoints) > 0 {
+			if err := jsonx.Unmarshal(r.Endpoints, &p.CurrentEndpoints); err != nil {
+				return PricePolicy{}, nil, err
+			}
+		}
 		out = append(out, p)
 	}
 	return policy, out, nil
@@ -257,16 +266,34 @@ func publicationDecision(policy PricePolicy, p Publication, old ReadPublications
 		if err != nil {
 			return Sold{}, "", err
 		}
+		// A shared version has no endpoint map, so its cost evidence is the only record of which endpoints it
+		// prices. It is read only on this decision path, not when routing loads every published price.
+		if current.Endpoints == nil {
+			current.endpointCosts = endpointCostsFromBasis(old.Basis, current.Schedule.Currency())
+		}
 		previous = current.Schedule
 	}
 	status := automaticPriceStatus(policy, previous, next, floor, old.CurrentID != nil)
+	if old.CurrentID != nil && current.Endpoints == nil && p.Endpoints == nil && status == "published" {
+		// The price itself did not move, but adding or removing an endpoint changes what the shared price covers.
+		// Cost evidence on both sides is the only record of the endpoint set; without it, a valid shared proposal
+		// could not have been built, so an unreadable side only leaves the ordinary gate in place.
+		nextCosts := endpointCostsFromBasis(p.Basis, next.Currency())
+		if len(current.endpointCosts) > 0 && len(nextCosts) > 0 &&
+			endpointMembershipMoved(endpointSet(current.endpointCosts), endpointSet(nextCosts)) {
+			status = "pending"
+		}
+	}
 	switch {
 	case p.Endpoints != nil:
 		status = automaticEndpointPriceStatus(policy, current, p.Endpoints, p.Floors, old.CurrentID != nil)
 	case old.CurrentID != nil && current.Endpoints != nil:
 		// The proposal goes back to a shared fixed or reference price. Every endpoint's current price is a real old
 		// charge, so compare each one with the shared proposal rather than only the model envelope, which may not move.
-		status = automaticSharedEndpointPriceStatus(policy, current, next, floor, true)
+		// The proposal's own cost evidence recovers its endpoint floors; an old candidate without it falls back to
+		// the ordinary move gate, which still holds any change for confirmation.
+		nextFloors, _ := endpointFloorsFromBasis(p.Basis, next.Currency(), policy.FloorMultiplier)
+		status = automaticSharedEndpointPriceStatus(policy, current, next, nextFloors)
 	}
 	if status == "blocked" {
 		current = Sold{}
@@ -307,10 +334,17 @@ func soldPublication(r ReadPublicationsRow) (Sold, error) {
 		return Sold{}, err
 	}
 	endpoints, err := parseEndpointPrices(r.Endpoints)
-	return Sold{Version: *r.CurrentID, Schedule: s, Endpoints: endpoints}, err
+	if err != nil {
+		return Sold{}, err
+	}
+	return Sold{Version: *r.CurrentID, Schedule: s, Endpoints: endpoints}, nil
 }
 
 func persistPublication(ctx context.Context, tx pg.Tx, site uuid.UUID, p Publication) error {
+	// CurrentEndpoints and CurrentSchedule are a read view of the joined current version, not part of the proposal.
+	// PublishPrice reads them from PriceState and persists the candidate afterwards; keeping them would make an old
+	// view override the row's actual current version after the next publication.
+	p.CurrentEndpoints, p.CurrentSchedule = nil, nil
 	raw, err := jsonx.MarshalCanonical(p)
 	if err != nil {
 		return err

@@ -71,6 +71,10 @@ func TestCostPlusPricesEachEndpoint(t *testing.T) {
 	if sold.Version == uuid.Nil() || len(sold.Endpoints) != 2 {
 		t.Fatalf("sold %+v", sold)
 	}
+	state := f.state()
+	if len(state.CurrentEndpoints) != 2 || len(state.CurrentSchedule) == 0 {
+		t.Fatalf("price state does not expose the current endpoint prices: endpoints=%d schedule=%d", len(state.CurrentEndpoints), len(state.CurrentSchedule))
+	}
 	cheap, ok := sold.PriceFor(f.costs[0].Endpoint)
 	if !ok {
 		t.Fatal("the first endpoint has no price")
@@ -203,6 +207,75 @@ func TestSharedPriceAfterEndpointPricesIsGated(t *testing.T) {
 	}
 	if got := f.published().Version; got != before.Version {
 		t.Fatalf("pending publication replaced the current version: %s, want %s", got, before.Version)
+	}
+}
+
+// TestNewEndpointWaitsWithoutStoppingServedEndpoints covers adding a second endpoint to a model already priced per
+// endpoint. The new endpoint is a new charge, so the old version stays current; the endpoint it already priced keeps
+// serving instead of the whole model going dark.
+func TestNewEndpointWaitsWithoutStoppingServedEndpoints(t *testing.T) {
+	t.Parallel()
+
+	f := newPrices(t)
+	f.method(plus("0"))
+	first := f.refresh()[f.model]
+	if first.Version == uuid.Nil() {
+		t.Fatal("the first publication has no version")
+	}
+	f.costs = append(f.costs, priceCost(t, f.model, "0.0000005"))
+	f.refresh()
+	if got := f.state().Status; got != "pending" {
+		t.Fatalf("adding an endpoint = %s, want pending", got)
+	}
+	published := f.published()
+	if published.Version != first.Version {
+		t.Fatalf("pending endpoint addition replaced the current version: %s, want %s", published.Version, first.Version)
+	}
+	if _, ok := published.PriceFor(f.costs[0].Endpoint); !ok {
+		t.Fatal("the endpoint that was already priced stopped serving")
+	}
+	if _, ok := published.PriceFor(f.costs[1].Endpoint); ok {
+		t.Fatal("the new endpoint was priced before confirmation")
+	}
+}
+
+// TestNewEndpointBehindASharedPriceWaits: a shared price covers every endpoint, but adding one is still a new charge.
+// The cost evidence on both versions identifies the endpoint set, so the proposal waits without replacing the version
+// that already serves the other endpoints.
+func TestNewEndpointBehindASharedPriceWaits(t *testing.T) {
+	t.Parallel()
+
+	f := newPrices(t)
+	first := f.refresh()[f.model]
+	if first.Version == uuid.Nil() {
+		t.Fatal("the first publication has no version")
+	}
+	f.costs = append(f.costs, priceCost(t, f.model, "0.0000005"))
+	f.refresh()
+	if got := f.state().Status; got != "pending" {
+		t.Fatalf("adding an endpoint behind a shared price = %s, want pending", got)
+	}
+	if got := f.published().Version; got != first.Version {
+		t.Fatalf("pending endpoint addition replaced the current version: %s, want %s", got, first.Version)
+	}
+}
+
+// TestSharedPriceKeepsANecessaryFloorRaise covers a cost rise followed by a switch to a shared fixed price. The old
+// endpoint price is below the new endpoint floor, the rise is inside the automatic cap, and it must publish rather than
+// wait for confirmation; the proposal's basis still records its endpoint costs so the decision can see the floor.
+func TestSharedPriceKeepsANecessaryFloorRaise(t *testing.T) {
+	t.Parallel()
+
+	f := newPrices(t)
+	f.method(plus("0"))
+	if sold := f.refresh()[f.model]; sold.Version == uuid.Nil() {
+		t.Fatal("the first publication has no version")
+	}
+	f.costs[0].UnitValue = "1.2"
+	f.method(Method{Kind: "fixed", Schedule: jsonx.Raw(`{"v":1,"currency":"USD","rates":{"input":"0.0000006","output":"0.000001"}}`)})
+	f.refresh()
+	if got := f.state().Status; got != "published" {
+		t.Fatalf("necessary floor raise with a shared price = %s, want published", got)
 	}
 }
 
