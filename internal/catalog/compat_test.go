@@ -124,3 +124,37 @@ func TestAllowFileSearchSpec(t *testing.T) {
 		t.Error("an ability without its item was accepted")
 	}
 }
+
+// TestAllowFileParse: the file_parse item is a new name in the price schedule's closed enumeration, so it has the same
+// rolling-upgrade gate, separate from every other new item. It adds no spec item or ability: only a price waits.
+func TestAllowFileParse(t *testing.T) {
+	t.Parallel()
+	withItem, err := ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"1","file_parse":"0.002"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"1","output":"2"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Catalog{}).allowPrices(withItem); !errors.Is(err, ErrFileParse) {
+		t.Errorf("a file_parse price while off: %v, want ErrFileParse", err)
+	}
+	if err := (&Catalog{cfg: Config{FileParse: true}}).allowPrices(withItem); err != nil {
+		t.Errorf("a file_parse price while on: %v", err)
+	}
+	if err := (&Catalog{}).allowPrices(token); err != nil {
+		t.Errorf("a token price while off: %v", err)
+	}
+	// Its switch is its own: the other new-item gates do not open it, and it opens none of them.
+	search, err := ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"1","file_search":"0.0025"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Catalog{cfg: Config{FileParse: true}}).allowPrices(search); !errors.Is(err, ErrFileSearch) {
+		t.Errorf("a file_search price with only file parse open: %v, want ErrFileSearch", err)
+	}
+	if err := (&Catalog{cfg: Config{CountedItems: true, RequestPrices: true, FileSearch: true}}).allowPrices(withItem); !errors.Is(err, ErrFileParse) {
+		t.Errorf("a file_parse price with the other gates open: %v, want ErrFileParse", err)
+	}
+}

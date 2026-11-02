@@ -71,7 +71,11 @@ export function perUnit(million: string) {
   return fraction ? `${integer}.${fraction}` : integer;
 }
 
-// Three items are priced per use, not per token, and are shown and typed as the contract has them.
-export function isPerUse(item: AdminSchemas["BillingItem"]) {
-  return item === "web_search" || item === "code_execution" || item === "file_search";
+// The items a price list can carry: every reportable item, plus file_parse, which the gateway records and the
+// upstream never reports, so it is not in a spec's items.
+export const rateItems = [...billingItems, "file_parse"] as const satisfies readonly (keyof AdminSchemas["Rates"])[];
+
+// Four items are priced per use, not per token, and are shown and typed as the contract has them.
+export function isPerUse(item: keyof AdminSchemas["Rates"]) {
+  return item === "web_search" || item === "code_execution" || item === "file_search" || item === "file_parse";
 }

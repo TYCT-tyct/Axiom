@@ -15,14 +15,14 @@ import (
 // below can be checked by hand.
 const prices = `{"v":1,"currency":"USD",
 	"rates":{"input":"1","cache_write":"2","cache_write_1h":"3","output":"10","web_search":"100","code_execution":"50",
-		"file_search":"25"},
+		"file_search":"25","file_parse":"75"},
 	"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":100,"rates":{"input":"4","output":"20"}}]},
 	"service_tiers":{"priority":{"context_tiers":[{"above":100,"rates":{}}],"rates":{"input":"6","output":"30"}}}}`
 
 const (
 	in, cacheWrite, cacheWrite1h = catalog.ItemInput, catalog.ItemCacheWrite, catalog.ItemCacheWrite1h
 	webSearch, codeExec          = catalog.ItemWebSearch, catalog.ItemCodeExecution
-	fileSearch                   = catalog.ItemFileSearch
+	fileSearch, fileParse        = catalog.ItemFileSearch, catalog.ItemFileParse
 )
 
 func mustSchedule(tb testing.TB, s string) catalog.Schedule {
@@ -104,7 +104,7 @@ func TestQuoteEntry(t *testing.T) {
 		{"model default of 3 searches: 80 + 3×1000 at 4 + 300 + 500 at 20", tools(text, ServerTool{Item: webSearch}), false, "22380"},
 		{"the request's 1 search: 80 + 1000 at 4 + 100 + 500 at 20", tools(text, ServerTool{Item: webSearch, MaxUses: 1}), false, "14180"},
 		{"a flat search adds only its fee: 80 + 100 + 500 at 10", tools(text, ServerTool{Item: webSearch, MaxUses: 1, Flat: true}), false, "5180"},
-		{"two flat parses: 80 + 2×100 + 500 at 10", tools(text, ServerTool{Item: webSearch, MaxUses: 2, Flat: true}), false, "5280"},
+		{"two flat parses: 80 + 2×75 + 500 at 10", tools(text, ServerTool{Item: fileParse, MaxUses: 2, Flat: true}), false, "5230"},
 		{"compaction doubles 1 sampling: 80 + 1000 at 4 + 500 at 20", Demand{TextBytes: 80, Compaction: true}, false, "14080"},
 		{
 			"a loop of one search: 80 + 1000 at 4 + 2×500 at 20 + 100",
@@ -192,6 +192,8 @@ func TestQuoteEntryRefuses(t *testing.T) {
 	noContext.Model.ContextLength = 0
 	noCodeDefault := entry(t, false, 3)
 	noCodeDefault.Model.MaxUses = map[catalog.Item]int64{webSearch: 3}
+	noParse := entry(t, false, 3)
+	noParse.Price = mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"10","web_search":"100","code_execution":"50"}}`)
 	hugeOutput := entry(t, true, 3)
 	hugeOutput.MaxOutput = math.MaxInt64/2 + 1
 	for _, tc := range []struct {
@@ -209,6 +211,7 @@ func TestQuoteEntryRefuses(t *testing.T) {
 		{"a search with no limit of its own, on a model with no default", Demand{ServerTools: []ServerTool{{Item: webSearch}}}, entry(t, false, 0)},
 		{"a code execution with no limit of its own, on a model with none by default", Demand{ServerTools: []ServerTool{{Item: codeExec}}}, noCodeDefault},
 		{"a file search with no limit of its own, on a model with none by default", Demand{ServerTools: []ServerTool{{Item: fileSearch}}}, entry(t, false, 0)},
+		{"a file parse the schedule does not price", Demand{ServerTools: []ServerTool{{Item: fileParse, MaxUses: 1, Flat: true}}}, noParse},
 		{"a model without a context length", Demand{}, noContext},
 		{"an output limit past int64 behind a small first segment", Demand{Choices: 2}, hugeOutput},
 	} {

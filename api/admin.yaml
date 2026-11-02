@@ -7026,6 +7026,7 @@ components:
         web_search: {$ref: "#/components/schemas/UnitPrice"}
         code_execution: {$ref: "#/components/schemas/UnitPrice"}
         file_search: {$ref: "#/components/schemas/UnitPrice"}
+        file_parse: {$ref: "#/components/schemas/UnitPrice"}
     ContextTier:
       type: object
       required: [above, rates]
