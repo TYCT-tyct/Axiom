@@ -1,6 +1,7 @@
 import type { Messages } from "@axiom/ui";
 import { en as providerKeys } from "./provider-keys";
 import { en as receipt } from "./receipt";
+import { en as settings } from "./settings";
 import { en as statement } from "./statement";
 import type zh from "./zh";
 
@@ -227,26 +228,7 @@ export default {
       "This request key was already used. Check the refunds below before sending another; nothing new was sent.",
     close: "Cancel",
   },
-  settings: {
-    description: "Choose how calls are paid for.",
-    billing: {
-      title: "Funding order",
-      preference: "Pay with",
-      hint: "The site's default is {{fallback}}.",
-      site: "Use the site default ({{value}})",
-      values: {
-        subscription_first: "Subscription first, then the wallet",
-        wallet_first: "Wallet first, then the subscription",
-        subscription_only: "Subscription only",
-        wallet_only: "Wallet only",
-      },
-      fallback:
-        'A request uses one source. The subscription orders take the plan when its current window covers the call; the wallet orders take the balance. The two "only" orders refuse the call instead of using the other source.',
-    },
-    save: "Save",
-    saved: "Saved.",
-    dismiss: "Close",
-  },
+  settings,
   receipt,
   notifications: {
     description: "When Axiom emails you or calls your webhook.",

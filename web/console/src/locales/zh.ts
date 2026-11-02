@@ -1,6 +1,7 @@
 // The console's messages in Chinese, the source every other language follows.
 import { zh as providerKeys } from "./provider-keys";
 import { zh as receipt } from "./receipt";
+import { zh as settings } from "./settings";
 import { zh as statement } from "./statement";
 
 export default {
@@ -216,26 +217,7 @@ export default {
     refundReused: "这个请求的键已经被使用过。请先查看下面的退款，再决定是否再次申请；没有发送新的请求。",
     close: "取消",
   },
-  settings: {
-    description: "选择调用怎么付费。",
-    billing: {
-      title: "扣费顺序",
-      preference: "付费方式",
-      hint: "站点默认是「{{fallback}}」。",
-      site: "跟随站点默认（{{value}}）",
-      values: {
-        subscription_first: "先套餐，后钱包",
-        wallet_first: "先钱包，后套餐",
-        subscription_only: "只扣套餐",
-        wallet_only: "只扣钱包",
-      },
-      fallback:
-        "一次调用只用一个来源。套餐优先的顺序在套餐当前窗口足够时扣套餐；钱包优先的顺序扣余额。两个「只扣」的顺序在来源不够时直接拒绝，不会改用另一个来源。",
-    },
-    save: "保存",
-    saved: "已保存。",
-    dismiss: "关闭",
-  },
+  settings,
   receipt,
   notifications: {
     description: "Axiom 什么时候给你发邮件或调用你的 webhook。",
