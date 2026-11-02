@@ -61,7 +61,8 @@ func endpointProposalStatus(policy PricePolicy, current Sold, currentSet map[uui
 // automaticSharedEndpointPriceStatus applies the endpoint gate when the current version prices endpoints separately but
 // the proposal returns to one shared fixed or reference price. The old version charged each endpoint its own price, so
 // each of those prices is compared with the shared proposal; the model envelope alone can hide an endpoint's move.
-// nextFloors is the proposal's own floor per endpoint; when old evidence lacks it, a move still waits for confirmation.
+// nextFloors is the proposal's own floor per endpoint; when it is missing, the endpoint set cannot be compared and the
+// proposal waits.
 func automaticSharedEndpointPriceStatus(policy PricePolicy, current Sold, next catalog.Schedule, nextFloors EndpointPrices) string {
 	currentSet := soldEndpointSet(current)
 	nextSet := endpointSet(nextFloors)
