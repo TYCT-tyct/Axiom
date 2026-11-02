@@ -74,24 +74,19 @@ def ready(number):
 
 
 class FakeLand(train.Train):
-    """train/main/land holding PRs 1..n, landed by the real land_verified: main's tree is t<k> after k of them."""
+    """train/main/land holding PRs 1..n, landed by the real land_verified: main's head is m<k> after k of them."""
 
-    def __init__(self, n, landed=0, changes=None, merge_error=None, dispatch_error=False, diverge=None, ff=False):
+    def __init__(self, n, landed=0, ff=True):
         self.base, self.dry_run, self.changed, self.ff = "main", False, 0, ff  # ff: the ruleset lets the train push main
         self.cars = [Car(Entry(number, SHA), f"c{number}") for number in range(1, n + 1)]
         self.prs = {number: ready(number) | ({"state": "MERGED"} if number <= landed else {}) for number in range(1, n + 1)}
         self.on_main, self.actions = landed, []
-        self.changes = changes or {}  # {after k merges: {number: change}}: what changes while the train lands
-        self.merge_error, self.dispatch_error, self.diverge = merge_error, dispatch_error, diverge
 
     def read_land_ref(self):
-        return self.cars, [f"t{k}" for k in range(len(self.cars) + 1)]
+        return self.cars
 
     def pr(self, number):
         return self.prs[number]
-
-    def base_tree(self):
-        return "elsewhere" if self.diverge == self.on_main else f"t{self.on_main}"
 
     def base_head(self):
         return self.cars[-1].commit if self.on_main == "tip" else f"m{self.on_main}"
@@ -106,71 +101,50 @@ class FakeLand(train.Train):
             self.on_main = "tip"
         return self.ff
 
-    def merge(self, entry, pr):
-        if self.merge_error == entry.number:
-            return "502 Bad Gateway"
-        self.actions.append(f"merge {entry.number}")
-        self.prs[entry.number]["state"] = "MERGED"
-        self.on_main += 1
-        for number, change in self.changes.get(self.on_main, {}).items():
-            self.prs[number] |= change
-        return None
-
-    def dispatch_main(self):
-        if self.dispatch_error:
-            raise RuntimeError("gh workflow run failed")
-        self.actions.append("dispatch")
-
     def drop_land_ref(self):
         self.actions.append("drop")
 
-    def alarm(self, landed, problem):
-        self.actions.append("alarm")
-        return train.Abort(problem)
-
 
 class Landing(unittest.TestCase):
-    def test_a_passing_train_lands_whole_then_starts_mains_build_then_forgets_the_record(self):
+    def test_a_passing_train_lands_whole_in_one_fast_forward_then_forgets_the_record(self):
         fake = FakeLand(3)
-        self.assertEqual(fake.land_verified(), "m3")
-        self.assertEqual(fake.actions, ["merge 1", "merge 2", "merge 3", "dispatch", "drop"])
-
-    def test_a_train_lands_in_one_fast_forward_when_the_ruleset_allows_it(self):
-        fake = FakeLand(3, ff=True)
         self.assertEqual(fake.land_verified(), "c3")
         # the landing push triggers main's push workflows by itself: landing dispatches no second build
         self.assertEqual((fake.actions, fake.changed), (["fast-forward", "drop"], 3))
 
-    def test_a_refused_fast_forward_falls_back_to_merging_pr_by_pr(self):
-        fake = FakeLand(2)
-        self.assertEqual(fake.land_verified(), "m2")
-        self.assertEqual((fake.tried_ff, fake.actions), (True, ["merge 1", "merge 2", "dispatch", "drop"]))
+    def test_a_refused_fast_forward_lands_nothing_and_fails_the_train(self):
+        fake = FakeLand(2, ff=False)
+        with self.assertRaises(train.Abort):
+            fake.land_verified()
+        self.assertEqual((fake.tried_ff, fake.actions, fake.changed), (True, ["drop"], 0))
+        self.assertEqual((fake.on_main, [pr["state"] for pr in fake.prs.values()]), (0, ["OPEN", "OPEN"]))
 
     def test_nothing_lands_when_any_pr_changed_after_the_build(self):
         # C fixed what A and B broke together, so the train passed; C then left: A+B alone was never tested
         for change in ({"labels": []}, {"baseRefName": "release"}, {"headRefOid": "b" * 40}, {"state": "CLOSED"}):
-            for ff in (False, True):
-                with self.subTest(change=change, ff=ff):
-                    fake = FakeLand(3, ff=ff)
-                    fake.prs[3] |= change
-                    self.assertIsNone(fake.land_verified())
-                    self.assertEqual(fake.actions, ["drop"])
-
-    def test_resume_merges_the_rest_or_only_starts_mains_build(self):
-        # a partly squash-merged train goes on PR by PR even where a fast-forward is allowed: main is no longer its base
-        for landed, merges in ((1, ["merge 2", "merge 3"]), (3, [])):  # 3: stopped after the last merge
-            for ff in (False, True):
-                with self.subTest(landed=landed, ff=ff):
-                    fake = FakeLand(3, landed=landed, ff=ff)
-                    fake.land_verified()
-                    self.assertEqual(fake.actions, merges + ["dispatch", "drop"])
+            with self.subTest(change=change), mock.patch.object(train, "log") as log:
+                fake = FakeLand(3)
+                fake.prs[3] |= change
+                self.assertIsNone(fake.land_verified())
+                self.assertEqual(fake.actions, ["drop"])
+                self.assertIn("#3", log.call_args.args[0])  # the message names the PR that changed, not one ahead of it
 
     def test_resume_after_a_fast_forward_only_forgets_the_record(self):
-        fake = FakeLand(3, ff=True)
+        fake = FakeLand(3)
         fake.on_main = "tip"  # the run stopped after the push; GitHub may not have marked the PRs merged yet
         fake.prs[2]["headRefOid"] = "b" * 40  # nor does a PR that moved since matter: main holds the tested tip
         self.assertEqual(fake.land_verified(), "c3")
         self.assertEqual(fake.actions, ["drop"])
+
+    def test_a_train_the_base_already_holds_lands_nothing_more(self):
+        fake = FakeLand(3, landed=3)  # an earlier run's push landed it; the base has moved on since
+        self.assertEqual(fake.land_verified(), "m3")
+        self.assertEqual((fake.actions, fake.changed), (["drop"], 0))
+
+    def test_a_partly_landed_train_lands_nothing(self):
+        fake = FakeLand(3, landed=1)  # the base holds a prefix but not the tip, so it cannot take the rest as one push
+        self.assertIsNone(fake.land_verified())
+        self.assertEqual((fake.actions, fake.changed), (["drop"], 0))
 
     def test_a_fast_forward_counts_by_where_the_base_is_after_the_push(self):
         # a refused push (the ruleset) leaves the base; a push whose reply was lost may still have moved it
@@ -191,52 +165,6 @@ class Landing(unittest.TestCase):
         with mock.patch.object(train, "FLAKY", "/nonexistent/flaky.toml"), mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(train.Train("x/y", "main").land_url, "origin")
 
-    def test_the_record_stays_until_the_fallbacks_dispatch_succeeds(self):
-        fake = FakeLand(2, dispatch_error=True)
-        with self.assertRaises(RuntimeError):
-            fake.land_verified()
-        self.assertEqual(fake.actions, ["merge 1", "merge 2"])
-
-    def test_a_fast_forward_dispatches_no_build(self):
-        fake = FakeLand(2, dispatch_error=True, ff=True)  # dispatch_main raises, so touching it would fail the landing
-        self.assertEqual(fake.land_verified(), "c2")
-        self.assertEqual(fake.actions, ["fast-forward", "drop"])
-
-    def test_a_failed_merge_keeps_the_record_for_the_next_run(self):
-        fake = FakeLand(3, merge_error=2)
-        with self.assertRaises(train.Abort):
-            fake.land_verified()
-        self.assertEqual(fake.actions, ["merge 1"])
-
-    def test_main_left_untested_raises_an_alarm(self):
-        cases = [("a PR changed while landing", dict(changes={1: {2: {"labels": []}}}), ["merge 1"]),
-                 ("main diverged before a merge", dict(diverge=0), []),
-                 ("main diverged after the last merge", dict(diverge=3), ["merge 1", "merge 2", "merge 3"])]
-        for name, options, merges in cases:
-            with self.subTest(name):
-                fake = FakeLand(3, **options)
-                with self.assertRaises(train.Abort):
-                    fake.land_verified()
-                self.assertEqual(fake.actions, merges + ["alarm"])
-        fake = FakeLand(3, landed=1)  # a run stopped part-way, then a PR changed: main holds an untested prefix
-        fake.prs[2]["labels"] = []
-        with self.assertRaises(train.Abort):
-            fake.land_verified()
-        self.assertEqual(fake.actions, ["alarm"])
-
-
-class Alarm(unittest.TestCase):
-    def test_an_alarm_holds_the_train_reports_and_starts_mains_build(self):
-        fake = FakeLand(2)
-        fake.repo, fake.run_url, fake.land_ref, calls = "x/y", "https://github.com/x/y/actions/runs/7", "train/main/land", []
-        fake.api = lambda path, *args, **kwargs: calls.append(path)
-        with mock.patch.object(train, "git", lambda *args, **kwargs: calls.append(" ".join(args))):
-            error = train.Train.alarm(fake, fake.cars[:1], "main does not match the tested train")
-        self.assertIsInstance(error, train.Abort)
-        self.assertIn("push -q -f origin origin/train/main/land:refs/heads/train-alarm/main/7", calls)
-        self.assertEqual(calls[1:], ["issues/1/comments", "issues"])
-        self.assertEqual(fake.actions, ["drop", "dispatch"])
-
 
 class Stopping(unittest.TestCase):
     def test_an_aborted_landing_ends_the_run(self):
@@ -253,9 +181,6 @@ class Stopping(unittest.TestCase):
             def land(self, base, cars):
                 raise train.Abort("main does not match the tested train")
 
-            def alarm_held(self):
-                return ""
-
             def resume(self):
                 pass
 
@@ -270,17 +195,10 @@ class Stopping(unittest.TestCase):
         self.assertEqual(fake.run(), 1)
         self.assertEqual((fake.assembled, fake.builds), (1, 1))  # nothing assembled or built after it
 
-    def test_an_open_alarm_stops_every_run(self):
-        fake = FakeTrain([], lane=2)
-        fake.dry_run = False
-        fake.alarm_held = lambda: "abc\trefs/heads/train-alarm/main/1"
-        fake.eligible = lambda: self.fail("a run went on past an open alarm")
-        self.assertEqual(fake.run(), 1)
-
 
 class Assembly(unittest.TestCase):
-    """assemble() on a real repository: a PR the train just squash-merged is left out, not taken for a duplicate
-    migration, while a real duplicate is still ejected."""
+    """assemble() on a real repository: a PR the train just landed is left out, not taken for a duplicate migration,
+    while a real duplicate is still ejected."""
 
     def setUp(self):
         self.cwd, self.tmp = os.getcwd(), tempfile.TemporaryDirectory()
@@ -302,9 +220,9 @@ class Assembly(unittest.TestCase):
         train.git(*train.IDENTITY, "commit", "-q", "-m", ",".join(files))
         return train.git("rev-parse", "HEAD")
 
-    def test_a_squash_merged_migration_pr_is_left_out_and_a_duplicate_ejected(self):
+    def test_a_migration_pr_already_in_the_base_is_left_out_and_a_duplicate_ejected(self):
         merged = self.commit({"m/migrations/00002_b.sql": "b"}, self.start)
-        main = self.commit({"m/migrations/00002_b.sql": "b"}, self.start)  # #1 as the train squash-merged it
+        main = self.commit({"m/migrations/00002_b.sql": "b"}, self.start)  # #1 as the train landed it
         duplicate = self.commit({"m/migrations/00002_c.sql": "c"}, self.start)
 
         class Repo(train.Train):
