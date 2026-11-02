@@ -150,6 +150,65 @@ func (q *Queries) ListByokKeys(ctx context.Context, db DBTX, arg ListByokKeysPar
 	return items, nil
 }
 
+const listByokNoFallback = `-- name: ListByokNoFallback :many
+SELECT s.site_id, s.account_id, e.model_id
+FROM suppliers.suppliers s
+JOIN suppliers.endpoints e ON e.supplier_id = s.id
+WHERE s.status = 'byok' AND NOT s.byok_fallback
+GROUP BY s.site_id, s.account_id, e.model_id
+ORDER BY s.site_id, s.account_id, e.model_id
+`
+
+type ListByokNoFallbackRow struct {
+	SiteID    *uuid.UUID
+	AccountID *uuid.UUID
+	ModelID   uuid.UUID
+}
+
+// The account's choice not to fall back is a property of the key, not of a working credential: a key the provider refused
+// is out of routing, but its rule stays until the account changes it or removes the key.
+func (q *Queries) ListByokNoFallback(ctx context.Context, db DBTX) ([]ListByokNoFallbackRow, error) {
+	rows, err := db.Query(ctx, listByokNoFallback)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListByokNoFallbackRow
+	for rows.Next() {
+		var i ListByokNoFallbackRow
+		if err := rows.Scan(&i.SiteID, &i.AccountID, &i.ModelID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockByokCredential = `-- name: LockByokCredential :execrows
+SELECT c.id FROM suppliers.credentials c
+JOIN suppliers.suppliers s ON s.id = c.supplier_id
+WHERE s.id = $1 AND s.status = 'byok' AND c.id = $2
+FOR UPDATE OF c
+`
+
+type LockByokCredentialParams struct {
+	SupplierID   uuid.UUID
+	CredentialID uuid.UUID
+}
+
+// The console's writes on one key take this row lock: a switch and a test answer that cross would let the switch put back
+// a status the test just found refused.
+func (q *Queries) LockByokCredential(ctx context.Context, db DBTX, arg LockByokCredentialParams) (int64, error) {
+	result, err := db.Exec(ctx, lockByokCredential, arg.SupplierID, arg.CredentialID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setByokCredentialStatus = `-- name: SetByokCredentialStatus :exec
 UPDATE suppliers.credentials c SET status = $1
 FROM suppliers.suppliers s

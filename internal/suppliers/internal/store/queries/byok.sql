@@ -45,3 +45,21 @@ WHERE c.supplier_id = s.id AND s.status = 'byok' AND s.id = @supplier_id AND c.i
 UPDATE suppliers.credentials c SET status = 'rejected'
 FROM suppliers.suppliers s
 WHERE c.supplier_id = s.id AND s.status = 'byok' AND c.id = @credential_id AND c.status = 'active';
+
+-- name: LockByokCredential :execrows
+-- The console's writes on one key take this row lock: a switch and a test answer that cross would let the switch put back
+-- a status the test just found refused.
+SELECT c.id FROM suppliers.credentials c
+JOIN suppliers.suppliers s ON s.id = c.supplier_id
+WHERE s.id = @supplier_id AND s.status = 'byok' AND c.id = @credential_id
+FOR UPDATE OF c;
+
+-- name: ListByokNoFallback :many
+-- The account's choice not to fall back is a property of the key, not of a working credential: a key the provider refused
+-- is out of routing, but its rule stays until the account changes it or removes the key.
+SELECT s.site_id, s.account_id, e.model_id
+FROM suppliers.suppliers s
+JOIN suppliers.endpoints e ON e.supplier_id = s.id
+WHERE s.status = 'byok' AND NOT s.byok_fallback
+GROUP BY s.site_id, s.account_id, e.model_id
+ORDER BY s.site_id, s.account_id, e.model_id;

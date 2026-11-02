@@ -298,11 +298,19 @@ type Preset struct {
 // Snapshot is the routing view of the world, built whole in the background and replaced whole: endpoints grouped by
 // model, and the presets. It never changes after it is built.
 type Snapshot struct {
-	built   time.Time
-	byModel map[catalog.ModelID][]*candidate
-	models  []catalog.ModelID // in id order, for openrouter/auto
-	free    []catalog.ModelID // the free ones, in id order, for openrouter/free
-	presets map[PresetID]Preset
+	built      time.Time
+	byModel    map[catalog.ModelID][]*candidate
+	models     []catalog.ModelID // in id order, for openrouter/auto
+	free       []catalog.ModelID // the free ones, in id order, for openrouter/free
+	presets    map[PresetID]Preset
+	noFallback map[AccountID]map[catalog.ModelID]struct{}
+}
+
+// ByokRule is an account's no-fallback choice for one model. It is kept apart from the key's endpoints: a key the
+// provider refused is not routable, but the account's choice must still keep the platform's endpoints out.
+type ByokRule struct {
+	Account AccountID
+	Model   catalog.ModelID
 }
 
 // candidate is an endpoint with what is worked out once at build: its price as a number for weighting, and its
@@ -354,8 +362,21 @@ func priceOf(p PriceRef, direct bool) (candidatePrice, error) {
 
 // NewSnapshot groups the endpoints by model and checks them: an endpoint twice, or a preset twice, is a mistake in
 // the data that would otherwise surface as a wrong choice.
-func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset) (*Snapshot, error) {
-	s := &Snapshot{built: built, byModel: map[catalog.ModelID][]*candidate{}, presets: make(map[PresetID]Preset, len(presets))}
+//
+//nolint:gocognit // one linear pass over the endpoints and the accounts' rules
+func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset, rules ...ByokRule) (*Snapshot, error) {
+	s := &Snapshot{
+		built:      built,
+		byModel:    map[catalog.ModelID][]*candidate{},
+		presets:    make(map[PresetID]Preset, len(presets)),
+		noFallback: map[AccountID]map[catalog.ModelID]struct{}{},
+	}
+	for _, rule := range rules {
+		if s.noFallback[rule.Account] == nil {
+			s.noFallback[rule.Account] = map[catalog.ModelID]struct{}{}
+		}
+		s.noFallback[rule.Account][rule.Model] = struct{}{}
+	}
 	seen := make(map[EndpointID]struct{}, len(endpoints))
 	prices := map[*billing.AudiencePrices][]candidatePrice{}
 	for _, e := range endpoints {

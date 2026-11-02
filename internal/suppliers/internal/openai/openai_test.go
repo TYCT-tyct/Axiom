@@ -45,6 +45,9 @@ func TestClassify(t *testing.T) {
 			if _, ok := f.Cause.(adapter.ContextTooLong); !ok {
 				t.Errorf("%d: cause %T, want ContextTooLong", tc.status, f.Cause)
 			}
+			if f.Scope != adapter.ScopeEndpoint {
+				t.Errorf("%d: scope %v, want ScopeEndpoint so routing tries another endpoint", tc.status, f.Scope)
+			}
 		case adapter.BadRequest:
 			if _, ok := f.Cause.(adapter.BadRequest); !ok {
 				t.Errorf("%d: cause %T, want BadRequest", tc.status, f.Cause)

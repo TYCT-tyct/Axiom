@@ -253,7 +253,7 @@ func newSession(x *Executor, w http.ResponseWriter, r *http.Request, c *Call) *s
 // the ending that reports the cost is written (I3). A settlement not written in time goes on in the background once
 // the ending is out.
 //
-//nolint:cyclop // the settlement order is the invariant; each branch is one ending
+//nolint:cyclop,gocognit // the settlement order is the invariant; each branch is one ending
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
@@ -265,6 +265,11 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	var fin *protocol.Final
 	if err == nil && len(o.Attempts) > 0 {
 		fin = s.final(f)
+	}
+	if fin == nil && s.isByok() {
+		// The settlement did not reach the response in time, but who served the call is known from the attempt. Without
+		// this the pending ending would report is_byok false (docs/domains/gateway.md「用量与费用」).
+		fin = &protocol.Final{Pending: true, IsBYOK: true}
 	}
 	switch {
 	case e.reply != nil:
@@ -285,7 +290,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	case s.aggregate:
 		s.answerAggregate(e, fin, err)
 	case e.done:
-		final := protocol.Final{Pending: err != nil, Files: s.files}
+		final := protocol.Final{Pending: err != nil, IsBYOK: s.isByok(), Files: s.files}
 		if fin != nil {
 			final = *fin
 		}
@@ -366,7 +371,7 @@ func (s *session) rewriteDirect(reply []byte, fin *protocol.Final) ([]byte, prot
 // relay that has not ended yet, which is always the case here. The body is the relay's buffers, so its share of the
 // node's budget stays charged until the call is over (session.live), as the compact reply's is (replyHeld).
 func (s *session) answerAggregate(e ended, fin *protocol.Final, err error) {
-	final := protocol.Final{Pending: err != nil, Files: s.files}
+	final := protocol.Final{Pending: err != nil, IsBYOK: s.isByok(), Files: s.files}
 	if fin != nil {
 		final = *fin
 	}
@@ -429,15 +434,20 @@ func (s *session) dropReply() {
 	s.replyHeld = 0
 }
 
+// isByok reports whether the attempt that served the call ran on the account's own key. It reads the last attempt, which
+// is the one that served the call, and does not depend on the settlement being written.
+func (s *session) isByok() bool {
+	n := len(s.tries)
+	return n > 0 && s.tries[n-1].entry.Byok
+}
+
 // final is what the ending reports of a settlement.
 func (s *session) final(f billing.Final) *protocol.Final {
 	fin := &protocol.Final{
 		Cost: f.Charged, Currency: s.currency, Estimated: f.Estimated,
 		ServerToolCost: f.ServerToolCost, CacheDiscount: f.CacheDiscount, Files: s.files,
 	}
-	if n := len(s.tries); n > 0 {
-		fin.IsBYOK = s.tries[n-1].entry.Byok
-	}
+	fin.IsBYOK = s.isByok()
 	for _, seg := range f.Segments {
 		fin.Usage.Segments = append(fin.Usage.Segments, protocol.Segment{Usage: seg.Usage, Reported: seg.Reported})
 	}

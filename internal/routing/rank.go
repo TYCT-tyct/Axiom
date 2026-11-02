@@ -39,14 +39,23 @@ const exploreShare = 0.05
 
 // rank filters the endpoints of one model and orders those that pass. Every endpoint left out is recorded, with the
 // reason, except those the account cannot see.
+// noSharedCapacity says the platform's endpoints may not serve this model for this account: the account either forbade
+// fallback for the model, or one of its visible keys did.
+func noSharedCapacity(cands []*candidate, n *need) bool {
+	if n.noFallback {
+		return true
+	}
+	return slices.ContainsFunc(cands, func(c *candidate) bool {
+		return c.Byok && !c.ByokFallback && c.Owner.visibleTo(n.in.Admission)
+	})
+}
+
 func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 	out := make([]ranked, 0, len(cands))
 	strategy := n.strategy()
 	// A key that refuses shared capacity takes this model's platform endpoints out before anything else looks at them.
 	// It is the account's own visible endpoint, so only the requests of that account are affected.
-	noShared := slices.ContainsFunc(cands, func(c *candidate) bool {
-		return c.Byok && !c.ByokFallback && c.Owner.visibleTo(n.in.Admission)
-	})
+	noShared := noSharedCapacity(cands, n)
 	for _, c := range cands {
 		price := c.priceFor(billing.Audience{Account: accounts.AccountID(n.in.Admission.Account), Tier: n.in.Admission.Tier})
 		if price == nil {

@@ -122,8 +122,13 @@ type Service struct {
 	rejectOnce sync.Once
 }
 
-// rejection is the credential a provider refused and the supplier it belongs to.
-type rejection struct{ supplier, credential uuid.UUID }
+// rejection is the credential a provider refused, its supplier for the log, and its runtime so the in-flight mark can
+// be cleared when the write ends.
+type rejection struct {
+	supplier   uuid.UUID
+	credential uuid.UUID
+	runtime    *credRuntime
+}
 
 // New makes a service with no endpoints; Reload fills it.
 func New(cfg Config) (*Service, error) {
@@ -170,7 +175,7 @@ type credRuntime struct {
 	configuredMax, configuredMinute int32 // last loaded limits, guarded by runtimeMu, retained when no endpoint routes it
 	inflight                        atomic.Int32
 	restUnix                        atomic.Int64 // unix nanoseconds until which the credential is not picked
-	reported                        atomic.Bool  // the provider refused it and the row is being, or was, marked
+	reporting                       atomic.Bool  // a rejection is queued or being written; reset when the write ends
 	requests                        *minuteRuntime
 }
 

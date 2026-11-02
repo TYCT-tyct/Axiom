@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 	"uuid"
 
@@ -206,6 +205,8 @@ func byokProblem(err error) error {
 		fields = []errorField{{Pointer: "/provider", Message: "no listed catalog model can be served with this key"}}
 	case errors.Is(err, suppliers.ErrByokNotFound):
 		return &apiError{status: http.StatusNotFound, code: codeNotFound, message: "no such resource"}
+	case errors.Is(err, suppliers.ErrByokDisabled):
+		return &apiError{status: http.StatusServiceUnavailable, code: codeUnavailable, message: "provider keys are not enabled on this deployment"}
 	default:
 		return err
 	}
@@ -216,6 +217,10 @@ func byokProblem(err error) error {
 // and responses), generate without streaming or an output limit (legacy completions), or embed. A model with no listed
 // price has no schedule to scale, so the key does not serve it either.
 func byokModels(snap *catalog.Snapshot, provider string) []suppliers.ByokModel {
+	usd, err := platform.ParseCurrency("USD")
+	if err != nil {
+		return nil
+	}
 	var out []suppliers.ByokModel
 	for m := range snap.Models() {
 		if m.Author != provider || m.Free() {
@@ -225,27 +230,34 @@ func byokModels(snap *catalog.Snapshot, provider string) []suppliers.ByokModel {
 		if len(formats) == 0 {
 			continue
 		}
-		ref, ok := snap.ReferencePrice(m.ID, "USD")
+		schedule, ok := byokSchedule(snap, m.ID, usd)
 		if !ok {
 			continue
 		}
-		usd, err := platform.ParseCurrency("USD")
-		if err != nil {
-			continue
-		}
-		schedule, err := ref.Schedule.Scaled("0", usd)
-		if err != nil {
-			continue
-		}
-		encoded, err := schedule.MarshalJSON()
-		if err != nil {
-			continue
+		upstream, ok := snap.OfficialName(m.ID)
+		if !ok {
+			continue // no vendor name means the slug would be a guess and the provider would refuse it
 		}
 		out = append(out, suppliers.ByokModel{
-			ID: uuid.UUID(m.ID), Upstream: strings.TrimPrefix(m.Slug, provider+"/"), Formats: formats, Schedule: encoded,
+			ID: uuid.UUID(m.ID), Upstream: upstream, Formats: formats, Schedule: schedule,
 		})
 	}
 	return out
+}
+
+// byokSchedule is the zero reference schedule a key's endpoint carries, or false when the catalog has no reference
+// price for the model or its schedule cannot be rendered.
+func byokSchedule(snap *catalog.Snapshot, id catalog.ModelID, usd platform.Currency) ([]byte, bool) {
+	ref, ok := snap.ReferencePrice(id, "USD")
+	if !ok {
+		return nil, false
+	}
+	schedule, err := ref.Schedule.Scaled("0", usd)
+	if err != nil {
+		return nil, false
+	}
+	encoded, err := schedule.MarshalJSON()
+	return encoded, err == nil
 }
 
 // byokFormats is the call formats an OpenAI-compatible endpoint serves a model in, from the model's own billable

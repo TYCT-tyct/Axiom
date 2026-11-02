@@ -5,6 +5,7 @@ import (
 	"iter"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 	"uuid"
 )
@@ -299,6 +300,7 @@ type Snapshot struct {
 }
 
 type nameEntry struct {
+	name     string
 	model    ModelID
 	public   bool
 	retired  bool
@@ -372,6 +374,7 @@ func (s *Snapshot) addNames(rows []CatalogName) {
 	for _, n := range rows {
 		m := s.models[ModelID(n.ModelID)]
 		s.names[n.Norm] = nameEntry{
+			name:     n.Name,
 			model:    m.ID,
 			public:   Visibility(n.Visibility) == VisibilityPublic,
 			retired:  m.Status == StatusRetired,
@@ -390,6 +393,32 @@ func (s *Snapshot) addAliases(rows []ListAliasesForSnapshotRow) {
 			s.aliases[a.Name] = id
 		}
 	}
+}
+
+// OfficialName is the name the vendor's own API knows a model by, from the catalog's public names: the longest one for a
+// dated model, whose version is part of its name, and the shortest for a floating one. Names with an author prefix, a
+// :free suffix or an @ version are catalog names, not names the vendor would accept, so they are not chosen. A model
+// with no such name is not one a provider key can call by guessing its slug.
+func (s *Snapshot) OfficialName(id ModelID) (string, bool) {
+	m, ok := s.models[id]
+	if !ok {
+		return "", false
+	}
+	best := ""
+	for _, e := range s.names {
+		if e.model != id || !e.public || strings.ContainsAny(e.name, "/:@") || strings.HasSuffix(e.name, "-latest") {
+			continue
+		}
+		switch {
+		case best == "":
+			best = e.name
+		case m.VersionBasis == VersionDated && len(e.name) > len(best):
+			best = e.name
+		case m.VersionBasis != VersionDated && len(e.name) < len(best):
+			best = e.name
+		}
+	}
+	return best, best != ""
 }
 
 // Model returns a listed or retired model.

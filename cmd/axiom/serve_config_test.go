@@ -15,6 +15,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
+	"axiom/internal/platform/config"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
@@ -283,5 +284,19 @@ func TestDirectFormatsRejectsUnknownValues(t *testing.T) {
 	_, err := readSettings([]string{"AXIOM_DIRECT_FORMATS=maybe"})
 	if err == nil || !strings.Contains(err.Error(), "AXIOM_DIRECT_FORMATS: want on or off") {
 		t.Fatalf("direct-format gate validation: %v", err)
+	}
+}
+
+func TestByokRejectsUnknownValues(t *testing.T) {
+	_, err := readSettings([]string{"AXIOM_BYOK=maybe"})
+	if err == nil || !strings.Contains(err.Error(), "AXIOM_BYOK: want on or off") {
+		t.Fatalf("BYOK gate validation: %v", err)
+	}
+	var s nodeSettings
+	if err := readByok(config.New(nil), &s); err != nil || s.byok {
+		t.Errorf("the BYOK gate defaults to %v, %v, want off", s.byok, err)
+	}
+	if err := readByok(config.New([]string{"AXIOM_BYOK=on"}), &s); err != nil || !s.byok {
+		t.Errorf("AXIOM_BYOK=on reads as %v, %v", s.byok, err)
 	}
 }

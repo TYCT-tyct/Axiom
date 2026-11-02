@@ -34,6 +34,8 @@ var (
 	ErrByokNotFound = errors.New("suppliers: no such provider key")
 	// ErrByokStatus is a status a provider key cannot be put in by a person.
 	ErrByokStatus = errors.New("suppliers: not a status a provider key can take")
+	// ErrByokDisabled is this deployment not having enabled provider keys yet.
+	ErrByokDisabled = errors.New("suppliers: provider keys are not enabled on this deployment")
 )
 
 // byokProviders are the providers whose official API this node can call with an account's key. A provider is a kind in
@@ -62,6 +64,36 @@ type ByokRequest struct {
 	Actor    audit.Actor
 }
 
+// ByokRule is one model an account's key keeps away from the platform: the key exists and the account forbade fallback,
+// whether or not the key's credential is usable now. Routing reads these separately from Routable so a refusal cannot
+// silently lift the account's choice.
+type ByokRule struct {
+	Site, Account, Model uuid.UUID
+}
+
+// ByokRules reads every account's no-fallback rule. It does not decrypt anything and does not depend on a credential's
+// status: that is what makes the rule survive a 401.
+func ByokRules(ctx context.Context, db *pg.DB, scope pg.Scope) ([]ByokRule, error) {
+	var out []ByokRule
+	err := db.ReadTx(ctx, scope, func(tx pg.Tx) error {
+		rows, err := store.New().ListByokNoFallback(ctx, tx)
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			if r.SiteID == nil || r.AccountID == nil {
+				continue
+			}
+			out = append(out, ByokRule{Site: *r.SiteID, Account: *r.AccountID, Model: r.ModelID})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read the provider keys' fallback rules: %w", err)
+	}
+	return out, nil
+}
+
 // ByokKey is a provider key as the console lists it. It never holds the key or its ciphertext.
 type ByokKey struct {
 	ID        uuid.UUID
@@ -81,6 +113,9 @@ type ByokKey struct {
 //
 //nolint:cyclop,funlen,gocognit // one transaction writes the rows in their dependency order; splitting it would break the all-or-nothing read
 func (a *Admin) CreateByok(ctx context.Context, tx pg.Tx, r ByokRequest, models []ByokModel) (ByokKey, error) {
+	if !a.byok {
+		return ByokKey{}, ErrByokDisabled
+	}
 	name := strings.TrimSpace(r.Name)
 	if name == "" || len([]rune(name)) > 200 {
 		return ByokKey{}, ErrByokName
@@ -116,8 +151,8 @@ func (a *Admin) CreateByok(ctx context.Context, tx pg.Tx, r ByokRequest, models 
 	if err != nil {
 		return ByokKey{}, fmt.Errorf("make the provider key's group: %w", err)
 	}
-	codename := "byok-" + id.String()[:8]
-	if err := q.SelectGroup(ctx, tx, store.SelectGroupParams{ID: group, Selected: true, Codename: &codename}); err != nil {
+	code := codename()
+	if err := q.SelectGroup(ctx, tx, store.SelectGroupParams{ID: group, Selected: true, Codename: &code}); err != nil {
 		return ByokKey{}, fmt.Errorf("select the provider key's group: %w", err)
 	}
 	credential := uuid.NewV7()
@@ -165,7 +200,7 @@ func (a *Admin) CreateByok(ctx context.Context, tx pg.Tx, r ByokRequest, models 
 			return ByokKey{}, fmt.Errorf("put the endpoint for %s in service: %w", m.Upstream, err)
 		}
 	}
-	if err := a.record(ctx, tx, r.Actor, "supplier.byok_create", id, "an account added its own provider key", map[string]any{
+	if err := a.recordByok(ctx, tx, r.Actor, "supplier.byok_create", r.Site, r.Account, id, "an account added its own provider key", map[string]any{
 		"provider": r.Provider, "hint": hintOf(key), "fallback": r.Fallback, "models": len(models),
 	}); err != nil {
 		return ByokKey{}, err
@@ -218,6 +253,12 @@ func (a *Admin) SetByokEnabled(ctx context.Context, tx pg.Tx, site, account, id 
 	if err != nil {
 		return ByokKey{}, err
 	}
+	if err := a.lockByok(ctx, tx, id, credential); err != nil {
+		return ByokKey{}, err
+	}
+	if row, _, err = a.byokRow(ctx, tx, site, account, id); err != nil {
+		return ByokKey{}, err
+	}
 	status := row.CredentialStatus
 	switch {
 	case !enabled && status == "active":
@@ -237,7 +278,7 @@ func (a *Admin) SetByokEnabled(ctx context.Context, tx pg.Tx, site, account, id 
 		if enabled {
 			action = "supplier.byok_enable"
 		}
-		if err := a.record(ctx, tx, actor, action, id, "the account switched its provider key", map[string]any{"hint": hint(row)}); err != nil {
+		if err := a.recordByok(ctx, tx, actor, action, site, account, id, "the account switched its provider key", map[string]any{"hint": hint(row)}); err != nil {
 			return ByokKey{}, err
 		}
 		row.CredentialStatus = status
@@ -248,8 +289,11 @@ func (a *Admin) SetByokEnabled(ctx context.Context, tx pg.Tx, site, account, id 
 // RemoveByok takes a key out of service for good: the supplier becomes removed, the credential erased and its
 // ciphertext cleared. Attempt cost rows stay, because they point at the credential.
 func (a *Admin) RemoveByok(ctx context.Context, tx pg.Tx, site, account, id uuid.UUID, actor audit.Actor) error {
-	row, _, err := a.byokRow(ctx, tx, site, account, id)
+	row, credential, err := a.byokRow(ctx, tx, site, account, id)
 	if err != nil {
+		return err
+	}
+	if err := a.lockByok(ctx, tx, id, credential); err != nil {
 		return err
 	}
 	if err := store.New().SetSupplierStatusBumpingConfigGen(ctx, tx, store.SetSupplierStatusBumpingConfigGenParams{
@@ -260,7 +304,7 @@ func (a *Admin) RemoveByok(ctx context.Context, tx pg.Tx, site, account, id uuid
 	if err := store.New().EraseCredentialsOf(ctx, tx, id); err != nil {
 		return fmt.Errorf("erase the provider key: %w", err)
 	}
-	return a.record(ctx, tx, actor, "supplier.byok_remove", id, "the account removed its provider key", map[string]any{"hint": hint(row)})
+	return a.recordByok(ctx, tx, actor, "supplier.byok_remove", site, account, id, "the account removed its provider key", map[string]any{"hint": hint(row)})
 }
 
 // byokRow reads one key of the account, with the credential the console acts on.
@@ -280,6 +324,21 @@ func (*Admin) byokRow(ctx context.Context, tx pg.Tx, site, account, id uuid.UUID
 		return row, credential, nil
 	}
 	return store.ListByokKeysRow{}, uuid.UUID{}, ErrByokNotFound
+}
+
+// lockByok serializes the console's writes on one key's credential. A test's answer and the switch must not cross:
+// without the lock, a switch that read "disabled" could write "active" over a test that just found the key refused.
+func (*Admin) lockByok(ctx context.Context, tx pg.Tx, id, credential uuid.UUID) error {
+	rows, err := store.New().LockByokCredential(ctx, tx, store.LockByokCredentialParams{
+		SupplierID: id, CredentialID: credential,
+	})
+	if err != nil {
+		return fmt.Errorf("lock the provider key: %w", err)
+	}
+	if rows == 0 {
+		return ErrByokNotFound
+	}
+	return nil
 }
 
 func hint(r store.ListByokKeysRow) string {
@@ -316,6 +375,13 @@ func (a *Admin) RevealByok(ctx context.Context, tx pg.Tx, site, account, id uuid
 // SetByokTestResult records what a test found: a key the provider accepts becomes active, one it refuses becomes
 // rejected and stays out of routing until a later test succeeds. Nothing else changes it back.
 func (a *Admin) SetByokTestResult(ctx context.Context, tx pg.Tx, site, account, id, credential uuid.UUID, ok bool, actor audit.Actor) (ByokKey, error) {
+	_, current, err := a.byokRow(ctx, tx, site, account, id)
+	if err != nil {
+		return ByokKey{}, err
+	}
+	if err := a.lockByok(ctx, tx, id, current); err != nil {
+		return ByokKey{}, err
+	}
 	row, _, err := a.byokRow(ctx, tx, site, account, id)
 	if err != nil {
 		return ByokKey{}, err
@@ -329,7 +395,7 @@ func (a *Admin) SetByokTestResult(ctx context.Context, tx pg.Tx, site, account, 
 	}); err != nil {
 		return ByokKey{}, fmt.Errorf("record the test: %w", err)
 	}
-	if err := a.record(ctx, tx, actor, "supplier.byok_test", id, "the account tested its provider key", map[string]any{
+	if err := a.recordByok(ctx, tx, actor, "supplier.byok_test", site, account, id, "the account tested its provider key", map[string]any{
 		"ok": ok, "hint": hint(row),
 	}); err != nil {
 		return ByokKey{}, err

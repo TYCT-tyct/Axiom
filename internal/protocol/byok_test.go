@@ -30,4 +30,11 @@ func TestIsByokUsage(t *testing.T) {
 	if !bytes.Contains(out, []byte(`"is_byok":true`)) {
 		t.Errorf("a direct reply on the account's key reports %s, want is_byok true", out)
 	}
+	out, err = protocol.RewriteDirectReply(protocol.Embeddings, reply, "id", "m", protocol.Usage{}, &protocol.Final{Pending: true, IsBYOK: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(`"billing_pending":true`)) || !bytes.Contains(out, []byte(`"is_byok":true`)) {
+		t.Errorf("a pending direct reply on the account's key reports %s, want billing_pending and is_byok true", out)
+	}
 }

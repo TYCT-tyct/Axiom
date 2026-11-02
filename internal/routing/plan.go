@@ -14,16 +14,17 @@ import (
 
 // need is everything a candidate is held against, worked out once per request.
 type need struct {
-	in     *Input
-	req    *protocol.Request
-	preset *Preset
-	over   *Override
-	auto   bool                   // rank across every model: the request named openrouter/auto
-	free   bool                   // rank across the free models: the request named openrouter/free
-	tokens int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
-	demand billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
-	tiers  catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
-	now    time.Time
+	in         *Input
+	req        *protocol.Request
+	preset     *Preset
+	over       *Override
+	auto       bool                   // rank across every model: the request named openrouter/auto
+	free       bool                   // rank across the free models: the request named openrouter/free
+	tokens     int64                  // an estimate of the input, in tokens; at billing.InputBytesPerToken, the rate a charge's estimate takes
+	demand     billing.Demand         // what billing would quote the request for, which bounds its length for the price limits
+	tiers      catalog.ServiceTierSet // the tiers it may be charged at, as billing takes them: its own and standard
+	now        time.Time
+	noFallback bool // the account forbade fallback for the model being ranked
 }
 
 // attempts is how many endpoints a plan may try: the preset's or the router's default, and one for a file reference,
@@ -62,6 +63,7 @@ func (r *Router) rankModels(snap *Snapshot, n *need, rec *Record) []ranked {
 		if len(cands) == 0 {
 			rec.Excluded = append(rec.Excluded, Excluded{Reason: NoCandidates})
 		}
+		_, n.noFallback = snap.noFallback[n.in.Admission.Account][m]
 		order = append(order, r.rank(cands, n, rec)...)
 	}
 	return order

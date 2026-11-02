@@ -82,7 +82,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	if err != nil {
 		return nodeRoutes{}, err
 	}
-	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: p.master, Egress: exit})
+	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: p.master, Egress: exit, Byok: p.cfg.byok})
 	if err != nil {
 		return nodeRoutes{}, err
 	}

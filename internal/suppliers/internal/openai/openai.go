@@ -85,7 +85,7 @@ func (quirks) Classify(status int, h http.Header, body []byte) adapter.Failure {
 	case status == http.StatusTooManyRequests:
 		return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.RateLimited{RetryAfter: adapter.RetryAfter(h)}}
 	case status == http.StatusBadRequest && e.Error.Code == "context_length_exceeded":
-		return adapter.Failure{Scope: adapter.ScopeRequest, Cause: adapter.ContextTooLong{}}
+		return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.ContextTooLong{}}
 	case status == http.StatusBadRequest:
 		return adapter.Failure{Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	case status == http.StatusNotFound, e.Error.Code == "model_not_found":

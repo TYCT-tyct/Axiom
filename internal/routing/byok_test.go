@@ -2,6 +2,7 @@ package routing_test
 
 import (
 	"testing"
+	"time"
 
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
@@ -66,5 +67,31 @@ func TestByokNoFallbackIsPerModel(t *testing.T) {
 	p := h.plan(input())
 	if len(p.Entries) != 1 || first(p) != shared.ID {
 		t.Fatalf("the plan is %+v, want the site's endpoint %v for the model the key does not cover", p.Entries, shared.ID)
+	}
+}
+
+// TestByokRuleSurvivesRejection: the account's no-fallback choice is a snapshot rule, not an endpoint. When the key's
+// credential is rejected its endpoint is gone, but the rule still keeps the platform's endpoint out of the plan.
+func TestByokRuleSurvivesRejection(t *testing.T) {
+	t.Parallel()
+	shared := endpoint(t, 1)
+	h := newHarness(t, routing.Config{}, openPreset(), shared)
+	h.now = h.now.Add(time.Nanosecond)
+	snap, err := h.r.NewSnapshot(h.now, []routing.Endpoint{shared}, []routing.Preset{openPreset()},
+		routing.ByokRule{Account: acct, Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.r.Replace(snap)
+	none := h.excluded(input())
+	if !none.Permanent {
+		t.Fatalf("the answer is %+v, want a permanent NoEndpoint", none)
+	}
+	var saw bool
+	for _, r := range none.Reasons {
+		saw = saw || r.Reason == routing.ByokNoFallback
+	}
+	if !saw {
+		t.Fatalf("the reasons are %+v, want byok_no_fallback after the key was rejected", none.Reasons)
 	}
 }

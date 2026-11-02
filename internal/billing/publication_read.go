@@ -197,9 +197,9 @@ func (s Sold) WithCosts(model catalog.Model, costs []PriceCost) Sold {
 	return s
 }
 
-// ByokFee is the site's share of a model's normal sale price, charged when the account's own provider key serves the
-// request (docs/domains/billing.md「定价」). It is a decimal multiplier for catalog.Schedule.Scaled: 500 basis points
-// is "0.0500". A site without a policy row has the default, the same value the column's default gives.
+// ByokFee is the site's share of a model's reference price, charged when the account's own provider key serves the
+// request (docs/domains/billing.md「定价」). It is a decimal multiplier for a reference schedule: 500 basis points is
+// "0.0500". A site without a policy row has the default, the same value the column's default gives.
 func ByokFee(ctx context.Context, tx pg.Tx, site uuid.UUID) (string, error) {
 	policy, err := loadPricePolicy(ctx, tx, site)
 	if err != nil {

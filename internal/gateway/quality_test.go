@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
@@ -51,7 +52,11 @@ func TestRoutePublishesMeasuredQuality(t *testing.T) {
 // published is what the snapshot says of r, or a fatal error why it cannot be an endpoint.
 func published(t *testing.T, f *routeFixture, snap *catalog.Snapshot, r suppliers.Routable, now time.Time) routing.Endpoint {
 	t.Helper()
-	e, why := endpointOf(snap, f.prices, nil, "0", r, f.health.MeasuredFor(r, now))
+	usd, err := platform.ParseCurrency("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, why := endpointOf(snap, f.prices, nil, "0", nil, usd, r, f.health.MeasuredFor(r, now))
 	if why != "" {
 		t.Fatalf("endpoint %s: %s", r.ID, why)
 	}

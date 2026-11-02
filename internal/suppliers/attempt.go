@@ -356,17 +356,18 @@ func (a *Attempt) rest(f Failure) {
 	}
 }
 
-// reportRejected asks the worker to mark a key the provider refused. A credential reports once: the call path stays
-// free of the database, and a revoked key found by a thousand requests writes its row once.
+// reportRejected asks the worker to mark a key the provider refused. A credential has at most one report in flight: the
+// call path stays free of the database, and a revoked key found by a thousand requests writes its row once. The mark is
+// cleared when the write ends, so a write that failed is tried again and a key that a test restored can be marked again.
 func (s *Service) reportRejected(supplier uuid.UUID, cred *credential) {
-	if s.cfg.DB == nil || !cred.rt.reported.CompareAndSwap(false, true) {
+	if s.cfg.DB == nil || !cred.rt.reporting.CompareAndSwap(false, true) {
 		return
 	}
 	s.rejectOnce.Do(func() { go s.markRejected() })
 	select {
-	case s.rejected <- rejection{supplier: supplier, credential: cred.id}:
+	case s.rejected <- rejection{supplier: supplier, credential: cred.id, runtime: cred.rt}:
 	default:
-		cred.rt.reported.Store(false) // the queue is full; a later rejection tries again
+		cred.rt.reporting.Store(false) // the queue is full; a later rejection tries again
 	}
 }
 
@@ -381,6 +382,7 @@ func (s *Service) markRejected() {
 		if err != nil {
 			s.cfg.Logger.Error("marking a refused provider key", "supplier", r.supplier.String(), "err", err)
 		}
+		r.runtime.reporting.Store(false)
 		cancel()
 	}
 }

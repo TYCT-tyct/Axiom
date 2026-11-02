@@ -3,6 +3,7 @@ package suppliers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"uuid"
 
@@ -14,6 +15,7 @@ import (
 // byokFixture makes one key with a listed model for an account and returns it.
 func byokFixture(t *testing.T, a admins, site, account uuid.UUID) ByokKey {
 	t.Helper()
+	registerTenant(a, site, account)
 	key, err := inTx(a, func(ctx context.Context, tx pg.Tx) (ByokKey, error) {
 		return a.admin.CreateByok(ctx, tx, ByokRequest{
 			Site: site, Account: account, Name: "my key", Provider: "openai",
@@ -25,6 +27,14 @@ func byokFixture(t *testing.T, a admins, site, account uuid.UUID) ByokKey {
 	})
 	refuses(t, "making a provider key", err, nil)
 	return key
+}
+
+// registerTenant makes the audit log's foreign key accept the site and account a test uses.
+func registerTenant(a admins, site, account uuid.UUID) {
+	a.sql(
+		fmt.Sprintf("INSERT INTO platform.tenants (site_id, tenant_id) VALUES ('%s', '%s') ON CONFLICT DO NOTHING", site, site),
+		fmt.Sprintf("INSERT INTO platform.tenants (site_id, tenant_id) VALUES ('%s', '%s') ON CONFLICT DO NOTHING", site, account),
+	)
 }
 
 // TestByokLifecycle: a key is sealed, listed with only its last four characters, switched off, refused by the provider
@@ -131,4 +141,130 @@ func byokCredential(ctx context.Context, t *testing.T, a admins, id uuid.UUID) u
 		t.Fatal(err)
 	}
 	return credential
+}
+
+// TestByokWritesInAccountScope: the console's four writes run in the account's own transaction, which is what the audit
+// log's row-level security and its registered-tenant foreign key check. A platform transaction would hide a missing
+// tenant in the audit target, so this test uses only pg.AccountScope.
+func TestByokWritesInAccountScope(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	site, account := uuid.NewV7(), uuid.NewV7()
+	registerTenant(a, site, account)
+	model := uuid.NewV7()
+	ctx := t.Context()
+
+	var key ByokKey
+	if err := a.db.Tx(ctx, pg.AccountScope(account), func(tx pg.Tx) (err error) {
+		key, err = a.admin.CreateByok(ctx, tx, ByokRequest{
+			Site: site, Account: account, Name: "scoped", Provider: "openai",
+			Key: "sk-proj-abcdefghijklmnop", Fallback: true, Actor: a.actor,
+		}, []ByokModel{{
+			ID: model, Upstream: "gpt-5", Formats: []protocol.Format{protocol.Chat},
+			Schedule: []byte(`{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`),
+		}})
+		return err
+	}); err != nil {
+		t.Fatalf("create in the account's scope: %v", err)
+	}
+
+	var credential uuid.UUID
+	if err := a.db.ReadTx(ctx, pg.AccountScope(account), func(tx pg.Tx) error {
+		var err error
+		credential, err = store.New().CredentialOfByok(ctx, tx, key.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		name string
+		do   func(pg.Tx) error
+	}{
+		{"disable", func(tx pg.Tx) error {
+			_, err := a.admin.SetByokEnabled(ctx, tx, site, account, key.ID, false, a.actor)
+			return err
+		}},
+		{"test", func(tx pg.Tx) error {
+			_, err := a.admin.SetByokTestResult(ctx, tx, site, account, key.ID, credential, true, a.actor)
+			return err
+		}},
+		{"remove", func(tx pg.Tx) error {
+			return a.admin.RemoveByok(ctx, tx, site, account, key.ID, a.actor)
+		}},
+	} {
+		if err := a.db.Tx(ctx, pg.AccountScope(account), step.do); err != nil {
+			t.Errorf("%s in the account's scope: %v", step.name, err)
+		}
+	}
+}
+
+// TestByokCodenameIsUnique: the group's codename is globally unique. A prefix of a UUIDv7 repeats for every key made in
+// the same 65.536-second window, so two keys made together would fail the unique constraint; the name is random instead.
+func TestByokCodenameIsUnique(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	site := uuid.NewV7()
+	first, second := uuid.NewV7(), uuid.NewV7()
+	one := byokFixture(t, a, site, first)
+	two := byokFixture(t, a, site, second)
+	name := func(id uuid.UUID) string {
+		return a.text(`SELECT codename FROM suppliers.supplier_groups WHERE supplier_id = '` + id.String() + `'`)
+	}
+	if a, b := name(one.ID), name(two.ID); a == b || len(a) < 9 || a[:1] != "g" {
+		t.Errorf("codenames %q and %q, want two different random names", a, b)
+	}
+}
+
+// TestByokGate: a deployment that has not enabled provider keys refuses to create one, whatever the console asks.
+func TestByokGate(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	a.admin.byok = false
+	site, account := uuid.NewV7(), uuid.NewV7()
+	registerTenant(a, site, account)
+	_, err := inTx(a, func(ctx context.Context, tx pg.Tx) (ByokKey, error) {
+		return a.admin.CreateByok(ctx, tx, ByokRequest{
+			Site: site, Account: account, Name: "off", Provider: "openai",
+			Key: "sk-proj-abcdefghijklmnop", Fallback: true, Actor: a.actor,
+		}, []ByokModel{{ID: uuid.NewV7(), Upstream: "gpt-5", Formats: []protocol.Format{protocol.Chat}}})
+	})
+	if !errors.Is(err, ErrByokDisabled) {
+		t.Fatalf("creating a key while the gate is off: %v, want ErrByokDisabled", err)
+	}
+}
+
+// TestByokNoFallbackSurvivesRejection: the rule is read from the key's rows, not from its working credentials, so a 401
+// that takes the key out of routing does not let the next request spend the platform's endpoints.
+func TestByokNoFallbackSurvivesRejection(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	site, account := uuid.NewV7(), uuid.NewV7()
+	registerTenant(a, site, account)
+	model := uuid.NewV7()
+	var key ByokKey
+	if err := a.db.Tx(t.Context(), pg.AccountScope(account), func(tx pg.Tx) (err error) {
+		key, err = a.admin.CreateByok(t.Context(), tx, ByokRequest{
+			Site: site, Account: account, Name: "no fallback", Provider: "openai",
+			Key: "sk-proj-abcdefghijklmnop", Fallback: false, Actor: a.actor,
+		}, []ByokModel{{
+			ID: model, Upstream: "gpt-5", Formats: []protocol.Format{protocol.Chat},
+			Schedule: []byte(`{"v":1,"currency":"USD","rates":{"input":"0","output":"0"}}`),
+		}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	credential := byokCredential(t.Context(), t, a, key.ID)
+	if _, err := inTx(a, func(ctx context.Context, tx pg.Tx) (struct{}, error) {
+		return struct{}{}, store.New().SetByokRejected(ctx, tx, credential)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := ByokRules(t.Context(), a.db, pg.PlatformScope())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || rules[0].Site != site || rules[0].Account != account || rules[0].Model != model {
+		t.Fatalf("the rules after a 401 are %+v, want the account's no-fallback rule for %s", rules, model)
+	}
 }
