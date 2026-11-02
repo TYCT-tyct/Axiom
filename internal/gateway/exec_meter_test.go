@@ -142,6 +142,7 @@ func TestARefusedExtensionCutsTheStream(t *testing.T) {
 	}
 }
 
+//nolint:cyclop // one assertion per property of the cut, kept together
 func checkCut(t *testing.T, h *harness, tc cutCase) {
 	t.Helper()
 	body := h.w.body()

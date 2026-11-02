@@ -12,6 +12,8 @@ import (
 // TestRewriteCompactReply: a compact call's reply reports Axiom's usage and cost in its top-level usage, and every
 // other member stays where and as it was; a settlement that was not written costs nothing and says so
 // (docs/domains/gateway.md「转发规则」).
+//
+//nolint:gocognit // the table and its assertions are the test
 func TestRewriteCompactReply(t *testing.T) {
 	settled, err := catalog.NewUsage(map[catalog.Item]int64{
 		catalog.ItemInput: 5, catalog.ItemCacheRead: 2, catalog.ItemOutput: 3, catalog.ItemReasoning: 1,

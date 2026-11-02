@@ -110,6 +110,8 @@ var auxEndpoints = map[string]endpoint{
 // disabled, expired, deleted or limited to other addresses is 401 whatever the cache holds. A management key may read
 // `/key` and `/credits`, as OpenRouter's may, and nothing else: it cannot make a call, and the endpoints that report
 // what a call did are for call keys.
+//
+//nolint:gocognit // the endpoint table and its assertions are the test
 func TestAuxJudgeTheKeyAsACallDoes(t *testing.T) {
 	t.Parallel()
 	for name, change := range map[string]string{

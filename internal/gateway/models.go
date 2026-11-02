@@ -169,7 +169,8 @@ func (h *Handler) authoriseRead(r *http.Request, caller accounts.Caller, fn func
 }
 
 func (h *Handler) authoriseWith(admit func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error,
-	r *http.Request, caller accounts.Caller, fn func(context.Context, pg.Tx, accounts.Admission) error) error {
+	r *http.Request, caller accounts.Caller, fn func(context.Context, pg.Tx, accounts.Admission) error,
+) error {
 	ctx, cancel := context.WithTimeout(r.Context(), h.Limits.cfg.AdmissionBudget)
 	defer cancel()
 	release, err := h.Limits.Pool.Acquire(ctx, Admission)

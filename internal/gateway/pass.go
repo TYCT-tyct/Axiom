@@ -34,42 +34,9 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 		s.dropReply()
 		return s.failedReply(a, ctx, err)
 	}
-	if s.c.Format.Direct() {
-		if err := protocol.ValidateDirectReply(s.c.Format, body); err != nil {
-			s.dropReply()
-			return s.failedReply(a, ctx, err)
-		}
-		u, err := protocol.DirectUsage(s.c.Format, body)
-		if err != nil {
-			s.dropReply()
-			return s.failedReply(a, ctx, err)
-		}
-		a.usage = u
-		// The rewrite holds a second copy beside the upstream's, with room for Axiom's members.
-		extra := int64(len(body)) + 64<<10
-		if !s.x.Memory.Charge(extra) {
-			s.dropReply()
-			return s.failedReply(a, ctx, protocol.ErrMemory)
-		}
-		s.replyHeld += extra
-	} else {
-		if s.c.Compact {
-			// The client reads a usage the gateway writes, so the reply must be the one object it can rewrite.
-			if err := protocol.ValidateCompactReply(body); err != nil {
-				s.dropReply()
-				return s.failedReply(a, ctx, err)
-			}
-		}
-		a.usage = protocol.UsageOf(body)
-		if s.c.Compact {
-			// As for a direct format, the rewrite holds a second copy beside the upstream's, with room for Axiom's members.
-			extra := int64(len(body)) + 64<<10
-			if !s.x.Memory.Charge(extra) {
-				s.dropReply()
-				return s.failedReply(a, ctx, protocol.ErrMemory)
-			}
-			s.replyHeld += extra
-		}
+	if err := a.readUsage(body); err != nil {
+		s.dropReply()
+		return s.failedReply(a, ctx, err)
 	}
 	a.obs.Done, a.obs.Empty = true, len(body) == 0
 	rec := &s.ends[a.i]
@@ -83,6 +50,40 @@ func (a *attempt) pass(ctx context.Context, resp *http.Response) (step, ended) {
 	rec.Result, rec.Finish = billing.Aggregated, billing.FinishStop
 	s.record(a, false, 0, 0)
 	return over, ended{reply: body, status: resp.StatusCode}
+}
+
+// readUsage validates a whole reply whose usage the gateway writes and charges the copy that rewrite holds beside the
+// upstream's. A direct format's usage is read by its own reader; the compact one's by UsageOf, which estimates what the
+// reply omits. Neither reaches the client before it is whole, so a reply that fails here still lets the call try
+// another entry.
+func (a *attempt) readUsage(body []byte) error {
+	s := a.s
+	if s.c.Format.Direct() {
+		if err := protocol.ValidateDirectReply(s.c.Format, body); err != nil {
+			return err
+		}
+		u, err := protocol.DirectUsage(s.c.Format, body)
+		if err != nil {
+			return err
+		}
+		a.usage = u
+	} else {
+		if s.c.Compact {
+			// The client reads a usage the gateway writes, so the reply must be the one object it can rewrite.
+			if err := protocol.ValidateCompactReply(body); err != nil {
+				return err
+			}
+		}
+		a.usage = protocol.UsageOf(body)
+	}
+	if s.c.Format.Direct() || s.c.Compact {
+		extra := int64(len(body)) + 64<<10
+		if !s.x.Memory.Charge(extra) {
+			return protocol.ErrMemory
+		}
+		s.replyHeld += extra
+	}
+	return nil
 }
 
 // readWhole reads a reply whole within the node's memory budget, charging each growth of its buffer before it is made,

@@ -93,8 +93,10 @@ func NewHandler(d Deps) (*Handler, error) {
 	if !d.Accounts.GatesLookups() {
 		return nil, errors.New("gateway: accounts must take its key lookups' slots from Backpressure.KeyLookupSlot")
 	}
-	h := &Handler{Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, admitReadTx: d.Accounts.AdmitRead,
-		admitBatchTx: d.Accounts.AdmitBatch, outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter)}
+	h := &Handler{
+		Deps: d, mux: http.NewServeMux(), admitTx: d.Accounts.Admit, admitReadTx: d.Accounts.AdmitRead,
+		admitBatchTx: d.Accounts.AdmitBatch, outage: newOutage(d.Logger, d.Meter), charges: billing.NewChargeReader(d.Logger, d.Meter),
+	}
 	for _, prefix := range []string{"/v1", "/api/v1"} {
 		for path, format := range map[string]protocol.Format{
 			"/chat/completions": protocol.Chat, "/responses": protocol.Responses, "/messages": protocol.Messages,

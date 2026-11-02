@@ -127,6 +127,8 @@ func typedError(body map[string]any) map[string]any {
 // TestRenderRejection: what the upstream said of a request it refused reaches the client in its own words, with the
 // type and param it gave, its code in metadata.provider_code (omitted when it gave none) and the numeric status as the
 // code, in the shells that have them; Messages keeps its own type.
+//
+//nolint:gocognit // the table and its assertions are the test
 func TestRenderRejection(t *testing.T) {
 	openAI := &protocol.Rejection{
 		Message: "Invalid value for 'max_tokens': expected a value above 0.", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value",
@@ -177,6 +179,8 @@ func TestRenderRejection(t *testing.T) {
 // TestTypedRejection: a request error the gateway classified keeps its unified type and the status table's status as
 // the numeric code, whatever the upstream called it, and the upstream's own code stays in metadata.provider_code when
 // it gave one (docs/domains/gateway.md「错误」).
+//
+//nolint:cyclop,gocognit // the table and its assertions are the test
 func TestTypedRejection(t *testing.T) {
 	for _, row := range []struct {
 		typ    protocol.ErrorType

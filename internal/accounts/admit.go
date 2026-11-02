@@ -85,8 +85,10 @@ func limit(amount *int64, reset *string) (int64, string, bool) {
 
 // callKinds is what a model call admits: a call key alone. readKinds are the keys the read-only endpoints OpenRouter
 // opens to management keys admit: both kinds.
-var callKinds = []string{CallKey}
-var readKinds = []string{CallKey, ManagementKey}
+var (
+	callKinds = []string{CallKey}
+	readKinds = []string{CallKey, ManagementKey}
+)
 
 // Admit opens the call's admission transaction in the key's account scope, checks in one query that the key may be
 // used now (on an enabled API domain of its site; key, workspace and account enabled; key and workspace not deleted;
@@ -95,27 +97,23 @@ var readKinds = []string{CallKey, ManagementKey}
 // ErrUnknownKey. Every node reads the database here, so a change committed before the call starts refuses it whatever
 // the nodes have cached. fn's error rolls back.
 func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(tx pg.Tx, a Admission) error) error {
-	if c == (Caller{}) {
-		return ErrUnknownKey
-	}
-	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(c.account)), func(tx pg.Tx) error {
-		a, err := s.checkKey(ctx, tx, c, r, callKinds)
-		if err != nil {
-			return err
-		}
-		return fn(tx, a)
-	})
+	return s.admit(ctx, c, r, callKinds, fn)
 }
 
 // AdmitRead is Admit for the read-only endpoints OpenRouter opens to management keys as well as call keys. A
 // management key stays unable to make a model call, which asks for a call key alone, and a call key sees what it
 // always saw; the ManagementKey in Admission.Kind tells the reader which one asked.
 func (s *Service) AdmitRead(ctx context.Context, c Caller, r AdmitRequest, fn func(tx pg.Tx, a Admission) error) error {
+	return s.admit(ctx, c, r, readKinds, fn)
+}
+
+// admit is the transaction both admissions share: the kinds are the only difference between a call and a read.
+func (s *Service) admit(ctx context.Context, c Caller, r AdmitRequest, kinds []string, fn func(tx pg.Tx, a Admission) error) error {
 	if c == (Caller{}) {
 		return ErrUnknownKey
 	}
 	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(c.account)), func(tx pg.Tx) error {
-		a, err := s.checkKey(ctx, tx, c, r, readKinds)
+		a, err := s.checkKey(ctx, tx, c, r, kinds)
 		if err != nil {
 			return err
 		}
