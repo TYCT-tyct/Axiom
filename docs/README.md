@@ -44,6 +44,7 @@
 | 合并队列：怎么排队、出队，标签的含义，列车怎么构建、找出元凶、落地和恢复，失败的列车怎么看，不稳定测试清单 | [ops/merge-train.md](ops/merge-train.md) | 给 PR 加 `queue` 之前；列车失败或卡住时 |
 | 上线前的安全审查：每次查了什么、怎么查、发现了什么、哪些没覆盖 | [ops/security-review.md](ops/security-review.md) | 做上线前审查、复核审查结论、接手遗留发现时 |
 | 备份与恢复：一次备份包含什么、加密与收件人、上传与保留、单实例、空白环境恢复、恢复演练、生产入口 | [ops/backup-restore.md](ops/backup-restore.md) | 配置或检查备份、恢复一台机器、改生产入口之前 |
+| PostgreSQL 热备与切换演练：选型与费用、同步复制、提升条件、旧主隔离、代码的重试与只读检测、演练场景与记录 | [ops/pg-ha.md](ops/pg-ha.md) | 部署或改动数据库高可用之前；做主备切换演练时 |
 | 发布前：目录规格要补全（请求写法的键怎么写进库、怎么检查），发布前的其他确认 | [ops/release.md](ops/release.md) | 发布或部署之前 |
 | 错题：已经发生、还没转成检查或规则的问题，以及上次复盘的日期 | [lessons.md](lessons.md) | 复盘时；评审发现同类问题再次出现时 |
 | 通用开发规则：四条硬约束、记录、对外文字、安全；由 project-workflow 管理 | [AGENTS.md](../AGENTS.md) | 每个开发者（人或 AI）动手之前；AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
