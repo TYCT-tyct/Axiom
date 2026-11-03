@@ -27,7 +27,7 @@ func targetRow(t *testing.T, month string, metric Metric, amount, currency strin
 	return row
 }
 
-func count(value int64) *int64 { return &value }
+func count(value int64) *int64 { return new(value) }
 
 func usd(t *testing.T) platform.Currency {
 	t.Helper()
@@ -161,7 +161,8 @@ func TestTargetsCheck(t *testing.T) {
 			Cost:    &Money{Amount: "0", Currency: usd(t)},
 		}
 	}
-	if err := valid().Check(); err != nil {
+	checked := valid()
+	if err := checked.Check(); err != nil {
 		t.Fatalf("a valid target was refused: %v", err)
 	}
 	cases := map[string]func(*Targets){

@@ -97,7 +97,7 @@ func targetsIn(body *adminapi.OperationsTargetsUpdate, currency platform.Currenc
 // targetsBody is the API's view of one month's targets, with absent targets left out rather than written as zero.
 func targetsBody(siteID string, month time.Time, targets operations.Targets) adminapi.OperationsTargets {
 	return adminapi.OperationsTargets{
-		SiteId: adminapi.SiteId(siteID), Month: month.Format("2006-01"),
+		SiteId: siteID, Month: month.Format("2006-01"),
 		Calls: targets.Calls, Errors: targets.Errors,
 		Revenue: moneyBody(targets.Revenue), Cost: moneyBody(targets.Cost),
 	}
