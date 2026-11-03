@@ -32,14 +32,14 @@ function minorOf(amount: string, digits: number) {
 }
 
 // parseMoney reads what a person typed, such as "12.5", as an amount in the contract's unit; null when it is not a
-// non-negative decimal with at most nine places that fits the contract's 19 digits.
-export function parseMoney(text: string): string | null {
+// non-negative decimal with at most nine places that fits maxDigits, by default the contract's 19.
+export function parseMoney(text: string, maxDigits = 19): string | null {
   const match = /^(\d+)(?:\.(\d{1,9}))?$/.exec(text.trim());
   if (!match) {
     return null;
   }
   const amount = `${match[1]}${(match[2] ?? "").padEnd(moneyDigits, "0")}`.replace(/^0+(?=\d)/, "");
-  return amount.length <= 19 ? amount : null;
+  return amount.length <= maxDigits ? amount : null;
 }
 
 // Numbers and times are always formatted for the page's language. A time shows in the viewer's time zone unless one is

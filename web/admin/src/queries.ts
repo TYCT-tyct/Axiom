@@ -171,6 +171,15 @@ export const siteKeyLimitsQuery = (id: AdminSchemas["SiteId"]) =>
       unwrap(adminApi.GET(`${base}/sites/{site_id}/key-limits`, { params: { path: { site_id: id } }, signal })),
   });
 
+// The targets of one UTC calendar month. A change replaces them whole and invalidates every account query, so the
+// dashboard's prorated figures refresh with the editor's view.
+export const targetsQuery = (month: string) =>
+  queryOptions({
+    queryKey: [accountKey, "operations-targets", month],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/reports/targets/{month}`, { params: { path: { month } }, signal })),
+  });
+
 export const suppliersQuery = (status?: AdminSchemas["SupplierStatus"]) =>
   infiniteQueryOptions({
     queryKey: [accountKey, "suppliers", status ?? ""],
