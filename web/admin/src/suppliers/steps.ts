@@ -1,7 +1,7 @@
 import type { AdminSchemas } from "@axiom/api";
 import type { Open } from "./open";
 
-export type StepKey = "connected" | "groups" | "keys" | "unit";
+type StepKey = "connected" | "groups" | "keys" | "unit";
 
 export type Step = { key: StepKey; done: boolean; failed?: number; open?: Open };
 
