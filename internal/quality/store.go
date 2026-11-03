@@ -188,8 +188,20 @@ func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) e
 		now = m.loop.now()
 	}
 	for _, ep := range endpoints {
-		e := m.Live(ep.ID, ep.Credentials)
+		e := m.of(ep.ID)
 		e.mu.Lock()
+		// A routing build and the health loop both publish configurations. The build may have read an older supplier
+		// snapshot and resume after the loop published a newer one; accepting that older generation would bring back a
+		// configuration whose facts are already gone. Generation 0 is an unversioned test or a source that has not
+		// reloaded yet; once a version has been published, a zero is older than it.
+		if e.published > 0 && ep.Generation < e.published {
+			e.mu.Unlock()
+			continue
+		}
+		if ep.Generation > e.published {
+			e.published = ep.Generation
+		}
+		e.credentials = ep.Credentials
 		if cfg := configOf(ep); e.current != cfg {
 			e.facts = nil // facts belong to the configuration they were measured on
 			e.current = cfg

@@ -203,6 +203,7 @@ type State struct {
 	verify        verification                      // the last fingerprint check and its schedule
 	verifying     bool                              // a verification generation is in flight
 	current       endpointConfig                    // the configuration Prepare last published
+	published     uint64                            // the supplier snapshot Prepare last accepted
 	facts         map[protocol.Format]measuredFacts // what detection measured, per call format
 }
 

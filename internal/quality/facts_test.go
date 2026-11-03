@@ -133,37 +133,74 @@ func TestMeasureByFormat(t *testing.T) {
 	}
 }
 
-// TestMeasureStaleConfiguration: a result from a configuration that was current when detection started must not clear
-// facts the endpoint's new configuration has already recorded. Prepare publishes the current configuration; Measure
-// refuses an older one in the same critical section that would have written it.
-func TestMeasureStaleConfiguration(t *testing.T) {
+// measuredConfiguration prepares A, publishes B after the endpoint moves, and records B's lack of tools. It is the
+// state a stale routing build or a late detection has to survive.
+func measuredConfiguration(t *testing.T) (*Monitor, suppliers.Routable, suppliers.Routable) {
+	t.Helper()
 	m := New(nil)
 	id := suppliers.EndpointID{12}
-	a := suppliers.Routable{ID: id, Model: uuid.NewV7(), Upstream: "up-a", Formats: []protocol.Format{protocol.Chat}}
-	b := suppliers.Routable{ID: id, Model: uuid.NewV7(), Upstream: "up-b", Formats: []protocol.Format{protocol.Responses}}
+	a := suppliers.Routable{ID: id, Model: uuid.NewV7(), Upstream: "up-a", Formats: []protocol.Format{protocol.Chat}, Generation: 1}
+	b := suppliers.Routable{ID: id, Model: uuid.NewV7(), Upstream: "up-b", Formats: []protocol.Format{protocol.Responses}, Generation: 2}
 	ctx := context.Background()
 	if err := m.Prepare(ctx, []suppliers.Routable{a}); err != nil {
 		t.Fatal(err)
 	}
-	// Detection for a started here. The endpoint moves to b before it finishes.
 	if err := m.Prepare(ctx, []suppliers.Routable{b}); err != nil {
 		t.Fatal(err)
 	}
 	if !m.Measure(b, protocol.Responses, Facts{Unsupported: protocol.Tools}) {
 		t.Fatal("the new configuration's measurement was refused")
 	}
+	return m, a, b
+}
+
+// TestMeasureStaleConfiguration: a result from a configuration that was current when detection started must not clear
+// facts the endpoint's new configuration has already recorded. Prepare publishes the current configuration; Measure
+// refuses an older one in the same critical section that would have written it.
+func TestMeasureStaleConfiguration(t *testing.T) {
+	m, a, b := measuredConfiguration(t)
 	if m.Measure(a, protocol.Chat, Facts{Supported: protocol.Tools, Context: 1}) {
 		t.Fatal("a stale measurement was accepted and overwrote the new configuration")
 	}
-	got := m.MeasuredFor(b, t0).Facts
-	if len(got) != 1 || got[protocol.Responses].Unsupported != protocol.Tools {
+	if got := m.MeasuredFor(b, t0).Facts; len(got) != 1 || got[protocol.Responses].Unsupported != protocol.Tools {
 		t.Fatalf("the new configuration's facts = %+v, want the measured lack of tools", got)
 	}
-	// Adding a format changes the configuration even though the model and upstream name stay: the old per-format facts
-	// are not carried into the new set.
+}
+
+// TestPrepareRejectsOlderGeneration: the routing build that read A can resume after B and call Prepare(A). Its older
+// generation must not republish A, which would clear B's facts and let A's late measurement through. Republishing B
+// keeps the facts it already measured.
+func TestPrepareRejectsOlderGeneration(t *testing.T) {
+	m, a, b := measuredConfiguration(t)
+	ctx := context.Background()
+	if err := m.Prepare(ctx, []suppliers.Routable{a}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.MeasuredFor(b, t0).Facts; len(got) != 1 || got[protocol.Responses].Unsupported != protocol.Tools {
+		t.Fatalf("a stale Prepare(A) changed B's facts to %+v", got)
+	}
+	if m.Measure(a, protocol.Chat, Facts{Supported: protocol.Tools, Context: 1}) {
+		t.Fatal("a measurement after stale Prepare(A) was accepted")
+	}
+	if err := m.Prepare(ctx, []suppliers.Routable{b}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.MeasuredFor(b, t0).Facts; len(got) != 1 || got[protocol.Responses].Unsupported != protocol.Tools {
+		t.Fatalf("republishing B lost its facts: %+v", got)
+	}
+	if m.Measure(a, protocol.Chat, Facts{Supported: protocol.Tools, Context: 1}) {
+		t.Fatal("a measurement was accepted after B was republished")
+	}
+}
+
+// TestPrepareFormatChangeClearsFacts: adding a format changes the configuration even though the model and upstream name
+// stay, so the old per-format facts are not carried into the new set.
+func TestPrepareFormatChangeClearsFacts(t *testing.T) {
+	m, _, b := measuredConfiguration(t)
 	c := b
+	c.Generation = 3
 	c.Formats = []protocol.Format{protocol.Chat, protocol.Responses}
-	if err := m.Prepare(ctx, []suppliers.Routable{c}); err != nil {
+	if err := m.Prepare(context.Background(), []suppliers.Routable{c}); err != nil {
 		t.Fatal(err)
 	}
 	if got := m.MeasuredFor(c, t0).Facts; len(got) != 0 {
