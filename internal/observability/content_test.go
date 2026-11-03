@@ -40,7 +40,7 @@ func contentKeyFor(t *testing.T, db *pg.DB, keys *secret.Keyring, site, account 
 	})
 	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO observability.content_keys
-			(account_id, site_id, ciphertext, nonce, wrapped_dek, key_version, created_at)
+			(account_id, site_id, ciphertext, nonce, wrapped_key, key_version, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (account_id) DO NOTHING`,
 			account, site, sealed.Ciphertext, sealed.Nonce, sealed.WrappedDEK, sealed.KeyVersion, time.Now().UTC())
 		return err
@@ -70,8 +70,18 @@ func putContent(t *testing.T, db *pg.DB, store *memoryObjects, key [32]byte, sit
 	at time.Time, kind ContentKind, plaintext []byte,
 ) ContentMeta {
 	t.Helper()
+	return putContentPart(t, db, store, key, site, account, uuid.UUID{}, at, kind, "body", plaintext)
+}
+
+func putContentPart(t *testing.T, db *pg.DB, store *memoryObjects, key [32]byte, site, account,
+	requestID uuid.UUID, at time.Time, kind ContentKind, part string, plaintext []byte,
+) ContentMeta {
+	t.Helper()
+	if requestID == (uuid.UUID{}) {
+		requestID = uuid.NewV7()
+	}
 	m := ContentMeta{
-		RequestID: uuid.NewV7(), Kind: kind, Site: site, Account: account, Blob: uuid.NewV7(),
+		RequestID: requestID, Part: part, Kind: kind, Site: site, Account: account, Blob: uuid.NewV7(),
 		CreatedAt: at.UTC(), Size: int64(len(plaintext)),
 	}
 	_, mac := contentKeys(key)
@@ -90,8 +100,8 @@ func putContent(t *testing.T, db *pg.DB, store *memoryObjects, key [32]byte, sit
 			return err
 		}
 		_, err := tx.Exec(t.Context(), `INSERT INTO observability.content_refs
-			(request_id, kind, site_id, account_id, blob_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-			m.RequestID, string(m.Kind), m.Site, m.Account, m.Blob, m.CreatedAt)
+			(request_id, part, kind, site_id, account_id, blob_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			m.RequestID, m.Part, string(m.Kind), m.Site, m.Account, m.Blob, m.CreatedAt)
 		return err
 	}); err != nil {
 		t.Fatalf("insert content: %v", err)
@@ -224,6 +234,41 @@ func TestContentMetaScope(t *testing.T) {
 	}
 }
 
+func TestContentMetaMultipleParts(t *testing.T) {
+	db := openDB(t)
+	keys := webhookTestKeys(t)
+	store := &memoryObjects{objects: map[string][]byte{}}
+	site, account := uuid.NewV7(), uuid.NewV7()
+	key := contentKeyFor(t, db, keys, site, account)
+	requestID := uuid.NewV7()
+	now := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
+	first := putContentPart(t, db, store, key, site, account, requestID, now, ContentRequest, "message-0", []byte("one"))
+	second := putContentPart(t, db, store, key, site, account, requestID, now, ContentRequest, "message-1", []byte("two"))
+
+	var got []ContentMeta
+	err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		_, err := StreamContentMeta(t.Context(), tx, ContentQuery{Since: now.Add(-time.Minute), Until: now.Add(time.Minute)},
+			func(m ContentMeta) error {
+				got = append(got, m)
+				return nil
+			})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Part != "message-0" || got[1].Part != "message-1" {
+		t.Fatalf("got %+v, want both parts of one request", got)
+	}
+	if got[0].TarPath() == got[1].TarPath() || !strings.Contains(got[0].TarPath(), "/request/message-0") ||
+		!strings.Contains(got[1].TarPath(), "/request/message-1") {
+		t.Fatalf("paths are not unique: %q, %q", got[0].TarPath(), got[1].TarPath())
+	}
+	if got[0].RequestID != requestID || got[1].RequestID != requestID || first.Blob == second.Blob {
+		t.Fatalf("parts lost their request or shared a blob: %+v", got)
+	}
+}
+
 func TestContentReader(t *testing.T) {
 	db := openDB(t)
 	keys := webhookTestKeys(t)
@@ -278,14 +323,14 @@ func TestContentKeyIsBoundToItsAccount(t *testing.T) {
 	var ciphertext, nonce, wrapped []byte
 	var version uint32
 	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT ciphertext, nonce, wrapped_dek, key_version
+		return tx.QueryRow(t.Context(), `SELECT ciphertext, nonce, wrapped_key, key_version
 			FROM observability.content_keys WHERE account_id = $1`, accountA).Scan(&ciphertext, &nonce, &wrapped, &version)
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO observability.content_keys
-			(account_id, site_id, ciphertext, nonce, wrapped_dek, key_version, created_at)
+			(account_id, site_id, ciphertext, nonce, wrapped_key, key_version, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, now())`, accountB, siteB, ciphertext, nonce, wrapped, version)
 		return err
 	}); err != nil {
@@ -310,10 +355,10 @@ func TestContentTablesArePlatformOnly(t *testing.T) {
 	putContent(t, db, store, key, site, account, now, ContentRequest, []byte("private"))
 	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO observability.content_exports
-			(id, approval_digest, owner_key, recipient_key, since, until, destination, format, status, started_at)
-			VALUES ($1, $2, $3, $4, $5, $6, '/tmp/export', 'test', 'started', $7)`,
-			uuid.NewV7(), bytes.Repeat([]byte{1}, 32), strings.Repeat("a", 64), strings.Repeat("b", 64),
-			now.Add(-time.Hour), now, now)
+			(id, approval_digest, owner_key, owner2_key, recipient_key, since, until, destination, format, status, started_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, '/tmp/export', 'test', 'started', $8)`,
+			uuid.NewV7(), bytes.Repeat([]byte{1}, 32), strings.Repeat("a", 64), strings.Repeat("c", 64),
+			strings.Repeat("b", 64), now.Add(-time.Hour), now, now)
 		return err
 	}); err != nil {
 		t.Fatal(err)

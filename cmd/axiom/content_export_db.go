@@ -10,12 +10,15 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 )
 
-func beginContentExport(ctx context.Context, db *pg.DB, id uuid.UUID, approval contentApproval, digest [32]byte, stats observability.ContentStats) error {
+func beginContentExport(ctx context.Context, db *pg.DB, id uuid.UUID, approval contentApproval, digest [32]byte,
+	stats observability.ContentStats, cache gateway.CacheStats,
+) error {
 	scope, err := approval.scope()
 	if err != nil {
 		return err
@@ -24,13 +27,13 @@ func beginContentExport(ctx context.Context, db *pg.DB, id uuid.UUID, approval c
 	return db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO observability.content_exports
-				(id, approval_digest, owner_key, recipient_key, since, until, site_id, account_id, destination, format,
-				 status, content_count, content_bytes, started_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'started', $11, $12, $13)
+				(id, approval_digest, owner_key, owner2_key, recipient_key, since, until, site_id, account_id, destination,
+				 format, status, content_count, content_bytes, cache_count, cache_bytes, started_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'started', $12, $13, $14, $15, $16)
 			ON CONFLICT (approval_digest) DO NOTHING`,
-			id, digest[:], approval.Owner, approval.Recipient, scope.Since, scope.Until,
+			id, digest[:], approval.Owner, approval.Owner2, approval.Recipient, scope.Since, scope.Until,
 			nullableUUID(scope.Site), nullableUUID(scope.Account), approval.Destination, approval.Format,
-			stats.Count, stats.Bytes, now)
+			stats.Count, stats.Bytes, cache.Count, cache.Bytes, now)
 		if err != nil {
 			return fmt.Errorf("content export: record the attempt: %w", err)
 		}
@@ -44,6 +47,7 @@ func beginContentExport(ctx context.Context, db *pg.DB, id uuid.UUID, approval c
 			Detail: map[string]any{
 				"approval_digest": hex.EncodeToString(digest[:]),
 				"owner_key":       approval.Owner,
+				"owner2_key":      approval.Owner2,
 				"recipient_key":   approval.Recipient,
 				"since":           approval.Since,
 				"until":           approval.Until,
@@ -53,6 +57,8 @@ func beginContentExport(ctx context.Context, db *pg.DB, id uuid.UUID, approval c
 				"format":          approval.Format,
 				"content_count":   stats.Count,
 				"content_bytes":   stats.Bytes,
+				"cache_count":     cache.Count,
+				"cache_bytes":     cache.Bytes,
 			},
 		})
 	})

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strings"
 	"sync"
 	"time"
 	"uuid"
@@ -59,6 +60,7 @@ type ContentQuery struct {
 // opened through ContentReader.
 type ContentMeta struct {
 	RequestID uuid.UUID
+	Part      string
 	Kind      ContentKind
 	Site      uuid.UUID
 	Account   uuid.UUID
@@ -96,7 +98,7 @@ func StreamContentMeta(ctx context.Context, tx pg.Tx, q ContentQuery, each func(
 		return ContentStats{}, errors.New("observability: a content export needs a range of at most 366 days")
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT r.request_id, r.kind, r.site_id, r.account_id, r.created_at,
+		SELECT r.request_id, r.part, r.kind, r.site_id, r.account_id, r.created_at,
 		       b.id, b.object_key, b.digest, b.size
 		FROM observability.content_refs r
 		JOIN observability.content_blobs b
@@ -105,7 +107,7 @@ func StreamContentMeta(ctx context.Context, tx pg.Tx, q ContentQuery, each func(
 		  AND r.kind IN ('request', 'response') -- attempt is upstream raw interaction, not conversation content yet
 		  AND ($3::uuid IS NULL OR r.site_id = $3)
 		  AND ($4::uuid IS NULL OR r.account_id = $4)
-		ORDER BY r.created_at, r.account_id, r.request_id, r.kind`,
+		ORDER BY r.created_at, r.account_id, r.request_id, r.kind, r.part`,
 		q.Since, q.Until, optionalUUID(q.Site), optionalUUID(q.Account))
 	if err != nil {
 		return ContentStats{}, fmt.Errorf("observability: read content references: %w", err)
@@ -140,8 +142,11 @@ func scanContentMeta(row contentRowScanner) (ContentMeta, error) {
 	var kind string
 	var digest []byte
 	var size int64
-	if err := row.Scan(&m.RequestID, &kind, &m.Site, &m.Account, &m.CreatedAt, &m.Blob, &m.ObjectKey, &digest, &size); err != nil {
+	if err := row.Scan(&m.RequestID, &m.Part, &kind, &m.Site, &m.Account, &m.CreatedAt, &m.Blob, &m.ObjectKey, &digest, &size); err != nil {
 		return ContentMeta{}, fmt.Errorf("observability: read a content reference: %w", err)
+	}
+	if !ValidContentPart(m.Part) {
+		return ContentMeta{}, fmt.Errorf("observability: content reference %s has part %q", m.RequestID, m.Part)
 	}
 	m.Kind = ContentKind(kind)
 	if !m.Kind.valid() {
@@ -257,7 +262,7 @@ func (r *ContentReader) accountKey(ctx context.Context, account uuid.UUID) ([32]
 func ReadContentKey(ctx context.Context, tx pg.Tx, keys *secret.Keyring, account uuid.UUID) ([32]byte, error) {
 	var ciphertext, nonce, wrapped []byte
 	var version uint32
-	err := tx.QueryRow(ctx, `SELECT ciphertext, nonce, wrapped_dek, key_version
+	err := tx.QueryRow(ctx, `SELECT ciphertext, nonce, wrapped_key, key_version
 		FROM observability.content_keys WHERE account_id = $1`, account).
 		Scan(&ciphertext, &nonce, &wrapped, &version)
 	if errors.Is(err, pg.ErrNoRows) {
@@ -395,8 +400,26 @@ func optionalUUID(id uuid.UUID) any {
 	return id
 }
 
-// TarPath is the export's entry name for this reference. All parts are canonical UUIDs or a closed kind, so a path
-// traversal is impossible.
+// ValidContentPart reports whether part is a safe, stable component name for a message, file or other body within one
+// request. The database check and the manifest parser use the same alphabet; a slash can never enter a tar path.
+func ValidContentPart(part string) bool {
+	if len(part) == 0 || len(part) > 64 {
+		return false
+	}
+	for i := 0; i < len(part); i++ {
+		allowed := "abcdefghijklmnopqrstuvwxyz0123456789"
+		if i > 0 {
+			allowed += "._-"
+		}
+		if !strings.ContainsRune(allowed, rune(part[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+// TarPath is the export's entry name for this reference. The request ID, kind and validated part are canonical, so a
+// path traversal is impossible and two bodies of one request cannot overwrite each other.
 func (m ContentMeta) TarPath() string {
-	return "content/" + m.RequestID.String() + "/" + string(m.Kind)
+	return "content/" + m.RequestID.String() + "/" + string(m.Kind) + "/" + m.Part
 }

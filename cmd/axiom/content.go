@@ -18,15 +18,16 @@ import (
 
 const contentUsage = `usage:
   axiom content keygen --dir DIR
-  axiom content approve --signing-key FILE --encryption-key FILE --since RFC3339 --until RFC3339 [--site ID] [--account ID] --destination PATH --out FILE [--ttl 24h]
+  axiom content approve --signing-key FILE --second-signing-key FILE --encryption-key FILE --since RFC3339 --until RFC3339 [--site ID] [--account ID] --destination PATH --out FILE [--ttl 24h]
   axiom content export --approval FILE
   axiom content decrypt --key FILE --in FILE --out FILE`
 
 const (
-	contentSigningKeyVar    = "AXIOM_CONTENT_EXPORT_SIGNING_KEY"
-	contentEncryptionKeyVar = "AXIOM_CONTENT_EXPORT_ENCRYPTION_KEY"
-	contentExportTimeoutVar = "AXIOM_CONTENT_EXPORT_TIMEOUT"
-	contentExportTimeout    = time.Hour
+	contentSigningKeyVar       = "AXIOM_CONTENT_EXPORT_SIGNING_KEY"
+	contentSecondSigningKeyVar = "AXIOM_CONTENT_EXPORT_SECOND_SIGNING_KEY"
+	contentEncryptionKeyVar    = "AXIOM_CONTENT_EXPORT_ENCRYPTION_KEY"
+	contentExportTimeoutVar    = "AXIOM_CONTENT_EXPORT_TIMEOUT"
+	contentExportTimeout       = time.Hour
 )
 
 func contentCommand(ctx context.Context, environ, args []string, out io.Writer) error {
@@ -47,12 +48,15 @@ func contentCommand(ctx context.Context, environ, args []string, out io.Writer) 
 	}
 }
 
-// contentKeygenCommand makes the owner's two key pairs. The private keys are raw 32-byte files, mode 0600; the public
-// keys are what the server is given. Nothing is printed that could reconstruct a private key.
+// contentKeygenCommand makes the owner's three key pairs. Two independent Ed25519 keys make export approval a
+// two-step operation: compromising or losing one signing key is not enough. The private keys are raw 32-byte files,
+// mode 0600; the public keys are what the server is given. Nothing printed can reconstruct a private key.
+//
+//nolint:cyclop,funlen // one key-generation and output transaction
 func contentKeygenCommand(args []string, out io.Writer) error {
 	var dir string
 	if err := flags("content keygen", contentUsage, args, func(set *flag.FlagSet) {
-		set.StringVar(&dir, "dir", "", "directory for the four key files")
+		set.StringVar(&dir, "dir", "", "directory for the six key files")
 	}); err != nil {
 		return err
 	}
@@ -76,6 +80,10 @@ func contentKeygenCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("generate the signing key: %w", err)
 	}
+	secondPub, secondPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate the second signing key: %w", err)
+	}
 	encryption, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return fmt.Errorf("generate the encryption key: %w", err)
@@ -87,6 +95,8 @@ func contentKeygenCommand(args []string, out io.Writer) error {
 	}{
 		{"owner-signing.key", signingPriv.Seed(), contentKeyFilePerm},
 		{"owner-signing.pub", signingPub, contentPubFilePerm},
+		{"owner-signing-2.key", secondPriv.Seed(), contentKeyFilePerm},
+		{"owner-signing-2.pub", secondPub, contentPubFilePerm},
 		{"owner-encryption.key", encryption.Bytes(), contentKeyFilePerm},
 		{"owner-encryption.pub", encryption.PublicKey().Bytes(), contentPubFilePerm},
 	}
@@ -102,19 +112,23 @@ func contentKeygenCommand(args []string, out io.Writer) error {
 		created = append(created, path)
 	}
 	return writeLine(out, map[string]any{
-		"dir":        dir,
-		"signing":    fingerprint(signingPub),
-		"encryption": fingerprint(encryption.PublicKey().Bytes()),
+		"dir":            dir,
+		"signing":        fingerprint(signingPub),
+		"second_signing": fingerprint(secondPub),
+		"encryption":     fingerprint(encryption.PublicKey().Bytes()),
 	})
 }
 
 // contentApproveCommand signs an approval on the owner's machine. The server can verify it with the public signing
-// key and encrypt to the public encryption key; neither private key ever reaches the server.
+// keys and encrypt to the public encryption key; no private key ever reaches the server.
+//
+//nolint:funlen // one approval transaction
 func contentApproveCommand(args []string, out io.Writer) error {
-	var signingPath, encryptionPath, sinceText, untilText, siteText, accountText, destination, output string
+	var signingPath, secondSigningPath, encryptionPath, sinceText, untilText, siteText, accountText, destination, output string
 	var ttl time.Duration
 	if err := flags("content approve", contentUsage, args, func(set *flag.FlagSet) {
-		set.StringVar(&signingPath, "signing-key", "", "the owner's Ed25519 private key")
+		set.StringVar(&signingPath, "signing-key", "", "the owner's first Ed25519 private key")
+		set.StringVar(&secondSigningPath, "second-signing-key", "", "the owner's second Ed25519 private key")
 		set.StringVar(&encryptionPath, "encryption-key", "", "the owner's X25519 public key")
 		set.StringVar(&sinceText, "since", "", "the first instant included, RFC 3339")
 		set.StringVar(&untilText, "until", "", "the first instant excluded, RFC 3339")
@@ -127,12 +141,17 @@ func contentApproveCommand(args []string, out io.Writer) error {
 		return err
 	}
 	if err := requireContentFlags(contentUsage, map[string]string{
-		"--signing-key": signingPath, "--encryption-key": encryptionPath, "--since": sinceText,
+		"--signing-key": signingPath, "--second-signing-key": secondSigningPath,
+		"--encryption-key": encryptionPath, "--since": sinceText,
 		"--until": untilText, "--destination": destination, "--out": output,
 	}); err != nil {
 		return err
 	}
 	signingSeed, err := readContentPrivateKey(signingPath)
+	if err != nil {
+		return err
+	}
+	secondSigningSeed, err := readContentPrivateKey(secondSigningPath)
 	if err != nil {
 		return err
 	}
@@ -152,7 +171,7 @@ func contentApproveCommand(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	file, digest, err := signContentApproval(signingSeed, approval)
+	signed, file, digest, err := signContentApproval(signingSeed, secondSigningSeed, approval)
 	if err != nil {
 		return err
 	}
@@ -162,9 +181,10 @@ func contentApproveCommand(args []string, out io.Writer) error {
 	return writeLine(out, map[string]any{
 		"approval":   output,
 		"digest":     hex.EncodeToString(digest[:]),
-		"owner":      approval.Owner,
-		"recipient":  approval.Recipient,
-		"expires_at": approval.ExpiresAt,
+		"owner":      signed.Owner,
+		"owner2":     signed.Owner2,
+		"recipient":  signed.Recipient,
+		"expires_at": signed.ExpiresAt,
 	})
 }
 
@@ -263,6 +283,9 @@ func optionalUUIDFlag(name, value string) (uuid.UUID, error) {
 	id, err := uuid.Parse(value)
 	if err != nil {
 		return uuid.UUID{}, fmt.Errorf("%s: %w", name, err)
+	}
+	if id == (uuid.UUID{}) {
+		return uuid.UUID{}, fmt.Errorf("%s: the all-zero UUID means no tenant and cannot be selected explicitly", name)
 	}
 	return id, nil
 }

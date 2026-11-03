@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -42,6 +43,7 @@ type contentApproval struct {
 	Action      string `json:"action"`
 	Version     string `json:"version"`
 	Owner       string `json:"owner"`
+	Owner2      string `json:"owner2"`
 	Recipient   string `json:"recipient"`
 	Since       string `json:"since"`
 	Until       string `json:"until"`
@@ -54,11 +56,13 @@ type contentApproval struct {
 	Nonce       string `json:"nonce"`
 }
 
-// contentApprovalFile is the file the operator hands to the server: the approval and the owner's signature over its
-// canonical form. The signature is not a secret; the file can travel through the same channel as the command.
+// contentApprovalFile is the file the operator hands to the server: the approval and the owner's two independent
+// signatures over its canonical form. Signatures are not secrets; the file can travel through the same channel as the
+// command.
 type contentApprovalFile struct {
-	Approval  contentApproval `json:"approval"`
-	Signature string          `json:"signature"`
+	Approval        contentApproval `json:"approval"`
+	Signature       string          `json:"signature"`
+	SecondSignature string          `json:"second_signature"`
 }
 
 // contentExportScope is the parsed, validated part of an approval the export query uses.
@@ -74,6 +78,7 @@ func canonicalApproval(a contentApproval) ([]byte, error) {
 		"action":      a.Action,
 		"version":     a.Version,
 		"owner":       a.Owner,
+		"owner2":      a.Owner2,
 		"recipient":   a.Recipient,
 		"since":       a.Since,
 		"until":       a.Until,
@@ -87,56 +92,83 @@ func canonicalApproval(a contentApproval) ([]byte, error) {
 	})
 }
 
-// signContentApproval fills the owner fingerprint and signs a with seed, returning the file to write and the digest
-// the export row records. The seed never leaves the owner's machine.
-func signContentApproval(seed []byte, a contentApproval) ([]byte, [32]byte, error) {
+// signContentApproval fills both owner fingerprints and signs a with two independent seeds, returning the signed
+// approval, the file to write and the digest the export row records. The seeds never leave the owner's machine.
+func signContentApproval(seed, secondSeed []byte, a contentApproval) (contentApproval, []byte, [32]byte, error) {
 	if len(seed) != ed25519.SeedSize {
-		return nil, [32]byte{}, fmt.Errorf("the signing key is %d bytes, want %d", len(seed), ed25519.SeedSize)
+		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("the signing key is %d bytes, want %d", len(seed), ed25519.SeedSize)
+	}
+	if len(secondSeed) != ed25519.SeedSize {
+		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("the second signing key is %d bytes, want %d", len(secondSeed), ed25519.SeedSize)
+	}
+	if bytes.Equal(seed, secondSeed) {
+		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the two signing keys must differ")
 	}
 	private := ed25519.NewKeyFromSeed(seed)
+	secondPrivate := ed25519.NewKeyFromSeed(secondSeed)
 	a.Owner = fingerprint(private.Public().(ed25519.PublicKey))
+	a.Owner2 = fingerprint(secondPrivate.Public().(ed25519.PublicKey))
 	canonical, err := canonicalApproval(a)
 	if err != nil {
-		return nil, [32]byte{}, fmt.Errorf("approval: canonical encoding: %w", err)
+		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: canonical encoding: %w", err)
 	}
-	signature := ed25519.Sign(private, append([]byte(contentApprovalPrefix), canonical...))
+	signed := append([]byte(contentApprovalPrefix), canonical...)
+	signature := ed25519.Sign(private, signed)
+	secondSignature := ed25519.Sign(secondPrivate, signed)
 	digest := sha256.Sum256(canonical)
 	file, err := jsonx.MarshalCanonical(contentApprovalFile{
-		Approval:  a,
-		Signature: base64.StdEncoding.EncodeToString(signature),
+		Approval:        a,
+		Signature:       base64.StdEncoding.EncodeToString(signature),
+		SecondSignature: base64.StdEncoding.EncodeToString(secondSignature),
 	})
 	if err != nil {
-		return nil, [32]byte{}, fmt.Errorf("approval: encode the file: %w", err)
+		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: encode the file: %w", err)
 	}
-	return file, digest, nil
+	return a, file, digest, nil
 }
 
 // verifyContentApproval authenticates data against the owner's public key and the recipient key, then checks that the
 // approval is current and within the export's limits. It returns the approval, its raw file bytes and its digest.
-func verifyContentApproval(data []byte, signing []byte, recipient []byte, now time.Time) (contentApproval, []byte, [32]byte, error) {
+//
+//nolint:cyclop,gocognit // one signature, tenant, time and recipient validation path
+func verifyContentApproval(data, signing, secondSigning, recipient []byte, now time.Time) (contentApproval, []byte, [32]byte, error) {
 	var file contentApprovalFile
 	if err := jsonx.UnmarshalKnown(data, &file); err != nil {
 		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: %w", err)
 	}
-	if len(signing) != ed25519.PublicKeySize {
-		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the signing key is not an Ed25519 public key")
+	if len(signing) != ed25519.PublicKeySize || len(secondSigning) != ed25519.PublicKeySize {
+		return contentApproval{}, nil, [32]byte{}, errors.New("approval: both signing keys must be Ed25519 public keys")
+	}
+	if bytes.Equal(signing, secondSigning) {
+		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the two signing keys must differ")
 	}
 	if len(recipient) != 32 {
 		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the encryption key is not an X25519 public key")
 	}
 	signature, err := base64.StdEncoding.DecodeString(file.Signature)
 	if err != nil || len(signature) != ed25519.SignatureSize {
-		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the signature is not Ed25519")
+		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the first signature is not Ed25519")
+	}
+	secondSignature, err := base64.StdEncoding.DecodeString(file.SecondSignature)
+	if err != nil || len(secondSignature) != ed25519.SignatureSize {
+		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the second signature is not Ed25519")
 	}
 	canonical, err := canonicalApproval(file.Approval)
 	if err != nil {
 		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: canonical encoding: %w", err)
 	}
-	if !ed25519.Verify(ed25519.PublicKey(signing), append([]byte(contentApprovalPrefix), canonical...), signature) {
-		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the owner's signature does not verify")
+	signed := append([]byte(contentApprovalPrefix), canonical...)
+	if !ed25519.Verify(ed25519.PublicKey(signing), signed, signature) {
+		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the first owner signature does not verify")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(secondSigning), signed, secondSignature) {
+		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the second owner signature does not verify")
 	}
 	if want := fingerprint(signing); file.Approval.Owner != want {
-		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: signed by %s, but it names %s", want, file.Approval.Owner)
+		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: first signature is by %s, but it names %s", want, file.Approval.Owner)
+	}
+	if want := fingerprint(secondSigning); file.Approval.Owner2 != want {
+		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: second signature is by %s, but it names %s", want, file.Approval.Owner2)
 	}
 	if want := fingerprint(recipient); file.Approval.Recipient != want {
 		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: for recipient %s, but this server holds %s", file.Approval.Recipient, want)
@@ -206,10 +238,16 @@ func parseContentTenant(siteText, accountText string) (uuid.UUID, uuid.UUID, err
 		if site, err = uuid.Parse(siteText); err != nil {
 			return uuid.UUID{}, uuid.UUID{}, fmt.Errorf("approval: site: %w", err)
 		}
+		if site == (uuid.UUID{}) {
+			return uuid.UUID{}, uuid.UUID{}, fmt.Errorf("approval: site: the all-zero UUID means no tenant and cannot be selected explicitly")
+		}
 	}
 	if accountText != "" {
 		if account, err = uuid.Parse(accountText); err != nil {
 			return uuid.UUID{}, uuid.UUID{}, fmt.Errorf("approval: account: %w", err)
+		}
+		if account == (uuid.UUID{}) {
+			return uuid.UUID{}, uuid.UUID{}, fmt.Errorf("approval: account: the all-zero UUID means no tenant and cannot be selected explicitly")
 		}
 	}
 	return site, account, nil

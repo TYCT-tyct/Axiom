@@ -7,6 +7,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/platform/pg"
 )
@@ -19,6 +20,7 @@ func TestContentExportRowsAndAudit(t *testing.T) {
 		Action:      contentExportAction,
 		Version:     contentApprovalVersion,
 		Owner:       strings.Repeat("a", 64),
+		Owner2:      strings.Repeat("c", 64),
 		Recipient:   strings.Repeat("b", 64),
 		Since:       now.Add(-time.Hour).Format(time.RFC3339Nano),
 		Until:       now.Format(time.RFC3339Nano),
@@ -30,7 +32,7 @@ func TestContentExportRowsAndAudit(t *testing.T) {
 	digest := sha256.Sum256([]byte("the owner's approval"))
 	stats := observability.ContentStats{Count: 2, Bytes: 123}
 	id := uuid.NewV7()
-	if err := beginContentExport(t.Context(), c.db, id, approval, digest, stats); err != nil {
+	if err := beginContentExport(t.Context(), c.db, id, approval, digest, stats, gateway.CacheStats{}); err != nil {
 		t.Fatal(err)
 	}
 	var status string
@@ -49,7 +51,7 @@ func TestContentExportRowsAndAudit(t *testing.T) {
 	}
 
 	replay := uuid.NewV7()
-	if err := beginContentExport(t.Context(), c.db, replay, approval, digest, stats); err == nil {
+	if err := beginContentExport(t.Context(), c.db, replay, approval, digest, stats, gateway.CacheStats{}); err == nil {
 		t.Fatal("the same approval was used twice")
 	}
 	if got := auditCount(t, c, "content_export.start", replay); got != 0 {
@@ -76,7 +78,7 @@ func TestContentExportRowsAndAudit(t *testing.T) {
 
 	failed := uuid.NewV7()
 	other := sha256.Sum256([]byte("another approval"))
-	if err := beginContentExport(t.Context(), c.db, failed, approval, other, stats); err != nil {
+	if err := beginContentExport(t.Context(), c.db, failed, approval, other, stats, gateway.CacheStats{}); err != nil {
 		t.Fatal(err)
 	}
 	failContentExport(t.Context(), c.db, failed, "write")

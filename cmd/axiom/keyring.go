@@ -30,7 +30,7 @@ func keyRotation(db *pg.DB, path string) secret.Rotation {
 		{Schema: "platform", Table: "search_engines", ID: "id", Purpose: "config"},
 		{Schema: "platform", Table: "file_parser_config", ID: "id", Purpose: "config"},
 		{Schema: "gateway", Table: "response_cache", ID: "id", Purpose: "body"},
-		{Schema: "observability", Table: "content_keys", ID: "account_id", Purpose: "content_key"},
+		{Schema: "observability", Table: "content_keys", ID: "account_id", Prefix: "", Purpose: "content_key", Wrapped: "wrapped_key"},
 	}}
 }
 

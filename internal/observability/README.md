@@ -59,25 +59,25 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 `retention`：单行 `jsonb`，保存调用记录的热窗口（`hot_days`，默认 90）。和规则、阈值一样是管理员数据，管理接口读写并留审计；0 表示全部留在 PostgreSQL。桶没配置时这个值不起作用：没有确认的归档就不能删。
 
-`content_keys`：每个账户一行，保存 32 字节数据密钥的信封（`ciphertext`、`nonce`、`wrapped_dek`、`key_version`）和站点。AAD 是 `observability.content_keys/<account_id>/content_key`，账户之间不能互换。主密钥轮换的重包裹清单要包含这张表。
+`content_keys`：每个账户一行，保存 32 字节数据密钥的信封（`ciphertext`、`nonce`、`wrapped_key`、`key_version`）和站点。AAD 是 `observability.content_keys/<account_id>/content_key`，账户之间不能互换。`wrapped_key` 是刻意避开旧二进制的 `wrapped_dek` 清单扫描：旧节点在迁移后仍能启动，新节点把这张表登记进主密钥轮换。
 
 `content_blobs`：一个消息或文件正文一行，`digest` 是带账户摘要子密钥的 HMAC-SHA256，`UNIQUE (account_id, digest)` 在账户内去重；`object_key` 指向对象存储，`size` 是明文大小，`last_referenced_at` 和可空的 `expires_at` 留给回收任务。正文不在这张表里。
 
-`content_refs`：一个调用的一类正文一行，主键 `(request_id, kind)`，外键 `(blob_id, site_id, account_id)` 保证引用和 blob 同账户；`created_at` 是导出的时间窗。
+`content_refs`：一个调用的一类正文的每个消息、文件或其他组件一行，主键 `(request_id, kind, part)`，`part` 是稳定的组件名（消息序号或文件标识），外键 `(blob_id, site_id, account_id)` 保证引用和 blob 同账户；`created_at` 是导出的时间窗。
 
-`content_exports`：每次导出尝试一行，`approval_digest` 唯一（批准一次性使用），记录负责人和接收公钥指纹、范围、目标、格式、状态、条数、字节数、输出 SHA-256 和错误类别。它和上面三张表都强制平台范围行级安全，账户范围看不到任何行。
+`content_exports`：每次导出尝试一行，`approval_digest` 唯一（批准一次性使用），记录两个负责人公钥和接收公钥指纹、范围、目标、格式、状态、内容和缓存的条数/字节数、输出 SHA-256 和错误类别。它和上面三张表都强制平台范围行级安全，账户范围看不到任何行。
 
 ## 内容存储与受控导出
 
 正文对象是 `version(1) || nonce(12) || AES-256-GCM(明文)`。账户的 32 字节数据密钥用 HKDF-SHA256 派生两个子密钥：一个加密，一个算 HMAC-SHA256 摘要。AAD 是 `axiom/content/object/v1\0` 加账户、blob ID 和摘要，固定长度，换账户或换 blob 都解不开；摘要同时用于账户内去重和读取时的完整性校验。对象键是 `content/v1/<site>/<account>/<blob>`，对象大小上限 64 MiB。
 
-`StreamContentMeta` 在一个只读快照里按 `(account, created_at, request_id, kind)` 列出引用；`ContentReader` 按账户缓存数据密钥，`Open` 先校验对象大小，再认证、检查明文长度和摘要。缺账户密钥返回 `ErrNoContentKey`，导出失败而不是跳过。写正文的通道还没接；`sealContent` 已在包内，接入时由它生成摘要和对象。
+`StreamContentMeta` 在一个只读快照里按 `(account, created_at, request_id, kind, part)` 列出引用；`ContentReader` 按账户缓存数据密钥，`Open` 先校验对象大小，再认证、检查明文长度和摘要。缺账户密钥返回 `ErrNoContentKey`，导出失败而不是跳过。写正文的通道还没接；`sealContent` 已在包内，接入时由它生成摘要和对象。
 
-`cmd/axiom content export` 是唯一读正文的命令：它验负责人签名、在平台范围写 `content_exports` 和 `content_export.start`、把引用写成 `manifest.jsonl`、逐条读出并认证，再把 tar.gz 经 X25519 + HKDF-SHA256 + 分块 AES-256-GCM 写给负责人。`keygen`、`approve`、`decrypt` 只在负责人机器上运行。格式、批准字段和威胁模型见[记录与告警的「受控导出」](../../docs/domains/observability.md#受控导出)。
+`cmd/axiom content export` 是唯一读正文的命令：它验负责人签名、在平台范围写 `content_exports` 和 `content_export.start`、把引用写成 `manifest.jsonl`、逐条读出并认证，再把 tar.gz 经 X25519 + HKDF-SHA256 + 分块 AES-256-GCM 写给负责人；`content/<request_id>/<kind>/<part>` 让同一请求的多条消息或附件各有唯一路径。`keygen`、`approve`、`decrypt` 只在负责人机器上运行。格式、批准字段和威胁模型见[记录与告警的「受控导出」](../../docs/domains/observability.md#受控导出)。
 
-`gateway.response_cache` 不参与：它是最多 24 小时的回复副本，没有请求 ID，不是对话历史；导出它只会重复内容且无法按调用记录追溯。删除账户时它仍必须和 `observability.content_*` 一起删除（[安全的「内容安全」](../../docs/security.md#内容安全)）。
+`gateway.response_cache` 也参与导出：它是最多 24 小时的回复副本，可能包含尚未进入 `content_*` 的回复；没有请求 ID，所以单独写 `cache.jsonl` 和 `cache/<cache_id>`，仍按批准的时间窗和租户范围选。`cache/<cache_id>` 是状态、NUL 和回复的原始载荷。删除账户时它必须和 `observability.content_*` 一起删除（[安全的「内容安全」](../../docs/security.md#内容安全)）。
 
-测试：`TestContentSealOpen`、`TestContentMetaScope`、`TestContentReader`、`TestContentKeyIsBoundToItsAccount`、`TestContentTablesArePlatformOnly` 覆盖加密、范围、密钥绑定和 RLS；`TestContentApprovalVerifies`、`TestContentKeygenAndApprove`、`TestContentExportRoundTrip`、`TestContentExportRowsAndAudit` 覆盖签名、命令和审计。
+测试：`TestContentSealOpen`、`TestContentMetaScope`、`TestContentMetaMultipleParts`、`TestContentReader`、`TestContentKeyIsBoundToItsAccount`、`TestContentTablesArePlatformOnly` 覆盖加密、范围、组件路径、密钥绑定和 RLS；`TestContentApprovalVerifies`、`TestContentKeygenAndApprove`、`TestContentExportRoundTrip`、`TestContentExportIncludesResponseCache`、`TestContentExportRowsAndAudit` 覆盖双签名、命令、缓存和审计。
 
 ## 不变量
 

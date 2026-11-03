@@ -16,6 +16,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/platform/config"
 	"axiom/internal/platform/jsonx"
@@ -28,6 +29,7 @@ import (
 // metadata only; the body is a separate tar entry.
 type contentManifestEntry struct {
 	RequestID string `json:"request_id"`
+	Part      string `json:"part"`
 	Kind      string `json:"kind"`
 	SiteID    string `json:"site_id"`
 	AccountID string `json:"account_id"`
@@ -39,21 +41,22 @@ type contentManifestEntry struct {
 	Path      string `json:"path"`
 }
 
-// contentExportSettings is the server-side configuration: the master key file, the two public keys and the object
+// contentExportSettings is the server-side configuration: the master key file, the three public keys and the object
 // store. The private keys are never here.
 type contentExportSettings struct {
-	masterPath, signingPath, encryptionPath string
-	timeout                                 time.Duration
-	objects                                 objectstore.Config
+	masterPath, signingPath, secondSigningPath, encryptionPath string
+	timeout                                                    time.Duration
+	objects                                                    objectstore.Config
 }
 
 func readContentExportSettings(environ []string) (contentExportSettings, error) {
 	env := config.New(environ)
 	settings := contentExportSettings{
-		masterPath:     env.Required(masterKeyFileVar),
-		signingPath:    env.Required(contentSigningKeyVar),
-		encryptionPath: env.Required(contentEncryptionKeyVar),
-		timeout:        env.Duration(contentExportTimeoutVar, contentExportTimeout),
+		masterPath:        env.Required(masterKeyFileVar),
+		signingPath:       env.Required(contentSigningKeyVar),
+		secondSigningPath: env.Required(contentSecondSigningKeyVar),
+		encryptionPath:    env.Required(contentEncryptionKeyVar),
+		timeout:           env.Duration(contentExportTimeoutVar, contentExportTimeout),
 	}
 	cfg, err := objectstore.ReadConfig(env)
 	if err != nil {
@@ -74,6 +77,8 @@ func readContentExportSettings(environ []string) (contentExportSettings, error) 
 
 // contentExportCommand runs on the server. The signed approval is the only scope: there are no flags that could widen
 // it, and the approval is consumed once, before the first body is read.
+//
+//nolint:cyclop // one command wiring path; the validation is below
 func contentExportCommand(ctx context.Context, environ, args []string, out io.Writer) error {
 	var approvalPath string
 	if err := flags("content export", contentUsage, args, func(set *flag.FlagSet) {
@@ -96,6 +101,10 @@ func contentExportCommand(ctx context.Context, environ, args []string, out io.Wr
 	if err != nil {
 		return err
 	}
+	secondSigningPub, err := readContentPublicKey(settings.secondSigningPath)
+	if err != nil {
+		return err
+	}
 	encryptionPub, err := readContentPublicKey(settings.encryptionPath)
 	if err != nil {
 		return err
@@ -108,7 +117,7 @@ func contentExportCommand(ctx context.Context, environ, args []string, out io.Wr
 	if err != nil {
 		return err
 	}
-	approval, raw, digest, err := verifyContentApproval(approvalData, signingPub, encryptionPub, time.Now())
+	approval, raw, digest, err := verifyContentApproval(approvalData, signingPub, secondSigningPub, encryptionPub, time.Now())
 	if err != nil {
 		return err
 	}
@@ -139,9 +148,8 @@ func runContentExport(ctx context.Context, db *pg.DB, objects *objectstore.Clien
 	if err != nil {
 		return err
 	}
-	meta, stats, err := prepareContentExport(ctx, dbContentSource{db}, observability.ContentQuery{
-		Since: scope.Since, Until: scope.Until, Site: scope.Site, Account: scope.Account,
-	})
+	q := observability.ContentQuery{Since: scope.Since, Until: scope.Until, Site: scope.Site, Account: scope.Account}
+	meta, stats, err := prepareContentExport(ctx, dbContentSource{db}, q)
 	if err != nil {
 		return err
 	}
@@ -149,11 +157,22 @@ func runContentExport(ctx context.Context, db *pg.DB, objects *objectstore.Clien
 		discard(meta)
 		removeTemp(meta.Name())
 	}()
-	exportID := uuid.NewV7()
-	if err := beginContentExport(ctx, db, exportID, approval, digest, stats); err != nil {
+	cacheMeta, cacheStats, err := prepareCacheExport(ctx, dbCacheSource{db}, gateway.CacheQuery{
+		Since: scope.Since, Until: scope.Until, Site: scope.Site, Account: scope.Account,
+	})
+	if err != nil {
 		return err
 	}
-	size, sum, err := writeContentExportFile(ctx, db, exportID, approval, raw, digest, recipient, meta, stats, reader)
+	defer func() {
+		discard(cacheMeta)
+		removeTemp(cacheMeta.Name())
+	}()
+	cache := &cacheExport{meta: cacheMeta, stats: cacheStats, reader: dbCacheOpener{db: db, keys: keys}}
+	exportID := uuid.NewV7()
+	if err := beginContentExport(ctx, db, exportID, approval, digest, stats, cacheStats); err != nil {
+		return err
+	}
+	size, sum, err := writeContentExportFile(ctx, db, exportID, approval, raw, digest, recipient, meta, stats, cache, reader)
 	if err != nil {
 		return err
 	}
@@ -165,6 +184,8 @@ func runContentExport(ctx context.Context, db *pg.DB, objects *objectstore.Clien
 		"export":        exportID.String(),
 		"contents":      stats.Count,
 		"content_bytes": stats.Bytes,
+		"cache_entries": cacheStats.Count,
+		"cache_bytes":   cacheStats.Bytes,
 		"output":        approval.Destination,
 		"output_bytes":  size,
 		"sha256":        hex.EncodeToString(sum[:]),
@@ -174,7 +195,8 @@ func runContentExport(ctx context.Context, db *pg.DB, objects *objectstore.Clien
 // writeContentExportFile writes one encrypted archive and publishes it only after a full fsync. Any failure after the
 // start row is recorded is marked failed here, with the stage that failed.
 func writeContentExportFile(ctx context.Context, db *pg.DB, exportID uuid.UUID, approval contentApproval, raw []byte,
-	digest [32]byte, recipient *ecdh.PublicKey, meta *os.File, stats observability.ContentStats, reader contentOpener,
+	digest [32]byte, recipient *ecdh.PublicKey, meta *os.File, stats observability.ContentStats, cache *cacheExport,
+	reader contentOpener,
 ) (int64, [32]byte, error) {
 	temp, err := createContentExportTemp(approval.Destination)
 	if err != nil {
@@ -183,7 +205,8 @@ func writeContentExportFile(ctx context.Context, db *pg.DB, exportID uuid.UUID, 
 	}
 	tempPath := temp.Name()
 	hash := sha256.New()
-	writeErr := writeContentExport(ctx, io.MultiWriter(temp, hash), approval, raw, digest, recipient, meta, stats, reader, time.Now())
+	writeErr := writeContentExportWithCache(ctx, io.MultiWriter(temp, hash), approval, raw, digest, recipient, meta, stats,
+		cache, reader, time.Now())
 	if writeErr == nil {
 		writeErr = temp.Sync()
 	}
@@ -268,6 +291,7 @@ func prepareContentExport(ctx context.Context, source contentMetaSource, q obser
 	stats, err := source.Stream(ctx, q, func(m observability.ContentMeta) error {
 		line, err := jsonx.MarshalCanonical(contentManifestEntry{
 			RequestID: m.RequestID.String(),
+			Part:      m.Part,
 			Kind:      string(m.Kind),
 			SiteID:    m.Site.String(),
 			AccountID: m.Account.String(),
@@ -305,17 +329,32 @@ func prepareContentExport(ctx context.Context, source contentMetaSource, q obser
 func writeContentExport(ctx context.Context, dst io.Writer, approval contentApproval, raw []byte, digest [32]byte,
 	recipient *ecdh.PublicKey, meta *os.File, stats observability.ContentStats, reader contentOpener, now time.Time,
 ) error {
+	return writeContentExportWithCache(ctx, dst, approval, raw, digest, recipient, meta, stats, nil, reader, now)
+}
+
+func writeContentExportWithCache(ctx context.Context, dst io.Writer, approval contentApproval, raw []byte, digest [32]byte,
+	recipient *ecdh.PublicKey, meta *os.File, stats observability.ContentStats, cache *cacheExport, reader contentOpener,
+	now time.Time,
+) error {
 	encrypted, err := newExportWriter(dst, recipient, digest)
 	if err != nil {
 		return err
 	}
 	gz := gzip.NewWriter(encrypted)
 	tw := tar.NewWriter(gz)
-	if err := writeExportPrelude(tw, approval, raw, digest, stats, meta, now); err != nil {
+	if err := writeExportPrelude(tw, approval, raw, digest, stats, cache, meta, now); err != nil {
 		return err
 	}
 	if err := writeExportBodies(ctx, tw, meta, reader); err != nil {
 		return err
+	}
+	if cache != nil {
+		if err := writeCacheManifestEntries(tw, cache.meta, now); err != nil {
+			return err
+		}
+		if err := writeCacheBodies(ctx, tw, cache.meta, cache.reader); err != nil {
+			return err
+		}
 	}
 	if err := tw.Close(); err != nil {
 		return fmt.Errorf("content export: finish tar: %w", err)
@@ -330,15 +369,16 @@ func writeContentExport(ctx context.Context, dst io.Writer, approval contentAppr
 }
 
 func writeExportPrelude(tw *tar.Writer, approval contentApproval, raw []byte, digest [32]byte,
-	stats observability.ContentStats, meta *os.File, now time.Time,
+	stats observability.ContentStats, cache *cacheExport, meta *os.File, now time.Time,
 ) error {
 	if err := writeTarBytes(tw, "approval.json", raw, now); err != nil {
 		return err
 	}
-	manifest, err := jsonx.MarshalCanonical(map[string]any{
+	fields := map[string]any{
 		"version":         1,
 		"approval_digest": hex.EncodeToString(digest[:]),
 		"owner_key":       approval.Owner,
+		"owner2_key":      approval.Owner2,
 		"recipient_key":   approval.Recipient,
 		"since":           approval.Since,
 		"until":           approval.Until,
@@ -349,7 +389,12 @@ func writeExportPrelude(tw *tar.Writer, approval contentApproval, raw []byte, di
 		"content_count":   stats.Count,
 		"content_bytes":   stats.Bytes,
 		"created_at":      now.UTC().Format(time.RFC3339Nano),
-	})
+	}
+	if cache != nil {
+		fields["cache_count"] = cache.stats.Count
+		fields["cache_bytes"] = cache.stats.Bytes
+	}
+	manifest, err := jsonx.MarshalCanonical(fields)
 	if err != nil {
 		return fmt.Errorf("content export: manifest: %w", err)
 	}
@@ -360,18 +405,22 @@ func writeExportPrelude(tw *tar.Writer, approval contentApproval, raw []byte, di
 }
 
 func writeManifestEntries(tw *tar.Writer, meta *os.File, now time.Time) error {
+	return writeMetadataFile(tw, meta, "manifest.jsonl", "metadata", now)
+}
+
+func writeMetadataFile(tw *tar.Writer, meta *os.File, name, label string, now time.Time) error {
 	info, err := meta.Stat()
 	if err != nil {
-		return fmt.Errorf("content export: metadata file: %w", err)
+		return fmt.Errorf("content export: %s file: %w", label, err)
 	}
-	if err := tw.WriteHeader(&tar.Header{Name: "manifest.jsonl", Mode: 0o600, Size: info.Size(), ModTime: now.UTC()}); err != nil {
-		return fmt.Errorf("content export: manifest header: %w", err)
+	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: info.Size(), ModTime: now.UTC()}); err != nil {
+		return fmt.Errorf("content export: %s header: %w", label, err)
 	}
 	if _, err := io.Copy(tw, meta); err != nil {
-		return fmt.Errorf("content export: manifest entries: %w", err)
+		return fmt.Errorf("content export: %s entries: %w", label, err)
 	}
 	if _, err := meta.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("content export: rewind metadata: %w", err)
+		return fmt.Errorf("content export: rewind %s: %w", label, err)
 	}
 	return nil
 }
@@ -435,6 +484,10 @@ func (e contentManifestEntry) meta() (observability.ContentMeta, error) {
 	if m.Kind != observability.ContentRequest && m.Kind != observability.ContentResponse && m.Kind != observability.ContentAttempt {
 		return m, fmt.Errorf("content export: unknown kind %q", e.Kind)
 	}
+	if !observability.ValidContentPart(e.Part) {
+		return m, fmt.Errorf("content export: invalid part %q", e.Part)
+	}
+	m.Part = e.Part
 	if m.CreatedAt, err = time.Parse(time.RFC3339Nano, e.CreatedAt); err != nil {
 		return m, fmt.Errorf("content export: created_at: %w", err)
 	}

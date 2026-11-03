@@ -14,7 +14,9 @@ CREATE TABLE observability.content_keys (
     -- subkey derived from it, so destroying this row makes all of it unreadable at once.
     ciphertext bytea NOT NULL CHECK (octet_length(ciphertext) = 48),
     nonce bytea NOT NULL CHECK (octet_length(nonce) = 12),
-    wrapped_dek bytea NOT NULL CHECK (octet_length(wrapped_dek) = 60),
+    -- A distinct column name keeps the old binary's envelope inventory (which looks for wrapped_dek) able to start
+    -- during a rolling upgrade; the new inventory registers this column and rotates it.
+    wrapped_key bytea NOT NULL CHECK (octet_length(wrapped_key) = 60),
     key_version bigint NOT NULL CHECK (key_version BETWEEN 1 AND 4294967295),
     created_at timestamptz NOT NULL
 );
@@ -45,17 +47,20 @@ CREATE INDEX content_blobs_account_age ON observability.content_blobs (account_i
 
 CREATE TABLE observability.content_refs (
     request_id uuid NOT NULL,
+    -- One message, file or other body within the request. The same request therefore has many refs for one kind,
+    -- and the export path includes this component so tar entries cannot overwrite each other.
+    part text NOT NULL CHECK (part ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
     kind text NOT NULL CHECK (kind IN ('request', 'response', 'attempt')),
     site_id uuid NOT NULL,
     account_id uuid NOT NULL,
     blob_id uuid NOT NULL,
     created_at timestamptz NOT NULL,
-    PRIMARY KEY (request_id, kind),
+    PRIMARY KEY (request_id, kind, part),
     FOREIGN KEY (blob_id, site_id, account_id)
         REFERENCES observability.content_blobs (id, site_id, account_id)
 );
-CREATE INDEX content_refs_export ON observability.content_refs (created_at, account_id, request_id, kind);
-CREATE INDEX content_refs_account_age ON observability.content_refs (account_id, created_at, request_id, kind);
+CREATE INDEX content_refs_export ON observability.content_refs (created_at, account_id, request_id, kind, part);
+CREATE INDEX content_refs_account_age ON observability.content_refs (account_id, created_at, request_id, kind, part);
 
 -- One row per export attempt: the signed approval, its scope and output, and the outcome. It is the audit record the
 -- command writes before it reads a byte of content, so an interrupted export still leaves evidence. The unique digest
@@ -64,6 +69,7 @@ CREATE TABLE observability.content_exports (
     id uuid PRIMARY KEY,
     approval_digest bytea NOT NULL UNIQUE CHECK (octet_length(approval_digest) = 32),
     owner_key text NOT NULL CHECK (owner_key ~ '^[0-9a-f]{64}$'),
+    owner2_key text NOT NULL CHECK (owner2_key ~ '^[0-9a-f]{64}$'),
     recipient_key text NOT NULL CHECK (recipient_key ~ '^[0-9a-f]{64}$'),
     since timestamptz NOT NULL,
     until timestamptz NOT NULL,
@@ -74,6 +80,8 @@ CREATE TABLE observability.content_exports (
     status text NOT NULL CHECK (status IN ('started', 'completed', 'failed')),
     content_count bigint NOT NULL DEFAULT 0 CHECK (content_count >= 0),
     content_bytes bigint NOT NULL DEFAULT 0 CHECK (content_bytes >= 0),
+    cache_count bigint NOT NULL DEFAULT 0 CHECK (cache_count >= 0),
+    cache_bytes bigint NOT NULL DEFAULT 0 CHECK (cache_bytes >= 0),
     output_bytes bigint NOT NULL DEFAULT 0 CHECK (output_bytes >= 0),
     output_sha256 bytea CHECK (output_sha256 IS NULL OR octet_length(output_sha256) = 32),
     error_kind text NOT NULL DEFAULT '' CHECK (char_length(error_kind) <= 64),
