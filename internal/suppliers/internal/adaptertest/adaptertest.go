@@ -170,6 +170,11 @@ func RunScan(t testing.TB, m adapter.Manager) {
 // leaves it out would have a removal take a backlog for read (#109). The module's sync relies on all of it: it
 // starts with no position, stores what comes back with each page, and reads until Done.
 func ScanProblem(m adapter.Manager) string {
+	if _, ok := m.(adapter.UsageQueue); ok {
+		// A usage-queue manager has no re-readable charge list: the resident collector drains it, and the sync engine
+		// skips Charges for such a manager. There is no scan protocol to check.
+		return ""
+	}
 	var state adapter.ScanState
 	for call := range 20 {
 		page, next, err := m.Charges(context.Background(), state)

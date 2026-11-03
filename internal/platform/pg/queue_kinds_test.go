@@ -48,6 +48,7 @@ func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 		"suppliers.sync":                  QueueSyncs,
 		"suppliers.sync_sweep":            QueueSyncs,
 		"suppliers.sync_alerts":           QueueNotifications,
+		"suppliers.usage_drain":           QueueSyncs,
 	}
 	got := jobKinds(t, repoRoot(t))
 	named := map[string]bool{}

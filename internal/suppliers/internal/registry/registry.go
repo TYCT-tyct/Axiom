@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"axiom/internal/suppliers/internal/adapter"
+	"axiom/internal/suppliers/internal/cpa"
 	"axiom/internal/suppliers/internal/declared"
 	"axiom/internal/suppliers/internal/newapi"
 	"axiom/internal/suppliers/internal/openai"
@@ -17,6 +18,7 @@ import (
 )
 
 var adapters = []adapter.Adapter{
+	cpa.New(),
 	newapi.New(),
 	openai.New(),
 	sub2api.New(),

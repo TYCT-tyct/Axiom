@@ -1,0 +1,5 @@
+{"observed_at":"2026-11-03T10:00:00Z","files":[
+ {"id":"claude-1","name":"claude-1.json","type":"claude","provider":"claude","status":"active","disabled":false,"unavailable":false,"success":12,"failed":1,"quota":{"observed_at":"2026-11-03T10:00:00Z","signals":{"Anthropic-Ratelimit-Unified-5h-Utilization":"0.25","Anthropic-Ratelimit-Unified-5h-Reset":"2026-11-03T12:00:00Z","Anthropic-Ratelimit-Unified-7d-Utilization":"0.50","Anthropic-Ratelimit-Unified-7d-Reset":"2026-11-08T10:00:00Z"}}},
+ {"id":"codex-1","name":"codex-1.json","type":"codex","provider":"codex","status":"active","disabled":false,"unavailable":false,"quota":{"observed_at":"2026-11-03T10:00:00Z","signals":{"X-Codex-Primary-Used-Percent":"80","X-Codex-Secondary-Used-Percent":"40","X-Codex-Primary-Reset-At":"2026-11-03T12:00:00Z"}}},
+ {"id":"dead-1","name":"dead-1.json","type":"claude","provider":"claude","status":"error","disabled":false,"unavailable":true}
+],"total":3,"has_more":false}
