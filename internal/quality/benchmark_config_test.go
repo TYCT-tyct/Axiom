@@ -451,3 +451,86 @@ func TestBenchmarkOfficialStaleRunKeepsNewerConfiguration(t *testing.T) {
 		t.Fatalf("the rejected run removed the newer official score: %+v", got)
 	}
 }
+
+// TestPrepareStartupSyncSerializesOlderSnapshot: a restart loads B's configuration and score, then an old A snapshot
+// pauses after its preliminary generation check while B publishes. The old call must not run the startup configuration
+// write after B and delete B's valid score; the serialized section rechecks the generation before touching the store.
+//
+//nolint:cyclop // the test orchestrates the paused older call and the newer publish in order
+func TestPrepareStartupSyncSerializesOlderSnapshot(t *testing.T) {
+	m, l, f, now := fixtureLoop(t, Observe)
+	official, candidate := benchmarkEndpoints()
+	f.mu.Lock()
+	f.endpoints = []suppliers.Routable{official, candidate}
+	f.mu.Unlock()
+	tick(t, l)
+
+	set := fixedBenchmark()
+	at := *now
+	if !m.RecordOfficialBenchmark(t.Context(), official, runOfSet(set, at, "yes")) {
+		t.Fatal("the official baseline was refused")
+	}
+	if _, ok := m.RecordBenchmark(t.Context(), candidate, runOfSet(set, at.Add(time.Minute), "yes")); !ok {
+		t.Fatal("the candidate A run was refused")
+	}
+	changed := candidate
+	changed.Upstream = "relay-2"
+	f.mu.Lock()
+	f.endpoints = []suppliers.Routable{official, changed}
+	f.mu.Unlock()
+	tick(t, l)
+	if _, ok := m.RecordBenchmark(t.Context(), changed, runOfSet(set, at.Add(2*time.Minute), "yes")); !ok {
+		t.Fatal("the candidate B run was refused")
+	}
+
+	oldA := candidate
+	oldA.Generation = 1
+	newB := changed
+	newB.Generation = 2
+	second := &probeFixture{
+		endpoints: []suppliers.Routable{official, oldA},
+		calls:     make(chan suppliers.TestRequest, 1),
+		release:   make(chan struct{}, 1),
+	}
+	t.Cleanup(func() { close(second.release) })
+	restarted, _, err := Start(t.Context(), Config{
+		DB: l.db, Scope: l.scope, Mode: Observe, Source: second, Pauses: second,
+		Now: func() time.Time { return *now }, Rand: func() float64 { return .5 },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldChecked := make(chan struct{})
+	release := make(chan struct{})
+	barrier := func(ep suppliers.Routable) {
+		if ep.Generation == oldA.Generation {
+			close(oldChecked)
+			<-release
+		}
+	}
+	oldDone := make(chan error, 1)
+	go func() {
+		oldDone <- restarted.prepareEndpointWith(t.Context(), oldA, restarted.loop.now(), barrier)
+	}()
+	<-oldChecked
+	if err := restarted.Prepare(t.Context(), []suppliers.Routable{official, newB}); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-oldDone; err != nil {
+		t.Fatal(err)
+	}
+
+	if stored, ok := restarted.storedConfig(candidate.ID); !ok || stored.config != configOf(newB) {
+		t.Fatalf("the stale startup call changed the shared configuration: %+v, %v", stored, ok)
+	}
+	if saved, ok := restarted.savedScore(candidate.ID); !ok || saved.config != configOf(newB) {
+		t.Fatalf("the stale startup call removed B's stored score: %+v, %v", saved, ok)
+	}
+	if result, ok := restarted.RecordBenchmark(t.Context(), newB, runOfSet(set, at.Add(3*time.Minute), "yes")); !ok {
+		t.Fatal("a new B run was refused after the stale startup call")
+	} else if got := restarted.MeasuredFor(newB, result.At); got.ProductScore != result.Score {
+		t.Fatalf("the new B run read %+v, want %v", got, result.Score)
+	}
+}

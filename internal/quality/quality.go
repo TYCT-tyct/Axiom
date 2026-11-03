@@ -241,6 +241,9 @@ type State struct {
 	// benchmarkEpoch is the configuration generation the held score was measured under. A generation that advances
 	// invalidates the score even if the configuration later returns to the same model, upstream and formats.
 	benchmarkEpoch int64
+	// prepareMu serializes the shared configuration write and the local publish for this endpoint. A stale snapshot
+	// that passed its preliminary generation check waits here and rechecks before it can write.
+	prepareMu sync.Mutex
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.

@@ -195,16 +195,44 @@ func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) e
 	return nil
 }
 
+// staleSnapshot reports whether generation is older than the newest snapshot this endpoint published. Generation 0 is
+// an unversioned test or a source that has not reloaded yet; once a version has been published, a zero is older than it.
+// The caller holds e.mu.
+func staleSnapshot(e *State, generation uint64) bool {
+	return e.published > 0 && generation < e.published
+}
+
 // prepareEndpoint publishes one endpoint's configuration and restores its durable health the first time it reappears.
 // The stored score and configuration are read before the endpoint lock: the monitor lock must never be taken under it,
 // or a commit (monitor then endpoint) could deadlock with a snapshot build (endpoint then monitor).
 func (m *Monitor) prepareEndpoint(ctx context.Context, ep suppliers.Routable, now time.Time) error {
+	return m.prepareEndpointWith(ctx, ep, now, nil)
+}
+
+// prepareEndpointWith is prepareEndpoint with a test-only barrier between the preliminary generation check and the
+// serialized write. Production passes nil.
+func (m *Monitor) prepareEndpointWith(ctx context.Context, ep suppliers.Routable, now time.Time, barrier func(suppliers.Routable)) error {
+	e := m.of(ep.ID)
+	e.mu.Lock()
+	if staleSnapshot(e, ep.Generation) {
+		e.mu.Unlock()
+		return nil
+	}
+	e.mu.Unlock()
+	if barrier != nil {
+		barrier(ep)
+	}
+
+	// The preliminary check above avoids queueing a snapshot that is already stale. The check below, the shared
+	// configuration write and the local publish are serialized: a newer generation may publish while this call waits
+	// for prepareMu, and this call must not write its older configuration after that.
+	e.prepareMu.Lock()
+	defer e.prepareMu.Unlock()
 	saved, hasSaved := m.savedScore(ep.ID)
 	stored, hasStored := m.storedConfig(ep.ID)
 	cfg := configOf(ep)
-	e := m.of(ep.ID)
 	e.mu.Lock()
-	if e.published > 0 && ep.Generation < e.published {
+	if staleSnapshot(e, ep.Generation) {
 		e.mu.Unlock()
 		return nil
 	}
@@ -216,11 +244,7 @@ func (m *Monitor) prepareEndpoint(ctx context.Context, ep suppliers.Routable, no
 		return err
 	}
 	e.mu.Lock()
-	// A routing build and the health loop both publish configurations. The build may have read an older supplier
-	// snapshot and resume after the loop published a newer one; accepting that older generation would bring back a
-	// configuration whose facts are already gone. Generation 0 is an unversioned test or a source that has not
-	// reloaded yet; once a version has been published, a zero is older than it.
-	if e.published > 0 && ep.Generation < e.published {
+	if staleSnapshot(e, ep.Generation) {
 		e.mu.Unlock()
 		return nil
 	}
