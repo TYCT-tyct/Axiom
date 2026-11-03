@@ -343,6 +343,11 @@ export const probeSettingsQuery = queryOptions({
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/quality-probes`, { signal })),
 });
 
+export const sourceClassesQuery = queryOptions({
+  queryKey: [accountKey, "source-classes"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/source-classes`, { signal })),
+});
+
 export const mailSettingsQuery = queryOptions({
   queryKey: [accountKey, "mail-settings"],
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/mail`, { signal })),

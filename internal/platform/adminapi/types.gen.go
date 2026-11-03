@@ -1332,6 +1332,72 @@ func (e SiteLogoUploadContentType) Valid() bool {
 	}
 }
 
+// Defines values for SourceClassConditionEvidence.
+const (
+	Header SourceClassConditionEvidence = "header"
+	Usage  SourceClassConditionEvidence = "usage"
+)
+
+// Valid indicates whether the value is a known member of the SourceClassConditionEvidence enum.
+func (e SourceClassConditionEvidence) Valid() bool {
+	switch e {
+	case Header:
+		return true
+	case Usage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceClassConditionOperator.
+const (
+	Absent   SourceClassConditionOperator = "absent"
+	Contains SourceClassConditionOperator = "contains"
+	Equals   SourceClassConditionOperator = "equals"
+	Prefix   SourceClassConditionOperator = "prefix"
+	Present  SourceClassConditionOperator = "present"
+	Suffix   SourceClassConditionOperator = "suffix"
+)
+
+// Valid indicates whether the value is a known member of the SourceClassConditionOperator enum.
+func (e SourceClassConditionOperator) Valid() bool {
+	switch e {
+	case Absent:
+		return true
+	case Contains:
+		return true
+	case Equals:
+		return true
+	case Prefix:
+		return true
+	case Present:
+		return true
+	case Suffix:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SourceClassRulesMatch.
+const (
+	SourceClassRulesMatchAll SourceClassRulesMatch = "all"
+	SourceClassRulesMatchAny SourceClassRulesMatch = "any"
+)
+
+// Valid indicates whether the value is a known member of the SourceClassRulesMatch enum.
+func (e SourceClassRulesMatch) Valid() bool {
+	switch e {
+	case SourceClassRulesMatchAll:
+		return true
+	case SourceClassRulesMatchAny:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SubscriptionRefundProposalState.
 const (
 	SubscriptionRefundProposalStateApproved SubscriptionRefundProposalState = "approved"
@@ -4147,6 +4213,88 @@ type SiteSignInUpdate struct {
 	Reason      string  `json:"reason"`
 }
 
+// SourceClass defines model for SourceClass.
+type SourceClass struct {
+	Description string           `json:"description"`
+	Fallback    bool             `json:"fallback"`
+	Name        string           `json:"name"`
+	NameZh      string           `json:"name_zh"`
+	Position    int              `json:"position"`
+	Revision    int64            `json:"revision"`
+	Rules       SourceClassRules `json:"rules"`
+	Slug        string           `json:"slug"`
+	System      bool             `json:"system"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+}
+
+// SourceClassCondition defines model for SourceClassCondition.
+type SourceClassCondition struct {
+	Evidence SourceClassConditionEvidence `json:"evidence"`
+
+	// Item The billing item name for a usage condition.
+	Item *string `json:"item,omitempty"`
+
+	// Name The response header name for a header condition, canonicalized before it is stored.
+	Name     *string                      `json:"name,omitempty"`
+	Operator SourceClassConditionOperator `json:"operator"`
+
+	// Value Empty for present and absent; 1 to 256 bytes for the comparing operators.
+	Value *string `json:"value,omitempty"`
+}
+
+// SourceClassConditionEvidence defines model for SourceClassCondition.Evidence.
+type SourceClassConditionEvidence string
+
+// SourceClassConditionOperator defines model for SourceClassCondition.Operator.
+type SourceClassConditionOperator string
+
+// SourceClassCreate defines model for SourceClassCreate.
+type SourceClassCreate struct {
+	Description *string `json:"description,omitempty"`
+	Name        string  `json:"name"`
+	NameZh      *string `json:"name_zh,omitempty"`
+	Position    *int    `json:"position,omitempty"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason           `json:"reason"`
+	Rules  SourceClassRules `json:"rules"`
+	Slug   string           `json:"slug"`
+}
+
+// SourceClassDelete defines model for SourceClassDelete.
+type SourceClassDelete struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+	Rev    int64  `json:"rev"`
+}
+
+// SourceClassList defines model for SourceClassList.
+type SourceClassList struct {
+	Classes []SourceClass `json:"classes"`
+}
+
+// SourceClassRules defines model for SourceClassRules.
+type SourceClassRules struct {
+	Conditions []SourceClassCondition `json:"conditions"`
+	Match      SourceClassRulesMatch  `json:"match"`
+}
+
+// SourceClassRulesMatch defines model for SourceClassRules.Match.
+type SourceClassRulesMatch string
+
+// SourceClassUpdate defines model for SourceClassUpdate.
+type SourceClassUpdate struct {
+	Description *string `json:"description,omitempty"`
+	Name        *string `json:"name,omitempty"`
+	NameZh      *string `json:"name_zh,omitempty"`
+	Position    *int    `json:"position,omitempty"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason            `json:"reason"`
+	Rev    int64             `json:"rev"`
+	Rules  *SourceClassRules `json:"rules,omitempty"`
+}
+
 // SourcePrice defines model for SourcePrice.
 type SourcePrice struct {
 	// Evidence What supports a price (a page excerpt, a dataset entry), kept as the person entered it.
@@ -5326,6 +5474,24 @@ type SetPaymentSettingsParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// CreateSourceClassParams defines parameters for CreateSourceClass.
+type CreateSourceClassParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// DeleteSourceClassParams defines parameters for DeleteSourceClass.
+type DeleteSourceClassParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// UpdateSourceClassParams defines parameters for UpdateSourceClass.
+type UpdateSourceClassParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListSubscriptionPlansParams defines parameters for ListSubscriptionPlans.
 type ListSubscriptionPlansParams struct {
 	IncludeInactive *bool `form:"include_inactive,omitempty" json:"include_inactive,omitempty"`
@@ -5635,6 +5801,15 @@ type SetSystemSettingsJSONRequestBody = SystemSettingsUpdate
 
 // SetPaymentSettingsJSONRequestBody defines body for SetPaymentSettings for application/json ContentType.
 type SetPaymentSettingsJSONRequestBody = PaymentSettingsUpdate
+
+// CreateSourceClassJSONRequestBody defines body for CreateSourceClass for application/json ContentType.
+type CreateSourceClassJSONRequestBody = SourceClassCreate
+
+// DeleteSourceClassJSONRequestBody defines body for DeleteSourceClass for application/json ContentType.
+type DeleteSourceClassJSONRequestBody = SourceClassDelete
+
+// UpdateSourceClassJSONRequestBody defines body for UpdateSourceClass for application/json ContentType.
+type UpdateSourceClassJSONRequestBody = SourceClassUpdate
 
 // CreateSubscriptionPlanJSONRequestBody defines body for CreateSubscriptionPlan for application/json ContentType.
 type CreateSubscriptionPlanJSONRequestBody = SubscriptionPlanInput

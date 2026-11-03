@@ -49,7 +49,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 `call_attempt`：一次尝试一行，外键意义上的归属是调用，按调用的 `at` 分区，主键 `(request_id, at, attempt_seq)`。
 
 - **谁**：`site_id`、`account_id`（与调用相同，行级安全看这两列）。
-- **走了哪**：`endpoint_id`、`supplier_id`、`source_class`（official、cloud、relay）、`egress`（按名字）。
+- **走了哪**：`endpoint_id`、`supplier_id`、`source_class`（稳定的来源类别 slug，种子是 official、cloud、relay；类别在后台增改）、`egress`（按名字）。
 - **结果**：`outcome`（`committed`：内容已交给客户端；`failed`：没有；`unknown`：上游可能已执行）、`error_kind`、`started_at`、`finished_at`、`first_token_ms`。成本、用量和供应商的对账键不在这里重复：suppliers 的 `attempt_costs` 按 `(request_id, attempt_seq)` 保存，与计费同成同败；崩溃或超过截止时间的请求记在 `suppliers.lost_requests` 里。
 - **没有 NULL，文字有界**：与 `call_log` 相同；没有正文、密钥或凭证列。
 

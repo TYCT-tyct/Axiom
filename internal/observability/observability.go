@@ -67,7 +67,7 @@ type AttemptRecord struct {
 	Seq         platform.AttemptSeq // 1 to platform.MaxAttemptSeq, in the order the attempts were made
 	Endpoint    uuid.UUID
 	Supplier    uuid.UUID
-	SourceClass string // official, cloud or relay
+	SourceClass string // a stable source class slug; the seeds are official, cloud or relay
 	Egress      string // the outbound route, by name
 	Outcome     AttemptOutcome
 	ErrorKind   string

@@ -9,6 +9,8 @@
 ```go
 func New(cfg Config) (*Router, error)
 func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset) (*Snapshot, error)
+// Endpoint.Class is a stable source-class slug (official, cloud, relay, or one added in the admin), not an enum;
+// Entry.Class freezes it into the plan for the call record. See docs/domains/quality.md「来源类别与指纹」.
 func (r *Router) Replace(s *Snapshot) // 只接受更新的快照
 func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte, header string) SessionKey // 只扫有界前缀
 func (r *Router) Plan(in Input) (Plan, *Wait, error) // 纯内存；*NoEndpoint{Reasons, Permanent}；ErrStale

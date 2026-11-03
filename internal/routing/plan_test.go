@@ -74,7 +74,7 @@ func TestFilters(t *testing.T) {
 		},
 		{
 			"preset class", func(e *routing.Endpoint) { e.Class = routing.ClassRelay }, nil,
-			func(p *routing.Preset) { p.Classes = 1 << routing.ClassOfficial }, routing.PresetFilter, true,
+			func(p *routing.Preset) { p.Classes = routing.ClassSet{routing.ClassOfficial} }, routing.PresetFilter, true,
 		},
 		{
 			"preset data policy", func(e *routing.Endpoint) { e.Policy = routing.PolicyMayTrain }, nil,
@@ -89,7 +89,7 @@ func TestFilters(t *testing.T) {
 		}, routing.PresetFilter, true},
 		{"override only another supplier", nil, func(in *routing.Input) { in.Override.OnlyNames = []string{"g99"} }, nil, routing.OverrideFilter, true},
 		{"override excludes the supplier", nil, func(in *routing.Input) { in.Override.ExcludeNames = []string{"g1"} }, nil, routing.OverrideFilter, true},
-		{"override class", nil, func(in *routing.Input) { in.Override.Classes = 1 << routing.ClassRelay }, nil, routing.OverrideFilter, true},
+		{"override class", nil, func(in *routing.Input) { in.Override.Classes = routing.ClassSet{routing.ClassRelay} }, nil, routing.OverrideFilter, true},
 		{"override verified only", func(e *routing.Endpoint) { e.Verified = false }, func(in *routing.Input) { in.Override.VerifiedOnly = true }, nil, routing.NotVerified, false},
 		{"override price limit", nil, func(in *routing.Input) {
 			in.Override.MaxPrice.Set.Add(catalog.ItemOutput)
@@ -171,14 +171,14 @@ func TestOverridesOnlyTighten(t *testing.T) {
 	relay := endpoint(t, 2, func(e *routing.Endpoint) { e.Class = routing.ClassRelay })
 	official := endpoint(t, 1)
 	preset := openPreset()
-	preset.Classes = 1 << routing.ClassOfficial
+	preset.Classes = routing.ClassSet{routing.ClassOfficial}
 	h := newHarness(t, routing.Config{}, preset, official, relay)
 	in := input()
 	in.Override.Classes = routing.AllClasses // asking for more changes nothing
 	if p := h.plan(in); len(p.Entries) != 1 || first(p) != ep(1) {
 		t.Errorf("an override widened the preset: %+v", p.Entries)
 	}
-	in.Override.Classes = 1 << routing.ClassRelay // asking for a different class leaves nothing
+	in.Override.Classes = routing.ClassSet{routing.ClassRelay} // asking for a different class leaves nothing
 	h.excluded(in)
 
 	// Price limits: the preset allows output up to 3e-6 and the override 1e-6; the lower applies, and the other way round.

@@ -203,7 +203,9 @@ func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) e
 		}
 		e.credentials = ep.Credentials
 		if cfg := configOf(ep); e.current != cfg {
-			e.facts = nil // facts belong to the configuration they were measured on
+			e.facts = nil                // facts belong to the configuration they were measured on
+			e.evidence = classEvidence{} // and so do response fingerprints: another upstream's headers say nothing of this one
+			e.class = m.fallbackClass()
 			e.current = cfg
 		}
 		loaded := e.loaded

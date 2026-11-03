@@ -75,6 +75,7 @@ type Loop struct {
 	budget              probeBudget
 	settings            atomic.Pointer[ProbeSettings]
 	settingsAt          time.Time
+	classesAt           time.Time
 	done                chan probeEnd
 	verifyDone          chan verifyEnd
 	stale               bool
@@ -99,6 +100,10 @@ type verifyEnd struct {
 	result   suppliers.TestResult
 	err      error
 }
+
+// classesEvery is how often a node rereads the source classes. With the routing snapshot's own five seconds, a rule
+// change reaches new plans within about ten seconds and needs no restart (docs/domains/quality.md「来源类别与指纹」).
+const classesEvery = 5 * time.Second
 
 // Start loads persisted state synchronously, before the node serves traffic.
 func Start(ctx context.Context, c Config) (*Monitor, *Loop, error) {
@@ -130,6 +135,9 @@ func Start(ctx context.Context, c Config) (*Monitor, *Loop, error) {
 		return nil, nil, err
 	}
 	if err := l.loadSettings(ctx, c.Now()); err != nil {
+		return nil, nil, err
+	}
+	if err := l.loadClasses(ctx, c.Now()); err != nil {
 		return nil, nil, err
 	}
 	return m, l, nil
@@ -221,6 +229,7 @@ func (l *Loop) Tick(ctx context.Context) error {
 	}
 	now := l.now()
 	l.refreshSettings(ctx, now)
+	l.refreshClasses(ctx, now)
 	endpoints, err := l.source.Routable()
 	if err != nil {
 		l.stale = true
