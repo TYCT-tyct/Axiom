@@ -178,7 +178,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 控制台命名预设契约在 `api/console.yaml`，响应字段均为 optional，沿用会话/CSRF 与 key 的查看/管理权限；config 在 Go 契约里用 jsonx.Raw 保留，防止工具 schema 或 seed 的大整数经 map[string]any 变成 float64；实际存储和快照见 [accounts](../accounts/README.md#命名请求配置)。
 
-控制台接口和管理接口的契约在 `api/` 里，每个监听一份、自成一体：`console.yaml` 在公网监听的 `/api/console/v1`，`admin.yaml` 在管理监听的 `/api/admin/v1`。运营接口以后另加一份。`just generate` 生成 Go 端的 `consoleapi`、`adminapi` 和 `web/packages/api/src` 里的 `console.gen.ts`、`admin.gen.ts`；`just api`（`tools/checkapi`）用 kin-openapi 校验契约，并检查下表中标「检查」的约定。PR 和列车还对照目标分支跑 `just api-compat`：目标分支里已有的结构（组件、操作里内联的请求和响应体，以及它们嵌套的对象）不得新增必填字段。滚动发布时，新页面会读到不返回这个字段的旧节点，旧页面写到新节点时也不带它；字段保持可选，生成的类型就会逼两边处理它缺失的情况。确实可以必填时（例如旧节点都已下线），在这个结构上用 `x-axiom-newly-required` 按字段写明理由。新加的结构不受限制。每个操作的权限、限次、幂等和 CSRF 写在契约里，不在这里重复。
+控制台接口和管理接口的契约在 `api/` 里，每个监听一份、自成一体：`console.yaml` 在公网监听的 `/api/console/v1`，`admin.yaml` 在管理监听的 `/api/admin/v1`。运营接口另有 `api/operations.yaml`，设计见[运营](../../docs/domains/operations.md#运营接口)，尚未实现。`just generate` 生成 Go 端的 `consoleapi`、`adminapi` 和 `web/packages/api/src` 里的 `console.gen.ts`、`admin.gen.ts`；`just api`（`tools/checkapi`）用 kin-openapi 校验契约，并检查下表中标「检查」的约定。PR 和列车还对照目标分支跑 `just api-compat`：目标分支里已有的结构（组件、操作里内联的请求和响应体，以及它们嵌套的对象）不得新增必填字段。滚动发布时，新页面会读到不返回这个字段的旧节点，旧页面写到新节点时也不带它；字段保持可选，生成的类型就会逼两边处理它缺失的情况。确实可以必填时（例如旧节点都已下线），在这个结构上用 `x-axiom-newly-required` 按字段写明理由。新加的结构不受限制。每个操作的权限、限次、幂等和 CSRF 写在契约里，不在这里重复。
 
 | 约定 | 内容 | 检查 |
 |---|---|---|
@@ -355,7 +355,7 @@ worker 返回的错误也一样：River 把它的文本写进 `river.river_job.e
 
   | 列 | 内容 |
   |---|---|
-  | `actor_kind`、`actor_id` | 操作者：`audit.User(用户 ID)`、`audit.System("<模块>.<任务>")` 或 `audit.ManagementKey(key ID)`（种类 management_key，迁移 00016 放宽约束）。运营 agent 的种类随第一个以它们身份写入的 PR 加入 |
+  | `actor_kind`、`actor_id` | 操作者：`audit.User(用户 ID)`、`audit.System("<模块>.<任务>")` 或 `audit.ManagementKey(key ID)`（种类 management_key，迁移 00016 放宽约束）。运营 agent 的种类将是 `operations_agent`，随第一个以它身份写入的 PR 加入；审批 AI 用 `system:operations.ai_approval`，负责人审批用 `user`。 |
   | `request_id` | 请求 ID，`Record` 从 context 读取（`httpserver.RequestID`）；后台任务没有 |
   | `action` | 稳定的动作名 `<对象>.<动作>`，如 `api_key.revoke`。检索和回放按它分类，改名就是另一种动作 |
   | `module`、`target_kind`、`target_id` | 改动的对象：所属模块、种类、ID |
@@ -420,7 +420,7 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 | 镜像里的根证书由程序内嵌（`golang.org/x/crypto/x509roots/fallback`，系统没有根证书时 Go 才用它） | scratch 镜像没有证书库，出站 HTTPS 会全部失败；内嵌只多一行导入、不改镜像、不依赖构建机上有没有证书文件，根证书随依赖升级更新 | 往镜像里复制 `ca-certificates.crt`：要在构建机上找到这个文件，Windows 上没有；多一个构建阶段或基础镜像：违背“镜像只有程序” |
 | 迁移管理员不必是超级用户，测试也这样跑 | 生产上缺的权限在测试里就暴露 | 测试用超级用户：权限问题到部署时才发现 |
 | 测试用 testcontainers，一个测试二进制一个容器，每个测试一份模板副本 | 对着真实的 PostgreSQL 测；复制模板只要几十毫秒，测试互不影响 | 每个测试一个容器：慢；共用一个库：测试互相干扰 |
-| 契约按接口面分文件：`api/console.yaml`（控制台，公网监听），`api/admin.yaml`（管理后台，管理监听），以后的运营接口再加一份，在自己的监听上 | 一个前端应用只引用它那一份；公网监听只提供数据面和控制台接口，管理后台和运营接口只挂在管理监听上（[总体架构](../../docs/architecture.md#技术选型)「前端交付」），分文件后不会被意外挂到公网 | 一份大契约：前端类型和服务端接口混在一起，管理接口容易挂错监听 |
+| 契约按接口面分文件：`api/console.yaml`（控制台，公网监听），`api/admin.yaml`（管理后台，管理监听），运营接口再加一份 `api/operations.yaml`（运营监听） | 一个前端应用只引用它那一份；公网监听只提供数据面和控制台接口，管理后台在管理监听上，运营接口在自己的运营监听上（[总体架构](../../docs/architecture.md#技术选型)「前端交付」），分文件后不会被意外挂到公网 | 一份大契约：前端类型和服务端接口混在一起，管理接口容易挂错监听 |
 | 前端三个应用嵌入程序，预压缩在构建时做，不在请求时压 | 一个文件部署（[总体架构](../../docs/architecture.md#技术选型)「前端交付」）；请求路径上不占 CPU，体积预算量的就是发出去的字节 | 请求时压缩加缓存：占 CPU，要管缓存；只嵌 br 或 gz，旧客户端要解压：多一份代码 |
 | 缓存策略按文件名判断（`assets/` 下带 8 位哈希），不读清单 | Vite 和 `theme.js` 都用这个名字；一条正则，不依赖构建的内部文件 | 读 `manifest.json`：多一个要随构建同步的文件 |
 | 管理监听默认 `127.0.0.1:8082`，不是 `:8082` | 管理后台不对公网开放；忘了配置的部署也是安全的，容器里由 compose 明确打开 | 默认 `:8082`：忘了限制来源就暴露 |
