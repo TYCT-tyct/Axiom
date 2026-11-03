@@ -49,23 +49,27 @@ export default function SourceClassesPage() {
   );
 }
 
+// Editing is the open editor: a new class, or an existing one by slug. Every slug is a valid name for a class, "new"
+// included, so creating is its own kind rather than a reserved slug.
+type Editing = { kind: "create" } | { kind: "edit"; slug: string } | null;
+
 // Classes is the list and the two dialogs it opens. The dialogs are mounted only while open, so each starts from the
 // class as it was read and a stale revision is refused rather than silently applied.
-function Classes({ classes }: { classes: Class[] }) {
+export function Classes({ classes }: { classes: Class[] }) {
   const { t, i18n } = useTranslation();
   const chinese = i18n.language.startsWith("zh");
-  const [editing, setEditing] = useState<string | "new" | null>(null);
+  const [editing, setEditing] = useState<Editing>(null);
   const [retiring, setRetiring] = useState<string | null>(null);
   // Follow the class in the fetched list: a refresh after a stale revision brings the revision the dialog must now
   // send. The dialog itself keeps the copy it was opened with until it is filled again (useSnapshot).
-  const edited = editing === null || editing === "new" ? undefined : classes.find((item) => item.slug === editing);
+  const edited = editing?.kind === "edit" ? classes.find((item) => item.slug === editing.slug) : undefined;
   const retired = retiring === null ? undefined : classes.find((item) => item.slug === retiring);
   const full = classes.length >= 32;
   const add = (
     <Button
       variant="primary"
       size="md"
-      onClick={() => setEditing("new")}
+      onClick={() => setEditing({ kind: "create" })}
       disabled={full}
       title={full ? t("sourceClasses.limitReached") : undefined}
     >
@@ -85,15 +89,15 @@ function Classes({ classes }: { classes: Class[] }) {
                 key={item.slug}
                 item={item}
                 chinese={chinese}
-                onEdit={() => setEditing(item.slug)}
+                onEdit={() => setEditing({ kind: "edit", slug: item.slug })}
                 onRetire={() => setRetiring(item.slug)}
               />
             ))}
           </ul>
         )}
       </Panel>
-      {editing === null || (editing !== "new" && edited === undefined) ? null : (
-        <Editor key={editing} cls={edited} onClose={() => setEditing(null)} />
+      {editing === null || (editing.kind === "edit" && edited === undefined) ? null : (
+        <Editor key={edited?.slug ?? ""} cls={edited} onClose={() => setEditing(null)} />
       )}
       {retired === undefined ? null : <Retire key={retired.slug} cls={retired} onClose={() => setRetiring(null)} />}
     </>
