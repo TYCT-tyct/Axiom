@@ -97,11 +97,7 @@ func Own(t testing.TB, opts ...Option) *Server {
 	if err != nil {
 		t.Fatalf("start valkey: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := b.terminate(context.WithoutCancel(ctx)); err != nil {
-			t.Errorf("remove the valkey container: %v", err)
-		}
-	})
+	containertest.Cleanup(t, b.container, "valkey")
 	return &Server{
 		URL: "valkey://axiom@" + b.address, PasswordFile: file,
 		Admin: dial(t, b.address, "admin", admin), box: b,
