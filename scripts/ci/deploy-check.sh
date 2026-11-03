@@ -113,10 +113,13 @@ start() {
   chmod 600 deploy/.env
   # No wall-clock bound around Compose: on the shared host the daemon alone took 34 seconds to deliver a stop signal
   # (#605), so a per-command limit measured the host's load, not the deployment. The step's 40 minutes bound a hung
-  # daemon; --wait-timeout still bounds the health checks.
-  compose up --detach --no-build --wait --wait-timeout 60 postgres
+  # daemon, and the database's own healthcheck bounds a start that never becomes ready. The healthcheck is the
+  # condition: Docker keeps probing while PostgreSQL replays WAL and fsyncs the data directory (starting, then
+  # unhealthy) and reports healthy on the first probe that accepts connections. A 60-second --wait-timeout ignored
+  # that transition and failed a recovery that was still progressing at 48 seconds (#605).
+  compose up --detach --no-build --wait postgres
   compose exec -T postgres sh < deploy/postgres/roles.sh
-  compose up --detach --no-build --wait --wait-timeout 60
+  compose up --detach --no-build --wait
   # Include exited one-shot services before teardown, so their resource policy cannot escape inspection.
   local id ids parent
   ids=$(compose ps --all --quiet)

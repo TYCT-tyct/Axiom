@@ -111,8 +111,14 @@ services:
       # Over TCP: while it runs the init scripts, the image's temporary server listens only on its Unix socket.
       test: [CMD, pg_isready, --host, 127.0.0.1, --username, postgres, --dbname, axiom]
       interval: 10s
-      start_period: 30s
+      # A start after an unclean stop replays WAL and fsyncs the data directory. On the shared CI host that fsync was
+      # still running at 40 seconds and pg_isready was still answering "the database system is starting up" at 48
+      # seconds (#605); the old 30-second start period plus 3 retries at the 10-second interval marked the recovering
+      # database unhealthy. Two minutes is more than twice that measured lower bound and still reports a database that
+      # is not recovering as unhealthy.
+      start_period: 2m
       start_interval: 1s
+      retries: 3
     <<: *hardened
 
   migrate:

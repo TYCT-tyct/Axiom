@@ -103,6 +103,9 @@ curl() {
                 starts = [i for i, call in enumerate(calls) if " up " in call]
                 self.assertEqual(len(starts), 6)  # database then services for each of three starts
                 self.assertTrue(all("--no-build" in calls[i] for i in starts))
+                # The database's healthcheck, including its start period for crash recovery, is the condition; a
+                # separate wall clock made a slow-but-progressing start fail (#605).
+                self.assertFalse(any("--wait-timeout" in calls[i] for i in starts), calls)
                 self.assertLess(database[0], starts[0])
                 self.assertEqual(calls[-1], "image rm --force axiom-ci-postgres:fixture")
 

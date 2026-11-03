@@ -78,6 +78,8 @@ compose run --rm --no-deps --user 0:0 axiom web-assets /assets
 # The database image is built from this tree (pgBackRest on the pinned PostgreSQL tag), not consumed as a digest like
 # the program; it has to exist before the no-build start below.
 compose build postgres
-compose up --detach --no-build --wait --wait-timeout 60 postgres
+# The database healthcheck is the startup condition, including crash recovery; the old 60-second --wait-timeout
+# failed a recovery that was still progressing at 48 seconds on the shared CI host (#605).
+compose up --detach --no-build --wait postgres
 compose exec -T postgres sh < deploy/postgres/roles.sh
 compose up --detach --no-build --wait

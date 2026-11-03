@@ -102,8 +102,9 @@ class DeployEntry(unittest.TestCase):
         self.assertTrue(any(" pull axiom migrate " in call and f"DEPLOY_IMAGE={IMAGE}" in call for call in compose), compose)
         self.assertTrue(any(" run --rm --no-deps --user 0:0 axiom web-assets /assets " in call
                             and f"DEPLOY_IMAGE={IMAGE}" in call for call in compose), compose)
-        self.assertTrue(any(" up --detach --no-build --wait --wait-timeout 60 postgres " in call
+        self.assertTrue(any(" up --detach --no-build --wait postgres " in call
                             and f"DEPLOY_IMAGE={IMAGE}" in call for call in compose), compose)
+        self.assertFalse(any("--wait-timeout" in call for call in compose), compose)
         self.assertTrue(any(" exec -T postgres " in call for call in compose), compose)
         self.assertTrue(any(" build postgres " in call for call in compose), compose)
         self.assertLess(next(i for i, call in enumerate(calls) if call.startswith("verify ")),
