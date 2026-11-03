@@ -21,10 +21,10 @@ import { RecoveryCodesHost } from "./totp-dialogs";
 // by every tab, though, so an answer belongs to the session that started the call, not to whoever is signed in when it
 // lands; a late refusal from before another tab signed in must not end the session that replaced it.
 
-// SessionBoundQueryCache remembers the session each fetch started under. QueryCache has no per-fetch hook, so it wraps
-// Query.fetch when the cache builds a query; every fetch of that query records the session current at its start.
+// SessionBoundQueryCache remembers the session each fetch belongs to in that fetch's own meta. QueryCache has no
+// per-fetch hook, so it wraps Query.fetch when the cache builds a query. A duplicate fetch that reuses the request in
+// flight returns before it reads the new meta, so the binding kept is the one of the request that actually runs.
 class SessionBoundQueryCache extends QueryCache {
-  // The query object is the identity: the same key can be removed and built again for another session.
   readonly #clients = new WeakMap<object, QueryClient>();
   readonly #startedIn = new WeakMap<object, string>();
   readonly #bound = new WeakSet<object>();
@@ -33,8 +33,9 @@ class SessionBoundQueryCache extends QueryCache {
     super({
       onError: (error, query) => {
         const client = this.#clients.get(query);
-        if (client) {
-          endUnauthenticated(client, error, this.#startedIn.get(query) ?? "");
+        const meta = query.state.fetchMeta;
+        if (client && meta) {
+          endUnauthenticated(client, error, this.#startedIn.get(meta) ?? "");
         }
       },
     });
@@ -56,8 +57,9 @@ class SessionBoundQueryCache extends QueryCache {
       this.#bound.add(query);
       const fetch = query.fetch.bind(query);
       query.fetch = (options, fetchOptions) => {
-        this.#startedIn.set(query, sessionBinding(currentSession(client)));
-        return fetch(options, fetchOptions);
+        const meta = { ...(fetchOptions?.meta ?? {}) };
+        this.#startedIn.set(meta, sessionBinding(currentSession(client)));
+        return fetch(options, { ...fetchOptions, meta });
       };
     }
     return query;

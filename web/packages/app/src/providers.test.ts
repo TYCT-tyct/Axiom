@@ -66,6 +66,31 @@ describe("a late unauthenticated answer", () => {
     expect(client.getQueryData(["session"])).toEqual(now);
   });
 
+  it("keeps the binding of the request in flight when a duplicate fetch reuses it", async () => {
+    const client = createQueryClient();
+    client.setQueryData(["session"], session());
+    const answer = deferred<string>();
+    let calls = 0;
+    const query = client.getQueryCache().build(client, {
+      queryKey: [accountKey, "duplicate"],
+      queryFn: () => {
+        calls += 1;
+        return answer.promise;
+      },
+    });
+    const first = query.fetch().catch((error: unknown) => error);
+
+    const now = replacements[0][1];
+    client.setQueryData(["session"], now);
+    const second = query.fetch(undefined, { cancelRefetch: false }).catch((error: unknown) => error);
+    expect(calls).toBe(1);
+
+    answer.reject(refused());
+    await Promise.all([first, second]);
+
+    expect(client.getQueryData(["session"])).toEqual(now);
+  });
+
   it("ends the session a mutation started under", async () => {
     const client = createQueryClient();
     client.setQueryData(["session"], session());
