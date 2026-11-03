@@ -88,7 +88,7 @@ func (l *Loop) scheduleVerification(ctx context.Context, due []*State, endpoints
 		}
 		ep := endpoints[idx]
 		claimed, ok := l.identity(catalog.ModelID(ep.Model))
-		if !ok || claimed.Author == "" {
+		if !ok || claimed.Author == "" || ep.Upstream == "" {
 			// Nothing to compare an answer with; a catalog that has not loaded is retried soon.
 			e.mu.Lock()
 			e.verify.attempted = now
@@ -106,7 +106,7 @@ func (l *Loop) scheduleVerification(ctx context.Context, due []*State, endpoints
 		e.mu.Unlock()
 		l.budget.spend(now)
 		l.active++
-		go l.verify(context.WithoutCancel(ctx), ep, want, newChallenge(l.rand, claimed))
+		go l.verify(context.WithoutCancel(ctx), ep, want, newChallenge(l.rand, claimed, want.upstream))
 	}
 }
 

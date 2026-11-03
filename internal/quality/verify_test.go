@@ -1,38 +1,63 @@
 package quality
 
 import (
+	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/suppliers"
 )
 
+// testModel is the model name the tests claim unless a sample says otherwise.
+const testModel = "claude-3-5-sonnet-20241022"
+
+// testChallenge is a fixed question whose answers the recorded samples below use.
+func testChallenge() challenge {
+	return challenge{
+		nonce: "a1b2c3d4e5f60718", a: 17, b: 25,
+		factorX: 4873, factorY: 926, product: 4512398,
+		origin: "k3y9p2", reverse: "2p9y3k", check: 6,
+		claimed: Claimed{Author: "Anthropic", Others: []string{"OpenAI", "Google"}},
+		model:   testModel,
+	}
+}
+
+// fullAnswer is a line-based answer with every known value, for tests about one field.
+func fullAnswer(c challenge, model, author string) string {
+	return c.nonce + "\n" + strconv.Itoa(c.a+c.b) + "\n" + answerTail(c, model, author)
+}
+
+// answerTail is what follows the sum: model, author, product, reverse and the check object.
+func answerTail(c challenge, model, author string) string {
+	return model + "\n" + author + "\n" + strconv.Itoa(c.product) + "\n" + c.reverse + "\n" +
+		`{"ok":true,"n":` + strconv.Itoa(c.check) + `}`
+}
+
 func TestJudgeVerification(t *testing.T) {
 	t.Parallel()
-	c := challenge{
-		nonce: "aaaaaaaa7aaaaaaaaaaaaaaaaaaaaaaa", a: 3, b: 4,
-		claimed: Claimed{Author: "anthropic", Others: []string{"openai", "google"}},
-	}
+	c := testChallenge()
 	sum := strconv.Itoa(c.a + c.b)
 	for name, tc := range map[string]struct {
 		reply string
 		want  verifyOutcome
 	}{
-		"three answers":         {c.nonce + "\n" + sum + "\nAnthropic", verifyPassed},
-		"numbered and wrapped":  {"1. `" + c.nonce + "`\n2. " + sum + "\n3. Anthropic.", verifyPassed},
-		"the sum in words":      {c.nonce + "\n" + sum + " (three plus four)\nAnthropic", verifyPassed},
-		"the claimed author":    {c.nonce + "\n" + sum + "\nAnthropic, not OpenAI", verifyPassed},
-		"another author":        {c.nonce + "\n" + sum + "\nOpenAI", verifyContradicted},
+		"all answers":           {fullAnswer(c, testModel, "Anthropic"), verifyPassed},
+		"numbered and wrapped":  {"1. `" + c.nonce + "`\n2. " + sum + "\n3. " + testModel + "\n4. Anthropic.\n5. " + strconv.Itoa(c.product) + "\n6. " + c.reverse + "\n7. {\"ok\":true,\"n\":6}", verifyPassed},
+		"the sum in words":      {c.nonce + "\n" + sum + " (three plus four)\n" + answerTail(c, testModel, "Anthropic"), verifyPassed},
+		"the claimed author":    {fullAnswer(c, testModel, "Anthropic, not OpenAI"), verifyPassed},
+		"another author":        {fullAnswer(c, testModel, "OpenAI"), verifyContradicted},
 		"another author alone":  {"google", verifyContradicted},
-		"a wrong sum":           {c.nonce + "\n8\nAnthropic", verifyUnknown},
-		"no nonce":              {sum + "\nAnthropic", verifyUnknown},
-		"no author":             {c.nonce + "\n" + sum, verifyUnknown},
+		"a wrong sum":           {c.nonce + "\n8\n" + answerTail(c, testModel, "Anthropic"), verifyUnknown},
+		"no nonce":              {sum + "\n" + answerTail(c, testModel, "Anthropic"), verifyUnknown},
+		"no author":             {c.nonce + "\n" + sum + "\n" + testModel + "\n" + strconv.Itoa(c.product) + "\n" + c.reverse + "\n{\"ok\":true,\"n\":6}", verifyUnknown},
 		"a refusal":             {"I cannot answer that.", verifyUnknown},
 		"the nonce's own digit": {c.nonce + "\n\nAnthropic", verifyUnknown}, // the 7 is inside the nonce, not an answer
-		"a longer word":         {c.nonce + "\n" + sum + "\nanthropicx", verifyUnknown},
-		"metadata is not Meta":  {c.nonce + "\n" + sum + "\nmetadata", verifyUnknown},
-		"sum inside a number":   {c.nonce + "\n17\nAnthropic", verifyUnknown},
+		"a longer word":         {fullAnswer(c, testModel, "anthropicx"), verifyUnknown},
+		"metadata is not Meta":  {fullAnswer(c, testModel, "metadata"), verifyUnknown},
+		"sum inside a number":   {c.nonce + "\n17\n" + answerTail(c, testModel, "Anthropic"), verifyUnknown},
 		"empty":                 {"", verifyUnknown},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -49,13 +74,104 @@ func TestJudgeVerification(t *testing.T) {
 // its text happened to be.
 func TestJudgeVerificationNeedsAPassedGeneration(t *testing.T) {
 	t.Parallel()
-	c := challenge{nonce: "ab", a: 1, b: 2, claimed: Claimed{Author: "anthropic"}}
-	reply := "ab\n3\nAnthropic"
+	c := testChallenge()
+	c.nonce, c.a, c.b = "ab", 1, 2
+	reply := fullAnswer(c, testModel, "Anthropic")
 	if got := judgeVerification(suppliers.TestResult{Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.UpstreamError{}}, Reply: reply}, c); got != verifyUnknown {
 		t.Errorf("a failed generation judged %s, want inconclusive", got)
 	}
 	if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: "anthropic"}, c); got != verifyUnknown {
 		t.Errorf("a pass without the known answers judged %s", got)
+	}
+}
+
+// TestJudgeVerificationCustomUpstreamName: the line fallback does not depend on a known model family when the answer
+// names the claimed upstream exactly.
+func TestJudgeVerificationCustomUpstreamName(t *testing.T) {
+	t.Parallel()
+	c := testChallenge()
+	c.model = "acme-chat-2026-01-01"
+	if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: fullAnswer(c, c.model, "Anthropic")}, c); got != verifyPassed {
+		t.Errorf("a custom upstream name judged %s, want passed", got)
+	}
+}
+
+// TestModelVerdict: a date snapshot is the same model; another size or tier of the same author is not; an alias that
+// cannot be resolved is unknown rather than a fake.
+func TestModelVerdict(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		answer, claim string
+		want          identityVerdict
+	}{
+		"the dated snapshot":      {"GPT-4o 2024-08-06", "gpt-4o-2024-08-06", identityMatched},
+		"the compact date":        {"gpt-4o 20240806", "gpt-4o-2024-08-06", identityMatched},
+		"the provider prefix":     {"OpenAI GPT-4o", "openai/gpt-4o", identityMatched},
+		"a cheaper sibling":       {"gpt-4o-mini-2024-07-18", "gpt-4o-2024-08-06", identityContradicted},
+		"a smaller o-series":      {"o1-mini", "o1", identityContradicted},
+		"a different claude tier": {"Claude 3.5 Haiku", "claude-3-5-sonnet-20241022", identityContradicted},
+		"the same claude tier":    {"Claude 3.5 Sonnet", "claude-3-5-sonnet-20241022", identityMatched},
+		"a different gemini tier": {"Gemini 2.5 Flash", "gemini-2.5-pro", identityContradicted},
+		"a different llama size":  {"Llama 3.1 8B", "llama-3.3-70b", identityContradicted},
+		"a preview snapshot":      {"Gemini 2.5 Pro", "gemini-2.5-pro-preview-06-05", identityMatched},
+		"a dated build":           {"DeepSeek-V3", "deepseek-v3-0324", identityMatched},
+		"a three digit build":     {"Gemini 1.5 Pro", "gemini-1.5-pro-002", identityMatched},
+		"a plus variant":          {"Command R+", "command-r-plus-08-2024", identityMatched},
+		"the same instruct model": {"Llama 3 70B Instruct", "llama-3-70b-instruct", identityMatched},
+		"a missing instruct word": {"Llama 3 70B", "llama-3-70b-instruct", identityUnknown},
+		"a shorter alias":         {"DeepSeek-V3", "deepseek-chat", identityUnknown},
+		"a different version":     {"GPT-4", "gpt-4o", identityUnknown},
+		"a shorter answer":        {"GPT-4o", "gpt-4o-mini", identityUnknown},
+		"an empty answer":         {"", "gpt-4o", identityUnknown},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := modelVerdict(tc.answer, tc.claim); got != tc.want {
+				t.Errorf("modelVerdict(%q, %q) = %v, want %v", tc.answer, tc.claim, got, tc.want)
+			}
+		})
+	}
+}
+
+// recordedSample is one reply replayed by TestJudgeVerificationRecordedSamples.
+type recordedSample struct {
+	Name   string   `json:"name"`
+	Model  string   `json:"model"`
+	Author string   `json:"author"`
+	Others []string `json:"others"`
+	Reply  string   `json:"reply"`
+	Want   string   `json:"want"`
+}
+
+// TestJudgeVerificationRecordedSamples replays the recorded replies in testdata: the claimed model passes, a cheaper
+// model of the same author contradicts, and an alias or a refusal is inconclusive.
+func TestJudgeVerificationRecordedSamples(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/verification_samples.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Note    string           `json:"note"`
+		Samples []recordedSample `json:"samples"`
+	}
+	if err := jsonx.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	if file.Note == "" || len(file.Samples) == 0 {
+		t.Fatal("the recorded samples have no provenance note or no samples")
+	}
+	for _, sample := range file.Samples {
+		t.Run(sample.Name, func(t *testing.T) {
+			t.Parallel()
+			c := testChallenge()
+			c.model = sample.Model
+			c.claimed = Claimed{Author: sample.Author, Others: sample.Others}
+			got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: sample.Reply}, c)
+			if got.String() != sample.Want {
+				t.Errorf("judged %s, want %s", got, sample.Want)
+			}
+		})
 	}
 }
 
@@ -101,7 +217,7 @@ func TestVerificationConfidenceAndDue(t *testing.T) {
 // substring of a longer word or another company's name is not a pass.
 func TestJudgeVerificationNames(t *testing.T) {
 	t.Parallel()
-	c := challenge{nonce: "beef", a: 2, b: 2, claimed: Claimed{Author: "Mistral AI", Others: []string{"OpenAI", "Meta"}}}
+	c := testChallenge()
 	for name, tc := range map[string]struct {
 		author, reply string
 		want          verifyOutcome
@@ -117,8 +233,8 @@ func TestJudgeVerificationNames(t *testing.T) {
 			t.Parallel()
 			ch := c
 			ch.claimed.Author = tc.author
-			reply := ch.nonce + "\n" + strconv.Itoa(ch.a+ch.b) + "\n" + tc.reply
-			if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: reply}, ch); got != tc.want {
+			ch.claimed.Others = []string{"OpenAI", "Meta", "Google"}
+			if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: fullAnswer(ch, testModel, tc.reply)}, ch); got != tc.want {
 				t.Errorf("judged %s, want %s", got, tc.want)
 			}
 		})
@@ -137,6 +253,9 @@ func TestContainsName(t *testing.T) {
 		{"made by Z.ai", "Z.ai", true},
 		{"01.AI", "01.AI", true},
 		{"Google DeepMind", "Google", true},
+		{"Google", "Google LLC", true},
+		{"Meta", "Meta Platforms, Inc.", true},
+		{"AI", "Mistral AI", false},
 		{"Meta", "Meta", true},
 		{"metadata", "Meta", false},
 		{"open source", "OpenAI", false},
@@ -182,20 +301,42 @@ func TestAnswerSum(t *testing.T) {
 // expression answers nothing.
 func TestJudgeVerificationNumbering(t *testing.T) {
 	t.Parallel()
-	c := challenge{nonce: "cc11", a: 1, b: 1, claimed: Claimed{Author: "anthropic"}}
+	c := testChallenge()
+	c.nonce, c.a, c.b = "cc11", 1, 1
 	for name, tc := range map[string]struct {
 		reply string
 		want  verifyOutcome
 	}{
-		"the line number is not the sum": {c.nonce + "\n2. 99\nAnthropic", verifyUnknown},
-		"the expression is no answer":    {c.nonce + "\n1 + 1\nAnthropic", verifyUnknown},
-		"the equation answered":          {c.nonce + "\n1 + 1 = 2\nAnthropic", verifyPassed},
-		"the numbered answer":            {c.nonce + "\n2. 2\nAnthropic", verifyPassed},
+		"the line number is not the sum": {c.nonce + "\n2. 99\n" + answerTail(c, testModel, "Anthropic"), verifyUnknown},
+		"the expression is no answer":    {c.nonce + "\n1 + 1\n" + answerTail(c, testModel, "Anthropic"), verifyUnknown},
+		"the equation answered":          {c.nonce + "\n1 + 1 = 2\n" + answerTail(c, testModel, "Anthropic"), verifyPassed},
+		"the numbered answer":            {c.nonce + "\n2. 2\n" + answerTail(c, testModel, "Anthropic"), verifyPassed},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: tc.reply}, c); got != tc.want {
 				t.Errorf("judged %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestJudgeVerificationWrongProbe: a correct identity with a wrong known answer is inconclusive, not a contradiction:
+// an arithmetic slip must not be reported as a swapped model.
+func TestJudgeVerificationWrongProbe(t *testing.T) {
+	t.Parallel()
+	c := testChallenge()
+	good := fullAnswer(c, testModel, "Anthropic")
+	for name, reply := range map[string]string{
+		"a wrong product": strings.Replace(good, strconv.Itoa(c.product), strconv.Itoa(c.product+1), 1),
+		"the original":    strings.Replace(good, c.reverse, c.origin, 1),
+		"a wrong count":   strings.Replace(good, `"n":`+strconv.Itoa(c.check), `"n":`+strconv.Itoa(c.check+1), 1),
+		"no check":        strings.Replace(good, `{"ok":true,"n":`+strconv.Itoa(c.check)+`}`, "", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: reply}, c); got != verifyUnknown {
+				t.Errorf("judged %s, want inconclusive", got)
 			}
 		})
 	}

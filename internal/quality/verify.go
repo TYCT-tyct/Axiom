@@ -1,26 +1,28 @@
 package quality
 
 import (
+	"math"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"uuid"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
 )
 
 // Verification is what the health loop knows about an endpoint's claim to serve the model its catalog entry names
 // (docs/domains/quality.md「真伪检测」). A check is a real generation with a random challenge: the answer must echo a
-// random string, give the sum of two random numbers, and name the model's author. Three outcomes stay apart: unknown
-// (never checked, or the last pass is older than the configured maximum age), passed, and contradicted;
+// random string, give the sum and product of random numbers, reverse a random string, count its characters, name the
+// model's author, and name the exact model and variant it serves. Three outcomes stay apart: unknown (never checked,
+// the last pass is older than the configured maximum age, or an answer that says nothing), passed, and contradicted;
 // verifyFailures consecutive contradictions are what the docs call a fake.
 const (
-	verifyFailures = 3       // consecutive contradictions that conclude an endpoint is fake
-	verifyOutput   = 48      // tokens an answer may use: three short lines
-	verifyReply    = 4 << 10 // bytes of the answer kept for judging
+	verifyFailures = 3        // consecutive contradictions that conclude an endpoint is fake
+	verifyOutput   = 256      // tokens an answer may use: a JSON object with seven short fields
+	verifyReply    = 16 << 10 // bytes of the answer kept for judging
 )
 
 // Claimed is what the catalog says an endpoint serves: the author's display name, which a verification answer must
@@ -103,51 +105,262 @@ func (o verifyOutcome) String() string {
 	return "unknown"
 }
 
-// challenge is one verification question: the random string to echo, the two numbers to add, and the claim to check.
+// challenge is one verification question: the random values to compute, the claimed model to compare with, and the
+// claim's author. model is the upstream name the endpoint claims; the prompt deliberately does not contain it, so an
+// answer that copies the claim instead of knowing it is what the check detects.
 type challenge struct {
 	nonce   string
 	a, b    int
+	factorX int
+	factorY int
+	product int
+	origin  string
+	reverse string
+	check   int
 	claimed Claimed
+	model   string
 }
 
 // newChallenge makes a question from the loop's randomness, which tests control.
-func newChallenge(rand func() float64, claimed Claimed) challenge {
-	return challenge{
+func newChallenge(rand func() float64, claimed Claimed, model string) challenge {
+	pick := func(n int) int { return min(int(rand()*float64(n)), n-1) }
+	c := challenge{
 		nonce:   strconv.FormatUint(uint64(rand()*(1<<53)), 16) + strconv.FormatUint(uint64(rand()*(1<<53)), 16),
-		a:       min(int(rand()*64), 63),
-		b:       min(int(rand()*64), 63),
+		a:       pick(64),
+		b:       pick(64),
+		factorX: 1000 + pick(9000),
+		factorY: 100 + pick(900),
 		claimed: claimed,
+		model:   strings.TrimSpace(model),
 	}
+	c.product = c.factorX * c.factorY
+	const alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+	length := 6 + pick(4)
+	var b strings.Builder
+	b.Grow(length)
+	for range length {
+		b.WriteByte(alphabet[pick(len(alphabet))])
+	}
+	c.origin = b.String()
+	c.reverse = reverse(c.origin)
+	c.check = length
+	return c
 }
 
-// prompt is the question: three answers with known values, each of which a relay that forwards, replays or rewrites
-// the answer gets wrong or cannot know.
+// prompt is the question: one JSON object whose values a relay that forwards, replays or rewrites the answer gets
+// wrong or cannot know. The claimed model is not named, so the answer has to come from the model itself.
 func (c challenge) prompt() string {
-	return "Answer with three short lines and nothing else:\n" +
-		"1. the characters " + c.nonce + "\n" +
-		"2. the number " + strconv.Itoa(c.a) + " + " + strconv.Itoa(c.b) + "\n" +
-		"3. the company that made you, in one word"
+	return "Reply with one JSON object and nothing else, filling every value:\n" +
+		`{"nonce":"` + c.nonce + `",` +
+		`"sum":<the number ` + strconv.Itoa(c.a) + ` + ` + strconv.Itoa(c.b) + `>,` +
+		`"model":"<the exact model identifier you are serving as, including its version>",` +
+		`"author":"<the company that made you>",` +
+		`"product":<the number ` + strconv.Itoa(c.factorX) + ` * ` + strconv.Itoa(c.factorY) + `>,` +
+		`"reverse":"<the characters ` + c.origin + ` in reverse order>",` +
+		`"check":{"ok":true,"n":<the number of characters in ` + c.origin + `>}}`
 }
 
-// judgeVerification reads an answer against the challenge. A pass is all three known answers; a contradiction is an
-// answer naming another author of the catalog and not the claimed one, which is evidence of another model. Everything
-// else is unknown: a refusal, a truncated answer or an answer formatted differently says nothing about the claim, and
-// never counts as a failure (docs/domains/quality.md「真伪检测」).
+// judgeVerification reads an answer against the challenge. A pass is every known answer, the claimed author and the
+// claimed model line and variant. A contradiction is an answer naming another author of the catalog and not the
+// claimed one, or naming a different variant of the claimed model. Everything else is unknown: a
+// refusal, a truncated answer, a different format, a wrong arithmetic answer or an unrecognized alias says nothing
+// conclusive about the claim, and never counts as a failure (docs/domains/quality.md「真伪检测」).
 func judgeVerification(result suppliers.TestResult, c challenge) verifyOutcome {
 	if result.Outcome() != suppliers.TestPassed || result.Reply == "" {
 		return verifyUnknown
 	}
-	reply := strings.ToLower(result.Reply)
-	nonce := strings.Contains(reply, c.nonce)
-	sum := answerSum(reply, c.nonce, c.a+c.b)
-	author := containsName(reply, c.claimed.Author)
+	if object, ok := firstObject(result.Reply); ok {
+		if _, isAnswer := object["nonce"]; isAnswer {
+			return judgeObject(object, c)
+		}
+	}
+	return judgeLines(result.Reply, c)
+}
+
+// judgeObject reads the JSON answer the prompt asks for. A missing or mistyped field is unknown, not a wrong answer:
+// format differences must not turn a genuine endpoint into a fake.
+func judgeObject(object map[string]any, c challenge) verifyOutcome {
 	switch {
-	case nonce && sum && author:
-		return verifyPassed
-	case !author && containsAnyName(reply, c.claimed.Others):
+	case objectAuthor(object, c) == identityContradicted, objectModel(object, c) == identityContradicted:
 		return verifyContradicted
+	case objectAnswers(object, c):
+		return verifyPassed
 	}
 	return verifyUnknown
+}
+
+// objectAuthor is the author field's verdict.
+func objectAuthor(object map[string]any, c challenge) identityVerdict {
+	author, _ := object["author"].(string)
+	return authorVerdict(author, c.claimed)
+}
+
+// objectModel is the model field's verdict.
+func objectModel(object map[string]any, c challenge) identityVerdict {
+	model, _ := object["model"].(string)
+	return modelVerdict(model, c.model)
+}
+
+// objectAnswers reports the known answers and the claimed identity all at once.
+func objectAnswers(object map[string]any, c challenge) bool {
+	nonce, _ := object["nonce"].(string)
+	sum, sumOK := objectInt(object["sum"])
+	product, productOK := objectInt(object["product"])
+	reverseAnswer, _ := object["reverse"].(string)
+	check, _ := object["check"].(map[string]any)
+	checkOK, checkN, checkNOK := checkAnswer(check)
+	return !slices.Contains([]bool{
+		strings.EqualFold(nonce, c.nonce),
+		sumOK && sum == c.a+c.b,
+		objectAuthor(object, c) == identityMatched,
+		objectModel(object, c) == identityMatched,
+		productOK && product == c.product,
+		strings.EqualFold(strings.TrimSpace(reverseAnswer), c.reverse),
+		checkOK && checkNOK && checkN == c.check,
+	}, false)
+}
+
+// judgeLines reads an answer that did not parse as one JSON object. Models sometimes wrap the object in prose or
+// answer in lines; the same known answers still count, and a conclusive author or model mismatch still contradicts.
+func judgeLines(reply string, c challenge) verifyOutcome {
+	lower := strings.ToLower(reply)
+	nonce := strings.Contains(lower, c.nonce)
+	sum := answerSum(lower, c.nonce, c.a+c.b)
+	wrote := authorVerdict(lower, c.claimed)
+	model := lineModelVerdict(lower, c.model)
+	product := containsWholeNumber(lower, c.product)
+	reverseAnswer := strings.Contains(compact(lower), compact(c.reverse))
+	check := lineCheck(lower, c.check)
+	switch {
+	case wrote == identityContradicted || model == identityContradicted:
+		return verifyContradicted
+	case nonce && sum && wrote == identityMatched && model == identityMatched &&
+		product && reverseAnswer && check:
+		return verifyPassed
+	}
+	return verifyUnknown
+}
+
+// checkAnswer reads the nested check object: a true ok and the expected character count.
+func checkAnswer(check map[string]any) (ok bool, n int, nOK bool) {
+	if check == nil {
+		return false, 0, false
+	}
+	ok, _ = check["ok"].(bool)
+	n, nOK = objectInt(check["n"])
+	return ok, n, nOK
+}
+
+// lineCheck finds the first check object in an answer that is not one JSON document.
+func lineCheck(reply string, want int) bool {
+	object, ok := firstObject(reply)
+	if !ok {
+		return false
+	}
+	check, _ := object["check"].(map[string]any)
+	if check == nil {
+		check = object
+	}
+	ok, n, nOK := checkAnswer(check)
+	return ok && nOK && n == want
+}
+
+// objectInt reads an integer from a decoded JSON value. A string is accepted too: a model that quotes a number has
+// still answered it.
+func objectInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case float64:
+		if v != math.Trunc(v) {
+			return 0, false
+		}
+		return int(v), true
+	case int64:
+		return int(v), true
+	case int:
+		return v, true
+	case string:
+		i, err := strconv.Atoi(strings.TrimSpace(v))
+		return i, err == nil
+	}
+	return 0, false
+}
+
+// firstObject returns the first valid JSON object in reply, skipping prose and code fences before it.
+func firstObject(reply string) (map[string]any, bool) {
+	for start := 0; start < len(reply); {
+		at := strings.IndexByte(reply[start:], '{')
+		if at < 0 {
+			return nil, false
+		}
+		start += at
+		if raw, ok := balancedObject(reply[start:]); ok {
+			var object map[string]any
+			if err := jsonx.Unmarshal([]byte(raw), &object); err == nil && object != nil {
+				return object, true
+			}
+		}
+		start++
+	}
+	return nil, false
+}
+
+// balancedObject returns the first balanced object in s, respecting quoted strings and escapes.
+func balancedObject(s string) (string, bool) {
+	depth, quoted, escaped := 0, false, false
+	for i := range len(s) {
+		switch {
+		case quoted:
+			switch {
+			case escaped:
+				escaped = false
+			case s[i] == '\\':
+				escaped = true
+			case s[i] == '"':
+				quoted = false
+			}
+		case s[i] == '"':
+			quoted = true
+		case s[i] == '{':
+			depth++
+		case s[i] == '}':
+			depth--
+			if depth == 0 {
+				return s[:i+1], true
+			}
+		}
+	}
+	return "", false
+}
+
+// reverse returns s with its bytes in reverse order; the challenge's alphabet is ASCII.
+func reverse(s string) string {
+	b := []byte(s)
+	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
+		b[i], b[j] = b[j], b[i]
+	}
+	return string(b)
+}
+
+// containsWholeNumber reports whether s contains want as a decimal number, with or without grouping punctuation.
+func containsWholeNumber(s string, want int) bool {
+	if strings.Contains(compact(s), strconv.Itoa(want)) {
+		return true
+	}
+	for i := 0; i < len(s); {
+		if s[i] < '0' || s[i] > '9' {
+			i++
+			continue
+		}
+		j := i
+		for j < len(s) && '0' <= s[j] && s[j] <= '9' {
+			j++
+		}
+		if n, err := strconv.Atoi(s[i:j]); err == nil && n == want {
+			return true
+		}
+		i = j
+	}
+	return false
 }
 
 // answerSum reads the answer to the sum: the line after the nonce, with a list marker removed, and only if that line
@@ -223,70 +436,6 @@ func singleNumber(s string) (int, bool) {
 		i = j
 	}
 	return answer, found
-}
-
-// containsName reports whether s names n. Both sides are compared as runs of letters and digits, lower-cased, so
-// "Mistral AI", "Mistral" and "mistral.ai" all name "Mistral AI", while "metadata" does not name "Meta". A run may
-// also be a shortened form of the name when it is at least five characters ("Mistral" for "Mistral AI"), and up to
-// three adjacent runs are joined so a name split across punctuation or spacing still matches.
-func containsName(s, name string) bool {
-	want := compact(name)
-	if len(want) < 3 {
-		return false
-	}
-	runs := nameRuns(s)
-	for i := range runs {
-		if runs[i] == want || len(runs[i]) >= 5 && strings.HasPrefix(want, runs[i]) {
-			return true
-		}
-		for j, joined := i+1, runs[i]; j < len(runs) && j < i+3; j++ {
-			joined += runs[j]
-			if joined == want {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func containsAnyName(s string, names []string) bool {
-	for _, n := range names {
-		if containsName(s, n) {
-			return true
-		}
-	}
-	return false
-}
-
-// compact keeps only the lower-cased letters and digits of a name.
-func compact(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-// nameRuns splits s into its lower-cased runs of letters and digits.
-func nameRuns(s string) []string {
-	var runs []string
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-			continue
-		}
-		if b.Len() > 0 {
-			runs = append(runs, b.String())
-			b.Reset()
-		}
-	}
-	if b.Len() > 0 {
-		runs = append(runs, b.String())
-	}
-	return runs
 }
 
 // backoff is retry doubled failures-1 times, capped at every.
