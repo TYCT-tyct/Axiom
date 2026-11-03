@@ -54,7 +54,7 @@ func (c *Client) watch(ctx context.Context) {
 func (c *Client) beat(ctx context.Context, over *since, clockDue bool) {
 	if c.vk != nil {
 		c.accounts.prune(c.now())
-		if _, _, err := c.measure(ctx, clockDue); err != nil &&
+		if _, _, err := c.measure(ctx, clockDue && !c.testClock); err != nil &&
 			ctx.Err() == nil && !errors.Is(err, ErrUnavailable) {
 			// An outage is the breaker's to report; what reaches here answered, but not as one of our deployments must.
 			c.logger.ErrorContext(ctx, "valkey does not answer as it must: the node keeps serving on its own counters", "err", err)
