@@ -55,8 +55,9 @@ export default {
     targets: {
       description: "目标按 UTC 自然月设置，看板按所选时段折算。",
       month: "目标月份",
+      monthHint: "按 UTC 自然月选择；页面上的时间按你的时区（{{zone}}）显示。",
       edit: "设置目标",
-      title: "{{month}} 的目标",
+      title: "{{month}}的目标",
       intro: "设置这个月的目标。留空的项会清除该目标；看板把其余目标按所选时段折算后与实际数字对照。",
       calls: "调用量",
       callsHint: "这个月至少要达到的调用量。",

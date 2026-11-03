@@ -3,8 +3,9 @@ export { AppShell, focusPage, PageHeader, routerDefaults, SideNavItem } from "./
 export { Button, SubmitButton } from "./components/button";
 export { CopyButton } from "./components/copy-button";
 export { Dialog } from "./components/dialog";
-export { CheckField, FormError, SelectField, TextAreaField, TextField } from "./components/form";
+export { CheckField, FormError, MonthField, SelectField, TextAreaField, TextField } from "./components/form";
 export { Icon, type IconName } from "./components/icon";
+export { Id, IdText } from "./components/id";
 export { Logo } from "./components/logo";
 export {
   ModelCatalog,

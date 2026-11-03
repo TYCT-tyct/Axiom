@@ -42,13 +42,28 @@ export function parseMoney(text: string, maxDigits = 19): string | null {
   return amount.length <= maxDigits ? amount : null;
 }
 
+// A calendar month is a month, not an instant: both formats read it as UTC so the viewer's zone cannot move it to the
+// previous or next day. The picker needs the month alone; a title needs the month and year.
+function monthFormats(locale: string) {
+  const months = new Intl.DateTimeFormat(locale, { month: "short", timeZone: "UTC" });
+  const labels = new Intl.DateTimeFormat(locale, { year: "numeric", month: "long", timeZone: "UTC" });
+  return {
+    monthName: (month: number) => months.format(new Date(Date.UTC(2000, month - 1, 1))),
+    monthLabel: (month: string) => {
+      const year = Number(month.slice(0, 4));
+      const number = Number(month.slice(5, 7));
+      return labels.format(new Date(Date.UTC(year, number - 1, 1)));
+    },
+  };
+}
+
 // Numbers and times are always formatted for the page's language. A time shows in the viewer's time zone unless one is
 // given, such as an account's setting, and says which zone it is in, so a time read off a screenshot is never ambiguous.
 // The clock has 24 two-digit hours, so times line up in a column, and the zone comes last: Chinese would otherwise put
 // it between the date and the time.
 export function formatters(language: Language, timeZone?: string) {
   const locale = locales[language];
-  const zone = timeZone ? { timeZone } : {};
+  const zone = { timeZone: timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone };
   const integers = new Intl.NumberFormat(locale);
   // An exact decimal in text, such as a ratio or a supplier's own balance: grouped for the language, every digit kept.
   const decimals = new Intl.NumberFormat(locale, { maximumFractionDigits: 100 });
@@ -63,6 +78,7 @@ export function formatters(language: Language, timeZone?: string) {
     ...zone,
   });
   const zones = new Intl.DateTimeFormat(locale, { timeZoneName: "short", ...zone });
+  const months = monthFormats(locale);
   const currencies = new Map<string, Intl.NumberFormat>();
   // A payment's minor unit is the currency's, not always two digits (JPY, KWD), and is resolved once per currency.
   const payDigits = new Map<string, number>();
@@ -107,6 +123,11 @@ export function formatters(language: Language, timeZone?: string) {
     },
     dateTime: (value: Date) =>
       `${times.format(value)} ${zones.formatToParts(value).find((part) => part.type === "timeZoneName")?.value}`,
+    // The short name of the zone dateTime uses, for a sentence that says which zone the page's times are in.
+    zone: () => zones.formatToParts(new Date()).find((part) => part.type === "timeZoneName")?.value ?? zone.timeZone,
+    // The month's name alone for a picker's options, and "YYYY-MM" as a month and year for a title.
+    monthName: months.monthName,
+    monthLabel: months.monthLabel,
   };
 }
 

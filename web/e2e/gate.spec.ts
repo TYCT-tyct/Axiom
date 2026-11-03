@@ -75,6 +75,30 @@ for (const suite of suites) {
           }),
         );
         expect(hidden).toEqual([]);
+        // A header keeps its own line at every width: a narrow numeric column must not break 「调用」 in two.
+        const wrapped = await page.evaluate(() =>
+          [...document.querySelectorAll("th")]
+            .filter((th) => getComputedStyle(th).whiteSpace !== "nowrap")
+            .map((th) => th.textContent),
+        );
+        expect(wrapped).toEqual([]);
+        if (width === 1280) {
+          // The sidebar's column reaches the end of the document, not only the end of the window.
+          const sidebar = await page.evaluate(() => {
+            const nav = document.querySelector("nav");
+            // A modal dialog scrolls its own body over a locked page; the column behind it is only viewport-tall.
+            if (!nav || nav.getBoundingClientRect().width === 0 || document.querySelector("dialog[open]")) {
+              return null;
+            }
+            return {
+              bottom: nav.getBoundingClientRect().bottom + window.scrollY,
+              page: document.documentElement.scrollHeight,
+            };
+          });
+          if (sidebar) {
+            expect(sidebar.bottom).toBeGreaterThanOrEqual(sidebar.page - 1);
+          }
+        }
       });
     }
   }

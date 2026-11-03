@@ -23,4 +23,6 @@ it("prints the page alone, in one column", () => {
   );
   expect(html).toContain("print:block");
   expect(html).toMatch(/class="[^"]*print:hidden[^"]*"><span>new version<\/span>/);
+  // The column takes the grid row's height; only the links inside it are viewport-tall and stay in view.
+  expect(html).toMatch(/<nav[^>]*class="[^"]*bg-s1[^"]*"[^>]*><div class="sticky top-0 flex h-dvh/);
 });
