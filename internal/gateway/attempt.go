@@ -320,10 +320,14 @@ func (a *attempt) observe(ctx context.Context) {
 	for _, rec := range s.ends[a.first : a.i+1] {
 		for _, seg := range rec.Segments {
 			o.OutputTokens += seg.Usage.OutputTotal()
-			for it := range catalog.NumItems {
-				if seg.Usage.Count(it) > 0 {
-					o.UsageItems.Add(it)
-				}
+		}
+	}
+	// The fingerprint's usage evidence comes from the same response as its headers, the first supplier request, and
+	// only from what that upstream reported: an estimate the gateway filled in is not something the supplier said.
+	for _, seg := range s.ends[a.first].Segments {
+		for it := range catalog.NumItems {
+			if seg.Reported.Has(it) && seg.Usage.Count(it) > 0 {
+				o.UsageItems.Add(it)
 			}
 		}
 	}

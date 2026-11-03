@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"axiom/internal/billing"
+	"axiom/internal/protocol"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // TestEveryAttemptIsObservedOnce: each attempt tells quality how it ended, once, and the table decides what it counts
@@ -148,5 +150,88 @@ func TestThroughputLeavesOutOurOwnWaits(t *testing.T) {
 	}
 	if got := health.MeasuredFor(suppliers.Routable{ID: uuidOf(ep(1))}, now).Throughput; math.Abs(got-100) > 1e-9 {
 		t.Errorf("throughput %v, want 100 tokens a second", got)
+	}
+}
+
+// TestClassEvidenceIsOneReportedResponse: the usage a source class rule reads is what the upstream reported, not the
+// gateway's estimate, and it comes from the same response as the headers, so two hops of a search loop cannot together
+// satisfy a rule no single response did.
+func TestClassEvidenceIsOneReportedResponse(t *testing.T) {
+	const cached = `"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,"prompt_tokens_details":{"cached_tokens":5}}`
+	reported := []quality.Condition{{Evidence: "usage", Item: "input", Operator: "present"}}
+	together := []quality.Condition{
+		{Evidence: "header", Name: "X-Official", Operator: "present"},
+		{Evidence: "usage", Item: "cache_read", Operator: "present"},
+	}
+	official := http.Header{"X-Official": {"1"}}
+	for _, tc := range []struct {
+		name  string
+		rule  []quality.Condition
+		hops  []scripted
+		class string
+	}{
+		{"input reported", reported, []scripted{serve(beat{data: chatAnswer})}, "official"},
+		{"input estimated", reported, []scripted{serve(beat{data: withoutUsage(chatAnswer)})}, "relay"},
+		{"header and usage in the first hop", together, []scripted{
+			withHeader(official, serve(beat{data: strings.Replace(chatToolCall, `"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}`, cached, 1)})),
+			serve(beat{data: chatAnswer}),
+		}, "official"},
+		{"header in the first hop, usage in the second", together, []scripted{
+			withHeader(official, serve(beat{data: chatToolCall})),
+			serve(beat{data: strings.Replace(chatAnswer, `"usage":{"prompt_tokens":20,"completion_tokens":5,"total_tokens":25}`, cached, 1)}),
+		}, "relay"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run(t, func(t *testing.T, ctx context.Context) {
+				health := quality.New(nil)
+				classes := quality.DefaultSourceClasses()
+				classes[0].Rules = quality.Rules{Match: "all", Conditions: tc.rule}
+				if err := health.SetSourceClasses(classes); err != nil {
+					t.Fatal(err)
+				}
+				// The harness's entry: no catalog model or formats, upstream up-1.
+				endpoint := suppliers.Routable{ID: uuidOf(ep(1)), Upstream: "up-1"}
+				if err := health.Prepare(ctx, []suppliers.Routable{endpoint}); err != nil {
+					t.Fatal(err)
+				}
+				upstream := protocol.Chat
+				h := newHarness(t, ctx, options{
+					client: protocol.Chat, upstream: &upstream, request: []byte(searchTool), health: health,
+					price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_read":"0.0000001","cache_write":"0.000001","web_search":"0.01"}}`,
+					search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
+					server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+					script: map[int][]scripted{1: tc.hops},
+				})
+				h.run()
+				if h.w.status != http.StatusOK {
+					t.Fatalf("status = %d, body = %s", h.w.status, h.w.body())
+				}
+				if got := health.MeasuredFor(endpoint, time.Now()).Class; got != tc.class {
+					t.Errorf("class %q, want %q", got, tc.class)
+				}
+			})
+		})
+	}
+}
+
+// withoutUsage drops a Chat stream's usage chunk: the upstream reported nothing.
+func withoutUsage(stream string) string {
+	var kept []string
+	for _, e := range strings.SplitAfter(stream, "\n\n") {
+		if !strings.Contains(e, `"usage"`) {
+			kept = append(kept, e)
+		}
+	}
+	return strings.Join(kept, "")
+}
+
+// withHeader answers as s does, with h as the response headers.
+func withHeader(h http.Header, s scripted) scripted {
+	return func(ctx context.Context) (*http.Response, *suppliers.Failure) {
+		resp, f := s(ctx)
+		if resp != nil {
+			resp.Header = h
+		}
+		return resp, f
 	}
 }
