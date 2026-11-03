@@ -78,7 +78,9 @@ func TestDatabasesAreDroppedWhenTheirTestEnds(t *testing.T) {
 	if databaseExists(t, name) {
 		t.Errorf("database %s exists after its test ended with a connection open", name)
 	}
-	_ = leftover.Close(context.Background()) //nolint:errcheck // The drop has already ended the session.
+	if leftover != nil {
+		_ = leftover.Close(context.Background()) //nolint:errcheck // The drop has already ended the session.
+	}
 }
 
 // TestClonesAreDroppedWhenTheirTestEnds: a clone of a fixture follows the same rule as New; the fixture source lives
