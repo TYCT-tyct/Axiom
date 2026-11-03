@@ -5,14 +5,22 @@ import { Button } from "./button";
 import { SelectField, TextField } from "./form";
 import { Icon } from "./icon";
 import { EndpointSection } from "./model-endpoints";
-import { label, PricingPrice, type PublicModelPricing, RateTable, SearchEnginePrices } from "./model-pricing";
+import {
+  label,
+  PriceHeads,
+  PricingPrice,
+  type PublicModelPricing,
+  RateTable,
+  SearchEnginePrices,
+} from "./model-pricing";
 import { Badge, Table, Td, Th } from "./panel";
 
 export { baseRate, perMillionBillionths } from "./model-pricing";
 
 // The public models and prices page: what a visitor may see of the catalog, at the price of the audience that asked.
 // Every member but the identity is optional, so a page served by an older node shows what it has and marks the rest
-// unavailable instead of failing (docs/frontend.md「滚动发布」).
+// unavailable instead of failing (docs/frontend.md「滚动发布」). `pricing` is absent on every model and endpoint when
+// the site keeps its prices to signed-in members; that is a no-price state, not an unavailable one.
 export type PublicModel = {
   id: string;
   name: string;
@@ -41,6 +49,12 @@ export type PublicEndpoint = {
 function Price({ model, item }: { model: PublicModel; item: "input" | "output" }) {
   return <PricingPrice pricing={model.pricing} item={item} />;
 }
+
+// hasPrice says whether a model's answer carries any price at all. A site that keeps its prices to signed-in members
+// leaves every model's and endpoint's pricing out, so a page can tell that state from a missing field on an older node,
+// which always sent the model's price.
+const hasPrice = (model: PublicModel) =>
+  model.pricing !== undefined || (model.endpoints ?? []).some((endpoint) => endpoint.pricing !== undefined);
 
 export const modelAbilities = [
   "tools",
@@ -128,12 +142,19 @@ export function ModelFilterForm({
 }
 
 // ModelCatalog is the list and the details of the selected model. It is presentational: the page owns the URL
-// filters and the request, and both the website and the console use this component so the two read the same.
+// filters and the request, and both the website and the console use this component so the two read the same. A list
+// with no prices anywhere is the site keeping them to signed-in members, so the table drops its price columns and says
+// so once, instead of marking every row's price unavailable.
 export function ModelCatalog({ models, note }: { models: PublicModel[]; note?: ReactNode }) {
   const { t } = useTranslation("common");
   const [open, setOpen] = useState<string | null>(null);
+  const showPrices = models.some(hasPrice);
+  const columns = showPrices ? 8 : 6;
   return (
     <div className="space-y-4">
+      {models.length > 0 && !showPrices ? (
+        <p className="max-w-prose text-ui text-t2">{t("publicModels.pricesNotPublic")}</p>
+      ) : null}
       <Table label={t("publicModels.title")}>
         <thead>
           <tr>
@@ -142,8 +163,7 @@ export function ModelCatalog({ models, note }: { models: PublicModel[]; note?: R
             <Th className="hidden text-right lg:table-cell">{t("publicModels.context")}</Th>
             <Th className="hidden text-right xl:table-cell">{t("publicModels.maxOutput")}</Th>
             <Th className="hidden 2xl:table-cell">{t("publicModels.ability")}</Th>
-            <Th className="hidden text-right sm:table-cell">{t("publicModels.item.input")}</Th>
-            <Th className="hidden text-right sm:table-cell">{t("publicModels.item.output")}</Th>
+            <PriceHeads show={showPrices} />
             <Th />
           </tr>
         </thead>
@@ -153,27 +173,41 @@ export function ModelCatalog({ models, note }: { models: PublicModel[]; note?: R
               key={model.id}
               model={model}
               open={open === model.id}
+              showPrices={showPrices}
+              columns={columns}
               onToggle={() => setOpen(open === model.id ? null : model.id)}
             />
           ))}
         </tbody>
       </Table>
-      {note ? <p className="max-w-prose text-ui text-t3">{note}</p> : null}
+      {note && showPrices ? <p className="max-w-prose text-ui text-t3">{note}</p> : null}
     </div>
   );
 }
 
 // ModelRow is a model and, when it is open, its details in the row right under it, where the person who opened them is
 // looking; a list of a hundred models would otherwise show them far below the button.
-function ModelRow({ model, open, onToggle }: { model: PublicModel; open: boolean; onToggle: () => void }) {
+function ModelRow({
+  model,
+  open,
+  showPrices,
+  columns,
+  onToggle,
+}: {
+  model: PublicModel;
+  open: boolean;
+  showPrices: boolean;
+  columns: number;
+  onToggle: () => void;
+}) {
   const details = useId();
   return (
     <>
-      <ModelSummary model={model} open={open} details={details} onToggle={onToggle} />
+      <ModelSummary model={model} open={open} showPrices={showPrices} details={details} onToggle={onToggle} />
       {open ? (
         <tr>
-          <td colSpan={8} className="border-b border-b1 bg-s2">
-            <ModelDetails id={details} model={model} />
+          <td colSpan={columns} className="border-b border-b1 bg-s2">
+            <ModelDetails id={details} model={model} showPrices={showPrices} />
           </td>
         </tr>
       ) : null}
@@ -184,11 +218,13 @@ function ModelRow({ model, open, onToggle }: { model: PublicModel; open: boolean
 function ModelSummary({
   model,
   open,
+  showPrices,
   details,
   onToggle,
 }: {
   model: PublicModel;
   open: boolean;
+  showPrices: boolean;
   details: string;
   onToggle: () => void;
 }) {
@@ -204,10 +240,12 @@ function ModelSummary({
           {model.id}
         </p>
         {/* Below sm the price columns are hidden, so the input price reads under the name and Details stays in view. */}
-        <div className="mt-1 text-label tabular-nums sm:hidden">
-          <span className="text-t3">{t("publicModels.item.input")} </span>
-          <Price model={model} item="input" />
-        </div>
+        {showPrices ? (
+          <div className="mt-1 text-label tabular-nums sm:hidden">
+            <span className="text-t3">{t("publicModels.item.input")} </span>
+            <Price model={model} item="input" />
+          </div>
+        ) : null}
       </Td>
       <Td className="hidden max-w-40 md:table-cell">
         <p className="truncate" title={model.author}>
@@ -227,12 +265,16 @@ function ModelSummary({
           ))}
         </span>
       </Td>
-      <Td className="hidden text-right tabular-nums sm:table-cell">
-        <Price model={model} item="input" />
-      </Td>
-      <Td className="hidden text-right tabular-nums sm:table-cell">
-        <Price model={model} item="output" />
-      </Td>
+      {showPrices ? (
+        <>
+          <Td className="hidden text-right tabular-nums sm:table-cell">
+            <Price model={model} item="input" />
+          </Td>
+          <Td className="hidden text-right tabular-nums sm:table-cell">
+            <Price model={model} item="output" />
+          </Td>
+        </>
+      ) : null}
       <Td className="text-right">
         <Button size="sm" variant="ghost" aria-expanded={open} aria-controls={details} onClick={onToggle}>
           {t(open ? "publicModels.hide" : "publicModels.details")}
@@ -243,7 +285,7 @@ function ModelSummary({
   );
 }
 
-function ModelDetails({ id, model }: { id: string; model: PublicModel }) {
+function ModelDetails({ id, model, showPrices }: { id: string; model: PublicModel; showPrices: boolean }) {
   const { t } = useTranslation("common");
   const pricing = model.pricing;
   const rates = pricing?.rates ?? [];
@@ -251,32 +293,34 @@ function ModelDetails({ id, model }: { id: string; model: PublicModel }) {
     // w-0 min-w-full: the details take the table's width without widening it on a narrow screen.
     <section id={id} aria-label={model.name} className="w-0 min-w-full pb-1">
       <ModelFacts model={model} />
-      <EndpointSection model={model} />
-      <div className="mt-4 border-t border-b1">
-        <div className="px-4 pt-4">
-          <h3 className="text-ui text-t1">{t("publicModels.modelPrice")}</h3>
-          <p className="mt-1 text-label text-t3">{t("publicModels.modelPriceNote")}</p>
+      <EndpointSection model={model} showPrices={showPrices} />
+      {showPrices ? (
+        <div className="mt-4 border-t border-b1">
+          <div className="px-4 pt-4">
+            <h3 className="text-ui text-t1">{t("publicModels.modelPrice")}</h3>
+            <p className="mt-1 text-label text-t3">{t("publicModels.modelPriceNote")}</p>
+          </div>
+          {!pricing ? (
+            <p className="px-4 py-3 text-t3">{t("publicModels.priceUnavailable")}</p>
+          ) : rates.length === 0 ? (
+            <p className="px-4 py-3 text-t3">{t("publicModels.noRates")}</p>
+          ) : (
+            <RateTable
+              title={`${model.name} ${t("publicModels.modelPrice")}`}
+              currency={pricing.currency}
+              basis={pricing.basis}
+              rates={rates}
+            />
+          )}
+          {pricing?.search_engines?.length ? (
+            <SearchEnginePrices
+              title={`${model.name} ${t("publicModels.searchEngines")}`}
+              currency={pricing.currency}
+              engines={pricing.search_engines}
+            />
+          ) : null}
         </div>
-        {!pricing ? (
-          <p className="px-4 py-3 text-t3">{t("publicModels.priceUnavailable")}</p>
-        ) : rates.length === 0 ? (
-          <p className="px-4 py-3 text-t3">{t("publicModels.noRates")}</p>
-        ) : (
-          <RateTable
-            title={`${model.name} ${t("publicModels.modelPrice")}`}
-            currency={pricing.currency}
-            basis={pricing.basis}
-            rates={rates}
-          />
-        )}
-        {pricing?.search_engines?.length ? (
-          <SearchEnginePrices
-            title={`${model.name} ${t("publicModels.searchEngines")}`}
-            currency={pricing.currency}
-            engines={pricing.search_engines}
-          />
-        ) : null}
-      </div>
+      ) : null}
     </section>
   );
 }

@@ -15,6 +15,8 @@ test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 
 const h1 = (page: Page, name: string | RegExp) => page.getByRole("heading", { level: 1, name });
 const press = (page: Page, key: string, nth = 0) => page.getByRole("button", { name: words(key) }).nth(nth);
+// The settings dialog says itself whether the save took, since a node of the release before may drop the price switch.
+const saved = (page: Page) => dialog(page).getByText(zhText("settings.saved"));
 
 test.describe("users and credit", () => {
   test("an account from a server of the release before, without key limits, still shows with the card marked unavailable", async ({
@@ -190,14 +192,30 @@ test.describe("site settings", () => {
     await dialog(page).getByLabel(words("settings.field.admin_idle_timeout_seconds")).fill("7200");
     await dialog(page).getByLabel(words("settings.field.console_idle_timeout_seconds")).fill("");
     await dialog(page).locator("button[type=submit]").click();
-    await expect(done(page)).toBeVisible();
+    await expect(saved(page)).toBeVisible();
     expect(state.settings.settings).toEqual({
       billing_preference: "subscription_first",
       admin_idle_timeout_seconds: 7200,
+      model_prices_public: true,
       new_key_daily_limit: { amount: "20000000000", currency: "USD" },
     });
     await close(page);
     await expect(page.getByText(/7,200/)).toBeVisible();
+  });
+
+  test("model prices are kept to signed-in members when the switch is turned off", async ({ page }) => {
+    const state = await open(page, "/settings");
+    const shown = page
+      .getByText(zhText("settings.field.model_prices_public"), { exact: true })
+      .locator("xpath=following-sibling::dd[1]");
+    await expect(shown).toContainText(zhText("settings.publicPrices.values.public"));
+    await press(page, "settings.edit").click();
+    await dialog(page).getByLabel(words("settings.field.model_prices_public")).uncheck();
+    await send(page);
+    await expect(saved(page)).toBeVisible();
+    expect(state.settings.settings.model_prices_public).toBe(false);
+    await close(page);
+    await expect(shown).toContainText(zhText("settings.publicPrices.values.private"));
   });
 
   test("the site's key limits are changed apart from the settings, and a settings change leaves them", async ({
@@ -216,7 +234,7 @@ test.describe("site settings", () => {
     await close(page);
     await press(page, "settings.edit").click();
     await send(page);
-    await expect(done(page)).toBeVisible();
+    await expect(saved(page)).toBeVisible();
     expect(state.keyLimits.limits).toEqual({ max_keys: 20, creations_per_hour: 30 });
   });
 });
