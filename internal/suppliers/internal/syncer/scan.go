@@ -12,6 +12,24 @@ import (
 // restart goes on where it was. The adapter says when a pass has ended (Done), also when there was nothing yet to read.
 // A record is kept by its Ref, so the repeats of an overlap or a growing list cost nothing.
 func (e *Engine) scan(ctx context.Context, st *State, c *Commit) error {
+	if _, ok := e.mgr.(adapter.UsageQueue); ok {
+		// A manager that is itself a usage queue (a test, or a caller that did not wrap it) has no re-readable list.
+		c.State.ScanOpen, c.State.Scan = false, nil
+		return nil
+	}
+	if q, ok := e.mgr.(adapter.UsageQueueManager); ok {
+		has, err := q.HasUsageQueue(ctx)
+		if err != nil {
+			return err
+		}
+		if has {
+			// A one-read queue is drained by the resident collector, not by the round: a second reader would take the
+			// records away from it. The collector writes them as charge records, which reconciliation reads here or on
+			// another node. A position left by another kind must not keep the task due.
+			c.State.ScanOpen, c.State.Scan = false, nil
+			return nil
+		}
+	}
 	for range e.set.MaxPages {
 		done, err := e.page(ctx, st, c)
 		if err != nil || done || st.Status == NeedsAttention {

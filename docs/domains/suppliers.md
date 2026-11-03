@@ -39,7 +39,7 @@
   - new-api：适配新版的个人访问令牌和登录令牌，也兼容旧版的访问令牌；
   - sub2api：登录令牌加刷新令牌；
   - 通用 OpenAI 兼容：只有 API key，通过 OpenAI 兼容的余额接口读取余额。
-- **管理员身份，用于自建号池**：sub2api 管理接口、new-api 管理接口；CPA（CLIProxyAPI）是规划中的号池适配器，尚未实现，情况见下文「号池」。
+- **管理员身份，用于自建号池**：sub2api 管理接口、new-api 管理接口、CPA（CLIProxyAPI，Go 适配器加常驻采集器），情况见下文「号池」和「CPA」。
 - **官方 API（预留）**：OpenAI、Anthropic、Gemini 三种协议的调用面，加上最基本的管理面。这三种协议的调用面同时也是转换和检测的基准。
 
 ### 声明式适配器
@@ -76,7 +76,7 @@
 
 **和给每个中转站写 Go 适配器相比**。new-api 把上游渠道做成数据行（[`model/channel.go`](https://github.com/QuantumNous/new-api/blob/e449cc700eb569cdfc2199cb73e97de46944f43c/model/channel.go#L23) 的 `BaseURL`、`Models`、`ModelMapping`、`StatusCodeMapping`、`Setting`、`ParamOverride`、`HeaderOverride`），但新增一种上游仍要实现 15 个方法的 [`relay/channel.Adaptor`](https://github.com/QuantumNous/new-api/blob/e449cc700eb569cdfc2199cb73e97de46944f43c/relay/channel/adapter.go#L18)，并在 [`constant/channel.go`](https://github.com/QuantumNous/new-api/blob/e449cc700eb569cdfc2199cb73e97de46944f43c/constant/channel.go#L3) 登记约 60 种渠道类型；渠道行描述的是“怎么把请求转给上游”，不含余额、key 和逐笔扣费这些管理操作。sub2api 的 [`Channel`](https://github.com/Wei-Shaw/sub2api/blob/a3298b46ebe239fb0720b068a1eb3383955bdac2/backend/internal/service/channel.go#L50) 行带 `ModelPricing` 和 `ModelMapping`，由 [`channel_service.go`](https://github.com/Wei-Shaw/sub2api/blob/a3298b46ebe239fb0720b068a1eb3383955bdac2/backend/internal/service/channel_service.go) 缓存价格和映射，同样没有把管理面变成配置。Axiom 的声明覆盖的是另一半：一个形状固定的管理面加共享调用协议；所以它比“每个站写一个包”少一次代码、构建和发布，但只适用于这些操作都在声明表里的站。字段一多、分页/鉴权/错误形状超出表，或者要读一个有状态的接口，就写 Go 适配器；声明在加载时就拒绝，不会半工作。（引用提交：new-api `e449cc7`，sub2api `a3298b4`，2026-10-28。）
 
-**CPA 为什么不在这一档**。CPA（CLIProxyAPI）的逐笔用量从 [`GET /v0/management/usage-queue?count=N`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/usage.go) 读取，这个接口每读一条就把记录从内存队列里拿走（路由在 [`internal/api/server_management.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/server_management.go#L93)）；记录默认只留 60 秒、最长 3600 秒，6.10 起不再内置用量统计。适配器的 `Charges` 契约要求同一时间窗可以重读、按水位推进，声明无法把“读一次就没了”的队列变成可重读的逐笔记录；它还需要一个常驻采集程序、自己的持久位置和“同一 CPA 不能挂第二个采集器”的部署约束。号池的账号健康和额度窗口也超出声明的固定操作。所以 CPA 走单独的 Go 适配器加常驻采集器（[号池](#号池)），声明式 v1 明确不接。（引用提交：CLIProxyAPI `6e6afab`，2026-11-03。）
+**CPA 为什么不在这一档**。CPA（CLIProxyAPI）的逐笔用量从 [`GET /v0/management/usage-queue?count=N`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/usage.go) 读取，这个接口每读一条就把记录从内存队列里拿走（路由在 [`internal/api/server_management.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/server_management.go#L93)）；记录默认只留 60 秒、最长 3600 秒，6.10 起不再内置用量统计。适配器的 `Charges` 契约要求同一时间窗可以重读、按水位推进，声明无法把“读一次就没了”的队列变成可重读的逐笔记录；它还需要一个常驻采集程序、自己的持久位置和“同一 CPA 不能挂第二个采集器”的部署约束。号池的账号健康和额度窗口也超出声明的固定操作。所以 CPA 走单独的 Go 适配器加常驻采集器（[号池](#号池)、[CPA](#cpacliproxyapi)），声明式 v1 明确不接。（引用提交：CLIProxyAPI `6e6afab`，2026-11-03。）
 
 声明式 v1 没有后台的新建、编辑、试连和停用界面，也没有“保存即生效”的运行时重载；这些需要另行设计多节点的文件分发和校验后的生效方式，见[待定问题](#待定问题)。[前端](../frontend.md)把它们列为 M1，当前以部署文件为准。
 
@@ -186,13 +186,45 @@
 - **出网**：号池账号的出网代理在号池系统里配置，可以指向我们的出口节点，也可以指向外部的固定 IP 代理。我们的出口只负责 Axiom 到号池这一段。
 - **CPA 的用量**：
   - CPA 从 6.10 版起不再内置用量统计，逐笔用量只能从它的用量队列读取；
-  - 这个队列"读一条删一条"，记录只在内存里保留，默认 60 秒，最长 3600 秒，而且要先开启用量发布才有数据（CLIProxyAPI 文档，2026-10）。
-
-  所以我们的采集程序必须一直运行，把记录按我们的请求 ID 写入数据库并去重；保留时间设为最长；同一个 CPA 上不能再挂别的采集程序，否则记录会被抢走。采集中断而丢失的部分，按"只能看到余额变化"的方式对账。
+  - 这个队列"读一条删一条"，记录只在内存里保留，默认 60 秒，最长 3600 秒，而且要先开启用量发布、并且管理路由启用（或有 Home 订阅者）时队列才存在（CLIProxyAPI 文档，2026-10）。
+  - 我们的常驻采集器每 5 秒弹一批（100 条），先写 `usage_records` staging 再解析入库；同一个 CPA 上不能再挂别的采集程序或 Home 订阅者，否则记录会被抢走。采集中断而丢失的部分只能靠日志和未匹配尝试发现，不能从队列补读；具体窗口、单采集器锁和两种被否决的设计见「[CPA（CLIProxyAPI）](#cpacliproxyapi)」。
 - **部署要求**：sub2api 存储凭证时没有加密，所以号池系统部署在内网，磁盘加密，管理端口只对 Axiom 开放。
 - **管理员凭证**：权限极高，只给号池专用，权限尽量小。定期轮换；一旦泄露，立即吊销并重置号池里的账号。
 - **支出**：号池的支出（订阅费、代理、封号损失）记入计费，用于计算号池成本。
 - **预留**：自己写号池模块只作预留。它在系统里也只是一个适配器，需要时替换即可，其他部分不受影响。
+
+### CPA（CLIProxyAPI）
+
+CPA 是 Go 适配器（`internal/suppliers/internal/cpa/`）加常驻采集器（`internal/suppliers/internal/collector/`），不放进声明式 v1。事实按上游 `6e6afab99a1939525ecb6bb1f0873c8e7a9df877`（v8，2026-11-03）核对；下面每个接口都指到那个提交。
+
+**契约映射**
+
+- **识别**：`GET /` 的公开回答带 `"message":"CLI Proxy API Server"`（[`server_routes.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/server_routes.go)）。`Detect` 只读这里，不探测管理接口：管理鉴权失败五次会封地址三十分钟（[`handler.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/handler.go)），探测不能拿这个冒险。`Generation` 写 `v8`，不读只在管理回答里出现的版本头。
+- **账号**：`GET /v0/management/auth-files` 的 `files`（[`auth_files.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/auth_files.go)）。`status=error` 算失败；`active`、未 `disabled`、未 `unavailable`、`next_retry_after` 已过（或没有）才算可服务；不认识的 `status` 既不算失败也不算可服务。`Account.Balance` 是可服务账号数，`UnitHint` 是 `1`：CPA 没有现金余额，这个数只让路由的“余额大于 0”门槛和低余额告警保持意义；每个模型的成本计划是全零，所以这个数不参与逐笔成本。页大小 500，最多 40 页；更多账号时 `Pool` 标 `Complete=false`，引擎保留上次读数，`Offer` 拒绝这一轮而不是把前缀当成全集。
+- **分组**：只有一个 `default`。CPA 的 `GET /api-keys` 是一个全局字符串列表，没有名字、分组、权限（[`config_lists.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/config_lists.go)）；按 Claude/Codex 拆组会让同一把 key 同时属于多个组，或者让没有 key 的组无法路由。一个组是这套 key 模型下唯一诚实的映射。
+- **模型**：`GET /auth-files/models?name=<name|id>` 逐个账号读（[`auth_files.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/auth_files.go)），取可服务账号的并集。只读可服务账号，是因为失效账号的模型没有账号可接；一个可服务账号都没有时保留上次的模型（`ModelsUnread`），不因一次临时故障把全部端点摘掉。一次 `Offer` 最多读 20 个账号，位置里记账号名和已读模型；读不完时下一次接着读，账号清单变了或位置读不懂就整份重来。所有模型都给 Messages、Responses、Chat 三种格式，成本计划是零。
+- **额度窗口**：号池的 `Pool` 只读 `auth-files` 里的被动快照 `quota.signals`，不依赖 `/quota/fetch`（上游只对 claude、codex、devin 写被动信号，见 [`quota_signals.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/sdk/cliproxy/auth/quota_signals.go)）。Claude 取 `Anthropic-Ratelimit-Unified-5h-Utilization`（0 到 1 的小数）和 `7d` 两项，Codex 取 `X-Codex-Primary-Used-Percent` 和 `Secondary-Used-Percent`（0 到 100）；重置时间接受 RFC3339 或 Unix 秒，`reset-after-seconds` 相对快照时间。重置已过的窗口按 0 用量；每个账号取两个窗口里更紧的剩余，再对可服务账号求平均并向下取整。没有窗口的账号不参与平均；认得的值读不懂时返回 `ErrUnrecognised`，不猜成 100% 已用。devin 等其他 provider 没有已知窗口形状，不猜。
+- **key**：`GET /api-keys` 是明文列表。`KeyState.Ref` 是 key 的 SHA-256 前 128 位（32 个十六进制字符），不是 key 本身；`KeySecret` 按 ref 再读列表取原文。CPA 没有建 key 的接口，所以适配器不实现 `KeyMaker`：人从已有 key 里选一把绑定，或先在 CPA 建好再绑。列表里没有的 key 由现有的 key 投影标为全拒，不自动擦除。
+- **调用面**：三种格式都服务；`Policy.Streams` 为真，`Cancels` 为假（没有样本证明 CPA 会在客户端断开后停止上游，按保守默认）。对账键是响应头 `X-CPA-TRACE-ID` 的最后 36 个字符（[`cpa_trace.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/logging/cpa_trace.go)），即 usage 记录的 `request_id`；不是 UUID 就不给键，不猜。`Classify` 只把固定的错误码和状态映射成 `Failure`，不带对方的消息文本。
+- **`Charges`**：适配器返回一个空的 Done 页，但引擎不会调用它。`Manager` 同时实现 `UsageQueue`，同步的 `scan` 见到这种 manager 就跳过；读一次就删的队列不能再被第二轮抢走。
+
+**采集器**
+
+CPA 的 `GET /v0/management/usage-queue?count=N` 每弹出一条就从内存队列删除（[`usage.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/usage.go)、[`queue.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/redisqueue/queue.go)）；记录默认留 60 秒、最长 3600 秒，而且只有开着用量发布、并且管理路由启用时队列才存在；Home 也会让队列开关为真，但订阅者会直接把记录拿走。记录里有 `request_id`、`timestamp`、`model`、`provider`、`auth_index`、`api_key` 和 `token_breakdown`；`api_key` 是明文，绝不能原样入库或进日志。
+
+- **部署前提**：CPA 打开 `usage-statistics-enabled`，把队列保留时间设为 3600 秒，启用管理路由并只让 Axiom 的采集器读它；不要配置 Home 或其他 `SubscribeUsage` 订阅者，因为存在订阅者时 `Enqueue` 直接把记录发给订阅者、根本不入队。CPA 的队列开关由 `hasManagementSecret || cfg.Home.Enabled` 决定（[`server.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/server.go)），所以“有管理密钥”是队列存在的前提之一。
+- **单采集器**：每个供应商用 `pg.Hold(ctx, "axiom.usage."+supplier_id, 30s)` 拿一个会话级 advisory lock，拿不到就跳过这一轮。锁不包住 HTTP 请求：一个事务里等 CPA 会把数据库连接占住；锁由连接存活看门狗续，进程死亡或连接断开自动释放。不是“同一 CPA 不能挂第二个采集器”的全部保证：别的程序或 CPA 的订阅者仍然能抢；这不是协议能阻止的，见下。
+- **顺序**：每 5 秒一个 River 周期任务（只在 River leader 上入队），按注册表里声明了 `UsageQueueSource` 的适配器列出 `connecting`、`active`、`low_balance` 的供应商。每批 `count=100`、最多 20 批；拿到后**先**写 `suppliers.usage_records`，**再**解析并 `reconcile.Ingest`，最后在同一个事务里删掉已入库的行。先落库再解析，使 CPA 队列尽快空出来，也让解析失败的行留下来给人看。
+- **落库形态**：`usage_records` 只存脱敏后的 `v=1` 记录：`request_id`、`timestamp`、`model`、`alias`、`provider`、`auth_index`、`api_key_sha256`、`token_breakdown`、`failed`。`api_key` 原文、请求头、失败响应体、客户端地址都不存。`ParseUsage` 只读这份存下来的形态，所以重启后重放不需要再问 CPA，也不需要 key。CPA 的 v2 breakdown 把 5 分钟和 1 小时缓存写合在 `cache_write_tokens`，这里都按 5 分钟缓存写记，不拆出 1 小时项。
+- **幂等**：`usage_records` 的唯一索引是 `(supplier_id, request_id)`（`request_id` 非空时）；`charge_records` 的唯一索引是 `(supplier_id, charge_ref)`。一次弹出在崩溃后重放、或同一请求被两次写入，都只留下一条 charge；`reconcile.Ingest` 本身按 `Ref` 去重。不能解析的记录标 `rejected` 并保留，删掉就失去唯一的副本。
+- **崩溃窗口**：队列没有 ack/peek，弹出和第一次本地提交之间进程崩溃，记录只能从 CPA 的内存队列里等下一次（若还在保留期内）再弹；如果已经弹出且没写进 `usage_records`，就永久丢失。这个窗口由“弹出后立刻 staging、每批 100 条、staging 三次短重试（200ms、400ms）”压到最小，但不能消掉；因此保证是“CPA 侧至多一次弹出 + 本地 staging 至少一次重放”，不是跨两个系统的 exactly-once。这个取舍必须在上线文档里写明。
+- **别人把队列读走**：CPA 没有“谁读过”的接口，队列本身也查不到；`auth_files` 的 `success`/`failed`/`recent_requests` 只是每个账号的进程内计数，不能证明逐笔记录被谁拿走。可观察的只有日志（空批、批大小骤降、`rejected`）和现有的“尝试到了宽限期还没有 charge”报告。部署上必须保证没有第二个采集器、没有 Home 订阅者；发现记录缺失时先查这两件事，不能把队列当成可回放的历史。
+- **失败与恢复**：管理 key 被拒（401/403）时采集器停这个供应商 30 分钟，并记下被拒的登录版本；登录行版本变了（人换了 key）就立刻解封，避免旧 key 的封禁拖住新 key。网络错误、5xx、`Blocked` 都只让这一轮结束，下一轮再试；`ErrBucketsFull` 不算失败。staging 的数据库错误重试三次后让这一轮失败，记录只在这几秒的内存里；数据库恢复后下一轮把上一轮留在 `usage_records` 的行和新批次一起 ingest。采集器不写供应商状态：鉴权被拒由同步轮次按现有规则置 `needs_attention`，采集器自己只退避。
+- **成本与资金来源**：每条 charge 的 `amount_native` 是 `0`，`funding=wallet`，模型用零成本计划；CPA 的订阅费、代理和封号损失按[计费](billing.md#供应商成本)的“实际支出单独记账”处理，不摊进逐笔调用。不用 `FundingOther`：那会让 `reconcile.Ingest` 把整家供应商暂停，而 CPA 的调用并不从别的钱包扣。零金额是表达“这笔调用的现金成本是零”，不是把未知成本写成零；逐笔用量和 `reported` 仍按 token 记录，billing 的用量校正照常工作。
+- **对账**：只有带 `X-CPA-TRACE-ID` 的调用才有 `charge_ref`；没有这个响应头（或它最后不是 UUID）时记录仍会入库（`charge_ref` 仍是 CPA 的 `request_id`），但没有能和尝试对上的键，按现有的宽限期报告为未匹配尝试。`request_id` 是 CPA 生成的 UUIDv7，不能由 Axiom 指定；用响应头关联，不用我们自己的 request id 猜。
+- **比较过的做法**：直接 `DrainUsage` → `reconcile.Ingest` 一个事务，代码最少，但数据库慢或崩溃时刚弹出的整批直接没了，也没有地方查解析失败；本地 spool 文件能扛数据库故障，但多一份节点本地状态、要自己 fsync/清理、跨节点看不见，且崩溃后还要和数据库对账；这里选 staging 表：多一张小表和一次 DELETE，换来“弹出后马上有持久副本、重放幂等、坏记录可查”，代价是崩溃窗口仍在，只是从“整轮”缩到“一批”。
+
+**限制**：CPA 的管理 key 是明文 bearer，适配器只在内存里持有；`api-keys` 列表没有分页，key 很多时一次读完整列表；不实现 `KeyMaker`，建 key 仍在 CPA 侧；不读 `cost_details`（CPA 默认不填金额，且不同 provider 的币种/单位不一致，逐笔金额固定为零）；不依赖 `/quota/fetch` 的插件，也不解析 devin 的窗口。
 
 ## 决策与理由
 
@@ -205,7 +237,7 @@
 | 适配器分成管理面和调用面 | 对方运行的系统和支持的协议是两件独立的事；分开后可以自由组合，不用为每种组合重写 |
 | 三档适配器 | 约一成的自研中转站大多只是接口路径和字段名不同，用配置就能接；配置也做不到的才交给浏览器自动化 |
 | 声明式适配器是启动时读取的部署文件，按 `v` 校验，不在后台存一条可变配置 | 声明是部署配置：坏路径、坏模板、未声明的桶和不可能的错误规则在启动时报错，节点起不来，而不是第一次同步才失败；同一份文件在每个核心节点上，滚动发布时行为一致。后台保存即生效需要 API/UI、多节点分发、并发编辑和回滚，且一次坏保存会让正在同步的供应商停摆；v1 不做。代价是改声明要重启，运营要能访问部署目录。否决：数据库里存声明并由各节点轮询（省重启，但多一套生效、版本和回滚机制，坏数据也会先跑起来）；把声明编译进镜像（每加一个站都要构建发布，回到写 Go 的老路）。`v` 只在成员含义变化时升，`kind` 是持久身份，改名等于新供应商。依据负责人 2026-10-28 的委托「遇到问题自己解决问题和判断最优而不是问我。」（[原话](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)），数据格式仍需独立深审 |
-| 声明式 v1 只覆盖可重读、形状固定的管理面；CPA 另写 Go 适配器和常驻采集器 | CPA 的用量队列读一条删一条、只在内存里保留（[`usage.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/usage.go)），而 `Charges` 要求同一时间窗可重读；号池还需要账号健康和额度窗口。硬把队列塞进声明会丢掉“可重读”这个契约前提，采集中断就永久丢记录。否决：给声明加一个“队列消费者”操作（把常驻状态、去重和单采集器约束藏进配置，比 Go 适配器更难审查）；让 CPA 只报余额变化（丢掉逐笔成本，对账无法按请求归属）。CPA 适配器和采集器尚未实现，见「号池」 |
+| 声明式 v1 只覆盖可重读、形状固定的管理面；CPA 另写 Go 适配器和常驻采集器 | CPA 的用量队列读一条删一条、只在内存里保留（[`usage.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/usage.go)），而 `Charges` 要求同一时间窗可重读；号池还需要账号健康和额度窗口。硬把队列塞进声明会丢掉“可重读”这个契约前提，采集中断就永久丢记录。否决：给声明加一个“队列消费者”操作（把常驻状态、去重和单采集器约束藏进配置，比 Go 适配器更难审查）；让 CPA 只报余额变化（丢掉逐笔成本，对账无法按请求归属）。CPA 适配器和采集器已实现，接口映射、staging 与失败恢复见「[CPA（CLIProxyAPI）](#cpacliproxyapi)」 |
 | 每个适配器独立成包，移除只删目录和一行登记 | 负责人要求自研中转站的适配以后可以干净移除，避免代码冗杂；声明式是删部署文件，见「声明式适配器」 |
 | 接入方式逐级兜底 | 来自团队成员的实践经验：多数站点用接口即可，遇到人机验证由人登录一次，剩下的交给浏览器自动化 |
 | 同步按供应商限速，先用便宜的接口 | 普通用户账号被限流或封号，会连带损失预付余额 |

@@ -147,6 +147,39 @@ type Manager interface {
 	Charges(ctx context.Context, scan ScanState) (ChargePage, ScanState, error)
 }
 
+// UsageQueue is the optional management half of a supplier whose per-call usage is a queue that is consumed once. A
+// resident collector drains it; the sync engine does not scan Charges for such a manager, because a second reader would
+// take the records away from the collector. The records a queue returns are already sanitised for storage: no credential
+// may reach UsageRecord.Raw, and ParseUsage must work from that stored form alone, also after a restart.
+type UsageQueue interface {
+	// DrainUsage takes up to limit records from the supplier, oldest first. The supplier removes them when this returns,
+	// so the caller must store every record before doing anything else. An error means the records may be gone.
+	DrainUsage(ctx context.Context, limit int) ([]UsageRecord, error)
+	// ParseUsage turns one stored record into a Charge. It must not touch the network: it is called while the collector
+	// replays records a crash left behind.
+	ParseUsage(raw []byte) (Charge, error)
+}
+
+// UsageRecord is one record a UsageQueue returned. Ref is the supplier's request id when it has one; Raw is the stored
+// form, which must not contain a credential. Raw is opaque to the collector and is parsed by ParseUsage.
+type UsageRecord struct {
+	Ref ChargeRef
+	Raw []byte
+}
+
+// UsageQueueSource marks an adapter whose Open returns a UsageQueue. The resident collector asks this before it opens a
+// supplier's login, so adapters without a one-read queue cost it no request and no decryption.
+type UsageQueueSource interface {
+	UsesUsageQueue()
+}
+
+// UsageQueueManager is implemented by a manager wrapper that has to open the real manager to know whether it has a
+// one-read queue. The sync engine asks this before it scans Charges, because the wrapper itself cannot implement
+// UsageQueue for every manager without making every adapter look like one.
+type UsageQueueManager interface {
+	HasUsageQueue(ctx context.Context) (bool, error)
+}
+
 // KeyMaker is the optional half of a management side that can make a key of its own. An adapter that can serve a group
 // only through such a key implements it. The sync calls CreateKey only for a group with no stored key; a key whose
 // response was lost is adopted by its name on the next complete listing, and made again only if that listing does not

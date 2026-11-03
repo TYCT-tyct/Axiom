@@ -61,6 +61,17 @@ func (o *openOnUse) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.S
 	return m.KeySecret(ctx, ref)
 }
 
+// HasUsageQueue implements adapter.UsageQueueManager. It opens the manager, because only the manager knows whether its
+// charges are a queue that is consumed once; the sync engine then skips Charges for it.
+func (o *openOnUse) HasUsageQueue(ctx context.Context) (bool, error) {
+	m, err := o.get()
+	if err != nil {
+		return false, err
+	}
+	_, ok := m.(adapter.UsageQueue)
+	return ok, nil
+}
+
 func (o *openOnUse) Charges(ctx context.Context, scan adapter.ScanState) (adapter.ChargePage, adapter.ScanState, error) {
 	m, err := o.get()
 	if err != nil {
