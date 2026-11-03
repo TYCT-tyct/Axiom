@@ -90,8 +90,8 @@ func (q *Queries) InsertProjectedEndpoint(ctx context.Context, db DBTX, arg Inse
 }
 
 const insertProjectedGroup = `-- name: InsertProjectedGroup :exec
-INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, facts, last_seen_at)
-VALUES ($1, $2, $3, $4, $5::numeric, $6::jsonb, $7)
+INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, facts, key_eligible, last_seen_at)
+VALUES ($1, $2, $3, $4, $5::numeric, $6::jsonb, $7, $8)
 `
 
 type InsertProjectedGroupParams struct {
@@ -101,10 +101,12 @@ type InsertProjectedGroupParams struct {
 	Name        string
 	Ratio       string
 	Facts       []byte
+	KeyEligible bool
 	SeenAt      *time.Time
 }
 
-// A group is made unselected: which groups to use is a person's choice, not the listing's.
+// A group is made unselected: which groups to use is a person's choice, and the projection's automatic selection is a
+// separate write. key_eligible says whether a key of ours can serve it.
 func (q *Queries) InsertProjectedGroup(ctx context.Context, db DBTX, arg InsertProjectedGroupParams) error {
 	_, err := db.Exec(ctx, insertProjectedGroup,
 		arg.ID,
@@ -113,6 +115,7 @@ func (q *Queries) InsertProjectedGroup(ctx context.Context, db DBTX, arg InsertP
 		arg.Name,
 		arg.Ratio,
 		arg.Facts,
+		arg.KeyEligible,
 		arg.SeenAt,
 	)
 	return err
@@ -255,6 +258,7 @@ func (q *Queries) ListProjectedEndpoints(ctx context.Context, db DBTX, supplierI
 const listProjectedGroups = `-- name: ListProjectedGroups :many
 
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts::text AS facts, present,
+    key_eligible, selected, codename,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low, pool_observed_at
 FROM suppliers.supplier_groups
 WHERE supplier_id = $1
@@ -268,6 +272,9 @@ type ListProjectedGroupsRow struct {
 	Ratio          string
 	Facts          string
 	Present        bool
+	KeyEligible    bool
+	Selected       bool
+	Codename       *string
 	PoolAccounts   *int32
 	PoolFailed     *int32
 	PoolUsable     *int32
@@ -298,6 +305,9 @@ func (q *Queries) ListProjectedGroups(ctx context.Context, db DBTX, supplierID u
 			&i.Ratio,
 			&i.Facts,
 			&i.Present,
+			&i.KeyEligible,
+			&i.Selected,
+			&i.Codename,
 			&i.PoolAccounts,
 			&i.PoolFailed,
 			&i.PoolUsable,

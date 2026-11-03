@@ -34,6 +34,9 @@ func TestSelectGroupAndBindKey(t *testing.T) {
 	if !chosen.Selected || chosen.Codename == nil || off.Selected || off.Codename == nil || *off.Codename != *chosen.Codename {
 		t.Errorf("selected %+v, then unselected %+v", chosen, off)
 	}
+	if chosen.KeyState == nil || *chosen.KeyState != adminapi.SupplierGroupKeyStateUnavailable {
+		t.Errorf("a chosen group no adapter needs a key for: %+v", chosen.KeyState)
+	}
 	expectAdmin(t, "a group the supplier lacks", f.change(f.s, http.MethodPut, base+"/groups/"+uuid.NewV7().String(), `{"selected":true,"reason":"r"}`, newKey()),
 		http.StatusNotFound, codeNotFound)
 	f.send(http.MethodPut, base+"/groups/"+group, `{"selected":true,"reason":"r"}`, http.StatusOK, &chosen)
@@ -69,6 +72,25 @@ func bindRefusals(t *testing.T, f supplierFixture, supplier, group, idle string)
 	if len(detail.Groups) != 2 || len(detail.Credentials) != 1 {
 		t.Errorf("the supplier after: %+v", detail)
 	}
+	if state := groupState(detail.Groups, group); state == nil || *state != adminapi.SupplierGroupKeyStatePending {
+		t.Errorf("a group waiting for a bound key's text: %v", state)
+	}
+	f.run("UPDATE suppliers.credentials SET status = 'active', ciphertext = decode('00000000000000000000000000000000', 'hex'), nonce = decode('000000000000000000000000', 'hex'), wrapped_dek = decode('00', 'hex'), key_version = 1 WHERE supplier_id = '" + supplier + "'")
+	rec = f.do(http.MethodGet, base, "", as(f.s))
+	decode(t, rec, &detail)
+	if state := groupState(detail.Groups, group); state == nil || *state != adminapi.SupplierGroupKeyStateReady {
+		t.Errorf("a group with a stored key: %v", state)
+	}
+}
+
+// groupState is the key state of one group of a detail, or nil when it has none.
+func groupState(groups []adminapi.SupplierGroup, id string) *adminapi.SupplierGroupKeyState {
+	for _, g := range groups {
+		if g.Id == id {
+			return g.KeyState
+		}
+	}
+	return nil
 }
 
 // pendingNames reads the pages of the queue of names to map, following the cursor, and returns the names in order and

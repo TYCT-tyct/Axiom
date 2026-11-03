@@ -109,7 +109,7 @@ func TestKeysAreReadWithTheirStatus(t *testing.T) {
 	f := newFake()
 	f.routes["GET /api/token/?p=1&page_size=100"] = sample(t, "57-list-keys2")
 	got, err := readKeys(t, open(t, f, now))
-	want := []adapter.KeyState{{Ref: "2", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}, {Ref: "1", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}}
+	want := []adapter.KeyState{{Ref: "2", Name: "small", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}, {Ref: "1", Name: "k1", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}}
 	if err != nil || cmp.Diff(want, got) != "" {
 		t.Errorf("Keys: %+v, %v; want %+v", got, err, want)
 	}

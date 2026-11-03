@@ -177,6 +177,7 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, in
 			Total *int `json:"total"`
 			Items []struct {
 				ID            int64   `json:"id"`
+				Name          string  `json:"name"`
 				Status        int     `json:"status"`
 				Group         string  `json:"group"`
 				Expires       *int64  `json:"expired_time"`
@@ -202,7 +203,9 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, in
 		if err != nil {
 			return nil, 0, err
 		}
-		keys = append(keys, adapter.KeyState{Ref: adapter.KeyRef(strconv.FormatInt(item.ID, 10)), GroupRef: item.Group, Status: status, Policy: policy})
+		keys = append(keys, adapter.KeyState{
+			Ref: adapter.KeyRef(strconv.FormatInt(item.ID, 10)), GroupRef: item.Group, Name: item.Name, Status: status, Policy: policy,
+		})
 	}
 	return keys, *list.Data.Total, nil
 }
@@ -246,6 +249,9 @@ func (m *manager) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Sec
 		} `json:"data"`
 	}
 	if err := m.api.do(ctx, "POST", "/api/token/"+string(ref)+"/key", globalCritical, &reveal); err != nil {
+		if errors.Is(err, errScopeDenied) {
+			return secret.Secret{}, fmt.Errorf("%w: %v", adapter.ErrKeyNotPermitted, err)
+		}
 		return secret.Secret{}, err
 	}
 	if reveal.Data == nil || reveal.Data.Key == "" {

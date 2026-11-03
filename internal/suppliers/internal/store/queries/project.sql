@@ -6,15 +6,17 @@
 -- The pool columns are what the last read of the pool reported: the projection compares them so that a listing read
 -- twice writes no row, and a pool whose numbers did not change writes none either.
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts::text AS facts, present,
+    key_eligible, selected, codename,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low, pool_observed_at
 FROM suppliers.supplier_groups
 WHERE supplier_id = @supplier_id
 ORDER BY upstream_ref;
 
 -- name: InsertProjectedGroup :exec
--- A group is made unselected: which groups to use is a person's choice, not the listing's.
-INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, facts, last_seen_at)
-VALUES (@id, @supplier_id, @upstream_ref, @name, @ratio::numeric, @facts::jsonb, @seen_at);
+-- A group is made unselected: which groups to use is a person's choice, and the projection's automatic selection is a
+-- separate write. key_eligible says whether a key of ours can serve it.
+INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, facts, key_eligible, last_seen_at)
+VALUES (@id, @supplier_id, @upstream_ref, @name, @ratio::numeric, @facts::jsonb, @key_eligible, @seen_at);
 
 -- name: UpdateProjectedGroup :exec
 UPDATE suppliers.supplier_groups

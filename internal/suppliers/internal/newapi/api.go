@@ -2,6 +2,7 @@ package newapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -57,6 +58,10 @@ var authCodes = map[string]bool{
 
 var scopeName = regexp.MustCompile(`^[a-z_]+:[a-z_]+$`)
 
+// errScopeDenied marks a 403 whose reason is a personal access token missing a scope: the account is fine, the token
+// is too narrow, and another token fixes it.
+var errScopeDenied = errors.New("the access token lacks a scope")
+
 // api sends the management requests of one account.
 type api struct {
 	c      adapter.Client
@@ -69,10 +74,7 @@ func (a *api) get(ctx context.Context, path string, buckets []string, out any) e
 }
 
 func (a *api) do(ctx context.Context, method, path string, buckets []string, out any) error {
-	resp, err := a.c.Do(ctx, adapter.Request{
-		Method: method, Path: path, Buckets: buckets,
-		Header: http.Header{"Authorization": {a.bearer}, "Accept": {"application/json"}},
-	})
+	resp, err := a.send(ctx, method, path, buckets, nil)
 	if err != nil {
 		return err
 	}
@@ -95,6 +97,16 @@ func (a *api) do(ctx context.Context, method, path string, buckets []string, out
 	return nil
 }
 
+// send sends one request without reading the status: the caller classifies a status that is not a plain answer, because
+// a refused key operation means something different from a refused read.
+func (a *api) send(ctx context.Context, method, path string, buckets []string, body []byte) (adapter.Response, error) {
+	header := http.Header{"Authorization": {a.bearer}, "Accept": {"application/json"}}
+	if body != nil {
+		header.Set("Content-Type", "application/json")
+	}
+	return a.c.Do(ctx, adapter.Request{Method: method, Path: path, Buckets: buckets, Header: header, Body: body})
+}
+
 // authError names a refused credential by a code from the fixed list, and for a missing permission which one.
 func authError(env envelope, parsed bool) error {
 	code := "unknown"
@@ -102,7 +114,7 @@ func authError(env envelope, parsed bool) error {
 		code = env.Code
 	}
 	if code == "ACCESS_TOKEN_SCOPE_DENIED" && scopeName.MatchString(env.Params.Scope) {
-		return fmt.Errorf("%w: %s %s", adapter.ErrAuthRejected, code, env.Params.Scope)
+		return fmt.Errorf("%w: %w: %s %s", adapter.ErrAuthRejected, errScopeDenied, code, env.Params.Scope)
 	}
 	return fmt.Errorf("%w: %s", adapter.ErrAuthRejected, code)
 }

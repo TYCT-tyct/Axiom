@@ -126,7 +126,7 @@ func (c *cluster) callSnapshot(group uuid.UUID) *suppliers.Service {
 		c.t.Fatal(err)
 	}
 	err := c.open().Tx(ctx, platform, func(tx pg.Tx) error {
-		if _, err := tx.Exec(ctx, "UPDATE suppliers.supplier_groups SET selected = true, codename = 'test-group' WHERE id = $1", group); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE suppliers.supplier_groups SET selected = true, codename = COALESCE(codename, 'test-group') WHERE id = $1", group); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, "UPDATE suppliers.suppliers SET status = 'active', balance_native = 100 WHERE id = $1", c.supplier); err != nil {

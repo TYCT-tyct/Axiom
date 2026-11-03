@@ -144,6 +144,22 @@ type ProjectionWrites struct {
 	ChangedEndpoints []UpdateProjectedEndpointParams
 	Costs            []EnsureCostScheduleParams
 	UnknownCosts     []UnsetProjectedEndpointCostParams
+	// Eligibility is the key_eligible flag of groups the listing already had. A new group carries it in its insert.
+	Eligibility []SetGroupEligibilityParams
+	// AutoSelected are the groups no person has chosen that the projection puts in use, with the codename it gives them.
+	AutoSelected []AutoSelectGroupParams
+}
+
+// SetGroupEligibilityParams sets whether a key of ours can serve a group.
+type SetGroupEligibilityParams struct {
+	ID       uuid.UUID
+	Eligible bool
+}
+
+// AutoSelectGroupParams puts a never-chosen group in use and gives it the codename it keeps.
+type AutoSelectGroupParams struct {
+	ID       uuid.UUID
+	Codename string
 }
 
 // Apply writes nonempty pages in dependency order, inside the caller's transaction.
@@ -156,9 +172,9 @@ func (w *ProjectionWrites) Apply(ctx context.Context, db DBTX) error {
 
 func (w *ProjectionWrites) applyNames(ctx context.Context, db DBTX) error {
 	if err := projectionPages(ctx, db, w.Groups, `
-INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, facts, last_seen_at)
-VALUES `, ``, []string{"uuid", "uuid", "text", "text", "numeric", "jsonb", "timestamptz"}, func(r InsertProjectedGroupParams) []any {
-		return []any{r.ID, r.SupplierID, r.UpstreamRef, r.Name, r.Ratio, string(r.Facts), r.SeenAt}
+INSERT INTO suppliers.supplier_groups (id, supplier_id, upstream_ref, name, ratio, facts, key_eligible, last_seen_at)
+VALUES `, ``, []string{"uuid", "uuid", "text", "text", "numeric", "jsonb", "boolean", "timestamptz"}, func(r InsertProjectedGroupParams) []any {
+		return []any{r.ID, r.SupplierID, r.UpstreamRef, r.Name, r.Ratio, string(r.Facts), r.KeyEligible, r.SeenAt}
 	}); err != nil {
 		return fmt.Errorf("project groups: %w", err)
 	}
@@ -192,6 +208,20 @@ FROM (VALUES `, `) AS v(id) WHERE t.id = v.id`, []string{"uuid"}, func(r uuid.UU
 		return []any{r}
 	}); err != nil {
 		return fmt.Errorf("clear pool capacity: %w", err)
+	}
+	if err := projectionPages(ctx, db, w.AutoSelected, `
+UPDATE suppliers.supplier_groups AS t SET selected = true, codename = v.codename
+FROM (VALUES `, `) AS v(id, codename) WHERE t.id = v.id AND NOT t.selected AND t.codename IS NULL`, []string{"uuid", "text"}, func(r AutoSelectGroupParams) []any {
+		return []any{r.ID, r.Codename}
+	}); err != nil {
+		return fmt.Errorf("select groups: %w", err)
+	}
+	if err := projectionPages(ctx, db, w.Eligibility, `
+UPDATE suppliers.supplier_groups AS t SET key_eligible = v.eligible
+FROM (VALUES `, `) AS v(id, eligible) WHERE t.id = v.id AND t.key_eligible IS DISTINCT FROM v.eligible`, []string{"uuid", "boolean"}, func(r SetGroupEligibilityParams) []any {
+		return []any{r.ID, r.Eligible}
+	}); err != nil {
+		return fmt.Errorf("project key eligibility: %w", err)
 	}
 	if err := projectionPages(ctx, db, lastProjectionRows(w.Models, func(r UpsertProjectedModelParams) projectedNameKey {
 		return projectedNameKey{r.SupplierGroupID, r.UpstreamName}

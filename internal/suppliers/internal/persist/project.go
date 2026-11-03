@@ -37,6 +37,8 @@ type projector struct {
 	now        time.Time
 	aliases    map[aliasKey]alias // the supplier's aliases, by the group they hold in
 	plans      map[string]store.PlanVersion
+	offerRead  bool                                    // this commit holds a complete offer listing
+	groupRows  map[string]store.ListProjectedGroupsRow // what the tables held before the listing was applied
 }
 
 // aliasKey is the scope of an alias: the group it holds in, or the zero id for the whole supplier.
@@ -84,8 +86,8 @@ type desiredEndpoint struct {
 
 // projectListing writes the groups, models, endpoints and cost schedules of a listing already read, and leaves every row
 // that the listing agrees with alone.
-func projectListing(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State, cur store.LockSupplierRow, snap *catalog.Snapshot, now time.Time) error {
-	p := &projector{q: store.New(), tx: tx, id: id, st: st, snap: snap, nativeUnit: cur.NativeUnit, now: now}
+func projectListing(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State, cur store.LockSupplierRow, snap *catalog.Snapshot, offerRead bool, now time.Time) error {
+	p := &projector{q: store.New(), tx: tx, id: id, st: st, snap: snap, nativeUnit: cur.NativeUnit, offerRead: offerRead, now: now}
 	if err := p.read(ctx); err != nil {
 		return err
 	}
@@ -100,6 +102,7 @@ func projectListing(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State
 	if err := p.endpoints(ctx, groups, states); err != nil {
 		return err
 	}
+	p.autoSelect(groups, states)
 	return p.writes.Apply(ctx, tx)
 }
 
@@ -164,7 +167,7 @@ func (p *projector) readPlans(ctx context.Context) (map[string]store.PlanVersion
 }
 
 // groups makes and changes the groups of the listing and returns their ids by the supplier's ref. A group is made
-// unselected: which groups to use is a person's choice, and the projection never touches it or the codename.
+// unselected here; autoSelect puts the ones with a priced endpoint in use unless a person has chosen for them.
 func (p *projector) groups(ctx context.Context) (map[string]uuid.UUID, error) {
 	rows, err := p.q.ListProjectedGroups(ctx, p.tx, p.id)
 	if err != nil {
@@ -176,6 +179,7 @@ func (p *projector) groups(ctx context.Context) (map[string]uuid.UUID, error) {
 	for _, r := range rows {
 		stored[r.UpstreamRef] = r
 	}
+	p.groupRows = stored
 	pool := make(map[string]syncer.PoolCapacity, len(p.st.Pool))
 	for _, g := range p.st.Pool {
 		pool[g.GroupRef] = g
@@ -214,13 +218,17 @@ func (p *projector) group(g syncer.GroupSnap, found store.ListProjectedGroupsRow
 		id := uuid.NewV7()
 		p.writes.Groups = append(p.writes.Groups, store.InsertProjectedGroupParams{
 			ID:         id,
-			SupplierID: p.id, UpstreamRef: g.Ref, Name: g.Name, Ratio: g.Ratio, Facts: facts, SeenAt: &p.now,
+			SupplierID: p.id, UpstreamRef: g.Ref, Name: g.Name, Ratio: g.Ratio, Facts: facts,
+			KeyEligible: g.KeyEligible, SeenAt: &p.now,
 		})
 		return id, nil
 	}
 	was, err := factsObject(found.Facts)
 	if err != nil {
 		return uuid.Nil(), fmt.Errorf("group %s: what the table holds: %w", g.Ref, err)
+	}
+	if p.offerRead && found.KeyEligible != g.KeyEligible {
+		p.writes.Eligibility = append(p.writes.Eligibility, store.SetGroupEligibilityParams{ID: found.ID, Eligible: g.KeyEligible})
 	}
 	if found.Name == g.Name && sameRatio(found.Ratio, g.Ratio) && found.Present && bytes.Equal(was, facts) {
 		return found.ID, nil
@@ -374,6 +382,40 @@ func (p *projector) endpoints(ctx context.Context, groups map[string]uuid.UUID, 
 		p.makeEndpoint(key, desired[key])
 	}
 	return nil
+}
+
+// autoSelect puts a group in use when it has an endpoint with a cost plan and no person has ever chosen it. A group with
+// a codename has been chosen, selected or not, and is left alone: the sync never undoes a person's choice. The codename
+// is made here, once, and never changes; the database enforces both parts.
+func (p *projector) autoSelect(groups map[string]uuid.UUID, states map[nameKey]nameState) {
+	for _, g := range p.st.Groups {
+		if !p.hasPricedEndpoint(g, groups[g.Ref], states) {
+			continue
+		}
+		id := groups[g.Ref]
+		if found, known := p.groupRows[g.Ref]; known && (found.Selected || found.Codename != nil) {
+			continue
+		}
+		p.writes.AutoSelected = append(p.writes.AutoSelected, store.AutoSelectGroupParams{ID: id, Codename: store.Codename()})
+	}
+}
+
+// hasPricedEndpoint reports whether a group has a model whose cost plan the projection can put in force. It is the same
+// test wanted makes for an endpoint, without choosing which name of a model keeps it: a group with any priced name is
+// worth putting in use.
+func (p *projector) hasPricedEndpoint(g syncer.GroupSnap, group uuid.UUID, states map[nameKey]nameState) bool {
+	for _, m := range g.Models {
+		if m.Plan == "" || len(m.Formats) == 0 {
+			continue
+		}
+		if states[nameKey{group: group, name: m.Name}].model == (catalog.ModelID{}) {
+			continue
+		}
+		if v, ok := p.plans[syncer.PlanKey(g.Ref, m.Name)]; ok && v.Fingerprint == m.Plan {
+			return true
+		}
+	}
+	return false
 }
 
 func compareModelKeys(a, b modelKey) int {

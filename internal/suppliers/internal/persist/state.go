@@ -11,6 +11,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/reconcile"
 	"axiom/internal/suppliers/internal/store"
@@ -233,10 +234,13 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		if changed == 0 {
 			return syncer.ErrFenced
 		}
-		if err := writeStep(ctx, tx, id, c, cur, snap, now); err != nil {
+		if err := writeStep(ctx, tx, id, c, cur, snap, cfg.Keys, now); err != nil {
 			return err
 		}
-		return projectKeyPolicies(ctx, tx, id, c.KeyPolicies)
+		if err := projectKeyPolicies(ctx, tx, id, c.KeyPolicies); err != nil {
+			return err
+		}
+		return projectLostKeys(ctx, tx, id, c.KeyWrites)
 	})
 	if err != nil {
 		return fmt.Errorf("persist: commit version %d of supplier %s: %w", c.State.Version, id, err)
@@ -267,7 +271,7 @@ func (st stateStore) snapshot(ctx context.Context) (*catalog.Snapshot, error) {
 }
 
 // writeStep writes what a step produced next to its state.
-func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur store.LockSupplierRow, snap *catalog.Snapshot, now time.Time) error {
+func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur store.LockSupplierRow, snap *catalog.Snapshot, keys *secret.Keyring, now time.Time) error {
 	if len(c.Events) > 0 {
 		rows := make([]store.SyncEventRow, len(c.Events))
 		for i, e := range c.Events {
@@ -297,7 +301,10 @@ func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur
 		// left them.
 		return nil
 	}
-	return projectListing(ctx, tx, id, c.State, cur, snap, now)
+	if err := projectListing(ctx, tx, id, c.State, cur, snap, c.OfferRead, now); err != nil {
+		return err
+	}
+	return projectOnboarding(ctx, tx, id, c.KeyWrites, keys)
 }
 
 // nextDue is when the supplier next needs a round: the earliest time one of its tasks may run, or never while the

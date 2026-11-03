@@ -9,7 +9,9 @@ package syncer
 
 import (
 	"time"
+	"uuid"
 
+	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -70,6 +72,9 @@ type ModelSnap struct {
 type GroupSnap struct {
 	Ref, Name, Ratio, Facts string
 	Models                  []ModelSnap
+	// KeyEligible is whether a key of ours can serve this group. It is recomputed by every complete offer read and is
+	// not stored: an older node decodes the state strictly (jsonx.UnmarshalKnown), and this is the projection's to keep.
+	KeyEligible bool `json:"-"`
 }
 
 // PlanKey names an endpoint the way the engine keeps it in its state and the way its cost plans are stored
@@ -179,4 +184,45 @@ type Commit struct {
 	// KeyPolicies is a complete fresh listing, projected with this commit and never encoded in State.
 	// A pointer distinguishes an empty completed listing from a step that did not read keys.
 	KeyPolicies *[]adapter.KeyState
+	// OfferRead is set when this commit holds a complete offer listing, so GroupSnap.KeyEligible is fresh.
+	OfferRead bool
+	// KeyWrites are the keys the keys task made, bound and found gone: applied with this commit, never encoded in State.
+	KeyWrites KeyWrites
+}
+
+// KeyWrites is what the keys task did to the supplier's keys beyond reading them. A made key is one the sync created
+// for a group; a bound key is one a person bound by reference, whose text the sync has now read; a lost key is one a
+// complete listing no longer has.
+type KeyWrites struct {
+	Made   []KeyMade
+	Bound  []KeyBound
+	Lost   []adapter.KeyRef
+	Failed []KeyFailure
+	// StaleBefore is when a key must have last been listed for Lost to erase its credential: a listing that is briefly
+	// behind must not delete a key just made.
+	StaleBefore time.Time
+}
+
+// KeyMade is a key the sync made for a group, with its text. The text is sealed by the store and never kept elsewhere.
+type KeyMade struct {
+	Ref      adapter.KeyRef
+	GroupRef string
+	Status   adapter.KeyStatus
+	Secret   secret.Secret
+}
+
+// KeyBound is a key a person bound by reference, now with its text. ID is the credential row that is waiting for it.
+type KeyBound struct {
+	ID       uuid.UUID
+	Ref      adapter.KeyRef
+	GroupRef string
+	Secret   secret.Secret
+}
+
+// KeyFailure is a group whose key could not be made or read, with the fixed reason and when to try again. The reason is
+// one of the adapter's key errors; the supplier's own words are never kept.
+type KeyFailure struct {
+	GroupRef string
+	Reason   string
+	RetryAt  time.Time
 }

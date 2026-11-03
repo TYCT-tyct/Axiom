@@ -54,7 +54,7 @@ func TestKeysAndKeySecret(t *testing.T) {
 	srv := routes(panel(t))
 	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
 	keys, err := readKeys(t, m)
-	want := []adapter.KeyState{{Ref: "2", GroupRef: "2", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}, {Ref: "1", GroupRef: "1", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}}
+	want := []adapter.KeyState{{Ref: "2", GroupRef: "2", Name: "claude-test", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}, {Ref: "1", GroupRef: "1", Name: "k1", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}}
 	if err != nil || !cmp.Equal(keys, want) {
 		t.Fatalf("Keys = %+v, %v; want %+v", keys, err, want)
 	}
@@ -410,4 +410,53 @@ func usageOf(t *testing.T, c adapter.Charge, item catalog.Item) int64 {
 	}
 	n, _ := total.Rat().Float64()
 	return int64(n)
+}
+
+// TestCreateKey: a key is made in the group, under Axiom's name and idempotency key, and the three refusals are told
+// apart from a supplier error.
+func TestCreateKey(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	t.Run("made", func(t *testing.T) {
+		t.Parallel()
+		srv := routes(map[string]adapter.Response{
+			"POST /api/v1/keys": {Status: 200, Body: []byte(`{"code":0,"data":{"id":3,"name":"axiom-1-2","group_id":1,"status":"active"}}`)},
+		})
+		ref, err := manager0(t, srv, login(t, now.Add(24*time.Hour))).(adapter.KeyMaker).CreateKey(t.Context(), "1", "axiom-1-2")
+		if err != nil || ref != "3" {
+			t.Fatalf("CreateKey = %q, %v", ref, err)
+		}
+		req := srv.requests[0]
+		if req.Header.Get("Idempotency-Key") != "axiom-1-2" || !strings.Contains(string(req.Body), `"group_id":1`) {
+			t.Errorf("the create request: %+v", req)
+		}
+	})
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   error
+	}{
+		{"the account may not use the group", 403, `{"code":"GROUP_NOT_ALLOWED"}`, adapter.ErrKeyGroupUnavailable},
+		{"the login may not manage keys", 403, `{"code":"FORBIDDEN"}`, adapter.ErrKeyNotPermitted},
+		{"the group is gone", 404, `{"code":"NOT_FOUND"}`, adapter.ErrKeyGroupUnavailable},
+		{"the supplier refuses", 400, `{"code":"BAD_REQUEST"}`, adapter.ErrKeyRefused},
+		{"a supplier error", 500, `{}`, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			srv := routes(map[string]adapter.Response{"POST /api/v1/keys": {Status: c.status, Body: []byte(c.body)}})
+			_, err := manager0(t, srv, login(t, now.Add(24*time.Hour))).(adapter.KeyMaker).CreateKey(t.Context(), "1", "axiom-1-2")
+			if c.want == nil {
+				if err == nil || errors.Is(err, adapter.ErrKeyRefused) || errors.Is(err, adapter.ErrKeyNotPermitted) {
+					t.Fatalf("CreateKey = %v, want a task failure", err)
+				}
+				return
+			}
+			if !errors.Is(err, c.want) {
+				t.Fatalf("CreateKey = %v, want %v", err, c.want)
+			}
+		})
+	}
 }

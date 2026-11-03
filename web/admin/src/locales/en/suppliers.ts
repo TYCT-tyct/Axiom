@@ -1,6 +1,6 @@
 export default {
   description:
-    "The upstream suppliers you have connected. Connect one, choose its groups, bind keys and confirm what a unit of its balance is worth; only then does it take traffic.",
+    "The upstream suppliers you have connected. Give an address, an account and its login; Axiom reads the groups, prices and models, puts the groups it can sell in use and makes a key for each. Confirm what a unit of its balance is worth and it takes traffic.",
   empty: { title: "No suppliers yet", body: "Connect the first supplier so Axiom has an upstream to route to." },
   noMatch: { title: "No supplier matches", body: "Try another status, or clear the filter." },
   anyStatus: "Any status",
@@ -34,15 +34,16 @@ export default {
     waiting: "To do",
     connected: {
       title: "Connect to the supplier",
-      todo: "Logging in and reading groups, keys and models. If it fails the reason is shown here; replace the login and try again.",
+      todo: "Logging in and reading groups, prices, models and keys. If it fails the reason is shown here; replace the login and try again.",
     },
     groups: {
-      title: "Choose groups",
-      todo: "Choose the groups below you want to use. Only chosen groups get endpoints.",
+      title: "Read groups and prices",
+      todo: "Axiom reads the groups, prices and models. A group with a priced model is put in use by itself; you can stop using one below.",
     },
     keys: {
-      title: "Bind keys",
-      todo: "Bind a key the supplier already has to each chosen group (see “Unbound keys” below).",
+      title: "Make a key for each group",
+      todo: "Axiom makes a key for every group it can call, in the background. A group it could not set up says why below.",
+      failed: "{{count}} group(s) could not be set up; the reason is beside each group.",
     },
     unit: {
       title: "Confirm the unit value",
@@ -61,7 +62,10 @@ export default {
       "Axiom didn’t recognise the system this site runs. Check the address, or ask a developer to write the adapter first.",
     detect: "Probe",
     detected: "Recognised as {{kind}}",
+    auto: "Axiom reads the groups, prices and models, puts the groups it can sell in use, and makes a key for each group it can call. The login must be allowed to create keys and read their text.",
+    scopes: "For new-api, the personal access token needs the api_key:read, api_key:write and api_key:reveal scopes.",
     name: "Name",
+    nameHint: "Filled in from the site's host name; you can change it.",
     account: "Login account",
     accountHint: "The email or username Axiom logs in as. It can’t be changed after connecting.",
     currency: "Settlement currency",
@@ -71,7 +75,7 @@ export default {
     loginMissing: "Fill in at least one part of the login.",
     detailsInvalid: "Enter a name, the login account, and a settlement currency of 3 capital letters.",
     connecting: "Connecting “{{name}}”: logging in and reading.",
-    next: "Next: choose groups, bind keys and confirm the unit value.",
+    next: "Next: Axiom reads the groups and makes the keys; then confirm the unit value.",
     view: "Open the supplier’s page",
   },
   login: {
@@ -107,7 +111,7 @@ export default {
     body: "Removing can’t be undone. It leaves routing at once and erases the login and the sealed text of every key; calls in flight end with the key they hold.",
     action: "Remove",
     started: "Removed. The login and the sealed keys are erased.",
-    keys: "In M1 Axiom doesn’t write to the supplier, so the keys it used there have to be revoked by a person; the audit entry lists them.",
+    keys: "Axiom never deletes keys at the supplier, including the ones it made (named axiom-…). Revoke them there if you want them gone; the audit entry gives the count.",
   },
   unit: {
     open: "Confirm unit value",
@@ -130,6 +134,17 @@ export default {
     selected: "In use",
     notSelected: "Not in use",
     gone: "No longer listed",
+    key: {
+      pending: "Making key",
+      ready: "Key ready",
+      failed: "Key failed",
+      unavailable: "No key needed",
+    },
+    keyReason: {
+      not_permitted: "The login may not create or read keys at this supplier.",
+      group_unavailable: "The account can’t use this group.",
+      refused: "The supplier refused to make a key for this group.",
+    },
     empty: { title: "No groups read yet", body: "They appear here once connecting is done." },
   },
   group: {
@@ -146,14 +161,14 @@ export default {
     },
   },
   credentials: {
-    title: "Bound keys",
+    title: "Keys",
     key: "Key",
     group: "Group",
     until: "Cooldown / expiry",
     concurrency: "Max concurrency",
     cooldown: "Cooling until",
     state: {
-      binding: "Binding",
+      binding: "Waiting for its text",
       active: "Active",
       upstream_disabled: "Disabled upstream",
       quota_exhausted: "Quota used up",
@@ -161,22 +176,25 @@ export default {
       disabled: "Disabled",
       erased: "Erased",
     },
-    empty: { title: "No keys bound yet", body: "Bind a key the supplier already has to each chosen group." },
+    empty: {
+      title: "No keys yet",
+      body: "Axiom makes a key for each group it can call; they appear here as the sync works.",
+    },
   },
   unbound: {
-    title: "Unbound keys",
+    title: "Keys not used",
     groupRef: "For group",
     state: { active: "Active", disabled: "Disabled", quota_exhausted: "Quota used up", expired: "Expired" },
-    empty: { title: "No unbound keys", body: "Every key the supplier lists is bound." },
+    empty: { title: "No unused keys", body: "Every key the supplier lists is bound to a group." },
   },
   bind: {
     action: "Bind",
     title: "Bind a key",
-    body: "Have Axiom send the chosen group’s calls with this key of the supplier:",
+    body: "Use this key of the supplier for the chosen group. The sync reads and seals its text. Normally Axiom makes the keys itself; this is for one it did not make.",
     group: "Group",
     choose: "Choose a group",
     missing: "Choose a group.",
-    done: "Binding has started; the state becomes “Active” shortly.",
+    done: "Binding has started; the sync will read and activate the key shortly.",
   },
   endpoints: {
     title: "Endpoints",

@@ -312,9 +312,10 @@ func TestAListingFillsTheTablesAndReadingItAgainWritesNothing(t *testing.T) {
 	s := c.acquire(c.node("a"))
 	c.commitListing(s, 1, groups)
 
-	// The groups, made unselected: which groups to use is a person's choice.
-	same(t, "supplier_groups", c.column("supplier_groups", "upstream_ref || ' ' || ratio::text || ' ' || facts::text || ' ' || present::text || selected::text || coalesce(codename, '-')", "upstream_ref"),
-		[]string{`default 0.8 {"platform": "openai"} truefalse-`, "vip 1.2 {} truefalse-"})
+	// A group with a priced endpoint is put in use by itself and given a codename; the codename is random, so only
+	// whether it has one is read.
+	same(t, "supplier_groups", c.column("supplier_groups", "upstream_ref || ' ' || ratio::text || ' ' || facts::text || ' ' || present::text || selected::text || (codename IS NOT NULL)::text", "upstream_ref"),
+		[]string{`default 0.8 {"platform": "openai"} truetruetrue`, "vip 1.2 {} truetruetrue"})
 
 	// Every name the listing has is a row, with the model it maps to, or none. The two rows of one name are the two
 	// groups, in the order formats::text sorts them.
@@ -607,4 +608,22 @@ func TestAGroupNothingCanBeCalledFromIsNotListed(t *testing.T) {
 		"gpt-4o true",
 		"gpt-4o known -",
 	})
+}
+
+// TestAGroupWithoutASellableEndpointIsNotSelected: a planned model the catalog cannot map makes no endpoint, so it does
+// not make the group one the sync puts in use by itself; a person can still select the group and map the name.
+func TestAGroupWithoutASellableEndpointIsNotSelected(t *testing.T) {
+	t.Parallel()
+	c := newCluster(t)
+	groups := []listedGroup{{ref: "unknown", name: "Unknown", ratio: "1", models: []listedModel{
+		{name: "not-in-the-catalog", formats: []protocol.Format{protocol.Chat}, plan: &unitPrice},
+	}}}
+	s := c.acquire(c.node("a"))
+	c.commitListing(s, 1, groups)
+	same(t, "the group waits for a person", c.column("supplier_groups", "upstream_ref || ' ' || selected::text || ' ' || (codename IS NOT NULL)::text", "upstream_ref"),
+		[]string{"unknown false false"})
+	if got := c.count("endpoints"); got != 0 {
+		t.Errorf("the listing made %d endpoints, want none", got)
+	}
+	same(t, "the name to map", c.pending(), []string{"not-in-the-catalog"})
 }

@@ -1,7 +1,8 @@
 import type { AdminSchemas } from "@axiom/api";
 
 export default {
-  description: "接入的上游供应商：连上它、选用它的分组、绑定 key、确认余额单位的价值，之后它才会接收流量。",
+  description:
+    "接入的上游供应商：填网址、账号和登录信息，Axiom 会读取分组、价格和模型，选用能卖的分组，并为每个能调用的分组自动建 key；确认余额单位的价值后它才会接收流量。",
   empty: { title: "还没有接入供应商", body: "接入第一个供应商，Axiom 才有可以路由的上游。" },
   noMatch: { title: "没有符合条件的供应商", body: "换一个状态，或清除筛选。" },
   anyStatus: "全部状态",
@@ -33,9 +34,19 @@ export default {
     title: "接入进度",
     done: "已完成",
     waiting: "待办",
-    connected: { title: "连上供应商", todo: "正在登录并读取分组、key 和模型；失败时这里会写明原因，换一个登录再试。" },
-    groups: { title: "选用分组", todo: "在下面的分组里选用要用的，被选用的分组才会生成端点。" },
-    keys: { title: "绑定 key", todo: "给每个被选用的分组绑定供应商那边已有的 key（见下面“未绑定的 key”）。" },
+    connected: {
+      title: "连上供应商",
+      todo: "正在登录并读取分组、价格、模型和 key；失败时这里会写明原因，换一个登录再试。",
+    },
+    groups: {
+      title: "读取分组和价格",
+      todo: "Axiom 读取分组、价格和模型；有定价模型的分组会自动选用。也可以在下面停用某个分组。",
+    },
+    keys: {
+      title: "为每个分组建 key",
+      todo: "Axiom 在后台为每个能调用的分组建一个 key；建不成的分组会在下面写明原因。",
+      failed: "有 {{count}} 个分组没能建好，原因写在各分组旁边。",
+    },
     unit: { title: "确认单位价值", todo: "告诉 Axiom 供应商余额的 1 个单位值多少钱；确认之前它的端点不会进入路由。" },
   },
   connect: {
@@ -48,7 +59,10 @@ export default {
     unrecognised: "没有认出这个站点用的系统。确认网址无误，或请开发者先写好适配器。",
     detect: "探测",
     detected: "识别为 {{kind}}",
+    auto: "Axiom 读取分组、价格和模型，选用能卖的分组，并为每个能调用的分组建一个 key。登录账号要能建 key、读取 key 的内容。",
+    scopes: "new-api 的个人访问令牌要带 api_key:read、api_key:write、api_key:reveal 权限。",
     name: "名称",
+    nameHint: "已按站点的域名填好，可以改。",
     account: "登录账号",
     accountHint: "Axiom 用来登录供应商的邮箱或用户名。接入后不能改。",
     currency: "结算币种",
@@ -57,7 +71,7 @@ export default {
     loginMissing: "请至少填一项登录信息。",
     detailsInvalid: "请填名称、登录账号，以及 3 个大写字母的结算币种。",
     connecting: "已开始接入“{{name}}”，正在登录并读取。",
-    next: "接下来要选用分组、绑定 key、确认单位价值。",
+    next: "接下来 Axiom 会读取分组并建 key，然后确认单位价值。",
     view: "打开供应商页面",
   },
   login: {
@@ -116,6 +130,17 @@ export default {
     selected: "已选用",
     notSelected: "未选用",
     gone: "供应商已不再列出",
+    key: {
+      pending: "正在建 key",
+      ready: "key 已就绪",
+      failed: "key 建失败",
+      unavailable: "不需要 key",
+    },
+    keyReason: {
+      not_permitted: "这个登录不能在该供应商建 key 或读取 key 内容。",
+      group_unavailable: "这个账号不能用该分组。",
+      refused: "供应商拒绝为该分组建 key。",
+    },
     empty: { title: "还没有读到分组", body: "接入完成后会列在这里。" },
   },
   group: {
@@ -132,14 +157,14 @@ export default {
     },
   },
   credentials: {
-    title: "已绑定的 key",
+    title: "使用的 key",
     key: "key",
     group: "分组",
     until: "冷却 / 过期",
     concurrency: "最大并发",
     cooldown: "冷却至",
     state: {
-      binding: "绑定中",
+      binding: "等待读取内容",
       active: "可用",
       upstream_disabled: "上游已停用",
       quota_exhausted: "额度用尽",
@@ -147,22 +172,22 @@ export default {
       disabled: "已停用",
       erased: "已清除",
     },
-    empty: { title: "还没有绑定 key", body: "给被选用的分组绑定供应商那边已有的 key。" },
+    empty: { title: "还没有 key", body: "Axiom 会为每个能调用的分组建 key，同步推进后会出现在这里。" },
   },
   unbound: {
-    title: "未绑定的 key",
+    title: "未使用的 key",
     groupRef: "对应的分组",
     state: { active: "可用", disabled: "已停用", quota_exhausted: "额度用尽", expired: "已过期" },
-    empty: { title: "没有未绑定的 key", body: "供应商列出的 key 都已经绑定了。" },
+    empty: { title: "没有未使用的 key", body: "供应商列出的 key 都已绑定到分组。" },
   },
   bind: {
     action: "绑定",
     title: "绑定 key",
-    body: "让 Axiom 用供应商的这个 key 发送所选分组的调用：",
+    body: "让所选分组用供应商的这个 key。同步会读取并加密保存它的内容。通常 Axiom 自己建 key，这里用于它没建过的 key。",
     group: "分组",
     choose: "选择分组",
     missing: "请选择一个分组。",
-    done: "已开始绑定，稍后状态会变成“可用”。",
+    done: "已开始绑定，同步稍后会读取并启用这个 key。",
   },
   endpoints: {
     title: "端点",

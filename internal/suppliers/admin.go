@@ -214,6 +214,12 @@ type Group struct {
 	Selected, Present bool
 	Codename          string
 	Facts             map[string]any
+	// KeyState is how the key Axiom uses for the group stands: ready (one is stored), pending (the sync will make one),
+	// failed (the last attempt did not work, see KeyReason) or unavailable (the group is not in use, gone, or cannot be
+	// called, so no key is needed).
+	KeyState string
+	// KeyReason is the fixed reason a key could not be made: not_permitted, group_unavailable or refused.
+	KeyReason string
 	// Pool is what the management API of a pool last said of the group's accounts; nil when this supplier is not one, or
 	// nothing has been read yet.
 	Pool *Pool
@@ -229,7 +235,7 @@ type Pool struct {
 	ObservedAt               time.Time
 }
 
-// Credential is a key bound to a group.
+// Credential is a key Axiom uses for a group.
 type Credential struct {
 	ID, Group      uuid.UUID
 	UpstreamKeyRef string
@@ -279,12 +285,43 @@ type Detail struct {
 	Endpoints   []Endpoint
 }
 
-func groupOf(id uuid.UUID, ref, name, ratio string, facts []byte, selected bool, codename *string, present bool, pool *Pool) (Group, error) {
-	g := Group{ID: id, UpstreamRef: ref, Name: name, Ratio: ratio, Selected: selected, Codename: deref(codename), Present: present, Pool: pool}
-	if err := jsonx.Unmarshal(facts, &g.Facts); err != nil {
-		return Group{}, fmt.Errorf("the facts of group %s: %w", id, err)
+// groupFacts is one row of a group as the tables hold it, before the fixed names of its key state are worked out.
+type groupFacts struct {
+	ID                             uuid.UUID
+	Ref, Name, Ratio               string
+	Facts                          []byte
+	Selected, Present, KeyEligible bool
+	Codename, KeyError             *string
+	Pool                           *Pool
+}
+
+func groupOf(f groupFacts) (Group, error) {
+	state, reason := keyStateOf(f.Present, f.Selected, f.KeyEligible, f.KeyError)
+	g := Group{
+		ID: f.ID, UpstreamRef: f.Ref, Name: f.Name, Ratio: f.Ratio, Selected: f.Selected, Codename: deref(f.Codename),
+		Present: f.Present, KeyState: state, KeyReason: reason, Pool: f.Pool,
+	}
+	if err := jsonx.Unmarshal(f.Facts, &g.Facts); err != nil {
+		return Group{}, fmt.Errorf("the facts of group %s: %w", f.ID, err)
 	}
 	return g, nil
+}
+
+// keyStateOf answers how a group's key stands from the group's own row: failed if the last attempt said why, pending if
+// the projection says it needs a key, and unavailable if it does not. A group the supplier no longer lists, or one a
+// person unselected, is unavailable even if an older attempt left a reason. Whether one is stored is read from the
+// credentials; the detail has them and raises pending to ready, while a change answers without reading every credential.
+func keyStateOf(present, selected, eligible bool, keyError *string) (string, string) {
+	switch {
+	case !present || !selected:
+		return "unavailable", ""
+	case keyError != nil:
+		return "failed", *keyError
+	case eligible:
+		return "pending", ""
+	default:
+		return "unavailable", ""
+	}
 }
 
 // poolOf reads the pool columns of a group. A group no pool read has reported has no row, which is nil and not a
@@ -321,8 +358,11 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, e
 		return Detail{}, fmt.Errorf("read the groups: %w", err)
 	}
 	for _, g := range groups {
-		group, err := groupOf(g.ID, g.UpstreamRef, g.Name, g.Ratio, g.Facts, g.Selected, g.Codename, g.Present,
-			poolOf(g.PoolAccounts, g.PoolFailed, g.PoolUsable, g.PoolHeadroom, g.PoolCapacity, g.PoolLow, g.PoolObservedAt))
+		group, err := groupOf(groupFacts{
+			ID: g.ID, Ref: g.UpstreamRef, Name: g.Name, Ratio: g.Ratio, Facts: g.Facts, Selected: g.Selected,
+			Present: g.Present, KeyEligible: g.KeyEligible, Codename: g.Codename, KeyError: g.KeyError,
+			Pool: poolOf(g.PoolAccounts, g.PoolFailed, g.PoolUsable, g.PoolHeadroom, g.PoolCapacity, g.PoolLow, g.PoolObservedAt),
+		})
 		if err != nil {
 			return Detail{}, err
 		}
@@ -332,9 +372,28 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, e
 	if err != nil {
 		return Detail{}, fmt.Errorf("read the credentials: %w", err)
 	}
+	hasKey := make(map[uuid.UUID]bool, len(creds))
+	waiting := make(map[uuid.UUID]bool, len(creds))
 	for _, c := range creds {
 		d.Credentials = append(d.Credentials, credentialOf(
 			c.ID, c.SupplierGroupID, c.UpstreamKeyRef, c.Status, c.CooldownUntil, c.ExpiresAt, c.MaxConcurrency, c.RequestsPerMinute))
+		switch c.Status {
+		case "binding":
+			waiting[c.SupplierGroupID] = true
+		case "erased":
+		default:
+			hasKey[c.SupplierGroupID] = true
+		}
+	}
+	// The groups were read from their own rows, without the credentials, so that a change answers without reading them;
+	// the detail reads the credentials anyway and says which groups have one or are waiting for its text.
+	for i := range d.Groups {
+		switch {
+		case hasKey[d.Groups[i].ID]:
+			d.Groups[i].KeyState, d.Groups[i].KeyReason = "ready", ""
+		case waiting[d.Groups[i].ID]:
+			d.Groups[i].KeyState, d.Groups[i].KeyReason = "pending", ""
+		}
 	}
 	endpoints, err := q.ListEndpointsOf(ctx, tx, id)
 	if err != nil {
@@ -425,9 +484,9 @@ func (a *Admin) SetStatus(ctx context.Context, tx pg.Tx, actor audit.Actor, id u
 // is raised, so it leaves the routing snapshot at the next reload and a round of the sync that began before is
 // discarded; its sealed login is deleted; and the sealed key of each credential is cleared and the credential marked
 // `erased`. The credentials stay as rows, because attempts made with them point at the row. Calls in flight go on with
-// the key they hold in memory. M1 never writes at the supplier, so the keys a person has to revoke there stay listed on
-// the erased credential rows (their upstream_key_ref), and the audit entry says how many. A supplier removed already is returned as it is; a supplier a former version left in `removing` is
-// removed now.
+// the key they hold in memory. Axiom never deletes keys at the supplier, including the ones it made, so the keys a person
+// has to revoke there stay listed on the erased credential rows (their upstream_key_ref), and the audit entry says how
+// many. A supplier removed already is returned as it is; a supplier a former version left in `removing` is removed now.
 func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, reason string) (Supplier, error) {
 	row, err := a.locked(ctx, tx, id, Connecting, Active, LowBalance, NeedsAttention, Paused, Removing, Removed)
 	if err != nil {

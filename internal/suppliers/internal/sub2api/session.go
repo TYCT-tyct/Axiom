@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"axiom/internal/platform/jsonx"
@@ -213,7 +214,18 @@ func (s *session) authed(ctx context.Context, r adapter.Request) (adapter.Respon
 		return adapter.Response{}, err
 	}
 	for attempt := 0; ; attempt++ {
-		r.Header = http.Header{"Authorization": {"Bearer " + s.login.Access.Reveal()}}
+		header := http.Header{"Authorization": {"Bearer " + s.login.Access.Reveal()}}
+		// A caller may add headers of its own (an idempotency key, say); the login's own header is the only one it may
+		// not set.
+		for name, values := range r.Header {
+			if strings.EqualFold(name, "Authorization") {
+				continue
+			}
+			for _, v := range values {
+				header.Add(name, v)
+			}
+		}
+		r.Header = header
 		resp, err := s.c.Do(ctx, r)
 		if err != nil {
 			return adapter.Response{}, fmt.Errorf("sub2api: %s %s: %w", r.Method, r.Path, err)

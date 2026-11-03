@@ -98,7 +98,7 @@ var knownCodes = map[string]bool{
 	"TOKEN_EXPIRED": true, "INVALID_TOKEN": true, "UNAUTHORIZED": true, "TOKEN_REVOKED": true, "USER_INACTIVE": true,
 	"SESSION_BINDING_MISMATCH": true, "INVALID_CREDENTIALS": true, "REFRESH_TOKEN_INVALID": true,
 	"INSUFFICIENT_BALANCE": true, "INVALID_API_KEY": true, "API_KEY_QUOTA_EXHAUSTED": true, "USAGE_LIMIT_EXCEEDED": true,
-	"rate_limit_exceeded": true,
+	"GROUP_NOT_ALLOWED": true, "rate_limit_exceeded": true,
 }
 
 // errorCode is the known code of an error answer: the reason when there is one, else the code when it is a string. The

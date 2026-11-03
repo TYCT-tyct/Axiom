@@ -103,6 +103,7 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 
 type keyDTO struct {
 	ID        number     `json:"id"`
+	Name      string     `json:"name"`
 	Key       string     `json:"key"`
 	GroupID   number     `json:"group_id"`
 	Status    string     `json:"status"`
@@ -121,7 +122,10 @@ func keyIDs(keys []adapter.KeyState) map[number]bool {
 }
 
 func keyState(k keyDTO) adapter.KeyState {
-	out := adapter.KeyState{Ref: adapter.KeyRef(k.ID), GroupRef: string(k.GroupID), Status: keyStatus(k.Status), Policy: &adapter.KeyPolicy{ExpiresAt: k.ExpiresAt}}
+	out := adapter.KeyState{
+		Ref: adapter.KeyRef(k.ID), GroupRef: string(k.GroupID), Name: k.Name, Status: keyStatus(k.Status),
+		Policy: &adapter.KeyPolicy{ExpiresAt: k.ExpiresAt},
+	}
 	if out.Status == adapter.KeyQuotaExhausted {
 		out.ResetAt = k.resetAt()
 	}
@@ -247,6 +251,8 @@ type builtGroup struct {
 	Models    []string
 	// ModelsUnread is set when no key of the group could list its models: they stay as they were, not empty.
 	ModelsUnread bool
+	// NeedsKey is set when the group can be sold but has no key of ours to read its models with.
+	NeedsKey bool
 }
 
 func decodeOffer(raw adapter.Listing) offerProgress {
@@ -371,7 +377,9 @@ func (m *manager) startOffer(ctx context.Context, groups []groupDTO) (offerProgr
 func (p offerProgress) offer() []adapter.Group {
 	out := make([]adapter.Group, 0, len(p.Built))
 	for _, b := range p.Built {
-		g := adapter.Group{Ref: b.Ref, Name: b.Name, Ratio: b.Ratio, Facts: b.Facts, ModelsUnread: b.ModelsUnread}
+		g := adapter.Group{
+			Ref: b.Ref, Name: b.Name, Ratio: b.Ratio, Facts: b.Facts, ModelsUnread: b.ModelsUnread, NeedsKey: b.NeedsKey,
+		}
 		if !b.ModelsUnread {
 			formats := quirks{}.Formats(b.Facts)
 			for _, n := range b.Models {
@@ -482,6 +490,7 @@ func (m *manager) group(ctx context.Context, g groupDTO, overrides map[string]nu
 		return builtGroup{}, err
 	}
 	b.Facts = f
+	b.NeedsKey = key == nil && len((quirks{}).Formats(f)) > 0
 	if key != nil {
 		// The key's own view is the supplier's final word on the multiplier (it knows the peak hours) and on the models.
 		if resolved, ok, err := m.resolvedMultiplier(ctx, key); err != nil {

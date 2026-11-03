@@ -1509,6 +1509,51 @@ func (e SupplierEndpointQuantization) Valid() bool {
 	}
 }
 
+// Defines values for SupplierGroupKeyReason.
+const (
+	SupplierGroupKeyReasonGroupUnavailable SupplierGroupKeyReason = "group_unavailable"
+	SupplierGroupKeyReasonNotPermitted     SupplierGroupKeyReason = "not_permitted"
+	SupplierGroupKeyReasonRefused          SupplierGroupKeyReason = "refused"
+)
+
+// Valid indicates whether the value is a known member of the SupplierGroupKeyReason enum.
+func (e SupplierGroupKeyReason) Valid() bool {
+	switch e {
+	case SupplierGroupKeyReasonGroupUnavailable:
+		return true
+	case SupplierGroupKeyReasonNotPermitted:
+		return true
+	case SupplierGroupKeyReasonRefused:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupplierGroupKeyState.
+const (
+	SupplierGroupKeyStateFailed      SupplierGroupKeyState = "failed"
+	SupplierGroupKeyStatePending     SupplierGroupKeyState = "pending"
+	SupplierGroupKeyStateReady       SupplierGroupKeyState = "ready"
+	SupplierGroupKeyStateUnavailable SupplierGroupKeyState = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the SupplierGroupKeyState enum.
+func (e SupplierGroupKeyState) Valid() bool {
+	switch e {
+	case SupplierGroupKeyStateFailed:
+		return true
+	case SupplierGroupKeyStatePending:
+		return true
+	case SupplierGroupKeyStateReady:
+		return true
+	case SupplierGroupKeyStateUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SupplierStatus.
 const (
 	SupplierStatusActive         SupplierStatus = "active"
@@ -4341,7 +4386,7 @@ type SupplierNativeUnit string
 type SupplierCreate struct {
 	Kind string `json:"kind"`
 
-	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`. `login_fields` lists what the kind takes.
+	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. `login_fields` lists what the kind takes.
 	Login  SupplierLogin `json:"login"`
 	Name   string        `json:"name"`
 	Origin string        `json:"origin"`
@@ -4421,8 +4466,14 @@ type SupplierGroup struct {
 	Facts *map[string]interface{} `json:"facts,omitempty"`
 
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
-	Id   Uuid   `json:"id"`
-	Name string `json:"name"`
+	Id Uuid `json:"id"`
+
+	// KeyReason Why the last attempt to make a key failed: the login may not manage keys, the account may not use this group, or the supplier refused. Present only with `key_state` `failed`.
+	KeyReason *SupplierGroupKeyReason `json:"key_reason,omitempty"`
+
+	// KeyState How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
+	KeyState *SupplierGroupKeyState `json:"key_state,omitempty"`
+	Name     string                 `json:"name"`
 
 	// Pool What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool, or a read has not reported it yet.
 	Pool *SupplierPool `json:"pool,omitempty"`
@@ -4438,6 +4489,12 @@ type SupplierGroup struct {
 	UpstreamRef string `json:"upstream_ref"`
 }
 
+// SupplierGroupKeyReason Why the last attempt to make a key failed: the login may not manage keys, the account may not use this group, or the supplier refused. Present only with `key_state` `failed`.
+type SupplierGroupKeyReason string
+
+// SupplierGroupKeyState How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
+type SupplierGroupKeyState string
+
 // SupplierList defines model for SupplierList.
 type SupplierList struct {
 	Data []Supplier `json:"data"`
@@ -4446,7 +4503,7 @@ type SupplierList struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
-// SupplierLogin What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`. `login_fields` lists what the kind takes.
+// SupplierLogin What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. `login_fields` lists what the kind takes.
 type SupplierLogin struct {
 	AccessToken          *string    `json:"access_token,omitempty"`
 	AccessTokenExpiresAt *time.Time `json:"access_token_expires_at,omitempty"`
@@ -4459,7 +4516,7 @@ type SupplierLogin struct {
 
 // SupplierLoginUpdate defines model for SupplierLoginUpdate.
 type SupplierLoginUpdate struct {
-	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`. `login_fields` lists what the kind takes.
+	// Login What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. `login_fields` lists what the kind takes.
 	Login SupplierLogin `json:"login"`
 
 	// Reason Why the person is doing this. It goes to the audit log.

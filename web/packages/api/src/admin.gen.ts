@@ -1458,7 +1458,7 @@ export interface paths {
         put?: never;
         /**
          * Connect a supplier
-         * @description Connects the supplier at `origin` as `upstream_account`, with the login `detectSupplier` said its kind needs (stored sealed, never returned). It answers at once with the supplier in `connecting`; the first sync logs in, reads the groups, keys and models, and moves it to `active`, or to `needs_attention` with the reason, so the page polls `getSupplier`. The origin and the account cannot change later, so a changed address cannot carry old credentials to a new host; an origin and account already connected is a 409. The address is checked by the outbound client like every supplier request, and one it refuses is a 422.
+         * @description Connects the supplier at `origin` as `upstream_account`, with the login `detectSupplier` said its kind needs (stored sealed, never returned). It answers at once with the supplier in `connecting`; the first sync logs in, reads the groups, prices, models and keys, selects the groups it can sell, makes a key for each group it can call, and moves it to `active`, or to `needs_attention` with the reason, so the page polls `getSupplier`. The origin and the account cannot change later, so a changed address cannot carry old credentials to a new host; an origin and account already connected is a 409. The address is checked by the outbound client like every supplier request, and one it refuses is a 422.
          */
         post: operations["createSupplier"];
         delete?: never;
@@ -1666,7 +1666,7 @@ export interface paths {
         put?: never;
         /**
          * Use one of the supplier's keys for a group
-         * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected. Use a dedicated key. If its model limits or expiry cannot be read, create an unrestricted dedicated key upstream and grant permission to read those fields; unreadable permissions deny all models.
+         * @description Usually unnecessary: the sync makes a key for every group it can call, and a group's `key_state` says how that stands. This binds a key a person made upstream to a selected group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier, sealed it and activated it; its model limits and expiry apply from the next complete key listing, and until then it is allowed no models. A key is bound once. Use a dedicated key; if its limits cannot be read, an unrestricted dedicated key and permission to read those fields are needed.
          */
         post: operations["bindSupplierKey"];
         delete?: never;
@@ -3579,7 +3579,7 @@ export interface components {
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
-        /** @description What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`. `login_fields` lists what the kind takes. */
+        /** @description What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. `login_fields` lists what the kind takes. */
         SupplierLogin: {
             email?: string;
             password?: string;
@@ -3639,6 +3639,16 @@ export interface components {
             codename?: string;
             /** @description False when the supplier no longer lists the group. */
             present: boolean;
+            /**
+             * @description How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
+             * @enum {string}
+             */
+            key_state?: "pending" | "ready" | "failed" | "unavailable";
+            /**
+             * @description Why the last attempt to make a key failed: the login may not manage keys, the account may not use this group, or the supplier refused. Present only with `key_state` `failed`.
+             * @enum {string}
+             */
+            key_reason?: "not_permitted" | "group_unavailable" | "refused";
             /** @description What the supplier says about the group (platform, subscription type, peak pricing, long context). */
             facts?: {
                 [key: string]: unknown;
