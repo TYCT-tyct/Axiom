@@ -276,7 +276,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | `axiom_app` | 是 | 运行时唯一的登录角色，`AXIOM_DATABASE_URL`；由部署创建并设密码，密码不经过本程序 |
 | 迁移管理员 | 是 | `AXIOM_MIGRATE_DATABASE_URL`，部署里叫 `axiom_migrator`；需要 CREATEROLE 和数据库的 CREATE 权限，不需要超级用户；`axiom_owner`、`axiom_lookup` 由别的角色建好时，还要有它们的 ADMIN 权限。建好 `axiom_owner`、`axiom_lookup` 和各模块的 schema，再切成 `axiom_owner` 执行迁移 |
 
-[安全](../../docs/security.md#租户隔离)角色表里的后台任务角色由 `pg.Module.JobRole` 声明，`pg.Migrate` 的初始化步骤以迁移管理员建立 NOLOGIN 角色、授予 `axiom_owner`（继承并带 ADMIN）；模块的迁移再给它 schema 与表的权限、把该由它拥有的对象交过去，并把它授予部署建的登录角色（如 `axiom_retention`）。任务用那个登录的独立连接池，事务里再 `pg.Tx.SetRole` 到任务角色。应用角色**不是**任务角色的成员：能切换过去就能成为表的属主，绕过启动检查对“应用不拥有表”的要求。`serve` 的启动检查覆盖 `axiom_app` 能成为的全部角色，也就覆盖任务角色。`axiom_owner` 和 `axiom_lookup` 由迁移的第一步以迁移管理员建立；`axiom_owner` 能切换成 `axiom_lookup`（不继承它的权限），因为迁移要用 `ALTER FUNCTION … OWNER TO axiom_lookup` 把函数交给它，这一步要求执行者能切换成新的所有者。
+[安全](../../docs/security.md#租户隔离)角色表里的后台任务角色由 `pg.Module.JobRole` 声明，`pg.Migrate` 的初始化步骤以迁移管理员建立 NOLOGIN 角色、授予 `axiom_owner`（继承并带 ADMIN）；模块的迁移再给它 schema 与表的权限、把该由它拥有的对象交过去，并把它授予部署建的登录角色（如 `axiom_retention`）。任务用那个登录的独立连接池，事务里再 `pg.Tx.SetRole` 到任务角色。应用角色**不是**任务角色的成员：能切换过去就能成为表的属主，绕过启动检查对“应用不拥有表”的要求。`serve` 的启动检查按 `pg_has_role(session_user, …, 'MEMBER')` 列出登录直接或间接属于的角色（不论 `INHERIT`、`SET` 选项），拒绝其中拥有 Axiom schema 里表（含分区）的角色、全部 `Module.JobRole`（即使还没拥有任何表）、`axiom_owner`、`axiom_lookup`、超级用户、`BYPASSRLS`、`REPLICATION`、`CREATEROLE`、`CREATEDB` 和服务器文件/程序角色；错误只报角色名。`axiom_owner` 和 `axiom_lookup` 由迁移的第一步以迁移管理员建立；`axiom_owner` 能切换成 `axiom_lookup`（不继承它的权限），因为迁移要用 `ALTER FUNCTION … OWNER TO axiom_lookup` 把函数交给它，这一步要求执行者能切换成新的所有者。
 
 ### 连接池
 
