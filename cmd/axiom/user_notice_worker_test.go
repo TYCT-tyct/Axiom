@@ -13,6 +13,7 @@ import (
 )
 
 func TestUserNoticeRunDrainsWithoutBalanceJournal(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	f.owner()
 	logger := slog.New(slog.DiscardHandler)
@@ -46,6 +47,7 @@ func TestUserNoticeRunDrainsWithoutBalanceJournal(t *testing.T) {
 }
 
 func TestUserNoticeBudgetIsNormalCompletion(t *testing.T) {
+	t.Parallel()
 	if err := runUserNotices(t.Context(), nil, nil, nil, 0); err != nil {
 		t.Fatalf("exhausted before starting: %v", err)
 	}

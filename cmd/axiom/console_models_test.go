@@ -150,6 +150,7 @@ func consoleBase(t *testing.T) commandLine {
 }
 
 func TestModelsPickTheAudienceOfThePage(t *testing.T) {
+	t.Parallel()
 	currency, err := platform.ParseCurrency("USD")
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +249,7 @@ func setModelPricesPublic(t *testing.T, c consoleFixture, v bool) {
 // them and without any when it keeps them to signed-in members; the signed-in account's endpoint keeps its prices in
 // both states. The setting is read from the database through the node's snapshot, as a request would see it.
 func TestModelPricesFollowTheSiteSetting(t *testing.T) {
+	t.Parallel()
 	c := startNodeWithModels(consoleBase(t), &testClock{now: time.Now()}, false, pricedFakeModel(t))
 	if !pricesShown(readModelList(t, c, "/models")) {
 		t.Fatal("a site that sets nothing: the anonymous page has no prices, want public")
@@ -294,6 +296,7 @@ func TestModelPricesFollowTheSiteSetting(t *testing.T) {
 }
 
 func TestModelsEndpoints(t *testing.T) {
+	t.Parallel()
 	c := newConsoleFixture(t)
 	// The website reads the public projection without a session; an empty catalog is an empty list, not an error.
 	rec := c.do(http.MethodGet, "/models", "")
