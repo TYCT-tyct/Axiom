@@ -1,7 +1,6 @@
 package quality
 
 import (
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +12,7 @@ import (
 )
 
 // stated is the claim verification tests check answers against: the endpoint says it serves Anthropic's model.
-var stated = Claimed{Author: "anthropic", Others: []string{"openai", "google"}}
+var stated = Claimed{Author: "anthropic", Others: []string{"openai", "google"}, Model: testModel}
 
 func verificationWorld(t *testing.T) (*Monitor, *Loop, *probeFixture, *time.Time, uuid.UUID) {
 	t.Helper()
@@ -21,13 +20,17 @@ func verificationWorld(t *testing.T) (*Monitor, *Loop, *probeFixture, *time.Time
 	l.identity = func(catalog.ModelID) (Claimed, bool) { return stated, true }
 	id := uuid.NewV7()
 	f.endpoints = append(f.endpoints, suppliers.Routable{
-		ID: id, Credentials: 1, Model: uuid.NewV7(), Formats: []protocol.Format{protocol.Chat},
+		ID: id, Credentials: 1, Model: uuid.NewV7(), Upstream: testModel, Formats: []protocol.Format{protocol.Chat},
 	})
 	return m, l, f, now, id
 }
 
 func verificationAnswer(c challenge, author string) string {
-	return c.nonce + "\n" + strconv.Itoa(c.a+c.b) + "\n" + author
+	return verificationAnswerFor(c, c.model, author)
+}
+
+func verificationAnswerFor(c challenge, model, author string) string {
+	return fullAnswer(c, model, author)
 }
 
 // collectVerification waits for the check the last Tick started and applies its result.
@@ -99,11 +102,29 @@ func verificationPassSetsVerified(t *testing.T) {
 	if req.Prompt == "" || !strings.Contains(req.Prompt, c.nonce) {
 		t.Errorf("the check's prompt %q does not ask for the nonce %q", req.Prompt, c.nonce)
 	}
+	if strings.Contains(req.Prompt, c.model) {
+		t.Errorf("the check's prompt names the claimed model %q, so it can be copied", c.model)
+	}
 	if req.Capture != verifyReply {
 		t.Errorf("the check captures %d bytes, want %d", req.Capture, verifyReply)
 	}
 	if req.Output != verifyOutput {
 		t.Errorf("the check asks for %d tokens, want %d", req.Output, verifyOutput)
+	}
+}
+
+// TestVerificationComparesTheCatalogModel: a supplier alias such as gpt-4 may map to catalog gpt-4o. The model must be
+// checked against the catalog identity, not the upstream string, or a genuine GPT-4o answer would never pass.
+func TestVerificationComparesTheCatalogModel(t *testing.T) {
+	m, l, f, now, id := verificationWorld(t)
+	claimed := Claimed{Author: "openai", Others: []string{"anthropic", "google"}, Model: "openai/gpt-4o"}
+	l.identity = func(catalog.ModelID) (Claimed, bool) { return claimed, true }
+	setVerificationUpstream(f, "gpt-4")
+	c := newChallenge(func() float64 { return .5 }, claimed)
+	startVerification(t, l, f, fullAnswer(c, "GPT-4o", "OpenAI"))
+	collectVerification(t, l, f)
+	if !measured(m, id, *now).Verified {
+		t.Fatal("a genuinely mapped GPT-4o endpoint did not verify against its catalog model")
 	}
 }
 
@@ -126,6 +147,24 @@ func verificationContradictionFailsClosed(t *testing.T) {
 	}
 	if v.failed() {
 		t.Fatal("one contradiction concluded a fake")
+	}
+}
+
+// TestVerificationRejectsACheaperModelOfTheSameVendor is the behavior #560 asks for: after a pass, an answer that
+// claims a cheaper model of the same author is a contradiction, not a pass, even when its author is right.
+func TestVerificationRejectsACheaperModelOfTheSameVendor(t *testing.T) {
+	m, l, f, now, id := verificationWorld(t)
+	c := newChallenge(func() float64 { return .5 }, stated)
+	passVerification(t, l, f, c)
+	*now = now.Add(l.currentSettings().VerifyEvery)
+	startVerification(t, l, f, verificationAnswerFor(c, "claude-3-5-haiku-20241022", "Anthropic"))
+	collectVerification(t, l, f)
+	got := measured(m, id, *now)
+	if got.Verified {
+		t.Fatalf("a cheaper model of the same author kept the pass: %+v", got)
+	}
+	if v := verificationOf(m, id); v.failures != 1 || v.failed() {
+		t.Fatalf("after one cheaper-model contradiction: %+v", v)
 	}
 }
 
@@ -224,7 +263,7 @@ func TestVerificationFollowsTheUpstreamName(t *testing.T) {
 		t.Fatal("the first check did not verify the endpoint")
 	}
 
-	want := setVerificationUpstream(f, "another-upstream-name")
+	want := setVerificationUpstream(f, "claude-3-5-sonnet-20240620")
 	*now = now.Add(time.Second)
 	tick(t, l)
 	if got := measured(m, id, *now); got.Verified || !got.VerifiedAt.IsZero() {
@@ -236,7 +275,7 @@ func TestVerificationFollowsTheUpstreamName(t *testing.T) {
 	if l.active != 1 {
 		t.Fatal("the renamed upstream was not checked at once")
 	}
-	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
+	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(newChallenge(func() float64 { return .5 }, stated), "Anthropic")}
 	collectVerification(t, l, f)
 	if !measured(m, id, *now).Verified {
 		t.Fatal("the new upstream did not verify")
@@ -251,7 +290,7 @@ func TestVerificationDropsACheckOfAnotherClaim(t *testing.T) {
 	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
 	tick(t, l) // the check is in flight against the old claim
 
-	want := setVerificationUpstream(f, "another-upstream-name")
+	want := setVerificationUpstream(f, "claude-3-5-sonnet-20240620")
 	collectVerification(t, l, f) // its answer arrives after the change
 	if got := measured(m, id, *now); got.Verified {
 		t.Fatalf("an answer about another configuration verified the endpoint: %+v", got)
@@ -265,7 +304,7 @@ func TestVerificationDropsACheckOfAnotherClaim(t *testing.T) {
 	if l.active != 1 {
 		t.Fatal("the changed claim was not checked again")
 	}
-	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
+	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(newChallenge(func() float64 { return .5 }, stated), "Anthropic")}
 	collectVerification(t, l, f)
 	if !measured(m, id, *now).Verified {
 		t.Fatal("the check of the new claim did not verify")
