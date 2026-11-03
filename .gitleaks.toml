@@ -35,3 +35,11 @@ regexes = ['''^0123456789abcdef0123456789abcdef$''']
 [[allowlists]]
 description = "EzPay signature digest vectors in an earlier commit of the payments tests"
 regexes = ['''^a044d7461cfe6481920ca58ce533adf7$''', '''^b7338b55a6e7bc634a11dddf98134824$''']
+
+# The content export tests list the file names `axiom content keygen` writes. The generic-api-key rule reads the
+# keyword "key" before `", "` as an assignment and takes the next name for its value. It is a file name, not a
+# credential, and it is already in commit 5b0351ad, which cannot be rewritten, so allow that exact string and nothing
+# else; a real key in the same tests still fails.
+[[allowlists]]
+description = "owner key file name in the content export tests"
+regexes = ['''^owner-signing-2\.pub$''']

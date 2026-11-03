@@ -14,6 +14,9 @@ set -euo pipefail
 job="$(python3 scripts/deploy_name.py "${RUNNER_NAME:-local-$(hostname)}" "${GITHUB_WORKSPACE:-$(pwd)}")"
 export COMPOSE_PROJECT_NAME="axiom-ci-$job"
 export DEPLOY_IMAGE="${CI_DEPLOY_IMAGE:-axiom-ci:$job}"
+# The database image is the job's own too. Every runner on the host building the shared default tag would move it
+# under a running stack, and Compose recreates a container whose tag now names another image (#605).
+export DEPLOY_POSTGRES_IMAGE="axiom-ci-postgres:$job"
 export DEPLOY_RESTART_POLICY=no # a CI stack must not start again after a killed job leaves it behind
 # Empty: the compose file publishes a port the kernel picks (deploy/compose.yaml), which no other job can hold.
 export DEPLOY_PORT= DEPLOY_ADMIN_PORT=
@@ -24,15 +27,28 @@ compose() { docker compose -f deploy/compose.yaml "$@"; }
 # step, and `down` by project name works before deploy/.env exists.
 down() { docker compose --project-name "$COMPOSE_PROJECT_NAME" down --volumes --timeout 5; }
 
-# Both steps always run: failing to stop the containers must not leave the image behind.
+# Both steps always run: failing to stop the containers must not leave the images behind.
 teardown() {
   down || true
   if [ -z "${CI_DEPLOY_IMAGE:-}" ]; then docker image rm --force "$DEPLOY_IMAGE" > /dev/null 2>&1 || true; fi
+  docker image rm --force "$DEPLOY_POSTGRES_IMAGE" > /dev/null 2>&1 || true
+}
+
+# A container that exited is gone after the teardown, and with it the only record of why: print every container's
+# output first. By label, because `docker compose logs` without the compose file finds no services.
+dump_logs() {
+  local id
+  for id in $(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME"); do
+    echo "::group::$(docker inspect --format '{{.Name}} {{.State.Status}} {{.State.ExitCode}}' "$id")"
+    docker logs --tail 200 "$id" 2>&1 || true
+    echo "::endgroup::"
+  done
 }
 
 # Keep the status the script already had: neither a failed teardown nor a successful one may change it.
 finish() {
   status=$?
+  [ "$status" -eq 0 ] || dump_logs
   teardown
   exit "$status"
 }
@@ -58,7 +74,7 @@ clean_stale() {
     [ $(( now - newest[$project] )) -ge "$STALE_AFTER" ] || continue
     echo "removing the abandoned CI deploy stack $project"
     docker compose --project-name "$project" down --volumes --timeout 5 || true
-    docker image rm --force "axiom-ci:${project#axiom-ci-}" > /dev/null 2>&1 || true
+    docker image rm --force "axiom-ci:${project#axiom-ci-}" "axiom-ci-postgres:${project#axiom-ci-}" > /dev/null 2>&1 || true
   done
 }
 
@@ -80,6 +96,10 @@ else
   built="$(just axiom-version)"
   docker build --tag "$DEPLOY_IMAGE" deploy
 fi
+# The database image is built from this tree (pgBackRest on the pinned PostgreSQL tag), not consumed as a digest like
+# the program, and built once: a rebuild from a warm cache still names a new image, because the build's provenance
+# attestation differs, and Compose would recreate the database under the running node at the next start (#605).
+docker build --tag "$DEPLOY_POSTGRES_IMAGE" deploy/postgres
 
 # Reuse the same image for every start, including the legacy-role upgrade. Only CI's own environment is initialized.
 start() {
@@ -91,12 +111,12 @@ start() {
     { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env
   fi
   chmod 600 deploy/.env
-  # The database image is built from this tree (pgBackRest on the pinned PostgreSQL tag), not consumed as a digest like
-  # the program; it has to exist before the no-build starts below.
-  timeout 300 docker compose -f deploy/compose.yaml build postgres
-  timeout 90 docker compose -f deploy/compose.yaml up --detach --no-build --wait --wait-timeout 60 postgres
+  # No wall-clock bound around Compose: on the shared host the daemon alone took 34 seconds to deliver a stop signal
+  # (#605), so a per-command limit measured the host's load, not the deployment. The step's 40 minutes bound a hung
+  # daemon; --wait-timeout still bounds the health checks.
+  compose up --detach --no-build --wait --wait-timeout 60 postgres
   compose exec -T postgres sh < deploy/postgres/roles.sh
-  timeout 180 docker compose -f deploy/compose.yaml up --detach --no-build --wait --wait-timeout 60
+  compose up --detach --no-build --wait --wait-timeout 60
   # Include exited one-shot services before teardown, so their resource policy cannot escape inspection.
   local id ids parent
   ids=$(compose ps --all --quiet)
