@@ -10,7 +10,8 @@ import (
 
 // benchmarkState is one endpoint's score and the official baseline it was computed against. A later baseline makes the
 // score incomparable rather than merely old, so it is withheld until the endpoint is run again. config binds the score
-// to the model, upstream name and format set it was run on; a stored score is adopted only for the same configuration.
+// to the model, upstream name and format set it was run on; epoch is the configuration generation it was measured
+// under. A stored score is adopted only when both still match the endpoint.
 type benchmarkState struct {
 	version    string
 	hash       string
@@ -19,6 +20,14 @@ type benchmarkState struct {
 	confidence float64
 	at         time.Time
 	config     EndpointConfig
+	epoch      int64
+}
+
+// benchmarkConfig is one endpoint's current configuration and its shared generation. A generation advances when the
+// configuration changes, and every score carries the generation it was run under.
+type benchmarkConfig struct {
+	config EndpointConfig
+	epoch  int64
 }
 
 // newerScore reports whether a is later evidence than b. A run against a later baseline replaces a run against an
@@ -37,8 +46,8 @@ func newerScore(a, b benchmarkState) bool {
 // measures is the score routing and the public list read: zero and no confidence without a run on the current
 // configuration, against the current baseline, in this question set, and younger than benchmarkMaxAge. The confidence
 // decays linearly to zero at the age limit; the score and its time remain for "last measured" until it is replaced.
-func (b benchmarkState) measures(now time.Time, version, hash string, baseline time.Time, current bool) (score, confidence float64, at time.Time) {
-	if !current || b.at.IsZero() || b.version != version || b.hash != hash || !b.baseline.Equal(baseline) {
+func (b benchmarkState) measures(now time.Time, version, hash string, baseline time.Time, current bool, epoch int64) (score, confidence float64, at time.Time) {
+	if !current || b.at.IsZero() || b.version != version || b.hash != hash || !b.baseline.Equal(baseline) || b.epoch != epoch {
 		return 0, 0, time.Time{}
 	}
 	age := max(0, now.Sub(b.at)) // a run timestamped by a clock slightly ahead of this one is not older than this one
@@ -51,11 +60,11 @@ func (b benchmarkState) measures(now time.Time, version, hash string, baseline t
 // productScore is what MeasuredFor returns for the product score: no baseline, no run, another set, an older baseline or
 // a changed configuration all mean zero and no confidence, and an aged-out anchor or score means zero but keeps the
 // last run's time so "never measured" and "measured, then stale" stay distinguishable.
-func (b benchmarkState) productScore(now time.Time, baseline benchmarkAnchor, hasBaseline, current bool) (score, confidence float64, at time.Time) {
+func (b benchmarkState) productScore(now time.Time, baseline benchmarkAnchor, hasBaseline, current bool, epoch int64) (score, confidence float64, at time.Time) {
 	if !hasBaseline {
 		return 0, 0, time.Time{}
 	}
-	score, confidence, at = b.measures(now, baseline.version, baseline.hash, baseline.at, current)
+	score, confidence, at = b.measures(now, baseline.version, baseline.hash, baseline.at, current, epoch)
 	if now.Sub(baseline.at) >= benchmarkMaxAge {
 		return 0, 0, at
 	}
@@ -95,10 +104,17 @@ func (m *Monitor) RecordOfficialBenchmark(ctx context.Context, ep suppliers.Rout
 	if !ok {
 		return false
 	}
-	state := benchmarkStateOf(official, anchor.at, ep)
-	if !m.storeBaseline(ctx, ep, anchor, state) {
+	epoch, err := m.ensureConfig(ctx, ep)
+	if err != nil {
 		return false
 	}
+	state := benchmarkStateOf(official, anchor.at, ep)
+	state.epoch = epoch
+	won, storedEpoch := m.storeBaseline(ctx, ep, anchor, state)
+	if !won {
+		return false
+	}
+	state.epoch = storedEpoch
 	m.mu.Lock()
 	if old, ok := m.benchmarks[ep.Model]; ok && !anchor.at.After(old.at) {
 		m.mu.Unlock()
@@ -111,6 +127,17 @@ func (m *Monitor) RecordOfficialBenchmark(ctx context.Context, ep suppliers.Rout
 	m.mu.Unlock()
 	m.commitBenchmark(ep, anchor, state) // best effort: a snapshot that is not current adopts the stored row later
 	return true
+}
+
+// benchmarkConfigCurrent reports whether the endpoint still publishes the configuration the run measured, and records
+// a configuration row when the endpoint has never had one. The score write repeats the configuration check atomically,
+// so a change between this check and the write cannot leave an old-configuration row.
+func (m *Monitor) benchmarkConfigCurrent(ctx context.Context, ep suppliers.Routable) bool {
+	e := m.of(ep.ID)
+	e.mu.Lock()
+	current := e.current == configOf(ep)
+	e.mu.Unlock()
+	return current && m.configForScore(ctx, ep)
 }
 
 // RecordBenchmark scores an endpoint's run against its model's official baseline and records it. It returns false for
@@ -135,18 +162,19 @@ func (m *Monitor) RecordBenchmark(ctx context.Context, ep suppliers.Routable, ru
 		return BenchmarkResult{}, false
 	}
 	// Reject a stale configuration before the write, not after it: commitBenchmark would refuse it too, but the row
-	// would remain and a later refresh could adopt it if the configuration came back.
-	e := m.of(ep.ID)
-	e.mu.Lock()
-	current := e.current == configOf(ep)
-	e.mu.Unlock()
-	if !current {
+	// would remain and a later refresh could adopt it if the configuration came back. A brand-new endpoint also gets
+	// its configuration row here, not in Prepare: a routing build may look at an endpoint that never ran. The
+	// insert-if-absent never replaces a configuration another node already stored; if it finds one, the score write
+	// below is the atomic arbiter.
+	if !m.benchmarkConfigCurrent(ctx, ep) {
 		return BenchmarkResult{}, false
 	}
 	state := benchmarkStateOf(score, baseline.at, ep)
-	if !m.storeScore(ctx, ep, state) {
+	won, epoch := m.storeScore(ctx, ep, state)
+	if !won {
 		return BenchmarkResult{}, false
 	}
+	state.epoch = epoch
 	m.mu.Lock()
 	if old, ok := m.scores[ep.ID]; !ok || newerScore(state, old) {
 		m.scores[ep.ID] = state
@@ -158,8 +186,9 @@ func (m *Monitor) RecordBenchmark(ctx context.Context, ep suppliers.Routable, ru
 	return score, true
 }
 
-// commitBenchmark stores a score only if the baseline it was scored against is still the current one. The monitor
-// lock stays held across the endpoint commit, so a replacement cannot slip between the check and the store.
+// commitBenchmark stores a score only if the baseline and configuration generation it was scored against are still the
+// current ones. The monitor lock stays held across the endpoint commit, so a replacement cannot slip between the check
+// and the store.
 func (m *Monitor) commitBenchmark(ep suppliers.Routable, baseline benchmarkAnchor, state benchmarkState) bool {
 	e := m.of(ep.ID)
 	m.mu.RLock()
@@ -170,7 +199,10 @@ func (m *Monitor) commitBenchmark(ep suppliers.Routable, baseline benchmarkAncho
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.current != state.config || !newerScore(state, e.benchmark) {
+	if e.current == state.config && e.benchmarkEpoch == 0 && state.epoch > 0 {
+		e.benchmarkEpoch = state.epoch // the first score on a fresh endpoint establishes the generation
+	}
+	if e.current != state.config || state.epoch != e.benchmarkEpoch || !newerScore(state, e.benchmark) {
 		return false
 	}
 	e.benchmark = state

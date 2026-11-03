@@ -191,10 +191,12 @@ type Monitor struct {
 	endpoints map[suppliers.EndpointID]*State
 	collected map[suppliers.EndpointID]struct{}
 	// benchmarks is each catalog model's official direct run, the anchor its endpoints' product scores are relative to.
-	// scores holds the current benchmark version's stored endpoint scores until Prepare adopts them into a State; both
-	// are guarded by mu and refilled from quality.benchmark_baselines and quality.benchmark_scores on every refresh.
+	// scores holds the current benchmark version's stored endpoint scores until Prepare adopts them into a State, and
+	// configs each endpoint's configuration generation, the shared invalidation marker. All three are guarded by mu and
+	// refilled from quality.benchmark_baselines, quality.benchmark_scores and quality.benchmark_configs on every refresh.
 	benchmarks map[uuid.UUID]benchmarkAnchor
 	scores     map[suppliers.EndpointID]benchmarkState
+	configs    map[suppliers.EndpointID]benchmarkConfig
 
 	unclassified   metric.Int64Counter // failures the adapters could not classify, which are not counted
 	verifyAge      atomic.Int64        // how long a verification pass counts, in nanoseconds, from the probe settings
@@ -236,9 +238,9 @@ type State struct {
 	class         string                            // the source class's stable slug, from the last successful response
 	evidence      classEvidence                     // the headers and usage items the live rules read
 	benchmark     benchmarkState                    // the product score and the official baseline it was computed against
-	// benchmarkSeen is the newest score a configuration change has voided or a refresh has considered. Remembering it
-	// keeps a later refresh from resurrecting a score the change invalidated if the configuration returns.
-	benchmarkSeen benchmarkState
+	// benchmarkEpoch is the configuration generation the held score was measured under. A generation that advances
+	// invalidates the score even if the configuration later returns to the same model, upstream and formats.
+	benchmarkEpoch int64
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -273,6 +275,7 @@ func New(meter metric.Meter) *Monitor {
 		collected:  map[suppliers.EndpointID]struct{}{},
 		benchmarks: map[uuid.UUID]benchmarkAnchor{},
 		scores:     map[suppliers.EndpointID]benchmarkState{},
+		configs:    map[suppliers.EndpointID]benchmarkConfig{},
 		changes:    make(chan change, 1024),
 		mode:       Observe,
 		unclassified: counter(meter, "axiom.quality.unclassified",
@@ -492,7 +495,7 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	}
 	current := has && e.current == configOf(ep)
 	out.ProductScore, out.ProductScoreConfidence, out.ProductScoreAt = e.benchmark.productScore(
-		now, baseline, hasBaseline, e.scoreCurrent(current))
+		now, baseline, hasBaseline, e.scoreCurrent(current), e.benchmarkEpoch)
 	out.Facts = nil
 	if current {
 		for f, mf := range e.facts {

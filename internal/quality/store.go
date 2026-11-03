@@ -188,65 +188,97 @@ func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) e
 		now = m.loop.now()
 	}
 	for _, ep := range endpoints {
-		// Read the stored score before taking the endpoint lock: the monitor lock must never be taken under it, or a
-		// commit (monitor then endpoint) could deadlock with a snapshot build (endpoint then monitor).
-		saved, hasSaved := m.savedScore(ep.ID)
-		e := m.of(ep.ID)
-		e.mu.Lock()
-		// A routing build and the health loop both publish configurations. The build may have read an older supplier
-		// snapshot and resume after the loop published a newer one; accepting that older generation would bring back a
-		// configuration whose facts are already gone. Generation 0 is an unversioned test or a source that has not
-		// reloaded yet; once a version has been published, a zero is older than it.
-		if e.published > 0 && ep.Generation < e.published {
-			e.mu.Unlock()
-			continue
-		}
-		if ep.Generation > e.published {
-			e.published = ep.Generation
-		}
-		e.credentials = ep.Credentials
-		e.publish(ep, saved, hasSaved, m.fallbackClass())
-		loaded := e.loaded
-		e.owned = !ep.Platform()
-		_, generation := probeFormat(ep.Formats)
-		e.probeable = ep.Platform() && generation
-		e.lastSeen = now
-		e.mu.Unlock()
-		if m.loop == nil || loaded {
-			continue
-		}
-		err := m.loop.restore(ctx, e)
-		if err != nil {
+		if err := m.prepareEndpoint(ctx, ep, now); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// publish moves the endpoint to ep's configuration and adopts the stored score when it belongs to that configuration.
-// The caller holds e.mu. A configuration change voids the score and remembers it as seen, so a later refresh cannot
-// resurrect it if the configuration returns; a genuinely newer run still passes newerScore.
-func (e *State) publish(ep suppliers.Routable, saved benchmarkState, hasSaved bool, fallback string) {
+// prepareEndpoint publishes one endpoint's configuration and restores its durable health the first time it reappears.
+// The stored score and configuration are read before the endpoint lock: the monitor lock must never be taken under it,
+// or a commit (monitor then endpoint) could deadlock with a snapshot build (endpoint then monitor).
+func (m *Monitor) prepareEndpoint(ctx context.Context, ep suppliers.Routable, now time.Time) error {
+	saved, hasSaved := m.savedScore(ep.ID)
+	stored, hasStored := m.storedConfig(ep.ID)
+	cfg := configOf(ep)
+	e := m.of(ep.ID)
+	e.mu.Lock()
+	if e.published > 0 && ep.Generation < e.published {
+		e.mu.Unlock()
+		return nil
+	}
+	changing := e.current != cfg
+	established := e.current != (EndpointConfig{})
+	e.mu.Unlock()
+	epoch, err := m.benchmarkEpochFor(ctx, ep, cfg, saved, hasSaved, stored, hasStored, changing, established)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	// A routing build and the health loop both publish configurations. The build may have read an older supplier
+	// snapshot and resume after the loop published a newer one; accepting that older generation would bring back a
+	// configuration whose facts are already gone. Generation 0 is an unversioned test or a source that has not
+	// reloaded yet; once a version has been published, a zero is older than it.
+	if e.published > 0 && ep.Generation < e.published {
+		e.mu.Unlock()
+		return nil
+	}
+	if ep.Generation > e.published {
+		e.published = ep.Generation
+	}
+	e.credentials = ep.Credentials
+	e.publish(ep, saved, hasSaved, epoch, m.fallbackClass())
+	loaded := e.loaded
+	e.owned = !ep.Platform()
+	_, generation := probeFormat(ep.Formats)
+	e.probeable = ep.Platform() && generation
+	e.lastSeen = now
+	e.mu.Unlock()
+	if m.loop == nil || loaded {
+		return nil
+	}
+	return m.loop.restore(ctx, e)
+}
+
+// benchmarkEpochFor returns the generation the endpoint's current configuration has in the store. A configuration
+// that is already stored needs no write; a brand-new endpoint does not write until it has a score to record, because
+// Prepare is also called for endpoints a snapshot is only looking at.
+func (m *Monitor) benchmarkEpochFor(ctx context.Context, ep suppliers.Routable, cfg EndpointConfig, saved benchmarkState, hasSaved bool, stored benchmarkConfig, hasStored, changing, established bool) (int64, error) {
+	switch {
+	case hasStored && stored.config == cfg:
+		return stored.epoch, nil
+	case ep.Platform() && ((hasSaved && saved.config == cfg) || (changing && established)):
+		return m.ensureConfig(ctx, ep)
+	}
+	return 0, nil
+}
+
+// publish moves the endpoint to ep's configuration and adopts the stored score when it belongs to that configuration
+// and generation. The caller holds e.mu. A configuration change, or a newer generation learned from another node,
+// voids the held score; the generation is durable, so a restart or the configuration returning cannot resurrect it.
+func (e *State) publish(ep suppliers.Routable, saved benchmarkState, hasSaved bool, epoch int64, fallback string) {
 	cfg := configOf(ep)
 	if e.current != cfg {
+		if epoch > 0 && e.benchmarkEpoch > 0 && epoch < e.benchmarkEpoch {
+			return // a concurrent Prepare already published a newer generation
+		}
 		e.facts = nil                // facts belong to the configuration they were measured on
 		e.evidence = classEvidence{} // and so do response fingerprints: another upstream's headers say nothing of this one
 		e.class = fallback
-		if !e.benchmark.at.IsZero() && newerScore(e.benchmark, e.benchmarkSeen) {
-			e.benchmarkSeen = e.benchmark
-		}
-		if e.benchmark.config != cfg {
-			e.benchmark = benchmarkState{} // a product score recorded on another configuration
-		}
+		e.benchmark = benchmarkState{} // a product score recorded on another configuration
 		e.current = cfg
+		e.benchmarkEpoch = epoch
+	} else if epoch > e.benchmarkEpoch {
+		// Another node changed the configuration and changed it back (or changed it while this node held the same
+		// configuration): the shared generation moved, so the row this node holds is no longer evidence.
+		e.benchmark = benchmarkState{}
+		e.benchmarkEpoch = epoch
 	}
 	// The store is the shared record: adopt a score another node recorded, or one from before a restart, as soon as
-	// the configuration it names is the one this endpoint publishes.
-	if hasSaved && newerScore(saved, e.benchmarkSeen) {
-		e.benchmarkSeen = saved
-		if saved.config == cfg && newerScore(saved, e.benchmark) {
-			e.benchmark = saved
-		}
+	// the configuration and generation it names are the ones this endpoint publishes.
+	if hasSaved && saved.config == cfg && saved.epoch == e.benchmarkEpoch && newerScore(saved, e.benchmark) {
+		e.benchmark = saved
 	}
 }
 

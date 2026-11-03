@@ -173,11 +173,14 @@ func TestNewerBenchmarkVersionSupersedesTheOlder(t *testing.T) {
 		version: "benchmark-v1", hash: oldHash, baseline: oldAt,
 		score: 42, confidence: 0.4, at: oldAt, config: configOf(candidate),
 	}
+	if !m.configForScore(t.Context(), candidate) {
+		t.Fatal("the candidate configuration was not recorded")
+	}
 	if err := l.db.Tx(t.Context(), l.scope, func(tx pg.Tx) error {
 		if _, err := writeBenchmarkBaseline(t.Context(), tx, official.Model, oldAnchor); err != nil {
 			return err
 		}
-		_, err := writeBenchmarkScore(t.Context(), tx, candidate, oldScore)
+		_, _, err := writeBenchmarkScore(t.Context(), tx, candidate, oldScore)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -285,7 +288,7 @@ func TestBenchmarkConfigurationChangeDoesNotResurrect(t *testing.T) {
 		t.Fatal("the candidate run was refused")
 	}
 
-	// The endpoint moves to another upstream: Prepare voids the score and remembers it as seen.
+	// The endpoint moves to another upstream: Prepare voids the score and advances the configuration generation.
 	changed := candidate
 	changed.Upstream = "relay-2"
 	f.mu.Lock()
