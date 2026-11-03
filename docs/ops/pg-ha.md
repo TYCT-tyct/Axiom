@@ -77,7 +77,7 @@ watchdog 和 HAProxy；换来的是没有同步备库时写提交阻塞，而不
    在 leader lock 过期前复位，不能再写。
 5. 如果 `COMMIT` 的结果未知（连接在提交和响应之间断开，或者同步等待被取消但 `COMMIT` 返回成功），网关答 503、不向上游
    发请求，`SettleOrphan` 在后台按预留状态释放或写墓碑；用户重试是新的请求。提交可能已经成功，也可能没有，
-   `SettleOrphan` 两条路都收敛到正确的账本。`TestLostCommit` 只覆盖前一种（连接断开）；后一种要新增用例（见演练和
+   `SettleOrphan` 两条路都收敛到正确的账本。`TestLostCommit` 只覆盖前一种（提交结果丢失/失败）；后一种要新增用例（见演练和
    代码要求）。
 6. 结算和孤儿处理按请求编号和预留状态幂等；追加只在一秒预算内重试，重试只会生效一次，见 `TestBatchedSettleSeesTheTerminalStateAfterItsLock`。
 
@@ -87,7 +87,7 @@ watchdog 和 HAProxy；换来的是没有同步备库时写提交阻塞，而不
 然后结束等待，`COMMIT` 仍返回成功。`statement_timeout` 会设置 `QueryCancelPending`；支付入账的
 `internal/payments/orders.go` 设了 5 秒 `statement_timeout`，所以这个路径可达。`synchronous_mode_strict` 只让没有同步
 备库时提交等待，挡不住这次取消。当前 `internal/platform/pg/pg.go` 的 `DB.begin` 直接用 `pgx.BeginTxFunc`，没有读取
-Notice；`TestLostCommit` 也只覆盖连接断开。所以**当前实现不满足本文的无条件保证**，实现前必须补上：
+Notice；`TestLostCommit` 也只覆盖提交结果丢失/失败。所以**当前实现不满足本文的无条件保证**，实现前必须补上：
 
 - 在连接配置的 `OnNotice` 回调里按 `*pgconn.PgConn` 捕获提交期间的 Notice；`DB.begin` 在 `COMMIT` 前登记当前事务，
   `COMMIT` 返回后检查并清除。
