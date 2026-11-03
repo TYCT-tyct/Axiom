@@ -67,7 +67,7 @@ func (s *Service) verifyMFA(ctx context.Context, r *http.Request, code string, f
 	var issued Issued
 	wrong := false
 	err := s.db.Tx(ctx, pg.AccountScope(found.AccountID), func(tx pg.Tx) error {
-		pending, locked, err := s.lockPending(ctx, tx, found.UserID, tokenHash, attempts)
+		pending, locked, err := s.lockPendingAttempt(ctx, tx, found.UserID, tokenHash, attempts)
 		if err != nil {
 			return err
 		}
@@ -96,9 +96,9 @@ func (s *Service) verifyMFA(ctx context.Context, r *http.Request, code string, f
 	return issued, err
 }
 
-// lockPending locks the user first, then reads the pending session with tokenHash: it must be unrevoked, unexpired,
-// of the user's current factor version, with fewer than attempts made.
-func (s *Service) lockPending(ctx context.Context, tx pg.Tx, user uuid.UUID, tokenHash []byte, attempts int) (PendingSessionRow, LockUserRow, error) {
+// lockPending locks the user first, then reads the pending session with tokenHash: it must be unrevoked, unexpired and
+// of the user's current factor version.
+func (s *Service) lockPending(ctx context.Context, tx pg.Tx, user uuid.UUID, tokenHash []byte) (PendingSessionRow, LockUserRow, error) {
 	users, err := s.queries.LockUser(ctx, tx, user)
 	if err != nil {
 		return PendingSessionRow{}, LockUserRow{}, err
@@ -107,11 +107,45 @@ func (s *Service) lockPending(ctx context.Context, tx pg.Tx, user uuid.UUID, tok
 	if err != nil {
 		return PendingSessionRow{}, LockUserRow{}, err
 	}
+	return lockedPending(users, pending)
+}
+
+// lockPendingAttempt is lockPending with the per-challenge attempt budget: a path that spends an attempt on a failure
+// refuses once the budget is used up.
+func (s *Service) lockPendingAttempt(ctx context.Context, tx pg.Tx, user uuid.UUID, tokenHash []byte, attempts int) (PendingSessionRow, LockUserRow, error) {
+	pending, locked, err := s.lockPending(ctx, tx, user, tokenHash)
+	if err != nil {
+		return PendingSessionRow{}, LockUserRow{}, err
+	}
+	if int(pending.MfaAttempts) >= attempts {
+		return PendingSessionRow{}, LockUserRow{}, ErrBadCode
+	}
+	return pending, locked, nil
+}
+
+// lockPendingID is lockPending for a session the caller already authenticated: the principal's session ID replaces the
+// token hash, so a passkey ceremony does not read the cookie a second time.
+func (s *Service) lockPendingID(ctx context.Context, tx pg.Tx, user, session uuid.UUID) (PendingSessionRow, LockUserRow, error) {
+	users, err := s.queries.LockUser(ctx, tx, user)
+	if err != nil {
+		return PendingSessionRow{}, LockUserRow{}, err
+	}
+	rows, err := s.queries.PendingSessionByID(ctx, tx, PendingSessionByIDParams{ID: session, UserID: user})
+	if err != nil {
+		return PendingSessionRow{}, LockUserRow{}, err
+	}
+	pending := make([]PendingSessionRow, len(rows))
+	for i := range rows {
+		pending[i] = PendingSessionRow(rows[i])
+	}
+	return lockedPending(users, pending)
+}
+
+// lockedPending is the check both pending-session lookups end with: an active user and a live pending session at the
+// user's current factor version.
+func lockedPending(users []LockUserRow, pending []PendingSessionRow) (PendingSessionRow, LockUserRow, error) {
 	if len(users) == 0 || !users[0].Active || len(pending) == 0 || pending[0].FactorVersion != users[0].FactorVersion {
 		return PendingSessionRow{}, LockUserRow{}, ErrNoSession
-	}
-	if int(pending[0].MfaAttempts) >= attempts {
-		return PendingSessionRow{}, LockUserRow{}, ErrBadCode
 	}
 	return pending[0], users[0], nil
 }
