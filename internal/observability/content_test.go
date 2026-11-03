@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
@@ -305,12 +306,24 @@ func TestContentTablesArePlatformOnly(t *testing.T) {
 	store := &memoryObjects{objects: map[string][]byte{}}
 	site, account := uuid.NewV7(), uuid.NewV7()
 	key := contentKeyFor(t, db, keys, site, account)
-	putContent(t, db, store, key, site, account, time.Now(), ContentRequest, []byte("private"))
+	now := time.Now()
+	putContent(t, db, store, key, site, account, now, ContentRequest, []byte("private"))
+	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO observability.content_exports
+			(id, approval_digest, owner_key, recipient_key, since, until, destination, format, status, started_at)
+			VALUES ($1, $2, $3, $4, $5, $6, '/tmp/export', 'test', 'started', $7)`,
+			uuid.NewV7(), bytes.Repeat([]byte{1}, 32), strings.Repeat("a", 64), strings.Repeat("b", 64),
+			now.Add(-time.Hour), now, now)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	for name, query := range map[string]string{
-		"keys":  `SELECT count(*) FROM observability.content_keys`,
-		"blobs": `SELECT count(*) FROM observability.content_blobs`,
-		"refs":  `SELECT count(*) FROM observability.content_refs`,
+		"keys":    `SELECT count(*) FROM observability.content_keys`,
+		"blobs":   `SELECT count(*) FROM observability.content_blobs`,
+		"refs":    `SELECT count(*) FROM observability.content_refs`,
+		"exports": `SELECT count(*) FROM observability.content_exports`,
 	} {
 		var platform, own int
 		if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
