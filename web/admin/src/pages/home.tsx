@@ -10,7 +10,7 @@ import { callsDrill, type OverviewRange, ordersDrill, overviewRanges, overviewWi
 import { Code, PageBody } from "../parts";
 import { overviewQuery } from "../queries";
 import { targetsEmpty } from "../targets";
-import { CountTargetNote, MoneyTargetNote, TargetsAction } from "../targets-view";
+import { TargetNote, TargetsAction } from "../targets-view";
 
 // The figures are links: each opens the call or order list narrowed to the same window, so a number is never a dead
 // end. The whole card is the target, and the keyboard sees one focus ring around it; the pointer sees its border lift.
@@ -174,7 +174,7 @@ function CallsFigure({ data, window, site, targets, showTarget }: FigureProps) {
       <Stat
         label={t("overview.calls")}
         value={data.calls === undefined ? t("overview.unavailable") : format.number(data.calls)}
-        note={withTarget(showTarget, <CountTargetNote metric="calls" comparison={targets?.calls} />)}
+        note={withTarget(showTarget, <TargetNote metric="calls" comparison={targets?.calls} />)}
       />
     </Link>
   );
@@ -188,7 +188,7 @@ function ErrorsFigure({ data, window, site, targets, showTarget }: FigureProps) 
       <Stat
         label={t("overview.errors")}
         value={data.errors === undefined ? t("overview.unavailable") : format.number(data.errors)}
-        note={withTarget(showTarget, <CountTargetNote metric="errors" comparison={targets?.errors} />)}
+        note={withTarget(showTarget, <TargetNote metric="errors" comparison={targets?.errors} />)}
       />
     </Link>
   );
@@ -204,7 +204,7 @@ function RevenueFigure({ data, window, site, targets, showTarget }: FigureProps)
         value={data.revenue ? format.money(data.revenue) : t("overview.unavailable")}
         note={withTarget(
           showTarget,
-          <MoneyTargetNote metric="revenue" comparison={targets?.revenue} />,
+          <TargetNote metric="revenue" comparison={targets?.revenue} />,
           t("overview.revenueNote"),
         )}
       />
@@ -225,7 +225,7 @@ function CostFigure({ data, window, site, targets, showTarget }: FigureProps) {
         value={data.cost ? format.money(data.cost) : t("overview.unavailable")}
         note={withTarget(
           showTarget,
-          <MoneyTargetNote metric="cost" comparison={targets?.cost} costUnknown={Boolean(data.unknown_cost_calls)} />,
+          <TargetNote metric="cost" comparison={targets?.cost} costUnknown={Boolean(data.unknown_cost_calls)} />,
           note,
         )}
       />

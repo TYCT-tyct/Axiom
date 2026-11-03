@@ -152,42 +152,30 @@ function TargetFields({
   );
 }
 
-// CountTargetNote and MoneyTargetNote show one figure's target and gap under its value. An absent comparison is a
-// metric without a target; an absent gap is a comparison withheld because the actual side is incomplete (the call log,
-// or supplier cost with calls whose cost is unknown).
-export function CountTargetNote({ metric, comparison }: { metric: "calls" | "errors"; comparison?: CountComparison }) {
-  const { t } = useTranslation();
-  if (comparison === undefined) {
-    return <span className="text-t4">{t("overview.targets.none")}</span>;
-  }
-  return (
-    <TargetLine
-      metric={metric}
-      target={String(comparison.target)}
-      gap={comparison.gap === undefined ? undefined : String(comparison.gap)}
-    />
-  );
-}
-
-export function MoneyTargetNote({
+// TargetNote shows one figure's target and gap under its value. An absent comparison is a metric without a target; an
+// absent gap is a comparison withheld because the actual side is incomplete (the call log, or supplier cost with calls
+// whose cost is unknown).
+export function TargetNote({
   metric,
   comparison,
   costUnknown = false,
 }: {
-  metric: "revenue" | "cost";
-  comparison?: MoneyComparison;
+  metric: TargetMetric;
+  comparison?: CountComparison | MoneyComparison;
   costUnknown?: boolean;
 }) {
   const { t } = useTranslation();
   if (comparison === undefined) {
     return <span className="text-t4">{t("overview.targets.none")}</span>;
   }
+  const { target, gap } = comparison;
+  const money = typeof target === "object";
   return (
     <TargetLine
       metric={metric}
-      target={comparison.target.amount}
-      gap={comparison.gap?.amount}
-      currency={comparison.target.currency}
+      target={money ? target.amount : String(target)}
+      gap={typeof gap === "object" ? gap.amount : gap?.toString()}
+      currency={money ? target.currency : undefined}
       incomplete={metric === "cost" && costUnknown ? t("overview.targets.costIncomplete") : undefined}
     />
   );

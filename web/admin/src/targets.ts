@@ -1,4 +1,5 @@
 import type { AdminSchemas } from "@axiom/api";
+import { parseMoney } from "@axiom/ui";
 import type { Problem } from "./change";
 
 // The dashboard's figures that take a target. Calls and revenue are floors; errors and cost are ceilings, so the same
@@ -42,16 +43,10 @@ export function targetTone(metric: TargetMetric, sign: GapSign): TargetTone {
 
 const maxCount = 1_000_000_000_000_000;
 
-// A target's amount is stored in numeric(38, 0), wider than a ledger entry's int64. parseMoney stops at 19 digits;
-// this parser keeps the same nine decimal places and accepts up to the target table's 38 digits.
+// A target's amount is stored in numeric(38, 0), wider than a ledger entry's int64 that parseMoney bounds by default.
 const maxTargetDigits = 38;
 export function parseTargetMoney(text: string): string | null {
-  const match = /^(\d+)(?:\.(\d{1,9}))?$/.exec(text.trim());
-  if (!match) {
-    return null;
-  }
-  const amount = `${match[1]}${(match[2] ?? "").padEnd(9, "0")}`.replace(/^0+(?=\d)/, "");
-  return amount.length <= maxTargetDigits ? amount : null;
+  return parseMoney(text, maxTargetDigits);
 }
 
 // readTargets turns the form into the request's targets: an empty field is a target to clear, a count must be a whole
