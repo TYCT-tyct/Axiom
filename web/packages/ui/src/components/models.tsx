@@ -5,7 +5,14 @@ import { Button } from "./button";
 import { SelectField, TextField } from "./form";
 import { Icon } from "./icon";
 import { EndpointSection } from "./model-endpoints";
-import { label, PricingPrice, type PublicModelPricing, RateTable, SearchEnginePrices } from "./model-pricing";
+import {
+  label,
+  PriceHeads,
+  PricingPrice,
+  type PublicModelPricing,
+  RateTable,
+  SearchEnginePrices,
+} from "./model-pricing";
 import { Badge, Table, Td, Th } from "./panel";
 
 export { baseRate, perMillionBillionths } from "./model-pricing";
@@ -156,12 +163,7 @@ export function ModelCatalog({ models, note }: { models: PublicModel[]; note?: R
             <Th className="hidden text-right lg:table-cell">{t("publicModels.context")}</Th>
             <Th className="hidden text-right xl:table-cell">{t("publicModels.maxOutput")}</Th>
             <Th className="hidden 2xl:table-cell">{t("publicModels.ability")}</Th>
-            {showPrices ? (
-              <>
-                <Th className="hidden text-right sm:table-cell">{t("publicModels.item.input")}</Th>
-                <Th className="hidden text-right sm:table-cell">{t("publicModels.item.output")}</Th>
-              </>
-            ) : null}
+            <PriceHeads show={showPrices} />
             <Th />
           </tr>
         </thead>
