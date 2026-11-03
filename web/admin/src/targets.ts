@@ -25,23 +25,13 @@ export function targetsEmpty(targets: TargetComparison): boolean {
   );
 }
 
-export type Gap = { sign: -1 | 0 | 1; amount: string };
-
-// gapOf subtracts two exact decimal integers in text, so a money gap past 2^53 keeps every digit. The amount is the
-// absolute difference; the sign says which side is larger.
-export function gapOf(actual: string, target: string): Gap {
-  const difference = BigInt(actual) - BigInt(target);
-  return {
-    sign: difference < 0n ? -1 : difference > 0n ? 1 : 0,
-    amount: (difference < 0n ? -difference : difference).toString(),
-  };
-}
+export type GapSign = -1 | 0 | 1;
 
 export type TargetTone = "ahead" | "behind" | "over" | "under" | "at";
 
 // targetTone says how to read a gap: above a floor is ahead, above a ceiling is over, and the reverse below. At the
 // target is neutral for both.
-export function targetTone(metric: TargetMetric, sign: Gap["sign"]): TargetTone {
+export function targetTone(metric: TargetMetric, sign: GapSign): TargetTone {
   if (sign === 0) {
     return "at";
   }

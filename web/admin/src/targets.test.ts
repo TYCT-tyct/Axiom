@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { gapOf, readTargets, targetMonth, targetsEmpty, targetTone } from "./targets";
+import { readTargets, targetMonth, targetsEmpty, targetTone } from "./targets";
 
 it("takes the UTC month of the visit", () => {
   expect(targetMonth(new Date("2026-11-30T23:30:00Z"))).toBe("2026-11");
@@ -10,21 +10,6 @@ it("calls a set with no metric empty", () => {
   expect(targetsEmpty({})).toBe(true);
   expect(targetsEmpty({ calls: { target: 0 } })).toBe(false);
   expect(targetsEmpty({ cost: { target: { amount: "0", currency: "USD" } } })).toBe(false);
-});
-
-it.each([
-  { case: "above", actual: "120", target: "100", sign: 1, amount: "20" },
-  { case: "below", actual: "80", target: "100", sign: -1, amount: "20" },
-  { case: "equal", actual: "100", target: "100", sign: 0, amount: "0" },
-  {
-    case: "a money gap wider than a JSON number",
-    actual: "10000000000000000001",
-    target: "1",
-    sign: 1,
-    amount: "10000000000000000000",
-  },
-])("reads a gap $case", ({ actual, target, sign, amount }) => {
-  expect(gapOf(actual, target)).toEqual({ sign, amount });
 });
 
 it.each([
