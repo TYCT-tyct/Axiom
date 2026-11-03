@@ -47,6 +47,7 @@ type supplierAlertTest struct {
 }
 
 func TestSupplierSyncStormSendsOneNoticeAndOneRecovery(t *testing.T) {
+	t.Parallel()
 	w := newSupplierAlertTest(t)
 	w.enqueue(supplierAlertPass{})
 	w.waitPosition(0)

@@ -406,6 +406,7 @@ type failingKeyringOutput struct{}
 func (failingKeyringOutput) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
 func TestKeyringRewrapIncludesWebhookSigningKeys(t *testing.T) {
+	t.Parallel()
 	f := newRotationFixture(t)
 	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
 		c, err := observability.GetAlertConfiguration(t.Context(), tx)

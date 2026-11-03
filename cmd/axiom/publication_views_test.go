@@ -44,6 +44,7 @@ func newPublicationView(t *testing.T) publicationViewFixture {
 }
 
 func TestLocalPriceViewsNeverRepublish(t *testing.T) {
+	t.Parallel()
 	f := newPublicationView(t)
 	counts := func() string {
 		return f.world.query(`SELECT jsonb_build_array((SELECT count(*) FROM billing.price_versions),(SELECT count(*) FROM platform.audit_log),(SELECT count(*) FROM platform.alert_signals),(SELECT jsonb_agg(candidate_id ORDER BY model_id) FROM billing.price_publications))::text`)
@@ -63,6 +64,7 @@ func TestLocalPriceViewsNeverRepublish(t *testing.T) {
 }
 
 func TestLocalPriceCostGuard(t *testing.T) {
+	t.Parallel()
 	f := newPublicationView(t)
 	expensive := append([]suppliers.Routable(nil), f.endpoints[:1]...)
 	var err error
@@ -80,6 +82,7 @@ func TestLocalPriceCostGuard(t *testing.T) {
 }
 
 func TestCanonicalPricesIgnoreNodeKeyAvailability(t *testing.T) {
+	t.Parallel()
 	f := newPublicationView(t)
 	before := f.world.query("SELECT jsonb_agg(id ORDER BY id)::text FROM billing.price_versions")
 	if err := pgtest.Run(t.Context(), f.world.database.Superuser, "UPDATE suppliers.credentials SET key_version=999"); err != nil {

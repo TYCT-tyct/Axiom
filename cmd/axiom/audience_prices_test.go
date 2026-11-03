@@ -18,6 +18,7 @@ import (
 )
 
 func TestAudiencePreviewMatchesNodeCharge(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"tier", "account"} {
 		t.Run(kind, func(t *testing.T) { assertAudienceNodeCharge(t, kind == "account") })
 	}

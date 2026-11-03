@@ -19,6 +19,7 @@ import (
 //
 //nolint:cyclop,gocognit // the generation, the replay and the disable are one admin journey.
 func TestAdminRedeemCodes(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	site := f.siteID()
@@ -101,6 +102,7 @@ func TestAdminRedeemCodes(t *testing.T) {
 //
 //nolint:cyclop,gocognit // the credit, its replay, the read-back, the refusals and the limit are one journey.
 func TestConsoleRedeemCode(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	owner := f.text("SELECT id::text FROM accounts.users WHERE email = '" + ownerEmail + "'")

@@ -183,11 +183,20 @@ func startPostgres(t *testing.T, ctx context.Context, image string, restore bool
 	env := make(map[string]string, len(backup)+len(server))
 	maps.Copy(env, backup)
 	maps.Copy(env, server)
+	// An open port is not a server that answers the test: the server listens on TCP before it creates the socket psql
+	// uses, and accepts connections only after its startup process finishes, so on a slow disk the first statement found
+	// no socket or "the database system is starting up" (#605). The port still comes first because only the final server
+	// listens on TCP; the base image's temporary init server is socket-only, and pg_isready alone would pass on it just
+	// before it stops. The restored server is waited out by waitPromoted instead, which also reports a failed restore.
+	ready := []wait.Strategy{wait.ForListeningPort("5432/tcp")}
+	if !restore {
+		ready = append(ready, wait.ForExec([]string{"pg_isready", "-U", "postgres", "-d", "axiom"}))
+	}
 	opts := []testcontainers.ContainerCustomizer{
 		testcontainers.WithConfigModifier(func(config *container.Config) { config.User = "postgres" }),
 		testcontainers.WithExposedPorts("5432/tcp"),
 		testcontainers.WithEnv(env),
-		testcontainers.WithWaitStrategyAndDeadline(3*time.Minute, wait.ForListeningPort("5432/tcp")),
+		testcontainers.WithWaitStrategyAndDeadline(3*time.Minute, ready...),
 	}
 	if image == "" {
 		opts = append(opts, testcontainers.WithDockerfile(testcontainers.FromDockerfile{

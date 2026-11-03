@@ -168,7 +168,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 - **谁能调用**：它是运营和管理读的链，不是用户的接口：它带成本、端点和路由。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己调用的这些字段（用户读 `ListOwn`/`GetOwn`，那两个没有这些字段）。
 - **路由过程**：调用行的 `route` 列，内容是 routing 的 `Record.JSON()`：被排除的候选和原因、选定的路线、每次尝试的结局。尝试不重复存路由。
 - **账本交易**：由 billing 的 `LedgerOf(ctx, tx, id)` 按同一个请求 ID 读，每笔交易带自己的分录。observability 不读 billing 的表，也不引用 billing（依赖表里 observability 在 billing 之上），所以「串起」由调用方把两个函数的结果合起来：三个查询、两个模块，各读自己的表（[总体架构的「模块边界规则」](../../docs/architecture.md#模块边界规则)）。
-- **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，校正还会在记录写好后再记交易，抄下来的链接会旧；记录在本地 spill 里等写库时账本已经提交，抄下来的交易看起来会比记录新。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。这一列留在表里（`NOT NULL DEFAULT '{}'`），新代码既不读也不写；按[平台的迁移规则](../platform/README.md#迁移)，等停止使用它的版本发布之后再删（#204）。本次发布仍不删：还需要一个已发布的版本先停止读写它，滚动发布期间旧节点可能仍在写。
+- **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，校正还会在记录写好后再记交易，抄下来的链接会旧；记录在本地 spill 里等写库时账本已经提交，抄下来的交易看起来会比记录新。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。这一列已由迁移 `00020` 删除（#204）：Axiom 从未部署到生产，没有节点写过它，[平台的「晚一个版本再删」规则](../platform/README.md#迁移)针对的滚动发布窗口不存在；Go 代码和 sqlc 查询里都没有它。`ALTER TABLE` 对分区表的列删除会作用到每个分区，`TestDropLedgerEntryIDsReachesPartitions` 在真实 PostgreSQL 上逐个核对父表、月分区和默认分区，迁移前写入的调用也还在。
 - **不变量**：尝试序号从 1 连续到 `len(Attempts)`，调用行的 `attempt_count` 等于它（写入时算好）；`route` 是 JSON 对象；`LedgerOf` 的每笔交易 `request_id` 等于调用 ID、`attempt_seq` 是 0（请求本身）或 1 到 33（某次尝试），每笔交易的分录合计为 0（billing 写入时断言）。测试：`TestTraceReadsTheWholeChain`（cmd/axiom，走一次真实结算）与 `TestCallAndAttemptsRoundTrip`。
 
 ## 分区
@@ -209,7 +209,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 |---|---|---|
 | 另建 `call_attempt`，每次尝试一行 | 调用记录要能串起每次尝试（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）；suppliers 的 `attempt_costs` 只在结算事务里写，失败或崩溃的请求可能没有可查的尝试；单独的表让尝试有类型、时间和结果，并按 `(request_id, attempt_seq)` 连到供应商的扣费。负责人已在对话中把设计决定交给开发者（Issue #29） | 只存 `route` JSON：没有类型和耗时，查一次尝试要解 JSON；把尝试嵌进 `call_log`：一个请求一行会被撑大，按尝试查询和保留都更难；让 suppliers 直写：跨模块写同一张表，违反模块边界 |
 | 调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 取自最后一个尝试 | 一处事实：调用行与尝试表不可能不一致；网关也不用把同样的值填两遍 | 调用记录再带一份端点、来源和出口：两套值迟早对不上 |
-| 调用、尝试和账本交易只用请求 ID 关联，`ledger_entry_ids` 不再读写 | 分录没有 ID，这一列从来没有写入方；请求 ID 已经是账本自己的键，照抄一份会在调用记录丢失或校正追加交易时与账本不一致。列按平台的迁移规则留到停止使用它的版本之后删除 | 抄交易 ID：要结算把 ID 带进异步记录，仍会缺、会旧；让 observability 查 billing 的表：违反模块边界 |
+| 调用、尝试和账本交易只用请求 ID 关联，`ledger_entry_ids` 已删除（迁移 `00020`） | 分录没有 ID，这一列从来没有写入方；请求 ID 已经是账本自己的键，照抄一份会在调用记录丢失或校正追加交易时与账本不一致。Axiom 从未部署到生产，没有节点写过这一列，所以不必等停止使用它的版本再发布一次；真实 PostgreSQL 的迁移测试核对父表和每个分区都删掉了它 | 抄交易 ID：要结算把 ID 带进异步记录，仍会缺、会旧；让 observability 查 billing 的表：违反模块边界；再等一个发布：没有生产节点可等 |
 | 准入预占 + 本机 WAL + 顺序批量入库，spill 满时拒绝新调用 | 记录在响应结束前已追加到本机段文件，进程崩溃可重放，数据库慢不拖慢已完成调用；磁盘和接收量都有硬上限，满了拒绝而不是丢。`Commit` 等一轮组提交 fsync 才返回，主机断电也不丢已回复的调用；并发调用共用一次 fsync，调用路径的实测代价见[性能的「调用路径上的规则」](../../docs/performance.md#调用路径上的规则)。否决在结算事务里写调用记录：它虽然和结算同一原子提交，但会让一条日志记录的约束或磁盘故障失败整笔钱的结算，`SettleBatch` 还要为每笔调用多带一行日志，日志表因此进入钱的临界路径；也否决同步数据库插入：同样把数据库延迟放进调用路径，且崩溃会丢掉已结算未插入的记录。否决无界队列：内存无上限；否决队列满丢新记录：违反「全部保存」 |
 | 整批行作为一个 JSON 数组传给一条 `INSERT … SELECT` | 一次往返、一个参数；类型转换和检查留给表。sqlc 不认 30 多个参数的 `unnest`，也没有 `:copyfrom`（`pg.Tx` 没有 `CopyFrom`） | 逐行 `INSERT`：每条一次往返；列式 `unnest`：生成不了 |
 | 金额存最小单位的整数，币种单列 | 与 billing 的存储一致（[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)），汇总不丢精度 | 浮点数、字符串 |

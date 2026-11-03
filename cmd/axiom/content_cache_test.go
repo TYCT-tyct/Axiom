@@ -19,6 +19,7 @@ import (
 
 //nolint:cyclop,gocognit // one export through cache, encryption and tar verification
 func TestContentExportIncludesResponseCache(t *testing.T) {
+	t.Parallel()
 	c := newCommandLine(t)
 	master := masterKeys(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
