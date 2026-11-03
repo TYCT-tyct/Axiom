@@ -136,6 +136,40 @@ function putTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/targets/
   return ok(stored);
 }
 
+// targetComparison turns a stored month into the overview's prorated comparison. The mock states the month's targets
+// as they are; it exists to show the page's target and gap, not to re-test the server's arithmetic.
+function targetComparison(
+  stored: Schemas["OperationsTargets"] | undefined,
+  calls: number,
+  errors: number,
+  revenue: bigint,
+  cost: bigint,
+) {
+  if (!stored) {
+    return {};
+  }
+  return {
+    ...(stored.calls !== undefined ? { calls: { target: stored.calls, gap: calls - stored.calls } } : {}),
+    ...(stored.errors !== undefined ? { errors: { target: stored.errors, gap: errors - stored.errors } } : {}),
+    ...(stored.revenue
+      ? {
+          revenue: {
+            target: stored.revenue,
+            gap: { amount: String(revenue - BigInt(stored.revenue.amount)), currency: stored.revenue.currency },
+          },
+        }
+      : {}),
+    ...(stored.cost
+      ? {
+          cost: {
+            target: stored.cost,
+            gap: { amount: String(cost - BigInt(stored.cost.amount)), currency: stored.cost.currency },
+          },
+        }
+      : {}),
+  };
+}
+
 // The overview sums the mocked calls, so the worst data's long slugs, many accounts and int64 prices reach the page; the
 // cash comes back in two currencies, one of them negative, as a site with refunds in another currency would see.
 function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "get">) {
@@ -157,30 +191,7 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
   const errors = state.calls.filter((call) => call.error_kind).length;
   const month = (query.get("until") ?? new Date().toISOString()).slice(0, 7);
   const stored = state.targets.get(month);
-  const targets = stored
-    ? {
-        ...(stored.calls !== undefined
-          ? { calls: { target: stored.calls, gap: state.calls.length - stored.calls } }
-          : {}),
-        ...(stored.errors !== undefined ? { errors: { target: stored.errors, gap: errors - stored.errors } } : {}),
-        ...(stored.revenue
-          ? {
-              revenue: {
-                target: stored.revenue,
-                gap: { amount: String(revenue - BigInt(stored.revenue.amount)), currency: stored.revenue.currency },
-              },
-            }
-          : {}),
-        ...(stored.cost
-          ? {
-              cost: {
-                target: stored.cost,
-                gap: { amount: String(cost - BigInt(stored.cost.amount)), currency: stored.cost.currency },
-              },
-            }
-          : {}),
-      }
-    : {};
+  const targets = targetComparison(stored, state.calls.length, errors, revenue, cost);
   return ok({
     site_id: state.siteId,
     since: query.get("since") ?? "2026-10-29T00:00:00.000Z",
@@ -200,7 +211,7 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
       ...n,
     })),
     top_models: rank((call) => call.model).map(([model, n]) => ({ model, ...n })),
-    ...(state.withoutTargets ? {} : { targets }),
+    targets,
   });
 }
 

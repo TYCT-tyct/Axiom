@@ -1,4 +1,4 @@
-import { long, nano, pad, range, type Schemas, siteId, tierId, usd, uuid } from "./admin-fixtures.ts";
+import { long, nano, pad, range, type Schemas, siteId, tierId, usd, usualTargets, uuid } from "./admin-fixtures.ts";
 import { aMerchant, anOrder, aRefund } from "./admin-payments-data.ts";
 import type { AuthState } from "./mock.ts";
 import { accountId, authState, userId } from "./mock-auth.ts";
@@ -13,8 +13,6 @@ export { uuid } from "./admin-fixtures.ts";
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
   targets: Map<string, Schemas["OperationsTargets"]>;
-  // A test sets this to answer like a node of the release before: the overview has no targets field.
-  withoutTargets?: boolean;
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
   logo: Schemas["SiteLogoView"];
@@ -39,9 +37,6 @@ export type AdminState = AuthState & {
   models: Schemas["Model"][];
   rules: Schemas["PricingRule"][];
 };
-
-// The month the dashboard and the target editor open on: the real UTC month, as the page computes it.
-const thisMonth = () => new Date().toISOString().slice(0, 7);
 
 const allPermissions = [
   "users.view",
@@ -384,24 +379,11 @@ export function usualState(): AdminState {
   const own = aUser(0, { email: "admin@example.com", mfa_enabled: true, tier: tiers[0] });
   const people = [own, ...users];
   const calls = range(60).map((n) => aCall(n, people[(n - 1) % people.length] ?? own));
-  const month = thisMonth();
   const audit = range(60).map((n) => anAuditEntry(n, people[(n - 1) % people.length] ?? own));
   const state: AdminState = {
     ...authState(allPermissions),
     siteId,
-    targets: new Map([
-      [
-        month,
-        {
-          site_id: siteId,
-          month,
-          calls: 45,
-          errors: 10,
-          revenue: usd("2000"),
-          cost: usd("1800"),
-        },
-      ],
-    ]),
+    targets: usualTargets(),
     settings: {
       settings: { console_idle_timeout_seconds: 604800, new_key_daily_limit: usd("20") },
       defaults: {
