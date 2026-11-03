@@ -12,6 +12,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/payments"
 	"axiom/internal/platform/alert"
@@ -57,7 +58,7 @@ type listening struct {
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
-	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher)
+	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher, gateway.DefaultConfig())
 }
 
 // directEgress is the client a node reaches its suppliers through in production.
@@ -65,13 +66,15 @@ func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
 	return egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
 }
 
-// serveWith lets a test capture its recorder and opt into price syncing with local datasets. A nil prices constructor
-// disables the periodic price job, so tests of the listeners and call path never download the production datasets.
+// serveWith lets a test capture its recorder, opt into price syncing with local datasets, and choose the node's
+// in-process limits. A nil prices constructor disables the periodic price job, so tests of the listeners and call path
+// never download the production datasets; a test world passes limits sized for the shared machines it runs on, not
+// production's.
 //
 //nolint:funlen,cyclop // startup order is the contract: listeners drain before the recorder, the queue, the cache and the database.
 func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
-	prices func(*egress.Client) *catalog.Fetcher,
+	prices func(*egress.Client) *catalog.Fetcher, limits gateway.Config,
 ) error {
 	cfg, err := readSettings(environ)
 	if err != nil {
@@ -80,7 +83,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if !cfg.roles.has(roleCore) {
 		return serveWithoutCore(ctx, cfg, logger)
 	}
-	console, err := loadConsole(cfg)
+	console, err := loadConsole(cfg, limits)
 	if err != nil {
 		return err
 	}
@@ -231,6 +234,7 @@ func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error, los
 // write version the database chose, and the login and mail keys were derived from the same snapshot.
 type consoleParts struct {
 	cfg            nodeSettings
+	gate           gateway.Config     // the in-process limits the call path and the accounts module share
 	masterKeys     *secret.MasterKeys // the one master-key read; the mail worker derives the recipient key from it
 	master         *secret.Keyring    // seals users' TOTP secrets and suppliers' credentials; openCheckedDatabase sets its write version
 	loginKey       secret.LoginKey    // from the same master-key snapshot, under the login label
@@ -243,7 +247,7 @@ type consoleParts struct {
 	paymentSignals *payments.SignalState
 }
 
-func loadConsole(cfg nodeSettings) (consoleParts, error) {
+func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) {
 	// One read of the master key file gives the ring openCheckedDatabase checks and the snapshot the login and mail keys
 	// are derived from under labels of their own, so a replacement during startup cannot mix versions and neither key
 	// follows the hash keys' rotation (internal/platform/kv/README.md「键」). The plaintext stays in secret.
@@ -276,7 +280,7 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	return consoleParts{
-		cfg: cfg, masterKeys: master, master: master.Keyring(), loginKey: loginKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
+		cfg: cfg, gate: limits, masterKeys: master, master: master.Keyring(), loginKey: loginKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
 	}, nil
 }
 

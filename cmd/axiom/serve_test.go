@@ -409,7 +409,7 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 		recorder, err = startRecorder(ctx, db, tel, dir, logger)
 		return recorder, err
 	}
-	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil); err == nil {
+	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil, testGatewayConfig()); err == nil {
 		t.Fatal("the node started on a taken address")
 	}
 	if recorder == nil {

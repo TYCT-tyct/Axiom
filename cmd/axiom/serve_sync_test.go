@@ -12,12 +12,22 @@ import (
 	"time"
 
 	"axiom/internal/catalog"
+	"axiom/internal/gateway"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/telemetry"
 )
+
+// testGatewayConfig is the in-process limits a test world's node starts with. Tests run many nodes at once on machines
+// shared with other work, where production's one-second admission budget is not enough for a transaction or a key
+// lookup (internal/gateway rig_test.go gives its rigs the same); the tests of a budget set their own.
+func testGatewayConfig() gateway.Config {
+	limits := gateway.DefaultConfig()
+	limits.AdmissionBudget, limits.KeyLookup = 30*time.Second, 30*time.Second
+	return limits
+}
 
 // serveForTest keeps the entry's admission checks, with periodic downloads disabled unless a test supplies local data.
 // A core node's recorder gets a temporary spill directory: the production default is relative to the working
@@ -46,7 +56,7 @@ func serveForTest(ctx context.Context, environ []string, logger *slog.Logger) er
 	if !hasDir && core {
 		environ = append(environ, callLogDirVar+"="+dir)
 	}
-	return serveWith(ctx, environ, logger, directEgress, startRecorder, nil)
+	return serveWith(ctx, environ, logger, directEgress, startRecorder, nil, testGatewayConfig())
 }
 
 func TestServeCancelsAPriceFetchOnShutdown(t *testing.T) {
@@ -101,7 +111,7 @@ func checkPriceFetchShutdown(t *testing.T, body bool) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil)), loopback, startRecorder, prices)
+		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil)), loopback, startRecorder, prices, testGatewayConfig())
 	}()
 	servingAddrs(t, logs, done)
 	select {
