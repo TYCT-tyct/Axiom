@@ -10,7 +10,9 @@ ROOT = Path(__file__).parents[1]
 
 
 def duration_seconds(value):
-    """Parse a Compose duration (Go duration string): 2m0s, 1m30s, 30s."""
+    """Parse a Compose duration (Go duration string) or the integer seconds --wait-timeout takes."""
+    if value.isdigit():
+        return int(value)
     match = re.fullmatch(r"(?:(\d+)m)?(?:(\d+)s)?", value)
     if match is None:
         raise AssertionError(f"not a Compose duration: {value}")

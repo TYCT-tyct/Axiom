@@ -83,6 +83,6 @@ compose build postgres
 # needed here: restart: unless-stopped resets a crash-looping container's start period on every restart, so it may
 # never reach unhealthy, and this entry has no CI step timeout. Five minutes covers the 2-minute start period, the
 # three 10-second failure probes and the host's slow Docker daemon, and then fails the deployment.
-compose up --detach --no-build --wait --wait-timeout 5m postgres
+compose up --detach --no-build --wait --wait-timeout 300 postgres
 compose exec -T postgres sh < deploy/postgres/roles.sh
 compose up --detach --no-build --wait
