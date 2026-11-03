@@ -47,22 +47,27 @@ func TestRecordBenchmark(t *testing.T) {
 	t.Parallel()
 	set := fixedBenchmark()
 	m, ep, at := benchmarkMonitor(t, set)
-	if got := m.MeasuredFor(ep, at); got.ProductScore != 0 || got.ProductScoreConfidence != 0 || !got.ProductScoreAt.IsZero() {
-		t.Fatalf("a baseline alone scored the endpoint: %+v", got)
+	candidate := ep
+	candidate.ID = suppliers.EndpointID{2}
+	if err := m.Prepare(t.Context(), []suppliers.Routable{ep, candidate}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.MeasuredFor(candidate, at); got.ProductScore != 0 || got.ProductScoreConfidence != 0 || !got.ProductScoreAt.IsZero() {
+		t.Fatalf("a baseline alone scored another endpoint: %+v", got)
 	}
 	official := runOfSet(set, at, "yes")
-	score, ok := m.RecordBenchmark(ep, official)
+	score, ok := m.RecordBenchmark(candidate, official)
 	if !ok || score.Score != 100 || score.Confidence != 1 || score.Possible == 0 {
-		t.Fatalf("the official endpoint scored %+v, want 100 with full confidence", score)
+		t.Fatalf("the candidate scored %+v, want 100 with full confidence", score)
 	}
-	got := m.MeasuredFor(ep, at)
+	got := m.MeasuredFor(candidate, at)
 	if got.ProductScore != 100 || got.ProductScoreConfidence != 1 || !got.ProductScoreAt.Equal(at) {
 		t.Fatalf("read back %+v, want 100 with full confidence at %v", got, at)
 	}
-	if half := m.MeasuredFor(ep, at.Add(benchmarkMaxAge/2)); half.ProductScore != 100 || math.Abs(half.ProductScoreConfidence-0.5) > 1e-9 {
+	if half := m.MeasuredFor(candidate, at.Add(benchmarkMaxAge/2)); half.ProductScore != 100 || math.Abs(half.ProductScoreConfidence-0.5) > 1e-9 {
 		t.Fatalf("half the age: %+v, want 100 and confidence 0.5", half)
 	}
-	if expired := m.MeasuredFor(ep, at.Add(benchmarkMaxAge)); expired.ProductScore != 0 ||
+	if expired := m.MeasuredFor(candidate, at.Add(benchmarkMaxAge)); expired.ProductScore != 0 ||
 		expired.ProductScoreConfidence != 0 || !expired.ProductScoreAt.Equal(at) {
 		t.Fatalf("aged out: %+v, want no score and the last run's time", expired)
 	}
@@ -141,9 +146,6 @@ func TestProductScoreOnlyForPlatformEndpoints(t *testing.T) {
 	t.Parallel()
 	set := fixedBenchmark()
 	m, ep, at := benchmarkMonitor(t, set)
-	if _, ok := m.RecordBenchmark(ep, runOfSet(set, at, "yes")); !ok {
-		t.Fatal("the platform endpoint was refused")
-	}
 	if got := m.MeasuredFor(ep, at); got.ProductScore != 100 {
 		t.Fatalf("platform endpoint scored %+v, want 100", got)
 	}
@@ -170,7 +172,12 @@ func TestRecordBenchmarkNeedsTheCurrentBaseline(t *testing.T) {
 	if !m.RecordOfficialBenchmark(ep, runOfSet(set, at, "yes")) {
 		t.Fatal("the first baseline was refused")
 	}
-	if _, ok := m.RecordBenchmark(ep, runOfSet(set, at, "yes")); !ok {
+	candidate := ep
+	candidate.ID = suppliers.EndpointID{2}
+	if err := m.Prepare(t.Context(), []suppliers.Routable{ep, candidate}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.RecordBenchmark(candidate, runOfSet(set, at, "yes")); !ok {
 		t.Fatal("the endpoint was not scored against the first baseline")
 	}
 	newer := runOfSet(set, at.Add(time.Hour), "yes")
@@ -178,13 +185,13 @@ func TestRecordBenchmarkNeedsTheCurrentBaseline(t *testing.T) {
 	if !m.RecordOfficialBenchmark(ep, newer) {
 		t.Fatal("a newer baseline was refused")
 	}
-	if got := m.MeasuredFor(ep, at.Add(time.Hour)); got.ProductScore != 0 || got.ProductScoreConfidence != 0 {
+	if got := m.MeasuredFor(candidate, at.Add(time.Hour)); got.ProductScore != 0 || got.ProductScoreConfidence != 0 {
 		t.Fatalf("a score against the old baseline survived its replacement: %+v", got)
 	}
 	if m.RecordOfficialBenchmark(ep, runOfSet(set, at.Add(-time.Hour), "yes")) {
 		t.Fatal("an older baseline replaced the current one")
 	}
-	if _, ok := m.RecordBenchmark(ep, runOfSet(set, newer.At.Add(benchmarkMaxAge), "yes")); ok {
+	if _, ok := m.RecordBenchmark(candidate, runOfSet(set, newer.At.Add(benchmarkMaxAge), "yes")); ok {
 		t.Fatal("a run against an aged-out anchor was scored")
 	}
 }
@@ -232,9 +239,6 @@ func TestBenchmarkKeepsRunningMetricsSeparate(t *testing.T) {
 	at := t0.Add(time.Hour)
 	if !m.RecordOfficialBenchmark(ep, runOfSet(set, at, "yes")) {
 		t.Fatal("baseline refused")
-	}
-	if _, ok := m.RecordBenchmark(ep, runOfSet(set, at, "yes")); !ok {
-		t.Fatal("score refused")
 	}
 	for range scoreSamples {
 		m.Observe(t.Context(), Observation{Endpoint: ep.ID, Failure: failed500, Ended: at})

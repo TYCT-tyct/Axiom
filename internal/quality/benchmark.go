@@ -577,7 +577,8 @@ func (b benchmarkState) productScore(now time.Time, baseline officialBenchmark, 
 // are scored against. Only a platform endpoint can be the official run; a tenant's own key measures that tenant's
 // endpoint, not the official service. The caller must pass the catalog author's own API, not a cloud host or a relay:
 // this package can see only the platform flag. A baseline older than the one in force is rejected, so a late result
-// cannot replace a newer anchor.
+// cannot replace a newer anchor. It also records the endpoint's own 100 through RecordBenchmark when its snapshot is
+// current.
 func (m *Monitor) RecordOfficialBenchmark(ep suppliers.Routable, run BenchmarkRun) bool {
 	set := fixedBenchmark()
 	if ep.Model == (uuid.UUID{}) || !benchmarkRunAllowed(ep, run, set) {
@@ -589,11 +590,15 @@ func (m *Monitor) RecordOfficialBenchmark(ep suppliers.Routable, run BenchmarkRu
 		return false
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if old, ok := m.benchmarks[ep.Model]; ok && !run.At.After(old.run.At) {
+		m.mu.Unlock()
 		return false
 	}
 	m.benchmarks[ep.Model] = officialBenchmark{run: run}
+	m.mu.Unlock()
+	// The official endpoint is the anchor, so its own score is 100 by definition. Record it through the same path a
+	// candidate uses; if its snapshot is not current yet, its score waits for the next published run.
+	_, _ = m.RecordBenchmark(ep, run)
 	return true
 }
 
