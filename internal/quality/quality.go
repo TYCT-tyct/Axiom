@@ -421,6 +421,16 @@ func (m *Monitor) observeClassEvidence(e *State, o *Observation, v verdict) {
 	}
 }
 
+// classOf is the endpoint's class for ep's configuration. The class was recognized from responses of the configuration
+// Prepare last published; a caller holding another (a routing build that read an older supplier generation) gets the
+// fallback, as MeasuredFor withholds its facts. e.mu is held.
+func (m *Monitor) classOf(e *State, ep suppliers.Routable) string {
+	if e.class == "" || e.current != configOf(ep) {
+		return m.fallbackClass()
+	}
+	return e.class
+}
+
 // fallbackClass is the class an endpoint belongs to before a rule decides, or when nothing matches: the live table's
 // fallback. New installs the relay fallback before Start reads the table.
 func (m *Monitor) fallbackClass() string { return m.classes.Load().fallback }
@@ -430,8 +440,6 @@ func (m *Monitor) fallbackClass() string { return m.classes.Load().fallback }
 // the loop clears the state (docs/domains/quality.md「真伪检测」), and a measurement of its structure likewise says
 // nothing about another configuration. The evidence and its claim are read in one critical section: a claim switched
 // between two reads must not be paired with the previous claim's evidence.
-//
-//nolint:gocognit // one guarded read of the endpoint's state and its claims
 func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	m.mu.RLock()
 	e := m.endpoints[ep.ID]
@@ -447,12 +455,7 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := e.measures(now, m.verificationAge())
-	// The class was recognized from responses of the configuration Prepare last published; a caller holding another
-	// (a routing build that read an older supplier generation) gets the fallback, as its facts are withheld below.
-	out.Class = e.class
-	if out.Class == "" || e.current != configOf(ep) {
-		out.Class = m.fallbackClass()
-	}
+	out.Class = m.classOf(e, ep)
 	if out.Verified && (!has || e.verify.claim != want) {
 		out.Verified, out.VerifyConfidence, out.VerifiedAt = false, 0, time.Time{}
 	}

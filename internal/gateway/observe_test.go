@@ -183,35 +183,42 @@ func TestClassEvidenceIsOneReportedResponse(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run(t, func(t *testing.T, ctx context.Context) {
-				health := quality.New(nil)
-				classes := quality.DefaultSourceClasses()
-				classes[0].Rules = quality.Rules{Match: "all", Conditions: tc.rule}
-				if err := health.SetSourceClasses(classes); err != nil {
-					t.Fatal(err)
-				}
-				// The harness's entry: no catalog model or formats, upstream up-1.
-				endpoint := suppliers.Routable{ID: uuidOf(ep(1)), Upstream: "up-1"}
-				if err := health.Prepare(ctx, []suppliers.Routable{endpoint}); err != nil {
-					t.Fatal(err)
-				}
-				upstream := protocol.Chat
-				h := newHarness(t, ctx, options{
-					client: protocol.Chat, upstream: &upstream, request: []byte(searchTool), health: health,
-					price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_read":"0.0000001","cache_write":"0.000001","web_search":"0.01"}}`,
-					search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
-					server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
-					script: map[int][]scripted{1: tc.hops},
-				})
-				h.run()
-				if h.w.status != http.StatusOK {
-					t.Fatalf("status = %d, body = %s", h.w.status, h.w.body())
-				}
-				if got := health.MeasuredFor(endpoint, time.Now()).Class; got != tc.class {
+				if got := classAfter(t, ctx, tc.rule, tc.hops); got != tc.class {
 					t.Errorf("class %q, want %q", got, tc.class)
 				}
 			})
 		})
 	}
+}
+
+// classAfter runs one search-loop call whose hops answer as given and returns the class quality then gives endpoint 1,
+// where official is recognized by rule.
+func classAfter(t *testing.T, ctx context.Context, rule []quality.Condition, hops []scripted) string {
+	t.Helper()
+	health := quality.New(nil)
+	classes := quality.DefaultSourceClasses()
+	classes[0].Rules = quality.Rules{Match: "all", Conditions: rule}
+	if err := health.SetSourceClasses(classes); err != nil {
+		t.Fatal(err)
+	}
+	// The harness's entry: no catalog model or formats, upstream up-1.
+	endpoint := suppliers.Routable{ID: uuidOf(ep(1)), Upstream: "up-1"}
+	if err := health.Prepare(ctx, []suppliers.Routable{endpoint}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := protocol.Chat
+	h := newHarness(t, ctx, options{
+		client: protocol.Chat, upstream: &upstream, request: []byte(searchTool), health: health,
+		price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_read":"0.0000001","cache_write":"0.000001","web_search":"0.01"}}`,
+		search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
+		server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+		script: map[int][]scripted{1: hops},
+	})
+	h.run()
+	if h.w.status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", h.w.status, h.w.body())
+	}
+	return health.MeasuredFor(endpoint, time.Now()).Class
 }
 
 // withoutUsage drops a Chat stream's usage chunk: the upstream reported nothing.
