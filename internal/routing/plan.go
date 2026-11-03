@@ -266,8 +266,8 @@ func (*Router) entry(c *candidate, n *need) Entry {
 	limits.OpenAIUsage = format != protocol.Messages // the call format decides whose usage semantics the reply has
 	return Entry{
 		Exchange: c.Exchange,
-		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, ModelSlug: c.ModelSlug, Price: c.Price, Limits: limits, MaxOutput: out,
-		Segmentable: segmentable, Byok: c.Byok,
+		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, ModelSlug: c.ModelSlug, Class: c.Class,
+		Price: c.Price, Limits: limits, MaxOutput: out, Segmentable: segmentable, Byok: c.Byok,
 	}
 }
 
@@ -475,7 +475,7 @@ func (n *need) presetAllows(c *candidate, price *candidatePrice, spec Spec) bool
 func (n *need) overrideAllows(c *candidate, price *candidatePrice, spec Spec) bool {
 	o := n.over
 	return o.allowsName(c.Codename) && o.allowsQuantization(c.Quantization) &&
-		(o.Classes == 0 || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
+		(o.Classes.Empty() || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
 		(!o.RequireParameters || spec.Parameters.HasAll(o.RequiredParameters)) &&
 		n.withinLimit(o.MaxPrice, c, price, spec)
 }

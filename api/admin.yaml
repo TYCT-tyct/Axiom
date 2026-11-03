@@ -27,6 +27,7 @@ tags:
   - {name: Audit, description: "Immutable audit search."}
   - {name: Session, description: "Sign-in, two-step verification and the current session."}
   - {name: Site, description: "Site settings."}
+  - {name: Quality, description: "Source classes and the fingerprint rules that recognize them."}
   - {name: Users, description: "Users, accounts and manual credit."}
   - {name: Suppliers, description: "Suppliers, their groups and keys, and the upstream model names waiting to be mapped."}
   - {name: Catalog, description: "Authors, models, their names, specs and reference prices."}
@@ -1161,6 +1162,132 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ProbeSettingsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/source-classes:
+    get:
+      operationId: listSourceClasses
+      tags: [Quality]
+      summary: The source classes in recognition order and their fingerprint rules.
+      description: >-
+        The live classes, lowest position first. `relay` is the fallback an endpoint belongs to until a rule matches or
+        while it has no successful response. Nodes reread this table within 5 seconds and reclassify endpoints from
+        their last response; the routing snapshot publishes the new class within another snapshot interval.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The live source classes.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SourceClassList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createSourceClass
+      tags: [Quality]
+      summary: Add a source class and its fingerprint rules.
+      description: >-
+        The slug is stable: presets and call records name it, and a retired class keeps it reserved. A missing position
+        is placed after the last class before the fallback. The rules are validated here and again when a node loads
+        them; a bad rule names its path (`/rules/conditions/0/operator`) in the 400.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SourceClassCreate"}
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SourceClass"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/source-classes/{slug}:
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        schema: {type: string, maxLength: 32}
+    put:
+      operationId: updateSourceClass
+      tags: [Quality]
+      summary: Change a source class at the revision the caller read.
+      description: >-
+        Changes names, description, position and rules. A stale `rev` is a 409 and changes nothing. A seeded class keeps
+        its slug and cannot be retired; the fallback keeps its position and has no rules. Endpoints are reclassified
+        from their last successful response, and a header the new rules read but the old ones did not is absent until
+        the next response, so the endpoint may fall to the fallback in the meantime.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SourceClassUpdate"}
+      responses:
+        "200":
+          description: The class as stored.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SourceClass"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+    delete:
+      operationId: deleteSourceClass
+      tags: [Quality]
+      summary: Retire a source class.
+      description: >-
+        The class stops matching and leaves the list; its row and slug stay reserved, so a preset naming it simply
+        stops matching (fail closed) instead of silently pointing at a later class. A seeded class cannot be retired.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SourceClassDelete"}
+      responses:
+        "204":
+          description: Retired; the same Idempotency-Key replays this answer without a second change.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
@@ -6346,6 +6473,90 @@ components:
       required: [settings, reason]
       properties:
         settings: {$ref: "#/components/schemas/SegmentSettings"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SourceClassCondition:
+      type: object
+      additionalProperties: false
+      required: [evidence, operator]
+      properties:
+        evidence: {type: string, enum: [header, usage]}
+        name:
+          type: string
+          maxLength: 256
+          description: The response header name for a header condition, canonicalized before it is stored.
+        item:
+          type: string
+          maxLength: 64
+          description: The billing item name for a usage condition.
+        operator: {type: string, enum: [present, absent, equals, prefix, suffix, contains]}
+        value:
+          type: string
+          maxLength: 256
+          description: Empty for present and absent; 1 to 256 bytes for the comparing operators.
+    SourceClassRules:
+      type: object
+      additionalProperties: false
+      required: [match, conditions]
+      properties:
+        match: {type: string, enum: [all, any]}
+        conditions:
+          type: array
+          maxItems: 8
+          items: {$ref: "#/components/schemas/SourceClassCondition"}
+    SourceClass:
+      type: object
+      required: [slug, name, name_zh, description, position, fallback, system, rules, revision, updated_at]
+      properties:
+        slug: {type: string}
+        name: {type: string}
+        name_zh: {type: string}
+        description: {type: string}
+        position: {type: integer}
+        fallback: {type: boolean}
+        system: {type: boolean}
+        rules: {$ref: "#/components/schemas/SourceClassRules"}
+        revision: {type: integer, format: int64}
+        updated_at: {type: string, format: date-time}
+    SourceClassList:
+      type: object
+      required: [classes]
+      properties:
+        classes:
+          type: array
+          items: {$ref: "#/components/schemas/SourceClass"}
+    SourceClassCreate:
+      type: object
+      additionalProperties: false
+      required: [slug, name, rules, reason]
+      properties:
+        slug:
+          type: string
+          maxLength: 32
+          pattern: "^[a-z][a-z0-9-]{0,31}$"
+        name: {type: string, maxLength: 100}
+        name_zh: {type: string, maxLength: 100}
+        description: {type: string, maxLength: 500}
+        position: {type: integer, minimum: 0, maximum: 1000000}
+        rules: {$ref: "#/components/schemas/SourceClassRules"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SourceClassUpdate:
+      type: object
+      additionalProperties: false
+      required: [rev, reason]
+      properties:
+        name: {type: string, maxLength: 100}
+        name_zh: {type: string, maxLength: 100}
+        description: {type: string, maxLength: 500}
+        position: {type: integer, minimum: 0, maximum: 1000000}
+        rules: {$ref: "#/components/schemas/SourceClassRules"}
+        rev: {type: integer, format: int64, minimum: 1}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SourceClassDelete:
+      type: object
+      additionalProperties: false
+      required: [rev, reason]
+      properties:
+        rev: {type: integer, format: int64, minimum: 1}
         reason: {$ref: "#/components/schemas/Reason"}
     ProbeSettings:
       type: object

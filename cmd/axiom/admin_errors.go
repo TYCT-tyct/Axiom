@@ -10,6 +10,7 @@ import (
 	"axiom/internal/operations"
 	"axiom/internal/payments"
 	"axiom/internal/platform/idem"
+	"axiom/internal/quality"
 	"axiom/internal/suppliers"
 )
 
@@ -25,6 +26,10 @@ var adminRefusals = []refusal{
 	{observability.ErrRetention, http.StatusUnprocessableEntity, codeUnprocessable, "the hot window is 0 to 3650 days"},
 	{observability.ErrAlertRevision, http.StatusConflict, codeStaleRevision, "the alert configuration changed since it was read"},
 	{idem.ErrReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another request"},
+	{quality.ErrClassNotFound, http.StatusNotFound, codeNotFound, "no such resource"},
+	{quality.ErrClassExists, http.StatusConflict, codeConflict, "the slug is already taken or was retired; choose another"},
+	{quality.ErrClassStale, http.StatusConflict, codeStaleRevision, "the source class changed since it was read"},
+	{quality.ErrClassSystem, http.StatusConflict, codeConflict, "a seeded source class cannot be retired"},
 
 	{catalog.ErrOpKeyReused, http.StatusConflict, codeIdempotencyReuse, "the Idempotency-Key was first used for another change"},
 	{catalog.ErrStaleRev, http.StatusConflict, codeStaleRevision, "the model changed since it was read"},

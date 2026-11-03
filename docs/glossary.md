@@ -91,7 +91,7 @@ API key → 路由按 key 的路由预设选端点 → 供应商选凭证 → �
 | 能力 | capability | 请求用到、端点可能不支持的功能，如工具、图片、PDF、推理；路由只留下支持请求全部能力的端点 |
 | 调用格式 | format | 模型调用接口的写法：OpenAI Chat、OpenAI Responses、Anthropic Messages |
 | 依据 | basis | 一个属性值的出处 |
-| 来源 | `source_class` | 端点的上游从哪来；类别是后台数据，M1 只写 `relay` |
+| 来源 | `source_class` | 端点的上游从哪来；类别是后台数据（`quality.source_classes`），稳定 slug 由预设和调用记录使用 |
 | 指纹 | fingerprint | 识别来源的规则，如响应头、消息 ID 格式、用量特征 |
 | 检测 | probe | 我们主动发给端点的测试请求，见[端点评估](domains/quality.md) |
 | 同步 | sync | 通过适配器拉取供应商的模型、分组、价格和余额 |

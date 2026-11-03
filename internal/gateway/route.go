@@ -449,10 +449,11 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		Owner: routing.Owner{Site: routing.SiteID(r.Site), Account: routing.AccountID(r.Account)},
 		Byok:  r.Byok, ByokFallback: r.ByokFallback,
 		Enabled: true, BalanceOK: r.Funds != nil, Funds: r.Funds, Cost: r.Schedule, Egresses: 1, PoolLow: r.PoolLow,
-		// Every supplier M1 buys from is a relay or reseller, which is what its adapter talks to; nothing records what
-		// one does with the data it is sent, so an endpoint is taken to be the worst case rather than the best: a preset
-		// that requires no retention must not route to it on the strength of a value nobody set.
-		Class: routing.ClassRelay, Policy: routing.PolicyMayTrain,
+		// Where the endpoint's supply comes from is what quality's fingerprints decided from its real responses, the
+		// fallback being relay until a rule matches (docs/domains/quality.md「来源类别与指纹」). Nothing records what a
+		// supplier does with the data it is sent, so an endpoint is taken to be the worst case rather than the best: a
+		// preset that requires no retention must not route to it on the strength of a value nobody set.
+		Class: routing.Class(measured.Class), Policy: routing.PolicyMayTrain,
 		// Health, the quality score, its confidence, and the time to first token and speed are what real traffic and the
 		// probes measured, as of this build: the snapshot is at most one rebuild behind the attempts
 		// (docs/domains/quality.md「质量分、吞吐与延迟」). An endpoint nothing counted has the neutral quality 1 and the

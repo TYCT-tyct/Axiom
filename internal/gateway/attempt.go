@@ -11,6 +11,7 @@ import (
 	"uuid"
 
 	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/quality"
@@ -318,6 +319,11 @@ func (a *attempt) observe(ctx context.Context) {
 	for _, rec := range s.ends[a.first : a.i+1] {
 		for _, seg := range rec.Segments {
 			o.OutputTokens += seg.Usage.OutputTotal()
+			for it := range catalog.NumItems {
+				if seg.Usage.Count(it) > 0 {
+					o.UsageItems.Add(it)
+				}
+			}
 		}
 	}
 	s.x.Quality.Observe(ctx, *o)
@@ -353,7 +359,8 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 		a.obs.Failure, a.obs.Cut, a.obs.Ended = fail, cutOf(ctx), time.Now()
 		return s.failed(a, fail)
 	}
-	defer resp.Body.Close() //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close
+	defer resp.Body.Close()     //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close
+	a.obs.Headers = resp.Header // the fingerprint evidence source classes are recognized by
 	a.state = strings.TrimSpace(resp.Header.Get(stateHeader))
 	if s.c.Compact || s.c.Format.Direct() {
 		return a.pass(ctx, resp)

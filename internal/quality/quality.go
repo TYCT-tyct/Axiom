@@ -4,6 +4,7 @@ package quality
 
 import (
 	"context"
+	"net/http"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
+	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
 )
@@ -73,6 +75,11 @@ type Observation struct {
 	// to; Ended when the upstream's end or failure was read, before any wait of the gateway's own, which dates the
 	// samples.
 	Sent, FirstToken, Ended time.Time
+	// Headers are the accepted 2xx response's headers, the evidence source classes are recognized by. They are only
+	// read when a class rule names them and are not retained whole (docs/domains/quality.md「来源类别与指纹」).
+	Headers http.Header
+	// UsageItems are the billing items the response reported with a non-zero count, the other fingerprint evidence.
+	UsageItems catalog.ItemSet
 }
 
 func (o *Observation) content() bool { return !o.FirstToken.IsZero() }
@@ -99,6 +106,9 @@ type Measures struct {
 	Verified         bool
 	VerifiedAt       time.Time
 	VerifyConfidence float64
+	// Class is the source class's stable slug, decided by the endpoint's last successful response and the live rules;
+	// the fallback when no rule matched or no response has been seen. Routing filters on it and the call record names it.
+	Class string
 	// Facts are what detection measured of the endpoint's structure, by call format: a measurement of Chat says
 	// nothing about Responses (docs/domains/quality.md「实测的能力与上限」).
 	Facts map[protocol.Format]Facts
@@ -174,6 +184,7 @@ type Monitor struct {
 	mode           Mode
 	changes        chan change
 	loop           *Loop
+	classes        atomic.Pointer[compiledClasses]
 	suspectedBlock metric.Int64Counter // HTML answers, taken for a firewall on the route and not counted
 }
 
@@ -205,6 +216,8 @@ type State struct {
 	current       endpointConfig                    // the configuration Prepare last published
 	published     uint64                            // the supplier snapshot Prepare last accepted
 	facts         map[protocol.Format]measuredFacts // what detection measured, per call format
+	class         string                            // the source class's stable slug, from the last successful response
+	evidence      classEvidence                     // the headers and usage items the live rules read
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -244,6 +257,9 @@ func New(meter metric.Meter) *Monitor {
 			"HTML answers taken for a firewall on the route, which count against neither the endpoint nor the route."),
 	}
 	m.verifyAge.Store(int64(defaultVerifyMaxAge))
+	if classes, err := compileClasses(DefaultSourceClasses()); err == nil {
+		m.classes.Store(classes) // the seeds; a node with the table replaces them at Start
+	}
 	m.register(meter)
 	return m
 }
@@ -267,12 +283,13 @@ func counter(m metric.Meter, name, description string) metric.Int64Counter {
 func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	v := m.judge(ctx, &o)
 	latency := o.content() && o.InputTokens <= latencyMaxInput
-	if v == uncounted && !latency {
+	if v == uncounted && !latency && o.Failure != nil {
 		return
 	}
 	e := m.of(o.Endpoint)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	m.observeClassEvidence(e, &o) // a 2xx's headers and usage are the fingerprint evidence
 	e.count(v, o.Ended)
 	m.health(e, v, &o)
 	if latency {
@@ -389,17 +406,39 @@ func (m *Monitor) Measure(ep suppliers.Routable, format protocol.Format, facts F
 	return true
 }
 
+// observeClassEvidence records what a successful response says about its source. A failed attempt is not evidence:
+// an error page's headers say nothing about where the endpoint's real answers come from. e.mu is held.
+func (m *Monitor) observeClassEvidence(e *State, o *Observation) {
+	if o.Failure != nil {
+		return
+	}
+	if c := m.classes.Load(); c != nil {
+		e.observeClass(c, o.Headers, o.UsageItems, o.Ended)
+	}
+}
+
+// fallbackClass is the class an endpoint belongs to before a rule decides, or when nothing matches: the live table's
+// fallback, or relay if classes have not loaded (the seeds New installs always have one).
+func (m *Monitor) fallbackClass() string {
+	if c := m.classes.Load(); c != nil {
+		return c.fallbackOrRelay()
+	}
+	return "relay"
+}
+
 // MeasuredFor is what the endpoint's numbers are now for a routable endpoint: a pass counts only for the configuration
 // it checked, so an endpoint whose model, upstream name or format changed since the check is not verified even before
 // the loop clears the state (docs/domains/quality.md「真伪检测」), and a measurement of its structure likewise says
 // nothing about another configuration. The evidence and its claim are read in one critical section: a claim switched
 // between two reads must not be paired with the previous claim's evidence.
+//
+//nolint:gocognit // one guarded read of the endpoint's state and its claims
 func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	m.mu.RLock()
 	e := m.endpoints[ep.ID]
 	m.mu.RUnlock()
 	if e == nil {
-		return Measures{Health: 1, Quality: 1}
+		return Measures{Health: 1, Quality: 1, Class: m.fallbackClass()}
 	}
 	has := len(ep.Formats) > 0
 	want := claim{}
@@ -409,6 +448,10 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := e.measures(now, m.verificationAge())
+	out.Class = e.class
+	if out.Class == "" {
+		out.Class = m.fallbackClass()
+	}
 	if out.Verified && (!has || e.verify.claim != want) {
 		out.Verified, out.VerifyConfidence, out.VerifiedAt = false, 0, time.Time{}
 	}

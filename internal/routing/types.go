@@ -99,6 +99,9 @@ type Entry struct {
 	Limits      billing.Model
 	MaxOutput   int64
 	Segmentable bool
+	// Class is the endpoint's source class, frozen with the plan: the call record names where the attempt went, even
+	// after a rule change reclassifies the endpoint for later plans.
+	Class Class
 	// Byok says the entry serves on the account's own provider key, which the reply reports as usage.is_byok.
 	Byok bool
 }

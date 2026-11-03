@@ -284,8 +284,8 @@ func costOf(o billing.Outcome) (n int64) {
 }
 
 // attemptsOf is the call's attempts as the log keeps them, from the settlement's results and the entries they bound.
-// The source class is relay for every attempt: a routed entry does not carry it (routing.Entry has what a call needs
-// of the endpoint, not what the snapshot weighed it by), and route.go gives every endpoint of this release that class.
+// The source class is the one frozen into the entry when the plan was made: a rule change reclassifies the endpoint for
+// later plans, but this attempt still says where it actually went.
 func attemptsOf(o billing.Outcome, tries []try) []observability.AttemptRecord {
 	out := make([]observability.AttemptRecord, 0, len(o.Attempts))
 	for i, a := range o.Attempts {
@@ -293,10 +293,14 @@ func attemptsOf(o billing.Outcome, tries []try) []observability.AttemptRecord {
 			break // a settlement can name no more attempts than were made; the log says what it has
 		}
 		t := tries[i]
+		class := t.entry.Class
+		if class == "" {
+			class = routing.ClassRelay // an entry from before plans carried a class was a relay
+		}
 		out = append(out, observability.AttemptRecord{
 			Seq:      platform.AttemptSeq(a.Seq), //nolint:gosec // G115: at most platform.MaxAttemptSeq
 			Endpoint: uuid.UUID(t.entry.Endpoint), Supplier: uuid.UUID(t.entry.Supplier),
-			SourceClass: relayClass, Egress: directEgress, Outcome: outcomeOf(a), StartedAt: t.started, FinishedAt: a.FinishedAt,
+			SourceClass: string(class), Egress: directEgress, Outcome: outcomeOf(a), StartedAt: t.started, FinishedAt: a.FinishedAt,
 		})
 	}
 	return out
@@ -343,6 +347,3 @@ func finishOf(a billing.AttemptResult) string {
 // directEgress is the one way a node reaches its suppliers: from its own address (internal/platform/egress), which is
 // what the log's egress column names.
 const directEgress = "direct"
-
-// relayClass is the source class of every endpoint this release routes to (route.go: routing.ClassRelay).
-const relayClass = "relay"

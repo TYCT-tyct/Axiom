@@ -459,6 +459,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/source-classes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The source classes in recognition order and their fingerprint rules.
+         * @description The live classes, lowest position first. `relay` is the fallback an endpoint belongs to until a rule matches or while it has no successful response. Nodes reread this table within 5 seconds and reclassify endpoints from their last response; the routing snapshot publishes the new class within another snapshot interval.
+         */
+        get: operations["listSourceClasses"];
+        put?: never;
+        /**
+         * Add a source class and its fingerprint rules.
+         * @description The slug is stable: presets and call records name it, and a retired class keeps it reserved. A missing position is placed after the last class before the fallback. The rules are validated here and again when a node loads them; a bad rule names its path (`/rules/conditions/0/operator`) in the 400.
+         */
+        post: operations["createSourceClass"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/source-classes/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change a source class at the revision the caller read.
+         * @description Changes names, description, position and rules. A stale `rev` is a 409 and changes nothing. A seeded class keeps its slug and cannot be retired; the fallback keeps its position and has no rules. Endpoints are reclassified from their last successful response, and a header the new rules read but the old ones did not is absent until the next response, so the endpoint may fall to the fallback in the meantime.
+         */
+        put: operations["updateSourceClass"];
+        post?: never;
+        /**
+         * Retire a source class.
+         * @description The class stops matching and leaves the list; its row and slug stay reserved, so a preset naming it simply stops matching (fail closed) instead of silently pointing at a later class. A seeded class cannot be retired.
+         */
+        delete: operations["deleteSourceClass"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/payments/merchants": {
         parameters: {
             query?: never;
@@ -3308,6 +3358,64 @@ export interface components {
             settings: components["schemas"]["SegmentSettings"];
             reason: components["schemas"]["Reason"];
         };
+        SourceClassCondition: {
+            /** @enum {string} */
+            evidence: "header" | "usage";
+            /** @description The response header name for a header condition, canonicalized before it is stored. */
+            name?: string;
+            /** @description The billing item name for a usage condition. */
+            item?: string;
+            /** @enum {string} */
+            operator: "present" | "absent" | "equals" | "prefix" | "suffix" | "contains";
+            /** @description Empty for present and absent; 1 to 256 bytes for the comparing operators. */
+            value?: string;
+        };
+        SourceClassRules: {
+            /** @enum {string} */
+            match: "all" | "any";
+            conditions: components["schemas"]["SourceClassCondition"][];
+        };
+        SourceClass: {
+            slug: string;
+            name: string;
+            name_zh: string;
+            description: string;
+            position: number;
+            fallback: boolean;
+            system: boolean;
+            rules: components["schemas"]["SourceClassRules"];
+            /** Format: int64 */
+            revision: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SourceClassList: {
+            classes: components["schemas"]["SourceClass"][];
+        };
+        SourceClassCreate: {
+            slug: string;
+            name: string;
+            name_zh?: string;
+            description?: string;
+            position?: number;
+            rules: components["schemas"]["SourceClassRules"];
+            reason: components["schemas"]["Reason"];
+        };
+        SourceClassUpdate: {
+            name?: string;
+            name_zh?: string;
+            description?: string;
+            position?: number;
+            rules?: components["schemas"]["SourceClassRules"];
+            /** Format: int64 */
+            rev: number;
+            reason: components["schemas"]["Reason"];
+        };
+        SourceClassDelete: {
+            /** Format: int64 */
+            rev: number;
+            reason: components["schemas"]["Reason"];
+        };
         /** @description The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds. */
         ProbeSettings: {
             hourly_budget?: number;
@@ -5280,6 +5388,132 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProbeSettingsView"];
                 };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listSourceClasses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The live source classes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceClassList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createSourceClass: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceClassCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceClass"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSourceClass: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceClassUpdate"];
+            };
+        };
+        responses: {
+            /** @description The class as stored. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceClass"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    deleteSourceClass: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceClassDelete"];
+            };
+        };
+        responses: {
+            /** @description Retired; the same Idempotency-Key replays this answer without a second change. */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
