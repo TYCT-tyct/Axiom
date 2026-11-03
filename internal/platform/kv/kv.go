@@ -85,7 +85,11 @@ type Client struct {
 // error, and the node starts on its fallbacks; a server that refuses the user, has no memory limit, or disagrees about
 // the time stops the start, because those are deployment mistakes.
 func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
-	testClock := deps.Now != nil
+	return open(ctx, cfg, deps, deps.Now != nil)
+}
+
+// open is Open, with testClock saying whether deps.Now is a test's clock, whose offset the loop keeps (Deps.Now).
+func open(ctx context.Context, cfg Config, deps Deps, testClock bool) (*Client, error) {
 	deps.fillDefaults()
 	namespace := cfg.Namespace
 	if namespace == "" {

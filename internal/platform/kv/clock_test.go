@@ -2,6 +2,7 @@ package kv_test
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -149,41 +150,43 @@ func TestTheOffsetToTheServerIsMeasuredAndKept(t *testing.T) {
 // TestTheLoopMeasuresOnlyTheMachinesClock: a round of the loop measures the machine's clock again and follows a server
 // whose time moved, while a client on a test's clock keeps the offset the start measured, so an advance of the test's
 // clock is not read as skew and undone (README「时钟」, #624: an accounts test's advance undone by the 30-second
-// measurement failed its sign-ins under load).
+// measurement failed its sign-ins under load). Both clocks are the test's in both cases, so the offsets are exact.
 func TestTheLoopMeasuresOnlyTheMachinesClock(t *testing.T) {
 	t.Parallel()
 	password := writePassword(t, "password\n")
-	open := func(t *testing.T, server *timeServer, now func() time.Time) *kv.Client {
-		t.Helper()
-		cfg := kv.Config{URL: "valkey://axiom@" + server.address, PasswordFile: password, Nodes: 1, Namespace: kvtest.Namespace()}
-		client, err := kv.Open(t.Context(), cfg, kvtest.Deps(kv.Deps{Now: now}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { closeQuietly(t, client) })
-		return client
+	for _, c := range []struct {
+		name string
+		open func(context.Context, kv.Config, kv.Deps) (*kv.Client, error)
+		// step moves the server's clock or the client's by an hour, before the round of the loop.
+		step func(server *timeServer, local *atomic.Int64)
+		want time.Duration // the corrected time less the client's after the round
+	}{
+		{
+			"the machine's clock follows the server", kv.OpenAsTheMachine,
+			func(server *timeServer, _ *atomic.Int64) { server.now.Add(int64(time.Hour)) }, time.Hour,
+		},
+		{
+			"a test's clock keeps its advance", kv.Open,
+			func(_ *timeServer, local *atomic.Int64) { local.Add(int64(time.Hour)) }, 0,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var local atomic.Int64
+			local.Store(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC).UnixNano())
+			now := func() time.Time { return time.Unix(0, local.Load()) }
+			server := startTimeServer(t, now())
+			cfg := kv.Config{URL: "valkey://axiom@" + server.address, PasswordFile: password, Nodes: 1, Namespace: kvtest.Namespace()}
+			client, err := c.open(t.Context(), cfg, kvtest.Deps(kv.Deps{Now: now}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { closeQuietly(t, client) })
+			c.step(server, &local)
+			client.Beat(t.Context())
+			if got := client.Now().Sub(now()); got != c.want {
+				t.Fatalf("after the round, the corrected time is %v from the client's, want %v", got, c.want)
+			}
+		})
 	}
-	t.Run("the machine's clock", func(t *testing.T) {
-		t.Parallel()
-		server := startTimeServer(t, time.Now())
-		client := open(t, server, nil)
-		server.now.Store(time.Now().Add(time.Hour).UnixNano())
-		client.Beat(t.Context())
-		if ahead := time.Until(client.Now()); ahead < 59*time.Minute {
-			t.Fatalf("after the server's clock moved an hour, the corrected time is %v ahead, want about an hour", ahead)
-		}
-	})
-	t.Run("a test's clock", func(t *testing.T) {
-		t.Parallel()
-		var local atomic.Int64
-		local.Store(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC).UnixNano())
-		now := func() time.Time { return time.Unix(0, local.Load()) }
-		server := startTimeServer(t, now())
-		client := open(t, server, now)
-		local.Add(int64(time.Hour))
-		client.Beat(t.Context())
-		if got := client.Now().Sub(now()); got != 0 {
-			t.Fatalf("after the test's clock advanced, the corrected time is %v from it, want the 0 the start measured", got)
-		}
-	})
 }
