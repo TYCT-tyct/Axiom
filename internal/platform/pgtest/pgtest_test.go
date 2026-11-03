@@ -54,6 +54,84 @@ func TestDatabasesAreSeparate(t *testing.T) {
 	}
 }
 
+// TestDatabasesAreDroppedWhenTheirTestEnds: a test's copy is removed when the test ends, so a run holds only the
+// copies of the tests in flight instead of one for every test that ever ran. FORCE matters when a test leaves a
+// connection open, which its own cleanups do not have to close.
+func TestDatabasesAreDroppedWhenTheirTestEnds(t *testing.T) {
+	var name string
+	var leftover *pgx.Conn
+	t.Run("after the test", func(t *testing.T) {
+		name = nameOf(t, New(t).Superuser)
+	})
+	if databaseExists(t, name) {
+		t.Errorf("database %s exists after its test ended", name)
+	}
+	t.Run("with a connection still open", func(t *testing.T) {
+		database := New(t)
+		name = nameOf(t, database.Superuser)
+		conn, err := pgx.Connect(t.Context(), database.Superuser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leftover = conn
+	})
+	if databaseExists(t, name) {
+		t.Errorf("database %s exists after its test ended with a connection open", name)
+	}
+	_ = leftover.Close(context.Background()) //nolint:errcheck // The drop has already ended the session.
+}
+
+// TestClonesAreDroppedWhenTheirTestEnds: a clone of a fixture follows the same rule as New; the fixture source lives
+// on, its copies do not.
+func TestClonesAreDroppedWhenTheirTestEnds(t *testing.T) {
+	source := New(t)
+	var name string
+	t.Run("after the test", func(t *testing.T) {
+		name = nameOf(t, Clone(t, source).Superuser)
+	})
+	if databaseExists(t, name) {
+		t.Errorf("clone %s exists after its test ended", name)
+	}
+}
+
+// TestClusterBoundsWAL: the test cluster is removed when its run ends, so the WAL it keeps serves no recovery, and a
+// copy of a template writes one template's worth of WAL per test. The default gigabyte per cluster is not worth the
+// disk on a host where several runs share the disk.
+func TestClusterBoundsWAL(t *testing.T) {
+	conn, err := pgx.Connect(t.Context(), New(t).Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.WithoutCancel(t.Context())) //nolint:errcheck // The test's report is what matters.
+	for _, c := range []struct{ setting, want string }{
+		{"min_wal_size", "32MB"},
+		{"max_wal_size", "128MB"},
+	} {
+		var got string
+		if err := conn.QueryRow(t.Context(), "SHOW "+c.setting).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want {
+			t.Errorf("%s = %q, want %q", c.setting, got, c.want)
+		}
+	}
+}
+
+// databaseExists reports whether the cluster still has a database named name.
+func databaseExists(t *testing.T, name string) bool {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), at("postgres", "postgres", "postgres"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.WithoutCancel(t.Context())) //nolint:errcheck // The query's result is what matters.
+	var exists bool
+	if err := conn.QueryRow(t.Context(), "SELECT EXISTS (SELECT FROM pg_database WHERE datname = $1)", name).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	return exists
+}
+
 // TestTemplatesAreBuiltUnderConcurrentBuilders: binaries of one run build templates at the same time, the same one or
 // different ones. Each goroutine here stands for one binary: the mutex of templateFor is not shared between binaries,
 // so they go straight to ensureTemplate. All must succeed and every template must hold its own module's migration.
