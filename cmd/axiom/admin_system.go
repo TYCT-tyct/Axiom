@@ -87,24 +87,33 @@ func paymentSettingsBody(v payments.SiteSettings, c platform.Currency, buffer in
 	return body
 }
 
+// paymentSettingsView reads the settings and the buffer in one transaction and renders the admin answer.
+func paymentSettingsView(ctx context.Context, tx pg.Tx, id uuid.UUID, currency platform.Currency) (adminapi.PaymentSettings, error) {
+	v, err := payments.ReadSiteSettings(ctx, tx, id)
+	if err != nil {
+		return adminapi.PaymentSettings{}, err
+	}
+	buffer, err := billing.TopUpBufferPPM(ctx, tx, id)
+	if err != nil {
+		return adminapi.PaymentSettings{}, err
+	}
+	return paymentSettingsBody(v, currency, buffer), nil
+}
+
 func (a adminAPI) GetPaymentSettings(ctx context.Context, r adminapi.GetPaymentSettingsRequestObject) (adminapi.GetPaymentSettingsResponseObject, error) {
 	id, site, err := a.siteOf(r.SiteId)
 	if err != nil {
 		return nil, err
 	}
-	var v payments.SiteSettings
-	var buffer int32
+	var body adminapi.PaymentSettings
 	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		if v, err = payments.ReadSiteSettings(ctx, tx, uuid.UUID(id)); err != nil {
-			return err
-		}
-		buffer, err = billing.TopUpBufferPPM(ctx, tx, uuid.UUID(id))
+		body, err = paymentSettingsView(ctx, tx, uuid.UUID(id), site.Currency)
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	return adminapi.GetPaymentSettings200JSONResponse(paymentSettingsBody(v, site.Currency, buffer)), nil
+	return adminapi.GetPaymentSettings200JSONResponse(body), nil
 }
 
 // paymentSettingsInput reads the collection controls, answering every field that is wrong at once.
@@ -115,7 +124,10 @@ func paymentSettingsInput(body adminapi.PaymentSettingsUpdate, currency platform
 		name string
 		in   *adminapi.Money
 		out  **int64
-	}{{"credits_min", body.Settings.CreditsMin, &v.Min}, {"credits_max", body.Settings.CreditsMax, &v.Max}} {
+	}{
+		{"credits_min", body.Settings.CreditsMin, &v.Min},
+		{"credits_max", body.Settings.CreditsMax, &v.Max},
+	} {
 		if f.in != nil {
 			n, ok := moneyIn(*f.in, currency, "/settings/"+f.name, &p)
 			if ok {
@@ -148,11 +160,7 @@ func (a adminAPI) SetPaymentSettings(ctx context.Context, r adminapi.SetPaymentS
 				return adminapi.PaymentSettings{}, err
 			}
 		}
-		buffer, err := billing.TopUpBufferPPM(ctx, tx, uuid.UUID(id))
-		if err != nil {
-			return adminapi.PaymentSettings{}, err
-		}
-		return paymentSettingsBody(v, site.Currency, buffer), nil
+		return paymentSettingsView(ctx, tx, uuid.UUID(id), site.Currency)
 	})
 	if err != nil {
 		return nil, err

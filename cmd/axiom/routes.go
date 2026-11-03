@@ -115,7 +115,8 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 	exit *egress.Client, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
 ) (nodeRoutes, error) {
 	pay, err := payments.Open(payments.Config{
-		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: paymentPlugins, Proxies: p.cfg.trustedProxies,
+		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: paymentPlugins,
+		Proxies: p.cfg.trustedProxies, Accounts: service,
 		Alerts: p.alerts, Instance: p.cfg.valkey.NodeID, Signals: p.paymentSignals,
 	})
 	if err != nil {

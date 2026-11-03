@@ -362,6 +362,7 @@ export default {
     buffer: "Top-up buffer",
     bufferUnavailable: "Not available on this server yet",
     bufferSkipped: "Saved; this server does not accept the top-up buffer yet, so it was left unchanged.",
+    fieldsSkipped: "Saved; this server does not accept one of the newer fields yet, so it was left unchanged.",
     edit: "Edit payments",
     intro:
       "Whether users can top up, the credits one top-up may buy, and the buffer added to the reference rate. The change goes to the audit log.",

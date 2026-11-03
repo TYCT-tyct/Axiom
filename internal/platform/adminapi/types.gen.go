@@ -3063,6 +3063,9 @@ type PaymentRefund struct {
 	Credits    *Money     `json:"credits,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 
+	// FirstApprovedBy The first of the two operators, when the refund is above the site's approval limit.
+	FirstApprovedBy *UserId `json:"first_approved_by,omitempty"`
+
 	// Id A refund's ID (TypeID), the refund number of channels that take one.
 	Id *RefundId `json:"id,omitempty"`
 
@@ -3078,7 +3081,10 @@ type PaymentRefund struct {
 	// RequestedBy A user's ID (TypeID).
 	RequestedBy *UserId `json:"requested_by,omitempty"`
 
-	// State The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
+	// SecondRequired Whether this refund needs two operators; the first is in `first_approved_by`.
+	SecondRequired *bool `json:"second_required,omitempty"`
+
+	// State The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent), for a second approval when `second_required` is set, or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
 	State *PaymentRefundState `json:"state,omitempty"`
 
 	// Via channel sends the cash back; offline waits for a manual conclusion.
@@ -3096,7 +3102,7 @@ type PaymentRefundList struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
-// PaymentRefundState The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
+// PaymentRefundState The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent), for a second approval when `second_required` is set, or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
 type PaymentRefundState string
 
 // PaymentSettings defines model for PaymentSettings.

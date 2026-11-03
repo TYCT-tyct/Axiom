@@ -4,6 +4,7 @@ package payments
 
 import (
 	"container/list"
+	"context"
 	"embed"
 	"errors"
 	"fmt"
@@ -15,7 +16,9 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform/alert"
+	"axiom/internal/platform/audit"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -35,6 +38,13 @@ func Migrations() pg.Module {
 
 var queries = New()
 
+// AccountStates is the accounts module's suspension operation. It is separate from the module's other reads because a
+// dispute must change the account in the same transaction that books the chargeback; nil is accepted only by nodes that
+// never receive callbacks.
+type AccountStates interface {
+	SetAccountSuspended(context.Context, pg.Tx, audit.Actor, accounts.AccountID, bool, string) error
+}
+
 // Config is what Open needs.
 type Config struct {
 	DB       *pg.DB
@@ -44,6 +54,7 @@ type Config struct {
 	Plugins  []Plugin       // one per kind, compiled in
 	Logger   *slog.Logger   // diagnostics; durable alerts use platform signals; default slog.Default()
 	Proxies  []netip.Prefix // only these peers may supply a callback's source address
+	Accounts AccountStates  // suspends an account when a chargeback opens or is lost
 	Alerts   alert.Sink     // where the per-event signals go; nil means only logs and the durable signals
 	Instance string         // this node's identity, the first part of every signal key; required with Alerts
 	Signals  *SignalState   // the node's shared counters and unresolved incidents; nil makes a new one
@@ -64,6 +75,7 @@ type Payments struct {
 	proxies     []netip.Prefix
 	callbacks   map[callbackKey]*list.Element
 	callbackLRU list.List
+	accounts    AccountStates
 	alerts      alert.Sink
 	instance    string
 	signals     *SignalState
@@ -83,7 +95,7 @@ func Open(c Config) (*Payments, error) {
 	if state == nil {
 		state = NewSignalState()
 	}
-	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger, valid: map[uuid.UUID]validity{}, alerts: c.Alerts, instance: c.Instance, signals: state, now: time.Now, after: func(d time.Duration, f func()) { time.AfterFunc(d, f) }}
+	p := &Payments{db: c.DB, platform: c.Platform, keyring: c.Keyring, client: c.Client, plugins: map[Kind]Plugin{}, logger: c.Logger, valid: map[uuid.UUID]validity{}, accounts: c.Accounts, alerts: c.Alerts, instance: c.Instance, signals: state, now: time.Now, after: func(d time.Duration, f func()) { time.AfterFunc(d, f) }}
 	p.channels = make(map[MerchantID]channelBinding)
 	p.proxies = slices.Clone(c.Proxies)
 	p.callbacks = make(map[callbackKey]*list.Element)
