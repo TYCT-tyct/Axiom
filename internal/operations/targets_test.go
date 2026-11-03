@@ -38,7 +38,7 @@ func usd(t *testing.T) platform.Currency {
 	return currency
 }
 
-func TestExpectedFromProratesEachMonthBySeconds(t *testing.T) {
+func TestExpectedFromProratesEachMonthByDuration(t *testing.T) {
 	t.Parallel()
 	jan := "2026-01-01"
 	feb := "2026-02-01"

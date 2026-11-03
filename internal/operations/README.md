@@ -48,7 +48,7 @@ func (t *Targets) Check() error
 
 ## 测试
 
-- `targets_test.go`：`TestExpectedFromProratesEachMonthBySeconds` 表驱动覆盖整月、部分月、跨月、闰年、空窗口、金额币种不符、四种指标的半入和带毫秒的跨月折算；`TestExpectedFromRefusesACountWiderThanItsType` 覆盖超宽；`TestTargetsCheck` 覆盖月份、负数、非法金额、币种和 38 位上限。
+- `targets_test.go`：`TestExpectedFromProratesEachMonthByDuration` 表驱动覆盖整月、部分月、跨月、闰年、空窗口、金额币种不符、四种指标的半入和带毫秒的跨月折算；`TestExpectedFromRefusesACountWiderThanItsType` 覆盖超宽；`TestTargetsCheck` 覆盖月份、负数、非法金额、币种和 38 位上限。
 - `cmd/axiom/admin_targets_test.go`：`TestAdminOperationsTargets` 走真实 HTTP 和数据库，覆盖空月份、四项写入、审计、看板折算、重放、整月替换和清零；`TestAdminOperationsTargetsRefuseAStaleForm` 与 `...AfterClear` 覆盖两个编辑者交错提交和清空后的版本；`TestAdminOperationsTargetsKeepWideMoney` 覆盖超过 int64 和 38 位边界；`TestTargetComparisonHidesAnUnknownCostGap` 覆盖成本未知；`TestAdminOperationsTargetsNeedSitesManage` 覆盖无权限；`TestAdminOperationsTargetsRefuseAnotherCurrency` 覆盖币种。
 - `cmd/axiom/admin_guard_test.go` 把两个操作登记进权限契约：GET 和 PUT 都需要 `sites.manage`，PUT 还要 `mfa`、CSRF 和 `Idempotency-Key`。
 
