@@ -330,9 +330,10 @@ type classEvidence struct {
 type fingerprintHeader struct {
 	name, value string
 	present     bool
+	cut         bool // value is the first maxEvidenceValue bytes of a longer one
 }
 
-const maxEvidenceValue = 256
+const maxEvidenceValue = maxConditionValue // at least every rule value, so a cut keeps whole any prefix a rule names
 
 // observeClass records the response's evidence for the endpoint and classifies it. The response headers are the
 // upstream's own; a header the rules do not name is neither read nor kept.
@@ -340,7 +341,7 @@ func (e *State) observeClass(c *compiledClasses, h http.Header, usage catalog.It
 	e.evidence.n = 0
 	for _, name := range c.headers {
 		value, present := headerValue(h, name)
-		e.evidence.headers[e.evidence.n] = fingerprintHeader{name: name, value: clip(value), present: present}
+		e.evidence.headers[e.evidence.n] = fingerprintHeader{name: name, value: clip(value), present: present, cut: len(value) > maxEvidenceValue}
 		e.evidence.n++
 	}
 	e.evidence.usage, e.evidence.at = usage, at
@@ -364,15 +365,15 @@ func clip(s string) string {
 	return strings.Clone(s[:maxEvidenceValue])
 }
 
-// header returns a checked header's first value and whether it was present. known is false for a header the rules
-// in force when the response was observed did not name; that is not evidence of absence.
-func (e *classEvidence) header(name string) (value string, present, known bool) {
+// header returns a checked header as stored, or false for a header the rules in force when the response was observed
+// did not name; that is not evidence of absence.
+func (e *classEvidence) header(name string) (fingerprintHeader, bool) {
 	for i := 0; i < e.n; i++ {
 		if e.headers[i].name == name {
-			return e.headers[i].value, e.headers[i].present, true
+			return e.headers[i], true
 		}
 	}
-	return "", false, false
+	return fingerprintHeader{}, false
 }
 
 // classify returns the first class whose conditions hold, or the fallback. No evidence yet means the fallback: an
@@ -408,23 +409,26 @@ func (c compiledClass) matches(e *classEvidence) bool {
 //nolint:cyclop // one branch per fixed operator; the operators are a closed set
 func (c compiledCondition) matches(e *classEvidence) bool {
 	if c.header != "" {
-		value, present, known := e.header(c.header)
+		h, known := e.header(c.header)
 		if !known {
 			return false // a header the evidence never checked is unknown, not absent
 		}
+		// A cut value is a true prefix of the real one and a rule value is at most as long as the cut, so prefix and a
+		// found substring are exact; equality and a suffix are about the lost tail, and what cannot be decided is no
+		// match. A value longer than every rule value equals none of them anyway.
 		switch c.op {
 		case "present":
-			return present
+			return h.present
 		case "absent":
-			return !present
+			return !h.present
 		case "equals":
-			return present && value == c.value
+			return h.present && !h.cut && h.value == c.value
 		case "prefix":
-			return present && strings.HasPrefix(value, c.value)
+			return h.present && strings.HasPrefix(h.value, c.value)
 		case "suffix":
-			return present && strings.HasSuffix(value, c.value)
+			return h.present && !h.cut && strings.HasSuffix(h.value, c.value)
 		case "contains":
-			return present && strings.Contains(value, c.value)
+			return h.present && strings.Contains(h.value, c.value)
 		}
 		return false
 	}

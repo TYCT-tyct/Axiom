@@ -26,15 +26,16 @@ func classesWith() []SourceClass {
 
 func observedClass(t *testing.T, m *Monitor, id suppliers.EndpointID, h http.Header, usage catalog.ItemSet) string {
 	t.Helper()
-	return observedClassAt(t, m, id, h, usage, EndpointConfig{})
+	return observedClassAt(t, m, suppliers.Routable{ID: id}, h, usage)
 }
 
-func observedClassAt(t *testing.T, m *Monitor, id suppliers.EndpointID, h http.Header, usage catalog.ItemSet, config EndpointConfig) string {
+// observedClassAt observes a successful response of ep's configuration and reads the class back for it.
+func observedClassAt(t *testing.T, m *Monitor, ep suppliers.Routable, h http.Header, usage catalog.ItemSet) string {
 	t.Helper()
-	o := answered(id, t0, time.Second, time.Second, 100, 100)
-	o.Headers, o.UsageItems, o.Config = h, usage, config
+	o := answered(ep.ID, t0, time.Second, time.Second, 100, 100)
+	o.Headers, o.UsageItems, o.Config = h, usage, configOf(ep)
 	m.Observe(context.Background(), o)
-	return m.MeasuredFor(suppliers.Routable{ID: id}, t0.Add(time.Minute)).Class
+	return m.MeasuredFor(ep, t0.Add(time.Minute)).Class
 }
 
 // TestSourceClassClassification: rules are evaluated in position order, headers are compared by their first value, a
@@ -167,7 +168,7 @@ func TestSourceClassEvidenceBindsToConfig(t *testing.T) {
 	if err := m.Prepare(context.Background(), []suppliers.Routable{a}); err != nil {
 		t.Fatal(err)
 	}
-	if got := observedClassAt(t, m, id, http.Header{"X-Official": {"1"}}, 0, configOf(a)); got != "official" {
+	if got := observedClassAt(t, m, a, http.Header{"X-Official": {"1"}}, 0); got != "official" {
 		t.Fatalf("after a response: %q, want official", got)
 	}
 	if err := m.Prepare(context.Background(), []suppliers.Routable{b}); err != nil {
@@ -200,6 +201,60 @@ func TestSourceClassLateObservationOfOldConfig(t *testing.T) {
 	m.Observe(context.Background(), o)
 	if got := m.MeasuredFor(b, t0.Add(time.Minute)).Class; got != "relay" {
 		t.Fatalf("a late up-a response classified up-b as %q, want relay", got)
+	}
+}
+
+// TestSourceClassStaleGenerationGetsTheFallback: a routing build that read an older supplier generation is refused by
+// Prepare once a newer one is published; reading its configuration must not hand it the newer one's class.
+func TestSourceClassStaleGenerationGetsTheFallback(t *testing.T) {
+	m := New(nil)
+	if err := m.SetSourceClasses(classesWith()); err != nil {
+		t.Fatal(err)
+	}
+	id := suppliers.EndpointID{6}
+	a := suppliers.Routable{ID: id, Model: [16]byte{1}, Upstream: "up-a", Formats: []protocol.Format{protocol.Chat}, Generation: 1}
+	b := a
+	b.Upstream, b.Generation = "up-b", 2
+	if err := m.Prepare(context.Background(), []suppliers.Routable{b}); err != nil {
+		t.Fatal(err)
+	}
+	if got := observedClassAt(t, m, b, http.Header{"X-Official": {"1"}}, 0); got != "official" {
+		t.Fatalf("after a response: %q, want official", got)
+	}
+	if err := m.Prepare(context.Background(), []suppliers.Routable{a}); err != nil { // older: skipped
+		t.Fatal(err)
+	}
+	if got := m.MeasuredFor(b, t0.Add(time.Minute)).Class; got != "official" {
+		t.Fatalf("current configuration: %q, want official", got)
+	}
+	if got := m.MeasuredFor(a, t0.Add(time.Minute)).Class; got != "relay" {
+		t.Fatalf("the stale configuration read %q, want relay", got)
+	}
+}
+
+// TestSourceClassCutHeaderValue: a header value longer than what is kept matches only what its kept prefix decides; a
+// rule about the lost tail does not match on the cut.
+func TestSourceClassCutHeaderValue(t *testing.T) {
+	long := strings.Repeat("a", 248) + "-trusted" + "-untrusted" // 256 kept bytes end in "-trusted"
+	for _, tc := range []struct {
+		operator, value, want string
+	}{
+		{"prefix", "aaaa", "official"},
+		{"contains", "-trusted", "official"},
+		{"suffix", "-trusted", "relay"},
+		{"suffix", "-untrusted", "relay"},
+		{"equals", long[:256], "relay"},
+		{"contains", "-untrusted", "relay"},
+	} {
+		classes := DefaultSourceClasses()
+		classes[0].Rules = Rules{Match: "all", Conditions: []Condition{{Evidence: "header", Name: "X-Pool", Operator: tc.operator, Value: tc.value}}}
+		m := New(nil)
+		if err := m.SetSourceClasses(classes); err != nil {
+			t.Fatal(err)
+		}
+		if got := observedClass(t, m, suppliers.EndpointID{7}, http.Header{"X-Pool": {long}}, 0); got != tc.want {
+			t.Errorf("%s %q: %q, want %q", tc.operator, tc.value, got, tc.want)
+		}
 	}
 }
 

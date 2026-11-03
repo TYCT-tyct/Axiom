@@ -78,7 +78,8 @@ type Observation struct {
 	// Headers are the accepted 2xx response's headers, the evidence source classes are recognized by. They are only
 	// read when a class rule names them and are not retained whole (docs/domains/quality.md「来源类别与指纹」).
 	Headers http.Header
-	// UsageItems are the billing items the response reported with a non-zero count, the other fingerprint evidence.
+	// UsageItems are the billing items the upstream itself reported with a non-zero count in the response Headers came
+	// from, the other fingerprint evidence. An item the gateway estimated is not one the upstream reported.
 	UsageItems catalog.ItemSet
 	// Config is the endpoint configuration the attempt was sent to: its catalog model, upstream name and formats. A
 	// response from a configuration Prepare has since replaced is not evidence for the new one.
@@ -446,8 +447,10 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := e.measures(now, m.verificationAge())
+	// The class was recognized from responses of the configuration Prepare last published; a caller holding another
+	// (a routing build that read an older supplier generation) gets the fallback, as its facts are withheld below.
 	out.Class = e.class
-	if out.Class == "" {
+	if out.Class == "" || e.current != configOf(ep) {
 		out.Class = m.fallbackClass()
 	}
 	if out.Verified && (!has || e.verify.claim != want) {
