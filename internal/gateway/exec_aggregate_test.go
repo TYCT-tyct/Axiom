@@ -22,6 +22,7 @@ import (
 // stream with the whole reply, in one write, after the settlement whose cost is in it (I3), with the ID of the call and
 // the model the client asked for.
 func TestACallThatDoesNotStreamIsAnsweredWithOneReply(t *testing.T) {
+	t.Parallel()
 	no := false
 	messages, responses, chat := protocol.Messages, protocol.Responses, protocol.Chat
 	cases := []struct {
@@ -98,6 +99,7 @@ func checkAggregateSettlement(t *testing.T, h *harness, name string) {
 // content and then broke is given up on for the next entry, whose reply alone answers the call
 // (docs/domains/gateway.md「转发规则」).
 func TestAFailedAggregateIsTriedElsewhereAndItsContentIsNotMixed(t *testing.T) {
+	t.Parallel()
 	no := false
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 2, stream: &no})
@@ -121,6 +123,7 @@ func TestAFailedAggregateIsTriedElsewhereAndItsContentIsNotMixed(t *testing.T) {
 // written nor booked as content the client got (docs/domains/gateway.md「用量与费用」). A Chat client is the one that
 // shows it, since Messages answers the error alone either way.
 func TestAnAggregateKeptForAClientThatLeftIsLetGo(t *testing.T) {
+	t.Parallel()
 	no, messages := false, protocol.Messages
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{client: protocol.Chat, upstream: &messages, entries: 2, stream: &no, noSlot: []int{2}})
@@ -147,6 +150,7 @@ func TestAnAggregateKeptForAClientThatLeftIsLetGo(t *testing.T) {
 // the call with the error in it for Chat and Responses, and Messages, which has no stop reason for an error, answers the
 // error alone, 502 (docs/domains/gateway.md「错误」).
 func TestTheLastAttemptOfAnAggregateAnswersWithWhatItMade(t *testing.T) {
+	t.Parallel()
 	no := false
 	messages, responses := protocol.Messages, protocol.Responses
 	cases := []struct {
@@ -221,6 +225,7 @@ func checkLastAttemptReply(t *testing.T, h *harness, name string, status int, co
 // TestAnAggregatePastTheCapIsRefusedWithoutAnotherEntry: a reply may hold 16 MiB (protocol's limit), past which the call
 // ends with the node's own capacity error, which no other endpoint can cure (README.md「Relay 的所有权」).
 func TestAnAggregatePastTheCapIsRefusedWithoutAnotherEntry(t *testing.T) {
+	t.Parallel()
 	no := false
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 2, stream: &no})
@@ -248,6 +253,7 @@ func TestAnAggregatePastTheCapIsRefusedWithoutAnotherEntry(t *testing.T) {
 // halfway, and goes back whole afterwards (the harness checks that it does, once). A budget given back before the
 // write would let more large replies wait on slow readers than the node has memory for.
 func TestAnAggregatedBodyHoldsTheNodesBudgetWhileItIsWritten(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name     string
 		leavesAt int // the write after which the client leaves; 0 reads to the end
@@ -295,6 +301,7 @@ func writeSlowlyAndCountLooseBudget(t *testing.T, ctx context.Context, leavesAt 
 // 「用量与费用」): an endpoint that passes cancellation on is stopped at once with what it had made charged, one that
 // does not is read to its end, and nothing is written to the client that left.
 func TestAClientThatLeavesWhileItsReplyIsAggregated(t *testing.T) {
+	t.Parallel()
 	no := false
 	cases := []struct {
 		name     string
@@ -337,6 +344,7 @@ func TestAClientThatLeavesWhileItsReplyIsAggregated(t *testing.T) {
 // TestAnAggregateMetersItsStreamAsItGoes: the upstream is still read as a stream, so the reservation is extended as the
 // reply grows, on the same path as a stream's (docs/domains/gateway.md「转发规则」).
 func TestAnAggregateMetersItsStreamAsItGoes(t *testing.T) {
+	t.Parallel()
 	no := false
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, segmented(options{stream: &no}))
@@ -359,6 +367,7 @@ func TestAnAggregateMetersItsStreamAsItGoes(t *testing.T) {
 // TestAnAggregateWhoseSettlementFails: a reply that completed is a 200 without a cost and with the pending flag, as a
 // stream's is (docs/domains/gateway.md「用量与费用」).
 func TestAnAggregateWhoseSettlementFails(t *testing.T) {
+	t.Parallel()
 	no := false
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{stream: &no, settleErr: io.ErrClosedPipe})
@@ -378,6 +387,7 @@ func TestAnAggregateWhoseSettlementFails(t *testing.T) {
 // the billing error, without what was made and without another entry, whose attempt would draw on the same account
 // (docs/domains/gateway.md「错误」).
 func TestATruncatedAggregateAnswersWithTheBillingError(t *testing.T) {
+	t.Parallel()
 	no := false
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, segmented(options{entries: 2, stream: &no, extend: func(context.Context, billing.ExtendRequest) error {

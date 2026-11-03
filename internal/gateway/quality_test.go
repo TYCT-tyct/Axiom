@@ -16,6 +16,7 @@ import (
 // them. An endpoint nothing counted keeps the neutral quality 1 and the confidence 0; a measured bad endpoint has a low
 // score and a nonzero confidence, so routing can tell the unknown from the bad.
 func TestRoutePublishesMeasuredQuality(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	snap, err := f.cat.Current()

@@ -12,6 +12,7 @@ import (
 // TestPendingEndingKeepsBYOK: the settlement may fail, but who served the call is known from the attempt. The pending
 // stream, aggregate and direct endings all report is_byok from it (docs/domains/gateway.md「用量与费用」).
 func TestPendingEndingKeepsBYOK(t *testing.T) {
+	t.Parallel()
 	mark := func(c *Call) { c.Plan.Entries[0].Byok = true }
 	for _, tc := range []struct {
 		name   string
@@ -39,6 +40,7 @@ func TestPendingEndingKeepsBYOK(t *testing.T) {
 // TestPendingAggregateKeepsFiles: a file annotation is not part of the settlement, so a pending ending must keep the
 // parsed files the aggregate would otherwise attach, exactly as a settled one does.
 func TestPendingAggregateKeepsFiles(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		no := false
 		h := newHarness(t, ctx, options{

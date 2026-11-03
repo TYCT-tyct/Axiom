@@ -29,6 +29,7 @@ func acquireSlot(t *testing.T, f *InFlight, account string, accountMax int) func
 // The account limit is 429 and the node limit is 503; the default account limit is a tenth of the node's slots and
 // an account's own setting replaces it.
 func TestInFlightRefusals(t *testing.T) {
+	t.Parallel()
 	f := newInFlight(t, 20) // an account may hold 2 by default
 	first := acquireSlot(t, f, "a", 0)
 	acquireSlot(t, f, "a", 0)
@@ -62,6 +63,7 @@ func TestInFlightRefusals(t *testing.T) {
 
 // A request refused by the node must not keep its account's slot.
 func TestInFlightNodeRefusalReleasesTheAccount(t *testing.T) {
+	t.Parallel()
 	f := newInFlight(t, 10) // an account may hold 1 by default
 	var held []func()
 	for i := range 10 {
@@ -76,6 +78,7 @@ func TestInFlightNodeRefusalReleasesTheAccount(t *testing.T) {
 
 // A flood of distinct keys leaves nothing behind once they are released.
 func TestLimiterForgetsReleasedKeys(t *testing.T) {
+	t.Parallel()
 	l := NewLimiter(errIPInFlight)
 	for i := range 100 {
 		release, err := l.Acquire(strconv.Itoa(i), 1)
@@ -92,6 +95,7 @@ func TestLimiterForgetsReleasedKeys(t *testing.T) {
 // Release may run more than once (a request has several exit paths): the second call must not free the slot of
 // the next holder.
 func TestLimiterReleaseIsIdempotent(t *testing.T) {
+	t.Parallel()
 	l := NewLimiter(errIPInFlight)
 	release, err := l.Acquire("k", 2)
 	if err != nil {

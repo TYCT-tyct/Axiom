@@ -28,6 +28,7 @@ func (h *harness) elapsed() time.Duration { return time.Since(h.started) }
 // and the next entry answers; a comment, a keep-alive and complete events without content do not count as news, so
 // they do not hold the timeout off.
 func TestAnUpstreamThatSaysNothingNewBeforeTheCommitPointIsTriedElsewhere(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 2, startBy: 10 * time.Minute})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(
@@ -51,6 +52,7 @@ func TestAnUpstreamThatSaysNothingNewBeforeTheCommitPointIsTriedElsewhere(t *tes
 
 // TestContentKeepsAnUpstreamAlive: a stream that sends content now and then lives for longer than the idle timeout.
 func TestContentKeepsAnUpstreamAlive(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 1})
 		var beats []beat
@@ -75,6 +77,7 @@ func TestContentKeepsAnUpstreamAlive(t *testing.T) {
 // upstream that stays quiet is ended with a timeout, where it is: no other entry is tried (I4), and the settlement is of
 // the attempt that was committed.
 func TestAfterTheCommitPointTheStreamIsKeptAliveAndThenEndedInPlace(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		// An idle timeout that is not a whole number of keep-alive intervals, or the last keep-alive and the end would be
 		// due in the same instant.
@@ -117,6 +120,7 @@ func checkKeepAlives(t *testing.T, h *harness) {
 
 // TestWritesHoldBackTheKeepAlive: a stream that writes often is not sent a keep-alive.
 func TestWritesHoldBackTheKeepAlive(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		var beats []beat
@@ -136,6 +140,7 @@ func TestWritesHoldBackTheKeepAlive(t *testing.T) {
 // TestAnUpstreamThatFailsBeforeTheCommitPointIsTriedElsewhere, in each way it can: it takes too long to answer, answers
 // 200 with no content, or breaks off before any.
 func TestAnUpstreamThatFailsBeforeTheCommitPointIsTriedElsewhere(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		first   func(h *harness) scripted
@@ -167,6 +172,7 @@ func TestAnUpstreamThatFailsBeforeTheCommitPointIsTriedElsewhere(t *testing.T) {
 // TestAStreamThatBreaksAfterTheCommitPointEndsWithAnErrorAndSettlesWhatCameFirst: the status is 200 and cannot change, no other
 // entry is tried, and what was committed is settled.
 func TestAStreamThatBreaksAfterTheCommitPointEndsWithAnErrorAndSettlesWhatCameFirst(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 2})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart, evBlock, evHello), beat{hangup: true})}
@@ -185,6 +191,7 @@ func TestAStreamThatBreaksAfterTheCommitPointEndsWithAnErrorAndSettlesWhatCameFi
 // TestTheCallStopsAtItsLongestTime: an attempt is cancelled when the call's time is out, and a call whose time is out
 // starts no other: before the first content that is a 408, after it the stream ends with a timeout.
 func TestTheCallStopsAtItsLongestTime(t *testing.T) {
+	t.Parallel()
 	config := func(c *Config) {
 		c.MaxCall, c.IdleTimeout, c.StartBy, c.QueueWait = 10*time.Minute, 9*time.Minute, 9*time.Minute, 9*time.Minute
 		c.CompactHeaderWait = c.HeaderWait // it is below the call's longest time too (internal/gateway/README.md「超时与限额」)
@@ -220,6 +227,7 @@ func TestTheCallStopsAtItsLongestTime(t *testing.T) {
 // TestNoNewAttemptStartsAfterStartBy: an entry that fails after the window is not followed by another, and a call that is
 // past it before its first attempt is a 408 with none made.
 func TestNoNewAttemptStartsAfterStartBy(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 2, startBy: 10 * time.Second})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{late(20*time.Second, failure(routing.ScopeEndpoint, false))}
@@ -241,6 +249,7 @@ func TestNoNewAttemptStartsAfterStartBy(t *testing.T) {
 // TestAThrottledEndpointIsWeighedDown: a 429 is told to routing, which gives the endpoint less of the traffic after it.
 // Two endpoints alike and a draw that never changes: the first always comes first, until the 429.
 func TestAThrottledEndpointIsWeighedDown(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 2, routing: routing.Config{Rand: func() float64 { return 0.5 }}})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{throttled()}
@@ -298,6 +307,7 @@ func twoAlikeEndpoints(t *testing.T, router *routing.Router) func() routing.Endp
 
 // TestAnUpstreamsOwnPingIsPassedOnAfterTheCommitPoint, and only then.
 func TestAnUpstreamsOwnPingIsPassedOnAfterTheCommitPoint(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart, evPing, evBlock, evHello, evPing, evBang, evBlockStop, evMsgDelta, evMsgStop))}
@@ -311,6 +321,7 @@ func TestAnUpstreamsOwnPingIsPassedOnAfterTheCommitPoint(t *testing.T) {
 // TestAnEventArrivingInPiecesKeepsTheUpstreamAlive: bytes that make progress on an event are news, though no event is
 // whole until the last of them.
 func TestAnEventArrivingInPiecesKeepsTheUpstreamAlive(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		hello := h.events[evHello]
@@ -329,6 +340,7 @@ func TestAnEventArrivingInPiecesKeepsTheUpstreamAlive(t *testing.T) {
 // TestAnUpstreamsPingsDoNotKeepItAlive: after the commit point too, only content is news; the pings an upstream sends
 // are passed on but the idle timeout runs from the last content.
 func TestAnUpstreamsPingsDoNotKeepItAlive(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		var beats []beat

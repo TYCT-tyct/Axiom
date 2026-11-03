@@ -28,6 +28,7 @@ func (c *perCallCosts) Credits(_ suppliers.AttemptReceipt, _ []catalog.Usage, _ 
 // TestServerLoopChargesEverySupplierRequest: each hop is an attempt priced on its own receipt, so a per-request price is
 // counted once per hop and the call's cost is the sum, never one pricing of all segments under the last receipt.
 func TestServerLoopChargesEverySupplierRequest(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		costs := &perCallCosts{}
 		upstream := protocol.Chat
@@ -79,6 +80,7 @@ func failedLoop(t *testing.T, ctx context.Context, executed bool) (*harness, *pe
 // TestServerLoopKeepsAnUnknownFailedRequest: the second hop can fail before it reaches a Relay, but the supplier may
 // still have run and charged it. It is an attempt of its own, priced as any failed attempt whose outcome is unknown.
 func TestServerLoopKeepsAnUnknownFailedRequest(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h, costs := failedLoop(t, ctx, false)
 		attempts := h.settlements[0].outcome.Attempts
@@ -97,6 +99,7 @@ func TestServerLoopKeepsAnUnknownFailedRequest(t *testing.T) {
 // TestServerLoopDoesNotPriceARefusedRequest: an explicit refusal is not an unknown execution, so the failed hop is
 // recorded as not executed and costs nothing.
 func TestServerLoopDoesNotPriceARefusedRequest(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h, costs := failedLoop(t, ctx, true)
 		attempts := h.settlements[0].outcome.Attempts
@@ -114,6 +117,7 @@ func TestServerLoopDoesNotPriceARefusedRequest(t *testing.T) {
 // fewer than platform.MaxAttempts were made, so an attempt charged alone never numbers past it: a correction worker of
 // the release before loops drops such a number. A loop that ran no search may still fall back while attempts are left.
 func TestServerLoopSamplingsCountAgainstFallbacks(t *testing.T) {
+	t.Parallel()
 	noQuery := strings.Replace(chatToolCall, `{\"query\":\"axiom\"}`, `{}`, 1)
 	for name, tc := range map[string]struct {
 		first    []scripted
@@ -174,6 +178,7 @@ data: [DONE]
 // That must not make an empty final reply a delivered one: it is a failure, the model usage is waived and only the
 // search is charged.
 func TestServerLoopEmptyAnswerIsNotDelivered(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		h := newHarness(t, ctx, options{
@@ -232,6 +237,7 @@ func (s *cutSearcher) Search(ctx context.Context, _ websearch.Query) ([]websearc
 // out of time during the first of two searches, the second is never started and nothing more is sent upstream; a
 // search that had finished stays charged, one that was cut is not.
 func TestServerLoopSearchStopsWithTheAttempt(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		finished bool
 		charged  int64
@@ -267,6 +273,7 @@ func (s slowSearcher) Search(context.Context, websearch.Query) ([]websearch.Resu
 // TestServerLoopSearchOutlastsTheIdleWait: the idle timer watches an upstream that is sending. Once the sampling is
 // over, a search slower than the idle wait is the gateway's own work and must not cut the attempt.
 func TestServerLoopSearchOutlastsTheIdleWait(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := serverHarness(t, ctx, slowSearcher{wait: 2 * time.Second}, serve(beat{data: chatToolCall}), serve(beat{data: chatAnswer}))
 		h.exec.Limits.cfg.IdleTimeout = time.Second
@@ -280,6 +287,7 @@ func TestServerLoopSearchOutlastsTheIdleWait(t *testing.T) {
 // TestHeldEventsAreChargedByCapacity: the events a hop holds are charged as the buffer's capacity, before it grows; a
 // tool hop's drop gives the charge back with the buffer, so the next hop does not wait on memory nothing counts.
 func TestHeldEventsAreChargedByCapacity(t *testing.T) {
+	t.Parallel()
 	const budget = 1 << 10
 	mem := protocol.NewMemory(budget)
 	s := &session{x: &Executor{Memory: mem}}
@@ -321,6 +329,7 @@ func checkCutSearch(t *testing.T, h *harness, searcher *cutSearcher, charged int
 // then broke off is not a partial answer to keep. The client gets the upstream error, the internal call stays hidden,
 // and no model usage is charged.
 func TestServerLoopBrokenToolHopIsNotAnAnswer(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		firstChunk := chatToolCall[:strings.Index(chatToolCall, "\n\n")+2]

@@ -392,6 +392,7 @@ func TestAFailureIsNotChargedForModelUsageBecauseTheClientLeftAfterIt(t *testing
 // stream. The same withFunds path carries the settle and extend batches, so this covers the gateway's retry of the
 // members that did not fail, not a manual single-request retry.
 func TestCompletionBatchKeepsOneWritesFailureOffTheRest(t *testing.T) {
+	t.Parallel()
 	testOneCompletionFailure(t, &billing.Insufficient{Source: billing.SourceKey})
 }
 
@@ -399,6 +400,7 @@ func TestCompletionBatchKeepsOneWritesFailureOffTheRest(t *testing.T) {
 // permanent, so when it was copied to a normal member, permanent() discarded that member's settlement and only the
 // cleanup released its reservation. Here the normal member still commits and charges.
 func TestCompletionBatchKeepsAMissingReservationOffTheRest(t *testing.T) {
+	t.Parallel()
 	testOneCompletionFailure(t, pg.ErrNoRows)
 }
 
