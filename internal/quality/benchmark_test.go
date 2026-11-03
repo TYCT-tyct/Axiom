@@ -149,56 +149,52 @@ func TestRecordBenchmarkRejectsRunBeforeCurrentBaseline(t *testing.T) {
 	}
 }
 
-//nolint:cyclop,gocognit // the concurrent loops and their failure capture are the test
-func TestRecordBenchmarkCommitUsesTheBaselineItScored(t *testing.T) {
+func TestCommitBenchmarkRejectsAStaleBaseline(t *testing.T) {
 	t.Parallel()
 	set := fixedBenchmark()
 	model := uuid.NewV7()
-	ep := suppliers.Routable{
+	official := suppliers.Routable{
 		ID: suppliers.EndpointID{1}, Model: model, Upstream: "official",
 		Formats: []protocol.Format{protocol.Chat},
 	}
-	candidate := ep
+	candidate := official
 	candidate.ID = suppliers.EndpointID{2}
 	candidate.Upstream = "relay"
 	m := New(nil)
-	if err := m.Prepare(t.Context(), []suppliers.Routable{ep, candidate}); err != nil {
+	if err := m.Prepare(t.Context(), []suppliers.Routable{official, candidate}); err != nil {
 		t.Fatal(err)
 	}
-	if !m.RecordOfficialBenchmark(ep, runOfSet(set, t0, "yes")) {
-		t.Fatal("the initial baseline was refused")
+	oldAt := t0
+	if !m.RecordOfficialBenchmark(official, runOfSet(set, oldAt, "yes")) {
+		t.Fatal("the old baseline was refused")
 	}
-	fail := make(chan string, 1)
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		for i := 1; i <= 500; i++ {
-			if !m.RecordOfficialBenchmark(ep, runOfSet(set, t0.Add(time.Duration(i)*time.Second), "yes")) {
-				select {
-				case fail <- "a newer official baseline was refused":
-				default:
-				}
-				return
-			}
-		}
-	})
-	wg.Go(func() {
-		for i := 1; i <= 500; i++ {
-			run := runOfSet(set, t0.Add(time.Duration(i)*time.Second), "yes")
-			result, ok := m.RecordBenchmark(candidate, run)
-			if ok && result.At.Before(result.BaselineAt) {
-				select {
-				case fail <- "a score was attached to a baseline newer than its run":
-				default:
-				}
-				return
-			}
-		}
-	})
-	wg.Wait()
-	select {
-	case msg := <-fail:
-		t.Fatal(msg)
-	default:
+	m.mu.RLock()
+	oldBaseline := m.benchmarks[model]
+	m.mu.RUnlock()
+	run := runOfSet(set, oldAt.Add(10*time.Minute), "yes")
+	score, ok := scoreBenchmark(set, oldBaseline.run, run)
+	if !ok {
+		t.Fatal("the old baseline did not score a candidate run")
+	}
+	if !m.RecordOfficialBenchmark(official, runOfSet(set, oldAt.Add(time.Hour), "yes")) {
+		t.Fatal("the new baseline was refused")
+	}
+	sentinel := benchmarkState{
+		version: set.Version, baseline: oldAt.Add(5 * time.Minute),
+		score: 42, confidence: 0.5, at: oldAt.Add(5 * time.Minute),
+	}
+	e := m.of(candidate.ID)
+	e.mu.Lock()
+	e.benchmark = sentinel
+	e.mu.Unlock()
+	if m.commitBenchmark(candidate, oldBaseline, run, score) {
+		t.Fatal("a score computed against the replaced baseline was committed")
+	}
+	e.mu.Lock()
+	got := e.benchmark
+	e.mu.Unlock()
+	if got != sentinel {
+		t.Fatalf("the endpoint state was overwritten: %+v", got)
 	}
 }
 
