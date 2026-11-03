@@ -157,3 +157,21 @@ func (w *world) addEndpoint(ctx context.Context, tx pg.Tx, id uuid.UUID, upstrea
 	}
 	return store.New().SetEndpointCost(ctx, tx, store.SetEndpointCostParams{ID: id, CostScheduleID: &sc})
 }
+
+// TestRoutableGenerationAdvancesWithReload: every successful Reload publishes a newer snapshot generation, so a routing
+// build that read an older snapshot can be told apart from the health loop's current one.
+func TestRoutableGenerationAdvancesWithReload(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	first := w.routable()
+	if len(first) != 1 || first[0].Generation == 0 {
+		t.Fatalf("Routable generation = %+v, want one versioned endpoint", first)
+	}
+	if err := w.svc.Reload(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	second := w.routable()
+	if len(second) != 1 || second[0].Generation <= first[0].Generation {
+		t.Fatalf("generation after a Reload = %+v, want newer than %d", second, first[0].Generation)
+	}
+}
