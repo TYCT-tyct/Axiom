@@ -200,7 +200,7 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
       ...n,
     })),
     top_models: rank((call) => call.model).map(([model, n]) => ({ model, ...n })),
-    targets,
+    ...(state.withoutTargets ? {} : { targets }),
   });
 }
 

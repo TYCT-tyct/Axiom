@@ -13,6 +13,8 @@ export { uuid } from "./admin-fixtures.ts";
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
   targets: Map<string, Schemas["OperationsTargets"]>;
+  // A test sets this to answer like a node of the release before: the overview has no targets field.
+  withoutTargets?: boolean;
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
   logo: Schemas["SiteLogoView"];
