@@ -178,6 +178,14 @@ func TestBenchmarkScoreCannotOutliveItsConfigurationWrite(t *testing.T) {
 
 	changed := candidate
 	changed.Upstream = "relay-2"
+	// A configuration change commits before Prepare publishes it. The cached generation must already stop the old
+	// configuration's score from becoming visible.
+	if _, err := m.ensureConfig(t.Context(), changed); err != nil {
+		t.Fatal(err)
+	}
+	if m.commitBenchmark(candidate, baseline, state) {
+		t.Fatal("a score for the committed configuration change was published")
+	}
 	f.mu.Lock()
 	f.endpoints = []suppliers.Routable{official, changed}
 	f.mu.Unlock()

@@ -186,6 +186,13 @@ func (m *Monitor) RecordBenchmark(ctx context.Context, ep suppliers.Routable, ru
 	return score, true
 }
 
+// benchmarkConfigMatches reports whether the cached shared configuration still names the score's configuration and
+// generation. The caller holds m.mu.
+func (m *Monitor) benchmarkConfigMatches(ep suppliers.Routable, state benchmarkState) bool {
+	stored, ok := m.configs[ep.ID]
+	return !ok || (stored.config == state.config && stored.epoch == state.epoch)
+}
+
 // commitBenchmark stores a score only if the baseline and configuration generation it was scored against are still the
 // current ones. The monitor lock stays held across the endpoint commit, so a replacement cannot slip between the check
 // and the store.
@@ -199,6 +206,11 @@ func (m *Monitor) commitBenchmark(ep suppliers.Routable, baseline benchmarkAncho
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	// A configuration change commits in the store before Prepare publishes it. The cached generation closes that
+	// window: a score that lost its configuration must not be published even if the endpoint still reports the old one.
+	if !m.benchmarkConfigMatches(ep, state) {
+		return false
+	}
 	if e.current == state.config && e.benchmarkEpoch == 0 && state.epoch > 0 {
 		e.benchmarkEpoch = state.epoch // the first score on a fresh endpoint establishes the generation
 	}
