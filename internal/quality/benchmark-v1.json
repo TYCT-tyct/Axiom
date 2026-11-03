@@ -1,0 +1,251 @@
+{
+  "version": "benchmark-v1",
+  "note": "The fixed question set behind the product score (docs/domains/quality.md「产品成绩（固定测评题）」). A run is one generation per question, judged only by the fixed operations below; changing any byte changes the set's SHA-256 and invalidates every recorded score and official baseline, so a new set is a new file and a new version.",
+  "questions": [
+    {
+      "id": "arith-multiply",
+      "category": "arithmetic",
+      "prompt": "What is 17 × 23? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "391"}]
+    },
+    {
+      "id": "arith-sum",
+      "category": "arithmetic",
+      "prompt": "What is the sum of all integers from 1 through 100? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "5050"}]
+    },
+    {
+      "id": "arith-power",
+      "category": "arithmetic",
+      "prompt": "What is 2^10? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "1024"}]
+    },
+    {
+      "id": "arith-percent",
+      "category": "arithmetic",
+      "prompt": "What is 15% of 240? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "36"}]
+    },
+    {
+      "id": "arith-sequence",
+      "category": "arithmetic",
+      "prompt": "What is the next number in the sequence 2, 6, 12, 20, 30? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "42"}]
+    },
+    {
+      "id": "logic-weekday",
+      "category": "reasoning",
+      "prompt": "If today is Tuesday, what day of the week will it be 100 days from today? Reply with only the day name.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "Thursday"}]
+    },
+    {
+      "id": "logic-primes",
+      "category": "reasoning",
+      "prompt": "How many prime numbers are there from 10 through 30, inclusive? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "6"}]
+    },
+    {
+      "id": "logic-syllogism",
+      "category": "reasoning",
+      "prompt": "All bloops are razzies. All razzies are lazzies. Are all bloops lazzies? Reply with only yes or no.",
+      "max_output": 16,
+      "checks": [{"kind": "one_of", "values": ["yes"]}]
+    },
+    {
+      "id": "logic-shortest",
+      "category": "reasoning",
+      "prompt": "Alice is taller than Bob. Bob is taller than Carol. Who is the shortest? Reply with only the name.",
+      "max_output": 16,
+      "checks": [{"kind": "one_of", "values": ["carol"]}]
+    },
+    {
+      "id": "logic-father-son",
+      "category": "reasoning",
+      "prompt": "A father is 30 years older than his son. In 10 years, the father will be twice as old as the son. How old is the son now? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "20"}]
+    },
+    {
+      "id": "transform-reverse",
+      "category": "transformation",
+      "prompt": "Reverse the string `axiom-quality` exactly. Reply with only the reversed string.",
+      "max_output": 32,
+      "checks": [{"kind": "equals", "value": "ytilauq-moixa"}]
+    },
+    {
+      "id": "transform-sort",
+      "category": "transformation",
+      "prompt": "Sort these integers in ascending order: 42, 7, 19, 3, 88. Reply with only the numbers separated by commas and a space.",
+      "max_output": 64,
+      "checks": [{"kind": "equals", "value": "3, 7, 19, 42, 88"}]
+    },
+    {
+      "id": "transform-replace",
+      "category": "transformation",
+      "prompt": "Replace every occurrence of `cat` with `dog` in this sentence: `the cat sat on the cat mat`. Reply with only the result.",
+      "max_output": 64,
+      "checks": [{"kind": "equals", "value": "the dog sat on the dog mat"}]
+    },
+    {
+      "id": "transform-count",
+      "category": "transformation",
+      "prompt": "How many times does the letter `e` appear in `defenselessness`? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "5"}]
+    },
+    {
+      "id": "transform-email",
+      "category": "transformation",
+      "prompt": "Extract the email address from this text: `Contact ada@example.org for details.` Reply with only the email address.",
+      "max_output": 64,
+      "checks": [{"kind": "equals", "value": "ada@example.org"}]
+    },
+    {
+      "id": "transform-words",
+      "category": "transformation",
+      "prompt": "How many words are in this sentence: `The quick brown fox jumps over the lazy dog`? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "9"}]
+    },
+    {
+      "id": "code-python-squares",
+      "category": "code",
+      "prompt": "What does this Python code print? `print([x*x for x in range(5)])` Reply with only the output.",
+      "max_output": 64,
+      "checks": [{"kind": "equals", "value": "[0, 1, 4, 9, 16]"}]
+    },
+    {
+      "id": "code-go-len",
+      "category": "code",
+      "prompt": "What does this Go code print? `fmt.Println(len([]int{1, 2, 3}))` Reply with only the output.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "3"}]
+    },
+    {
+      "id": "code-c-div",
+      "category": "code",
+      "prompt": "In C, what does `printf(\"%d\", 7/2);` print? Reply with only the output.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "3"}]
+    },
+    {
+      "id": "code-js-typeof-null",
+      "category": "code",
+      "prompt": "In JavaScript, what is `typeof null`? Reply with only the value.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "object"}]
+    },
+    {
+      "id": "code-sql-filter",
+      "category": "code",
+      "prompt": "Which SQL clause filters individual rows before grouping? Reply with only the clause name.",
+      "max_output": 16,
+      "checks": [{"kind": "one_of", "values": ["WHERE", "where"]}]
+    },
+    {
+      "id": "code-binary-search",
+      "category": "code",
+      "prompt": "What is the worst-case time complexity of binary search on a sorted array of n elements? Reply with only the Big-O expression.",
+      "max_output": 32,
+      "checks": [{"kind": "one_of", "values": ["O(log n)", "O(log(n))", "O(log2 n)", "O(log₂ n)"]}]
+    },
+    {
+      "id": "fact-gold",
+      "category": "factual",
+      "prompt": "What is the chemical symbol for gold? Reply with only the symbol.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "Au"}]
+    },
+    {
+      "id": "fact-canberra",
+      "category": "factual",
+      "prompt": "What is the capital of Australia? Reply with only the city name.",
+      "max_output": 16,
+      "checks": [{"kind": "one_of", "values": ["canberra"]}]
+    },
+    {
+      "id": "fact-hamlet",
+      "category": "factual",
+      "prompt": "Who wrote the play Hamlet? Reply with only the author's surname.",
+      "max_output": 16,
+      "checks": [{"kind": "one_of", "values": ["shakespeare"]}]
+    },
+    {
+      "id": "fact-jupiter",
+      "category": "factual",
+      "prompt": "What is the largest planet in the Solar System? Reply with only the planet name.",
+      "max_output": 16,
+      "checks": [{"kind": "one_of", "values": ["jupiter"]}]
+    },
+    {
+      "id": "fact-http-404",
+      "category": "factual",
+      "prompt": "What HTTP status code means Not Found? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "404"}]
+    },
+    {
+      "id": "fact-kib",
+      "category": "factual",
+      "prompt": "How many bytes are in 3 KiB? Reply with only the number.",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "3072"}]
+    },
+    {
+      "id": "fact-china-capital",
+      "category": "factual",
+      "prompt": "用中文回答：中国的首都是哪座城市？只输出城市名。",
+      "max_output": 16,
+      "checks": [{"kind": "equals", "value": "北京"}]
+    },
+    {
+      "id": "json-person",
+      "category": "structured",
+      "prompt": "Return exactly one JSON object with the keys `name` and `age`: name is `Ada`, age is 36. Output only the JSON object, with no code fence or explanation.",
+      "max_output": 64,
+      "checks": [{"kind": "json_fields", "fields": {"name": "Ada", "age": "36"}}]
+    },
+    {
+      "id": "json-flags",
+      "category": "structured",
+      "prompt": "Return exactly one JSON object with the keys `ok` (boolean true) and `count` (integer 3). Output only the JSON object.",
+      "max_output": 64,
+      "checks": [{"kind": "json_fields", "fields": {"ok": "true", "count": "3"}}]
+    },
+    {
+      "id": "json-squares",
+      "category": "structured",
+      "prompt": "Return exactly one JSON array containing the squares of 1, 2, 3 and 4 in that order. Output only the JSON array.",
+      "max_output": 64,
+      "checks": [{"kind": "json_equals", "value": "[1,4,9,16]"}]
+    },
+    {
+      "id": "explain-tcp-handshake",
+      "category": "explanation",
+      "prompt": "Explain in at most 120 words why TCP uses a three-way handshake. Include the words `sequence`, `synchronize`, and `acknowledge`.",
+      "max_output": 256,
+      "checks": [
+        {"kind": "contains", "value": "sequence"},
+        {"kind": "contains", "value": "synchronize"},
+        {"kind": "contains", "value": "acknowledge"}
+      ]
+    },
+    {
+      "id": "explain-cache-hit",
+      "category": "explanation",
+      "prompt": "Explain in at most 120 words the difference between a cache hit and a cache miss. Include the words `latency` and `storage`.",
+      "max_output": 256,
+      "checks": [
+        {"kind": "contains", "value": "latency"},
+        {"kind": "contains", "value": "storage"}
+      ]
+    }
+  ]
+}
