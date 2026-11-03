@@ -345,6 +345,7 @@ G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggr
 ## 响应缓存
 
 P15 的代码结构：`cacheplan.go` 在准入前决定开不开、TTL、清除和键，`cache.go` 负责加密、存储、查询、淘汰和清理，`cachehit.go` 负责把命中的上游字节重新走 `protocol.Relay`。对外语义见[接入的「响应缓存」](../../docs/domains/gateway.md#响应缓存)。
+`cache_export.go` 只给受控导出用：`StreamCacheSealed` 在调用方的平台范围只读事务里，用同一个查询按批准时间窗和租户列出缓存行及其密封正文；导出在快照内用平台密钥环打开正文，再用本次导出的临时密钥加密到 0600 暂存，快照结束后用临时密钥在内存打开并校验 NUL、回复长度和大小，再组装成 `cache.jsonl` 和 `cache/<cache_id>`。`OpenCachePayload` 是快照内打开行的入口。这样快照后的正常淘汰、同键替换或数据库密钥退役不会拆开清单和正文，暂存也不含缓存明文。导出不冒充带请求 ID 的调用内容。
 
 **顺序与钱**：`fillCall` 在预设、压缩、文件解析都完成之后调用 `cachePlanFor`，键因此是最终发给上游的正文；`Run` 在 `webSearch`、`readEcho` 之后、第一次尝试之前调用 `cached`。命中仍走完整的准入和预留，只是没有尝试：`conclude` 用 `billing.Outcome{Attempts: nil}` 结算，`billing.Settle` 把预留全额释放，不写账本；调用记录写 `cache_hit=true`、价格和成本为 0。未命中照常尝试，结算成功后才异步写入。
 
