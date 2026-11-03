@@ -34,6 +34,7 @@ func (h *harness) isReleased() bool {
 // since nothing else will write it; one retried in vain is given up when SettleBackground is over, and its slots go then.
 // Either way nothing more is written, and the cleanup settles the reservation by recording the request lost.
 func TestASettlementThatCannotBeWrittenIsTheCleanups(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		err   error
@@ -67,6 +68,7 @@ func TestASettlementThatCannotBeWrittenIsTheCleanups(t *testing.T) {
 // up, then cancels every upstream, so the calls end with a timeout and settle in the grace; settlements still retrying
 // when that is over are given up, the cleanup's to finish.
 func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{policy: suppliers.CallPolicy{Streams: true}}) // not even one that ignores the client is spared
 		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(evStart, evBlock, evHello))}
@@ -113,6 +115,7 @@ func TestDrainCancelsTheUpstreamsAndLeavesTheRestToTheCleanup(t *testing.T) {
 // an answer that broke after the content began has the output read at 3 bytes a token, the input it reported, and its
 // cost.
 func TestWhatIsCharged(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 3, cost: 70})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{failure(routing.ScopeEndpoint, true)}
@@ -155,6 +158,7 @@ func checkCharged(t *testing.T, h *harness) {
 // back, and an error is logged. Nothing corrects it in M1: the cost is the platform's, and the charge to the user never
 // rests on it. A failure is never a cost the platform knows: the supplier's row of it is flagged unpriced, not complete.
 func TestACostThatIsNotKnown(t *testing.T) {
+	t.Parallel()
 	errPricing := errors.New("the cost schedule could not be read")
 	for _, tc := range []struct {
 		name     string

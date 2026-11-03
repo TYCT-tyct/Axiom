@@ -12,6 +12,7 @@ import (
 // TestSub2apiHasNoFabricatedSession leaves unrelated conversations to the relay's content fallback when no
 // session was declared, for both Messages rewriting and Chat conversion.
 func TestSub2apiHasNoFabricatedSession(t *testing.T) {
+	t.Parallel()
 	for _, format := range []protocol.Format{protocol.Messages, protocol.Chat} {
 		for _, value := range []string{`""`, `"  "`, `"\t\n"`, `"\u3000"`, `null`} {
 			t.Run(fmt.Sprintf("%d/%s", format, value), func(t *testing.T) {

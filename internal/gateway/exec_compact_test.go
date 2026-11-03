@@ -91,6 +91,7 @@ func wholeAnswer(body string) scripted {
 // settlement, with Axiom's usage and cost in place of the upstream's and every other member as it came; the
 // settlement is charged for the usage the reply reports.
 func TestTheCompactEndpointIsPassedThrough(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }, final: compactFinal(t, compacted)})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(compacted)}
@@ -161,6 +162,7 @@ func checkCompactSettlement(t *testing.T, h *harness) {
 // as nothing: the input by the bound of the first sampling, marked as not reported, and the output at nothing, since a
 // whole reply says nothing of what it generated (docs/domains/billing.md「用量来源与暂估」).
 func TestACompactReplyThatNamesNoUsageIsEstimated(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		const noUsage = `{"object":"response.compaction","output":[]}`
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
@@ -194,6 +196,7 @@ func TestACompactReplyThatNamesNoUsageIsEstimated(t *testing.T) {
 // TestTheCompactEndpointWaitsItsOwnTimeForTheAnswer: the compact endpoint compacts a whole conversation, so its headers
 // are waited for ten minutes rather than one (docs/domains/gateway.md「路径与格式」).
 func TestTheCompactEndpointWaitsItsOwnTimeForTheAnswer(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{late(11*time.Minute, wholeAnswer(compacted))}
@@ -210,6 +213,7 @@ func TestTheCompactEndpointWaitsItsOwnTimeForTheAnswer(t *testing.T) {
 // TestACompactReplyThatBreaksIsTriedElsewhere: nothing reached the client, so a reply the upstream broke off is given up
 // on for the next entry.
 func TestACompactReplyThatBreaksIsTriedElsewhere(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 2, mutate: func(c *Call) { compact(t, c) }, final: compactFinal(t, compacted)})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) {
@@ -240,6 +244,7 @@ func (zero) Read(p []byte) (int, error) { clear(p); return len(p), nil }
 // TestACompactReplyHoldsAtMostTheCap: the whole reply is held within the cap an aggregated reply has, a reply of exactly
 // the cap included; past it the read stops with the node's own error, and what it held is the caller's to give back.
 func TestACompactReplyHoldsAtMostTheCap(t *testing.T) {
+	t.Parallel()
 	idle := time.NewTimer(time.Hour)
 	defer idle.Stop()
 	memory := protocol.NewMemory(1 << 30)
@@ -270,6 +275,7 @@ func TestACompactReplyHoldsAtMostTheCap(t *testing.T) {
 // endpoint can cure, so the call is answered with the node's error and no other entry is tried (README.md「Relay 的
 // 所有权」).
 func TestACompactReplyTooLargeForTheNodeIsNotTriedElsewhere(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		const budget = 1 << 20
 		h := newHarness(t, ctx, options{entries: 2, memory: budget, mutate: func(c *Call) { compact(t, c) }})
@@ -307,6 +313,7 @@ func (g *goneAtEOF) Read(p []byte) (int, error) {
 // reaches a client that has gone: the attempt is a failure before the commit point, and nothing is written
 // (docs/domains/gateway.md「用量与费用」).
 func TestACompactReplyReadForAClientThatLeft(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) {
@@ -332,6 +339,7 @@ func TestACompactReplyReadForAClientThatLeft(t *testing.T) {
 // that reads slowly but keeps reading gets all of it, though the reply takes longer than one write deadline
 // (docs/domains/gateway.md「转发规则」).
 func TestASlowClientGetsItsWholeReply(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		reply := bigCompacted(1 << 20)
 		want := compactReply(t, reply)
@@ -358,6 +366,7 @@ func TestASlowClientGetsItsWholeReply(t *testing.T) {
 // 8s, which one write's own deadline would allow; the reply's total of 10s is what stops it after the first chunk
 // (docs/domains/gateway.md「转发规则」, README.md「超时与限额」).
 func TestAWholeReplyIsStoppedWhenItTakesTooLong(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		reply := bigCompacted(256 << 10)
 		want := compactReply(t, reply)
@@ -383,6 +392,7 @@ func TestAWholeReplyIsStoppedWhenItTakesTooLong(t *testing.T) {
 // reply was read and reported, so it is charged as delivered what was written of it (docs/domains/gateway.md
 // 「用量与费用」).
 func TestAClientThatStopsReadingAWholeReply(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		reply := bigCompacted(256 << 10)
 		want := compactReply(t, reply)

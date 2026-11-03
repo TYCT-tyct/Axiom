@@ -91,6 +91,7 @@ func served(h *harness) (n int) {
 // TestASessionStaysOnTheEndpointThatServedIt: the first call falls back to the dear endpoint, and the session follows it
 // there, though the cheap one is first for anyone else; a session that never stuck still starts on the cheap one.
 func TestASessionStaysOnTheEndpointThatServedIt(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		router, model := stickyRouter(t, 0)
 		session, other := routing.SessionKey{1}, routing.SessionKey{2}
@@ -123,6 +124,7 @@ func TestASessionStaysOnTheEndpointThatServedIt(t *testing.T) {
 // TestASessionMovesWhenItsEndpointFails: the stuck endpoint fails and the call is served by the other, which the session
 // moves to, so the call after goes there first.
 func TestASessionMovesWhenItsEndpointFails(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		router, model := stickyRouter(t, 0)
 		session := routing.SessionKey{1}
@@ -151,6 +153,7 @@ func TestASessionMovesWhenItsEndpointFails(t *testing.T) {
 // TestACallThatServesNothingWritesNothing: no endpoint answers, so no entry is made; and one that was there stays, as
 // the failure says nothing of its cache.
 func TestACallThatServesNothingWritesNothing(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		router, model := stickyRouter(t, 0)
 		fresh, held := routing.SessionKey{1}, routing.SessionKey{2}
@@ -173,6 +176,7 @@ func TestACallThatServesNothingWritesNothing(t *testing.T) {
 
 // TestTheStickyTimeIsTheRoutes: the time a preset gives rides the plan to the write.
 func TestTheStickyTimeIsTheRoutes(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		router, model := stickyRouter(t, 2*time.Minute)
 		session := routing.SessionKey{1}

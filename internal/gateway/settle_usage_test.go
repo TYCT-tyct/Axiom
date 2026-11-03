@@ -11,6 +11,7 @@ import (
 )
 
 func TestEstimatedKeepsPhysicalInputAndImageOutput(t *testing.T) {
+	t.Parallel()
 	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemCacheRead: 80, catalog.ItemCacheWrite: 80, catalog.ItemImageOut: 20}, catalog.ServiceTierPriority, nil)
 	if err != nil {
 		t.Fatal(err)

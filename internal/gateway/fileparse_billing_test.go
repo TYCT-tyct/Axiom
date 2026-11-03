@@ -39,13 +39,17 @@ type searchParseCase struct {
 // units: a free parse adds no search, and a multi-page OCR keeps one file_parse per page. Both the final usage and the
 // ledger are checked, because admission alone is what the earlier combination tests covered.
 func TestSearchAndParseBillingSurviveTheRewrite(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []searchParseCase{
 		{name: "the web plugin with a free parse", engine: "cloudflare-ai", pages: 1, wantSearches: 1},
 		{name: "the web plugin with a multi-page OCR", engine: "mistral-ocr", pages: 3, wantSearches: 1, wantPages: 3},
 		{name: "the server tool with a free parse", tool: true, engine: "cloudflare-ai", pages: 1, wantSearches: 1},
 		{name: "the server tool with a multi-page OCR", tool: true, engine: "mistral-ocr", pages: 3, wantSearches: 1, wantPages: 3},
 	} {
-		t.Run(tc.name, func(t *testing.T) { checkSearchParseCase(t, tc) })
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkSearchParseCase(t, tc)
+		})
 	}
 }
 

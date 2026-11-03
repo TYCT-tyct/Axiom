@@ -510,6 +510,7 @@ func TestOpenRouterListIsOneBuild(t *testing.T) {
 // thousand, and a page past the end, cost what they hold; the matches a sorted page sorts are the one cost that grows with
 // the catalog, which is why the catalog's order is the list's own. Measurements run in an isolated test process.
 func TestOpenRouterPageBuffer(t *testing.T) {
+	t.Parallel()
 	const models = 1000
 	l := orListing(t, models)
 	cases := []struct {

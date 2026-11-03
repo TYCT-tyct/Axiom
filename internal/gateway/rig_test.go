@@ -131,10 +131,10 @@ type rigOptions struct {
 	noCacheWriter bool               // leave the response-cache writer stopped so a test can inspect its queue
 }
 
-// rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
-// on the clock (a second for a key lookup, the admission budget), so a machine with every test at once is slower than
-// the clock allows and they fail for that alone.
-var rigs = make(chan struct{}, 3)
+// rigs limits how many rigs run at once. Each is a database and a server with requests in flight; with every test at
+// once a busy machine is slower than even the rig's 30-second budgets allow. A rig mostly waits on its database rather
+// than computing: at three the package used about one core and spent most of its time queued here (#605), so eight.
+var rigs = make(chan struct{}, 8)
 
 // testKeyring is a loaded ring for the cache's envelope encryption: one key, version 1.
 func testKeyring(t *testing.T) *secret.Keyring {

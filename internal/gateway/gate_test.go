@@ -18,6 +18,7 @@ func testFunds(wait time.Duration) *Funds {
 // TestGateDropsAnAdmissionAlreadyCancelled: a client that is gone before its request reaches the gate gets its
 // cancellation back and no transaction is started for it.
 func TestGateDropsAnAdmissionAlreadyCancelled(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		bp, err := New(DefaultConfig(), nil)
 		if err != nil {
@@ -80,6 +81,7 @@ func holdGate(t *testing.T, ctx context.Context, f *Funds, account string) func(
 
 // A settlement that arrives after an admission still gets the account first.
 func TestGateCompletionOvertakesWaitingAdmissions(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(200 * time.Millisecond)
 		release := holdGate(t, ctx, f, "a")
@@ -112,6 +114,7 @@ func TestGateCompletionOvertakesWaitingAdmissions(t *testing.T) {
 }
 
 func TestGateAdmissionGivesUpAfterTheWait(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(200 * time.Millisecond)
 		release := holdGate(t, ctx, f, "a")
@@ -138,6 +141,7 @@ func TestGateAdmissionGivesUpAfterTheWait(t *testing.T) {
 // A completion carries money already committed to, so it has no wait limit of its own; a client that goes away
 // leaves with its own error, not a 429.
 func TestGateCompletionKeepsWaitingAndClientCancelIsNotARefusal(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(200 * time.Millisecond)
 		release := holdGate(t, ctx, f, "a")
@@ -164,6 +168,7 @@ func TestGateCompletionKeepsWaitingAndClientCancelIsNotARefusal(t *testing.T) {
 
 // One account's queue does not hold up another account.
 func TestGateAccountsAreIndependent(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(200 * time.Millisecond)
 		release := holdGate(t, ctx, f, "hot")
@@ -177,6 +182,7 @@ func TestGateAccountsAreIndependent(t *testing.T) {
 // The admissions waiting for one account are written as one batch: the leader takes every waiter, not one per
 // transaction, and the run it uses is the first admission's.
 func TestGateBatchesWaitingAdmissions(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(200 * time.Millisecond)
 		release := holdGate(t, ctx, f, "a")
@@ -208,6 +214,7 @@ func TestGateBatchesWaitingAdmissions(t *testing.T) {
 // account could hold an admission before its upstream call, an extension's landing, or its cancel for as long as the
 // queue keeps arriving.
 func TestGateLeaderReturnsWithItsBatch(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(time.Second)
 		firstStarted, firstRelease := make(chan struct{}), make(chan struct{})
@@ -254,6 +261,7 @@ func TestGateLeaderReturnsWithItsBatch(t *testing.T) {
 // its error as soon as its own batch ends, even while the next batch is blocked. The caller then sends the error to
 // the meter's landing channel and cancels the upstream, so the wait for later work cannot stretch ExtendWait.
 func TestGateFailedCompletionReturnsWhileTheNextBatchRuns(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		f := testFunds(time.Second)
 		boom := errors.New("extension refused")
@@ -300,6 +308,7 @@ func TestGateFailedCompletionReturnsWhileTheNextBatchRuns(t *testing.T) {
 // when its batch ends, and only then does the leader find the queue empty and free the account (a check made right
 // after the last request returned failed the train on 2026-11-02, run 41467253974).
 func TestGateSurvivesCancellationsRacingBatches(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		f := testFunds(time.Hour)
 		for round := range 20 {

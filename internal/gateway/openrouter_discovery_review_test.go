@@ -41,6 +41,7 @@ func TestOpenRouterCountOutputModalities(t *testing.T) {
 }
 
 func TestOpenRouterDiscoveryExcludesPrivateOwners(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	snap, err := f.cat.Current()
 	if err != nil {
@@ -85,6 +86,7 @@ func TestOpenRouterDiscoveryExcludesPrivateOwners(t *testing.T) {
 }
 
 func TestOpenRouterEndpointTagsAreStablePublicCodenames(t *testing.T) {
+	t.Parallel()
 	model := orEntry{ID: "acme/model", Name: "model"}
 	endpoints := []routing.Endpoint{
 		{ID: routing.EndpointID(uuid.NewV7()), Codename: "g-alpha", Context: 200000, MaxOutput: 8192},
@@ -148,6 +150,7 @@ func endpointTags(t *testing.T, body []byte) []string {
 // TestOpenRouterEndpointPublishesQuantizationAndRequestPrice: the public endpoint shows the precision a person recorded
 // and omits it when none is, and the model's price list shows a per-request price when the schedule has one.
 func TestOpenRouterEndpointPublishesQuantizationAndRequestPrice(t *testing.T) {
+	t.Parallel()
 	model := orEntry{ID: "acme/model", Name: "model", Pricing: orPricing{Request: "1.5"}}
 	endpoints := []routing.Endpoint{
 		{ID: routing.EndpointID(uuid.NewV7()), Codename: "g-fp8", Context: 1, MaxOutput: 1, Quantization: "fp8"},

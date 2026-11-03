@@ -24,6 +24,7 @@ import (
 // TestAClientThatGoesBeforeAnythingWasSentCostsNothing: the reservation is released, by a settlement without attempts, and
 // nothing is written.
 func TestAClientThatGoesBeforeAnythingWasSentCostsNothing(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		h.client()
@@ -38,6 +39,7 @@ func TestAClientThatGoesBeforeAnythingWasSentCostsNothing(t *testing.T) {
 // TestAClientThatGoesFromAnEndpointThatPassesCancellationOn: the upstream is cancelled at once, whatever it was still to
 // send, and the usage so far is settled as cancelled.
 func TestAClientThatGoesFromAnEndpointThatPassesCancellationOn(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{policy: suppliers.CallPolicy{Streams: true, Cancels: true}})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(evStart, evBlock, evHello), h.after(time.Hour, evBang))}
@@ -70,6 +72,7 @@ func TestAClientThatGoesFromAnEndpointThatPassesCancellationOn(t *testing.T) {
 // when the client leaves, so the attempt's context is cancelled and the transport fails. That failure is the leaving's: the
 // attempt ends as cancelled, which is never waived, not as a failure with nothing delivered, which is.
 func TestAClientThatGoesWhileTheRequestIsOutIsACancelNotAFailure(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{policy: suppliers.CallPolicy{Streams: true, Cancels: true}})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{late(time.Hour, whole(h))}
@@ -89,6 +92,7 @@ func TestAClientThatGoesWhileTheRequestIsOutIsACancelNotAFailure(t *testing.T) {
 // completed event, so one cancelled before it has none, and an image or a file in the request must not make that input the
 // whole context the reservation allowed for them: the settlement carries the text, 1600 tokens an image and 4096 a file.
 func TestACancelledStreamThatReportedNoInputIsEstimatedBySizeNotWindow(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{
 			client: protocol.Responses, policy: suppliers.CallPolicy{Streams: true, Cancels: true},
@@ -113,6 +117,7 @@ func TestACancelledStreamThatReportedNoInputIsEstimatedBySizeNotWindow(t *testin
 // TestAClientThatGoesFromAnEndpointThatDoesNot: the upstream is read to its end, for it bills the whole of what it
 // generates, but nothing more is forwarded; the settlement waits for the end and has all its usage, as reported.
 func TestAClientThatGoesFromAnEndpointThatDoesNot(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(
@@ -140,6 +145,7 @@ func TestAClientThatGoesFromAnEndpointThatDoesNot(t *testing.T) {
 // TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel: nothing was delivered, so the attempt is no
 // commit, and it is read to the end for its usage, not written.
 func TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart), h.after(10*time.Second, evBlock, evHello, evBang, evBlockStop, evMsgDelta, evMsgStop))}
@@ -158,6 +164,7 @@ func TestAClientThatGoesBeforeTheFirstContentOfAnEndpointThatDoesNotCancel(t *te
 // TestAnEndpointThatDoesNotCancelIsStillStoppedByTheIdleTimeout: the read goes on for the usage only as long as the upstream
 // keeps saying something; the settlement then is of what had come.
 func TestAnEndpointThatDoesNotCancelIsStillStoppedByTheIdleTimeout(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(evStart, evBlock, evHello))}
@@ -178,6 +185,7 @@ func TestAnEndpointThatDoesNotCancelIsStillStoppedByTheIdleTimeout(t *testing.T)
 // TestAWriteThatFailsMeansTheClientIsGone: nothing is written after it; an endpoint that passes cancellation on is
 // cancelled then, one that does not is read on.
 func TestAWriteThatFailsMeansTheClientIsGone(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		cancels bool
@@ -206,6 +214,7 @@ func TestAWriteThatFailsMeansTheClientIsGone(t *testing.T) {
 // TestAClientThatDoesNotTakeAWriteInTimeIsGone: every write has a deadline, the write timeout from the moment it starts;
 // one that is not taken by then is a client that has gone.
 func TestAClientThatDoesNotTakeAWriteInTimeIsGone(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{policy: suppliers.CallPolicy{Streams: true, Cancels: true}})
 		h.w.stall = true
@@ -227,6 +236,7 @@ func TestAClientThatDoesNotTakeAWriteInTimeIsGone(t *testing.T) {
 // ends with the error and no cost, as the settlement could not say; and a settlement that has a charge to report puts it
 // in the error that answers a call that sent nothing.
 func TestSettlingFails(t *testing.T) {
+	t.Parallel()
 	t.Run("completed", func(t *testing.T) {
 		run(t, func(t *testing.T, ctx context.Context) {
 			h := newHarness(t, ctx, options{settleErr: io.ErrClosedPipe})
@@ -262,6 +272,7 @@ func TestSettlingFails(t *testing.T) {
 // TestEveryWayOutSettlesOnce, even a panic: the attempt in progress is settled as one whose outcome is unknown, its
 // credential and the node's memory given back, and the panic goes on.
 func TestEveryWayOutSettlesOnce(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) { panic("a bug") }}
@@ -283,6 +294,7 @@ func TestEveryWayOutSettlesOnce(t *testing.T) {
 // TestKeepAlivesAndWritesNeverInterleave: with a keep-alive timer that fires as often as events come, every write the
 // client sees is one whole event or one whole keep-alive (the race detector watches the rest).
 func TestKeepAlivesAndWritesNeverInterleave(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{config: func(c *Config) { c.KeepAlive = time.Millisecond }})
 		beats := []beat{h.feed(evStart, evBlock, evHello)}
@@ -313,6 +325,7 @@ func TestKeepAlivesAndWritesNeverInterleave(t *testing.T) {
 // context ending, and the call is settled as cancelled, its upstream cancelled. The test waits for events, never for
 // time.
 func TestAClientThatLeavesARealConnection(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, t.Context(), options{policy: suppliers.CallPolicy{Streams: true, Cancels: true}})
 	h.up.eps[uuidOf(ep(1))].script = []scripted{hold(h.feed(evStart, evBlock, evHello))}
 	over := make(chan struct{})

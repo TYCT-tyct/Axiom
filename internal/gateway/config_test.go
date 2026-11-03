@@ -9,6 +9,7 @@ import (
 )
 
 func TestDefaultConfigIsValid(t *testing.T) {
+	t.Parallel()
 	if _, err := New(DefaultConfig(), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -17,6 +18,7 @@ func TestDefaultConfigIsValid(t *testing.T) {
 // Every forbidden relation of internal/gateway/README.md「超时与限额」 stops the node from starting, and the error
 // names what to change.
 func TestConfigRejectsForbiddenRelations(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		change func(*Config)
 		want   string
@@ -57,6 +59,7 @@ func TestConfigRejectsForbiddenRelations(t *testing.T) {
 
 // The ends of the allowed rate windows are allowed, and the shared count's TTL, two windows in milliseconds, is positive.
 func TestConfigAcceptsTheRateWindowBounds(t *testing.T) {
+	t.Parallel()
 	for _, window := range []time.Duration{minRateWindow, time.Minute, maxRateWindow} {
 		cfg := DefaultConfig()
 		cfg.RateWindow = window
@@ -71,6 +74,7 @@ func TestConfigAcceptsTheRateWindowBounds(t *testing.T) {
 }
 
 func TestConfigReportsEveryProblem(t *testing.T) {
+	t.Parallel()
 	cfg := DefaultConfig()
 	cfg.HolderTTL, cfg.QueuePerKey = 1, cfg.QueueMax+1
 	err := cfg.Validate()

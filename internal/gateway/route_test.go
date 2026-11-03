@@ -249,6 +249,7 @@ func call(model catalog.ModelID, edits ...func(*protocol.Request)) routing.Input
 // snapshot with the protocol, limits and abilities its spec and its supplier's formats say, priced at the sale price,
 // under the one zero-ID preset, and routing plans with it.
 func TestRouteBuildMapsWhatRoutableGives(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	r := routable(f.served, protocol.Messages, protocol.Responses)
 	r.Codename = "g-public"
@@ -303,6 +304,7 @@ func (f *routeFixture) checkEntry(r suppliers.Routable, built routing.Entry) {
 // spec and the supplier's formats say — the abilities, the native and served formats, the service tiers — so a call
 // that needs one of them still finds the endpoint, and a stream the supplier's policy cannot pass finds none.
 func TestRouteBuildHoldsWhatRoutingFiltersBy(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	f.build([]suppliers.Routable{routable(f.served, protocol.Messages, protocol.Responses)})
 	if got := f.planned(call(f.served, func(r *protocol.Request) { r.Needs = protocol.Tools })); len(got) != 1 {
@@ -325,6 +327,7 @@ func TestRouteBuildHoldsWhatRoutingFiltersBy(t *testing.T) {
 }
 
 func TestRouteBuildConvertsNativeClientsToChat(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	f.build([]suppliers.Routable{routable(f.served, protocol.Chat)})
 	for _, client := range []protocol.Format{protocol.Messages, protocol.Responses} {
@@ -355,6 +358,7 @@ func withStreams(r suppliers.Routable, streams bool) suppliers.Routable {
 // the snapshot still holds the one model that can be routed. Nothing is guessed,
 // and a model that cannot be routed leaves a line an administrator can act on.
 func TestRouteBuildLeavesOutWhatItCannotDescribe(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	f.build([]suppliers.Routable{
 		routable(f.served, protocol.Messages),
@@ -388,6 +392,7 @@ func TestRouteBuildLeavesOutWhatItCannotDescribe(t *testing.T) {
 // only endpoints that cannot be routed may not: it would answer every call 404 no_endpoint with the reason only in the
 // log. That is what readiness is decided on (cmd/axiom's announceReady).
 func TestRouteBuildCountsWhatSuppliersOffer(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	f.build(nil)
 	if !f.count.Routable() || f.count.Endpoints != 0 || f.count.Offered != 0 {
@@ -407,6 +412,7 @@ func TestRouteBuildCountsWhatSuppliersOffer(t *testing.T) {
 // stays in the snapshot, flagged, so routing refuses it with the reason instead of the node pretending the model is
 // fine (docs/domains/billing.md「价目表缺项」).
 func TestRouteBuildFlagsAModelThatReportedAnUnpricedItem(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	f.items = []billing.UnknownItem{{Model: f.served, Field: "web_search", Request: uuid.NewV7()}}
 	snap := f.build([]suppliers.Routable{routable(f.served, protocol.Messages)})
@@ -424,6 +430,7 @@ func TestRouteBuildFlagsAModelThatReportedAnUnpricedItem(t *testing.T) {
 // TestRouteBuildPublishesOnlyNewerSnapshots: the router refuses a snapshot built before the one it holds, so a rebuild
 // that finished late never replaces a newer view of the world, and neither does its model list: the two are one build's.
 func TestRouteBuildPublishesOnlyNewerSnapshots(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	a, b := routable(f.served, protocol.Messages), routable(f.served, protocol.Messages)
 	older := f.build([]suppliers.Routable{a})
@@ -444,6 +451,7 @@ func TestRouteBuildPublishesOnlyNewerSnapshots(t *testing.T) {
 // TestRouteBuildReportsAFailedSource: a source that cannot be read is an error, not an empty snapshot: the node fails
 // its start on it (cmd/axiom) and a rebuild keeps the last snapshot it had.
 func TestRouteBuildReportsAFailedSource(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	boom := fmt.Errorf("the database is gone")
 	for name, set := range map[string]func(*RouteDeps){
@@ -480,6 +488,7 @@ func TestRouteBuildReportsAFailedSource(t *testing.T) {
 // that item, so the model is left out with the reason in the log. A per-use item is not short: its site's default price
 // covers it (the test after this one).
 func TestRouteBuildLeavesOutAModelWhoseSalePriceIsShort(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	short, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002"}}`))
 	if err != nil {
@@ -499,6 +508,7 @@ func TestRouteBuildLeavesOutAModelWhoseSalePriceIsShort(t *testing.T) {
 // model whose spec says its upstream may report one, because admission fills in the site's default price for it. Leaving
 // the model out would answer plain text calls 404 too (docs/domains/billing.md「价目表缺项」).
 func TestRouteBuildSellsAModelWhoseSalePriceLeavesAPerUseItemOut(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	model := f.seedPrice("acme/searcher", specSearch, searchReference)
 	short, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002"}}`))
@@ -520,6 +530,7 @@ func TestRouteBuildSellsAModelWhoseSalePriceLeavesAPerUseItemOut(t *testing.T) {
 // reason at each build is one line in the log, not one every 5 seconds; a reason that changes, or comes back after the
 // model was routable, is told again.
 func TestRouteBuildTellsAStandingReasonOnce(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	f.build([]suppliers.Routable{routable(f.unpriced, protocol.Messages)})
 	deps, offered := f.deps, []suppliers.Routable{routable(f.unpriced, protocol.Messages)}
@@ -549,6 +560,7 @@ func TestRouteBuildTellsAStandingReasonOnce(t *testing.T) {
 // TestRouteBuildRanksByWhatQualityMeasured: the snapshot carries the health, speed and time to first token real traffic
 // measured, so the fastest goes by them, and a session no longer sticks to an endpoint whose health fell below 0.5.
 func TestRouteBuildRanksByWhatQualityMeasured(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	fast, slow := routable(f.served, protocol.Messages), routable(f.served, protocol.Messages)
 	answer := func(id uuid.UUID, gen time.Duration) {
