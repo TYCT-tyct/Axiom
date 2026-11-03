@@ -1,7 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
+import { mockAdmin } from "./admin-api.ts";
 import { close, dialog, open, send } from "./admin-page.ts";
-import { acct } from "./admin-scenes.ts";
 import { apps } from "./apps.ts";
+import { signedInAs } from "./mock-auth.ts";
 import { words, zhText } from "./words.ts";
 
 // The target editor and the dashboard's target lines against the mocked API (admin-api.ts, admin-fixtures.ts).
@@ -125,7 +126,13 @@ test.describe("business targets", () => {
   test("at 360 the rank tables keep their headers and account ids on one line", async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 900 });
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-    await open(page, "", "worst");
+    // The 31-character fixture can fit the column exactly on a font that renders slightly narrower; a longer id makes
+    // this a test of the clip, not of the font.
+    const state = await mockAdmin(page, "worst");
+    const full = `acct_${"0".repeat(40)}1`;
+    state.calls = state.calls.map((call) => ({ ...call, account_id: full as typeof call.account_id }));
+    signedInAs(state, "mfa");
+    await page.goto("/");
     for (const table of await page.getByRole("table").all()) {
       for (const head of await table.getByRole("columnheader").all()) {
         expect((await head.boundingBox())?.height ?? 0).toBeLessThan(40);
@@ -134,7 +141,6 @@ test.describe("business targets", () => {
 
     const accounts = page.getByRole("table", { name: zhText("overview.topAccounts") });
     const first = accounts.getByRole("row").nth(1).getByRole("cell").first();
-    const full = acct(1);
     await expect(first).toContainText("acct_");
     await expect(first).toContainText(full.slice(-8));
     const text = first.locator("[title]").first();
