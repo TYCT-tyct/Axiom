@@ -338,6 +338,7 @@ export default {
     buffer: "充值缓冲",
     bufferUnavailable: "这台服务器还没有这一项",
     bufferSkipped: "已保存；这台服务器还不接受充值缓冲，缓冲保持原值。",
+    fieldsSkipped: "已保存；这台服务器还不接受其中一项新设置，该项保持原值。",
     edit: "修改支付设置",
     intro: "用户能否充值、单次充值可买多少积分，以及参考汇率上加的缓冲。修改会记进审计日志。",
     save: "保存支付设置",

@@ -63,7 +63,12 @@ it("writes a percentage without a floating point", () => {
 it("reads the payment settings with exact amounts and the buffer", () => {
   expect(
     readPayments(
-      { open: "true", credits_min: "1.5", credits_max: "20", top_up_buffer_ppm: "3.5" },
+      {
+        open: "true",
+        credits_min: "1.5",
+        credits_max: "20",
+        top_up_buffer_ppm: "3.5",
+      },
       "USD",
       true,
       paymentWords,

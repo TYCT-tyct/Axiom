@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"uuid"
 
+	"axiom/internal/platform/alert"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 )
@@ -30,7 +31,17 @@ func (*Service) SetAccountSuspended(ctx context.Context, tx pg.Tx, actor audit.A
 	if _, err := tx.Exec(ctx, `UPDATE accounts.accounts SET status=$2 WHERE id=$1`, uuid.UUID(id), after); err != nil {
 		return fmt.Errorf("set account status: %w", err)
 	}
-	return audit.Record(ctx, tx, audit.Event{Actor: actor, Action: "account.status_change", Reason: reason, Target: audit.Target{Module: "accounts", Kind: "account", ID: id.TypeID(), Site: site, Account: uuid.UUID(id)}, Detail: map[string]any{"before": before, "after": after}})
+	if err := audit.Record(ctx, tx, audit.Event{Actor: actor, Action: "account.status_change", Reason: reason, Target: audit.Target{Module: "accounts", Kind: "account", ID: id.TypeID(), Site: site, Account: uuid.UUID(id)}, Detail: map[string]any{"before": before, "after": after}}); err != nil {
+		return err
+	}
+	sev := "info"
+	if suspended {
+		sev = "critical"
+	}
+	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{
+		Kind: "accounts.account_suspended", Key: id.TypeID(), Severity: sev, Resolved: !suspended,
+		Fields: map[string]string{"site": site.String()},
+	})
 }
 
 // SetAccountTier moves an account to another tier of its site. The account row is locked, so two changes to one account

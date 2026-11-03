@@ -104,10 +104,22 @@ func InvestigateDiscrepancy(ctx context.Context, tx pg.Tx, id uuid.UUID, note st
 	return discrepancyRecord(r)
 }
 
-func recordPending(ctx context.Context, tx pg.Tx, r RecordDiscrepancyParams) (bool, error) {
+// insertPending records the discrepancy without its signal. A dispute records the difference first and persists the
+// signal after it has suspended the account, so the transaction takes no global alert lock before its row locks.
+func insertPending(ctx context.Context, tx pg.Tx, r RecordDiscrepancyParams) (bool, error) {
 	n, err := queries.RecordDiscrepancy(ctx, tx, r)
-	if err != nil || n == 0 {
-		return false, err
+	return n > 0, err
+}
+
+// persistPending publishes the signal of a discrepancy insertPending recorded.
+func persistPending(ctx context.Context, tx pg.Tx, r RecordDiscrepancyParams) error {
+	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "payments.discrepancy", Key: r.ID.String(), Severity: "critical", Fields: map[string]string{"merchant": r.MerchantID.String(), "kind": r.Kind, "value": "1"}})
+}
+
+func recordPending(ctx context.Context, tx pg.Tx, r RecordDiscrepancyParams) (bool, error) {
+	inserted, err := insertPending(ctx, tx, r)
+	if err != nil || !inserted {
+		return inserted, err
 	}
-	return true, alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: "payments.discrepancy", Key: r.ID.String(), Severity: "critical", Fields: map[string]string{"merchant": r.MerchantID.String(), "kind": r.Kind, "value": "1"}})
+	return true, persistPending(ctx, tx, r)
 }
