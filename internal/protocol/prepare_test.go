@@ -142,6 +142,7 @@ func prepare(f protocol.Format, body []byte, encrypted, continues bool) ([]byte,
 
 // TestPrepare compares whole bodies, so a byte changed outside the rewrites fails it (README.md「同格式改写」, I1, I2).
 func TestPrepare(t *testing.T) {
+	t.Parallel()
 	for _, c := range prepareCases {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := prepare(c.format, []byte(c.body), c.encrypted, c.continues)
@@ -160,6 +161,7 @@ var routingParameters = []string{"provider", "models", "preset", "fallbacks", "r
 
 // TestPrepareDropsRoutingParameters holds every routing parameter to being dropped (README.md「同格式改写」).
 func TestPrepareDropsRoutingParameters(t *testing.T) {
+	t.Parallel()
 	values := map[string]string{"session_id": `"s"`, "preset": `"ignored"`, "fallbacks": `[]`, "models": `["alt"]`, "plugins": `[]`, "transforms": `[]`}
 	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
 		want := `{"model":"up"}`
@@ -182,6 +184,7 @@ func TestPrepareDropsRoutingParameters(t *testing.T) {
 // TestPrepareSamples holds the recorded requests, pretty-printed as published, to a change of the model alone, and
 // of storage in Responses.
 func TestPrepareSamples(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		format protocol.Format
 		file   string
@@ -230,6 +233,7 @@ var prepareRejects = []struct {
 }
 
 func TestPrepareRejects(t *testing.T) {
+	t.Parallel()
 	for _, c := range prepareRejects {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := prepare(c.format, []byte(c.body), true, c.continues)
@@ -356,6 +360,7 @@ func BenchmarkPrepare(b *testing.B) {
 // when the request names one alone; a format not converted to the endpoint's is the endpoint's shortcoming, not the
 // client's error.
 func TestPrepareUpstream(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, body string
 		to         protocol.Format
@@ -395,6 +400,7 @@ func TestPrepareUpstream(t *testing.T) {
 // the cap it was quoted at, whose member the buffer has room for; one that sets a cap keeps it, and a target without
 // a cap to send leaves the request as it is (README.md「同格式改写」, I1).
 func TestPrepareOutputCap(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, body string
 		max        int64

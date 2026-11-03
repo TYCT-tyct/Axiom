@@ -31,6 +31,7 @@ func chatUsage(usage string) string { return chatHead + `[],"usage":` + usage + 
 // with an error rather than a success; every chunk names the call ID and the client's model; a stream without a
 // usage chunk gets one with the usage and cost of the settlement; a relay's provider and cost do not reach the client.
 func TestRelayChat(t *testing.T) {
+	t.Parallel()
 	usage := `{"prompt_tokens":9,"completion_tokens":2,"total_tokens":11,"cost":0.5,"is_byok":false}`
 	for _, c := range []struct {
 		name, stream string
@@ -87,6 +88,7 @@ const chatMixed = chatHead + `[{"index":0,"delta":{"role":"assistant","content":
 // TestRelayChatSplitKeeps: once its finish signals are out, a chunk goes on if any member is left with a value, even
 // one without text, such as another choice's role or a finish's logprobs; a chunk left with nothing goes no further.
 func TestRelayChatSplitKeeps(t *testing.T) {
+	t.Parallel()
 	stop := `{"index":0,"delta":{},"finish_reason":"stop"}`
 	second := chatHead + `[{"index":1,"delta":{"content":"y"},"finish_reason":"stop"}]}` + "\n\n"
 	// The client gets the role chunk, Hi, what is left of the chunk when it goes on, the chunks after it, a chunk of
@@ -123,6 +125,7 @@ func TestRelayChatSplitKeeps(t *testing.T) {
 // place and only the finish signal is held, so every choice keeps its order, tool calls included; a chunk with content
 // is the commit point even when it finishes a choice and carries the usage.
 func TestRelayChatChoices(t *testing.T) {
+	t.Parallel()
 	got := relay(t, protocol.Chat, strings.NewReader(chatMixed), protocol.UsageContext{}, protocol.NewMemory(0), settled)
 	want := map[string]string{
 		"0/role": "assistant", "0/content": "x", "0/finish_reason": "stop", "1/role": "assistant", "1/content": "AB",
@@ -192,6 +195,7 @@ func checkChunk(t *testing.T, block string, e map[string]any) {
 // TestRelayChatContent: the dialects' reasoning, refusals and tool calls are content, counted as they arrive; a
 // chunk with only a role is not the commit point.
 func TestRelayChatContent(t *testing.T) {
+	t.Parallel()
 	delta := `[{"index":0,"delta":{"reasoning_content":"ab","reasoning":"c","refusal":"d",` +
 		`"reasoning_details":[{"type":"reasoning.text","text":"e"}],"tool_calls":[{"index":0,"id":"call_1","type":"function",` +
 		`"function":{"name":"f","arguments":"{}"}}]},"finish_reason":null}]}` + "\n\n"
@@ -216,6 +220,7 @@ const responsesObject = `,"response":{"id":"resp_1","object":"response","status"
 // TestRelayResponses: a failure after response.created is response.failed, numbered after the last event and naming
 // the call ID; before it, the error event; response.incomplete is a normal end.
 func TestRelayResponses(t *testing.T) {
+	t.Parallel()
 	created := responsesEvent("response.created", 0, responsesObject)
 	added := responsesEvent("response.output_item.added", 1, `,"output_index":0,"item":{"id":"msg_1","type":"message","content":[]}`)
 	incomplete := responsesEvent("response.incomplete", 1, strings.Replace(responsesObject, `"usage":null`,
@@ -251,6 +256,7 @@ func TestRelayResponses(t *testing.T) {
 // TestRelayResponsesPendingKeepsIsByok: an unsettled Responses call still describes this site's key use. The cost is
 // absent because the settlement is pending, but is_byok is a usage member and stays.
 func TestRelayResponsesPendingKeepsIsByok(t *testing.T) {
+	t.Parallel()
 	got := relay(t, protocol.Responses, bytes.NewReader(sample(t, "responses/text/upstream.sse")), protocol.UsageContext{},
 		protocol.NewMemory(0), func(protocol.Usage) protocol.Final { return protocol.Final{Pending: true} })
 	if got.err != nil {
@@ -271,6 +277,7 @@ func TestRelayResponsesPendingKeepsIsByok(t *testing.T) {
 }
 
 func TestRelayResponsesKeepsANullUsage(t *testing.T) {
+	t.Parallel()
 	created := responsesEvent("response.created", 0, responsesObject)
 	progress := responsesEvent("response.in_progress", 1, responsesObject)
 	completed := responsesEvent("response.completed", 2, strings.Replace(responsesObject, `"usage":null`, `"usage":{"input_tokens":5,"output_tokens":3}`, 1))
@@ -299,6 +306,7 @@ func TestRelayResponsesKeepsANullUsage(t *testing.T) {
 // to its deltas, so text is never counted twice and an item without deltas is still counted; a web search call
 // counts as a search.
 func TestRelayResponsesContent(t *testing.T) {
+	t.Parallel()
 	item := `"item":{"id":"msg_1","type":"message","content":[{"type":"output_text","text":"Hello"}]}`
 	created := responsesEvent("response.created", 0, responsesObject)
 	added := responsesEvent("response.output_item.added", 1, `,"output_index":0,"item":{"id":"msg_1","type":"message"}`)
@@ -339,6 +347,7 @@ type openAIUsageCase struct {
 // TestRelayOpenAIUsage maps both OpenAI formats' usage as catalog README.md「计费项与用量」 tabulates: the input total
 // less its cached, cache-written and audio parts is input; the output total less reasoning and audio is output.
 func TestRelayOpenAIUsage(t *testing.T) {
+	t.Parallel()
 	for _, c := range []openAIUsageCase{
 		{
 			name: "parts", usage: `{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":20,"audio_tokens":10},` +
@@ -410,6 +419,7 @@ func wantWithPrompt(t *testing.T, usage string, want protocol.Segment) protocol.
 // the other when it sent one; two names with text are left as they are, and a finish_reason edited in the same chunk
 // comes out right on either side of the delta (docs/domains/gateway.md「转发规则」).
 func TestRelayChatWritesReasoningUnderBothNames(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, choice string
 		want         map[string]any

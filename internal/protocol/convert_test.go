@@ -113,6 +113,7 @@ func quotedCap(t *protocol.Target)    { t.MaxOutput = 7000 }
 const messagesHead = `{"model":"up","max_tokens":4096,`
 
 func TestConvertToMessages(t *testing.T) {
+	t.Parallel()
 	convertCases(t, protocol.Messages, []convertCase{
 		{
 			"the cap the request was quoted at", chatBody(`"messages":[` + userHi + `]`), quotedCap,
@@ -278,6 +279,7 @@ func TestConvertToMessages(t *testing.T) {
 }
 
 func TestConvertToResponses(t *testing.T) {
+	t.Parallel()
 	const head = `{"model":"up","input":[`
 	convertCases(t, protocol.Responses, []convertCase{
 		{
@@ -387,6 +389,7 @@ func TestConvertToResponses(t *testing.T) {
 // TestToolUseIDs: an ID Anthropic accepts stays; any other is written in hex behind a prefix that the first kind
 // cannot take, so distinct IDs stay distinct.
 func TestToolUseIDs(t *testing.T) {
+	t.Parallel()
 	ids := []string{"call_1", "call.1", "axid_63616c6c2e31", "", "名", "a-b_C9", strings.Repeat("x", 300)}
 	seen := map[string]string{}
 	for _, id := range ids {
@@ -432,6 +435,7 @@ func quote(s string) string {
 // TestConvertSamples converts each Chat sample's request for both other formats and compares the result with its
 // golden copy, to-<format>.json, which go test -update rewrites.
 func TestConvertSamples(t *testing.T) {
+	t.Parallel()
 	for _, dir := range must(fs.Glob(samples, "chat/*")) {
 		for _, to := range []struct {
 			f    protocol.Format
@@ -463,6 +467,7 @@ var conversation = []string{
 // of the one converted after turn n+1 (I11): an upstream's prompt cache and Anthropic's thinking signatures see the
 // same prefix every turn.
 func TestConvertPrefix(t *testing.T) {
+	t.Parallel()
 	for _, to := range []protocol.Format{protocol.Messages, protocol.Responses} {
 		var last string
 		for n := 2; n <= len(conversation); n++ {

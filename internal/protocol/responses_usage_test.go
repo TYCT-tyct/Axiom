@@ -13,6 +13,7 @@ import (
 const responseUsage = `{"input_tokens":5,"output_tokens":11}`
 
 func TestResponsesIgnoreTopLevelUsage(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"response.completed", "response.incomplete"} {
 		for _, top := range []string{
 			`{"prompt_tokens":900,"completion_tokens":700}`, `{"output_tokens":1}`,
@@ -71,6 +72,7 @@ func checkResponsesUsageReport(t *testing.T, u protocol.Usage) {
 }
 
 func TestResponsesFailurePrefersResponseUsage(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"response.failed", "error"} {
 		for _, tc := range []struct {
 			nested, top string

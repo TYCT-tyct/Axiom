@@ -8,6 +8,7 @@ import (
 )
 
 func TestResponsesOmittedStrictKeepsSchema(t *testing.T) {
+	t.Parallel()
 	for _, schema := range []string{
 		`{"type":"object","additionalProperties":true}`,
 		`{"type":"object","additionalProperties":{"type":"string"}}`,
@@ -28,6 +29,7 @@ func TestResponsesOmittedStrictKeepsSchema(t *testing.T) {
 }
 
 func TestMessagesErrorToolResultsToChat(t *testing.T) {
+	t.Parallel()
 	for _, content := range []string{`"failed"`, `[{"type":"text","text":"failed"}]`, `[]`, `null`} {
 		body := chatBody(`"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","is_error":true,"content":` + content + `}]}]`)
 		up, err := prepareNativeChat(protocol.Messages, body, "up", nil)
@@ -46,6 +48,7 @@ func TestMessagesErrorToolResultsToChat(t *testing.T) {
 }
 
 func TestResponsesChatExplicitDefaults(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		members string
 		ok      bool
@@ -69,6 +72,7 @@ func TestResponsesChatExplicitDefaults(t *testing.T) {
 }
 
 func TestResponsesReasoningKeepsItsHistoryPosition(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ items, want string }{
 		{
 			`{"role":"user","content":"old"},{"type":"reasoning","summary":[{"type":"summary_text","text":"why"}]},{"role":"user","content":"new"}`,
@@ -88,6 +92,7 @@ func TestResponsesReasoningKeepsItsHistoryPosition(t *testing.T) {
 }
 
 func TestResponsesDanglingReasoningInResolvedHistory(t *testing.T) {
+	t.Parallel()
 	history := [][]byte{
 		[]byte(`{"role":"user","content":"old"}`),
 		[]byte(`{"type":"reasoning","summary":[{"type":"summary_text","text":"why"}]}`),
@@ -100,6 +105,7 @@ func TestResponsesDanglingReasoningInResolvedHistory(t *testing.T) {
 }
 
 func TestSuccessfulToolResultHasNoErrorMarker(t *testing.T) {
+	t.Parallel()
 	body := chatBody(`"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","is_error":false,"content":"ok"}]}]`)
 	up, err := prepareNativeChat(protocol.Messages, body, "up", nil)
 	if err != nil {

@@ -19,6 +19,7 @@ data: [DONE]
 // TestAggregateAnnotatesFiles: an aggregated Chat reply carries the parsed files as `file` annotations on every choice,
 // in the shape OpenRouter returns, so a client can send the text back instead of the file.
 func TestAggregateAnnotatesFiles(t *testing.T) {
+	t.Parallel()
 	files := []protocol.FileAnnotation{{Hash: "abc123", Name: "scan.pdf", Text: "The parsed page."}}
 	o := protocol.RelayOptions{
 		ID: "gen-1", Model: "m", Created: 1, Aggregate: true, Memory: protocol.NewMemory(1 << 20),
@@ -80,6 +81,7 @@ func replyAnnotations(t *testing.T, body []byte) []replyAnnotation {
 
 // TestAggregateWithoutFilesHasNoAnnotations: a reply keeps the shape it had when nothing was parsed.
 func TestAggregateWithoutFilesHasNoAnnotations(t *testing.T) {
+	t.Parallel()
 	o := protocol.RelayOptions{ID: "gen-1", Model: "m", Created: 1, Aggregate: true, Memory: protocol.NewMemory(1 << 20)}
 	r := protocol.NewRelay(protocol.Chat, protocol.Chat, strings.NewReader(chatFileStream), protocol.UsageContext{}, o)
 	var body []byte

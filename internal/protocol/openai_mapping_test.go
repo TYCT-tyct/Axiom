@@ -60,6 +60,7 @@ var overlapCases = []overlapCase{
 
 // Both wire formats accept both names used by OpenAI-compatible upstreams.
 func TestOpenAIOverlapAndImages(t *testing.T) {
+	t.Parallel()
 	for _, format := range []protocol.Format{protocol.Chat, protocol.Responses} {
 		for _, alias := range []string{"prompt", "input"} {
 			for _, tc := range overlapCases {
@@ -120,6 +121,7 @@ func mappingStream(format protocol.Format, usage string, broken bool) string {
 }
 
 func TestOpenAIPhysicalTotalsSurviveDelivery(t *testing.T) {
+	t.Parallel()
 	for _, upstream := range []protocol.Format{protocol.Chat, protocol.Responses} {
 		for _, client := range []protocol.Format{upstream, protocol.Chat} {
 			for _, broken := range []bool{false, true} {
@@ -172,6 +174,7 @@ var deepSeekCases = []overlapCase{
 }
 
 func TestOpenAIDeepSeekCache(t *testing.T) {
+	t.Parallel()
 	for _, tc := range deepSeekCases {
 		t.Run(tc.name, func(t *testing.T) { tc.check(t, protocol.Chat, "prompt") })
 	}

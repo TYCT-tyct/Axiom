@@ -14,6 +14,7 @@ type breakdownCase struct {
 }
 
 func TestOpenAIBreakdownsReplaceTogether(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []breakdownCase{
 		{"cache detail arrives later", `{"input_tokens":100}`, `{"input_tokens":100,"input_tokens_details":{"cached_tokens":80,"cache_write_tokens":80}}`, 0, 80, 80, 0, false},
 		{"image detail arrives later", `{"output_tokens":100}`, `{"output_tokens":100,"output_tokens_details":{"image_tokens":100}}`, 0, 0, 0, 100, false},
@@ -70,6 +71,7 @@ func metered(t *testing.T, bodies ...string) Usage {
 // prompt tokens of which 80 are cached are 20 input at 1 and 80 reads at 0.1, 28 in all, not 100 input. A larger total,
 // or the details object itself, is a new snapshot.
 func TestOpenAIKeepsTheSplitOfAnEarlierReport(t *testing.T) {
+	t.Parallel()
 	const (
 		cached    = `{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":80}}`
 		reasoning = `{"completion_tokens":100,"completion_tokens_details":{"reasoning_tokens":60}}`
@@ -144,6 +146,7 @@ func (tc splitCase) check(t *testing.T, got Usage) {
 // TestNativeSplitsMergeByPresence: an input frame reports video, a later output frame reports predictions and says
 // nothing about video. The later frame must not wipe the earlier native split.
 func TestNativeSplitsMergeByPresence(t *testing.T) {
+	t.Parallel()
 	u := metered(t,
 		`{"input_tokens":100,"input_tokens_details":{"video_tokens":10}}`,
 		`{"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":2,"rejected_prediction_tokens":1}}`)
@@ -156,6 +159,7 @@ func TestNativeSplitsMergeByPresence(t *testing.T) {
 // TestNativeSplitsReplaceOnSameSideSnapshot: a new output details object can report accepted=0 after accepted=4; the
 // zero is a replacement, not an absent field. Otherwise accepted and rejected would add up past the output total.
 func TestNativeSplitsReplaceOnSameSideSnapshot(t *testing.T) {
+	t.Parallel()
 	u := metered(t,
 		`{"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":4,"rejected_prediction_tokens":1}}`,
 		`{"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":0,"rejected_prediction_tokens":5}}`)
@@ -171,6 +175,7 @@ func TestNativeSplitsReplaceOnSameSideSnapshot(t *testing.T) {
 // TestNativeVideoClearsOnAnInputSnapshot: video is an input-details field, so a later input snapshot with video=0
 // replaces the earlier 10; an output frame from the same call must not clear it.
 func TestNativeVideoClearsOnAnInputSnapshot(t *testing.T) {
+	t.Parallel()
 	u := metered(t,
 		`{"input_tokens":100,"input_tokens_details":{"video_tokens":10}}`,
 		`{"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":2}}`,
@@ -183,6 +188,7 @@ func TestNativeVideoClearsOnAnInputSnapshot(t *testing.T) {
 // TestNativeVideoKeepsWithAZeroTotal: a relay that clears the input total is ignored by takeSide, so the video split
 // from the kept input snapshot must not be cleared by its empty details object.
 func TestNativeVideoKeepsWithAZeroTotal(t *testing.T) {
+	t.Parallel()
 	u := metered(t,
 		`{"input_tokens":100,"input_tokens_details":{"video_tokens":10}}`,
 		`{"input_tokens":0,"input_tokens_details":{}}`)
@@ -194,6 +200,7 @@ func TestNativeVideoKeepsWithAZeroTotal(t *testing.T) {
 // TestNativePredictionsKeepWithAZeroTotal: the same rule for the output side: a zero total with empty details keeps
 // the accepted and rejected prediction splits of the earlier snapshot.
 func TestNativePredictionsKeepWithAZeroTotal(t *testing.T) {
+	t.Parallel()
 	u := metered(t,
 		`{"output_tokens":5,"output_tokens_details":{"accepted_prediction_tokens":4,"rejected_prediction_tokens":1}}`,
 		`{"output_tokens":0,"output_tokens_details":{}}`)

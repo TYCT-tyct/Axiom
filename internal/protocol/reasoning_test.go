@@ -15,6 +15,7 @@ import (
 )
 
 func TestReasoningControlsAcrossFormats(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, setting, thinking, effort string
 		target                          protocol.Format
@@ -65,6 +66,7 @@ func TestReasoningControlsAcrossFormats(t *testing.T) {
 // TestAnEmptyEffortAsksForNoReasoning: the summary and the conversion agree that "" is no setting, so it neither asks
 // for the reasoning ability nor satisfies a :thinking suffix; an effort the reasoning object does set still counts.
 func TestAnEmptyEffortAsksForNoReasoning(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		setting string
 		want    bool
@@ -111,6 +113,7 @@ func checkReasoningSettings(t *testing.T, body []byte, target protocol.Format, t
 }
 
 func TestReasoningEffortBudgets(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		effort string
 		budget int64
@@ -148,6 +151,7 @@ type reasoningSample struct {
 }
 
 func TestHiddenReasoningRecordedStreams(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []reasoningSample{
 		{protocol.Messages, "messages/thinking/upstream.sse", "I need to find the GCD", "greatest common divisor"},
 		{protocol.Responses, "assembled/responses-reasoning-tool.sse", "Checking the weather", "get_weather"},
@@ -242,6 +246,7 @@ func reasoningReply(t *testing.T, client, up protocol.Format, stream []byte, hid
 }
 
 func TestReasoningDisablePrecedenceAndVisibility(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		f       protocol.Format
 		setting string
@@ -276,6 +281,7 @@ func TestReasoningDisablePrecedenceAndVisibility(t *testing.T) {
 }
 
 func TestNativeReasoningRequestsToChat(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		f               protocol.Format
 		setting, effort string
@@ -311,6 +317,7 @@ func TestNativeReasoningRequestsToChat(t *testing.T) {
 }
 
 func TestReasoningBudgetApproximation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		budget int
 		effort string
@@ -329,6 +336,7 @@ func TestReasoningBudgetApproximation(t *testing.T) {
 }
 
 func TestReasoningVisibilityWithoutStrength(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		target         protocol.Format
 		exclude        bool
@@ -359,6 +367,7 @@ func TestReasoningVisibilityWithoutStrength(t *testing.T) {
 }
 
 func TestHiddenReasoningSnapshots(t *testing.T) {
+	t.Parallel()
 	stream := []byte(`event: response.created
 data: {"type":"response.created","sequence_number":0,"response":{"id":"r","model":"m","output":[]}}
 
@@ -386,6 +395,7 @@ data: {"type":"response.completed","sequence_number":2,"response":{"id":"r","mod
 }
 
 func TestHiddenThinkingKeepsSignature(t *testing.T) {
+	t.Parallel()
 	stream := reasoningSampleStream(t, reasoningSample{up: protocol.Messages, path: "messages/thinking/upstream.sse"})
 	for _, aggregate := range []bool{false, true} {
 		out, _, _ := reasoningReply(t, protocol.Messages, protocol.Messages, stream, true, aggregate)
@@ -396,6 +406,7 @@ func TestHiddenThinkingKeepsSignature(t *testing.T) {
 }
 
 func TestHiddenReasoningCanUseEntireOutputCap(t *testing.T) {
+	t.Parallel()
 	stream := []byte(`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"private"},"finish_reason":null}]}
 
 data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"completion_tokens_details":{"reasoning_tokens":5}}}
@@ -426,6 +437,7 @@ data: [DONE]
 }
 
 func TestHiddenReasoningCommitsOnVisibleContent(t *testing.T) {
+	t.Parallel()
 	stream, err := os.ReadFile("testdata/assembled/chat-reasoning-cache.sse")
 	if err != nil {
 		t.Fatal(err)

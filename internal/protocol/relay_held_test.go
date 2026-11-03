@@ -161,6 +161,7 @@ func heldStreams(many int) map[string]heldStream {
 // failure what stays is the opening the failure ending writes and the meter, and, for a reply that is aggregated, what
 // the aggregator holds; the meter at its bounds fits meterMemory.
 func TestRelayMemoryHeld(t *testing.T) {
+	t.Parallel()
 	// The aggregated replies run on a tenth of the choices, items and calls: what they hold is walked at each check,
 	// which costs more than a relay's own.
 	for _, aggregate := range []bool{false, true} {
@@ -223,6 +224,7 @@ func readHeld(t *testing.T, r *Relay) (int, error) {
 
 // TestMeterMemory: a meter at its bounds, with its copy in the progress, holds no more than meterMemory.
 func TestMeterMemory(t *testing.T) {
+	t.Parallel()
 	report := func(prefix string) usageReport {
 		var r usageReport
 		total := int64(100)

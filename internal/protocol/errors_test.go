@@ -41,6 +41,7 @@ var errorRows = []struct {
 // TestRenderError: each type answers with its status in each format's shell, the unified type where gateway.md puts
 // it, the details next to it, and with a settlement the usage and cost in an axiom object.
 func TestRenderError(t *testing.T) {
+	t.Parallel()
 	u := protocol.Usage{Segments: []protocol.Segment{{Usage: must(catalog.NewUsage(map[catalog.Item]int64{
 		catalog.ItemInput: 7, catalog.ItemOutput: 2,
 	}, catalog.ServiceTierStandard, nil))}}}
@@ -130,6 +131,7 @@ func typedError(body map[string]any) map[string]any {
 //
 //nolint:gocognit // the table and its assertions are the test
 func TestRenderRejection(t *testing.T) {
+	t.Parallel()
 	openAI := &protocol.Rejection{
 		Message: "Invalid value for 'max_tokens': expected a value above 0.", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value",
 	}
@@ -182,6 +184,7 @@ func TestRenderRejection(t *testing.T) {
 //
 //nolint:cyclop,gocognit // the table and its assertions are the test
 func TestTypedRejection(t *testing.T) {
+	t.Parallel()
 	for _, row := range []struct {
 		typ    protocol.ErrorType
 		name   string
@@ -219,6 +222,7 @@ func TestTypedRejection(t *testing.T) {
 // TestErrorStatusOverride: a key or workspace budget is a 403 where its type's status is a 402, and the numeric code
 // follows the status the caller named, so the body and the status line still say the same thing.
 func TestErrorStatusOverride(t *testing.T) {
+	t.Parallel()
 	for _, f := range []protocol.Format{protocol.Chat, protocol.Responses} {
 		status, body := protocol.RenderError(f, protocol.Error{Type: protocol.CreditsInsufficient, Status: 403, Details: `,"limit_source":"openrouter_key_limit"`}, nil)
 		if status != 403 || !strings.Contains(string(body), `"code":403`) ||
@@ -235,6 +239,7 @@ func TestErrorStatusOverride(t *testing.T) {
 
 // TestRenderErrorCharges: no settlement, no axiom object; a pending settlement says so and gives no cost.
 func TestRenderErrorCharges(t *testing.T) {
+	t.Parallel()
 	_, body := protocol.RenderError(protocol.Chat, protocol.Error{Type: protocol.Timeout}, nil)
 	if strings.Contains(string(body), "axiom") {
 		t.Errorf("an axiom object without a settlement: %s", body)
@@ -261,6 +266,7 @@ var newAPIDisableKeywords = []string{
 // TestErrorMessages: no error we write, before or during a stream, says any of them, so a relay that fronts us with
 // new-api does not take our errors for a dead upstream (docs/domains/gateway.md「错误」).
 func TestErrorMessages(t *testing.T) {
+	t.Parallel()
 	for _, row := range errorRows {
 		for _, f := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
 			_, body := protocol.RenderError(f, protocol.Error{Type: row.t}, nil)

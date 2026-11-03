@@ -11,6 +11,7 @@ import (
 // Zero and null have the same meaning as an omitted cap to admission. The buffer
 // must also fit the longest replacement without growing beyond PrepareCost.
 func TestPrepareResponsesCap(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		limit   string
 		max     int64
@@ -58,6 +59,7 @@ func TestPrepareResponsesCap(t *testing.T) {
 }
 
 func TestPrepareResponsesEscapedZeroCap(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","input":"Hi","max_output_\u0074okens":-0}`)
 	r := inspected(t, protocol.Responses, body)
 	u, err := protocol.Prepare(&r, body, protocol.Target{Format: protocol.Responses, Model: "u", MaxOutput: 7000}, protocol.Rewrites{})
@@ -87,6 +89,7 @@ func responsesCapBody(limit, wantCap string, compact bool) string {
 // one keeps it, and a model whose cap is not known leaves it out (README.md「同格式改写」, docs/domains/gateway.md
 // 「转发规则」). The member is added before the stream, so a request that names neither is rewritten the same way twice.
 func TestPrepareMessagesCap(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, body string
 		max        int64

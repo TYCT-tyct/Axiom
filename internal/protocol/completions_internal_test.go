@@ -21,6 +21,7 @@ func completionsBudgetChunk(size int) []byte {
 //
 //nolint:cyclop,gocognit // one budget, a chunk too large and one that fits, and the allocations measured
 func TestCompletionsLogprobsBudget(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("15 MiB of logprobs")
 	}
@@ -82,6 +83,7 @@ func TestCompletionsLogprobsBudget(t *testing.T) {
 // TestCompletionsEchoChargesItsChoiceState: echo keeps how much of each choice's echo has arrived, a second map slot per
 // choice, which is charged beside the choice's own: three choices draw 3 × choiceSize more with echo than without.
 func TestCompletionsEchoChargesItsChoiceState(t *testing.T) {
+	t.Parallel()
 	chunk := []byte(`{"id":"x","object":"text_completion","created":1,"model":"m","choices":[` +
 		`{"index":0,"text":"a"},{"index":1,"text":"a"},{"index":2,"text":"a"}]}`)
 	drawn := func(echo *EchoPrompts) int {

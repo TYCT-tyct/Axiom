@@ -46,6 +46,7 @@ func bigStream(f protocol.Format, n int) string {
 // stream that passes either fails with ErrMemory, a local failure, never the upstream's, and gives back all it drew,
 // the reply that failed by the cap included.
 func TestAggregateBudget(t *testing.T) {
+	t.Parallel()
 	const node = 128 << 20
 	// A Responses ending whose response alone passes the cap.
 	huge := strings.Replace(responsesObject, `"output":[]`, `"output":[],"x":"`+strings.Repeat("x", 17<<20)+`"`, 1)
@@ -84,6 +85,7 @@ func TestAggregateBudget(t *testing.T) {
 // were charged against stays drawn after the ending, and Release, which the gateway calls once the body is written,
 // gives it back whole, once.
 func TestAggregateHoldsItsBudgetUntilReleased(t *testing.T) {
+	t.Parallel()
 	const node, size = 128 << 20, 2 << 20
 	for _, p := range aggregatePaths {
 		stream := string(aggregateDeltas(p.upstream, 4, size/4))
@@ -127,6 +129,7 @@ func drainAggregated(tb testing.TB, f protocol.Format, stream []byte) {
 // the size of its deltas (docs/performance.md「调用路径上的规则」). The measurement runs in a child process, so this
 // binary's other goroutines and their collections are not counted as the aggregator's.
 func TestAggregateAllocs(t *testing.T) {
+	t.Parallel()
 	read := func(stream []byte) func() {
 		return func() {
 			r := sse.NewReader(bytes.NewReader(stream), 1<<20)

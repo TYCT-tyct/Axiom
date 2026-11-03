@@ -9,6 +9,7 @@ import (
 )
 
 func TestResponseHealing(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ input, want string }{
 		{`{"name":"Alice","age":30`, `{"name":"Alice","age":30}`},
 		{"```json\n{\"name\":\"Bob\"}\n```", `{"name":"Bob"}`},
@@ -31,6 +32,7 @@ func TestResponseHealing(t *testing.T) {
 }
 
 func TestHealingOnlyForCompletedNonStreamingJSON(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, members, finish string
 		healed                bool
@@ -130,6 +132,7 @@ func FuzzResponseHealing(f *testing.F) {
 }
 
 func TestHealingDoesNotChangeFailedRefusedOrToolOutput(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		failed, refused, tool bool
 		finish                string
@@ -155,6 +158,7 @@ func TestHealingDoesNotChangeFailedRefusedOrToolOutput(t *testing.T) {
 }
 
 func TestHealedReplyDropsStaleLogprobs(t *testing.T) {
+	t.Parallel()
 	for _, input := range []string{`{key:1,}`, `{"key":1}`} {
 		raw := jsonValue(input)
 		c := chatChoice{finish: jsonValue("stop")}

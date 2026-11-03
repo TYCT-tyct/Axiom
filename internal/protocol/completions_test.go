@@ -47,6 +47,7 @@ func completionsStreamOf(n, size int) string {
 //
 //nolint:cyclop,gocognit // the table and its assertions are the test
 func TestCompletionsInspect(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name                            string
 		body                            string
@@ -131,6 +132,7 @@ func TestCompletionsInspect(t *testing.T) {
 //
 //nolint:cyclop,gocognit // the table and its assertions are the test
 func TestCompletionsPrepare(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, body string
 		maxOutput  int64
@@ -208,6 +210,7 @@ func TestCompletionsPrepare(t *testing.T) {
 //
 //nolint:cyclop,gocognit // the table and its assertions are the test
 func TestCompletionsSample(t *testing.T) {
+	t.Parallel()
 	body := sample(t, "completions/text/request.json")
 	r, err := protocol.Inspect(protocol.Completions, body)
 	if err != nil {
@@ -302,6 +305,7 @@ func completionChunks(t *testing.T, out []byte) []map[string]any {
 // TestCompletionsUsageEnding: the upstream's usage is taken from the ending chunk and the client gets the relay's own
 // usage chunk, once, after the choices, with the cost; the aggregated body carries the same counts.
 func TestCompletionsUsageEnding(t *testing.T) {
+	t.Parallel()
 	stream := completionsStreamOf(1, 1)
 	got := relay(t, protocol.Completions, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0),
 		completionSettled)
@@ -332,6 +336,7 @@ func TestCompletionsUsageEnding(t *testing.T) {
 // TestCompletionsLogprobsLongStream: many chunks whose reply stays far below the cap are all kept: the arrays are
 // appended, not merged into a new object per chunk (docs/domains/gateway.md「决策与理由」).
 func TestCompletionsLogprobsLongStream(t *testing.T) {
+	t.Parallel()
 	const chunks, size = 130, 1 << 10
 	stream := completionsStreamOf(chunks, size)
 	agg := aggregate(t, protocol.Completions, protocol.Completions, strings.NewReader(stream), protocol.NewMemory(128<<20),
@@ -363,6 +368,7 @@ func TestCompletionsLogprobsLongStream(t *testing.T) {
 
 // TestCompletionsFailures: a stream that breaks its shape is the upstream's failure, not a local capacity error.
 func TestCompletionsFailures(t *testing.T) {
+	t.Parallel()
 	text := `data: {"id":"x","object":"text_completion","created":1,"model":"m","choices":[{"index":0,"text":"Hi",` +
 		`"finish_reason":null}]}` + "\n\n"
 	usage := `data: {"id":"x","object":"text_completion","created":1,"model":"m","choices":[],` +
@@ -394,6 +400,7 @@ func TestCompletionsFailures(t *testing.T) {
 // TestCompletionsAggregateBodyBudget: a reply past the 16 MiB cap is a memory error, and the pieces it did hold are
 // given back by the relay's Release; the failure is not the upstream's.
 func TestCompletionsAggregateBodyBudget(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("17 MiB of logprobs")
 	}
@@ -412,6 +419,7 @@ func TestCompletionsAggregateBodyBudget(t *testing.T) {
 // TestCompletionsFormatNumbers keeps the new format at the end: suppliers store the names, and a routing set keeps the
 // numbers, so an inserted format would silently turn one into another on a node of the previous release.
 func TestCompletionsFormatNumbers(t *testing.T) {
+	t.Parallel()
 	if protocol.Completions != protocol.Rerank+1 {
 		t.Errorf("Completions is %d, want %d", protocol.Completions, protocol.Rerank+1)
 	}

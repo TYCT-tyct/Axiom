@@ -9,6 +9,7 @@ import (
 )
 
 func TestInspectRefusesUnpricedServerTools(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		format       protocol.Format
 		member, name string
@@ -50,6 +51,7 @@ func TestInspectRefusesUnpricedServerTools(t *testing.T) {
 //
 //nolint:cyclop // a table of refusals
 func TestInspectRefusesOpenRouterServerTools(t *testing.T) {
+	t.Parallel()
 	tools := []string{
 		"openrouter:web_fetch", "openrouter:datetime", "openrouter:image_generation",
 		"openrouter:apply_patch", "openrouter:shell", "openrouter:bash", "openrouter:fusion", "openrouter:advisor",
@@ -92,6 +94,7 @@ func refusedTool(t *testing.T, format protocol.Format, name string) {
 }
 
 func TestInspectEmptyMCPServersAndClientToolNames(t *testing.T) {
+	t.Parallel()
 	for _, member := range []string{`"mcp_servers":[]`, `"mcp_servers":null`, `"tools":[{"name":"web_fetch","input_schema":{"type":"object"}}]`} {
 		if _, err := protocol.Inspect(protocol.Messages, []byte(`{"model":"m",`+member+`}`)); err != nil {
 			t.Fatal(err)
@@ -103,6 +106,7 @@ func TestInspectEmptyMCPServersAndClientToolNames(t *testing.T) {
 }
 
 func TestInspectKeepsClientToolExecution(t *testing.T) {
+	t.Parallel()
 	for _, tool := range []string{
 		`{"type":"shell","environment":{"type":"local"}}`,
 		`{"environment":{"type":"local"},"type":"shell"}`,

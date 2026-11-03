@@ -12,6 +12,7 @@ import (
 // server_tool_use block — once each: a done event for an item counts nothing more, and a client tool named
 // code_execution is not a server tool.
 func TestRelayCountsServerToolCalls(t *testing.T) {
+	t.Parallel()
 	created := responsesEvent("response.created", 0, responsesObject)
 	fileSearch := `,"output_index":0,"item":{"id":"fs_1","type":"file_search_call","status":"completed","queries":["q"],"results":[]}`
 	codeInterpreter := `,"output_index":1,"item":{"id":"ci_1","type":"code_interpreter_call","status":"completed","code":"1","container_id":"c","outputs":[]}`

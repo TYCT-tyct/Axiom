@@ -11,6 +11,7 @@ import (
 
 //nolint:cyclop // a table of accepted parameters
 func TestInspectWebSearchTool(t *testing.T) {
+	t.Parallel()
 	req, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","max_tool_calls":7,"tools":[{"type":"openrouter:web_search","parameters":{"engine":"native","max_results":9,"max_uses":4,"max_total_results":12,"allowed_domains":["example.com"],"excluded_domains":["spam.example"]}}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +31,7 @@ func TestInspectWebSearchTool(t *testing.T) {
 }
 
 func TestInspectWebSearchParameterOrder(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		format protocol.Format
 		body   string
@@ -56,6 +58,7 @@ func TestInspectWebSearchParameterOrder(t *testing.T) {
 }
 
 func TestInspectWebSearchToolRefusals(t *testing.T) {
+	t.Parallel()
 	for _, parameters := range []string{
 		`{"mode":"deep"}`,
 		`{"search_context_size":"high"}`,
@@ -84,6 +87,7 @@ func TestInspectWebSearchToolRefusals(t *testing.T) {
 }
 
 func TestRemoveServerTool(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","tools":[{"type":"function","function":{"name":"keep"}},{"type":"openrouter:web_search","parameters":{"max_uses":2}}],"messages":[{"role":"user","content":"hi"}]}`)
 	out, err := protocol.RemoveServerTool(protocol.Chat, body)
 	if err != nil {
@@ -104,6 +108,7 @@ func TestRemoveServerTool(t *testing.T) {
 }
 
 func TestAppendServerTurn(t *testing.T) {
+	t.Parallel()
 	calls := []protocol.ServerToolCall{{ID: "call_1", Arguments: `{"query":"axiom"}`}}
 	results := []string{"[1] Example\nhttps://example.com\nText."}
 	for _, tc := range []struct {
@@ -144,6 +149,7 @@ func TestAppendServerTurn(t *testing.T) {
 }
 
 func TestInjectServerFunction(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		format     protocol.Format
 		body, path string
@@ -168,6 +174,7 @@ func TestInjectServerFunction(t *testing.T) {
 }
 
 func TestServerFunctionDeclared(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		format protocol.Format
@@ -187,6 +194,7 @@ func TestServerFunctionDeclared(t *testing.T) {
 }
 
 func TestAppendServerTurnNormalizesArguments(t *testing.T) {
+	t.Parallel()
 	calls := []protocol.ServerToolCall{{ID: "call_1", Arguments: `{"query":`}}
 	for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"input":[{"role":"user","content":"hi"}]}`
@@ -201,6 +209,7 @@ func TestAppendServerTurnNormalizesArguments(t *testing.T) {
 }
 
 func TestRemoveLoopControls(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		body, want string
 	}{
@@ -230,6 +239,7 @@ func TestRemoveLoopControls(t *testing.T) {
 // TestDropForcedToolChoiceKeepsWhitespaceValid: the forced choice may follow a space or newline and be the last member;
 // removal must leave valid JSON, not a dangling comma.
 func TestDropForcedToolChoiceKeepsWhitespaceValid(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{
 		`{"model":"m", "tool_choice":"required"}`,
 		"{\"model\":\"m\"\n,\t\"tool_choice\" : \"required\"\n}",

@@ -24,6 +24,7 @@ func chatTarget(max int64) protocol.Target {
 // asked for with usage in it whatever the client wrote, and the output cap the request was quoted at when it set none.
 // What the model's dialect owns — reasoning, cache markers, a reasoning_content sent back, image parts — stays as written.
 func TestPrepareChat(t *testing.T) {
+	t.Parallel()
 	const tail = `,"stream_options":{"include_usage":true},"stream":true}`
 	for _, c := range []struct {
 		name, body, want string
@@ -99,6 +100,7 @@ func TestPrepareChat(t *testing.T) {
 // TestPrepareChatToAnEndpointThatDoesNotStream: the request keeps the stream the client asked for and the options it
 // sent, since nothing is read from a stream there; the cap and the end users are still the endpoint's.
 func TestPrepareChatToAnEndpointThatDoesNotStream(t *testing.T) {
+	t.Parallel()
 	body := `{"model":"m","stream":false,"stream_options":{"include_usage":false},"user":"u"}`
 	r := inspected(t, protocol.Chat, []byte(body))
 	target := chatTarget(7)
@@ -112,6 +114,7 @@ func TestPrepareChatToAnEndpointThatDoesNotStream(t *testing.T) {
 
 // TestPrepareChatRejects: a member Prepare rewrites that is not of the type it rewrites is the client's to fix.
 func TestPrepareChatRejects(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ body, want string }{
 		{`{"model":"m","user":1}`, "user is not a string"},
 		{`{"model":"m","prompt_cache_key":{}}`, "prompt_cache_key is not a string"},
@@ -204,6 +207,7 @@ func checkChatStreamSent(t *testing.T, r protocol.Request, body, sent []byte) {
 // reads max_tokens and ignores max_completion_tokens, OpenAI's reasoning, GPT-5 and GPT-6 models read
 // max_completion_tokens and refuse max_tokens (new-api's rule, GetOpenAIChatCapabilities).
 func TestPrepareChatWritesTheCapTheEndpointReads(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		model, body, want string
 	}{
