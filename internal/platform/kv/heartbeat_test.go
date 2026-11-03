@@ -421,6 +421,53 @@ func TestHeartbeatReportsTheKeyRing(t *testing.T) {
 	}
 }
 
+// TestModelPricesReadinessNeedsEveryLiveNode: a new node may hide prices only while every live node declares support.
+// Adding a previous-release row makes the readiness false, and removing it makes it true again.
+func TestModelPricesReadinessNeedsEveryLiveNode(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	scope := pg.PlatformScope()
+	node, err := openNamed(t, db, scope, "node-a")
+	if err != nil {
+		t.Fatalf("open the new node: %v", err)
+	}
+	ready := func() bool {
+		t.Helper()
+		var enabled bool
+		if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+			return tx.QueryRow(t.Context(), `SELECT enabled FROM platform.model_prices_public_readiness WHERE id`).Scan(&enabled)
+		}); err != nil {
+			t.Fatalf("read model-price readiness: %v", err)
+		}
+		return enabled
+	}
+	if !ready() {
+		t.Fatal("one new node: model prices are not ready, want ready")
+	}
+	old := uuid.NewV7()
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active)
+   VALUES ('node-old', $1, '{}', '{}', 0)`, old)
+		return err
+	}); err != nil {
+		t.Fatalf("register the old node: %v", err)
+	}
+	node.Beat(t.Context())
+	if ready() {
+		t.Fatal("an old node is live: model prices are ready, want not ready")
+	}
+	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `DELETE FROM platform.nodes WHERE id = 'node-old'`)
+		return err
+	}); err != nil {
+		t.Fatalf("remove the old node: %v", err)
+	}
+	node.Beat(t.Context())
+	if !ready() {
+		t.Fatal("the old node left: model prices are not ready, want ready")
+	}
+}
+
 // TestAReusedNodeIDFromAnOldBinaryDoesNotSupportThePreference: an old binary can start under a new node's ID and
 // update share_session without knowing the capability columns. The old row's true must not survive that process
 // change; only a declaration whose session is the live session counts.

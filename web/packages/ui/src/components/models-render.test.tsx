@@ -1,0 +1,68 @@
+import { createInstance } from "i18next";
+import { renderToStaticMarkup } from "react-dom/server";
+import { I18nextProvider } from "react-i18next";
+import { beforeAll, expect, it } from "vitest";
+import en from "../locales/en";
+import { ModelCatalog, type PublicEndpoint, type PublicModel } from "./models";
+
+const i18n = createInstance();
+
+beforeAll(async () => {
+  await i18n.init({ lng: "en", defaultNS: "common", resources: { en: { common: en } } });
+});
+
+const endpoint: PublicEndpoint = {
+  name: "group-a",
+  context_length: 1_000,
+  max_output: 100,
+  streams: true,
+  abilities: ["tools"],
+  verified: true,
+};
+
+const model: PublicModel = {
+  id: "acme/model",
+  name: "Model",
+  author: "acme",
+  context_length: 1_000,
+  max_output: 100,
+  streams: true,
+  abilities: ["tools"],
+  endpoints: [endpoint],
+};
+
+const price = {
+  currency: "USD",
+  rates: [{ service_tier: "standard", item: "input", unit: "token", amount: "0.000001" }],
+};
+
+const render = (models: PublicModel[]) =>
+  renderToStaticMarkup(
+    <I18nextProvider i18n={i18n}>
+      <ModelCatalog models={models} />
+    </I18nextProvider>,
+  );
+
+// A site that keeps its prices to signed-in members leaves every pricing out of the anonymous projection. The page must
+// read that as a no-price state: the models are still listed, no row claims a price is unavailable, and the note says
+// who can see them (docs/domains/gateway.md「模型与价格页」).
+it("lists models without prices when the site keeps them to members", () => {
+  const html = render([model]);
+  expect(html).toContain("Prices are visible to signed-in members");
+  expect(html).not.toContain("Prices unavailable");
+  expect(html).not.toContain("$");
+  expect(html).toContain("Model");
+});
+
+// The public state is unchanged: the model's and its endpoint's prices are both shown, and the no-price note is not.
+it("shows the model and endpoint prices when the site publishes them", () => {
+  const html = render([
+    {
+      ...model,
+      pricing: price,
+      endpoints: [{ ...endpoint, pricing: price }],
+    },
+  ]);
+  expect(html).toContain("$1.00");
+  expect(html).not.toContain("Prices are visible to signed-in members");
+});

@@ -390,6 +390,7 @@ export function usualState(): AdminState {
         admin_idle_timeout_seconds: 3600,
         admin_max_age_seconds: 43200,
         new_key_daily_limit: usd("10"),
+        model_prices_public: true,
       },
     },
     keyLimits: { limits: { max_keys: 20 }, effective: { max_keys: 20, creations_per_hour: 50 } },

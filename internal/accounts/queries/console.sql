@@ -210,6 +210,10 @@ WHERE a.id = @account_id;
 -- name: BillingPreferenceReady :one
 SELECT coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true)::boolean AS ready;
 
+-- name: ModelPricesPublicReady :one
+-- No row means no new node has declared support yet, so the anonymous projection stays public.
+SELECT coalesce((SELECT enabled FROM platform.model_prices_public_readiness WHERE id), false)::boolean AS ready;
+
 -- name: SetBillingPreference :exec
 -- A NULL clears the account's choice, so the site's default applies again.
 UPDATE accounts.accounts SET billing_preference = sqlc.narg('preference')::text WHERE id = @account_id;

@@ -4028,7 +4028,7 @@ type SiteOAuthProviderUpdate struct {
 	Reason       string `json:"reason"`
 }
 
-// SiteSettings A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units.
+// SiteSettings A site's own values for the sessions and keys its users get, and whether its model prices are public. An absent value is unset: the view's `defaults` says what applies, and a write that leaves out `model_prices_public` or `billing_preference` keeps the stored value. Turning `model_prices_public` off waits until every live gateway node supports hiding prices. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units.
 type SiteSettings struct {
 	AdminIdleTimeoutSeconds *int `json:"admin_idle_timeout_seconds,omitempty"`
 	AdminMaxAgeSeconds      *int `json:"admin_max_age_seconds,omitempty"`
@@ -4037,6 +4037,9 @@ type SiteSettings struct {
 	BillingPreference         *BillingPreferenceName `json:"billing_preference,omitempty"`
 	ConsoleIdleTimeoutSeconds *int                   `json:"console_idle_timeout_seconds,omitempty"`
 	ConsoleMaxAgeSeconds      *int                   `json:"console_max_age_seconds,omitempty"`
+
+	// ModelPricesPublic Whether visitors who are not signed in see the site's model prices; absent is `true`. When false, the anonymous models endpoint leaves every model's and endpoint's price out, and a signed-in member still sees the account's prices. A page built before this field leaves it out, and the server keeps the stored value rather than clearing it. Turning it off while a gateway node of a previous release is live is a 400 naming this field; until every live node supports it, the anonymous list keeps prices public.
+	ModelPricesPublic *bool `json:"model_prices_public,omitempty"`
 
 	// NewKeyDailyLimit An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	NewKeyDailyLimit *Money `json:"new_key_daily_limit,omitempty"`
@@ -4047,7 +4050,7 @@ type SiteSettingsUpdate struct {
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 
-	// Settings A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units.
+	// Settings A site's own values for the sessions and keys its users get, and whether its model prices are public. An absent value is unset: the view's `defaults` says what applies, and a write that leaves out `model_prices_public` or `billing_preference` keeps the stored value. Turning `model_prices_public` off waits until every live gateway node supports hiding prices. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units.
 	Settings SiteSettings `json:"settings"`
 }
 
@@ -4056,7 +4059,7 @@ type SiteSettingsView struct {
 	// Defaults What applies where `settings` has no value.
 	Defaults SiteSettings `json:"defaults"`
 
-	// Settings A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units.
+	// Settings A site's own values for the sessions and keys its users get, and whether its model prices are public. An absent value is unset: the view's `defaults` says what applies, and a write that leaves out `model_prices_public` or `billing_preference` keeps the stored value. Turning `model_prices_public` off waits until every live gateway node supports hiding prices. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units.
 	Settings SiteSettings `json:"settings"`
 }
 

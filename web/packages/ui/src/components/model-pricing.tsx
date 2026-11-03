@@ -64,6 +64,21 @@ export function baseRate<T extends Pick<PublicModelRate, "item" | "above" | "ser
   );
 }
 
+// PriceHeads are the input and output price column heads the model list and the endpoint table share; they render
+// nothing when the site keeps its prices to signed-in members, so the columns go with them.
+export function PriceHeads({ show }: { show: boolean }) {
+  const { t } = useTranslation("common");
+  if (!show) {
+    return null;
+  }
+  return (
+    <>
+      <Th className="hidden text-right sm:table-cell">{t("publicModels.item.input")}</Th>
+      <Th className="hidden text-right sm:table-cell">{t("publicModels.item.output")}</Th>
+    </>
+  );
+}
+
 export function PricingPrice({ pricing, item }: { pricing?: PublicModelPricing; item: "input" | "output" }) {
   const { t } = useTranslation("common");
   const format = useFormat();
