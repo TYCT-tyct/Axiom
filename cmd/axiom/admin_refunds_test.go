@@ -111,6 +111,7 @@ func newOrderListFixture(t *testing.T) orderListFixture {
 }
 
 func TestAdminListsPaymentOrders(t *testing.T) {
+	t.Parallel()
 	o := newOrderListFixture(t)
 	list := o.f.orders(t, o.s, url.Values{})
 	if list.Data == nil || len(list.Data) != 3 {
@@ -150,6 +151,7 @@ func valueOf[T any](p *T) (v T) {
 }
 
 func TestAdminFiltersPaymentOrders(t *testing.T) {
+	t.Parallel()
 	o := newOrderListFixture(t)
 	at := func(offset time.Duration) string { return o.base.Add(offset).Format(time.RFC3339) }
 	cases := map[string]struct {
@@ -186,6 +188,7 @@ func TestAdminFiltersPaymentOrders(t *testing.T) {
 }
 
 func TestAdminPagesPaymentOrders(t *testing.T) {
+	t.Parallel()
 	o := newOrderListFixture(t)
 	firstPage := o.f.orders(t, o.s, url.Values{"limit": {"2"}})
 	if firstPage.NextCursor == nil || len(firstPage.Data) != 2 {
@@ -198,6 +201,7 @@ func TestAdminPagesPaymentOrders(t *testing.T) {
 }
 
 func TestAdminRejectsInvalidOrderQueries(t *testing.T) {
+	t.Parallel()
 	o := newOrderListFixture(t)
 	for name, query := range map[string]string{
 		"until before since": "since=2026-10-02T00:00:00Z&until=2026-10-01T00:00:00Z",
@@ -231,6 +235,7 @@ func orderIDs(orders []adminapi.PaymentOrder) []string {
 }
 
 func TestAdminApprovesRefund(t *testing.T) {
+	t.Parallel()
 	f, s, refund := newFrozenRefund(t)
 	assertRefundQueue(t, f, s, refund)
 	assertRefundApproval(t, f, s, refund)
@@ -314,6 +319,7 @@ func assertRefundApproval(t *testing.T, f adminFixture, s session, refund uuid.U
 }
 
 func TestAdminRefusesRefundPastReviewOrByRequester(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	f.addUser("other@example.com", "")
 	s := f.owner()
@@ -335,6 +341,7 @@ func TestAdminRefusesRefundPastReviewOrByRequester(t *testing.T) {
 
 // One key stands for one decision: two refunds cannot both be approved because they raced past a lookup.
 func TestRefundDecisionKeyCoversOneRefund(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	f.addUser("other@example.com", "")
 	s := f.owner()
@@ -374,6 +381,7 @@ func TestRefundDecisionKeyCoversOneRefund(t *testing.T) {
 // The local decision, its audit and its idempotency answer commit together; if the answer cannot be stored, no approval
 // is left behind and the same key can be retried after the fault is gone.
 func TestRefundDecisionAndItsKeyCommitTogether(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	f.addUser("other@example.com", "")
 	s := f.owner()

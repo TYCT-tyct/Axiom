@@ -59,21 +59,28 @@ export function Badge({
   );
 }
 
-// A table scrolls sideways inside its own box when the window is too narrow, and never widens the page.
-export function Table({ children, label }: { children: ReactNode; label: string }) {
+// A table scrolls sideways inside its own box when the window is too narrow, and never widens the page. `fixed` lets a
+// table whose columns are all known give each one a width and truncate long values inside it; without it, a browser
+// sizes columns from their widest content and no `max-width` on a cell can make a table narrower than that.
+export function Table({ children, label, fixed = false }: { children: ReactNode; label: string; fixed?: boolean }) {
   return (
     // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need focus to scroll a table region.
     <section className="overflow-x-auto" aria-label={label} tabIndex={0}>
-      <table aria-label={label} className="w-full border-collapse text-left text-ui">
+      <table aria-label={label} className={cn("w-full border-collapse text-left text-ui", fixed && "table-fixed")}>
         {children}
       </table>
     </section>
   );
 }
 
+// A table header keeps its own line: a narrow numeric column would otherwise break a two-character label one character
+// per line, which reads as two columns. A table that needs more width scrolls sideways inside its own box.
 export function Th({ children, className }: { children?: ReactNode; className?: string }) {
   return (
-    <th scope="col" className={cn("border-b border-b1 px-3 py-2 text-label sm:px-4 font-medium text-t4", className)}>
+    <th
+      scope="col"
+      className={cn("border-b border-b1 px-3 py-2 text-label font-medium text-t4 whitespace-nowrap sm:px-4", className)}
+    >
       {children}
     </th>
   );

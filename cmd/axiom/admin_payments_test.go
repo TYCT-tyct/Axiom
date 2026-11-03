@@ -11,6 +11,7 @@ import (
 )
 
 func TestAdminPaymentDiscrepancyInvestigation(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	merchant, id := uuid.NewV7(), uuid.NewV7()

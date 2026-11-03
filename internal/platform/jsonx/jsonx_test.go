@@ -7,9 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"strings"
 	"testing"
+
+	"axiom/internal/platform/alloctest"
 )
 
 func nested(depth int) string { return strings.Repeat("[", depth) + strings.Repeat("]", depth) }
@@ -202,53 +203,21 @@ func TestValidatorKeeps(t *testing.T) {
 	}
 }
 
-// heapGrowth is the heap that grew from before to after. HeapAlloc is the whole process heap, so another allocation
-// freed between the two readings can make the second smaller: a shrinking heap grew by nothing, where subtracting the
-// two unsigned readings would wrap into a huge number.
-func heapGrowth(before, after uint64) uint64 {
-	if after <= before {
-		return 0
-	}
-	return after - before
-}
-
-// retainedBy estimates the heap a Validator holds after validating docs in turn, as the growth of the process heap: it
-// is an estimate, because other heap activity during the run adds to it or hides part of it.
+// retainedBy measures the heap a Validator holds after validating docs in turn. alloctest holds the validator after
+// the collector runs in a child process of this test binary, so the number is what the validator retains, not the
+// growth of a heap this binary's other tests are using.
 func retainedBy(t *testing.T, docs []string) uint64 {
 	t.Helper()
-	var v Validator
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.GC() // twice: the first sweep may leave the garbage of the test before
-	runtime.ReadMemStats(&before)
-	for _, doc := range docs {
-		if err := v.Validate([]byte(doc)); err != nil {
-			t.Fatal(err)
+	got := alloctest.MeasureRetained(t, alloctest.RetainedFunction{Name: "validator", F: func() any {
+		var v Validator
+		for _, doc := range docs {
+			if err := v.Validate([]byte(doc)); err != nil {
+				t.Fatal(err)
+			}
 		}
-	}
-	runtime.GC()
-	runtime.GC()
-	runtime.ReadMemStats(&after)
-	runtime.KeepAlive(&v)
-	runtime.KeepAlive(docs)
-	return heapGrowth(before.HeapAlloc, after.HeapAlloc)
-}
-
-// TestHeapGrowth: a heap that shrank between the readings grew by nothing, so it cannot fail a retention test.
-func TestHeapGrowth(t *testing.T) {
-	for _, tc := range []struct {
-		name          string
-		before, after uint64
-		want          uint64
-	}{
-		{"grew", 1 << 20, 3 << 20, 2 << 20},
-		{"unchanged", 1 << 20, 1 << 20, 0},
-		{"shrank", 3 << 20, 1 << 20, 0},
-	} {
-		if got := heapGrowth(tc.before, tc.after); got != tc.want {
-			t.Errorf("%s: heapGrowth(%d, %d) = %d, want %d", tc.name, tc.before, tc.after, got, tc.want)
-		}
-	}
+		return &v
+	}})
+	return got["validator"]
 }
 
 // TestValidatorRetains: what a Validator holds after documents of any shape stays small. A decoder keeps a table of
@@ -267,10 +236,10 @@ func TestValidatorRetains(t *testing.T) {
 	}
 	for name, docs := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := retainedBy(t, docs); got > retainedMax {
-				t.Errorf("the Validator holds %d bytes, want at most %d", got, retainedMax)
+			if held := retainedBy(t, docs); held > retainedMax {
+				t.Errorf("the Validator holds %d bytes, want at most %d", held, retainedMax)
 			} else {
-				t.Logf("holds %d bytes", got)
+				t.Logf("holds %d bytes", held)
 			}
 		})
 	}

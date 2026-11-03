@@ -27,6 +27,7 @@ func checkExchangeLists(t *testing.T, f pricingFixture) {
 }
 
 func TestAdminExchangeHistoryCorrectionAndReplay(t *testing.T) {
+	t.Parallel()
 	f := newPricingFixture(t)
 	key := newKey()
 	rec := f.change(f.s, http.MethodPost, "/pricing/exchange-rates", initialExchange, key)
@@ -53,6 +54,7 @@ func TestAdminExchangeHistoryCorrectionAndReplay(t *testing.T) {
 }
 
 func TestAdminExchangeInvalidFields(t *testing.T) {
+	t.Parallel()
 	f := newPricingFixture(t)
 	for _, tc := range []struct{ old, new, pointer string }{
 		{`"USD"`, `"XXX"`, "/base"},
@@ -73,6 +75,7 @@ func TestAdminExchangeInvalidFields(t *testing.T) {
 }
 
 func TestAdminExchangeHistoryNamesTheParameter(t *testing.T) {
+	t.Parallel()
 	f := newPricingFixture(t)
 	rec := f.do(http.MethodGet, "/pricing/exchange-rates/ZZZ/CNY", "", as(f.s))
 	expectAdmin(t, "exchangeRateHistory", rec, http.StatusUnprocessableEntity, codeUnprocessable)
