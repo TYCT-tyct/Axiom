@@ -85,8 +85,9 @@ func benchmarkStateOf(score BenchmarkResult, baseline time.Time, ep suppliers.Ro
 // this package can see only the platform flag. A baseline older than the one in force is rejected, so a late result
 // cannot replace a newer anchor. The baseline and the official endpoint's own 100 are stored in one transaction before
 // either is published, so a recorded run survives a restart; a store failure returns false and leaves the previous
-// anchor in force. The endpoint's in-memory 100 waits for its snapshot to be current, but the stored row is ready for
-// the next Prepare.
+// anchor in force. An existing configuration row is never replaced: a run for another configuration is rejected before
+// the baseline is written, so a late run cannot flip the shared configuration or delete a valid score. The endpoint's
+// in-memory 100 waits for its snapshot to be current, but the stored row is ready for the next Prepare.
 func (m *Monitor) RecordOfficialBenchmark(ctx context.Context, ep suppliers.Routable, run BenchmarkRun) bool {
 	run = cloneBenchmarkRun(run)
 	set := fixedBenchmark()
@@ -104,8 +105,11 @@ func (m *Monitor) RecordOfficialBenchmark(ctx context.Context, ep suppliers.Rout
 	if !ok {
 		return false
 	}
-	epoch, err := m.ensureConfig(ctx, ep)
-	if err != nil {
+	// Record the official endpoint's configuration only when it has no row yet. An existing row names the configuration
+	// the shared record currently considers authoritative; a late run of another configuration must not flip it back
+	// (and delete the valid score) just because its baseline is older.
+	epoch, ok := m.configForScore(ctx, ep)
+	if !ok {
 		return false
 	}
 	state := benchmarkStateOf(official, anchor.at, ep)
@@ -129,15 +133,19 @@ func (m *Monitor) RecordOfficialBenchmark(ctx context.Context, ep suppliers.Rout
 	return true
 }
 
-// benchmarkConfigCurrent reports whether the endpoint still publishes the configuration the run measured, and records
-// a configuration row when the endpoint has never had one. The score write repeats the configuration check atomically,
-// so a change between this check and the write cannot leave an old-configuration row.
-func (m *Monitor) benchmarkConfigCurrent(ctx context.Context, ep suppliers.Routable) bool {
+// benchmarkConfigCurrent returns the generation of the configuration the run measured, and records a configuration row
+// when the endpoint has never had one. The score write repeats the configuration and generation check atomically, so a
+// change between this check and the write, including a round trip back to the same fields, cannot leave an old run under
+// the new generation.
+func (m *Monitor) benchmarkConfigCurrent(ctx context.Context, ep suppliers.Routable) (int64, bool) {
 	e := m.of(ep.ID)
 	e.mu.Lock()
 	current := e.current == configOf(ep)
 	e.mu.Unlock()
-	return current && m.configForScore(ctx, ep)
+	if !current {
+		return 0, false
+	}
+	return m.configForScore(ctx, ep)
 }
 
 // RecordBenchmark scores an endpoint's run against its model's official baseline and records it. It returns false for
@@ -166,15 +174,17 @@ func (m *Monitor) RecordBenchmark(ctx context.Context, ep suppliers.Routable, ru
 	// its configuration row here, not in Prepare: a routing build may look at an endpoint that never ran. The
 	// insert-if-absent never replaces a configuration another node already stored; if it finds one, the score write
 	// below is the atomic arbiter.
-	if !m.benchmarkConfigCurrent(ctx, ep) {
+	epoch, ok := m.benchmarkConfigCurrent(ctx, ep)
+	if !ok {
 		return BenchmarkResult{}, false
 	}
 	state := benchmarkStateOf(score, baseline.at, ep)
-	won, epoch := m.storeScore(ctx, ep, state)
+	state.epoch = epoch
+	won, storedEpoch := m.storeScore(ctx, ep, state)
 	if !won {
 		return BenchmarkResult{}, false
 	}
-	state.epoch = epoch
+	state.epoch = storedEpoch
 	m.mu.Lock()
 	if old, ok := m.scores[ep.ID]; !ok || newerScore(state, old) {
 		m.scores[ep.ID] = state

@@ -173,9 +173,11 @@ func TestNewerBenchmarkVersionSupersedesTheOlder(t *testing.T) {
 		version: "benchmark-v1", hash: oldHash, baseline: oldAt,
 		score: 42, confidence: 0.4, at: oldAt, config: configOf(candidate),
 	}
-	if !m.configForScore(t.Context(), candidate) {
+	configEpoch, configOK := m.configForScore(t.Context(), candidate)
+	if !configOK {
 		t.Fatal("the candidate configuration was not recorded")
 	}
+	oldScore.epoch = configEpoch
 	if err := l.db.Tx(t.Context(), l.scope, func(tx pg.Tx) error {
 		if _, err := writeBenchmarkBaseline(t.Context(), tx, official.Model, oldAnchor); err != nil {
 			return err

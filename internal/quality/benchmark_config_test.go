@@ -175,6 +175,11 @@ func TestBenchmarkScoreCannotOutliveItsConfigurationWrite(t *testing.T) {
 		t.Fatal("the candidate run did not score against the baseline")
 	}
 	state := benchmarkStateOf(result, baseline.at, candidate)
+	epoch, configOK := m.configForScore(t.Context(), candidate)
+	if !configOK {
+		t.Fatal("the candidate configuration was not recorded")
+	}
+	state.epoch = epoch
 
 	changed := candidate
 	changed.Upstream = "relay-2"
@@ -226,7 +231,8 @@ func TestBenchmarkScoreWaitsForAnUncommittedConfigurationChange(t *testing.T) {
 	f.endpoints = []suppliers.Routable{official, candidate}
 	f.mu.Unlock()
 	tick(t, l)
-	if !m.configForScore(t.Context(), candidate) {
+	configEpoch, configOK := m.configForScore(t.Context(), candidate)
+	if !configOK {
 		t.Fatal("the candidate configuration was not recorded")
 	}
 
@@ -243,6 +249,7 @@ func TestBenchmarkScoreWaitsForAnUncommittedConfigurationChange(t *testing.T) {
 		t.Fatal("the candidate run did not score against the baseline")
 	}
 	state := benchmarkStateOf(result, baseline.at, candidate)
+	state.epoch = configEpoch
 
 	changed := candidate
 	changed.Upstream = "relay-2"
@@ -305,5 +312,142 @@ func TestBenchmarkScoreWaitsForAnUncommittedConfigurationChange(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("the store kept %d scores for the replaced configuration", count)
+	}
+}
+
+// TestBenchmarkStaleRunCannotCrossConfigurationRoundTrip: a run checked against configuration A must not be accepted
+// after A→B→A. The fields match again, but the shared generation advanced twice; the write has to compare the generation
+// it checked, not only the fields it sees at write time.
+func TestBenchmarkStaleRunCannotCrossConfigurationRoundTrip(t *testing.T) {
+	m, l, f, now := fixtureLoop(t, Observe)
+	official, candidate := benchmarkEndpoints()
+	f.mu.Lock()
+	f.endpoints = []suppliers.Routable{official, candidate}
+	f.mu.Unlock()
+	tick(t, l)
+
+	set := fixedBenchmark()
+	at := *now
+	if !m.RecordOfficialBenchmark(t.Context(), official, runOfSet(set, at, "yes")) {
+		t.Fatal("the official baseline was refused")
+	}
+	if _, ok := m.RecordBenchmark(t.Context(), candidate, runOfSet(set, at.Add(time.Minute), "yes")); !ok {
+		t.Fatal("the candidate run was refused")
+	}
+	m.mu.RLock()
+	baseline := m.benchmarks[official.Model]
+	m.mu.RUnlock()
+	result, ok := scoreAgainst(set, baseline, runOfSet(set, at.Add(2*time.Minute), "yes"))
+	if !ok {
+		t.Fatal("the stale run did not score against the baseline")
+	}
+	stale := benchmarkStateOf(result, baseline.at, candidate)
+	epoch, configOK := m.configForScore(t.Context(), candidate)
+	if !configOK {
+		t.Fatal("the candidate configuration was not recorded")
+	}
+	stale.epoch = epoch
+
+	changed := candidate
+	changed.Upstream = "relay-2"
+	for _, endpoints := range [][]suppliers.Routable{
+		{official, changed},
+		{official, candidate},
+	} {
+		f.mu.Lock()
+		f.endpoints = endpoints
+		f.mu.Unlock()
+		tick(t, l)
+	}
+
+	if won, _, err := l.saveScore(t.Context(), candidate, stale); err != nil || won {
+		t.Fatalf("a run from before the configuration round trip was stored: won=%v err=%v", won, err)
+	}
+	if got := m.MeasuredFor(candidate, at.Add(2*time.Minute)); got.ProductScore != 0 || !got.ProductScoreAt.IsZero() {
+		t.Fatalf("the round trip resurrected the stale run: %+v", got)
+	}
+}
+
+// TestBenchmarkRestartSyncsChangedConfiguration: a process restart loads the stored configuration A and the supplier's
+// new authoritative configuration B. No configuration has been published in this process yet, so Prepare must sync the
+// shared row to B; otherwise every score for B is rejected forever.
+func TestBenchmarkRestartSyncsChangedConfiguration(t *testing.T) {
+	m, l, f, now := fixtureLoop(t, Observe)
+	official, candidate := benchmarkEndpoints()
+	f.mu.Lock()
+	f.endpoints = []suppliers.Routable{official, candidate}
+	f.mu.Unlock()
+	tick(t, l)
+
+	set := fixedBenchmark()
+	at := *now
+	if !m.RecordOfficialBenchmark(t.Context(), official, runOfSet(set, at, "yes")) {
+		t.Fatal("the official baseline was refused")
+	}
+	if _, ok := m.RecordBenchmark(t.Context(), candidate, runOfSet(set, at.Add(time.Minute), "yes")); !ok {
+		t.Fatal("the candidate run before the restart was refused")
+	}
+
+	changed := candidate
+	changed.Upstream = "relay-2"
+	second := &probeFixture{
+		endpoints: []suppliers.Routable{official, changed},
+		calls:     make(chan suppliers.TestRequest, 1),
+		release:   make(chan struct{}, 1),
+	}
+	t.Cleanup(func() { close(second.release) })
+	restarted, restartedLoop, err := Start(t.Context(), Config{
+		DB: l.db, Scope: l.scope, Mode: Observe, Source: second, Pauses: second,
+		Now: func() time.Time { return *now }, Rand: func() float64 { return .5 },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tick(t, restartedLoop)
+	if stored, ok := restarted.storedConfig(candidate.ID); !ok || stored.config != configOf(changed) {
+		t.Fatalf("the restart kept the old configuration: %+v, %v", stored, ok)
+	}
+	result, ok := restarted.RecordBenchmark(t.Context(), changed, runOfSet(set, at.Add(2*time.Minute), "yes"))
+	if !ok {
+		t.Fatal("a new run on the restarted configuration was refused")
+	}
+	if got := restarted.MeasuredFor(changed, result.At); got.ProductScore != result.Score {
+		t.Fatalf("the restarted configuration read %+v, want %v", got, result.Score)
+	}
+}
+
+// TestBenchmarkOfficialStaleRunKeepsNewerConfiguration: a late official run of configuration A must not flip the shared
+// configuration back to A (and delete B's valid 100) when its baseline loses to the newer B baseline.
+func TestBenchmarkOfficialStaleRunKeepsNewerConfiguration(t *testing.T) {
+	m, l, f, now := fixtureLoop(t, Observe)
+	official, _ := benchmarkEndpoints()
+	changed := official
+	changed.Upstream = "relay-2"
+	f.mu.Lock()
+	f.endpoints = []suppliers.Routable{official}
+	f.mu.Unlock()
+	tick(t, l)
+
+	set := fixedBenchmark()
+	at := *now
+	if !m.RecordOfficialBenchmark(t.Context(), official, runOfSet(set, at, "yes")) {
+		t.Fatal("the first official run was refused")
+	}
+	f.mu.Lock()
+	f.endpoints = []suppliers.Routable{changed}
+	f.mu.Unlock()
+	tick(t, l)
+	if !m.RecordOfficialBenchmark(t.Context(), changed, runOfSet(set, at.Add(2*time.Minute), "yes")) {
+		t.Fatal("the newer official run was refused")
+	}
+
+	if m.RecordOfficialBenchmark(t.Context(), official, runOfSet(set, at.Add(time.Minute), "yes")) {
+		t.Fatal("the older official run was accepted")
+	}
+	if stored, ok := m.storedConfig(official.ID); !ok || stored.config != configOf(changed) {
+		t.Fatalf("the rejected run changed the shared configuration: %+v, %v", stored, ok)
+	}
+	if got := m.MeasuredFor(changed, at.Add(2*time.Minute)); got.ProductScore != 100 {
+		t.Fatalf("the rejected run removed the newer official score: %+v", got)
 	}
 }

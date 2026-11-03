@@ -243,11 +243,18 @@ func (m *Monitor) prepareEndpoint(ctx context.Context, ep suppliers.Routable, no
 
 // benchmarkEpochFor returns the generation the endpoint's current configuration has in the store. A configuration
 // that is already stored needs no write; a brand-new endpoint does not write until it has a score to record, because
-// Prepare is also called for endpoints a snapshot is only looking at.
+// Prepare is also called for endpoints a snapshot is only looking at. A restart has no local established configuration,
+// so a stored row that differs from the authoritative configuration is synchronized; after that, a stale snapshot is
+// rejected instead of flipping the row back.
 func (m *Monitor) benchmarkEpochFor(ctx context.Context, ep suppliers.Routable, cfg EndpointConfig, saved benchmarkState, hasSaved bool, stored benchmarkConfig, hasStored, changing, established bool) (int64, error) {
 	switch {
 	case hasStored && stored.config == cfg:
 		return stored.epoch, nil
+	case ep.Platform() && hasStored && !established:
+		// A restart loads the authoritative supplier configuration while the shared row still names the configuration
+		// this process (or a previous one) last published. No local configuration has been established yet, so this is
+		// the startup sync; once established, a stale snapshot must not flip the shared row back.
+		return m.ensureConfig(ctx, ep)
 	case ep.Platform() && ((hasSaved && saved.config == cfg) || (changing && established)):
 		return m.ensureConfig(ctx, ep)
 	}

@@ -85,21 +85,21 @@ func (m *Monitor) ensureConfig(ctx context.Context, ep suppliers.Routable) (int6
 // configForScore records a configuration that has no row yet and returns the stored generation. It never changes a row
 // that already names another configuration: a score written after Prepare moved the endpoint must lose at the write,
 // not be rescued by recreating its old configuration. Without a database the in-memory record is the whole record.
-func (m *Monitor) configForScore(ctx context.Context, ep suppliers.Routable) bool {
+func (m *Monitor) configForScore(ctx context.Context, ep suppliers.Routable) (int64, bool) {
 	if m.loop == nil || m.loop.db == nil {
-		return true
+		return 0, true
 	}
 	epoch, ok, err := m.loop.configForScore(ctx, ep)
 	if err != nil {
 		m.loop.logger.Error("quality: record the endpoint benchmark configuration", "endpoint", ep.ID.String(), "err", err)
-		return false
+		return 0, false
 	}
 	if ok {
 		m.mu.Lock()
 		m.configs[ep.ID] = benchmarkConfig{config: configOf(ep), epoch: epoch}
 		m.mu.Unlock()
 	}
-	return ok
+	return epoch, ok
 }
 
 // storeBaseline writes an official anchor and the official endpoint's own 100 before either is published. Without a
@@ -240,15 +240,15 @@ func writeBenchmarkBaseline(ctx context.Context, tx pg.Tx, model uuid.UUID, anch
 }
 
 // writeBenchmarkScore stores a scored run. The INSERT only fires while the baseline it was scored against is still the
-// stored anchor and the endpoint's stored configuration still matches the score, so a baseline replaced or a
-// configuration changed by another node between this node's read and write cannot be given a score it never produced.
-// The row takes the configuration's current generation; the conflict clause keeps an older run from replacing a newer
-// one. A zero row count means the run lost and nothing was written.
+// stored anchor and the endpoint's stored configuration has the exact generation the run was checked against. A change
+// that returns to the same fields still advances the generation, so a stale run cannot be written under the new one.
+// The row takes the checked generation; the conflict clause keeps an older run from replacing a newer one. A zero row
+// count means the run lost and nothing was written.
 func writeBenchmarkScore(ctx context.Context, tx pg.Tx, ep suppliers.Routable, state benchmarkState) (int64, bool, error) {
 	var epoch int64
 	err := tx.QueryRow(ctx, `WITH current AS (
    SELECT model_id,upstream,formats,epoch FROM quality.benchmark_configs
-   WHERE endpoint_id=$1 AND model_id=$4 AND upstream=$5 AND formats=$6
+   WHERE endpoint_id=$1 AND model_id=$4 AND upstream=$5 AND formats=$6 AND epoch=$11
    FOR SHARE
  )
  INSERT INTO quality.benchmark_scores
@@ -264,7 +264,7 @@ func writeBenchmarkScore(ctx context.Context, tx pg.Tx, ep suppliers.Routable, s
  OR (excluded.baseline_at=benchmark_scores.baseline_at AND excluded.run_at>benchmark_scores.run_at)
  RETURNING epoch`,
 		ep.ID, state.version, state.hash, state.config.Model, state.config.Upstream, int32(state.config.Formats),
-		state.score, state.confidence, state.at.UnixNano(), state.baseline.UnixNano()).Scan(&epoch)
+		state.score, state.confidence, state.at.UnixNano(), state.baseline.UnixNano(), state.epoch).Scan(&epoch)
 	if errors.Is(err, pg.ErrNoRows) {
 		return 0, false, nil
 	}
