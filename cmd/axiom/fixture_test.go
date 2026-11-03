@@ -22,15 +22,21 @@ type fixtureDatabase[T any] struct {
 // connection it opened, so that a copy can be made while the other tests run.
 func (f *fixtureDatabase[T]) get(t *testing.T, build func(*testing.T) (pgtest.Database, T)) (commandLine, T) {
 	t.Helper()
-	f.once.Do(func() { f.source, f.value = build(t) })
+	f.once.Do(func() {
+		source, value := build(t)
+		// pgtest drops the test's database when the test ends, so the fixture keeps a copy made now, while source
+		// still exists; every later test clones that one, and the cluster removes it at the end of the run.
+		f.source, f.value = copyFixtureSource(t, source), value
+	})
 	if f.source.App == "" {
 		t.Fatal("the fixture database was not built")
 	}
-	return commandLineAt(t, copyDatabase(t, f.source)), f.value
+	return commandLineAt(t, pgtest.Clone(t, f.source)), f.value
 }
 
-// copyDatabase creates a database from source, so the copy has its rows and neither database sees the other's writes.
-func copyDatabase(t *testing.T, source pgtest.Database) pgtest.Database {
+// copyFixtureSource creates a database from source that lives until the cluster is removed, for the fixture that later
+// tests clone.
+func copyFixtureSource(t *testing.T, source pgtest.Database) pgtest.Database {
 	t.Helper()
 	name := "test_fixture_" + strings.ReplaceAll(uuid.NewV7().String(), "-", "")
 	if err := pgtest.Run(t.Context(), databaseURL(t, source.Superuser, "postgres"),
