@@ -139,6 +139,7 @@ func (f adminFixture) addUser(email, role string) {
 	if _, err := f.user(ownerPassword+"\n", "create", "--email", email); err != nil {
 		f.t.Fatal(err)
 	}
+	useFastPassword(f.t, f.database, email)
 	if role == "" {
 		return
 	}

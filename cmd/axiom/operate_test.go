@@ -129,7 +129,24 @@ func buildOwnerDatabase(t *testing.T) (pgtest.Database, struct{}) {
 	if _, err := c.user(ownerPassword+"\n", "create", "--email", ownerEmail); err != nil {
 		t.Fatal(err)
 	}
+	useFastPassword(t, database, ownerEmail)
 	return database, struct{}{}
+}
+
+// fastOwnerPasswordHash is ownerPassword under test-only argon2id parameters. Tests of this package sign in as the
+// owner to reach a handler, and the production parameters (m=19 MiB, t=2) make every one of those setup steps a
+// deliberate CPU cost; internal/accounts has the tests for the production cost and for PHC parsing.
+const fastOwnerPasswordHash = `$argon2id$v=19$m=1024,t=1,p=1$JPpCG4Fctr0sP/onpqm3/A$yt14hwx5Whbfg/XyFgHBQlQRJrJPBsgYa4fB9P+Be7o`
+
+// useFastPassword replaces email's stored hash with the test-only one, after user create has hashed the shared password
+// with the production parameters.
+func useFastPassword(t *testing.T, database pgtest.Database, email string) {
+	t.Helper()
+	email = strings.ReplaceAll(strings.ToLower(email), "'", "''")
+	if err := pgtest.Run(t.Context(), database.Superuser,
+		"UPDATE accounts.users SET password_hash = '"+fastOwnerPasswordHash+"' WHERE email = '"+email+"'"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestSiteInitAndUserCreate: the site is made with the currency and key prefix, and the user it makes, whose email is
