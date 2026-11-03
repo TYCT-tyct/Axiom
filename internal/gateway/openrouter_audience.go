@@ -63,11 +63,10 @@ func (m *orModel) forAudience(a billing.Audience) *orModel {
 func (m *orModel) encodeEndpoints(endpoints []routing.Endpoint) error {
 	encode := func(e *orModel) error {
 		var err error
-		if e.sold.Endpoints == nil {
-			e.endpoints, err = encodeOREndpoints(e.orEntry, endpoints)
-		} else {
-			e.endpoints, err = encodeOREndpointPrices(e.orEntry, e.sold, e.serving.Abilities, endpoints)
-		}
+		// Price every endpoint from its effective abilities, whether the version prices each endpoint or shares one
+		// schedule: a measurement can add or remove images or reasoning, and the endpoint's price shape must agree with
+		// the capabilities the same snapshot routes on.
+		e.endpoints, err = encodeOREndpointPrices(e.orEntry, e.sold, e.serving.Abilities, endpoints)
 		return err
 	}
 	if m.audiences == nil {
