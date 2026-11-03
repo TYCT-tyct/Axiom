@@ -114,6 +114,15 @@ func TestSupplierDetail(t *testing.T) {
 		{ID: alpha, Group: group, Model: two, UpstreamName: "alpha", Formats: []string{"responses"}, CostState: "unknown"},
 		{ID: zeta, Group: group, Model: one, UpstreamName: "zeta", Formats: []string{"messages", "chat"}, CostState: "unknown", Enabled: true},
 	}, detail.Endpoints)
+	if _, err := a.choose(id, group, true); err != nil {
+		t.Fatal(err)
+	}
+	a.sql(fmt.Sprintf(`UPDATE suppliers.supplier_groups SET key_error = 'not_permitted', key_retry_at = now() WHERE id = '%s'`, group))
+	detail, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+	refuses(t, "the detail after a failed binding", err, nil)
+	if g := detail.Groups[0]; g.KeyState != "failed" || g.KeyReason != "not_permitted" {
+		t.Errorf("a binding whose read failed: %q, %q", g.KeyState, g.KeyReason)
+	}
 	_, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, uuid.NewV7()) })
 	refuses(t, "a supplier that is not there", err, ErrNoSupplier)
 }

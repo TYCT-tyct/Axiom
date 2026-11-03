@@ -237,10 +237,7 @@ func (st stateStore) Commit(ctx context.Context, expect int64, c syncer.Commit) 
 		if err := writeStep(ctx, tx, id, c, cur, snap, cfg.Keys, now); err != nil {
 			return err
 		}
-		if err := projectKeyPolicies(ctx, tx, id, c.KeyPolicies); err != nil {
-			return err
-		}
-		return projectLostKeys(ctx, tx, id, c.KeyWrites)
+		return projectKeyChanges(ctx, tx, id, c)
 	})
 	if err != nil {
 		return fmt.Errorf("persist: commit version %d of supplier %s: %w", c.State.Version, id, err)
@@ -268,6 +265,15 @@ func (st stateStore) snapshot(ctx context.Context) (*catalog.Snapshot, error) {
 		return nil, fmt.Errorf("persist: read the catalog: %w", err)
 	}
 	return snap, nil
+}
+
+// projectKeyChanges applies the key policies and then erases the credentials a complete listing no longer has. The order
+// matters: a key the listing saw this round gets its seen time before the erasure looks at it.
+func projectKeyChanges(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit) error {
+	if err := projectKeyPolicies(ctx, tx, id, c.KeyPolicies); err != nil {
+		return err
+	}
+	return projectLostKeys(ctx, tx, id, c.KeyWrites)
 }
 
 // writeStep writes what a step produced next to its state.

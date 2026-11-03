@@ -32,13 +32,19 @@ func (m *manager) CreateKey(ctx context.Context, groupRef, name string) (adapter
 	if err != nil {
 		return "", err
 	}
+	return m.keyCreated(ctx, name, groupRef, resp)
+}
+
+// keyCreated reads what new-api said to an add. Its successful answer has no id, so a made key is found by the name the
+// sync gave it; a lost answer is adopted by that name on the next complete listing.
+func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp adapter.Response) (adapter.KeyRef, error) {
 	var env envelope
 	parsed := jsonx.Unmarshal(resp.Body, &env) == nil
 	switch {
 	case resp.Status == http.StatusUnauthorized || resp.Status == http.StatusForbidden:
 		refused := authError(env, parsed)
 		if errors.Is(refused, errScopeDenied) {
-			return "", fmt.Errorf("%w: %v", adapter.ErrKeyNotPermitted, refused)
+			return "", fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, refused)
 		}
 		return "", refused
 	case resp.Status == http.StatusOK && parsed && env.Success:
@@ -68,7 +74,7 @@ func (m *manager) keyByName(ctx context.Context, name, group string) (adapter.Ke
 	query := url.Values{"keyword": {name}, "page_size": {"100"}}
 	if err := m.api.get(ctx, "/api/token/search?"+query.Encode(), global, &found); err != nil {
 		if errors.Is(err, errScopeDenied) {
-			return "", fmt.Errorf("%w: %v", adapter.ErrKeyNotPermitted, err)
+			return "", fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
 		}
 		return "", err
 	}

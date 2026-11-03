@@ -50,6 +50,8 @@ func TestOnboardingFacts(t *testing.T) {
 
 // TestCreateKey: the token is made with no quota, expiry or model limit, and its id is found by the name because the
 // create answer has none. A narrow token, a refusal and a supplier error are told apart.
+//
+//nolint:cyclop // each refusal is one case in the table
 func TestCreateKey(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)

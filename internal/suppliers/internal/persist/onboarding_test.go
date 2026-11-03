@@ -12,6 +12,7 @@ import (
 	"axiom/internal/suppliers/internal/syncer"
 )
 
+//nolint:gocognit,cyclop // one fixture with a made, a bound and a lost key, then its assertions
 func TestOnboardingWritesKeysAndFailures(t *testing.T) {
 	t.Parallel()
 	c := newCluster(t)

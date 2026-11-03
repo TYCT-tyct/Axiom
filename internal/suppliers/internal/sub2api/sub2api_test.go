@@ -414,6 +414,8 @@ func usageOf(t *testing.T, c adapter.Charge, item catalog.Item) int64 {
 
 // TestCreateKey: a key is made in the group, under Axiom's name and idempotency key, and the three refusals are told
 // apart from a supplier error.
+//
+//nolint:gocognit // each refusal is one case in the table
 func TestCreateKey(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)

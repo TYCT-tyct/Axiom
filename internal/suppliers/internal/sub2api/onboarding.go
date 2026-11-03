@@ -34,6 +34,12 @@ func (m *manager) CreateKey(ctx context.Context, groupRef, name string) (adapter
 	if err != nil {
 		return "", err
 	}
+	return createdKey(resp)
+}
+
+// createdKey names what sub2api said to a create: the account may not use the group, the login may not manage keys, the
+// group is gone, the supplier refuses, or its error is the task's to retry.
+func createdKey(resp adapter.Response) (adapter.KeyRef, error) {
 	switch {
 	case resp.Status == http.StatusForbidden:
 		if errorCode(resp.Body) == "GROUP_NOT_ALLOWED" {

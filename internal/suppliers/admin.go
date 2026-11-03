@@ -345,6 +345,31 @@ func poolOf(accounts, failed, usable, headroom, capacity *int32, low bool, obser
 	return p
 }
 
+// applyKeyStates raises a group's state from its credentials: one with a stored key is ready, one whose key is waiting
+// for its text is pending, and a binding whose read already failed keeps its fixed reason. The groups were read without
+// the credentials so that a change answers without reading them; the detail reads them anyway and applies this.
+func applyKeyStates(groups []Group, credentials []Credential) {
+	hasKey := make(map[uuid.UUID]bool, len(credentials))
+	waiting := make(map[uuid.UUID]bool, len(credentials))
+	for _, c := range credentials {
+		switch c.Status {
+		case "binding":
+			waiting[c.Group] = true
+		case "erased":
+		default:
+			hasKey[c.Group] = true
+		}
+	}
+	for i := range groups {
+		switch {
+		case hasKey[groups[i].ID]:
+			groups[i].KeyState, groups[i].KeyReason = "ready", ""
+		case waiting[groups[i].ID] && groups[i].KeyState != "failed":
+			groups[i].KeyState, groups[i].KeyReason = "pending", ""
+		}
+	}
+}
+
 // Supplier is one supplier with its groups, credentials and endpoints; ErrNoSupplier when there is none.
 func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, error) {
 	summary, err := a.view(ctx, tx, id)
@@ -372,29 +397,11 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, e
 	if err != nil {
 		return Detail{}, fmt.Errorf("read the credentials: %w", err)
 	}
-	hasKey := make(map[uuid.UUID]bool, len(creds))
-	waiting := make(map[uuid.UUID]bool, len(creds))
 	for _, c := range creds {
 		d.Credentials = append(d.Credentials, credentialOf(
 			c.ID, c.SupplierGroupID, c.UpstreamKeyRef, c.Status, c.CooldownUntil, c.ExpiresAt, c.MaxConcurrency, c.RequestsPerMinute))
-		switch c.Status {
-		case "binding":
-			waiting[c.SupplierGroupID] = true
-		case "erased":
-		default:
-			hasKey[c.SupplierGroupID] = true
-		}
 	}
-	// The groups were read from their own rows, without the credentials, so that a change answers without reading them;
-	// the detail reads the credentials anyway and says which groups have one or are waiting for its text.
-	for i := range d.Groups {
-		switch {
-		case hasKey[d.Groups[i].ID]:
-			d.Groups[i].KeyState, d.Groups[i].KeyReason = "ready", ""
-		case waiting[d.Groups[i].ID]:
-			d.Groups[i].KeyState, d.Groups[i].KeyReason = "pending", ""
-		}
-	}
+	applyKeyStates(d.Groups, d.Credentials)
 	endpoints, err := q.ListEndpointsOf(ctx, tx, id)
 	if err != nil {
 		return Detail{}, fmt.Errorf("read the endpoints: %w", err)

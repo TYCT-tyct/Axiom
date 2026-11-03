@@ -162,6 +162,26 @@ type AutoSelectGroupParams struct {
 	Codename string
 }
 
+// applyKeyProjection puts the groups with a priced model in use and records whether each needs a key of ours. It runs
+// before the models and endpoints of this listing, so a group selected here has its rows by the end of the transaction.
+func (w *ProjectionWrites) applyKeyProjection(ctx context.Context, db DBTX) error {
+	if err := projectionPages(ctx, db, w.AutoSelected, `
+UPDATE suppliers.supplier_groups AS t SET selected = true, codename = v.codename
+FROM (VALUES `, `) AS v(id, codename) WHERE t.id = v.id AND NOT t.selected AND t.codename IS NULL`, []string{"uuid", "text"}, func(r AutoSelectGroupParams) []any {
+		return []any{r.ID, r.Codename}
+	}); err != nil {
+		return fmt.Errorf("select groups: %w", err)
+	}
+	if err := projectionPages(ctx, db, w.Eligibility, `
+UPDATE suppliers.supplier_groups AS t SET key_eligible = v.eligible
+FROM (VALUES `, `) AS v(id, eligible) WHERE t.id = v.id AND t.key_eligible IS DISTINCT FROM v.eligible`, []string{"uuid", "boolean"}, func(r SetGroupEligibilityParams) []any {
+		return []any{r.ID, r.Eligible}
+	}); err != nil {
+		return fmt.Errorf("project key eligibility: %w", err)
+	}
+	return nil
+}
+
 // Apply writes nonempty pages in dependency order, inside the caller's transaction.
 func (w *ProjectionWrites) Apply(ctx context.Context, db DBTX) error {
 	if err := w.applyNames(ctx, db); err != nil {
@@ -209,19 +229,8 @@ FROM (VALUES `, `) AS v(id) WHERE t.id = v.id`, []string{"uuid"}, func(r uuid.UU
 	}); err != nil {
 		return fmt.Errorf("clear pool capacity: %w", err)
 	}
-	if err := projectionPages(ctx, db, w.AutoSelected, `
-UPDATE suppliers.supplier_groups AS t SET selected = true, codename = v.codename
-FROM (VALUES `, `) AS v(id, codename) WHERE t.id = v.id AND NOT t.selected AND t.codename IS NULL`, []string{"uuid", "text"}, func(r AutoSelectGroupParams) []any {
-		return []any{r.ID, r.Codename}
-	}); err != nil {
-		return fmt.Errorf("select groups: %w", err)
-	}
-	if err := projectionPages(ctx, db, w.Eligibility, `
-UPDATE suppliers.supplier_groups AS t SET key_eligible = v.eligible
-FROM (VALUES `, `) AS v(id, eligible) WHERE t.id = v.id AND t.key_eligible IS DISTINCT FROM v.eligible`, []string{"uuid", "boolean"}, func(r SetGroupEligibilityParams) []any {
-		return []any{r.ID, r.Eligible}
-	}); err != nil {
-		return fmt.Errorf("project key eligibility: %w", err)
+	if err := w.applyKeyProjection(ctx, db); err != nil {
+		return err
 	}
 	if err := projectionPages(ctx, db, lastProjectionRows(w.Models, func(r UpsertProjectedModelParams) projectedNameKey {
 		return projectedNameKey{r.SupplierGroupID, r.UpstreamName}

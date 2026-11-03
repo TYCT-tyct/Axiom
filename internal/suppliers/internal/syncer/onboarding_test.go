@@ -14,10 +14,10 @@ import (
 // keyStore is a Store that also knows the groups to make keys for, which the real one reads from the tables.
 type keyStore struct {
 	*memStore
-	make, bind []BindTarget
-	targets    []KeyTarget
-	askedMake  int
-	askedBind  int
+	bind      []BindTarget
+	targets   []KeyTarget
+	askedMake int
+	askedBind int
 }
 
 func (s *keyStore) KeysToMake(context.Context) ([]KeyTarget, error) {
@@ -51,13 +51,16 @@ func keyEngine(m adapter.Manager, st Store) *Engine {
 	return New(st, m, Defaults(), (&clock{t: t0}).now)
 }
 
+//nolint:cyclop // one make is checked from the request through the stored state
 func TestKeysTaskMakesAKeyForAGroup(t *testing.T) {
 	base := healthy()
 	base.keys = func(adapter.Listing) (adapter.Page[adapter.KeyState], error) {
 		return adapter.Page[adapter.KeyState]{Done: true}, nil
 	}
-	m2 := &maker{supplier: base, create: func(_, _ string) (adapter.KeyRef, error) { return "9", nil },
-		secret: func(adapter.KeyRef) (secret.Secret, error) { return secret.New("s3"), nil }}
+	m2 := &maker{
+		supplier: base, create: func(_, _ string) (adapter.KeyRef, error) { return "9", nil },
+		secret: func(adapter.KeyRef) (secret.Secret, error) { return secret.New("s3"), nil },
+	}
 	st := &keyStore{memStore: newStore(), targets: []KeyTarget{{GroupRef: "1", Name: "axiom-1-2"}}}
 	c := Commit{State: State{Version: 1}}
 	if err := keyEngine(m2, st).keys(t.Context(), &c); err != nil {

@@ -250,7 +250,7 @@ func (m *manager) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Sec
 	}
 	if err := m.api.do(ctx, "POST", "/api/token/"+string(ref)+"/key", globalCritical, &reveal); err != nil {
 		if errors.Is(err, errScopeDenied) {
-			return secret.Secret{}, fmt.Errorf("%w: %v", adapter.ErrKeyNotPermitted, err)
+			return secret.Secret{}, fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
 		}
 		return secret.Secret{}, err
 	}

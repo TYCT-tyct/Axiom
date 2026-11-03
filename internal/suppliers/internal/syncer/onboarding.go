@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -29,73 +30,126 @@ func (e *Engine) onboard(ctx context.Context, c *Commit, policies *[]adapter.Key
 	if err != nil {
 		return nil, fmt.Errorf("syncer: the keys to bind: %w", err)
 	}
+	now := e.now()
 	c.KeyWrites.Lost = gone
-	c.KeyWrites.StaleBefore = e.now().Add(-e.set.KeyGrace)
-	retry := e.now().Add(e.set.KeyRetry)
-	byRef := make(map[adapter.KeyRef]bool, len(*policies))
-	byName := make(map[string]adapter.KeyState, len(*policies))
+	c.KeyWrites.StaleBefore = now.Add(-e.set.KeyGrace)
+	run := &keyOnboarding{
+		e: e, c: c, policies: policies, retry: now.Add(e.set.KeyRetry),
+		byName: make(map[string]adapter.KeyState, len(*policies)),
+		byRef:  make(map[adapter.KeyRef]bool, len(*policies)),
+	}
 	for _, k := range *policies {
-		byRef[k.Ref] = true
+		run.byRef[k.Ref] = true
 		if k.Name != "" {
-			byName[k.Name] = k
+			run.byName[k.Name] = k
 		}
 	}
-	maker, canMake := e.mgr.(adapter.KeyMaker)
+	run.maker, run.canMake = e.mgr.(adapter.KeyMaker)
 	for _, target := range targets {
-		found, adopted := byName[target.Name]
-		if adopted && found.GroupRef != target.GroupRef {
-			adopted = false // a name that belongs to another group is not evidence of this key
-		}
-		ref, status := found.Ref, found.Status
-		if !adopted {
-			if !canMake {
-				continue
-			}
-			ref, err = maker.CreateKey(ctx, target.GroupRef, target.Name)
-			if err != nil {
-				if errors.Is(err, adapter.ErrNoKeyMaker) {
-					canMake = false
-					continue
-				}
-				if reason, failed := keyFailure(err); failed {
-					c.KeyWrites.Failed = append(c.KeyWrites.Failed, KeyFailure{GroupRef: target.GroupRef, Reason: reason, RetryAt: retry})
-					continue
-				}
-				return nil, err
-			}
-			status = adapter.KeyActive
-		}
-		text, err := e.mgr.KeySecret(ctx, ref)
-		if err != nil {
-			if reason, failed := keyFailure(err); failed {
-				c.KeyWrites.Failed = append(c.KeyWrites.Failed, KeyFailure{GroupRef: target.GroupRef, Reason: reason, RetryAt: retry})
-				continue
-			}
+		if err := run.makeKey(ctx, target); err != nil {
 			return nil, err
 		}
-		if !adopted {
-			key := adapter.KeyState{Ref: ref, GroupRef: target.GroupRef, Name: target.Name, Status: status, Policy: &adapter.KeyPolicy{}}
-			*policies = append(*policies, key)
-			byRef[ref] = true
-		}
-		c.KeyWrites.Made = append(c.KeyWrites.Made, KeyMade{Ref: ref, GroupRef: target.GroupRef, Status: status, Secret: text})
 	}
+	return run.bindKeys(ctx, bind)
+}
+
+// keyOnboarding is one keys step: the listing that backs the policies, the keys it already names, and the maker the
+// adapter has. A group that fails a fixed way is left for the retry; a task failure stops the step.
+type keyOnboarding struct {
+	e        *Engine
+	c        *Commit
+	policies *[]adapter.KeyState
+	byName   map[string]adapter.KeyState
+	byRef    map[adapter.KeyRef]bool
+	maker    adapter.KeyMaker
+	canMake  bool
+	retry    time.Time
+}
+
+// makeKey makes or adopts one key, reads its text and adds it to the state and the policies. A name that belongs to
+// another group is not evidence of this key, so it is made again with this group's marker.
+func (o *keyOnboarding) makeKey(ctx context.Context, target KeyTarget) error {
+	found, adopted := o.find(target)
+	ref, status := found.Ref, found.Status
+	if !adopted {
+		created, made, err := o.create(ctx, target)
+		if err != nil || !made {
+			return err
+		}
+		ref, status = created, adapter.KeyActive
+	}
+	text, err := o.e.mgr.KeySecret(ctx, ref)
+	if err != nil {
+		if reason, failed := keyFailure(err); failed {
+			o.fail(target.GroupRef, reason)
+			return nil
+		}
+		return err
+	}
+	if !adopted {
+		key := adapter.KeyState{Ref: ref, GroupRef: target.GroupRef, Name: target.Name, Status: status, Policy: &adapter.KeyPolicy{}}
+		*o.policies = append(*o.policies, key)
+		o.byRef[ref] = true
+	}
+	o.c.KeyWrites.Made = append(o.c.KeyWrites.Made, KeyMade{Ref: ref, GroupRef: target.GroupRef, Status: status, Secret: text})
+	return nil
+}
+
+// find is the listed key with this group's marker name, if one belongs to the group. A key of another group with the
+// same name is not adopted.
+func (o *keyOnboarding) find(target KeyTarget) (adapter.KeyState, bool) {
+	found, adopted := o.byName[target.Name]
+	if adopted && found.GroupRef != target.GroupRef {
+		return adapter.KeyState{}, false
+	}
+	return found, adopted
+}
+
+// create makes the key. made is false when there is no maker or the group failed a fixed way; then the step continues
+// with the next group. A task failure is returned.
+func (o *keyOnboarding) create(ctx context.Context, target KeyTarget) (ref adapter.KeyRef, made bool, err error) {
+	if !o.canMake {
+		return "", false, nil
+	}
+	ref, err = o.maker.CreateKey(ctx, target.GroupRef, target.Name)
+	if err == nil {
+		return ref, true, nil
+	}
+	if errors.Is(err, adapter.ErrNoKeyMaker) {
+		o.canMake = false
+		return "", false, nil
+	}
+	if reason, failed := keyFailure(err); failed {
+		o.fail(target.GroupRef, reason)
+		return "", false, nil
+	}
+	return "", false, err
+}
+
+// bindKeys reads the text of the credentials people bound by reference. A key the listing does not have is kept in the
+// state only, so its policy stays "nothing allowed" until a listing reports it.
+func (o *keyOnboarding) bindKeys(ctx context.Context, targets []BindTarget) ([]adapter.KeyState, error) {
 	var extra []adapter.KeyState
-	for _, target := range bind {
-		text, err := e.mgr.KeySecret(ctx, target.Ref)
+	for _, target := range targets {
+		text, err := o.e.mgr.KeySecret(ctx, target.Ref)
 		if err != nil {
 			if reason, failed := keyFailure(err); failed {
-				c.KeyWrites.Failed = append(c.KeyWrites.Failed, KeyFailure{GroupRef: target.GroupRef, Reason: reason, RetryAt: retry})
+				o.fail(target.GroupRef, reason)
 				continue
 			}
 			return nil, err
 		}
-		c.KeyWrites.Bound = append(c.KeyWrites.Bound, KeyBound{ID: target.ID, Ref: target.Ref, GroupRef: target.GroupRef, Secret: text})
-		if !byRef[target.Ref] {
+		o.c.KeyWrites.Bound = append(o.c.KeyWrites.Bound, KeyBound{ID: target.ID, Ref: target.Ref, GroupRef: target.GroupRef, Secret: text})
+		if !o.byRef[target.Ref] {
 			extra = append(extra, adapter.KeyState{Ref: target.Ref, GroupRef: target.GroupRef, Status: adapter.KeyActive})
 		}
 	}
 	return extra, nil
+}
+
+// fail records a fixed key failure for a group, to be tried again after the retry interval.
+func (o *keyOnboarding) fail(groupRef, reason string) {
+	o.c.KeyWrites.Failed = append(o.c.KeyWrites.Failed, KeyFailure{GroupRef: groupRef, Reason: reason, RetryAt: o.retry})
 }
 
 // keyFailure names the fixed reason of a key error the group can be left waiting on, or says it is a task failure.
