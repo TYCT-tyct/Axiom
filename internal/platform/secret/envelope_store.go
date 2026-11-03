@@ -16,6 +16,10 @@ import (
 // Purpose and the qualified table name are the existing secret.Location AAD; ID is the row's primary key.
 type EnvelopeStore struct {
 	Schema, Table, ID, Prefix, Purpose string
+	// Wrapped names the wrapped-DEK column. Empty means the standard wrapped_dek. A new store that must not stop an
+	// older binary during a rolling upgrade uses a distinct name such as wrapped_key; old inventory queries only
+	// wrapped_dek, while this version registers the custom column and rotates it.
+	Wrapped string
 }
 
 func (s EnvelopeStore) name() string  { return s.Schema + "." + s.Table }
@@ -24,11 +28,30 @@ func (s EnvelopeStore) column(suffix string) string {
 	return pgx.Identifier{s.Prefix + suffix}.Sanitize()
 }
 func (s EnvelopeStore) id() string { return pgx.Identifier{s.ID}.Sanitize() }
+func (s EnvelopeStore) wrapped() string {
+	if s.Wrapped == "" {
+		return "wrapped_dek"
+	}
+	return s.Wrapped
+}
+func (s EnvelopeStore) wrappedColumn() string { return s.column(s.wrapped()) }
+
+func envelopeSuffix(column string) (string, bool) {
+	for _, suffix := range []string{"wrapped_dek", "wrapped_key"} {
+		if strings.HasSuffix(column, suffix) {
+			return suffix, true
+		}
+	}
+	return "", false
+}
 
 // checkInventory fails closed when a new module adds an envelope without registering its AAD.
+//
+//nolint:cyclop // one scan plus one fence check is the whole startup invariant
 func (r Rotation) checkInventory(ctx context.Context, tx pg.Tx) error {
 	rows, err := tx.Query(ctx, `SELECT table_schema, table_name, column_name FROM information_schema.columns
-		WHERE column_name = 'wrapped_dek' OR column_name LIKE '%\_wrapped_dek' ESCAPE '\'`)
+		WHERE column_name = 'wrapped_dek' OR column_name LIKE '%\_wrapped_dek' ESCAPE '\'
+		   OR column_name = 'wrapped_key' OR column_name LIKE '%\_wrapped_key' ESCAPE '\'`)
 	if err != nil {
 		return fmt.Errorf("keyring: cannot inspect envelope inventory: %w", err)
 	}
@@ -38,8 +61,13 @@ func (r Rotation) checkInventory(ctx context.Context, tx pg.Tx) error {
 		if err := rows.Scan(&schema, &table, &column); err != nil {
 			return fmt.Errorf("keyring: cannot read envelope inventory: %w", err)
 		}
+		suffix, ok := envelopeSuffix(column)
+		if !ok {
+			continue
+		}
 		if !slices.ContainsFunc(r.Stores, func(s EnvelopeStore) bool {
-			return s.Schema == schema && s.Table == table && s.Prefix == strings.TrimSuffix(column, "wrapped_dek")
+			return s.Schema == schema && s.Table == table && s.Prefix == strings.TrimSuffix(column, suffix) &&
+				s.wrapped() == suffix
 		}) {
 			return errors.New("keyring: an envelope store is not registered")
 		}
@@ -207,7 +235,7 @@ type storedEnvelope struct {
 // carries it instead of rescanning the rows every batch already committed.
 func (s EnvelopeStore) batch(ctx context.Context, tx pg.Tx, active uint32, after string, limit int) ([]storedEnvelope, error) {
 	query := "SELECT " + s.id() + "::text, " + s.column("ciphertext") + ", " + s.column("nonce") +
-		", " + s.column("wrapped_dek") + ", " + s.column("key_version") + " FROM " + s.table() +
+		", " + s.wrappedColumn() + ", " + s.column("key_version") + " FROM " + s.table() +
 		" WHERE " + s.column("key_version") + " <> $1"
 	args := []any{int64(active), limit}
 	if after != "" {
@@ -244,7 +272,7 @@ func (s EnvelopeStore) rewrap(ctx context.Context, tx pg.Tx, ring *keySnapshot, 
 		if err != nil {
 			return 0, "", fmt.Errorf("keyring: rewrap version %d: %w", row.sealed.KeyVersion, err)
 		}
-		if _, err := tx.Exec(ctx, "UPDATE "+s.table()+" SET "+s.column("wrapped_dek")+" = $1, "+
+		if _, err := tx.Exec(ctx, "UPDATE "+s.table()+" SET "+s.wrappedColumn()+" = $1, "+
 			s.column("key_version")+" = $2 WHERE "+s.id()+" = $3", sealed.WrappedDEK, int64(sealed.KeyVersion), row.id); err != nil {
 			return 0, "", fmt.Errorf("keyring: cannot update envelope: %w", err)
 		}
