@@ -63,6 +63,13 @@ func (m *manager) DrainUsage(ctx context.Context, limit int) ([]adapter.UsageRec
 	if err != nil {
 		return nil, err
 	}
+	if resp.Status == http.StatusTooManyRequests {
+		wait := retryAfter(resp.Header.Get("Retry-After"))
+		if wait <= 0 {
+			wait = time.Minute
+		}
+		return nil, adapter.Blocked{Until: m.now().Add(wait)}
+	}
 	if resp.Status != http.StatusOK {
 		return nil, fmt.Errorf("cpa: read the usage queue: status %d", resp.Status)
 	}

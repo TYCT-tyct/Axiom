@@ -349,3 +349,16 @@ func TestChargesIsAnEmptyDonePage(t *testing.T) {
 		t.Fatalf("Charges = %+v, %v", page, err)
 	}
 }
+
+func TestUsageDrainDefersOn429(t *testing.T) {
+	t.Parallel()
+	srv := recorded(t)
+	srv.answer = func(adapter.Request) (adapter.Response, error) {
+		return adapter.Response{Status: http.StatusTooManyRequests, Header: http.Header{"Retry-After": {"7"}}}, nil
+	}
+	_, err := manager0(t, srv).DrainUsage(t.Context(), 1)
+	blocked, ok := errors.AsType[adapter.Blocked](err)
+	if !ok || !blocked.Until.Equal(epoch.Add(7*time.Second)) {
+		t.Fatalf("DrainUsage error = %v, want Blocked until %v", err, epoch.Add(7*time.Second))
+	}
+}
