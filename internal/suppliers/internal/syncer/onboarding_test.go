@@ -208,6 +208,53 @@ func TestKeysTaskKeepsPoliciesWhenALaterKeyReadIsBlocked(t *testing.T) {
 	}
 }
 
+// TestKeysTaskDoesNotRepeatKeyEventsAfterABlockedRead: the listing reports a status change, then a later bound key
+// read is limited. The blocked commit must carry both the event and the listing's state; otherwise the next complete
+// listing compares against the old state and emits the same change again.
+//
+//nolint:cyclop // the first blocked round and its retry are checked as one fixture
+func TestKeysTaskDoesNotRepeatKeyEventsAfterABlockedRead(t *testing.T) {
+	m := healthy()
+	m.keys = func(adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+		return adapter.Page[adapter.KeyState]{Done: true, Items: []adapter.KeyState{{
+			Ref: "8", GroupRef: "1", Status: adapter.KeyDisabled,
+		}}}, nil
+	}
+	id := uuid.NewV7()
+	blocked := true
+	m2 := &maker{supplier: m, secret: func(adapter.KeyRef) (secret.Secret, error) {
+		if blocked {
+			return secret.Secret{}, adapter.Blocked{Until: t0.Add(time.Minute)}
+		}
+		return secret.New("s10"), nil
+	}}
+	st := &keyStore{memStore: newStore(), bind: []BindTarget{{ID: id, Ref: "10", GroupRef: "1"}}}
+	c := Commit{State: State{Version: 1, Keys: []adapter.KeyState{{Ref: "8", GroupRef: "1", Status: adapter.KeyActive}}}}
+	if err := keyEngine(m2, st).keys(t.Context(), &c); !errors.Is(err, adapter.ErrBucketsFull) {
+		t.Fatalf("first read = %v, want a blocked key read", err)
+	}
+	if len(c.Events) != 1 || c.Events[0].Kind != KeyChanged || c.Events[0].Old != "active" || c.Events[0].New != "disabled" {
+		t.Fatalf("events %+v, want one active-to-disabled change", c.Events)
+	}
+	if len(c.State.Keys) != 1 || c.State.Keys[0].Status != adapter.KeyDisabled {
+		t.Fatalf("state keys %+v, want the listing's disabled key", c.State.Keys)
+	}
+
+	blocked = false
+	c.Events = nil
+	c.KeyWrites = KeyWrites{}
+	c.KeyPolicies = nil
+	if err := keyEngine(m2, st).keys(t.Context(), &c); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Events) != 0 {
+		t.Fatalf("events %+v, want no repeat of the status change", c.Events)
+	}
+	if len(c.State.Keys) != 2 || c.State.Keys[0].Ref != "10" || c.State.Keys[1].Ref != "8" {
+		t.Fatalf("state keys %+v, want the bound key and the listed key", c.State.Keys)
+	}
+}
+
 func TestKeysTaskReadsAndActivatesABoundKey(t *testing.T) {
 	m := healthy()
 	m.keys = func(adapter.Listing) (adapter.Page[adapter.KeyState], error) {

@@ -256,6 +256,9 @@ func (e *Engine) keys(ctx context.Context, c *Commit) error {
 	for _, k := range c.State.Keys {
 		old[k.Ref] = k
 	}
+	// Advance the state before onboarding. If a later key read is limited, step keeps this commit; the event and the
+	// state that explains it must land together, or the next complete listing emits the same event again.
+	c.State.Keys = stateKeys(keys)
 	for _, k := range keys {
 		if prev, ok := old[k.Ref]; !ok || prev.Status != k.Status {
 			c.Events = append(c.Events, Event{Kind: KeyChanged, Subject: string(k.Ref), Old: statusName(ok, prev.Status), New: statusName(true, k.Status)})
@@ -271,18 +274,43 @@ func (e *Engine) keys(ctx context.Context, c *Commit) error {
 	c.KeyPolicies = &keys
 	extra, err := e.onboard(ctx, c, &keys)
 	if err != nil {
+		// A made or bound key can be written before a later read is limited. Keep those writes in the state too,
+		// while the listing itself is already there for the next round's event comparison.
+		c.State.Keys = stateKeys(append(slices.Clone(keys), writtenKeys(c)...))
 		return err
 	}
-	slices.SortFunc(keys, func(a, b adapter.KeyState) int { return cmpStr(string(a.Ref), string(b.Ref)) })
-	state := append(slices.Clone(keys), extra...)
-	slices.SortFunc(state, func(a, b adapter.KeyState) int { return cmpStr(string(a.Ref), string(b.Ref)) })
-	c.State.Keys = state
-	for i := range c.State.Keys {
-		// Older nodes strictly decode the persisted state, including each key: neither a policy nor a name is stored.
-		c.State.Keys[i].Policy = nil
-		c.State.Keys[i].Name = ""
-	}
+	c.State.Keys = stateKeys(append(slices.Clone(keys), extra...))
 	return nil
+}
+
+// stateKeys is the part of a complete listing the strict state keeps: no names and no policies, sorted by reference,
+// and one entry per reference.
+func stateKeys(keys []adapter.KeyState) []adapter.KeyState {
+	seen := make(map[adapter.KeyRef]bool, len(keys))
+	out := make([]adapter.KeyState, 0, len(keys))
+	for _, k := range keys {
+		if seen[k.Ref] {
+			continue
+		}
+		seen[k.Ref] = true
+		k.Name, k.Policy = "", nil
+		out = append(out, k)
+	}
+	slices.SortFunc(out, func(a, b adapter.KeyState) int { return cmpStr(string(a.Ref), string(b.Ref)) })
+	return out
+}
+
+// writtenKeys turns the keys whose text was read before a blocked step into state entries. A made key is normally
+// already appended to the listing, but a bound key the listing does not have is not.
+func writtenKeys(c *Commit) []adapter.KeyState {
+	out := make([]adapter.KeyState, 0, len(c.KeyWrites.Made)+len(c.KeyWrites.Bound))
+	for _, m := range c.KeyWrites.Made {
+		out = append(out, adapter.KeyState{Ref: m.Ref, GroupRef: m.GroupRef, Status: m.Status})
+	}
+	for _, b := range c.KeyWrites.Bound {
+		out = append(out, adapter.KeyState{Ref: b.Ref, GroupRef: b.GroupRef, Status: adapter.KeyActive})
+	}
+	return out
 }
 
 func statusName(present bool, s adapter.KeyStatus) string {
