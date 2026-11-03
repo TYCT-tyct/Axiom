@@ -58,10 +58,10 @@ func startNewAPI(t *testing.T, up *diffUpstream) newAPI {
 		testcontainers.WithEnv(map[string]string{"SESSION_SECRET": "diff-test-session-secret", "TZ": "UTC"}), //nolint:gosec // a throwaway container's, not a credential
 		testcontainers.WithWaitStrategy(wait.ForHTTP("/api/status").WithPort("3000/tcp").WithStartupTimeout(2*time.Minute)),
 	)
-	testcontainers.CleanupContainer(t, container)
 	if err != nil {
 		t.Fatalf("starting new-api: %v", err)
 	}
+	containertest.Cleanup(t, container, "new-api")
 	base, err := container.PortEndpoint(ctx, "3000/tcp", "http")
 	if err != nil {
 		t.Fatal(err)
