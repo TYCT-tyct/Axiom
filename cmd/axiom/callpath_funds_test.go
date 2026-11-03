@@ -227,8 +227,7 @@ func (w *callWorld) controlledCallDeps(clock *testClock) (callDeps, *suppliers.S
 	w.t.Helper()
 	logger := slog.New(slog.DiscardHandler)
 	exit := egress.NewForTesting(egresstest.Loopback(w.t))
-	cfg := gateway.DefaultConfig()
-	cfg.AdmissionBudget, cfg.KeyLookup = 30*time.Second, 30*time.Second
+	cfg := testGatewayConfig()
 	meter := noop.NewMeterProvider().Meter("test")
 	limits, err := gateway.New(cfg, meter)
 	if err != nil {

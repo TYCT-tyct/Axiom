@@ -452,7 +452,7 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 		}
 		return recorder, errors.New("injected failure after the call-record writer started")
 	}
-	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil); err == nil || !strings.Contains(err.Error(), "injected failure") {
+	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil, testGatewayConfig()); err == nil || !strings.Contains(err.Error(), "injected failure") {
 		t.Fatalf("serveWith: %v, want the injected failure", err)
 	}
 	if recorder == nil {

@@ -412,7 +412,7 @@ func (w *callWorld) start(extra ...string) runningNode {
 		return egress.NewForTesting(egresstest.Loopback(w.t, w.trusted...), egress.WithTracerProvider(tel.Traces)), nil
 	}
 	go func() {
-		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil)), loopback, startRecorder, nil)
+		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil)), loopback, startRecorder, nil, testGatewayConfig())
 	}()
 	budget := awaitRecord(w.t, logs, done, "database connection budget")
 	if budget.Nodes != 2 {
@@ -461,9 +461,19 @@ type reply struct {
 // call posts a model API call to the node, as a client of the main site's API domain.
 func (w *callWorld) call(n runningNode, path, key, body string, headers ...string) reply {
 	w.t.Helper()
-	req, err := http.NewRequestWithContext(w.t.Context(), http.MethodPost, "http://"+n.Public+path, strings.NewReader(body))
+	got, err := w.tryCall(n, path, key, body, headers...)
 	if err != nil {
 		w.t.Fatal(err)
+	}
+	return got
+}
+
+// tryCall is call for a test that makes it from another goroutine, where Fatal would end that goroutine and leave the
+// test waiting for an answer that never arrives.
+func (w *callWorld) tryCall(n runningNode, path, key, body string, headers ...string) (reply, error) {
+	req, err := http.NewRequestWithContext(w.t.Context(), http.MethodPost, "http://"+n.Public+path, strings.NewReader(body))
+	if err != nil {
+		return reply{}, err
 	}
 	req.Host = "api.main.example"
 	req.Header.Set("Content-Type", "application/json")
@@ -473,14 +483,14 @@ func (w *callWorld) call(n runningNode, path, key, body string, headers ...strin
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		w.t.Fatal(err)
+		return reply{}, err
 	}
 	defer resp.Body.Close() //nolint:errcheck // a test client
 	out, err := io.ReadAll(resp.Body)
 	if err != nil {
-		w.t.Fatal(err)
+		return reply{}, err
 	}
-	return reply{resp.StatusCode, resp.Header, out}
+	return reply{resp.StatusCode, resp.Header, out}, nil
 }
 
 // query is the first column of the query's one row, read in the platform scope.
