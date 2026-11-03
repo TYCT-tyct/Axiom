@@ -53,13 +53,7 @@ func StartSeaweedFS(t testing.TB, buckets ...string) SeaweedFS {
 	if err != nil {
 		t.Fatalf("start SeaweedFS: %v", err)
 	}
-	t.Cleanup(func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := testcontainers.TerminateContainer(container, testcontainers.StopContext(stopCtx)); err != nil {
-			t.Errorf("remove the SeaweedFS container: %v", err)
-		}
-	})
+	Cleanup(t, container, "SeaweedFS")
 	host, err := container.Host(ctx)
 	if err != nil {
 		t.Fatalf("find the SeaweedFS host: %v", err)

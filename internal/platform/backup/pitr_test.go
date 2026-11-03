@@ -214,13 +214,7 @@ func startPostgres(t *testing.T, ctx context.Context, image string, restore bool
 	if err != nil {
 		t.Fatalf("start the database image: %v", err)
 	}
-	t.Cleanup(func() {
-		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-		if err := testcontainers.TerminateContainer(ctr, testcontainers.StopContext(stopCtx)); err != nil {
-			t.Errorf("remove the database container: %v", err)
-		}
-	})
+	containertest.Cleanup(t, ctr, "database") //nolint:contextcheck // the removal runs after the test, when ctx is over
 	return ctr
 }
 

@@ -8,18 +8,12 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
-	"net"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 	"uuid"
-
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"axiom/internal/platform/containertest"
 	"axiom/internal/platform/jsonx"
@@ -28,24 +22,6 @@ import (
 	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/secret"
 )
-
-// The bucket server the tests run against, and the one credential pair the archive uses.
-const seaweedfsS3Config = `{"identities":[{"name":"axiom","credentials":[{"accessKey":"AKIAOBJECTSTORETEST","secretKey":"objectstore-test-secret"}],"actions":["Admin","Read","Write","List","Tagging"]}]}`
-
-func createBucket(t *testing.T, ctx context.Context, container *testcontainers.DockerContainer, name string) {
-	t.Helper()
-	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	code, out, err := container.Exec(execCtx, []string{
-		"sh", "-ec", fmt.Sprintf("echo 's3.bucket.create -name %s' | weed shell -master=localhost:9333", name),
-	})
-	if err != nil {
-		t.Fatalf("create bucket %q: %v", name, err)
-	}
-	if output, readErr := io.ReadAll(out); readErr != nil || code != 0 {
-		t.Fatalf("create bucket %q: exit %d, %v: %s", name, code, readErr, output)
-	}
-}
 
 // fakeStore is the archive's view of a bucket in memory, with knobs for the failures the tests need.
 type fakeStore struct {
@@ -441,49 +417,15 @@ func ungzipCSV(t *testing.T, raw []byte) [][]string {
 
 // TestRetentionArchivesToSeaweedFS is the archive against the deployment's object store: the objects are where the
 // manifest says, they unpack to the CSV, and the month is gone from PostgreSQL only afterwards.
-//
-//nolint:cyclop,gocognit // one object-store flow: start, archive, read the objects back and check the drop.
 func TestRetentionArchivesToSeaweedFS(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts SeaweedFS")
 	}
 	ctx := t.Context()
-	container, err := testcontainers.Run(ctx, "chrislusf/seaweedfs:3.80",
-		testcontainers.WithExposedPorts("8333/tcp"),
-		testcontainers.WithFiles(testcontainers.ContainerFile{
-			Reader:            strings.NewReader(seaweedfsS3Config),
-			ContainerFilePath: "/tmp/s3.json",
-			FileMode:          0o444,
-		}),
-		testcontainers.WithCmd("server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/tmp/s3.json"),
-		testcontainers.WithWaitStrategyAndDeadline(2*time.Minute, wait.ForListeningPort("8333/tcp")),
-		containertest.WithHostPolicy(),
-	)
-	if err != nil {
-		t.Fatalf("start SeaweedFS: %v", err)
-	}
-	t.Cleanup(func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := testcontainers.TerminateContainer(container, testcontainers.StopContext(stopCtx)); err != nil {
-			t.Errorf("remove the SeaweedFS container: %v", err)
-		}
-	})
-	host, err := container.Host(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, err := container.MappedPort(ctx, "8333/tcp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if host == "localhost" {
-		host = "127.0.0.1"
-	}
-	createBucket(t, ctx, container, "axiom")
+	s3 := containertest.StartSeaweedFS(t, "axiom")
 	client, err := objectstore.Open(objectstore.Config{
-		Endpoint: "http://" + net.JoinHostPort(host, port.Port()), Bucket: "axiom", Region: "us-east-1",
-		AccessKeyID: "AKIAOBJECTSTORETEST", SecretAccessKey: secret.New("objectstore-test-secret"), PathStyle: true,
+		Endpoint: s3.Endpoint, Bucket: "axiom", Region: "us-east-1",
+		AccessKeyID: containertest.SeaweedFSAccessKey, SecretAccessKey: secret.New(containertest.SeaweedFSSecretKey), PathStyle: true,
 	})
 	if err != nil {
 		t.Fatal(err)
