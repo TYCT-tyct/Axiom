@@ -1,0 +1,111 @@
+{
+  "v": 1,
+  "kind": "acme",
+  "native_unit": "quota",
+  "buckets": [
+    {"name": "global", "per": "ip", "window": "60s", "limit": 100},
+    {"name": "critical", "per": "account", "window": "60s", "limit": 10}
+  ],
+  "auth": {
+    "fields": ["access_token", "email", "password"],
+    "header": "Authorization",
+    "prefix": "Bearer ",
+    "login": {
+      "path": "/api/login",
+      "body": {"email": "{email}", "password": "{password}"},
+      "token": "data.token",
+      "bucket": "critical"
+    }
+  },
+  "detect": {
+    "path": "/api/status",
+    "header": "X-Acme",
+    "version": "data.version",
+    "captcha": "data.captcha"
+  },
+  "account": {
+    "path": "/api/me",
+    "balance": "data.balance",
+    "unit_hint": "data.unit",
+    "funding": {"path": "data.source", "wallet": ["wallet"]}
+  },
+  "offer": {
+    "groups": {
+      "path": "/api/groups",
+      "items": "data",
+      "ref": "id",
+      "name": "name",
+      "ratio": "ratio",
+      "skip_ratio": ["auto"],
+      "formats": "formats"
+    },
+    "models": {
+      "path": "/api/groups/{group}/models",
+      "items": "data",
+      "name": "name",
+      "formats": "formats"
+    },
+    "prices": {
+      "path": "/api/prices",
+      "items": "data.rates",
+      "model": "model",
+      "rates": {"input": "input", "output": "output", "cache_read": "cache_read"},
+      "scale": "0.000001"
+    },
+    "formats": {"openai": "chat", "anthropic": "messages", "responses": "responses"}
+  },
+  "keys": {
+    "list": {
+      "path": "/api/keys?page={page}&size={size}",
+      "page_size": 2,
+      "total": "data.total",
+      "items": "data.items",
+      "ref": "id",
+      "group": "group_id",
+      "name": "name",
+      "status": "status",
+      "statuses": {"enabled": "active", "disabled": "disabled", "exhausted": "quota_exhausted"},
+      "reset_at": "reset_at",
+      "bucket": "critical"
+    },
+    "secret": {"path": "/api/keys/{ref}/secret", "token": "data.key", "bucket": "critical"},
+    "create": {
+      "path": "/api/keys",
+      "body": {"name": "{name}", "group_id": "{group}"},
+      "ref": "data.id",
+      "bucket": "critical"
+    },
+    "policy": {"models": "models", "expires_at": "expires_at"}
+  },
+  "charges": {
+    "path": "/api/charges?start={start}&end={end}&page={page}&size={size}",
+    "page_size": 2,
+    "items": "data.items",
+    "ref": "request_id",
+    "key": "key_id",
+    "time": "created_at",
+    "amount": "amount",
+    "model": "model",
+    "funding": {"path": "source", "wallet": ["wallet"]},
+    "usage": {"input": "usage.input", "output": "usage.output"},
+    "filter": {"path": "type", "value": "consume"},
+    "bucket": "critical"
+  },
+  "calls": {
+    "formats": ["chat", "messages", "responses"],
+    "streams": true,
+    "cancels": true,
+    "charge_ref_header": "X-Acme-Request",
+    "errors": {
+      "code": "error.code",
+      "reset_at": "error.reset_at",
+      "rules": [
+        {"status": 401, "code": "invalid_key", "cause": "credential_rejected", "scope": "credential", "executed": "no"},
+        {"status": 402, "code": "balance", "cause": "supplier_balance_low", "scope": "supplier", "executed": "no"},
+        {"status": 429, "cause": "rate_limited", "scope": "endpoint"},
+        {"status": 400, "code": "context", "cause": "context_too_long", "scope": "request", "executed": "no"},
+        {"status": 404, "code": "model", "cause": "model_not_found", "scope": "request", "executed": "no"}
+      ]
+    }
+  }
+}

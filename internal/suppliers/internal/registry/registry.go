@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"axiom/internal/suppliers/internal/adapter"
+	"axiom/internal/suppliers/internal/declared"
 	"axiom/internal/suppliers/internal/newapi"
 	"axiom/internal/suppliers/internal/openai"
 	"axiom/internal/suppliers/internal/sub2api"
@@ -26,8 +27,16 @@ type Registry struct {
 	byKind map[adapter.Kind]adapter.Adapter
 }
 
-// Default is the registry of the adapters this program carries.
-func Default() (*Registry, error) { return New(adapters...) }
+// Default is the registry of the adapters this program carries: the built-in kinds, then the declarations in the
+// directory AXIOM_SUPPLIER_ADAPTERS names. Declarations are read and checked here, at startup, so a bad file stops the
+// node before it can serve a supplier it cannot talk to.
+func Default() (*Registry, error) {
+	declaredAdapters, err := declared.LoadEnv()
+	if err != nil {
+		return nil, err
+	}
+	return New(append(slices.Clone(adapters), declaredAdapters...)...)
+}
 
 // New refuses what would fail later in a request: a kind that cannot be stored, two adapters of one kind, or a rate
 // bucket that can never admit a request.

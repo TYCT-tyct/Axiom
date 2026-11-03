@@ -132,6 +132,9 @@ func (s *session) webSearch(ctx context.Context) *ended {
 	if req.Web == nil {
 		req.Web = web
 	}
+	// The parse's counts and the catalog switch that bills them are routing and billing settings, not body members:
+	// the injected body cannot carry them into the new Request. Restore the values the call was quoted under.
+	restoreFile(&req, s.c.Request.File, s.parses, s.pages, s.fileBilling)
 	req.SearchBytes = 0
 	s.c.Body, s.c.Request = body, req
 	s.searches = 1

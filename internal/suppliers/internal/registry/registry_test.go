@@ -1,6 +1,8 @@
 package registry_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -66,8 +68,45 @@ func TestRegistryFindsByKind(t *testing.T) {
 // TestTheProgramsAdaptersAreValid: the list the program carries passes the same checks, so a broken line fails the
 // tests and not only the start.
 func TestTheProgramsAdaptersAreValid(t *testing.T) {
-	t.Parallel()
+	t.Setenv("AXIOM_SUPPLIER_ADAPTERS", "")
 	if _, err := registry.Default(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestDefaultIncludesDeclarations: the env directory is part of the program's registry, not a separate list the
+// service has to remember to consult.
+func TestDefaultIncludesDeclarations(t *testing.T) {
+	t.Setenv("AXIOM_SUPPLIER_ADAPTERS", filepath.Join("..", "declared", "testdata"))
+	r, err := registry.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.Has("acme") {
+		t.Fatalf("kinds %v do not include the declaration", r.Kinds())
+	}
+	if _, ok := r.Get("acme"); !ok {
+		t.Error("Get does not find the declaration")
+	}
+}
+
+// TestDefaultRefusesADeclarationThatShadowsABuiltIn: a declaration's kind is stored in suppliers.kind, so two adapters
+// of one kind would make an existing supplier open with the wrong protocol.
+func TestDefaultRefusesADeclarationThatShadowsABuiltIn(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "declared", "testdata", "acme.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shadow := strings.Replace(string(raw), `"kind": "acme"`, `"kind": "newapi"`, 1)
+	if shadow == string(raw) {
+		t.Fatal("the fixture's kind was not replaced")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "shadow.json"), []byte(shadow), 0o600); err != nil { //nolint:gosec // a test temporary directory
+		t.Fatal(err)
+	}
+	t.Setenv("AXIOM_SUPPLIER_ADAPTERS", dir)
+	if _, err := registry.Default(); err == nil || !strings.Contains(err.Error(), `"newapi": registered twice`) {
+		t.Fatalf("Default: %v, want the duplicate kind", err)
 	}
 }
