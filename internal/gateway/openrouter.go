@@ -207,9 +207,15 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 func publicEndpointsOf(endpoints []routing.Endpoint) []publicEndpoint {
 	page := make([]publicEndpoint, len(endpoints))
 	for i, e := range endpoints {
+		context, maxOutput := e.Context, e.MaxOutput
+		var abilities []string
+		if len(e.Specs) > 0 {
+			surface := e.Surface()
+			context, maxOutput, abilities = surface.Context, surface.MaxOutput, abilityNames(surface.Caps)
+		}
 		page[i] = publicEndpoint{
-			id: uuid.UUID(e.ID), name: e.Codename, contextLength: e.Context, maxOutput: e.MaxOutput,
-			streams: e.Streams, quantization: string(e.Quantization), verified: e.Verified,
+			id: uuid.UUID(e.ID), name: e.Codename, contextLength: context, maxOutput: maxOutput,
+			streams: e.Streams, abilities: abilities, quantization: string(e.Quantization), verified: e.Verified,
 		}
 	}
 	slices.SortFunc(page, func(a, b publicEndpoint) int { return strings.Compare(a.name, b.name) })

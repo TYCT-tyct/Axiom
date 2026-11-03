@@ -38,7 +38,10 @@ func parameterSupport(s catalog.Serving, d catalog.Dialect) (p protocol.Paramete
 func orParameters(p protocol.ParameterSet) []string {
 	var names []string
 	if p.Has(protocol.ParamTemperature) {
-		names = append(names, "temperature", "top_p")
+		names = append(names, "temperature")
+	}
+	if p.Has(protocol.ParamTopP) {
+		names = append(names, "top_p")
 	}
 	if p.Has(protocol.ParamMaxTokens) {
 		names = append(names, "max_tokens", "max_completion_tokens")
@@ -50,10 +53,19 @@ func orParameters(p protocol.ParameterSet) []string {
 		names = append(names, "stop")
 	}
 	if p.Has(protocol.ParamTools) {
-		names = append(names, "tools", "tool_choice", "parallel_tool_calls")
+		names = append(names, "tools")
+	}
+	if p.Has(protocol.ParamToolChoice) {
+		names = append(names, "tool_choice")
+	}
+	if p.Has(protocol.ParamParallelToolCalls) {
+		names = append(names, "parallel_tool_calls")
 	}
 	if p.Has(protocol.ParamReasoning) {
-		names = append(names, "reasoning", "reasoning_effort")
+		names = append(names, "reasoning")
+	}
+	if p.Has(protocol.ParamReasoningEffort) {
+		names = append(names, "reasoning_effort")
 	}
 	return names
 }

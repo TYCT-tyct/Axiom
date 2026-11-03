@@ -90,7 +90,7 @@
 | `provider.sort` | 请求的 `sort` 是全局的，替换当前请求所有模型的预设排序（`price`/`throughput`/`latency`）；只在预设允许的候选里排，不改变允许集合。没有请求覆盖时，按模型/作者规则的最近一层显式 `sort`。 |
 | `provider.max_price` | 每个计费项取预设上限和请求上限的较低者；请求不能把上限调高。 |
 | `provider.data_collection` / `zdr` | 与预设的数据政策取交集；`deny`/ZDR 不能放行预设排除的政策。 |
-| `provider.quantizations` / `require_parameters` | `quantizations` 与预设的量化条件取交集（预设首版不设量化）；`require_parameters` 仍按模型规格过滤。 |
+| `provider.quantizations` / `require_parameters` | `quantizations` 与预设的量化条件取交集（预设首版不设量化）；`require_parameters` 按端点实际调用格式生效的参数清单过滤，包含该格式的实测。 |
 | `models` / `fallbacks` | 模型列表先受 key 的可用模型约束；每个模型用自己的预设规则；请求不能借备选模型绕开 key 的模型白名单。 |
 | 请求类别 / 工具重排 | 平台预设可以按请求类别选策略；用户预设不暴露这个字段。请求覆盖排序时仍按现有的工具重排规则。 |
 
@@ -164,7 +164,7 @@
 快照由核心节点从各模块已公开的数据组装，不在调用路径上查库（见[总体架构的「模块边界规则」](../architecture.md#模块边界规则)）：
 
 - **哪些端点**：供应商模块给出已启用的、成本已知的、分组已选用、有可用凭证的端点，以及发给上游的模型名（`upstream_name`）、这个端点能用的调用格式、按分组倍率缩放好的成本计划、供应商是否流式和是否传递取消（`suppliers.Service.Routable()`，见[供应商的「调用面」](../../internal/suppliers/README.md#调用面)）。映射不到目录模型、模型不在上架状态、或没有成本计划的端点不在其中（见[供应商的「同步与变化」](suppliers.md#同步与变化)）。
-- **模型规格**：目录给出上下文长度、输出上限、是否流式和能力位（`catalog.Model.Serving()`，见[模型目录的 README](../../internal/catalog/README.md)）。规格里没写全四项的模型不进快照：猜一个上限会让端点带着错的上限接流量。只有直接格式（embeddings、rerank）的端点例外：`ServingDirect()` 只要求 `context_length`；它不生成、不流式、不用能力位，`max_output_tokens`、`streams`、`abilities` 不是它需要的事实，不能为它猜，也不该因此把它排除。规格里可选的最快输出速度（`output_speed`）与推理可见的格式（`reasoning_visible`）读成 `Endpoint.OutputSpeed`、`Endpoint.ReasoningVisible`：速度是分段预留算超额额度的依据，0 表示没写，条目只能整笔预留；推理可见为空时不放行推理进度（保守，见 `gateway/route.go` 的 `reasoningVisible`）。
+- **模型规格**：目录给出上下文长度、输出上限、是否流式和能力位（`catalog.Model.Serving()`，见[模型目录的 README](../../internal/catalog/README.md)）。规格里没写全四项的模型不进快照：猜一个上限会让端点带着错的上限接流量。只有直接格式（embeddings、rerank）的端点例外：`ServingDirect()` 只要求 `context_length`；它不生成、不流式、不用能力位，`max_output_tokens`、`streams`、`abilities` 不是它需要的事实，不能为它猜，也不该因此把它排除。目录是基线，[端点评估](quality.md)实测到的能力、请求参数、上下文和输出上限按[「实测的能力与上限」](quality.md#实测的能力与上限)替换它：实测可用的位加上、不可用的去掉，实测的上限替换目录值（更高或更低），没有实测的字段仍用目录值；覆盖在 `gateway/route.go` 的 `endpointOf`，每次重建快照时按值取入。事实按调用格式分开，`endpointOf` 为每个原生格式写入 `Endpoint.Specs`（`routing.Spec`），`Plan` 按 `callFormat` 选择实际要用的那一份；`Endpoint.Caps`、`Parameters`、`Context`、`MaxOutput` 是所有原生格式的交集与下限，供模型页和发现接口在没有格式参数时展示，路由不拿它替代 `Specs`。规格里可选的最快输出速度（`output_speed`）与推理可见的格式（`reasoning_visible`）读成 `Endpoint.OutputSpeed`、`Endpoint.ReasoningVisible`：速度是分段预留算超额额度的依据，0 表示没写，条目只能整笔预留；推理可见为空时不放行推理进度（保守，见 `gateway/route.go` 的 `reasoningVisible`）。
 - **售价**：每个模型读取已发布的售价版本（`billing.PublishedPrices`）；由独立发布任务调用 `billing.RefreshPrices` 维护，路由构建不发布。没有有效版本或版本无法覆盖本节点成本的端点不进快照（见[计费的「定价」](billing.md#定价)）；快照是一个节点一份，所以只有对所有人定价的规则算数，对某个账户或档位的规则不进快照；用量里出现过没人定价的字段的模型留在快照里并标记，路由以 `UnknownItem` 拒绝它（见[计费的「价目表缺项」](billing.md#价目表缺项)）。
 - **其余**：熔断、健康度、质量分与置信度、吞吐与延迟来自[端点评估](quality.md)。熔断是端点评估的实时状态，快照只持有指针，所以熔断在下一次 `Plan` 就生效，不等重建；健康度、质量分与置信度、首字延迟和吞吐由 `internal/quality` 从真实流量和试探实测，在每次重建快照时按值取入：没有计入结局的端点质量分是中性 1、置信度是 0（未知），没测过的延迟和吞吐是 0（各项的来源与公式见[端点评估的「质量分、吞吐与延迟」](quality.md#质量分吞吐与延迟)）。凭证容量是供应商的实时视图（`suppliers.Capacity`），快照同样只持有指针。全局默认只观察，启用执行模式后的熔断、离线与慢启动规则见[端点评估](quality.md#健康与熔断)。供应商同步余额与原生成本已填入，按下文逐请求检查付得起；号池分组的有效容量低由供应商快照的 `Routable.PoolLow` 带成 `Endpoint.PoolLow`（没有读数的分组是假），排序按它减半，见[供应商的「号池」](suppliers.md#号池)；出口仍恒为 1 个。现有模型规格都没有写最快输出速度，所以条目仍全部整笔预留；规格写上速度后，`gateway/route.go` 的 `endpointOf` 把它带进快照，路由就能把输出超过一段加超额额度的条目标为可分段（`plan.go` 的 `entry`），分段本身的大小与超额额度来自后台记录（`billing.segment_settings`，默认值在代码），由 `billing.SegmentPolicy` 每 30 秒热更新；路由在 `Plan` 时读一次并把值冻结在计划里，随预留请求交给计费，所以计划后的热更新不会改变这笔请求的报价。
 
@@ -180,7 +180,7 @@
    - 已启用、成本已知、没在离线：三者分属人、供应商模块和端点评估，各自只改自己的，见[端点评估的「三条摘除通道」](quality.md#三条摘除通道各归各的主人)。熔断的端点先从正常路线降权，有别的候选时不接；候选全部熔断时保留原有排序作为最后备选。第一次试探仍失败的端点离线，一律不接，候选全部离线时这条路线是空的，网关回 503 `no_endpoint`（原因 `breaker_open`），等试探通过（见[端点评估的「摘除」](quality.md#摘除)和「试探」）。刚恢复的端点慢启动，只在有别的端点可用时限制它；
    - 供应商同步原生余额够付这次请求的完整生成成本上界（与预留共用报价规则）。余额低于告警线但还够付时，只降低权重；低余额降权尚未接入。号池分组的有效容量低时，它的端点权重已经减半（见[供应商的「号池」](suppliers.md#号池)）。
 3. **过滤**，都是硬条件：
-   - 能力：请求用到的工具、图片、PDF、结构化输出、参数；预估输入加最大输出不超过上下文；
+   - 能力：请求用到的工具、图片、PDF、结构化输出、参数；按请求实际调用的上游格式取 `Endpoint.Specs`，能力与参数有实测时用实测的位（可用的加上、不可用的去掉），否则用目录的位；预估输入加最大输出不超过该格式的上下文（有实测上限时用实测的，否则用目录的）；
    - 格式：请求用到只有原格式才能表达的能力时（例如 Anthropic 的 beta 功能、推理签名、`/responses/compact`，以及旧版补全和两种直接格式本身），只保留原生支持这种格式的端点；否则三种 Chat 形态的格式两两可以转换：原格式的端点优先（同格式转发），其次是 Chat 端点，最后是另一个原生格式（Messages 与 Responses 互转）。转换表达不了的成员让这个请求在这个端点得到 `*NotSupported`，路由跳过它、不算一次尝试（见[接入的「转发规则」](gateway.md#转发规则)）；
    - key 的路由预设：来源类别、产品成绩和置信度、是否只走已验证的端点、数据政策、最高单价（产品成绩不是运营质量的 `MinQuality`，见上文）；
    - 请求里的临时覆盖，规则见下文「请求覆盖」；
@@ -225,7 +225,7 @@ BYOK 端点的售价是参考价乘站点的 BYOK 费率（见[计费](billing.m
 
 - 过滤条件（只走、排除、来源类别、数据政策、量化级别）只能比 key 的预设更严，不能放宽；
 - 最高价只能比 key 的预设更低。最高价按计费项分别设定，比较的是每个端点这个账户实际要付的售价；同一模型的不同端点各自过滤；
-- `require_parameters: true` 只保留声明了请求所设全部参数的端点；端点声明由模型规格的能力和方言推出，与 `/api/v1/models` 和端点发现接口的 `supported_parameters` 同一份。请求写了这份清单之外的参数（`seed`、`logprobs` 等）时在预留前 400，因为目录与供应商同步没有逐端点的参数清单；清单内的采样、输出上限或 `stop` 没有端点满足时按覆盖过滤 404（能力参数没有端点时仍按能力缺失 404）；
+- `require_parameters: true` 只保留声明了请求所设全部参数的端点；端点声明是该端点按实际调用格式生效的 `Endpoint.Specs[format].Parameters`，由模型规格的能力和方言及该格式的实测共同推出。发现接口逐端点发布 `orParameters` 的清单，模型页展示同一份端点面；`/api/v1/models` 的模型级清单只是模型基线，不能替代逐端点的判断。请求写了清单之外、且不是能力参数的参数（`seed`、`logprobs` 等）时在预留前 400；清单内的采样、输出上限、`stop` 或能力参数（`tools`、`tool_choice`、`parallel_tool_calls`、`response_format`、`reasoning`、`reasoning_effort`）没有端点满足时按覆盖过滤 404（对应能力位缺失仍按能力缺失 404）。空 `tools`/`functions` 数组不算使用工具参数；
 - 排序方式和指定顺序可以替换 key 预设的排序和顺序，但只在预设允许的候选里；`allow_fallbacks: false` 不能打开预设关闭的回退；
 - `order`、`only`、`ignore` 精确匹配供应商分组不可变的公开代号，选组不会放宽到同供应商其他组；未知代号的行为见上文「供应商代号」和[接入的路由参数](gateway.md#路由参数)；
 - 指定顺序并关闭回退时（`allow_fallbacks: false`），只在指定的组之间按顺序尝试；没有指定顺序则每个模型只保留排序后的首个端点，`models` 的跨模型回退不受影响；
@@ -322,7 +322,7 @@ BYOK 端点的售价是参考价乘站点的 BYOK 费率（见[计费](billing.m
 
 P4（2026-10-29）依负责人在 [#309 的授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」执行，独立评审由流水线安排。以 [OpenRouter Provider Routing](https://openrouter.ai/docs/guides/routing/provider-selection) 为基线。不变量：请求限制必须兑现或在预留前返回 400；名称不越过端点归属与预设；价格使用实际受众售价且不经浮点换算。实现复用现有快照、过滤和排序，公开名称采用供应商分组不可变的代号，精确匹配分组，不把代号扩大为整家供应商。另一方案是在准入查供应商名称并转成供应商 ID：会增加数据库往返、暴露真实名称，并让选定分组扩大到同供应商其他组，因此不选。
 
-字符串与对象排序共用策略；对象 `partition: none` 对主模型和备选整体排序，默认 `model` 保留主模型优先。无 `order` 的 `allow_fallbacks: false` 对每个模型保留排序后的首个端点，有 `order` 时仅保留命名组，预设限制仍独立生效。`require_parameters` 使用模型规格推出的公开参数清单（与发现接口同一份）；逐端点的采样/提供商参数清单仍缺。`quantizations` 按管理员记录的端点级别精确匹配，未记录不匹配非空列表；数字性能偏好按 EWMA，p50/p75/p90/p99 对象按 quality 的滚动五分钟窗口，未测过的端点不判为不满足，写出的截断全满足才进偏好组，不满足的排后不排除；`max_price.request` 比较每个生成请求的售价。按张的图片项已有，但 `max_price.image` 管输入、生成还是按 token 计价的图未定，端点也不报按张用量，所以仍明确 400。清单外参数与这些限制均明确 400；不拿模型能力、EWMA 或图片 token 价格冒充。`sort` 对象没有 OpenRouter 文档之外的 `percentile` 成员；百分位截断只属于 `preferred_min_throughput` / `preferred_max_latency`。每项缺的数据和支持它需要补的字段见[接入的路由参数偏离表](gateway.md#路由参数)。同模型供应商回退和 [OpenRouter Model Fallbacks](https://openrouter.ai/docs/guides/routing/model-fallbacks) 的跨模型回退分开：关闭前者不能丢掉请求明确给出的备选模型，整体排序同样按模型去重。provider 参数校验用统一的错误外壳：Chat/Responses 的 `error.code` 是数字状态码（400），分类读 `metadata.error_type`（`invalid_request`），按 `type` 或状态行分支的客户端照常可读；偏离清单见[接入的路由参数](gateway.md#路由参数)。
+字符串与对象排序共用策略；对象 `partition: none` 对主模型和备选整体排序，默认 `model` 保留主模型优先。无 `order` 的 `allow_fallbacks: false` 对每个模型保留排序后的首个端点，有 `order` 时仅保留命名组，预设限制仍独立生效。`require_parameters` 使用端点按实际调用格式生效的参数清单（`Endpoint.Specs[format].Parameters`，含该格式实测；与发现接口逐端点发布的一致）；逐端点的采样/提供商专有参数清单仍缺。`quantizations` 按管理员记录的端点级别精确匹配，未记录不匹配非空列表；数字性能偏好按 EWMA，p50/p75/p90/p99 对象按 quality 的滚动五分钟窗口，未测过的端点不判为不满足，写出的截断全满足才进偏好组，不满足的排后不排除；`max_price.request` 比较每个生成请求的售价。按张的图片项已有，但 `max_price.image` 管输入、生成还是按 token 计价的图未定，端点也不报按张用量，所以仍明确 400。清单外参数与这些限制均明确 400；不拿模型能力、EWMA 或图片 token 价格冒充。`sort` 对象没有 OpenRouter 文档之外的 `percentile` 成员；百分位截断只属于 `preferred_min_throughput` / `preferred_max_latency`。每项缺的数据和支持它需要补的字段见[接入的路由参数偏离表](gateway.md#路由参数)。同模型供应商回退和 [OpenRouter Model Fallbacks](https://openrouter.ai/docs/guides/routing/model-fallbacks) 的跨模型回退分开：关闭前者不能丢掉请求明确给出的备选模型，整体排序同样按模型去重。provider 参数校验用统一的错误外壳：Chat/Responses 的 `error.code` 是数字状态码（400），分类读 `metadata.error_type`（`invalid_request`），按 `type` 或状态行分支的客户端照常可读；偏离清单见[接入的路由参数](gateway.md#路由参数)。
 
 供应商付得起的检查采用同步余额与该端点原生单位成本计划，复用 billing 的完整请求预留上界（含工具、服务档、实际调用格式与输出上限），不用售价、单位价值或汇率。比较使用定点数；相等可用。成本计划缺某个等级或项目时，使用全部已知等级与上下文档位中的最高 token 单价估算缺项，并保留请求涉及的更高已知价格；这只是原生成本估算，不修改售价或结算规则。已发布售价的保本检查仍先于这项逐请求检查：成本不完整、无法安全发布或使用售价的端点快照组装时退出（见上文「售价」），这里的估算不放宽发布门槛。不能报价的上下文或数量越界记为永久的 `unquotable_cost`，不伪装成暂时余额不足。余额只是同步快照，不是供应商侧的并发预留保证，多节点份额仍只约束凭证并发和 RPM。余额不足拒绝在 suppliers 内暂停整家供应商，所有端点和已冻结路线再次准入都检查同一状态；时间经过和重读旧余额不恢复。较拒绝更新的正余额同步或拒绝后开始、完整成功的显式检测才恢复；更晚的拒绝不被旧检测清掉。拒绝只标记内存，节点后台合并请求余额同步，每家至多一分钟一次，保留已有同步退避、限速和人工停用。
 
