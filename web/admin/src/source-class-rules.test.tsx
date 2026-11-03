@@ -2,8 +2,8 @@ import { createInstance } from "i18next";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, expect, it } from "vitest";
-import en from "../locales/en";
-import { ConditionRows } from "./source-classes";
+import en from "./locales/en";
+import { ConditionRows } from "./source-class-rules";
 
 const i18n = createInstance();
 

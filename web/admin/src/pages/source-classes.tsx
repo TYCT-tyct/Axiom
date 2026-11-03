@@ -1,27 +1,15 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange, unwrapEmptyChange } from "@axiom/api";
-import {
-  Button,
-  DataState,
-  EmptyState,
-  PageHeader,
-  Panel,
-  SelectField,
-  TextAreaField,
-  TextField,
-  useFormat,
-} from "@axiom/ui";
+import { Button, DataState, EmptyState, PageHeader, Panel, TextAreaField, TextField, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, isProblem, type Problem, useSnapshot } from "../change";
-import { billingItems } from "../models/catalog";
 import { Code, PageBody, State } from "../parts";
 import { sourceClassesQuery } from "../queries";
+import { ConditionRows, type Rules, readRules } from "../source-class-rules";
 
 type Class = AdminSchemas["SourceClass"];
-type Rules = AdminSchemas["SourceClassRules"];
-type Condition = AdminSchemas["SourceClassCondition"];
 
 // EditorInput is what both the create and the edit dialog read from their form. The slug is absent when editing.
 type EditorInput = {
@@ -221,26 +209,35 @@ function readIdentity(
   current: Class | undefined,
   t: TFunction<"admin">,
 ): Identity | Problem {
-  const name = values.name?.trim() ?? "";
+  const text = (key: string) => values[key]?.trim() ?? "";
+  const name = text("name");
   if (name.length < 1 || name.length > 100) {
     return { problem: t("sourceClasses.invalidName") };
   }
-  const slug = values.slug?.trim() ?? "";
+  const slug = text("slug");
   if (!current && !/^[a-z][a-z0-9-]{0,31}$/.test(slug)) {
     return { problem: t("sourceClasses.invalidSlug") };
   }
-  const positionText = values.position?.trim() ?? "";
-  const position = positionText === "" ? undefined : Number(positionText);
-  if (position !== undefined && (!Number.isInteger(position) || position < 0 || position > 1_000_000)) {
+  const position = readPosition(text("position"));
+  if (position === null) {
     return { problem: t("sourceClasses.invalidPosition") };
   }
   return {
     slug: current ? undefined : slug,
     name,
-    name_zh: values.name_zh?.trim() ?? "",
-    description: values.description?.trim() ?? "",
+    name_zh: text("name_zh"),
+    description: text("description"),
     position,
   };
+}
+
+// readPosition is undefined for an empty field (keep the position, or append when creating) and null when invalid.
+function readPosition(text: string): number | undefined | null {
+  if (text === "") {
+    return undefined;
+  }
+  const position = Number(text);
+  return Number.isInteger(position) && position >= 0 && position <= 1_000_000 ? position : null;
 }
 
 function EditorFields({ current }: { current?: Class }) {
@@ -345,196 +342,4 @@ function Retire({ cls, onClose }: { cls: Class; onClose: () => void }) {
       onClose={onClose}
     />
   );
-}
-
-type Row = {
-  key: number;
-  evidence: Condition["evidence"];
-  name: string;
-  item: string;
-  operator: string;
-  value: string;
-};
-
-// ConditionRows edits the rule list. It owns the rows because adding and removing one changes the form; every input
-// still has a name, so the dialog reads the same form values as every other change. The count is a hidden field: an
-// empty list has no row inputs, and the reader must know it is empty rather than stale.
-export function ConditionRows({ initial }: { initial?: Rules }) {
-  const { t } = useTranslation();
-  const [match, setMatch] = useState<Rules["match"]>(initial?.match ?? "all");
-  const [rows, setRows] = useState<Row[]>(() =>
-    (initial?.conditions ?? []).map((condition, key) => ({
-      key,
-      evidence: condition.evidence,
-      name: condition.name ?? "",
-      item: condition.item ?? "input",
-      operator: condition.operator,
-      value: condition.value ?? "",
-    })),
-  );
-  const nextKey = useRef((initial?.conditions.length ?? 0) + 1);
-  const change = (key: number, patch: Partial<Row>) =>
-    setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
-  const add = () =>
-    setRows((current) => [
-      ...current,
-      { key: nextKey.current++, evidence: "header", name: "", item: "input", operator: "present", value: "" },
-    ]);
-  const remove = (key: number) => setRows((current) => current.filter((row) => row.key !== key));
-  return (
-    <div className="space-y-3">
-      <input type="hidden" name="count" value={rows.length} />
-      <SelectField
-        label={t("sourceClasses.match")}
-        name="match"
-        value={match}
-        onChange={(event) => setMatch(event.target.value as Rules["match"])}
-      >
-        <option value="all">{t("sourceClasses.all")}</option>
-        <option value="any">{t("sourceClasses.any")}</option>
-      </SelectField>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-ui font-medium text-t1">{t("sourceClasses.conditions")}</h3>
-        <Button size="sm" onClick={add} disabled={rows.length >= 8}>
-          {t("sourceClasses.addCondition")}
-        </Button>
-      </div>
-      {rows.length === 0 ? (
-        <p className="text-label text-t3">{t("sourceClasses.noConditions")}</p>
-      ) : (
-        rows.map((row, index) => (
-          <fieldset key={row.key} className="space-y-3 rounded-btn border border-b1 p-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <SelectField
-                label={t("sourceClasses.evidence")}
-                name={`evidence-${index}`}
-                value={row.evidence}
-                onChange={(event) => {
-                  const evidence = event.target.value as Condition["evidence"];
-                  change(row.key, { evidence, operator: "present", name: "", value: "" });
-                }}
-              >
-                <option value="header">{t("sourceClasses.header")}</option>
-                <option value="usage">{t("sourceClasses.usage")}</option>
-              </SelectField>
-              {row.evidence === "header" ? (
-                <TextField
-                  label={t("sourceClasses.headerName")}
-                  hint={t("sourceClasses.headerNameHint")}
-                  name={`name-${index}`}
-                  value={row.name}
-                  onChange={(event) => change(row.key, { name: event.target.value })}
-                  maxLength={256}
-                />
-              ) : (
-                <SelectField
-                  label={t("sourceClasses.item")}
-                  name={`item-${index}`}
-                  value={row.item}
-                  onChange={(event) => change(row.key, { item: event.target.value })}
-                >
-                  {billingItems.map((item) => (
-                    <option key={item} value={item}>
-                      {t(`models.item.${item}`)}
-                    </option>
-                  ))}
-                </SelectField>
-              )}
-              <SelectField
-                label={t("sourceClasses.operator")}
-                name={`operator-${index}`}
-                value={row.operator}
-                onChange={(event) => change(row.key, { operator: event.target.value, value: "" })}
-              >
-                {(row.evidence === "header"
-                  ? (["present", "absent", "equals", "prefix", "suffix", "contains"] as const)
-                  : (["present", "absent"] as const)
-                ).map((operator) => (
-                  <option key={operator} value={operator}>
-                    {t(`sourceClasses.operators.${operator}`)}
-                  </option>
-                ))}
-              </SelectField>
-              {row.operator === "present" || row.operator === "absent" ? null : (
-                <TextField
-                  label={t("sourceClasses.value")}
-                  hint={t("sourceClasses.valueHint")}
-                  name={`value-${index}`}
-                  value={row.value}
-                  onChange={(event) => change(row.key, { value: event.target.value })}
-                  maxLength={256}
-                />
-              )}
-            </div>
-            <div className="flex justify-end">
-              <Button size="sm" onClick={() => remove(row.key)}>
-                {t("sourceClasses.removeCondition")}
-              </Button>
-            </div>
-          </fieldset>
-        ))
-      )}
-    </div>
-  );
-}
-
-function readRules(values: Record<string, string>, t: TFunction<"admin">): Rules | Problem {
-  const count = Number(values.count ?? 0);
-  if (!Number.isInteger(count) || count < 0 || count > 8) {
-    return { problem: t("sourceClasses.invalidCount") };
-  }
-  const conditions: Condition[] = [];
-  for (let index = 0; index < count; index++) {
-    const condition = readCondition(values, index, t);
-    if (isProblem(condition)) {
-      return condition;
-    }
-    conditions.push(condition);
-  }
-  return { match: values.match === "any" ? "any" : "all", conditions };
-}
-
-function readCondition(values: Record<string, string>, index: number, t: TFunction<"admin">): Condition | Problem {
-  const evidence = (values[`evidence-${index}`] === "usage" ? "usage" : "header") as Condition["evidence"];
-  const chosen = values[`operator-${index}`] ?? "present";
-  if (evidence === "usage") {
-    return readUsageCondition(values, index, chosen, t);
-  }
-  return readHeaderCondition(values, index, chosen, t);
-}
-
-function readUsageCondition(
-  values: Record<string, string>,
-  index: number,
-  chosen: string,
-  t: TFunction<"admin">,
-): Condition | Problem {
-  const item = values[`item-${index}`] ?? "";
-  if (item === "") {
-    return { problem: t("sourceClasses.invalidConditionValue") };
-  }
-  const operator = (chosen === "absent" ? "absent" : "present") as Condition["operator"];
-  return { evidence: "usage", item, operator };
-}
-
-function readHeaderCondition(
-  values: Record<string, string>,
-  index: number,
-  operator: string,
-  t: TFunction<"admin">,
-): Condition | Problem {
-  const name = values[`name-${index}`]?.trim() ?? "";
-  if (name === "") {
-    return { problem: t("sourceClasses.invalidConditionName") };
-  }
-  const condition: Condition = { evidence: "header", name, operator: operator as Condition["operator"] };
-  if (operator === "present" || operator === "absent") {
-    return condition;
-  }
-  const value = values[`value-${index}`] ?? "";
-  if (value === "" || value.length > 256) {
-    return { problem: t("sourceClasses.invalidConditionValue") };
-  }
-  condition.value = value;
-  return condition;
 }
