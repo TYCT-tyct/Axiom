@@ -30,6 +30,7 @@ const specFast = `{"items":["input","output","cache_read","cache_write"],"tiers"
 // the stream the gateway meters. A model that does not reason has nothing to miss, so its speed alone segments it; a
 // model that says nothing of its speed is reserved in full, as checkEntry finds the ones whose spec says nothing.
 func TestRouteBuildCarriesWhatSegmentingNeeds(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	fast, plain := f.seed("acme/fast", specFast), f.seed("acme/plain", specFastPlain)
 	prices, err := f.fixturePrices() // the models were seeded after the fixture's sale prices

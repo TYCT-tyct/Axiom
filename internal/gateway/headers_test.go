@@ -77,6 +77,7 @@ func TestUpstreamHeaders(t *testing.T) {
 // client, an upstream that minted none leaves the header off, and a state the client sent itself is never echoed — for a
 // stream, an aggregated reply and the compact endpoint alike (docs/domains/gateway.md「转发规则」).
 func TestTheTurnStateComesBackFromTheUpstream(t *testing.T) {
+	t.Parallel()
 	no := false
 	// minting is an upstream that answers as then does, with the turn state it sets on the response headers.
 	minting := func(state string, then scripted) scripted {
@@ -210,6 +211,7 @@ type conversation struct {
 // that the gateway also puts in the body's cache key; the client's own value never reaches the relay
 // (docs/domains/gateway.md「转发规则」).
 func TestSub2apiPinsTwoTurnsToOneAccount(t *testing.T) {
+	t.Parallel()
 	messages, responses, chat := protocol.Messages, protocol.Responses, protocol.Chat
 	cases := []conversation{
 		{
@@ -303,6 +305,7 @@ func turnRequest(t *testing.T, call *Call, format protocol.Format, turn clientTu
 // the session the gateway also gives the session headers of an OpenAI one — one derivation, two carriers — and the whole
 // identifier stays within the length Prepare sizes its output for.
 func TestTheMetadataCarriesTheDeviceAndTheSessionHeader(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) {
 			c.Body = []byte(`{"model":"client-model","stream":true,"metadata":{"user_id":"conv-1"},"messages":[{"role":"user","content":"hi"}]}`)

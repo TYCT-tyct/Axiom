@@ -18,6 +18,7 @@ import (
 // something else. An endpoint measured without tools takes no tool request, and an endpoint measured with a shorter
 // context takes no request that needs the catalog's longer one.
 func TestRoutePlansOnMeasuredFacts(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	r := routable(f.served, protocol.Messages)
 	withTools := call(f.served, func(req *protocol.Request) { req.Needs = protocol.Tools })
@@ -54,6 +55,7 @@ func TestRoutePlansOnMeasuredFacts(t *testing.T) {
 // TestRoutePlansOnMeasuredLimitsAndParameters: a measured output limit reaches the entry, and a measured parameter
 // lack excludes a request that requires it.
 func TestRoutePlansOnMeasuredLimitsAndParameters(t *testing.T) {
+	t.Parallel()
 	const temperature = protocol.ParameterSet(1) << protocol.ParamTemperature
 	f := newRouteFixture(t)
 	r := routable(f.served, protocol.Messages)
@@ -78,6 +80,7 @@ func TestRoutePlansOnMeasuredLimitsAndParameters(t *testing.T) {
 // capability the catalog did not declare is added, a lack is flipped back to working, and measured ceilings higher than
 // the catalog's are used.
 func TestRoutePlansOnMeasuredFactsReplacingTheCatalog(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	r := routable(f.served, protocol.Messages)
 	withTools := call(f.served, func(req *protocol.Request) { req.Needs = protocol.Tools })
@@ -118,6 +121,7 @@ func TestRoutePlansOnMeasuredFactsReplacingTheCatalog(t *testing.T) {
 // TestRoutePlansOnMeasuredFactsReplacingParameters: a parameter measured missing and then working is added back,
 // without the capability and limit changes of the other replacement test.
 func TestRoutePlansOnMeasuredFactsReplacingParameters(t *testing.T) {
+	t.Parallel()
 	const temperature = protocol.ParameterSet(1) << protocol.ParamTemperature
 	f := newRouteFixture(t)
 	r := routable(f.served, protocol.Messages)
@@ -143,6 +147,7 @@ func TestRoutePlansOnMeasuredFactsReplacingParameters(t *testing.T) {
 // in Chat and have them in Responses, and can have a shorter context in Responses than in Chat; each request is judged
 // by the format it is actually called in, not the endpoint's first format or its catalog baseline.
 func TestRoutePlansMeasuredPerFormat(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	r := routable(f.served, protocol.Chat, protocol.Responses)
 	f.build([]suppliers.Routable{r})
@@ -179,6 +184,7 @@ func TestRoutePlansMeasuredPerFormat(t *testing.T) {
 // is part of the inventory provider.require_parameters checks. Measuring it unsupported must exclude the endpoint even
 // though the tools capability itself is still present.
 func TestRoutePlansMeasuredParametersFromRequest(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	r := routable(f.served, protocol.Chat)
 	f.build([]suppliers.Routable{r})
@@ -206,6 +212,7 @@ func TestRoutePlansMeasuredParametersFromRequest(t *testing.T) {
 // routing. Before measurement it claims the catalog's tools and 200000-token context; after measuring tools unsupported
 // and a 32000-token context, it claims neither.
 func TestPublicPageProjectsMeasuredEndpointFacts(t *testing.T) {
+	t.Parallel()
 	f, r := measuredPublicFixture(t)
 	publicEndpointFor(t, f, r).check(t, true, 200_000)
 	if !f.health.Measure(r, protocol.Chat, quality.Facts{
@@ -222,6 +229,7 @@ func TestPublicPageProjectsMeasuredEndpointFacts(t *testing.T) {
 // and limits, not the model-level baseline. A measured parameter and capability are removed and the measured context
 // replaces the catalog's.
 func TestEndpointDiscoveryProjectsMeasuredFacts(t *testing.T) {
+	t.Parallel()
 	f, r := measuredPublicFixture(t)
 	discoveryEndpointFor(t, f, r).check(t, true, true, 200_000)
 	if !f.health.Measure(r, protocol.Chat, quality.Facts{

@@ -15,6 +15,7 @@ import (
 )
 
 func TestModelDiscoveryUsesAudiencePrices(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	base := f.prices[f.served]
 	dear := base

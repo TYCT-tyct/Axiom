@@ -20,6 +20,7 @@ import (
 // 0.84, one it counts as a failure drops it to 0.64, and one it does not count leaves it at 0.8; endpoint 2, where the
 // call goes next, ends normally.
 func TestEveryAttemptIsObservedOnce(t *testing.T) {
+	t.Parallel()
 	const succeeded, failed, uncounted = 0.84, 0.64, 0.8
 	fivexx := failing(routing.ScopeEndpoint, false, suppliers.Failure{Cause: suppliers.UpstreamError{Status: 502}})
 	cases := []struct {
@@ -106,6 +107,7 @@ func (h *harness) runLeaving(leave time.Duration) {
 // TestTheTimeToTheFirstTokenIsMeasured: the time from sending to the first content is what quality averages, once five
 // attempts have measured it.
 func TestTheTimeToTheFirstTokenIsMeasured(t *testing.T) {
+	t.Parallel()
 	health := quality.New(nil)
 	var now time.Time // the bubble's: every bubble's clock starts at the same instant
 	for range 5 {
@@ -125,6 +127,7 @@ func TestTheTimeToTheFirstTokenIsMeasured(t *testing.T) {
 // which the attempt waits for before it closes, does not slow the measured speed: 100 tokens a second after the first
 // content, though the attempt closes half a second after the upstream ended.
 func TestThroughputLeavesOutOurOwnWaits(t *testing.T) {
+	t.Parallel()
 	health := quality.New(nil)
 	var now time.Time
 	for range 5 {

@@ -13,6 +13,7 @@ import (
 // must still go through; the hot account's admissions wait for the gate without holding a connection, and give up
 // with 429 after the gate wait.
 func TestColdKeyFloodAndHotAccountSettlement(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
 		cfg.PoolSize, cfg.PoolReserve = 12, 4 // admission may use 8
@@ -70,6 +71,7 @@ func TestColdKeyFloodAndHotAccountSettlement(t *testing.T) {
 
 // A funds transaction waits for its account's gate before it takes a connection.
 func TestFundsWaitsForTheGateWithoutAConnection(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
 		bp, err := New(cfg, nil)
@@ -101,6 +103,7 @@ func TestFundsWaitsForTheGateWithoutAConnection(t *testing.T) {
 
 // An admission that runs out of time waiting for a connection gives its account's gate back at once.
 func TestFundsReleasesTheGateWhenTheConnectionWaitEnds(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
 		bp, err := New(cfg, nil)
@@ -123,6 +126,7 @@ func TestFundsReleasesTheGateWhenTheConnectionWaitEnds(t *testing.T) {
 // the connection and the transaction and starts when the gate is held (issue #295: a burst on one account queues here,
 // and a wait counted in the budget could not be longer than the budget).
 func TestAdmissionBudgetStartsAtTheGate(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
 		bp, err := New(cfg, nil)

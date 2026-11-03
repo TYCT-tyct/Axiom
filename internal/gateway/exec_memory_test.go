@@ -48,6 +48,7 @@ func chatForResponses(t *testing.T, c *Call) {
 // it was meant to prevent. The proof is the request Prepare would have refused: with the budget it gets that answer, a
 // 400 about the request; without, it is never asked.
 func TestMemoryIsAskedForBeforePrepareAllocates(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		spare  int64 // the budget beyond the cost
@@ -72,6 +73,7 @@ func TestMemoryIsAskedForBeforePrepareAllocates(t *testing.T) {
 // TestMemoryHoldsARequestByItsCapacityWhileItIsSent: the node's budget is charged for the buffer the request is in, its
 // whole capacity, and no more once the request is sent; the length of what is sent is less.
 func TestMemoryHoldsARequestByItsCapacityWhileItIsSent(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		var during int64
@@ -98,6 +100,7 @@ func TestMemoryHoldsARequestByItsCapacityWhileItIsSent(t *testing.T) {
 // get three and are refused five, whatever the order: the room is drawn before the buffer is made, so the refused make
 // none, and the three are held by the capacity they will have.
 func TestMemoryHoldsConcurrentRequestsToTheBudget(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		probe := newHarness(t, ctx, options{})
 		entry := probe.call.Plan.Entries[0]
@@ -135,6 +138,7 @@ func TestMemoryHoldsConcurrentRequestsToTheBudget(t *testing.T) {
 // much more than the same call without echo; a node short of it refuses, 503, without asking an upstream; and either
 // way the budget is whole again after the call.
 func TestMemoryHoldsEchoPromptSizes(t *testing.T) {
+	t.Parallel()
 	prompts := `"prompt":[""` + strings.Repeat(`,""`, 999) + `]}`
 	echoed := []byte(`{"model":"m","echo":true ,"max_tokens":0,` + prompts) // as long as the body without echo
 	req, err := protocol.Inspect(protocol.Completions, echoed)

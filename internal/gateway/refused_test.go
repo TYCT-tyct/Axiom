@@ -67,6 +67,7 @@ func wantRefused(t testing.TB, got map[string]int64, want map[string]int64) {
 // (docs/domains/gateway.md「错误」). The limits that need the database (the key's rate, the count's rate, the
 // credentials) are asserted in the tests that exercise them.
 func TestEachRateLimitIsCountedByItsReason(t *testing.T) {
+	t.Parallel()
 	cfg := DefaultConfig()
 	cfg.QueueMax, cfg.QueuePerKey = 2, 1
 	for reason, produce := range map[string]func(t *testing.T, ctx context.Context, bp *Backpressure) error{

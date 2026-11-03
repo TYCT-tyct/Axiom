@@ -14,6 +14,7 @@ import (
 // just its context length; the routing snapshot admits it with an input-only sale price, and no output limit, stream or
 // ability bit is made up for it.
 func TestRouteDirectOnlyModelNeedsNoGenerationSpec(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	id := f.seedPrice("acme/direct", `{"items":["input"],"tiers":["standard"],"context_length":8192}`,
 		`{"v":1,"currency":"USD","rates":{"input":"0.0000045"}}`)
@@ -35,6 +36,7 @@ func TestRouteDirectOnlyModelNeedsNoGenerationSpec(t *testing.T) {
 // TestDirectRequireParameters: provider.require_parameters reads a direct request's own members as its structure, not
 // as parameters no endpoint declares, so a rerank or embeddings call that asks for it is routed rather than refused.
 func TestDirectRequireParameters(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		format protocol.Format
 		body   string

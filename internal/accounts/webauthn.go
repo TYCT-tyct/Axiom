@@ -46,7 +46,7 @@ func (s *Service) passkeySite(host string) (Site, *webauthn.WebAuthn, error) {
 	return site, wa, nil
 }
 
-// passkeyUser reads a user and its credentials in an account scope.
+// passkeyUser reads a user and its credentials in an account or site scope.
 func (s *Service) passkeyUser(ctx context.Context, tx pg.Tx, user uuid.UUID) (passkeyUser, error) {
 	rows, err := s.queries.UserForWebAuthn(ctx, tx, user)
 	if err != nil {
@@ -121,50 +121,66 @@ func (s *Service) usePasskey(ctx context.Context, account, user uuid.UUID, crede
 
 func (s *Service) insertWebAuthnFlow(ctx context.Context, site Site, kind string, p Principal, session *webauthn.SessionData, sessionName string) (string, error) {
 	id := uuid.NewV7()
-	allowed := session.AllowedCredentialIDs
-	if allowed == nil {
-		allowed = [][]byte{}
-	}
 	if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
-		return s.queries.InsertWebAuthnFlow(ctx, tx, InsertWebAuthnFlowParams{
-			ID: id, SiteID: uuid.UUID(site.ID), Kind: kind, AccountID: optionalUUID(p.account), UserID: optionalUUID(p.user),
-			SessionID: optionalUUID(p.session), Challenge: session.Challenge,
-			RelyingPartyID: site.LoginDomain, Origin: site.LoginOrigin, Name: sessionName, AllowedCredentialIds: allowed,
-		})
+		return s.insertWebAuthnFlowTx(ctx, tx, id, site, kind, p, session, sessionName)
 	}); err != nil {
 		return "", fmt.Errorf("begin the passkey ceremony: %w", err)
 	}
 	return id.String(), nil
 }
 
+// insertWebAuthnFlowTx writes a begin's row in a transaction the caller already holds, so a budget check and the flow
+// it allows commit or roll back together.
+func (s *Service) insertWebAuthnFlowTx(ctx context.Context, tx pg.Tx, id uuid.UUID, site Site, kind string, p Principal, session *webauthn.SessionData, sessionName string) error {
+	allowed := session.AllowedCredentialIDs
+	if allowed == nil {
+		allowed = [][]byte{}
+	}
+	return s.queries.InsertWebAuthnFlow(ctx, tx, InsertWebAuthnFlowParams{
+		ID: id, SiteID: uuid.UUID(site.ID), Kind: kind, AccountID: optionalUUID(p.account), UserID: optionalUUID(p.user),
+		SessionID: optionalUUID(p.session), Challenge: session.Challenge,
+		RelyingPartyID: site.LoginDomain, Origin: site.LoginOrigin, Name: sessionName, AllowedCredentialIds: allowed,
+	})
+}
+
 // consumeWebAuthnFlow reads a begin's row in the site's transaction, checks it belongs to this ceremony and this
 // session, then spends it: one begin is one finish attempt.
 func (s *Service) consumeWebAuthnFlow(ctx context.Context, site Site, flowID, kind string, p Principal) (FindWebAuthnFlowRow, error) {
-	id, err := uuid.Parse(flowID)
-	if err != nil {
-		return FindWebAuthnFlowRow{}, ErrPasskeyFailed
-	}
-	var rows []FindWebAuthnFlowRow
+	var row FindWebAuthnFlowRow
 	if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
 		var err error
-		if rows, err = s.queries.FindWebAuthnFlow(ctx, tx, FindWebAuthnFlowParams{ID: id, SiteID: uuid.UUID(site.ID)}); err != nil {
+		if row, err = s.findWebAuthnFlow(ctx, tx, site, flowID, kind, p); err != nil {
 			return err
 		}
-		if len(rows) == 0 {
-			return ErrPasskeyFailed
-		}
-		// Check everything before spending the flow: a request with the wrong kind or session must not burn a
-		// ceremony that belongs to someone else.
-		if err := webauthnFlowOwnedBy(rows[0], kind, p); err != nil {
-			return err
-		}
-		affected, err := s.queries.ConsumeWebAuthnFlow(ctx, tx, id)
+		affected, err := s.queries.ConsumeWebAuthnFlow(ctx, tx, row.ID)
 		if err == nil && affected != 1 {
 			return ErrPasskeyFailed
 		}
 		return err
 	}); err != nil {
 		return FindWebAuthnFlowRow{}, fmt.Errorf("consume the passkey ceremony: %w", err)
+	}
+	return row, nil
+}
+
+// findWebAuthnFlow reads a begin's row and checks it belongs to this ceremony and this session. It does not spend it,
+// so a caller can consume it in the same transaction as the work that must roll back with it.
+func (s *Service) findWebAuthnFlow(ctx context.Context, tx pg.Tx, site Site, flowID, kind string, p Principal) (FindWebAuthnFlowRow, error) {
+	id, err := uuid.Parse(flowID)
+	if err != nil {
+		return FindWebAuthnFlowRow{}, ErrPasskeyFailed
+	}
+	rows, err := s.queries.FindWebAuthnFlow(ctx, tx, FindWebAuthnFlowParams{ID: id, SiteID: uuid.UUID(site.ID)})
+	if err != nil {
+		return FindWebAuthnFlowRow{}, err
+	}
+	if len(rows) == 0 {
+		return FindWebAuthnFlowRow{}, ErrPasskeyFailed
+	}
+	// Check everything before spending the flow: a request with the wrong kind or session must not burn a
+	// ceremony that belongs to someone else.
+	if err := webauthnFlowOwnedBy(rows[0], kind, p); err != nil {
+		return FindWebAuthnFlowRow{}, err
 	}
 	return rows[0], nil
 }

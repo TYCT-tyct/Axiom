@@ -75,6 +75,7 @@ func panicCases() []panicCase {
 // included (README.md「Relay 的所有权」). Each call panics only once it holds part of the node's budget, so the check at
 // the end is not about a call that never took any; it is exact, so a second release shows too.
 func TestAPanicGivesBackTheNodesBudgetWhole(t *testing.T) {
+	t.Parallel()
 	for _, c := range panicCases() {
 		t.Run(c.name, func(t *testing.T) {
 			run(t, func(t *testing.T, ctx context.Context) {
@@ -98,6 +99,7 @@ func TestAPanicGivesBackTheNodesBudgetWhole(t *testing.T) {
 
 // TestAPanicInTheSettlementOfACompactReplyGivesBackItsMemory is the same for the reply the compact endpoint answers whole.
 func TestAPanicInTheSettlementOfACompactReplyGivesBackItsMemory(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		var h *harness
 		h = newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }, settle: func(int) error {
@@ -114,6 +116,7 @@ func TestAPanicInTheSettlementOfACompactReplyGivesBackItsMemory(t *testing.T) {
 // TestAPanicInTheReadOfACompactReplyGivesBackItsMemory: the reply is charged as it is read, so a panic in the read has
 // already drawn on the budget.
 func TestAPanicInTheReadOfACompactReplyGivesBackItsMemory(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) {
@@ -132,6 +135,7 @@ func TestAPanicInTheReadOfACompactReplyGivesBackItsMemory(t *testing.T) {
 // would stay in memory, uncounted, while the budget they were charged against is spent again, as it is while the next
 // attempt waits for its response headers. A relay of the next attempt is not touched by the letting go of an old one.
 func TestADiscardedRelayIsNotHeldBySession(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		do        func(s *session, old, next *protocol.Relay)

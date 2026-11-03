@@ -57,6 +57,9 @@ func (s *Service) AuthenticateKey(ctx context.Context, site SiteID, raw string) 
 		defer cancel()
 		return s.lookUp(ctx, at, raw)
 	})
+	if s.lookupJoined != nil {
+		s.lookupJoined()
+	}
 	var found singleflight.Result
 	select {
 	case <-ctx.Done():

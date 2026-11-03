@@ -17,6 +17,7 @@ import (
 )
 
 func TestAttemptCountsOncePerFamily(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","input":"` + strings.Repeat("今天天气很好。", 1000) + `"}`)
 	s := session{
 		c:      &Call{Body: body, Request: protocol.Request{TextBytes: int64(len(body))}},
@@ -51,6 +52,7 @@ func TestAttemptCountsOncePerFamily(t *testing.T) {
 }
 
 func TestAttemptSkipsCountForReportedInput(t *testing.T) {
+	t.Parallel()
 	for _, item := range []catalog.Item{catalog.ItemInput, catalog.ItemCacheRead, catalog.ItemCacheWrite} {
 		s := session{c: &Call{Body: []byte(`invalid`), Request: protocol.Request{TextBytes: 100}}}
 		a := attempt{s: &s, usage: protocol.Usage{Segments: []protocol.Segment{{Reported: 1 << item}}}}
@@ -62,6 +64,7 @@ func TestAttemptSkipsCountForReportedInput(t *testing.T) {
 }
 
 func TestInputTextEstimateDecodedAndOpaque(t *testing.T) {
+	t.Parallel()
 	plain := `{"input":"你好"}`
 	for _, body := range []string{
 		plain,
@@ -79,7 +82,10 @@ func TestInputTextEstimateDecodedAndOpaque(t *testing.T) {
 }
 
 func TestInputTextEstimateByteBudget(t *testing.T) {
-	prefix := strings.Repeat("a", maxCountBytes)
+	t.Parallel()
+	// Words, not one unbroken run: the budget is the same, and a run of one letter costs BPE about seven times as much
+	// (BenchmarkInputTextEstimate), which the race detector multiplies past twenty seconds.
+	prefix := strings.Repeat("English words with spaces. ", maxCountBytes/27+1)[:maxCountBytes]
 	c := billing.NewTextCount(billing.TokenizerO200k, int64(len(prefix)))
 	c.Add([]byte(prefix))
 	want, err := c.Total()
@@ -96,6 +102,7 @@ func TestInputTextEstimateByteBudget(t *testing.T) {
 }
 
 func TestAttemptReleasesRouteBeforePricing(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{})
 		entry := h.call.Plan.Entries[0]
@@ -182,6 +189,7 @@ func BenchmarkInputTextEstimate(b *testing.B) {
 // a suffix read again for each later prompt adds its bytes at 4 a token: three prompts with a 4000-byte suffix estimate
 // 2000 tokens more than one, plus the two "x" prompts.
 func TestAttemptCountsInputTheStringsDoNotShow(t *testing.T) {
+	t.Parallel()
 	ids := strings.TrimSuffix(strings.Repeat("7,", 1000), ",")
 	suffix := strings.Repeat("a", 4000)
 	estimate := func(f protocol.Format, body string) int64 {

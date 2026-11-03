@@ -47,6 +47,7 @@ func pricedEngine(name, search, result string) *websearch.Backend {
 
 //nolint:gocognit // the table is the test
 func TestChooseSearch(t *testing.T) {
+	t.Parallel()
 	paid := pricedEngine("paid", "0.005", "0.0125")
 	def := pricedEngine("default", "0.01", "0")
 	all := fakeEngines{byName: map[string]*websearch.Backend{"paid": paid, "default": def}, def: def}
@@ -94,6 +95,7 @@ func TestChooseSearch(t *testing.T) {
 }
 
 func TestQuotablesSellsTheEnginePrice(t *testing.T) {
+	t.Parallel()
 	schedule, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001","web_search":"0.01"}}`))
 	if err != nil {
 		t.Fatal(err)

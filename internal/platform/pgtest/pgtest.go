@@ -2,8 +2,8 @@
 // application, a migration administrator that is not a superuser, and every migration applied by it. One cluster
 // serves all test binaries of a run when `just test` has started it (cmd/withcluster, ClusterEnv); a binary run on its
 // own starts a container of its own. Each test gets its own copy of a migrated template, so tests run in parallel and
-// never see each other's rows. Copies are not dropped one by one: DROP DATABASE forces a checkpoint, which stalls the
-// other packages sharing the cluster; the cluster, with all its copies, is removed when the run ends.
+// never see each other's rows. A copy is dropped when its test ends, so a run's cluster holds only the copies of the
+// tests in flight instead of one for every test that has run; the cluster, with its templates, is removed at the end.
 package pgtest
 
 import (
@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/moby/moby/api/types/container"
@@ -62,29 +63,70 @@ var (
 	templates   = map[string]bool{} // module templates already built, by name
 )
 
-// New returns a database of its own for one test. Given modules, it also holds their migrations: the database is a
-// copy of a template that has them, built the first time a set of modules is asked for.
+// New returns a database of its own for one test, dropped when the test's cleanups have run. Given modules, it also
+// holds their migrations: the database is a copy of a template that has them, built the first time a set of modules is
+// asked for.
 func New(t testing.TB, modules ...pg.Module) Database {
+	t.Helper()
+	ready(t)
+	template, err := templateFor(t.Context(), modules)
+	if err != nil {
+		t.Fatalf("test database template: %v", err)
+	}
+	return create(t, template)
+}
+
+// Clone returns a copy of source with its rows, dropped when the test's cleanups have run. It is for a test that
+// starts from a fixture seeded once for many tests; New is the cheaper choice when the migrations alone are the
+// starting point.
+func Clone(t testing.TB, source Database) Database {
+	t.Helper()
+	ready(t)
+	return create(t, databaseName(t, source.Superuser))
+}
+
+// ready points this binary at the cluster of the run, starting one of its own if the run has none.
+func ready(t testing.TB) {
 	t.Helper()
 	once.Do(func() { startErr = connect(context.Background()) })
 	if startErr != nil {
 		t.Fatalf("test database cluster: %v", startErr)
 	}
-	template, err := templateFor(t.Context(), modules)
-	if err != nil {
-		t.Fatalf("test database template: %v", err)
-	}
+}
+
+// create makes a database from template for the test, and drops it when the test's cleanups have run.
+func create(t testing.TB, template string) Database {
+	t.Helper()
 	name := fmt.Sprintf("test_%s_%d", runID, databases.Add(1))
 	if err := Run(t.Context(), at("postgres", "postgres", "postgres"), "CREATE DATABASE "+name+" TEMPLATE "+template,
 		"GRANT CREATE ON DATABASE "+name+" TO axiom_migrator"); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		// t.Context is canceled before the cleanups run, so the drop needs a deadline of its own.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+		defer cancel()
+		// FORCE ends connections the test left open; without it the drop would wait for them and keep the copy's files.
+		if err := Run(ctx, at("postgres", "postgres", "postgres"), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)"); err != nil {
+			t.Errorf("drop test database %s: %v", name, err)
+		}
+	})
 	return Database{
 		App:       at("axiom_app", "app", name),
 		Retention: at("axiom_retention", "retention", name),
 		Migrator:  at("axiom_migrator", "axiom_migrator", name),
 		Superuser: at("postgres", "postgres", name),
 	}
+}
+
+// databaseName is the database databaseURL names.
+func databaseName(t testing.TB, databaseURL string) string {
+	t.Helper()
+	u, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimPrefix(u.Path, "/")
 }
 
 // templateFor is the template a database with modules is copied from. Migrate grants roles cluster-wide and so must
@@ -213,7 +255,9 @@ func connect(ctx context.Context) error {
 // It returns the superuser's URL, to be passed in ClusterEnv, and the function that removes the container; a process
 // that dies without calling it leaves the container to Ryuk or CI label cleanup. Durability is off for speed; tests
 // of durability, migrations under load and performance run elsewhere with it on. max_connections is raised because
-// every test binary of a run shares the cluster, each with the pools of its parallel tests.
+// every test binary of a run shares the cluster, each with the pools of its parallel tests. WAL is capped because
+// every test copies a template and each copy writes WAL: the default gigabyte per cluster serves recovery, and this
+// cluster is removed when the run ends.
 func StartCluster(ctx context.Context) (string, func(context.Context) error, error) {
 	if err := keepReaperAlive(); err != nil {
 		return "", nil, err
@@ -228,7 +272,7 @@ func StartCluster(ctx context.Context) (string, func(context.Context) error, err
 		testcontainers.WithHostConfigModifier(func(host *container.HostConfig) { host.ShmSize = clusterShmSize }),
 		containertest.WithHostPolicy(),
 		testcontainers.WithCmdArgs("-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off",
-			"-c", "max_connections=1000"))
+			"-c", "max_connections=1000", "-c", "min_wal_size=32MB", "-c", "max_wal_size=128MB"))
 	if err != nil {
 		return "", nil, err
 	}
