@@ -2,18 +2,20 @@
 
 供应商模块：供应商及其账号凭证、分组、模型、端点的表，适配器的契约和注册，以及调用路径上的接口（挑凭证、发请求、记尝试）。适配器、同步、对账的要求见[供应商](../../docs/domains/suppliers.md)和[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)，一次调用的编排见 [gateway](../gateway/README.md)。
 
-> [Issue #25](https://github.com/TYCT-tyct/Axiom/issues/25) 分多个 PR 实现。已实现：表、适配器契约、注册表、启动检查、new-api 与 sub2api 适配器、声明式适配器（`declared/`，`AXIOM_SUPPLIER_ADAPTERS`）、同步引擎及其状态、租约和限速桶的持久化、同步的投影（分组、模型、端点、成本计划）、调用面（挑凭证、发请求、记尝试）和对账的写入，写在「代码结构」到「对账」；同步的调度（River，在 `serve` 里运行）已实现，写在「调度」；用真实生成测试端点（`TestEndpoint`、`RecordTest`，[#313](https://github.com/TYCT-tyct/Axiom/issues/313) 的 E3-5）已实现，写在「用真实生成测试端点」；管理接口见「管理接口」，事件投递见「持久化」和「调度」。请求进行中的对账日志已删（「没有对账日志」）。代码与本文不一致时，在同一个 PR 里改本文。
+> [Issue #25](https://github.com/TYCT-tyct/Axiom/issues/25) 分多个 PR 实现。已实现：表、适配器契约、注册表、启动检查、new-api、sub2api 与 CPA 适配器、CPA 的常驻用量采集器、声明式适配器（`declared/`，`AXIOM_SUPPLIER_ADAPTERS`）、同步引擎及其状态、租约和限速桶的持久化、同步的投影（分组、模型、端点、成本计划）、调用面（挑凭证、发请求、记尝试）和对账的写入，写在「代码结构」到「对账」；同步的调度（River，在 `serve` 里运行）已实现，写在「调度」；用真实生成测试端点（`TestEndpoint`、`RecordTest`，[#313](https://github.com/TYCT-tyct/Axiom/issues/313) 的 E3-5）已实现，写在「用真实生成测试端点」；管理接口见「管理接口」，事件投递见「持久化」和「调度」。请求进行中的对账日志已删（「没有对账日志」）。代码与本文不一致时，在同一个 PR 里改本文。
 
 ## 代码结构
 
 ```
 internal/suppliers/                 公开接口：Module()、CheckAdapters()、Service（调用面）、RecordAttempts 等、Reconcile、Admin 与 NewAdmin（管理接口）、RegisterSync（同步的调度）
 internal/suppliers/internal/
-  adapter/       契约：Adapter、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec
+  adapter/       契约：Adapter、Manager、UsageQueue、CallQuirks、Failure、CallPolicy、Client、BucketSpec
   declared/      声明式适配器：从 AXIOM_SUPPLIER_ADAPTERS 目录读 JSON，启动时校验并编译成 Adapter；v1 声明、模板、字段路径、扣费扫描和端到端测试
   registry/      注册表：唯一同时引用所有适配器的文件，一个内置适配器一行，另加声明式目录；按 kind 查找
   client/        适配器唯一的出站入口：经 platform/egress、按声明的限速桶放行（进程内或数据库里的桶）
   newapi/        new-api 适配器（含 testdata/ 录制样本和测试）
+  cpa/           CPA 适配器：账号、模型、key、号池窗口和一次性用量队列
+  collector/     常驻采集器：把 CPA 的用量队列 staging 后写入 charge_records
   adaptertest/   每个适配器都要过的契约测试（只被测试引用）
   syncer/        同步引擎：只做决定，状态由 Store 整份读出、整份提交
   persist/       同步状态的持久化：租约与栅栏、Store、LoginStore、把状态投影到分组/模型/端点/成本计划
@@ -23,11 +25,11 @@ internal/suppliers/internal/
   removable/     `just adapters-removable` 的程序
 ```
 
-`newapi/` 和 `sub2api/`（适配器，`testdata/` 里是录制并脱敏的样本）已有，`syncer/`（同步引擎）、`persist/`（引擎状态的持久化）、`schedule/`（任务调度）、`registry/`（适配器注册表）也有；与系统无关的路径和鉴权头（`wire`）是 `attempt.go` 里的一张表，不是包：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/completions`、`/v1/embeddings`、`/v1/rerank`，前三个以外都不加版本头；挑凭证在 `Acquire`。
+`newapi/`、`sub2api/` 和 `cpa/`（适配器；前两者的 `testdata/` 是录制并脱敏的样本，CPA 的按源码和上游测试的报文形状整理）已有，`syncer/`（同步引擎）、`persist/`（引擎状态的持久化）、`schedule/`（任务调度）、`registry/`（适配器注册表）也有；与系统无关的路径和鉴权头（`wire`）是 `attempt.go` 里的一张表，不是包：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/completions`、`/v1/embeddings`、`/v1/rerank`，前三个以外都不加版本头；挑凭证在 `Acquire`。
 
 ## 表
 
-schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）；`00011` 在 `pg.Migrate` 提供的平台范围里把高于 100,000 的旧值降到上界；拒绝新写入的上限 CHECK 待旧节点退出后再加（[检查清单](../../CONTRIBUTING.md#检查清单)）。`00012` 将范围读取改为策略级 InitPlan，权限边界不变，表达式与可重跑方式见 [pg](../platform/pg/README.md#决策与理由)。`00013` 是清单读取进度；`00014` 固定单位价值的币种和原生单位，回填历史行并用插入触发器兼容旧节点的写入（不提升权限，仍受供应商可见范围限制）。`00015` 增加凭证的上游模型清单和分组别名修订（原别名行是第 1 版，纠错从第 2 版追加，收回应用角色改写原别名的 UPDATE 授权；`00022` 只补授 `formats` 一列）；`00020` 把 `embeddings`、`rerank` 加进 `supplier_models.formats` 与 `endpoints.formats` 的 CHECK，new-api 的 `embeddings`、`rerank`、`jina-rerank` 端点类型映射到对应的调用格式；`00021` 再把 `completions` 加进同样的两处 CHECK；`00022` 给 `supplier_aliases` 加可空的 `formats` 声明（适配器推不出的调用格式，未知格式在管理接口写之前拒绝）；`00023` 给 `endpoints` 加可空的 `quantization`，管理员经管理接口记录 OpenRouter 的量化级别，同步从不写它；`00024` 把 `attempt_costs.attempt_seq` 的 CHECK 从 1–3 放宽到 1–33（`platform.MaxAttemptSeq`：模型侧循环的每次采样是一次尝试），只放宽、`NOT VALID`、主键不变，旧节点的写入仍在范围内（`TestALoopsSamplingsAreAttemptsMatchedOnTheirOwn`）。`00026` 给分组加 `key_eligible`（这个分组要 Axiom 自己建 key）、`key_error`/`key_retry_at`（建 key 的固定失败原因和下次可试的时刻，两者同空同有），只补授这几列的 UPDATE。迁移只增不改。`00020` 的 Down 在表里还有这两种格式的行时会明确报错并列出要先删端点/供应商模型或改写格式，而不是让 CHECK 失败；滚动升级时旧节点读到一个不认识的格式只跳过那一个端点（日志 `suppliers.unsupported_format`），不把整个供应商摘掉。写新格式由 `AXIOM_DIRECT_FORMATS` 控制，默认 `off`：这个版本先在全部节点以 `off` 发布，兼容读取先落地；关闭时同步引擎（`syncer.Settings.DirectFormats`）就不让新格式进入持久化的同步状态，模型只保留 messages、responses、chat，`completions` 与 `embeddings`、`rerank` 一样被拿掉，被闸门拿掉全部格式的模型暂不列出。闸门放在状态而不只是投影表上，是因为旧节点接手任何同步任务时都会载入这份状态并重新投影，状态里一个它不认识的格式编号会让它整个提交回滚。确认没有旧节点后再在全部节点设 `on`，下一次同步才写入这些新格式。回滚前先按 Down 的提示清掉或改写新格式的行。
+schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`（设计草稿里的 `store/migrations/` 按[总体架构](../../docs/architecture.md)的 `internal/` 规则改为此路径），版本表 `platform.goose_suppliers`。`00001` 是配置表；`00002` 是调用面和对账的表；`00003` 是同步的表；`00004` 是单位价值；`00005` 是管理接口用的（`supplier_models.first_seen_at`）；`00006` 是移除供应商的擦除（凭证状态 `erased`、对 `supplier_logins` 的 DELETE 授权）；`00007`、`00008` 是换算依据；`00009` 是凭证的每分钟请求上限；`00010` 是检测成本行的标记（`attempt_costs.test`，带默认值，沿用现有 INSERT 授权）；`00011` 在 `pg.Migrate` 提供的平台范围里把高于 100,000 的旧值降到上界；拒绝新写入的上限 CHECK 待旧节点退出后再加（[检查清单](../../CONTRIBUTING.md#检查清单)）。`00012` 将范围读取改为策略级 InitPlan，权限边界不变，表达式与可重跑方式见 [pg](../platform/pg/README.md#决策与理由)。`00013` 是清单读取进度；`00014` 固定单位价值的币种和原生单位，回填历史行并用插入触发器兼容旧节点的写入（不提升权限，仍受供应商可见范围限制）。`00015` 增加凭证的上游模型清单和分组别名修订（原别名行是第 1 版，纠错从第 2 版追加，收回应用角色改写原别名的 UPDATE 授权；`00022` 只补授 `formats` 一列）；`00020` 把 `embeddings`、`rerank` 加进 `supplier_models.formats` 与 `endpoints.formats` 的 CHECK，new-api 的 `embeddings`、`rerank`、`jina-rerank` 端点类型映射到对应的调用格式；`00021` 再把 `completions` 加进同样的两处 CHECK；`00022` 给 `supplier_aliases` 加可空的 `formats` 声明（适配器推不出的调用格式，未知格式在管理接口写之前拒绝）；`00023` 给 `endpoints` 加可空的 `quantization`，管理员经管理接口记录 OpenRouter 的量化级别，同步从不写它；`00024` 把 `attempt_costs.attempt_seq` 的 CHECK 从 1–3 放宽到 1–33（`platform.MaxAttemptSeq`：模型侧循环的每次采样是一次尝试），只放宽、`NOT VALID`、主键不变，旧节点的写入仍在范围内（`TestALoopsSamplingsAreAttemptsMatchedOnTheirOwn`）。`00026` 给分组加 `key_eligible`（这个分组要 Axiom 自己建 key）、`key_error`/`key_retry_at`（建 key 的固定失败原因和下次可试的时刻，两者同空同有），只补授这几列的 UPDATE；`00027` 是 CPA 用量队列的 staging 表 `usage_records`（脱敏后的记录、`request_id` 去重、`new`/`rejected`）。迁移只增不改。`00020` 的 Down 在表里还有这两种格式的行时会明确报错并列出要先删端点/供应商模型或改写格式，而不是让 CHECK 失败；滚动升级时旧节点读到一个不认识的格式只跳过那一个端点（日志 `suppliers.unsupported_format`），不把整个供应商摘掉。写新格式由 `AXIOM_DIRECT_FORMATS` 控制，默认 `off`：这个版本先在全部节点以 `off` 发布，兼容读取先落地；关闭时同步引擎（`syncer.Settings.DirectFormats`）就不让新格式进入持久化的同步状态，模型只保留 messages、responses、chat，`completions` 与 `embeddings`、`rerank` 一样被拿掉，被闸门拿掉全部格式的模型暂不列出。闸门放在状态而不只是投影表上，是因为旧节点接手任何同步任务时都会载入这份状态并重新投影，状态里一个它不认识的格式编号会让它整个提交回滚。确认没有旧节点后再在全部节点设 `on`，下一次同步才写入这些新格式。回滚前先按 Down 的提示清掉或改写新格式的行。
 
 | 表 | 内容 | 键与约束 |
 |---|---|---|
@@ -51,6 +53,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 | `sync_plans` | 引擎算出的成本计划的每个版本（端点是「分组/模型」文本），只插入 | PK `(supplier_id, version, seq)`；平台范围 |
 | `unit_values` | 供应商的单位余额价值：1 单位余额值多少结算币种，确认时的 `currency` 与 `native_unit`、管理员确认的值、操作人、理由 | 只插入，币种与原生单位均匹配的最新一行生效；`value` 在 (0, 1000] 且小数不超过 15 位；行级安全随所属供应商可见 |
 | `rate_buckets` | 供应商的限速桶：窗口起点、已用次数、封到何时 | PK `(scope, name)`；平台范围 |
+| `usage_records` | 一次性用量队列弹出的脱敏记录（`record` jsonb、`request_id`、`received_at`、`state`、`reason`），采集器解析入库后删除，`rejected` 保留 | `UNIQUE (supplier_id, request_id)`（`request_id` 非空时）；平台范围；应用角色可 SELECT/INSERT/UPDATE/DELETE |
 
 - **授权的偏差**：设计里这几张表只有对账角色能改，那个后台任务角色还没有（security.md 的角色表），所以应用角色现在能改 `attempt_costs` 的 `charge_record_id`、`state` 和 `charge_records` 的状态与归属列，别的列、DELETE 都没有；`attempt_journal` 的授权还在（连同它的 DELETE），但没有代码用它，删表时一起删；角色隔离随后台任务角色加入。
 - **行级安全**：`suppliers` 的策略用本行的站点、账户与 [pg 的 InitPlan 范围参数](../platform/pg/README.md#决策与理由)比较，平台的供应商只有平台范围看得见；其余各表不存归属列，只存 `supplier_id`，策略是"这个供应商对本事务可见"，所以插入也挡住"挂到看不见的供应商下"，也不会有与父对象不一致的标签。
@@ -70,7 +73,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 - **`Failure`** 是 `{Executed, Scope, Cause}`。`Cause` 是封闭的和类型（`gochecksumtype` 检查每个 switch 都处理了全部成员），成员只带数字和时间，**没有来自对方的文本**，所以回显了凭证的响应进不了日志和表。`Executed` 的零值是 `ExecutionUnknown`：没把握就按"可能执行了"处理，成本按估算记、由对账补正；`NotExecuted` 只给对方在执行前就拒绝的响应。`Transport` 只由通用调用层设置，适配器不得返回。作用范围比设计草稿多一个 `Endpoint`（限流、过载作用于一个分组和模型）。
 - **`Client`** 是适配器唯一的出站入口，`Request` 声明占用的全部桶，`BucketSpec` 声明对方的限速；任一桶没有名额就不发，返回包装了 `ErrBucketsFull` 的错误，调用方推迟而不是当失败。实现是 `internal/suppliers/internal/client`：`Limiter` 在进程内计数（适配器的测试用），`SharedLimiter` 在数据库里计数（`rate_buckets` 表，多个节点从一个出口地址访问同一个供应商时用），两者都实现 `Buckets`。
 - **注册表**（`registry`）：`adapters` 列表是唯一同时引用所有内置适配器的地方，一行一个，不用 `init()`。`Default()` 先取这份列表，再加上 `declared.LoadEnv()` 读到的声明；`registry.New` 在启动时拒绝不合法的 `kind`、重复的 `kind`（包括声明与内置同名）、不可能放行请求的限速桶。
-- **移除**：删适配器的目录和注册表里它的那一行。`just adapters-removable` 对注册表里的每个适配器，用 `go build -overlay` 在不改工作区的前提下删掉二者，再跑 `go build ./...` 和 `go vet ./...`；还有别的代码依赖它时失败，并给出编译器的原话。注册表里现在有 new-api，检查对它真实生效。
+- **移除**：删适配器的目录和注册表里它的那一行。`just adapters-removable` 对注册表里的每个适配器，用 `go build -overlay` 在不改工作区的前提下删掉二者，再跑 `go build ./...` 和 `go vet ./...`；还有别的代码依赖它时失败，并给出编译器的原话。注册表里现在有 new-api、sub2api 和 cpa，检查对它们真实生效。
 - **启动检查**：`CheckAdapters` 在 `serve` 启动时列出仍在使用（状态不是"已移除"）而本程序没有注册适配器的供应商，有就拒绝启动并逐个指出名字和 `kind`。它要看到全部供应商，所以由 `cmd/axiom` 传入平台范围。
 
 ## 声明式适配器
@@ -102,6 +105,20 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 - **扣费记录的扫描**：位置（`scanState`）是适配器自己的，模块当作不透明的字节，每一页连同它存下；空位置是第一次扫描，只记下"从现在起"（水位），本次返回 Done；之后每遍从（水位 − 5 分钟）读到（现在 − 30 秒），每天再读一遍最近 24 小时（补扫，不动水位）。`/api/v1/usage` 只认日期，所以一遍按 key 逐把读，列 key 共用 `keysPage` 的去重和缩减重读；扫描状态只存 ID、不存总数，为保持旧节点能严格解码，续读时先复读上一页核对 ID 边界，变动就从第 1 页重来；旧节点追加的重复 ID 在继续扫描时去重（当前 key 被去掉时从下一把的第 1 页开始）；扣费记录新的在前、按页翻；起止日取窗口两端的日期（跨午夜两天都读），每页 200 条（每条还带着 key、用户和分组，页太大会超响应上限），一把 key 在短页或最旧一条早于窗口起点时结束，全部 key 结束才算读完。记录的用量映射到不重叠的计费项（输入、输出、缓存读、5 分钟和 1 小时缓存写），**只有记录里写了的项算已报告**；非 token 计费（按次、图片）带 `UnknownUsage`；`billing_type` 不是 0 的不是钱包。记录里的 key 原文、用户、地址一概不读。
 - **报文中的数字**：只接受 JSON 数字，缺失或 `null` 才是未报告；带引号的数字和空串都报 `ErrUnrecognised`。清单位置把数字写回 JSON 数字，不放宽上游报文的解码。
 - **未验证**：key 的重置时间字段（`reset_*_at`）没有样本；分页 `total` 是否精确；订阅分组的记录形态。
+
+## CPA
+
+适配器在 `cpa/`，`kind` 是 `cpa`；常驻采集器在 `collector/`。设计、上游依据和与两种被否决做法的比较见[供应商的「CPA（CLIProxyAPI）」](../../docs/domains/suppliers.md#cpacliproxyapi)。这里只写代码怎么接。
+
+- **登录**：`Login` 只有一个管理 key，编码成 `{"v":1,"management_key":...}` 交给 `LoginStore` 封存；解码拒绝未知成员。`NewLogin` 只收 `access_token`，其他成员给了就报 `LoginError`；不在接入时发管理请求，避免一次错 key 计入 CPA 的失败次数。管理请求的 401/403 统一是 `ErrAuthRejected`；`Charges` 的空页不会被调用。
+- **读账号和模型**（`manager.go`）：`GET /v0/management/auth-files?page=N&page_size=500`，最多 40 页；`files` 必须存在，缺失是 `ErrUnrecognised`，不能读成空号池。`Account` 用可服务账号数作余额、`UnitHint=1`、`FundingWallet`。`Offer` 只读可服务账号的 `GET /auth-files/models?name=...`，一次最多 20 个账号，位置是 `offerState`（账号名、下一个、读到几个、模型并集）；一个可服务账号都没有时返回 `ModelsUnread`，不摘掉上次的模型。所有模型三种格式；成本计划留空（CPA 没有每模型价格，管理员确认基础价前端点因成本未知不进路由）。只有一个 `default` 组：CPA 的 key 是全局列表，拆组会让同一把 key 同时属于多个组。
+- **号池窗口**（`pool.go`）：只读 `auth-files` 的被动 `quota.signals`，不调用 `/quota/fetch`。Claude 的 5h/7d 是 0 到 1 的小数，Codex 的 primary/secondary 是 0 到 100 的百分数；重置已过按 0，取两个窗口里更紧的剩余，按可服务账号平均并向下取整。认得的信号读不懂时报 `ErrUnrecognised`，不按 100% 已用降权。`status=error` 计失败，`active`、未 disabled、未 unavailable、重试时间已过才算可服务；目录超过 40 页时 `Complete=false`，引擎保留上次读数。
+- **key**（`manager.go`）：`GET /api-keys` 返回 `{"api-keys":[...]}`；`KeyState.Ref` 是 SHA-256 前 128 位的十六进制（32 字符），`KeySecret` 按 ref 重新读列表匹配。CPA 没有建 key 接口，所以不实现 `KeyMaker`，绑定要人从现有 key 里选；`KeyState.Policy` 返回空对象（`Models` 为 nil，不限模型，无到期），避免 nil 被投影成全拒。
+- **调用面**（`quirks.go`）：三种格式；`X-CPA-TRACE-ID` 的最后 36 字符是 `request_id`，不是 UUID 就不给对账键；`Classify` 只读状态和固定错误码，HTML 按出站拦截，429 只带 `Retry-After` 的秒数。`Streams=true`、`Cancels=false`。
+- **采集器**（`collector/collector.go`）：River 周期任务 `suppliers.usage_drain`，每 5 秒、只在 leader 上入队，`MaxAttempts=1`，`ByArgs` 去重防止重跑堆叠。先按 `usage_records` 的 `new` 行和 `kind` 用适配器自己的 `ParseUsage` 离线重放，不读登录、不要求供应商在线；再按注册表里的 `UsageQueueSource` 找适配器，列出 `connecting`/`active`/`low_balance` 的供应商；每个供应商先 `pg.Hold("axiom.usage."+id, 30s)`，拿不到就跳过。`DrainUsage(ctx, 100)` 最多 20 批，每批先 `store.InsertUsageRecords`（staging 三次短重试），再 `ingest`：每次读 100 条 `new` 行，`ParseUsage` 失败的标 `rejected`（保留），成功的和 `reconcile.Ingest`、删除 staging 行在同一个事务里。鉴权被拒把 30 分钟退避写进共享的 `rate_buckets`（`usage-auth:<登录版本>`）；所有节点和重启后共用，登录版本变了换新桶、旧封锁失效。网络、5xx、`Blocked` 只结束这一轮。采集器不写供应商状态。
+- **脱敏与幂等**（`usage.go`）：`DrainUsage` 只把 `request_id`、`timestamp`、`model`、`alias`、`provider`、`auth_index`、`api_key_sha256`、`token_breakdown`、`failed` 写进 `storedUsage`；`api_key` 原文、请求头、失败体、地址都不留。`ParseUsage` 严格读这份形态（`token_breakdown` 用宽松解码，容忍 CPA 新增成员），校验 v2 的分项相加，映射到 `catalog` 的输入、缓存读、输出、推理四项；`cache_write_tokens` 的 5 分钟/1 小时期限合并不分，数量放进 `UnknownUsage` 且不计入 `reported`，防止按错期限校正；`quality=complete` 且无未分类时四项报告，否则把 quality 和未分类数也放进 `UnknownUsage`。金额固定 `0`、`FundingWallet`，不用 `FundingOther`（那会暂停供应商）；`0` 是队列没有逐笔钱包扣款的记录，不是成本计划。
+- **测试**：`cpa/testdata/` 是按 CPA 源码和上游测试的报文形状整理的根回答、auth-files、模型、api-keys 和 usage-queue（已脱敏，不是真实实例录制）；`cpa_test.go` 跑契约、账号/报价/号池/key、脱敏解析、被限速后续读、坏窗口；`collector/collector_test.go` 用 `pgtest` 真实建表，验证 staging 在重启后重放、charge 只留一条、坏记录保留为 `rejected`、移除供应商后仍离线重放，以及两个 worker/重启和登录版本变化共用鉴权退避。`adaptertest.ScanProblem` 对 `UsageQueue` 返回空：这种 manager 没有可重读的扣费列表。
+- **未做/限制**：队列没有 ack/peek，弹出到 staging 之间崩溃仍可能丢这一批，代码只能把窗口压到最小；CPA 的队列只在管理路由启用且没有订阅者时存在，部署要把保留时间设到 3600 秒并保证没有第二个读者；`api-keys` 不分页；不读 `cost_details`，不解析 devin 窗口，不建/删 CPA 的 key。
 
 ## 同步
 
