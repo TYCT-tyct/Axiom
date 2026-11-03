@@ -407,12 +407,14 @@ export function withoutBuffer(
 
 // bufferRefused is the old node's 400 for top_up_buffer_ppm under additionalProperties: false.
 export function bufferRefused(error: unknown): boolean {
+  return fieldRefused(error, "top_up_buffer_ppm");
+}
+
+function fieldRefused(error: unknown, field: string): boolean {
   return (
     error instanceof ApiError &&
     error.status === 400 &&
     error.code === "invalid_request" &&
-    error.fields.some(
-      ({ pointer, message }) => pointer === "/settings/top_up_buffer_ppm" || message.includes("top_up_buffer_ppm"),
-    )
+    error.fields.some(({ pointer, message }) => pointer === `/settings/${field}` || message.includes(field))
   );
 }

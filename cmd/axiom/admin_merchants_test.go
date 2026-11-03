@@ -306,7 +306,7 @@ func TestAdminPaymentSettingsTopUpBuffer(t *testing.T) {
 	}
 	f.expectAudit("billing.top_up_buffer.update", map[string]string{"detail::text": `{"after": 35000, "before": 20000}`})
 
-	// An update without the buffer leaves it as it is.
+	// An update without either field leaves both as they are.
 	rec = f.change(s, http.MethodPut, path, `{"settings":{"open":false},"reason":"close collection"}`, newKey())
 	expectAdmin(t, "set payment settings without buffer", rec, http.StatusOK, "")
 	decode(t, rec, &view)

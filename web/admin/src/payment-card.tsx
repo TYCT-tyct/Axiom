@@ -167,7 +167,7 @@ function PaymentDialog({
       done={() => (
         <>
           <p>{t("settings.payments.saved")}</p>
-          {skipped.current ? <p>{t("settings.payments.bufferSkipped")}</p> : null}
+          {skipped.current ? <p>{t("settings.payments.fieldsSkipped")}</p> : null}
         </>
       )}
       onClose={onClose}
