@@ -13,7 +13,7 @@ import (
 // prorates them to its window and states each gap as actual minus target. A later write replaces the whole set, and a
 // target left out is cleared rather than kept.
 //
-//nolint:cyclop // one admin journey: set, read back, prorate, replay, replace and clear.
+//nolint:cyclop,gocognit // one admin journey: set, read back, prorate, replay, replace and clear.
 func TestAdminOperationsTargets(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)

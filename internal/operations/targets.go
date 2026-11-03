@@ -163,19 +163,27 @@ func (t *Targets) Check() error {
 		}
 	}
 	for name, money := range map[string]*Money{"revenue": t.Revenue, "cost": t.Cost} {
-		if money == nil {
-			continue
+		if err := checkMoney(name, money); err != nil {
+			return err
 		}
-		amount, ok := new(big.Int).SetString(money.Amount, 10)
-		if !ok || amount.Sign() < 0 {
-			return fmt.Errorf("operations: a %s target must be a non-negative whole number of billionths", name)
-		}
-		if len(amount.String()) > MaxMoneyDigits {
-			return fmt.Errorf("operations: a %s target must fit %d digits", name, MaxMoneyDigits)
-		}
-		if _, err := platform.ParseCurrency(money.Currency.String()); err != nil {
-			return fmt.Errorf("operations: a %s target: %w", name, err)
-		}
+	}
+	return nil
+}
+
+// checkMoney applies the table's rules for one money target; a nil target is absent.
+func checkMoney(name string, money *Money) error {
+	if money == nil {
+		return nil
+	}
+	amount, ok := new(big.Int).SetString(money.Amount, 10)
+	if !ok || amount.Sign() < 0 {
+		return fmt.Errorf("operations: a %s target must be a non-negative whole number of billionths", name)
+	}
+	if len(amount.String()) > MaxMoneyDigits {
+		return fmt.Errorf("operations: a %s target must fit %d digits", name, MaxMoneyDigits)
+	}
+	if _, err := platform.ParseCurrency(money.Currency.String()); err != nil {
+		return fmt.Errorf("operations: a %s target: %w", name, err)
 	}
 	return nil
 }

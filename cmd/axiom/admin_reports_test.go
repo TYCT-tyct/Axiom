@@ -15,6 +15,8 @@ import (
 // TestAdminOperationsOverview: the dashboard reads calls, revenue, cost and cash from the site's window, keeps the
 // calls whose cost is unknown out of the cost total, and lets the page drill into the call list with the model and
 // result filters the log has.
+//
+//nolint:cyclop,gocognit // one dashboard journey: unknown cost, its target, then the same cost after it is filled in.
 func TestAdminOperationsOverview(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)

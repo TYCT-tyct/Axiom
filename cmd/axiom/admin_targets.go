@@ -144,23 +144,24 @@ func targetComparison(expected operations.Expected, calls, errors int64, revenue
 		}
 		comparison.Errors = &target
 	}
-	if expected.Revenue != nil && expected.Revenue.Currency == currency {
-		target := adminapi.OperationsMoneyTarget{Target: adminapi.Money{Amount: expected.Revenue.Amount, Currency: currency.String()}}
-		if gap, ok := moneyGap(revenue, expected.Revenue.Amount, currency); ok {
+	comparison.Revenue = moneyComparison(expected.Revenue, revenue, currency, true)
+	comparison.Cost = moneyComparison(expected.Cost, cost, currency, costComplete)
+	return comparison
+}
+
+// moneyComparison states one money target and, when the actual total is complete and in the same currency, its gap.
+// The target survives an incomplete actual: the page shows what the owner asked for and withholds the conclusion.
+func moneyComparison(expected *operations.Money, actual string, currency platform.Currency, complete bool) *adminapi.OperationsMoneyTarget {
+	if expected == nil || expected.Currency != currency {
+		return nil
+	}
+	target := adminapi.OperationsMoneyTarget{Target: adminapi.Money{Amount: expected.Amount, Currency: currency.String()}}
+	if complete {
+		if gap, ok := moneyGap(actual, expected.Amount, currency); ok {
 			target.Gap = gap
 		}
-		comparison.Revenue = &target
 	}
-	if expected.Cost != nil && expected.Cost.Currency == currency {
-		target := adminapi.OperationsMoneyTarget{Target: adminapi.Money{Amount: expected.Cost.Amount, Currency: currency.String()}}
-		if costComplete {
-			if gap, ok := moneyGap(cost, expected.Cost.Amount, currency); ok {
-				target.Gap = gap
-			}
-		}
-		comparison.Cost = &target
-	}
-	return comparison
+	return &target
 }
 
 // moneyGap is actual - target in the same currency, exact in big.Int because a report's sum can be wider than int64.
