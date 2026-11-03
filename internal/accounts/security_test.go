@@ -38,6 +38,15 @@ func TestAccountSuspensionAdmission(t *testing.T) {
 	if got := texts(t, db, platform, `SELECT count(*)::text FROM platform.audit_log WHERE action='account.status_change'`)[0]; got != "2" {
 		t.Fatal(got)
 	}
+	if got := texts(t, db, platform, `SELECT count(*)::text FROM platform.alert_signals
+		WHERE body->>'kind'='accounts.account_suspended' AND body->>'key'='`+accounts.AccountID(a1).TypeID()+`'
+		AND body->>'resolved'='false' AND body->>'severity'='critical'`)[0]; got != "1" {
+		t.Fatalf("suspension alerts = %s", got)
+	}
+	if got := texts(t, db, platform, `SELECT count(*)::text FROM platform.alert_signals
+		WHERE body->>'kind'='accounts.account_suspended' AND body->>'resolved'='true'`)[0]; got != "1" {
+		t.Fatalf("recovery alerts = %s", got)
+	}
 }
 
 func TestAccountTierChangeIsAuditedOnce(t *testing.T) {

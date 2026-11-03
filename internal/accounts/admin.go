@@ -22,16 +22,21 @@ type Tier struct {
 	Name string
 }
 
-// SiteSettings are a site's own values for the sessions and keys its users get. A duration of 0 and a nil limit are
-// not set: the default in code applies (DefaultSiteSettings).
+// SiteSettings are a site's own values for the sessions and keys its users get, and how public its model prices are.
+// A duration of 0 and a nil limit are not set: the default in code applies (DefaultSiteSettings).
 type SiteSettings struct {
 	ConsoleIdle, ConsoleMaxAge time.Duration
 	AdminIdle, AdminMaxAge     time.Duration
 	// NewKeyDailyLimit is the daily spend limit a new key gets, in billionths of a credit.
 	NewKeyDailyLimit *int64
+	// ModelPricesPublic is whether anonymous visitors see the site's model prices; nil is unset, which means public.
+	ModelPricesPublic *bool
 	// BillingPreference is the funding order an account gets until it chooses its own (docs/domains/billing.md
 	// 「资金来源」); empty is unset, which means subscription_first.
 	BillingPreference string
+	// KeepModelPricesPublic preserves the stored value when an older page omits the field. It is decided under the
+	// site lock, not by a read before it, so a concurrent change cannot be overwritten.
+	KeepModelPricesPublic bool
 	// KeepBillingPreference preserves the stored value when an older client omits the field. It is decided under the
 	// site lock, not by a read before it, so a concurrent change cannot be overwritten.
 	KeepBillingPreference bool
@@ -40,10 +45,11 @@ type SiteSettings struct {
 // DefaultSiteSettings are the values that apply where a site sets none.
 func DefaultSiteSettings() SiteSettings {
 	limit := int64(defaultNewKeyDailyLimit)
+	public := true
 	return SiteSettings{
 		ConsoleIdle: defaultLifetimes[Console].idle, ConsoleMaxAge: defaultLifetimes[Console].max,
 		AdminIdle: defaultLifetimes[Admin].idle, AdminMaxAge: defaultLifetimes[Admin].max,
-		NewKeyDailyLimit: &limit, BillingPreference: BillingSubscriptionFirst,
+		NewKeyDailyLimit: &limit, ModelPricesPublic: &public, BillingPreference: BillingSubscriptionFirst,
 	}
 }
 
@@ -96,7 +102,8 @@ func (v SiteSettings) detail() map[string]any {
 	return map[string]any{
 		"console_idle_timeout_seconds": seconds(v.ConsoleIdle), "console_max_age_seconds": seconds(v.ConsoleMaxAge),
 		"admin_idle_timeout_seconds": seconds(v.AdminIdle), "admin_max_age_seconds": seconds(v.AdminMaxAge),
-		"new_key_daily_limit": v.NewKeyDailyLimit, "billing_preference": v.BillingPreference,
+		"new_key_daily_limit": v.NewKeyDailyLimit, "model_prices_public": v.ModelPricesPublic,
+		"billing_preference": v.BillingPreference,
 	}
 }
 
@@ -133,7 +140,8 @@ func (s *Service) SiteSettings(ctx context.Context, tx pg.Tx, site SiteID) (Site
 	return SiteSettings{
 		ConsoleIdle: time.Duration(r.ConsoleIdleSeconds) * time.Second, ConsoleMaxAge: time.Duration(r.ConsoleMaxAgeSeconds) * time.Second,
 		AdminIdle: time.Duration(r.AdminIdleSeconds) * time.Second, AdminMaxAge: time.Duration(r.AdminMaxAgeSeconds) * time.Second,
-		NewKeyDailyLimit: r.NewKeyDailyLimit, BillingPreference: derefString(r.BillingPreference),
+		NewKeyDailyLimit: r.NewKeyDailyLimit, ModelPricesPublic: r.ModelPricesPublic,
+		BillingPreference: derefString(r.BillingPreference),
 	}, nil
 }
 
@@ -155,6 +163,12 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 	if err != nil {
 		return err
 	}
+	if set.KeepModelPricesPublic {
+		set.ModelPricesPublic = before.ModelPricesPublic
+	}
+	if err := requireModelPricesPublicReady(ctx, tx, before, set); err != nil {
+		return err
+	}
 	if set.KeepBillingPreference {
 		set.BillingPreference = before.BillingPreference
 	}
@@ -164,6 +178,7 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 	if err := s.queries.WriteSiteSettings(ctx, tx, WriteSiteSettingsParams{
 		SiteID: uuid.UUID(site), ConsoleIdleSeconds: seconds64(set.ConsoleIdle), ConsoleMaxAgeSeconds: seconds64(set.ConsoleMaxAge),
 		AdminIdleSeconds: seconds64(set.AdminIdle), AdminMaxAgeSeconds: seconds64(set.AdminMaxAge), NewKeyDailyLimit: set.NewKeyDailyLimit,
+		ModelPricesPublic: set.ModelPricesPublic,
 	}); err != nil {
 		return fmt.Errorf("write the site's settings: %w", err)
 	}
@@ -183,6 +198,26 @@ func (s *Service) SetSiteSettings(ctx context.Context, tx pg.Tx, actor audit.Act
 		Target: audit.Target{Module: "accounts", Kind: "site", ID: site.TypeID(), Site: uuid.UUID(site)},
 		Detail: map[string]any{"before": before.detail(), "after": set.detail()},
 	})
+}
+
+// requireModelPricesPublicReady refuses to hide prices while a node of the previous release, which returns them
+// unconditionally, is live. Keeping the stored value is not a new choice, so an old page or a page that repeats an
+// already-hidden value may still save other fields.
+func requireModelPricesPublicReady(ctx context.Context, tx pg.Tx, before, set SiteSettings) error {
+	if set.KeepModelPricesPublic || set.ModelPricesPublic == nil || *set.ModelPricesPublic {
+		return nil
+	}
+	if before.ModelPricesPublic != nil && !*before.ModelPricesPublic {
+		return nil
+	}
+	ready, err := New().ModelPricesPublicReady(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return &SettingError{"model_prices_public", "waits for every gateway node to support it"}
+	}
+	return nil
 }
 
 // writeBillingPreference clears or writes the site's default order after checking the rollout gate.

@@ -40,6 +40,13 @@ func paymentRefundBody(r payments.Refund, site platform.Currency) adminapi.Payme
 		Id: &id, OrderId: &order, AccountId: &account, State: &state, Via: &via, Credits: &credits, Amount: &amount,
 		Reason: &reason, RequestedBy: &requested, CreatedAt: &r.CreatedAt, FinishedAt: r.FinishedAt,
 	}
+	if r.FirstApprovedBy != nil {
+		first := accounts.UserID(*r.FirstApprovedBy).TypeID()
+		body.FirstApprovedBy = &first
+	}
+	if r.SecondRequired {
+		body.SecondRequired = &r.SecondRequired
+	}
 	if r.ApprovedBy != nil {
 		approved := accounts.UserID(*r.ApprovedBy).TypeID()
 		body.ApprovedBy = &approved

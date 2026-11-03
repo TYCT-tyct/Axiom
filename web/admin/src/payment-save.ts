@@ -10,8 +10,9 @@ export type PaymentAttempt = { settings: Update; skipped: boolean };
 
 export type PaymentPut = (settings: Update, reason: string, key: string) => Promise<Saved>;
 
-// savePaymentSettings sends the body attempted for key, downgrading once for an older node that refuses the buffer. The
-// downgraded body is stored before its response is awaited: a lost answer must leave the same body for the resend.
+// savePaymentSettings sends the body attempted for key, downgrading once for an older node that refuses a field it does
+// not know. The downgraded body is stored before its response is awaited: a lost answer must leave the same body for the
+// resend.
 export async function savePaymentSettings(
   attempted: Map<string, PaymentAttempt>,
   key: string,
@@ -25,7 +26,8 @@ export async function savePaymentSettings(
     const saved = await put(body, reason, key);
     return { ...saved, skipped: known?.skipped === true };
   } catch (error) {
-    if (!("top_up_buffer_ppm" in body) || !bufferRefused(error)) {
+    const dropBuffer = "top_up_buffer_ppm" in body && bufferRefused(error);
+    if (!dropBuffer) {
       throw error;
     }
     const downgraded = withoutBuffer(body);

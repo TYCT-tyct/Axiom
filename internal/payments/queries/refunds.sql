@@ -26,9 +26,13 @@ LEFT JOIN payments.settings s ON s.site_id = o.site_id WHERE o.id = @id;
 
 -- name: InsertRefund :one
 INSERT INTO payments.refunds(id, order_id, site_id, account_id, state, via, credits, requested_credits, amount,
-    with_fee, refund_key, reason, requested_by, idem_key)
+    with_fee, refund_key, reason, requested_by, idem_key, second_required)
 VALUES (@id, @order_id, @site_id, @account_id, 'frozen', @via, @credits, @requested_credits, @amount,
-    @with_fee, @refund_key, @reason, @requested_by, @idem_key) RETURNING *;
+    @with_fee, @refund_key, @reason, @requested_by, @idem_key, @second_required) RETURNING *;
+
+-- name: FirstApproveRefund :exec
+UPDATE payments.refunds SET first_approved_by = @first_approved_by
+WHERE id = @id AND first_approved_by IS NULL AND approved_by IS NULL;
 
 -- name: ApproveRefund :exec
 UPDATE payments.refunds SET approved_by = @approved_by WHERE id = @id AND approved_by IS NULL;

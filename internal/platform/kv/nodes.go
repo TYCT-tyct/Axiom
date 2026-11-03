@@ -94,11 +94,12 @@ func (h *heartbeat) start(ctx context.Context, nodes int, live *atomic.Int64, m 
 		}
 		versions, active := h.report()
 		_, err = tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active,
-    supports_billing_preference, billing_preference_session)
-   VALUES ($1, $2, '{}', $3, $4, true, $2)
+    supports_billing_preference, billing_preference_session, supports_model_prices_public, model_prices_public_session)
+   VALUES ($1, $2, '{}', $3, $4, true, $2, true, $2)
    ON CONFLICT (id) DO UPDATE SET seen_at = now(), share_session = excluded.share_session, share_view = '{}', share_joining = true,
     key_versions = excluded.key_versions, key_active = excluded.key_active, supports_billing_preference = true,
-    billing_preference_session = excluded.billing_preference_session,
+    billing_preference_session = excluded.billing_preference_session, supports_model_prices_public = true,
+    model_prices_public_session = excluded.model_prices_public_session,
     key_active_since = CASE WHEN platform.nodes.key_active IS DISTINCT FROM excluded.key_active
      THEN now() ELSE platform.nodes.key_active_since END`, h.id, h.session, versions, active)
 		if err != nil {
@@ -141,12 +142,20 @@ func (h *heartbeat) beat(ctx context.Context) (int, error) {
 	return alive, nil
 }
 
-// recordReadiness republishes whether every live node supports the funding preference. Every new node does this on
-// every beat; an old node's row stays false, so a mixed deployment keeps the safe default until the old node is gone.
+// recordReadiness republishes whether every live node supports each setting whose meaning depends on the release.
+// Every new node does this on every beat; an old node's row stays false, so a mixed deployment keeps the safe
+// default until the old node is gone.
 func (*heartbeat) recordReadiness(ctx context.Context, tx pg.Tx) error {
-	_, err := tx.Exec(ctx, `INSERT INTO platform.billing_preference_readiness (id, enabled)
+	if _, err := tx.Exec(ctx, `INSERT INTO platform.billing_preference_readiness (id, enabled)
   SELECT true, coalesce(bool_and(coalesce(supports_billing_preference, false)
     AND billing_preference_session IS NOT NULL AND billing_preference_session = share_session), true)
+  FROM platform.nodes WHERE seen_at > now() - make_interval(secs => $1)
+  ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled, updated_at = clock_timestamp()`, AliveFor.Seconds()); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO platform.model_prices_public_readiness (id, enabled)
+  SELECT true, coalesce(bool_and(coalesce(supports_model_prices_public, false)
+    AND model_prices_public_session IS NOT NULL AND model_prices_public_session = share_session), false)
   FROM platform.nodes WHERE seen_at > now() - make_interval(secs => $1)
   ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled, updated_at = clock_timestamp()`, AliveFor.Seconds())
 	return err
@@ -157,12 +166,13 @@ func (*heartbeat) recordReadiness(ctx context.Context, tx pg.Tx) error {
 func (h *heartbeat) write(ctx context.Context, tx pg.Tx) error {
 	versions, active := h.report()
 	_, err := tx.Exec(ctx, `INSERT INTO platform.nodes (id, share_session, share_view, key_versions, key_active,
-    supports_billing_preference, billing_preference_session)
-  VALUES ($1, $2, '{}', $3, $4, true, $2)
+    supports_billing_preference, billing_preference_session, supports_model_prices_public, model_prices_public_session)
+  VALUES ($1, $2, '{}', $3, $4, true, $2, true, $2)
   ON CONFLICT (id) DO UPDATE SET seen_at = now(),
    share_joining = platform.nodes.share_joining OR platform.nodes.seen_at <= now() - make_interval(secs => $5),
    key_versions = excluded.key_versions, key_active = excluded.key_active, supports_billing_preference = true,
-   billing_preference_session = excluded.billing_preference_session,
+   billing_preference_session = excluded.billing_preference_session, supports_model_prices_public = true,
+   model_prices_public_session = excluded.model_prices_public_session,
    key_active_since = CASE WHEN platform.nodes.key_active IS DISTINCT FROM excluded.key_active
     THEN now() ELSE platform.nodes.key_active_since END
   WHERE platform.nodes.share_session = excluded.share_session`,

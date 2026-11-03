@@ -1,13 +1,16 @@
 package payments
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"uuid"
@@ -35,8 +38,41 @@ type world struct {
 	siteA, siteB   uuid.UUID
 	account, acctB uuid.UUID
 	user           uuid.UUID
+	states         *recordingAccountStates
 	alerts         *recordingSink
 	timers         []testTimer
+}
+
+type suspensionCall struct {
+	account   accounts.AccountID
+	suspended bool
+	reason    string
+}
+
+type recordingAccountStates struct {
+	mu        sync.Mutex
+	calls     []suspensionCall
+	suspended map[accounts.AccountID]bool
+}
+
+func (r *recordingAccountStates) SetAccountSuspended(_ context.Context, _ pg.Tx, _ audit.Actor, id accounts.AccountID, suspended bool, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.suspended[id] == suspended {
+		return nil
+	}
+	if r.suspended == nil {
+		r.suspended = map[accounts.AccountID]bool{}
+	}
+	r.suspended[id] = suspended
+	r.calls = append(r.calls, suspensionCall{account: id, suspended: suspended, reason: reason})
+	return nil
+}
+
+func (r *recordingAccountStates) recorded() []suspensionCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.calls)
 }
 
 func newWorld(t *testing.T) *world {
@@ -63,6 +99,7 @@ func newTestWorldWithPool(t *testing.T, plugin Plugin, suffix string, opts ...pg
 	w := &world{
 		t: t, db: db, super: d.Superuser, logs: &telemetrytest.Buffer{},
 		siteA: uuid.NewV7(), siteB: uuid.NewV7(), account: uuid.NewV7(), acctB: uuid.NewV7(), user: uuid.NewV7(),
+		states: &recordingAccountStates{},
 		alerts: &recordingSink{},
 	}
 	w.exec(fmt.Sprintf("INSERT INTO platform.tenants VALUES ('%s','%[1]s'), ('%[1]s','%s'), ('%s','%[3]s'), ('%[3]s','%s')",
@@ -71,7 +108,7 @@ func newTestWorldWithPool(t *testing.T, plugin Plugin, suffix string, opts ...pg
 		w.siteA, w.account, w.siteB, w.acctB))
 	w.p, err = Open(Config{
 		DB: db, Platform: pg.NewScope(true, nil, nil), Keyring: masterKey(t), Plugins: []Plugin{plugin},
-		Logger: slog.New(slog.NewTextHandler(w.logs, nil)), Alerts: w.alerts, Instance: "test-node",
+		Logger: slog.New(slog.NewTextHandler(w.logs, nil)), Accounts: w.states, Alerts: w.alerts, Instance: "test-node",
 	})
 	if err != nil {
 		t.Fatal(err)
