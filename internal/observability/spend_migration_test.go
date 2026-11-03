@@ -11,10 +11,12 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-// migrationsBeforeObservability is this module's migrations numbered below version.
+// migrationsBeforeObservability is this module's migrations numbered below version, with the module's job role so that
+// migrations past 00015 can alter the tables it owns.
 func migrationsBeforeObservability(t *testing.T, version string) pg.Module {
 	t.Helper()
-	all, before := Module().Migrations, fstest.MapFS{}
+	module := Module()
+	all, before := module.Migrations, fstest.MapFS{}
 	paths, err := fs.Glob(all, "*.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +31,7 @@ func migrationsBeforeObservability(t *testing.T, version string) pg.Module {
 		}
 		before[path] = &fstest.MapFile{Data: data}
 	}
-	return pg.Module{Name: "observability", Migrations: before}
+	return pg.Module{Name: module.Name, Migrations: before, JobRole: module.JobRole}
 }
 
 // ruleBody builds a legal pre-upgrade alert configuration from rule ids and kinds.
