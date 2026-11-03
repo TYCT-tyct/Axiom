@@ -70,6 +70,7 @@ func TestModelEndpointVariantsAndVisibility(t *testing.T) {
 }
 
 func TestHTTPRequestErrorVocabulary(t *testing.T) {
+	t.Parallel()
 	for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		for _, tc := range []struct {
 			failure suppliers.Failure

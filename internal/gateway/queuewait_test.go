@@ -53,6 +53,7 @@ func wantTooManyRequests(t *testing.T, err error) {
 // is on all its waits together. Wakes that are not for it arrive every three seconds; the call still gets its 429 when
 // the limit since it first queued is spent, not when the last wait is.
 func TestQueueLimitCoversAllTheWaitsOfACall(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		bp, err := New(DefaultConfig(), nil)
 		if err != nil {
@@ -79,6 +80,7 @@ func TestQueueLimitCoversAllTheWaitsOfACall(t *testing.T) {
 // parks and Wait's fast path answers every time. The call still ends 429 when its time since the first wait is spent,
 // with no more than the attempt that was under way.
 func TestQueueLimitHoldsWhenEveryAdmissionSeesARelease(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		bp, err := New(DefaultConfig(), nil)
 		if err != nil {

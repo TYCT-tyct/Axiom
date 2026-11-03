@@ -20,6 +20,7 @@ const freeReference = `{"v":1,"currency":"USD","rates":{"input":"0","output":"0"
 // TestRouteBuildLeavesOutAFreeModelWithAPaidSale: the :free suffix promises no charge, so an already published paid
 // price for any audience keeps the model out of routing rather than serving a call that charges.
 func TestRouteBuildLeavesOutAFreeModelWithAPaidSale(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	free := f.seedPrice("acme/served:free", specAll, freeReference)
 	paid, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002"}}`))
@@ -42,6 +43,7 @@ func TestRouteBuildLeavesOutAFreeModelWithAPaidSale(t *testing.T) {
 // The snapshot is the only source the routers that choose a model themselves rank from, so neither openrouter/auto nor
 // openrouter/free then has anything to plan, and the log names the reason.
 func TestRouteBuildDropsARetiredFreeModel(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	f.seedPrice("acme/free", specAll, reference) // the :free entry needs a listed base model with a public name
 	free := f.seedPrice("acme/free:free", specAll, freeReference)

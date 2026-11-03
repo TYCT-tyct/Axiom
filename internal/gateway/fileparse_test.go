@@ -60,6 +60,7 @@ func parseHarness(t *testing.T, parser fileparse.Parser) (*Handler, *Call) {
 }
 
 func TestParseFilesReplacesTheFile(t *testing.T) {
+	t.Parallel()
 	parser := &recordingParser{text: "The parsed page."}
 	h, c := parseHarness(t, parser)
 	body := fileBody("mistral-ocr")
@@ -104,6 +105,7 @@ func checkParsedBody(t *testing.T, out []byte, c *Call) {
 }
 
 func TestParseFilesSkipsAnAnnotatedFile(t *testing.T) {
+	t.Parallel()
 	parser := &recordingParser{text: "should not be used"}
 	h, c := parseHarness(t, parser)
 	data := base64.StdEncoding.EncodeToString([]byte("%PDF-1.7 a scanned page"))
@@ -136,6 +138,7 @@ func TestParseFilesSkipsAnAnnotatedFile(t *testing.T) {
 // TestParseFilesNativeSendsTheFile: the native engine leaves the file to the endpoint, and a node without a parser
 // serves it.
 func TestParseFilesNativeSendsTheFile(t *testing.T) {
+	t.Parallel()
 	body := fileBody("native")
 	req, err := protocol.Inspect(protocol.Chat, body)
 	if err != nil {
@@ -153,6 +156,7 @@ func TestParseFilesNativeSendsTheFile(t *testing.T) {
 }
 
 func TestParseFilesRefusals(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		parser fileparse.Parser
@@ -206,6 +210,7 @@ func TestParseFilesRefusals(t *testing.T) {
 // TestParsesAreChargedAsFileParses: each page is one per-use unit of its own item when the switch is on, charged on the
 // attempt that answered, like the web plugin's search, and not folded into the search item.
 func TestParsesAreChargedAsFileParses(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		upstream := protocol.Chat
 		h := newHarness(t, t.Context(), options{
@@ -227,6 +232,7 @@ func TestParsesAreChargedAsFileParses(t *testing.T) {
 
 // TestParseFilesRefusesTooManyFiles: the cap is checked before the backend is asked to convert the ninth file.
 func TestParseFilesRefusesTooManyFiles(t *testing.T) {
+	t.Parallel()
 	parser := &recordingParser{text: "unused"}
 	h, c := parseHarness(t, parser)
 	var parts []string
@@ -254,6 +260,7 @@ func TestParseFilesRefusesTooManyFiles(t *testing.T) {
 // TestFileParserUnconfiguredThroughTheHandler: the OCR engine keeps the documented 400 while no backend is configured,
 // and nothing is reserved.
 func TestFileParserUnconfiguredThroughTheHandler(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	resp, body := r.do(http.MethodPost, "/api/v1/chat/completions", a.key, bytes.NewReader(fileBody("mistral-ocr")))
@@ -292,6 +299,7 @@ const (
 // comes back with the annotation the client can send to skip reparsing, its cost naming the parse's one per-use
 // charge. One call, one reservation, one settlement: the parse is billed inside the call it was made for.
 func TestFileParserThroughTheHandler(t *testing.T) {
+	t.Parallel()
 	parser := &recordingParser{text: "The parsed page."}
 	r := newRig(t, func(o *rigOptions) {
 		o.spec, o.parser = parseSpec, parser
@@ -319,6 +327,7 @@ func TestFileParserThroughTheHandler(t *testing.T) {
 // TestCloudflareParsingIsFree: the cloudflare-ai engine is free in OpenRouter's File Parser. The file is still parsed
 // and annotated, but the call reserves and settles no file_parse unit and the reply has no server-tool cost.
 func TestCloudflareParsingIsFree(t *testing.T) {
+	t.Parallel()
 	parser := &recordingParser{text: "The parsed page."}
 	r := newRig(t, func(o *rigOptions) {
 		o.spec, o.parser = parseSpec, parser
@@ -349,6 +358,7 @@ func TestCloudflareParsingIsFree(t *testing.T) {
 // upgrading this release, because the catalog switch is off. The parse succeeds without a file_parse price, so the
 // upgrade does not take an existing OCR site offline.
 func TestFileParseKeepsSearchBillingUntilTheSwitchIsOn(t *testing.T) {
+	t.Parallel()
 	parser := &recordingParser{text: "The parsed page."}
 	r := newRig(t, func(o *rigOptions) {
 		o.spec, o.parser, o.price, o.fileParse = parseSpec, parser, `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},`+
@@ -456,6 +466,7 @@ func checkParseBilling(t *testing.T, r *rig, c *Call) {
 // tool result, a URL source — is a file the plugin cannot parse, and the request is refused rather than forwarded with
 // its document intact.
 func TestParseFilesRefusesAFileItCannotParse(t *testing.T) {
+	t.Parallel()
 	h, c := parseHarness(t, &recordingParser{text: "unused"})
 	for name, body := range map[string]string{
 		"tool result": `{"model":"acme/alpha","plugins":[{"id":"file-parser","pdf":{"engine":"cloudflare-ai"}}],` +
@@ -481,6 +492,7 @@ func TestParseFilesRefusesAFileItCannotParse(t *testing.T) {
 // TestParseFilesLeavesAReference: a file the client named by id is routing's to pin, not content to parse; the inline
 // file beside it is parsed, and the request is not refused for the reference.
 func TestParseFilesLeavesAReference(t *testing.T) {
+	t.Parallel()
 	parser := &recordingParser{text: "The parsed page."}
 	h, c := parseHarness(t, parser)
 	body := []byte(`{"model":"acme/alpha","plugins":[{"id":"file-parser","pdf":{"engine":"cloudflare-ai"}}],` +
@@ -503,6 +515,7 @@ func TestParseFilesLeavesAReference(t *testing.T) {
 // TestOnlineSurvivesParsing: the model suffix is not a body member, so the re-inspection after a parse cannot see it.
 // The web plugin the suffix asked for is kept, and its reserved input with it.
 func TestOnlineSurvivesParsing(t *testing.T) {
+	t.Parallel()
 	parser := &recordingParser{text: "The parsed page."}
 	r := newRig(t, func(o *rigOptions) {
 		o.spec, o.parser = parseSpec, parser
@@ -529,6 +542,7 @@ func TestOnlineSurvivesParsing(t *testing.T) {
 // the document is sent anywhere. A key whose address is not allowed gets the refusal it would get at admission, and
 // the backend is never called.
 func TestAParseIsRefusedBeforeTheBackend(t *testing.T) {
+	t.Parallel()
 	parser := &recordingParser{text: "The parsed page."}
 	r := newRig(t, func(o *rigOptions) {
 		o.spec, o.parser = parseSpec, parser
@@ -552,6 +566,7 @@ func TestAParseIsRefusedBeforeTheBackend(t *testing.T) {
 // cannot hold is refused without building the body it would have thrown away. The request replays a megabyte of parsed
 // text beside a small file: the rewrite alone would copy it twice before a check that came after the fact.
 func TestAParseRefusedForBudgetAllocatesNothing(t *testing.T) {
+	t.Parallel()
 	parser := &recordingParser{text: "unused"}
 	h, c := parseHarness(t, parser)
 	h.Memory = protocol.NewMemory(1 << 20) // less than the rewrite's work set, which is the text cap alone

@@ -149,6 +149,7 @@ func checkRecordedTypes(t *testing.T, path string, recorded, actual any) {
 }
 
 func TestOpenRouterOffsetDefault(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		query string
 		limit int
@@ -161,6 +162,7 @@ func TestOpenRouterOffsetDefault(t *testing.T) {
 }
 
 func TestOpenRouterEndpointBuild(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	first, second := routable(f.served, protocol.Messages), routable(f.served, protocol.Responses)
 	first.Upstream, second.Upstream = "private-first", "private-second"

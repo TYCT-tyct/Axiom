@@ -112,8 +112,12 @@ func benchScan(b *testing.B, router *routing.Router, f protocol.Format, size int
 // (docs/performance.md「调用路径上的规则」). The measurement runs in a child process, so this binary's other goroutines
 // and their collections are not counted as the scans'.
 func TestScanAllocationsDoNotGrow(t *testing.T) {
+	t.Parallel()
 	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
-		t.Run(fmt.Sprintf("format=%d", f), func(t *testing.T) { checkScanAllocations(t, f) })
+		t.Run(fmt.Sprintf("format=%d", f), func(t *testing.T) {
+			t.Parallel()
+			checkScanAllocations(t, f)
+		})
 	}
 }
 

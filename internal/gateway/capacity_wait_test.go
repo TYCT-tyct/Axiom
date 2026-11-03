@@ -65,6 +65,7 @@ func TestQueueWaitsForCredentialCapacity(t *testing.T) {
 // TestAReleasedCredentialWakesAQueuedCall: giving a credential slot back wakes the oldest queued call, so a request
 // that waited for capacity is planned again instead of sleeping until its deadline.
 func TestAReleasedCredentialWakesAQueuedCall(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 1})
 		epoch := h.exec.Limits.Queue.Epoch()

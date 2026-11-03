@@ -52,6 +52,7 @@ func TestTheAttemptCostIsTheSuppliersKnownCost(t *testing.T) {
 		{"a delivered call whose output never came finally is no zero output", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			r, receipt := costedRig(t)
 			sample, _ := sample(t, protocol.Messages)
 			up := withCosts(r, r.billing, r.suppliers)

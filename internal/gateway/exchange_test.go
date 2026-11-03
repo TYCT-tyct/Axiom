@@ -45,6 +45,7 @@ func wantVersion(t *testing.T, entries []routing.Entry, version int64, who strin
 }
 
 func TestRouteFreezesExchangeAcrossRefreshes(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	a, b := routable(f.served, protocol.Messages), routable(f.served, protocol.Messages)
 	a.Currency, b.Currency = exchangeCurrency(t, "CNY"), exchangeCurrency(t, "JPY")
@@ -77,6 +78,7 @@ func TestRouteFreezesExchangeAcrossRefreshes(t *testing.T) {
 }
 
 func TestExchangeRefreshFailureDoesNotExtendFreshness(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	now := time.Now()
 	router, err := routing.New(routing.Config{Now: func() time.Time { return now }, MaxStale: time.Second})
@@ -132,6 +134,7 @@ func (f *routeFixture) currentRates(ctx context.Context) (rates []platform.Excha
 }
 
 func TestRouteBuildKeepsTheRatesReadBeforeAConcurrentCommit(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	e := routable(f.served, protocol.Messages)
 	e.Currency = exchangeCurrency(t, "CNY")

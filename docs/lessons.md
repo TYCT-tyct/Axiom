@@ -92,7 +92,7 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 
 证据：PR #462 的列车构建 [40914818602](https://github.com/TYCT-tyct/Axiom/actions/runs/40914818602) 在健康探测恢复断言失败，并在第二份大账本夹具播种时达到 billing 包的十分钟期限。
 哪一层没拦住：健康测试从组装前冻结的时钟推进 31 秒，实际熔断时间却由网关按真实时钟记录；两种账本计划测试分别播种 200 万笔数据，单包累计成本没有被局部测试暴露。集成测试应从实际事件时刻推进受控时钟，并用时钟偏移复现组装延迟；同模块同量级的计划验证共用大夹具，保留每种查询的完整计划断言。`TestGatewayHealthRemoveProbeRestore` 固定模拟两分钟时钟落后；`TestLedgerReadsGrowWithThePage` 同时验证 movements 和 statement，后续此类计划用例加在同一夹具下。
-`cmd/axiom` 的通话导出夹具用 `INSERT … SELECT (jsonb_populate_record(…)).*` 复制一万行，PostgreSQL 对展开的每一列各算一次函数，单个测试播种 50 秒；改为 `CROSS JOIN LATERAL jsonb_populate_record(…)` 后约 2 秒。`internal/payments` 的播种还是旧写法。同一轮还有 42 个耗时的数据库测试没有 `t.Parallel()`，串行跑了约 95 秒，`cmd/axiom` 包在列车上超过十分钟（run [41581562012](https://github.com/TYCT-tyct/Axiom/actions/runs/41581562012)）。
+`cmd/axiom` 的通话导出夹具用 `INSERT … SELECT (jsonb_populate_record(…)).*` 复制一万行，PostgreSQL 对展开的每一列各算一次函数，单个测试播种 50 秒；改为 `CROSS JOIN LATERAL jsonb_populate_record(…)` 后约 2 秒。`internal/payments` 的播种还是旧写法。同一轮还有 42 个耗时的数据库测试没有 `t.Parallel()`，串行跑了约 95 秒，`cmd/axiom` 包在列车上超过十分钟（run [41581562012](https://github.com/TYCT-tyct/Axiom/actions/runs/41581562012)）。同一天 `internal/gateway` 在 main 上超时（run [41623800762](https://github.com/TYCT-tyct/Axiom/actions/runs/41623800762)），是同一类：279 个顶层测试没有 `t.Parallel()`，串行阶段 120 秒；并行阶段又被同时只放 3 个 rig 的信号量卡住，整包只用到约一个核。三次都是数据库测试漏了 `t.Parallel()`，还没有机械检查拦下（`paralleltest` 未启用）。
 出现：2026-10-29、2026-11-03
 
 ## 只读状态和故障兜底的测试也为容器排队

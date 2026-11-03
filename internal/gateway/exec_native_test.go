@@ -15,6 +15,7 @@ import (
 // round, with the endpoint called in its own format and the client answered in its own, streamed and aggregated
 // (protocol README.md「跨格式转换」「跨格式的流」).
 func TestNativeClientsUseNativeEndpoints(t *testing.T) {
+	t.Parallel()
 	for _, pair := range [][2]protocol.Format{{protocol.Messages, protocol.Responses}, {protocol.Responses, protocol.Messages}} {
 		for _, stream := range []bool{true, false} {
 			client, upstream := pair[0], pair[1]

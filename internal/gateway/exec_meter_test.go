@@ -35,6 +35,7 @@ func segmented(o options) options {
 // TestAStreamExtendsItsReservationAsItGoes: every segment is asked for before the last is spent, numbered on, each to
 // a larger target, and the stream is never held up.
 func TestAStreamExtendsItsReservationAsItGoes(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, segmented(options{}))
 		beats := []beat{h.feed(evStart), h.feed(evBlock)}
@@ -71,6 +72,7 @@ func checkExtensions(t *testing.T, h *harness) {
 // TestASpentSegmentStopsTheReadUntilItsExtensionComes: the event that spends the segment, past its end or to its last
 // token, is written only once the next is approved, and the wait does not count as the upstream being idle.
 func TestASpentSegmentStopsTheReadUntilItsExtensionComes(t *testing.T) {
+	t.Parallel()
 	for _, n := range []int{250, 200} {
 		run(t, func(t *testing.T, ctx context.Context) {
 			h := newHarness(t, ctx, segmented(options{
@@ -111,6 +113,7 @@ type cutCase struct {
 // before it, nothing was delivered: the call is answered with the error, no other entry is tried, and billing is told
 // the attempt delivered nothing, which charges no model usage. The upstream is stopped either way.
 func TestARefusedExtensionCutsTheStream(t *testing.T) {
+	t.Parallel()
 	slow := func(ctx context.Context, _ billing.ExtendRequest) error {
 		<-ctx.Done()
 		return ctx.Err()
@@ -191,6 +194,7 @@ func checkCutStream(t *testing.T, h *harness, tc cutCase) {
 // (docs/domains/billing.md「预留与结算」) or for the idle timeout; unless the upstream has already ended normally, when
 // there is nothing left to stop.
 func TestAnExtensionThatFailsEarlyCutsAtOnce(t *testing.T) {
+	t.Parallel()
 	failing := func(context.Context, billing.ExtendRequest) error { return errors.New("connection refused") }
 	run(t, func(t *testing.T, ctx context.Context) {
 		late := func(context.Context, billing.ExtendRequest) error {
@@ -220,6 +224,7 @@ func TestAnExtensionThatFailsEarlyCutsAtOnce(t *testing.T) {
 // quiet when the extension fails; the failure ends the read and the call, billing_unavailable, not the idle timeout
 // three minutes on, which would call it the upstream's.
 func TestAnExtensionThatFailsCutsAnUpstreamThatSaysNothing(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, segmented(options{extend: func(context.Context, billing.ExtendRequest) error {
 			return errors.New("connection refused")
@@ -244,6 +249,7 @@ const freeOutput = `{"v":1,"currency":"USD","rates":{"input":"0.000001","output"
 // said the segment was spent when no extension was coming left the owner waiting for none, and again, with the
 // processor to itself and no way to cancel it.
 func TestOutputThatCostsNothingNeverWaitsForAnExtension(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, segmented(options{price: freeOutput}))
 		h.up.eps[uuidOf(ep(1))].script = []scripted{serve(h.feed(evStart), h.feed(evBlock), beat{data: text(250)}, beat{data: text(250)},
@@ -273,6 +279,7 @@ func TestOutputThatCostsNothingNeverWaitsForAnExtension(t *testing.T) {
 // TestNoSettlementWhileAnExtensionIsInFlight: billing settles a reservation with no extension in flight, so a stream that
 // breaks while one is waits for it first.
 func TestNoSettlementWhileAnExtensionIsInFlight(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, segmented(options{extend: func(context.Context, billing.ExtendRequest) error {
 			time.Sleep(800 * time.Millisecond)
@@ -295,6 +302,7 @@ func TestNoSettlementWhileAnExtensionIsInFlight(t *testing.T) {
 // TestAWriteMayBlockOnlyAsLongAsTheSegmentLasts: the write deadline is the time the approved output takes at the
 // model's fastest, 195 tokens at 100 a second after the first 5, so a client that does not read is gone by then.
 func TestAWriteMayBlockOnlyAsLongAsTheSegmentLasts(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, segmented(options{}))
 		h.w.stall = true
@@ -328,6 +336,7 @@ func TestAWriteMayBlockOnlyAsLongAsTheSegmentLasts(t *testing.T) {
 // segment's reservation set aside, so the supplier cannot bill more than was reserved for the call
 // (docs/domains/billing.md「预留与结算」).
 func TestATruncatedStreamConsumesNoMoreThanItsAllowance(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		const covered, allowance = 500, 500 // a segment of 500 tokens, and 5s at 100 tokens a second
 		const wait = 5 * time.Second        // how long the extension is waited for
@@ -378,6 +387,7 @@ data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use"
 // segment instead of leaving the difference to the platform. Empty arguments keep the byte bound at zero, so only the
 // count can ask for the extension.
 func TestToolCallsExtendTheReservation(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, segmented(options{mutate: func(c *Call) {
 			c.Plan.Entries[0].Target.Model = "claude-sonnet-4-5"
