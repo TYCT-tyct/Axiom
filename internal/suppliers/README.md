@@ -2,7 +2,7 @@
 
 供应商模块：供应商及其账号凭证、分组、模型、端点的表，适配器的契约和注册，以及调用路径上的接口（挑凭证、发请求、记尝试）。适配器、同步、对账的要求见[供应商](../../docs/domains/suppliers.md)和[计费的「供应商成本」](../../docs/domains/billing.md#供应商成本)，一次调用的编排见 [gateway](../gateway/README.md)。
 
-> [Issue #25](https://github.com/TYCT-tyct/Axiom/issues/25) 分多个 PR 实现。已实现：表、适配器契约、注册表、启动检查、new-api 与 sub2api 适配器、同步引擎及其状态、租约和限速桶的持久化、同步的投影（分组、模型、端点、成本计划）、调用面（挑凭证、发请求、记尝试）和对账的写入，写在「代码结构」到「对账」；同步的调度（River，在 `serve` 里运行）已实现，写在「调度」；用真实生成测试端点（`TestEndpoint`、`RecordTest`，[#313](https://github.com/TYCT-tyct/Axiom/issues/313) 的 E3-5）已实现，写在「用真实生成测试端点」；管理接口见「管理接口」，事件投递见「持久化」和「调度」。请求进行中的对账日志已删（「没有对账日志」）。代码与本文不一致时，在同一个 PR 里改本文。
+> [Issue #25](https://github.com/TYCT-tyct/Axiom/issues/25) 分多个 PR 实现。已实现：表、适配器契约、注册表、启动检查、new-api 与 sub2api 适配器、声明式适配器（`declared/`，`AXIOM_SUPPLIER_ADAPTERS`）、同步引擎及其状态、租约和限速桶的持久化、同步的投影（分组、模型、端点、成本计划）、调用面（挑凭证、发请求、记尝试）和对账的写入，写在「代码结构」到「对账」；同步的调度（River，在 `serve` 里运行）已实现，写在「调度」；用真实生成测试端点（`TestEndpoint`、`RecordTest`，[#313](https://github.com/TYCT-tyct/Axiom/issues/313) 的 E3-5）已实现，写在「用真实生成测试端点」；管理接口见「管理接口」，事件投递见「持久化」和「调度」。请求进行中的对账日志已删（「没有对账日志」）。代码与本文不一致时，在同一个 PR 里改本文。
 
 ## 代码结构
 
@@ -10,7 +10,8 @@
 internal/suppliers/                 公开接口：Module()、CheckAdapters()、Service（调用面）、RecordAttempts 等、Reconcile、Admin 与 NewAdmin（管理接口）、RegisterSync（同步的调度）
 internal/suppliers/internal/
   adapter/       契约：Adapter、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec
-  registry/      注册表：唯一同时引用所有适配器的文件，一个适配器一行；按 kind 查找
+  declared/      声明式适配器：从 AXIOM_SUPPLIER_ADAPTERS 目录读 JSON，启动时校验并编译成 Adapter；v1 声明、模板、字段路径、扣费扫描和端到端测试
+  registry/      注册表：唯一同时引用所有适配器的文件，一个内置适配器一行，另加声明式目录；按 kind 查找
   client/        适配器唯一的出站入口：经 platform/egress、按声明的限速桶放行（进程内或数据库里的桶）
   newapi/        new-api 适配器（含 testdata/ 录制样本和测试）
   adaptertest/   每个适配器都要过的契约测试（只被测试引用）
@@ -68,9 +69,23 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 - **建 key**（`adapter.KeyMaker`，可选，与 `Onboarding` 分开）：`CreateKey` 按分组和名字建一把无限额度、不过期、不限模型的 key，返回对方的编号；对方拒绝时只回三种固定原因之一（`ErrKeyNotPermitted` 登录不能管 key、`ErrKeyGroupUnavailable` 账号不能用这个分组、`ErrKeyRefused` 对方拒绝），网络和 5xx 是任务失败、退避，不是固定原因。名字由 Axiom 给，重试或提交失败后下一次完整清单按名字认领，不建第二把。
 - **`Failure`** 是 `{Executed, Scope, Cause}`。`Cause` 是封闭的和类型（`gochecksumtype` 检查每个 switch 都处理了全部成员），成员只带数字和时间，**没有来自对方的文本**，所以回显了凭证的响应进不了日志和表。`Executed` 的零值是 `ExecutionUnknown`：没把握就按"可能执行了"处理，成本按估算记、由对账补正；`NotExecuted` 只给对方在执行前就拒绝的响应。`Transport` 只由通用调用层设置，适配器不得返回。作用范围比设计草稿多一个 `Endpoint`（限流、过载作用于一个分组和模型）。
 - **`Client`** 是适配器唯一的出站入口，`Request` 声明占用的全部桶，`BucketSpec` 声明对方的限速；任一桶没有名额就不发，返回包装了 `ErrBucketsFull` 的错误，调用方推迟而不是当失败。实现是 `internal/suppliers/internal/client`：`Limiter` 在进程内计数（适配器的测试用），`SharedLimiter` 在数据库里计数（`rate_buckets` 表，多个节点从一个出口地址访问同一个供应商时用），两者都实现 `Buckets`。
-- **注册表**（`registry`）：`adapters` 列表是唯一同时引用所有适配器的地方，一行一个，不用 `init()`。`registry.New` 在启动时拒绝不合法的 `kind`、重复的 `kind`、不可能放行请求的限速桶。
+- **注册表**（`registry`）：`adapters` 列表是唯一同时引用所有内置适配器的地方，一行一个，不用 `init()`。`Default()` 先取这份列表，再加上 `declared.LoadEnv()` 读到的声明；`registry.New` 在启动时拒绝不合法的 `kind`、重复的 `kind`（包括声明与内置同名）、不可能放行请求的限速桶。
 - **移除**：删适配器的目录和注册表里它的那一行。`just adapters-removable` 对注册表里的每个适配器，用 `go build -overlay` 在不改工作区的前提下删掉二者，再跑 `go build ./...` 和 `go vet ./...`；还有别的代码依赖它时失败，并给出编译器的原话。注册表里现在有 new-api，检查对它真实生效。
 - **启动检查**：`CheckAdapters` 在 `serve` 启动时列出仍在使用（状态不是"已移除"）而本程序没有注册适配器的供应商，有就拒绝启动并逐个指出名字和 `kind`。它要看到全部供应商，所以由 `cmd/axiom` 传入平台范围。
+
+## 声明式适配器
+
+`declared/` 把一份 JSON 声明编译成与内置适配器相同的 `adapter.Adapter`、`adapter.Onboarding` 和 `adapter.Manager`；声明了 `keys.create` 时还实现 `adapter.KeyMaker`。它覆盖自研中转站里管理路径和字段名不同、调用面仍是标准协议的那些，见[供应商的「声明式适配器」](../../docs/domains/suppliers.md#声明式适配器)。
+
+- **加载**：`registry.Default()` 读 `AXIOM_SUPPLIER_ADAPTERS`。未设置表示没有声明；设置了但目录读不了是错误。目录里每个 `*.json` 都经 `jsonx.UnmarshalKnown` 严格解码（未知成员拒绝）再 `Compile`；`LoadDir` 的错误带文件名，重复的 `kind` 和与内置适配器同名的 `kind` 都拒绝，最后按 `kind` 排序。声明在启动时读取，不做热加载；所有核心节点必须挂同一份目录。
+- **声明（`v: 1`）**：`kind`、`native_unit`（`quota`/`usd`）、`buckets`（必须有 `global`）、`auth`（登录字段、令牌放响应头或查询参数、登录路径/请求体/令牌/过期字段）、`detect`（公开路径和至少一个特征）、`account`（余额、单位提示或固定值、资金来源）、`offer`（分组、模型、价格、格式名映射）、`keys`（分页清单、按 ID 读原文、可选建 key、模型/到期策略）、`charges`（时间窗和分页、逐笔字段、可选过滤和用量）、`calls`（格式、流式、取消、对账键响应头、错误规则）。
+- **字段与模板**：字段路径是点分成员加数组下标（`data.items[0].id`），最多 16 步。路径模板只认操作允许的命名变量：登录 `{email}`/`{password}`，key 原文 `{ref}`，模型 `{group}`，分页 `{page}`/`{size}`，扣费 `{start}`/`{end}`/`{page}`/`{size}`；值按路径段转义。金额按十进制字面量读（字符串或数字），不接受指数；余额允许负值。时间接受 RFC3339 或 Unix 秒。页码从 1 开始，分页接口用 `page_size` 声明每页条数；`charges` 的起止是 Unix 秒。`keys.create.body` 必须发送 `{name}`，供响应丢失后的清单认领。
+- **校验**：`Compile` 检查版本、`kind` 格式、桶、每条字段路径、模板变量、引用的桶、格式名、价格项、状态映射、固定原因/范围/执行状态；声明了 `detect.captcha` 时必须接受 `access_token`，否则人机验证打开时无法接入；5xx 和只按错误码、可能命中 5xx 的规则不能声明 `executed: no`。错误规则先于通用默认生效，HTML 响应一律按出站拦截（`ScopeEgress`），未列出的 4xx 是 `Unknown`，429 默认 `RateLimited`。读管理面的 401/403 是 `ErrAuthRejected`，429 是 `Blocked`（默认 1 分钟），5xx 是任务失败，其他 4xx 是 `ErrUnrecognised`；建 key 的拒绝按上面的固定原因映射，5xx 仍是任务失败。
+- **分页位置**：`Offer` 和 `Keys` 的位置是 `declared` 自己的版本化 JSON，带这一轮已读的部分；位置读不懂或上游清单变了就整份重读，不跳过页。`Charges` 用模块的扫描算法（重叠 5 分钟、滞后 30 秒、初始 1 小时、最长 24 小时、每天补扫），声明只提供路径、页码、字段和 `page_size`；页大小改变时从水位重开这一遍，保存的位置读不懂时只停这个任务、不写记录。
+- **调用面**：`calls.formats` 是 Axiom 的规范格式名；`offer.formats` 把对方自己的格式名映射到这些名字，规范名本身总被接受，映射表可以只列别名。`ChargeRef` 只接受可打印 ASCII、最长 128 字符；`Classify` 只带状态、时间等固定数据，不带对方的文本。`Policy` 的流式和取消来自声明，端点级实测仍可覆盖取消。
+- **测试**：`testdata/acme.json` 是一份完整的 v1 样本；`load_test.go` 用表驱动覆盖坏声明（未知成员、坏路径、坏模板、重复键、错误规则等），`e2e_test.go` 用真实 `client`+`egress` 驱动一个录制的 HTTP 中转站，走登录、探测、余额、分组/模型/价格、分页 key、读原文、建 key、分页扣费和错误映射。`registry_test.go` 验证 `Default()` 带上声明、声明与内置同名时拒绝启动。
+- **限制**：不解人机验证（只能让人取令牌）、不改模型映射（仍走供应商别名和待映射）、不读阶梯价/上下文价（只有基础价）、不删对方的 key、建 key 的 body 成员值都是字符串、管理面只支持 JSON、分组/模型/价格列表不分页、keys 和 charges 的页码从 1 起、没有后台编辑器。声明没有刷新操作：`access_token` 由人提供并按 `expires_at` 校验；`email`/`password` 每次 `Open` 重新登录，受登录桶限速，生产优先用令牌。CPA 的用量队列读一次就没、只在内存里保留，不能实现可重读的 `Charges`，因此 CPA 是 Go 适配器加常驻采集器，不在声明式 v1 里（[号池](../../docs/domains/suppliers.md#号池)）。
+- **移除**：先移除使用它的供应商（或确认已是 `removed`），再删所有节点上的文件和重启；声明不写数据库，没有残留行。供应商自己的分组、端点、成本计划和凭证仍按 `Admin.Remove` 处理。
 
 ## sub2api
 
@@ -403,5 +418,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 | 新绑定的默认是并发 4、每分钟请求不限 | 绑定时对方允许几个并发还不知道，用保守值，免得一次打满对方；每分钟不设，因为限流值猜错会让本来能发的请求失败，不设只是没有额外的天花板 | 不设并发上限：新接入的供应商可能被打满；给每分钟一个默认数字：猜错就拒了本来能发的请求 |
 | 被限速时结束任务，把清单的位置存进状态，不在任务里等 | 同步队列每节点 4 个工人，原先每个任务最多等 8 分钟，少量供应商就能占满同步队列；位置存下后，下一次任务、另一个节点都接着读，代价是每次恢复要重新打开适配器 | 在任务里持着租约等限速重开：占工人，而且适配器的进度活不过进程，重启就从头读；让 River 把任务 snooze 到那时：换的是新的适配器，位置照样得存进状态，只是多一条队列状态 |
 | 清单的位置放在 `sync_states.listing` 一列，不放进状态的 JSON | 往状态里加成员要加格式号，旧版本的严格解码会拒绝，滚动发布时两个版本同时运行就读不了；单独一列旧版本不看也不写，位置读不懂或代次不对时丢掉即可（重读一页，不丢 key） | 加进状态的 JSON 并把 `format` 加到 2：发布期间旧节点读不了状态；把它放进 `sync_events`：每读一页一行历史，退出时不可回收 |
+
+| 声明式适配器从部署目录加载并在启动时编译，不进数据库 | 坏路径、坏模板、未声明的桶和不可能的错误规则在启动时报错，节点起不来；同一份文件在每个核心节点上，滚动发布时行为一致。声明不写数据库，删文件即没有配置残留；代价是改声明要重启、运营要能访问部署目录。否决：数据库存声明并由节点轮询（多一套生效、版本和回滚，坏数据会先跑起来）；把声明编译进镜像（回到每个站构建发布） | 后台保存即生效；运行时热加载 |
 
 `PriceCosts` 直接从数据库投影配置上可调用的端点成本、单位价值版本与结算币种，使用与 `ListRoutable` 一样的供应商、分组和凭证资格条件，但不读取或解密密钥、不依赖本节点的适配器注册表。售价发布采用这份全局成本集，节点局部加载失败不会改变共享发布依据。
