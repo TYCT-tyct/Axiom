@@ -119,7 +119,9 @@ func awaitJoins(t *testing.T, joined <-chan struct{}, want int) {
 	}
 }
 
-// lockTable holds table locked from a superuser connection until release, which waits for the unlock.
+// lockTable holds table locked from a superuser connection until release, which waits for the unlock. release is
+// idempotent and runs as a cleanup before admin.Close, so a Fatal while waiting for a request still lets the locked
+// transaction finish and the connection return.
 func lockTable(t *testing.T, database pgtest.Database, table string) (*pg.DB, func()) {
 	t.Helper()
 	admin, err := pg.Open(t.Context(), database.Superuser)
@@ -138,13 +140,22 @@ func lockTable(t *testing.T, database pgtest.Database, table string) (*pg.DB, fu
 			return nil
 		})
 	}()
-	<-locked
-	return admin, func() {
-		close(unlock)
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
+	select {
+	case <-locked:
+	case err := <-done:
+		t.Fatalf("lock %s: %v", table, err)
 	}
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			close(unlock)
+			if err := <-done; err != nil {
+				t.Errorf("unlock %s: %v", table, err)
+			}
+		})
+	}
+	t.Cleanup(release)
+	return admin, release
 }
 
 // awaitLookup waits until a key lookup waits for the lock, and fails when none does.

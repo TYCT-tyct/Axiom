@@ -23,6 +23,9 @@ import (
 var (
 	// ErrBadCode is a TOTP or recovery code refused, or a pending session out of attempts.
 	ErrBadCode = errors.New("accounts: wrong code")
+	// ErrMFAExhausted is a pending passkey sign-in that has spent the attempts its session allows. Waiting does not
+	// restore them; the person must sign in again.
+	ErrMFAExhausted = errors.New("accounts: passkey sign-in attempts are used up, sign in again")
 	// ErrBadSecret is a TOTP secret that is not 20 bytes of base32.
 	ErrBadSecret = errors.New("accounts: not a TOTP secret")
 	// ErrTOTPOn is turning on two-step verification for a user who has it; ReplaceTOTP is how it is replaced instead.

@@ -363,8 +363,8 @@ func (s *Service) issuePasskeySession(ctx context.Context, site Site, user passk
 }
 
 // BeginPasskeyMFA starts the passkey factor of a pending sign-in. The pending session is the only credential the
-// caller needs; the assertion proves the second factor. The source address's budget and the session's remaining
-// attempts are checked before a flow row or a challenge is made.
+// caller needs; the assertion proves the second factor. The source address's budget is spent first, then the session's
+// remaining attempts are checked under the user lock in the transaction that inserts the flow.
 func (s *Service) BeginPasskeyMFA(ctx context.Context, r *http.Request, p Principal, ip netip.Addr) (PasskeyChallenge, error) {
 	if !p.Pending() {
 		return PasskeyChallenge{}, ErrNoSession
@@ -374,9 +374,6 @@ func (s *Service) BeginPasskeyMFA(ctx context.Context, r *http.Request, p Princi
 		return PasskeyChallenge{}, err
 	}
 	if err := s.fromIP(ctx, site.ID, ip); err != nil {
-		return PasskeyChallenge{}, err
-	}
-	if err := s.checkMFAAttempt(ctx, p); err != nil {
 		return PasskeyChallenge{}, err
 	}
 	user, err := s.accountPasskeyUser(ctx, p.account, p.user)
@@ -390,11 +387,17 @@ func (s *Service) BeginPasskeyMFA(ctx context.Context, r *http.Request, p Princi
 	if err != nil {
 		return PasskeyChallenge{}, fmt.Errorf("%w: %w", ErrPasskeyFailed, err)
 	}
-	flow, err := s.insertWebAuthnFlow(ctx, site, "mfa", p, session, "")
-	if err != nil {
-		return PasskeyChallenge{}, err
+	var flowID uuid.UUID
+	if err := s.db.Tx(ctx, pg.SiteScope(uuid.UUID(site.ID)), func(tx pg.Tx) error {
+		if _, err := s.lockMFAAttempt(ctx, tx, p); err != nil {
+			return err
+		}
+		flowID = uuid.NewV7()
+		return s.insertWebAuthnFlowTx(ctx, tx, flowID, site, "mfa", p, session, "")
+	}); err != nil {
+		return PasskeyChallenge{}, fmt.Errorf("begin the passkey ceremony: %w", err)
 	}
-	return PasskeyChallenge{PublicKey: options, FlowID: flow}, nil
+	return PasskeyChallenge{PublicKey: options, FlowID: flowID.String()}, nil
 }
 
 // FinishPasskeyMFA turns the pending session into a verified one after the assertion. A failed assertion counts one of
@@ -416,22 +419,10 @@ func (s *Service) FinishPasskeyMFA(ctx context.Context, r *http.Request, p Princ
 	if err != nil {
 		return Issued{}, fmt.Errorf("%w: %w", ErrPasskeyFailed, err)
 	}
-	// Check the budget before consuming the flow or verifying. Only an assertion that parsed and belongs to a live
-	// flow can spend an attempt, so a random or expired flow is still refused without a failure record.
-	if err := s.checkMFAAttempt(ctx, p); err != nil {
-		return Issued{}, err
-	}
-	flow, err := s.consumeWebAuthnFlow(ctx, site, flowID, "mfa", p)
+	// The session's budget, its live flow and the attempt the flow spends commit together. A request that loses the
+	// race sees the attempt already spent before it can consume its flow or verify anything.
+	flow, user, err := s.consumeMFAAttempt(ctx, site, p, flowID)
 	if err != nil {
-		return Issued{}, err
-	}
-	user, err := s.accountPasskeyUser(ctx, p.account, p.user)
-	if err != nil {
-		return Issued{}, err
-	}
-	// Reserve the attempt before the expensive verification. The conditional update is what makes the budget hold
-	// when two finishes arrive together; once it fails, nothing is verified.
-	if err := s.spendMFAAttempt(ctx, p); err != nil {
 		return Issued{}, err
 	}
 	defer func() { s.failed(ctx, p.securityAttempt(), "security.mfa_failed", &err) }()
@@ -443,46 +434,6 @@ func (s *Service) FinishPasskeyMFA(ctx context.Context, r *http.Request, p Princ
 		return Issued{}, err
 	}
 	return s.passkeyMFAVerified(ctx, p, site, ip, userAgent)
-}
-
-// checkMFAAttempt refuses a pending session with no attempt left, before a ceremony creates a flow or verifies an
-// assertion. The user lock serializes it with the attempt a failed assertion reserves.
-func (s *Service) checkMFAAttempt(ctx context.Context, p Principal) error {
-	limit := int32(s.snapshot.Load().sites[p.site].limits.challengeAttempts) //nolint:gosec // the setting is at most 100
-	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-		pending, _, err := s.lockPendingID(ctx, tx, uuid.UUID(p.user), uuid.UUID(p.session))
-		if errors.Is(err, ErrNoSession) {
-			// A session that is no longer pending cannot spend an attempt: refuse it as a ceremony failure, as a
-			// spent or unknown flow would be.
-			return ErrPasskeyFailed
-		} else if err != nil {
-			return err
-		}
-		if pending.MfaAttempts >= limit {
-			return ErrTooManyAttempts
-		}
-		return nil
-	})
-}
-
-// spendMFAAttempt reserves one of the pending session's attempts before an assertion is verified. The conditional
-// update makes concurrent finishes stop at the budget instead of overrunning it.
-func (s *Service) spendMFAAttempt(ctx context.Context, p Principal) error {
-	limit := int32(s.snapshot.Load().sites[p.site].limits.challengeAttempts) //nolint:gosec // the setting is at most 100
-	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
-		pending, _, err := s.lockPendingID(ctx, tx, uuid.UUID(p.user), uuid.UUID(p.session))
-		if err != nil {
-			return err
-		}
-		spent, err := s.queries.ReserveMFAAttempt(ctx, tx, ReserveMFAAttemptParams{ID: pending.ID, Attempts: limit})
-		if err != nil {
-			return err
-		}
-		if spent != 1 {
-			return ErrTooManyAttempts
-		}
-		return nil
-	})
 }
 
 // passkeyMFAVerified replaces the pending session with a verified one after the assertion.
