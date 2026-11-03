@@ -305,11 +305,24 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the comparison checks out the base commit
+      # The same test container policy as go-test (#411): benchmarks start PostgreSQL and Valkey containers too, and a
+      # Ryuk that does not start within its wait on a loaded runner failed the whole job (train build 41569176679).
+      - name: Configure test container policy
+        run: |
+          echo "AXIOM_TEST_JOB=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB" >> "$GITHUB_ENV"
+          if [ -n "${AXIOM_TEST_CGROUP_PARENT:-}" ]; then
+            echo "TESTCONTAINERS_RYUK_DISABLED=true" >> "$GITHUB_ENV"
+          fi
+      - name: Clean test containers before tests
+        run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
       - if: env.BASE == ''
         run: just bench-once
       - if: env.BASE != ''
         run: bash scripts/ci/bench-compare.sh "$BASE"
+      - name: Clean test containers after tests
+        if: always()
+        run: bash scripts/ci/clean-test-containers.sh
 
   # A train or main only, as for the benchmark: a deployment regression is caught by the train, which ejects the PR that
   # broke it (scripts/train.py). The skip rule is the one ci.yml always had: only files clearly outside the container.
