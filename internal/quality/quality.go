@@ -103,6 +103,14 @@ type Measures struct {
 	ThroughputPercentiles [4]float64
 	Quality               float64 // 0 to 1: reliability and the measured time to first token and speed
 	Confidence            float64 // 0 to 1: 0 when nothing was counted; decays after the last counted outcome
+	// ProductScore is the fixed benchmark's score against the official direct run, 0–100 with official at 100, and
+	// ProductScoreConfidence how much it can be trusted: the 95% paired interval, answered coverage and age. They are
+	// separate from Quality, which measures how the endpoint runs, not what it answers. No run on the current
+	// configuration against the current official baseline means 0 and 0 (docs/domains/quality.md「产品成绩（固定测评题）」).
+	// ProductScoreAt is the last run's time, kept after the score ages out.
+	ProductScore           float64
+	ProductScoreConfidence float64
+	ProductScoreAt         time.Time
 	// Verified is set when a fingerprint check passed and is still recent (the configured maximum age), with no contradiction
 	// since. An endpoint never checked is not verified; neither is one concluded fake (docs/domains/quality.md
 	//「真伪检测」). VerifiedAt is when the last check passed, kept after it ages out or is contradicted, and
@@ -182,6 +190,8 @@ type Monitor struct {
 	mu        sync.RWMutex
 	endpoints map[suppliers.EndpointID]*State
 	collected map[suppliers.EndpointID]struct{}
+	// benchmarks is each catalog model's official direct run, the anchor its endpoints' product scores are relative to.
+	benchmarks map[uuid.UUID]officialBenchmark
 
 	unclassified   metric.Int64Counter // failures the adapters could not classify, which are not counted
 	verifyAge      atomic.Int64        // how long a verification pass counts, in nanoseconds, from the probe settings
@@ -222,6 +232,7 @@ type State struct {
 	facts         map[protocol.Format]measuredFacts // what detection measured, per call format
 	class         string                            // the source class's stable slug, from the last successful response
 	evidence      classEvidence                     // the headers and usage items the live rules read
+	benchmark     benchmarkState                    // the product score and the official baseline it was computed against
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -250,11 +261,13 @@ func New(meter metric.Meter) *Monitor {
 	if meter == nil {
 		meter = noop.NewMeterProvider().Meter("quality")
 	}
+	_ = fixedBenchmark() // a malformed embedded set must stop the node here, not on the first routing read
 	m := &Monitor{
-		endpoints: map[suppliers.EndpointID]*State{},
-		collected: map[suppliers.EndpointID]struct{}{},
-		changes:   make(chan change, 1024),
-		mode:      Observe,
+		endpoints:  map[suppliers.EndpointID]*State{},
+		collected:  map[suppliers.EndpointID]struct{}{},
+		benchmarks: map[uuid.UUID]officialBenchmark{},
+		changes:    make(chan change, 1024),
+		mode:       Observe,
 		unclassified: counter(meter, "axiom.quality.unclassified",
 			"Endpoint failures the adapter could not classify (an Unknown below 500), which do not count against health."),
 		suspectedBlock: counter(meter, "axiom.quality.suspected_block",
@@ -435,15 +448,26 @@ func (m *Monitor) classOf(e *State, ep suppliers.Routable) string {
 // fallback. New installs the relay fallback before Start reads the table.
 func (m *Monitor) fallbackClass() string { return m.classes.Load().fallback }
 
+// measuredState reads the endpoint and, for a platform endpoint, its model's official baseline under one lock: a tenant
+// endpoint never gets a product score, even if its id once belonged to a platform endpoint.
+func (m *Monitor) measuredState(ep suppliers.Routable) (*State, officialBenchmark, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	e := m.endpoints[ep.ID]
+	if !ep.Platform() {
+		return e, officialBenchmark{}, false
+	}
+	baseline, ok := m.benchmarks[ep.Model]
+	return e, baseline, ok
+}
+
 // MeasuredFor is what the endpoint's numbers are now for a routable endpoint: a pass counts only for the configuration
 // it checked, so an endpoint whose model, upstream name or format changed since the check is not verified even before
 // the loop clears the state (docs/domains/quality.md「真伪检测」), and a measurement of its structure likewise says
 // nothing about another configuration. The evidence and its claim are read in one critical section: a claim switched
 // between two reads must not be paired with the previous claim's evidence.
 func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
-	m.mu.RLock()
-	e := m.endpoints[ep.ID]
-	m.mu.RUnlock()
+	e, baseline, hasBaseline := m.measuredState(ep)
 	if e == nil {
 		return Measures{Health: 1, Quality: 1, Class: m.fallbackClass()}
 	}
@@ -459,8 +483,10 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	if out.Verified && (!has || e.verify.claim != want) {
 		out.Verified, out.VerifyConfidence, out.VerifiedAt = false, 0, time.Time{}
 	}
+	current := has && e.current == configOf(ep)
+	out.ProductScore, out.ProductScoreConfidence, out.ProductScoreAt = e.benchmark.productScore(now, baseline, hasBaseline, current)
 	out.Facts = nil
-	if has && e.current == configOf(ep) {
+	if current {
 		for f, mf := range e.facts {
 			if mf.claim != factClaim(ep, f) {
 				continue
