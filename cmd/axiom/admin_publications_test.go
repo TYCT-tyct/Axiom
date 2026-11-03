@@ -13,6 +13,7 @@ import (
 )
 
 func TestPricePolicyAPIAndUnknownCostPublication(t *testing.T) {
+	t.Parallel()
 	f := newPreview(t)
 	f.create(ruleJSON(everything, everything, faced))
 	seedUnpricedPublication(t, f.adminFixture)

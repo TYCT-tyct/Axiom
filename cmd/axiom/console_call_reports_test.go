@@ -180,12 +180,16 @@ func TestCallCSVSafeExactCells(t *testing.T) {
 	}
 }
 
+// seedCallHistory writes n copies of the recent call, a millisecond apart. Each copy's record is built once, in the
+// LATERAL join: `(jsonb_populate_record(…)).*` would build it once per column of the call log, which made the 10,000
+// calls of a full export take 50 seconds to write.
 func (c callsFixture) seedCallHistory(n int) {
 	c.f.t.Helper()
-	c.f.run(`INSERT INTO observability.call_log SELECT (jsonb_populate_record(NULL::observability.call_log,
-        to_jsonb(c) || jsonb_build_object('id', uuidv7(), 'at', c.at - n * interval '1 millisecond'))).*
+	c.f.run(`INSERT INTO observability.call_log SELECT r.*
         FROM observability.call_log c CROSS JOIN generate_series(1, ` + strconv.Itoa(n) + `) n
-        WHERE id = '` + c.recent.ID.String() + `'`)
+        CROSS JOIN LATERAL jsonb_populate_record(NULL::observability.call_log,
+            to_jsonb(c) || jsonb_build_object('id', uuidv7(), 'at', c.at - n * interval '1 millisecond')) r
+        WHERE c.id = '` + c.recent.ID.String() + `'`)
 }
 
 func TestCallCSVAtLimitExportsAll(t *testing.T) {
