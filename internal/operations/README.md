@@ -12,7 +12,7 @@ type Expected struct{ Calls, Errors *int64; Revenue, Cost *Money } // 已折算�
 func Read(ctx context.Context, tx pg.Tx, site uuid.UUID, month time.Time) (Targets, error)
 func ExpectedFor(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, since, until time.Time) (Expected, error)
 func Set(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, set Targets, reason string) error
-func (t Targets) Check() error
+func (t *Targets) Check() error
 ```
 
 - **谁调**：`cmd/axiom` 的 `GetOperationsTargets` 和 `UpdateOperationsTargets` 读写编辑器；`GetOperationsOverview` 用 `ExpectedFor` 把目标放进看板。本模块不引用 `observability` 或 `billing`：实际值由 `cmd/axiom` 算好，`Expected` 只带目标。
@@ -41,7 +41,7 @@ func (t Targets) Check() error
 | 读者看不到半套目标 | 四项写入、旧值读取和审计在同一个事务；同一站点和月份的写入先取 advisory lock，并发写有先后 |
 | 窗口跨月时不丢目标 | `ExpectedFor` 读 `since` 到 `until` 触及的每个月，逐月裁剪后相加；表驱动测试覆盖整月、部分月、跨月和空窗口 |
 | 金额不经过浮点，超出 64 位的中间结果不溢出 | 表和查询用 `numeric` 文本，折算用 `big.Int`；超宽的结果被 `countTarget` 拒绝而不是截断 |
-| 币种不符的金额目标不参与对照 | `expectedFrom` 跳过；handler 再检查 `Expected` 的币种与站点当前币种一致 |
+| 币种不符的金额目标不参与对照 | `expectedFrom` 跳过；`Expected` 的金额只按站点当前币种呈现 |
 | 未记录的成功改动不能留下 | `audit.Record` 和写入同一事务；`TestAdminOperationsTargets` 读审计的 `before`/`after` |
 
 ## 测试
