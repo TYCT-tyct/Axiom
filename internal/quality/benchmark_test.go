@@ -56,7 +56,7 @@ func TestRecordBenchmark(t *testing.T) {
 		t.Fatalf("a baseline alone scored another endpoint: %+v", got)
 	}
 	official := runOfSet(set, at, "yes")
-	score, ok := m.RecordBenchmark(candidate, official)
+	score, ok := m.RecordBenchmark(t.Context(), candidate, official)
 	if !ok || score.Score != 100 || score.Confidence != 1 || score.Possible == 0 {
 		t.Fatalf("the candidate scored %+v, want 100 with full confidence", score)
 	}
@@ -92,7 +92,7 @@ func TestOfficialBaselineOwnsItsAnswers(t *testing.T) {
 	if err := m.Prepare(t.Context(), []suppliers.Routable{ep}); err != nil {
 		t.Fatal(err)
 	}
-	if !m.RecordOfficialBenchmark(ep, run) {
+	if !m.RecordOfficialBenchmark(t.Context(), ep, run) {
 		t.Fatal("the official baseline was refused")
 	}
 	for i := range 17 { // the caller reuses the slice after the call
@@ -108,7 +108,7 @@ func TestOfficialBaselineOwnsItsAnswers(t *testing.T) {
 	for i := range 17 {
 		weaker.Answers[i].Reply = correct[weaker.Answers[i].Question]
 	}
-	score, ok := m.RecordBenchmark(candidate, weaker)
+	score, ok := m.RecordBenchmark(t.Context(), candidate, weaker)
 	if !ok || math.Abs(score.Score-50) > 1e-9 {
 		t.Fatalf("a candidate with 17 of 34 scored %+v, want 50 after the input was mutated", score)
 	}
@@ -130,18 +130,18 @@ func TestRecordBenchmarkRejectsRunBeforeCurrentBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldBase := t0.Add(time.Hour)
-	if !m.RecordOfficialBenchmark(ep, runOfSet(set, oldBase, "yes")) {
+	if !m.RecordOfficialBenchmark(t.Context(), ep, runOfSet(set, oldBase, "yes")) {
 		t.Fatal("the old baseline was refused")
 	}
-	if _, ok := m.RecordBenchmark(candidate, runOfSet(set, oldBase.Add(5*time.Minute), "yes")); !ok {
+	if _, ok := m.RecordBenchmark(t.Context(), candidate, runOfSet(set, oldBase.Add(5*time.Minute), "yes")); !ok {
 		t.Fatal("the old candidate run was refused")
 	}
 	newBase := oldBase.Add(time.Hour)
-	if !m.RecordOfficialBenchmark(ep, runOfSet(set, newBase, "yes")) {
+	if !m.RecordOfficialBenchmark(t.Context(), ep, runOfSet(set, newBase, "yes")) {
 		t.Fatal("the new baseline was refused")
 	}
 	late := runOfSet(set, oldBase.Add(30*time.Minute), "yes")
-	if _, ok := m.RecordBenchmark(candidate, late); ok {
+	if _, ok := m.RecordBenchmark(t.Context(), candidate, late); ok {
 		t.Fatal("a run before the new baseline was accepted")
 	}
 	if got := m.MeasuredFor(candidate, newBase); got.ProductScore != 0 {
@@ -165,18 +165,18 @@ func TestCommitBenchmarkRejectsAStaleBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldAt := t0
-	if !m.RecordOfficialBenchmark(official, runOfSet(set, oldAt, "yes")) {
+	if !m.RecordOfficialBenchmark(t.Context(), official, runOfSet(set, oldAt, "yes")) {
 		t.Fatal("the old baseline was refused")
 	}
 	m.mu.RLock()
 	oldBaseline := m.benchmarks[model]
 	m.mu.RUnlock()
 	run := runOfSet(set, oldAt.Add(10*time.Minute), "yes")
-	score, ok := scoreBenchmark(set, oldBaseline.run, run)
+	score, ok := scoreAgainst(set, oldBaseline, run)
 	if !ok {
 		t.Fatal("the old baseline did not score a candidate run")
 	}
-	if !m.RecordOfficialBenchmark(official, runOfSet(set, oldAt.Add(time.Hour), "yes")) {
+	if !m.RecordOfficialBenchmark(t.Context(), official, runOfSet(set, oldAt.Add(time.Hour), "yes")) {
 		t.Fatal("the new baseline was refused")
 	}
 	sentinel := benchmarkState{
@@ -187,7 +187,7 @@ func TestCommitBenchmarkRejectsAStaleBaseline(t *testing.T) {
 	e.mu.Lock()
 	e.benchmark = sentinel
 	e.mu.Unlock()
-	if m.commitBenchmark(candidate, oldBaseline, run, score) {
+	if m.commitBenchmark(candidate, oldBaseline, benchmarkStateOf(score, oldBaseline.at, candidate)) {
 		t.Fatal("a score computed against the replaced baseline was committed")
 	}
 	e.mu.Lock()
@@ -210,17 +210,17 @@ func TestRecordBenchmarkBindsToConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	weaker := runOfSet(set, at.Add(time.Hour), "no")
-	score, ok := m.RecordBenchmark(other, weaker)
+	score, ok := m.RecordBenchmark(t.Context(), other, weaker)
 	if !ok || score.Score != 0 || score.Points != 0 {
 		t.Fatalf("the weaker endpoint scored %+v, want 0", score)
 	}
 	mismatch := runOfSet(set, at.Add(2*time.Hour), "yes")
 	mismatch.Format = protocol.Messages
-	if _, ok := m.RecordBenchmark(other, mismatch); ok {
+	if _, ok := m.RecordBenchmark(t.Context(), other, mismatch); ok {
 		t.Fatal("a run in another format was scored against the chat baseline")
 	}
 	older := runOfSet(set, at.Add(30*time.Minute), "yes")
-	if _, ok := m.RecordBenchmark(other, older); ok {
+	if _, ok := m.RecordBenchmark(t.Context(), other, older); ok {
 		t.Fatal("an older run replaced a newer score")
 	}
 	changed := other
@@ -244,7 +244,7 @@ func TestRecordBenchmarkRejectsNonGenerationFormat(t *testing.T) {
 	}
 	run := runOfSet(set, t0.Add(2*time.Hour), "yes")
 	run.Format = protocol.Embeddings
-	if _, ok := m.RecordBenchmark(embedding, run); ok {
+	if _, ok := m.RecordBenchmark(t.Context(), embedding, run); ok {
 		t.Fatal("an embeddings endpoint was scored on a text benchmark")
 	}
 }
@@ -261,7 +261,7 @@ func benchmarkMonitor(t *testing.T, set *BenchmarkSet) (*Monitor, suppliers.Rout
 		t.Fatal(err)
 	}
 	at := t0.Add(time.Hour)
-	if !m.RecordOfficialBenchmark(ep, runOfSet(set, at, "yes")) {
+	if !m.RecordOfficialBenchmark(t.Context(), ep, runOfSet(set, at, "yes")) {
 		t.Fatal("the official baseline was refused")
 	}
 	return m, ep, at
@@ -294,7 +294,7 @@ func TestRecordBenchmarkNeedsTheCurrentBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := t0.Add(time.Hour)
-	if !m.RecordOfficialBenchmark(ep, runOfSet(set, at, "yes")) {
+	if !m.RecordOfficialBenchmark(t.Context(), ep, runOfSet(set, at, "yes")) {
 		t.Fatal("the first baseline was refused")
 	}
 	candidate := ep
@@ -302,21 +302,21 @@ func TestRecordBenchmarkNeedsTheCurrentBaseline(t *testing.T) {
 	if err := m.Prepare(t.Context(), []suppliers.Routable{ep, candidate}); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := m.RecordBenchmark(candidate, runOfSet(set, at, "yes")); !ok {
+	if _, ok := m.RecordBenchmark(t.Context(), candidate, runOfSet(set, at, "yes")); !ok {
 		t.Fatal("the endpoint was not scored against the first baseline")
 	}
 	newer := runOfSet(set, at.Add(time.Hour), "yes")
 	newer.Answers[0].Reply = "no" // the official run itself moved: scores against the old anchor are incomparable
-	if !m.RecordOfficialBenchmark(ep, newer) {
+	if !m.RecordOfficialBenchmark(t.Context(), ep, newer) {
 		t.Fatal("a newer baseline was refused")
 	}
 	if got := m.MeasuredFor(candidate, at.Add(time.Hour)); got.ProductScore != 0 || got.ProductScoreConfidence != 0 {
 		t.Fatalf("a score against the old baseline survived its replacement: %+v", got)
 	}
-	if m.RecordOfficialBenchmark(ep, runOfSet(set, at.Add(-time.Hour), "yes")) {
+	if m.RecordOfficialBenchmark(t.Context(), ep, runOfSet(set, at.Add(-time.Hour), "yes")) {
 		t.Fatal("an older baseline replaced the current one")
 	}
-	if _, ok := m.RecordBenchmark(candidate, runOfSet(set, newer.At.Add(benchmarkMaxAge), "yes")); ok {
+	if _, ok := m.RecordBenchmark(t.Context(), candidate, runOfSet(set, newer.At.Add(benchmarkMaxAge), "yes")); ok {
 		t.Fatal("a run against an aged-out anchor was scored")
 	}
 }
@@ -334,10 +334,10 @@ func TestRecordOfficialBenchmarkRejectsIncompleteRun(t *testing.T) {
 	}
 	partial := runOfSet(set, t0, "yes")
 	partial.Answers = partial.Answers[:len(partial.Answers)/2]
-	if m.RecordOfficialBenchmark(ep, partial) {
+	if m.RecordOfficialBenchmark(t.Context(), ep, partial) {
 		t.Fatal("a partial official run became the anchor")
 	}
-	if m.RecordOfficialBenchmark(ep, runOfSet(set, t0, "no")) {
+	if m.RecordOfficialBenchmark(t.Context(), ep, runOfSet(set, t0, "no")) {
 		t.Fatal("an official run that passed nothing became the anchor")
 	}
 }
@@ -348,7 +348,7 @@ func TestRecordOfficialBenchmarkRejectsTenantEndpoints(t *testing.T) {
 	ep := suppliers.Routable{ID: suppliers.EndpointID{1}, Model: uuid.NewV7(), Upstream: "own", Formats: []protocol.Format{protocol.Chat}}
 	ep.Site = uuid.NewV7()
 	m := New(nil)
-	if m.RecordOfficialBenchmark(ep, runOfSet(set, t0, "yes")) {
+	if m.RecordOfficialBenchmark(t.Context(), ep, runOfSet(set, t0, "yes")) {
 		t.Fatal("a tenant endpoint anchored the official score")
 	}
 }
@@ -362,7 +362,7 @@ func TestBenchmarkKeepsRunningMetricsSeparate(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := t0.Add(time.Hour)
-	if !m.RecordOfficialBenchmark(ep, runOfSet(set, at, "yes")) {
+	if !m.RecordOfficialBenchmark(t.Context(), ep, runOfSet(set, at, "yes")) {
 		t.Fatal("baseline refused")
 	}
 	for range scoreSamples {
@@ -393,7 +393,7 @@ func TestBenchmarkConcurrently(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := t0.Add(time.Hour)
-	if !m.RecordOfficialBenchmark(eps[0], runOfSet(set, at, "yes")) {
+	if !m.RecordOfficialBenchmark(t.Context(), eps[0], runOfSet(set, at, "yes")) {
 		t.Fatal("baseline refused")
 	}
 	var wg sync.WaitGroup
@@ -401,7 +401,7 @@ func TestBenchmarkConcurrently(t *testing.T) {
 		wg.Go(func() {
 			for n := range 50 {
 				ep := eps[i%len(eps)]
-				_, _ = m.RecordBenchmark(ep, runOfSet(set, at.Add(time.Duration(n)*time.Second), "yes"))
+				_, _ = m.RecordBenchmark(t.Context(), ep, runOfSet(set, at.Add(time.Duration(n)*time.Second), "yes"))
 				_ = m.MeasuredFor(ep, at)
 				m.Observe(t.Context(), Observation{Endpoint: ep.ID, Done: true, Sent: at, FirstToken: at.Add(time.Millisecond), Ended: at.Add(time.Second)})
 			}

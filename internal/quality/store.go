@@ -188,6 +188,9 @@ func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) e
 		now = m.loop.now()
 	}
 	for _, ep := range endpoints {
+		// Read the stored score before taking the endpoint lock: the monitor lock must never be taken under it, or a
+		// commit (monitor then endpoint) could deadlock with a snapshot build (endpoint then monitor).
+		saved, hasSaved := m.savedScore(ep.ID)
 		e := m.of(ep.ID)
 		e.mu.Lock()
 		// A routing build and the health loop both publish configurations. The build may have read an older supplier
@@ -202,13 +205,7 @@ func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) e
 			e.published = ep.Generation
 		}
 		e.credentials = ep.Credentials
-		if cfg := configOf(ep); e.current != cfg {
-			e.facts = nil                  // facts belong to the configuration they were measured on
-			e.benchmark = benchmarkState{} // and so does the product score
-			e.evidence = classEvidence{}   // and so do response fingerprints: another upstream's headers say nothing of this one
-			e.class = m.fallbackClass()
-			e.current = cfg
-		}
+		e.publish(ep, saved, hasSaved, m.fallbackClass())
 		loaded := e.loaded
 		e.owned = !ep.Platform()
 		_, generation := probeFormat(ep.Formats)
@@ -224,6 +221,33 @@ func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) e
 		}
 	}
 	return nil
+}
+
+// publish moves the endpoint to ep's configuration and adopts the stored score when it belongs to that configuration.
+// The caller holds e.mu. A configuration change voids the score and remembers it as seen, so a later refresh cannot
+// resurrect it if the configuration returns; a genuinely newer run still passes newerScore.
+func (e *State) publish(ep suppliers.Routable, saved benchmarkState, hasSaved bool, fallback string) {
+	cfg := configOf(ep)
+	if e.current != cfg {
+		e.facts = nil                // facts belong to the configuration they were measured on
+		e.evidence = classEvidence{} // and so do response fingerprints: another upstream's headers say nothing of this one
+		e.class = fallback
+		if !e.benchmark.at.IsZero() && newerScore(e.benchmark, e.benchmarkSeen) {
+			e.benchmarkSeen = e.benchmark
+		}
+		if e.benchmark.config != cfg {
+			e.benchmark = benchmarkState{} // a product score recorded on another configuration
+		}
+		e.current = cfg
+	}
+	// The store is the shared record: adopt a score another node recorded, or one from before a restart, as soon as
+	// the configuration it names is the one this endpoint publishes.
+	if hasSaved && newerScore(saved, e.benchmarkSeen) {
+		e.benchmarkSeen = saved
+		if saved.config == cfg && newerScore(saved, e.benchmark) {
+			e.benchmark = saved
+		}
+	}
 }
 
 func (l *Loop) restore(ctx context.Context, e *State) error {

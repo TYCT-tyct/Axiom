@@ -76,6 +76,7 @@ type Loop struct {
 	settings            atomic.Pointer[ProbeSettings]
 	settingsAt          time.Time
 	classesAt           time.Time
+	benchmarksAt        time.Time
 	done                chan probeEnd
 	verifyDone          chan verifyEnd
 	stale               bool
@@ -138,6 +139,9 @@ func Start(ctx context.Context, c Config) (*Monitor, *Loop, error) {
 		return nil, nil, err
 	}
 	if err := l.loadClasses(ctx, c.Now()); err != nil {
+		return nil, nil, err
+	}
+	if err := l.loadBenchmarks(ctx, c.Now()); err != nil {
 		return nil, nil, err
 	}
 	return m, l, nil
@@ -230,6 +234,7 @@ func (l *Loop) Tick(ctx context.Context) error {
 	now := l.now()
 	l.refreshSettings(ctx, now)
 	l.refreshClasses(ctx, now)
+	l.refreshBenchmarks(ctx, now)
 	endpoints, err := l.source.Routable()
 	if err != nil {
 		l.stale = true
