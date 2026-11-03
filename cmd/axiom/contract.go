@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
@@ -14,8 +15,12 @@ import (
 	"axiom/internal/platform/consoleapi"
 )
 
-// consoleContract is the console's contract as the generated code embeds it, with the rules read out of it.
-func consoleContract() (*contract, error) {
+// consoleContract is the console's contract as the generated code embeds it, with the rules read out of it. The rules
+// are immutable, so they are read once: parsing the generated document under the race detector costs more than most of
+// the requests the guard checks against it.
+func consoleContract() (*contract, error) { return consoleContractOnce() }
+
+var consoleContractOnce = sync.OnceValues(func() (*contract, error) {
 	doc, err := consoleapi.GetSpec()
 	if err != nil {
 		return nil, fmt.Errorf("the console contract: %w", err)
@@ -25,7 +30,7 @@ func consoleContract() (*contract, error) {
 		return nil, fmt.Errorf("the console contract: %w", err)
 	}
 	return c, nil
-}
+})
 
 // The levels an operation's `x-axiom-level` names (internal/platform/README.md「接口约定」).
 const (

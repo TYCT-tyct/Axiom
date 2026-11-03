@@ -203,11 +203,12 @@ func (w *supplierAlertTest) waitReceipt(seq int) {
 
 func (w *supplierAlertTest) waitQuery(query string, args ...any) {
 	w.t.Helper()
-	ctx, cancel := context.WithTimeout(w.t.Context(), 15*time.Second)
-	defer cancel()
+	// The row is the signal. A loaded machine may take longer to reach this state, so there is no wall-clock deadline:
+	// a state that never arrives is a hang the test binary's timeout reports with every goroutine, while a deadline
+	// here would fail a correct run (#624).
 	for {
 		var ok bool
-		err := w.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error { return tx.QueryRow(ctx, query, args...).Scan(&ok) })
+		err := w.db.ReadTx(w.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error { return tx.QueryRow(w.t.Context(), query, args...).Scan(&ok) })
 		if err != nil {
 			w.t.Fatal(err)
 		}
@@ -219,11 +220,11 @@ func (w *supplierAlertTest) waitQuery(query string, args ...any) {
 
 func (w *supplierAlertTest) waitNotice() {
 	w.t.Helper()
-	ctx, cancel := context.WithTimeout(w.t.Context(), 15*time.Second)
-	defer cancel()
+	// The receiver's delivery is the signal, not a wall clock: under load the queue may take longer than the 15 seconds
+	// this wait used to allow, and a missing notice is a hang the test binary's timeout reports (#624).
 	select {
 	case <-w.received:
-	case <-ctx.Done():
+	case <-w.t.Context().Done():
 		w.t.Fatal("no supplier notification")
 	}
 }
