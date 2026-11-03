@@ -136,7 +136,7 @@ func buildOwnerDatabase(t *testing.T) (pgtest.Database, struct{}) {
 // fastOwnerPasswordHash is ownerPassword under test-only argon2id parameters. Tests of this package sign in as the
 // owner to reach a handler, and the production parameters (m=19 MiB, t=2) make every one of those setup steps a
 // deliberate CPU cost; internal/accounts has the tests for the production cost and for PHC parsing.
-const fastOwnerPasswordHash = `$argon2id$v=19$m=1024,t=1,p=1$JPpCG4Fctr0sP/onpqm3/A$yt14hwx5Whbfg/XyFgHBQlQRJrJPBsgYa4fB9P+Be7o`
+const fastOwnerPasswordHash = `$argon2id$v=19$m=1024,t=1,p=1$JPpCG4Fctr0sP/onpqm3/A$yt14hwx5Whbfg/XyFgHBQlQRJrJPBsgYa4fB9P+Be7o` //nolint:gosec // the shared test password is not a credential; this hash is deliberately cheap
 
 // useFastPassword replaces email's stored hash with the test-only one, after user create has hashed the shared password
 // with the production parameters.
