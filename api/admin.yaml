@@ -176,6 +176,73 @@ paths:
           $ref: '#/components/responses/NotFound'
         default:
           $ref: '#/components/responses/Failure'
+  /api/admin/v1/reports/targets/{month}:
+    parameters:
+      - name: month
+        in: path
+        required: true
+        description: A UTC calendar month, `YYYY-MM`.
+        schema: {type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'}
+    get:
+      operationId: getOperationsTargets
+      tags: [Reports]
+      summary: The site's business targets for a UTC calendar month.
+      description: >-
+        The targets the owner set in the admin for one month (docs/domains/operations.md「业务目标」). Calls and errors
+        are whole counts; revenue and cost are exact money in the site's accounting currency. `rev` is the month's
+        revision: 0 before the first write, one more after every successful write, including a clear. A month with no
+        target has no target fields and still carries its revision.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The targets
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsTargets"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateOperationsTargets
+      tags: [Reports]
+      summary: Set the site's business targets for a UTC calendar month.
+      description: >-
+        Replaces all four targets of the month: a target left out is cleared, not kept from before. The request carries
+        the `rev` the editor read; a month that has moved since then is a 409 `stale_revision`, not a silent overwrite
+        of another administrator's change. Counts are calls and errors; revenue and cost are exact money in the site's
+        accounting currency, and another currency is a 400. The change is audited with the values it replaced and the
+        reason. Targets are administrative data, not site settings, so `updateSiteSettings` leaves them as they are.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationsTargetsUpdate"}
+      responses:
+        "200":
+          description: The targets as stored
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsTargets"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/audit:
     get:
       operationId: listAuditEntries
@@ -5718,6 +5785,93 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/OverviewModel'
+        targets:
+          $ref: '#/components/schemas/OperationsTargetComparison'
+    OperationsTargets:
+      type: object
+      additionalProperties: false
+      required: [site_id, month, rev]
+      description: >-
+        A site's business targets for one UTC calendar month (docs/domains/operations.md「业务目标」). A target that is
+        absent has not been set for that month; a target of zero is set and means zero. `rev` is the optimistic
+        concurrency token for the month: 0 before the first write, and one more after every successful write.
+      properties:
+        site_id: {$ref: '#/components/schemas/SiteId'}
+        month:
+          type: string
+          pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+          description: The UTC calendar month the targets cover.
+        rev:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The revision to send back when replacing this month's targets.
+        calls: {type: integer, format: int64, minimum: 0, maximum: 1000000000000000}
+        errors: {type: integer, format: int64, minimum: 0, maximum: 1000000000000000}
+        revenue: {$ref: '#/components/schemas/Money'}
+        cost: {$ref: '#/components/schemas/Money'}
+    OperationsTargetsUpdate:
+      type: object
+      additionalProperties: false
+      required: [reason, rev]
+      description: >-
+        The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the
+        matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's
+        accounting currency; another currency is a 400. Counts are calls and errors.
+      properties:
+        reason: {$ref: '#/components/schemas/Reason'}
+        rev:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The revision the editor read; a changed revision is a 409 `stale_revision`.
+        calls: {type: integer, format: int64, minimum: 0, maximum: 1000000000000000}
+        errors: {type: integer, format: int64, minimum: 0, maximum: 1000000000000000}
+        revenue: {$ref: '#/components/schemas/Money'}
+        cost: {$ref: '#/components/schemas/Money'}
+    OperationsTargetComparison:
+      type: object
+      additionalProperties: false
+      description: >-
+        The monthly targets prorated to the dashboard's window, with `gap` = actual - target, in the metric's unit. An
+        empty object means no monthly target covers the window. The count gaps are absent while `calls_incomplete`,
+        because archived calls would make the actual side incomplete. The cost gap is also absent while
+        `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the
+        data does not support. A money target set in another currency than the site's accounting currency is absent.
+        The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as
+        no target.
+      properties:
+        calls: {$ref: '#/components/schemas/OperationsCountTarget'}
+        errors: {$ref: '#/components/schemas/OperationsCountTarget'}
+        revenue: {$ref: '#/components/schemas/OperationsMoneyTarget'}
+        cost: {$ref: '#/components/schemas/OperationsMoneyTarget'}
+    OperationsCountTarget:
+      type: object
+      additionalProperties: false
+      required: [target]
+      properties:
+        target:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The monthly target, prorated to the part of the window inside its month.
+        gap:
+          type: integer
+          format: int64
+          description: Actual minus target. Absent when the call log is incomplete over the window.
+    OperationsMoneyTarget:
+      type: object
+      additionalProperties: false
+      required: [target]
+      properties:
+        target:
+          $ref: '#/components/schemas/Money'
+        gap:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          description: >-
+            Actual minus target. Absent when the cost total is incomplete (`unknown_cost_calls` above zero) or the
+            target's currency is not the site's current accounting currency.
     OverviewAccount:
       type: object
       additionalProperties: false

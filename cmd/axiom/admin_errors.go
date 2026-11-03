@@ -7,6 +7,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
+	"axiom/internal/operations"
 	"axiom/internal/payments"
 	"axiom/internal/platform/idem"
 	"axiom/internal/suppliers"
@@ -18,6 +19,7 @@ var adminRefusals = []refusal{
 	{observability.ErrAlertRotationWindow, http.StatusConflict, codeConflict, "the preceding signing secret is still valid; wait until the one-hour overlap ends before rotating again"},
 	{payments.ErrInvestigated, http.StatusConflict, codeConflict, "this record was already investigated; read its saved note"},
 	{payments.ErrStale, http.StatusConflict, codeStaleRevision, "the merchant account changed since it was read"},
+	{operations.ErrStaleRevision, http.StatusConflict, codeStaleRevision, "the targets changed since they were read"},
 	{payments.ErrTampered, http.StatusConflict, codeConflict, "the merchant account's settings do not match its sealed secrets; enter the secrets again"},
 	{observability.ErrAlertConfiguration, http.StatusUnprocessableEntity, codeUnprocessable, "the alert configuration is invalid"},
 	{observability.ErrRetention, http.StatusUnprocessableEntity, codeUnprocessable, "the hot window is 0 to 3650 days"},

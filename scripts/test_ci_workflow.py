@@ -247,6 +247,17 @@ class TestContainerPolicy(unittest.TestCase):
         self.assertIn("if: always()", steps[after:])
         self.assertEqual(steps.count("run: bash scripts/ci/clean-test-containers.sh"), 2)
 
+    def test_every_job_that_starts_test_containers_has_the_same_policy(self):
+        # bench starts PostgreSQL and Valkey too and lacked the policy: Ryuk timed out on a loaded runner (#411's
+        # mechanism, train build 41569176679)
+        policy = lambda name: re.search(
+            r"- name: Configure test container policy\n        run: \|\n(.*?)(?=^      -)", job(name), re.M | re.S)
+        for name in ("journey", "bench"):
+            with self.subTest(job=name):
+                self.assertIsNotNone(policy(name))
+                self.assertEqual(policy(name).group(1), policy("go-test").group(1))
+                self.assertEqual(job(name).count("run: bash scripts/ci/clean-test-containers.sh"), 2)
+
     def test_policy_is_conditional_and_identifies_the_attempt_and_job(self):
         if not BASH:
             self.skipTest("Bash from Git for Windows or PATH is unavailable")
