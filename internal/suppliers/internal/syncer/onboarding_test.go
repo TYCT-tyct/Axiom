@@ -113,6 +113,45 @@ func TestKeysTaskAdoptsAMadeKeyByName(t *testing.T) {
 	}
 }
 
+// TestKeysTaskAdoptsAKeyAfterALostCreateResponse: the supplier created the key but the answer never arrived. The next
+// complete listing must find it by its group and marker name and read its text, not create a second valid key.
+func TestKeysTaskAdoptsAKeyAfterALostCreateResponse(t *testing.T) {
+	base := healthy()
+	var listed []adapter.KeyState
+	base.keys = func(adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+		return adapter.Page[adapter.KeyState]{Done: true, Items: listed}, nil
+	}
+	created := 0
+	m := &maker{
+		supplier: base,
+		create: func(_, _ string) (adapter.KeyRef, error) {
+			created++
+			return "", errors.New("the create response was lost")
+		},
+		secret: func(adapter.KeyRef) (secret.Secret, error) { return secret.New("s9"), nil },
+	}
+	st := &keyStore{memStore: newStore(), targets: []KeyTarget{{GroupRef: "1", Name: "axiom-1-2"}}}
+	first := Commit{State: State{Version: 1}}
+	if err := keyEngine(m, st).keys(t.Context(), &first); err == nil {
+		t.Fatal("the lost create response was not reported")
+	}
+	if created != 1 {
+		t.Fatalf("made %d keys, want 1", created)
+	}
+
+	listed = []adapter.KeyState{{Ref: "9", GroupRef: "1", Name: "axiom-1-2", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}}
+	second := Commit{State: State{Version: 1}}
+	if err := keyEngine(m, st).keys(t.Context(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 {
+		t.Fatalf("made %d keys after the listing, want to adopt the first", created)
+	}
+	if len(second.KeyWrites.Made) != 1 || second.KeyWrites.Made[0].Ref != "9" {
+		t.Fatalf("made %+v, want the listed key adopted", second.KeyWrites.Made)
+	}
+}
+
 func TestKeysTaskRecordsAFixedKeyFailure(t *testing.T) {
 	m := healthy()
 	m.keys = func(adapter.Listing) (adapter.Page[adapter.KeyState], error) {

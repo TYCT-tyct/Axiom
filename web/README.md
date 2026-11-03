@@ -52,7 +52,8 @@
 | 每个请求都会结束 | `@axiom/api` 的客户端给每个请求设 10 秒超时（含读响应体），并接上调用方的 signal；查询把 TanStack Query 的 signal 传下去，没人再看的查询会取消请求。已知更慢的调用用 `fetchWithin` 给自己的超时：后台的端点测试是 75 秒，长过服务端给它的一分钟，否则每次慢测试都拿不到结果、只能重发 |
 | 切换页面不出现空白 | 两个应用的路由都从 `routerDefaults` 开始：保留当前页面，等待超过 150 毫秒时只在内容区显示骨架；骨架也是整页状态，带着一个一级标题，端到端场景等的是页面自己的标题而不是加载中的那个（`e2e/page-heading.ts`） |
 | 部署后旧页面加载不到新的代码块时自动刷新一次；滚动发布保留了旧构建的带哈希文件时通常不触发，回滚到没有保留的构建仍靠它 | 路由的 `lazyRouteComponent`：只在打开页面时刷新，悬停或聚焦链接引起的预加载失败不刷新；同一个代码块在本标签页只刷新一次，再失败就显示 `PageFailedState`；会话存储不可用时不刷新，直接显示。保留旧文件的机制在 [platform 的「前端文件」](../internal/platform/README.md#前端文件)，端到端测试覆盖刷新 |
-| 数字和时间按页面语言格式化，时间注明时区 | `packages/ui/src/format.ts` 的 `useFormat` |
+| 数字和时间按页面语言格式化，时间按查看者的时区显示并注明时区；按 UTC 定义的月份在控件旁写明 UTC | `packages/ui/src/format.ts` 的 `useFormat`、`MonthField` |
+| 表格的列标题不换行；长标识符在中间截断，保留首尾，悬停可看到完整值，旁边有复制按钮；其余文字不截断 | `Th` 的 `whitespace-nowrap`、`Id`/`IdText`；`e2e/gate.spec.ts` 和 `e2e/admin-targets.spec.ts` |
 | 登录状态只由服务端说了算：页面启动时问 `getSession`，401 就是没登录（不是故障）；CSRF 令牌只放内存（Cookie 是 HttpOnly），每个改数据的请求自动带它和 JSON 内容类型，登录、第二步和改认证因素的响应换新令牌 | `@axiom/api` 的 `setCsrfToken` 与客户端中间件，`packages/app/src/session.tsx`；端到端的接口模拟按契约校验会话、等级、权限、CSRF、Origin，缺一个就拒绝 |
 | 会话中途失效（任何请求得到 `unauthenticated`）：清掉会话和账户的缓存，去登录页，登录后回到原来的页面（路径加查询）；只有登录流程的页面（登录、第二步、开启两步验证、注册）沿用它地址里经过校验的 `next`，受保护页面地址里的 `next` 是页面自己的参数；`next` 按浏览器的 URL 规则（含编码的 `..`）解析，只收落在本应用路径范围内的地址 | `createQueryClient`（`packages/app/src/providers.tsx`）里 `QueryCache`/`MutationCache` 的 `onError`、`Gate`、`safeNext`、`endUnauthenticated`；`safeNext` 的单元测试和 `e2e/console-pages.spec.ts` |
 | 浏览器的会话由所有标签页共用：页面重新读到的会话换了用户或账户时，取消并清掉上一个账户加载的数据，页面从头开始（打开着的对话框和填了一半的表单不留）；同一账户的权限变了时页面保留（恢复码对话框不丢），但没人看的账户数据清掉、正在看的重新请求，失去权限的按「没有权限」显示；重新读会话失败时保留已有的会话，不把正在用的页面换成错误页 | `packages/app/src/session.tsx` 的 `sessionQuery`（比较前后会话的身份）、`Gate`（按身份重建、失败时保留）；端到端测试覆盖 |
@@ -62,7 +63,7 @@
 | 金额是精确的整数文本，显示和输入都不经过浮点数 | `useFormat().money`、`parseMoney`、`moneyInput`；单元测试含 int64 的上下界 |
 | 只显示一次的内容（key 明文、恢复码）放在不能用 Esc 或点背景关掉的对话框里，用户确认后才关；生成恢复码的请求还没回来时，发起请求的对话框也不能关；确认时读新会话失败，恢复码仍留在屏幕上并说明原因，可以重试 | `Dialog` 的 `dismissible`、`packages/app/src/totp-dialogs.tsx`；端到端测试覆盖 |
 | 两步验证的二维码在本地用 `qrcode-generator` 画成 SVG 的 `<path>`，不拼 HTML 字符串，也不把密钥交给外部服务 | `packages/app/src/qr.tsx` |
-| 验收门槛的无障碍和不破版：控制台和后台的每个页面、每个对话框在深浅色、中英文下没有 WCAG 2.2 AA 的违规，用最坏数据在 360 到 2560px 宽下页面不出现横向滚动，表格行内的按钮和链接不跑出表格自己的滚动框 | `e2e/gate.spec.ts`（axe-core 与溢出检查），页面列表在 `e2e/console-scenes.ts` 和 `e2e/admin-scenes.ts` |
+| 验收门槛的无障碍和不破版：控制台和后台的每个页面、每个对话框在深浅色、中英文下没有 WCAG 2.2 AA 的违规，用最坏数据在 360 到 2560px 宽下页面不出现横向滚动，列标题不换行，侧栏铺满长页面，表格行内的按钮和链接不跑出表格自己的滚动框 | `e2e/gate.spec.ts`（axe-core 与溢出检查），页面列表在 `e2e/console-scenes.ts` 和 `e2e/admin-scenes.ts` |
 | 站点的品牌色自动配出深浅两套强调色和主按钮，对比度不低于 4.5:1，主按钮与页面、面板、对话框任一底色对比不到 3:1 时加边线（`--btn-line`）；不是 `#rrggbb` 的写法被拒绝。后台的系统设置没有这一项，颜色经 `PUT /api/admin/v1/sites/{site_id}/brand` 设置，控制台从 `GET /api/console/v1/site` 的 `brand_color` 取用；没有时用默认配色 | `packages/ui/src/brand.ts` 的 `brandStyle`，由 `AppShell` 和 `AuthFrame` 通过 `useBrandStyle` 写到文档根元素，页面外的恢复码对话框也继承；单元测试 `brand.test.ts`（极端色与色彩网格）；`e2e/gate.spec.ts` 对 5 种极端品牌色做 axe 对比度检查，`e2e/shots.spec.ts` 截图 |
 | 后台的每个改数据的操作都填理由、有确认（高风险的要输入对象的名字）、防重复提交；一个操作一个 Idempotency-Key，对话框打开时生成，发出后锁定表单，结果未知时原样重发，只有服务端明确拒绝后才换新；按修订号改的对话框收到 `stale_revision` 要重新载入才能再保存；结果标明是不是之前已完成的那次 | `admin/src/change.tsx` 的 `ChangeDialog`，状态转换在 `admin/src/attempt.ts`（规则见[前端](../docs/frontend.md)「决策与理由」）；端到端的模拟按契约要求 Idempotency-Key 和理由，同一个键带同样的请求再来就返回存下的结果并带 `Idempotency-Replayed`，换了请求就拒绝（`idempotency_key_reused`）；「同样」按服务端的指纹判断：整数按原样比较，供应商的登录只比成员名、不比密钥，地址先规范化，与 Go 共用 `internal/platform/idem/testdata/same-request.json` 里的样例 |
 | 改数据的对话框在结果未知时，请求（含幂等键）留在内存里，关闭后重开、会话过期重新登录后，该改动的对话框只提示“上次的改动结果未知”，可原样重发或放弃，不给新表单 | `admin/src/unsettled.ts`、`admin/src/change.tsx` 的 `UnsettledChange`；`e2e/admin-change.spec.ts` |

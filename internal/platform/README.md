@@ -23,7 +23,7 @@
 | `containertest` | 测试容器的共享宿主策略：`WithHostPolicy` 在已有宿主配置之后应用：`AXIOM_TEST_CGROUP_PARENT` 决定父 cgroup，`AXIOM_TEST_JOB` 非空时加 `axiom.ci.job` 标签；未设或空值保留原配置。作业标识、pgtest 集群连接串及 kvtest 地址和密码文件统一通过 `Untracked` 读取：用 `os.Environ` 避免基础设施标识进入 Go 测试缓存键，末项覆盖继承的同名变量。所有直接启动测试容器的入口都使用它。`StartSeaweedFS(t, 桶…)` 起一个真实的 S3 服务（`SeaweedFSImage`，唯一一对测试凭证 `SeaweedFSAccessKey`、`SeaweedFSSecretKey`），建好给出的桶，测试结束时删掉容器；`Endpoint` 是本进程经发布端口访问的地址，`InternalEndpoint` 是同一测试里另一个容器经默认桥接网络访问的地址，要从数据库容器里读写同一个桶的测试用它。CI 的 `go-test` 在设置父 cgroup 时禁用 Ryuk，按标签清理；diff 在 CI 避免启动 SSHD sidecar，见[CI 在哪跑](../../docs/architecture.md) |
 | `pgtest` | 测试用的 PostgreSQL，按部署的方式准备好；`New(t, 模块…)` 把给出的模块的迁移也做进模板，同一次运行里每次调用给的模块必须相同；一次 `just test` 的所有包共用一个集群（`withcluster` 同时起一个 Valkey，见 `kvtest`）；每个测试的库在测试结束时删掉，集群的 WAL 封顶在 128 MiB；容器给并行查询留 512 MiB 的 `/dev/shm`，Docker 默认的 64 MiB 在 `-p=4` 时会先被 32 MiB 的查询段耗尽 |
 | `backup` | 只有容器测试（`pitr_test.go`），守 `deploy/postgres` 的镜像和[时间点恢复的步骤](../../docs/ops/backup-restore.md#时间点恢复)：用 `containertest.StartSeaweedFS` 起桶，数据库开始归档 WAL，做全量备份、写两批行并切换 WAL，再起第二个容器恢复到两批之间，断言目标前写入的 100 行都在、目标后的 50 行一行不在，最后以逻辑恢复留下的空 WAL 桶启动，断言 `archive_mode=off` |
-| `alloctest` | 测试用的分配测量：父进程重跑本测试二进制，子进程只跑被测函数（堆先结算、GC 关掉、单核），在 stdout 报告单次调用的分配次数和字节数（5 次中最小的，运行时自身的分配只会加到某一次上），测试二进制里其他 goroutine 的分配不计入 |
+| `alloctest` | 测试用的内存测量，都在只跑被测函数的子进程里做，测试二进制里其他 goroutine 的分配不计入。`Measure` 关掉 GC、单核，报告单次调用的分配次数和字节数（5 次中最小的，运行时自身的分配只会加到某一次上）。`MeasureRetained` 保留函数返回的对象，显式回收后读 `HeapAlloc` 的增长（5 次中最小的），测的是结果留下的堆，而不是调用分配过又回收的字节；返回 nil 的函数没有要保留的结果 |
 | `telemetry` | 指标和链路的提供者，见下文「遥测」 |
 | `telemetrytest` | 测试用的读法：`Buffer` 收集别的 goroutine 写的日志，`Logger()` 把它交给 `slog`；`Metric` 从探针 `/metrics` 的文本里读一条序列（名字和标签），没有这条序列时返回整段文本；`Text` 返回整段文本 |
 | `page` | 调用与审计共享的时间/UUID 游标编码、合法范围和时间窗上界；模块持有翻页裁剪，HTTP 只读写游标 |
@@ -276,7 +276,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 | `axiom_app` | 是 | 运行时唯一的登录角色，`AXIOM_DATABASE_URL`；由部署创建并设密码，密码不经过本程序 |
 | 迁移管理员 | 是 | `AXIOM_MIGRATE_DATABASE_URL`，部署里叫 `axiom_migrator`；需要 CREATEROLE 和数据库的 CREATE 权限，不需要超级用户；`axiom_owner`、`axiom_lookup` 由别的角色建好时，还要有它们的 ADMIN 权限。建好 `axiom_owner`、`axiom_lookup` 和各模块的 schema，再切成 `axiom_owner` 执行迁移 |
 
-[安全](../../docs/security.md#租户隔离)角色表里的后台任务角色由 `pg.Module.JobRole` 声明，`pg.Migrate` 的初始化步骤以迁移管理员建立 NOLOGIN 角色、授予 `axiom_owner`（继承并带 ADMIN）；模块的迁移再给它 schema 与表的权限、把该由它拥有的对象交过去，并把它授予部署建的登录角色（如 `axiom_retention`）。任务用那个登录的独立连接池，事务里再 `pg.Tx.SetRole` 到任务角色。应用角色**不是**任务角色的成员：能切换过去就能成为表的属主，绕过启动检查对“应用不拥有表”的要求。`serve` 的启动检查覆盖 `axiom_app` 能成为的全部角色，也就覆盖任务角色。`axiom_owner` 和 `axiom_lookup` 由迁移的第一步以迁移管理员建立；`axiom_owner` 能切换成 `axiom_lookup`（不继承它的权限），因为迁移要用 `ALTER FUNCTION … OWNER TO axiom_lookup` 把函数交给它，这一步要求执行者能切换成新的所有者。
+[安全](../../docs/security.md#租户隔离)角色表里的后台任务角色由 `pg.Module.JobRole` 声明，`pg.Migrate` 的初始化步骤以迁移管理员建立 NOLOGIN 角色、授予 `axiom_owner`（继承并带 ADMIN）；模块的迁移再给它 schema 与表的权限、把该由它拥有的对象交过去，并把它授予部署建的登录角色（如 `axiom_retention`）。任务用那个登录的独立连接池，事务里再 `pg.Tx.SetRole` 到任务角色。应用角色**不是**任务角色的成员：能切换过去就能成为表的属主，绕过启动检查对“应用不拥有表”的要求。`serve` 的启动检查按 `pg_has_role(session_user, …, 'MEMBER')` 列出登录直接或间接属于的角色（不论 `INHERIT`、`SET` 选项），拒绝其中拥有 Axiom schema 里表（含分区）的角色、全部 `Module.JobRole`（即使还没拥有任何表）、`axiom_owner`、`axiom_lookup`、超级用户、`BYPASSRLS`、`REPLICATION`、`CREATEROLE`、`CREATEDB` 和服务器文件/程序角色；错误只报角色名。`axiom_owner` 和 `axiom_lookup` 由迁移的第一步以迁移管理员建立；`axiom_owner` 能切换成 `axiom_lookup`（不继承它的权限），因为迁移要用 `ALTER FUNCTION … OWNER TO axiom_lookup` 把函数交给它，这一步要求执行者能切换成新的所有者。
 
 ### 连接池
 

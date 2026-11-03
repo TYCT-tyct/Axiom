@@ -59,6 +59,7 @@ export default {
     targets: {
       description: "Targets cover one UTC calendar month and are prorated to the window you pick.",
       month: "Target month",
+      monthHint: "Months are UTC calendar months. Times on this page are shown in your time zone ({{zone}}).",
       edit: "Edit targets",
       title: "Targets for {{month}}",
       intro:

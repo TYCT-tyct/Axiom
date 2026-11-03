@@ -95,7 +95,7 @@ async function observeShifts(page: Page) {
 // The hidden copy in the drawer and the other breakpoint's copy have no layout box.
 const logoSlot = (page: Page) =>
   page
-    .locator("header > span:has(> img), header > span:has(> svg), nav > span:has(> img), nav > span:has(> svg)")
+    .locator("header > span:has(> img), header > span:has(> svg), nav span:has(> img), nav span:has(> svg)")
     .filter({ visible: true });
 
 async function waitForLogo(page: Page, path: string, failing: boolean) {
@@ -130,7 +130,7 @@ async function shiftsAroundLogo(page: Page) {
     type Source = { node: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly };
     type Entry = PerformanceEntry & { value: number; hadRecentInput: boolean; sources?: Source[] };
     const entries = (window as unknown as { __logoShifts?: Entry[] }).__logoShifts ?? [];
-    const slots = [...document.querySelectorAll<HTMLElement>("header > span, nav > span")].filter((span) => {
+    const slots = [...document.querySelectorAll<HTMLElement>("header > span, nav span")].filter((span) => {
       if (span.getClientRects().length === 0) {
         return false;
       }

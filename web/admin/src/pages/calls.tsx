@@ -5,6 +5,7 @@ import {
   DataState,
   EmptyState,
   Icon,
+  Id,
   Notice,
   PageHeader,
   Panel,
@@ -18,19 +19,7 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import type { CallsEmptyKind } from "../overview";
 import { callStatus, callsArchivedWhole, callsCoverage, callsEmptyKind } from "../overview";
-import {
-  ChoiceFilter,
-  Code,
-  FilterBar,
-  Head,
-  mainCell,
-  PageBody,
-  State,
-  Time,
-  text,
-  toInstant,
-  toLocalInput,
-} from "../parts";
+import { ChoiceFilter, FilterBar, Head, PageBody, State, Time, text, toInstant, toLocalInput } from "../parts";
 import { adminCallsQuery } from "../queries";
 
 type CallFilters = {
@@ -247,18 +236,19 @@ function CallsTable({ rows }: { rows: AdminSchemas["AdminCallSummary"][] }) {
   const { t } = useTranslation();
   const inspect = can(useSession(), "calls.inspect");
   return (
-    <Table label={t("nav.calls")}>
+    <Table label={t("nav.calls")} fixed>
       <Head
         cols={[
-          [t("calls.col.at"), "hidden sm:table-cell"],
-          [t("calls.requestId")],
-          [t("calls.col.account")],
-          [t("calls.col.model"), "hidden md:table-cell"],
-          [t("calls.col.result")],
-          [t("calls.col.latency"), "hidden text-right lg:table-cell"],
-          [t("calls.col.price"), "hidden text-right xl:table-cell"],
+          [t("calls.col.at"), "hidden w-40 sm:table-cell"],
+          [t("calls.requestId"), "w-[45%] sm:w-[22%]"],
+          [t("calls.col.account"), "hidden w-[14%] sm:table-cell"],
+          [t("calls.col.model"), "hidden w-36 md:table-cell"],
+          [t("calls.col.result"), "w-16"],
+          [t("calls.col.latency"), "hidden w-28 text-right lg:table-cell"],
+          [t("calls.col.price"), "hidden w-20 text-right xl:table-cell"],
         ]}
         action={inspect}
+        actionClass="w-20 sm:w-28"
       />
       <tbody>
         {rows.map((call) => (
@@ -284,17 +274,13 @@ function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; in
         )}
       </Td>
       <Td>
-        <Code>{call.id ?? "—"}</Code>
+        {call.id ? <Id value={call.id} /> : "—"}
         <span className="block text-label text-t3 sm:hidden">
           <Time at={call.at} />
         </span>
       </Td>
-      <Td className={mainCell}>
-        <span className="block truncate font-mono text-label text-t2" title={call.account_id}>
-          {call.account_id ?? "—"}
-        </span>
-      </Td>
-      <Td className="hidden max-w-44 md:table-cell">
+      <Td className="hidden sm:table-cell">{call.account_id ? <Id value={call.account_id} /> : "—"}</Td>
+      <Td className="hidden md:table-cell">
         <span className="block truncate" title={call.model}>
           {call.model ?? "—"}
         </span>
@@ -309,7 +295,7 @@ function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; in
         {call.price ? format.money(call.price) : "—"}
       </Td>
       {inspect ? (
-        <Td className="w-0">
+        <Td>
           <Button asChild size="sm" variant="ghost">
             <Link to="/calls/$callId" params={{ callId: call.id }} aria-label={t("calls.trace")}>
               <span className="hidden sm:inline">{t("calls.trace")}</span>
