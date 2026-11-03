@@ -312,9 +312,10 @@ func TestAListingFillsTheTablesAndReadingItAgainWritesNothing(t *testing.T) {
 	s := c.acquire(c.node("a"))
 	c.commitListing(s, 1, groups)
 
-	// The groups, made unselected: which groups to use is a person's choice.
-	same(t, "supplier_groups", c.column("supplier_groups", "upstream_ref || ' ' || ratio::text || ' ' || facts::text || ' ' || present::text || selected::text || coalesce(codename, '-')", "upstream_ref"),
-		[]string{`default 0.8 {"platform": "openai"} truefalse-`, "vip 1.2 {} truefalse-"})
+	// A group with a priced endpoint is put in use by itself and given a codename; the codename is random, so only
+	// whether it has one is read.
+	same(t, "supplier_groups", c.column("supplier_groups", "upstream_ref || ' ' || ratio::text || ' ' || facts::text || ' ' || present::text || selected::text || (codename IS NOT NULL)::text", "upstream_ref"),
+		[]string{`default 0.8 {"platform": "openai"} truetruetrue`, "vip 1.2 {} truetruetrue"})
 
 	// Every name the listing has is a row, with the model it maps to, or none. The two rows of one name are the two
 	// groups, in the order formats::text sorts them.

@@ -2,8 +2,6 @@ package suppliers
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base32"
 	"errors"
 	"fmt"
 	"math"
@@ -242,6 +240,10 @@ func (a *Admin) ReplaceLogin(ctx context.Context, tx pg.Tx, actor audit.Actor, i
 	if err := q.SetSupplierStatusBumpingConfigGen(ctx, tx, store.SetSupplierStatusBumpingConfigGenParams{ID: id, Status: string(Connecting)}); err != nil {
 		return Supplier{}, fmt.Errorf("set the status: %w", err)
 	}
+	// A new login is a new chance to make the keys a narrow token could not: the groups wait for nothing but the sync.
+	if err := q.ClearKeyErrors(ctx, tx, id); err != nil {
+		return Supplier{}, fmt.Errorf("clear the key errors: %w", err)
+	}
 	if err := a.record(ctx, tx, actor, "supplier.replace_login", id, reason, map[string]any{"from": row.Status}); err != nil {
 		return Supplier{}, err
 	}
@@ -270,14 +272,6 @@ func (a *Admin) ConfirmUnitValue(ctx context.Context, tx pg.Tx, actor audit.Acto
 		return Supplier{}, err
 	}
 	return a.view(ctx, tx, id)
-}
-
-// codename is a name for a group that tells nothing of the supplier: a letter and eight characters from the alphabet
-// of base 32, which a person can say aloud. The format is a decision of this code until the product names one.
-func codename() string {
-	b := make([]byte, 5)
-	rand.Read(b)                                                       // Since Go 1.24 crypto/rand.Read never returns an error; it crashes the program instead.
-	return "g" + strings.ToLower(base32.StdEncoding.EncodeToString(b)) // five bytes are eight characters, unpadded
 }
 
 // SelectGroup chooses whether a supplier's group is used. The first time it is selected it gets its code name, which
@@ -320,7 +314,7 @@ func (a *Admin) SelectGroup(ctx context.Context, tx pg.Tx, actor audit.Actor, su
 func (*Admin) chooseGroup(ctx context.Context, tx pg.Tx, group uuid.UUID, selected, nameless bool) error {
 	params := store.SelectGroupParams{ID: group, Selected: selected}
 	if selected && nameless {
-		name := codename()
+		name := store.Codename()
 		params.Codename = &name
 	}
 	if err := store.New().SelectGroup(ctx, tx, params); err != nil {
@@ -339,15 +333,19 @@ func (*Admin) group(ctx context.Context, tx pg.Tx, supplier, id uuid.UUID) (Grou
 		return Group{}, ErrNoGroup
 	}
 	g := rows[0]
-	return groupOf(g.ID, g.UpstreamRef, g.Name, g.Ratio, g.Facts, g.Selected, g.Codename, g.Present,
-		poolOf(g.PoolAccounts, g.PoolFailed, g.PoolUsable, g.PoolHeadroom, g.PoolCapacity, g.PoolLow, g.PoolObservedAt))
+	return groupOf(groupFacts{
+		ID: g.ID, Ref: g.UpstreamRef, Name: g.Name, Ratio: g.Ratio, Facts: g.Facts, Selected: g.Selected,
+		Present: g.Present, KeyEligible: g.KeyEligible, Codename: g.Codename, KeyError: g.KeyError,
+		Pool: poolOf(g.PoolAccounts, g.PoolFailed, g.PoolUsable, g.PoolHeadroom, g.PoolCapacity, g.PoolLow, g.PoolObservedAt),
+	})
 }
 
 // defaultMaxConcurrency is how many calls a key serves at once until a person sets another number.
 const defaultMaxConcurrency = 4
 
-// BindKey binds one of the supplier's keys to a selected group, by the supplier's own ID of it. The credential is
-// `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once.
+// BindKey binds one of the supplier's keys to a selected group, by the supplier's own ID of it. It is the exception: the
+// sync makes the keys a group needs by itself. The credential is `binding` until the sync has read the key's text from
+// the supplier, sealed it and activated it. A key is bound once.
 func (a *Admin) BindKey(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier, group uuid.UUID, keyRef, reason string) (Credential, error) {
 	if _, err := a.locked(ctx, tx, supplier); err != nil {
 		return Credential{}, err

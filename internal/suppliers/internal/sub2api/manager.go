@@ -101,33 +101,6 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 	return adapter.Account{Balance: balance, Funding: funding, UnitHint: "USD"}, nil
 }
 
-type keyDTO struct {
-	ID        number     `json:"id"`
-	Key       string     `json:"key"`
-	GroupID   number     `json:"group_id"`
-	Status    string     `json:"status"`
-	ExpiresAt *time.Time `json:"expires_at"`
-	Reset5h   string     `json:"reset_5h_at"`
-	Reset1d   string     `json:"reset_1d_at"`
-	Reset7d   string     `json:"reset_7d_at"`
-}
-
-func keyIDs(keys []adapter.KeyState) map[number]bool {
-	seen := make(map[number]bool, len(keys))
-	for _, k := range keys {
-		seen[number(k.Ref)] = true
-	}
-	return seen
-}
-
-func keyState(k keyDTO) adapter.KeyState {
-	out := adapter.KeyState{Ref: adapter.KeyRef(k.ID), GroupRef: string(k.GroupID), Status: keyStatus(k.Status), Policy: &adapter.KeyPolicy{ExpiresAt: k.ExpiresAt}}
-	if out.Status == adapter.KeyQuotaExhausted {
-		out.ResetAt = k.resetAt()
-	}
-	return out
-}
-
 func (m *manager) keyPage(ctx context.Context, p int) ([]keyDTO, int, int, error) {
 	if p > maxPages {
 		return nil, 0, 0, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
@@ -247,6 +220,8 @@ type builtGroup struct {
 	Models    []string
 	// ModelsUnread is set when no key of the group could list its models: they stay as they were, not empty.
 	ModelsUnread bool
+	// NeedsKey is set when the group can be sold but has no key of ours to read its models with.
+	NeedsKey bool
 }
 
 func decodeOffer(raw adapter.Listing) offerProgress {
@@ -305,7 +280,7 @@ func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter
 func (m *manager) keyPageStep(ctx context.Context, p *offerProgress) (page adapter.Page[adapter.Group], more bool, err error) {
 	pos := keysProgress{V: keyListingVersion, Page: p.Page, Total: p.Total}
 	for group, id := range p.Keys {
-		pos.Keys = append(pos.Keys, adapter.KeyState{Ref: adapter.KeyRef(id), GroupRef: group, Status: adapter.KeyActive})
+		pos.Keys = append(pos.Keys, listedKey{Ref: adapter.KeyRef(id), GroupRef: group, Status: adapter.KeyActive})
 	}
 	keys, more, err := m.keysPage(ctx, &pos)
 	if err != nil {
@@ -371,7 +346,9 @@ func (m *manager) startOffer(ctx context.Context, groups []groupDTO) (offerProgr
 func (p offerProgress) offer() []adapter.Group {
 	out := make([]adapter.Group, 0, len(p.Built))
 	for _, b := range p.Built {
-		g := adapter.Group{Ref: b.Ref, Name: b.Name, Ratio: b.Ratio, Facts: b.Facts, ModelsUnread: b.ModelsUnread}
+		g := adapter.Group{
+			Ref: b.Ref, Name: b.Name, Ratio: b.Ratio, Facts: b.Facts, ModelsUnread: b.ModelsUnread, NeedsKey: b.NeedsKey,
+		}
 		if !b.ModelsUnread {
 			formats := quirks{}.Formats(b.Facts)
 			for _, n := range b.Models {
@@ -482,6 +459,7 @@ func (m *manager) group(ctx context.Context, g groupDTO, overrides map[string]nu
 		return builtGroup{}, err
 	}
 	b.Facts = f
+	b.NeedsKey = key == nil && len((quirks{}).Formats(f)) > 0
 	if key != nil {
 		// The key's own view is the supplier's final word on the multiplier (it knows the peak hours) and on the models.
 		if resolved, ok, err := m.resolvedMultiplier(ctx, key); err != nil {

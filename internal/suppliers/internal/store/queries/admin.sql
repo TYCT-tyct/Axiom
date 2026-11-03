@@ -22,16 +22,16 @@ SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detec
 FROM suppliers.suppliers s WHERE s.id = @id;
 
 -- name: ListGroupsOf :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible, key_error,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
     pool_observed_at
-FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id ORDER BY name, id;
+FROM suppliers.supplier_groups g WHERE g.supplier_id = @supplier_id ORDER BY g.name, g.id;
 
 -- name: GetGroupOf :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible, key_error,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
     pool_observed_at
-FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id AND id = @id;
+FROM suppliers.supplier_groups g WHERE g.supplier_id = @supplier_id AND g.id = @id;
 
 -- name: ListCredentialsOf :many
 SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute

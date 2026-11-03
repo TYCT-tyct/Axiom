@@ -69,6 +69,21 @@ func (o *openOnUse) Charges(ctx context.Context, scan adapter.ScanState) (adapte
 	return m.Charges(ctx, scan)
 }
 
+// CreateKey forwards key creation to the adapter that has one. A management side without the optional half answers
+// ErrNoKeyMaker: the group stays pending rather than failing, and an adapter that declares it can serve a group with a
+// key is expected to implement it.
+func (o *openOnUse) CreateKey(ctx context.Context, groupRef, name string) (adapter.KeyRef, error) {
+	m, err := o.get()
+	if err != nil {
+		return "", err
+	}
+	maker, ok := m.(adapter.KeyMaker)
+	if !ok {
+		return "", adapter.ErrNoKeyMaker
+	}
+	return maker.CreateKey(ctx, groupRef, name)
+}
+
 // Pool forwards the pool read to the adapter that has one. A relay's manager does not, and answers ErrNotPool; that is
 // how the engine tells a supplier whose group weights it may lower from one whose capacity is its own.
 func (o *openOnUse) Pool(ctx context.Context) (adapter.PoolReading, error) {

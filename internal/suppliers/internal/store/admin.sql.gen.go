@@ -190,10 +190,10 @@ func (q *Queries) GetEndpointOf(ctx context.Context, db DBTX, arg GetEndpointOfP
 }
 
 const getGroupOf = `-- name: GetGroupOf :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible, key_error,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
     pool_observed_at
-FROM suppliers.supplier_groups WHERE supplier_id = $1 AND id = $2
+FROM suppliers.supplier_groups g WHERE g.supplier_id = $1 AND g.id = $2
 `
 
 type GetGroupOfParams struct {
@@ -210,6 +210,8 @@ type GetGroupOfRow struct {
 	Selected       bool
 	Codename       *string
 	Present        bool
+	KeyEligible    bool
+	KeyError       *string
 	PoolAccounts   *int32
 	PoolFailed     *int32
 	PoolUsable     *int32
@@ -237,6 +239,8 @@ func (q *Queries) GetGroupOf(ctx context.Context, db DBTX, arg GetGroupOfParams)
 			&i.Selected,
 			&i.Codename,
 			&i.Present,
+			&i.KeyEligible,
+			&i.KeyError,
 			&i.PoolAccounts,
 			&i.PoolFailed,
 			&i.PoolUsable,
@@ -509,10 +513,10 @@ func (q *Queries) ListEndpointsOf(ctx context.Context, db DBTX, supplierID uuid.
 }
 
 const listGroupsOf = `-- name: ListGroupsOf :many
-SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present,
+SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible, key_error,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
     pool_observed_at
-FROM suppliers.supplier_groups WHERE supplier_id = $1 ORDER BY name, id
+FROM suppliers.supplier_groups g WHERE g.supplier_id = $1 ORDER BY g.name, g.id
 `
 
 type ListGroupsOfRow struct {
@@ -524,6 +528,8 @@ type ListGroupsOfRow struct {
 	Selected       bool
 	Codename       *string
 	Present        bool
+	KeyEligible    bool
+	KeyError       *string
 	PoolAccounts   *int32
 	PoolFailed     *int32
 	PoolUsable     *int32
@@ -551,6 +557,8 @@ func (q *Queries) ListGroupsOf(ctx context.Context, db DBTX, supplierID uuid.UUI
 			&i.Selected,
 			&i.Codename,
 			&i.Present,
+			&i.KeyEligible,
+			&i.KeyError,
 			&i.PoolAccounts,
 			&i.PoolFailed,
 			&i.PoolUsable,

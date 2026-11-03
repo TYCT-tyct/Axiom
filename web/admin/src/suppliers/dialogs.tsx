@@ -289,8 +289,8 @@ export function SelectGroupDialog({
   );
 }
 
-// Binding says which of the keys the supplier lists Axiom sends a group's calls with. M1 does not make keys at the
-// supplier, so the key is one that exists there already.
+// Binding is the exception: the sync makes the keys a group needs, and this binds one that already exists at the
+// supplier to a group.
 export function BindKeyDialog({
   supplier,
   upstreamKey,

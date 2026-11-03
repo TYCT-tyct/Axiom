@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"time"
+	"uuid"
 
 	"axiom/internal/catalog"
 	"axiom/internal/protocol"
@@ -29,6 +30,29 @@ type Store interface {
 	Commit(ctx context.Context, expect int64, c Commit) error
 }
 
+// KeyStore is the optional half of a Store that lets the sync onboard a supplier's groups by itself. A Store without it
+// keeps the keys a person bound, and makes none.
+type KeyStore interface {
+	// KeysToMake lists the groups that need a key of ours and have none, with the name the key is made under.
+	KeysToMake(ctx context.Context) ([]KeyTarget, error)
+	// KeysToBind lists the credentials a person bound by reference that the sync has not read the text of yet, and
+	// whose group is not waiting out a failure.
+	KeysToBind(ctx context.Context, now time.Time) ([]BindTarget, error)
+}
+
+// KeyTarget is a group the sync makes a key for, and the name that marks the key as ours.
+type KeyTarget struct {
+	GroupRef string
+	Name     string
+}
+
+// BindTarget is a credential waiting for its key's text.
+type BindTarget struct {
+	ID       uuid.UUID
+	Ref      adapter.KeyRef
+	GroupRef string
+}
+
 // Settings are the engine's numbers. They are data in the module (the intervals are a back-office setting); Defaults
 // holds the values of the design.
 type Settings struct {
@@ -41,6 +65,9 @@ type Settings struct {
 	MaxPages int
 	// LowBalance is the balance under which BalanceLow is sent.
 	LowBalance adapter.Amount
+	// KeyRetry is how long a group waits after its key could not be made or read for a reason the login or the group
+	// has to fix.
+	KeyRetry time.Duration
 	// DirectFormats lets the state keep embeddings, rerank and legacy completions. While it is false the state holds
 	// only the formats a
 	// pre-P18 node can name: such a node may load this state for any task and project it, and a name it does not know
@@ -55,6 +82,7 @@ func Defaults() Settings {
 		BackoffBase: time.Minute, BackoffMax: 30 * time.Minute,
 		MaxPages:   50,
 		LowBalance: "5",
+		KeyRetry:   time.Hour,
 	}
 }
 
@@ -212,8 +240,8 @@ func fundingName(f adapter.Funding) string {
 }
 
 // keys reads the keys listing. A read is stored with the position it reached, also when the supplier's limits stopped
-// it, so the next round goes on from there; the read that ends the listing holds every key, and what changed since the
-// last complete one is an event.
+// it, so the next round goes on from there; the read that ends the listing holds every key and every name, and what
+// changed since the last complete one is an event.
 func (e *Engine) keys(ctx context.Context, c *Commit) error {
 	page, err := e.mgr.Keys(ctx, c.State.KeysAt)
 	if err != nil {
@@ -224,26 +252,65 @@ func (e *Engine) keys(ctx context.Context, c *Commit) error {
 		return adapter.Blocked{Until: page.Until}
 	}
 	keys := page.Items
-	c.KeyPolicies = &keys
 	old := make(map[adapter.KeyRef]adapter.KeyState, len(c.State.Keys))
 	for _, k := range c.State.Keys {
 		old[k.Ref] = k
 	}
+	// Advance the state before onboarding. If a later key read is limited, step keeps this commit; the event and the
+	// state that explains it must land together, or the next complete listing emits the same event again.
+	c.State.Keys = stateKeys(keys)
 	for _, k := range keys {
 		if prev, ok := old[k.Ref]; !ok || prev.Status != k.Status {
 			c.Events = append(c.Events, Event{Kind: KeyChanged, Subject: string(k.Ref), Old: statusName(ok, prev.Status), New: statusName(true, k.Status)})
 		}
 		delete(old, k.Ref)
 	}
-	for _, gone := range slices.Sorted(maps.Keys(old)) {
-		c.Events = append(c.Events, Event{Kind: KeyChanged, Subject: string(gone), Old: statusName(true, old[gone].Status)})
+	for _, ref := range slices.Sorted(maps.Keys(old)) {
+		c.Events = append(c.Events, Event{Kind: KeyChanged, Subject: string(ref), Old: statusName(true, old[ref].Status)})
 	}
-	slices.SortFunc(keys, func(a, b adapter.KeyState) int { return cmpStr(string(a.Ref), string(b.Ref)) })
-	c.State.Keys = slices.Clone(keys)
-	for i := range c.State.Keys {
-		c.State.Keys[i].Policy = nil // Older nodes strictly decode the persisted state, including each key.
+	// Set the policies before any key write: onboarding reads key texts one by one, and a later read may be stopped by
+	// a bucket. The commit that keeps an earlier write must also carry the complete listing's policies, or the new
+	// credential would keep its default (unrestricted) policy.
+	c.KeyPolicies = &keys
+	extra, err := e.onboard(ctx, c, &keys)
+	if err != nil {
+		// A made or bound key can be written before a later read is limited. Keep those writes in the state too,
+		// while the listing itself is already there for the next round's event comparison.
+		c.State.Keys = stateKeys(append(slices.Clone(keys), writtenKeys(c)...))
+		return err
 	}
+	c.State.Keys = stateKeys(append(slices.Clone(keys), extra...))
 	return nil
+}
+
+// stateKeys is the part of a complete listing the strict state keeps: no names and no policies, sorted by reference,
+// and one entry per reference.
+func stateKeys(keys []adapter.KeyState) []adapter.KeyState {
+	seen := make(map[adapter.KeyRef]bool, len(keys))
+	out := make([]adapter.KeyState, 0, len(keys))
+	for _, k := range keys {
+		if seen[k.Ref] {
+			continue
+		}
+		seen[k.Ref] = true
+		k.Name, k.Policy = "", nil
+		out = append(out, k)
+	}
+	slices.SortFunc(out, func(a, b adapter.KeyState) int { return cmpStr(string(a.Ref), string(b.Ref)) })
+	return out
+}
+
+// writtenKeys turns the keys whose text was read before a blocked step into state entries. A made key is normally
+// already appended to the listing, but a bound key the listing does not have is not.
+func writtenKeys(c *Commit) []adapter.KeyState {
+	out := make([]adapter.KeyState, 0, len(c.KeyWrites.Made)+len(c.KeyWrites.Bound))
+	for _, m := range c.KeyWrites.Made {
+		out = append(out, adapter.KeyState{Ref: m.Ref, GroupRef: m.GroupRef, Status: m.Status})
+	}
+	for _, b := range c.KeyWrites.Bound {
+		out = append(out, adapter.KeyState{Ref: b.Ref, GroupRef: b.GroupRef, Status: adapter.KeyActive})
+	}
+	return out
 }
 
 func statusName(present bool, s adapter.KeyStatus) string {
@@ -292,6 +359,7 @@ func (e *Engine) catalog(ctx context.Context, c *Commit) error {
 	diffGroups(c, prev, groups)
 	diffPlans(c, plans)
 	c.State.Groups, c.State.Plans = groups, plans
+	c.OfferRead = true
 	if err := e.pool(ctx, c); err != nil && !errors.Is(err, adapter.ErrNotPool) {
 		return err
 	}
@@ -321,7 +389,19 @@ func group(c *Commit, g adapter.Group, before GroupSnap, plans map[string]string
 		snap.Models = append(snap.Models, ModelSnap{Name: m.UpstreamName, Formats: formats, Without: m.Without, Plan: plan})
 	}
 	sort.Slice(snap.Models, func(i, j int) bool { return snap.Models[i].Name < snap.Models[j].Name })
+	snap.KeyEligible = g.NeedsKey || hasPlan(snap.Models)
 	return snap, nil
+}
+
+// hasPlan reports whether a model of the group can be sold with a known cost. A model without a call format is not sold,
+// so its plan does not make the group one to make a key for.
+func hasPlan(models []ModelSnap) bool {
+	for _, m := range models {
+		if m.Plan != "" && len(m.Formats) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // keptGroup is the snapshot of a group whose models were not read: they stay as they were, behind the same gate, and
@@ -338,6 +418,7 @@ func keptGroup(c *Commit, g adapter.Group, snap, before GroupSnap, plans map[str
 		}
 		snap.Models = append(snap.Models, ModelSnap{Name: m.Name, Formats: formats, Without: m.Without, Plan: plan})
 	}
+	snap.KeyEligible = g.NeedsKey || hasPlan(snap.Models)
 	return snap, nil
 }
 

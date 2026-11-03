@@ -26,7 +26,7 @@ func keyList(total *int) func(adapter.Request) adapter.Response {
 		}
 		var items []string
 		for i := (page-1)*100 + 1; i <= min(page*100, *total); i++ {
-			items = append(items, fmt.Sprintf(`{"id":%d,"key":"k","group_id":1,"status":"active"}`, i))
+			items = append(items, fmt.Sprintf(`{"id":%d,"name":"k%d","key":"k","group_id":1,"status":"active"}`, i, i))
 		}
 		return adapter.Response{Status: 200, Body: []byte(fmt.Sprintf(`{"code":0,"data":{"items":[%s],"total":%d,"pages":%d}}`,
 			strings.Join(items, ","), *total, (*total+99)/100))}
@@ -89,8 +89,8 @@ func assertKeyListing(t *testing.T, page adapter.Page[adapter.KeyState], total i
 		t.Fatalf("incomplete listing: done %v, %d keys, position %q", page.Done, len(page.Items), page.Next)
 	}
 	for i, k := range page.Items {
-		if k.Ref != adapter.KeyRef(strconv.Itoa(i+1)) {
-			t.Fatalf("key %d: %q", i+1, k.Ref)
+		if k.Ref != adapter.KeyRef(strconv.Itoa(i+1)) || k.Name != fmt.Sprintf("k%d", i+1) {
+			t.Fatalf("key %d: %q named %q", i+1, k.Ref, k.Name)
 		}
 	}
 }
@@ -177,4 +177,34 @@ func TestLegacyKeyListingRestartsBeforeProjectingPolicies(t *testing.T) {
 			t.Fatalf("key %s lost its unrestricted policy", key.Ref)
 		}
 	}
+}
+
+// TestAKeyListingResumesPastAWindow: 9,050 keys need 91 pages, more than one 90-request window. The first run stops at
+// page 90 with the names of the pages it read; the second finishes and returns every key, so the sync can onboard.
+func TestAKeyListingResumesPastAWindow(t *testing.T) {
+	t.Parallel()
+	total := 9050
+	limited := true
+	serve := keyList(&total)
+	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
+		page, err := keyPageOf(r.Path)
+		if err != nil {
+			return adapter.Response{}, err
+		}
+		if limited && page == 90 {
+			return adapter.Response{}, adapter.Blocked{Until: epoch.Add(time.Minute)}
+		}
+		return serve(r), nil
+	})
+	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
+	first, err := m.Keys(t.Context(), nil)
+	if err != nil || first.Done || len(first.Next) == 0 {
+		t.Fatalf("first run: done %v, position %d, %v; want a resumable position", first.Done, len(first.Next), err)
+	}
+	limited = false
+	page, err := m.Keys(t.Context(), first.Next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertKeyListing(t, page, total)
 }

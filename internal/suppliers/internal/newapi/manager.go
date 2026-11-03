@@ -96,17 +96,36 @@ const keyPageSize = 100
 // maxPages bounds a listing: a supplier whose pages never end would otherwise keep the task busy.
 const maxPages = 100
 
-const keyListingVersion = 2 // Version 1 did not retain key policies.
+const keyListingVersion = 3 // Version 2 stored adapter.KeyState, whose Name was not persisted.
+
+// listedKey is one key read in a resumable listing. It is deliberately not adapter.KeyState: that hides Name from the
+// stored state, which older nodes decode strictly, but a resumed listing needs the names of the pages already read so
+// the sync can adopt a key it made before the read was interrupted.
+type listedKey struct {
+	Ref      adapter.KeyRef     `json:"ref"`
+	GroupRef string             `json:"group_ref"`
+	Name     string             `json:"name"`
+	Status   adapter.KeyStatus  `json:"status"`
+	Policy   *adapter.KeyPolicy `json:"policy,omitzero"`
+}
+
+func (k listedKey) state() adapter.KeyState {
+	return adapter.KeyState{Ref: k.Ref, GroupRef: k.GroupRef, Name: k.Name, Status: k.Status, Policy: k.Policy}
+}
+
+func listed(k adapter.KeyState) listedKey {
+	return listedKey{Ref: k.Ref, GroupRef: k.GroupRef, Name: k.Name, Status: k.Status, Policy: k.Policy}
+}
 
 // keysProgress is the position in the keys listing: the page to read next, the keys read so far, and the total the
 // supplier stated. A key created during the listing shifts the pages, so one key may be read twice, which the position's
 // keys take out. A listing that shrank (a key removed) moved its pages forward, which would skip a key, so it begins
 // again: the keys read so far are given up, none is skipped.
 type keysProgress struct {
-	V     int                `json:"v"`
-	Page  int                `json:"page"`
-	Total int                `json:"total"`
-	Keys  []adapter.KeyState `json:"keys"`
+	V     int         `json:"v"`
+	Page  int         `json:"page"`
+	Total int         `json:"total"`
+	Keys  []listedKey `json:"keys"`
 }
 
 func decodeKeys(raw adapter.Listing) keysProgress {
@@ -153,22 +172,30 @@ func (m *manager) keysPage(ctx context.Context, p *keysProgress) (page adapter.P
 	for _, k := range items {
 		if !seen[k.Ref] {
 			seen[k.Ref] = true
-			p.Keys = append(p.Keys, k)
+			p.Keys = append(p.Keys, listed(k))
 		}
 	}
 	if len(items) < keyPageSize {
-		return adapter.Page[adapter.KeyState]{Items: p.Keys, Done: true}, false, nil
+		return adapter.Page[adapter.KeyState]{Items: keyStates(p.Keys), Done: true}, false, nil
 	}
 	p.Page++
 	return page, true, nil
 }
 
-func keyRefs(keys []adapter.KeyState) map[adapter.KeyRef]bool {
+func keyRefs(keys []listedKey) map[adapter.KeyRef]bool {
 	seen := make(map[adapter.KeyRef]bool, len(keys))
 	for _, k := range keys {
 		seen[k.Ref] = true
 	}
 	return seen
+}
+
+func keyStates(keys []listedKey) []adapter.KeyState {
+	out := make([]adapter.KeyState, len(keys))
+	for i, k := range keys {
+		out[i] = k.state()
+	}
+	return out
 }
 
 func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, int, error) {
@@ -177,6 +204,7 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, in
 			Total *int `json:"total"`
 			Items []struct {
 				ID            int64   `json:"id"`
+				Name          string  `json:"name"`
 				Status        int     `json:"status"`
 				Group         string  `json:"group"`
 				Expires       *int64  `json:"expired_time"`
@@ -202,7 +230,9 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, in
 		if err != nil {
 			return nil, 0, err
 		}
-		keys = append(keys, adapter.KeyState{Ref: adapter.KeyRef(strconv.FormatInt(item.ID, 10)), GroupRef: item.Group, Status: status, Policy: policy})
+		keys = append(keys, adapter.KeyState{
+			Ref: adapter.KeyRef(strconv.FormatInt(item.ID, 10)), GroupRef: item.Group, Name: item.Name, Status: status, Policy: policy,
+		})
 	}
 	return keys, *list.Data.Total, nil
 }
@@ -246,6 +276,9 @@ func (m *manager) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Sec
 		} `json:"data"`
 	}
 	if err := m.api.do(ctx, "POST", "/api/token/"+string(ref)+"/key", globalCritical, &reveal); err != nil {
+		if errors.Is(err, errScopeDenied) {
+			return secret.Secret{}, fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
+		}
 		return secret.Secret{}, err
 	}
 	if reveal.Data == nil || reveal.Data.Key == "" {

@@ -108,12 +108,21 @@ func TestSupplierDetail(t *testing.T) {
 				('%[5]s', '%[2]s', '%[3]s', '%[6]s', 'alpha', ARRAY['responses'], false)`, zeta, id, group, one, alpha, two))
 	detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
 	refuses(t, "the detail", err, nil)
-	same(t, "its groups", []Group{{ID: group, UpstreamRef: "g", Name: "Group g", Ratio: "1.5", Present: true, Facts: map[string]any{"platform": "anthropic"}}}, detail.Groups)
+	same(t, "its groups", []Group{{ID: group, UpstreamRef: "g", Name: "Group g", Ratio: "1.5", Present: true, Facts: map[string]any{"platform": "anthropic"}, KeyState: "pending"}}, detail.Groups)
 	same(t, "its keys", []Credential{{ID: key, Group: group, UpstreamKeyRef: "k1", Status: "binding", MaxConcurrency: 4}}, detail.Credentials)
 	same(t, "its endpoints", []Endpoint{
 		{ID: alpha, Group: group, Model: two, UpstreamName: "alpha", Formats: []string{"responses"}, CostState: "unknown"},
 		{ID: zeta, Group: group, Model: one, UpstreamName: "zeta", Formats: []string{"messages", "chat"}, CostState: "unknown", Enabled: true},
 	}, detail.Endpoints)
+	if _, err := a.choose(id, group, true); err != nil {
+		t.Fatal(err)
+	}
+	a.sql(fmt.Sprintf(`UPDATE suppliers.supplier_groups SET key_error = 'not_permitted', key_retry_at = now() WHERE id = '%s'`, group))
+	detail, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+	refuses(t, "the detail after a failed binding", err, nil)
+	if g := detail.Groups[0]; g.KeyState != "failed" || g.KeyReason != "not_permitted" {
+		t.Errorf("a binding whose read failed: %q, %q", g.KeyState, g.KeyReason)
+	}
 	_, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, uuid.NewV7()) })
 	refuses(t, "a supplier that is not there", err, ErrNoSupplier)
 }

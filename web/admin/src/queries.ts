@@ -201,15 +201,28 @@ export type SupplierView = Omit<AdminSchemas["SupplierDetail"], "endpoints"> & {
 };
 
 // A supplier that is being connected changes by itself, as the sync works through it: the page asks again until it
-// settles.
+// settles. Keys are made after the supplier is active, so a group whose key is still being made keeps the page asking,
+// as does a key whose text the sync is reading.
 export const supplierQuery = (id: string) =>
   queryOptions({
     queryKey: [accountKey, "supplier", id],
     queryFn: ({ signal }): Promise<SupplierView> =>
       unwrap(adminApi.GET(`${base}/suppliers/{supplier_id}`, { params: { path: { supplier_id: id } }, signal })),
     refetchInterval: ({ state }) => {
-      const status = state.data?.supplier.status;
-      return status === "connecting" ? 3000 : false;
+      const data = state.data;
+      if (!data) {
+        return false;
+      }
+      if (data.supplier.status === "connecting") {
+        return 3000;
+      }
+      if (data.supplier.status !== "active" && data.supplier.status !== "low_balance") {
+        return false;
+      }
+      const making = data.groups.some((group) => group.key_state === "pending");
+      const binding = data.credentials.some((credential) => credential.status === "binding");
+      // A supplier that cannot make a key would otherwise be asked forever; five minutes is longer than a sync round.
+      return (making || binding) && state.dataUpdateCount < 100 ? 3000 : false;
     },
   });
 

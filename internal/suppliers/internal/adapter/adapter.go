@@ -61,6 +61,17 @@ var (
 	// ErrNotPool: the login does not administer the supplier's accounts, so the supplier is a relay and has no pool to
 	// read. It is not a failure: a relay's capacity is its own, and its weight is not Axiom's to lower.
 	ErrNotPool = errors.New("adapter: the supplier is not a pool this login administers")
+	// ErrKeyNotPermitted: the login may not manage keys (it lacks the scope to create one or to read a key's text).
+	// Trying again with the same login only risks the account, so the group waits for the login to be replaced.
+	ErrKeyNotPermitted = errors.New("adapter: the login may not manage keys")
+	// ErrKeyGroupUnavailable: the account may not put a key in this group (the group is outside what it subscribed to).
+	// The group is not a failure of the supplier as a whole; other groups may work.
+	ErrKeyGroupUnavailable = errors.New("adapter: the account may not use this group")
+	// ErrKeyRefused: the supplier refused to make the key for a reason the group can fix later (a key limit, say). The
+	// sync tries again after a wait.
+	ErrKeyRefused = errors.New("adapter: the supplier refused to make the key")
+	// ErrNoKeyMaker: the management side cannot make keys. A group that needs one stays pending rather than failed.
+	ErrNoKeyMaker = errors.New("adapter: the supplier's adapter cannot make keys")
 )
 
 // Pool is the optional half of a management side whose supplier is a pool of upstream accounts: a self-hosted system
@@ -117,7 +128,7 @@ type LoginStore interface {
 // ErrStaleLogin is Swap's error when the stored credentials are no longer the version the caller read.
 var ErrStaleLogin = errors.New("adapter: the stored login changed since it was read")
 
-// Manager is the read-only management half of an adapter.
+// Manager is the management half of an adapter. It only reads unless it also implements KeyMaker.
 //
 // Its two listings, the offer and the keys, are read over as many reads as the supplier's limits need: a read is given
 // the position the one before returned (none for the first) and returns the position it reached, so that the module
@@ -134,6 +145,17 @@ type Manager interface {
 	KeySecret(ctx context.Context, ref KeyRef) (secret.Secret, error)
 	// Charges reads one page of the charge records, newest first, from the position in scan.
 	Charges(ctx context.Context, scan ScanState) (ChargePage, ScanState, error)
+}
+
+// KeyMaker is the optional half of a management side that can make a key of its own. An adapter that can serve a group
+// only through such a key implements it. The sync calls CreateKey only for a group with no stored key; a key whose
+// response was lost is adopted by its name on the next complete listing, and made again only if that listing does not
+// show it.
+type KeyMaker interface {
+	// CreateKey makes a dedicated key for the group, named name, with no quota, expiry or model limit, and returns its
+	// id at the supplier. The text is read through KeySecret. Errors that say the group cannot have a key are
+	// ErrKeyNotPermitted, ErrKeyGroupUnavailable and ErrKeyRefused; anything else is a failure of the task.
+	CreateKey(ctx context.Context, groupRef, name string) (KeyRef, error)
 }
 
 // Listing is an adapter's own position in a paged listing, opaque to everyone else. It carries what the pass has read so
@@ -171,6 +193,9 @@ type Group struct {
 	// group, or a balance too low to list): Models is then empty because nothing was read, and the module keeps the
 	// models it last saw instead of taking the group to have none.
 	ModelsUnread bool
+	// NeedsKey is set when the supplier sells this group but its models cannot be read without a key of ours. It is
+	// false when a key exists or when the group is not sold to us (a subscription or peak-priced group, say).
+	NeedsKey bool
 }
 
 // GroupFacts is a group's facts as canonical JSON.
@@ -205,9 +230,12 @@ const (
 type KeyState struct {
 	Ref      KeyRef
 	GroupRef string
-	Status   KeyStatus
-	ResetAt  time.Time  // when an exhausted key's allowance returns, zero if not stated
-	Policy   *KeyPolicy `json:",omitzero"` // read with the listing; absent in the legacy persisted State.Keys
+	// Name is the supplier's name for the key. It is how a key the sync made but did not record is adopted on the next
+	// complete listing; it is not persisted in the sync state, which older nodes decode strictly.
+	Name    string `json:"-"`
+	Status  KeyStatus
+	ResetAt time.Time  // when an exhausted key's allowance returns, zero if not stated
+	Policy  *KeyPolicy `json:",omitzero"` // read with the listing; absent in the legacy persisted State.Keys
 }
 
 // KeyPolicy is the upstream permission of a key, independent of Axiom's concurrency limits.

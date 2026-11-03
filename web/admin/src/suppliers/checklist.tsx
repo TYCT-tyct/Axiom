@@ -2,29 +2,18 @@ import { Icon, Panel } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import type { SupplierView } from "../queries";
 import type { Open } from "./open";
+import { type Step, steps } from "./steps";
 
 type Detail = SupplierView;
 
-type Step = { key: "connected" | "groups" | "keys" | "unit"; done: boolean; open?: Open };
-
-// The steps from a new supplier to one that takes traffic, read off what the sync stored: connected, a group chosen,
-// a key bound for every chosen group, and the unit of its balance valued. A step is shown done or waiting, with the
-// dialog that does it; the order is the order to work in.
-function steps(detail: Detail): Step[] {
-  const chosen = detail.groups.filter((group) => group.selected);
-  const bound = new Set(detail.credentials.map((credential) => credential.group_id));
-  const status = detail.supplier.status;
-  return [
-    { key: "connected", done: status !== "connecting" && status !== "needs_attention" },
-    { key: "groups", done: chosen.length > 0 },
-    { key: "keys", done: chosen.length > 0 && chosen.every((group) => bound.has(group.id)) },
-    { key: "unit", done: detail.supplier.unit_value !== undefined, open: { kind: "unit" } },
-  ];
-}
-
 export function Checklist({ detail, onOpen }: { detail: Detail; onOpen: ((open: Open) => void) | undefined }) {
   const { t } = useTranslation();
-  const all = steps(detail);
+  const all: Step[] = steps({
+    status: detail.supplier.status,
+    groups: detail.groups,
+    credentials: detail.credentials,
+    hasUnitValue: detail.supplier.unit_value !== undefined,
+  });
   if (all.every((step) => step.done) || detail.supplier.status === "removed") {
     return null;
   }
@@ -36,7 +25,13 @@ export function Checklist({ detail, onOpen }: { detail: Detail; onOpen: ((open: 
             <Icon name={step.done ? "check" : "alert"} className={step.done ? "mt-0.5 text-ok" : "mt-0.5 text-warn"} />
             <div className="min-w-0 flex-1">
               <p className="text-t1">{t(`suppliers.steps.${step.key}.title`)}</p>
-              {step.done ? null : <p className="text-t3">{t(`suppliers.steps.${step.key}.todo`)}</p>}
+              {step.done ? null : (
+                <p className="text-t3">
+                  {step.key === "keys" && step.failed
+                    ? t("suppliers.steps.keys.failed", { count: step.failed })
+                    : t(`suppliers.steps.${step.key}.todo`)}
+                </p>
+              )}
             </div>
             <span className="sr-only">{step.done ? t("suppliers.steps.done") : t("suppliers.steps.waiting")}</span>
             {!step.done && step.open && onOpen ? (

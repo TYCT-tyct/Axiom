@@ -9,7 +9,8 @@ import (
 const projectCredentialPolicies = `WITH policies AS (
     SELECT * FROM jsonb_to_recordset($2::jsonb) AS p(ref text, group_ref text, models text[], expires_at timestamptz)
 ), desired AS (
-    SELECT c.id, CASE WHEN (p.group_ref = '' OR p.group_ref = g.upstream_ref) THEN p.models ELSE ARRAY[]::text[] END AS models, p.expires_at
+    SELECT c.id, CASE WHEN (p.group_ref = '' OR p.group_ref = g.upstream_ref) THEN p.models ELSE ARRAY[]::text[] END AS models,
+        p.expires_at
     FROM suppliers.credentials c
     JOIN suppliers.supplier_groups g ON g.id = c.supplier_group_id
     LEFT JOIN policies p ON p.ref = c.upstream_key_ref
