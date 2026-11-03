@@ -192,18 +192,19 @@ func (c callsFixture) seedCallHistory(n int) {
         WHERE c.id = '` + c.recent.ID.String() + `'`)
 }
 
+// exportQuery is the account's export of the last day, with the scope a console request for it reads in.
+func (c callsFixture) exportQuery() (pg.Scope, observability.OwnQuery) {
+	q := observability.OwnQuery{Account: c.old.Account, Since: c.now.Add(-24 * time.Hour), Until: c.now}
+	return pg.NewScope(false, nil, []uuid.UUID{q.Account}), q
+}
+
 func TestCallCSVAtLimitExportsAll(t *testing.T) {
 	t.Parallel()
 	c := newCallsFixture(t)
 	c.seedCallHistory(callExportRows - 3)
-	q := observability.OwnQuery{Account: c.old.Account, Since: c.now.Add(-24 * time.Hour), Until: c.now}
+	scope, q := c.exportQuery()
 	var output bytes.Buffer
-	if err := c.f.db.ReadTx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{q.Account}), func(tx pg.Tx) error {
-		if err := observability.CheckOwnExportSize(t.Context(), tx, q); err != nil {
-			return err
-		}
-		return callsCSV(t.Context(), tx, q, &output)
-	}); err != nil {
+	if err := (consoleAPI{db: c.f.db}).writeCalls(t.Context(), scope, q, &output); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := csv.NewReader(&output).ReadAll()
@@ -280,17 +281,18 @@ func (w *callExportWriter) Write(b []byte) (int, error) {
 	return w.ResponseRecorder.Write(b)
 }
 
+// TestCallCSVUsesOneSnapshot: a call recorded after the first page was written, which the next page would reach, is not
+// in the file. The export runs with the test's context, not the request's ten-second deadline: the late write and the
+// export together used that deadline up under the merge train's load (#605).
 func TestCallCSVUsesOneSnapshot(t *testing.T) {
 	t.Parallel()
 	c := newCallsFixture(t)
 	c.seedCallHistory(300)
 	late := newCall(c.old.Account, c.now.Add(-90*time.Minute), "late-insert", "codex")
 	sink := &callExportWriter{ResponseRecorder: httptest.NewRecorder(), beforeWrite: func() { c.f.record(late) }}
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+consoleHost+basePath+"/calls/export", nil)
-	as(c.s)(r)
-	c.f.routes.ServeHTTP(sink, r)
-	if sink.Code != http.StatusOK {
-		t.Fatalf("snapshot export: %d %s", sink.Code, sink.Body)
+	scope, q := c.exportQuery()
+	if err := (consoleAPI{db: c.f.db}).writeCalls(t.Context(), scope, q, sink); err != nil {
+		t.Fatalf("snapshot export: %v", err)
 	}
 	rows, err := csv.NewReader(sink.Body).ReadAll()
 	if err != nil || len(rows) != 304 {

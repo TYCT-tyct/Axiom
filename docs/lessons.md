@@ -21,7 +21,10 @@
 
 证据：合并车 run [40791946142](https://github.com/TYCT-tyct/Axiom/actions/runs/40791946142) 的 go-test 在 `TestStatementExportCutsInsideAPage` 中报 `context deadline exceeded`，build 随之失败，PR #423 被移出队列。
 哪一层没拦住：PR #358 只在客户端构造函数里设置宽期限，直接调用 `kv.Open` 的路径漏过；超时测试虽用 `CLIENT PAUSE` 控制失败阶段，预热和恢复阶段仍要求真实网络在 20ms 内回复；流水满额测试同样没有隔离内容正确性与生产期限。性能文档已禁止单元测试按绝对墙钟预算判失败，但尚未机械检查。待加的检查：测试中的直接 `kv.Open` 必须经过 `kvtest.Deps`；使用真实依赖验证大批量内容的测试不得沿用生产请求期限，期限行为单独用受控阻塞或虚拟时间验证。
-出现：2026-10-20、2026-10-29
+`TestCallCSVUsesOneSnapshot` 经 HTTP 守卫导出 300 条调用，中途写入迟到的一条，整段跑在导出的 10 秒请求期限里，main 的完整 CI 负载下用尽期限。处理器在期限内调用的读事务提成 `consoleAPI.writeCalls`，快照测试和满额导出测试直接用测试上下文调用它，不再各自复制事务体。
+
+证据：main run [41569157437](https://github.com/TYCT-tyct/Axiom/actions/runs/41569157437) 的 `panic: console: stream calls: timeout: context deadline exceeded`；本地让迟到的写入拖过期限，得到同一 panic。
+出现：2026-10-20、2026-10-29、2026-11-03
 
 ## 凭证份额测试遗漏注册空档和路由投影外的占用
 
