@@ -32,4 +32,23 @@ describe("formatters", () => {
     expect(formatters("en").number(1_240_512_880)).toBe("1,240,512,880");
     expect(formatters("zh").number(1_240_512_880n)).toBe("1,240,512,880");
   });
+
+  it.each([
+    { language: "en", month: "2026-11", want: "November 2026" },
+    { language: "zh", month: "2026-11", want: "2026年11月" },
+  ] as const)("reads $month as a calendar month in $language", ({ language, month, want }) => {
+    expect(formatters(language).monthLabel(month)).toBe(want);
+  });
+
+  it.each([
+    { language: "en", month: 11, want: "Nov" },
+    { language: "zh", month: 11, want: "11月" },
+  ] as const)("names month $month alone in $language", ({ language, month, want }) => {
+    expect(formatters(language).monthName(month)).toBe(want);
+  });
+
+  it("names the zone its times are in", () => {
+    expect(formatters("zh", "UTC").zone()).toBe("UTC");
+    expect(formatters("en", "Asia/Shanghai").zone()).toBe("GMT+8");
+  });
 });
