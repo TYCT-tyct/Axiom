@@ -21,7 +21,10 @@
 
 证据：合并车 run [40791946142](https://github.com/TYCT-tyct/Axiom/actions/runs/40791946142) 的 go-test 在 `TestStatementExportCutsInsideAPage` 中报 `context deadline exceeded`，build 随之失败，PR #423 被移出队列。
 哪一层没拦住：PR #358 只在客户端构造函数里设置宽期限，直接调用 `kv.Open` 的路径漏过；超时测试虽用 `CLIENT PAUSE` 控制失败阶段，预热和恢复阶段仍要求真实网络在 20ms 内回复；流水满额测试同样没有隔离内容正确性与生产期限。性能文档已禁止单元测试按绝对墙钟预算判失败，但尚未机械检查。待加的检查：测试中的直接 `kv.Open` 必须经过 `kvtest.Deps`；使用真实依赖验证大批量内容的测试不得沿用生产请求期限，期限行为单独用受控阻塞或虚拟时间验证。
-出现：2026-10-20、2026-10-29
+`TestCallCSVUsesOneSnapshot` 经 HTTP 守卫导出 300 条调用，中途写入迟到的一条，整段跑在导出的 10 秒请求期限里，main 的完整 CI 负载下用尽期限。处理器在期限内调用的读事务提成 `consoleAPI.writeCalls`，快照测试和满额导出测试直接用测试上下文调用它，不再各自复制事务体。
+
+证据：main run [41569157437](https://github.com/TYCT-tyct/Axiom/actions/runs/41569157437) 的 `panic: console: stream calls: timeout: context deadline exceeded`；本地让迟到的写入拖过期限，得到同一 panic。
+出现：2026-10-20、2026-10-29、2026-11-03
 
 ## 凭证份额测试遗漏注册空档和路由投影外的占用
 
@@ -89,7 +92,8 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 
 证据：PR #462 的列车构建 [40914818602](https://github.com/TYCT-tyct/Axiom/actions/runs/40914818602) 在健康探测恢复断言失败，并在第二份大账本夹具播种时达到 billing 包的十分钟期限。
 哪一层没拦住：健康测试从组装前冻结的时钟推进 31 秒，实际熔断时间却由网关按真实时钟记录；两种账本计划测试分别播种 200 万笔数据，单包累计成本没有被局部测试暴露。集成测试应从实际事件时刻推进受控时钟，并用时钟偏移复现组装延迟；同模块同量级的计划验证共用大夹具，保留每种查询的完整计划断言。`TestGatewayHealthRemoveProbeRestore` 固定模拟两分钟时钟落后；`TestLedgerReadsGrowWithThePage` 同时验证 movements 和 statement，后续此类计划用例加在同一夹具下。
-出现：2026-10-29
+`cmd/axiom` 的通话导出夹具用 `INSERT … SELECT (jsonb_populate_record(…)).*` 复制一万行，PostgreSQL 对展开的每一列各算一次函数，单个测试播种 50 秒；改为 `CROSS JOIN LATERAL jsonb_populate_record(…)` 后约 2 秒。`internal/payments` 的播种还是旧写法。同一轮还有 42 个耗时的数据库测试没有 `t.Parallel()`，串行跑了约 95 秒，`cmd/axiom` 包在列车上超过十分钟（run [41581562012](https://github.com/TYCT-tyct/Axiom/actions/runs/41581562012)）。
+出现：2026-10-29、2026-11-03
 
 ## 只读状态和故障兜底的测试也为容器排队
 

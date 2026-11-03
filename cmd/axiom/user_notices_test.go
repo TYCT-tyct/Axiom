@@ -20,6 +20,7 @@ import (
 
 //nolint:cyclop // one preferences round trip plus isolation and invalid bodies.
 func TestNotificationPreferencesAPIIsolationAndValidation(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
 	expect(t, "signed out", f.do(http.MethodGet, "/notification-preferences", ""), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)
@@ -53,6 +54,7 @@ func TestNotificationPreferencesAPIIsolationAndValidation(t *testing.T) {
 }
 
 func TestAnnouncementPublishReadWithdrawAndReplay(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	site, ok := f.svc.MainSite()
@@ -104,6 +106,7 @@ func TestAnnouncementPublishReadWithdrawAndReplay(t *testing.T) {
 }
 
 func TestUserNoticeEvaluationDoesNotAccumulateActiveJobs(t *testing.T) {
+	t.Parallel()
 	f := newConsoleFixture(t)
 	logger := slog.New(slog.DiscardHandler)
 	q := f.db.NewQueue(logger, pg.PlatformScope(), nil)

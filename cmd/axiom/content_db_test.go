@@ -14,6 +14,7 @@ import (
 
 //nolint:cyclop,gocognit // the start, completion, failure and replay are one audit journey.
 func TestContentExportRowsAndAudit(t *testing.T) {
+	t.Parallel()
 	c := newCommandLine(t)
 	now := time.Now().UTC()
 	approval := contentApproval{

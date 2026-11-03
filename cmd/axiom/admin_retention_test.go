@@ -9,6 +9,7 @@ import (
 
 // TestAdminRetention: the default window, a save with its audit entry, replay, and the contract's refusals.
 func TestAdminRetention(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	rec := f.do(http.MethodGet, "/retention", "", as(s))
