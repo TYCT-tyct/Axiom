@@ -248,10 +248,8 @@ func TestServeRefusesBadKeysAndSettings(t *testing.T) {
 		})
 	}
 	for _, c := range cases {
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		environ := append([]string{"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0"}, c.environ...)
-		err := serveForTest(ctx, environ, slog.New(slog.DiscardHandler))
-		cancel()
+		err := serveRefused(t, c.name, environ)
 		if err == nil {
 			t.Fatalf("%s: the node started", c.name)
 		}

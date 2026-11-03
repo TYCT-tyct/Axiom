@@ -46,30 +46,56 @@ func listenerKey(variable string) string {
 	}
 }
 
-// node returns a core node's servers in the order shutdown stops them. The public listener comes first, so at shutdown
-// it drains while the probes still answer. The admin listener serves the admin app and the admin API, behind the source
-// restriction; it exists only on a core node (#171). The node listener is the same call path over mutual TLS, for the
+// listeners are the addresses the node's roles open, in the order shutdown stops them, before their handlers exist.
+// Startup claims them after the bounded configuration checks and before the slow steps (database, cache, queue, call
+// path), so a taken address is refused at once with the variable's name. The public listener comes first, so at
+// shutdown it drains while the probes still answer. The admin listener exists only on a core node (#171), and the node
+// listener only when mutual TLS is configured.
+func listeners(cfg nodeSettings) []*listening {
+	var servers []*listening
+	if cfg.roles.has(roleCore) || cfg.roles.has(roleIngress) {
+		servers = append(servers, &listening{variable: publicAddrVar, addr: cfg.publicAddr})
+	}
+	if cfg.roles.has(roleCore) {
+		servers = append(servers, &listening{variable: adminAddrVar, addr: cfg.adminAddr})
+		if cfg.nodeTLS != nil {
+			servers = append(servers, &listening{variable: nodeAddrVar, addr: cfg.nodeAddr, tls: true})
+		}
+	}
+	return append(servers, &listening{variable: probesAddrVar, addr: cfg.probesAddr})
+}
+
+// node attaches a core node's handlers to the listeners startup claimed. The admin listener serves the admin app and
+// the admin API, behind the source restriction; the node listener is the same call path over mutual TLS, for the
 // ingress nodes' calls, and also answers the peers' readiness probes so an ingress knows whether the core can route.
 // Every listener but the probes refuses a request that starts during the drain (httpserver.Health.Gate).
-func node(cfg nodeSettings, routes http.Handler, admin http.Handler, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) []*listening {
-	servers := []*listening{
-		{
-			publicAddrVar, cfg.publicAddr,
-			httpserver.New(httpserver.Public(health.Gate(routes), logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger), nil, false,
-		},
-		{
-			adminAddrVar, cfg.adminAddr,
-			httpserver.New(httpserver.Public(health.Gate(restrictSources(admin, cfg.adminSources, cfg.trustedProxies)), logger, bodyTimeout,
-				httpserver.WithTelemetry(requests)), logger), nil, false,
-		},
+func node(servers []*listening, cfg nodeSettings, routes http.Handler, admin http.Handler, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) {
+	for _, s := range servers {
+		switch s.variable {
+		case publicAddrVar:
+			s.server = httpserver.New(httpserver.Public(health.Gate(routes), logger, bodyTimeout,
+				httpserver.WithTelemetry(requests)), logger)
+		case adminAddrVar:
+			s.server = httpserver.New(httpserver.Public(health.Gate(restrictSources(admin, cfg.adminSources, cfg.trustedProxies)), logger, bodyTimeout,
+				httpserver.WithTelemetry(requests)), logger)
+		case nodeAddrVar:
+			s.server = httpserver.New(httpserver.Public(withHealth(routes, health), logger, bodyTimeout,
+				httpserver.WithTelemetry(requests)), logger)
+			s.server.TLSConfig = cfg.nodeTLS
+		case probesAddrVar:
+			s.server = health.Server(logger)
+		}
 	}
-	if cfg.nodeTLS != nil {
-		server := httpserver.New(httpserver.Public(withHealth(routes, health), logger, bodyTimeout,
-			httpserver.WithTelemetry(requests)), logger)
-		server.TLSConfig = cfg.nodeTLS
-		servers = append(servers, &listening{nodeAddrVar, cfg.nodeAddr, server, nil, true})
+}
+
+// closeListeners closes the listeners a start claimed but never served, so a failed start does not leave the ports
+// taken. Serving closes them in shutdown; closing one twice reports an error that is not startup's.
+func closeListeners(servers []*listening) {
+	for _, s := range servers {
+		if s.listener != nil {
+			_ = s.listener.Close() //nolint:errcheck // shutdown may have closed it already, and there is nothing to do then
+		}
 	}
-	return append(servers, &listening{probesAddrVar, cfg.probesAddr, health.Server(logger), nil, false})
 }
 
 // withHealth puts the two probes on the node listener in front of the call path, so an ingress can ask the core over
@@ -115,8 +141,9 @@ func shutdown(ctx context.Context, servers []*listening) error {
 	return errors.Join(errs...)
 }
 
-// listen binds every server before any serves, so a taken address fails startup with nothing half started. A
-// failure names the variable and the cause, such as "bind: address already in use", but not the address.
+// listen binds every claimed listener before any serves, so a taken address fails startup before the slow steps with
+// nothing half started. A failure names the variable and the cause, such as "bind: address already in use", but not the
+// address.
 func listen(ctx context.Context, servers []*listening) error {
 	for i, s := range servers {
 		listener, err := new(net.ListenConfig).Listen(ctx, "tcp", s.addr)

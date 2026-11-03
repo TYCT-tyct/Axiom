@@ -93,6 +93,13 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		archiveStore = archive
 		defer archive.Close()
 	}
+	// Claim every listener before the slow steps (database check, cache, queue, call path), so a taken address is named
+	// at once instead of after them. The same listeners serve; shutdown closes them, and a failed start closes them here.
+	servers := listeners(cfg)
+	if err := listen(ctx, servers); err != nil {
+		return err
+	}
+	defer closeListeners(servers)
 	tel, db, master, err := openCoreNode(ctx, cfg, console.master, logger)
 	if err != nil {
 		return err
@@ -147,18 +154,16 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer routes.calls.stop() // every way out ends the loops; the normal shutdown does it earlier, after the drain
-	return runNode(ctx, cfg, routes, tel, requests, logger, queue, recorder, cache, cancelSync)
+	return runNode(ctx, cfg, servers, routes, tel, requests, logger, queue, recorder, cache, cancelSync)
 }
 
-// runNode listens, serves until ctx ends, and then shuts the node down in stopNode's order.
-func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *telemetry.Telemetry, requests httpserver.Telemetry,
+// runNode attaches the handlers to the listeners startup claimed, serves until ctx ends, and then shuts the node down
+// in stopNode's order.
+func runNode(ctx context.Context, cfg nodeSettings, servers []*listening, routes nodeRoutes, tel *telemetry.Telemetry, requests httpserver.Telemetry,
 	logger *slog.Logger, queue *pg.Queue, recorder *observability.Recorder, cache *kv.Client, cancelSync context.CancelFunc,
 ) error {
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg, routes.public, routes.admin, &health, logger, requests)
-	if err := listen(ctx, servers); err != nil {
-		return err
-	}
+	node(servers, cfg, routes.public, routes.admin, &health, logger, requests)
 	served := startServing(cfg.roles, servers, logger)
 	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
 	// rebuild.
@@ -427,7 +432,7 @@ func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.T
 }
 
 // logConnectionBudget reports the numbers the startup check derived from the database's limits, so a deployment can
-// see what it will use before the listeners open.
+// see what it will use before the listeners serve.
 func logConnectionBudget(logger *slog.Logger, db *pg.DB) {
 	if budget, ok := db.Budget(); ok {
 		logger.Info("database connection budget", "max_connections", budget.MaxConnections, "reserved", budget.Reserved,
@@ -579,7 +584,7 @@ func closeCache(ctx context.Context, cache *kv.Client, timeout time.Duration, lo
 var errNoAnswer = errors.New("database: " + pg.DatabaseURLVar + ": no answer within AXIOM_STARTUP_TIMEOUT")
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
-// answers would otherwise hold the node before its listeners open, where no probe or log reports it.
+// answers would otherwise hold the node before its listeners serve, where no probe or log reports it.
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errNoAnswer)
 	defer cancel()

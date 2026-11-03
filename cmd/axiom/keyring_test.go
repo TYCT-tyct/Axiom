@@ -344,7 +344,7 @@ func TestKeyringArgs(t *testing.T) {
 }
 
 // TestKeyringCheckFitsTheStartupTimeout: the startup check reads every envelope store, so a lock held on one of them
-// ends the start within AXIOM_STARTUP_TIMEOUT instead of hanging before the listeners open.
+// ends the start within AXIOM_STARTUP_TIMEOUT instead of hanging before the listeners serve.
 func TestKeyringCheckFitsTheStartupTimeout(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)

@@ -29,9 +29,9 @@ func serveNode(t *testing.T, handler http.Handler) *testNode {
 	t.Helper()
 	health := new(httpserver.Health)
 	health.SetReady(true)
-	servers := node(nodeSettings{
-		roles: nodeRoles{roleCore}, publicAddr: "127.0.0.1:0", adminAddr: "127.0.0.1:0", probesAddr: "127.0.0.1:0",
-	}, handler, handler, health, slog.New(slog.DiscardHandler), httpserver.Telemetry{})
+	cfg := nodeSettings{roles: nodeRoles{roleCore}, publicAddr: "127.0.0.1:0", adminAddr: "127.0.0.1:0", probesAddr: "127.0.0.1:0"}
+	servers := listeners(cfg)
+	node(servers, cfg, handler, handler, health, slog.New(slog.DiscardHandler), httpserver.Telemetry{})
 	if err := listen(t.Context(), servers); err != nil {
 		t.Fatal(err)
 	}
