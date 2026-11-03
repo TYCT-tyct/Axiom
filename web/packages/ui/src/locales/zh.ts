@@ -55,6 +55,7 @@ export default {
     skipToContent: "跳到正文",
   },
   dialog: { close: "关闭" },
+  month: { month: "月份", year: "年份" },
   cancel: "取消",
   loadMore: "加载更多",
   loadingMore: "正在加载",
@@ -109,7 +110,7 @@ export default {
     message: "Axiom 已经更新。刷新页面就能用上新版本。",
     reload: "刷新",
   },
-  copy: { copy: "复制", copied: "已复制", failed: "没能复制，请手动选中" },
+  copy: { copy: "复制", copied: "已复制", failed: "没能复制，请手动选中", id: "复制 ID" },
   publicModels: {
     title: "模型与价格",
     description:

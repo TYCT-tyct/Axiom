@@ -1,5 +1,7 @@
 import { type ComponentProps, type ReactNode, useId } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "../cn";
+import { useFormat } from "../format";
 import { Icon } from "./icon";
 
 // The pieces every form is made of. A field's label, hint and error are tied to its control (for, aria-describedby,
@@ -105,6 +107,76 @@ export function SelectField({
         />
       )}
     </FieldFrame>
+  );
+}
+
+// MonthField picks a calendar month, "YYYY-MM", with the month's name and the year in the page's language. The browser's
+// own month input takes its month name from the browser's locale, which is not the page's; two selects are the same
+// control in every browser. The months are the contract's calendar months, not the viewer's zone's: a target covers a
+// UTC month. The years around the chosen one are offered so the control stays short; the chosen year is always among
+// them, and the server takes any month.
+export function MonthField({
+  label,
+  hint,
+  value,
+  onChange,
+  className,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  const { t } = useTranslation("common");
+  const format = useFormat();
+  const id = useId();
+  const [yearText = "", monthText = ""] = value.split("-");
+  const year = Number(yearText);
+  const current = new Date().getUTCFullYear();
+  const first = Math.min(year, current - 10);
+  const last = Math.max(year, current + 10);
+  const years = Array.from({ length: last - first + 1 }, (_, index) => first + index);
+  const describedBy = hint ? `${id}-hint` : undefined;
+  return (
+    <fieldset className={cn("min-w-0 space-y-1.5 border-0 p-0", className)}>
+      <legend id={id} className="block p-0 text-ui font-medium text-t2">
+        {label}
+      </legend>
+      <div className="flex gap-2">
+        <select
+          aria-label={t("month.month")}
+          aria-describedby={describedBy}
+          className={cn(control, "h-10 w-32 sm:h-9")}
+          value={monthText}
+          onChange={(event) => onChange(`${yearText}-${event.target.value}`)}
+        >
+          {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => (
+            <option key={month} value={String(month).padStart(2, "0")}>
+              {format.monthName(month)}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label={t("month.year")}
+          aria-describedby={describedBy}
+          className={cn(control, "h-10 w-24 tabular-nums sm:h-9")}
+          value={yearText}
+          onChange={(event) => onChange(`${event.target.value}-${monthText}`)}
+        >
+          {years.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </div>
+      {hint ? (
+        <p id={`${id}-hint`} className="text-label text-t4">
+          {hint}
+        </p>
+      ) : null}
+    </fieldset>
   );
 }
 

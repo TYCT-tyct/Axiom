@@ -15,6 +15,7 @@ export default {
     skipToContent: "Skip to content",
   },
   dialog: { close: "Close" },
+  month: { month: "Month", year: "Year" },
   cancel: "Cancel",
   loadMore: "Load more",
   loadingMore: "Loading",
@@ -108,7 +109,7 @@ export default {
     message: "Axiom has been updated. Reload to use the new version.",
     reload: "Reload",
   },
-  copy: { copy: "Copy", copied: "Copied", failed: "Couldn’t copy. Select it by hand." },
+  copy: { copy: "Copy", copied: "Copied", failed: "Couldn’t copy. Select it by hand.", id: "Copy ID" },
   publicModels: {
     title: "Models & prices",
     description:

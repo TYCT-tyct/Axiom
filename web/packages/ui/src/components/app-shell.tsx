@@ -48,12 +48,11 @@ export function AppShell({
       >
         {t("shell.skipToContent")}
       </a>
-      {/* The frame stays off paper: a printed receipt is the page, not the navigation that led to it. */}
-      <nav
-        aria-label={t("shell.navigation")}
-        className="sticky top-0 hidden h-dvh flex-col gap-0.5 border-r border-b1 bg-s1 p-3 lg:flex print:hidden"
-      >
-        {sidebar}
+      {/* The frame stays off paper: a printed receipt is the page, not the navigation that led to it. The column itself
+          takes the grid row's height, which is the page's when the page is longer than the window, so its edge and
+          background reach the end of the document; the links sit in a viewport-tall box that stays in view. */}
+      <nav aria-label={t("shell.navigation")} className="hidden border-r border-b1 bg-s1 lg:block print:hidden">
+        <div className="sticky top-0 flex h-dvh flex-col gap-0.5 p-3">{sidebar}</div>
       </nav>
       <NavDrawer ref={drawer}>{sidebar}</NavDrawer>
       <div className="flex min-w-0 flex-col">
