@@ -50,7 +50,9 @@ class PostgresHealthcheck(unittest.TestCase):
         self.assertIsNotNone(match, "the production entry must bound the postgres wait")
         # --wait-timeout is an integer number of seconds; 5m would be rejected by Compose at deploy time.
         self.assertTrue(match.group(1).isdigit(), f"--wait-timeout takes integer seconds, not {match.group(1)}")
-        self.assertGreaterEqual(int(match.group(1)), budget)
+        # The bound must leave room for the Docker daemon as well as the healthcheck; twice the budget is the
+        # documented margin.
+        self.assertGreaterEqual(int(match.group(1)), 2 * budget)
 
 
 if __name__ == "__main__":
