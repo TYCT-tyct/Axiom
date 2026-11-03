@@ -433,28 +433,27 @@ func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 	}
 }
 
-// TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started, here on a taken
-// address, closes it on the way out, so the writer has exited when serve returns. The test holds the Recorder that
-// this call created, so no other node's writer, parallel or earlier, can change the outcome.
+// TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started closes it on the way
+// out, so the writer has exited when serve returns. The recorder constructor starts the real writer and then reports a
+// failure, so the test does not need a listener that would now be refused before the writer exists. The test holds the
+// Recorder that this call created, so no other node's writer, parallel or earlier, can change the outcome.
 func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	t.Parallel()
-	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer taken.Close() //nolint:errcheck // a test listener
 	environ := []string{
-		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + taken.Addr().String(), "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'),
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'),
 		"AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_CALL_LOG_DIR=" + t.TempDir(),
 	}
 	var recorder *observability.Recorder
 	record := func(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, dir string, logger *slog.Logger) (*observability.Recorder, error) {
 		var err error
 		recorder, err = startRecorder(ctx, db, tel, dir, logger)
-		return recorder, err
+		if err != nil {
+			return nil, err
+		}
+		return recorder, errors.New("injected failure after the call-record writer started")
 	}
-	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil); err == nil {
-		t.Fatal("the node started on a taken address")
+	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil); err == nil || !strings.Contains(err.Error(), "injected failure") {
+		t.Fatalf("serveWith: %v, want the injected failure", err)
 	}
 	if recorder == nil {
 		t.Fatal("the node failed before it started the recorder")

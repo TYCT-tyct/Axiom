@@ -463,8 +463,8 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 }
 
 // startBackground starts what serves the call path and outlives it: the call-record writer and the job queue. Both are
-// closed on every way out (closeRecorder, stopQueue), before the database they use; a queue that fails to start closes
-// the recorder it had already started, since the caller has no defer of its own yet.
+// closed on every way out (closeRecorder, stopQueue), before the database they use; a recorder that started before a
+// failing step, including the queue, is closed here, since the caller has no defer of its own yet.
 func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
 	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger, nodeID string,
@@ -473,6 +473,9 @@ func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.K
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, *alert.Bus, *payments.SignalState, error) {
 	recorder, err := record(ctx, db, tel, callLogDir, logger)
 	if err != nil {
+		if recorder != nil {
+			closeRecorder(ctx, recorder, timeout, logger)
+		}
 		return nil, nil, nil, nil, nil, nil, err
 	}
 	signals := alert.New(ctx, db, pg.PlatformScope(), logger)
