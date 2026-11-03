@@ -64,6 +64,7 @@ func checkOutcome(t *testing.T, want outcome, from, to protocol.Format, body str
 }
 
 func TestAnUnsetClaimIsNeverAnAnswer(t *testing.T) {
+	t.Parallel()
 	const (
 		forcedTool = `,"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`
 		cached     = `{"role":"user","content":[{"type":"text","text":"Hi","cache_control":{"type":"ephemeral"}}]}`
@@ -121,6 +122,7 @@ func TestAnUnsetClaimIsNeverAnAnswer(t *testing.T) {
 // is asked, and when the spec says none or nothing there is no way to ask. A model that thinks with a budget is never
 // sent the adaptive form that the zero value used to stand for.
 func TestThinkingIsAsTheSpecSaysOrNotAtAll(t *testing.T) {
+	t.Parallel()
 	asks := chatBody(`"messages":[` + userHi + `],"max_tokens":10000,"reasoning":{"effort":"high"}`)
 	asksNot := chatBody(`"messages":[` + userHi + `]`)
 	for _, c := range []struct {
@@ -148,6 +150,7 @@ func TestThinkingIsAsTheSpecSaysOrNotAtAll(t *testing.T) {
 // TestAZeroTargetAnswersNothing: a Target nobody filled in is not a model that takes the defaults: a request that needs
 // an answer of its spec is refused, whichever it is.
 func TestAZeroTargetAnswersNothing(t *testing.T) {
+	t.Parallel()
 	for name, body := range map[string]string{
 		"reasoning":  chatBody(`"messages":[` + userHi + `],"max_tokens":10000,"reasoning":{"effort":"high"}`),
 		"mid-system": chatBody(`"messages":[` + userHi + `,{"role":"system","content":"x"}]`),
@@ -164,6 +167,7 @@ func TestAZeroTargetAnswersNothing(t *testing.T) {
 // TestSamplingAndForcedToolAreDecidedApart: a model that refuses a temperature other than the default (Claude Haiku
 // 5.5) can still take a forced tool, and one that refuses a forced tool (Claude Opus 5.5) is no judge of the sampling.
 func TestSamplingAndForcedToolAreDecidedApart(t *testing.T) {
+	t.Parallel()
 	forced := chatBody(`"messages":[` + userHi + `],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"required"`)
 	warm := chatBody(`"messages":[` + userHi + `],"temperature":0.5`)
 	checkOutcome(t, "+"+`"type":"any"`, protocol.Chat, protocol.Messages, forced, func(tg *protocol.Target) {
@@ -194,6 +198,7 @@ func refusalOf(t *testing.T, body string, change func(*protocol.Target)) *protoc
 // TestAnUnsetClaimIsTheOperatorsToKnow: the reason a refusal gives is what the client may be told, and says nothing of
 // the spec; which key is missing is in Detail, which only the log gets.
 func TestAnUnsetClaimIsTheOperatorsToKnow(t *testing.T) {
+	t.Parallel()
 	nothing := func(*protocol.Target) {}
 	for name, c := range map[string]struct {
 		body   string

@@ -8,6 +8,7 @@ import orders from "./orders";
 import pricing from "./pricing";
 import redeem from "./redeem";
 import settings from "./settings";
+import sourceClasses from "./source-classes";
 import suppliers from "./suppliers";
 import users from "./users";
 
@@ -26,9 +27,11 @@ export default {
     models: "Model catalog",
     pricing: "Pricing",
     settings: "Site settings",
+    sourceClasses: "Source classes",
   },
   calls,
   audit,
+  sourceClasses,
   signIn: { description: "The admin is for operators. After signing in you also complete two-step verification." },
   home: {
     title: "Operations",

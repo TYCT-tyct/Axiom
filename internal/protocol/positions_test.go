@@ -11,6 +11,7 @@ import (
 )
 
 func TestInspectRejectsDuplicateAfterLargePayload(t *testing.T) {
+	t.Parallel()
 	for _, tail := range []string{
 		`,"opaque":{"key":1,"k\u0065y":2}}`,
 		`,"m\u006fdel":"other"}`,
@@ -23,6 +24,7 @@ func TestInspectRejectsDuplicateAfterLargePayload(t *testing.T) {
 }
 
 func TestPositionCapacity(t *testing.T) {
+	t.Parallel()
 	for f, rules := range rewriteRules {
 		names := map[string]struct{}{}
 		for _, members := range []map[string]rule{rules.members, compactRules[f].members} {
@@ -37,6 +39,7 @@ func TestPositionCapacity(t *testing.T) {
 }
 
 func TestPrepareDiscardsPositionsForDifferentBodySize(t *testing.T) {
+	t.Parallel()
 	for f := range Format(len(rewriteRules)) {
 		for _, bodies := range [][2]string{
 			{`{"model":"original","provider":{},"input":"content"}`, `{"model":"b"}`},

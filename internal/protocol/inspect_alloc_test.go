@@ -18,6 +18,7 @@ var allocSizes = sizes[:2]
 // own allocations constant: it no longer visits wide objects in untouched content. The
 // child process excludes other goroutines and collections (README.md「不变量」).
 func TestAllocs(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name    string
 		formats protocol.Format // the formats below it
@@ -66,18 +67,19 @@ func extraAllocs(t *testing.T, f protocol.Format, lead string, subtractValidatio
 	var funcs []alloctest.Function
 	for _, size := range allocSizes {
 		b := body(f, size, lead)
-		funcs = append(funcs,
-			alloctest.Function{Name: fmt.Sprintf("read/%d", size), F: func() {
-				if err := read(f, b); err != nil {
-					t.Fatal(err)
-				}
-			}},
-			alloctest.Function{Name: fmt.Sprintf("validate/%d", size), F: func() {
-				if err := jsonx.Validate(b); err != nil {
-					t.Fatal(err)
-				}
-			}},
-		)
+		funcs = append(funcs, alloctest.Function{Name: fmt.Sprintf("read/%d", size), F: func() {
+			if err := read(f, b); err != nil {
+				t.Fatal(err)
+			}
+		}})
+		if !subtractValidation { // Prepare's bound includes its validation; only Inspect's is measured to subtract
+			continue
+		}
+		funcs = append(funcs, alloctest.Function{Name: fmt.Sprintf("validate/%d", size), F: func() {
+			if err := jsonx.Validate(b); err != nil {
+				t.Fatal(err)
+			}
+		}})
 	}
 	got := alloctest.Measure(t, funcs...)
 	var extra []float64

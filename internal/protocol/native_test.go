@@ -8,6 +8,7 @@ import (
 
 //nolint:gocognit // the table and its assertions are the test
 func TestInjectNativeSearch(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		format Format
@@ -97,6 +98,7 @@ func TestInjectNativeSearch(t *testing.T) {
 }
 
 func TestInjectNativeSearchRefusesWhatItCannotRewrite(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		format Format
@@ -118,6 +120,7 @@ func TestInjectNativeSearchRefusesWhatItCannotRewrite(t *testing.T) {
 // TestInjectNativeSearchKnowsEveryEscape: a tool already searching is one whatever the escapes of its type, so the
 // search is never added twice; a Messages type longer than the scan's own array is decoded too.
 func TestInjectNativeSearchKnowsEveryEscape(t *testing.T) {
+	t.Parallel()
 	escaped := func(s string) string {
 		var b strings.Builder
 		for _, c := range []byte(s) {
@@ -152,6 +155,7 @@ func TestInjectNativeSearchKnowsEveryEscape(t *testing.T) {
 // TestResponsesMaxToolCalls: the limit is found wherever it sits, including after whitespace long enough that reading
 // the value refills the decoder's buffer over the member name.
 func TestResponsesMaxToolCalls(t *testing.T) {
+	t.Parallel()
 	gap := strings.Repeat(" ", 1<<20)
 	for _, tc := range []struct {
 		name, body string

@@ -51,6 +51,7 @@ data: [DONE]
 `
 
 func TestHiddenChatToolResultReplaysManualThinking(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		up     protocol.Format
 		stream string
@@ -96,6 +97,7 @@ func checkHiddenToolContinuation(t *testing.T, up protocol.Format, stream string
 }
 
 func TestHiddenChatReasoningBufferIsBounded(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		delta string
 		bytes int
@@ -143,6 +145,7 @@ func checkHiddenChatBuffer(t *testing.T, delta string, bytesPerChunk int) {
 }
 
 func TestHiddenChatEncryptedContinuation(t *testing.T) {
+	t.Parallel()
 	stream, err := os.ReadFile("testdata/assembled/responses-reasoning-tool.sse")
 	if err != nil {
 		t.Fatal(err)
@@ -155,6 +158,7 @@ func TestHiddenChatEncryptedContinuation(t *testing.T) {
 }
 
 func TestHiddenChatDetailsKeepOpaqueState(t *testing.T) {
+	t.Parallel()
 	const suffix = `,"format":"anthropic-claude-v1","index":0}`
 	const encrypted = `{"type":"reasoning.encrypted","data":"cipher","format":"anthropic-claude-v1","index":1}`
 	for _, detail := range []string{
@@ -181,6 +185,7 @@ func TestHiddenChatDetailsKeepOpaqueState(t *testing.T) {
 }
 
 func TestHiddenResponsesPartMatchesSnapshots(t *testing.T) {
+	t.Parallel()
 	const part = `{"type":"reasoning_text","text":"private"}`
 	const item = `{"id":"rs","type":"reasoning","summary":[],"content":[` + part + `],"encrypted_content":"opaque"}`
 	source := []string{

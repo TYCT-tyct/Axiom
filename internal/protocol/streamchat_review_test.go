@@ -12,6 +12,7 @@ import (
 )
 
 func TestChatToolStopReasons(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ finish, arguments, want string }{
 		{"stop", `{\"x\":1}`, "tool_use"},
 		{"tool_calls", `{\"x\":1}`, "tool_use"},
@@ -30,6 +31,7 @@ func TestChatToolStopReasons(t *testing.T) {
 }
 
 func TestChatThinkingStartsWithEmptySignature(t *testing.T) {
+	t.Parallel()
 	stream := chatPiece(`{"reasoning_content":"why","content":"answer"}`, `"stop"`) + ev("[DONE]")
 	got := relayTo(t, protocol.Messages, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
 	if got.err != nil {

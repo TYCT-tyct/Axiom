@@ -3,6 +3,7 @@ package pg_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -496,5 +497,31 @@ func enqueueJobs(t *testing.T, db *pg.DB, q *pg.Queue, jobs []river.InsertManyPa
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestARegistrationAfterStartPanics: a worker or a periodic job registered once the queue has started panics at the
+// registration, so the misordered caller is found by its first run and not by the race detector (#624), or never, for a
+// periodic job River would not see.
+func TestARegistrationAfterStartPanics(t *testing.T) {
+	t.Parallel()
+	_, q, _ := startQueue(t)
+	for _, c := range []struct {
+		name     string
+		register func()
+	}{
+		{"a worker", func() {
+			river.AddWorker(q.Workers(), river.WorkFunc(func(context.Context, *river.Job[held]) error { return nil }))
+		}},
+		{"a periodic job", func() { q.Every(time.Hour, func() river.JobArgs { return ping{} }) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "after Start") {
+					t.Fatalf("registering %s after Start: recovered %v, want a panic that names Start", c.name, r)
+				}
+			}()
+			c.register()
+		})
 	}
 }

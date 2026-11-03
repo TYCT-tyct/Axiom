@@ -11,6 +11,7 @@ import (
 	"uuid"
 
 	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/quality"
@@ -256,6 +257,7 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	a.obs.Endpoint, a.obs.Sent = uuid.UUID(entry.Endpoint), time.Now()
 	a.obs.Source = uuid.UUID(s.c.Admission.OwnerID())
 	a.obs.Request = s.c.ID
+	a.obs.Config = quality.EndpointConfig{Model: uuid.UUID(entry.Model), Upstream: entry.Target.Model, Formats: uint16(entry.Formats)}
 	a.first = s.begin(entry, kept, false)
 	a.i = a.first
 	s.currency = entry.Price.Schedule.Currency()
@@ -320,6 +322,15 @@ func (a *attempt) observe(ctx context.Context) {
 			o.OutputTokens += seg.Usage.OutputTotal()
 		}
 	}
+	// The fingerprint's usage evidence comes from the same response as its headers, the first supplier request, and
+	// only from what that upstream reported: an estimate the gateway filled in is not something the supplier said.
+	for _, seg := range s.ends[a.first].Segments {
+		for it := range catalog.NumItems {
+			if seg.Reported.Has(it) && seg.Usage.Count(it) > 0 {
+				o.UsageItems.Add(it)
+			}
+		}
+	}
 	s.x.Quality.Observe(ctx, *o)
 }
 
@@ -353,7 +364,8 @@ func (s *session) attempt(ctx context.Context, i int, entry routing.Entry, conn 
 		a.obs.Failure, a.obs.Cut, a.obs.Ended = fail, cutOf(ctx), time.Now()
 		return s.failed(a, fail)
 	}
-	defer resp.Body.Close() //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close
+	defer resp.Body.Close()     //nolint:errcheck // the stream is over or abandoned; nothing to learn from the close
+	a.obs.Headers = resp.Header // the fingerprint evidence source classes are recognized by
 	a.state = strings.TrimSpace(resp.Header.Get(stateHeader))
 	if s.c.Compact || s.c.Format.Direct() {
 		return a.pass(ctx, resp)

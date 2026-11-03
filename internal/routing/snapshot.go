@@ -41,25 +41,31 @@ func Of(formats ...protocol.Format) (s FormatSet) {
 // Has reports whether f is in the set.
 func (s FormatSet) Has(f protocol.Format) bool { return s&(1<<f) != 0 }
 
-// Class is where an endpoint's supply comes from, which presets filter on.
-type Class uint8
+// Class is the stable slug of a source class: where an endpoint's supply comes from, which presets filter on. The
+// classes are administrator data in quality (docs/domains/quality.md「来源类别与指纹」); routing knows only the slug, so a
+// class added there needs no change here. The seeds are official, cloud and relay, and relay is the fallback of an
+// endpoint no fingerprint decided.
+type Class string
 
-// The classes of supply.
+// The seeded classes. Their slugs are stable: presets, call records and documents name them.
 const (
-	ClassOfficial Class = iota // the vendor's own API
-	ClassCloud                 // a cloud platform's hosting of the model
-	ClassRelay                 // a relay or reseller
-	numClasses
+	ClassOfficial Class = "official" // the vendor's own API
+	ClassCloud    Class = "cloud"    // a cloud platform's hosting of the model
+	ClassRelay    Class = "relay"    // a relay or reseller, and the fallback
 )
 
-// ClassSet is a set of classes. The zero value allows none; presets list what they allow.
-type ClassSet uint8
+// ClassSet is the source classes a preset allows: stable slugs, or every class including the ones added later. The
+// zero value allows none.
+type ClassSet []Class
 
-// AllClasses allows every class.
-const AllClasses = ClassSet(1<<numClasses - 1)
+// AllClasses allows every class, including one the running code has not heard of yet.
+var AllClasses = ClassSet{"*"}
 
-// Has reports whether c is in the set.
-func (s ClassSet) Has(c Class) bool { return s&(1<<c) != 0 }
+// Has reports whether c is in the set: explicitly, or through "*".
+func (s ClassSet) Has(c Class) bool { return slices.Contains(s, c) || slices.Contains(s, Class("*")) }
+
+// Empty reports whether the set allows no class.
+func (s ClassSet) Empty() bool { return len(s) == 0 }
 
 // Policy is what an endpoint's supplier does with the data it is sent; a preset lists the policies it accepts.
 type Policy uint8
@@ -189,7 +195,7 @@ type Override struct {
 	// VerifiedOnly keeps only endpoints quality verified as the model they claim; a request's :exacto sets it, and
 	// only an explicit provider.sort replaces it (docs/domains/quality.md「真伪检测」).
 	VerifiedOnly  bool
-	Classes       ClassSet  // when not zero, only these classes
+	Classes       ClassSet  // when not empty, only these classes
 	Policies      PolicySet // when not zero, only these policies
 	MaxPrice      PriceLimit
 	MinThroughput float64
@@ -450,8 +456,9 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 		if p.NoFallbacks && len(p.Order) == 0 {
 			return nil, fmt.Errorf("routing snapshot: preset %s closes the fallbacks but names no suppliers", uuid.UUID(p.ID))
 		}
-		p.Order = slices.Clone(p.Order) // the caller keeps its slice; the snapshot never changes
-		if p.Classes == 0 || p.Policies == 0 {
+		p.Order = slices.Clone(p.Order)     // the caller keeps its slice; the snapshot never changes
+		p.Classes = slices.Clone(p.Classes) // and so does a preset that names classes
+		if p.Classes.Empty() || p.Policies == 0 {
 			return nil, fmt.Errorf("routing snapshot: preset %s allows no class or no data policy, which would filter out everything", uuid.UUID(p.ID))
 		}
 		s.presets[p.ID] = p

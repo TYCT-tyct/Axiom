@@ -40,6 +40,7 @@ func responsesErrorEvent(seq int, code, message, usage string) string {
 // relayed; an item it does not state stays estimated, which a count reported earlier only bounds from below
 // (docs/domains/billing.md「用量来源与暂估」).
 func TestRelayResponsesFailureUsage(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name                    string
 		stream                  string
@@ -113,6 +114,7 @@ func checkFailureUsage(t *testing.T, got relayed, input, output int64, inputFina
 // with: the first failure is terminal, including a bare error event
 // (docs/domains/gateway.md「错误」).
 func TestRelayResponsesFailureMeaning(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name               string
 		stream             string
@@ -162,6 +164,7 @@ func checkFailureRead(t *testing.T, got relayed, want protocol.Fault) *protocol.
 // TestRelayChatFailureUsage: an error chunk ends the stream, so a usage object in it is taken before the error, and the
 // error's members are the client's to read (docs/domains/gateway.md「错误」).
 func TestRelayChatFailureUsage(t *testing.T) {
+	t.Parallel()
 	chunk := `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":7,"model":"gpt-upstream",` +
 		`"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":11},` +
 		`"error":{"message":"too long","type":"invalid_request_error","code":"context_length_exceeded","param":"messages"}}` + "\n\n"
@@ -181,6 +184,7 @@ func TestRelayChatFailureUsage(t *testing.T) {
 
 // Failed frames must go through the same usage validation as successful frames, for native and converted clients.
 func TestFailedFrameValidatesUsage(t *testing.T) {
+	t.Parallel()
 	for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		clients := []protocol.Format{f, protocol.Chat}
 		if f == protocol.Chat {
@@ -224,6 +228,7 @@ func failedUsageFrame(f protocol.Format, output string) string {
 
 // Only compactions listed by the terminal frame are final; an earlier snapshot is still provisional.
 func TestFailedFrameCompactions(t *testing.T) {
+	t.Parallel()
 	const usage = `{"input_tokens":5,"output_tokens":11,"iterations":[{"type":"compaction","input_tokens":3,"output_tokens":7}]}`
 	for _, terminalUsage := range []bool{false, true} {
 		before, final := messageStart(usage), "{}"

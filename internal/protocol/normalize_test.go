@@ -8,6 +8,7 @@ import (
 )
 
 func TestControlNormalizationKeepsPayloadBytes(t *testing.T) {
+	t.Parallel()
 	const body = `"messages":[{"role":"user","content":[{"type":"te\u0078t","text":"\u0048i"}]},` +
 		`{"role":"assistant","reasoning_details":[{"type":"reasoning.text","format":"anthropic-claude-v1","text":"\u0068m","signature":"\u0053"}],` +
 		`"function_call":{"name":"f","arguments":"{ \"q\" : \"\\u0061\" }"}},` +
@@ -42,6 +43,7 @@ func TestControlNormalizationKeepsPayloadBytes(t *testing.T) {
 }
 
 func TestPrepareChatUpgradesLegacyBytes(t *testing.T) {
+	t.Parallel()
 	const members = `"messages":[{"role":"user","content":"\u0048i"}],"functions":[{"name":"\u0066"}],"function_call":"\u0061uto"`
 	body := []byte(chatBody(members))
 	r := inspected(t, protocol.Chat, body)

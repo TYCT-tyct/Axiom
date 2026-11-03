@@ -35,6 +35,7 @@ func metadataOf(t *testing.T, body []byte) (device, session string) {
 }
 
 func TestMetadataEncoding(t *testing.T) {
+	t.Parallel()
 	for _, format := range []protocol.Format{protocol.Messages, protocol.Chat} {
 		for _, value := range []string{"plain", "a\"b", `a\b`, "\x00\n\t", "设备"} {
 			t.Run(fmt.Sprintf("%d/%q", format, value), func(t *testing.T) {
@@ -64,6 +65,7 @@ func metadataRequest(format protocol.Format, user, content string) []byte {
 }
 
 func TestMetadataEncodedLength(t *testing.T) {
+	t.Parallel()
 	for _, format := range []protocol.Format{protocol.Messages, protocol.Chat} {
 		// Two backslashes need four inner bytes, so raw component lengths fit while the encoded object does not.
 		const encodedLen = userIDLen + 4

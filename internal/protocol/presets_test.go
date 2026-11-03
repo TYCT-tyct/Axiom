@@ -12,6 +12,7 @@ import (
 )
 
 func TestPresetMerge(t *testing.T) {
+	t.Parallel()
 	for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		t.Run(fmt.Sprint(f), func(t *testing.T) {
 			checkPresetMerge(t, f)
@@ -57,6 +58,7 @@ func checkMergedTools(t *testing.T, tools []map[string]jsonx.Raw) {
 }
 
 func TestMessagesFallbacks(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		member string
 		valid  bool
@@ -106,6 +108,7 @@ func checkFallbackForwarding(t *testing.T, req protocol.Request, body []byte) {
 }
 
 func TestPresetKeepsOpaqueInput(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"@preset/p","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"secret","signature":"sig\u006eature"}]}],"custom_number":1e1000,"session_id":"s"}`)
 	out, err := protocol.MergePreset(protocol.Messages, body, []byte(`{"model":"m","temperature":0.2}`), "")
 	if err != nil {
@@ -117,6 +120,7 @@ func TestPresetKeepsOpaqueInput(t *testing.T) {
 }
 
 func TestSessionIDBoundary(t *testing.T) {
+	t.Parallel()
 	_, err := protocol.Inspect(protocol.Messages, []byte(`{"model":"m","session_id":"`+strings.Repeat("🙂", 256)+`"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -131,6 +135,7 @@ func TestSessionIDBoundary(t *testing.T) {
 }
 
 func TestPresetNamedTools(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		tools, request string
 		count          int
@@ -155,6 +160,7 @@ func TestPresetNamedTools(t *testing.T) {
 }
 
 func TestPresetModelList(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		member, model string
 		alternates    int
@@ -171,6 +177,7 @@ func TestPresetModelList(t *testing.T) {
 }
 
 func TestPresetMergeErrorsAreInvalidRequests(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ body, config string }{
 		{`{"model":"@preset/p","tools":[{"type":"function","name":"f"}]}`, `{"model":"m","tools":{"a":1}}`},
 		{`{"model":"@preset/p","tools":[{"type":"function","name":"f"}]}`, `{"model":"m","tools":[1]}`},
@@ -184,6 +191,7 @@ func TestPresetMergeErrorsAreInvalidRequests(t *testing.T) {
 }
 
 func TestPresetMessagesFallbackOverride(t *testing.T) {
+	t.Parallel()
 	for _, config := range []string{`{"models":["a","b"]}`, `{"models":["a"]}`, `{"model":"a","models":["b"]}`} {
 		for _, tc := range []struct {
 			fallbacks string

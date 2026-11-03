@@ -68,6 +68,7 @@ func primed(f Format, prime [][]byte) *serverCapture {
 // draws from the node's budget before the read (captureEvent). Each case is measured twice, priming alone and priming
 // then the event, so the difference is the event's own allocation.
 func TestCaptureAllocatesWithinItsCharge(t *testing.T) {
+	t.Parallel()
 	cases := allocCases()
 	var funcs []alloctest.Function
 	for name, tc := range cases {
@@ -102,6 +103,7 @@ func TestCaptureAllocatesWithinItsCharge(t *testing.T) {
 // TestTurnAllocatesWithinItsCharge: building the turn, which merges every reasoning_details entry the capture kept,
 // allocates no more than turnBound, which ServerTurn draws before it builds.
 func TestTurnAllocatesWithinItsCharge(t *testing.T) {
+	t.Parallel()
 	empties := strings.TrimSuffix(strings.Repeat(`{"type":"reasoning.text"},`, 10000), ",")
 	events := map[string]string{
 		"many details":    `{"choices":[{"index":0,"delta":{"reasoning_details":[` + empties + `]}}]}`,
@@ -130,6 +132,7 @@ func TestTurnAllocatesWithinItsCharge(t *testing.T) {
 // A body of a hundred thousand empty objects costs each at most the copy of the body it returns, and the check for a
 // colliding function nothing that grows with it; decoding the arrays would take tens of bytes an element.
 func TestRequestScansAllocateOnlyTheCopy(t *testing.T) {
+	t.Parallel()
 	empties := strings.TrimSuffix(strings.Repeat("{},", 100000), ",")
 	tools := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}],"tools":[` + empties + `,{"type":"openrouter:web_search"}]}`)
 	plain := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}],"tools":[` + empties + `]}`)

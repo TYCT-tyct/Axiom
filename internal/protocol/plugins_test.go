@@ -7,6 +7,7 @@ import (
 )
 
 func TestPluginControls(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		members     string
 		compression Compression
@@ -47,6 +48,7 @@ func TestPluginControls(t *testing.T) {
 }
 
 func TestPluginFormatBoundary(t *testing.T) {
+	t.Parallel()
 	for _, format := range []Format{Messages, Responses} {
 		_, err := Inspect(format, []byte(`{"model":"a","plugins":[{"id":"response-healing"}]}`))
 		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "not supported") {

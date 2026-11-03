@@ -21,6 +21,7 @@ func prepareNativeChat(f protocol.Format, body, model string, history [][]byte) 
 
 // These are whole-request goldens: anything silently dropped or added changes the oracle.
 func TestMessagesRequestsToChat(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, members, want string }{
 		{
 			"system and sampling",
@@ -103,6 +104,7 @@ func BenchmarkRequestsToChat(b *testing.B) {
 }
 
 func TestMessagesEmptyToolResultsToChat(t *testing.T) {
+	t.Parallel()
 	for _, content := range []string{"", `,"content":null`, `,"content":[ ]`} {
 		body := chatBody(`"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1"` + content + `}]}]`)
 		up, err := prepareNativeChat(protocol.Messages, body, "up", nil)
@@ -114,6 +116,7 @@ func TestMessagesEmptyToolResultsToChat(t *testing.T) {
 }
 
 func TestResponsesRequestsToChat(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, members, want string }{
 		{
 			"instructions and identities",
@@ -167,6 +170,7 @@ func TestResponsesRequestsToChat(t *testing.T) {
 }
 
 func TestNativeChatRejectsUnrepresentableMembers(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		f       protocol.Format
 		members string
@@ -194,6 +198,7 @@ func TestNativeChatRejectsUnrepresentableMembers(t *testing.T) {
 }
 
 func TestNativeChatCapAndContinuation(t *testing.T) {
+	t.Parallel()
 	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
 		members := `"messages":[{"role":"user","content":"Hi"}],"max_tokens":9`
 		if f == protocol.Responses {
@@ -220,6 +225,7 @@ func TestNativeChatCapAndContinuation(t *testing.T) {
 }
 
 func TestResponsesToolSchemaKeepsLargeIntegerConstraints(t *testing.T) {
+	t.Parallel()
 	const bound = "9007199254740993"
 	body := chatBody(`"input":"Go","tools":[{"type":"function","name":"f","parameters":{"type":"object","properties":{"n":{"type":"integer","minimum":` + bound + `}}}}]`)
 	up, err := prepareNativeChat(protocol.Responses, body, "up", nil)
@@ -232,6 +238,7 @@ func TestResponsesToolSchemaKeepsLargeIntegerConstraints(t *testing.T) {
 }
 
 func TestNativeChatUsesJSONValuesRegardlessOfSpelling(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		format  protocol.Format
 		members string

@@ -4,6 +4,7 @@ package quality
 
 import (
 	"context"
+	"net/http"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
+	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
 )
@@ -73,6 +75,15 @@ type Observation struct {
 	// to; Ended when the upstream's end or failure was read, before any wait of the gateway's own, which dates the
 	// samples.
 	Sent, FirstToken, Ended time.Time
+	// Headers are the accepted 2xx response's headers, the evidence source classes are recognized by. They are only
+	// read when a class rule names them and are not retained whole (docs/domains/quality.md「来源类别与指纹」).
+	Headers http.Header
+	// UsageItems are the billing items the upstream itself reported with a non-zero count in the response Headers came
+	// from, the other fingerprint evidence. An item the gateway estimated is not one the upstream reported.
+	UsageItems catalog.ItemSet
+	// Config is the endpoint configuration the attempt was sent to: its catalog model, upstream name and formats. A
+	// response from a configuration Prepare has since replaced is not evidence for the new one.
+	Config EndpointConfig
 }
 
 func (o *Observation) content() bool { return !o.FirstToken.IsZero() }
@@ -99,6 +110,9 @@ type Measures struct {
 	Verified         bool
 	VerifiedAt       time.Time
 	VerifyConfidence float64
+	// Class is the source class's stable slug, decided by the endpoint's last successful response and the live rules;
+	// the fallback when no rule matched or no response has been seen. Routing filters on it and the call record names it.
+	Class string
 	// Facts are what detection measured of the endpoint's structure, by call format: a measurement of Chat says
 	// nothing about Responses (docs/domains/quality.md「实测的能力与上限」).
 	Facts map[protocol.Format]Facts
@@ -143,22 +157,22 @@ type measuredFacts struct {
 	facts Facts
 }
 
-// endpointConfig identifies the endpoint configuration a measurement belongs to: its model, upstream name and the set
-// of formats it serves. A measurement that arrives after any of them changed is stale and must not overwrite the
-// current configuration's facts.
-type endpointConfig struct {
-	model    uuid.UUID
-	upstream string
-	formats  uint16
+// EndpointConfig identifies the endpoint configuration a measurement belongs to: its model, upstream name and the set
+// of formats it serves. A measurement that arrives after any of them changed is stale and must not overwrite the current
+// configuration's facts.
+type EndpointConfig struct {
+	Model    uuid.UUID
+	Upstream string
+	Formats  uint16
 }
 
 // configOf is the configuration the endpoint presents now.
-func configOf(ep suppliers.Routable) endpointConfig {
+func configOf(ep suppliers.Routable) EndpointConfig {
 	var formats uint16
 	for _, f := range ep.Formats {
 		formats |= 1 << f
 	}
-	return endpointConfig{model: ep.Model, upstream: ep.Upstream, formats: formats}
+	return EndpointConfig{Model: ep.Model, Upstream: ep.Upstream, Formats: formats}
 }
 
 // Monitor keeps local endpoint evidence and live breaker state. Observe never accesses the database or allocates
@@ -174,6 +188,7 @@ type Monitor struct {
 	mode           Mode
 	changes        chan change
 	loop           *Loop
+	classes        atomic.Pointer[compiledClasses]
 	suspectedBlock metric.Int64Counter // HTML answers, taken for a firewall on the route and not counted
 }
 
@@ -202,9 +217,11 @@ type State struct {
 	sampled       time.Time
 	verify        verification                      // the last fingerprint check and its schedule
 	verifying     bool                              // a verification generation is in flight
-	current       endpointConfig                    // the configuration Prepare last published
+	current       EndpointConfig                    // the configuration Prepare last published
 	published     uint64                            // the supplier snapshot Prepare last accepted
 	facts         map[protocol.Format]measuredFacts // what detection measured, per call format
+	class         string                            // the source class's stable slug, from the last successful response
+	evidence      classEvidence                     // the headers and usage items the live rules read
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -244,6 +261,7 @@ func New(meter metric.Meter) *Monitor {
 			"HTML answers taken for a firewall on the route, which count against neither the endpoint nor the route."),
 	}
 	m.verifyAge.Store(int64(defaultVerifyMaxAge))
+	m.classes.Store(&compiledClasses{fallback: "relay"}) // Start replaces this with the table; before then nothing has a fingerprint
 	m.register(meter)
 	return m
 }
@@ -267,12 +285,13 @@ func counter(m metric.Meter, name, description string) metric.Int64Counter {
 func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	v := m.judge(ctx, &o)
 	latency := o.content() && o.InputTokens <= latencyMaxInput
-	if v == uncounted && !latency {
+	if v == uncounted && !latency && o.Failure != nil {
 		return
 	}
 	e := m.of(o.Endpoint)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	m.observeClassEvidence(e, &o, v) // a successful response's headers and usage are the fingerprint evidence
 	e.count(v, o.Ended)
 	m.health(e, v, &o)
 	if latency {
@@ -389,6 +408,33 @@ func (m *Monitor) Measure(ep suppliers.Routable, format protocol.Format, facts F
 	return true
 }
 
+// observeClassEvidence records what a successful response says about its source. The verdict, not the HTTP status,
+// decides: an idle timeout, an empty body or a broken stream after 2xx is a failure and its headers say nothing about
+// where the endpoint's real answers come from. The attempt must also belong to the configuration Prepare last
+// published: a response from an upstream the endpoint no longer uses cannot classify the new one. e.mu is held.
+func (m *Monitor) observeClassEvidence(e *State, o *Observation, v verdict) {
+	if v != success || o.Failure != nil || o.Config != e.current {
+		return
+	}
+	if c := m.classes.Load(); c != nil {
+		e.observeClass(c, o.Headers, o.UsageItems, o.Ended)
+	}
+}
+
+// classOf is the endpoint's class for ep's configuration. The class was recognized from responses of the configuration
+// Prepare last published; a caller holding another (a routing build that read an older supplier generation) gets the
+// fallback, as MeasuredFor withholds its facts. e.mu is held.
+func (m *Monitor) classOf(e *State, ep suppliers.Routable) string {
+	if e.class == "" || e.current != configOf(ep) {
+		return m.fallbackClass()
+	}
+	return e.class
+}
+
+// fallbackClass is the class an endpoint belongs to before a rule decides, or when nothing matches: the live table's
+// fallback. New installs the relay fallback before Start reads the table.
+func (m *Monitor) fallbackClass() string { return m.classes.Load().fallback }
+
 // MeasuredFor is what the endpoint's numbers are now for a routable endpoint: a pass counts only for the configuration
 // it checked, so an endpoint whose model, upstream name or format changed since the check is not verified even before
 // the loop clears the state (docs/domains/quality.md「真伪检测」), and a measurement of its structure likewise says
@@ -399,7 +445,7 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	e := m.endpoints[ep.ID]
 	m.mu.RUnlock()
 	if e == nil {
-		return Measures{Health: 1, Quality: 1}
+		return Measures{Health: 1, Quality: 1, Class: m.fallbackClass()}
 	}
 	has := len(ep.Formats) > 0
 	want := claim{}
@@ -409,6 +455,7 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := e.measures(now, m.verificationAge())
+	out.Class = m.classOf(e, ep)
 	if out.Verified && (!has || e.verify.claim != want) {
 		out.Verified, out.VerifyConfidence, out.VerifiedAt = false, 0, time.Time{}
 	}

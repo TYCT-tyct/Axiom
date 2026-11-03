@@ -12,6 +12,7 @@ import (
 const convertedCallID = "01a152cc-b523-7cb6-a0da-e4134209295f"
 
 func TestUnsignedThinkingReplaysToNativeMessages(t *testing.T) {
+	t.Parallel()
 	for _, signature := range []string{"", `,"signature":""`, `,"signature":null`} {
 		body := []byte(`{"model":"m","max_tokens":20,"messages":[{"role":"user","content":"old"},{"role":"assistant","content":[{"type":"thinking","thinking":"lost"` + signature + `},{"type":"text","text":"answer"}]},{"role":"assistant","content":[{"type":"thinking","thinking":"orphan"` + signature + `}]},{"role":"user","content":"next"}]}`)
 		r := inspected(t, protocol.Messages, body)
@@ -31,6 +32,7 @@ func TestUnsignedThinkingReplaysToNativeMessages(t *testing.T) {
 }
 
 func TestNativeThinkingSettingNeedsNoReplayBuffer(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","system":"Explain your thinking","thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"user","content":"Go"}]}`)
 	r := inspected(t, protocol.Messages, body)
 	target, w := protocol.Target{Format: protocol.Messages, Model: "m"}, protocol.Rewrites{Identity: derive}
@@ -44,6 +46,7 @@ func TestNativeThinkingSettingNeedsNoReplayBuffer(t *testing.T) {
 }
 
 func TestConvertedResponsesIDsAreRemovedFromNativeReplay(t *testing.T) {
+	t.Parallel()
 	for _, compact := range []bool{false, true} {
 		body := []byte(`{"model":"m","input":[{"type":"message","id":"` + convertedCallID + `_0","role":"assistant","content":"answer"},{"type":"function_call","id":"` + convertedCallID + `_1","call_id":"c1","name":"f","arguments":"{}"},{"type":"function_call_output","call_id":"c1","output":"ok"},{"type":"reasoning","id":"rs_native","encrypted_content":"opaque","summary":[]},{"role":"user","content":"next"}]}`)
 		r := inspected(t, protocol.Responses, body)
@@ -69,6 +72,7 @@ func TestConvertedResponsesIDsAreRemovedFromNativeReplay(t *testing.T) {
 }
 
 func TestConvertedOutputCanReturnToNativeEndpoints(t *testing.T) {
+	t.Parallel()
 	for _, format := range formats[:2] {
 		stream := sample(t, "assembled/chat-reasoning-cache.sse")
 		whole := aggregate(t, format.f, protocol.Chat, bytes.NewReader(stream), protocol.NewMemory(64<<20), unsettled)
@@ -93,6 +97,7 @@ func TestConvertedOutputCanReturnToNativeEndpoints(t *testing.T) {
 }
 
 func TestNativeReplayCleanupFitsPrepareCost(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, members string
 		format        protocol.Format

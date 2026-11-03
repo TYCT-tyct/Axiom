@@ -41,6 +41,7 @@ var nativeChatContent = map[string][2]string{
 }
 
 func TestChatToNativeSamples(t *testing.T) {
+	t.Parallel()
 	for fi, format := range formats[:2] {
 		for ci, c := range chatUpstreamCases {
 			t.Run(format.dir+"/"+c.name, func(t *testing.T) { checkNativeChatSample(t, fi, ci) })
@@ -49,6 +50,7 @@ func TestChatToNativeSamples(t *testing.T) {
 }
 
 func TestChatResponsesLifecycleMembers(t *testing.T) {
+	t.Parallel()
 	stream := sample(t, "assembled/chat-tool-calls.sse")
 	got := relayTo(t, protocol.Responses, protocol.Chat, bytes.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(64<<20), settled)
 	if got.err != nil {
@@ -113,6 +115,7 @@ func chatPiece(delta, finish string) string {
 }
 
 func TestChatParallelToolsAreStreamedWithoutMixingArguments(t *testing.T) {
+	t.Parallel()
 	first := chatPiece(`{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"f","arguments":"{\"x\":"}}]}`, "null")
 	second := chatPiece(`{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"g","arguments":"{\"y\":"}}]}`, "null")
 	finish := chatPiece(`{"tool_calls":[{"index":0,"function":{"arguments":"1}"}},{"index":1,"function":{"arguments":"2}"}}]}`, `"tool_calls"`) + ev("[DONE]")
@@ -163,6 +166,7 @@ func checkParallelToolsAggregate(t *testing.T, fi int, stream []byte) {
 }
 
 func TestChatToNativeStopReasons(t *testing.T) {
+	t.Parallel()
 	for fi := range formats[:2] {
 		for _, reason := range []string{"stop", "length", "content_filter", "tool_calls"} {
 			t.Run(formats[fi].dir+"/"+reason, func(t *testing.T) { checkStopReason(t, fi, reason) })
@@ -197,6 +201,7 @@ func stopMarker(f protocol.Format, reason string) string {
 }
 
 func TestChatConversionFailureBeforeClientPrelude(t *testing.T) {
+	t.Parallel()
 	stream := chatPiece(`{"tool_calls":[{"index":3,"function":{"arguments":"{}"}}]}`, `"tool_calls"`) + ev("[DONE]")
 	for _, format := range formats[:2] {
 		got := relayTo(t, format.f, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
@@ -213,6 +218,7 @@ func TestChatConversionFailureBeforeClientPrelude(t *testing.T) {
 }
 
 func TestChatToMessagesRejectsInvalidToolInput(t *testing.T) {
+	t.Parallel()
 	stream := chatPiece(`{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"f","arguments":"{\"x\":"}}]}`, `"tool_calls"`) + ev("[DONE]")
 	got := relayTo(t, protocol.Messages, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20), settled)
 	if protocol.FaultOf(got.err) != protocol.FaultToolInput {
@@ -224,6 +230,7 @@ func TestChatToMessagesRejectsInvalidToolInput(t *testing.T) {
 }
 
 func TestChatToNativeFailures(t *testing.T) {
+	t.Parallel()
 	for _, format := range formats[:2] {
 		for _, suffix := range []string{
 			"", ev(`{"error":{"type":"server_error","message":"secret"}}`),
@@ -270,6 +277,7 @@ func FuzzChatToNative(f *testing.F) {
 }
 
 func TestChatConversionCannotOutgrowTheNodeBudget(t *testing.T) {
+	t.Parallel()
 	stream := chatPiece(`{"content":"`+strings.Repeat("x", 100000)+`"}`, `"stop"`) + ev("[DONE]")
 	for _, format := range formats[:2] {
 		mem := protocol.NewMemory(0)
@@ -281,6 +289,7 @@ func TestChatConversionCannotOutgrowTheNodeBudget(t *testing.T) {
 }
 
 func TestChatConversionUsesOneReasoningCopyAndWaitsForSettlement(t *testing.T) {
+	t.Parallel()
 	stream := chatPiece(`{"reasoning":"why","reasoning_content":"why","reasoning_details":[ ]}`, `"stop"`) + ev("[DONE]")
 	for _, format := range formats[:2] {
 		got := relayTo(t, format.f, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(1<<20),

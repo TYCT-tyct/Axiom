@@ -37,6 +37,7 @@ func (p *parsedRecords) parse(f File) (string, error) {
 }
 
 func TestFileParserEngine(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		members string
 		engine  string
@@ -83,6 +84,7 @@ func checkEngine(t *testing.T, members, engine, bad string) {
 }
 
 func TestFileParserFormat(t *testing.T) {
+	t.Parallel()
 	for _, format := range []Format{Chat, Messages, Responses} {
 		if _, err := Inspect(format, []byte(`{"model":"a","plugins":[{"id":"file-parser","pdf":{"engine":"native"}}]}`)); err != nil {
 			t.Fatalf("format %d: %v", format, err)
@@ -91,6 +93,7 @@ func TestFileParserFormat(t *testing.T) {
 }
 
 func TestRewriteFiles(t *testing.T) {
+	t.Parallel()
 	data := []byte("%PDF-1.7 a scan")
 	for _, tc := range rewriteCases(data) {
 		t.Run(tc.name, func(t *testing.T) {
@@ -190,6 +193,7 @@ func checkRewrite(t *testing.T, tc rewriteCase, rec *parsedRecords, body []byte,
 }
 
 func TestRewriteFilesRefusals(t *testing.T) {
+	t.Parallel()
 	data := []byte("%PDF")
 	for _, tc := range []struct {
 		name string
@@ -230,6 +234,7 @@ func TestRewriteFilesRefusals(t *testing.T) {
 }
 
 func TestFileAnnotationEntries(t *testing.T) {
+	t.Parallel()
 	got := string(FileAnnotationEntries([]FileAnnotation{{Hash: "h", Name: "a.pdf", Text: "text"}}))
 	want := `{"file":{"content":[{"text":"text","type":"text"}],"hash":"h","name":"a.pdf"},"type":"file"}`
 	if got != want {
@@ -244,6 +249,7 @@ func TestFileAnnotationEntries(t *testing.T) {
 // TestRewriteFilesKeepsTheBytesItDoesNotReplace: a member the rewrite knows nothing about is copied as the client wrote
 // it, including a number the encoder cannot hold. Rewriting one content array must not re-encode the message.
 func TestRewriteFilesKeepsTheBytesItDoesNotReplace(t *testing.T) {
+	t.Parallel()
 	data := []byte("%PDF-1.7 a scan")
 	body := `{"model":"a","messages":[{"role":"user","content":[{"type":"file","file":{"file_data":"` +
 		testDataURL(data) + `"}}],"seed":1e9999,"note":"kept"}]}`
@@ -267,6 +273,7 @@ func TestRewriteFilesKeepsTheBytesItDoesNotReplace(t *testing.T) {
 // TestRewriteFilesCountsEveryCopyOfAText: a history that repeats one file writes the settled text beside every copy of
 // it, so the copies are held to the request's total, not the parse's one.
 func TestRewriteFilesCountsEveryCopyOfAText(t *testing.T) {
+	t.Parallel()
 	rec := &parsedRecords{text: strings.Repeat("x", MaxParsedBytes/2)}
 	file := `{"type":"file","file":{"file_data":"` + testDataURL([]byte("%PDF-1.7 a scan")) + `"}}`
 	body := `{"model":"a","messages":[{"role":"user","content":[` + file + `,` + file + `,` + file + `]}]}`
@@ -281,6 +288,7 @@ func TestRewriteFilesCountsEveryCopyOfAText(t *testing.T) {
 // TestFileReferences: only a part that names a supplier's file without carrying one is a reference a rewrite may leave;
 // anything else that still counts as a document is a file it could not parse.
 func TestFileReferences(t *testing.T) {
+	t.Parallel()
 	ref := `{"type":"file","file":{"file_id":"file-1"}}`
 	inline := `{"type":"file","file":{"file_data":"` + testDataURL([]byte("%PDF-1.7 a scan")) + `"}}`
 	for _, tc := range []struct {
@@ -326,6 +334,7 @@ func TestFileReferences(t *testing.T) {
 // TestQuotedLength: the budget a text is charged by is what the encoder actually writes. A change in the escaping
 // would grow the buffer past what was charged before the text reached the reply, so the two are compared here.
 func TestQuotedLength(t *testing.T) {
+	t.Parallel()
 	for _, s := range []string{
 		"", "plain markdown", `a "quoted" word`, `back\slash`, "tab\tnewline\ncarriage\r", "\x00\x01\x1f",
 		"unicode: 世界, emoji 🙂", "line separator", "\xff\xfe invalid", strings.Repeat(`"\\`, 200),
@@ -339,6 +348,7 @@ func TestQuotedLength(t *testing.T) {
 // TestAnnotationRefusedForBudgetAllocatesNothing: a reply whose budget cannot hold the annotations goes without them,
 // and it decides that before encoding a megabyte of text into an entry it would throw away.
 func TestAnnotationRefusedForBudgetAllocatesNothing(t *testing.T) {
+	t.Parallel()
 	files := []FileAnnotation{{Hash: strings.Repeat("a", 64), Name: "scan.pdf", Text: strings.Repeat("x", 1<<20)}}
 	a := &chatAggregate{}
 	a.init(func(int) error { return ErrMemory })
@@ -352,6 +362,7 @@ func TestAnnotationRefusedForBudgetAllocatesNothing(t *testing.T) {
 // choice, and each choice's render copies them once more into the body. A budget that covers the entries and the pieces
 // but not those copies is short of what the reply allocates, so it takes no annotations at all.
 func TestAnnotationBudgetCoversEveryChoicesBody(t *testing.T) {
+	t.Parallel()
 	const choices = 8
 	text := strings.Repeat("x", 1<<20)
 	files := []FileAnnotation{{Hash: strings.Repeat("a", 64), Name: "scan.pdf", Text: text}}
@@ -375,6 +386,7 @@ func TestAnnotationBudgetCoversEveryChoicesBody(t *testing.T) {
 // TestAnnotationRollbackKeepsUpstreamAnnotations: a budget that runs out at the second choice takes the file annotations
 // off the first again, and leaves every choice's own upstream annotations as they were, the choices not reached included.
 func TestAnnotationRollbackKeepsUpstreamAnnotations(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("x", 1<<20)
 	files := []FileAnnotation{{Hash: strings.Repeat("a", 64), Name: "scan.pdf", Text: text}}
 	bound := int64(quotedLength(text) + quotedLength(files[0].Hash) + quotedLength(files[0].Name) + 128)

@@ -31,6 +31,7 @@ data: [DONE]
 // is the node's memory like any buffer of the relay. It is drawn before it is held, refused when the budget is spent,
 // and given back whole when the relay is released.
 func TestServerTurnIsChargedToTheBudget(t *testing.T) {
+	t.Parallel()
 	const chunks = 256 // 256 KiB of reasoning, past the relay's base allowance
 	const reasoning = chunks << 10
 	read := func(mem *protocol.Memory) (*protocol.Relay, error) {
