@@ -315,7 +315,7 @@ func classDetail(c *SourceClass) map[string]any {
 	}
 }
 
-// LoadSourceClasses reads the table for a node's loop; a caller without a database keeps the seeds New installed.
+// LoadSourceClasses reads the table for a node's loop; a caller without a database keeps the relay fallback New installed.
 func LoadSourceClasses(ctx context.Context, db *pg.DB, scope pg.Scope) ([]SourceClass, error) {
 	var classes []SourceClass
 	err := db.ReadTx(ctx, scope, func(tx pg.Tx) error {
@@ -326,8 +326,8 @@ func LoadSourceClasses(ctx context.Context, db *pg.DB, scope pg.Scope) ([]Source
 	return classes, err
 }
 
-// loadClasses reads the administrator's classes before the node serves traffic. The seeds New installed are the
-// fallback only until this read: a table that is missing or unusable fails the start rather than routing on stale data.
+// loadClasses reads the administrator's classes before the node serves traffic. The relay fallback New installed is
+// used only until this read: a table that is missing or unusable fails the start rather than routing on stale data.
 func (l *Loop) loadClasses(ctx context.Context, now time.Time) error {
 	if l.db == nil {
 		l.classesAt = now

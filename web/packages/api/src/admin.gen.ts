@@ -495,7 +495,7 @@ export interface paths {
         get?: never;
         /**
          * Change a source class at the revision the caller read.
-         * @description Changes names, description, position and rules. A stale `rev` is a 409 and changes nothing. A seeded class keeps its slug and cannot be retired; the fallback keeps its position and has no rules. Endpoints are reclassified from their last successful response, and a header the new rules read but the old ones did not is absent until the next response, so the endpoint may fall to the fallback in the meantime.
+         * @description Changes names, description, position and rules. A stale `rev` is a 409 and changes nothing. A seeded class keeps its slug and cannot be retired; the fallback keeps its position and has no rules. Endpoints are reclassified from their last successful response. A header the new rules read but the old ones did not is unknown until the next response: present and absent conditions for it do not match, so the endpoint may fall to the fallback in the meantime.
          */
         put: operations["updateSourceClass"];
         post?: never;

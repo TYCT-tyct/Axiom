@@ -294,9 +294,6 @@ func attemptsOf(o billing.Outcome, tries []try) []observability.AttemptRecord {
 		}
 		t := tries[i]
 		class := t.entry.Class
-		if class == "" {
-			class = routing.ClassRelay // an entry from before plans carried a class was a relay
-		}
 		out = append(out, observability.AttemptRecord{
 			Seq:      platform.AttemptSeq(a.Seq), //nolint:gosec // G115: at most platform.MaxAttemptSeq
 			Endpoint: uuid.UUID(t.entry.Endpoint), Supplier: uuid.UUID(t.entry.Supplier),

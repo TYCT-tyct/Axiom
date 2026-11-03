@@ -26,9 +26,13 @@ func classesWith() []SourceClass {
 
 func observedClass(t *testing.T, m *Monitor, id suppliers.EndpointID, h http.Header, usage catalog.ItemSet) string {
 	t.Helper()
+	return observedClassAt(t, m, id, h, usage, EndpointConfig{})
+}
+
+func observedClassAt(t *testing.T, m *Monitor, id suppliers.EndpointID, h http.Header, usage catalog.ItemSet, config EndpointConfig) string {
+	t.Helper()
 	o := answered(id, t0, time.Second, time.Second, 100, 100)
-	o.Headers = h
-	o.UsageItems = usage
+	o.Headers, o.UsageItems, o.Config = h, usage, config
 	m.Observe(context.Background(), o)
 	return m.MeasuredFor(suppliers.Routable{ID: id}, t0.Add(time.Minute)).Class
 }
@@ -81,6 +85,74 @@ func TestSourceClassClassification(t *testing.T) {
 	}
 }
 
+// TestSourceClassNewHeaderIsUnknown: adding a rule for a header the old rules did not check must fall back for both
+// present and absent; an unchecked header is unknown, not evidence that it was missing.
+func TestSourceClassNewHeaderIsUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name, operator string
+		header         http.Header
+	}{
+		{"present", "present", http.Header{"X-New": {"1"}}},
+		{"absent", "absent", http.Header{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testNewHeader(t, tc.operator, tc.header) })
+	}
+}
+
+func testNewHeader(t *testing.T, operator string, header http.Header) {
+	t.Helper()
+	m := New(nil)
+	if err := m.SetSourceClasses(classesWith()); err != nil {
+		t.Fatal(err)
+	}
+	id := suppliers.EndpointID{3}
+	if got := observedClass(t, m, id, http.Header{"X-Official": {"1"}}, 0); got != "official" {
+		t.Fatalf("after a response: %q, want official", got)
+	}
+	classes := classesWith()
+	classes[0].Rules = Rules{Match: "all", Conditions: []Condition{
+		{Evidence: "header", Name: "X-New", Operator: operator},
+	}}
+	if err := m.SetSourceClasses(classes); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.MeasuredFor(suppliers.Routable{ID: id}, t0.Add(time.Minute)).Class; got != "relay" {
+		t.Fatalf("after adding an unchecked header as %s: %q, want relay", operator, got)
+	}
+	if got := observedClass(t, m, id, header, 0); got != "official" {
+		t.Fatalf("after a response that checked the header: %q, want official", got)
+	}
+}
+
+// TestSourceClassOnlySuccessfulResponsesAreEvidence: a 2xx followed by an idle timeout, an empty body or a broken
+// stream is a failed attempt and must not replace the class its last successful response set.
+func TestSourceClassOnlySuccessfulResponsesAreEvidence(t *testing.T) {
+	m := New(nil)
+	if err := m.SetSourceClasses(classesWith()); err != nil {
+		t.Fatal(err)
+	}
+	id := suppliers.EndpointID{4}
+	if got := observedClass(t, m, id, http.Header{"X-Official": {"1"}}, 0); got != "official" {
+		t.Fatalf("after a successful response: %q, want official", got)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*Observation)
+	}{
+		{"idle timeout", func(o *Observation) { o.Done = false; o.Cut = Idle }},
+		{"empty body", func(o *Observation) { o.Done = true; o.Empty = true }},
+		{"broken stream", func(o *Observation) { o.Done = false; o.Fault = protocol.FaultBroken }},
+	} {
+		o := answered(id, t0, time.Second, time.Second, 100, 100)
+		tc.edit(&o)
+		o.Headers = http.Header{} // would fall back if this failed attempt were evidence
+		m.Observe(context.Background(), o)
+		if got := m.MeasuredFor(suppliers.Routable{ID: id}, t0.Add(time.Minute)).Class; got != "official" {
+			t.Errorf("%s replaced the class with %q, want official", tc.name, got)
+		}
+	}
+}
+
 // TestSourceClassEvidenceBindsToConfig: another model or upstream must not inherit the response headers of the old
 // one; Prepare clears the evidence that decided the class.
 func TestSourceClassEvidenceBindsToConfig(t *testing.T) {
@@ -95,7 +167,7 @@ func TestSourceClassEvidenceBindsToConfig(t *testing.T) {
 	if err := m.Prepare(context.Background(), []suppliers.Routable{a}); err != nil {
 		t.Fatal(err)
 	}
-	if got := observedClass(t, m, id, http.Header{"X-Official": {"1"}}, 0); got != "official" {
+	if got := observedClassAt(t, m, id, http.Header{"X-Official": {"1"}}, 0, configOf(a)); got != "official" {
 		t.Fatalf("after a response: %q, want official", got)
 	}
 	if err := m.Prepare(context.Background(), []suppliers.Routable{b}); err != nil {
@@ -103,6 +175,31 @@ func TestSourceClassEvidenceBindsToConfig(t *testing.T) {
 	}
 	if got := m.MeasuredFor(b, t0.Add(time.Minute)).Class; got != "relay" {
 		t.Fatalf("after the upstream changed: %q, want relay", got)
+	}
+}
+
+// TestSourceClassLateObservationOfOldConfig: an attempt sent to up-a can finish after Prepare publishes up-b; its
+// headers must not classify up-b.
+func TestSourceClassLateObservationOfOldConfig(t *testing.T) {
+	m := New(nil)
+	if err := m.SetSourceClasses(classesWith()); err != nil {
+		t.Fatal(err)
+	}
+	id := suppliers.EndpointID{5}
+	a := suppliers.Routable{ID: id, Model: [16]byte{1}, Upstream: "up-a", Formats: []protocol.Format{protocol.Chat}}
+	b := a
+	b.Upstream = "up-b"
+	if err := m.Prepare(context.Background(), []suppliers.Routable{a}); err != nil {
+		t.Fatal(err)
+	}
+	o := answered(id, t0, time.Second, time.Second, 100, 100)
+	o.Headers, o.Config = http.Header{"X-Official": {"1"}}, configOf(a)
+	if err := m.Prepare(context.Background(), []suppliers.Routable{b}); err != nil {
+		t.Fatal(err)
+	}
+	m.Observe(context.Background(), o)
+	if got := m.MeasuredFor(b, t0.Add(time.Minute)).Class; got != "relay" {
+		t.Fatalf("a late up-a response classified up-b as %q, want relay", got)
 	}
 }
 

@@ -65,7 +65,8 @@ const (
 
 // DefaultSourceClasses are the seeds the migration writes: official direct APIs, cloud hosting, and relays. They have
 // no rules, so every endpoint is relay until an administrator adds fingerprints, exactly the behaviour before classes
-// became data. Relay is the fallback and therefore has no rules of its own.
+// became data. Relay is the fallback and therefore has no rules of its own. Production starts with relay only and reads
+// the migration's rows at Start; this function is the in-memory test fixture and the shape the migration must keep.
 func DefaultSourceClasses() []SourceClass {
 	return []SourceClass{
 		{Slug: "official", Name: "Official", NameZh: "官方直连", Position: 0, System: true, Rules: Rules{Match: "all"}},
@@ -315,9 +316,10 @@ func compileClasses(classes []SourceClass) (*compiledClasses, error) {
 	return out, nil
 }
 
-// classEvidence is what one successful response said about its source, as far as the current rules care: the first
-// value of each referenced header and the billing items the response reported. Its fixed array is why Observe stays
-// allocation-free; headers longer than 256 bytes are cut when they are stored.
+// classEvidence is what one successful response said about its source, as far as the rules that were live then cared:
+// every header those rules named (present or not) and the billing items the response reported. Its fixed array is why
+// Observe stays allocation-free; headers longer than 256 bytes are cut when they are stored. A header that was not
+// named by the rules then is unknown, not absent: a later rule that reads it must wait for a new response.
 type classEvidence struct {
 	headers [MaxFingerprintKey]fingerprintHeader
 	n       int
@@ -325,7 +327,10 @@ type classEvidence struct {
 	at      time.Time
 }
 
-type fingerprintHeader struct{ name, value string }
+type fingerprintHeader struct {
+	name, value string
+	present     bool
+}
 
 const maxEvidenceValue = 256
 
@@ -334,10 +339,9 @@ const maxEvidenceValue = 256
 func (e *State) observeClass(c *compiledClasses, h http.Header, usage catalog.ItemSet, at time.Time) {
 	e.evidence.n = 0
 	for _, name := range c.headers {
-		if value, ok := headerValue(h, name); ok {
-			e.evidence.headers[e.evidence.n] = fingerprintHeader{name: name, value: clip(value)}
-			e.evidence.n++
-		}
+		value, present := headerValue(h, name)
+		e.evidence.headers[e.evidence.n] = fingerprintHeader{name: name, value: clip(value), present: present}
+		e.evidence.n++
 	}
 	e.evidence.usage, e.evidence.at = usage, at
 	e.class = c.classify(&e.evidence)
@@ -360,20 +364,22 @@ func clip(s string) string {
 	return strings.Clone(s[:maxEvidenceValue])
 }
 
-func (e *classEvidence) header(name string) (string, bool) {
+// header returns a checked header's first value and whether it was present. known is false for a header the rules
+// in force when the response was observed did not name; that is not evidence of absence.
+func (e *classEvidence) header(name string) (value string, present, known bool) {
 	for i := 0; i < e.n; i++ {
 		if e.headers[i].name == name {
-			return e.headers[i].value, true
+			return e.headers[i].value, e.headers[i].present, true
 		}
 	}
-	return "", false
+	return "", false, false
 }
 
 // classify returns the first class whose conditions hold, or the fallback. No evidence yet means the fallback: an
 // endpoint that never answered successfully has no fingerprint to trust.
 func (c *compiledClasses) classify(e *classEvidence) string {
-	if c == nil || e.at.IsZero() {
-		return c.fallbackOrRelay()
+	if e.at.IsZero() {
+		return c.fallback
 	}
 	for _, class := range c.classes {
 		if class.matches(e) {
@@ -381,13 +387,6 @@ func (c *compiledClasses) classify(e *classEvidence) string {
 		}
 	}
 	return c.fallback
-}
-
-func (c *compiledClasses) fallbackOrRelay() string {
-	if c != nil && c.fallback != "" {
-		return c.fallback
-	}
-	return "relay"
 }
 
 func (c compiledClass) matches(e *classEvidence) bool {
@@ -409,7 +408,10 @@ func (c compiledClass) matches(e *classEvidence) bool {
 //nolint:cyclop // one branch per fixed operator; the operators are a closed set
 func (c compiledCondition) matches(e *classEvidence) bool {
 	if c.header != "" {
-		value, present := e.header(c.header)
+		value, present, known := e.header(c.header)
+		if !known {
+			return false // a header the evidence never checked is unknown, not absent
+		}
 		switch c.op {
 		case "present":
 			return present
@@ -454,11 +456,7 @@ func (m *Monitor) SetSourceClasses(classes []SourceClass) error {
 	m.mu.RUnlock()
 	for _, e := range states {
 		e.mu.Lock()
-		if e.evidence.at.IsZero() {
-			e.class = c.fallback
-		} else {
-			e.class = c.classify(&e.evidence)
-		}
+		e.class = c.classify(&e.evidence)
 		e.mu.Unlock()
 	}
 	return nil

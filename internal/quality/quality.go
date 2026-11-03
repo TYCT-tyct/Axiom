@@ -80,6 +80,9 @@ type Observation struct {
 	Headers http.Header
 	// UsageItems are the billing items the response reported with a non-zero count, the other fingerprint evidence.
 	UsageItems catalog.ItemSet
+	// Config is the endpoint configuration the attempt was sent to: its catalog model, upstream name and formats. A
+	// response from a configuration Prepare has since replaced is not evidence for the new one.
+	Config EndpointConfig
 }
 
 func (o *Observation) content() bool { return !o.FirstToken.IsZero() }
@@ -153,22 +156,22 @@ type measuredFacts struct {
 	facts Facts
 }
 
-// endpointConfig identifies the endpoint configuration a measurement belongs to: its model, upstream name and the set
-// of formats it serves. A measurement that arrives after any of them changed is stale and must not overwrite the
-// current configuration's facts.
-type endpointConfig struct {
-	model    uuid.UUID
-	upstream string
-	formats  uint16
+// EndpointConfig identifies the endpoint configuration a measurement belongs to: its model, upstream name and the set
+// of formats it serves. A measurement that arrives after any of them changed is stale and must not overwrite the current
+// configuration's facts.
+type EndpointConfig struct {
+	Model    uuid.UUID
+	Upstream string
+	Formats  uint16
 }
 
 // configOf is the configuration the endpoint presents now.
-func configOf(ep suppliers.Routable) endpointConfig {
+func configOf(ep suppliers.Routable) EndpointConfig {
 	var formats uint16
 	for _, f := range ep.Formats {
 		formats |= 1 << f
 	}
-	return endpointConfig{model: ep.Model, upstream: ep.Upstream, formats: formats}
+	return EndpointConfig{Model: ep.Model, Upstream: ep.Upstream, Formats: formats}
 }
 
 // Monitor keeps local endpoint evidence and live breaker state. Observe never accesses the database or allocates
@@ -213,7 +216,7 @@ type State struct {
 	sampled       time.Time
 	verify        verification                      // the last fingerprint check and its schedule
 	verifying     bool                              // a verification generation is in flight
-	current       endpointConfig                    // the configuration Prepare last published
+	current       EndpointConfig                    // the configuration Prepare last published
 	published     uint64                            // the supplier snapshot Prepare last accepted
 	facts         map[protocol.Format]measuredFacts // what detection measured, per call format
 	class         string                            // the source class's stable slug, from the last successful response
@@ -257,9 +260,7 @@ func New(meter metric.Meter) *Monitor {
 			"HTML answers taken for a firewall on the route, which count against neither the endpoint nor the route."),
 	}
 	m.verifyAge.Store(int64(defaultVerifyMaxAge))
-	if classes, err := compileClasses(DefaultSourceClasses()); err == nil {
-		m.classes.Store(classes) // the seeds; a node with the table replaces them at Start
-	}
+	m.classes.Store(&compiledClasses{fallback: "relay"}) // Start replaces this with the table; before then nothing has a fingerprint
 	m.register(meter)
 	return m
 }
@@ -289,7 +290,7 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	e := m.of(o.Endpoint)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	m.observeClassEvidence(e, &o) // a 2xx's headers and usage are the fingerprint evidence
+	m.observeClassEvidence(e, &o, v) // a successful response's headers and usage are the fingerprint evidence
 	e.count(v, o.Ended)
 	m.health(e, v, &o)
 	if latency {
@@ -406,10 +407,12 @@ func (m *Monitor) Measure(ep suppliers.Routable, format protocol.Format, facts F
 	return true
 }
 
-// observeClassEvidence records what a successful response says about its source. A failed attempt is not evidence:
-// an error page's headers say nothing about where the endpoint's real answers come from. e.mu is held.
-func (m *Monitor) observeClassEvidence(e *State, o *Observation) {
-	if o.Failure != nil {
+// observeClassEvidence records what a successful response says about its source. The verdict, not the HTTP status,
+// decides: an idle timeout, an empty body or a broken stream after 2xx is a failure and its headers say nothing about
+// where the endpoint's real answers come from. The attempt must also belong to the configuration Prepare last
+// published: a response from an upstream the endpoint no longer uses cannot classify the new one. e.mu is held.
+func (m *Monitor) observeClassEvidence(e *State, o *Observation, v verdict) {
+	if v != success || o.Failure != nil || o.Config != e.current {
 		return
 	}
 	if c := m.classes.Load(); c != nil {
@@ -418,13 +421,8 @@ func (m *Monitor) observeClassEvidence(e *State, o *Observation) {
 }
 
 // fallbackClass is the class an endpoint belongs to before a rule decides, or when nothing matches: the live table's
-// fallback, or relay if classes have not loaded (the seeds New installs always have one).
-func (m *Monitor) fallbackClass() string {
-	if c := m.classes.Load(); c != nil {
-		return c.fallbackOrRelay()
-	}
-	return "relay"
-}
+// fallback. New installs the relay fallback before Start reads the table.
+func (m *Monitor) fallbackClass() string { return m.classes.Load().fallback }
 
 // MeasuredFor is what the endpoint's numbers are now for a routable endpoint: a pass counts only for the configuration
 // it checked, so an endpoint whose model, upstream name or format changed since the check is not verified even before

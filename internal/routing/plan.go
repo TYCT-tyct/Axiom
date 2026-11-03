@@ -267,7 +267,7 @@ func (*Router) entry(c *candidate, n *need) Entry {
 	return Entry{
 		Exchange: c.Exchange,
 		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, ModelSlug: c.ModelSlug, Class: c.Class,
-		Price: c.Price, Limits: limits, MaxOutput: out, Segmentable: segmentable, Byok: c.Byok,
+		Formats: c.Native, Price: c.Price, Limits: limits, MaxOutput: out, Segmentable: segmentable, Byok: c.Byok,
 	}
 }
 

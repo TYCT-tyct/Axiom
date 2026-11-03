@@ -102,6 +102,9 @@ type Entry struct {
 	// Class is the endpoint's source class, frozen with the plan: the call record names where the attempt went, even
 	// after a rule change reclassifies the endpoint for later plans.
 	Class Class
+	// Formats are the call formats the endpoint served when the plan was made. Quality binds response evidence to
+	// this configuration; an attempt that finishes after it changed must not classify the endpoint.
+	Formats FormatSet
 	// Byok says the entry serves on the account's own provider key, which the reply reports as usage.is_byok.
 	Byok bool
 }

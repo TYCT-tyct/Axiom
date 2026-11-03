@@ -257,6 +257,7 @@ func (s *session) bind(ctx context.Context, i int, entry routing.Entry, conn Con
 	a.obs.Endpoint, a.obs.Sent = uuid.UUID(entry.Endpoint), time.Now()
 	a.obs.Source = uuid.UUID(s.c.Admission.OwnerID())
 	a.obs.Request = s.c.ID
+	a.obs.Config = quality.EndpointConfig{Model: uuid.UUID(entry.Model), Upstream: entry.Target.Model, Formats: uint16(entry.Formats)}
 	a.first = s.begin(entry, kept, false)
 	a.i = a.first
 	s.currency = entry.Price.Schedule.Currency()
