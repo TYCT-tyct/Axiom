@@ -12,6 +12,7 @@ func acquire(ctx context.Context, p *Pool, c Class) func() (func(), error) {
 
 // Saturating either physical pool must leave the other class's entire permit budget available.
 func TestPoolClassesDoNotConsumeEachOthersCapacity(t *testing.T) {
+	t.Parallel()
 	for name, first := range map[string]Class{"completions first": Completion, "admissions first": Admission} {
 		t.Run(name, func(t *testing.T) {
 			run(t, func(t *testing.T, ctx context.Context) {
@@ -54,6 +55,7 @@ func TestPoolClassesDoNotConsumeEachOthersCapacity(t *testing.T) {
 
 // A context that has already ended never keeps a connection.
 func TestPoolDeadContextKeepsNothing(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
 		bp, err := New(cfg, nil)
@@ -78,6 +80,7 @@ func TestPoolDeadContextKeepsNothing(t *testing.T) {
 
 // Cancelling a queued caller must leave its class's full capacity available after the holders finish.
 func TestPoolCancelledWaiterReleasesCapacity(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		cfg := DefaultConfig()
 		pool := newPool(cfg.PoolSize, cfg.PoolReserve)

@@ -50,6 +50,7 @@ func (f *routeFixture) prepared(model catalog.ModelID, from, to protocol.Format,
 // Target asked every model to think adaptively, which a model with a thinking budget refuses. A want is "unsupported"
 // for a refusal, or a part the request has ("+") or has not ("-").
 func TestAModelIsAskedToThinkAsItsSpecSays(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	system := `"mid_system":true,"untrusted_system_after_tools":false,"default_sampling_only":false`
 	for _, c := range []struct {
@@ -95,6 +96,7 @@ func missing(body string, err error, want string) string {
 // returns it, and neither of one whose spec says it does not nor of one whose spec says nothing, which would refuse
 // the member or be asked for what it was never said to give.
 func TestAResponsesCallThatStoresNothingAsksForEncryptedReasoning(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	for _, c := range []struct {
 		name, keys string

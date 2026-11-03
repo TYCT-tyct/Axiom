@@ -18,12 +18,14 @@ import (
 // the call and the model it asked for, settled before its ending (docs/domains/gateway.md「转发规则」). A client that
 // asked for no stream gets the aggregated reply from the same stream.
 func TestAChatCallToAChatEndpointIsForwardedAsChat(t *testing.T) {
+	t.Parallel()
 	no := false
 	checkChatCall(t, "streamed", options{client: protocol.Chat})
 	checkChatCall(t, "aggregated", options{client: protocol.Chat, stream: &no})
 }
 
 func TestNativeClientsUseChatEndpoints(t *testing.T) {
+	t.Parallel()
 	for _, client := range []protocol.Format{protocol.Messages, protocol.Responses} {
 		for _, stream := range []bool{true, false} {
 			checkNativeClientOnChat(t, client, stream)
@@ -116,6 +118,7 @@ func checkContains(t *testing.T, what, text string, wants ...string) {
 // endpoint that reads only max_tokens (DeepSeek, Qwen), has the cap written in max_tokens, the member the endpoint
 // honors, so that the output is bounded by what the call was reserved for and not by the endpoint's own default.
 func TestAChatCapTheEndpointIgnoresIsNotTheBound(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{client: protocol.Chat, mutate: func(c *Call) {
 			c.Body = bytes.Replace(c.Body, []byte(`"stream": true`), []byte(`"stream": true, "max_completion_tokens": 1`), 1)

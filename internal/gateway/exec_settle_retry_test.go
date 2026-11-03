@@ -15,6 +15,7 @@ import (
 // acknowledgement lost costs nothing more; the ending carries the cost of the one written, and the call gives its slots
 // back once it is written.
 func TestASettlementIsRetriedUntilItIsWritten(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{
 			final: billing.Final{Charged: platform.AmountExact(5000)},
@@ -43,6 +44,7 @@ func TestASettlementIsRetriedUntilItIsWritten(t *testing.T) {
 // TestASettlementNotWrittenInTimeGoesOnInTheBackground: after 10s the ending goes out without a cost and says the
 // billing is pending; the settlement goes on with the same outcome, and the call keeps its slots until it is written.
 func TestASettlementNotWrittenInTimeGoesOnInTheBackground(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		start := time.Now()
 		h := newHarness(t, ctx, options{settle: func(int) error {
@@ -71,6 +73,7 @@ func TestASettlementNotWrittenInTimeGoesOnInTheBackground(t *testing.T) {
 // after it. A settlement still blocked when the deadline arrives must make Drain return there, not five seconds later;
 // the controlled clock proves the whole path, not just the arithmetic.
 func TestDrainDoesNotAddGracePastTheDeadline(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		release := make(chan struct{})
 		h := newHarness(t, ctx, options{settle: func(int) error {

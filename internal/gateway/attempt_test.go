@@ -15,6 +15,7 @@ import (
 )
 
 func TestSupplierFailureSkipsEveryRemainingEntryOfThatSupplier(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		scope suppliers.Scope
 		sends [3]int // entries 1 and 2 are one supplier's, entry 3 another's
@@ -38,6 +39,7 @@ func TestSupplierFailureSkipsEveryRemainingEntryOfThatSupplier(t *testing.T) {
 }
 
 func TestSupplierPauseWithoutRetryTimeEndsAfterThePauseTime(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		now := time.Now()
 		h := failFirstEntry(t, ctx, suppliers.ScopeSupplier, &now)
@@ -79,6 +81,7 @@ func failFirstEntry(t *testing.T, ctx context.Context, scope suppliers.Scope, no
 }
 
 func TestRateLimitPausesOnlyTheNamedScope(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []rateLimitCase{
 		{"endpoint retry time", suppliers.ScopeEndpoint, 30 * time.Second},
 		{"endpoint default", suppliers.ScopeEndpoint, 0},
@@ -126,6 +129,7 @@ func (tc rateLimitCase) check(t *testing.T, ctx context.Context) {
 }
 
 func TestAlreadyPlannedCooldownSkipsAcquireAndRetryBudget(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 3, maxAttempts: 2, routing: routing.Config{RetryFloor: 1}})
 		h.router.Block(h.call.Plan.Entries[1], routing.ScopeEndpoint, 30*time.Second)
@@ -142,6 +146,7 @@ func TestAlreadyPlannedCooldownSkipsAcquireAndRetryBudget(t *testing.T) {
 }
 
 func TestSupplierStaysExcludedForTheRequestAfterItsLocalPause(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		now := time.Now()
 		h := newHarness(t, ctx, options{
@@ -168,6 +173,7 @@ func TestSupplierStaysExcludedForTheRequestAfterItsLocalPause(t *testing.T) {
 }
 
 func TestFrozenRouteRecordsRestedSupplierAsBalance(t *testing.T) {
+	t.Parallel()
 	for _, rested := range []int{1, 2} {
 		run(t, func(t *testing.T, ctx context.Context) {
 			h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1, 2}})
@@ -193,6 +199,7 @@ func TestFrozenRouteRecordsRestedSupplierAsBalance(t *testing.T) {
 }
 
 func TestProviderNoFallbackKeepsModelRecovery(t *testing.T) {
+	t.Parallel()
 	for _, global := range []bool{false, true} {
 		run(t, func(t *testing.T, ctx context.Context) {
 			h := newHarness(t, ctx, options{entries: 3})

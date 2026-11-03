@@ -26,6 +26,7 @@ func whole(h *harness) scripted { return serve(beat{data: strings.Join(h.events,
 // asked for; the settlement runs once after the upstream has ended and before the ending, which carries the cost (I3),
 // and the attempt it settles is the committed one.
 func TestACallIsRelayedAndSettledBeforeItsEnding(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{final: billing.Final{Charged: platform.AmountExact(3703701)}})
 		h.up.eps[uuidOf(ep(1))].script = []scripted{whole(h)}
@@ -85,6 +86,7 @@ func checkCommittedAttempt(t *testing.T, e billing.Outcome) {
 // replaced by derived ones — the metadata.user_id of an Anthropic call by the structure the session is read out of — and
 // the whitelisted headers go with it.
 func TestTheUpstreamGetsTheEndpointsRequest(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{mutate: func(c *Call) {
 			c.Body = []byte(`{"model":"claude-opus-5-5","stream":true,"max_tokens":9,"metadata":{"user_id":"client-secret-user"},"messages":[{"role":"user","content":"hi"}]}`)
@@ -112,6 +114,7 @@ func TestTheUpstreamGetsTheEndpointsRequest(t *testing.T) {
 // TestFailuresMoveTheCallAsRoutingDecides: by the scope of the failure the next entry is tried, the same entry again, or
 // the call ends with the client's error; whether the request ran is the supplier's word.
 func TestFailuresMoveTheCallAsRoutingDecides(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		scope       routing.Scope
@@ -148,6 +151,7 @@ func TestFailuresMoveTheCallAsRoutingDecides(t *testing.T) {
 // the supplier said of it (Claude Code recovers from the text), in the shell of its format; with nothing said, the
 // error is ours.
 func TestARefusedRequestIsAnsweredInTheUpstreamsWords(t *testing.T) {
+	t.Parallel()
 	messages := protocol.Messages
 	said := &protocol.Rejection{Message: "max_tokens: Input should be greater than 0", Type: "invalid_request_error", Param: "max_tokens", Code: "invalid_value"}
 	for _, tc := range []struct {
@@ -180,6 +184,7 @@ func TestARefusedRequestIsAnsweredInTheUpstreamsWords(t *testing.T) {
 // TestAttemptsAreNumberedBoundAndRecorded: every attempt counts from the moment it is bound, with its number and the
 // entry it was priced as; the route's record gets each; and the most is the plan's (never more than three).
 func TestAttemptsAreNumberedBoundAndRecorded(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		entries     int
@@ -230,6 +235,7 @@ func checkNumbered(t *testing.T, h *harness, name string, entries, want int) {
 // with the reason; credentials that were all taken are a 429 to retry in a second; an endpoint the suppliers do not
 // have is the node's own trouble.
 func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		o          options
@@ -270,6 +276,7 @@ func TestNothingIsTriedWhenNoEntryCanBe(t *testing.T) {
 // key out, the client is told the model does not support the parameter yet, and the log, which the operator reads, names
 // the key.
 func TestAnUnsetSpecKeyIsTheOperatorsToKnow(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		var logs bytes.Buffer
 		messages := protocol.Messages
@@ -288,6 +295,7 @@ func TestAnUnsetSpecKeyIsTheOperatorsToKnow(t *testing.T) {
 }
 
 func TestAMixOfReasonsForPassingOverEntries(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 2, noSlot: []int{1}, mutate: func(c *Call) {
 			c.Compact = true // the compact endpoint takes only the request's own format, so the second entry can never serve
@@ -303,6 +311,7 @@ func TestAMixOfReasonsForPassingOverEntries(t *testing.T) {
 // TestRetriesSpendTheSuppliersBudget: the first attempt earns it, each later one takes from it, and an entry whose
 // supplier's budget is used up is passed over, with the reason in the route's record, while another supplier's goes on.
 func TestRetriesSpendTheSuppliersBudget(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		supplier  func(int) int
@@ -337,6 +346,7 @@ func TestRetriesSpendTheSuppliersBudget(t *testing.T) {
 // TestAttemptsAreBoundToTheEntriesTheReservationKept: the route is cut to the entries the reservation covers, and an
 // attempt is bound to the position its entry had in the route that was quoted.
 func TestAttemptsAreBoundToTheEntriesTheReservationKept(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{entries: 3, mutate: func(c *Call) { // the middle entry could not be afforded
 			c.Plan.Entries = []routing.Entry{c.Plan.Entries[0], c.Plan.Entries[2]}
@@ -355,6 +365,7 @@ func TestAttemptsAreBoundToTheEntriesTheReservationKept(t *testing.T) {
 // TestWhenTheHolderMayBeGoneNothingIsStarted: a holder that may be gone starts no attempt, and the call ends by a
 // settlement without one, which releases the reservation.
 func TestWhenTheHolderMayBeGoneNothingIsStarted(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		h := newHarness(t, ctx, options{alive: func() bool { return false }})
 		h.run()

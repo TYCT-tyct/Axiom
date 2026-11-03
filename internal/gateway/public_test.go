@@ -20,6 +20,7 @@ var comparePrices = cmp.Options{
 }
 
 func TestPublicModelsAreTheServedCatalogAtTheAudiencePrice(t *testing.T) {
+	t.Parallel()
 	price := func(text string) platform.UnitPrice {
 		p, err := platform.ParseUnitPrice(text)
 		if err != nil {
@@ -61,6 +62,7 @@ func TestPublicModelsAreTheServedCatalogAtTheAudiencePrice(t *testing.T) {
 }
 
 func TestPublicModelsSelectTheAccountThenTierThenDefaultPrice(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	account, tier := accounts.AccountID(uuid.NewV7()), accounts.TierID(uuid.NewV7())
 	r.sold[r.alpha] = billing.Sold{Version: uuid.NewV7(), Audiences: billing.CompilePrices([]billing.AudiencePrice{

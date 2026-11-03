@@ -15,6 +15,7 @@ import (
 // ParseMetadataUserID (backend/internal/service/metadata_userid.go:35) and GenerateSessionHash
 // (gateway_service.go:901), sub2api a3298b46, require device_id and session_id and use the latter verbatim.
 func TestRecordedSub2apiMetadataContract(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile("testdata/sub2api/metadata.json")
 	if err != nil {
 		t.Fatal(err)

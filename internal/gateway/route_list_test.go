@@ -58,6 +58,7 @@ func (f *routeFixture) checkPublishedPrice(step string, sold billing.Sold) {
 // one reading of the sale prices, so the price a client reads is the price the endpoint the snapshot plans to charges —
 // the same price version. A reading that changes publishes both, and a build that fails publishes neither.
 func TestRouteBuildPricesTheListWithTheSnapshotsPrices(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	f.build([]suppliers.Routable{routable(f.served, protocol.Messages)})
 

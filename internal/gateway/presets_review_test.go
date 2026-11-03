@@ -14,6 +14,7 @@ import (
 )
 
 func TestPresetMergeRefusalClassification(t *testing.T) {
+	t.Parallel()
 	_, err := protocol.MergePreset(protocol.Chat, []byte(`{"model":"@preset/p"}`), []byte(`{"model":"m","system":"help"}`), "")
 	for _, format := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		ref, expected := refusal(format, err)

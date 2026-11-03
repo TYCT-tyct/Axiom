@@ -42,6 +42,7 @@ data: [DONE]
 `
 
 func TestWebPluginSearchesInjectsAndAnnotates(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		searcher := &recordingSearcher{results: []websearch.Result{{
 			URL: "https://example.com/one", Title: "Example One", Content: "The first recorded result.",
@@ -125,6 +126,7 @@ func replyCitations(t *testing.T, body string) (types, urls []string) {
 }
 
 func TestWebPluginSearchFailureSearchesNothingElse(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		searcher := &recordingSearcher{err: websearch.ErrUpstream}
 		body := []byte(`{"model":"acme/alpha","plugins":[{"id":"web","engine":"test"}],"messages":[{"role":"user","content":"what is axiom"}]}`)
@@ -150,6 +152,7 @@ func TestWebPluginSearchFailureSearchesNothingElse(t *testing.T) {
 }
 
 func TestOnlineReachesTheNodeAsAWebRequest(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, func(o *rigOptions) {
 		o.search = &recordingSearcher{}
 		o.price = `{"v":1,"currency":"USD",
@@ -176,6 +179,7 @@ func TestOnlineReachesTheNodeAsAWebRequest(t *testing.T) {
 // the node's budget for that working set before searching. A node without room answers 503 without running the
 // search, reaching the upstream or settling an attempt, and gives the budget back when the call is over.
 func TestWebPluginSearchBudgetRefusedBeforeSearch(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com/one", Title: "One", Content: "text"}}}
 		body := []byte(`{"model":"acme/alpha","plugins":[{"id":"web","engine":"test"}],"messages":[{"role":"user","content":"what is axiom"}]}`)
@@ -216,6 +220,7 @@ func (c *captureCosts) Credits(_ suppliers.AttemptReceipt, usage []catalog.Usage
 // charged attempt, while the supplier cost of every attempt is computed from the supplier's own usage only. An
 // upstream that reports zero searches explicitly must not hide the external one either.
 func TestExternalSearchStaysOutOfSupplierCost(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com/one", Title: "One", Content: "text"}}}
 		costs := &captureCosts{}
@@ -259,11 +264,13 @@ func TestExternalSearchStaysOutOfSupplierCost(t *testing.T) {
 // query, so a long one must not be refused at admission, and no fallback may take a different search path after the
 // first entry chose native. The reservation therefore covers only the native entries.
 func TestNativeSearchUsesTheRealRequestAndOneRoute(t *testing.T) {
+	t.Parallel()
 	nativeSpec := `{"items":["input","output","web_search"],"tiers":[],"context_length":128000,"max_output_tokens":1000,"streams":true,"abilities":["web_search"]}`
 	price := `{"v":1,"currency":"USD",
 		"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},
 		"service_tiers":{"priority":{"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"}}}}`
 	t.Run("a long last message", func(t *testing.T) {
+		t.Parallel()
 		r := newRig(t, func(o *rigOptions) { o.alphaSpec, o.price = nativeSpec, price })
 		a := r.newAccount(1e12)
 		body := `{"model":"acme/alpha","plugins":[{"id":"web"}],"messages":[{"role":"user","content":"` +
@@ -278,6 +285,7 @@ func TestNativeSearchUsesTheRealRequestAndOneRoute(t *testing.T) {
 		}
 	})
 	t.Run("a fallback that cannot search natively", func(t *testing.T) {
+		t.Parallel()
 		r := newRig(t, func(o *rigOptions) {
 			o.alphaSpec, o.price = nativeSpec, price
 			o.endpoints = func(name string, e *routing.Endpoint) {
@@ -303,6 +311,7 @@ func TestNativeSearchUsesTheRealRequestAndOneRoute(t *testing.T) {
 // without the search the client asked for after the first entry fails. The route must keep automatic-search entries
 // only, so the old three-entry route (alpha-1, alpha-2, beta-1) becomes two alpha entries.
 func TestAutomaticSearchTrimsNormalFallback(t *testing.T) {
+	t.Parallel()
 	alwaysSpec := `{"items":["input","output"],"tiers":[],"context_length":128000,"max_output_tokens":1000,"streams":true,"abilities":[],"always_searches":true}`
 	price := `{"v":1,"currency":"USD",
 		"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},
@@ -328,6 +337,7 @@ func TestAutomaticSearchTrimsNormalFallback(t *testing.T) {
 // TestAutomaticSearchDoesNotFallbackAfterFailure replays the first automatic entry failing: the normal beta fallback
 // answers successfully if it is still in the route, but it must not be reached because it cannot search.
 func TestAutomaticSearchDoesNotFallbackAfterFailure(t *testing.T) {
+	t.Parallel()
 	alwaysSpec := `{"items":["input","output"],"tiers":[],"context_length":128000,"max_output_tokens":1000,"streams":true,"abilities":[],"always_searches":true}`
 	price := `{"v":1,"currency":"USD",
 		"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},
@@ -367,6 +377,7 @@ func TestAutomaticSearchDoesNotFallbackAfterFailure(t *testing.T) {
 // Setting SearchBytes and routing again must choose the larger-context fallback, not search first and then fail at the
 // small endpoint.
 func TestBackendSearchReroutesAroundSmallContext(t *testing.T) {
+	t.Parallel()
 	smallSpec := `{"items":["input","output"],"tiers":[],"context_length":8192,"max_output_tokens":1000,"streams":true,"abilities":[]}`
 	price := `{"v":1,"currency":"USD",
 		"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},
@@ -396,6 +407,7 @@ func TestBackendSearchReroutesAroundSmallContext(t *testing.T) {
 }
 
 func TestSearchEngineSelectionReachesTheCall(t *testing.T) {
+	t.Parallel()
 	searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com/one", Title: "One", Content: "text"}}}
 	paid := pricedEngine("paid", "0.005", "0.0125")
 	paid.Searcher = searcher
@@ -404,6 +416,7 @@ func TestSearchEngineSelectionReachesTheCall(t *testing.T) {
 		"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},
 		"service_tiers":{"priority":{"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"}}}}`
 	t.Run("a named engine", func(t *testing.T) {
+		t.Parallel()
 		r := newRig(t, func(o *rigOptions) { o.backends = backends; o.price = price })
 		a := r.newAccount(1e9)
 		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key,
@@ -420,6 +433,7 @@ func TestSearchEngineSelectionReachesTheCall(t *testing.T) {
 		}
 	})
 	t.Run("native without the model's ability", func(t *testing.T) {
+		t.Parallel()
 		r := newRig(t, func(o *rigOptions) { o.backends = backends; o.price = price })
 		a := r.newAccount(1e9)
 		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key,
@@ -429,6 +443,7 @@ func TestSearchEngineSelectionReachesTheCall(t *testing.T) {
 		}
 	})
 	t.Run("an unknown engine", func(t *testing.T) {
+		t.Parallel()
 		r := newRig(t, func(o *rigOptions) { o.backends = backends; o.price = price })
 		a := r.newAccount(1e9)
 		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key,

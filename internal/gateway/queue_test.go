@@ -19,6 +19,7 @@ func wait(ctx context.Context, q *Queue, key string) *pending {
 }
 
 func TestQueueWakesOneWaiterPerSlotInArrivalOrder(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		q := newQueue(10, 10)
 		first := wait(ctx, q, "a")
@@ -41,6 +42,7 @@ func TestQueueWakesOneWaiterPerSlotInArrivalOrder(t *testing.T) {
 }
 
 func TestQueueCaps(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		q := newQueue(3, 2)
 		wait(ctx, q, "a").mustWait(t)
@@ -59,6 +61,7 @@ func TestQueueCaps(t *testing.T) {
 
 // A waiter that leaves gives its place and its share back, and the wake it would have had goes to the next waiter.
 func TestQueueWaiterThatLeavesLeavesNoTrace(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		q := newQueue(2, 1)
 		leaveCtx, cancel := context.WithCancel(ctx)
@@ -78,6 +81,7 @@ func TestQueueWaiterThatLeavesLeavesNoTrace(t *testing.T) {
 }
 
 func TestQueueWaitEndsAfterTheLimit(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		q := newQueue(2, 2)
 		w := wait(ctx, q, "a")
@@ -96,6 +100,7 @@ func TestQueueWaitEndsAfterTheLimit(t *testing.T) {
 // A slot released between the caller's look at the load and its place in the queue must not be lost; one released
 // while others wait goes to them and does not let a newcomer overtake.
 func TestQueueDoesNotLoseAWakeThatCameEarly(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		q := newQueue(5, 5)
 		epoch := q.Epoch()
@@ -117,6 +122,7 @@ func TestQueueDoesNotLoseAWakeThatCameEarly(t *testing.T) {
 // returns nil, whether it went to a waiter who stayed or to one who was just leaving. (The interleaving is the
 // scheduler's, so this is a stress test of that invariant.)
 func TestQueueSurvivesCancellationsRacingWakes(t *testing.T) {
+	t.Parallel()
 	const waiters, wakes = 40, 20
 	q := newQueue(waiters, waiters)
 	for round := range 100 {
@@ -182,6 +188,7 @@ func eventually(cond func() bool) bool {
 
 // A client that has already gone gets its own error from every way out of Wait, not a retry (nil) and not a 429.
 func TestQueueWaitReportsAnEndedContextBeforeAnythingElse(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		q := newQueue(1, 1)
 		stale := q.Epoch()
@@ -208,6 +215,7 @@ func TestQueueWaitReportsAnEndedContextBeforeAnythingElse(t *testing.T) {
 // A call whose time is spent is refused 429 whatever else Wait could answer: a release that found nobody waiting makes
 // the epoch stale, and that must not send a call past its deadline for another attempt.
 func TestQueueRefusesAnExpiredDeadlineWhateverTheEpoch(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		q := newQueue(5, 5)
 		stale := q.Epoch()
@@ -229,6 +237,7 @@ func TestQueueRefusesAnExpiredDeadlineWhateverTheEpoch(t *testing.T) {
 // A woken waiter that cannot use the slot passes the wake to the next waiter queued before the slot came back, and to
 // nobody who queued after: a slot costs at most one admission for each call that was waiting for it.
 func TestQueuePassesAWakeOnOnce(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		q := newQueue(10, 10)
 		var woken relay
