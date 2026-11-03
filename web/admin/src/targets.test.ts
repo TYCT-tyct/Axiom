@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { readTargets, targetMonth, targetsEmpty, targetTone } from "./targets";
+import { parseTargetMoney, readTargets, targetMonth, targetsEmpty, targetTone } from "./targets";
 
 it("takes the UTC month of the visit", () => {
   expect(targetMonth(new Date("2026-11-30T23:30:00Z"))).toBe("2026-11");
@@ -23,6 +23,23 @@ it.each([
   { metric: "calls" as const, sign: 0 as const, tone: "at" },
 ])("$metric with a $sign gap is $tone", ({ metric, sign, tone }) => {
   expect(targetTone(metric, sign)).toBe(tone);
+});
+
+it("keeps a target amount above int64 and up to 38 digits", () => {
+  expect(parseTargetMoney("9223372036.854775808")).toBe("9223372036854775808");
+  expect(parseTargetMoney("10000000000")).toBe("10000000000000000000");
+  expect(parseTargetMoney("99999999999999999999999999999.999999999")).toBe("99999999999999999999999999999999999999");
+  expect(parseTargetMoney("999999999999999999999999999999999999999")).toBeNull();
+  expect(parseTargetMoney("1.1234567890")).toBeNull();
+  expect(readTargets({ revenue: "9223372036.854775808" }, "USD", { count: "count", money: "money" })).toEqual({
+    revenue: { amount: "9223372036854775808", currency: "USD" },
+  });
+  expect(
+    readTargets({ cost: "999999999999999999999999999999999999999" }, "USD", {
+      count: "count",
+      money: "money",
+    }),
+  ).toEqual({ problem: "money" });
 });
 
 it("reads the form as the month's whole set, leaving empty fields out", () => {

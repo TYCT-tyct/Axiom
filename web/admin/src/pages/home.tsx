@@ -223,7 +223,11 @@ function CostFigure({ data, window, site, targets, showTarget }: FigureProps) {
       <Stat
         label={t("overview.cost")}
         value={data.cost ? format.money(data.cost) : t("overview.unavailable")}
-        note={withTarget(showTarget, <MoneyTargetNote metric="cost" comparison={targets?.cost} />, note)}
+        note={withTarget(
+          showTarget,
+          <MoneyTargetNote metric="cost" comparison={targets?.cost} costUnknown={Boolean(data.unknown_cost_calls)} />,
+          note,
+        )}
       />
     </Link>
   );

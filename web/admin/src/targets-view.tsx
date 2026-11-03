@@ -4,7 +4,7 @@ import { Button, DataState, Dialog, Icon, moneyInput, TextField, useFormat } fro
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChangeDialog } from "./change";
+import { ChangeDialog, useSnapshot } from "./change";
 import { targetsQuery } from "./queries";
 import {
   type CountComparison,
@@ -68,24 +68,28 @@ function TargetsForm({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  // Keep the values the form was opened with, and its revision, while another editor may change the month. A stale
+  // write is refused; reload then fills both from the query that the refusal has refreshed.
+  const [read, reload] = useSnapshot(view);
   return (
     <ChangeDialog
       operation={`operations-targets:${month}`}
       title={t("overview.targets.title", { month })}
       intro={<p>{t("overview.targets.intro")}</p>}
       action={t("overview.targets.save")}
-      fields={(error) => <TargetFields view={view} currency={currency} error={error} />}
+      fields={(error) => <TargetFields view={read} currency={currency} error={error} />}
       read={(values) =>
         readTargets(values, currency, {
           count: t("overview.targets.countInvalid"),
           money: t("overview.targets.moneyInvalid"),
         })
       }
+      reload={reload}
       send={(targets, { reason, key }) =>
         unwrapChange(
           adminApi.PUT("/api/admin/v1/reports/targets/{month}", {
             params: { path: { month }, header: { "Idempotency-Key": key } },
-            body: { ...targets, reason },
+            body: { ...targets, rev: read.rev, reason },
           }),
         )
       }
@@ -149,7 +153,8 @@ function TargetFields({
 }
 
 // CountTargetNote and MoneyTargetNote show one figure's target and gap under its value. An absent comparison is a
-// metric without a target; an absent gap is a comparison the node withholds because the call log is incomplete.
+// metric without a target; an absent gap is a comparison withheld because the actual side is incomplete (the call log,
+// or supplier cost with calls whose cost is unknown).
 export function CountTargetNote({ metric, comparison }: { metric: "calls" | "errors"; comparison?: CountComparison }) {
   const { t } = useTranslation();
   if (comparison === undefined) {
@@ -164,7 +169,15 @@ export function CountTargetNote({ metric, comparison }: { metric: "calls" | "err
   );
 }
 
-export function MoneyTargetNote({ metric, comparison }: { metric: "revenue" | "cost"; comparison?: MoneyComparison }) {
+export function MoneyTargetNote({
+  metric,
+  comparison,
+  costUnknown = false,
+}: {
+  metric: "revenue" | "cost";
+  comparison?: MoneyComparison;
+  costUnknown?: boolean;
+}) {
   const { t } = useTranslation();
   if (comparison === undefined) {
     return <span className="text-t4">{t("overview.targets.none")}</span>;
@@ -175,6 +188,7 @@ export function MoneyTargetNote({ metric, comparison }: { metric: "revenue" | "c
       target={comparison.target.amount}
       gap={comparison.gap?.amount}
       currency={comparison.target.currency}
+      incomplete={metric === "cost" && costUnknown ? t("overview.targets.costIncomplete") : undefined}
     />
   );
 }
@@ -184,11 +198,13 @@ function TargetLine({
   target,
   gap,
   currency,
+  incomplete,
 }: {
   metric: TargetMetric;
   target: string;
   gap?: string;
   currency?: string;
+  incomplete?: string;
 }) {
   const { t } = useTranslation();
   const format = useFormat();
@@ -199,7 +215,7 @@ function TargetLine({
       <span>
         {t("overview.targets.target", { value })}
         {" · "}
-        <span className="text-t4">{t("overview.targets.incomplete")}</span>
+        <span className="text-t4">{incomplete ?? t("overview.targets.incomplete")}</span>
       </span>
     );
   }

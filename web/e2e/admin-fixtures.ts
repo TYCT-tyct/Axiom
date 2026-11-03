@@ -21,6 +21,7 @@ export function usualTargets(): Map<string, Schemas["OperationsTargets"]> {
       {
         site_id: siteId,
         month,
+        rev: 1,
         calls: 45,
         errors: 10,
         revenue: usd("2000"),

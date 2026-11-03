@@ -31,6 +31,32 @@ test.describe("business targets", () => {
     await expect(page.getByText(words("overview.targets.ahead")).first()).toBeVisible();
   });
 
+  test("an editor with an old revision reloads before it can save", async ({ page }) => {
+    const state = await open(page, "");
+    const month = new Date().toISOString().slice(0, 7);
+    const current = state.targets.get(month);
+    if (!current) {
+      throw new Error("the usual target fixture is missing");
+    }
+    await press(page, "overview.targets.edit");
+    const editor = dialog(page);
+
+    // Another administrator changes the month after this form was filled. The form's revision and values are now old;
+    // saving it must be refused instead of restoring the calls target it read.
+    state.targets.set(month, { ...current, calls: 99, rev: current.rev + 1 });
+    await editor.getByLabel(words("overview.targets.errors")).fill("5");
+    await send(page);
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("change.stale"));
+
+    await press(page, "change.reload");
+    await expect(editor.getByLabel(words("overview.targets.calls"))).toHaveValue("99");
+    await editor.getByLabel(words("overview.targets.calls")).fill("50");
+    await send(page);
+    await expect(dialog(page).getByText(zhText("overview.targets.saved"))).toBeVisible();
+    expect(state.targets.get(month)?.calls).toBe(50);
+    expect(state.targets.get(month)?.errors).toBe(10);
+  });
+
   test("a month with no target says so and still offers the editor", async ({ page }) => {
     await open(page, "", "empty");
     await expect(page.getByText(zhText("overview.targets.empty"))).toBeVisible();

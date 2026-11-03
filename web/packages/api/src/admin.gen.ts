@@ -78,12 +78,12 @@ export interface paths {
         };
         /**
          * The site's business targets for a UTC calendar month.
-         * @description The targets the owner set in the admin for one month (docs/domains/operations.md「业务目标」). Calls and errors are whole counts; revenue and cost are exact money in the site's accounting currency. A month with no target is an object with only `site_id` and `month`.
+         * @description The targets the owner set in the admin for one month (docs/domains/operations.md「业务目标」). Calls and errors are whole counts; revenue and cost are exact money in the site's accounting currency. `rev` is the month's revision: 0 before the first write, one more after every successful write, including a clear. A month with no target has no target fields and still carries its revision.
          */
         get: operations["getOperationsTargets"];
         /**
          * Set the site's business targets for a UTC calendar month.
-         * @description Replaces all four targets of the month: a target left out is cleared, not kept from before. Counts are calls and errors; revenue and cost are exact money in the site's accounting currency, and another currency is a 400. The change is audited with the values it replaced and the reason. Targets are administrative data, not site settings, so `updateSiteSettings` leaves them as they are.
+         * @description Replaces all four targets of the month: a target left out is cleared, not kept from before. The request carries the `rev` the editor read; a month that has moved since then is a 409 `stale_revision`, not a silent overwrite of another administrator's change. Counts are calls and errors; revenue and cost are exact money in the site's accounting currency, and another currency is a 400. The change is audited with the values it replaced and the reason. Targets are administrative data, not site settings, so `updateSiteSettings` leaves them as they are.
          */
         put: operations["updateOperationsTargets"];
         post?: never;
@@ -2926,11 +2926,16 @@ export interface components {
             top_models?: components["schemas"]["OverviewModel"][];
             targets?: components["schemas"]["OperationsTargetComparison"];
         };
-        /** @description A site's business targets for one UTC calendar month (docs/domains/operations.md「业务目标」). A target that is absent has not been set for that month; a target of zero is set and means zero. */
+        /** @description A site's business targets for one UTC calendar month (docs/domains/operations.md「业务目标」). A target that is absent has not been set for that month; a target of zero is set and means zero. `rev` is the optimistic concurrency token for the month: 0 before the first write, and one more after every successful write. */
         OperationsTargets: {
             site_id: components["schemas"]["SiteId"];
             /** @description The UTC calendar month the targets cover. */
             month: string;
+            /**
+             * Format: int64
+             * @description The revision to send back when replacing this month's targets.
+             */
+            rev: number;
             /** Format: int64 */
             calls?: number;
             /** Format: int64 */
@@ -2938,9 +2943,14 @@ export interface components {
             revenue?: components["schemas"]["Money"];
             cost?: components["schemas"]["Money"];
         };
-        /** @description The whole set of targets for one month: leaving a target out clears it. Money is in the site's accounting currency; another currency is a 400. Counts are calls and errors. */
+        /** @description The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls and errors. */
         OperationsTargetsUpdate: {
             reason: components["schemas"]["Reason"];
+            /**
+             * Format: int64
+             * @description The revision the editor read; a changed revision is a 409 `stale_revision`.
+             */
+            rev: number;
             /** Format: int64 */
             calls?: number;
             /** Format: int64 */
@@ -2948,7 +2958,7 @@ export interface components {
             revenue?: components["schemas"]["Money"];
             cost?: components["schemas"]["Money"];
         };
-        /** @description The monthly targets prorated to the dashboard's window, with `gap` = actual - target, in the metric's unit. An empty object means no monthly target covers the window. The count gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete. A money target set in another currency than the site's accounting currency is absent. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target. */
+        /** @description The monthly targets prorated to the dashboard's window, with `gap` = actual - target, in the metric's unit. An empty object means no monthly target covers the window. The count gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete. The cost gap is also absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target. */
         OperationsTargetComparison: {
             calls?: components["schemas"]["OperationsCountTarget"];
             errors?: components["schemas"]["OperationsCountTarget"];
@@ -2969,6 +2979,7 @@ export interface components {
         };
         OperationsMoneyTarget: {
             target: components["schemas"]["Money"];
+            /** @description Actual minus target. Absent when the cost total is incomplete (`unknown_cost_calls` above zero) or the target's currency is not the site's current accounting currency. */
             gap?: components["schemas"]["Money"];
         };
         OverviewAccount: {

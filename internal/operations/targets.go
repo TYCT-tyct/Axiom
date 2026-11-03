@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -41,12 +42,15 @@ type Money struct {
 }
 
 // Targets is one site's targets for one UTC calendar month. A nil field is a metric with no target for that month.
+// Revision is 0 before the first write to the month and moves on every successful write, including a clear; an editor
+// sends back the revision it read so a form cannot restore values another administrator has already replaced.
 type Targets struct {
-	Month   time.Time
-	Calls   *int64
-	Errors  *int64
-	Revenue *Money
-	Cost    *Money
+	Month    time.Time
+	Revision int64
+	Calls    *int64
+	Errors   *int64
+	Revenue  *Money
+	Cost     *Money
 }
 
 // Expected is the part of a window's targets the dashboard can compare: each target is the monthly one prorated to
@@ -62,8 +66,16 @@ type Expected struct {
 // module writes a site under its TypeID; the prefix is part of the public contract, not a dependency on accounts.
 var sitePrefix = typeid.MustPrefix("site")
 
-// Read reads the site's targets for one month; a month with no rows is a Targets with only its Month set. The month
-// is its UTC first day, whatever day the caller names.
+// ErrStaleRevision is a write read from a revision that another write has since moved. The transaction has not
+// changed anything when it is returned.
+var ErrStaleRevision = errors.New("operations: the targets changed since they were read")
+
+// MaxMoneyDigits is the width of a money target's amount, matching operations.targets.amount numeric(38, 0). Counts
+// still fit int64; a money target is a planning figure, not a ledger entry, so it keeps the database's wider range.
+const MaxMoneyDigits = 38
+
+// Read reads the site's targets for one month; a month with no target rows is a Targets with only its Month and
+// Revision set. The month is its UTC first day, whatever day the caller names.
 func Read(ctx context.Context, tx pg.Tx, site uuid.UUID, month time.Time) (Targets, error) {
 	month = monthStart(month)
 	rows, err := New().ReadTargets(ctx, tx, ReadTargetsParams{
@@ -72,7 +84,16 @@ func Read(ctx context.Context, tx pg.Tx, site uuid.UUID, month time.Time) (Targe
 	if err != nil {
 		return Targets{}, fmt.Errorf("operations: read the targets: %w", err)
 	}
-	return targetsFrom(rows, month)
+	revision, err := New().ReadTargetRevision(ctx, tx, ReadTargetRevisionParams{SiteID: site, Month: month})
+	if err != nil {
+		return Targets{}, fmt.Errorf("operations: read the targets' revision: %w", err)
+	}
+	targets, err := targetsFrom(rows, month)
+	if err != nil {
+		return Targets{}, err
+	}
+	targets.Revision = revision
+	return targets, nil
 }
 
 // ExpectedFor reads the targets of every month the window touches and prorates each to the part of the window inside that
@@ -95,8 +116,10 @@ func ExpectedFor(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platfor
 // Set replaces the site's targets for set.Month in one transaction: a metric with a nil value loses its row, a set one
 // is written. It records the change in the audit log with the values it replaced, in the same transaction, so an
 // unrecorded change cannot stand. A writer of the same site and month takes an advisory lock first, so two
-// administrators' changes have one order and each audit entry names the values that were really there.
-func Set(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, set Targets, reason string) error {
+// administrators' changes have one order and each audit entry names the values that were really there. expectedRev
+// is the revision the caller read; a write that finds a different revision refuses with ErrStaleRevision instead of
+// restoring the form's older values. A successful write, including a clear, moves the revision by one.
+func Set(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, set Targets, expectedRev int64, reason string) error {
 	if err := set.Check(); err != nil {
 		return err
 	}
@@ -109,10 +132,18 @@ func Set(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, set T
 	if err != nil {
 		return err
 	}
+	if before.Revision != expectedRev {
+		return fmt.Errorf("%w: at revision %d, the request read %d", ErrStaleRevision, before.Revision, expectedRev)
+	}
 	for _, metric := range dashboardMetrics {
 		if err := writeTarget(ctx, tx, q, site, month, metric, set); err != nil {
 			return err
 		}
+	}
+	if err := q.UpsertTargetRevision(ctx, tx, UpsertTargetRevisionParams{
+		SiteID: site, Month: month, Revision: before.Revision + 1,
+	}); err != nil {
+		return fmt.Errorf("operations: move the targets' revision: %w", err)
 	}
 	return audit.Record(ctx, tx, audit.Event{
 		Actor: actor, Action: "targets.update", Reason: reason,
@@ -138,6 +169,9 @@ func (t *Targets) Check() error {
 		amount, ok := new(big.Int).SetString(money.Amount, 10)
 		if !ok || amount.Sign() < 0 {
 			return fmt.Errorf("operations: a %s target must be a non-negative whole number of billionths", name)
+		}
+		if len(amount.String()) > MaxMoneyDigits {
+			return fmt.Errorf("operations: a %s target must fit %d digits", name, MaxMoneyDigits)
 		}
 		if _, err := platform.ParseCurrency(money.Currency.String()); err != nil {
 			return fmt.Errorf("operations: a %s target: %w", name, err)
@@ -318,11 +352,13 @@ func addExpected(sums map[Metric]*big.Int, row ReadTargetsRow, currency platform
 // part of it; both must be positive, and amount non-negative. Counts thereby round to the nearest whole call or
 // error, money to the nearest billionth of a unit.
 func prorate(amount *big.Int, whole, part time.Duration) *big.Int {
-	// floor((2·amount·part + whole) / (2·whole)) is half up for a non-negative amount.
-	numerator := new(big.Int).Mul(amount, big.NewInt(int64(part/time.Second)))
+	// floor((2·amount·part + whole) / (2·whole)) is half up for a non-negative amount. Duration is nanoseconds, so a
+	// window with a fractional second keeps that fraction; rounding happens once, in the metric's unit, rather than
+	// truncating each month's overlap to whole seconds.
+	numerator := new(big.Int).Mul(amount, big.NewInt(int64(part)))
 	numerator.Lsh(numerator, 1)
-	numerator.Add(numerator, big.NewInt(int64(whole/time.Second)))
-	denominator := big.NewInt(int64(whole / time.Second))
+	numerator.Add(numerator, big.NewInt(int64(whole)))
+	denominator := big.NewInt(int64(whole))
 	denominator.Lsh(denominator, 1)
 	return numerator.Quo(numerator, denominator)
 }

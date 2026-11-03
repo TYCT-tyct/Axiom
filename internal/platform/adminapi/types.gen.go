@@ -2910,7 +2910,7 @@ type OperationsCountTarget struct {
 
 // OperationsMoneyTarget defines model for OperationsMoneyTarget.
 type OperationsMoneyTarget struct {
-	// Gap An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	// Gap Actual minus target. Absent when the cost total is incomplete (`unknown_cost_calls` above zero) or the target's currency is not the site's current accounting currency.
 	Gap *Money `json:"gap,omitempty"`
 
 	// Target An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
@@ -2939,7 +2939,7 @@ type OperationsOverview struct {
 	// SiteId A site's ID (TypeID).
 	SiteId *SiteId `json:"site_id,omitempty"`
 
-	// Targets The monthly targets prorated to the dashboard's window, with `gap` = actual - target, in the metric's unit. An empty object means no monthly target covers the window. The count gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete. A money target set in another currency than the site's accounting currency is absent. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target.
+	// Targets The monthly targets prorated to the dashboard's window, with `gap` = actual - target, in the metric's unit. An empty object means no monthly target covers the window. The count gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete. The cost gap is also absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target.
 	Targets          *OperationsTargetComparison `json:"targets,omitempty"`
 	TopAccounts      *[]OverviewAccount          `json:"top_accounts,omitempty"`
 	TopModels        *[]OverviewModel            `json:"top_models,omitempty"`
@@ -2947,7 +2947,7 @@ type OperationsOverview struct {
 	Until            *time.Time                  `json:"until,omitempty"`
 }
 
-// OperationsTargetComparison The monthly targets prorated to the dashboard's window, with `gap` = actual - target, in the metric's unit. An empty object means no monthly target covers the window. The count gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete. A money target set in another currency than the site's accounting currency is absent. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target.
+// OperationsTargetComparison The monthly targets prorated to the dashboard's window, with `gap` = actual - target, in the metric's unit. An empty object means no monthly target covers the window. The count gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete. The cost gap is also absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target.
 type OperationsTargetComparison struct {
 	Calls   *OperationsCountTarget `json:"calls,omitempty"`
 	Cost    *OperationsMoneyTarget `json:"cost,omitempty"`
@@ -2955,7 +2955,7 @@ type OperationsTargetComparison struct {
 	Revenue *OperationsMoneyTarget `json:"revenue,omitempty"`
 }
 
-// OperationsTargets A site's business targets for one UTC calendar month (docs/domains/operations.md「业务目标」). A target that is absent has not been set for that month; a target of zero is set and means zero.
+// OperationsTargets A site's business targets for one UTC calendar month (docs/domains/operations.md「业务目标」). A target that is absent has not been set for that month; a target of zero is set and means zero. `rev` is the optimistic concurrency token for the month: 0 before the first write, and one more after every successful write.
 type OperationsTargets struct {
 	Calls *int64 `json:"calls,omitempty"`
 
@@ -2966,6 +2966,9 @@ type OperationsTargets struct {
 	// Month The UTC calendar month the targets cover.
 	Month string `json:"month"`
 
+	// Rev The revision to send back when replacing this month's targets.
+	Rev int64 `json:"rev"`
+
 	// Revenue An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Revenue *Money `json:"revenue,omitempty"`
 
@@ -2973,7 +2976,7 @@ type OperationsTargets struct {
 	SiteId SiteId `json:"site_id"`
 }
 
-// OperationsTargetsUpdate The whole set of targets for one month: leaving a target out clears it. Money is in the site's accounting currency; another currency is a 400. Counts are calls and errors.
+// OperationsTargetsUpdate The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls and errors.
 type OperationsTargetsUpdate struct {
 	Calls *int64 `json:"calls,omitempty"`
 
@@ -2983,6 +2986,9 @@ type OperationsTargetsUpdate struct {
 
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
+
+	// Rev The revision the editor read; a changed revision is a 409 `stale_revision`.
+	Rev int64 `json:"rev"`
 
 	// Revenue An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Revenue *Money `json:"revenue,omitempty"`

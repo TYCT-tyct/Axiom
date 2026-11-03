@@ -64,7 +64,7 @@ func (a adminAPI) GetOperationsOverview(ctx context.Context, r adminapi.GetOpera
 		"unknown_cost_calls": money.UnknownCost,
 		"cash":               cashBody, "top_accounts": accountsBody, "top_models": modelsBody,
 		"targets": targetComparison(targets, overview.Calls, overview.Errors, money.Revenue, money.Cost,
-			call.site.Currency, overview.Coverage.Covers(w.Since, w.Until)),
+			call.site.Currency, overview.Coverage.Covers(w.Since, w.Until), money.UnknownCost == 0),
 	}
 	if overview.Coverage.Known {
 		body["calls_available_since"] = overview.Coverage.Since

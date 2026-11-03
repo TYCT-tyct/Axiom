@@ -22,6 +22,17 @@ CREATE TABLE operations.targets (
 -- the metric, so it cannot answer that range.
 CREATE INDEX targets_by_month ON operations.targets (site_id, month);
 
+-- Every successful set, including a clear that leaves no target rows, moves the month's revision. The editor sends the
+-- revision it read and a write compares it under the same lock, so a form filled before another administrator's change
+-- is refused as stale instead of restoring the old values. There is no row before the first write: revision 0.
+CREATE TABLE operations.target_revisions (
+    site_id uuid NOT NULL,
+    month date NOT NULL CHECK (EXTRACT(DAY FROM month) = 1),
+    revision bigint NOT NULL CHECK (revision >= 1),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (site_id, month)
+);
+
 -- The scope readers sit in scalar subqueries, so each is a statement InitPlan instead of a call for every row
 -- (internal/platform/pg/migrations/00014_scope_once.sql, internal/platform/pg/check.go). Targets are site data: the
 -- platform scope sees every site, the site scope only its own; an account scope sees none.
@@ -43,5 +54,21 @@ CREATE POLICY deletes ON operations.targets FOR DELETE USING (
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON operations.targets TO axiom_app;
 
+ALTER TABLE operations.target_revisions ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY reads ON operations.target_revisions FOR SELECT USING (
+    (SELECT platform.in_platform_scope()) OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+);
+CREATE POLICY inserts ON operations.target_revisions FOR INSERT WITH CHECK (
+    (SELECT platform.in_platform_scope()) OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+);
+CREATE POLICY updates ON operations.target_revisions FOR UPDATE USING (
+    (SELECT platform.in_platform_scope()) OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+) WITH CHECK (
+    (SELECT platform.in_platform_scope()) OR site_id = ANY ((SELECT platform.allowed_sites())::uuid[])
+);
+
+GRANT SELECT, INSERT, UPDATE ON operations.target_revisions TO axiom_app;
+
 -- +goose Down
+DROP TABLE operations.target_revisions;
 DROP TABLE operations.targets;

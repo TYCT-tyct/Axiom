@@ -90,6 +90,15 @@ func TestExpectedFromProratesEachMonthBySeconds(t *testing.T) {
 			want: Expected{Revenue: &Money{Amount: "32258065", Currency: usd(t)}},
 		},
 		{
+			name: "fractional seconds keep each month's exact share",
+			rows: []ReadTargetsRow{
+				targetRow(t, jan, Revenue, "2678400000000", "USD"),
+				targetRow(t, feb, Revenue, "2419200000000", "USD"),
+			},
+			since: "2026-01-31T12:00:00.500Z", until: "2026-02-01T12:00:00.500Z", currency: "USD",
+			want: Expected{Revenue: &Money{Amount: "86400000000", Currency: usd(t)}},
+		},
+		{
 			name: "money sums whole months",
 			rows: []ReadTargetsRow{
 				targetRow(t, jan, Cost, "100000000000", "USD"),
@@ -172,6 +181,9 @@ func TestTargetsCheck(t *testing.T) {
 		"a negative amount":                 func(targets *Targets) { targets.Revenue.Amount = "-1" },
 		"an amount that is not an integer":  func(targets *Targets) { targets.Cost.Amount = "1.5" },
 		"a money target without a currency": func(targets *Targets) { targets.Revenue.Currency = platform.Currency{} },
+		"a money amount wider than the table": func(targets *Targets) {
+			targets.Revenue.Amount = "999999999999999999999999999999999999999"
+		},
 	}
 	for name, spoil := range cases {
 		t.Run(name, func(t *testing.T) {

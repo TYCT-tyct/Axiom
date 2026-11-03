@@ -119,14 +119,19 @@ const registration: Schemas["RegistrationPolicy"] = {
 // showing the page's target and empty states is enough.
 function getTargets({ params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "get">) {
   const month = params.month ?? "";
-  return ok(state.targets.get(month) ?? { site_id: state.siteId, month });
+  return ok(state.targets.get(month) ?? { site_id: state.siteId, month, rev: 0 });
 }
 
 function putTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "put">) {
   const month = params.month ?? "";
+  const current = state.targets.get(month);
+  if (body.rev !== (current?.rev ?? 0)) {
+    return fail(409, "stale_revision");
+  }
   const stored: Schemas["OperationsTargets"] = {
     site_id: state.siteId,
     month,
+    rev: (current?.rev ?? 0) + 1,
     calls: body.calls,
     errors: body.errors,
     revenue: body.revenue,

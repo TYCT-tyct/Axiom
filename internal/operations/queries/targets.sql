@@ -22,3 +22,14 @@ WHERE site_id = @site_id AND metric = @metric AND month = @month;
 -- Serializes the writers of one site's month: the read of the old values, the writes and the audit entry then see one
 -- order, instead of two administrators overwriting each other's values and auditing a "before" that never was.
 SELECT pg_advisory_xact_lock(hashtextextended(@key, 0));
+
+-- name: ReadTargetRevision :one
+-- The month's revision, 0 before the first write. The editor sends this value back and a set compares it under the
+-- lock, so a form that read before another change cannot restore the old set.
+SELECT coalesce((SELECT revision FROM operations.target_revisions WHERE site_id = @site_id AND month = @month), 0)::bigint AS revision;
+
+-- name: UpsertTargetRevision :exec
+INSERT INTO operations.target_revisions (site_id, month, revision)
+VALUES (@site_id, @month, @revision)
+ON CONFLICT (site_id, month) DO UPDATE
+SET revision = EXCLUDED.revision, updated_at = now();

@@ -39,6 +39,24 @@ func (q *Queries) LockTargets(ctx context.Context, db DBTX, key string) error {
 	return err
 }
 
+const readTargetRevision = `-- name: ReadTargetRevision :one
+SELECT coalesce((SELECT revision FROM operations.target_revisions WHERE site_id = $1 AND month = $2), 0)::bigint AS revision
+`
+
+type ReadTargetRevisionParams struct {
+	SiteID uuid.UUID
+	Month  time.Time
+}
+
+// The month's revision, 0 before the first write. The editor sends this value back and a set compares it under the
+// lock, so a form that read before another change cannot restore the old set.
+func (q *Queries) ReadTargetRevision(ctx context.Context, db DBTX, arg ReadTargetRevisionParams) (int64, error) {
+	row := db.QueryRow(ctx, readTargetRevision, arg.SiteID, arg.Month)
+	var revision int64
+	err := row.Scan(&revision)
+	return revision, err
+}
+
 const readTargets = `-- name: ReadTargets :many
 SELECT month, metric, amount::text AS amount, currency
 FROM operations.targets
@@ -111,5 +129,23 @@ func (q *Queries) UpsertTarget(ctx context.Context, db DBTX, arg UpsertTargetPar
 		arg.Amount,
 		arg.Currency,
 	)
+	return err
+}
+
+const upsertTargetRevision = `-- name: UpsertTargetRevision :exec
+INSERT INTO operations.target_revisions (site_id, month, revision)
+VALUES ($1, $2, $3)
+ON CONFLICT (site_id, month) DO UPDATE
+SET revision = EXCLUDED.revision, updated_at = now()
+`
+
+type UpsertTargetRevisionParams struct {
+	SiteID   uuid.UUID
+	Month    time.Time
+	Revision int64
+}
+
+func (q *Queries) UpsertTargetRevision(ctx context.Context, db DBTX, arg UpsertTargetRevisionParams) error {
+	_, err := db.Exec(ctx, upsertTargetRevision, arg.SiteID, arg.Month, arg.Revision)
 	return err
 }

@@ -1,5 +1,4 @@
 import type { AdminSchemas } from "@axiom/api";
-import { parseMoney } from "@axiom/ui";
 import type { Problem } from "./change";
 
 // The dashboard's figures that take a target. Calls and revenue are floors; errors and cost are ceilings, so the same
@@ -9,7 +8,7 @@ export type TargetMetric = "calls" | "errors" | "revenue" | "cost";
 export type TargetComparison = AdminSchemas["OperationsTargetComparison"];
 export type CountComparison = AdminSchemas["OperationsCountTarget"];
 export type MoneyComparison = AdminSchemas["OperationsMoneyTarget"];
-export type TargetsInput = Omit<AdminSchemas["OperationsTargetsUpdate"], "reason">;
+export type TargetsInput = Pick<AdminSchemas["OperationsTargetsUpdate"], "calls" | "errors" | "revenue" | "cost">;
 
 // The month a new target is for: the visit's UTC month, the same calendar the dashboard's window uses.
 export function targetMonth(at: Date): string {
@@ -43,6 +42,18 @@ export function targetTone(metric: TargetMetric, sign: GapSign): TargetTone {
 
 const maxCount = 1_000_000_000_000_000;
 
+// A target's amount is stored in numeric(38, 0), wider than a ledger entry's int64. parseMoney stops at 19 digits;
+// this parser keeps the same nine decimal places and accepts up to the target table's 38 digits.
+const maxTargetDigits = 38;
+export function parseTargetMoney(text: string): string | null {
+  const match = /^(\d+)(?:\.(\d{1,9}))?$/.exec(text.trim());
+  if (!match) {
+    return null;
+  }
+  const amount = `${match[1]}${(match[2] ?? "").padEnd(9, "0")}`.replace(/^0+(?=\d)/, "");
+  return amount.length <= maxTargetDigits ? amount : null;
+}
+
 // readTargets turns the form into the request's targets: an empty field is a target to clear, a count must be a whole
 // number the contract accepts, and money is parsed exactly in the site's currency. One malformed field refuses the
 // whole form rather than saving the others.
@@ -68,7 +79,7 @@ export function readTargets(
     if (typed === "") {
       continue;
     }
-    const amount = parseMoney(typed);
+    const amount = parseTargetMoney(typed);
     if (amount === null) {
       return { problem: problem.money };
     }
