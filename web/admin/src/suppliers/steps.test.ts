@@ -92,6 +92,7 @@ describe("steps", () => {
   it("waits for groups and the unit value", () => {
     const all = steps(input({ groups: [], hasUnitValue: false }));
     expect(done(all, "groups")).toBe(false);
+    expect(done(all, "keys")).toBe(false);
     expect(done(all, "unit")).toBe(false);
   });
 });

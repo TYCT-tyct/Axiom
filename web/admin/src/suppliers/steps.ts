@@ -32,7 +32,7 @@ export function steps({ status, groups, credentials, hasUnitValue }: StepInput):
     { key: "groups", done: present.length > 0 },
     {
       key: "keys",
-      done: keyStates.every((state) => state === "ready" || state === "unavailable"),
+      done: present.length > 0 && keyStates.every((state) => state === "ready" || state === "unavailable"),
       failed: keyStates.filter((state) => state === "failed").length,
     },
     { key: "unit", done: hasUnitValue, open: { kind: "unit" } },
