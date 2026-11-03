@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strings"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
@@ -17,13 +18,14 @@ import (
 // offerState is a group-and-model pass as far as it got. It is stored in the supplier's sync state, so a pass the
 // supplier's limits stopped goes on at the group it stopped at instead of reading every group again.
 type offerState struct {
-	V          int                          `json:"v"`
-	GroupsRead bool                         `json:"groups_read,omitempty"`
-	Groups     []offerGroup                 `json:"groups,omitempty"`
-	Models     map[string][]offerModel      `json:"models,omitempty"`
-	Prices     map[string]map[string]string `json:"prices,omitempty"`
-	PricesRead bool                         `json:"prices_read,omitempty"`
-	Next       int                          `json:"next,omitempty"`
+	V           int                          `json:"v"`
+	Fingerprint string                       `json:"fingerprint,omitempty"`
+	GroupsRead  bool                         `json:"groups_read,omitempty"`
+	Groups      []offerGroup                 `json:"groups,omitempty"`
+	Models      map[string][]offerModel      `json:"models,omitempty"`
+	Prices      map[string]map[string]string `json:"prices,omitempty"`
+	PricesRead  bool                         `json:"prices_read,omitempty"`
+	Next        int                          `json:"next,omitempty"`
 }
 
 type offerGroup struct {
@@ -39,12 +41,12 @@ type offerModel struct {
 	Formats []string `json:"formats,omitempty"`
 }
 
-const offerVersion = 1
+const offerVersion = 2
 
 // Offer implements adapter.Manager. A declaration reads groups once, the price list once, and each group's models in
 // turn; each read is one request against the declared bucket, so a rate limit stops the pass with its position stored.
 func (m *manager) Offer(ctx context.Context, from adapter.Listing) (adapter.Page[adapter.Group], error) {
-	st := decodeOffer(from)
+	st := decodeOffer(from, m.a.offer.fingerprint)
 	page, err := m.offerHead(ctx, st)
 	if err != nil || page != nil {
 		if err != nil {
@@ -156,9 +158,9 @@ func parseGroups(p offerPlan, body []byte) ([]offerGroup, error) {
 	if !ok {
 		return nil, missing("groups")
 	}
-	var items []jsonx.Raw
-	if err := jsonx.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("%w: the groups are not an array", adapter.ErrUnrecognised)
+	items, err := readArray(raw, "groups")
+	if err != nil {
+		return nil, err
 	}
 	out := make([]offerGroup, 0, len(items))
 	seen := map[string]bool{}
@@ -233,9 +235,9 @@ func parsePrices(p *pricePlan, body []byte) (map[string]map[string]string, error
 	if !ok {
 		return nil, missing("prices")
 	}
-	var items []jsonx.Raw
-	if err := jsonx.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("%w: the prices are not an array", adapter.ErrUnrecognised)
+	items, err := readArray(raw, "prices")
+	if err != nil {
+		return nil, err
 	}
 	out := make(map[string]map[string]string, len(items))
 	for _, item := range items {
@@ -286,9 +288,9 @@ func parseModels(p modelPlan, body []byte) ([]offerModel, error) {
 	if !ok {
 		return nil, missing("models")
 	}
-	var items []jsonx.Raw
-	if err := jsonx.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("%w: the models are not an array", adapter.ErrUnrecognised)
+	items, err := readArray(raw, "models")
+	if err != nil {
+		return nil, err
 	}
 	out := make([]offerModel, 0, len(items))
 	seen := map[string]bool{}
@@ -379,6 +381,9 @@ func assembleGroup(p offerPlan, st offerState, g offerGroup) (adapter.Group, err
 	if err != nil {
 		return adapter.Group{}, err
 	}
+	if len(fmts) == 0 {
+		fmts = p.fallback
+	}
 	group := adapter.Group{Ref: g.Ref, Name: g.Name, Ratio: adapter.Amount(ratio), Facts: factsOf(fmts)}
 	for _, m := range st.Models[g.Ref] {
 		model, err := assembleModel(p, m, ratio, fmts, st.Prices)
@@ -453,11 +458,27 @@ func (p offerPlan) costOf(model, ratio string, prices map[string]map[string]stri
 	if p.prices == nil || len(prices[model]) == 0 {
 		return nil, nil //nolint:nilnil // the model has no declared price, so it has no cost
 	}
+	multiplier, ok := new(big.Rat).SetString(ratio)
+	if !ok {
+		return nil, fmt.Errorf("%w: the ratio of a group is not a decimal", adapter.ErrUnrecognised)
+	}
+	scale := new(big.Rat).Mul(p.prices.scale, multiplier)
+	rates := prices[model]
+	if scale.Cmp(big.NewRat(1, 1)) != 0 {
+		rates = make(map[string]string, len(prices[model]))
+		for item, text := range prices[model] {
+			scaled, err := scaledRate(text, scale)
+			if err != nil {
+				return nil, fmt.Errorf("%w: the cost of %s: %w", adapter.ErrUnrecognised, model, err)
+			}
+			rates[item] = scaled
+		}
+	}
 	raw, err := jsonx.MarshalCanonical(struct {
 		V        int               `json:"v"`
 		Currency string            `json:"currency"`
 		Rates    map[string]string `json:"rates"`
-	}{1, platform.CurrencyNone.String(), prices[model]})
+	}{1, platform.CurrencyNone.String(), rates})
 	if err != nil {
 		return nil, fmt.Errorf("declared: the cost of %s: %w", model, err)
 	}
@@ -465,19 +486,50 @@ func (p offerPlan) costOf(model, ratio string, prices map[string]map[string]stri
 	if err != nil {
 		return nil, fmt.Errorf("%w: the cost of %s: %w", adapter.ErrUnrecognised, model, err)
 	}
-	multiplier, ok := new(big.Rat).SetString(ratio)
-	if !ok {
-		return nil, fmt.Errorf("%w: the ratio of a group is not a decimal", adapter.ErrUnrecognised)
+	return &schedule, nil
+}
+
+// scaledRate applies the declaration's native-unit scale and the group's ratio before the parsed schedule sees a
+// price. The raw number can exceed platform.UnitPrice's per-token limit and still become a valid final price after
+// scaling; parsing first would reject it. The final price is rounded up once, at 10⁻¹⁵.
+func scaledRate(text string, factor *big.Rat) (string, error) {
+	value, ok := new(big.Rat).SetString(text)
+	if !ok || value.Sign() < 0 {
+		return "", fmt.Errorf("price %q is not a decimal", text)
 	}
-	scale := new(big.Rat).Mul(p.prices.scale, multiplier)
-	if scale.Cmp(big.NewRat(1, 1)) == 0 {
-		return &schedule, nil
+	scaled := new(big.Rat).Mul(value, factor)
+	units, rem := new(big.Int).QuoRem(
+		new(big.Int).Mul(scaled.Num(), big.NewInt(unitPriceScale)),
+		scaled.Denom(), new(big.Int),
+	)
+	if rem.Sign() > 0 {
+		units.Add(units, big.NewInt(1))
 	}
-	scaled, err := schedule.Scaled(scale.RatString(), platform.CurrencyNone)
-	if err != nil {
-		return nil, fmt.Errorf("%w: the cost of %s: %w", adapter.ErrUnrecognised, model, err)
+	if !units.IsInt64() || units.Int64() > maxUnitPrice {
+		return "", fmt.Errorf("price %q is over the unit-price limit after scaling", text)
 	}
-	return &scaled, nil
+	return formatUnitPrice(units), nil
+}
+
+const (
+	unitPriceScale = 1_000_000_000_000_000
+	maxUnitPrice   = 1000 * unitPriceScale
+)
+
+// formatUnitPrice writes units of 10⁻¹⁵ in UnitPrice's canonical spelling: no leading zeros, no trailing zeros.
+func formatUnitPrice(units *big.Int) string {
+	if units.Sign() == 0 {
+		return "0"
+	}
+	digits := units.String()
+	if len(digits) <= 15 {
+		digits = strings.Repeat("0", 16-len(digits)) + digits
+	}
+	whole, fraction := digits[:len(digits)-15], strings.TrimRight(digits[len(digits)-15:], "0")
+	if fraction == "" {
+		return whole
+	}
+	return whole + "." + fraction
 }
 
 func encodeOffer(st *offerState) adapter.Listing {
@@ -489,10 +541,12 @@ func encodeOffer(st *offerState) adapter.Listing {
 	return raw
 }
 
-func decodeOffer(from adapter.Listing) *offerState {
+func decodeOffer(from adapter.Listing, fingerprint string) *offerState {
+	fresh := &offerState{V: offerVersion, Fingerprint: fingerprint}
 	var st offerState
-	if len(from) == 0 || jsonx.UnmarshalKnown(from, &st) != nil || st.V != offerVersion || st.Next < 0 || st.Next > len(st.Groups) {
-		return &offerState{V: offerVersion}
+	if len(from) == 0 || jsonx.UnmarshalKnown(from, &st) != nil || st.V != offerVersion ||
+		st.Fingerprint != fingerprint || st.Next < 0 || st.Next > len(st.Groups) {
+		return fresh
 	}
 	return &st
 }

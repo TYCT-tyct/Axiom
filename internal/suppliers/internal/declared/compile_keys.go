@@ -16,10 +16,8 @@ func (c *compiler) keys(spec Keys) (keysPlan, error) {
 	if k.secret, err = c.keySecret(spec.Secret); err != nil {
 		return k, err
 	}
-	if spec.Create != nil {
-		if k.create, err = c.keyCreate(*spec.Create); err != nil {
-			return k, err
-		}
+	if err := c.keyCreatePlan(spec, &k); err != nil {
+		return k, err
 	}
 	switch {
 	case spec.Unrestricted && spec.Policy != nil:
@@ -34,6 +32,31 @@ func (c *compiler) keys(spec Keys) (keysPlan, error) {
 		}
 	}
 	return k, nil
+}
+
+// keyCreatePlan compiles the optional create operation and checks that its result can be adopted from the listing.
+func (c *compiler) keyCreatePlan(spec Keys, k *keysPlan) error {
+	if spec.Create == nil {
+		return nil
+	}
+	create, err := c.keyCreate(*spec.Create)
+	if err != nil {
+		return err
+	}
+	k.create = create
+	return keyClaimable(k.list)
+}
+
+// keyClaimable requires the two listing fields that make a created key adoptable: its group and the marker name the
+// sync gave it. Without either, a lost create response would make the next round create another valid key.
+func keyClaimable(k keyListPlan) error {
+	if k.name == nil {
+		return errors.New("keys.list.name: required when keys.create is declared, so a created key can be adopted")
+	}
+	if k.group == nil {
+		return errors.New("keys.list.group: required when keys.create is declared, so a created key is adopted for its group")
+	}
+	return nil
 }
 
 func (c *compiler) keyPolicy(spec KeyPolicy) (*keyPolicyPlan, error) {
@@ -181,12 +204,18 @@ func (c *compiler) keyCreateBody(spec map[string]string) (map[string]tmpl, error
 			return nil, err
 		}
 		for _, p := range t.parts {
-			named = named || p.variable == "name"
+			if p.variable != "name" {
+				continue
+			}
+			if len(t.parts) != 1 || named {
+				return nil, errors.New("keys.create.body: the key's name must be sent as {name} alone, exactly once")
+			}
+			named = true
 		}
 		body[member] = t
 	}
 	if !named {
-		return nil, errors.New("keys.create.body: the key's name must be sent, so a listing can adopt a key whose answer was lost")
+		return nil, errors.New("keys.create.body: the key's name must be sent as {name} alone, exactly once")
 	}
 	return body, nil
 }

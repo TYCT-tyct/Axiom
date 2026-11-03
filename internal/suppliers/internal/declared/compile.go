@@ -1,14 +1,18 @@
 package declared
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -77,10 +81,12 @@ type fundingPlan struct {
 }
 
 type offerPlan struct {
-	groups  groupPlan
-	models  modelPlan
-	prices  *pricePlan
-	formats map[string]protocol.Format
+	groups      groupPlan
+	models      modelPlan
+	prices      *pricePlan
+	formats     map[string]protocol.Format
+	fallback    []protocol.Format // calls.formats, used when a group and a model state none
+	fingerprint string            // the declaration this offer state belongs to
 }
 
 type groupPlan struct {
@@ -185,6 +191,12 @@ func Compile(spec Spec) (*Adapter, error) {
 	if err := a.read(c, spec); err != nil {
 		return nil, err
 	}
+	raw, err := jsonx.MarshalCanonical(spec)
+	if err != nil {
+		return nil, fmt.Errorf("declaration fingerprint: %w", err)
+	}
+	sum := sha256.Sum256(raw)
+	a.offer.fingerprint = hex.EncodeToString(sum[:])
 	return a, nil
 }
 
@@ -241,6 +253,7 @@ func (a *Adapter) read(c *compiler, spec Spec) error {
 			return fmt.Errorf("offer.formats: %q maps to a format calls.formats does not declare", from)
 		}
 	}
+	a.offer.fallback = a.calls.formats
 	return nil
 }
 
@@ -433,12 +446,17 @@ var (
 	}
 )
 
+// headerName accepts an HTTP field-name token (RFC 9110 section 5.1). Parentheses, slashes and other separators are
+// not field-name characters, even though net/http would canonicalize some of them without complaint.
 func headerName(s string) bool {
 	if s == "" {
 		return false
 	}
 	for _, r := range s {
-		if r <= ' ' || r >= 0x7f || r == ':' {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			continue
+		}
+		if !strings.ContainsRune("!#$%&'*+-.^_`|~", r) {
 			return false
 		}
 	}

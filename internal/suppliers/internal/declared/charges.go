@@ -185,9 +185,9 @@ func parseCharges(p chargesPlan, body []byte) ([]adapter.Charge, int, error) {
 	if !ok {
 		return nil, 0, missing("charges")
 	}
-	var items []jsonx.Raw
-	if err := jsonx.Unmarshal(raw, &items); err != nil {
-		return nil, 0, fmt.Errorf("%w: the charges are not an array", adapter.ErrUnrecognised)
+	items, err := readArray(raw, "charges")
+	if err != nil {
+		return nil, 0, err
 	}
 	out := make([]adapter.Charge, 0, len(items))
 	for _, item := range items {

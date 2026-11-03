@@ -9,6 +9,32 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
+// TestUnrestrictedKeysKeepTheirPolicy: a declaration that does not read restrictions must say "unrestricted" with a
+// non-nil policy. nil is what persist treats as unreadable, and that denies every model.
+func TestUnrestrictedKeysKeepTheirPolicy(t *testing.T) {
+	t.Parallel()
+	policy, err := keyPolicy(nil, nil)
+	if err != nil || policy == nil || policy.Models != nil {
+		t.Fatalf("policy = %+v, %v; want a non-nil unrestricted policy", policy, err)
+	}
+}
+
+// TestKeysWithATotalCannotEndEarly: an empty page before the declared total, or more rows than it, is not a complete
+// listing. The old projection must stay in place, so the caller sees an error instead of an empty key set.
+func TestKeysWithATotalCannotEndEarly(t *testing.T) {
+	t.Parallel()
+	st := keysState{V: keysVersion, Page: 2, Size: 2, Total: 3, HasTotal: true, Rows: []keyRow{
+		{Ref: "k1", Status: "active"}, {Ref: "k2", Status: "active"},
+	}}
+	if done, err := st.done(0, 2); err == nil || done {
+		t.Fatalf("done = %v, %v; want an error on an early empty page", done, err)
+	}
+	st.Rows = append(st.Rows, keyRow{Ref: "k3", Status: "active"}, keyRow{Ref: "k4", Status: "active"})
+	if done, err := st.done(0, 2); err == nil || done {
+		t.Fatalf("done = %v, %v; want an error when the total is exceeded", done, err)
+	}
+}
+
 func TestDecodeKeysStartsOverWhenThePageSizeChanges(t *testing.T) {
 	t.Parallel()
 	old := keysState{V: keysVersion, Page: 2, Size: 2, Rows: []keyRow{{Ref: "k1", Status: "active"}}}

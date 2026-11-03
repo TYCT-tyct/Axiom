@@ -1,6 +1,7 @@
 package declared
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,34 @@ func loadAcme(t *testing.T) *Adapter {
 		t.Fatalf("%T, want *declared.Adapter", adapters[0])
 	}
 	return a
+}
+
+// TestRequiredListingsRejectNull: JSON null decodes into a nil slice without an error. Each required listing must
+// reject it, so an abnormal answer cannot withdraw a projection or end a charge scan.
+func TestRequiredListingsRejectNull(t *testing.T) {
+	t.Parallel()
+	a := loadAcme(t)
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"groups", func() error { _, err := parseGroups(a.offer, []byte(`{"data":null}`)); return err }},
+		{"models", func() error { _, err := parseModels(a.offer.models, []byte(`{"data":null}`)); return err }},
+		{"prices", func() error { _, err := parsePrices(a.offer.prices, []byte(`{"data":{"rates":null}}`)); return err }},
+		{"keys", func() error {
+			_, err := parseKeys(a.keys.list, a.keys.policy, []byte(`{"data":{"total":0,"items":null}}`))
+			return err
+		}},
+		{"charges", func() error { _, _, err := parseCharges(a.charges, []byte(`{"data":{"items":null}}`)); return err }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if err := c.call(); !errors.Is(err, adapter.ErrUnrecognised) {
+				t.Fatalf("error = %v, want ErrUnrecognised", err)
+			}
+		})
+	}
 }
 
 // TestLoadDir: the one declaration in testdata compiles to the kind, native unit and buckets it states.
@@ -163,6 +192,9 @@ func TestCompileRefusesBrokenDeclarations(t *testing.T) {
 		{"no login for account fields", func(s *Spec) { s.Auth.Login = nil }, "without a login"},
 		{"detect with no marker", func(s *Spec) { s.Detect = Detect{Path: "/api/status"} }, "does not claim"},
 		{"detect path with a space", func(s *Spec) { s.Detect.Path = "/api/status page" }, "character"},
+		{"path with a network reference", func(s *Spec) { s.Account.Path = "//api/me" }, "single /"},
+		{"path with a bad escape", func(s *Spec) { s.Account.Path = "/api/%zz" }, "percent escape"},
+		{"header with a separator", func(s *Spec) { s.Auth.Header = "Bad(Name" }, "header name"},
 		{"captcha without a token", func(s *Spec) { s.Auth.Fields = []string{"email", "password"} }, "access_token"},
 		{"models without group", func(s *Spec) { s.Offer.Models.Path = "/api/models" }, "{group}"},
 		{"format not in calls", func(s *Spec) { s.Offer.Formats = map[string]string{"chat": "embeddings"} }, "calls.formats"},
@@ -174,11 +206,15 @@ func TestCompileRefusesBrokenDeclarations(t *testing.T) {
 		{"page size missing", func(s *Spec) { s.Keys.List.PageSize = 0 }, "page_size"},
 		{"total without page", func(s *Spec) { s.Keys.List.Path = "/api/keys"; s.Keys.List.PageSize = 0 }, "only for a path"},
 		{"create without name", func(s *Spec) { s.Keys.Create.Body = map[string]string{"group_id": "{group}"} }, "name"},
+		{"create without list name", func(s *Spec) { s.Keys.List.Name = "" }, "keys.list.name"},
+		{"create without list group", func(s *Spec) { s.Keys.List.Group = "" }, "keys.list.group"},
+		{"create name with a prefix", func(s *Spec) { s.Keys.Create.Body["name"] = "prefix-{name}" }, "as {name} alone"},
 		{"policy and unrestricted", func(s *Spec) { s.Keys.Unrestricted = true }, "not both"},
 		{"no policy", func(s *Spec) { s.Keys.Policy = nil }, "declare unrestricted"},
 		{"no formats", func(s *Spec) { s.Calls.Formats = nil }, "at least one format"},
 		{"unknown format", func(s *Spec) { s.Calls.Formats = []string{"grpc"} }, "protocol format"},
 		{"bad charge ref header", func(s *Spec) { s.Calls.ChargeRefHeader = "Bad Header" }, "header name"},
+		{"charge ref header with a separator", func(s *Spec) { s.Calls.ChargeRefHeader = "Bad(Name" }, "header name"},
 		{"unknown cause", func(s *Spec) { s.Calls.Errors.Rules[0].Cause = "nope" }, "cause"},
 		{"unknown scope", func(s *Spec) { s.Calls.Errors.Rules[0].Scope = "world" }, "scope"},
 		{"rule is not a refusal", func(s *Spec) {

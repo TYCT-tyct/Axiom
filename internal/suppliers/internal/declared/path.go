@@ -1,6 +1,7 @@
 package declared
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -184,6 +185,20 @@ func decimal(s string) bool {
 		return false
 	}
 	return !point || allDigits(frac)
+}
+
+// readArray reads a required list. JSON null decodes into a nil slice without an error, but a null answer is not an
+// empty list: taking it for one would withdraw every row of a projection, or end a charge scan and advance its
+// watermark. Only [] is an empty list.
+func readArray(raw jsonx.Raw, what string) ([]jsonx.Raw, error) {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, fmt.Errorf("%w: the %s are null, not an array", adapter.ErrUnrecognised, what)
+	}
+	var items []jsonx.Raw
+	if err := jsonx.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("%w: the %s are not an array", adapter.ErrUnrecognised, what)
+	}
+	return items, nil
 }
 
 // readInteger reads a non-negative integer from a number or a string. Counts and ids are never floats.

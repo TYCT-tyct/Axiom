@@ -87,7 +87,11 @@ func (m *manager) pagedKeys(ctx context.Context, st *keysState, restarted bool) 
 		if st.add(rows) {
 			return restartKeys(m, ctx, st, restarted)
 		}
-		if st.done(len(rows), m.a.keys.list.pageSize) {
+		done, err := st.done(len(rows), m.a.keys.list.pageSize)
+		if err != nil {
+			return adapter.Page[adapter.KeyState]{}, err
+		}
+		if done {
 			return adapter.Page[adapter.KeyState]{Items: keyStates(st.Rows), Done: true}, nil
 		}
 		st.Page++
@@ -149,16 +153,23 @@ func (st *keysState) add(rows []keyRow) bool {
 	return false
 }
 
-// done reports whether the pass reached the end. A full page is not the end when a total is known; an empty page is
-// always the end, so a supplier whose total is wrong cannot make the pass loop for ever.
-func (st *keysState) done(pageLen, pageSize int) bool {
-	if pageLen == 0 {
-		return true
-	}
+// done reports whether the pass reached the end. A total, when the declaration reads one, is binding: an empty page
+// before it, or more rows than it, is an incomplete or inconsistent listing, not a complete one. Without a total an
+// empty page ends the pass and a short page is the last page.
+func (st *keysState) done(pageLen, pageSize int) (bool, error) {
 	if st.HasTotal {
-		return int64(len(st.Rows)) >= st.Total
+		if int64(len(st.Rows)) > st.Total {
+			return false, fmt.Errorf("%w: the key listing has %d rows, more than its total %d", adapter.ErrUnrecognised, len(st.Rows), st.Total)
+		}
+		if pageLen == 0 {
+			if int64(len(st.Rows)) != st.Total {
+				return false, fmt.Errorf("%w: the key listing ended at %d of %d rows", adapter.ErrUnrecognised, len(st.Rows), st.Total)
+			}
+			return true, nil
+		}
+		return int64(len(st.Rows)) == st.Total, nil
 	}
-	return pageLen < pageSize
+	return pageLen == 0 || pageLen < pageSize, nil
 }
 
 func parseKeys(p keyListPlan, policy *keyPolicyPlan, body []byte) ([]keyRow, error) {
@@ -166,9 +177,9 @@ func parseKeys(p keyListPlan, policy *keyPolicyPlan, body []byte) ([]keyRow, err
 	if !ok {
 		return nil, missing("keys")
 	}
-	var items []jsonx.Raw
-	if err := jsonx.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("%w: the keys are not an array", adapter.ErrUnrecognised)
+	items, err := readArray(raw, "keys")
+	if err != nil {
+		return nil, err
 	}
 	out := make([]keyRow, 0, len(items))
 	for _, item := range items {
@@ -252,7 +263,9 @@ func keyResetAt(p *path, item jsonx.Raw) string {
 
 func keyPolicy(p *keyPolicyPlan, item jsonx.Raw) (*adapter.KeyPolicy, error) {
 	if p == nil {
-		return nil, nil //nolint:nilnil // the adapter declares unrestricted: the key's permissions are not read
+		// An empty policy with a nil model list means unrestricted. Returning nil here would make persist read the
+		// listing as one that could not prove permission, which denies every model.
+		return &adapter.KeyPolicy{}, nil
 	}
 	raw, ok := p.models.lookup(item)
 	if !ok {
