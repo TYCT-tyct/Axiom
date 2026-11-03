@@ -102,9 +102,8 @@ class DeployEntry(unittest.TestCase):
         self.assertTrue(any(" pull axiom migrate " in call and f"DEPLOY_IMAGE={IMAGE}" in call for call in compose), compose)
         self.assertTrue(any(" run --rm --no-deps --user 0:0 axiom web-assets /assets " in call
                             and f"DEPLOY_IMAGE={IMAGE}" in call for call in compose), compose)
-        self.assertTrue(any(" up --detach --no-build --wait postgres " in call
+        self.assertTrue(any(" up --detach --no-build --wait --wait-timeout 5m postgres " in call
                             and f"DEPLOY_IMAGE={IMAGE}" in call for call in compose), compose)
-        self.assertFalse(any("--wait-timeout" in call for call in compose), compose)
         self.assertTrue(any(" exec -T postgres " in call for call in compose), compose)
         self.assertTrue(any(" build postgres " in call for call in compose), compose)
         self.assertLess(next(i for i, call in enumerate(calls) if call.startswith("verify ")),
@@ -114,6 +113,16 @@ class DeployEntry(unittest.TestCase):
         # The database image is built from this tree; the no-build starts below would fail without it.
         self.assertLess(next(i for i, call in enumerate(calls) if " build postgres " in call),
                         next(i for i, call in enumerate(calls) if " up " in call))
+
+    def test_a_database_that_never_becomes_healthy_stops_the_deployment(self):
+        # `compose up --wait` returns 1 when its final bound expires. A database whose restart: unless-stopped resets
+        # the healthcheck's start period on every crash never reaches unhealthy, so the bound is what ends the wait.
+        result, calls = self.run_deploy(self.config(), up_status=1)
+        self.assertNotEqual(result.returncode, 0)
+        compose = self.compose_calls(calls)
+        self.assertTrue(any(" up --detach --no-build --wait --wait-timeout 5m postgres " in call for call in compose),
+                        compose)
+        self.assertFalse(any(" exec -T postgres " in call for call in compose), compose)
 
     def test_an_exported_image_is_the_one_verified_not_the_env_file(self):
         # Compose interpolation prefers the shell over --env-file, so the exported digest is what pull and up would use.

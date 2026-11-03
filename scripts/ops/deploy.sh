@@ -79,7 +79,10 @@ compose run --rm --no-deps --user 0:0 axiom web-assets /assets
 # the program; it has to exist before the no-build start below.
 compose build postgres
 # The database healthcheck is the startup condition, including crash recovery; the old 60-second --wait-timeout
-# failed a recovery that was still progressing at 48 seconds on the shared CI host (#605).
-compose up --detach --no-build --wait postgres
+# failed a recovery that was still progressing at 48 seconds on the shared CI host (#605). A final bound is still
+# needed here: restart: unless-stopped resets a crash-looping container's start period on every restart, so it may
+# never reach unhealthy, and this entry has no CI step timeout. Five minutes covers the 2-minute start period, the
+# three 10-second failure probes and the host's slow Docker daemon, and then fails the deployment.
+compose up --detach --no-build --wait --wait-timeout 5m postgres
 compose exec -T postgres sh < deploy/postgres/roles.sh
 compose up --detach --no-build --wait
