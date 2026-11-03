@@ -1,4 +1,4 @@
-import { long, nano, pad, range, type Schemas, siteId, tierId, usd, uuid } from "./admin-fixtures.ts";
+import { long, nano, pad, range, type Schemas, siteId, tierId, usd, usualTargets, uuid } from "./admin-fixtures.ts";
 import { aMerchant, anOrder, aRefund } from "./admin-payments-data.ts";
 import type { AuthState } from "./mock.ts";
 import { accountId, authState, userId } from "./mock-auth.ts";
@@ -12,6 +12,7 @@ export { uuid } from "./admin-fixtures.ts";
 
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
+  targets: Map<string, Schemas["OperationsTargets"]>;
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
   logo: Schemas["SiteLogoView"];
@@ -382,6 +383,7 @@ export function usualState(): AdminState {
   const state: AdminState = {
     ...authState(allPermissions),
     siteId,
+    targets: usualTargets(),
     settings: {
       settings: { console_idle_timeout_seconds: 604800, new_key_daily_limit: usd("20") },
       defaults: {
@@ -418,6 +420,7 @@ export function usualState(): AdminState {
 export function emptyState(): AdminState {
   return {
     ...usualState(),
+    targets: new Map(),
     users: [],
     calls: [],
     traces: new Map(),

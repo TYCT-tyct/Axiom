@@ -8,6 +8,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/observability"
+	"axiom/internal/operations"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/pg"
 )
@@ -26,11 +27,15 @@ func (a adminAPI) GetOperationsOverview(ctx context.Context, r adminapi.GetOpera
 	site := uuid.UUID(call.site.ID)
 	var overview observability.AdminOverview
 	var money billing.PlatformReport
+	var targets operations.Expected
 	err = a.db.ReadTx(ctx, call.scope, func(tx pg.Tx) error {
 		if overview, err = observability.ReadAdminOverview(ctx, tx, site, w.Since, w.Until); err != nil {
 			return err
 		}
-		money, err = billing.ReadPlatformReport(ctx, tx, site, call.site.Currency, w.Since, w.Until)
+		if money, err = billing.ReadPlatformReport(ctx, tx, site, call.site.Currency, w.Since, w.Until); err != nil {
+			return err
+		}
+		targets, err = operations.ExpectedFor(ctx, tx, site, call.site.Currency, w.Since, w.Until)
 		return err
 	})
 	if err != nil {
@@ -58,6 +63,8 @@ func (a adminAPI) GetOperationsOverview(ctx context.Context, r adminapi.GetOpera
 		"cost":               adminapi.Money{Amount: money.Cost, Currency: call.site.Currency.String()},
 		"unknown_cost_calls": money.UnknownCost,
 		"cash":               cashBody, "top_accounts": accountsBody, "top_models": modelsBody,
+		"targets": targetComparison(targets, overview.Calls, overview.Errors, money.Revenue, money.Cost,
+			call.site.Currency, overview.Coverage.Covers(w.Since, w.Until), money.UnknownCost == 0),
 	}
 	if overview.Coverage.Known {
 		body["calls_available_since"] = overview.Coverage.Since
