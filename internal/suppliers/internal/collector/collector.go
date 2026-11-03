@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 	"uuid"
 
@@ -67,19 +66,14 @@ func (Args) InsertOpts() river.InsertOpts {
 }
 
 // Worker drains the suppliers of every adapter that declares a one-read usage queue.
-type Worker struct {
-	cfg Config
-
-	mu      sync.Mutex
-	blocked map[uuid.UUID]blockedLogin // a rejected management key, and the login version that was rejected
-}
+type Worker struct{ cfg Config }
 
 // Register adds the worker and the periodic job to a queue that has not started yet.
 func Register(cfg Config) error {
 	if err := cfg.check(); err != nil {
 		return err
 	}
-	w := &Worker{cfg: cfg, blocked: map[uuid.UUID]blockedLogin{}}
+	w := &Worker{cfg: cfg}
 	if err := river.AddWorkerSafely(cfg.Queue.Workers(), river.WorkFunc(w.work)); err != nil {
 		return fmt.Errorf("collector: add the drain worker: %w", err)
 	}
@@ -102,6 +96,11 @@ type supplier struct {
 }
 
 func (w *Worker) work(ctx context.Context, _ *river.Job[Args]) error {
+	// Replay first, from the durable staging table alone. A supplier may be paused, rejected or removed, its login may
+	// be gone, and no CPA may be reachable; none of that changes a record that is already ours.
+	if err := w.replay(ctx); err != nil {
+		return err
+	}
 	var errs []error
 	for _, kind := range w.cfg.Registry.Kinds() {
 		a, ok := w.cfg.Registry.Get(kind)
@@ -124,6 +123,36 @@ func (w *Worker) work(ctx context.Context, _ *river.Job[Args]) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// replay ingests staged records through each adapter's parser. It deliberately does not read the supplier's status,
+// login, egress or auth backoff: those govern fetching new records, not finishing records already taken from the queue.
+func (w *Worker) replay(ctx context.Context) error {
+	var rows []store.UsageSupplier
+	err := w.cfg.DB.ReadTx(ctx, w.cfg.Scope, func(tx pg.Tx) error {
+		var err error
+		rows, err = store.ListUsageSuppliers(ctx, tx)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("collector: list suppliers with staged usage: %w", err)
+	}
+	for _, s := range rows {
+		a, ok := w.cfg.Registry.Get(adapter.Kind(s.Kind))
+		if !ok {
+			w.cfg.Logger.Warn("staged usage has no adapter", "supplier", s.ID.String(), "kind", s.Kind)
+			continue
+		}
+		parser, ok := a.(adapter.UsageParser)
+		if !ok {
+			w.cfg.Logger.Warn("staged usage has no offline parser", "supplier", s.ID.String(), "kind", s.Kind)
+			continue
+		}
+		if err := w.ingest(ctx, s.ID, parser); err != nil {
+			return fmt.Errorf("collector: replay staged usage of %s: %w", s.ID, err)
+		}
+	}
+	return nil
 }
 
 func (w *Worker) suppliers(ctx context.Context, kind adapter.Kind) ([]supplier, error) {
@@ -151,9 +180,6 @@ func (w *Worker) one(ctx context.Context, a adapter.Adapter, sup supplier) error
 	if sup.exit != string(egress.Direct) {
 		return nil // only the direct exit exists today; another node handles the supplier
 	}
-	if w.blockedNow(ctx, sup.id) {
-		return nil
-	}
 	hold, err := w.hold(ctx, sup.id)
 	if errors.Is(err, pg.ErrHeld) {
 		return nil // another node is draining this supplier
@@ -169,6 +195,13 @@ func (w *Worker) one(ctx context.Context, a adapter.Adapter, sup supplier) error
 	} else if err != nil {
 		return err
 	}
+	blocked, err := w.blockedUntil(ctx, sup.id, version)
+	if err != nil {
+		return err
+	}
+	if w.cfg.Now().Before(blocked) {
+		return nil
+	}
 	uq, err := w.open(ctx, a, sup, raw)
 	if err != nil {
 		return err
@@ -176,19 +209,26 @@ func (w *Worker) one(ctx context.Context, a adapter.Adapter, sup supplier) error
 	return w.drain(ctx, sup, uq, version, hold)
 }
 
-// blockedNow reports whether a rejected management key still stops this supplier. A replaced login (a new version)
-// clears the stop at once, so a person's fix is not held back by the old key's failure.
-func (w *Worker) blockedNow(ctx context.Context, id uuid.UUID) bool {
-	until, version, ok := w.blockState(id)
-	if !ok {
-		return false
-	}
-	_, current, err := persist.ReadLogin(ctx, w.cfg.DB, w.cfg.Scope, w.cfg.Keys, id)
-	if err == nil && current != version {
-		w.unblock(id)
-		return false
-	}
-	return w.cfg.Now().Before(until)
+// blockedUntil reads the shared stop for one supplier and login version. A new login version has a different bucket,
+// so replacing the key lifts the old stop without a write; the stop survives a process restart and is visible to every
+// node. The bucket lives in the existing rate_buckets table, because both are per-supplier waits shared by all nodes.
+func (w *Worker) blockedUntil(ctx context.Context, id uuid.UUID, version int64) (time.Time, error) {
+	var until time.Time
+	err := w.cfg.DB.Tx(ctx, w.cfg.Scope, func(tx pg.Tx) error {
+		rows, err := store.LockRateBucketsFor(ctx, tx, []store.RateBucket{usageAuthBucket(id, version)})
+		if err != nil {
+			return err
+		}
+		if len(rows) == 1 {
+			until = rows[0].BlockedUntil
+		}
+		return nil
+	})
+	return until, err
+}
+
+func usageAuthBucket(id uuid.UUID, version int64) store.RateBucket {
+	return store.RateBucket{Scope: "account:" + id.String(), Name: fmt.Sprintf("usage-auth:%d", version)}
 }
 
 func (w *Worker) hold(ctx context.Context, id uuid.UUID) (*pg.Hold, error) {
@@ -230,7 +270,7 @@ func (w *Worker) drain(ctx context.Context, sup supplier, uq adapter.UsageQueue,
 		}
 		records, err := uq.DrainUsage(ctx, drainBatch)
 		if err != nil {
-			drainErr := w.drainError(sup, version, err)
+			drainErr := w.drainError(ctx, sup, version, err)
 			if ingestErr := w.ingest(ctx, sup.id, uq); ingestErr != nil {
 				return errors.Join(drainErr, ingestErr)
 			}
@@ -275,9 +315,11 @@ func (w *Worker) stage(ctx context.Context, supplier uuid.UUID, records []adapte
 	return fmt.Errorf("collector: stage %d records: %w", len(records), err)
 }
 
-func (w *Worker) drainError(sup supplier, version int64, err error) error {
+func (w *Worker) drainError(ctx context.Context, sup supplier, version int64, err error) error {
 	if errors.Is(err, adapter.ErrAuthRejected) {
-		w.block(sup.id, version)
+		if blockErr := w.block(ctx, sup.id, version); blockErr != nil {
+			return blockErr
+		}
 		w.cfg.Logger.Error("CPA rejected the management key; polling stops until a person replaces it",
 			"supplier", sup.id.String())
 		return nil
@@ -292,7 +334,7 @@ func (w *Worker) drainError(sup supplier, version int64, err error) error {
 	return err
 }
 
-func (w *Worker) ingest(ctx context.Context, supplier uuid.UUID, uq adapter.UsageQueue) error {
+func (w *Worker) ingest(ctx context.Context, supplier uuid.UUID, parser adapter.UsageParser) error {
 	for {
 		rows, err := w.pending(ctx, supplier)
 		if err != nil {
@@ -301,7 +343,7 @@ func (w *Worker) ingest(ctx context.Context, supplier uuid.UUID, uq adapter.Usag
 		if len(rows) == 0 {
 			return nil
 		}
-		if err := w.ingestBatch(ctx, supplier, uq, rows); err != nil {
+		if err := w.ingestBatch(ctx, supplier, parser, rows); err != nil {
 			return err
 		}
 		if len(rows) < ingestBatch {
@@ -320,11 +362,11 @@ func (w *Worker) pending(ctx context.Context, supplier uuid.UUID) ([]store.Usage
 	return rows, err
 }
 
-func (w *Worker) ingestBatch(ctx context.Context, supplier uuid.UUID, uq adapter.UsageQueue, rows []store.UsageRecordRow) error {
+func (w *Worker) ingestBatch(ctx context.Context, supplier uuid.UUID, parser adapter.UsageParser, rows []store.UsageRecordRow) error {
 	var charges []adapter.Charge
 	var good, bad []uuid.UUID
 	for _, row := range rows {
-		ch, err := uq.ParseUsage(row.Record)
+		ch, err := parser.ParseUsage(row.Record)
 		if err != nil {
 			bad = append(bad, row.ID)
 			continue
@@ -347,28 +389,16 @@ func (w *Worker) ingestBatch(ctx context.Context, supplier uuid.UUID, uq adapter
 	})
 }
 
-type blockedLogin struct {
-	until   time.Time
-	version int64
-}
-
-func (w *Worker) blockState(id uuid.UUID) (time.Time, int64, bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	b, ok := w.blocked[id]
-	return b.until, b.version, ok
-}
-
-func (w *Worker) block(id uuid.UUID, version int64) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.blocked[id] = blockedLogin{until: w.cfg.Now().Add(authBackoff), version: version}
-}
-
-func (w *Worker) unblock(id uuid.UUID) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	delete(w.blocked, id)
+// block persists the stop for the rejected login version. The next login version gets a new bucket and is not stopped.
+func (w *Worker) block(ctx context.Context, id uuid.UUID, version int64) error {
+	until := w.cfg.Now().Add(authBackoff)
+	// Persisting the stop is more important than the job context: if the job was cancelled after CPA rejected the key,
+	// the next job must still see the stop rather than send the rejected key again.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	return w.cfg.DB.Tx(ctx, w.cfg.Scope, func(tx pg.Tx) error {
+		return store.BlockRateBuckets(ctx, tx, []store.RateBucket{usageAuthBucket(id, version)}, until)
+	})
 }
 
 // staticLogin is the login the collector read outside the sync lease. It never writes: the collector does not refresh a

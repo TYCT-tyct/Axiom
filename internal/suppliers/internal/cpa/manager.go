@@ -217,9 +217,9 @@ func (*manager) offerPage(s offerState) adapter.Page[adapter.Group] {
 	if !g.ModelsUnread {
 		g.Models = make([]adapter.Model, 0, len(s.Models))
 		for _, name := range s.Models {
-			g.Models = append(g.Models, adapter.Model{
-				UpstreamName: name, Formats: slices.Clone(allFormats), Cost: zeroCost,
-			})
+			// CPA does not publish a per-token or per-request price for its accounts, and its subscription spend is not
+			// a per-call cost. Leave Cost nil: the endpoint is not routable until a person confirms a cost base.
+			g.Models = append(g.Models, adapter.Model{UpstreamName: name, Formats: slices.Clone(allFormats)})
 		}
 	}
 	return adapter.Page[adapter.Group]{Items: []adapter.Group{g}, Done: true}
@@ -304,7 +304,12 @@ func (m *manager) Keys(ctx context.Context, _ adapter.Listing) (adapter.Page[ada
 			continue
 		}
 		seen[ref] = true
-		items = append(items, adapter.KeyState{Ref: adapter.KeyRef(ref), GroupRef: groupRef, Status: adapter.KeyActive})
+		items = append(items, adapter.KeyState{
+			Ref: adapter.KeyRef(ref), GroupRef: groupRef, Status: adapter.KeyActive,
+			// CPA keys are global and have no per-key model or expiry restriction. A nil Policy would be projected as an
+			// empty model list, which denies every model to an otherwise valid key.
+			Policy: &adapter.KeyPolicy{},
+		})
 	}
 	slices.SortFunc(items, func(a, b adapter.KeyState) int { return strings.Compare(string(a.Ref), string(b.Ref)) })
 	return adapter.Page[adapter.KeyState]{Items: items, Done: true}, nil

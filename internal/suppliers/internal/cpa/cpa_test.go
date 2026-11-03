@@ -126,7 +126,7 @@ func TestPool(t *testing.T) {
 	}
 }
 
-func TestOfferHasTheThreeModelsWithZeroCost(t *testing.T) {
+func TestOfferHasTheThreeModelsWithoutACostPlan(t *testing.T) {
 	t.Parallel()
 	offer, err := manager0(t, recorded(t)).Offer(t.Context(), nil)
 	if err != nil || !offer.Done || len(offer.Items) != 1 {
@@ -136,16 +136,9 @@ func TestOfferHasTheThreeModelsWithZeroCost(t *testing.T) {
 	if g.Ref != groupRef || len(g.Models) != 3 || g.ModelsUnread {
 		t.Fatalf("group = %+v", g)
 	}
-	u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: 1, catalog.ItemOutput: 1}, catalog.ServiceTierStandard, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, model := range g.Models {
-		if model.Cost == nil {
-			t.Fatalf("%s has no zero cost", model.UpstreamName)
-		}
-		if _, missing, err := model.Cost.Cost(u); err != nil || missing != 0 {
-			t.Fatalf("%s cost missing %d: %v", model.UpstreamName, missing, err)
+		if model.Cost != nil {
+			t.Fatalf("%s has an invented cost plan: %+v", model.UpstreamName, model.Cost)
 		}
 	}
 }
@@ -160,6 +153,9 @@ func TestKeysHideTheSecret(t *testing.T) {
 	for _, key := range keys.Items {
 		if key.GroupRef != groupRef || strings.Contains(fmt.Sprint(key), "sk-cpa-test") {
 			t.Fatalf("key row leaks the secret: %+v", key)
+		}
+		if key.Policy == nil || key.Policy.Models != nil {
+			t.Fatalf("key %s is not unrestricted: %+v", key.Ref, key.Policy)
 		}
 	}
 	secret, err := m.KeySecret(t.Context(), keys.Items[0].Ref)
@@ -195,19 +191,34 @@ func TestUsageParsesTheCompleteRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkCompleteCharge(t, first)
+}
+
+func checkCompleteCharge(t *testing.T, first adapter.Charge) {
+	t.Helper()
+	checkChargeIdentity(t, first)
+	checkChargeCounts(t, first)
+	checkChargeReported(t, first)
+}
+
+func checkChargeIdentity(t *testing.T, first adapter.Charge) {
+	t.Helper()
 	if first.Ref != "019c0f3e-6a4b-7c8d-9e0f-1a2b3c4d5e6f" || first.Key != keyRef("sk-cpa-test-1") {
 		t.Fatalf("first charge identity = %+v", first)
 	}
 	if first.Amount != "0" || first.Funding != adapter.FundingWallet || first.Model != "claude-sonnet-4-5" {
 		t.Fatalf("first charge terms = %+v", first)
 	}
+}
+
+func checkChargeCounts(t *testing.T, first adapter.Charge) {
+	t.Helper()
 	counts := []struct {
 		item catalog.Item
 		want int64
 	}{
 		{catalog.ItemInput, 150},
 		{catalog.ItemCacheRead, 40},
-		{catalog.ItemCacheWrite, 10},
 		{catalog.ItemOutput, 70},
 		{catalog.ItemReasoning, 30},
 	}
@@ -216,10 +227,20 @@ func TestUsageParsesTheCompleteRecord(t *testing.T) {
 			t.Errorf("%s = %d, want %d", c.item, got, c.want)
 		}
 	}
-	for _, item := range []catalog.Item{catalog.ItemInput, catalog.ItemCacheRead, catalog.ItemCacheWrite, catalog.ItemOutput, catalog.ItemReasoning} {
+}
+
+func checkChargeReported(t *testing.T, first adapter.Charge) {
+	t.Helper()
+	for _, item := range []catalog.Item{catalog.ItemInput, catalog.ItemCacheRead, catalog.ItemOutput, catalog.ItemReasoning} {
 		if !first.Reported.Has(item) {
 			t.Errorf("%s was not reported", item)
 		}
+	}
+	if first.Reported.Has(catalog.ItemCacheWrite) || first.Usage.Count(catalog.ItemCacheWrite) != 0 {
+		t.Error("an ambiguous cache write was priced as a known item")
+	}
+	if len(first.Usage.Unknown()) != 1 || first.Usage.Unknown()[0].Field != "cpa.token_breakdown.input.cache_write_tokens" {
+		t.Fatalf("cache write was not left unknown: %+v", first.Usage.Unknown())
 	}
 }
 

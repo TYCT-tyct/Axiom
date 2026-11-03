@@ -83,3 +83,39 @@ func DeleteUsageRecords(ctx context.Context, db DBTX, supplier uuid.UUID, ids []
 	_, err := db.Exec(ctx, deleteUsageRecords, supplier, ids)
 	return err
 }
+
+// UsageSupplier is a supplier that has at least one staged usage record waiting to be parsed. Kind is the adapter
+// kind stored on the supplier, not a current sync status: a removed or paused supplier still has to replay what it
+// staged before it went away.
+type UsageSupplier struct {
+	ID   uuid.UUID
+	Kind string
+}
+
+const listUsageSuppliers = `
+SELECT s.id, s.kind
+FROM suppliers.suppliers s
+WHERE EXISTS (
+    SELECT 1 FROM suppliers.usage_records u
+    WHERE u.supplier_id = s.id AND u.state = 'new'
+)
+ORDER BY s.id`
+
+// ListUsageSuppliers lists suppliers with staged records, regardless of status or login. It is the offline replay
+// path: the parser is the adapter's own, so a removed supplier's already-paid usage can still become a charge.
+func ListUsageSuppliers(ctx context.Context, db DBTX) ([]UsageSupplier, error) {
+	rows, err := db.Query(ctx, listUsageSuppliers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UsageSupplier
+	for rows.Next() {
+		var s UsageSupplier
+		if err := rows.Scan(&s.ID, &s.Kind); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"time"
 
-	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
@@ -50,21 +49,6 @@ func (*Adapter) UsesUsageQueue() {}
 
 // Calls returns the call half.
 func (*Adapter) Calls() adapter.CallQuirks { return quirks{} }
-
-// zeroCost is the cost schedule of every CPA model: the pool is paid for by its subscription, and a call's cash cost is
-// zero. The spend itself is booked separately (docs/domains/billing.md「供应商成本」). Every item is priced at zero so
-// that a complete usage record does not leave part of its usage unpriced.
-var zeroCost = func() *catalog.Schedule {
-	s, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"XXX","rates":{` +
-		`"input":"0","cache_read":"0","cache_write":"0","cache_write_1h":"0","audio_in":"0","image_in":"0",` +
-		`"output":"0","reasoning":"0","audio_out":"0","image_out":"0","web_search":"0","code_execution":"0",` +
-		`"image_in_piece":"0","image_out_piece":"0","audio_in_second":"0","audio_out_second":"0","character_in":"0",` +
-		`"request":"0","file_search":"0","file_parse":"0"}}`))
-	if err != nil {
-		panic("cpa: the zero cost schedule is invalid: " + err.Error())
-	}
-	return &s
-}()
 
 var allFormats = []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat}
 

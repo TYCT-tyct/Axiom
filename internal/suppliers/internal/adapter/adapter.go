@@ -147,17 +147,23 @@ type Manager interface {
 	Charges(ctx context.Context, scan ScanState) (ChargePage, ScanState, error)
 }
 
+// UsageParser turns a stored, sanitised usage record into a Charge. It is implemented by the adapter as well as its
+// manager, so the collector can replay records that were staged before a crash or a supplier was removed, without a
+// login or a network call.
+type UsageParser interface {
+	// ParseUsage must not touch the network: it is called while the collector replays records a crash left behind.
+	ParseUsage(raw []byte) (Charge, error)
+}
+
 // UsageQueue is the optional management half of a supplier whose per-call usage is a queue that is consumed once. A
 // resident collector drains it; the sync engine does not scan Charges for such a manager, because a second reader would
 // take the records away from the collector. The records a queue returns are already sanitised for storage: no credential
 // may reach UsageRecord.Raw, and ParseUsage must work from that stored form alone, also after a restart.
 type UsageQueue interface {
+	UsageParser
 	// DrainUsage takes up to limit records from the supplier, oldest first. The supplier removes them when this returns,
 	// so the caller must store every record before doing anything else. An error means the records may be gone.
 	DrainUsage(ctx context.Context, limit int) ([]UsageRecord, error)
-	// ParseUsage turns one stored record into a Charge. It must not touch the network: it is called while the collector
-	// replays records a crash left behind.
-	ParseUsage(raw []byte) (Charge, error)
 }
 
 // UsageRecord is one record a UsageQueue returned. Ref is the supplier's request id when it has one; Raw is the stored

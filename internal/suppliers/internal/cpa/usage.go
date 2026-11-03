@@ -129,9 +129,14 @@ func sanitizeUsage(raw []byte) ([]byte, string, error) {
 	return body, d.RequestID, nil
 }
 
-// ParseUsage implements adapter.UsageQueue. It reads the sanitised form only, so a record can be parsed after a restart
-// with no CPA request and no key.
-func (*manager) ParseUsage(raw []byte) (adapter.Charge, error) {
+// ParseUsage implements adapter.UsageParser on the adapter, for replay without a login or a supplier. It reads the
+// sanitised form only, so a record can be parsed after a restart with no CPA request and no key.
+func (*Adapter) ParseUsage(raw []byte) (adapter.Charge, error) { return parseUsage(raw) }
+
+// ParseUsage implements adapter.UsageQueue on the opened manager.
+func (*manager) ParseUsage(raw []byte) (adapter.Charge, error) { return parseUsage(raw) }
+
+func parseUsage(raw []byte) (adapter.Charge, error) {
 	d, err := decodeStored(raw)
 	if err != nil {
 		return adapter.Charge{}, err
@@ -161,6 +166,8 @@ func (*manager) ParseUsage(raw []byte) (adapter.Charge, error) {
 	}
 	return adapter.Charge{
 		Ref: adapter.ChargeRef(request.String()), Key: adapter.KeyRef(d.APIKeyHash), OccurredAt: at.UTC(),
+		// CPA does not charge a call from a wallet; zero is the recorded cash amount, not a price schedule. The model's
+		// cost plan stays unknown until a person confirms a base (see Offer).
 		Amount: "0", Usage: usage, Reported: reported, Funding: adapter.FundingWallet, Model: model,
 	}, nil
 }
@@ -202,16 +209,23 @@ func decodeBreakdown(raw jsonx.Raw) (tokenBreakdown, error) {
 
 func chargeUsage(b tokenBreakdown) (catalog.Usage, catalog.ItemSet, error) {
 	counts := map[catalog.Item]int64{
-		catalog.ItemInput:      b.Input.UncachedTokens,
-		catalog.ItemCacheRead:  b.Input.CacheReadTokens,
-		catalog.ItemCacheWrite: b.Input.CacheWriteTokens,
-		catalog.ItemOutput:     b.Output.NonReasoningTokens,
-		catalog.ItemReasoning:  b.Output.ReasoningTokens,
+		catalog.ItemInput:     b.Input.UncachedTokens,
+		catalog.ItemCacheRead: b.Input.CacheReadTokens,
+		catalog.ItemOutput:    b.Output.NonReasoningTokens,
+		catalog.ItemReasoning: b.Output.ReasoningTokens,
 	}
 	var reported catalog.ItemSet
 	var unknown []catalog.UnknownUsage
+	// CPA v2 combines 5-minute and 1-hour cache writes in cache_write_tokens. Without a duration split, pricing the
+	// count as either item would invent a quantity; keep it as unknown and out of Reported so a correction cannot
+	// reprice an estimated cache write at the wrong duration.
+	if b.Input.CacheWriteTokens > 0 {
+		unknown = append(unknown, catalog.UnknownUsage{
+			Field: "cpa.token_breakdown.input.cache_write_tokens", Value: strconv.FormatInt(b.Input.CacheWriteTokens, 10),
+		})
+	}
 	if b.Quality == "complete" && b.UnclassifiedTokens == 0 {
-		for _, item := range []catalog.Item{catalog.ItemInput, catalog.ItemCacheRead, catalog.ItemCacheWrite, catalog.ItemOutput, catalog.ItemReasoning} {
+		for _, item := range []catalog.Item{catalog.ItemInput, catalog.ItemCacheRead, catalog.ItemOutput, catalog.ItemReasoning} {
 			reported.Add(item)
 		}
 	} else {
