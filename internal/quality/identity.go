@@ -28,79 +28,39 @@ func authorVerdict(answer string, claimed Claimed) identityVerdict {
 	return identityUnknown
 }
 
-// lineModelVerdict looks for model names in a line-based answer. It scans for a family word and takes the version and
-// variant words that follow it, so "I am gpt-4o, not gpt-4o-mini" is not read as one long name. A line that names both
-// the claimed model and another variant is ambiguous and says nothing.
-func lineModelVerdict(reply, claim string) identityVerdict {
-	var matched, contradicted bool
-	for line := range strings.SplitSeq(reply, "\n") {
-		switch modelVerdictInLine(line, claim) {
-		case identityMatched:
-			matched = true
-		case identityContradicted:
-			contradicted = true
-		case identityUnknown:
-		}
+// modelVerdictAny compares an answer with every effective catalog name. A match wins only when no catalog name
+// contradicts, and contradictory names are conclusive only when every non-empty claim contradicts. Conflicting or
+// unfamiliar names therefore say nothing rather than turn a genuine answer into a fake.
+func modelVerdictAny(answer string, claims ...string) identityVerdict {
+	if answer == "" {
+		return identityUnknown
 	}
-	if !matched && !contradicted {
-		// A custom upstream name need not contain a family word; an answer line that names it exactly still counts.
-		for line := range strings.SplitSeq(reply, "\n") {
-			switch modelVerdict(line, claim) {
-			case identityMatched:
-				matched = true
-			case identityContradicted:
-				contradicted = true
-			case identityUnknown:
-			}
-		}
-	}
-	return combineVerdicts(matched, contradicted)
-}
-
-// modelVerdictInLine reads the model names that follow a family or provider word on one line.
-func modelVerdictInLine(line, claim string) identityVerdict {
-	fields := modelFields(line)
-	var matched, contradicted bool
-	for i := range fields {
-		if !modelFamily[fields[i]] && !providerPrefix[fields[i]] {
+	var matched, contradicted, unknown bool
+	for _, claim := range claims {
+		if claim == "" {
 			continue
 		}
-		switch modelVerdict(modelCandidate(fields, i), claim) {
+		switch modelVerdict(answer, claim) {
 		case identityMatched:
 			matched = true
 		case identityContradicted:
 			contradicted = true
 		case identityUnknown:
+			unknown = true
 		}
 	}
-	return combineVerdicts(matched, contradicted)
-}
-
-// modelCandidate joins a family word with up to five version or variant words after it.
-func modelCandidate(fields []string, at int) string {
-	end := at + 1
-	for end < len(fields) && end < at+6 && modelPart(fields[end]) {
-		end++
-	}
-	return strings.Join(fields[at:end], " ")
-}
-
-// combineVerdicts turns the names found in one line into one verdict; two different names are ambiguous.
-func combineVerdicts(matched, contradicted bool) identityVerdict {
 	switch {
-	case matched && contradicted:
-		return identityUnknown
-	case matched:
+	case matched && !contradicted:
 		return identityMatched
-	case contradicted:
+	case contradicted && !matched && !unknown:
 		return identityContradicted
 	}
 	return identityUnknown
 }
 
-// modelVerdict compares the model an answer names with the claimed upstream name. Equal keys (a date suffix is not a
-// different model) match. A different size or variant of the same line, or a smaller variant when the claim names none,
-// contradicts. Anything else is unknown: an alias we cannot resolve must not be asserted as a fake.
+// modelVerdict compares the model an answer names with a catalog model name. Equal keys (a date suffix or a recognized
+// release number is not a different model) match. A different size or variant contradicts only when both names start
+// with the same recognized family; an unknown alias or a different line says nothing.
 func modelVerdict(answer, claim string) identityVerdict {
 	if answer == "" || claim == "" {
 		return identityUnknown
@@ -112,6 +72,9 @@ func modelVerdict(answer, claim string) identityVerdict {
 	if got.key == want.key {
 		return identityMatched
 	}
+	if !got.sharesFamily(want) {
+		return identityUnknown
+	}
 	if differentVariant(got, want) {
 		return identityContradicted
 	}
@@ -119,10 +82,17 @@ func modelVerdict(answer, claim string) identityVerdict {
 }
 
 // identity is a model name reduced to the part that identifies the model line and its variant: provider prefixes,
-// dates and explanatory words are gone; size words and version numbers remain.
+// dates and recognized release numbers are gone; size words, version numbers, and the leading family word remain.
 type identity struct {
 	key   string
 	sizes map[string]struct{}
+	line  string
+}
+
+// sharesFamily reports whether both names start with the same recognized model family. Without one, two names are not
+// comparable: a suffix such as "mini" on an unknown alias is not evidence of a cheaper model of the claimed line.
+func (id identity) sharesFamily(other identity) bool {
+	return id.line != "" && id.line == other.line
 }
 
 // modelDate removes the date forms model names use: 2024-08-06, 20240806, 2024. A model line's date is a snapshot, not
@@ -132,23 +102,34 @@ var modelDate = regexp.MustCompile(`\b(19|20)\d{2}([-_.]?(0[1-9]|1[0-2])[-_.]?(0
 // modelRelease removes a preview or release suffix and a month-year build: preview-06-05, 08-2024.
 var modelRelease = regexp.MustCompile(`(?i)(preview|exp|experimental|rc|snapshot)[-_.]?\d{1,2}[-_.]?\d{1,2}|\b\d{1,2}[-_.](19|20)\d{2}\b`)
 
-// identityOf normalizes a model name. It strips a provider prefix, a @date or :variant suffix, dates, and words that
-// describe rather than name the model, then joins the remaining runs. The size words are kept separately so two lines
-// of the same author can be told apart.
+// identityOf normalizes a model name. It strips a provider prefix, a @date or :variant suffix, dates and recognized
+// release numbers, then joins the remaining runs. Size words and the leading family word are kept separately so two
+// lines of the same author can be told apart.
 func identityOf(name string) identity {
-	fields := modelFields(cleanModelName(name))
+	fields := nameRuns(cleanModelName(name))
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
-		if !modelNoise[f] && !dateField(f) {
+		if !dateField(f) {
 			out = append(out, f)
 		}
 	}
 	out = dropProvider(out)
-	return identity{key: strings.Join(out, ""), sizes: modelSizesOf(out)}
+	sizes := map[string]struct{}{}
+	for _, f := range out {
+		if modelSizes[f] || sizeField(f) {
+			sizes[f] = struct{}{}
+		}
+	}
+	line := ""
+	if len(out) > 0 && modelFamily[out[0]] {
+		line = out[0]
+	}
+	return identity{key: strings.Join(out, ""), sizes: sizes, line: line}
 }
 
 // cleanModelName lower-cases a name and removes a relay prefix, a @date or :variant suffix, a plus spelling and the
-// date and release forms model names carry. The words that remain are split by modelFields.
+// date and release forms model names carry. It does not drop other suffixes: an unrecognized one must leave the name
+// incomparable rather than make it equal to the base model.
 func cleanModelName(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	if i := strings.LastIndexByte(s, '/'); i >= 0 {
@@ -173,50 +154,30 @@ func dropProvider(fields []string) []string {
 	return fields
 }
 
-// modelSizesOf collects the words that distinguish variants of one model line.
-func modelSizesOf(fields []string) map[string]struct{} {
-	sizes := map[string]struct{}{}
-	for _, f := range fields {
-		if modelSizes[f] || sizeField(f) {
-			sizes[f] = struct{}{}
-		}
-	}
-	return sizes
-}
-
-// modelFields splits a name into lower-cased runs of letters and digits.
-func modelFields(s string) []string {
-	var fields []string
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-			continue
-		}
-		if b.Len() > 0 {
-			fields = append(fields, b.String())
-			b.Reset()
-		}
-	}
-	if b.Len() > 0 {
-		fields = append(fields, b.String())
-	}
-	return fields
-}
-
-// modelPart says a field can be part of a model name after its family word: a version or size ("4o", "70b", "3",
-// "v3", "r1", "mini").
-func modelPart(f string) bool {
-	if f == "" {
+// dateField says a run is a date or build number its separators did not reveal: 0613, 0324, 002, 20241022. A
+// three-digit build must start with zero; four digits must be a valid month and day. Anything else is an unrecognized
+// suffix and stays in the name, so it cannot pass for the base model by accident.
+func dateField(f string) bool {
+	if !allDigits(f) {
 		return false
 	}
-	if modelSizes[f] || sizeField(f) {
+	switch len(f) {
+	case 3:
+		return f[0] == '0'
+	case 4:
+		month := int(f[0]-'0')*10 + int(f[1]-'0')
+		day := int(f[2]-'0')*10 + int(f[3]-'0')
+		return month >= 1 && month <= 12 && day >= 1 && day <= 31
+	case 8:
 		return true
+	default:
+		return false
 	}
-	if '0' <= f[0] && f[0] <= '9' {
-		return true
-	}
-	return len(f) >= 2 && 'a' <= f[0] && f[0] <= 'z' && allDigits(f[1:])
+}
+
+// sizeField reports a parameter-count run such as 7b, 70b or 405b.
+func sizeField(f string) bool {
+	return len(f) >= 2 && f[len(f)-1] == 'b' && allDigits(f[:len(f)-1])
 }
 
 // allDigits reports whether s is one or more decimal digits.
@@ -227,17 +188,6 @@ func allDigits(s string) bool {
 		}
 	}
 	return s != ""
-}
-
-// dateField says a run is a release or build number its separators did not reveal: 0613, 0324, 002, 20241022. Runs
-// of one or two digits are kept: they are version parts (gpt-4.1, claude-3-5) rather than dates.
-func dateField(f string) bool {
-	return len(f) >= 3 && len(f) <= 8 && allDigits(f)
-}
-
-// sizeField reports a parameter-count run such as 7b, 70b or 405b.
-func sizeField(f string) bool {
-	return len(f) >= 2 && f[len(f)-1] == 'b' && allDigits(f[:len(f)-1])
 }
 
 // differentVariant says the answer names a different size or variant of the claimed line. A claim with no size word
@@ -277,19 +227,6 @@ func sameSizes(a, b map[string]struct{}) bool {
 	return true
 }
 
-// modelNoise are words that describe a model rather than name it. "chat" is dropped so deepseek-chat and DeepSeek
-// name the same line; "instruct" is kept so an instruct model and its base do not pass for each other. A dated
-// snapshot is handled by modelDate.
-var modelNoise = map[string]bool{
-	"the": true, "a": true, "an": true, "model": true, "version": true, "is": true, "i": true, "am": true,
-	"as": true, "serving": true, "powered": true, "by": true, "made": true, "created": true, "assistant": true,
-	"language": true, "chat": true, "api": true, "exact": true, "name": true, "and": true,
-	"of": true, "my": true, "this": true, "that": true, "which": true, "it": true, "you": true, "are": true,
-	"answering": true, "currently": true, "running": true, "based": true, "on": true, "official": true,
-	"identifier": true, "id": true, "family": true, "series": true, "preview": true, "latest": true,
-	"stable": true, "experimental": true, "beta": true,
-}
-
 // providerPrefix are organization words a model name may carry before its family.
 var providerPrefix = map[string]bool{
 	"openai": true, "anthropic": true, "google": true, "meta": true, "xai": true, "alibaba": true,
@@ -297,7 +234,7 @@ var providerPrefix = map[string]bool{
 	"mistralai": true, "moonshot": true, "zhipu": true, "baidu": true, "bytedance": true, "tencent": true,
 }
 
-// modelFamily are the family words a model name starts with, in the catalog and in the wild.
+// modelFamily are the family words a model name may carry.
 var modelFamily = map[string]bool{
 	"gpt": true, "chatgpt": true, "o1": true, "o3": true, "o4": true, "claude": true, "gemini": true,
 	"gemma": true, "llama": true, "qwen": true, "deepseek": true, "mistral": true, "mixtral": true,
@@ -358,17 +295,6 @@ func containsAnyName(s string, names []string) bool {
 		}
 	}
 	return false
-}
-
-// compact keeps only the lower-cased letters and digits of a name.
-func compact(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }
 
 // nameRuns splits s into its lower-cased runs of letters and digits.

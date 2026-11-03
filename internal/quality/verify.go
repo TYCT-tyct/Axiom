@@ -26,10 +26,19 @@ const (
 )
 
 // Claimed is what the catalog says an endpoint serves: the author's display name, which a verification answer must
-// carry, and every other author's display name, which instead contradicts the claim.
+// carry, every other author's display name, which instead contradicts the claim, the catalog model's stable identity,
+// and the vendor-native effective name when the catalog has one. The upstream name can be a supplier alias (gpt-4
+// mapping to gpt-4o), so the model comparison uses these catalog values, not the name sent upstream.
 type Claimed struct {
 	Author string
 	Others []string
+	Model  string // the catalog slug, a stable identity
+	Name   string // the vendor-native name the model should report, when known
+}
+
+// comparable reports whether an answer can be checked: the author and at least one catalog model name are known.
+func (c Claimed) comparable() bool {
+	return c.Author != "" && (c.Model != "" || c.Name != "")
 }
 
 // verification is an endpoint's last conclusive check and its schedule. passed and checked move only on a conclusive
@@ -105,9 +114,9 @@ func (o verifyOutcome) String() string {
 	return "unknown"
 }
 
-// challenge is one verification question: the random values to compute, the claimed model to compare with, and the
-// claim's author. model is the upstream name the endpoint claims; the prompt deliberately does not contain it, so an
-// answer that copies the claim instead of knowing it is what the check detects.
+// challenge is one verification question: the random values to compute, the catalog model to compare with, and the
+// claim's author. The prompt deliberately does not contain the model name, so an answer that copies the claim instead
+// of knowing it is what the check detects.
 type challenge struct {
 	nonce   string
 	a, b    int
@@ -118,12 +127,18 @@ type challenge struct {
 	reverse string
 	check   int
 	claimed Claimed
-	model   string
+	model   string // the catalog identity, also the comparison target when Name is empty
+	name    string // the vendor-native effective name, when the catalog has one
 }
 
 // newChallenge makes a question from the loop's randomness, which tests control.
-func newChallenge(rand func() float64, claimed Claimed, model string) challenge {
+func newChallenge(rand func() float64, claimed Claimed) challenge {
 	pick := func(n int) int { return min(int(rand()*float64(n)), n-1) }
+	model := strings.TrimSpace(claimed.Model)
+	name := strings.TrimSpace(claimed.Name)
+	if model == "" {
+		model = name
+	}
 	c := challenge{
 		nonce:   strconv.FormatUint(uint64(rand()*(1<<53)), 16) + strconv.FormatUint(uint64(rand()*(1<<53)), 16),
 		a:       pick(64),
@@ -131,7 +146,8 @@ func newChallenge(rand func() float64, claimed Claimed, model string) challenge 
 		factorX: 1000 + pick(9000),
 		factorY: 100 + pick(900),
 		claimed: claimed,
-		model:   strings.TrimSpace(model),
+		model:   model,
+		name:    name,
 	}
 	c.product = c.factorX * c.factorY
 	const alphabet = "abcdefghjkmnpqrstuvwxyz23456789"
@@ -169,12 +185,13 @@ func judgeVerification(result suppliers.TestResult, c challenge) verifyOutcome {
 	if result.Outcome() != suppliers.TestPassed || result.Reply == "" {
 		return verifyUnknown
 	}
-	if object, ok := firstObject(result.Reply); ok {
-		if _, isAnswer := object["nonce"]; isAnswer {
-			return judgeObject(object, c)
-		}
+	object, ok := firstObject(result.Reply)
+	if !ok || object["nonce"] == nil {
+		// The question asks for one JSON object. Prose, line lists and partial objects say nothing conclusive: matching
+		// fragments would let a wrong product or a longer reversed string pass.
+		return verifyUnknown
 	}
-	return judgeLines(result.Reply, c)
+	return judgeObject(object, c)
 }
 
 // judgeObject reads the JSON answer the prompt asks for. A missing or mistyped field is unknown, not a wrong answer:
@@ -198,7 +215,7 @@ func objectAuthor(object map[string]any, c challenge) identityVerdict {
 // objectModel is the model field's verdict.
 func objectModel(object map[string]any, c challenge) identityVerdict {
 	model, _ := object["model"].(string)
-	return modelVerdict(model, c.model)
+	return modelVerdictAny(model, c.model, c.name)
 }
 
 // objectAnswers reports the known answers and the claimed identity all at once.
@@ -220,27 +237,6 @@ func objectAnswers(object map[string]any, c challenge) bool {
 	}, false)
 }
 
-// judgeLines reads an answer that did not parse as one JSON object. Models sometimes wrap the object in prose or
-// answer in lines; the same known answers still count, and a conclusive author or model mismatch still contradicts.
-func judgeLines(reply string, c challenge) verifyOutcome {
-	lower := strings.ToLower(reply)
-	nonce := strings.Contains(lower, c.nonce)
-	sum := answerSum(lower, c.nonce, c.a+c.b)
-	wrote := authorVerdict(lower, c.claimed)
-	model := lineModelVerdict(lower, c.model)
-	product := containsWholeNumber(lower, c.product)
-	reverseAnswer := strings.Contains(compact(lower), compact(c.reverse))
-	check := lineCheck(lower, c.check)
-	switch {
-	case wrote == identityContradicted || model == identityContradicted:
-		return verifyContradicted
-	case nonce && sum && wrote == identityMatched && model == identityMatched &&
-		product && reverseAnswer && check:
-		return verifyPassed
-	}
-	return verifyUnknown
-}
-
 // checkAnswer reads the nested check object: a true ok and the expected character count.
 func checkAnswer(check map[string]any) (ok bool, n int, nOK bool) {
 	if check == nil {
@@ -249,20 +245,6 @@ func checkAnswer(check map[string]any) (ok bool, n int, nOK bool) {
 	ok, _ = check["ok"].(bool)
 	n, nOK = objectInt(check["n"])
 	return ok, n, nOK
-}
-
-// lineCheck finds the first check object in an answer that is not one JSON document.
-func lineCheck(reply string, want int) bool {
-	object, ok := firstObject(reply)
-	if !ok {
-		return false
-	}
-	check, _ := object["check"].(map[string]any)
-	if check == nil {
-		check = object
-	}
-	ok, n, nOK := checkAnswer(check)
-	return ok && nOK && n == want
 }
 
 // objectInt reads an integer from a decoded JSON value. A string is accepted too: a model that quotes a number has
@@ -339,103 +321,6 @@ func reverse(s string) string {
 		b[i], b[j] = b[j], b[i]
 	}
 	return string(b)
-}
-
-// containsWholeNumber reports whether s contains want as a decimal number, with or without grouping punctuation.
-func containsWholeNumber(s string, want int) bool {
-	if strings.Contains(compact(s), strconv.Itoa(want)) {
-		return true
-	}
-	for i := 0; i < len(s); {
-		if s[i] < '0' || s[i] > '9' {
-			i++
-			continue
-		}
-		j := i
-		for j < len(s) && '0' <= s[j] && s[j] <= '9' {
-			j++
-		}
-		if n, err := strconv.Atoi(s[i:j]); err == nil && n == want {
-			return true
-		}
-		i = j
-	}
-	return false
-}
-
-// answerSum reads the answer to the sum: the line after the nonce, with a list marker removed, and only if that line
-// holds exactly one whole number. A line number is thereby not the answer ("2. 99" answers 99, not 2), and echoing the
-// expression ("1 + 1") is no answer for either of its numbers.
-func answerSum(reply, nonce string, want int) bool {
-	lines := strings.Split(reply, "\n")
-	at := slices.IndexFunc(lines, func(line string) bool { return strings.Contains(line, nonce) })
-	if at < 0 {
-		return false
-	}
-	// The sum may share the nonce's line; what follows the nonce is then the answer.
-	if n, ok := answerNumber(strings.Replace(numbered(lines[at]), nonce, "", 1)); ok && n == want {
-		return true
-	}
-	for _, line := range lines[at+1:] {
-		s := strings.TrimSpace(line)
-		if s == "" {
-			continue
-		}
-		n, ok := answerNumber(numbered(s))
-		return ok && n == want
-	}
-	return false
-}
-
-// numbered removes a leading list marker ("2. ", "2) ") from an answer line, keeping "2." when it is the answer
-// itself. Two digits are enough: an answer has three lines, and a longer run is a number, not a marker.
-func numbered(s string) string {
-	s = strings.TrimSpace(s)
-	i := 0
-	for i < len(s) && i < 2 && '0' <= s[i] && s[i] <= '9' {
-		i++
-	}
-	if i == 0 || i >= len(s) || !strings.ContainsRune(".)]:-", rune(s[i])) {
-		return s
-	}
-	if rest := strings.TrimSpace(s[i+1:]); rest != "" {
-		return rest
-	}
-	return s
-}
-
-// answerNumber reads a line's answer: the part after its last "=" when it writes the equation out ("1 + 1 = 2"),
-// otherwise the line itself, which must hold exactly one whole number.
-func answerNumber(s string) (int, bool) {
-	if i := strings.LastIndexByte(s, '='); i >= 0 {
-		s = s[i+1:]
-	}
-	return singleNumber(s)
-}
-
-// singleNumber returns s's only whole decimal number, and whether it has exactly one.
-func singleNumber(s string) (int, bool) {
-	answer, found := 0, false
-	for i := 0; i < len(s); {
-		if s[i] < '0' || s[i] > '9' {
-			i++
-			continue
-		}
-		j := i
-		for j < len(s) && '0' <= s[j] && s[j] <= '9' {
-			j++
-		}
-		if j-i > 9 {
-			return 0, false
-		}
-		v, err := strconv.Atoi(s[i:j])
-		if err != nil || found {
-			return 0, false
-		}
-		answer, found = v, true
-		i = j
-	}
-	return answer, found
 }
 
 // backoff is retry doubled failures-1 times, capped at every.

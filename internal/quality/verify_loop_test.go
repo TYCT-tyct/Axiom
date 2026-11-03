@@ -1,7 +1,6 @@
 package quality
 
 import (
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +12,7 @@ import (
 )
 
 // stated is the claim verification tests check answers against: the endpoint says it serves Anthropic's model.
-var stated = Claimed{Author: "anthropic", Others: []string{"openai", "google"}}
+var stated = Claimed{Author: "anthropic", Others: []string{"openai", "google"}, Model: testModel}
 
 func verificationWorld(t *testing.T) (*Monitor, *Loop, *probeFixture, *time.Time, uuid.UUID) {
 	t.Helper()
@@ -31,7 +30,7 @@ func verificationAnswer(c challenge, author string) string {
 }
 
 func verificationAnswerFor(c challenge, model, author string) string {
-	return c.nonce + "\n" + strconv.Itoa(c.a+c.b) + "\n" + answerTail(c, model, author)
+	return fullAnswer(c, model, author)
 }
 
 // collectVerification waits for the check the last Tick started and applies its result.
@@ -86,7 +85,7 @@ func TestVerificationPassesAndFailsClosed(t *testing.T) {
 
 func verificationPassSetsVerified(t *testing.T) {
 	m, l, f, now, id := verificationWorld(t)
-	c := newChallenge(func() float64 { return .5 }, stated, testModel)
+	c := newChallenge(func() float64 { return .5 }, stated)
 	startVerification(t, l, f, verificationAnswer(c, "Anthropic"))
 	collectVerification(t, l, f)
 	got := measured(m, id, *now)
@@ -114,9 +113,24 @@ func verificationPassSetsVerified(t *testing.T) {
 	}
 }
 
+// TestVerificationComparesTheCatalogModel: a supplier alias such as gpt-4 may map to catalog gpt-4o. The model must be
+// checked against the catalog identity, not the upstream string, or a genuine GPT-4o answer would never pass.
+func TestVerificationComparesTheCatalogModel(t *testing.T) {
+	m, l, f, now, id := verificationWorld(t)
+	claimed := Claimed{Author: "openai", Others: []string{"anthropic", "google"}, Model: "openai/gpt-4o"}
+	l.identity = func(catalog.ModelID) (Claimed, bool) { return claimed, true }
+	setVerificationUpstream(f, "gpt-4")
+	c := newChallenge(func() float64 { return .5 }, claimed)
+	startVerification(t, l, f, fullAnswer(c, "GPT-4o", "OpenAI"))
+	collectVerification(t, l, f)
+	if !measured(m, id, *now).Verified {
+		t.Fatal("a genuinely mapped GPT-4o endpoint did not verify against its catalog model")
+	}
+}
+
 func verificationContradictionFailsClosed(t *testing.T) {
 	m, l, f, now, id := verificationWorld(t)
-	c := newChallenge(func() float64 { return .5 }, stated, testModel)
+	c := newChallenge(func() float64 { return .5 }, stated)
 	passVerification(t, l, f, c)
 	*now = now.Add(l.currentSettings().VerifyEvery)
 	contradictVerification(t, l, f, c)
@@ -140,7 +154,7 @@ func verificationContradictionFailsClosed(t *testing.T) {
 // claims a cheaper model of the same author is a contradiction, not a pass, even when its author is right.
 func TestVerificationRejectsACheaperModelOfTheSameVendor(t *testing.T) {
 	m, l, f, now, id := verificationWorld(t)
-	c := newChallenge(func() float64 { return .5 }, stated, testModel)
+	c := newChallenge(func() float64 { return .5 }, stated)
 	passVerification(t, l, f, c)
 	*now = now.Add(l.currentSettings().VerifyEvery)
 	startVerification(t, l, f, verificationAnswerFor(c, "claude-3-5-haiku-20241022", "Anthropic"))
@@ -156,7 +170,7 @@ func TestVerificationRejectsACheaperModelOfTheSameVendor(t *testing.T) {
 
 func verificationFakeThenRestored(t *testing.T) {
 	m, l, f, now, id := verificationWorld(t)
-	c := newChallenge(func() float64 { return .5 }, stated, testModel)
+	c := newChallenge(func() float64 { return .5 }, stated)
 	passVerification(t, l, f, c)
 	for i, retry := range []time.Duration{l.currentSettings().VerifyEvery, l.currentSettings().VerifyRetry, 2 * l.currentSettings().VerifyRetry} {
 		*now = now.Add(retry)
@@ -186,7 +200,7 @@ func verificationFakeThenRestored(t *testing.T) {
 // verifies nor un-verifies, and is retried sooner than a full interval.
 func TestInconclusiveVerificationKeepsThePass(t *testing.T) {
 	m, l, f, now, id := verificationWorld(t)
-	c := newChallenge(func() float64 { return .5 }, stated, testModel)
+	c := newChallenge(func() float64 { return .5 }, stated)
 	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
 	tick(t, l)
 	collectVerification(t, l, f)
@@ -241,7 +255,7 @@ func setVerificationUpstream(f *probeFixture, upstream string) claim {
 // clears the pass at once, so the new upstream is not verified until it passes a check of its own.
 func TestVerificationFollowsTheUpstreamName(t *testing.T) {
 	m, l, f, now, id := verificationWorld(t)
-	c := newChallenge(func() float64 { return .5 }, stated, testModel)
+	c := newChallenge(func() float64 { return .5 }, stated)
 	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
 	tick(t, l)
 	collectVerification(t, l, f)
@@ -249,7 +263,7 @@ func TestVerificationFollowsTheUpstreamName(t *testing.T) {
 		t.Fatal("the first check did not verify the endpoint")
 	}
 
-	want := setVerificationUpstream(f, "claude-opus-4-7")
+	want := setVerificationUpstream(f, "claude-3-5-sonnet-20240620")
 	*now = now.Add(time.Second)
 	tick(t, l)
 	if got := measured(m, id, *now); got.Verified || !got.VerifiedAt.IsZero() {
@@ -261,7 +275,7 @@ func TestVerificationFollowsTheUpstreamName(t *testing.T) {
 	if l.active != 1 {
 		t.Fatal("the renamed upstream was not checked at once")
 	}
-	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(newChallenge(func() float64 { return .5 }, stated, "claude-opus-4-7"), "Anthropic")}
+	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(newChallenge(func() float64 { return .5 }, stated), "Anthropic")}
 	collectVerification(t, l, f)
 	if !measured(m, id, *now).Verified {
 		t.Fatal("the new upstream did not verify")
@@ -272,11 +286,11 @@ func TestVerificationFollowsTheUpstreamName(t *testing.T) {
 // configuration that no longer serves traffic, so its pass is discarded and the new claim is checked instead.
 func TestVerificationDropsACheckOfAnotherClaim(t *testing.T) {
 	m, l, f, now, id := verificationWorld(t)
-	c := newChallenge(func() float64 { return .5 }, stated, testModel)
+	c := newChallenge(func() float64 { return .5 }, stated)
 	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(c, "Anthropic")}
 	tick(t, l) // the check is in flight against the old claim
 
-	want := setVerificationUpstream(f, "claude-opus-4-7")
+	want := setVerificationUpstream(f, "claude-3-5-sonnet-20240620")
 	collectVerification(t, l, f) // its answer arrives after the change
 	if got := measured(m, id, *now); got.Verified {
 		t.Fatalf("an answer about another configuration verified the endpoint: %+v", got)
@@ -290,7 +304,7 @@ func TestVerificationDropsACheckOfAnotherClaim(t *testing.T) {
 	if l.active != 1 {
 		t.Fatal("the changed claim was not checked again")
 	}
-	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(newChallenge(func() float64 { return .5 }, stated, "claude-opus-4-7"), "Anthropic")}
+	f.result = suppliers.TestResult{Streamed: true, Reply: verificationAnswer(newChallenge(func() float64 { return .5 }, stated), "Anthropic")}
 	collectVerification(t, l, f)
 	if !measured(m, id, *now).Verified {
 		t.Fatal("the check of the new claim did not verify")
@@ -303,7 +317,7 @@ func TestVerificationAlertsAFakeOnce(t *testing.T) {
 	m, l, f, now, id := verificationWorld(t)
 	rec := &signalRecorder{}
 	l.alerts = rec
-	c := newChallenge(func() float64 { return .5 }, stated, testModel)
+	c := newChallenge(func() float64 { return .5 }, stated)
 	passVerification(t, l, f, c)
 
 	for i := range verifyFailures + 1 {

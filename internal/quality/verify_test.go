@@ -3,7 +3,6 @@ package quality
 import (
 	"os"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +10,7 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// testModel is the model name the tests claim unless a sample says otherwise.
+// testModel is the catalog model the tests claim unless a sample says otherwise.
 const testModel = "claude-3-5-sonnet-20241022"
 
 // testChallenge is a fixed question whose answers the recorded samples below use.
@@ -20,45 +19,66 @@ func testChallenge() challenge {
 		nonce: "a1b2c3d4e5f60718", a: 17, b: 25,
 		factorX: 4873, factorY: 926, product: 4512398,
 		origin: "k3y9p2", reverse: "2p9y3k", check: 6,
-		claimed: Claimed{Author: "Anthropic", Others: []string{"OpenAI", "Google"}},
+		claimed: Claimed{Author: "Anthropic", Others: []string{"OpenAI", "Google"}, Model: testModel},
 		model:   testModel,
 	}
 }
 
-// fullAnswer is a line-based answer with every known value, for tests about one field.
-func fullAnswer(c challenge, model, author string) string {
-	return c.nonce + "\n" + strconv.Itoa(c.a+c.b) + "\n" + answerTail(c, model, author)
+// answerObject is a complete JSON answer.
+func answerObject(c challenge, model, author string) map[string]any {
+	return map[string]any{
+		"nonce": c.nonce, "sum": c.a + c.b, "model": model, "author": author,
+		"product": c.product, "reverse": c.reverse,
+		"check": map[string]any{"ok": true, "n": c.check},
+	}
 }
 
-// answerTail is what follows the sum: model, author, product, reverse and the check object.
-func answerTail(c challenge, model, author string) string {
-	return model + "\n" + author + "\n" + strconv.Itoa(c.product) + "\n" + c.reverse + "\n" +
-		`{"ok":true,"n":` + strconv.Itoa(c.check) + `}`
+// answerJSON is answerObject with one field changed, for tests about that field.
+func answerJSON(c challenge, model, author string, change func(map[string]any)) string {
+	object := answerObject(c, model, author)
+	if change != nil {
+		change(object)
+	}
+	raw, err := jsonx.MarshalCanonical(object)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+// fullAnswer is a complete JSON answer for tests about one field.
+func fullAnswer(c challenge, model, author string) string {
+	return answerJSON(c, model, author, nil)
 }
 
 func TestJudgeVerification(t *testing.T) {
 	t.Parallel()
 	c := testChallenge()
-	sum := strconv.Itoa(c.a + c.b)
 	for name, tc := range map[string]struct {
 		reply string
 		want  verifyOutcome
 	}{
-		"all answers":           {fullAnswer(c, testModel, "Anthropic"), verifyPassed},
-		"numbered and wrapped":  {"1. `" + c.nonce + "`\n2. " + sum + "\n3. " + testModel + "\n4. Anthropic.\n5. " + strconv.Itoa(c.product) + "\n6. " + c.reverse + "\n7. {\"ok\":true,\"n\":6}", verifyPassed},
-		"the sum in words":      {c.nonce + "\n" + sum + " (three plus four)\n" + answerTail(c, testModel, "Anthropic"), verifyPassed},
-		"the claimed author":    {fullAnswer(c, testModel, "Anthropic, not OpenAI"), verifyPassed},
-		"another author":        {fullAnswer(c, testModel, "OpenAI"), verifyContradicted},
-		"another author alone":  {"google", verifyContradicted},
-		"a wrong sum":           {c.nonce + "\n8\n" + answerTail(c, testModel, "Anthropic"), verifyUnknown},
-		"no nonce":              {sum + "\n" + answerTail(c, testModel, "Anthropic"), verifyUnknown},
-		"no author":             {c.nonce + "\n" + sum + "\n" + testModel + "\n" + strconv.Itoa(c.product) + "\n" + c.reverse + "\n{\"ok\":true,\"n\":6}", verifyUnknown},
-		"a refusal":             {"I cannot answer that.", verifyUnknown},
-		"the nonce's own digit": {c.nonce + "\n\nAnthropic", verifyUnknown}, // the 7 is inside the nonce, not an answer
-		"a longer word":         {fullAnswer(c, testModel, "anthropicx"), verifyUnknown},
-		"metadata is not Meta":  {fullAnswer(c, testModel, "metadata"), verifyUnknown},
-		"sum inside a number":   {c.nonce + "\n17\n" + answerTail(c, testModel, "Anthropic"), verifyUnknown},
-		"empty":                 {"", verifyUnknown},
+		"all answers":          {fullAnswer(c, testModel, "Anthropic"), verifyPassed},
+		"wrapped in prose":     {"Here is the answer:\n```json\n" + fullAnswer(c, testModel, "Anthropic") + "\n```", verifyPassed},
+		"the claimed author":   {fullAnswer(c, testModel, "Anthropic, not OpenAI"), verifyPassed},
+		"another author":       {fullAnswer(c, testModel, "OpenAI"), verifyContradicted},
+		"a cheaper variant":    {fullAnswer(c, "claude-3-5-haiku", "Anthropic"), verifyContradicted},
+		"an unknown alias":     {fullAnswer(c, "custom-mini-alias", "Anthropic"), verifyUnknown},
+		"an audio variant":     {fullAnswer(c, "claude-3-5-sonnet-audio-preview", "Anthropic"), verifyUnknown},
+		"an instruct variant":  {fullAnswer(c, "claude-3-5-sonnet-instruct", "Anthropic"), verifyUnknown},
+		"a chat variant":       {fullAnswer(c, "claude-3-5-sonnet-chat", "Anthropic"), verifyUnknown},
+		"a wrong sum":          {answerJSON(c, testModel, "Anthropic", func(o map[string]any) { o["sum"] = 8 }), verifyUnknown},
+		"a wrong product":      {answerJSON(c, testModel, "Anthropic", func(o map[string]any) { o["product"] = c.product * 10 }), verifyUnknown},
+		"a longer reverse":     {answerJSON(c, testModel, "Anthropic", func(o map[string]any) { o["reverse"] = c.reverse + "x" }), verifyUnknown},
+		"the original string":  {answerJSON(c, testModel, "Anthropic", func(o map[string]any) { o["reverse"] = c.origin }), verifyUnknown},
+		"a wrong count":        {answerJSON(c, testModel, "Anthropic", func(o map[string]any) { o["check"] = map[string]any{"ok": true, "n": c.check + 1} }), verifyUnknown},
+		"no check":             {answerJSON(c, testModel, "Anthropic", func(o map[string]any) { delete(o, "check") }), verifyUnknown},
+		"a cross-field answer": {answerJSON(c, testModel, "Anthropic", func(o map[string]any) { o["product"] = strconv.Itoa(c.product) + c.reverse }), verifyUnknown},
+		"no nonce":             {answerJSON(c, testModel, "Anthropic", func(o map[string]any) { delete(o, "nonce") }), verifyUnknown},
+		"no author":            {answerJSON(c, testModel, "Anthropic", func(o map[string]any) { delete(o, "author") }), verifyUnknown},
+		"a refusal":            {"I cannot answer that.", verifyUnknown},
+		"a line list":          {c.nonce + "\n42\n" + testModel + "\nAnthropic\n" + strconv.Itoa(c.product) + "\n" + c.reverse + "\n" + `{"ok":true,"n":6}`, verifyUnknown},
+		"empty":                {"", verifyUnknown},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -85,19 +105,34 @@ func TestJudgeVerificationNeedsAPassedGeneration(t *testing.T) {
 	}
 }
 
-// TestJudgeVerificationCustomUpstreamName: the line fallback does not depend on a known model family when the answer
-// names the claimed upstream exactly.
-func TestJudgeVerificationCustomUpstreamName(t *testing.T) {
+// TestJudgeVerificationUsesEffectiveName: the catalog can have a stable slug unlike the name the model reports. The
+// vendor-native effective name is an alternate comparison target, so an opaque catalog slug cannot block a genuine
+// answer.
+func TestJudgeVerificationUsesEffectiveName(t *testing.T) {
+	t.Parallel()
+	c := testChallenge()
+	c.model = "catalog/opaque-id"
+	c.name = "Vendor Model 4o"
+	c.claimed.Model = c.model
+	c.claimed.Name = c.name
+	if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: fullAnswer(c, c.name, "Anthropic")}, c); got != verifyPassed {
+		t.Errorf("a vendor-native effective name judged %s, want passed", got)
+	}
+}
+
+// TestJudgeVerificationCustomCatalogName: equality is enough even when the catalog name has no family word, so a custom
+// model identifier can pass without being recognized by a family heuristic.
+func TestJudgeVerificationCustomCatalogName(t *testing.T) {
 	t.Parallel()
 	c := testChallenge()
 	c.model = "acme-chat-2026-01-01"
 	if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: fullAnswer(c, c.model, "Anthropic")}, c); got != verifyPassed {
-		t.Errorf("a custom upstream name judged %s, want passed", got)
+		t.Errorf("a custom catalog name judged %s, want passed", got)
 	}
 }
 
-// TestModelVerdict: a date snapshot is the same model; another size or tier of the same author is not; an alias that
-// cannot be resolved is unknown rather than a fake.
+// TestModelVerdict: a date snapshot is the same model; another size or tier of a recognized family is not; an alias
+// that cannot be resolved is unknown rather than a fake.
 func TestModelVerdict(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -107,6 +142,7 @@ func TestModelVerdict(t *testing.T) {
 		"the dated snapshot":      {"GPT-4o 2024-08-06", "gpt-4o-2024-08-06", identityMatched},
 		"the compact date":        {"gpt-4o 20240806", "gpt-4o-2024-08-06", identityMatched},
 		"the provider prefix":     {"OpenAI GPT-4o", "openai/gpt-4o", identityMatched},
+		"a mapped catalog name":   {"GPT-4o", "openai/gpt-4o", identityMatched},
 		"a cheaper sibling":       {"gpt-4o-mini-2024-07-18", "gpt-4o-2024-08-06", identityContradicted},
 		"a smaller o-series":      {"o1-mini", "o1", identityContradicted},
 		"a different claude tier": {"Claude 3.5 Haiku", "claude-3-5-sonnet-20241022", identityContradicted},
@@ -119,8 +155,18 @@ func TestModelVerdict(t *testing.T) {
 		"a plus variant":          {"Command R+", "command-r-plus-08-2024", identityMatched},
 		"the same instruct model": {"Llama 3 70B Instruct", "llama-3-70b-instruct", identityMatched},
 		"a missing instruct word": {"Llama 3 70B", "llama-3-70b-instruct", identityUnknown},
+		"an audio variant":        {"gpt-4o-audio-preview", "gpt-4o", identityUnknown},
+		"an instruct variant":     {"Llama 3 70B Instruct", "llama-3-70b", identityUnknown},
+		"a chat variant":          {"llama-2-70b-chat", "llama-2-70b", identityUnknown},
+		"an unknown alias":        {"custom-mini-alias", "gpt-4o", identityUnknown},
+		"an unknown family alias": {"custom-gpt-mini", "gpt-4o", identityUnknown},
+		"an unknown prefix":       {"acme-gpt-4o", "gpt-4o", identityUnknown},
+		"an unknown size alias":   {"custom-70b", "llama-3-70b", identityUnknown},
 		"a shorter alias":         {"DeepSeek-V3", "deepseek-chat", identityUnknown},
 		"a different version":     {"GPT-4", "gpt-4o", identityUnknown},
+		"an unrecognized suffix":  {"gpt-4o-128", "gpt-4o", identityUnknown},
+		"an invalid date suffix":  {"gpt-4o-1280", "gpt-4o", identityUnknown},
+		"a month-day build":       {"gpt-4o-1106", "gpt-4o", identityMatched},
 		"a shorter answer":        {"GPT-4o", "gpt-4o-mini", identityUnknown},
 		"an empty answer":         {"", "gpt-4o", identityUnknown},
 	} {
@@ -128,6 +174,29 @@ func TestModelVerdict(t *testing.T) {
 			t.Parallel()
 			if got := modelVerdict(tc.answer, tc.claim); got != tc.want {
 				t.Errorf("modelVerdict(%q, %q) = %v, want %v", tc.answer, tc.claim, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestModelVerdictAny(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		answer string
+		claims []string
+		want   identityVerdict
+	}{
+		"both catalog names match":          {"GPT-4o", []string{"openai/gpt-4o", "gpt-4o"}, identityMatched},
+		"one effective name matches":        {"Vendor Model 4o", []string{"catalog/opaque-id", "Vendor Model 4o"}, identityMatched},
+		"every name contradicts":            {"gpt-4o-mini", []string{"gpt-4o", "gpt-4o"}, identityContradicted},
+		"one contradicts, one does not":     {"gpt-4o-mini", []string{"gpt-4o", "catalog/opaque-id"}, identityUnknown},
+		"a match with an unknown alternate": {"gpt-4o", []string{"gpt-4o", "gpt-4o-mini"}, identityMatched},
+		"conflicting catalog names":         {"gpt-4o-mini", []string{"gpt-4o-mini", "gpt-4o"}, identityUnknown},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := modelVerdictAny(tc.answer, tc.claims...); got != tc.want {
+				t.Errorf("modelVerdictAny(%q, %v) = %v, want %v", tc.answer, tc.claims, got, tc.want)
 			}
 		})
 	}
@@ -166,7 +235,7 @@ func TestJudgeVerificationRecordedSamples(t *testing.T) {
 			t.Parallel()
 			c := testChallenge()
 			c.model = sample.Model
-			c.claimed = Claimed{Author: sample.Author, Others: sample.Others}
+			c.claimed = Claimed{Author: sample.Author, Others: sample.Others, Model: sample.Model}
 			got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: sample.Reply}, c)
 			if got.String() != sample.Want {
 				t.Errorf("judged %s, want %s", got, sample.Want)
@@ -268,73 +337,27 @@ func TestContainsName(t *testing.T) {
 	}
 }
 
-func TestAnswerSum(t *testing.T) {
-	t.Parallel()
-	const nonce = "ab12cd"
-	for name, tc := range map[string]struct {
-		reply string
-		want  int
-		ok    bool
-	}{
-		"on its own line":          {nonce + "\n7\nAnthropic", 7, true},
-		"after a list number":      {nonce + "\n2. 7\nAnthropic", 7, true},
-		"a numbered wrong answer":  {nonce + "\n2. 99\nAnthropic", 2, false},
-		"the number is the answer": {nonce + "\n2. 2\nAnthropic", 2, true},
-		"an echoed expression":     {nonce + "\n1 + 1\nAnthropic", 2, false},
-		"an equation":              {nonce + "\n1 + 1 = 2\nAnthropic", 2, true},
-		"a lone numbered answer":   {nonce + "\n2.\nAnthropic", 2, true},
-		"a label before it":        {nonce + "\nThe sum is 7.\nAnthropic", 7, true},
-		"on the nonce's line":      {nonce + " 7\nAnthropic", 7, true},
-		"no answer":                {nonce + "\nAnthropic", 7, false},
-		"no nonce line":            {"7", 7, false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if got := answerSum(tc.reply, nonce, tc.want); got != tc.ok {
-				t.Errorf("answerSum(%q, %d) = %v, want %v", tc.reply, tc.want, got, tc.ok)
-			}
-		})
-	}
-}
-
-// TestJudgeVerificationNumbering: the number in front of an answer is a list marker, not the answer, and an echoed
-// expression answers nothing.
-func TestJudgeVerificationNumbering(t *testing.T) {
-	t.Parallel()
-	c := testChallenge()
-	c.nonce, c.a, c.b = "cc11", 1, 1
-	for name, tc := range map[string]struct {
-		reply string
-		want  verifyOutcome
-	}{
-		"the line number is not the sum": {c.nonce + "\n2. 99\n" + answerTail(c, testModel, "Anthropic"), verifyUnknown},
-		"the expression is no answer":    {c.nonce + "\n1 + 1\n" + answerTail(c, testModel, "Anthropic"), verifyUnknown},
-		"the equation answered":          {c.nonce + "\n1 + 1 = 2\n" + answerTail(c, testModel, "Anthropic"), verifyPassed},
-		"the numbered answer":            {c.nonce + "\n2. 2\n" + answerTail(c, testModel, "Anthropic"), verifyPassed},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: tc.reply}, c); got != tc.want {
-				t.Errorf("judged %s, want %s", got, tc.want)
-			}
-		})
-	}
-}
-
 // TestJudgeVerificationWrongProbe: a correct identity with a wrong known answer is inconclusive, not a contradiction:
 // an arithmetic slip must not be reported as a swapped model.
 func TestJudgeVerificationWrongProbe(t *testing.T) {
 	t.Parallel()
 	c := testChallenge()
-	good := fullAnswer(c, testModel, "Anthropic")
-	for name, reply := range map[string]string{
-		"a wrong product": strings.Replace(good, strconv.Itoa(c.product), strconv.Itoa(c.product+1), 1),
-		"the original":    strings.Replace(good, c.reverse, c.origin, 1),
-		"a wrong count":   strings.Replace(good, `"n":`+strconv.Itoa(c.check), `"n":`+strconv.Itoa(c.check+1), 1),
-		"no check":        strings.Replace(good, `{"ok":true,"n":`+strconv.Itoa(c.check)+`}`, "", 1),
+	for name, change := range map[string]func(map[string]any){
+		"a wrong product": func(o map[string]any) { o["product"] = c.product * 10 },
+		"an extra digit":  func(o map[string]any) { o["product"] = strconv.Itoa(c.product) + "0" },
+		"an extra char":   func(o map[string]any) { o["reverse"] = c.reverse + "x" },
+		"the original":    func(o map[string]any) { o["reverse"] = c.origin },
+		"a wrong count":   func(o map[string]any) { o["check"] = map[string]any{"ok": true, "n": c.check + 1} },
+		"no check":        func(o map[string]any) { delete(o, "check") },
+		"a cross-field":   func(o map[string]any) { o["product"] = strconv.Itoa(c.product) + c.reverse },
+		"two wrong fields": func(o map[string]any) {
+			o["product"] = strconv.Itoa(c.product) + "0"
+			o["reverse"] = c.reverse + "x"
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+			reply := answerJSON(c, testModel, "Anthropic", change)
 			if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: reply}, c); got != verifyUnknown {
 				t.Errorf("judged %s, want inconclusive", got)
 			}
