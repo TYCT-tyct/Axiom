@@ -81,7 +81,7 @@ func Register(cfg Config) error {
 	}
 	w := &Worker{cfg: cfg, blocked: map[uuid.UUID]blockedLogin{}}
 	if err := river.AddWorkerSafely(cfg.Queue.Workers(), river.WorkFunc(w.work)); err != nil {
-		return fmt.Errorf("usage: add the drain worker: %w", err)
+		return fmt.Errorf("collector: add the drain worker: %w", err)
 	}
 	cfg.Queue.Every(drainEvery, func() river.JobArgs { return Args{} })
 	return nil
