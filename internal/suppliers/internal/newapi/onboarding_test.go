@@ -112,3 +112,38 @@ func TestCreateKey(t *testing.T) {
 		}
 	})
 }
+
+// TestA5xxOnAKeyReadIsRetryable: a gateway error while searching for a just-created key or reading its text is a
+// temporary failure, not an unrecognised answer that would halt the key task for good.
+func TestA5xxOnAKeyReadIsRetryable(t *testing.T) {
+	t.Parallel()
+	t.Run("search after create", func(t *testing.T) {
+		t.Parallel()
+		f := newFake()
+		f.routes["POST /api/token/"] = answer(200, `{"success":true}`)
+		search := "GET /api/token/search?keyword=axiom-1-2&page_size=100"
+		f.routes[search] = answer(503, `{"success":false}`)
+		m := open(t, f, now)
+		if _, err := m.(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2"); !errors.Is(err, errServer) || errors.Is(err, adapter.ErrUnrecognised) {
+			t.Fatalf("search = %v, want a retryable server error", err)
+		}
+		f.routes[search] = answer(200, `{"success":true,"data":{"items":[{"id":12,"name":"axiom-1-2","group":"g"}]}}`)
+		ref, err := m.(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
+		if err != nil || ref != "12" {
+			t.Fatalf("after recovery CreateKey = %q, %v; want 12", ref, err)
+		}
+	})
+	t.Run("read the text", func(t *testing.T) {
+		t.Parallel()
+		f := newFake()
+		f.routes["POST /api/token/1/key"] = answer(503, `{"success":false}`)
+		m := open(t, f, now)
+		if _, err := m.KeySecret(t.Context(), "1"); !errors.Is(err, errServer) || errors.Is(err, adapter.ErrUnrecognised) {
+			t.Fatalf("KeySecret = %v, want a retryable server error", err)
+		}
+		f.routes["POST /api/token/1/key"] = sample(t, "28-reveal-key")
+		if text, err := m.KeySecret(t.Context(), "1"); err != nil || text.Reveal() == "" {
+			t.Fatalf("after recovery KeySecret = %v, %v; want text", text, err)
+		}
+	})
+}

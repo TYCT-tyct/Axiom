@@ -18,12 +18,20 @@ type keyDTO struct {
 	Reset7d   string     `json:"reset_7d_at"`
 }
 
-func keyIDs(keys []adapter.KeyState) map[number]bool {
+func keyIDs(keys []listedKey) map[number]bool {
 	seen := make(map[number]bool, len(keys))
 	for _, k := range keys {
 		seen[number(k.Ref)] = true
 	}
 	return seen
+}
+
+func keyStates(keys []listedKey) []adapter.KeyState {
+	out := make([]adapter.KeyState, len(keys))
+	for i, k := range keys {
+		out[i] = k.state()
+	}
+	return out
 }
 
 func keyState(k keyDTO) adapter.KeyState {

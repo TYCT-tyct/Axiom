@@ -280,7 +280,7 @@ func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter
 func (m *manager) keyPageStep(ctx context.Context, p *offerProgress) (page adapter.Page[adapter.Group], more bool, err error) {
 	pos := keysProgress{V: keyListingVersion, Page: p.Page, Total: p.Total}
 	for group, id := range p.Keys {
-		pos.Keys = append(pos.Keys, adapter.KeyState{Ref: adapter.KeyRef(id), GroupRef: group, Status: adapter.KeyActive})
+		pos.Keys = append(pos.Keys, listedKey{Ref: adapter.KeyRef(id), GroupRef: group, Status: adapter.KeyActive})
 	}
 	keys, more, err := m.keysPage(ctx, &pos)
 	if err != nil {

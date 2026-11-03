@@ -68,9 +68,6 @@ type Settings struct {
 	// KeyRetry is how long a group waits after its key could not be made or read for a reason the login or the group
 	// has to fix.
 	KeyRetry time.Duration
-	// KeyGrace is how long a key must be missing from complete listings before its credential is erased, so that a
-	// listing that is briefly behind does not delete a key just made.
-	KeyGrace time.Duration
 	// DirectFormats lets the state keep embeddings, rerank and legacy completions. While it is false the state holds
 	// only the formats a
 	// pre-P18 node can name: such a node may load this state for any task and project it, and a name it does not know
@@ -86,7 +83,6 @@ func Defaults() Settings {
 		MaxPages:   50,
 		LowBalance: "5",
 		KeyRetry:   time.Hour,
-		KeyGrace:   15 * time.Minute,
 	}
 }
 
@@ -244,12 +240,9 @@ func fundingName(f adapter.Funding) string {
 }
 
 // keys reads the keys listing. A read is stored with the position it reached, also when the supplier's limits stopped
-// it, so the next round goes on from there; the read that ends the listing holds every key, and what changed since the
-// last complete one is an event.
+// it, so the next round goes on from there; the read that ends the listing holds every key and every name, and what
+// changed since the last complete one is an event.
 func (e *Engine) keys(ctx context.Context, c *Commit) error {
-	// A listing that is resumed lost the names of the pages read before (an older node does not write them), so the
-	// sync waits for the next complete listing to onboard: a name it cannot see is a key it could make twice.
-	resumed := len(c.State.KeysAt) > 0
 	page, err := e.mgr.Keys(ctx, c.State.KeysAt)
 	if err != nil {
 		return err
@@ -269,20 +262,18 @@ func (e *Engine) keys(ctx context.Context, c *Commit) error {
 		}
 		delete(old, k.Ref)
 	}
-	var gone []adapter.KeyRef
 	for _, ref := range slices.Sorted(maps.Keys(old)) {
 		c.Events = append(c.Events, Event{Kind: KeyChanged, Subject: string(ref), Old: statusName(true, old[ref].Status)})
-		gone = append(gone, ref)
 	}
-	var extra []adapter.KeyState
-	if !resumed {
-		extra, err = e.onboard(ctx, c, &keys, gone)
-		if err != nil {
-			return err
-		}
+	// Set the policies before any key write: onboarding reads key texts one by one, and a later read may be stopped by
+	// a bucket. The commit that keeps an earlier write must also carry the complete listing's policies, or the new
+	// credential would keep its default (unrestricted) policy.
+	c.KeyPolicies = &keys
+	extra, err := e.onboard(ctx, c, &keys)
+	if err != nil {
+		return err
 	}
 	slices.SortFunc(keys, func(a, b adapter.KeyState) int { return cmpStr(string(a.Ref), string(b.Ref)) })
-	c.KeyPolicies = &keys
 	state := append(slices.Clone(keys), extra...)
 	slices.SortFunc(state, func(a, b adapter.KeyState) int { return cmpStr(string(a.Ref), string(b.Ref)) })
 	c.State.Keys = state

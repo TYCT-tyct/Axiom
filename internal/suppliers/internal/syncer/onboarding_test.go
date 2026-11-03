@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 	"uuid"
@@ -152,22 +153,58 @@ func TestKeysTaskMakesNothingWithoutAKeyMaker(t *testing.T) {
 	}
 }
 
-func TestKeysTaskOnAResumedListingDoesNotOnboard(t *testing.T) {
+func TestKeysTaskOnboardsOnAResumedCompleteListing(t *testing.T) {
 	m := healthy()
 	m.keys = func(adapter.Listing) (adapter.Page[adapter.KeyState], error) {
 		return adapter.Page[adapter.KeyState]{Done: true}, nil
 	}
+	called := 0
 	m2 := &maker{supplier: m, create: func(_, _ string) (adapter.KeyRef, error) {
-		t.Fatal("made a key from a resumed listing")
-		return "", nil
-	}, secret: func(adapter.KeyRef) (secret.Secret, error) { return secret.Secret{}, nil }}
+		called++
+		return "9", nil
+	}, secret: func(adapter.KeyRef) (secret.Secret, error) { return secret.New("s9"), nil }}
 	st := &keyStore{memStore: newStore(), targets: []KeyTarget{{GroupRef: "1", Name: "axiom-1-2"}}}
 	c := Commit{State: State{Version: 1, KeysAt: adapter.Listing("page")}}
 	if err := keyEngine(m2, st).keys(t.Context(), &c); err != nil {
 		t.Fatal(err)
 	}
-	if st.askedMake != 0 {
-		t.Fatalf("asked for %d groups to make keys for, want none", st.askedMake)
+	if called != 1 || len(c.KeyWrites.Made) != 1 {
+		t.Fatalf("made %d keys, wrote %+v; want one", called, c.KeyWrites.Made)
+	}
+}
+
+// TestKeysTaskKeepsPoliciesWhenALaterKeyReadIsBlocked: the first bound key is read, the second meets a full bucket.
+// The commit still runs (a blocked step keeps its page position), so it must carry the listing policy for the first
+// key; otherwise activating it would leave allowed_models NULL, which routing reads as unrestricted.
+func TestKeysTaskKeepsPoliciesWhenALaterKeyReadIsBlocked(t *testing.T) {
+	m := healthy()
+	m.keys = func(adapter.Listing) (adapter.Page[adapter.KeyState], error) {
+		return adapter.Page[adapter.KeyState]{Done: true, Items: []adapter.KeyState{{
+			Ref: "8", GroupRef: "1", Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{Models: []string{"a"}},
+		}}}, nil
+	}
+	first, second := uuid.NewV7(), uuid.NewV7()
+	m2 := &maker{supplier: m, secret: func(ref adapter.KeyRef) (secret.Secret, error) {
+		if ref == "8" {
+			return secret.New("s8"), nil
+		}
+		return secret.Secret{}, adapter.Blocked{Until: t0.Add(time.Minute)}
+	}}
+	st := &keyStore{memStore: newStore(), bind: []BindTarget{
+		{ID: first, Ref: "8", GroupRef: "1"},
+		{ID: second, Ref: "10", GroupRef: "1"},
+	}}
+	c := Commit{State: State{Version: 1}}
+	err := keyEngine(m2, st).keys(t.Context(), &c)
+	if !errors.Is(err, adapter.ErrBucketsFull) {
+		t.Fatalf("keys = %v, want a blocked read", err)
+	}
+	if len(c.KeyWrites.Bound) != 1 || c.KeyWrites.Bound[0].ID != first {
+		t.Fatalf("bound %+v, want only the first key", c.KeyWrites.Bound)
+	}
+	if c.KeyPolicies == nil || len(*c.KeyPolicies) != 1 || (*c.KeyPolicies)[0].Ref != "8" ||
+		!slices.Equal((*c.KeyPolicies)[0].Policy.Models, []string{"a"}) {
+		t.Fatalf("policies %+v, want the listing's policy for the first key", c.KeyPolicies)
 	}
 }
 

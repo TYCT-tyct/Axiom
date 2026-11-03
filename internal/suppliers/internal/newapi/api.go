@@ -62,6 +62,9 @@ var scopeName = regexp.MustCompile(`^[a-z_]+:[a-z_]+$`)
 // is too narrow, and another token fixes it.
 var errScopeDenied = errors.New("the access token lacks a scope")
 
+// errServer marks a 5xx: the supplier is temporarily unable to answer, so the task backs off instead of halting.
+var errServer = errors.New("new-api: the server failed")
+
 // api sends the management requests of one account.
 type api struct {
 	c      adapter.Client
@@ -83,6 +86,8 @@ func (a *api) do(ctx context.Context, method, path string, buckets []string, out
 	switch {
 	case resp.Status == http.StatusUnauthorized || resp.Status == http.StatusForbidden:
 		return authError(env, parsed)
+	case resp.Status >= http.StatusInternalServerError:
+		return fmt.Errorf("%w: status %d", errServer, resp.Status)
 	case resp.Status != http.StatusOK || !parsed:
 		return fmt.Errorf("%w: status %d", adapter.ErrUnrecognised, resp.Status)
 	case !env.Success:

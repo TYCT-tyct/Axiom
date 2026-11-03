@@ -267,13 +267,10 @@ func (st stateStore) snapshot(ctx context.Context) (*catalog.Snapshot, error) {
 	return snap, nil
 }
 
-// projectKeyChanges applies the key policies and then erases the credentials a complete listing no longer has. The order
-// matters: a key the listing saw this round gets its seen time before the erasure looks at it.
+// projectKeyChanges applies the policies of a complete key listing. A credential whose key the listing no longer has
+// is left in place; the policy projection sets it to deny everything, and a person decides whether to remove or rebind.
 func projectKeyChanges(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit) error {
-	if err := projectKeyPolicies(ctx, tx, id, c.KeyPolicies); err != nil {
-		return err
-	}
-	return projectLostKeys(ctx, tx, id, c.KeyWrites)
+	return projectKeyPolicies(ctx, tx, id, c.KeyPolicies)
 }
 
 // writeStep writes what a step produced next to its state.

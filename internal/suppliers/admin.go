@@ -296,7 +296,7 @@ type groupFacts struct {
 }
 
 func groupOf(f groupFacts) (Group, error) {
-	state, reason := keyStateOf(f.Present, f.Selected, f.KeyEligible, f.KeyError)
+	state, reason := keyStateOf(f.Present, f.Selected, f.Codename != nil, f.KeyEligible, f.KeyError)
 	g := Group{
 		ID: f.ID, UpstreamRef: f.Ref, Name: f.Name, Ratio: f.Ratio, Selected: f.Selected, Codename: deref(f.Codename),
 		Present: f.Present, KeyState: state, KeyReason: reason, Pool: f.Pool,
@@ -308,12 +308,14 @@ func groupOf(f groupFacts) (Group, error) {
 }
 
 // keyStateOf answers how a group's key stands from the group's own row: failed if the last attempt said why, pending if
-// the projection says it needs a key, and unavailable if it does not. A group the supplier no longer lists, or one a
-// person unselected, is unavailable even if an older attempt left a reason. Whether one is stored is read from the
-// credentials; the detail has them and raises pending to ready, while a change answers without reading every credential.
-func keyStateOf(present, selected, eligible bool, keyError *string) (string, string) {
+// the projection says it needs a key, and unavailable if it does not. A group the supplier no longer lists is
+// unavailable. A group a person unselected is unavailable too, but a group never chosen is still being onboarded by the
+// sync (its code name is empty): it can need a key and can fail, and that must be shown before anyone selects it.
+// Whether one is stored is read from the credentials; the detail has them and raises pending to ready, while a change
+// answers without reading every credential.
+func keyStateOf(present, selected, chosen, eligible bool, keyError *string) (string, string) {
 	switch {
-	case !present || !selected:
+	case !present || (chosen && !selected):
 		return "unavailable", ""
 	case keyError != nil:
 		return "failed", *keyError

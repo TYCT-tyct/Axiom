@@ -54,7 +54,7 @@ func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp ad
 		// words are not kept: they may echo the request, and the class is all the page needs.
 		return "", adapter.ErrKeyRefused
 	case resp.Status >= http.StatusInternalServerError:
-		return "", fmt.Errorf("new-api: make the key: status %d", resp.Status)
+		return "", fmt.Errorf("%w: make the key: status %d", errServer, resp.Status)
 	default:
 		return "", fmt.Errorf("%w: make the key: status %d", adapter.ErrUnrecognised, resp.Status)
 	}

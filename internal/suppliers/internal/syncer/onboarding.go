@@ -9,15 +9,15 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-// onboard makes the keys a supplier needs (docs/domains/suppliers.md「接入流程」), reads the text of the ones a person
-// bound by reference, and reports the keys a complete listing no longer has. It runs only on a complete listing whose
-// pages all carry their names, never inside a transaction: a key exists at the supplier before the state says so, and
-// the marker name is what lets the next round adopt it instead of making a second one.
+// onboard makes the keys a supplier needs (docs/domains/suppliers.md「接入流程」) and reads the text of the ones a
+// person bound by reference. It runs on a complete listing whose pages all carry their names, never inside a
+// transaction: a key exists at the supplier before the state says so, and the marker name is what lets the next round
+// adopt it instead of making a second one.
 //
 // policies is the key listing that will back the credentials' policies. A made key is added to it with an empty policy,
 // because that is how it was made; a bound key the listing does not have is left out, so its policy stays "nothing
 // allowed" until a complete listing reports it. The returned keys are for the state only.
-func (e *Engine) onboard(ctx context.Context, c *Commit, policies *[]adapter.KeyState, gone []adapter.KeyRef) ([]adapter.KeyState, error) {
+func (e *Engine) onboard(ctx context.Context, c *Commit, policies *[]adapter.KeyState) ([]adapter.KeyState, error) {
 	store, ok := e.store.(KeyStore)
 	if !ok {
 		return nil, nil
@@ -31,8 +31,6 @@ func (e *Engine) onboard(ctx context.Context, c *Commit, policies *[]adapter.Key
 		return nil, fmt.Errorf("syncer: the keys to bind: %w", err)
 	}
 	now := e.now()
-	c.KeyWrites.Lost = gone
-	c.KeyWrites.StaleBefore = now.Add(-e.set.KeyGrace)
 	run := &keyOnboarding{
 		e: e, c: c, policies: policies, retry: now.Add(e.set.KeyRetry),
 		byName: make(map[string]adapter.KeyState, len(*policies)),

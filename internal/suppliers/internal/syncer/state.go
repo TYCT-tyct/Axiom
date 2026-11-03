@@ -186,21 +186,16 @@ type Commit struct {
 	KeyPolicies *[]adapter.KeyState
 	// OfferRead is set when this commit holds a complete offer listing, so GroupSnap.KeyEligible is fresh.
 	OfferRead bool
-	// KeyWrites are the keys the keys task made, bound and found gone: applied with this commit, never encoded in State.
+	// KeyWrites are the keys the keys task made and bound: applied with this commit, never encoded in State.
 	KeyWrites KeyWrites
 }
 
 // KeyWrites is what the keys task did to the supplier's keys beyond reading them. A made key is one the sync created
-// for a group; a bound key is one a person bound by reference, whose text the sync has now read; a lost key is one a
-// complete listing no longer has.
+// for a group; a bound key is one a person bound by reference, whose text the sync has now read.
 type KeyWrites struct {
 	Made   []KeyMade
 	Bound  []KeyBound
-	Lost   []adapter.KeyRef
 	Failed []KeyFailure
-	// StaleBefore is when a key must have last been listed for Lost to erase its credential: a listing that is briefly
-	// behind must not delete a key just made.
-	StaleBefore time.Time
 }
 
 // KeyMade is a key the sync made for a group, with its text. The text is sealed by the store and never kept elsewhere.

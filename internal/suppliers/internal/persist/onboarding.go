@@ -138,25 +138,6 @@ func projectBoundKey(ctx context.Context, tx pg.Tx, id uuid.UUID, bound syncer.K
 	return nil
 }
 
-// projectLostKeys erases the credentials of keys a complete listing no longer has, after the policy projection has
-// touched the ones it did have: a key the listing saw this round is not erased for having been away too long. A listing
-// that lags must not erase a key just made, so the key must also be older than the sync's grace.
-func projectLostKeys(ctx context.Context, tx pg.Tx, id uuid.UUID, w syncer.KeyWrites) error {
-	if len(w.Lost) == 0 {
-		return nil
-	}
-	refs := make([]string, len(w.Lost))
-	for i, ref := range w.Lost {
-		refs[i] = string(ref)
-	}
-	if err := store.New().EraseCredentialsByRef(ctx, tx, store.EraseCredentialsByRefParams{
-		SupplierID: id, Refs: refs, StaleBefore: w.StaleBefore,
-	}); err != nil {
-		return fmt.Errorf("erase the lost keys: %w", err)
-	}
-	return nil
-}
-
 // credentialStatus is the credential status a key's own status stands for.
 func credentialStatus(s adapter.KeyStatus) string {
 	switch s {

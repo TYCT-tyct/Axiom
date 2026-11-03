@@ -35,14 +35,13 @@ WHERE supplier_id = @supplier_id AND upstream_key_ref = @upstream_key_ref AND st
 -- name: ReviveCredential :execrows
 UPDATE suppliers.credentials
 SET ciphertext = @ciphertext, nonce = @nonce, wrapped_dek = @wrapped_dek, key_version = @key_version,
-    status = @status, cooldown_until = NULL, expires_at = NULL, last_seen_at = now()
+    status = @status, cooldown_until = NULL, expires_at = NULL
 WHERE id = @id AND supplier_id = @supplier_id AND status = 'erased';
 
 -- name: ActivateCredential :exec
 -- Turns a binding into a credential with a secret. The status guard leaves one a person removed alone.
 UPDATE suppliers.credentials
-SET status = 'active', ciphertext = @ciphertext, nonce = @nonce, wrapped_dek = @wrapped_dek, key_version = @key_version,
-    last_seen_at = now()
+SET status = 'active', ciphertext = @ciphertext, nonce = @nonce, wrapped_dek = @wrapped_dek, key_version = @key_version
 WHERE id = @id AND supplier_id = @supplier_id AND status = 'binding';
 
 -- name: SetGroupKeyError :exec
@@ -59,12 +58,3 @@ WHERE supplier_id = @supplier_id AND upstream_ref = @upstream_ref;
 UPDATE suppliers.supplier_groups
 SET key_error = NULL, key_retry_at = NULL
 WHERE supplier_id = @supplier_id AND key_error IS NOT NULL;
-
--- name: EraseCredentialsByRef :exec
--- A key that has not been in a complete listing for a while: its text cannot open anything, so it goes. The wait keeps
--- a listing that is briefly behind from deleting a key just made. A binding is left for the sync to finish or fail, and
--- an erased row is left as it is.
-UPDATE suppliers.credentials
-SET status = 'erased', ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL
-WHERE supplier_id = @supplier_id AND upstream_key_ref = ANY(@refs::text[])
-  AND status NOT IN ('binding', 'erased') AND last_seen_at < @stale_before;

@@ -40,6 +40,16 @@ describe("steps", () => {
     expect(all.find((step) => step.key === "keys")?.failed).toBe(0);
   });
 
+  it("shows a key failure before the group is selected", () => {
+    const all = steps(
+      input({
+        groups: [{ id: "g1", present: true, selected: false, key_state: "failed" }],
+      }),
+    );
+    expect(done(all, "keys")).toBe(false);
+    expect(all.find((step) => step.key === "keys")?.failed).toBe(1);
+  });
+
   it("counts failed keys and keeps the key step open", () => {
     const all = steps(
       input({

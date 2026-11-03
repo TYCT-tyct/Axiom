@@ -14,8 +14,7 @@ import (
 
 const activateCredential = `-- name: ActivateCredential :exec
 UPDATE suppliers.credentials
-SET status = 'active', ciphertext = $1, nonce = $2, wrapped_dek = $3, key_version = $4,
-    last_seen_at = now()
+SET status = 'active', ciphertext = $1, nonce = $2, wrapped_dek = $3, key_version = $4
 WHERE id = $5 AND supplier_id = $6 AND status = 'binding'
 `
 
@@ -65,27 +64,6 @@ WHERE supplier_id = $1 AND key_error IS NOT NULL
 
 func (q *Queries) ClearKeyErrors(ctx context.Context, db DBTX, supplierID uuid.UUID) error {
 	_, err := db.Exec(ctx, clearKeyErrors, supplierID)
-	return err
-}
-
-const eraseCredentialsByRef = `-- name: EraseCredentialsByRef :exec
-UPDATE suppliers.credentials
-SET status = 'erased', ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL
-WHERE supplier_id = $1 AND upstream_key_ref = ANY($2::text[])
-  AND status NOT IN ('binding', 'erased') AND last_seen_at < $3
-`
-
-type EraseCredentialsByRefParams struct {
-	SupplierID  uuid.UUID
-	Refs        []string
-	StaleBefore time.Time
-}
-
-// A key that has not been in a complete listing for a while: its text cannot open anything, so it goes. The wait keeps
-// a listing that is briefly behind from deleting a key just made. A binding is left for the sync to finish or fail, and
-// an erased row is left as it is.
-func (q *Queries) EraseCredentialsByRef(ctx context.Context, db DBTX, arg EraseCredentialsByRefParams) error {
-	_, err := db.Exec(ctx, eraseCredentialsByRef, arg.SupplierID, arg.Refs, arg.StaleBefore)
 	return err
 }
 
@@ -228,7 +206,7 @@ func (q *Queries) GroupsToKey(ctx context.Context, db DBTX, arg GroupsToKeyParam
 const reviveCredential = `-- name: ReviveCredential :execrows
 UPDATE suppliers.credentials
 SET ciphertext = $1, nonce = $2, wrapped_dek = $3, key_version = $4,
-    status = $5, cooldown_until = NULL, expires_at = NULL, last_seen_at = now()
+    status = $5, cooldown_until = NULL, expires_at = NULL
 WHERE id = $6 AND supplier_id = $7 AND status = 'erased'
 `
 
