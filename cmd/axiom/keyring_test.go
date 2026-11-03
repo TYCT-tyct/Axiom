@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"log/slog"
@@ -440,5 +441,61 @@ func TestKeyringRewrapIncludesWebhookSigningKeys(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestKeyringRotatesCustomContentEnvelope(t *testing.T) {
+	t.Parallel()
+	f := newRotationFixture(t)
+	keys := masterKeys(t)
+	site, account := uuid.NewV7(), uuid.NewV7()
+	contentKey := sha256.Sum256([]byte("custom content envelope"))
+	sealed := keys.Seal(secret.New(string(contentKey[:])), secret.Location{
+		Table: "observability.content_keys", RowID: account.String(), Purpose: "content_key",
+	})
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `INSERT INTO observability.content_keys
+			(account_id, site_id, ciphertext, nonce, wrapped_key, key_version, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, now())`,
+			account, site, sealed.Ciphertext, sealed.Nonce, sealed.WrappedDEK, sealed.KeyVersion)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The old binary's inventory only looks for wrapped_dek, so this table is invisible to it during a rolling
+	// upgrade; the new inventory registers the custom wrapped_key column below.
+	var oldStyle int
+	if err := f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT count(*) FROM information_schema.columns
+			WHERE table_schema = 'observability' AND table_name = 'content_keys' AND column_name = 'wrapped_dek'`).Scan(&oldStyle)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if oldStyle != 0 {
+		t.Fatal("content_keys has a wrapped_dek column visible to the old inventory")
+	}
+	f.run("check")
+	f.addAndActivate()
+	f.run("rewrap")
+	var rotated secret.Sealed
+	if err := f.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT ciphertext, nonce, wrapped_key, key_version
+			FROM observability.content_keys WHERE account_id = $1`, account).
+			Scan(&rotated.Ciphertext, &rotated.Nonce, &rotated.WrappedDEK, &rotated.KeyVersion)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rotated.KeyVersion != 2 {
+		t.Fatalf("content key is at version %d, want 2", rotated.KeyVersion)
+	}
+	ring, _, err := f.r.Check(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := ring.Open(rotated, secret.Location{
+		Table: "observability.content_keys", RowID: account.String(), Purpose: "content_key",
+	})
+	if err != nil || opened.Reveal() != string(contentKey[:]) {
+		t.Fatalf("rotated content key does not open: %v", err)
 	}
 }

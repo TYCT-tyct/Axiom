@@ -169,7 +169,7 @@
 
 基线是 OpenRouter 的[响应缓存](https://openrouter.ai/docs/guides/features/response-caching)（2026-11-02 核对）：它按 key、模型、端点类型、流式与否和规范化后的请求体缓存**成功**回复，命中时重放、换新的 `id`、用量清零、免费，TTL 默认 300 秒、范围 1–86400 秒。Axiom 照这套语义，但有五处有意不同，理由在「决策与理由」：按**账户**而不是按 API key 隔离，命中再用当前 key 的模型和端点权限复核；命中仍先走正常准入与预留，结算时释放；不做并发相同请求的合并；只缓存 Chat、Responses、Messages 的生成回复，不缓存直连格式、compact 和带状态的请求；**平台未明确允许前，持久化默认由平台开关关闭**。
 
-**开关与优先级。** 缓存默认关闭，只有平台允许且请求明确要求才开。`AXIOM_RESPONSE_CACHE_CONTENT` 是平台对「保存回复正文」的决定，默认 `off`；为 `off` 时网关根本不建缓存，缓存头被忽略，为 `on` 时才看下面的请求级开关。这遵守 `docs/product.md` 的「对话内容保存由平台统一决定」，在 #325 的数据保留、删除和导出流程落地前不打开：
+**开关与优先级。** 缓存默认关闭，只有平台允许且请求明确要求才开。`AXIOM_RESPONSE_CACHE_CONTENT` 是平台对「保存回复正文」的决定，默认 `off`；为 `off` 时网关根本不建缓存，缓存头被忽略，为 `on` 时才看下面的请求级开关。这遵守 `docs/product.md` 的「对话内容保存由平台统一决定」，在 #325 的数据保留和删除流程落地前不打开（受控导出已落地，但缓存仍只是短期副本）：
 
 | 来源 | 值 | 结果 |
 |---|---|---|
@@ -202,7 +202,7 @@ TTL 按 OpenRouter 的读法：以开头的十进制数字为准，小数截断�
 
 **未命中与写入。** 只有上游 `200` 且回复完整、结算成功的调用才写入，错误、限流、半截流、客户端断开、结算失败的都不写。写入在回复交付之后异步进行，有界队列满了就丢弃并计数；写缓存失败只记日志，永远不失败或拖慢调用。条目在写入时按本次请求的 TTL 定过期时间，命中不会延长它。每个条目最多 1 MiB（上游原始回复字节），每个账户最多 64 MiB 或 1024 条，超出时按创建时间删最旧的；过期的条目由每分钟一次的清理删除，查询到过期条目也当未命中。
 
-**加密与保留。** 正文用信封加密保存（`secret.Keyring`，AAD 绑定 `gateway.response_cache` 的表、行和 `body` 用途），表按账户 RLS 隔离；数据库里没有明文正文。TTL 上限 24 小时，到期删除，`X-OpenRouter-Cache-Clear` 和未来的账户数据删除流程可以按账户删。现在没有按账户的数据保留设置：`docs/product.md` 规定对话正文保存由平台统一决定，`docs/security.md` 的保留与导出流程（#325）尚未实现；因此平台开关默认关闭，只有平台明确允许才写入，写入时也只保留 TTL 这么短，正文不进入调用记录、导出或内容接口。账户数据删除流程实现时必须把 `gateway.response_cache` 纳入删除和导出范围。
+**加密与保留。** 正文用信封加密保存（`secret.Keyring`，AAD 绑定 `gateway.response_cache` 的表、行和 `body` 用途），表按账户 RLS 隔离；数据库里没有明文正文。TTL 上限 24 小时，到期删除，`X-OpenRouter-Cache-Clear` 和未来的账户数据删除流程可以按账户删。现在没有按账户的数据保留设置：`docs/product.md` 规定对话正文保存由平台统一决定，`docs/security.md` 的删除流程还没有实现；因此平台开关默认关闭，只有平台明确允许才写入，写入时也只保留 TTL 这么短，正文不进入调用记录或内容接口。受控导出也覆盖缓存：它是 ≤24h 的回复副本、没有请求 ID，所以单独写成 `cache.jsonl` 和 `cache/<cache_id>`，仍受批准的时间窗和租户范围约束（见[记录的「受控导出」](observability.md#受控导出)）。导出在同一只读快照里读取缓存元数据和密封正文，正文在快照内打开并用本次导出的临时密钥加密到 0600 暂存文件，之后正常的过期清理、容量淘汰或同键替换不会造成导出失败或混入替换后的回复。账户数据删除流程实现时必须把 `gateway.response_cache` 纳入删除范围。
 
 **不缓存的路径。** 直连格式（Embeddings、Rerank、Completions）、`/responses/compact`、带 `previous_response_id` 的 Responses、`web`/`file-parser` 插件、`openrouter:web_search` 循环、服务端压缩和文件引用都不缓存。Embeddings 的整份 JSON 重放要另写一条不经 relay 的路径，等有需求时再加；在此之前，这些请求即使带缓存头也没有缓存响应头。
 
@@ -545,7 +545,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 | 适配器推不出的格式由模型映射的 `formats` 声明，投影取并集 | 生产代码里没有任何适配器会产出 `completions`：new-api 的 `/v1/completions` 路由存在，但它的端点类型没有旧补全类型（`relaykit/types/endpoint_type.go`），OpenAI 类型既可能是 gpt-4o 也可能是旧模型，按类型猜会把所有 OpenAI 模型都标成支持旧补全；sub2api 没有这条路径。另一个做法是直接改 `supplier_models.formats`，但同步每次都会按适配器重写，改动会被覆盖且没有审计。选：`POST /api/admin/v1/suppliers/{id}/model-mappings` 的 `formats` 字段（可省略=不改、`[]`=清除），存在 `supplier_aliases.formats`，投影把它与适配器的格式取并集，写入 `supplier_models` 和 `endpoints` 的 `formats`，因此下一次同步不会覆盖；未知格式在写之前以 422 拒绝。代价：声明要等下一次同步和快照重载才生效；`AXIOM_DIRECT_FORMATS` 未开时，旧节点读到这一行只会跳过这个端点（`suppliers.unsupported_format`），不会摘掉整家供应商，但该格式的端点对旧节点暂时不可用，所以仍要等全部节点都认识它再声明。测试：`TestDeclaredFormatsSurviveSync`（两次同步）与 `TestDeclaredFormats`（规范化、收窄、清除、未知格式） |
 ## 待定问题
 
-- 响应缓存没有按账户的数据保留设置可遵守：`docs/product.md` 说对话正文保存由平台统一决定，`docs/security.md` 的删除与导出流程（#325）还没有实现。现在用「平台开关默认关闭 + 请求级开关 + 最长 24 小时 TTL + 按账户清理」代替；#325 落地时要把 `gateway.response_cache` 纳入账户删除、导出和保留策略，并决定是否允许账户关闭缓存；在此之前 `AXIOM_RESPONSE_CACHE_CONTENT` 不应打开。
+- 响应缓存没有按账户的数据保留设置可遵守：`docs/product.md` 说对话正文保存由平台统一决定，`docs/security.md` 的账户删除流程还没有实现。现在用「平台开关默认关闭 + 请求级开关 + 最长 24 小时 TTL + 按账户清理」代替；删除流程实现时必须把 `gateway.response_cache` 纳入，并决定是否允许账户关闭缓存。受控导出也覆盖它：它是 ≤24h 的回复副本、没有请求 ID，所以单独写成 `cache.jsonl` 和 `cache/<cache_id>`，仍受批准的时间窗和租户范围约束（见[记录的「受控导出」](observability.md#受控导出)）。在此之前 `AXIOM_RESPONSE_CACHE_CONTENT` 不应打开。
 - 各字段的最终名称和结构写入接口契约时确定
 - 官方供应商名称的可信映射、逐端点的采样/提供商参数清单仍缺数据；量化事实、五分钟窗口性能分位数和按请求计价已落地；按张的图片价已有目录项，但 `max_price.image` 管输入还是生成、端点按张用量怎么报还没定。每项缺的具体字段和补上后能支持什么，见上文「路由参数」偏离表的第三列。`require_parameters` 目前用逐端点、按实际调用格式生效的参数清单，清单外的参数明确 400；`max_price` 在非美元站点是否统一换成美元待定。
 - 402/403 的错误体附所需金额和在途预留，`limit_source` 加上 `pending`（进行中的请求占满了余额），会重置的上限的 `Retry-After` 是窗口结束的时间：billing 的 `Insufficient` 现在只报来源和是否会重置，网关回 `balance`、`subscription`、`openrouter_workspace_budget`、`openrouter_key_limit`，会重置的上限固定 `Retry-After: 60`；随 billing 补上这些信息后改。现状：`Insufficient` 只有 `Source` 和 `Transient`，也没有“最早释放的时间”可报（`deadline` 是兜底期限，约 90 分钟）；报金额还要定币种字段和金额的显示格式，这随 `usage.cost` 在 G5 定（[gateway 模块 README](../../internal/gateway/README.md#入口与准入)）

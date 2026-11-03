@@ -3,7 +3,7 @@
 用 S3 接口读写对象。程序里只有这一份对象存储客户端；逻辑备份任务也用它，但用自己的桶和凭证（`deploy/ops`，见
 [备份与恢复](../../../docs/ops/backup-restore.md#与程序的对象存储分开)）。WAL 归档不走这个客户端：pgBackRest 在数据库镜像里
 用自己的 S3 实现写同一个桶的 `<AXIOM_BACKUP_WAL_PREFIX>`（默认 `<前缀>-pgbackrest`），见[WAL 连续归档与时间点恢复](../../../docs/ops/backup-restore.md#wal-连续归档与时间点恢复)。
-observability 的调用记录保留任务用它写每月的归档；对话正文不经过它：保存正文的平台开关仍然是关的（[记录与告警](../../../docs/domains/observability.md#存储)）。
+observability 的调用记录保留任务用它写每月的归档；对话正文的写入还不经过它（保存正文的平台开关仍然关着），受控导出用它的 `Get` 读正文对象（[记录与告警](../../../docs/domains/observability.md#存储)）。
 
 架构上的选型是「只依赖 S3 接口」，云厂商的对象存储和自托管的 SeaweedFS 都能接（[总体架构的技术选型](../../../docs/architecture.md#技术选型)）。本包不引入
 AWS SDK：用到的只是签名、五个对象操作和一次列举，自己实现 SigV4 少一批依赖；签名与 S3 的互操作由真实的 SeaweedFS

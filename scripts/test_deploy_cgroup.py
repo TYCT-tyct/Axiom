@@ -38,10 +38,9 @@ class RehearsalInspection(unittest.TestCase):
         script = (ROOT / "scripts" / "ci" / "deploy-check.sh").read_text()
         start = re.search(r"^start\(\).*?^}", script, re.M | re.S)[0]
         stubs = r'''
-timeout() { :; }
 compose() {
   case "$*" in
-    'exec -T postgres sh') return 0 ;;
+    'up --detach --no-build '*|'exec -T postgres sh') return 0 ;;
     'ps --all --quiet')
       [ "$INVENTORY_STATUS" = 0 ] || return "$INVENTORY_STATUS"
       printf '%s\n' postgres valkey axiom migrate keys ;;
