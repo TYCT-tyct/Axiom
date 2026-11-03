@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 	"uuid"
 
@@ -33,25 +34,30 @@ func TestRunKeepsTheHolderAlive(t *testing.T) {
 }
 
 // TestRunStopsWhenTheHolderIsReaped: once another node has reaped this one's holder, nothing this process writes is
-// fenced in any more, so the loop ends with ErrReaped and the node starts over with a new holder rather than running on
-// and failing every reservation.
+// fenced in any more, so the first beat after the reap ends the loop with ErrReaped and the node starts over with a new
+// holder rather than running on and failing every reservation.
+//
+// The loop runs on synctest's clock, which stands still while a goroutine waits on the database: a beat's deadline is
+// its period, and on a loaded machine a real 100ms period ran out in every beat's connect or statement, so no beat
+// ever read the reap (#624). Here the beat's period and deadline are the product's, and only the loop's own waiting
+// moves the clock.
 func TestRunStopsWhenTheHolderIsReaped(t *testing.T) {
 	t.Parallel()
 
-	b := newBank(t, 0, 0, Config{HolderTTL: 300 * time.Millisecond, ReapGrace: time.Hour, Lifetime: time.Hour})
-	done := make(chan error, 1)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() { done <- b.billing.Run(ctx) }()
+	b := newBank(t, 0, 0, Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
 	b.sql("UPDATE billing.holders SET reaped_at = clock_timestamp() WHERE id = '" + b.billing.holder.String() + "'")
-	select {
-	case err := <-done:
-		if !errors.Is(err, ErrReaped) {
-			t.Errorf("the loop ended with %v, want ErrReaped", err)
+	synctest.Test(t, func(t *testing.T) {
+		done := make(chan error, 1)
+		go func() { done <- b.billing.Run(t.Context()) }()
+		select {
+		case err := <-done:
+			if !errors.Is(err, ErrReaped) {
+				t.Errorf("the loop ended with %v, want ErrReaped", err)
+			}
+		case <-time.After(2 * b.billing.config.Heartbeat):
+			t.Fatal("the loop outlived the first beat after the reaping of its holder")
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the loop outlived the reaping of its holder")
-	}
+	})
 }
 
 // TestRunCleansUpAtOnce: the first sweep is not a period away, so what a node that died left behind is taken over as soon
