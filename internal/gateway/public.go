@@ -48,6 +48,7 @@ type publicEndpoint struct {
 	contextLength int64
 	maxOutput     int64
 	streams       bool
+	abilities     []string // nil when the endpoint was built without per-format specs
 	quantization  string
 	verified      bool
 }
@@ -70,17 +71,6 @@ func (m *ModelList) Public(a billing.Audience) []PublicModel {
 		for _, ability := range entry.serving.Abilities.List() {
 			abilities = append(abilities, ability.String())
 		}
-		endpoints := make([]PublicEndpoint, 0, len(entry.pageEndpoints))
-		for _, e := range entry.pageEndpoints {
-			endpointPrice, ok := sold.PriceFor(e.id)
-			if !ok {
-				continue
-			}
-			endpoints = append(endpoints, PublicEndpoint{
-				Name: e.name, ContextLength: e.contextLength, MaxOutput: e.maxOutput, Streams: e.streams,
-				Abilities: abilities, Quantization: e.quantization, Verified: e.verified, Pricing: endpointPrice.View(),
-			})
-		}
 		models = append(models, PublicModel{
 			ID:            entry.ID,
 			Name:          entry.Name,
@@ -90,7 +80,7 @@ func (m *ModelList) Public(a billing.Audience) []PublicModel {
 			Streams:       entry.serving.Streams,
 			Abilities:     abilities,
 			Pricing:       price.View(),
-			Endpoints:     endpoints,
+			Endpoints:     publicEndpointsOfSold(entry, sold, abilities),
 		})
 	}
 	slices.SortFunc(models, func(a, b PublicModel) int {
@@ -100,4 +90,25 @@ func (m *ModelList) Public(a billing.Audience) []PublicModel {
 		return strings.Compare(strings.ToLower(a.ID), strings.ToLower(b.ID))
 	})
 	return models
+}
+
+// publicEndpointsOfSold projects the endpoints a price version can sell to the audience, each with the endpoint's
+// effective public surface. The model-level abilities are the fallback for a page built before endpoints had specs.
+func publicEndpointsOfSold(entry *orModel, sold billing.Sold, abilities []string) []PublicEndpoint {
+	endpoints := make([]PublicEndpoint, 0, len(entry.pageEndpoints))
+	for _, e := range entry.pageEndpoints {
+		endpointPrice, ok := sold.PriceFor(e.id)
+		if !ok {
+			continue
+		}
+		endpointAbilities := e.abilities
+		if endpointAbilities == nil {
+			endpointAbilities = abilities
+		}
+		endpoints = append(endpoints, PublicEndpoint{
+			Name: e.name, ContextLength: e.contextLength, MaxOutput: e.maxOutput, Streams: e.streams,
+			Abilities: endpointAbilities, Quantization: e.quantization, Verified: e.verified, Pricing: endpointPrice.View(),
+		})
+	}
+	return endpoints
 }

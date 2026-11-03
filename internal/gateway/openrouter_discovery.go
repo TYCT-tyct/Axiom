@@ -9,6 +9,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/protocol"
 	"axiom/internal/routing"
 )
 
@@ -108,8 +109,24 @@ func encodeOREndpointPrices(m orEntry, sold billing.Sold, abilities catalog.Abil
 		if !ok {
 			return orPricing{}, false
 		}
-		return newORPricing(price, abilities), true
+		endpointAbilities := abilities
+		if len(e.Specs) > 0 {
+			endpointAbilities = pricingAbilities(e.Surface().Caps)
+		}
+		return newORPricing(price, endpointAbilities), true
 	})
+}
+
+// pricingAbilities maps the effective capabilities back to the two catalog abilities the public price shape reads:
+// whether image prices and an internal-reasoning price are shown (newORPricing).
+func pricingAbilities(c protocol.Capabilities) (a catalog.AbilitySet) {
+	if c.Has(protocol.Images) {
+		a.Add(catalog.AbilityImages)
+	}
+	if c.Has(protocol.Reasoning) {
+		a.Add(catalog.AbilityReasoning)
+	}
+	return a
 }
 
 func encodeOREndpointList(m orEntry, endpoints []routing.Endpoint, pricing func(routing.Endpoint) (orPricing, bool)) ([]byte, error) {
@@ -130,9 +147,15 @@ func encodeOREndpointList(m orEntry, endpoints []routing.Endpoint, pricing func(
 		if e.Quantization != "" {
 			quantization = string(e.Quantization)
 		}
+		parameters := m.SupportedParameters
+		context, maxOutput := e.Context, e.MaxOutput
+		if len(e.Specs) > 0 {
+			surface := e.Surface()
+			parameters, context, maxOutput = orParameters(surface.Parameters), surface.Context, surface.MaxOutput
+		}
 		data.Endpoints = append(data.Endpoints, orEndpoint{
 			Name: "Axiom: " + m.Name, ModelID: m.ID, ModelName: m.Name, ProviderName: "Axiom", Tag: e.Codename,
-			ContextLength: e.Context, MaxCompletionTokens: e.MaxOutput, Pricing: price, SupportedParameters: m.SupportedParameters,
+			ContextLength: context, MaxCompletionTokens: maxOutput, Pricing: price, SupportedParameters: parameters,
 			Quantization: quantization,
 		})
 	}

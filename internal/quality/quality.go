@@ -4,6 +4,7 @@ package quality
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -98,9 +99,9 @@ type Measures struct {
 	Verified         bool
 	VerifiedAt       time.Time
 	VerifyConfidence float64
-	// Facts are what detection measured of the endpoint's structure, to override the catalog's baseline where they say
-	// it offers less (docs/domains/quality.md「实测的能力与上限」).
-	Facts Facts
+	// Facts are what detection measured of the endpoint's structure, by call format: a measurement of Chat says
+	// nothing about Responses (docs/domains/quality.md「实测的能力与上限」).
+	Facts map[protocol.Format]Facts
 }
 
 // Facts are what detection found out about an endpoint's structure, as opposed to how well it performs: a capability
@@ -134,11 +135,30 @@ func (f *Facts) add(m Facts) {
 	}
 }
 
-// measuredFacts are the facts recorded for an endpoint, with the configuration they were measured on: a measurement of
-// one upstream name, model or format says nothing about another (docs/domains/quality.md「实测的能力与上限」).
+// measuredFacts are the facts recorded for one call format, with the configuration they were measured on: a
+// measurement of one upstream name, model or format says nothing about another
+// (docs/domains/quality.md「实测的能力与上限」).
 type measuredFacts struct {
 	claim claim
 	facts Facts
+}
+
+// endpointConfig identifies the endpoint configuration a measurement belongs to: its model, upstream name and the set
+// of formats it serves. A measurement that arrives after any of them changed is stale and must not overwrite the
+// current configuration's facts.
+type endpointConfig struct {
+	model    uuid.UUID
+	upstream string
+	formats  uint16
+}
+
+// configOf is the configuration the endpoint presents now.
+func configOf(ep suppliers.Routable) endpointConfig {
+	var formats uint16
+	for _, f := range ep.Formats {
+		formats |= 1 << f
+	}
+	return endpointConfig{model: ep.Model, upstream: ep.Upstream, formats: formats}
 }
 
 // Monitor keeps local endpoint evidence and live breaker state. Observe never accesses the database or allocates
@@ -180,9 +200,10 @@ type State struct {
 	speedWindow   sampleWindow
 	samples       int // counted outcomes, capped at scoreSamples: the confidence's evidence
 	sampled       time.Time
-	verify        verification  // the last fingerprint check and its schedule
-	verifying     bool          // a verification generation is in flight
-	facts         measuredFacts // what detection measured of its structure
+	verify        verification                      // the last fingerprint check and its schedule
+	verifying     bool                              // a verification generation is in flight
+	current       endpointConfig                    // the configuration Prepare last published
+	facts         map[protocol.Format]measuredFacts // what detection measured, per call format
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -334,27 +355,37 @@ func (e *State) measures(now time.Time, verifyMaxAge time.Duration) Measures {
 	if !e.verify.checked.IsZero() {
 		out.VerifiedAt = e.verify.checked
 	}
-	out.Facts = e.facts.facts
 	return out
 }
 
-// Measure records what detection established about an endpoint's structure: the capabilities and request parameters it
-// found working and lacking, and the context and output ceilings it measured. The facts replace what was measured of
-// the same fields and are bound to the configuration measured; a configuration change voids them until the new one is
-// measured (docs/domains/quality.md「实测的能力与上限」). It is not on the call path: detection calls it, and the next
-// snapshot rebuild carries the change to routing.
-func (m *Monitor) Measure(ep suppliers.Routable, facts Facts) {
-	e := m.of(ep.ID)
-	c := claim{}
-	if len(ep.Formats) > 0 {
-		c = claimOf(ep)
+// Measure records what detection established about an endpoint's structure in one call format: the capabilities and
+// request parameters it found working and lacking, and the context and output ceilings it measured. The facts replace
+// what was measured of the same fields in that format and are bound to the configuration measured; a configuration
+// change voids them until the new one is measured (docs/domains/quality.md「实测的能力与上限」). It returns false when
+// the format is not one the endpoint serves or the endpoint's current configuration is no longer the one passed: a
+// result from an old configuration must not clear facts the new configuration has already recorded. It is not on the
+// call path; detection calls it, and the next snapshot rebuild carries the change to routing.
+func (m *Monitor) Measure(ep suppliers.Routable, format protocol.Format, facts Facts) bool {
+	if !slices.Contains(ep.Formats, format) {
+		return false
 	}
+	e := m.of(ep.ID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.facts.claim != c {
-		e.facts = measuredFacts{claim: c}
+	if e.current != configOf(ep) {
+		return false
 	}
-	e.facts.facts.add(facts)
+	c := factClaim(ep, format)
+	if e.facts == nil {
+		e.facts = map[protocol.Format]measuredFacts{}
+	}
+	f := e.facts[format]
+	if f.claim != c {
+		f = measuredFacts{claim: c}
+	}
+	f.facts.add(facts)
+	e.facts[format] = f
+	return true
 }
 
 // MeasuredFor is what the endpoint's numbers are now for a routable endpoint: a pass counts only for the configuration
@@ -380,8 +411,17 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	if out.Verified && (!has || e.verify.claim != want) {
 		out.Verified, out.VerifyConfidence, out.VerifiedAt = false, 0, time.Time{}
 	}
-	if !has || e.facts.claim != want {
-		out.Facts = Facts{}
+	out.Facts = nil
+	if has && e.current == configOf(ep) {
+		for f, mf := range e.facts {
+			if mf.claim != factClaim(ep, f) {
+				continue
+			}
+			if out.Facts == nil {
+				out.Facts = make(map[protocol.Format]Facts, len(e.facts))
+			}
+			out.Facts[f] = mf.facts
+		}
 	}
 	return out
 }

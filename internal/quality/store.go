@@ -183,19 +183,24 @@ func (l *Loop) claim(ctx context.Context, e *State, now time.Time) (healthRecord
 
 // Prepare restores reappearing endpoints before a routing snapshot can publish a new live pointer.
 func (m *Monitor) Prepare(ctx context.Context, endpoints []suppliers.Routable) error {
-	if m.loop == nil {
-		return nil
+	now := time.Now()
+	if m.loop != nil {
+		now = m.loop.now()
 	}
 	for _, ep := range endpoints {
 		e := m.Live(ep.ID, ep.Credentials)
 		e.mu.Lock()
+		if cfg := configOf(ep); e.current != cfg {
+			e.facts = nil // facts belong to the configuration they were measured on
+			e.current = cfg
+		}
 		loaded := e.loaded
 		e.owned = !ep.Platform()
 		_, generation := probeFormat(ep.Formats)
 		e.probeable = ep.Platform() && generation
-		e.lastSeen = m.loop.now()
+		e.lastSeen = now
 		e.mu.Unlock()
-		if loaded {
+		if m.loop == nil || loaded {
 			continue
 		}
 		err := m.loop.restore(ctx, e)
