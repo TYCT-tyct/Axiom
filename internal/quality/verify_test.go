@@ -105,6 +105,24 @@ func TestJudgeVerificationNeedsAPassedGeneration(t *testing.T) {
 	}
 }
 
+// TestJudgeVerificationDoesNotContradictUnknownModelLine: a size word only proves a cheaper tier when the rest of the
+// model line, including its version, is the same. An unknown alias or a different version stays inconclusive and does
+// not clear Verified.
+func TestJudgeVerificationDoesNotContradictUnknownModelLine(t *testing.T) {
+	t.Parallel()
+	c := testChallenge()
+	c.model = "gpt-4o"
+	c.claimed.Model = c.model
+	for _, model := range []string{"gpt-custom-mini", "gpt-4.1-mini"} {
+		if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: fullAnswer(c, model, "Anthropic")}, c); got != verifyUnknown {
+			t.Errorf("unknown model line %q judged %s, want inconclusive", model, got)
+		}
+	}
+	if got := judgeVerification(suppliers.TestResult{Streamed: true, Reply: fullAnswer(c, "gpt-4o-mini", "Anthropic")}, c); got != verifyContradicted {
+		t.Errorf("the cheaper sibling judged %s, want contradicted", got)
+	}
+}
+
 // TestJudgeVerificationUsesEffectiveName: the catalog can have a stable slug unlike the name the model reports. The
 // vendor-native effective name is an alternate comparison target, so an opaque catalog slug cannot block a genuine
 // answer.
@@ -139,36 +157,39 @@ func TestModelVerdict(t *testing.T) {
 		answer, claim string
 		want          identityVerdict
 	}{
-		"the dated snapshot":      {"GPT-4o 2024-08-06", "gpt-4o-2024-08-06", identityMatched},
-		"the compact date":        {"gpt-4o 20240806", "gpt-4o-2024-08-06", identityMatched},
-		"the provider prefix":     {"OpenAI GPT-4o", "openai/gpt-4o", identityMatched},
-		"a mapped catalog name":   {"GPT-4o", "openai/gpt-4o", identityMatched},
-		"a cheaper sibling":       {"gpt-4o-mini-2024-07-18", "gpt-4o-2024-08-06", identityContradicted},
-		"a smaller o-series":      {"o1-mini", "o1", identityContradicted},
-		"a different claude tier": {"Claude 3.5 Haiku", "claude-3-5-sonnet-20241022", identityContradicted},
-		"the same claude tier":    {"Claude 3.5 Sonnet", "claude-3-5-sonnet-20241022", identityMatched},
-		"a different gemini tier": {"Gemini 2.5 Flash", "gemini-2.5-pro", identityContradicted},
-		"a different llama size":  {"Llama 3.1 8B", "llama-3.3-70b", identityContradicted},
-		"a preview snapshot":      {"Gemini 2.5 Pro", "gemini-2.5-pro-preview-06-05", identityMatched},
-		"a dated build":           {"DeepSeek-V3", "deepseek-v3-0324", identityMatched},
-		"a three digit build":     {"Gemini 1.5 Pro", "gemini-1.5-pro-002", identityMatched},
-		"a plus variant":          {"Command R+", "command-r-plus-08-2024", identityMatched},
-		"the same instruct model": {"Llama 3 70B Instruct", "llama-3-70b-instruct", identityMatched},
-		"a missing instruct word": {"Llama 3 70B", "llama-3-70b-instruct", identityUnknown},
-		"an audio variant":        {"gpt-4o-audio-preview", "gpt-4o", identityUnknown},
-		"an instruct variant":     {"Llama 3 70B Instruct", "llama-3-70b", identityUnknown},
-		"a chat variant":          {"llama-2-70b-chat", "llama-2-70b", identityUnknown},
-		"an unknown alias":        {"custom-mini-alias", "gpt-4o", identityUnknown},
-		"an unknown family alias": {"custom-gpt-mini", "gpt-4o", identityUnknown},
-		"an unknown prefix":       {"acme-gpt-4o", "gpt-4o", identityUnknown},
-		"an unknown size alias":   {"custom-70b", "llama-3-70b", identityUnknown},
-		"a shorter alias":         {"DeepSeek-V3", "deepseek-chat", identityUnknown},
-		"a different version":     {"GPT-4", "gpt-4o", identityUnknown},
-		"an unrecognized suffix":  {"gpt-4o-128", "gpt-4o", identityUnknown},
-		"an invalid date suffix":  {"gpt-4o-1280", "gpt-4o", identityUnknown},
-		"a month-day build":       {"gpt-4o-1106", "gpt-4o", identityMatched},
-		"a shorter answer":        {"GPT-4o", "gpt-4o-mini", identityUnknown},
-		"an empty answer":         {"", "gpt-4o", identityUnknown},
+		"the dated snapshot":        {"GPT-4o 2024-08-06", "gpt-4o-2024-08-06", identityMatched},
+		"the compact date":          {"gpt-4o 20240806", "gpt-4o-2024-08-06", identityMatched},
+		"the provider prefix":       {"OpenAI GPT-4o", "openai/gpt-4o", identityMatched},
+		"a mapped catalog name":     {"GPT-4o", "openai/gpt-4o", identityMatched},
+		"a cheaper sibling":         {"gpt-4o-mini-2024-07-18", "gpt-4o-2024-08-06", identityContradicted},
+		"a smaller o-series":        {"o1-mini", "o1", identityContradicted},
+		"a different claude tier":   {"Claude 3.5 Haiku", "claude-3-5-sonnet-20241022", identityContradicted},
+		"the same claude tier":      {"Claude 3.5 Sonnet", "claude-3-5-sonnet-20241022", identityMatched},
+		"a different gemini tier":   {"Gemini 2.5 Flash", "gemini-2.5-pro", identityContradicted},
+		"a different llama size":    {"Llama 3.3 8B", "llama-3.3-70b", identityContradicted},
+		"a different llama version": {"Llama 3.1 8B", "llama-3.3-70b", identityUnknown},
+		"a preview snapshot":        {"Gemini 2.5 Pro", "gemini-2.5-pro-preview-06-05", identityMatched},
+		"a dated build":             {"DeepSeek-V3", "deepseek-v3-0324", identityMatched},
+		"a three digit build":       {"Gemini 1.5 Pro", "gemini-1.5-pro-002", identityMatched},
+		"a plus variant":            {"Command R+", "command-r-plus-08-2024", identityMatched},
+		"the same instruct model":   {"Llama 3 70B Instruct", "llama-3-70b-instruct", identityMatched},
+		"a missing instruct word":   {"Llama 3 70B", "llama-3-70b-instruct", identityUnknown},
+		"an audio variant":          {"gpt-4o-audio-preview", "gpt-4o", identityUnknown},
+		"an instruct variant":       {"Llama 3 70B Instruct", "llama-3-70b", identityUnknown},
+		"a chat variant":            {"llama-2-70b-chat", "llama-2-70b", identityUnknown},
+		"an unknown alias":          {"custom-mini-alias", "gpt-4o", identityUnknown},
+		"an unknown family alias":   {"custom-gpt-mini", "gpt-4o", identityUnknown},
+		"an alias with a size":      {"gpt-custom-mini", "gpt-4o", identityUnknown},
+		"a version with a size":     {"gpt-4.1-mini", "gpt-4o", identityUnknown},
+		"an unknown prefix":         {"acme-gpt-4o", "gpt-4o", identityUnknown},
+		"an unknown size alias":     {"custom-70b", "llama-3-70b", identityUnknown},
+		"a shorter alias":           {"DeepSeek-V3", "deepseek-chat", identityUnknown},
+		"a different version":       {"GPT-4", "gpt-4o", identityUnknown},
+		"an unrecognized suffix":    {"gpt-4o-128", "gpt-4o", identityUnknown},
+		"an invalid date suffix":    {"gpt-4o-1280", "gpt-4o", identityUnknown},
+		"a month-day build":         {"gpt-4o-1106", "gpt-4o", identityMatched},
+		"a shorter answer":          {"GPT-4o", "gpt-4o-mini", identityUnknown},
+		"an empty answer":           {"", "gpt-4o", identityUnknown},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

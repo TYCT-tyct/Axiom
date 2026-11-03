@@ -85,14 +85,16 @@ func modelVerdict(answer, claim string) identityVerdict {
 // dates and recognized release numbers are gone; size words, version numbers, and the leading family word remain.
 type identity struct {
 	key   string
+	base  string // the model line without its size/variant words, such as gpt-4o for gpt-4o-mini
 	sizes map[string]struct{}
 	line  string
 }
 
-// sharesFamily reports whether both names start with the same recognized model family. Without one, two names are not
-// comparable: a suffix such as "mini" on an unknown alias is not evidence of a cheaper model of the claimed line.
+// sharesFamily reports whether both names start with the same recognized model family and agree on the model line
+// without its size/variant words. Without both, two names are not comparable: a suffix such as "mini" on an unknown
+// alias or a different version is not evidence of a cheaper model of the claimed line.
 func (id identity) sharesFamily(other identity) bool {
-	return id.line != "" && id.line == other.line
+	return id.line != "" && id.line == other.line && id.base != "" && id.base == other.base
 }
 
 // modelDate removes the date forms model names use: 2024-08-06, 20240806, 2024. A model line's date is a snapshot, not
@@ -103,8 +105,8 @@ var modelDate = regexp.MustCompile(`\b(19|20)\d{2}([-_.]?(0[1-9]|1[0-2])[-_.]?(0
 var modelRelease = regexp.MustCompile(`(?i)(preview|exp|experimental|rc|snapshot)[-_.]?\d{1,2}[-_.]?\d{1,2}|\b\d{1,2}[-_.](19|20)\d{2}\b`)
 
 // identityOf normalizes a model name. It strips a provider prefix, a @date or :variant suffix, dates and recognized
-// release numbers, then joins the remaining runs. Size words and the leading family word are kept separately so two
-// lines of the same author can be told apart.
+// release numbers, then joins the remaining runs. The leading family word, the size words and the rest of the line are
+// kept separately so two lines of the same author can be told apart before a variant difference is considered.
 func identityOf(name string) identity {
 	fields := nameRuns(cleanModelName(name))
 	out := make([]string, 0, len(fields))
@@ -124,7 +126,13 @@ func identityOf(name string) identity {
 	if len(out) > 0 && modelFamily[out[0]] {
 		line = out[0]
 	}
-	return identity{key: strings.Join(out, ""), sizes: sizes, line: line}
+	base := make([]string, 0, len(out))
+	for _, f := range out {
+		if _, variant := sizes[f]; !variant {
+			base = append(base, f)
+		}
+	}
+	return identity{key: strings.Join(out, ""), base: strings.Join(base, ""), sizes: sizes, line: line}
 }
 
 // cleanModelName lower-cases a name and removes a relay prefix, a @date or :variant suffix, a plus spelling and the
