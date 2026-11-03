@@ -2,7 +2,7 @@
 
 调用记录的代码接口：写什么、怎么写、怎么读、数据怎么放。要不要记、记多久、谁能看是[记录与告警](../../docs/domains/observability.md)的事，本文只写代码里的做法和理由。指标与链路的基座在 [platform 的「遥测」](../platform/README.md#遥测)，不在本模块。
 
-目前实现调用与尝试记录，以及运维告警事件、规则、邮件与 Webhook 通知和周期渠道自测。用户元数据筛选、聚合与导出已实现；对话内容、分析标签和内容受控导出随各自的 Issue 加入。
+目前实现调用与尝试记录、运维告警事件、规则、邮件与 Webhook 通知和周期渠道自测，以及用户元数据筛选、聚合与导出。对话内容的存储表、账户密钥和受控导出已实现；保存正文的写入通道、分析标签和到期回收随各自的 Issue 加入。
 
 ## 接口
 
@@ -17,6 +17,11 @@ func (r *Recorder) Close(ctx context.Context) error       // 写完 spill；ctx 
 func (r *Recorder) Done() <-chan struct{}                 // 写入协程退出时关闭；Close 返回前已等待它，测试据此断言没有写入协程留下
 func ListOwn(ctx, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, error)
 func CheckOwnExportSize(ctx, tx pg.Tx, q OwnQuery) error // 同一 ReadTx 内、开始输出前检查最多 10001 个匹配键；超过 10000 返回 ErrExportSize
+func StreamContentMeta(ctx, tx pg.Tx, q ContentQuery, each func(ContentMeta) error) (ContentStats, error) // 一个只读快照里的正文引用；平台范围
+func ReadContentKey(ctx, tx pg.Tx, keys *secret.Keyring, account uuid.UUID) ([32]byte, error) // 调用方须传平台范围事务；AAD 绑定账户
+type ContentKeySource interface { ContentKey(context.Context, uuid.UUID) ([32]byte, error) } // cmd 用平台范围实现
+func NewContentReader(keys ContentKeySource, objects ContentObjects) (*ContentReader, error) // 密钥来源和对象存储缺一不可
+func (r *ContentReader) Open(ctx context.Context, m ContentMeta) ([]byte, error) // 取对象、解密、校验摘要；缺账户密钥返回 ErrNoContentKey
 func GetRetention(ctx, tx pg.Tx) (Retention, error)         // 调用记录的热窗口；第一次保存前是代码默认值
 func SetRetention(ctx, tx pg.Tx, r Retention) error        // 校验并保存；范围 0 到 3650 天，0 表示全部留在 PostgreSQL
 func RegisterRetention(cfg RetentionConfig) error          // 在 archive 队列登记每天的预建、归档与删除
@@ -54,6 +59,26 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 `retention`：单行 `jsonb`，保存调用记录的热窗口（`hot_days`，默认 90）。和规则、阈值一样是管理员数据，管理接口读写并留审计；0 表示全部留在 PostgreSQL。桶没配置时这个值不起作用：没有确认的归档就不能删。
 
+`content_keys`：每个账户一行，保存 32 字节数据密钥的信封（`ciphertext`、`nonce`、`wrapped_dek`、`key_version`）和站点。AAD 是 `observability.content_keys/<account_id>/content_key`，账户之间不能互换。主密钥轮换的重包裹清单要包含这张表。
+
+`content_blobs`：一个消息或文件正文一行，`digest` 是带账户摘要子密钥的 HMAC-SHA256，`UNIQUE (account_id, digest)` 在账户内去重；`object_key` 指向对象存储，`size` 是明文大小，`last_referenced_at` 和可空的 `expires_at` 留给回收任务。正文不在这张表里。
+
+`content_refs`：一个调用的一类正文一行，主键 `(request_id, kind)`，外键 `(blob_id, site_id, account_id)` 保证引用和 blob 同账户；`created_at` 是导出的时间窗。
+
+`content_exports`：每次导出尝试一行，`approval_digest` 唯一（批准一次性使用），记录负责人和接收公钥指纹、范围、目标、格式、状态、条数、字节数、输出 SHA-256 和错误类别。它和上面三张表都强制平台范围行级安全，账户范围看不到任何行。
+
+## 内容存储与受控导出
+
+正文对象是 `version(1) || nonce(12) || AES-256-GCM(明文)`。账户的 32 字节数据密钥用 HKDF-SHA256 派生两个子密钥：一个加密，一个算 HMAC-SHA256 摘要。AAD 是 `axiom/content/object/v1\0` 加账户、blob ID 和摘要，固定长度，换账户或换 blob 都解不开；摘要同时用于账户内去重和读取时的完整性校验。对象键是 `content/v1/<site>/<account>/<blob>`，对象大小上限 64 MiB。
+
+`StreamContentMeta` 在一个只读快照里按 `(account, created_at, request_id, kind)` 列出引用；`ContentReader` 按账户缓存数据密钥，`Open` 先校验对象大小，再认证、检查明文长度和摘要。缺账户密钥返回 `ErrNoContentKey`，导出失败而不是跳过。写正文的通道还没接；`sealContent` 已在包内，接入时由它生成摘要和对象。
+
+`cmd/axiom content export` 是唯一读正文的命令：它验负责人签名、在平台范围写 `content_exports` 和 `content_export.start`、把引用写成 `manifest.jsonl`、逐条读出并认证，再把 tar.gz 经 X25519 + HKDF-SHA256 + 分块 AES-256-GCM 写给负责人。`keygen`、`approve`、`decrypt` 只在负责人机器上运行。格式、批准字段和威胁模型见[记录与告警的「受控导出」](../../docs/domains/observability.md#受控导出)。
+
+`gateway.response_cache` 不参与：它是最多 24 小时的回复副本，没有请求 ID，不是对话历史；导出它只会重复内容且无法按调用记录追溯。删除账户时它仍必须和 `observability.content_*` 一起删除（[安全的「内容安全」](../../docs/security.md#内容安全)）。
+
+测试：`TestContentSealOpen`、`TestContentMetaScope`、`TestContentReader`、`TestContentKeyIsBoundToItsAccount`、`TestContentTablesArePlatformOnly` 覆盖加密、范围、密钥绑定和 RLS；`TestContentApprovalVerifies`、`TestContentKeygenAndApprove`、`TestContentExportRoundTrip`、`TestContentExportRowsAndAudit` 覆盖签名、命令和审计。
+
 ## 不变量
 
 | 不变量 | 靠什么保证 |
@@ -68,6 +93,10 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 | 文字能存进库 | `Commit` 在写 spill 前拒绝不合法的 UTF-8、NUL 和打印成 jsonb 文本后超过 8192 字节的路由 JSON（每个 `:`、`,` 后多一个空格，按此上界计），包括每次尝试的文字；这是 bug 或上游脏数据，不是可以跳过的行，进了 spill 它会在每次重放时被数据库拒绝。路由由 routing 有界编码：选定的路线、尝试（只有端点和结果，出口在 `call_attempt`）和每个原因的数量完整，被排除的端点最多逐个记 16 个，最坏情况约 5.2 KB，所以合法的 `openrouter/auto` 记录总能写进 `call_log.route`。记录计入 `records.lost{reason="invalid"}`，recorder 标记为不可记录，准入从此拒绝。测试：非法 UTF-8、NUL、未知 outcome、超过 jsonb 上限的路由（`TestEnqueueRejectsText`），逐项排除上千个候选的最大路由不超过同一上界（`TestRecordIsBounded`），恰好等于上界的路由能写进真实数据库、存下的文本与预测一致（`TestBoundedRouteFitsTheColumn`） |
 | 终端用户标识只以带密钥的哈希存放 | `EndUserHash` 是带私有数组的结构，包外无法构造非零值 |
 | 没有对话正文、密钥或凭证 | 两张表的列里没有这样的名字或字节类型，文字和 JSON 列都有长度或格式检查；测试读 `information_schema` 核对两张表。请求头只记应用归因的三个，由 gateway 去控制字符、按列宽截断（`app_referer` 另去掉 userinfo、查询串和片段）后放入 `app_referer`、`app_title`、`app_categories`；其余请求头一律不记 |
+| 内容只有平台范围能读 | `content_keys`、`content_blobs`、`content_refs`、`content_exports` 都强制行级安全，策略只允许 `platform.in_platform_scope()`；账户范围的读测试返回 0，产品接口不查询这些表 |
+| 正文只能被对应账户和 blob 打开 | 每账户的数据密钥由密钥环封装，AAD 绑定账户；正文用 HKDF 派生的 AES-256-GCM 子密钥加密，AAD 绑定账户、blob 和 HMAC 摘要；测试换账户、换 blob、篡改、截断都失败 |
+| 一个导出批准只能用一次 | `content_exports.approval_digest` 唯一，命令在读取正文前 `ON CONFLICT DO NOTHING`；测试第二次使用同一批准失败且不产生第二条开始审计 |
+| 导出文件在服务端没有明文 | 服务端只把 tar.gz 写进加密流，临时文件是密文；测试导出缓冲区不含正文，换密钥、篡改、截断都解不开 |
 | 每次尝试有且只有一行，且能从调用找到 | `call_attempt` 的主键 `(request_id, at, attempt_seq)`；`Seq` 必须从 1 连续递增，最多 `platform.MaxAttemptSeq` 次（`TestALoopsAttemptsAreKept`）；调用行的端点、来源类别、出口和次数由最后一个尝试算出。测试：写两次只有一行，按序号读回每次尝试，调用行与最后尝试一致 |
 | 同一个请求写两次是一行 | 两张表都是 `ON CONFLICT … DO NOTHING`；`at` 是请求开始时间，不是写入时间，所以重试的是同一个键。测试：同一个 `CallRecord` 写两次，调用一行、每次尝试一行 |
 | 写入从不因没有分区而失败 | 两张表都有默认分区兜底；测试写入 2001 年和 2090 年的调用和尝试 |
