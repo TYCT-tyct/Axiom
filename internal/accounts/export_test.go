@@ -89,3 +89,7 @@ func ProofNonce(site SiteID, email string, bitsWanted int) string {
 func PrincipalForTest(site SiteID, account AccountID, user UserID) Principal {
 	return Principal{site: site, account: account, user: user, level: levelPassword}
 }
+
+// ObserveLookupJoins calls f after each request joins the shared key lookup, before it waits for the result, so a test
+// can wait until every target request is inside it instead of sleeping.
+func (s *Service) ObserveLookupJoins(f func()) { s.lookupJoined = f }

@@ -83,8 +83,11 @@ type Service struct {
 	known   *lru[keyHash, Caller]
 	unknown *lru[keyHash, struct{}]
 	lookups singleflight.Group
-	guards  guards
-	queries *Queries
+	// lookupJoined, when set by a test, is called after a request joined the shared lookup, before it waits for the
+	// result; it is how a timing test observes every waiter instead of sleeping.
+	lookupJoined func()
+	guards       guards
+	queries      *Queries
 	// cache is where the attempts before sign-in are counted, and loginKey the HMAC key of their subjects.
 	cache    *kv.Client
 	loginKey secret.LoginKey

@@ -66,6 +66,7 @@ var refusals = []refusal{
 	{accounts.ErrPasskeysInUse, http.StatusConflict, codeConflict, "users of this site still hold passkeys; they must remove them before passkeys can be turned off"},
 	{accounts.ErrBadCredentials, http.StatusUnauthorized, codeWrongLogin, "wrong email or password"},
 	{accounts.ErrNoSession, http.StatusUnauthorized, codeUnauthenticated, "not signed in"},
+	{accounts.ErrMFAExhausted, http.StatusUnauthorized, codeUnauthenticated, "the passkey sign-in attempt limit is used up; sign in again"},
 	{accounts.ErrBadCode, http.StatusUnauthorized, codeInvalidCode, "wrong code"},
 	{accounts.ErrBadOrigin, http.StatusForbidden, codeOriginRejected, "the origin, content type or CSRF token is not accepted"},
 	{accounts.ErrForbidden, http.StatusForbidden, codeForbidden, "this session may not do that"},

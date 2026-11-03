@@ -300,7 +300,7 @@ func pendingPasskeySignIn(t *testing.T, x site, s *accounts.Service) (accounts.P
 // records one guessed factor, like a wrong code does.
 func assertWrongAssertionSpendsAttempt(t *testing.T, x site, s *accounts.Service, auth *softAuthenticator, p accounts.Principal, cookie *http.Cookie) {
 	t.Helper()
-	flow, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p)
+	flow, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,12 +319,12 @@ func assertWrongAssertionSpendsAttempt(t *testing.T, x site, s *accounts.Service
 	assertPasskeyFailures(t, x, "1")
 }
 
-// assertPasskeyFailures checks the unified security record a rejected assertion leaves: one security.mfa_failed entry
-// and one counted failure per guessed factor.
+// assertPasskeyFailures checks the unified security record a rejected assertion leaves: one failed-login entry and one
+// counted failure per guessed factor, whether the assertion was a discoverable sign-in or the second factor.
 func assertPasskeyFailures(t *testing.T, x site, want string) {
 	t.Helper()
-	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action = 'security.mfa_failed' AND detail->>'outcome' = 'bad_passkey'"); got[0] != want {
-		t.Errorf("security.mfa_failed entries: %v, want %s", got, want)
+	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action IN ('security.sign_in_failed', 'security.mfa_failed') AND detail->>'outcome' = 'bad_passkey'"); got[0] != want {
+		t.Errorf("bad_passkey entries: %v, want %s", got, want)
 	}
 	if got := texts(t, x.db, platform, "SELECT coalesce(sum(failures + completed_peak), 0)::text FROM accounts.security_failures"); got[0] != want {
 		t.Errorf("counted failures: %v, want %s", got, want)
@@ -335,7 +335,7 @@ func assertPasskeyFailures(t *testing.T, x site, want string) {
 // an expired flow and a body that does not parse are refused without an audit entry or a counted failure.
 func assertPasskeyFlowErrorsAreNotFailures(t *testing.T, x site, s *accounts.Service, auth *softAuthenticator, p accounts.Principal, cookie *http.Cookie) {
 	t.Helper()
-	expired, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p)
+	expired, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +349,7 @@ func assertPasskeyFlowErrorsAreNotFailures(t *testing.T, x site, s *accounts.Ser
 		t.Errorf("an expired flow: %v", err)
 	}
 
-	malformed, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p)
+	malformed, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func assertPasskeyFlowErrorsAreNotFailures(t *testing.T, x site, s *accounts.Ser
 // completePasskeyMFA finishes the pending sign-in with a passkey and returns the verified session.
 func completePasskeyMFA(t *testing.T, s *accounts.Service, auth *softAuthenticator, p accounts.Principal, cookie *http.Cookie) accounts.Issued {
 	t.Helper()
-	flow, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p)
+	flow, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,8 +439,9 @@ func assertCounterRefusals(t *testing.T, x site, s *accounts.Service, auth *soft
 	}
 }
 
-// assertTamperedAssertion checks that a signature over other bytes is refused.
-func assertTamperedAssertion(t *testing.T, s *accounts.Service, auth *softAuthenticator) {
+// assertTamperedAssertion checks that a valid discoverable flow with a signature over other bytes is refused and
+// recorded like a wrong password: one security.sign_in_failed entry and one counted site failure.
+func assertTamperedAssertion(t *testing.T, x site, s *accounts.Service, auth *softAuthenticator) {
 	t.Helper()
 	replay, err := s.BeginPasskeySignIn(t.Context(), console, client)
 	if err != nil {
@@ -449,6 +450,12 @@ func assertTamperedAssertion(t *testing.T, s *accounts.Service, auth *softAuthen
 	tampered := reSign(t, auth.assert(t, replay.PublicKey), func([]byte) []byte { return []byte("not a signature") })
 	if _, err := s.FinishPasskeySignIn(t.Context(), passkeyRequest(t, tampered), replay.FlowID, client, "test"); !errors.Is(err, accounts.ErrPasskeyFailed) {
 		t.Errorf("a tampered assertion: %v", err)
+	}
+	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action = 'security.sign_in_failed' AND detail->>'outcome' = 'bad_passkey'"); got[0] != "1" {
+		t.Errorf("security.sign_in_failed entries: %v, want 1", got)
+	}
+	if got := texts(t, x.db, platform, "SELECT coalesce(sum(failures + completed_peak), 0)::text FROM accounts.security_failures"); got[0] != "2" {
+		t.Errorf("counted failures after the tampered sign-in: %v, want 2", got)
 	}
 }
 
@@ -482,9 +489,10 @@ func TestPasskeyRegistrationSignInAndMFA(t *testing.T) {
 	verified := completePasskeyMFA(t, s, auth, pendingPrincipal, pendingCookie)
 	assertDiscoverableSignIn(t, x, s, auth)
 	assertCounterRefusals(t, x, s, auth)
-	assertTamperedAssertion(t, s, auth)
-	// Spent and unknown flows, a sign-in whose signature is wrong, and the credential's counter are not MFA guesses.
-	assertPasskeyFailures(t, x, "1")
+	assertTamperedAssertion(t, x, s, auth)
+	// A wrong second-factor assertion and a tampered discoverable sign-in are the two guessed factors; spent and
+	// unknown flows and the credential's counter are not.
+	assertPasskeyFailures(t, x, "2")
 	removePasskey(t, x, s, verified, passkey)
 }
 
