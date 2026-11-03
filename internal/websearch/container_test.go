@@ -80,7 +80,7 @@ func TestSearXNGContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start the mock results server: %v", err)
 	}
-	t.Cleanup(func() { terminate(t, mock) })
+	containertest.Cleanup(t, mock, "mock results server")
 
 	searxng, err := testcontainers.Run(ctx, searxngImage,
 		network.WithNetwork([]string{"searxng"}, nw),
@@ -94,7 +94,7 @@ func TestSearXNGContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start SearXNG: %v", err)
 	}
-	t.Cleanup(func() { terminate(t, searxng) })
+	containertest.Cleanup(t, searxng, "SearXNG")
 
 	client := egress.NewForTesting(egresstest.Loopback(t))
 	searcher, err := websearch.Open(websearch.Config{URL: searchURL(t, ctx, searxng)}, client)
@@ -132,13 +132,4 @@ func searchURL(t *testing.T, ctx context.Context, c testcontainers.Container) st
 		t.Fatalf("find the SearXNG port: %v", err)
 	}
 	return "http://" + net.JoinHostPort(host, port.Port())
-}
-
-func terminate(t *testing.T, c testcontainers.Container) {
-	t.Helper()
-	stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := testcontainers.TerminateContainer(c, testcontainers.StopContext(stopCtx)); err != nil {
-		t.Errorf("remove the container: %v", err)
-	}
 }
