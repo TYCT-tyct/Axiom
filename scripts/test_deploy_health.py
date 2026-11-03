@@ -48,7 +48,9 @@ class PostgresHealthcheck(unittest.TestCase):
         script = (ROOT / "scripts" / "ops" / "deploy.sh").read_text()
         match = re.search(r"up --detach --no-build --wait --wait-timeout (\S+) postgres", script)
         self.assertIsNotNone(match, "the production entry must bound the postgres wait")
-        self.assertGreaterEqual(duration_seconds(match.group(1)), budget)
+        # --wait-timeout is an integer number of seconds; 5m would be rejected by Compose at deploy time.
+        self.assertTrue(match.group(1).isdigit(), f"--wait-timeout takes integer seconds, not {match.group(1)}")
+        self.assertGreaterEqual(int(match.group(1)), budget)
 
 
 if __name__ == "__main__":
