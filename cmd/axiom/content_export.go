@@ -157,19 +157,15 @@ func runContentExport(ctx context.Context, db *pg.DB, objects *objectstore.Clien
 		discard(meta)
 		removeTemp(meta.Name())
 	}()
-	cacheMeta, cacheStats, err := prepareCacheExport(ctx, dbCacheSource{db}, gateway.CacheQuery{
+	cache, err := prepareCacheExport(ctx, dbCacheSource{db}, gateway.CacheQuery{
 		Since: scope.Since, Until: scope.Until, Site: scope.Site, Account: scope.Account,
-	})
+	}, keys)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		discard(cacheMeta)
-		removeTemp(cacheMeta.Name())
-	}()
-	cache := &cacheExport{meta: cacheMeta, stats: cacheStats, reader: dbCacheOpener{db: db, keys: keys}}
+	defer cache.cleanup()
 	exportID := uuid.NewV7()
-	if err := beginContentExport(ctx, db, exportID, approval, digest, stats, cacheStats); err != nil {
+	if err := beginContentExport(ctx, db, exportID, approval, digest, stats, cache.stats); err != nil {
 		return err
 	}
 	size, sum, err := writeContentExportFile(ctx, db, exportID, approval, raw, digest, recipient, meta, stats, cache, reader)
@@ -184,8 +180,8 @@ func runContentExport(ctx context.Context, db *pg.DB, objects *objectstore.Clien
 		"export":        exportID.String(),
 		"contents":      stats.Count,
 		"content_bytes": stats.Bytes,
-		"cache_entries": cacheStats.Count,
-		"cache_bytes":   cacheStats.Bytes,
+		"cache_entries": cache.stats.Count,
+		"cache_bytes":   cache.stats.Bytes,
 		"output":        approval.Destination,
 		"output_bytes":  size,
 		"sha256":        hex.EncodeToString(sum[:]),
@@ -352,7 +348,7 @@ func writeContentExportWithCache(ctx context.Context, dst io.Writer, approval co
 		if err := writeCacheManifestEntries(tw, cache.meta, now); err != nil {
 			return err
 		}
-		if err := writeCacheBodies(ctx, tw, cache.meta, cache.reader); err != nil {
+		if err := writeCacheBodies(tw, cache); err != nil {
 			return err
 		}
 	}

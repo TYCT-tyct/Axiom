@@ -200,7 +200,7 @@ TTL 按 OpenRouter 的读法：以开头的十进制数字为准，小数截断�
 
 **未命中与写入。** 只有上游 `200` 且回复完整、结算成功的调用才写入，错误、限流、半截流、客户端断开、结算失败的都不写。写入在回复交付之后异步进行，有界队列满了就丢弃并计数；写缓存失败只记日志，永远不失败或拖慢调用。条目在写入时按本次请求的 TTL 定过期时间，命中不会延长它。每个条目最多 1 MiB（上游原始回复字节），每个账户最多 64 MiB 或 1024 条，超出时按创建时间删最旧的；过期的条目由每分钟一次的清理删除，查询到过期条目也当未命中。
 
-**加密与保留。** 正文用信封加密保存（`secret.Keyring`，AAD 绑定 `gateway.response_cache` 的表、行和 `body` 用途），表按账户 RLS 隔离；数据库里没有明文正文。TTL 上限 24 小时，到期删除，`X-OpenRouter-Cache-Clear` 和未来的账户数据删除流程可以按账户删。现在没有按账户的数据保留设置：`docs/product.md` 规定对话正文保存由平台统一决定，`docs/security.md` 的删除流程还没有实现；因此平台开关默认关闭，只有平台明确允许才写入，写入时也只保留 TTL 这么短，正文不进入调用记录或内容接口。受控导出也覆盖缓存：它是 ≤24h 的回复副本、没有请求 ID，所以单独写成 `cache.jsonl` 和 `cache/<cache_id>`，仍受批准的时间窗和租户范围约束（见[记录的「受控导出」](observability.md#受控导出)）。账户数据删除流程实现时必须把 `gateway.response_cache` 纳入删除范围。
+**加密与保留。** 正文用信封加密保存（`secret.Keyring`，AAD 绑定 `gateway.response_cache` 的表、行和 `body` 用途），表按账户 RLS 隔离；数据库里没有明文正文。TTL 上限 24 小时，到期删除，`X-OpenRouter-Cache-Clear` 和未来的账户数据删除流程可以按账户删。现在没有按账户的数据保留设置：`docs/product.md` 规定对话正文保存由平台统一决定，`docs/security.md` 的删除流程还没有实现；因此平台开关默认关闭，只有平台明确允许才写入，写入时也只保留 TTL 这么短，正文不进入调用记录或内容接口。受控导出也覆盖缓存：它是 ≤24h 的回复副本、没有请求 ID，所以单独写成 `cache.jsonl` 和 `cache/<cache_id>`，仍受批准的时间窗和租户范围约束（见[记录的「受控导出」](observability.md#受控导出)）。导出在同一只读快照里读取缓存元数据和密封正文，正文在快照内打开并用本次导出的临时密钥加密到 0600 暂存文件，之后正常的过期清理、容量淘汰或同键替换不会造成导出失败或混入替换后的回复。账户数据删除流程实现时必须把 `gateway.response_cache` 纳入删除范围。
 
 **不缓存的路径。** 直连格式（Embeddings、Rerank、Completions）、`/responses/compact`、带 `previous_response_id` 的 Responses、`web`/`file-parser` 插件、`openrouter:web_search` 循环、服务端压缩和文件引用都不缓存。Embeddings 的整份 JSON 重放要另写一条不经 relay 的路径，等有需求时再加；在此之前，这些请求即使带缓存头也没有缓存响应头。
 

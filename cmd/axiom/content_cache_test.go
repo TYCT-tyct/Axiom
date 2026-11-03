@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"crypto/rand"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -47,25 +48,23 @@ func TestContentExportIncludesResponseCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanupTemp(contentMeta)
-	cacheMeta, cacheStats, err := prepareCacheExport(t.Context(), dbCacheSource{c.db}, gateway.CacheQuery{
+	cache, err := prepareCacheExport(t.Context(), dbCacheSource{c.db}, gateway.CacheQuery{
 		Since: now.Add(-2 * time.Hour), Until: now,
-	})
+	}, master)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanupTemp(cacheMeta)
-	if cacheStats.Count != 1 || cacheStats.Bytes != int64(len(payload)) {
-		t.Fatalf("cache stats %+v, want one payload of %d bytes", cacheStats, len(payload))
+	defer cache.cleanup()
+	if cache.stats.Count != 1 || cache.stats.Bytes != int64(len(payload)) {
+		t.Fatalf("cache stats %+v, want one payload of %d bytes", cache.stats, len(payload))
 	}
-	cache := &cacheExport{meta: cacheMeta, stats: cacheStats, reader: dbCacheOpener{db: c.db, keys: master}}
-
 	recipient, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	approval, raw, digest, _, _ := contentTestApproval(t, now, recipient.PublicKey().Bytes())
 	exportID := uuid.NewV7()
-	if err := beginContentExport(t.Context(), c.db, exportID, approval, digest, contentStats, cacheStats); err != nil {
+	if err := beginContentExport(t.Context(), c.db, exportID, approval, digest, contentStats, cache.stats); err != nil {
 		t.Fatal(err)
 	}
 	var storedCount, storedBytes int64
@@ -75,8 +74,30 @@ func TestContentExportIncludesResponseCache(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if storedCount != cacheStats.Count || storedBytes != cacheStats.Bytes {
-		t.Fatalf("stored cache stats %d/%d, want %+v", storedCount, storedBytes, cacheStats)
+	if storedCount != cache.stats.Count || storedBytes != cache.stats.Bytes {
+		t.Fatalf("stored cache stats %d/%d, want %+v", storedCount, storedBytes, cache.stats)
+	}
+	// The metadata transaction is closed and the approval is consumed. Replace the cache row before the final
+	// archive consumes the staged snapshot. A later metadata/payload read would export the replacement (or fail if
+	// the row were deleted); the staging must still yield the original payload.
+	replacement := append(append([]byte("replacement-state"), 0), []byte("replacement reply")...)
+	replacementSealed := master.Seal(secret.New(string(replacement)), secret.Location{
+		Table: "gateway.response_cache", RowID: cacheID.String(), Purpose: "body",
+	})
+	if err := c.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		tag, err := tx.Exec(t.Context(), `UPDATE gateway.response_cache
+			SET ciphertext = $1, nonce = $2, wrapped_dek = $3, key_version = $4, body_size = $5
+			WHERE id = $6`, replacementSealed.Ciphertext, replacementSealed.Nonce, replacementSealed.WrappedDEK,
+			replacementSealed.KeyVersion, len("replacement reply"), cacheID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("replacement affected %d rows", tag.RowsAffected())
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	var encrypted bytes.Buffer
 	if err := writeContentExportWithCache(t.Context(), &encrypted, approval, raw, digest, recipient.PublicKey(),

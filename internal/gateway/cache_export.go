@@ -39,9 +39,12 @@ type CacheStats struct {
 	Count, Bytes int64
 }
 
-// StreamCacheMeta walks response-cache rows in a stable order for the export's metadata manifest. The caller supplies
-// the platform-scope transaction; the cache body is not read until the export reaches it.
-func StreamCacheMeta(ctx context.Context, tx pg.Tx, q CacheQuery, each func(CacheMeta) error) (CacheStats, error) {
+// StreamCacheSealed walks response-cache rows and their sealed payloads in one query, so a later deletion or
+// replacement of the row cannot separate the exported metadata from the payload it describes. It is used inside a
+// read-only transaction; callbacks must decrypt and stage the payload before that transaction closes.
+func StreamCacheSealed(ctx context.Context, tx pg.Tx, q CacheQuery,
+	each func(CacheMeta, secret.Sealed, int) error,
+) (CacheStats, error) {
 	if each == nil {
 		return CacheStats{}, errors.New("gateway: cache export needs a callback")
 	}
@@ -50,7 +53,7 @@ func StreamCacheMeta(ctx context.Context, tx pg.Tx, q CacheQuery, each func(Cach
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT id, site_id, account_id, source_id, format, model, created_at, expires_at,
-		       octet_length(ciphertext) - 16
+		       octet_length(ciphertext) - 16, ciphertext, nonce, wrapped_dek, key_version, body_size
 		FROM gateway.response_cache
 		WHERE created_at >= $1 AND created_at < $2
 		  AND ($3::uuid IS NULL OR site_id = $3)
@@ -63,23 +66,13 @@ func StreamCacheMeta(ctx context.Context, tx pg.Tx, q CacheQuery, each func(Cach
 	defer rows.Close()
 	var stats CacheStats
 	for rows.Next() {
-		var m CacheMeta
-		var format int16
-		if err := rows.Scan(&m.ID, &m.Site, &m.Account, &m.Source, &format, &m.Model, &m.CreatedAt,
-			&m.ExpiresAt, &m.Size); err != nil {
-			return CacheStats{}, fmt.Errorf("gateway: read a response-cache row: %w", err)
+		m, sealed, bodySize, err := scanCacheSealed(rows)
+		if err != nil {
+			return CacheStats{}, err
 		}
-		if format < 0 || format > 255 {
-			return CacheStats{}, fmt.Errorf("gateway: response cache %s has format %d", m.ID, format)
-		}
-		if m.Size <= 0 {
-			return CacheStats{}, fmt.Errorf("gateway: response cache %s has size %d", m.ID, m.Size)
-		}
-		m.Format = uint8(format) // #nosec G115 -- the bounds check above keeps the conversion in range.
-		m.Path = "cache/" + m.ID.String()
 		stats.Count++
 		stats.Bytes += m.Size
-		if err := each(m); err != nil {
+		if err := each(m, sealed, bodySize); err != nil {
 			return CacheStats{}, err
 		}
 	}
@@ -89,22 +82,47 @@ func StreamCacheMeta(ctx context.Context, tx pg.Tx, q CacheQuery, each func(Cach
 	return stats, nil
 }
 
-// ReadCachePayload opens one cache row. The returned bytes are the complete plaintext payload: the turn state, a NUL,
-// and the upstream reply. The caller verifies the manifest size and writes the bytes unchanged.
-func ReadCachePayload(ctx context.Context, tx pg.Tx, keys *secret.Keyring, m CacheMeta) ([]byte, error) {
-	if keys == nil {
-		return nil, errors.New("gateway: cache export needs the platform keyring")
-	}
+type cacheRows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+}
+
+func scanCacheSealed(rows cacheRows) (CacheMeta, secret.Sealed, int, error) {
 	var (
+		m        CacheMeta
 		sealed   secret.Sealed
+		format   int16
 		bodySize int
 	)
-	if err := tx.QueryRow(ctx, `
-		SELECT ciphertext, nonce, wrapped_dek, key_version, body_size
-		FROM gateway.response_cache
-		WHERE id = $1 AND site_id = $2 AND account_id = $3`, m.ID, m.Site, m.Account).
-		Scan(&sealed.Ciphertext, &sealed.Nonce, &sealed.WrappedDEK, &sealed.KeyVersion, &bodySize); err != nil {
-		return nil, fmt.Errorf("gateway: read response cache %s: %w", m.ID, err)
+	if err := rows.Scan(&m.ID, &m.Site, &m.Account, &m.Source, &format, &m.Model, &m.CreatedAt,
+		&m.ExpiresAt, &m.Size, &sealed.Ciphertext, &sealed.Nonce, &sealed.WrappedDEK, &sealed.KeyVersion,
+		&bodySize); err != nil {
+		return m, sealed, 0, fmt.Errorf("gateway: read a response-cache row: %w", err)
+	}
+	if format < 0 || format > 255 {
+		return m, sealed, 0, fmt.Errorf("gateway: response cache %s has format %d", m.ID, format)
+	}
+	if m.Size <= 0 {
+		return m, sealed, 0, fmt.Errorf("gateway: response cache %s has size %d", m.ID, m.Size)
+	}
+	if bodySize < 0 {
+		return m, sealed, 0, fmt.Errorf("gateway: response cache %s has body size %d", m.ID, bodySize)
+	}
+	m.Format = uint8(format) // #nosec G115 -- the bounds check above keeps the conversion in range.
+	m.Path = "cache/" + m.ID.String()
+	return m, sealed, bodySize, nil
+}
+
+// OpenCachePayload opens a sealed cache payload already read from the database. It validates the turn state, reply
+// length and total manifest size without issuing another query.
+func OpenCachePayload(m CacheMeta, sealed secret.Sealed, bodySize int, keys *secret.Keyring) ([]byte, error) {
+	return openCachePayload(m, sealed, bodySize, keys)
+}
+
+func openCachePayload(m CacheMeta, sealed secret.Sealed, bodySize int, keys *secret.Keyring) ([]byte, error) {
+	if keys == nil {
+		return nil, errors.New("gateway: cache export needs the platform keyring")
 	}
 	opened, err := keys.Open(sealed, secret.Location{Table: "gateway.response_cache", RowID: m.ID.String(), Purpose: "body"})
 	if err != nil {

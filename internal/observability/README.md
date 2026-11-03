@@ -75,9 +75,9 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 `cmd/axiom content export` 是唯一读正文的命令：它验负责人签名、在平台范围写 `content_exports` 和 `content_export.start`、把引用写成 `manifest.jsonl`、逐条读出并认证，再把 tar.gz 经 X25519 + HKDF-SHA256 + 分块 AES-256-GCM 写给负责人；`content/<request_id>/<kind>/<part>` 让同一请求的多条消息或附件各有唯一路径。`keygen`、`approve`、`decrypt` 只在负责人机器上运行。格式、批准字段和威胁模型见[记录与告警的「受控导出」](../../docs/domains/observability.md#受控导出)。
 
-`gateway.response_cache` 也参与导出：它是最多 24 小时的回复副本，可能包含尚未进入 `content_*` 的回复；没有请求 ID，所以单独写 `cache.jsonl` 和 `cache/<cache_id>`，仍按批准的时间窗和租户范围选。`cache/<cache_id>` 是状态、NUL 和回复的原始载荷。删除账户时它必须和 `observability.content_*` 一起删除（[安全的「内容安全」](../../docs/security.md#内容安全)）。
+`gateway.response_cache` 也参与导出：它是最多 24 小时的回复副本，可能包含尚未进入 `content_*` 的回复；没有请求 ID，所以单独写 `cache.jsonl` 和 `cache/<cache_id>`，仍按批准的时间窗和租户范围选。缓存元数据和密封正文在同一个只读快照里读出，正文在快照内打开并用本次导出的临时密钥加密到 0600 暂存，快照结束后的正常过期、淘汰或同键替换不会拆开清单和正文；暂存不含缓存明文。`cache/<cache_id>` 是状态、NUL 和回复的原始载荷。删除账户时它必须和 `observability.content_*` 一起删除（[安全的「内容安全」](../../docs/security.md#内容安全)）。
 
-测试：`TestContentSealOpen`、`TestContentMetaScope`、`TestContentMetaMultipleParts`、`TestContentReader`、`TestContentKeyIsBoundToItsAccount`、`TestContentTablesArePlatformOnly` 覆盖加密、范围、组件路径、密钥绑定和 RLS；`TestContentApprovalVerifies`、`TestContentKeygenAndApprove`、`TestContentExportRoundTrip`、`TestContentExportIncludesResponseCache`、`TestContentExportRowsAndAudit` 覆盖双签名、命令、缓存和审计。
+测试：`TestContentSealOpen`、`TestContentMetaScope`、`TestContentMetaMultipleParts`、`TestContentReader`、`TestContentKeyIsBoundToItsAccount`、`TestContentTablesArePlatformOnly` 覆盖加密、范围、组件路径、密钥绑定和 RLS；`TestContentApprovalVerifies`、`TestContentKeygenAndApprove`、`TestContentExportRoundTrip`、`TestContentExportIncludesResponseCache`、`TestContentExportRowsAndAudit` 覆盖双签名、命令、缓存快照替换和审计。
 
 ## 不变量
 
