@@ -30,7 +30,7 @@ func (b *bank) saveFallbacks(body string) error {
 	return b.app.Tx(b.t.Context(), b.platform, func(tx pg.Tx) error { return SaveFallbacks(b.t.Context(), tx, r) })
 }
 
-// fallbackBank is a bank whose fallbacks are testFallbacks: a web search 20, a code execution 50, markup 1.5.
+// fallbackBank is a bank whose fallbacks are testFallbacks: a web search 20, a code execution 50.
 func fallbackBank(t *testing.T, balance, floor int64, config Config) *bank {
 	t.Helper()
 	b := newBank(t, balance, floor, config)
@@ -247,7 +247,7 @@ func fallbackWaiver(t *testing.T) {
 // amount holds; the charge saturates instead of failing and the account pays what it has above the floor.
 func fallbackHuge(t *testing.T) {
 	b := fallbackBank(t, 10_000, 0, fallbackBankConfig)
-	if err := b.saveFallbacks(`{"currency":"USD","markup":"1.2","per_use":{"code_execution":"1","web_search":"1"}}`); err != nil {
+	if err := b.saveFallbacks(`{"currency":"USD","per_use":{"code_execution":"1","web_search":"1"}}`); err != nil {
 		t.Fatal(err)
 	}
 	h := b.hold(1000)
@@ -423,14 +423,13 @@ func TestFallbackSettings(t *testing.T) {
 
 	b := newBank(t, 10_000, 0, Config{})
 	seeded := b.count("SELECT count(*) FROM billing.fallbacks WHERE currency = 'USD' AND body = " +
-		`'{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0.05","web_search":"0.025"}}'`)
+		`'{"currency":"USD","per_use":{"code_execution":"0.05","web_search":"0.025"}}'`)
 	if seeded != 1 {
 		t.Fatal("the migration did not seed the USD row")
 	}
 	for _, body := range []string{
-		`{"currency":"USD","markup":"0.9","per_use":{"code_execution":"0.05","web_search":"0.025"}}`,
-		`{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0","web_search":"0.025"}}`,
-		`{"currency":"USD","markup":"1.2","per_use":{"web_search":"0.025"}}`,
+		`{"currency":"USD","per_use":{"code_execution":"0.05","web_search":"0"}}`,
+		`{"currency":"USD","per_use":{"web_search":"0.025"}}`,
 	} {
 		if err := b.saveFallbacks(body); !errors.Is(err, errFallbacks) {
 			t.Errorf("saving %s = %v, want refused", body, err)
@@ -464,12 +463,34 @@ func TestFallbackSettings(t *testing.T) {
 	}
 }
 
+// TestLockedFallbacksFromBeforeTheMarkupWasDropped: a reservation admitted before #232 locked the fallback text with the
+// markup; it still settles at the prices it locked, and the read leaves the row exactly as written. The stored row no
+// longer takes the member (TestFallbackSettings), so only a writer of the previous release can have produced it.
+func TestLockedFallbacksFromBeforeTheMarkupWasDropped(t *testing.T) {
+	t.Parallel()
+
+	b := fallbackBank(t, 10_000, 0, Config{})
+	h := b.hold(1000)
+	legacy := `{"currency":"USD","markup":"1.5","per_use":{"code_execution":"0.00000005","web_search":"0.00000002"}}`
+	b.sql(`UPDATE billing.reservations SET fallbacks = ARRAY['` + legacy + `'] WHERE request_id = '` + h.id.String() + `'`)
+	s := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, catalog.ItemCodeExecution: 1})
+	const want = 120 // 70 billionths of tokens and one code execution at the locked 0.00000005
+	if f := b.settleWith(h, outcome(Committed, FinishStop, s)); f.Charged != platform.AmountExact(want) {
+		t.Errorf("Settle = %+v, want the prices the row locked, %d", f, want)
+	}
+	b.expect("settled", want)
+	if n := b.count(`SELECT count(*) FROM billing.reservations WHERE fallbacks[1] LIKE '%"markup"%'`); n != 1 {
+		t.Errorf("the locked row was rewritten: %d rows still hold its markup, want 1", n)
+	}
+}
+
 // TestStartChecksFallbacks: Start refuses fallback rows that fail the check, or no USD row, before it registers.
 func TestStartChecksFallbacks(t *testing.T) {
 	t.Parallel()
 
 	for name, statement := range map[string]string{
-		"an invalid row":               `UPDATE billing.fallbacks SET body = replace(body, '"markup":"1.2"', '"markup":"0.5"')`,
+		"an invalid row":               `UPDATE billing.fallbacks SET body = replace(body, '"web_search":"0.025"', '"web_search":"0"')`,
+		"a leftover markup":            `UPDATE billing.fallbacks SET body = replace(body, '"per_use"', '"markup":"1.2","per_use"')`,
 		"a row that is no JSON":        `UPDATE billing.fallbacks SET body = '{'`,
 		"a row under another currency": `INSERT INTO billing.fallbacks (currency, body) SELECT 'EUR', body FROM billing.fallbacks`,
 		"no USD row":                   `DELETE FROM billing.fallbacks`,

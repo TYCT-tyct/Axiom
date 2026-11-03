@@ -87,7 +87,7 @@ func chargeDetails(r ReadChargesRow) (ChargeDetails, error) {
 	if err != nil {
 		return ChargeDetails{}, err
 	}
-	f, err := parseFallbacks(r.Fallback)
+	f, err := parseLockedFallbacks(r.Fallback)
 	if err != nil {
 		return ChargeDetails{}, err
 	}
