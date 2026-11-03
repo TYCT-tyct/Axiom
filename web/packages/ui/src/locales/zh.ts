@@ -113,7 +113,7 @@ export default {
   publicModels: {
     title: "模型与价格",
     description:
-      "已发布的模型、它的限制、提供服务的端点和你要付的价格。价格是精确的；中转端点用稳定的匿名代号，不显示供应商名称、上游或成本数据。",
+      "已发布的模型、它的限制、提供服务的端点，以及站点公开价格时你要付的价格。价格是精确的；中转端点用稳定的匿名代号，不显示供应商名称、上游或成本数据。",
     search: "模型",
     searchHint: "ID 或名称",
     author: "厂商",
@@ -127,6 +127,7 @@ export default {
     unavailableTitle: "价格暂不可用",
     unavailableBody: "这台服务器还没有模型与价格页，请在下次更新后再试。",
     priceUnavailable: "价格暂不可用",
+    pricesNotPublic: "价格仅对登录用户可见。登录后可查看本站价格。",
     context: "上下文",
     maxOutput: "最大输出",
     streams: "流式输出",

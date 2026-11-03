@@ -537,6 +537,18 @@ func (q *Queries) MemberRoles(ctx context.Context, db DBTX, arg MemberRolesParam
 	return items, nil
 }
 
+const modelPricesPublicReady = `-- name: ModelPricesPublicReady :one
+SELECT coalesce((SELECT enabled FROM platform.model_prices_public_readiness WHERE id), false)::boolean AS ready
+`
+
+// No row means no new node has declared support yet, so the anonymous projection stays public.
+func (q *Queries) ModelPricesPublicReady(ctx context.Context, db DBTX) (bool, error) {
+	row := db.QueryRow(ctx, modelPricesPublicReady)
+	var ready bool
+	err := row.Scan(&ready)
+	return ready, err
+}
+
 const pendingSession = `-- name: PendingSession :many
 SELECT id, csrf_token, factor_version, mfa_attempts FROM accounts.sessions
 WHERE token_hash = $1 AND level = 'pending_mfa' AND revoked_at IS NULL AND expires_at > now()

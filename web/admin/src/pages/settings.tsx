@@ -2,6 +2,7 @@ import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors, useSession } from "@axiom/app";
 import {
   Button,
+  CheckField,
   DataState,
   Icon,
   moneyInput,
@@ -19,6 +20,7 @@ import { useDuration } from "../durations";
 import { FileParserSettings } from "../file-parser-settings";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { MailSettings } from "../mail-settings";
+import { modelPricesChangeUnconfirmed } from "../model-prices";
 import { Facts, PageBody, State } from "../parts";
 import { PaymentsSettings } from "../payments-settings";
 import { ProbeSettings } from "../probe-settings";
@@ -140,6 +142,18 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
       {t(`settings.billing.values.${preference}`)} {settings.billing_preference ? own : standard}
     </span>,
   ]);
+  // A node of the release before this setting has no default for it: the row and the field stay off rather than send a
+  // field that node would silently ignore, which would make the save look applied.
+  if (defaults.model_prices_public !== undefined) {
+    const publicPrices = settings.model_prices_public ?? defaults.model_prices_public;
+    rows.push([
+      t("settings.field.model_prices_public"),
+      <span key="model-prices-public">
+        {t(`settings.publicPrices.values.${publicPrices ? "public" : "private"}`)}{" "}
+        {settings.model_prices_public === undefined ? standard : own}
+      </span>,
+    ]);
+  }
   return (
     <>
       <Facts
@@ -178,6 +192,7 @@ function readSettings(
   values: Record<string, string>,
   limitCurrency: string | undefined,
   words: { range: string; limit: string },
+  supportsModelPrices: boolean,
 ): Settings | Problem {
   const settings = readDurations(values, words.range);
   if ("problem" in settings) {
@@ -186,6 +201,11 @@ function readSettings(
   const preference = (values.billing_preference ?? "").trim();
   if (preference !== "") {
     settings.billing_preference = preference as Settings["billing_preference"];
+  }
+  if (supportsModelPrices) {
+    // The checkbox is only redrawn by this page when the node knows the field; unchecked means the site keeps its
+    // prices to signed-in members, which is an explicit false rather than an omitted field.
+    settings.model_prices_public = values.model_prices_public === "true";
   }
   const limit = (values.new_key_daily_limit ?? "").trim();
   if (limit !== "") {
@@ -239,6 +259,15 @@ function SettingsFields({
         <option value="subscription_only">{t("settings.billing.values.subscription_only")}</option>
         <option value="wallet_only">{t("settings.billing.values.wallet_only")}</option>
       </SelectField>
+      {view.defaults.model_prices_public !== undefined ? (
+        <CheckField
+          label={t("settings.field.model_prices_public")}
+          hint={t("settings.publicPrices.hint")}
+          name="model_prices_public"
+          value="true"
+          defaultChecked={view.settings.model_prices_public ?? view.defaults.model_prices_public}
+        />
+      ) : null}
       <TextField
         label={t("settings.field.new_key_daily_limit")}
         hint={t("settings.limitHint", { currency: currency ?? "" })}
@@ -271,16 +300,27 @@ function EditDialog({
       intro={<p>{t("settings.intro")}</p>}
       action={t("settings.save")}
       fields={(error) => <SettingsFields view={view} currency={currency} error={error} />}
-      read={(values) => readSettings(values, currency, words)}
-      send={(settings, { reason, key }) =>
-        unwrapChange(
+      read={(values) => readSettings(values, currency, words, view.defaults.model_prices_public !== undefined)}
+      send={async (settings, { reason, key }) => {
+        const result = await unwrapChange(
           adminApi.PUT("/api/admin/v1/sites/{site_id}/settings", {
             params: { path: { site_id: siteId }, header: { "Idempotency-Key": key } },
             body: { settings, reason },
           }),
-        )
-      }
-      done={() => <p>{t("settings.saved")}</p>}
+        );
+        const unconfirmed = modelPricesChangeUnconfirmed(view, settings, result.data);
+        return { ...result, data: { ...result.data, modelPricesSaved: !unconfirmed } };
+      }}
+      verdict
+      done={(out) => (
+        <p role="status" className="flex items-start gap-2 text-t1">
+          <Icon
+            name={out.modelPricesSaved ? "check" : "alert"}
+            className={out.modelPricesSaved ? "mt-0.5 shrink-0 text-ok" : "mt-0.5 shrink-0 text-bad"}
+          />
+          <span>{t(out.modelPricesSaved ? "settings.saved" : "settings.publicPrices.notSaved")}</span>
+        </p>
+      )}
       onClose={onClose}
     />
   );

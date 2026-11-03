@@ -112,7 +112,7 @@ export default {
   publicModels: {
     title: "Models & prices",
     description:
-      "Every published model, its limits, the endpoints that serve it and the price you pay. Prices are exact; reseller endpoints use stable anonymous codenames, and no supplier, upstream or cost data is shown.",
+      "Every published model, its limits, the endpoints that serve it and, when the site publishes them, the price you pay. Prices are exact; reseller endpoints use stable anonymous codenames, and no supplier, upstream or cost data is shown.",
     search: "Model",
     searchHint: "ID or name",
     author: "Author",
@@ -126,6 +126,7 @@ export default {
     unavailableTitle: "Prices aren’t available",
     unavailableBody: "This server doesn’t have the models and prices page yet. Try again after the next update.",
     priceUnavailable: "Prices unavailable",
+    pricesNotPublic: "Prices are visible to signed-in members. Sign in to see this site’s prices.",
     context: "Context",
     maxOutput: "Max output",
     streams: "Streaming",
