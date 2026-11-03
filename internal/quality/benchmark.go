@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,7 +41,7 @@ const (
 	checkJSONEquals = "json_equals" // the reply is the JSON value Value
 )
 
-//go:embed benchmark-v1.json
+//go:embed benchmark-v2.json
 var benchmarkBytes []byte
 
 // BenchmarkQuestion is one fixed question and the checks its answer must pass. A question contributes the fraction of
@@ -269,7 +270,7 @@ func (c BenchmarkCheck) matchesJSON(reply string) bool {
 		return false
 	}
 	want, ok := jsonAnswer(c.Value)
-	return ok && equalJSON(got, want)
+	return ok && reflect.DeepEqual(got, want)
 }
 
 // jsonAnswer parses one JSON value, stripping one surrounding Markdown fence if the answer has it.
@@ -300,49 +301,6 @@ func jsonScalar(value any) string {
 		return strconv.FormatBool(v)
 	}
 	return ""
-}
-
-// equalJSON compares two parsed JSON values. Numbers decode as float64 on both sides, so equality is numeric.
-//
-//nolint:cyclop,gocognit // one branch per JSON value type; the types are a closed set
-func equalJSON(a, b any) bool {
-	switch av := a.(type) {
-	case map[string]any:
-		bv, ok := b.(map[string]any)
-		if !ok || len(av) != len(bv) {
-			return false
-		}
-		for k, v := range av {
-			other, ok := bv[k]
-			if !ok || !equalJSON(v, other) {
-				return false
-			}
-		}
-		return true
-	case []any:
-		bv, ok := b.([]any)
-		if !ok || len(av) != len(bv) {
-			return false
-		}
-		for i := range av {
-			if !equalJSON(av[i], bv[i]) {
-				return false
-			}
-		}
-		return true
-	case float64:
-		bv, ok := b.(float64)
-		return ok && av == bv
-	case string:
-		bv, ok := b.(string)
-		return ok && av == bv
-	case bool:
-		bv, ok := b.(bool)
-		return ok && av == bv
-	case nil:
-		return b == nil
-	}
-	return false
 }
 
 // judgeBenchmarkAnswer is the fraction of a question's checks the answer passes.
@@ -400,15 +358,18 @@ func scoreBenchmark(set *BenchmarkSet, official, candidate BenchmarkRun) (Benchm
 	}, true
 }
 
-// benchmarkPairs is the paired evidence of one comparison: the question-equivalents on each side, and the per-question
-// fractions the interval needs.
+// benchmarkPairs is the evidence of one comparison. paired counts the official questions the candidate actually
+// answered, which is the coverage floor; the score and the interval use every official answer, with a missing
+// candidate answer counted as zero.
 type benchmarkPairs struct {
 	paired, officialAnswered        int
 	officialPoints, candidatePoints float64
 	officialScores, candidateScores []float64
 }
 
-// pairedScores sums the question-equivalents and collects the paired fractions used by the interval.
+// pairedScores sums the question-equivalents and collects one official/candidate fraction per official answer. A
+// candidate that missed a question scores zero there rather than dropping the question, so a missing first answer
+// cannot make the official mean zero and reject an otherwise valid zero score.
 func pairedScores(set *BenchmarkSet, official, candidate map[string]BenchmarkAnswer) benchmarkPairs {
 	pairs := benchmarkPairs{
 		officialScores:  make([]float64, 0, len(set.Questions)),
@@ -422,12 +383,12 @@ func pairedScores(set *BenchmarkSet, official, candidate map[string]BenchmarkAns
 		pairs.officialAnswered++
 		officialScore := judgeBenchmarkAnswer(q, o.Reply)
 		pairs.officialPoints += officialScore
+		candidateScore := 0.0
 		c, ok := candidate[q.ID]
-		if !ok || !c.Complete {
-			continue
+		if ok && c.Complete {
+			pairs.paired++
+			candidateScore = judgeBenchmarkAnswer(q, c.Reply)
 		}
-		pairs.paired++
-		candidateScore := judgeBenchmarkAnswer(q, c.Reply)
 		pairs.candidatePoints += candidateScore
 		pairs.officialScores = append(pairs.officialScores, officialScore)
 		pairs.candidateScores = append(pairs.candidateScores, candidateScore)
@@ -435,8 +396,8 @@ func pairedScores(set *BenchmarkSet, official, candidate map[string]BenchmarkAns
 	return pairs
 }
 
-// scoreCoverage is the floor for a comparable score: enough official answers, enough pairs, and enough of the official
-// answers paired with the candidate.
+// scoreCoverage is the floor for a comparable score: enough official answers, enough candidate answers, and enough of
+// the official answers paired with the candidate.
 func scoreCoverage(total, officialAnswered, paired int) bool {
 	if officialAnswered < int(math.Ceil(benchmarkCoverage*float64(total))) {
 		return false
@@ -445,9 +406,9 @@ func scoreCoverage(total, officialAnswered, paired int) bool {
 		paired >= int(math.Ceil(benchmarkCoverage*float64(officialAnswered)))
 }
 
-// benchmarkConfidence turns the paired fractions into the score's statistical confidence. The paired differences carry
-// the sampling noise: the standard error of the ratio of the two runs' means, by the delta method. It covers the
-// candidate's wrong answers and the official run's own misses.
+// benchmarkConfidence turns the fractions into the score's statistical confidence. The differences carry the sampling
+// noise: the standard error of the ratio of the two runs' means, by the delta method. It covers the candidate's wrong
+// and missing answers and the official run's own misses.
 func benchmarkConfidence(officialScores, candidateScores []float64) (float64, bool) {
 	paired := len(officialScores)
 	meanOfficial := sum(officialScores) / float64(paired)
@@ -528,6 +489,13 @@ func benchmarkFormat(f protocol.Format) bool {
 	return f == protocol.Chat || f == protocol.Messages || f == protocol.Responses
 }
 
+// cloneBenchmarkRun detaches a recorded run's answers from the caller's slice, so a reused or mutated input cannot
+// change the baseline after it has been accepted.
+func cloneBenchmarkRun(run BenchmarkRun) BenchmarkRun {
+	run.Answers = slices.Clone(run.Answers)
+	return run
+}
+
 // officialBenchmark is the official direct endpoint's run for one catalog model, the anchor every endpoint of that
 // model is scored against. It is kept in memory; persistence and cross-node adoption follow the same path as
 // verification (docs/domains/quality.md「产品成绩（固定测评题）」).
@@ -580,6 +548,7 @@ func (b benchmarkState) productScore(now time.Time, baseline officialBenchmark, 
 // cannot replace a newer anchor. It also records the endpoint's own 100 through RecordBenchmark when its snapshot is
 // current.
 func (m *Monitor) RecordOfficialBenchmark(ep suppliers.Routable, run BenchmarkRun) bool {
+	run = cloneBenchmarkRun(run)
 	set := fixedBenchmark()
 	if ep.Model == (uuid.UUID{}) || !benchmarkRunAllowed(ep, run, set) {
 		return false
@@ -615,25 +584,40 @@ func (m *Monitor) RecordBenchmark(ep suppliers.Routable, run BenchmarkRun) (Benc
 	m.mu.RLock()
 	baseline, ok := m.benchmarks[ep.Model]
 	m.mu.RUnlock()
-	if !ok || run.Format != baseline.run.Format || run.At.Sub(baseline.run.At) >= benchmarkMaxAge {
+	if !ok || run.Format != baseline.run.Format || run.At.Before(baseline.run.At) || run.At.Sub(baseline.run.At) >= benchmarkMaxAge {
 		return BenchmarkResult{}, false
 	}
 	score, ok := scoreBenchmark(set, baseline.run, run)
 	if !ok {
 		return BenchmarkResult{}, false
 	}
+	if !m.commitBenchmark(ep, baseline, run, score) {
+		return BenchmarkResult{}, false
+	}
+	return score, true
+}
+
+// commitBenchmark stores a score only if the baseline it was scored against is still the current one. The monitor
+// lock stays held across the endpoint commit, so a replacement cannot slip between the check and the store.
+func (m *Monitor) commitBenchmark(ep suppliers.Routable, baseline officialBenchmark, run BenchmarkRun, score BenchmarkResult) bool {
 	e := m.of(ep.ID)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	current, ok := m.benchmarks[ep.Model]
+	if !ok || !current.run.At.Equal(baseline.run.At) || current.run.Format != baseline.run.Format {
+		return false
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.current != configOf(ep) {
-		return BenchmarkResult{}, false
+		return false
 	}
 	if !e.benchmark.at.IsZero() && !run.At.After(e.benchmark.at) {
-		return BenchmarkResult{}, false
+		return false
 	}
 	e.benchmark = benchmarkState{
-		version: set.Version, baseline: baseline.run.At,
+		version: score.Version, baseline: baseline.run.At,
 		score: score.Score, confidence: score.Confidence, at: score.At,
 	}
-	return score, true
+	return true
 }

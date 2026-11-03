@@ -50,6 +50,8 @@ func TestJudgeBenchmarkAnswer(t *testing.T) {
 		},
 		{"json equals", []BenchmarkCheck{{Kind: checkJSONEquals, Value: "[1,4,9,16]"}}, `[1, 4, 9, 16]`, 1},
 		{"json equals order", []BenchmarkCheck{{Kind: checkJSONEquals, Value: "[1,4,9,16]"}}, `[4,1,9,16]`, 0},
+		{"json equals keeps a boolean type", []BenchmarkCheck{{Kind: checkJSONEquals, Value: `{"ok":true}`}}, `{"ok":"true"}`, 0},
+		{"json equals keeps a number type", []BenchmarkCheck{{Kind: checkJSONEquals, Value: `{"count":3}`}}, `{"count":"3"}`, 0},
 		{"a partial multi-check answer", []BenchmarkCheck{
 			{Kind: checkContains, Value: "sequence"},
 			{Kind: checkContains, Value: "acknowledge"},
@@ -117,7 +119,7 @@ func TestScoreBenchmark(t *testing.T) {
 		{"fewer than the minimum pairs has no score", set, official, syntheticRun(set, t0, 19, 19), false, 0, 0, 0},
 		{"an official that passed nothing has no score", set, syntheticRun(set, t0, 20, 0), syntheticRun(set, t0, 20, 20), false, 0, 0, 0},
 		{"a candidate under the 30-question floor", syntheticSet(30), syntheticRun(syntheticSet(30), t0, 30, 30), syntheticRun(syntheticSet(30), t0, 30, 27), true, 90, 0.891, 27},
-		{"a candidate that answered 90% correctly", syntheticSet(30), syntheticRun(syntheticSet(30), t0, 30, 30), syntheticRun(syntheticSet(30), t0, 27, 27), true, 90, 0.9, 27},
+		{"a candidate that answered 90% correctly", syntheticSet(30), syntheticRun(syntheticSet(30), t0, 30, 30), syntheticRun(syntheticSet(30), t0, 27, 27), true, 90, 0.802, 27},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -138,6 +140,48 @@ func TestScoreBenchmark(t *testing.T) {
 				t.Errorf("points = %v, want %v", got.Points, c.wantPoints)
 			}
 		})
+	}
+}
+
+func TestBenchmarkStructuredQuestionsRequireTypes(t *testing.T) {
+	t.Parallel()
+	set := fixedBenchmark()
+	for _, c := range []struct{ id, correct, wrong string }{
+		{"json-person", `{"name":"Ada","age":36}`, `{"name":"Ada","age":"36"}`},
+		{"json-flags", `{"ok":true,"count":3}`, `{"ok":"true","count":3}`},
+	} {
+		var q BenchmarkQuestion
+		for _, candidate := range set.Questions {
+			if candidate.ID == c.id {
+				q = candidate
+				break
+			}
+		}
+		if q.ID == "" {
+			t.Fatalf("question %s is missing", c.id)
+		}
+		if got := judgeBenchmarkAnswer(q, c.correct); got != 1 {
+			t.Errorf("%s correct answer scored %v", c.id, got)
+		}
+		if got := judgeBenchmarkAnswer(q, c.wrong); got != 0 {
+			t.Errorf("%s wrong JSON type scored %v", c.id, got)
+		}
+	}
+}
+
+func TestScoreBenchmarkMissingAnswerCountsZero(t *testing.T) {
+	t.Parallel()
+	set := fixedBenchmark()
+	official := runOfSet(set, t0, "no")
+	official.Answers[0].Reply = "391" // the only official point
+	candidate := official
+	candidate.Answers = append([]BenchmarkAnswer(nil), official.Answers[1:]...)
+	got, ok := scoreBenchmark(set, official, candidate)
+	if !ok {
+		t.Fatal("a covered zero score was rejected")
+	}
+	if got.Score != 0 || got.Points != 0 || got.Answered != len(set.Questions)-1 {
+		t.Fatalf("missing answer scored %+v, want 0 with one missing pair", got)
 	}
 }
 

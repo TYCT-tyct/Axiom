@@ -1,6 +1,6 @@
 {
-  "note": "Replays of the benchmark-v1 question set for the scoring and recorded-sample tests. The answers were written to the set; this machine has no model API credentials, so they were not scraped from live endpoints. The official run passes every check, the capable relay misses three, the degraded relay misses ten questions and one explanation check, and the partial run answers only half the set.",
-  "set": "benchmark-v1",
+  "note": "Replays of the benchmark-v2 question set for the scoring and recorded-sample tests. The answers were written to the set; this machine has no model API credentials, so they were not scraped from live endpoints. The official run passes every check, the capable relay misses three, the degraded relay misses ten questions and one explanation check, and the partial run answers only half the set.",
+  "set": "benchmark-v2",
   "runs": [
     {
       "name": "official",

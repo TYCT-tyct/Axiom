@@ -12,15 +12,15 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// benchmarkV1Hash is the exact set the recorded scores belong to. Editing benchmark-v1.json without a new version and
+// benchmarkV2Hash is the exact set the recorded scores belong to. Editing benchmark-v2.json without a new version and
 // a new hash must fail here: an edited set silently makes every stored score incomparable.
-const benchmarkV1Hash = "ff6a5f8c544197e288cf24fd2bb0e51b5e2645e6527e7c57d0baf38512d4f919"
+const benchmarkV2Hash = "5ac6d2c34cbd4dee0faedf8cb8d3547039f037be81f1ede2626dea42d4c3175e"
 
 func TestBenchmarkSet(t *testing.T) {
 	t.Parallel()
 	set := fixedBenchmark()
-	if set.Version != "benchmark-v1" || set.Hash != benchmarkV1Hash {
-		t.Fatalf("set %q hash %s, want benchmark-v1 %s", set.Version, set.Hash, benchmarkV1Hash)
+	if set.Version != "benchmark-v2" || set.Hash != benchmarkV2Hash {
+		t.Fatalf("set %q hash %s, want benchmark-v2 %s", set.Version, set.Hash, benchmarkV2Hash)
 	}
 	if len(set.Questions) != 34 {
 		t.Fatalf("%d questions, want 34", len(set.Questions))
@@ -70,6 +70,135 @@ func TestRecordBenchmark(t *testing.T) {
 	if expired := m.MeasuredFor(candidate, at.Add(benchmarkMaxAge)); expired.ProductScore != 0 ||
 		expired.ProductScoreConfidence != 0 || !expired.ProductScoreAt.Equal(at) {
 		t.Fatalf("aged out: %+v, want no score and the last run's time", expired)
+	}
+}
+
+func TestOfficialBaselineOwnsItsAnswers(t *testing.T) {
+	t.Parallel()
+	set := fixedBenchmark()
+	run := recordedBenchmarkRuns(t, set)["official"]
+	at := t0.Add(time.Hour)
+	run.At = at
+	run.Format = protocol.Chat
+	correct := make(map[string]string, len(run.Answers))
+	for _, a := range run.Answers {
+		correct[a.Question] = a.Reply
+	}
+	ep := suppliers.Routable{
+		ID: suppliers.EndpointID{1}, Model: uuid.NewV7(), Upstream: "official",
+		Formats: []protocol.Format{protocol.Chat},
+	}
+	m := New(nil)
+	if err := m.Prepare(t.Context(), []suppliers.Routable{ep}); err != nil {
+		t.Fatal(err)
+	}
+	if !m.RecordOfficialBenchmark(ep, run) {
+		t.Fatal("the official baseline was refused")
+	}
+	for i := range 17 { // the caller reuses the slice after the call
+		run.Answers[i].Reply = "no"
+	}
+	candidate := ep
+	candidate.ID = suppliers.EndpointID{2}
+	candidate.Upstream = "relay"
+	if err := m.Prepare(t.Context(), []suppliers.Routable{ep, candidate}); err != nil {
+		t.Fatal(err)
+	}
+	weaker := runOfSet(set, at, "no")
+	for i := range 17 {
+		weaker.Answers[i].Reply = correct[weaker.Answers[i].Question]
+	}
+	score, ok := m.RecordBenchmark(candidate, weaker)
+	if !ok || math.Abs(score.Score-50) > 1e-9 {
+		t.Fatalf("a candidate with 17 of 34 scored %+v, want 50 after the input was mutated", score)
+	}
+}
+
+func TestRecordBenchmarkRejectsRunBeforeCurrentBaseline(t *testing.T) {
+	t.Parallel()
+	set := fixedBenchmark()
+	model := uuid.NewV7()
+	ep := suppliers.Routable{
+		ID: suppliers.EndpointID{1}, Model: model, Upstream: "official",
+		Formats: []protocol.Format{protocol.Chat},
+	}
+	candidate := ep
+	candidate.ID = suppliers.EndpointID{2}
+	candidate.Upstream = "relay"
+	m := New(nil)
+	if err := m.Prepare(t.Context(), []suppliers.Routable{ep, candidate}); err != nil {
+		t.Fatal(err)
+	}
+	oldBase := t0.Add(time.Hour)
+	if !m.RecordOfficialBenchmark(ep, runOfSet(set, oldBase, "yes")) {
+		t.Fatal("the old baseline was refused")
+	}
+	if _, ok := m.RecordBenchmark(candidate, runOfSet(set, oldBase.Add(5*time.Minute), "yes")); !ok {
+		t.Fatal("the old candidate run was refused")
+	}
+	newBase := oldBase.Add(time.Hour)
+	if !m.RecordOfficialBenchmark(ep, runOfSet(set, newBase, "yes")) {
+		t.Fatal("the new baseline was refused")
+	}
+	late := runOfSet(set, oldBase.Add(30*time.Minute), "yes")
+	if _, ok := m.RecordBenchmark(candidate, late); ok {
+		t.Fatal("a run before the new baseline was accepted")
+	}
+	if got := m.MeasuredFor(candidate, newBase); got.ProductScore != 0 {
+		t.Fatalf("the old score survived the baseline replacement: %+v", got)
+	}
+}
+
+//nolint:cyclop,gocognit // the concurrent loops and their failure capture are the test
+func TestRecordBenchmarkCommitUsesTheBaselineItScored(t *testing.T) {
+	t.Parallel()
+	set := fixedBenchmark()
+	model := uuid.NewV7()
+	ep := suppliers.Routable{
+		ID: suppliers.EndpointID{1}, Model: model, Upstream: "official",
+		Formats: []protocol.Format{protocol.Chat},
+	}
+	candidate := ep
+	candidate.ID = suppliers.EndpointID{2}
+	candidate.Upstream = "relay"
+	m := New(nil)
+	if err := m.Prepare(t.Context(), []suppliers.Routable{ep, candidate}); err != nil {
+		t.Fatal(err)
+	}
+	if !m.RecordOfficialBenchmark(ep, runOfSet(set, t0, "yes")) {
+		t.Fatal("the initial baseline was refused")
+	}
+	fail := make(chan string, 1)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for i := 1; i <= 500; i++ {
+			if !m.RecordOfficialBenchmark(ep, runOfSet(set, t0.Add(time.Duration(i)*time.Second), "yes")) {
+				select {
+				case fail <- "a newer official baseline was refused":
+				default:
+				}
+				return
+			}
+		}
+	})
+	wg.Go(func() {
+		for i := 1; i <= 500; i++ {
+			run := runOfSet(set, t0.Add(time.Duration(i)*time.Second), "yes")
+			result, ok := m.RecordBenchmark(candidate, run)
+			if ok && result.At.Before(result.BaselineAt) {
+				select {
+				case fail <- "a score was attached to a baseline newer than its run":
+				default:
+				}
+				return
+			}
+		}
+	})
+	wg.Wait()
+	select {
+	case msg := <-fail:
+		t.Fatal(msg)
+	default:
 	}
 }
 

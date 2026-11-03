@@ -1,5 +1,5 @@
 {
-  "version": "benchmark-v1",
+  "version": "benchmark-v2",
   "note": "The fixed question set behind the product score (docs/domains/quality.md「产品成绩（固定测评题）」). A run is one generation per question, judged only by the fixed operations below; changing any byte changes the set's SHA-256 and invalidates every recorded score and official baseline, so a new set is a new file and a new version.",
   "questions": [
     {
@@ -210,14 +210,14 @@
       "category": "structured",
       "prompt": "Return exactly one JSON object with the keys `name` and `age`: name is `Ada`, age is 36. Output only the JSON object, with no code fence or explanation.",
       "max_output": 64,
-      "checks": [{"kind": "json_fields", "fields": {"name": "Ada", "age": "36"}}]
+      "checks": [{"kind": "json_equals", "value": "{\"name\":\"Ada\",\"age\":36}"}]
     },
     {
       "id": "json-flags",
       "category": "structured",
       "prompt": "Return exactly one JSON object with the keys `ok` (boolean true) and `count` (integer 3). Output only the JSON object.",
       "max_output": 64,
-      "checks": [{"kind": "json_fields", "fields": {"ok": "true", "count": "3"}}]
+      "checks": [{"kind": "json_equals", "value": "{\"ok\":true,\"count\":3}"}]
     },
     {
       "id": "json-squares",
