@@ -17,6 +17,16 @@ import (
 	"axiom/internal/suppliers"
 )
 
+// Spec is the part of an endpoint's specification that detection can replace for one call format: what the endpoint
+// can do and the limits it enforces. Routing reads the spec of the format the request is actually called in, so a
+// measurement of Chat never widens or narrows Responses (docs/domains/quality.md「实测的能力与上限」).
+type Spec struct {
+	Caps       protocol.Capabilities
+	Parameters protocol.ParameterSet
+	Context    int64
+	MaxOutput  int64
+}
+
 // FormatSet is a set of call formats.
 type FormatSet uint8
 
@@ -130,13 +140,19 @@ type Endpoint struct {
 	ThroughputPercentiles [4]float64
 	Quantization          suppliers.Quantization // the level an admin recorded for this endpoint; empty is unrecorded
 
-	ServiceTiers     catalog.ServiceTierSet // the service tiers it offers; standard is one of them unless it offers only others
-	Native           FormatSet              // formats it speaks itself
-	Served           FormatSet              // formats it can serve, with protocol's conversion; includes Native
-	Caps             protocol.Capabilities
-	Parameters       protocol.ParameterSet  // the request parameters its spec declares it takes; provider.require_parameters reads it
-	Context          int64                  // the most tokens a request may take, input plus output
-	MaxOutput        int64                  // the model's output limit here, also its default
+	ServiceTiers catalog.ServiceTierSet // the service tiers it offers; standard is one of them unless it offers only others
+	Native       FormatSet              // formats it speaks itself
+	Served       FormatSet              // formats it can serve, with protocol's conversion; includes Native
+	// Caps, Parameters, Context and MaxOutput are the effective common surface of the endpoint: a capability or
+	// parameter holds only if every native format has it, and the limits are the smallest any of them enforces. They
+	// are what public discovery may claim without naming a format. Routing reads Specs for the format it calls.
+	Caps       protocol.Capabilities
+	Parameters protocol.ParameterSet // the request parameters its spec declares it takes; provider.require_parameters reads it
+	Context    int64                 // the most tokens a request may take, input plus output
+	MaxOutput  int64                 // the model's output limit here, also its default
+	// Specs is the effective spec of each native format; a format absent falls back to the common surface above. The
+	// gateway fills it from the catalog and the measured facts of that format (docs/domains/quality.md「实测的能力与上限」).
+	Specs            map[protocol.Format]Spec
 	OutputSpeed      int64                  // the fastest it outputs, in tokens per second; 0 when not known, which rules out segmenting
 	Reports          catalog.ItemSet        // the billing items its upstream may report (catalog.Reportable)
 	ImageTokens      int64                  // the most input tokens one image can take
@@ -322,6 +338,41 @@ type candidate struct {
 	prices        []candidatePrice
 	state         *epState
 	supplierPause *cooldown
+}
+
+// Spec returns the effective spec of one call format.
+func (e *Endpoint) Spec(f protocol.Format) Spec {
+	if s, ok := e.Specs[f]; ok {
+		return s
+	}
+	return Spec{Caps: e.Caps, Parameters: e.Parameters, Context: e.Context, MaxOutput: e.MaxOutput}
+}
+
+// Surface returns the part of the endpoint's spec that holds in every native format: the intersection of capabilities
+// and parameters and the smaller limits. Public discovery has one endpoint object and no format, so it claims only
+// what a request of any native format can rely on; a measured removal in one format therefore cannot be hidden by
+// another format's support.
+func (e *Endpoint) Surface() Spec {
+	var out Spec
+	first := true
+	for f := protocol.Format(0); f <= protocol.Completions; f++ {
+		if !e.Native.Has(f) {
+			continue
+		}
+		s := e.Spec(f)
+		if first {
+			out, first = s, false
+			continue
+		}
+		out.Caps &= s.Caps
+		out.Parameters &= s.Parameters
+		out.Context = min(out.Context, s.Context)
+		out.MaxOutput = min(out.MaxOutput, s.MaxOutput)
+	}
+	if first {
+		return e.Spec(protocol.Messages)
+	}
+	return out
 }
 
 func (c *candidate) priceFor(a billing.Audience) *candidatePrice {

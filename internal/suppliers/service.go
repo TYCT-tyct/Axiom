@@ -49,9 +49,12 @@ type Routable struct {
 	Upstream            string
 	Codename            string // the group's immutable public codename
 	Formats             []protocol.Format
-	Quantization        Quantization // the level an admin recorded; empty is unrecorded
-	Schedule            catalog.Schedule
-	Streams, Cancels    bool
+	// Generation orders the supplier snapshots a node publishes. A routing build that read an older snapshot must
+	// not publish its endpoint configuration after a newer Reload already has (docs/domains/quality.md「实测的能力与上限」).
+	Generation       uint64
+	Quantization     Quantization // the level an admin recorded; empty is unrecorded
+	Schedule         catalog.Schedule
+	Streams, Cancels bool
 	// PoolLow says the group's pool has little capacity left: routing halves this endpoint's weight. Only a pool whose
 	// management API reported a low reading sets it; a relay's endpoints keep false.
 	PoolLow bool
@@ -106,6 +109,7 @@ type Service struct {
 	shareUntil time.Time
 	balanceMu  sync.Mutex // serializes background balance refreshes
 	reloadMu   sync.Mutex // one Reload at a time; no call takes it
+	generation uint64     // guarded by reloadMu; the next snapshot's generation
 	// What outlives a snapshot: credential slots and rest, and the account's minute, must not reset
 	// when the snapshot is rebuilt while calls run. Each lock is held for a lookup, never while anything is parsed or
 	// decrypted.
@@ -344,9 +348,10 @@ type credential struct {
 // snapshot is the endpoints one Reload built. confirmed is when that Reload began reading the database, so the state it
 // shows is never older than that; it is zero until the first Reload succeeds.
 type snapshot struct {
-	endpoints map[EndpointID]*endpoint
-	confirmed time.Time
-	until     time.Time // zero for isolated services; shared admission stops before its registry lease expires
+	endpoints  map[EndpointID]*endpoint
+	confirmed  time.Time
+	generation uint64    // the Reload that built this snapshot; monotonic within a Service
+	until      time.Time // zero for isolated services; shared admission stops before its registry lease expires
 }
 
 // Reload rebuilds the snapshot from the database, decrypting the keys of the credentials in this node's memory. A
@@ -369,7 +374,8 @@ func (s *Service) Reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read the endpoints: %w", err)
 	}
-	next := &snapshot{endpoints: map[EndpointID]*endpoint{}, confirmed: asked}
+	s.generation++
+	next := &snapshot{endpoints: map[EndpointID]*endpoint{}, confirmed: asked, generation: s.generation}
 	schedules := maps.Clone(*s.schedules.Load())
 	unloadable := map[uuid.UUID]error{}
 	unsupported := map[uuid.UUID]error{}
@@ -444,8 +450,8 @@ func (s *Service) Routable() ([]Routable, error) {
 			Credentials: s.availableCredentials(ep), Capacity: &Capacity{s: s, id: ep.id},
 			Funds: ep.funds, Currency: ep.currency, UnitValue: ep.unitValue, UnitValueID: ep.unitValueID,
 			ID: ep.id, Supplier: ep.supplier, Model: ep.model, Upstream: ep.upstream, Codename: ep.codename, Formats: slices.Clone(ep.formats),
-			Quantization: ep.quantization,
-			Schedule:     *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels, PoolLow: ep.poolLow,
+			Generation: snap.generation, Quantization: ep.quantization,
+			Schedule: *schedules[ep.schedule], Streams: policy.Streams, Cancels: policy.Cancels, PoolLow: ep.poolLow,
 			Byok: ep.byok, ByokFallback: ep.byokFallback,
 		})
 	}

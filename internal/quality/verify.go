@@ -51,9 +51,16 @@ type claim struct {
 	format   protocol.Format
 }
 
-// claimOf is the claim the endpoint's current configuration makes.
+// claimOf is the claim the endpoint's current configuration makes for verification, which checks the endpoint's first
+// generation format: a pass says the model behind the name is what it claims, not that every format behaves alike.
 func claimOf(ep suppliers.Routable) claim {
 	return claim{model: ep.Model, upstream: ep.Upstream, format: ep.Formats[0]}
+}
+
+// factClaim binds a measured fact to the format it was measured in, not the endpoint's first format: a detector calls
+// the endpoint in one call format, and its result says nothing about another (docs/domains/quality.md「实测的能力与上限」).
+func factClaim(ep suppliers.Routable, format protocol.Format) claim {
+	return claim{model: ep.Model, upstream: ep.Upstream, format: format}
 }
 
 // verified says the endpoint passed a check that is still recent and has not been contradicted since.

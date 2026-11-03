@@ -4,6 +4,7 @@ package quality
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -98,6 +99,66 @@ type Measures struct {
 	Verified         bool
 	VerifiedAt       time.Time
 	VerifyConfidence float64
+	// Facts are what detection measured of the endpoint's structure, by call format: a measurement of Chat says
+	// nothing about Responses (docs/domains/quality.md「实测的能力与上限」).
+	Facts map[protocol.Format]Facts
+}
+
+// Facts are what detection found out about an endpoint's structure, as opposed to how well it performs: a capability
+// or a request parameter that works or does not, and the context and output ceilings it enforces. A measured value
+// replaces the catalog's: Supported adds a capability or parameter the catalog did not declare, Unsupported removes
+// one it did, and a non-zero Context or MaxOutput replaces the catalog's ceiling. A zero field was not measured and
+// the catalog's value stands. Supported and Unsupported are disjoint: a measurement of one clears the same bit from
+// the other, so a later measurement can flip an earlier one.
+type Facts struct {
+	Supported, Unsupported                     protocol.Capabilities
+	SupportedParameters, UnsupportedParameters protocol.ParameterSet
+	// Context and MaxOutput are the ceilings measurement found, in tokens; 0 is unmeasured. A measured ceiling replaces
+	// the catalog's, higher or lower: the catalog is a baseline, and detection is the evidence for this endpoint.
+	Context, MaxOutput int64
+}
+
+// add merges measurement m over f. m's statements replace what they cover; what m leaves zero stands. A support
+// statement wins over its own lack in the same measurement, so a detector that reports both is read as working.
+func (f *Facts) add(m Facts) {
+	m.Unsupported &^= m.Supported
+	m.UnsupportedParameters &^= m.SupportedParameters
+	f.Supported = f.Supported&^m.Unsupported | m.Supported
+	f.Unsupported = f.Unsupported&^m.Supported | m.Unsupported
+	f.SupportedParameters = f.SupportedParameters&^m.UnsupportedParameters | m.SupportedParameters
+	f.UnsupportedParameters = f.UnsupportedParameters&^m.SupportedParameters | m.UnsupportedParameters
+	if m.Context > 0 {
+		f.Context = m.Context
+	}
+	if m.MaxOutput > 0 {
+		f.MaxOutput = m.MaxOutput
+	}
+}
+
+// measuredFacts are the facts recorded for one call format, with the configuration they were measured on: a
+// measurement of one upstream name, model or format says nothing about another
+// (docs/domains/quality.md「实测的能力与上限」).
+type measuredFacts struct {
+	claim claim
+	facts Facts
+}
+
+// endpointConfig identifies the endpoint configuration a measurement belongs to: its model, upstream name and the set
+// of formats it serves. A measurement that arrives after any of them changed is stale and must not overwrite the
+// current configuration's facts.
+type endpointConfig struct {
+	model    uuid.UUID
+	upstream string
+	formats  uint16
+}
+
+// configOf is the configuration the endpoint presents now.
+func configOf(ep suppliers.Routable) endpointConfig {
+	var formats uint16
+	for _, f := range ep.Formats {
+		formats |= 1 << f
+	}
+	return endpointConfig{model: ep.Model, upstream: ep.Upstream, formats: formats}
 }
 
 // Monitor keeps local endpoint evidence and live breaker state. Observe never accesses the database or allocates
@@ -139,8 +200,11 @@ type State struct {
 	speedWindow   sampleWindow
 	samples       int // counted outcomes, capped at scoreSamples: the confidence's evidence
 	sampled       time.Time
-	verify        verification // the last fingerprint check and its schedule
-	verifying     bool         // a verification generation is in flight
+	verify        verification                      // the last fingerprint check and its schedule
+	verifying     bool                              // a verification generation is in flight
+	current       endpointConfig                    // the configuration Prepare last published
+	published     uint64                            // the supplier snapshot Prepare last accepted
+	facts         map[protocol.Format]measuredFacts // what detection measured, per call format
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -295,10 +359,41 @@ func (e *State) measures(now time.Time, verifyMaxAge time.Duration) Measures {
 	return out
 }
 
+// Measure records what detection established about an endpoint's structure in one call format: the capabilities and
+// request parameters it found working and lacking, and the context and output ceilings it measured. The facts replace
+// what was measured of the same fields in that format and are bound to the configuration measured; a configuration
+// change voids them until the new one is measured (docs/domains/quality.md「实测的能力与上限」). It returns false when
+// the format is not one the endpoint serves or the endpoint's current configuration is no longer the one passed: a
+// result from an old configuration must not clear facts the new configuration has already recorded. It is not on the
+// call path; detection calls it, and the next snapshot rebuild carries the change to routing.
+func (m *Monitor) Measure(ep suppliers.Routable, format protocol.Format, facts Facts) bool {
+	if !slices.Contains(ep.Formats, format) {
+		return false
+	}
+	e := m.of(ep.ID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current != configOf(ep) {
+		return false
+	}
+	c := factClaim(ep, format)
+	if e.facts == nil {
+		e.facts = map[protocol.Format]measuredFacts{}
+	}
+	f := e.facts[format]
+	if f.claim != c {
+		f = measuredFacts{claim: c}
+	}
+	f.facts.add(facts)
+	e.facts[format] = f
+	return true
+}
+
 // MeasuredFor is what the endpoint's numbers are now for a routable endpoint: a pass counts only for the configuration
 // it checked, so an endpoint whose model, upstream name or format changed since the check is not verified even before
-// the loop clears the state (docs/domains/quality.md「真伪检测」). The evidence and its claim are read in one critical
-// section: a claim switched between two reads must not be paired with the previous claim's pass.
+// the loop clears the state (docs/domains/quality.md「真伪检测」), and a measurement of its structure likewise says
+// nothing about another configuration. The evidence and its claim are read in one critical section: a claim switched
+// between two reads must not be paired with the previous claim's evidence.
 func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	m.mu.RLock()
 	e := m.endpoints[ep.ID]
@@ -316,6 +411,18 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	out := e.measures(now, m.verificationAge())
 	if out.Verified && (!has || e.verify.claim != want) {
 		out.Verified, out.VerifyConfidence, out.VerifiedAt = false, 0, time.Time{}
+	}
+	out.Facts = nil
+	if has && e.current == configOf(ep) {
+		for f, mf := range e.facts {
+			if mf.claim != factClaim(ep, f) {
+				continue
+			}
+			if out.Facts == nil {
+				out.Facts = make(map[protocol.Format]Facts, len(e.facts))
+			}
+			out.Facts[f] = mf.facts
+		}
 	}
 	return out
 }

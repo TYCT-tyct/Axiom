@@ -36,3 +36,15 @@ func TestParameterSupport(t *testing.T) {
 		})
 	}
 }
+
+// TestORParametersAreIndependent: the public list writes the parameter each bit stands for, not a family gated by one
+// member. A measured endpoint can take temperature without top_p, or tools without tool_choice.
+func TestORParametersAreIndependent(t *testing.T) {
+	t.Parallel()
+	got := orParameters(protocol.ParameterSet(1)<<protocol.ParamTemperature |
+		protocol.ParameterSet(1)<<protocol.ParamToolChoice | protocol.ParameterSet(1)<<protocol.ParamReasoning)
+	want := []string{"temperature", "tool_choice", "reasoning"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("parameters (-want +got):\n%s", diff)
+	}
+}
