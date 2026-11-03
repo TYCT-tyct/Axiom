@@ -124,3 +124,25 @@ func TestAdminSourceClassDefaultPosition(t *testing.T) {
 		t.Fatalf("position: %d, want 20 after the seeds", created.Position)
 	}
 }
+
+// TestAdminSourceClassKeyBindsSlug: a key used to change one class cannot be replayed for another with the same body.
+func TestAdminSourceClassKeyBindsSlug(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	for _, slug := range []string{"pool-a", "pool-b"} {
+		expectAdmin(t, "create "+slug, f.change(s, http.MethodPost, "/source-classes",
+			`{"slug":"`+slug+`","name":"Pool","rules":{"match":"all","conditions":[]},"reason":"two pools"}`, newKey()), 201, "")
+	}
+	for _, c := range []struct {
+		method, body string
+		ok           int
+	}{
+		{http.MethodPut, `{"name":"Renamed","rev":1,"reason":"same body"}`, 200},
+		{http.MethodDelete, `{"rev":2,"reason":"same body"}`, 204},
+	} {
+		key := newKey()
+		expectAdmin(t, c.method+" pool-a", f.change(s, c.method, "/source-classes/pool-a", c.body, key), c.ok, "")
+		expectAdmin(t, c.method+" pool-b with the same key", f.change(s, c.method, "/source-classes/pool-b", c.body, key), 409, codeIdempotencyReuse)
+	}
+}

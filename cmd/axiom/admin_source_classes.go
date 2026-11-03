@@ -65,7 +65,7 @@ func (a adminAPI) UpdateSourceClass(ctx context.Context, r adminapi.UpdateSource
 	if r.Body.Rules != nil {
 		in.Rules = rulesIn(*r.Body.Rules)
 	}
-	body, replayed, err := idempotently(ctx, a.db, "updateSourceClass", r.Params.IdempotencyKey, []any{r.Body},
+	body, replayed, err := idempotently(ctx, a.db, "updateSourceClass", r.Params.IdempotencyKey, []any{r.Slug, r.Body},
 		func(tx pg.Tx) (adminapi.SourceClass, error) {
 			c, err := quality.UpdateSourceClass(ctx, tx, actor(ctx), r.Slug, in, r.Body.Reason)
 			if err != nil {
@@ -85,7 +85,7 @@ func (a adminAPI) DeleteSourceClass(ctx context.Context, r adminapi.DeleteSource
 	if r.Body == nil {
 		return nil, invalidField("/", "a body is required")
 	}
-	_, replayed, err := idempotently(ctx, a.db, "deleteSourceClass", r.Params.IdempotencyKey, []any{r.Body},
+	_, replayed, err := idempotently(ctx, a.db, "deleteSourceClass", r.Params.IdempotencyKey, []any{r.Slug, r.Body},
 		func(tx pg.Tx) (struct{}, error) {
 			if err := quality.DeleteSourceClass(ctx, tx, actor(ctx), r.Slug, r.Body.Rev, r.Body.Reason); err != nil {
 				return struct{}{}, classProblem(err)
