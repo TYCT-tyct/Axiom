@@ -18,7 +18,6 @@ class ReuseRelease(unittest.TestCase):
 python3() { echo fixture; }
 just() { [ "$1" != axiom-version ] || echo 'axiom fixture'; }
 go() { :; }
-timeout() { shift; "$@"; }
 cosign() {
   printf 'cosign %s\n' "$*" >> "$CALLS"
   case "$1" in
@@ -42,6 +41,7 @@ docker() {
   case "$*" in
     'inspect --format {{.Config.Image}} axiom'|'inspect --format {{.Config.Image}} migrate') echo "${ACTUAL_IMAGE:-$CI_DEPLOY_IMAGE}" ;;
     'compose -f deploy/compose.yaml ps --all --quiet axiom') echo axiom ;;
+    'ps -aq --filter label=com.docker.compose.project=axiom-ci-fixture') echo axiom ;;
     'inspect --format {{range .Config.Env}}'*) echo 'TMPDIR=/retention-tmp' ;;
     'inspect --format {{range .Mounts}}'*) echo 'volume true' ;;
     'run --rm --network none --volumes-from axiom'*) echo '65532:65532:700' ;;
@@ -95,10 +95,24 @@ curl() {
             with self.subTest(image=image):
                 result, calls = self.run_deploy(image)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(sum(call.startswith("build --tag") for call in calls), 1 if image is None else 0)
-                starts = [call for call in calls if " up " in call]
+                self.assertEqual(calls.count("build --tag axiom-ci:fixture deploy"), 1 if image is None else 0)
+                # A second build of the database image names a new image even from a warm cache, and Compose then
+                # recreates the database under the running node, which exits (#605).
+                database = [i for i, call in enumerate(calls) if call.startswith("build ") and "postgres" in call]
+                self.assertEqual([calls[i] for i in database], ["build --tag axiom-ci-postgres:fixture deploy/postgres"])
+                starts = [i for i, call in enumerate(calls) if " up " in call]
                 self.assertEqual(len(starts), 6)  # database then services for each of three starts
-                self.assertTrue(all("--no-build" in call for call in starts))
+                self.assertTrue(all("--no-build" in calls[i] for i in starts))
+                self.assertLess(database[0], starts[0])
+                self.assertEqual(calls[-1], "image rm --force axiom-ci-postgres:fixture")
+
+    def test_a_failed_check_prints_the_containers_output_before_removing_them(self):
+        result, calls = self.run_deploy("local/axiom@sha256:" + "a" * 64, actual_image="axiom:stale")
+        self.assertNotEqual(result.returncode, 0)
+        logs = calls.index("logs --tail 200 axiom")
+        down = "compose --project-name axiom-ci-fixture down --volumes --timeout 5"
+        self.assertLess(logs, len(calls) - 1 - calls[::-1].index(down))
+        self.assertNotIn("logs --tail 200 axiom", self.run_deploy(None)[1])
 
     def test_legacy_upgrade_stops_the_node_before_recreating_postgres(self):
         result, calls = self.run_deploy(None)
