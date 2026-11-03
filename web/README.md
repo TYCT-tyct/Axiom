@@ -18,7 +18,7 @@
 | `scripts/embed.ts`、`scripts/compress.ts` | 把构建产物复制到 Go 代码树供程序嵌入，附预压缩的副本和内容安全策略；压缩函数只有这一个，体积预算也用它 | — |
 | `scripts/budget.ts` | 体积预算检查 | — |
 | `scripts/limits.ts` | 函数的圈复杂度和长度、文件长度检查 | — |
-| `scripts/vitals.ts` | 成对测量的三个 LCP 折算成一个值（[前端性能指标](../docs/frontend.md#前端性能指标)）；不需要浏览器，单独用 vitest 测 | — |
+| `scripts/vitals.ts` | 三次目标页 LCP 各按前后两次概览页的平均值折算成一个值（[前端性能指标](../docs/frontend.md#前端性能指标)）；不需要浏览器，单独用 vitest 测 | — |
 
 共用的 Vite 配置在 `vite.shared.ts`，各应用的 `vite.config.ts` 只写端口和路径。
 
@@ -74,7 +74,7 @@
 | 没有没人用的文件、导出和依赖 | knip（`knip.jsonc`）；包只给本仓库的应用用，入口文件的导出也要有应用引用 |
 | 没有重复代码 | jscpd（`.jscpd.json`），50 个词法单元以上算重复；测试和端到端的模拟（`e2e/`）不查 |
 | 首屏脚本、每多开一页增加的脚本、西文字体不超过[前端性能指标](../docs/frontend.md#前端性能指标) | `scripts/budget.ts` 按程序发送时的压缩（`scripts/compress.ts`，brotli q11）后的大小计脚本，字体取 woff2 文件本身的大小；首屏算入口页加载的每个脚本和它们的静态依赖，再加入口地址打开的页面（控制台的概览、后台的首页） |
-| 主要页面的 LCP、CLS，常用操作的 INP，调用日志和用户列表各 1000 行滚动的掉帧和长任务不超过[前端性能指标](../docs/frontend.md#前端性能指标)：只有 LCP 超出上限才失败，CLS、INP、长列表滚动只报告（INP 和掉帧随共享 CI 机器的负载摆动，CLS 同一页在两次测量之间差别很大），数字写进测试的注解；它是计时，单独在 CI 的 `vitals` 任务里用 `just web-vitals` 一次一个测试地跑，普通分片排除它（`playwright.vitals.config.ts`） | `e2e/vitals.spec.ts`：web-vitals 的 IIFE 构建在页面脚本之前注入；手机档（Pixel 5、慢速 4G、CPU 降速 4 倍）和电脑档（10 Mbps）把每个页面和概览页成对测三次，每对先概览页、再目标页，按同一对的概览页 LCP 折算到设定上限的基线 run（概览页手机 3.496 秒、电脑 0.948 秒）后取中位数，折算系数最多为 1；概览页自己取三次里最快的一次卡容量；原始值、概览值和折算结果写进输出；INP 在 CPU 降速 4 倍下取该操作的最差值 |
+| 主要页面的 LCP、CLS，常用操作的 INP，调用日志和用户列表各 1000 行滚动的掉帧和长任务不超过[前端性能指标](../docs/frontend.md#前端性能指标)：只有 LCP 超出上限才失败，CLS、INP、长列表滚动只报告（INP 和掉帧随共享 CI 机器的负载摆动，CLS 同一页在两次测量之间差别很大），数字写进测试的注解；它是计时，单独在 CI 的 `vitals` 任务里用 `just web-vitals` 一次一个测试地跑，普通分片排除它（`playwright.vitals.config.ts`） | `e2e/vitals.spec.ts`：web-vitals 的 IIFE 构建在页面脚本之前注入；手机档（Pixel 5、慢速 4G、CPU 降速 4 倍）和电脑档（10 Mbps）把每个页面测三次，每次夹在前后两次概览页加载之间，按这两次概览页 LCP 的平均值折算到设定上限的基线 run（概览页手机 3.496 秒、电脑 0.948 秒）后取中位数，折算系数最多为 1；概览页自己取三次里最快的一次卡容量；原始值、概览值和折算结果写进输出；INP 在 CPU 降速 4 倍下取该操作的最差值 |
 
 ## 测试
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scaled, scaledLcp } from "./vitals.ts";
+import { bracketed, type Pair, scaled, scaledLcp } from "./vitals.ts";
 
 describe("scaled", () => {
   it.each([
@@ -43,5 +43,47 @@ describe("scaledLcp", () => {
       { base: 1896, page: 2200 },
     ];
     expect(scaledLcp(pairs, 948)).toBe(1200);
+  });
+});
+
+// The three page loads of a sample, each between its own two reference loads, in the order vitals.spec.ts takes them.
+// host is the host's slowdown at each load and ratio the page's LCP beside a reference on the baseline host.
+function sample(host: (load: number) => number, ratio: number, reference: number): Pair[] {
+  const pairs: Pair[] = [];
+  for (let i = 0; i < 3; i++) {
+    const before = reference * host(3 * i);
+    const page = reference * ratio * host(3 * i + 1);
+    const after = reference * host(3 * i + 2);
+    pairs.push(bracketed({ before, after, page }));
+  }
+  return pairs;
+}
+
+// The same sample in the order #585 took it: each pair is one reference load and then the page.
+const referenceFirst = (host: (load: number) => number, ratio: number, reference: number): Pair[] =>
+  [0, 1, 2].map((i) => ({
+    base: reference * host(2 * i),
+    page: reference * ratio * host(2 * i + 1),
+  }));
+
+describe("bracketed sampling", () => {
+  // The desktop ceiling is 1500 ms against the 948 ms reference run; the statement page's usual LCP is about 0.8 of the
+  // overview beside it. A host taken over by another job gets twice as slow on every load: the reference-first order
+  // charges every pair the page's next, slower load, so all three scale to 1.6 x 948 = 1517 ms, over the ceiling — run
+  // 41695611815 measured 1550.895 ms this way. Bracketing the page raises the reference beside it too, so the same
+  // rising host stays under the ceiling.
+  it("keeps a rising host under the ceiling where the reference-first order fails", () => {
+    const host = (load: number) => 2 ** load;
+    expect(scaledLcp(referenceFirst(host, 0.8, 948), 948)).toBeGreaterThan(1500);
+    expect(scaledLcp(sample(host, 0.8, 948), 948)).toBeLessThanOrEqual(1500);
+  });
+
+  // A host that gets slower by the same step on every load leaves the page halfway between its two reference loads, so
+  // their mean is the reference beside it and every pair is the page's own LCP again.
+  it("cancels a steady rise exactly", () => {
+    const host = (load: number) => 1 + load / 10;
+    for (const pair of sample(host, 0.8, 948)) {
+      expect(scaled(pair, 948)).toBeCloseTo(0.8 * 948);
+    }
   });
 });
