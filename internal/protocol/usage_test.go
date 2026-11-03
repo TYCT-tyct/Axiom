@@ -22,6 +22,7 @@ type usageCase struct {
 // names none used nothing of the model, and one protocol cannot map is invalid, which billing estimates rather than
 // waiving (docs/domains/billing.md「免单规则」).
 func TestUsageOf(t *testing.T) {
+	t.Parallel()
 	const usage = `"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":40},` +
 		`"output_tokens":10,"output_tokens_details":{"reasoning_tokens":4},"total_tokens":110}`
 	for _, c := range []usageCase{

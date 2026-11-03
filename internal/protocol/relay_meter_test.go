@@ -21,6 +21,7 @@ import (
 // TestRelayProgress: Next returns after every read of at most 16 KiB, so an event larger than a read, or one that
 // keeps arriving and never finishes, is counted while it arrives.
 func TestRelayProgress(t *testing.T) {
+	t.Parallel()
 	head := messageStart(`{"input_tokens":3}`) +
 		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"`
@@ -97,6 +98,7 @@ func (endless) Read(p []byte) (int, error) {
 // estimates the output. Counts only go up: a later 0 keeps the earlier count and a smaller one makes the usage
 // invalid.
 func TestRelayMeter(t *testing.T) {
+	t.Parallel()
 	last := strings.Replace(messageDelta(`{"input_tokens":0,"output_tokens":15}`), `"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null}`,
 		`"delta":{"stop_reason":"end_turn","stop_sequence":null},"type":"message_delta"`, 1)
 	stream := messageStart(`{"input_tokens":25,"output_tokens":1}`) + textBlock + last + messageStop
@@ -130,6 +132,7 @@ func TestRelayMeter(t *testing.T) {
 // TestRelayMeterSample: the official text sample reports output_tokens 1 in message_start, a lower bound that the
 // message_delta's 15 replaces as the final count (internal/billing/README.md「接口草图」).
 func TestRelayMeterSample(t *testing.T) {
+	t.Parallel()
 	o := options
 	o.Memory = protocol.NewMemory(0)
 	r := protocol.NewRelay(protocol.Messages, protocol.Messages, bytes.NewReader(sample(t, "messages/text/upstream.sse")),
@@ -160,6 +163,7 @@ func stepTo(t *testing.T, r *protocol.Relay, kind protocol.StepKind) {
 // or a server tool's result does, and not when its text or thinking starts empty; it counts what it holds, and a web
 // search it starts.
 func TestRelayCommitPoint(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		block           string
 		kind            protocol.StepKind
@@ -189,6 +193,7 @@ func TestRelayCommitPoint(t *testing.T) {
 // delivers bytes the upstream bills as output tokens, so a client of the upstream's format and a Chat client of a
 // converted stream both count them (README.md「字节上界」).
 func TestRelaySignatureContent(t *testing.T) {
+	t.Parallel()
 	const sign, redacted = "EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxB", "EmwBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdj"
 	for _, c := range []struct {
 		name, block, delta string
@@ -225,6 +230,7 @@ func TestRelaySignatureContent(t *testing.T) {
 // TestRelayUsageMerge: a later usage event that leaves out the tier, an unknown count or the iterations keeps what an
 // earlier one reported.
 func TestRelayUsageMerge(t *testing.T) {
+	t.Parallel()
 	start := messageStart(`{"input_tokens":5,"service_tier":"priority","audio_tokens":4,` +
 		`"iterations":[{"type":"compaction","input_tokens":100,"output_tokens":10}]}`)
 	got := relay(t, protocol.Messages, strings.NewReader(start+textBlock+messageDelta(`{"output_tokens":2}`)+messageStop),
@@ -241,6 +247,7 @@ func TestRelayUsageMerge(t *testing.T) {
 
 // TestRelayUsage maps Messages usage onto billing items as catalog README.md「计费项与用量」 tabulates.
 func TestRelayUsage(t *testing.T) {
+	t.Parallel()
 	type counts = map[catalog.Item]int64
 	for _, c := range []struct {
 		name    string
@@ -339,6 +346,7 @@ func segment(t *testing.T, counts map[catalog.Item]int64, st catalog.ServiceTier
 // and given back at its end; a budget that is spent ends the attempt before the commit point, writing nothing, and
 // with an error ending after it.
 func TestRelayMemory(t *testing.T) {
+	t.Parallel()
 	big := strings.Repeat("x", 100<<10)
 	bigDelta := `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + big + "\"}}\n\n"
 	start := messageStart(`{"input_tokens":3}`)
@@ -375,6 +383,7 @@ func TestRelayMemory(t *testing.T) {
 // TestRelayMemoryRewrite: rewriting a snapshot draws on the budget for the copy it writes, and the next snapshot
 // reuses that copy, so what the relay holds after a large snapshot stays within what it has drawn.
 func TestRelayMemoryRewrite(t *testing.T) {
+	t.Parallel()
 	const size = 800 << 10
 	big := strings.Replace(responsesObject, `"output":[]`, `"output":[],"instructions":"`+strings.Repeat("x", size)+`"`, 1)
 	// After the commit point, so that the events held before it do not add up.
@@ -408,6 +417,7 @@ func TestRelayMemoryRewrite(t *testing.T) {
 // TestRelayMemoryFailure: after a failure the relay still holds the events Fail writes, and keeps them charged while
 // the gateway settles; it gives back the rest at once, and all of it with Fail.
 func TestRelayMemoryFailure(t *testing.T) {
+	t.Parallel()
 	const budget, size = 8 << 20, 600 << 10
 	pad := strings.Replace(messageStart(`{}`), `"content":[]`, `"content":[],"pad":"`+strings.Repeat("x", size)+`"`, 1)
 	mem := protocol.NewMemory(budget)
@@ -477,6 +487,7 @@ func drain(tb testing.TB, f protocol.Format, stream []byte) {
 // relay no more allocations (docs/performance.md「调用路径上的规则」). The measurement runs in a child process, so
 // this binary's other goroutines and the collections they trigger are not counted as the relay's.
 func TestRelayAllocs(t *testing.T) {
+	t.Parallel()
 	read := func(stream []byte) func() {
 		return func() {
 			r := sse.NewReader(bytes.NewReader(stream), 1<<20)

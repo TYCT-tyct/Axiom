@@ -307,6 +307,7 @@ var inspectCases = []struct {
 }
 
 func TestInspect(t *testing.T) {
+	t.Parallel()
 	for _, c := range inspectCases {
 		t.Run(c.name, func(t *testing.T) {
 			body := caseBody(t, c.body)
@@ -344,6 +345,7 @@ func caseBody(tb testing.TB, body string) []byte {
 }
 
 func TestInspectRejects(t *testing.T) {
+	t.Parallel()
 	deep := func(n int) string { return strings.Repeat("[", n) + strings.Repeat("]", n) }
 	for _, c := range []struct {
 		name   string
@@ -482,6 +484,7 @@ func BenchmarkInspect(b *testing.B) {
 // TestAnInvalidBodyIsDescribedInOurWords: what the client reads of a body that cannot be read is a sentence of ours
 // (a decoder's text names offsets and Go types), and a value of the wrong type is named by its JSON pointer.
 func TestAnInvalidBodyIsDescribedInOurWords(t *testing.T) {
+	t.Parallel()
 	leaks := []string{"jsontext", "json:", "Go struct", "canon", "offset"}
 	for _, c := range []struct {
 		name, body, want string

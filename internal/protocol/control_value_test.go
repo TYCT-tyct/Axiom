@@ -5,6 +5,7 @@ import (
 )
 
 func TestReasoningDetailIndexUsesDecodedValue(t *testing.T) {
+	t.Parallel()
 	c, err := decodeCanon([]byte(`{"model":"m","messages":[{"role":"assistant","reasoning_details":[{"type":"reasoning.text","index":0,"text":"a"},{"type":"reasoning.text","index":-0,"text":"b"}]}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -16,6 +17,7 @@ func TestReasoningDetailIndexUsesDecodedValue(t *testing.T) {
 }
 
 func TestReasoningDetailIndices(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		first, second string
 		count         int

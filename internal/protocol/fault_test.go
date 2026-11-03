@@ -14,6 +14,7 @@ import (
 // TestFaultOf: a stream that fails says why, by the class its error names (the code before the class when Chat names
 // both), so that quality can tell the endpoint's failures from the request's; the error is ErrUpstream either way.
 func TestFaultOf(t *testing.T) {
+	t.Parallel()
 	anthropicError := func(class string) string {
 		return messageStart(`{"input_tokens":3}`) + "event: error\ndata: {\"type\":\"error\",\"error\":" + class + "}\n\n"
 	}
@@ -77,6 +78,7 @@ func TestFaultOf(t *testing.T) {
 // is no words. What is given still holds the supplier's identity, which the supplier takes out
 // (docs/domains/gateway.md「错误」).
 func TestRejectionOf(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		f      protocol.Format
@@ -107,6 +109,7 @@ func TestRejectionOf(t *testing.T) {
 
 // Oversized fields are omitted whole so sanitization cannot miss a truncated credential.
 func TestRejectionOfIsBounded(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{strings.Repeat("é", 3000), strings.Repeat(`\uD83D\uDE00`, 600)} {
 		got := relay(t, protocol.Chat, strings.NewReader(`data: {"error":{"message":"`+value+`","code":"invalid_value"}}`+"\n\n"),
 			protocol.UsageContext{}, protocol.NewMemory(0), settled)

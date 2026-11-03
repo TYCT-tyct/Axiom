@@ -12,6 +12,7 @@ import (
 // its own growth checks are off, so the working set they need is drawn while the content is being aggregated. A node
 // without it fails the step with ErrMemory rather than allocating through the answer and past the seal.
 func TestAggregateCitationReservesMemoryBeforeSeal(t *testing.T) {
+	t.Parallel()
 	stream := `data: {"id":"gen-1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"See [example.com](https://example.com/one)."}}]}
 
 data: {"id":"gen-1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}

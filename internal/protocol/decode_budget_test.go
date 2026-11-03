@@ -12,6 +12,7 @@ import (
 // request's own bytes, not a bound that grows with its shape, and a byte short refuses. The readers of the other two
 // formats still reserve nativeRequestCost (README.md「跨格式转换」).
 func TestPrepareLargeRequestReservesAboutItsBody(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("x", 1<<18)
 	for _, c := range []struct {
 		name string
@@ -42,6 +43,7 @@ func TestPrepareLargeRequestReservesAboutItsBody(t *testing.T) {
 // allocate, and what they keep when done is their output's capacity; the failures take nothing and the budget is whole
 // once the kept bodies are given back.
 func TestPrepareConcurrentLargeRequests(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("x", 1<<18)
 	body := []byte(`{"model":"m","max_tokens":1024,"messages":[{"role":"user","content":"` + long + `"}]}`)
 	r, err := Inspect(Messages, body)
@@ -94,6 +96,7 @@ func TestPrepareConcurrentLargeRequests(t *testing.T) {
 // TestBudgetedDecodeMatchesTheFastPath: with a budget, the decoder must build the same tree jsonx builds for a
 // Prepare outside a node. The conversions' goldens run through the fast path; this holds the budgeted path to it.
 func TestBudgetedDecodeMatchesTheFastPath(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{
 		`{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
 		`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"a\nb"},{"type":"image_url","image_url":{"url":"https://x/y.png","detail":"high"}}]}]}`,
@@ -135,6 +138,7 @@ func prepareNeed(t *testing.T, r *Request, body []byte, target Target) int64 {
 // TestMemoryErrorKeepsItsType: a budget exhausted inside a legacy function-call upgrade or a thinking budget is a
 // memory error (503), not a shape error (400).
 func TestMemoryErrorKeepsItsType(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		from Format
@@ -165,6 +169,7 @@ func TestMemoryErrorKeepsItsType(t *testing.T) {
 // whatever the writer would have written first (here the system blocks, which look at what was written), and gives
 // back everything it drew.
 func TestPrepareRefusesTheOutputCleanly(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":"` + strings.Repeat("x", 1<<18) + `"}]}`)
 	r, err := Inspect(Chat, body)
 	if err != nil {
@@ -190,6 +195,7 @@ func TestPrepareRefusesTheOutputCleanly(t *testing.T) {
 // TestReplayRefusesWithErrMemory: replay's own unquoting draws from the budget, and a refusal there stays ErrMemory,
 // not the invalid replay a client is told of.
 func TestReplayRefusesWithErrMemory(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"},{"role":"assistant","content":[` +
 		`{"type":"thinking","thinking":"t","signature":"` + strings.Repeat(string(rune(0x5c))+"u0061", 1<<16) + `"}]}]}`)
 	b := &budget{m: NewMemory(rounded(int64(len(body))) + 1024)} // the output fits, the signature's unquoting does not

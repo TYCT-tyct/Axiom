@@ -57,6 +57,7 @@ func runLegacyReply(t *testing.T, f protocol.Format, src io.Reader, ctx protocol
 }
 
 func TestLegacyRepliesFollowClient(t *testing.T) {
+	t.Parallel()
 	for _, fields := range []struct {
 		name, body string
 		legacy     bool
@@ -78,6 +79,7 @@ func TestLegacyRepliesFollowClient(t *testing.T) {
 
 //nolint:exhaustive // the formats that can carry parallel calls are the ones tested
 func TestLegacyReplyRejectsParallelCalls(t *testing.T) {
+	t.Parallel()
 	for _, aggregate := range []bool{false, true} {
 		for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 			stream := legacyReplyStream(f)
@@ -178,6 +180,7 @@ func checkLegacyReplyFormats(t *testing.T, name string, ctx protocol.UsageContex
 }
 
 func TestLegacyEscapedReplyControls(t *testing.T) {
+	t.Parallel()
 	stream := strings.ReplaceAll(legacyReplyStream(protocol.Chat), `"tool_calls"`, `"tool_c\u0061lls"`)
 	for _, aggregate := range []bool{false, true} {
 		out, err := runLegacyReply(t, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{LegacyFunctions: true}, aggregate, protocol.NewMemory(4<<20))
@@ -189,6 +192,7 @@ func TestLegacyEscapedReplyControls(t *testing.T) {
 }
 
 func TestLegacyReplyBudget(t *testing.T) {
+	t.Parallel()
 	stream := chatPiece(`{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"f","arguments":"`+strings.Repeat("x", 128<<10)+`"}}]}`, `"tool_calls"`) + ev("[DONE]")
 	for _, aggregate := range []bool{false, true} {
 		_, err := runLegacyReply(t, protocol.Chat, strings.NewReader(stream), protocol.UsageContext{LegacyFunctions: true}, aggregate, protocol.NewMemory(0))
@@ -199,6 +203,7 @@ func TestLegacyReplyBudget(t *testing.T) {
 }
 
 func TestLegacyReplyToolType(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		kind    string
 		invalid bool
@@ -231,6 +236,7 @@ func checkLegacyReplyToolType(t *testing.T, stream, kind string, invalid bool) {
 }
 
 func TestLegacyReplyDropsNullFunctionCall(t *testing.T) {
+	t.Parallel()
 	stream := strings.ReplaceAll(legacyReplyStream(protocol.Chat), `"tool_calls":`, `"function_call":null,"tool_calls":`)
 	checkLegacyReplyToolType(t, stream, "null function_call", false)
 }

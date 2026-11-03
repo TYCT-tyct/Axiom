@@ -16,6 +16,7 @@ import (
 // and a function call, which official docs do not give whole, is converted for a Messages client too. Every client
 // stream passes its format's stream check (README.md「跨格式的流」).
 func TestConvertStreamsBetweenNativeFormats(t *testing.T) {
+	t.Parallel()
 	for _, c := range nativeStreamCases(t) {
 		t.Run(c.name, func(t *testing.T) { checkNativeStream(t, c) })
 	}

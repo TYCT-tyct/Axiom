@@ -50,6 +50,7 @@ func nativeConvertCases(t *testing.T, from, to protocol.Format, cases []nativeCa
 
 // TestConvertMessagesToResponses: a Messages request for a Responses endpoint (README.md「跨格式转换」).
 func TestConvertMessagesToResponses(t *testing.T) {
+	t.Parallel()
 	nativeConvertCases(t, protocol.Messages, protocol.Responses, []nativeCase{
 		{
 			"system and text", `{"model":"m","max_tokens":64,"system":[{"type":"text","text":"Be brief."}],"messages":[{"role":"user","content":[{"type":"text","text":"Hi"}]}]}`, nil,
@@ -101,6 +102,7 @@ func TestConvertMessagesToResponses(t *testing.T) {
 
 // TestConvertResponsesToMessages: a Responses request for a Messages endpoint (README.md「跨格式转换」).
 func TestConvertResponsesToMessages(t *testing.T) {
+	t.Parallel()
 	nativeConvertCases(t, protocol.Responses, protocol.Messages, []nativeCase{
 		{
 			"instructions and input", `{"model":"m","instructions":"Be brief.","input":"Hi","max_output_tokens":64}`, nil,
@@ -182,6 +184,7 @@ func TestConvertResponsesToMessages(t *testing.T) {
 // TestConvertNativeSamples converts each recorded Messages and Responses request for the other format's endpoint and
 // compares the result with its golden copy, to-messages.json or to-responses.json, which go test -update rewrites.
 func TestConvertNativeSamples(t *testing.T) {
+	t.Parallel()
 	for _, up := range formats[:2] {
 		to, ext := protocol.Responses, "responses"
 		if up.f == protocol.Responses {

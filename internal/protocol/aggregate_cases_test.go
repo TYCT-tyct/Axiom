@@ -33,6 +33,7 @@ func input(i int, partial string) string {
 // escapes, a tool's input from its pieces, or as the block began when no piece came, or an empty object; unknown
 // events and pings change nothing; the usage of message_start and the later usages are one object.
 func TestAggregateMessages(t *testing.T) {
+	t.Parallel()
 	stream := messageStart(`{"input_tokens":3,"cache_read_input_tokens":0,"output_tokens":1}`) + ping +
 		startBlock(0, `{"type":"thinking","thinking":"","signature":""}`) +
 		deltaOf(0, `{"type":"thinking_delta","thinking":"a\n"}`) + deltaOf(0, `{"type":"thinking_delta","thinking":"b\"c"}`) +
@@ -89,6 +90,7 @@ func TestAggregateMessages(t *testing.T) {
 
 // TestAggregateMessagesFraming: an event of several data lines, which the stream reader joins with line feeds.
 func TestAggregateMessagesFraming(t *testing.T) {
+	t.Parallel()
 	stream := messageStart(`{"input_tokens":3}`) + startBlock(0, `{"type":"text","text":""}`) +
 		"data: {\"type\":\"content_block_delta\",\"index\":0,\n" +
 		"data: \"delta\":{\"type\":\"text_delta\",\n" +
@@ -108,6 +110,7 @@ type pendingCase struct {
 // TestAggregatePending: a reply whose settlement was not written is a 200 without a cost and with the flag in axiom,
 // in each format, as the stream's ending has it.
 func TestAggregatePending(t *testing.T) {
+	t.Parallel()
 	for _, c := range []pendingCase{
 		{"messages/text", 0}, {"responses/text", 1}, {"chat/text", 2}, {"messages/text", 3}, {"responses/text", 4},
 	} {
@@ -140,6 +143,7 @@ func assertPending(t *testing.T, c pendingCase) {
 // TestAggregateRejects: an upstream that sends what no reply can be made of fails the call as the upstream's, with
 // the answer the status table gives, since it has not got as far as content, or Messages' 502 when it has.
 func TestAggregateRejects(t *testing.T) {
+	t.Parallel()
 	start := messageStart(`{"input_tokens":3}`)
 	for name, stream := range map[string]string{
 		"a delta out of turn":           start + deltaOf(0, `{"type":"text_delta","text":"x"}`),
@@ -167,6 +171,7 @@ func chatChunk(choices string) string { return chatHead + choices + "}\n\n" }
 // reasoning details of a type and index are one entry, with the signature that came apart from the text; a message
 // with tool calls and no text has no content.
 func TestAggregateChat(t *testing.T) {
+	t.Parallel()
 	stream := chatChunk(`[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null},`+
 		`{"index":1,"delta":{"role":"assistant","content":""},"finish_reason":null}]`) +
 		chatChunk(`[{"index":0,"delta":{"reasoning":"th","reasoning_details":[{"type":"reasoning.text","text":"th","format":"f","index":0}]},"finish_reason":null}]`) +
@@ -220,6 +225,7 @@ func TestAggregateChat(t *testing.T) {
 // TestAggregateChatFail: a choice the failure cut short finishes with the error, though the error chunk names only the
 // first.
 func TestAggregateChatFail(t *testing.T) {
+	t.Parallel()
 	stream := chatChunk(`[{"index":0,"delta":{"content":"a"},"finish_reason":null},{"index":1,"delta":{"content":"b"},"finish_reason":null}]`) +
 		chatChunk(`[{"index":1,"delta":{"content":"c"},"finish_reason":"stop"}]`)
 	got := aggregate(t, protocol.Chat, protocol.Chat, strings.NewReader(stream), protocol.NewMemory(0), unsettled)
@@ -234,6 +240,7 @@ func TestAggregateChatFail(t *testing.T) {
 // the ones still open as far as they got: a reasoning item whose summary part has some text, a message with a part
 // that has text and an annotation, a function call with the arguments so far, not mended; an open item is incomplete.
 func TestAggregateResponsesFail(t *testing.T) {
+	t.Parallel()
 	item := func(i int, rest string) string {
 		return `,"output_index":` + strconv.Itoa(i) + `,"item":` + rest
 	}
@@ -278,6 +285,7 @@ func TestAggregateResponsesFail(t *testing.T) {
 // TestAggregateResponsesFailOpenReasoning: a reasoning item that is still open has its summary parts and its reasoning
 // text parts; a refusal part keeps its text in refusal.
 func TestAggregateResponsesFailOpenReasoning(t *testing.T) {
+	t.Parallel()
 	part := func(i int, kind, field string) string {
 		return `,"output_index":` + strconv.Itoa(i) + `,"content_index":0,"item_id":"x","part":{"type":"` + kind + `","` + field + `":""}`
 	}
@@ -310,6 +318,7 @@ func TestAggregateResponsesFailOpenReasoning(t *testing.T) {
 // TestAggregateChatFraming: a chunk is JSON however it is spaced: whitespace before it, a tab, and a chunk of several
 // lines all aggregate to the same reply; [DONE] and an event without data are the only events skipped.
 func TestAggregateChatFraming(t *testing.T) {
+	t.Parallel()
 	content := chatChunk(`[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]`)
 	for name, chunk := range map[string]string{
 		"plain":         content,
@@ -330,6 +339,7 @@ func TestAggregateChatFraming(t *testing.T) {
 // TestAggregateResponsesTypes: a part or an item whose type is not a string is the upstream's failure when it arrives,
 // not a panic when the failure is written from it; an escaped type is the type it spells.
 func TestAggregateResponsesTypes(t *testing.T) {
+	t.Parallel()
 	added := func(item string) string {
 		return responsesEvent("response.output_item.added", 1, `,"output_index":0,"item":`+item)
 	}
@@ -370,6 +380,7 @@ func TestAggregateResponsesTypes(t *testing.T) {
 // is the block's own; the type reaches the reply as the upstream wrote it, and one that is null names no kind of block
 // and is written as it came (README.md「非流式聚合」).
 func TestAggregateMessagesTypes(t *testing.T) {
+	t.Parallel()
 	head := messageStart(`{"input_tokens":3}`)
 	tail := messageDelta(`{"output_tokens":2}`) + messageStop
 	for _, c := range []struct {
@@ -429,6 +440,7 @@ func finishOnly(n, per int) string {
 // TestAggregateResponsesBadItem: an item the upstream sends with a type that is not a string fails the call, and the
 // reply keeps what it had generated: the failure is still a 200 with the output so far.
 func TestAggregateResponsesBadItem(t *testing.T) {
+	t.Parallel()
 	stream := responsesEvent("response.created", 0, responsesObject) +
 		responsesEvent("response.output_item.added", 1, `,"output_index":0,"item":{"id":"msg_1","type":"message","content":[]}`) +
 		responsesEvent("response.content_part.added", 2, `,"output_index":0,"content_index":0,"item_id":"msg_1","part":{"type":"output_text","text":""}`) +
@@ -448,6 +460,7 @@ func TestAggregateResponsesBadItem(t *testing.T) {
 // charging has ended, so they are charged when they are held: finish-only choices past the cap fail the stream with
 // ErrMemory before its end, and give back what they drew, though no chunk comes near the size of an event.
 func TestAggregateChatHeld(t *testing.T) {
+	t.Parallel()
 	const node, perChunk = 256 << 20, 10000
 	for _, c := range []struct {
 		name    string
@@ -474,6 +487,7 @@ func TestAggregateChatHeld(t *testing.T) {
 // after the first, which carry only arguments; the call keeps the id and name it started with (sub2api drops the same
 // filler, openai_gateway_cc_tool_call_identity.go).
 func TestAggregateChatKeepsTheCallIdentity(t *testing.T) {
+	t.Parallel()
 	stream := chatChunk(`[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_1","type":"function",`+
 		`"function":{"name":"get","arguments":""}}]},"finish_reason":null}]`) +
 		chatChunk(`[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"","type":"","function":{"name":"","arguments":"{\"a\""}}]},"finish_reason":null}]`) +

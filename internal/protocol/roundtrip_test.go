@@ -16,6 +16,7 @@ import (
 // signature and its tool calls with their IDs and input; Responses' reasoning item with its summary and encrypted
 // content and its function call with its call_id and arguments.
 func TestConvertRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		stream  string
 		from    protocol.Format

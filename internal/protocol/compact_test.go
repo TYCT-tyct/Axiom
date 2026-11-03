@@ -16,6 +16,7 @@ import (
 //
 //nolint:gocognit // the table and its assertions are the test
 func TestRewriteCompactReply(t *testing.T) {
+	t.Parallel()
 	settled, err := catalog.NewUsage(map[catalog.Item]int64{
 		catalog.ItemInput: 5, catalog.ItemCacheRead: 2, catalog.ItemOutput: 3, catalog.ItemReasoning: 1,
 	}, catalog.ServiceTierStandard, nil)
@@ -89,6 +90,7 @@ func TestRewriteCompactReply(t *testing.T) {
 //
 //nolint:gocognit // the pending and settled cases are the test
 func TestRewriteCompactReplyKeepsOneAxiom(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"id":"c1","axiom":{"billing_pending":true},"output":[]}`)
 	for _, pending := range []bool{true, false} {
 		var fin *protocol.Final
@@ -123,6 +125,7 @@ func TestRewriteCompactReplyKeepsOneAxiom(t *testing.T) {
 // TestRewriteCompactReplyAllocatesOnce: a reply without usage still fits in the capacity computed before writing, even
 // when its ciphertext is large; a second output buffer during the copy would exceed the memory charged for the rewrite.
 func TestRewriteCompactReplyAllocatesOnce(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"ciphertext":"` + strings.Repeat("x", 1<<20) + `"}`)
 	out, err := protocol.RewriteCompactReply(body, protocol.Usage{}, &protocol.Final{Usage: protocol.Usage{}, Currency: usd})
 	if err != nil {
@@ -139,6 +142,7 @@ func TestRewriteCompactReplyAllocatesOnce(t *testing.T) {
 
 // TestValidateCompactReply: only one JSON object is a reply whose usage can be replaced, and nothing may follow it.
 func TestValidateCompactReply(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		body string
 		ok   bool

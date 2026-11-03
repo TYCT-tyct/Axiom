@@ -9,6 +9,7 @@ import (
 )
 
 func TestMiddleOutPreservesBothEndsAndToolPairs(t *testing.T) {
+	t.Parallel()
 	body := jsonValue(map[string]any{"model": "a", "plugins": []any{map[string]any{"id": "context-compression"}}, "messages": []any{
 		map[string]any{"role": "system", "content": "keep instructions"},
 		map[string]any{"role": "user", "content": "first question"},
@@ -38,6 +39,7 @@ func TestMiddleOutPreservesBothEndsAndToolPairs(t *testing.T) {
 }
 
 func TestMiddleOutTruncatesTextWithoutBreakingUnicodeOrProtectedContent(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		role      string
 		content   any
@@ -65,6 +67,7 @@ func TestMiddleOutTruncatesTextWithoutBreakingUnicodeOrProtectedContent(t *testi
 }
 
 func TestCompressionPolicy(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		policy  Compression
 		context int64
@@ -80,6 +83,7 @@ func TestCompressionPolicy(t *testing.T) {
 }
 
 func TestMiddleOutMessageLimitAndInsufficientWindow(t *testing.T) {
+	t.Parallel()
 	messages := make([]jsonx.Raw, CompressionMessageLimit+1)
 	for i := range messages {
 		messages[i] = jsonx.Raw(`{"role":"user","content":"hello"}`)
@@ -99,6 +103,7 @@ func TestMiddleOutMessageLimitAndInsufficientWindow(t *testing.T) {
 }
 
 func TestMiddleTextRetainsUnicodeEnds(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ text, want string }{
 		{"😀" + strings.Repeat("中", 10) + "👋", "😀👋"},
 		{"ab€", "a€"},
@@ -112,6 +117,7 @@ func TestMiddleTextRetainsUnicodeEnds(t *testing.T) {
 }
 
 func TestCompressionKeepsUntouchedRawValues(t *testing.T) {
+	t.Parallel()
 	const opaque = `"opaque": {"big":1e9999,"spelling":1.0000}`
 	const signed = `{"role":"assistant","content":[{"type":"thinking","thinking":"unchanged","signature":"a\u002fb"}]}`
 	body := []byte(`{"model":"a",` + opaque + `,"messages":[{"role":"user","content":"start` + strings.Repeat("middle", 1000) + `end"},` + signed + `]}`)
@@ -125,6 +131,7 @@ func TestCompressionKeepsUntouchedRawValues(t *testing.T) {
 }
 
 func TestCompressionPreservesToolsAcrossInterleavedMessages(t *testing.T) {
+	t.Parallel()
 	const call = `{"role":"assistant","tool_calls":[{"id":"call","type":"function","function":{"name":"f","arguments":"{}"}}]}`
 	const result = `{"role":"tool","tool_call_id":"call","content":"result"}`
 	body := []byte(`{"model":"a","messages":[{"role":"user","content":"first"},` + call + `,{"role":"system","content":"keep policy"},` + result + `,{"role":"user","content":"` + strings.Repeat("middle", 1000) + `"},{"role":"user","content":"last"}]}`)

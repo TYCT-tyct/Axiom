@@ -123,6 +123,7 @@ var formats = []struct {
 // stream with its golden copy, client-<format>.sse, which go test -update rewrites. Every client stream passes the
 // format's stream check.
 func TestRelaySamples(t *testing.T) {
+	t.Parallel()
 	for _, format := range formats {
 		dirs, err := fs.Glob(samples, format.dir+"/*")
 		if err != nil || len(dirs) == 0 {
@@ -197,6 +198,7 @@ func events(t *testing.T, stream []byte) []map[string]any {
 // TestRelaySteps: nothing is written before the first content, which writes everything held with it; a ping is
 // written only after it; the ending is held until the upstream's normal end.
 func TestRelaySteps(t *testing.T) {
+	t.Parallel()
 	stream := ping + messageStart(`{"input_tokens":3,"output_tokens":1}`) + ping + textBlock + ping +
 		messageDelta(`{"output_tokens":2}`) + messageStop
 	got := relay(t, protocol.Messages, strings.NewReader(stream), protocol.UsageContext{}, protocol.NewMemory(0), settled)
@@ -224,6 +226,7 @@ func TestRelaySteps(t *testing.T) {
 // TestRelayEndings: each way a stream ends gives exactly one ending, and only the upstream's normal end a successful
 // one; a failure before any content writes nothing the upstream sent.
 func TestRelayEndings(t *testing.T) {
+	t.Parallel()
 	start := messageStart(`{"input_tokens":3,"output_tokens":1}`)
 	for _, c := range []struct {
 		name, stream string
@@ -292,6 +295,7 @@ func types(es []map[string]any) []any {
 // TestRelayRewrites: the client sees the call ID and its own model name, usage without anything but Messages'
 // usage members, and the cost of our settlement in the ending.
 func TestRelayRewrites(t *testing.T) {
+	t.Parallel()
 	stream := messageStart(`{"input_tokens":3,"output_tokens":1,"cost":0.9,"inference_geo":"us"}`) + textBlock +
 		strings.Replace(messageDelta(`{"output_tokens":2,"cost_details":{"upstream_inference_cost":0.8}}`), "{", `{"axiom":{"billing_pending":true},`, 1) +
 		messageStop
@@ -344,6 +348,7 @@ func TestRelayRewrites(t *testing.T) {
 // TestRelayFail: an error ending says our error type in Messages' shape, with the usage reported so far, and the cost
 // only when the settlement was written.
 func TestRelayFail(t *testing.T) {
+	t.Parallel()
 	stream := messageStart(`{"input_tokens":3,"cache_read_input_tokens":4,"output_tokens":1}`) + textBlock
 	for _, c := range []struct {
 		name  string
@@ -391,6 +396,7 @@ func TestRelayFail(t *testing.T) {
 // TestRelayUnknownFormat: every pair of the three formats is relayed (README.md「跨格式的流」); a format the relay does
 // not know fails at its first step, before reading anything.
 func TestRelayUnknownFormat(t *testing.T) {
+	t.Parallel()
 	r := protocol.NewRelay(protocol.Format(3), protocol.Messages, strings.NewReader(""), protocol.UsageContext{}, options)
 	if _, err := r.Next(); err == nil {
 		t.Error("relaying to a client of an unknown format succeeded")
@@ -399,6 +405,7 @@ func TestRelayUnknownFormat(t *testing.T) {
 
 // TestKeepAlive: the keep-alive bytes may go anywhere after the commit point in each format's stream.
 func TestKeepAlive(t *testing.T) {
+	t.Parallel()
 	for dir, c := range map[string]struct {
 		f     protocol.Format
 		check func(io.Reader) error

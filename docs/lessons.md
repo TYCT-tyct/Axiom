@@ -93,6 +93,7 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 证据：PR #462 的列车构建 [40914818602](https://github.com/TYCT-tyct/Axiom/actions/runs/40914818602) 在健康探测恢复断言失败，并在第二份大账本夹具播种时达到 billing 包的十分钟期限。
 哪一层没拦住：健康测试从组装前冻结的时钟推进 31 秒，实际熔断时间却由网关按真实时钟记录；两种账本计划测试分别播种 200 万笔数据，单包累计成本没有被局部测试暴露。集成测试应从实际事件时刻推进受控时钟，并用时钟偏移复现组装延迟；同模块同量级的计划验证共用大夹具，保留每种查询的完整计划断言。`TestGatewayHealthRemoveProbeRestore` 固定模拟两分钟时钟落后；`TestLedgerReadsGrowWithThePage` 同时验证 movements 和 statement，后续此类计划用例加在同一夹具下。
 `cmd/axiom` 的通话导出夹具用 `INSERT … SELECT (jsonb_populate_record(…)).*` 复制一万行，PostgreSQL 对展开的每一列各算一次函数，单个测试播种 50 秒；改为 `CROSS JOIN LATERAL jsonb_populate_record(…)` 后约 2 秒。`internal/payments` 的播种还是旧写法。同一轮还有 42 个耗时的数据库测试没有 `t.Parallel()`，串行跑了约 95 秒，`cmd/axiom` 包在列车上超过十分钟（run [41581562012](https://github.com/TYCT-tyct/Axiom/actions/runs/41581562012)）。
+#624 的调查里 `internal/protocol` 在负载下以 599.980 秒和 595.148 秒通过，离默认的十分钟只差 20 毫秒和 4.85 秒。按测试统计耗时（`go test -json`），333 个测试中 23 个超过 1 秒的占了 250 秒里的 230 秒，300 个顶层测试没有 `t.Parallel()`，分配测量、属性测试和录制流回放逐个串行。全部并行后，同一台 8 核机器上 `go test -race -count=1 ./internal/protocol/` 从 251.5 秒降到 43.2 秒，墙钟从 268.4 秒降到 48.4 秒。`TestPrepareAllocatesOnlyWhatItDrew` 原本对每个用例准备两遍（一遍只记录能否准备，一遍求峰值），现在从求峰值那次读结果，竞态构建下把两种形状拆成并行子测试；`TestAllocs` 在 Prepare 的测量里不再测量用不到的校验分配。
 出现：2026-10-29、2026-11-03
 
 ## 只读状态和故障兜底的测试也为容器排队

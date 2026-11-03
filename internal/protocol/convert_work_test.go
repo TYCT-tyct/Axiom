@@ -14,6 +14,7 @@ import (
 // walks one path at a time converts at once; a definition that comes back to itself, or to the root, is recursion,
 // which Anthropic's structured outputs refuse.
 func TestConvertSchemaRefs(t *testing.T) {
+	t.Parallel()
 	var defs []string
 	for i := range 64 {
 		defs = append(defs, fmt.Sprintf(`"d%d":{"anyOf":[{"$ref":"#/$defs/d%d"},{"$ref":"#/$defs/d%d"}]}`, i, i+1, i+1))
@@ -42,6 +43,7 @@ func TestConvertSchemaRefs(t *testing.T) {
 // where joining 20,000 pieces of 100 bytes by copying all before each would allocate 20 GB. The measurement runs in a
 // child process, so this binary's other goroutines and collections are not counted as the conversion's.
 func TestConvertManyDetails(t *testing.T) {
+	t.Parallel()
 	piece := strings.Repeat("x", 100)
 	for name, index := range map[string]func(int) int{"one index": func(int) int { return 0 }, "an index each": func(i int) int { return i }} {
 		t.Run(name, func(t *testing.T) {
@@ -66,6 +68,7 @@ func TestConvertManyDetails(t *testing.T) {
 // decoded once, so the bytes allocated stay within a small multiple of the body. The measurement runs in a child
 // process, so this binary's other goroutines and collections are not counted as the conversion's.
 func TestConvertManyItemIDs(t *testing.T) {
+	t.Parallel()
 	var details []string
 	for i := range 20000 {
 		details = append(details, fmt.Sprintf(`{"type":"reasoning.summary","format":"openai-responses-v1","id":"rs_%d","summary":"s"},`+
@@ -92,6 +95,7 @@ func TestConvertManyItemIDs(t *testing.T) {
 // TestConvertCacheTTL: the usage context tells the relay of a 1-hour cache write only for a Messages endpoint, the one
 // format that keeps the TTL.
 func TestConvertCacheTTL(t *testing.T) {
+	t.Parallel()
 	body := []byte(chatBody(`"messages":[{"role":"user","content":[{"type":"text","text":"Hi","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]`))
 	r, err := protocol.Inspect(protocol.Chat, body)
 	if err != nil {

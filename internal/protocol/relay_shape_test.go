@@ -14,6 +14,7 @@ import (
 // it does for a client of the upstream's format and for a Chat client of a converted stream alike, and an output the
 // upstream does not report is estimated from it at the error measured on whole texts.
 func TestRelayTextShape(t *testing.T) {
+	t.Parallel()
 	deltas := []string{`Hello, wor`, `ld\n20`, `26 \u4f60`, `\u597d\ud83d\ude42 ok`}
 	stream := messageStart(`{"input_tokens":3,"output_tokens":1}`) + blockStart
 	whole := ""
