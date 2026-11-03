@@ -124,7 +124,15 @@ export const mainCell = "w-full max-w-0 sm:w-auto sm:max-w-72 sm:min-w-40";
 
 // Head is the header row of a table: a label per column, with the classes that hide a column on a narrow window, and an
 // empty last column for the buttons of a row.
-export function Head({ cols, action = false }: { cols: [label: string, className?: string][]; action?: boolean }) {
+export function Head({
+  cols,
+  action = false,
+  actionClass = "w-0",
+}: {
+  cols: [label: string, className?: string][];
+  action?: boolean;
+  actionClass?: string;
+}) {
   return (
     <thead>
       <tr>
@@ -133,7 +141,7 @@ export function Head({ cols, action = false }: { cols: [label: string, className
             {label}
           </Th>
         ))}
-        {action ? <Th className="w-0" /> : null}
+        {action ? <Th className={actionClass} /> : null}
       </tr>
     </thead>
   );

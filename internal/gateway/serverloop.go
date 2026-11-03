@@ -170,10 +170,11 @@ func (a *attempt) search(ctx context.Context, turn protocol.ServerTurn) *ended {
 	req.NativeWeb = s.c.Request.NativeWeb
 	req.MaxToolCalls, req.HasMaxToolCalls = s.c.Request.MaxToolCalls, s.c.Request.HasMaxToolCalls
 	req.WebSearches = s.c.Request.WebSearches
-	// The admission's own fields are not in the body and would be lost with the new Inspect: the tier it resolved, the
-	// files it parsed, and the input bound a search plugin reserved. The loop's own input is what Inspect just read.
+	// The admission's own fields are not in the body and would be lost with the new Inspect: the tier it resolved,
+	// the files it parsed and the switch that bills them, and the input bound a search plugin reserved. The loop's own
+	// input is what Inspect just read. The parse's fields come from the session, which copied them before any rewrite.
 	req.ServiceTiers = s.c.Request.ServiceTiers
-	req.FileParses = s.c.Request.FileParses
+	restoreFile(&req, s.c.Request.File, s.parses, s.pages, s.fileBilling)
 	req.SearchBytes = s.c.Request.SearchBytes
 	req.Needs |= protocol.WebSearch | protocol.Tools
 	s.c.Body, s.c.Request = body, req

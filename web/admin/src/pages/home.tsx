@@ -1,13 +1,26 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, Stat, useSession } from "@axiom/app";
-import { DataState, EmptyState, Notice, PageHeader, Panel, Segmented, Table, Td, Th, useFormat } from "@axiom/ui";
+import {
+  CopyButton,
+  DataState,
+  EmptyState,
+  IdText,
+  Notice,
+  PageHeader,
+  Panel,
+  Segmented,
+  Table,
+  Td,
+  Th,
+  useFormat,
+} from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useSearch } from "@tanstack/react-router";
 import { type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { nav } from "../nav";
 import { callsDrill, type OverviewRange, ordersDrill, overviewRanges, overviewWindow, type Window } from "../overview";
-import { Code, PageBody } from "../parts";
+import { mainCell, PageBody } from "../parts";
 import { overviewQuery } from "../queries";
 import { targetsEmpty } from "../targets";
 import { TargetNote, TargetsAction } from "../targets-view";
@@ -289,17 +302,24 @@ function TopAccounts({ data, window, site }: { data: Overview; window: Window; s
           <tbody>
             {data.top_accounts.map((account) => (
               <tr key={account.account_id}>
-                <Td>
-                  <Link
-                    to="/calls"
-                    search={callsDrill(window, { site, account: account.account_id })}
-                    className="text-accent underline-offset-4 hover:underline"
-                  >
-                    <Code>{account.account_id}</Code>
-                  </Link>
+                <Td className={mainCell}>
+                  {account.account_id ? (
+                    <span className="flex min-w-0 items-center gap-1">
+                      <Link
+                        to="/calls"
+                        search={callsDrill(window, { site, account: account.account_id })}
+                        className="inline-flex min-w-0 text-accent underline-offset-4 hover:underline"
+                      >
+                        <IdText value={account.account_id} />
+                      </Link>
+                      <CopyButton compact text={account.account_id} />
+                    </span>
+                  ) : (
+                    "—"
+                  )}
                 </Td>
-                <Td className="text-right tabular-nums">{format.number(account.calls ?? 0)}</Td>
-                <Td className="text-right tabular-nums">{format.number(account.errors ?? 0)}</Td>
+                <Td className="whitespace-nowrap text-right tabular-nums">{format.number(account.calls ?? 0)}</Td>
+                <Td className="whitespace-nowrap text-right tabular-nums">{format.number(account.errors ?? 0)}</Td>
               </tr>
             ))}
           </tbody>
@@ -326,17 +346,24 @@ function TopModels({ data, window, site }: { data: Overview; window: Window; sit
           <tbody>
             {data.top_models.map((model) => (
               <tr key={model.model}>
-                <Td>
-                  <Link
-                    to="/calls"
-                    search={callsDrill(window, { site, model: model.model })}
-                    className="text-accent underline-offset-4 hover:underline"
-                  >
-                    <Code>{model.model}</Code>
-                  </Link>
+                <Td className={mainCell}>
+                  {model.model ? (
+                    <span className="flex min-w-0 items-center gap-1">
+                      <Link
+                        to="/calls"
+                        search={callsDrill(window, { site, model: model.model })}
+                        className="inline-flex min-w-0 text-accent underline-offset-4 hover:underline"
+                      >
+                        <IdText value={model.model} />
+                      </Link>
+                      <CopyButton compact text={model.model} />
+                    </span>
+                  ) : (
+                    "—"
+                  )}
                 </Td>
-                <Td className="text-right tabular-nums">{format.number(model.calls ?? 0)}</Td>
-                <Td className="text-right tabular-nums">{format.number(model.errors ?? 0)}</Td>
+                <Td className="whitespace-nowrap text-right tabular-nums">{format.number(model.calls ?? 0)}</Td>
+                <Td className="whitespace-nowrap text-right tabular-nums">{format.number(model.errors ?? 0)}</Td>
               </tr>
             ))}
           </tbody>

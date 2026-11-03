@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, DataState, Dialog, Icon, moneyInput, TextField, useFormat } from "@axiom/ui";
+import { Button, DataState, Dialog, Icon, MonthField, moneyInput, TextField, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,22 +17,22 @@ import {
 } from "./targets";
 
 // TargetsAction is the month picker and the button that opens the editor. The month is a UTC calendar month, the
-// period a target covers; the dashboard prorates it over any window that touches it.
+// period a target covers; the dashboard prorates it over any window that touches it. The picker says both: its month
+// and year read in the page's language, and its hint names the zone the page's other times are in.
 export function TargetsAction({ anchor, currency }: { anchor: Date; currency: string }) {
   const { t } = useTranslation();
+  const format = useFormat();
   const [month, setMonth] = useState(() => targetMonth(anchor));
   const [open, setOpen] = useState(false);
   return (
     <div className="flex flex-wrap items-end gap-2">
-      <TextField
+      <MonthField
         label={t("overview.targets.month")}
-        name="month"
-        type="month"
+        hint={t("overview.targets.monthHint", { zone: format.zone() })}
         value={month}
-        onChange={(event) => setMonth(event.target.value)}
-        className="w-44"
+        onChange={setMonth}
       />
-      <Button size="md" onClick={() => setOpen(true)} disabled={month === ""}>
+      <Button size="md" onClick={() => setOpen(true)}>
         <Icon name="pencil" />
         {t("overview.targets.edit")}
       </Button>
@@ -45,12 +45,13 @@ export function TargetsAction({ anchor, currency }: { anchor: Date; currency: st
 // their own, so the page never shows a form over data it has not read.
 function TargetsDialog({ month, currency, onClose }: { month: string; currency: string; onClose: () => void }) {
   const { t } = useTranslation();
+  const format = useFormat();
   const targets = useQuery(targetsQuery(month));
   if (targets.status === "success") {
     return <TargetsForm month={month} currency={currency} view={targets.data} onClose={onClose} />;
   }
   return (
-    <Dialog title={t("overview.targets.title", { month })} onClose={onClose}>
+    <Dialog title={t("overview.targets.title", { month: format.monthLabel(month) })} onClose={onClose}>
       <DataState query={targets}>{() => null}</DataState>
     </Dialog>
   );
@@ -68,13 +69,14 @@ function TargetsForm({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const format = useFormat();
   // Keep the values the form was opened with, and its revision, while another editor may change the month. A stale
   // write is refused; reload then fills both from the query that the refusal has refreshed.
   const [read, reload] = useSnapshot(view);
   return (
     <ChangeDialog
       operation={`operations-targets:${month}`}
-      title={t("overview.targets.title", { month })}
+      title={t("overview.targets.title", { month: format.monthLabel(month) })}
       intro={<p>{t("overview.targets.intro")}</p>}
       action={t("overview.targets.save")}
       fields={(error) => <TargetFields view={read} currency={currency} error={error} />}
