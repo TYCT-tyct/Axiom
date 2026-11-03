@@ -130,6 +130,30 @@ func TestOldNodeInsertGetsSecondApprovalSnapshot(t *testing.T) {
 	}
 }
 
+// A site that never saved payment settings has no row, and its limit is the code's default 0. The trigger must decide
+// second_required from that default rather than leave it NULL, which the not-null constraint rejects.
+func TestOldNodeInsertOnSiteWithoutSettingsKeepsOneApproval(t *testing.T) {
+	w, o := refundWorldAmount(t, fakePlugin{caps: CapRefund, refund: refundSucceeds}, 150*yuan)
+	w.exec("DELETE FROM payments.settings WHERE site_id = '" + w.siteA.String() + "'")
+	id := uuid.NewV7()
+	err := w.tx(w.p.platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(w.t.Context(), `INSERT INTO payments.refunds
+			(id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, reason, requested_by, idem_key)
+			VALUES ($1,$2,$3,$4,'frozen','channel',$5,$5,$5,false,false,'old node',$6,'old-node-no-settings')`,
+			id, o.ID, o.SiteID, o.AccountID, o.Credits, w.user)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var second bool
+	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
+		return tx.QueryRow(w.t.Context(), "SELECT second_required FROM payments.refunds WHERE id=$1", id).Scan(&second)
+	}); err != nil || second {
+		t.Fatalf("an old insert on a site without settings: second=%v err=%v", second, err)
+	}
+}
+
 func TestRefundApprovalRuleIsSnapshotted(t *testing.T) {
 	t.Run("above stays above when the limit rises", func(t *testing.T) {
 		w, o := refundWorldAmount(t, fakePlugin{caps: CapRefund, refund: refundSucceeds}, 150*yuan)

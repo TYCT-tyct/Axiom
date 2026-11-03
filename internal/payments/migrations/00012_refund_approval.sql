@@ -19,10 +19,13 @@ DECLARE
     limit_credits bigint;
 BEGIN
     IF NEW.second_required IS NULL THEN
-        SELECT COALESCE(s.refund_second_approval_credits, 0)
-        INTO limit_credits
-        FROM payments.settings AS s
-        WHERE s.site_id = NEW.site_id;
+        -- A site that never saved settings has no row, and its limit is the code's default 0. The scalar subquery keeps
+        -- COALESCE seeing that case; SELECT INTO would leave the variable NULL.
+        limit_credits := COALESCE((
+            SELECT s.refund_second_approval_credits
+            FROM payments.settings AS s
+            WHERE s.site_id = NEW.site_id
+        ), 0);
         NEW.second_required := limit_credits > 0 AND NEW.credits > limit_credits;
     END IF;
     RETURN NEW;
