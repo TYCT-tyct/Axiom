@@ -71,6 +71,27 @@ test.describe("calls and audit", () => {
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(first.account_id);
   });
 
+  for (const mode of ["denied", "missing"] as const) {
+    test(`a ${mode} clipboard says so visibly`, async ({ page }) => {
+      await page.setViewportSize({ width: 360, height: 900 });
+      await page.addInitScript((value) => {
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value:
+            value === "missing"
+              ? undefined
+              : { writeText: () => Promise.reject(new DOMException("denied", "NotAllowedError")) },
+        });
+      }, mode);
+      await open(page, "/calls");
+      await page
+        .getByRole("button", { name: zhText("copy.id") })
+        .first()
+        .click();
+      await expect(page.getByRole("status").filter({ hasText: zhText("copy.failed") })).toBeVisible();
+    });
+  }
+
   test("audit filters exactly, shows the recorded detail, and links to the call only with calls.search", async ({
     page,
   }) => {

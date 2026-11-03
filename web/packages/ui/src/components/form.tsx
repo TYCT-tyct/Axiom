@@ -114,7 +114,8 @@ export function SelectField({
 // own month input takes its month name from the browser's locale, which is not the page's; two selects are the same
 // control in every browser. The months are the contract's calendar months, not the viewer's zone's: a target covers a
 // UTC month. The years around the chosen one are offered so the control stays short; the chosen year is always among
-// them, and the server takes any month.
+// them, and selecting a boundary year adds the next year outward, so the range can keep growing to any month the
+// server accepts.
 export function MonthField({
   label,
   hint,
@@ -137,6 +138,12 @@ export function MonthField({
   const first = Math.min(year, current - 10);
   const last = Math.max(year, current + 10);
   const years = Array.from({ length: last - first + 1 }, (_, index) => first + index);
+  if (year === first) {
+    years.unshift(first - 1);
+  }
+  if (year === last) {
+    years.push(last + 1);
+  }
   const describedBy = hint ? `${id}-hint` : undefined;
   return (
     <fieldset className={cn("min-w-0 space-y-1.5 border-0 p-0", className)}>

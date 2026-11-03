@@ -93,11 +93,26 @@ test.describe("business targets", () => {
     await expect(page.getByText(/UTC.*GMT\+8/)).toBeVisible();
     await expect(page.locator('input[type="month"]')).toHaveCount(0);
 
+    const yearSelect = group.getByLabel(zhText("month.year"));
     const next = String(Number(year) + 1);
-    await group.getByLabel(zhText("month.year")).selectOption(next);
-    await expect(group.getByLabel(zhText("month.year"))).toHaveValue(next);
+    await yearSelect.selectOption(next);
+    await expect(yearSelect).toHaveValue(next);
     await expect(group.getByLabel(zhText("month.month"))).toHaveValue(month);
 
+    const high = String(Number(year) + 10);
+    await yearSelect.selectOption(high);
+    await expect(yearSelect).toHaveValue(high);
+    await yearSelect.selectOption(String(Number(high) + 1));
+    await expect(yearSelect).toHaveValue(String(Number(high) + 1));
+
+    const low = String(Number(year) - 10);
+    await yearSelect.selectOption(low);
+    await expect(yearSelect).toHaveValue(low);
+    await yearSelect.selectOption(String(Number(low) - 1));
+    await expect(yearSelect).toHaveValue(String(Number(low) - 1));
+
+    await yearSelect.selectOption(next);
+    await expect(yearSelect).toHaveValue(next);
     await press(page, "overview.targets.edit");
     const label = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", timeZone: "UTC" }).format(
       new Date(Date.UTC(Number(next), Number(month) - 1, 1)),
