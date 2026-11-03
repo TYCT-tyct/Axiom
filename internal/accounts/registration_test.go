@@ -28,7 +28,7 @@ type registrationWorld struct {
 	queue        *pg.Queue
 }
 
-// registrationSite is a seeded site with a mailer and the registration worker, in a queue that is not started: the
+// registrationSite is a seeded site with a mailer and the registration worker, on the queue registrationFor starts: the
 // test calls the worker itself, as password_reset_test.go does.
 func registrationSite(t *testing.T) registrationWorld {
 	t.Helper()
@@ -50,6 +50,10 @@ func registrationFor(t *testing.T, x site) (*accounts.Registration, *pg.Queue) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registration, err := accounts.RegisterRegistration(x.db, queue, mailer, platform, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := exec(t, x.db, platform, "INSERT INTO river.river_queue (name, paused_at) VALUES ('notifications', now()) ON CONFLICT (name) DO UPDATE SET paused_at = now()"); err != nil {
 		t.Fatal(err)
 	}
@@ -63,10 +67,6 @@ func registrationFor(t *testing.T, x site) (*accounts.Registration, *pg.Queue) {
 			t.Error(err)
 		}
 	})
-	registration, err := accounts.RegisterRegistration(x.db, queue, mailer, platform, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
 	return registration, queue
 }
 

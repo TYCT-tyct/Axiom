@@ -46,3 +46,9 @@ func (c *Client) Beat(ctx context.Context) {
 	var over since
 	c.beat(ctx, &over, true)
 }
+
+// OpenAsTheMachine is Open for a client whose clock the test controls but whose loop measures the clock again, as on
+// the machine's clock: the server's clock and the client's are both the test's, so the offset is exact.
+func OpenAsTheMachine(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
+	return open(ctx, cfg, deps, false)
+}

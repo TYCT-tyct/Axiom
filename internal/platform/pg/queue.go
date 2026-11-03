@@ -114,6 +114,9 @@ type Queue struct {
 	OnDiscard func(context.Context, Tx, string, []byte) error
 	discarded metric.Int64Counter
 	client    atomic.Pointer[river.Client[pgx.Tx]]
+	// started is set as Start begins: from then on River reads the workers and the periodic jobs, so a registration
+	// panics instead of racing its producers or being silently ignored (#624).
+	started atomic.Bool
 }
 
 // NewQueue makes a queue that does nothing until Start. scope is the platform scope, which only cmd/ builds; meter
@@ -133,15 +136,29 @@ func (db *DB) NewQueue(logger *slog.Logger, scope Scope, meter metric.Meter) *Qu
 	return q
 }
 
-// Workers is where a module registers the workers of its jobs (river.AddWorker), before Start.
-func (q *Queue) Workers() *river.Workers { return q.workers }
+// Workers is where a module registers the workers of its jobs (river.AddWorker), before Start; after it, it panics.
+func (q *Queue) Workers() *river.Workers {
+	q.refuseAfterStart("a worker")
+	return q.workers
+}
 
 // Every makes the queue insert the job args returns once every interval, and once when it starts. Only the node that
 // leads the queue inserts it, so the job is not inserted by every node, but a node that dies or a change of leader
-// restarts the count: a periodic job must be one whose repeat or delay costs nothing. Call it before Start.
+// restarts the count: a periodic job must be one whose repeat or delay costs nothing. Call it before Start; after it,
+// it panics.
 func (q *Queue) Every(interval time.Duration, args func() river.JobArgs) {
+	q.refuseAfterStart("a periodic job")
 	q.periodic = append(q.periodic, river.NewPeriodicJob(river.PeriodicInterval(interval),
 		func() (river.JobArgs, *river.InsertOpts) { return args(), nil }, &river.PeriodicJobOpts{RunOnStart: true}))
+}
+
+// refuseAfterStart panics when the queue has started. A registration then is a bug in the caller's order that River
+// would show only as a data race (its producers read the worker map without a lock) or as a periodic job that never
+// runs (the client takes the list once, when Start makes it).
+func (q *Queue) refuseAfterStart(what string) {
+	if q.started.Load() {
+		panic("queue: " + what + " registered after Start: register every one before the queue starts")
+	}
 }
 
 // Start begins working jobs. It refuses a database whose queue tables Migrate has not made. The queue runs until Stop,
@@ -149,6 +166,7 @@ func (q *Queue) Every(interval time.Duration, args func() river.JobArgs) {
 // that decides how long they get has begun, and a job that is cut short mid-way (a login token spent and not yet
 // stored, say) is the harm Stop's deadline exists to avoid.
 func (q *Queue) Start(ctx context.Context) error {
+	q.started.Store(true)
 	if err := river.AddWorkerSafely(q.workers, river.WorkFunc(q.workDiscardedScan)); err != nil {
 		return fmt.Errorf("queue: %w", err)
 	}
