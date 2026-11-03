@@ -12,7 +12,7 @@
 
 ## 文档与代码的一致性
 
-命名预设已由 `gw/presets.go`、`proto/presets.go` 在目录认名前展开；key 的强制端点过滤预设仍独立执行，现有零号预设不代表没有命名配置。预设与会话/回退的 OpenRouter 来源于 2026-10-29 复核，规则与来源链接见[路由](domains/routing.md#命名预设)。
+命名预设已由 `gw/presets.go`、`proto/presets.go` 在目录认名前展开；它和挂在 key 上的路由预设是两个对象。路由预设目前只有零号放行预设，#562 的设计见[路由](domains/routing.md#路由预设)，尚未实现。命名预设与会话/回退的 OpenRouter 来源于 2026-10-29 复核，规则与来源链接见[路由](domains/routing.md#命名预设)。
 
 ## 1. 调用格式
 
@@ -48,7 +48,7 @@
 | 查询参数 `category`、`supported_parameters`、`output_modalities`、`input_modalities`、`sort`、`q`、`context`、`min_price`、`max_price`、`offset`、`limit`（≤1000）、`use_rss` | 服务端过滤和排序 | api/models/list-all-models-and-their-properties（OpenAPI `/models` 的 parameters） | 部分：读 `offset`、`limit`（1–1000）、`q`、`context`、`min_price`/`max_price`（prompt，$/M token）、`min_output_price`/`max_output_price`（completion）、`input_modalities`、`output_modalities`、`supported_parameters`、`model_authors`，`sort` 只支持 `pricing-low-to-high`、`pricing-high-to-low`、`context-high-to-low`；文档里有而 Axiom 没有数据的（`category`、`arch`、`providers`、`distillable`、`zdr`、`region`、`use_rss`、`min_age_days`/`max_age_days`、intelligence/coding/agentic 的 index 与 tool success rate）按名字回 400 并说明缺什么 | 无 | 无 | 不静默忽略：过滤条件丢掉的答案客户端看不出来；文档之外的参数（缓存参数、`utm_*`）不报错 |
 | `GET /api/v1/models/{author}/{slug}`、`/model/{author}/{slug}` | 单个模型详情，后缀按变体规则解析 | api/models/get-a-model-by-its-slug | 部分：`GET /api/v1/models/{model}` 返回 `{data: 模型对象}`，名字按调用规则解析（`claude-live` 与 `anthropic/claude-live` 到同一个模型），`id` 是标准 ID，`links.details` 指向 endpoints 路径；`/v1/models/{model}` 仍是 OpenAI/Anthropic 形 | `na:router/relay-router.go:36`（`/v1/models/:model`，OpenAI 形） | `s2:internal/server/routes/gateway.go:209` | OpenRouter 的 `/model/{author}/{slug}`（单数）没有；目录变体后缀见本表下一行 |
 | `GET /api/v1/models/count` | 模型总数 | api/models/get-total-count-of-available-models | 有：`data.count` 为同次发布中本 key 可见公共模型数，支持 `output_modalities`，非法/重复模态和损坏查询串回 400，不应用分页 | 无 | 无 | 2026-10-29 核对官方模型计数文档；响应数据来自内存投影，实时准入仍查库 |
-| `GET /api/v1/models/{author}/{slug}/endpoints` | 每个供应商端点：`provider_name`、`tag`、`quantization`、`pricing`、`context_length`、`max_completion_tokens`、`max_prompt_tokens`、`supported_parameters`、`supports_implicit_caching`、`uptime_last_5m/30m/1d`、`latency_last_30m`、`throughput_last_30m`、`status`、`service_tier` | api/endpoints/list-all-endpoints-for-a-model；spec `PublicEndpoint` | 部分：每个公共路由分组端点一个持久分组代号 tag（同一分组跨模型相同，也是 `provider.only`/`ignore` 和预设的路由身份，不暴露内部 UUID），非零 Owner 的私有端点从共享投影排除；当前接入都是中转分组，公开 `provider_name` 为 Axiom，官方直连后同一字段用真实名称；每个端点的价格取它自己的已发布版本价，上下文和输出上限来自同次构建 | 无 | 无 | 2026-10-29 核对官方模型端点文档（量化枚举 2026-11-01）；量化取管理员记录的级别，没有记录为 null；性能和窗口可用率为 null；未知能力、描述和模板字段省略，不暴露货源，字段偏离清单见 gateway.md |
+| `GET /api/v1/models/{author}/{slug}/endpoints` | 每个供应商端点：`provider_name`、`tag`、`quantization`、`pricing`、`context_length`、`max_completion_tokens`、`max_prompt_tokens`、`supported_parameters`、`supports_implicit_caching`、`uptime_last_5m/30m/1d`、`latency_last_30m`、`throughput_last_30m`、`status`、`service_tier` | api/endpoints/list-all-endpoints-for-a-model；spec `PublicEndpoint` | 部分：每个公共路由分组端点一个持久分组代号 tag（同一分组跨模型相同，也是 `provider.only`/`ignore` 和平台预设供应商顺序的公开身份，不暴露内部 UUID），非零 Owner 的私有端点从共享投影排除；当前接入都是中转分组，公开 `provider_name` 为 Axiom，官方直连后同一字段用真实名称；每个端点的价格取它自己的已发布版本价，上下文和输出上限来自同次构建 | 无 | 无 | 2026-10-29 核对官方模型端点文档（量化枚举 2026-11-01）；量化取管理员记录的级别，没有记录为 null；性能和窗口可用率为 null；未知能力、描述和模板字段省略，不暴露货源，字段偏离清单见 gateway.md |
 | `GET /api/v1/models/user` | 按账户供应商偏好、隐私设置、护栏过滤后的模型 | api/models（OpenAPI `/models/user`） | 部分：复用列表的 key 可见性、过滤和分页，next 保留 user 路径 | `na:router/api-router.go:101`（`/user/self/models`） | 无 | 2026-10-29 核对官方用户模型文档；缺供应商偏好、隐私和护栏数据，不伪称这些过滤已生效 |
 | `GET /api/v1/providers` | 供应商列表及隐私政策链接 | api/providers/list-all-providers | 部分：有可见模型时列 Axiom/axiom，政策链接、总部和机房为 null，无可见模型时为空 | 无 | 无 | 2026-10-29 核对官方 providers 文档；聚合供应商不暴露真实货源，缺失政策和地域不虚构 |
 | `GET /api/v1/endpoints/zdr` | ZDR 过滤影响预览 | api/endpoints/preview-the-impact-of-zdr-on-the-available-endpoints | 没有 | 无 | 无 | 低优先 |
@@ -63,7 +63,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
 | `provider.order`（供应商 slug 列表） | 按序尝试，可含 `provider/variant/region/tier` 形式的端点 slug | docs/guides/routing/provider-selection | 有：按不可变公开分组代号排序（`gw/provider.go`、`rt/rank.go`） | 无（按渠道优先级/权重，非请求级） | 无 | 精确选组，不公开真实名称；官方名称没有可信映射；偏离见 gateway 领域文档 |
-| `provider.only` / `provider.ignore` | 只允许/排除某些供应商，与账户级设置合并 | 同上 | 有：按公开分组代号过滤，不扩大到同供应商其他组（`rt/plan.go`） | 无 | 无 | 预设和归属权限独立生效 |
+| `provider.only` / `provider.ignore` | 只允许/排除某些供应商，与账户级设置合并 | 同上 | 有：按公开分组代号过滤，不扩大到同供应商其他组（`rt/plan.go`） | 无 | 无 | 路由预设和归属权限独立生效 |
 | `provider.allow_fallbacks` | 默认 true；false 配合 order 限定列表，无 order 则每个模型只取首选 | 同上 | 有：命名顺序限制集合，无顺序每个模型仅保留首条，保留 models 回退（`rt/plan.go`） | 无 | 无 | 不延长已冻结路线 |
 | `provider.require_parameters` | 只路由到支持请求里全部参数的端点 | 同上 | 部分：按端点公布的 `supported_parameters`（模型规格能力与方言，和 `/api/v1/models` 同一份）过滤；清单外参数 400 | 无 | 无 | 逐端点的采样/提供商参数清单仍缺（`seed`、`logprobs` 等 400）；需要供应商同步逐端点读出，见 gateway 领域文档 |
 | `provider.data_collection`（`allow`/`deny`） | 排除会存储数据的供应商 | 同上 | 有：`readDataCollection`（`gw/provider.go`），`deny` 映射到「不留存」政策 | 无 | 无 | 无 |
@@ -235,11 +235,21 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 
 ## 14. 预设（Presets）
 
+本节是 OpenRouter 的**请求预设**，它可以包含 provider 路由，但按请求引用；挂在 API key 上的**路由预设**见 14.1，两者不是同一个对象。
+
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
 | 请求里 `model: "@preset/slug"`、`model: "provider/model@preset/slug"`、请求体 `preset: "@preset/slug"` | 配置与代码分离，覆盖 model/provider/参数/系统提示/工具 | docs/guides/features/presets | 有：gateway 展开账户配置，protocol 负责引用与合并 | 无 | 无 | 请求浅覆盖、tools 按身份合并，规则见 routing.md「命名预设」 |
 | `/api/v1/presets` 列表、详情、版本、`POST /presets/{slug}/chat/completions|messages|responses`（从请求体创建预设）、版本回滚 | 预设管理 API | api/presets/* | 账户 CRUD 与控制台 API 已有 | 无 | 无 | 版本历史、版本指定与从推理请求建版本未实现；响应直接返回 config |
 | 预设里的 `tools`（含服务端工具）、`cache_enabled`、`cache_ttl_seconds`、系统提示 | 预设内容 | docs/guides/features/presets | 系统提示、函数工具与生成参数已有；`cache_enabled`、`cache_ttl_seconds` 已随 #330 实现 | 无 | 无 | 服务端工具仍按现有报价边界拒绝 |
+
+### 14.1 路由预设（挂在 API key 上，#562 设计，未实现）
+
+| 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
+|---|---|---|---|---|---|---|
+| key 绑定路由预设 | 没有这个对象：路由默认在 workspace；guardrail 可把 provider/model allowlist 和预算分配到具体 key；创建 key 没有 preset 字段 | docs/guides/features/workspaces、docs/guides/features/guardrails、api/api-keys/create-a-new-api-key（2026-11-02） | 设计（#562）：key 的 `preset_id`、平台 → 站点 → 账户 → 工作区默认、key 创建时落章；代码未实现，只有零号放行预设 | 无 filter/sort 预设；token 只有分组、模型限制和自动分组（`na:model/token.go`，2026-11-02） | 无 filter/sort 预设；API key 只有分组、IP 和额度（`s2:backend/internal/service/api_key.go`，2026-11-02） | 产品要求 key 选择，供 Claude Code/Codex 这类不能加请求参数的工具；与 OpenRouter 的 workspace/guardrail 是有意的差异 |
+| 预设内容 | 请求预设覆盖 model/provider/参数/系统提示/工具；路由默认按价格/吞吐/延迟/可靠性；guardrail 限制 provider/model | docs/guides/features/presets、docs/guides/routing/provider-selection、docs/guides/features/guardrails（2026-11-02） | 设计（#562）：用户路由预设只含来源类别、数据政策、产品成绩、验证、排序和最高单价；平台预设另有供应商顺序和运行时调参，不暴露给用户；命名请求配置另由 accounts 的 presets 提供 | 无 | 无 | 两个“预设”分开；不要把请求配置和路由预设混成一个对象 |
+| 版本与覆盖 | 请求预设保留版本、API 总用最新、请求浅覆盖；guardrail 更严者生效 | docs/guides/features/presets、docs/guides/features/guardrails（2026-11-02） | 设计（#562）：规则版本不可变、key 绑预设 ID 跟着最新；请求 `provider` 只能收紧 | 无 | 无 | 编辑预设影响已绑定 key；默认值变更只影响新 key |
 
 ## 15. Key 管理（Management / provisioning keys）
 
@@ -248,6 +258,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | 管理 key（不能调模型，只能调管理接口） | 程序化管理 key | docs/guides/overview/auth/management-api-keys | 有：控制台签发、账户范围、禁止调用模型（`internal/accounts/management.go`） | 无 | 无 | #315 |
 | `GET /api/v1/keys`（`include_disabled`、`include_expired`、`offset`、`workspace_id`） | 列 key，带 `hash`、`usage*`、`limit*`、`byok_usage*`、`expires_at`、`disabled` | api/api-keys/list-api-keys | 有：`cmd/axiom/management.go`，只列调用 key，支持四个筛选/分页参数 | `na:router/api-router.go:282-295`（令牌 CRUD，要登录） | `s2:internal/handler/api_key_handler.go` | hash 为不透明 UUID 十六进制，限额为本站额度；无 BYOK，返回零用量 |
 | `POST /api/v1/keys`（`name`、`limit`、`limit_reset`、`include_byok_in_limit`、`expires_at`、`workspace_id`、`creator_user_id`，明文只返回一次） | 创建 key | api/api-keys/create-a-new-api-key | 有：`cmd/axiom/management.go`；创建人固定为管理 key 的签发人，限制继承且只能收紧 | 同上 | 同上 | 同上 |
+| key 的路由预设 `preset_id`（创建、查询、修改） | 没有这个字段；路由默认在 workspace，provider/model 限制由 guardrail 分配到 key | api/api-keys/create-a-new-api-key、docs/guides/features/guardrails（2026-11-02） | 设计（#562）：key 可绑定一个可见的路由预设；创建省略按默认链，修改只能选可见 ID；代码未实现 | 无 | 无 | #562；见 14.1 |
 | `GET/PATCH/DELETE /api/v1/keys/{hash}` | 查询/修改（含停用）/删除 | api/api-keys/get-a-single-api-key、update-an-api-key、delete-an-api-key | 有：`cmd/axiom/management.go`，data/deleted 外壳；PATCH 只改设置，不改到期或工作区 | 同上 | 同上 | 同上 |
 | key 限额：`limit`(USD)、`limit_reset`(daily/weekly/monthly，UTC)、`expires_at` | 每 key 限额 | 同上 | 有：key 的限额、重置周期、过期（`gw/readonly.go:86-125`、`internal/accounts/keys.go`） | 有 | 有 | 周期的边界（UTC、周一起算）与 OpenRouter 是否一致未核实 |
 | OAuth PKCE 换 key（`/auth/keys/code`、`/auth/keys`） | 第三方应用让用户授权拿 key | docs/guides/overview/auth/oauth | 没有（范围「以后」：第三方应用用户用自己账户付费，`docs/product.md:96`） | 无 | 无 | 归「新建」 |
