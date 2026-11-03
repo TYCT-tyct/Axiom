@@ -165,6 +165,7 @@ const scenes: Scene[] = [
   dialog("price-publish", model(1), "models.prices.publish"),
   dialog("price-source", model(1), "models.prices.changeSource"),
   dialog("rule-new", "pricing", "pricing.rule.new"),
+  dialog("targets", "", "overview.targets.edit"),
   dialog("settings-edit", "settings", "settings.edit"),
   unsettled(
     "change-unknown",

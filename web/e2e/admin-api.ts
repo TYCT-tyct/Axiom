@@ -115,6 +115,27 @@ const registration: Schemas["RegistrationPolicy"] = {
   domain_deny: ["mailinator.com"],
 };
 
+// The targets of a month, and the editor's write of them. The mock keeps one set per month and does not prorate it;
+// showing the page's target and empty states is enough.
+function getTargets({ params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "get">) {
+  const month = params.month ?? "";
+  return ok(state.targets.get(month) ?? { site_id: state.siteId, month });
+}
+
+function putTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "put">) {
+  const month = params.month ?? "";
+  const stored: Schemas["OperationsTargets"] = {
+    site_id: state.siteId,
+    month,
+    calls: body.calls,
+    errors: body.errors,
+    revenue: body.revenue,
+    cost: body.cost,
+  };
+  state.targets.set(month, stored);
+  return ok(stored);
+}
+
 // The overview sums the mocked calls, so the worst data's long slugs, many accounts and int64 prices reach the page; the
 // cash comes back in two currencies, one of them negative, as a site with refunds in another currency would see.
 function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "get">) {
@@ -132,14 +153,43 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
     ]
       .sort((a, b) => b[1].calls - a[1].calls)
       .slice(0, 10);
+  const cost = (revenue * 6n) / 10n;
+  const errors = state.calls.filter((call) => call.error_kind).length;
+  const month = (query.get("until") ?? new Date().toISOString()).slice(0, 7);
+  const stored = state.targets.get(month);
+  const targets = stored
+    ? {
+        ...(stored.calls !== undefined
+          ? { calls: { target: stored.calls, gap: state.calls.length - stored.calls } }
+          : {}),
+        ...(stored.errors !== undefined ? { errors: { target: stored.errors, gap: errors - stored.errors } } : {}),
+        ...(stored.revenue
+          ? {
+              revenue: {
+                target: stored.revenue,
+                gap: { amount: String(revenue - BigInt(stored.revenue.amount)), currency: stored.revenue.currency },
+              },
+            }
+          : {}),
+        ...(stored.cost
+          ? {
+              cost: {
+                target: stored.cost,
+                gap: { amount: String(cost - BigInt(stored.cost.amount)), currency: stored.cost.currency },
+              },
+            }
+          : {}),
+      }
+    : {};
   return ok({
     site_id: state.siteId,
     since: query.get("since") ?? "2026-10-29T00:00:00.000Z",
     until: query.get("until") ?? "2026-10-30T23:59:59.000Z",
     calls: state.calls.length,
-    errors: state.calls.filter((call) => call.error_kind).length,
+    errors,
+    calls_incomplete: false,
     revenue: { amount: String(revenue), currency: "USD" },
-    cost: { amount: String((revenue * 6n) / 10n), currency: "USD" },
+    cost: { amount: String(cost), currency: "USD" },
     unknown_cost_calls: 0,
     cash: [
       { amount: String(revenue / 2n), currency: "USD" },
@@ -150,6 +200,7 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
       ...n,
     })),
     top_models: rank((call) => call.model).map(([model, n]) => ({ model, ...n })),
+    targets,
   });
 }
 
@@ -457,6 +508,8 @@ const handlers: Handler<AdminState>[] = [
   route("put", `${base}/accounts/{account_id}/tier`, changes("users.manage"), putTier),
   route("put", `${base}/users/{user_id}/sign-in`, changes("users.manage"), putSignIn),
   route("get", `${base}/reports/overview`, reads("sites.manage"), getOverview),
+  route("get", `${base}/reports/targets/{month}`, reads("sites.manage"), getTargets),
+  route("put", `${base}/reports/targets/{month}`, changes("sites.manage"), putTargets),
   route("get", `${base}/calls`, reads("calls.search"), listCalls),
   route("get", `${base}/calls/{call_id}/trace`, reads("calls.inspect"), getTrace),
   route("get", `${base}/audit`, reads("audit.view"), listAudit),

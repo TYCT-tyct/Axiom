@@ -7,3 +7,4 @@ CREATE SCHEMA observability;
 CREATE SCHEMA suppliers;
 CREATE SCHEMA billing;
 CREATE SCHEMA payments;
+CREATE SCHEMA operations;

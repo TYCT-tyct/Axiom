@@ -3,12 +3,14 @@ import { can, Stat, useSession } from "@axiom/app";
 import { DataState, EmptyState, Notice, PageHeader, Panel, Segmented, Table, Td, Th, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useSearch } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { nav } from "../nav";
 import { callsDrill, type OverviewRange, ordersDrill, overviewRanges, overviewWindow, type Window } from "../overview";
 import { Code, PageBody } from "../parts";
 import { overviewQuery } from "../queries";
+import { targetsEmpty } from "../targets";
+import { CountTargetNote, MoneyTargetNote, TargetsAction } from "../targets-view";
 
 // The figures are links: each opens the call or order list narrowed to the same window, so a number is never a dead
 // end. The whole card is the target, and the keyboard sees one focus ring around it; the pointer sees its border lift.
@@ -62,7 +64,7 @@ function Dashboard() {
             })}
           </p>
         </div>
-        <DataState query={overview}>{(data) => <Figures data={data} window={window} />}</DataState>
+        <DataState query={overview}>{(data) => <Figures data={data} window={window} anchor={anchor} />}</DataState>
       </PageBody>
     </>
   );
@@ -70,63 +72,186 @@ function Dashboard() {
 
 type Overview = AdminSchemas["OperationsOverview"];
 
-function Figures({ data, window }: { data: Overview; window: Window }) {
+// CoverageNotice says whether the call log covers the window: a node that cannot tell says so, and an archived month
+// marks only the log's part of the dashboard incomplete.
+function CoverageNotice({ data }: { data: Overview }) {
   const { t } = useTranslation();
   const format = useFormat();
-  const number = (n?: number) => (n === undefined ? t("overview.unavailable") : format.number(n));
-  const money = (m?: AdminSchemas["Money"]) => (m ? format.money(m) : t("overview.unavailable"));
-  // One line per currency: joined on one line, a second amount broke in the middle of its digits.
-  const cash = data.cash?.length
-    ? data.cash.map((c) => (
-        <span key={c.currency} className="block">
-          {format.money(c)}
-        </span>
-      ))
-    : t("overview.unavailable");
-  const site = data.site_id;
-  // Calls, errors and the two rankings come from the call log, whose months leave PostgreSQL once archived. Revenue,
-  // cost and cash do not, so only the log's part is marked incomplete.
-  const coverage =
-    data.calls_incomplete === undefined
-      ? t("overview.coverageUnavailable")
-      : data.calls_incomplete
-        ? data.calls_available_since
-          ? t("overview.callsIncomplete", { since: format.dateTime(new Date(data.calls_available_since)) })
-          : t("overview.callsIncompleteUnknown")
-        : null;
+  if (data.calls_incomplete === undefined) {
+    return <Notice>{t("overview.coverageUnavailable")}</Notice>;
+  }
+  if (!data.calls_incomplete) {
+    return null;
+  }
+  return (
+    <Notice>
+      {data.calls_available_since
+        ? t("overview.callsIncomplete", { since: format.dateTime(new Date(data.calls_available_since)) })
+        : t("overview.callsIncompleteUnknown")}
+    </Notice>
+  );
+}
+
+// TargetsSection is the description, month picker and editor, or the one notice that this node does not have targets.
+// An empty set still shows the editor: the month can be given its first target.
+function TargetsSection({
+  targets,
+  anchor,
+  currency,
+}: {
+  targets?: AdminSchemas["OperationsTargetComparison"];
+  anchor: Date;
+  currency: string;
+}) {
+  const { t } = useTranslation();
+  if (targets === undefined) {
+    return <Notice>{t("overview.targets.unavailable")}</Notice>;
+  }
   return (
     <>
-      {coverage ? <Notice>{coverage}</Notice> : null}
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <p className="max-w-3xl text-ui text-t3">{t("overview.targets.description")}</p>
+        {currency ? <TargetsAction anchor={anchor} currency={currency} /> : null}
+      </div>
+      {targetsEmpty(targets) ? <Notice>{t("overview.targets.empty")}</Notice> : null}
+    </>
+  );
+}
+
+// withTarget puts a figure's target under its existing note; with no targets in the window, the cards keep their notes
+// and one notice above them explains the empty set.
+function withTarget(show: boolean, target: ReactNode, base?: ReactNode): ReactNode {
+  if (!show) {
+    return base;
+  }
+  return base ? (
+    <>
+      <span className="block">{base}</span>
+      {target}
+    </>
+  ) : (
+    target
+  );
+}
+
+type FigureProps = {
+  data: Overview;
+  window: Window;
+  site?: string;
+  targets?: AdminSchemas["OperationsTargetComparison"];
+  showTarget: boolean;
+};
+
+function Figures({ data, window, anchor }: { data: Overview; window: Window; anchor: Date }) {
+  const targets = data.targets;
+  const targetNotes = targets !== undefined && !targetsEmpty(targets);
+  const currency = data.revenue?.currency ?? data.cost?.currency ?? "";
+  const site = data.site_id;
+  return (
+    <>
+      <CoverageNotice data={data} />
+      <TargetsSection targets={targets} anchor={anchor} currency={currency} />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-        <Link to="/calls" search={callsDrill(window, { site })} className={count}>
-          <Stat label={t("overview.calls")} value={number(data.calls)} />
-        </Link>
-        <Link to="/calls" search={callsDrill(window, { site, status: "error" })} className={count}>
-          <Stat label={t("overview.errors")} value={number(data.errors)} />
-        </Link>
-        <Link to="/calls" search={callsDrill(window, { site })} className={amount}>
-          <Stat label={t("overview.revenue")} value={money(data.revenue)} note={t("overview.revenueNote")} />
-        </Link>
-        <Link to="/calls" search={callsDrill(window, { site })} className={amount}>
-          <Stat
-            label={t("overview.cost")}
-            value={money(data.cost)}
-            note={
-              data.unknown_cost_calls
-                ? t("overview.unknownCost", { calls: format.number(data.unknown_cost_calls) })
-                : t("overview.costNote")
-            }
-          />
-        </Link>
-        <Link to="/orders" search={ordersDrill(window)} className={amount}>
-          <Stat label={t("overview.cash")} value={cash} note={t("overview.cashNote")} />
-        </Link>
+        <CallsFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
+        <ErrorsFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
+        <RevenueFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
+        <CostFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
+        <CashFigure data={data} window={window} showTarget={targetNotes} />
       </div>
       <div className="grid gap-4 xl:grid-cols-2">
         <TopAccounts data={data} window={window} site={site} />
         <TopModels data={data} window={window} site={site} />
       </div>
     </>
+  );
+}
+
+function CallsFigure({ data, window, site, targets, showTarget }: FigureProps) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <Link to="/calls" search={callsDrill(window, { site })} className={count}>
+      <Stat
+        label={t("overview.calls")}
+        value={data.calls === undefined ? t("overview.unavailable") : format.number(data.calls)}
+        note={withTarget(showTarget, <CountTargetNote metric="calls" comparison={targets?.calls} />)}
+      />
+    </Link>
+  );
+}
+
+function ErrorsFigure({ data, window, site, targets, showTarget }: FigureProps) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <Link to="/calls" search={callsDrill(window, { site, status: "error" })} className={count}>
+      <Stat
+        label={t("overview.errors")}
+        value={data.errors === undefined ? t("overview.unavailable") : format.number(data.errors)}
+        note={withTarget(showTarget, <CountTargetNote metric="errors" comparison={targets?.errors} />)}
+      />
+    </Link>
+  );
+}
+
+function RevenueFigure({ data, window, site, targets, showTarget }: FigureProps) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <Link to="/calls" search={callsDrill(window, { site })} className={amount}>
+      <Stat
+        label={t("overview.revenue")}
+        value={data.revenue ? format.money(data.revenue) : t("overview.unavailable")}
+        note={withTarget(
+          showTarget,
+          <MoneyTargetNote metric="revenue" comparison={targets?.revenue} />,
+          t("overview.revenueNote"),
+        )}
+      />
+    </Link>
+  );
+}
+
+function CostFigure({ data, window, site, targets, showTarget }: FigureProps) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const note = data.unknown_cost_calls
+    ? t("overview.unknownCost", { calls: format.number(data.unknown_cost_calls) })
+    : t("overview.costNote");
+  return (
+    <Link to="/calls" search={callsDrill(window, { site })} className={amount}>
+      <Stat
+        label={t("overview.cost")}
+        value={data.cost ? format.money(data.cost) : t("overview.unavailable")}
+        note={withTarget(showTarget, <MoneyTargetNote metric="cost" comparison={targets?.cost} />, note)}
+      />
+    </Link>
+  );
+}
+
+function CashFigure({ data, window, showTarget }: { data: Overview; window: Window; showTarget: boolean }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  // One line per currency: joined on one line, a second amount broke in the middle of its digits.
+  const cash = data.cash?.length
+    ? data.cash.map((amount) => (
+        <span key={amount.currency} className="block">
+          {format.money(amount)}
+        </span>
+      ))
+    : t("overview.unavailable");
+  return (
+    <Link to="/orders" search={ordersDrill(window)} className={amount}>
+      <Stat
+        label={t("overview.cash")}
+        value={cash}
+        note={withTarget(
+          showTarget,
+          <span className="block">{t("overview.targets.cashNoTarget")}</span>,
+          t("overview.cashNote"),
+        )}
+      />
+    </Link>
   );
 }
 

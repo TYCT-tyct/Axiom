@@ -12,6 +12,7 @@ export { uuid } from "./admin-fixtures.ts";
 
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
+  targets: Map<string, Schemas["OperationsTargets"]>;
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
   logo: Schemas["SiteLogoView"];
@@ -36,6 +37,9 @@ export type AdminState = AuthState & {
   models: Schemas["Model"][];
   rules: Schemas["PricingRule"][];
 };
+
+// The month the dashboard and the target editor open on: the real UTC month, as the page computes it.
+const thisMonth = () => new Date().toISOString().slice(0, 7);
 
 const allPermissions = [
   "users.view",
@@ -378,10 +382,24 @@ export function usualState(): AdminState {
   const own = aUser(0, { email: "admin@example.com", mfa_enabled: true, tier: tiers[0] });
   const people = [own, ...users];
   const calls = range(60).map((n) => aCall(n, people[(n - 1) % people.length] ?? own));
+  const month = thisMonth();
   const audit = range(60).map((n) => anAuditEntry(n, people[(n - 1) % people.length] ?? own));
   const state: AdminState = {
     ...authState(allPermissions),
     siteId,
+    targets: new Map([
+      [
+        month,
+        {
+          site_id: siteId,
+          month,
+          calls: 45,
+          errors: 10,
+          revenue: usd("2000"),
+          cost: usd("1800"),
+        },
+      ],
+    ]),
     settings: {
       settings: { console_idle_timeout_seconds: 604800, new_key_daily_limit: usd("20") },
       defaults: {
@@ -418,6 +436,7 @@ export function usualState(): AdminState {
 export function emptyState(): AdminState {
   return {
     ...usualState(),
+    targets: new Map(),
     users: [],
     calls: [],
     traces: new Map(),
