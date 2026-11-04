@@ -6,9 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
-	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -21,14 +19,12 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/fileparse"
 	"axiom/internal/observability"
-	"axiom/internal/platform"
 	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
-	"axiom/internal/websearch"
 )
 
 // Run takes a call that has been admitted: it tries the route, relays the answer, meters and settles (the steps after
@@ -134,123 +130,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
-// refuseUnrouted answers a request no route took: 404, or 405 with the Allow header the mux would have sent, in the
-// error shell of the path's protocol. It asks the mux for the status and the methods it would allow instead of keeping
-// a second routing table, which would drift from the first, and drops only its plain-text body.
-func (h *Handler) refuseUnrouted(w http.ResponseWriter, r *http.Request) {
-	answer := &statusOnly{header: make(http.Header)}
-	h.mux.ServeHTTP(answer, r)
-	f := protocol.Chat
-	if isMessagesPath(r.URL.Path) {
-		f = protocol.Messages
-	}
-	switch answer.status {
-	case http.StatusNotFound:
-		writeRefusal(w, f, errNotFound)
-	case http.StatusMethodNotAllowed:
-		if allow := answer.header.Values("Allow"); len(allow) > 0 {
-			w.Header()["Allow"] = allow
-		}
-		writeRefusal(w, f, errMethodNotAllowed)
-	default: // the mux had something else to say, such as a redirect to the canonical path
-		h.mux.ServeHTTP(w, r)
-	}
-}
-
-// statusOnly keeps the status and the headers of an answer, not its body: the mux's answer to a request no route took,
-// whose body the protocol's error shell replaces.
-type statusOnly struct {
-	header http.Header
-	status int
-}
-
-func (s *statusOnly) Header() http.Header { return s.header }
-
-// Write keeps what the mux wrote out of the response: the status and the headers are the answer, and the body is the
-// one the caller writes. It reports len(p) so the writer that called it sees success.
-func (*statusOnly) Write(p []byte) (int, error) { return len(p), nil }
-
-func (s *statusOnly) WriteHeader(status int) {
-	if s.status == 0 {
-		s.status = status
-	}
-}
-
-// isMessagesPath says whether a path belongs to the Messages format, whose errors have their own shell: everything
-// under /messages in either prefix (docs/domains/gateway.md「错误」).
-func isMessagesPath(path string) bool {
-	path = strings.TrimPrefix(path, "/api")
-	return path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages/")
-}
-
-// Call is a request that has been admitted: its reservation is committed and its route is cut to the entries that
-// reservation covers. Run gets it; nothing in it changes after that but what Run does through its methods.
-type Call struct {
-	ID      uuid.UUID // the request ID, which is also the call number
-	At      time.Time // one start for the call log and the reservation: the request's arrival, before admission
-	Format  protocol.Format
-	Compact bool // the Responses compact endpoint: the upstream answers whole and its body is passed through
-	Request protocol.Request
-	Body    []byte
-	search  string // the web plugin's query, read before admission and never logged
-	// searchBackend is the backend the plugin's one search runs through, nil when the plugin uses the model's own
-	// search instead. nativeSearch is the most searches the gateway turns on upstream, 0 when it turns on none.
-	searchBackend *websearch.Backend
-	nativeSearch  int
-	serverLoop    bool                      // openrouter:web_search runs the model-side loop through searchBackend
-	searchPrice   platform.UnitPrice        // the backend's published price per search, zero to use the model's
-	files         []protocol.FileAnnotation // the annotations a parsed Chat reply returns, so the client can skip reparsing
-	Header        http.Header               // the client's values of the headers that may go upstream, which headers.go derives per attempt
-	cache         cachePlan                 // the response cache this call may read or write, zero when it did not ask
-	presetCache   *bool                     // the preset's cache_enabled, nil when it does not decide the switch
-	presetTTL     int64                     // the preset's cache_ttl_seconds, 0 when absent
-	Session       routing.SessionKey
-	Admission     accounts.Admission
-	Admitted      billing.Admitted
-	Hold          *billing.Hold
-	Plan          routing.Plan
-
-	site        accounts.Site
-	caller      accounts.Caller
-	host        string
-	ip          netip.Addr
-	snap        *catalog.Snapshot
-	models      []catalog.ModelID
-	auto        bool // the request named openrouter/auto: routing ranks every model the key may call
-	free        bool // the request named openrouter/free: routing ranks only the free models the key may call
-	sticky      routing.EndpointID
-	stickyCache *kv.Client
-	stickyKey   string
-	over        routing.Override // what the request's provider object narrows the route by
-	accountRate int
-	rateReset   int64
-	rate        int  // requests of the key in the rate window, counted before admission
-	gated       bool // the file parser's gate counted the call already; fillCall does not count it again
-
-	record *observability.Slot // this call's room in the call log, taken before admission
-
-	mu       sync.Mutex
-	releases []func()
-}
-
-// hold registers something to give back when the call is done, in reverse order.
-func (c *Call) hold(release func()) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.releases = append(c.releases, release)
-}
-
-// Done gives back the call's in-flight slots and the memory of its body. It is safe to call more than once.
-func (c *Call) Done() {
-	c.mu.Lock()
-	releases := c.releases
-	c.releases = nil
-	c.mu.Unlock()
-	for _, release := range slices.Backward(releases) {
-		release()
-	}
-}
-
 // call serves one of the call paths, or the Responses compact endpoint, which is passed through instead of relayed.
 func (h *Handler) call(format protocol.Format, compact bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -279,32 +158,6 @@ func (h *Handler) ipSlot(w http.ResponseWriter, r *http.Request, format protocol
 		return nil, false
 	}
 	return release, true
-}
-
-var errUpgrade = invalid("Protocol upgrades such as WebSocket are not supported.")
-
-// errNotFound and errMethodNotAllowed answer a path or a method no route takes, in the protocol's error shell like
-// every other refusal; the mux's own plain-text answer would be the only response not shaped by it
-// (docs/domains/gateway.md「错误」).
-var (
-	errNotFound         = &Refusal{Status: http.StatusNotFound, Code: "not_found"}
-	errMethodNotAllowed = &Refusal{Status: http.StatusMethodNotAllowed, Code: "method_not_allowed"}
-)
-
-// notServed answers a path that is registered only to keep a wildcard from taking it, as the mux answers a path nothing
-// serves.
-func notServed(w http.ResponseWriter, r *http.Request) { writeRefusal(w, formatFor(r), errNotFound) }
-
-// refuseUpgrade answers the WebSocket handshake a client may try on a call path before it falls back to POST.
-func refuseUpgrade(format protocol.Format) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Upgrade") == "" {
-			w.Header().Set("Allow", http.MethodPost)
-			writeRefusal(w, format, errMethodNotAllowed)
-			return
-		}
-		writeRefusal(w, format, errUpgrade)
-	}
 }
 
 // accept takes a request as far as admission: recognise the site and the key from the headers alone, take the
