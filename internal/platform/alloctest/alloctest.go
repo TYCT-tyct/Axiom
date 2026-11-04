@@ -1,5 +1,5 @@
-// Package alloctest measures what a function allocates, or what its result retains, without the rest of the test binary
-// running beside it.
+// Package alloctest measures what a function allocates, what its result retains, or the most heap it holds while it
+// runs, without the rest of the test binary running beside it.
 //
 // testing.AllocsPerRun and runtime.ReadMemStats count the whole process: a collection another goroutine starts inside a
 // measured run, or a goroutine the scheduler runs while the measured one is preempted, adds to the count and to the
@@ -8,20 +8,24 @@
 // turns the collector off and keeps one processor, and the parent asserts on what the child reports. Nothing of the
 // rest of the test binary is left to allocate in the measurement. MeasureRetained runs in a child the same way, but
 // keeps what the function returns alive while the collector runs, because how much a result holds is not what a call
-// allocated.
+// allocated. MeasurePeak runs in a child too, but reads the live heap while the function's goroutines run, because a
+// working set shared by concurrent calls is what is live at one moment, not what the whole of them allocated.
 package alloctest
 
 import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"runtime/metrics"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -32,6 +36,7 @@ const (
 	childModeEnv = "AXIOM_ALLOC_MEASURE_MODE"
 	allocMode    = "allocs"
 	retainedMode = "retained"
+	peakMode     = "peak"
 	// runs is how many times a function runs after its warm-up; the smallest run is reported, as load and the
 	// runtime's own work only ever add to a run.
 	runs = 5
@@ -52,14 +57,21 @@ type RetainedFunction struct {
 	F    func() any
 }
 
+// PeakFunction is one peak measurement: what F holds at its highest is reported as Name. Its result stays alive
+// until the last reading, so what F keeps is part of the peak; F may return nil when it keeps nothing.
+type PeakFunction struct {
+	Name string
+	F    func() any
+}
+
 // Allocs is what a function allocated per run.
 type Allocs struct {
 	Count float64 // allocations per run
 	Bytes float64 // bytes allocated per run
 }
 
-// measured is one function to measure: its name and whether it has a body. It lets Measure and MeasureRetained share
-// the child process protocol without sharing what they run or report.
+// measured is one function to measure: its name and whether it has a body. It lets the three measurements share the
+// child process protocol without sharing what they run or report.
 type measured interface {
 	label() string
 	defined() bool
@@ -69,6 +81,8 @@ func (f Function) label() string         { return f.Name }
 func (f Function) defined() bool         { return f.F != nil }
 func (f RetainedFunction) label() string { return f.Name }
 func (f RetainedFunction) defined() bool { return f.F != nil }
+func (f PeakFunction) label() string     { return f.Name }
+func (f PeakFunction) defined() bool     { return f.F != nil }
 
 // Measure runs each function in a child process of the test binary and returns what each allocated per run, by name.
 //
@@ -96,8 +110,26 @@ func MeasureRetained(t *testing.T, funcs ...RetainedFunction) map[string]uint64 
 	return measure(t, funcs, retainedMode, childRetained, parseRetained)
 }
 
+// MeasurePeak runs each function in a child process of the test binary and returns the highest live heap it held while
+// it ran, in bytes, by name.
+//
+// Measure counts every allocation and MeasureRetained what survives the call; neither sees the working set of a
+// function that runs goroutines at once, whose memory is what is live at one moment rather than what one call
+// allocated. MeasurePeak fixes the collector's settings, then, until F returns, collects the heap and reads it: each
+// reading is what was live at that instant, and the largest is reported. After F returns, its result stays alive while
+// the heap is read once more, so what F keeps is always part of the peak. Work of the runtime's own, and the sampler's
+// own reads, can only add to a reading; a reading never exceeds what was live.
+//
+// The collector is off between readings so that only a reading collects, and the memory limit is lifted for the same
+// reason; both are restored when the child is done. Like the other measurements it may be called once in t: the child
+// stops t as soon as it has reported.
+func MeasurePeak(t *testing.T, funcs ...PeakFunction) map[string]uint64 {
+	t.Helper()
+	return measure(t, funcs, peakMode, childPeak, parsePeak)
+}
+
 // measure validates funcs, then runs them in the child that selects t for mode, or spawns that child and parses its
-// report. It is the one place the two measurements share the child process protocol.
+// report. It is the one place the three measurements share the child process protocol.
 func measure[T measured, V any](t *testing.T, funcs []T, mode string,
 	child func(*testing.T, []T), parse func([]byte, []T) (map[string]V, error),
 ) map[string]V {
@@ -142,12 +174,39 @@ func runPattern(name string) string {
 func spawn(t *testing.T, mode string) ([]byte, error) {
 	args := []string{"-test.count=1", "-test.timeout=10m", "-test.run=" + runPattern(t.Name())}
 	cmd := exec.CommandContext(t.Context(), os.Args[0], args...) //nolint:gosec // this test binary, selected by its own name
-	cmd.Env = append(os.Environ(), childEnv+"="+t.Name(), childModeEnv+"="+mode)
+	cmd.Env = childEnvironment(t.Name(), mode)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("the child measuring %s failed: %w", t.Name(), err)
 	}
 	return out, nil
+}
+
+// childEnvironment is the child's environment: this process's, with the keys alloctest sets replaced rather than
+// repeated, because which of two entries a reader takes is its own business. A peak child also gets stop-the-world
+// collections: a reading must be the heap live when the collection stopped the world, not what the program allocated
+// between the end of the mark and the reading.
+func childEnvironment(name, mode string) []string {
+	env := os.Environ()
+	out := make([]string, 0, len(env)+3)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, childEnv+"=") || strings.HasPrefix(entry, childModeEnv+"=") {
+			continue
+		}
+		if mode == peakMode && strings.HasPrefix(entry, "GODEBUG=") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	out = append(out, childEnv+"="+name, childModeEnv+"="+mode)
+	if mode == peakMode {
+		godebug := os.Getenv("GODEBUG")
+		if godebug != "" {
+			godebug += ","
+		}
+		out = append(out, "GODEBUG="+godebug+"gcstoptheworld=2")
+	}
+	return out
 }
 
 // childAllocs measures funcs and stops t with the results on stdout. It runs in the child process only.
@@ -181,6 +240,18 @@ func childRetained(t *testing.T, funcs []RetainedFunction) {
 	t.SkipNow() // the parent has every measurement; the test's assertions are the parent's
 }
 
+// childPeak measures funcs and stops t with the results on stdout. It runs in the child process only. The sampler runs
+// beside the measured function rather than in place of it, so the function keeps the processors its goroutines need;
+// the collector runs only where measurePeak reads the heap.
+func childPeak(t *testing.T, funcs []PeakFunction) {
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer debug.SetMemoryLimit(debug.SetMemoryLimit(math.MaxInt64)) // the limit collects too, and the readings are the only collections
+	for _, f := range funcs {
+		report(t, f.Name, measurePeak(f.F))
+	}
+	t.SkipNow() // the parent has every measurement; the test's assertions are the parent's
+}
+
 // measureRetained returns the smallest heap growth a call to f leaves behind while its result stays alive.
 func measureRetained(f func() any) uint64 {
 	warm := f() // warm-up: any one-time cache the call fills is not part of what its result holds
@@ -206,6 +277,46 @@ func retainedOnce(f func() any) uint64 {
 	runtime.ReadMemStats(&after)
 	runtime.KeepAlive(held)
 	return heapGrowth(before.HeapAlloc, after.HeapAlloc)
+}
+
+// measurePeak returns the highest live heap f held while it ran: the heap after a collection before f, and after each
+// collection a sampler takes until f returns, the largest, minus that first reading. The reading after f returns, with
+// its result alive, is the last one, so a peak that is only what f keeps is always seen.
+//
+// The sampler runs beside f rather than after it: a working set that exists only while goroutines run is gone once they
+// are done, so the heap has to be read as it happens. Each reading is exact for the instant it collects, and the
+// collector being off in between keeps every reading to what was live, not to what had not been collected yet.
+func measurePeak(f func() any) uint64 {
+	live := liveHeap()
+	done := make(chan struct{})
+	var peak uint64
+	var sampler sync.WaitGroup
+	sampler.Go(func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				peak = max(peak, liveHeap())
+				runtime.Gosched() // let the function run between readings; a reading stops the world
+			}
+		}
+	})
+	held := f()
+	close(done)
+	sampler.Wait() // the sampler's last reading happens before the one below
+	peak = max(peak, liveHeap())
+	runtime.KeepAlive(held)
+	return heapGrowth(live, peak)
+}
+
+// liveHeap is the heap a collection marked live, in bytes: what was live when the collection stopped the world, not
+// what the program allocated between the end of the mark and the reading.
+func liveHeap() uint64 {
+	runtime.GC()
+	samples := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+	metrics.Read(samples)
+	return samples[0].Value.Uint64()
 }
 
 // heapGrowth is the heap that grew from before to after. HeapAlloc is the whole process heap, so a collection freeing
@@ -259,6 +370,20 @@ func parseRetained(out []byte, funcs []RetainedFunction) (map[string]uint64, err
 	return parseMeasurements(out, names, func(values []uint64) (uint64, error) {
 		if len(values) != 1 {
 			return 0, errors.New("want retained bytes")
+		}
+		return values[0], nil
+	})
+}
+
+// parsePeak reads the peak measurements the child wrote, with the same promises as parse.
+func parsePeak(out []byte, funcs []PeakFunction) (map[string]uint64, error) {
+	names := make([]string, len(funcs))
+	for i, f := range funcs {
+		names[i] = f.Name
+	}
+	return parseMeasurements(out, names, func(values []uint64) (uint64, error) {
+		if len(values) != 1 {
+			return 0, errors.New("want peak bytes")
 		}
 		return values[0], nil
 	})
