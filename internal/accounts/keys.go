@@ -18,6 +18,9 @@ import (
 // ErrKeyNotFound is a key the transaction cannot see, or already deleted.
 var ErrKeyNotFound = errors.New("accounts: no such API key")
 
+// ErrKeyPreset is a routing preset chosen for a key that has none: a management key, which is never routed.
+var ErrKeyPreset = errors.New("accounts: a management key has no routing preset")
+
 // ErrTooManyKeys is a key an account may not make now, over one of its site's two limits: the keys it holds that
 // are not deleted, which deleting a key lifts, and the keys it makes in an hour, which waiting lifts. A site that lowers
 // its limit leaves the keys already made usable.
@@ -71,12 +74,17 @@ type KeySettings struct {
 	LimitReset string
 	Models     []string // nil: any model
 	IPAllow    []netip.Prefix
+	// Preset is a call key's routing preset. Read, it is the one the key is bound to, nil for a management key and a
+	// call key made before keys were bound. Written, it is the one chosen, checked by Config.KeyPreset; nil chooses
+	// none, so a new key takes its layers' default and a changed key keeps its preset.
+	Preset *uuid.UUID
 }
 
 // Equal compares settings by value, treating empty model and address lists as unrestricted like nil lists.
 func (k KeySettings) Equal(other KeySettings) bool {
 	return k.Name == other.Name && k.Disabled == other.Disabled && sameOptional(k.SpendLimit, other.SpendLimit) &&
-		k.LimitReset == other.LimitReset && slices.Equal(k.Models, other.Models) && slices.Equal(k.IPAllow, other.IPAllow)
+		k.LimitReset == other.LimitReset && slices.Equal(k.Models, other.Models) && slices.Equal(k.IPAllow, other.IPAllow) &&
+		sameOptional(k.Preset, other.Preset)
 }
 
 // Key is a key as the console shows it. Its text is not here: only its hash is kept, and the last four characters
@@ -153,7 +161,7 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 		SecretHash: hash[:], SecretVersion: int64(version), CreatedBy: uuid.UUID(r.CreatedBy),
 		ExpiresAt: r.ExpiresAt, SpendLimit: limit, LimitReset: nullable(reset), Models: nilIfEmpty(r.Models), IpAllow: nilIfEmpty(r.IPAllow),
 	}
-	if err := s.insertKey(ctx, tx, &key, site.Currency); err != nil {
+	if err := s.insertKey(ctx, tx, &key, site.Currency, r.Preset); err != nil {
 		return CreatedKey{}, err
 	}
 	if err := recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account), presetDetail(key.PresetID)); err != nil {
@@ -162,16 +170,19 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	return CreatedKey{id, secret.New(text)}, nil
 }
 
-// insertKey binds a new call key to the routing preset of its layers' defaults (Config.KeyPreset), in the transaction
-// that makes it, and inserts it. A management key is never routed, so it has no preset; nor has any key when no
-// KeyPreset was given.
-func (s *Service) insertKey(ctx context.Context, tx pg.Tx, key *InsertKeyParams, currency platform.Currency) error {
-	if key.Kind == CallKey && s.keyPreset != nil {
-		preset, err := s.keyPreset(ctx, tx, key.SiteID, key.AccountID, key.WorkspaceID, currency)
+// insertKey binds a new call key to the chosen routing preset, or with none chosen to its layers' default
+// (Config.KeyPreset), in the transaction that makes it, and inserts it. A management key is never routed, so it has no
+// preset; nor has any key when no KeyPreset was given.
+func (s *Service) insertKey(ctx context.Context, tx pg.Tx, key *InsertKeyParams, currency platform.Currency, chosen *uuid.UUID) error {
+	switch {
+	case key.Kind == CallKey && s.keyPreset != nil:
+		preset, err := s.keyPreset(ctx, tx, key.SiteID, key.AccountID, key.WorkspaceID, currency, chosen)
 		if err != nil {
 			return fmt.Errorf("create an API key: its routing preset: %w", err)
 		}
 		key.PresetID = &preset
+	case chosen != nil:
+		return ErrKeyPreset
 	}
 	if err := s.queries.InsertKey(ctx, tx, *key); err != nil {
 		return fmt.Errorf("create an API key: %w", err)
@@ -322,9 +333,12 @@ func (s *Service) UpdateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, id
 	if k.Disabled {
 		status = "disabled"
 	}
+	if k.Preset, err = s.rebind(ctx, tx, before, k.Preset); err != nil {
+		return Key{}, err
+	}
 	if err := s.queries.UpdateKey(ctx, tx, UpdateKeyParams{
 		ID: uuid.UUID(id), Name: k.Name, Status: status, SpendLimit: k.SpendLimit, LimitReset: nullable(k.LimitReset),
-		Models: nilIfEmpty(k.Models), IpAllow: nilIfEmpty(k.IPAllow),
+		Models: nilIfEmpty(k.Models), IpAllow: nilIfEmpty(k.IPAllow), PresetID: k.Preset,
 	}); err != nil {
 		return Key{}, fmt.Errorf("update an API key: %w", err)
 	}
@@ -332,6 +346,26 @@ func (s *Service) UpdateKey(ctx context.Context, tx pg.Tx, actor audit.Actor, id
 		return Key{}, err
 	}
 	return s.GetKey(ctx, tx, id)
+}
+
+// rebind is the routing preset a changed key is bound to: the one it has, when none is chosen or the chosen one is it,
+// and otherwise the chosen one, once Config.KeyPreset found that the key may use it.
+func (s *Service) rebind(ctx context.Context, tx pg.Tx, before LockKeyRow, chosen *uuid.UUID) (*uuid.UUID, error) {
+	if chosen == nil || sameOptional(chosen, before.PresetID) {
+		return before.PresetID, nil
+	}
+	if before.Kind != CallKey || s.keyPreset == nil {
+		return nil, ErrKeyPreset
+	}
+	site, ok := s.snapshot.Load().sites[SiteID(before.SiteID)]
+	if !ok {
+		return nil, fmt.Errorf("update an API key: site %s is not in the snapshot", SiteID(before.SiteID).TypeID())
+	}
+	preset, err := s.keyPreset(ctx, tx, before.SiteID, before.AccountID, before.WorkspaceID, site.Currency, chosen)
+	if err != nil {
+		return nil, fmt.Errorf("update an API key: its routing preset: %w", err)
+	}
+	return &preset, nil
 }
 
 // keyChange is what a change to a key replaced, as the audit entry records it: the names of the settings that changed,
@@ -363,6 +397,9 @@ func keyChange(before LockKeyRow, now KeySettings) map[string]any {
 	if !slices.Equal(before.IpAllow, nilIfEmpty(now.IPAllow)) {
 		changed = append(changed, "ip_allow")
 	}
+	if !sameOptional(before.PresetID, now.Preset) {
+		disclose("preset_id", before.PresetID, now.Preset)
+	}
 	return map[string]any{"changed": changed, "before": was, "after": after}
 }
 
@@ -378,6 +415,7 @@ func keyOf[R ListKeysRow | GetKeyRow | ValidManagementKeyRow | ListManagedKeysRo
 		Kind: r.Kind, CreatedBy: UserID(r.CreatedBy), ID: KeyID(r.ID), Workspace: WorkspaceID(r.WorkspaceID), Prefix: r.Prefix, Last4: r.Last4,
 		CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt, ExpiresAt: r.ExpiresAt,
 		Name: r.Name, Disabled: r.Status == "disabled", SpendLimit: r.SpendLimit, Models: r.Models, IPAllow: r.IpAllow,
+		Preset: r.PresetID,
 	}
 	if r.LimitReset != nil {
 		k.LimitReset = *r.LimitReset

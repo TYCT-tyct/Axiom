@@ -45,6 +45,10 @@ const (
 	codeInternal              errorCode = "internal"
 	codeNotImplemented        errorCode = "not_implemented"
 	codeUnavailable           errorCode = "unavailable"
+	codePresetNotSelectable   errorCode = "preset_not_selectable"
+	codePresetDefaultInvalid  errorCode = "preset_default_invalid"
+	codePresetInUse           errorCode = "preset_in_use"
+	codePresetQuota           errorCode = "preset_quota"
 )
 
 // errorField is one part of a request that broke a constraint: a JSON pointer into the body, or the name of a query

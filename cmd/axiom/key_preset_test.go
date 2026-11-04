@@ -53,7 +53,7 @@ func TestNewKeysTakeTheDefaultPreset(t *testing.T) {
 
 	f.run(`UPDATE routing.preset_defaults SET preset_id = '` + disabled.String() + `' WHERE account_id = '` + account.String() + `'`)
 	expect(t, "a key under a disabled default", f.do(http.MethodPost, "/keys", `{"name":"refused"}`, as(s)),
-		http.StatusConflict, consoleapi.ErrorCodeConflict)
+		http.StatusConflict, consoleapi.ErrorCodePresetDefaultInvalid)
 	if rec := f.managementRequest(http.MethodPost, "", `{"name":"refused too"}`, manager.Secret); rec.Code != http.StatusConflict {
 		t.Errorf("a managed key under a disabled default: %d %s", rec.Code, rec.Body)
 	}

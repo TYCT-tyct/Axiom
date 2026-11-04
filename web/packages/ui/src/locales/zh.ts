@@ -38,6 +38,10 @@ const codes = {
   internal: "服务出了问题，请稍后重试。",
   not_implemented: "这个功能还没有开放。",
   unavailable: "服务暂时不可用，请稍后重试。",
+  preset_not_selectable: "这里不能选这个路由预设，换一个。",
+  preset_default_invalid: "默认的路由预设现在不能用于新 key，请管理员改一下默认。",
+  preset_in_use: "还有默认值在用这个路由预设，先改默认值。",
+  preset_quota: "这个账户的路由预设已达上限，改一个现有的吧。",
 } satisfies Record<ErrorCode, string>;
 
 // Messages the shared components show, in Chinese: the source every other language follows.
