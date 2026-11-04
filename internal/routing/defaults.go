@@ -42,8 +42,8 @@ func ReadDefault(ctx context.Context, tx pg.Tx, layer Layer) (Default, error) {
 // SetDefault points the layer's default at preset, or clears it when preset is nil, if the default is still at
 // version. currency is the layer's site's, which a platform preset's price limits must be in; the platform's own
 // default may point at no preset that limits a price, since it serves sites of every currency. New keys of the layer
-// are bound to the new default; the keys already made keep theirs.
-func SetDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, currency platform.Currency, preset *PresetID, version int64) (Default, error) {
+// are bound to the new default; the keys already made keep theirs. The change is recorded with the actor's reason.
+func SetDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, currency platform.Currency, preset *PresetID, version int64, reason string) (Default, error) {
 	if err := lockBudget(ctx, tx); err != nil { // ordered with DisablePreset: a default never points at a disabled preset
 		return Default{}, err
 	}
@@ -70,7 +70,7 @@ func SetDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, c
 		return Default{}, err
 	}
 	return after, audit.Record(ctx, tx, audit.Event{
-		Actor: actor, Action: "routing.default.update",
+		Actor: actor, Action: "routing.default.update", Reason: reason,
 		Target: audit.Target{Module: "routing", Kind: "preset_default", ID: layer.id(), Site: uuid.UUID(layer.Site), Account: uuid.UUID(layer.Account)},
 		Detail: map[string]any{"scope": layer.Scope.String(), "before": optionalID(before.Preset), "after": optionalID(after.Preset)},
 	})

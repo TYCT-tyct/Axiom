@@ -24,6 +24,7 @@ type managedInput struct {
 	Expires     jsonx.Raw `json:"expires_at"`
 	Models      jsonx.Raw `json:"models"`
 	IPs         jsonx.Raw `json:"ip_allow"`
+	Preset      jsonx.Raw `json:"preset_id"`
 	Workspace   *string   `json:"workspace_id"`
 	Creator     *string   `json:"creator_user_id"`
 	IncludeBYOK *bool     `json:"include_byok_in_limit"`
@@ -50,7 +51,7 @@ func managementInput(r *http.Request, create bool) (managedInput, error) {
 		if len(in.Expires) != 0 || in.Workspace != nil || in.Creator != nil {
 			return in, errManagementInput
 		}
-		if len(in.Name)+len(in.Disabled)+len(in.Limit)+len(in.Reset)+len(in.Models)+len(in.IPs) == 0 && in.IncludeBYOK == nil {
+		if len(in.Name)+len(in.Disabled)+len(in.Limit)+len(in.Reset)+len(in.Models)+len(in.IPs)+len(in.Preset) == 0 && in.IncludeBYOK == nil {
 			return in, errManagementInput
 		}
 	}
@@ -69,6 +70,9 @@ func (in managedInput) settings(k accounts.KeySettings, expiry *time.Time, creat
 		return k, nil, err
 	}
 	if err := in.addresses(&k); err != nil {
+		return k, nil, err
+	}
+	if err := in.preset(&k); err != nil {
 		return k, nil, err
 	}
 	expiry, err := in.expiry(expiry)
@@ -178,6 +182,25 @@ func (in managedInput) addresses(k *accounts.KeySettings) error {
 			return errManagementInput
 		}
 	}
+	return nil
+}
+
+// preset reads the routing preset chosen for a call key (docs/domains/routing.md「接口、权限与审计」). Omitted, a new
+// key takes its layers' default and a changed one keeps its preset; null is refused, because a key with no preset is
+// routed by the system's allow-all and would lose the limits its preset had.
+func (in managedInput) preset(k *accounts.KeySettings) error {
+	if len(in.Preset) == 0 {
+		return nil
+	}
+	var text string
+	if string(in.Preset) == "null" || jsonx.Unmarshal(in.Preset, &text) != nil {
+		return errManagementInput
+	}
+	id, err := uuid.Parse(text)
+	if err != nil {
+		return errManagementInput
+	}
+	k.Preset = &id
 	return nil
 }
 

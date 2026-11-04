@@ -116,18 +116,35 @@ type PresetContent struct {
 	Rules    []byte
 }
 
-// tenantLimits bound the presets of a tenant: the live ones, and all of them with the disabled ones, which keep their
-// rows for the keys bound to them (docs/domains/routing.md「滚动发布、失败与性能」). An account's count its workspaces'
-// presets too, since the account is the tenant, so a workspace's preset is held to both. They bound no bytes: a
-// version's rules are at most maxRulesBytes, so the most presets a tenant holds already bound what it can write. The
-// platform's and sites' own limits are decided with their interfaces; until then they are held to the global budget.
-var tenantLimits = [...]struct {
-	scope         PresetScope
-	column        string // the owner column the presets are counted by
+// layerLimit bounds the presets of a layer: the live ones, and all of them with the disabled ones, which keep their
+// rows for the keys bound to them (docs/domains/routing.md「滚动发布、失败与性能」). where picks the presets it counts,
+// with args. Limits bound no bytes: a version's rules are at most maxRulesBytes, so the most presets a layer holds
+// already bound what it can write.
+type layerLimit struct {
+	owner         string
+	where         string
+	args          []any
 	active, total int64
-}{
-	{ScopeAccount, "account_id", 20, 200},
-	{ScopeWorkspace, "workspace_id", 10, 100},
+}
+
+// limitsOf are the limits a new preset of the layer is held to. An account's count its workspaces' presets too, since
+// the account is the tenant, so a workspace's preset is held to both. The platform's and a site's are wider than an
+// account's because every key of the platform or the site chooses among them, and narrow enough that the list a key
+// chooses from, every layer's live presets together, stays one a page can show whole.
+func limitsOf(layer Layer) []layerLimit {
+	site, account, workspace := uuid.UUID(layer.Site), uuid.UUID(layer.Account), uuid.UUID(layer.Workspace)
+	accountLimit := layerLimit{"account", "site_id = $1 AND account_id = $2", []any{site, account}, 20, 200}
+	switch layer.Scope {
+	case ScopePlatform:
+		return []layerLimit{{"platform", "scope = 'platform'", nil, 50, 500}}
+	case ScopeSite:
+		return []layerLimit{{"site", "scope = 'site' AND site_id = $1", []any{site}, 50, 500}}
+	case ScopeAccount:
+		return []layerLimit{accountLimit}
+	case ScopeWorkspace:
+		return []layerLimit{accountLimit, {"workspace", "site_id = $1 AND workspace_id = $2", []any{site, workspace}, 10, 100}}
+	}
+	return nil
 }
 
 // keptVersions is how many rule versions a preset keeps, its current one included; the table's policy deletes no
@@ -178,8 +195,21 @@ func (p StoredPreset) visibleTo(a Admission) bool {
 // ListPresets is the live presets a key of a may be bound to, the widest layer first: the system preset, which no one
 // chooses, is not among them.
 func ListPresets(ctx context.Context, tx pg.Tx, a Admission) ([]StoredPreset, error) {
-	rows, err := tx.Query(ctx, `SELECT `+presetColumns+` WHERE p.deleted_at IS NULL AND NOT p.is_system
+	return queryPresets(ctx, tx, func(p StoredPreset) bool { return p.visibleTo(a) }, `SELECT `+presetColumns+` WHERE p.deleted_at IS NULL AND NOT p.is_system
 		ORDER BY array_position(ARRAY['platform', 'site', 'account', 'workspace'], p.scope), p.slug`)
+}
+
+// LayerPresets is the layer's own presets as the layer's managers see them, the disabled ones after the live ones:
+// the platform's include the system preset.
+func LayerPresets(ctx context.Context, tx pg.Tx, layer Layer) ([]StoredPreset, error) {
+	where, args := layer.match(1)
+	return queryPresets(ctx, tx, func(StoredPreset) bool { return true },
+		`SELECT `+presetColumns+` WHERE `+where+` ORDER BY p.deleted_at IS NOT NULL, p.slug`, args...)
+}
+
+// queryPresets is the presets query reads that keep keeps.
+func queryPresets(ctx context.Context, tx pg.Tx, keep func(StoredPreset) bool, query string, args ...any) ([]StoredPreset, error) {
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("routing: list the presets: %w", err)
 	}
@@ -190,7 +220,7 @@ func ListPresets(ctx context.Context, tx pg.Tx, a Admission) ([]StoredPreset, er
 		if err != nil {
 			return nil, fmt.Errorf("routing: list the presets: %w", err)
 		}
-		if p.visibleTo(a) {
+		if keep(p) {
 			out = append(out, p)
 		}
 	}
@@ -213,8 +243,8 @@ func GetPreset(ctx context.Context, tx pg.Tx, id PresetID) (StoredPreset, error)
 }
 
 // CreatePreset makes a preset of layer with its first version, in tx, which must be in a scope that may write the
-// layer, and records it.
-func CreatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, slug string, c PresetContent) (StoredPreset, error) {
+// layer, and records it with the actor's reason, which the platform's and sites' changes give.
+func CreatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, slug string, c PresetContent, reason string) (StoredPreset, error) {
 	rules, err := checkContent(ctx, tx, layer, c)
 	if err != nil {
 		return StoredPreset{}, err
@@ -239,12 +269,12 @@ func CreatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer,
 	if err != nil {
 		return StoredPreset{}, err
 	}
-	return p, recordPreset(ctx, tx, actor, "routing.preset.create", p, map[string]any{"slug": slug, "name": p.Name})
+	return p, recordPreset(ctx, tx, actor, reason, "routing.preset.create", p, map[string]any{"slug": slug, "name": p.Name})
 }
 
 // UpdatePreset replaces the name and the rules of the preset at revision. Rules that differ from the current ones are
 // a new version; the same rules keep it, and a write that changes nothing changes nothing, its revision included.
-func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID, revision int64, c PresetContent) (StoredPreset, error) {
+func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID, revision int64, c PresetContent, reason string) (StoredPreset, error) {
 	if err := lockBudget(ctx, tx); err != nil { // before the preset's row, in the order DisablePreset takes them
 		return StoredPreset{}, err
 	}
@@ -280,7 +310,7 @@ func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID,
 	if err != nil {
 		return StoredPreset{}, err
 	}
-	return p, recordPreset(ctx, tx, actor, "routing.preset.update", p, map[string]any{
+	return p, recordPreset(ctx, tx, actor, reason, "routing.preset.update", p, map[string]any{
 		"before": map[string]any{"name": before.Name, "version": before.Version, "rules_sha256": digest(string(before.Rules))},
 		"after":  map[string]any{"name": p.Name, "version": p.Version},
 	})
@@ -298,7 +328,7 @@ func addVersion(ctx context.Context, tx pg.Tx, actor audit.Actor, before StoredP
 // can choose it. A preset a default still points at is refused (ErrPresetInUse); the default is changed first, so new
 // keys never fall silently to a wider layer's default. A disabled preset keeps counting against the tenant's total, so
 // making and disabling presets in turn cannot grow the table without bound.
-func DisablePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID, revision int64) error {
+func DisablePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID, revision int64, reason string) error {
 	// The budget row orders this with the default writes, which check that the preset they point at is live.
 	if err := lockBudget(ctx, tx); err != nil {
 		return err
@@ -318,7 +348,7 @@ func DisablePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID
 		updated_at = statement_timestamp() WHERE id = $1`, uuid.UUID(id)); err != nil {
 		return presetWriteErr("disable a preset", err)
 	}
-	return recordPreset(ctx, tx, actor, "routing.preset.disable", before, nil)
+	return recordPreset(ctx, tx, actor, reason, "routing.preset.disable", before, nil)
 }
 
 // lockPreset is the live preset tx may change, at revision, held for the rest of tx. A row the scope may read but not
@@ -402,17 +432,11 @@ func takeBudget(ctx context.Context, tx pg.Tx, layer Layer, presets, bytes int64
 	if presets == 0 {
 		return nil
 	}
-	site, account, workspace := layer.ids()
-	owners := map[PresetScope]*uuid.UUID{ScopeAccount: account, ScopeWorkspace: workspace}
-	for _, limit := range tenantLimits {
-		owner := owners[limit.scope]
-		if owner == nil {
-			continue
-		}
+	for _, limit := range limitsOf(layer) {
 		var active, total int64
 		if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE deleted_at IS NULL), count(*) FROM routing.presets
-			WHERE site_id = $1 AND `+limit.column+` = $2`, site, owner).Scan(&active, &total); err != nil {
-			return fmt.Errorf("routing: count the %s's presets: %w", limit.scope, err)
+			WHERE `+limit.where, limit.args...).Scan(&active, &total); err != nil {
+			return fmt.Errorf("routing: count the %s's presets: %w", limit.owner, err)
 		}
 		if active+presets > limit.active || total+presets > limit.total {
 			return ErrPresetQuota
@@ -421,12 +445,12 @@ func takeBudget(ctx context.Context, tx pg.Tx, layer Layer, presets, bytes int64
 	return nil
 }
 
-func recordPreset(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, p StoredPreset, detail map[string]any) error {
+func recordPreset(ctx context.Context, tx pg.Tx, actor audit.Actor, reason, action string, p StoredPreset, detail map[string]any) error {
 	if detail == nil {
 		detail = map[string]any{}
 	}
 	detail["scope"], detail["version"], detail["rules_sha256"] = p.Scope.String(), p.Version, digest(string(p.Rules))
-	return audit.Record(ctx, tx, audit.Event{Actor: actor, Action: action, Detail: detail, Target: audit.Target{
+	return audit.Record(ctx, tx, audit.Event{Actor: actor, Action: action, Reason: reason, Detail: detail, Target: audit.Target{
 		Module: "routing", Kind: "preset", ID: uuid.UUID(p.ID).String(), Site: uuid.UUID(p.Site), Account: uuid.UUID(p.Account),
 	}})
 }
