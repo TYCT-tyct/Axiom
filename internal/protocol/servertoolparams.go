@@ -86,8 +86,6 @@ func insertMember(body []byte, member string, value []byte) ([]byte, error) {
 
 // parseServerParams reads and validates the openrouter:web_search parameters. A parameter this gateway cannot express
 // is refused rather than ignored: the model would otherwise run a search the client did not ask for.
-//
-//nolint:cyclop,funlen,gocognit // one case per documented parameter
 func parseServerParams(v []byte) (*ServerWebSearch, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(v, &raw); err != nil {
@@ -95,60 +93,60 @@ func parseServerParams(v []byte) (*ServerWebSearch, error) {
 	}
 	t := &ServerWebSearch{MaxResults: DefaultWebSearchResults}
 	for name, value := range raw {
-		switch name {
-		case "engine":
-			if err := json.Unmarshal(value, &t.Engine); err != nil {
-				return nil, fmt.Errorf("%w: the web search engine is not a string", ErrInvalid)
-			}
-			if t.Engine != "" && t.Engine != "auto" && t.Engine != "native" && !ValidEngineName(t.Engine) {
-				return nil, fmt.Errorf("%w: %q is not a search engine name", ErrInvalid, t.Engine)
-			}
-		case "max_results":
-			n, err := serverCount(value)
-			if err != nil {
-				return nil, err
-			}
-			if n < 1 || n > MaxServerResults {
-				return nil, fmt.Errorf("%w: max_results is between 1 and %d", ErrInvalid, MaxServerResults)
-			}
-			t.MaxResults = int(n)
-		case "max_uses":
-			n, err := serverCount(value)
-			if err != nil {
-				return nil, err
-			}
-			if n < 1 || n > DefaultServerToolCalls {
-				return nil, fmt.Errorf("%w: max_uses is between 1 and %d", ErrInvalid, DefaultServerToolCalls)
-			}
-			t.MaxUses = n
-		case "max_total_results":
-			n, err := serverCount(value)
-			if err != nil {
-				return nil, err
-			}
-			if n < 1 || n > 1000 {
-				return nil, fmt.Errorf("%w: max_total_results is between 1 and 1000", ErrInvalid)
-			}
-			t.MaxTotalResults = n
-		case "allowed_domains":
-			list, err := serverDomains(value)
-			if err != nil {
-				return nil, err
-			}
-			t.IncludeDomains = list
-		case "excluded_domains":
-			list, err := serverDomains(value)
-			if err != nil {
-				return nil, err
-			}
-			t.ExcludeDomains = list
-		case "mode", "search_context_size", "max_characters", "user_location", "x_search":
-			return nil, fmt.Errorf("%w: the web search parameter %q is not supported yet", ErrInvalid, name)
-		default:
-			return nil, fmt.Errorf("%w: %q is not an OpenRouter web search parameter", ErrInvalid, name)
+		if err := t.set(name, value); err != nil {
+			return nil, err
 		}
 	}
 	return t, nil
+}
+
+// set reads one documented parameter into t. On an error t is left half set; the caller discards it.
+func (t *ServerWebSearch) set(name string, value json.RawMessage) (err error) {
+	switch name {
+	case "engine":
+		t.Engine, err = serverEngine(value)
+	case "max_results":
+		var n int64
+		n, err = serverBounded(name, value, MaxServerResults)
+		t.MaxResults = int(n)
+	case "max_uses":
+		t.MaxUses, err = serverBounded(name, value, DefaultServerToolCalls)
+	case "max_total_results":
+		t.MaxTotalResults, err = serverBounded(name, value, 1000)
+	case "allowed_domains":
+		t.IncludeDomains, err = serverDomains(value)
+	case "excluded_domains":
+		t.ExcludeDomains, err = serverDomains(value)
+	case "mode", "search_context_size", "max_characters", "user_location", "x_search":
+		err = fmt.Errorf("%w: the web search parameter %q is not supported yet", ErrInvalid, name)
+	default:
+		err = fmt.Errorf("%w: %q is not an OpenRouter web search parameter", ErrInvalid, name)
+	}
+	return err
+}
+
+// serverEngine reads the engine: empty, auto, native or a backend's name.
+func serverEngine(v json.RawMessage) (string, error) {
+	var engine string
+	if err := json.Unmarshal(v, &engine); err != nil {
+		return "", fmt.Errorf("%w: the web search engine is not a string", ErrInvalid)
+	}
+	if engine != "" && engine != "auto" && engine != "native" && !ValidEngineName(engine) {
+		return "", fmt.Errorf("%w: %q is not a search engine name", ErrInvalid, engine)
+	}
+	return engine, nil
+}
+
+// serverBounded reads the count named name, which is between 1 and limit.
+func serverBounded(name string, v json.RawMessage, limit int64) (int64, error) {
+	n, err := serverCount(v)
+	if err != nil {
+		return 0, err
+	}
+	if n < 1 || n > limit {
+		return 0, fmt.Errorf("%w: %s is between 1 and %d", ErrInvalid, name, limit)
+	}
+	return n, nil
 }
 
 // serverCount reads a non-negative count.
@@ -263,5 +261,3 @@ func hasTool(body []byte, member string) (bool, error) {
 	}
 	return true, nil
 }
-
-func isSpaceByte(b byte) bool { return b == ' ' || b == '\t' || b == '\n' || b == '\r' }

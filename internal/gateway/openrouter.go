@@ -3,7 +3,6 @@ package gateway
 import (
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -154,11 +153,26 @@ func (l *openRouterListing) shows(v visibility, m catalog.ModelID) bool {
 // model without a sale price is left out for the reason routing leaves its endpoints out, and one whose spec does not
 // declare its limits or whose price cannot fill prompt and completion is left out because OpenRouter's object cannot be
 // written without them.
-//
-//nolint:gocognit // one model at a time: catalog, published price and served endpoints are one publication
 func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 	endpoints []routing.Endpoint,
 ) (*openRouterListing, error) {
+	served, byModel := platformEndpoints(endpoints)
+	l := &openRouterListing{snap: snap, served: served}
+	for m := range snap.Models() {
+		e, ok, err := l.modelOf(m, prices, byModel[m.ID])
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			l.models = append(l.models, e)
+		}
+	}
+	return l, nil
+}
+
+// platformEndpoints are the build's endpoints with no owner, the platform's, by model, and the set of models they
+// serve: the list is made of those alone.
+func platformEndpoints(endpoints []routing.Endpoint) (map[catalog.ModelID]struct{}, map[catalog.ModelID][]routing.Endpoint) {
 	served := make(map[catalog.ModelID]struct{}, len(endpoints))
 	byModel := make(map[catalog.ModelID][]routing.Endpoint)
 	for _, e := range endpoints {
@@ -168,37 +182,35 @@ func newOpenRouterListing(snap *catalog.Snapshot, prices map[catalog.ModelID]bil
 		served[e.Model] = struct{}{}
 		byModel[e.Model] = append(byModel[e.Model], e)
 	}
-	l := &openRouterListing{snap: snap, served: served}
-	for m := range snap.Models() {
-		serving, serves := m.Serving()
-		sold, priced := prices[m.ID]
-		if _, routed := served[m.ID]; !routed || !serves || !priced {
-			continue
-		}
-		id, ok := l.publicID(m)
-		if !ok {
-			continue
-		}
-		servedIDs := make([]uuid.UUID, len(byModel[m.ID]))
-		for i, ep := range byModel[m.ID] {
-			servedIDs[i] = uuid.UUID(ep.ID)
-		}
-		pageEndpoints := publicEndpointsOf(byModel[m.ID])
-		e, ok, err := newAudienceORModel(id, m, serving, sold, servedIDs)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		err = e.encodeEndpoints(byModel[m.ID])
-		if err != nil {
-			return nil, err
-		}
-		e.sold, e.served, e.serving, e.pageEndpoints = sold, servedIDs, serving, pageEndpoints
-		l.models = append(l.models, e)
+	return served, byModel
+}
+
+// modelOf is the list's entry for one catalog model served by endpoints, ok false when the build serves it nowhere, no
+// rule prices it, or its spec, public name or price cannot fill OpenRouter's object.
+func (l *openRouterListing) modelOf(m catalog.Model, prices map[catalog.ModelID]billing.Sold, endpoints []routing.Endpoint) (orModel, bool, error) {
+	serving, serves := m.Serving()
+	sold, priced := prices[m.ID]
+	if _, routed := l.served[m.ID]; !routed || !serves || !priced {
+		return orModel{}, false, nil
 	}
-	return l, nil
+	id, ok := l.publicID(m)
+	if !ok {
+		return orModel{}, false, nil
+	}
+	servedIDs := make([]uuid.UUID, len(endpoints))
+	for i, ep := range endpoints {
+		servedIDs[i] = uuid.UUID(ep.ID)
+	}
+	pageEndpoints := publicEndpointsOf(endpoints)
+	e, ok, err := newAudienceORModel(id, m, serving, sold, servedIDs)
+	if err != nil || !ok {
+		return orModel{}, false, err
+	}
+	if err := e.encodeEndpoints(endpoints); err != nil {
+		return orModel{}, false, err
+	}
+	e.sold, e.served, e.serving, e.pageEndpoints = sold, servedIDs, serving, pageEndpoints
+	return e, true, nil
 }
 
 // publicEndpointsOf keeps the audience-independent attributes of a model's served endpoints for the public page. The
@@ -431,98 +443,4 @@ func orPrice(p catalog.Schedule, it catalog.Item) string {
 		return ""
 	}
 	return price.String()
-}
-
-// orRoom is what the buffer is given beyond the page's entries: the envelope's own members and the next page's link.
-const orRoom = 256
-
-// encode is the list as the key sees it and the query keeps it, in the canonical form writeJSON gives (members in key
-// order), made in one buffer sized for the page it serves. It counts first, so a key that sees few models, a query that
-// keeps few and a page that holds few do not pay for the catalog: the buffer grows with the page, not with the matches.
-func (l *openRouterListing) encode(v visibility, q orQuery) []byte {
-	if q.sort != orCatalogOrder {
-		return l.encodeOrdered(v, q)
-	}
-	matched, size := l.pageStats(v, q)
-	return l.encodePage(v, q, matched, size)
-}
-
-func (l *openRouterListing) encodePage(v visibility, q orQuery, matched, size int) []byte {
-	first, last := q.page(matched)
-	next := q.next(last, matched)
-	buf := append(make([]byte, 0, orRoom+len(next)+size), `{"data":[`...)
-	seen, written := 0, 0
-	for i := range l.models {
-		e := l.models[i].forAudience(v.audience)
-		if e == nil || !l.shows(v, e.model) || !q.keeps(e) {
-			continue
-		}
-		if seen++; seen <= first || seen > last {
-			continue
-		}
-		if written > 0 {
-			buf = append(buf, ',')
-		}
-		written++
-		buf = append(buf, e.body...)
-	}
-	return orFooter(buf, next, matched)
-}
-
-// encodeOrdered is encode with one of the orderings: the matches are gathered, ordered, and the page copied out of them.
-// It allocates the matches as well as the buffer, which is why the list is served in the catalog's order unless a sort is
-// asked for; the buffer itself is the page's, as in encode.
-func (l *openRouterListing) encodeOrdered(v visibility, q orQuery) []byte {
-	matches := make([]*orModel, 0, len(l.models))
-	for i := range l.models {
-		if e := l.models[i].forAudience(v.audience); e != nil && l.shows(v, e.model) && q.keeps(e) {
-			matches = append(matches, e)
-		}
-	}
-	slices.SortFunc(matches, q.compare)
-	first, last := q.page(len(matches))
-	next := q.next(last, len(matches))
-	size := orRoom + len(next)
-	for _, e := range matches[first:last] {
-		size += len(e.body) + 1
-	}
-	buf := append(make([]byte, 0, size), `{"data":[`...)
-	for i, e := range matches[first:last] {
-		if i > 0 {
-			buf = append(buf, ',')
-		}
-		buf = append(buf, e.body...)
-	}
-	return orFooter(buf, next, len(matches))
-}
-
-// pageStats counts all matches but sizes only the page; subtraction avoids adding an unbounded offset to the limit.
-func (l *openRouterListing) pageStats(v visibility, q orQuery) (matched, size int) {
-	for i := range l.models {
-		e := l.models[i].forAudience(v.audience)
-		if e == nil || !l.shows(v, e.model) || !q.keeps(e) {
-			continue
-		}
-		matched++
-		if matched > q.offset && (q.limit == 0 || matched-q.offset <= q.limit) {
-			size += len(e.body) + 1
-		}
-	}
-	return matched, size
-}
-
-// orFooter writes the members after the data: the next page's link, null on the last page, and how many models the query
-// matched in all.
-func orFooter(buf []byte, next string, total int) []byte {
-	buf = append(buf, `],"links":{"next":`...)
-	if next == "" {
-		buf = append(buf, "null"...)
-	} else {
-		buf = append(buf, '"')
-		buf = append(buf, next...)
-		buf = append(buf, '"')
-	}
-	buf = append(buf, `},"total_count":`...)
-	buf = strconv.AppendInt(buf, int64(total), 10)
-	return append(buf, '}')
 }

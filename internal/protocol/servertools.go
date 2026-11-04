@@ -162,15 +162,7 @@ func injectServerFunction(f Format, body []byte) ([]byte, error) {
 	if jsontext.Value(value).Kind() != '[' {
 		return nil, fmt.Errorf("%w: tools is not an array", ErrInvalid)
 	}
-	at := end - 1 // the closing ']'
-	out := make([]byte, 0, len(body)+len(tool)+1)
-	out = append(out, body[:at]...)
-	if !arrayEmpty(value) {
-		out = append(out, ',')
-	}
-	out = append(out, tool...)
-	out = append(out, body[at:]...)
-	return out, nil
+	return appendElements(body, value, end, tool), nil
 }
 
 // serverFunction is the function declaration in the endpoint format's shape.
@@ -221,11 +213,8 @@ func serverFunction(f Format) ([]byte, error) {
 // AppendServerTurn appends the model's assistant turn and the gateway's results to a client-format body. The turn is
 // the one captured from the hop, so text, thinking blocks and signatures survive; if a caller has no captured turn, the
 // assistant message is built from the server calls alone. One result follows each server call, in the format's own tool
-// shapes: Chat's tool_calls and tool messages, Messages' tool_use and tool_result blocks, Responses' function_call and
-// function_call_output items. The body is the client's format, not the endpoint's, because the loop may fall back
-// before its first search and because a later hop is prepared again like any other request.
-//
-//nolint:cyclop,funlen,gocognit // one branch per chat format and per call
+// shapes (serverShape). The body is the client's format, not the endpoint's, because the loop may fall back before its
+// first search and because a later hop is prepared again like any other request.
 func AppendServerTurn(f Format, body []byte, turn ServerTurn, results []string) ([]byte, error) {
 	calls := make([]ServerToolCall, 0, len(turn.Calls))
 	for _, call := range turn.Calls {
@@ -239,91 +228,21 @@ func AppendServerTurn(f Format, body []byte, turn ServerTurn, results []string) 
 	if len(results) != len(calls) {
 		return nil, fmt.Errorf("%w: %d calls and %d results", ErrInvalid, len(calls), len(results))
 	}
+	shape, err := serverShapeOf(f)
+	if err != nil {
+		return nil, err
+	}
 	assistant := append([]byte(nil), turn.Assistant...)
 	if len(assistant) == 0 {
-		var err error
-		assistant, err = serverAssistant(f, calls)
-		if err != nil {
+		if assistant, err = shape.assistant(calls); err != nil {
 			return nil, err
 		}
 	}
-	var following []byte
-	//nolint:exhaustive // only the three chat formats carry tools
-	switch f {
-	case Chat:
-		for i, call := range calls {
-			id, err := jsonx.MarshalCanonical(call.ID)
-			if err != nil {
-				return nil, err
-			}
-			following = appendResult(following, i, `{"role":"tool","tool_call_id":`, id, `,"content":`, results[i], `}`) //nolint:gosec // results has one entry per server call, checked above
-		}
-	case Messages:
-		for i, call := range calls {
-			id, err := jsonx.MarshalCanonical(toolUseID(call.ID))
-			if err != nil {
-				return nil, err
-			}
-			following = appendResult(following, i, `{"role":"user","content":[{"type":"tool_result","tool_use_id":`, id,
-				`,"content":[{"type":"text","text":`, results[i], `}]}]}`) //nolint:gosec // results has one entry per server call, checked above
-		}
-	case Responses:
-		for i, call := range calls {
-			id, err := jsonx.MarshalCanonical(call.ID)
-			if err != nil {
-				return nil, err
-			}
-			following = appendResult(following, i, `{"type":"function_call_output","call_id":`, id, `,"output":`,
-				results[i], `}`) //nolint:gosec // results has one entry per server call, checked above
-		}
-	default:
-		return nil, &NotSupported{Reason: fmt.Sprintf("format %d has no tools", f)}
-	}
-
-	member := "messages"
-	if f == Responses {
-		member = "input"
-	}
-	value, start, end, ok, err := topMember(body, member)
+	following, err := shape.results(calls, results)
 	if err != nil {
 		return nil, err
 	}
-	if f == Responses && ok && jsontext.Value(value).Kind() == '"' {
-		// A string input is one user message (OpenAI《Create a model response》, input): keep it as that message.
-		msg := make([]byte, 0, len(value)+32)
-		msg = append(msg, `[{"role":"user","content":`...)
-		msg = append(msg, value...)
-		msg = append(msg, `}]`...)
-		replaced := make([]byte, 0, len(body)-len(value)+len(msg))
-		replaced = append(replaced, body[:start]...)
-		replaced = append(replaced, msg...)
-		replaced = append(replaced, body[end:]...)
-		body = replaced
-		value, _, end, ok, err = topMember(body, member)
-		if err != nil || !ok {
-			return nil, err
-		}
-	}
-	parts, err := serverTurnParts(f, assistant, following)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		added := append(append([]byte{'['}, parts...), ']')
-		return insertMember(body, member, added)
-	}
-	if jsontext.Value(value).Kind() != '[' {
-		return nil, fmt.Errorf("%w: %s is not an array", ErrInvalid, member)
-	}
-	at := end - 1
-	out := make([]byte, 0, len(body)+len(parts)+2)
-	out = append(out, body[:at]...)
-	if !arrayEmpty(value) {
-		out = append(out, ',')
-	}
-	out = append(out, parts...)
-	out = append(out, body[at:]...)
-	return out, nil
+	return appendConversation(f, body, assistant, following)
 }
 
 // serverTurnParts produces the array elements to append to the conversation. Responses' captured turn is already an
@@ -357,20 +276,4 @@ func serverTurnParts(f Format, assistant, following []byte) ([]byte, error) {
 		out = append(out, following...)
 	}
 	return out, nil
-}
-
-// appendResult appends one tool result, quoted, with a comma before it when it is not the first.
-func appendResult(dst []byte, i int, prefix string, id []byte, middle, text, suffix string) []byte {
-	if i > 0 {
-		dst = append(dst, ',')
-	}
-	dst = append(dst, prefix...)
-	dst = append(dst, id...)
-	dst = append(dst, middle...)
-	quoted, err := jsonx.MarshalCanonical(text)
-	if err != nil {
-		panic(err) // a Go string always encodes
-	}
-	dst = append(dst, quoted...)
-	return append(dst, suffix...)
 }
