@@ -506,3 +506,39 @@ func TestLayerQuota(t *testing.T) {
 	}
 	m.made(t, "still", allowed)
 }
+
+// TestPlatformPresetKeepsItsCurrency: a platform preset never serves fewer sites than it did, so the keys and defaults
+// of the sites it serves stay usable: one that limits no price gains no currency, and a priced one keeps its currency
+// or drops its prices.
+func TestPlatformPresetKeepsItsCurrency(t *testing.T) {
+	t.Parallel()
+	m := newManager(t)
+	priced := func(code string) routing.PresetContent {
+		return routing.PresetContent{Name: "P", Currency: mustCurrency(code), Rules: []byte(`{"default": {"max_price": {"prompt": "1"}}}`)}
+	}
+	unpriced := routing.PresetContent{Name: "P", Rules: []byte(allowed)}
+	for _, c := range []struct {
+		what     string
+		from, to routing.PresetContent
+		refused  bool
+	}{
+		{"an unpriced preset given prices", unpriced, priced("USD"), true},
+		{"prices moved to another currency", priced("USD"), priced("EUR"), true},
+		{"prices dropped", priced("USD"), unpriced, false},
+		{"prices changed in their currency", priced("USD"), routing.PresetContent{Name: "P", Currency: usd, Rules: []byte(`{"default": {"max_price": {"prompt": "2"}}}`)}, false},
+	} {
+		err := m.operate(t, func(ctx context.Context, tx pg.Tx) error {
+			p, err := routing.CreatePreset(ctx, tx, m.actor, routing.Layer{Scope: routing.ScopePlatform}, "p-"+uuid.NewV7().String()[24:], c.from, "r")
+			if err != nil {
+				return err
+			}
+			_, err = routing.UpdatePreset(ctx, tx, m.actor, p.ID, p.Revision, c.to, "r")
+			return err
+		})
+		if c.refused {
+			wantErr(t, c.what, err, routing.ErrPresetCurrency)
+		} else {
+			noErr(t, c.what, err)
+		}
+	}
+}

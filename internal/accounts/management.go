@@ -162,13 +162,15 @@ func (m KeyManager) Create(ctx context.Context, workspace WorkspaceID, expires *
 	}, false)
 }
 
-// Update permits bounded grants and reductions of existing authority, including disabling older permanent keys.
+// Update permits bounded grants and reductions of existing authority, including disabling older permanent keys. A new
+// routing preset is no reduction: it may route to dearer endpoints, so the key it leaves must be within the ceiling.
 func (m KeyManager) Update(ctx context.Context, id KeyID, k KeySettings) (Key, error) {
 	before, err := m.Get(ctx, id)
 	if err != nil {
 		return Key{}, err
 	}
-	reducing := (!before.Disabled || k.Disabled) && settingsWithin(k, before.KeySettings) == nil
+	reducing := (!before.Disabled || k.Disabled) && settingsWithin(k, before.KeySettings) == nil &&
+		(k.Preset == nil || sameOptional(k.Preset, before.Preset))
 	if !reducing {
 		if err := m.permits(k, before.ExpiresAt); err != nil {
 			return Key{}, err

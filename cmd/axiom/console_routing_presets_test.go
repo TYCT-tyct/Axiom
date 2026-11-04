@@ -190,6 +190,16 @@ func TestManagementKeyPresets(t *testing.T) {
 			t.Errorf("%s: %d %s, want 400", what, rec.Code, rec.Body)
 		}
 	}
+	// A key made in the console is permanent, beyond the manager's ceiling: renaming it is no grant, a new preset is.
+	f.createKey(s, `{"name":"permanent","preset_id":"`+strict.Id.String()+`"}`)
+	permanent := "/" + f.text(`SELECT replace(id::text, '-', '') FROM accounts.api_keys WHERE name = 'permanent'`)
+	if rec := f.managementRequest(http.MethodPatch, permanent, `{"preset_id":"`+open.Id.String()+`"}`, manager); rec.Code != http.StatusForbidden {
+		t.Errorf("a key beyond the manager's ceiling rebound: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if got := f.text(`SELECT preset_id::text FROM accounts.api_keys WHERE name = 'permanent'`); got != strict.Id.String() {
+		t.Errorf("the permanent key is bound to %s after a refused rebind", got)
+	}
+	readManaged(t, f.managementRequest(http.MethodPatch, permanent, `{"name":"kept","preset_id":"`+strict.Id.String()+`"}`, manager), http.StatusOK)
 	for _, step := range []struct{ what, body, want string }{
 		{"a change that names no preset", `{"name":"renamed"}`, strict.Id.String()},
 		{"a rebind", `{"preset_id":"` + open.Id.String() + `"}`, open.Id.String()},

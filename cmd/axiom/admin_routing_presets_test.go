@@ -164,6 +164,11 @@ func TestAdminRoutingPresets(t *testing.T) {
 	if d.PresetId == nil || *d.PresetId != l.cheap.Id || d.Version < 1 {
 		t.Fatalf("the site's default %+v", d)
 	}
+	// The two defaults stay on presets the platform's and the site's keys can use.
+	expectAdmin(t, "prices on the platform's default", f.change(s, http.MethodPut, "/routing-presets/"+l.open.Id.String(),
+		`{"name":"Open","currency":"USD","revision":1,"rules":{"default":{"max_price":{"prompt":"1"}}},"reason":"r"}`, newKey()), http.StatusBadRequest, codeInvalidRequest)
+	expectAdmin(t, "the site's default in another currency", f.change(s, http.MethodPut, "/routing-presets/"+l.cheap.Id.String(),
+		`{"name":"Cheap","currency":"EUR","revision":1,"rules":{"default":{"max_price":{"prompt":"1"}}},"reason":"r"}`, newKey()), http.StatusBadRequest, codeInvalidRequest)
 	expectAdmin(t, "disable the site's default", f.change(s, http.MethodDelete, "/routing-presets/"+l.cheap.Id.String(), `{"revision":1,"reason":"r"}`, newKey()),
 		http.StatusConflict, codePresetInUse)
 	expectAdmin(t, "disable the site's preset", f.change(s, http.MethodDelete, "/routing-presets/"+official.Id.String(), `{"revision":2,"reason":"replaced"}`, newKey()),

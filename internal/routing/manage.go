@@ -30,6 +30,9 @@ var (
 	ErrPresetInUse = errors.New("routing: a default still points at the routing preset")
 	// ErrPresetQuota is a write over one of the limits on what presets a tenant, or all of them, may hold.
 	ErrPresetQuota = errors.New("routing: over the limit of routing presets")
+	// ErrPresetCurrency is a change of a platform preset that would take it away from sites it serves: an unpriced one
+	// gaining a currency, or a priced one changing its currency.
+	ErrPresetCurrency = errors.New("routing: a platform preset keeps the currency it was made with")
 	// ErrPresetNotSelectable is a preset a key or a default may not be pointed at: the system preset, a disabled one,
 	// or one the key's or the layer's owners cannot see.
 	ErrPresetNotSelectable = errors.New("routing: the routing preset cannot be chosen here")
@@ -282,7 +285,7 @@ func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID,
 	if err != nil {
 		return StoredPreset{}, err
 	}
-	rules, err := checkContent(ctx, tx, before.Layer, c)
+	rules, err := checkChange(ctx, tx, before, c)
 	if err != nil {
 		return StoredPreset{}, err
 	}
@@ -314,6 +317,17 @@ func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID,
 		"before": map[string]any{"name": before.Name, "version": before.Version, "rules_sha256": digest(string(before.Rules))},
 		"after":  map[string]any{"name": p.Name, "version": p.Version},
 	})
+}
+
+// checkChange is checkContent for a change of before, which may not make a platform preset serve fewer sites. It serves
+// the sites of its currency, or every site when it limits no price: the keys and defaults of a site it stopped serving
+// would turn unavailable, and routing cannot list the keys, which are accounts'. Prices in another currency are a new
+// preset.
+func checkChange(ctx context.Context, tx pg.Tx, before StoredPreset, c PresetContent) (string, error) {
+	if before.Scope == ScopePlatform && c.Currency != before.Currency && c.Currency != (platform.Currency{}) {
+		return "", ErrPresetCurrency
+	}
+	return checkContent(ctx, tx, before.Layer, c)
 }
 
 // addVersion adds the next version of the preset's rules, within the global budget, and returns its number.
