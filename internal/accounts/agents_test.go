@@ -2,6 +2,7 @@ package accounts_test
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -114,6 +115,38 @@ func TestAgentCredentialRotation(t *testing.T) {
 
 // TestAgentCredentialRevocation: a revocation and the emergency stop refuse every token from the next request; a
 // revoked credential cannot be revoked again; a second stop revokes nothing; only a new credential works after it.
+// TestHoldAgent: a live credential is held until its transaction ends, so a revocation waits for what it proposed and
+// cannot pass it unseen; a revoked one is refused.
+func TestHoldAgent(t *testing.T) {
+	t.Parallel()
+	db, _, s, clock := agentSetup(t)
+	held := makeAgent(t, db, s, agentSpec(clock))
+	revoked := make(chan error, 1)
+	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		if err := s.HoldAgent(t.Context(), tx, held.ID); err != nil {
+			return err
+		}
+		go func() {
+			revoked <- db.Tx(t.Context(), platform, func(tx pg.Tx) error { return s.RevokeAgent(t.Context(), tx, system, held.ID, "r") })
+		}()
+		for t.Context().Err() == nil {
+			if texts(t, db, platform, "SELECT count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'")[0] != "0" {
+				return nil
+			}
+			runtime.Gosched()
+		}
+		return t.Context().Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-revoked; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error { return s.HoldAgent(t.Context(), tx, held.ID) }); !errors.Is(err, accounts.ErrUnknownAgent) {
+		t.Errorf("holding a revoked credential: %v", err)
+	}
+}
+
 func TestAgentCredentialRevocation(t *testing.T) {
 	t.Parallel()
 	db, _, s, clock := agentSetup(t)
@@ -229,7 +262,8 @@ func TestCreateAgentRefuses(t *testing.T) {
 	}{
 		{"its own management", func(a *accounts.AgentSpec) { a.Permissions = []string{"operations.manage"} }, "/permissions/0"},
 		{"granting platform roles", func(a *accounts.AgentSpec) { a.Permissions = []string{"calls.search", "platform_grants.manage"} }, "/permissions/1"},
-		{"an undeclared permission", func(a *accounts.AgentSpec) { a.Permissions = []string{"operations.approve"} }, "/permissions/0"},
+		{"approving its own proposals", func(a *accounts.AgentSpec) { a.Permissions = []string{"operations.approve"} }, "/permissions/0"},
+		{"an undeclared permission", func(a *accounts.AgentSpec) { a.Permissions = []string{"operations.no_such"} }, "/permissions/0"},
 		{"an unknown site", func(a *accounts.AgentSpec) { a.Sites = []accounts.SiteID{accounts.SiteID(a1)} }, "/sites/0"},
 		{"no vendor", func(a *accounts.AgentSpec) { a.Vendors = nil }, "/proposer_vendors"},
 		{"a vendor in capitals", func(a *accounts.AgentSpec) { a.Vendors = []string{"OpenAI"} }, "/proposer_vendors/0"},

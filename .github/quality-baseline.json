@@ -9,7 +9,7 @@
     "bodyclose": 1,
     "containedctx": 4,
     "contextcheck": 6,
-    "cyclop": 31,
+    "cyclop": 30,
     "depguard": 72,
     "dupl": 6,
     "errcheck": 132,

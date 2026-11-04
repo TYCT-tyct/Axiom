@@ -56,7 +56,7 @@ func TestAdminSessionPermissions(t *testing.T) {
 	}
 	wantAll := []string{
 		"api_keys.manage", "api_keys.view", "audit.view", "balance.top_up", "balance.view", "calls.inspect", "calls.search", "calls.view", "catalog.manage", "catalog.view", "credits.grant",
-		"operations.manage", "platform_grants.manage", "pricing.manage", "pricing.view", "sites.manage", "suppliers.manage", "suppliers.view",
+		"operations.approve", "operations.manage", "platform_grants.manage", "pricing.manage", "pricing.view", "sites.manage", "suppliers.manage", "suppliers.view",
 		"users.manage", "users.view", "workspaces.manage",
 	}
 	got := f.readSession(f.verified(ownerEmail))

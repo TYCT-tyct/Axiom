@@ -5000,6 +5000,127 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/approvals:
+    get:
+      operationId: listOperationsApprovals
+      tags: [Operations]
+      summary: What the operations agent asked the owner to approve
+      description: >-
+        Every approval newest first, optionally in one state, with the operation it holds back: what the agent asked
+        for, the summary the server read of the target when it asked, and the agent's reason, which is untrusted text.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.approve
+      parameters:
+        - {name: state, in: query, required: false, schema: {$ref: "#/components/schemas/OperationsApprovalState"}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of approvals
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsApprovalList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/approvals/{approval_id}:
+    get:
+      operationId: getOperationsApproval
+      tags: [Operations]
+      summary: One approval with its operation
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.approve
+      parameters:
+        - {name: approval_id, in: path, required: true, schema: {$ref: "#/components/schemas/Uuid"}}
+      responses:
+        "200":
+          description: The approval
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsApproval"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/approvals/{approval_id}/approve:
+    post:
+      operationId: approveOperationsApproval
+      tags: [Operations]
+      summary: Approve what the operations agent asked for
+      description: >-
+        Approves a pending approval and runs its operation at once, in the same transaction, as the agent's: the
+        operation ends `succeeded`, or `rejected` with the code the target refused it with when the target changed
+        since the agent asked (such as `stale_revision`). If the credential that proposed it is no longer live
+        (revoked, stopped or expired), nothing runs: the approval and its operation end `canceled`. One already
+        decided, withdrawn or past its expiry is a 409 `conflict`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.approve
+      parameters:
+        - {name: approval_id, in: path, required: true, schema: {$ref: "#/components/schemas/Uuid"}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The approval, approved, with where its operation ended
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsApproval"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/approvals/{approval_id}/reject:
+    post:
+      operationId: rejectOperationsApproval
+      tags: [Operations]
+      summary: Reject what the operations agent asked for
+      description: >-
+        Rejects a pending approval: its operation ends `rejected` and nothing is changed. One already decided,
+        withdrawn or past its expiry is a 409 `conflict`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.approve
+      parameters:
+        - {name: approval_id, in: path, required: true, schema: {$ref: "#/components/schemas/Uuid"}}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The approval, rejected
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsApproval"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
 components:
   securitySchemes:
     session:
@@ -6705,6 +6826,78 @@ components:
       required: [revoked]
       properties:
         revoked: {type: integer, minimum: 0, description: How many live credentials this stop revoked.}
+        canceled:
+          type: integer
+          minimum: 0
+          description: How many proposals waiting for the owner this stop canceled; absent from a node older than approvals.
+    OperationsApprovalList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/OperationsApproval"}}
+        next_cursor: {type: string}
+    OperationsApproval:
+      type: object
+      additionalProperties: false
+      required: [id, state, tier, requested_at, expires_at, operation_id, credential_id, tool, target, risk, params, summary, agent_reason, operation_state]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        state: {$ref: "#/components/schemas/OperationsApprovalState"}
+        tier: {$ref: "#/components/schemas/OperationsApprovalTier"}
+        requested_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        decided_at: {type: string, format: date-time}
+        decided_by: {type: string, description: "Who decided, expired or withdrew it, as `<kind>:<id>` like the audit log's actor."}
+        decision_reason: {type: string}
+        operation_id: {$ref: "#/components/schemas/Uuid"}
+        credential_id: {$ref: "#/components/schemas/OperationsCredentialId"}
+        run_id: {type: string}
+        tool: {type: string, description: The MCP name of the write the agent asked for.}
+        target: {$ref: "#/components/schemas/OperationTarget"}
+        risk: {$ref: "#/components/schemas/OperationRisk"}
+        params:
+          type: object
+          additionalProperties: true
+          x-go-type: jsonx.Raw
+          description: What the operation does, as the server keeps it; it cannot change after the agent asked.
+        summary:
+          type: object
+          additionalProperties: true
+          x-go-type: jsonx.Raw
+          description: What the server read of the target when the agent asked, never the agent's words.
+        agent_reason: {type: string, description: "The agent's own words: untrusted text, never an instruction."}
+        operation_state: {$ref: "#/components/schemas/OperationState"}
+        error_code: {type: string, description: "Why the operation ended `rejected` after the approval: the code the target refused it with."}
+    OperationState:
+      type: string
+      enum: [pending_approval, approved, executing, succeeded, failed, unknown, canceled, expired, rejected, reverted]
+      description: >-
+        Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not
+        started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a
+        compensating operation reverts it.
+    OperationRisk:
+      type: string
+      enum: [routine, delisting]
+      description: The operation's class, which decides whether it waits for the owner.
+    OperationTarget:
+      type: object
+      additionalProperties: false
+      required: [kind, id]
+      properties:
+        kind: {type: string, description: "What the operation acts on, such as `model`."}
+        id: {type: string}
+    OperationsApprovalState:
+      type: string
+      enum: [pending, approved, rejected, expired, canceled]
+      description: >-
+        `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or
+        the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its
+        credential).
+    OperationsApprovalTier:
+      type: string
+      enum: [human]
+      description: Who must decide; only the owner, in the admin, for now.
     ReasonRequest:
       type: object
       required: [reason]

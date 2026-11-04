@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -79,8 +80,12 @@ func agentRulesOf(op *openapi3.Operation) (*agentRules, error) {
 	return &agentRules{permission: permission, scope: scope, tool: tool}, nil
 }
 
-// operationsDeadline bounds a request of the operations API: every operation is a read of the database today.
-const operationsDeadline = 15 * time.Second
+// readDeadline bounds a read of the operations API and writeDeadline a write (docs/domains/operations.md「运营接口」):
+// a write runs the change it asks for, a read only reads the database.
+const (
+	readDeadline  = 15 * time.Second
+	writeDeadline = 30 * time.Second
+)
 
 // recordDeadline bounds writing a request's record, which runs after the request's own deadline may have passed.
 const recordDeadline = 5 * time.Second
@@ -98,7 +103,11 @@ type agentGuard struct {
 }
 
 func (g *agentGuard) serve(w http.ResponseWriter, r *http.Request, pattern string, routes http.Handler) {
-	ctx, cancel := context.WithTimeout(r.Context(), operationsDeadline)
+	deadline := readDeadline
+	if r.Method != http.MethodGet {
+		deadline = writeDeadline
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), deadline)
 	defer cancel()
 	r = r.WithContext(ctx)
 	rl, ok := g.contract.byPattern[pattern]
@@ -114,8 +123,13 @@ func (g *agentGuard) serve(w http.ResponseWriter, r *http.Request, pattern strin
 	}
 	started := time.Now()
 	answer := &bufferedResponse{header: http.Header{}}
-	g.answer(answer, r, rl, agent, routes)
-	if err := g.record(ctx, r, pattern, rl.agent.tool, agent, answer, started); err != nil {
+	body, err := heldBody(r)
+	if err != nil {
+		respond(answer, r, g.logger, invalidField("", "the request body is unreadable or larger than 1 MiB"))
+	} else {
+		g.answer(answer, r, rl, agent, routes)
+	}
+	if err := g.record(ctx, r, pattern, rl.agent.tool, agent, body, answer, started); err != nil {
 		g.logger.Error("recording an operations call", "err", err, "request_id", httpserver.RequestID(ctx))
 		writeError(w, http.StatusServiceUnavailable, codeUnavailable, "the call could not be recorded; nothing was answered")
 		return
@@ -159,14 +173,28 @@ var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
 // maxReason is the longest reason the contract and the log accept, in characters.
 const maxReason = 1000
 
-// record writes the request's entry in the operation log, on its own deadline: a request that ran out of time still
-// leaves its record.
-func (g *agentGuard) record(ctx context.Context, r *http.Request, pattern, tool string, agent accounts.Agent, answer *bufferedResponse, started time.Time) error {
-	entry := operations.LoggedCall{
-		Credential: uuid.UUID(agent.ID()), Tool: tool, Reason: truncate(r.URL.Query().Get("reason"), maxReason),
-		Input: inputOf(pattern, r), Status: answer.statusCode(), Error: answer.errorCode(),
-		RequestID: httpserver.RequestID(ctx), Started: started, Ended: time.Now(),
+// heldBody reads a write's body for its record and leaves it for the handler to read again; a read has none.
+func heldBody(r *http.Request) ([]byte, error) {
+	if r.Method == http.MethodGet {
+		return nil, nil
 	}
+	body, err := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	return body, err
+}
+
+// record writes the request's entry in the operation log, on its own deadline: a request that ran out of time still
+// leaves its record. A read's reason is in its query, a write's in its body, whose other members are its input.
+func (g *agentGuard) record(ctx context.Context, r *http.Request, pattern, tool string, agent accounts.Agent, body []byte, answer *bufferedResponse, started time.Time) error {
+	entry := operations.LoggedCall{
+		Credential: uuid.UUID(agent.ID()), Tool: tool, Reason: r.URL.Query().Get("reason"), Input: inputOf(pattern, r),
+		Status: answer.statusCode(), Error: answer.errorCode(), RequestID: httpserver.RequestID(ctx), Started: started,
+		Ended: time.Now(),
+	}
+	if r.Method != http.MethodGet {
+		entry.Reason, entry.Operation = bodyInput(body, entry.Input), answer.operation()
+	}
+	entry.Reason = truncate(entry.Reason, maxReason)
 	if run := r.Header.Get("X-Axiom-Run-Id"); runIDPattern.MatchString(run) {
 		entry.Run = run
 	}
@@ -197,6 +225,21 @@ func inputOf(pattern string, r *http.Request) map[string]any {
 		input["query"] = query
 	}
 	return input
+}
+
+// bodyInput puts a write's JSON body but its reason into input, and returns the reason; a body that is not a JSON
+// object, which the contract refused, is left out.
+func bodyInput(body []byte, input map[string]any) string {
+	var members map[string]any
+	if jsonx.Unmarshal(body, &members) != nil || members == nil {
+		return ""
+	}
+	reason, _ := members["reason"].(string)
+	delete(members, "reason")
+	if len(members) > 0 {
+		input["body"] = members
+	}
+	return reason
 }
 
 // pathInput is the path's parameters by the names the route pattern gives them.
@@ -270,6 +313,17 @@ func (b *bufferedResponse) errorCode() string {
 	return string(failed.Error.Code)
 }
 
+// operation is the ID of the operation a successful answer names; the zero ID for any other answer.
+func (b *bufferedResponse) operation() uuid.UUID {
+	var answered struct {
+		ID uuid.UUID `json:"operation_id"`
+	}
+	if b.statusCode() >= http.StatusBadRequest || jsonx.Unmarshal(b.body.Bytes(), &answered) != nil {
+		return uuid.UUID{}
+	}
+	return answered.ID
+}
+
 // sendTo writes the held answer to w, under the headers w already carries.
 func (b *bufferedResponse) sendTo(w http.ResponseWriter) {
 	maps.Copy(w.Header(), b.header)
@@ -341,6 +395,9 @@ func (o operationsAPI) OperationLogList(ctx context.Context, r operationsapi.Ope
 		}
 		if e.Error != "" {
 			entry.ErrorCode = &e.Error
+		}
+		if e.Operation != (uuid.UUID{}) {
+			entry.OperationId = new(e.Operation.String())
 		}
 		list.Data[i] = entry
 	}

@@ -13,8 +13,8 @@ import (
 )
 
 const insertLoggedCall = `-- name: InsertLoggedCall :exec
-INSERT INTO operations.operation_log (id, credential_id, run_id, tool, reason, input, status, error_code, request_id, started_at, ended_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO operations.operation_log (id, credential_id, run_id, tool, reason, input, status, error_code, request_id, started_at, ended_at, operation_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
 
 type InsertLoggedCallParams struct {
@@ -29,6 +29,7 @@ type InsertLoggedCallParams struct {
 	RequestID    string
 	StartedAt    time.Time
 	EndedAt      time.Time
+	OperationID  *uuid.UUID
 }
 
 func (q *Queries) InsertLoggedCall(ctx context.Context, db DBTX, arg InsertLoggedCallParams) error {
@@ -44,12 +45,13 @@ func (q *Queries) InsertLoggedCall(ctx context.Context, db DBTX, arg InsertLogge
 		arg.RequestID,
 		arg.StartedAt,
 		arg.EndedAt,
+		arg.OperationID,
 	)
 	return err
 }
 
 const loggedCalls = `-- name: LoggedCalls :many
-SELECT id, run_id, tool, reason, input, status, error_code, request_id, started_at, ended_at
+SELECT id, run_id, tool, reason, input, status, error_code, request_id, started_at, ended_at, operation_id
 FROM operations.operation_log
 WHERE credential_id = $1 AND ($2::uuid = '00000000-0000-0000-0000-000000000000' OR id < $2::uuid)
 ORDER BY id DESC
@@ -63,16 +65,17 @@ type LoggedCallsParams struct {
 }
 
 type LoggedCallsRow struct {
-	ID        uuid.UUID
-	RunID     *string
-	Tool      string
-	Reason    string
-	Input     []byte
-	Status    int16
-	ErrorCode *string
-	RequestID string
-	StartedAt time.Time
-	EndedAt   time.Time
+	ID          uuid.UUID
+	RunID       *string
+	Tool        string
+	Reason      string
+	Input       []byte
+	Status      int16
+	ErrorCode   *string
+	RequestID   string
+	StartedAt   time.Time
+	EndedAt     time.Time
+	OperationID *uuid.UUID
 }
 
 // A credential's calls newest first, a page after the cursor's ID.
@@ -96,6 +99,7 @@ func (q *Queries) LoggedCalls(ctx context.Context, db DBTX, arg LoggedCallsParam
 			&i.RequestID,
 			&i.StartedAt,
 			&i.EndedAt,
+			&i.OperationID,
 		); err != nil {
 			return nil, err
 		}
