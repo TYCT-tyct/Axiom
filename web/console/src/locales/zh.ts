@@ -1,6 +1,7 @@
 // The console's messages in Chinese, the source every other language follows.
 import { zh as providerKeys } from "./provider-keys";
 import { zh as receipt } from "./receipt";
+import { zh as routingPresets } from "./routing-presets";
 import { zh as settings } from "./settings";
 import { zh as statement } from "./statement";
 
@@ -21,6 +22,7 @@ export default {
     overview: "概览",
     keys: "API key",
     providerKeys: "供应商 key",
+    routingPresets: "路由预设",
     calls: "调用记录",
     balance: "余额",
     redeem: "兑换",
@@ -355,6 +357,7 @@ export default {
     },
   },
   providerKeys,
+  routingPresets,
   calls: {
     priceVersion: "价格版本 {{version}}",
     priceVersionUnavailable: "价格版本不可用",

@@ -1,6 +1,15 @@
 import type { Page } from "@playwright/test";
 import type { paths } from "../packages/api/src/console.gen.ts";
-import { aKey, emptyState, goodInvite, type MockState, type Schemas, usualState, worstState } from "./console-data.ts";
+import {
+  aKey,
+  aPreset,
+  emptyState,
+  goodInvite,
+  type MockState,
+  type Schemas,
+  usualState,
+  worstState,
+} from "./console-data.ts";
 import { type Ctx as CoreCtx, createRoute, fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
 import {
   confirmTotp,
@@ -211,6 +220,63 @@ function deleteKey({ params, state }: Ctx<"/api/console/v1/keys/{key_id}", "dele
   return state.keys.length < before ? ({ status: 204, json: undefined } as const) : fail(404, "not_found");
 }
 
+// The routing presets an account's keys may use: the live ones are listed, and only the account's own change.
+function createPreset({ body, state }: Ctx<"/api/console/v1/routing-presets", "post">) {
+  if (state.presets.some((preset) => !preset.disabled && preset.slug === body.slug)) {
+    return fail(409, "name_taken");
+  }
+  const preset = aPreset(state.presets.length + 100, { slug: body.slug, name: body.name, rules: body.rules });
+  state.presets.push(preset);
+  return { status: 201, json: preset } as const;
+}
+
+function ownPreset(state: MockState, id: string | undefined) {
+  return state.presets.find((preset) => preset.id === id && preset.scope === "account" && !preset.disabled);
+}
+
+function updatePreset({ body, params, state }: Ctx<"/api/console/v1/routing-presets/{preset_id}", "put">) {
+  const preset = ownPreset(state, params.preset_id);
+  if (!preset) {
+    return fail(404, "not_found");
+  }
+  if (preset.revision !== body.revision) {
+    return fail(409, "stale_revision");
+  }
+  Object.assign(preset, {
+    name: body.name,
+    rules: body.rules,
+    revision: preset.revision + 1,
+    version: preset.version + 1,
+  });
+  return ok(preset);
+}
+
+function disablePreset({ params, state }: Ctx<"/api/console/v1/routing-presets/{preset_id}", "delete">) {
+  const preset = ownPreset(state, params.preset_id);
+  if (!preset) {
+    return fail(404, "not_found");
+  }
+  if (state.routingDefault.preset_id === preset.id) {
+    return fail(409, "preset_in_use");
+  }
+  preset.disabled = true;
+  return { status: 204, json: undefined } as const;
+}
+
+function setDefault({ body, state }: Ctx<"/api/console/v1/routing-default", "put">) {
+  if (body.version !== state.routingDefault.version) {
+    return fail(409, "stale_revision");
+  }
+  state.routingDefault = { preset_id: body.preset_id ?? undefined, version: state.routingDefault.version + 1 };
+  return ok(state.routingDefault);
+}
+
+const sourceClasses = [
+  { slug: "official", name: "Official", name_zh: "官方直连" },
+  { slug: "cloud", name: "Cloud", name_zh: "云厂商" },
+  { slug: "relay", name: "Relay", name_zh: "中转站" },
+];
+
 // Removing a passkey raises the factor version and hands this browser a new session, with fresh codes when TOTP is on.
 function deletePasskey({ body, params, state }: Ctx<"/api/console/v1/auth/passkeys/{id}", "delete">) {
   if (body.password !== state.user.password) {
@@ -301,6 +367,19 @@ const handlers: Handler<MockState>[] = [
   route("post", `${base}/keys`, { ...signedIn, permission: "api_keys.manage" }, createKey),
   route("put", `${base}/keys/{key_id}`, { ...signedIn, permission: "api_keys.manage" }, updateKey),
   route("delete", `${base}/keys/{key_id}`, { ...signedIn, permission: "api_keys.manage" }, deleteKey),
+  route("get", `${base}/routing-presets`, { ...signedIn, permission: "api_keys.view" }, ({ state }) =>
+    ok({ data: state.presets.filter((preset) => !preset.disabled) }),
+  ),
+  route("post", `${base}/routing-presets`, { ...signedIn, permission: "api_keys.manage" }, createPreset),
+  route("put", `${base}/routing-presets/{preset_id}`, { ...signedIn, permission: "api_keys.manage" }, updatePreset),
+  route("delete", `${base}/routing-presets/{preset_id}`, { ...signedIn, permission: "api_keys.manage" }, disablePreset),
+  route("get", `${base}/routing-default`, { ...signedIn, permission: "api_keys.view" }, ({ state }) =>
+    ok(state.routingDefault),
+  ),
+  route("put", `${base}/routing-default`, { ...signedIn, permission: "api_keys.manage" }, setDefault),
+  route("get", `${base}/source-classes`, { ...signedIn, permission: "api_keys.view" }, () =>
+    ok({ data: sourceClasses }),
+  ),
   route("get", `${base}/balance`, { ...signedIn, permission: "balance.view" }, ({ state }) => ok(state.balance)),
   route("get", `${base}/models`, none, listPublicModels),
   route("get", `${base}/models/account`, signedIn, listAccountModels),

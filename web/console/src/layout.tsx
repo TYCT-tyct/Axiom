@@ -8,6 +8,7 @@ import { siteQuery } from "./queries";
 const nav = [
   { to: "/", label: "nav.overview", icon: "grid" },
   { to: "/keys", label: "nav.keys", icon: "key", permission: "api_keys.view" },
+  { to: "/routing-presets", label: "nav.routingPresets", icon: "sliders", permission: "api_keys.view" },
   { to: "/provider-keys", label: "nav.providerKeys", icon: "lock", permission: "api_keys.view" },
   { to: "/calls", label: "nav.calls", icon: "list", permission: "calls.view" },
   { to: "/models", label: "nav.models", icon: "cube" },
