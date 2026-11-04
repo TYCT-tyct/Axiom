@@ -25,7 +25,8 @@ type call struct {
 	site      accounts.Site
 	ip        netip.Addr
 	principal accounts.Principal
-	scope     pg.Scope // the account's, when the operation needs a permission on it
+	scope     pg.Scope       // the account's, when the operation needs a permission on it
+	agent     accounts.Agent // the operations credential, on the operations listener
 }
 
 type callKey struct{}

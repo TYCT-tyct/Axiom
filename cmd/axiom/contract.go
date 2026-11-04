@@ -53,6 +53,8 @@ type rules struct {
 	// params are the query and header parameters; a path parameter is not checked (a malformed ID is a 404).
 	params []*openapi3.Parameter
 	body   *openapi3.RequestBody
+	// agent is what an operation of the operations API needs of its credential; nil for a session's operations.
+	agent *agentRules
 }
 
 // contract is the console's API as api/console.yaml declares it: the rules of each operation, by the pattern its
@@ -84,11 +86,13 @@ func rulesOf(method string, op *openapi3.Operation, pathParameters openapi3.Para
 	if op.Security == nil {
 		return nil, errors.New("no security declaration (an empty one is public)")
 	}
-	var csrf bool
-	for _, requirement := range *op.Security {
-		_, session := requirement["session"]
-		_, withCSRF := requirement["csrf"]
-		r.session, csrf = r.session || session, csrf || withCSRF
+	var csrf, credential bool
+	r.session, csrf, credential = schemes(*op.Security)
+	if credential {
+		var err error
+		if r.agent, err = agentRulesOf(op); err != nil {
+			return nil, err
+		}
 	}
 	if r.session {
 		if err := r.sessionRules(op, csrf); err != nil {
@@ -104,6 +108,17 @@ func rulesOf(method string, op *openapi3.Operation, pathParameters openapi3.Para
 		r.body = op.RequestBody.Value
 	}
 	return r, nil
+}
+
+// schemes reports which of the session, the CSRF token and the operations credential the requirements name.
+func schemes(requirements openapi3.SecurityRequirements) (session, csrf, credential bool) {
+	for _, requirement := range requirements {
+		_, withSession := requirement["session"]
+		_, withCSRF := requirement["csrf"]
+		_, withCredential := requirement["credential"]
+		session, csrf, credential = session || withSession, csrf || withCSRF, credential || withCredential
+	}
+	return session, csrf, credential
 }
 
 // sessionRules reads the level and permission of an operation that needs a session.

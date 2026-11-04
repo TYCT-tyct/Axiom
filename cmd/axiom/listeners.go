@@ -41,6 +41,8 @@ func listenerKey(variable string) string {
 		return "admin"
 	case nodeAddrVar:
 		return "node"
+	case operationsAddrVar:
+		return "operations"
 	default:
 		return "ops"
 	}
@@ -49,8 +51,8 @@ func listenerKey(variable string) string {
 // listeners are the addresses the node's roles open, in the order shutdown stops them, before their handlers exist.
 // Startup claims them after the bounded configuration checks and before the slow steps (database, cache, queue, call
 // path), so a taken address is refused at once with the variable's name. The public listener comes first, so at
-// shutdown it drains while the probes still answer. The admin listener exists only on a core node (#171), and the node
-// listener only when mutual TLS is configured.
+// shutdown it drains while the probes still answer. The admin listener exists only on a core node (#171), the node
+// listener only when mutual TLS is configured, and the operations listener only when its address is set.
 func listeners(cfg nodeSettings) []*listening {
 	var servers []*listening
 	if cfg.roles.has(roleCore) || cfg.roles.has(roleIngress) {
@@ -61,6 +63,9 @@ func listeners(cfg nodeSettings) []*listening {
 		if cfg.nodeTLS != nil {
 			servers = append(servers, &listening{variable: nodeAddrVar, addr: cfg.nodeAddr, tls: true})
 		}
+		if cfg.operationsTLS != nil {
+			servers = append(servers, &listening{variable: operationsAddrVar, addr: cfg.operationsAddr, tls: true})
+		}
 	}
 	return append(servers, &listening{variable: probesAddrVar, addr: cfg.probesAddr})
 }
@@ -68,20 +73,26 @@ func listeners(cfg nodeSettings) []*listening {
 // node attaches a core node's handlers to the listeners startup claimed. The admin listener serves the admin app and
 // the admin API, behind the source restriction; the node listener is the same call path over mutual TLS, for the
 // ingress nodes' calls, and also answers the peers' readiness probes so an ingress knows whether the core can route.
-// Every listener but the probes refuses a request that starts during the drain (httpserver.Health.Gate).
-func node(servers []*listening, cfg nodeSettings, routes http.Handler, admin http.Handler, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) {
+// The operations listener serves the operations API over mutual TLS with the ops purpose, behind its own source
+// restriction, which reads the connection's address and never a forwarding header: nothing proxies to it. Every
+// listener but the probes refuses a request that starts during the drain (httpserver.Health.Gate).
+func node(servers []*listening, cfg nodeSettings, routes nodeRoutes, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) {
 	for _, s := range servers {
 		switch s.variable {
 		case publicAddrVar:
-			s.server = httpserver.New(httpserver.Public(health.Gate(routes), logger, bodyTimeout,
+			s.server = httpserver.New(httpserver.Public(health.Gate(routes.public), logger, bodyTimeout,
 				httpserver.WithTelemetry(requests)), logger)
 		case adminAddrVar:
-			s.server = httpserver.New(httpserver.Public(health.Gate(restrictSources(admin, cfg.adminSources, cfg.trustedProxies)), logger, bodyTimeout,
+			s.server = httpserver.New(httpserver.Public(health.Gate(restrictSources(routes.admin, cfg.adminSources, cfg.trustedProxies)), logger, bodyTimeout,
 				httpserver.WithTelemetry(requests)), logger)
 		case nodeAddrVar:
-			s.server = httpserver.New(httpserver.Public(withHealth(routes, health), logger, bodyTimeout,
+			s.server = httpserver.New(httpserver.Public(withHealth(routes.public, health), logger, bodyTimeout,
 				httpserver.WithTelemetry(requests)), logger)
 			s.server.TLSConfig = cfg.nodeTLS
+		case operationsAddrVar:
+			s.server = httpserver.New(httpserver.Public(health.Gate(restrictSources(routes.operations, cfg.operationsSources, nil)), logger, bodyTimeout,
+				httpserver.WithTelemetry(requests)), logger)
+			s.server.TLSConfig = cfg.operationsTLS
 		case probesAddrVar:
 			s.server = health.Server(logger)
 		}
