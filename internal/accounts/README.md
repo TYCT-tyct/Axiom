@@ -102,7 +102,7 @@
 - `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
 - `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。账户目标的范围是 `pg.AccountScopeIn(会话签发的站点, 账户)`：除了账户自己的行，还读这个站点的公开配置和共享计数（策略把站点列与 `platform.home_site()` 的 InitPlan 参数比较，如充值页的付款方式、每 IP 的下单计数），别的站点的读不到；站点来自会话，不来自账户能写的行。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
 - 权限在代码里声明名字和是否敏感；角色快照合并 permissions 与 additional_permissions，警告并忽略代码不认识的名字，避免新版本权限使旧节点快照过期。迁移 00010 将新增权限放进 additional_permissions，保留不支持忽略未知名字的旧节点所读 permissions 原样；`TestRolePermissionsRollingCompatibility` 同时核对旧投影及迁移权限的声明，防止拼写错误。敏感权限要求本次会话 `level = mfa`。
-- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`、`balance.top_up`，以及敏感的 `sites.manage`、`platform_grants.manage`、`users.manage`，和管理接口权限（含 `calls.search`、`calls.inspect`、`audit.view`）（见下文「管理接口」），以及运营的 `operations.read` 和敏感的 `operations.manage`（迁移 00034 放进内置 `admin` 角色的 additional_permissions）。默认角色由迁移 00003 写入，00005、00006、00010 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
+- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`、`balance.top_up`，以及敏感的 `sites.manage`、`platform_grants.manage`、`users.manage`，和管理接口权限（含 `calls.search`、`calls.inspect`、`audit.view`）（见下文「管理接口」），以及运营的 `operations.read`、`operations.write` 和敏感的 `operations.manage`、`operations.approve`（迁移 00034、00036 分别把后两个放进内置 `admin` 角色的 additional_permissions）。默认角色由迁移 00003 写入，00005、00006、00010 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
 - `Authorize(ctx, principal, permission, target)`：账户目标读操作者在该账户的成员关系；企业账户的成员关系怎么归类待定，所以 M1 只有自己的个人账户能被授权，别的账户返回 `ErrNotFound`。平台目标要求会话在管理后台、`level = mfa`，再读未撤销的平台授予；有成员关系或授予但角色不含这项权限返回 `ErrForbidden`。
 
 ## 运营凭证
@@ -117,14 +117,16 @@ func (s *Service) StopAgents(ctx, tx, actor, reason string) (int, error)   // �
 func (s *Service) AgentCredentials(ctx, tx, after AgentID, pageSize int) ([]AgentCredential, bool, error)
 func (s *Service) AuthenticateAgent(ctx, raw string) (Agent, error)
 func (s *Service) AuthorizeAgent(a Agent, perm Permission, platform bool) (pg.Scope, error)
+func (s *Service) HoldAgent(ctx, tx, id AgentID) error                  // 运营操作提出时持有凭证，吊销等它提交
 ```
 
 - **表**：`accounts.agent_credentials` 一行一张凭证：名字、权限、站点（NULL 是全部站点）、是否平台范围、提出方厂商、创建人、到期、吊销和最后使用时间；`accounts.agent_credential_tokens` 一行一个令牌：带密钥的哈希（主键）、哈希版本、末四位、`retires_at`（NULL 是当前令牌，部分唯一索引保证每张凭证只有一个）。两张表都是平台数据，策略只放行平台范围；`axiom_app` 只能改 `revoked_at`、`last_used_at` 和 `retires_at`。
 - **令牌**：`op-ax-v1-` 加 API key 同样的 43 位随机和 6 位校验（`newKeyText`、`wellFormedKey`），只在创建或轮换的返回值里出现一次；哈希用 key 的哈希密钥（`hashes.Sum`），查找时按所有版本各算一次。
-- **权限**：至少有 `operations.read`，`CreateAgent` 自动加上；`agentRefused`（`operations.manage`、`platform_grants.manage`）和代码没声明的名字被拒，表的 CHECK 还拒 `operations.approve`，所以凭证不能管理自己、不能审批、不能给别人平台角色。拒绝是 `*AgentSpecError`，带请求里出错位置的 JSON 指针。
+- **权限**：至少有 `operations.read`，`CreateAgent` 自动加上；`agentRefused`（`operations.manage`、`operations.approve`、`platform_grants.manage`）和代码没声明的名字被拒，表的 CHECK 也拒这三个，所以凭证不能管理自己、不能审批、不能给别人平台角色。拒绝是 `*AgentSpecError`，带请求里出错位置的 JSON 指针。
 - **认证**：`AuthenticateAgent` 先查形状，再在平台范围的事务里按哈希读活的凭证（令牌当前或在重叠期内、凭证未吊销未过期，按 `Config.Now` 判断），每个请求都读库、不缓存，所以吊销、停止和过期从下一个请求生效；最后使用时间超过一分钟才写一次。认出后按凭证在本节点的令牌桶扣一次（突发 60、每 100 毫秒补一个，即每分钟 600），超了是 `*TooManyAttempts`。
 - **授权**：`AuthorizeAgent` 不读库：没有这项权限是 `ErrForbidden`；平台资源要凭证的平台范围，没有是 `ErrNotFound`（和不存在一样）；其余给凭证站点的范围。
 - **生命周期**：到期时间由负责人为每张凭证给出（必填、在未来即可，代码不带默认值和上限）；到期的凭证和吊销的一样，认证、`RevokeAgent`（`ErrAgentNotFound`）、`StopAgents` 的计数和列表的旧令牌期限都把它当作已不存在；`RotateAgent` 先锁凭证行，把上一次轮换留下的旧令牌立即作废、当前令牌的 `retires_at` 设为现在加重叠（最多 `AgentOverlap`，24 小时），再插新令牌；吊销是终态，`StopAgents` 吊销全部活的凭证，每张一条 `operations_credential.revoke` 审计，再记一条 `operations_agent.stop`。创建、轮换、吊销都在调用方的事务里记审计。
+- **持有**：`HoldAgent` 在调用方的事务里对活的凭证行加 `FOR SHARE`，吊销、过期或不存在是 `ErrUnknownAgent`（401）。运营接口提出一个运营操作前先持有：吊销和紧急停止要改这一行，只能在提案提交前失败、或等它提交后再把它和别的待审批提案一起取消，不会在两者之间漏掉一个。同一凭证的多个提案互不等待。测试 `TestHoldAgent`。
 
 ## 登录前的查找
 

@@ -83,6 +83,37 @@ func (q *Queries) EndAgentOverlap(ctx context.Context, db DBTX, arg EndAgentOver
 	return err
 }
 
+const holdAgentCredential = `-- name: HoldAgentCredential :many
+SELECT id, revoked_at, expires_at FROM accounts.agent_credentials WHERE id = $1 FOR SHARE
+`
+
+type HoldAgentCredentialRow struct {
+	ID        uuid.UUID
+	RevokedAt *time.Time
+	ExpiresAt time.Time
+}
+
+// FOR SHARE: proposals of one credential do not wait on each other, and a revocation waits for them.
+func (q *Queries) HoldAgentCredential(ctx context.Context, db DBTX, id uuid.UUID) ([]HoldAgentCredentialRow, error) {
+	rows, err := db.Query(ctx, holdAgentCredential, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []HoldAgentCredentialRow
+	for rows.Next() {
+		var i HoldAgentCredentialRow
+		if err := rows.Scan(&i.ID, &i.RevokedAt, &i.ExpiresAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertAgentCredential = `-- name: InsertAgentCredential :exec
 
 INSERT INTO accounts.agent_credentials (id, name, permissions, sites, platform, proposer_vendors, created_by, created_at, expires_at)

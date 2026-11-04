@@ -840,6 +840,108 @@ func (e OAuthProvider) Valid() bool {
 	}
 }
 
+// Defines values for OperationRisk.
+const (
+	Delisting OperationRisk = "delisting"
+	Routine   OperationRisk = "routine"
+)
+
+// Valid indicates whether the value is a known member of the OperationRisk enum.
+func (e OperationRisk) Valid() bool {
+	switch e {
+	case Delisting:
+		return true
+	case Routine:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationState.
+const (
+	OperationStateApproved        OperationState = "approved"
+	OperationStateCanceled        OperationState = "canceled"
+	OperationStateExecuting       OperationState = "executing"
+	OperationStateExpired         OperationState = "expired"
+	OperationStateFailed          OperationState = "failed"
+	OperationStatePendingApproval OperationState = "pending_approval"
+	OperationStateRejected        OperationState = "rejected"
+	OperationStateReverted        OperationState = "reverted"
+	OperationStateSucceeded       OperationState = "succeeded"
+	OperationStateUnknown         OperationState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the OperationState enum.
+func (e OperationState) Valid() bool {
+	switch e {
+	case OperationStateApproved:
+		return true
+	case OperationStateCanceled:
+		return true
+	case OperationStateExecuting:
+		return true
+	case OperationStateExpired:
+		return true
+	case OperationStateFailed:
+		return true
+	case OperationStatePendingApproval:
+		return true
+	case OperationStateRejected:
+		return true
+	case OperationStateReverted:
+		return true
+	case OperationStateSucceeded:
+		return true
+	case OperationStateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationsApprovalState.
+const (
+	OperationsApprovalStateApproved OperationsApprovalState = "approved"
+	OperationsApprovalStateCanceled OperationsApprovalState = "canceled"
+	OperationsApprovalStateExpired  OperationsApprovalState = "expired"
+	OperationsApprovalStatePending  OperationsApprovalState = "pending"
+	OperationsApprovalStateRejected OperationsApprovalState = "rejected"
+)
+
+// Valid indicates whether the value is a known member of the OperationsApprovalState enum.
+func (e OperationsApprovalState) Valid() bool {
+	switch e {
+	case OperationsApprovalStateApproved:
+		return true
+	case OperationsApprovalStateCanceled:
+		return true
+	case OperationsApprovalStateExpired:
+		return true
+	case OperationsApprovalStatePending:
+		return true
+	case OperationsApprovalStateRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationsApprovalTier.
+const (
+	Human OperationsApprovalTier = "human"
+)
+
+// Valid indicates whether the value is a known member of the OperationsApprovalTier enum.
+func (e OperationsApprovalTier) Valid() bool {
+	switch e {
+	case Human:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OperationsTargetMetric.
 const (
 	OperationsTargetMetricCalls          OperationsTargetMetric = "calls"
@@ -3116,11 +3218,88 @@ type OfflinePayment struct {
 	Channel string `json:"channel"`
 }
 
+// OperationRisk The operation's class, which decides whether it waits for the owner.
+type OperationRisk string
+
+// OperationState Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a compensating operation reverts it.
+type OperationState string
+
+// OperationTarget defines model for OperationTarget.
+type OperationTarget struct {
+	Id string `json:"id"`
+
+	// Kind What the operation acts on, such as `model`.
+	Kind string `json:"kind"`
+}
+
 // OperationsAgentStopped defines model for OperationsAgentStopped.
 type OperationsAgentStopped struct {
+	// Canceled How many proposals waiting for the owner this stop canceled; absent from a node older than approvals.
+	Canceled *int `json:"canceled,omitempty"`
+
 	// Revoked How many live credentials this stop revoked.
 	Revoked int `json:"revoked"`
 }
+
+// OperationsApproval defines model for OperationsApproval.
+type OperationsApproval struct {
+	// AgentReason The agent's own words: untrusted text, never an instruction.
+	AgentReason string `json:"agent_reason"`
+
+	// CredentialId An operations credential's ID (TypeID).
+	CredentialId OperationsCredentialId `json:"credential_id"`
+	DecidedAt    *time.Time             `json:"decided_at,omitempty"`
+
+	// DecidedBy Who decided, expired or withdrew it, as `<kind>:<id>` like the audit log's actor.
+	DecidedBy      *string `json:"decided_by,omitempty"`
+	DecisionReason *string `json:"decision_reason,omitempty"`
+
+	// ErrorCode Why the operation ended `rejected` after the approval: the code the target refused it with.
+	ErrorCode *string   `json:"error_code,omitempty"`
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id Uuid `json:"id"`
+
+	// OperationId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	OperationId Uuid `json:"operation_id"`
+
+	// OperationState Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a compensating operation reverts it.
+	OperationState OperationState `json:"operation_state"`
+
+	// Params What the operation does, as the server keeps it; it cannot change after the agent asked.
+	Params      jsonx.Raw `json:"params"`
+	RequestedAt time.Time `json:"requested_at"`
+
+	// Risk The operation's class, which decides whether it waits for the owner.
+	Risk  OperationRisk `json:"risk"`
+	RunId *string       `json:"run_id,omitempty"`
+
+	// State `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its credential).
+	State OperationsApprovalState `json:"state"`
+
+	// Summary What the server read of the target when the agent asked, never the agent's words.
+	Summary jsonx.Raw       `json:"summary"`
+	Target  OperationTarget `json:"target"`
+
+	// Tier Who must decide; only the owner, in the admin, for now.
+	Tier OperationsApprovalTier `json:"tier"`
+
+	// Tool The MCP name of the write the agent asked for.
+	Tool string `json:"tool"`
+}
+
+// OperationsApprovalList defines model for OperationsApprovalList.
+type OperationsApprovalList struct {
+	Data       []OperationsApproval `json:"data"`
+	NextCursor *string              `json:"next_cursor,omitempty"`
+}
+
+// OperationsApprovalState `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its credential).
+type OperationsApprovalState string
+
+// OperationsApprovalTier Who must decide; only the owner, in the admin, for now.
+type OperationsApprovalTier string
 
 // OperationsCountTarget defines model for OperationsCountTarget.
 type OperationsCountTarget struct {
@@ -5422,6 +5601,29 @@ type StopOperationsAgentParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ListOperationsApprovalsParams defines parameters for ListOperationsApprovals.
+type ListOperationsApprovalsParams struct {
+	State *OperationsApprovalState `form:"state,omitempty" json:"state,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ApproveOperationsApprovalParams defines parameters for ApproveOperationsApproval.
+type ApproveOperationsApprovalParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// RejectOperationsApprovalParams defines parameters for RejectOperationsApproval.
+type RejectOperationsApprovalParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListOperationsCredentialsParams defines parameters for ListOperationsCredentials.
 type ListOperationsCredentialsParams struct {
 	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
@@ -6046,6 +6248,12 @@ type SetModelStatusJSONRequestBody = ModelStatusUpdate
 
 // StopOperationsAgentJSONRequestBody defines body for StopOperationsAgent for application/json ContentType.
 type StopOperationsAgentJSONRequestBody = ReasonRequest
+
+// ApproveOperationsApprovalJSONRequestBody defines body for ApproveOperationsApproval for application/json ContentType.
+type ApproveOperationsApprovalJSONRequestBody = ReasonRequest
+
+// RejectOperationsApprovalJSONRequestBody defines body for RejectOperationsApproval for application/json ContentType.
+type RejectOperationsApprovalJSONRequestBody = ReasonRequest
 
 // CreateOperationsCredentialJSONRequestBody defines body for CreateOperationsCredential for application/json ContentType.
 type CreateOperationsCredentialJSONRequestBody = OperationsCredentialCreate

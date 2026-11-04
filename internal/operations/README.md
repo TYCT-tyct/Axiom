@@ -1,6 +1,6 @@
 # operations
 
-运营看板的业务目标和运营接口的操作记录在代码里的接口、表和不变量。规则和理由见[运营的「业务目标」](../../docs/domains/operations.md#业务目标)和[「审计」](../../docs/domains/operations.md#审计)；本文只写实现时依赖的部分。
+运营看板的业务目标、运营接口的操作记录、运营操作与审批在代码里的接口、表和不变量。规则和理由见[运营的「业务目标」](../../docs/domains/operations.md#业务目标)、[「审计」](../../docs/domains/operations.md#审计)和[「风险分级与审批」](../../docs/domains/operations.md#风险分级与审批)；本文只写实现时依赖的部分。
 
 ## 接口
 
@@ -34,15 +34,49 @@ func (t *Targets) Check() error
 ```go
 type LoggedCall struct {
     ID, Credential uuid.UUID; Run, Tool, Reason string; Input map[string]any
-    Status int; Error, RequestID string; Started, Ended time.Time
+    Status int; Error, RequestID string; Started, Ended time.Time; Operation uuid.UUID
 }
 func RecordCall(ctx context.Context, tx pg.Tx, c LoggedCall) (uuid.UUID, error)
 func LoggedCalls(ctx context.Context, tx pg.Tx, credential, after uuid.UUID, pageSize int) ([]LoggedCall, bool, error)
 ```
 
 - **谁调**：`cmd/axiom` 的运营接口守卫（`agentGuard`）在每个认出凭证的请求结束时调 `RecordCall`，写进去才把缓存的答案发出；`operationLogList` 用 `LoggedCalls` 让凭证读自己的记录。本模块不认凭证，`Credential` 只是 ID。
-- **表**：`migrations/00003_operation_log.sql` 的 `operations.operation_log`：ID（UUIDv7）、凭证、运行 ID、工具名（`x-mcp-name`）、理由（agent 写的，不可信；可以为空：缺理由被拒的请求也记）、输入（规范 JSON，最多 8 KiB）、HTTP 状态、错误码、请求 ID、开始和结束时间。索引 `(credential_id, id DESC)` 供按凭证从新到旧分页。平台数据：只有平台范围能读写；只插入，没有 UPDATE 和 DELETE 权限。
-- **输入**：`RecordCall` 用 `jsonx.MarshalCanonical` 编码，超过 8 KiB 改记 `{"truncated":true,"bytes":n}`，表的 CHECK 再兜一层。列是 `json` 而不是 `jsonb`：`json` 原样保存文本，CHECK 量的字节和 Go 量的相同；`jsonb` 输出时在冒号和逗号后加空格，会让刚好 8 KiB 以内的输入在库里超限、整次调用答 503。
+- **表**：`migrations/00003_operation_log.sql` 的 `operations.operation_log`：ID（UUIDv7）、凭证、运行 ID、工具名（`x-mcp-name`）、理由（agent 写的，不可信；可以为空：缺理由被拒的请求也记）、输入（规范 JSON，最多 8 KiB）、HTTP 状态、错误码、请求 ID、开始和结束时间，以及写操作建出或按键找到的运营操作（`operation_id`，迁移 00004 加的可空列；旧节点不写写操作，留空）。索引 `(credential_id, id DESC)` 供按凭证从新到旧分页。平台数据：只有平台范围能读写；只插入，没有 UPDATE 和 DELETE 权限。
+- **输入**：读是路径和查询参数（不含理由），写还有请求体除 `reason` 以外的成员（`body`），理由取自请求体。`RecordCall` 用 `jsonx.MarshalCanonical` 编码，超过 8 KiB 改记 `{"truncated":true,"bytes":n}`，表的 CHECK 再兜一层。列是 `json` 而不是 `jsonb`：`json` 原样保存文本，CHECK 量的字节和 Go 量的相同；`jsonb` 输出时在冒号和逗号后加空格，会让刚好 8 KiB 以内的输入在库里超限、整次调用答 503。
+
+## 运营操作与审批
+
+```go
+type Proposal struct {
+    Credential, Key uuid.UUID; Tool string; Target Target; Params map[string]any
+    Risk Risk; Reason, Run string; Summary map[string]any // Summary 非 nil：要负责人审批
+}
+func Propose(ctx, tx, p Proposal) (Operation, bool, error)                    // bool：按键找到的旧操作
+func Settle(ctx, tx, op Operation, result map[string]any, refused string) (Operation, error)
+func Decide(ctx, tx, actor audit.Actor, approval uuid.UUID, approve bool, reason string) (Operation, error)
+func Withdraw(ctx, tx, credential, approval uuid.UUID, reason string) (Operation, error)
+func CancelLive(ctx, tx, actor audit.Actor, credential *uuid.UUID, reason string) (int, error) // nil：全部凭证
+func ExpireDue(ctx, tx, batch int) (int, error)
+func Get / Operations / Approvals / ApprovalOperation                       // 读
+func RegisterExpiry(db, scope, queue, logger) error
+```
+
+- **谁调**：`cmd/axiom` 的运营接口写操作（`operations_writes.go`）先 `accounts.HoldAgent` 再 `Propose`：不要审批的直接是 `approved`，处理器在同一个事务里调目标模块（现在只有 `catalog.ListModel`）再 `Settle`；要审批的是 `pending_approval`，带一条审批。负责人在管理接口 `ApproveOperationsApproval` 里 `Decide`，同一个事务里执行目标改动再 `Settle`；目标在提案之后变了（目标模块的 4xx 拒绝，如 `stale_revision`），改动回滚到保存点，操作以 `rejected` 和那个错误码结束，决定照样提交。吊销凭证和紧急停止在各自的事务里 `CancelLive`。本模块不引用被审批的模块（[总体架构的「模块边界规则」](../../docs/architecture.md#模块边界规则)）。
+- **表**：`migrations/00004_operations.sql`。`operations.operations` 一行一个运营操作：凭证、幂等键（`(credential_id, idempotency_key)` 唯一）、请求哈希（工具、目标、规范化参数的 SHA-256）、工具名、目标种类和 ID、参数（`json`，最多 8 KiB，含目标的 `rev`）、风险类别、状态、agent 的理由、运行 ID、结果、错误码和时间。`operations.approvals` 一行一个审批：运营操作（唯一）、档位（现在只有 `human`）、状态、服务端读出的摘要、请求、到期和决定的时间、决定者（`<种类>:<ID>`）和理由。两张表都是平台数据，策略只放行平台范围；`axiom_app` 只能改操作的 `state`、`result`、`error_code`、`updated_at` 和审批的 `state` 与决定列，不能删。
+- **幂等**：`Propose` 用 `INSERT … ON CONFLICT DO NOTHING` 占键；同一个键的第二个请求等第一个事务结束，找到它后比请求哈希：相同返回现在的状态（`replayed`），不同是 `ErrKeyReused`。占键和操作同事务，失败就一起回滚，同一个键可以重试。
+- **到期**：审批在数据库时钟上到期，`least(now() + 30 分钟, 当天 UTC 结束)`。`Decide` 和 `Withdraw` 对已到期的审批答 `ErrNotPending`，不管清扫到没到；`RegisterExpiry` 每分钟一轮，`ExpireDue` 每批最多 100 个，以 `system:operations.approval_expiry` 记 `approval.expire`。
+- **锁的顺序**：所有路径先锁运营操作，再锁它的审批。`Decide`、`Withdraw` 先无锁读出审批所属的操作，再按这个顺序加锁、重新判断状态；`CancelLive` 按 ID 升序锁；清扫用 `FOR UPDATE OF o SKIP LOCKED`，跳过正被决定的操作，条件里带操作的状态，所以快照之后已被决定的行在新版本上重判后被排除。
+- **审计与通知**：`approval.request`、`operation.succeed`、`operation.reject`、`operation.cancel` 的操作者是 `operations_agent:<凭证>`（提出、执行和撤回都以 agent 的名义；吊销和停止时的取消是负责人）；`approval.approve`、`approval.reject` 是负责人，`approval.expire` 是系统。审批提出时同事务 `alert.Persist` 一个 `operations.approval_pending` 信号（键是审批 ID），决定、到期、撤回、取消时同事务恢复它；负责人给这个种类配一条告警规则和渠道才会收到通知。
+
+| 不变量 | 怎么保证 |
+|---|---|
+| 一个凭证的一个幂等键只对应一个运营操作 | 唯一约束；第二个请求等第一个提交后按请求哈希返回原操作或 `ErrKeyReused`。测试 `TestProposeOnceAKey`、`TestRaces` |
+| 批准的就是执行的 | 应用角色不能改操作的工具、目标和参数；执行只读这三列。决定时再由目标模块按参数里的 `rev` 核对目标，变了就 `rejected` |
+| 审批只决定一次 | 锁住操作和审批后才判断 `pending` 和到期；决定、撤回、到期、取消互斥。测试 `TestDecide`、`TestRaces`（撤回等在批准之后，得到 `ErrNotPending`；清扫跳过被持有的操作，放开后再到期） |
+| 过期的审批不能被批准 | 判断用数据库的 `now()`，和到期时间同一个时钟；清扫晚到只推迟记录 |
+| 吊销和停止不会漏掉一个待审批的提案 | 提案前 `HoldAgent`（`FOR SHARE`），吊销要改同一行，只能在提案之前失败或之后取消它。测试 `TestCancelLive`、`accounts.TestHoldAgent` |
+| 每个状态变化都有审计 | `finish`、`Settle` 在同一个事务里写状态和 `audit.Record`；审计写不进整个改动回滚 |
+| 已批准的操作不留在 `approved` | 直接执行的和批准后的都在同一个事务里 `Settle`；所以 `CancelLive` 和清扫只处理 `pending_approval` |
 
 ## 表
 
@@ -74,6 +108,9 @@ func LoggedCalls(ctx context.Context, tx pg.Tx, credential, after uuid.UUID, pag
 | 未记录的成功改动不能留下 | `audit.Record` 和写入同一事务；`TestAdminOperationsTargets` 读审计的 `before`/`after`，包括旧页面写入时后四项的现值 |
 
 ## 测试
+
+- `actions_test.go`：`TestProposeOnceAKey` 覆盖直接执行与结算、按键重放、键复用、别的凭证同一个键、审批的到期上界、审计和信号；`TestDecide` 覆盖批准、重复决定、驳回、过期后拒绝决定与清扫、撤回只限自己；`TestCancelLive` 覆盖按凭证和全部取消；`TestRaces` 用持有事务等对方进入锁等待的显式顺序覆盖同键并发、批准与撤回、清扫与决定。
+- `cmd/axiom/operations_writes_test.go`：`TestOperationsAPIWrites` 走真实 HTTP 和数据库，覆盖上架立即执行、重放、键复用、试运行和旧 `rev` 不写、下架等负责人、负责人看到的摘要和理由、批准后以 agent 的名义执行与审计、操作记录里的理由和输入；`TestOperationsApprovalOutcomes` 覆盖驳回、批准时模型已变、撤回与重放、紧急停止和吊销取消待审批、没有权限、别的凭证的审批、下架草稿。
 
 - `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖刚好 8192 字节的输入原样保存、多一个字节只记大小、站点范围读不到。
 

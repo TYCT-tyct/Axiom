@@ -5,9 +5,12 @@ import (
 	"errors"
 	"strconv"
 	"time"
+	"uuid"
 
 	"axiom/internal/accounts"
+	"axiom/internal/operations"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
 
@@ -125,14 +128,19 @@ func (a adminAPI) RotateOperationsCredential(ctx context.Context, r adminapi.Rot
 	return adminapi.RotateOperationsCredential200JSONResponse{Body: body, Headers: adminapi.RotateOperationsCredential200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
-// RevokeOperationsCredential ends a credential for good.
+// RevokeOperationsCredential ends a credential for good, and cancels its proposals still waiting for the owner.
 func (a adminAPI) RevokeOperationsCredential(ctx context.Context, r adminapi.RevokeOperationsCredentialRequestObject) (adminapi.RevokeOperationsCredentialResponseObject, error) {
 	id, err := agentIDOf(r.CredentialId)
 	if err != nil {
 		return nil, err
 	}
 	body, replayed, err := idempotently(ctx, a.db, "revokeOperationsCredential", r.Params.IdempotencyKey, r, func(tx pg.Tx) (adminapi.OperationsCredentialRevoked, error) {
-		return adminapi.OperationsCredentialRevoked{CredentialId: id.TypeID()}, a.accounts.RevokeAgent(ctx, tx, actor(ctx), id, r.Body.Reason)
+		revoked := adminapi.OperationsCredentialRevoked{CredentialId: id.TypeID()}
+		if err := a.accounts.RevokeAgent(ctx, tx, actor(ctx), id, r.Body.Reason); err != nil {
+			return revoked, err
+		}
+		_, err := operations.CancelLive(ctx, tx, actor(ctx), new(uuid.UUID(id)), r.Body.Reason)
+		return revoked, err
 	})
 	if err != nil {
 		return nil, err
@@ -140,11 +148,16 @@ func (a adminAPI) RevokeOperationsCredential(ctx context.Context, r adminapi.Rev
 	return adminapi.RevokeOperationsCredential200JSONResponse{Body: body, Headers: adminapi.RevokeOperationsCredential200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
-// StopOperationsAgent is the emergency stop: every live credential revoked at once.
+// StopOperationsAgent is the emergency stop: every live credential revoked at once, and every proposal still waiting for
+// the owner canceled with them.
 func (a adminAPI) StopOperationsAgent(ctx context.Context, r adminapi.StopOperationsAgentRequestObject) (adminapi.StopOperationsAgentResponseObject, error) {
 	body, replayed, err := idempotently(ctx, a.db, "stopOperationsAgent", r.Params.IdempotencyKey, r.Body, func(tx pg.Tx) (adminapi.OperationsAgentStopped, error) {
-		n, err := a.accounts.StopAgents(ctx, tx, actor(ctx), r.Body.Reason)
-		return adminapi.OperationsAgentStopped{Revoked: n}, err
+		revoked, err := a.accounts.StopAgents(ctx, tx, actor(ctx), r.Body.Reason)
+		if err != nil {
+			return adminapi.OperationsAgentStopped{}, err
+		}
+		canceled, err := operations.CancelLive(ctx, tx, actor(ctx), nil, r.Body.Reason)
+		return adminapi.OperationsAgentStopped{Revoked: revoked, Canceled: &canceled}, err
 	})
 	if err != nil {
 		return nil, err
@@ -167,4 +180,112 @@ func agentSpecFailure(err error) error {
 		return invalidField(spec.Field, spec.Message)
 	}
 	return err
+}
+
+// ListOperationsApprovals is the owner's queue of what the agent asked to be approved, newest first.
+func (a adminAPI) ListOperationsApprovals(ctx context.Context, r adminapi.ListOperationsApprovalsRequestObject) (adminapi.ListOperationsApprovalsResponseObject, error) {
+	after, err := cursorID(r.Params.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	var state operations.ApprovalState
+	if r.Params.State != nil {
+		state = operations.ApprovalState(*r.Params.State)
+	}
+	var page []operations.Operation
+	var more bool
+	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		page, more, err = operations.Approvals(ctx, tx, state, after, pageSize(r.Params.Limit))
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	list := adminapi.OperationsApprovalList{Data: make([]adminapi.OperationsApproval, len(page))}
+	for i, op := range page {
+		list.Data[i] = approvalBody(op)
+	}
+	if more {
+		list.NextCursor = new(page[len(page)-1].Approval.ID.String())
+	}
+	return adminapi.ListOperationsApprovals200JSONResponse(list), nil
+}
+
+// GetOperationsApproval reads one approval with its operation.
+func (a adminAPI) GetOperationsApproval(ctx context.Context, r adminapi.GetOperationsApprovalRequestObject) (adminapi.GetOperationsApprovalResponseObject, error) {
+	id, err := approvalIDOf(r.ApprovalId)
+	if err != nil {
+		return nil, err
+	}
+	var op operations.Operation
+	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		op, err = operations.ApprovalOperation(ctx, tx, id)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return adminapi.GetOperationsApproval200JSONResponse(approvalBody(op)), nil
+}
+
+// ApproveOperationsApproval approves what the agent asked for and runs it, in one transaction.
+func (a adminAPI) ApproveOperationsApproval(ctx context.Context, r adminapi.ApproveOperationsApprovalRequestObject) (adminapi.ApproveOperationsApprovalResponseObject, error) {
+	body, replayed, err := a.decide(ctx, "approveOperationsApproval", r.ApprovalId, r.Params.IdempotencyKey, r.Body.Reason, true)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.ApproveOperationsApproval200JSONResponse{Body: body, Headers: adminapi.ApproveOperationsApproval200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// RejectOperationsApproval rejects what the agent asked for; nothing is changed.
+func (a adminAPI) RejectOperationsApproval(ctx context.Context, r adminapi.RejectOperationsApprovalRequestObject) (adminapi.RejectOperationsApprovalResponseObject, error) {
+	body, replayed, err := a.decide(ctx, "rejectOperationsApproval", r.ApprovalId, r.Params.IdempotencyKey, r.Body.Reason, false)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.RejectOperationsApproval200JSONResponse{Body: body, Headers: adminapi.RejectOperationsApproval200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// decide records the owner's decision on an approval under an Idempotency-Key; an approval runs its operation in the
+// same transaction, and a change of the catalog is reloaded once it has committed.
+func (a adminAPI) decide(ctx context.Context, operation, approval, key, reason string, approve bool) (adminapi.OperationsApproval, bool, error) {
+	id, err := approvalIDOf(approval)
+	if err != nil {
+		return adminapi.OperationsApproval{}, false, err
+	}
+	succeeded := false
+	body, replayed, err := idempotently(ctx, a.db, operation, key, []any{approval, reason}, func(tx pg.Tx) (adminapi.OperationsApproval, error) {
+		op, err := operations.Decide(ctx, tx, actor(ctx), id, approve, reason)
+		if err == nil && approve {
+			op, err = a.runApproved(ctx, tx, op)
+		}
+		if err != nil {
+			return adminapi.OperationsApproval{}, err
+		}
+		succeeded = op.State == operations.StateSucceeded
+		return approvalBody(op), nil
+	})
+	a.refreshCatalog(ctx, err != nil || !succeeded)
+	return body, replayed, err
+}
+
+// approvalIDOf reads an approval's ID from a path. A malformed ID and an unknown one are the same 404.
+func approvalIDOf(s string) (uuid.UUID, error) {
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return uuid.UUID{}, operations.ErrNoApproval
+	}
+	return id, nil
+}
+
+// approvalBody is an approval with its operation as the admin contract answers it.
+func approvalBody(op operations.Operation) adminapi.OperationsApproval {
+	ap := op.Approval
+	return adminapi.OperationsApproval{
+		Id: ap.ID.String(), State: adminapi.OperationsApprovalState(ap.State), Tier: adminapi.OperationsApprovalTier("human"),
+		RequestedAt: ap.Requested, ExpiresAt: ap.Expires, DecidedAt: ap.Decided,
+		OperationId: op.ID.String(), CredentialId: accounts.AgentID(op.Credential).TypeID(), Tool: op.Tool,
+		Target: adminapi.OperationTarget{Kind: op.Target.Kind, Id: op.Target.ID}, Risk: adminapi.OperationRisk(op.Risk),
+		Params: jsonx.Raw(op.Params), Summary: jsonx.Raw(ap.Summary), AgentReason: op.Reason,
+		OperationState: adminapi.OperationState(op.State), DecidedBy: optionalText(ap.DecidedBy),
+		DecisionReason: optionalText(ap.DecisionReason), RunId: optionalText(op.Run), ErrorCode: optionalText(op.Error),
+	}
 }

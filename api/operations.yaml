@@ -258,6 +258,152 @@ paths:
         '404': {$ref: '#/components/responses/OutOfScope'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/models/{model_id}/status:
+    put:
+      operationId: modelSetStatus
+      summary: Put a draft model on sale or retire a listed one
+      description: >-
+        `listed` puts a draft model on sale as the admin does, after the same review gate, and runs at once (200,
+        `succeeded`). `retired` takes a listed model out of use for good, so it waits for the owner's approval (202,
+        `pending_approval`) and runs when the owner approves; a model changed since `rev` then ends the operation
+        `rejected` with `stale_revision`. A `rev` that is not the model's current one is a 409 `stale_revision` at
+        once. With `dry_run` nothing is written: the answer says where the operation would start.
+      tags: [Catalog]
+      security: [{credential: []}]
+      x-axiom-permission: catalog.manage
+      x-axiom-scope: platform
+      x-mcp-name: model_set_status
+      parameters:
+        - {in: path, name: model_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ModelStatusChange'}}}
+      responses:
+        '200':
+          description: The operation run, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '202':
+          description: The operation, waiting for the owner's approval
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/operations:
+    get:
+      operationId: operationsList
+      summary: The credential's own operations
+      description: Every write this credential asked for, newest first, optionally in one state.
+      tags: [Agent]
+      security: [{credential: []}]
+      x-axiom-permission: operations.read
+      x-axiom-scope: self
+      x-mcp-name: operations_list
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - {in: query, name: state, required: false, schema: {$ref: '#/components/schemas/OperationState'}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of operations
+          content: {application/json: {schema: {$ref: '#/components/schemas/OperationList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/operations/{operation_id}:
+    get:
+      operationId: operationGet
+      summary: One of the credential's operations
+      description: The operation as it is now, with its approval; another credential's is not found.
+      tags: [Agent]
+      security: [{credential: []}]
+      x-axiom-permission: operations.read
+      x-axiom-scope: self
+      x-mcp-name: operation_get
+      parameters:
+        - {in: path, name: operation_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The operation
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/approvals/{approval_id}:
+    get:
+      operationId: approvalGet
+      summary: The operation waiting on an approval
+      description: The credential's operation that waits or waited on this approval, as it is now; another credential's is not found. Only the owner decides an approval, in the admin.
+      tags: [Agent]
+      security: [{credential: []}]
+      x-axiom-permission: operations.read
+      x-axiom-scope: self
+      x-mcp-name: approval_get
+      parameters:
+        - {in: path, name: approval_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The operation
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/approvals/{approval_id}/withdraw:
+    post:
+      operationId: approvalWithdraw
+      summary: Withdraw a pending proposal
+      description: >-
+        Takes back one of the credential's own proposals while it waits for the owner: its operation ends `canceled`.
+        One already decided, expired or withdrawn is a 409 `conflict`; another credential's is not found.
+      tags: [Agent]
+      security: [{credential: []}]
+      x-axiom-permission: operations.write
+      x-axiom-scope: self
+      x-mcp-name: approval_withdraw
+      parameters:
+        - {in: path, name: approval_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/WithdrawRequest'}}}
+      responses:
+        '200':
+          description: The operation, canceled
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
 components:
   securitySchemes:
     credential:
@@ -266,7 +412,20 @@ components:
       description: >-
         An operations credential's token, `op-ax-v1-` and 49 base62 characters, which the admin shows once when it is
         made or rotated. A missing, malformed, unknown, retired, revoked or expired token is answered alike.
+  headers:
+    IdempotencyReplayed:
+      required: false
+      description: "true when this response is the stored result of an earlier request with the same Idempotency-Key; nothing was done again."
+      schema: {type: boolean}
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost
+        response, returns the first result instead of doing it twice.
+      schema: {type: string, pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}
     Reason:
       in: query
       name: reason
@@ -300,6 +459,20 @@ components:
         maximum: 200
         default: 50
   responses:
+    Conflict:
+      description: >-
+        The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`,
+        `idempotency_key_reused`).
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unprocessable:
+      description: >-
+        The request is well formed but a rule refuses it (`invalid_invite`, `weak_password`, `not_ready`,
+        `unprocessable`); `message` says which.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
     CredentialRejected:
       description: No live operations credential, or a missing, malformed, unknown, retired, revoked or expired token (`unauthenticated`).
       content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
@@ -372,12 +545,108 @@ components:
           type: object
           additionalProperties: true
           x-go-type: jsonx.Raw
-          description: The request's path and query parameters other than the reason, or its size alone past 8 KiB.
+          description: >-
+            The request's path and query parameters and a write's body, all but the reason, or its size alone past 8
+            KiB.
         status: {type: integer, description: The HTTP status of the answer.}
         error_code: {type: string}
         request_id: {type: string}
         started_at: {type: string, format: date-time}
         ended_at: {type: string, format: date-time}
+        operation_id:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: The operation a write made or found under its key.
+    ModelStatusChange:
+      type: object
+      additionalProperties: false
+      required: [status, rev, reason]
+      properties:
+        status: {type: string, enum: [listed, retired]}
+        rev: {type: integer, format: int64, minimum: 0}
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: nothing is written and the model is not changed."}
+    AgentReason:
+      type: string
+      minLength: 1
+      maxLength: 1000
+      description: Why the agent asks for this, in its own words; recorded with the operation as untrusted text.
+    WithdrawRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: {$ref: '#/components/schemas/AgentReason'}
+    OperationList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Operation'}}
+        next_cursor: {type: string}
+    Operation:
+      type: object
+      additionalProperties: false
+      required: [tool, target, risk, state, dry_run]
+      description: >-
+        One write the agent asked for. It acts on one object and is never reused: a retry under its key finds it as it
+        is now. A preview (`dry_run`) has no ID, approval or times, and its `state` is where the operation would
+        start: `approved` when it would run at once, `pending_approval` when it would wait for the owner.
+      properties:
+        operation_id: {$ref: '#/components/schemas/Uuid'}
+        tool: {type: string, description: The MCP name of the write.}
+        target: {$ref: '#/components/schemas/OperationTarget'}
+        risk: {$ref: '#/components/schemas/OperationRisk'}
+        state: {$ref: '#/components/schemas/OperationState'}
+        dry_run: {type: boolean}
+        approval: {$ref: '#/components/schemas/OperationApproval'}
+        result:
+          type: object
+          additionalProperties: true
+          x-go-type: jsonx.Raw
+          description: What the change answered, once it succeeded.
+        error_code: {type: string, description: "Why it ended `rejected`: the code the target refused the change with."}
+        next_check_after_seconds: {type: integer, minimum: 1, description: "While it waits: when to read it again."}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    OperationApproval:
+      type: object
+      additionalProperties: false
+      required: [approval_id, state, tier, expires_at]
+      properties:
+        approval_id: {$ref: '#/components/schemas/Uuid'}
+        state: {$ref: '#/components/schemas/OperationsApprovalState'}
+        tier: {$ref: '#/components/schemas/OperationsApprovalTier'}
+        expires_at: {type: string, format: date-time}
+        decided_at: {type: string, format: date-time}
+    OperationState:
+      type: string
+      enum: [pending_approval, approved, executing, succeeded, failed, unknown, canceled, expired, rejected, reverted]
+      description: >-
+        Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not
+        started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a
+        compensating operation reverts it.
+    OperationRisk:
+      type: string
+      enum: [routine, delisting]
+      description: The operation's class, which decides whether it waits for the owner.
+    OperationTarget:
+      type: object
+      additionalProperties: false
+      required: [kind, id]
+      properties:
+        kind: {type: string, description: "What the operation acts on, such as `model`."}
+        id: {type: string}
+    OperationsApprovalState:
+      type: string
+      enum: [pending, approved, rejected, expired, canceled]
+      description: >-
+        `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or
+        the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its
+        credential).
+    OperationsApprovalTier:
+      type: string
+      enum: [human]
+      description: Who must decide; only the owner, in the admin, for now.
     AccountId:
       type: string
       pattern: ^acct_[0-9a-hjkmnp-tv-z]{26}$
