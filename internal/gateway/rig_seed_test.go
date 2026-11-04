@@ -134,7 +134,7 @@ func (r *rig) seedRouting(o rigOptions) {
 	}
 	preset := routing.Preset{Classes: routing.AllClasses, Policies: routing.AllPolicies, Strategy: routing.Cheapest}
 	if e, ok := r.endpoints[o.prefer]; ok {
-		preset.Order = []routing.SupplierID{e.Supplier}
+		preset.OrderNames = []string{e.Codename}
 	}
 	r.install(preset, endpoints...)
 }

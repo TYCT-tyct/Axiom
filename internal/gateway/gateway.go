@@ -47,6 +47,10 @@ var (
 	errCredentialsBusy = rateLimited("credentials_busy") // every credential of the route is at its concurrency limit
 	// ErrOverloaded is a node that has no capacity left and does not queue: 503.
 	ErrOverloaded = &Refusal{Status: 503, Code: "overloaded", RetryAfter: 1}
+	// errPresetUnavailable is a key whose routing preset this node cannot route by: routing it by another preset could
+	// exceed the preset's price limits or sources, so it is refused (docs/domains/routing.md「滚动发布、失败与性能」).
+	// The next snapshot is built within five seconds, which is when a preset just made or fixed can be routed by.
+	errPresetUnavailable = &Refusal{Status: 503, Code: "preset_unavailable", RetryAfter: 5}
 	// errRecordBacklog is a node whose call log cannot keep another record: serving the call would leave it unlogged,
 	// so it is refused before any work is done (docs/domains/observability.md「写入路径」).
 	errRecordBacklog = &Refusal{Status: 503, Code: "overloaded", RetryAfter: 1}

@@ -13,6 +13,7 @@ import (
 	"axiom/internal/billing"
 	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
+	"axiom/internal/routing"
 )
 
 // openBalance gives an account its balance row, with no room below zero, in the transaction that opens the account
@@ -20,6 +21,13 @@ import (
 // site's default, 0 until a site setting says otherwise (docs/domains/billing.md「余额底线」).
 func openBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID) error {
 	return billing.OpenBalance(ctx, tx, site, account, 0)
+}
+
+// keyPreset binds a new call key to the routing preset its layers' defaults name (docs/domains/routing.md「默认链与
+// key 落章」), in the transaction that makes the key.
+func keyPreset(ctx context.Context, tx pg.Tx, site, account, workspace uuid.UUID, currency platform.Currency) (uuid.UUID, error) {
+	id, err := routing.DefaultPreset(ctx, tx, routing.SiteID(site), routing.AccountID(account), routing.WorkspaceID(workspace), currency)
+	return uuid.UUID(id), err
 }
 
 const (

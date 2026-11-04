@@ -485,7 +485,10 @@ func servesWebSearch(m catalog.Model) bool {
 // routingAdmission is what routing reads of the admission. A key with no preset is routed by the preset with the zero
 // ID, which the routing snapshot must hold.
 func routingAdmission(a accounts.Admission, c *Call) routing.Admission {
-	ra := routing.Admission{Tier: a.Tier(), Account: routing.AccountID(c.caller.AccountID()), Site: routing.SiteID(c.site.ID)}
+	ra := routing.Admission{
+		Tier: a.Tier(), Account: routing.AccountID(c.caller.AccountID()), Site: routing.SiteID(c.site.ID),
+		Workspace: routing.WorkspaceID(c.caller.WorkspaceID()), Currency: c.site.Currency,
+	}
 	if p, ok := a.Preset(); ok {
 		ra.Preset = routing.PresetID(p)
 	}

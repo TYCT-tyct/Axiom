@@ -101,8 +101,8 @@ func (n *need) order(c *candidate) int {
 		}
 		return len(names)
 	}
-	order := n.preset.Order
-	if i := slices.Index(order, c.Supplier); i >= 0 {
+	order := n.preset.OrderNames
+	if i := slices.Index(order, c.Codename); i >= 0 {
 		return i
 	}
 	return len(order)
@@ -112,7 +112,10 @@ func (n *need) strategy() Strategy {
 	if n.over.Sort != nil {
 		return *n.over.Sort
 	}
-	return n.preset.Strategy
+	if n.rankAll() {
+		return n.preset.Strategy // one ranking across the models has one sort: the preset's default
+	}
+	return n.rule.Strategy
 }
 
 // explore marks, in exploreShare of the requests, the unmeasured candidate with the highest key to go first: the one
