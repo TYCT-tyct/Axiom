@@ -1,6 +1,7 @@
-"""Tests for the quality ratchet: a fixture tree that grows a count fails, and one that falls without lowering the
-baseline fails too. The fixture trees are measured by tools/qualityratchet, so the tests exercise the real gocognit
-numbers, the generated/test exclusions and the baseline comparison together."""
+"""Tests for the quality ratchet: a fixture tree that grows a count fails, one that falls without lowering the baseline
+fails too, and a package whose coverage falls, rises or starts below the floor must move the baseline. The fixture trees
+are measured by tools/qualityratchet, so the tests exercise the real gocognit numbers, the coverage profile parser, the
+generated/test exclusions and the baseline comparison together."""
 
 import json
 import os
@@ -14,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "ci" / "quality_ratchet.py"
 
 ZERO = {
-    "version": 1,
+    "version": 2,
     "description": "fixture",
     "ceilings": {"gocognit": 30, "file_lines": 800},
     "nolint": {},
@@ -22,6 +23,7 @@ ZERO = {
     "gocognit_ceiling": [],
     "files_over_500_lines": 0,
     "file_ceiling": [],
+    "coverage": {"tolerance_basis_points": 50, "floor_basis_points": 6000, "packages": {}},
 }
 
 
@@ -72,6 +74,18 @@ class Fixture:
         data.update(overrides)
         self.write(".github/quality-baseline.json", json.dumps(data))
 
+    def coverage(self, package="pkg", covered=1, total=2, extra_blocks=()):
+        """A hand-written package and a cover profile with one statement per block, plus any generated blocks."""
+        name = package.rsplit("/", 1)[-1]
+        self.write("go.mod", "module fixture\n\ngo 1.27.3\n")
+        self.write(f"{package}/source.go", f"package {name}\n\nfunc Hand() {{}}\n")
+        blocks = [f"fixture/{package}/source.go:{index + 1}.1,{index + 1}.2 1 {1 if index < covered else 0}"
+                  for index in range(total)]
+        self.write("coverage.out", "\n".join(["mode: set", *blocks, *extra_blocks]) + "\n")
+
+    def profile(self):
+        return str(self.root / "coverage.out")
+
     def baseline_data(self):
         return json.loads((self.root / ".github" / "quality-baseline.json").read_text(encoding="utf-8"))
 
@@ -91,6 +105,157 @@ class Fixture:
         environment.pop("BASE", None)
         return subprocess.run([sys.executable, str(SCRIPT), "--root", str(self.root), *args],
                               capture_output=True, text=True, encoding="utf-8", env=environment)
+
+
+class CoverageTest(unittest.TestCase):
+    def test_a_fall_beyond_the_tolerance_fails_and_one_at_it_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=2, total=5)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 5000}})
+
+            run = fixture.run("--coverage", fixture.profile())
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("coverage of fixture/pkg fell from 50.00% to 40.00% (tolerance 0.50%)", run.stderr)
+
+            fixture.coverage(covered=99, total=200)
+            run = fixture.run("--coverage", fixture.profile())
+
+            self.assertEqual(run.returncode, 0, run.stderr)
+
+    def test_a_rise_beyond_the_tolerance_must_raise_the_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=3, total=5)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 4000}})
+
+            run = fixture.run("--coverage", fixture.profile())
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("coverage of fixture/pkg rose from 40.00% to 60.00%; raise its baseline", run.stderr)
+
+            lowered = fixture.run("--coverage", fixture.profile(), "--write-baseline")
+
+            self.assertEqual(lowered.returncode, 0, lowered.stderr)
+            self.assertEqual(fixture.baseline_data()["coverage"]["packages"], {"fixture/pkg": 6000})
+            self.assertEqual(fixture.run("--coverage", fixture.profile()).returncode, 0)
+
+            fixture.coverage(covered=101, total=200)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 5000}})
+
+            self.assertEqual(fixture.run("--coverage", fixture.profile()).returncode, 0)
+
+    def test_a_new_package_must_start_at_the_floor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=2, total=5)
+            fixture.baseline()
+
+            run = fixture.run("--coverage", fixture.profile())
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("new package fixture/pkg is at 40.00%, below the 60.00% floor", run.stderr)
+
+            refused = fixture.run("--coverage", fixture.profile(), "--write-baseline")
+
+            self.assertEqual(refused.returncode, 1, refused.stderr)
+            self.assertEqual(fixture.baseline_data()["coverage"]["packages"], {})
+
+            fixture.coverage(covered=3, total=5)
+            written = fixture.run("--coverage", fixture.profile(), "--write-baseline")
+
+            self.assertEqual(written.returncode, 0, written.stderr)
+            self.assertEqual(fixture.baseline_data()["coverage"]["packages"], {"fixture/pkg": 6000})
+
+    def test_a_package_with_code_and_no_tests_is_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(package="other", covered=1, total=1)
+            fixture.write("pkg/source.go", "package pkg\n\nfunc Hand() {}\n")
+            fixture.baseline()
+
+            run = fixture.run("--coverage", fixture.profile())
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("new package fixture/pkg is at 0.00%, below the 60.00% floor", run.stderr)
+
+    def test_generated_code_is_dropped_from_both_sides(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.write("pkg/generated.gen.go", "package pkg\n\nfunc Generated() {}\n")
+            fixture.write("pkg/header.go",
+                          "// Code generated by fixture. DO NOT EDIT.\n\npackage pkg\n\nfunc Header() {}\n")
+            extra = [f"fixture/pkg/generated.gen.go:{index}.1,{index}.2 1 0" for index in range(1, 11)]
+            extra += [f"fixture/pkg/header.go:{index}.1,{index}.2 1 1" for index in range(1, 6)]
+            fixture.coverage(covered=1, total=2, extra_blocks=extra)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 5000}})
+
+            run = fixture.run("--coverage", fixture.profile())
+
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn("coverage measured for 1 packages", run.stdout)
+
+
+class CoverageBaseTest(unittest.TestCase):
+    def test_a_coverage_fall_against_the_base_fails_even_if_the_branch_lowers_the_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=4, total=5)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 8000}})
+            base = fixture.commit()
+
+            fixture.coverage(covered=2, total=5)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 4000}})
+
+            run = fixture.run("--coverage", fixture.profile(), "--base", base)
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("base baseline: coverage of fixture/pkg fell from 80.00% to 40.00%", run.stderr)
+
+            refused = fixture.run("--coverage", fixture.profile(), "--base", base, "--write-baseline")
+
+            self.assertEqual(refused.returncode, 1, refused.stderr)
+            self.assertEqual(fixture.baseline_data()["coverage"]["packages"], {"fixture/pkg": 4000})
+
+    def test_a_new_package_below_the_floor_against_the_base_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.write("go.mod", "module fixture\n\ngo 1.27.3\n")
+            fixture.write("pkg/source.go", "package pkg\n\nfunc Hand() {}\n")
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000, "packages": {}})
+            base = fixture.commit()
+
+            fixture.coverage(covered=2, total=5)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 4000}})
+
+            run = fixture.run("--coverage", fixture.profile(), "--base", base)
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("base baseline: new package fixture/pkg is at 40.00%, below the 60.00% floor", run.stderr)
+
+    def test_a_version_one_base_has_no_coverage_to_compare(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            version_one = {key: value for key, value in ZERO.items() if key != "coverage"}
+            version_one["version"] = 1
+            fixture.write(".github/quality-baseline.json", json.dumps(version_one))
+            base = fixture.commit()
+
+            fixture.coverage(covered=1, total=2)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 5000}})
+
+            run = fixture.run("--coverage", fixture.profile(), "--base", base)
+
+            self.assertEqual(run.returncode, 0, run.stderr)
 
 
 class GrowsTest(unittest.TestCase):
@@ -203,6 +368,25 @@ class WriteBaselineTest(unittest.TestCase):
             self.assertEqual(raised.returncode, 1)
             self.assertIn("nolint:gosec grew from 0 to 1", raised.stderr)
             self.assertEqual(fixture.baseline_data()["nolint"], {})
+
+    def test_write_without_coverage_keeps_the_recorded_packages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=1, total=2)
+            fixture.baseline(
+                nolint={"gosec": 1},
+                coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                          "packages": {"fixture/pkg": 5000}},
+            )
+
+            lowered = fixture.run("--write-baseline")
+
+            self.assertEqual(lowered.returncode, 0, lowered.stderr)
+            data = fixture.baseline_data()
+            self.assertEqual(data["nolint"], {})
+            self.assertEqual(data["coverage"]["packages"], {"fixture/pkg": 5000})
+            self.assertEqual(data["coverage"]["tolerance_basis_points"], 50)
+            self.assertEqual(data["coverage"]["floor_basis_points"], 6000)
 
 
 

@@ -277,3 +277,13 @@ func TestExpectedFromProratesCommercialCountsAndMoney(t *testing.T) {
 		t.Errorf("monthly revenue = %+v, want half the month", got.MonthlyRevenue)
 	}
 }
+
+// TestMetricsListsEveryTarget: the editor and the audit use one order, the first-release four then the commercial four,
+// so a page can tell a node that stores all eight from one that predates them.
+func TestMetricsListsEveryTarget(t *testing.T) {
+	t.Parallel()
+	want := []Metric{Calls, Errors, Revenue, Cost, PaidUsers, MonthlyRevenue, GrossMargin, Retention}
+	if diff := cmp.Diff(want, Metrics()); diff != "" {
+		t.Errorf("Metrics differs (-want +got):\n%s", diff)
+	}
+}

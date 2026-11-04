@@ -16,7 +16,7 @@ var platformScope = pg.NewScope(true, nil, nil)
 // TestOperationLog: a credential reads its own calls newest first, a page at a time, and never another credential's.
 func TestOperationLog(t *testing.T) {
 	t.Parallel()
-	db := openLog(t)
+	db := openOperations(t)
 	mine, theirs := uuid.NewV7(), uuid.NewV7()
 	at := time.Now().UTC().Truncate(time.Microsecond)
 	recordCall(t, db, mine, "suppliers_list", map[string]any{"query": map[string]any{"status": "active"}}, at)
@@ -41,7 +41,7 @@ func TestOperationLog(t *testing.T) {
 // first); a site scope sees none of the log, which is platform data.
 func TestOperationLogBounds(t *testing.T) {
 	t.Parallel()
-	db := openLog(t)
+	db := openOperations(t)
 	frame := len(`{"query":{"x":""}}`)
 	for _, c := range []struct {
 		size      int
@@ -59,7 +59,7 @@ func TestOperationLogBounds(t *testing.T) {
 	}
 }
 
-func openLog(t *testing.T) *pg.DB {
+func openOperations(t *testing.T) *pg.DB {
 	t.Helper()
 	db, err := pg.Open(t.Context(), pgtest.New(t, operations.Module()).App)
 	if err != nil {
