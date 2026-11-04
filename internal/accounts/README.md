@@ -124,7 +124,7 @@ func (s *Service) AuthorizeAgent(a Agent, perm Permission, platform bool) (pg.Sc
 - **权限**：至少有 `operations.read`，`CreateAgent` 自动加上；`agentRefused`（`operations.manage`、`platform_grants.manage`）和代码没声明的名字被拒，表的 CHECK 还拒 `operations.approve`，所以凭证不能管理自己、不能审批、不能给别人平台角色。拒绝是 `*AgentSpecError`，带请求里出错位置的 JSON 指针。
 - **认证**：`AuthenticateAgent` 先查形状，再在平台范围的事务里按哈希读活的凭证（令牌当前或在重叠期内、凭证未吊销未过期，按 `Config.Now` 判断），每个请求都读库、不缓存，所以吊销、停止和过期从下一个请求生效；最后使用时间超过一分钟才写一次。认出后按凭证在本节点的令牌桶扣一次（突发 60、每 100 毫秒补一个，即每分钟 600），超了是 `*TooManyAttempts`。
 - **授权**：`AuthorizeAgent` 不读库：没有这项权限是 `ErrForbidden`；平台资源要凭证的平台范围，没有是 `ErrNotFound`（和不存在一样）；其余给凭证站点的范围。
-- **生命周期**：有效期默认并上限 `AgentLifetime`（90 天）；`RotateAgent` 先锁凭证行，把上一次轮换留下的旧令牌立即作废、当前令牌的 `retires_at` 设为现在加重叠（最多 `AgentOverlap`，24 小时），再插新令牌；吊销是终态，`StopAgents` 吊销全部活的凭证，每张一条 `operations_credential.revoke` 审计，再记一条 `operations_agent.stop`。创建、轮换、吊销都在调用方的事务里记审计。
+- **生命周期**：到期时间由负责人为每张凭证给出（必填、在未来即可，代码不带默认值和上限）；到期的凭证和吊销的一样，认证、`RevokeAgent`（`ErrAgentNotFound`）、`StopAgents` 的计数和列表的旧令牌期限都把它当作已不存在；`RotateAgent` 先锁凭证行，把上一次轮换留下的旧令牌立即作废、当前令牌的 `retires_at` 设为现在加重叠（最多 `AgentOverlap`，24 小时），再插新令牌；吊销是终态，`StopAgents` 吊销全部活的凭证，每张一条 `operations_credential.revoke` 审计，再记一条 `operations_agent.stop`。创建、轮换、吊销都在调用方的事务里记审计。
 
 ## 登录前的查找
 

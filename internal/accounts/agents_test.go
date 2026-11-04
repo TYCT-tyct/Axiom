@@ -47,8 +47,15 @@ func makeAgent(t *testing.T, db *pg.DB, s *accounts.Service, spec accounts.Agent
 	return made
 }
 
+// agentLife is how long the test's credentials live: the owner chooses it for each one.
+const agentLife = 30 * 24 * time.Hour
+
+// agentSpec is a credential of perms that expires agentLife after the wall clock, where the tests' clocks start.
 func agentSpec(perms ...string) accounts.AgentSpec {
-	return accounts.AgentSpec{Name: "hermes", Permissions: perms, Vendors: []string{"deepseek"}, CreatedBy: accounts.UserID(u1), Reason: "r"}
+	return accounts.AgentSpec{
+		Name: "hermes", Permissions: perms, Vendors: []string{"deepseek"}, CreatedBy: accounts.UserID(u1),
+		ExpiresAt: time.Now().Add(agentLife), Reason: "r",
+	}
 }
 
 // TestAgentCredentialLifecycle: a new credential's token authenticates, always holds operations.read and records its
@@ -74,7 +81,7 @@ func TestAgentCredentialLifecycle(t *testing.T) {
 	if got := texts(t, db, platform, "SELECT (last_used_at IS NOT NULL)::text FROM accounts.agent_credentials")[0]; got != "true" {
 		t.Errorf("last use recorded: %s", got)
 	}
-	clock.advance(accounts.AgentLifetime)
+	clock.advance(agentLife + time.Second) // agentSpec reads the wall clock after the test's clock started
 	expectAgent(t, s, made.Token.Reveal(), accounts.ErrUnknownAgent)
 }
 
@@ -148,6 +155,41 @@ func TestAgentCredentialRevocation(t *testing.T) {
 	expectAgent(t, s, makeAgent(t, db, s, agentSpec()).Token.Reveal(), nil)
 }
 
+// TestExpiredAgentIsGone: an expired credential that nobody revoked is not found by a revocation, not counted by the
+// stop, and its rotation's overlap is not listed, as it can no longer authenticate.
+func TestExpiredAgentIsGone(t *testing.T) {
+	t.Parallel()
+	db, _, s, clock := agentSetup(t)
+	spec := agentSpec()
+	spec.ExpiresAt = clock.Now().Add(time.Hour) // before the rotation's overlap ends
+	expiring := makeAgent(t, db, s, spec)
+	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := s.RotateAgent(t.Context(), tx, system, expiring.ID, accounts.AgentOverlap, "r")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(time.Hour)
+	err := db.Tx(t.Context(), platform, func(tx pg.Tx) error { return s.RevokeAgent(t.Context(), tx, system, expiring.ID, "r") })
+	if !errors.Is(err, accounts.ErrAgentNotFound) {
+		t.Errorf("revoking an expired credential: %v", err)
+	}
+	var stopped int
+	var list []accounts.AgentCredential
+	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) (err error) {
+		if stopped, err = s.StopAgents(t.Context(), tx, system, "stop"); err != nil {
+			return err
+		}
+		list, _, err = s.AgentCredentials(t.Context(), tx, accounts.AgentID{}, 10)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stopped != 0 || len(list) != 1 || list[0].PreviousUntil != nil || list[0].RevokedAt != nil {
+		t.Errorf("the stop counted %d; the list is %+v", stopped, list)
+	}
+}
+
 func expectAgent(t *testing.T, s *accounts.Service, token string, want error) {
 	t.Helper()
 	if _, err := s.AuthenticateAgent(t.Context(), token); !errors.Is(err, want) {
@@ -179,7 +221,7 @@ func TestAgentTokenShape(t *testing.T) {
 func TestCreateAgentRefuses(t *testing.T) {
 	t.Parallel()
 	db, database, s, clock := agentSetup(t)
-	past, far := clock.Now().Add(-time.Minute), clock.Now().Add(accounts.AgentLifetime+time.Minute)
+	past := clock.Now().Add(-time.Minute)
 	cases := []struct {
 		name  string
 		edit  func(*accounts.AgentSpec)
@@ -191,8 +233,8 @@ func TestCreateAgentRefuses(t *testing.T) {
 		{"an unknown site", func(a *accounts.AgentSpec) { a.Sites = []accounts.SiteID{accounts.SiteID(a1)} }, "/sites/0"},
 		{"no vendor", func(a *accounts.AgentSpec) { a.Vendors = nil }, "/proposer_vendors"},
 		{"a vendor in capitals", func(a *accounts.AgentSpec) { a.Vendors = []string{"OpenAI"} }, "/proposer_vendors/0"},
-		{"an expiry in the past", func(a *accounts.AgentSpec) { a.ExpiresAt = &past }, "/expires_at"},
-		{"an expiry past the lifetime", func(a *accounts.AgentSpec) { a.ExpiresAt = &far }, "/expires_at"},
+		{"an expiry in the past", func(a *accounts.AgentSpec) { a.ExpiresAt = past }, "/expires_at"},
+		{"no expiry", func(a *accounts.AgentSpec) { a.ExpiresAt = time.Time{} }, "/expires_at"},
 	}
 	for _, c := range cases {
 		spec := agentSpec()

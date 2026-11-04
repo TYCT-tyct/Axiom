@@ -2331,7 +2331,7 @@ export interface paths {
         put?: never;
         /**
          * Make an operations credential
-         * @description Makes a credential for the operations agent and returns its token once. It always holds `operations.read`; it may hold any other declared permission except `operations.manage` and `platform_grants.manage`, which are the control plane's. Without `sites` it acts on every site; `platform` lets it read the platform's own resources. It expires at `expires_at`, at most 90 days ahead and 90 days when absent. A replay of the same key returns the credential without the token: a lost token is replaced by a rotation.
+         * @description Makes a credential for the operations agent and returns its token once. It always holds `operations.read`; it may hold any other declared permission except `operations.manage` and `platform_grants.manage`, which are the control plane's. Without `sites` it acts on every site; `platform` lets it read the platform's own resources. It expires at `expires_at`, which the owner chooses for each credential and must be in the future. A replay of the same key returns the credential without the token: a lost token is replaced by a rotation.
          */
         post: operations["createOperationsCredential"];
         delete?: never;
@@ -3438,7 +3438,7 @@ export interface components {
             /** @description The vendors of the models that propose through it, which an approving model must differ from. */
             proposer_vendors: string[];
             /** Format: date-time */
-            expires_at?: string;
+            expires_at: string;
             reason: components["schemas"]["Reason"];
         };
         OperationsCredentialRotate: {

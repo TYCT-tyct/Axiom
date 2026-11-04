@@ -12,7 +12,9 @@ CREATE TABLE operations.operation_log (
     run_id text CHECK (run_id ~ '^[A-Za-z0-9._:-]{1,64}$'),
     tool text NOT NULL CHECK (tool ~ '^[a-z][a-z0-9_]{0,63}$'),
     reason text NOT NULL CHECK (char_length(reason) <= 1000),
-    input jsonb NOT NULL CHECK (octet_length(input::text) <= 8192),
+    -- json, not jsonb: json keeps the text as written, so the database measures the same bytes RecordCall measured;
+    -- jsonb's text adds spaces and would refuse an input the code let through.
+    input json NOT NULL CHECK (octet_length(input::text) <= 8192),
     status smallint NOT NULL CHECK (status BETWEEN 100 AND 599),
     error_code text CHECK (error_code ~ '^[a-z][a-z0-9_]{0,63}$'),
     request_id text NOT NULL,

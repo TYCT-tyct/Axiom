@@ -4863,7 +4863,7 @@ paths:
         Makes a credential for the operations agent and returns its token once. It always holds `operations.read`; it
         may hold any other declared permission except `operations.manage` and `platform_grants.manage`, which are the
         control plane's. Without `sites` it acts on every site; `platform` lets it read the platform's own resources.
-        It expires at `expires_at`, at most 90 days ahead and 90 days when absent. A replay of the same key returns
+        It expires at `expires_at`, which the owner chooses for each credential and must be in the future. A replay of the same key returns
         the credential without the token: a lost token is replaced by a rotation.
       security:
         - session: []
@@ -6642,7 +6642,7 @@ components:
     OperationsCredentialCreate:
       type: object
       additionalProperties: false
-      required: [name, permissions, platform, proposer_vendors, reason]
+      required: [name, permissions, platform, proposer_vendors, expires_at, reason]
       properties:
         name: {type: string, minLength: 1, maxLength: 100}
         permissions:

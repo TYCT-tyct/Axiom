@@ -3134,8 +3134,8 @@ type OperationsCredential struct {
 
 // OperationsCredentialCreate defines model for OperationsCredentialCreate.
 type OperationsCredentialCreate struct {
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	Name      string     `json:"name"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Name      string    `json:"name"`
 
 	// Permissions Besides operations.read, which every credential holds.
 	Permissions []string `json:"permissions"`

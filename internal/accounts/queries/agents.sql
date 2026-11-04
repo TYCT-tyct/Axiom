@@ -33,10 +33,12 @@ UPDATE accounts.agent_credential_tokens SET retires_at = @now WHERE credential_i
 UPDATE accounts.agent_credential_tokens SET retires_at = @retires_at WHERE credential_id = @credential_id AND retires_at IS NULL;
 
 -- name: RevokeAgentCredential :many
-UPDATE accounts.agent_credentials SET revoked_at = @now WHERE id = @id AND revoked_at IS NULL RETURNING id;
+-- An expired credential is already gone: it is not found, as an unknown one.
+UPDATE accounts.agent_credentials SET revoked_at = @now WHERE id = @id AND revoked_at IS NULL AND expires_at > @now RETURNING id;
 
 -- name: RevokeAllAgentCredentials :many
-UPDATE accounts.agent_credentials SET revoked_at = @now WHERE revoked_at IS NULL RETURNING id;
+-- The live credentials: an expired one cannot authenticate, so the stop does not count it.
+UPDATE accounts.agent_credentials SET revoked_at = @now WHERE revoked_at IS NULL AND expires_at > @now RETURNING id;
 
 -- name: ListAgentCredentials :many
 -- Newest first, a page after the cursor's ID (IDs are UUIDv7). The tokens are their last four characters only.

@@ -36,19 +36,26 @@ func TestOperationLog(t *testing.T) {
 	}
 }
 
-// TestOperationLogBounds: an input past 8 KiB is kept as its size, and a site scope sees none of the log, which is
-// platform data.
+// TestOperationLogBounds: an input of exactly 8 KiB as canonical JSON is kept as it is, one byte more is kept as its
+// size, and the database measures the same bytes (a jsonb column would add a space after each colon and refuse the
+// first); a site scope sees none of the log, which is platform data.
 func TestOperationLogBounds(t *testing.T) {
 	t.Parallel()
 	db := openLog(t)
-	mine := uuid.NewV7()
-	recordCall(t, db, mine, "models_list", map[string]any{"query": map[string]any{"slug_prefix": strings.Repeat("x", 9000)}}, time.Now())
-	page, _ := readCalls(t, db, platformScope, mine, uuid.UUID{}, 10)
-	if len(page) != 1 || page[0].Input["truncated"] != true || page[0].Input["bytes"] == nil {
-		t.Errorf("an input past 8 KiB is kept as %+v", page)
-	}
-	if page, _ := readCalls(t, db, pg.NewScope(false, []uuid.UUID{uuid.NewV7()}, nil), mine, uuid.UUID{}, 10); len(page) != 0 {
-		t.Errorf("a site scope read %d entries of the log", len(page))
+	frame := len(`{"query":{"x":""}}`)
+	for _, c := range []struct {
+		size      int
+		truncated bool
+	}{{8192, false}, {8193, true}} {
+		mine := uuid.NewV7()
+		recordCall(t, db, mine, "whoami", map[string]any{"query": map[string]any{"x": strings.Repeat("x", c.size-frame)}}, time.Now())
+		page, _ := readCalls(t, db, platformScope, mine, uuid.UUID{}, 10)
+		if len(page) != 1 || (page[0].Input["truncated"] == true) != c.truncated {
+			t.Errorf("an input of %d bytes is kept as %.80v", c.size, page)
+		}
+		if others, _ := readCalls(t, db, pg.NewScope(false, []uuid.UUID{uuid.NewV7()}, nil), mine, uuid.UUID{}, 10); len(others) != 0 {
+			t.Errorf("a site scope read %d entries of the log", len(others))
+		}
 	}
 }
 

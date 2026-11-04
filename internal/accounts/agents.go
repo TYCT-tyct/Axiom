@@ -21,8 +21,6 @@ import (
 const agentTokenPrefix = "op-ax-v1-"
 
 const (
-	// AgentLifetime is the longest a credential lives, and its lifetime when the owner names none.
-	AgentLifetime = 90 * 24 * time.Hour
 	// AgentOverlap is the longest the token a rotation replaces still works, for the MCP bridge to swap its file.
 	AgentOverlap = 24 * time.Hour
 	// agentTouchEvery is how stale the last use may be before a request writes it again: a write per request would be
@@ -70,7 +68,7 @@ type AgentSpec struct {
 	Sites       []SiteID // nil or empty: every site
 	Platform    bool
 	Vendors     []string
-	ExpiresAt   *time.Time // nil: AgentLifetime from now
+	ExpiresAt   time.Time // the owner's choice for each credential; the code holds no default and no maximum
 	CreatedBy   UserID
 	Reason      string // the owner's, for the audit log
 }
@@ -102,7 +100,7 @@ type AgentToken struct {
 
 // CreateAgent makes a credential and its first token in tx, which must be in the platform scope, and audits it as
 // actor. A permission the code does not declare, one of agentRefused, a site that does not exist, a vendor that is
-// malformed, none at all, or an expiry in the past or past AgentLifetime is an *AgentSpecError.
+// malformed, none at all, or an expiry that is not in the future is an *AgentSpecError.
 func (s *Service) CreateAgent(ctx context.Context, tx pg.Tx, actor audit.Actor, spec AgentSpec) (AgentToken, error) {
 	now := s.now()
 	perms, sites, expires, err := s.checkAgentSpec(spec, now)
@@ -151,14 +149,10 @@ func (s *Service) checkAgentSpec(spec AgentSpec, now time.Time) (perms []string,
 	if err = checkVendors(spec.Vendors); err != nil {
 		return nil, nil, time.Time{}, err
 	}
-	expires = now.Add(AgentLifetime)
-	if spec.ExpiresAt != nil {
-		if !spec.ExpiresAt.After(now) || spec.ExpiresAt.After(expires) {
-			return nil, nil, time.Time{}, &AgentSpecError{"/expires_at", fmt.Sprintf("must be in the next %d days", int(AgentLifetime/(24*time.Hour)))}
-		}
-		expires = *spec.ExpiresAt
+	if !spec.ExpiresAt.After(now) {
+		return nil, nil, time.Time{}, &AgentSpecError{"/expires_at", "must be in the future"}
 	}
-	return perms, sites, expires, nil
+	return perms, sites, spec.ExpiresAt, nil
 }
 
 // agentPermissions is names with operations.read, sorted and once each, or what is wrong with one of them.
@@ -315,7 +309,7 @@ func (s *Service) AgentCredentials(ctx context.Context, tx pg.Tx, after AgentID,
 			Vendors: r.ProposerVendors, CreatedBy: UserID(r.CreatedBy), CreatedAt: r.CreatedAt, ExpiresAt: r.ExpiresAt,
 			RevokedAt: r.RevokedAt, LastUsedAt: r.LastUsedAt, Last4: r.Last4,
 		}
-		if r.PreviousRetiresAt != nil && r.PreviousRetiresAt.After(now) && r.RevokedAt == nil {
+		if r.PreviousRetiresAt != nil && r.PreviousRetiresAt.After(now) && r.RevokedAt == nil && r.ExpiresAt.After(now) {
 			c.PreviousUntil = r.PreviousRetiresAt
 		}
 		list[i] = c

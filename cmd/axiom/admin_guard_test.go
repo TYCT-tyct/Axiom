@@ -38,7 +38,7 @@ var adminOperations = []adminOperation{
 	{"listPaidBatches", http.MethodGet, "/payments/paid-batches", "", "sites.manage", false},
 	{"getOperationsTargets", http.MethodGet, "/reports/targets/2026-11", "", "sites.manage", false},
 	{"listOperationsCredentials", http.MethodGet, "/operations/credentials", "", "operations.manage", false},
-	{"createOperationsCredential", http.MethodPost, "/operations/credentials", `{"name":"n","permissions":[],"platform":false,"proposer_vendors":["deepseek"],"reason":"r"}`, "operations.manage", true},
+	{"createOperationsCredential", http.MethodPost, "/operations/credentials", `{"name":"n","permissions":[],"platform":false,"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`, "operations.manage", true},
 	{"rotateOperationsCredential", http.MethodPost, "/operations/credentials/opcred_00000000000000000000000000/rotate", `{"reason":"r"}`, "operations.manage", true},
 	{"revokeOperationsCredential", http.MethodPost, "/operations/credentials/opcred_00000000000000000000000000/revoke", `{"reason":"r"}`, "operations.manage", true},
 	{"stopOperationsAgent", http.MethodPost, "/operations/agent/stop", `{"reason":"r"}`, "operations.manage", true},

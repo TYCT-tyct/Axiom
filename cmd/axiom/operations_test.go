@@ -62,7 +62,7 @@ func TestOperationsAPIReads(t *testing.T) {
 	f := newAdminFixture(t)
 	owner := f.owner()
 	id, token := f.makeCredential(owner, `{"name":"hermes","permissions":["suppliers.view","catalog.view","calls.search"],
-		"platform":true,"proposer_vendors":["deepseek"],"reason":"start the agent"}`)
+		"platform":true,"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"start the agent"}`)
 	f.expectAudit("operations_credential.create", map[string]string{"reason": "start the agent", "target_id": id})
 
 	expectWhoami(t, f.agent(token, because("/me", "who am I"), header("X-Axiom-Run-ID", "run-1")), id, token)
@@ -75,7 +75,7 @@ func TestOperationsAPIReads(t *testing.T) {
 
 	expectReadLog(t, f.agent(token, because("/log?limit=20", "replay")))
 
-	_, other := f.makeCredential(owner, `{"name":"codex","permissions":[],"platform":false,"proposer_vendors":["openai"],"reason":"r"}`)
+	_, other := f.makeCredential(owner, `{"name":"codex","permissions":[],"platform":false,"proposer_vendors":["openai"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`)
 	var log operationsapi.OperationLogList
 	decode(t, f.agent(other, because("/log", "mine only")), &log)
 	if len(log.Data) != 0 {
@@ -157,10 +157,10 @@ func TestOperationsAPIRefuses(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)
 	owner := f.owner()
-	revoked, revokedToken := f.makeCredential(owner, `{"name":"old","permissions":[],"platform":true,"proposer_vendors":["deepseek"],"reason":"r"}`)
+	revoked, revokedToken := f.makeCredential(owner, `{"name":"old","permissions":[],"platform":true,"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`)
 	expectAdmin(t, "revokeOperationsCredential", f.change(owner, http.MethodPost, "/operations/credentials/"+revoked+"/revoke", `{"reason":"leaked"}`, newKey()), http.StatusOK, "")
 	_, sites := f.makeCredential(owner, `{"name":"sites","permissions":["suppliers.view","calls.search"],"platform":false,
-		"sites":["`+f.siteID()+`"],"proposer_vendors":["deepseek"],"reason":"r"}`)
+		"sites":["`+f.siteID()+`"],"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`)
 
 	for name, token := range map[string]string{ // #nosec G101 -- tokens this test made or malformed on purpose
 		"no token": "", "a malformed token": "op-ax-v1-nope", "an API key": "sk-ax-v1-" + revokedToken[len("op-ax-v1-"):],
@@ -195,11 +195,11 @@ func TestOperationsCredentialControlPlane(t *testing.T) {
 	owner := f.owner()
 	for _, perm := range []string{"operations.manage", "platform_grants.manage", "no.such"} {
 		rec := f.change(owner, http.MethodPost, "/operations/credentials",
-			`{"name":"n","permissions":["`+perm+`"],"platform":false,"proposer_vendors":["deepseek"],"reason":"r"}`, newKey())
+			`{"name":"n","permissions":["`+perm+`"],"platform":false,"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`, newKey())
 		expectAdmin(t, "a credential holding "+perm, rec, http.StatusBadRequest, codeInvalidRequest)
 	}
 
-	body := `{"name":"hermes","permissions":["suppliers.view"],"platform":true,"proposer_vendors":["deepseek"],"reason":"r"}`
+	body := `{"name":"hermes","permissions":["suppliers.view"],"platform":true,"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`
 	key := newKey()
 	rec := f.change(owner, http.MethodPost, "/operations/credentials", body, key)
 	expectAdmin(t, "createOperationsCredential", rec, http.StatusCreated, "")
@@ -215,7 +215,7 @@ func TestOperationsCredentialControlPlane(t *testing.T) {
 		t.Errorf("%s stored responses hold a token", got)
 	}
 
-	_, another := f.makeCredential(owner, `{"name":"codex","permissions":[],"platform":false,"proposer_vendors":["openai"],"reason":"r"}`)
+	_, another := f.makeCredential(owner, `{"name":"codex","permissions":[],"platform":false,"proposer_vendors":["openai"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`)
 	rec = f.change(owner, http.MethodPost, "/operations/agent/stop", `{"reason":"it misbehaved"}`, newKey())
 	expectAdmin(t, "stopOperationsAgent", rec, http.StatusOK, "")
 	var stopped adminapi.OperationsAgentStopped
@@ -239,7 +239,7 @@ func TestOperationsCredentialRotation(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)
 	owner := f.owner()
-	id, first := f.makeCredential(owner, `{"name":"hermes","permissions":[],"platform":false,"proposer_vendors":["deepseek"],"reason":"r"}`)
+	id, first := f.makeCredential(owner, `{"name":"hermes","permissions":[],"platform":false,"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`)
 	rotate := func(body string) string {
 		t.Helper()
 		rec := f.change(owner, http.MethodPost, "/operations/credentials/"+id+"/rotate", body, newKey())

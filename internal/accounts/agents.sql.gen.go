@@ -255,7 +255,7 @@ func (q *Queries) RetireAgentToken(ctx context.Context, db DBTX, arg RetireAgent
 }
 
 const revokeAgentCredential = `-- name: RevokeAgentCredential :many
-UPDATE accounts.agent_credentials SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL RETURNING id
+UPDATE accounts.agent_credentials SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL AND expires_at > $1 RETURNING id
 `
 
 type RevokeAgentCredentialParams struct {
@@ -263,6 +263,7 @@ type RevokeAgentCredentialParams struct {
 	ID  uuid.UUID
 }
 
+// An expired credential is already gone: it is not found, as an unknown one.
 func (q *Queries) RevokeAgentCredential(ctx context.Context, db DBTX, arg RevokeAgentCredentialParams) ([]uuid.UUID, error) {
 	rows, err := db.Query(ctx, revokeAgentCredential, arg.Now, arg.ID)
 	if err != nil {
@@ -284,9 +285,10 @@ func (q *Queries) RevokeAgentCredential(ctx context.Context, db DBTX, arg Revoke
 }
 
 const revokeAllAgentCredentials = `-- name: RevokeAllAgentCredentials :many
-UPDATE accounts.agent_credentials SET revoked_at = $1 WHERE revoked_at IS NULL RETURNING id
+UPDATE accounts.agent_credentials SET revoked_at = $1 WHERE revoked_at IS NULL AND expires_at > $1 RETURNING id
 `
 
+// The live credentials: an expired one cannot authenticate, so the stop does not count it.
 func (q *Queries) RevokeAllAgentCredentials(ctx context.Context, db DBTX, now *time.Time) ([]uuid.UUID, error) {
 	rows, err := db.Query(ctx, revokeAllAgentCredentials, now)
 	if err != nil {

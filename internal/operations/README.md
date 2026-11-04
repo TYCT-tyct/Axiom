@@ -42,7 +42,7 @@ func LoggedCalls(ctx context.Context, tx pg.Tx, credential, after uuid.UUID, pag
 
 - **谁调**：`cmd/axiom` 的运营接口守卫（`agentGuard`）在每个认出凭证的请求结束时调 `RecordCall`，写进去才把缓存的答案发出；`operationLogList` 用 `LoggedCalls` 让凭证读自己的记录。本模块不认凭证，`Credential` 只是 ID。
 - **表**：`migrations/00003_operation_log.sql` 的 `operations.operation_log`：ID（UUIDv7）、凭证、运行 ID、工具名（`x-mcp-name`）、理由（agent 写的，不可信；可以为空：缺理由被拒的请求也记）、输入（规范 JSON，最多 8 KiB）、HTTP 状态、错误码、请求 ID、开始和结束时间。索引 `(credential_id, id DESC)` 供按凭证从新到旧分页。平台数据：只有平台范围能读写；只插入，没有 UPDATE 和 DELETE 权限。
-- **输入**：`RecordCall` 用 `jsonx.MarshalCanonical` 编码，超过 8 KiB 改记 `{"truncated":true,"bytes":n}`，表的 CHECK 再兜一层。
+- **输入**：`RecordCall` 用 `jsonx.MarshalCanonical` 编码，超过 8 KiB 改记 `{"truncated":true,"bytes":n}`，表的 CHECK 再兜一层。列是 `json` 而不是 `jsonb`：`json` 原样保存文本，CHECK 量的字节和 Go 量的相同；`jsonb` 输出时在冒号和逗号后加空格，会让刚好 8 KiB 以内的输入在库里超限、整次调用答 503。
 
 ## 表
 
@@ -75,7 +75,7 @@ func LoggedCalls(ctx context.Context, tx pg.Tx, credential, after uuid.UUID, pag
 
 ## 测试
 
-- `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖超过 8 KiB 的输入只记大小、站点范围读不到。
+- `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖刚好 8192 字节的输入原样保存、多一个字节只记大小、站点范围读不到。
 
 - `targets_test.go`：`TestExpectedFromProratesEachMonthByDuration` 表驱动覆盖整月、部分月、跨月、闰年、空窗口、金额币种不符、四种指标的半入和带毫秒的跨月折算；`TestExpectedFromRefusesACountWiderThanItsType` 覆盖超宽；`TestTargetsCheck` 覆盖月份、负数、非法金额、币种和 38 位上限；`TestTargetsCheckCommercial` 覆盖付费用户、月流水和两个比率的范围；`TestExpectedFromAppliesRatesToTheEndMonth` 覆盖比率的结束月规则和月首边界；`TestExpectedFromProratesCommercialCountsAndMoney` 覆盖后两项数量/金额的折算。
 - `cmd/axiom/admin_targets_test.go`：`TestAdminOperationsTargets` 走真实 HTTP 和数据库，覆盖空月份、八项写入、审计、看板折算、重放、旧页面只写前四项时后四项保留、整月替换和清零；`TestAdminOperationsTargetsRefuseAStaleForm` 与 `...AfterClear` 覆盖两个编辑者交错提交和清空后的版本；`TestAdminOperationsTargetsKeepWideMoney` 覆盖超过 int64 和 38 位边界；`TestTargetComparisonHidesAnUnknownCostGap` 覆盖成本未知；`TestAdminOperationsTargetsNeedSitesManage` 覆盖无权限；`TestAdminOperationsTargetsRefuseAnotherCurrency` 覆盖币种。
