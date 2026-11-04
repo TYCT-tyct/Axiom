@@ -18,6 +18,12 @@ class ReuseRelease(unittest.TestCase):
 python3() { echo fixture; }
 just() { [ "$1" != axiom-version ] || echo 'axiom fixture'; }
 go() { :; }
+bash() {
+  case "$*" in
+    *old-binary-check.sh*) printf 'bash %s\n' "$*" >> "$CALLS" ;;
+    *) command bash "$@" ;;
+  esac
+}
 cosign() {
   printf 'cosign %s\n' "$*" >> "$CALLS"
   case "$1" in
@@ -116,6 +122,18 @@ curl() {
         down = "compose --project-name axiom-ci-fixture down --volumes --timeout 5"
         self.assertLess(logs, len(calls) - 1 - calls[::-1].index(down))
         self.assertNotIn("logs --tail 200 axiom", self.run_deploy(None)[1])
+
+    def test_the_previous_release_starts_before_the_legacy_upgrade(self):
+        result, calls = self.run_deploy(None)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        check = next(i for i, call in enumerate(calls) if "old-binary-check.sh" in call)
+        self.assertIn("--current-image axiom-ci:", calls[check])
+        drop = next(i for i, call in enumerate(calls) if "DROP OWNED BY axiom_migrator" in call)
+        self.assertLess(check, drop, "the normal deployment checks run before the separate legacy-role scenario")
+        result, calls = self.run_deploy("127.0.0.1:1234/axiom@sha256:" + "a" * 64)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        check = next(i for i, call in enumerate(calls) if "old-binary-check.sh" in call)
+        self.assertIn("--current-image 127.0.0.1:1234/axiom@sha256:", calls[check])
 
     def test_legacy_upgrade_stops_the_node_before_recreating_postgres(self):
         result, calls = self.run_deploy(None)
