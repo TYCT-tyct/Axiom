@@ -1501,8 +1501,10 @@ paths:
         Replaces the name, the rules and, for a platform preset, the `currency` of its price limits, at the `revision`
         the page read (409 `stale_revision` when it moved on). Rules or a currency that differ from the current ones are
         a new version, which every key bound to the preset is routed by from the next routing snapshot, within 5
-        seconds; a rename keeps the version. The system preset is 403; a disabled preset, and an account's or a
-        workspace's, are 404.
+        seconds; a rename keeps the version. A platform preset never serves fewer sites than it did, so the defaults
+        and keys on it stay usable: one that limits no price takes no `currency`, and a priced one keeps its currency or
+        drops its prices (400). The system preset is 403; a disabled preset, and an account's or a workspace's, are
+        404.
       security:
         - session: []
           csrf: []
