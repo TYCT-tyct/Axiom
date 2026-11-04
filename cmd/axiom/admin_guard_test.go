@@ -116,7 +116,7 @@ var adminOperations = []adminOperation{
 	{"getSiteBrand", http.MethodGet, strings.Replace(someSite, "/settings", "/brand", 1), "", "sites.manage", false},
 	{"updateSiteBrand", http.MethodPut, strings.Replace(someSite, "/settings", "/brand", 1), `{"brand_color":"#335ddf","reason":"r"}`, "sites.manage", true},
 	{"listLegalDocuments", http.MethodGet, strings.Replace(someSite, "/settings", "/legal-documents", 1), "", "sites.manage", false},
-	{"publishLegalDocument", http.MethodPost, strings.Replace(someSite, "/settings", "/legal-documents", 1), `{"kind":"terms","body":"Text.","reason":"r"}`, "sites.manage", true},
+	{"publishLegalDocument", http.MethodPost, strings.Replace(someSite, "/settings", "/legal-documents", 1), `{"kind":"terms","locale":"zh","body":"Text.","reason":"r"}`, "sites.manage", true},
 	{"setAccountSuspension", http.MethodPut, someAccount + "/suspension", `{"suspended":true,"reason":"r"}`, "users.manage", true},
 	{"setAccountTier", http.MethodPut, someAccount + "/tier", `{"tier_id":"tier_00000000000000000000000000","reason":"r"}`, "users.manage", true},
 	{"setUserSignIn", http.MethodPut, "/users/user_00000000000000000000000000/sign-in", `{"disabled":true,"reason":"r"}`, "users.manage", true},

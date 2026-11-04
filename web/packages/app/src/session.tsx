@@ -8,18 +8,18 @@ import { createContext, type ReactNode, use, useCallback, useEffect, useRef, use
 export type Session = Schemas["Session"];
 
 // Where a visitor stands: nobody signed in (guest), a password proven and a second factor awaited (pending), a password
-// proven where two-step verification is required and not yet set up (enroll), or in (member). The server decides; the
-// pages only route by it.
-type Stage = "guest" | "pending" | "enroll" | "member";
+// proven where two-step verification is required and not yet set up (enroll), current legal documents not accepted
+// (consent), or in (member). The server decides; the pages only route by it.
+type Stage = "guest" | "pending" | "enroll" | "consent" | "member";
 
-// What a surface needs from the app: its Session calls, and whether its operations need two-step verification (the
-// admin's all do, the console's do not).
-type Auth = { api: AuthApi; requiresMfa: boolean };
+// What a surface needs from the app: its Session calls, whether its operations need two-step verification (the admin's
+// all do, the console's do not), and whether members must accept the current legal documents (the console does).
+type Auth = { api: AuthApi; requiresMfa: boolean; requiresConsent: boolean };
 
 const AuthContext = createContext<Auth | null>(null);
 
-export function AuthProvider({ api, requiresMfa, children }: Auth & { children: ReactNode }) {
-  return <AuthContext value={{ api, requiresMfa }}>{children}</AuthContext>;
+export function AuthProvider({ api, requiresMfa, requiresConsent = false, children }: Auth & { children: ReactNode }) {
+  return <AuthContext value={{ api, requiresMfa, requiresConsent }}>{children}</AuthContext>;
 }
 
 export function useAuth() {
@@ -246,24 +246,27 @@ export function can(session: Session, permission: string) {
   return session.permissions.includes(permission);
 }
 
-function stageOf(session: Session | null, requiresMfa: boolean): Stage {
+function stageOf(session: Session | null, requiresMfa: boolean, requiresConsent: boolean): Stage {
   if (!session) {
     return "guest";
   }
   if (session.level === "pending_mfa") {
     return "pending";
   }
-  return requiresMfa && session.level !== "mfa" ? "enroll" : "member";
+  if (requiresMfa && session.level !== "mfa") {
+    return "enroll";
+  }
+  return requiresConsent && (session.consent?.required.length ?? 0) > 0 ? "consent" : "member";
 }
 
 // The origin the address is resolved against: only its being the same one for the base and for the target matters, so a
 // target that resolves elsewhere (`//host`, `\\host`, a scheme) is told apart without reading window.location.
 const origin = "http://app.invalid";
-const guestPage = /^\/(sign-in|mfa|register|enroll)(?![\w-])/;
+const guestPage = /^\/(sign-in|mfa|register|enroll|consent)(?![\w-])/;
 
 // A path of this app, to return to after signing in, as the browser would resolve it under the app's base: an encoded
 // or plain `..` that climbs out of the base, or an address of another origin, is dropped, and the way back is returned
-// in its resolved form. A sign-in page is dropped too: a way back to it would only loop. `base` is the app's, with the
+// in its resolved form. A sign-in or consent page is dropped too: a way back to it would only loop. `base` is the app's, with the
 // trailing slash.
 export function safeNext(value: unknown, base = import.meta.env.BASE_URL) {
   if (typeof value !== "string" || !value.startsWith("/")) {
@@ -293,7 +296,7 @@ function Replace({ path }: { path: string }) {
   return null;
 }
 
-const guestPages = { guest: "/sign-in", pending: "/mfa", enroll: "/enroll" } as const;
+const guestPages = { guest: "/sign-in", pending: "/mfa", enroll: "/enroll", consent: "/consent" } as const;
 
 // A visitor in the wrong stage goes to the page of the stage they are in, remembering where they were going; a member
 // who arrived on a guest page goes on to where they were going. Where they were going is the page the gate turned them
@@ -314,7 +317,7 @@ function Redirect({ stage, page, here }: { stage: Stage; page: Stage; here: stri
 // whose session ends while a page is open lands on the sign-in page and comes back to that page after signing in. Page
 // state is the account's too: a session of another account starts the pages afresh.
 export function Gate({ stage, children }: { stage: Stage; children: ReactNode }) {
-  const { api, requiresMfa } = useAuth();
+  const { api, requiresMfa, requiresConsent } = useAuth();
   const result = useQuery(sessionQuery(api));
   // A refresh that fails leaves the session the page already has in place: the server ends a session by saying so (401),
   // and a page open on something the user must act on, such as recovery codes, is not taken away for a bad moment.
@@ -325,12 +328,12 @@ export function Gate({ stage, children }: { stage: Stage; children: ReactNode })
   return (
     <DataState query={session} page>
       {(data) =>
-        stageOf(data, requiresMfa) === stage ? (
+        stageOf(data, requiresMfa, requiresConsent) === stage ? (
           <SessionContext key={identityOf(data)} value={data}>
             {children}
           </SessionContext>
         ) : (
-          <Redirect stage={stageOf(data, requiresMfa)} page={stage} here={here} />
+          <Redirect stage={stageOf(data, requiresMfa, requiresConsent)} page={stage} here={here} />
         )
       }
     </DataState>

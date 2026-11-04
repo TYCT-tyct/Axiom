@@ -23,7 +23,38 @@ type Ctx<K extends keyof paths, M extends "get" | "post" | "put" | "delete"> = C
 const none = { level: "none" } as const;
 const signedIn = { level: "signed_in" } as const;
 
+function acceptsCurrent(documents: Schemas["LegalDocument"][], consent: Schemas["LegalDocumentVersion"][]): boolean {
+  const chosen = new Map<Schemas["LegalDocumentKind"], Schemas["LegalDocumentVersion"]>();
+  for (const document of consent) {
+    if (chosen.has(document.kind)) {
+      return false;
+    }
+    chosen.set(document.kind, document);
+  }
+  const newest = new Map<Schemas["LegalDocumentKind"], number>();
+  for (const document of documents) {
+    newest.set(document.kind, Math.max(newest.get(document.kind) ?? 0, document.version));
+  }
+  if (chosen.size !== newest.size) {
+    return false;
+  }
+  return [...newest].every(([kind, version]) => {
+    const picked = chosen.get(kind);
+    return (
+      picked !== undefined &&
+      picked.version === version &&
+      (picked.locale === undefined ||
+        documents.some(
+          (document) => document.kind === kind && document.locale === picked.locale && document.version === version,
+        ))
+    );
+  });
+}
+
 function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">) {
+  if (state.legal.length > 0 && !acceptsCurrent(state.legal, body.consent ?? [])) {
+    return fail(403, "consent_required");
+  }
   if (body.invite_code !== goodInvite) {
     return fail(422, "invalid_invite");
   }
@@ -32,6 +63,7 @@ function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">)
   }
   state.user.email = body.email;
   state.user.password = body.password ?? "";
+  state.legalAccepted = state.legal.length > 0;
   return { status: 201, json: { user_id: `user_${"1".repeat(26)}` as Schemas["UserId"] } } as const;
 }
 
@@ -245,9 +277,17 @@ function setNotifications({ body, state }: Ctx<"/api/console/v1/notification-pre
 const handlers: Handler<MockState>[] = [
   route("get", `${base}/version`, none, ({ state }) => ok({ version: state.version })),
   route("get", `${base}/site`, none, ({ state }) => ok(state.site)),
+  route("get", `${base}/legal`, none, ({ state }) => ok({ documents: state.legal })),
   route("post", `${base}/auth/sign-in`, none, signIn),
   route("post", `${base}/auth/mfa`, { level: "pending_mfa" }, verifyMfa),
   route("post", `${base}/auth/register`, none, register),
+  route("post", `${base}/legal/accept`, signedIn, ({ body, state }) => {
+    if (!acceptsCurrent(state.legal, body.consent)) {
+      return fail(403, "consent_required");
+    }
+    state.legalAccepted = true;
+    return { status: 204 as const, json: undefined };
+  }),
   route("post", `${base}/auth/sign-out`, { level: "any" }, signOut),
   route("get", `${base}/session`, { level: "any" }, ({ state }) => ok(session(state))),
   route("post", `${base}/auth/totp/setup`, signedIn, totpSetup),
