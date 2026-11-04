@@ -221,6 +221,10 @@ func managedKeyData(k accounts.Key, use billing.KeyUsage) map[string]any {
 		"usage": float64(use.Total) / 1e9, "usage_daily": float64(use.Day) / 1e9,
 		"usage_weekly": float64(use.Week) / 1e9, "usage_monthly": float64(use.Month) / 1e9,
 		"include_byok_in_limit": true, "byok_usage": 0, "byok_usage_daily": 0, "byok_usage_weekly": 0, "byok_usage_monthly": 0,
+		"preset_id": nil,
+	}
+	if k.Preset != nil {
+		data["preset_id"] = k.Preset.String()
 	}
 	if k.SpendLimit != nil {
 		data["limit"], data["limit_remaining"] = float64(*k.SpendLimit)/1e9, float64(max(0, *k.SpendLimit-use.Counted))/1e9
@@ -275,7 +279,7 @@ func managementStatus(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, accounts.ErrPresetConflict), errors.Is(err, routing.ErrDefaultInvalid):
 		return http.StatusConflict
-	case errors.Is(err, accounts.ErrPreset):
+	case errors.Is(err, accounts.ErrPreset), errors.Is(err, routing.ErrPresetNotSelectable), errors.Is(err, accounts.ErrKeyPreset):
 		return http.StatusBadRequest
 	case errors.Is(err, errManagementInput):
 		return http.StatusBadRequest

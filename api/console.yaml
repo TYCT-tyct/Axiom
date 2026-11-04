@@ -2646,11 +2646,11 @@ components:
         up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort`
         (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all),
         `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million
-        tokens, `request` per call, decimal strings in the site's currency). At most 16 KiB.
+        tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
     RoutingPresetScope:
       type: string
       enum: [platform, site, account, workspace]
-      description: The layer the preset belongs to; only the account's own presets can be changed here.
+      description: The layer the preset belongs to.
     RoutingPreset:
       type: object
       required: [id, scope, slug, name, revision, version, rules, disabled, created_at, updated_at]
@@ -2703,8 +2703,8 @@ components:
       type: object
       required: [version]
       properties:
-        preset_id: {type: string, format: uuid, description: "Absent when the account sets no default."}
-        version: {type: integer, format: int64, minimum: 0, description: "0 when the account has no default; a change names the version it read."}
+        preset_id: {type: string, format: uuid, description: "Absent when the layer sets no default."}
+        version: {type: integer, format: int64, minimum: 0, description: "0 when the layer has no default; a change names the version it read."}
     RoutingDefaultUpdate:
       type: object
       additionalProperties: false
