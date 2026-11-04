@@ -378,7 +378,8 @@ paths:
       summary: Withdraw a pending proposal
       description: >-
         Takes back one of the credential's own proposals while it waits for the owner: its operation ends `canceled`.
-        One already decided, expired or withdrawn is a 409 `conflict`; another credential's is not found.
+        One already decided, expired or withdrawn is a 409 `conflict`; another credential's is not found. With
+        `dry_run` the same checks run and nothing is written.
       tags: [Agent]
       security: [{credential: []}]
       x-axiom-permission: operations.write
@@ -393,7 +394,7 @@ paths:
         content: {application/json: {schema: {$ref: '#/components/schemas/WithdrawRequest'}}}
       responses:
         '200':
-          description: The operation, canceled
+          description: The operation, canceled, or the preview of its withdrawal
           headers:
             Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
           content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
@@ -576,6 +577,7 @@ components:
       required: [reason]
       properties:
         reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
     OperationList:
       type: object
       additionalProperties: false
@@ -590,7 +592,8 @@ components:
       description: >-
         One write the agent asked for. It acts on one object and is never reused: a retry under its key finds it as it
         is now. A preview (`dry_run`) has no ID, approval or times, and its `state` is where the operation would
-        start: `approved` when it would run at once, `pending_approval` when it would wait for the owner.
+        start: `approved` when it would run at once, `pending_approval` when it would wait for the owner; a previewed
+        withdrawal answers `canceled`, where it would leave the operation.
       properties:
         operation_id: {$ref: '#/components/schemas/Uuid'}
         tool: {type: string, description: The MCP name of the write.}

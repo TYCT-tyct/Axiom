@@ -2452,7 +2452,7 @@ export interface paths {
         put?: never;
         /**
          * Approve what the operations agent asked for
-         * @description Approves a pending approval and runs its operation at once, in the same transaction, as the agent's: the operation ends `succeeded`, or `rejected` with the code the target refused it with when the target changed since the agent asked (such as `stale_revision`). One already decided, withdrawn or past its expiry is a 409 `conflict`.
+         * @description Approves a pending approval and runs its operation at once, in the same transaction, as the agent's: the operation ends `succeeded`, or `rejected` with the code the target refused it with when the target changed since the agent asked (such as `stale_revision`). If the credential that proposed it is no longer live (revoked, stopped or expired), nothing runs: the approval and its operation end `canceled`. One already decided, withdrawn or past its expiry is a 409 `conflict`.
          */
         post: operations["approveOperationsApproval"];
         delete?: never;

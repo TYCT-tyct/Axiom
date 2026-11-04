@@ -35,15 +35,17 @@ FOR UPDATE;
 -- name: LockDueOperations :many
 -- Operations whose approval is past its expiry, locked operation first like every other path; one another sweep or a
 -- decision holds is skipped, not waited for. The operation's state is in the condition so a row decided since the
--- snapshot is rechecked on its new version and left out; its approval moves with it.
+-- snapshot is rechecked on its new version and left out; its approval moves with it. The clock is the statement's, as
+-- the decision's is.
 SELECT o.id FROM operations.operations o JOIN operations.approvals a ON a.operation_id = o.id
-WHERE o.state = 'pending_approval' AND a.state = 'pending' AND a.expires_at <= now()
+WHERE o.state = 'pending_approval' AND a.state = 'pending' AND a.expires_at <= clock_timestamp()
 ORDER BY o.id
 LIMIT @batch
 FOR UPDATE OF o SKIP LOCKED;
 
--- name: SetOperationState :exec
-UPDATE operations.operations SET state = @state, result = @result, error_code = @error_code, updated_at = now() WHERE id = @id;
+-- name: SetOperationState :one
+UPDATE operations.operations SET state = @state, result = @result, error_code = @error_code, updated_at = now() WHERE id = @id
+RETURNING updated_at;
 
 -- name: InsertApproval :one
 -- It waits @ttl_seconds at most, and never past the end of the UTC day it was asked on.
@@ -59,8 +61,9 @@ SELECT * FROM operations.approvals WHERE id = @id;
 SELECT * FROM operations.approvals WHERE operation_id = ANY (@operations::uuid[]);
 
 -- name: LockApprovalOf :many
--- The approval of an operation its caller has locked, and whether it is past its expiry by the database's clock.
-SELECT sqlc.embed(a), (a.expires_at <= now())::bool AS due FROM operations.approvals a WHERE a.operation_id = @operation_id FOR UPDATE;
+-- The approval of an operation its caller has locked, and whether it is past its expiry by the database's clock as it
+-- is now: now() is the transaction's start, and a decision that waited for the lock past the expiry must see it.
+SELECT sqlc.embed(a), (a.expires_at <= clock_timestamp())::bool AS due FROM operations.approvals a WHERE a.operation_id = @operation_id FOR UPDATE;
 
 -- name: Approvals :many
 -- Every approval newest first, a page after the cursor's ID, in one state or all: the owner's queue.
@@ -70,6 +73,7 @@ WHERE (sqlc.narg(state)::text IS NULL OR state = sqlc.narg(state)::text)
 ORDER BY id DESC
 LIMIT @page_size;
 
--- name: DecideApproval :exec
+-- name: DecideApproval :one
 UPDATE operations.approvals SET state = @state, decided_at = now(), decided_by = @decided_by, decision_reason = @decision_reason
-WHERE id = @id;
+WHERE id = @id
+RETURNING decided_at;

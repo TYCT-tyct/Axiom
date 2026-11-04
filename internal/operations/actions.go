@@ -238,6 +238,16 @@ func Withdraw(ctx context.Context, tx pg.Tx, credential, id uuid.UUID, reason st
 	return op, finish(ctx, tx, audit.OperationsAgent(credential), "operation.cancel", &op, StateCanceled, ApprovalCanceled, reason)
 }
 
+// Cancel ends pending approval id and its operation as actor's, whoever proposed it: the proposal of a credential that
+// is no longer live, which a node without CancelLive left pending when it revoked the credential.
+func Cancel(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, reason string) (Operation, error) {
+	op, err := lockApproval(ctx, tx, id, uuid.UUID{})
+	if err != nil {
+		return Operation{}, err
+	}
+	return op, finish(ctx, tx, actor, "operation.cancel", &op, StateCanceled, ApprovalCanceled, reason)
+}
+
 // CancelLive cancels, as actor, the proposals a credential is waiting on, or every credential's when credential is nil:
 // the revocation of a credential and the emergency stop, in their transaction. It returns how many it canceled. An
 // approved operation runs and settles in the transaction that approved it, so there is no other kind to cancel.
@@ -326,12 +336,13 @@ func lockApproval(ctx context.Context, tx pg.Tx, id, credential uuid.UUID) (Oper
 
 // finish ends op's pending approval as decided and moves op to state, records it and resolves the approval's signal.
 func finish(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, op *Operation, state State, decided ApprovalState, reason string) error {
-	if err := New().DecideApproval(ctx, tx, DecideApprovalParams{
+	at, err := New().DecideApproval(ctx, tx, DecideApprovalParams{
 		ID: op.Approval.ID, State: string(decided), DecidedBy: new(actor.String()), DecisionReason: optionalText(reason),
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("decide approval %s: %w", op.Approval.ID, err)
 	}
-	op.Approval.State, op.Approval.DecidedBy, op.Approval.DecisionReason = decided, actor.String(), reason
+	op.Approval.State, op.Approval.Decided, op.Approval.DecidedBy, op.Approval.DecisionReason = decided, at, actor.String(), reason
 	if err := setState(ctx, tx, op, state, nil, ""); err != nil {
 		return err
 	}
@@ -342,12 +353,13 @@ func finish(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, op 
 }
 
 func setState(ctx context.Context, tx pg.Tx, op *Operation, state State, result []byte, code string) error {
-	if err := New().SetOperationState(ctx, tx, SetOperationStateParams{
+	updated, err := New().SetOperationState(ctx, tx, SetOperationStateParams{
 		ID: op.ID, State: string(state), Result: result, ErrorCode: optionalText(code),
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("move operation %s to %s: %w", op.ID, state, err)
 	}
-	op.State, op.Result, op.Error = state, result, code
+	op.State, op.Result, op.Error, op.Updated = state, result, code, updated
 	return nil
 }
 

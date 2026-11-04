@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"uuid"
@@ -179,6 +180,26 @@ func (a adminAPI) runApproved(ctx context.Context, tx pg.Tx, op operations.Opera
 	return operations.Settle(ctx, tx, op, result, "")
 }
 
+// errPreviewed rolls back the transaction of a previewed write, which ran to its end so that every check ran.
+var errPreviewed = errors.New("previewed")
+
+// previewWithdrawal runs the withdrawal of approval id in a transaction it then rolls back: the checks are the
+// withdrawal's own, and nothing it wrote stays, the audit entry and the signal included. Its key is not claimed.
+func (o operationsAPI) previewWithdrawal(ctx context.Context, credential, id uuid.UUID, reason string) (operationsapi.ApprovalWithdrawResponseObject, error) {
+	var op operations.Operation
+	err := o.db.Tx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		if op, err = operations.Withdraw(ctx, tx, credential, id, reason); err != nil {
+			return err
+		}
+		return errPreviewed
+	})
+	if !errors.Is(err, errPreviewed) {
+		return nil, err
+	}
+	body := operationBody(operations.Operation{Tool: op.Tool, Target: op.Target, Risk: op.Risk, State: op.State})
+	return operationsapi.ApprovalWithdraw200JSONResponse{Body: body}, nil
+}
+
 // operationBody is an operation as the operations contract answers it.
 func operationBody(op operations.Operation) operationsapi.Operation {
 	body := operationsapi.Operation{
@@ -304,6 +325,9 @@ func (o operationsAPI) ApprovalWithdraw(ctx context.Context, r operationsapi.App
 		return nil, operations.ErrNoApproval
 	}
 	credential := uuid.UUID(callOf(ctx).agent.ID())
+	if r.Body.DryRun != nil && *r.Body.DryRun {
+		return o.previewWithdrawal(ctx, credential, id, r.Body.Reason)
+	}
 	fingerprint, err := idem.Fingerprint(r.ApprovalId, r.Body)
 	if err != nil {
 		return nil, err

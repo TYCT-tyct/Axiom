@@ -7,6 +7,7 @@ package operations
 
 import (
 	"context"
+	"time"
 
 	"uuid"
 )
@@ -127,9 +128,10 @@ func (q *Queries) ApprovalsOf(ctx context.Context, db DBTX, operations []uuid.UU
 	return items, nil
 }
 
-const decideApproval = `-- name: DecideApproval :exec
+const decideApproval = `-- name: DecideApproval :one
 UPDATE operations.approvals SET state = $1, decided_at = now(), decided_by = $2, decision_reason = $3
 WHERE id = $4
+RETURNING decided_at
 `
 
 type DecideApprovalParams struct {
@@ -139,14 +141,16 @@ type DecideApprovalParams struct {
 	ID             uuid.UUID
 }
 
-func (q *Queries) DecideApproval(ctx context.Context, db DBTX, arg DecideApprovalParams) error {
-	_, err := db.Exec(ctx, decideApproval,
+func (q *Queries) DecideApproval(ctx context.Context, db DBTX, arg DecideApprovalParams) (*time.Time, error) {
+	row := db.QueryRow(ctx, decideApproval,
 		arg.State,
 		arg.DecidedBy,
 		arg.DecisionReason,
 		arg.ID,
 	)
-	return err
+	var decided_at *time.Time
+	err := row.Scan(&decided_at)
+	return decided_at, err
 }
 
 const insertApproval = `-- name: InsertApproval :one
@@ -244,7 +248,7 @@ func (q *Queries) InsertOperation(ctx context.Context, db DBTX, arg InsertOperat
 }
 
 const lockApprovalOf = `-- name: LockApprovalOf :many
-SELECT a.id, a.operation_id, a.tier, a.state, a.summary, a.requested_at, a.expires_at, a.decided_at, a.decided_by, a.decision_reason, (a.expires_at <= now())::bool AS due FROM operations.approvals a WHERE a.operation_id = $1 FOR UPDATE
+SELECT a.id, a.operation_id, a.tier, a.state, a.summary, a.requested_at, a.expires_at, a.decided_at, a.decided_by, a.decision_reason, (a.expires_at <= clock_timestamp())::bool AS due FROM operations.approvals a WHERE a.operation_id = $1 FOR UPDATE
 `
 
 type LockApprovalOfRow struct {
@@ -252,7 +256,8 @@ type LockApprovalOfRow struct {
 	Due                bool
 }
 
-// The approval of an operation its caller has locked, and whether it is past its expiry by the database's clock.
+// The approval of an operation its caller has locked, and whether it is past its expiry by the database's clock as it
+// is now: now() is the transaction's start, and a decision that waited for the lock past the expiry must see it.
 func (q *Queries) LockApprovalOf(ctx context.Context, db DBTX, operationID uuid.UUID) ([]LockApprovalOfRow, error) {
 	rows, err := db.Query(ctx, lockApprovalOf, operationID)
 	if err != nil {
@@ -287,7 +292,7 @@ func (q *Queries) LockApprovalOf(ctx context.Context, db DBTX, operationID uuid.
 
 const lockDueOperations = `-- name: LockDueOperations :many
 SELECT o.id FROM operations.operations o JOIN operations.approvals a ON a.operation_id = o.id
-WHERE o.state = 'pending_approval' AND a.state = 'pending' AND a.expires_at <= now()
+WHERE o.state = 'pending_approval' AND a.state = 'pending' AND a.expires_at <= clock_timestamp()
 ORDER BY o.id
 LIMIT $1
 FOR UPDATE OF o SKIP LOCKED
@@ -295,7 +300,8 @@ FOR UPDATE OF o SKIP LOCKED
 
 // Operations whose approval is past its expiry, locked operation first like every other path; one another sweep or a
 // decision holds is skipped, not waited for. The operation's state is in the condition so a row decided since the
-// snapshot is rechecked on its new version and left out; its approval moves with it.
+// snapshot is rechecked on its new version and left out; its approval moves with it. The clock is the statement's, as
+// the decision's is.
 func (q *Queries) LockDueOperations(ctx context.Context, db DBTX, batch int32) ([]uuid.UUID, error) {
 	rows, err := db.Query(ctx, lockDueOperations, batch)
 	if err != nil {
@@ -563,8 +569,9 @@ func (q *Queries) OperationsOf(ctx context.Context, db DBTX, arg OperationsOfPar
 	return items, nil
 }
 
-const setOperationState = `-- name: SetOperationState :exec
+const setOperationState = `-- name: SetOperationState :one
 UPDATE operations.operations SET state = $1, result = $2, error_code = $3, updated_at = now() WHERE id = $4
+RETURNING updated_at
 `
 
 type SetOperationStateParams struct {
@@ -574,12 +581,14 @@ type SetOperationStateParams struct {
 	ID        uuid.UUID
 }
 
-func (q *Queries) SetOperationState(ctx context.Context, db DBTX, arg SetOperationStateParams) error {
-	_, err := db.Exec(ctx, setOperationState,
+func (q *Queries) SetOperationState(ctx context.Context, db DBTX, arg SetOperationStateParams) (time.Time, error) {
+	row := db.QueryRow(ctx, setOperationState,
 		arg.State,
 		arg.Result,
 		arg.ErrorCode,
 		arg.ID,
 	)
-	return err
+	var updated_at time.Time
+	err := row.Scan(&updated_at)
+	return updated_at, err
 }

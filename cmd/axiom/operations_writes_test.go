@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/audit"
 	"axiom/internal/platform/operationsapi"
+	"axiom/internal/platform/pg"
 )
 
 // writer has the owner make a credential that may change the catalog and withdraw its own proposals.
@@ -213,5 +215,66 @@ func expectOperation(t *testing.T, rec *httptest.ResponseRecorder, state, approv
 	op := agentOperation(t, rec)
 	if rec.Code != http.StatusOK || string(op.State) != state || approval != "" && string(op.Approval.State) != approval {
 		t.Errorf("want %s: %d %s", state, rec.Code, rec.Body)
+	}
+}
+
+// TestOperationsApprovalAfterAnOldNodesStop: a node from before approvals stops the agent by revoking its credentials
+// only, so a proposal stays pending; approving it then runs nothing and cancels it, and the decision's time is the
+// one the owner reads back.
+func TestOperationsApprovalAfterAnOldNodesStop(t *testing.T) {
+	t.Parallel()
+	f := newCatalogFixture(t)
+	_, token := f.writer()
+	model, asked := f.listedAndAsked(token, "acme/o1")
+	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		_, err := f.svc.StopAgents(t.Context(), tx, audit.System("test.old_node"), "stop on an old node")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := f.decide(asked.Approval.ApprovalId, "approve")
+	var canceled adminapi.OperationsApproval
+	decode(t, rec, &canceled)
+	if rec.Code != http.StatusOK || canceled.State != adminapi.OperationsApprovalStateCanceled || canceled.OperationState != adminapi.OperationStateCanceled || canceled.DecidedAt == nil {
+		t.Errorf("approving a stopped credential's proposal: %d %s", rec.Code, rec.Body)
+	}
+	if got := f.send(http.MethodGet, "/models/"+model.Id, "", http.StatusOK); got.Status != adminapi.ModelStatusListed {
+		t.Errorf("the model is %s", got.Status)
+	}
+	var read adminapi.OperationsApproval
+	decode(t, f.do(http.MethodGet, "/operations/approvals/"+asked.Approval.ApprovalId, "", as(f.s)), &read)
+	if read.DecidedAt == nil || !read.DecidedAt.Equal(*canceled.DecidedAt) {
+		t.Errorf("the decision's time: answered %v, read %v", canceled.DecidedAt, read.DecidedAt)
+	}
+}
+
+// TestOperationsWithdrawalPreview: a previewed withdrawal runs the checks and leaves the proposal, its audit and its
+// key untouched; the withdrawal then answers with the times the operation has, on its retry too.
+func TestOperationsWithdrawalPreview(t *testing.T) {
+	t.Parallel()
+	f := newCatalogFixture(t)
+	_, token := f.writer()
+	_, asked := f.listedAndAsked(token, "acme/w1")
+	withdraw := func(key, extra string) *httptest.ResponseRecorder {
+		return f.agentSend(token, http.MethodPost, "/approvals/"+asked.Approval.ApprovalId+"/withdraw", `{"reason":"checking the impact"`+extra+`}`, idempotent(key))
+	}
+	key := newKey()
+	rec := withdraw(key, `,"dry_run":true`)
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStateCanceled || preview.OperationId != nil {
+		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
+	}
+	if got := f.text(`SELECT a.state || ':' || o.state || ':' || (SELECT count(*) FROM platform.audit_log WHERE action = 'operation.cancel') || ':' ||
+		(SELECT count(*) FROM platform.idempotency WHERE key = '` + key + `') FROM operations.approvals a JOIN operations.operations o ON o.id = a.operation_id`); got != "pending:pending_approval:0:0" {
+		t.Errorf("after the preview: %s", got)
+	}
+
+	withdrawn := agentOperation(t, withdraw(key, ""))
+	replayed := agentOperation(t, withdraw(key, ""))
+	read := agentOperation(t, f.agent(token, because("/operations/"+*asked.OperationId, "x")))
+	for what, op := range map[string]operationsapi.Operation{"the withdrawal": withdrawn, "its retry": replayed} {
+		if op.State != operationsapi.OperationStateCanceled || !op.UpdatedAt.Equal(*read.UpdatedAt) || !op.UpdatedAt.After(*asked.UpdatedAt) ||
+			op.Approval.DecidedAt == nil || !op.Approval.DecidedAt.Equal(*read.Approval.DecidedAt) {
+			t.Errorf("%s answers %+v, the operation reads %+v", what, op, read)
+		}
 	}
 }

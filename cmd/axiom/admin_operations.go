@@ -253,6 +253,11 @@ func (a adminAPI) decide(ctx context.Context, operation, approval, key, reason s
 	}
 	succeeded := false
 	body, replayed, err := idempotently(ctx, a.db, operation, key, []any{approval, reason}, func(tx pg.Tx) (adminapi.OperationsApproval, error) {
+		if approve {
+			if live, err := a.holdProposer(ctx, tx, id); err != nil || !live {
+				return cancelOrphan(ctx, tx, id, err)
+			}
+		}
 		op, err := operations.Decide(ctx, tx, actor(ctx), id, approve, reason)
 		if err == nil && approve {
 			op, err = a.runApproved(ctx, tx, op)
@@ -265,6 +270,34 @@ func (a adminAPI) decide(ctx context.Context, operation, approval, key, reason s
 	})
 	a.refreshCatalog(ctx, err != nil || !succeeded)
 	return body, replayed, err
+}
+
+// holdProposer holds the credential that proposed approval id until tx ends, before the operation is locked, in the
+// order a proposal takes them; false is a credential no longer live. Revocation and the stop cancel a credential's
+// proposals, but a node from before them only revokes, and an approved change must not run for a credential that is
+// gone.
+func (a adminAPI) holdProposer(ctx context.Context, tx pg.Tx, id uuid.UUID) (bool, error) {
+	op, err := operations.ApprovalOperation(ctx, tx, id)
+	if err != nil {
+		return false, err
+	}
+	err = a.accounts.HoldAgent(ctx, tx, accounts.AgentID(op.Credential))
+	if errors.Is(err, accounts.ErrUnknownAgent) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// cancelOrphan cancels approval id, whose proposer is no longer live, unless err says why it could not be read.
+func cancelOrphan(ctx context.Context, tx pg.Tx, id uuid.UUID, err error) (adminapi.OperationsApproval, error) {
+	if err != nil {
+		return adminapi.OperationsApproval{}, err
+	}
+	op, err := operations.Cancel(ctx, tx, actor(ctx), id, "the credential that proposed it is no longer live")
+	if err != nil {
+		return adminapi.OperationsApproval{}, err
+	}
+	return approvalBody(op), nil
 }
 
 // approvalIDOf reads an approval's ID from a path. A malformed ID and an unknown one are the same 404.

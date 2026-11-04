@@ -243,6 +243,28 @@ func (db opsDB) state(t *testing.T, id uuid.UUID) string {
 		JOIN operations.approvals a ON a.operation_id = o.id WHERE o.id = '`+id.String()+`'`)
 }
 
+// waiterSeen returns once a session of the database waits on a lock.
+func (db opsDB) waiterSeen(t *testing.T) error {
+	t.Helper()
+	for t.Context().Err() == nil {
+		n, err := strconv.Atoi(db.text(t, `SELECT count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`))
+		if err != nil || n > 0 {
+			return err
+		}
+		runtime.Gosched()
+	}
+	return t.Context().Err()
+}
+
+// dueNow makes an operation's approval expire at this moment, after a transaction that is already open began.
+func (db opsDB) dueNow(t *testing.T, op operations.Operation) {
+	t.Helper()
+	if err := pgtest.Run(t.Context(), db.superuser, `UPDATE operations.approvals SET expires_at = clock_timestamp(),
+		requested_at = clock_timestamp() - interval '1 hour' WHERE id = '`+op.Approval.ID.String()+`'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestCancelLive: a revocation cancels the credential's pending proposals and no other's; the stop cancels the rest.
 func TestCancelLive(t *testing.T) {
 	t.Parallel()
@@ -297,7 +319,7 @@ func TestRaces(t *testing.T) {
 		var err error
 		second, replayed, err = db.propose(t, retire(credential, key, 1, true))
 		return err
-	})
+	}, nil)
 	if !replayed || second.ID != first.ID || db.text(t, `SELECT count(*)::text FROM operations.operations`) != "1" {
 		t.Errorf("the key's second request: %+v %v", second, replayed)
 	}
@@ -311,7 +333,7 @@ func TestRaces(t *testing.T) {
 			return operations.Withdraw(t.Context(), tx, credential, first.Approval.ID, "late")
 		})
 		return nil
-	})
+	}, nil)
 	if !errors.Is(withdrawn, operations.ErrNotPending) {
 		t.Errorf("the withdrawal after the approval: %v", withdrawn)
 	}
@@ -337,9 +359,32 @@ func TestRaces(t *testing.T) {
 	}
 }
 
+// TestDecisionWaitingPastTheExpiry: a decision whose transaction began before an approval's expiry and got the lock
+// after it is refused; the database's now() would still be the transaction's start.
+func TestDecisionWaitingPastTheExpiry(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	credential := uuid.NewV7()
+	waited, _, err := db.propose(t, retire(credential, uuid.NewV7(), 1, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decided error
+	db.whileWaited(t, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `SELECT 1 FROM operations.operations WHERE id = $1 FOR UPDATE`, waited.ID)
+		return err
+	}, func() error {
+		_, decided = db.decide(t, waited, true)
+		return nil
+	}, func() { db.dueNow(t, waited) })
+	if !errors.Is(decided, operations.ErrNotPending) {
+		t.Errorf("a decision that waited for the lock past the expiry: %v", decided)
+	}
+}
+
 // whileWaited runs hold in a transaction it keeps open until wait, started alongside, is seen waiting on a lock, then
-// commits it and returns once wait has.
-func (db opsDB) whileWaited(t *testing.T, hold func(tx pg.Tx) error, wait func() error) {
+// runs meanwhile (when there is one), commits it and returns once wait has.
+func (db opsDB) whileWaited(t *testing.T, hold func(tx pg.Tx) error, wait func() error, meanwhile func()) {
 	t.Helper()
 	done := make(chan error, 1)
 	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
@@ -347,14 +392,13 @@ func (db opsDB) whileWaited(t *testing.T, hold func(tx pg.Tx) error, wait func()
 			return err
 		}
 		go func() { done <- wait() }()
-		for t.Context().Err() == nil {
-			n, err := strconv.Atoi(db.text(t, `SELECT count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`))
-			if err != nil || n > 0 {
-				return err
-			}
-			runtime.Gosched()
+		if err := db.waiterSeen(t); err != nil {
+			return err
 		}
-		return t.Context().Err()
+		if meanwhile != nil {
+			meanwhile()
+		}
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}

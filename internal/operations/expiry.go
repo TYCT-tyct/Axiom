@@ -21,9 +21,10 @@ type expiryArgs struct{}
 // Kind implements river.JobArgs.
 func (expiryArgs) Kind() string { return "operations.approval_expiry" }
 
-// InsertOpts implements river.JobArgsWithInsertOpts: one run at a time.
+// InsertOpts implements river.JobArgsWithInsertOpts: one run at a time, on the housekeeping queue. A decision refuses
+// an expired approval by itself, so the sweep only records the expiry and may wait behind the call log's retention.
 func (expiryArgs) InsertOpts() river.InsertOpts {
-	return river.InsertOpts{UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
+	return river.InsertOpts{Queue: pg.QueueArchive, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
 		rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable,
 		rivertype.JobStateScheduled,
 	}}}

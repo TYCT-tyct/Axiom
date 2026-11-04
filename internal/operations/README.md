@@ -55,6 +55,7 @@ func Propose(ctx, tx, p Proposal) (Operation, bool, error)                    //
 func Settle(ctx, tx, op Operation, result map[string]any, refused string) (Operation, error)
 func Decide(ctx, tx, actor audit.Actor, approval uuid.UUID, approve bool, reason string) (Operation, error)
 func Withdraw(ctx, tx, credential, approval uuid.UUID, reason string) (Operation, error)
+func Cancel(ctx, tx, actor audit.Actor, approval uuid.UUID, reason string) (Operation, error) // 提出方已不在
 func CancelLive(ctx, tx, actor audit.Actor, credential *uuid.UUID, reason string) (int, error) // nil：全部凭证
 func ExpireDue(ctx, tx, batch int) (int, error)
 func Get / Operations / Approvals / ApprovalOperation                       // 读
@@ -64,7 +65,8 @@ func RegisterExpiry(db, scope, queue, logger) error
 - **谁调**：`cmd/axiom` 的运营接口写操作（`operations_writes.go`）先 `accounts.HoldAgent` 再 `Propose`：不要审批的直接是 `approved`，处理器在同一个事务里调目标模块（现在只有 `catalog.ListModel`）再 `Settle`；要审批的是 `pending_approval`，带一条审批。负责人在管理接口 `ApproveOperationsApproval` 里 `Decide`，同一个事务里执行目标改动再 `Settle`；目标在提案之后变了（目标模块的 4xx 拒绝，如 `stale_revision`），改动回滚到保存点，操作以 `rejected` 和那个错误码结束，决定照样提交。吊销凭证和紧急停止在各自的事务里 `CancelLive`。本模块不引用被审批的模块（[总体架构的「模块边界规则」](../../docs/architecture.md#模块边界规则)）。
 - **表**：`migrations/00004_operations.sql`。`operations.operations` 一行一个运营操作：凭证、幂等键（`(credential_id, idempotency_key)` 唯一）、请求哈希（工具、目标、规范化参数的 SHA-256）、工具名、目标种类和 ID、参数（`json`，最多 8 KiB，含目标的 `rev`）、风险类别、状态、agent 的理由、运行 ID、结果、错误码和时间。`operations.approvals` 一行一个审批：运营操作（唯一）、档位（现在只有 `human`）、状态、服务端读出的摘要、请求、到期和决定的时间、决定者（`<种类>:<ID>`）和理由。两张表都是平台数据，策略只放行平台范围；`axiom_app` 只能改操作的 `state`、`result`、`error_code`、`updated_at` 和审批的 `state` 与决定列，不能删。
 - **幂等**：`Propose` 用 `INSERT … ON CONFLICT DO NOTHING` 占键；同一个键的第二个请求等第一个事务结束，找到它后比请求哈希：相同返回现在的状态（`replayed`），不同是 `ErrKeyReused`。占键和操作同事务，失败就一起回滚，同一个键可以重试。
-- **到期**：审批在数据库时钟上到期，`least(now() + 30 分钟, 当天 UTC 结束)`。`Decide` 和 `Withdraw` 对已到期的审批答 `ErrNotPending`，不管清扫到没到；`RegisterExpiry` 每分钟一轮，`ExpireDue` 每批最多 100 个，以 `system:operations.approval_expiry` 记 `approval.expire`。
+- **到期**：审批在数据库时钟上到期，`least(now() + 30 分钟, 当天 UTC 结束)`。`Decide`、`Withdraw` 和 `Cancel` 在锁住之后用 `clock_timestamp()` 判断是否已到期，不用 `now()`：`now()` 是事务开始的时刻，到期前开始、等锁等到到期后的决定用它会看不到到期。对已到期的审批答 `ErrNotPending`，不管清扫到没到；`RegisterExpiry` 在 `archive` 队列上每分钟一轮（决定自己就拒绝过期的审批，清扫只补记录，可以排在调用记录的保留任务后面），`ExpireDue` 每批最多 100 个，以 `system:operations.approval_expiry` 记 `approval.expire`。
+- **批准时复核提出方**：`ApproveOperationsApproval` 先无锁读出审批所属的凭证，`accounts.HoldAgent` 持有它，再 `Decide`，和提案时一样先凭证后操作，所以和吊销、停止的锁顺序一致。凭证已吊销、停止或过期时什么都不执行，用 `Cancel` 把审批和操作记为 `canceled`：滚动发布期间旧节点的吊销和停止只吊销凭证、不作废提案，新节点不能拿它们去执行。
 - **锁的顺序**：所有路径先锁运营操作，再锁它的审批。`Decide`、`Withdraw` 先无锁读出审批所属的操作，再按这个顺序加锁、重新判断状态；`CancelLive` 按 ID 升序锁；清扫用 `FOR UPDATE OF o SKIP LOCKED`，跳过正被决定的操作，条件里带操作的状态，所以快照之后已被决定的行在新版本上重判后被排除。
 - **审计与通知**：`approval.request`、`operation.succeed`、`operation.reject`、`operation.cancel` 的操作者是 `operations_agent:<凭证>`（提出、执行和撤回都以 agent 的名义；吊销和停止时的取消是负责人）；`approval.approve`、`approval.reject` 是负责人，`approval.expire` 是系统。审批提出时同事务 `alert.Persist` 一个 `operations.approval_pending` 信号（键是审批 ID），决定、到期、撤回、取消时同事务恢复它；负责人给这个种类配一条告警规则和渠道才会收到通知。
 
@@ -73,7 +75,9 @@ func RegisterExpiry(db, scope, queue, logger) error
 | 一个凭证的一个幂等键只对应一个运营操作 | 唯一约束；第二个请求等第一个提交后按请求哈希返回原操作或 `ErrKeyReused`。测试 `TestProposeOnceAKey`、`TestRaces` |
 | 批准的就是执行的 | 应用角色不能改操作的工具、目标和参数；执行只读这三列。决定时再由目标模块按参数里的 `rev` 核对目标，变了就 `rejected` |
 | 审批只决定一次 | 锁住操作和审批后才判断 `pending` 和到期；决定、撤回、到期、取消互斥。测试 `TestDecide`、`TestRaces`（撤回等在批准之后，得到 `ErrNotPending`；清扫跳过被持有的操作，放开后再到期） |
-| 过期的审批不能被批准 | 判断用数据库的 `now()`，和到期时间同一个时钟；清扫晚到只推迟记录 |
+| 过期的审批不能被批准 | 锁住后用数据库的 `clock_timestamp()` 判断，和到期时间同一个时钟，等锁的时间也算进去；清扫晚到只推迟记录。测试 `TestRaces`（到期前开始、等锁到到期后的决定被拒绝） |
+| 不再存活的凭证的提案不会执行 | 批准前持有提出方的凭证，不在了就作废。测试 `cmd/axiom` 的 `TestOperationsApprovalAfterAnOldNodesStop`（旧节点只吊销凭证，新节点批准时作废） |
+| 写的答案和读到的一致 | 改状态和决定的语句 `RETURNING` 时间，答案和幂等存下的答案带的是库里的 `updated_at`、`decided_at`。测试 `TestOperationsWithdrawalPreview`、`TestOperationsApprovalAfterAnOldNodesStop` |
 | 吊销和停止不会漏掉一个待审批的提案 | 提案前 `HoldAgent`（`FOR SHARE`），吊销要改同一行，只能在提案之前失败或之后取消它。测试 `TestCancelLive`、`accounts.TestHoldAgent` |
 | 每个状态变化都有审计 | `finish`、`Settle` 在同一个事务里写状态和 `audit.Record`；审计写不进整个改动回滚 |
 | 已批准的操作不留在 `approved` | 直接执行的和批准后的都在同一个事务里 `Settle`；所以 `CancelLive` 和清扫只处理 `pending_approval` |
@@ -109,8 +113,8 @@ func RegisterExpiry(db, scope, queue, logger) error
 
 ## 测试
 
-- `actions_test.go`：`TestProposeOnceAKey` 覆盖直接执行与结算、按键重放、键复用、别的凭证同一个键、审批的到期上界、审计和信号；`TestDecide` 覆盖批准、重复决定、驳回、过期后拒绝决定与清扫、撤回只限自己；`TestCancelLive` 覆盖按凭证和全部取消；`TestRaces` 用持有事务等对方进入锁等待的显式顺序覆盖同键并发、批准与撤回、清扫与决定。
-- `cmd/axiom/operations_writes_test.go`：`TestOperationsAPIWrites` 走真实 HTTP 和数据库，覆盖上架立即执行、重放、键复用、试运行和旧 `rev` 不写、下架等负责人、负责人看到的摘要和理由、批准后以 agent 的名义执行与审计、操作记录里的理由和输入；`TestOperationsApprovalOutcomes` 覆盖驳回、批准时模型已变、撤回与重放、紧急停止和吊销取消待审批、没有权限、别的凭证的审批、下架草稿。
+- `actions_test.go`：`TestProposeOnceAKey` 覆盖直接执行与结算、按键重放、键复用、别的凭证同一个键、审批的到期上界、审计和信号；`TestDecide` 覆盖批准、重复决定、驳回、过期后拒绝决定与清扫、撤回只限自己；`TestCancelLive` 覆盖按凭证和全部取消；`TestRaces` 用持有事务等对方进入锁等待的显式顺序覆盖同键并发、批准与撤回、等锁期间到期的决定、清扫与决定。
+- `cmd/axiom/operations_writes_test.go`：`TestOperationsAPIWrites` 走真实 HTTP 和数据库，覆盖上架立即执行、重放、键复用、试运行和旧 `rev` 不写、下架等负责人、负责人看到的摘要和理由、批准后以 agent 的名义执行与审计、操作记录里的理由和输入；`TestOperationsApprovalOutcomes` 覆盖驳回、批准时模型已变、撤回与重放、紧急停止和吊销取消待审批、没有权限、别的凭证的审批、下架草稿；`TestOperationsApprovalAfterAnOldNodesStop` 覆盖旧节点停止后批准；`TestOperationsWithdrawalPreview` 覆盖撤回的试运行不改审批、审计和幂等键，以及撤回和重放的时间与详情一致。
 
 - `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖刚好 8192 字节的输入原样保存、多一个字节只记大小、站点范围读不到。
 
