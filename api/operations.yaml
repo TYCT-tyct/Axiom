@@ -463,7 +463,7 @@ components:
     Conflict:
       description: >-
         The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`,
-        `idempotency_key_reused`).
+        `idempotency_key_reused`, `preset_default_invalid`, `preset_in_use`, `preset_quota`).
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
