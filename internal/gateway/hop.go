@@ -18,8 +18,6 @@ func (a *attempt) serverTool() bool {
 // readHop reads one upstream reply. A hop that calls the web search tool is not the answer: its events were held, the
 // searches run, and the next request is prepared; next tells stream to read that request. The answering hop's events
 // are written here, so a tool hop never reaches the client, which sees one stream with one ending.
-//
-//nolint:cyclop,funlen,gocognit // the relay step state machine, one branch per step kind
 func (a *attempt) readHop(ctx context.Context, relay *protocol.Relay, idle *time.Timer, idleFor time.Duration) (step, ended, bool) {
 	s := a.s
 	a.hopRecorded = false
@@ -33,8 +31,7 @@ func (a *attempt) readHop(ctx context.Context, relay *protocol.Relay, idle *time
 			return st, e, false
 		}
 		p := relay.Progress()
-		if st.Kind == protocol.StepCommit || p.ContentBytes != a.seen.ContentBytes ||
-			p.PartialBytes > a.seen.PartialBytes || p.Searches != a.seen.Searches {
+		if st.Kind == protocol.StepCommit || a.moved(p) {
 			idle.Reset(idleFor)
 		}
 		a.seen = p
@@ -43,79 +40,101 @@ func (a *attempt) readHop(ctx context.Context, relay *protocol.Relay, idle *time
 			return st, e, false
 		}
 		switch st.Kind {
-		case protocol.StepCommit:
-			if s.loop != nil && !s.aggregate {
-				if !s.holdOut(st.Out) {
-					s.dropOut()
-					s.drop(relay)
-					return over, ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}, false
-				}
-				break
+		case protocol.StepCommit, protocol.StepData, protocol.StepHeartbeat:
+			if !a.deliver(relay, st) {
+				return over, ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}, false
 			}
-			s.commit(a, st.Out)
-		case protocol.StepData, protocol.StepHeartbeat:
-			if s.loop != nil && !s.aggregate {
-				if !s.holdOut(st.Out) {
-					s.dropOut()
-					s.drop(relay)
-					return over, ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}, false
-				}
-				break
-			}
-			s.write(st.Out)
 		case protocol.StepUpstreamDone:
-			if s.loop == nil {
-				st, e := a.complete(relay)
-				return st, e, false
-			}
-			// The upstream is done: the search and the next send have waits of their own, and the idle timer would cut
-			// the attempt during a slow search.
-			idle.Stop()
-			calls := relay.ServerCalls()
-			a.hopDone(relay)
-			var turn protocol.ServerTurn
-			if len(calls) > 0 {
-				var err error
-				if turn, err = relay.ServerTurn(); err != nil {
-					s.drop(relay)
-					return over, *a.abort(turnError(err)), false
-				}
-			}
-			if turn.Client && len(calls) > 0 {
-				s.drop(relay)
-				return over, *a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0), false
-			}
-			if len(calls) > 0 && !s.loop.disabled {
-				if s.isGone() {
-					s.drop(relay)
-					return over, *a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0), false
-				}
-				if e := a.search(ctx, turn); e != nil {
-					s.drop(relay)
-					return over, *e, false
-				}
-				if e := a.sendNext(ctx); e != nil {
-					s.drop(relay)
-					return over, *e, false
-				}
-				s.drop(relay)
-				s.dropOut()
-				return over, ended{}, true
-			}
-			if !s.flush(a) {
-				rec := &s.ends[a.i]
-				if rec.Result == billing.Unknown {
-					rec.Result = billing.FailedBeforeCommit
-				}
-				rec.Finish = billing.FinishCancelled
-				s.drop(relay)
-				return over, ended{}, false
-			}
-			st, e := a.complete(relay)
-			return st, e, false
+			return a.upstreamDone(ctx, relay, idle)
 		case protocol.StepProgress, protocol.StepBuffered:
 		}
 	}
+}
+
+// moved reports whether the relay saw something new of the upstream since the last step, which moves the idle timer on.
+func (a *attempt) moved(p protocol.Progress) bool {
+	return p.ContentBytes != a.seen.ContentBytes || p.PartialBytes > a.seen.PartialBytes || p.Searches != a.seen.Searches
+}
+
+// deliver passes a step's events on: to the client, or, while the hop may still be a tool call of the loop, into the
+// held events. It is false when the node's budget cannot hold them, which has dropped the hop.
+func (a *attempt) deliver(relay *protocol.Relay, st protocol.Step) bool {
+	s := a.s
+	switch {
+	case s.loop != nil && !s.aggregate:
+		if !s.holdOut(st.Out) {
+			s.dropOut()
+			s.drop(relay)
+			return false
+		}
+	case st.Kind == protocol.StepCommit:
+		s.commit(a, st.Out)
+	default:
+		s.write(st.Out)
+	}
+	return true
+}
+
+// upstreamDone ends a hop whose upstream is done. Outside a loop it is the answer. In a loop, a hop that called the
+// search runs it and sends the next sampling, and next is true; any other hop is the answer, written in one go.
+func (a *attempt) upstreamDone(ctx context.Context, relay *protocol.Relay, idle *time.Timer) (step, ended, bool) {
+	s := a.s
+	if s.loop == nil {
+		st, e := a.complete(relay)
+		return st, e, false
+	}
+	// The search and the next send have waits of their own, and the idle timer would cut the attempt during a slow
+	// search.
+	idle.Stop()
+	calls := relay.ServerCalls()
+	a.hopDone(relay)
+	if len(calls) > 0 {
+		e, next := a.runTurn(ctx, relay)
+		if e != nil {
+			s.drop(relay)
+			return over, *e, false
+		}
+		if next {
+			s.drop(relay)
+			s.dropOut()
+			return over, ended{}, true
+		}
+	}
+	if !s.flush(a) {
+		rec := &s.ends[a.i]
+		if rec.Result == billing.Unknown {
+			rec.Result = billing.FailedBeforeCommit
+		}
+		rec.Finish = billing.FinishCancelled
+		s.drop(relay)
+		return over, ended{}, false
+	}
+	st, e := a.complete(relay)
+	return st, e, false
+}
+
+// runTurn runs the searches of a hop that called the search tool and sends the next sampling, or ends the loop. A turn
+// that also calls a client function fails rather than lose that call; a loop past its caps runs nothing, and the hop is
+// the answer (next is false).
+func (a *attempt) runTurn(ctx context.Context, relay *protocol.Relay) (e *ended, next bool) {
+	turn, err := relay.ServerTurn()
+	switch {
+	case err != nil:
+		return a.abort(turnError(err)), false
+	case turn.Client:
+		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0), false
+	case a.s.loop.disabled:
+		return nil, false
+	case a.s.isGone():
+		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0), false
+	}
+	if e := a.search(ctx, turn); e != nil {
+		return e, false
+	}
+	if e := a.sendNext(ctx); e != nil {
+		return e, false
+	}
+	return nil, true
 }
 
 // turnError is how a loop ends whose tool turn could not be kept for the next request: over the node's budget, the
