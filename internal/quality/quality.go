@@ -340,17 +340,21 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	e.sampleTools(v, &o)
 }
 
-// sampleTools takes an answer with client tool calls as a sample of the tool-call error rate, apart from the verdict on
-// the endpoint's health. An attempt the gateway failed because a call's input could not be given to the client
-// (protocol.FaultToolInput) is an error however the health judged it, which is not at all: the model got the call
-// wrong, the endpoint did not fail. Otherwise only an answer that ended normally has calls that ended: one cut short
-// says nothing of how the endpoint calls tools. An answer is one sample however many calls it made, as OpenRouter
-// counts requests (《Auto Exacto》). e.mu is held.
+// sampleTools takes an answer whose client tool calls the relay checked as a sample of the tool-call error rate, apart
+// from the verdict on the endpoint's health. The relay checks none for an answer stopped at its output cap, whose calls
+// were cut rather than wrong, however the client's format then failed it. An attempt the gateway failed because a
+// checked call's input could not be given to the client (protocol.FaultToolInput) is an error however the health judged
+// it, which is not at all: the model got the call wrong, the endpoint did not fail. Otherwise only an answer that ended
+// normally counts: one cut short says nothing of how the endpoint calls tools. An answer is one sample however many
+// calls it made, as OpenRouter counts requests (《Auto Exacto》). e.mu is held.
 func (e *State) sampleTools(v verdict, o *Observation) {
+	if o.ToolChecks == 0 { // no call ended, or the answer stopped at its output cap and its calls were cut
+		return
+	}
 	switch {
 	case o.Fault == protocol.FaultToolInput:
 		e.tools.add(1, o.Ended)
-	case v == success && o.Done && o.ToolChecks > 0:
+	case v == success && o.Done:
 		e.tools.add(float64(min(o.ToolErrors, 1)), o.Ended)
 	}
 }

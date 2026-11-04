@@ -124,7 +124,7 @@ func (s *chatToNative) event(data []byte, m *meter) (event, error) {
 			return event{}, fmt.Errorf("%w: Chat ended without a finished choice", ErrUpstream)
 		}
 		if err := s.completeItems(); err != nil {
-			return event{}, err
+			return out, err // the calls were checked before the client's format refused one: quality counts them
 		}
 		out.role = end
 		return out, nil

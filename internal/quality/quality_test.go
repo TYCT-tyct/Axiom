@@ -121,9 +121,9 @@ func TestMeasured(t *testing.T) {
 }
 
 // TestToolErrorRate: each answer with checked client tool calls that ended normally is one sample, 1 when any call's
-// arguments were not one JSON text, however many were; an attempt the gateway failed for a call's input it could not
-// give the client is a 1 too, while the health does not count it. An answer cut short, or with no call checked, is no
-// sample. The rate is a moving average, unmeasured (0) below minSamples samples and maxAge after the last.
+// arguments were not one JSON text, however many were; an attempt the gateway failed for a checked call's input it
+// could not give the client is a 1 too, while the health does not count it. An answer cut short, or with no call
+// checked, such as one stopped at its output cap whatever the client's format then made of it, is no sample. The rate is a moving average, unmeasured (0) below minSamples samples and maxAge after the last.
 func TestToolErrorRate(t *testing.T) {
 	m := New(nil)
 	id := suppliers.EndpointID{7}
@@ -135,9 +135,12 @@ func TestToolErrorRate(t *testing.T) {
 	for range 3 {
 		m.Observe(t.Context(), tools(3, 2))
 	}
-	refused := tools(0, 0)
+	refused := tools(1, 0)
 	refused.Done, refused.Fault = false, protocol.FaultToolInput
 	m.Observe(t.Context(), refused)
+	capped := tools(0, 0)
+	capped.Done, capped.Fault = false, protocol.FaultToolInput
+	m.Observe(t.Context(), capped)
 	cut := tools(1, 1)
 	cut.Done, cut.Fault = false, protocol.FaultBroken
 	m.Observe(t.Context(), cut)

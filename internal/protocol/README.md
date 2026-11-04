@@ -228,7 +228,7 @@ type UsageContext struct{ CacheTTL1h bool; Tier catalog.ServiceTier } // 实际�
 func NewRelay(client, upstream Format, body io.Reader, u UsageContext, o RelayOptions) *Relay
 func (r *Relay) Next() (Step, error) // 阻塞读；取消 attemptCtx 关闭 body 即返回
 type Step struct{ Out []byte; Kind StepKind } // StepBuffered | StepCommit（Out 含暂存的开头）| StepData | StepProgress（未成事件，Out 为空）| StepHeartbeat | StepUpstreamDone
-func (r *Relay) Progress() Progress // 值类型、不分配：ContentBytes、PartialBytes、Searches、ToolCalls、已报告的数，以及其中哪些已是最终值（Final）；Text 是内容里解码后字符串的形状（textshape.Shape），上游没报输出时 gateway 按它估 token，ToolCalls 让暂估加上每次客户端工具调用的框架；ToolChecks、ToolErrors 是检查了参数的客户端工具调用数和其中参数不是一段合法 JSON 的数（Messages 在块结束、Responses 在 `output_item.done`、Chat 在 `[DONE]` 时判定，逐段检查、不缓存参数，见 toolargs.go），在回答结尾（带停止原因的 `message_delta`、`response.completed`、`[DONE]`）一起报告，因输出上限停下的回答不报；quality 按它们算工具调用错误率
+func (r *Relay) Progress() Progress // 值类型、不分配：ContentBytes、PartialBytes、Searches、ToolCalls、已报告的数，以及其中哪些已是最终值（Final）；Text 是内容里解码后字符串的形状（textshape.Shape），上游没报输出时 gateway 按它估 token，ToolCalls 让暂估加上每次客户端工具调用的框架；ToolChecks、ToolErrors 是检查了参数的客户端工具调用数和其中参数不是一段合法 JSON 的数（Messages 在块结束、Responses 在 `output_item.done`、Chat 在 `[DONE]` 时判定，逐段检查、不缓存参数，见 toolargs.go），在回答结尾（带停止原因的 `message_delta`、`response.completed`、`[DONE]`）一起报告，因输出上限停下的回答不报；读取器让事件失败时仍可报告随它结束的计数（Chat 流转给 Messages 客户端在 `[DONE]` 拒绝参数时就是这样），`Relay` 先计入再返回错误；quality 按它们算工具调用错误率
 func (r *Relay) Usage() Usage       // Segments []Segment{Usage catalog.Usage; Reported catalog.ItemSet}，每段各自已是最终值的报告项；Invalid
 func (r *Relay) Finish(f Final) []byte
 func (r *Relay) Fail(e Error, f *Final) []byte // f 为 nil：结算没提交，结尾不带费用

@@ -317,7 +317,6 @@ func (a *attempt) observe(ctx context.Context) {
 	}
 	r := &s.c.Request
 	o.InputTokens = billing.InputEstimate(billing.Demand{TextBytes: r.TextBytes, Images: r.Images, Documents: r.Documents}, a.entry.Limits)
-	o.ToolChecks, o.ToolErrors = a.seen.ToolChecks, a.seen.ToolErrors // the answering reply's, the last the relay read
 	for _, rec := range s.ends[a.first : a.i+1] {
 		for _, seg := range rec.Segments {
 			o.OutputTokens += seg.Usage.OutputTotal()

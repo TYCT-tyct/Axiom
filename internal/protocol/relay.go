@@ -287,10 +287,10 @@ func (r *Relay) Next() (Step, error) {
 //nolint:gocognit // one branch per event role
 func (r *Relay) event(data []byte) (Step, error) {
 	e, err := r.up.event(data, &r.meter)
+	r.observe(e) // a reader that fails the event may still report what ended with it, such as the tool calls checked
 	if err != nil {
 		return Step{}, err
 	}
-	r.observe(e)
 	if data, err = r.edit(&e); err != nil {
 		return Step{}, err
 	}
