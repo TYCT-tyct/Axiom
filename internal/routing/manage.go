@@ -80,6 +80,8 @@ func (o Layer) match(first int) (string, []any) {
 // id names the layer in the audit log: its deepest owner, or the platform.
 func (o Layer) id() string {
 	switch o.Scope {
+	case ScopePlatform:
+		return o.Scope.String()
 	case ScopeSite:
 		return uuid.UUID(o.Site).String()
 	case ScopeAccount:
@@ -450,13 +452,36 @@ func SetDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, c
 			return Default{}, err
 		}
 	}
-	switch {
-	case preset == nil && before.Preset == nil, preset != nil && before.Preset != nil && *before.Preset == *preset:
+	if sameDefault(before.Preset, preset) {
 		return before, nil
+	}
+	if err := writeDefault(ctx, tx, actor, layer, before.Preset == nil, preset); err != nil {
+		return Default{}, presetWriteErr("set the default preset", err)
+	}
+	after, err := ReadDefault(ctx, tx, layer)
+	if err != nil {
+		return Default{}, err
+	}
+	return after, audit.Record(ctx, tx, audit.Event{
+		Actor: actor, Action: "routing.default.update",
+		Target: audit.Target{Module: "routing", Kind: "preset_default", ID: layer.id(), Site: uuid.UUID(layer.Site), Account: uuid.UUID(layer.Account)},
+		Detail: map[string]any{"scope": layer.Scope.String(), "before": optionalID(before.Preset), "after": optionalID(after.Preset)},
+	})
+}
+
+func sameDefault(a, b *PresetID) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
+}
+
+// writeDefault clears the layer's default when preset is nil, or points it at preset: a new row when the layer had
+// none, or the next version of its row.
+func writeDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, unset bool, preset *PresetID) error {
+	var err error
+	switch {
 	case preset == nil:
 		where, args := layer.match(1)
 		_, err = tx.Exec(ctx, `DELETE FROM routing.preset_defaults WHERE `+where, args...)
-	case before.Preset == nil:
+	case unset:
 		site, account, workspace := layer.ids()
 		_, err = tx.Exec(ctx, `INSERT INTO routing.preset_defaults (scope, site_id, account_id, workspace_id, preset_id, updated_by)
 			VALUES ($1, $2, $3, $4, $5, $6)`, layer.Scope.String(), site, account, workspace, uuid.UUID(*preset), actorID(actor))
@@ -465,17 +490,7 @@ func SetDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, c
 		_, err = tx.Exec(ctx, `UPDATE routing.preset_defaults SET preset_id = $1, version = version + 1, updated_by = $2,
 			updated_at = statement_timestamp() WHERE `+where, append([]any{uuid.UUID(*preset), actorID(actor)}, args...)...)
 	}
-	if err != nil {
-		return Default{}, presetWriteErr("set the default preset", err)
-	}
-	after, err := ReadDefault(ctx, tx, layer)
-	if err != nil {
-		return Default{}, err
-	}
-	return after, audit.Record(ctx, tx, audit.Event{Actor: actor, Action: "routing.default.update",
-		Target: audit.Target{Module: "routing", Kind: "preset_default", ID: layer.id(), Site: uuid.UUID(layer.Site), Account: uuid.UUID(layer.Account)},
-		Detail: map[string]any{"scope": layer.Scope.String(), "before": optionalID(before.Preset), "after": optionalID(after.Preset)},
-	})
+	return err
 }
 
 // SelectablePreset checks that a key of a may be bound to the preset, when it is made or changed: a live preset of a
