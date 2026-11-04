@@ -238,68 +238,18 @@ type compiledCondition struct {
 
 // compileClasses validates and freezes the administrator's classes for the call path. The fallback must exist exactly
 // once and come last; a class that is not the fallback with no conditions simply never matches.
-//
-//nolint:cyclop,gocognit,funlen // one pass over a small closed format, with the field named at each refusal
 func compileClasses(classes []SourceClass) (*compiledClasses, error) {
-	if len(classes) == 0 {
-		return nil, classErr("classes", "at least the fallback class is required")
+	ordered, err := orderedClasses(classes)
+	if err != nil {
+		return nil, err
 	}
-	if len(classes) > MaxSourceClasses {
-		return nil, classErr("classes", fmt.Sprintf("must be at most %d classes", MaxSourceClasses))
+	fallbackAt, err := checkClassOrder(ordered)
+	if err != nil {
+		return nil, err
 	}
-	ordered := slices.Clone(classes)
-	slices.SortFunc(ordered, func(a, b SourceClass) int {
-		if a.Position != b.Position {
-			return a.Position - b.Position
-		}
-		return strings.Compare(a.Slug, b.Slug)
-	})
-	out := &compiledClasses{}
-	seen := map[string]bool{}
-	names := map[string]bool{}
-	fallbacks := 0
-	fallbackAt := -1
-	for i, c := range ordered {
-		if err := c.Check(); err != nil {
-			return nil, err
-		}
-		if i > 0 && ordered[i-1].Position == c.Position {
-			return nil, classErr("position", "is used twice")
-		}
-		if seen[c.Slug] {
-			return nil, classErr("slug", "is used twice")
-		}
-		seen[c.Slug] = true
-		if c.Fallback {
-			if fallbacks++; fallbacks > 1 {
-				return nil, classErr("fallback", "only one class can be the fallback")
-			}
-			out.fallback = c.Slug
-			fallbackAt = i
-			continue
-		}
-		compiled := compiledClass{slug: c.Slug, all: c.Rules.Match != "any"}
-		for _, cond := range c.Rules.Conditions {
-			cc := compiledCondition{op: cond.Operator, value: cond.Value}
-			if cond.Evidence == "header" {
-				cc.header = textproto.CanonicalMIMEHeaderKey(cond.Name)
-				names[cc.header] = true
-			} else {
-				item, err := catalog.ParseItem(cond.Item)
-				if err != nil {
-					return nil, classErr(fmt.Sprintf("rules/conditions/%d/item", len(compiled.conditions)), "must be a billing item name")
-				}
-				cc.item = item
-			}
-			compiled.conditions = append(compiled.conditions, cc)
-		}
-		out.classes = append(out.classes, compiled)
-	}
-	if fallbacks != 1 {
-		return nil, classErr("fallback", "exactly one class must be the fallback")
-	}
-	if fallbackAt != len(ordered)-1 {
-		return nil, classErr("position", "the fallback must come after every other class")
+	out, names, err := compileOrdered(ordered, fallbackAt)
+	if err != nil {
+		return nil, err
 	}
 	if len(names) > MaxFingerprintKey {
 		return nil, classErr("rules", fmt.Sprintf("the classes together may read at most %d different response headers", MaxFingerprintKey))
@@ -314,6 +264,109 @@ func compileClasses(classes []SourceClass) (*compiledClasses, error) {
 	}
 	out.version = fmt.Sprintf("%x", sha256.Sum256(data))
 	return out, nil
+}
+
+// orderedClasses bounds and sorts the administrator's list; every later check reads this order.
+func orderedClasses(classes []SourceClass) ([]SourceClass, error) {
+	if len(classes) == 0 {
+		return nil, classErr("classes", "at least the fallback class is required")
+	}
+	if len(classes) > MaxSourceClasses {
+		return nil, classErr("classes", fmt.Sprintf("must be at most %d classes", MaxSourceClasses))
+	}
+	ordered := slices.Clone(classes)
+	slices.SortFunc(ordered, func(a, b SourceClass) int {
+		if a.Position != b.Position {
+			return a.Position - b.Position
+		}
+		return strings.Compare(a.Slug, b.Slug)
+	})
+	return ordered, nil
+}
+
+// checkClassOrder validates each class and the one fallback's place; it returns the fallback's index.
+func checkClassOrder(ordered []SourceClass) (int, error) {
+	seen := map[string]bool{}
+	fallbacks := 0
+	fallbackAt := -1
+	for i, c := range ordered {
+		if err := checkClass(c, i, ordered, seen); err != nil {
+			return 0, err
+		}
+		if c.Fallback {
+			fallbacks++
+			if fallbacks > 1 {
+				return 0, classErr("fallback", "only one class can be the fallback")
+			}
+			fallbackAt = i
+		}
+	}
+	if fallbacks != 1 {
+		return 0, classErr("fallback", "exactly one class must be the fallback")
+	}
+	if fallbackAt != len(ordered)-1 {
+		return 0, classErr("position", "the fallback must come after every other class")
+	}
+	return fallbackAt, nil
+}
+
+func checkClass(c SourceClass, i int, ordered []SourceClass, seen map[string]bool) error {
+	if err := c.Check(); err != nil {
+		return err
+	}
+	if i > 0 && ordered[i-1].Position == c.Position {
+		return classErr("position", "is used twice")
+	}
+	if seen[c.Slug] {
+		return classErr("slug", "is used twice")
+	}
+	seen[c.Slug] = true
+	return nil
+}
+
+// compileOrdered compiles every class but the fallback; names collects the headers the rules read as evidence.
+func compileOrdered(ordered []SourceClass, fallbackAt int) (*compiledClasses, map[string]bool, error) {
+	out := &compiledClasses{}
+	names := map[string]bool{}
+	for i, c := range ordered {
+		if i == fallbackAt {
+			out.fallback = c.Slug
+			continue
+		}
+		compiled, err := compileClass(c, names)
+		if err != nil {
+			return nil, nil, err
+		}
+		out.classes = append(out.classes, compiled)
+	}
+	return out, names, nil
+}
+
+func compileClass(c SourceClass, names map[string]bool) (compiledClass, error) {
+	compiled := compiledClass{slug: c.Slug, all: c.Rules.Match != "any"}
+	for i, cond := range c.Rules.Conditions {
+		cc, err := compileCondition(cond, i, names)
+		if err != nil {
+			return compiledClass{}, err
+		}
+		compiled.conditions = append(compiled.conditions, cc)
+	}
+	return compiled, nil
+}
+
+func compileCondition(cond Condition, index int, names map[string]bool) (compiledCondition, error) {
+	cc := compiledCondition{op: cond.Operator, value: cond.Value}
+	if cond.Evidence == "header" {
+		cc.header = textproto.CanonicalMIMEHeaderKey(cond.Name)
+		names[cc.header] = true
+		return cc, nil
+	}
+	item, err := catalog.ParseItem(cond.Item)
+	if err != nil {
+		return compiledCondition{}, classErr(fmt.Sprintf("rules/conditions/%d/item", index), "must be a billing item name")
+	}
+	cc.item = item
+	return cc, nil
 }
 
 // classEvidence is what one successful response said about its source, as far as the rules that were live then cared:

@@ -118,32 +118,56 @@ func (p *Payments) reconcileMerchant(ctx context.Context, merchant uuid.UUID, da
 	return nil
 }
 
-//nolint:cyclop,gocognit // the day's order, refund and dispute checks are one reconciliation
 func checkMerchant(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.Time) ([]RecordDiscrepancyParams, error) {
 	expected := make(map[string]*big.Int)
 	differences, err := checkBatches(ctx, tx, merchant, day, expected)
 	if err != nil {
 		return nil, err
 	}
-	refunds, err := queries.SuccessfulRefundCash(ctx, tx, SuccessfulRefundCashParams{MerchantID: merchant, Since: day, Until: day.Add(24 * time.Hour)})
+	if err := addRefundCash(ctx, tx, merchant, day, expected); err != nil {
+		return nil, err
+	}
+	if err := addDisputeCash(ctx, tx, merchant, day, expected); err != nil {
+		return nil, err
+	}
+	cash, err := checkCash(ctx, tx, merchant, day, expected)
+	differences = append(differences, cash...)
 	if err != nil {
 		return nil, err
+	}
+	usage, err := checkUsage(ctx, tx, merchant, day)
+	if err != nil {
+		return nil, err
+	}
+	return append(differences, usage...), nil
+}
+
+// addRefundCash subtracts the day's successful refunds from the cash the ledger should hold, in payment minor units.
+func addRefundCash(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.Time, expected map[string]*big.Int) error {
+	refunds, err := queries.SuccessfulRefundCash(ctx, tx, SuccessfulRefundCashParams{MerchantID: merchant, Since: day, Until: day.Add(24 * time.Hour)})
+	if err != nil {
+		return err
 	}
 	for _, r := range refunds {
 		amount, ok := new(big.Int).SetString(r.Amount, 10)
 		if !ok {
-			return nil, errors.New("payments: invalid refund cash aggregate")
+			return errors.New("payments: invalid refund cash aggregate")
 		}
 		if expected[r.Currency] == nil {
 			expected[r.Currency] = new(big.Int)
 		}
 		expected[r.Currency].Sub(expected[r.Currency], amount)
 	}
-	// A chargeback takes cash on the day it is applied and gives it back on the day it is reversed. Both are payment
-	// minor units, like the paid totals and refund cash above; checkCash converts the whole expectation to billionths.
+	return nil
+}
+
+// addDisputeCash subtracts a chargeback on the day it is applied and adds it back on the day it is reversed. Both are
+// payment minor units, like the paid totals and refund cash above; checkCash converts the whole expectation to
+// billionths.
+func addDisputeCash(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.Time, expected map[string]*big.Int) error {
 	disputes, err := queries.ReconcileDisputes(ctx, tx, ReconcileDisputesParams{MerchantID: merchant, Since: day, Until: day.Add(24 * time.Hour)})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for _, d := range disputes {
 		if expected[d.Currency] == nil {
@@ -157,15 +181,15 @@ func checkMerchant(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.T
 			expected[d.Currency].Add(expected[d.Currency], amount)
 		}
 	}
-	cash, err := checkCash(ctx, tx, merchant, day, expected)
-	differences = append(differences, cash...)
-	if err != nil {
-		return nil, err
-	}
+	return nil
+}
+
+func checkUsage(ctx context.Context, tx pg.Tx, merchant uuid.UUID, day time.Time) ([]RecordDiscrepancyParams, error) {
 	usage, err := queries.ReconcileUsage(ctx, tx, ReconcileUsageParams{MerchantID: merchant, Since: day, Until: day.Add(24 * time.Hour)})
 	if err != nil {
 		return nil, err
 	}
+	differences := make([]RecordDiscrepancyParams, 0, len(usage))
 	for _, u := range usage {
 		d, err := pendingDifference(merchant, "usage", u.Day, map[string]any{"day": u.Day, "expected": u.Expected, "actual": u.Actual})
 		if err != nil {
