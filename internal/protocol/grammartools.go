@@ -37,26 +37,13 @@ func (s *scanner) serverParams() error {
 	return nil
 }
 
-//nolint:cyclop,gocognit // one branch per tool type and its execution claim
 func (s *scanner) tool() error {
 	s.p = part{kind: Tools}
 	if err := s.object(s.g.tool); err != nil {
 		return err
 	}
-	if s.p.toolKind == "openrouter:web_search" {
-		if s.p.serverRawBig {
-			return fmt.Errorf("the web search parameters are larger than %d bytes", MaxServerToolBytes)
-		}
-		if s.p.server == nil {
-			s.p.server = &ServerWebSearch{MaxResults: DefaultWebSearchResults}
-			if s.p.serverRaw != nil {
-				t, err := parseServerParams(s.p.serverRaw)
-				if err != nil {
-					return err
-				}
-				s.p.server = t
-			}
-		}
+	if err := s.settleServerParams(); err != nil {
+		return err
 	}
 	switch {
 	case s.p.toolKind == "shell" && !s.p.localShell, s.p.toolKind == "tool_search" && !s.p.clientSearch:
@@ -78,6 +65,25 @@ func (s *scanner) tool() error {
 	}
 	s.r.Needs |= s.p.kind
 	return nil
+}
+
+// settleServerParams parses the web search parameters serverParams kept because they came before the tool's type, and
+// gives a declaration without parameters the defaults.
+func (s *scanner) settleServerParams() (err error) {
+	if s.p.toolKind != "openrouter:web_search" {
+		return nil
+	}
+	if s.p.serverRawBig {
+		return fmt.Errorf("the web search parameters are larger than %d bytes", MaxServerToolBytes)
+	}
+	switch {
+	case s.p.server != nil:
+	case s.p.serverRaw != nil:
+		s.p.server, err = parseServerParams(s.p.serverRaw)
+	default:
+		s.p.server = &ServerWebSearch{MaxResults: DefaultWebSearchResults}
+	}
+	return err
 }
 
 // addCalls adds a server tool's limit to its kind's total. Limits of two tools of a kind add up, and a tool without

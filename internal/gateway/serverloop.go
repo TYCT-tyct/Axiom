@@ -41,102 +41,32 @@ func newServerLoop(c *Call) *serverLoop {
 	return &serverLoop{backend: c.searchBackend, tool: t, cap: cap}
 }
 
+// The tool results that tell the model why a call ran no search, so it can answer or call again.
+const (
+	stepLimitResult   = "The web search step limit for this request was reached. Answer with the results you already have."
+	noQueryResult     = "The web search call did not name a query. Call it again with a query, or answer without a search."
+	longQueryResult   = "The search query is longer than this search engine accepts. Try a shorter one."
+	resultLimitResult = "The result limit for this request was reached. Answer with the results you already have."
+)
+
 // search runs the searches of one tool-call step and appends the model's calls and their results to the conversation.
 // A backend failure ends the call before anything is written: the model usage of the hops so far is waived as
 // undelivered, while the searches that did run stay charged (docs/domains/billing.md「免单规则」).
-//
-//nolint:cyclop,funlen,gocognit // one branch per cap, query, result budget and backend outcome
 func (a *attempt) search(ctx context.Context, turn protocol.ServerTurn) *ended {
-	s, loop := a.s, a.s.loop
-	calls := make([]protocol.ServerToolCall, 0, len(turn.Calls))
+	loop := a.s.loop
+	results := make([]string, 0, len(turn.Calls))
 	for _, call := range turn.Calls {
-		if !call.Client {
-			calls = append(calls, call)
+		if call.Client {
+			continue
 		}
-	}
-	results := make([]string, 0, len(calls))
-	for _, call := range calls {
 		if e := a.stopped(ctx); e != nil {
 			return e
 		}
-		if loop.disabled || loop.steps >= loop.cap {
-			loop.disabled = true
-			results = append(results, "The web search step limit for this request was reached. Answer with the results you already have.")
-			continue
+		text, e := a.searchCall(ctx, call)
+		if e != nil {
+			return e
 		}
-		loop.steps++
-		query := searchQuery(call.Arguments)
-		if query == "" {
-			results = append(results, "The web search call did not name a query. Call it again with a query, or answer without a search.")
-			continue
-		}
-		if len(query) > protocol.MaxWebSearchQueryBytes {
-			results = append(results, "The search query is longer than this search engine accepts. Try a shorter one.")
-			continue
-		}
-		remaining := int64(protocol.MaxServerResults)
-		if loop.tool.MaxResults > 0 {
-			remaining = int64(loop.tool.MaxResults)
-		}
-		if loop.tool.MaxTotalResults > 0 {
-			left := loop.tool.MaxTotalResults - loop.results
-			if left <= 0 {
-				loop.disabled = true
-				results = append(results, "The result limit for this request was reached. Answer with the results you already have.")
-				continue
-			}
-			remaining = min(remaining, left)
-		}
-		room := min(protocol.MaxServerResultBytes, protocol.ServerResultBudget-loop.bytes)
-		if room <= 0 {
-			loop.disabled = true
-			results = append(results, "The result limit for this request was reached. Answer with the results you already have.")
-			continue
-		}
-		if !s.reserveSearch(websearch.WorkingSet) {
-			return a.abort(protocol.Error{Type: protocol.Overloaded}, 1)
-		}
-		// The search is new paid work: the attempt's end (the call's deadline, the node's shutdown) stops it, and so does
-		// the client leaving, even when the endpoint's policy kept the first sampling reading after it.
-		searchCtx, cancel := context.WithTimeout(ctx, websearch.Timeout)
-		stop := context.AfterFunc(s.req.Context(), cancel) //nolint:contextcheck // the client leaving ends the search; the search never ends the client
-		found, err := loop.backend.Search(searchCtx, websearch.Query{
-			Text: query, MaxResults: int(remaining),
-			IncludeDomains: loop.tool.IncludeDomains, ExcludeDomains: loop.tool.ExcludeDomains,
-		})
-		stop()
-		cancel()
-		if err != nil {
-			if e := a.stopped(ctx); e != nil {
-				return e // cut by the attempt's end or the client, not the backend's failure
-			}
-		}
-		switch {
-		case errors.Is(err, websearch.ErrQueryTooLong):
-			results = append(results, "The search query is longer than this search engine accepts. Try a shorter one.")
-			continue
-		case err != nil:
-			s.logger.WarnContext(ctx, "the web search backend failed in the model-side loop", "request_id", s.c.ID.String(), "err", err)
-			return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
-		}
-		s.searches++
-		s.searched = true
-		text, n := searchResults(query, found, room, int(remaining))
-		loop.results += int64(n)
-		loop.bytes += len(text)
 		results = append(results, text)
-		for _, r := range found {
-			if len(s.citations) >= 32 {
-				break
-			}
-			s.citations = append(s.citations, protocol.Citation{URL: r.URL, Title: r.Title, Content: r.Content})
-		}
-		if loop.tool.MaxTotalResults > 0 && loop.results >= loop.tool.MaxTotalResults {
-			loop.disabled = true
-		}
-		if loop.bytes >= protocol.ServerResultBudget {
-			loop.disabled = true
-		}
 	}
 	if loop.steps >= loop.cap {
 		loop.disabled = true
@@ -144,6 +74,109 @@ func (a *attempt) search(ctx context.Context, turn protocol.ServerTurn) *ended {
 	if e := a.stopped(ctx); e != nil {
 		return e // the searches that ran stay charged; nothing is sent after the attempt ended
 	}
+	return a.appendTurn(turn, results)
+}
+
+// searchCall runs one tool call's search and returns the tool result the model reads: the results, or why there are
+// none. A cap the call reaches disables the loop, so the next hop declares no function.
+func (a *attempt) searchCall(ctx context.Context, call protocol.ServerToolCall) (string, *ended) {
+	loop := a.s.loop
+	if loop.disabled || loop.steps >= loop.cap {
+		loop.disabled = true
+		return stepLimitResult, nil
+	}
+	loop.steps++
+	query := searchQuery(call.Arguments)
+	switch {
+	case query == "":
+		return noQueryResult, nil
+	case len(query) > protocol.MaxWebSearchQueryBytes:
+		return longQueryResult, nil
+	}
+	limit, room, ok := loop.room()
+	if !ok {
+		loop.disabled = true
+		return resultLimitResult, nil
+	}
+	return a.runSearch(ctx, query, limit, room)
+}
+
+// room is what the next search may add: at most limit results, the per-search cap within what max_total_results leaves,
+// in at most room bytes of ServerResultBudget. ok is false once either total is spent.
+func (l *serverLoop) room() (limit int64, room int, ok bool) {
+	limit = int64(protocol.MaxServerResults)
+	if l.tool.MaxResults > 0 {
+		limit = int64(l.tool.MaxResults)
+	}
+	if l.tool.MaxTotalResults > 0 {
+		left := l.tool.MaxTotalResults - l.results
+		if left <= 0 {
+			return 0, 0, false
+		}
+		limit = min(limit, left)
+	}
+	room = min(protocol.MaxServerResultBytes, protocol.ServerResultBudget-l.bytes)
+	return limit, room, room > 0
+}
+
+// runSearch asks the backend for one query and returns its results as the tool result, counted against the loop's
+// caps. A backend failure ends the call, unless it was the attempt or the client ending that cut the search.
+func (a *attempt) runSearch(ctx context.Context, query string, limit int64, room int) (string, *ended) {
+	s, loop := a.s, a.s.loop
+	if !s.reserveSearch(websearch.WorkingSet) {
+		return "", a.abort(protocol.Error{Type: protocol.Overloaded}, 1)
+	}
+	// The search is new paid work: the attempt's end (the call's deadline, the node's shutdown) stops it, and so does
+	// the client leaving, even when the endpoint's policy kept the first sampling reading after it.
+	searchCtx, cancel := context.WithTimeout(ctx, websearch.Timeout)
+	stop := context.AfterFunc(s.req.Context(), cancel) //nolint:contextcheck // the client leaving ends the search; the search never ends the client
+	found, err := loop.backend.Search(searchCtx, websearch.Query{
+		Text: query, MaxResults: int(limit),
+		IncludeDomains: loop.tool.IncludeDomains, ExcludeDomains: loop.tool.ExcludeDomains,
+	})
+	stop()
+	cancel()
+	if err != nil {
+		if e := a.stopped(ctx); e != nil {
+			return "", e // cut by the attempt's end or the client, not the backend's failure
+		}
+		if errors.Is(err, websearch.ErrQueryTooLong) {
+			return longQueryResult, nil
+		}
+		s.logger.WarnContext(ctx, "the web search backend failed in the model-side loop", "request_id", s.c.ID.String(), "err", err)
+		return "", a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
+	}
+	s.searches++
+	s.searched = true
+	text, n := searchResults(query, found, room, int(limit))
+	loop.took(n, len(text))
+	s.cite(found)
+	return text, nil
+}
+
+// took counts a search's results and bytes against the loop's totals, and disables the loop once either is spent.
+func (l *serverLoop) took(results, bytes int) {
+	l.results += int64(results)
+	l.bytes += bytes
+	if l.tool.MaxTotalResults > 0 && l.results >= l.tool.MaxTotalResults || l.bytes >= protocol.ServerResultBudget {
+		l.disabled = true
+	}
+}
+
+// cite keeps a search's results as the citations an aggregated Chat reply carries, at most 32 for the call.
+func (s *session) cite(found []websearch.Result) {
+	for _, r := range found {
+		if len(s.citations) >= 32 {
+			return
+		}
+		s.citations = append(s.citations, protocol.Citation{URL: r.URL, Title: r.Title, Content: r.Content})
+	}
+}
+
+// appendTurn makes the next sampling's request: the conversation with the model's turn replayed and the tool results
+// after it, read again as the request it now is.
+func (a *attempt) appendTurn(turn protocol.ServerTurn, results []string) *ended {
+	s, loop := a.s, a.s.loop
 	// AppendServerTurn copies the whole conversation with the replayed turn, already JSON, and the results, which a JSON
 	// escape writes in at most six bytes a byte (\u00XX); Inspect reads the copy. Both are charged before they allocate.
 	added := len(turn.Assistant)

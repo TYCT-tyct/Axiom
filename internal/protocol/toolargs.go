@@ -29,7 +29,7 @@ const (
 	scanObjectFirst                  // after '{': a name or '}'
 	scanName                         // after a comma in an object
 	scanColon
-	scanAfter // after a value in a container: a comma or its closer
+	scanAfter // after a value in a container: a comma or its closer; step takes the states up to here as between tokens
 	scanString
 	scanEscape
 	scanHex
@@ -57,96 +57,48 @@ func (s *argScan) ok() bool {
 	return s.state == scanDone
 }
 
-//nolint:cyclop,gocognit,funlen // the scanner's transition table, one case per state
+// step reads one byte. The states between tokens and those within one have a transition table each, a method per
+// state's rule; a string's content, most of what arguments hold, is read first.
 func (s *argScan) step(c byte) {
-	switch s.state {
+	switch {
+	case s.state == scanString:
+		s.inString(c)
+	case s.state <= scanAfter:
+		s.between(c)
+	default:
+		s.within(c)
+	}
+}
+
+// between reads a byte between tokens.
+func (s *argScan) between(c byte) {
+	switch s.state { //nolint:exhaustive // step gives it only the states up to scanAfter
 	case scanValue, scanArrayFirst:
-		switch {
-		case space(c):
-		case c == ']' && s.state == scanArrayFirst:
-			s.close()
-		default:
-			s.value(c)
-		}
+		s.valueDue(c)
 	case scanObjectFirst, scanName:
-		switch {
-		case space(c):
-		case c == '}' && s.state == scanObjectFirst:
-			s.close()
-		case c == '"':
-			s.state, s.name = scanString, true
-		default:
-			s.state = scanBad
-		}
+		s.nameDue(c)
 	case scanColon:
-		switch {
-		case space(c):
-		case c == ':':
-			s.state = scanValue
-		default:
-			s.state = scanBad
-		}
+		s.colon(c)
 	case scanAfter:
-		object := s.objects[(s.depth-1)/64]&(1<<((s.depth-1)%64)) != 0
-		switch {
-		case space(c):
-		case c == ',' && object:
-			s.state = scanName
-		case c == ',':
-			s.state = scanValue
-		case c == '}' && object, c == ']' && !object:
-			s.close()
-		default:
-			s.state = scanBad
-		}
-	case scanString:
-		switch {
-		case c == '"' && s.name:
-			s.state, s.name = scanColon, false
-		case c == '"':
-			s.end()
-		case c == '\\':
-			s.state = scanEscape
-		case c < 0x20:
-			s.state = scanBad
-		}
+		s.after(c)
+	}
+}
+
+// within reads a byte within a token other than a string's content, or after the text.
+func (s *argScan) within(c byte) {
+	switch s.state { //nolint:exhaustive // step gives it only the states after scanString
 	case scanEscape:
-		switch c {
-		case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
-			s.state = scanString
-		case 'u':
-			s.state, s.hex = scanHex, 4
-		default:
-			s.state = scanBad
-		}
+		s.escape(c)
 	case scanHex:
-		switch {
-		case !hexDigit(c):
-			s.state = scanBad
-		case s.hex == 1:
-			s.state = scanString
-		default:
-			s.hex--
-		}
+		s.hexDigit(c)
 	case scanLiteral:
-		switch {
-		case c != s.lit[0]:
-			s.state = scanBad
-		case len(s.lit) == 1:
-			s.end()
-		default:
-			s.lit = s.lit[1:]
-		}
+		s.literal(c)
 	case scanMinus:
 		s.digitOr(c, c == '0', scanZero, scanInt)
 	case scanDot:
 		s.digitOr(c, false, scanFrac, scanFrac)
 	case scanE, scanESign:
-		if (c == '+' || c == '-') && s.state == scanE {
-			s.state = scanESign
-			return
-		}
-		s.digitOr(c, false, scanExp, scanExp)
+		s.exponent(c)
 	case scanZero, scanInt, scanFrac, scanExp:
 		s.number(c)
 	case scanDone:
@@ -155,6 +107,112 @@ func (s *argScan) step(c byte) {
 		}
 	case scanBad:
 	}
+}
+
+// valueDue reads where a value is due, or, right after '[', the array's end.
+func (s *argScan) valueDue(c byte) {
+	switch {
+	case space(c):
+	case c == ']' && s.state == scanArrayFirst:
+		s.close()
+	default:
+		s.value(c)
+	}
+}
+
+// nameDue reads where a member name is due, or, right after '{', the object's end.
+func (s *argScan) nameDue(c byte) {
+	switch {
+	case space(c):
+	case c == '}' && s.state == scanObjectFirst:
+		s.close()
+	case c == '"':
+		s.state, s.name = scanString, true
+	default:
+		s.state = scanBad
+	}
+}
+
+func (s *argScan) colon(c byte) {
+	switch {
+	case space(c):
+	case c == ':':
+		s.state = scanValue
+	default:
+		s.state = scanBad
+	}
+}
+
+// after reads what follows a value in a container: a comma or the container's closer.
+func (s *argScan) after(c byte) {
+	object := s.objects[(s.depth-1)/64]&(1<<((s.depth-1)%64)) != 0
+	switch {
+	case space(c):
+	case c == ',' && object:
+		s.state = scanName
+	case c == ',':
+		s.state = scanValue
+	case c == '}' && object, c == ']' && !object:
+		s.close()
+	default:
+		s.state = scanBad
+	}
+}
+
+func (s *argScan) inString(c byte) {
+	switch {
+	case c == '"' && s.name:
+		s.state, s.name = scanColon, false
+	case c == '"':
+		s.end()
+	case c == '\\':
+		s.state = scanEscape
+	case c < 0x20:
+		s.state = scanBad
+	}
+}
+
+func (s *argScan) escape(c byte) {
+	switch c {
+	case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+		s.state = scanString
+	case 'u':
+		s.state, s.hex = scanHex, 4
+	default:
+		s.state = scanBad
+	}
+}
+
+// hexDigit reads one of a \u escape's four hex digits.
+func (s *argScan) hexDigit(c byte) {
+	switch {
+	case !hexDigit(c):
+		s.state = scanBad
+	case s.hex == 1:
+		s.state = scanString
+	default:
+		s.hex--
+	}
+}
+
+func (s *argScan) literal(c byte) {
+	switch {
+	case c != s.lit[0]:
+		s.state = scanBad
+	case len(s.lit) == 1:
+		s.end()
+	default:
+		s.lit = s.lit[1:]
+	}
+}
+
+// exponent reads what follows an exponent's e: a sign, once, or its first digit.
+func (s *argScan) exponent(c byte) {
+	if (c == '+' || c == '-') && s.state == scanE {
+		s.state = scanESign
+		return
+	}
+	s.digitOr(c, false, scanExp, scanExp)
 }
 
 // value starts the value c begins.

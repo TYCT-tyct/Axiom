@@ -187,8 +187,6 @@ func bodyFault(err error) string {
 // Inspect reads the request summary from body in one pass of the tokenizer, never decoding the body into a tree, so
 // its own allocations do not grow with the body; the tokenizer's grow only with the names of objects wider than 64
 // names, as in jsonx.Validate (README.md「请求摘要」). Members it does not read are only checked to be JSON.
-//
-//nolint:cyclop,gocognit // one dispatch over every format, each branch one reader
 func Inspect(f Format, body []byte) (Request, error) {
 	if f == Completions || f.Direct() {
 		return inspectNew(f, body)
@@ -202,6 +200,13 @@ func Inspect(f Format, body []byte) (Request, error) {
 		}
 		return Request{}, fmt.Errorf("%w: %s", ErrInvalid, bodyFault(err))
 	}
+	s.settle()
+	return s.r, nil
+}
+
+// settle fills what the summary takes from members read in any order: compression, reasoning, the service tiers and the
+// native tools' bounds.
+func (s *scanner) settle() {
 	if !s.compressionSet && s.transformsSet {
 		s.r.Compression = CompressionDisabled
 		if s.middleOut {
@@ -218,18 +223,24 @@ func Inspect(f Format, body []byte) (Request, error) {
 	if s.r.ServiceTiers == 0 {
 		s.r.ServiceTiers = anyTier
 	}
-	// Only Responses sends max_tool_calls upstream, where it caps the provider's tools; Chat and Messages lose it in
-	// Prepare (it is OpenRouter's loop control there), so a quote that counted it would cover fewer uses than run.
-	if f == Responses && s.r.HasMaxToolCalls && s.r.Needs.Has(CodeExecution) {
+	if s.r.Format == Responses && s.r.HasMaxToolCalls {
+		s.boundToolCalls()
+	}
+}
+
+// boundToolCalls bounds Responses' native tools by its max_tool_calls. Only Responses sends max_tool_calls upstream,
+// where it caps the provider's tools; Chat and Messages lose it in Prepare (it is OpenRouter's loop control there), so
+// a quote that counted it would cover fewer uses than run.
+func (s *scanner) boundToolCalls() {
+	if s.r.Needs.Has(CodeExecution) {
 		s.r.CodeExecutions = s.r.MaxToolCalls
 	}
-	if f == Responses && s.r.HasMaxToolCalls && s.r.Needs.Has(WebSearch) && s.r.ServerSearch == nil {
+	if s.r.Needs.Has(WebSearch) && s.r.ServerSearch == nil {
 		s.r.WebSearches = s.r.MaxToolCalls
 	}
-	if f == Responses && s.r.HasMaxToolCalls && s.r.Needs.Has(FileSearch) {
+	if s.r.Needs.Has(FileSearch) {
 		s.r.FileSearches = s.r.MaxToolCalls
 	}
-	return s.r, nil
 }
 
 // anyTier is what a request that names no tier may get: OpenAI's auto takes the project's tier and Anthropic's auto
