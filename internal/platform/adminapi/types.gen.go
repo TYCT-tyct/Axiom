@@ -516,6 +516,7 @@ func (e EndpointTestProblemScope) Valid() bool {
 // Defines values for ErrorCode.
 const (
 	ErrorCodeAccountNotLinked      ErrorCode = "account_not_linked"
+	ErrorCodeCapExceeded           ErrorCode = "cap_exceeded"
 	ErrorCodeConflict              ErrorCode = "conflict"
 	ErrorCodeConsentRequired       ErrorCode = "consent_required"
 	ErrorCodeEmailDomainNotAllowed ErrorCode = "email_domain_not_allowed"
@@ -561,6 +562,8 @@ const (
 func (e ErrorCode) Valid() bool {
 	switch e {
 	case ErrorCodeAccountNotLinked:
+		return true
+	case ErrorCodeCapExceeded:
 		return true
 	case ErrorCodeConflict:
 		return true
@@ -856,6 +859,7 @@ func (e OAuthProvider) Valid() bool {
 const (
 	Delisting OperationRisk = "delisting"
 	Routine   OperationRisk = "routine"
+	TopUp     OperationRisk = "top_up"
 )
 
 // Valid indicates whether the value is a known member of the OperationRisk enum.
@@ -864,6 +868,8 @@ func (e OperationRisk) Valid() bool {
 	case Delisting:
 		return true
 	case Routine:
+		return true
+	case TopUp:
 		return true
 	default:
 		return false
@@ -948,6 +954,21 @@ const (
 func (e OperationsApprovalTier) Valid() bool {
 	switch e {
 	case Human:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationsCapCategory.
+const (
+	MoneyTopUp OperationsCapCategory = "money.top_up"
+)
+
+// Valid indicates whether the value is a known member of the OperationsCapCategory enum.
+func (e OperationsCapCategory) Valid() bool {
+	switch e {
+	case MoneyTopUp:
 		return true
 	default:
 		return false
@@ -3313,6 +3334,71 @@ type OperationsApprovalState string
 // OperationsApprovalTier Who must decide; only the owner, in the admin, for now.
 type OperationsApprovalTier string
 
+// OperationsCapAmount An amount in billionths of one unit of the policy's currency, as integer text.
+type OperationsCapAmount = string
+
+// OperationsCapCategory A kind of money the agent moves, each with its own caps; top-ups of suppliers for now.
+type OperationsCapCategory string
+
+// OperationsCapLimits The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or not: one proposal, the day and the week. Reserved and committed amounts both count.
+type OperationsCapLimits struct {
+	DailyCountMax int32 `json:"daily_count_max"`
+
+	// DailyMax An amount in billionths of one unit of the policy's currency, as integer text.
+	DailyMax OperationsCapAmount `json:"daily_max"`
+
+	// HardDailyMax An amount in billionths of one unit of the policy's currency, as integer text.
+	HardDailyMax OperationsCapAmount `json:"hard_daily_max"`
+
+	// HardSingleMax An amount in billionths of one unit of the policy's currency, as integer text.
+	HardSingleMax OperationsCapAmount `json:"hard_single_max"`
+
+	// HardWeeklyMax An amount in billionths of one unit of the policy's currency, as integer text.
+	HardWeeklyMax OperationsCapAmount `json:"hard_weekly_max"`
+
+	// ObjectDailyMax An amount in billionths of one unit of the policy's currency, as integer text.
+	ObjectDailyMax OperationsCapAmount `json:"object_daily_max"`
+
+	// SingleMax An amount in billionths of one unit of the policy's currency, as integer text.
+	SingleMax OperationsCapAmount `json:"single_max"`
+
+	// WeeklyMax An amount in billionths of one unit of the policy's currency, as integer text.
+	WeeklyMax OperationsCapAmount `json:"weekly_max"`
+}
+
+// OperationsCapPolicy defines model for OperationsCapPolicy.
+type OperationsCapPolicy struct {
+	// Category A kind of money the agent moves, each with its own caps; top-ups of suppliers for now.
+	Category OperationsCapCategory `json:"category"`
+	Currency string                `json:"currency"`
+
+	// Limits The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or not: one proposal, the day and the week. Reserved and committed amounts both count.
+	Limits OperationsCapLimits `json:"limits"`
+	Rev    int64               `json:"rev"`
+
+	// Scope `platform` or a site's ID.
+	Scope     string    `json:"scope"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// OperationsCapPolicyList defines model for OperationsCapPolicyList.
+type OperationsCapPolicyList struct {
+	Data []OperationsCapPolicy `json:"data"`
+}
+
+// OperationsCapPolicyUpdate defines model for OperationsCapPolicyUpdate.
+type OperationsCapPolicyUpdate struct {
+	// Currency Fixed when the policy is made.
+	Currency string `json:"currency"`
+
+	// Limits The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or not: one proposal, the day and the week. Reserved and committed amounts both count.
+	Limits OperationsCapLimits `json:"limits"`
+	Reason string              `json:"reason"`
+
+	// Rev The revision read; 0 makes the policy.
+	Rev int64 `json:"rev"`
+}
+
 // OperationsCountTarget defines model for OperationsCountTarget.
 type OperationsCountTarget struct {
 	// Gap Actual minus target. Absent for calls and errors when the call log is incomplete over the window; paid users always state it because it reads credit batches, not the call log.
@@ -5636,6 +5722,12 @@ type RejectOperationsApprovalParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetOperationsCapPolicyParams defines parameters for SetOperationsCapPolicy.
+type SetOperationsCapPolicyParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListOperationsCredentialsParams defines parameters for ListOperationsCredentials.
 type ListOperationsCredentialsParams struct {
 	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
@@ -6266,6 +6358,9 @@ type ApproveOperationsApprovalJSONRequestBody = ReasonRequest
 
 // RejectOperationsApprovalJSONRequestBody defines body for RejectOperationsApproval for application/json ContentType.
 type RejectOperationsApprovalJSONRequestBody = ReasonRequest
+
+// SetOperationsCapPolicyJSONRequestBody defines body for SetOperationsCapPolicy for application/json ContentType.
+type SetOperationsCapPolicyJSONRequestBody = OperationsCapPolicyUpdate
 
 // CreateOperationsCredentialJSONRequestBody defines body for CreateOperationsCredential for application/json ContentType.
 type CreateOperationsCredentialJSONRequestBody = OperationsCredentialCreate

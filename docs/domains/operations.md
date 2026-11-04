@@ -62,7 +62,7 @@
 
 ### 运营接口
 
-运营接口是 agent 改动 Axiom 的唯一入口；读供应商页面走浏览器工具，不经过运营接口。下面是接口设计，按「上线与兼容」的分片落地。现状：第一片已实现——契约 `api/operations.yaml`、核心的运营监听、运营凭证与控制面的凭证管理和紧急停止、读工具 `whoami`、`operation_log_list`、`suppliers_list`、`suppliers_get`、`pending_mappings_list`、`models_list`、`model_get`、`calls_list`、`call_get`，以及每次调用的操作记录。第二片的审批引擎已实现：运营操作和审批的表、第一个写工具 `model_set_status`（上架直接执行，下架等负责人批准）、`operations_list`、`operation_get`、`approval_get`、`approval_withdraw`，管理接口的审批列表、详情、批准和驳回，到期清扫，以及审批通知的告警信号；管理后台的审批页、一键令牌和审批 AI 还没有。其余读工具（余额、端点、价格、路由预览、告警、审计、节点）、其余写工具、资金上限、MCP 桥和审计链随后续分片落地，运维节点上仍只有探针（`cmd/axiom/ingress.go`）。接口面是公开契约，资金规则和它一起按「谁拍板」需要负责人同意；负责人 2026-11-04 在[评论](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6498764672)批准本设计，原话：「12同意，3待定后续会做现在成本高不推荐。4测评我会单独做一个项目一个网站 5.写一个demo」；第 2 项即本设计，覆盖运营接口、MCP 映射、审批、资金上限和审计。
+运营接口是 agent 改动 Axiom 的唯一入口；读供应商页面走浏览器工具，不经过运营接口。下面是接口设计，按「上线与兼容」的分片落地。现状：第一片已实现——契约 `api/operations.yaml`、核心的运营监听、运营凭证与控制面的凭证管理和紧急停止、读工具 `whoami`、`operation_log_list`、`suppliers_list`、`suppliers_get`、`pending_mappings_list`、`models_list`、`model_get`、`calls_list`、`call_get`，以及每次调用的操作记录。第二片的审批引擎已实现：运营操作和审批的表、第一个写工具 `model_set_status`（上架直接执行，下架等负责人批准）、`operations_list`、`operation_get`、`approval_get`、`approval_withdraw`，管理接口的审批列表、详情、批准和驳回，到期清扫，以及审批通知的告警信号；管理后台的审批页、一键令牌和审批 AI 还没有。第三片的转账上限已实现：控制面的上限策略（`/operations/cap-policies`）、计数器与预留，以及第一个资金写，供应商充值的提出与确认（`supplier_top_up_propose`、`supplier_top_up_confirm`）。其余读工具（余额、端点、价格、路由预览、告警、上限用量、审计、节点）、其余写工具、价格包络、退款与赠额、MCP 桥和审计链随后续分片落地，运维节点上仍只有探针（`cmd/axiom/ingress.go`）。接口面是公开契约，资金规则和它一起按「谁拍板」需要负责人同意；负责人 2026-11-04 在[评论](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6498764672)批准本设计，原话：「12同意，3待定后续会做现在成本高不推荐。4测评我会单独做一个项目一个网站 5.写一个demo」；第 2 项即本设计，覆盖运营接口、MCP 映射、审批、资金上限和审计。
 
 - **契约与监听**：运营接口另有一份 OpenAPI 契约 `api/operations.yaml`，路径前缀 `/api/operations/v1`，挂在核心节点的运营监听上（`AXIOM_OPERATIONS_ADDR`），不挂在公网、管理或节点监听上。监听默认关闭；打开时只接受带 `ops` 用途客户端证书的双向 TLS 连接（由 `ca.crt` 签发、`clientAuth`，且主题备用名里有 URI `urn:axiom:node-purpose:ops`；入口节点的证书没有它），来源再按 `AXIOM_OPERATIONS_SOURCES` 限制（只看连接地址，不读转发头；监听不是回环地址又没配来源就拒绝启动）。运维节点上的 MCP 桥是唯一客户端，它同时出示`ops` 用途的节点证书和运营凭证；只有运营凭证、没有`ops` 用途的节点证书的连接一样拒绝。
 - **执行位置**：HTTP 处理器在 `cmd/axiom`，和两个现有接口一样只经各模块的公开接口组合；权限、审批、资金上限、操作记录和审计链在 `operations` 模块。运维节点上的 Go 程序只新增一个回环地址上的 MCP 监听，不连数据库、不读密钥环、不跑任务队列，也不持有任何业务数据；它把工具调用经`ops` 用途的节点证书和运营凭证转发给核心。这样 MCP 桥被攻破时，攻击者拿到的是运营凭证；数据库、供应商凭证和用户数据在核心，模型 key 和供应商会话在运维节点的其他进程，按各自的边界加固。
@@ -102,13 +102,13 @@
   | 升级、增减服务器、删除数据 | — | — | 不在运营接口里 |
   | 发告警、提 Issue、撤回自己的待审批提案、取消自己的未开始操作 | 日常 | `operations.write` | 直接执行，限频 |
 
-资金类操作（充值、退款、赠额）在资金上限服务接入前不生成工具、不开放接口；运营记录和审计先覆盖读和日常写，agent 只能发告警或 Issue 建议，由负责人处理。
+资金类操作在资金上限服务接入前不生成工具、不开放接口。充值已接入上限（见「转账的累计金额上限」的「现在的实现」）；退款和赠额还没有接入，不生成工具，agent 只能发告警或 Issue 建议，由负责人处理。
 
-现在实现的写：`PUT /models/{id}/status`（`model_set_status`）的上架是日常、直接执行，下架等负责人审批；`POST /approvals/{id}/withdraw`（`approval_withdraw`）撤回自己的待审批提案（`dry_run` 时在一个回滚的事务里跑完撤回的检查，什么都不留下）。提案时按 `rev` 和模型状态先拒绝目标模块执行时一定会拒绝的（旧 `rev`、下架不在售的模型），不让负责人去批一个注定失败的提案；`dry_run` 只回操作会从哪个状态开始（直接执行是 `approved`，要审批是 `pending_approval`），不写、不调目标模块。其余写操作、`approval_wait`、`approvals_list` 和 `operation_cancel` 尚未实现；`approved` 的操作现在都在批准它的事务里执行完，没有"已批准未开始"的可取消状态。
+现在实现的写：`PUT /models/{id}/status`（`model_set_status`）的上架是日常、直接执行，下架等负责人审批；`POST /approvals/{id}/withdraw`（`approval_withdraw`）撤回自己的待审批提案（`dry_run` 时在一个回滚的事务里跑完撤回的检查，什么都不留下）。提案时按 `rev` 和模型状态先拒绝目标模块执行时一定会拒绝的（旧 `rev`、下架不在售的模型），不让负责人去批一个注定失败的提案；`dry_run` 只回操作会从哪个状态开始（直接执行是 `approved`，要审批是 `pending_approval`），不写、不调目标模块。`POST /suppliers/{id}/top-ups`（`supplier_top_up_propose`）提出充值，`POST /suppliers/{id}/top-ups/{operation_id}/confirm`（`supplier_top_up_confirm`）附付款凭证确认到账，两者都要 `suppliers.manage` 和 `operations.money`，契约上标 `x-axiom-money: true`，`dry_run` 在一个回滚的事务里跑完全部检查。其余写操作、`approval_wait`、`approvals_list` 和 `operation_cancel` 尚未实现；`approved` 的操作现在都在批准它的事务里执行完，没有"已批准未开始"的可取消状态。
 
 状态机：`pending_approval` 可到 `approved`、`rejected`、`expired`、`canceled`；`approved` 可到 `executing`、`rejected`、`expired`、`canceled`；`executing` 可到 `succeeded`、`failed`、`unknown`；`unknown` 经对账到 `succeeded` 或 `failed`。`rejected`、`expired`、`canceled`、`failed`、`reverted` 是终态；`succeeded` 已结算，配置类被补偿操作冲正后原操作记 `reverted`，资金类原操作不改状态、由目标模块的退款/冲正记录关联。要重做就新建操作，不复用旧状态、旧批准或旧预留。
 
-- **新增权限**：运营接口和运营凭证使用 `accounts` 已有的权限名，另加 `operations.read`（读自己的操作记录，不敏感）、`operations.write`（告警、Issue、撤回、取消，不敏感）、`operations.money`（所有资金操作的前置范围，敏感）、`operations.approve`（审批，敏感）、`operations.manage`（控制面，敏感）、`refunds.manage`（退款，敏感）、`nodes.view` 与 `nodes.manage`（节点读取与管理）。`operations.approve` 和 `operations.manage` 只授予负责人（迁移把两者放进内置 `admin` 角色）；运营凭证不能持有这两个权限中的任何一个（代码和表的 CHECK 两处拒绝），所以 agent 不能审批自己、不能改策略和上限。现在声明了 `operations.read`、`operations.write`、`operations.approve` 和 `operations.manage`；其余随用到它们的写操作加入。资金操作同时要求 `operations.money` 和对应的业务权限，只有日常权限的凭证花不了钱。
+- **新增权限**：运营接口和运营凭证使用 `accounts` 已有的权限名，另加 `operations.read`（读自己的操作记录，不敏感）、`operations.write`（告警、Issue、撤回、取消，不敏感）、`operations.money`（所有资金操作的前置范围，敏感）、`operations.approve`（审批，敏感）、`operations.manage`（控制面，敏感）、`refunds.manage`（退款，敏感）、`nodes.view` 与 `nodes.manage`（节点读取与管理）。`operations.approve` 和 `operations.manage` 只授予负责人（迁移把两者放进内置 `admin` 角色）；运营凭证不能持有这两个权限中的任何一个（代码和表的 CHECK 两处拒绝），所以 agent 不能审批自己、不能改策略和上限。现在声明了 `operations.read`、`operations.write`、`operations.money`、`operations.approve` 和 `operations.manage`；其余随用到它们的写操作加入。资金操作同时要求 `operations.money` 和对应的业务权限，只有日常权限的凭证花不了钱。
 
 #### 运营凭证
 
@@ -152,6 +152,7 @@
   6. 审批通过时重新锁运营操作、审批、目标行和计数器行（按第 2 步的顺序），核对指纹、`rev`、策略版本、硬上限、当前窗口和执行期限；窗口或执行期限变了改 `expired`，指纹、`rev`、策略版本或硬上限变了改 `rejected`，都释放，不拿旧批准去执行新操作。
 - **审批与上限的关系**：累计上限决定"能不能不经过人"；硬上限决定"能不能做"。超出累计上限的提案可以转人工，但金额必须在硬上限内；人工批准不会把金额从计数器里去掉，批准后仍然占用额度，可以超过自主/累计阈值，但不能超过硬上限。硬上限只能由负责人在控制面改，改的时候要两步验证并记审计。审批 AI 的上限不高于人工上限，且不能碰硬上限。
 - **失败与对账**：确定失败释放 `reserved`；超时、连接断开、进程崩溃等无法判断的结果保持 `reserved`，不自动重试不幂等的外部调用。每分钟的对账任务按 `operations.money_actions` 重算当前窗口的计数器，和 `cap_counters` 比对；不一致就告警，并暂停该站点该类别的自主资金操作，直到负责人两步验证后修复。修复也在锁内重算，不手工改数字。
+- **现在的实现**：类别只有 `money.top_up`。策略按 `(类别, 站点)` 一行，站点为空是平台（平台供应商的充值没有站点，记在平台上）；负责人给平台设默认值、再按站点覆盖还没有做，哪个范围没有策略就不动钱。策略有币种（建了不变）、五个自主上限（单笔、日、周、对象日、日笔数）和三个硬上限（单笔、日、周），硬上限不能低于对应的自主上限。充值的金额是 `原生金额 × 单位价值`，供应商的结算币种和策略不同时再乘计费的当前参考汇率（不加充值缓冲），向上取整到 10⁻⁹；缺单位价值或汇率回 422 `unprocessable`，账户自带的 key 和已移除的供应商回 409。提案在上限内直接成功（预留），超出自主上限等负责人，超出硬上限回 422 `cap_exceeded`、不建运营操作。充值提案成功只表示负责人可以付款，预留一直占着，直到 agent 用 `supplier_top_up_confirm` 附凭证确认到账（转为 `committed`），或当天 UTC 结束时由每分钟的清扫释放；过了日再确认回 409，负责人仍可以自己付款，那一笔不算 agent 的额度。批准时按现在的策略重算硬上限（窗口里已含这笔预留）：放宽的不影响，调低到装不下它的以 `stale_revision` 结束并释放；资金操作仍记下提案时的策略版本，供审计。审批 AI、一键令牌、操作回答里的 `cap` 字段、`caps_get`、资金写的单独限频（每分钟 30、每小时 300；现在只受每张凭证的总限频）、上限对账任务和"对账不一致就暂停"还没有；`cap` 的内容现在在审批摘要里给负责人看。
 - **不放在计费账本里**：上限是授权控制，不是钱；它要在钱动之前判断，还要跨供应商、退款、赠额统一计数。账本记录的是已经发生的钱，不能代替事前预留；两者通过运营操作编号关联，各自可对账。
 
 #### 售价的累计变动上限
@@ -174,7 +175,7 @@
 - 运营凭证的创建、轮换、吊销、站点范围和权限范围；
 - 运营接口和 agent 的启停；紧急停止后的恢复。
 
-控制面的管理接口操作要求 `operations.manage`（凭证、上限、策略、启停）或 `operations.approve`（审批），两者都是敏感权限，只授予负责人；把其中一个授予别人本身就是高风险操作。agent 的凭证不能持有这两个权限。控制面的接口也在管理接口（`api/admin.yaml`），按资源分：`/operations/credentials`（列表、创建；`/{id}/rotate`、`/{id}/revoke`，已实现）、`/operations/cap-policies`（随资金上限落地）、`/operations/agent/stop`（已实现）；`operations.manage` 由迁移给内置的 `admin` 角色，授予这个角色本身是要两步验证的平台授权；审批在 `/operations/approvals`（已实现列表、详情、批准、驳回）。写都要求两步验证、CSRF、`reason` 和 `Idempotency-Key`。
+控制面的管理接口操作要求 `operations.manage`（凭证、上限、策略、启停）或 `operations.approve`（审批），两者都是敏感权限，只授予负责人；把其中一个授予别人本身就是高风险操作。agent 的凭证不能持有这两个权限。控制面的接口也在管理接口（`api/admin.yaml`），按资源分：`/operations/credentials`（列表、创建；`/{id}/rotate`、`/{id}/revoke`，已实现）、`/operations/cap-policies`（列表；`/{scope}/{category}` 按读到的版本设置，已实现）、`/operations/agent/stop`（已实现）；`operations.manage` 由迁移给内置的 `admin` 角色，授予这个角色本身是要两步验证的平台授权；审批在 `/operations/approvals`（已实现列表、详情、批准、驳回）。写都要求两步验证、CSRF、`reason` 和 `Idempotency-Key`。
 
 ### 风险分级与审批
 
@@ -243,7 +244,7 @@
 ### 审计
 
 - **每次工具调用都有操作记录**：`operations.operation_log` 记记录 ID、凭证 ID、agent 运行 ID、工具名、站点、目标、风险类别、策略版本、幂等键（写操作）、规范化输入（脱敏，最多 8 KiB）、理由、状态、运营操作编号和审批编号（写操作）、预留与计入上限的金额、结果摘要（最多 8 KiB）、错误码、开始和结束时间。现在实现的是读和日常写用到的列：记录 ID、凭证 ID、运行 ID、工具名（`x-mcp-name`）、理由（读取自查询参数，写取自请求体）、输入（路径和查询参数，写还有请求体，都不含理由；按规范 JSON 的字节数计，超过 8 KiB 只记大小；列是 `json` 不是 `jsonb`，数据库量的就是代码写进去的那些字节）、HTTP 状态、错误码、请求 ID、开始和结束时间，写操作还有运营操作编号；其余列随资金写加。凭证认出之后的每个请求都记，守卫拒绝的（权限、范围、参数）也记；答案先缓存在内存里，记录写进数据库后才发出，写不进就答 503、不发答案。令牌不认识或超限频的请求没有凭证可记，不记。读操作也记，但不写审计日志；它是 agent 可回放的调用记录，不是"谁改了钱"的凭证。
-- **每个改状态的操作都写平台审计日志**：在改动自己的事务里调用平台的审计写入，和运营操作、计数器、目标改动同成同败；写不进就整个改动失败。运营操作和审批请求的操作者是 `operations_agent:<凭证 ID>`（新增的操作者种类）；批准/驳回的操作者是负责人（`user`）或审批 AI（`system:operations.ai_approval`），过期是 `system:operations.approval_expiry`。动作名是 `operation.execute`、`operation.succeed`、`operation.fail`、`operation.reject`、`operation.cancel`、`approval.request`、`approval.approve`、`approval.reject`、`approval.expire`（模块列已经是 `operations`，动作名保持两段）。现在写入的是 `approval.request`、`approval.approve`、`approval.reject`、`approval.expire`、`operation.succeed`、`operation.reject`（批准后目标已变）和 `operation.cancel`（撤回、吊销和停止）；`operation.execute` 和 `operation.fail` 随外部调用加入。目标模块自己的审计（如 `model.retire`）以 agent 的名义写在同一个事务里。审计的 `detail` 放运营操作编号、审批编号、金额与币种、上限前后、目标模块的行 ID、改前改后的价格/状态/权重；不放密钥、凭证明文、对话内容、请求正文或供应商页面原文。理由字段只放 agent 写的理由，视为不可信文本。
+- **每个改状态的操作都写平台审计日志**：在改动自己的事务里调用平台的审计写入，和运营操作、计数器、目标改动同成同败；写不进就整个改动失败。运营操作和审批请求的操作者是 `operations_agent:<凭证 ID>`（新增的操作者种类）；批准/驳回的操作者是负责人（`user`）或审批 AI（`system:operations.ai_approval`），过期是 `system:operations.approval_expiry`。动作名是 `operation.execute`、`operation.succeed`、`operation.fail`、`operation.reject`、`operation.cancel`、`approval.request`、`approval.approve`、`approval.reject`、`approval.expire`（模块列已经是 `operations`，动作名保持两段）。现在写入的是 `approval.request`、`approval.approve`、`approval.reject`、`approval.expire`、`operation.succeed`、`operation.reject`（批准后目标已变）和 `operation.cancel`（撤回、吊销和停止），资金操作另有 `reservation.commit`（agent 确认到账）和 `reservation.release`（提案结束或过了日，清扫的操作者是 `system:operations.reservation_expiry`），控制面改上限记 `cap_policy.set`（改前改后的全部上限和版本）；`operation.execute` 和 `operation.fail` 随外部调用加入。目标模块自己的审计（如 `model.retire`）以 agent 的名义写在同一个事务里。审计的 `detail` 放运营操作编号、审批编号、金额与币种、上限前后、目标模块的行 ID、改前改后的价格/状态/权重；不放密钥、凭证明文、对话内容、请求正文或供应商页面原文。理由字段只放 agent 写的理由，视为不可信文本。
 - **谁能读**：agent 通过运营接口读自己的操作记录和审批；读全平台审计需要 `audit.view`，由负责人决定给不给。负责人和管理员用管理后台的审计页检索，沿用平台的 `audit.List`/`audit.Get` 和范围规则。审计条目属于平台数据，租户范围读不到。
 - **防篡改**：`operations.audit_chain` 按 `(at, id)` 顺序给每条已提交的审计条目接链，一行的内容是序号、审计条目 ID、前一条的哈希和本条哈希（SHA-256，覆盖规范化后的审计字段）。接链由一个带会话锁的 worker 做，不在审计写入的事务里；worker 只处理 `at` 早于当前时间至少 60 秒的条目，给还在提交中的事务留出窗口；如果仍看到比链头更早的新条目，停止接链并告警，不把它插到链中间。worker 落后超过 60 秒告警，链断或哈希不匹配立即告警并停掉自动处理。链和条目定期复制到运维节点以外的对象存储，对象存储开版本控制和对象锁，写凭证只允许写新对象、不能覆盖或删除；对象存储不可用时链照常本地推进，复制落后告警。每天给负责人发摘要：按类别的操作数、资金操作与上限、审批、被拒绝的尝试、链的进度和复制状态。
 - **保留**：审计和操作记录的保留期待定，由负责人决定；与钱有关的条目至少和账本保留一样久。到期删除只由专门的后台角色执行，应用角色不能删；删除前先确认链和异地副本完整。
@@ -406,6 +407,14 @@
 | 审批通知用告警信号 `operations.approval_pending` | 信号表、规则、渠道、回执和重试都已有，信号和提案同一个事务写入，提案在通知就在，没配规则也不丢事件。代价是现在通知里只有工具、目标和到期时间，摘要和管理后台链接要等通知模板 |
 | 提案时先拒绝目标一定会拒绝的（旧 `rev`、下架不在售的模型） | 这样的提案批准后必然失败；先拒绝让 agent 立刻知道，负责人也不白审 |
 | 限频先按核心节点在进程内计 | 现在的唯一客户端是一个 MCP 桥，连一个核心地址；共享计数要用 Valkey 和它的兜底，等桥和多核心部署落地再定。MCP 桥另有按任务的预算 |
+| 充值提案的预留留到 agent 确认到账或当天 UTC 结束，不按 5 分钟执行期限过期 | 充值的付款由负责人做，几分钟内完不成；把它当成"已批准未开始"按 5 分钟过期，几乎每笔都会在付款前释放，额度形同虚设。留到当天结束和设计"跨窗口的未开始操作在窗口结束时过期"一致，昨天的额度不会拿来记今天的钱；代价是傍晚提的充值能付款的时间短，过了日负责人自己付款即可 |
+| 日笔数数每一笔提案，释放的也算 | 撤回、驳回再重提如果不算，agent 可以在一天里无限次提案、让负责人反复审批；数提案让笔数上限约束的是"打扰负责人的次数"。金额释放后照常退回 `reserved`，只有笔数不退 |
+| 上限策略按 `(类别, 站点)` 一行，平台为空；先不做平台默认值覆盖站点 | 平台供应商的充值没有站点，需要平台自己的一行；默认值加覆盖要定"站点改了默认值是否跟着变"，现在只有平台供应商，没有站点上限的需要。没有策略就拒绝，所以缺覆盖不会变成不限 |
+| 策略的币种建了不变 | 计数器只记整数，不记币种；币种一变，同一行计数器里就混了两种钱。要换币种就新建范围或等窗口过去，代价是负责人不能原地改币种 |
+| 充值金额用计费的当前参考汇率，不加充值缓冲，向上取整到 10⁻⁹ | 上限要按"这笔钱值多少"计，缓冲是向用户收款时的加价，不属于这笔钱；向上取整让计数器永远不少算。汇率和单位价值的行 ID 记在资金操作的依据里，审计能复算 |
+| 动钱的写在契约上标 `x-axiom-money: true`，守卫在业务权限之外再查 `operations.money` | 设计要求资金操作同时要两个权限；放在契约里，守卫统一检查，以后的 MCP 桥按同一份契约过滤工具，不靠每个处理器记得多查一次 |
+| 充值提案不锁供应商行 | 设计的第 2 步先锁目标行，是为了目标在判断和改动之间不变；充值提案不改供应商，金额来自只追加的单位价值行（ID 记在依据里），锁供应商只会让余额同步等提案。同一家供应商的提案由对象计数器的行锁串行 |
+| 批准时按现在的策略重算硬上限，不比对策略版本 | 设计要求"变松不影响已经发出的提案，但仍按新策略重算硬上限"：只比版本会让无关的放宽也作废待批的提案、重复打扰负责人。待批的金额已经在计数器里，所以重算是"窗口里的已用（含这笔）不超过新的硬上限、这笔不超过新的单笔硬上限"；自主上限只决定要不要人审，负责人正在审，不再看 |
 | 操作记录和审计日志分开 | 每次工具调用都进操作记录，读也能回放；审计只记状态改变，保持"谁改了什么"的清晰和可检索。合成一张表会让读操作淹没审计，或者让读也进入不可变的审计链 |
 | 回滚是补偿操作，成功的资金操作不自动返还上限 | 删除或改写原记录会毁掉审计；自动返还上限会让"花掉、退回、再花"在同一窗口循环。补偿操作重新走审批和上限，原操作永久保留 |
 | 上线按能力门控，没有凭证或没有策略时失败关闭 | 滚动发布时旧核心没有运营监听，不能让 agent 退回管理接口；没有策略时默认拒绝，避免"忘配就是不限" |

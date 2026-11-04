@@ -1,6 +1,6 @@
 # operations
 
-运营看板的业务目标、运营接口的操作记录、运营操作与审批在代码里的接口、表和不变量。规则和理由见[运营的「业务目标」](../../docs/domains/operations.md#业务目标)、[「审计」](../../docs/domains/operations.md#审计)和[「风险分级与审批」](../../docs/domains/operations.md#风险分级与审批)；本文只写实现时依赖的部分。
+运营看板的业务目标、运营接口的操作记录、运营操作与审批、资金上限在代码里的接口、表和不变量。规则和理由见[运营的「业务目标」](../../docs/domains/operations.md#业务目标)、[「审计」](../../docs/domains/operations.md#审计)、[「风险分级与审批」](../../docs/domains/operations.md#风险分级与审批)和[「资金操作上限」](../../docs/domains/operations.md#资金操作上限)；本文只写实现时依赖的部分。
 
 ## 接口
 
@@ -82,6 +82,46 @@ func RegisterExpiry(db, scope, queue, logger) error
 | 每个状态变化都有审计 | `finish`、`Settle` 在同一个事务里写状态和 `audit.Record`；审计写不进整个改动回滚 |
 | 已批准的操作不留在 `approved` | 直接执行的和批准后的都在同一个事务里 `Settle`；所以 `CancelLive` 和清扫只处理 `pending_approval` |
 
+## 资金上限
+
+```go
+type Category string // CategoryTopUp = "money.top_up"
+type CapPolicy struct {
+    Site *uuid.UUID; Category Category; Currency platform.Currency // Site nil：平台
+    Single, Daily, Weekly, ObjectDaily int64; DailyCount int32   // 自主上限：都在内才不经过人
+    HardSingle, HardDaily, HardWeekly int64                       // 硬上限：超过就拒绝
+    Rev int64; Updated time.Time
+}
+type Transfer struct { Site *uuid.UUID; Category Category; Object Target; Amount int64; Currency platform.Currency; Basis, Summary map[string]any }
+type CapExceeded struct { Limit string; Max, Used, Amount int64 } // error
+func CapPolicies(ctx, tx) ([]CapPolicy, error)
+func SetCapPolicy(ctx, tx, actor, p CapPolicy, rev int64, reason string) (CapPolicy, error)
+func CapCurrency(ctx, tx, site *uuid.UUID, category Category) (platform.Currency, error)
+func ProposeMoney(ctx, tx, p Proposal, m Transfer) (Operation, bool, error)
+func CheckReservation(ctx, tx, op Operation) (Reservation, error)                  // 批准时复核
+func CommitReservation(ctx, tx, confirm Operation, proposal uuid.UUID, object Target, proof string) (Reservation, error)
+func ExpireReservations(ctx, tx, batch int) (int, error)
+func ReservationOf(ctx, tx, id uuid.UUID) (Reservation, bool, error)
+```
+
+- **谁调**：`cmd/axiom` 的 `supplierTopUpPropose` 先 `HoldAgent`，用 `suppliers.Admin.TopUpBasis` 读出供应商的归属、单位价值和结算币种，按 `CapCurrency` 的币种折算金额（原生金额 × 单位价值，币种不同再乘 `billing.ExchangeRates` 的当前汇率，向上取整到 10⁻⁹），再 `ProposeMoney`；直接执行的在同一个事务里 `Settle`。批准时 `runOperation` 调 `CheckReservation`。`supplierTopUpConfirm` 先 `Propose` 一个确认操作，再 `CommitReservation`，最后 `Settle`。管理接口的 `listOperationsCapPolicies`、`setOperationsCapPolicy` 调 `CapPolicies`、`SetCapPolicy`。本模块不引用 `suppliers` 和 `billing`：金额和它的依据由调用方算好放进 `Transfer`。
+- **表**：`migrations/00005_money_caps.sql`。`operations.cap_policies` 每个 `(类别, 站点)` 一行（`UNIQUE NULLS NOT DISTINCT`，站点为空是平台）：币种、五个自主上限、三个硬上限（表的 CHECK 要求每个硬上限不低于对应的自主上限）、版本。`operations.cap_counters` 每个 `(类别, 窗口种类, 窗口开始, 对象种类, 对象 ID, 站点)` 一行：类别的 UTC 日和 ISO 周（对象为空），对象的 UTC 日；记 `reserved`、`committed` 和笔数，初值 0，CHECK 不为负。`operations.money_actions` 每个资金操作一行：类别、范围、对象、金额、币种、依据（`basis`：原生金额、原生单位、单位价值行 ID 与值、结算币种、汇率的 ID、版本和分子分母、结果）、策略版本、预留所在的日和周、到期（当天 UTC 结束）、状态（`reserved`/`committed`/`released`）、付款凭证和确认它的操作。应用角色只能改策略的上限和版本、计数器的三个数、资金操作的状态与确认列；策略的币种建了就不变。
+- **一笔提案**：`ProposeMoney` 先 `FOR SHARE` 锁策略（没有就是 `ErrNoCapPolicy`），用数据库时钟取当天和本周，补齐三行计数器后按「类别日、类别周、对象日」的顺序 `FOR UPDATE`；这把锁让同一范围和类别的提案排队，所以接着按键找重放（找到就返回，不再按已含它自己预留的计数器重新判断），再判断：硬上限任一超过是 `*CapExceeded`，什么都不写；自主上限任一超过（含当天笔数）就带摘要和上限前后的数（`cap`，金额是十进制文本）建待审批提案；都在内就直接 `approved`。两种都把金额记进三行的 `reserved`、笔数加一，写资金操作，一起提交。笔数数的是当天的提案，释放的也算，所以撤回再提不会刷出额度外的笔数。
+- **预留的结局**：提案被驳回、撤回、作废、到期，或批准时被目标拒绝（`Settle` 带拒绝码），`finish` 和 `Settle` 都调 `release` 释放：按资金操作记下的窗口锁计数器，减掉 `reserved`，状态 `released`，审计 `reservation.release`。批准时 `CheckReservation` 锁住资金操作、策略和三行计数器，预留已不在或已过它的日是 `ErrNotReserved`；按现在的策略，这笔超过单笔硬上限、或窗口里的已用（已含这笔）超过日或周硬上限，是 `ErrPolicyChanged`（策略放宽不影响待批的提案），处理器回到保存点、以 `rejected` 结束操作并释放。充值提案成功只表示负责人可以付款：预留留到 agent 确认到账（`CommitReservation`：同一张凭证、同一家供应商的已成功提案，预留还在且没过它的日，在原来的窗口里把金额从 `reserved` 移到 `committed`，审计 `reservation.commit`），或到当天 UTC 结束由清扫释放（`ExpireReservations`，`system:operations.reservation_expiry`）。已计入 `committed` 的不会因为之后的退款或冲正退回。
+- **锁的顺序**：提案是「策略 → 计数器」，之后只插入新行；批准是「运营操作 → 审批 → 资金操作 → 策略 → 计数器」，驳回、撤回、作废、到期是「运营操作 → 审批 → 资金操作 → 计数器」；确认是「被确认的运营操作 → 资金操作 → 计数器」；清扫是「资金操作（`SKIP LOCKED`）→ 计数器」；改策略只锁策略（`FOR UPDATE`，等正在按它判断的提案）。没有路径反过来先拿计数器再等运营操作或资金操作，所以不成环。
+- **清扫**：`RegisterExpiry` 的同一个每分钟任务里，先到期审批，再释放过了日的预留，各自每批最多 100 个。确认在锁住后用 `clock_timestamp()` 判断是否已过日，不等清扫。
+- **滚动发布**：迁移只加表和放宽 `risk` 的 CHECK，旧节点不提充值。旧节点驳回、撤回、作废或到期一个待批的充值时不会释放它的预留，预留留到当天结束由新节点的清扫释放：只会多占、不会少算。旧节点批准充值时不认识这个工具，整个批准回滚，提案仍待批。
+
+| 不变量 | 怎么保证 |
+|---|---|
+| 没有策略就不动钱 | `ProposeMoney`、`CapCurrency` 找不到策略都是 `ErrNoCapPolicy`。测试 `TestCapDimensions` |
+| 任何时候一个窗口里 `reserved + committed` 不超过硬上限（策略不调低时） | 判断和预留在同一个事务里、持有三行计数器的锁；超过的不建操作。测试 `TestCapDimensions`、`TestCapRaces`（两笔各自在内、合起来超过的并发提案，后一笔等前一笔提交后被拒） |
+| 待批的金额也占额度 | 待审批的提案同样记进 `reserved`；释放只在操作不再执行时发生。测试 `TestReservations` |
+| 同一个键不会预留两次 | 计数器锁之后先按键找重放。测试 `TestReservations`、`TestCapRaces` |
+| 批准不越过现在的硬上限 | 批准时锁住计数器，按现在的策略重算硬上限，装不下就 `rejected` 并释放；放宽的不作废。测试 `TestReservations`（放宽后批准成功、调低后被拒）、`cmd/axiom` 的 `TestOperationsTopUp` |
+| 预留只结一次 | 确认、释放、清扫都锁住资金操作再看状态；`settled_at` 的 CHECK 让 `reserved` 之外的状态都有结算时间。测试 `TestReservations`（第二次确认被拒）、`TestCapRaces`（清扫跳过被持有的预留） |
+| 计数器里的币种只有一种 | 策略的币种建了就不变（`ErrCurrencyFixed`，应用角色也没有改这一列的权限）；`ProposeMoney` 再核对 `Transfer` 的币种 |
+
 ## 表
 
 `targets.go`、`migrations/00001_targets.sql` 与 `migrations/00002_commercial_targets.sql`：
@@ -115,6 +155,9 @@ func RegisterExpiry(db, scope, queue, logger) error
 
 - `actions_test.go`：`TestProposeOnceAKey` 覆盖直接执行与结算、按键重放、键复用、别的凭证同一个键、审批的到期上界、审计和信号；`TestDecide` 覆盖批准、重复决定、驳回、过期后拒绝决定与清扫、撤回只限自己；`TestCancelLive` 覆盖按凭证和全部取消；`TestRaces` 用持有事务等对方进入锁等待的显式顺序覆盖同键并发、批准与撤回、等锁期间到期的决定、清扫与决定。
 - `cmd/axiom/operations_writes_test.go`：`TestOperationsAPIWrites` 走真实 HTTP 和数据库，覆盖上架立即执行、重放、键复用、试运行和旧 `rev` 不写、下架等负责人、负责人看到的摘要和理由、批准后以 agent 的名义执行与审计、操作记录里的理由和输入；`TestOperationsApprovalOutcomes` 覆盖驳回、批准时模型已变、撤回与重放、紧急停止和吊销取消待审批、没有权限、别的凭证的审批、下架草稿；`TestOperationsApprovalAfterAnOldNodesStop` 覆盖旧节点停止后批准；`TestOperationsWithdrawalPreview` 覆盖撤回的试运行不改审批、审计和幂等键，以及撤回和重放的时间与详情一致。
+
+- `caps_test.go`：`TestCapDimensions` 表驱动覆盖每个自主上限（单笔、日、周、对象日、笔数）转人工、每个硬上限（单笔、日、周）拒绝且不写、刚好在上限上直接执行，以及没有策略的站点和平台；`TestSetCapPolicy` 覆盖建、按版本改、币种不变、硬上限不低于自主上限和审计；`TestReservations` 覆盖驳回、撤回、作废、策略调低后的批准各自释放，策略放宽后的批准照常成功，确认一次、第二次被拒，过了日的确认被拒和清扫释放，以及重放不重复预留；`TestCapRaces` 覆盖并发提案在计数器上排队、同键并发只预留一次、清扫跳过被持有的预留。
+- `cmd/axiom/operations_money_test.go`：`TestOperationsTopUp` 走真实 HTTP 和数据库，覆盖没有 `operations.money` 的 403、没有单位价值和没有策略的 422、直接执行与重放、试运行不写、硬上限拒绝、待审批与负责人看到的摘要和上限、确认与重复确认、别的凭证确认 404、策略调低后批准以 `stale_revision` 结束，以及策略的列表、币种不变和旧版本；`TestOperationsTopUpExchange` 覆盖跨币种按汇率折算、没有汇率 422 和向上取整到 10⁻⁹。
 
 - `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖刚好 8192 字节的输入原样保存、多一个字节只记大小、站点范围读不到。
 

@@ -55,10 +55,11 @@ const (
 )
 
 // agentRules is what an operation of the operations API needs, read from the contract: the permission, where it acts,
-// and the MCP tool it is.
+// whether it moves money (x-axiom-money, which needs operations.money besides) and the MCP tool it is.
 type agentRules struct {
 	permission accounts.Permission
 	scope      string
+	money      bool
 	tool       string
 }
 
@@ -77,7 +78,8 @@ func agentRulesOf(op *openapi3.Operation) (*agentRules, error) {
 	if tool == "" {
 		return nil, errors.New("no x-mcp-name")
 	}
-	return &agentRules{permission: permission, scope: scope, tool: tool}, nil
+	money, _ := op.Extensions["x-axiom-money"].(bool)
+	return &agentRules{permission: permission, scope: scope, money: money, tool: tool}, nil
 }
 
 // readDeadline bounds a read of the operations API and writeDeadline a write (docs/domains/operations.md「运营接口」):
@@ -140,6 +142,9 @@ func (g *agentGuard) serve(w http.ResponseWriter, r *http.Request, pattern strin
 // answer authorizes the credential, checks the request and runs the handler, writing whatever the answer is to w.
 func (g *agentGuard) answer(w *bufferedResponse, r *http.Request, rl *rules, agent accounts.Agent, routes http.Handler) {
 	scope, err := g.accounts.AuthorizeAgent(agent, rl.agent.permission, rl.agent.scope == agentPlatform)
+	if err == nil && rl.agent.money {
+		_, err = g.accounts.AuthorizeAgent(agent, accounts.OperationsMoney, rl.agent.scope == agentPlatform)
+	}
 	if err != nil {
 		respond(w, r, g.logger, err)
 		return

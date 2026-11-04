@@ -42,6 +42,8 @@ var adminOperations = []adminOperation{
 	{"rotateOperationsCredential", http.MethodPost, "/operations/credentials/opcred_00000000000000000000000000/rotate", `{"reason":"r"}`, "operations.manage", true},
 	{"revokeOperationsCredential", http.MethodPost, "/operations/credentials/opcred_00000000000000000000000000/revoke", `{"reason":"r"}`, "operations.manage", true},
 	{"stopOperationsAgent", http.MethodPost, "/operations/agent/stop", `{"reason":"r"}`, "operations.manage", true},
+	{"listOperationsCapPolicies", http.MethodGet, "/operations/cap-policies", "", "operations.manage", false},
+	{"setOperationsCapPolicy", http.MethodPut, "/operations/cap-policies/platform/money.top_up", `{"currency":"USD",` + moneyLimits + `,"rev":0,"reason":"r"}`, "operations.manage", true},
 	{"listOperationsApprovals", http.MethodGet, "/operations/approvals", "", "operations.approve", false},
 	{"getOperationsApproval", http.MethodGet, "/operations/approvals/0198c0a8-0000-7000-8000-000000000004", "", "operations.approve", false},
 	{"approveOperationsApproval", http.MethodPost, "/operations/approvals/0198c0a8-0000-7000-8000-000000000004/approve", `{"reason":"r"}`, "operations.approve", true},

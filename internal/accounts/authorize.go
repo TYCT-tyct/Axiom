@@ -41,10 +41,12 @@ var (
 	ManagePricing   = Permission{"pricing.manage", true}
 
 	// The operations API's (docs/domains/operations.md「运营接口」). Every operations credential holds OperationsRead;
-	// OperationsWrite withdraws what it proposed. The control plane's OperationsManage and the approval of what the agent
-	// proposed, OperationsApprove, are the owner's alone, and no credential may hold either.
+	// OperationsWrite withdraws what it proposed; OperationsMoney is needed, besides the operation's own permission, by
+	// every write that moves money. The control plane's OperationsManage and the approval of what the agent proposed,
+	// OperationsApprove, are the owner's alone, and no credential may hold either.
 	OperationsRead    = Permission{"operations.read", false}
 	OperationsWrite   = Permission{"operations.write", false}
+	OperationsMoney   = Permission{"operations.money", true}
 	OperationsManage  = Permission{"operations.manage", true}
 	OperationsApprove = Permission{"operations.approve", true}
 )
@@ -54,7 +56,7 @@ var permissions = func() map[string]Permission {
 	for _, p := range []Permission{
 		ViewKeys, ManageKeys, ManageWorkspaces, ViewCalls, ViewBalance, TopUpBalance, ManageUsers, ManageSites, ManagePlatformGrants,
 		SearchCalls, InspectCalls, ViewAudit, ViewUsers, GrantCredits, ViewSuppliers, ManageSuppliers, ViewCatalog, ManageCatalog, ViewPricing, ManagePricing,
-		OperationsRead, OperationsWrite, OperationsManage, OperationsApprove,
+		OperationsRead, OperationsWrite, OperationsMoney, OperationsManage, OperationsApprove,
 	} {
 		declared[p.name] = p
 	}

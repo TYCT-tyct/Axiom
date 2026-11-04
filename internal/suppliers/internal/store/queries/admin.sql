@@ -140,3 +140,14 @@ WHERE m.model_id IS NULL AND m.present AND g.present AND s.status <> 'removed'
         OR (m.first_seen_at, m.supplier_group_id, m.upstream_name) > (sqlc.narg(after_seen), sqlc.narg(after_group)::uuid, sqlc.narg(after_name)::text))
 ORDER BY m.first_seen_at, m.supplier_group_id, m.upstream_name
 LIMIT @page_size::int;
+
+-- name: TopUpBasis :many
+-- What a top-up proposal is computed from: who owns the supplier, its units and the unit value now in force, the
+-- empty text when there is none.
+SELECT s.id, s.name, s.owner_scope, s.site_id, s.status, s.native_unit, s.settlement_currency,
+    coalesce(u.id::text, '')::text AS unit_value_id, coalesce(u.value::text, '')::text AS unit_value
+FROM suppliers.suppliers s
+LEFT JOIN LATERAL (SELECT v.id, v.value FROM suppliers.unit_values v
+    WHERE v.supplier_id = s.id AND v.currency = s.settlement_currency AND v.native_unit = s.native_unit
+    ORDER BY v.id DESC LIMIT 1) u ON true
+WHERE s.id = @id;

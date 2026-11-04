@@ -299,6 +299,89 @@ paths:
         '422': {$ref: '#/components/responses/Unprocessable'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/suppliers/{supplier_id}/top-ups:
+    post:
+      operationId: supplierTopUpPropose
+      summary: Propose topping a supplier up
+      description: >-
+        Proposes that the owner pay `amount_native` of the supplier's own unit into it. The server values it with the
+        supplier's confirmed unit value and the current exchange rate into the currency of the cap policy of the
+        supplier's owner (the platform, or its site), rounded up to 10⁻⁹, and reserves that against the caps: within
+        every autonomous limit the proposal succeeds at once (200); over one it waits for the owner (202); over a hard
+        limit, or without a policy, it is a 422 `cap_exceeded` and nothing is written. The agent never pays: the
+        reservation holds until it confirms the money arrived (`supplierTopUpConfirm`) or the UTC day ends. A supplier
+        without a confirmed unit value, or a currency pair without a rate, is a 422 `unprocessable`; a removed supplier,
+        or an account's own key, is a 409 `conflict`. With `dry_run` the same checks run and nothing is written.
+      tags: [Suppliers]
+      security: [{credential: []}]
+      x-axiom-permission: suppliers.manage
+      x-axiom-money: true
+      x-axiom-scope: platform
+      x-mcp-name: supplier_top_up_propose
+      parameters:
+        - {in: path, name: supplier_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/TopUpProposal'}}}
+      responses:
+        '200':
+          description: The proposal, reserved, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '202':
+          description: The proposal, reserved and waiting for the owner's approval
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/suppliers/{supplier_id}/top-ups/{operation_id}/confirm:
+    post:
+      operationId: supplierTopUpConfirm
+      summary: Confirm that a proposed top-up arrived
+      description: >-
+        Confirms, with `proof` of the payment, that the money of one of the credential's own succeeded top-up proposals
+        for this supplier arrived: the reserved amount becomes committed in the windows it was reserved in, and stays
+        counted whatever happens to the money later. A proposal that is another credential's, of another supplier or
+        not a top-up is not found; one whose reservation ended (confirmed, refused, or past its UTC day) is a 409
+        `conflict`. With `dry_run` the same checks run and nothing is written.
+      tags: [Suppliers]
+      security: [{credential: []}]
+      x-axiom-permission: suppliers.manage
+      x-axiom-money: true
+      x-axiom-scope: platform
+      x-mcp-name: supplier_top_up_confirm
+      parameters:
+        - {in: path, name: supplier_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - {in: path, name: operation_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/TopUpConfirmation'}}}
+      responses:
+        '200':
+          description: The confirmation, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
   /api/operations/v1/operations:
     get:
       operationId: operationsList
@@ -470,7 +553,7 @@ components:
     Unprocessable:
       description: >-
         The request is well formed but a rule refuses it (`invalid_invite`, `weak_password`, `not_ready`,
-        `unprocessable`); `message` says which.
+        `unprocessable`, `cap_exceeded`); `message` says which.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -567,6 +650,29 @@ components:
         rev: {type: integer, format: int64, minimum: 0}
         reason: {$ref: '#/components/schemas/AgentReason'}
         dry_run: {type: boolean, description: "Preview only: nothing is written and the model is not changed."}
+    TopUpProposal:
+      type: object
+      additionalProperties: false
+      required: [amount_native, reason]
+      properties:
+        amount_native:
+          type: string
+          pattern: ^(0|[1-9][0-9]{0,11})(\.[0-9]{1,6})?$
+          description: How much of the supplier's own unit (`native_unit`) to pay in, as exact decimal text above zero.
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written or reserved."}
+    TopUpConfirmation:
+      type: object
+      additionalProperties: false
+      required: [proof, reason]
+      properties:
+        proof:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: What shows the payment arrived, such as the supplier's receipt number or the balance seen after it; recorded as untrusted text.
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
     AgentReason:
       type: string
       minLength: 1
@@ -631,7 +737,7 @@ components:
         compensating operation reverts it.
     OperationRisk:
       type: string
-      enum: [routine, delisting]
+      enum: [routine, delisting, top_up]
       description: The operation's class, which decides whether it waits for the owner.
     OperationTarget:
       type: object
@@ -850,6 +956,7 @@ components:
       - weak_password
       - not_ready
       - unprocessable
+      - cap_exceeded
       - redeem_code_invalid
       - redeem_code_expired
       - redeem_code_disabled
