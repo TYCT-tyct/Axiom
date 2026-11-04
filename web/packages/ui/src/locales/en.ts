@@ -53,6 +53,7 @@ export default {
     weak_password: "That password is too weak. Use a longer, less common one.",
     not_ready: "This isn’t available yet.",
     unprocessable: "The request couldn’t be processed. Check what you entered.",
+    cap_exceeded: "This is over a spending cap the owner set.",
     redeem_code_invalid: "That redeem code isn’t valid for this site. Check it, or ask the person who gave it to you.",
     redeem_code_expired: "That redeem code has expired. Ask the person who gave it to you for a new one.",
     redeem_code_disabled: "That redeem code was disabled. Ask the person who gave it to you for a new one.",

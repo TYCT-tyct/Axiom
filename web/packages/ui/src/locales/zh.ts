@@ -30,6 +30,7 @@ const codes = {
   weak_password: "密码太弱。换一个更长、更不常见的密码。",
   not_ready: "这个功能暂时还不能用。",
   unprocessable: "没能处理这个请求，请检查填写的内容。",
+  cap_exceeded: "超过了负责人设定的资金上限。",
   redeem_code_invalid: "这个兑换码在本站无效。检查一下，或联系发码的人。",
   redeem_code_expired: "这个兑换码已经过期，联系发码的人再要一个。",
   redeem_code_disabled: "这个兑换码已经停用，联系发码的人再要一个。",
