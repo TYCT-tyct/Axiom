@@ -152,9 +152,7 @@ func TestBusinessRateConcurrentAdmission(t *testing.T) {
 	a := r.newAccount(10e9)
 	r.sql("UPDATE accounts.accounts SET rate_requests = 5")
 	second, _ := r.newKey(a)
-	if _, err := r.accounts.AuthenticateKey(t.Context(), accounts.SiteID(siteID), second); err != nil {
-		t.Fatal(err)
-	}
+	r.recognise(second)
 	keys := []string{a.key, second}
 	var allowed atomic.Int32
 	var wg sync.WaitGroup
@@ -188,10 +186,7 @@ func TestBusinessRateSharedAndFallback(t *testing.T) {
 	r.sql("UPDATE accounts.accounts SET rate_requests = 2")
 	other := node(t, server, namespace, clock)
 	otherKey, _ := r.newKey(a)
-	caller, err := r.accounts.AuthenticateKey(t.Context(), accounts.SiteID(siteID), otherKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	caller := r.recognise(otherKey)
 	clock.midWindow(cache, r.cfg.RateWindow)
 	first := &Call{caller: caller}
 	other.precheck(t.Context(), accounts.SiteID(siteID), countDimension, countRateKey(caller), keyHex(caller), first, false)

@@ -14,6 +14,9 @@ var (
 	TOTPStep      = totpStep
 )
 
+// LookupTimeout is how long a key lookup whose caller set no deadline may take.
+const LookupTimeout = lookupTimeout
+
 // ClientSummary and IPGroup expose the device list's summaries to its tests.
 var ClientSummary, IPGroup = clientSummary, ipGroup
 

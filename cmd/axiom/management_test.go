@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/hex"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/accounts"
+	"axiom/internal/gateway"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/pg"
 )
@@ -34,7 +37,7 @@ func (f consoleFixture) managementRequest(method, path, body, token string, mods
 		modify(r)
 	}
 	rec := httptest.NewRecorder()
-	withKeyManagement(f.routes, managementAPI{accounts: f.svc}).ServeHTTP(rec, r)
+	withKeyManagement(f.routes, managementAPI{accounts: f.svc, keyLookup: gateway.DefaultConfig().KeyLookup}).ServeHTTP(rec, r)
 	return rec
 }
 
@@ -88,6 +91,46 @@ func checkManagedPatch(t *testing.T, patched, before managedData) {
 	}
 	if patched.Updated == nil {
 		t.Fatal("PATCH did not timestamp update")
+	}
+}
+
+// TestManagementKeyLookupHasTheGatewaysBudget: a management request's lookup of a key not yet cached has the gateway's
+// KeyLookup, not the five seconds the whole request has. The deadline is read where the lookup takes its slot, so the
+// test compares it with the budget instead of timing the lookup.
+func TestManagementKeyLookupHasTheGatewaysBudget(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	manager := f.managementKey(f.owner(), `"name":"manager"`)
+	// The lookup outlives a request whose budget ran out, so it hands over what it saw instead of writing a variable.
+	// The request takes a slot again for the key manager after the lookup; only the first, the lookup's, is kept.
+	type seen struct {
+		remaining time.Duration
+		set       bool
+	}
+	lookups := make(chan seen, 1)
+	cold, err := accounts.NewService(f.db, accounts.Config{
+		Platform: pg.PlatformScope(), Hashes: macKeys(t), Keyring: masterKeys(t), Now: f.clock.Now,
+		LookupSlot: func(ctx context.Context) (func(), error) {
+			deadline, set := ctx.Deadline()
+			select {
+			case lookups <- seen{time.Until(deadline), set}:
+			default:
+			}
+			return func() {}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cold.Load(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	const budget = 100 * time.Millisecond
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+managementHost+"/api/v1/keys", nil)
+	r.Header.Set("Authorization", "Bearer "+manager.Secret)
+	withKeyManagement(f.routes, managementAPI{accounts: cold, keyLookup: budget}).ServeHTTP(httptest.NewRecorder(), r)
+	if got := <-lookups; !got.set || got.remaining > budget {
+		t.Fatalf("the lookup had %v left (deadline set %v), want at most the %v budget", got.remaining, got.set, budget)
 	}
 }
 
