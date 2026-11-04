@@ -96,7 +96,7 @@ export default {
   paidBatches: {
     title: "Paid top-ups",
     description:
-      "The paid credit batches behind the dashboard's paid users and monthly revenue, by the batch's own time. An order created before the window but credited inside it appears here.",
+      "The paid credit batches behind the dashboard's paid users and monthly revenue, by the batch's own time. An order created before the window but credited inside it appears here. An account may appear more than once: paid users counts distinct accounts, while this list shows every batch.",
     back: "Back to orders",
     emptyTitle: "No paid top-up in this window",
     emptyBody: "A paid top-up appears here at the time its credit batch was created.",
