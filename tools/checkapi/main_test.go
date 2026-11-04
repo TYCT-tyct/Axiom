@@ -148,7 +148,7 @@ func TestCheckOperations(t *testing.T) {
 		{"a session level", "x-axiom-scope: platform", "x-axiom-scope: platform\n      x-axiom-level: mfa", "an operations credential has no x-axiom-level"},
 		{"no permission", "x-axiom-permission: things.view", "x-axiom-permission: none", "x-axiom-permission must name a permission"},
 		{"an unknown scope", "x-axiom-scope: platform", "x-axiom-scope: everything", "x-axiom-scope must be one of [platform sites self]"},
-		{"no reason", "      parameters:\n        - $ref: \"#/components/parameters/Reason\"\n      responses:\n        \"200\": {description: ok}\n        \"401\": {$ref: \"#/components/responses/Failure\"}\n        default: {$ref: \"#/components/responses/Failure\"}\n  /api/operations/v1/me", "      responses:\n        \"200\": {description: ok}\n        \"401\": {$ref: \"#/components/responses/Failure\"}\n        default: {$ref: \"#/components/responses/Failure\"}\n  /api/operations/v1/me", "an operation takes the Reason parameter"},
+		{"no reason", "      parameters:\n        - $ref: \"#/components/parameters/Reason\"\n      responses:\n        \"200\": {description: ok}\n        \"401\": {$ref: \"#/components/responses/Failure\"}\n        default: {$ref: \"#/components/responses/Failure\"}\n  /api/operations/v1/me", "      responses:\n        \"200\": {description: ok}\n        \"401\": {$ref: \"#/components/responses/Failure\"}\n        default: {$ref: \"#/components/responses/Failure\"}\n  /api/operations/v1/me", "a read takes the Reason parameter"},
 		{"a tool name that is not snake case", "x-mcp-name: things_list", "x-mcp-name: thingsList", "x-mcp-name must be lower_snake_case"},
 		{"no tool name", "      x-mcp-name: things_list\n", "", "x-mcp-name must be lower_snake_case"},
 		{"one tool name twice", "x-mcp-name: things_list", "x-mcp-name: whoami", "x-mcp-name whoami is also whoami's"},
@@ -168,6 +168,24 @@ func TestCheckOperations(t *testing.T) {
 				t.Errorf("problems (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// TestCheckOperationsWrite: a write of the operations API says why in its body, never in the Reason parameter.
+func TestCheckOperationsWrite(t *testing.T) {
+	write := strings.Replace(agentFixture, `    get:
+      operationId: thingsList`, `    post:
+      operationId: thingsList`, 1)
+	write = strings.Replace(write, `        "401": {$ref: "#/components/responses/Failure"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/operations/v1/me`, `        "401": {$ref: "#/components/responses/Failure"}
+        "403": {$ref: "#/components/responses/Failure"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/operations/v1/me`, 1)
+	got := check(map[string][]byte{"operations.yaml": []byte(write)})
+	want := []string{"operations.yaml: POST /api/operations/v1/things: a write says why in its body, not the Reason parameter"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("problems (-want +got):\n%s", diff)
 	}
 }
 

@@ -233,8 +233,14 @@ func agentSecurity(o operation) []string {
 	if scope, _ := o.op.Extensions["x-axiom-scope"].(string); !slices.Contains(agentScopes, scope) {
 		found = append(found, fmt.Sprintf("x-axiom-scope must be one of %v", agentScopes))
 	}
-	if !slices.ContainsFunc(o.op.Parameters, func(p *openapi3.ParameterRef) bool { return p.Ref == reasonRef }) {
-		found = append(found, "an operation takes the Reason parameter")
+	// A read says why in the query; a write in its body, which idempotency checks, since a header cannot carry UTF-8
+	// and two places would need an order.
+	takesReason := slices.ContainsFunc(o.op.Parameters, func(p *openapi3.ParameterRef) bool { return p.Ref == reasonRef })
+	switch {
+	case !o.mutating() && !takesReason:
+		found = append(found, "a read takes the Reason parameter")
+	case o.mutating() && takesReason:
+		found = append(found, "a write says why in its body, not the Reason parameter")
 	}
 	return found
 }

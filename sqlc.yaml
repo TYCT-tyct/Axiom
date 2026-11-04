@@ -179,6 +179,7 @@ sql:
         omit_unused_structs: true
         overrides:
           - {db_type: uuid, go_type: {import: uuid, type: UUID}}
+          - {db_type: uuid, nullable: true, go_type: {import: uuid, type: UUID, pointer: true}}
           # Exact amounts cross as their decimal text, not a float.
           - {db_type: "pg_catalog.numeric", go_type: string}
           # month is a date: its UTC first day identifies the target.
@@ -187,4 +188,6 @@ sql:
           - {column: "operations.operation_log.ended_at", go_type: {import: time, type: Time}}
           - {column: "operations.commercial_targets.month", go_type: {import: time, type: Time}}
           - {column: "operations.target_revisions.month", go_type: {import: time, type: Time}}
+          - {db_type: timestamptz, go_type: {import: time, type: Time}}
+          - {db_type: timestamptz, nullable: true, go_type: {import: time, type: Time, pointer: true}}
           - {db_type: text, nullable: true, go_type: {type: string, pointer: true}}

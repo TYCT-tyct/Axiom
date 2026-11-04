@@ -24,6 +24,10 @@ UPDATE accounts.agent_credentials SET last_used_at = @now WHERE id = @id;
 -- name: LockAgentCredential :many
 SELECT id, revoked_at, expires_at FROM accounts.agent_credentials WHERE id = @id FOR UPDATE;
 
+-- name: HoldAgentCredential :many
+-- FOR SHARE: proposals of one credential do not wait on each other, and a revocation waits for them.
+SELECT id, revoked_at, expires_at FROM accounts.agent_credentials WHERE id = @id FOR SHARE;
+
 -- name: EndAgentOverlap :exec
 -- A rotation ends now the overlap an earlier rotation gave the token before the current one.
 UPDATE accounts.agent_credential_tokens SET retires_at = @now WHERE credential_id = @credential_id AND retires_at > @now;

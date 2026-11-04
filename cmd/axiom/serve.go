@@ -14,6 +14,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/gateway"
 	"axiom/internal/observability"
+	"axiom/internal/operations"
 	"axiom/internal/payments"
 	"axiom/internal/platform/alert"
 	"axiom/internal/platform/egress"
@@ -300,8 +301,6 @@ func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) 
 // reconciliation, the ledger's daily check and the expiry of credit on the money queue. Each queue has its own workers,
 // so a burst of syncs cannot hold a money job back (internal/platform/README.md「任务队列」). It reaches the suppliers and
 // the datasets through exit, the client the whole node shares.
-//
-//nolint:cyclop // every registration is checked in order; the order is the queue's startup contract.
 func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
 	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
 	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger,
@@ -327,32 +326,13 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, ca
 	if err := registerSalePrices(db, queue); err != nil {
 		return nil, nil, nil, err
 	}
+	// What the operations agent asked the owner to approve expires once its time is up, on whichever node leads the
+	// queue (docs/domains/operations.md「风险分级与审批」).
+	if err := operations.RegisterExpiry(db, pg.PlatformScope(), queue, logger); err != nil {
+		return nil, nil, nil, err
+	}
 
-	// The ledger checks itself once a day, on whichever node leads the queue (the check needs only the database, so it
-	// is registered here and not with the call path, which starts after the queue).
-	if err := billing.RegisterReconcile(billing.ReconcileConfig{
-		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
-	}); err != nil {
-		return nil, nil, nil, err
-	}
-	// Credit past its expiry is written off every minute by whichever node leads the queue (docs/domains/billing.md「额度批次」).
-	if err := billing.RegisterExpire(billing.ExpireConfig{
-		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
-	}); err != nil {
-		return nil, nil, nil, err
-	}
-	// A subscription's windows pass, its term ends and what is left of its liability is written off every minute, by
-	// whichever node leads the queue (docs/domains/billing.md「订阅套餐」).
-	if err := billing.RegisterSubscriptions(billing.SubscriptionConfig{
-		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
-	}); err != nil {
-		return nil, nil, nil, err
-	}
-	// Estimated charges are corrected from the suppliers' records by whichever node leads the queue
-	// (docs/domains/billing.md「用量来源与暂估」).
-	if err := billing.RegisterCorrections(billing.CorrectConfig{
-		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
-	}); err != nil {
+	if err := registerBillingJobs(db, queue, tel, logger); err != nil {
 		return nil, nil, nil, err
 	}
 	// The call log's partitions move to the object store and leave PostgreSQL on the archive queue; with no bucket
@@ -388,6 +368,35 @@ func registerCatalogJobs(ctx context.Context, db *pg.DB, queue *pg.Queue, exit *
 		return nil
 	}
 	return catalog.RegisterSync(ctx, catalog.SyncJobConfig{DB: db, Scope: pg.PlatformScope(), Queue: queue, Fetcher: prices(exit), Logger: logger, Meter: tel.Metrics.Meter("axiom/catalog")})
+}
+
+// registerBillingJobs adds billing's jobs, which need only the database, to the queue before it starts.
+func registerBillingJobs(db *pg.DB, queue *pg.Queue, tel *telemetry.Telemetry, logger *slog.Logger) error {
+	// The ledger checks itself once a day, on whichever node leads the queue (the check needs only the database, so it
+	// is registered here and not with the call path, which starts after the queue).
+	if err := billing.RegisterReconcile(billing.ReconcileConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
+	}); err != nil {
+		return err
+	}
+	// Credit past its expiry is written off every minute by whichever node leads the queue (docs/domains/billing.md「额度批次」).
+	if err := billing.RegisterExpire(billing.ExpireConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
+	}); err != nil {
+		return err
+	}
+	// A subscription's windows pass, its term ends and what is left of its liability is written off every minute, by
+	// whichever node leads the queue (docs/domains/billing.md「订阅套餐」).
+	if err := billing.RegisterSubscriptions(billing.SubscriptionConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
+	}); err != nil {
+		return err
+	}
+	// Estimated charges are corrected from the suppliers' records by whichever node leads the queue
+	// (docs/domains/billing.md「用量来源与暂估」).
+	return billing.RegisterCorrections(billing.CorrectConfig{
+		DB: db, Scope: pg.PlatformScope(), Queue: queue, Logger: logger, Meter: tel.Metrics.Meter("axiom/billing"),
+	})
 }
 
 // stopQueue stops the queue within timeout, on a context that outlives the one that ended the node.

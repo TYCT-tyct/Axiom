@@ -22,6 +22,11 @@ func User(id uuid.UUID) Actor { return Actor{"user", id.String()} }
 // ManagementKey is an independently authenticated programmatic key administrator.
 func ManagementKey(id uuid.UUID) Actor { return Actor{"management_key", id.String()} }
 
+// OperationsAgent is an operations credential: what the agent proposes and what runs on its behalf once approved.
+func OperationsAgent(credential uuid.UUID) Actor {
+	return Actor{"operations_agent", credential.String()}
+}
+
 // System is a job of ours acting on its own, named <module>.<job> such as catalog.sync.
 func System(job string) Actor { return Actor{"system", job} }
 
