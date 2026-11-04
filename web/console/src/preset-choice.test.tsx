@@ -14,6 +14,7 @@ import RoutingPresets from "./pages/routing-presets";
 // the account's default, and every default the page sends.
 const api = vi.hoisted(() => ({
   presetsFail: false,
+  defaultFail: false,
   routingDefault: { preset_id: "", version: 0 } as { preset_id?: string; version: number },
   sent: [] as unknown[],
 }));
@@ -48,7 +49,7 @@ vi.mock("@axiom/api", async (importOriginal) => {
           case "/api/console/v1/routing-presets":
             return api.presetsFail ? answer(503, "unavailable") : answer(200, { data: [preset(1), preset(2)] });
           case "/api/console/v1/routing-default":
-            return answer(200, api.routingDefault);
+            return api.defaultFail ? answer(503, "unavailable") : answer(200, api.routingDefault);
           case "/api/console/v1/balance":
             return answer(500, "internal");
           default:
@@ -81,6 +82,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   api.presetsFail = false;
+  api.defaultFail = false;
   api.routingDefault = { preset_id: preset(1).id, version: 1 };
   api.sent = [];
 });
@@ -163,7 +165,8 @@ it("offers no preset for a management key", async () => {
 });
 
 // The default is sent at the version its choice was made against. A background read that brings a newer default does
-// not move that version, so the save is refused instead of overwriting; reloading takes the newer default as the base.
+// not move that version, so the save is refused instead of overwriting. A reload that fails says so and keeps the
+// refusal, so it can be tried again; one that succeeds takes the newer default as the base.
 it("sends the default at the version the choice was made against", async () => {
   const { client, container } = await render(<RoutingPresets />);
   const form = container.querySelector("form") as HTMLFormElement;
@@ -177,11 +180,22 @@ it("sends the default at the version the choice was made against", async () => {
   await submit(form);
   expect(api.sent).toEqual([{ preset_id: preset(2).id, version: 1 }]);
   expect(api.routingDefault).toEqual({ preset_id: undefined, version: 2 });
-  const reload = [...form.querySelectorAll("button")].find((b) => b.textContent === "routingPresets.defaults.reload");
-  await act(async () => {
-    reload?.click();
-  });
-  await settle();
+  const reload = () =>
+    [...form.querySelectorAll("button")].find((b) => b.textContent === "routingPresets.defaults.reload");
+  const clickReload = async () => {
+    await act(async () => {
+      reload()?.click();
+    });
+    await settle();
+  };
+  api.defaultFail = true;
+  await clickReload();
+  expect(form.querySelectorAll("[role=alert]")).toHaveLength(2);
+  expect(select.value).toBe(preset(2).id);
+  expect(reload()).toBeDefined();
+  api.defaultFail = false;
+  await clickReload();
+  expect(form.querySelectorAll("[role=alert]")).toHaveLength(0);
   expect(select.value).toBe("");
   await choose(select, preset(2).id);
   await submit(form);

@@ -84,21 +84,12 @@ function DefaultPanel({ presets, manage }: { presets: Preset[]; manage: boolean 
   ) : null;
 }
 
-// DefaultForm edits from the default it first read: the choice and the version it is sent at are one base, which a
+// useDefaultEdit edits from the default it first read: the choice and the version it is sent at are one base, which a
 // background read never moves, so a change made elsewhere meanwhile is refused (stale_revision) instead of
 // overwritten. A saved default becomes the new base; after a refusal the user reloads, which takes the latest default
-// as the base and drops the choice made against the old one.
-function DefaultForm({
-  first,
-  presets,
-  manage,
-}: {
-  first: Schemas["RoutingDefault"];
-  presets: Preset[];
-  manage: boolean;
-}) {
-  const { t } = useTranslation();
-  const errors = useErrors();
+// as the base and drops the choice made against the old one. A reload that fails keeps the old base and the refusal,
+// so it can be tried again, and says why it failed.
+function useDefaultEdit(first: Schemas["RoutingDefault"]) {
   const queryClient = useQueryClient();
   const [base, setBase] = useState(first);
   const [chosen, setChosen] = useState(first.preset_id ?? "");
@@ -118,12 +109,29 @@ function DefaultForm({
       queryClient.setQueryData(routingDefaultQuery.queryKey, saved);
     },
   });
-  const reload = async () => {
-    const latest = await queryClient.fetchQuery({ ...routingDefaultQuery, staleTime: 0 });
-    rebase(latest);
-    save.reset();
-  };
+  const reload = useMutation({
+    mutationFn: () => queryClient.fetchQuery({ ...routingDefaultQuery, staleTime: 0 }),
+    onSuccess: (latest) => {
+      rebase(latest);
+      save.reset();
+    },
+  });
   const stale = save.error instanceof ApiError && save.error.code === "stale_revision";
+  return { chosen, setChosen, unchanged: chosen === (base.preset_id ?? ""), save, reload, stale };
+}
+
+function DefaultForm({
+  first,
+  presets,
+  manage,
+}: {
+  first: Schemas["RoutingDefault"];
+  presets: Preset[];
+  manage: boolean;
+}) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const { chosen, setChosen, unchanged, save, reload, stale } = useDefaultEdit(first);
   return (
     <Panel className="p-4">
       <form
@@ -138,15 +146,17 @@ function DefaultForm({
       >
         <h2 className="text-ui font-medium text-t1">{t("routingPresets.defaults.title")}</h2>
         {save.isError ? <FormError>{errors.message(save.error)}</FormError> : null}
+        {reload.isError ? <FormError>{errors.message(reload.error)}</FormError> : null}
         <div className="flex flex-wrap items-end gap-3">
           <DefaultSelect presets={presets} chosen={chosen} manage={manage} onChoose={setChosen} />
-          {manage && stale ? (
-            <Button onClick={() => void reload()}>{t("routingPresets.defaults.reload")}</Button>
-          ) : null}
-          {manage && !stale ? (
-            <SubmitButton pending={save.isPending} disabled={chosen === (base.preset_id ?? "")}>
-              {t("routingPresets.defaults.save")}
-            </SubmitButton>
+          {manage ? (
+            <DefaultAction
+              stale={stale}
+              reloading={reload.isPending}
+              saving={save.isPending}
+              unchanged={unchanged}
+              onReload={() => reload.mutate()}
+            />
           ) : null}
         </div>
         {save.isSuccess ? (
@@ -156,6 +166,32 @@ function DefaultForm({
         ) : null}
       </form>
     </Panel>
+  );
+}
+
+// DefaultAction saves the choice, or after a refusal loads the latest default, which is the only way on from there.
+function DefaultAction({
+  stale,
+  reloading,
+  saving,
+  unchanged,
+  onReload,
+}: {
+  stale: boolean;
+  reloading: boolean;
+  saving: boolean;
+  unchanged: boolean;
+  onReload: () => void;
+}) {
+  const { t } = useTranslation();
+  return stale ? (
+    <Button disabled={reloading} onClick={onReload}>
+      {t("routingPresets.defaults.reload")}
+    </Button>
+  ) : (
+    <SubmitButton pending={saving} disabled={unchanged}>
+      {t("routingPresets.defaults.save")}
+    </SubmitButton>
   );
 }
 
