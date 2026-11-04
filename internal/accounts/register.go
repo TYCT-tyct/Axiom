@@ -13,6 +13,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 )
@@ -39,6 +40,11 @@ var (
 // can give the account what it needs to exist there too (billing's balance row) and the account is never seen
 // without it. cmd/axiom supplies it: accounts may not import the modules above it.
 type OpenedFunc func(ctx context.Context, tx pg.Tx, site, account uuid.UUID) error
+
+// KeyPresetFunc is the routing preset a new call key is bound to, read in the transaction that makes the key from the
+// defaults of the layers its workspace is in; currency is the site's. cmd/axiom supplies routing's: accounts may not
+// import the modules above it, and stores the ID without knowing what it names.
+type KeyPresetFunc func(ctx context.Context, tx pg.Tx, site, account, workspace uuid.UUID, currency platform.Currency) (uuid.UUID, error)
 
 // RegisterRequest is a registration at a console domain. An invite code is required on an invite-only site; an open
 // site instead takes the proof of work its page solved, and a language for the verification mail.

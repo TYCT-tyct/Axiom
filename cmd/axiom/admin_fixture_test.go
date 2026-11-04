@@ -93,7 +93,7 @@ func startAdminNodeVia(c commandLine, clock *testClock, exit *egress.Client) adm
 func startAdminNodeWithSignals(c commandLine, clock *testClock, exit *egress.Client, signals alert.Sink, instance string) adminFixture {
 	c.t.Helper()
 	svc, err := accounts.NewService(c.db, accounts.Config{
-		Platform: pg.PlatformScope(), Hashes: macKeys(c.t), Keyring: masterKeys(c.t), Now: clock.Now, OnAccountOpened: openBalance,
+		Platform: pg.PlatformScope(), Hashes: macKeys(c.t), Keyring: masterKeys(c.t), Now: clock.Now, OnAccountOpened: openBalance, KeyPreset: keyPreset,
 	})
 	if err != nil {
 		c.t.Fatal(err)

@@ -299,9 +299,9 @@ func (q *Queries) GetKeyInfo(ctx context.Context, db DBTX, id uuid.UUID) (GetKey
 
 const insertKey = `-- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
-    secret_version, created_by, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow)
+    secret_version, created_by, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow, preset_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $11, statement_timestamp(), $12, 'active', $13, $14, $15, $16)
+    $11, statement_timestamp(), $12, 'active', $13, $14, $15, $16, $17)
 `
 
 type InsertKeyParams struct {
@@ -321,6 +321,7 @@ type InsertKeyParams struct {
 	LimitReset    *string
 	Models        []string
 	IpAllow       []netip.Prefix
+	PresetID      *uuid.UUID
 }
 
 func (q *Queries) InsertKey(ctx context.Context, db DBTX, arg InsertKeyParams) error {
@@ -341,6 +342,7 @@ func (q *Queries) InsertKey(ctx context.Context, db DBTX, arg InsertKeyParams) e
 		arg.LimitReset,
 		arg.Models,
 		arg.IpAllow,
+		arg.PresetID,
 	)
 	return err
 }

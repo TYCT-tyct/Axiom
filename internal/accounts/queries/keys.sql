@@ -67,9 +67,9 @@ SELECT (SELECT count(*) FROM recent)::bigint AS made,
 
 -- name: InsertKey :exec
 INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
-    secret_version, created_by, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow)
+    secret_version, created_by, created_at, expires_at, status, spend_limit, limit_reset, models, ip_allow, preset_id)
 VALUES (@id, @site_id, @account_id, @workspace_id, @kind, @name, @prefix, @last4, @secret_hash, @secret_version,
-    @created_by, statement_timestamp(), @expires_at, 'active', @spend_limit, @limit_reset, @models, @ip_allow);
+    @created_by, statement_timestamp(), @expires_at, 'active', @spend_limit, @limit_reset, @models, @ip_allow, @preset_id);
 
 -- name: DefaultWorkspace :many
 SELECT id FROM accounts.workspaces WHERE account_id = @account_id AND is_default;

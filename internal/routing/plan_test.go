@@ -456,7 +456,7 @@ func TestSnapshotStaleness(t *testing.T) {
 	h.plan(input())
 	in := input()
 	in.Admission.Preset = routing.PresetID(id(55))
-	if _, _, err := h.r.Plan(in); !errors.Is(err, routing.ErrUnknownPreset) {
+	if _, _, err := h.r.Plan(in); !errors.Is(err, routing.ErrPresetUnavailable) {
 		t.Errorf("unknown preset: %v", err)
 	}
 	empty := mustRouter(t)

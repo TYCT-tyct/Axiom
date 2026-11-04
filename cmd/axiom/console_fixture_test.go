@@ -93,7 +93,7 @@ func startNodeWithModels(c commandLine, clock *testClock, withRegistration bool,
 	logs := new(bytes.Buffer)
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
 	config := accounts.Config{
-		Platform: pg.PlatformScope(), Hashes: macKeys(c.t), Keyring: masterKeys(c.t), Now: clock.Now, OnAccountOpened: openBalance,
+		Platform: pg.PlatformScope(), Hashes: macKeys(c.t), Keyring: masterKeys(c.t), Now: clock.Now, OnAccountOpened: openBalance, KeyPreset: keyPreset,
 	}
 	var queue *pg.Queue
 	if withRegistration {

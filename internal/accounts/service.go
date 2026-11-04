@@ -55,6 +55,9 @@ type Config struct {
 	LoginKey secret.LoginKey
 	// OnAccountOpened runs in the transaction of every account a registration opens; nil does nothing.
 	OnAccountOpened OpenedFunc
+	// KeyPreset binds each new call key to a routing preset; nil leaves new keys without one, routed by the system
+	// preset.
+	KeyPreset KeyPresetFunc
 	// Egress makes the provider requests of third-party sign-in; nil uses the production exit. Tests pass a client
 	// that reaches their fake provider.
 	Egress *egress.Client
@@ -69,6 +72,7 @@ type Service struct {
 	versions     []uint32 // of hashes, newest first
 	now          func() time.Time
 	opened       OpenedFunc
+	keyPreset    KeyPresetFunc
 	recovery     *PasswordRecovery
 	registration *Registration
 	exit         *egress.Client
@@ -134,7 +138,7 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 		exit = egress.NewDirect()
 	}
 	return &Service{
-		recovery: cfg.Recovery, registration: cfg.Registration, misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened,
+		recovery: cfg.Recovery, registration: cfg.Registration, misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened, keyPreset: cfg.KeyPreset,
 		exit: exit, providers: maps.Clone(oauthProviders),
 		slot: slot, gated: cfg.LookupSlot != nil,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit), agentRequests: newBuckets[AgentID](),
