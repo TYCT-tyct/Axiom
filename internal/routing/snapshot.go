@@ -348,9 +348,12 @@ func (p *Preset) visibleTo(a Admission) bool {
 	return false
 }
 
-// preset is a Preset as the snapshot holds it, with its rules looked up by pointer so a plan copies none of them.
+// preset is a Preset as the snapshot holds it, with its rules looked up by pointer so a plan copies none of them. def
+// is &Rule, stored rather than taken in ruleFor: a pointer Plan derived from the preset it was handed would make the
+// compiler move the whole plan's state, and the request, to the heap (BenchmarkPlan's allocations).
 type preset struct {
 	Preset
+	def               *Rule
 	byModel, byAuthor map[string]*Rule
 }
 
@@ -362,7 +365,7 @@ func (p *preset) ruleFor(slug string) *Rule {
 	if r, ok := p.byAuthor[authorOf(slug)]; ok {
 		return r
 	}
-	return &p.Rule
+	return p.def
 }
 
 // newPreset checks p for the snapshot and indexes its rules. The snapshot keeps copies of what can be shared, so a
@@ -391,6 +394,7 @@ func newPreset(p Preset) (*preset, error) {
 	}
 	p.Authors, p.Models = nil, nil // the indexes hold them
 	out.Preset = p
+	out.def = &out.Rule
 	return out, nil
 }
 

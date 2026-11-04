@@ -112,7 +112,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		return Plan{}, nil, ErrPresetUnavailable
 	}
 	n := &need{
-		in: &in, req: in.Req, preset: preset, rule: &preset.Rule, over: &in.Override, auto: in.Auto, free: in.Free, now: now,
+		in: &in, req: in.Req, preset: preset, rule: preset.def, over: &in.Override, auto: in.Auto, free: in.Free, now: now,
 		tokens: inputTokens(in.Req), demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	if r.cfg.Segments != nil {
