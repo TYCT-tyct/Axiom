@@ -454,12 +454,12 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		// supplier does with the data it is sent, so an endpoint is taken to be the worst case rather than the best: a
 		// preset that requires no retention must not route to it on the strength of a value nobody set.
 		Class: routing.Class(measured.Class), Policy: routing.PolicyMayTrain,
-		// Health, the quality score, its confidence, and the time to first token and speed are what real traffic and the
-		// probes measured, as of this build: the snapshot is at most one rebuild behind the attempts
+		// Health, the quality score, its confidence, the tool-call error rate, and the time to first token and speed are
+		// what real traffic and the probes measured, as of this build: the snapshot is at most one rebuild behind the attempts
 		// (docs/domains/quality.md「质量分、吞吐与延迟」). An endpoint nothing counted has the neutral quality 1 and the
 		// confidence 0, which routing keeps apart from a measured bad one. Verified is the health loop's last
 		// fingerprint check, which real traffic does not count for (docs/domains/quality.md「真伪检测」).
-		Quality: measured.Quality, Confidence: measured.Confidence, Health: measured.Health,
+		Quality: measured.Quality, Confidence: measured.Confidence, Health: measured.Health, ToolErrorRate: measured.ToolErrorRate,
 		Throughput: measured.Throughput, Latency: measured.Latency, Verified: measured.Verified,
 		LatencyPercentiles: measured.LatencyPercentiles, ThroughputPercentiles: measured.ThroughputPercentiles,
 		Quantization: r.Quantization,

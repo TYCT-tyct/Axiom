@@ -27,7 +27,8 @@ type responsesStream struct {
 	webSearch, codeInterpreter, fileSearch, functionCall, hasResponse bool
 	report                                                            *openAIUsage
 	reportErr                                                         error
-	topReport                                                         []byte // borrowed from this event; only failures may use it when response.usage is absent
+	topReport                                                         []byte         // borrowed from this event; only failures may use it when response.usage is absent
+	args                                                              jsontext.Value // its item's arguments, in its data
 	// items is, for each output item added so far, the content its deltas carried: an item that completes counts only
 	// what it adds to them, so the bound never counts the same text twice.
 	items []int64
@@ -64,7 +65,7 @@ var (
 		"service_tier": (*responsesStream).serviceTier,
 		"error":        func(s *responsesStream) error { return errorObject(&s.reader, &s.eventReader, errorFields) }, // response.failed's
 	}
-	responsesItemFields = map[string]func(*responsesStream) error{"type": (*responsesStream).itemType}
+	responsesItemFields = map[string]func(*responsesStream) error{"type": (*responsesStream).itemType, "arguments": (*responsesStream).itemArgs}
 	// responsesRewrites put the call ID and the client's model name in the response, keep its usage to the official
 	// members, and drop an upstream's axiom member, which our ending may write.
 	responsesRewrites = formatRules{members: map[string]rule{
@@ -79,7 +80,7 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	s.start(data)
 	s.index, s.itemBytes, s.webSearch, s.codeInterpreter, s.fileSearch, s.functionCall, s.hasResponse, s.report, s.reportErr =
 		-1, 0, false, false, false, false, false, nil, nil
-	s.topReport = nil
+	s.topReport, s.args = nil, nil
 	if err := walk(&s.reader, s, responsesFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
@@ -135,6 +136,9 @@ func (s *responsesStream) settle() error {
 		s.e.role, s.e.content = content, s.itemBytes
 		if 0 <= s.index && s.index < int64(len(s.items)) {
 			s.e.content = max(0, s.itemBytes-s.items[s.index])
+		}
+		if s.functionCall {
+			s.checkArgs()
 		}
 	}
 	return nil
@@ -237,6 +241,25 @@ func (s *responsesStream) itemType() error {
 	s.fileSearch = string(v) == "file_search_call"
 	s.functionCall = string(v) == "function_call"
 	return nil
+}
+
+// itemArgs keeps an item's arguments, which only a function call's are checked by, once its type is known.
+func (s *responsesStream) itemArgs() error {
+	v, err := s.raw()
+	if v != nil && err == nil {
+		to := int(s.dec.InputOffset())
+		s.args = s.e.data[to-len(v) : to]
+	}
+	return err
+}
+
+// checkArgs checks a function call that is done: its item has the arguments whole.
+func (s *responsesStream) checkArgs() {
+	var scan argScan
+	feedArgs(&scan, s.args)
+	if !scan.ok() {
+		s.e.toolErrors = 1
+	}
 }
 
 func (s *responsesStream) usage() error {

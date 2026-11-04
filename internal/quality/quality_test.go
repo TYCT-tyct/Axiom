@@ -120,6 +120,36 @@ func TestMeasured(t *testing.T) {
 	}
 }
 
+// TestToolErrorRate: each answer with client tool calls that ended normally is one sample, 1 when any call's
+// arguments were not one JSON text, however many were; an answer cut short, or without tool calls, is none. The rate is
+// a moving average, unmeasured (0) below minSamples samples and maxAge after the last.
+func TestToolErrorRate(t *testing.T) {
+	m := New(nil)
+	id := suppliers.EndpointID{7}
+	tools := func(calls, errors int64) Observation {
+		o := answered(id, t0, time.Second, time.Second, 10, 10)
+		o.ToolCalls, o.ToolErrors = calls, errors
+		return o
+	}
+	for range 4 {
+		m.Observe(t.Context(), tools(3, 2))
+	}
+	cut := tools(1, 1)
+	cut.Done, cut.Fault = false, protocol.FaultBroken
+	m.Observe(t.Context(), cut)
+	m.Observe(t.Context(), tools(0, 0))
+	if got := measured(m, id, t0); got.ToolErrorRate != 0 {
+		t.Fatalf("after 4 samples: rate %v, want unmeasured", got.ToolErrorRate)
+	}
+	m.Observe(t.Context(), tools(1, 0))
+	if got := measured(m, id, t0); !near(got.ToolErrorRate, 0.8) { // 1 − 0.2·(1 − 0)
+		t.Fatalf("rate %v, want 0.8", got.ToolErrorRate)
+	}
+	if got := measured(m, id, t0.Add(2*time.Second+maxAge+time.Nanosecond)); got.ToolErrorRate != 0 {
+		t.Fatalf("30 minutes after the last sample: rate %v, want unmeasured", got.ToolErrorRate)
+	}
+}
+
 // TestQualityScore: the score is reliability (1 minus the error moving average) times the mean of the measured
 // performance factors, each normalized to the interactive references—a second to the first token and 50 tokens a
 // second. An unmeasured factor is left out, never counted as a bad one; nothing counted gives the neutral score 1 and

@@ -115,7 +115,7 @@ func (s *chatToNative) event(data []byte, m *meter) (event, error) {
 	if err != nil {
 		return event{}, err
 	}
-	out := event{role: skipped, usageAt: -1, content: e.content, shape: e.shape, searches: e.searches, toolCalls: e.toolCalls, usage: e.usage, final: e.final}
+	out := event{role: skipped, usageAt: -1, content: e.content, shape: e.shape, searches: e.searches, toolCalls: e.toolCalls, toolErrors: e.toolErrors, usage: e.usage, final: e.final}
 	if s.composed {
 		return s.composedEvent(e, out)
 	}

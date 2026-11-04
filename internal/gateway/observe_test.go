@@ -156,6 +156,29 @@ func TestThroughputLeavesOutOurOwnWaits(t *testing.T) {
 	}
 }
 
+// TestToolErrorsReachQuality: an answer whose tool call's arguments are not one JSON text is told to quality as a tool
+// error, so after five such calls the endpoint's measured tool-call error rate is 1.
+func TestToolErrorsReachQuality(t *testing.T) {
+	t.Parallel()
+	health := quality.New(nil)
+	var now time.Time
+	for range 5 {
+		run(t, func(t *testing.T, ctx context.Context) {
+			h := newHarness(t, ctx, options{health: health})
+			call := "event: content_block_start\n" +
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"f","input":{}}}` + "\n\n" +
+				"event: content_block_delta\n" +
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}` + "\n\n"
+			h.up.eps[uuidOf(ep(1))].script = []scripted{serve(beat{data: events(h.events, evStart) + call + events(h.events, evBlockStop, evMsgDelta, evMsgStop)})}
+			h.run()
+			now = time.Now()
+		})
+	}
+	if got := health.MeasuredFor(suppliers.Routable{ID: uuidOf(ep(1))}, now).ToolErrorRate; got != 1 {
+		t.Errorf("tool-call error rate %v, want 1", got)
+	}
+}
+
 // TestClassEvidenceIsOneReportedResponse: the usage a source class rule reads is what the upstream reported, not the
 // gateway's estimate, and it comes from the same response as the headers, so two hops of a search loop cannot together
 // satisfy a rule no single response did.

@@ -39,17 +39,29 @@ type chatStream struct {
 	reportErr                         error
 	// The reasoning members of the delta being read, to be written under both names.
 	reasoning, reasoningContent reasoningMember
-	// pending are the tool-call indices of the choice being read, counted after its index is known: a chunk may put
-	// delta before index. The small buffers keep the common calls allocation-free; a longer response grows them and
-	// the growth is charged. seen and nSeen are the first (choice, tool) pairs counted, extra the rest, so a call's
-	// repeated deltas count once and the same index in another choice is another call.
-	pending    []int64
-	pendingBuf [8]int64
+	// pending are the tool calls of the choice being read, counted after its index is known: a chunk may put delta
+	// before index. The small buffers keep the common calls allocation-free; a longer response grows them and the
+	// growth is charged. seen and nSeen are the first (choice, tool) pairs counted, extra the rest, so a call's
+	// repeated deltas count once and the same index in another choice is another call. scans check the arguments of
+	// the calls in seen; a call past them is counted but not checked, which keeps the stream's state fixed.
+	pending    []chatPending
+	pendingBuf [8]chatPending
 	seen       [8]chatToolKey
+	scans      [8]argScan
 	nSeen      int
 	extra      map[chatToolKey]struct{}
 	toolIndex  int64
+	toolArgs   jsontext.Value // the tool-call element's arguments piece, in the chunk
 }
+
+// chatPending is a tool-call element of the choice being read: its index and its piece of the arguments, in the chunk.
+type chatPending struct {
+	tool int64
+	args jsontext.Value
+}
+
+// chatPendingSize is what a pending entry takes: an index and a slice header.
+const chatPendingSize = 32
 
 func newChatStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
 	return newChatStreamReader(u, o, charge)
@@ -100,7 +112,7 @@ var (
 		"index":    (*chatStream).toolCallIndex,
 		"function": func(s *chatStream) error { return walk(&s.reader, s, functionFields) },
 	}
-	functionFields = map[string]func(*chatStream) error{"name": (*chatStream).visibleText, "arguments": (*chatStream).visibleText}
+	functionFields = map[string]func(*chatStream) error{"name": (*chatStream).visibleText, "arguments": (*chatStream).arguments}
 	// chatRewrites are for a chunk with members to drop: the others only get their edits in place. provider names the
 	// upstream (docs/domains/gateway.md「转发规则」).
 	chatRewrites = formatRules{members: map[string]rule{
@@ -171,7 +183,8 @@ func (s *chatStream) settle() {
 	}
 }
 
-// done is [DONE]: the normal end, once every choice that started has finished.
+// done is [DONE]: the normal end, once every choice that started has finished. The calls' arguments are complete
+// only now: Chat marks no call's end but the choice's.
 func (s *chatStream) done() (event, error) {
 	for i, finished := range s.choices {
 		if !finished {
@@ -179,6 +192,11 @@ func (s *chatStream) done() (event, error) {
 		}
 	}
 	s.e.role = end
+	for i := range s.scans[:s.nSeen] {
+		if !s.scans[i].ok() {
+			s.e.toolErrors++
+		}
+	}
 	return s.e, nil
 }
 
@@ -277,7 +295,7 @@ func (s *chatStream) finishReason() error {
 // toolCall notes the index of a tool-call element. The element's choice may come after it, so counting waits until the
 // choice is read; the note is kept in a slice the stream reuses, and its growth is charged like any other buffer.
 func (s *chatStream) toolCall() error {
-	s.toolIndex = -1
+	s.toolIndex, s.toolArgs = -1, nil
 	if err := walk(&s.reader, s, toolCallFields); err != nil {
 		return err
 	}
@@ -285,11 +303,11 @@ func (s *chatStream) toolCall() error {
 		return nil
 	}
 	if len(s.pending) == cap(s.pending) {
-		if err := s.charge(max(cap(s.pending), 8) * 8); err != nil {
+		if err := s.charge(max(cap(s.pending), 8) * chatPendingSize); err != nil {
 			return err
 		}
 	}
-	s.pending = append(s.pending, s.toolIndex)
+	s.pending = append(s.pending, chatPending{tool: s.toolIndex, args: s.toolArgs})
 	return nil
 }
 
@@ -297,13 +315,19 @@ func (s *chatStream) toolCall() error {
 // live in the stream's inline buffer; a longer set is charged per entry. An index of any accepted width is kept, and a
 // call's deltas repeat its pair rather than add one.
 func (s *chatStream) countTools() error {
-	for _, tool := range s.pending {
-		key := chatToolKey{choice: s.index, tool: tool}
-		if s.counted(key) {
+	for _, p := range s.pending {
+		key := chatToolKey{choice: s.index, tool: p.tool}
+		if i := slices.Index(s.seen[:s.nSeen], key); i >= 0 {
+			feedArgs(&s.scans[i], p.args)
+			continue
+		}
+		if _, seen := s.extra[key]; seen {
 			continue
 		}
 		if s.nSeen < len(s.seen) {
 			s.seen[s.nSeen] = key
+			s.scans[s.nSeen] = argScan{}
+			feedArgs(&s.scans[s.nSeen], p.args)
 			s.nSeen++
 		} else {
 			if err := s.charge(chatToolKeySize); err != nil {
@@ -317,15 +341,6 @@ func (s *chatStream) countTools() error {
 		s.e.toolCalls++
 	}
 	return nil
-}
-
-// counted reports whether the pair was already counted for this stream.
-func (s *chatStream) counted(key chatToolKey) bool {
-	if slices.Contains(s.seen[:s.nSeen], key) {
-		return true
-	}
-	_, seen := s.extra[key]
-	return seen
 }
 
 func (s *chatStream) toolCallIndex() error {
@@ -371,7 +386,7 @@ func (s *chatStream) usage() error {
 func (s *chatStream) dropBuffers() {
 	s.eventReader.dropBuffers()
 	s.choices, s.held, s.finish, s.first, s.report, s.reportErr = nil, nil, nil, "", nil, nil
-	s.pending, s.nSeen, s.extra, s.toolIndex = s.pendingBuf[:0], 0, nil, 0
+	s.pending, s.nSeen, s.extra, s.toolIndex, s.toolArgs = s.pendingBuf[:0], 0, nil, 0, nil
 	s.reasoning, s.reasoningContent = reasoningMember{}, reasoningMember{}
 }
 
@@ -417,6 +432,18 @@ func (s *chatWriter) usageEvent(dst []byte, u catalog.Usage, cost, top string) [
 func (s *chatWriter) chunk(choices string) []byte {
 	return []byte(`{"id":` + s.id + `,"object":"chat.completion.chunk","created":` + s.created + `,"model":` + s.model +
 		`,"choices":` + choices)
+}
+
+// arguments reads a tool call's piece of arguments as visibleText does, and keeps it for the call's check, which waits
+// for the element's index and the choice's.
+func (s *chatStream) arguments() error {
+	before := s.e.content
+	v, err := s.textValue()
+	if s.e.content > before {
+		s.e.role = content
+	}
+	s.toolArgs = v
+	return err
 }
 
 // visibleText separates the commit point from the full content bound used for billing.

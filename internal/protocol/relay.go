@@ -61,9 +61,12 @@ type Usage struct {
 // last usage event on; until then an output count only bounds the output from below (README.md「转发（草图）」).
 type Progress struct {
 	ContentBytes, PartialBytes, Searches, CodeExecutions, FileSearches, ToolCalls int64
-	Text                                                                          textshape.Shape
-	Reported                                                                      Segment
-	Final                                                                         catalog.ItemSet
+	// ToolErrors are the client tool calls whose arguments, once the call ended, were not one JSON text: what quality
+	// ranks an endpoint's tool calling by (docs/domains/quality.md「线上观测」). Chat ends its calls only at [DONE].
+	ToolErrors int64
+	Text       textshape.Shape
+	Reported   Segment
+	Final      catalog.ItemSet
 }
 
 // UsageContext carries the upstream request's metering context and the original client's reply contract.
@@ -377,6 +380,7 @@ func (r *Relay) observe(e event) {
 	r.progress.CodeExecutions += e.codeExecutions
 	r.progress.FileSearches += e.fileSearches
 	r.progress.ToolCalls += e.toolCalls
+	r.progress.ToolErrors += e.toolErrors
 	if e.usage || e.final {
 		r.meter.final = r.meter.final || e.final
 		r.progress.Reported, r.progress.Final = r.meter.progress()
