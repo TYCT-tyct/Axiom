@@ -1,4 +1,4 @@
-import { consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { AuthFrame, Gate, readForm, useErrors, useSignIn } from "@axiom/app";
 import { DataState, FormError, SubmitButton, TextField } from "@axiom/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -6,6 +6,7 @@ import { Link, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
+import { canSubmitWithLegal, LegalConsent, useLegalConsent } from "./legal";
 import { solveProof } from "./proof";
 
 export default function Register() {
@@ -23,6 +24,7 @@ function RegisterPage() {
   return (
     <AuthFrame
       brand={site.data}
+      wide
       title={t("auth.register.title")}
       description={t("auth.register.description")}
       footer={
@@ -121,6 +123,7 @@ function InviteRegisterForm() {
   const { t } = useTranslation();
   const errors = useErrors();
   const signIn = useSignIn();
+  const legal = useLegalConsent();
   const [sent, setSent] = useState(false);
   const register = useMutation({
     mutationFn: (body: Schemas["RegisterRequest"]) =>
@@ -130,6 +133,11 @@ function InviteRegisterForm() {
         signIn.mutate({ email, password: password ?? "" });
       } else {
         setSent(true);
+      }
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === "consent_required") {
+        legal.reload();
       }
     },
   });
@@ -146,20 +154,26 @@ function InviteRegisterForm() {
       onSubmit={(event) => {
         event.preventDefault();
         const { invite_code = "", email = "", password = "" } = readForm(event.currentTarget);
-        if (pending) {
+        if (pending || !canSubmitWithLegal(legal)) {
           return;
         }
         // an account already made is signed in to, not registered again
         if (made) {
           signIn.mutate({ email: email.trim(), password });
         } else {
-          register.mutate({ invite_code: invite_code.trim(), email: email.trim(), password });
+          register.mutate({
+            invite_code: invite_code.trim(),
+            email: email.trim(),
+            password,
+            consent: legal.versions,
+          });
         }
       }}
     >
       {failure ? <FormError>{made ? t("auth.register.signInFailed") : errors.message(failure)}</FormError> : null}
       <RegisterFields error={register.error} invite />
-      <SubmitButton pending={pending} className="w-full">
+      <LegalConsent consent={legal} />
+      <SubmitButton pending={pending} disabled={!canSubmitWithLegal(legal)} className="w-full">
         {t("auth.register.submit")}
       </SubmitButton>
     </form>

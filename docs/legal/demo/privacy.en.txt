@@ -1,0 +1,153 @@
+Demo text, not legal advice; replace before launch.
+
+# Axiom Privacy Policy (Demo)
+
+Effective date: 【effective date】
+
+## Introduction and Scope
+
+1.1 This Policy explains how 【operating entity】 (“we,” “us,” or “our”) collects, uses, stores, shares, and protects personal data when providing the Axiom website, console, API, and related services (the “Service”), and the rights you have in that data.
+
+1.2 This Policy applies to personal data we process when you access or use the Service. It does not apply to services independently provided by upstream model providers, third-party relay sites, payment channels, sub-site operators, or other third parties. Those third parties have their own privacy policies, which you should read separately.
+
+1.3 “Personal data” means information relating to an identified or identifiable natural person, as determined by 【governing law】. We process personal data in accordance with the principles of lawfulness, fairness, necessity, and good faith.
+
+## Information We Collect
+
+2.1 Account and identity data: email address, password hash, third-party login identifiers (such as GitHub, Google, or LinuxDO account identifiers), passkeys, two-step verification secrets and recovery codes, language and time-zone preferences, invitation relationships, roles and permissions, email verification status, and account and workspace identifiers.
+
+2.2 Payment and billing data: order number, top-up amount, payment currency, payment method, payment channel, channel fee, credit credited, refunds and chargebacks, receipts, and invoice information (if you provide it). Full card numbers, CVVs, bank passwords, payment passwords, and on-chain private keys are handled by payment channels; we do not collect or store them.
+
+2.3 API usage data: API key identifiers (prefix, last four characters, and hash), workspace, request ID, model, endpoint or source code, each attempt, usage, sale price, cost, latency, first-token time, error type, whether the call was streamed, whether it hit cache, whether it was free, client application, IP address, session and sub-agent identifiers, app-attribution headers (such as HTTP-Referer, X-OpenRouter-Title, and X-OpenRouter-Categories), and request class.
+
+2.4 Conversation content: the complete requests you submit through the API (including messages, system prompts, tool definitions, parameters, and multimodal content such as images, PDFs, audio, and files), and the complete responses, reasoning content, and tool calls returned by models. Conversation content is collected and stored only when the platform enables storage; the platform decides as a whole, and sites and accounts cannot turn it off individually. When storage is disabled, we do not store message bodies, but we still store call records.
+
+2.5 Support and communications data: emails, tickets, chat records, problem descriptions, attachments, and your feedback about the Service, billing, or security incidents.
+
+2.6 Device and log data: IP address, User-Agent, access time, pages and actions, error logs, security events, login attempts, session state, CSRF tokens, and language and theme preferences. Operational logs do not contain conversation bodies, plaintext API keys, upstream keys, cookies, or authentication tokens.
+
+2.7 Cookies and local storage: essential cookies used to maintain sessions and prevent cross-site request forgery, and browser local storage used to remember language, theme, and unfinished form state. We do not use advertising-tracking cookies or sell your personal data to advertisers.
+
+## How We Use Information
+
+3.1 To provide and operate the Service: authentication, registration, routing, retries and fallbacks, billing, reservations and settlement, refunds, reconciliation, statements and receipts, and model and endpoint display.
+
+3.2 Security and anti-abuse: preventing unauthorized access, key theft, account takeover, fraud, chargebacks, spam registration, rate-limit evasion, and other abuse; conducting security audits, incident response, and dispute investigations.
+
+3.3 Customer support: answering your questions, troubleshooting, handling refunds and complaints, and restoring accounts.
+
+3.4 Improving the Service: analyzing usage, performance, errors, and capacity to improve routing, endpoint quality, pricing, and user experience. We use aggregated or de-identified data where possible.
+
+3.5 Model training and improvement: we may use stored conversation content to improve models or the Service, but only where we have the consent required by applicable law or another lawful basis; before necessary consent is obtained, we will not use conversation content for model training. Each call record indicates the training-permission status that applied at the time.
+
+3.6 Legal and compliance: complying with laws, regulations, sanctions, export controls, law-enforcement, or regulatory requirements; enforcing these Terms; and protecting the rights, property, and safety of us, our users, and third parties.
+
+3.7 Notices: sending service changes, security incidents, billing, refunds, account status, and important policy updates. Marketing or promotional messages require separate consent, and you can opt out at any time.
+
+3.8 Legal bases (where applicable law requires one): performance of a contract, compliance with legal obligations, protection of your or another person’s vital interests, our legitimate interests (where they do not override your rights and freedoms), and your consent. You may withdraw consent at any time, without affecting processing carried out before withdrawal.
+
+## Conversation Content and Call Records
+
+4.1 Call records (metadata) are always stored and cannot be disabled. They are used for billing, settlement, reconciliation, audit, security, troubleshooting, dispute handling, and service improvement. Call records do not contain conversation bodies.
+
+4.2 Whether conversation content is stored is decided by the platform as a whole. When storage is enabled, content is retained for 90 days by default, adjustable in the backend, and may be retained long-term; when storage is disabled, message bodies are not stored. Stored content includes complete requests, complete responses, tool calls, and multimodal content such as images and files.
+
+4.3 Stored conversation content is isolated per account, encrypted at rest, and deduplicated by content; the deduplication fingerprint uses an HMAC-SHA256 with an account key, so someone who can list the storage bucket cannot determine whether a piece of content exists. API keys, upstream keys, cookies, authentication headers, and login tokens are not recorded.
+
+4.4 Access restrictions: no user, customer, site administrator, or ordinary employee can view conversation bodies through the product interface or ordinary APIs. Only the platform owner, under a controlled process with two signatures from two independent keys, audit, and encrypted export, may access stored content for tracing, security, dispute handling, and, where necessary consent has been obtained, model improvement or training. Exports record the approval summary, scope, item and byte counts, output digest, and start and end audit entries.
+
+4.5 Expiry and deletion: conversation content expires based on the last time it was referenced; after the last call referencing it expires, it is moved to cold storage or deleted by a periodic cleanup job. Call records are partitioned by time and moved to object storage after the default 90-day hot window; ledgers, financial records, and audit records are retained long-term under law and internal policy.
+
+4.6 Response cache: if a site enables the response cache, cached content is stored as separate encrypted entries for at most 24 hours and is included in account deletion and export scope; the cache does not change the access restrictions in this Policy.
+
+## Sharing, Disclosure, and Processing by Others
+
+5.1 Upstream model providers: to complete your request, we send inputs and necessary request parameters to the upstream endpoint that actually serves it, including official APIs, third-party relay sites, and Axiom-operated account pools. Upstreams may record, store, use for training, use for improvement, or resell data under their terms; we do not control their data practices. You can select or exclude endpoints using the endpoint attributes, source classes, and presets the site provides.
+
+5.2 Payment channels and banks: to process top-ups, refunds, chargebacks, and reconciliation, we share necessary order and payment information with payment channels, banks, and payment service providers. They process information under their own privacy policies.
+
+5.3 Service providers: we may use cloud, object-storage, email, monitoring, logging, security, and customer-support providers. They process information only on our instructions and are bound by confidentiality and security obligations. We do not permit them to use your information for their own marketing.
+
+5.4 Affiliates and sub-sites: if you use a sub-site, the sub-site operator is the controller for its own users, and we share information necessary to provide the sub-site service; the sub-site operator must comply with its own privacy policy and commitments to you. When we share information with affiliates, we require them to comply with this Policy.
+
+5.5 Legal, law enforcement, and rights protection: subject to law, we may disclose information in response to a subpoena, court order, regulatory requirement, or law-enforcement request, or to protect the rights, property, and safety of us, our users, or the public. We review the legality and scope of requests and, where permitted by law, notify you.
+
+5.6 Business transfers: in a merger, acquisition, reorganization, or asset transfer, personal data may be transferred as part of the transaction; we will require the recipient to remain bound by this Policy or obtain your consent.
+
+5.7 We do not sell your personal data or share it for advertising purposes.
+
+## Cookies and Local Storage
+
+6.1 Essential cookies: used to maintain login sessions, distinguish sites and consoles, and prevent cross-site request forgery. Disabling these cookies will prevent you from signing in or using the console.
+
+6.2 Local storage: used to remember language, theme, idempotency keys for unfinished forms, and page preferences. You can clear local storage through your browser, but language, theme, and unfinished state will reset.
+
+6.3 Third-party sign-in: GitHub, Google, LinuxDO, and similar sign-in providers may set their own cookies in your browser; their processing is governed by their privacy policies.
+
+6.4 We currently do not use advertising or cross-site tracking technologies. If we introduce analytics or marketing tools in the future, we will update this Policy and obtain consent as required by law.
+
+## Retention
+
+7.1 Account and identity data: retained while the account exists; after account closure, records required by law are retained and the rest are deleted or anonymized.
+
+7.2 Call records: all call records are retained. The hot window is 90 days by default (adjustable), after which records are archived to object storage; archived objects are not deleted, to meet the product requirement that all call records be kept. Ledgers, financial records, and audit records are retained long-term under law and internal policy.
+
+7.3 Conversation content: retained only when the platform enables storage; when enabled, 90 days by default (adjustable, or long-term), expiring based on the last reference time.
+
+7.4 Support and communications data: retained for as long as needed to handle the matter, then deleted or anonymized, extended where required by law or a dispute.
+
+7.5 Security logs: retained for as long as needed for security audit and incident response, normally no longer than 【log retention period】.
+
+7.6 We may extend retention where required by law, a dispute, an investigation, or law enforcement; extended data remains protected under this Policy.
+
+## Security
+
+8.1 We use technical and organizational measures consistent with industry practice to protect personal data, including: transport encryption; argon2id password hashing; envelope encryption for API keys, upstream keys, and payment credentials; key rings and key rotation; database row-level security; least privilege and separation of duties; operation audits; encrypted backups; access controls; and employee confidentiality obligations.
+
+8.2 We review our security measures and handle vulnerabilities and incidents. If personal data is leaked, destroyed, lost, or accessed without authorization, we will notify you and regulators as required by law and take measures to contain the impact.
+
+8.3 No system is absolutely secure. You must safeguard your password, passkeys, two-step verification credentials, recovery codes, and API keys, avoid saving sessions on public devices, and notify us immediately if you discover a compromise.
+
+## Your Rights
+
+9.1 To the extent provided by applicable law, you have the right to access, copy, correct, supplement, and delete your personal data, to restrict or object to processing, to withdraw consent, to obtain a portable copy, and to complain to a regulator.
+
+9.2 You may make a request through the console or 【contact details】. We may need to verify your identity and will respond within the period permitted by law. For repetitive, excessive, or vexatious requests, we may charge a reasonable fee or refuse.
+
+9.3 Legal exceptions: if information concerns the rights of others, legal obligations, financial records, security investigations, disputes, or law-enforcement requirements, we may be unable to delete or provide it, but we will explain why.
+
+9.4 Conversation bodies cannot be viewed through the product interface or ordinary APIs. If applicable law gives you the right to access or copy conversation content, please contact 【contact details】; we will verify your identity and handle the request through a controlled process to the extent permitted by law.
+
+9.5 Account closure: you may request closure through the console or 【contact details】. After closure, your personal data is handled under this Policy, financial records and records required by law are retained, remaining credit is handled under the site’s refund policy, and the same email address may register again but will receive a new account.
+
+9.6 Marketing opt-out: you may opt out of marketing messages at any time through the unsubscribe link in an email or 【contact details】. Service, security, and billing notices are not marketing and cannot be opted out of.
+
+## International Transfers
+
+10.1 Our servers, service providers, and upstream model providers may be located in 【country or region】. Your personal data may be transferred to and processed in places outside your country or region.
+
+10.2 We will implement transfer safeguards required by 【governing law】, such as standard contractual clauses, data-transfer agreements, encryption, de-identification, or your consent. You may contact 【contact details】 for details.
+
+10.3 Because of the nature of the Service, your requests are sent to the upstream endpoint that actually serves them, which may be in another country or region. You should assess whether the data-protection level in the upstream’s location meets your requirements.
+
+## Children
+
+11.1 The Service is not directed to children. We do not knowingly collect personal data from children. If you are a child, please use the Service only with the consent and guidance of a guardian, or do not use it.
+
+11.2 The minimum age is 【minimum age】. If we learn that we have collected a child’s personal data without guardian consent, we will delete it as soon as possible. Guardians may contact us at 【contact details】.
+
+## Changes to This Policy
+
+12.1 We may update this Policy from time to time. For material changes, we will give advance notice through the website, console, email, or another reasonable method, and update the version and effective date.
+
+12.2 After a change takes effect, your continued use of the Service means you accept the updated Policy; if you do not accept it, you must stop using the Service and may request a refund of unused credit under the refund policy.
+
+12.3 If applicable law requires separate consent, we will obtain it separately.
+
+## Contact Us
+
+13.1 Operating entity: 【operating entity】. Registered address: 【registered address】. Contact: 【contact details】. Data protection officer: 【data protection officer and contact details】.
+
+13.2 We will respond to your request within 【fifteen】 business days after receiving it; where the law provides otherwise, that law governs.
+
+13.3 Effective date: 【effective date】.

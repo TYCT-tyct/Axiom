@@ -42,7 +42,9 @@ export function grant(state: AuthState, status: Schemas["SessionGrant"]["status"
   return { status, csrf_token: state.csrf };
 }
 
-export const session = (state: AuthState): Schemas["Session"] => ({
+export const session = (
+  state: AuthState & { legal?: Schemas["LegalDocument"][]; legalAccepted?: boolean },
+): Schemas["Session"] => ({
   user: { id: userId(state.account), email: state.user.email, invite_code: state.user.inviteCode },
   account: accountId(state.account),
   level: state.level === "none" ? "password" : state.level,
@@ -50,6 +52,14 @@ export const session = (state: AuthState): Schemas["Session"] => ({
   csrf_token: state.csrf,
   expires_at: "2026-10-15T00:00:00Z",
   permissions: state.permissions,
+  consent:
+    state.legal && state.legal.length > 0
+      ? {
+          required: state.legalAccepted
+            ? []
+            : state.legal.map(({ kind, locale, version }) => ({ kind, locale, version })),
+        }
+      : undefined,
 });
 
 export const recoveryCodes = Array.from({ length: 10 }, (_, i) => `abcd-efgh-ijkl-${String(1000 + i)}`);

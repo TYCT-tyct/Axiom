@@ -17,12 +17,14 @@ export function AuthFrame({
   footer,
   brand,
   children,
+  wide = false,
 }: {
   title: string;
   description?: string;
   footer?: ReactNode;
   brand?: Brand;
   children: ReactNode;
+  wide?: boolean;
 }) {
   usePageTitle(title);
   useBrandStyle(brand?.brand_color);
@@ -35,7 +37,9 @@ export function AuthFrame({
       <main
         id="main"
         tabIndex={-1}
-        className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-6 px-4 pb-24 outline-none"
+        className={`mx-auto flex w-full flex-1 flex-col justify-center gap-6 px-4 pb-24 outline-none ${
+          wide ? "max-w-2xl" : "max-w-sm"
+        }`}
       >
         <div className="space-y-1.5">
           <h1 className="text-xl tracking-[-0.01em] text-t1">{title}</h1>

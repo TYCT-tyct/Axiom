@@ -10,6 +10,8 @@ export type Schemas = components["schemas"];
 
 export type MockState = AuthState & {
   site: Schemas["Site"];
+  legal: Schemas["LegalDocument"][];
+  legalAccepted: boolean;
   balance: Schemas["Balance"];
   keys: Schemas["Key"][];
   passkeys: Schemas["Passkey"][];
@@ -229,6 +231,8 @@ export function usualState(): MockState {
       api_base_url: "https://api.example.com",
       registration: "invite",
     },
+    legal: [],
+    legalAccepted: false,
     balance: {
       balance: usd("12"),
       reserved: nano("250000000"),
