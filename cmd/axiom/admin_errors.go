@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"axiom/internal/accounts"
+
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
@@ -17,6 +19,8 @@ import (
 // adminRefusals are the refusals the admin API's modules make beyond those the console's do (refusals), tried after
 // them. A message is English for logs and developers and never repeats what the client sent.
 var adminRefusals = []refusal{
+	{accounts.ErrUnknownAgent, http.StatusUnauthorized, codeUnauthenticated, "no live operations credential"},
+	{accounts.ErrAgentNotFound, http.StatusNotFound, codeNotFound, "no such resource"},
 	{observability.ErrAlertRotationWindow, http.StatusConflict, codeConflict, "the preceding signing secret is still valid; wait until the one-hour overlap ends before rotating again"},
 	{payments.ErrInvestigated, http.StatusConflict, codeConflict, "this record was already investigated; read its saved note"},
 	{payments.ErrStale, http.StatusConflict, codeStaleRevision, "the merchant account changed since it was read"},

@@ -87,6 +87,8 @@ type Service struct {
 	known   *lru[keyHash, Caller]
 	unknown *lru[keyHash, struct{}]
 	lookups singleflight.Group
+	// agentRequests spends each operations credential's requests on this node (AuthenticateAgent).
+	agentRequests *buckets[AgentID]
 	// lookupJoined, when set by a test, is called after a request joined the shared lookup, before it waits for the
 	// result; it is how a timing test observes every waiter instead of sleeping.
 	lookupJoined func()
@@ -139,7 +141,7 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 		recovery: cfg.Recovery, registration: cfg.Registration, misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened, keyPreset: cfg.KeyPreset,
 		exit: exit, providers: maps.Clone(oauthProviders),
 		slot: slot, gated: cfg.LookupSlot != nil,
-		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit),
+		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit), agentRequests: newBuckets[AgentID](),
 		guards: newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),
 		cache: cfg.Cache, loginKey: cfg.LoginKey,
 	}, nil

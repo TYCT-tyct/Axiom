@@ -9,7 +9,7 @@ useDefault = true
 # in api/*.yaml in the clear. Only these generated files are skipped; a secret anywhere else still fails.
 [[allowlists]]
 description = "embedded OpenAPI contract in generated code"
-paths = ['''internal/platform/(adminapi|consoleapi)/[^/]+\.gen\.go''']
+paths = ['''internal/platform/(adminapi|consoleapi|operationsapi)/[^/]+\.gen\.go''']
 
 # The Stripe webhook tests sign fixtures with a placeholder secret. It is not a credential: only
 # webhook.GenerateTestSignedPayload uses it, no live endpoint sees it, and the channel verifies with the merchant's own

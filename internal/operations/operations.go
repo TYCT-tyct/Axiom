@@ -1,6 +1,6 @@
-// Package operations owns the operations module's data. Today that is the business targets the owner sets in the
-// admin and the operations dashboard compares with the actual figures (docs/domains/operations.md「运营看板」); the
-// rest of the module — the agent interface, approvals and node management — is still to be built.
+// Package operations owns the operations module's data: the business targets the owner sets in the admin and the
+// operations dashboard compares with the actual figures (docs/domains/operations.md「运营看板」), and the operation log
+// of every call of the operations API (「审计」). Approvals, money caps and node management are still to be built.
 package operations
 
 import (

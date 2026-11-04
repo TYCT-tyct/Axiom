@@ -2316,6 +2316,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/operations/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The operations credentials
+         * @description Every operations credential, newest first, revoked ones included: its permissions, sites, platform grant, proposer vendors, expiry, last use and the last four characters of its current token. Never a token.
+         */
+        get: operations["listOperationsCredentials"];
+        put?: never;
+        /**
+         * Make an operations credential
+         * @description Makes a credential for the operations agent and returns its token once. It always holds `operations.read`; it may hold any other declared permission except `operations.manage` and `platform_grants.manage`, which are the control plane's. Without `sites` it acts on every site; `platform` lets it read the platform's own resources. It expires at `expires_at`, which the owner chooses for each credential and must be in the future. A replay of the same key returns the credential without the token: a lost token is replaced by a rotation.
+         */
+        post: operations["createOperationsCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/credentials/{credential_id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                credential_id: components["schemas"]["OperationsCredentialId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Give an operations credential a new token
+         * @description Returns a new token once. The token it replaces keeps working for `overlap_hours` (0 to 24, 24 when absent), for the MCP bridge to swap its file; a token an earlier rotation replaced stops now. A replay of the same key returns no token: rotate again.
+         */
+        post: operations["rotateOperationsCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/credentials/{credential_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                credential_id: components["schemas"]["OperationsCredentialId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke an operations credential
+         * @description From the next request every token of the credential is refused, and it never comes back; a revoked or expired credential is not found.
+         */
+        post: operations["revokeOperationsCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/agent/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Emergency stop of the operations agent
+         * @description Revokes every live operations credential in one transaction, so the operations listener refuses the next request of any of them. Resuming is making a new credential; a revoked one never comes back. Stopping again revokes nothing and is not an error.
+         */
+        post: operations["stopOperationsAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3308,6 +3396,68 @@ export interface components {
         UnitPrice: string;
         /** @description Why the person is doing this. It goes to the audit log. */
         Reason: string;
+        /** @description An operations credential's ID (TypeID). */
+        OperationsCredentialId: string;
+        OperationsCredential: {
+            id: components["schemas"]["OperationsCredentialId"];
+            name: string;
+            /** @description Sorted; always holds operations.read. */
+            permissions: string[];
+            /** @description The sites it acts on; absent for every site. */
+            sites?: components["schemas"]["SiteId"][];
+            platform: boolean;
+            proposer_vendors: string[];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            revoked_at?: string;
+            /** Format: date-time */
+            last_used_at?: string;
+            /** @description The last four characters of the current token. */
+            token_last4: string;
+            /**
+             * Format: date-time
+             * @description When the token the last rotation replaced stops working; absent once it has.
+             */
+            previous_token_until?: string;
+        };
+        OperationsCredentialList: {
+            data: components["schemas"]["OperationsCredential"][];
+            next_cursor?: string;
+        };
+        OperationsCredentialCreate: {
+            name: string;
+            /** @description Besides operations.read, which every credential holds. */
+            permissions: string[];
+            /** @description Absent for every site. */
+            sites?: components["schemas"]["SiteId"][];
+            /** @description Whether it may act on the platform's own resources. */
+            platform: boolean;
+            /** @description The vendors of the models that propose through it, which an approving model must differ from. */
+            proposer_vendors: string[];
+            /** Format: date-time */
+            expires_at: string;
+            reason: components["schemas"]["Reason"];
+        };
+        OperationsCredentialRotate: {
+            /** @default 24 */
+            overlap_hours: number;
+            reason: components["schemas"]["Reason"];
+        };
+        OperationsCredentialToken: {
+            credential_id: components["schemas"]["OperationsCredentialId"];
+            /** @description Shown once; absent on a replay. */
+            token?: string;
+        };
+        OperationsCredentialRevoked: {
+            credential_id: components["schemas"]["OperationsCredentialId"];
+        };
+        OperationsAgentStopped: {
+            /** @description How many live credentials this stop revoked. */
+            revoked: number;
+        };
         ReasonRequest: {
             reason: components["schemas"]["Reason"];
         };
@@ -9079,6 +9229,173 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listOperationsCredentials: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of credentials */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsCredentialList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createOperationsCredential: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperationsCredentialCreate"];
+            };
+        };
+        responses: {
+            /** @description The credential, and its token unless this is a replay */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsCredentialToken"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    rotateOperationsCredential: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                credential_id: components["schemas"]["OperationsCredentialId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperationsCredentialRotate"];
+            };
+        };
+        responses: {
+            /** @description The new token unless this is a replay */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsCredentialToken"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    revokeOperationsCredential: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                credential_id: components["schemas"]["OperationsCredentialId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description Revoked */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsCredentialRevoked"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    stopOperationsAgent: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description Stopped */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsAgentStopped"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };
