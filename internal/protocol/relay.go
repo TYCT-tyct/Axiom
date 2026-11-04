@@ -284,7 +284,6 @@ func (r *Relay) Next() (Step, error) {
 	return step, nil
 }
 
-//nolint:gocognit // one branch per event role
 func (r *Relay) event(data []byte) (Step, error) {
 	e, err := r.up.event(data, &r.meter)
 	r.observe(e) // a reader that fails the event may still report what ended with it, such as the tool calls checked
@@ -294,15 +293,8 @@ func (r *Relay) event(data []byte) (Step, error) {
 	if data, err = r.edit(&e); err != nil {
 		return Step{}, err
 	}
-	if e.role != skipped && e.role != heartbeat {
-		if data, err = r.legacyReply(data); err != nil {
-			return Step{}, err
-		}
-		if r.srv != nil {
-			if err = r.capture(data); err != nil {
-				return Step{}, err
-			}
-		}
+	if data, err = r.delivered(e, data); err != nil {
+		return Step{}, err
 	}
 	step := Step{Kind: StepBuffered} // what a skipped event takes
 	if e.role != skipped {
@@ -315,6 +307,19 @@ func (r *Relay) event(data []byte) (Step, error) {
 		}
 	}
 	return step, err
+}
+
+// delivered is an event of the reply as the client gets it, legacy completions' rewritten, and captured for the server
+// tool's loop. A skipped event and a heartbeat carry no reply.
+func (r *Relay) delivered(e event, data []byte) ([]byte, error) {
+	if e.role == skipped || e.role == heartbeat {
+		return data, nil
+	}
+	data, err := r.legacyReply(data)
+	if err != nil || r.srv == nil {
+		return data, err
+	}
+	return data, r.capture(data)
 }
 
 // route writes or holds an event by its role.

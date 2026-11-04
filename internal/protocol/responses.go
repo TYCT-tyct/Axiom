@@ -471,8 +471,6 @@ func compactReplyMembers(body []byte, fn func(compactMember)) error {
 // like every other call. A pending settlement has no cost and says so, as the streams' endings do
 // (docs/domains/gateway.md「转发规则」). A member the upstream should not have sent under our name, axiom, is dropped so
 // the settlement state appears once and is ours.
-//
-//nolint:cyclop,gocognit // the member loop is the serializer; each branch is one member kind
 func RewriteCompactReply(body []byte, seen Usage, fin *Final) ([]byte, error) {
 	u, costString, axiom := reply(seen), "", ""
 	if fin == nil || fin.Pending {
@@ -483,46 +481,29 @@ func RewriteCompactReply(body []byte, seen Usage, fin *Final) ([]byte, error) {
 	usage := appendOpenAIUsage(make([]byte, 0, 512), responsesNames, u, costString)
 	// One allocation: the members kept, the usage key, our axiom, and the commas between them all fit.
 	out := make([]byte, 0, len(body)+len(usage)+len(axiom)+16)
-	out = append(out, '{')
-	wrote, hasUsage := false, false
+	sep, hasUsage := byte('{'), false // sep opens the object before the first member and separates the rest
 	err := compactReplyMembers(body, func(m compactMember) {
 		switch m.kind {
 		case compactAxiom:
-			return
 		case compactUsage:
-			if hasUsage {
-				return
+			if !hasUsage {
+				out = append(append(append(out, sep), body[m.keyStart:m.valueStart]...), usage...)
+				sep, hasUsage = ',', true
 			}
-			hasUsage = true
-			if wrote {
-				out = append(out, ',')
-			}
-			out = append(out, body[m.keyStart:m.valueStart]...)
-			out = append(out, usage...)
 		case compactOther:
-			if wrote {
-				out = append(out, ',')
-			}
-			out = append(out, body[m.keyStart:m.end]...)
+			out = append(append(out, sep), body[m.keyStart:m.end]...)
+			sep = ','
 		}
-		wrote = true
 	})
 	if err != nil {
 		return nil, err
 	}
 	if !hasUsage {
-		if wrote {
-			out = append(out, ',')
-		}
-		out = append(out, `"usage":`...)
-		out = append(out, usage...)
-		wrote = true
+		out = append(append(append(out, sep), `"usage":`...), usage...)
 	}
+	// The usage is written either way, so a comma always comes before our axiom.
 	if axiom != "" {
-		if wrote {
-			out = append(out, ',')
-		}
-		out = append(out, axiom...)
+		out = append(append(out, ','), axiom...)
 	}
 	return append(out, '}'), nil
 }
