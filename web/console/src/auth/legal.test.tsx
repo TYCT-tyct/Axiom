@@ -116,7 +116,7 @@ describe("legal consent", () => {
     expect(canSubmitWithLegal({ ready: true, documents: terms, accepted: true })).toBe(true);
   });
 
-  it("reads an old node's document without locale as the Chinese text", () => {
+  it("keeps an old node's missing locale out of the acceptance", () => {
     const legacy: Schemas["LegalDocument"] = {
       kind: "terms",
       version: 1,
@@ -125,23 +125,38 @@ describe("legal consent", () => {
     };
     expect(legalDocumentsForLanguage([legacy], "en")).toEqual([legacy]);
     expect(legalDocumentsForLanguage([legacy], "zh")).toEqual([legacy]);
-    expect(legalVersions([legacy])).toEqual([{ kind: "terms", locale: "zh", version: 1 }]);
+    expect(legalVersions([legacy])).toEqual([{ kind: "terms", version: 1 }]);
   });
 
-  it("selects the UI language, falls back per document, and shows terms before privacy", () => {
+  it("selects the newest shared version before language, falls back per document, and orders terms first", () => {
     const privacy = document("privacy", 1, "en");
-    const terms = document("terms", 4, "en");
     const zhTerms = document("terms", 7, "zh");
-    expect(legalDocumentsForLanguage([privacy, terms, zhTerms], "en-US")).toEqual([terms, privacy]);
+    const olderTerms = document("terms", 4, "en");
+    expect(legalDocumentsForLanguage([privacy, olderTerms, zhTerms], "en-US")).toEqual([zhTerms, privacy]);
     expect(legalDocumentsForLanguage([privacy, zhTerms], "en")).toEqual([zhTerms, privacy]);
-    expect(legalDocumentsForLanguage([privacy, terms], "zh")).toEqual([terms, privacy]);
+    expect(legalDocumentsForLanguage([privacy, olderTerms], "zh")).toEqual([olderTerms, privacy]);
+
+    const zhCurrent = document("terms", 2, "zh");
+    const enCurrent = document("terms", 2, "en");
+    expect(legalDocumentsForLanguage([zhCurrent, enCurrent], "en-US")).toEqual([enCurrent]);
+    expect(legalDocumentsForLanguage([zhCurrent, enCurrent], "zh-CN")).toEqual([zhCurrent]);
     expect(legalDocumentsForLanguage([], "en")).toEqual([]);
   });
 
-  it("sends exactly the versions that were shown, including their locale", () => {
+  it("sends exactly the versions that were shown, including a locale only when the response had one", () => {
     expect(legalVersions([document("terms", 4), document("privacy", 2, "zh")])).toEqual([
       { kind: "terms", locale: "en", version: 4 },
       { kind: "privacy", locale: "zh", version: 2 },
+    ]);
+    const legacy: Schemas["LegalDocument"] = {
+      kind: "terms",
+      version: 3,
+      body: "Legacy terms.",
+      published_at: "2026-11-04T00:00:00Z",
+    };
+    expect(legalVersions([legacy, document("privacy", 2, "en")])).toEqual([
+      { kind: "terms", version: 3 },
+      { kind: "privacy", locale: "en", version: 2 },
     ]);
     expect(legalVersions([])).toBeUndefined();
   });

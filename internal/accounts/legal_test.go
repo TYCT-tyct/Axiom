@@ -2,6 +2,7 @@ package accounts_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -101,6 +102,12 @@ func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
 	}
 	if len(pending) != 2 || pending[0].Kind != accounts.LegalPrivacy || pending[1].Version != 3 || pending[1].Locale != accounts.LegalLocaleEN {
 		t.Fatalf("pending before accepting: %+v", pending)
+	}
+	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{
+		{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleZH, Version: 2},
+		{Kind: accounts.LegalPrivacy, Locale: accounts.LegalLocaleZH, Version: 1},
+	}); !errors.Is(err, accounts.ErrConsentRequired) {
+		t.Fatalf("accepting a lower locale version: %v, want ErrConsentRequired", err)
 	}
 	if err := s.AcceptLegalDocuments(t.Context(), p, pending[:1]); !errors.Is(err, accounts.ErrConsentRequired) {
 		t.Fatalf("accepting half the documents: %v, want ErrConsentRequired", err)
@@ -225,6 +232,88 @@ func TestLegalOldNodeWritesAfterLocaleExpansion(t *testing.T) {
 		`INSERT INTO accounts.legal_documents (site_id, kind, locale, version, body)
 			VALUES (:s1, 'terms', 'en', 1, 'A second locale at the legacy version.')`); err == nil {
 		t.Fatal("a second locale at the legacy version was accepted")
+	}
+}
+
+// TestLegalCompatibilityAcceptanceAcrossNodes checks the two directions that a rolling release can route between an
+// old and a new node. The compatibility phase has one current version per kind, the newest across locales: accepting
+// that version on either node satisfies the other, and accepting a lower version in the page's language does not.
+func TestLegalCompatibilityAcceptanceAcrossNodes(t *testing.T) {
+	t.Parallel()
+	db, _ := open(t)
+	s := node(t, db, hashKeys(t, 1), nil)
+	site, account := accounts.SiteID(s1), accounts.AccountID(a1)
+	publish := func(site accounts.SiteID, kind, locale, body string) {
+		t.Helper()
+		if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+			_, err := s.PublishLegalDocument(t.Context(), tx, system, site, kind, locale, body, "test")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish(site, accounts.LegalTerms, accounts.LegalLocaleZH, placeholderTerms)
+	publish(site, accounts.LegalTerms, accounts.LegalLocaleEN, "English placeholder terms for tests.")
+	publish(site, accounts.LegalPrivacy, accounts.LegalLocaleZH, placeholderPrivacy)
+
+	p := accounts.PrincipalForTest(site, account, accounts.UserID(u1))
+	// The old page omits locale: the new node resolves the one row at each version, then the database stores its
+	// actual locale. This is the old-response-to-new-node direction.
+	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{
+		{Kind: accounts.LegalTerms, Version: 2},
+		{Kind: accounts.LegalPrivacy, Version: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := texts(t, db, platform, "SELECT kind || ' ' || locale || ' ' || version FROM accounts.legal_acceptances WHERE user_id = '"+u1.String()+"' ORDER BY kind"); !slices.Equal(got, []string{"privacy zh 1", "terms en 2"}) {
+		t.Fatalf("acceptances after omitted locales: %v", got)
+	}
+	// This is the old node's current/accepted comparison: max(version) per kind, not per locale.
+	if got := texts(t, db, platform, fmt.Sprintf(`
+		SELECT count(*)::text
+		FROM (SELECT d.kind, max(d.version) AS version
+			FROM accounts.legal_documents d
+			WHERE d.site_id = '%s'
+			GROUP BY d.kind) current
+		WHERE NOT EXISTS (
+			SELECT 1 FROM accounts.legal_acceptances a
+			WHERE a.site_id = '%s' AND a.user_id = '%s'
+				AND a.kind = current.kind AND a.version = current.version
+		)`, s1, s1, u1)); !slices.Equal(got, []string{"0"}) {
+		t.Fatalf("the old node still sees %v kind(s) pending after the new acceptance", got)
+	}
+	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{
+		{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleZH, Version: 1},
+		{Kind: accounts.LegalPrivacy, Locale: accounts.LegalLocaleZH, Version: 1},
+	}); !errors.Is(err, accounts.ErrConsentRequired) {
+		t.Fatalf("accepting the lower Chinese terms: %v, want ErrConsentRequired", err)
+	}
+
+	// The other direction uses the second seeded site, because its user has no acceptance yet. An old node accepts
+	// the newest versions without a locale, and the new node sees no pending.
+	secondSite, secondAccount := accounts.SiteID(s2), accounts.AccountID(a2)
+	publish(secondSite, accounts.LegalTerms, accounts.LegalLocaleEN, "Second site terms for tests.")
+	publish(secondSite, accounts.LegalPrivacy, accounts.LegalLocaleZH, placeholderPrivacy)
+	runAsMember := func(account accounts.AccountID, statement string) error {
+		return db.Tx(t.Context(), pg.AccountScope(uuid.UUID(account)), func(tx pg.Tx) error {
+			_, err := tx.Exec(t.Context(), ids.Replace(statement))
+			return err
+		})
+	}
+	for _, statement := range []string{
+		`INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
+			VALUES (:x, :s2, :a2, :u2, 'terms', 1)
+			ON CONFLICT (user_id, kind, version) DO NOTHING`,
+		`INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
+			VALUES (:y, :s2, :a2, :u2, 'privacy', 1)
+			ON CONFLICT (user_id, kind, version) DO NOTHING`,
+	} {
+		if err := runAsMember(secondAccount, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if pending, err := s.PendingLegalDocuments(t.Context(), accounts.PrincipalForTest(secondSite, secondAccount, accounts.UserID(u2))); err != nil || len(pending) != 0 {
+		t.Fatalf("pending after the old acceptance: %+v, %v", pending, err)
 	}
 }
 

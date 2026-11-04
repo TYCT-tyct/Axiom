@@ -31,20 +31,22 @@ function acceptsCurrent(documents: Schemas["LegalDocument"][], consent: Schemas[
     }
     chosen.set(document.kind, document);
   }
-  const kinds = new Set(documents.map((document) => document.kind));
-  if (chosen.size !== kinds.size) {
+  const newest = new Map<Schemas["LegalDocumentKind"], number>();
+  for (const document of documents) {
+    newest.set(document.kind, Math.max(newest.get(document.kind) ?? 0, document.version));
+  }
+  if (chosen.size !== newest.size) {
     return false;
   }
-  return [...kinds].every((kind) => {
+  return [...newest].every(([kind, version]) => {
     const picked = chosen.get(kind);
     return (
       picked !== undefined &&
-      documents.some(
-        (document) =>
-          document.kind === kind &&
-          (document.locale ?? "zh") === (picked.locale ?? "zh") &&
-          document.version === picked.version,
-      )
+      picked.version === version &&
+      (picked.locale === undefined ||
+        documents.some(
+          (document) => document.kind === kind && document.locale === picked.locale && document.version === version,
+        ))
     );
   });
 }

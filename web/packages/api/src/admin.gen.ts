@@ -3231,10 +3231,10 @@ export interface components {
         };
         /** @description The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead. */
         SessionConsent: {
-            /** @description One current document per kind this user still has to accept; empty when one current version of every kind is accepted. */
+            /** @description One newest current document per kind this user still has to accept during the compatibility phase; empty when each newest version is accepted. */
             required: components["schemas"]["LegalDocumentVersion"][];
         };
-        /** @description A legal document version named by an acceptance or the session's pending list. `locale` is optional for rolling compatibility: an old client omits it, and the server resolves the kind and version to the one current document; a page reading an old node's response treats the absent value as `zh`. */
+        /** @description A legal document version named by an acceptance or the session's pending list. `locale` is optional for rolling compatibility: when an old node's response omits it, the page also omits it from the acceptance, and the server resolves the kind and version to the one current document. The page may use `zh` as the display fallback. */
         LegalDocumentVersion: {
             kind: components["schemas"]["LegalDocumentKind"];
             locale?: components["schemas"]["LegalDocumentLocale"];
@@ -3433,7 +3433,7 @@ export interface components {
         LegalDocumentKind: "terms" | "privacy";
         /** @enum {string} */
         LegalDocumentLocale: "zh" | "en";
-        /** @description One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. `locale` is absent on a node that predates locale-aware documents; a client treats the absent value as `zh`. */
+        /** @description One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. `locale` is absent on a node that predates locale-aware documents; a page uses `zh` only as the display fallback and omits the locale from the acceptance. */
         LegalDocument: {
             kind: components["schemas"]["LegalDocumentKind"];
             locale?: components["schemas"]["LegalDocumentLocale"];

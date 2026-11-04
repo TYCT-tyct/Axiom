@@ -57,6 +57,54 @@ test.describe("accepting updated documents", () => {
     await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
   });
 
+  test("an old node's missing locale stays missing in the acceptance", async ({ page }) => {
+    const state = await mockConsole(page);
+    const documents = demoDocuments();
+    state.legal = documents;
+    signedInAs(state);
+    const legacy = documents.map(({ locale: _locale, ...document }) => document);
+    await page.route("**/api/console/v1/legal*", (route) =>
+      route.request().method() === "GET" ? route.fulfill({ json: { documents: legacy } }) : route.fallback(),
+    );
+    await page.goto("/console/keys");
+    await expect(page.getByRole("heading", { level: 1, name: "更新后的条款" })).toBeVisible();
+    await page.getByLabel("我已阅读并同意上述服务条款和隐私政策。").check();
+    const accepted = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().endsWith("/api/console/v1/legal/accept"),
+    );
+    await page.getByRole("button", { name: "同意并继续" }).click();
+    expect((await accepted).postDataJSON()).toEqual({
+      consent: [
+        { kind: "terms", version: 3 },
+        { kind: "privacy", version: 2 },
+      ],
+    });
+    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+  });
+
+  test("English accepts the newest shared version, not a lower Chinese one", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.legal = demoDocuments().map((document) =>
+      document.kind === "terms" ? { ...document, version: document.locale === "en" ? 2 : 1 } : document,
+    );
+    signedInAs(state);
+    await page.addInitScript(() => localStorage.setItem("axiom.language", "en"));
+    await page.goto("/console/keys");
+    await expect(page.getByRole("heading", { level: 1, name: "Updated terms" })).toBeVisible();
+    await page.getByLabel("I have read and agree to the terms of service and privacy policy above.").check();
+    const accepted = page.waitForRequest(
+      (request) => request.method() === "POST" && request.url().endsWith("/api/console/v1/legal/accept"),
+    );
+    await page.getByRole("button", { name: "Accept and continue" }).click();
+    expect((await accepted).postDataJSON()).toEqual({
+      consent: [
+        { kind: "terms", locale: "en", version: 2 },
+        { kind: "privacy", locale: "zh", version: 2 },
+      ],
+    });
+    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+  });
+
   test("a member can leave the consent page for another account without accepting", async ({ page }) => {
     const state = await mockConsole(page);
     state.legal = demoDocuments();

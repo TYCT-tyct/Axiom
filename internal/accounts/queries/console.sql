@@ -40,22 +40,20 @@ VALUES (@id, @site_id, @account_id, @user_id, @surface, @token_hash, @csrf_token
 -- A session holds while it is not revoked, expired or idle too long, its user is enabled, and its factor version is
 -- the user's. The site's lifetimes now (the caller's, in seconds) cut what the session was issued with, never extend it:
 -- a site that shortens its sessions writes that into the ones already made (CutSessions), and this cut also holds a
--- session another node issued from its snapshot before reloading the change.
+-- session another node issued from its snapshot before reloading the change. During the rolling-release compatibility
+-- phase a kind is pending until its newest version across locales is accepted, matching an old node's max(version)
+-- check; accepting a lower version in another locale must not make the session look consented.
 SELECT s.site_id, s.surface, s.level, s.csrf_token, s.factor_version,
     EXISTS (
         SELECT 1
-        FROM (SELECT DISTINCT kind FROM accounts.legal_documents WHERE site_id = s.site_id) k
-        WHERE NOT EXISTS (
-            SELECT 1
+        FROM (SELECT d.kind, max(d.version) AS version
             FROM accounts.legal_documents d
-            WHERE d.site_id = s.site_id AND d.kind = k.kind
-                AND d.version = (SELECT max(x.version) FROM accounts.legal_documents x
-                    WHERE x.site_id = d.site_id AND x.kind = d.kind AND x.locale = d.locale)
-                AND EXISTS (
-                    SELECT 1 FROM accounts.legal_acceptances a
-                    WHERE a.site_id = s.site_id AND a.user_id = s.user_id
-                        AND a.kind = d.kind AND a.locale = d.locale AND a.version = d.version
-                )
+            WHERE d.site_id = s.site_id
+            GROUP BY d.kind) k
+        WHERE NOT EXISTS (
+            SELECT 1 FROM accounts.legal_acceptances a
+            WHERE a.site_id = s.site_id AND a.user_id = s.user_id
+                AND a.kind = k.kind AND a.version = k.version
         )
     ) AS consent_pending
 FROM accounts.sessions s

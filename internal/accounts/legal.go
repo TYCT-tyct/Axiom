@@ -149,10 +149,33 @@ func (s *Service) LegalDocumentHistory(ctx context.Context, tx pg.Tx, site SiteI
 	return documents, more, nil
 }
 
-// PendingLegalDocuments is what the signed-in user has not accepted at a current version. A kind is satisfied when a
-// current document of that kind in any locale is accepted; when it is not, the kind's newest current document is
-// returned, one per kind, so the list can itself be accepted. The page chooses the locale it shows from the full
-// current list. An empty result means every kind is accepted, and a site with no documents always has an empty one.
+// newestLegalDocuments keeps the newest version of each kind. During the rolling-release compatibility phase an old
+// node has exactly this view: it does not know locale, so the newest row of a kind is its current document. The page and
+// the acceptance check use the same view until the cleanup migration lets each locale have an independent stream.
+func newestLegalDocuments(documents []LegalDocument) []LegalDocument {
+	newest := make(map[string]LegalDocument, 2)
+	kinds := make([]string, 0, 2)
+	for _, document := range documents {
+		previous, seen := newest[document.Kind]
+		if !seen {
+			kinds = append(kinds, document.Kind)
+		}
+		if !seen || document.Version > previous.Version {
+			newest[document.Kind] = document
+		}
+	}
+	out := make([]LegalDocument, 0, len(kinds))
+	for _, kind := range kinds {
+		out = append(out, newest[kind])
+	}
+	return out
+}
+
+// PendingLegalDocuments is what the signed-in user has not accepted at a current version. During the compatibility
+// phase a kind's current version is its newest version across locales, matching an old node; a kind is satisfied only
+// when that version is accepted, not when a lower version in another locale is. The newest current document is returned
+// once per kind, so the list can itself be accepted. The page chooses the locale it shows within that version. An empty
+// result means every kind is accepted, and a site with no documents always has an empty one.
 func (s *Service) PendingLegalDocuments(ctx context.Context, p Principal) ([]DocumentVersion, error) {
 	var pending []DocumentVersion
 	err := s.db.ReadTx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
@@ -175,24 +198,9 @@ func (s *Service) pendingLegalDocuments(ctx context.Context, tx pg.Tx, site Site
 	if err != nil {
 		return nil, err
 	}
-	satisfied := make(map[string]bool, len(current))
-	newest := make(map[string]LegalDocument, len(current))
-	var kinds []string
-	for _, document := range current {
-		if accepted[DocumentVersion{Kind: document.Kind, Locale: document.Locale, Version: document.Version}] {
-			satisfied[document.Kind] = true
-		}
-		chosen, seen := newest[document.Kind]
-		if !seen {
-			kinds = append(kinds, document.Kind)
-		}
-		if !seen || document.Version > chosen.Version {
-			newest[document.Kind] = document
-		}
-	}
 	var pending []DocumentVersion
-	for _, kind := range kinds {
-		if document := newest[kind]; !satisfied[kind] {
+	for _, document := range newestLegalDocuments(current) {
+		if !accepted[DocumentVersion{Kind: document.Kind, Locale: document.Locale, Version: document.Version}] {
 			pending = append(pending, DocumentVersion{Kind: document.Kind, Locale: document.Locale, Version: document.Version})
 		}
 	}
@@ -227,41 +235,38 @@ func (s *Service) AcceptLegalDocuments(ctx context.Context, p Principal, accepte
 }
 
 // currentVersionsAccepted checks that accepted names exactly one current document per kind, and returns that
-// canonical set. A site with no documents requires no acceptance, and extra versions are refused: they mean the page
-// was built from other documents than the ones now in force.
+// canonical set. During the compatibility phase "current" is the newest version across locales, as on an old node, so
+// a lower version in the page's language is refused even though it is that locale's newest row. A site with no
+// documents requires no acceptance, and extra versions are refused: they mean the page was built from other documents
+// than the ones now in force.
 func (s *Service) currentVersionsAccepted(ctx context.Context, tx pg.Tx, site SiteID, accepted []DocumentVersion) ([]DocumentVersion, error) {
 	current, err := s.currentLegalDocuments(ctx, tx, site)
 	if err != nil {
 		return nil, err
 	}
 	given := make(map[string]DocumentVersion, len(accepted))
-	kinds := make(map[string]bool)
-	for _, document := range current {
-		kinds[document.Kind] = true
-	}
 	for _, document := range accepted {
 		if _, twice := given[document.Kind]; twice {
 			return nil, ErrConsentRequired
 		}
 		given[document.Kind] = document
 	}
-	if len(given) != len(kinds) {
+	current = newestLegalDocuments(current)
+	if len(given) != len(current) {
 		return nil, ErrConsentRequired
 	}
 	documents := make([]DocumentVersion, 0, len(current))
 	for _, document := range current {
 		chosen, ok := given[document.Kind]
 		if !ok || chosen.Version != document.Version {
-			continue
+			return nil, ErrConsentRequired
 		}
 		// An old page sends no locale. The version resolves it while old nodes keep versions unique across locales; if a
 		// later cleanup allows two current rows at one version, the old request becomes ambiguous and stays refused.
-		if chosen.Locale == "" || chosen.Locale == document.Locale {
-			documents = append(documents, DocumentVersion{Kind: document.Kind, Locale: document.Locale, Version: document.Version})
+		if chosen.Locale != "" && chosen.Locale != document.Locale {
+			return nil, ErrConsentRequired
 		}
-	}
-	if len(documents) != len(given) {
-		return nil, ErrConsentRequired
+		documents = append(documents, DocumentVersion{Kind: document.Kind, Locale: document.Locale, Version: document.Version})
 	}
 	return documents, nil
 }

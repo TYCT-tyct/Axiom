@@ -18,37 +18,43 @@ export type LegalConsentState = {
   reload: () => void;
 };
 
-// An old node predates locale-aware documents and omits the field. Those rows are the Chinese text (the migration's
-// default), so a new page treats the absence as zh instead of selecting no document and hiding the terms.
+// An old node predates locale-aware documents and omits the field. Use zh for display and keys only; the acceptance
+// omits it so the server resolves the row. Treating the absence as zh here keeps a page from hiding the terms entirely.
 function documentLocale(document: Schemas["LegalDocument"]): Schemas["LegalDocumentLocale"] {
   return document.locale ?? "zh";
 }
 
-// The versions a form sends are exactly the ones the visitor saw, including their locale. No documents means no
-// consent field at all. A missing locale is sent as zh, and an old node ignores the extra member.
+// The versions a form sends are exactly the ones the visitor saw. A document from an old node has no locale, so its
+// acceptance also omits it and the server resolves the one current document from the kind and version; inventing zh
+// here would name a different row after the locale expansion.
 export function legalVersions(documents: Schemas["LegalDocument"][]): Schemas["LegalDocumentVersion"][] | undefined {
   return documents.length === 0
     ? undefined
-    : documents.map((document) => ({
-        kind: document.kind,
-        locale: documentLocale(document),
-        version: document.version,
-      }));
+    : documents.map((document) =>
+        document.locale === undefined
+          ? { kind: document.kind, version: document.version }
+          : { kind: document.kind, locale: document.locale, version: document.version },
+      );
 }
 
-// The site may publish Chinese and English separately. Show one document per kind in the language the console uses,
-// falling back to the other locale only when that kind has no document in the chosen one. Terms come first.
+// During the rolling-release compatibility phase an old node knows one current version per kind: the newest version
+// across locales. Select that same version here, then use the console language only to choose its locale. Choosing a
+// lower version in the preferred language would name a version the old node does not accept, and accepting at a new
+// node would still leave an old node asking again. The cleanup migration, after old nodes exit, can switch this to
+// independent per-locale streams.
 export function legalDocumentsForLanguage(
   documents: Schemas["LegalDocument"][],
   language: string,
 ): Schemas["LegalDocument"][] {
   const preferred = language.toLowerCase().startsWith("zh") ? "zh" : "en";
-  const fallback = preferred === "zh" ? "en" : "zh";
   return (["terms", "privacy"] as const).flatMap((kind) => {
     const sameKind = documents.filter((document) => document.kind === kind);
-    const document =
-      sameKind.find((candidate) => documentLocale(candidate) === preferred) ??
-      sameKind.find((candidate) => documentLocale(candidate) === fallback);
+    if (sameKind.length === 0) {
+      return [];
+    }
+    const newest = Math.max(...sameKind.map((document) => document.version));
+    const current = sameKind.filter((document) => document.version === newest);
+    const document = current.find((candidate) => documentLocale(candidate) === preferred) ?? current[0];
     return document ? [document] : [];
   });
 }
