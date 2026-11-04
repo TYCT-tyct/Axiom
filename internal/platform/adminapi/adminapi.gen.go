@@ -136,6 +136,18 @@ type ServerInterface interface {
 	// StopOperationsAgent Emergency stop of the operations agent
 	// (POST /api/admin/v1/operations/agent/stop)
 	StopOperationsAgent(w http.ResponseWriter, r *http.Request, params StopOperationsAgentParams)
+	// ListOperationsApprovals What the operations agent asked the owner to approve
+	// (GET /api/admin/v1/operations/approvals)
+	ListOperationsApprovals(w http.ResponseWriter, r *http.Request, params ListOperationsApprovalsParams)
+	// GetOperationsApproval One approval with its operation
+	// (GET /api/admin/v1/operations/approvals/{approval_id})
+	GetOperationsApproval(w http.ResponseWriter, r *http.Request, approvalId Uuid)
+	// ApproveOperationsApproval Approve what the operations agent asked for
+	// (POST /api/admin/v1/operations/approvals/{approval_id}/approve)
+	ApproveOperationsApproval(w http.ResponseWriter, r *http.Request, approvalId Uuid, params ApproveOperationsApprovalParams)
+	// RejectOperationsApproval Reject what the operations agent asked for
+	// (POST /api/admin/v1/operations/approvals/{approval_id}/reject)
+	RejectOperationsApproval(w http.ResponseWriter, r *http.Request, approvalId Uuid, params RejectOperationsApprovalParams)
 	// ListOperationsCredentials The operations credentials
 	// (GET /api/admin/v1/operations/credentials)
 	ListOperationsCredentials(w http.ResponseWriter, r *http.Request, params ListOperationsCredentialsParams)
@@ -2282,6 +2294,199 @@ func (siw *ServerInterfaceWrapper) StopOperationsAgent(w http.ResponseWriter, r 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.StopOperationsAgent(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListOperationsApprovals operation middleware
+func (siw *ServerInterfaceWrapper) ListOperationsApprovals(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListOperationsApprovalsParams
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListOperationsApprovals(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetOperationsApproval operation middleware
+func (siw *ServerInterfaceWrapper) GetOperationsApproval(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "approval_id" -------------
+	var approvalId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "approval_id", r.PathValue("approval_id"), &approvalId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "approval_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetOperationsApproval(w, r, approvalId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ApproveOperationsApproval operation middleware
+func (siw *ServerInterfaceWrapper) ApproveOperationsApproval(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "approval_id" -------------
+	var approvalId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "approval_id", r.PathValue("approval_id"), &approvalId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "approval_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ApproveOperationsApprovalParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ApproveOperationsApproval(w, r, approvalId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RejectOperationsApproval operation middleware
+func (siw *ServerInterfaceWrapper) RejectOperationsApproval(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "approval_id" -------------
+	var approvalId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "approval_id", r.PathValue("approval_id"), &approvalId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "approval_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RejectOperationsApprovalParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RejectOperationsApproval(w, r, approvalId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7739,6 +7944,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/credentials/{credential_id}/rotate", wrapper.RotateOperationsCredential)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/credentials/{credential_id}/revoke", wrapper.RevokeOperationsCredential)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/agent/stop", wrapper.StopOperationsAgent)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/approvals", wrapper.ListOperationsApprovals)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/approvals/{approval_id}", wrapper.GetOperationsApproval)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/approvals/{approval_id}/approve", wrapper.ApproveOperationsApproval)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/approvals/{approval_id}/reject", wrapper.RejectOperationsApproval)
 
 	return m
 }
@@ -12050,6 +12259,424 @@ type StopOperationsAgentdefaultJSONResponse struct {
 }
 
 func (response StopOperationsAgentdefaultJSONResponse) VisitStopOperationsAgentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsApprovalsRequestObject struct {
+	Params ListOperationsApprovalsParams
+}
+
+type ListOperationsApprovalsResponseObject interface {
+	VisitListOperationsApprovalsResponse(w http.ResponseWriter) error
+}
+
+type ListOperationsApprovals200JSONResponse OperationsApprovalList
+
+func (response ListOperationsApprovals200JSONResponse) VisitListOperationsApprovalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsApprovals400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListOperationsApprovals400JSONResponse) VisitListOperationsApprovalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsApprovals401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListOperationsApprovals401JSONResponse) VisitListOperationsApprovalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsApprovals403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListOperationsApprovals403JSONResponse) VisitListOperationsApprovalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsApprovalsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListOperationsApprovalsdefaultJSONResponse) VisitListOperationsApprovalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsApprovalRequestObject struct {
+	ApprovalId Uuid `json:"approval_id"`
+}
+
+type GetOperationsApprovalResponseObject interface {
+	VisitGetOperationsApprovalResponse(w http.ResponseWriter) error
+}
+
+type GetOperationsApproval200JSONResponse OperationsApproval
+
+func (response GetOperationsApproval200JSONResponse) VisitGetOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsApproval400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetOperationsApproval400JSONResponse) VisitGetOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsApproval401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetOperationsApproval401JSONResponse) VisitGetOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsApproval403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetOperationsApproval403JSONResponse) VisitGetOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsApproval404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetOperationsApproval404JSONResponse) VisitGetOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsApprovaldefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetOperationsApprovaldefaultJSONResponse) VisitGetOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveOperationsApprovalRequestObject struct {
+	ApprovalId Uuid `json:"approval_id"`
+	Params     ApproveOperationsApprovalParams
+	Body       *ApproveOperationsApprovalJSONRequestBody
+}
+
+type ApproveOperationsApprovalResponseObject interface {
+	VisitApproveOperationsApprovalResponse(w http.ResponseWriter) error
+}
+
+type ApproveOperationsApproval200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type ApproveOperationsApproval200JSONResponse struct {
+	Body    OperationsApproval
+	Headers ApproveOperationsApproval200ResponseHeaders
+}
+
+func (response ApproveOperationsApproval200JSONResponse) VisitApproveOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveOperationsApproval400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ApproveOperationsApproval400JSONResponse) VisitApproveOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveOperationsApproval401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ApproveOperationsApproval401JSONResponse) VisitApproveOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveOperationsApproval403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ApproveOperationsApproval403JSONResponse) VisitApproveOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveOperationsApproval404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ApproveOperationsApproval404JSONResponse) VisitApproveOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveOperationsApproval409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ApproveOperationsApproval409JSONResponse) VisitApproveOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveOperationsApprovaldefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ApproveOperationsApprovaldefaultJSONResponse) VisitApproveOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectOperationsApprovalRequestObject struct {
+	ApprovalId Uuid `json:"approval_id"`
+	Params     RejectOperationsApprovalParams
+	Body       *RejectOperationsApprovalJSONRequestBody
+}
+
+type RejectOperationsApprovalResponseObject interface {
+	VisitRejectOperationsApprovalResponse(w http.ResponseWriter) error
+}
+
+type RejectOperationsApproval200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type RejectOperationsApproval200JSONResponse struct {
+	Body    OperationsApproval
+	Headers RejectOperationsApproval200ResponseHeaders
+}
+
+func (response RejectOperationsApproval200JSONResponse) VisitRejectOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectOperationsApproval400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RejectOperationsApproval400JSONResponse) VisitRejectOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectOperationsApproval401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RejectOperationsApproval401JSONResponse) VisitRejectOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectOperationsApproval403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RejectOperationsApproval403JSONResponse) VisitRejectOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectOperationsApproval404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RejectOperationsApproval404JSONResponse) VisitRejectOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectOperationsApproval409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RejectOperationsApproval409JSONResponse) VisitRejectOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RejectOperationsApprovaldefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RejectOperationsApprovaldefaultJSONResponse) VisitRejectOperationsApprovalResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -24685,6 +25312,18 @@ type StrictServerInterface interface {
 	// StopOperationsAgent Emergency stop of the operations agent
 	// (POST /api/admin/v1/operations/agent/stop)
 	StopOperationsAgent(ctx context.Context, request StopOperationsAgentRequestObject) (StopOperationsAgentResponseObject, error)
+	// ListOperationsApprovals What the operations agent asked the owner to approve
+	// (GET /api/admin/v1/operations/approvals)
+	ListOperationsApprovals(ctx context.Context, request ListOperationsApprovalsRequestObject) (ListOperationsApprovalsResponseObject, error)
+	// GetOperationsApproval One approval with its operation
+	// (GET /api/admin/v1/operations/approvals/{approval_id})
+	GetOperationsApproval(ctx context.Context, request GetOperationsApprovalRequestObject) (GetOperationsApprovalResponseObject, error)
+	// ApproveOperationsApproval Approve what the operations agent asked for
+	// (POST /api/admin/v1/operations/approvals/{approval_id}/approve)
+	ApproveOperationsApproval(ctx context.Context, request ApproveOperationsApprovalRequestObject) (ApproveOperationsApprovalResponseObject, error)
+	// RejectOperationsApproval Reject what the operations agent asked for
+	// (POST /api/admin/v1/operations/approvals/{approval_id}/reject)
+	RejectOperationsApproval(ctx context.Context, request RejectOperationsApprovalRequestObject) (RejectOperationsApprovalResponseObject, error)
 	// ListOperationsCredentials The operations credentials
 	// (GET /api/admin/v1/operations/credentials)
 	ListOperationsCredentials(ctx context.Context, request ListOperationsCredentialsRequestObject) (ListOperationsCredentialsResponseObject, error)
@@ -26235,6 +26874,126 @@ func (sh *strictHandler) StopOperationsAgent(w http.ResponseWriter, r *http.Requ
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(StopOperationsAgentResponseObject); ok {
 		if err := validResponse.VisitStopOperationsAgentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListOperationsApprovals operation middleware
+func (sh *strictHandler) ListOperationsApprovals(w http.ResponseWriter, r *http.Request, params ListOperationsApprovalsParams) {
+	var request ListOperationsApprovalsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListOperationsApprovals(ctx, request.(ListOperationsApprovalsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListOperationsApprovals")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListOperationsApprovalsResponseObject); ok {
+		if err := validResponse.VisitListOperationsApprovalsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetOperationsApproval operation middleware
+func (sh *strictHandler) GetOperationsApproval(w http.ResponseWriter, r *http.Request, approvalId Uuid) {
+	var request GetOperationsApprovalRequestObject
+
+	request.ApprovalId = approvalId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetOperationsApproval(ctx, request.(GetOperationsApprovalRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetOperationsApproval")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetOperationsApprovalResponseObject); ok {
+		if err := validResponse.VisitGetOperationsApprovalResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ApproveOperationsApproval operation middleware
+func (sh *strictHandler) ApproveOperationsApproval(w http.ResponseWriter, r *http.Request, approvalId Uuid, params ApproveOperationsApprovalParams) {
+	var request ApproveOperationsApprovalRequestObject
+
+	request.ApprovalId = approvalId
+	request.Params = params
+
+	var body ApproveOperationsApprovalJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ApproveOperationsApproval(ctx, request.(ApproveOperationsApprovalRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ApproveOperationsApproval")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ApproveOperationsApprovalResponseObject); ok {
+		if err := validResponse.VisitApproveOperationsApprovalResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RejectOperationsApproval operation middleware
+func (sh *strictHandler) RejectOperationsApproval(w http.ResponseWriter, r *http.Request, approvalId Uuid, params RejectOperationsApprovalParams) {
+	var request RejectOperationsApprovalRequestObject
+
+	request.ApprovalId = approvalId
+	request.Params = params
+
+	var body RejectOperationsApprovalJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RejectOperationsApproval(ctx, request.(RejectOperationsApprovalRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RejectOperationsApproval")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RejectOperationsApprovalResponseObject); ok {
+		if err := validResponse.VisitRejectOperationsApprovalResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

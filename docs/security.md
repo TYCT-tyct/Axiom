@@ -95,7 +95,7 @@ new-api 的 15 条安全公告和 sub2api 的 2 条高危公告（GitHub，2026-
 
 - 入口节点放在带 DDoS 防护的服务商或 CDN 后面。
 - **节点调用面**：节点监听只在核心上开，地址由部署限制在节点网络或内网；它只接受由 `ca.crt` 签发、带客户端证书且用途匹配的连接，最低 TLS 1.3，开机时检查证书、私钥和 CA 是否可用。入口到核心的流量走这条连接，公网不能直接到达。证书和私钥放在 `AXIOM_NODE_TLS_DIR`，私钥文件必须只有属主可读写、目录不能对组或其他用户可写，否则拒绝启动。
-- **运营调用面**：运营监听（`AXIOM_OPERATIONS_ADDR`）默认关闭，只在核心上开；用同一份节点证书，但只接受客户端证书带 `ops` 用途的双向 TLS（入口的证书进不来），来源按 `AXIOM_OPERATIONS_SOURCES` 只看连接地址；每个请求还要运营凭证（`Authorization: Bearer op-ax-v1-…`，只存带密钥的哈希，每个请求查库，吊销立即生效）。凭证不能持有控制面的权限（`operations.manage`、`platform_grants.manage`），控制面只在管理接口、要两步验证；运营接口每次调用都先写操作记录再回答（见[运营的「运营接口」](domains/operations.md#运营接口)）。
+- **运营调用面**：运营监听（`AXIOM_OPERATIONS_ADDR`）默认关闭，只在核心上开；用同一份节点证书，但只接受客户端证书带 `ops` 用途的双向 TLS（入口的证书进不来），来源按 `AXIOM_OPERATIONS_SOURCES` 只看连接地址；每个请求还要运营凭证（`Authorization: Bearer op-ax-v1-…`，只存带密钥的哈希，每个请求查库，吊销立即生效）。凭证不能持有控制面和审批的权限（`operations.manage`、`operations.approve`、`platform_grants.manage`），控制面和审批只在管理接口、要两步验证；要审批的写只建提案，负责人批准时才以 agent 的名义执行；运营接口每次调用都先写操作记录再回答（见[运营的「运营接口」](domains/operations.md#运营接口)）。
 - 按 IP 的连接数由前置的 CDN 或反向代理限制：节点只绑本机，accept 时看到的是代理的地址，节点自己按 IP 限连接只会变成限整个节点的连接数。节点自己限在途请求（总量、按 IP、按 key）和请求体大小，阈值是后台配置；按 IP 的在途上限和控制台的按 IP 计数都经 `platform/clientip` 读地址，代理写进 `AXIOM_TRUSTED_PROXIES` 后才信 `X-Forwarded-For`，所以代理后面按的是客户端自己的地址。
 
 ## 账户安全

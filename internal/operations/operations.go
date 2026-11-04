@@ -1,6 +1,7 @@
 // Package operations owns the operations module's data: the business targets the owner sets in the admin and the
-// operations dashboard compares with the actual figures (docs/domains/operations.md「运营看板」), and the operation log
-// of every call of the operations API (「审计」). Approvals, money caps and node management are still to be built.
+// operations dashboard compares with the actual figures (docs/domains/operations.md「运营看板」), the operation log of
+// every call of the operations API (「审计」), and the operations the agent's writes make with the approvals they wait
+// on (「风险分级与审批」). Money caps and node management are still to be built.
 package operations
 
 import (

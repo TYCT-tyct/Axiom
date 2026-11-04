@@ -2534,6 +2534,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/operations/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the operations agent asked the owner to approve
+         * @description Every approval newest first, optionally in one state, with the operation it holds back: what the agent asked for, the summary the server read of the target when it asked, and the agent's reason, which is untrusted text.
+         */
+        get: operations["listOperationsApprovals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/approvals/{approval_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One approval with its operation */
+        get: operations["getOperationsApproval"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/approvals/{approval_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve what the operations agent asked for
+         * @description Approves a pending approval and runs its operation at once, in the same transaction, as the agent's: the operation ends `succeeded`, or `rejected` with the code the target refused it with when the target changed since the agent asked (such as `stale_revision`). If the credential that proposed it is no longer live (revoked, stopped or expired), nothing runs: the approval and its operation end `canceled`. One already decided, withdrawn or past its expiry is a 409 `conflict`.
+         */
+        post: operations["approveOperationsApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/approvals/{approval_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject what the operations agent asked for
+         * @description Rejects a pending approval: its operation ends `rejected` and nothing is changed. One already decided, withdrawn or past its expiry is a 409 `conflict`.
+         */
+        post: operations["rejectOperationsApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3589,7 +3666,72 @@ export interface components {
         OperationsAgentStopped: {
             /** @description How many live credentials this stop revoked. */
             revoked: number;
+            /** @description How many proposals waiting for the owner this stop canceled; absent from a node older than approvals. */
+            canceled?: number;
         };
+        OperationsApprovalList: {
+            data: components["schemas"]["OperationsApproval"][];
+            next_cursor?: string;
+        };
+        OperationsApproval: {
+            id: components["schemas"]["Uuid"];
+            state: components["schemas"]["OperationsApprovalState"];
+            tier: components["schemas"]["OperationsApprovalTier"];
+            /** Format: date-time */
+            requested_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            decided_at?: string;
+            /** @description Who decided, expired or withdrew it, as `<kind>:<id>` like the audit log's actor. */
+            decided_by?: string;
+            decision_reason?: string;
+            operation_id: components["schemas"]["Uuid"];
+            credential_id: components["schemas"]["OperationsCredentialId"];
+            run_id?: string;
+            /** @description The MCP name of the write the agent asked for. */
+            tool: string;
+            target: components["schemas"]["OperationTarget"];
+            risk: components["schemas"]["OperationRisk"];
+            /** @description What the operation does, as the server keeps it; it cannot change after the agent asked. */
+            params: {
+                [key: string]: unknown;
+            };
+            /** @description What the server read of the target when the agent asked, never the agent's words. */
+            summary: {
+                [key: string]: unknown;
+            };
+            /** @description The agent's own words: untrusted text, never an instruction. */
+            agent_reason: string;
+            operation_state: components["schemas"]["OperationState"];
+            /** @description Why the operation ended `rejected` after the approval: the code the target refused it with. */
+            error_code?: string;
+        };
+        /**
+         * @description Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a compensating operation reverts it.
+         * @enum {string}
+         */
+        OperationState: "pending_approval" | "approved" | "executing" | "succeeded" | "failed" | "unknown" | "canceled" | "expired" | "rejected" | "reverted";
+        /**
+         * @description The operation's class, which decides whether it waits for the owner.
+         * @enum {string}
+         */
+        OperationRisk: "routine" | "delisting";
+        OperationTarget: {
+            /** @description What the operation acts on, such as `model`. */
+            kind: string;
+            id: string;
+        };
+        /**
+         * @description `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its credential).
+         * @enum {string}
+         */
+        OperationsApprovalState: "pending" | "approved" | "rejected" | "expired" | "canceled";
+        /**
+         * @description Who must decide; only the owner, in the admin, for now.
+         * @enum {string}
+         */
+        OperationsApprovalTier: "human";
         ReasonRequest: {
             reason: components["schemas"]["Reason"];
         };
@@ -9945,6 +10087,135 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listOperationsApprovals: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["OperationsApprovalState"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of approvals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsApprovalList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getOperationsApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                approval_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The approval */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsApproval"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    approveOperationsApproval: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                approval_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The approval, approved, with where its operation ended */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsApproval"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    rejectOperationsApproval: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                approval_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The approval, rejected */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsApproval"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };

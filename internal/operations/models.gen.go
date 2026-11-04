@@ -3,3 +3,41 @@
 //   sqlc v1.31.1
 
 package operations
+
+import (
+	"time"
+
+	"uuid"
+)
+
+type OperationsApproval struct {
+	ID             uuid.UUID
+	OperationID    uuid.UUID
+	Tier           string
+	State          string
+	Summary        []byte
+	RequestedAt    time.Time
+	ExpiresAt      time.Time
+	DecidedAt      *time.Time
+	DecidedBy      *string
+	DecisionReason *string
+}
+
+type OperationsOperation struct {
+	ID             uuid.UUID
+	CredentialID   uuid.UUID
+	IdempotencyKey uuid.UUID
+	RequestHash    []byte
+	Tool           string
+	TargetKind     string
+	TargetID       string
+	Params         []byte
+	Risk           string
+	State          string
+	Reason         string
+	RunID          *string
+	Result         []byte
+	ErrorCode      *string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
