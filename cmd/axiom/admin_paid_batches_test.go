@@ -54,15 +54,8 @@ func TestAdminPaidBatchesUseBatchTime(t *testing.T) {
 		t.Fatalf("paid batches: %s", rec.Body.String())
 	}
 	first, second := list.Data[0], list.Data[1]
-	if first.Id != offline.String() || first.Amount.Amount != "2500" || first.Online || first.OfflineChannel == nil || *first.OfflineChannel != "bank" {
-		t.Fatalf("first paid batch: %+v", first)
-	}
-	if second.Id != online.String() || second.Amount.Amount != "1500" || !second.Online || second.OfflineChannel != nil {
-		t.Fatalf("second paid batch: %+v", second)
-	}
-	if first.CreatedAt != time.Date(2026, 11, 1, 0, 2, 0, 0, time.UTC) || second.CreatedAt != time.Date(2026, 11, 1, 0, 1, 0, 0, time.UTC) {
-		t.Fatalf("paid batch times: %+v %+v", first.CreatedAt, second.CreatedAt)
-	}
+	checkPaidBatch(t, first, offline.String(), "2500", false, "bank", time.Date(2026, 11, 1, 0, 2, 0, 0, time.UTC))
+	checkPaidBatch(t, second, online.String(), "1500", true, "", time.Date(2026, 11, 1, 0, 1, 0, 0, time.UTC))
 
 	// The cursor is the batch position, so the next page continues after the first row.
 	firstPage := f.do(http.MethodGet, path+"&limit=1", "", as(owner))
@@ -81,4 +74,20 @@ func TestAdminPaidBatchesUseBatchTime(t *testing.T) {
 	}
 
 	expectAdmin(t, "paid batches cursor", f.do(http.MethodGet, "/payments/paid-batches?site_id="+url.QueryEscape(siteID)+"&cursor=not-a-cursor", "", as(owner)), 400, "")
+}
+
+func checkPaidBatch(t *testing.T, got adminapi.PaidBatch, id, amount string, online bool, channel string, at time.Time) {
+	t.Helper()
+	if got.Id != id || got.Amount.Amount != amount || got.Online != online || !got.CreatedAt.Equal(at) {
+		t.Fatalf("paid batch: %+v", got)
+	}
+	if channel == "" {
+		if got.OfflineChannel != nil {
+			t.Fatalf("paid batch channel: %+v", got)
+		}
+		return
+	}
+	if got.OfflineChannel == nil || *got.OfflineChannel != channel {
+		t.Fatalf("paid batch channel: %+v", got)
+	}
 }
