@@ -268,10 +268,14 @@ function KeyLimit({ apiKey }: { apiKey: Key }) {
   );
 }
 
-// A key without a preset routes by the system's allow-all: an older key, or a node that gives no preset.
+// A management key calls no model, so it has no preset. A call key without one routes by the system's allow-all: an
+// older key, or a node that gives no preset.
 function KeyPreset({ apiKey }: { apiKey: Key }) {
   const { t } = useTranslation();
   const presetName = usePresetName();
+  if (apiKey.kind === "management") {
+    return <span className="text-t4">{t("routingPresets.key.notApplicable")}</span>;
+  }
   if (!apiKey.preset_id) {
     return (
       <span className="text-t4" title={t("routingPresets.key.noneHint")}>

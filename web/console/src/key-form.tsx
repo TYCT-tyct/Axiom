@@ -149,29 +149,34 @@ function Restrictions({ apiKey, error }: Section) {
 
 // PresetField chooses the key's routing preset among those the account's keys may use. A new key left at the first
 // option takes its layers' default when it is made; a changed key keeps its preset unless another is chosen, so the
-// form sends the field only for a choice. Unreadable presets leave the field out: the key keeps what it has.
+// form sends the field only for a choice. The choice is held here, not in the list: a later read of the list that fails
+// or no longer has it keeps the choice and its option, so a submit never falls back to the default the user moved
+// away from. Presets that could not be read at all leave the field out and the key keeps what it has. A management
+// key has no preset.
 function PresetField({ apiKey, error }: Section) {
   const { t } = useTranslation();
   const errors = useErrors();
   const presets = useQuery(routingPresetsQuery);
   const defaults = useQuery(routingDefaultQuery);
   const presetName = usePresetName();
-  if (presets.isPending) {
+  const current = apiKey?.preset_id;
+  const [chosen, setChosen] = useState(current ?? "");
+  if (apiKey?.kind === "management") {
     return null;
   }
-  if (presets.isError) {
-    return <p className="text-label text-t3">{t("routingPresets.key.unavailable")}</p>;
+  if (!presets.data) {
+    return presets.isError ? <p className="text-label text-t3">{t("routingPresets.key.unavailable")}</p> : null;
   }
   const list = presets.data.data;
   const named = (id: string | undefined) => list.find((preset) => preset.id === id)?.name;
-  const current = apiKey?.preset_id;
   const fallback = named(defaults.data?.preset_id);
   return (
     <SelectField
       label={t("routingPresets.key.field")}
       hint={t("routingPresets.key.hint")}
       name="preset_id"
-      defaultValue={current ?? ""}
+      value={chosen}
+      onChange={(event) => setChosen(event.currentTarget.value)}
       error={errors.field(error, "preset_id")}
     >
       {apiKey && !current ? <option value="">{t("routingPresets.key.legacy")}</option> : null}
@@ -180,14 +185,22 @@ function PresetField({ apiKey, error }: Section) {
           {fallback ? t("routingPresets.key.byDefault", { name: fallback }) : t("routingPresets.key.byLayers")}
         </option>
       )}
-      {current && !named(current) ? <option value={current}>{presetName(apiKey)}</option> : null}
-      {list.map((preset) => (
-        <option key={preset.id} value={preset.id}>
-          {`${preset.name} · ${t(`routingPresets.layer.${preset.scope}`)}`}
-        </option>
-      ))}
+      {chosen && !named(chosen) ? (
+        <option value={chosen}>{presetName(chosen === current ? apiKey : undefined)}</option>
+      ) : null}
+      <PresetOptions presets={list} />
     </SelectField>
   );
+}
+
+// PresetOptions offers presets by name and the layer they come from, as every preset choice shows them.
+export function PresetOptions({ presets }: { presets: Schemas["RoutingPreset"][] }) {
+  const { t } = useTranslation();
+  return presets.map((preset) => (
+    <option key={preset.id} value={preset.id}>
+      {`${preset.name} · ${t(`routingPresets.layer.${preset.scope}`)}`}
+    </option>
+  ));
 }
 
 // usePresetName names a key's preset as the account can see it: its name, marked when disabled, or a placeholder for

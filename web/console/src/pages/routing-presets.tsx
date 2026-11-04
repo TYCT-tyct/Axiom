@@ -1,4 +1,4 @@
-import { consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { can, useErrors, useSession } from "@axiom/app";
 import {
   Badge,
@@ -18,6 +18,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { PresetOptions } from "../key-form";
 import { DisablePresetDialog, PresetDialog, type PresetEdit } from "../preset-dialogs";
 import { type Sort, sorts, summaryOf } from "../preset-rules";
 import { routingDefaultQuery, routingPresetsQuery } from "../queries";
@@ -68,46 +69,61 @@ export default function RoutingPresets() {
   );
 }
 
-// DefaultPanel shows and sets the account's default for new keys, at the version it read: a change made elsewhere
-// meanwhile is refused (stale_revision) rather than overwritten, and the page keeps that version until it is reloaded,
-// so trying again cannot overwrite it either.
+// DefaultPanel shows and sets the account's default for new keys. A later read that fails keeps the form and what the
+// user chose in it; only a first read that fails says the default is unavailable.
 function DefaultPanel({ presets, manage }: { presets: Preset[]; manage: boolean }) {
   const { t } = useTranslation();
   const defaults = useQuery(routingDefaultQuery);
-  if (defaults.isError) {
-    return (
-      <Panel className="p-4">
-        <p className="text-ui text-t2">{t("routingPresets.unavailable")}</p>
-      </Panel>
-    );
+  if (defaults.data) {
+    return <DefaultForm first={defaults.data} presets={presets} manage={manage} />;
   }
-  return defaults.data ? <DefaultForm current={defaults.data} presets={presets} manage={manage} /> : null;
+  return defaults.isError ? (
+    <Panel className="p-4">
+      <p className="text-ui text-t2">{t("routingPresets.unavailable")}</p>
+    </Panel>
+  ) : null;
 }
 
+// DefaultForm edits from the default it first read: the choice and the version it is sent at are one base, which a
+// background read never moves, so a change made elsewhere meanwhile is refused (stale_revision) instead of
+// overwritten. A saved default becomes the new base; after a refusal the user reloads, which takes the latest default
+// as the base and drops the choice made against the old one.
 function DefaultForm({
-  current,
+  first,
   presets,
   manage,
 }: {
-  current: Schemas["RoutingDefault"];
+  first: Schemas["RoutingDefault"];
   presets: Preset[];
   manage: boolean;
 }) {
   const { t } = useTranslation();
   const errors = useErrors();
   const queryClient = useQueryClient();
-  const [chosen, setChosen] = useState(current.preset_id ?? "");
+  const [base, setBase] = useState(first);
+  const [chosen, setChosen] = useState(first.preset_id ?? "");
+  const rebase = (next: Schemas["RoutingDefault"]) => {
+    setBase(next);
+    setChosen(next.preset_id ?? "");
+  };
   const save = useMutation({
     mutationFn: () =>
       unwrap(
         consoleApi.PUT("/api/console/v1/routing-default", {
-          body: { preset_id: chosen || null, version: current.version },
+          body: { preset_id: chosen || null, version: base.version },
         }),
       ),
-    onSuccess: (saved) => queryClient.setQueryData(routingDefaultQuery.queryKey, saved),
+    onSuccess: (saved) => {
+      rebase(saved);
+      queryClient.setQueryData(routingDefaultQuery.queryKey, saved);
+    },
   });
-  // The default always points at a live preset the account can use; one the list lacks is shown by its ID.
-  const known = chosen === "" || presets.some((preset) => preset.id === chosen);
+  const reload = async () => {
+    const latest = await queryClient.fetchQuery({ ...routingDefaultQuery, staleTime: 0 });
+    rebase(latest);
+    save.reset();
+  };
+  const stale = save.error instanceof ApiError && save.error.code === "stale_revision";
   return (
     <Panel className="p-4">
       <form
@@ -115,7 +131,7 @@ function DefaultForm({
         className="space-y-3"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!save.isPending) {
+          if (!save.isPending && !stale) {
             save.mutate();
           }
         }}
@@ -123,24 +139,12 @@ function DefaultForm({
         <h2 className="text-ui font-medium text-t1">{t("routingPresets.defaults.title")}</h2>
         {save.isError ? <FormError>{errors.message(save.error)}</FormError> : null}
         <div className="flex flex-wrap items-end gap-3">
-          <SelectField
-            className="sm:w-80"
-            label={t("routingPresets.defaults.label")}
-            hint={t("routingPresets.defaults.hint")}
-            value={chosen}
-            disabled={!manage}
-            onChange={(event) => setChosen(event.currentTarget.value)}
-          >
-            <option value="">{t("routingPresets.defaults.none")}</option>
-            {known ? null : <option value={chosen}>{chosen}</option>}
-            {presets.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {`${preset.name} · ${t(`routingPresets.layer.${preset.scope}`)}`}
-              </option>
-            ))}
-          </SelectField>
-          {manage ? (
-            <SubmitButton pending={save.isPending} disabled={chosen === (current.preset_id ?? "")}>
+          <DefaultSelect presets={presets} chosen={chosen} manage={manage} onChoose={setChosen} />
+          {manage && stale ? (
+            <Button onClick={() => void reload()}>{t("routingPresets.defaults.reload")}</Button>
+          ) : null}
+          {manage && !stale ? (
+            <SubmitButton pending={save.isPending} disabled={chosen === (base.preset_id ?? "")}>
               {t("routingPresets.defaults.save")}
             </SubmitButton>
           ) : null}
@@ -152,6 +156,36 @@ function DefaultForm({
         ) : null}
       </form>
     </Panel>
+  );
+}
+
+function DefaultSelect({
+  presets,
+  chosen,
+  manage,
+  onChoose,
+}: {
+  presets: Preset[];
+  chosen: string;
+  manage: boolean;
+  onChoose: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  // The default always points at a live preset the account can use; one the list lacks is shown by its ID.
+  const known = chosen === "" || presets.some((preset) => preset.id === chosen);
+  return (
+    <SelectField
+      className="sm:w-80"
+      label={t("routingPresets.defaults.label")}
+      hint={t("routingPresets.defaults.hint")}
+      value={chosen}
+      disabled={!manage}
+      onChange={(event) => onChoose(event.currentTarget.value)}
+    >
+      <option value="">{t("routingPresets.defaults.none")}</option>
+      {known ? null : <option value={chosen}>{chosen}</option>}
+      <PresetOptions presets={presets} />
+    </SelectField>
   );
 }
 

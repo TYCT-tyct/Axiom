@@ -30,6 +30,7 @@ export const zh = {
     none: "不设置（沿用站点或平台的默认）",
     save: "保存默认",
     saved: "已保存。",
+    reload: "载入最新的默认",
   },
   form: {
     slug: "标识",
@@ -96,6 +97,7 @@ export const zh = {
   key: {
     col: "路由预设",
     none: "未绑定",
+    notApplicable: "不适用",
     noneHint: "旧 key，或节点没有给出预设：按系统的放行预设路由。",
     hidden: "看不到的预设",
     field: "路由预设",
@@ -137,6 +139,7 @@ export const en: Messages<typeof zh> = {
     none: "None (use the site’s or the platform’s default)",
     save: "Save default",
     saved: "Saved.",
+    reload: "Load the latest default",
   },
   form: {
     slug: "Identifier",
@@ -206,6 +209,7 @@ export const en: Messages<typeof zh> = {
   key: {
     col: "Routing preset",
     none: "Not bound",
+    notApplicable: "Not applicable",
     noneHint: "An older key, or the node gave no preset: it routes by the system’s allow-all preset.",
     hidden: "A preset you can’t see",
     field: "Routing preset",

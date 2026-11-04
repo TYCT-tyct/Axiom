@@ -42,8 +42,10 @@ export type RulesDraft = { base: RuleDraft; overrides: OverrideDraft[]; rest: Js
 export type Invalid = { rule: "default" | number; field: "name" | "minScore" | "minConfidence" | PriceItem };
 
 const ruleMembers = ["sort", "classes", "policies", "verified_only", "min_score", "min_score_confidence", "max_price"];
-// The member a rule writes the prices of a million tokens and of a call in: decimal text, never a JSON number.
-const decimal = /^\d{1,10}(\.\d{1,15})?$/;
+// The shape of a price the server reads (priceNumber in internal/routing/price.go): digits, an optional fraction and an
+// optional exponent of at most three digits. The value is sent as it was typed, as text, never through a float; the
+// server alone checks the bounds and precision, so a price it once accepted always passes here.
+const decimal = /^[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,3})?$/;
 
 function object(value: unknown): Json {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
