@@ -90,6 +90,7 @@ var refusals = []refusal{
 	{routing.ErrPresetNotSelectable, http.StatusBadRequest, codePresetNotSelectable, "the routing preset cannot be chosen here"},
 	{accounts.ErrKeyPreset, http.StatusBadRequest, codePresetNotSelectable, "a management key has no routing preset"},
 	{routing.ErrPresetNotFound, http.StatusNotFound, codeNotFound, "no such resource"},
+	{routing.ErrPresetCurrency, http.StatusBadRequest, codeInvalidRequest, "a platform preset keeps the currency it was made with; make a new preset for prices in another currency"},
 	{routing.ErrPresetReadOnly, http.StatusForbidden, codeForbidden, "the routing preset belongs to another layer"},
 	{routing.ErrPresetSlugTaken, http.StatusConflict, codeNameTaken, "a routing preset of this layer has that slug"},
 	{routing.ErrPresetStale, http.StatusConflict, codeStaleRevision, "the routing preset or default changed since it was read"},

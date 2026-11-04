@@ -33,7 +33,16 @@ func (f adminFixture) makeCredential(s session, body string) (id, token string) 
 // agent calls the operations API with token, as the MCP bridge does: a GET with the reason in the query.
 func (f adminFixture) agent(token, path string, mods ...mod) *httptest.ResponseRecorder {
 	f.t.Helper()
-	r := httptest.NewRequestWithContext(f.t.Context(), http.MethodGet, "https://core.internal:8084"+operationsBase+path, nil)
+	return f.agentSend(token, http.MethodGet, path, "", mods...)
+}
+
+// agentSend calls the operations API with token and a JSON body, which a write carries its reason in.
+func (f adminFixture) agentSend(token, method, path, body string, mods ...mod) *httptest.ResponseRecorder {
+	f.t.Helper()
+	r := httptest.NewRequestWithContext(f.t.Context(), method, "https://core.internal:8084"+operationsBase+path, strings.NewReader(body))
+	if body != "" {
+		r.Header.Set("Content-Type", "application/json")
+	}
 	r.RemoteAddr = "10.0.0.9:4000"
 	if token != "" {
 		r.Header.Set("Authorization", "Bearer "+token)

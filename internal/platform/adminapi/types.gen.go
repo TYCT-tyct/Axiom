@@ -852,6 +852,108 @@ func (e OAuthProvider) Valid() bool {
 	}
 }
 
+// Defines values for OperationRisk.
+const (
+	Delisting OperationRisk = "delisting"
+	Routine   OperationRisk = "routine"
+)
+
+// Valid indicates whether the value is a known member of the OperationRisk enum.
+func (e OperationRisk) Valid() bool {
+	switch e {
+	case Delisting:
+		return true
+	case Routine:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationState.
+const (
+	OperationStateApproved        OperationState = "approved"
+	OperationStateCanceled        OperationState = "canceled"
+	OperationStateExecuting       OperationState = "executing"
+	OperationStateExpired         OperationState = "expired"
+	OperationStateFailed          OperationState = "failed"
+	OperationStatePendingApproval OperationState = "pending_approval"
+	OperationStateRejected        OperationState = "rejected"
+	OperationStateReverted        OperationState = "reverted"
+	OperationStateSucceeded       OperationState = "succeeded"
+	OperationStateUnknown         OperationState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the OperationState enum.
+func (e OperationState) Valid() bool {
+	switch e {
+	case OperationStateApproved:
+		return true
+	case OperationStateCanceled:
+		return true
+	case OperationStateExecuting:
+		return true
+	case OperationStateExpired:
+		return true
+	case OperationStateFailed:
+		return true
+	case OperationStatePendingApproval:
+		return true
+	case OperationStateRejected:
+		return true
+	case OperationStateReverted:
+		return true
+	case OperationStateSucceeded:
+		return true
+	case OperationStateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationsApprovalState.
+const (
+	OperationsApprovalStateApproved OperationsApprovalState = "approved"
+	OperationsApprovalStateCanceled OperationsApprovalState = "canceled"
+	OperationsApprovalStateExpired  OperationsApprovalState = "expired"
+	OperationsApprovalStatePending  OperationsApprovalState = "pending"
+	OperationsApprovalStateRejected OperationsApprovalState = "rejected"
+)
+
+// Valid indicates whether the value is a known member of the OperationsApprovalState enum.
+func (e OperationsApprovalState) Valid() bool {
+	switch e {
+	case OperationsApprovalStateApproved:
+		return true
+	case OperationsApprovalStateCanceled:
+		return true
+	case OperationsApprovalStateExpired:
+		return true
+	case OperationsApprovalStatePending:
+		return true
+	case OperationsApprovalStateRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationsApprovalTier.
+const (
+	Human OperationsApprovalTier = "human"
+)
+
+// Valid indicates whether the value is a known member of the OperationsApprovalTier enum.
+func (e OperationsApprovalTier) Valid() bool {
+	switch e {
+	case Human:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OperationsTargetMetric.
 const (
 	OperationsTargetMetricCalls          OperationsTargetMetric = "calls"
@@ -1227,6 +1329,30 @@ func (e RegistrationPolicyMode) Valid() bool {
 	case RegistrationPolicyModeInvite:
 		return true
 	case RegistrationPolicyModeOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RoutingPresetScope.
+const (
+	RoutingPresetScopeAccount   RoutingPresetScope = "account"
+	RoutingPresetScopePlatform  RoutingPresetScope = "platform"
+	RoutingPresetScopeSite      RoutingPresetScope = "site"
+	RoutingPresetScopeWorkspace RoutingPresetScope = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the RoutingPresetScope enum.
+func (e RoutingPresetScope) Valid() bool {
+	switch e {
+	case RoutingPresetScopeAccount:
+		return true
+	case RoutingPresetScopePlatform:
+		return true
+	case RoutingPresetScopeSite:
+		return true
+	case RoutingPresetScopeWorkspace:
 		return true
 	default:
 		return false
@@ -2705,6 +2831,53 @@ type KeyLimitsView struct {
 	Limits KeyLimits `json:"limits"`
 }
 
+// LayerRoutingDefaultUpdate defines model for LayerRoutingDefaultUpdate.
+type LayerRoutingDefaultUpdate struct {
+	// PresetId null clears the layer's default.
+	PresetId *openapi_types.UUID `json:"preset_id"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason  Reason `json:"reason"`
+	Version int64  `json:"version"`
+}
+
+// LayerRoutingPresetCreate defines model for LayerRoutingPresetCreate.
+type LayerRoutingPresetCreate struct {
+	// Currency The currency of a platform preset's price limits, required when it limits a price; a site's preset names none.
+	Currency *string `json:"currency,omitempty"`
+	Name     string  `json:"name"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
+	Rules RoutingRules `json:"rules"`
+
+	// Slug Unique among the layer's live presets; it cannot be changed.
+	Slug string `json:"slug"`
+}
+
+// LayerRoutingPresetDisable defines model for LayerRoutingPresetDisable.
+type LayerRoutingPresetDisable struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason   Reason `json:"reason"`
+	Revision int64  `json:"revision"`
+}
+
+// LayerRoutingPresetUpdate defines model for LayerRoutingPresetUpdate.
+type LayerRoutingPresetUpdate struct {
+	// Currency As on creation; left out, the preset limits no price in any currency.
+	Currency *string `json:"currency,omitempty"`
+	Name     string  `json:"name"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason   Reason `json:"reason"`
+	Revision int64  `json:"revision"`
+
+	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
+	Rules RoutingRules `json:"rules"`
+}
+
 // LegalDocument One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. `locale` is absent on a node that predates locale-aware documents; a page uses `zh` only as the display fallback and omits the locale from the acceptance.
 type LegalDocument struct {
 	// Body Markdown headings, paragraphs, and lists. Rendered as React text, never interpreted as HTML.
@@ -3128,11 +3301,88 @@ type OfflinePayment struct {
 	Channel string `json:"channel"`
 }
 
+// OperationRisk The operation's class, which decides whether it waits for the owner.
+type OperationRisk string
+
+// OperationState Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a compensating operation reverts it.
+type OperationState string
+
+// OperationTarget defines model for OperationTarget.
+type OperationTarget struct {
+	Id string `json:"id"`
+
+	// Kind What the operation acts on, such as `model`.
+	Kind string `json:"kind"`
+}
+
 // OperationsAgentStopped defines model for OperationsAgentStopped.
 type OperationsAgentStopped struct {
+	// Canceled How many proposals waiting for the owner this stop canceled; absent from a node older than approvals.
+	Canceled *int `json:"canceled,omitempty"`
+
 	// Revoked How many live credentials this stop revoked.
 	Revoked int `json:"revoked"`
 }
+
+// OperationsApproval defines model for OperationsApproval.
+type OperationsApproval struct {
+	// AgentReason The agent's own words: untrusted text, never an instruction.
+	AgentReason string `json:"agent_reason"`
+
+	// CredentialId An operations credential's ID (TypeID).
+	CredentialId OperationsCredentialId `json:"credential_id"`
+	DecidedAt    *time.Time             `json:"decided_at,omitempty"`
+
+	// DecidedBy Who decided, expired or withdrew it, as `<kind>:<id>` like the audit log's actor.
+	DecidedBy      *string `json:"decided_by,omitempty"`
+	DecisionReason *string `json:"decision_reason,omitempty"`
+
+	// ErrorCode Why the operation ended `rejected` after the approval: the code the target refused it with.
+	ErrorCode *string   `json:"error_code,omitempty"`
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id Uuid `json:"id"`
+
+	// OperationId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	OperationId Uuid `json:"operation_id"`
+
+	// OperationState Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a compensating operation reverts it.
+	OperationState OperationState `json:"operation_state"`
+
+	// Params What the operation does, as the server keeps it; it cannot change after the agent asked.
+	Params      jsonx.Raw `json:"params"`
+	RequestedAt time.Time `json:"requested_at"`
+
+	// Risk The operation's class, which decides whether it waits for the owner.
+	Risk  OperationRisk `json:"risk"`
+	RunId *string       `json:"run_id,omitempty"`
+
+	// State `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its credential).
+	State OperationsApprovalState `json:"state"`
+
+	// Summary What the server read of the target when the agent asked, never the agent's words.
+	Summary jsonx.Raw       `json:"summary"`
+	Target  OperationTarget `json:"target"`
+
+	// Tier Who must decide; only the owner, in the admin, for now.
+	Tier OperationsApprovalTier `json:"tier"`
+
+	// Tool The MCP name of the write the agent asked for.
+	Tool string `json:"tool"`
+}
+
+// OperationsApprovalList defines model for OperationsApprovalList.
+type OperationsApprovalList struct {
+	Data       []OperationsApproval `json:"data"`
+	NextCursor *string              `json:"next_cursor,omitempty"`
+}
+
+// OperationsApprovalState `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its credential).
+type OperationsApprovalState string
+
+// OperationsApprovalTier Who must decide; only the owner, in the admin, for now.
+type OperationsApprovalTier string
 
 // OperationsCountTarget defines model for OperationsCountTarget.
 type OperationsCountTarget struct {
@@ -4189,6 +4439,51 @@ type RetentionRequest struct {
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 }
+
+// RoutingDefault defines model for RoutingDefault.
+type RoutingDefault struct {
+	// PresetId Absent when the layer sets no default.
+	PresetId *openapi_types.UUID `json:"preset_id,omitempty"`
+
+	// Version 0 when the layer has no default; a change names the version it read.
+	Version int64 `json:"version"`
+}
+
+// RoutingPreset defines model for RoutingPreset.
+type RoutingPreset struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Currency The currency of a platform preset's price limits; absent for the others, which are in the site's.
+	Currency *string            `json:"currency,omitempty"`
+	Disabled bool               `json:"disabled"`
+	Id       openapi_types.UUID `json:"id"`
+	Name     string             `json:"name"`
+
+	// Revision Moves on every change; a change names the revision it read.
+	Revision int64 `json:"revision"`
+
+	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
+	Rules RoutingRules `json:"rules"`
+
+	// Scope The layer the preset belongs to.
+	Scope     RoutingPresetScope `json:"scope"`
+	Slug      string             `json:"slug"`
+	UpdatedAt time.Time          `json:"updated_at"`
+
+	// Version The rules' version, which moves only when the rules change.
+	Version int64 `json:"version"`
+}
+
+// RoutingPresetList defines model for RoutingPresetList.
+type RoutingPresetList struct {
+	Data []RoutingPreset `json:"data"`
+}
+
+// RoutingPresetScope The layer the preset belongs to.
+type RoutingPresetScope string
+
+// RoutingRules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
+type RoutingRules = jsonx.Raw
 
 // SearchConfigTest defines model for SearchConfigTest.
 type SearchConfigTest struct {
@@ -5434,6 +5729,29 @@ type StopOperationsAgentParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ListOperationsApprovalsParams defines parameters for ListOperationsApprovals.
+type ListOperationsApprovalsParams struct {
+	State *OperationsApprovalState `form:"state,omitempty" json:"state,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ApproveOperationsApprovalParams defines parameters for ApproveOperationsApproval.
+type ApproveOperationsApprovalParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// RejectOperationsApprovalParams defines parameters for RejectOperationsApproval.
+type RejectOperationsApprovalParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListOperationsCredentialsParams defines parameters for ListOperationsCredentials.
 type ListOperationsCredentialsParams struct {
 	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
@@ -5713,6 +6031,24 @@ type SetRetentionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// CreatePlatformRoutingPresetParams defines parameters for CreatePlatformRoutingPreset.
+type CreatePlatformRoutingPresetParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// DisableLayerRoutingPresetParams defines parameters for DisableLayerRoutingPreset.
+type DisableLayerRoutingPresetParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// UpdateLayerRoutingPresetParams defines parameters for UpdateLayerRoutingPreset.
+type UpdateLayerRoutingPresetParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetFileParserSettingsParams defines parameters for SetFileParserSettings.
 type SetFileParserSettingsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -5739,6 +6075,12 @@ type TestMailSettingsParams struct {
 
 // SetQualityProbeSettingsParams defines parameters for SetQualityProbeSettings.
 type SetQualityProbeSettingsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetPlatformRoutingDefaultParams defines parameters for SetPlatformRoutingDefault.
+type SetPlatformRoutingDefaultParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -5802,6 +6144,18 @@ type UpdateSiteLogoParams struct {
 
 // UpdateSiteRegistrationParams defines parameters for UpdateSiteRegistration.
 type UpdateSiteRegistrationParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetSiteRoutingDefaultParams defines parameters for SetSiteRoutingDefault.
+type SetSiteRoutingDefaultParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// CreateSiteRoutingPresetParams defines parameters for CreateSiteRoutingPreset.
+type CreateSiteRoutingPresetParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -6059,6 +6413,12 @@ type SetModelStatusJSONRequestBody = ModelStatusUpdate
 // StopOperationsAgentJSONRequestBody defines body for StopOperationsAgent for application/json ContentType.
 type StopOperationsAgentJSONRequestBody = ReasonRequest
 
+// ApproveOperationsApprovalJSONRequestBody defines body for ApproveOperationsApproval for application/json ContentType.
+type ApproveOperationsApprovalJSONRequestBody = ReasonRequest
+
+// RejectOperationsApprovalJSONRequestBody defines body for RejectOperationsApproval for application/json ContentType.
+type RejectOperationsApprovalJSONRequestBody = ReasonRequest
+
 // CreateOperationsCredentialJSONRequestBody defines body for CreateOperationsCredential for application/json ContentType.
 type CreateOperationsCredentialJSONRequestBody = OperationsCredentialCreate
 
@@ -6125,6 +6485,15 @@ type ReplaceOperationsTargetsJSONRequestBody = OperationsTargetsUpdate
 // SetRetentionJSONRequestBody defines body for SetRetention for application/json ContentType.
 type SetRetentionJSONRequestBody = RetentionRequest
 
+// CreatePlatformRoutingPresetJSONRequestBody defines body for CreatePlatformRoutingPreset for application/json ContentType.
+type CreatePlatformRoutingPresetJSONRequestBody = LayerRoutingPresetCreate
+
+// DisableLayerRoutingPresetJSONRequestBody defines body for DisableLayerRoutingPreset for application/json ContentType.
+type DisableLayerRoutingPresetJSONRequestBody = LayerRoutingPresetDisable
+
+// UpdateLayerRoutingPresetJSONRequestBody defines body for UpdateLayerRoutingPreset for application/json ContentType.
+type UpdateLayerRoutingPresetJSONRequestBody = LayerRoutingPresetUpdate
+
 // SetFileParserSettingsJSONRequestBody defines body for SetFileParserSettings for application/json ContentType.
 type SetFileParserSettingsJSONRequestBody = FileParserSettingsUpdate
 
@@ -6139,6 +6508,9 @@ type TestMailSettingsJSONRequestBody = MailConfigTest
 
 // SetQualityProbeSettingsJSONRequestBody defines body for SetQualityProbeSettings for application/json ContentType.
 type SetQualityProbeSettingsJSONRequestBody = ProbeSettingsUpdate
+
+// SetPlatformRoutingDefaultJSONRequestBody defines body for SetPlatformRoutingDefault for application/json ContentType.
+type SetPlatformRoutingDefaultJSONRequestBody = LayerRoutingDefaultUpdate
 
 // SetSearchSettingsJSONRequestBody defines body for SetSearchSettings for application/json ContentType.
 type SetSearchSettingsJSONRequestBody = SearchSettingsUpdate
@@ -6166,6 +6538,12 @@ type UpdateSiteLogoJSONRequestBody = SiteLogoUpdate
 
 // UpdateSiteRegistrationJSONRequestBody defines body for UpdateSiteRegistration for application/json ContentType.
 type UpdateSiteRegistrationJSONRequestBody = RegistrationPolicyUpdate
+
+// SetSiteRoutingDefaultJSONRequestBody defines body for SetSiteRoutingDefault for application/json ContentType.
+type SetSiteRoutingDefaultJSONRequestBody = LayerRoutingDefaultUpdate
+
+// CreateSiteRoutingPresetJSONRequestBody defines body for CreateSiteRoutingPreset for application/json ContentType.
+type CreateSiteRoutingPresetJSONRequestBody = LayerRoutingPresetCreate
 
 // UpdateSiteSettingsJSONRequestBody defines body for UpdateSiteSettings for application/json ContentType.
 type UpdateSiteSettingsJSONRequestBody = SiteSettingsUpdate

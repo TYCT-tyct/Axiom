@@ -162,3 +162,51 @@ func TestConsoleKeyPresets(t *testing.T) {
 		}
 	}
 }
+
+// TestManagementKeyPresets: a management key chooses the routing preset of a key it makes or changes among those the
+// key may use, as the console does; one it may not use, and null, are refused, and a change that names none keeps it.
+func TestManagementKeyPresets(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	_, site := f.account(s)
+	other := f.presetOfAnother(site)
+	strict := f.routingPreset(s, `{"slug":"strict","name":"Strict","rules":{"default":{"classes":["official"]}}}`)
+	open := f.routingPreset(s, `{"slug":"open","name":"Open","rules":{"default":{}}}`)
+	manager := f.managementKey(s, `"name":"manager"`).Secret
+
+	made, _ := readManaged(t, f.managementRequest(http.MethodPost, "", `{"name":"chosen","preset_id":"`+strict.Id.String()+`"}`, manager), http.StatusCreated)
+	if made.Preset == nil || *made.Preset != strict.Id.String() {
+		t.Fatalf("a key made with a preset is bound to %v, want %s", made.Preset, strict.Id)
+	}
+	for what, c := range map[string]struct{ method, path, body string }{
+		"a new key bound to the system preset":   {http.MethodPost, "", `{"name":"x","preset_id":"` + systemPreset + `"}`},
+		"a new key bound to another account's":   {http.MethodPost, "", `{"name":"x","preset_id":"` + other + `"}`},
+		"a new key bound to no preset":           {http.MethodPost, "", `{"name":"x","preset_id":null}`},
+		"a key rebound to another account's one": {http.MethodPatch, "/" + made.Hash, `{"preset_id":"` + other + `"}`},
+		"a key rebound to an ID that is not one": {http.MethodPatch, "/" + made.Hash, `{"preset_id":"strict"}`},
+	} {
+		if rec := f.managementRequest(c.method, c.path, c.body, manager); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s, want 400", what, rec.Code, rec.Body)
+		}
+	}
+	// A key made in the console is permanent, beyond the manager's ceiling: renaming it is no grant, a new preset is.
+	f.createKey(s, `{"name":"permanent","preset_id":"`+strict.Id.String()+`"}`)
+	permanent := "/" + f.text(`SELECT replace(id::text, '-', '') FROM accounts.api_keys WHERE name = 'permanent'`)
+	if rec := f.managementRequest(http.MethodPatch, permanent, `{"preset_id":"`+open.Id.String()+`"}`, manager); rec.Code != http.StatusForbidden {
+		t.Errorf("a key beyond the manager's ceiling rebound: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if got := f.text(`SELECT preset_id::text FROM accounts.api_keys WHERE name = 'permanent'`); got != strict.Id.String() {
+		t.Errorf("the permanent key is bound to %s after a refused rebind", got)
+	}
+	readManaged(t, f.managementRequest(http.MethodPatch, permanent, `{"name":"kept","preset_id":"`+strict.Id.String()+`"}`, manager), http.StatusOK)
+	for _, step := range []struct{ what, body, want string }{
+		{"a change that names no preset", `{"name":"renamed"}`, strict.Id.String()},
+		{"a rebind", `{"preset_id":"` + open.Id.String() + `"}`, open.Id.String()},
+	} {
+		got, _ := readManaged(t, f.managementRequest(http.MethodPatch, "/"+made.Hash, step.body, manager), http.StatusOK)
+		if got.Preset == nil || *got.Preset != step.want {
+			t.Errorf("%s: bound to %v, want %s", step.what, got.Preset, step.want)
+		}
+	}
+}

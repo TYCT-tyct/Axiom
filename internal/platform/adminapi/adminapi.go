@@ -4,3 +4,4 @@ package adminapi
 
 //go:generate go tool -modfile=../../../tools/go.mod oapi-codegen -config oapi-codegen.yaml ../../../api/admin.yaml
 //go:generate go tool -modfile=../../../tools/go.mod oapi-codegen -config oapi-codegen-types.yaml ../../../api/admin.yaml
+//go:generate go tool -modfile=../../../tools/go.mod oapi-codegen -config oapi-codegen-spec.yaml ../../../api/admin.yaml

@@ -11,6 +11,7 @@ import (
 
 const (
 	someSite     = "/sites/site_00000000000000000000000000/settings"
+	somePreset   = "/routing-presets/0198c0a8-0000-7000-8000-000000000001"
 	someAccount  = "/accounts/acct_00000000000000000000000000"
 	someSupplier = "/suppliers/0198c0a8-0000-7000-8000-000000000001"
 	someModel    = "/models/0198c0a8-0000-7000-8000-000000000002"
@@ -42,6 +43,10 @@ var adminOperations = []adminOperation{
 	{"rotateOperationsCredential", http.MethodPost, "/operations/credentials/opcred_00000000000000000000000000/rotate", `{"reason":"r"}`, "operations.manage", true},
 	{"revokeOperationsCredential", http.MethodPost, "/operations/credentials/opcred_00000000000000000000000000/revoke", `{"reason":"r"}`, "operations.manage", true},
 	{"stopOperationsAgent", http.MethodPost, "/operations/agent/stop", `{"reason":"r"}`, "operations.manage", true},
+	{"listOperationsApprovals", http.MethodGet, "/operations/approvals", "", "operations.approve", false},
+	{"getOperationsApproval", http.MethodGet, "/operations/approvals/0198c0a8-0000-7000-8000-000000000004", "", "operations.approve", false},
+	{"approveOperationsApproval", http.MethodPost, "/operations/approvals/0198c0a8-0000-7000-8000-000000000004/approve", `{"reason":"r"}`, "operations.approve", true},
+	{"rejectOperationsApproval", http.MethodPost, "/operations/approvals/0198c0a8-0000-7000-8000-000000000004/reject", `{"reason":"r"}`, "operations.approve", true},
 	{"updateOperationsTargets", http.MethodPut, "/reports/targets/2026-11", `{"rev":0,"reason":"r"}`, "sites.manage", true},
 	{"replaceOperationsTargets", http.MethodPut, "/reports/targets/2026-11/all", `{"rev":0,"reason":"r"}`, "sites.manage", true},
 	{"listAuditEntries", http.MethodGet, "/audit", "", "audit.view", false},
@@ -67,6 +72,17 @@ var adminOperations = []adminOperation{
 	{"createSourceClass", http.MethodPost, "/source-classes", `{"slug":"pool","name":"Pool","rules":{"match":"all","conditions":[]},"reason":"r"}`, "sites.manage", true},
 	{"updateSourceClass", http.MethodPut, "/source-classes/pool", `{"rev":1,"reason":"r"}`, "sites.manage", true},
 	{"deleteSourceClass", http.MethodDelete, "/source-classes/pool", `{"rev":1,"reason":"r"}`, "sites.manage", true},
+	{"listPlatformRoutingPresets", http.MethodGet, "/routing-presets", "", "sites.manage", false},
+	{"createPlatformRoutingPreset", http.MethodPost, "/routing-presets", `{"slug":"p","name":"P","rules":{},"reason":"r"}`, "sites.manage", true},
+	{"listSiteRoutingPresets", http.MethodGet, strings.Replace(someSite, "/settings", "/routing-presets", 1), "", "sites.manage", false},
+	{"createSiteRoutingPreset", http.MethodPost, strings.Replace(someSite, "/settings", "/routing-presets", 1), `{"slug":"p","name":"P","rules":{},"reason":"r"}`, "sites.manage", true},
+	{"getLayerRoutingPreset", http.MethodGet, somePreset, "", "sites.manage", false},
+	{"updateLayerRoutingPreset", http.MethodPut, somePreset, `{"name":"P","rules":{},"revision":1,"reason":"r"}`, "sites.manage", true},
+	{"disableLayerRoutingPreset", http.MethodDelete, somePreset, `{"revision":1,"reason":"r"}`, "sites.manage", true},
+	{"getPlatformRoutingDefault", http.MethodGet, "/settings/routing", "", "sites.manage", false},
+	{"setPlatformRoutingDefault", http.MethodPut, "/settings/routing", `{"preset_id":null,"version":0,"reason":"r"}`, "sites.manage", true},
+	{"getSiteRoutingDefault", http.MethodGet, strings.Replace(someSite, "/settings", "/routing-default", 1), "", "sites.manage", false},
+	{"setSiteRoutingDefault", http.MethodPut, strings.Replace(someSite, "/settings", "/routing-default", 1), `{"preset_id":null,"version":0,"reason":"r"}`, "sites.manage", true},
 	{"listMerchants", http.MethodGet, "/payments/merchants?site_id=site_00000000000000000000000000", "", "sites.manage", false},
 	{"getMerchant", http.MethodGet, someMerchant, "", "sites.manage", false},
 	{"createMerchant", http.MethodPost, "/payments/merchants", `{"site_id":"site_00000000000000000000000000","merchant":{},"reason":"r"}`, "sites.manage", true},

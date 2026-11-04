@@ -1386,10 +1386,10 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the site's currency). At most 16 KiB. */
+        /** @description A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB. */
         RoutingRules: Record<string, never>;
         /**
-         * @description The layer the preset belongs to; only the account's own presets can be changed here.
+         * @description The layer the preset belongs to.
          * @enum {string}
          */
         RoutingPresetScope: "platform" | "site" | "account" | "workspace";
@@ -1446,12 +1446,12 @@ export interface components {
         RoutingDefault: {
             /**
              * Format: uuid
-             * @description Absent when the account sets no default.
+             * @description Absent when the layer sets no default.
              */
             preset_id?: string;
             /**
              * Format: int64
-             * @description 0 when the account has no default; a change names the version it read.
+             * @description 0 when the layer has no default; a change names the version it read.
              */
             version: number;
         };

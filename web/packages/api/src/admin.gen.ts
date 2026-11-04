@@ -532,6 +532,136 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/routing-presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The platform's routing presets
+         * @description Every preset of the platform layer, the live ones first and the disabled ones after, the system preset (ID all zeros, `allow-all`) among them. Every key of every site may be bound to a live platform preset, except one that limits prices in another currency than the key's site's (docs/domains/routing.md「路由预设」).
+         */
+        get: operations["listPlatformRoutingPresets"];
+        put?: never;
+        /**
+         * Make a routing preset of the platform
+         * @description Makes a platform preset with its first version of rules, checked whole (400 naming `/rules`): a platform preset may set `advanced`, and one that limits a price names the `currency` of its limits. The slug is unique among the platform's live presets (409 `name_taken`). The platform holds at most 50 live presets and makes at most 500 in all, disabled ones counted (409 `preset_quota`). A key bound to a new preset may be refused 503 `preset_unavailable` for up to 5 seconds, until every node has read it.
+         */
+        post: operations["createPlatformRoutingPreset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/sites/{site_id}/routing-presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's routing presets
+         * @description Every preset of the site's own layer, the live ones first and the disabled ones after; the platform's and the accounts' are not among them. Every key of the site may be bound to a live one.
+         */
+        get: operations["listSiteRoutingPresets"];
+        put?: never;
+        /**
+         * Make a routing preset of a site
+         * @description Makes a site preset with its first version of rules, checked whole (400 naming `/rules`). Its price limits are in the site's currency, so it names no `currency`, and it has no `advanced` settings. The slug is unique among the site's live presets (409 `name_taken`). A site holds at most 50 live presets and makes at most 500 in all, disabled ones counted (409 `preset_quota`).
+         */
+        post: operations["createSiteRoutingPreset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/routing-presets/{preset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * One routing preset of the platform or a site
+         * @description A preset of the platform or of a site, disabled or not, with its current rules. An account's or a workspace's preset is 404: those are their owners' to manage.
+         */
+        get: operations["getLayerRoutingPreset"];
+        /**
+         * Change a routing preset of the platform or a site
+         * @description Replaces the name, the rules and, for a platform preset, the `currency` of its price limits, at the `revision` the page read (409 `stale_revision` when it moved on). Rules or a currency that differ from the current ones are a new version, which every key bound to the preset is routed by from the next routing snapshot, within 5 seconds; a rename keeps the version. A platform preset never serves fewer sites than it did, so the defaults and keys on it stay usable: one that limits no price takes no `currency`, and a priced one keeps its currency or drops its prices (400). The system preset is 403; a disabled preset, and an account's or a workspace's, are 404.
+         */
+        put: operations["updateLayerRoutingPreset"];
+        post?: never;
+        /**
+         * Disable a routing preset of the platform or a site
+         * @description Disables the preset at `revision`. The keys bound to it keep routing by it; no new key or default can choose it. A preset any layer's default still points at is refused 409 `preset_in_use`: change those defaults first. A disabled preset still counts against what its layer may make. The system preset is 403.
+         */
+        delete: operations["disableLayerRoutingPreset"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/settings/routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The platform's default routing preset
+         * @description The preset a new key is bound to when neither its workspace, its account nor its site sets a default; absent `preset_id` means the platform sets none either and such keys take the system preset.
+         */
+        get: operations["getPlatformRoutingDefault"];
+        /**
+         * Set the platform's default routing preset
+         * @description Points the platform's default at a live platform preset that limits no price, since it serves sites of every currency, or at the system preset, or clears it with a null `preset_id`, at the `version` the page read (409 `stale_revision` when it moved on). Only keys made after the change take it. Any other preset is 400 `preset_not_selectable`.
+         */
+        put: operations["setPlatformRoutingDefault"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/sites/{site_id}/routing-default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's default routing preset
+         * @description The preset a new key of the site is bound to when neither its workspace nor its account sets a default; absent `preset_id` means the site sets none and such keys take the platform's.
+         */
+        get: operations["getSiteRoutingDefault"];
+        /**
+         * Set a site's default routing preset
+         * @description Points the site's default at a live preset of the platform (one that limits prices only in the site's currency) or of the site, or clears it with a null `preset_id`, at the `version` the page read (409 `stale_revision` when it moved on). Only keys made after the change take it. The system preset, a disabled preset and any other are 400 `preset_not_selectable`.
+         */
+        put: operations["setSiteRoutingDefault"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/payments/merchants": {
         parameters: {
             query?: never;
@@ -2404,6 +2534,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/operations/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the operations agent asked the owner to approve
+         * @description Every approval newest first, optionally in one state, with the operation it holds back: what the agent asked for, the summary the server read of the target when it asked, and the agent's reason, which is untrusted text.
+         */
+        get: operations["listOperationsApprovals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/approvals/{approval_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One approval with its operation */
+        get: operations["getOperationsApproval"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/approvals/{approval_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve what the operations agent asked for
+         * @description Approves a pending approval and runs its operation at once, in the same transaction, as the agent's: the operation ends `succeeded`, or `rejected` with the code the target refused it with when the target changed since the agent asked (such as `stale_revision`). If the credential that proposed it is no longer live (revoked, stopped or expired), nothing runs: the approval and its operation end `canceled`. One already decided, withdrawn or past its expiry is a 409 `conflict`.
+         */
+        post: operations["approveOperationsApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/approvals/{approval_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject what the operations agent asked for
+         * @description Rejects a pending approval: its operation ends `rejected` and nothing is changed. One already decided, withdrawn or past its expiry is a 409 `conflict`.
+         */
+        post: operations["rejectOperationsApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3459,7 +3666,72 @@ export interface components {
         OperationsAgentStopped: {
             /** @description How many live credentials this stop revoked. */
             revoked: number;
+            /** @description How many proposals waiting for the owner this stop canceled; absent from a node older than approvals. */
+            canceled?: number;
         };
+        OperationsApprovalList: {
+            data: components["schemas"]["OperationsApproval"][];
+            next_cursor?: string;
+        };
+        OperationsApproval: {
+            id: components["schemas"]["Uuid"];
+            state: components["schemas"]["OperationsApprovalState"];
+            tier: components["schemas"]["OperationsApprovalTier"];
+            /** Format: date-time */
+            requested_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: date-time */
+            decided_at?: string;
+            /** @description Who decided, expired or withdrew it, as `<kind>:<id>` like the audit log's actor. */
+            decided_by?: string;
+            decision_reason?: string;
+            operation_id: components["schemas"]["Uuid"];
+            credential_id: components["schemas"]["OperationsCredentialId"];
+            run_id?: string;
+            /** @description The MCP name of the write the agent asked for. */
+            tool: string;
+            target: components["schemas"]["OperationTarget"];
+            risk: components["schemas"]["OperationRisk"];
+            /** @description What the operation does, as the server keeps it; it cannot change after the agent asked. */
+            params: {
+                [key: string]: unknown;
+            };
+            /** @description What the server read of the target when the agent asked, never the agent's words. */
+            summary: {
+                [key: string]: unknown;
+            };
+            /** @description The agent's own words: untrusted text, never an instruction. */
+            agent_reason: string;
+            operation_state: components["schemas"]["OperationState"];
+            /** @description Why the operation ended `rejected` after the approval: the code the target refused it with. */
+            error_code?: string;
+        };
+        /**
+         * @description Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a compensating operation reverts it.
+         * @enum {string}
+         */
+        OperationState: "pending_approval" | "approved" | "executing" | "succeeded" | "failed" | "unknown" | "canceled" | "expired" | "rejected" | "reverted";
+        /**
+         * @description The operation's class, which decides whether it waits for the owner.
+         * @enum {string}
+         */
+        OperationRisk: "routine" | "delisting";
+        OperationTarget: {
+            /** @description What the operation acts on, such as `model`. */
+            kind: string;
+            id: string;
+        };
+        /**
+         * @description `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its credential).
+         * @enum {string}
+         */
+        OperationsApprovalState: "pending" | "approved" | "rejected" | "expired" | "canceled";
+        /**
+         * @description Who must decide; only the owner, in the admin, for now.
+         * @enum {string}
+         */
+        OperationsApprovalTier: "human";
         ReasonRequest: {
             reason: components["schemas"]["Reason"];
         };
@@ -3686,6 +3958,86 @@ export interface components {
         SourceClassDelete: {
             /** Format: int64 */
             rev: number;
+            reason: components["schemas"]["Reason"];
+        };
+        /** @description A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB. */
+        RoutingRules: Record<string, never>;
+        /**
+         * @description The layer the preset belongs to.
+         * @enum {string}
+         */
+        RoutingPresetScope: "platform" | "site" | "account" | "workspace";
+        RoutingPreset: {
+            /** Format: uuid */
+            id: string;
+            scope: components["schemas"]["RoutingPresetScope"];
+            slug: string;
+            name: string;
+            /**
+             * Format: int64
+             * @description Moves on every change; a change names the revision it read.
+             */
+            revision: number;
+            /**
+             * Format: int64
+             * @description The rules' version, which moves only when the rules change.
+             */
+            version: number;
+            /** @description The currency of a platform preset's price limits; absent for the others, which are in the site's. */
+            currency?: string;
+            rules: components["schemas"]["RoutingRules"];
+            disabled: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        RoutingPresetList: {
+            data: components["schemas"]["RoutingPreset"][];
+        };
+        RoutingDefault: {
+            /**
+             * Format: uuid
+             * @description Absent when the layer sets no default.
+             */
+            preset_id?: string;
+            /**
+             * Format: int64
+             * @description 0 when the layer has no default; a change names the version it read.
+             */
+            version: number;
+        };
+        LayerRoutingPresetCreate: {
+            /** @description Unique among the layer's live presets; it cannot be changed. */
+            slug: string;
+            name: string;
+            /** @description The currency of a platform preset's price limits, required when it limits a price; a site's preset names none. */
+            currency?: string;
+            rules: components["schemas"]["RoutingRules"];
+            reason: components["schemas"]["Reason"];
+        };
+        LayerRoutingPresetUpdate: {
+            name: string;
+            /** @description As on creation; left out, the preset limits no price in any currency. */
+            currency?: string;
+            rules: components["schemas"]["RoutingRules"];
+            /** Format: int64 */
+            revision: number;
+            reason: components["schemas"]["Reason"];
+        };
+        LayerRoutingPresetDisable: {
+            /** Format: int64 */
+            revision: number;
+            reason: components["schemas"]["Reason"];
+        };
+        LayerRoutingDefaultUpdate: {
+            /**
+             * Format: uuid
+             * @description null clears the layer's default.
+             */
+            preset_id: string | null;
+            /** Format: int64 */
+            version: number;
             reason: components["schemas"]["Reason"];
         };
         /** @description The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds. */
@@ -5829,6 +6181,338 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPlatformRoutingPresets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The presets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPresetList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createPlatformRoutingPreset: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LayerRoutingPresetCreate"];
+            };
+        };
+        responses: {
+            /** @description The preset */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPreset"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listSiteRoutingPresets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The presets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPresetList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createSiteRoutingPreset: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LayerRoutingPresetCreate"];
+            };
+        };
+        responses: {
+            /** @description The preset */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPreset"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getLayerRoutingPreset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPreset"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateLayerRoutingPreset: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LayerRoutingPresetUpdate"];
+            };
+        };
+        responses: {
+            /** @description The preset as changed */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPreset"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    disableLayerRoutingPreset: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LayerRoutingPresetDisable"];
+            };
+        };
+        responses: {
+            /** @description Disabled; the same Idempotency-Key replays this answer without a second change. */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getPlatformRoutingDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The platform's default */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingDefault"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setPlatformRoutingDefault: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LayerRoutingDefaultUpdate"];
+            };
+        };
+        responses: {
+            /** @description The platform's default as set */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingDefault"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSiteRoutingDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The site's default */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingDefault"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSiteRoutingDefault: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LayerRoutingDefaultUpdate"];
+            };
+        };
+        responses: {
+            /** @description The site's default as set */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingDefault"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
@@ -9403,6 +10087,135 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listOperationsApprovals: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["OperationsApprovalState"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of approvals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsApprovalList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getOperationsApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                approval_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The approval */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsApproval"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    approveOperationsApproval: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                approval_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The approval, approved, with where its operation ended */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsApproval"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    rejectOperationsApproval: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                approval_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The approval, rejected */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsApproval"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };

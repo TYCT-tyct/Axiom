@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"uuid"
@@ -50,7 +51,7 @@ func (m manager) create(t *testing.T, slug, rules string) (routing.StoredPreset,
 	t.Helper()
 	var p routing.StoredPreset
 	err := m.as(t, func(ctx context.Context, tx pg.Tx) (err error) {
-		p, err = routing.CreatePreset(ctx, tx, m.actor, m.layer(), slug, routing.PresetContent{Name: "N " + slug, Rules: []byte(rules)})
+		p, err = routing.CreatePreset(ctx, tx, m.actor, m.layer(), slug, routing.PresetContent{Name: "N " + slug, Rules: []byte(rules)}, "")
 		return err
 	})
 	return p, err
@@ -60,7 +61,7 @@ func (m manager) update(t *testing.T, id routing.PresetID, revision int64, name,
 	t.Helper()
 	var p routing.StoredPreset
 	err := m.as(t, func(ctx context.Context, tx pg.Tx) (err error) {
-		p, err = routing.UpdatePreset(ctx, tx, m.actor, id, revision, routing.PresetContent{Name: name, Rules: []byte(rules)})
+		p, err = routing.UpdatePreset(ctx, tx, m.actor, id, revision, routing.PresetContent{Name: name, Rules: []byte(rules)}, "")
 		return err
 	})
 	return p, err
@@ -69,7 +70,7 @@ func (m manager) update(t *testing.T, id routing.PresetID, revision int64, name,
 func (m manager) disable(t *testing.T, id routing.PresetID, revision int64) error {
 	t.Helper()
 	return m.as(t, func(ctx context.Context, tx pg.Tx) error {
-		return routing.DisablePreset(ctx, tx, m.actor, id, revision)
+		return routing.DisablePreset(ctx, tx, m.actor, id, revision, "")
 	})
 }
 
@@ -77,7 +78,7 @@ func (m manager) setDefault(t *testing.T, id *routing.PresetID, version int64) (
 	t.Helper()
 	var d routing.Default
 	err := m.as(t, func(ctx context.Context, tx pg.Tx) (err error) {
-		d, err = routing.SetDefault(ctx, tx, m.actor, m.layer(), usd, id, version)
+		d, err = routing.SetDefault(ctx, tx, m.actor, m.layer(), usd, id, version, "")
 		return err
 	})
 	return d, err
@@ -382,7 +383,7 @@ func TestDefaultWaitsForTheDisable(t *testing.T) {
 	disabled, commit := make(chan error, 1), make(chan struct{})
 	go func() {
 		disabled <- m.as(t, func(ctx context.Context, tx pg.Tx) error {
-			err := routing.DisablePreset(ctx, tx, m.actor, p.ID, p.Revision)
+			err := routing.DisablePreset(ctx, tx, m.actor, p.ID, p.Revision, "")
 			disabled <- err
 			<-commit
 			return err
@@ -420,6 +421,124 @@ func (m manager) waitForALockWaiter(t *testing.T) {
 		}
 		if waiting {
 			return
+		}
+	}
+}
+
+// operate runs fn in the platform scope, as the admin API does.
+func (m manager) operate(t *testing.T, fn func(ctx context.Context, tx pg.Tx) error) error {
+	t.Helper()
+	return m.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error { return fn(t.Context(), tx) })
+}
+
+// TestLayerPresets: the platform and a site manage their own layers' presets with a reason that the audit log keeps;
+// each lists its own presets, the disabled ones last and the platform's with the system preset, and none of another
+// layer's.
+func TestLayerPresets(t *testing.T) {
+	t.Parallel()
+	m := newManager(t)
+	platformLayer := routing.Layer{Scope: routing.ScopePlatform}
+	siteLayer := routing.Layer{Scope: routing.ScopeSite, Site: routing.SiteID(m.site)}
+	var cheap, site routing.StoredPreset
+	noErr(t, "make the layers' presets", m.operate(t, func(ctx context.Context, tx pg.Tx) (err error) {
+		if cheap, err = routing.CreatePreset(ctx, tx, m.actor, platformLayer, "cheap", routing.PresetContent{
+			Name: "Cheap", Currency: usd, Rules: []byte(`{"default": {"max_price": {"prompt": "1"}}}`),
+		}, "a cheap baseline"); err != nil {
+			return err
+		}
+		site, err = routing.CreatePreset(ctx, tx, m.actor, siteLayer, "official", routing.PresetContent{Name: "Official", Rules: []byte(allowed)}, "site baseline")
+		return err
+	}))
+	m.made(t, "mine", allowed)
+	noErr(t, "disable the site's preset", m.operate(t, func(ctx context.Context, tx pg.Tx) error {
+		return routing.DisablePreset(ctx, tx, m.actor, site.ID, site.Revision, "replaced")
+	}))
+	for _, c := range []struct {
+		layer routing.Layer
+		want  []string
+	}{
+		{platformLayer, []string{"allow-all", "cheap"}},
+		{siteLayer, []string{"official (disabled)"}},
+		{routing.Layer{Scope: routing.ScopeSite, Site: routing.SiteID(m.otherSite)}, nil},
+	} {
+		var got []string
+		noErr(t, "list", m.operate(t, func(ctx context.Context, tx pg.Tx) error {
+			presets, err := routing.LayerPresets(ctx, tx, c.layer)
+			for _, p := range presets {
+				got = append(got, p.Slug+map[bool]string{true: " (disabled)"}[p.Disabled])
+			}
+			return err
+		}))
+		if !slices.Equal(got, c.want) {
+			t.Errorf("the %s layer lists %v, want %v", c.layer.Scope, got, c.want)
+		}
+	}
+	var reasons string
+	noErr(t, "read the reasons", m.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT string_agg(coalesce(reason, ''), ',' ORDER BY id) FROM platform.audit_log
+			WHERE module = 'routing' AND target_id IN ($1, $2)`, uuid.UUID(cheap.ID).String(), uuid.UUID(site.ID).String()).Scan(&reasons)
+	}))
+	if want := "a cheap baseline,site baseline,replaced"; reasons != want {
+		t.Errorf("audited with the reasons %q, want %q", reasons, want)
+	}
+}
+
+// TestLayerQuota: the platform and a site each hold at most 50 live presets, apart from each other and from the
+// accounts of the site, which still make their own.
+func TestLayerQuota(t *testing.T) {
+	t.Parallel()
+	m := newManager(t)
+	for _, layer := range []routing.Layer{{Scope: routing.ScopePlatform}, {Scope: routing.ScopeSite, Site: routing.SiteID(m.site)}} {
+		create := func(slug string) error {
+			return m.operate(t, func(ctx context.Context, tx pg.Tx) error {
+				_, err := routing.CreatePreset(ctx, tx, m.actor, layer, slug, routing.PresetContent{Name: slug, Rules: []byte(allowed)}, "quota")
+				return err
+			})
+		}
+		live := 50
+		if layer.Scope == routing.ScopePlatform {
+			live-- // the system preset is one of the platform's
+		}
+		for i := range live {
+			noErr(t, "make a preset", create("p-"+strconv.Itoa(i)))
+		}
+		wantErr(t, "the "+layer.Scope.String()+"'s 51st live preset", create("over"), routing.ErrPresetQuota)
+	}
+	m.made(t, "still", allowed)
+}
+
+// TestPlatformPresetKeepsItsCurrency: a platform preset never serves fewer sites than it did, so the keys and defaults
+// of the sites it serves stay usable: one that limits no price gains no currency, and a priced one keeps its currency
+// or drops its prices.
+func TestPlatformPresetKeepsItsCurrency(t *testing.T) {
+	t.Parallel()
+	m := newManager(t)
+	priced := func(code string) routing.PresetContent {
+		return routing.PresetContent{Name: "P", Currency: mustCurrency(code), Rules: []byte(`{"default": {"max_price": {"prompt": "1"}}}`)}
+	}
+	unpriced := routing.PresetContent{Name: "P", Rules: []byte(allowed)}
+	for _, c := range []struct {
+		what     string
+		from, to routing.PresetContent
+		refused  bool
+	}{
+		{"an unpriced preset given prices", unpriced, priced("USD"), true},
+		{"prices moved to another currency", priced("USD"), priced("EUR"), true},
+		{"prices dropped", priced("USD"), unpriced, false},
+		{"prices changed in their currency", priced("USD"), routing.PresetContent{Name: "P", Currency: usd, Rules: []byte(`{"default": {"max_price": {"prompt": "2"}}}`)}, false},
+	} {
+		err := m.operate(t, func(ctx context.Context, tx pg.Tx) error {
+			p, err := routing.CreatePreset(ctx, tx, m.actor, routing.Layer{Scope: routing.ScopePlatform}, "p-"+uuid.NewV7().String()[24:], c.from, "r")
+			if err != nil {
+				return err
+			}
+			_, err = routing.UpdatePreset(ctx, tx, m.actor, p.ID, p.Revision, c.to, "r")
+			return err
+		})
+		if c.refused {
+			wantErr(t, c.what, err, routing.ErrPresetCurrency)
+		} else {
+			noErr(t, c.what, err)
 		}
 	}
 }

@@ -39,10 +39,10 @@ var (
 	ErrAgentNotFound = errors.New("accounts: no such operations credential")
 )
 
-// agentRefused are the permissions no credential may hold, whatever the owner asks: the control plane's own, and
-// granting platform roles, through which an agent could hand them to a user it controls (docs/domains/operations.md
+// agentRefused are the permissions no credential may hold, whatever the owner asks: the control plane's own, approving
+// what an agent proposed, and granting platform roles, through which an agent could hand them to a user it controls (docs/domains/operations.md
 // 「控制面」). The table's check refuses them too.
-var agentRefused = []Permission{OperationsManage, ManagePlatformGrants}
+var agentRefused = []Permission{OperationsManage, OperationsApprove, ManagePlatformGrants}
 
 // vendorPattern is a model vendor as the credential names the proposer's, such as deepseek or openai.
 var vendorPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,39}$`)
@@ -246,6 +246,20 @@ func (s *Service) lockLiveAgent(ctx context.Context, tx pg.Tx, id AgentID, now t
 	}
 	if len(rows) == 0 || rows[0].RevokedAt != nil || !rows[0].ExpiresAt.After(now) {
 		return ErrAgentNotFound
+	}
+	return nil
+}
+
+// HoldAgent keeps credential id from being revoked until tx ends, or is ErrUnknownAgent when it already is, has
+// expired or never was. What an operations credential proposes is held this way: a revocation or the stop, which cancel
+// what the credential has not started, then come after the proposal and cancel it too, never before it and miss it.
+func (s *Service) HoldAgent(ctx context.Context, tx pg.Tx, id AgentID) error {
+	rows, err := s.queries.HoldAgentCredential(ctx, tx, uuid.UUID(id))
+	if err != nil {
+		return fmt.Errorf("hold an operations credential: %w", err)
+	}
+	if len(rows) == 0 || rows[0].RevokedAt != nil || !rows[0].ExpiresAt.After(s.now()) {
+		return ErrUnknownAgent
 	}
 	return nil
 }
