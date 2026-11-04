@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"axiom/internal/accounts"
+	"axiom/internal/gateway"
 	"axiom/internal/platform/pg"
 )
 
@@ -20,7 +21,7 @@ func TestPresetAPIs(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
-		withKeyManagement(f.routes, managementAPI{accounts: f.svc}).ServeHTTP(rec, req)
+		withKeyManagement(f.routes, managementAPI{accounts: f.svc, keyLookup: gateway.DefaultConfig().KeyLookup}).ServeHTTP(rec, req)
 		return rec
 	}
 	check := func(rec *httptest.ResponseRecorder, status int) {
