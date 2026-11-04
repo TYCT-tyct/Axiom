@@ -7,6 +7,7 @@ import (
 
 	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/pg"
 	"axiom/internal/routing"
 )
@@ -45,11 +46,11 @@ func (a adminAPI) layerPresets(ctx context.Context, layer routing.Layer) (admina
 	}); err != nil {
 		return adminapi.RoutingPresetList{}, err
 	}
-	out := adminapi.RoutingPresetList{Data: make([]adminapi.RoutingPreset, len(presets))}
+	out := consoleapi.RoutingPresetList{Data: make([]consoleapi.RoutingPreset, len(presets))}
 	for i, p := range presets {
-		out.Data[i] = adminRoutingPreset(p)
+		out.Data[i] = routingPresetBody(p)
 	}
-	return out, nil
+	return converted[adminapi.RoutingPresetList](out)
 }
 
 func (a adminAPI) CreatePlatformRoutingPreset(ctx context.Context, r adminapi.CreatePlatformRoutingPresetRequestObject) (adminapi.CreatePlatformRoutingPresetResponseObject, error) {
@@ -86,7 +87,10 @@ func (a adminAPI) createLayerPreset(ctx context.Context, operation, key string, 
 	}
 	return idempotently(ctx, a.db, operation, key, request, func(tx pg.Tx) (adminapi.RoutingPreset, error) {
 		p, err := routing.CreatePreset(ctx, tx, actor(ctx), layer, b.Slug, routing.PresetContent{Name: b.Name, Currency: currency, Rules: b.Rules}, b.Reason)
-		return adminRoutingPreset(p), rulesProblem(err)
+		if err != nil {
+			return adminapi.RoutingPreset{}, rulesProblem(err)
+		}
+		return adminRoutingPreset(p)
 	})
 }
 
@@ -98,7 +102,8 @@ func (a adminAPI) GetLayerRoutingPreset(ctx context.Context, r adminapi.GetLayer
 	}); err != nil {
 		return nil, err
 	}
-	return adminapi.GetLayerRoutingPreset200JSONResponse(adminRoutingPreset(p)), nil
+	body, err := adminRoutingPreset(p)
+	return adminapi.GetLayerRoutingPreset200JSONResponse(body), err
 }
 
 func (a adminAPI) UpdateLayerRoutingPreset(ctx context.Context, r adminapi.UpdateLayerRoutingPresetRequestObject) (adminapi.UpdateLayerRoutingPresetResponseObject, error) {
@@ -116,7 +121,10 @@ func (a adminAPI) UpdateLayerRoutingPreset(ctx context.Context, r adminapi.Updat
 			}
 			p, err := routing.UpdatePreset(ctx, tx, actor(ctx), routing.PresetID(r.PresetId), r.Body.Revision,
 				routing.PresetContent{Name: r.Body.Name, Currency: currency, Rules: r.Body.Rules}, r.Body.Reason)
-			return adminRoutingPreset(p), rulesProblem(err)
+			if err != nil {
+				return adminapi.RoutingPreset{}, rulesProblem(err)
+			}
+			return adminRoutingPreset(p)
 		})
 	if err != nil {
 		return nil, err
@@ -228,16 +236,9 @@ func presetCurrency(code *string) (platform.Currency, error) {
 	return c, nil
 }
 
-func adminRoutingPreset(p routing.StoredPreset) adminapi.RoutingPreset {
-	body := adminapi.RoutingPreset{
-		Id: openapi_types.UUID(p.ID), Scope: adminapi.RoutingPresetScope(p.Scope.String()), Slug: p.Slug, Name: p.Name,
-		Revision: p.Revision, Version: p.Version, Rules: p.Rules, Disabled: p.Disabled, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
-	}
-	if p.Currency != (platform.Currency{}) {
-		code := p.Currency.String()
-		body.Currency = &code
-	}
-	return body
+// adminRoutingPreset is the preset as the console writes it: the two contracts define RoutingPreset alike.
+func adminRoutingPreset(p routing.StoredPreset) (adminapi.RoutingPreset, error) {
+	return converted[adminapi.RoutingPreset](routingPresetBody(p))
 }
 
 func adminRoutingDefault(d routing.Default) adminapi.RoutingDefault {
