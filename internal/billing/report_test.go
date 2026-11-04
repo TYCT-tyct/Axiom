@@ -59,7 +59,7 @@ func TestPlatformReportReadsTheCallsOverTheWindow(t *testing.T) {
 
 	var report PlatformReport
 	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
-		report, err = ReadPlatformReport(t.Context(), tx, site, testCurrency(t, "USD"), start, at(24*time.Hour))
+		report, err = ReadPlatformReport(t.Context(), tx, site, testCurrency(t), start, at(24*time.Hour))
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestPlatformReportNamesCashInItsCurrency(t *testing.T) {
 		t.Helper()
 		var report PlatformReport
 		if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
-			report, err = ReadPlatformReport(t.Context(), tx, site, testCurrency(t, "USD"), since, until)
+			report, err = ReadPlatformReport(t.Context(), tx, site, testCurrency(t), since, until)
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -140,7 +140,7 @@ func TestPlatformReportSumsWiderThanInt64(t *testing.T) {
 	)
 	var report PlatformReport
 	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
-		report, err = ReadPlatformReport(t.Context(), tx, site, testCurrency(t, "USD"), start, start.Add(24*time.Hour))
+		report, err = ReadPlatformReport(t.Context(), tx, site, testCurrency(t), start, start.Add(24*time.Hour))
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -186,7 +186,7 @@ func TestPlatformReportReadsPaidUsersAndRetention(t *testing.T) {
 		t.Helper()
 		var report PlatformReport
 		if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
-			report, err = ReadPlatformReport(t.Context(), tx, site, testCurrency(t, "USD"), since, until)
+			report, err = ReadPlatformReport(t.Context(), tx, site, testCurrency(t), since, until)
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -293,10 +293,10 @@ func TestPlatformReportPlanReadsTheWindow(t *testing.T) {
 	// whole entries table being read, which the plan above rules out.
 }
 
-// testCurrency is a currency the tests name.
-func testCurrency(t *testing.T, code string) platform.Currency {
+// testCurrency is the currency the tests name.
+func testCurrency(t *testing.T) platform.Currency {
 	t.Helper()
-	currency, err := platform.ParseCurrency(code)
+	currency, err := platform.ParseCurrency("USD")
 	if err != nil {
 		t.Fatal(err)
 	}

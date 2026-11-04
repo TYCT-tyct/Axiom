@@ -264,6 +264,7 @@ func checkMoney(name string, money *Money) error {
 // writeTarget writes one first-release metric of set, or deletes it when it has no value.
 func writeTarget(ctx context.Context, tx pg.Tx, queries *Queries, site uuid.UUID, month time.Time, metric Metric, set Targets) error {
 	var amount, currency *string
+	//nolint:exhaustive // this table stores the first-release metrics; the rest live in commercial_targets.
 	switch metric {
 	case Calls:
 		amount = countAmount(set.Calls)
@@ -293,6 +294,7 @@ func writeTarget(ctx context.Context, tx pg.Tx, queries *Queries, site uuid.UUID
 // writeCommercialTarget writes one commercial metric of set, or deletes it when it has no value.
 func writeCommercialTarget(ctx context.Context, tx pg.Tx, queries *Queries, site uuid.UUID, month time.Time, metric Metric, set Targets) error {
 	var amount, currency *string
+	//nolint:exhaustive // this table stores the commercial metrics; the rest live in targets.
 	switch metric {
 	case PaidUsers:
 		amount = countAmount(set.PaidUsers)
@@ -373,59 +375,62 @@ func targetsFrom(rows []storedTarget, month time.Time) (Targets, error) {
 }
 
 func (t *Targets) add(row storedTarget) error {
-	switch row.Metric {
-	case Calls:
+	switch {
+	case isCountMetric(row.Metric):
 		count, err := storedCount(row)
 		if err != nil {
 			return err
 		}
-		t.Calls = &count
-	case Errors:
-		count, err := storedCount(row)
-		if err != nil {
-			return err
-		}
-		t.Errors = &count
-	case Revenue:
+		t.setCount(row.Metric, count)
+	case isMoneyMetric(row.Metric):
 		money, err := storedMoney(row)
 		if err != nil {
 			return err
 		}
-		t.Revenue = money
-	case Cost:
-		money, err := storedMoney(row)
-		if err != nil {
-			return err
-		}
-		t.Cost = money
-	case PaidUsers:
-		count, err := storedCount(row)
-		if err != nil {
-			return err
-		}
-		t.PaidUsers = &count
-	case MonthlyRevenue:
-		money, err := storedMoney(row)
-		if err != nil {
-			return err
-		}
-		t.MonthlyRevenue = money
-	case GrossMargin:
+		t.setMoney(row.Metric, money)
+	case isRateMetric(row.Metric):
 		rate, err := storedRate(row)
 		if err != nil {
 			return err
 		}
-		t.GrossMargin = &rate
-	case Retention:
-		rate, err := storedRate(row)
-		if err != nil {
-			return err
-		}
-		t.Retention = &rate
+		t.setRate(row.Metric, rate)
 	default:
 		return fmt.Errorf("operations: stored target has unknown metric %q", row.Metric)
 	}
 	return nil
+}
+
+func (t *Targets) setCount(metric Metric, count int64) {
+	if metric == Calls {
+		t.Calls = &count
+	}
+	if metric == Errors {
+		t.Errors = &count
+	}
+	if metric == PaidUsers {
+		t.PaidUsers = &count
+	}
+}
+
+func (t *Targets) setMoney(metric Metric, money *Money) {
+	if metric == Revenue {
+		t.Revenue = money
+	}
+	if metric == Cost {
+		t.Cost = money
+	}
+	if metric == MonthlyRevenue {
+		t.MonthlyRevenue = money
+	}
+}
+
+func (t *Targets) setRate(metric Metric, rate int64) {
+	if metric == GrossMargin {
+		t.GrossMargin = &rate
+	}
+	if metric == Retention {
+		t.Retention = &rate
+	}
 }
 
 func storedCount(row storedTarget) (int64, error) {
@@ -456,131 +461,6 @@ func storedMoney(row storedTarget) (*Money, error) {
 		return nil, fmt.Errorf("operations: stored %s target: %w", row.Metric, err)
 	}
 	return &Money{Amount: row.Amount, Currency: currency}, nil
-}
-
-// expectedFrom prorates each count and money row to the part of the window inside its month and sums the months. The
-// arithmetic is in big.Int because a monthly target and the product with the window's share can be wider than int64.
-// A money row in another currency is skipped, not compared. A rate row contributes only when it is the target of the
-// UTC month the window ends in, and is taken as it is.
-func expectedFrom(rows []ReadTargetsRow, currency platform.Currency, since, until time.Time) (Expected, error) {
-	return expectedFromStored(targetRows(rows), currency, since, until)
-}
-
-// expectedFromStored is expectedFrom over rows from either target table.
-func expectedFromStored(rows []storedTarget, currency platform.Currency, since, until time.Time) (Expected, error) {
-	sums := map[Metric]*big.Int{}
-	endMonth := monthStart(until.Add(-time.Nanosecond))
-	rates := map[Metric]int64{}
-	for _, row := range rows {
-		switch row.Metric {
-		case GrossMargin, Retention:
-			rate, err := storedRate(row)
-			if err != nil {
-				return Expected{}, err
-			}
-			if row.Month.Equal(endMonth) {
-				rates[row.Metric] = rate
-			}
-			continue
-		}
-		if err := addExpected(sums, row, currency, since, until); err != nil {
-			return Expected{}, err
-		}
-	}
-	expected := Expected{}
-	var err error
-	if expected.Calls, err = countTarget(sums[Calls]); err != nil {
-		return Expected{}, err
-	}
-	if expected.Errors, err = countTarget(sums[Errors]); err != nil {
-		return Expected{}, err
-	}
-	if expected.Revenue, err = moneyTarget(sums[Revenue], currency); err != nil {
-		return Expected{}, err
-	}
-	if expected.Cost, err = moneyTarget(sums[Cost], currency); err != nil {
-		return Expected{}, err
-	}
-	if expected.PaidUsers, err = countTarget(sums[PaidUsers]); err != nil {
-		return Expected{}, err
-	}
-	if expected.MonthlyRevenue, err = moneyTarget(sums[MonthlyRevenue], currency); err != nil {
-		return Expected{}, err
-	}
-	if rate, ok := rates[GrossMargin]; ok {
-		expected.GrossMargin = &rate
-	}
-	if rate, ok := rates[Retention]; ok {
-		expected.Retention = &rate
-	}
-	return expected, nil
-}
-
-// addExpected adds one row's share to the window's sums. A money row in another currency is skipped, not compared; a
-// row outside the window contributes nothing. Rate rows never reach here.
-func addExpected(sums map[Metric]*big.Int, row storedTarget, currency platform.Currency, since, until time.Time) error {
-	switch row.Metric {
-	case Calls, Errors, PaidUsers:
-	case Revenue, Cost, MonthlyRevenue:
-		if row.Currency == nil || *row.Currency != currency.String() {
-			return nil
-		}
-	default:
-		return fmt.Errorf("operations: stored target has unknown metric %q", row.Metric)
-	}
-	amount, ok := new(big.Int).SetString(row.Amount, 10)
-	if !ok || amount.Sign() < 0 {
-		return fmt.Errorf("operations: stored %s target %q is not a non-negative amount", row.Metric, row.Amount)
-	}
-	monthEnd := row.Month.AddDate(0, 1, 0)
-	start := later(since, row.Month)
-	end := earlier(until, monthEnd)
-	if !end.After(start) {
-		return nil
-	}
-	part := prorate(amount, monthEnd.Sub(row.Month), end.Sub(start))
-	if sum, ok := sums[row.Metric]; ok {
-		sum.Add(sum, part)
-		return nil
-	}
-	sums[row.Metric] = part
-	return nil
-}
-
-// prorate is amount × part / whole rounded half up, in the metric's unit. whole is one month and part the covered
-// part of it; both must be positive, and amount non-negative. Counts thereby round to the nearest whole call or
-// error, money to the nearest billionth of a unit.
-func prorate(amount *big.Int, whole, part time.Duration) *big.Int {
-	// floor((2·amount·part + whole) / (2·whole)) is half up for a non-negative amount. Duration is nanoseconds, so a
-	// window with a fractional second keeps that fraction; rounding happens once, in the metric's unit, rather than
-	// truncating each month's overlap to whole seconds.
-	numerator := new(big.Int).Mul(amount, big.NewInt(int64(part)))
-	numerator.Lsh(numerator, 1)
-	numerator.Add(numerator, big.NewInt(int64(whole)))
-	denominator := big.NewInt(int64(whole))
-	denominator.Lsh(denominator, 1)
-	return numerator.Quo(numerator, denominator)
-}
-
-func countTarget(sum *big.Int) (*int64, error) {
-	if sum == nil {
-		return nil, nil //nolint:nilnil // a metric absent from every month is an absent target, not an error
-	}
-	if !sum.IsInt64() {
-		return nil, fmt.Errorf("operations: a prorated count target is wider than 64 bits")
-	}
-	count := sum.Int64()
-	return &count, nil
-}
-
-func moneyTarget(sum *big.Int, currency platform.Currency) (*Money, error) {
-	if sum == nil {
-		return nil, nil //nolint:nilnil // a metric absent from every month is an absent target, not an error
-	}
-	if sum.Sign() < 0 {
-		return nil, fmt.Errorf("operations: a prorated money target is negative")
-	}
-	return &Money{Amount: sum.String(), Currency: currency}, nil
 }
 
 // detail is the audit entry's side of the change: the metrics that have a value, so clearing a target shows as the
@@ -614,24 +494,4 @@ func (t *Targets) detail() map[string]any {
 		detail["retention"] = *t.Retention
 	}
 	return detail
-}
-
-// monthStart is the UTC first day of t's month, the key a target is stored under.
-func monthStart(t time.Time) time.Time {
-	year, month, _ := t.UTC().Date()
-	return time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
-}
-
-func later(a, b time.Time) time.Time {
-	if a.After(b) {
-		return a
-	}
-	return b
-}
-
-func earlier(a, b time.Time) time.Time {
-	if a.Before(b) {
-		return a
-	}
-	return b
 }

@@ -43,20 +43,7 @@ func (a adminAPI) GetOperationsOverview(ctx context.Context, r adminapi.GetOpera
 	if err != nil {
 		return nil, err
 	}
-	accountsBody := make([]map[string]any, len(overview.Accounts))
-	for i, account := range overview.Accounts {
-		accountsBody[i] = map[string]any{
-			"account_id": accounts.AccountID(account.Account).TypeID(), "calls": account.Calls, "errors": account.Errors,
-		}
-	}
-	modelsBody := make([]map[string]any, len(overview.Models))
-	for i, model := range overview.Models {
-		modelsBody[i] = map[string]any{"model": model.Model, "calls": model.Calls, "errors": model.Errors}
-	}
-	cashBody := make([]map[string]string, len(money.Cash))
-	for i, cash := range money.Cash {
-		cashBody[i] = map[string]string{"amount": cash.Amount, "currency": cash.Currency.String()}
-	}
+	accountsBody, modelsBody, cashBody := overviewRanks(overview, money)
 	callsComplete := overview.Coverage.Covers(w.Since, w.Until)
 	margin := grossMarginBasisPoints(money.Revenue, money.Cost, money.UnknownCost)
 	retention := retentionBasisPoints(money.Retention.Retained, money.Retention.Cohort)
@@ -91,6 +78,25 @@ func (a adminAPI) GetOperationsOverview(ctx context.Context, r adminapi.GetOpera
 		body["calls_available_since"] = overview.Coverage.Since
 	}
 	return adminJSON[adminapi.GetOperationsOverview200JSONResponse](body)
+}
+
+// overviewRanks shapes the dashboard's top accounts, top models and cash rows.
+func overviewRanks(overview observability.AdminOverview, money billing.PlatformReport) ([]map[string]any, []map[string]any, []map[string]string) {
+	accountsBody := make([]map[string]any, len(overview.Accounts))
+	for i, account := range overview.Accounts {
+		accountsBody[i] = map[string]any{
+			"account_id": accounts.AccountID(account.Account).TypeID(), "calls": account.Calls, "errors": account.Errors,
+		}
+	}
+	modelsBody := make([]map[string]any, len(overview.Models))
+	for i, model := range overview.Models {
+		modelsBody[i] = map[string]any{"model": model.Model, "calls": model.Calls, "errors": model.Errors}
+	}
+	cashBody := make([]map[string]string, len(money.Cash))
+	for i, cash := range money.Cash {
+		cashBody[i] = map[string]string{"amount": cash.Amount, "currency": cash.Currency.String()}
+	}
+	return accountsBody, modelsBody, cashBody
 }
 
 // grossMarginBasisPoints is (revenue - cost) / revenue in basis points, rounded half away from zero. It is nil when

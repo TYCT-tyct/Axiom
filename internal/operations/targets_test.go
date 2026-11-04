@@ -264,7 +264,7 @@ func TestExpectedFromProratesCommercialCountsAndMoney(t *testing.T) {
 	t.Parallel()
 	rows := []storedTarget{
 		{Month: at(t, "2026-01-01T00:00:00Z"), Metric: PaidUsers, Amount: "31"},
-		{Month: at(t, "2026-01-01T00:00:00Z"), Metric: MonthlyRevenue, Amount: "310000000000", Currency: ptr("USD")},
+		{Month: at(t, "2026-01-01T00:00:00Z"), Metric: MonthlyRevenue, Amount: "310000000000", Currency: new("USD")},
 	}
 	got, err := expectedFromStored(rows, usd(t), at(t, "2026-01-01T00:00:00Z"), at(t, "2026-01-16T00:00:00Z"))
 	if err != nil {
@@ -277,5 +277,3 @@ func TestExpectedFromProratesCommercialCountsAndMoney(t *testing.T) {
 		t.Errorf("monthly revenue = %+v, want half the month", got.MonthlyRevenue)
 	}
 }
-
-func ptr[T any](value T) *T { return &value }
