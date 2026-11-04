@@ -41,23 +41,28 @@ type nodeSettings struct {
 	coreURL                           *url.URL
 	nodeTLS, clientTLS                *tls.Config
 	adminSources                      []netip.Prefix
-	startupTimeout, shutdownTimeout   time.Duration
-	databaseURL                       string
-	completionReserve                 int
-	masterKeyFile, keyHashFile        string
-	identityKeyFile                   string
-	callLogDir                        string
-	webAssetsDir                      string
-	hashConcurrency                   int
-	hashWait                          time.Duration
-	trustedProxies                    []netip.Prefix
-	valkey                            kv.Config
-	smtp                              mail.Config
-	search                            websearch.Config
-	fileParser                        fileparse.Config
-	objectstore                       objectstore.Config
-	retentionURL                      string
-	exchangeSource                    string
+	// operationsAddr is the operations listener's address, empty while it is off; operationsTLS is the node's mutual
+	// TLS that also requires the ops purpose, and operationsSources where its connections may come from.
+	operationsAddr                  string
+	operationsTLS                   *tls.Config
+	operationsSources               []netip.Prefix
+	startupTimeout, shutdownTimeout time.Duration
+	databaseURL                     string
+	completionReserve               int
+	masterKeyFile, keyHashFile      string
+	identityKeyFile                 string
+	callLogDir                      string
+	webAssetsDir                    string
+	hashConcurrency                 int
+	hashWait                        time.Duration
+	trustedProxies                  []netip.Prefix
+	valkey                          kv.Config
+	smtp                            mail.Config
+	search                          websearch.Config
+	fileParser                      fileparse.Config
+	objectstore                     objectstore.Config
+	retentionURL                    string
+	exchangeSource                  string
 }
 
 // readSettings reads and checks every variable the node's roles use, so a node started wrong fails with the whole list.
@@ -157,15 +162,13 @@ func readCoreSettings(env *config.Env, s *nodeSettings) []error {
 		exchangeErr = errors.New("AXIOM_EXCHANGE_SOURCE: want manual or ecb")
 	}
 	s.smtp = smtp
-	sources, sourceErr := readAdminSources(env, s.adminAddr)
+	sources, sourceErr := readSources(env, adminSourcesVar, adminAddrVar, s.adminAddr)
 	if sourceErr != nil {
 		errs = append(errs, sourceErr)
 	} else {
 		s.adminSources = sources
 	}
-	if err := readNodeTLS(env, s); err != nil {
-		errs = append(errs, err)
-	}
+	errs = append(errs, readNodeTLS(env, s), readOperationsSources(env, s))
 	return append(errs, mailErr, searchErr, fileParserErr, archiveErr, s.valkey.Resolve(), healthErr, exchangeErr)
 }
 
@@ -248,7 +251,7 @@ func readNonCoreSettings(env *config.Env, s *nodeSettings) []error {
 // letting Env report them as unknown, says which role they belong to.
 func rejectCoreSettings(env *config.Env) []error {
 	var errs []error
-	for _, name := range []string{adminAddrVar, adminSourcesVar, nodeAddrVar} {
+	for _, name := range []string{adminAddrVar, adminSourcesVar, nodeAddrVar, operationsAddrVar, operationsSourcesVar} {
 		if env.Set(name) {
 			errs = append(errs, fmt.Errorf("%s: not used by a node without the core role", name))
 		}
@@ -289,18 +292,19 @@ func readIngressSettings(env *config.Env, s *nodeSettings) []error {
 	return errs
 }
 
-// readAdminSources is the admin listener's source restriction: the configured networks, or loopback when the listener is
-// bound to loopback and nothing else is named. A listener on every address without a source list is a configuration
-// error, so publishing the admin port cannot happen by forgetting one variable.
-func readAdminSources(env *config.Env, adminAddr string) ([]netip.Prefix, error) {
-	if env.Set(adminSourcesVar) {
-		sources := env.Prefixes(adminSourcesVar)
+// readSources is a listener's source restriction, named by variable: the configured networks, or loopback when the
+// listener (addrVar at addr) is bound to loopback and nothing else is named. A listener on every address without a
+// source list is a configuration error, so publishing the admin or the operations port cannot happen by forgetting one
+// variable.
+func readSources(env *config.Env, variable, addrVar, addr string) ([]netip.Prefix, error) {
+	if env.Set(variable) {
+		sources := env.Prefixes(variable)
 		if len(sources) == 0 {
 			return nil, nil // Prefixes reported the malformed value
 		}
 		return sources, nil
 	}
-	host, _, err := net.SplitHostPort(adminAddr)
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, nil //nolint:nilerr // Addr already reported the malformed address; nothing can be served with it.
 	}
@@ -308,18 +312,20 @@ func readAdminSources(env *config.Env, adminAddr string) ([]netip.Prefix, error)
 	if err == nil && ip.IsLoopback() {
 		return []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.MustParsePrefix("::1/128")}, nil
 	}
-	return nil, fmt.Errorf("%s: required when %s is not loopback", adminSourcesVar, adminAddrVar)
+	return nil, fmt.Errorf("%s: required when %s is not loopback", variable, addrVar)
 }
 
-// readNodeTLS prepares the core's mutual-TLS listener when one is configured. The certificates live in the key ring's
-// directory unless AXIOM_NODE_TLS_DIR names another, so one protected volume carries everything the node must keep
-// secret (docs/security.md「密钥管理」). A certificate directory without the listener it belongs to is a contradiction.
+// readNodeTLS prepares the core's mutual-TLS listeners when one is configured: the node listener, and the operations
+// listener, which accepts only certificates of the ops purpose. The certificates live in the key ring's directory unless
+// AXIOM_NODE_TLS_DIR names another, so one protected volume carries everything the node must keep secret
+// (docs/security.md「密钥管理」). A certificate directory without a listener it belongs to is a contradiction.
 func readNodeTLS(env *config.Env, s *nodeSettings) error {
 	s.nodeAddr = env.Addr(nodeAddrVar, "")
+	s.operationsAddr = env.Addr(operationsAddrVar, "")
 	explicit := env.Set(nodeTLSDirVar)
-	if s.nodeAddr == "" {
+	if s.nodeAddr == "" && s.operationsAddr == "" {
 		if explicit {
-			return fmt.Errorf("%s: set without %s", nodeTLSDirVar, nodeAddrVar)
+			return fmt.Errorf("%s: set without %s or %s", nodeTLSDirVar, nodeAddrVar, operationsAddrVar)
 		}
 		return nil
 	}
@@ -331,8 +337,27 @@ func readNodeTLS(env *config.Env, s *nodeSettings) error {
 	if err != nil {
 		return err
 	}
-	s.nodeTLS = server
+	if s.nodeAddr != "" {
+		s.nodeTLS = server
+	}
+	if s.operationsAddr != "" {
+		s.operationsTLS = nodetls.RequirePurpose(server, nodetls.OpsPurpose)
+	}
 	return nil
+}
+
+// readOperationsSources is where the operations listener's connections may come from, read after readNodeTLS has read
+// its address. Sources without the listener are a contradiction, as certificates without one are.
+func readOperationsSources(env *config.Env, s *nodeSettings) error {
+	if s.operationsAddr == "" {
+		if env.Set(operationsSourcesVar) {
+			return fmt.Errorf("%s: set without %s", operationsSourcesVar, operationsAddrVar)
+		}
+		return nil
+	}
+	var err error
+	s.operationsSources, err = readSources(env, operationsSourcesVar, operationsAddrVar, s.operationsAddr)
+	return err
 }
 
 // parseCoreURL checks the one address an ingress forwards to. Node-to-node traffic is always mutual TLS, so the scheme is
