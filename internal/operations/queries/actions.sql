@@ -8,6 +8,9 @@ RETURNING id;
 -- name: OperationByKey :one
 SELECT * FROM operations.operations WHERE credential_id = @credential_id AND idempotency_key = @idempotency_key;
 
+-- name: OperationsByKey :many
+SELECT * FROM operations.operations WHERE credential_id = @credential_id AND idempotency_key = @idempotency_key;
+
 -- name: OperationByID :many
 SELECT * FROM operations.operations WHERE id = @id;
 

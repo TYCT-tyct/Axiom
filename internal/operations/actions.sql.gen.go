@@ -511,6 +511,52 @@ func (q *Queries) OperationsByID(ctx context.Context, db DBTX, ids []uuid.UUID) 
 	return items, nil
 }
 
+const operationsByKey = `-- name: OperationsByKey :many
+SELECT id, credential_id, idempotency_key, request_hash, tool, target_kind, target_id, params, risk, state, reason, run_id, result, error_code, created_at, updated_at FROM operations.operations WHERE credential_id = $1 AND idempotency_key = $2
+`
+
+type OperationsByKeyParams struct {
+	CredentialID   uuid.UUID
+	IdempotencyKey uuid.UUID
+}
+
+func (q *Queries) OperationsByKey(ctx context.Context, db DBTX, arg OperationsByKeyParams) ([]OperationsOperation, error) {
+	rows, err := db.Query(ctx, operationsByKey, arg.CredentialID, arg.IdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OperationsOperation
+	for rows.Next() {
+		var i OperationsOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.CredentialID,
+			&i.IdempotencyKey,
+			&i.RequestHash,
+			&i.Tool,
+			&i.TargetKind,
+			&i.TargetID,
+			&i.Params,
+			&i.Risk,
+			&i.State,
+			&i.Reason,
+			&i.RunID,
+			&i.Result,
+			&i.ErrorCode,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const operationsOf = `-- name: OperationsOf :many
 SELECT id, credential_id, idempotency_key, request_hash, tool, target_kind, target_id, params, risk, state, reason, run_id, result, error_code, created_at, updated_at FROM operations.operations
 WHERE credential_id = $1 AND ($2::text IS NULL OR state = $2::text)

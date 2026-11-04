@@ -211,7 +211,10 @@ func Settle(ctx context.Context, tx pg.Tx, op Operation, result map[string]any, 
 	if err := setState(ctx, tx, &op, state, body, refused); err != nil {
 		return Operation{}, err
 	}
-	return op, record(ctx, tx, audit.OperationsAgent(op.Credential), action, op, op.Reason, nil)
+	if err := record(ctx, tx, audit.OperationsAgent(op.Credential), action, op, op.Reason, nil); err != nil || refused == "" {
+		return op, err
+	}
+	return op, release(ctx, tx, audit.OperationsAgent(op.Credential), op)
 }
 
 // Decide is a person's decision on approval id: approve leaves its operation approved for the caller to run in tx and
@@ -348,6 +351,11 @@ func finish(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, op 
 	}
 	if err := record(ctx, tx, actor, action, *op, reason, map[string]any{"approval_id": op.Approval.ID.String()}); err != nil {
 		return err
+	}
+	if state != StateApproved {
+		if err := release(ctx, tx, actor, *op); err != nil {
+			return err
+		}
 	}
 	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: approvalSignal, Key: op.Approval.ID.String(), Severity: "info", Resolved: true})
 }

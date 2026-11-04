@@ -15,7 +15,7 @@ import (
 // expiryBatch bounds one transaction of the sweep, so a backlog is worked off in short transactions.
 const expiryBatch = 100
 
-// expiryArgs is one run of the sweep of approvals nobody decided in time.
+// expiryArgs is one run of the sweep of approvals nobody decided in time and of reservations nobody confirmed.
 type expiryArgs struct{}
 
 // Kind implements river.JobArgs.
@@ -31,7 +31,8 @@ func (expiryArgs) InsertOpts() river.InsertOpts {
 }
 
 // RegisterExpiry adds the sweep to queue, before it starts: every minute, on whichever node leads the queue, the
-// approvals past their expiry are expired with their operations, recorded and their signals resolved. An approval is
+// approvals past their expiry are expired with their operations, recorded and their signals resolved, and the money
+// reservations past the end of their windows are released. An approval is
 // refused a decision from its expiry on whether or not the sweep has reached it, so the sweep's delay only defers the
 // record. scope is the platform's, which only cmd/ builds.
 func RegisterExpiry(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog.Logger) error {
@@ -39,15 +40,18 @@ func RegisterExpiry(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog.Log
 	// from being inserted.
 	work := func(ctx context.Context, _ *river.Job[expiryArgs]) error {
 		for {
-			var n int
+			var approvals, reservations int
 			if err := db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
-				n, err = ExpireDue(ctx, tx, expiryBatch)
+				if approvals, err = ExpireDue(ctx, tx, expiryBatch); err != nil {
+					return err
+				}
+				reservations, err = ExpireReservations(ctx, tx, expiryBatch)
 				return err
 			}); err != nil {
-				logger.Error("operations: the expiry of approvals stopped", "err", err)
+				logger.Error("operations: the expiry of approvals and reservations stopped", "err", err)
 				return nil
 			}
-			if n < expiryBatch {
+			if max(approvals, reservations) < expiryBatch {
 				return nil
 			}
 		}
