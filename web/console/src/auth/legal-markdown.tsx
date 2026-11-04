@@ -5,7 +5,7 @@ type LegalBlock =
   | { kind: "paragraph"; text: string }
   | { kind: "list"; items: string[] };
 
-export function legalBlocks(body: string): LegalBlock[] {
+function legalBlocks(body: string): LegalBlock[] {
   const blocks: LegalBlock[] = [];
   let paragraph: string[] = [];
   let list: string[] = [];

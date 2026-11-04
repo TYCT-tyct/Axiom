@@ -20,7 +20,7 @@ export type LegalConsentState = {
 
 // An old node predates locale-aware documents and omits the field. Those rows are the Chinese text (the migration's
 // default), so a new page treats the absence as zh instead of selecting no document and hiding the terms.
-export function documentLocale(document: Schemas["LegalDocument"]): Schemas["LegalDocumentLocale"] {
+function documentLocale(document: Schemas["LegalDocument"]): Schemas["LegalDocumentLocale"] {
   return document.locale ?? "zh";
 }
 
