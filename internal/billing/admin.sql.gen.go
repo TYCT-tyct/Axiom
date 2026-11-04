@@ -175,6 +175,66 @@ func (q *Queries) PlatformCash(ctx context.Context, db DBTX, arg PlatformCashPar
 	return items, nil
 }
 
+const platformPaid = `-- name: PlatformPaid :one
+WITH paid AS (
+    SELECT account_id, created_at, amount
+    FROM billing.credit_batches
+    WHERE site_id = $2 AND source = 'paid'
+        AND created_at >= $3 AND created_at < $4
+), accounts AS (
+    SELECT account_id,
+        bool_or(created_at >= $5 AND created_at < $6) AS in_cohort,
+        bool_or(created_at >= $7 AND created_at < $4) AS retained
+    FROM paid
+    GROUP BY account_id
+)
+SELECT
+    (SELECT count(DISTINCT account_id)::bigint FROM paid WHERE created_at >= $1) AS paid_users,
+    (SELECT coalesce(sum(amount::numeric), 0)::text FROM paid WHERE created_at >= $1) AS monthly_revenue,
+    (SELECT count(*)::bigint FROM accounts WHERE in_cohort) AS cohort,
+    (SELECT count(*)::bigint FROM accounts WHERE in_cohort AND retained) AS retained
+`
+
+type PlatformPaidParams struct {
+	Since       time.Time
+	SiteID      uuid.UUID
+	ScanSince   time.Time
+	Until       time.Time
+	CohortStart time.Time
+	CohortEnd   time.Time
+	MonthStart  time.Time
+}
+
+type PlatformPaidRow struct {
+	PaidUsers      int64
+	MonthlyRevenue string
+	Cohort         int64
+	Retained       int64
+}
+
+// The dashboard's commercial figures: distinct accounts with a paid top-up in the window, the credit those top-ups
+// granted in the site's accounting currency, and the paying-account retention of the UTC month the window ends in.
+// A paid batch is one row, so the time range and the partial index keep this a range read, not a scan of every credit.
+func (q *Queries) PlatformPaid(ctx context.Context, db DBTX, arg PlatformPaidParams) (PlatformPaidRow, error) {
+	row := db.QueryRow(ctx, platformPaid,
+		arg.Since,
+		arg.SiteID,
+		arg.ScanSince,
+		arg.Until,
+		arg.CohortStart,
+		arg.CohortEnd,
+		arg.MonthStart,
+	)
+	var i PlatformPaidRow
+	err := row.Scan(
+		&i.PaidUsers,
+		&i.MonthlyRevenue,
+		&i.Cohort,
+		&i.Retained,
+	)
+	return i, err
+}
+
 const readCreditBatch = `-- name: ReadCreditBatch :many
 
 SELECT id, site_id, account_id, source, amount, expires_at, created_at, coalesce(currency, '')::text AS currency, paid, fee,

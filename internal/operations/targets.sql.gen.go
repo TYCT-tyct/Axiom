@@ -12,6 +12,22 @@ import (
 	"uuid"
 )
 
+const deleteCommercialTarget = `-- name: DeleteCommercialTarget :exec
+DELETE FROM operations.commercial_targets
+WHERE site_id = $1 AND metric = $2 AND month = $3
+`
+
+type DeleteCommercialTargetParams struct {
+	SiteID uuid.UUID
+	Metric string
+	Month  time.Time
+}
+
+func (q *Queries) DeleteCommercialTarget(ctx context.Context, db DBTX, arg DeleteCommercialTargetParams) error {
+	_, err := db.Exec(ctx, deleteCommercialTarget, arg.SiteID, arg.Metric, arg.Month)
+	return err
+}
+
 const deleteTarget = `-- name: DeleteTarget :exec
 DELETE FROM operations.targets
 WHERE site_id = $1 AND metric = $2 AND month = $3
@@ -37,6 +53,55 @@ SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
 func (q *Queries) LockTargets(ctx context.Context, db DBTX, key string) error {
 	_, err := db.Exec(ctx, lockTargets, key)
 	return err
+}
+
+const readCommercialTargets = `-- name: ReadCommercialTargets :many
+SELECT month, metric, amount::text AS amount, currency
+FROM operations.commercial_targets
+WHERE site_id = $1
+  AND month >= $2
+  AND month <= $3
+ORDER BY month, metric
+`
+
+type ReadCommercialTargetsParams struct {
+	SiteID    uuid.UUID
+	FromMonth time.Time
+	ToMonth   time.Time
+}
+
+type ReadCommercialTargetsRow struct {
+	Month    time.Time
+	Metric   string
+	Amount   string
+	Currency *string
+}
+
+// The site's commercial targets for the months in [from_month, to_month]. The table is separate so a node from before
+// these metrics keeps reading operations.targets without meeting one it does not know.
+func (q *Queries) ReadCommercialTargets(ctx context.Context, db DBTX, arg ReadCommercialTargetsParams) ([]ReadCommercialTargetsRow, error) {
+	rows, err := db.Query(ctx, readCommercialTargets, arg.SiteID, arg.FromMonth, arg.ToMonth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadCommercialTargetsRow
+	for rows.Next() {
+		var i ReadCommercialTargetsRow
+		if err := rows.Scan(
+			&i.Month,
+			&i.Metric,
+			&i.Amount,
+			&i.Currency,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const readTargetRevision = `-- name: ReadTargetRevision :one
@@ -104,6 +169,32 @@ func (q *Queries) ReadTargets(ctx context.Context, db DBTX, arg ReadTargetsParam
 		return nil, err
 	}
 	return items, nil
+}
+
+const upsertCommercialTarget = `-- name: UpsertCommercialTarget :exec
+INSERT INTO operations.commercial_targets (site_id, metric, month, amount, currency)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (site_id, metric, month) DO UPDATE
+SET amount = EXCLUDED.amount, currency = EXCLUDED.currency, updated_at = now()
+`
+
+type UpsertCommercialTargetParams struct {
+	SiteID   uuid.UUID
+	Metric   string
+	Month    time.Time
+	Amount   string
+	Currency *string
+}
+
+func (q *Queries) UpsertCommercialTarget(ctx context.Context, db DBTX, arg UpsertCommercialTargetParams) error {
+	_, err := db.Exec(ctx, upsertCommercialTarget,
+		arg.SiteID,
+		arg.Metric,
+		arg.Month,
+		arg.Amount,
+		arg.Currency,
+	)
+	return err
 }
 
 const upsertTarget = `-- name: UpsertTarget :exec

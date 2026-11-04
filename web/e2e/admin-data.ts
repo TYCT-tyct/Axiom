@@ -13,6 +13,9 @@ export { uuid } from "./admin-fixtures.ts";
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
   targets: Map<string, Schemas["OperationsTargets"]>;
+  paidUsers: number;
+  monthlyRevenue: Schemas["Money"];
+  retention: Schemas["OperationsRetention"];
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
   logo: Schemas["SiteLogoView"];
@@ -384,6 +387,14 @@ export function usualState(): AdminState {
     ...authState(allPermissions),
     siteId,
     targets: usualTargets(),
+    paidUsers: 3,
+    monthlyRevenue: usd("4200"),
+    retention: {
+      month: new Date().toISOString().slice(0, 7),
+      cohort: 8,
+      retained: 6,
+      rate: 7500,
+    },
     settings: {
       settings: { console_idle_timeout_seconds: 604800, new_key_daily_limit: usd("20") },
       defaults: {
@@ -421,6 +432,9 @@ export function emptyState(): AdminState {
   return {
     ...usualState(),
     targets: new Map(),
+    paidUsers: 0,
+    monthlyRevenue: nano("0"),
+    retention: { month: new Date().toISOString().slice(0, 7), cohort: 0, retained: 0 },
     users: [],
     calls: [],
     traces: new Map(),
@@ -441,6 +455,14 @@ export function emptyState(): AdminState {
 // 182-character model slugs, the biggest amounts, and a lot of rows.
 export function worstState(): AdminState {
   const state = usualState();
+  state.paidUsers = 1_000_000;
+  state.monthlyRevenue = nano("9223372036854775807");
+  state.retention = {
+    month: new Date().toISOString().slice(0, 7),
+    cohort: 100_000,
+    retained: 99_999,
+    rate: 10_000,
+  };
   worstUsers(state);
   worstPayments(state);
   worstCalls(state);

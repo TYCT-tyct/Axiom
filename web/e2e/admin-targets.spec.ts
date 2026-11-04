@@ -16,18 +16,31 @@ test.describe("business targets", () => {
     const state = await open(page, "");
     await expect(page.getByText(zhText("overview.targets.description"))).toBeVisible();
     await expect(page.getByText(words("overview.targets.target")).first()).toBeVisible();
+    for (const label of ["paidUsers", "monthlyRevenue", "grossMargin", "retention"] as const) {
+      await expect(page.getByText(words(`overview.${label}`)).first()).toBeVisible();
+    }
 
     await press(page, "overview.targets.edit");
     const editor = dialog(page);
     await expect(editor.getByLabel(words("overview.targets.calls"))).toHaveValue("45");
+    await expect(editor.getByLabel(words("overview.targets.paidUsers"))).toHaveValue("5");
+    await expect(editor.getByLabel(words("overview.targets.monthlyRevenue"))).toHaveValue("5000");
+    await expect(editor.getByLabel(words("overview.targets.grossMargin"))).toHaveValue("45");
+    await expect(editor.getByLabel(words("overview.targets.retention"))).toHaveValue("70");
     await editor.getByLabel(words("overview.targets.calls")).fill("50");
     await editor.getByLabel(words("overview.targets.errors")).fill("5");
+    await editor.getByLabel(words("overview.targets.paidUsers")).fill("6");
+    await editor.getByLabel(words("overview.targets.grossMargin")).fill("40.5");
+    await editor.getByLabel(words("overview.targets.retention")).fill("75");
     await send(page);
     await expect(editor.getByText(zhText("overview.targets.saved"))).toBeVisible();
 
     const month = new Date().toISOString().slice(0, 7);
     expect(state.targets.get(month)?.calls).toBe(50);
     expect(state.targets.get(month)?.errors).toBe(5);
+    expect(state.targets.get(month)?.paid_users).toBe(6);
+    expect(state.targets.get(month)?.gross_margin).toBe(4050);
+    expect(state.targets.get(month)?.retention).toBe(7500);
 
     await close(page);
     await expect(page.getByText(words("overview.targets.ahead")).first()).toBeVisible();

@@ -22,7 +22,7 @@ import { nav } from "../nav";
 import { callsDrill, type OverviewRange, ordersDrill, overviewRanges, overviewWindow, type Window } from "../overview";
 import { mainCell, PageBody } from "../parts";
 import { overviewQuery } from "../queries";
-import { targetsEmpty } from "../targets";
+import { formatTargetRate, targetsEmpty } from "../targets";
 import { TargetNote, TargetsAction } from "../targets-view";
 
 // The figures are links: each opens the call or order list narrowed to the same window, so a number is never a dead
@@ -34,7 +34,8 @@ const figure =
 const count = `${figure} lg:col-span-3`;
 const amount = `${figure} lg:col-span-2`;
 
-// The admin's home is the operations dashboard: the site's calls, what they earned and cost, the cash that moved, and
+// The admin's home is the operations dashboard: the site's calls, what they earned and cost, the cash that moved, the
+// paid top-ups that made accounts paying customers, the margin between call revenue and supplier cost, retention, and
 // the accounts and models behind them (docs/domains/operations.md「运营看板」). A session without sites.manage sees the
 // first page it may use instead, as before.
 export default function Home() {
@@ -156,9 +157,10 @@ type FigureProps = {
 };
 
 function Figures({ data, window, anchor }: { data: Overview; window: Window; anchor: Date }) {
+  const { t } = useTranslation();
   const targets = data.targets;
   const targetNotes = targets !== undefined && !targetsEmpty(targets);
-  const currency = data.revenue?.currency ?? data.cost?.currency ?? "";
+  const currency = data.revenue?.currency ?? data.cost?.currency ?? data.monthly_revenue?.currency ?? "";
   const site = data.site_id;
   return (
     <>
@@ -170,6 +172,13 @@ function Figures({ data, window, anchor }: { data: Overview; window: Window; anc
         <RevenueFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
         <CostFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
         <CashFigure data={data} window={window} showTarget={targetNotes} />
+      </div>
+      <h2 className="text-ui font-medium text-t2">{t("overview.business")}</h2>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <PaidUsersFigure data={data} targets={targets} showTarget={targetNotes} />
+        <MonthlyRevenueFigure data={data} targets={targets} showTarget={targetNotes} />
+        <GrossMarginFigure data={data} targets={targets} showTarget={targetNotes} />
+        <RetentionFigure data={data} targets={targets} showTarget={targetNotes} />
       </div>
       <div className="grid gap-4 xl:grid-cols-2">
         <TopAccounts data={data} window={window} site={site} />
@@ -269,6 +278,82 @@ function CashFigure({ data, window, showTarget }: { data: Overview; window: Wind
         )}
       />
     </Link>
+  );
+}
+
+function PaidUsersFigure({ data, targets, showTarget }: Omit<FigureProps, "window" | "site">) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <div className={figure}>
+      <Stat
+        label={t("overview.paidUsers")}
+        value={data.paid_users === undefined ? t("overview.unavailable") : format.number(data.paid_users)}
+        note={withTarget(
+          showTarget,
+          <TargetNote metric="paid_users" comparison={targets?.paid_users} />,
+          t("overview.paidUsersNote"),
+        )}
+      />
+    </div>
+  );
+}
+
+function MonthlyRevenueFigure({ data, targets, showTarget }: Omit<FigureProps, "window" | "site">) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <div className={figure}>
+      <Stat
+        label={t("overview.monthlyRevenue")}
+        value={data.monthly_revenue ? format.money(data.monthly_revenue) : t("overview.unavailable")}
+        note={withTarget(
+          showTarget,
+          <TargetNote metric="monthly_revenue" comparison={targets?.monthly_revenue} />,
+          t("overview.monthlyRevenueNote"),
+        )}
+      />
+    </div>
+  );
+}
+
+function GrossMarginFigure({ data, targets, showTarget }: Omit<FigureProps, "window" | "site">) {
+  const { t } = useTranslation();
+  return (
+    <div className={figure}>
+      <Stat
+        label={t("overview.grossMargin")}
+        value={data.gross_margin === undefined ? t("overview.unavailable") : formatTargetRate(data.gross_margin)}
+        note={withTarget(
+          showTarget,
+          <TargetNote metric="gross_margin" comparison={targets?.gross_margin} />,
+          t("overview.grossMarginNote"),
+        )}
+      />
+    </div>
+  );
+}
+
+function RetentionFigure({ data, targets, showTarget }: Omit<FigureProps, "window" | "site">) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const retention = data.retention;
+  const note = retention
+    ? retention.cohort === 0
+      ? t("overview.retentionEmpty")
+      : t("overview.retentionNote", {
+          retained: format.number(retention.retained),
+          cohort: format.number(retention.cohort),
+        })
+    : t("overview.retentionUnavailable");
+  return (
+    <div className={figure}>
+      <Stat
+        label={t("overview.retention")}
+        value={retention?.rate === undefined ? t("overview.unavailable") : formatTargetRate(retention.rate)}
+        note={withTarget(showTarget, <TargetNote metric="retention" comparison={targets?.retention} />, note)}
+      />
+    </div>
   );
 }
 

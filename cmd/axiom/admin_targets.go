@@ -31,8 +31,10 @@ func (a adminAPI) GetOperationsTargets(ctx context.Context, request adminapi.Get
 	return adminapi.GetOperationsTargets200JSONResponse(targetsBody(call.site.ID.TypeID(), month, targets)), nil
 }
 
-// UpdateOperationsTargets replaces all four targets of a month: a target left out is cleared. The write, the read of
-// the values it replaced and the audit entry commit together, under the site-and-month lock the module takes.
+// UpdateOperationsTargets replaces a month's targets: a target left out is cleared. A full write replaces all eight;
+// a write from a page before the commercial metrics replaces only the first-release four and keeps the commercial rows
+// it cannot see. The write, the read of the values it replaced and the audit entry commit together, under the
+// site-and-month lock the module takes.
 func (a adminAPI) UpdateOperationsTargets(ctx context.Context, request adminapi.UpdateOperationsTargetsRequestObject) (adminapi.UpdateOperationsTargetsResponseObject, error) {
 	month, err := targetMonthIn(request.Month)
 	if err != nil {
@@ -44,9 +46,11 @@ func (a adminAPI) UpdateOperationsTargets(ctx context.Context, request adminapi.
 	if err != nil {
 		return nil, err
 	}
-	view, replayed, err := idempotently(ctx, a.db, "updateOperationsTargets", request.Params.IdempotencyKey, []any{request.Month, request.Body},
+	full := request.Params.XAxiomTargetMetrics != nil && *request.Params.XAxiomTargetMetrics == "all"
+	view, replayed, err := idempotently(ctx, a.db, "updateOperationsTargets", request.Params.IdempotencyKey, []any{request.Month, request.Body, full},
 		func(tx pg.Tx) (adminapi.OperationsTargets, error) {
-			if err := operations.Set(ctx, tx, actor(ctx), site, set, request.Body.Rev, request.Body.Reason); err != nil {
+			opts := operations.SetOptions{KeepCommercial: !full}
+			if err := operations.Set(ctx, tx, actor(ctx), site, set, request.Body.Rev, request.Body.Reason, opts); err != nil {
 				return adminapi.OperationsTargets{}, err
 			}
 			stored, err := operations.Read(ctx, tx, site, month)
@@ -75,11 +79,24 @@ func targetMonthIn(month string) (time.Time, error) {
 // a planning target is not a ledger entry and the table deliberately stores a wider amount. Counts are the contract's
 // own bounds and need no second check.
 func targetsIn(body *adminapi.OperationsTargetsUpdate, currency platform.Currency, month time.Time) (operations.Targets, error) {
-	targets := operations.Targets{Month: month, Calls: body.Calls, Errors: body.Errors}
+	targets := operations.Targets{Month: month, Calls: body.Calls, Errors: body.Errors, PaidUsers: body.PaidUsers}
 	var p problems
 	targets.Revenue = targetMoney(body.Revenue, currency, "/revenue", &p)
 	targets.Cost = targetMoney(body.Cost, currency, "/cost", &p)
+	targets.MonthlyRevenue = targetMoney(body.MonthlyRevenue, currency, "/monthly_revenue", &p)
+	targets.GrossMargin = rateTarget(body.GrossMargin)
+	targets.Retention = rateTarget(body.Retention)
 	return targets, p.err()
+}
+
+// rateTarget keeps a basis-point target as the module's wider integer; the contract's bounds are checked by the
+// request validation and again by the table, so this only changes the width.
+func rateTarget(rate *int) *int64 {
+	if rate == nil {
+		return nil
+	}
+	value := int64(*rate)
+	return &value
 }
 
 // targetMoney keeps a money target as decimal text. The endpoint's Money type allows 39 characters so reports can
@@ -109,9 +126,35 @@ func targetMoney(money *adminapi.Money, currency platform.Currency, pointer stri
 func targetsBody(siteID string, month time.Time, targets operations.Targets) adminapi.OperationsTargets {
 	return adminapi.OperationsTargets{
 		SiteId: siteID, Month: month.Format("2006-01"), Rev: targets.Revision,
-		Calls: targets.Calls, Errors: targets.Errors,
-		Revenue: moneyBody(targets.Revenue), Cost: moneyBody(targets.Cost),
+		Metrics:        metricNames(),
+		Calls:          targets.Calls,
+		Errors:         targets.Errors,
+		Revenue:        moneyBody(targets.Revenue),
+		Cost:           moneyBody(targets.Cost),
+		PaidUsers:      targets.PaidUsers,
+		MonthlyRevenue: moneyBody(targets.MonthlyRevenue),
+		GrossMargin:    rateBody(targets.GrossMargin),
+		Retention:      rateBody(targets.Retention),
 	}
+}
+
+// metricNames is the contract's list of the metrics this node stores, in the module's fixed order.
+func metricNames() *[]adminapi.OperationsTargetMetric {
+	metrics := operations.Metrics()
+	names := make([]adminapi.OperationsTargetMetric, len(metrics))
+	for i, metric := range metrics {
+		names[i] = adminapi.OperationsTargetMetric(metric)
+	}
+	return &names
+}
+
+// rateBody is a basis-point target in the contract's integer.
+func rateBody(rate *int64) *int {
+	if rate == nil {
+		return nil
+	}
+	value := int(*rate)
+	return &value
 }
 
 func moneyBody(money *operations.Money) *adminapi.Money {
@@ -121,32 +164,64 @@ func moneyBody(money *operations.Money) *adminapi.Money {
 	return &adminapi.Money{Amount: money.Amount, Currency: money.Currency.String()}
 }
 
-// targetComparison prorates the month targets to the dashboard's window and states each gap as actual minus target.
-// The count gaps wait for a complete call log; the cost gap also waits for a complete cost total, because calls whose
-// supplier cost is unknown are left out of that total and a gap would claim more than the data knows. A money gap
-// waits for the target and the actual to be in the same currency, which the module already enforces by leaving out a
-// target set in another one.
-func targetComparison(expected operations.Expected, calls, errors int64, revenue, cost string, currency platform.Currency, callsComplete, costComplete bool) *adminapi.OperationsTargetComparison {
-	comparison := &adminapi.OperationsTargetComparison{}
-	if expected.Calls != nil {
-		target := adminapi.OperationsCountTarget{Target: *expected.Calls}
-		if callsComplete {
-			gap := calls - *expected.Calls
-			target.Gap = &gap
-		}
-		comparison.Calls = &target
+// targetActuals is the dashboard's side of the comparison. Rates are basis points; a nil rate is unavailable, so its
+// target keeps its value and loses its gap.
+type targetActuals struct {
+	Calls          int64
+	Errors         int64
+	Revenue        string
+	Cost           string
+	PaidUsers      int64
+	MonthlyRevenue string
+	GrossMargin    *int64
+	Retention      *int64
+	CallsComplete  bool
+	CostComplete   bool
+}
+
+// targetComparison prorates the month's count and money targets to the dashboard's window and states each gap as
+// actual minus target. The count gaps wait for a complete call log; the cost gap also waits for a complete cost total,
+// because calls whose supplier cost is unknown are left out of that total and a gap would claim more than the data
+// knows. Paid users and monthly revenue come from the credit batches, not the call log, so their gaps are always
+// stated. Gross margin and retention are rates: the month's target is compared with the window's actual rate when that
+// is available, without proration.
+func targetComparison(expected operations.Expected, actual targetActuals, currency platform.Currency) *adminapi.OperationsTargetComparison {
+	return &adminapi.OperationsTargetComparison{
+		Calls:          countComparison(expected.Calls, actual.Calls, actual.CallsComplete),
+		Errors:         countComparison(expected.Errors, actual.Errors, actual.CallsComplete),
+		Revenue:        moneyComparison(expected.Revenue, actual.Revenue, currency, true),
+		Cost:           moneyComparison(expected.Cost, actual.Cost, currency, actual.CostComplete),
+		PaidUsers:      countComparison(expected.PaidUsers, actual.PaidUsers, true),
+		MonthlyRevenue: moneyComparison(expected.MonthlyRevenue, actual.MonthlyRevenue, currency, true),
+		GrossMargin:    rateComparison(expected.GrossMargin, actual.GrossMargin),
+		Retention:      rateComparison(expected.Retention, actual.Retention),
 	}
-	if expected.Errors != nil {
-		target := adminapi.OperationsCountTarget{Target: *expected.Errors}
-		if callsComplete {
-			gap := errors - *expected.Errors
-			target.Gap = &gap
-		}
-		comparison.Errors = &target
+}
+
+// countComparison states one count target and, when the actual count is complete, its gap.
+func countComparison(expected *int64, actual int64, complete bool) *adminapi.OperationsCountTarget {
+	if expected == nil {
+		return nil
 	}
-	comparison.Revenue = moneyComparison(expected.Revenue, revenue, currency, true)
-	comparison.Cost = moneyComparison(expected.Cost, cost, currency, costComplete)
-	return comparison
+	target := adminapi.OperationsCountTarget{Target: *expected}
+	if complete {
+		gap := actual - *expected
+		target.Gap = &gap
+	}
+	return &target
+}
+
+// rateComparison states one basis-point rate target and, when the actual rate is available, its gap.
+func rateComparison(expected, actual *int64) *adminapi.OperationsRateTarget {
+	if expected == nil {
+		return nil
+	}
+	target := adminapi.OperationsRateTarget{Target: int(*expected)}
+	if actual != nil {
+		gap := int(*actual - *expected)
+		target.Gap = &gap
+	}
+	return &target
 }
 
 // moneyComparison states one money target and, when the actual total is complete and in the same currency, its gap.

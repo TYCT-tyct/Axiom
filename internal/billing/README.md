@@ -345,11 +345,12 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 
 ## 运营看板
 
-`ReadPlatformReport` 在调用方的事务里读一个站点、一个 `[since, until)` 窗口的两组数，供管理后台的运营看板使用；口径写在[运营](../../docs/domains/operations.md#运营看板)。
+`ReadPlatformReport` 在调用方的事务里读一个站点、一个 `[since, until)` 窗口的三组数，供管理后台的运营看板使用；口径写在[运营](../../docs/domains/operations.md#运营看板)。
 
 - **收入与成本**：`PlatformCallMoney` 汇总 `billing.reservations` 里 `state` 为 `settled` 或 `cleanup_settled` 的行。`sum(charged)` 是收入（`charged` 已经是扣掉平台承担后的实收），`sum(charged - profit) FILTER (WHERE profit IS NOT NULL)` 是成本，`count(*) FILTER (WHERE profit IS NULL)` 是成本未知的调用数。`profit = charged - 成本`（见「结算与账本」），所以不必另存成本列；未知成本不按 0 计入。汇总在 SQL 里转成 `numeric` 并以十进制文本返回，窗口合计可以超过 `int64`；单笔写入仍是 `bigint`。时间轴是调用的 `created_at`：网关在接收请求时取一次时间，同时用于预留和调用日志的 `at`，所以准入跨过窗口边界也不会让调用和它的钱分到两边（见[运营](../../docs/domains/operations.md#运营看板)）。更正在同一行，仍落在这次调用的窗口里；升级前的预留保持当时的准入时间，不追改。
 - **现金**：`PlatformCash` 只读 `kind` 为 `credit`、`refund`、`chargeback`、`chargeback_reverse` 的交易的 `cash` 分录，按 `entries.currency` 分组；`NULL` 表示站点的记账货币。`LATERAL ... OFFSET 0` 让每条交易各探查一次条目，避免规划器把子查询 hash 掉后扫描全量 `entries`。`ListCashMovements` 用同一时间轴和索引列出流水，带批次的订单号或线下渠道，供看板下钻；较早订单的退款仍在退款发生的窗口，拒付与冲正也按各自的账本时间出现。`TestPlatformReportPlanReadsTheWindow` 用 12 万预留、5 万充值交易的夹具要求两个计划都不做 Seq Scan，分别走迁移 `00032` 的 `reservations_by_site_created` 与 `transactions_by_site_kind_created`；`TestListCashMovements` 覆盖跨订单退款、线下充值、拒付和冲正。
-- **合同**：`GET /api/admin/v1/reports/overview` 与 `GET /api/admin/v1/payments/cash`。金额都是十亿分之一货币单位，十进制文本；现金按支付币种分列，账本没有现金时给记账货币的 0，列表至少一项。
+- **付费用户、月流水与留存**：`PlatformPaid` 只读 `billing.credit_batches` 里 `source = 'paid'` 的批次。`paid_users` 是指定窗口内不同 `account_id` 的数，`monthly_revenue` 是同一批批次的 `amount` 之和（`amount` 已是站点记账货币的额度）；充值批次的时间轴是 `created_at`，不是调用时间。留存按窗口结束所在 UTC 自然月：`scan_since` 取 `since` 与上月第一天的较早者，`cohort_start` 是上月第一天，`cohort_end` 和 `month_start` 是当月第一天；`accounts` 按账户聚合出“上月付过费”和“当月至 `until` 又付过费”，分别得到 `cohort` 与 `retained`。`monthly_revenue` 用 `sum(amount::numeric)::text`，窗口合计可以超过 `int64`。迁移 `00041` 建部分覆盖索引 `credit_batches_by_site_paid_created (site_id, created_at) INCLUDE (account_id, amount) WHERE source = 'paid'`；`TestPlatformReportReadsPaidUsersAndRetention` 覆盖去重、窗口边界和同期群，`TestPlatformPaidPlanReadsTheWindow` 要求查询走这个索引、不做 Seq Scan。
+- **合同**：`GET /api/admin/v1/reports/overview` 与 `GET /api/admin/v1/payments/cash`。金额都是十亿分之一货币单位，十进制文本；现金按支付币种分列，账本没有现金时给记账货币的 0，列表至少一项；`retention` 带月份、同期群人数、留存人数和可选的基点比率。
 
 ## 测试
 

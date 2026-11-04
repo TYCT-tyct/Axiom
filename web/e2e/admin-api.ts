@@ -115,11 +115,22 @@ const registration: Schemas["RegistrationPolicy"] = {
   domain_deny: ["mailinator.com"],
 };
 
+const targetMetrics: Schemas["OperationsTargetMetric"][] = [
+  "calls",
+  "errors",
+  "revenue",
+  "cost",
+  "paid_users",
+  "monthly_revenue",
+  "gross_margin",
+  "retention",
+];
+
 // The targets of a month, and the editor's write of them. The mock keeps one set per month and does not prorate it;
 // showing the page's target and empty states is enough.
 function getTargets({ params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "get">) {
   const month = params.month ?? "";
-  return ok(state.targets.get(month) ?? { site_id: state.siteId, month, rev: 0 });
+  return ok(state.targets.get(month) ?? { site_id: state.siteId, month, rev: 0, metrics: targetMetrics });
 }
 
 function putTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "put">) {
@@ -132,10 +143,15 @@ function putTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/targets/
     site_id: state.siteId,
     month,
     rev: (current?.rev ?? 0) + 1,
+    metrics: targetMetrics,
     calls: body.calls,
     errors: body.errors,
     revenue: body.revenue,
     cost: body.cost,
+    paid_users: body.paid_users,
+    monthly_revenue: body.monthly_revenue,
+    gross_margin: body.gross_margin,
+    retention: body.retention,
   };
   state.targets.set(month, stored);
   return ok(stored);
@@ -149,6 +165,10 @@ function targetComparison(
   errors: number,
   revenue: bigint,
   cost: bigint,
+  paidUsers: number,
+  monthlyRevenue: bigint,
+  grossMargin: number | undefined,
+  retention: Schemas["OperationsRetention"],
 ) {
   if (!stored) {
     return {};
@@ -169,6 +189,36 @@ function targetComparison(
           cost: {
             target: stored.cost,
             gap: { amount: String(cost - BigInt(stored.cost.amount)), currency: stored.cost.currency },
+          },
+        }
+      : {}),
+    ...(stored.paid_users !== undefined
+      ? { paid_users: { target: stored.paid_users, gap: paidUsers - stored.paid_users } }
+      : {}),
+    ...(stored.monthly_revenue
+      ? {
+          monthly_revenue: {
+            target: stored.monthly_revenue,
+            gap: {
+              amount: String(monthlyRevenue - BigInt(stored.monthly_revenue.amount)),
+              currency: stored.monthly_revenue.currency,
+            },
+          },
+        }
+      : {}),
+    ...(stored.gross_margin !== undefined
+      ? {
+          gross_margin: {
+            target: stored.gross_margin,
+            ...(grossMargin !== undefined ? { gap: grossMargin - stored.gross_margin } : {}),
+          },
+        }
+      : {}),
+    ...(stored.retention !== undefined
+      ? {
+          retention: {
+            target: stored.retention,
+            ...(retention.rate !== undefined ? { gap: retention.rate - stored.retention } : {}),
           },
         }
       : {}),
@@ -196,7 +246,19 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
   const errors = state.calls.filter((call) => call.error_kind).length;
   const month = (query.get("until") ?? new Date().toISOString()).slice(0, 7);
   const stored = state.targets.get(month);
-  const targets = targetComparison(stored, state.calls.length, errors, revenue, cost);
+  const grossMargin = revenue > 0n ? Number(((revenue - cost) * 10000n) / revenue) : undefined;
+  const retention = { ...state.retention, month };
+  const targets = targetComparison(
+    stored,
+    state.calls.length,
+    errors,
+    revenue,
+    cost,
+    state.paidUsers,
+    BigInt(state.monthlyRevenue.amount),
+    grossMargin,
+    retention,
+  );
   return ok({
     site_id: state.siteId,
     since: query.get("since") ?? "2026-10-29T00:00:00.000Z",
@@ -207,6 +269,10 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
     revenue: { amount: String(revenue), currency: "USD" },
     cost: { amount: String(cost), currency: "USD" },
     unknown_cost_calls: 0,
+    paid_users: state.paidUsers,
+    monthly_revenue: state.monthlyRevenue,
+    ...(grossMargin !== undefined ? { gross_margin: grossMargin } : {}),
+    retention,
     cash: [
       { amount: String(revenue / 2n), currency: "USD" },
       { amount: String(-revenue / 20n), currency: "CNY" },

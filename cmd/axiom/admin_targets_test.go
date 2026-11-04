@@ -9,9 +9,9 @@ import (
 	"axiom/internal/platform/adminapi"
 )
 
-// TestAdminOperationsTargets: the owner sets all four targets of a UTC month, reads them back, and the overview
-// prorates them to its window and states each gap as actual minus target. A later write replaces the whole set, and a
-// target left out is cleared rather than kept.
+// TestAdminOperationsTargets: the owner sets every target of a UTC month, reads them back, and the overview prorates
+// the quantities to its window and states each gap as actual minus target. A later legacy write replaces only the
+// first-release four and keeps the commercial metrics; a full write clears what it leaves out.
 //
 //nolint:cyclop,gocognit // one admin journey: set, read back, prorate, replay, replace and clear.
 func TestAdminOperationsTargets(t *testing.T) {
@@ -24,14 +24,22 @@ func TestAdminOperationsTargets(t *testing.T) {
 	expectAdmin(t, "empty targets", rec, 200, "")
 	var empty adminapi.OperationsTargets
 	decode(t, rec, &empty)
-	if empty.Month != "2026-11" || empty.Rev != 0 || empty.SiteId == "" || empty.Calls != nil || empty.Errors != nil || empty.Revenue != nil || empty.Cost != nil {
+	if empty.Month != "2026-11" || empty.Rev != 0 || empty.SiteId == "" || empty.Calls != nil || empty.Errors != nil ||
+		empty.Revenue != nil || empty.Cost != nil || empty.PaidUsers != nil || empty.MonthlyRevenue != nil ||
+		empty.GrossMargin != nil || empty.Retention != nil {
 		t.Fatalf("a month with no targets: %s", rec.Body.String())
+	}
+	if empty.Metrics == nil || len(*empty.Metrics) != 8 {
+		t.Fatalf("a node with the commercial metrics reports %v, want all eight", empty.Metrics)
 	}
 
 	key := newKey()
-	rec = f.change(owner, http.MethodPut, path,
+	rec = f.do(http.MethodPut, path,
 		`{"calls":3100,"errors":12,"revenue":{"amount":"5000000000000","currency":"USD"},`+
-			`"cost":{"amount":"3000000000000","currency":"USD"},"rev":0,"reason":"set November targets"}`, key)
+			`"cost":{"amount":"3000000000000","currency":"USD"},`+
+			`"paid_users":300,"monthly_revenue":{"amount":"600000000000","currency":"USD"},`+
+			`"gross_margin":3500,"retention":7000,"rev":0,"reason":"set November targets"}`,
+		as(owner), idempotent(key), header("X-Axiom-Target-Metrics", "all"))
 	expectAdmin(t, "set targets", rec, 200, "")
 	var set adminapi.OperationsTargets
 	decode(t, rec, &set)
@@ -42,11 +50,19 @@ func TestAdminOperationsTargets(t *testing.T) {
 	wantPtr(t, rec, "errors", set.Errors, int64(12))
 	wantPtr(t, rec, "revenue", set.Revenue, adminapi.Money{Amount: "5000000000000", Currency: "USD"})
 	wantPtr(t, rec, "cost", set.Cost, adminapi.Money{Amount: "3000000000000", Currency: "USD"})
+	wantPtr(t, rec, "paid users", set.PaidUsers, int64(300))
+	wantPtr(t, rec, "monthly revenue", set.MonthlyRevenue, adminapi.Money{Amount: "600000000000", Currency: "USD"})
+	wantPtr(t, rec, "gross margin", set.GrossMargin, 3500)
+	wantPtr(t, rec, "retention", set.Retention, 7000)
 	f.expectAudit("targets.update", map[string]string{
-		"detail->>'month'":                      "2026-11",
-		"detail->'after'->>'calls'":             "3100",
-		"detail->'after'->'revenue'->>'amount'": "5000000000000",
-		"detail->'before'":                      "{}",
+		"detail->>'month'":                              "2026-11",
+		"detail->'after'->>'calls'":                     "3100",
+		"detail->'after'->'revenue'->>'amount'":         "5000000000000",
+		"detail->'before'":                              "{}",
+		"detail->'after'->>'paid_users'":                "300",
+		"detail->'after'->'monthly_revenue'->>'amount'": "600000000000",
+		"detail->'after'->>'gross_margin'":              "3500",
+		"detail->'after'->>'retention'":                 "7000",
 	})
 
 	// Two days of a 30-day month: 3100 calls and 12 errors prorate to 207 and 1; the money targets keep their exact
@@ -66,11 +82,32 @@ func TestAdminOperationsTargets(t *testing.T) {
 	wantPtr(t, rec, "revenue gap", overview.Targets.Revenue.Gap, adminapi.Money{Amount: "-333333333333", Currency: "USD"})
 	wantPtr(t, rec, "cost target", &overview.Targets.Cost.Target, adminapi.Money{Amount: "200000000000", Currency: "USD"})
 	wantPtr(t, rec, "cost gap", overview.Targets.Cost.Gap, adminapi.Money{Amount: "-200000000000", Currency: "USD"})
+	wantPtr(t, rec, "paid-user target", &overview.Targets.PaidUsers.Target, int64(20))
+	wantPtr(t, rec, "paid-user gap", overview.Targets.PaidUsers.Gap, int64(-20))
+	wantPtr(t, rec, "monthly-revenue target", &overview.Targets.MonthlyRevenue.Target,
+		adminapi.Money{Amount: "40000000000", Currency: "USD"})
+	wantPtr(t, rec, "monthly-revenue gap", overview.Targets.MonthlyRevenue.Gap,
+		adminapi.Money{Amount: "-40000000000", Currency: "USD"})
+	wantPtr(t, rec, "gross-margin target", &overview.Targets.GrossMargin.Target, 3500)
+	if overview.Targets.GrossMargin.Gap != nil {
+		t.Errorf("a gross-margin gap was shown without settled revenue: %s", rec.Body.String())
+	}
+	wantPtr(t, rec, "retention target", &overview.Targets.Retention.Target, 7000)
+	if overview.Targets.Retention.Gap != nil {
+		t.Errorf("a retention gap was shown without a cohort: %s", rec.Body.String())
+	}
+	if overview.PaidUsers == nil || *overview.PaidUsers != 0 || overview.MonthlyRevenue == nil ||
+		overview.MonthlyRevenue.Amount != "0" || overview.Retention == nil || overview.Retention.Rate != nil {
+		t.Errorf("the commercial actuals without paid top-ups: %s", rec.Body.String())
+	}
 
 	// Replaying the first request returns its response without writing or auditing again.
-	replay := f.change(owner, http.MethodPut, path,
+	replay := f.do(http.MethodPut, path,
 		`{"calls":3100,"errors":12,"revenue":{"amount":"5000000000000","currency":"USD"},`+
-			`"cost":{"amount":"3000000000000","currency":"USD"},"rev":0,"reason":"set November targets"}`, key)
+			`"cost":{"amount":"3000000000000","currency":"USD"},`+
+			`"paid_users":300,"monthly_revenue":{"amount":"600000000000","currency":"USD"},`+
+			`"gross_margin":3500,"retention":7000,"rev":0,"reason":"set November targets"}`,
+		as(owner), idempotent(key), header("X-Axiom-Target-Metrics", "all"))
 	expectAdmin(t, "replayed targets", replay, 200, "")
 	if got := replay.Header().Get("Idempotency-Replayed"); got != "true" {
 		t.Fatalf("replayed header: %q", got)
@@ -91,25 +128,36 @@ func TestAdminOperationsTargets(t *testing.T) {
 	if replaced.Errors != nil || replaced.Revenue != nil || replaced.Cost != nil {
 		t.Fatalf("targets left out were kept: %s", rec.Body.String())
 	}
+	// A legacy editor sends no commercial fields and no full-set header. Its write must not clear what it cannot see.
+	wantPtr(t, rec, "commercial paid users kept", replaced.PaidUsers, int64(300))
+	wantPtr(t, rec, "commercial monthly revenue kept", replaced.MonthlyRevenue,
+		adminapi.Money{Amount: "600000000000", Currency: "USD"})
+	wantPtr(t, rec, "commercial gross margin kept", replaced.GrossMargin, 3500)
+	wantPtr(t, rec, "commercial retention kept", replaced.Retention, 7000)
 	if got := f.text("SELECT detail->'before'->>'errors' FROM platform.audit_log WHERE action = 'targets.update' ORDER BY at DESC LIMIT 1"); got != "12" {
 		t.Errorf("the replaced errors target in the audit entry: %q, want 12", got)
 	}
 	if got := f.text("SELECT coalesce(detail->'after'->>'errors', '') FROM platform.audit_log WHERE action = 'targets.update' ORDER BY at DESC LIMIT 1"); got != "" {
 		t.Errorf("the cleared errors target in the audit entry: %q, want none", got)
 	}
+	if got := f.text("SELECT detail->'after'->>'paid_users' FROM platform.audit_log WHERE action = 'targets.update' ORDER BY at DESC LIMIT 1"); got != "300" {
+		t.Errorf("a legacy write changed the commercial target in the audit entry: %q, want 300", got)
+	}
 	if n := f.auditCount("targets.update"); n != "2" {
 		t.Fatalf("%s audit entries after the second write, want 2", n)
 	}
 
 	// Clearing the set is a write too: the month stays answerable, with every target absent.
-	rec = f.change(owner, http.MethodPut, path, `{"rev":2,"reason":"clear the month"}`, newKey())
+	rec = f.do(http.MethodPut, path, `{"rev":2,"reason":"clear the month"}`,
+		as(owner), idempotent(newKey()), header("X-Axiom-Target-Metrics", "all"))
 	expectAdmin(t, "clear targets", rec, 200, "")
 	var cleared adminapi.OperationsTargets
 	decode(t, rec, &cleared)
 	if cleared.Rev != 3 {
 		t.Fatalf("the clear revision: %d, want 3", cleared.Rev)
 	}
-	if cleared.Calls != nil || cleared.Errors != nil || cleared.Revenue != nil || cleared.Cost != nil {
+	if cleared.Calls != nil || cleared.Errors != nil || cleared.Revenue != nil || cleared.Cost != nil ||
+		cleared.PaidUsers != nil || cleared.MonthlyRevenue != nil || cleared.GrossMargin != nil || cleared.Retention != nil {
 		t.Fatalf("a cleared month still has targets: %s", rec.Body.String())
 	}
 	if got := f.text("SELECT detail->'before'->>'calls' FROM platform.audit_log WHERE action = 'targets.update' ORDER BY at DESC LIMIT 1"); got != "4000" {
@@ -287,14 +335,14 @@ func TestTargetComparisonHidesAnUnknownCostGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := operations.Expected{Cost: &operations.Money{Amount: "100000000000", Currency: currency}}
-	incomplete := targetComparison(expected, 0, 0, "0", "50000000000", currency, true, false)
+	incomplete := targetComparison(expected, targetActuals{Cost: "50000000000", CallsComplete: true}, currency)
 	if incomplete.Cost == nil || incomplete.Cost.Target.Amount != "100000000000" {
 		t.Fatalf("an incomplete cost should keep its target: %+v", incomplete.Cost)
 	}
 	if incomplete.Cost.Gap != nil {
 		t.Fatalf("an incomplete cost showed a gap: %+v", incomplete.Cost.Gap)
 	}
-	complete := targetComparison(expected, 0, 0, "0", "50000000000", currency, true, true)
+	complete := targetComparison(expected, targetActuals{Cost: "50000000000", CallsComplete: true, CostComplete: true}, currency)
 	if complete.Cost == nil || complete.Cost.Gap == nil || complete.Cost.Gap.Amount != "-50000000000" {
 		t.Fatalf("a complete cost should show actual minus target: %+v", complete.Cost)
 	}

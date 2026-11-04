@@ -154,6 +154,98 @@ func TestPlatformReportSumsWiderThanInt64(t *testing.T) {
 	}
 }
 
+// TestPlatformReportReadsPaidUsersAndRetention: a paid top-up is the commercial signal, not a gift and not a call. The
+// window counts distinct paying accounts and the credit their paid batches granted; retention takes the previous UTC
+// month's paying accounts and asks how many paid again from this month's first instant through the window's end. A
+// full-month read then includes the payment the shorter window had not reached yet.
+func TestPlatformReportReadsPaidUsersAndRetention(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	site := b.admitted.Site
+	foreign := uuid.NewV7()
+	paid := func(account uuid.UUID, created time.Time, amount int64, batchSite uuid.UUID) string {
+		return fmt.Sprintf(`('%s', '%s', '%s', 'paid', %d, '%s', 'USD', %d, 0, 'bank')`,
+			uuid.NewV7(), batchSite, account, amount, created.Format(time.RFC3339), amount)
+	}
+	a, bAccount, c, d := uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+	rows := []string{
+		paid(a, time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC), 1000, site),
+		paid(a, time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC), 1000, site),
+		paid(bAccount, time.Date(2026, 1, 20, 0, 0, 0, 0, time.UTC), 500, site),
+		paid(c, time.Date(2026, 2, 10, 0, 0, 0, 0, time.UTC), 2000, site),
+		paid(d, time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC), 700, site),
+		paid(d, time.Date(2026, 2, 20, 0, 0, 0, 0, time.UTC), 700, site),
+		paid(uuid.NewV7(), time.Date(2026, 2, 12, 0, 0, 0, 0, time.UTC), 900, foreign),
+		paid(a, time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC), 1100, site),
+	}
+	rows = append(rows, fmt.Sprintf(`('%s', '%s', '%s', 'gift', 500, '%s', NULL, NULL, NULL, NULL)`,
+		uuid.NewV7(), site, uuid.NewV7(), time.Date(2026, 2, 3, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)))
+	b.sql(`INSERT INTO billing.credit_batches (id, site_id, account_id, source, amount, created_at, currency, paid, fee, offline_channel) VALUES ` + strings.Join(rows, ", "))
+
+	read := func(since, until time.Time) PlatformReport {
+		t.Helper()
+		var report PlatformReport
+		if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
+			report, err = ReadPlatformReport(t.Context(), tx, site, testCurrency(t, "USD"), since, until)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return report
+	}
+	feb := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	partial := read(feb, time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC))
+	if partial.PaidUsers != 2 || partial.MonthlyRevenue != "3000" {
+		t.Errorf("partial window paid = %d, revenue = %s; want 2 and 3000", partial.PaidUsers, partial.MonthlyRevenue)
+	}
+	if partial.Retention.Month != feb || partial.Retention.Cohort != 3 || partial.Retention.Retained != 1 {
+		t.Errorf("partial window retention = %+v; want February, cohort 3, retained 1", partial.Retention)
+	}
+	full := read(feb, time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))
+	if full.PaidUsers != 3 || full.MonthlyRevenue != "3700" {
+		t.Errorf("full window paid = %d, revenue = %s; want 3 and 3700", full.PaidUsers, full.MonthlyRevenue)
+	}
+	if full.Retention.Month != feb || full.Retention.Cohort != 3 || full.Retention.Retained != 2 {
+		t.Errorf("full window retention = %+v; want February, cohort 3, retained 2", full.Retention)
+	}
+}
+
+// TestPlatformPaidPlanReadsTheWindow: paid top-ups are read through the partial covering index, so the dashboard's
+// commercial figures cost a range of this site's paid batches rather than a scan of every credit. The plan test runs
+// with the index the billing migration builds, not one another module owns.
+func TestPlatformPaidPlanReadsTheWindow(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 0, 0, Config{})
+	site := b.admitted.Site
+	now := time.Now().UTC()
+	b.sql(
+		fmt.Sprintf(`INSERT INTO billing.credit_batches
+			(id, site_id, account_id, source, amount, created_at, currency, paid, fee, offline_channel)
+			SELECT uuidv7(),
+				CASE WHEN n %% 60 = 0 THEN '%s'::uuid ELSE md5(n::text || 'site')::uuid END,
+				uuidv7(), 'paid', 1000, now() - make_interval(secs => n * 10),
+				'USD', 1000, 0, 'bank'
+			FROM generate_series(1, 240000) n`, site),
+		"ANALYZE billing.credit_batches",
+	)
+	since := now.Add(-10 * time.Minute)
+	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	cohort := month.AddDate(0, -1, 0)
+	blocks, plan := b.plan(b.platform, nil, platformPaid,
+		since, site, cohort, now, cohort, month, month)
+	if strings.Contains(plan, "Seq Scan") {
+		t.Errorf("the paid scan reads a table:\n%s", plan)
+	}
+	if !strings.Contains(plan, "credit_batches_by_site_paid_created") {
+		t.Errorf("the paid scan does not read the partial index:\n%s", plan)
+	}
+	// The cohort month is wider than the page window, so the range still has thousands of this site's batches. What
+	// must not happen is the whole table being read; the index and no-seq-scan checks above rule that out.
+	if blocks > 6000 {
+		t.Errorf("the paid scan touched %d blocks, want at most 6000:\n%s", blocks, plan)
+	}
+}
+
 // TestPlatformReportPlanReadsTheWindow: over a large ledger, the calls' sums read the site's time range through the
 // reservations index and the cash reads only the credit and refund kinds, not the settlements' volume.
 func TestPlatformReportPlanReadsTheWindow(t *testing.T) {

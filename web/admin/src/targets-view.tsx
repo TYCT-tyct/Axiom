@@ -8,7 +8,10 @@ import { ChangeDialog, useSnapshot } from "./change";
 import { targetsQuery } from "./queries";
 import {
   type CountComparison,
+  formatTargetRate,
+  legacyTargetMetrics,
   type MoneyComparison,
+  type RateComparison,
   readTargets,
   type TargetMetric,
   type TargetTone,
@@ -73,24 +76,38 @@ function TargetsForm({
   // Keep the values the form was opened with, and its revision, while another editor may change the month. A stale
   // write is refused; reload then fills both from the query that the refusal has refreshed.
   const [read, reload] = useSnapshot(view);
+  const metrics = read.metrics ?? legacyTargetMetrics;
+  const full = read.metrics !== undefined;
   return (
     <ChangeDialog
       operation={`operations-targets:${month}`}
       title={t("overview.targets.title", { month: format.monthLabel(month) })}
       intro={<p>{t("overview.targets.intro")}</p>}
       action={t("overview.targets.save")}
-      fields={(error) => <TargetFields view={read} currency={currency} error={error} />}
+      fields={(error) => <TargetFields view={read} metrics={metrics} currency={currency} error={error} />}
       read={(values) =>
-        readTargets(values, currency, {
-          count: t("overview.targets.countInvalid"),
-          money: t("overview.targets.moneyInvalid"),
-        })
+        readTargets(
+          values,
+          currency,
+          {
+            count: t("overview.targets.countInvalid"),
+            money: t("overview.targets.moneyInvalid"),
+            rate: t("overview.targets.rateInvalid"),
+          },
+          metrics,
+        )
       }
       reload={reload}
       send={(targets, { reason, key }) =>
         unwrapChange(
           adminApi.PUT("/api/admin/v1/reports/targets/{month}", {
-            params: { path: { month }, header: { "Idempotency-Key": key } },
+            params: {
+              path: { month },
+              header: {
+                "Idempotency-Key": key,
+                ...(full ? { "X-Axiom-Target-Metrics": "all" as const } : {}),
+              },
+            },
             body: { ...targets, rev: read.rev, reason },
           }),
         )
@@ -103,15 +120,18 @@ function TargetsForm({
 
 function TargetFields({
   view,
+  metrics,
   currency,
   error,
 }: {
   view: AdminSchemas["OperationsTargets"];
+  metrics: readonly TargetMetric[];
   currency: string;
   error: unknown;
 }) {
   const { t } = useTranslation();
   const errors = useErrors();
+  const full = metrics.includes("paid_users");
   return (
     <>
       <TextField
@@ -150,6 +170,48 @@ function TargetFields({
         defaultValue={view.cost ? moneyInput(view.cost.amount) : undefined}
         error={errors.field(error, "cost")}
       />
+      {full ? (
+        <>
+          <TextField
+            name="paid_users"
+            label={t("overview.targets.paidUsers")}
+            hint={t("overview.targets.paidUsersHint")}
+            inputMode="numeric"
+            autoComplete="off"
+            defaultValue={view.paid_users}
+            error={errors.field(error, "paid_users")}
+          />
+          <TextField
+            name="monthly_revenue"
+            label={t("overview.targets.monthlyRevenue", { currency })}
+            hint={t("overview.targets.monthlyRevenueHint")}
+            inputMode="decimal"
+            autoComplete="off"
+            defaultValue={view.monthly_revenue ? moneyInput(view.monthly_revenue.amount) : undefined}
+            error={errors.field(error, "monthly_revenue")}
+          />
+          <TextField
+            name="gross_margin"
+            label={t("overview.targets.grossMargin")}
+            hint={t("overview.targets.grossMarginHint")}
+            inputMode="decimal"
+            autoComplete="off"
+            defaultValue={
+              view.gross_margin === undefined ? undefined : formatTargetRate(view.gross_margin).slice(0, -1)
+            }
+            error={errors.field(error, "gross_margin")}
+          />
+          <TextField
+            name="retention"
+            label={t("overview.targets.retention")}
+            hint={t("overview.targets.retentionHint")}
+            inputMode="decimal"
+            autoComplete="off"
+            defaultValue={view.retention === undefined ? undefined : formatTargetRate(view.retention).slice(0, -1)}
+            error={errors.field(error, "retention")}
+          />
+        </>
+      ) : null}
     </>
   );
 }
@@ -163,7 +225,7 @@ export function TargetNote({
   costUnknown = false,
 }: {
   metric: TargetMetric;
-  comparison?: CountComparison | MoneyComparison;
+  comparison?: CountComparison | MoneyComparison | RateComparison;
   costUnknown?: boolean;
 }) {
   const { t } = useTranslation();
@@ -171,16 +233,39 @@ export function TargetNote({
     return <span className="text-t4">{t("overview.targets.none")}</span>;
   }
   const { target, gap } = comparison;
-  const money = typeof target === "object";
+  const money = isMoneyMetric(metric);
+  const incomplete: Partial<Record<TargetMetric, string>> = {
+    cost: costUnknown ? t("overview.targets.costIncomplete") : undefined,
+    gross_margin: t("overview.targets.marginIncomplete"),
+    retention: t("overview.targets.retentionIncomplete"),
+  };
   return (
     <TargetLine
       metric={metric}
-      target={money ? target.amount : String(target)}
-      gap={typeof gap === "object" ? gap.amount : gap?.toString()}
-      currency={money ? target.currency : undefined}
-      incomplete={metric === "cost" && costUnknown ? t("overview.targets.costIncomplete") : undefined}
+      target={money && typeof target === "object" ? target.amount : String(target)}
+      gap={gap === undefined ? undefined : typeof gap === "object" ? gap.amount : String(gap)}
+      currency={money && typeof target === "object" ? target.currency : undefined}
+      incomplete={incomplete[metric]}
     />
   );
+}
+
+const isMoneyMetric = (metric: TargetMetric) =>
+  metric === "revenue" || metric === "cost" || metric === "monthly_revenue";
+
+function targetText(
+  metric: TargetMetric,
+  value: string,
+  currency: string | undefined,
+  format: ReturnType<typeof useFormat>,
+): string {
+  if (isMoneyMetric(metric)) {
+    return format.money({ amount: value, currency: currency ?? "" });
+  }
+  if (metric === "gross_margin" || metric === "retention") {
+    return formatTargetRate(Number(value));
+  }
+  return format.number(Number(value));
 }
 
 function TargetLine({
@@ -198,8 +283,7 @@ function TargetLine({
 }) {
   const { t } = useTranslation();
   const format = useFormat();
-  const money = metric === "revenue" || metric === "cost";
-  const value = money ? format.money({ amount: target, currency: currency ?? "" }) : format.number(Number(target));
+  const value = targetText(metric, target, currency, format);
   if (gap === undefined) {
     return (
       <span>
@@ -212,7 +296,7 @@ function TargetLine({
   const sign = gap.startsWith("-") ? -1 : gap === "0" ? 0 : 1;
   const tone = targetTone(metric, sign);
   const absolute = gap.startsWith("-") ? gap.slice(1) : gap;
-  const amount = money ? format.money({ amount: absolute, currency: currency ?? "" }) : format.number(Number(absolute));
+  const amount = targetText(metric, absolute, currency, format);
   const toneClass = toneClassOf(tone);
   return (
     <span>
