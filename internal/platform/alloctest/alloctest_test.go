@@ -63,3 +63,21 @@ func TestMeasureRetained(t *testing.T) {
 		t.Logf("%s: %d bytes", name, held)
 	}
 }
+
+// TestMeasurePeak: every function is measured apart, and what one keeps after it returns is still part of its peak.
+func TestMeasurePeak(t *testing.T) {
+	const size = 1 << 20
+	got := alloctest.MeasurePeak(t,
+		alloctest.PeakFunction{Name: "nothing", F: func() any { return nil }},
+		alloctest.PeakFunction{Name: "held", F: func() any { return make([]byte, size) }},
+	)
+	if peak := got["nothing"]; peak > 64<<10 {
+		t.Errorf("a function that holds nothing peaked at %d bytes, want at most %d", peak, 64<<10)
+	}
+	if peak := got["held"]; peak < size || peak > size+64<<10 {
+		t.Errorf("a held 1 MiB result peaked at %d bytes, want between %d and %d", peak, size, size+64<<10)
+	}
+	for name, peak := range got {
+		t.Logf("%s: %d bytes", name, peak)
+	}
+}
