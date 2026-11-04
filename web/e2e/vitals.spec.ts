@@ -17,9 +17,9 @@ import { words } from "./words.ts";
 // slow network and on a desktop, INP of the common operations at 4x slower CPU, and the smoothness of a long list
 // scrolled. Each number is measured in the browser by the web-vitals library (the list's frames by requestAnimationFrame
 // and the long-task observer), written to the report (each test's annotations, which Playwright's reporters list), and compared
-// with the budget (below); a page over its ceiling fails the run. The numbers are of the server in this run, so a slower CI
-// host gives larger ones: the ceilings leave room for that, and the measurements are the median of three page loads,
-// each between two reference loads (LCP), or the worst of the operation (INP), as the document states.
+// with the budget (below); a page over its ceiling fails the run. The numbers are timings of the host in this run, so
+// each page load is scaled by the reference page measured beside it (below): the measurements are the median of three
+// page loads, each between two reference loads (LCP), or the worst of the operation (INP), as the document states.
 
 // target is the budget of the document; ceiling is what fails the run. Where the pages do not meet a target yet, the
 // ceiling is the first measurement with room for a slower host (docs/frontend.md「实测」), so the gate stops a page from
@@ -51,7 +51,14 @@ type Profile = typeof phone;
 // page's LCP is scaled to the mean of the two reference loads around it on the 2026-10-30 run the ceilings came from, and
 // the median of the three scaled loads drops the one a burst landed in (docs/frontend.md「实测」). A burst stretches a
 // whole load, not one side of it, and contention can only delay a load, never hurry one.
-const reference = { phone: 3496, desktop: 948 } as Record<"phone" | "desktop", number>;
+//
+// The overview cannot be its own reference: a gate on its raw LCP is a gate on the host. Its reference is the sign-in
+// page, a static page of the same build (the same entry, styles and fonts) but outside the shell, so a slower overview or
+// a slower shared shell shows against it while host load stretches both. The two pages check each other: each is measured
+// between two loads of the other, scaled to the other's LCP on the baseline run. The sign-in LCP there is the overview's
+// 3.496/0.948 s times the 0.88/1.15 ratio measured beside it on the 2026-11-04 host.
+const overviewMs = { phone: 3496, desktop: 948 } as Record<"phone" | "desktop", number>;
+const signInMs = { phone: 3076, desktop: 1090 } as Record<"phone" | "desktop", number>;
 
 // web-vitals' IIFE build, which a page gets before its own scripts so it sees the whole load.
 // The package does not export its IIFE file, so it is found beside the CommonJS one the package does.
@@ -129,14 +136,19 @@ function sceneOf(suite: Suite, name: string) {
   return scene;
 }
 
-// The console overview is the reference: the lightest page with the same shell and mocked table, loaded beside every page
-// under test so a slow host or a busy neighbour stretches both. Its LCP on the 2026-10-30 CI run the 6 s ceiling came
-// from is in reference above; scaling to it keeps the ceiling a page budget rather than a host budget.
-const baseline = sceneOf(consoleSuite, "overview");
+// The console overview is the reference for the pages with its shell: the lightest page with that shell and a mocked
+// table, so a slow host or a busy neighbour stretches both, and scaling keeps the ceiling a page budget rather than a
+// host budget. The overview is the sign-in page's reference in the same way; its own LCP is gated against sign-in.
+const overview = sceneOf(consoleSuite, "overview");
+const signIn = sceneOf(consoleSuite, "sign-in");
 
-// The pages a person lands on and works in, by their names in the suites' scene lists.
+// The pages a person lands on and works in, by their names in the suites' scene lists. The overview and sign-in are the
+// two ends of the chain of references, so a regression of either shows against the other.
 const pages: [Suite, string][] = [
-  ...["overview", "keys", "calls", "balance", "statement"].map((name): [Suite, string] => [consoleSuite, name]),
+  ...["sign-in", "overview", "keys", "calls", "balance", "statement"].map((name): [Suite, string] => [
+    consoleSuite,
+    name,
+  ]),
   ...["users", "suppliers", "models", "pricing", "settings"].map((name): [Suite, string] => [adminSuite, name]),
 ];
 
@@ -150,28 +162,11 @@ const profiles: {
   { name: "desktop", profile: desktop, device: devices["Desktop Chrome"], lcp: budget.lcpDesktop },
 ];
 
-// measureReference loads the reference page three times and gates its fastest load: contention can only delay a load,
-// never hurry one, so the fastest says what the host can do. A host too slow for even that has no room for the other
-// pages' timings either.
-async function measureReference(
-  browser: Browser,
-  profile: Profile,
-  device: Parameters<Browser["newContext"]>[0],
-  suite: Suite,
-  scene: Scene,
-  name: "phone" | "desktop",
-  lcp: Limit,
-) {
-  const label = `${suite.app} ${scene.name} ${name}`;
-  const loads: Vitals[] = [];
-  for (let i = 0; i < 3; i++) loads.push(await load(browser, profile, device, suite, scene));
-  const lcps = loads.map((l) => l.LCP ?? Number.POSITIVE_INFINITY);
-  record(`LCP ${label}`, Math.min(...lcps), lcp, `loads ${lcps.map((value) => value.toFixed(0)).join("/")} ms`);
-  record(`CLS ${label}`, Math.max(...loads.map((l) => l.CLS ?? 0)), budget.cls);
-}
+// A page's reference: the page read beside it three times and its LCP on the run the ceiling came from.
+type Reference = { suite: Suite; scene: Scene; lcp: number };
 
-// measurePage loads the page three times, each between two reference loads, and gates the median of the scaled LCPs.
-// The reference is read beside the page, so a host that is slow for one is slow for both, and the mean of the two
+// measurePage loads the page three times, each between two loads of its reference, and gates the median of the scaled
+// LCPs. The reference is read beside the page, so a host that is slow for one is slow for both, and the mean of the two
 // brackets follows a load that rises through the sample instead of charging the page the slower side every time.
 async function measurePage(
   browser: Browser,
@@ -179,15 +174,16 @@ async function measurePage(
   device: Parameters<Browser["newContext"]>[0],
   suite: Suite,
   scene: Scene,
+  reference: Reference,
   name: "phone" | "desktop",
   lcp: Limit,
 ) {
   const label = `${suite.app} ${scene.name} ${name}`;
   const pairs: { base: number; page: number; cls: number }[] = [];
   for (let i = 0; i < 3; i++) {
-    const before = await load(browser, profile, device, consoleSuite, baseline);
+    const before = await load(browser, profile, device, reference.suite, reference.scene);
     const page = await load(browser, profile, device, suite, scene);
-    const after = await load(browser, profile, device, consoleSuite, baseline);
+    const after = await load(browser, profile, device, reference.suite, reference.scene);
     pairs.push({
       ...bracketed({
         before: before.LCP ?? Number.POSITIVE_INFINITY,
@@ -199,9 +195,9 @@ async function measurePage(
   }
   record(
     `LCP ${label}`,
-    scaledLcp(pairs, reference[name]),
+    scaledLcp(pairs, reference.lcp),
     lcp,
-    `raw ${median(pairs.map((pair) => pair.page)).toFixed(0)} ms, reference ${median(pairs.map((pair) => pair.base)).toFixed(0)} of ${reference[name]} ms`,
+    `raw ${median(pairs.map((pair) => pair.page)).toFixed(0)} ms, ${reference.scene.name} ${median(pairs.map((pair) => pair.base)).toFixed(0)} of ${reference.lcp} ms`,
   );
   record(`CLS ${label}`, Math.max(...pairs.map((pair) => pair.cls)), budget.cls);
 }
@@ -211,8 +207,11 @@ test.describe("loading", () => {
     for (const [suite, sceneName] of pages) {
       test(`${suite.app} ${sceneName}: LCP and CLS on ${name}`, async ({ browser }) => {
         const scene = sceneOf(suite, sceneName);
-        const measure = scene === baseline ? measureReference : measurePage;
-        await measure(browser, profile, device, suite, scene, name, lcp);
+        const reference =
+          scene === overview
+            ? { suite: consoleSuite, scene: signIn, lcp: signInMs[name] }
+            : { suite: consoleSuite, scene: overview, lcp: overviewMs[name] };
+        await measurePage(browser, profile, device, suite, scene, reference, name, lcp);
       });
     }
   }
