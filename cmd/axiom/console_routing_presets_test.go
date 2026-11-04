@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
 	"testing"
 	"uuid"
@@ -208,5 +209,23 @@ func TestManagementKeyPresets(t *testing.T) {
 		if got.Preset == nil || *got.Preset != step.want {
 			t.Errorf("%s: bound to %v, want %s", step.what, got.Preset, step.want)
 		}
+	}
+}
+
+// TestConsoleSourceClasses: the console offers the classes the node routes by, in recognition order, with both names.
+func TestConsoleSourceClasses(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	rec := f.do(http.MethodGet, "/source-classes", "", as(f.owner()))
+	expect(t, "source classes", rec, http.StatusOK, "")
+	var got consoleapi.SourceClassNameList
+	decode(t, rec, &got)
+	want := []consoleapi.SourceClassName{
+		{Slug: "official", Name: "Official", NameZh: "官方直连"},
+		{Slug: "cloud", Name: "Cloud", NameZh: "云厂商"},
+		{Slug: "relay", Name: "Relay", NameZh: "中转站"},
+	}
+	if !slices.Equal(got.Data, want) {
+		t.Errorf("classes %v, want %v", got.Data, want)
 	}
 }

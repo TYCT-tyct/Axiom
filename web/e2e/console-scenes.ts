@@ -36,6 +36,10 @@ const scenes: Scene[] = [
     },
   },
   { name: "keys", signedIn: true, open: (page) => goto(page, "keys") },
+  { name: "routing-presets", signedIn: true, open: (page) => goto(page, "routing-presets") },
+  dialogScene("routing-preset-create", "routing-presets", (page) =>
+    page.getByRole("button", { name: /^(新建预设|New preset)$/ }).click(),
+  ),
   { name: "calls", signedIn: true, open: (page) => goto(page, "calls") },
   { name: "call", signedIn: true, open: (page) => goto(page, "calls/00000000-0000-4000-8000-000000000001") },
   { name: "security", signedIn: true, open: (page) => goto(page, "security") },

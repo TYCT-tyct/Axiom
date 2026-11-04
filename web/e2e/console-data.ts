@@ -21,6 +21,8 @@ export type MockState = AuthState & {
   orders: Schemas["Order"][];
   methods: Schemas["PaymentMethod"][];
   notifications: Schemas["NotificationPreferences"];
+  presets: Schemas["RoutingPreset"][];
+  routingDefault: Schemas["RoutingDefault"];
 };
 
 const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "balance.top_up", "calls.view"];
@@ -42,6 +44,25 @@ export function aKey(n: number, over: Partial<Schemas["Key"]> = {}): Schemas["Ke
     workspace_id: workspace,
     created_at: new Date(Date.UTC(2026, 9, 1, 8, n)).toISOString(),
     disabled: false,
+    ...over,
+  };
+}
+
+const rules = (value: object) => value as Schemas["RoutingRules"];
+const presetId = (n: number) => `00000000-0000-4000-9000-${String(n).padStart(12, "0")}`;
+
+export function aPreset(n: number, over: Partial<Schemas["RoutingPreset"]> = {}): Schemas["RoutingPreset"] {
+  return {
+    id: presetId(n),
+    scope: "account",
+    slug: `preset-${n}`,
+    name: `Preset ${n}`,
+    revision: 1,
+    version: 1,
+    rules: rules({ default: {} }),
+    disabled: false,
+    created_at: "2026-11-01T08:00:00Z",
+    updated_at: "2026-11-01T08:00:00Z",
     ...over,
   };
 }
@@ -221,6 +242,40 @@ const aBatch = (n: number, over: Partial<Schemas["CreditBatch"]> = {}): Schemas[
   ...over,
 });
 
+const bound = {
+  preset_id: presetId(3),
+  preset: { id: presetId(3), name: "Official, cheapest first", scope: "account", version: 2 },
+} as const;
+
+// The platform's, the site's and the account's presets, the account's being its default and the Laptop key's.
+function usualPresets(): Pick<MockState, "presets" | "routingDefault"> {
+  return {
+    presets: [
+      aPreset(1, {
+        scope: "platform",
+        slug: "official",
+        name: "Official only",
+        rules: rules({ default: { classes: ["official"] } }),
+      }),
+      aPreset(2, {
+        scope: "site",
+        slug: "verified",
+        name: "Verified",
+        rules: rules({ default: { verified_only: true } }),
+      }),
+      aPreset(3, {
+        name: "Official, cheapest first",
+        version: 2,
+        rules: rules({
+          default: { sort: "price", classes: ["official", "cloud"], max_price: { prompt: "3", completion: "15" } },
+          rules: [{ author: "anthropic", sort: "quality" }],
+        }),
+      }),
+    ],
+    routingDefault: { preset_id: presetId(3), version: 4 },
+  };
+}
+
 export function usualState(): MockState {
   return {
     ...authState(allPermissions),
@@ -246,7 +301,7 @@ export function usualState(): MockState {
       ],
     },
     keys: [
-      aKey(3, { name: "Laptop", spend_limit: usd("20"), limit_reset: "monthly", limit_remaining: usd("17") }),
+      aKey(3, { name: "Laptop", spend_limit: usd("20"), limit_reset: "monthly", limit_remaining: usd("17"), ...bound }),
       aKey(2, { name: "CI runner", disabled: true, models: ["openai/gpt-5"], ip_allow: ["203.0.113.0/24"] }),
       aKey(1, { name: "Old key", expires_at: "2026-09-01T00:00:00Z" }),
     ],
@@ -268,11 +323,22 @@ export function usualState(): MockState {
       webhook_url: "",
       language: "zh",
     },
+    ...usualPresets(),
   };
 }
 
 export function emptyState(): MockState {
-  const state = { ...usualState(), keys: [], calls: [], models: [], statement: [], orders: [], methods: [] };
+  const state = {
+    ...usualState(),
+    keys: [],
+    calls: [],
+    models: [],
+    statement: [],
+    orders: [],
+    methods: [],
+    presets: [],
+    routingDefault: { version: 0 },
+  };
   state.balance = { ...state.balance, batches: [] };
   return state;
 }
@@ -339,7 +405,34 @@ export function worstState(): MockState {
     aMovement(n, n === 1 ? { amount: nano("-9223372036854775807"), balance_after: nano("-9223372036854775807") } : {}),
   );
   worstMoney(state, host);
+  worstPresets(state);
   return state;
+}
+
+// The most presets a key may choose from (the platform's and the site's 50 live each, the account's 20, a workspace's
+// 10), with the longest names and the most overrides a rule may hold.
+function worstPresets(state: MockState) {
+  const scope = (n: number) => (n < 50 ? "platform" : n < 100 ? "site" : n < 120 ? "account" : "workspace");
+  state.presets = range(130).map((n) =>
+    aPreset(n + 10, {
+      scope: scope(n),
+      slug: long(`preset-${n}-`, 64),
+      name: n === 1 ? long("Official sources at official quality, cheapest first ", 100) : `プリセット ${n}`,
+      version: Number.MAX_SAFE_INTEGER,
+      rules: rules({
+        default: { sort: "throughput", classes: range(32).map((c) => `class-${c}`), verified_only: true },
+        rules: range(100).map((r) => ({ model: `vendor/${long("model-", 100)}${r}` })),
+      }),
+    }),
+  );
+  const preset = {
+    id: presetId(11),
+    name: long("Preset ", 100),
+    scope: "platform",
+    version: 1,
+    disabled: true,
+  } as const;
+  state.keys = state.keys.map((key, n) => (n === 0 ? { ...key, preset_id: preset.id, preset } : key));
 }
 
 // The worst top-up data: int64 credits and payments, a 64-character method, six refunds on an order and many methods.

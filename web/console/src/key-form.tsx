@@ -14,7 +14,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { balanceQuery } from "./queries";
+import { balanceQuery, routingDefaultQuery, routingPresetsQuery } from "./queries";
 
 // What the form collects. A key is made with an expiry and changed with an on/off switch; the contract's two requests
 // share the rest.
@@ -26,6 +26,7 @@ export type KeyValues = {
   limit_reset?: Schemas["LimitReset"];
   models?: string[];
   ip_allow?: string[];
+  preset_id?: string;
 };
 
 const resets = ["daily", "weekly", "monthly"] as const;
@@ -66,6 +67,7 @@ function readValues(form: HTMLFormElement, currency: string | undefined): KeyVal
     limit_reset: limit && values.limit_reset ? (values.limit_reset as Schemas["LimitReset"]) : undefined,
     models: lines(values.models),
     ip_allow: lines(values.ip_allow),
+    preset_id: values.preset_id || undefined,
   };
 }
 
@@ -145,6 +147,75 @@ function Restrictions({ apiKey, error }: Section) {
   );
 }
 
+// PresetField chooses the key's routing preset among those the account's keys may use. A new key left at the first
+// option takes its layers' default when it is made; a changed key keeps its preset unless another is chosen, so the
+// form sends the field only for a choice. The choice is held here, not in the list: a later read of the list that fails
+// or no longer has it keeps the choice and its option, so a submit never falls back to the default the user moved
+// away from. Presets that could not be read at all leave the field out and the key keeps what it has. A management
+// key has no preset.
+function PresetField({ apiKey, error }: Section) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const presets = useQuery(routingPresetsQuery);
+  const defaults = useQuery(routingDefaultQuery);
+  const presetName = usePresetName();
+  const current = apiKey?.preset_id;
+  const [chosen, setChosen] = useState(current ?? "");
+  if (apiKey?.kind === "management") {
+    return null;
+  }
+  if (!presets.data) {
+    return presets.isError ? <p className="text-label text-t3">{t("routingPresets.key.unavailable")}</p> : null;
+  }
+  const list = presets.data.data;
+  const named = (id: string | undefined) => list.find((preset) => preset.id === id)?.name;
+  const fallback = named(defaults.data?.preset_id);
+  return (
+    <SelectField
+      label={t("routingPresets.key.field")}
+      hint={t("routingPresets.key.hint")}
+      name="preset_id"
+      value={chosen}
+      onChange={(event) => setChosen(event.currentTarget.value)}
+      error={errors.field(error, "preset_id")}
+    >
+      {apiKey && !current ? <option value="">{t("routingPresets.key.legacy")}</option> : null}
+      {apiKey ? null : (
+        <option value="">
+          {fallback ? t("routingPresets.key.byDefault", { name: fallback }) : t("routingPresets.key.byLayers")}
+        </option>
+      )}
+      {chosen && !named(chosen) ? (
+        <option value={chosen}>{presetName(chosen === current ? apiKey : undefined)}</option>
+      ) : null}
+      <PresetOptions presets={list} />
+    </SelectField>
+  );
+}
+
+// PresetOptions offers presets by name and the layer they come from, as every preset choice shows them.
+export function PresetOptions({ presets }: { presets: Schemas["RoutingPreset"][] }) {
+  const { t } = useTranslation();
+  return presets.map((preset) => (
+    <option key={preset.id} value={preset.id}>
+      {`${preset.name} · ${t(`routingPresets.layer.${preset.scope}`)}`}
+    </option>
+  ));
+}
+
+// usePresetName names a key's preset as the account can see it: its name, marked when disabled, or a placeholder for
+// one it cannot read.
+export function usePresetName() {
+  const { t } = useTranslation();
+  return (apiKey: Schemas["Key"] | undefined) => {
+    const preset = apiKey?.preset;
+    if (!preset) {
+      return t("routingPresets.key.hidden");
+    }
+    return preset.disabled ? t("routingPresets.key.disabledName", { name: preset.name }) : preset.name;
+  };
+}
+
 // KeyForm is the settings of a key, for making one (no key) and for changing one (filled with its current settings,
 // because the contract replaces them all). The expiry is asked once, when the key is made.
 export function KeyForm({
@@ -185,6 +256,7 @@ export function KeyForm({
         error={invalid === "name" ? t("keys.form.nameMissing") : errors.field(error, "name")}
       />
       <Limit apiKey={apiKey} error={error} invalid={invalid} {...currency} />
+      <PresetField apiKey={apiKey} error={error} />
       <Restrictions apiKey={apiKey} error={error} />
       {apiKey ? (
         <CheckField

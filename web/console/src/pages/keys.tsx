@@ -21,6 +21,7 @@ import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CreateKeyDialog, DeleteKeyDialog, EditKeyDialog, SecretDialog } from "../key-dialogs";
 import { keyFiltersApplied } from "../key-filters";
+import { usePresetName } from "../key-form";
 import { maskedKey, toInstant, toLocalInput } from "../parts";
 import { type KeyFilters, keysQuery } from "../queries";
 
@@ -219,6 +220,7 @@ function KeysTable({
           <Th>{t("keys.col.name")}</Th>
           <Th>{t("keys.col.status")}</Th>
           <Th className="hidden md:table-cell">{t("keys.col.limit")}</Th>
+          <Th className="hidden xl:table-cell">{t("routingPresets.key.col")}</Th>
           <Th className="hidden lg:table-cell">{t("keys.col.expires")}</Th>
           <Th className="hidden 2xl:table-cell">{t("keys.col.created")}</Th>
           {manage ? <Th className="w-0" /> : null}
@@ -266,6 +268,29 @@ function KeyLimit({ apiKey }: { apiKey: Key }) {
   );
 }
 
+// A management key calls no model, so it has no preset. A call key without one routes by the system's allow-all: an
+// older key, or a node that gives no preset.
+function KeyPreset({ apiKey }: { apiKey: Key }) {
+  const { t } = useTranslation();
+  const presetName = usePresetName();
+  if (apiKey.kind === "management") {
+    return <span className="text-t4">{t("routingPresets.key.notApplicable")}</span>;
+  }
+  if (!apiKey.preset_id) {
+    return (
+      <span className="text-t4" title={t("routingPresets.key.noneHint")}>
+        {t("routingPresets.key.none")}
+      </span>
+    );
+  }
+  const name = presetName(apiKey);
+  return (
+    <p className="truncate" title={name}>
+      {name}
+    </p>
+  );
+}
+
 function KeyRow({
   apiKey,
   manage,
@@ -298,6 +323,9 @@ function KeyRow({
       </Td>
       <Td className="hidden tabular-nums md:table-cell">
         <KeyLimit apiKey={apiKey} />
+      </Td>
+      <Td className="hidden max-w-48 xl:table-cell">
+        <KeyPreset apiKey={apiKey} />
       </Td>
       <Td className="hidden whitespace-nowrap lg:table-cell">
         {apiKey.expires_at ? format.dateTime(new Date(apiKey.expires_at)) : t("keys.neverExpires")}

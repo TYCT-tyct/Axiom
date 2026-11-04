@@ -1,6 +1,7 @@
 import type { Messages } from "@axiom/ui";
 import { en as providerKeys } from "./provider-keys";
 import { en as receipt } from "./receipt";
+import { en as routingPresets } from "./routing-presets";
 import { en as settings } from "./settings";
 import { en as statement } from "./statement";
 import type zh from "./zh";
@@ -22,6 +23,7 @@ export default {
     overview: "Overview",
     keys: "API keys",
     providerKeys: "Provider keys",
+    routingPresets: "Routing presets",
     calls: "Calls",
     balance: "Balance",
     redeem: "Redeem",
@@ -368,6 +370,7 @@ export default {
     },
   },
   providerKeys,
+  routingPresets,
   calls: {
     priceVersion: "Price version {{version}}",
     priceVersionUnavailable: "Price version unavailable",
