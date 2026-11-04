@@ -1,5 +1,6 @@
 import { long, nano, pad, range, type Schemas, siteId, tierId, usd, usualTargets, uuid } from "./admin-fixtures.ts";
-import { aMerchant, anOrder, aRefund } from "./admin-payments-data.ts";
+import { anOrder, aRefund, paymentData } from "./admin-payments-data.ts";
+import { allPermissions } from "./admin-permissions.ts";
 import type { AuthState } from "./mock.ts";
 import { accountId, authState, userId } from "./mock-auth.ts";
 
@@ -13,6 +14,9 @@ export { uuid } from "./admin-fixtures.ts";
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
   targets: Map<string, Schemas["OperationsTargets"]>;
+  // A node from before the commercial metrics, used to prove both mixed-version directions.
+  oldTargetRead?: boolean;
+  oldTargetWrite?: boolean;
   paidUsers: number;
   monthlyRevenue: Schemas["Money"];
   retention: Schemas["OperationsRetention"];
@@ -40,22 +44,6 @@ export type AdminState = AuthState & {
   models: Schemas["Model"][];
   rules: Schemas["PricingRule"][];
 };
-
-const allPermissions = [
-  "users.view",
-  "users.manage",
-  "credits.grant",
-  "calls.search",
-  "calls.inspect",
-  "audit.view",
-  "suppliers.view",
-  "suppliers.manage",
-  "catalog.view",
-  "catalog.manage",
-  "pricing.view",
-  "pricing.manage",
-  "sites.manage",
-];
 
 const tiers: Schemas["TierRef"][] = [
   { id: tierId(1), name: "Standard" },
@@ -362,21 +350,6 @@ function rules(): Schemas["PricingRule"][] {
   ];
 }
 
-function paymentData(people: Schemas["UserSummary"][]) {
-  const fallback = people[0] ?? aUser(1);
-  const orders = range(60).map((n) => anOrder(n, people[(n - 1) % Math.max(people.length, 1)] ?? fallback));
-  const refunds = range(3).map((n) =>
-    aRefund(n, orders[n - 1] ?? orders[0] ?? anOrder(1, fallback), people[n] ?? fallback),
-  );
-  for (const refund of refunds) {
-    const order = orders.find((candidate) => candidate.id === refund.order_id);
-    if (order) {
-      order.refunds = [...(order.refunds ?? []), refund];
-    }
-  }
-  return { merchants: [aMerchant()], orders, refunds };
-}
-
 export function usualState(): AdminState {
   const users = range(60).map((n) => aUser(n));
   const own = aUser(0, { email: "admin@example.com", mfa_enabled: true, tier: tiers[0] });
@@ -413,7 +386,7 @@ export function usualState(): AdminState {
     accounts: new Map([own, ...users].map((user) => [user.account_id, anAccount(user)])),
     calls,
     traces: new Map(calls.map((call, i) => [call.id ?? uuid(11, i + 1), aTrace(call, i + 1)])),
-    ...paymentData(people),
+    ...paymentData(people, aUser(1)),
     audit,
     auditEntries: new Map(audit.map((entry) => [entry.id ?? uuid(12, 1), entry])),
     suppliers: suppliers(),

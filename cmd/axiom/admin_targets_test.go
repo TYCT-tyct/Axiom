@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/hex"
 	"net/http"
 	"testing"
 
 	"axiom/internal/operations"
 	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/idem"
+	"axiom/internal/platform/jsonx"
 )
 
 // TestAdminOperationsTargets: the owner sets every target of a UTC month, reads them back, and the overview prorates
@@ -38,7 +41,7 @@ func TestAdminOperationsTargets(t *testing.T) {
 		`{"calls":3100,"errors":12,"revenue":{"amount":"5000000000000","currency":"USD"},`+
 			`"cost":{"amount":"3000000000000","currency":"USD"},`+
 			`"paid_users":300,"monthly_revenue":{"amount":"600000000000","currency":"USD"},`+
-			`"gross_margin":3500,"retention":7000,"rev":0,"reason":"set November targets"}`,
+			`"gross_margin":3500,"retention":7000,"all_metrics":true,"rev":0,"reason":"set November targets"}`,
 		as(owner), idempotent(key), header("X-Axiom-Target-Metrics", "all"))
 	expectAdmin(t, "set targets", rec, 200, "")
 	var set adminapi.OperationsTargets
@@ -106,7 +109,7 @@ func TestAdminOperationsTargets(t *testing.T) {
 		`{"calls":3100,"errors":12,"revenue":{"amount":"5000000000000","currency":"USD"},`+
 			`"cost":{"amount":"3000000000000","currency":"USD"},`+
 			`"paid_users":300,"monthly_revenue":{"amount":"600000000000","currency":"USD"},`+
-			`"gross_margin":3500,"retention":7000,"rev":0,"reason":"set November targets"}`,
+			`"gross_margin":3500,"retention":7000,"all_metrics":true,"rev":0,"reason":"set November targets"}`,
 		as(owner), idempotent(key), header("X-Axiom-Target-Metrics", "all"))
 	expectAdmin(t, "replayed targets", replay, 200, "")
 	if got := replay.Header().Get("Idempotency-Replayed"); got != "true" {
@@ -148,7 +151,7 @@ func TestAdminOperationsTargets(t *testing.T) {
 	}
 
 	// Clearing the set is a write too: the month stays answerable, with every target absent.
-	rec = f.do(http.MethodPut, path, `{"rev":2,"reason":"clear the month"}`,
+	rec = f.do(http.MethodPut, path, `{"all_metrics":true,"rev":2,"reason":"clear the month"}`,
 		as(owner), idempotent(newKey()), header("X-Axiom-Target-Metrics", "all"))
 	expectAdmin(t, "clear targets", rec, 200, "")
 	var cleared adminapi.OperationsTargets
@@ -377,5 +380,71 @@ func TestAdminOperationsTargetsRefuseAnotherCurrency(t *testing.T) {
 	detail := errorDetailOf(t, rec)
 	if detail.Fields == nil || len(*detail.Fields) != 1 || (*detail.Fields)[0].Pointer != "/revenue/currency" {
 		t.Fatalf("the field error: %s", rec.Body.String())
+	}
+}
+
+// TestAdminOperationsTargetsKeepTheLegacyFingerprint: a legacy write has the same fingerprint an old node stored for
+// it, so a request whose response was lost replays here after the node upgrade. The marker of a full write is not part
+// of the legacy form.
+func TestAdminOperationsTargetsKeepTheLegacyFingerprint(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	path := "/reports/targets/2026-11"
+	key := newKey()
+	payload := `{"calls":9,"rev":0,"reason":"legacy targets"}`
+	rec := f.do(http.MethodPut, path, payload, as(owner), idempotent(key))
+	expectAdmin(t, "legacy write", rec, 200, "")
+
+	// This is the request an old handler fingerprinted: the month and the body, with no full-write marker.
+	var body adminapi.OperationsTargetsUpdate
+	if err := jsonx.Unmarshal([]byte(payload), &body); err != nil {
+		t.Fatal(err)
+	}
+	want, err := idem.Fingerprint([]any{"2026-11", &body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.text("SELECT fingerprint::text FROM platform.idempotency WHERE key = '" + key + "'")
+	if got != `\x`+hex.EncodeToString(want[:]) {
+		t.Fatalf("legacy fingerprint = %s, want the old [month, body] form", got)
+	}
+
+	replay := f.do(http.MethodPut, path, payload, as(owner), idempotent(key))
+	expectAdmin(t, "legacy replay", replay, 200, "")
+	if replay.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatal("the old request did not replay")
+	}
+}
+
+// TestAdminOperationsTargetsFullWriteNeedsBothMarkers: a full write must carry the body marker as well as the header,
+// so an old node rejects it before it can clear only the legacy four and report success.
+func TestAdminOperationsTargetsFullWriteNeedsBothMarkers(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	path := "/reports/targets/2026-11"
+	for name, tc := range map[string]struct {
+		body   string
+		header string
+	}{
+		"header only": {`{"rev":0,"reason":"r"}`, "all"},
+		"body only":   {`{"all_metrics":true,"rev":0,"reason":"r"}`, ""},
+		"false body":  {`{"all_metrics":false,"rev":0,"reason":"r"}`, ""},
+	} {
+		var mods []mod
+		mods = append(mods, as(owner), idempotent(newKey()))
+		if tc.header != "" {
+			mods = append(mods, header("X-Axiom-Target-Metrics", tc.header))
+		}
+		rec := f.do(http.MethodPut, path, tc.body, mods...)
+		expectAdmin(t, name, rec, http.StatusBadRequest, codeInvalidRequest)
+		detail := errorDetailOf(t, rec)
+		if detail.Fields == nil || len(*detail.Fields) != 1 || (*detail.Fields)[0].Pointer != "/all_metrics" {
+			t.Fatalf("%s: the field error: %s", name, rec.Body.String())
+		}
+	}
+	if n := f.auditCount("targets.update"); n != "0" {
+		t.Fatalf("%s audit entries, want none", n)
 	}
 }

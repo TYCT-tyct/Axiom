@@ -46,8 +46,22 @@ func (a adminAPI) UpdateOperationsTargets(ctx context.Context, request adminapi.
 	if err != nil {
 		return nil, err
 	}
-	full := request.Params.XAxiomTargetMetrics != nil && *request.Params.XAxiomTargetMetrics == "all"
-	view, replayed, err := idempotently(ctx, a.db, "updateOperationsTargets", request.Params.IdempotencyKey, []any{request.Month, request.Body, full},
+	headerFull := request.Params.XAxiomTargetMetrics != nil && *request.Params.XAxiomTargetMetrics == "all"
+	if request.Body.AllMetrics != nil && !*request.Body.AllMetrics {
+		return nil, invalidField("/all_metrics", "must be true when present")
+	}
+	bodyFull := request.Body.AllMetrics != nil && *request.Body.AllMetrics
+	if headerFull != bodyFull {
+		return nil, invalidField("/all_metrics", "must be true exactly when X-Axiom-Target-Metrics is all")
+	}
+	full := bodyFull
+	// A legacy write keeps the first-release fingerprint [month, body] so a request an old node already completed
+	// replays here after a lost response. A full write adds its marker, which an old node rejects before writing.
+	fingerprint := []any{request.Month, request.Body}
+	if full {
+		fingerprint = append(fingerprint, true)
+	}
+	view, replayed, err := idempotently(ctx, a.db, "updateOperationsTargets", request.Params.IdempotencyKey, fingerprint,
 		func(tx pg.Tx) (adminapi.OperationsTargets, error) {
 			opts := operations.SetOptions{KeepCommercial: !full}
 			if err := operations.Set(ctx, tx, actor(ctx), site, set, request.Body.Rev, request.Body.Reason, opts); err != nil {

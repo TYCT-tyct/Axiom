@@ -46,6 +46,82 @@ test.describe("business targets", () => {
     await expect(page.getByText(words("overview.targets.ahead")).first()).toBeVisible();
   });
 
+  test("business figures drill into the records behind them with the same window", async ({ page }) => {
+    await open(page, "");
+    const link = (key: string) => page.getByRole("link", { name: new RegExp(zhText(`overview.${key}`)) });
+    const address = async (key: string) => new URL((await link(key).getAttribute("href")) ?? "", "http://axiom");
+    const [paid, revenue, margin, retention] = await Promise.all([
+      address("paidUsers"),
+      address("monthlyRevenue"),
+      address("grossMargin"),
+      address("retention"),
+    ]);
+    for (const url of [paid, revenue]) {
+      expect(url.pathname).toBe("/orders");
+      expect(url.searchParams.get("state")).toBe("paid");
+      expect(url.searchParams.get("since")).toBeTruthy();
+      expect(url.searchParams.get("until")).toBeTruthy();
+    }
+    expect(margin.pathname).toBe("/calls");
+    expect(margin.searchParams.get("site_id")).toBeTruthy();
+    expect(margin.searchParams.get("since")).toBeTruthy();
+    expect(margin.searchParams.get("until")).toBeTruthy();
+    expect(retention.pathname).toBe("/orders");
+    expect(retention.searchParams.get("state")).toBe("paid");
+    expect(retention.searchParams.get("since")).toMatch(/-01T00:00:00\.000Z$/);
+    expect(retention.searchParams.get("until")).toBe(paid.searchParams.get("until"));
+
+    await link("monthlyRevenue").click();
+    await page.waitForURL(/\/orders\?/);
+    const landed = new URL(page.url());
+    expect(landed.searchParams.get("state")).toBe("paid");
+    expect(landed.searchParams.get("since")).toBe(revenue.searchParams.get("since"));
+    expect(landed.searchParams.get("until")).toBe(revenue.searchParams.get("until"));
+  });
+
+  test("an old node's four-field read writes only those four and keeps the commercial targets", async ({ page }) => {
+    const state = await mockAdmin(page, "usual");
+    state.oldTargetRead = true;
+    signedInAs(state, "mfa");
+    await page.goto("");
+    const month = new Date().toISOString().slice(0, 7);
+    const before = state.targets.get(month);
+    await press(page, "overview.targets.edit");
+    const editor = dialog(page);
+    await expect(editor.getByLabel(words("overview.targets.paidUsers"))).toHaveCount(0);
+    await editor.getByLabel(words("overview.targets.calls")).fill("51");
+    await send(page);
+    await expect(editor.getByText(zhText("overview.targets.saved"))).toBeVisible();
+    expect(state.targets.get(month)?.calls).toBe(51);
+    expect(state.targets.get(month)?.paid_users).toBe(before?.paid_users);
+  });
+
+  test("a full clear is refused by an old node before it changes the legacy four", async ({ page }) => {
+    const state = await open(page, "");
+    state.oldTargetWrite = true;
+    const month = new Date().toISOString().slice(0, 7);
+    const before = state.targets.get(month);
+    await press(page, "overview.targets.edit");
+    const editor = dialog(page);
+    for (const field of [
+      "calls",
+      "errors",
+      "revenue",
+      "cost",
+      "paidUsers",
+      "monthlyRevenue",
+      "grossMargin",
+      "retention",
+    ] as const) {
+      await editor.getByLabel(words(`overview.targets.${field}`)).fill("");
+    }
+    await send(page);
+
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("errors.invalid_request"));
+    await expect(dialog(page).getByText(zhText("overview.targets.saved"))).toHaveCount(0);
+    expect(state.targets.get(month)).toEqual(before);
+  });
+
   test("an editor with an old revision reloads before it can save", async ({ page }) => {
     const state = await open(page, "");
     const month = new Date().toISOString().slice(0, 7);

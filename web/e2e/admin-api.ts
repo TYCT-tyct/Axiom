@@ -4,6 +4,7 @@ import { type AdminState, emptyState, type Schemas, usualState, worstState } fro
 import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { supplyHandlers } from "./admin-supply.ts";
+import { getTargets, putTargets, targetComparison } from "./admin-targets-api.ts";
 import { fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
 import { confirmTotp, regenerate, session, signIn, signOut, totpSetup, userId, verifyMfa } from "./mock-auth.ts";
 
@@ -114,116 +115,6 @@ const registration: Schemas["RegistrationPolicy"] = {
   domain_allow: [],
   domain_deny: ["mailinator.com"],
 };
-
-const targetMetrics: Schemas["OperationsTargetMetric"][] = [
-  "calls",
-  "errors",
-  "revenue",
-  "cost",
-  "paid_users",
-  "monthly_revenue",
-  "gross_margin",
-  "retention",
-];
-
-// The targets of a month, and the editor's write of them. The mock keeps one set per month and does not prorate it;
-// showing the page's target and empty states is enough.
-function getTargets({ params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "get">) {
-  const month = params.month ?? "";
-  return ok(state.targets.get(month) ?? { site_id: state.siteId, month, rev: 0, metrics: targetMetrics });
-}
-
-function putTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "put">) {
-  const month = params.month ?? "";
-  const current = state.targets.get(month);
-  if (body.rev !== (current?.rev ?? 0)) {
-    return fail(409, "stale_revision");
-  }
-  const stored: Schemas["OperationsTargets"] = {
-    site_id: state.siteId,
-    month,
-    rev: (current?.rev ?? 0) + 1,
-    metrics: targetMetrics,
-    calls: body.calls,
-    errors: body.errors,
-    revenue: body.revenue,
-    cost: body.cost,
-    paid_users: body.paid_users,
-    monthly_revenue: body.monthly_revenue,
-    gross_margin: body.gross_margin,
-    retention: body.retention,
-  };
-  state.targets.set(month, stored);
-  return ok(stored);
-}
-
-// targetComparison turns a stored month into the overview's prorated comparison. The mock states the month's targets
-// as they are; it exists to show the page's target and gap, not to re-test the server's arithmetic.
-function targetComparison(
-  stored: Schemas["OperationsTargets"] | undefined,
-  calls: number,
-  errors: number,
-  revenue: bigint,
-  cost: bigint,
-  paidUsers: number,
-  monthlyRevenue: bigint,
-  grossMargin: number | undefined,
-  retention: Schemas["OperationsRetention"],
-) {
-  if (!stored) {
-    return {};
-  }
-  return {
-    ...(stored.calls !== undefined ? { calls: { target: stored.calls, gap: calls - stored.calls } } : {}),
-    ...(stored.errors !== undefined ? { errors: { target: stored.errors, gap: errors - stored.errors } } : {}),
-    ...(stored.revenue
-      ? {
-          revenue: {
-            target: stored.revenue,
-            gap: { amount: String(revenue - BigInt(stored.revenue.amount)), currency: stored.revenue.currency },
-          },
-        }
-      : {}),
-    ...(stored.cost
-      ? {
-          cost: {
-            target: stored.cost,
-            gap: { amount: String(cost - BigInt(stored.cost.amount)), currency: stored.cost.currency },
-          },
-        }
-      : {}),
-    ...(stored.paid_users !== undefined
-      ? { paid_users: { target: stored.paid_users, gap: paidUsers - stored.paid_users } }
-      : {}),
-    ...(stored.monthly_revenue
-      ? {
-          monthly_revenue: {
-            target: stored.monthly_revenue,
-            gap: {
-              amount: String(monthlyRevenue - BigInt(stored.monthly_revenue.amount)),
-              currency: stored.monthly_revenue.currency,
-            },
-          },
-        }
-      : {}),
-    ...(stored.gross_margin !== undefined
-      ? {
-          gross_margin: {
-            target: stored.gross_margin,
-            ...(grossMargin !== undefined ? { gap: grossMargin - stored.gross_margin } : {}),
-          },
-        }
-      : {}),
-    ...(stored.retention !== undefined
-      ? {
-          retention: {
-            target: stored.retention,
-            ...(retention.rate !== undefined ? { gap: retention.rate - stored.retention } : {}),
-          },
-        }
-      : {}),
-  };
-}
 
 // The overview sums the mocked calls, so the worst data's long slugs, many accounts and int64 prices reach the page; the
 // cash comes back in two currencies, one of them negative, as a site with refunds in another currency would see.

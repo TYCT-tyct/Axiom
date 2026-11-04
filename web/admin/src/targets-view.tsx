@@ -108,7 +108,7 @@ function TargetsForm({
                 ...(full ? { "X-Axiom-Target-Metrics": "all" as const } : {}),
               },
             },
-            body: { ...targets, rev: read.rev, reason },
+            body: { ...targets, ...(full ? { all_metrics: true } : {}), rev: read.rev, reason },
           }),
         )
       }
@@ -118,20 +118,24 @@ function TargetsForm({
   );
 }
 
-function TargetFields({
-  view,
-  metrics,
-  currency,
-  error,
-}: {
+type TargetFieldProps = {
   view: AdminSchemas["OperationsTargets"];
-  metrics: readonly TargetMetric[];
   currency: string;
   error: unknown;
-}) {
+};
+
+function TargetFields({ view, metrics, currency, error }: TargetFieldProps & { metrics: readonly TargetMetric[] }) {
+  return (
+    <>
+      <LegacyTargetFields view={view} currency={currency} error={error} />
+      {metrics.includes("paid_users") ? <CommercialTargetFields view={view} currency={currency} error={error} /> : null}
+    </>
+  );
+}
+
+function LegacyTargetFields({ view, currency, error }: TargetFieldProps) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const full = metrics.includes("paid_users");
   return (
     <>
       <TextField
@@ -170,52 +174,54 @@ function TargetFields({
         defaultValue={view.cost ? moneyInput(view.cost.amount) : undefined}
         error={errors.field(error, "cost")}
       />
-      {full ? (
-        <>
-          <TextField
-            name="paid_users"
-            label={t("overview.targets.paidUsers")}
-            hint={t("overview.targets.paidUsersHint")}
-            inputMode="numeric"
-            autoComplete="off"
-            defaultValue={view.paid_users}
-            error={errors.field(error, "paid_users")}
-          />
-          <TextField
-            name="monthly_revenue"
-            label={t("overview.targets.monthlyRevenue", { currency })}
-            hint={t("overview.targets.monthlyRevenueHint")}
-            inputMode="decimal"
-            autoComplete="off"
-            defaultValue={view.monthly_revenue ? moneyInput(view.monthly_revenue.amount) : undefined}
-            error={errors.field(error, "monthly_revenue")}
-          />
-          <TextField
-            name="gross_margin"
-            label={t("overview.targets.grossMargin")}
-            hint={t("overview.targets.grossMarginHint")}
-            inputMode="decimal"
-            autoComplete="off"
-            defaultValue={
-              view.gross_margin === undefined ? undefined : formatTargetRate(view.gross_margin).slice(0, -1)
-            }
-            error={errors.field(error, "gross_margin")}
-          />
-          <TextField
-            name="retention"
-            label={t("overview.targets.retention")}
-            hint={t("overview.targets.retentionHint")}
-            inputMode="decimal"
-            autoComplete="off"
-            defaultValue={view.retention === undefined ? undefined : formatTargetRate(view.retention).slice(0, -1)}
-            error={errors.field(error, "retention")}
-          />
-        </>
-      ) : null}
     </>
   );
 }
 
+function CommercialTargetFields({ view, currency, error }: TargetFieldProps) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return (
+    <>
+      <TextField
+        name="paid_users"
+        label={t("overview.targets.paidUsers")}
+        hint={t("overview.targets.paidUsersHint")}
+        inputMode="numeric"
+        autoComplete="off"
+        defaultValue={view.paid_users}
+        error={errors.field(error, "paid_users")}
+      />
+      <TextField
+        name="monthly_revenue"
+        label={t("overview.targets.monthlyRevenue", { currency })}
+        hint={t("overview.targets.monthlyRevenueHint")}
+        inputMode="decimal"
+        autoComplete="off"
+        defaultValue={view.monthly_revenue ? moneyInput(view.monthly_revenue.amount) : undefined}
+        error={errors.field(error, "monthly_revenue")}
+      />
+      <TextField
+        name="gross_margin"
+        label={t("overview.targets.grossMargin")}
+        hint={t("overview.targets.grossMarginHint")}
+        inputMode="decimal"
+        autoComplete="off"
+        defaultValue={view.gross_margin === undefined ? undefined : formatTargetRate(view.gross_margin).slice(0, -1)}
+        error={errors.field(error, "gross_margin")}
+      />
+      <TextField
+        name="retention"
+        label={t("overview.targets.retention")}
+        hint={t("overview.targets.retentionHint")}
+        inputMode="decimal"
+        autoComplete="off"
+        defaultValue={view.retention === undefined ? undefined : formatTargetRate(view.retention).slice(0, -1)}
+        error={errors.field(error, "retention")}
+      />
+    </>
+  );
+}
 // TargetNote shows one figure's target and gap under its value. An absent comparison is a metric without a target; an
 // absent gap is a comparison withheld because the actual side is incomplete (the call log, or supplier cost with calls
 // whose cost is unknown).

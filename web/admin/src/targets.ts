@@ -14,7 +14,7 @@ export type TargetMetric =
   | "gross_margin"
   | "retention";
 
-export const allTargetMetrics: readonly TargetMetric[] = [
+const allTargetMetrics: readonly TargetMetric[] = [
   "calls",
   "errors",
   "revenue",

@@ -3206,9 +3206,11 @@ type OperationsTargets struct {
 	SiteId SiteId `json:"site_id"`
 }
 
-// OperationsTargetsUpdate The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls, errors and paid users; gross margin and retention are basis points from 0 to 10000. Without `X-Axiom-Target-Metrics: all` the commercial metrics are left as stored.
+// OperationsTargetsUpdate The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls, errors and paid users; gross margin and retention are basis points from 0 to 10000. Without `X-Axiom-Target-Metrics: all` and `all_metrics: true` the commercial metrics are left as stored; sending only one of the two is a 400.
 type OperationsTargetsUpdate struct {
-	Calls *int64 `json:"calls,omitempty"`
+	// AllMetrics True when the write replaces every metric the node stores; must be paired with `X-Axiom-Target-Metrics: all`. A node before the commercial metrics rejects this field, so a full replacement cannot partly succeed there.
+	AllMetrics *bool  `json:"all_metrics,omitempty"`
+	Calls      *int64 `json:"calls,omitempty"`
 
 	// Cost An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Cost   *Money `json:"cost,omitempty"`
@@ -5470,7 +5472,7 @@ type UpdateOperationsTargetsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 
-	// XAxiomTargetMetrics `all` makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. Without it, a write replaces only calls, errors, revenue and cost and leaves the commercial metrics as stored; a page from before them sends no such header. An old node ignores it.
+	// XAxiomTargetMetrics `all` makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body; a node from before the commercial metrics rejects that field, so a full replacement cannot clear only the legacy four there. Without it, a write replaces only calls, errors, revenue and cost and leaves the commercial metrics as stored; a page from before them sends neither.
 	XAxiomTargetMetrics *UpdateOperationsTargetsParamsXAxiomTargetMetrics `json:"X-Axiom-Target-Metrics,omitempty"`
 }
 

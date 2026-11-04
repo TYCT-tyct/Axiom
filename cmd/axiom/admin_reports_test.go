@@ -165,7 +165,7 @@ func TestAdminOperationsOverviewCommercial(t *testing.T) {
 
 	path := "/reports/targets/" + month.Format("2006-01")
 	rec := f.do(http.MethodPut, path,
-		`{"paid_users":0,"monthly_revenue":{"amount":"0","currency":"USD"},"retention":9000,"rev":0,"reason":"commercial targets"}`,
+		`{"all_metrics":true,"paid_users":0,"monthly_revenue":{"amount":"0","currency":"USD"},"retention":9000,"rev":0,"reason":"commercial targets"}`,
 		as(owner), idempotent(newKey()), header("X-Axiom-Target-Metrics", "all"))
 	expectAdmin(t, "commercial targets", rec, 200, "")
 

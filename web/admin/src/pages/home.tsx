@@ -19,7 +19,16 @@ import { Link, Navigate, useNavigate, useSearch } from "@tanstack/react-router";
 import { type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { nav } from "../nav";
-import { callsDrill, type OverviewRange, ordersDrill, overviewRanges, overviewWindow, type Window } from "../overview";
+import {
+  callsDrill,
+  type OverviewRange,
+  ordersDrill,
+  overviewRanges,
+  overviewWindow,
+  paidOrdersDrill,
+  retentionOrdersDrill,
+  type Window,
+} from "../overview";
 import { mainCell, PageBody } from "../parts";
 import { overviewQuery } from "../queries";
 import { formatTargetRate, targetsEmpty } from "../targets";
@@ -157,7 +166,6 @@ type FigureProps = {
 };
 
 function Figures({ data, window, anchor }: { data: Overview; window: Window; anchor: Date }) {
-  const { t } = useTranslation();
   const targets = data.targets;
   const targetNotes = targets !== undefined && !targetsEmpty(targets);
   const currency = data.revenue?.currency ?? data.cost?.currency ?? data.monthly_revenue?.currency ?? "";
@@ -173,32 +181,58 @@ function Figures({ data, window, anchor }: { data: Overview; window: Window; anc
         <CostFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
         <CashFigure data={data} window={window} showTarget={targetNotes} />
       </div>
+      <BusinessFigures data={data} window={window} site={site} targets={targets} targetNotes={targetNotes} />
+      <div className="grid gap-4 xl:grid-cols-2">
+        <TopAccounts data={data} window={window} site={site} />
+        <TopModels data={data} window={window} site={site} />
+      </div>
+    </>
+  );
+}
+
+function BusinessFigures({
+  data,
+  window,
+  site,
+  targets,
+  targetNotes,
+}: {
+  data: Overview;
+  window: Window;
+  site?: string;
+  targets?: AdminSchemas["OperationsTargetComparison"];
+  targetNotes: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
       <h2 className="text-ui font-medium text-t2">{t("overview.business")}</h2>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <PaidUsersFigure
           data={data}
+          window={window}
           targets={targets}
           showTarget={targetNotes && (data.paid_users !== undefined || targets?.paid_users !== undefined)}
         />
         <MonthlyRevenueFigure
           data={data}
+          window={window}
           targets={targets}
           showTarget={targetNotes && (data.monthly_revenue !== undefined || targets?.monthly_revenue !== undefined)}
         />
         <GrossMarginFigure
           data={data}
+          window={window}
+          site={site}
           targets={targets}
           showTarget={targetNotes && (data.gross_margin !== undefined || targets?.gross_margin !== undefined)}
         />
         <RetentionFigure
           data={data}
+          window={window}
           targets={targets}
           showTarget={targetNotes && (data.retention !== undefined || targets?.retention !== undefined)}
         />
-      </div>
-      <div className="grid gap-4 xl:grid-cols-2">
-        <TopAccounts data={data} window={window} site={site} />
-        <TopModels data={data} window={window} site={site} />
       </div>
     </>
   );
@@ -297,11 +331,19 @@ function CashFigure({ data, window, showTarget }: { data: Overview; window: Wind
   );
 }
 
-function PaidUsersFigure({ data, targets, showTarget }: Omit<FigureProps, "window" | "site">) {
+function PaidOrdersFigure({ window, children }: { window: Window; children: ReactNode }) {
+  return (
+    <Link to="/orders" search={paidOrdersDrill(window)} className={figure}>
+      {children}
+    </Link>
+  );
+}
+
+function PaidUsersFigure({ data, window, targets, showTarget }: FigureProps) {
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <div className={figure}>
+    <PaidOrdersFigure window={window}>
       <Stat
         label={t("overview.paidUsers")}
         value={data.paid_users === undefined ? t("overview.unavailable") : format.number(data.paid_users)}
@@ -311,15 +353,15 @@ function PaidUsersFigure({ data, targets, showTarget }: Omit<FigureProps, "windo
           t("overview.paidUsersNote"),
         )}
       />
-    </div>
+    </PaidOrdersFigure>
   );
 }
 
-function MonthlyRevenueFigure({ data, targets, showTarget }: Omit<FigureProps, "window" | "site">) {
+function MonthlyRevenueFigure({ data, window, targets, showTarget }: FigureProps) {
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <div className={figure}>
+    <PaidOrdersFigure window={window}>
       <Stat
         label={t("overview.monthlyRevenue")}
         value={data.monthly_revenue ? format.money(data.monthly_revenue) : t("overview.unavailable")}
@@ -329,14 +371,14 @@ function MonthlyRevenueFigure({ data, targets, showTarget }: Omit<FigureProps, "
           t("overview.monthlyRevenueNote"),
         )}
       />
-    </div>
+    </PaidOrdersFigure>
   );
 }
 
-function GrossMarginFigure({ data, targets, showTarget }: Omit<FigureProps, "window" | "site">) {
+function GrossMarginFigure({ data, window, site, targets, showTarget }: FigureProps) {
   const { t } = useTranslation();
   return (
-    <div className={figure}>
+    <Link to="/calls" search={callsDrill(window, { site })} className={figure}>
       <Stat
         label={t("overview.grossMargin")}
         value={data.gross_margin === undefined ? t("overview.unavailable") : formatTargetRate(data.gross_margin)}
@@ -346,11 +388,11 @@ function GrossMarginFigure({ data, targets, showTarget }: Omit<FigureProps, "win
           t("overview.grossMarginNote"),
         )}
       />
-    </div>
+    </Link>
   );
 }
 
-function RetentionFigure({ data, targets, showTarget }: Omit<FigureProps, "window" | "site">) {
+function RetentionFigure({ data, window, targets, showTarget }: FigureProps) {
   const { t } = useTranslation();
   const format = useFormat();
   const retention = data.retention;
@@ -363,13 +405,13 @@ function RetentionFigure({ data, targets, showTarget }: Omit<FigureProps, "windo
         })
     : t("overview.retentionUnavailable");
   return (
-    <div className={figure}>
+    <Link to="/orders" search={retentionOrdersDrill(window)} className={figure}>
       <Stat
         label={t("overview.retention")}
         value={retention?.rate === undefined ? t("overview.unavailable") : formatTargetRate(retention.rate)}
         note={withTarget(showTarget, <TargetNote metric="retention" comparison={targets?.retention} />, note)}
       />
-    </div>
+    </Link>
   );
 }
 

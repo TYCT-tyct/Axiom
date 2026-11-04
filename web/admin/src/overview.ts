@@ -48,11 +48,23 @@ export function callsDrill(
 }
 
 // The order page's cash view takes the same ledger window; it lists the transactions themselves, not orders filtered
-// by their creation time.
-export type OrderDrill = Window & { cash?: "1" };
+// by their creation time. The paid view is the payment orders behind paid-users and monthly revenue.
+export type OrderDrill = Window & { cash?: "1"; state?: "paid" };
 
 export function ordersDrill(window: Window): OrderDrill {
   return { ...window, cash: "1" };
+}
+
+export function paidOrdersDrill(window: Window): OrderDrill {
+  return { ...window, state: "paid" };
+}
+
+// Retention compares last month's paying accounts with this month's payments. The list therefore starts at the first
+// day of the UTC cohort month and ends at the dashboard's window end, so both payments it counts are visible.
+export function retentionOrdersDrill(window: Window): OrderDrill {
+  const end = new Date(Date.parse(window.until) - 1);
+  const cohort = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - 1, 1));
+  return { since: cohort.toISOString(), until: window.until, state: "paid" };
 }
 
 // A result filter in the address is one of the two the contract has; anything else narrows nothing.

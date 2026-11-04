@@ -83,7 +83,7 @@ export interface paths {
         get: operations["getOperationsTargets"];
         /**
          * Set the site's business targets for a UTC calendar month.
-         * @description Replaces the month's whole set: a target left out is cleared, not kept from before. The request carries the `rev` the editor read; a month that has moved since then is a 409 `stale_revision`, not a silent overwrite of another administrator's change. Counts are calls, errors and paid users; revenue, monthly revenue and cost are exact money in the site's accounting currency, and another currency is a 400; gross margin and retention are basis points from 0 to 10000. With `X-Axiom-Target-Metrics: all` the write replaces every metric the response's `metrics` lists. Without it, the write replaces only the first-release four (calls, errors, revenue, cost) and leaves the commercial metrics as stored, so an editor from a node before them cannot clear what it cannot see. The change is audited with the values it replaced and the reason. Targets are administrative data, not site settings, so `updateSiteSettings` leaves them as they are.
+         * @description Replaces the month's whole set: a target left out is cleared, not kept from before. The request carries the `rev` the editor read; a month that has moved since then is a 409 `stale_revision`, not a silent overwrite of another administrator's change. Counts are calls, errors and paid users; revenue, monthly revenue and cost are exact money in the site's accounting currency, and another currency is a 400; gross margin and retention are basis points from 0 to 10000. With `X-Axiom-Target-Metrics: all` the write replaces every metric the response's `metrics` lists. Without it, the write replaces only the first-release four (calls, errors, revenue, cost) and leaves the commercial metrics as stored, so an editor from a node before them cannot clear what it cannot see. A full replacement must send both that header and `all_metrics: true`; a node before the commercial metrics rejects the unknown body field, so the request cannot clear four targets there and still report success. The change is audited with the values it replaced and the reason. Targets are administrative data, not site settings, so `updateSiteSettings` leaves them as they are.
          */
         put: operations["updateOperationsTargets"];
         post?: never;
@@ -3014,7 +3014,7 @@ export interface components {
         };
         /** @enum {string} */
         OperationsTargetMetric: "calls" | "errors" | "revenue" | "cost" | "paid_users" | "monthly_revenue" | "gross_margin" | "retention";
-        /** @description The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls, errors and paid users; gross margin and retention are basis points from 0 to 10000. Without `X-Axiom-Target-Metrics: all` the commercial metrics are left as stored. */
+        /** @description The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls, errors and paid users; gross margin and retention are basis points from 0 to 10000. Without `X-Axiom-Target-Metrics: all` and `all_metrics: true` the commercial metrics are left as stored; sending only one of the two is a 400. */
         OperationsTargetsUpdate: {
             reason: components["schemas"]["Reason"];
             /**
@@ -3028,6 +3028,8 @@ export interface components {
             errors?: number;
             revenue?: components["schemas"]["Money"];
             cost?: components["schemas"]["Money"];
+            /** @description True when the write replaces every metric the node stores; must be paired with `X-Axiom-Target-Metrics: all`. A node before the commercial metrics rejects this field, so a full replacement cannot partly succeed there. */
+            all_metrics?: boolean;
             /** Format: int64 */
             paid_users?: number;
             monthly_revenue?: components["schemas"]["Money"];
@@ -4515,7 +4517,7 @@ export interface components {
         Limit: number;
         /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
         IdempotencyKey: string;
-        /** @description `all` makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. Without it, a write replaces only calls, errors, revenue and cost and leaves the commercial metrics as stored; a page from before them sends no such header. An old node ignores it. */
+        /** @description `all` makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body; a node from before the commercial metrics rejects that field, so a full replacement cannot clear only the legacy four there. Without it, a write replaces only calls, errors, revenue and cost and leaves the commercial metrics as stored; a page from before them sends neither. */
         TargetMetricSet: "all";
     };
     requestBodies: never;
@@ -4655,7 +4657,7 @@ export interface operations {
             header: {
                 /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description `all` makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. Without it, a write replaces only calls, errors, revenue and cost and leaves the commercial metrics as stored; a page from before them sends no such header. An old node ignores it. */
+                /** @description `all` makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body; a node from before the commercial metrics rejects that field, so a full replacement cannot clear only the legacy four there. Without it, a write replaces only calls, errors, revenue and cost and leaves the commercial metrics as stored; a page from before them sends neither. */
                 "X-Axiom-Target-Metrics"?: components["parameters"]["TargetMetricSet"];
             };
             path: {
