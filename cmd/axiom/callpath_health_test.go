@@ -57,6 +57,7 @@ func (w *callWorld) healthCallPath(clock *testClock, mode quality.Mode) (callNod
 }
 
 func TestGatewayHealthRemoveProbeRestore(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []quality.Mode{quality.Enforce, quality.Observe} {
 		t.Run(string(mode), func(t *testing.T) { runGatewayHealth(t, mode) })
 	}
@@ -162,6 +163,7 @@ func (w *callWorld) checkHealthRecovery(clock *testClock, loop *quality.Loop, he
 }
 
 func TestGatewayDisabledEndpointIsNeverProbed(t *testing.T) {
+	t.Parallel()
 	w := newCallWorld(t)
 	w.price()
 	clock := &testClock{now: time.Now()}
@@ -220,6 +222,7 @@ func (w *callWorld) checkDisabledHealth(router *routing.Router, health *quality.
 }
 
 func TestGatewayHealthDefersProbesDuringFundsRefusal(t *testing.T) {
+	t.Parallel()
 	w := newCallWorld(t)
 	w.seedFailover()
 	w.price()

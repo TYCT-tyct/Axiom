@@ -1,7 +1,8 @@
 // Package objectstore reads and writes objects through the S3 API. It is the platform's only client for object
 // storage: backups use it with their own bucket and credentials in the ops job, and archive and content features take
 // this client when they land. Conversation bodies are not written through it: the product switch that would save them
-// is still off (docs/domains/observability.md「保留与开关」).
+// is still off (docs/domains/observability.md「保留与开关」). The controlled export reads them through Get, as
+// ciphertext only.
 //
 // Every operation requires a context deadline, retries only failures that may pass, and never follows a redirect.
 // The rules and the choices behind them are in this directory's README.

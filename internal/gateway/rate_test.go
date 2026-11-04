@@ -13,6 +13,7 @@ import (
 )
 
 func TestRateCounterSlidingWindow(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		r := NewRateCounter(time.Minute)
 		for i := 1; i <= 10; i++ {
@@ -36,6 +37,7 @@ func TestRateCounterSlidingWindow(t *testing.T) {
 
 // Cold keys must not accumulate: after two windows without them nothing is held.
 func TestRateCounterDropsIdleKeys(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		r := NewRateCounter(time.Minute)
 		for i := range 100 {

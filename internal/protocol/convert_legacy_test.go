@@ -11,6 +11,7 @@ import (
 // TestConvertLegacyToMessages: Chat's legacy function calling becomes the members that replaced it at the conversion
 // entry, and its calls are paired with the results that answer them (README.md「跨格式转换」).
 func TestConvertLegacyToMessages(t *testing.T) {
+	t.Parallel()
 	convertCases(t, protocol.Messages, []convertCase{
 		{
 			"legacy functions and function_call", chatBody(`"messages":[` + userHi + `],"functions":[{"name":"f","description":"d","parameters":{"type":"object","properties":{}}}],"function_call":"auto"`), nil,
@@ -72,6 +73,7 @@ func TestConvertLegacyToMessages(t *testing.T) {
 
 // TestConvertLegacyToResponses: the same legacy members become function tools, a function choice and function calls.
 func TestConvertLegacyToResponses(t *testing.T) {
+	t.Parallel()
 	const head = `{"model":"up","input":[`
 	convertCases(t, protocol.Responses, []convertCase{
 		{
@@ -90,6 +92,7 @@ func TestConvertLegacyToResponses(t *testing.T) {
 
 // Legacy and current spellings must produce the same conversation on either endpoint.
 func TestLegacyConversionMatchesTools(t *testing.T) {
+	t.Parallel()
 	for _, format := range formats[:2] {
 		for _, c := range []struct{ name, legacy, current string }{
 			{
@@ -134,6 +137,7 @@ func TestLegacyConversionMatchesTools(t *testing.T) {
 }
 
 func TestLegacyHistoryDoesNotAddParallelSwitch(t *testing.T) {
+	t.Parallel()
 	const history = `"messages":[{"role":"user","content":"Hi"},{"role":"assistant","function_call":{"name":"f","arguments":"{}"}},{"role":"function","name":"f","content":"done"}]`
 	for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		for _, option := range []string{"", `,"parallel_tool_calls":true`, `,"parallel_tool_calls":false`} {

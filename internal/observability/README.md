@@ -2,7 +2,7 @@
 
 调用记录的代码接口：写什么、怎么写、怎么读、数据怎么放。要不要记、记多久、谁能看是[记录与告警](../../docs/domains/observability.md)的事，本文只写代码里的做法和理由。指标与链路的基座在 [platform 的「遥测」](../platform/README.md#遥测)，不在本模块。
 
-目前实现调用与尝试记录，以及运维告警事件、规则、邮件与 Webhook 通知和周期渠道自测。用户元数据筛选、聚合与导出已实现；对话内容、分析标签和内容受控导出随各自的 Issue 加入。
+目前实现调用与尝试记录、运维告警事件、规则、邮件与 Webhook 通知和周期渠道自测，以及用户元数据筛选、聚合与导出。对话内容的存储表、账户密钥和受控导出已实现；保存正文的写入通道、分析标签和到期回收随各自的 Issue 加入。
 
 ## 接口
 
@@ -17,6 +17,11 @@ func (r *Recorder) Close(ctx context.Context) error       // 写完 spill；ctx 
 func (r *Recorder) Done() <-chan struct{}                 // 写入协程退出时关闭；Close 返回前已等待它，测试据此断言没有写入协程留下
 func ListOwn(ctx, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, error)
 func CheckOwnExportSize(ctx, tx pg.Tx, q OwnQuery) error // 同一 ReadTx 内、开始输出前检查最多 10001 个匹配键；超过 10000 返回 ErrExportSize
+func StreamContentMeta(ctx, tx pg.Tx, q ContentQuery, each func(ContentMeta) error) (ContentStats, error) // 一个只读快照里的正文引用；平台范围
+func ReadContentKey(ctx, tx pg.Tx, keys *secret.Keyring, account uuid.UUID) ([32]byte, error) // 调用方须传平台范围事务；AAD 绑定账户
+type ContentKeySource interface { ContentKey(context.Context, uuid.UUID) ([32]byte, error) } // cmd 用平台范围实现
+func NewContentReader(keys ContentKeySource, objects ContentObjects) (*ContentReader, error) // 密钥来源和对象存储缺一不可
+func (r *ContentReader) Open(ctx context.Context, m ContentMeta) ([]byte, error) // 取对象、解密、校验摘要；缺账户密钥返回 ErrNoContentKey
 func GetRetention(ctx, tx pg.Tx) (Retention, error)         // 调用记录的热窗口；第一次保存前是代码默认值
 func SetRetention(ctx, tx pg.Tx, r Retention) error        // 校验并保存；范围 0 到 3650 天，0 表示全部留在 PostgreSQL
 func RegisterRetention(cfg RetentionConfig) error          // 在 archive 队列登记每天的预建、归档与删除
@@ -44,7 +49,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 `call_attempt`：一次尝试一行，外键意义上的归属是调用，按调用的 `at` 分区，主键 `(request_id, at, attempt_seq)`。
 
 - **谁**：`site_id`、`account_id`（与调用相同，行级安全看这两列）。
-- **走了哪**：`endpoint_id`、`supplier_id`、`source_class`（official、cloud、relay）、`egress`（按名字）。
+- **走了哪**：`endpoint_id`、`supplier_id`、`source_class`（稳定的来源类别 slug，种子是 official、cloud、relay；类别在后台增改）、`egress`（按名字）。
 - **结果**：`outcome`（`committed`：内容已交给客户端；`failed`：没有；`unknown`：上游可能已执行）、`error_kind`、`started_at`、`finished_at`、`first_token_ms`。成本、用量和供应商的对账键不在这里重复：suppliers 的 `attempt_costs` 按 `(request_id, attempt_seq)` 保存，与计费同成同败；崩溃或超过截止时间的请求记在 `suppliers.lost_requests` 里。
 - **没有 NULL，文字有界**：与 `call_log` 相同；没有正文、密钥或凭证列。
 
@@ -53,6 +58,26 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 `spend_detection`：单行 `jsonb`，保存管理员设置的检测开关、窗口、基线、金额下限、倍数和两类次数下限。和 `alert_configuration` 分开，旧节点整体替换规则/渠道时不会把这个不认识的对象丢掉；默认值在代码里，第一次保存前读代码默认值。
 
 `retention`：单行 `jsonb`，保存调用记录的热窗口（`hot_days`，默认 90）。和规则、阈值一样是管理员数据，管理接口读写并留审计；0 表示全部留在 PostgreSQL。桶没配置时这个值不起作用：没有确认的归档就不能删。
+
+`content_keys`：每个账户一行，保存 32 字节数据密钥的信封（`ciphertext`、`nonce`、`wrapped_key`、`key_version`）和站点。AAD 是 `observability.content_keys/<account_id>/content_key`，账户之间不能互换。`wrapped_key` 是刻意避开旧二进制的 `wrapped_dek` 清单扫描：旧节点在迁移后仍能启动，新节点把这张表登记进主密钥轮换。
+
+`content_blobs`：一个消息或文件正文一行，`digest` 是带账户摘要子密钥的 HMAC-SHA256，`UNIQUE (account_id, digest)` 在账户内去重；`object_key` 指向对象存储，`size` 是明文大小，`last_referenced_at` 和可空的 `expires_at` 留给回收任务。正文不在这张表里。
+
+`content_refs`：一个调用的一类正文的每个消息、文件或其他组件一行，主键 `(request_id, kind, part)`，`part` 是稳定的组件名（消息序号或文件标识），外键 `(blob_id, site_id, account_id)` 保证引用和 blob 同账户；`created_at` 是导出的时间窗。
+
+`content_exports`：每次导出尝试一行，`approval_digest` 唯一（批准一次性使用），记录两个负责人公钥和接收公钥指纹、范围、目标、格式、状态、内容和缓存的条数/字节数、输出 SHA-256 和错误类别。它和上面三张表都强制平台范围行级安全，账户范围看不到任何行。
+
+## 内容存储与受控导出
+
+正文对象是 `version(1) || nonce(12) || AES-256-GCM(明文)`。账户的 32 字节数据密钥用 HKDF-SHA256 派生两个子密钥：一个加密，一个算 HMAC-SHA256 摘要。AAD 是 `axiom/content/object/v1\0` 加账户、blob ID 和摘要，固定长度，换账户或换 blob 都解不开；摘要同时用于账户内去重和读取时的完整性校验。对象键是 `content/v1/<site>/<account>/<blob>`，对象大小上限 64 MiB。
+
+`StreamContentMeta` 在一个只读快照里按 `(account, created_at, request_id, kind, part)` 列出引用；`ContentReader` 按账户缓存数据密钥，`Open` 先校验对象大小，再认证、检查明文长度和摘要。缺账户密钥返回 `ErrNoContentKey`，导出失败而不是跳过。写正文的通道还没接；`sealContent` 已在包内，接入时由它生成摘要和对象。
+
+`cmd/axiom content export` 是唯一读正文的命令：它验负责人签名、在平台范围写 `content_exports` 和 `content_export.start`、把引用写成 `manifest.jsonl`、逐条读出并认证，再把 tar.gz 经 X25519 + HKDF-SHA256 + 分块 AES-256-GCM 写给负责人；`content/<request_id>/<kind>/<part>` 让同一请求的多条消息或附件各有唯一路径。`keygen`、`approve`、`decrypt` 只在负责人机器上运行。格式、批准字段和威胁模型见[记录与告警的「受控导出」](../../docs/domains/observability.md#受控导出)。
+
+`gateway.response_cache` 也参与导出：它是最多 24 小时的回复副本，可能包含尚未进入 `content_*` 的回复；没有请求 ID，所以单独写 `cache.jsonl` 和 `cache/<cache_id>`，仍按批准的时间窗和租户范围选。缓存元数据和密封正文在同一个只读快照里读出，正文在快照内打开并用本次导出的临时密钥加密到 0600 暂存，快照结束后的正常过期、淘汰或同键替换不会拆开清单和正文；暂存不含缓存明文。`cache/<cache_id>` 是状态、NUL 和回复的原始载荷。删除账户时它必须和 `observability.content_*` 一起删除（[安全的「内容安全」](../../docs/security.md#内容安全)）。
+
+测试：`TestContentSealOpen`、`TestContentMetaScope`、`TestContentMetaMultipleParts`、`TestContentReader`、`TestContentKeyIsBoundToItsAccount`、`TestContentTablesArePlatformOnly` 覆盖加密、范围、组件路径、密钥绑定和 RLS；`TestContentApprovalVerifies`、`TestContentKeygenAndApprove`、`TestContentExportRoundTrip`、`TestContentExportIncludesResponseCache`、`TestContentExportRowsAndAudit` 覆盖双签名、命令、缓存快照替换和审计。
 
 ## 不变量
 
@@ -68,6 +93,10 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 | 文字能存进库 | `Commit` 在写 spill 前拒绝不合法的 UTF-8、NUL 和打印成 jsonb 文本后超过 8192 字节的路由 JSON（每个 `:`、`,` 后多一个空格，按此上界计），包括每次尝试的文字；这是 bug 或上游脏数据，不是可以跳过的行，进了 spill 它会在每次重放时被数据库拒绝。路由由 routing 有界编码：选定的路线、尝试（只有端点和结果，出口在 `call_attempt`）和每个原因的数量完整，被排除的端点最多逐个记 16 个，最坏情况约 5.2 KB，所以合法的 `openrouter/auto` 记录总能写进 `call_log.route`。记录计入 `records.lost{reason="invalid"}`，recorder 标记为不可记录，准入从此拒绝。测试：非法 UTF-8、NUL、未知 outcome、超过 jsonb 上限的路由（`TestEnqueueRejectsText`），逐项排除上千个候选的最大路由不超过同一上界（`TestRecordIsBounded`），恰好等于上界的路由能写进真实数据库、存下的文本与预测一致（`TestBoundedRouteFitsTheColumn`） |
 | 终端用户标识只以带密钥的哈希存放 | `EndUserHash` 是带私有数组的结构，包外无法构造非零值 |
 | 没有对话正文、密钥或凭证 | 两张表的列里没有这样的名字或字节类型，文字和 JSON 列都有长度或格式检查；测试读 `information_schema` 核对两张表。请求头只记应用归因的三个，由 gateway 去控制字符、按列宽截断（`app_referer` 另去掉 userinfo、查询串和片段）后放入 `app_referer`、`app_title`、`app_categories`；其余请求头一律不记 |
+| 内容只有平台范围能读 | `content_keys`、`content_blobs`、`content_refs`、`content_exports` 都强制行级安全，策略只允许 `platform.in_platform_scope()`；账户范围的读测试返回 0，产品接口不查询这些表 |
+| 正文只能被对应账户和 blob 打开 | 每账户的数据密钥由密钥环封装，AAD 绑定账户；正文用 HKDF 派生的 AES-256-GCM 子密钥加密，AAD 绑定账户、blob 和 HMAC 摘要；测试换账户、换 blob、篡改、截断都失败 |
+| 一个导出批准只能用一次 | `content_exports.approval_digest` 唯一，命令在读取正文前 `ON CONFLICT DO NOTHING`；测试第二次使用同一批准失败且不产生第二条开始审计 |
+| 导出文件在服务端没有明文 | 服务端只把 tar.gz 写进加密流，临时文件是密文；测试导出缓冲区不含正文，换密钥、篡改、截断都解不开 |
 | 每次尝试有且只有一行，且能从调用找到 | `call_attempt` 的主键 `(request_id, at, attempt_seq)`；`Seq` 必须从 1 连续递增，最多 `platform.MaxAttemptSeq` 次（`TestALoopsAttemptsAreKept`）；调用行的端点、来源类别、出口和次数由最后一个尝试算出。测试：写两次只有一行，按序号读回每次尝试，调用行与最后尝试一致 |
 | 同一个请求写两次是一行 | 两张表都是 `ON CONFLICT … DO NOTHING`；`at` 是请求开始时间，不是写入时间，所以重试的是同一个键。测试：同一个 `CallRecord` 写两次，调用一行、每次尝试一行 |
 | 写入从不因没有分区而失败 | 两张表都有默认分区兜底；测试写入 2001 年和 2090 年的调用和尝试 |
@@ -139,7 +168,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 - **谁能调用**：它是运营和管理读的链，不是用户的接口：它带成本、端点和路由。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己调用的这些字段（用户读 `ListOwn`/`GetOwn`，那两个没有这些字段）。
 - **路由过程**：调用行的 `route` 列，内容是 routing 的 `Record.JSON()`：被排除的候选和原因、选定的路线、每次尝试的结局。尝试不重复存路由。
 - **账本交易**：由 billing 的 `LedgerOf(ctx, tx, id)` 按同一个请求 ID 读，每笔交易带自己的分录。observability 不读 billing 的表，也不引用 billing（依赖表里 observability 在 billing 之上），所以「串起」由调用方把两个函数的结果合起来：三个查询、两个模块，各读自己的表（[总体架构的「模块边界规则」](../../docs/architecture.md#模块边界规则)）。
-- **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，校正还会在记录写好后再记交易，抄下来的链接会旧；记录在本地 spill 里等写库时账本已经提交，抄下来的交易看起来会比记录新。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。这一列留在表里（`NOT NULL DEFAULT '{}'`），新代码既不读也不写；按[平台的迁移规则](../platform/README.md#迁移)，等停止使用它的版本发布之后再删（#204）。本次发布仍不删：还需要一个已发布的版本先停止读写它，滚动发布期间旧节点可能仍在写。
+- **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，校正还会在记录写好后再记交易，抄下来的链接会旧；记录在本地 spill 里等写库时账本已经提交，抄下来的交易看起来会比记录新。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。这一列已由迁移 `00020` 删除（#204）：Axiom 从未部署到生产，没有节点写过它，[平台的「晚一个版本再删」规则](../platform/README.md#迁移)针对的滚动发布窗口不存在；Go 代码和 sqlc 查询里都没有它。`ALTER TABLE` 对分区表的列删除会作用到每个分区，`TestDropLedgerEntryIDsReachesPartitions` 在真实 PostgreSQL 上逐个核对父表、月分区和默认分区，迁移前写入的调用也还在。
 - **不变量**：尝试序号从 1 连续到 `len(Attempts)`，调用行的 `attempt_count` 等于它（写入时算好）；`route` 是 JSON 对象；`LedgerOf` 的每笔交易 `request_id` 等于调用 ID、`attempt_seq` 是 0（请求本身）或 1 到 33（某次尝试），每笔交易的分录合计为 0（billing 写入时断言）。测试：`TestTraceReadsTheWholeChain`（cmd/axiom，走一次真实结算）与 `TestCallAndAttemptsRoundTrip`。
 
 ## 分区
@@ -180,7 +209,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 |---|---|---|
 | 另建 `call_attempt`，每次尝试一行 | 调用记录要能串起每次尝试（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）；suppliers 的 `attempt_costs` 只在结算事务里写，失败或崩溃的请求可能没有可查的尝试；单独的表让尝试有类型、时间和结果，并按 `(request_id, attempt_seq)` 连到供应商的扣费。负责人已在对话中把设计决定交给开发者（Issue #29） | 只存 `route` JSON：没有类型和耗时，查一次尝试要解 JSON；把尝试嵌进 `call_log`：一个请求一行会被撑大，按尝试查询和保留都更难；让 suppliers 直写：跨模块写同一张表，违反模块边界 |
 | 调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 取自最后一个尝试 | 一处事实：调用行与尝试表不可能不一致；网关也不用把同样的值填两遍 | 调用记录再带一份端点、来源和出口：两套值迟早对不上 |
-| 调用、尝试和账本交易只用请求 ID 关联，`ledger_entry_ids` 不再读写 | 分录没有 ID，这一列从来没有写入方；请求 ID 已经是账本自己的键，照抄一份会在调用记录丢失或校正追加交易时与账本不一致。列按平台的迁移规则留到停止使用它的版本之后删除 | 抄交易 ID：要结算把 ID 带进异步记录，仍会缺、会旧；让 observability 查 billing 的表：违反模块边界 |
+| 调用、尝试和账本交易只用请求 ID 关联，`ledger_entry_ids` 已删除（迁移 `00020`） | 分录没有 ID，这一列从来没有写入方；请求 ID 已经是账本自己的键，照抄一份会在调用记录丢失或校正追加交易时与账本不一致。Axiom 从未部署到生产，没有节点写过这一列，所以不必等停止使用它的版本再发布一次；真实 PostgreSQL 的迁移测试核对父表和每个分区都删掉了它 | 抄交易 ID：要结算把 ID 带进异步记录，仍会缺、会旧；让 observability 查 billing 的表：违反模块边界；再等一个发布：没有生产节点可等 |
 | 准入预占 + 本机 WAL + 顺序批量入库，spill 满时拒绝新调用 | 记录在响应结束前已追加到本机段文件，进程崩溃可重放，数据库慢不拖慢已完成调用；磁盘和接收量都有硬上限，满了拒绝而不是丢。`Commit` 等一轮组提交 fsync 才返回，主机断电也不丢已回复的调用；并发调用共用一次 fsync，调用路径的实测代价见[性能的「调用路径上的规则」](../../docs/performance.md#调用路径上的规则)。否决在结算事务里写调用记录：它虽然和结算同一原子提交，但会让一条日志记录的约束或磁盘故障失败整笔钱的结算，`SettleBatch` 还要为每笔调用多带一行日志，日志表因此进入钱的临界路径；也否决同步数据库插入：同样把数据库延迟放进调用路径，且崩溃会丢掉已结算未插入的记录。否决无界队列：内存无上限；否决队列满丢新记录：违反「全部保存」 |
 | 整批行作为一个 JSON 数组传给一条 `INSERT … SELECT` | 一次往返、一个参数；类型转换和检查留给表。sqlc 不认 30 多个参数的 `unnest`，也没有 `:copyfrom`（`pg.Tx` 没有 `CopyFrom`） | 逐行 `INSERT`：每条一次往返；列式 `unnest`：生成不了 |
 | 金额存最小单位的整数，币种单列 | 与 billing 的存储一致（[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)），汇总不丢精度 | 浮点数、字符串 |
@@ -210,6 +239,6 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 每分钟在消费者阶段读取最新周期测试的终态回执，以渠道测试行的锁和 reported_state 去重发布健康信号，删除渠道时同阶段发恢复并删除探测位置，再消费信号；发送回调只写回执，不在持有事件锁时获取信号锁。评估阶段先独占配置，再安排到期的小时探测、评估并派发；这避免并发节点同时排探测以及回执/消费锁反序。探测失败和恢复也走普通规则，但不发送到自身故障渠道。超过 24 小时、已没有存活 River 任务的 queued 回执会转 failed；用尽重试且被 River 救援直接丢弃的作业由既有丢弃扫描完成回执。事务执行测试使用 `pgtest.WorkJob` 包装 River 官方测试执行器，真实提交重试状态并注入时钟，不依赖后台调度轮询；端到端供应商测试另运行真实队列。测试覆盖重试后一次接受、错误密钥与正文篡改、轮换到期、私有地址/重定向拒绝、并发探测和晚到结果；测试按明确数据库状态和受控时钟推进，无固定睡眠。
 
-支付通知没有预置规则。启用时在现有配置中追加 `payments.discrepancy` 与 `payments.query_paused` 两条规则，各用唯一 id，最低严重度 warning、threshold=1、duration_seconds=0、repeat_seconds=0，channel 指向已测试的邮件渠道；使用当前 rev 保存并保留其余配置。仅绑定五条默认规则不会发送支付通知。事件持久化与渠道启用是两步，未配置不丢事件。
+支付差异、查单暂停和账户暂停通知没有预置规则。启用时在现有配置中追加 `payments.discrepancy`、`payments.query_paused` 与 `accounts.account_suspended` 三条规则，各用唯一 id，最低严重度 warning（账户暂停可设 critical）、threshold=1、duration_seconds=0、repeat_seconds=0，channel 指向已测试的邮件渠道；使用当前 rev 保存并保留其余配置。另外四类支付信号 `payments.verify_failed`、`payments.query_failed`、`payments.rate_limited` 与 `payments.merchant_unreadable` 的规则见下文。仅绑定五条默认规则不会发送这些通知。事件持久化与渠道启用是两步，未配置不丢事件。
 
 `pending_recovery` 表示恢复及其投递尚未收尾；部分索引 `(checked_at,id)` 只含未恢复或待收尾事件。收尾后进入按 `(resolved_at,id)` 排序的清理索引，30 天后由周期任务每批删 100 个，外键级联删除回执和窗口。回执按页内事件 ID 一次查询，每个事件沿索引最多取最近 100 条。

@@ -81,10 +81,12 @@ export function holdsIdentity(client: QueryClient, identity: string): boolean {
   return identity !== "" && identityOf(currentSession(client)) === identity;
 }
 
-// endUnauthenticated ends the session when a call was refused for want of one. Queries and mutations reach it through
-// their caches; work outside them, such as a file download, calls it too.
-export function endUnauthenticated(client: QueryClient, error: unknown) {
-  if (error instanceof ApiError && error.code === "unauthenticated") {
+// endUnauthenticated ends the session when a call was refused for want of one and the call belongs to the session still
+// on the page. binding is the session the call started under: the browser's session is shared by every tab, so an answer
+// can arrive after another tab signed in, and it must not end the session that replaced the one that asked. Queries and
+// mutations reach it through their caches; work outside them, such as a file download, calls it too.
+export function endUnauthenticated(client: QueryClient, error: unknown, binding: string) {
+  if (error instanceof ApiError && error.code === "unauthenticated" && holdsSession(client, binding)) {
     endSession(client);
   }
 }
@@ -130,7 +132,7 @@ export function useSessionBound(scope: "session" | "identity" = "session") {
         if (controller.signal.aborted) {
           return undefined;
         }
-        endUnauthenticated(client, error);
+        endUnauthenticated(client, error, claim.binding);
         throw error;
       } finally {
         running.current.delete(controller);

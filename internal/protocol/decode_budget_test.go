@@ -3,15 +3,20 @@ package protocol
 import (
 	"errors"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+
+	"axiom/internal/platform/alloctest"
 )
 
 // TestPrepareLargeRequestReservesAboutItsBody: a conversion from Chat of a large request draws a few times the
 // request's own bytes, not a bound that grows with its shape, and a byte short refuses. The readers of the other two
 // formats still reserve nativeRequestCost (README.md「跨格式转换」).
 func TestPrepareLargeRequestReservesAboutItsBody(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("x", 1<<18)
 	for _, c := range []struct {
 		name string
@@ -42,6 +47,7 @@ func TestPrepareLargeRequestReservesAboutItsBody(t *testing.T) {
 // allocate, and what they keep when done is their output's capacity; the failures take nothing and the budget is whole
 // once the kept bodies are given back.
 func TestPrepareConcurrentLargeRequests(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("x", 1<<18)
 	body := []byte(`{"model":"m","max_tokens":1024,"messages":[{"role":"user","content":"` + long + `"}]}`)
 	r, err := Inspect(Messages, body)
@@ -91,9 +97,167 @@ func TestPrepareConcurrentLargeRequests(t *testing.T) {
 	}
 }
 
+// peakBody is a large request of many small messages, the shape whose preparation holds the most beyond the body: the
+// tree it builds while converting is about thirteen times the body, and only its output body stays charged after it
+// returns.
+func peakBody(pairs int) []byte {
+	var b strings.Builder
+	b.Grow(2 * pairs * 30)
+	b.WriteString(`{"model":"m","max_tokens":1024,"messages":[`)
+	for i := range pairs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"role":"user","content":"a"},{"role":"assistant","content":"b"}`)
+	}
+	b.WriteString(`]}`)
+	return []byte(b.String())
+}
+
+// peakKept is everything the concurrent preparations keep alive, which the last reading of the peak must see.
+type peakKept struct {
+	bodies   [][]byte
+	requests []Request
+	upstream []Upstream
+}
+
+// peakState is one run of the concurrent preparations: the budget they share, the gate they start behind, and what the
+// child must see them do.
+type peakState struct {
+	m       *Memory
+	pairs   int
+	start   chan struct{}
+	ready   sync.WaitGroup
+	made    atomic.Int64
+	refused atomic.Int64
+	kept    *peakKept
+	t       *testing.T
+}
+
+// peakRun prepares the given number of large requests, of pairs message pairs each, at once over m, and returns what
+// they keep. Every body is read and charged before any preparation starts, as the gateway reads a body before preparing
+// it. With refusable, some preparations must be refused; without, none may be.
+func peakRun(m *Memory, requests, pairs int, refusable bool, t *testing.T) any {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(requests + 1)) // a processor of its own for the sampler reading the heap
+	s := &peakState{
+		m:     m,
+		pairs: pairs,
+		start: make(chan struct{}),
+		kept: &peakKept{
+			bodies:   make([][]byte, requests),
+			requests: make([]Request, requests),
+			upstream: make([]Upstream, requests),
+		},
+		t: t,
+	}
+	s.ready.Add(requests)
+	var done sync.WaitGroup
+	for i := range requests {
+		done.Go(func() { s.prepare(i) })
+	}
+	s.ready.Wait()
+	close(s.start)
+	done.Wait()
+	switch {
+	case refusable && (s.made.Load() == 0 || s.refused.Load() == 0):
+		t.Errorf("%d prepared, %d refused: a budget for one preparation's peak must both serve and refuse", s.made.Load(), s.refused.Load())
+	case !refusable && s.refused.Load() != 0:
+		t.Errorf("%d refused with a budget nothing spends", s.refused.Load())
+	}
+	return s.kept
+}
+
+// prepare builds and charges one body, then prepares it once every body is charged.
+func (s *peakState) prepare(i int) {
+	body := peakBody(s.pairs)
+	s.kept.bodies[i] = body
+	if !s.m.Charge(int64(len(body))) {
+		s.t.Errorf("a %d-byte body did not fit the budget", len(body))
+		s.ready.Done()
+		return
+	}
+	r, err := Inspect(Chat, body)
+	if err != nil {
+		s.t.Errorf("inspect: %v", err)
+		s.ready.Done()
+		return
+	}
+	s.kept.requests[i] = r
+	s.ready.Done()
+	<-s.start
+	u, held, err := PrepareBudgeted(s.m, &s.kept.requests[i], body, Target{Format: Messages, Model: "up", MaxOutput: 4096}, Rewrites{})
+	switch {
+	case err == nil:
+		s.kept.upstream[i] = u // what prepared; a refused body is dropped, as the gateway drops it
+		s.made.Add(1)
+		if held != int64(cap(u.Body)) {
+			s.t.Errorf("held %d bytes for a body of capacity %d", held, cap(u.Body))
+		}
+	case errors.Is(err, ErrMemory):
+		s.refused.Add(1)
+	default:
+		s.t.Errorf("prepare: %v", err)
+	}
+}
+
+// peakOverhead is what the concurrent preparations may hold beyond their budget. Each may allocate up to budgetSlack
+// without drawing it, the bound TestPrepareAllocatesOnlyWhatItDrew holds this shape to. A body is charged by its length
+// while the runtime allocates whole 8 KiB pages, so each may take a page more. Each goroutine also keeps the Request
+// Inspect made (1792 bytes measured for this body), its Upstream and its slice slots, for which 4 KiB is room. The last
+// two pages cover the sampler: its readings are part of the heap they read.
+func peakOverhead(requests int) int64 {
+	const (
+		bodyPage = 8 << 10
+		harness  = 4 << 10
+		readings = 16 << 10
+	)
+	return int64(requests)*(budgetSlack+bodyPage+harness) + readings
+}
+
+// TestConcurrentLargeRequestsStayWithinTheBudget: the node's budget is what concurrent preparations may hold, so with
+// room for one large preparation's peak beyond the bodies, the same requests at once must leave the live heap within
+// the budget plus peakOverhead. A child process reads the live heap while they run. The same preparations with a budget
+// nothing spends are the control: the measurement must see that peak pass the bound, or it could not see this one pass
+// it either.
+func TestConcurrentLargeRequestsStayWithinTheBudget(t *testing.T) {
+	t.Parallel()
+	requests, pairs := 8, 2000
+	if RaceDetector() { // a reading collects the heap, and the race build runs each collection many times slower
+		requests, pairs = 4, 1000
+	}
+	body := peakBody(pairs)
+	r, err := Inspect(Chat, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	need := prepareNeed(t, &r, body, Target{Format: Messages, Model: "up", MaxOutput: 4096})
+	budget := int64(requests)*int64(len(body)) + need // the bodies and one preparation's peak: only one fits at a time
+	peaks := alloctest.MeasurePeak(t,
+		alloctest.PeakFunction{Name: "budgeted", F: func() any {
+			return peakRun(NewMemory(budget), requests, pairs, true, t)
+		}},
+		alloctest.PeakFunction{Name: "unbudgeted", F: func() any {
+			return peakRun(NewMemory(unlimited), requests, pairs, false, t)
+		}},
+	)
+	overhead := peakOverhead(requests)
+	bound := uint64(budget + overhead) // #nosec G115 -- bodies plus a preparation's peak is a positive byte count
+	if got := peaks["budgeted"]; got > bound {
+		t.Errorf("%d requests of %d bytes at once peaked at %d bytes of live heap, over the %d-byte budget and the %d bytes they may hold beyond it",
+			requests, len(body), got, budget, overhead)
+	}
+	if control := peaks["unbudgeted"]; control <= bound {
+		t.Errorf("the same requests with a budget nothing spends peaked at %d bytes, within the %d-byte bound: the measurement cannot see the budget exceeded", control, bound)
+	}
+	for name, peak := range peaks {
+		t.Logf("%s: %d bytes of live heap", name, peak)
+	}
+}
+
 // TestBudgetedDecodeMatchesTheFastPath: with a budget, the decoder must build the same tree jsonx builds for a
 // Prepare outside a node. The conversions' goldens run through the fast path; this holds the budgeted path to it.
 func TestBudgetedDecodeMatchesTheFastPath(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{
 		`{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
 		`{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"a\nb"},{"type":"image_url","image_url":{"url":"https://x/y.png","detail":"high"}}]}]}`,
@@ -135,6 +299,7 @@ func prepareNeed(t *testing.T, r *Request, body []byte, target Target) int64 {
 // TestMemoryErrorKeepsItsType: a budget exhausted inside a legacy function-call upgrade or a thinking budget is a
 // memory error (503), not a shape error (400).
 func TestMemoryErrorKeepsItsType(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		from Format
@@ -165,6 +330,7 @@ func TestMemoryErrorKeepsItsType(t *testing.T) {
 // whatever the writer would have written first (here the system blocks, which look at what was written), and gives
 // back everything it drew.
 func TestPrepareRefusesTheOutputCleanly(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":"` + strings.Repeat("x", 1<<18) + `"}]}`)
 	r, err := Inspect(Chat, body)
 	if err != nil {
@@ -190,6 +356,7 @@ func TestPrepareRefusesTheOutputCleanly(t *testing.T) {
 // TestReplayRefusesWithErrMemory: replay's own unquoting draws from the budget, and a refusal there stays ErrMemory,
 // not the invalid replay a client is told of.
 func TestReplayRefusesWithErrMemory(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","max_tokens":1,"messages":[{"role":"user","content":"x"},{"role":"assistant","content":[` +
 		`{"type":"thinking","thinking":"t","signature":"` + strings.Repeat(string(rune(0x5c))+"u0061", 1<<16) + `"}]}]}`)
 	b := &budget{m: NewMemory(rounded(int64(len(body))) + 1024)} // the output fits, the signature's unquoting does not

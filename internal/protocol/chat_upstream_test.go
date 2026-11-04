@@ -48,6 +48,7 @@ var chatUpstreamCases = []struct {
 // recorder wrote without one fails the test rather than go unchecked; a scene transcribed from documentation, such as
 // chat/text, has no usage to state and is covered by the other sample tests.
 func TestChatUpstreamSamples(t *testing.T) {
+	t.Parallel()
 	for _, c := range chatUpstreamCases {
 		t.Run(c.name, func(t *testing.T) {
 			up := prepareChatRequest(t, "assembled/"+c.name+".request.json", "assembled/"+c.name+".to-chat.json")
@@ -159,6 +160,7 @@ type chatUsageCase struct {
 // TestChatSceneUsage: a recorded scene must state its billed items, a transcription need not, and a name that is not
 // an item is refused so that a typo cannot silently expect zero.
 func TestChatSceneUsage(t *testing.T) {
+	t.Parallel()
 	const meta = `{"source":"` + recordedSource + `/v1/chat/completions","date":"2026-10-19"}`
 	const page = `{"source":"https://example.com/chat","date":"2026-10-19"}`
 	for _, c := range []chatUsageCase{

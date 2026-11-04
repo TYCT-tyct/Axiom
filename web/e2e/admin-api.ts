@@ -1,9 +1,11 @@
 import type { Page } from "@playwright/test";
 import { catalogHandlers } from "./admin-catalog.ts";
 import { type AdminState, emptyState, type Schemas, usualState, worstState } from "./admin-data.ts";
+import { listPaidBatches } from "./admin-paid-batches-api.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { supplyHandlers } from "./admin-supply.ts";
+import { getTargets, putTargets, replaceTargets, targetComparison } from "./admin-targets-api.ts";
 import { fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
 import { confirmTotp, regenerate, session, signIn, signOut, totpSetup, userId, verifyMfa } from "./mock-auth.ts";
 
@@ -132,15 +134,37 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
     ]
       .sort((a, b) => b[1].calls - a[1].calls)
       .slice(0, 10);
+  const cost = (revenue * 6n) / 10n;
+  const errors = state.calls.filter((call) => call.error_kind).length;
+  const month = (query.get("until") ?? new Date().toISOString()).slice(0, 7);
+  const stored = state.targets.get(month);
+  const grossMargin = revenue > 0n ? Number(((revenue - cost) * 10000n) / revenue) : undefined;
+  const retention = { ...state.retention, month };
+  const targets = targetComparison(
+    stored,
+    state.calls.length,
+    errors,
+    revenue,
+    cost,
+    state.paidUsers,
+    BigInt(state.monthlyRevenue.amount),
+    grossMargin,
+    retention,
+  );
   return ok({
     site_id: state.siteId,
     since: query.get("since") ?? "2026-10-29T00:00:00.000Z",
     until: query.get("until") ?? "2026-10-30T23:59:59.000Z",
     calls: state.calls.length,
-    errors: state.calls.filter((call) => call.error_kind).length,
+    errors,
+    calls_incomplete: false,
     revenue: { amount: String(revenue), currency: "USD" },
-    cost: { amount: String((revenue * 6n) / 10n), currency: "USD" },
+    cost: { amount: String(cost), currency: "USD" },
     unknown_cost_calls: 0,
+    paid_users: state.paidUsers,
+    monthly_revenue: state.monthlyRevenue,
+    ...(grossMargin !== undefined ? { gross_margin: grossMargin } : {}),
+    retention,
     cash: [
       { amount: String(revenue / 2n), currency: "USD" },
       { amount: String(-revenue / 20n), currency: "CNY" },
@@ -150,6 +174,7 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
       ...n,
     })),
     top_models: rank((call) => call.model).map(([model, n]) => ({ model, ...n })),
+    targets,
   });
 }
 
@@ -440,6 +465,7 @@ const handlers: Handler<AdminState>[] = [
     query.get("site_id") === state.siteId ? ok({ data: state.merchants }) : fail(404, "not_found"),
   ),
   route("get", `${base}/payments/orders`, reads("sites.manage"), listPaymentOrders),
+  route("get", `${base}/payments/paid-batches`, reads("sites.manage"), listPaidBatches),
   route("get", `${base}/payments/refunds`, reads("sites.manage"), listPaymentRefunds),
   route("get", `${base}/payments/cash`, reads("sites.manage"), ({ query, state }) =>
     query.get("site_id") === state.siteId ? ok({ data: [], next_cursor: null }) : fail(404, "not_found"),
@@ -457,6 +483,9 @@ const handlers: Handler<AdminState>[] = [
   route("put", `${base}/accounts/{account_id}/tier`, changes("users.manage"), putTier),
   route("put", `${base}/users/{user_id}/sign-in`, changes("users.manage"), putSignIn),
   route("get", `${base}/reports/overview`, reads("sites.manage"), getOverview),
+  route("get", `${base}/reports/targets/{month}`, reads("sites.manage"), getTargets),
+  route("put", `${base}/reports/targets/{month}`, changes("sites.manage"), putTargets),
+  route("put", `${base}/reports/targets/{month}/all`, changes("sites.manage"), replaceTargets),
   route("get", `${base}/calls`, reads("calls.search"), listCalls),
   route("get", `${base}/calls/{call_id}/trace`, reads("calls.inspect"), getTrace),
   route("get", `${base}/audit`, reads("audit.view"), listAudit),

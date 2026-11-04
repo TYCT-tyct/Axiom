@@ -13,6 +13,7 @@ import (
 )
 
 func TestPrepareLegacyChat(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, fields string
 		legacy       bool
@@ -50,6 +51,7 @@ func TestPrepareLegacyChat(t *testing.T) {
 }
 
 func TestPrepareLegacyRejectsConflicts(t *testing.T) {
+	t.Parallel()
 	for _, fields := range []string{
 		`"function_call":"auto","tool_choice":"none"`,
 		`"messages":[{"role":"assistant","function_call":{"name":"f","arguments":{}}}]`,
@@ -68,6 +70,7 @@ func TestPrepareLegacyRejectsConflicts(t *testing.T) {
 }
 
 func TestControlSpellings(t *testing.T) {
+	t.Parallel()
 	for _, choice := range []string{`"auto"`, `"\u0061uto"`, `"none"`, `"n\u006fne"`, `"required"`, `"requir\u0065d"`} {
 		modern := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(choice, `\u0061`, `a`), `\u006f`, `o`), `\u0065`, `e`)
 		for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {

@@ -18,7 +18,7 @@ func TestClaimedByCatalog(t *testing.T) {
 	deps, _ := w.controlledCallDeps(&testClock{now: time.Now()})
 	claimed, ok := claimedByCatalog(deps.catalog)(catalog.ModelID(uuid.MustParse(
 		w.query("SELECT id::text FROM catalog.model WHERE slug = 'anthropic/claude-opus-5-5'"))))
-	if !ok || claimed.Author != "anthropic" || !slices.Contains(claimed.Others, "openai") || slices.Contains(claimed.Others, "anthropic") {
+	if !ok || claimed.Author != "anthropic" || claimed.Model != "anthropic/claude-opus-5-5" || !slices.Contains(claimed.Others, "openai") || slices.Contains(claimed.Others, "anthropic") {
 		t.Fatalf("the claim: %+v, ok %v", claimed, ok)
 	}
 	if _, ok := claimedByCatalog(deps.catalog)(catalog.ModelID(uuid.NewV7())); ok {

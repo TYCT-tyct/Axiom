@@ -1,14 +1,23 @@
 package payments
 
 import (
+	"bytes"
 	"maps"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/stripe/stripe-go/v85/webhook"
 
+	"axiom/internal/platform/egress"
+	"axiom/internal/platform/egresstest"
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 )
 
@@ -42,6 +51,9 @@ func stripeTestChannel(t *testing.T) *stripeChannel {
 	}
 }
 
+// The table maps signed events to notices; TestStripeWebhookCheckoutCreditsOnce carries the paid event through the
+// HTTP callback and asserts the credit and ledger.
+//
 //nolint:cyclop,gocognit // the event table and its notices are the test
 func TestStripeWebhookCheckoutEvents(t *testing.T) {
 	c := stripeTestChannel(t)
@@ -95,6 +107,9 @@ func TestStripeWebhookCheckoutEvents(t *testing.T) {
 	}
 }
 
+// The table maps signed events to dispute notices; TestStripeWebhookDisputeSuspendsTheAccount carries them through the
+// HTTP callback into the dispute flow, the ledger and the suspension.
+//
 //nolint:cyclop,gocognit // the dispute table and its actions are the test
 func TestStripeWebhookDisputes(t *testing.T) {
 	c := stripeTestChannel(t)
@@ -182,5 +197,194 @@ func TestStripeWebhookSignatureAndRotation(t *testing.T) {
 	}
 	if _, err := c.Verify(t.Context(), Callback{Method: http.MethodPost, Body: []byte(`{`), Header: http.Header{"Stripe-Signature": []string{"t=1,v1=00"}}}); err == nil {
 		t.Fatal("malformed event verified")
+	}
+}
+
+// stripeWebhookWorld runs the callback path end to end: an order is placed through Create, the signed event is handed
+// to the same HTTP handler the program mounts, and the core, payments tables and billing ledger are real.
+type stripeWebhookWorld struct {
+	world    *world
+	merchant Merchant
+	amount   atomic.Int64 // amount_total the fake Stripe API reports for the next payment intent
+	queries  atomic.Int64 // payment intents read while confirming a callback
+}
+
+func newStripeWebhookWorld(t *testing.T) *stripeWebhookWorld {
+	t.Helper()
+	s := &stripeWebhookWorld{world: newTestWorld(t, Stripe{})}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/balance":
+			writeStripeJSON(t, w, map[string]any{"object": "balance", "available": []any{}, "pending": []any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/checkout/sessions":
+			session := stripeSession("cs_1", "open", "unpaid")
+			session["url"] = "https://checkout.stripe.com/c/pay/cs_1"
+			session["expires_at"] = time.Now().Add(time.Hour).Unix()
+			writeStripeJSON(t, w, session)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/payment_intents/"):
+			s.queries.Add(1)
+			writeStripeJSON(t, w, map[string]any{
+				"id": "pi_1", "object": "payment_intent", "status": "succeeded",
+				"amount": s.amount.Load(), "currency": "usd",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	old := stripeAPIBase
+	stripeAPIBase = server.URL
+	t.Cleanup(func() { stripeAPIBase = old })
+	client := egress.NewForTesting(egresstest.Loopback(t, server.Certificate()))
+	t.Cleanup(client.CloseIdleConnections)
+	s.world.p.client = client
+	s.world.open(s.world.siteA, RoundRobin)
+	in := s.world.input(s.world.siteA, MethodInput{Method: "card", Upstream: "card", Fee: Fee{PPM: 30_000}, Enabled: true})
+	in.Kind, in.Settings, in.Currency = "stripe", []byte("{}"), currency(t, "USD")
+	in.Secrets = map[string]secret.Secret{
+		"secret_key": secret.New("sk_test_123"), "webhook_secret": secret.New(stripeTestWebhookSecret),
+	}
+	s.merchant = s.world.mustSave(siteScope(s.world.siteA), in)
+	return s
+}
+
+// place creates an order through the Stripe plugin; amount is what the fake API answers when the callback confirms.
+func (s *stripeWebhookWorld) place(t *testing.T, key string) Order {
+	t.Helper()
+	o, _, err := s.world.p.CreateOrder(t.Context(), s.world.accountA(), CreateOrder{
+		Site: s.world.site(s.world.siteA, "USD"), Account: s.world.account, User: s.world.user,
+		Method: "card", Credits: 10 * yuan, Key: key, ReturnURL: "https://console.example.com/topup",
+		ClientIP: netip.MustParseAddr("203.0.113.7"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.amount.Store(o.Total.Minor)
+	return o
+}
+
+// send posts a signed event to the merchant's callback route.
+func (s *stripeWebhookWorld) send(t *testing.T, payload []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	cb := stripeSigned(t, payload, stripeTestWebhookSecret)
+	merchant := MerchantID(s.merchant.ID).TypeID()
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, NotifyPath+merchant, bytes.NewReader(cb.Body))
+	r.Header = cb.Header.Clone()
+	r.SetPathValue("merchant", merchant)
+	rw := httptest.NewRecorder()
+	s.world.p.Notify().ServeHTTP(rw, r)
+	return rw
+}
+
+func stripeCheckoutPaid(t *testing.T, o Order) []byte {
+	t.Helper()
+	return stripeEvent(t, map[string]any{
+		"id": "cs_1", "object": "checkout.session", "status": "complete", "payment_status": "paid",
+		"amount_total": o.Total.Minor, "currency": "usd", "payment_intent": "pi_1",
+		"client_reference_id": o.ID.TypeID(),
+	}, "checkout.session.completed")
+}
+
+// TestStripeWebhookCheckoutCreditsOnce: a signed checkout event over the HTTP callback credits the order once, writes
+// the ledger, and a duplicate neither queries the gateway nor credits again.
+func TestStripeWebhookCheckoutCreditsOnce(t *testing.T) {
+	s := newStripeWebhookWorld(t)
+	o := s.place(t, "stripe-checkout")
+	for range 2 {
+		if r := s.send(t, stripeCheckoutPaid(t, o)); r.Code != http.StatusOK || r.Body.String() != `{"received":true}` {
+			t.Fatalf("callback: %d %s", r.Code, r.Body)
+		}
+	}
+	s.world.assertCredit(o, o.Credits)
+	if state, _, _ := s.world.stored(o.ID); state != "paid" {
+		t.Fatalf("order state = %q, want paid", state)
+	}
+	if n := s.queries.Load(); n != 1 {
+		t.Fatalf("the callback confirmed with %d gateway queries, want one: the replay must not query or credit twice", n)
+	}
+	if n := s.world.count(s.world.p.platform, "SELECT count(*) FROM billing.credit_batches WHERE id = $1", uuid.UUID(o.ID)); n != 1 {
+		t.Fatalf("credit batches = %d, want one", n)
+	}
+	if n := s.world.count(s.world.p.platform, "SELECT count(*) FROM billing.transactions WHERE kind = 'credit'"); n != 1 {
+		t.Fatalf("credit ledger transactions = %d, want one", n)
+	}
+	if n := s.world.count(s.world.p.platform, "SELECT count(*) FROM payments.order_payments WHERE order_id = $1", uuid.UUID(o.ID)); n != 1 {
+		t.Fatalf("recorded payments = %d, want one", n)
+	}
+	if n := s.world.count(s.world.p.platform, "SELECT count(*) FROM payments.order_events WHERE order_id = $1 AND kind = 'payment'", uuid.UUID(o.ID)); n != 1 {
+		t.Fatalf("payment events = %d, want one", n)
+	}
+	if n := s.world.count(s.world.p.platform, `SELECT count(*) FROM (SELECT transaction_id FROM billing.entries
+		GROUP BY transaction_id, currency HAVING sum(amount) <> 0) unbalanced`); n != 0 {
+		t.Fatal("the credit ledger is unbalanced")
+	}
+}
+
+// TestStripeWebhookDisputeSuspendsTheAccount: a warning is recorded without money, the signed open event books the
+// chargeback and suspends the account through the existing dispute flow, and its duplicate moves neither.
+//
+//nolint:cyclop,gocognit // the warning/open/duplicate flow and its ledger assertions are the test
+func TestStripeWebhookDisputeSuspendsTheAccount(t *testing.T) {
+	s := newStripeWebhookWorld(t)
+	o := s.place(t, "stripe-dispute")
+	if r := s.send(t, stripeCheckoutPaid(t, o)); r.Code != http.StatusOK {
+		t.Fatalf("checkout: %d %s", r.Code, r.Body)
+	}
+	s.world.assertCredit(o, o.Credits)
+	before := s.world.count(s.world.p.platform, "SELECT balance FROM billing.balances WHERE account_id = $1", o.AccountID)
+	dispute := func(status string) []byte {
+		return stripeEvent(t, map[string]any{
+			"id": "dp_1", "object": "dispute", "amount": o.Total.Minor, "currency": "usd", "reason": "fraudulent",
+			"status":         status,
+			"charge":         map[string]any{"id": "ch_1", "metadata": map[string]string{"order": o.ID.TypeID()}},
+			"payment_intent": map[string]any{"id": "pi_1"},
+		}, "charge.dispute.created")
+	}
+	if r := s.send(t, dispute("warning_needs_response")); r.Code != http.StatusOK {
+		t.Fatalf("warning: %d %s", r.Code, r.Body)
+	}
+	if got := s.world.states.recorded(); len(got) != 0 {
+		t.Fatalf("a warning suspended the account: %+v", got)
+	}
+	if state, _, _ := s.world.stored(o.ID); state != "paid" {
+		t.Fatalf("order state after a warning = %q, want paid", state)
+	}
+
+	open := dispute("needs_response")
+	for range 2 {
+		if r := s.send(t, open); r.Code != http.StatusOK {
+			t.Fatalf("dispute: %d %s", r.Code, r.Body)
+		}
+	}
+	if state, _, _ := s.world.stored(o.ID); state != "charged_back" {
+		t.Fatalf("order state = %q, want charged_back", state)
+	}
+	if got := s.world.count(s.world.p.platform, "SELECT balance FROM billing.balances WHERE account_id = $1", o.AccountID); got != before-int(o.Credits) {
+		t.Fatalf("balance = %d, want %d", got, before-int(o.Credits))
+	}
+	var state string
+	var credits, cash, fee int64
+	var suspended bool
+	if err := s.world.tx(s.world.p.platform, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT state, credits, cash, fee, suspended_at IS NOT NULL
+			FROM payments.order_disputes WHERE provider_id = 'dp_1'`).Scan(&state, &credits, &cash, &fee, &suspended)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if state != "applied" || credits != o.Credits || cash != o.Total.Minor || fee != o.Fee || !suspended {
+		t.Fatalf("dispute row = %s credits=%d cash=%d fee=%d suspended=%t; want applied, %d, %d, %d, true",
+			state, credits, cash, fee, suspended, o.Credits, o.Total.Minor, o.Fee)
+	}
+	if n := s.world.count(s.world.p.platform, "SELECT count(*) FROM billing.transactions WHERE kind = 'chargeback'"); n != 1 {
+		t.Fatalf("chargeback transactions = %d, want one", n)
+	}
+	if n := s.world.count(s.world.p.platform, `SELECT count(*) FROM (SELECT transaction_id FROM billing.entries
+		GROUP BY transaction_id, currency HAVING sum(amount) <> 0) unbalanced`); n != 0 {
+		t.Fatal("the chargeback ledger is unbalanced")
+	}
+	calls := s.world.states.recorded()
+	if len(calls) != 1 || uuid.UUID(calls[0].account) != o.AccountID || !calls[0].suspended ||
+		!strings.Contains(calls[0].reason, "stripe/dp_1") {
+		t.Fatalf("suspension calls = %+v, want one for the disputed account", calls)
 	}
 }

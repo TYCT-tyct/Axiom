@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -67,6 +68,101 @@ func TestCheckRefusesLoginsThatEscape(t *testing.T) {
 			t.Errorf("%s, acting as %s: %v", name, current, err)
 		}
 	}
+}
+
+// TestCheckRefusesAJobRoleGrantedToTheApplicationLogin: a module's job role owns the tables its job must alter, so a
+// login that can become it could read past row-level security or drop them. The role need not own anything yet: the
+// declared JobRole alone is refused. Migrate creates roles cluster-wide, so this test does not run in parallel (see
+// TestMigrateRunsTakeTurns).
+func TestCheckRefusesAJobRoleGrantedToTheApplicationLogin(t *testing.T) {
+	for name, migration := range map[string]string{
+		"that owns nothing": "-- +goose Up\nSELECT 1;\n",
+		"that owns a table": `-- +goose Up
+GRANT USAGE, CREATE ON SCHEMA observability TO axiom_retention_job;
+CREATE TABLE observability.call_log (id int);
+ALTER TABLE observability.call_log ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY platform_only ON observability.call_log USING ((SELECT platform.in_platform_scope()));
+GRANT SELECT, INSERT ON observability.call_log TO axiom_app;
+ALTER TABLE observability.call_log OWNER TO axiom_retention_job;
+`,
+	} {
+		t.Run(name, func(t *testing.T) { checkRefusesAJobRole(t, migration) })
+	}
+}
+
+// checkRefusesAJobRole migrates the observability module, checks that a login inheriting axiom_app passes, grants the
+// job role to it and expects the audit to name the role.
+func checkRefusesAJobRole(t *testing.T, migration string) {
+	t.Helper()
+	database := pgtest.New(t)
+	module := pg.Module{Name: "observability", JobRole: "axiom_retention_job", Migrations: fstest.MapFS{
+		"00001_call_log.sql": {Data: []byte(migration)},
+	}}
+	if err := pg.Migrate(t.Context(), database.Migrator, module); err != nil {
+		t.Fatal(err)
+	}
+	loginName, login := appLogin(t, database)
+	db := open(t, login)
+	if err := db.Check(t.Context(), module); err != nil {
+		t.Fatalf("before the job role was granted: %v", err)
+	}
+	if err := pgtest.Run(t.Context(), database.Superuser, "GRANT axiom_retention_job TO "+loginName); err != nil {
+		t.Fatal(err)
+	}
+	err := db.Check(t.Context(), module)
+	if err == nil || !strings.Contains(err.Error(), "row-level security cannot hold") ||
+		!strings.Contains(err.Error(), "axiom_retention_job") {
+		t.Fatalf("with the job role granted, Check = %v, want the role audit naming axiom_retention_job", err)
+	}
+	if strings.Contains(err.Error(), "misgranted") {
+		t.Errorf("the error quotes the login's password: %v", err)
+	}
+}
+
+// TestCheckRefusesATableOwnerThatIsNotAJobRole: table ownership is refused by itself, not only through the declared
+// job roles, so a role an administrator hands ownership to cannot read past or drop the table. Migrate creates roles
+// cluster-wide, so this test does not run in parallel.
+func TestCheckRefusesATableOwnerThatIsNotAJobRole(t *testing.T) {
+	database := pgtest.New(t)
+	module := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_items.sql": {Data: []byte(`-- +goose Up
+CREATE TABLE quality.items (id int);
+ALTER TABLE quality.items ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY platform_only ON quality.items USING ((SELECT platform.in_platform_scope()));
+GRANT SELECT ON quality.items TO axiom_app;
+`)},
+	}}
+	if err := pg.Migrate(t.Context(), database.Migrator, module); err != nil {
+		t.Fatal(err)
+	}
+	loginName, login := appLogin(t, database)
+	owner := loginName + "_owner"
+	if err := pgtest.Run(t.Context(), database.Superuser,
+		"CREATE ROLE "+owner,
+		"ALTER TABLE quality.items OWNER TO "+owner,
+		"GRANT "+owner+" TO "+loginName); err != nil {
+		t.Fatal(err)
+	}
+	err := open(t, login).Check(t.Context(), module)
+	if err == nil || !strings.Contains(err.Error(), "row-level security cannot hold") || !strings.Contains(err.Error(), owner) {
+		t.Fatalf("with the table's ownership granted, Check = %v, want the role audit naming %s", err, owner)
+	}
+}
+
+// appLogin creates a login that inherits the application role, and returns its name and URL. The login is not
+// axiom_app itself, so a test can grant it a dangerous role without changing what every other test connects as. Role
+// names are cluster-wide, so the name carries the database's.
+func appLogin(t *testing.T, database pgtest.Database) (string, string) {
+	t.Helper()
+	name := strings.TrimPrefix(parse(t, database.App).Path, "/") + "_app"
+	if err := pgtest.Run(t.Context(), database.Superuser,
+		"CREATE ROLE "+name+" LOGIN PASSWORD 'misgranted'",
+		"GRANT axiom_app TO "+name); err != nil {
+		t.Fatal(err)
+	}
+	login := parse(t, database.App)
+	login.User = url.UserPassword(name, "misgranted")
+	return name, login.String()
 }
 
 // TestConnectionFailuresAreRedacted: a failed connection, at startup or in a migration, names the variable and the

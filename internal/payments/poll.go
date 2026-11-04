@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+	"uuid"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -23,6 +24,9 @@ const (
 	expireBatch  = 100
 	pollDeadline = 30 * time.Second
 	closeTimeout = 5 * time.Second
+	// disputeRepairBatch bounds how many disputes one run suspends: an older node books a chargeback without the
+	// suspension, and the next run takes whatever is left.
+	disputeRepairBatch = 100
 )
 
 // pollArgs is the job of one run.
@@ -102,7 +106,46 @@ func (p *Payments) poll(ctx context.Context) error {
 	if err != nil {
 		p.logger.Warn("payments: poll refunds stopped", "error", err)
 	}
+	repairCtx, stopRepair := context.WithTimeout(ctx, 10*time.Second)
+	err = p.repairDisputeSuspensions(repairCtx)
+	stopRepair()
+	if err != nil {
+		p.logger.Warn("payments: dispute suspension repair stopped", "error", err)
+	}
 	p.closeExpired(ctx, closing)
+	return nil
+}
+
+// repairDisputeSuspensions suspends the accounts of disputes an older node applied without the suspension this release
+// adds, and marks each so a later run leaves it alone. Rows applied before the migration are already marked, so this
+// only drains the mixed-version window.
+func (p *Payments) repairDisputeSuspensions(ctx context.Context) error {
+	var due []uuid.UUID
+	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) {
+		due, err = queries.DisputesWithoutSuspension(ctx, tx, disputeRepairBatch)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("payments: read the disputes to repair: %w", err)
+	}
+	for _, id := range due {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error {
+			row, err := queries.LockDispute(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if row.SuspendedAt.Valid || (row.State != "applied" && row.State != "reversed") {
+				return nil
+			}
+			return p.suspendForDispute(ctx, tx, row, row.AccountID, row.Provider, row.ProviderID)
+		})
+		if err != nil {
+			p.logger.Error("payments: a dispute suspension was not repaired", "dispute", id.String(), "error", err)
+		}
+	}
 	return nil
 }
 

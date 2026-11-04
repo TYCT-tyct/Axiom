@@ -12,6 +12,7 @@ import (
 )
 
 func TestServerCaptureChat(t *testing.T) {
+	t.Parallel()
 	c := newServerCapture(Chat)
 	for _, event := range []string{
 		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"openrouter_web_search","arguments":"{\"query\":"}}]}}]}`,
@@ -32,6 +33,7 @@ func TestServerCaptureChat(t *testing.T) {
 }
 
 func TestServerCaptureMessages(t *testing.T) {
+	t.Parallel()
 	c := newServerCapture(Messages)
 	for _, event := range []string{
 		`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"openrouter_web_search","input":{}}}`,
@@ -48,6 +50,7 @@ func TestServerCaptureMessages(t *testing.T) {
 }
 
 func TestServerCaptureResponses(t *testing.T) {
+	t.Parallel()
 	c := newServerCapture(Responses)
 	for _, event := range []string{
 		`{"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"openrouter_web_search","arguments":""}}`,
@@ -65,6 +68,7 @@ func TestServerCaptureResponses(t *testing.T) {
 }
 
 func TestServerCaptureIgnoresOtherTools(t *testing.T) {
+	t.Parallel()
 	c := newServerCapture(Chat)
 	if err := c.event([]byte(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"keep","arguments":"{}"}}]}}]}`)); err != nil {
 		t.Fatal(err)
@@ -75,6 +79,7 @@ func TestServerCaptureIgnoresOtherTools(t *testing.T) {
 }
 
 func TestAppendCapturedResponsesTurnFlattensItems(t *testing.T) {
+	t.Parallel()
 	c := newServerCapture(Responses)
 	for _, event := range []string{
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}`,
@@ -101,6 +106,7 @@ func TestAppendCapturedResponsesTurnFlattensItems(t *testing.T) {
 }
 
 func TestAppendCapturedMessagesRedactedThinking(t *testing.T) {
+	t.Parallel()
 	c := newServerCapture(Messages)
 	for _, event := range []string{
 		`{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"ciphertext"}}`,
@@ -159,6 +165,7 @@ func readCapture(stream string, mem *Memory) (*Relay, error) {
 // TestCaptureChargesItsContainers: many short blocks hold little text but a block, a slice slot and an index entry
 // each; the budget is charged for those, not for the text alone.
 func TestCaptureChargesItsContainers(t *testing.T) {
+	t.Parallel()
 	const blocks = 4000
 	const budget = 64 << 20
 	mem := NewMemory(budget)
@@ -182,6 +189,7 @@ func TestCaptureChargesItsContainers(t *testing.T) {
 // TestCaptureRefusesGrowthPastTheBudget: when the budget cannot cover what an event may add, the event is not read
 // into the capture: the refusal comes before the allocation, and nothing is held that was not charged.
 func TestCaptureRefusesGrowthPastTheBudget(t *testing.T) {
+	t.Parallel()
 	r := NewRelay(Messages, Messages, strings.NewReader(""), UsageContext{},
 		RelayOptions{ID: "g", Model: "m", Created: 1, Memory: NewMemory(0), ServerTool: true})
 	r.held = r.free + r.charged // the base allowance is spent and the node has nothing left

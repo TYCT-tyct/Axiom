@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype" //nolint:depguard // the baseline writes InsertReservationAtParams, whose UUID arrays are pgtype.FlatArray
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
 
@@ -182,52 +183,199 @@ func writeHistoricReservation(ctx context.Context, tx pg.Tx, p InsertReservation
 	return err
 }
 
-// TestReserveManyRowsMatchTheHistoricInsert: the batch's pipelined insert writes the same row, field for field, as the
-// single reservation's insert did before #530 removed it. Every field has a distinct value, so a swapped argument in
-// insertReservationArgs still fails; created_at is the batch's addition and is not compared.
+// TestReserveManyRowsMatchTheHistoricInsert: the batch's pipelined insert writes the same row, column for column, as
+// the single reservation's insert did before #530 removed it. The column list comes from the table itself and every
+// column is compared, so a migration that adds one cannot slip past. All columns but three must be equal; request_id
+// names each row, and created_at and deadline are clock values the two writes cannot share (created_at is the batch's
+// call start, the historic insert's default).
 func TestReserveManyRowsMatchTheHistoricInsert(t *testing.T) {
 	t.Parallel()
 	b := newBank(t, 1e6, 0, Config{})
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	lifetime := 1733 * time.Second
 	day := time.Now().UTC().Truncate(24 * time.Hour)
 	params := func(id uuid.UUID) InsertReservationAtParams {
 		return InsertReservationAtParams{
 			WorkspaceID: b.admitted.Workspace, WorkspaceWindow: day,
 			SiteID: b.admitted.Site, AccountID: b.admitted.Account, Amount: 100,
 			KeyID: b.admitted.Key, KeyWindow: day.Add(-24 * time.Hour),
-			RequestID: id, HolderID: b.billing.holder, LifetimeSeconds: 1733,
+			RequestID: id, HolderID: b.billing.holder, LifetimeSeconds: lifetime.Seconds(),
 			Prices: []string{`{"v":1,"currency":"USD"}`}, Fallbacks: []string{`{"per_use":{}}`},
 			Models:        pgtype.FlatArray[uuid.UUID]{uuid.NewV7()},
 			Endpoints:     pgtype.FlatArray[uuid.UUID]{uuid.NewV7()},
 			ExchangeRates: []byte(`[]`),
 			PriceVersions: pgtype.FlatArray[uuid.UUID]{uuid.NewV7()},
-			CreatedAtUs:   time.Now().UnixMicro(),
+			CreatedAtUs:   at.UnixMicro(),
 		}
 	}
 	base := params(uuid.Nil())
 	batched, baseline := base, base
 	batched.RequestID, baseline.RequestID = uuid.NewV7(), uuid.NewV7()
+	var before, after time.Time
 	if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
+		if err := tx.QueryRow(t.Context(), "SELECT clock_timestamp()").Scan(&before); err != nil {
+			return err
+		}
 		if err := insertBatch(t.Context(), tx, []quotedReservation{{params: batched}}); err != nil {
 			return err
 		}
-		return writeHistoricReservation(t.Context(), tx, baseline)
+		if err := writeHistoricReservation(t.Context(), tx, baseline); err != nil {
+			return err
+		}
+		return tx.QueryRow(t.Context(), "SELECT clock_timestamp()").Scan(&after)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	const columns = `amount, prices, fallbacks, models, endpoints, exchange_rates, price_versions, workspace_window, key_window, state`
-	read := func(id uuid.UUID) string {
-		var row string
-		if err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
-			return tx.QueryRow(t.Context(), `SELECT row(`+columns+`)::text FROM billing.reservations WHERE request_id = $1`, id).Scan(&row)
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return row
+	facts := reservationFacts{
+		batchedID: batched.RequestID, historicID: baseline.RequestID, at: at,
+		before: before, after: after, lifetime: lifetime,
 	}
-	if got, want := read(batched.RequestID), read(baseline.RequestID); got != want {
-		t.Errorf("the batch wrote\n%s\nthe historic insert wrote\n%s", got, want)
-	}
+	batchedRow, historicRow := readReservationRow(t, b, batched.RequestID), readReservationRow(t, b, baseline.RequestID)
+	compareReservationRows(t, b, batchedRow, historicRow, facts)
 	b.consistent()
+}
+
+// reservationFacts is what the column checks need beyond the two values: the IDs of the inserted rows, the call start
+// the batch wrote, and the database clock on both sides of the two inserts.
+type reservationFacts struct {
+	batchedID, historicID uuid.UUID
+	at                    time.Time
+	before, after         time.Time
+	lifetime              time.Duration
+}
+
+// reservationCheck compares one column of the two rows, returning "" when they agree or what differs.
+type reservationCheck func(batched, historic jsonx.Raw, facts reservationFacts) string
+
+// reservationChecks handles the columns the two inserts cannot fill identically. compareReservationRows compares every
+// other column exactly, so a column a migration adds is compared even before it gets a check here.
+var reservationChecks = map[string]reservationCheck{
+	"request_id": reservationRequestID, "created_at": reservationCreatedAt, "deadline": reservationDeadline,
+}
+
+// compareReservationRows checks every column the table has, not a list the test keeps, against the two rows.
+func compareReservationRows(t *testing.T, b *bank, batched, historic map[string]jsonx.Raw, facts reservationFacts) {
+	t.Helper()
+	for _, column := range reservationColumns(t, b) {
+		check, ok := reservationChecks[column]
+		if !ok {
+			check = reservationValuesEqual
+		}
+		if diff := check(batched[column], historic[column], facts); diff != "" {
+			t.Errorf("%s: %s", column, diff)
+		}
+	}
+}
+
+// reservationValuesEqual is the check for a column both writes must fill identically.
+func reservationValuesEqual(batched, historic jsonx.Raw, _ reservationFacts) string {
+	if string(batched) == string(historic) {
+		return ""
+	}
+	return "the batch wrote " + string(batched) + ", the historic insert wrote " + string(historic)
+}
+
+// reservationRequestID checks that each row carries the ID it was inserted with, which the comparison cannot share
+// with the other row.
+func reservationRequestID(batched, historic jsonx.Raw, facts reservationFacts) string {
+	wantBatched, wantHistoric := fmt.Sprintf("%q", facts.batchedID), fmt.Sprintf("%q", facts.historicID)
+	if string(batched) == wantBatched && string(historic) == wantHistoric {
+		return ""
+	}
+	return fmt.Sprintf("the batch wrote %s, the historic insert wrote %s; want %s and %s",
+		batched, historic, wantBatched, wantHistoric)
+}
+
+// reservationCreatedAt checks the documented difference: the batch writes the call's start, while the historic insert
+// let created_at default to the statement's clock, which must lie between the readings around both inserts.
+func reservationCreatedAt(batched, historic jsonx.Raw, facts reservationFacts) string {
+	batchAt, historicAt, diff := reservationTimes(batched, historic)
+	if diff != "" {
+		return diff
+	}
+	if !batchAt.Equal(facts.at) {
+		return fmt.Sprintf("the batch wrote %s, want the call start %s", batchAt, facts.at)
+	}
+	if historicAt.Before(facts.before) || historicAt.After(facts.after) {
+		return fmt.Sprintf("the historic insert wrote %s, outside the inserts' clock %s to %s",
+			historicAt, facts.before, facts.after)
+	}
+	return ""
+}
+
+// reservationDeadline checks that both writes added the same lifetime to their statement's clock: each deadline must
+// lie in the insert window plus the lifetime, and the two deadlines can differ by no more than that window.
+func reservationDeadline(batched, historic jsonx.Raw, facts reservationFacts) string {
+	batchDeadline, historicDeadline, diff := reservationTimes(batched, historic)
+	if diff != "" {
+		return diff
+	}
+	earliest, latest := facts.before.Add(facts.lifetime), facts.after.Add(facts.lifetime)
+	if batchDeadline.Before(earliest) || batchDeadline.After(latest) {
+		return fmt.Sprintf("the batch wrote %s, outside %s to %s, the insert clock plus %s",
+			batchDeadline, earliest, latest, facts.lifetime)
+	}
+	if historicDeadline.Before(earliest) || historicDeadline.After(latest) {
+		return fmt.Sprintf("the historic insert wrote %s, outside %s to %s, the insert clock plus %s",
+			historicDeadline, earliest, latest, facts.lifetime)
+	}
+	if diff, window := batchDeadline.Sub(historicDeadline), facts.after.Sub(facts.before); diff < -window || diff > window {
+		return fmt.Sprintf("the deadlines differ by %s, more than the inserts' clock window %s", diff, window)
+	}
+	return ""
+}
+
+// reservationTimes reads both rows' timestamp JSON values, naming the row that failed to parse.
+func reservationTimes(batched, historic jsonx.Raw) (time.Time, time.Time, string) {
+	var batchAt, historicAt time.Time
+	if err := jsonx.Unmarshal(batched, &batchAt); err != nil {
+		return time.Time{}, time.Time{}, "the batch's timestamp: " + err.Error()
+	}
+	if err := jsonx.Unmarshal(historic, &historicAt); err != nil {
+		return time.Time{}, time.Time{}, "the historic timestamp: " + err.Error()
+	}
+	return batchAt, historicAt, ""
+}
+
+// reservationColumns reads billing.reservations' column names in table order.
+func reservationColumns(t *testing.T, b *bank) []string {
+	t.Helper()
+	var columns []string
+	if err := b.app.ReadTx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), `SELECT column_name::text FROM information_schema.columns
+			WHERE table_schema = 'billing' AND table_name = 'reservations' ORDER BY ordinal_position`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var column string
+			if err := rows.Scan(&column); err != nil {
+				return err
+			}
+			columns = append(columns, column)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return columns
+}
+
+// readReservationRow reads one reservation as the JSON of its whole row, keeping every column's value exact.
+func readReservationRow(t *testing.T, b *bank, id uuid.UUID) map[string]jsonx.Raw {
+	t.Helper()
+	var raw []byte
+	if err := b.app.ReadTx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT to_jsonb(r) FROM billing.reservations r WHERE request_id = $1`, id).Scan(&raw)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var row map[string]jsonx.Raw
+	if err := jsonx.Unmarshal(raw, &row); err != nil {
+		t.Fatal(err)
+	}
+	return row
 }
 
 // TestReserveManyWritesTheCallStart: the caller's start, before admission and before the call log's write, is the

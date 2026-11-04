@@ -13,6 +13,7 @@ import (
 // The publication callback observes the write gate while both stores are still protected; readers then see the
 // matching list and price. TryRLock makes the exclusion assertion deterministic, without a scheduling timeout.
 func TestModelPublicationExcludesReaders(t *testing.T) {
+	t.Parallel()
 	models := NewModelList()
 	router, err := routing.New(routing.Config{})
 	if err != nil {

@@ -14,6 +14,9 @@ set -euo pipefail
 job="$(python3 scripts/deploy_name.py "${RUNNER_NAME:-local-$(hostname)}" "${GITHUB_WORKSPACE:-$(pwd)}")"
 export COMPOSE_PROJECT_NAME="axiom-ci-$job"
 export DEPLOY_IMAGE="${CI_DEPLOY_IMAGE:-axiom-ci:$job}"
+# The database image is the job's own too. Every runner on the host building the shared default tag would move it
+# under a running stack, and Compose recreates a container whose tag now names another image (#605).
+export DEPLOY_POSTGRES_IMAGE="axiom-ci-postgres:$job"
 export DEPLOY_RESTART_POLICY=no # a CI stack must not start again after a killed job leaves it behind
 # Empty: the compose file publishes a port the kernel picks (deploy/compose.yaml), which no other job can hold.
 export DEPLOY_PORT= DEPLOY_ADMIN_PORT=
@@ -24,15 +27,28 @@ compose() { docker compose -f deploy/compose.yaml "$@"; }
 # step, and `down` by project name works before deploy/.env exists.
 down() { docker compose --project-name "$COMPOSE_PROJECT_NAME" down --volumes --timeout 5; }
 
-# Both steps always run: failing to stop the containers must not leave the image behind.
+# Both steps always run: failing to stop the containers must not leave the images behind.
 teardown() {
   down || true
   if [ -z "${CI_DEPLOY_IMAGE:-}" ]; then docker image rm --force "$DEPLOY_IMAGE" > /dev/null 2>&1 || true; fi
+  docker image rm --force "$DEPLOY_POSTGRES_IMAGE" > /dev/null 2>&1 || true
+}
+
+# A container that exited is gone after the teardown, and with it the only record of why: print every container's
+# output first. By label, because `docker compose logs` without the compose file finds no services.
+dump_logs() {
+  local id
+  for id in $(docker ps -aq --filter "label=com.docker.compose.project=$COMPOSE_PROJECT_NAME"); do
+    echo "::group::$(docker inspect --format '{{.Name}} {{.State.Status}} {{.State.ExitCode}}' "$id")"
+    docker logs --tail 200 "$id" 2>&1 || true
+    echo "::endgroup::"
+  done
 }
 
 # Keep the status the script already had: neither a failed teardown nor a successful one may change it.
 finish() {
   status=$?
+  [ "$status" -eq 0 ] || dump_logs
   teardown
   exit "$status"
 }
@@ -58,7 +74,15 @@ clean_stale() {
     [ $(( now - newest[$project] )) -ge "$STALE_AFTER" ] || continue
     echo "removing the abandoned CI deploy stack $project"
     docker compose --project-name "$project" down --volumes --timeout 5 || true
-    docker image rm --force "axiom-ci:${project#axiom-ci-}" > /dev/null 2>&1 || true
+    docker image rm --force "axiom-ci:${project#axiom-ci-}" "axiom-ci-postgres:${project#axiom-ci-}" > /dev/null 2>&1 || true
+  done
+  # The old-binary check runs a database of its own, outside this job's compose project; a job killed before its trap
+  # leaves it behind. The label keeps this away from every other container, and the age keeps a live check's database.
+  for id in $(docker ps -aq --filter label=axiom.ci.old-binary-check=true); do
+    created="$(date -d "$(docker inspect --format '{{.Created}}' "$id" 2>/dev/null)" +%s 2>/dev/null)" || continue
+    [ $(( now - created )) -ge "$STALE_AFTER" ] || continue
+    echo "removing the abandoned old-binary check database $id"
+    docker rm --force "$id" || true
   done
 }
 
@@ -80,6 +104,10 @@ else
   built="$(just axiom-version)"
   docker build --tag "$DEPLOY_IMAGE" deploy
 fi
+# The database image is built from this tree (pgBackRest on the pinned PostgreSQL tag), not consumed as a digest like
+# the program, and built once: a rebuild from a warm cache still names a new image, because the build's provenance
+# attestation differs, and Compose would recreate the database under the running node at the next start (#605).
+docker build --tag "$DEPLOY_POSTGRES_IMAGE" deploy/postgres
 
 # Reuse the same image for every start, including the legacy-role upgrade. Only CI's own environment is initialized.
 start() {
@@ -91,12 +119,15 @@ start() {
     { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env
   fi
   chmod 600 deploy/.env
-  # The database image is built from this tree (pgBackRest on the pinned PostgreSQL tag), not consumed as a digest like
-  # the program; it has to exist before the no-build starts below.
-  timeout 300 docker compose -f deploy/compose.yaml build postgres
-  timeout 90 docker compose -f deploy/compose.yaml up --detach --no-build --wait --wait-timeout 60 postgres
+  # No wall-clock bound around Compose: on the shared host the daemon alone took 34 seconds to deliver a stop signal
+  # (#605), so a per-command limit measured the host's load, not the deployment. The step's 40 minutes bound a hung
+  # daemon, and the database's own healthcheck bounds a start that never becomes ready. The healthcheck is the
+  # condition: Docker keeps probing while PostgreSQL replays WAL and fsyncs the data directory (starting, then
+  # unhealthy) and reports healthy on the first probe that accepts connections. A 60-second --wait-timeout ignored
+  # that transition and failed a recovery that was still progressing at 48 seconds (#605).
+  compose up --detach --no-build --wait postgres
   compose exec -T postgres sh < deploy/postgres/roles.sh
-  timeout 180 docker compose -f deploy/compose.yaml up --detach --no-build --wait --wait-timeout 60
+  compose up --detach --no-build --wait
   # Include exited one-shot services before teardown, so their resource policy cannot escape inspection.
   local id ids parent
   ids=$(compose ps --all --quiet)
@@ -161,6 +192,13 @@ admin_script="$(curl -fsS "http://127.0.0.1:$admin/" | grep -o '/assets/index-[^
 headers="$(curl -fsS -D - -o /dev/null -H 'Accept-Encoding: br' "http://127.0.0.1:$admin$admin_script" | tr -d '\r')"
 grep -qi '^cache-control: public, max-age=31536000, immutable$' <<< "$headers" && grep -qi '^content-encoding: br$' <<< "$headers" || { echo "::error::the admin script is not served cached and compressed"; exit 1; }
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$public$admin_script")" = 404 ] || { echo "::error::the public listener serves the admin's files"; exit 1; }
+
+# The rolling release's other half: the release this deployment replaces must still start against the schema this tree
+# migrates. The program is the train's base (BASE) or the base a main landing's Train trailer names; the check builds
+# it, migrates a database with this deployment's image and waits for its /readyz. It runs before the legacy-role
+# upgrade, a separate scenario; the check creates its own database and migration administrator, so the upgrade does not
+# affect it. DEPLOY_IMAGE is the release digest or the image built from this tree above.
+bash "$(dirname "${BASH_SOURCE[0]}")/old-binary-check.sh" --current-image "$DEPLOY_IMAGE"
 
 # A deployment from before the migration administrator: no such role, an owner role that role did not create, and
 # a deploy/.env without its password, readable by others and lacking a final newline. just up upgrades it in place.

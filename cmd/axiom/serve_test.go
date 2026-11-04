@@ -136,7 +136,8 @@ func checkMetrics(t *testing.T, addrs addresses) {
 }
 
 // TestServeRejectsBadConfiguration: the node does not start, names every wrong variable or the database problem, and
-// quotes no value.
+// quotes no value. The taken-address cases point at a database that refuses every connection, so they fail on that
+// error if the listeners are claimed after the database instead of before it.
 func TestServeRejectsBadConfiguration(t *testing.T) {
 	t.Parallel()
 	database := pgtest.New(t, modules()...)
@@ -157,6 +158,10 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	// unreachable refuses a connection at once. A taken address must be reported before this database is reached, and
+	// if it moves behind the database the first error is this one, so the order is proven without a clock.
+	unreachable := "AXIOM_DATABASE_URL=postgres://planted-value:planted-value@" + net.JoinHostPort("127.0.0.1", "1") + "/planted-value"
+	master, hashes, identity := keyFile(t, 'm'), keyFile(t, 'h'), keyFile(t, 'i')
 	cases := []struct {
 		name    string
 		environ []string
@@ -168,13 +173,13 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 			[]string{"AXIOM_SHUTDOWN_TIMEOUT: want", "AXIOM_PROBES_ADDR: want", "AXIOM_PROBES_ADRR: unknown variable", "AXIOM_DATABASE_URL: required"},
 		},
 		{
-			"a taken address",
-			[]string{"AXIOM_PROBES_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
+			"a taken probes address",
+			[]string{"AXIOM_PROBES_ADDR=" + taken.Addr().String(), unreachable},
 			[]string{"AXIOM_PROBES_ADDR: "},
 		},
 		{
 			"a taken admin address",
-			[]string{"AXIOM_ADMIN_ADDR=" + taken.Addr().String(), "AXIOM_DATABASE_URL=" + database.App},
+			[]string{"AXIOM_ADMIN_ADDR=" + taken.Addr().String(), unreachable},
 			[]string{"AXIOM_ADMIN_ADDR: "},
 		},
 		{
@@ -194,14 +199,13 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second) // a node that wrongly starts stops here
 		// Free ports unless the case sets its own, so a node that wrongly starts takes no fixed port.
 		environ := append([]string{
-			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
-			"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
+			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
+			"AXIOM_SHUTDOWN_TIMEOUT=5s", "AXIOM_MASTER_KEY_FILE=" + master, "AXIOM_KEY_HASH_FILE=" + hashes,
+			"AXIOM_IDENTITY_KEY_FILE=" + identity,
 		}, c.environ...)
-		err := serveForTest(ctx, environ, slog.New(slog.DiscardHandler))
-		cancel()
+		err := serveRefused(t, c.name, environ)
 		if err == nil {
 			t.Fatalf("%s: the node started", c.name)
 		}
@@ -216,6 +220,46 @@ func TestServeRejectsBadConfiguration(t *testing.T) {
 		}
 	}
 }
+
+// serveRefused runs a node that must fail before serving. The node gets t.Context(), so a loaded machine may take as
+// long as it needs and no wall clock turns a slow start into a different error. A node that starts anyway is caught at
+// its "serving" record and failed explicitly instead of being stopped by a deadline.
+func serveRefused(t *testing.T, name string, environ []string) error {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	started := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() { done <- serveForTest(ctx, environ, slog.New(startWatcher{started})) }()
+	select {
+	case err := <-done:
+		return err
+	case <-started:
+		cancel()
+		<-done
+		t.Fatalf("%s: the node started", name)
+		return nil
+	}
+}
+
+// startWatcher reports the node's "serving" record and drops every other: a bad configuration never reaches it, and a
+// node that does must fail the test at once rather than block until the package's timeout.
+type startWatcher struct{ started chan<- struct{} }
+
+func (startWatcher) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h startWatcher) Handle(_ context.Context, record slog.Record) error {
+	if record.Message == "serving" {
+		select {
+		case h.started <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+func (h startWatcher) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h startWatcher) WithGroup(string) slog.Handler      { return h }
 
 // records receives log records: the JSON handler writes each record with a single Write. Once the buffer is full,
 // records are dropped rather than blocking the node: the tests read only up to "serving" and "ready", the first records.
@@ -347,7 +391,7 @@ func getAccepting(t *testing.T, url, accept string) (response, error) {
 }
 
 // TestStartupTimeoutCoversTheFallbackCheck: a node whose check of the fallback prices waits on a lock fails within
-// AXIOM_STARTUP_TIMEOUT, as one whose database does not answer, instead of hanging before its listeners open.
+// AXIOM_STARTUP_TIMEOUT, as one whose database does not answer, instead of hanging before its listeners serve.
 func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 	t.Parallel()
 	database := pgtest.New(t, modules()...)
@@ -389,28 +433,27 @@ func TestStartupTimeoutCoversTheFallbackCheck(t *testing.T) {
 	}
 }
 
-// TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started, here on a taken
-// address, closes it on the way out, so the writer has exited when serve returns. The test holds the Recorder that
-// this call created, so no other node's writer, parallel or earlier, can change the outcome.
+// TestFailedStartLeavesNoRecorderWriter: a node that fails after the call-record writer started closes it on the way
+// out, so the writer has exited when serve returns. The recorder constructor starts the real writer and then reports a
+// failure, so the test does not need a listener that would now be refused before the writer exists. The test holds the
+// Recorder that this call created, so no other node's writer, parallel or earlier, can change the outcome.
 func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 	t.Parallel()
-	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer taken.Close() //nolint:errcheck // a test listener
 	environ := []string{
-		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + taken.Addr().String(), "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'),
+		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'),
 		"AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_CALL_LOG_DIR=" + t.TempDir(),
 	}
 	var recorder *observability.Recorder
 	record := func(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, dir string, logger *slog.Logger) (*observability.Recorder, error) {
 		var err error
 		recorder, err = startRecorder(ctx, db, tel, dir, logger)
-		return recorder, err
+		if err != nil {
+			return nil, err
+		}
+		return recorder, errors.New("injected failure after the call-record writer started")
 	}
-	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil); err == nil {
-		t.Fatal("the node started on a taken address")
+	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil, testGatewayConfig()); err == nil || !strings.Contains(err.Error(), "injected failure") {
+		t.Fatalf("serveWith: %v, want the injected failure", err)
 	}
 	if recorder == nil {
 		t.Fatal("the node failed before it started the recorder")

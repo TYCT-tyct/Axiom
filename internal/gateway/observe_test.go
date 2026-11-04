@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"axiom/internal/billing"
+	"axiom/internal/protocol"
 	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
+	"axiom/internal/websearch"
 )
 
 // TestEveryAttemptIsObservedOnce: each attempt tells quality how it ended, once, and the table decides what it counts
@@ -20,6 +22,7 @@ import (
 // 0.84, one it counts as a failure drops it to 0.64, and one it does not count leaves it at 0.8; endpoint 2, where the
 // call goes next, ends normally.
 func TestEveryAttemptIsObservedOnce(t *testing.T) {
+	t.Parallel()
 	const succeeded, failed, uncounted = 0.84, 0.64, 0.8
 	fivexx := failing(routing.ScopeEndpoint, false, suppliers.Failure{Cause: suppliers.UpstreamError{Status: 502}})
 	cases := []struct {
@@ -106,6 +109,7 @@ func (h *harness) runLeaving(leave time.Duration) {
 // TestTheTimeToTheFirstTokenIsMeasured: the time from sending to the first content is what quality averages, once five
 // attempts have measured it.
 func TestTheTimeToTheFirstTokenIsMeasured(t *testing.T) {
+	t.Parallel()
 	health := quality.New(nil)
 	var now time.Time // the bubble's: every bubble's clock starts at the same instant
 	for range 5 {
@@ -125,6 +129,7 @@ func TestTheTimeToTheFirstTokenIsMeasured(t *testing.T) {
 // which the attempt waits for before it closes, does not slow the measured speed: 100 tokens a second after the first
 // content, though the attempt closes half a second after the upstream ended.
 func TestThroughputLeavesOutOurOwnWaits(t *testing.T) {
+	t.Parallel()
 	health := quality.New(nil)
 	var now time.Time
 	for range 5 {
@@ -148,5 +153,158 @@ func TestThroughputLeavesOutOurOwnWaits(t *testing.T) {
 	}
 	if got := health.MeasuredFor(suppliers.Routable{ID: uuidOf(ep(1))}, now).Throughput; math.Abs(got-100) > 1e-9 {
 		t.Errorf("throughput %v, want 100 tokens a second", got)
+	}
+}
+
+// TestToolErrorsReachQuality: an answer whose tool call's arguments are not one JSON text is told to quality as a tool
+// error whether the client gets it as relayed or the client's format refuses it once the answer ended, as a Chat
+// stream converted for a Messages client does: five such calls make the endpoint's measured tool-call error rate 1. A
+// call cut at the output cap is no sample, relayed or aggregated: its arguments were cut, not wrong. A Messages reply
+// aggregated refuses the input when its block stops, before the stop reason says whether it was cut, so that refusal
+// is no sample either: it may be the cap's (docs/domains/quality.md「线上观测」).
+func TestToolErrorsReachQuality(t *testing.T) {
+	t.Parallel()
+	messagesCall := "event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"f","input":{}}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}` + "\n\n"
+	chatCall := strings.NewReplacer(`"openrouter_web_search"`, `"f"`, `"{\"query\":\"axiom\"}"`, `"{\"query\":"`).Replace(chatToolCall)
+	chat, unstreamed := protocol.Chat, false
+	// atTheCap is the Messages answer with the call stopped at max_tokens.
+	atTheCap := func(h *harness) string {
+		end := events(h.events, evMsgDelta)
+		capped := strings.Replace(end, `"end_turn"`, `"max_tokens"`, 1)
+		if capped == end {
+			h.t.Fatalf("the sample's message_delta has no end_turn to replace: %s", end)
+		}
+		return events(h.events, evStart) + messagesCall + events(h.events, evBlockStop) + capped + events(h.events, evMsgStop)
+	}
+	for _, tc := range []struct {
+		name   string
+		o      options
+		stream func(h *harness) string
+		want   float64
+	}{
+		{"a Messages stream", options{}, func(h *harness) string {
+			return events(h.events, evStart) + messagesCall + events(h.events, evBlockStop, evMsgDelta, evMsgStop)
+		}, 1},
+		{"a Chat stream converted for a Messages client", options{upstream: &chat}, func(*harness) string { return chatCall }, 1},
+		{"a Messages reply aggregated, refused before its stop reason", options{stream: &unstreamed}, func(h *harness) string {
+			return events(h.events, evStart) + messagesCall + events(h.events, evBlockStop, evMsgDelta, evMsgStop)
+		}, 0},
+		{"a Messages stream cut at max_tokens", options{}, atTheCap, 0},
+		{"a Messages reply aggregated, cut at max_tokens", options{stream: &unstreamed}, atTheCap, 0},
+		{"a Chat stream cut at the length limit", options{client: protocol.Chat}, func(*harness) string {
+			return strings.Replace(chatCall, `"finish_reason":"tool_calls"`, `"finish_reason":"length"`, 1)
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			health := quality.New(nil)
+			var now time.Time
+			for range 5 {
+				run(t, func(t *testing.T, ctx context.Context) {
+					o := tc.o
+					o.health = health
+					h := newHarness(t, ctx, o)
+					h.up.eps[uuidOf(ep(1))].script = []scripted{serve(beat{data: tc.stream(h)})}
+					h.run()
+					now = time.Now()
+				})
+			}
+			if got := health.MeasuredFor(suppliers.Routable{ID: uuidOf(ep(1))}, now).ToolErrorRate; got != tc.want {
+				t.Errorf("tool-call error rate %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClassEvidenceIsOneReportedResponse: the usage a source class rule reads is what the upstream reported, not the
+// gateway's estimate, and it comes from the same response as the headers, so two hops of a search loop cannot together
+// satisfy a rule no single response did.
+func TestClassEvidenceIsOneReportedResponse(t *testing.T) {
+	const cached = `"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,"prompt_tokens_details":{"cached_tokens":5}}`
+	reported := []quality.Condition{{Evidence: "usage", Item: "input", Operator: "present"}}
+	together := []quality.Condition{
+		{Evidence: "header", Name: "X-Official", Operator: "present"},
+		{Evidence: "usage", Item: "cache_read", Operator: "present"},
+	}
+	official := http.Header{"X-Official": {"1"}}
+	for _, tc := range []struct {
+		name  string
+		rule  []quality.Condition
+		hops  []scripted
+		class string
+	}{
+		{"input reported", reported, []scripted{serve(beat{data: chatAnswer})}, "official"},
+		{"input estimated", reported, []scripted{serve(beat{data: withoutUsage(chatAnswer)})}, "relay"},
+		{"header and usage in the first hop", together, []scripted{
+			withHeader(official, serve(beat{data: strings.Replace(chatToolCall, `"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}`, cached, 1)})),
+			serve(beat{data: chatAnswer}),
+		}, "official"},
+		{"header in the first hop, usage in the second", together, []scripted{
+			withHeader(official, serve(beat{data: chatToolCall})),
+			serve(beat{data: strings.Replace(chatAnswer, `"usage":{"prompt_tokens":20,"completion_tokens":5,"total_tokens":25}`, cached, 1)}),
+		}, "relay"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run(t, func(t *testing.T, ctx context.Context) {
+				if got := classAfter(t, ctx, tc.rule, tc.hops); got != tc.class {
+					t.Errorf("class %q, want %q", got, tc.class)
+				}
+			})
+		})
+	}
+}
+
+// classAfter runs one search-loop call whose hops answer as given and returns the class quality then gives endpoint 1,
+// where official is recognized by rule.
+func classAfter(t *testing.T, ctx context.Context, rule []quality.Condition, hops []scripted) string {
+	t.Helper()
+	health := quality.New(nil)
+	classes := quality.DefaultSourceClasses()
+	classes[0].Rules = quality.Rules{Match: "all", Conditions: rule}
+	if err := health.SetSourceClasses(classes); err != nil {
+		t.Fatal(err)
+	}
+	// The harness's entry: no catalog model or formats, upstream up-1.
+	endpoint := suppliers.Routable{ID: uuidOf(ep(1)), Upstream: "up-1"}
+	if err := health.Prepare(ctx, []suppliers.Routable{endpoint}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := protocol.Chat
+	h := newHarness(t, ctx, options{
+		client: protocol.Chat, upstream: &upstream, request: []byte(searchTool), health: health,
+		price:  `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_read":"0.0000001","cache_write":"0.000001","web_search":"0.01"}}`,
+		search: &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}},
+		server: &protocol.ServerWebSearch{Engine: "exa", MaxResults: 2},
+		script: map[int][]scripted{1: hops},
+	})
+	h.run()
+	if h.w.status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", h.w.status, h.w.body())
+	}
+	return health.MeasuredFor(endpoint, time.Now()).Class
+}
+
+// withoutUsage drops a Chat stream's usage chunk: the upstream reported nothing.
+func withoutUsage(stream string) string {
+	var kept []string
+	for _, e := range strings.SplitAfter(stream, "\n\n") {
+		if !strings.Contains(e, `"usage"`) {
+			kept = append(kept, e)
+		}
+	}
+	return strings.Join(kept, "")
+}
+
+// withHeader answers as s does, with h as the response headers.
+func withHeader(h http.Header, s scripted) scripted {
+	return func(ctx context.Context) (*http.Response, *suppliers.Failure) {
+		resp, f := s(ctx)
+		if resp != nil {
+			resp.Header = h
+		}
+		return resp, f
 	}
 }

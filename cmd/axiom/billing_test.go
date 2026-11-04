@@ -28,7 +28,7 @@ func TestBillingCommand(t *testing.T) {
 		}
 		return f
 	}
-	save := `{"currency":"CNY","markup":"1.3","per_use":{"code_execution":"0.3","web_search":"0.2"},"reason":"CNY site"}`
+	save := `{"currency":"CNY","per_use":{"code_execution":"0.3","web_search":"0.2"},"reason":"CNY site"}`
 	if out, err := run("save-fallbacks", file(save)); err != nil || out != `{"done":"save-fallbacks"}`+"\n" {
 		t.Errorf("save-fallbacks = %q, %v", out, err)
 	}
@@ -36,7 +36,8 @@ func TestBillingCommand(t *testing.T) {
 		args []string
 		want string
 	}{
-		"a refused row":          {[]string{"save-fallbacks", file(strings.Replace(save, `"1.3"`, `"0.5"`, 1))}, "markup"},
+		"a refused row":          {[]string{"save-fallbacks", file(strings.Replace(save, `"0.3"`, `"0"`, 1))}, "code_execution"},
+		"the removed markup":     {[]string{"save-fallbacks", file(strings.Replace(save, `"reason"`, `"markup":"1.3","reason"`, 1))}, "markup"},
 		"nothing to clear":       {[]string{"clear-unknown-item", file(`{"model":"0198c0a8-0000-7000-8000-000000000009","field":"f","reason":"r"}`)}, "not found"},
 		"an unknown operation":   {[]string{"drop-everything", file(`{}`)}, "unknown operation"},
 		"a closing that is gone": {[]string{"close-hold", file(`{"request":"0198c0a8-0000-7000-8000-000000000009","reason":"r"}`)}, "unknown operation"},

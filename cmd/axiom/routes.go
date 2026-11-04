@@ -60,7 +60,7 @@ func (p consoleParts) routes(ctx context.Context, db *pg.DB, tel *telemetry.Tele
 	// The accounts module and the call path take their in-process limits from one value: a key lookup that misses the
 	// cache uses a database connection like an admission does, so the two must share the counting, or a flood of
 	// unknown keys would be bounded by nothing (gateway.Backpressure.KeyLookupSlot, which gateway.NewHandler requires).
-	gate := gateway.DefaultConfig()
+	gate := p.gate
 	gate.PoolSize, gate.PoolReserve = int(db.MaxConns()), db.CompletionConns()
 	limits, err := gateway.New(gate, tel.Metrics.Meter("axiom/gateway"))
 	if err != nil {
@@ -115,7 +115,8 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 	exit *egress.Client, db *pg.DB, tel *telemetry.Telemetry, logger *slog.Logger,
 ) (nodeRoutes, error) {
 	pay, err := payments.Open(payments.Config{
-		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: paymentPlugins, Proxies: p.cfg.trustedProxies,
+		DB: db, Platform: pg.PlatformScope(), Keyring: p.master, Client: exit, Logger: logger, Plugins: paymentPlugins,
+		Proxies: p.cfg.trustedProxies, Accounts: service,
 		Alerts: p.alerts, Instance: p.cfg.valkey.NodeID, Signals: p.paymentSignals,
 	})
 	if err != nil {
@@ -125,7 +126,7 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, catalog: cat, db: db, models: calls.models, search: calls.search.List(), suppliers: supplierAdmin},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
-	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger})
+	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger, keyLookup: p.gate.KeyLookup})
 	public = withPaymentCallbacks(public, pay.Notify())
 	adminAPI := newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger)
 	adminAPI.keys, adminAPI.exit, adminAPI.smtp, adminAPI.search = p.master, exit, p.cfg.smtp, p.cfg.search

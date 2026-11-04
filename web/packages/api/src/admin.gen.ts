@@ -66,6 +66,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/reports/targets/{month}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UTC calendar month, `YYYY-MM`. */
+                month: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * The site's business targets for a UTC calendar month.
+         * @description The targets the owner set in the admin for one month (docs/domains/operations.md「业务目标」). Calls and errors are whole counts; revenue and cost are exact money in the site's accounting currency. `rev` is the month's revision: 0 before the first write, one more after every successful write, including a clear. A month with no target has no target fields and still carries its revision.
+         */
+        get: operations["getOperationsTargets"];
+        /**
+         * Set the first-release business targets for a UTC calendar month.
+         * @description Replaces the first-release four targets, calls, errors, revenue and cost: a target left out is cleared, not kept from before. The request carries the `rev` the editor read; a month that has moved since then is a 409 `stale_revision`, not a silent overwrite of another administrator's change. Revenue and cost are exact money in the site's accounting currency, and another currency is a 400. The commercial metrics (paid users, monthly revenue, gross margin and retention) are left as stored, so an editor from a node before them cannot clear what it cannot see. A full replacement uses `replaceOperationsTargets`; this operation refuses the full-set header, body marker and commercial fields. It remains the write every node has, so a page from before the commercial metrics can keep using it during a rolling release. The change is audited with the values it replaced and the reason. Targets are administrative data, not site settings, so `updateSiteSettings` leaves them as they are.
+         */
+        put: operations["updateOperationsTargets"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/reports/targets/{month}/all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UTC calendar month, `YYYY-MM`. */
+                month: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace every business target for a UTC calendar month.
+         * @description The full-set write, for a page that read all eight metrics. The path is new with the commercial metrics: a node before them does not route it and returns 404 before the request can be mistaken for a legacy four-field write, so a clear cannot leave the commercial rows behind and still report success. The body replaces every metric; a target left out is cleared. `X-Axiom-Target-Metrics: all` and `all_metrics: true` are both required. `rev`, currency and audit rules are the same as `updateOperationsTargets`. Targets are administrative data, not site settings, so `updateSiteSettings` leaves them as they are.
+         */
+        put: operations["replaceOperationsTargets"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/audit": {
         parameters: {
             query?: never;
@@ -236,13 +286,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Collection switch and accepted credit range. Omitted limits are unrestricted.
-         * @description Collection switch and accepted credit range. Omitted limits are unrestricted.
+         * Collection switch, accepted credit range and top-up buffer.
+         * @description Collection switch, accepted credit range and top-up buffer; omitted top-up limits are unrestricted.
          */
         get: operations["getPaymentSettings"];
         /**
-         * Collection switch and accepted credit range. Omitted limits are unrestricted.
-         * @description Collection switch and accepted credit range. Omitted limits are unrestricted.
+         * Collection switch, accepted credit range and top-up buffer.
+         * @description Collection switch, accepted credit range and top-up buffer; omitted top-up limits are unrestricted.
          */
         put: operations["setPaymentSettings"];
         post?: never;
@@ -427,6 +477,56 @@ export interface paths {
         put: operations["setQualityProbeSettings"];
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/source-classes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The source classes in recognition order and their fingerprint rules.
+         * @description The live classes, lowest position first. `relay` is the fallback an endpoint belongs to until a rule matches or while it has no successful response. Nodes reread this table within 5 seconds and reclassify endpoints from their last response; the routing snapshot publishes the new class within another snapshot interval.
+         */
+        get: operations["listSourceClasses"];
+        put?: never;
+        /**
+         * Add a source class and its fingerprint rules.
+         * @description The slug is stable: presets and call records name it, and a retired class keeps it reserved. A missing position is placed after the last class before the fallback. The rules are validated here and again when a node loads them; a bad rule names its path (`/rules/conditions/0/operator`) in the 400.
+         */
+        post: operations["createSourceClass"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/source-classes/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change a source class at the revision the caller read.
+         * @description Changes names, description, position and rules. A stale `rev` is a 409 and changes nothing. A seeded class keeps its slug and cannot be retired; the fallback keeps its position and has no rules. Endpoints are reclassified from their last successful response. A header the new rules read but the old ones did not is unknown until the next response: present and absent conditions for it do not match, so the endpoint may fall to the fallback in the meantime.
+         */
+        put: operations["updateSourceClass"];
+        post?: never;
+        /**
+         * Retire a source class.
+         * @description The class stops matching and leaves the list; its row and slug stay reserved, so a preset naming it simply stops matching (fail closed) instead of silently pointing at a later class. A seeded class cannot be retired.
+         */
+        delete: operations["deleteSourceClass"];
         options?: never;
         head?: never;
         patch?: never;
@@ -701,6 +801,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/payments/paid-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The paid top-ups behind the dashboard's business figures
+         * @description One site's paid credit batches in a window, newest first. A batch's `created_at` is the time both paid users and monthly revenue count; it is not an order's creation time, so an order created before the window and credited in it is here. `since` is inclusive and `until` exclusive; the window is at most 63 days so a retention drill can start at the previous UTC month's first day. Pages use `cursor` and `limit`; `amount` is the credit the batch granted in the site's accounting currency, exact decimal text.
+         */
+        get: operations["listPaidBatches"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/payments/refunds": {
         parameters: {
             query?: never;
@@ -710,7 +830,7 @@ export interface paths {
         };
         /**
          * A site's refunds, newest first, for review and follow-up
-         * @description The admin's refund list. `state` is the internal state: `frozen` is held after the request and waits for an administrator's approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash; `failed` returned the frozen credits. Filters left out do not narrow. The page asks with `state=frozen` for the review queue. Money is exact text: `credits` is in the site's accounting currency (billionths), `amount` in the currency the order was paid in (minor units).
+         * @description The admin's refund list. `state` is the internal state: `frozen` is held after the request and waits for an administrator's approval (`approved_by` absent), a second approval when `second_required` is set, or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash; `failed` returned the frozen credits. Filters left out do not narrow. The page asks with `state=frozen` for the review queue. Money is exact text: `credits` is in the site's accounting currency (billionths), `amount` in the currency the order was paid in (minor units).
          */
         get: operations["listPaymentRefunds"];
         put?: never;
@@ -731,8 +851,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Approve a refund as a second person and start its channel flow
-         * @description Releases a frozen refund. The approver must be a different person from the one who requested it, and the reason goes to the audit log. A channel refund is sent after the approval commits; an offline refund stays frozen for a separate manual conclusion. Repeating the approval with the same `Idempotency-Key` returns the stored answer and sends nothing again; a refund that is already approved is returned unchanged.
+         * Approve a refund and release it when its approval rule is met
+         * @description Approves a frozen refund. The approver must be a different person from the one who requested it, and the reason goes to the audit log. Within the site's refund limit one approval releases it; above the limit the first approval records `first_approved_by` and a different person must approve again before it can be sent. A channel refund is sent after the releasing approval commits; an offline refund stays frozen for a separate manual conclusion. Repeating the approval with the same `Idempotency-Key` returns the stored answer and sends nothing again; a refund that is already released is returned unchanged.
          */
         post: operations["approvePaymentRefund"];
         delete?: never;
@@ -751,8 +871,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Decline a refund that no one approved and no channel saw
-         * @description Returns the frozen credits and moves no cash. Only a refund still waiting for review, with no approver and nothing sent to a channel, can be rejected (`conflict` means it is past that point; a definitive channel outcome is resolved instead). The reason goes to the audit log. Repeating the rejection with the same `Idempotency-Key` returns the stored answer and unfreezes nothing again; an already declined refund is returned unchanged.
+         * Decline a refund before it is released
+         * @description Returns the frozen credits and moves no cash. Only a refund still waiting for release, with no releasing approver and nothing sent to a channel, can be rejected (`conflict` means it is past that point; a definitive channel outcome is resolved instead). A first approval above the limit does not prevent rejection: the credits return and nothing is sent. The reason goes to the audit log. Repeating the rejection with the same `Idempotency-Key` returns the stored answer and unfreezes nothing again; an already declined refund is returned unchanged.
          */
         post: operations["rejectPaymentRefund"];
         delete?: never;
@@ -1046,13 +1166,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * A site's session and key settings
+         * A site's session, key and model-price settings
          * @description The values the site sets itself, and the defaults in code that apply where it sets none, so a page can show what is in force.
          */
         get: operations["getSiteSettings"];
         /**
-         * Set a site's session and key settings
-         * @description Replaces the site's own values: a setting left out falls back to the default in code. Each value has the bounds `SiteSettings` states, and a request outside them is a 400. Shorter sessions take effect on the next request of every session; the change is audited.
+         * Set a site's session, key and model-price settings
+         * @description Replaces the site's own values: a setting left out falls back to the default in code, except `billing_preference` and `model_prices_public`, whose stored value is kept so a page built before the field cannot clear it. Each value has the bounds `SiteSettings` states, and a request outside them is a 400. Turning `model_prices_public` off while a gateway node of a previous release is live is a 400 naming it; until that node leaves, the anonymous models list keeps prices public. Shorter sessions take effect on the next request of every session; the change is audited.
          */
         put: operations["updateSiteSettings"];
         post?: never;
@@ -1458,7 +1578,7 @@ export interface paths {
         put?: never;
         /**
          * Connect a supplier
-         * @description Connects the supplier at `origin` as `upstream_account`, with the login `detectSupplier` said its kind needs (stored sealed, never returned). It answers at once with the supplier in `connecting`; the first sync logs in, reads the groups, keys and models, and moves it to `active`, or to `needs_attention` with the reason, so the page polls `getSupplier`. The origin and the account cannot change later, so a changed address cannot carry old credentials to a new host; an origin and account already connected is a 409. The address is checked by the outbound client like every supplier request, and one it refuses is a 422.
+         * @description Connects the supplier at `origin` as `upstream_account`, with the login `detectSupplier` said its kind needs (stored sealed, never returned). It answers at once with the supplier in `connecting`; the first sync logs in, reads the groups, prices, models and keys, selects the groups it can sell, makes a key for each group it can call, and moves it to `active`, or to `needs_attention` with the reason, so the page polls `getSupplier`. The origin and the account cannot change later, so a changed address cannot carry old credentials to a new host; an origin and account already connected is a 409. The address is checked by the outbound client like every supplier request, and one it refuses is a 422.
          */
         post: operations["createSupplier"];
         delete?: never;
@@ -1666,7 +1786,7 @@ export interface paths {
         put?: never;
         /**
          * Use one of the supplier's keys for a group
-         * @description Axiom does not make keys at suppliers in M1: a person makes one there, and this binds it to a group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier and sealed it. A key is bound once, and the group must be selected. Use a dedicated key. If its model limits or expiry cannot be read, create an unrestricted dedicated key upstream and grant permission to read those fields; unreadable permissions deny all models.
+         * @description Usually unnecessary: the sync makes a key for every group it can call, and a group's `key_state` says how that stands. This binds a key a person made upstream to a selected group by the supplier's own ID for it (from `unbound_keys` of `getSupplier`). The credential is `binding` until the sync has read the key's text from the supplier, sealed it and activated it; its model limits and expiry apply from the next complete key listing, and until then it is allowed no models. A key is bound once. Use a dedicated key; if its limits cannot be read, an unrestricted dedicated key and permission to read those fields are needed.
          */
         post: operations["bindSupplierKey"];
         delete?: never;
@@ -2488,7 +2608,7 @@ export interface components {
          */
         PaymentOrderState: "pending" | "paid" | "expired" | "cancelled" | "failed" | "review" | "partially_refunded" | "refunded" | "charged_back";
         /**
-         * @description The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent) or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
+         * @description The refund's internal state. `frozen` holds the credits and waits for approval (`approved_by` absent), for a second approval when `second_required` is set, or for sending; `sending` and `pending` are with the channel and their result is not final; `succeeded` returned the cash and took the credits; `failed` returned the credits and moved no cash.
          * @enum {string}
          */
         PaymentRefundState: "frozen" | "sending" | "pending" | "succeeded" | "failed";
@@ -2508,6 +2628,10 @@ export interface components {
             /** @description Why the user asked for the refund. */
             reason?: string;
             requested_by?: components["schemas"]["UserId"];
+            /** @description The first of the two operators, when the refund is above the site's approval limit. */
+            first_approved_by?: components["schemas"]["UserId"];
+            /** @description Whether this refund needs two operators; the first is in `first_approved_by`. */
+            second_required?: boolean;
             approved_by?: components["schemas"]["UserId"];
             /** @description The channel's own refund number, once it has one. */
             provider_ref?: string;
@@ -2577,6 +2701,26 @@ export interface components {
         };
         CashMovementList: {
             data: components["schemas"]["CashMovement"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description A paid credit batch, the record behind the dashboard's paid users and monthly revenue. Its `created_at` is the time those figures count; an online batch uses the order's ID as its ID. */
+        PaidBatch: {
+            id: components["schemas"]["Uuid"];
+            account_id: components["schemas"]["AccountId"];
+            amount: components["schemas"]["Money"];
+            /**
+             * Format: date-time
+             * @description The batch's time, the same axis paid users and monthly revenue count.
+             */
+            created_at: string;
+            /** @description True for a batch paid through an order; false for an offline channel. */
+            online: boolean;
+            /** @description Where an offline payment was received; absent for an online batch. */
+            offline_channel?: string;
+        };
+        PaidBatchList: {
+            data: components["schemas"]["PaidBatch"][];
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
@@ -2879,7 +3023,7 @@ export interface components {
             calls?: number;
             /** Format: int64 */
             errors?: number;
-            /** @description True when the window crosses a month the call log no longer retains, so calls, errors and the two rankings omit archived calls; revenue, cost and cash still cover the whole window. An old node leaves it out, which the page shows as unavailable rather than complete. */
+            /** @description True when the window crosses a month the call log no longer retains, so calls, errors and the two rankings omit archived calls; revenue, cost, cash, paid users, monthly revenue and retention still cover the whole window. An old node leaves it out, which the page shows as unavailable rather than complete. */
             calls_incomplete?: boolean;
             /**
              * Format: date-time
@@ -2890,9 +3034,117 @@ export interface components {
             cost?: components["schemas"]["Money"];
             /** Format: int64 */
             unknown_cost_calls?: number;
+            /**
+             * Format: int64
+             * @description Distinct accounts with a paid top-up in the window. An old node leaves it out, which the page shows as unavailable.
+             */
+            paid_users?: number;
+            /** @description The credit paid top-ups granted in the window, in the site's accounting currency. It is not call revenue: a top-up is prepaid credit, recognized as call revenue when calls settle. */
+            monthly_revenue?: components["schemas"]["Money"];
+            /** @description (revenue - cost) / revenue in basis points, rounded half away from zero. Absent when the window has no settled revenue or when a call's supplier cost is unknown, because the cost total is then incomplete. */
+            gross_margin?: number;
+            retention?: components["schemas"]["OperationsRetention"];
             cash?: components["schemas"]["CashAmount"][];
             top_accounts?: components["schemas"]["OverviewAccount"][];
             top_models?: components["schemas"]["OverviewModel"][];
+            targets?: components["schemas"]["OperationsTargetComparison"];
+        };
+        /** @description A site's business targets for one UTC calendar month (docs/domains/operations.md「业务目标」). A target that is absent has not been set for that month; a target of zero is set and means zero. `rev` is the optimistic concurrency token for the month: 0 before the first write, and one more after every successful write. */
+        OperationsTargets: {
+            site_id: components["schemas"]["SiteId"];
+            /** @description The UTC calendar month the targets cover. */
+            month: string;
+            /**
+             * Format: int64
+             * @description The revision to send back when replacing this month's targets.
+             */
+            rev: number;
+            /** @description The metrics this node stores. A node from before the commercial metrics leaves it out; the page then edits only calls, errors, revenue and cost and sends no commercial fields. */
+            metrics?: components["schemas"]["OperationsTargetMetric"][];
+            /** Format: int64 */
+            calls?: number;
+            /** Format: int64 */
+            errors?: number;
+            revenue?: components["schemas"]["Money"];
+            cost?: components["schemas"]["Money"];
+            /** Format: int64 */
+            paid_users?: number;
+            monthly_revenue?: components["schemas"]["Money"];
+            /** @description Basis points, hundredths of a percent. */
+            gross_margin?: number;
+            /** @description Basis points, hundredths of a percent. */
+            retention?: number;
+        };
+        /** @enum {string} */
+        OperationsTargetMetric: "calls" | "errors" | "revenue" | "cost" | "paid_users" | "monthly_revenue" | "gross_margin" | "retention";
+        /** @description The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls, errors and paid users; gross margin and retention are basis points from 0 to 10000. On `replaceOperationsTargets` both `X-Axiom-Target-Metrics: all` and `all_metrics: true` are required. `updateOperationsTargets` refuses both markers and commercial fields, leaving those metrics as stored. */
+        OperationsTargetsUpdate: {
+            reason: components["schemas"]["Reason"];
+            /**
+             * Format: int64
+             * @description The revision the editor read; a changed revision is a 409 `stale_revision`.
+             */
+            rev: number;
+            /** Format: int64 */
+            calls?: number;
+            /** Format: int64 */
+            errors?: number;
+            revenue?: components["schemas"]["Money"];
+            cost?: components["schemas"]["Money"];
+            /** @description True when the write replaces every metric the node stores; required on `replaceOperationsTargets` and refused on `updateOperationsTargets`. The full-replacement path is not routed by a node before the commercial metrics, so a full write cannot partly succeed there. */
+            all_metrics?: boolean;
+            /** Format: int64 */
+            paid_users?: number;
+            monthly_revenue?: components["schemas"]["Money"];
+            /** @description Basis points, hundredths of a percent. */
+            gross_margin?: number;
+            /** @description Basis points, hundredths of a percent. */
+            retention?: number;
+        };
+        /** @description The monthly targets with `gap` = actual - target, in the metric's unit. Counts and money are prorated to the window; gross margin and retention are the target of the UTC month the window ends in, unchanged. An empty object means no monthly target covers the window. The calls and errors gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete; paid users and monthly revenue come from credit batches and keep their gaps. The cost gap is absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. Gross margin and retention gaps are absent when their actual rate is unavailable. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target. */
+        OperationsTargetComparison: {
+            calls?: components["schemas"]["OperationsCountTarget"];
+            errors?: components["schemas"]["OperationsCountTarget"];
+            revenue?: components["schemas"]["OperationsMoneyTarget"];
+            cost?: components["schemas"]["OperationsMoneyTarget"];
+            paid_users?: components["schemas"]["OperationsCountTarget"];
+            monthly_revenue?: components["schemas"]["OperationsMoneyTarget"];
+            gross_margin?: components["schemas"]["OperationsRateTarget"];
+            retention?: components["schemas"]["OperationsRateTarget"];
+        };
+        OperationsRateTarget: {
+            /** @description The monthly rate target in basis points, hundredths of a percent. */
+            target: number;
+            /** @description Actual minus target in basis points. Absent when the actual rate is unavailable, such as no settled revenue or no previous-month cohort. */
+            gap?: number;
+        };
+        /** @description Paying-account retention for the UTC month the window ends in. The cohort is the accounts with a paid top-up in the previous month; retained is those among them with a paid top-up from this month's first instant through the window's end. The current month is therefore month-to-date. */
+        OperationsRetention: {
+            /** @description The UTC calendar month the rate is measured in. */
+            month: string;
+            /** Format: int64 */
+            cohort: number;
+            /** Format: int64 */
+            retained: number;
+            /** @description Retained / cohort in basis points, rounded half up. Absent when the cohort is empty. */
+            rate?: number;
+        };
+        OperationsCountTarget: {
+            /**
+             * Format: int64
+             * @description The monthly target, prorated to the part of the window inside its month.
+             */
+            target: number;
+            /**
+             * Format: int64
+             * @description Actual minus target. Absent for calls and errors when the call log is incomplete over the window; paid users always state it because it reads credit batches, not the call log.
+             */
+            gap?: number;
+        };
+        OperationsMoneyTarget: {
+            target: components["schemas"]["Money"];
+            /** @description Actual minus target. Absent when the cost total is incomplete (`unknown_cost_calls` above zero, cost only) or the target's currency is not the site's current accounting currency. Revenue and monthly revenue always state it when the currency matches. */
+            gap?: components["schemas"]["Money"];
         };
         OverviewAccount: {
             account_id?: components["schemas"]["AccountId"];
@@ -3095,13 +3347,15 @@ export interface components {
             client_secret: string;
             reason: string;
         };
-        /** @description A site's own values for the sessions and keys its users get. A value that is absent is the default in code. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units. */
+        /** @description A site's own values for the sessions and keys its users get, and whether its model prices are public. An absent value is unset: the view's `defaults` says what applies, and a write that leaves out `model_prices_public` or `billing_preference` keeps the stored value. Turning `model_prices_public` off waits until every live gateway node supports hiding prices. Bounds: session times from 300 seconds; the console's idle time to 30 days and its longest session to 90 days; the admin's idle time to 12 hours and its longest session to 1 day; the daily limit of a new key from 0 to 1,000,000 units. */
         SiteSettings: {
             console_idle_timeout_seconds?: number;
             console_max_age_seconds?: number;
             admin_idle_timeout_seconds?: number;
             admin_max_age_seconds?: number;
             new_key_daily_limit?: components["schemas"]["Money"];
+            /** @description Whether visitors who are not signed in see the site's model prices; absent is `true`. When false, the anonymous models endpoint leaves every model's and endpoint's price out, and a signed-in member still sees the account's prices. A page built before this field leaves it out, and the server keeps the stored value rather than clearing it. Turning it off while a gateway node of a previous release is live is a 400 naming this field; until every live node supports it, the anonymous list keeps prices public. */
+            model_prices_public?: boolean;
             /** @description The funding order an account gets until it chooses its own; absent is `subscription_first`. A page built before this field leaves it out, and the server keeps the stored value rather than clearing it. */
             billing_preference?: components["schemas"]["BillingPreferenceName"];
         };
@@ -3216,6 +3470,64 @@ export interface components {
         };
         SegmentSettingsUpdate: {
             settings: components["schemas"]["SegmentSettings"];
+            reason: components["schemas"]["Reason"];
+        };
+        SourceClassCondition: {
+            /** @enum {string} */
+            evidence: "header" | "usage";
+            /** @description The response header name for a header condition, canonicalized before it is stored. */
+            name?: string;
+            /** @description The billing item name for a usage condition. */
+            item?: string;
+            /** @enum {string} */
+            operator: "present" | "absent" | "equals" | "prefix" | "suffix" | "contains";
+            /** @description Empty for present and absent; 1 to 256 bytes for the comparing operators. */
+            value?: string;
+        };
+        SourceClassRules: {
+            /** @enum {string} */
+            match: "all" | "any";
+            conditions: components["schemas"]["SourceClassCondition"][];
+        };
+        SourceClass: {
+            slug: string;
+            name: string;
+            name_zh: string;
+            description: string;
+            position: number;
+            fallback: boolean;
+            system: boolean;
+            rules: components["schemas"]["SourceClassRules"];
+            /** Format: int64 */
+            revision: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SourceClassList: {
+            classes: components["schemas"]["SourceClass"][];
+        };
+        SourceClassCreate: {
+            slug: string;
+            name: string;
+            name_zh?: string;
+            description?: string;
+            position?: number;
+            rules: components["schemas"]["SourceClassRules"];
+            reason: components["schemas"]["Reason"];
+        };
+        SourceClassUpdate: {
+            name?: string;
+            name_zh?: string;
+            description?: string;
+            position?: number;
+            rules?: components["schemas"]["SourceClassRules"];
+            /** Format: int64 */
+            rev: number;
+            reason: components["schemas"]["Reason"];
+        };
+        SourceClassDelete: {
+            /** Format: int64 */
+            rev: number;
             reason: components["schemas"]["Reason"];
         };
         /** @description The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds. */
@@ -3575,7 +3887,7 @@ export interface components {
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
-        /** @description What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`. `login_fields` lists what the kind takes. */
+        /** @description What Axiom logs in with. Which members a kind needs is in `Detection.login_fields`; a member the kind does not use is a 400. It is sealed on arrival and never returned. For a site that asks for a CAPTCHA or two-step verification, a person signs in there by hand once and gives tokens instead of a password. A kind that can renew its login (sub2api) takes `access_token`, `refresh_token` and `access_token_expires_at`, and the refresh token keeps the login alive; a kind that cannot (new-api takes a personal access token) takes `access_token` and, if the token ends, `access_token_expires_at`; that token needs `api_key:read` and `api_key:write`, and `api_key:reveal` so the sync can make a key and read its text. `login_fields` lists what the kind takes. */
         SupplierLogin: {
             email?: string;
             password?: string;
@@ -3635,6 +3947,16 @@ export interface components {
             codename?: string;
             /** @description False when the supplier no longer lists the group. */
             present: boolean;
+            /**
+             * @description How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
+             * @enum {string}
+             */
+            key_state?: "pending" | "ready" | "failed" | "unavailable";
+            /**
+             * @description Why the last attempt to make a key failed: the login may not manage keys, the account may not use this group, or the supplier refused. Present only with `key_state` `failed`.
+             * @enum {string}
+             */
+            key_reason?: "not_permitted" | "group_unavailable" | "refused";
             /** @description What the supplier says about the group (platform, subscription type, peak pricing, long context). */
             facts?: {
                 [key: string]: unknown;
@@ -4258,6 +4580,8 @@ export interface components {
         Limit: number;
         /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
         IdempotencyKey: string;
+        /** @description `all` is required by `replaceOperationsTargets` and refused by `updateOperationsTargets`; it makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body. A node from before the commercial metrics does not route the full-replacement path, so a full replacement cannot clear only the legacy four there. */
+        TargetMetricSet: "all";
     };
     requestBodies: never;
     headers: {
@@ -4359,6 +4683,112 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getOperationsTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UTC calendar month, `YYYY-MM`. */
+                month: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The targets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsTargets"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateOperationsTargets: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description `all` is required by `replaceOperationsTargets` and refused by `updateOperationsTargets`; it makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body. A node from before the commercial metrics does not route the full-replacement path, so a full replacement cannot clear only the legacy four there. */
+                "X-Axiom-Target-Metrics"?: components["parameters"]["TargetMetricSet"];
+            };
+            path: {
+                /** @description A UTC calendar month, `YYYY-MM`. */
+                month: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperationsTargetsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The targets as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsTargets"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    replaceOperationsTargets: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description `all` is required by `replaceOperationsTargets` and refused by `updateOperationsTargets`; it makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body. A node from before the commercial metrics does not route the full-replacement path, so a full replacement cannot clear only the legacy four there. */
+                "X-Axiom-Target-Metrics"?: components["parameters"]["TargetMetricSet"];
+            };
+            path: {
+                /** @description A UTC calendar month, `YYYY-MM`. */
+                month: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperationsTargetsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The targets as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsTargets"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };
@@ -5124,6 +5554,132 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    listSourceClasses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The live source classes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceClassList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createSourceClass: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceClassCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceClass"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSourceClass: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceClassUpdate"];
+            };
+        };
+        responses: {
+            /** @description The class as stored. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceClass"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    deleteSourceClass: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceClassDelete"];
+            };
+        };
+        responses: {
+            /** @description Retired; the same Idempotency-Key replays this answer without a second change. */
+            204: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
     listMerchants: {
         parameters: {
             query: {
@@ -5733,6 +6289,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CashMovementList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPaidBatches: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                /** @description Batches created at or after this time. */
+                since?: string;
+                /** @description Batches created before this time. */
+                until?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the site's paid batches, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaidBatchList"];
                 };
             };
             400: components["responses"]["BadRequest"];

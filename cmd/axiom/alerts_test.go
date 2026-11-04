@@ -37,6 +37,7 @@ func TestWriterAlertDebouncesEmptySamples(t *testing.T) {
 }
 
 func TestAlertGracefulStopResolvesDrainedWriter(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	logger := slog.New(slog.DiscardHandler)
 	recorder := testRecorder(t, f.db, pg.PlatformScope(), testCallRecords(t))

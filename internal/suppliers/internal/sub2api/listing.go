@@ -3,22 +3,50 @@ package sub2api
 import (
 	"context"
 	"errors"
+	"time"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-const keyListingVersion = 2 // Version 1 did not retain key policies.
+const keyListingVersion = 3 // Version 2 stored adapter.KeyState, whose Name was not persisted.
+
+// listedKey is one key read in a resumable listing. It is deliberately not adapter.KeyState: that hides Name from the
+// stored state, which older nodes decode strictly, but a resumed listing needs the names of the pages already read so
+// the sync can adopt a key it made before the read was interrupted.
+type listedKey struct {
+	Ref       adapter.KeyRef    `json:"ref"`
+	GroupRef  string            `json:"group_ref"`
+	Name      string            `json:"name"`
+	Status    adapter.KeyStatus `json:"status"`
+	ResetAt   time.Time         `json:"reset_at,omitzero"`
+	ExpiresAt *time.Time        `json:"expires_at,omitzero"`
+}
+
+func (k listedKey) state() adapter.KeyState {
+	return adapter.KeyState{
+		Ref: k.Ref, GroupRef: k.GroupRef, Name: k.Name, Status: k.Status, ResetAt: k.ResetAt,
+		Policy: &adapter.KeyPolicy{ExpiresAt: k.ExpiresAt},
+	}
+}
+
+func listed(k adapter.KeyState) listedKey {
+	var expires *time.Time
+	if k.Policy != nil {
+		expires = k.Policy.ExpiresAt
+	}
+	return listedKey{Ref: k.Ref, GroupRef: k.GroupRef, Name: k.Name, Status: k.Status, ResetAt: k.ResetAt, ExpiresAt: expires}
+}
 
 // keysProgress is the position in the keys listing: the page to read next, the keys read so far, and the total the
 // supplier stated. A key created during the listing shifts the pages, so one key may be read twice, which the position's
 // keys take out. A listing that shrank (a key removed) moved its pages forward, which would skip a key, so it begins
 // again: the keys read so far are given up, none is skipped.
 type keysProgress struct {
-	V     int                `json:"v"`
-	Page  int                `json:"page"`
-	Total int                `json:"total"`
-	Keys  []adapter.KeyState `json:"keys"`
+	V     int         `json:"v"`
+	Page  int         `json:"page"`
+	Total int         `json:"total"`
+	Keys  []listedKey `json:"keys"`
 }
 
 func decodeKeys(raw adapter.Listing) keysProgress {
@@ -62,11 +90,11 @@ func (m *manager) keysPage(ctx context.Context, p *keysProgress) (page adapter.P
 	for _, k := range items {
 		if !seen[k.ID] {
 			seen[k.ID] = true
-			p.Keys = append(p.Keys, keyState(k))
+			p.Keys = append(p.Keys, listed(keyState(k)))
 		}
 	}
 	if p.Page >= pages || len(items) == 0 {
-		return adapter.Page[adapter.KeyState]{Items: p.Keys, Done: true}, false, nil
+		return adapter.Page[adapter.KeyState]{Items: keyStates(p.Keys), Done: true}, false, nil
 	}
 	p.Page++
 	return page, true, nil

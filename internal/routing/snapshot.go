@@ -17,6 +17,16 @@ import (
 	"axiom/internal/suppliers"
 )
 
+// Spec is the part of an endpoint's specification that detection can replace for one call format: what the endpoint
+// can do and the limits it enforces. Routing reads the spec of the format the request is actually called in, so a
+// measurement of Chat never widens or narrows Responses (docs/domains/quality.md「实测的能力与上限」).
+type Spec struct {
+	Caps       protocol.Capabilities
+	Parameters protocol.ParameterSet
+	Context    int64
+	MaxOutput  int64
+}
+
 // FormatSet is a set of call formats.
 type FormatSet uint8
 
@@ -31,25 +41,31 @@ func Of(formats ...protocol.Format) (s FormatSet) {
 // Has reports whether f is in the set.
 func (s FormatSet) Has(f protocol.Format) bool { return s&(1<<f) != 0 }
 
-// Class is where an endpoint's supply comes from, which presets filter on.
-type Class uint8
+// Class is the stable slug of a source class: where an endpoint's supply comes from, which presets filter on. The
+// classes are administrator data in quality (docs/domains/quality.md「来源类别与指纹」); routing knows only the slug, so a
+// class added there needs no change here. The seeds are official, cloud and relay, and relay is the fallback of an
+// endpoint no fingerprint decided.
+type Class string
 
-// The classes of supply.
+// The seeded classes. Their slugs are stable: presets, call records and documents name them.
 const (
-	ClassOfficial Class = iota // the vendor's own API
-	ClassCloud                 // a cloud platform's hosting of the model
-	ClassRelay                 // a relay or reseller
-	numClasses
+	ClassOfficial Class = "official" // the vendor's own API
+	ClassCloud    Class = "cloud"    // a cloud platform's hosting of the model
+	ClassRelay    Class = "relay"    // a relay or reseller, and the fallback
 )
 
-// ClassSet is a set of classes. The zero value allows none; presets list what they allow.
-type ClassSet uint8
+// ClassSet is the source classes a preset allows: stable slugs, or every class including the ones added later. The
+// zero value allows none.
+type ClassSet []Class
 
-// AllClasses allows every class.
-const AllClasses = ClassSet(1<<numClasses - 1)
+// AllClasses allows every class, including one the running code has not heard of yet.
+var AllClasses = ClassSet{"*"}
 
-// Has reports whether c is in the set.
-func (s ClassSet) Has(c Class) bool { return s&(1<<c) != 0 }
+// Has reports whether c is in the set: explicitly, or through "*".
+func (s ClassSet) Has(c Class) bool { return slices.Contains(s, c) || slices.Contains(s, Class("*")) }
+
+// Empty reports whether the set allows no class.
+func (s ClassSet) Empty() bool { return len(s) == 0 }
 
 // Policy is what an endpoint's supplier does with the data it is sent; a preset lists the policies it accepts.
 type Policy uint8
@@ -130,13 +146,19 @@ type Endpoint struct {
 	ThroughputPercentiles [4]float64
 	Quantization          suppliers.Quantization // the level an admin recorded for this endpoint; empty is unrecorded
 
-	ServiceTiers     catalog.ServiceTierSet // the service tiers it offers; standard is one of them unless it offers only others
-	Native           FormatSet              // formats it speaks itself
-	Served           FormatSet              // formats it can serve, with protocol's conversion; includes Native
-	Caps             protocol.Capabilities
-	Parameters       protocol.ParameterSet  // the request parameters its spec declares it takes; provider.require_parameters reads it
-	Context          int64                  // the most tokens a request may take, input plus output
-	MaxOutput        int64                  // the model's output limit here, also its default
+	ServiceTiers catalog.ServiceTierSet // the service tiers it offers; standard is one of them unless it offers only others
+	Native       FormatSet              // formats it speaks itself
+	Served       FormatSet              // formats it can serve, with protocol's conversion; includes Native
+	// Caps, Parameters, Context and MaxOutput are the effective common surface of the endpoint: a capability or
+	// parameter holds only if every native format has it, and the limits are the smallest any of them enforces. They
+	// are what public discovery may claim without naming a format. Routing reads Specs for the format it calls.
+	Caps       protocol.Capabilities
+	Parameters protocol.ParameterSet // the request parameters its spec declares it takes; provider.require_parameters reads it
+	Context    int64                 // the most tokens a request may take, input plus output
+	MaxOutput  int64                 // the model's output limit here, also its default
+	// Specs is the effective spec of each native format; a format absent falls back to the common surface above. The
+	// gateway fills it from the catalog and the measured facts of that format (docs/domains/quality.md「实测的能力与上限」).
+	Specs            map[protocol.Format]Spec
 	OutputSpeed      int64                  // the fastest it outputs, in tokens per second; 0 when not known, which rules out segmenting
 	Reports          catalog.ItemSet        // the billing items its upstream may report (catalog.Reportable)
 	ImageTokens      int64                  // the most input tokens one image can take
@@ -173,7 +195,7 @@ type Override struct {
 	// VerifiedOnly keeps only endpoints quality verified as the model they claim; a request's :exacto sets it, and
 	// only an explicit provider.sort replaces it (docs/domains/quality.md「真伪检测」).
 	VerifiedOnly  bool
-	Classes       ClassSet  // when not zero, only these classes
+	Classes       ClassSet  // when not empty, only these classes
 	Policies      PolicySet // when not zero, only these policies
 	MaxPrice      PriceLimit
 	MinThroughput float64
@@ -324,6 +346,41 @@ type candidate struct {
 	supplierPause *cooldown
 }
 
+// Spec returns the effective spec of one call format.
+func (e *Endpoint) Spec(f protocol.Format) Spec {
+	if s, ok := e.Specs[f]; ok {
+		return s
+	}
+	return Spec{Caps: e.Caps, Parameters: e.Parameters, Context: e.Context, MaxOutput: e.MaxOutput}
+}
+
+// Surface returns the part of the endpoint's spec that holds in every native format: the intersection of capabilities
+// and parameters and the smaller limits. Public discovery has one endpoint object and no format, so it claims only
+// what a request of any native format can rely on; a measured removal in one format therefore cannot be hidden by
+// another format's support.
+func (e *Endpoint) Surface() Spec {
+	var out Spec
+	first := true
+	for f := protocol.Format(0); f <= protocol.Completions; f++ {
+		if !e.Native.Has(f) {
+			continue
+		}
+		s := e.Spec(f)
+		if first {
+			out, first = s, false
+			continue
+		}
+		out.Caps &= s.Caps
+		out.Parameters &= s.Parameters
+		out.Context = min(out.Context, s.Context)
+		out.MaxOutput = min(out.MaxOutput, s.MaxOutput)
+	}
+	if first {
+		return e.Spec(protocol.Messages)
+	}
+	return out
+}
+
 func (c *candidate) priceFor(a billing.Audience) *candidatePrice {
 	if c.AudiencePrices == nil {
 		return &c.price
@@ -399,8 +456,9 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 		if p.NoFallbacks && len(p.Order) == 0 {
 			return nil, fmt.Errorf("routing snapshot: preset %s closes the fallbacks but names no suppliers", uuid.UUID(p.ID))
 		}
-		p.Order = slices.Clone(p.Order) // the caller keeps its slice; the snapshot never changes
-		if p.Classes == 0 || p.Policies == 0 {
+		p.Order = slices.Clone(p.Order)     // the caller keeps its slice; the snapshot never changes
+		p.Classes = slices.Clone(p.Classes) // and so does a preset that names classes
+		if p.Classes.Empty() || p.Policies == 0 {
 			return nil, fmt.Errorf("routing snapshot: preset %s allows no class or no data policy, which would filter out everything", uuid.UUID(p.ID))
 		}
 		s.presets[p.ID] = p

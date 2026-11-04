@@ -11,6 +11,9 @@ import { suites } from "./suites.ts";
 
 const directory = process.env.AXIOM_SHOTS_DIR;
 test.skip(!directory, "set AXIOM_SHOTS_DIR to take the screenshots");
+// The machine may run in UTC; a viewer is somewhere. Take the screenshots in one named zone so every time in them is a
+// local time with its zone, which is what the product shows.
+test.use({ timezoneId: "Asia/Shanghai" });
 test.describe.configure({ mode: "parallel" });
 
 const widths = [360, 768, 1280, 2560] as const;

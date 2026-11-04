@@ -15,6 +15,7 @@ import (
 // TestServerLoopReplaysAssistantText: the model's prose and reasoning before a tool call are part of the assistant
 // turn. The next hop must see them, not just the call and its result.
 func TestServerLoopReplaysAssistantText(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		h := serverHarness(t, ctx, searcher, serve(beat{data: chatToolCallWithText}), serve(beat{data: chatAnswer}))
@@ -43,6 +44,7 @@ data: [DONE]
 // by the loop without either dropping the client's call or inventing its result. Refusing is explicit and costs no
 // search.
 func TestServerLoopRefusesMixedCalls(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com"}}}
 		h := serverHarness(t, ctx, searcher, serve(beat{data: chatMixedCalls}))
@@ -111,6 +113,7 @@ data: {"type":"message_stop"}
 // TestServerLoopReplaysMessagesThinking: Anthropic signs a thinking block; the loop must carry the block and its
 // signature into the next hop, not replace the assistant turn with a bare tool call.
 func TestServerLoopReplaysMessagesThinking(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		request := `{"model":"acme/alpha","stream":true,"max_tokens":1000,"messages":[{"role":"user","content":"what is axiom"}],` +
@@ -144,6 +147,7 @@ func TestServerLoopReplaysMessagesThinking(t *testing.T) {
 // TestServerLoopBrokenContinuationDoesNotFallBack covers the other failure exit: a stream that ends without a usable
 // end event after a search. It is the same 502 and the same no-fallback rule as an empty 200.
 func TestServerLoopBrokenContinuationDoesNotFallBack(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		upstream := protocol.Chat
@@ -166,6 +170,7 @@ func TestServerLoopBrokenContinuationDoesNotFallBack(t *testing.T) {
 // TestServerLoopReleasesTheOldSlotBeforeTheNextHop: an endpoint with one credential and capacity one must let its own
 // finished request go before the next hop asks for that same slot.
 func TestServerLoopReleasesTheOldSlotBeforeTheNextHop(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		upstream := protocol.Chat
@@ -200,6 +205,7 @@ func TestServerLoopReleasesTheOldSlotBeforeTheNextHop(t *testing.T) {
 // reasoning_details. The loop must keep them, or the next hop has no reasoning to replay before its tool result and a
 // thinking upstream refuses it after the search was paid for.
 func TestServerLoopReplaysThinkingThroughChat(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		request := `{"model":"acme/alpha","stream":true,"max_tokens":8000,"reasoning":{"max_tokens":2000},` +

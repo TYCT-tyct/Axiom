@@ -151,7 +151,7 @@ func (a *Admin) CreateByok(ctx context.Context, tx pg.Tx, r ByokRequest, models 
 	if err != nil {
 		return ByokKey{}, fmt.Errorf("make the provider key's group: %w", err)
 	}
-	code := codename()
+	code := store.Codename()
 	if err := q.SelectGroup(ctx, tx, store.SelectGroupParams{ID: group, Selected: true, Codename: &code}); err != nil {
 		return ByokKey{}, fmt.Errorf("select the provider key's group: %w", err)
 	}

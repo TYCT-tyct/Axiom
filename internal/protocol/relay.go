@@ -61,9 +61,13 @@ type Usage struct {
 // last usage event on; until then an output count only bounds the output from below (README.md「转发（草图）」).
 type Progress struct {
 	ContentBytes, PartialBytes, Searches, CodeExecutions, FileSearches, ToolCalls int64
-	Text                                                                          textshape.Shape
-	Reported                                                                      Segment
-	Final                                                                         catalog.ItemSet
+	// ToolChecks are the client tool calls whose arguments were checked once the answer ended, and ToolErrors those
+	// that were not one JSON text: what quality ranks an endpoint's tool calling by (docs/domains/quality.md「线上观测」).
+	// Both are reported with the answer's ending, and not at all for an answer that stopped at its output cap.
+	ToolChecks, ToolErrors int64
+	Text                   textshape.Shape
+	Reported               Segment
+	Final                  catalog.ItemSet
 }
 
 // UsageContext carries the upstream request's metering context and the original client's reply contract.
@@ -283,10 +287,10 @@ func (r *Relay) Next() (Step, error) {
 //nolint:gocognit // one branch per event role
 func (r *Relay) event(data []byte) (Step, error) {
 	e, err := r.up.event(data, &r.meter)
+	r.observe(e) // a reader that fails the event may still report what ended with it, such as the tool calls checked
 	if err != nil {
 		return Step{}, err
 	}
-	r.observe(e)
 	if data, err = r.edit(&e); err != nil {
 		return Step{}, err
 	}
@@ -377,6 +381,8 @@ func (r *Relay) observe(e event) {
 	r.progress.CodeExecutions += e.codeExecutions
 	r.progress.FileSearches += e.fileSearches
 	r.progress.ToolCalls += e.toolCalls
+	r.progress.ToolChecks += e.toolChecks
+	r.progress.ToolErrors += e.toolErrors
 	if e.usage || e.final {
 		r.meter.final = r.meter.final || e.final
 		r.progress.Reported, r.progress.Final = r.meter.progress()

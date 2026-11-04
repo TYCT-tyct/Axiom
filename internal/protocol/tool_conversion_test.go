@@ -11,6 +11,7 @@ import (
 // with the content; otherwise the same Claude reply is estimated 45 tokens lower for a Chat client than for a native
 // one. Each stream stops before its final usage, the case where the estimate stands in for the report.
 func TestConvertedStreamsKeepToolCalls(t *testing.T) {
+	t.Parallel()
 	messagesTool := messageStart(`{"input_tokens":10,"output_tokens":0}`) +
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{}}}` + "\n\n" +
 		blockStop + messageDelta(`{}`) + messageStop

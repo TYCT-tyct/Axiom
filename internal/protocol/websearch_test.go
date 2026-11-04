@@ -11,6 +11,7 @@ import (
 )
 
 func TestInspectWebPlugin(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","plugins":[{"id":"web","max_results":7,"search_prompt":"Use these.","include_domains":["Example.COM"],"exclude_domains":["bad.example"]}]}`)
 	req, err := protocol.Inspect(protocol.Chat, body)
 	if err != nil {
@@ -29,6 +30,7 @@ func TestInspectWebPlugin(t *testing.T) {
 }
 
 func TestInspectRefusesBadWebPlugins(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []struct{ name, plugin string }{
 		{"too many results", `{"id":"web","max_results":11}`},
 		{"wildcard", `{"id":"web","include_domains":["*.example.com"]}`},
@@ -52,6 +54,7 @@ func TestInspectRefusesBadWebPlugins(t *testing.T) {
 }
 
 func TestChatSearchQuery(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"m","messages":[{"role":"system","content":"s"},{"role":"user","content":[{"type":"text","text":"first"}]},{"role":"assistant","content":"a"},{"role":"user","content":[{"type":"text","text":"second\nquestion"}]}]}`)
 	got, err := protocol.ChatSearchQuery(body)
 	if err != nil || got != "second\nquestion" {
@@ -71,6 +74,7 @@ type message struct {
 // TestInjectWebSearch: the results become a system message before the first user turn, so a format that only takes
 // them at the front keeps them, and the search still answered the last user turn.
 func TestInjectWebSearch(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		body string
@@ -113,6 +117,7 @@ func TestInjectWebSearch(t *testing.T) {
 }
 
 func TestCitationAnnotations(t *testing.T) {
+	t.Parallel()
 	content := "See [example.com](https://example.com/one) and [other](https://example.org/two), not [x](https://other.example)."
 	got := protocol.CitationAnnotations(content, []protocol.Citation{
 		{URL: "https://example.com/one", Title: "One", Content: "first"},
@@ -144,6 +149,7 @@ func TestCitationAnnotations(t *testing.T) {
 }
 
 func TestValidSearchDomain(t *testing.T) {
+	t.Parallel()
 	for d, want := range map[string]bool{
 		"example.com": true, "sub.example.co.uk": true, "example": false, "*.example.com": false,
 		"https://example.com": false, "exa mple.com": false, ".example.com": false, "example..com": false,
@@ -155,6 +161,7 @@ func TestValidSearchDomain(t *testing.T) {
 }
 
 func TestChatSearchQueryScansLongHistoryAndBoundsTheQuery(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`{"model":"m","messages":[`)
 	for i := range 500 {
@@ -178,6 +185,7 @@ func TestChatSearchQueryScansLongHistoryAndBoundsTheQuery(t *testing.T) {
 }
 
 func TestChatSearchQueryIgnoresLongEarlierMessagesAndMemberOrder(t *testing.T) {
+	t.Parallel()
 	long := strings.Repeat("x", protocol.MaxWebSearchQueryBytes+1)
 	cases := map[string]string{
 		"long earlier user message":          `{"messages":[{"role":"user","content":"` + long + `"},{"role":"assistant","content":"ok"},{"role":"user","content":"hello"}]}`,

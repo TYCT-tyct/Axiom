@@ -111,8 +111,17 @@ WHERE site_id = @site_id AND user_id = @user_id AND surface = 'console'
 SELECT id, csrf_token, factor_version, mfa_attempts FROM accounts.sessions
 WHERE token_hash = @token_hash AND level = 'pending_mfa' AND revoked_at IS NULL AND expires_at > now();
 
+-- name: PendingSessionByID :many
+SELECT id, csrf_token, factor_version, mfa_attempts FROM accounts.sessions
+WHERE id = @id AND user_id = @user_id AND level = 'pending_mfa' AND revoked_at IS NULL AND expires_at > now();
+
 -- name: CountMFAAttempt :exec
 UPDATE accounts.sessions SET mfa_attempts = mfa_attempts + 1 WHERE id = @id;
+
+-- name: ReserveMFAAttempt :execrows
+-- One assertion's attempt, reserved before verification so concurrent finishes cannot pass the budget.
+UPDATE accounts.sessions SET mfa_attempts = mfa_attempts + 1
+WHERE id = @id AND mfa_attempts < @attempts;
 
 -- name: AdvanceTOTP :execrows
 -- A code counts once: the step must be later than the last one used.
@@ -209,6 +218,10 @@ WHERE a.id = @account_id;
 
 -- name: BillingPreferenceReady :one
 SELECT coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true)::boolean AS ready;
+
+-- name: ModelPricesPublicReady :one
+-- No row means no new node has declared support yet, so the anonymous projection stays public.
+SELECT coalesce((SELECT enabled FROM platform.model_prices_public_readiness WHERE id), false)::boolean AS ready;
 
 -- name: SetBillingPreference :exec
 -- A NULL clears the account's choice, so the site's default applies again.

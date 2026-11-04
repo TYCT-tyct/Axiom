@@ -21,7 +21,10 @@
 
 证据：合并车 run [40791946142](https://github.com/TYCT-tyct/Axiom/actions/runs/40791946142) 的 go-test 在 `TestStatementExportCutsInsideAPage` 中报 `context deadline exceeded`，build 随之失败，PR #423 被移出队列。
 哪一层没拦住：PR #358 只在客户端构造函数里设置宽期限，直接调用 `kv.Open` 的路径漏过；超时测试虽用 `CLIENT PAUSE` 控制失败阶段，预热和恢复阶段仍要求真实网络在 20ms 内回复；流水满额测试同样没有隔离内容正确性与生产期限。性能文档已禁止单元测试按绝对墙钟预算判失败，但尚未机械检查。待加的检查：测试中的直接 `kv.Open` 必须经过 `kvtest.Deps`；使用真实依赖验证大批量内容的测试不得沿用生产请求期限，期限行为单独用受控阻塞或虚拟时间验证。
-出现：2026-10-20、2026-10-29
+`TestCallCSVUsesOneSnapshot` 经 HTTP 守卫导出 300 条调用，中途写入迟到的一条，整段跑在导出的 10 秒请求期限里，main 的完整 CI 负载下用尽期限。处理器在期限内调用的读事务提成 `consoleAPI.writeCalls`，快照测试和满额导出测试直接用测试上下文调用它，不再各自复制事务体。
+
+证据：main run [41569157437](https://github.com/TYCT-tyct/Axiom/actions/runs/41569157437) 的 `panic: console: stream calls: timeout: context deadline exceeded`；本地让迟到的写入拖过期限，得到同一 panic。
+出现：2026-10-20、2026-10-29、2026-11-03
 
 ## 凭证份额测试遗漏注册空档和路由投影外的占用
 
@@ -89,7 +92,9 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 
 证据：PR #462 的列车构建 [40914818602](https://github.com/TYCT-tyct/Axiom/actions/runs/40914818602) 在健康探测恢复断言失败，并在第二份大账本夹具播种时达到 billing 包的十分钟期限。
 哪一层没拦住：健康测试从组装前冻结的时钟推进 31 秒，实际熔断时间却由网关按真实时钟记录；两种账本计划测试分别播种 200 万笔数据，单包累计成本没有被局部测试暴露。集成测试应从实际事件时刻推进受控时钟，并用时钟偏移复现组装延迟；同模块同量级的计划验证共用大夹具，保留每种查询的完整计划断言。`TestGatewayHealthRemoveProbeRestore` 固定模拟两分钟时钟落后；`TestLedgerReadsGrowWithThePage` 同时验证 movements 和 statement，后续此类计划用例加在同一夹具下。
-出现：2026-10-29
+`cmd/axiom` 的通话导出夹具用 `INSERT … SELECT (jsonb_populate_record(…)).*` 复制一万行，PostgreSQL 对展开的每一列各算一次函数，单个测试播种 50 秒；改为 `CROSS JOIN LATERAL jsonb_populate_record(…)` 后约 2 秒。`internal/payments` 的播种还是旧写法。同一轮还有 42 个耗时的数据库测试没有 `t.Parallel()`，串行跑了约 95 秒，`cmd/axiom` 包在列车上超过十分钟（run [41581562012](https://github.com/TYCT-tyct/Axiom/actions/runs/41581562012)）。同一天 `internal/gateway` 在 main 上超时（run [41623800762](https://github.com/TYCT-tyct/Axiom/actions/runs/41623800762)），是同一类：279 个顶层测试没有 `t.Parallel()`，串行阶段 120 秒；并行阶段又被同时只放 3 个 rig 的信号量卡住，整包只用到约一个核。三次都是数据库测试漏了 `t.Parallel()`，还没有机械检查拦下（`paralleltest` 未启用）。
+#624 的调查里 `internal/protocol` 在负载下以 599.980 秒和 595.148 秒通过，离默认的十分钟只差 20 毫秒和 4.85 秒。按测试统计耗时（`go test -json`），333 个测试中 23 个超过 1 秒的占了 250 秒里的 230 秒，300 个顶层测试没有 `t.Parallel()`，分配测量、属性测试和录制流回放逐个串行。全部并行后，同一台 8 核机器上 `go test -race -count=1 ./internal/protocol/` 从 251.5 秒降到 43.2 秒，墙钟从 268.4 秒降到 48.4 秒。`TestPrepareAllocatesOnlyWhatItDrew` 原本对每个用例准备两遍（一遍只记录能否准备，一遍求峰值），现在从求峰值那次读结果，竞态构建下把两种形状拆成并行子测试；`TestAllocs` 在 Prepare 的测量里不再测量用不到的校验分配。
+出现：2026-10-29、2026-11-03
 
 ## 只读状态和故障兜底的测试也为容器排队
 
@@ -116,3 +121,11 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 建议（未改 `CONTRIBUTING.md`，需负责人同意）：在评审清单加一条「领域文档是否改写或偏离产品要求；改了就要有负责人同意的出处」，由流水线或评审人执行。本轮先记在这里，规则修改另起 PR。
 
 出现：2026-11-02
+
+## 测试设的期限没到达实际触发的那个期限
+
+证据：`main` 的 run [41738641864](https://github.com/TYCT-tyct/Axiom/actions/runs/41738641864)（cc4b851f）里 `TestAnUndeclaredTierStopsTheNextRoute` 在 rig 预热 key 时失败：`look up an API key: timeout: context deadline exceeded`。rig 把 `KeyLookup` 设成 30 秒，但共享的 key 查找脱离调用方运行，用的是 accounts 写死的 1 秒，`KeyLookup` 只管等待者；预热又是不带期限的直接调用。#623 把同时运行的 rig 从 3 个加到 8 个，理由正是「rig 的 key 查找有 30 秒」。本机复现：rig 数不是原因，3 个和 24 个 rig 的预热查找最长 54 ms 和 62 ms，CI 上是宿主停顿吃掉了那 1 秒。
+
+哪一层没拦住：rig 的注释和 #623 的说明都假定配置的期限管住了查找，没人对照实际报错的那条代码路径；评审只看了改动的行。现在共享的查找沿用发起请求的截止时间（`TestALookupKeepsItsCallersDeadline`），rig 的预热按自己的 `KeyLookup` 查（`rig.recognise`）。以后设测试期限时，要从报错的那一行反查它是哪个期限。
+
+出现：2026-11-04

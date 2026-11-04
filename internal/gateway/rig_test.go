@@ -131,10 +131,10 @@ type rigOptions struct {
 	noCacheWriter bool               // leave the response-cache writer stopped so a test can inspect its queue
 }
 
-// rigs limits how many rigs run at once. Each is a database and a server with requests in flight, and the tests wait
-// on the clock (a second for a key lookup, the admission budget), so a machine with every test at once is slower than
-// the clock allows and they fail for that alone.
-var rigs = make(chan struct{}, 3)
+// rigs limits how many rigs run at once. Each is a database and a server with requests in flight; with every test at
+// once a busy machine is slower than even the rig's 30-second budgets allow. A rig mostly waits on its database rather
+// than computing: at three the package used about one core and spent most of its time queued here (#605), so eight.
+var rigs = make(chan struct{}, 8)
 
 // testKeyring is a loaded ring for the cache's envelope encryption: one key, version 1.
 func testKeyring(t *testing.T) *secret.Keyring {
@@ -396,12 +396,22 @@ func (r *rig) newAccount(balance int64) account {
 	}
 	r.sql("UPDATE billing.balances SET balance = " + itoa(balance) + " WHERE account_id = '" + a.id.String() + "'")
 	a.key, a.keyID = r.newKey(a)
-	// Recognise the key once, so the requests find it in the cache: a cold key is looked up in the database within a
-	// second (accounts' tests cover that), which a busy machine under the race detector does not always keep to.
-	if _, err := r.accounts.AuthenticateKey(r.t.Context(), accounts.SiteID(siteID), a.key); err != nil {
+	r.recognise(a.key)
+	return a
+}
+
+// recognise looks a new key up once, so the requests find it in the cache, within the rig's KeyLookup as a request's
+// lookup is (Handler.authenticate). Without a deadline the lookup would have accounts' one second, which a busy
+// machine under the race detector does not always keep to (#605).
+func (r *rig) recognise(key string) accounts.Caller {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(r.t.Context(), r.cfg.KeyLookup)
+	defer cancel()
+	caller, err := r.accounts.AuthenticateKey(ctx, accounts.SiteID(siteID), key)
+	if err != nil {
 		r.t.Fatal(err)
 	}
-	return a
+	return caller
 }
 
 // reply is what a client got back: the status and headers, with the body read and closed.

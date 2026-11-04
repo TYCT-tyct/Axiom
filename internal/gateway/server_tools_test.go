@@ -21,6 +21,7 @@ import (
 )
 
 func TestUnpricedServerToolsNeverReachAdmission(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	for _, tc := range []struct{ path, member, name string }{
@@ -52,6 +53,7 @@ func TestUnpricedServerToolsNeverReachAdmission(t *testing.T) {
 // same 400 before anything is reserved; they run once a backend is configured. The openrouter:web_search tool has the
 // same answer while nothing can search, tested where its loop is.
 func TestWebSearchIsOneRefusal(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	for name, body := range map[string]string{
@@ -71,6 +73,7 @@ func TestWebSearchIsOneRefusal(t *testing.T) {
 }
 
 func TestCatalogToolDefaultsReachTheQuote(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	snap, err := f.cat.Current()
 	if err != nil {
@@ -121,6 +124,7 @@ func TestCatalogToolDefaultsReachTheQuote(t *testing.T) {
 }
 
 func TestAnUndeclaredTierStopsTheNextRoute(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, func(o *rigOptions) {
 		o.endpoints = func(_ string, e *routing.Endpoint) {
 			e.ServiceTiers = 1 << catalog.ServiceTierStandard

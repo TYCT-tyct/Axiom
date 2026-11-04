@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"axiom/internal/gateway"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
 	"axiom/internal/platform/telemetry"
@@ -46,7 +47,8 @@ func TestLoadNodeProcess(t *testing.T) {
 	loopback := func(tel *telemetry.Telemetry) (*egress.Client, error) {
 		return egress.NewForTesting(egresstest.Loopback(t), egress.WithTracerProvider(tel.Traces)), nil
 	}
-	if err := serveWith(ctx, strings.Split(environ, "\n"), slog.New(slog.NewJSONHandler(os.Stdout, nil)), loopback, startRecorder, nil); err != nil {
+	// The load node is the production configuration: the 503s its budgets turn away are part of what a load run measures.
+	if err := serveWith(ctx, strings.Split(environ, "\n"), slog.New(slog.NewJSONHandler(os.Stdout, nil)), loopback, startRecorder, nil, gateway.DefaultConfig()); err != nil {
 		t.Fatal(err)
 	}
 }

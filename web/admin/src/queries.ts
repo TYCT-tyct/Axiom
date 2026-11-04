@@ -171,6 +171,15 @@ export const siteKeyLimitsQuery = (id: AdminSchemas["SiteId"]) =>
       unwrap(adminApi.GET(`${base}/sites/{site_id}/key-limits`, { params: { path: { site_id: id } }, signal })),
   });
 
+// The targets of one UTC calendar month. A change replaces them whole and invalidates every account query, so the
+// dashboard's prorated figures refresh with the editor's view.
+export const targetsQuery = (month: string) =>
+  queryOptions({
+    queryKey: [accountKey, "operations-targets", month],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/reports/targets/{month}`, { params: { path: { month } }, signal })),
+  });
+
 export const suppliersQuery = (status?: AdminSchemas["SupplierStatus"]) =>
   infiniteQueryOptions({
     queryKey: [accountKey, "suppliers", status ?? ""],
@@ -192,15 +201,28 @@ export type SupplierView = Omit<AdminSchemas["SupplierDetail"], "endpoints"> & {
 };
 
 // A supplier that is being connected changes by itself, as the sync works through it: the page asks again until it
-// settles.
+// settles. Keys are made after the supplier is active, so a group whose key is still being made keeps the page asking,
+// as does a key whose text the sync is reading.
 export const supplierQuery = (id: string) =>
   queryOptions({
     queryKey: [accountKey, "supplier", id],
     queryFn: ({ signal }): Promise<SupplierView> =>
       unwrap(adminApi.GET(`${base}/suppliers/{supplier_id}`, { params: { path: { supplier_id: id } }, signal })),
     refetchInterval: ({ state }) => {
-      const status = state.data?.supplier.status;
-      return status === "connecting" ? 3000 : false;
+      const data = state.data;
+      if (!data) {
+        return false;
+      }
+      if (data.supplier.status === "connecting") {
+        return 3000;
+      }
+      if (data.supplier.status !== "active" && data.supplier.status !== "low_balance") {
+        return false;
+      }
+      const making = data.groups.some((group) => group.key_state === "pending");
+      const binding = data.credentials.some((credential) => credential.status === "binding");
+      // A supplier that cannot make a key would otherwise be asked forever; five minutes is longer than a sync round.
+      return (making || binding) && state.dataUpdateCount < 100 ? 3000 : false;
     },
   });
 
@@ -321,6 +343,11 @@ export const probeSettingsQuery = queryOptions({
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/quality-probes`, { signal })),
 });
 
+export const sourceClassesQuery = queryOptions({
+  queryKey: [accountKey, "source-classes"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/source-classes`, { signal })),
+});
+
 export const mailSettingsQuery = queryOptions({
   queryKey: [accountKey, "mail-settings"],
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/mail`, { signal })),
@@ -401,23 +428,50 @@ export const redeemCodesQuery = (siteId: AdminSchemas["SiteId"], filters: Redeem
     getNextPageParam: (page) => page.next_cursor ?? undefined,
   });
 
-// The cash behind the dashboard figure: ledger time, not an order's, so a refund of an older order and an offline
-// top-up are both here.
-export const cashMovementsQuery = (siteId: AdminSchemas["SiteId"], window: { since?: string; until?: string }) =>
-  infiniteQueryOptions({
-    queryKey: [accountKey, "cash-movements", siteId, window],
-    queryFn: ({ pageParam, signal }) =>
-      unwrap(
-        adminApi.GET(`${base}/payments/cash`, {
-          params: {
-            query: { site_id: siteId, since: window.since, until: window.until, cursor: pageParam, limit: pageSize },
-          },
-          signal,
-        }),
-      ),
+// A ledger list's pages share the window and the cursor contract; only the path and the query key differ.
+type LedgerPage<T> = { data?: T[]; next_cursor: string | null };
+
+function ledgerQuery<T>(
+  key: string,
+  siteId: AdminSchemas["SiteId"],
+  window: { since?: string; until?: string },
+  load: (cursor: string | undefined, signal: AbortSignal) => Promise<LedgerPage<T>>,
+) {
+  return infiniteQueryOptions({
+    queryKey: [accountKey, key, siteId, window],
+    queryFn: ({ pageParam, signal }) => load(pageParam, signal),
     initialPageParam: firstPage,
     getNextPageParam: nextCursor,
   });
+}
+
+// The cash behind the dashboard figure: ledger time, not an order's, so a refund of an older order and an offline
+// top-up are both here.
+export const cashMovementsQuery = (siteId: AdminSchemas["SiteId"], window: { since?: string; until?: string }) =>
+  ledgerQuery("cash-movements", siteId, window, (cursor, signal) =>
+    unwrap(
+      adminApi.GET(`${base}/payments/cash`, {
+        params: {
+          query: { site_id: siteId, since: window.since, until: window.until, cursor, limit: pageSize },
+        },
+        signal,
+      }),
+    ),
+  );
+
+// The paid credit batches behind paid users and monthly revenue. The server filters by the batch's created_at, not
+// an order's creation time, so the list is the same time window the dashboard counted.
+export const paidBatchesQuery = (siteId: AdminSchemas["SiteId"], window: { since?: string; until?: string }) =>
+  ledgerQuery("paid-batches", siteId, window, (cursor, signal) =>
+    unwrap(
+      adminApi.GET(`${base}/payments/paid-batches`, {
+        params: {
+          query: { site_id: siteId, since: window.since, until: window.until, cursor, limit: pageSize },
+        },
+        signal,
+      }),
+    ),
+  );
 
 export const paymentRefundsQuery = (siteId: AdminSchemas["SiteId"], state?: AdminSchemas["PaymentRefundState"]) =>
   infiniteQueryOptions({

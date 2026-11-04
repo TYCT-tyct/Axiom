@@ -91,7 +91,7 @@ API key → 路由按 key 的路由预设选端点 → 供应商选凭证 → �
 | 能力 | capability | 请求用到、端点可能不支持的功能，如工具、图片、PDF、推理；路由只留下支持请求全部能力的端点 |
 | 调用格式 | format | 模型调用接口的写法：OpenAI Chat、OpenAI Responses、Anthropic Messages |
 | 依据 | basis | 一个属性值的出处 |
-| 来源 | `source_class` | 端点的上游从哪来；类别是后台数据，M1 只写 `relay` |
+| 来源 | `source_class` | 端点的上游从哪来；类别是后台数据（`quality.source_classes`），稳定 slug 由预设和调用记录使用 |
 | 指纹 | fingerprint | 识别来源的规则，如响应头、消息 ID 格式、用量特征 |
 | 检测 | probe | 我们主动发给端点的测试请求，见[端点评估](domains/quality.md) |
 | 同步 | sync | 通过适配器拉取供应商的模型、分组、价格和余额 |
@@ -149,7 +149,7 @@ API key → 路由按 key 的路由预设选端点 → 供应商选凭证 → �
 | 运维 | ops | 节点角色之一，见[总体架构的「部署拓扑」](architecture.md#部署拓扑) |
 | 公网监听 / 管理监听 / 节点监听 / 运营监听 / 探针监听 | public / admin / node / ops / probes | 节点上的五个 HTTP 监听：模型调用、官网、控制台和支付回调 / 管理后台和管理接口 / 核心给入口转发和探活的调用面，走双向 TLS / 运营接口（只接受 `ops` 用途客户端证书的双向 TLS，随 #565 落地）/ 健康检查和指标。各自提供什么、谁能访问，见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
 | 审批策略 | approval_policy | 一类运营操作需要怎样的审批，是后台数据，见[运营](domains/operations.md) |
-| 受控导出 | data_export | 由负责人发起、经两步验证并留审计的数据导出，是取用对话内容的唯一方式，见[记录与告警](domains/observability.md) |
+| 受控导出 | data_export | 由负责人两把离线私钥双签名批准、加密到负责人公钥并留审计的数据导出，是取用对话内容的唯一方式，见[记录与告警](domains/observability.md#受控导出) |
 | 收款渠道 | payment_channel（代码里 `payments.Kind`） | 一种收款协议的插件，如易支付、Stripe、支付宝官方；USDT 经易支付兼容的网关接入，见[支付的「收款渠道」](domains/payments.md#收款渠道) |
 | 商户账户 | merchant | 站点在某个收款渠道上配置的一个收款账号（商户号、密钥、网关地址），一个渠道可以有多个；二级站点用站长自己的 |
 | 付款方式 | payment_method | 用户充值时选的一项，如支付宝、微信、`usdt.tron`；一个商户账户可以支持多种 |

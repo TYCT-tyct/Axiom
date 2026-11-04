@@ -14,6 +14,7 @@ import (
 
 //nolint:cyclop // one configuration through read, write, replay, stale revision and detection round-trip.
 func TestAdminAlertConfigurationTestAndResolve(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	rec := f.do(http.MethodGet, "/alerts/configuration", "", as(s))
@@ -72,6 +73,7 @@ func TestAdminAlertConfigurationTestAndResolve(t *testing.T) {
 }
 
 func TestAdminWebhookSecretIsSealedAuditedAndIdempotent(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	if err := f.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {

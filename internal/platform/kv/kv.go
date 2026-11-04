@@ -38,7 +38,8 @@ type Deps struct {
 	// HeartbeatTimeout bounds one round of the heartbeat's database work; zero is defaultHeartbeatTimeout. A test shortens it.
 	HeartbeatTimeout time.Duration
 	// Now is the local clock, and nil is time.Now. Tests set one that is wrong to see the clock check, and one they
-	// advance to open and close the breaker without waiting (README「时钟」「熔断」).
+	// advance to open and close the breaker without waiting (README「时钟」「熔断」). A client on such a clock keeps the
+	// offset the start measured: a later measurement would read the test's own advances as skew and undo them.
 	Now func() time.Time
 }
 
@@ -50,6 +51,7 @@ type Client struct {
 	ns         string
 	now        func() time.Time // the local clock, which Now corrects by skew
 	skew       atomic.Int64     // the server's clock less this one's, in nanoseconds
+	testClock  bool             // now is a test's (Deps.Now): the loop does not measure the clock again
 	live       atomic.Int64     // nodes the heartbeat sees alive, this one included
 	config     int              // the configured N
 	logger     *slog.Logger
@@ -83,6 +85,11 @@ type Client struct {
 // error, and the node starts on its fallbacks; a server that refuses the user, has no memory limit, or disagrees about
 // the time stops the start, because those are deployment mistakes.
 func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
+	return open(ctx, cfg, deps, deps.Now != nil)
+}
+
+// open is Open, with testClock saying whether deps.Now is a test's clock, whose offset the loop keeps (Deps.Now).
+func open(ctx context.Context, cfg Config, deps Deps, testClock bool) (*Client, error) {
 	deps.fillDefaults()
 	namespace := cfg.Namespace
 	if namespace == "" {
@@ -92,7 +99,7 @@ func Open(ctx context.Context, cfg Config, deps Deps) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{
-		ns: namespace, now: deps.Now, config: cfg.Nodes, logger: deps.Logger, m: newMetrics(deps.Meter),
+		ns: namespace, now: deps.Now, testClock: testClock, config: cfg.Nodes, logger: deps.Logger, m: newMetrics(deps.Meter),
 		br: newBreaker(), slots: semaphore.NewWeighted(maxOutstanding), writeSlots: semaphore.NewWeighted(stickyOutstanding),
 		beatTimeout: deps.HeartbeatTimeout, timeout: deps.AccessTimeout,
 	}

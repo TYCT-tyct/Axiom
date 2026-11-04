@@ -12,6 +12,7 @@ type ctxKey struct{}
 // The cancellation flows from the client to the attempt (when the endpoint passes cancellation on) and never back,
 // and the settlement context outlives both.
 func TestContextsPropagateCancellation(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		client, cancelClient := context.WithCancel(context.WithValue(ctx, ctxKey{}, "id"))
 		deadline := time.Now().Add(time.Hour)

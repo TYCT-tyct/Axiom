@@ -4,6 +4,8 @@ package quality
 
 import (
 	"context"
+	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
+	"axiom/internal/catalog"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers"
 )
@@ -68,10 +71,22 @@ type Observation struct {
 	// InputTokens is the request's input as estimated before it was sent (billing.InputEstimate).
 	InputTokens  int64
 	OutputTokens int64
+	// ToolChecks are the client tool calls whose arguments were checked when the answer ended, and ToolErrors those that
+	// were not one JSON text (protocol.Progress); an answer cut at its output cap has none checked.
+	ToolChecks, ToolErrors int64
 	// Sent is when the attempt was sent; FirstToken when its first content came, zero when none did, whoever it went
 	// to; Ended when the upstream's end or failure was read, before any wait of the gateway's own, which dates the
 	// samples.
 	Sent, FirstToken, Ended time.Time
+	// Headers are the accepted 2xx response's headers, the evidence source classes are recognized by. They are only
+	// read when a class rule names them and are not retained whole (docs/domains/quality.md「来源类别与指纹」).
+	Headers http.Header
+	// UsageItems are the billing items the upstream itself reported with a non-zero count in the response Headers came
+	// from, the other fingerprint evidence. An item the gateway estimated is not one the upstream reported.
+	UsageItems catalog.ItemSet
+	// Config is the endpoint configuration the attempt was sent to: its catalog model, upstream name and formats. A
+	// response from a configuration Prepare has since replaced is not evidence for the new one.
+	Config EndpointConfig
 }
 
 func (o *Observation) content() bool { return !o.FirstToken.IsZero() }
@@ -91,6 +106,17 @@ type Measures struct {
 	ThroughputPercentiles [4]float64
 	Quality               float64 // 0 to 1: reliability and the measured time to first token and speed
 	Confidence            float64 // 0 to 1: 0 when nothing was counted; decays after the last counted outcome
+	// ToolErrorRate is the share of answers with client tool calls that had at least one call whose arguments were not
+	// one JSON text, as a moving average; 0 while it is not measured, as Latency is (docs/domains/quality.md「线上观测」).
+	ToolErrorRate float64
+	// ProductScore is the fixed benchmark's score against the official direct run, 0–100 with official at 100, and
+	// ProductScoreConfidence how much it can be trusted: the 95% paired interval, answered coverage and age. They are
+	// separate from Quality, which measures how the endpoint runs, not what it answers. No run on the current
+	// configuration against the current official baseline means 0 and 0 (docs/domains/quality.md「产品成绩（固定测评题）」).
+	// ProductScoreAt is the last run's time, kept after the score ages out.
+	ProductScore           float64
+	ProductScoreConfidence float64
+	ProductScoreAt         time.Time
 	// Verified is set when a fingerprint check passed and is still recent (the configured maximum age), with no contradiction
 	// since. An endpoint never checked is not verified; neither is one concluded fake (docs/domains/quality.md
 	//「真伪检测」). VerifiedAt is when the last check passed, kept after it ages out or is contradicted, and
@@ -98,6 +124,69 @@ type Measures struct {
 	Verified         bool
 	VerifiedAt       time.Time
 	VerifyConfidence float64
+	// Class is the source class's stable slug, decided by the endpoint's last successful response and the live rules;
+	// the fallback when no rule matched or no response has been seen. Routing filters on it and the call record names it.
+	Class string
+	// Facts are what detection measured of the endpoint's structure, by call format: a measurement of Chat says
+	// nothing about Responses (docs/domains/quality.md「实测的能力与上限」).
+	Facts map[protocol.Format]Facts
+}
+
+// Facts are what detection found out about an endpoint's structure, as opposed to how well it performs: a capability
+// or a request parameter that works or does not, and the context and output ceilings it enforces. A measured value
+// replaces the catalog's: Supported adds a capability or parameter the catalog did not declare, Unsupported removes
+// one it did, and a non-zero Context or MaxOutput replaces the catalog's ceiling. A zero field was not measured and
+// the catalog's value stands. Supported and Unsupported are disjoint: a measurement of one clears the same bit from
+// the other, so a later measurement can flip an earlier one.
+type Facts struct {
+	Supported, Unsupported                     protocol.Capabilities
+	SupportedParameters, UnsupportedParameters protocol.ParameterSet
+	// Context and MaxOutput are the ceilings measurement found, in tokens; 0 is unmeasured. A measured ceiling replaces
+	// the catalog's, higher or lower: the catalog is a baseline, and detection is the evidence for this endpoint.
+	Context, MaxOutput int64
+}
+
+// add merges measurement m over f. m's statements replace what they cover; what m leaves zero stands. A support
+// statement wins over its own lack in the same measurement, so a detector that reports both is read as working.
+func (f *Facts) add(m Facts) {
+	m.Unsupported &^= m.Supported
+	m.UnsupportedParameters &^= m.SupportedParameters
+	f.Supported = f.Supported&^m.Unsupported | m.Supported
+	f.Unsupported = f.Unsupported&^m.Supported | m.Unsupported
+	f.SupportedParameters = f.SupportedParameters&^m.UnsupportedParameters | m.SupportedParameters
+	f.UnsupportedParameters = f.UnsupportedParameters&^m.SupportedParameters | m.UnsupportedParameters
+	if m.Context > 0 {
+		f.Context = m.Context
+	}
+	if m.MaxOutput > 0 {
+		f.MaxOutput = m.MaxOutput
+	}
+}
+
+// measuredFacts are the facts recorded for one call format, with the configuration they were measured on: a
+// measurement of one upstream name, model or format says nothing about another
+// (docs/domains/quality.md「实测的能力与上限」).
+type measuredFacts struct {
+	claim claim
+	facts Facts
+}
+
+// EndpointConfig identifies the endpoint configuration a measurement belongs to: its model, upstream name and the set
+// of formats it serves. A measurement that arrives after any of them changed is stale and must not overwrite the current
+// configuration's facts.
+type EndpointConfig struct {
+	Model    uuid.UUID
+	Upstream string
+	Formats  uint16
+}
+
+// configOf is the configuration the endpoint presents now.
+func configOf(ep suppliers.Routable) EndpointConfig {
+	var formats uint16
+	for _, f := range ep.Formats {
+		formats |= 1 << f
+	}
+	return EndpointConfig{Model: ep.Model, Upstream: ep.Upstream, Formats: formats}
 }
 
 // Monitor keeps local endpoint evidence and live breaker state. Observe never accesses the database or allocates
@@ -107,12 +196,20 @@ type Monitor struct {
 	mu        sync.RWMutex
 	endpoints map[suppliers.EndpointID]*State
 	collected map[suppliers.EndpointID]struct{}
+	// benchmarks is each catalog model's official direct run, the anchor its endpoints' product scores are relative to.
+	// scores holds the current benchmark version's stored endpoint scores until Prepare adopts them into a State, and
+	// configs each endpoint's configuration generation, the shared invalidation marker. All three are guarded by mu and
+	// refilled from quality.benchmark_baselines, quality.benchmark_scores and quality.benchmark_configs on every refresh.
+	benchmarks map[uuid.UUID]benchmarkAnchor
+	scores     map[suppliers.EndpointID]benchmarkState
+	configs    map[suppliers.EndpointID]benchmarkConfig
 
 	unclassified   metric.Int64Counter // failures the adapters could not classify, which are not counted
 	verifyAge      atomic.Int64        // how long a verification pass counts, in nanoseconds, from the probe settings
 	mode           Mode
 	changes        chan change
 	loop           *Loop
+	classes        atomic.Pointer[compiledClasses]
 	suspectedBlock metric.Int64Counter // HTML answers, taken for a firewall on the route and not counted
 }
 
@@ -134,13 +231,26 @@ type State struct {
 	errorRate   float64 // the moving average of failures (1) and successes (0); 0 before any
 	latency     average // seconds to the first token
 	speed       average // output tokens per second
+	tools       average // 1 for an answer whose tool calls had an error, 0 for one whose calls were all well formed
 	// The rolling windows the percentile preferences read, fed by the same samples as latency and speed.
 	latencyWindow sampleWindow
 	speedWindow   sampleWindow
 	samples       int // counted outcomes, capped at scoreSamples: the confidence's evidence
 	sampled       time.Time
-	verify        verification // the last fingerprint check and its schedule
-	verifying     bool         // a verification generation is in flight
+	verify        verification                      // the last fingerprint check and its schedule
+	verifying     bool                              // a verification generation is in flight
+	current       EndpointConfig                    // the configuration Prepare last published
+	published     uint64                            // the supplier snapshot Prepare last accepted
+	facts         map[protocol.Format]measuredFacts // what detection measured, per call format
+	class         string                            // the source class's stable slug, from the last successful response
+	evidence      classEvidence                     // the headers and usage items the live rules read
+	benchmark     benchmarkState                    // the product score and the official baseline it was computed against
+	// benchmarkEpoch is the configuration generation the held score was measured under. A generation that advances
+	// invalidates the score even if the configuration later returns to the same model, upstream and formats.
+	benchmarkEpoch int64
+	// prepareMu serializes the shared configuration write and the local publish for this endpoint. A stale snapshot
+	// that passed its preliminary generation check waits here and rechecks before it can write.
+	prepareMu sync.Mutex
 }
 
 // average is a moving average with how many samples it rests on and when the last one came.
@@ -169,17 +279,22 @@ func New(meter metric.Meter) *Monitor {
 	if meter == nil {
 		meter = noop.NewMeterProvider().Meter("quality")
 	}
+	_ = fixedBenchmark() // a malformed embedded set must stop the node here, not on the first routing read
 	m := &Monitor{
-		endpoints: map[suppliers.EndpointID]*State{},
-		collected: map[suppliers.EndpointID]struct{}{},
-		changes:   make(chan change, 1024),
-		mode:      Observe,
+		endpoints:  map[suppliers.EndpointID]*State{},
+		collected:  map[suppliers.EndpointID]struct{}{},
+		benchmarks: map[uuid.UUID]benchmarkAnchor{},
+		scores:     map[suppliers.EndpointID]benchmarkState{},
+		configs:    map[suppliers.EndpointID]benchmarkConfig{},
+		changes:    make(chan change, 1024),
+		mode:       Observe,
 		unclassified: counter(meter, "axiom.quality.unclassified",
 			"Endpoint failures the adapter could not classify (an Unknown below 500), which do not count against health."),
 		suspectedBlock: counter(meter, "axiom.quality.suspected_block",
 			"HTML answers taken for a firewall on the route, which count against neither the endpoint nor the route."),
 	}
 	m.verifyAge.Store(int64(defaultVerifyMaxAge))
+	m.classes.Store(&compiledClasses{fallback: "relay"}) // Start replaces this with the table; before then nothing has a fingerprint
 	m.register(meter)
 	return m
 }
@@ -203,12 +318,13 @@ func counter(m metric.Meter, name, description string) metric.Int64Counter {
 func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	v := m.judge(ctx, &o)
 	latency := o.content() && o.InputTokens <= latencyMaxInput
-	if v == uncounted && !latency {
+	if v == uncounted && !latency && o.Failure != nil {
 		return
 	}
 	e := m.of(o.Endpoint)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	m.observeClassEvidence(e, &o, v) // a successful response's headers and usage are the fingerprint evidence
 	e.count(v, o.Ended)
 	m.health(e, v, &o)
 	if latency {
@@ -220,6 +336,26 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 		speed := float64(o.OutputTokens) / o.Ended.Sub(o.FirstToken).Seconds()
 		e.speed.add(speed, o.Ended)
 		e.speedWindow.add(speed, o.Ended)
+	}
+	e.sampleTools(v, &o)
+}
+
+// sampleTools takes an answer whose client tool calls the relay checked as a sample of the tool-call error rate, apart
+// from the verdict on the endpoint's health. The relay checks none for an answer stopped at its output cap, whose calls
+// were cut rather than wrong, however the client's format then failed it. An attempt the gateway failed because a
+// checked call's input could not be given to the client (protocol.FaultToolInput) is an error however the health judged
+// it, which is not at all: the model got the call wrong, the endpoint did not fail. Otherwise only an answer that ended
+// normally counts: one cut short says nothing of how the endpoint calls tools. An answer is one sample however many
+// calls it made, as OpenRouter counts requests (《Auto Exacto》). e.mu is held.
+func (e *State) sampleTools(v verdict, o *Observation) {
+	if o.ToolChecks == 0 { // no call ended, or the answer stopped at its output cap and its calls were cut
+		return
+	}
+	switch {
+	case o.Fault == protocol.FaultToolInput:
+		e.tools.add(1, o.Ended)
+	case v == success && o.Done:
+		e.tools.add(float64(min(o.ToolErrors, 1)), o.Ended)
 	}
 }
 
@@ -279,6 +415,9 @@ func (e *State) measures(now time.Time, verifyMaxAge time.Duration) Measures {
 	if v, ok := e.speed.measured(now); ok {
 		out.Throughput = v
 	}
+	if v, ok := e.tools.measured(now); ok {
+		out.ToolErrorRate = v
+	}
 	if v, ok := e.latencyWindow.percentiles(now); ok {
 		for i := range v {
 			out.LatencyPercentiles[i] = time.Duration(v[i] * float64(time.Second))
@@ -295,16 +434,85 @@ func (e *State) measures(now time.Time, verifyMaxAge time.Duration) Measures {
 	return out
 }
 
+// Measure records what detection established about an endpoint's structure in one call format: the capabilities and
+// request parameters it found working and lacking, and the context and output ceilings it measured. The facts replace
+// what was measured of the same fields in that format and are bound to the configuration measured; a configuration
+// change voids them until the new one is measured (docs/domains/quality.md「实测的能力与上限」). It returns false when
+// the format is not one the endpoint serves or the endpoint's current configuration is no longer the one passed: a
+// result from an old configuration must not clear facts the new configuration has already recorded. It is not on the
+// call path; detection calls it, and the next snapshot rebuild carries the change to routing.
+func (m *Monitor) Measure(ep suppliers.Routable, format protocol.Format, facts Facts) bool {
+	if !slices.Contains(ep.Formats, format) {
+		return false
+	}
+	e := m.of(ep.ID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.current != configOf(ep) {
+		return false
+	}
+	c := factClaim(ep, format)
+	if e.facts == nil {
+		e.facts = map[protocol.Format]measuredFacts{}
+	}
+	f := e.facts[format]
+	if f.claim != c {
+		f = measuredFacts{claim: c}
+	}
+	f.facts.add(facts)
+	e.facts[format] = f
+	return true
+}
+
+// observeClassEvidence records what a successful response says about its source. The verdict, not the HTTP status,
+// decides: an idle timeout, an empty body or a broken stream after 2xx is a failure and its headers say nothing about
+// where the endpoint's real answers come from. The attempt must also belong to the configuration Prepare last
+// published: a response from an upstream the endpoint no longer uses cannot classify the new one. e.mu is held.
+func (m *Monitor) observeClassEvidence(e *State, o *Observation, v verdict) {
+	if v != success || o.Failure != nil || o.Config != e.current {
+		return
+	}
+	if c := m.classes.Load(); c != nil {
+		e.observeClass(c, o.Headers, o.UsageItems, o.Ended)
+	}
+}
+
+// classOf is the endpoint's class for ep's configuration. The class was recognized from responses of the configuration
+// Prepare last published; a caller holding another (a routing build that read an older supplier generation) gets the
+// fallback, as MeasuredFor withholds its facts. e.mu is held.
+func (m *Monitor) classOf(e *State, ep suppliers.Routable) string {
+	if e.class == "" || e.current != configOf(ep) {
+		return m.fallbackClass()
+	}
+	return e.class
+}
+
+// fallbackClass is the class an endpoint belongs to before a rule decides, or when nothing matches: the live table's
+// fallback. New installs the relay fallback before Start reads the table.
+func (m *Monitor) fallbackClass() string { return m.classes.Load().fallback }
+
+// measuredState reads the endpoint and, for a platform endpoint, its model's official baseline under one lock: a tenant
+// endpoint never gets a product score, even if its id once belonged to a platform endpoint.
+func (m *Monitor) measuredState(ep suppliers.Routable) (*State, benchmarkAnchor, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	e := m.endpoints[ep.ID]
+	if !ep.Platform() {
+		return e, benchmarkAnchor{}, false
+	}
+	baseline, ok := m.benchmarks[ep.Model]
+	return e, baseline, ok
+}
+
 // MeasuredFor is what the endpoint's numbers are now for a routable endpoint: a pass counts only for the configuration
 // it checked, so an endpoint whose model, upstream name or format changed since the check is not verified even before
-// the loop clears the state (docs/domains/quality.md「真伪检测」). The evidence and its claim are read in one critical
-// section: a claim switched between two reads must not be paired with the previous claim's pass.
+// the loop clears the state (docs/domains/quality.md「真伪检测」), and a measurement of its structure likewise says
+// nothing about another configuration. The evidence and its claim are read in one critical section: a claim switched
+// between two reads must not be paired with the previous claim's evidence.
 func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
-	m.mu.RLock()
-	e := m.endpoints[ep.ID]
-	m.mu.RUnlock()
+	e, baseline, hasBaseline := m.measuredState(ep)
 	if e == nil {
-		return Measures{Health: 1, Quality: 1}
+		return Measures{Health: 1, Quality: 1, Class: m.fallbackClass()}
 	}
 	has := len(ep.Formats) > 0
 	want := claim{}
@@ -314,10 +522,33 @@ func (m *Monitor) MeasuredFor(ep suppliers.Routable, now time.Time) Measures {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := e.measures(now, m.verificationAge())
+	out.Class = m.classOf(e, ep)
 	if out.Verified && (!has || e.verify.claim != want) {
 		out.Verified, out.VerifyConfidence, out.VerifiedAt = false, 0, time.Time{}
 	}
+	current := has && e.current == configOf(ep)
+	out.ProductScore, out.ProductScoreConfidence, out.ProductScoreAt = e.benchmark.productScore(
+		now, baseline, hasBaseline, e.scoreCurrent(current), e.benchmarkEpoch)
+	out.Facts = nil
+	if current {
+		for f, mf := range e.facts {
+			if mf.claim != factClaim(ep, f) {
+				continue
+			}
+			if out.Facts == nil {
+				out.Facts = make(map[protocol.Format]Facts, len(e.facts))
+			}
+			out.Facts[f] = mf.facts
+		}
+	}
 	return out
+}
+
+// scoreCurrent reports whether the held product score may be read for this endpoint: its configuration is current, and
+// the score's own record of its configuration matches. The second check covers the instant before Prepare clears a state
+// written for another configuration.
+func (e *State) scoreCurrent(current bool) bool {
+	return current && (e.benchmark.at.IsZero() || e.benchmark.config == e.current)
 }
 
 // probeFormat picks the call format a health probe uses: the first generation format the endpoint serves. Embeddings,

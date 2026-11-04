@@ -101,20 +101,11 @@ function CreateDialog({ detection, onClose }: { detection: Detection; onClose: (
     <ChangeDialog
       operation={"supplier-connect"}
       title={t("suppliers.connect.title")}
-      intro={
-        <>
-          <p>
-            {t("suppliers.connect.detected", { kind })}
-            {detection.generation ? ` · ${detection.generation}` : ""}
-            {detection.detected_version ? ` · ${detection.detected_version}` : ""}
-          </p>
-          <p className="text-label text-t3">
-            <Code>{detection.origin}</Code>
-          </p>
-        </>
-      }
+      intro={<DetectedIntro detection={detection} />}
       action={t("suppliers.connect.submit")}
-      fields={(error) => <CreateFields error={error} fields={detection.login_fields} />}
+      fields={(error) => (
+        <CreateFields error={error} fields={detection.login_fields} name={new URL(detection.origin).hostname} />
+      )}
       read={read}
       send={(input, { reason, key }) =>
         unwrapChange(
@@ -142,14 +133,35 @@ function CreateDialog({ detection, onClose }: { detection: Detection; onClose: (
   );
 }
 
-function CreateFields({ error, fields }: { error: unknown; fields: Detection["login_fields"] }) {
+function DetectedIntro({ detection }: { detection: Detection }) {
+  const { t } = useTranslation();
+  const kind = detection.kind ?? "";
+  return (
+    <>
+      <p>
+        {t("suppliers.connect.detected", { kind })}
+        {detection.generation ? ` · ${detection.generation}` : ""}
+        {detection.detected_version ? ` · ${detection.detected_version}` : ""}
+      </p>
+      <p className="text-label text-t3">
+        <Code>{detection.origin}</Code>
+      </p>
+      <p>{t("suppliers.connect.auto")}</p>
+      {kind === "newapi" ? <p className="text-label text-t3">{t("suppliers.connect.scopes")}</p> : null}
+    </>
+  );
+}
+
+function CreateFields({ error, fields, name }: { error: unknown; fields: Detection["login_fields"]; name: string }) {
   const { t } = useTranslation();
   const errors = useErrors();
   return (
     <>
       <TextField
         label={t("suppliers.connect.name")}
+        hint={t("suppliers.connect.nameHint")}
         name="name"
+        defaultValue={name}
         maxLength={200}
         autoComplete="off"
         error={errors.field(error, "name")}

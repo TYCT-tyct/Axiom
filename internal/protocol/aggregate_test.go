@@ -139,6 +139,7 @@ func samplePaths(t *testing.T) []sampledPath {
 // which go test -update rewrites. Each body has the official reply's shape, and is what the client's stream says:
 // foldStream folds the stream the client would have got instead.
 func TestAggregateSamples(t *testing.T) {
+	t.Parallel()
 	paths := samplePaths(t)
 	for _, c := range paths {
 		t.Run(c.golden, func(t *testing.T) {
@@ -208,6 +209,7 @@ var shapes = [...]func(map[string]any, func(map[string]any, string, ...string)){
 // was generated and the error in it, and for a Messages client, which has no stop reason for an error, a 502 with
 // the error alone; both carry the usage, and the cost if the settlement was written (docs/domains/gateway.md「错误」).
 func TestAggregateFail(t *testing.T) {
+	t.Parallel()
 	messages := messageStart(`{"input_tokens":3}`) + textBlock
 	responses := responsesEvent("response.created", 0, strings.Replace(responsesObject, `"id"`, `"created_at":1700000000,"id"`, 1)) +
 		responsesEvent("response.output_item.added", 1, `,"output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}`) +
@@ -285,6 +287,7 @@ var failures = [...]func(*testing.T, aggregated, map[string]any) any{
 // status, in each format; the gateway may still replace it with another endpoint's. Without a settlement the answer
 // has the usage, no cost and no pending flag.
 func TestAggregateFailBeforeContent(t *testing.T) {
+	t.Parallel()
 	streams := [...]string{
 		protocol.Messages: messageStart(`{"input_tokens":3}`),
 		protocol.Responses: responsesEvent("response.created", 0, responsesObject) +

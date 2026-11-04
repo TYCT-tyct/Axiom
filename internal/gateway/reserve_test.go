@@ -32,6 +32,7 @@ func (reserveJob) InsertOpts() river.InsertOpts {
 // Background writes and the console use no gateway permits. Four ordinary connections remain held: a River worker,
 // the console transaction, the real recorder and River's own query, the latter two blocked on their tables.
 func TestBackgroundAndConsoleCannotTakeTheSettlementReserve(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, func(o *rigOptions) {
 		o.conns = 5
 		o.config = func(c *Config) { c.PoolSize, c.PoolReserve = 5, 1 }

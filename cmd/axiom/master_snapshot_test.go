@@ -44,7 +44,7 @@ func TestServeReadsTheMasterKeyFileOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	console, err := loadConsole(cfg)
+	console, err := loadConsole(cfg, testGatewayConfig())
 	if err != nil {
 		t.Fatal(err)
 	}

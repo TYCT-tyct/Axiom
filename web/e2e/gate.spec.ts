@@ -11,6 +11,19 @@ import { suites } from "./suites.ts";
 const schemes = ["light", "dark"] as const;
 const languages = ["zh", "en"] as const;
 const widths = [360, 768, 1280, 2560] as const;
+const axeTags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+
+// axe's time grows with the DOM. A table repeats one row component, and the usual fixtures cycle every row state within
+// 11 rows (a disabled user, a free or failed call), so 12 rows cover every state the table can show. Scanning the whole
+// 50-row admin calls list cost 4.5 s idle and 15 s under a 2x CPU load, and timed out at 30 s in CI (#624). The overflow
+// checks below still lay out every row with the worst data. The gate asserts violations only, so axe need not build or
+// return its passes and inapplicable results either.
+const axeRows = 12;
+const axe = (page: Page) =>
+  new AxeBuilder({ page })
+    .options({ resultTypes: ["violations"] })
+    .withTags(axeTags)
+    .exclude(`tbody tr:nth-child(n + ${axeRows + 1})`);
 
 // Nothing here is shared: every check gets its own page, its own mocked API state (suite.prepare) and the one server
 // Playwright starts for the whole run. In the default mode a single worker took the whole file by itself, 8.9 of the
@@ -32,9 +45,7 @@ for (const suite of suites) {
           await suite.prepare(page, scene);
           await page.setViewportSize({ width: 1280, height: 800 });
           await scene.open(page);
-          const result = await new AxeBuilder({ page })
-            .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
-            .analyze();
+          const result = await axe(page).analyze();
           expect(
             result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(" | ")}`),
           ).toEqual([]);
@@ -51,7 +62,7 @@ for (const suite of suites) {
             await page.setViewportSize({ width: 1280, height: 800 });
             await scene.open(page);
             await applyBrand(page, color);
-            const result = await new AxeBuilder({ page }).withRules(["color-contrast"]).analyze();
+            const result = await axe(page).withRules(["color-contrast"]).analyze();
             expect(result.violations.map((v) => v.nodes.map((n) => n.target.join(" ")).join(" | "))).toEqual([]);
           });
         }
@@ -75,6 +86,30 @@ for (const suite of suites) {
           }),
         );
         expect(hidden).toEqual([]);
+        // A header keeps its own line at every width: a narrow numeric column must not break 「调用」 in two.
+        const wrapped = await page.evaluate(() =>
+          [...document.querySelectorAll("th")]
+            .filter((th) => getComputedStyle(th).whiteSpace !== "nowrap")
+            .map((th) => th.textContent),
+        );
+        expect(wrapped).toEqual([]);
+        if (width === 1280) {
+          // The sidebar's column reaches the end of the document, not only the end of the window.
+          const sidebar = await page.evaluate(() => {
+            const nav = document.querySelector("nav");
+            // A modal dialog scrolls its own body over a locked page; the column behind it is only viewport-tall.
+            if (!nav || nav.getBoundingClientRect().width === 0 || document.querySelector("dialog[open]")) {
+              return null;
+            }
+            return {
+              bottom: nav.getBoundingClientRect().bottom + window.scrollY,
+              page: document.documentElement.scrollHeight,
+            };
+          });
+          if (sidebar) {
+            expect(sidebar.bottom).toBeGreaterThanOrEqual(sidebar.page - 1);
+          }
+        }
       });
     }
   }

@@ -21,9 +21,10 @@ import (
 
 // managementAPI is the public, Bearer-authenticated key administration surface, outside the console's cookie guard.
 type managementAPI struct {
-	accounts *accounts.Service
-	proxies  []netip.Prefix
-	logger   *slog.Logger
+	accounts  *accounts.Service
+	proxies   []netip.Prefix
+	logger    *slog.Logger
+	keyLookup time.Duration // a key's lookup in the database: the gateway's KeyLookup, not the request's five seconds
 }
 
 func withKeyManagement(next http.Handler, api managementAPI) http.Handler {
@@ -91,7 +92,9 @@ func (a managementAPI) managementCaller(r *http.Request) (accounts.Caller, error
 	if !bearer || !strings.EqualFold(scheme, "Bearer") {
 		return accounts.Caller{}, accounts.ErrUnknownKey
 	}
-	return a.accounts.AuthenticateKey(r.Context(), site.ID, strings.TrimSpace(token))
+	ctx, cancel := context.WithTimeout(r.Context(), a.keyLookup)
+	defer cancel()
+	return a.accounts.AuthenticateKey(ctx, site.ID, strings.TrimSpace(token))
 }
 
 func dispatchManagement(r *http.Request, m accounts.KeyManager, tx pg.Tx, input managedInput) (any, int, error) {

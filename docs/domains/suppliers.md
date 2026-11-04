@@ -6,7 +6,7 @@
 
 - 三类供应商通过同一套接口接入（见[产品需求的「供给侧」](../product.md#供给侧)）。
 - 中转站多数基于 new-api、sub2api，约一成是自研系统；我们通常只有普通用户账号。
-- 自研系统需要单独适配；以后不再接入的，适配可以干净地移除。
+- 自研系统先看能不能用声明式适配器接；不能的单独写 Go 适配器。以后不再接入的，适配可以干净地移除。
 - 号池一般是自建的 sub2api、new-api、CPA 等系统；除非必要，不自己写号池模块，但要预留。
 - 官方 API：实现主流的基础适配，暂不接入，只作预留；账户自带 key（BYOK）用的 OpenAI 官方适配是例外，它只服务账户自己的 key，不作为平台货源（见[账户](accounts.md#自带的供应商-keybyok)）。
 - 接入、同步、变化处理尽量自动，人只处理例外。
@@ -30,7 +30,7 @@
 | 档 | 用于 | 怎么加 |
 |---|---|---|
 | 内置适配器 | 常见系统和官方 API | 写代码 |
-| 声明式适配器 | 自研中转站中只是接口路径和字段名不同的那些 | 在后台填一份配置（登录地址、余额字段位置等），不改代码 |
+| 声明式适配器 | 自研中转站中只是接口路径和字段名不同的那些 | 在部署目录加一份 JSON 声明（登录地址、余额字段位置等），重启节点，不改代码 |
 | 浏览器自动化 | 前两档做不到的事 | 运营 agent 操作网页 |
 
 第一版的内置适配器：
@@ -39,15 +39,53 @@
   - new-api：适配新版的个人访问令牌和登录令牌，也兼容旧版的访问令牌；
   - sub2api：登录令牌加刷新令牌；
   - 通用 OpenAI 兼容：只有 API key，通过 OpenAI 兼容的余额接口读取余额。
-- **管理员身份，用于自建号池**：sub2api 管理接口、new-api 管理接口、CPA（CLIProxyAPI）。CPA 的情况见下文「号池」。
+- **管理员身份，用于自建号池**：sub2api 管理接口、new-api 管理接口、CPA（CLIProxyAPI，Go 适配器加常驻采集器），情况见下文「号池」和「CPA」。
 - **官方 API（预留）**：OpenAI、Anthropic、Gemini 三种协议的调用面，加上最基本的管理面。这三种协议的调用面同时也是转换和检测的基准。
+
+### 声明式适配器
+
+声明式适配器是一份 JSON 文件，放在 `AXIOM_SUPPLIER_ADAPTERS` 指的目录里。进程启动时，注册表读取目录、校验并把它编译成和内置适配器相同的接口，之后同步和调用都按同一套契约使用它。它面向自研中转站里管理接口只是路径和字段名不同、调用面仍说 OpenAI、Anthropic 等标准协议的那些。声明不是脚本：没有条件、循环、变量计算或任意 HTTP，只有固定操作的字段映射和少量开关；需要这些能力时写 Go 适配器。
+
+一份声明（`v: 1`）描述这些部分：
+
+| 部分 | 成员 | 内容 |
+|---|---|---|
+| 身份 | `kind`、`native_unit` | 稳定的小写种类，存进 `suppliers.kind`；余额的原生单位是 `quota` 或 `usd` |
+| 限速 | `buckets` | 每个接口组一个桶：按 IP 或账号、窗口、次数；必须有 `global`，操作不写桶时用它 |
+| 登录与鉴权 | `auth.fields`、`auth.header`/`auth.query`、`auth.login` | 收哪些登录字段；令牌放哪个响应头或查询参数；登录的路径、请求体模板、令牌和过期字段 |
+| 识别 | `detect` | 一个公开路径，以及只有这个系统才有的响应头、版本、代次或人机验证标志 |
+| 余额 | `account` | 余额、单位提示（或固定值）和资金来源字段 |
+| 分组、模型、价格 | `offer.groups`、`offer.models`、`offer.prices`、`offer.formats` | 分组列表与倍率、每组的模型、每百万 token 的价格表及缩放、对方格式名到规范格式名的映射 |
+| key | `keys.list`、`keys.secret`、`keys.create`、`keys.policy` | 分页清单、按对方 ID 读原文、按名字建 key、模型和到期限制 |
+| 扣费 | `charges` | 按时间窗和页码读逐笔记录，映射请求号、key、时间、金额、模型、资金来源和 token 数 |
+| 调用面 | `calls` | 支持哪些格式、能否流式、是否传递取消、对账键响应头、状态码或错误码到固定原因和范围的映射 |
+
+字段位置写成点分成员加数组下标（`data.items[0].key_id`），最多 16 步。路径模板只认操作允许的命名变量：登录用 `{email}`、`{password}`，读 key 原文用 `{ref}`，读模型用 `{group}`，分页清单用 `{page}`、`{size}`，扣费用 `{start}`、`{end}`、`{page}`、`{size}`；`?` 之前的值按路径段转义，之后按查询值转义，因此 `+`、`&`、`=`、空格和斜杠不会改变请求的资源或查询成员。金额按 JSON 里的十进制字面量读，字符串或数字都行，不经过浮点，也不接受指数；余额允许负值，扣费金额不允许。时间接受 RFC3339 或 Unix 秒。`keys.list` 和 `charges` 的路径里，`{page}` 是 1 起的页码；`charges.path` 必须带齐 `{start}`、`{end}`、`{page}`、`{size}`，`start`、`end` 是 Unix 秒。`keys.create.body` 必须恰好有一个成员的值是 `{name}`，不能带前后缀；启用 `keys.create` 时 `keys.list` 还必须能读回 `name` 和 `group`，否则建 key 的响应丢了以后，下一轮清单认领不到它，会重复建。body 的成员值都是字符串；需要布尔、数字或数组的站写 Go 适配器。
+
+**加载时校验，启动失败而不是首次调用失败**。`jsonx.UnmarshalKnown` 拒绝本版本不认识的成员；`v` 不是 1、`kind` 不合格式、没有 `global` 桶、字段路径写错、模板用了不允许的变量、路径不以单个 `/` 开头或含无效 `%` 转义、请求头名不是 HTTP token、引用了未声明的桶、错误原因/范围/执行状态不在固定表里、5xx 规则（包括只按错误码匹配、可能命中 5xx 的规则）声称“未执行”，都在这里报错。声明了 `detect.captcha` 就必须同时接受 `access_token`，否则人机验证打开时这个站无法接入。必需列表只接受 JSON 数组：`null`、对象和缺失都报“认不出”，不当成空列表；`keys.list` 声明了 `total` 时，提前出现的空页或总数不符也报错，不清空已有 key，也不推进位置。`LoadDir` 的错误带文件名；`registry.Default()` 在启动时调用它，所以目录里有一个坏文件，节点就起不来。`CheckAdapters` 随后检查数据库里仍在用的每个 `kind` 都有适配器，声明被误删也不会等到同步时才发现。未设置环境变量表示没有声明；设置了但目录读不了是错误，不当成空目录。
+
+分组没有声明格式时用 `calls.formats`；模型没有声明时用分组的格式，分组也已回落到 `calls.formats`，所以上游少给格式字段时模型仍不会没有可调用端点。价格先乘 `scale × 分组倍率`，向上取整到 10⁻¹⁵，再按平台单价上限（1000）校验；原始价可以超过上限，只要缩放后的价合法。`Offer` 的断点位置带声明指纹，声明内容变了（包括 `scale`）就丢弃旧位置、重读分组和价格，避免旧价格按新倍率解释。
+
+探测要有区分度：多个适配器都认出同一个站时，按 `kind` 排序取第一个；声明不要模仿 new-api、sub2api 的通用状态接口。
+
+声明没有刷新操作：`access_token` 由人提供，`expires_at` 到了就要求重新提供；`email`/`password` 每次打开管理会话都重新登录，受登录桶限速，生产应优先用令牌。
+
+**版本与身份**。`v` 是声明格式的版本，不是供应商系统的版本：新增成员或改变成员含义时升到 `v: 2`，旧程序拒绝而不是猜。`kind` 是供应商身份的持久键，改名等于新供应商；在同一个 `kind` 下改路径、字段和错误映射是普通的配置发布，不改已有供应商、凭证和成本历史。声明不做热加载：改文件后重启节点；滚动发布时所有核心节点必须挂同一份目录，否则旧节点会在启动检查或首次同步时拒绝新种类。
+
+**部署与移除**。目录是部署配置：只读挂载、权限只给部署账号。文件里没有账号密码（凭证仍由接入流程加密存库），但路径和鉴权头会暴露内部管理接口的形状，按内部配置保护。声明同样走统一出站客户端和声明的桶，不能借它绕过出网策略。移除一个声明：先移除使用它的供应商（或确认它已是 `removed`），再从所有节点删除文件并重启；反过来会让仍活跃的供应商找不到适配器，启动检查失败。声明本身不写数据库，删除后没有残留行；已经同步的分组、端点、成本计划和凭证仍按供应商的移除流程处理。
+
+**和给每个中转站写 Go 适配器相比**。new-api 把上游渠道做成数据行（[`model/channel.go`](https://github.com/QuantumNous/new-api/blob/e449cc700eb569cdfc2199cb73e97de46944f43c/model/channel.go#L23) 的 `BaseURL`、`Models`、`ModelMapping`、`StatusCodeMapping`、`Setting`、`ParamOverride`、`HeaderOverride`），但新增一种上游仍要实现 15 个方法的 [`relay/channel.Adaptor`](https://github.com/QuantumNous/new-api/blob/e449cc700eb569cdfc2199cb73e97de46944f43c/relay/channel/adapter.go#L18)，并在 [`constant/channel.go`](https://github.com/QuantumNous/new-api/blob/e449cc700eb569cdfc2199cb73e97de46944f43c/constant/channel.go#L3) 登记约 60 种渠道类型；渠道行描述的是“怎么把请求转给上游”，不含余额、key 和逐笔扣费这些管理操作。sub2api 的 [`Channel`](https://github.com/Wei-Shaw/sub2api/blob/a3298b46ebe239fb0720b068a1eb3383955bdac2/backend/internal/service/channel.go#L50) 行带 `ModelPricing` 和 `ModelMapping`，由 [`channel_service.go`](https://github.com/Wei-Shaw/sub2api/blob/a3298b46ebe239fb0720b068a1eb3383955bdac2/backend/internal/service/channel_service.go) 缓存价格和映射，同样没有把管理面变成配置。Axiom 的声明覆盖的是另一半：一个形状固定的管理面加共享调用协议；所以它比“每个站写一个包”少一次代码、构建和发布，但只适用于这些操作都在声明表里的站。字段一多、分页/鉴权/错误形状超出表，或者要读一个有状态的接口，就写 Go 适配器；声明在加载时就拒绝，不会半工作。（引用提交：new-api `e449cc7`，sub2api `a3298b4`，2026-10-28。）
+
+**CPA 为什么不在这一档**。CPA（CLIProxyAPI）的逐笔用量从 [`GET /v0/management/usage-queue?count=N`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/usage.go) 读取，这个接口每读一条就把记录从内存队列里拿走（路由在 [`internal/api/server_management.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/server_management.go#L93)）；记录默认只留 60 秒、最长 3600 秒，6.10 起不再内置用量统计。适配器的 `Charges` 契约要求同一时间窗可以重读、按水位推进，声明无法把“读一次就没了”的队列变成可重读的逐笔记录；它还需要一个常驻采集程序、自己的持久位置和“同一 CPA 不能挂第二个采集器”的部署约束。号池的账号健康和额度窗口也超出声明的固定操作。所以 CPA 走单独的 Go 适配器加常驻采集器（[号池](#号池)、[CPA](#cpacliproxyapi)），声明式 v1 明确不接。（引用提交：CLIProxyAPI `6e6afab`，2026-11-03。）
+
+声明式 v1 没有后台的新建、编辑、试连和停用界面，也没有“保存即生效”的运行时重载；这些需要另行设计多节点的文件分发和校验后的生效方式，见[待定问题](#待定问题)。[前端](../frontend.md)把它们列为 M1，当前以部署文件为准。
 
 ### 代码组织：适配器可以干净地移除
 
 - 每个适配器是 `suppliers` 内部的一个独立包，带着自己的测试样本（录制的真实响应）和契约测试。
 - 所有适配器在一张注册表里登记，各占一行。
 - 适配器放在 `suppliers` 的 `internal/` 下，其他模块在编译层面就无法引用，见[总体架构的「AI 好写好维护」](../architecture.md#ai-好写好维护)。
-- 移除一个适配器：删除它的目录和注册表里的那一行，不影响其他代码。声明式适配器只是一条后台数据，直接删除即可。
+- 移除一个内置适配器：删除它的目录和注册表里的那一行，不影响其他代码。声明式适配器是部署目录里的一份文件：先移除使用它的供应商，再删文件并重启；详见上文「声明式适配器」。
 - 适配器能识别对方系统的版本，按版本选择对应的接口，不靠到处写特殊判断。
 
 ### 接入方式逐级兜底
@@ -64,12 +102,19 @@
 1. **填写网址和账号**：
    - 网址和之后所有的访问，包括识别系统类型的探测请求，都走统一的出站客户端，防止借我们的服务器访问内网（见[安全的「安全基线」](../security.md#安全基线)）。
    - 核对域名，防止把账号填进仿冒站。
-   - 能用令牌就不存密码；必须存密码时加密存储。
+   - 能用令牌就不存密码；必须存密码时加密存储。名称由页面从网址生成、可改；结算币种是付款事实，仍由人选一次。
 2. **识别系统并选适配器**：new-api 有公开的状态接口，sub2api 有特征接口。
-3. **选分组**：读出分组和倍率，由人选择要使用哪些分组。
-4. **绑定 key**：须使用专用 key；上游读不出模型限制或到期信息时，要求在对方建立不限模型的专用 key 并提供可读取这些字段的管理权限，未知限制的 key 不进入新快照。M1 不自动建 key。适配器只读，key 由人在对方站点建好，Axiom 按对方的 ID 绑定（见本节的决策表）；移除供应商时 Axiom 清除自己存的密文，对方那边的 key 由人吊销，清单在审计记录里。自动建 key、移除时自动吊销，随适配器的写能力加入。
+3. **读分组、模型和价格**：同步登录后读出分组、倍率、模型和价格，算成本计划。投影自动选中有东西可卖的分组：分组下至少一个模型映射到上架目录模型、且有成本计划，就给分组起代号并置为选中。**人选过（包括取消选用）的分组保持人的选择**，不再自动改；代号在第一次选中时生成，之后不变。自动选中只发生在从未选过的分组上（`codename IS NULL`），所以人的取消不会被下一次同步推翻。
+4. **自动建 key**：适配器声明能建 key 时（new-api、sub2api），同步为每个可调用、且人没有取消的分组各建一把专用 key，不再由人去对方站点建 key、回来按 ID 绑定。
+   - **哪些分组**：分组仍在清单里；适配器说它可用我们的 key 服务（new-api 至少一个模型有调用格式和成本计划；sub2api 的分组是 active、standard 订阅、非高峰时段的 openai/anthropic 平台），或 sub2api 还没有 key、读不出模型而 key 正是读模型的前提。订阅分组、按小时计价的分组不建。分组一旦被人取消选用（有代号且 `selected=false`），不再为它新建。
+   - **建什么 key**：不限额度、不过期、不限模型。名字是 `axiom-<供应商 ID 前 8 位>-<供应商 ID 与分组 ref 的哈希前 8 位>`，23 个字符，两家的上限都放得下。名字是**标记**：建 key 的响应丢了、或提交被栅栏挡下，下一轮完整 key 清单按标记认出那把 key，接着按对方 ID 读原文，不重复建。
+   - **原文和保管**：原文由适配器按对方的 ID 读（new-api `POST /api/token/:id/key`，sub2api `GET /api/v1/keys/:id`），随后在提交事务里用主密钥封存到 `suppliers.credentials`，状态 `active`，默认并发 4、每分钟不限。明文只在读与封存之间存在，不进状态、日志或接口。模型允许清单与到期时间随下一次完整 key 清单投影；刚建的 key 按"不限"写，因为建的时候就是不限。
+   - **对方的 key 清单是唯一真相**：完整清单里没有的 key，对应凭证保留、密文不清，下一次策略投影把它设为全拒（`allowed_models` 空数组），路由因此不再使用它。同步不会自动擦除凭证，也不会为同一分组另建；由运营确认后删除或按 ID 重新绑定。这样供应商的清单若短暂漏报，不会触发不可逆的销毁或换 key；代价是上游 key 真的消失后需要人处理。清单的 `Done` 是"全读完了"，不是猜的。
+   - **失败分开记**：`not_permitted`（登录没有建或读 key 的权限，例如 new-api 个人令牌缺 `api_key:write`/`api_key:reveal`）、`group_unavailable`（账号不能用这个分组）、`refused`（对方拒绝，例如账号的 key 数量到顶）。按分组记，1 小时后重试；换登录时清空。网络错误不记组失败，任务按指数退避；建 key 和读原文都在事务外，失败不会留下半行。
+   - **手建 key 保留为例外**：`BindKey` 仍可把对方已有的一把 key 按 ID 绑到已选分组。同步下一轮按 ID 读出原文、封存并激活；它的模型允许清单要等下一次完整 key 清单，之前按"全拒"处理，避免把未知限制的 key 当成不限。它不再是接入的必经步骤。
+   - **移除**：Axiom 清掉自己存的密文，但不删除对方那边的 key；自动建的 key 名称带 `axiom-` 前缀，审计记录给出数量，运营在对方站点吊销。
 5. **确认单位余额价值**：适配器读出提示值，由负责人或运营 agent 确认；值存在本模块的 `suppliers.unit_values` 表（只追加，币种与原生单位均匹配的最新一行生效），确认之前这家供应商的端点不进路由。怎么换算成本见[计费的「供应商成本」](billing.md#供应商成本)。
-6. **生成成本计划和端点**，进入检测队列（见[端点评估](quality.md)）。
+6. **生成成本计划和端点**：端点在投影里生成；有成本计划的分组此时已被自动选中，端点进入检测队列（见[端点评估](quality.md)）。
 
 ### 调用面
 
@@ -141,13 +186,45 @@
 - **出网**：号池账号的出网代理在号池系统里配置，可以指向我们的出口节点，也可以指向外部的固定 IP 代理。我们的出口只负责 Axiom 到号池这一段。
 - **CPA 的用量**：
   - CPA 从 6.10 版起不再内置用量统计，逐笔用量只能从它的用量队列读取；
-  - 这个队列"读一条删一条"，记录只在内存里保留，默认 60 秒，最长 3600 秒，而且要先开启用量发布才有数据（CLIProxyAPI 文档，2026-10）。
-
-  所以我们的采集程序必须一直运行，把记录按我们的请求 ID 写入数据库并去重；保留时间设为最长；同一个 CPA 上不能再挂别的采集程序，否则记录会被抢走。采集中断而丢失的部分，按"只能看到余额变化"的方式对账。
+  - 这个队列"读一条删一条"，记录只在内存里保留，默认 60 秒，最长 3600 秒，而且要先开启用量发布、并且管理路由启用（或有 Home 订阅者）时队列才存在（CLIProxyAPI 文档，2026-10）。
+  - 我们的常驻采集器每 5 秒弹一批（100 条），先写 `usage_records` staging 再解析入库；同一个 CPA 上不能再挂别的采集程序或 Home 订阅者，否则记录会被抢走。采集中断而丢失的部分只能靠日志和未匹配尝试发现，不能从队列补读；具体窗口、单采集器锁和两种被否决的设计见「[CPA（CLIProxyAPI）](#cpacliproxyapi)」。
 - **部署要求**：sub2api 存储凭证时没有加密，所以号池系统部署在内网，磁盘加密，管理端口只对 Axiom 开放。
 - **管理员凭证**：权限极高，只给号池专用，权限尽量小。定期轮换；一旦泄露，立即吊销并重置号池里的账号。
 - **支出**：号池的支出（订阅费、代理、封号损失）记入计费，用于计算号池成本。
 - **预留**：自己写号池模块只作预留。它在系统里也只是一个适配器，需要时替换即可，其他部分不受影响。
+
+### CPA（CLIProxyAPI）
+
+CPA 是 Go 适配器（`internal/suppliers/internal/cpa/`）加常驻采集器（`internal/suppliers/internal/collector/`），不放进声明式 v1。事实按上游 `6e6afab99a1939525ecb6bb1f0873c8e7a9df877`（v8，2026-11-03）核对；下面每个接口都指到那个提交。
+
+**契约映射**
+
+- **识别**：`GET /` 的公开回答带 `"message":"CLI Proxy API Server"`（[`server_routes.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/server_routes.go)）。`Detect` 只读这里，不探测管理接口：管理鉴权失败五次会封地址三十分钟（[`handler.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/handler.go)），探测不能拿这个冒险。`Generation` 写 `v8`，不读只在管理回答里出现的版本头。
+- **账号**：`GET /v0/management/auth-files` 的 `files`（[`auth_files.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/auth_files.go)）。`status=error` 算失败；`active`、未 `disabled`、未 `unavailable`、`next_retry_after` 已过（或没有）才算可服务；不认识的 `status` 既不算失败也不算可服务。`Account.Balance` 是可服务账号数，`UnitHint` 是 `1`：CPA 没有现金余额，这个数只让路由的“余额大于 0”门槛和低余额告警保持意义；适配器不推导逐笔成本，成本计划留空，等管理员按已有号池规则确认基础价。页大小 500，最多 40 页；更多账号时 `Pool` 标 `Complete=false`，引擎保留上次读数，`Offer` 拒绝这一轮而不是把前缀当成全集。
+- **分组**：只有一个 `default`。CPA 的 `GET /api-keys` 是一个全局字符串列表，没有名字、分组、权限（[`config_lists.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/config_lists.go)）；按 Claude/Codex 拆组会让同一把 key 同时属于多个组，或者让没有 key 的组无法路由。一个组是这套 key 模型下唯一诚实的映射。
+- **模型**：`GET /auth-files/models?name=<name|id>` 逐个账号读（[`auth_files.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/auth_files.go)），取可服务账号的并集。只读可服务账号，是因为失效账号的模型没有账号可接；一个可服务账号都没有时保留上次的模型（`ModelsUnread`），不因一次临时故障把全部端点摘掉。一次 `Offer` 最多读 20 个账号，位置里记账号名和已读模型；读不完时下一次接着读，账号清单变了或位置读不懂就整份重来。所有模型都给 Messages、Responses、Chat 三种格式；CPA 没有每模型价格，`Cost` 留空，管理员确认基础价之前端点因成本未知不进路由。
+- **额度窗口**：号池的 `Pool` 只读 `auth-files` 里的被动快照 `quota.signals`，不依赖 `/quota/fetch`（上游只对 claude、codex、devin 写被动信号，见 [`quota_signals.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/sdk/cliproxy/auth/quota_signals.go)）。Claude 取 `Anthropic-Ratelimit-Unified-5h-Utilization`（0 到 1 的小数）和 `7d` 两项，Codex 取 `X-Codex-Primary-Used-Percent` 和 `Secondary-Used-Percent`（0 到 100）；重置时间接受 RFC3339 或 Unix 秒，`reset-after-seconds` 相对快照时间。重置已过的窗口按 0 用量；每个账号取两个窗口里更紧的剩余，再对可服务账号求平均并向下取整。没有窗口的账号不参与平均；认得的值读不懂时返回 `ErrUnrecognised`，不猜成 100% 已用。devin 等其他 provider 没有已知窗口形状，不猜。
+- **key**：`GET /api-keys` 是明文列表。`KeyState.Ref` 是 key 的 SHA-256 前 128 位（32 个十六进制字符），不是 key 本身；`KeySecret` 按 ref 再读列表取原文；`Policy` 是 `&KeyPolicy{}`（`Models` 为 nil，不限模型，无到期），不能留 nil，否则投影会把它当成全拒。CPA 没有建 key 的接口，所以适配器不实现 `KeyMaker`：人从已有 key 里选一把绑定，或先在 CPA 建好再绑。列表里没有的 key 由现有的 key 投影标为全拒，不自动擦除。
+- **调用面**：三种格式都服务；`Policy.Streams` 为真，`Cancels` 为假（没有样本证明 CPA 会在客户端断开后停止上游，按保守默认）。对账键是响应头 `X-CPA-TRACE-ID` 的最后 36 个字符（[`cpa_trace.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/logging/cpa_trace.go)），即 usage 记录的 `request_id`；不是 UUID 就不给键，不猜。`Classify` 只把固定的错误码和状态映射成 `Failure`，不带对方的消息文本。
+- **`Charges`**：适配器返回一个空的 Done 页，但引擎不会调用它。`Manager` 同时实现 `UsageQueue`，同步的 `scan` 见到这种 manager 就跳过；读一次就删的队列不能再被第二轮抢走。
+
+**采集器**
+
+CPA 的 `GET /v0/management/usage-queue?count=N` 每弹出一条就从内存队列删除（[`usage.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/usage.go)、[`queue.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/redisqueue/queue.go)）；记录默认留 60 秒、最长 3600 秒，而且只有开着用量发布、并且管理路由启用时队列才存在；Home 也会让队列开关为真，但订阅者会直接把记录拿走。记录里有 `request_id`、`timestamp`、`model`、`provider`、`auth_index`、`api_key` 和 `token_breakdown`；`api_key` 是明文，绝不能原样入库或进日志。
+
+- **部署前提**：CPA 打开 `usage-statistics-enabled`，把队列保留时间设为 3600 秒，启用管理路由并只让 Axiom 的采集器读它；不要配置 Home 或其他 `SubscribeUsage` 订阅者，因为存在订阅者时 `Enqueue` 直接把记录发给订阅者、根本不入队。CPA 的队列开关由 `hasManagementSecret || cfg.Home.Enabled` 决定（[`server.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/server.go)），所以“有管理密钥”是队列存在的前提之一。
+- **单采集器**：每个供应商用 `pg.Hold(ctx, "axiom.usage."+supplier_id, 30s)` 拿一个会话级 advisory lock，拿不到就跳过这一轮。锁不包住 HTTP 请求：一个事务里等 CPA 会把数据库连接占住；锁由连接存活看门狗续，进程死亡或连接断开自动释放。不是“同一 CPA 不能挂第二个采集器”的全部保证：别的程序或 CPA 的订阅者仍然能抢；这不是协议能阻止的，见下。
+- **先离线重放，再远端采集**：每 5 秒一个 River 周期任务（只在 River leader 上入队）。每轮先按 `usage_records` 里 `state='new'` 的行找到供应商，用注册表里同一个 `kind` 的适配器的 `ParseUsage` 离线解析并入库；不读登录、不要求供应商在线、不看 `paused`/`needs_attention`/`removed` 或鉴权退避，所以已暂存的记录不会因为供应商被移除或 CPA 暂时不可达而永远卡住。重放之后，再按注册表里声明了 `UsageQueueSource` 的适配器列出 `connecting`、`active`、`low_balance` 的供应商。每批 `count=100`、最多 20 批；拿到后**先**写 `suppliers.usage_records`，**再**解析并 `reconcile.Ingest`，最后在同一个事务里删掉已入库的行。先落库再解析，使 CPA 队列尽快空出来，也让解析失败的行留下来给人看。
+- **落库形态**：`usage_records` 只存脱敏后的 `v=1` 记录：`request_id`、`timestamp`、`model`、`alias`、`provider`、`auth_index`、`api_key_sha256`、`token_breakdown`、`failed`。`api_key` 原文、请求头、失败响应体、客户端地址都不存。`ParseUsage` 只读这份存下来的形态，所以重启后重放不需要再问 CPA，也不需要 key。CPA 的 v2 breakdown 把 5 分钟和 1 小时缓存写合在 `cache_write_tokens`，没有可靠的期限分项。这里不把它映射成任何一种缓存写：数量放进 `UnknownUsage`，`reported` 不含缓存写，因此估算过缓存写的请求不会按 5 分钟价被当作完整实际用量校正。
+- **幂等**：`usage_records` 的唯一索引是 `(supplier_id, request_id)`（`request_id` 非空时）；`charge_records` 的唯一索引是 `(supplier_id, charge_ref)`。一次弹出在崩溃后重放、或同一请求被两次写入，都只留下一条 charge；`reconcile.Ingest` 本身按 `Ref` 去重。不能解析的记录标 `rejected` 并保留，删掉就失去唯一的副本。
+- **崩溃窗口**：队列没有 ack/peek。HTTP 已经弹出、但第一批 `usage_records` 还没提交时进程崩溃，这一批不会回到队列，永久丢失；尚未弹出的记录仍在队列里（保留期内）等下一轮。这个窗口由“弹出后立刻 staging、每批 100 条、staging 三次短重试（200ms、400ms）”压到最小，但不能消掉；因此保证是“CPA 侧至多一次弹出 + 本地 staging 至少一次重放”，不是跨两个系统的 exactly-once。这个取舍必须在上线文档里写明。
+- **别人把队列读走**：CPA 没有“谁读过”的接口，队列本身也查不到；`auth_files` 的 `success`/`failed`/`recent_requests` 只是每个账号的进程内计数，不能证明逐笔记录被谁拿走。可观察的只有日志（空批、批大小骤降、`rejected`）和现有的“尝试到了宽限期还没有 charge”报告。部署上必须保证没有第二个采集器、没有 Home 订阅者；发现记录缺失时先查这两件事，不能把队列当成可回放的历史。
+- **失败与恢复**：管理 key 被拒（401/403）时采集器停这个供应商 30 分钟，并把 `blocked_until` 写进 `rate_buckets` 的 `usage-auth:<登录版本>` 桶；所有节点和进程重启后都读同一个桶，不是只记在当前进程里。登录行版本变了（人换了 key）就换到新桶、旧封锁自然失效，不会拖住新 key。网络错误、5xx、`Blocked` 都只让这一轮结束，下一轮再试；`ErrBucketsFull` 不算失败。staging 的数据库错误重试三次后让这一轮失败，记录只在这几秒的内存里；数据库恢复后下一轮把上一轮留在 `usage_records` 的行和新批次一起 ingest。采集器不写供应商状态：鉴权被拒由同步轮次按现有规则置 `needs_attention`，采集器自己只退避。
+- **成本与资金来源**：适配器不提供成本计划，CPA 没有每模型价格；没有管理员确认的基础价时 `Cost` 为 nil，端点因成本未知不进路由，确认后由现有的确认价乘分组倍率规则生成计划。每条 charge 的 `amount_native` 是 `0`、`funding=wallet`：CPA 队列没有逐笔金额，订阅费、代理和封号损失按[计费](billing.md#供应商成本)的“实际支出单独记账”处理；这个 `0` 是“没有逐笔钱包扣款”的记录，不是售价或成本计划。不用 `FundingOther`：那会让 `reconcile.Ingest` 把整家供应商暂停，而 CPA 的调用并不从别的钱包扣。逐笔用量仍按 token 记录；缓存写期限不明的部分留在 `UnknownUsage`，不参与完整校正。
+- **对账**：只有带 `X-CPA-TRACE-ID` 的调用才有 `charge_ref`；没有这个响应头（或它最后不是 UUID）时记录仍会入库（`charge_ref` 仍是 CPA 的 `request_id`），但没有能和尝试对上的键，按现有的宽限期报告为未匹配尝试。`request_id` 是 CPA 生成的 UUIDv7，不能由 Axiom 指定；用响应头关联，不用我们自己的 request id 猜。
+- **比较过的做法**：直接 `DrainUsage` → `reconcile.Ingest` 一个事务，代码最少，但数据库慢或崩溃时刚弹出的整批直接没了，也没有地方查解析失败；本地 spool 文件能扛数据库故障，但多一份节点本地状态、要自己 fsync/清理、跨节点看不见，且崩溃后还要和数据库对账；这里选 staging 表：多一张小表和一次 DELETE，换来“弹出后马上有持久副本、重放幂等、坏记录可查”，代价是崩溃窗口仍在，只是从“整轮”缩到“一批”。
+
+**限制**：CPA 的管理 key 是明文 bearer，适配器只在内存里持有；`api-keys` 列表没有分页，key 很多时一次读完整列表；不实现 `KeyMaker`，建 key 仍在 CPA 侧；不读 `cost_details`（CPA 默认不填金额，且不同 provider 的币种/单位不一致；队列没有可推导的逐笔金额）；不依赖 `/quota/fetch` 的插件，也不解析 devin 的窗口。
 
 ## 决策与理由
 
@@ -159,7 +236,10 @@
 | 凭证并发与有限账号 RPM 采用后台静态份额，按节点 ID 分余数，额度小于人数时允许 0 份额 | 开发者按 #313 E3-3 任务卡及[负责人委托](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)确定。对比共享 Redis 槽位（容量利用率高，但每次调用增加共享计数、释放和故障清理）与仅按本地 N 等分（调用便宜，但扩容交接可超额），选完整成员列表确认，旧占用先排空再确认，新节点等待所有旧成员，保持存活核心的准入总额；代价是扩容短期欠用、低额度偏向排序靠前的节点。OpenRouter [Limits](https://github.com/OpenRouterTeam/docs/blob/main/api_reference/limits.mdx)（2026-10-28）强调增加 key 不增加全局额度；参考 sub2api 的共享槽位，但沿用 Axiom 已定的后台份额以守住调用预算。心跳失联不能证明上游孤儿请求已经停止，故不将失联回收描述为上游执行总量的保证 |
 | 适配器分成管理面和调用面 | 对方运行的系统和支持的协议是两件独立的事；分开后可以自由组合，不用为每种组合重写 |
 | 三档适配器 | 约一成的自研中转站大多只是接口路径和字段名不同，用配置就能接；配置也做不到的才交给浏览器自动化 |
-| 每个适配器独立成包，移除只删目录和一行登记 | 负责人要求自研中转站的适配以后可以干净移除，避免代码冗杂 |
+| 声明式适配器是启动时读取的部署文件，按 `v` 校验，不在后台存一条可变配置 | 声明是部署配置：坏路径、坏模板、未声明的桶和不可能的错误规则在启动时报错，节点起不来，而不是第一次同步才失败；同一份文件在每个核心节点上，滚动发布时行为一致。后台保存即生效需要 API/UI、多节点分发、并发编辑和回滚，且一次坏保存会让正在同步的供应商停摆；v1 不做。代价是改声明要重启，运营要能访问部署目录。否决：数据库里存声明并由各节点轮询（省重启，但多一套生效、版本和回滚机制，坏数据也会先跑起来）；把声明编译进镜像（每加一个站都要构建发布，回到写 Go 的老路）。`v` 只在成员含义变化时升，`kind` 是持久身份，改名等于新供应商。依据负责人 2026-10-28 的委托「遇到问题自己解决问题和判断最优而不是问我。」（[原话](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)），数据格式仍需独立深审 |
+| 声明式 v1 只覆盖可重读、形状固定的管理面；CPA 另写 Go 适配器和常驻采集器 | CPA 的用量队列读一条删一条、只在内存里保留（[`usage.go`](https://github.com/router-for-me/CLIProxyAPI/blob/6e6afab99a1939525ecb6bb1f0873c8e7a9df877/internal/api/handlers/management/usage.go)），而 `Charges` 要求同一时间窗可重读；号池还需要账号健康和额度窗口。硬把队列塞进声明会丢掉“可重读”这个契约前提，采集中断就永久丢记录。否决：给声明加一个“队列消费者”操作（把常驻状态、去重和单采集器约束藏进配置，比 Go 适配器更难审查）；让 CPA 只报余额变化（丢掉逐笔成本，对账无法按请求归属）。CPA 适配器和采集器已实现，接口映射、staging 与失败恢复见「[CPA（CLIProxyAPI）](#cpacliproxyapi)」 |
+| CPA 的成本计划保持未知，等管理员确认基础价 | CPA 不提供每模型价格；订阅费、代理和封号损失无法按调用归因，按[计费](billing.md#供应商成本)的已有规则，无法推导时保持成本未知。适配器给零成本会把 `cost_plus` 的售价也变成零，是未获批准的计费规则；把订阅费摊到每次调用则制造没有来源的单价。 |
+| 每个适配器独立成包，移除只删目录和一行登记 | 负责人要求自研中转站的适配以后可以干净移除，避免代码冗杂；声明式是删部署文件，见「声明式适配器」 |
 | 接入方式逐级兜底 | 来自团队成员的实践经验：多数站点用接口即可，遇到人机验证由人登录一次，剩下的交给浏览器自动化 |
 | 同步按供应商限速，先用便宜的接口 | 普通用户账号被限流或封号，会连带损失预付余额 |
 | 号池用自建的现成系统，以管理员身份接入，按分组路由 | 负责人决定。订阅账号的登录、刷新和风控对抗由这些系统的社区持续维护；账号之间的调度交给它们，我们不重复做 |
@@ -167,8 +247,8 @@
 | 官方 API 只做主流基础适配，暂不接入 | 负责人决定。三种主流协议本来就是转换和检测的基准 |
 | 供应商别名和待映射队列归本模块，不进目录 | 上游名字只在该供应商内有意义，全局共用会把请求映射到错误的模型；目录在模块依赖里位于本模块之下，不能引用供应商 |
 | 刷新令牌时比较后再写 | 并发刷新互相覆盖会让账号掉线；sub2api 采用同样做法（sub2api 源码，2026-10） |
-| M1 的接入向导：探测 → 创建 → 选分组 → 绑定上游已有的 key → 确认单位余额价值；Axiom 不在对方站点建 key | 适配器现在只读，写能力以后用单独的可选接口加入（[suppliers 的「适配器」](../../internal/suppliers/README.md#适配器)），所以 key 由人在对方建好，Axiom 按对方的 ID 绑定，文本由同步读取并封存。创建立即返回 `connecting`，登录和读取在同步里做、页面轮询：对方的登录可能要数秒，前端的请求 10 秒就超时。否决的做法：请求里同步登录：慢，失败原因混进请求错误；现在就自动建 key：适配器没有写能力 |
-| 移除当场完成：状态直接是 `removed`，登录行删除，所有凭证的密文清空、凭证标为 `erased` 而行保留；不等在途，也不最后再读一次扣费记录 | 密文留得越久越是风险；在途的尝试手里已有解密后的 key（`Reload` 时读进内存），结算写成本要用的外键指向凭证行，行在就够。扣费记录每 2 分钟读一次，移除可能丢掉最后不到 2 分钟的记录；逐条对账会报告缺失的扣费，按 key 按天总数的补偿尚未实现（见[计费的对账现状](billing.md#供应商成本)）。Axiom 在 M1 不写对方，所以对方那边的 key 由人吊销，清单就是已清除（`erased`）的凭证行上的 `upstream_key_ref`，审计记录只记个数（`keys_to_revoke_count`；审计详情有 8192 字节的上限，不列 ID）。参考：new-api 删渠道是立即硬删整行（`model/channel.go`），sub2api 删账号是立即删除并清调度快照（`backend/internal/repository/account_repo.go`，表带软删除），两家都不等在途、不做最后读取；我们介于两者之间，比 sub2api 严（不留凭证），比 new-api 保住成本历史。否决的做法：分步移除（等在途、读尽记录、再删密文）：多一个持久化的状态机，上游不可达时会延长密文留存；硬删凭证行：成本记录指向它的外键断掉。以后要加最后一次读取，加在擦除之前，不用撤回 `erased` 状态。 |
+| 接入向导只填网址、账号和单位价值：同步读分组、价格和模型，自动选中从未选过且有可卖端点的分组，为每个可调用分组建一把带标记名的 key、读出原文并封存；请人建 key 降为例外 | [产品](../product.md)要求"添加供应商时只需人工填写网址、账号，并确认 1 单位余额值多少钱"。new-api 与 sub2api 都允许普通账号用登录令牌建 key：[new-api `AddToken`](https://github.com/QuantumNous/new-api/blob/e449cc700eb569cdfc2199cb73e97de46944f43c/controller/token.go#L299)、[sub2api `APIKeyService.Create`](https://github.com/Wei-Shaw/sub2api/blob/a3298b46ebe239fb0720b068a1eb3383955bdac2/backend/internal/service/api_key_service.go#L494)（2026-10-28）。new-api 的建 key 响应只回 `success`，sub2api 回 key 的 ID；所以两边都用确定性名字当标记，sub2api 直接用响应里的 ID，new-api 在下一轮完整清单按名字和分组认领，响应丢失也不重复建；读原文分别走 [`POST /api/token/:id/key`](https://github.com/QuantumNous/new-api/blob/e449cc700eb569cdfc2199cb73e97de46944f43c/controller/token.go#L190)（作用域 `api_key:reveal`）和 [`GET /api/v1/keys/:id`](https://github.com/Wei-Shaw/sub2api/blob/a3298b46ebe239fb0720b068a1eb3383955bdac2/backend/internal/handler/api_key_handler.go#L152)，建 key 需要 `api_key:write`（[作用域表](https://github.com/QuantumNous/new-api/blob/e449cc700eb569cdfc2199cb73e97de46944f43c/middleware/access_token_routes.go#L214)）。只写 key、不写别的：写面最小，建 key 是接供应商的自然部分，删除仍留给人。自动选中只碰 `codename IS NULL` 的分组，人的选择（包括取消）不被同步推翻；每组的状态放 `supplier_groups` 的 `key_eligible`/`key_error`/`key_retry_at` 列（迁移 `00026`），不进严格解码的同步状态，滚动发布时旧节点不读也不写。失败按组记、1 小时后重试，网络错误交给任务退避；换登录清空。完整清单缺失的 key 只让策略全拒并保留凭证，不自动擦除或重建；擦除改变凭证销毁规则，需负责人明确批准后才能加入。否决：继续让人建 key（卡片要解决的痛点）；给所有分组建 key（订阅组不能用、浪费额度）；只信创建响应的 ID（new-api 不返回，丢失就重复）；把状态放进 `State`（旧节点严格解码拒绝）。此数据模型决定依据负责人 2026-10-28 的委托「遇到问题自己解决问题和判断最优而不是问我。」（[原话](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)） |
+| 移除当场完成：状态直接是 `removed`，登录行删除，所有凭证的密文清空、凭证标为 `erased` 而行保留；不等在途，也不最后再读一次扣费记录 | 密文留得越久越是风险；在途的尝试手里已有解密后的 key（`Reload` 时读进内存），结算写成本要用的外键指向凭证行，行在就够。扣费记录每 2 分钟读一次，移除可能丢掉最后不到 2 分钟的记录；逐条对账会报告缺失的扣费，按 key 按天总数的补偿尚未实现（见[计费的对账现状](billing.md#供应商成本)）。Axiom 不删除对方那边的 key（包括自动建的），所以 key 由人吊销，清单就是已清除（`erased`）的凭证行上的 `upstream_key_ref`，审计记录只记个数（`keys_to_revoke_count`；审计详情有 8192 字节的上限，不列 ID）。参考：new-api 删渠道是立即硬删整行（`model/channel.go`），sub2api 删账号是立即删除并清调度快照（`backend/internal/repository/account_repo.go`，表带软删除），两家都不等在途、不做最后读取；我们介于两者之间，比 sub2api 严（不留凭证），比 new-api 保住成本历史。否决的做法：分步移除（等在途、读尽记录、再删密文）：多一个持久化的状态机，上游不可达时会延长密文留存；硬删凭证行：成本记录指向它的外键断掉。以后要加最后一次读取，加在擦除之前，不用撤回 `erased` 状态。 |
 | 供应商的地址和账号创建后不改，换凭证是单独的操作，移除也是 | 地址不变，旧凭证就送不到新主机（表的列级授权已如此）；换凭证、移除是高风险操作（[运营](operations.md#风险分级与审批)），单列出来才能单独审批、审计。否决的做法：一个「修改供应商」入口：审批策略分不开 |
 | 换登录就唤醒同步，不另做「恢复」操作 | 停在「需处理」是登录不能用了，换上登录就说明可以再试；再要人点一次「恢复」，两步里漏一步供应商就一直停着，而它看起来只是「需处理」。状态复位（失败清零，已完成的清单和扣费位置保留，未完成的清单位置作废）、清租约、加代次都在换登录的同一个事务里，要么整个生效要么不生效，握着旧登录的节点写不进新状态。否决的做法：单独的恢复操作：要同时改 `suppliers.status` 和引擎的状态，多做一个人会忘的步骤；自动定时重试「需处理」的供应商：对方的封禁不是重试能解决的，只会白费请求 |
 | 待映射是独立的队列，映射建的是供应商别名（可限定到一个分组） | 对不上的名字不生成端点，不进路由，在队列里一个个处理；供应商范围别名保持不变；分组别名用追加修订纠错，当前投影取最新修订，保留旧端点和成本。否决的做法：直接改端点的模型：同一个写法在别的中转站可能是别的模型 |
@@ -182,4 +262,4 @@
 
 ## 待定问题
 
-- 暂无
+- 声明式的后台新建、编辑、试连和停用界面尚未实现；v1 只支持部署目录里的文件。要加后台编辑，先决定“保存即生效”还是“保存后重启”、多节点的文件分发和坏声明的回滚，不能只在数据库里存一份而各节点读不到。

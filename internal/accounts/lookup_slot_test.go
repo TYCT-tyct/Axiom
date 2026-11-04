@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
-	"time"
 
 	"axiom/internal/accounts"
 	"axiom/internal/platform/pg"
@@ -64,6 +63,7 @@ func TestLookupHoldsOneSlotUntilItEnds(t *testing.T) {
 	if !s.GatesLookups() {
 		t.Error("a service given a slot does not say its lookups are gated")
 	}
+	joins := observeLookupJoins(s)
 	admin, release := lockTable(t, database, "accounts.api_keys")
 	first, leave := context.WithCancel(t.Context())
 	results := make(chan error, 6)
@@ -74,11 +74,12 @@ func TestLookupHoldsOneSlotUntilItEnds(t *testing.T) {
 		}()
 	}
 	authenticate(first)
+	awaitJoins(t, joins, 1)
 	awaitLookup(t, admin)
 	for range 5 {
 		authenticate(t.Context())
 	}
-	time.Sleep(100 * time.Millisecond) // time for the others to join the lookup
+	awaitJoins(t, joins, 5)
 	leave()
 	if err := <-results; !errors.Is(err, context.Canceled) {
 		t.Errorf("the request that left: %v", err)

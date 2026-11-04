@@ -18,6 +18,7 @@ import (
 )
 
 func TestCallChargeDetailsAcrossAPIs(t *testing.T) {
+	t.Parallel()
 	w := newCallWorld(t)
 	w.price()
 	n := w.start()

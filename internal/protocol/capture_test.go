@@ -10,6 +10,7 @@ import (
 // TestCaptureKeepsTheAnswer: a relay given a capture keeps the upstream's content, unquoted and decoded, up to the
 // bound; a relay given none keeps nothing, as every gateway call does.
 func TestCaptureKeepsTheAnswer(t *testing.T) {
+	t.Parallel()
 	content := chatRole + chatHead + `[{"index":0,"delta":{"content":"Anthropic \u00e9"},"finish_reason":null}]}` + "\n\n" + chatStop + chatDone
 	for name, tc := range map[string]struct {
 		stream string

@@ -537,6 +537,18 @@ func (q *Queries) MemberRoles(ctx context.Context, db DBTX, arg MemberRolesParam
 	return items, nil
 }
 
+const modelPricesPublicReady = `-- name: ModelPricesPublicReady :one
+SELECT coalesce((SELECT enabled FROM platform.model_prices_public_readiness WHERE id), false)::boolean AS ready
+`
+
+// No row means no new node has declared support yet, so the anonymous projection stays public.
+func (q *Queries) ModelPricesPublicReady(ctx context.Context, db DBTX) (bool, error) {
+	row := db.QueryRow(ctx, modelPricesPublicReady)
+	var ready bool
+	err := row.Scan(&ready)
+	return ready, err
+}
+
 const pendingSession = `-- name: PendingSession :many
 SELECT id, csrf_token, factor_version, mfa_attempts FROM accounts.sessions
 WHERE token_hash = $1 AND level = 'pending_mfa' AND revoked_at IS NULL AND expires_at > now()
@@ -558,6 +570,48 @@ func (q *Queries) PendingSession(ctx context.Context, db DBTX, tokenHash []byte)
 	var items []PendingSessionRow
 	for rows.Next() {
 		var i PendingSessionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CsrfToken,
+			&i.FactorVersion,
+			&i.MfaAttempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pendingSessionByID = `-- name: PendingSessionByID :many
+SELECT id, csrf_token, factor_version, mfa_attempts FROM accounts.sessions
+WHERE id = $1 AND user_id = $2 AND level = 'pending_mfa' AND revoked_at IS NULL AND expires_at > now()
+`
+
+type PendingSessionByIDParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+type PendingSessionByIDRow struct {
+	ID            uuid.UUID
+	CsrfToken     string
+	FactorVersion int64
+	MfaAttempts   int32
+}
+
+func (q *Queries) PendingSessionByID(ctx context.Context, db DBTX, arg PendingSessionByIDParams) ([]PendingSessionByIDRow, error) {
+	rows, err := db.Query(ctx, pendingSessionByID, arg.ID, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PendingSessionByIDRow
+	for rows.Next() {
+		var i PendingSessionByIDRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.CsrfToken,
@@ -624,6 +678,25 @@ func (q *Queries) ReplaceTOTP(ctx context.Context, db DBTX, arg ReplaceTOTPParam
 		arg.ID,
 	)
 	return err
+}
+
+const reserveMFAAttempt = `-- name: ReserveMFAAttempt :execrows
+UPDATE accounts.sessions SET mfa_attempts = mfa_attempts + 1
+WHERE id = $1 AND mfa_attempts < $2
+`
+
+type ReserveMFAAttemptParams struct {
+	ID       uuid.UUID
+	Attempts int32
+}
+
+// One assertion's attempt, reserved before verification so concurrent finishes cannot pass the budget.
+func (q *Queries) ReserveMFAAttempt(ctx context.Context, db DBTX, arg ReserveMFAAttemptParams) (int64, error) {
+	result, err := db.Exec(ctx, reserveMFAAttempt, arg.ID, arg.Attempts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const revokeDeviceSession = `-- name: RevokeDeviceSession :execrows

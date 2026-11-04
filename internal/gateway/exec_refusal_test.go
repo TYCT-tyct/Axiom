@@ -22,6 +22,7 @@ type streamFailureCase struct {
 
 // The same terminal failure retains its usage and meaning across every supported relay path.
 func TestStreamFailureMeaningAndUsage(t *testing.T) {
+	t.Parallel()
 	paths := []struct{ client, upstream protocol.Format }{
 		{protocol.Messages, protocol.Messages},
 		{protocol.Responses, protocol.Responses},
@@ -190,6 +191,7 @@ func (c streamFailureCase) checkContent(t *testing.T, h *harness) {
 }
 
 func TestStreamRefusalMatchesHTTP400(t *testing.T) {
+	t.Parallel()
 	for _, f := range []protocol.Format{protocol.Chat, protocol.Messages, protocol.Responses} {
 		for _, stream := range []bool{false, true} {
 			run(t, func(t *testing.T, ctx context.Context) {

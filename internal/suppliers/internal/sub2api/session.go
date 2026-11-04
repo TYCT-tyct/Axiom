@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"axiom/internal/platform/jsonx"
@@ -213,7 +214,7 @@ func (s *session) authed(ctx context.Context, r adapter.Request) (adapter.Respon
 		return adapter.Response{}, err
 	}
 	for attempt := 0; ; attempt++ {
-		r.Header = http.Header{"Authorization": {"Bearer " + s.login.Access.Reveal()}}
+		r.Header = authedHeader(r.Header, s.login.Access.Reveal())
 		resp, err := s.c.Do(ctx, r)
 		if err != nil {
 			return adapter.Response{}, fmt.Errorf("sub2api: %s %s: %w", r.Method, r.Path, err)
@@ -229,6 +230,21 @@ func (s *session) authed(ctx context.Context, r adapter.Request) (adapter.Respon
 			return resp, nil
 		}
 	}
+}
+
+// authedHeader adds the login's bearer token to a request's headers. A caller may add headers of its own (an idempotency
+// key, say); the login's own header is the only one it may not set.
+func authedHeader(caller http.Header, token string) http.Header {
+	header := http.Header{"Authorization": {"Bearer " + token}}
+	for name, values := range caller {
+		if strings.EqualFold(name, "Authorization") {
+			continue
+		}
+		for _, v := range values {
+			header.Add(name, v)
+		}
+	}
+	return header
 }
 
 // afterRefusal handles a 401 on an authenticated call: an expired token is renewed (once per call), anything else

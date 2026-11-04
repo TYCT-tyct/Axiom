@@ -66,6 +66,7 @@ func serverHarness(t *testing.T, ctx context.Context, searcher websearch.Searche
 
 //nolint:cyclop,gocognit // one assertion per hop of the loop
 func TestServerLoopSearchesAndAnswersInOneStream(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{
 			{URL: "https://example.com/one", Title: "Example One", Content: "The first result."},
@@ -119,6 +120,7 @@ func TestServerLoopSearchesAndAnswersInOneStream(t *testing.T) {
 }
 
 func TestServerLoopTwoSteps(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		h := serverHarness(t, ctx, searcher,
@@ -140,6 +142,7 @@ func TestServerLoopTwoSteps(t *testing.T) {
 }
 
 func TestServerLoopStepCapDropsTheFunction(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		h := newHarness(t, ctx, options{
@@ -162,6 +165,7 @@ func TestServerLoopStepCapDropsTheFunction(t *testing.T) {
 }
 
 func TestServerLoopBackendFailureWaivesModelUsage(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{err: errors.New("backend down")}
 		h := serverHarness(t, ctx, searcher, serve(beat{data: chatToolCall}))
@@ -183,6 +187,7 @@ func TestServerLoopBackendFailureWaivesModelUsage(t *testing.T) {
 }
 
 func TestServerLoopUpstreamFailureIsUpstreamError(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		h := serverHarness(t, ctx, searcher, serve(beat{data: chatToolCall}), failure(routing.ScopeEndpoint, false))
@@ -201,6 +206,7 @@ func TestServerLoopUpstreamFailureIsUpstreamError(t *testing.T) {
 }
 
 func TestServerLoopClientLeavesDuringSearch(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		started, stopped := make(chan struct{}), make(chan struct{})
 		searcher := &blockingSearcher{started: started, stopped: stopped}
@@ -233,6 +239,7 @@ func (s *blockingSearcher) Search(ctx context.Context, _ websearch.Query) ([]web
 }
 
 func TestServerLoopAggregateCarriesTheFinalReply(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		body := strings.Replace(strings.Replace(searchTool, `"stream":true`, `"stream":false`, 1),
@@ -264,6 +271,7 @@ func TestServerLoopAggregateCarriesTheFinalReply(t *testing.T) {
 }
 
 func TestServerToolNeedsABackend(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e18)
 	body := `{"model":"acme/beta","tools":[{"type":"openrouter:web_search"}],"messages":[{"role":"user","content":"hello"}]}`
@@ -284,6 +292,7 @@ func TestServerToolNeedsABackend(t *testing.T) {
 // TestServerToolConflicts: the loop runs alone. The web plugin would be a second search path, and the provider's code
 // execution would run again on every sampling while the quote counts its uses once.
 func TestServerToolConflicts(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e18)
 	for _, tc := range []struct{ path, body, want string }{
@@ -308,6 +317,7 @@ func TestServerToolConflicts(t *testing.T) {
 
 //nolint:cyclop // native, refused-native and loop decisions in one fixture
 func TestServerToolNativeMapping(t *testing.T) {
+	t.Parallel()
 	f := newRouteFixture(t)
 	snap, err := f.cat.Current()
 	if err != nil {
@@ -352,6 +362,7 @@ func TestServerToolNativeMapping(t *testing.T) {
 }
 
 func TestServerToolNameCollision(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e18)
 	body := `{"model":"acme/beta","tools":[{"type":"function","function":{"name":"openrouter_web_search"}},{"type":"openrouter:web_search"}],"messages":[{"role":"user","content":"hello"}]}`
@@ -365,6 +376,7 @@ func TestServerToolNameCollision(t *testing.T) {
 // keep a new search running after the client leaves. The endpoint's already-sent sampling is read for its usage, but
 // the search follows the client and no next hop is prepared.
 func TestServerLoopClientLeaveStopsADetachedEndpoint(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		started, stopped := make(chan struct{}), make(chan struct{})
 		searcher := &blockingSearcher{started: started, stopped: stopped}
@@ -397,6 +409,7 @@ func httptestRequest(t *testing.T, h *harness, policy suppliers.CallPolicy) *htt
 // TestServerLoopEmptyContinuationDoesNotFallBack: an empty 200 on the hop after a search ends the loop with the upstream
 // error; another entry would run the search again and would show a second response to a client promised one stream.
 func TestServerLoopEmptyContinuationDoesNotFallBack(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		upstream := protocol.Chat
@@ -423,6 +436,7 @@ func TestServerLoopEmptyContinuationDoesNotFallBack(t *testing.T) {
 // TestServerLoopConsumesOpenRouterControls: max_tool_calls is OpenRouter's, not a field of the Chat or Messages
 // upstream; after the step cap a forced choice has no tool left to force and must not reach the next hop either.
 func TestServerLoopConsumesOpenRouterControls(t *testing.T) {
+	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
 		searcher := &recordingSearcher{results: []websearch.Result{{URL: "https://example.com", Title: "E", Content: "R"}}}
 		request := strings.Replace(searchTool, `"messages"`, `"max_tool_calls":3,"tool_choice":"required","messages"`, 1)
@@ -457,6 +471,7 @@ func TestServerLoopConsumesOpenRouterControls(t *testing.T) {
 // TestServerLoopRoutesWithoutTheNativeSearchCapability: the loop runs ordinary tools through the external backend, so an
 // endpoint whose model has no native web search must stay in the route. Only the native choice adds WebSearch.
 func TestServerLoopRoutesWithoutTheNativeSearchCapability(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, func(o *rigOptions) {
 		o.search = &recordingSearcher{}
 		o.price = `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"},"service_tiers":{"priority":{"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","web_search":"0.01"}}}}`

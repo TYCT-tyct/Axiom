@@ -109,6 +109,7 @@ func readCostBasis(t *testing.T, r *rig, id uuid.UUID) (c costBasis) {
 }
 
 func TestExchangeReservationReachesTheActualCostAndProfit(t *testing.T) {
+	t.Parallel()
 	r, _ := costedRig(t)
 	e := r.endpoints["alpha-1"]
 	payInCNY(t, r)
@@ -157,6 +158,7 @@ func TestExchangeReservationReachesTheActualCostAndProfit(t *testing.T) {
 }
 
 func TestMissingExchangeMakesGatewayProfitUnknown(t *testing.T) {
+	t.Parallel()
 	r, _ := costedRig(t)
 	payInCNY(t, r)
 	a, err := r.suppliers.Acquire(uuid.UUID(r.endpoints["alpha-1"].ID))
@@ -180,6 +182,7 @@ func TestMissingExchangeMakesGatewayProfitUnknown(t *testing.T) {
 // A cost the usage did not fully support is an estimate, not a known cost, whatever it converted to: the call's profit
 // is unknown, as it is for a missing rate. A cost from reported usage has one (the test above).
 func TestEstimatedUsageMakesGatewayProfitUnknown(t *testing.T) {
+	t.Parallel()
 	smp, _ := sample(t, protocol.Messages)
 	start := strings.Replace(supplierStart(false), `{"input_tokens":`+strconv.Itoa(supplierInput)+`}`, `{}`, 1)
 	for name, tc := range map[string]struct {
@@ -190,6 +193,7 @@ func TestEstimatedUsageMakesGatewayProfitUnknown(t *testing.T) {
 		"no usage reported":        {serve(beat{data: start + events(smp, evBlock) + events(smp, evHello)}), "no_usage"},
 	} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			r, receipt := costedRig(t)
 			up := withCosts(r, r.billing, r.suppliers)
 			up.setReceipt(receipt)
@@ -210,6 +214,7 @@ func TestEstimatedUsageMakesGatewayProfitUnknown(t *testing.T) {
 // The fallback after a failed first attempt is costed with the rate the request reserved, though a new one was
 // published between the two attempts.
 func TestFallbackAttemptKeepsTheReservedRate(t *testing.T) {
+	t.Parallel()
 	r := newRig(t, func(o *rigOptions) { o.suppliers = true })
 	_, endpoint := r.seedSupplierCost()
 	payInCNY(t, r)

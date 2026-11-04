@@ -9,6 +9,7 @@ import (
 
 // The request writer already reserves the encoded identifier's room; neither JSON layer needs its own allocation.
 func TestMetadataUserIDAllocs(t *testing.T) {
+	t.Parallel()
 	var funcs []alloctest.Function
 	for _, value := range []string{"", "plain", "a\"b\\c\x00\n\t", "设备"} {
 		w := Rewrites{Device: value, Identity: func(string) string { return value }}.withDefaults()

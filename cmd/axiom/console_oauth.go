@@ -118,7 +118,7 @@ func (c consoleAPI) FinishPasskeySignIn(ctx context.Context, request consoleapi.
 // BeginPasskeyMfa starts the passkey factor of a pending session.
 func (c consoleAPI) BeginPasskeyMfa(ctx context.Context, _ consoleapi.BeginPasskeyMfaRequestObject) (consoleapi.BeginPasskeyMfaResponseObject, error) {
 	cl := callOf(ctx)
-	challenge, err := c.accounts.BeginPasskeyMFA(ctx, cl.r, cl.principal)
+	challenge, err := c.accounts.BeginPasskeyMFA(ctx, cl.r, cl.principal, cl.ip)
 	if err != nil {
 		return nil, err
 	}

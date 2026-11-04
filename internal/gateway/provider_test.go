@@ -413,6 +413,7 @@ func TestProviderRefusedMembersReserveNothing(t *testing.T) {
 // what that check accepted. The bytes a refused price allocates are measured in a child process, where no other
 // goroutine of this test binary adds to the process's count: a million-digit integer would be hundreds of kilobytes.
 func TestPriceParsingIsBounded(t *testing.T) {
+	t.Parallel()
 	huge := []string{"1e1000000", "1e-1000000", "1e999", "1e-999", "0.1e999999999"}
 	t.Run("bounds", func(t *testing.T) { checkPriceBounds(t, huge) })
 	t.Run("allocations", func(t *testing.T) { checkPriceAllocations(t, huge) })

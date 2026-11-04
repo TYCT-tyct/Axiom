@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { type Browser, devices, expect, type Locator, type Page, test } from "@playwright/test";
-import { median, scaledLcp } from "../scripts/vitals.ts";
+import { bracketed, median, scaledLcp } from "../scripts/vitals.ts";
 import { mockAdmin } from "./admin-api.ts";
 import { adminSuite } from "./admin-scenes.ts";
 import { adminUrl } from "./apps.ts";
@@ -18,8 +18,8 @@ import { words } from "./words.ts";
 // scrolled. Each number is measured in the browser by the web-vitals library (the list's frames by requestAnimationFrame
 // and the long-task observer), written to the report (each test's annotations, which Playwright's reporters list), and compared
 // with the budget (below); a page over its ceiling fails the run. The numbers are of the server in this run, so a slower CI
-// host gives larger ones: the ceilings leave room for that, and the measurements are the median of three pairs of loads
-// (LCP) or the worst of the operation (INP), as the document states.
+// host gives larger ones: the ceilings leave room for that, and the measurements are the median of three page loads,
+// each between two reference loads (LCP), or the worst of the operation (INP), as the document states.
 
 // target is the budget of the document; ceiling is what fails the run. Where the pages do not meet a target yet, the
 // ceiling is the first measurement with room for a slower host (docs/frontend.md「实测」), so the gate stops a page from
@@ -46,12 +46,11 @@ const desktop = { rtt: 40, down: 10 * 1024 * 0.9 * 128, up: 10 * 1024 * 0.9 * 12
 type Profile = typeof phone;
 
 // Every number here is a timing of this host, and the vitals job shares its host with the other jobs of its train and of
-// every pull request building beside it. Each page is therefore measured in a pair: the console overview, the lightest
-// page with the same shell and a table of mocked data, first, then the page, each in a fresh context with the same
-// throttle. The pair is loaded three times; the page's LCP is scaled to the overview's LCP of the same pair on the
-// 2026-10-30 run the ceilings came from, and the median of the three pairs drops the pair a burst landed in
-// (docs/frontend.md「实测」). A burst stretches a whole pair, not one side of it, and contention can only delay a load,
-// never hurry one.
+// every pull request building beside it. Each page load is therefore measured between two loads of the console overview,
+// the lightest page with the same shell and a table of mocked data, each in a fresh context with the same throttle. The
+// page's LCP is scaled to the mean of the two reference loads around it on the 2026-10-30 run the ceilings came from, and
+// the median of the three scaled loads drops the one a burst landed in (docs/frontend.md「实测」). A burst stretches a
+// whole load, not one side of it, and contention can only delay a load, never hurry one.
 const reference = { phone: 3496, desktop: 948 } as Record<"phone" | "desktop", number>;
 
 // web-vitals' IIFE build, which a page gets before its own scripts so it sees the whole load.
@@ -171,9 +170,9 @@ async function measureReference(
   record(`CLS ${label}`, Math.max(...loads.map((l) => l.CLS ?? 0)), budget.cls);
 }
 
-// measurePage loads the page in three pairs, each a reference load and then the page, and gates the median of the pairs'
-// scaled LCP. The reference is read beside the page, so a host that is slow for one is slow for both, and a burst that
-// lands in one pair leaves the other two.
+// measurePage loads the page three times, each between two reference loads, and gates the median of the scaled LCPs.
+// The reference is read beside the page, so a host that is slow for one is slow for both, and the mean of the two
+// brackets follows a load that rises through the sample instead of charging the page the slower side every time.
 async function measurePage(
   browser: Browser,
   profile: Profile,
@@ -186,11 +185,15 @@ async function measurePage(
   const label = `${suite.app} ${scene.name} ${name}`;
   const pairs: { base: number; page: number; cls: number }[] = [];
   for (let i = 0; i < 3; i++) {
-    const base = await load(browser, profile, device, consoleSuite, baseline);
+    const before = await load(browser, profile, device, consoleSuite, baseline);
     const page = await load(browser, profile, device, suite, scene);
+    const after = await load(browser, profile, device, consoleSuite, baseline);
     pairs.push({
-      base: base.LCP ?? Number.POSITIVE_INFINITY,
-      page: page.LCP ?? Number.POSITIVE_INFINITY,
+      ...bracketed({
+        before: before.LCP ?? Number.POSITIVE_INFINITY,
+        after: after.LCP ?? Number.POSITIVE_INFINITY,
+        page: page.LCP ?? Number.POSITIVE_INFINITY,
+      }),
       cls: page.CLS ?? 0,
     });
   }

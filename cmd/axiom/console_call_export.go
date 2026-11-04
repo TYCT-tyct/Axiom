@@ -40,12 +40,7 @@ func (c consoleAPI) ExportCalls(ctx context.Context, request consoleapi.ExportCa
 		sink := csvDownloadWriter{ResponseWriter: w, deadline: deadline, name: "calls"}
 		w.Header().Set("X-Export-Since", q.Since.UTC().Format(time.RFC3339Nano))
 		w.Header().Set("X-Export-Until", q.Until.UTC().Format(time.RFC3339Nano))
-		err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
-			if err := observability.CheckOwnExportSize(ctx, tx, q); err != nil {
-				return err
-			}
-			return callsCSV(ctx, tx, q, &sink)
-		})
+		err := c.writeCalls(ctx, cl.scope, q, &sink)
 		if errors.Is(err, observability.ErrExportSize) {
 			return invalidField("since", fmt.Sprintf("more than %d calls; narrow the window or filters", callExportRows))
 		}
@@ -54,6 +49,17 @@ func (c consoleAPI) ExportCalls(ctx context.Context, request consoleapi.ExportCa
 		}
 		return err
 	}), nil
+}
+
+// writeCalls writes the calls q selects as CSV, every page from one snapshot of the call log, once they are known to
+// fit one export. The request's deadline is the caller's: a test of the file's content runs it without that deadline.
+func (c consoleAPI) writeCalls(ctx context.Context, scope pg.Scope, q observability.OwnQuery, out io.Writer) error {
+	return c.db.ReadTx(ctx, scope, func(tx pg.Tx) error {
+		if err := observability.CheckOwnExportSize(ctx, tx, q); err != nil {
+			return err
+		}
+		return callsCSV(ctx, tx, q, out)
+	})
 }
 
 func callsCSV(ctx context.Context, tx pg.Tx, q observability.OwnQuery, out io.Writer) error {

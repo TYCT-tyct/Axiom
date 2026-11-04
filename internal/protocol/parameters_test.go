@@ -10,9 +10,10 @@ import (
 	"axiom/internal/protocol"
 )
 
-// TestRequestParameters: provider.require_parameters reads the sampling, output-cap and stopping parameters a request
-// sets, treats a null as absent, and names the first member whose support the catalog does not declare. Controls and
-// capability parameters are not read here. Responses' text.verbosity is read because Inspect only sees text.format.
+// TestRequestParameters: provider.require_parameters reads the parameters a request actually uses, including the
+// capability parameters, treats a null as absent, reads an empty tools array as no tools, and names the first member
+// whose support the catalog does not declare. Responses' text verbosity and format, and Messages' output_config, are
+// read because Inspect reads them for the request but not for the parameter inventory.
 func TestRequestParameters(t *testing.T) {
 	t.Parallel()
 	set := func(params ...protocol.Parameter) (s protocol.ParameterSet) {
@@ -36,7 +37,17 @@ func TestRequestParameters(t *testing.T) {
 		"a null is absent":              {protocol.Chat, `{"temperature":null}`, 0, "", false},
 		"a control":                     {protocol.Chat, `{"metadata":{"user_id":"u"},"stream":true}`, 0, "", false},
 		"a nested parameter":            {protocol.Chat, `{"messages":[{"temperature":1}]}`, 0, "", false},
-		"capability names":              {protocol.Chat, `{"tools":[],"response_format":{"type":"json_object"},"reasoning":{"effort":"low"}}`, 0, "", false},
+		"empty tools":                   {protocol.Chat, `{"tools":[]}`, 0, "", false},
+		"null capabilities":             {protocol.Chat, `{"tools":null,"tool_choice":null,"parallel_tool_calls":null,"response_format":null,"reasoning":null,"reasoning_effort":null}`, 0, "", false},
+		"tool parameters":               {protocol.Chat, `{"tools":[{}],"tool_choice":"auto","parallel_tool_calls":false}`, set(protocol.ParamTools, protocol.ParamToolChoice, protocol.ParamParallelToolCalls), "", false},
+		"legacy tools":                  {protocol.Chat, `{"functions":[{}],"function_call":"auto"}`, set(protocol.ParamTools, protocol.ParamToolChoice), "", false},
+		"reply format":                  {protocol.Chat, `{"response_format":{"type":"json_object"}}`, set(protocol.ParamResponseFormat), "", false},
+		"reasoning":                     {protocol.Chat, `{"reasoning":{"effort":"low"}}`, set(protocol.ParamReasoning, protocol.ParamReasoningEffort), "", false},
+		"reasoning without effort":      {protocol.Chat, `{"reasoning":{"enabled":true}}`, set(protocol.ParamReasoning), "", false},
+		"reasoning effort off":          {protocol.Chat, `{"reasoning":{"effort":"none"}}`, set(protocol.ParamReasoning), "", false},
+		"an empty reasoning effort":     {protocol.Chat, `{"reasoning_effort":""}`, 0, "", false},
+		"a reasoning effort":            {protocol.Chat, `{"reasoning_effort":"high"}`, set(protocol.ParamReasoningEffort), "", false},
+		"messages output config":        {protocol.Messages, `{"output_config":{"format":{"type":"json_schema"},"effort":"high"}}`, set(protocol.ParamResponseFormat, protocol.ParamReasoningEffort), "", false},
 		"a null unknown":                {protocol.Chat, `{"seed":null}`, 0, "", false},
 		"an unknown":                    {protocol.Chat, `{"seed":7}`, 0, "seed", true},
 		"the first unknown":             {protocol.Chat, `{"seed":7,"logprobs":true}`, 0, "seed", true},
@@ -44,7 +55,7 @@ func TestRequestParameters(t *testing.T) {
 		"messages verbosity":            {protocol.Messages, `{"model":"m","messages":[],"verbosity":"high"}`, 0, "verbosity", true},
 		"responses text verbosity":      {protocol.Responses, `{"model":"m","input":"hi","text":{"verbosity":"high"}}`, 0, "verbosity", true},
 		"responses text verbosity null": {protocol.Responses, `{"model":"m","input":"hi","text":{"verbosity":null}}`, 0, "", false},
-		"responses text format":         {protocol.Responses, `{"model":"m","input":"hi","text":{"format":{"type":"json_object"}}}`, 0, "", false},
+		"responses text format":         {protocol.Responses, `{"model":"m","input":"hi","text":{"format":{"type":"json_object"}}}`, set(protocol.ParamResponseFormat), "", false},
 		"embeddings structure":          {protocol.Embeddings, `{"model":"m","input":["a","b"],"provider":{"require_parameters":true}}`, 0, "", false},
 		"rerank structure":              {protocol.Rerank, `{"model":"m","query":"q","documents":["d"],"provider":{"require_parameters":true}}`, 0, "", false},
 	} {

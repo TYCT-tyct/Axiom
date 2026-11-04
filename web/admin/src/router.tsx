@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { Layout } from "./layout";
 import { modelStatus } from "./models/catalog";
 import { paymentOrderState } from "./orders/states";
-import { callStatus, overviewRange } from "./overview";
+import { callStatus, cashView, overviewRange } from "./overview";
 import { redeemState } from "./redeem";
 import { supplierStatus } from "./suppliers/statuses";
 
@@ -59,7 +59,8 @@ const routeTree = root.addChildren([
         user_id: text(search.user_id),
         state: paymentOrderState(search.state),
         merchant_id: text(search.merchant_id),
-        cash: text(search.cash),
+        cash: cashView(search.cash),
+        paid: text(search.paid),
         since: text(search.since),
         until: text(search.until),
       }),
@@ -122,6 +123,7 @@ const routeTree = root.addChildren([
       }),
     ),
     shellPage("/models/$modelId", () => import("./pages/model")),
+    shellPage("/source-classes", () => import("./pages/source-classes")),
     shellPage("/pricing", () => import("./pages/pricing")),
     shellPage("/settings", () => import("./pages/settings")),
     createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),

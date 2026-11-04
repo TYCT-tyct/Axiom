@@ -22,30 +22,34 @@ import (
 // fallbacks are a credit currency's prices for what a schedule cannot price (docs/domains/billing.md「价目表缺项」):
 // each known per-use item's default unit price. Admission locks them on the reservation, as it locks the schedules.
 //
-// The stored row also carries a markup on a supplier's actual cost, which priced a correction of the charge. M1 has no
-// corrections (docs/domains/billing.md「用量来源与暂估」), so nothing applies it; it stays in the rows written before
-// because a row with a member this type does not know is refused, and dropping it takes a migration of its own.
+// Rows also carried a markup on a supplier's actual cost, which priced a correction of the charge. M1 has no
+// corrections (docs/domains/billing.md「用量来源与暂估」), so nothing applied it; migration 00040_fallbacks_no_markup.sql
+// drops it from billing.fallbacks, and a reservation admitted before then still holds it, which parseLockedFallbacks
+// ignores.
 type fallbacks struct {
 	currency platform.Currency
 	perUse   map[catalog.Item]platform.UnitPrice
-	markup   platform.UnitPrice
 }
 
-// fallbacksJSON is how billing.fallbacks and the reservations store them, canonical so the locked text is the row's.
+// fallbacksJSON is how billing.fallbacks stores them, canonical so the saved text is the row's: a currency and every
+// known per-use item's price, and nothing else.
 type fallbacksJSON struct {
 	Currency string            `json:"currency"`
-	Markup   string            `json:"markup"`
 	PerUse   map[string]string `json:"per_use"`
 }
 
-// The bounds a valid row keeps. A markup below 1 sells below the supplier's cost, which no setting may do
-// (「要求」); above 10, or a per-use price above one currency unit (catalog's sanity bound for per-use prices), is
-// taken for a typing error, such as 12 for 1.2. A per-use price of 0 would make the item free.
-var (
-	minMarkup = mustUnitPrice("1")
-	maxMarkup = mustUnitPrice("10")
-	maxPerUse = mustUnitPrice("1")
-)
+// lockedFallbacksJSON is a reservation's locked fallbacks: the same, plus the markup rows admitted before #232 locked.
+// It is read and ignored so those calls settle at the prices they were admitted at; billing.fallbacks and every save
+// stay closed and refuse it.
+type lockedFallbacksJSON struct {
+	Currency string            `json:"currency"`
+	PerUse   map[string]string `json:"per_use"`
+	Markup   jsonx.Raw         `json:"markup"`
+}
+
+// maxPerUse is the bound a valid row keeps: a per-use price above one currency unit (catalog's sanity bound for
+// per-use prices) is taken for a typing error, such as 12 for 1.2. A per-use price of 0 would make the item free.
+var maxPerUse = mustUnitPrice("1")
 
 func mustUnitPrice(s string) platform.UnitPrice {
 	p, err := platform.ParseUnitPrice(s)
@@ -58,7 +62,7 @@ func mustUnitPrice(s string) platform.UnitPrice {
 var errFallbacks = errors.New("billing: invalid fallback prices")
 
 // parseFallbacks reads and checks a stored row: a currency, a price for every known per-use item and nothing else,
-// each above 0 and at most maxPerUse, and a markup from minMarkup to maxMarkup.
+// each above 0 and at most maxPerUse.
 func parseFallbacks(body string) (fallbacks, error) {
 	var w fallbacksJSON
 	if err := jsonx.UnmarshalKnown([]byte(body), &w); err != nil {
@@ -67,34 +71,48 @@ func parseFallbacks(body string) (fallbacks, error) {
 	return w.parse()
 }
 
-func (w fallbacksJSON) parse() (f fallbacks, err error) {
-	if f.currency, err = platform.ParseCurrency(w.Currency); err != nil {
+// parseLockedFallbacks reads the fallback text a reservation locked. A row admitted before #232 also locked a markup,
+// which priced a correction billing no longer has; that one member is ignored so the call settles at the prices it
+// locked. Any other member is still refused, as on the stored row.
+func parseLockedFallbacks(body string) (fallbacks, error) {
+	var w lockedFallbacksJSON
+	if err := jsonx.UnmarshalKnown([]byte(body), &w); err != nil {
 		return fallbacks{}, fmt.Errorf("%w: %w", errFallbacks, err)
 	}
-	f.markup, err = platform.ParseUnitPrice(w.Markup)
-	if err != nil || f.markup.Cmp(minMarkup) < 0 || f.markup.Cmp(maxMarkup) > 0 {
-		return fallbacks{}, fmt.Errorf("%w: the markup %q is not a decimal from %s to %s", errFallbacks, w.Markup, minMarkup, maxMarkup)
+	return w.parse()
+}
+
+func (w fallbacksJSON) parse() (fallbacks, error) { return parseFallbacksBody(w.Currency, w.PerUse) }
+
+func (w lockedFallbacksJSON) parse() (fallbacks, error) {
+	return parseFallbacksBody(w.Currency, w.PerUse)
+}
+
+// parseFallbacksBody checks the members both stored forms share.
+func parseFallbacksBody(currency string, perUse map[string]string) (f fallbacks, err error) {
+	if f.currency, err = platform.ParseCurrency(currency); err != nil {
+		return fallbacks{}, fmt.Errorf("%w: %w", errFallbacks, err)
 	}
 	f.perUse = map[catalog.Item]platform.UnitPrice{}
 	for it := range catalog.NumItems {
 		if !perUseItems.Has(it) {
 			continue
 		}
-		text, ok := w.PerUse[it.String()]
+		text, ok := perUse[it.String()]
 		p, err := platform.ParseUnitPrice(text)
 		if !ok || err != nil || p.Cmp(platform.UnitPrice{}) == 0 || p.Cmp(maxPerUse) > 0 {
 			return fallbacks{}, fmt.Errorf("%w: %s's default price %q is not a decimal above 0 and at most %s", errFallbacks, it, text, maxPerUse)
 		}
 		f.perUse[it] = p
 	}
-	if len(w.PerUse) != len(f.perUse) {
-		return fallbacks{}, fmt.Errorf("%w: only the known per-use items have default prices, not %v", errFallbacks, slices.Sorted(maps.Keys(w.PerUse)))
+	if len(perUse) != len(f.perUse) {
+		return fallbacks{}, fmt.Errorf("%w: only the known per-use items have default prices, not %v", errFallbacks, slices.Sorted(maps.Keys(perUse)))
 	}
 	return f, nil
 }
 
 func (f fallbacks) body() (string, error) {
-	w := fallbacksJSON{Currency: f.currency.String(), Markup: f.markup.String(), PerUse: map[string]string{}}
+	w := fallbacksJSON{Currency: f.currency.String(), PerUse: map[string]string{}}
 	for it, p := range f.perUse {
 		w.PerUse[it.String()] = p.String()
 	}
@@ -286,12 +304,11 @@ func isDigits(s string) bool { return s != "" && strings.Trim(s, "0123456789") =
 // maxUnknownCount bounds a count of unknown usage as catalog bounds every known count.
 const maxUnknownCount = 1e10
 
-// SaveFallbacksRequest is an administrator's change to a currency's fallbacks: each known per-use item's default
-// price and the markup, as decimal text.
+// SaveFallbacksRequest is an administrator's change to a currency's fallbacks: each known per-use item's default price,
+// as decimal text.
 type SaveFallbacksRequest struct {
 	Currency string            `json:"currency"`
 	PerUse   map[string]string `json:"per_use"`
-	Markup   string            `json:"markup"`
 	Reason   string            `json:"reason"`
 	actor    audit.Actor
 }
@@ -303,7 +320,7 @@ func (r *SaveFallbacksRequest) SetActor(a audit.Actor) { r.actor = a }
 // platform scope. A request that fails the check changes nothing. Reservations already admitted keep the fallbacks
 // they locked.
 func SaveFallbacks(ctx context.Context, tx pg.Tx, r SaveFallbacksRequest) error {
-	f, err := fallbacksJSON{Currency: r.Currency, Markup: r.Markup, PerUse: r.PerUse}.parse()
+	f, err := fallbacksJSON{Currency: r.Currency, PerUse: r.PerUse}.parse()
 	if err != nil {
 		return err
 	}

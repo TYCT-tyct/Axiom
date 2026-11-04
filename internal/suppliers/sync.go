@@ -10,6 +10,7 @@ import (
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
+	"axiom/internal/suppliers/internal/collector"
 	"axiom/internal/suppliers/internal/registry"
 	"axiom/internal/suppliers/internal/schedule"
 )
@@ -58,10 +59,15 @@ func RegisterSync(cfg SyncConfig) error {
 	if err != nil {
 		host = "unknown"
 	}
-	_, err = schedule.New(schedule.Config{
+	if _, err = schedule.New(schedule.Config{
 		DB: cfg.DB, Scope: cfg.Scope, Keys: cfg.Keys, Egress: cfg.Egress, Queue: cfg.Queue, Registry: cfg.Registry,
 		Holder: host + "/" + uuid.NewV7().String(), SweepEvery: cfg.SweepEvery, Now: cfg.Clock, Logger: cfg.Logger,
 		DirectFormats: cfg.DirectFormats,
+	}); err != nil {
+		return err
+	}
+	return collector.Register(collector.Config{
+		DB: cfg.DB, Scope: cfg.Scope, Keys: cfg.Keys, Egress: cfg.Egress, Queue: cfg.Queue, Registry: cfg.Registry,
+		Now: cfg.Clock, Logger: cfg.Logger,
 	})
-	return err
 }

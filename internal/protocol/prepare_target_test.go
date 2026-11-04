@@ -11,6 +11,7 @@ import (
 // (docs/domains/gateway.md「转发规则」): a request that names no stream gets the member, and false or null is turned
 // true. An endpoint that does not stream keeps what the client asked.
 func TestPrepareAsksForAStream(t *testing.T) {
+	t.Parallel()
 	names := []string{"absent", "false", "null", "true"}
 	bodies := []string{`{"model":"m"}`, `{"model":"m","stream":false}`, `{"model":"m","stream":null}`, `{"model":"m","stream":true}`}
 	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
@@ -60,6 +61,7 @@ func preparedReply(t *testing.T, from, to protocol.Format, body string, streams 
 // derived, and the routing parameters go. Nothing is added — store, include, the output cap and the input stay as the
 // client wrote them (docs/domains/gateway.md「转发规则」).
 func TestPrepareCompactionRewritesOnlyWhatMustNotGoUpstream(t *testing.T) {
+	t.Parallel()
 	body := `{"model":"client-model","input":[{"role":"user","content":"hi"}],"store":true,"max_output_tokens":7,` +
 		`"include":["reasoning.encrypted_content"],"user":"u","prompt_cache_key":"k","safety_identifier":"s",` +
 		`"provider":{"order":["a"]},"models":["m"],"route":"fallback","session_id":"abc","axiom":{"trace":"t"}}`

@@ -438,10 +438,10 @@ func loadCallInputs(ctx context.Context, upstreams *suppliers.Service, cat *cata
 	return cat.Refresh(ctx)
 }
 
-// claimedByCatalog answers what an endpoint claims to serve from the catalog's current snapshot: the author's display
-// name, which a verification answer must carry, and every other author's display name, which instead contradicts the
-// claim. The snapshot is read when a check is due, in the health loop, never on the call path
-// (docs/domains/quality.md「真伪检测」).
+// claimedByCatalog answers what an endpoint claims to serve from the catalog's current snapshot: the catalog model's
+// slug and, when it has one, the vendor-native name a verification answer should report; the author's display name,
+// which it must carry; and every other author's display name, which instead contradicts the claim. The snapshot is
+// read when a check is due, in the health loop, never on the call path (docs/domains/quality.md「真伪检测」).
 func claimedByCatalog(cat *catalog.Catalog) func(catalog.ModelID) (quality.Claimed, bool) {
 	return func(id catalog.ModelID) (quality.Claimed, bool) {
 		snap, err := cat.Current()
@@ -452,6 +452,7 @@ func claimedByCatalog(cat *catalog.Catalog) func(catalog.ModelID) (quality.Claim
 		if !ok || m.AuthorName == "" {
 			return quality.Claimed{}, false
 		}
+		name, _ := snap.OfficialName(id)
 		others := make([]string, 0, 8)
 		seen := make(map[string]struct{}, 8)
 		for other := range snap.Models() {
@@ -465,7 +466,7 @@ func claimedByCatalog(cat *catalog.Catalog) func(catalog.ModelID) (quality.Claim
 			seen[name] = struct{}{}
 			others = append(others, name)
 		}
-		return quality.Claimed{Author: m.AuthorName, Others: others}, true
+		return quality.Claimed{Author: m.AuthorName, Others: others, Model: m.Slug, Name: name}, true
 	}
 }
 

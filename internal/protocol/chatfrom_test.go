@@ -22,6 +22,7 @@ import (
 // stream with its golden copy, to-chat.sse, which go test -update rewrites. Every client stream passes Chat's
 // stream check.
 func TestConvertStreams(t *testing.T) {
+	t.Parallel()
 	type stream struct {
 		name, golden string
 		from         protocol.Format
@@ -89,6 +90,7 @@ func textBlockAt(i int, text string) string {
 // TestConvertMessages: each case is a Messages stream after message_start and what a Chat client gets of it, by
 // the keys of contents, or the error the conversion ends with.
 func TestConvertMessages(t *testing.T) {
+	t.Parallel()
 	start := messageStart(`{"input_tokens":3}`)
 	for name, c := range map[string]struct {
 		stream string
@@ -203,6 +205,7 @@ func checkConverted(t *testing.T, got relayed, want map[string]string) {
 
 // TestConvertKeepAlive: a Messages ping after the commit point reaches a Chat client as Chat's keep-alive, a comment.
 func TestConvertKeepAlive(t *testing.T) {
+	t.Parallel()
 	stream := messageStart(`{}`) + textBlockAt(0, "x") + ev(`{"type":"ping"}`) + stopWith("end_turn")
 	got := relayTo(t, protocol.Chat, protocol.Messages, strings.NewReader(stream), protocol.UsageContext{},
 		protocol.NewMemory(0), settled)
@@ -239,6 +242,7 @@ func ended(typ, rest string) string {
 // TestConvertResponses: each case is a Responses stream after response.created and what a Chat client gets of it,
 // or the error the conversion ends with. A part given whole is compared with its deltas.
 func TestConvertResponses(t *testing.T) {
+	t.Parallel()
 	completed := ended("response.completed", "")
 	for name, c := range map[string]struct {
 		stream string
@@ -401,6 +405,7 @@ func messagesText(t *testing.T, stream []byte) string {
 // TestConvertToolCallFields: a tool call the upstream starts without its id or name, or with either null or empty, is
 // the upstream's failure, before any of it reaches the client: written as it is, the call would be invalid JSON.
 func TestConvertToolCallFields(t *testing.T) {
+	t.Parallel()
 	for _, format := range []struct {
 		name, id string // the format's name and its id member
 		stream   func(members string) string
@@ -436,6 +441,7 @@ func TestConvertToolCallFields(t *testing.T) {
 // is done adds only what its pieces did not cover, so the stream counts as much as the same stream relayed to a
 // Responses client. Each case ends right after the event, as a stream that breaks does.
 func TestConvertProgress(t *testing.T) {
+	t.Parallel()
 	functionAdded := func(args string) string {
 		return rev("response.output_item.added", `,"output_index":0,"item":{"id":"fc_1","type":"function_call",`+
 			`"call_id":"c1","name":"f","arguments":"`+args+`"}`)

@@ -47,6 +47,22 @@ func decimal(s string) *string {
 
 func text(s string) *string { return decimal(s) }
 
+func keyState(s string) *adminapi.SupplierGroupKeyState {
+	if s == "" {
+		return nil
+	}
+	v := adminapi.SupplierGroupKeyState(s)
+	return &v
+}
+
+func keyReason(s string) *adminapi.SupplierGroupKeyReason {
+	if s == "" {
+		return nil
+	}
+	v := adminapi.SupplierGroupKeyReason(s)
+	return &v
+}
+
 // supplierBody is a supplier as the contract gives it.
 func supplierBody(s suppliers.Supplier) adminapi.Supplier {
 	return adminapi.Supplier{
@@ -62,7 +78,7 @@ func supplierBody(s suppliers.Supplier) adminapi.Supplier {
 func groupBody(g suppliers.Group) adminapi.SupplierGroup {
 	body := adminapi.SupplierGroup{
 		Id: g.ID.String(), UpstreamRef: g.UpstreamRef, Name: g.Name, Ratio: g.Ratio, Selected: g.Selected, Present: g.Present,
-		Codename: text(g.Codename),
+		Codename: text(g.Codename), KeyState: keyState(g.KeyState), KeyReason: keyReason(g.KeyReason),
 	}
 	if len(g.Facts) > 0 {
 		body.Facts = &g.Facts

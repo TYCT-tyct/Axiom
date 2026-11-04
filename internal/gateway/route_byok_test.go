@@ -10,6 +10,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
+	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 )
 
@@ -157,5 +158,46 @@ func TestByokPriceKeepsTheKeysEndpointWhenTheSitePricesEachEndpoint(t *testing.T
 	}
 	if got, _ := plan.Entries[1].Price.Schedule.BaseRate(catalog.ItemInput); got.Cmp(saleBase) != 0 {
 		t.Errorf("the site's endpoint is priced %s, want the published %s", got, saleBase)
+	}
+}
+
+// TestByokKeepsTheEndpointsAttributes: an account's own key changes the credential, not the endpoint. Its source class
+// is what fingerprints decide, the relay fallback before any rule matched, and its data policy the worst case, as a
+// site endpoint's; so a request that wants only official supply, or no retention, does not get the key on the strength
+// of it being the vendor's address or the user's own (docs/domains/routing.md「BYOK（#578）」).
+func TestByokKeepsTheEndpointsAttributes(t *testing.T) {
+	t.Parallel()
+	f := newRouteFixture(t)
+	f.byokFee = "0.05"
+	own := routable(f.served, protocol.Messages, protocol.Responses)
+	own.Byok, own.ByokFallback = true, false
+	shared := routable(f.served, protocol.Messages, protocol.Responses)
+	snap, err := f.cat.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	usd, err := platform.ParseCurrency("USD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []suppliers.Routable{own, shared} {
+		e, why := endpointOf(snap, f.prices, nil, "0.05", nil, usd, r, f.health.MeasuredFor(r, time.Now()))
+		if why != "" {
+			t.Fatalf("building %s: %s", r.ID, why)
+		}
+		if e.Class != routing.ClassRelay || e.Policy != routing.PolicyMayTrain {
+			t.Errorf("byok %v: class %q, policy %d; want the fallback relay and the worst case", r.Byok, e.Class, e.Policy)
+		}
+	}
+	f.build([]suppliers.Routable{shared, own})
+	for name, edit := range map[string]func(*routing.Override){
+		"only official": func(o *routing.Override) { o.Classes = routing.ClassSet{routing.ClassOfficial} },
+		"no retention":  func(o *routing.Override) { o.Policies = noRetention },
+	} {
+		in := call(f.served)
+		edit(&in.Override)
+		if plan, _, err := f.router.Plan(in); err == nil {
+			t.Errorf("%s: planned %+v, want no endpoint: neither the key nor the site's endpoint is known to qualify", name, plan.Entries)
+		}
 	}
 }

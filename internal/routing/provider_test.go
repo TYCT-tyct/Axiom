@@ -31,7 +31,7 @@ func TestProviderGroupFilters(t *testing.T) {
 		{name: "ignore wins over order", over: routing.Override{OrderNames: []string{"g2"}, ExcludeNames: []string{"g2"}, NoFallbacks: true}},
 		{name: "request order replaces preset priority", over: routing.Override{OrderNames: []string{"g2", "g1"}}, preset: func(p *routing.Preset) { p.Order = []routing.SupplierID{sup(1)} }, want: []routing.EndpointID{ep(2), ep(1)}},
 		{name: "private group", over: routing.Override{OnlyNames: []string{"g2"}}, private: true},
-		{name: "preset stays restrictive", over: routing.Override{OnlyNames: []string{"g2"}}, preset: func(p *routing.Preset) { p.Classes = 1 << routing.ClassRelay }},
+		{name: "preset stays restrictive", over: routing.Override{OnlyNames: []string{"g2"}}, preset: func(p *routing.Preset) { p.Classes = routing.ClassSet{routing.ClassRelay} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := openPreset()

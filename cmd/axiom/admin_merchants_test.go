@@ -69,6 +69,7 @@ func epusdtMerchantJSON(site, name string, enabled bool, rev int64, gateway stri
 }
 
 func TestAdminMerchantLifecycle(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	site := f.siteID()
@@ -195,6 +196,7 @@ func disableMerchant(t *testing.T, f adminFixture, s session, created adminapi.M
 // changed since. Preparation and probing run only when the change still has to happen, so a stale revision of the
 // original request cannot turn its replay into a 409.
 func TestAdminMerchantReplaySurvivesLaterChanges(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	created := createMerchant(t, f, s, f.siteID())
@@ -226,6 +228,7 @@ func TestAdminMerchantReplaySurvivesLaterChanges(t *testing.T) {
 // reaches the gateway probe. Holding the idempotency transaction while preparing would use both the connection and the
 // time, so the probe would never start (and a real save would hold a database connection across the network call).
 func TestAdminMerchantProbeDoesNotHoldTheWriteTransaction(t *testing.T) {
+	t.Parallel()
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -284,6 +287,7 @@ func TestAdminMerchantProbeDoesNotHoldTheWriteTransaction(t *testing.T) {
 }
 
 func TestAdminPaymentSettingsTopUpBuffer(t *testing.T) {
+	t.Parallel()
 	f := newAdminFixture(t)
 	s := f.owner()
 	site := f.siteID()
@@ -306,7 +310,7 @@ func TestAdminPaymentSettingsTopUpBuffer(t *testing.T) {
 	}
 	f.expectAudit("billing.top_up_buffer.update", map[string]string{"detail::text": `{"after": 35000, "before": 20000}`})
 
-	// An update without the buffer leaves it as it is.
+	// An update without either field leaves both as they are.
 	rec = f.change(s, http.MethodPut, path, `{"settings":{"open":false},"reason":"close collection"}`, newKey())
 	expectAdmin(t, "set payment settings without buffer", rec, http.StatusOK, "")
 	decode(t, rec, &view)
@@ -342,6 +346,7 @@ func (s *merchantSignals) Resolve(kind, key string) error {
 // TestAdminMerchantUnreadableUsesTheNodesSignals proves the admin's paymentsService is constructed with the node's
 // alert sink and identity, not a private instance that silently drops a decryption failure.
 func TestAdminMerchantUnreadableUsesTheNodesSignals(t *testing.T) {
+	t.Parallel()
 	c, _ := ownerFixture.get(t, buildOwnerDatabase)
 	exit, err := egress.New(egress.Direct)
 	if err != nil {

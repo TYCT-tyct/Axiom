@@ -43,7 +43,7 @@ func measured(m *Monitor, id suppliers.EndpointID, now time.Time) Measures {
 func TestHealth(t *testing.T) {
 	m := New(nil)
 	id := suppliers.EndpointID{1}
-	if got := measured(m, id, t0); got != (Measures{Health: 1, Quality: 1}) {
+	if got := measured(m, id, t0); got.Health != 1 || got.Quality != 1 {
 		t.Fatalf("never observed: %+v", got)
 	}
 	want := 1.0
@@ -117,6 +117,49 @@ func TestMeasured(t *testing.T) {
 	m.Observe(t.Context(), broke)
 	if got := measured(m, id, t0.Add(9*time.Second)); !near(got.Throughput, 60) {
 		t.Fatalf("an answer that did not end normally changed the speed: %+v", got)
+	}
+}
+
+// TestToolErrorRate: each answer with checked client tool calls that ended normally is one sample, 1 when any call's
+// arguments were not one JSON text, however many were; an attempt the gateway failed for a checked call's input it
+// could not give the client is a 1 too, while the health does not count it. An answer cut short, or with no call
+// checked, such as one stopped at its output cap whatever the client's format then made of it, is no sample. The rate is a moving average, unmeasured (0) below minSamples samples and maxAge after the last.
+func TestToolErrorRate(t *testing.T) {
+	m := New(nil)
+	id := suppliers.EndpointID{7}
+	tools := func(checks, errors int64) Observation {
+		o := answered(id, t0, time.Second, time.Second, 10, 10)
+		o.ToolChecks, o.ToolErrors = checks, errors
+		return o
+	}
+	for range 3 {
+		m.Observe(t.Context(), tools(3, 2))
+	}
+	refused := tools(1, 0)
+	refused.Done, refused.Fault = false, protocol.FaultToolInput
+	m.Observe(t.Context(), refused)
+	capped := tools(0, 0)
+	capped.Done, capped.Fault = false, protocol.FaultToolInput
+	m.Observe(t.Context(), capped)
+	cut := tools(1, 1)
+	cut.Done, cut.Fault = false, protocol.FaultBroken
+	m.Observe(t.Context(), cut)
+	m.Observe(t.Context(), tools(0, 0))
+	if got := measured(m, id, t0); got.ToolErrorRate != 0 {
+		t.Fatalf("after 4 samples: rate %v, want unmeasured", got.ToolErrorRate)
+	}
+	m.Observe(t.Context(), tools(1, 0))
+	got := measured(m, id, t0)
+	if !near(got.ToolErrorRate, 0.8) { // 1 − 0.2·(1 − 0)
+		t.Fatalf("rate %v, want 0.8", got.ToolErrorRate)
+	}
+	// The broken stream is the endpoint's failure and the two answers after it successes: 1 − 0.2·0.8·0.8. Had the
+	// refused input counted too, the health would be 0.7696.
+	if !near(got.Health, 0.872) {
+		t.Fatalf("health %v, want 0.872: only the broken stream counts against it", got.Health)
+	}
+	if got := measured(m, id, t0.Add(2*time.Second+maxAge+time.Nanosecond)); got.ToolErrorRate != 0 {
+		t.Fatalf("30 minutes after the last sample: rate %v, want unmeasured", got.ToolErrorRate)
 	}
 }
 
@@ -232,12 +275,21 @@ func TestProbeResultsScoreTheEndpoint(t *testing.T) {
 func TestObserveConcurrently(t *testing.T) {
 	m := New(nil)
 	ids := [2]suppliers.EndpointID{{1}, {2}}
+	eps := [2]suppliers.Routable{
+		{ID: ids[0], Model: uuid.NewV7(), Upstream: "a", Formats: []protocol.Format{protocol.Chat}},
+		{ID: ids[1], Model: uuid.NewV7(), Upstream: "b", Formats: []protocol.Format{protocol.Chat}},
+	}
+	if err := m.Prepare(t.Context(), eps[:]); err != nil {
+		t.Fatal(err)
+	}
 	var wg sync.WaitGroup
 	for g := range 8 {
 		wg.Go(func() {
 			for range 100 {
 				m.Observe(t.Context(), Observation{Endpoint: ids[g%2], Failure: failed500, Ended: t0})
+				m.Measure(eps[g%2], protocol.Chat, Facts{Context: int64(1000 + g)})
 				_ = measured(m, ids[g%2], t0)
+				_ = m.MeasuredFor(eps[g%2], t0)
 			}
 		})
 	}

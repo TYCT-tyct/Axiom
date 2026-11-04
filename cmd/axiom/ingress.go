@@ -39,6 +39,11 @@ const (
 // the key ring or the job queue, so an ingress machine holds no tenant data and its compromise cannot read or write
 // any (docs/architecture.md「部署拓扑」).
 func serveWithoutCore(ctx context.Context, cfg nodeSettings, logger *slog.Logger) error {
+	servers := listeners(cfg)
+	if err := listen(ctx, servers); err != nil {
+		return err
+	}
+	defer closeListeners(servers)
 	tel, err := telemetry.New()
 	if err != nil {
 		return err
@@ -53,10 +58,7 @@ func serveWithoutCore(ctx context.Context, cfg nodeSettings, logger *slog.Logger
 	if cfg.roles.has(roleIngress) {
 		transport = ingressTransport(cfg.clientTLS)
 	}
-	servers := nonCoreServers(cfg, transport, &health, requests, logger)
-	if err := listen(ctx, servers); err != nil {
-		return err
-	}
+	nonCoreServers(servers, cfg, transport, &health, requests, logger)
 	if transport == nil { // an ops node has nothing to wait for: it is ready as soon as its probes answer
 		health.SetReady(true)
 	}
@@ -76,18 +78,19 @@ func serveWithoutCore(ctx context.Context, cfg nodeSettings, logger *slog.Logger
 	return errors.Join(ended, shutdown(drainCtx, servers))
 }
 
-// nonCoreServers is the ingress's or the ops node's listeners in the order shutdown stops them: the public proxy first,
-// then the probes, which keep answering while it drains. The public proxy refuses a request that starts during the drain.
-func nonCoreServers(cfg nodeSettings, transport http.RoundTripper, health *httpserver.Health, requests httpserver.Telemetry, logger *slog.Logger) []*listening {
-	var servers []*listening
-	if cfg.roles.has(roleIngress) {
-		servers = append(servers, &listening{
-			publicAddrVar, cfg.publicAddr,
-			httpserver.New(httpserver.Public(health.Gate(ingressHandler(cfg.coreURL, transport, logger)), logger, bodyTimeout,
-				httpserver.WithTelemetry(requests)), logger), nil, false,
-		})
+// nonCoreServers attaches the ingress's or the ops node's handlers to the listeners startup claimed. The public proxy
+// comes first, then the probes, which keep answering while it drains. The public proxy refuses a request that starts
+// during the drain.
+func nonCoreServers(servers []*listening, cfg nodeSettings, transport http.RoundTripper, health *httpserver.Health, requests httpserver.Telemetry, logger *slog.Logger) {
+	for _, s := range servers {
+		switch s.variable {
+		case publicAddrVar:
+			s.server = httpserver.New(httpserver.Public(health.Gate(ingressHandler(cfg.coreURL, transport, logger)), logger, bodyTimeout,
+				httpserver.WithTelemetry(requests)), logger)
+		case probesAddrVar:
+			s.server = health.Server(logger)
+		}
 	}
-	return append(servers, &listening{probesAddrVar, cfg.probesAddr, health.Server(logger), nil, false})
 }
 
 // ingressTransport is the ingress's one connection pool to its core: HTTP/2 over mutual TLS, no proxy from the

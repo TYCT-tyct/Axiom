@@ -13,6 +13,7 @@ import (
 )
 
 func TestUnsupportedPluginsAreRejectedBeforeAdmission(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	for _, members := range []string{
@@ -44,6 +45,7 @@ func TestUnsupportedPluginsAreRejectedBeforeAdmission(t *testing.T) {
 }
 
 func TestCompressionReinspectsTheBodyBeforeAdmission(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	content := "start" + strings.Repeat("middle", 30000) + "end"
@@ -90,6 +92,7 @@ func checkCompressionControls(t *testing.T, r *rig, a account, content string) {
 }
 
 func TestDefaultCompressionPreservesServiceableRequests(t *testing.T) {
+	t.Parallel()
 	r := newRig(t)
 	a := r.newAccount(1e9)
 	addSmallContextModel(r, "acme/small-context", 4096)

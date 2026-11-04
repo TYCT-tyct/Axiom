@@ -239,8 +239,9 @@ func (r *Router) entries(order []ranked, n *need, rec *Record) []Entry {
 // entry works out what billing needs for one endpoint and this request: the output limit and whether the reservation can
 // be made in segments.
 func (*Router) entry(c *candidate, n *need) Entry {
-	out, _ := c.outputLimit(n.req, n.tokens)
 	format, _ := c.callFormat(n)
+	spec := c.Spec(format)
+	out, _ := c.outputLimit(n.req, n.tokens, spec)
 	// Without a known output speed the overshoot allowance of a segmented reservation would be nothing, so an entry
 	// whose speed is unknown is reserved in full; so is one whose call the gateway cannot meter (Input.NoSegments), and
 	// every entry while no segment size is configured: a segment of 0 tokens would reserve no output at all.
@@ -248,7 +249,7 @@ func (*Router) entry(c *candidate, n *need) Entry {
 	// Reasoning counts against a segment while it streams, so a model that reasons must show it in the stream the
 	// gateway reads: the format the endpoint is called in, not the client's, since a converted call is metered where it
 	// is made. A model without the ability has no reasoning to miss.
-	reasoning := c.Caps.Has(protocol.Reasoning)
+	reasoning := spec.Caps.Has(protocol.Reasoning)
 	// A completion request is reserved in full: its n choices and every prompt generate at once, and a first segment
 	// would reserve a fraction of an amount the documentation promises whole (docs/domains/billing.md「决策与理由」).
 	segmentable := !n.in.NoSegments && n.req.Format != protocol.Completions && c.Streams && c.Cancels &&
@@ -257,15 +258,16 @@ func (*Router) entry(c *candidate, n *need) Entry {
 	target := c.Target
 	target.Format = format
 	target.Streams = c.Streams // the request sent asks for a stream, which the gateway relays or aggregates
-	if c.MaxOutput > 0 {       // a model whose limit is unknown has no default to send: the upstream's own applies
+	if spec.MaxOutput > 0 {    // a model whose limit is unknown has no default to send: the upstream's own applies
 		target.MaxOutput = out
 	}
 	limits := c.model
+	limits.ContextLength = spec.Context
 	limits.OpenAIUsage = format != protocol.Messages // the call format decides whose usage semantics the reply has
 	return Entry{
 		Exchange: c.Exchange,
-		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, ModelSlug: c.ModelSlug, Price: c.Price, Limits: limits, MaxOutput: out,
-		Segmentable: segmentable, Byok: c.Byok,
+		Endpoint: c.ID, Supplier: c.Supplier, Target: target, Model: c.Model, ModelSlug: c.ModelSlug, Class: c.Class,
+		Formats: c.Native, Price: c.Price, Limits: limits, MaxOutput: out, Segmentable: segmentable, Byok: c.Byok,
 	}
 }
 
@@ -315,13 +317,18 @@ func check(c *candidate, n *need, price *candidatePrice, noShared bool) (reason 
 	if reason = c.unavailable(); reason != 0 {
 		return reason, true
 	}
-	if reason = c.unfit(n); reason != 0 {
+	format, ok := c.callFormat(n)
+	if !ok {
+		return FormatNotServed, true
+	}
+	spec := c.Spec(format)
+	if reason = c.unfit(n, spec); reason != 0 {
 		return reason, true
 	}
-	if reason = c.filtered(n, price); reason != 0 {
+	if reason = c.filtered(n, price, spec); reason != 0 {
 		return reason, true
 	}
-	if reason = c.funding(n); reason != 0 {
+	if reason = c.funding(n, format, spec); reason != 0 {
 		return reason, true
 	}
 	if c.full() {
@@ -332,13 +339,13 @@ func check(c *candidate, n *need, price *candidatePrice, noShared bool) (reason 
 
 // filtered is what a preset or the request's override leaves out before its cost is known: the visible set it allows,
 // whether it is verified when the request asks only for that, its price, and whether it is cooling down.
-func (c *candidate) filtered(n *need, price *candidatePrice) Reason {
+func (c *candidate) filtered(n *need, price *candidatePrice, spec Spec) Reason {
 	switch {
-	case !n.presetAllows(c, price):
+	case !n.presetAllows(c, price, spec):
 		return PresetFilter
 	case n.over.VerifiedOnly && !c.Verified:
 		return NotVerified
-	case !n.overrideAllows(c, price):
+	case !n.overrideAllows(c, price, spec):
 		return OverrideFilter
 	case price.none():
 		return NoPrice
@@ -351,16 +358,16 @@ func (c *candidate) filtered(n *need, price *candidatePrice) Reason {
 }
 
 // funding uses the same demand, output cap and call format as the reservation, but the supplier's native cost plan.
-func (c *candidate) funding(n *need) Reason {
+func (c *candidate) funding(n *need, format protocol.Format, spec Spec) Reason {
 	if c.Funds == nil {
 		return 0
 	}
 	if !c.Funds.CanPay(platform.Exact{}) {
 		return SupplierBalance
 	}
-	out, _ := c.outputLimit(n.req, n.tokens)
-	format, _ := c.callFormat(n)
+	out, _ := c.outputLimit(n.req, n.tokens, spec)
 	model := c.model
+	model.ContextLength = spec.Context
 	model.OpenAIUsage = format != protocol.Messages
 	cost, err := billing.ReservedCost(n.demand, billing.Quotable{Price: c.Cost, Model: model, MaxOutput: out})
 	// An unbounded tool is a request error: admission's Quote must keep returning its actionable 400, rather than
@@ -395,18 +402,16 @@ func (c *candidate) unavailable() Reason {
 // unfit is what the request needs and the endpoint lacks. The input is an estimate of its tokens from the body's bytes
 // (billing.InputBytesPerToken), so an endpoint is left out only when the request surely does not fit; one that turns out too
 // small answers with a context error, which falls back to the next entry.
-func (c *candidate) unfit(n *need) Reason {
+func (c *candidate) unfit(n *need, spec Spec) Reason {
 	switch {
-	case !c.Caps.Has(n.req.Needs):
+	case !spec.Caps.Has(n.req.Needs):
 		return MissingCapability
-	case !c.servesFormat(n):
-		return FormatNotServed
 	case !c.streamsFor(n):
 		return FormatNotServed
 	case n.req.ServiceTiers&c.ServiceTiers == 0:
 		return ServiceTierNotServed
 	}
-	if _, fits := c.outputLimit(n.req, n.tokens); !fits {
+	if _, fits := c.outputLimit(n.req, n.tokens, spec); !fits {
 		return ContextTooSmall
 	}
 	return 0
@@ -424,18 +429,18 @@ func (c *candidate) streamsFor(n *need) bool {
 // held to the endpoint's, or else the endpoint's default. The context holds the input and the output together: a limit
 // the request set that does not fit leaves the endpoint out; a default is cut to what is left of the context. A direct
 // call generates nothing: its limit is 0, and an input as long as the context fits it.
-func (c *candidate) outputLimit(req *protocol.Request, tokens int64) (limit int64, fits bool) {
+func (*candidate) outputLimit(req *protocol.Request, tokens int64, spec Spec) (limit int64, fits bool) {
 	if req.Format.Direct() {
-		return 0, tokens <= c.Context
+		return 0, tokens <= spec.Context
 	}
-	limit = c.MaxOutput
+	limit = spec.MaxOutput
 	// A request that named its cap sets it even when it is 0: legacy completions' max_tokens 0 asks for the prompt's
 	// logprobs only, and replacing it with the endpoint's default would reserve output nobody can generate.
 	set := req.MaxOutputSet || req.MaxOutput > 0
 	if set && (limit == 0 || req.MaxOutput < limit) {
 		limit = req.MaxOutput
 	}
-	room := c.Context - tokens
+	room := spec.Context - tokens
 	switch {
 	case room <= 0:
 		return 0, false
@@ -445,11 +450,6 @@ func (c *candidate) outputLimit(req *protocol.Request, tokens int64) (limit int6
 		limit = room
 	}
 	return limit, true
-}
-
-func (c *candidate) servesFormat(n *need) bool {
-	_, ok := c.callFormat(n)
-	return ok
 }
 
 // full reports whether the endpoint can take no more calls now: its credentials are all at their concurrency or minute
@@ -463,21 +463,21 @@ func (c *candidate) full() bool {
 }
 
 // presetAllows applies the preset's filters, and the price limit that the request's override may lower.
-func (n *need) presetAllows(c *candidate, price *candidatePrice) bool {
+func (n *need) presetAllows(c *candidate, price *candidatePrice, spec Spec) bool {
 	p := n.preset
 	return p.Classes.Has(c.Class) && p.Policies.Has(c.Policy) && c.Quality >= p.MinQuality && c.Confidence >= p.MinConfidence &&
-		(!p.VerifiedOnly || c.Verified) && n.withinLimit(p.MaxPrice, c, price) &&
+		(!p.VerifiedOnly || c.Verified) && n.withinLimit(p.MaxPrice, c, price, spec) &&
 		(!p.NoFallbacks || listed(p.Order, c.Supplier))
 }
 
 // overrideAllows applies the request's filters. They only narrow what the preset allows: they are checked after it,
 // and an endpoint must pass both.
-func (n *need) overrideAllows(c *candidate, price *candidatePrice) bool {
+func (n *need) overrideAllows(c *candidate, price *candidatePrice, spec Spec) bool {
 	o := n.over
 	return o.allowsName(c.Codename) && o.allowsQuantization(c.Quantization) &&
-		(o.Classes == 0 || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
-		(!o.RequireParameters || c.Parameters.HasAll(o.RequiredParameters)) &&
-		n.withinLimit(o.MaxPrice, c, price)
+		(o.Classes.Empty() || o.Classes.Has(c.Class)) && (o.Policies == 0 || o.Policies.Has(c.Policy)) &&
+		(!o.RequireParameters || spec.Parameters.HasAll(o.RequiredParameters)) &&
+		n.withinLimit(o.MaxPrice, c, price, spec)
 }
 
 // allowsQuantization: an endpoint with no level recorded never matches a request that names levels, because a missing
@@ -492,11 +492,13 @@ func (o *Override) allowsName(name string) bool {
 }
 
 // withinLimit holds the endpoint's price to a limit against the longest prompt any sampling of the request can have.
-func (n *need) withinLimit(limit PriceLimit, c *candidate, price *candidatePrice) bool {
+func (n *need) withinLimit(limit PriceLimit, c *candidate, price *candidatePrice, spec Spec) bool {
 	if limit.Set == 0 {
 		return true
 	}
-	_, longest := billing.InputBound(n.demand, c.model)
+	model := c.model
+	model.ContextLength = spec.Context
+	_, longest := billing.InputBound(n.demand, model)
 	return limit.within(price.Schedule, n.tiers, longest)
 }
 

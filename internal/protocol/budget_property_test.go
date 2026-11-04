@@ -24,7 +24,6 @@ type budgetCase struct {
 	body []byte
 	t    Target
 	w    Rewrites
-	ok   bool // it prepares, given the memory; one that does not is measured but not swept
 }
 
 // budgetShapes are the request shapes that cost the most per byte, written in each source format: many tiny parts and
@@ -197,10 +196,6 @@ func budgetCases(t *testing.T, shapes map[string]map[Format]string) []budgetCase
 			}
 		}
 	}
-	for i := range cases {
-		_, err := Prepare(&cases[i].r, cases[i].body, cases[i].t, cases[i].w)
-		cases[i].ok = err == nil
-	}
 	return cases
 }
 
@@ -258,15 +253,18 @@ func (c *budgetCase) prepare(left int64) (*budget, error) {
 // Under the race detector only the refusals of two shapes are checked: what it allocates is not what the code does
 // (RaceDetector), and every shape would take the package past its time limit.
 func TestPrepareAllocatesOnlyWhatItDrew(t *testing.T) {
+	t.Parallel()
 	shapes := budgetShapes()
 	if RaceDetector() { // the refusals of two shapes, every pair: the race build runs each preparation many times slower
-		shapes = map[string]map[Format]string{"long text": shapes["long text"], "tool calls": shapes["tool calls"]}
-	}
-	points := budgetPoints(t, budgetCases(t, shapes))
-	if RaceDetector() {
-		checkRefusals(t, points)
+		for _, name := range []string{"long text", "tool calls"} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				checkRefusals(t, budgetPoints(t, budgetCases(t, map[string]map[Format]string{name: shapes[name]})))
+			})
+		}
 		return
 	}
+	points := budgetPoints(t, budgetCases(t, shapes))
 	funcs := make([]alloctest.Function, 0, len(points))
 	for name, p := range points {
 		funcs = append(funcs, alloctest.Function{Name: name, F: func() {
@@ -321,7 +319,7 @@ func budgetPoints(t *testing.T, cases []budgetCase) map[string]budgetPoint {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		points[c.name] = budgetPoint{c, unlimited}
-		if !c.ok || full.peak == 0 {
+		if err != nil || full.peak == 0 { // one that does not prepare is measured, but has no peak to sweep below
 			continue
 		}
 		points[c.name+"/short"] = budgetPoint{c, rng.Int64N(full.peak)}
@@ -332,6 +330,7 @@ func budgetPoints(t *testing.T, cases []budgetCase) map[string]budgetPoint {
 // TestRoundedIsWhatTheRuntimeAllocates: an append to an empty slice allocates the runtime's size for what it holds, so
 // its capacity is that size, which rounded must give.
 func TestRoundedIsWhatTheRuntimeAllocates(t *testing.T) {
+	t.Parallel()
 	for n := int64(1); n <= 1<<17; n += 1 + n/512 {
 		if got := cap(append([]byte(nil), make([]byte, n)...)); int64(got) != rounded(n) {
 			t.Fatalf("rounded(%d) = %d, the runtime allocates %d", n, rounded(n), got)

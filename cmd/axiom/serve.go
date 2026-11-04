@@ -12,6 +12,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/gateway"
 	"axiom/internal/observability"
 	"axiom/internal/payments"
 	"axiom/internal/platform/alert"
@@ -57,7 +58,7 @@ type listening struct {
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
-	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher)
+	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher, gateway.DefaultConfig())
 }
 
 // directEgress is the client a node reaches its suppliers through in production.
@@ -65,13 +66,15 @@ func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
 	return egress.New(egress.Direct, egress.WithTracerProvider(tel.Traces))
 }
 
-// serveWith lets a test capture its recorder and opt into price syncing with local datasets. A nil prices constructor
-// disables the periodic price job, so tests of the listeners and call path never download the production datasets.
+// serveWith lets a test capture its recorder, opt into price syncing with local datasets, and choose the node's
+// in-process limits. A nil prices constructor disables the periodic price job, so tests of the listeners and call path
+// never download the production datasets; a test world passes limits sized for the shared machines it runs on, not
+// production's.
 //
 //nolint:funlen,cyclop // startup order is the contract: listeners drain before the recorder, the queue, the cache and the database.
 func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
-	prices func(*egress.Client) *catalog.Fetcher,
+	prices func(*egress.Client) *catalog.Fetcher, limits gateway.Config,
 ) error {
 	cfg, err := readSettings(environ)
 	if err != nil {
@@ -80,7 +83,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if !cfg.roles.has(roleCore) {
 		return serveWithoutCore(ctx, cfg, logger)
 	}
-	console, err := loadConsole(cfg)
+	console, err := loadConsole(cfg, limits)
 	if err != nil {
 		return err
 	}
@@ -93,6 +96,13 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		archiveStore = archive
 		defer archive.Close()
 	}
+	// Claim every listener before the slow steps (database check, cache, queue, call path), so a taken address is named
+	// at once instead of after them. The same listeners serve; shutdown closes them, and a failed start closes them here.
+	servers := listeners(cfg)
+	if err := listen(ctx, servers); err != nil {
+		return err
+	}
+	defer closeListeners(servers)
 	tel, db, master, err := openCoreNode(ctx, cfg, console.master, logger)
 	if err != nil {
 		return err
@@ -147,18 +157,16 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer routes.calls.stop() // every way out ends the loops; the normal shutdown does it earlier, after the drain
-	return runNode(ctx, cfg, routes, tel, requests, logger, queue, recorder, cache, cancelSync)
+	return runNode(ctx, cfg, servers, routes, tel, requests, logger, queue, recorder, cache, cancelSync)
 }
 
-// runNode listens, serves until ctx ends, and then shuts the node down in stopNode's order.
-func runNode(ctx context.Context, cfg nodeSettings, routes nodeRoutes, tel *telemetry.Telemetry, requests httpserver.Telemetry,
+// runNode attaches the handlers to the listeners startup claimed, serves until ctx ends, and then shuts the node down
+// in stopNode's order.
+func runNode(ctx context.Context, cfg nodeSettings, servers []*listening, routes nodeRoutes, tel *telemetry.Telemetry, requests httpserver.Telemetry,
 	logger *slog.Logger, queue *pg.Queue, recorder *observability.Recorder, cache *kv.Client, cancelSync context.CancelFunc,
 ) error {
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	servers := node(cfg, routes.public, routes.admin, &health, logger, requests)
-	if err := listen(ctx, servers); err != nil {
-		return err
-	}
+	node(servers, cfg, routes.public, routes.admin, &health, logger, requests)
 	served := startServing(cfg.roles, servers, logger)
 	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
 	// rebuild.
@@ -231,6 +239,7 @@ func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error, los
 // write version the database chose, and the login and mail keys were derived from the same snapshot.
 type consoleParts struct {
 	cfg            nodeSettings
+	gate           gateway.Config     // the in-process limits the call path and the accounts module share
 	masterKeys     *secret.MasterKeys // the one master-key read; the mail worker derives the recipient key from it
 	master         *secret.Keyring    // seals users' TOTP secrets and suppliers' credentials; openCheckedDatabase sets its write version
 	loginKey       secret.LoginKey    // from the same master-key snapshot, under the login label
@@ -243,7 +252,7 @@ type consoleParts struct {
 	paymentSignals *payments.SignalState
 }
 
-func loadConsole(cfg nodeSettings) (consoleParts, error) {
+func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) {
 	// One read of the master key file gives the ring openCheckedDatabase checks and the snapshot the login and mail keys
 	// are derived from under labels of their own, so a replacement during startup cannot mix versions and neither key
 	// follows the hash keys' rotation (internal/platform/kv/README.md「键」). The plaintext stays in secret.
@@ -276,7 +285,7 @@ func loadConsole(cfg nodeSettings) (consoleParts, error) {
 		return consoleParts{}, err
 	}
 	return consoleParts{
-		cfg: cfg, masterKeys: master, master: master.Keyring(), loginKey: loginKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
+		cfg: cfg, gate: limits, masterKeys: master, master: master.Keyring(), loginKey: loginKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
 	}, nil
 }
 
@@ -427,7 +436,7 @@ func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.T
 }
 
 // logConnectionBudget reports the numbers the startup check derived from the database's limits, so a deployment can
-// see what it will use before the listeners open.
+// see what it will use before the listeners serve.
 func logConnectionBudget(logger *slog.Logger, db *pg.DB) {
 	if budget, ok := db.Budget(); ok {
 		logger.Info("database connection budget", "max_connections", budget.MaxConnections, "reserved", budget.Reserved,
@@ -458,8 +467,8 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 }
 
 // startBackground starts what serves the call path and outlives it: the call-record writer and the job queue. Both are
-// closed on every way out (closeRecorder, stopQueue), before the database they use; a queue that fails to start closes
-// the recorder it had already started, since the caller has no defer of its own yet.
+// closed on every way out (closeRecorder, stopQueue), before the database they use; a recorder that started before a
+// failing step, including the queue, is closed here, since the caller has no defer of its own yet.
 func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
 	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger, nodeID string,
@@ -468,6 +477,9 @@ func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.K
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, *alert.Bus, *payments.SignalState, error) {
 	recorder, err := record(ctx, db, tel, callLogDir, logger)
 	if err != nil {
+		if recorder != nil {
+			closeRecorder(ctx, recorder, timeout, logger)
+		}
 		return nil, nil, nil, nil, nil, nil, err
 	}
 	signals := alert.New(ctx, db, pg.PlatformScope(), logger)
@@ -579,7 +591,7 @@ func closeCache(ctx context.Context, cache *kv.Client, timeout time.Duration, lo
 var errNoAnswer = errors.New("database: " + pg.DatabaseURLVar + ": no answer within AXIOM_STARTUP_TIMEOUT")
 
 // openDatabase connects to the database and checks it within timeout: a server that accepts connections and never
-// answers would otherwise hold the node before its listeners open, where no probe or log reports it.
+// answers would otherwise hold the node before its listeners serve, where no probe or log reports it.
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errNoAnswer)
 	defer cancel()

@@ -15,6 +15,8 @@ import (
 // TestAdminOperationsOverview: the dashboard reads calls, revenue, cost and cash from the site's window, keeps the
 // calls whose cost is unknown out of the cost total, and lets the page drill into the call list with the model and
 // result filters the log has.
+//
+//nolint:cyclop,gocognit // one dashboard journey: unknown cost, its target, then the same cost after it is filled in.
 func TestAdminOperationsOverview(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)
@@ -50,7 +52,14 @@ func TestAdminOperationsOverview(t *testing.T) {
  FROM billing.transactions WHERE request_id IN ('0198c0a8-0000-7000-8000-0000000000f1', '0198c0a8-0000-7000-8000-0000000000f2')`,
 	)
 
-	rec := f.do(http.MethodGet, "/reports/overview?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until), "", as(owner))
+	// A cost target is present while one call's supplier cost is unknown, but the gap is withheld: the cost total
+	// does not include that call, so it cannot support a definite comparison.
+	targetPath := "/reports/targets/" + now.Format("2006-01")
+	rec := f.change(owner, http.MethodPut, targetPath,
+		`{"cost":{"amount":"1000","currency":"USD"},"rev":0,"reason":"cost target"}`, newKey())
+	expectAdmin(t, "cost target", rec, 200, "")
+
+	rec = f.do(http.MethodGet, "/reports/overview?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until), "", as(owner))
 	expectAdmin(t, "overview", rec, 200, "")
 	var overview adminapi.OperationsOverview
 	decode(t, rec, &overview)
@@ -60,6 +69,12 @@ func TestAdminOperationsOverview(t *testing.T) {
 	wantPtr(t, rec, "revenue", overview.Revenue, adminapi.Money{Amount: "2500", Currency: "USD"})
 	wantPtr(t, rec, "cost", overview.Cost, adminapi.Money{Amount: "1000", Currency: "USD"})
 	wantPtr(t, rec, "unknown cost calls", overview.UnknownCostCalls, int64(1))
+	if overview.Targets == nil || overview.Targets.Cost == nil {
+		t.Fatalf("the cost target is missing: %s", rec.Body.String())
+	}
+	if overview.Targets.Cost.Gap != nil {
+		t.Fatalf("a cost gap was shown while the cost total is incomplete: %s", rec.Body.String())
+	}
 	if overview.CallsIncomplete == nil || *overview.CallsIncomplete {
 		t.Errorf("a window inside the retained log is complete: %s", rec.Body.String())
 	}
@@ -73,6 +88,17 @@ func TestAdminOperationsOverview(t *testing.T) {
 	wantPtr(t, rec, "top account calls", accounts[0].Calls, int64(3))
 	models := wantList(t, rec, "top models", overview.TopModels, 2)
 	wantPtr(t, rec, "top model", models[0].Model, "model-a")
+
+	// Once the unknown cost is filled in, the same target gains its definite gap.
+	f.run("UPDATE billing.reservations SET profit = 0 WHERE state = 'cleanup_settled'")
+	rec = f.do(http.MethodGet, "/reports/overview?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until), "", as(owner))
+	expectAdmin(t, "overview with complete cost", rec, 200, "")
+	var complete adminapi.OperationsOverview
+	decode(t, rec, &complete)
+	wantPtr(t, rec, "complete unknown cost calls", complete.UnknownCostCalls, int64(0))
+	if complete.Targets == nil || complete.Targets.Cost == nil || complete.Targets.Cost.Gap == nil {
+		t.Fatalf("a complete cost should show the target's gap: %s", rec.Body.String())
+	}
 
 	for _, tc := range []struct {
 		name, query string
@@ -110,6 +136,64 @@ func TestAdminOperationsOverview(t *testing.T) {
 	}
 
 	expectAdmin(t, "overview window too wide", f.do(http.MethodGet, "/reports/overview?since=2020-01-01T00:00:00Z&until=2020-03-01T00:00:00Z", "", as(owner)), 400, "")
+}
+
+// TestAdminOperationsOverviewCommercial: paid top-ups, not gifts or calls, make the paying users and monthly revenue;
+// retention compares the previous UTC month's payers with this month through the window's end. The target comparison
+// states the gaps for the commercial quantities and the retention rate, and withholds no figure it has.
+func TestAdminOperationsOverviewCommercial(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	main, _, err := f.svc.SiteForHost(adminHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := uuid.UUID(main.ID).String()
+	account := f.text("SELECT id::text FROM accounts.accounts ORDER BY id LIMIT 1")
+	now := time.Date(2026, 2, 15, 12, 0, 0, 0, time.UTC)
+	f.clock.mu.Lock()
+	f.clock.now = now
+	f.clock.mu.Unlock()
+	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	previous := month.AddDate(0, -1, 0).Add(time.Hour)
+	f.run(fmt.Sprintf(`INSERT INTO billing.credit_batches
+		(id, site_id, account_id, source, amount, created_at, currency, paid, fee, offline_channel) VALUES
+		(uuidv7(), '%s', '%s', 'paid', 500, '%s', 'USD', 500, 0, 'bank'),
+		(uuidv7(), '%s', '%s', 'paid', 700, '%s', 'USD', 700, 0, 'bank')`,
+		site, account, previous.Format(time.RFC3339), site, account, now.Format(time.RFC3339)))
+
+	path := "/reports/targets/" + month.Format("2006-01")
+	rec := f.do(http.MethodPut, path+"/all",
+		`{"all_metrics":true,"paid_users":0,"monthly_revenue":{"amount":"0","currency":"USD"},"retention":9000,"rev":0,"reason":"commercial targets"}`,
+		as(owner), idempotent(newKey()), header("X-Axiom-Target-Metrics", "all"))
+	expectAdmin(t, "commercial targets", rec, 200, "")
+
+	since, until := now.Add(-time.Hour).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339)
+	rec = f.do(http.MethodGet, "/reports/overview?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until), "", as(owner))
+	expectAdmin(t, "commercial overview", rec, 200, "")
+	var overview adminapi.OperationsOverview
+	decode(t, rec, &overview)
+	wantPtr(t, rec, "paid users", overview.PaidUsers, int64(1))
+	wantPtr(t, rec, "monthly revenue", overview.MonthlyRevenue, adminapi.Money{Amount: "700", Currency: "USD"})
+	if overview.Retention == nil || overview.Retention.Month != month.Format("2006-01") ||
+		overview.Retention.Cohort != 1 || overview.Retention.Retained != 1 {
+		t.Fatalf("retention = %+v, want one cohort member retained in %s", overview.Retention, month.Format("2006-01"))
+	}
+	wantPtr(t, rec, "retention rate", overview.Retention.Rate, 10000)
+	if overview.GrossMargin != nil {
+		t.Errorf("gross margin without settled revenue = %d, want unavailable", *overview.GrossMargin)
+	}
+	if overview.Targets == nil || overview.Targets.PaidUsers == nil || overview.Targets.MonthlyRevenue == nil ||
+		overview.Targets.Retention == nil {
+		t.Fatalf("the commercial targets are missing: %s", rec.Body.String())
+	}
+	wantPtr(t, rec, "paid-user target", &overview.Targets.PaidUsers.Target, int64(0))
+	wantPtr(t, rec, "paid-user gap", overview.Targets.PaidUsers.Gap, int64(1))
+	wantPtr(t, rec, "monthly-revenue target", &overview.Targets.MonthlyRevenue.Target, adminapi.Money{Amount: "0", Currency: "USD"})
+	wantPtr(t, rec, "monthly-revenue gap", overview.Targets.MonthlyRevenue.Gap, adminapi.Money{Amount: "700", Currency: "USD"})
+	wantPtr(t, rec, "retention target", &overview.Targets.Retention.Target, 9000)
+	wantPtr(t, rec, "retention gap", overview.Targets.Retention.Gap, 1000)
 }
 
 // TestAdminOperationsOverviewSumsWiderThanInt64: two settled calls that each fit int64 add up past it; the dashboard

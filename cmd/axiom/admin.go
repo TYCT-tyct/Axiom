@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"axiom/internal/accounts"
@@ -64,8 +65,12 @@ func newAdminAPI(version string, a *accounts.Service, c *catalog.Catalog, s *sup
 	}
 }
 
-// adminContract is the admin's contract as the generated code embeds it, with the rules read out of it.
-func adminContract() (*contract, error) {
+// adminContract is the admin's contract as the generated code embeds it, with the rules read out of it. The rules are
+// immutable, so they are read once: parsing the generated document under the race detector costs more than most of the
+// requests the guard checks against it.
+func adminContract() (*contract, error) { return adminContractOnce() }
+
+var adminContractOnce = sync.OnceValues(func() (*contract, error) {
 	doc, err := adminapi.GetSpec()
 	if err != nil {
 		return nil, fmt.Errorf("the admin contract: %w", err)
@@ -75,7 +80,7 @@ func adminContract() (*contract, error) {
 		return nil, fmt.Errorf("the admin contract: %w", err)
 	}
 	return c, nil
-}
+})
 
 // GetVersion tells the admin which build answers, uncached, so a page left open across a deployment notices it.
 func (a adminAPI) GetVersion(context.Context, adminapi.GetVersionRequestObject) (adminapi.GetVersionResponseObject, error) {

@@ -18,6 +18,7 @@ import (
 //
 //nolint:cyclop,gocognit // the sample table and its assertions are the test
 func TestDirectSamples(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		dir       string
 		format    protocol.Format
@@ -103,6 +104,7 @@ func TestDirectSamples(t *testing.T) {
 //
 //nolint:cyclop,gocognit // the input table is the test
 func TestDirectInputs(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		f    protocol.Format
@@ -194,6 +196,7 @@ func TestDirectInputs(t *testing.T) {
 //
 //nolint:gocognit // the prepare table is the test
 func TestDirectPrepare(t *testing.T) {
+	t.Parallel()
 	identity := func(string) string { return "derived" }
 	for _, tc := range []struct {
 		name, body string
@@ -248,6 +251,7 @@ func TestDirectPrepare(t *testing.T) {
 // TestDirectErrors: a reply without its data or results is the upstream breaking its format, before anything is
 // committed; a usage that cannot be read is Invalid, and billing estimates it as it does for a stream.
 func TestDirectErrors(t *testing.T) {
+	t.Parallel()
 	if err := protocol.ValidateDirectReply(protocol.Embeddings, []byte(`{"object":"list","usage":{}}`)); err == nil {
 		t.Fatal("an embeddings reply without data was accepted")
 	}
@@ -275,6 +279,7 @@ func TestDirectErrors(t *testing.T) {
 // TestDirectFormatNames keeps the formats' numbers, which suppliers store by name and routing keeps in a bit set, from
 // moving silently.
 func TestDirectFormatNames(t *testing.T) {
+	t.Parallel()
 	var b bytes.Buffer
 	for f := protocol.Messages; f <= protocol.Rerank; f++ {
 		b.WriteString(string(rune('0' + f)))
@@ -290,6 +295,7 @@ func TestDirectFormatNames(t *testing.T) {
 // TestDirectReplyBoundaries: a reply may have whitespace around it, but one JSON object and nothing else. The usage
 // and data a call is charged by must come from the same complete value, not from a prefix of one.
 func TestDirectReplyBoundaries(t *testing.T) {
+	t.Parallel()
 	body := []byte(" \n {\"object\":\"list\",\"data\":[],\"usage\":{\"prompt_tokens\":1,\"total_tokens\":1}}\n ")
 	if err := protocol.ValidateDirectReply(protocol.Embeddings, body); err != nil {
 		t.Fatalf("leading whitespace: %v", err)
@@ -329,6 +335,7 @@ func TestDirectReplyBoundaries(t *testing.T) {
 //
 //nolint:gocognit // the two formats and two settlement states are the test
 func TestDirectErrorBodies(t *testing.T) {
+	t.Parallel()
 	for _, f := range []protocol.Format{protocol.Embeddings, protocol.Rerank} {
 		u, err := protocol.DirectUsage(f, []byte(`{"data":[],"results":[],"usage":{"prompt_tokens":3,"total_tokens":3}}`))
 		if err != nil {

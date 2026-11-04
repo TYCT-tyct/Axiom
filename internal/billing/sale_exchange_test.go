@@ -251,7 +251,7 @@ func publishExchangeReference(t *testing.T, f *snapshotter, id catalog.ModelID, 
 func exchangePrices(t *testing.T) *priceFixture {
 	t.Helper()
 	f := newPrices(t)
-	defaults := SaveFallbacksRequest{Currency: "CNY", Markup: "1.5", PerUse: map[string]string{"code_execution": "0.00000005", "web_search": "0.00000002"}, Reason: "CNY site configuration"}
+	defaults := SaveFallbacksRequest{Currency: "CNY", PerUse: map[string]string{"code_execution": "0.00000005", "web_search": "0.00000002"}, Reason: "CNY site configuration"}
 	defaults.SetActor(system)
 	if err := f.tx(func(tx pg.Tx) error { return SaveFallbacks(t.Context(), tx, defaults) }); err != nil {
 		t.Fatal(err)

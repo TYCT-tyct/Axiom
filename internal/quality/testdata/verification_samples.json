@@ -1,0 +1,115 @@
+{
+  "note": "Replies replayed by TestJudgeVerificationRecordedSamples. They were written for the probe format and checked against the published model names; this environment has no model API credentials, so they are representative replay samples, not live captures.",
+  "samples": [
+    {
+      "name": "gpt-4o answers as itself",
+      "model": "gpt-4o-2024-08-06",
+      "author": "OpenAI",
+      "others": [
+        "Anthropic",
+        "Google"
+      ],
+      "reply": "{\"nonce\":\"a1b2c3d4e5f60718\",\"sum\":42,\"product\":4512398,\"reverse\":\"2p9y3k\",\"check\":{\"ok\":true,\"n\":6},\"model\":\"gpt-4o-2024-08-06\",\"author\":\"OpenAI\"}",
+      "want": "passed"
+    },
+    {
+      "name": "gpt-4o-mini is a cheaper model",
+      "model": "gpt-4o-2024-08-06",
+      "author": "OpenAI",
+      "others": [
+        "Anthropic",
+        "Google"
+      ],
+      "reply": "{\"nonce\":\"a1b2c3d4e5f60718\",\"sum\":42,\"product\":4512398,\"reverse\":\"2p9y3k\",\"check\":{\"ok\":true,\"n\":6},\"model\":\"gpt-4o-mini-2024-07-18\",\"author\":\"OpenAI\"}",
+      "want": "contradicted"
+    },
+    {
+      "name": "claude sonnet answers as itself",
+      "model": "claude-sonnet-4-5-20250929",
+      "author": "Anthropic",
+      "others": [
+        "OpenAI",
+        "Google"
+      ],
+      "reply": "{\"nonce\":\"a1b2c3d4e5f60718\",\"sum\":42,\"product\":4512398,\"reverse\":\"2p9y3k\",\"check\":{\"ok\":true,\"n\":6},\"model\":\"claude-sonnet-4-5-20250929\",\"author\":\"Anthropic\"}",
+      "want": "passed"
+    },
+    {
+      "name": "claude haiku is a cheaper model",
+      "model": "claude-sonnet-4-5-20250929",
+      "author": "Anthropic",
+      "others": [
+        "OpenAI",
+        "Google"
+      ],
+      "reply": "{\"nonce\":\"a1b2c3d4e5f60718\",\"sum\":42,\"product\":4512398,\"reverse\":\"2p9y3k\",\"check\":{\"ok\":true,\"n\":6},\"model\":\"claude-haiku-4-5\",\"author\":\"Anthropic\"}",
+      "want": "contradicted"
+    },
+    {
+      "name": "gemini pro answers as itself",
+      "model": "gemini-2.5-pro",
+      "author": "Google",
+      "others": [
+        "OpenAI",
+        "Anthropic"
+      ],
+      "reply": "{\"nonce\":\"a1b2c3d4e5f60718\",\"sum\":42,\"product\":4512398,\"reverse\":\"2p9y3k\",\"check\":{\"ok\":true,\"n\":6},\"model\":\"gemini-2.5-pro\",\"author\":\"Google\"}",
+      "want": "passed"
+    },
+    {
+      "name": "gemini flash is a cheaper model",
+      "model": "gemini-2.5-pro",
+      "author": "Google",
+      "others": [
+        "OpenAI",
+        "Anthropic"
+      ],
+      "reply": "{\"nonce\":\"a1b2c3d4e5f60718\",\"sum\":42,\"product\":4512398,\"reverse\":\"2p9y3k\",\"check\":{\"ok\":true,\"n\":6},\"model\":\"gemini-2.5-flash\",\"author\":\"Google\"}",
+      "want": "contradicted"
+    },
+    {
+      "name": "a deepseek alias is inconclusive",
+      "model": "deepseek-chat",
+      "author": "DeepSeek",
+      "others": [
+        "OpenAI",
+        "Anthropic"
+      ],
+      "reply": "{\"nonce\":\"a1b2c3d4e5f60718\",\"sum\":42,\"product\":4512398,\"reverse\":\"2p9y3k\",\"check\":{\"ok\":true,\"n\":6},\"model\":\"DeepSeek-V3\",\"author\":\"DeepSeek\"}",
+      "want": "inconclusive"
+    },
+    {
+      "name": "a refusal is inconclusive",
+      "model": "gpt-4o-2024-08-06",
+      "author": "OpenAI",
+      "others": [
+        "Anthropic",
+        "Google"
+      ],
+      "reply": "I cannot answer that.",
+      "want": "inconclusive"
+    },
+    {
+      "name": "a wrong product is inconclusive",
+      "model": "gpt-4o-2024-08-06",
+      "author": "OpenAI",
+      "others": [
+        "Anthropic",
+        "Google"
+      ],
+      "reply": "{\"nonce\":\"a1b2c3d4e5f60718\",\"sum\":42,\"product\":4512399,\"reverse\":\"2p9y3k\",\"check\":{\"ok\":true,\"n\":6},\"model\":\"gpt-4o-2024-08-06\",\"author\":\"OpenAI\"}",
+      "want": "inconclusive"
+    },
+    {
+      "name": "another author is contradicted",
+      "model": "gpt-4o-2024-08-06",
+      "author": "OpenAI",
+      "others": [
+        "Anthropic",
+        "Google"
+      ],
+      "reply": "{\"nonce\":\"a1b2c3d4e5f60718\",\"sum\":42,\"product\":4512398,\"reverse\":\"2p9y3k\",\"check\":{\"ok\":true,\"n\":6},\"model\":\"gpt-4o-2024-08-06\",\"author\":\"Anthropic\"}",
+      "want": "contradicted"
+    }
+  ]
+}

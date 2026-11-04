@@ -93,6 +93,73 @@ func (q *Queries) ListCashMovements(ctx context.Context, db DBTX, arg ListCashMo
 	return items, nil
 }
 
+const listPaidBatches = `-- name: ListPaidBatches :many
+SELECT id, account_id, amount::text AS amount, created_at,
+    (merchant_id IS NOT NULL)::boolean AS online,
+    coalesce(offline_channel, '')::text AS offline_channel
+FROM billing.credit_batches
+WHERE site_id = $1 AND source = 'paid'
+    AND created_at >= $2 AND created_at < $3
+    AND (created_at, id) < ($4::timestamptz, $5::uuid)
+ORDER BY created_at DESC, id DESC
+LIMIT $6
+`
+
+type ListPaidBatchesParams struct {
+	SiteID  uuid.UUID
+	Since   time.Time
+	Until   time.Time
+	AfterAt time.Time
+	AfterID uuid.UUID
+	Max     int32
+}
+
+type ListPaidBatchesRow struct {
+	ID             uuid.UUID
+	AccountID      uuid.UUID
+	Amount         string
+	CreatedAt      time.Time
+	Online         bool
+	OfflineChannel string
+}
+
+// The paid credit batches behind the dashboard's commercial figures, by the batch's own created_at. The time axis is
+// the same one PlatformPaid counts, not an order's creation time, so a payment credited after midnight is in the
+// window the dashboard counted. The partial index credit_batches_by_site_paid_created covers the range read.
+func (q *Queries) ListPaidBatches(ctx context.Context, db DBTX, arg ListPaidBatchesParams) ([]ListPaidBatchesRow, error) {
+	rows, err := db.Query(ctx, listPaidBatches,
+		arg.SiteID,
+		arg.Since,
+		arg.Until,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.Max,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPaidBatchesRow
+	for rows.Next() {
+		var i ListPaidBatchesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.Amount,
+			&i.CreatedAt,
+			&i.Online,
+			&i.OfflineChannel,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const platformCallMoney = `-- name: PlatformCallMoney :one
 SELECT
     coalesce(sum(charged::numeric), 0)::text AS revenue,
@@ -173,6 +240,66 @@ func (q *Queries) PlatformCash(ctx context.Context, db DBTX, arg PlatformCashPar
 		return nil, err
 	}
 	return items, nil
+}
+
+const platformPaid = `-- name: PlatformPaid :one
+WITH paid AS (
+    SELECT account_id, created_at, amount
+    FROM billing.credit_batches
+    WHERE site_id = $2 AND source = 'paid'
+        AND created_at >= $3 AND created_at < $4
+), accounts AS (
+    SELECT account_id,
+        bool_or(created_at >= $5 AND created_at < $6) AS in_cohort,
+        bool_or(created_at >= $7 AND created_at < $4) AS retained
+    FROM paid
+    GROUP BY account_id
+)
+SELECT
+    (SELECT count(DISTINCT account_id)::bigint FROM paid WHERE created_at >= $1) AS paid_users,
+    (SELECT coalesce(sum(amount::numeric), 0)::text FROM paid WHERE created_at >= $1) AS monthly_revenue,
+    (SELECT count(*)::bigint FROM accounts WHERE in_cohort) AS cohort,
+    (SELECT count(*)::bigint FROM accounts WHERE in_cohort AND retained) AS retained
+`
+
+type PlatformPaidParams struct {
+	Since       time.Time
+	SiteID      uuid.UUID
+	ScanSince   time.Time
+	Until       time.Time
+	CohortStart time.Time
+	CohortEnd   time.Time
+	MonthStart  time.Time
+}
+
+type PlatformPaidRow struct {
+	PaidUsers      int64
+	MonthlyRevenue string
+	Cohort         int64
+	Retained       int64
+}
+
+// The dashboard's commercial figures: distinct accounts with a paid top-up in the window, the credit those top-ups
+// granted in the site's accounting currency, and the paying-account retention of the UTC month the window ends in.
+// A paid batch is one row, so the time range and the partial index keep this a range read, not a scan of every credit.
+func (q *Queries) PlatformPaid(ctx context.Context, db DBTX, arg PlatformPaidParams) (PlatformPaidRow, error) {
+	row := db.QueryRow(ctx, platformPaid,
+		arg.Since,
+		arg.SiteID,
+		arg.ScanSince,
+		arg.Until,
+		arg.CohortStart,
+		arg.CohortEnd,
+		arg.MonthStart,
+	)
+	var i PlatformPaidRow
+	err := row.Scan(
+		&i.PaidUsers,
+		&i.MonthlyRevenue,
+		&i.Cohort,
+		&i.Retained,
+	)
+	return i, err
 }
 
 const readCreditBatch = `-- name: ReadCreditBatch :many

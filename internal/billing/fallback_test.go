@@ -10,8 +10,8 @@ import (
 	"axiom/internal/platform"
 )
 
-// testFallbacks prices a web search at 20 billionths, a code execution at 50 and corrects by cost at 1.5 times.
-const testFallbacks = `{"currency":"USD","markup":"1.5","per_use":{"code_execution":"0.00000005","web_search":"0.00000002"}}`
+// testFallbacks prices a web search at 20 billionths and a code execution at 50.
+const testFallbacks = `{"currency":"USD","per_use":{"code_execution":"0.00000005","web_search":"0.00000002"}}`
 
 func mustFallbacks(tb testing.TB, body string) fallbacks {
 	tb.Helper()
@@ -23,30 +23,29 @@ func mustFallbacks(tb testing.TB, body string) fallbacks {
 }
 
 // TestParseFallbacks: a row is valid only with a currency, a price above 0 and at most 1 for each known per-use item
-// and nothing else, and a markup from 1 to 10 (docs/domains/billing.md「价目表缺项」: 币种、单位正确，不为 0).
+// and nothing else (docs/domains/billing.md「价目表缺项」: 币种、单位正确，不为 0). The markup rows written before #232
+// carried is an unknown member now and is refused here; parseLockedFallbacks alone reads it.
 func TestParseFallbacks(t *testing.T) {
 	t.Parallel()
 
-	row := func(currency, markup, search, code string) string {
-		return `{"currency":"` + currency + `","markup":"` + markup + `","per_use":{"code_execution":"` + code + `","web_search":"` + search + `"}}`
+	row := func(currency, search, code string) string {
+		return `{"currency":"` + currency + `","per_use":{"code_execution":"` + code + `","web_search":"` + search + `"}}`
 	}
 	for _, tc := range []struct {
 		name, body string
 		ok         bool
 	}{
 		{"valid", testFallbacks, true},
-		{"the seeded row", `{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0.05","web_search":"0.025"}}`, true},
-		{"markup at the bounds", row("CNY", "1", "1", "0.000000000000001"), true},
-		{"markup at the top", row("USD", "10", "0.01", "0.01"), true},
-		{"markup below 1 sells below cost", row("USD", "0.99", "0.01", "0.01"), false},
-		{"markup above 10", row("USD", "10.000000000000001", "0.01", "0.01"), false},
-		{"a free per-use item", row("USD", "1.2", "0", "0.01"), false},
-		{"a per-use price above 1", row("USD", "1.2", "1.01", "0.01"), false},
-		{"a price that is no decimal", row("USD", "1.2", "1e-2", "0.01"), false},
-		{"a currency in lower case", row("usd", "1.2", "0.01", "0.01"), false},
-		{"an item missing", `{"currency":"USD","markup":"1.2","per_use":{"web_search":"0.01"}}`, false},
-		{"an item that is not per use", `{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0.01","input":"0.01","web_search":"0.01"}}`, false},
-		{"an unknown member", `{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0.01","web_search":"0.01"},"v":1}`, false},
+		{"the saved row", `{"currency":"USD","per_use":{"code_execution":"0.05","web_search":"0.025"}}`, true},
+		{"a per-use item at its bounds", row("CNY", "1", "0.000000000000001"), true},
+		{"a free per-use item", row("USD", "0", "0.01"), false},
+		{"a per-use price above 1", row("USD", "1.01", "0.01"), false},
+		{"a price that is no decimal", row("USD", "1e-2", "0.01"), false},
+		{"a currency in lower case", row("usd", "0.01", "0.01"), false},
+		{"an item missing", `{"currency":"USD","per_use":{"web_search":"0.01"}}`, false},
+		{"an item that is not per use", `{"currency":"USD","per_use":{"code_execution":"0.01","input":"0.01","web_search":"0.01"}}`, false},
+		{"an unknown member", `{"currency":"USD","per_use":{"code_execution":"0.01","web_search":"0.01"},"v":1}`, false},
+		{"a leftover markup", `{"currency":"USD","markup":"1.2","per_use":{"code_execution":"0.01","web_search":"0.01"}}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, err := parseFallbacks(tc.body)
@@ -58,6 +57,36 @@ func TestParseFallbacks(t *testing.T) {
 			}
 			if body, err := f.body(); err != nil || body != tc.body { // every valid fixture is written canonically
 				t.Errorf("body = %s, %v; want %s", body, err, tc.body)
+			}
+		})
+	}
+}
+
+// TestParseLockedFallbacks: a reservation's locked text reads with or without the markup rows admitted before #232
+// carried, and yields the prices alone; any other unknown member is still refused.
+func TestParseLockedFallbacks(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, body string
+		ok         bool
+	}{
+		{"locked after #232", testFallbacks, true},
+		{"locked before #232", `{"currency":"USD","markup":"1.5","per_use":{"code_execution":"0.00000005","web_search":"0.00000002"}}`, true},
+		{"a markup after the prices", `{"currency":"USD","per_use":{"code_execution":"0.00000005","web_search":"0.00000002"},"markup":"1.5"}`, true},
+		{"an unknown member", `{"currency":"USD","markup":"1.5","per_use":{"code_execution":"0.00000005","web_search":"0.00000002"},"v":1}`, false},
+		{"an invalid price", `{"currency":"USD","markup":"1.5","per_use":{"code_execution":"0","web_search":"0.00000002"}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := parseLockedFallbacks(tc.body)
+			if (err == nil) != tc.ok || err != nil && !errors.Is(err, errFallbacks) {
+				t.Fatalf("parseLockedFallbacks = %v, want ok %v", err, tc.ok)
+			}
+			if err != nil {
+				return
+			}
+			if body, err := f.body(); err != nil || body != testFallbacks {
+				t.Errorf("body = %s, %v; want the prices alone, %s", body, err, testFallbacks)
 			}
 		})
 	}
@@ -161,7 +190,7 @@ func TestPriceSegmentsSaturates(t *testing.T) {
 	t.Parallel()
 
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.000000001","output":"0.000000001"}}`)
-	f := mustFallbacks(t, `{"currency":"USD","markup":"10","per_use":{"code_execution":"1","web_search":"1"}}`)
+	f := mustFallbacks(t, `{"currency":"USD","per_use":{"code_execution":"1","web_search":"1"}}`)
 	most := func(field string) catalog.UnknownUsage {
 		return catalog.UnknownUsage{Field: field, Value: "10000000000"}
 	}

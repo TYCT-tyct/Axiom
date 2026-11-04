@@ -115,7 +115,7 @@ func (s *chatToNative) event(data []byte, m *meter) (event, error) {
 	if err != nil {
 		return event{}, err
 	}
-	out := event{role: skipped, usageAt: -1, content: e.content, shape: e.shape, searches: e.searches, toolCalls: e.toolCalls, usage: e.usage, final: e.final}
+	out := event{role: skipped, usageAt: -1, content: e.content, shape: e.shape, searches: e.searches, toolCalls: e.toolCalls, toolChecks: e.toolChecks, toolErrors: e.toolErrors, usage: e.usage, final: e.final}
 	if s.composed {
 		return s.composedEvent(e, out)
 	}
@@ -124,7 +124,7 @@ func (s *chatToNative) event(data []byte, m *meter) (event, error) {
 			return event{}, fmt.Errorf("%w: Chat ended without a finished choice", ErrUpstream)
 		}
 		if err := s.completeItems(); err != nil {
-			return event{}, err
+			return out, err // the calls were checked before the client's format refused one: quality counts them
 		}
 		out.role = end
 		return out, nil

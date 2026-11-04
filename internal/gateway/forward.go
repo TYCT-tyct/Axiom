@@ -286,6 +286,7 @@ func (s *session) isStarted() bool {
 func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (step, ended) {
 	s := a.s
 	a.obs.Cut, a.obs.Fault = cutOf(ctx), protocol.FaultOf(err)
+	a.toolCounts(relay)
 	if failed, ok := errors.AsType[*extendFailed](context.Cause(ctx)); ok {
 		return a.truncate(relay, cut(failed.err))
 	}
@@ -351,6 +352,13 @@ func (s *session) classify(ctx context.Context, err error, conn Conn) (protocol.
 		}
 	}
 	return e, finish, again
+}
+
+// toolCounts takes the answer's tool-call checks from the relay as it ends, normally or not: a call whose input the
+// client's format cannot take fails the read after the relay counted it (docs/domains/quality.md「线上观测」).
+func (a *attempt) toolCounts(relay *protocol.Relay) {
+	p := relay.Progress()
+	a.obs.ToolChecks, a.obs.ToolErrors = p.ToolChecks, p.ToolErrors
 }
 
 // upstreamRefused reports whether the fault is the upstream saying the request itself is wrong: its context, the
@@ -454,6 +462,7 @@ func (a *attempt) complete(relay *protocol.Relay) (step, ended) {
 	rec := &s.ends[a.i]
 	a.usage = relay.Usage()
 	a.obs.Done, a.obs.Empty = true, !a.content
+	a.toolCounts(relay)
 	if s.aggregate {
 		rec.Finish = billing.FinishStop
 		switch {

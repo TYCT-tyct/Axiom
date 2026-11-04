@@ -13,7 +13,7 @@ SELECT coalesce(extract(epoch FROM t.console_idle_timeout)::bigint, 0)::bigint A
     coalesce(extract(epoch FROM t.console_max_age)::bigint, 0)::bigint AS console_max_age_seconds,
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
-    t.new_key_daily_limit, p.preference AS billing_preference
+    t.new_key_daily_limit, t.model_prices_public, p.preference AS billing_preference
 FROM accounts.sites s
 LEFT JOIN accounts.site_settings t ON t.site_id = s.id
 LEFT JOIN accounts.site_billing_preferences p ON p.site_id = s.id
@@ -23,14 +23,16 @@ WHERE s.id = @site_id;
 -- Replaces the site's own values; a NULL is a value left out, which falls back to the default in code. The attempt
 -- limits belong to their own admin resource and are left as they are.
 INSERT INTO accounts.site_settings (site_id, console_idle_timeout, console_max_age, admin_idle_timeout, admin_max_age,
-    new_key_daily_limit)
+    new_key_daily_limit, model_prices_public)
 VALUES (@site_id, make_interval(secs => sqlc.narg(console_idle_seconds)::bigint),
     make_interval(secs => sqlc.narg(console_max_age_seconds)::bigint),
     make_interval(secs => sqlc.narg(admin_idle_seconds)::bigint),
-    make_interval(secs => sqlc.narg(admin_max_age_seconds)::bigint), sqlc.narg(new_key_daily_limit)::bigint)
+    make_interval(secs => sqlc.narg(admin_max_age_seconds)::bigint), sqlc.narg(new_key_daily_limit)::bigint,
+    sqlc.narg(model_prices_public)::boolean)
 ON CONFLICT (site_id) DO UPDATE SET console_idle_timeout = excluded.console_idle_timeout,
     console_max_age = excluded.console_max_age, admin_idle_timeout = excluded.admin_idle_timeout,
-    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit;
+    admin_max_age = excluded.admin_max_age, new_key_daily_limit = excluded.new_key_daily_limit,
+    model_prices_public = excluded.model_prices_public;
 
 -- name: ClearSiteBillingPreference :exec
 -- No row means the code default; deleting is how a site goes back to it.
