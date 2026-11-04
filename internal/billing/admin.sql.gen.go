@@ -93,6 +93,73 @@ func (q *Queries) ListCashMovements(ctx context.Context, db DBTX, arg ListCashMo
 	return items, nil
 }
 
+const listPaidBatches = `-- name: ListPaidBatches :many
+SELECT id, account_id, amount::text AS amount, created_at,
+    (merchant_id IS NOT NULL)::boolean AS online,
+    coalesce(offline_channel, '')::text AS offline_channel
+FROM billing.credit_batches
+WHERE site_id = $1 AND source = 'paid'
+    AND created_at >= $2 AND created_at < $3
+    AND (created_at, id) < ($4::timestamptz, $5::uuid)
+ORDER BY created_at DESC, id DESC
+LIMIT $6
+`
+
+type ListPaidBatchesParams struct {
+	SiteID  uuid.UUID
+	Since   time.Time
+	Until   time.Time
+	AfterAt time.Time
+	AfterID uuid.UUID
+	Max     int32
+}
+
+type ListPaidBatchesRow struct {
+	ID             uuid.UUID
+	AccountID      uuid.UUID
+	Amount         string
+	CreatedAt      time.Time
+	Online         bool
+	OfflineChannel string
+}
+
+// The paid credit batches behind the dashboard's commercial figures, by the batch's own created_at. The time axis is
+// the same one PlatformPaid counts, not an order's creation time, so a payment credited after midnight is in the
+// window the dashboard counted. The partial index credit_batches_by_site_paid_created covers the range read.
+func (q *Queries) ListPaidBatches(ctx context.Context, db DBTX, arg ListPaidBatchesParams) ([]ListPaidBatchesRow, error) {
+	rows, err := db.Query(ctx, listPaidBatches,
+		arg.SiteID,
+		arg.Since,
+		arg.Until,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.Max,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPaidBatchesRow
+	for rows.Next() {
+		var i ListPaidBatchesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.Amount,
+			&i.CreatedAt,
+			&i.Online,
+			&i.OfflineChannel,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const platformCallMoney = `-- name: PlatformCallMoney :one
 SELECT
     coalesce(sum(charged::numeric), 0)::text AS revenue,

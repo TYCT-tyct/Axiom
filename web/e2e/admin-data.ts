@@ -33,6 +33,7 @@ export type AdminState = AuthState & {
   traces: Map<string, Schemas["AdminCallTrace"]>;
   merchants: Schemas["Merchant"][];
   orders: Schemas["PaymentOrder"][];
+  paidBatches: Schemas["PaidBatch"][];
   refunds: Schemas["PaymentRefund"][];
   audit: Schemas["AuditEntry"][];
   auditEntries: Map<string, Schemas["AuditEntry"]>;
@@ -413,6 +414,7 @@ export function emptyState(): AdminState {
     traces: new Map(),
     merchants: [],
     orders: [],
+    paidBatches: [],
     refunds: [],
     audit: [],
     auditEntries: new Map(),

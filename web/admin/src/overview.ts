@@ -47,16 +47,23 @@ export function callsDrill(
   return search;
 }
 
-// The order page's cash view takes the same ledger window; it lists the transactions themselves, not orders filtered
-// by their creation time. The paid view is the payment orders behind paid-users and monthly revenue.
-export type OrderDrill = Window & { cash?: "1"; state?: "paid" };
+// The orders page has two list views beside the orders themselves: cash movements by ledger time, and paid batches by
+// the batch's created_at. The paid view is the records behind paid users and monthly revenue. Both use the dashboard's
+// window directly; neither filters orders by an order's creation time.
+export type OrderDrill = Window & { cash?: "1"; paid?: "batches" };
+
+// The router serializes the string "1" with JSON quotes in the address. Both the quoted form and a plain 1 mean the
+// cash view; the old page wrote and read cash=1, so that spelling stays the contract.
+export function cashView(value: unknown): "1" | undefined {
+  return value === "1" || value === 1 || value === '"1"' ? "1" : undefined;
+}
 
 export function ordersDrill(window: Window): OrderDrill {
   return { ...window, cash: "1" };
 }
 
 export function paidOrdersDrill(window: Window): OrderDrill {
-  return { ...window, state: "paid" };
+  return { ...window, paid: "batches" };
 }
 
 // Retention compares last month's paying accounts with this month's payments. The list therefore starts at the first
@@ -64,7 +71,7 @@ export function paidOrdersDrill(window: Window): OrderDrill {
 export function retentionOrdersDrill(window: Window): OrderDrill {
   const end = new Date(Date.parse(window.until) - 1);
   const cohort = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - 1, 1));
-  return { since: cohort.toISOString(), until: window.until, state: "paid" };
+  return { since: cohort.toISOString(), until: window.until, paid: "batches" };
 }
 
 // A result filter in the address is one of the two the contract has; anything else narrows nothing.

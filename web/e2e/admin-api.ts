@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { catalogHandlers } from "./admin-catalog.ts";
 import { type AdminState, emptyState, type Schemas, usualState, worstState } from "./admin-data.ts";
+import { listPaidBatches } from "./admin-paid-batches-api.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { supplyHandlers } from "./admin-supply.ts";
@@ -464,6 +465,7 @@ const handlers: Handler<AdminState>[] = [
     query.get("site_id") === state.siteId ? ok({ data: state.merchants }) : fail(404, "not_found"),
   ),
   route("get", `${base}/payments/orders`, reads("sites.manage"), listPaymentOrders),
+  route("get", `${base}/payments/paid-batches`, reads("sites.manage"), listPaidBatches),
   route("get", `${base}/payments/refunds`, reads("sites.manage"), listPaymentRefunds),
   route("get", `${base}/payments/cash`, reads("sites.manage"), ({ query, state }) =>
     query.get("site_id") === state.siteId ? ok({ data: [], next_cursor: null }) : fail(404, "not_found"),

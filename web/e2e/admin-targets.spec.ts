@@ -58,7 +58,7 @@ test.describe("business targets", () => {
     ]);
     for (const url of [paid, revenue]) {
       expect(url.pathname).toBe("/orders");
-      expect(url.searchParams.get("state")).toBe("paid");
+      expect(url.searchParams.get("paid")).toBe("batches");
       expect(url.searchParams.get("since")).toBeTruthy();
       expect(url.searchParams.get("until")).toBeTruthy();
     }
@@ -67,16 +67,18 @@ test.describe("business targets", () => {
     expect(margin.searchParams.get("since")).toBeTruthy();
     expect(margin.searchParams.get("until")).toBeTruthy();
     expect(retention.pathname).toBe("/orders");
-    expect(retention.searchParams.get("state")).toBe("paid");
+    expect(retention.searchParams.get("paid")).toBe("batches");
     expect(retention.searchParams.get("since")).toMatch(/-01T00:00:00\.000Z$/);
     expect(retention.searchParams.get("until")).toBe(paid.searchParams.get("until"));
 
     await link("monthlyRevenue").click();
     await page.waitForURL(/\/orders\?/);
     const landed = new URL(page.url());
-    expect(landed.searchParams.get("state")).toBe("paid");
+    expect(landed.searchParams.get("paid")).toBe("batches");
     expect(landed.searchParams.get("since")).toBe(revenue.searchParams.get("since"));
     expect(landed.searchParams.get("until")).toBe(revenue.searchParams.get("until"));
+    await expect(page.getByText(zhText("orders.paidBatches.title"))).toBeVisible();
+    await expect(page.getByText("bank transfer")).toBeVisible();
   });
 
   test("an old node's four-field read writes only those four and keeps the commercial targets", async ({ page }) => {

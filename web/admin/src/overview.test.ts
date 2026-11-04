@@ -5,6 +5,7 @@ import {
   callsCoverage,
   callsDrill,
   callsEmptyKind,
+  cashView,
   ordersDrill,
   overviewRange,
   overviewWindow,
@@ -40,20 +41,24 @@ it("drills into the call list with the window and only the filters that narrow",
     status: "error",
   });
   expect(ordersDrill(window)).toEqual({ ...window, cash: "1" });
-  expect(paidOrdersDrill(window)).toEqual({ ...window, state: "paid" });
+  expect(cashView("1")).toBe("1");
+  expect(cashView('"1"')).toBe("1");
+  expect(cashView(1)).toBe("1");
+  expect(cashView("ledger")).toBeUndefined();
+  expect(paidOrdersDrill(window)).toEqual({ ...window, paid: "batches" });
 });
 
 it("opens retention at the previous UTC month's cohort", () => {
   expect(retentionOrdersDrill({ since: "2026-10-29T12:00:00.000Z", until: "2026-10-30T12:00:00.000Z" })).toEqual({
     since: "2026-09-01T00:00:00.000Z",
     until: "2026-10-30T12:00:00.000Z",
-    state: "paid",
+    paid: "batches",
   });
   // The window ends at midnight on the first: its last instant is still in the previous month.
   expect(retentionOrdersDrill({ since: "2026-10-25T00:00:00.000Z", until: "2026-11-01T00:00:00.000Z" })).toEqual({
     since: "2026-09-01T00:00:00.000Z",
     until: "2026-11-01T00:00:00.000Z",
-    state: "paid",
+    paid: "batches",
   });
 });
 

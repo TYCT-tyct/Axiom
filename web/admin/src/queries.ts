@@ -428,23 +428,50 @@ export const redeemCodesQuery = (siteId: AdminSchemas["SiteId"], filters: Redeem
     getNextPageParam: (page) => page.next_cursor ?? undefined,
   });
 
-// The cash behind the dashboard figure: ledger time, not an order's, so a refund of an older order and an offline
-// top-up are both here.
-export const cashMovementsQuery = (siteId: AdminSchemas["SiteId"], window: { since?: string; until?: string }) =>
-  infiniteQueryOptions({
-    queryKey: [accountKey, "cash-movements", siteId, window],
-    queryFn: ({ pageParam, signal }) =>
-      unwrap(
-        adminApi.GET(`${base}/payments/cash`, {
-          params: {
-            query: { site_id: siteId, since: window.since, until: window.until, cursor: pageParam, limit: pageSize },
-          },
-          signal,
-        }),
-      ),
+// A ledger list's pages share the window and the cursor contract; only the path and the query key differ.
+type LedgerPage<T> = { data?: T[]; next_cursor: string | null };
+
+function ledgerQuery<T>(
+  key: string,
+  siteId: AdminSchemas["SiteId"],
+  window: { since?: string; until?: string },
+  load: (cursor: string | undefined, signal: AbortSignal) => Promise<LedgerPage<T>>,
+) {
+  return infiniteQueryOptions({
+    queryKey: [accountKey, key, siteId, window],
+    queryFn: ({ pageParam, signal }) => load(pageParam, signal),
     initialPageParam: firstPage,
     getNextPageParam: nextCursor,
   });
+}
+
+// The cash behind the dashboard figure: ledger time, not an order's, so a refund of an older order and an offline
+// top-up are both here.
+export const cashMovementsQuery = (siteId: AdminSchemas["SiteId"], window: { since?: string; until?: string }) =>
+  ledgerQuery("cash-movements", siteId, window, (cursor, signal) =>
+    unwrap(
+      adminApi.GET(`${base}/payments/cash`, {
+        params: {
+          query: { site_id: siteId, since: window.since, until: window.until, cursor, limit: pageSize },
+        },
+        signal,
+      }),
+    ),
+  );
+
+// The paid credit batches behind paid users and monthly revenue. The server filters by the batch's created_at, not
+// an order's creation time, so the list is the same time window the dashboard counted.
+export const paidBatchesQuery = (siteId: AdminSchemas["SiteId"], window: { since?: string; until?: string }) =>
+  ledgerQuery("paid-batches", siteId, window, (cursor, signal) =>
+    unwrap(
+      adminApi.GET(`${base}/payments/paid-batches`, {
+        params: {
+          query: { site_id: siteId, since: window.since, until: window.until, cursor, limit: pageSize },
+        },
+        signal,
+      }),
+    ),
+  );
 
 export const paymentRefundsQuery = (siteId: AdminSchemas["SiteId"], state?: AdminSchemas["PaymentRefundState"]) =>
   infiniteQueryOptions({

@@ -90,6 +90,17 @@ export default {
       failed: "已拒绝",
     },
   },
+  paidBatches: {
+    title: "付费充值",
+    description:
+      "看板付费用户和月流水背后的充值批次，按批次自己的时间排列。窗口开始前创建、窗口内入账的订单会出现在这里。",
+    back: "返回订单",
+    emptyTitle: "这个时间范围内没有付费充值",
+    emptyBody: "付费充值入账时，会按充值批次创建的时间出现在这里。",
+    col: { at: "时间", account: "账户", amount: "额度", channel: "渠道" },
+    online: "在线订单",
+    offline: "线下：{{channel}}",
+  },
   cash: {
     title: "现金流水",
     description: "看板窗口内的账本现金收支，按交易时间排列：较早订单的退款和线下充值都会出现在看板统计的窗口里。",

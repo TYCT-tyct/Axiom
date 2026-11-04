@@ -1925,6 +1925,39 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/payments/paid-batches:
+    get:
+      operationId: listPaidBatches
+      tags: [Payments]
+      summary: The paid top-ups behind the dashboard's business figures
+      description: >-
+        One site's paid credit batches in a window, newest first. A batch's `created_at` is the time both paid users
+        and monthly revenue count; it is not an order's creation time, so an order created before the window and
+        credited in it is here. `since` is inclusive and `until` exclusive; the window is at most 63 days so a
+        retention drill can start at the previous UTC month's first day. Pages use `cursor` and `limit`; `amount` is
+        the credit the batch granted in the site's accounting currency, exact decimal text.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: since, in: query, schema: {type: string, format: date-time}, description: "Batches created at or after this time."}
+        - {name: until, in: query, schema: {type: string, format: date-time}, description: "Batches created before this time."}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of the site's paid batches, newest first.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaidBatchList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/payments/refunds:
     get:
       operationId: listPaymentRefunds
@@ -5598,6 +5631,27 @@ components:
         data:
           type: array
           items: {$ref: "#/components/schemas/CashMovement"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    PaidBatch:
+      type: object
+      required: [id, account_id, amount, created_at, online]
+      description: >-
+        A paid credit batch, the record behind the dashboard's paid users and monthly revenue. Its `created_at` is the
+        time those figures count; an online batch uses the order's ID as its ID.
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        amount: {$ref: "#/components/schemas/Money"}
+        created_at: {type: string, format: date-time, description: "The batch's time, the same axis paid users and monthly revenue count."}
+        online: {type: boolean, description: "True for a batch paid through an order; false for an offline channel."}
+        offline_channel: {type: string, description: "Where an offline payment was received; absent for an online batch."}
+    PaidBatchList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PaidBatch"}
         next_cursor: {type: string, nullable: true, description: "Null on the last page."}
     Merchant:
       type: object

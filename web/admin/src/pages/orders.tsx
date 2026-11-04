@@ -6,6 +6,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { orderAmounts } from "../orders/amounts";
 import { CashMovements } from "../orders/cash";
+import { PaidBatches } from "../orders/paid-batches";
 import { RefundQueue, Refunds } from "../orders/refunds";
 import { orderTone, paymentOrderState, paymentOrderStates, shortId } from "../orders/states";
 import {
@@ -43,6 +44,9 @@ function Current({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const filters = useSearch({ from: "/app/orders" });
   if (filters.cash === "1") {
     return <CashMovements siteId={siteId} since={filters.since} until={filters.until} />;
+  }
+  if (filters.paid === "batches") {
+    return <PaidBatches siteId={siteId} since={filters.since} until={filters.until} />;
   }
   return (
     <>

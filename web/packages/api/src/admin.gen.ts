@@ -801,6 +801,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/payments/paid-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The paid top-ups behind the dashboard's business figures
+         * @description One site's paid credit batches in a window, newest first. A batch's `created_at` is the time both paid users and monthly revenue count; it is not an order's creation time, so an order created before the window and credited in it is here. `since` is inclusive and `until` exclusive; the window is at most 63 days so a retention drill can start at the previous UTC month's first day. Pages use `cursor` and `limit`; `amount` is the credit the batch granted in the site's accounting currency, exact decimal text.
+         */
+        get: operations["listPaidBatches"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/payments/refunds": {
         parameters: {
             query?: never;
@@ -2681,6 +2701,26 @@ export interface components {
         };
         CashMovementList: {
             data: components["schemas"]["CashMovement"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description A paid credit batch, the record behind the dashboard's paid users and monthly revenue. Its `created_at` is the time those figures count; an online batch uses the order's ID as its ID. */
+        PaidBatch: {
+            id: components["schemas"]["Uuid"];
+            account_id: components["schemas"]["AccountId"];
+            amount: components["schemas"]["Money"];
+            /**
+             * Format: date-time
+             * @description The batch's time, the same axis paid users and monthly revenue count.
+             */
+            created_at: string;
+            /** @description True for a batch paid through an order; false for an offline channel. */
+            online: boolean;
+            /** @description Where an offline payment was received; absent for an online batch. */
+            offline_channel?: string;
+        };
+        PaidBatchList: {
+            data: components["schemas"]["PaidBatch"][];
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
@@ -6249,6 +6289,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CashMovementList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPaidBatches: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                /** @description Batches created at or after this time. */
+                since?: string;
+                /** @description Batches created before this time. */
+                until?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the site's paid batches, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaidBatchList"];
                 };
             };
             400: components["responses"]["BadRequest"];

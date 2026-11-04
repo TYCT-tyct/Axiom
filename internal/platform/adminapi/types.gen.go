@@ -3269,6 +3269,35 @@ type OverviewModel struct {
 	Model  *string `json:"model,omitempty"`
 }
 
+// PaidBatch A paid credit batch, the record behind the dashboard's paid users and monthly revenue. Its `created_at` is the time those figures count; an online batch uses the order's ID as its ID.
+type PaidBatch struct {
+	// AccountId An account's ID (TypeID).
+	AccountId AccountId `json:"account_id"`
+
+	// Amount An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Amount Money `json:"amount"`
+
+	// CreatedAt The batch's time, the same axis paid users and monthly revenue count.
+	CreatedAt time.Time `json:"created_at"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id Uuid `json:"id"`
+
+	// OfflineChannel Where an offline payment was received; absent for an online batch.
+	OfflineChannel *string `json:"offline_channel,omitempty"`
+
+	// Online True for a batch paid through an order; false for an offline channel.
+	Online bool `json:"online"`
+}
+
+// PaidBatchList defines model for PaidBatchList.
+type PaidBatchList struct {
+	Data []PaidBatch `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
 // PayAmount An amount in the currency a method is paid in, which is not always the site's. `amount` is a non-negative integer in decimal text, in the currency's minor units (cents for USD, fen for CNY, none for JPY).
 type PayAmount struct {
 	// Amount Example: 7300
@@ -5354,6 +5383,23 @@ type ListPaymentOrdersParams struct {
 	Since *time.Time `form:"since,omitempty" json:"since,omitempty"`
 
 	// Until Orders created before this time.
+	Until *time.Time `form:"until,omitempty" json:"until,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListPaidBatchesParams defines parameters for ListPaidBatches.
+type ListPaidBatchesParams struct {
+	SiteId SiteId `form:"site_id" json:"site_id"`
+
+	// Since Batches created at or after this time.
+	Since *time.Time `form:"since,omitempty" json:"since,omitempty"`
+
+	// Until Batches created before this time.
 	Until *time.Time `form:"until,omitempty" json:"until,omitempty"`
 
 	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.

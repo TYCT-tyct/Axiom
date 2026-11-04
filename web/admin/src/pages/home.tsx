@@ -331,7 +331,7 @@ function CashFigure({ data, window, showTarget }: { data: Overview; window: Wind
   );
 }
 
-function PaidOrdersFigure({ window, children }: { window: Window; children: ReactNode }) {
+function PaidBatchesFigure({ window, children }: { window: Window; children: ReactNode }) {
   return (
     <Link to="/orders" search={paidOrdersDrill(window)} className={figure}>
       {children}
@@ -343,7 +343,7 @@ function PaidUsersFigure({ data, window, targets, showTarget }: FigureProps) {
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <PaidOrdersFigure window={window}>
+    <PaidBatchesFigure window={window}>
       <Stat
         label={t("overview.paidUsers")}
         value={data.paid_users === undefined ? t("overview.unavailable") : format.number(data.paid_users)}
@@ -353,7 +353,7 @@ function PaidUsersFigure({ data, window, targets, showTarget }: FigureProps) {
           t("overview.paidUsersNote"),
         )}
       />
-    </PaidOrdersFigure>
+    </PaidBatchesFigure>
   );
 }
 
@@ -361,7 +361,7 @@ function MonthlyRevenueFigure({ data, window, targets, showTarget }: FigureProps
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <PaidOrdersFigure window={window}>
+    <PaidBatchesFigure window={window}>
       <Stat
         label={t("overview.monthlyRevenue")}
         value={data.monthly_revenue ? format.money(data.monthly_revenue) : t("overview.unavailable")}
@@ -371,7 +371,7 @@ function MonthlyRevenueFigure({ data, window, targets, showTarget }: FigureProps
           t("overview.monthlyRevenueNote"),
         )}
       />
-    </PaidOrdersFigure>
+    </PaidBatchesFigure>
   );
 }
 

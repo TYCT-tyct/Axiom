@@ -62,8 +62,39 @@ export function aRefund(n: number, order: Schemas["PaymentOrder"], user: Schemas
   } satisfies Schemas["PaymentRefund"];
 }
 
-// The payment fixtures of a populated site: one channel, its orders, and the refunds frozen on them. The caller passes
-// one fallback user for an empty people list; a populated fixture always has its owner first.
+// The paid credit batches behind the dashboard's business figures, inside the window. The list is by the batch's
+// own time, as the server's paid-batch view is, not by an order's creation time.
+function paidBatches(people: Schemas["UserSummary"][], fallbackUser: Schemas["UserSummary"]) {
+  const fallback = people[0] ?? fallbackUser;
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  return [
+    {
+      id: uuid(15, 1),
+      account_id: people[0]?.account_id ?? fallback.account_id,
+      amount: usd("1500"),
+      created_at: at(30),
+      online: true,
+    },
+    {
+      id: uuid(15, 2),
+      account_id: people[1]?.account_id ?? fallback.account_id,
+      amount: usd("2000"),
+      created_at: at(60),
+      online: false,
+      offline_channel: "bank transfer",
+    },
+    {
+      id: uuid(15, 3),
+      account_id: people[2]?.account_id ?? fallback.account_id,
+      amount: usd("700"),
+      created_at: at(90),
+      online: true,
+    },
+  ] satisfies Schemas["PaidBatch"][];
+}
+
+// The payment fixtures of a populated site: one channel, its orders, its paid batches, and the refunds frozen on
+// them. The caller passes one fallback user for an empty people list; a populated fixture always has its owner first.
 export function paymentData(people: Schemas["UserSummary"][], fallbackUser: Schemas["UserSummary"]) {
   const fallback = people[0] ?? fallbackUser;
   const orders = range(60).map((n) => anOrder(n, people[(n - 1) % Math.max(people.length, 1)] ?? fallback));
@@ -76,5 +107,5 @@ export function paymentData(people: Schemas["UserSummary"][], fallbackUser: Sche
       order.refunds = [...(order.refunds ?? []), refund];
     }
   }
-  return { merchants: [aMerchant()], orders, refunds };
+  return { merchants: [aMerchant()], orders, paidBatches: paidBatches(people, fallbackUser), refunds };
 }

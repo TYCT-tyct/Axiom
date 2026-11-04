@@ -78,3 +78,17 @@ SELECT
     (SELECT coalesce(sum(amount::numeric), 0)::text FROM paid WHERE created_at >= @since) AS monthly_revenue,
     (SELECT count(*)::bigint FROM accounts WHERE in_cohort) AS cohort,
     (SELECT count(*)::bigint FROM accounts WHERE in_cohort AND retained) AS retained;
+
+-- name: ListPaidBatches :many
+-- The paid credit batches behind the dashboard's commercial figures, by the batch's own created_at. The time axis is
+-- the same one PlatformPaid counts, not an order's creation time, so a payment credited after midnight is in the
+-- window the dashboard counted. The partial index credit_batches_by_site_paid_created covers the range read.
+SELECT id, account_id, amount::text AS amount, created_at,
+    (merchant_id IS NOT NULL)::boolean AS online,
+    coalesce(offline_channel, '')::text AS offline_channel
+FROM billing.credit_batches
+WHERE site_id = @site_id AND source = 'paid'
+    AND created_at >= @since AND created_at < @until
+    AND (created_at, id) < (@after_at::timestamptz, @after_id::uuid)
+ORDER BY created_at DESC, id DESC
+LIMIT @max;
