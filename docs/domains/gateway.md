@@ -240,7 +240,7 @@ TTL 按 OpenRouter 的读法：以开头的十进制数字为准，小数截断�
 | 模型不存在；key 不允许用这个模型 | 404 `model_not_found`，不返回 403 | `not_found_error` | — |
 | 没有可用端点，永久性的：能力、上下文、格式、路由预设或请求覆盖过滤掉了全部端点，或没有售价 | 404 `no_endpoint`，附过滤原因 | `not_found_error` | — |
 | 没有可用端点，暂时性的：全部离线（第一次重新检测仍失败）、供应商余额不足、重试预算用完，或 `:exacto` 没有已验证的端点 | 503 `no_endpoint`，附原因和 `Retry-After` | `overloaded_error` | — |
-| 路由预设暂不可用：快照不认识 key 的 `preset_id`（滚动发布/回滚、刚创建还没重建、数据损坏） | 503 `preset_unavailable`，`Retry-After: 5`；不按放行预设继续 | `overloaded_error` | — |
+| 路由预设暂不可用：快照不认识 key 的 `preset_id`（滚动发布/回滚、刚创建还没重建、本节点读不懂它的规则、数据损坏），或它不属于这把 key 的站点、账户、工作区或币种 | 503 `preset_unavailable`，`Retry-After: 5`；不按放行预设继续 | `overloaded_error` | — |
 | 每个端点都不支持这个请求的写法 | 400 `invalid_request`，附原因 | `invalid_request_error` | — |
 | 开启了联网搜索或代码执行，却没写最多用几次，而模型也没有默认次数（费用没有上界，预留不了） | 400 `invalid_request`，说明要写 `max_uses`（Messages 联网搜索）或 `max_tool_calls`（Responses）；没有上限字段的（Chat 的工具、Messages 的代码执行）说明该格式暂不支持，不调用上游 | `invalid_request_error` | — |
 | 上游拒绝上下文过长（HTTP 或流内错误） | 400 `context_length_exceeded`，保留脱敏原话、`param` 和上游的 code（Chat 在 `metadata.provider_code`，Responses 原生流在 `response.error.code`）；不重试 | `invalid_request_error` | 同一 `error_type`，保留已转发内容 |

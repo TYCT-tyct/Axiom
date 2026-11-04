@@ -30,16 +30,21 @@ type (
 	AccountID uuid.UUID
 	// SiteID identifies a site.
 	SiteID uuid.UUID
+	// WorkspaceID identifies a workspace of an account.
+	WorkspaceID uuid.UUID
 )
 
 // Admission is the part of accounts' admission that routing reads: who asks, which preset applies, and which models
-// the key may use. Allowed is nil when the key may use every model.
+// the key may use. Allowed is nil when the key may use every model. Workspace and the site's Currency say which
+// presets the key may be routed by (Preset.visibleTo).
 type Admission struct {
-	Tier    accounts.TierID
-	Account AccountID
-	Site    SiteID
-	Preset  PresetID
-	Allowed map[catalog.ModelID]struct{}
+	Tier      accounts.TierID
+	Account   AccountID
+	Site      SiteID
+	Workspace WorkspaceID
+	Currency  platform.Currency
+	Preset    PresetID
+	Allowed   map[catalog.ModelID]struct{}
 }
 
 func (a Admission) allows(m catalog.ModelID) bool {
@@ -140,8 +145,11 @@ func (e *NoEndpoint) Error() string {
 // ErrStale is returned when the snapshot is missing or older than the staleness limit; the gateway answers 503.
 var ErrStale = errors.New("the routing snapshot is missing or stale")
 
-// ErrUnknownPreset is a preset the snapshot does not hold: admission named a preset the snapshot was built without.
-var ErrUnknownPreset = errors.New("the admission's preset is not in the routing snapshot")
+// ErrPresetUnavailable is a key's preset the snapshot cannot route by: one it does not hold (not yet built, left out
+// because this node cannot read its rules, or written by a newer release), or one the key may not use. Routing by
+// another preset could exceed its price limits or sources, so the request is refused instead
+// (docs/domains/routing.md「滚动发布、失败与性能」).
+var ErrPresetUnavailable = errors.New("routing: the key's routing preset is unavailable")
 
 // Reason is why a candidate was left out.
 type Reason uint8

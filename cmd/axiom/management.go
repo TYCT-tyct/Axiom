@@ -17,6 +17,7 @@ import (
 	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/routing"
 )
 
 // managementAPI is the public, Bearer-authenticated key administration surface, outside the console's cookie guard.
@@ -272,7 +273,7 @@ func managementStatus(err error) int {
 		return http.StatusForbidden
 	case errors.Is(err, accounts.ErrKeyNotFound), errors.Is(err, accounts.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, accounts.ErrPresetConflict):
+	case errors.Is(err, accounts.ErrPresetConflict), errors.Is(err, routing.ErrDefaultInvalid):
 		return http.StatusConflict
 	case errors.Is(err, accounts.ErrPreset):
 		return http.StatusBadRequest

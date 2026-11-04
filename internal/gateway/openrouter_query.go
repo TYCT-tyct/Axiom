@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"axiom/internal/platform"
+	"axiom/internal/routing"
 )
 
 // orSort is the order the list is served in.
@@ -217,11 +218,11 @@ func readContext(q *orQuery, name, value string) error {
 }
 
 // readPrice reads one of the four price bounds, in dollars per million tokens: the main site's currency is the dollar, so
-// perToken, which reads credits per million tokens, reads the number exactly as written, refusing one that is not a whole
+// routing.PricePerMillion, which reads credits per million tokens, reads the number exactly as written, refusing one that is not a whole
 // number of price units rather than rounding it. A bound beyond what a unit price holds is refused too: the client is
 // told rather than the server guessing what it meant.
 func (q *orQuery) readPrice(name, value string) error {
-	p, ok := perToken([]byte(value))
+	p, ok := routing.PricePerMillion([]byte(value))
 	if !ok {
 		return queryMismatch(name, "a number of dollars per million tokens with at most 9 decimals, from 0 to 1000000000")
 	}

@@ -3116,6 +3116,12 @@ type OfflinePayment struct {
 	Channel string `json:"channel"`
 }
 
+// OperationsAgentStopped defines model for OperationsAgentStopped.
+type OperationsAgentStopped struct {
+	// Revoked How many live credentials this stop revoked.
+	Revoked int `json:"revoked"`
+}
+
 // OperationsCountTarget defines model for OperationsCountTarget.
 type OperationsCountTarget struct {
 	// Gap Actual minus target. Absent for calls and errors when the call log is incomplete over the window; paid users always state it because it reads credit batches, not the call log.
@@ -3123,6 +3129,85 @@ type OperationsCountTarget struct {
 
 	// Target The monthly target, prorated to the part of the window inside its month.
 	Target int64 `json:"target"`
+}
+
+// OperationsCredential defines model for OperationsCredential.
+type OperationsCredential struct {
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Id An operations credential's ID (TypeID).
+	Id         OperationsCredentialId `json:"id"`
+	LastUsedAt *time.Time             `json:"last_used_at,omitempty"`
+	Name       string                 `json:"name"`
+
+	// Permissions Sorted; always holds operations.read.
+	Permissions []string `json:"permissions"`
+	Platform    bool     `json:"platform"`
+
+	// PreviousTokenUntil When the token the last rotation replaced stops working; absent once it has.
+	PreviousTokenUntil *time.Time `json:"previous_token_until,omitempty"`
+	ProposerVendors    []string   `json:"proposer_vendors"`
+	RevokedAt          *time.Time `json:"revoked_at,omitempty"`
+
+	// Sites The sites it acts on; absent for every site.
+	Sites *[]SiteId `json:"sites,omitempty"`
+
+	// TokenLast4 The last four characters of the current token.
+	TokenLast4 string `json:"token_last4"`
+}
+
+// OperationsCredentialCreate defines model for OperationsCredentialCreate.
+type OperationsCredentialCreate struct {
+	ExpiresAt time.Time `json:"expires_at"`
+	Name      string    `json:"name"`
+
+	// Permissions Besides operations.read, which every credential holds.
+	Permissions []string `json:"permissions"`
+
+	// Platform Whether it may act on the platform's own resources.
+	Platform bool `json:"platform"`
+
+	// ProposerVendors The vendors of the models that propose through it, which an approving model must differ from.
+	ProposerVendors []string `json:"proposer_vendors"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Sites Absent for every site.
+	Sites *[]SiteId `json:"sites,omitempty"`
+}
+
+// OperationsCredentialId An operations credential's ID (TypeID).
+type OperationsCredentialId = string
+
+// OperationsCredentialList defines model for OperationsCredentialList.
+type OperationsCredentialList struct {
+	Data       []OperationsCredential `json:"data"`
+	NextCursor *string                `json:"next_cursor,omitempty"`
+}
+
+// OperationsCredentialRevoked defines model for OperationsCredentialRevoked.
+type OperationsCredentialRevoked struct {
+	// CredentialId An operations credential's ID (TypeID).
+	CredentialId OperationsCredentialId `json:"credential_id"`
+}
+
+// OperationsCredentialRotate defines model for OperationsCredentialRotate.
+type OperationsCredentialRotate struct {
+	OverlapHours *int `json:"overlap_hours,omitempty"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// OperationsCredentialToken defines model for OperationsCredentialToken.
+type OperationsCredentialToken struct {
+	// CredentialId An operations credential's ID (TypeID).
+	CredentialId OperationsCredentialId `json:"credential_id"`
+
+	// Token Shown once; absent on a replay.
+	Token *string `json:"token,omitempty"`
 }
 
 // OperationsMoneyTarget defines model for OperationsMoneyTarget.
@@ -5331,6 +5416,39 @@ type SetModelStatusParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// StopOperationsAgentParams defines parameters for StopOperationsAgent.
+type StopOperationsAgentParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ListOperationsCredentialsParams defines parameters for ListOperationsCredentials.
+type ListOperationsCredentialsParams struct {
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// CreateOperationsCredentialParams defines parameters for CreateOperationsCredential.
+type CreateOperationsCredentialParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// RevokeOperationsCredentialParams defines parameters for RevokeOperationsCredential.
+type RevokeOperationsCredentialParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// RotateOperationsCredentialParams defines parameters for RotateOperationsCredential.
+type RotateOperationsCredentialParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListCashMovementsParams defines parameters for ListCashMovements.
 type ListCashMovementsParams struct {
 	SiteId    SiteId     `form:"site_id" json:"site_id"`
@@ -5925,6 +6043,18 @@ type UpdateModelSpecJSONRequestBody = SpecUpdate
 
 // SetModelStatusJSONRequestBody defines body for SetModelStatus for application/json ContentType.
 type SetModelStatusJSONRequestBody = ModelStatusUpdate
+
+// StopOperationsAgentJSONRequestBody defines body for StopOperationsAgent for application/json ContentType.
+type StopOperationsAgentJSONRequestBody = ReasonRequest
+
+// CreateOperationsCredentialJSONRequestBody defines body for CreateOperationsCredential for application/json ContentType.
+type CreateOperationsCredentialJSONRequestBody = OperationsCredentialCreate
+
+// RevokeOperationsCredentialJSONRequestBody defines body for RevokeOperationsCredential for application/json ContentType.
+type RevokeOperationsCredentialJSONRequestBody = ReasonRequest
+
+// RotateOperationsCredentialJSONRequestBody defines body for RotateOperationsCredential for application/json ContentType.
+type RotateOperationsCredentialJSONRequestBody = OperationsCredentialRotate
 
 // InvestigatePaymentDiscrepancyJSONRequestBody defines body for InvestigatePaymentDiscrepancy for application/json ContentType.
 type InvestigatePaymentDiscrepancyJSONRequestBody = ReasonRequest

@@ -17,6 +17,7 @@ import (
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
+	"axiom/internal/routing"
 )
 
 // apiError is a failure with the status and code the contract gives it. A handler returns it, or an error that
@@ -85,6 +86,7 @@ var refusals = []refusal{
 	{accounts.ErrTOTPOn, http.StatusConflict, codeConflict, "two-step verification is already on"},
 	{accounts.ErrTOTPOff, http.StatusConflict, codeConflict, "two-step verification is not on"},
 	{accounts.ErrTooManyKeys, http.StatusConflict, codeTooManyKeys, "the account may not make another key"},
+	{routing.ErrDefaultInvalid, http.StatusConflict, codeConflict, "the default routing preset of this workspace cannot be used; an administrator must change it"},
 	{accounts.ErrTooManyAttempts, http.StatusTooManyRequests, codeRateLimited, "too many attempts"},
 	{accounts.ErrBusy, http.StatusServiceUnavailable, codeUnavailable, "busy, try again shortly"},
 	{accounts.ErrStale, http.StatusServiceUnavailable, codeUnavailable, "temporarily unavailable"},

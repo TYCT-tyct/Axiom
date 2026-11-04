@@ -24,6 +24,7 @@ info:
 tags:
   - {name: Calls, description: "Support summaries and operator traces."}
   - {name: Reports, description: "The operations dashboard: calls, revenue, cost and cash over a window."}
+  - {name: Operations, description: "The operations agent's control plane: its credentials and the emergency stop."}
   - {name: Audit, description: "Immutable audit search."}
   - {name: Session, description: "Sign-in, two-step verification and the current session."}
   - {name: Site, description: "Site settings."}
@@ -4832,6 +4833,173 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/credentials:
+    get:
+      operationId: listOperationsCredentials
+      tags: [Operations]
+      summary: The operations credentials
+      description: >-
+        Every operations credential, newest first, revoked ones included: its permissions, sites, platform grant,
+        proposer vendors, expiry, last use and the last four characters of its current token. Never a token.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of credentials
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsCredentialList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createOperationsCredential
+      tags: [Operations]
+      summary: Make an operations credential
+      description: >-
+        Makes a credential for the operations agent and returns its token once. It always holds `operations.read`; it
+        may hold any other declared permission except `operations.manage` and `platform_grants.manage`, which are the
+        control plane's. Without `sites` it acts on every site; `platform` lets it read the platform's own resources.
+        It expires at `expires_at`, which the owner chooses for each credential and must be in the future. A replay of the same key returns
+        the credential without the token: a lost token is replaced by a rotation.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationsCredentialCreate"}
+      responses:
+        "201":
+          description: The credential, and its token unless this is a replay
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsCredentialToken"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/credentials/{credential_id}/rotate:
+    parameters:
+      - {name: credential_id, in: path, required: true, schema: {$ref: "#/components/schemas/OperationsCredentialId"}}
+    post:
+      operationId: rotateOperationsCredential
+      tags: [Operations]
+      summary: Give an operations credential a new token
+      description: >-
+        Returns a new token once. The token it replaces keeps working for `overlap_hours` (0 to 24, 24 when absent),
+        for the MCP bridge to swap its file; a token an earlier rotation replaced stops now. A replay of the same key
+        returns no token: rotate again.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationsCredentialRotate"}
+      responses:
+        "200":
+          description: The new token unless this is a replay
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsCredentialToken"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/credentials/{credential_id}/revoke:
+    parameters:
+      - {name: credential_id, in: path, required: true, schema: {$ref: "#/components/schemas/OperationsCredentialId"}}
+    post:
+      operationId: revokeOperationsCredential
+      tags: [Operations]
+      summary: Revoke an operations credential
+      description: >-
+        From the next request every token of the credential is refused, and it never comes back; a revoked or expired
+        credential is not found.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: Revoked
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsCredentialRevoked"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/agent/stop:
+    post:
+      operationId: stopOperationsAgent
+      tags: [Operations]
+      summary: Emergency stop of the operations agent
+      description: >-
+        Revokes every live operations credential in one transaction, so the operations listener refuses the next
+        request of any of them. Resuming is making a new credential; a revoked one never comes back. Stopping again
+        revokes nothing and is not an error.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: Stopped
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsAgentStopped"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
 components:
   securitySchemes:
     session:
@@ -6448,6 +6616,89 @@ components:
       minLength: 1
       maxLength: 1000
       description: Why the person is doing this. It goes to the audit log.
+    OperationsCredentialId: {type: string, pattern: '^opcred_[0-9a-hjkmnp-tv-z]{26}$', description: "An operations credential's ID (TypeID)."}
+    OperationsCredential:
+      type: object
+      additionalProperties: false
+      required: [id, name, permissions, platform, proposer_vendors, created_at, expires_at, token_last4]
+      properties:
+        id: {$ref: "#/components/schemas/OperationsCredentialId"}
+        name: {type: string}
+        permissions: {type: array, items: {type: string}, description: Sorted; always holds operations.read.}
+        sites:
+          type: array
+          items: {$ref: "#/components/schemas/SiteId"}
+          description: The sites it acts on; absent for every site.
+        platform: {type: boolean}
+        proposer_vendors: {type: array, items: {type: string}}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+        last_used_at: {type: string, format: date-time}
+        token_last4: {type: string, description: The last four characters of the current token.}
+        previous_token_until:
+          type: string
+          format: date-time
+          description: When the token the last rotation replaced stops working; absent once it has.
+    OperationsCredentialList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/OperationsCredential"}}
+        next_cursor: {type: string}
+    OperationsCredentialCreate:
+      type: object
+      additionalProperties: false
+      required: [name, permissions, platform, proposer_vendors, expires_at, reason]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        permissions:
+          type: array
+          maxItems: 50
+          items: {type: string, pattern: '^[a-z_]+\.[a-z_]+$'}
+          description: Besides operations.read, which every credential holds.
+        sites:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: {$ref: "#/components/schemas/SiteId"}
+          description: Absent for every site.
+        platform: {type: boolean, description: Whether it may act on the platform's own resources.}
+        proposer_vendors:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: {type: string, pattern: '^[a-z0-9][a-z0-9.-]{0,39}$'}
+          description: The vendors of the models that propose through it, which an approving model must differ from.
+        expires_at: {type: string, format: date-time}
+        reason: {$ref: "#/components/schemas/Reason"}
+    OperationsCredentialRotate:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        overlap_hours: {type: integer, minimum: 0, maximum: 24, default: 24}
+        reason: {$ref: "#/components/schemas/Reason"}
+    OperationsCredentialToken:
+      type: object
+      additionalProperties: false
+      required: [credential_id]
+      properties:
+        credential_id: {$ref: "#/components/schemas/OperationsCredentialId"}
+        token: {type: string, description: Shown once; absent on a replay.}
+    OperationsCredentialRevoked:
+      type: object
+      additionalProperties: false
+      required: [credential_id]
+      properties:
+        credential_id: {$ref: "#/components/schemas/OperationsCredentialId"}
+    OperationsAgentStopped:
+      type: object
+      additionalProperties: false
+      required: [revoked]
+      properties:
+        revoked: {type: integer, minimum: 0, description: How many live credentials this stop revoked.}
     ReasonRequest:
       type: object
       required: [reason]

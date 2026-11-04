@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -86,6 +87,12 @@ func (a *authority) intermediate(t *testing.T, usage ...x509.ExtKeyUsage) *autho
 // issue signs a leaf valid for the given names and purposes.
 func (a *authority) issue(t *testing.T, dns []string, ips []net.IP, usage ...x509.ExtKeyUsage) (certPEM, keyPEM []byte) {
 	t.Helper()
+	return a.issueFor(t, dns, ips, nil, usage...)
+}
+
+// issueFor is issue with URI names, where a node certificate states its purpose.
+func (a *authority) issueFor(t *testing.T, dns []string, ips []net.IP, uris []*url.URL, usage ...x509.ExtKeyUsage) (certPEM, keyPEM []byte) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +104,7 @@ func (a *authority) issue(t *testing.T, dns []string, ips []net.IP, usage ...x50
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		DNSNames:     dns,
 		IPAddresses:  ips,
+		URIs:         uris,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  usage,
 	}
@@ -166,6 +174,53 @@ func TestMutualTLSRequiresACertificateFromBothSides(t *testing.T) {
 		RootCAs: mustPool(t, clientConfig.RootCAs), ServerName: "127.0.0.1", MinVersion: tls.VersionTLS13,
 	}); err == nil {
 		t.Fatal("the server accepted a peer without a certificate")
+	}
+}
+
+// TestOperationsListenerNeedsTheOpsPurpose: a listener that requires the ops purpose accepts a certificate the authority
+// signed with that purpose among its URI names, and refuses one that is otherwise as good, such as an ingress's, or that
+// names another purpose.
+func TestOperationsListenerNeedsTheOpsPurpose(t *testing.T) {
+	t.Parallel()
+	serverDir, ingressDir, ca := nodeDirs(t)
+	server, err := Server(serverDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := RequirePurpose(server, OpsPurpose)
+	client := func(uris ...string) *tls.Config {
+		var names []*url.URL
+		for _, u := range uris {
+			parsed, err := url.Parse(u)
+			if err != nil {
+				t.Fatal(err)
+			}
+			names = append(names, parsed)
+		}
+		cert, key := ca.issueFor(t, []string{"ops.test"}, nil, names, x509.ExtKeyUsageClientAuth)
+		cfg, err := Client(writeNode(t, filepath.Join(t.TempDir(), "ops"), cert, key, ca.pem), "127.0.0.1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	ingress, err := Client(ingressDir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handshake(t, operations, client(OpsPurpose)); err != nil {
+		t.Fatalf("the ops node's certificate was refused: %v", err)
+	}
+	for name, cfg := range map[string]*tls.Config{
+		"an ingress's certificate": ingress,
+		"another purpose":          client("urn:axiom:node-purpose:ingress"),
+	} {
+		if err := handshake(t, operations, cfg); err == nil {
+			t.Errorf("%s opened the operations listener", name)
+		}
+	}
+	if err := handshake(t, server, ingress); err != nil {
+		t.Errorf("requiring the purpose changed the node listener's configuration: %v", err)
 	}
 }
 

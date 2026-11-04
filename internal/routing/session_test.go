@@ -179,12 +179,19 @@ func TestRecordJSON(t *testing.T) {
 // sticks to the third: what BenchmarkPlan and TestPlanScales plan over. cfg is the router's configuration.
 func candidates(tb testing.TB, n int, cfg routing.Config) (*harness, routing.Input) {
 	tb.Helper()
+	return candidatesUnder(tb, n, cfg, openPreset())
+}
+
+// candidatesUnder is candidates routed by the preset; the model is a7/m, which BenchmarkPlanPreset's rules name.
+func candidatesUnder(tb testing.TB, n int, cfg routing.Config, preset routing.Preset) (*harness, routing.Input) {
+	tb.Helper()
 	var endpoints []routing.Endpoint
 	for i := 1; i <= n; i++ {
 		endpoints = append(endpoints, endpoint(tb, i, func(e *routing.Endpoint) {
 			e.Price.Schedule = schedule(tb, "0.000001", "0.000002", "0.0000001")
 			e.Cost = e.Price.Schedule
 			e.Funds = &suppliers.Funds{Balance: platform.AmountExact(1_000_000_000_000)}
+			e.ModelSlug = "a7/m"
 			if i%7 == 0 {
 				e.BreakerOpen = true
 			}
@@ -192,7 +199,7 @@ func candidates(tb testing.TB, n int, cfg routing.Config) (*harness, routing.Inp
 	}
 	in := input()
 	in.Sticky = ep(3)
-	return newHarness(tb, cfg, openPreset(), endpoints...), in
+	return newHarness(tb, cfg, preset, endpoints...), in
 }
 
 // BenchmarkPlan is the route for a request with fifty candidates, the size docs/performance.md expects ("通常几十个").

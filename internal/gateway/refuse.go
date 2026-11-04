@@ -95,6 +95,7 @@ var messages = map[string]string{
 	"timeout":              "The request body was not received in time.",
 	"generation_not_found": "No call with this ID is visible to this key.",
 	"upstream_error":       "The upstream failed; retry shortly.",
+	"preset_unavailable":   "The routing preset of this API key is not available now; retry shortly, or choose another preset for the key.",
 }
 
 // errorTypes are the Messages `type` of a status; Chat's `type` uses the same words (protocol's errorTypes, which the
@@ -178,6 +179,8 @@ func refusal(f protocol.Format, err error) (r *Refusal, expected bool) {
 		return invalid(strings.TrimPrefix(err.Error(), protocol.ErrInvalid.Error()+": ")), true
 	case errors.Is(err, billing.ErrUnbounded):
 		return unbounded(f, err), true
+	case errors.Is(err, routing.ErrPresetUnavailable):
+		return errPresetUnavailable, true
 	case errors.Is(err, accounts.ErrStale), errors.Is(err, catalog.ErrStale), errors.Is(err, routing.ErrStale),
 		errors.Is(err, billing.ErrTerminated), errors.Is(err, errCommitUnknown), errors.Is(err, context.DeadlineExceeded):
 		return ErrOverloaded, true // the node cannot serve now; the first request that finds it so is not a bug

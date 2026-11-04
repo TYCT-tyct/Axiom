@@ -145,6 +145,7 @@ func TestRefusalOfAnError(t *testing.T) {
 		"a retired model":                        {catalog.ErrRetired, 404, "model_not_found", false},
 		"a catalog gone stale":                   {catalog.ErrStale, 503, "overloaded", false},
 		"a routing snapshot gone stale":          {routing.ErrStale, 503, "overloaded", false},
+		"a key's preset this node cannot route":  {wrapped(routing.ErrPresetUnavailable), 503, "preset_unavailable", false},
 		"a reaped holder":                        {billing.ErrTerminated, 503, "overloaded", false},
 		"a deadline":                             {wrapped(errors.Join(errors.New("x"), context.DeadlineExceeded)), 503, "overloaded", false},
 		"a body Inspect cannot read":             {fmt.Errorf("%w: model is missing", protocol.ErrInvalid), 400, "invalid_request", false},

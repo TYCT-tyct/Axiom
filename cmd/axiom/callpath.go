@@ -249,6 +249,7 @@ func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service,
 		SiteCurrency:  siteCurrency,
 		Models:        models,
 		UnknownItems:  unknownItems(d.db),
+		Presets:       routePresets(d.db, d.logger),
 		Quality:       health,
 		Router:        router,
 		Logger:        d.logger,
@@ -425,6 +426,18 @@ func unknownItems(db *pg.DB) func(context.Context) ([]billing.UnknownItem, error
 			return err
 		})
 		return items, err
+	}
+}
+
+// routePresets reads the routing presets for each build, keeping the versions it compiled (routing.Presets).
+func routePresets(db *pg.DB, logger *slog.Logger) func(context.Context) ([]routing.Preset, error) {
+	source := &routing.Presets{Logger: logger}
+	return func(ctx context.Context) (presets []routing.Preset, err error) {
+		err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
+			presets, err = source.Load(ctx, tx)
+			return err
+		})
+		return presets, err
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -146,18 +147,44 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	id := KeyID(uuid.NewV7())
 	version := s.versions[0]
 	hash := s.hashes.Sum(version, []byte(text))
-	if err := s.queries.InsertKey(ctx, tx, InsertKeyParams{
+	key := InsertKeyParams{
 		Kind: r.Kind, ID: uuid.UUID(id), SiteID: uuid.UUID(r.Site), AccountID: uuid.UUID(r.Account),
 		WorkspaceID: uuid.UUID(r.Workspace), Name: r.Name, Prefix: site.KeyPrefix, Last4: text[len(text)-4:],
 		SecretHash: hash[:], SecretVersion: int64(version), CreatedBy: uuid.UUID(r.CreatedBy),
 		ExpiresAt: r.ExpiresAt, SpendLimit: limit, LimitReset: nullable(reset), Models: nilIfEmpty(r.Models), IpAllow: nilIfEmpty(r.IPAllow),
-	}); err != nil {
-		return CreatedKey{}, fmt.Errorf("create an API key: %w", err)
 	}
-	if err := recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account), nil); err != nil {
+	if err := s.insertKey(ctx, tx, &key, site.Currency); err != nil {
+		return CreatedKey{}, err
+	}
+	if err := recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account), presetDetail(key.PresetID)); err != nil {
 		return CreatedKey{}, err
 	}
 	return CreatedKey{id, secret.New(text)}, nil
+}
+
+// insertKey binds a new call key to the routing preset of its layers' defaults (Config.KeyPreset), in the transaction
+// that makes it, and inserts it. A management key is never routed, so it has no preset; nor has any key when no
+// KeyPreset was given.
+func (s *Service) insertKey(ctx context.Context, tx pg.Tx, key *InsertKeyParams, currency platform.Currency) error {
+	if key.Kind == CallKey && s.keyPreset != nil {
+		preset, err := s.keyPreset(ctx, tx, key.SiteID, key.AccountID, key.WorkspaceID, currency)
+		if err != nil {
+			return fmt.Errorf("create an API key: its routing preset: %w", err)
+		}
+		key.PresetID = &preset
+	}
+	if err := s.queries.InsertKey(ctx, tx, *key); err != nil {
+		return fmt.Errorf("create an API key: %w", err)
+	}
+	return nil
+}
+
+// presetDetail is what the audit of a new key says of its routing preset.
+func presetDetail(preset *uuid.UUID) map[string]any {
+	if preset == nil {
+		return nil
+	}
+	return map[string]any{"preset_id": preset.String()}
 }
 
 // keyWindow is the span the limit of keys made counts over.

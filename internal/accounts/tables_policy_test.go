@@ -48,6 +48,8 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"password_reset_requests": {"id", "email", "domain", "language", "expires_at"},
 		"password_reset_tokens":   {"used_at"},
 		"registration_requests":   {"tier_id", "domain", "language", "expires_at", "token_hash"},
+		"agent_credentials":       {"revoked_at", "last_used_at"},
+		"agent_credential_tokens": {"retires_at"},
 	}
 	assertUpdatableColumns(t, db, updatable)
 	assertDeniedDeletes(t, db, updatable)
@@ -100,7 +102,7 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
 	var want []string
 	for _, table := range []string{
-		"accounts", "announcements", "api_keys", "legal_acceptances", "legal_documents", "members", "notification_preferences", "oauth_flows", "passkey_credentials",
+		"accounts", "agent_credential_tokens", "agent_credentials", "announcements", "api_keys", "legal_acceptances", "legal_documents", "members", "notification_preferences", "oauth_flows", "passkey_credentials",
 		"password_reset_requests", "password_reset_tokens", "platform_grants", "presets", "recovery_codes",
 		"registration_requests", "roles", "security_failures", "sessions", "site_billing_preferences", "site_domains", "site_logos",
 		"site_oauth_providers", "site_settings", "sites", "tiers", "user_identities", "user_notices", "users",
