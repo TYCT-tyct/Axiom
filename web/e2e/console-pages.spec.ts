@@ -72,7 +72,7 @@ test.describe("accepting updated documents", () => {
     const state = await mockConsole(page);
     state.legal = demoDocuments();
     signedInAs(state);
-    await page.route("**/api/console/v1/legal", (route) =>
+    await page.route("**/api/console/v1/legal*", (route) =>
       route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } }),
     );
     await page.goto("/console/keys");
