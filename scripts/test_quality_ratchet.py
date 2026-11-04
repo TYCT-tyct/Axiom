@@ -211,6 +211,21 @@ class CoverageTest(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertIn("coverage measured for 0 packages", run.stdout)
 
+    def test_the_withcluster_test_command_is_not_measured(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.write("go.mod", "module fixture\n\ngo 1.27.3\n")
+            fixture.write("internal/platform/pgtest/cmd/withcluster/main.go",
+                          "package main\n\nfunc main() { run() }\n\nfunc run() {}\n")
+            fixture.write("coverage.out",
+                          "mode: set\nfixture/internal/platform/pgtest/cmd/withcluster/main.go:3.14,3.14 1 0\n")
+            fixture.baseline()
+
+            run = fixture.run("--coverage", fixture.profile())
+
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn("coverage measured for 0 packages", run.stdout)
+
     def test_generated_code_is_dropped_from_both_sides(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Fixture(directory)

@@ -62,8 +62,9 @@ quality-ratchet:
     {{ python }} scripts/ci/quality_ratchet.py
 
 # After `just test` wrote coverage.out: a package may not fall below its baseline by more than the tolerance, a new
-# package must start at or above the floor, and a rise must raise the baseline in the same PR. Generated code is excluded; tools/ is another module and is not measured here. It reads the profile the race
-# suite already wrote, so the suite runs once.
+# package must start at or above the floor, and a rise must raise the baseline in the same PR. Generated code and the
+# withcluster test command are excluded; tools/ is another module and is not measured here. It reads the profile the
+# race suite already wrote, so the suite runs once.
 # The coverage half of the quality ratchet: per-package statement coverage may only fall.
 quality-ratchet-coverage:
     {{ python }} scripts/ci/quality_ratchet.py --coverage coverage.out

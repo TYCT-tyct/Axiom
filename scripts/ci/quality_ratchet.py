@@ -15,7 +15,8 @@ What is measured, in hand-written non-test Go:
 - files over 500 physical lines. This is stricter than revive's file-length-limit, which skips comments and blank
   lines, and is what the review counted.
 - statement coverage per package from the profile CI's race test run writes with -coverprofile, so the suite runs once.
-  Generated code is dropped from both sides of the fraction. The baseline stores hundredths of a percentage point
+  Generated code is dropped from both sides of the fraction, and so is the withcluster test command whose test skips
+  under CI's Ryuk-disabled setting. The baseline stores hundredths of a percentage point
   (basis points) per package: a package may fall by at most tolerance_basis_points (0.50 point) below its baseline, a
   rise beyond the same tolerance must raise the baseline in the same pull request, and a package absent from the
   baseline is new and must start at or above floor_basis_points (60%). The tolerance is not slack for new code: two runs

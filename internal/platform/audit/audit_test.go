@@ -42,6 +42,24 @@ func open(t *testing.T) *pg.DB {
 	return db
 }
 
+// TestActorUserID: only a user actor names a row's user, and the UUID survives the round trip through the actor.
+func TestActorUserID(t *testing.T) {
+	t.Parallel()
+	id := uuid.NewV7()
+	if got, ok := audit.User(id).UserID(); !ok || got != id {
+		t.Fatalf("User(%s).UserID() = (%s, %t), want (%s, true)", id, got, ok, id)
+	}
+	for name, actor := range map[string]audit.Actor{
+		"system":         audit.System("catalog.sync"),
+		"management key": audit.ManagementKey(id),
+		"zero":           {},
+	} {
+		if _, ok := actor.UserID(); ok {
+			t.Errorf("%s actor reported a user ID", name)
+		}
+	}
+}
+
 // event is a valid event.
 func event() audit.Event {
 	return audit.Event{

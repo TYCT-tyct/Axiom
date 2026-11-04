@@ -13,7 +13,8 @@
 // exclusion recognize. Coverage drops generated code from both sides of the fraction, so a generated table can neither
 // raise nor lower a package's number; a package with a hand-written function body containing statements but no test files
 // is reported as zero, so a new package without tests cannot look measured. A package with no statements has no coverage
-// to rate and is omitted, including one whose only profile blocks have zero statements.
+// to rate and is omitted, including one whose only profile blocks have zero statements. The withcluster test command is
+// left out because its test skips when Ryuk is disabled, so its coverage would differ between CI and a local run.
 package main
 
 import (
@@ -42,6 +43,12 @@ const (
 	cognitiveLimit = 15
 	fileLimit      = 500
 )
+
+// coverageExcluded is test tooling whose tests skip when Ryuk is disabled, so its coverage differs between CI
+// (TESTCONTAINERS_RYUK_DISABLED=true) and a local run. It is still measured for nolint, complexity and file length.
+var coverageExcluded = map[string]bool{
+	"internal/platform/pgtest/cmd/withcluster": true,
+}
 
 type functionMetric struct {
 	Name       string `json:"name"` // path:function, stable when lines move
@@ -104,8 +111,12 @@ func newSourceTree() *sourceTree {
 	}
 }
 
-// own reports whether dir belongs to the measured module rather than to a nested one such as tools/.
+// own reports whether dir is measured: it belongs to the module rather than to a nested one such as tools/, and it is
+// not test tooling left out of coverage.
 func (s *sourceTree) own(dir string) bool {
+	if coverageExcluded[dir] {
+		return false
+	}
 	for nested := range s.nested {
 		if dir == nested || strings.HasPrefix(dir, nested+"/") {
 			return false
@@ -194,7 +205,8 @@ func measureFile(tree fs.FS, fset *token.FileSet, filePath string, result *measu
 		return nil
 	}
 	dir := path.Dir(filePath)
-	if sources.own(dir) {
+	measured := sources.own(dir)
+	if measured {
 		sources.packages[dir] = true
 	}
 
@@ -207,7 +219,7 @@ func measureFile(tree fs.FS, fset *token.FileSet, filePath string, result *measu
 		if !ok {
 			continue
 		}
-		if function.Body != nil && len(function.Body.List) > 0 && sources.own(dir) {
+		if function.Body != nil && len(function.Body.List) > 0 && measured {
 			sources.code[dir] = true
 		}
 		if complexity := gocognit.Complexity(function); complexity > cognitiveLimit {
@@ -390,6 +402,9 @@ func addBlock(coverage map[string]packageCoverage, module string, sources *sourc
 		return nil
 	}
 	dir := path.Dir(relative)
+	if coverageExcluded[dir] {
+		return nil
+	}
 	if !sources.packages[dir] {
 		return fmt.Errorf("%s names %s, but %s is not a hand-written package in the tree", profile, match[1], dir)
 	}
