@@ -140,7 +140,7 @@ G9 的代码在 `readonly.go`（只读接口）、`count.go`（`count_tokens`）
 
 ## 尝试与转发
 
-G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个就不启动）的 `Run` 正是 `Deps.Run`，拿走准入后的 `Call`，把它做到最后一个字节并结算。文件：`exec.go`（`Executor`、`session`、收尾）、`attempt.go`（尝试循环）、`forward.go`（提交点之后的转发），G6、G7 的在下一节。`session` 是一次调用的运行，归运行它的 goroutine；与它共享状态的只有保活计时器和取消尝试的函数，都经写锁。
+G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个就不启动）的 `Run` 正是 `Deps.Run`，拿走准入后的 `Call`，把它做到最后一个字节并结算。文件：`exec.go`（`Executor`、`session`）、`conclude.go`（收尾）、`attempt.go`（尝试循环）、`forward.go`（提交点之后的转发），G6、G7 的在下一节。`session` 是一次调用的运行，归运行它的 goroutine；与它共享状态的只有保活计时器和取消尝试的函数，都经写锁。
 
 **循环**（`session.attempts`），每个条目一次 `try`，直到有一个应答、没有条目、或调用被别的原因结束：
 
@@ -261,7 +261,7 @@ G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错�
 
 ## 非流式聚合与 compact
 
-G8 的代码结构，`forward.go`（聚合的出口）、`exec.go`（`answerAggregate`；compact 的回复在 `conclude` 里直接 `respond`）、`pass.go`（compact）。不要流的客户端仍以流调用上游、由网关聚合，compact 则上游不流式（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)），区别在答案怎么得到。
+G8 的代码结构，`forward.go`（聚合的出口）、`conclude.go`（`answerAggregate`；compact 的回复由 `conclude` 交给 `answerReply` 直接 `respond`）、`pass.go`（compact）。不要流的客户端仍以流调用上游、由网关聚合，compact 则上游不流式（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)），区别在答案怎么得到。
 
 **不要流的客户端**（`stream` 不为 true）：`session.aggregate` 为真，`RelayOptions.Aggregate` 让 `Next` 不交出 `Out`，读、计量、追加、截断、结算都与流式相同（同一个 `Meter`/`Extend`/`Settle` 路径，客户端断开四种情况不变）。提交点仍由 `Relay` 在第一个内容事件上给出，但客户端什么都还没收到，所以 `commit` 只记下这次尝试有内容（`attempt.content`）和它上游的状态头，不写响应头。
 
