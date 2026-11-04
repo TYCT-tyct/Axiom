@@ -11,64 +11,68 @@ import (
 
 // notice turns a verified Stripe event into the core's payment or dispute notice. An event the channel sends but this
 // module does not act on is Relevant false, so Stripe gets a 2xx and stops retrying it.
-//
-//nolint:gocognit // one branch per event family; the payload mapping is the function
 func (c *stripeChannel) notice(event stripe.Event) (Notice, error) {
 	switch event.Type { //nolint:exhaustive // only subscribed event families are mapped
-
 	case stripe.EventTypeCheckoutSessionCompleted, stripe.EventTypeCheckoutSessionAsyncPaymentSucceeded,
 		stripe.EventTypeCheckoutSessionAsyncPaymentFailed, stripe.EventTypeCheckoutSessionExpired:
-		var session stripe.CheckoutSession
-		if err := jsonx.Unmarshal(event.Data.Raw, &session); err != nil {
-			return Notice{}, fmt.Errorf("stripe: decode the checkout session: %w", err)
-		}
-		order := session.ClientReferenceID
-		if order == "" {
-			order = session.Metadata["order"]
-		}
-		tradeNo := stripePaymentIntent(&session)
-		raw := stripeRaw(event, session.ID)
-		switch event.Type { //nolint:exhaustive // the remaining checkout events are async completion
-		case stripe.EventTypeCheckoutSessionAsyncPaymentFailed, stripe.EventTypeCheckoutSessionExpired:
-			// A failed or expired session changes no state here: the order's own expiry and the query job decide, and
-			// a later successful payment must still be able to credit it.
-			return Notice{Relevant: true, Order: order, TradeNo: tradeNo, Raw: raw}, nil
-		case stripe.EventTypeCheckoutSessionCompleted:
-			if session.Status != stripe.CheckoutSessionStatusComplete || session.PaymentStatus != stripe.CheckoutSessionPaymentStatusPaid {
-				// An asynchronous method is still unpaid; its async_payment_succeeded follows.
-				return Notice{}, nil
-			}
-		}
-		return Notice{
-			Relevant: true, Success: true, Order: order, TradeNo: tradeNo,
-			Paid: stripeMoney(c.currency, session.AmountTotal, session.Currency), Raw: raw,
-		}, nil
-
+		return c.checkoutNotice(event)
 	case stripe.EventTypeChargeDisputeCreated, stripe.EventTypeChargeDisputeClosed,
 		stripe.EventTypeChargeDisputeFundsWithdrawn, stripe.EventTypeChargeDisputeFundsReinstated:
-		var dispute stripe.Dispute
-		if err := jsonx.Unmarshal(event.Data.Raw, &dispute); err != nil {
-			return Notice{}, fmt.Errorf("stripe: decode the dispute: %w", err)
-		}
-		paymentIntent := ""
-		if dispute.PaymentIntent != nil {
-			paymentIntent = dispute.PaymentIntent.ID
-		}
-		order := ""
-		if dispute.Charge != nil {
-			order = dispute.Charge.Metadata["order"]
-		}
-		return Notice{
-			Relevant: true, Raw: stripeRaw(event, dispute.ID),
-			Dispute: &DisputeNotice{
-				Provider: "stripe", ID: dispute.ID, PaymentIntent: paymentIntent, Order: order,
-				Status: string(dispute.Status), Reason: string(dispute.Reason),
-				Amount: stripeMoney(c.currency, dispute.Amount, dispute.Currency),
-				Action: stripeDisputeAction(event.Type, dispute.Status),
-			},
-		}, nil
+		return c.disputeNotice(event)
 	}
 	return Notice{}, nil
+}
+
+func (c *stripeChannel) checkoutNotice(event stripe.Event) (Notice, error) {
+	var session stripe.CheckoutSession
+	if err := jsonx.Unmarshal(event.Data.Raw, &session); err != nil {
+		return Notice{}, fmt.Errorf("stripe: decode the checkout session: %w", err)
+	}
+	order := session.ClientReferenceID
+	if order == "" {
+		order = session.Metadata["order"]
+	}
+	tradeNo := stripePaymentIntent(&session)
+	raw := stripeRaw(event, session.ID)
+	switch event.Type { //nolint:exhaustive // the remaining checkout events are async completion
+	case stripe.EventTypeCheckoutSessionAsyncPaymentFailed, stripe.EventTypeCheckoutSessionExpired:
+		// A failed or expired session changes no state here: the order's own expiry and the query job decide, and a
+		// later successful payment must still be able to credit it.
+		return Notice{Relevant: true, Order: order, TradeNo: tradeNo, Raw: raw}, nil
+	case stripe.EventTypeCheckoutSessionCompleted:
+		if session.Status != stripe.CheckoutSessionStatusComplete || session.PaymentStatus != stripe.CheckoutSessionPaymentStatusPaid {
+			// An asynchronous method is still unpaid; its async_payment_succeeded follows.
+			return Notice{}, nil
+		}
+	}
+	return Notice{
+		Relevant: true, Success: true, Order: order, TradeNo: tradeNo,
+		Paid: stripeMoney(c.currency, session.AmountTotal, session.Currency), Raw: raw,
+	}, nil
+}
+
+func (c *stripeChannel) disputeNotice(event stripe.Event) (Notice, error) {
+	var dispute stripe.Dispute
+	if err := jsonx.Unmarshal(event.Data.Raw, &dispute); err != nil {
+		return Notice{}, fmt.Errorf("stripe: decode the dispute: %w", err)
+	}
+	paymentIntent := ""
+	if dispute.PaymentIntent != nil {
+		paymentIntent = dispute.PaymentIntent.ID
+	}
+	order := ""
+	if dispute.Charge != nil {
+		order = dispute.Charge.Metadata["order"]
+	}
+	return Notice{
+		Relevant: true, Raw: stripeRaw(event, dispute.ID),
+		Dispute: &DisputeNotice{
+			Provider: "stripe", ID: dispute.ID, PaymentIntent: paymentIntent, Order: order,
+			Status: string(dispute.Status), Reason: string(dispute.Reason),
+			Amount: stripeMoney(c.currency, dispute.Amount, dispute.Currency),
+			Action: stripeDisputeAction(event.Type, dispute.Status),
+		},
+	}, nil
 }
 
 func stripeDisputeAction(kind stripe.EventType, status stripe.DisputeStatus) DisputeAction {
