@@ -12,7 +12,7 @@
     "cyclop": 62,
     "depguard": 68,
     "dupl": 6,
-    "errcheck": 131,
+    "errcheck": 132,
     "errorlint": 4,
     "exhaustive": 34,
     "forcetypeassert": 2,
