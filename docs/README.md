@@ -36,7 +36,7 @@
 | 联网搜索：一次查询、SearXNG 适配器、配置与覆盖、结果上限、失败与测试 | [internal/websearch/README.md](../internal/websearch/README.md) | 改 `web` 插件、换搜索后端或部署 SearXNG 之前 |
 | 文件解析：一次转换、Docling serve 适配器、配置与覆盖、大小上限、失败与测试 | [internal/fileparse/README.md](../internal/fileparse/README.md) | 改 `file-parser` 插件、换解析后端或部署 Docling 之前 |
 | 一次调用在代码里怎么走：不变量、步骤、所有权、期限、并发与背压、故障矩阵、性能估算、PR 拆分 | [internal/gateway/README.md](../internal/gateway/README.md) | 实现或改动调用路径上任何模块之前 |
-| 运营：分工、agent 的组成与模型来源、运营接口、风险分级与审批、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
+| 运营：分工、agent 的组成与模型来源、运营接口与运营凭证、MCP、风险分级与审批、累计资金上限、审计与回滚、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
 | 运营在代码里怎么存业务目标：表与索引、月度与折算、读写与审计 | [internal/operations/README.md](../internal/operations/README.md) | 实现或调用 `operations` 的业务目标之前 |
 | 记录与告警：记录范围、分类标签、分层存储、保留、受控导出、监控告警、通知渠道 | [domains/observability.md](domains/observability.md) | 改动 `observability` 模块、记录或告警之前 |
 | 调用记录在代码里怎么写与读：表、有界队列与背压、批量写与重试、用户读自己的记录、分区 | [internal/observability/README.md](../internal/observability/README.md) | 实现或调用 `observability` 的调用记录之前 |
