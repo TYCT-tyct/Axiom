@@ -156,6 +156,69 @@ func TestThroughputLeavesOutOurOwnWaits(t *testing.T) {
 	}
 }
 
+// TestToolErrorsReachQuality: an answer whose tool call's arguments are not one JSON text is told to quality as a tool
+// error whether the client gets it as relayed or the client's format refuses it once the answer ended, as a Chat
+// stream converted for a Messages client does: five such calls make the endpoint's measured tool-call error rate 1. A
+// call cut at the output cap is no sample, relayed or aggregated: its arguments were cut, not wrong. A Messages reply
+// aggregated refuses the input when its block stops, before the stop reason says whether it was cut, so that refusal
+// is no sample either: it may be the cap's (docs/domains/quality.md「线上观测」).
+func TestToolErrorsReachQuality(t *testing.T) {
+	t.Parallel()
+	messagesCall := "event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"f","input":{}}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}` + "\n\n"
+	chatCall := strings.NewReplacer(`"openrouter_web_search"`, `"f"`, `"{\"query\":\"axiom\"}"`, `"{\"query\":"`).Replace(chatToolCall)
+	chat, unstreamed := protocol.Chat, false
+	// atTheCap is the Messages answer with the call stopped at max_tokens.
+	atTheCap := func(h *harness) string {
+		end := events(h.events, evMsgDelta)
+		capped := strings.Replace(end, `"end_turn"`, `"max_tokens"`, 1)
+		if capped == end {
+			h.t.Fatalf("the sample's message_delta has no end_turn to replace: %s", end)
+		}
+		return events(h.events, evStart) + messagesCall + events(h.events, evBlockStop) + capped + events(h.events, evMsgStop)
+	}
+	for _, tc := range []struct {
+		name   string
+		o      options
+		stream func(h *harness) string
+		want   float64
+	}{
+		{"a Messages stream", options{}, func(h *harness) string {
+			return events(h.events, evStart) + messagesCall + events(h.events, evBlockStop, evMsgDelta, evMsgStop)
+		}, 1},
+		{"a Chat stream converted for a Messages client", options{upstream: &chat}, func(*harness) string { return chatCall }, 1},
+		{"a Messages reply aggregated, refused before its stop reason", options{stream: &unstreamed}, func(h *harness) string {
+			return events(h.events, evStart) + messagesCall + events(h.events, evBlockStop, evMsgDelta, evMsgStop)
+		}, 0},
+		{"a Messages stream cut at max_tokens", options{}, atTheCap, 0},
+		{"a Messages reply aggregated, cut at max_tokens", options{stream: &unstreamed}, atTheCap, 0},
+		{"a Chat stream cut at the length limit", options{client: protocol.Chat}, func(*harness) string {
+			return strings.Replace(chatCall, `"finish_reason":"tool_calls"`, `"finish_reason":"length"`, 1)
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			health := quality.New(nil)
+			var now time.Time
+			for range 5 {
+				run(t, func(t *testing.T, ctx context.Context) {
+					o := tc.o
+					o.health = health
+					h := newHarness(t, ctx, o)
+					h.up.eps[uuidOf(ep(1))].script = []scripted{serve(beat{data: tc.stream(h)})}
+					h.run()
+					now = time.Now()
+				})
+			}
+			if got := health.MeasuredFor(suppliers.Routable{ID: uuidOf(ep(1))}, now).ToolErrorRate; got != tc.want {
+				t.Errorf("tool-call error rate %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestClassEvidenceIsOneReportedResponse: the usage a source class rule reads is what the upstream reported, not the
 // gateway's estimate, and it comes from the same response as the headers, so two hops of a search loop cannot together
 // satisfy a rule no single response did.

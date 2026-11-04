@@ -71,6 +71,9 @@ type Observation struct {
 	// InputTokens is the request's input as estimated before it was sent (billing.InputEstimate).
 	InputTokens  int64
 	OutputTokens int64
+	// ToolChecks are the client tool calls whose arguments were checked when the answer ended, and ToolErrors those that
+	// were not one JSON text (protocol.Progress); an answer cut at its output cap has none checked.
+	ToolChecks, ToolErrors int64
 	// Sent is when the attempt was sent; FirstToken when its first content came, zero when none did, whoever it went
 	// to; Ended when the upstream's end or failure was read, before any wait of the gateway's own, which dates the
 	// samples.
@@ -103,6 +106,9 @@ type Measures struct {
 	ThroughputPercentiles [4]float64
 	Quality               float64 // 0 to 1: reliability and the measured time to first token and speed
 	Confidence            float64 // 0 to 1: 0 when nothing was counted; decays after the last counted outcome
+	// ToolErrorRate is the share of answers with client tool calls that had at least one call whose arguments were not
+	// one JSON text, as a moving average; 0 while it is not measured, as Latency is (docs/domains/quality.md「线上观测」).
+	ToolErrorRate float64
 	// ProductScore is the fixed benchmark's score against the official direct run, 0–100 with official at 100, and
 	// ProductScoreConfidence how much it can be trusted: the 95% paired interval, answered coverage and age. They are
 	// separate from Quality, which measures how the endpoint runs, not what it answers. No run on the current
@@ -225,6 +231,7 @@ type State struct {
 	errorRate   float64 // the moving average of failures (1) and successes (0); 0 before any
 	latency     average // seconds to the first token
 	speed       average // output tokens per second
+	tools       average // 1 for an answer whose tool calls had an error, 0 for one whose calls were all well formed
 	// The rolling windows the percentile preferences read, fed by the same samples as latency and speed.
 	latencyWindow sampleWindow
 	speedWindow   sampleWindow
@@ -330,6 +337,26 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 		e.speed.add(speed, o.Ended)
 		e.speedWindow.add(speed, o.Ended)
 	}
+	e.sampleTools(v, &o)
+}
+
+// sampleTools takes an answer whose client tool calls the relay checked as a sample of the tool-call error rate, apart
+// from the verdict on the endpoint's health. The relay checks none for an answer stopped at its output cap, whose calls
+// were cut rather than wrong, however the client's format then failed it. An attempt the gateway failed because a
+// checked call's input could not be given to the client (protocol.FaultToolInput) is an error however the health judged
+// it, which is not at all: the model got the call wrong, the endpoint did not fail. Otherwise only an answer that ended
+// normally counts: one cut short says nothing of how the endpoint calls tools. An answer is one sample however many
+// calls it made, as OpenRouter counts requests (《Auto Exacto》). e.mu is held.
+func (e *State) sampleTools(v verdict, o *Observation) {
+	if o.ToolChecks == 0 { // no call ended, or the answer stopped at its output cap and its calls were cut
+		return
+	}
+	switch {
+	case o.Fault == protocol.FaultToolInput:
+		e.tools.add(1, o.Ended)
+	case v == success && o.Done:
+		e.tools.add(float64(min(o.ToolErrors, 1)), o.Ended)
+	}
 }
 
 // count moves the error rate by a counted outcome, and records it as quality evidence. A probe's result comes through
@@ -387,6 +414,9 @@ func (e *State) measures(now time.Time, verifyMaxAge time.Duration) Measures {
 	}
 	if v, ok := e.speed.measured(now); ok {
 		out.Throughput = v
+	}
+	if v, ok := e.tools.measured(now); ok {
+		out.ToolErrorRate = v
 	}
 	if v, ok := e.latencyWindow.percentiles(now); ok {
 		for i := range v {

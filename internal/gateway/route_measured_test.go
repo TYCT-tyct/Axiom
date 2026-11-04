@@ -4,6 +4,8 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
+	"uuid"
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
@@ -327,5 +329,41 @@ func excludedFor(t *testing.T, f *routeFixture, in routing.Input, reason routing
 	}
 	if !none.Permanent || len(none.Reasons) == 0 || none.Reasons[0].Reason != reason {
 		t.Fatalf("Plan left the endpoint out as %+v, want permanent %v", none, reason)
+	}
+}
+
+// TestRouteBuildRanksByToolErrors: the tool-call error rate real answers showed reaches the snapshot, so a request with
+// tools puts an endpoint whose calls came back malformed behind a less reliable one whose calls were sound, while a
+// request without tools still goes by reliability (docs/domains/routing.md「排序的先后」).
+func TestRouteBuildRanksByToolErrors(t *testing.T) {
+	t.Parallel()
+	f := newRouteFixture(t)
+	flaky, sound := routable(f.served, protocol.Messages), routable(f.served, protocol.Messages)
+	answer := func(id uuid.UUID, toolErrors int64) {
+		now := time.Now()
+		f.health.Observe(t.Context(), quality.Observation{
+			Endpoint: id, Done: true, Delivered: true, OutputTokens: 10, ToolChecks: 2, ToolErrors: toolErrors,
+			Sent: now.Add(-time.Second), FirstToken: now.Add(-time.Second / 2), Ended: now,
+		})
+	}
+	for range 10 {
+		answer(flaky.ID, 1)
+		answer(sound.ID, 0)
+	}
+	f.health.Observe(t.Context(), quality.Observation{ // the sound one's reliability falls to 0.8
+		Endpoint: sound.ID, Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.UpstreamError{Status: 500}},
+		Ended: time.Now(),
+	})
+	f.build([]suppliers.Routable{flaky, sound})
+	best := routing.BestQuality
+	plain := call(f.served)
+	plain.Override.Sort = &best
+	if got := f.planned(plain); len(got) != 2 || got[0] != flaky.ID {
+		t.Fatalf("route %v without tools: the more reliable endpoint is not first", got)
+	}
+	tools := call(f.served, func(r *protocol.Request) { r.Needs |= protocol.Tools })
+	tools.Override.Sort = &best
+	if got := f.planned(tools); len(got) != 2 || got[0] != sound.ID {
+		t.Errorf("route %v with tools: the endpoint whose tool calls came back malformed is still first", got)
 	}
 }

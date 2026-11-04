@@ -135,8 +135,24 @@ func heldStreams(many int) map[string]heldStream {
 	completed := strings.Replace(strings.Replace(created, "response.created", "response.completed", 1), `"usage":null`,
 		`"usage":{"input_tokens":1,"output_tokens":1}`, 1)
 	completed = strings.Replace(completed, `"sequence_number":0`, `"sequence_number":`+strconv.Itoa(many+1), 1)
+	// A tool call's long arguments in one event, which the argument check reads in place, then small events that let
+	// the reader's buffer shrink; cut before its end, the stream fails right after them.
+	var small strings.Builder
+	for range 64 {
+		small.WriteString(chat + `{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"1"}}]}}]}` + "\n\n")
+	}
+	longArgs := chat + `{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c","type":"function","function":{"name":"f","arguments":"[` +
+		strings.Repeat("1,", 100000) + `"}}]}}]}` + "\n\n"
+	longCall := `data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"type":"function_call",` +
+		`"id":"fc","call_id":"c","name":"f","arguments":"[` + strings.Repeat("1,", 100000) + `1]"}}` + "\n\n"
+	completedOne := strings.Replace(completed, `"sequence_number":`+strconv.Itoa(many+1), `"sequence_number":2`, 1)
 	return map[string]heldStream{
-		"chat choices": {Chat, chat + choices.String() + "]}\n\n" + "data: [DONE]\n\n", false},
+		"a tool's long arguments, then small chunks": {Chat, longArgs + small.String() +
+			chat + `{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" + "data: [DONE]\n\n", false},
+		"a tool's long arguments, then the end": {Chat, longArgs +
+			chat + `{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" + "data: [DONE]\n\n", false},
+		"a long function call": {Responses, created + longCall + completedOne, false},
+		"chat choices":         {Chat, chat + choices.String() + "]}\n\n" + "data: [DONE]\n\n", false},
 		"a tool's long input for chat": {Messages, `data: {"type":"message_start","message":{"id":"x","model":"m","usage":{"input_tokens":1}}}` + "\n\n" +
 			`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"f","input":{"a":"` +
 			strings.Repeat("x", 100000) + `"}}}` + "\n\n" + `data: {"type":"content_block_stop","index":0}` + "\n\n" +

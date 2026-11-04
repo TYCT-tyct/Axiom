@@ -27,7 +27,11 @@ type responsesStream struct {
 	webSearch, codeInterpreter, fileSearch, functionCall, hasResponse bool
 	report                                                            *openAIUsage
 	reportErr                                                         error
-	topReport                                                         []byte // borrowed from this event; only failures may use it when response.usage is absent
+	topReport                                                         []byte         // borrowed from this event; only failures may use it when response.usage is absent
+	args                                                              jsontext.Value // its item's arguments, in its data
+	// checks and malformed are the function calls checked so far and the ones that were not JSON, reported with
+	// response.completed; response.incomplete reports none, as its calls may have been cut.
+	checks, malformed int64
 	// items is, for each output item added so far, the content its deltas carried: an item that completes counts only
 	// what it adds to them, so the bound never counts the same text twice.
 	items []int64
@@ -64,7 +68,7 @@ var (
 		"service_tier": (*responsesStream).serviceTier,
 		"error":        func(s *responsesStream) error { return errorObject(&s.reader, &s.eventReader, errorFields) }, // response.failed's
 	}
-	responsesItemFields = map[string]func(*responsesStream) error{"type": (*responsesStream).itemType}
+	responsesItemFields = map[string]func(*responsesStream) error{"type": (*responsesStream).itemType, "arguments": (*responsesStream).itemArgs}
 	// responsesRewrites put the call ID and the client's model name in the response, keep its usage to the official
 	// members, and drop an upstream's axiom member, which our ending may write.
 	responsesRewrites = formatRules{members: map[string]rule{
@@ -79,7 +83,7 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 	s.start(data)
 	s.index, s.itemBytes, s.webSearch, s.codeInterpreter, s.fileSearch, s.functionCall, s.hasResponse, s.report, s.reportErr =
 		-1, 0, false, false, false, false, false, nil, nil
-	s.topReport = nil
+	s.topReport, s.args = nil, nil
 	if err := walk(&s.reader, s, responsesFields); err != nil {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
@@ -98,9 +102,15 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 		s.created = true
 	case "response.completed", "response.incomplete":
 		s.e.role, s.e.ends, s.e.final = ending, true, true
+		if s.e.name == "response.completed" {
+			s.e.toolChecks, s.e.toolErrors = s.checks, s.malformed
+		}
+		s.checks, s.malformed = 0, 0
 	}
 	s.topReport = nil
-	if err := s.settle(); err != nil {
+	err := s.settle()
+	s.args = nil // the item's arguments are the event's, and its buffer may be given back before the next
+	if err != nil {
 		return event{}, err
 	}
 	if s.report != nil {
@@ -136,6 +146,9 @@ func (s *responsesStream) settle() error {
 		if 0 <= s.index && s.index < int64(len(s.items)) {
 			s.e.content = max(0, s.itemBytes-s.items[s.index])
 		}
+		if s.functionCall {
+			s.checkArgs()
+		}
 	}
 	return nil
 }
@@ -167,7 +180,7 @@ func (s *responsesStream) itemAdded() error {
 
 func (s *responsesStream) dropBuffers() {
 	s.eventReader.dropBuffers()
-	s.items, s.report, s.reportErr, s.topReport = nil, nil, nil, nil
+	s.items, s.report, s.reportErr, s.topReport, s.args, s.checks, s.malformed = nil, nil, nil, nil, nil, 0, 0
 }
 
 func (s *responsesStream) eventType() error {
@@ -237,6 +250,26 @@ func (s *responsesStream) itemType() error {
 	s.fileSearch = string(v) == "file_search_call"
 	s.functionCall = string(v) == "function_call"
 	return nil
+}
+
+// itemArgs keeps an item's arguments, which only a function call's are checked by, once its type is known.
+func (s *responsesStream) itemArgs() error {
+	v, err := s.raw()
+	if v != nil && err == nil {
+		to := int(s.dec.InputOffset())
+		s.args = s.e.data[to-len(v) : to]
+	}
+	return err
+}
+
+// checkArgs checks a function call that is done: its item has the arguments whole.
+func (s *responsesStream) checkArgs() {
+	var scan argScan
+	feedArgs(&scan, s.args)
+	s.checks++
+	if !scan.ok() {
+		s.malformed++
+	}
 }
 
 func (s *responsesStream) usage() error {

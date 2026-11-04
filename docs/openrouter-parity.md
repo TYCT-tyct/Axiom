@@ -77,7 +77,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | `provider.options`（按供应商透传的选项，spec `ProviderOptions`） | 给特定供应商的原生参数 | spec `ProviderPreferences.options` | 没有：不在 `providerMembers`，会 400 | 无 | 无 | 低优先 |
 | 默认价格加权负载均衡（按价格平方倒数、近 30 秒无故障优先） | 默认策略 | docs/guides/routing/provider-selection | 部分：默认是价格加权随机（`docs/domains/routing.md` 决策与理由），加权公式未核对是否一致 | 无（渠道权重） | 无 | 行为相近，公式可能不同 |
 | 失败后换端点 | 按序回退直到成功 | docs/guides/routing/provider-selection | 有：`gw/attempt.go`、`rt/plan.go:60`（`MaxAttempts`） | `na:controller/relay.go:177`（`RetryTimes`） | `s2:internal/service/gateway_anthropic_passthrough.go:802`（failover） | 无 |
-| 工具调用请求的 Auto Exacto 重排 | 有 `tools` 时按工具调用成功率重排 | docs/guides/routing/auto-exacto | 部分：`rt/rank.go:68` 按实测工具调用错误率排序；只在「均衡」「质量优先」策略下生效（`docs/domains/routing.md:74`） | 无 | 无 | 需要 #313 的端点健康数据 |
+| 工具调用请求的 Auto Exacto 重排 | 有 `tools` 时按工具调用成功率重排；错误分参数不是 JSON、工具名不存在、参数不符合 schema 三类，按请求统计（2026-11-04 核实） | docs/guides/routing/auto-exacto | 部分：`rt/rank.go` 按真实流量的工具调用错误率排序，只在「均衡」「质量优先」策略下生效；错误率只统计参数不是 JSON 的一类（`proto/toolargs.go`、`quality` 的 `ToolErrorRate`） | 无 | 无 | 工具名、schema 两类未测，见 docs/domains/quality.md「待定问题」；吞吐和基准评分另由「最快」、产品成绩提供 |
 | 会话粘性（`session_id`、`x-session-id` 头、`prompt_cache_key`，≤256 字符，10 分钟） | 缓存命中靠粘到同一供应商 | docs/guides/best-practices/prompt-caching | 有：body session_id 优先于 x-session-id，再取缓存键与既有身份回退；`gw/handler.go`、`rt/session.go`，键含账户，头转发仍派生隔离 | 无 | 无 | 本站默认一小时、使用不续期；理由见 routing.md「会话粘性」；Embeddings/TTS 不在当前范围 |
 | `models` 数组（备选模型，主模型失败/限流/审核时顺序尝试，按最终使用的模型计价） | 跨模型回退 | docs/guides/routing/model-fallbacks | 有：解析 `proto/grammar.go:148-157`（最多 8 个），逐个模型排端点 `rt/plan.go:45-58`；默认关闭跨模型，只有请求给出 `models` 才开 | 无 | 无 | 无 |
 | `route: "fallback"`（旧参数） | 老客户端会发 | spec `ChatRequest.route` | 部分：接受并丢弃（`proto/prepare.go:281`） | 无 | 无 | 丢弃而不报错，对旧参数是对的 |
