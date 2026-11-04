@@ -6,6 +6,9 @@ import (
 	"net/netip"
 	"strconv"
 	"time"
+	"uuid"
+
+	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"axiom/internal/accounts"
 	"axiom/internal/platform"
@@ -35,15 +38,16 @@ type keyInput struct {
 	reset    *consoleapi.LimitReset
 	models   *[]string
 	ips      *[]string
+	preset   *openapi_types.UUID
 	expires  *time.Time
 }
 
 func createInput(b *consoleapi.KeyCreate) keyInput {
-	return keyInput{name: b.Name, limit: b.SpendLimit, reset: b.LimitReset, models: b.Models, ips: b.IpAllow, expires: b.ExpiresAt}
+	return keyInput{name: b.Name, limit: b.SpendLimit, reset: b.LimitReset, models: b.Models, ips: b.IpAllow, preset: b.PresetId, expires: b.ExpiresAt}
 }
 
 func updateInput(b *consoleapi.KeySettings) keyInput {
-	return keyInput{name: b.Name, disabled: b.Disabled, limit: b.SpendLimit, reset: b.LimitReset, models: b.Models, ips: b.IpAllow}
+	return keyInput{name: b.Name, disabled: b.Disabled, limit: b.SpendLimit, reset: b.LimitReset, models: b.Models, ips: b.IpAllow, preset: b.PresetId}
 }
 
 // settings checks the input against what the table takes and turns it into the module's settings and the expiry: money
@@ -51,7 +55,7 @@ func updateInput(b *consoleapi.KeySettings) keyInput {
 // network is taken as its masked form, the table's cidr type allows no host bits), and an expiry after now, in UTC.
 func (in keyInput) settings(currency platform.Currency, now time.Time) (accounts.KeySettings, *time.Time, error) {
 	var p problems
-	s := accounts.KeySettings{Name: in.name, Disabled: in.disabled, SpendLimit: spendLimit(in.limit, currency, &p)}
+	s := accounts.KeySettings{Name: in.name, Disabled: in.disabled, SpendLimit: spendLimit(in.limit, currency, &p), Preset: (*uuid.UUID)(in.preset)}
 	var expires *time.Time
 	if in.expires != nil {
 		if !in.expires.After(now) {

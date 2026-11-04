@@ -133,6 +133,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/routing-presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The routing presets the account's keys may use
+         * @description The live routing presets a key of the account may be bound to, the widest layer first: the platform's (those that limit prices only in the site's currency), the site's and the account's own. The system preset that keys made before presets route by is not among them. Disabled presets are not listed; `getRoutingPreset` still reads them. Routing presets are not the request presets of `/presets`: they choose which endpoints a key is routed to (docs/domains/routing.md「路由预设」).
+         */
+        get: operations["listRoutingPresets"];
+        put?: never;
+        /**
+         * Make a routing preset of the account
+         * @description Makes an account preset with its first version of rules. The rules are checked whole: a member the format does not have, an override that widens what it inherits, or the platform's `advanced` settings are a 400 naming `/rules`. The slug is the account's own, unique among its live presets (409 `name_taken`). An account holds at most 20 live presets and makes at most 200 in all, disabled ones counted (409 `preset_quota`). A key bound to a new preset may be refused 503 `preset_unavailable` for up to 5 seconds, until every node has read it.
+         */
+        post: operations["createRoutingPreset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/routing-presets/{preset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * One routing preset
+         * @description A preset the account can read, disabled or not, with its current rules.
+         */
+        get: operations["getRoutingPreset"];
+        /**
+         * Change a routing preset of the account
+         * @description Replaces the name and the rules of one of the account's presets, at the `revision` the page read (409 `stale_revision` when it moved on). Rules that differ from the current ones are a new version, which every key bound to the preset is routed by from the next routing snapshot, within 5 seconds; a rename keeps the version. A preset of the platform or the site is 403; a disabled one is 404.
+         */
+        put: operations["updateRoutingPreset"];
+        post?: never;
+        /**
+         * Disable a routing preset of the account
+         * @description Disables one of the account's presets at `revision`. The keys bound to it keep routing by it; no new key or default can choose it. A preset a default still points at is refused 409 `preset_in_use`: change the default first. A disabled preset still counts against the 200 the account may make.
+         */
+        delete: operations["disableRoutingPreset"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/routing-default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's default routing preset
+         * @description The preset the account's new keys are bound to, when the account sets one; absent `preset_id` means the account sets none and new keys take the site's or the platform's default.
+         */
+        get: operations["getRoutingDefault"];
+        /**
+         * Set the account's default routing preset
+         * @description Points the account's default at a live preset of the platform, the site or the account, or clears it with a null `preset_id`, at the `version` the page read (409 `stale_revision` when it moved on). Only keys made after the change take it; the keys already made keep their presets. The system preset, a disabled preset and one the account cannot use are 400 `preset_not_selectable`.
+         */
+        put: operations["setRoutingDefault"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/notification-preferences": {
         parameters: {
             query?: never;
@@ -926,7 +1004,7 @@ export interface paths {
         get: operations["getKey"];
         /**
          * Change an API key's settings
-         * @description Replaces every setting the user may change: what the request leaves out is unrestricted (no spend limit, any model, any IP), so a page sends back all of the key's current settings with its edit. The expiry cannot be changed after the key is made. Disabling takes effect on the next call on every node; `disabled: false` enables the key again.
+         * @description Replaces every setting the user may change: what the request leaves out is unrestricted (no spend limit, any model, any IP), so a page sends back all of the key's current settings with its edit. The routing preset is the exception: left out, the key keeps its preset. The expiry cannot be changed after the key is made. Disabling takes effect on the next call on every node; `disabled: false` enables the key again.
          */
         put: operations["updateKey"];
         post?: never;
@@ -1308,6 +1386,84 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the site's currency). At most 16 KiB. */
+        RoutingRules: Record<string, never>;
+        /**
+         * @description The layer the preset belongs to; only the account's own presets can be changed here.
+         * @enum {string}
+         */
+        RoutingPresetScope: "platform" | "site" | "account" | "workspace";
+        RoutingPreset: {
+            /** Format: uuid */
+            id: string;
+            scope: components["schemas"]["RoutingPresetScope"];
+            slug: string;
+            name: string;
+            /**
+             * Format: int64
+             * @description Moves on every change; a change names the revision it read.
+             */
+            revision: number;
+            /**
+             * Format: int64
+             * @description The rules' version, which moves only when the rules change.
+             */
+            version: number;
+            /** @description The currency of a platform preset's price limits; absent for the others, which are in the site's. */
+            currency?: string;
+            rules: components["schemas"]["RoutingRules"];
+            disabled: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        RoutingPresetList: {
+            data: components["schemas"]["RoutingPreset"][];
+        };
+        RoutingPresetCreate: {
+            /** @description Unique among the account's live presets; it cannot be changed. */
+            slug: string;
+            name: string;
+            rules: components["schemas"]["RoutingRules"];
+        };
+        RoutingPresetUpdate: {
+            name: string;
+            rules: components["schemas"]["RoutingRules"];
+            /** Format: int64 */
+            revision: number;
+        };
+        /** @description The preset a key is bound to, as the key list shows it. */
+        RoutingPresetSummary: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            scope: components["schemas"]["RoutingPresetScope"];
+            /** Format: int64 */
+            version: number;
+            disabled?: boolean;
+        };
+        RoutingDefault: {
+            /**
+             * Format: uuid
+             * @description Absent when the account sets no default.
+             */
+            preset_id?: string;
+            /**
+             * Format: int64
+             * @description 0 when the account has no default; a change names the version it read.
+             */
+            version: number;
+        };
+        RoutingDefaultUpdate: {
+            /**
+             * Format: uuid
+             * @description null clears the account's default.
+             */
+            preset_id: string | null;
+            /** Format: int64 */
+            version: number;
+        };
         /** @description Inference defaults. Only deliberate configuration, no transient input. */
         PresetConfig: {
             [key: string]: unknown;
@@ -1520,7 +1676,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable" | "preset_not_selectable" | "preset_default_invalid" | "preset_in_use" | "preset_quota";
         /**
          * @description An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it.
          * @example 5000000000
@@ -1981,6 +2137,12 @@ export interface components {
             retired_models?: string[];
             /** @description The client addresses (IP or CIDR) the key may be used from; absent means any. */
             ip_allow?: string[];
+            /**
+             * Format: uuid
+             * @description The routing preset a call key is routed by. Absent for a management key, for a call key made before keys were bound to presets, which the system preset routes, and from a node that predates the field.
+             */
+            preset_id?: string;
+            preset?: components["schemas"]["RoutingPresetSummary"];
         };
         /**
          * @description The state the key list shows: `active` is enabled and not expired, `disabled` is disabled and not expired, and `expired` is past its `expires_at` whether enabled or not.
@@ -2026,6 +2188,11 @@ export interface components {
             limit_reset?: components["schemas"]["LimitReset"];
             models?: string[];
             ip_allow?: string[];
+            /**
+             * Format: uuid
+             * @description The routing preset a call key is routed by: a live preset of the platform, the site or the account. Absent, a new key takes its layers' default and a changed key keeps its preset. The system preset, a disabled one, another tenant's and any for a management key are 400 `preset_not_selectable`.
+             */
+            preset_id?: string;
         };
         KeySettings: {
             name: string;
@@ -2034,6 +2201,11 @@ export interface components {
             limit_reset?: components["schemas"]["LimitReset"];
             models?: string[];
             ip_allow?: string[];
+            /**
+             * Format: uuid
+             * @description The routing preset a call key is routed by: a live preset of the platform, the site or the account. Absent, a new key takes its layers' default and a changed key keeps its preset. The system preset, a disabled one, another tenant's and any for a management key are 400 `preset_not_selectable`.
+             */
+            preset_id?: string;
         };
         CreatedKey: {
             key: components["schemas"]["Key"];
@@ -2274,7 +2446,7 @@ export interface components {
         };
     };
     responses: {
-        /** @description The request is malformed or breaks a constraint of the contract (`invalid_request`). */
+        /** @description The request is malformed or breaks a constraint of the contract (`invalid_request`), or names a routing preset it may not choose (`preset_not_selectable`). */
         BadRequest: {
             headers: {
                 [name: string]: unknown;
@@ -2310,7 +2482,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`, `idempotency_key_reused`). */
+        /** @description The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`, `idempotency_key_reused`, `preset_default_invalid`, `preset_in_use`, `preset_quota`). */
         Conflict: {
             headers: {
                 [name: string]: unknown;
@@ -2668,6 +2840,196 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listRoutingPresets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The presets. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPresetList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createRoutingPreset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutingPresetCreate"];
+            };
+        };
+        responses: {
+            /** @description The preset. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPreset"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getRoutingPreset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preset. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPreset"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateRoutingPreset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutingPresetUpdate"];
+            };
+        };
+        responses: {
+            /** @description The preset as changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPreset"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    disableRoutingPreset: {
+        parameters: {
+            query: {
+                revision: number;
+            };
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disabled. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getRoutingDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account's default. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingDefault"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setRoutingDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutingDefaultUpdate"];
+            };
+        };
+        responses: {
+            /** @description The account's default as set. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingDefault"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };

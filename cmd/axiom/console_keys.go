@@ -13,6 +13,7 @@ import (
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/pg"
+	"axiom/internal/routing"
 )
 
 // defaultPage is how many items a page holds when the request does not say (the contract's default).
@@ -90,7 +91,8 @@ func retiredModels(snap *catalog.Snapshot, models []string) []string {
 // keyBody is a key as the contract gives it. limit_remaining is what is left of the limit in its window, not below
 // zero: a key that a late charge pushed past its limit has nothing left. retired_models is the hint that some of the
 // key's model restrictions point at models the catalog has retired; it is absent when the node has no snapshot.
-func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]int64, snap *catalog.Snapshot) consoleapi.Key {
+// presets are the routing presets the keys are bound to (keyPresets).
+func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]int64, presets map[uuid.UUID]routing.StoredPreset, snap *catalog.Snapshot) consoleapi.Key {
 	kind := consoleapi.KeyKind(k.Kind)
 	body := consoleapi.Key{
 		Kind: &kind,
@@ -118,6 +120,7 @@ func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]int6
 		}
 		body.IpAllow = &ips
 	}
+	keyPresetBody(&body, k, presets)
 	return body
 }
 
@@ -176,12 +179,16 @@ func (c consoleAPI) ListKeys(ctx context.Context, request consoleapi.ListKeysReq
 	}
 	var keys []accounts.Key
 	var used map[uuid.UUID]int64
+	var presets map[uuid.UUID]routing.StoredPreset
 	var more bool
 	err = c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
 		if keys, more, err = c.accounts.ListKeys(ctx, tx, cl.principal.AccountID(), q); err != nil {
 			return err
 		}
-		used, err = keysUsed(ctx, tx, keys)
+		if used, err = keysUsed(ctx, tx, keys); err != nil {
+			return err
+		}
+		presets, err = keyPresets(ctx, tx, keys)
 		return err
 	})
 	if err != nil {
@@ -190,7 +197,7 @@ func (c consoleAPI) ListKeys(ctx context.Context, request consoleapi.ListKeysReq
 	snap := c.snapshot()
 	list := consoleapi.KeyList{Filters: keyFilterEcho(q), Data: make([]consoleapi.Key, len(keys))}
 	for i, k := range keys {
-		list.Data[i] = keyBody(k, cl.site.Currency, used, snap)
+		list.Data[i] = keyBody(k, cl.site.Currency, used, presets, snap)
 	}
 	if more { // the next page starts after the last key of this one
 		next := keys[len(keys)-1].ID.TypeID()
@@ -220,20 +227,24 @@ func (c consoleAPI) CreateKey(ctx context.Context, request consoleapi.CreateKeyR
 	}
 	var created accounts.CreatedKey
 	var key accounts.Key
+	var presets map[uuid.UUID]routing.StoredPreset
 	err = c.db.Tx(ctx, cl.scope, func(tx pg.Tx) error {
 		if created, err = c.accounts.CreateKey(ctx, tx, audit.User(uuid.UUID(cl.principal.UserID())), accounts.KeyRequest{
 			Kind: kind, Site: cl.site.ID, Account: cl.principal.AccountID(), CreatedBy: cl.principal.UserID(), ExpiresAt: expires, KeySettings: settings,
 		}); err != nil {
 			return err
 		}
-		key, err = c.accounts.GetKey(ctx, tx, created.ID)
+		if key, err = c.accounts.GetKey(ctx, tx, created.ID); err != nil {
+			return err
+		}
+		presets, err = keyPresets(ctx, tx, []accounts.Key{key})
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 	// A new key has used nothing, so no query is needed for its remaining limit.
-	return consoleapi.CreateKey201JSONResponse{Key: keyBody(key, cl.site.Currency, nil, c.snapshot()), Secret: created.Text.Reveal()}, nil
+	return consoleapi.CreateKey201JSONResponse{Key: keyBody(key, cl.site.Currency, nil, presets, c.snapshot()), Secret: created.Text.Reveal()}, nil
 }
 
 // GetKey reads one key.
@@ -243,18 +254,11 @@ func (c consoleAPI) GetKey(ctx context.Context, request consoleapi.GetKeyRequest
 	if err != nil {
 		return nil, err
 	}
-	var key accounts.Key
-	var used map[uuid.UUID]int64
-	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-		if key, err = c.accounts.GetKey(ctx, tx, id); err != nil {
-			return err
-		}
-		used, err = keysUsed(ctx, tx, []accounts.Key{key})
-		return err
-	}); err != nil {
+	key, used, presets, err := c.readKey(ctx, cl, func(tx pg.Tx) (accounts.Key, error) { return c.accounts.GetKey(ctx, tx, id) }, true)
+	if err != nil {
 		return nil, err
 	}
-	return consoleapi.GetKey200JSONResponse(keyBody(key, cl.site.Currency, used, c.snapshot())), nil
+	return consoleapi.GetKey200JSONResponse(keyBody(key, cl.site.Currency, used, presets, c.snapshot())), nil
 }
 
 // UpdateKey replaces the settings of a key.
@@ -268,18 +272,33 @@ func (c consoleAPI) UpdateKey(ctx context.Context, request consoleapi.UpdateKeyR
 	if err != nil {
 		return nil, err
 	}
-	var key accounts.Key
-	var used map[uuid.UUID]int64
-	if err := c.db.Tx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-		if key, err = c.accounts.UpdateKey(ctx, tx, audit.User(uuid.UUID(cl.principal.UserID())), id, settings); err != nil {
-			return err
-		}
-		used, err = keysUsed(ctx, tx, []accounts.Key{key})
-		return err
-	}); err != nil {
+	key, used, presets, err := c.readKey(ctx, cl, func(tx pg.Tx) (accounts.Key, error) {
+		return c.accounts.UpdateKey(ctx, tx, audit.User(uuid.UUID(cl.principal.UserID())), id, settings)
+	}, false)
+	if err != nil {
 		return nil, err
 	}
-	return consoleapi.UpdateKey200JSONResponse(keyBody(key, cl.site.Currency, used, c.snapshot())), nil
+	return consoleapi.UpdateKey200JSONResponse(keyBody(key, cl.site.Currency, used, presets, c.snapshot())), nil
+}
+
+// readKey is the key get gives, in a read-only transaction or one that writes, with what its body shows besides: the
+// spend left in its window and its routing preset.
+func (c consoleAPI) readKey(ctx context.Context, cl call, get func(pg.Tx) (accounts.Key, error), readOnly bool) (key accounts.Key, used map[uuid.UUID]int64, presets map[uuid.UUID]routing.StoredPreset, err error) {
+	run := c.db.Tx
+	if readOnly {
+		run = c.db.ReadTx
+	}
+	err = run(ctx, cl.scope, func(tx pg.Tx) (err error) {
+		if key, err = get(tx); err != nil {
+			return err
+		}
+		if used, err = keysUsed(ctx, tx, []accounts.Key{key}); err != nil {
+			return err
+		}
+		presets, err = keyPresets(ctx, tx, []accounts.Key{key})
+		return err
+	})
+	return key, used, presets, err
 }
 
 // DeleteKey deletes a key for good.
