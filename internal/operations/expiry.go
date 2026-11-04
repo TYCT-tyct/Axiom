@@ -40,14 +40,20 @@ func RegisterExpiry(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog.Log
 	// from being inserted.
 	work := func(ctx context.Context, _ *river.Job[expiryArgs]) error {
 		for {
+			// Two transactions: the approvals' signals are the last lock either takes (resolve), and the reservations'
+			// counters must not be taken after them.
 			var approvals, reservations int
-			if err := db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
-				if approvals, err = ExpireDue(ctx, tx, expiryBatch); err != nil {
-					return err
-				}
-				reservations, err = ExpireReservations(ctx, tx, expiryBatch)
+			err := db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
+				approvals, err = ExpireDue(ctx, tx, expiryBatch)
 				return err
-			}); err != nil {
+			})
+			if err == nil {
+				err = db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
+					reservations, err = ExpireReservations(ctx, tx, expiryBatch)
+					return err
+				})
+			}
+			if err != nil {
 				logger.Error("operations: the expiry of approvals and reservations stopped", "err", err)
 				return nil
 			}

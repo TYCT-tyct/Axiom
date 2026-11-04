@@ -311,7 +311,8 @@ paths:
         limit, or without a policy, it is a 422 `cap_exceeded` and nothing is written. The agent never pays: the
         reservation holds until it confirms the money arrived (`supplierTopUpConfirm`) or the UTC day ends. A supplier
         without a confirmed unit value, or a currency pair without a rate, is a 422 `unprocessable`; a removed supplier,
-        or an account's own key, is a 409 `conflict`. With `dry_run` the same checks run and nothing is written.
+        an account's own key, or a proposal that waited past UTC midnight (propose it again), is a 409 `conflict`. A
+        retry under the key finds the first proposal whatever has happened to the supplier since. With `dry_run` the same checks run and nothing is written.
       tags: [Suppliers]
       security: [{credential: []}]
       x-axiom-permission: suppliers.manage

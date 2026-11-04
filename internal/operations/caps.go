@@ -35,6 +35,9 @@ var (
 	ErrCurrencyFixed = errors.New("operations: a cap policy keeps the currency it was made with")
 	// ErrBadPolicy is a policy whose hard limit is below its autonomous one, or a negative limit.
 	ErrBadPolicy = errors.New("operations: each limit is at least 0 and each hard limit at least its autonomous limit")
+	// ErrWindowEnded is a proposal whose UTC day ended while it waited for a lock: it is not reserved in a day that is
+	// over, and is proposed again on the new one.
+	ErrWindowEnded = errors.New("operations: the UTC day ended while the proposal waited; propose it again")
 	// ErrNotReserved is a money operation with no reservation to confirm or approve: it still waits for approval, or its
 	// reservation ended, committed, released or past its windows.
 	ErrNotReserved = errors.New("operations: the operation holds no reservation that can be settled")
@@ -131,7 +134,7 @@ func ProposeMoney(ctx context.Context, tx pg.Tx, p Proposal, m Transfer) (Operat
 	}
 	// The counters serialize the proposals of a scope and category, a retry of this key among them, so it is found here
 	// before it is weighed again against counters that hold its own reservation.
-	if op, found, err := byKey(ctx, tx, p); found || err != nil {
+	if op, found, err := Replay(ctx, tx, p); found || err != nil {
 		return op, found, err
 	}
 	within, err := weigh(policy, c, m.Amount)
@@ -149,7 +152,8 @@ func ProposeMoney(ctx context.Context, tx pg.Tx, p Proposal, m Transfer) (Operat
 	return op, false, reserve(ctx, tx, op, m, policy, w, c)
 }
 
-// reserve records op's money action and adds its amount to the counters c, which tx holds, until the end of the day.
+// reserve records op's money action and adds its amount to the counters c, which tx holds, until the end of the day,
+// unless that day has ended.
 func reserve(ctx context.Context, tx pg.Tx, op Operation, m Transfer, policy CapPolicy, w CapWindowsRow, c counters) error {
 	basis, err := jsonx.MarshalCanonical(m.Basis)
 	if err != nil {
@@ -163,11 +167,26 @@ func reserve(ctx context.Context, tx pg.Tx, op Operation, m Transfer, policy Cap
 	}); err != nil {
 		return fmt.Errorf("reserve operation %s: %w", op.ID, err)
 	}
-	return q.MoveCapCounters(ctx, tx, MoveCapCountersParams{Ids: c.ids, Reserved: m.Amount, Count: 1})
+	if err := q.MoveCapCounters(ctx, tx, MoveCapCountersParams{Ids: c.ids, Reserved: m.Amount, Count: 1}); err != nil {
+		return fmt.Errorf("reserve operation %s: %w", op.ID, err)
+	}
+	// Every lock the proposal waits for is taken by now, the signal's included; a day that ended meanwhile refuses it
+	// rather than reserving in yesterday's windows a proposal that could no longer be confirmed.
+	ended, err := q.WindowEnded(ctx, tx, w.DayStart)
+	if err != nil {
+		return fmt.Errorf("check the cap windows: %w", err)
+	}
+	if ended {
+		return ErrWindowEnded
+	}
+	return nil
 }
 
-// byKey finds the operation p's credential made with p's key, as Propose would; found is false when there is none.
-func byKey(ctx context.Context, tx pg.Tx, p Proposal) (Operation, bool, error) {
+// Replay finds the operation p's credential made with p's key, as Propose would: found when it is p's request, and
+// ErrKeyReused when the key was used for another. A handler calls it before it reads what a first request needs, so a
+// retry finds its operation even when the target has changed since; one still uncommitted is not found here, and
+// Propose finds it once it commits.
+func Replay(ctx context.Context, tx pg.Tx, p Proposal) (Operation, bool, error) {
 	rows, err := New().OperationsByKey(ctx, tx, OperationsByKeyParams{CredentialID: p.Credential, IdempotencyKey: p.Key})
 	if err != nil || len(rows) == 0 {
 		return Operation{}, false, err
@@ -237,6 +256,24 @@ func CheckReservation(ctx context.Context, tx pg.Tx, op Operation) (Reservation,
 		return Reservation{}, ErrPolicyChanged
 	}
 	return reservationOf(m), nil
+}
+
+// holdReservation locks operation id's reservation, if it holds one, then its policy and counters, so the run of an
+// approval waits for nothing after the approval's signal is resolved.
+func holdReservation(ctx context.Context, tx pg.Tx, id uuid.UUID) error {
+	rows, err := New().LockMoneyAction(ctx, tx, id)
+	if err != nil {
+		return fmt.Errorf("lock the reservation of operation %s: %w", id, err)
+	}
+	if len(rows) == 0 || rows[0].OperationsMoneyAction.State != "reserved" {
+		return nil
+	}
+	m := rows[0].OperationsMoneyAction
+	if _, err := lockPolicy(ctx, tx, Category(m.Category), m.SiteID); err != nil && !errors.Is(err, ErrNoCapPolicy) {
+		return err
+	}
+	_, err = lockCounters(ctx, tx, m.SiteID, Category(m.Category), Target{Kind: m.ObjectKind, ID: m.ObjectID}, m.DayStart, m.WeekStart)
+	return err
 }
 
 // CommitReservation is the agent's confirmation, in operation confirm, that the money of its own proposal arrived,

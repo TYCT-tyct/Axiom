@@ -33,6 +33,7 @@ var adminRefusals = []refusal{
 	{operations.ErrPolicyChanged, http.StatusConflict, codeStaleRevision, "the cap policy changed since it was read"},
 	{operations.ErrCurrencyFixed, http.StatusConflict, codeConflict, "a cap policy keeps the currency it was made with"},
 	{operations.ErrBadPolicy, http.StatusBadRequest, codeInvalidRequest, "each limit is at least 0 and each hard limit at least its autonomous limit"},
+	{operations.ErrWindowEnded, http.StatusConflict, codeConflict, "the UTC day ended while the proposal waited; propose it again"},
 	{operations.ErrNotReserved, http.StatusConflict, codeConflict, "the proposal holds no reservation now: it waits for approval, was confirmed or released, or its day ended"},
 	{payments.ErrTampered, http.StatusConflict, codeConflict, "the merchant account's settings do not match its sealed secrets; enter the secrets again"},
 	{observability.ErrAlertConfiguration, http.StatusUnprocessableEntity, codeUnprocessable, "the alert configuration is invalid"},

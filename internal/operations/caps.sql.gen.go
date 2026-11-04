@@ -94,8 +94,9 @@ func (q *Queries) CapPolicyOf(ctx context.Context, db DBTX, arg CapPolicyOfParam
 }
 
 const capWindows = `-- name: CapWindows :one
-SELECT date_trunc('day', now(), 'UTC')::timestamptz AS day_start, date_trunc('week', now(), 'UTC')::timestamptz AS week_start,
-    (date_trunc('day', now(), 'UTC') + interval '1 day')::timestamptz AS day_end
+SELECT date_trunc('day', c.at, 'UTC')::timestamptz AS day_start, date_trunc('week', c.at, 'UTC')::timestamptz AS week_start,
+    (date_trunc('day', c.at, 'UTC') + interval '1 day')::timestamptz AS day_end
+FROM (SELECT clock_timestamp() AS at) c
 `
 
 type CapWindowsRow struct {
@@ -104,7 +105,8 @@ type CapWindowsRow struct {
 	DayEnd    time.Time
 }
 
-// The UTC day and ISO week a proposal falls in, and the end of the day, by the database's clock.
+// The UTC day and ISO week a proposal falls in, and the end of the day, by the database's clock as it is now: now() is
+// the transaction's start, and a proposal that began before midnight may get here after it.
 func (q *Queries) CapWindows(ctx context.Context, db DBTX) (CapWindowsRow, error) {
 	row := db.QueryRow(ctx, capWindows)
 	var i CapWindowsRow
@@ -386,14 +388,16 @@ func (q *Queries) LockCapPolicyForUpdate(ctx context.Context, db DBTX, arg LockC
 }
 
 const lockDueMoneyActions = `-- name: LockDueMoneyActions :many
-SELECT operation_id FROM operations.money_actions
-WHERE state = 'reserved' AND expires_at <= clock_timestamp()
-ORDER BY operation_id
+SELECT m.operation_id FROM operations.money_actions m JOIN operations.operations o ON o.id = m.operation_id
+WHERE m.state = 'reserved' AND m.expires_at <= clock_timestamp()
+ORDER BY m.operation_id
 LIMIT $1
-FOR UPDATE SKIP LOCKED
+FOR UPDATE OF o, m SKIP LOCKED
 `
 
-// Reservations past the end of their windows; one a confirmation or a release holds is skipped, not waited for.
+// Reservations past the end of their windows, each locked with its operation first, as every other path takes them;
+// one whose operation or reservation another transaction holds is skipped, not waited for, and its state is rechecked
+// on the row's new version.
 func (q *Queries) LockDueMoneyActions(ctx context.Context, db DBTX, batch int32) ([]uuid.UUID, error) {
 	rows, err := db.Query(ctx, lockDueMoneyActions, batch)
 	if err != nil {
@@ -600,4 +604,16 @@ func (q *Queries) UpdateCapPolicy(ctx context.Context, db DBTX, arg UpdateCapPol
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const windowEnded = `-- name: WindowEnded :one
+SELECT clock_timestamp() >= $1::timestamptz + interval '1 day' AS ended
+`
+
+// Whether the UTC day that starts at @day_start is over by the database's clock as it is now.
+func (q *Queries) WindowEnded(ctx context.Context, db DBTX, dayStart time.Time) (bool, error) {
+	row := db.QueryRow(ctx, windowEnded, dayStart)
+	var ended bool
+	err := row.Scan(&ended)
+	return ended, err
 }

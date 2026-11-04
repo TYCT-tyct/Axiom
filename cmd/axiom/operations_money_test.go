@@ -185,3 +185,18 @@ func TestOperationsTopUpExchange(t *testing.T) {
 		}
 	}
 }
+
+// TestOperationsTopUpReplay: a retry under the key of a top-up that succeeded finds it after the supplier was removed,
+// where a new proposal is refused; the key's first answer was lost, not the operation.
+func TestOperationsTopUpReplay(t *testing.T) {
+	t.Parallel()
+	f, supplier, token := topUpReady(t)
+	key := newKey()
+	first := agentOperation(t, f.proposeTopUp(token, supplier, "2500000", key, ""))
+	expectAdmin(t, "removeSupplier", f.change(f.s, http.MethodPost, "/suppliers/"+supplier+"/removal", `{"reason":"closed"}`, newKey()), http.StatusOK, "")
+	rec := f.proposeTopUp(token, supplier, "2500000", key, "")
+	if rec.Code != http.StatusOK || rec.Header().Get("Idempotency-Replayed") != "true" || *agentOperation(t, rec).OperationId != *first.OperationId {
+		t.Errorf("the retry after the removal: %d %s", rec.Code, rec.Body)
+	}
+	expectAdmin(t, "a new proposal after the removal", f.proposeTopUp(token, supplier, "2500000", newKey(), ""), http.StatusConflict, codeConflict)
+}

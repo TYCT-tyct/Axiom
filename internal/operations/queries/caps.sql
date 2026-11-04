@@ -29,9 +29,15 @@ WHERE category = @category AND site_id IS NOT DISTINCT FROM sqlc.narg(site_id)::
 RETURNING *;
 
 -- name: CapWindows :one
--- The UTC day and ISO week a proposal falls in, and the end of the day, by the database's clock.
-SELECT date_trunc('day', now(), 'UTC')::timestamptz AS day_start, date_trunc('week', now(), 'UTC')::timestamptz AS week_start,
-    (date_trunc('day', now(), 'UTC') + interval '1 day')::timestamptz AS day_end;
+-- The UTC day and ISO week a proposal falls in, and the end of the day, by the database's clock as it is now: now() is
+-- the transaction's start, and a proposal that began before midnight may get here after it.
+SELECT date_trunc('day', c.at, 'UTC')::timestamptz AS day_start, date_trunc('week', c.at, 'UTC')::timestamptz AS week_start,
+    (date_trunc('day', c.at, 'UTC') + interval '1 day')::timestamptz AS day_end
+FROM (SELECT clock_timestamp() AS at) c;
+
+-- name: WindowEnded :one
+-- Whether the UTC day that starts at @day_start is over by the database's clock as it is now.
+SELECT clock_timestamp() >= sqlc.arg(day_start)::timestamptz + interval '1 day' AS ended;
 
 -- name: EnsureCapCounters :exec
 -- The three rows a money action moves, made at zero if they are not there yet, in the order they are locked.
@@ -71,12 +77,14 @@ WHERE m.operation_id = @operation_id FOR UPDATE;
 SELECT * FROM operations.money_actions WHERE operation_id = @operation_id;
 
 -- name: LockDueMoneyActions :many
--- Reservations past the end of their windows; one a confirmation or a release holds is skipped, not waited for.
-SELECT operation_id FROM operations.money_actions
-WHERE state = 'reserved' AND expires_at <= clock_timestamp()
-ORDER BY operation_id
+-- Reservations past the end of their windows, each locked with its operation first, as every other path takes them;
+-- one whose operation or reservation another transaction holds is skipped, not waited for, and its state is rechecked
+-- on the row's new version.
+SELECT m.operation_id FROM operations.money_actions m JOIN operations.operations o ON o.id = m.operation_id
+WHERE m.state = 'reserved' AND m.expires_at <= clock_timestamp()
+ORDER BY m.operation_id
 LIMIT @batch
-FOR UPDATE SKIP LOCKED;
+FOR UPDATE OF o, m SKIP LOCKED;
 
 -- name: SettleMoneyAction :exec
 UPDATE operations.money_actions SET state = @state, proof = @proof, confirmed_by = @confirmed_by, settled_at = now()

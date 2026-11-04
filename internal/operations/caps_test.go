@@ -255,9 +255,18 @@ func (r reservations) confirm(proposal operations.Operation) (operations.Reserva
 
 // approve approves op and ends it as the admin does, rejected and committed so when the recheck refuses it, and
 // returns the recheck's refusal.
-func (r reservations) approve(op operations.Operation) (checked error) {
+func (r reservations) approve(op operations.Operation) error {
 	r.t.Helper()
-	if _, err := r.in(r.t, func(tx pg.Tx) (operations.Operation, error) {
+	checked, err := r.tryApprove(op)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return checked
+}
+
+// tryApprove is approve that returns the transaction's own failure too, for a goroutine that may not stop the test.
+func (r reservations) tryApprove(op operations.Operation) (checked, err error) {
+	_, err = r.in(r.t, func(tx pg.Tx) (operations.Operation, error) {
 		op, err := operations.Decide(r.t.Context(), tx, owner, op.Approval.ID, true, "ok")
 		if err != nil {
 			return op, err
@@ -267,10 +276,8 @@ func (r reservations) approve(op operations.Operation) (checked error) {
 			refused = "stale_revision"
 		}
 		return operations.Settle(r.t.Context(), tx, op, map[string]any{}, refused)
-	}); err != nil {
-		r.t.Fatal(err)
-	}
-	return checked
+	})
+	return checked, err
 }
 
 // TestReservationReleases: a proposal that is rejected, withdrawn or canceled by the stop releases its reservation,

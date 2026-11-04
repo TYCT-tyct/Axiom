@@ -154,9 +154,10 @@ func (q *Queries) DecideApproval(ctx context.Context, db DBTX, arg DecideApprova
 }
 
 const insertApproval = `-- name: InsertApproval :one
-INSERT INTO operations.approvals (id, operation_id, tier, state, summary, expires_at)
-VALUES ($1, $2, 'human', 'pending', $3,
-    least(now() + make_interval(secs => $4::float8), date_trunc('day', now(), 'UTC') + interval '1 day'))
+INSERT INTO operations.approvals (id, operation_id, tier, state, summary, requested_at, expires_at)
+SELECT $1, $2, 'human', 'pending', $3, c.at,
+    least(c.at + make_interval(secs => $4::float8), date_trunc('day', c.at, 'UTC') + interval '1 day')
+FROM (SELECT clock_timestamp() AS at) c
 RETURNING id, operation_id, tier, state, summary, requested_at, expires_at, decided_at, decided_by, decision_reason
 `
 
@@ -167,7 +168,8 @@ type InsertApprovalParams struct {
 	TtlSeconds  float64
 }
 
-// It waits @ttl_seconds at most, and never past the end of the UTC day it was asked on.
+// It waits @ttl_seconds at most, and never past the end of the UTC day it was asked on, by the clock as it is now: a
+// proposal that began before midnight and waited for a lock past it is asked on the new day.
 func (q *Queries) InsertApproval(ctx context.Context, db DBTX, arg InsertApprovalParams) (OperationsApproval, error) {
 	row := db.QueryRow(ctx, insertApproval,
 		arg.ID,

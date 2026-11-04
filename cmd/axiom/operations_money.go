@@ -124,6 +124,10 @@ func (o operationsAPI) proposeTopUp(ctx context.Context, tx pg.Tx, id uuid.UUID,
 	if err := o.admin.accounts.HoldAgent(ctx, tx, accounts.AgentID(p.Credential)); err != nil {
 		return operations.Operation{}, false, err
 	}
+	// A retry answers with its operation whatever happened to the supplier since; only a first request is valued.
+	if op, found, err := operations.Replay(ctx, tx, p); found || err != nil {
+		return op, found, err
+	}
 	basis, err := o.admin.suppliers.TopUpBasis(ctx, tx, id)
 	if err != nil {
 		return operations.Operation{}, false, err
