@@ -194,15 +194,18 @@ def checked_coverage(value, path):
     return {"tolerance": tolerance, "floor": floor, "packages": found}
 
 
-def checked(data, path):
+def checked(data, path, allow_old=False):
     """The baseline data, checked enough that a typo cannot pass as a lower number.
 
-    Version 1 predates coverage and version 2 predates the test counts. A base may still carry either (this ratchet's
-    earlier introductions); only the current baseline must be version 3, which load enforces.
+    Version 1 predates coverage and version 2 predates the test counts. Only a base or an explicit upgrade may carry
+    either; the current baseline must be version 3, which read and load enforce. A version 3 baseline may omit coverage
+    when it was written from a static-only run, so no coverage was measured rather than none was required.
     """
     version = data.get("version") if isinstance(data, dict) else None
-    if version not in (1, 2, VERSION):
-        raise SystemExit(f"quality ratchet: {path}: version must be 1, 2 or {VERSION}")
+    allowed = (1, 2, VERSION) if allow_old else (VERSION,)
+    if version not in allowed:
+        wanted = f"1, 2 or {VERSION}" if allow_old else str(VERSION)
+        raise SystemExit(f"quality ratchet: {path}: version must be {wanted}")
     ceilings = {"gocognit": COGNITIVE_CEILING, "file_lines": FILE_CEILING}
     if version >= 3:
         ceilings["test_gocognit"] = TEST_COGNITIVE_CEILING
@@ -216,6 +219,12 @@ def checked(data, path):
         if not isinstance(name, str) or not name:
             raise SystemExit(f"quality ratchet: {path}: every nolint key must be a linter name")
         number(count, f"nolint.{name}", path)
+    coverage = None
+    if version >= 3:
+        if "coverage" in data:
+            coverage = checked_coverage(data["coverage"], path)
+    elif version >= 2:
+        coverage = checked_coverage(data["coverage"], path)
     result = {
         "version": version,
         "nolint": nolint,
@@ -226,7 +235,7 @@ def checked(data, path):
         "test_gocognit_ceiling": None,
         "files_over_500_lines": number(data.get("files_over_500_lines"), "files_over_500_lines", path),
         "file_ceiling": entries(data.get("file_ceiling"), "file", "lines", path),
-        "coverage": checked_coverage(data["coverage"], path) if version >= 2 else None,
+        "coverage": coverage,
     }
     if version >= 3:
         result["test_functions_over_gocognit_15"] = number(
@@ -236,19 +245,23 @@ def checked(data, path):
     return result
 
 
-def read(path):
-    """The committed baseline, checked enough that a typo cannot pass as a lower number."""
+def read(path, allow_old=False):
+    """The committed baseline, checked enough that a typo cannot pass as a lower number.
+
+    allow_old is for an explicit upgrade: a static-only write may replace an older baseline, and must then write the
+    current version.
+    """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise SystemExit(f"quality ratchet: cannot read {path}: {exc}")
     except json.JSONDecodeError as exc:
         raise SystemExit(f"quality ratchet: {path} is not valid JSON: {exc}")
-    return checked(data, path)
+    return checked(data, path, allow_old=allow_old)
 
 
 def load(path):
-    """The committed baseline. An older version may lack coverage or the test counts; a static-only check can use it."""
+    """The committed baseline. It must be the current version, so a downgraded file cannot skip the test checks."""
     return read(path)
 
 
@@ -283,7 +296,7 @@ def load_base(root, base):
         data = json.loads(shown.stdout)
     except json.JSONDecodeError as exc:
         raise SystemExit(f"quality ratchet: {base}:{path} is not valid JSON: {exc}")
-    return checked(data, f"{base}:{path}")
+    return checked(data, f"{base}:{path}", allow_old=True)
 
 
 def compare(now, baseline):
@@ -481,7 +494,7 @@ def document(now, baseline=None):
     """
     coverage = recorded_coverage(now, baseline)
     result = {
-        "version": VERSION if coverage is not None else (baseline or {}).get("version", 1),
+        "version": VERSION,
         "description": DESCRIPTION,
         "ceilings": {"gocognit": COGNITIVE_CEILING, "test_gocognit": TEST_COGNITIVE_CEILING,
                      "file_lines": FILE_CEILING},
@@ -562,7 +575,7 @@ def main(argv=None):
 
     if args.write_baseline:
         problems = []
-        existing = read(path) if path.exists() else None
+        existing = read(path, allow_old=True) if path.exists() else None
         if existing is not None:
             current_problems, _ = compare(now, existing)
             problems += current_problems
@@ -576,8 +589,10 @@ def main(argv=None):
             problems += baseline_problems(recorded, base, now)
         if problems:
             return report(problems, [])
+        text = json.dumps(recorded, indent=2) + "\n"
+        checked(json.loads(text), f"{path} to write")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(recorded, indent=2) + "\n", encoding="utf-8")
+        path.write_text(text, encoding="utf-8")
         print(f"quality ratchet: wrote {path}")
         return 0
 

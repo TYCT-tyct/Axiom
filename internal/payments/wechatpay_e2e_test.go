@@ -64,61 +64,32 @@ func wpE2ERefundJSON(id string, refund *wpE2ERefund, status string) []byte {
 	})
 }
 
-// wpE2EPaymentRoute names the payment method a request addresses, or "".
-func wpE2EPaymentRoute(r *http.Request) string {
-	switch {
-	case r.Method == http.MethodPost && r.URL.Path == "/v3/pay/transactions/native":
-		return "native"
-	case r.Method == http.MethodPost && r.URL.Path == "/v3/pay/transactions/h5":
-		return "h5"
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v3/pay/transactions/out-trade-no/"):
-		return "order"
-	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/close"):
-		return "close"
-	}
-	return ""
-}
-
-// wpE2ERefundRoute names the refund method a request addresses, or "".
-func wpE2ERefundRoute(r *http.Request) string {
-	switch {
-	case r.Method == http.MethodPost && r.URL.Path == "/v3/refund/domestic/refunds":
-		return "refund"
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v3/refund/domestic/refunds/"):
-		return "refund-query"
-	}
-	return ""
-}
-
-// wpE2ERoute names the gateway method a request addresses.
-func wpE2ERoute(r *http.Request) string {
-	if route := wpE2EPaymentRoute(r); route != "" {
-		return route
-	}
-	return wpE2ERefundRoute(r)
-}
-
 // respond dispatches one gateway request. The mutex is held for the whole request so each handler sees a settled state.
 func (s *wpE2EState) respond(t *testing.T, r *http.Request, body []byte) (int, []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	switch wpE2ERoute(r) {
-	case "native":
-		return s.createNative(t, body)
-	case "h5":
-		return s.createH5(t, body)
-	case "order":
-		return s.queryOrder(strings.TrimPrefix(r.URL.Path, "/v3/pay/transactions/out-trade-no/"))
-	case "close":
-		return s.closeOrder(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v3/pay/transactions/out-trade-no/"), "/close"))
-	case "refund":
-		return s.createRefund(t, body)
-	case "refund-query":
-		return s.queryRefund(strings.TrimPrefix(r.URL.Path, "/v3/refund/domestic/refunds/"))
-	default:
-		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-		return http.StatusNotFound, nil
+	switch r.Method {
+	case http.MethodPost:
+		switch {
+		case r.URL.Path == "/v3/pay/transactions/native":
+			return s.createNative(t, body)
+		case r.URL.Path == "/v3/pay/transactions/h5":
+			return s.createH5(t, body)
+		case strings.HasSuffix(r.URL.Path, "/close"):
+			return s.closeOrder(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v3/pay/transactions/out-trade-no/"), "/close"))
+		case r.URL.Path == "/v3/refund/domestic/refunds":
+			return s.createRefund(t, body)
+		}
+	case http.MethodGet:
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/pay/transactions/out-trade-no/"):
+			return s.queryOrder(strings.TrimPrefix(r.URL.Path, "/v3/pay/transactions/out-trade-no/"))
+		case strings.HasPrefix(r.URL.Path, "/v3/refund/domestic/refunds/"):
+			return s.queryRefund(strings.TrimPrefix(r.URL.Path, "/v3/refund/domestic/refunds/"))
+		}
 	}
+	t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+	return http.StatusNotFound, nil
 }
 
 func (s *wpE2EState) createNative(t *testing.T, body []byte) (int, []byte) {

@@ -56,6 +56,17 @@ def test_file(*functions):
     return "\n".join(lines)
 
 
+def older_baseline(version, coverage=True):
+    """A baseline from before the test half: version 1 has no coverage, version 2 has coverage but no test counts."""
+    data = {key: value for key, value in ZERO.items()
+            if key not in ("test_functions_over_gocognit_15", "test_gocognit_ceiling")}
+    data["version"] = version
+    data["ceilings"] = {"gocognit": 30, "file_lines": 800}
+    if not coverage:
+        data.pop("coverage")
+    return data
+
+
 def violating_file(name, lines, ifs, header=False, nolint=False):
     """A generated-looking or test file that would break every count if it were measured."""
     body = ["package fixture", ""]
@@ -518,6 +529,88 @@ class TestCodeTest(unittest.TestCase):
 
 
 class WriteBaselineTest(unittest.TestCase):
+    def test_a_current_baseline_must_keep_the_test_half(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.write("clean.go", go_file(("small", 1)))
+            for version in (1, 2):
+                fixture.write(".github/quality-baseline.json", json.dumps(older_baseline(version)))
+                run = fixture.run()
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertIn("version must be 3", run.stderr)
+
+    def test_a_downgraded_baseline_cannot_skip_the_test_half_against_a_version_three_base(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.write("clean.go", go_file(("small", 1)))
+            fixture.baseline()
+            base = fixture.commit()
+            fixture.write("fixture_test.go", test_file(("big", 31)))
+            fixture.write(".github/quality-baseline.json", json.dumps(older_baseline(2)))
+
+            run = fixture.run("--base", base)
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("version must be 3", run.stderr)
+
+    def test_static_initialization_writes_a_readable_current_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.write("clean.go", go_file(("small", 1)))
+
+            written = fixture.run("--write-baseline")
+
+            self.assertEqual(written.returncode, 0, written.stderr)
+            data = fixture.baseline_data()
+            self.assertEqual(data["version"], 3)
+            self.assertEqual(data["test_functions_over_gocognit_15"], 0)
+            self.assertNotIn("coverage", data)
+            self.assertEqual(fixture.run().returncode, 0)
+
+            fixture.coverage(covered=1, total=2)
+            missing = fixture.run("--coverage", fixture.profile())
+            self.assertEqual(missing.returncode, 1, missing.stderr)
+            self.assertIn("has no coverage section", missing.stderr)
+
+            added = fixture.run("--coverage", fixture.profile(), "--write-baseline")
+            self.assertEqual(added.returncode, 0, added.stderr)
+            self.assertEqual(fixture.baseline_data()["coverage"]["packages"],
+                             {"fixture": 0, "fixture/pkg": 5000})
+            self.assertEqual(fixture.run("--coverage", fixture.profile()).returncode, 0)
+
+    def test_static_upgrade_of_an_older_baseline_writes_version_three(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.write("clean.go", go_file(("small", 1)))
+            fixture.write(".github/quality-baseline.json", json.dumps(older_baseline(1, coverage=False)))
+
+            upgraded = fixture.run("--write-baseline")
+
+            self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+            data = fixture.baseline_data()
+            self.assertEqual(data["version"], 3)
+            self.assertEqual(data["test_functions_over_gocognit_15"], 0)
+            self.assertEqual(data["test_gocognit_ceiling"], [])
+            self.assertNotIn("coverage", data)
+            self.assertEqual(fixture.run().returncode, 0)
+
+    def test_static_upgrade_keeps_the_coverage_of_a_version_two_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=1, total=2)
+            older = older_baseline(2)
+            older["coverage"]["packages"] = {"fixture/pkg": 5000}
+            fixture.write(".github/quality-baseline.json", json.dumps(older))
+
+            upgraded = fixture.run("--write-baseline")
+
+            self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+            data = fixture.baseline_data()
+            self.assertEqual(data["version"], 3)
+            self.assertEqual(data["coverage"]["packages"], {"fixture/pkg": 5000})
+            self.assertEqual(data["test_functions_over_gocognit_15"], 0)
+            self.assertEqual(fixture.run("--coverage", fixture.profile()).returncode, 0)
+
     def test_write_lowers_the_baseline_but_refuses_to_raise_it(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Fixture(directory)
