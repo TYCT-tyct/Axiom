@@ -1,0 +1,110 @@
+import type { Schemas } from "@axiom/api";
+import { createInstance } from "i18next";
+import { renderToStaticMarkup } from "react-dom/server";
+import { I18nextProvider } from "react-i18next";
+import { beforeAll, describe, expect, it } from "vitest";
+import { canSubmitWithLegal, LegalConsent, type LegalConsentState, legalVersions } from "./legal";
+
+const i18n = createInstance();
+
+beforeAll(async () => {
+  await i18n.init({
+    lng: "en",
+    defaultNS: "console",
+    resources: {
+      en: {
+        console: {
+          legal: {
+            terms: "Terms of Service",
+            privacy: "Privacy Policy",
+            version: "Version {{version}}",
+            loading: "Loading the terms…",
+            error: "The terms didn’t load.",
+            retry: "Retry",
+            accept: "I have read and agree.",
+          },
+        },
+      },
+    },
+  });
+});
+
+const document = (kind: "terms" | "privacy", version: number): Schemas["LegalDocument"] => ({
+  kind,
+  version,
+  body: `DEMO BANNER ${kind} v${version}\nBody`,
+  published_at: "2026-11-04T00:00:00Z",
+});
+
+function state(
+  documents: Schemas["LegalDocument"][],
+  accepted: boolean,
+  flags: { pending?: boolean; error?: boolean } = {},
+): LegalConsentState {
+  return {
+    query: { isPending: flags.pending ?? false, isError: flags.error ?? false } as LegalConsentState["query"],
+    documents,
+    accepted,
+    setAccepted: () => {},
+    versions: legalVersions(documents),
+    ready: !(flags.pending ?? false) && !(flags.error ?? false),
+    reload: () => {},
+  };
+}
+
+describe("legal consent", () => {
+  it("resolves the legal keys in the console namespace", () => {
+    expect(i18n.t("legal.error")).toBe("The terms didn’t load.");
+  });
+
+  it("renders the displayed documents, their versions and the unchecked acceptance", () => {
+    const html = renderToStaticMarkup(
+      <I18nextProvider i18n={i18n}>
+        <LegalConsent consent={state([document("terms", 3), document("privacy", 1)], false)} />
+      </I18nextProvider>,
+    );
+    expect(html).toContain("Terms of Service");
+    expect(html).toContain("Version 3");
+    expect(html).toContain("Privacy Policy");
+    expect(html).toContain("Version 1");
+    expect(html).toContain("DEMO BANNER terms v3");
+    expect(html).toContain("I have read and agree.");
+    expect(html).toContain('type="checkbox"');
+    expect(html).not.toContain("checked");
+  });
+
+  it("renders nothing when the site publishes no documents", () => {
+    const html = renderToStaticMarkup(
+      <I18nextProvider i18n={i18n}>
+        <LegalConsent consent={state([], false)} />
+      </I18nextProvider>,
+    );
+    expect(html).toBe("");
+  });
+
+  it("shows the read failure with a retry", () => {
+    const html = renderToStaticMarkup(
+      <I18nextProvider i18n={i18n}>
+        <LegalConsent consent={state([], false, { error: true })} />
+      </I18nextProvider>,
+    );
+    expect(html).toContain("The terms didn’t load.");
+    expect(html).toContain("Retry");
+  });
+
+  it("requires acceptance only when there are documents, and only after they loaded", () => {
+    const terms = [document("terms", 1)];
+    expect(canSubmitWithLegal({ ready: false, documents: [], accepted: false })).toBe(false);
+    expect(canSubmitWithLegal({ ready: true, documents: [], accepted: false })).toBe(true);
+    expect(canSubmitWithLegal({ ready: true, documents: terms, accepted: false })).toBe(false);
+    expect(canSubmitWithLegal({ ready: true, documents: terms, accepted: true })).toBe(true);
+  });
+
+  it("sends exactly the versions that were shown, in the server's order", () => {
+    expect(legalVersions([document("terms", 4), document("privacy", 2)])).toEqual([
+      { kind: "terms", version: 4 },
+      { kind: "privacy", version: 2 },
+    ]);
+    expect(legalVersions([])).toBeUndefined();
+  });
+});

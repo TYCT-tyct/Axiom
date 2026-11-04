@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
 import { failOnce, mockConsole, signedInAs } from "./console-api.ts";
-import { goodInvite } from "./console-data.ts";
+import { goodInvite, type Schemas } from "./console-data.ts";
 import { knownEmail, knownPassword, limitedEmail, mfaEmail } from "./mock-auth.ts";
 
 // The console's pages against the mocked API (console-api.ts): the main flows of M1, each as a user would walk it.
@@ -13,6 +13,21 @@ async function signIn(page: Page, email = knownEmail, password = knownPassword) 
   await page.getByLabel("密码").fill(password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
 }
+
+const demoDocuments = (): Schemas["LegalDocument"][] => [
+  {
+    kind: "terms",
+    version: 3,
+    body: "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】\nDemo text, not legal advice; replace before launch.\n\n一、服务说明\n这是服务条款的演示文本。",
+    published_at: "2026-11-04T00:00:00Z",
+  },
+  {
+    kind: "privacy",
+    version: 2,
+    body: "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】\nDemo text, not legal advice; replace before launch.\n\n一、引言与适用范围\n这是隐私政策的演示文本。",
+    published_at: "2026-11-04T00:00:00Z",
+  },
+];
 
 const main = (page: Page) => page.getByRole("main");
 
@@ -253,6 +268,23 @@ test.describe("two-step verification at sign-in", () => {
   });
 });
 
+test.describe("accepting updated documents", () => {
+  test("a signed-in member accepts before the shell opens", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.legal = demoDocuments();
+    signedInAs(state);
+    await page.goto("/console/keys");
+    await expect(page.getByRole("heading", { level: 1, name: "更新后的条款" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "服务条款" })).toBeVisible();
+    const submit = page.getByRole("button", { name: "同意并继续" });
+    await expect(submit).toBeDisabled();
+    await page.getByLabel("我已阅读并同意上述服务条款和隐私政策。").check();
+    await expect(submit).toBeEnabled();
+    await submit.click();
+    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+  });
+});
+
 test.describe("registering", () => {
   test("an invite code from the link registers and signs in", async ({ page }) => {
     await mockConsole(page);
@@ -276,6 +308,25 @@ test.describe("registering", () => {
     await page.getByLabel("邮箱").fill(knownEmail);
     await page.getByRole("button", { name: "注册", exact: true }).click();
     await expect(page.getByRole("alert")).toHaveText(/已经注册过/);
+  });
+
+  test("the registration form shows the published documents and needs this version accepted", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.legal = demoDocuments();
+    await page.goto(`/console/register?invite=${goodInvite}`);
+    await expect(page.getByRole("region", { name: "服务条款" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "隐私政策" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /服务条款.*第 3 版/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /隐私政策.*第 2 版/ })).toBeVisible();
+    await expect(page.getByText("【示例文本（demo）").first()).toBeVisible();
+    const submit = page.getByRole("button", { name: "注册", exact: true });
+    await expect(submit).toBeDisabled();
+    await page.getByLabel("邮箱").fill("new@example.com");
+    await page.getByLabel("密码").fill("a long password nobody guesses");
+    await page.getByLabel("我已阅读并同意上述服务条款和隐私政策。").check();
+    await expect(submit).toBeEnabled();
+    await submit.click();
+    await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
   });
 
   test("a site that does not take registration says so instead of showing a form", async ({ page }) => {

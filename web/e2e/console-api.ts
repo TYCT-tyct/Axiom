@@ -24,6 +24,12 @@ const none = { level: "none" } as const;
 const signedIn = { level: "signed_in" } as const;
 
 function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">) {
+  if (state.legal.length > 0) {
+    const accepted = new Map((body.consent ?? []).map(({ kind, version }) => [kind, version]));
+    if (state.legal.some(({ kind, version }) => accepted.get(kind) !== version)) {
+      return fail(403, "consent_required");
+    }
+  }
   if (body.invite_code !== goodInvite) {
     return fail(422, "invalid_invite");
   }
@@ -32,6 +38,7 @@ function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">)
   }
   state.user.email = body.email;
   state.user.password = body.password ?? "";
+  state.legalAccepted = state.legal.length > 0;
   return { status: 201, json: { user_id: `user_${"1".repeat(26)}` as Schemas["UserId"] } } as const;
 }
 
@@ -245,9 +252,18 @@ function setNotifications({ body, state }: Ctx<"/api/console/v1/notification-pre
 const handlers: Handler<MockState>[] = [
   route("get", `${base}/version`, none, ({ state }) => ok({ version: state.version })),
   route("get", `${base}/site`, none, ({ state }) => ok(state.site)),
+  route("get", `${base}/legal`, none, ({ state }) => ok({ documents: state.legal })),
   route("post", `${base}/auth/sign-in`, none, signIn),
   route("post", `${base}/auth/mfa`, { level: "pending_mfa" }, verifyMfa),
   route("post", `${base}/auth/register`, none, register),
+  route("post", `${base}/legal/accept`, signedIn, ({ body, state }) => {
+    const accepted = new Map(body.consent.map(({ kind, version }) => [kind, version]));
+    if (state.legal.some(({ kind, version }) => accepted.get(kind) !== version)) {
+      return fail(403, "consent_required");
+    }
+    state.legalAccepted = true;
+    return { status: 204 as const, json: undefined };
+  }),
   route("post", `${base}/auth/sign-out`, { level: "any" }, signOut),
   route("get", `${base}/session`, { level: "any" }, ({ state }) => ok(session(state))),
   route("post", `${base}/auth/totp/setup`, signedIn, totpSetup),

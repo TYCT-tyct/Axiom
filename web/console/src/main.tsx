@@ -11,7 +11,7 @@ import { router } from "./router";
 startApp(
   "console",
   { zh, en },
-  <AppProviders api={consoleAuth} requiresMfa={false}>
+  <AppProviders api={consoleAuth} requiresMfa={false} requiresConsent>
     <PendingCodesProvider>
       <RouterProvider router={router} />
     </PendingCodesProvider>
