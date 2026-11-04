@@ -90,18 +90,9 @@ func readSourceClass(ctx context.Context, tx pg.Tx, slug string) (SourceClass, e
 // CreateSourceClass writes a class and its audit entry in one transaction. Position, the global class count and the
 // headers all classes may read are checked against the same locked table, so two administrators cannot create a
 // duplicate position or a rule set the call path cannot hold.
-//
-//nolint:cyclop,gocognit // validation, ordering and the audit write are one transaction; each refusal names its field
 func CreateSourceClass(ctx context.Context, tx pg.Tx, actor audit.Actor, in SourceClassInput, reason string) (SourceClass, error) {
-	if !validSlug(in.Slug) {
-		return SourceClass{}, classErr("slug", "must start with a lower-case letter, then lower-case letters, digits or hyphens, at most 32 characters")
-	}
-	rules := Rules{Match: "all"}
-	if in.Rules != nil {
-		rules = in.Rules.Normalized()
-	}
-	c := SourceClass{Slug: in.Slug, Name: in.Name, NameZh: in.NameZh, Description: in.Description, Rules: rules}
-	if err := c.Check(); err != nil {
+	c, err := newSourceClass(in)
+	if err != nil {
 		return SourceClass{}, err
 	}
 	if err := lockClasses(ctx, tx); err != nil {
@@ -121,19 +112,52 @@ func CreateSourceClass(ctx context.Context, tx pg.Tx, actor audit.Actor, in Sour
 	if len(live) >= MaxSourceClasses {
 		return SourceClass{}, classErr("classes", fmt.Sprintf("at most %d classes are allowed", MaxSourceClasses))
 	}
-	if in.Position == nil {
-		position, err := nextPosition(live)
-		if err != nil {
-			return SourceClass{}, err
-		}
-		c.Position = position
-	} else {
-		c.Position = *in.Position
-	}
-	next := append(live, c)
-	if _, err := compileClasses(next); err != nil {
+	if err := placeNewClass(&c, in.Position, live); err != nil {
 		return SourceClass{}, err
 	}
+	if _, err := compileClasses(append(live, c)); err != nil {
+		return SourceClass{}, err
+	}
+	c, err = insertSourceClass(ctx, tx, c)
+	if err != nil {
+		return SourceClass{}, err
+	}
+	if err := recordClass(ctx, tx, actor, "source_class.create", nil, &c, reason); err != nil {
+		return SourceClass{}, err
+	}
+	return c, nil
+}
+
+// newSourceClass validates the administrator's input before it takes the class lock.
+func newSourceClass(in SourceClassInput) (SourceClass, error) {
+	if !validSlug(in.Slug) {
+		return SourceClass{}, classErr("slug", "must start with a lower-case letter, then lower-case letters, digits or hyphens, at most 32 characters")
+	}
+	rules := Rules{Match: "all"}
+	if in.Rules != nil {
+		rules = in.Rules.Normalized()
+	}
+	c := SourceClass{Slug: in.Slug, Name: in.Name, NameZh: in.NameZh, Description: in.Description, Rules: rules}
+	if err := c.Check(); err != nil {
+		return SourceClass{}, err
+	}
+	return c, nil
+}
+
+func placeNewClass(c *SourceClass, position *int, live []SourceClass) error {
+	if position == nil {
+		next, err := nextPosition(live)
+		if err != nil {
+			return err
+		}
+		c.Position = next
+		return nil
+	}
+	c.Position = *position
+	return nil
+}
+
+func insertSourceClass(ctx context.Context, tx pg.Tx, c SourceClass) (SourceClass, error) {
 	encoded, err := rulesJSON(c.Rules)
 	if err != nil {
 		return SourceClass{}, err
@@ -144,16 +168,11 @@ func CreateSourceClass(ctx context.Context, tx pg.Tx, actor audit.Actor, in Sour
 		Scan(&c.Revision, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return SourceClass{}, fmt.Errorf("quality: create source class %s: %w", c.Slug, err)
 	}
-	if err := recordClass(ctx, tx, actor, "source_class.create", nil, &c, reason); err != nil {
-		return SourceClass{}, err
-	}
 	return c, nil
 }
 
 // UpdateSourceClass edits a live class. The revision is the one the administrator read; a stale revision changes
 // nothing. The fallback keeps its position and conditions: it is defined by matching nothing, not by a rule.
-//
-//nolint:cyclop,gocognit,funlen // applying optional fields and revalidating the set reads as one guarded body
 func UpdateSourceClass(ctx context.Context, tx pg.Tx, actor audit.Actor, slug string, in SourceClassChanges, reason string) (SourceClass, error) {
 	if err := lockClasses(ctx, tx); err != nil {
 		return SourceClass{}, err
@@ -165,6 +184,33 @@ func UpdateSourceClass(ctx context.Context, tx pg.Tx, actor audit.Actor, slug st
 	if in.Rev != before.Revision {
 		return SourceClass{}, ErrClassStale
 	}
+	next := changedClass(before, in)
+	if err := checkClassChanges(before, next, in); err != nil {
+		return SourceClass{}, err
+	}
+	if err := next.Check(); err != nil {
+		return SourceClass{}, err
+	}
+	live, err := ReadSourceClasses(ctx, tx)
+	if err != nil {
+		return SourceClass{}, err
+	}
+	replaceClass(live, next)
+	if _, err := compileClasses(live); err != nil {
+		return SourceClass{}, err
+	}
+	next, err = writeSourceClass(ctx, tx, slug, next, in.Rev)
+	if err != nil {
+		return SourceClass{}, err
+	}
+	next.CreatedAt = before.CreatedAt
+	if err := recordClass(ctx, tx, actor, "source_class.update", &before, &next, reason); err != nil {
+		return SourceClass{}, err
+	}
+	return next, nil
+}
+
+func changedClass(before SourceClass, in SourceClassChanges) SourceClass {
 	next := before
 	if in.Name != nil {
 		next.Name = *in.Name
@@ -181,30 +227,33 @@ func UpdateSourceClass(ctx context.Context, tx pg.Tx, actor audit.Actor, slug st
 	if in.Rules != nil {
 		next.Rules = in.Rules.Normalized()
 	}
-	if before.Fallback {
-		if next.Position != before.Position {
-			return SourceClass{}, classErr("position", "the fallback class keeps its position")
-		}
-		if in.Rules != nil {
-			return SourceClass{}, classErr("rules", "the fallback class recognizes the endpoints no rule matches and has no rules")
-		}
+	return next
+}
+
+// checkClassChanges keeps the fallback the class that matches nothing: its position and rules are not editable.
+func checkClassChanges(before, next SourceClass, in SourceClassChanges) error {
+	if !before.Fallback {
+		return nil
 	}
-	if err := next.Check(); err != nil {
-		return SourceClass{}, err
+	if next.Position != before.Position {
+		return classErr("position", "the fallback class keeps its position")
 	}
-	live, err := ReadSourceClasses(ctx, tx)
-	if err != nil {
-		return SourceClass{}, err
+	if in.Rules != nil {
+		return classErr("rules", "the fallback class recognizes the endpoints no rule matches and has no rules")
 	}
+	return nil
+}
+
+func replaceClass(live []SourceClass, next SourceClass) {
 	for i := range live {
-		if live[i].Slug == slug {
+		if live[i].Slug == next.Slug {
 			live[i] = next
-			break
+			return
 		}
 	}
-	if _, err := compileClasses(live); err != nil {
-		return SourceClass{}, err
-	}
+}
+
+func writeSourceClass(ctx context.Context, tx pg.Tx, slug string, next SourceClass, rev int64) (SourceClass, error) {
 	encoded, err := rulesJSON(next.Rules)
 	if err != nil {
 		return SourceClass{}, err
@@ -212,15 +261,11 @@ func UpdateSourceClass(ctx context.Context, tx pg.Tx, actor audit.Actor, slug st
 	if err := tx.QueryRow(ctx, `UPDATE quality.source_classes SET name=$2,name_zh=$3,description=$4,position=$5,
 		rules=$6,revision=revision+1,updated_at=now() WHERE slug=$1 AND deleted_at IS NULL AND revision=$7
 		RETURNING revision,updated_at`, slug, next.Name, next.NameZh, next.Description, next.Position,
-		encoded, in.Rev).Scan(&next.Revision, &next.UpdatedAt); err != nil {
+		encoded, rev).Scan(&next.Revision, &next.UpdatedAt); err != nil {
 		if errors.Is(err, pg.ErrNoRows) {
 			return SourceClass{}, ErrClassStale
 		}
 		return SourceClass{}, fmt.Errorf("quality: update source class %s: %w", slug, err)
-	}
-	next.CreatedAt = before.CreatedAt
-	if err := recordClass(ctx, tx, actor, "source_class.update", &before, &next, reason); err != nil {
-		return SourceClass{}, err
 	}
 	return next, nil
 }

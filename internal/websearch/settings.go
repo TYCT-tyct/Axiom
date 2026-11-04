@@ -89,10 +89,47 @@ func legacyEngine(cfg Config) Engine {
 	return Engine{Name: "searxng", Kind: KindSearXNG, URL: cfg.URL, Key: cfg.Key, Enabled: true, Default: true, Markup: "0", PriceVersion: 1}
 }
 
+// engineRecord is one row before its prices, kind and key are decoded. The row is scanned as stored so the decode
+// stays one function with one error message per field.
+type engineRecord struct {
+	engine                   Engine
+	kind                     string
+	costSearch, costResult   string
+	priceSearch, priceResult string
+	sealed                   secret.Sealed
+}
+
+func (r engineRecord) decode(keys *secret.Keyring) (Engine, error) {
+	e := r.engine
+	var err error
+	if e.Kind, err = ParseKind(r.kind); err != nil {
+		return Engine{}, err
+	}
+	if e.CostSearch, err = platform.ParseUnitPrice(r.costSearch); err != nil {
+		return Engine{}, fmt.Errorf("websearch: engine %q: %w", e.Name, err)
+	}
+	if e.CostResult, err = platform.ParseUnitPrice(r.costResult); err != nil {
+		return Engine{}, fmt.Errorf("websearch: engine %q: %w", e.Name, err)
+	}
+	if e.PriceSearch, err = platform.ParseUnitPrice(r.priceSearch); err != nil {
+		return Engine{}, fmt.Errorf("websearch: engine %q: %w", e.Name, err)
+	}
+	if e.PriceResult, err = platform.ParseUnitPrice(r.priceResult); err != nil {
+		return Engine{}, fmt.Errorf("websearch: engine %q: %w", e.Name, err)
+	}
+	if markup, ok := new(big.Rat).SetString(e.Markup); !ok || markup.Sign() < 0 {
+		return Engine{}, fmt.Errorf("websearch: engine %q: markup %q is not a nonnegative decimal", e.Name, e.Markup)
+	}
+	plain, err := keys.Open(r.sealed, engineLocation(e.ID))
+	if err != nil {
+		return Engine{}, err
+	}
+	e.Key = secret.New(plain.Reveal())
+	return e, nil
+}
+
 // loadRows reads every engine, disabled ones included: the admin edits them, and only the node's OpenEngines leaves
 // the disabled ones out.
-//
-//nolint:gocognit // one decoded column per stored field
 func loadRows(ctx context.Context, tx pg.Tx, keys *secret.Keyring) ([]Engine, error) {
 	rows, err := tx.Query(ctx, `SELECT id,name,kind,url,enabled,is_default,cost_search,cost_result,markup,
  price_search,price_result,price_version,ciphertext,nonce,wrapped_dek,key_version,updated_at
@@ -103,41 +140,16 @@ func loadRows(ctx context.Context, tx pg.Tx, keys *secret.Keyring) ([]Engine, er
 	defer rows.Close()
 	var out []Engine
 	for rows.Next() {
-		var (
-			e                        Engine
-			kind                     string
-			costSearch, costResult   string
-			priceSearch, priceResult string
-			sealed                   secret.Sealed
-		)
-		if err := rows.Scan(&e.ID, &e.Name, &kind, &e.URL, &e.Enabled, &e.Default,
-			&costSearch, &costResult, &e.Markup, &priceSearch, &priceResult, &e.PriceVersion,
-			&sealed.Ciphertext, &sealed.Nonce, &sealed.WrappedDEK, &sealed.KeyVersion, &e.UpdatedAt); err != nil {
+		var r engineRecord
+		if err := rows.Scan(&r.engine.ID, &r.engine.Name, &r.kind, &r.engine.URL, &r.engine.Enabled, &r.engine.Default,
+			&r.costSearch, &r.costResult, &r.engine.Markup, &r.priceSearch, &r.priceResult, &r.engine.PriceVersion,
+			&r.sealed.Ciphertext, &r.sealed.Nonce, &r.sealed.WrappedDEK, &r.sealed.KeyVersion, &r.engine.UpdatedAt); err != nil {
 			return nil, err
 		}
-		if e.Kind, err = ParseKind(kind); err != nil {
-			return nil, err
-		}
-		if e.CostSearch, err = platform.ParseUnitPrice(costSearch); err != nil {
-			return nil, fmt.Errorf("websearch: engine %q: %w", e.Name, err)
-		}
-		if e.CostResult, err = platform.ParseUnitPrice(costResult); err != nil {
-			return nil, fmt.Errorf("websearch: engine %q: %w", e.Name, err)
-		}
-		if e.PriceSearch, err = platform.ParseUnitPrice(priceSearch); err != nil {
-			return nil, fmt.Errorf("websearch: engine %q: %w", e.Name, err)
-		}
-		if e.PriceResult, err = platform.ParseUnitPrice(priceResult); err != nil {
-			return nil, fmt.Errorf("websearch: engine %q: %w", e.Name, err)
-		}
-		if markup, ok := new(big.Rat).SetString(e.Markup); !ok || markup.Sign() < 0 {
-			return nil, fmt.Errorf("websearch: engine %q: markup %q is not a nonnegative decimal", e.Name, e.Markup)
-		}
-		plain, err := keys.Open(sealed, engineLocation(e.ID))
+		e, err := r.decode(keys)
 		if err != nil {
 			return nil, err
 		}
-		e.Key = secret.New(plain.Reveal())
 		out = append(out, e)
 	}
 	return out, rows.Err()
@@ -176,8 +188,6 @@ func StoredConfig(ctx context.Context, tx pg.Tx, keys *secret.Keyring) (Config, 
 
 // Save validates the list, seals each engine's key, publishes its prices and writes the audit entry in one
 // transaction. The list replaces the saved one: an engine left out is removed.
-//
-//nolint:cyclop,gocognit // validation, replacement and the audit entry are one transaction; splitting hides the order
 func Save(ctx context.Context, tx pg.Tx, keys *secret.Keyring, actor audit.Actor, in Settings, environment Config, reason string) (Loaded, error) {
 	if len(in.Engines) > maxEngines {
 		return Loaded{}, fmt.Errorf("%w: at most %d engines", ErrInvalidConfig, maxEngines)
@@ -199,17 +209,34 @@ func Save(ctx context.Context, tx pg.Tx, keys *secret.Keyring, actor audit.Actor
 	if err != nil {
 		return Loaded{}, err
 	}
+	names, def, err := replaceEngines(ctx, tx, keys, next)
+	if err != nil {
+		return Loaded{}, err
+	}
+	err = audit.Record(ctx, tx, audit.Event{
+		Actor: actor, Action: "search_engines.update", Reason: reason,
+		Target: audit.Target{Module: "platform", Kind: "search_engines", ID: uuid.Nil().String()},
+		Detail: map[string]any{"engines": names, "default": def},
+	})
+	if err != nil {
+		return Loaded{}, err
+	}
+	return Loaded{Engines: next, Source: "database"}, nil
+}
+
+// replaceEngines deletes the saved list and writes the prepared one, returning the audit names and the default.
+func replaceEngines(ctx context.Context, tx pg.Tx, keys *secret.Keyring, next []Engine) ([]string, string, error) {
 	names := make([]string, 0, len(next))
 	def := ""
 	if _, err := tx.Exec(ctx, `DELETE FROM platform.search_engines`); err != nil {
-		return Loaded{}, err
+		return nil, "", err
 	}
 	if len(next) == 0 {
 		// No row can say "no engines": an empty table is indistinguishable from one never saved, and Load would fall
 		// back to the environment. The old single-backend row's empty form is the marker that says the admin turned
 		// search off, which is what clearing the list meant before engines existed.
 		if err := saveDisabled(ctx, tx, keys); err != nil {
-			return Loaded{}, err
+			return nil, "", err
 		}
 	}
 	for _, e := range next {
@@ -221,22 +248,14 @@ func Save(ctx context.Context, tx pg.Tx, keys *secret.Keyring, actor audit.Actor
 			e.ID, e.Name, string(e.Kind), e.URL, e.Enabled, e.Default, e.CostSearch.String(), e.CostResult.String(),
 			e.Markup, e.PriceSearch.String(), e.PriceResult.String(), e.PriceVersion,
 			sealed.Ciphertext, sealed.Nonce, sealed.WrappedDEK, sealed.KeyVersion); err != nil {
-			return Loaded{}, err
+			return nil, "", err
 		}
 		names = append(names, e.Name)
 		if e.Default {
 			def = e.Name
 		}
 	}
-	err = audit.Record(ctx, tx, audit.Event{
-		Actor: actor, Action: "search_engines.update", Reason: reason,
-		Target: audit.Target{Module: "platform", Kind: "search_engines", ID: uuid.Nil().String()},
-		Detail: map[string]any{"engines": names, "default": def},
-	})
-	if err != nil {
-		return Loaded{}, err
-	}
-	return Loaded{Engines: next, Source: "database"}, nil
+	return names, def, nil
 }
 
 // saveDisabled writes the empty legacy row that makes a cleared list authoritative over the environment.
@@ -283,7 +302,6 @@ func prepareEngines(in Settings, old map[uuid.UUID]Engine, legacy []Engine) ([]E
 	return out, nil
 }
 
-//nolint:cyclop,gocognit // one field per stored column, in the order the row is written
 func prepareEngine(s EngineSettings, old map[uuid.UUID]Engine, legacy []Engine) (Engine, error) {
 	e := Engine{
 		Name: strings.TrimSpace(s.Name), Enabled: s.Enabled, Default: s.Default,
@@ -315,31 +333,69 @@ func prepareEngine(s EngineSettings, old map[uuid.UUID]Engine, legacy []Engine) 
 		return Engine{}, err
 	}
 	e.Key = secret.New(key)
-	if e.CostSearch, err = parsePrice(s.CostSearch); err != nil {
-		return Engine{}, fmt.Errorf("%w: cost_per_search: %w", ErrInvalidConfig, err)
-	}
-	if e.CostResult, err = parsePrice(s.CostResult); err != nil {
-		return Engine{}, fmt.Errorf("%w: cost_per_extra_result: %w", ErrInvalidConfig, err)
-	}
-	markup, ok := new(big.Rat).SetString(e.Markup)
-	if !ok || markup.Sign() < 0 || markup.Cmp(big.NewRat(10, 1)) > 0 {
-		return Engine{}, fmt.Errorf("%w: markup must be a decimal from 0 to 10", ErrInvalidConfig)
-	}
-	onePlus := new(big.Rat).Add(big.NewRat(1, 1), markup)
-	if e.PriceSearch, err = e.CostSearch.Scale(onePlus); err != nil {
-		return Engine{}, fmt.Errorf("%w: price_per_search: %w", ErrInvalidConfig, err)
-	}
-	if e.PriceResult, err = e.CostResult.Scale(onePlus); err != nil {
-		return Engine{}, fmt.Errorf("%w: price_per_extra_result: %w", ErrInvalidConfig, err)
-	}
-	e.PriceVersion = 1
-	if found && previous.CostSearch == e.CostSearch && previous.CostResult == e.CostResult &&
-		previous.Markup == e.Markup {
-		e.PriceVersion = previous.PriceVersion
-	} else if found {
-		e.PriceVersion = previous.PriceVersion + 1
+	if err := applyEnginePrices(&e, s, previous, found); err != nil {
+		return Engine{}, err
 	}
 	return e, nil
+}
+
+// applyEnginePrices validates the cost and markup and derives the published price, keeping its version while the
+// inputs are unchanged.
+func applyEnginePrices(e *Engine, s EngineSettings, previous Engine, found bool) error {
+	if err := applyEngineCosts(e, s); err != nil {
+		return err
+	}
+	markup, err := engineMarkup(e.Markup)
+	if err != nil {
+		return err
+	}
+	if err := scaleEnginePrices(e, markup); err != nil {
+		return err
+	}
+	e.PriceVersion = enginePriceVersion(previous, *e, found)
+	return nil
+}
+
+func applyEngineCosts(e *Engine, s EngineSettings) error {
+	var err error
+	if e.CostSearch, err = parsePrice(s.CostSearch); err != nil {
+		return fmt.Errorf("%w: cost_per_search: %w", ErrInvalidConfig, err)
+	}
+	if e.CostResult, err = parsePrice(s.CostResult); err != nil {
+		return fmt.Errorf("%w: cost_per_extra_result: %w", ErrInvalidConfig, err)
+	}
+	return nil
+}
+
+func engineMarkup(text string) (*big.Rat, error) {
+	markup, ok := new(big.Rat).SetString(text)
+	if !ok || markup.Sign() < 0 || markup.Cmp(big.NewRat(10, 1)) > 0 {
+		return nil, fmt.Errorf("%w: markup must be a decimal from 0 to 10", ErrInvalidConfig)
+	}
+	return markup, nil
+}
+
+func scaleEnginePrices(e *Engine, markup *big.Rat) error {
+	onePlus := new(big.Rat).Add(big.NewRat(1, 1), markup)
+	var err error
+	if e.PriceSearch, err = e.CostSearch.Scale(onePlus); err != nil {
+		return fmt.Errorf("%w: price_per_search: %w", ErrInvalidConfig, err)
+	}
+	if e.PriceResult, err = e.CostResult.Scale(onePlus); err != nil {
+		return fmt.Errorf("%w: price_per_extra_result: %w", ErrInvalidConfig, err)
+	}
+	return nil
+}
+
+// enginePriceVersion keeps the version while cost and markup are unchanged, and raises it when they change.
+func enginePriceVersion(previous Engine, next Engine, found bool) int64 {
+	if !found {
+		return 1
+	}
+	if previous.CostSearch == next.CostSearch && previous.CostResult == next.CostResult && previous.Markup == next.Markup {
+		return previous.PriceVersion
+	}
+	return previous.PriceVersion + 1
 }
 
 // savedEngine finds what an input edits: the saved row it names, or, for an input that names none, a saved row with

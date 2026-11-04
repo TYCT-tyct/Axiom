@@ -53,8 +53,6 @@ type request struct {
 // do sends the request, retrying only what may succeed later: a transport failure, 408, 429 and 5xx. A retryable
 // status on the last attempt is returned as a response, so the caller turns the server's own explanation into an
 // Error instead of replacing it with "too many attempts".
-//
-//nolint:gocognit // the retry order — stop, drain, wait — is the mechanism; splitting it would hide that order
 func (c *Client) do(ctx context.Context, r request) (*http.Response, error) {
 	if err := requireDeadline(ctx); err != nil {
 		return nil, err
@@ -65,31 +63,43 @@ func (c *Client) do(ctx context.Context, r request) (*http.Response, error) {
 		if err == nil && !retryableStatus(resp.StatusCode) {
 			return resp, nil
 		}
-		if err != nil {
-			last = err
-		} else {
-			last = statusError(resp)
-		}
+		last = attemptError(resp, err)
 		if ctx.Err() != nil {
-			if resp != nil {
-				drain(resp)
-			}
+			drain(resp)
 			return nil, errors.Join(last, ctx.Err())
 		}
 		if attempt >= c.attempts {
-			if resp != nil {
-				return resp, nil
-			}
-			return nil, last
+			return lastAttempt(resp, last)
 		}
-		wait := c.backoff(attempt, retryAfter(resp, c.now()))
-		if resp != nil {
-			drain(resp)
-		}
-		if err := pause(ctx, wait); err != nil {
+		if err := c.wait(ctx, attempt, resp); err != nil {
 			return nil, errors.Join(last, err)
 		}
 	}
+}
+
+// attemptError is what a failed attempt leaves behind: the transport's error, or the status when the server answered.
+func attemptError(resp *http.Response, err error) error {
+	if err != nil {
+		return err
+	}
+	return statusError(resp)
+}
+
+// lastAttempt hands back the final response so its own error document wins over "too many attempts"; a transport
+// failure has no response to hand back.
+func lastAttempt(resp *http.Response, last error) (*http.Response, error) {
+	if resp != nil {
+		return resp, nil
+	}
+	return nil, last
+}
+
+// wait is the order a retry needs: compute the wait, drain the body that will not be read, then pause. A canceled
+// context stops at the pause.
+func (c *Client) wait(ctx context.Context, attempt int, resp *http.Response) error {
+	wait := c.backoff(attempt, retryAfter(resp, c.now()))
+	drain(resp)
+	return pause(ctx, wait)
 }
 
 // roundTrip sends one attempt and rewinds the body first. A protocol upgrade is refused and closed like egress does:
@@ -310,8 +320,12 @@ func pause(ctx context.Context, wait time.Duration) error {
 	}
 }
 
-// drain reads a little of a response that will be retried and closes it, so the connection can be reused.
+// drain reads a little of a response that will be retried and closes it, so the connection can be reused. A
+// transport failure has no response to drain.
 func drain(resp *http.Response) {
+	if resp == nil {
+		return
+	}
 	// The response is about to be thrown away; its read and close errors cannot change the retry decision.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10)) //nolint:errcheck // discarded response
 	_ = resp.Body.Close()                                         //nolint:errcheck // discarded response

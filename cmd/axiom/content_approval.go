@@ -129,49 +129,21 @@ func signContentApproval(seed, secondSeed []byte, a contentApproval) (contentApp
 
 // verifyContentApproval authenticates data against the owner's public key and the recipient key, then checks that the
 // approval is current and within the export's limits. It returns the approval, its raw file bytes and its digest.
-//
-//nolint:cyclop,gocognit // one signature, tenant, time and recipient validation path
 func verifyContentApproval(data, signing, secondSigning, recipient []byte, now time.Time) (contentApproval, []byte, [32]byte, error) {
 	var file contentApprovalFile
 	if err := jsonx.UnmarshalKnown(data, &file); err != nil {
 		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: %w", err)
 	}
-	if len(signing) != ed25519.PublicKeySize || len(secondSigning) != ed25519.PublicKeySize {
-		return contentApproval{}, nil, [32]byte{}, errors.New("approval: both signing keys must be Ed25519 public keys")
-	}
-	if bytes.Equal(signing, secondSigning) {
-		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the two signing keys must differ")
-	}
-	if len(recipient) != 32 {
-		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the encryption key is not an X25519 public key")
-	}
-	signature, err := base64.StdEncoding.DecodeString(file.Signature)
-	if err != nil || len(signature) != ed25519.SignatureSize {
-		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the first signature is not Ed25519")
-	}
-	secondSignature, err := base64.StdEncoding.DecodeString(file.SecondSignature)
-	if err != nil || len(secondSignature) != ed25519.SignatureSize {
-		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the second signature is not Ed25519")
+	signature, secondSignature, err := approvalSignatures(file, signing, secondSigning, recipient)
+	if err != nil {
+		return contentApproval{}, nil, [32]byte{}, err
 	}
 	canonical, err := canonicalApproval(file.Approval)
 	if err != nil {
 		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: canonical encoding: %w", err)
 	}
-	signed := append([]byte(contentApprovalPrefix), canonical...)
-	if !ed25519.Verify(ed25519.PublicKey(signing), signed, signature) {
-		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the first owner signature does not verify")
-	}
-	if !ed25519.Verify(ed25519.PublicKey(secondSigning), signed, secondSignature) {
-		return contentApproval{}, nil, [32]byte{}, errors.New("approval: the second owner signature does not verify")
-	}
-	if want := fingerprint(signing); file.Approval.Owner != want {
-		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: first signature is by %s, but it names %s", want, file.Approval.Owner)
-	}
-	if want := fingerprint(secondSigning); file.Approval.Owner2 != want {
-		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: second signature is by %s, but it names %s", want, file.Approval.Owner2)
-	}
-	if want := fingerprint(recipient); file.Approval.Recipient != want {
-		return contentApproval{}, nil, [32]byte{}, fmt.Errorf("approval: for recipient %s, but this server holds %s", file.Approval.Recipient, want)
+	if err := verifyApprovalSignatures(file.Approval, canonical, signature, secondSignature, signing, secondSigning, recipient); err != nil {
+		return contentApproval{}, nil, [32]byte{}, err
 	}
 	if _, err := file.Approval.scope(); err != nil {
 		return contentApproval{}, nil, [32]byte{}, err
@@ -180,6 +152,51 @@ func verifyContentApproval(data, signing, secondSigning, recipient []byte, now t
 		return contentApproval{}, nil, [32]byte{}, err
 	}
 	return file.Approval, data, sha256.Sum256(canonical), nil
+}
+
+// approvalSignatures checks the key shapes and decodes both owner signatures before anything is verified against
+// them.
+func approvalSignatures(file contentApprovalFile, signing, secondSigning, recipient []byte) (signature, secondSignature []byte, err error) {
+	if len(signing) != ed25519.PublicKeySize || len(secondSigning) != ed25519.PublicKeySize {
+		return nil, nil, errors.New("approval: both signing keys must be Ed25519 public keys")
+	}
+	if bytes.Equal(signing, secondSigning) {
+		return nil, nil, errors.New("approval: the two signing keys must differ")
+	}
+	if len(recipient) != 32 {
+		return nil, nil, errors.New("approval: the encryption key is not an X25519 public key")
+	}
+	signature, err = base64.StdEncoding.DecodeString(file.Signature)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return nil, nil, errors.New("approval: the first signature is not Ed25519")
+	}
+	secondSignature, err = base64.StdEncoding.DecodeString(file.SecondSignature)
+	if err != nil || len(secondSignature) != ed25519.SignatureSize {
+		return nil, nil, errors.New("approval: the second signature is not Ed25519")
+	}
+	return signature, secondSignature, nil
+}
+
+// verifyApprovalSignatures requires both owner signatures over the canonical approval and the recipient and owner
+// fingerprints the file names to be the keys this server holds.
+func verifyApprovalSignatures(a contentApproval, canonical, signature, secondSignature, signing, secondSigning, recipient []byte) error {
+	signed := append([]byte(contentApprovalPrefix), canonical...)
+	if !ed25519.Verify(ed25519.PublicKey(signing), signed, signature) {
+		return errors.New("approval: the first owner signature does not verify")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(secondSigning), signed, secondSignature) {
+		return errors.New("approval: the second owner signature does not verify")
+	}
+	if want := fingerprint(signing); a.Owner != want {
+		return fmt.Errorf("approval: first signature is by %s, but it names %s", want, a.Owner)
+	}
+	if want := fingerprint(secondSigning); a.Owner2 != want {
+		return fmt.Errorf("approval: second signature is by %s, but it names %s", want, a.Owner2)
+	}
+	if want := fingerprint(recipient); a.Recipient != want {
+		return fmt.Errorf("approval: for recipient %s, but this server holds %s", a.Recipient, want)
+	}
+	return nil
 }
 
 // validateTime checks the approval's own clock and its maximum life.

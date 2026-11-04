@@ -2,6 +2,7 @@ package quality
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -268,6 +269,14 @@ func TestSourceClassValidation(t *testing.T) {
 	}{
 		{"slug case", func(c []SourceClass) []SourceClass { c[0].Slug = "Official"; return c }, "slug"},
 		{"duplicate position", func(c []SourceClass) []SourceClass { c[1].Position = 0; return c }, "position"},
+		{"duplicate slug", func(c []SourceClass) []SourceClass { c[1].Slug = c[0].Slug; return c }, "slug"},
+		{"no classes", func([]SourceClass) []SourceClass { return nil }, "classes"},
+		{"too many classes", func(c []SourceClass) []SourceClass {
+			for i := range MaxSourceClasses {
+				c = append(c, SourceClass{Slug: fmt.Sprintf("extra-%d", i), Name: "Extra", Position: 100 + i})
+			}
+			return c
+		}, "classes"},
 		{"fallback with rules", func(c []SourceClass) []SourceClass {
 			c[2].Rules.Conditions = []Condition{{Evidence: "header", Name: "X", Operator: "present"}}
 			return c

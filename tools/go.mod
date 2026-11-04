@@ -14,6 +14,7 @@ tool (
 require (
 	github.com/getkin/kin-openapi v0.152.0
 	github.com/google/go-cmp v0.7.0
+	github.com/uudashr/gocognit v1.2.1
 	golang.org/x/perf v0.0.0-20260929162123-406019bb8b68
 )
 
@@ -232,7 +233,6 @@ require (
 	github.com/tommy-muehle/go-mnd/v2 v2.5.1 // indirect
 	github.com/ultraware/funlen v0.2.0 // indirect
 	github.com/ultraware/whitespace v0.2.0 // indirect
-	github.com/uudashr/gocognit v1.2.1 // indirect
 	github.com/uudashr/iface v1.5.1 // indirect
 	github.com/vmware-labs/yaml-jsonpath v0.3.2 // indirect
 	github.com/wasilibs/go-pgquery v0.0.0-20250409022910-10ac41983c07 // indirect

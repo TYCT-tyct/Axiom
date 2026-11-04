@@ -111,7 +111,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 适配器在 `cpa/`，`kind` 是 `cpa`；常驻采集器在 `collector/`。设计、上游依据和与两种被否决做法的比较见[供应商的「CPA（CLIProxyAPI）」](../../docs/domains/suppliers.md#cpacliproxyapi)。这里只写代码怎么接。
 
 - **登录**：`Login` 只有一个管理 key，编码成 `{"v":1,"management_key":...}` 交给 `LoginStore` 封存；解码拒绝未知成员。`NewLogin` 只收 `access_token`，其他成员给了就报 `LoginError`；不在接入时发管理请求，避免一次错 key 计入 CPA 的失败次数。管理请求的 401/403 统一是 `ErrAuthRejected`；`Charges` 的空页不会被调用。
-- **读账号和模型**（`manager.go`）：`GET /v0/management/auth-files?page=N&page_size=500`，最多 40 页；`files` 必须存在，缺失是 `ErrUnrecognised`，不能读成空号池。`Account` 用可服务账号数作余额、`UnitHint=1`、`FundingWallet`。`Offer` 只读可服务账号的 `GET /auth-files/models?name=...`，一次最多 20 个账号，位置是 `offerState`（账号名、下一个、读到几个、模型并集）；一个可服务账号都没有时返回 `ModelsUnread`，不摘掉上次的模型。所有模型三种格式；成本计划留空（CPA 没有每模型价格，管理员确认基础价前端点因成本未知不进路由）。只有一个 `default` 组：CPA 的 key 是全局列表，拆组会让同一把 key 同时属于多个组。
+- **读账号和模型**（`manager.go`、`manager_offer.go`）：`GET /v0/management/auth-files?page=N&page_size=500`，最多 40 页；`files` 必须存在，缺失是 `ErrUnrecognised`，不能读成空号池。`Account` 用可服务账号数作余额、`UnitHint=1`、`FundingWallet`。`Offer` 只读可服务账号的 `GET /auth-files/models?name=...`，一次最多 20 个账号，位置是 `offerState`（账号名、下一个、读到几个、模型并集）；一个可服务账号都没有时返回 `ModelsUnread`，不摘掉上次的模型。所有模型三种格式；成本计划留空（CPA 没有每模型价格，管理员确认基础价前端点因成本未知不进路由）。只有一个 `default` 组：CPA 的 key 是全局列表，拆组会让同一把 key 同时属于多个组。
 - **号池窗口**（`pool.go`）：只读 `auth-files` 的被动 `quota.signals`，不调用 `/quota/fetch`。Claude 的 5h/7d 是 0 到 1 的小数，Codex 的 primary/secondary 是 0 到 100 的百分数；重置已过按 0，取两个窗口里更紧的剩余，按可服务账号平均并向下取整。认得的信号读不懂时报 `ErrUnrecognised`，不按 100% 已用降权。`status=error` 计失败，`active`、未 disabled、未 unavailable、重试时间已过才算可服务；目录超过 40 页时 `Complete=false`，引擎保留上次读数。
 - **key**（`manager.go`）：`GET /api-keys` 返回 `{"api-keys":[...]}`；`KeyState.Ref` 是 SHA-256 前 128 位的十六进制（32 字符），`KeySecret` 按 ref 重新读列表匹配。CPA 没有建 key 接口，所以不实现 `KeyMaker`，绑定要人从现有 key 里选；`KeyState.Policy` 返回空对象（`Models` 为 nil，不限模型，无到期），避免 nil 被投影成全拒。
 - **调用面**（`quirks.go`）：三种格式；`X-CPA-TRACE-ID` 的最后 36 字符是 `request_id`，不是 UUID 就不给对账键；`Classify` 只读状态和固定错误码，HTML 按出站拦截，429 只带 `Retry-After` 的秒数。`Streams=true`、`Cancels=false`。
@@ -143,7 +143,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 - **清单的位置**：`sync_states.listing` 存两个清单（报价、key）的 `adapter.Listing` 和读到它们时的 `config_gen`、状态 `version`，随这一步的提交一起写；两个位置都空了整列就是 NULL，读完的清单不会留下空位置（JSON 把空的 `[]byte` 写成空串，读回来也是空串而不是 nil，所以「空」按长度判定，读出来的一律当没有）。状态的 JSON 里没有这个成员：新版本往状态里加成员，旧版本的严格解码（`jsonx.UnmarshalKnown`）会拒绝，滚动发布时两个版本同时运行就读不了。这一列读得宽松：读不懂、或状态版本不匹配（旧节点提交时不写位置）、或代次不是这一次的（换了凭证、暂停过、开始移除），位置丢掉，清单从头读，丢的是读的次数，不是 key。位置里没有凭证（sub2api 的 key 原文按 ID 现读，不进位置）。
 - **状态的格式**：`state` 是引擎的 `State` 的规范 JSON，`format` 记它的格式号，读不认识的格式或多出来的成员就失败而不是猜。新版本写的状态旧版本也读得了，反过来也一样（滚动发布时两个版本同时运行），所以删掉不再用的成员会让已存的状态读不了：`Removal` 等移除的成员不删，`TestTheStoredStateIsWhatAnOlderNodeReads` 钉住成员的集合。`Task`、`Status`、`RemovalStep` 的常量只在末尾增加。第一次同步的供应商没有状态，读出来是零值的 `State`。
 - **投影**：每次提交把最后读到的余额和观察时间写到 `suppliers`，并按引擎的状态写 `status`：正常时 `connecting → active`、`active ↔ low_balance`，需处理写 `needs_attention`，引擎不再写 `removing`、`removed`：移除是管理操作写的状态（见「移除」）。人暂停的 `paused` 和对账暂停的 `needs_attention` 不被「正常」覆盖，移除不会被改回需处理。路由的快照看这个状态。配置代次（`config_gen`）不投影：引擎的代次只管它自己的轮次，`suppliers.config_gen` 由改凭证、暂停、移除的代码加一，`hold` 用它判断一轮是不是在凭证被换之前开始的。
-- **清单的投影**（`project.go`，与状态同一次提交）：引擎最后读到的分组和模型也落到表上，`routing` 与后台读的是这些行。同一步里先写 `supplier_groups`（名字、倍率、事实、`last_seen_at`、`key_eligible`），再写 `supplier_models`（每个上游名字，`model_id` 由 `MapUpstream` 按别名和目录定，映射不上就是 NULL，那就是待映射队列；别名是人或运营 agent 的决定，投影只读、不建；格式是适配器报告的与别名 `formats` 声明的并集，所以声明不会被下一次同步覆盖），最后写 `endpoints` 和 `cost_schedules`；分组的 `pool_*` 列也在这一步，按读到的号池读数与行里的值比较，读数没了就清空。每条语句都先读同一事务里的行，一样就不写：同一份清单读两次，五张表一行都不动（`sync_events` 以外零写入，测试用 `xmin` 核对）；`first_seen_at` 只在插入时由数据库取、之后不改（待映射队列按它排序），`last_seen_at` 因此是"这个分组最后一次被改动"，不是"最后一次出现在清单里"。
+- **清单的投影**（`project.go`、`project_models.go`，与状态同一次提交）：引擎最后读到的分组和模型也落到表上，`routing` 与后台读的是这些行。同一步里先写 `supplier_groups`（名字、倍率、事实、`last_seen_at`、`key_eligible`），再写 `supplier_models`（每个上游名字，`model_id` 由 `MapUpstream` 按别名和目录定，映射不上就是 NULL，那就是待映射队列；别名是人或运营 agent 的决定，投影只读、不建；格式是适配器报告的与别名 `formats` 声明的并集，所以声明不会被下一次同步覆盖），最后写 `endpoints` 和 `cost_schedules`；分组的 `pool_*` 列也在这一步，按读到的号池读数与行里的值比较，读数没了就清空。每条语句都先读同一事务里的行，一样就不写：同一份清单读两次，五张表一行都不动（`sync_events` 以外零写入，测试用 `xmin` 核对）；`first_seen_at` 只在插入时由数据库取、之后不改（待映射队列按它排序），`last_seen_at` 因此是"这个分组最后一次被改动"，不是"最后一次出现在清单里"。
   - **自动选用**：一个从没被人选过的分组（`codename IS NULL`，选用与停用都会给它代号）如果在这次清单里有已映射、有调用格式且带成本计划的模型，投影把它标为选用并给它代号；已经有代号的分组，无论现在是否选用，投影都不改，停用是人的决定。代号用 `store.Codename`，与人的第一次选用同一个格式。`key_eligible` 由适配器说这个分组要不要 Axiom 的 key（没读全模型的组 `NeedsKey`，或已有可卖模型的组）。
   - **批量写入**：投影仍先读现有行、只收集差异，再经 `store.ProjectionWrites.Apply` 按依赖顺序写入；每种操作每页最多 1000 行，一页一条参数化 `VALUES` 语句，空操作不发 SQL。同一个名字或分组的多次更新只保留最后一次实际差异写入，避免单条 UPSERT 重复修改同一行。分组、端点先分配 UUID，成本计划按端点与指纹复用，在同一语句里插入缺少的计划并激活；人的开关、首次列出时间、对账的估低判定和计划历史不变。所有页面仍在持有栅栏的同一个事务里，任何页失败都整份回滚；清单未读完整前不投影。相比临时表加 COPY，这种做法无需额外建表、清理或连接状态，且沿用现有查询参数类型；不等长的格式数组按独立参数传递（UNNEST 也可将每行数组编码后传入）。分页 SQL 随尾页行数变化，因此明确用 pgx 的非预编译执行模式，不占连接上的语句缓存、不挤掉调用路径的热语句；代价是每页重新解析 SQL，以及收集差异占用与变化量成正比的内存。
   - **端点**：键是 `(supplier_group_id, model_id)`（`UNIQUE`，一个分组的同一个模型只有一个端点）。只有映射到上架目录模型的、且拿到了成本计划的模型才有端点，上游名字和格式跟着清单走；一个分组的两个名字指向同一个模型时，端点是带日期的那个（名字本身是版本的证据），都不带日期时取名字排序里的第一个，所以选谁与清单读到的顺序无关。`enabled` 只在插入时取默认的真，之后同步从不写它，人停用的端点不会被重新打开；`model_id` 也不改（改名在 `upstream_name` 里）。
@@ -263,7 +263,7 @@ schema `suppliers`，迁移在 `internal/suppliers/internal/store/migrations/`�
 
 `Routable` 携带端点所属供应商快照里的 `UnitValue` 与 `UnitValueID`，与成本计划及结算币种同次读取，供 billing 发布保本价格；它们不从后来的配置补齐。
 
-已实现（`service.go`、`attempt.go`、`record.go`）。`Service` 是一个节点上的调用面：快照、凭证运行状态、成本计划。
+已实现（`service.go`、`service_runtime.go`、`attempt.go`、`record.go`）。`Service` 是一个节点上的调用面：快照、凭证运行状态、成本计划。
 
 ```go
 func New(cfg Config) (*Service, error)                        // DB、平台范围、主密钥、出口、适配器注册表、时钟
@@ -351,7 +351,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 
 ## 管理接口
 
-已实现（`admin.go`、`admin_write.go`）。`Admin` 是管理后台对供应商做的事，处理器（`cmd/axiom/admin_suppliers.go`）只做请求与响应的转换；每个函数在调用方的事务里写（事务要有平台范围，审计条目在同一个事务里写），审计条目带操作者和原因，不带登录、账号和邮箱。除 `Detect` 外不碰供应商：同步引擎读到这里改的行和代次后做其余的事。
+已实现（`admin.go`、`admin_view.go`、`admin_write.go`、`admin_connect.go`）。`Admin` 是管理后台对供应商做的事，处理器（`cmd/axiom/admin_suppliers.go`）只做请求与响应的转换；每个函数在调用方的事务里写（事务要有平台范围，审计条目在同一个事务里写），审计条目带操作者和原因，不带登录、账号和邮箱。除 `Detect` 外不碰供应商：同步引擎读到这里改的行和代次后做其余的事。
 
 | 操作 | 做什么 | 拒绝 |
 |---|---|---|
