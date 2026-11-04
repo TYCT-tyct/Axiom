@@ -175,13 +175,41 @@ class CoverageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Fixture(directory)
             fixture.coverage(package="other", covered=1, total=1)
-            fixture.write("pkg/source.go", "package pkg\n\nfunc Hand() {}\n")
+            fixture.write("pkg/source.go", "package pkg\n\nfunc Hand() { _ = 1 }\n")
             fixture.baseline()
 
             run = fixture.run("--coverage", fixture.profile())
 
             self.assertEqual(run.returncode, 1, run.stderr)
             self.assertIn("new package fixture/pkg is at 0.00%, below the 60.00% floor", run.stderr)
+
+    def test_a_package_with_only_an_empty_function_is_not_measured(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.write("go.mod", "module fixture\n\ngo 1.27.3\n")
+            fixture.write("pkg/source.go", "package pkg\n\nfunc Hook() {}\n")
+            fixture.write("coverage.out", "mode: set\n")
+            fixture.baseline()
+
+            run = fixture.run("--coverage", fixture.profile())
+
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn("coverage measured for 0 packages", run.stdout)
+
+    def test_an_empty_function_seen_in_the_profile_is_not_added_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.write("go.mod", "module fixture\n\ngo 1.27.3\n")
+            fixture.write("pkg/source.go", "package pkg\n\nfunc Hook() {}\n")
+            fixture.write("pkg/source_test.go",
+                          'package pkg\n\nimport "testing"\n\nfunc TestHook(t *testing.T) { Hook() }\n')
+            fixture.write("coverage.out", "mode: set\nfixture/pkg/source.go:3.14,3.14 0 1\n")
+            fixture.baseline()
+
+            run = fixture.run("--coverage", fixture.profile())
+
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn("coverage measured for 0 packages", run.stdout)
 
     def test_generated_code_is_dropped_from_both_sides(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -202,6 +230,40 @@ class CoverageTest(unittest.TestCase):
 
 
 class CoverageBaseTest(unittest.TestCase):
+    def test_write_inside_the_tolerance_keeps_the_baseline_against_the_base(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=99, total=200)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 5000}})
+            base = fixture.commit()
+
+            written = fixture.run("--coverage", fixture.profile(), "--base", base, "--write-baseline")
+
+            self.assertEqual(written.returncode, 0, written.stderr)
+            self.assertEqual(fixture.baseline_data()["coverage"]["packages"], {"fixture/pkg": 5000})
+
+    def test_a_baseline_lowered_against_the_base_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=99, total=200)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 5000}})
+            base = fixture.commit()
+
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 4950}})
+
+            run = fixture.run("--coverage", fixture.profile(), "--base", base)
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("base baseline: the baseline of fixture/pkg fell from 50.00% to 49.50%", run.stderr)
+
+            refused = fixture.run("--coverage", fixture.profile(), "--base", base, "--write-baseline")
+
+            self.assertEqual(refused.returncode, 1, refused.stderr)
+            self.assertEqual(fixture.baseline_data()["coverage"]["packages"], {"fixture/pkg": 4950})
+
     def test_a_coverage_fall_against_the_base_fails_even_if_the_branch_lowers_the_baseline(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Fixture(directory)
@@ -368,6 +430,24 @@ class WriteBaselineTest(unittest.TestCase):
             self.assertEqual(raised.returncode, 1)
             self.assertIn("nolint:gosec grew from 0 to 1", raised.stderr)
             self.assertEqual(fixture.baseline_data()["nolint"], {})
+
+    def test_write_keeps_the_baseline_when_coverage_is_inside_the_tolerance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=99, total=200)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 5000}})
+
+            written = fixture.run("--coverage", fixture.profile(), "--write-baseline")
+
+            self.assertEqual(written.returncode, 0, written.stderr)
+            self.assertEqual(fixture.baseline_data()["coverage"]["packages"], {"fixture/pkg": 5000})
+
+            fixture.coverage(covered=98, total=200)
+            run = fixture.run("--coverage", fixture.profile())
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("coverage of fixture/pkg fell from 50.00% to 49.00% (tolerance 0.50%)", run.stderr)
 
     def test_write_without_coverage_keeps_the_recorded_packages(self):
         with tempfile.TemporaryDirectory() as directory:

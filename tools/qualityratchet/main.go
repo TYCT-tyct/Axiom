@@ -11,8 +11,9 @@
 // (sqlc's output_files_suffix is .gen) or a Go file whose first declaration is preceded by the
 // `// Code generated ... DO NOT EDIT.` header, which is what go/ast.IsGenerated and golangci-lint's generated-code
 // exclusion recognize. Coverage drops generated code from both sides of the fraction, so a generated table can neither
-// raise nor lower a package's number; a package with hand-written code but no test files is reported as zero, so a new
-// package without tests cannot look measured. A package with no statements has no coverage to rate and is omitted.
+// raise nor lower a package's number; a package with a hand-written function body containing statements but no test files
+// is reported as zero, so a new package without tests cannot look measured. A package with no statements has no coverage
+// to rate and is omitted, including one whose only profile blocks have zero statements.
 package main
 
 import (
@@ -89,7 +90,7 @@ func main() {
 // generated files it must drop, and the nested modules it must leave to their own go.mod.
 type sourceTree struct {
 	packages  map[string]bool // directories with hand-written, non-test Go
-	code      map[string]bool // directories with a hand-written function body, so zero coverage is a measurement
+	code      map[string]bool // directories with a statement in a hand-written function body, so zero coverage is a measurement
 	generated map[string]bool // files coverage must drop entirely
 	nested    map[string]bool // directories holding another module's go.mod
 }
@@ -206,7 +207,7 @@ func measureFile(tree fs.FS, fset *token.FileSet, filePath string, result *measu
 		if !ok {
 			continue
 		}
-		if function.Body != nil && sources.own(dir) {
+		if function.Body != nil && len(function.Body.List) > 0 && sources.own(dir) {
 			sources.code[dir] = true
 		}
 		if complexity := gocognit.Complexity(function); complexity > cognitiveLimit {
@@ -299,8 +300,8 @@ func receiver(expression ast.Expr) string {
 var profileLine = regexp.MustCompile(`^(.+):([0-9]+)\.([0-9]+),([0-9]+)\.([0-9]+) ([0-9]+) ([0-9]+)$`)
 
 // measureCoverage reads a `go test -coverprofile` profile and sums each package's hand-written statements. A package
-// named by the tree but absent from the profile has no test files and is reported as zero; generated code is dropped
-// from both numerator and denominator so it can neither raise nor lower the number.
+// named by the tree with statements but absent from the profile has no test files and is reported as zero; generated
+// code is dropped from both numerator and denominator so it can neither raise nor lower the number.
 func measureCoverage(root, profile string, sources *sourceTree) (map[string]packageCoverage, error) {
 	module, err := modulePath(root)
 	if err != nil {
@@ -314,18 +315,24 @@ func measureCoverage(root, profile string, sources *sourceTree) (map[string]pack
 	if err != nil {
 		return nil, err
 	}
-	// A package with no statements (only types, or tests over generated code) has no coverage to ratchet.
+	// A package whose profile records only zero-statement blocks (an empty function, for example) has no coverage to
+	// ratchet. Remember that the profile named it: adding it back below would turn a package with nothing to measure
+	// into a new package below the floor.
+	seen := make(map[string]bool, len(coverage))
 	for name := range coverage {
+		seen[name] = true
 		if coverage[name].Total == 0 {
 			delete(coverage, name)
 		}
 	}
-	// A package with hand-written function bodies but no test files never reaches the profile. It is measured at zero
-	// so that a new package without tests cannot pass as unmeasured.
+	// A package with statements in a hand-written function body but no test files never reaches the profile. It is
+	// measured at zero so that a new package without tests cannot pass as unmeasured.
 	for dir := range sources.code {
-		if _, ok := coverage[packageName(module, dir)]; !ok {
-			coverage[packageName(module, dir)] = packageCoverage{}
+		name := packageName(module, dir)
+		if _, ok := coverage[name]; ok || seen[name] {
+			continue
 		}
+		coverage[name] = packageCoverage{}
 	}
 	return coverage, nil
 }

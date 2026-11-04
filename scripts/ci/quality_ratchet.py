@@ -21,8 +21,11 @@ What is measured, in hand-written non-test Go:
   baseline is new and must start at or above floor_basis_points (60%). The tolerance is not slack for new code: two runs
   of the same commit on the same machine differed by at most 0.32 point (platform/kv 93.31% vs 92.99%), and 0.50 point
   is one statement in a package of up to 200, the smallest change the arithmetic can resolve in a package of that size.
-- packages with hand-written function bodies but no test files are reported as zero, so a new package without tests
-  cannot pass as unmeasured.
+  A committed package baseline may not be lower than the base's, so a manual lowering cannot turn the tolerance into a
+  repeated allowance.
+- packages with a hand-written function body containing statements but no test files are reported as zero, so a new
+  package without tests cannot pass as unmeasured. A package whose profile records only zero-statement blocks (an empty
+  function, for example) has no statements to rate and is omitted.
 
 A hard ceiling applies even with a nolint or //gocognit:ignore: no function may exceed cognitive complexity 30 and no
 file may exceed 800 lines unless it is named in the baseline's gocognit_ceiling or file_ceiling, and each named value may
@@ -34,12 +37,13 @@ exclusion recognize.
 usage: python3 scripts/ci/quality_ratchet.py [--root DIR] [--base REV] [--coverage PROFILE] [--write-baseline]
        [--report-coverage]
        --base (default: $BASE, the PR or train base) also reads the baseline committed at that revision and rejects any
-       count increase, new hard-ceiling exception or exception value increase. With coverage, a package below the base
-       baseline by more than the tolerance or a new package below the floor is rejected too. Without a baseline there,
-       the tree is the baseline's first introduction. --coverage reads the profile and compares per-package coverage;
-       --report-coverage prints the measured numbers lowest first and exits. --write-baseline lowers the committed
-       baseline to the tree (and records coverage from --coverage), and refuses when a count grew, coverage fell by more
-       than the tolerance, a new package is below the floor, or the base baseline says it may not be weakened.
+       count increase, new hard-ceiling exception, exception value increase, or committed coverage baseline below the
+       base. With coverage, a package below the base baseline by more than the tolerance or a new package below the floor
+       is rejected too. Without a baseline there, the tree is the baseline's first introduction. --coverage reads the
+       profile and compares per-package coverage; --report-coverage prints the measured numbers lowest first and exits.
+       --write-baseline lowers the static counts and raises coverage, keeping a higher recorded coverage value when a
+       measurement is inside the tolerance; it refuses when a count grew, coverage fell by more than the tolerance, a
+       new package is below the floor, or the base baseline says it may not be weakened.
 """
 
 import argparse
@@ -70,7 +74,8 @@ DESCRIPTION = (
     "complexity 30 and files over 800 lines, and each value may only shrink. coverage.packages is statement coverage "
     "per package in hundredths of a percentage point, measured from the profile the race test run writes, generated "
     "code excluded; tolerance_basis_points is how far a package may fall and floor_basis_points is where a new package "
-    "must start."
+    "must start. A write keeps the higher recorded value when a measurement is inside the tolerance, so the tolerance "
+    "cannot lower the baseline repeatedly."
 )
 
 
@@ -374,6 +379,29 @@ def base_problems(now, base):
     return problems
 
 
+def baseline_problems(baseline, base, now):
+    """The committed baseline may not be lowered against the base.
+
+    The measured comparison has a tolerance; without this check a package's baseline could be lowered by the tolerance,
+    measured at the lower value, and lowered again, making the tolerance a per-pull-request allowance. A package removed
+    from the tree may also leave the baseline; a package the tree still measures may not disappear from it.
+    """
+    recorded = (baseline or {}).get("coverage")
+    remote = (base or {}).get("coverage")
+    if recorded is None or remote is None:
+        return []
+    measured = now["coverage"]["packages"] if now["coverage"] is not None else {}
+    problems = []
+    for name, want in sorted(remote["packages"].items()):
+        have = recorded["packages"].get(name)
+        if have is None:
+            if name in measured:
+                problems.append(f"base baseline: {name} is still measured but missing from the baseline")
+        elif have < want:
+            problems.append(f"base baseline: the baseline of {name} fell from {percent(want)} to {percent(have)}")
+    return problems
+
+
 def report(problems, fallen):
     """Print both kinds of failure; 1 when either is present."""
     if problems:
@@ -387,13 +415,33 @@ def report(problems, fallen):
     return 1 if problems or fallen else 0
 
 
+def recorded_coverage(now, baseline):
+    """The coverage to write: a rise moves a package's number, a fall inside the tolerance does not.
+
+    The tolerance exists to absorb a difference between two runs of the same commit, not to become a lower baseline.
+    Keeping the higher recorded value means two small falls cannot compound into a larger one.
+    """
+    measured = now["coverage"]
+    previous = (baseline or {}).get("coverage")
+    if measured is None:
+        return previous
+    if previous is None:
+        return measured
+    packages = dict(measured["packages"])
+    for name, value in previous["packages"].items():
+        if name in packages:
+            packages[name] = max(packages[name], value)
+    return {"tolerance": measured["tolerance"], "floor": measured["floor"], "packages": packages}
+
+
 def document(now, baseline=None):
     """The baseline file for a measurement, with stable ordering.
 
     A static-only write keeps the coverage the committed baseline already records, so lowering a count does not drop
-    the coverage ratchet by accident.
+    the coverage ratchet by accident. A coverage write keeps an existing package's higher baseline when the measurement
+    is inside the tolerance.
     """
-    coverage = now["coverage"] if now["coverage"] is not None else (baseline or {}).get("coverage")
+    coverage = recorded_coverage(now, baseline)
     result = {
         "version": VERSION if coverage is not None else (baseline or {}).get("version", 1),
         "description": DESCRIPTION,
@@ -454,7 +502,8 @@ def main(argv=None):
     parser.add_argument("--report-coverage", action="store_true",
                         help="print each package's coverage, lowest first, and exit")
     parser.add_argument("--write-baseline", action="store_true",
-                        help="lower the baseline to the tree; refuse when a count grew or the base baseline says no")
+                        help="lower the static counts and raise coverage, keeping a higher coverage baseline; refuse "
+                             "when a count grew, coverage fell beyond the tolerance, or the base baseline says no")
     args = parser.parse_args(argv)
     if args.report_coverage and args.coverage is None:
         parser.error("--report-coverage needs --coverage")
@@ -479,10 +528,13 @@ def main(argv=None):
                              "creating a weaker one")
         if base is not None:
             problems += base_problems(now, base)
+        recorded = document(now, existing)
+        if base is not None:
+            problems += baseline_problems(recorded, base, now)
         if problems:
             return report(problems, [])
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(document(now, existing), indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(recorded, indent=2) + "\n", encoding="utf-8")
         print(f"quality ratchet: wrote {path}")
         return 0
 
@@ -498,6 +550,7 @@ def main(argv=None):
             print(f"quality ratchet: {args.base} has no baseline; treating this as its first introduction")
         else:
             problems += base_problems(now, base)
+            problems += baseline_problems(baseline, base, now)
     status = report(problems, fallen)
     if not status:
         print(summary(now))
