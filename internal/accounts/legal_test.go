@@ -402,7 +402,7 @@ func TestLegalLocaleMigrationDownKeepsOldWrites(t *testing.T) {
 	run(`INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, locale, version)
 		VALUES (:x, :s1, :a1, :u1, 'terms', 'en', 2)`)
 
-	file, err := os.ReadFile("migrations/00032_legal_locales.sql")
+	file, err := os.ReadFile("migrations/00035_legal_locales.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

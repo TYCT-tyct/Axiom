@@ -1,6 +1,6 @@
 -- The versioned legal documents of a site and the versions its users accepted (README.md「注册同意」). The documents
 -- are public data, readable in any scope; the acceptances are account data. A document names the locale it was
--- published in. During the rolling-release compatibility phase (migration 00032) version numbers remain unique per
+-- published in. During the rolling-release compatibility phase (migration 00035) version numbers remain unique per
 -- kind across locales, so an old node's (kind, version) cursor and ON CONFLICT target keep working. A later cleanup may
 -- give each locale its own stream once no old node remains.
 
