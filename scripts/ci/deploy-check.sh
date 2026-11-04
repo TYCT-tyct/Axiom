@@ -76,6 +76,14 @@ clean_stale() {
     docker compose --project-name "$project" down --volumes --timeout 5 || true
     docker image rm --force "axiom-ci:${project#axiom-ci-}" "axiom-ci-postgres:${project#axiom-ci-}" > /dev/null 2>&1 || true
   done
+  # The old-binary check runs a database of its own, outside this job's compose project; a job killed before its trap
+  # leaves it behind. The label keeps this away from every other container, and the age keeps a live check's database.
+  for id in $(docker ps -aq --filter label=axiom.ci.old-binary-check=true); do
+    created="$(date -d "$(docker inspect --format '{{.Created}}' "$id" 2>/dev/null)" +%s 2>/dev/null)" || continue
+    [ $(( now - created )) -ge "$STALE_AFTER" ] || continue
+    echo "removing the abandoned old-binary check database $id"
+    docker rm --force "$id" || true
+  done
 }
 
 # Whatever a killed job left: this runner's own stack first, then any abandoned one.
@@ -184,6 +192,13 @@ admin_script="$(curl -fsS "http://127.0.0.1:$admin/" | grep -o '/assets/index-[^
 headers="$(curl -fsS -D - -o /dev/null -H 'Accept-Encoding: br' "http://127.0.0.1:$admin$admin_script" | tr -d '\r')"
 grep -qi '^cache-control: public, max-age=31536000, immutable$' <<< "$headers" && grep -qi '^content-encoding: br$' <<< "$headers" || { echo "::error::the admin script is not served cached and compressed"; exit 1; }
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$public$admin_script")" = 404 ] || { echo "::error::the public listener serves the admin's files"; exit 1; }
+
+# The rolling release's other half: the release this deployment replaces must still start against the schema this tree
+# migrates. The program is the train's base (BASE) or the base a main landing's Train trailer names; the check builds
+# it, migrates a database with this deployment's image and waits for its /readyz. It runs before the legacy-role
+# upgrade, a separate scenario; the check creates its own database and migration administrator, so the upgrade does not
+# affect it. DEPLOY_IMAGE is the release digest or the image built from this tree above.
+bash "$(dirname "${BASH_SOURCE[0]}")/old-binary-check.sh" --current-image "$DEPLOY_IMAGE"
 
 # A deployment from before the migration administrator: no such role, an owner role that role did not create, and
 # a deploy/.env without its password, readable by others and lacking a final newline. just up upgrades it in place.

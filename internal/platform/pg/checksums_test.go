@@ -504,13 +504,11 @@ func TestMigrateRecordsWhatWasAppliedBeforeTheRecordExisted(t *testing.T) {
 	}
 }
 
-// TestAnOlderNodeStartsAgainstTheNewSchema: during the rolling release a node of the previous release runs against a
-// database this release migrated. It refuses a database that lacks one of its own migrations, and the new platform
-// migration is above its newest, which it allows; it also audits every table in Axiom's schemas and knows nothing of
-// the checksum record. Its audit is frozen here: an unknown table in platform is an offender unless it forces
-// row-level security and has a policy, so the record must do both, and nothing else this migration does is read by
-// the previous release's start. This program's own check is the same plus the checksum verification.
-func TestAnOlderNodeStartsAgainstTheNewSchema(t *testing.T) {
+// TestThePreviousReleasesAuditAcceptsTheChecksumRecord: the previous release's startup audit would refuse an unknown
+// table in platform unless it forces row-level security and has a policy, so the checksum record must do both. That
+// predicate is frozen here; this test does not start the previous release's binary (scripts/ci/old-binary-check.sh does
+// that in the deploy rehearsal). The current program's own check, which also verifies checksums, must pass too.
+func TestThePreviousReleasesAuditAcceptsTheChecksumRecord(t *testing.T) {
 	t.Parallel()
 	database := pgtest.New(t)
 	db := open(t, database.App)
