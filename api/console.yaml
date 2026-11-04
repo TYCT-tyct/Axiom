@@ -292,6 +292,194 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/routing-presets:
+    get:
+      operationId: listRoutingPresets
+      tags: [Keys]
+      summary: The routing presets the account's keys may use
+      description: >-
+        The live routing presets a key of the account may be bound to, the widest layer first: the platform's (those
+        that limit prices only in the site's currency), the site's and the account's own. The system preset that keys
+        made before presets route by is not among them. Disabled presets are not listed; `getRoutingPreset` still reads
+        them. Routing presets are not the request presets of `/presets`: they choose which endpoints a key is routed to
+        (docs/domains/routing.md「路由预设」).
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The presets.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPresetList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createRoutingPreset
+      tags: [Keys]
+      summary: Make a routing preset of the account
+      description: >-
+        Makes an account preset with its first version of rules. The rules are checked whole: a member the format does
+        not have, an override that widens what it inherits, or the platform's `advanced` settings are a 400 naming
+        `/rules`. The slug is the account's own, unique among its live presets (409 `name_taken`). An account holds at
+        most 20 live presets and makes at most 200 in all, disabled ones counted (409 `preset_quota`). A key bound to a
+        new preset may be refused 503 `preset_unavailable` for up to 5 seconds, until every node has read it.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RoutingPresetCreate"}
+      responses:
+        "201":
+          description: The preset.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPreset"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/routing-presets/{preset_id}:
+    parameters:
+      - in: path
+        name: preset_id
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      operationId: getRoutingPreset
+      tags: [Keys]
+      summary: One routing preset
+      description: A preset the account can read, disabled or not, with its current rules.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The preset.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPreset"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateRoutingPreset
+      tags: [Keys]
+      summary: Change a routing preset of the account
+      description: >-
+        Replaces the name and the rules of one of the account's presets, at the `revision` the page read (409
+        `stale_revision` when it moved on). Rules that differ from the current ones are a new version, which every key
+        bound to the preset is routed by from the next routing snapshot, within 5 seconds; a rename keeps the version.
+        A preset of the platform or the site is 403; a disabled one is 404.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RoutingPresetUpdate"}
+      responses:
+        "200":
+          description: The preset as changed.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPreset"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+    delete:
+      operationId: disableRoutingPreset
+      tags: [Keys]
+      summary: Disable a routing preset of the account
+      description: >-
+        Disables one of the account's presets at `revision`. The keys bound to it keep routing by it; no new key or
+        default can choose it. A preset a default still points at is refused 409 `preset_in_use`: change the default
+        first. A disabled preset still counts against the 200 the account may make.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      parameters:
+        - in: query
+          name: revision
+          required: true
+          schema: {type: integer, format: int64, minimum: 1}
+      responses:
+        "204": {description: Disabled.}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/routing-default:
+    get:
+      operationId: getRoutingDefault
+      tags: [Keys]
+      summary: The account's default routing preset
+      description: >-
+        The preset the account's new keys are bound to, when the account sets one; absent `preset_id` means the
+        account sets none and new keys take the site's or the platform's default.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The account's default.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingDefault"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setRoutingDefault
+      tags: [Keys]
+      summary: Set the account's default routing preset
+      description: >-
+        Points the account's default at a live preset of the platform, the site or the account, or clears it with a
+        null `preset_id`, at the `version` the page read (409 `stale_revision` when it moved on). Only keys made after
+        the change take it; the keys already made keep their presets. The system preset, a disabled preset and one the
+        account cannot use are 400 `preset_not_selectable`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RoutingDefaultUpdate"}
+      responses:
+        "200":
+          description: The account's default as set.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingDefault"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/notification-preferences:
     get:
       operationId: getNotificationPreferences
@@ -1575,8 +1763,8 @@ paths:
       summary: Change an API key's settings
       description: >-
         Replaces every setting the user may change: what the request leaves out is unrestricted (no spend limit, any
-        model, any IP), so a page sends back all of the key's current settings with its edit. The expiry cannot be
-        changed after the key is made. Disabling takes effect on the next call on every node; `disabled: false`
+        model, any IP), so a page sends back all of the key's current settings with its edit. The routing preset is
+        the exception: left out, the key keeps its preset. The expiry cannot be changed after the key is made. Disabling takes effect on the next call on every node; `disabled: false`
         enables the key again.
       security:
         - session: []
@@ -2391,7 +2579,9 @@ components:
       schema: {type: integer, minimum: 1, maximum: 200, default: 50}
   responses:
     BadRequest:
-      description: The request is malformed or breaks a constraint of the contract (`invalid_request`).
+      description: >-
+        The request is malformed or breaks a constraint of the contract (`invalid_request`), or names a routing preset
+        it may not choose (`preset_not_selectable`).
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -2420,7 +2610,7 @@ components:
     Conflict:
       description: >-
         The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`,
-        `idempotency_key_reused`).
+        `idempotency_key_reused`, `preset_default_invalid`, `preset_in_use`, `preset_quota`).
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -2448,6 +2638,80 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
   schemas:
+    RoutingRules:
+      x-go-type: jsonx.Raw
+      type: object
+      description: >-
+        A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`,
+        up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort`
+        (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all),
+        `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million
+        tokens, `request` per call, decimal strings in the site's currency). At most 16 KiB.
+    RoutingPresetScope:
+      type: string
+      enum: [platform, site, account, workspace]
+      description: The layer the preset belongs to; only the account's own presets can be changed here.
+    RoutingPreset:
+      type: object
+      required: [id, scope, slug, name, revision, version, rules, disabled, created_at, updated_at]
+      properties:
+        id: {type: string, format: uuid}
+        scope: {$ref: "#/components/schemas/RoutingPresetScope"}
+        slug: {type: string}
+        name: {type: string}
+        revision: {type: integer, format: int64, description: "Moves on every change; a change names the revision it read."}
+        version: {type: integer, format: int64, description: "The rules' version, which moves only when the rules change."}
+        currency: {type: string, description: "The currency of a platform preset's price limits; absent for the others, which are in the site's."}
+        rules: {$ref: "#/components/schemas/RoutingRules"}
+        disabled: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    RoutingPresetList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/RoutingPreset"}
+    RoutingPresetCreate:
+      type: object
+      additionalProperties: false
+      required: [slug, name, rules]
+      properties:
+        slug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,63}$', description: "Unique among the account's live presets; it cannot be changed."}
+        name: {type: string, minLength: 1, maxLength: 100}
+        rules: {$ref: "#/components/schemas/RoutingRules"}
+    RoutingPresetUpdate:
+      type: object
+      additionalProperties: false
+      required: [name, rules, revision]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        rules: {$ref: "#/components/schemas/RoutingRules"}
+        revision: {type: integer, format: int64, minimum: 1}
+    RoutingPresetSummary:
+      type: object
+      required: [id, name, scope, version]
+      description: The preset a key is bound to, as the key list shows it.
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        scope: {$ref: "#/components/schemas/RoutingPresetScope"}
+        version: {type: integer, format: int64}
+        disabled: {type: boolean}
+    RoutingDefault:
+      type: object
+      required: [version]
+      properties:
+        preset_id: {type: string, format: uuid, description: "Absent when the account sets no default."}
+        version: {type: integer, format: int64, minimum: 0, description: "0 when the account has no default; a change names the version it read."}
+    RoutingDefaultUpdate:
+      type: object
+      additionalProperties: false
+      required: [preset_id, version]
+      properties:
+        preset_id: {type: string, format: uuid, nullable: true, description: "null clears the account's default."}
+        version: {type: integer, format: int64, minimum: 0}
     PresetConfig:
       x-go-type: jsonx.Raw
       type: object
@@ -2786,6 +3050,10 @@ components:
         - internal
         - not_implemented
         - unavailable
+        - preset_not_selectable
+        - preset_default_invalid
+        - preset_in_use
+        - preset_quota
     SubscriptionCredit:
       type: string
       pattern: '^(0|[1-9][0-9]*)$'
@@ -3405,6 +3673,13 @@ components:
           type: array
           description: The client addresses (IP or CIDR) the key may be used from; absent means any.
           items: {type: string, maxLength: 64}
+        preset_id:
+          type: string
+          format: uuid
+          description: >-
+            The routing preset a call key is routed by. Absent for a management key, for a call key made before keys
+            were bound to presets, which the system preset routes, and from a node that predates the field.
+        preset: {$ref: "#/components/schemas/RoutingPresetSummary"}
     KeyStatus:
       type: string
       enum: [active, disabled, expired]
@@ -3446,6 +3721,13 @@ components:
           type: array
           maxItems: 64
           items: {type: string, maxLength: 64}
+        preset_id:
+          type: string
+          format: uuid
+          description: >-
+            The routing preset a call key is routed by: a live preset of the platform, the site or the account. Absent,
+            a new key takes its layers' default and a changed key keeps its preset. The system preset, a disabled one,
+            another tenant's and any for a management key are 400 `preset_not_selectable`.
     KeySettings:
       type: object
       required: [name, disabled]
@@ -3462,6 +3744,13 @@ components:
           type: array
           maxItems: 64
           items: {type: string, maxLength: 64}
+        preset_id:
+          type: string
+          format: uuid
+          description: >-
+            The routing preset a call key is routed by: a live preset of the platform, the site or the account. Absent,
+            a new key takes its layers' default and a changed key keeps its preset. The system preset, a disabled one,
+            another tenant's and any for a management key are 400 `preset_not_selectable`.
     CreatedKey:
       type: object
       required: [key, secret]

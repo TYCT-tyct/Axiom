@@ -12,7 +12,15 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 func (p *Preset) ReadRules(rules []byte) error // 校验并编译一个版本的规则；写入和快照共用，见「路由预设」
 func (s *Presets) Load(ctx context.Context, tx pg.Tx) ([]Preset, error) // 快照的预设来源，平台范围
 func DefaultPreset(ctx context.Context, tx pg.Tx, site SiteID, account AccountID, workspace WorkspaceID, currency platform.Currency) (PresetID, error)
-func Module() pg.Module // routing 的迁移：预设三张表
+func Module() pg.Module // routing 的迁移：预设三张表和全局预算行
+func ListPresets(ctx context.Context, tx pg.Tx, a Admission) ([]StoredPreset, error) // 一把 key 能选的活预设
+func GetPreset(ctx context.Context, tx pg.Tx, id PresetID) (StoredPreset, error)
+func CreatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, slug string, c PresetContent) (StoredPreset, error)
+func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID, revision int64, c PresetContent) (StoredPreset, error)
+func DisablePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID, revision int64) error
+func ReadDefault(ctx context.Context, tx pg.Tx, layer Layer) (Default, error)
+func SetDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, currency platform.Currency, preset *PresetID, version int64) (Default, error)
+func SelectablePreset(ctx context.Context, tx pg.Tx, a Admission, id PresetID) error // key 显式选的预设能不能用
 // Endpoint.Class is a stable source-class slug (official, cloud, relay, or one added in the admin), not an enum;
 // Entry.Class freezes it into the plan for the call record. See docs/domains/quality.md「来源类别与指纹」.
 func (r *Router) Replace(s *Snapshot) // 只接受更新的快照
@@ -63,15 +71,17 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 
 ## 路由预设
 
-预设是 routing 自己的数据（`migrations/00001_presets.sql`），规则与理由见[路由的「路由预设」](../../docs/domains/routing.md#路由预设)。
+预设是 routing 自己的数据（`migrations/00001_presets.sql`、`00002_preset_budget.sql`），规则与理由见[路由的「路由预设」](../../docs/domains/routing.md#路由预设)。
 
 - **表**：`routing.presets`（身份、层与归属、`current_version`、`revision`、`deleted_at` 停用）、`routing.preset_versions`（不可变的规则 JSON，≤16 KiB；平台带价预设的币种）、`routing.preset_defaults`（每层最多一行的默认指针）。`presets.(id, current_version)` 引用自己的版本（延迟到事务结束检查），所以预设总有它指向的版本。迁移写入零 ID 的系统 `allow-all`（规则 `{"default":{"classes":["*"],"policies":["*"]},"advanced":{"max_attempts":4}}`，与代码里的 `gateway.presets()` 相同）和指向它的平台默认。
 - **行级安全**：读沿默认链向下：平台行任何范围可读，站点行本站（站点范围或账户范围的所属站点）可读，账户与工作区行本账户和所属站点可读；写只写本层。`preset_versions` 的读写经子查询继承 `presets` 的策略。`pg.Scope` 没有工作区这一维，租户边界是账户，账户内谁能改哪个工作区由接口授权决定。系统预设只有迁移能写，`UPDATE` 策略排除它。
 - **`ReadRules`**：严格解码（不认识的成员拒绝，所以更新版本写的新字段在旧节点上让这一个预设不可用，而不是半套生效），校验后编译成 `Preset.Rule`、`Authors`、`Models` 和平台的运行时设置。覆盖规则在编译时就补全：缺的筛选取上一层（模型的上一层是它作者的规则，没有才是默认），写了的筛选必须不宽于上一层；排序写了就替换。返回的错误都包着 `ErrRules`。
 - **`Presets.Load`**：每次快照构建读一次全部预设的头（含停用的，绑定它的 key 仍按它走），只为没编译过的 `(id, version)` 读规则；编译过的版本留在进程里，不再指向的就丢掉。读不懂的版本记一行 `routing.preset_isolated` 警告（每个版本只记一次）并不进快照，其余照常；系统预设缺失或读不懂时返回错误，快照不换。
 - **`NewSnapshot`**：把每个预设的按作者、按模型规则建成指针表，`Plan` 每个模型查一到两次表，不复制规则、不分配（`BenchmarkPlanPreset`）。
+- **写（`manage.go`，默认与选预设的核对在 `defaults.go`）**：`CreatePreset`、`UpdatePreset`、`DisablePreset` 在调用方的范围里写，表的策略把它限在本层；规则先经 PostgreSQL 打印回文本，再由 `ReadRules` 按层校验，所以写入检查的就是快照读到的文本。`UpdatePreset` 带 `revision`（不符 `ErrPresetStale`）：规则或币种变了才追加版本，只改名不加版本，什么都没变就什么都不写。停用的预设不再能改（`ErrPresetNotFound`）；看得到但改不了的是 `ErrPresetReadOnly`；仍是某层默认时停用返回 `ErrPresetInUse`。`ListPresets` 列一把 key 能选的活预设（不含系统预设），`GetPreset` 读一条（含停用的）。`ReadDefault`、`SetDefault` 读写一层自己的默认，带 `version` 乐观并发（版本取自全局序列，清空后重设也不会拿到用过的版本）；`UpdatePreset` 加新版本时删掉最近 50 版以外的旧版本（`keptVersions`，表的删除策略同样只放过这些）；默认只能指向这一层看得见的活预设，系统预设只有平台层能指（`ErrPresetNotSelectable`）。`SelectablePreset` 是 key 显式选预设时的同一检查。每次写都记审计 `routing.preset.create|update|disable`、`routing.default.update`，带层、版本和当前规则的 SHA-256，不带规则全文。
+- **配额与写的顺序**：`routing.preset_budget` 是一行全局总数（预设条数和当前规则的字节数），租户的范围数不到别人的行，所以全局预算靠它；新建、改规则、停用和改默认都先锁这一行，它同时让这些写排成一队：新建时租户的数在锁后才数，两个请求抢不到同一个空位；停用和改默认谁先谁后都看得见对方（默认先写时，外键对预设行的锁也让停用等它）。账户最多 20 条活预设、200 条（含停用）；工作区 10 条、100 条，同时计入所属账户；全局 10 万条、256 MiB。租户不另设字节上限：每版最多 16 KiB，200 条也只有 3.2 MiB。只缩小的写（规则变小）超过预算也放行。
 - **`DefaultPreset`**：在建 key 的事务里（key 自己的范围）取最深的、设了默认的层；没有任何层就是系统预设。默认指向的预设已停用、这把 key 看不到或币种不符时返回 `ErrDefaultInvalid`，不退到更宽的层。cmd 把它作为 `accounts.Config.KeyPreset` 接上。
-- **测试**：`TestReadRulesRefuses`、`TestReadRulesInherits` 覆盖规则的校验和继承，`TestReadRulesBoundsTheDurations` 覆盖平台时长按整秒比较上限、不因换算成 `time.Duration` 溢出而放过；`TestPresetRulesRoute` 覆盖每种规则在默认、作者、模型三层的效果与平台的顺序、关闭回退、质量下限；`TestRequestOnlyTightensThePreset` 覆盖请求覆盖只能收紧；`TestPresetVisibility` 覆盖层与币种；`TestPresetsLoad`、`TestDefaultPresetLayers`、`TestPresetTablesKeepTenantsApart` 走真实数据库，覆盖系统预设、隔离、新版本、停用、默认链和租户隔离；`cmd/axiom` 的 `TestNewKeysTakeTheDefaultPreset` 覆盖控制台和管理 key 建 key 时落章。
+- **测试**：`TestReadRulesRefuses`、`TestReadRulesInherits` 覆盖规则的校验和继承，`TestReadRulesBoundsTheDurations` 覆盖平台时长按整秒比较上限、不因换算成 `time.Duration` 溢出而放过；`TestPresetRulesRoute` 覆盖每种规则在默认、作者、模型三层的效果与平台的顺序、关闭回退、质量下限；`TestRequestOnlyTightensThePreset` 覆盖请求覆盖只能收紧；`TestPresetVisibility` 覆盖层与币种；`TestPresetsLoad`、`TestDefaultPresetLayers`、`TestPresetTablesKeepTenantsApart` 走真实数据库，覆盖系统预设、隔离、新版本、停用、默认链和租户隔离；`TestPresetVersions`、`TestPresetDefaultAndDisable`、`TestPresetWritesRefused`、`TestPresetQuota`、`TestPresetGlobalBudget`、`TestDefaultVersionsAreNeverReused`、`TestPresetKeepsItsLastVersions`、`TestDefaultWaitsForTheDisable` 走真实数据库，覆盖写入、版本、默认、停用、审计、拒绝的写、租户配额（同一账户反复建停 201 次时第 201 次被拒，另一账户照常）、全局预算、默认版本不复用、只留最近 50 版和停用与改默认的交错；`cmd/axiom` 的 `TestNewKeysTakeTheDefaultPreset` 覆盖控制台和管理 key 建 key 时落章，`TestConsoleRoutingPresets` 覆盖控制台接口，`TestConsoleKeyPresets` 覆盖 key 的 `preset_id`。
 
 ## 健康闭环
 

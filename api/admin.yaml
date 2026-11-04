@@ -5183,7 +5183,9 @@ components:
       schema: {type: string, enum: [all]}
   responses:
     BadRequest:
-      description: The request is malformed or breaks a constraint of the contract (`invalid_request`).
+      description: >-
+        The request is malformed or breaks a constraint of the contract (`invalid_request`), or names a routing preset
+        it may not choose (`preset_not_selectable`).
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -5212,7 +5214,7 @@ components:
     Conflict:
       description: >-
         The request conflicts with the current state (`conflict`, `email_taken`, `name_taken`, `too_many_keys`, `stale_revision`,
-        `idempotency_key_reused`).
+        `idempotency_key_reused`, `preset_default_invalid`, `preset_in_use`, `preset_quota`).
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -6279,6 +6281,10 @@ components:
         - internal
         - not_implemented
         - unavailable
+        - preset_not_selectable
+        - preset_default_invalid
+        - preset_in_use
+        - preset_quota
     OperationsOverview:
       type: object
       additionalProperties: false

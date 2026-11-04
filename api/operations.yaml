@@ -486,7 +486,8 @@ components:
         own resources without the platform grant. A malformed ID and an unknown one answer alike (`not_found`).
       content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
     BadRequest:
-      description: The request is malformed or breaks a constraint of the contract (`invalid_request`).
+      description: The request is malformed or breaks a constraint of the contract (`invalid_request`), or names a routing
+        preset it may not choose (`preset_not_selectable`).
       content:
         application/json:
           schema:
@@ -857,6 +858,10 @@ components:
       - internal
       - not_implemented
       - unavailable
+      - preset_not_selectable
+      - preset_default_invalid
+      - preset_in_use
+      - preset_quota
     ErrorDetail:
       type: object
       required:

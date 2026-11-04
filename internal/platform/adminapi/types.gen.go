@@ -539,6 +539,10 @@ const (
 	ErrorCodeNotImplemented        ErrorCode = "not_implemented"
 	ErrorCodeNotReady              ErrorCode = "not_ready"
 	ErrorCodeOriginRejected        ErrorCode = "origin_rejected"
+	ErrorCodePresetDefaultInvalid  ErrorCode = "preset_default_invalid"
+	ErrorCodePresetInUse           ErrorCode = "preset_in_use"
+	ErrorCodePresetNotSelectable   ErrorCode = "preset_not_selectable"
+	ErrorCodePresetQuota           ErrorCode = "preset_quota"
 	ErrorCodeRateLimited           ErrorCode = "rate_limited"
 	ErrorCodeRedeemCodeDisabled    ErrorCode = "redeem_code_disabled"
 	ErrorCodeRedeemCodeExpired     ErrorCode = "redeem_code_expired"
@@ -603,6 +607,14 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeNotReady:
 		return true
 	case ErrorCodeOriginRejected:
+		return true
+	case ErrorCodePresetDefaultInvalid:
+		return true
+	case ErrorCodePresetInUse:
+		return true
+	case ErrorCodePresetNotSelectable:
+		return true
+	case ErrorCodePresetQuota:
 		return true
 	case ErrorCodeRateLimited:
 		return true
