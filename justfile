@@ -9,7 +9,7 @@ web := "pnpm --dir web"
 # Run every check CI runs, except one run of each benchmark and the deployment check: `check-all` adds the benchmarks.
 # This is the local pre-push gate, so it keeps `secrets` and `docs`, which a PR build leaves to check-docs.yml and check-secrets.yml (see
 # `check-ci`)
-check: docs check-static test secrets web
+check: docs check-static test quality-ratchet-coverage secrets web
 
 # The checks that need no run of a test suite: CI's static job adds `script-tests` on a PR, and `docs` (which includes
 # `script-tests`) plus `secrets` on a train or main
@@ -56,9 +56,18 @@ lint:
 # function or file may newly cross the hard ceiling 30/800. .github/quality-baseline.json holds the counts and the named
 # exceptions; the script says which number to lower when one falls (`--write-baseline` lowers them, and refuses a rise).
 # With BASE set (PRs and trains), it also reads the baseline committed at the base, so code and baseline cannot grow
-# together; a base without the baseline is its first introduction.
+# together; a base without the baseline is its first introduction. A static-only write keeps the recorded coverage.
+# The static half of the quality ratchet: nolint, complexity and file length may only fall.
 quality-ratchet:
     {{ python }} scripts/ci/quality_ratchet.py
+
+# After `just test` wrote coverage.out: a package may not fall below its baseline by more than the tolerance, a new
+# package must start at or above the floor, and a rise must raise the baseline in the same PR. Generated code and the
+# withcluster test command are excluded; tools/ is another module and is not measured here. It reads the profile the
+# race suite already wrote, so the suite runs once.
+# The coverage half of the quality ratchet: per-package statement coverage may only fall.
+quality-ratchet-coverage:
+    {{ python }} scripts/ci/quality_ratchet.py --coverage coverage.out
 
 # Module imports follow the dependency table in docs/architecture.md
 modules:
@@ -113,9 +122,11 @@ deadcode:
 # ./pkg` alone starts its own. The test build still compiles every benchmark; `bench-once` runs them under the race
 # detector, and bench-compare compares their allocations without it. At most four packages at once: eight, the default
 # on the 8-core host, raced with the shared cluster and starved the timing-sensitive database tests; four is the limit
-# the server proof used.
+# the server proof used. -coverprofile adds coverage instrumentation to that same run and writes coverage.out for
+# quality-ratchet-coverage; the suite is not run twice. On the CI host the covered runs took 9-12m against 13m
+# uncovered, dominated by host load; reading the profile costs under a second.
 test: web-embed
-    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 ./...
+    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 -coverprofile=coverage.out ./...
     go test -C tools -race ./...
 
 # Focused remote verification for callback transactions and their mutation proofs (#309).
@@ -145,7 +156,7 @@ check-all: check bench-once
 # What a pull request's build runs: `check` without `secrets` and the workflow half of `docs`, which check-docs.yml's
 # required `secrets` and `docs` jobs already run on it, so they would run twice per build. `script-tests` is the half of
 # `docs` check-docs.yml does not run. A train or main runs `docs` and `secrets` too (CI's static job).
-check-ci: script-tests check-static test web
+check-ci: script-tests check-static test quality-ratchet-coverage web
 
 # The checks a Markdown-only pull request runs instead of the full build: the docs tests (including the pull request
 # template), module boundaries, the pg module table, and the size and binary rule, which a document must pass too.
