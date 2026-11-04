@@ -33,7 +33,7 @@ func legalVersions(in *[]consoleapi.LegalDocumentVersion) []accounts.DocumentVer
 	}
 	out := make([]accounts.DocumentVersion, len(*in))
 	for i, document := range *in {
-		out[i] = accounts.DocumentVersion{Kind: string(document.Kind), Version: document.Version}
+		out[i] = accounts.DocumentVersion{Kind: string(document.Kind), Locale: string(document.Locale), Version: document.Version}
 	}
 	return out
 }
@@ -42,7 +42,9 @@ func legalVersions(in *[]consoleapi.LegalDocumentVersion) []accounts.DocumentVer
 func legalVersionList(in []accounts.DocumentVersion) []consoleapi.LegalDocumentVersion {
 	out := make([]consoleapi.LegalDocumentVersion, len(in))
 	for i, document := range in {
-		out[i] = consoleapi.LegalDocumentVersion{Kind: consoleapi.LegalDocumentKind(document.Kind), Version: document.Version}
+		out[i] = consoleapi.LegalDocumentVersion{
+			Kind: consoleapi.LegalDocumentKind(document.Kind), Locale: consoleapi.LegalDocumentLocale(document.Locale), Version: document.Version,
+		}
 	}
 	return out
 }
@@ -51,7 +53,7 @@ func legalDocuments(in []accounts.LegalDocument) []consoleapi.LegalDocument {
 	out := make([]consoleapi.LegalDocument, len(in))
 	for i, document := range in {
 		out[i] = consoleapi.LegalDocument{
-			Kind: consoleapi.LegalDocumentKind(document.Kind), Version: document.Version,
+			Kind: consoleapi.LegalDocumentKind(document.Kind), Locale: consoleapi.LegalDocumentLocale(document.Locale), Version: document.Version,
 			Body: document.Body, PublishedAt: document.PublishedAt,
 		}
 	}

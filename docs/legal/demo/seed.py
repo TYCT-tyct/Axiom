@@ -2,10 +2,10 @@
 """Publish the demo legal texts to one development site through the admin API.
 
 The script signs in, enrolls a TOTP factor when the account has none (the
-admin API requires an MFA session to publish), and posts both documents with
-the normal publish endpoint. It refuses anything but a loopback admin URL
-unless --allow-nonlocal is passed, so a stray environment cannot publish the
-demo texts to a real site.
+admin API requires an MFA session to publish), and posts the terms and privacy
+policy in Chinese and English as four locale versions with the normal publish
+endpoint. It refuses anything but a loopback admin URL unless --allow-nonlocal
+is passed, so a stray environment cannot publish the demo texts to a real site.
 
 Required environment:
   AXIOM_ADMIN_URL   Admin origin, e.g. http://localhost:8082
@@ -44,9 +44,15 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DOCUMENTS = (
-    ("terms", HERE / "terms.zh-en.txt"),
-    ("privacy", HERE / "privacy.zh-en.txt"),
+    ("terms", "zh", HERE / "terms.zh.txt"),
+    ("terms", "en", HERE / "terms.en.txt"),
+    ("privacy", "zh", HERE / "privacy.zh.txt"),
+    ("privacy", "en", HERE / "privacy.en.txt"),
 )
+BANNERS = {
+    "zh": "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】",
+    "en": "Demo text, not legal advice; replace before launch.",
+}
 MAX_BODY = 65536
 LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 
@@ -152,13 +158,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    for kind, path in DOCUMENTS:
+    for kind, locale, path in DOCUMENTS:
         body = path.read_text(encoding="utf-8")
-        if not body.startswith("【示例文本（demo）"):
-            raise SeedError(f"{path} does not start with the demo banner")
+        if not body.startswith(BANNERS[locale]):
+            raise SeedError(f"{path} does not start with the {locale} demo banner")
         if len(body.encode()) > MAX_BODY:
             raise SeedError(f"{path} is larger than the {MAX_BODY}-byte API limit")
-        print(f"{kind}: {path.name}, {len(body)} characters, banner present")
+        print(f"{kind}/{locale}: {path.name}, {len(body)} characters, banner present")
     if args.dry_run:
         return 0
 
@@ -178,14 +184,14 @@ def main() -> int:
     api = Api(base)
     sign_in(api, os.environ["AXIOM_EMAIL"], os.environ["AXIOM_PASSWORD"])
     print(f"signed in to {base}", file=sys.stderr)
-    for kind, path in DOCUMENTS:
+    for kind, locale, path in DOCUMENTS:
         body = path.read_text(encoding="utf-8")
         published = api.post(
             admin_path(os.environ["AXIOM_SITE_ID"]),
-            {"kind": kind, "body": body, "reason": reason},
+            {"kind": kind, "locale": locale, "body": body, "reason": reason},
             {"Idempotency-Key": str(uuid.uuid4())},
         )
-        print(f"{kind}: published version {published['version']}")
+        print(f"{kind}/{locale}: published version {published['version']}")
     return 0
 
 

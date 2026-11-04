@@ -55,7 +55,9 @@ export const session = (
   consent:
     state.legal && state.legal.length > 0
       ? {
-          required: state.legalAccepted ? [] : state.legal.map(({ kind, version }) => ({ kind, version })),
+          required: state.legalAccepted
+            ? []
+            : state.legal.map(({ kind, locale, version }) => ({ kind, locale, version })),
         }
       : undefined,
 });

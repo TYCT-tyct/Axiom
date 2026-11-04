@@ -2925,10 +2925,11 @@ paths:
       tags: [Site]
       summary: A site's legal document versions
       description: >-
-        Every published version of the site's terms of service and privacy policy, newest first within a kind, with the
-        text. The current version of each kind is the first one of that kind; the earlier ones are what earlier
-        acceptances name. One page holds at most `limit` rows; `next_cursor` continues after the last row, so a kind
-        with more than one page does not hide the other kind or its own older versions.
+        Every published version of the site's terms of service and privacy policy in every locale, newest first
+        within a kind and locale, with the Markdown body. The current version of each kind and locale is the first row
+        for that pair; the earlier ones are what earlier acceptances name. One page holds at most `limit` rows;
+        `next_cursor` continues after the last row, so a pair with more than one page does not hide another pair or its
+        own older versions.
       security:
         - session: []
       x-axiom-level: mfa
@@ -2951,10 +2952,10 @@ paths:
       tags: [Site]
       summary: Publish a new version of a legal document
       description: >-
-        Adds version 1 of the kind, or the next number after the current one. The version and its text never change:
-        a correction is another publication, which every user must accept before the console lets them continue. The
-        text is supplied by the site's operator, stored and returned as plain text; the request's reason and a digest,
-        not the text, go to the audit log.
+        Adds version 1 of the kind and locale, or the next number after the current one. The version and its text
+        never change: a correction is another publication, which every user must accept before the console lets them
+        continue. The text is supplied by the site's operator, stored and returned as Markdown; the request's reason
+        and a digest, not the text, go to the audit log.
       security:
         - session: []
           csrf: []
@@ -6324,13 +6325,14 @@ components:
       properties:
         required:
           type: array
-          description: Current documents this user has not accepted; empty when every one is accepted.
+          description: One current document per kind this user still has to accept; empty when one current version of every kind is accepted.
           items: {$ref: "#/components/schemas/LegalDocumentVersion"}
     LegalDocumentVersion:
       type: object
-      required: [kind, version]
+      required: [kind, locale, version]
       properties:
         kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        locale: {$ref: "#/components/schemas/LegalDocumentLocale"}
         version: {type: integer, minimum: 1}
     TotpSetup:
       type: object
@@ -6612,14 +6614,20 @@ components:
     LegalDocumentKind:
       type: string
       enum: [terms, privacy]
+    LegalDocumentLocale:
+      type: string
+      enum: [zh, en]
     LegalDocument:
       type: object
-      description: One version of one of the site's legal documents; the text is plain text, never HTML.
-      required: [kind, version, body, published_at]
+      description: One version of one of the site's legal documents in one locale; the body is Markdown, never HTML.
+      required: [kind, locale, version, body, published_at]
       properties:
         kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        locale: {$ref: "#/components/schemas/LegalDocumentLocale"}
         version: {type: integer, minimum: 1}
-        body: {type: string}
+        body:
+          type: string
+          description: Markdown headings, paragraphs, and lists. Rendered as React text, never interpreted as HTML.
         published_at: {type: string, format: date-time}
     LegalDocumentHistory:
       type: object
@@ -6627,7 +6635,7 @@ components:
       properties:
         documents:
           type: array
-          description: Newest first within a kind, at most `limit` rows.
+          description: Newest first within a kind and locale, at most `limit` rows.
           items: {$ref: "#/components/schemas/LegalDocument"}
         next_cursor:
           type: string
@@ -6636,9 +6644,10 @@ components:
 
     LegalDocumentPublish:
       type: object
-      required: [kind, body, reason]
+      required: [kind, locale, body, reason]
       properties:
         kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        locale: {$ref: "#/components/schemas/LegalDocumentLocale"}
         body: {type: string, minLength: 1, maxLength: 65536}
         reason: {$ref: "#/components/schemas/Reason"}
     SiteSettingsView:

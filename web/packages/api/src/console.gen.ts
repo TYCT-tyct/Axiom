@@ -774,7 +774,7 @@ export interface paths {
         };
         /**
          * The site's current legal documents
-         * @description The terms of service and the privacy policy the site has published, at their current versions, as plain text. The registration page shows them and sends their versions back with the registration or with `acceptLegalDocuments`. A site that publishes none answers an empty list and requires no acceptance. The text is public: no session is needed.
+         * @description The terms of service and the privacy policy the site has published, at their current versions, in every published locale. Each body is Markdown (headings and paragraphs; never HTML). The registration page shows the locale that matches its language, falling back to the other locale when one is missing, and sends exactly those versions back with the registration or with `acceptLegalDocuments`. A site that publishes none answers an empty list and requires no acceptance. The text is public: no session is needed.
          */
         get: operations["getLegalDocuments"];
         put?: never;
@@ -796,7 +796,7 @@ export interface paths {
         put?: never;
         /**
          * Accept the current legal documents
-         * @description Records the signed-in user's acceptance of every current document at the version the request names, with the time. A missing, stale or extra version is `consent_required`: the page must send exactly what `getLegalDocuments` returned. Accepting the same version again changes nothing. A session may call this while the rest of the console is refused for want of acceptance.
+         * @description Records the signed-in user's acceptance of the current version of each kind, in the locale the request names, with the time. A missing, stale or duplicate kind is `consent_required`: the page sends exactly one current document per kind, as `getLegalDocuments` returned it. Accepting the same version again changes nothing. A session may call this while the rest of the console is refused for want of acceptance.
          */
         post: operations["acceptLegalDocuments"];
         delete?: never;
@@ -1627,29 +1627,34 @@ export interface components {
         SessionLevel: "pending_mfa" | "password" | "mfa";
         /** @enum {string} */
         LegalDocumentKind: "terms" | "privacy";
-        /** @description One version of one of the site's legal documents; the text is plain text, never HTML. */
+        /** @enum {string} */
+        LegalDocumentLocale: "zh" | "en";
+        /** @description One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. */
         LegalDocument: {
             kind: components["schemas"]["LegalDocumentKind"];
+            locale: components["schemas"]["LegalDocumentLocale"];
             version: number;
+            /** @description Markdown headings, paragraphs, and lists. Rendered as React text, never interpreted as HTML. */
             body: string;
             /** Format: date-time */
             published_at: string;
         };
         LegalDocumentVersion: {
             kind: components["schemas"]["LegalDocumentKind"];
+            locale: components["schemas"]["LegalDocumentLocale"];
             version: number;
         };
         LegalDocuments: {
-            /** @description The current version of each kind, at most one per kind. */
+            /** @description The current version of each kind in each published locale, at most one per kind and locale. */
             documents: components["schemas"]["LegalDocument"][];
         };
         LegalAcceptance: {
-            /** @description Every current document at its current version, as getLegalDocuments returned it. */
+            /** @description One current document per kind, with the locale shown, as getLegalDocuments returned it. */
             consent: components["schemas"]["LegalDocumentVersion"][];
         };
         /** @description The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead. */
         SessionConsent: {
-            /** @description Current documents this user has not accepted; empty when every one is accepted. */
+            /** @description One current document per kind this user still has to accept; empty when one current version of every kind is accepted. */
             required: components["schemas"]["LegalDocumentVersion"][];
         };
         Session: {
@@ -3641,7 +3646,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The current documents, one per kind, oldest kind first. */
+            /** @description The current documents, one per kind and locale. */
             200: {
                 headers: {
                     [name: string]: unknown;

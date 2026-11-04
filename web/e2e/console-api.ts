@@ -23,12 +23,33 @@ type Ctx<K extends keyof paths, M extends "get" | "post" | "put" | "delete"> = C
 const none = { level: "none" } as const;
 const signedIn = { level: "signed_in" } as const;
 
-function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">) {
-  if (state.legal.length > 0) {
-    const accepted = new Map((body.consent ?? []).map(({ kind, version }) => [kind, version]));
-    if (state.legal.some(({ kind, version }) => accepted.get(kind) !== version)) {
-      return fail(403, "consent_required");
+function acceptsCurrent(documents: Schemas["LegalDocument"][], consent: Schemas["LegalDocumentVersion"][]): boolean {
+  const chosen = new Map<Schemas["LegalDocumentKind"], Schemas["LegalDocumentVersion"]>();
+  for (const document of consent) {
+    if (chosen.has(document.kind)) {
+      return false;
     }
+    chosen.set(document.kind, document);
+  }
+  const kinds = new Set(documents.map((document) => document.kind));
+  if (chosen.size !== kinds.size) {
+    return false;
+  }
+  return [...kinds].every((kind) => {
+    const picked = chosen.get(kind);
+    return (
+      picked !== undefined &&
+      documents.some(
+        (document) =>
+          document.kind === kind && document.locale === picked.locale && document.version === picked.version,
+      )
+    );
+  });
+}
+
+function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">) {
+  if (state.legal.length > 0 && !acceptsCurrent(state.legal, body.consent ?? [])) {
+    return fail(403, "consent_required");
   }
   if (body.invite_code !== goodInvite) {
     return fail(422, "invalid_invite");
@@ -257,8 +278,7 @@ const handlers: Handler<MockState>[] = [
   route("post", `${base}/auth/mfa`, { level: "pending_mfa" }, verifyMfa),
   route("post", `${base}/auth/register`, none, register),
   route("post", `${base}/legal/accept`, signedIn, ({ body, state }) => {
-    const accepted = new Map(body.consent.map(({ kind, version }) => [kind, version]));
-    if (state.legal.some(({ kind, version }) => accepted.get(kind) !== version)) {
+    if (!acceptsCurrent(state.legal, body.consent)) {
       return fail(403, "consent_required");
     }
     state.legalAccepted = true;

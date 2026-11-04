@@ -44,7 +44,8 @@ func (a adminAPI) ListLegalDocuments(ctx context.Context, request adminapi.ListL
 	}
 	var next *string
 	if more {
-		cursor := fmt.Sprintf("%s:%d", documents[len(documents)-1].Kind, documents[len(documents)-1].Version)
+		last := documents[len(documents)-1]
+		cursor := fmt.Sprintf("%s:%s:%d", last.Kind, last.Locale, last.Version)
 		next = &cursor
 	}
 	return adminapi.ListLegalDocuments200JSONResponse(adminapi.LegalDocumentHistory{
@@ -52,21 +53,25 @@ func (a adminAPI) ListLegalDocuments(ctx context.Context, request adminapi.ListL
 	}), nil
 }
 
-// legalHistoryCursor reads a next_cursor as the (kind, version) it names. The kind order is the query's, so a cursor
+// legalHistoryCursor reads a next_cursor as the (kind, locale, version) it names. The order is the query's, so a cursor
 // after the last terms version continues with the privacy versions, and a malformed one is a 400.
 func legalHistoryCursor(raw *adminapi.Cursor) (accounts.DocumentVersion, bool, error) {
 	if raw == nil {
 		return accounts.DocumentVersion{}, false, nil
 	}
-	kind, versionText, ok := strings.Cut(*raw, ":")
+	kind, rest, ok := strings.Cut(*raw, ":")
 	if !ok || (kind != accounts.LegalTerms && kind != accounts.LegalPrivacy) {
+		return accounts.DocumentVersion{}, false, invalidField("/cursor", "is not a legal document cursor")
+	}
+	locale, versionText, ok := strings.Cut(rest, ":")
+	if !ok || (locale != accounts.LegalLocaleZH && locale != accounts.LegalLocaleEN) {
 		return accounts.DocumentVersion{}, false, invalidField("/cursor", "is not a legal document cursor")
 	}
 	version, err := strconv.ParseInt(versionText, 10, 32)
 	if err != nil || version < 1 {
 		return accounts.DocumentVersion{}, false, invalidField("/cursor", "is not a legal document cursor")
 	}
-	return accounts.DocumentVersion{Kind: kind, Version: int(version)}, true, nil
+	return accounts.DocumentVersion{Kind: kind, Locale: locale, Version: int(version)}, true, nil
 }
 
 // PublishLegalDocument adds a version of a kind. The text is the owner's, so it is stored as given; the audit entry
@@ -78,7 +83,7 @@ func (a adminAPI) PublishLegalDocument(ctx context.Context, request adminapi.Pub
 	}
 	document, replayed, err := idempotently(ctx, a.db, "publishLegalDocument", request.Params.IdempotencyKey, []any{request.SiteId, request.Body},
 		func(tx pg.Tx) (adminapi.LegalDocument, error) {
-			document, err := a.accounts.PublishLegalDocument(ctx, tx, actor(ctx), site, string(request.Body.Kind), request.Body.Body, request.Body.Reason)
+			document, err := a.accounts.PublishLegalDocument(ctx, tx, actor(ctx), site, string(request.Body.Kind), string(request.Body.Locale), request.Body.Body, request.Body.Reason)
 			if err != nil {
 				if refusal, ok := errors.AsType[*accounts.LegalDocumentError](err); ok {
 					return adminapi.LegalDocument{}, invalidField("/"+refusal.Field, refusal.Reason)
@@ -86,7 +91,7 @@ func (a adminAPI) PublishLegalDocument(ctx context.Context, request adminapi.Pub
 				return adminapi.LegalDocument{}, err
 			}
 			return adminapi.LegalDocument{
-				Kind: adminapi.LegalDocumentKind(document.Kind), Version: document.Version,
+				Kind: adminapi.LegalDocumentKind(document.Kind), Locale: adminapi.LegalDocumentLocale(document.Locale), Version: document.Version,
 				Body: document.Body, PublishedAt: document.PublishedAt,
 			}, nil
 		})
@@ -102,7 +107,7 @@ func adminLegalDocuments(in []accounts.LegalDocument) []adminapi.LegalDocument {
 	out := make([]adminapi.LegalDocument, len(in))
 	for i, document := range in {
 		out[i] = adminapi.LegalDocument{
-			Kind: adminapi.LegalDocumentKind(document.Kind), Version: document.Version,
+			Kind: adminapi.LegalDocumentKind(document.Kind), Locale: adminapi.LegalDocumentLocale(document.Locale), Version: document.Version,
 			Body: document.Body, PublishedAt: document.PublishedAt,
 		}
 	}

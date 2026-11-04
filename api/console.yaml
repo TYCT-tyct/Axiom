@@ -1295,14 +1295,15 @@ paths:
       tags: [Session]
       summary: The site's current legal documents
       description: >-
-        The terms of service and the privacy policy the site has published, at their current versions, as plain text.
-        The registration page shows them and sends their versions back with the registration or with
-        `acceptLegalDocuments`. A site that publishes none answers an empty list and requires no acceptance. The text
-        is public: no session is needed.
+        The terms of service and the privacy policy the site has published, at their current versions, in every
+        published locale. Each body is Markdown (headings and paragraphs; never HTML). The registration page shows the
+        locale that matches its language, falling back to the other locale when one is missing, and sends exactly those
+        versions back with the registration or with `acceptLegalDocuments`. A site that publishes none answers an empty
+        list and requires no acceptance. The text is public: no session is needed.
       security: []
       responses:
         "200":
-          description: The current documents, one per kind, oldest kind first.
+          description: The current documents, one per kind and locale.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/LegalDocuments"}
@@ -1314,10 +1315,10 @@ paths:
       tags: [Session]
       summary: Accept the current legal documents
       description: >-
-        Records the signed-in user's acceptance of every current document at the version the request names, with the
-        time. A missing, stale or extra version is `consent_required`: the page must send exactly what
-        `getLegalDocuments` returned. Accepting the same version again changes nothing. A session may call this while
-        the rest of the console is refused for want of acceptance.
+        Records the signed-in user's acceptance of the current version of each kind, in the locale the request names,
+        with the time. A missing, stale or duplicate kind is `consent_required`: the page sends exactly one current
+        document per kind, as `getLegalDocuments` returned it. Accepting the same version again changes nothing. A
+        session may call this while the rest of the console is refused for want of acceptance.
       security:
         - session: []
           csrf: []
@@ -2895,20 +2896,27 @@ components:
     LegalDocumentKind:
       type: string
       enum: [terms, privacy]
+    LegalDocumentLocale:
+      type: string
+      enum: [zh, en]
     LegalDocument:
       type: object
-      description: One version of one of the site's legal documents; the text is plain text, never HTML.
-      required: [kind, version, body, published_at]
+      description: One version of one of the site's legal documents in one locale; the body is Markdown, never HTML.
+      required: [kind, locale, version, body, published_at]
       properties:
         kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        locale: {$ref: "#/components/schemas/LegalDocumentLocale"}
         version: {type: integer, minimum: 1}
-        body: {type: string}
+        body:
+          type: string
+          description: Markdown headings, paragraphs, and lists. Rendered as React text, never interpreted as HTML.
         published_at: {type: string, format: date-time}
     LegalDocumentVersion:
       type: object
-      required: [kind, version]
+      required: [kind, locale, version]
       properties:
         kind: {$ref: "#/components/schemas/LegalDocumentKind"}
+        locale: {$ref: "#/components/schemas/LegalDocumentLocale"}
         version: {type: integer, minimum: 1}
     LegalDocuments:
       type: object
@@ -2916,7 +2924,7 @@ components:
       properties:
         documents:
           type: array
-          description: The current version of each kind, at most one per kind.
+          description: The current version of each kind in each published locale, at most one per kind and locale.
           items: {$ref: "#/components/schemas/LegalDocument"}
     LegalAcceptance:
       type: object
@@ -2924,7 +2932,7 @@ components:
       properties:
         consent:
           type: array
-          description: Every current document at its current version, as getLegalDocuments returned it.
+          description: One current document per kind, with the locale shown, as getLegalDocuments returned it.
           items: {$ref: "#/components/schemas/LegalDocumentVersion"}
     SessionConsent:
       type: object
@@ -2935,7 +2943,7 @@ components:
       properties:
         required:
           type: array
-          description: Current documents this user has not accepted; empty when every one is accepted.
+          description: One current document per kind this user still has to accept; empty when one current version of every kind is accepted.
           items: {$ref: "#/components/schemas/LegalDocumentVersion"}
     Session:
       type: object

@@ -1343,13 +1343,13 @@ export interface paths {
         };
         /**
          * A site's legal document versions
-         * @description Every published version of the site's terms of service and privacy policy, newest first within a kind, with the text. The current version of each kind is the first one of that kind; the earlier ones are what earlier acceptances name. One page holds at most `limit` rows; `next_cursor` continues after the last row, so a kind with more than one page does not hide the other kind or its own older versions.
+         * @description Every published version of the site's terms of service and privacy policy in every locale, newest first within a kind and locale, with the Markdown body. The current version of each kind and locale is the first row for that pair; the earlier ones are what earlier acceptances name. One page holds at most `limit` rows; `next_cursor` continues after the last row, so a pair with more than one page does not hide another pair or its own older versions.
          */
         get: operations["listLegalDocuments"];
         put?: never;
         /**
          * Publish a new version of a legal document
-         * @description Adds version 1 of the kind, or the next number after the current one. The version and its text never change: a correction is another publication, which every user must accept before the console lets them continue. The text is supplied by the site's operator, stored and returned as plain text; the request's reason and a digest, not the text, go to the audit log.
+         * @description Adds version 1 of the kind and locale, or the next number after the current one. The version and its text never change: a correction is another publication, which every user must accept before the console lets them continue. The text is supplied by the site's operator, stored and returned as Markdown; the request's reason and a digest, not the text, go to the audit log.
          */
         post: operations["publishLegalDocument"];
         delete?: never;
@@ -3231,11 +3231,12 @@ export interface components {
         };
         /** @description The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead. */
         SessionConsent: {
-            /** @description Current documents this user has not accepted; empty when every one is accepted. */
+            /** @description One current document per kind this user still has to accept; empty when one current version of every kind is accepted. */
             required: components["schemas"]["LegalDocumentVersion"][];
         };
         LegalDocumentVersion: {
             kind: components["schemas"]["LegalDocumentKind"];
+            locale: components["schemas"]["LegalDocumentLocale"];
             version: number;
         };
         TotpSetup: {
@@ -3429,22 +3430,27 @@ export interface components {
         };
         /** @enum {string} */
         LegalDocumentKind: "terms" | "privacy";
-        /** @description One version of one of the site's legal documents; the text is plain text, never HTML. */
+        /** @enum {string} */
+        LegalDocumentLocale: "zh" | "en";
+        /** @description One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. */
         LegalDocument: {
             kind: components["schemas"]["LegalDocumentKind"];
+            locale: components["schemas"]["LegalDocumentLocale"];
             version: number;
+            /** @description Markdown headings, paragraphs, and lists. Rendered as React text, never interpreted as HTML. */
             body: string;
             /** Format: date-time */
             published_at: string;
         };
         LegalDocumentHistory: {
-            /** @description Newest first within a kind, at most `limit` rows. */
+            /** @description Newest first within a kind and locale, at most `limit` rows. */
             documents: components["schemas"]["LegalDocument"][];
             /** @description Where the next page starts, or null on the last page. */
             next_cursor: string | null;
         };
         LegalDocumentPublish: {
             kind: components["schemas"]["LegalDocumentKind"];
+            locale: components["schemas"]["LegalDocumentLocale"];
             body: string;
             reason: components["schemas"]["Reason"];
         };

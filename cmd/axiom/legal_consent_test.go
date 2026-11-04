@@ -47,18 +47,18 @@ func TestLegalConsentHTTP(t *testing.T) {
 	}
 
 	operator := admin.owner()
-	publish := func(kind, body string) adminapi.LegalDocument {
+	publish := func(kind, locale, body string) adminapi.LegalDocument {
 		t.Helper()
 		rec := admin.change(operator, http.MethodPost, path,
-			`{"kind":"`+kind+`","body":"`+body+`","reason":"legal test"}`, newKey())
-		expectAdmin(t, "publish "+kind, rec, http.StatusCreated, "")
+			`{"kind":"`+kind+`","locale":"`+locale+`","body":"`+body+`","reason":"legal test"}`, newKey())
+		expectAdmin(t, "publish "+kind+"/"+locale, rec, http.StatusCreated, "")
 		var document adminapi.LegalDocument
 		decode(t, rec, &document)
 		return document
 	}
-	terms1 := publish("terms", testTerms)
-	privacy1 := publish("privacy", testPrivacy)
-	if terms1.Version != 1 || privacy1.Version != 1 || terms1.Kind != adminapi.LegalDocumentKind("terms") {
+	terms1 := publish("terms", "zh", testTerms)
+	privacy1 := publish("privacy", "zh", testPrivacy)
+	if terms1.Version != 1 || privacy1.Version != 1 || terms1.Locale != adminapi.LegalDocumentLocale("zh") {
 		t.Fatalf("first versions: %+v %+v", terms1, privacy1)
 	}
 
@@ -77,7 +77,8 @@ func TestLegalConsentHTTP(t *testing.T) {
 	expect(t, "legal documents after publishing", rec, http.StatusOK, "")
 	decode(t, rec, &public)
 	if len(public.Documents) != 2 || public.Documents[0].Kind != consoleapi.LegalDocumentKind("privacy") ||
-		public.Documents[1].Body != testTerms || public.Documents[1].PublishedAt.IsZero() {
+		public.Documents[1].Body != testTerms || public.Documents[1].Locale != consoleapi.LegalDocumentLocale("zh") ||
+		public.Documents[1].PublishedAt.IsZero() {
 		t.Fatalf("public documents: %+v", public.Documents)
 	}
 
@@ -92,13 +93,13 @@ func TestLegalConsentHTTP(t *testing.T) {
 	}
 	expect(t, "a key list before accepting", console.do(http.MethodGet, "/keys", "", as(owner)), http.StatusForbidden, consoleapi.ErrorCodeConsentRequired)
 	expect(t, "a stale acceptance", console.do(http.MethodPost, "/legal/accept",
-		`{"consent":[{"kind":"terms","version":2},{"kind":"privacy","version":1}]}`, as(owner)),
+		`{"consent":[{"kind":"terms","locale":"zh","version":2},{"kind":"privacy","locale":"zh","version":1}]}`, as(owner)),
 		http.StatusForbidden, consoleapi.ErrorCodeConsentRequired)
 	expect(t, "accepting both documents", console.do(http.MethodPost, "/legal/accept",
-		`{"consent":[{"kind":"terms","version":1},{"kind":"privacy","version":1}]}`, as(owner)), http.StatusNoContent, "")
+		`{"consent":[{"kind":"terms","locale":"zh","version":1},{"kind":"privacy","locale":"zh","version":1}]}`, as(owner)), http.StatusNoContent, "")
 	expect(t, "a key list after accepting", console.do(http.MethodGet, "/keys", "", as(owner)), http.StatusOK, "")
 
-	terms2 := publish("terms", testTerms+" Version two.")
+	terms2 := publish("terms", "zh", testTerms+" Version two.")
 	if terms2.Version != 2 {
 		t.Fatalf("second terms version: %+v", terms2)
 	}
@@ -110,7 +111,7 @@ func TestLegalConsentHTTP(t *testing.T) {
 		t.Fatalf("the session's pending consent after a new version: %+v", session.Consent)
 	}
 	expect(t, "accepting the new version", console.do(http.MethodPost, "/legal/accept",
-		`{"consent":[{"kind":"terms","version":2},{"kind":"privacy","version":1}]}`, as(owner)), http.StatusNoContent, "")
+		`{"consent":[{"kind":"terms","locale":"zh","version":2},{"kind":"privacy","locale":"zh","version":1}]}`, as(owner)), http.StatusNoContent, "")
 	expect(t, "a key list after accepting the new version", console.do(http.MethodGet, "/keys", "", as(owner)), http.StatusOK, "")
 
 	// An invite registration records the versions with the user it makes.
@@ -119,10 +120,10 @@ func TestLegalConsentHTTP(t *testing.T) {
 	expect(t, "an invite registration without consent", rec, http.StatusForbidden, consoleapi.ErrorCodeConsentRequired)
 	rec = console.do(http.MethodPost, "/auth/register",
 		`{"invite_code":"`+session.User.InviteCode+`","email":"consented@example.com","password":"another horse battery",`+
-			`"consent":[{"kind":"terms","version":2},{"kind":"privacy","version":1}]}`)
+			`"consent":[{"kind":"terms","locale":"zh","version":2},{"kind":"privacy","locale":"zh","version":1}]}`)
 	expect(t, "an invite registration with consent", rec, http.StatusCreated, "")
-	if got := admin.text(`SELECT string_agg(a.kind || ' ' || a.version, ',' ORDER BY a.kind) FROM accounts.legal_acceptances a
-		JOIN accounts.users u ON u.id = a.user_id WHERE u.email = 'consented@example.com'`); got != "privacy 1,terms 2" {
+	if got := admin.text(`SELECT string_agg(a.kind || ' ' || a.locale || ' ' || a.version, ',' ORDER BY a.kind) FROM accounts.legal_acceptances a
+		JOIN accounts.users u ON u.id = a.user_id WHERE u.email = 'consented@example.com'`); got != "privacy zh 1,terms zh 2" {
 		t.Errorf("the registration's acceptances: %q", got)
 	}
 }

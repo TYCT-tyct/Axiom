@@ -17,14 +17,30 @@ async function signIn(page: Page, email = knownEmail, password = knownPassword) 
 const demoDocuments = (): Schemas["LegalDocument"][] => [
   {
     kind: "terms",
+    locale: "zh",
     version: 3,
-    body: "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】\nDemo text, not legal advice; replace before launch.\n\n一、服务说明\n这是服务条款的演示文本。",
+    body: "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】\n\n# Axiom 服务条款（示例）\n\n## 服务说明\n\n这是服务条款的演示文本。",
     published_at: "2026-11-04T00:00:00Z",
   },
   {
     kind: "privacy",
+    locale: "zh",
     version: 2,
-    body: "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】\nDemo text, not legal advice; replace before launch.\n\n一、引言与适用范围\n这是隐私政策的演示文本。",
+    body: "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】\n\n# Axiom 隐私政策（示例）\n\n## 引言与适用范围\n\n这是隐私政策的演示文本。",
+    published_at: "2026-11-04T00:00:00Z",
+  },
+  {
+    kind: "terms",
+    locale: "en",
+    version: 1,
+    body: "Demo text, not legal advice; replace before launch.\n\n# Axiom Terms of Service (Demo)\n\n## The Service\n\nThis is demo terms text.",
+    published_at: "2026-11-04T00:00:00Z",
+  },
+  {
+    kind: "privacy",
+    locale: "en",
+    version: 1,
+    body: "Demo text, not legal advice; replace before launch.\n\n# Axiom Privacy Policy (Demo)\n\n## Introduction and Scope\n\nThis is demo privacy text.",
     published_at: "2026-11-04T00:00:00Z",
   },
 ];
@@ -316,9 +332,12 @@ test.describe("registering", () => {
     await page.goto(`/console/register?invite=${goodInvite}`);
     await expect(page.getByRole("region", { name: "服务条款" })).toBeVisible();
     await expect(page.getByRole("region", { name: "隐私政策" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: /服务条款.*第 3 版/ })).toBeVisible();
-    await expect(page.getByRole("heading", { name: /隐私政策.*第 2 版/ })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "服务条款" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "隐私政策" })).toBeVisible();
+    await expect(page.getByText("第 3 版")).toBeVisible();
+    await expect(page.getByText("第 2 版")).toBeVisible();
     await expect(page.getByText("【示例文本（demo）").first()).toBeVisible();
+    await expect(page.getByText("## 服务说明")).toHaveCount(0);
     const submit = page.getByRole("button", { name: "注册", exact: true });
     await expect(submit).toBeDisabled();
     await page.getByLabel("邮箱").fill("new@example.com");

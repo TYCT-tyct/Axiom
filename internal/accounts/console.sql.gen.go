@@ -974,15 +974,19 @@ const validSession = `-- name: ValidSession :many
 SELECT s.site_id, s.surface, s.level, s.csrf_token, s.factor_version,
     EXISTS (
         SELECT 1
-        FROM accounts.legal_documents d
-        WHERE d.site_id = s.site_id
-            AND d.version = (SELECT max(x.version) FROM accounts.legal_documents x
-                WHERE x.site_id = d.site_id AND x.kind = d.kind)
-            AND NOT EXISTS (
-                SELECT 1 FROM accounts.legal_acceptances a
-                WHERE a.site_id = s.site_id AND a.user_id = s.user_id
-                    AND a.kind = d.kind AND a.version >= d.version
-            )
+        FROM (SELECT DISTINCT kind FROM accounts.legal_documents WHERE site_id = s.site_id) k
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM accounts.legal_documents d
+            WHERE d.site_id = s.site_id AND d.kind = k.kind
+                AND d.version = (SELECT max(x.version) FROM accounts.legal_documents x
+                    WHERE x.site_id = d.site_id AND x.kind = d.kind AND x.locale = d.locale)
+                AND EXISTS (
+                    SELECT 1 FROM accounts.legal_acceptances a
+                    WHERE a.site_id = s.site_id AND a.user_id = s.user_id
+                        AND a.kind = d.kind AND a.locale = d.locale AND a.version = d.version
+                )
+        )
     ) AS consent_pending
 FROM accounts.sessions s
 JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id

@@ -15,8 +15,10 @@ import (
 
 // The kinds of legal document a site publishes. They are the contract's enum and the table's check.
 const (
-	LegalTerms   = "terms"
-	LegalPrivacy = "privacy"
+	LegalTerms    = "terms"
+	LegalPrivacy  = "privacy"
+	LegalLocaleZH = "zh"
+	LegalLocaleEN = "en"
 )
 
 // maxLegalBody is the most a document may hold, in characters: the table's bound and the contract's maxLength.
@@ -29,6 +31,7 @@ var ErrConsentRequired = errors.New("accounts: the current legal documents must 
 // version, so an acceptance keeps naming the text that was shown.
 type LegalDocument struct {
 	Kind        string
+	Locale      string
 	Version     int
 	Body        string
 	PublishedAt time.Time
@@ -37,6 +40,7 @@ type LegalDocument struct {
 // DocumentVersion names a document version, which is what a page accepts and an acceptance records.
 type DocumentVersion struct {
 	Kind    string
+	Locale  string
 	Version int
 }
 
@@ -45,12 +49,16 @@ type LegalDocumentError struct{ Field, Reason string }
 
 func (e *LegalDocumentError) Error() string { return "accounts: " + e.Field + " " + e.Reason }
 
-// PublishLegalDocument adds the next version of kind for the site and records it. The site row is locked so two
+// PublishLegalDocument adds the next version of kind and locale for the site and records it. Versions count per kind
+// and locale, so a correction to one language does not force a new version of the other. The site row is locked so two
 // publications cannot choose the same version, and the audit entry carries a digest and the length rather than the
 // text: a long document would exceed the entry's limit.
-func (s *Service) PublishLegalDocument(ctx context.Context, tx pg.Tx, actor audit.Actor, site SiteID, kind, body, reason string) (LegalDocument, error) {
+func (s *Service) PublishLegalDocument(ctx context.Context, tx pg.Tx, actor audit.Actor, site SiteID, kind, locale, body, reason string) (LegalDocument, error) {
 	if kind != LegalTerms && kind != LegalPrivacy {
 		return LegalDocument{}, &LegalDocumentError{"kind", "must be terms or privacy"}
+	}
+	if locale != LegalLocaleZH && locale != LegalLocaleEN {
+		return LegalDocument{}, &LegalDocumentError{"locale", "must be zh or en"}
 	}
 	switch {
 	case body == "":
@@ -65,12 +73,12 @@ func (s *Service) PublishLegalDocument(ctx context.Context, tx pg.Tx, actor audi
 	if len(locked) == 0 {
 		return LegalDocument{}, ErrNotFound
 	}
-	version, err := s.queries.NextLegalVersion(ctx, tx, NextLegalVersionParams{SiteID: uuid.UUID(site), Kind: kind})
+	version, err := s.queries.NextLegalVersion(ctx, tx, NextLegalVersionParams{SiteID: uuid.UUID(site), Kind: kind, Locale: locale})
 	if err != nil {
 		return LegalDocument{}, fmt.Errorf("read the next legal document version: %w", err)
 	}
 	publishedAt, err := s.queries.InsertLegalDocument(ctx, tx, InsertLegalDocumentParams{
-		SiteID: uuid.UUID(site), Kind: kind, Version: version, Body: body,
+		SiteID: uuid.UUID(site), Kind: kind, Locale: locale, Version: version, Body: body,
 	})
 	if err != nil {
 		return LegalDocument{}, fmt.Errorf("insert the legal document: %w", err)
@@ -80,17 +88,17 @@ func (s *Service) PublishLegalDocument(ctx context.Context, tx pg.Tx, actor audi
 		Actor: actor, Action: "site_legal_document.publish", Reason: reason,
 		Target: audit.Target{Module: "accounts", Kind: "site", ID: site.TypeID(), Site: uuid.UUID(site)},
 		Detail: map[string]any{
-			"kind": kind, "version": version,
+			"kind": kind, "locale": locale, "version": version,
 			"characters": utf8.RuneCountInString(body), "sha256": fmt.Sprintf("%x", sum),
 		},
 	}); err != nil {
 		return LegalDocument{}, err
 	}
-	return LegalDocument{Kind: kind, Version: int(version), Body: body, PublishedAt: publishedAt.Time}, nil
+	return LegalDocument{Kind: kind, Locale: locale, Version: int(version), Body: body, PublishedAt: publishedAt.Time}, nil
 }
 
-// CurrentLegalDocuments reads the latest version of each kind for the site, which is what a page shows and a
-// registration must accept. The text is public, so the read runs in the site's scope.
+// CurrentLegalDocuments reads the latest version of each kind in each locale for the site, which is what a page may
+// show and a registration must accept. The text is public, so the read runs in the site's scope.
 func (s *Service) CurrentLegalDocuments(ctx context.Context, site SiteID) ([]LegalDocument, error) {
 	var documents []LegalDocument
 	err := s.db.ReadTx(ctx, pg.SiteScope(uuid.UUID(site)), func(tx pg.Tx) error {
@@ -111,18 +119,18 @@ func (s *Service) currentLegalDocuments(ctx context.Context, tx pg.Tx, site Site
 	}
 	documents := make([]LegalDocument, len(rows))
 	for i, row := range rows {
-		documents[i] = LegalDocument{Kind: row.Kind, Version: int(row.Version), Body: row.Body, PublishedAt: row.PublishedAt.Time}
+		documents[i] = LegalDocument{Kind: row.Kind, Locale: row.Locale, Version: int(row.Version), Body: row.Body, PublishedAt: row.PublishedAt.Time}
 	}
 	return documents, nil
 }
 
-// LegalDocumentHistory reads one page of every kind's versions, newest first within a kind, after the cursor position.
-// It asks for one row more than the page so the caller knows whether a next page exists. The caller's transaction holds
-// the platform scope.
+// LegalDocumentHistory reads one page of every kind's and locale's versions, newest first within a pair, after the
+// cursor position. It asks for one row more than the page so the caller knows whether a next page exists. The caller's
+// transaction holds the platform scope.
 func (s *Service) LegalDocumentHistory(ctx context.Context, tx pg.Tx, site SiteID, after *DocumentVersion, limit int) ([]LegalDocument, bool, error) {
 	params := LegalDocumentHistoryParams{SiteID: uuid.UUID(site), PageSize: int32(limit + 1)} // #nosec G115 -- the admin contract bounds the page size at 200
 	if after != nil {
-		params.CursorKind, params.CursorVersion = after.Kind, int32(after.Version) // #nosec G115 -- the cursor comes from a published version
+		params.CursorKind, params.CursorLocale, params.CursorVersion = after.Kind, after.Locale, int32(after.Version) // #nosec G115 -- the cursor comes from a published version
 	}
 	rows, err := s.queries.LegalDocumentHistory(ctx, tx, params)
 	if err != nil {
@@ -134,13 +142,15 @@ func (s *Service) LegalDocumentHistory(ctx context.Context, tx pg.Tx, site SiteI
 	}
 	documents := make([]LegalDocument, len(rows))
 	for i, row := range rows {
-		documents[i] = LegalDocument{Kind: row.Kind, Version: int(row.Version), Body: row.Body, PublishedAt: row.PublishedAt.Time}
+		documents[i] = LegalDocument{Kind: row.Kind, Locale: row.Locale, Version: int(row.Version), Body: row.Body, PublishedAt: row.PublishedAt.Time}
 	}
 	return documents, more, nil
 }
 
-// PendingLegalDocuments is what the signed-in user has not accepted at its current version. An empty result means
-// every current document is accepted, and a site with no documents always has an empty one.
+// PendingLegalDocuments is what the signed-in user has not accepted at a current version. A kind is satisfied when a
+// current document of that kind in any locale is accepted; when it is not, the kind's newest current document is
+// returned, one per kind, so the list can itself be accepted. The page chooses the locale it shows from the full
+// current list. An empty result means every kind is accepted, and a site with no documents always has an empty one.
 func (s *Service) PendingLegalDocuments(ctx context.Context, p Principal) ([]DocumentVersion, error) {
 	var pending []DocumentVersion
 	err := s.db.ReadTx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
@@ -163,30 +173,46 @@ func (s *Service) pendingLegalDocuments(ctx context.Context, tx pg.Tx, site Site
 	if err != nil {
 		return nil, err
 	}
-	var pending []DocumentVersion
+	satisfied := make(map[string]bool, len(current))
+	newest := make(map[string]LegalDocument, len(current))
+	var kinds []string
 	for _, document := range current {
-		if accepted[document.Kind] < document.Version {
-			pending = append(pending, DocumentVersion{Kind: document.Kind, Version: document.Version})
+		if accepted[DocumentVersion{Kind: document.Kind, Locale: document.Locale, Version: document.Version}] {
+			satisfied[document.Kind] = true
+		}
+		chosen, seen := newest[document.Kind]
+		if !seen {
+			kinds = append(kinds, document.Kind)
+		}
+		if !seen || document.Version > chosen.Version {
+			newest[document.Kind] = document
+		}
+	}
+	var pending []DocumentVersion
+	for _, kind := range kinds {
+		if document := newest[kind]; !satisfied[kind] {
+			pending = append(pending, DocumentVersion{Kind: document.Kind, Locale: document.Locale, Version: document.Version})
 		}
 	}
 	return pending, nil
 }
 
-func (s *Service) acceptedLegalVersions(ctx context.Context, tx pg.Tx, site SiteID, user UserID) (map[string]int, error) {
+func (s *Service) acceptedLegalVersions(ctx context.Context, tx pg.Tx, site SiteID, user UserID) (map[DocumentVersion]bool, error) {
 	rows, err := s.queries.AcceptedLegalVersions(ctx, tx, AcceptedLegalVersionsParams{SiteID: uuid.UUID(site), UserID: uuid.UUID(user)})
 	if err != nil {
 		return nil, fmt.Errorf("read the accepted legal versions: %w", err)
 	}
-	accepted := make(map[string]int, len(rows))
+	accepted := make(map[DocumentVersion]bool, len(rows))
 	for _, row := range rows {
-		accepted[row.Kind] = int(row.Version)
+		accepted[DocumentVersion{Kind: row.Kind, Locale: row.Locale, Version: int(row.Version)}] = true
 	}
 	return accepted, nil
 }
 
-// AcceptLegalDocuments records the user's acceptance of every current document at the version the request names. A
-// missing, stale or extra version is ErrConsentRequired, so a page must send exactly what getLegalDocuments showed;
-// accepting the same version again is a no-op. The site and user come from the session, never from the request.
+// AcceptLegalDocuments records the user's acceptance of the current version of each kind, in the locale the request
+// names. A missing, stale or duplicate kind is ErrConsentRequired, so a page sends exactly one current document per
+// kind, as getLegalDocuments showed it; accepting the same version again is a no-op. The site and user come from the
+// session, never from the request.
 func (s *Service) AcceptLegalDocuments(ctx context.Context, p Principal, accepted []DocumentVersion) error {
 	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
 		documents, err := s.currentVersionsAccepted(ctx, tx, p.site, accepted)
@@ -197,7 +223,7 @@ func (s *Service) AcceptLegalDocuments(ctx context.Context, p Principal, accepte
 	})
 }
 
-// currentVersionsAccepted checks that accepted names every current document at its current version, and returns that
+// currentVersionsAccepted checks that accepted names exactly one current document per kind, and returns that
 // canonical set. A site with no documents requires no acceptance, and extra versions are refused: they mean the page
 // was built from other documents than the ones now in force.
 func (s *Service) currentVersionsAccepted(ctx context.Context, tx pg.Tx, site SiteID, accepted []DocumentVersion) ([]DocumentVersion, error) {
@@ -205,22 +231,28 @@ func (s *Service) currentVersionsAccepted(ctx context.Context, tx pg.Tx, site Si
 	if err != nil {
 		return nil, err
 	}
-	given := make(map[string]int, len(accepted))
+	given := make(map[string]DocumentVersion, len(accepted))
+	kinds := make(map[string]bool)
+	for _, document := range current {
+		kinds[document.Kind] = true
+	}
 	for _, document := range accepted {
 		if _, twice := given[document.Kind]; twice {
 			return nil, ErrConsentRequired
 		}
-		given[document.Kind] = document.Version
+		given[document.Kind] = document
 	}
-	if len(given) != len(current) {
+	if len(given) != len(kinds) {
 		return nil, ErrConsentRequired
 	}
-	documents := make([]DocumentVersion, len(current))
-	for i, document := range current {
-		if given[document.Kind] != document.Version {
-			return nil, ErrConsentRequired
+	documents := make([]DocumentVersion, 0, len(current))
+	for _, document := range current {
+		if chosen, ok := given[document.Kind]; ok && chosen.Locale == document.Locale && chosen.Version == document.Version {
+			documents = append(documents, DocumentVersion{Kind: document.Kind, Locale: document.Locale, Version: document.Version})
 		}
-		documents[i] = DocumentVersion{Kind: document.Kind, Version: document.Version}
+	}
+	if len(documents) != len(given) {
+		return nil, ErrConsentRequired
 	}
 	return documents, nil
 }
@@ -231,7 +263,7 @@ func insertLegalAcceptances(ctx context.Context, tx pg.Tx, q *Queries, site Site
 	for _, document := range documents {
 		if err := q.InsertLegalAcceptance(ctx, tx, InsertLegalAcceptanceParams{
 			ID: uuid.NewV7(), SiteID: uuid.UUID(site), AccountID: uuid.UUID(account), UserID: uuid.UUID(user),
-			Kind: document.Kind, Version: int32(document.Version), // #nosec G115 -- the version comes from the table, which checks it is at least 1
+			Kind: document.Kind, Locale: document.Locale, Version: int32(document.Version), // #nosec G115 -- the version comes from the table, which checks it is at least 1
 		}); err != nil {
 			return fmt.Errorf("record a legal document acceptance: %w", err)
 		}

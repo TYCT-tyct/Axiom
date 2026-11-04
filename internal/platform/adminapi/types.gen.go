@@ -651,6 +651,24 @@ func (e LegalDocumentKind) Valid() bool {
 	}
 }
 
+// Defines values for LegalDocumentLocale.
+const (
+	En LegalDocumentLocale = "en"
+	Zh LegalDocumentLocale = "zh"
+)
+
+// Valid indicates whether the value is a known member of the LegalDocumentLocale enum.
+func (e LegalDocumentLocale) Valid() bool {
+	switch e {
+	case En:
+		return true
+	case Zh:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LoginField.
 const (
 	LoginFieldAccessToken          LoginField = "access_token"
@@ -2675,17 +2693,19 @@ type KeyLimitsView struct {
 	Limits KeyLimits `json:"limits"`
 }
 
-// LegalDocument One version of one of the site's legal documents; the text is plain text, never HTML.
+// LegalDocument One version of one of the site's legal documents in one locale; the body is Markdown, never HTML.
 type LegalDocument struct {
-	Body        string            `json:"body"`
-	Kind        LegalDocumentKind `json:"kind"`
-	PublishedAt time.Time         `json:"published_at"`
-	Version     int               `json:"version"`
+	// Body Markdown headings, paragraphs, and lists. Rendered as React text, never interpreted as HTML.
+	Body        string              `json:"body"`
+	Kind        LegalDocumentKind   `json:"kind"`
+	Locale      LegalDocumentLocale `json:"locale"`
+	PublishedAt time.Time           `json:"published_at"`
+	Version     int                 `json:"version"`
 }
 
 // LegalDocumentHistory defines model for LegalDocumentHistory.
 type LegalDocumentHistory struct {
-	// Documents Newest first within a kind, at most `limit` rows.
+	// Documents Newest first within a kind and locale, at most `limit` rows.
 	Documents []LegalDocument `json:"documents"`
 
 	// NextCursor Where the next page starts, or null on the last page.
@@ -2695,10 +2715,14 @@ type LegalDocumentHistory struct {
 // LegalDocumentKind defines model for LegalDocumentKind.
 type LegalDocumentKind string
 
+// LegalDocumentLocale defines model for LegalDocumentLocale.
+type LegalDocumentLocale string
+
 // LegalDocumentPublish defines model for LegalDocumentPublish.
 type LegalDocumentPublish struct {
-	Body string            `json:"body"`
-	Kind LegalDocumentKind `json:"kind"`
+	Body   string              `json:"body"`
+	Kind   LegalDocumentKind   `json:"kind"`
+	Locale LegalDocumentLocale `json:"locale"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
@@ -2706,8 +2730,9 @@ type LegalDocumentPublish struct {
 
 // LegalDocumentVersion defines model for LegalDocumentVersion.
 type LegalDocumentVersion struct {
-	Kind    LegalDocumentKind `json:"kind"`
-	Version int               `json:"version"`
+	Kind    LegalDocumentKind   `json:"kind"`
+	Locale  LegalDocumentLocale `json:"locale"`
+	Version int                 `json:"version"`
 }
 
 // LoginField defines model for LoginField.
@@ -4230,7 +4255,7 @@ type Session struct {
 
 // SessionConsent The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead.
 type SessionConsent struct {
-	// Required Current documents this user has not accepted; empty when every one is accepted.
+	// Required One current document per kind this user still has to accept; empty when one current version of every kind is accepted.
 	Required []LegalDocumentVersion `json:"required"`
 }
 

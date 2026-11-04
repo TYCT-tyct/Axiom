@@ -17,9 +17,9 @@ const (
 	placeholderPrivacy = "Placeholder privacy policy for tests: this is not a real policy."
 )
 
-// TestLegalDocumentVersionsAndAcceptance: publishing adds a version per kind, the current one is the latest, and an
-// acceptance names exactly the current versions and keeps its first time. A stale or extra version is refused, and
-// the audit entry carries the version and a digest rather than the text.
+// TestLegalDocumentVersionsAndAcceptance: publishing adds a version per kind and locale, the current one is the latest
+// of each pair, and an acceptance names exactly one current version per kind and keeps its first time. A stale or
+// extra version is refused, and the audit entry carries the version and a digest rather than the text.
 //
 //nolint:cyclop,gocognit // one publication-to-acceptance flow: each step is the mechanism under test.
 func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
@@ -27,12 +27,12 @@ func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
 	db, _ := open(t)
 	s := node(t, db, hashKeys(t, 1), nil)
 	site, account, user := accounts.SiteID(s1), accounts.AccountID(a1), accounts.UserID(u1)
-	publish := func(kind, body string) accounts.LegalDocument {
+	publish := func(kind, locale, body string) accounts.LegalDocument {
 		t.Helper()
 		var document accounts.LegalDocument
 		if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 			var err error
-			document, err = s.PublishLegalDocument(t.Context(), tx, system, site, kind, body, "test")
+			document, err = s.PublishLegalDocument(t.Context(), tx, system, site, kind, locale, body, "test")
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -40,24 +40,28 @@ func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
 		return document
 	}
 
-	terms1 := publish(accounts.LegalTerms, placeholderTerms)
-	if terms1.Kind != accounts.LegalTerms || terms1.Version != 1 || terms1.PublishedAt.IsZero() {
+	terms1 := publish(accounts.LegalTerms, accounts.LegalLocaleZH, placeholderTerms)
+	if terms1.Kind != accounts.LegalTerms || terms1.Locale != accounts.LegalLocaleZH || terms1.Version != 1 || terms1.PublishedAt.IsZero() {
 		t.Fatalf("the first terms version: %+v", terms1)
 	}
-	privacy1 := publish(accounts.LegalPrivacy, placeholderPrivacy)
-	if privacy1.Kind != accounts.LegalPrivacy || privacy1.Version != 1 {
+	privacy1 := publish(accounts.LegalPrivacy, accounts.LegalLocaleZH, placeholderPrivacy)
+	if privacy1.Kind != accounts.LegalPrivacy || privacy1.Locale != accounts.LegalLocaleZH || privacy1.Version != 1 {
 		t.Fatalf("the first privacy version: %+v", privacy1)
 	}
-	terms2 := publish(accounts.LegalTerms, placeholderTerms+" Version two.")
-	if terms2.Version != 2 { // versions count per kind, not per site
+	terms2 := publish(accounts.LegalTerms, accounts.LegalLocaleZH, placeholderTerms+" Version two.")
+	if terms2.Version != 2 { // versions count per kind and locale, not per site
 		t.Fatalf("the second terms version: %+v", terms2)
+	}
+	termsEN := publish(accounts.LegalTerms, accounts.LegalLocaleEN, "English placeholder terms for tests.")
+	if termsEN.Version != 1 { // the English stream starts at 1 independently
+		t.Fatalf("the first English terms version: %+v", termsEN)
 	}
 
 	current, err := s.CurrentLegalDocuments(t.Context(), site)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(current) != 2 || current[0].Kind != accounts.LegalPrivacy || current[1].Version != 2 {
+	if len(current) != 3 || current[0].Kind != accounts.LegalPrivacy || current[1].Locale != accounts.LegalLocaleEN || current[2].Version != 2 {
 		t.Fatalf("current documents: %+v", current)
 	}
 	if none, err := s.CurrentLegalDocuments(t.Context(), accounts.SiteID(s2)); err != nil || len(none) != 0 {
@@ -69,18 +73,21 @@ func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
 		var err error
 		history, more, err = s.LegalDocumentHistory(t.Context(), tx, site, nil, 200)
 		if err == nil && more {
-			t.Error("a site with three documents has a next page")
+			t.Error("a site with four documents has a next page")
 		}
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var versions []int
-	for _, document := range history {
-		versions = append(versions, document.Version)
-	}
-	if len(history) != 3 || !slices.Equal(versions, []int{1, 2, 1}) {
+	if len(history) != 4 {
 		t.Fatalf("history: %+v", history)
+	}
+	var pairVersions []string
+	for _, document := range history {
+		pairVersions = append(pairVersions, document.Kind+":"+document.Locale+":"+itoa(document.Version))
+	}
+	if !slices.Equal(pairVersions, []string{"privacy:zh:1", "terms:en:1", "terms:zh:2", "terms:zh:1"}) {
+		t.Fatalf("history: %v", pairVersions)
 	}
 
 	p := accounts.PrincipalForTest(site, account, user)
@@ -97,32 +104,32 @@ func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
 	if err := s.AcceptLegalDocuments(t.Context(), p, pending); err != nil {
 		t.Fatal(err)
 	}
-	if got := texts(t, db, platform, "SELECT kind || ' ' || version FROM accounts.legal_acceptances ORDER BY kind"); !slices.Equal(got, []string{"privacy 1", "terms 2"}) {
+	if got := texts(t, db, platform, "SELECT kind || ' ' || locale || ' ' || version FROM accounts.legal_acceptances ORDER BY kind, locale"); !slices.Equal(got, []string{"privacy zh 1", "terms zh 2"}) {
 		t.Fatalf("acceptances: %v", got)
 	}
-	firstAccepted := texts(t, db, platform, "SELECT accepted_at::text FROM accounts.legal_acceptances WHERE kind = 'terms'")[0]
+	firstAccepted := texts(t, db, platform, "SELECT accepted_at::text FROM accounts.legal_acceptances WHERE kind = 'terms' AND locale = 'zh'")[0]
 	if err := s.AcceptLegalDocuments(t.Context(), p, pending); err != nil {
 		t.Fatal(err)
 	}
-	if got := texts(t, db, platform, "SELECT accepted_at::text FROM accounts.legal_acceptances WHERE kind = 'terms'"); len(got) != 1 || got[0] != firstAccepted {
+	if got := texts(t, db, platform, "SELECT accepted_at::text FROM accounts.legal_acceptances WHERE kind = 'terms' AND locale = 'zh'"); len(got) != 1 || got[0] != firstAccepted {
 		t.Errorf("a retried acceptance: %v, want one row at %s", got, firstAccepted)
 	}
 	if pending, err := s.PendingLegalDocuments(t.Context(), p); err != nil || len(pending) != 0 {
 		t.Fatalf("pending after accepting: %+v, %v", pending, err)
 	}
 
-	publish(accounts.LegalTerms, placeholderTerms+" Version three.")
+	publish(accounts.LegalTerms, accounts.LegalLocaleZH, placeholderTerms+" Version three.")
 	pending, err = s.PendingLegalDocuments(t.Context(), p)
-	if err != nil || len(pending) != 1 || pending[0].Version != 3 {
+	if err != nil || len(pending) != 1 || pending[0].Version != 3 || pending[0].Locale != accounts.LegalLocaleZH {
 		t.Fatalf("pending after a new version: %+v, %v", pending, err)
 	}
-	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{{Kind: accounts.LegalTerms, Version: 2}}); !errors.Is(err, accounts.ErrConsentRequired) {
+	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleZH, Version: 2}}); !errors.Is(err, accounts.ErrConsentRequired) {
 		t.Errorf("accepting the superseded version: %v, want ErrConsentRequired", err)
 	}
-	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{{Kind: accounts.LegalTerms, Version: 3}, {Kind: accounts.LegalPrivacy, Version: 1}, {Kind: "marketing", Version: 1}}); !errors.Is(err, accounts.ErrConsentRequired) {
+	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleZH, Version: 3}, {Kind: accounts.LegalPrivacy, Locale: accounts.LegalLocaleZH, Version: 1}, {Kind: "marketing", Locale: accounts.LegalLocaleZH, Version: 1}}); !errors.Is(err, accounts.ErrConsentRequired) {
 		t.Errorf("accepting an extra kind: %v, want ErrConsentRequired", err)
 	}
-	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{{Kind: accounts.LegalTerms, Version: 3}, {Kind: accounts.LegalPrivacy, Version: 1}}); err != nil {
+	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleZH, Version: 3}, {Kind: accounts.LegalPrivacy, Locale: accounts.LegalLocaleZH, Version: 1}}); err != nil {
 		t.Fatal(err)
 	}
 	if pending, err := s.PendingLegalDocuments(t.Context(), p); err != nil || len(pending) != 0 {
@@ -130,14 +137,15 @@ func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
 	}
 
 	for _, c := range []struct {
-		name, kind, body, field string
+		name, kind, locale, body, field string
 	}{
-		{"an unknown kind", "marketing", "Text.", "kind"},
-		{"an empty body", accounts.LegalTerms, "", "body"},
-		{"a body past the limit", accounts.LegalTerms, strings.Repeat("x", 65537), "body"},
+		{"an unknown kind", "marketing", accounts.LegalLocaleZH, "Text.", "kind"},
+		{"an unknown locale", accounts.LegalTerms, "fr", "Text.", "locale"},
+		{"an empty body", accounts.LegalTerms, accounts.LegalLocaleZH, "", "body"},
+		{"a body past the limit", accounts.LegalTerms, accounts.LegalLocaleZH, strings.Repeat("x", 65537), "body"},
 	} {
 		err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-			_, err := s.PublishLegalDocument(t.Context(), tx, system, site, c.kind, c.body, "test")
+			_, err := s.PublishLegalDocument(t.Context(), tx, system, site, c.kind, c.locale, c.body, "test")
 			return err
 		})
 		var refusal *accounts.LegalDocumentError
@@ -146,18 +154,18 @@ func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
 		}
 	}
 	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		_, err := s.PublishLegalDocument(t.Context(), tx, system, accounts.SiteID(uuid.NewV7()), accounts.LegalTerms, "Text.", "test")
+		_, err := s.PublishLegalDocument(t.Context(), tx, system, accounts.SiteID(uuid.NewV7()), accounts.LegalTerms, accounts.LegalLocaleZH, "Text.", "test")
 		return err
 	})
 	if !errors.Is(err, accounts.ErrNotFound) {
 		t.Errorf("publishing for an unknown site: %v, want ErrNotFound", err)
 	}
 
-	if got := texts(t, db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action = 'site_legal_document.publish'"); !slices.Equal(got, []string{"4"}) {
-		t.Errorf("publication audit entries: %v, want 4", got)
+	if got := texts(t, db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action = 'site_legal_document.publish'"); !slices.Equal(got, []string{"5"}) {
+		t.Errorf("publication audit entries: %v, want 5", got)
 	}
-	if got := texts(t, db, platform, `SELECT (detail->>'version') || ' ' || (detail ? 'sha256')::text || ' ' || (detail ? 'body')::text
-		FROM platform.audit_log WHERE action = 'site_legal_document.publish' ORDER BY id LIMIT 1`); !slices.Equal(got, []string{"1 true false"}) {
+	if got := texts(t, db, platform, `SELECT (detail->>'version') || ' ' || (detail->>'locale') || ' ' || (detail ? 'sha256')::text || ' ' || (detail ? 'body')::text
+		FROM platform.audit_log WHERE action = 'site_legal_document.publish' ORDER BY id LIMIT 1`); !slices.Equal(got, []string{"1 zh true false"}) {
 		t.Errorf("the first audit detail: %v", got)
 	}
 }

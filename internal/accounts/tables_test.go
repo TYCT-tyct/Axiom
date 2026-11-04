@@ -477,12 +477,12 @@ func TestStartupCheckCoversTheTables(t *testing.T) {
 func TestLegalDocumentsArePublicAndAcceptancesBelongToTheirAccount(t *testing.T) {
 	t.Parallel()
 	db, _ := open(t)
-	if _, err := exec(t, db, platform, `INSERT INTO accounts.legal_documents (site_id, kind, version, body)
-		VALUES (:s1, 'terms', 1, 'Placeholder terms for the legal document test.')`); err != nil {
+	if _, err := exec(t, db, platform, `INSERT INTO accounts.legal_documents (site_id, kind, locale, version, body)
+		VALUES (:s1, 'terms', 'zh', 1, 'Placeholder terms for the legal document test.')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exec(t, db, pg.AccountScope(a1), `INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
-		VALUES (gen_random_uuid(), :s1, :a1, :u1, 'terms', 1)`); err != nil {
+	if _, err := exec(t, db, pg.AccountScope(a1), `INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, locale, version)
+		VALUES (gen_random_uuid(), :s1, :a1, :u1, 'terms', 'zh', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	scopes := map[string]struct {
@@ -503,12 +503,12 @@ func TestLegalDocumentsArePublicAndAcceptancesBelongToTheirAccount(t *testing.T)
 			t.Errorf("%s sees documents %v and acceptances %v, want %s and %s", name, documents, accepted, c.documents, c.accepted)
 		}
 	}
-	if _, err := attempt(t, db, pg.SiteScope(s1), `INSERT INTO accounts.legal_documents (site_id, kind, version, body)
-		VALUES (:s1, 'privacy', 1, 'Placeholder privacy text.')`); state(err) != "42501" {
+	if _, err := attempt(t, db, pg.SiteScope(s1), `INSERT INTO accounts.legal_documents (site_id, kind, locale, version, body)
+		VALUES (:s1, 'privacy', 'zh', 1, 'Placeholder privacy text.')`); state(err) != "42501" {
 		t.Errorf("a site scope inserting a document: %v, want permission denied", err)
 	}
-	if _, err := attempt(t, db, pg.AccountScope(a2), `INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
-		VALUES (gen_random_uuid(), :s1, :a1, :u1, 'terms', 1)`); state(err) != "42501" {
+	if _, err := attempt(t, db, pg.AccountScope(a2), `INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, locale, version)
+		VALUES (gen_random_uuid(), :s1, :a1, :u1, 'terms', 'zh', 1)`); state(err) != "42501" {
 		t.Errorf("another account recording an acceptance: %v, want permission denied", err)
 	}
 }
