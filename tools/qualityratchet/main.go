@@ -212,16 +212,21 @@ func measureFile(
 		sources.generated[filePath] = true
 		return nil
 	}
-	dir := path.Dir(filePath)
-	measured := sources.own(dir)
 	if isTest {
 		countTestComplexity(file, filePath, result)
 		return nil
 	}
+	measureProduction(file, filePath, source, sources.own(path.Dir(filePath)), result, sources)
+	return nil
+}
+
+// measureProduction records a non-test file's nolint directives, length and functions over the limit, and whether the
+// file holds code that coverage can measure.
+func measureProduction(file *ast.File, filePath string, source []byte, measured bool, result *measurement, sources *sourceTree) {
+	dir := path.Dir(filePath)
 	if measured {
 		sources.packages[dir] = true
 	}
-
 	countNolint(file, result)
 	if lines := lineCount(source); lines > fileLimit {
 		result.FilesOver500 = append(result.FilesOver500, fileMetric{Path: filePath, Lines: lines})
@@ -241,7 +246,6 @@ func measureFile(
 			})
 		}
 	}
-	return nil
 }
 
 // countTestComplexity records the test functions over the limit. Nolint directives and file length stay non-test: the

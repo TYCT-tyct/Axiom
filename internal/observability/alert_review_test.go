@@ -313,7 +313,61 @@ func TestSecuritySpikeUsesConfiguredThresholdAndRecovers(t *testing.T) {
 	}
 }
 
-//nolint:cyclop,gocognit // one batch with a high window and either a low window or a recovery is the point.
+// checkFrozenReceipt asserts the first receipt froze the burst's fields, not the later sample.
+func checkFrozenReceipt(t *testing.T, db *pg.DB, event uuid.UUID) {
+	t.Helper()
+	var raw []byte
+	alertTx(t, db, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT fields FROM observability.alert_receipts WHERE event_id=$1 AND sequence=0`, event).Scan(&raw)
+	})
+	var display map[string]string
+	if err := jsonx.Unmarshal(raw, &display); err != nil || display["value"] != "12" {
+		t.Fatalf("receipt did not freeze the burst: %s %v", raw, err)
+	}
+}
+
+// checkDelayedPaymentWindow writes a high sample and then a low one or a recovery in the same batch, and asserts the
+// completed window keeps the current sample and its receipt.
+func checkDelayedPaymentWindow(t *testing.T, resolved bool, next string) {
+	t.Helper()
+	db := openDB(t)
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	alertTx(t, db, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		c.Channels = []AlertChannel{{ID: "ops", Email: "ops@example.com"}}
+		c.Rules = []AlertRule{{ID: "verify", Kind: "payments.verify_failed", MinimumSeverity: "warning", Threshold: 10, Channel: "ops"}}
+		return SetAlertConfiguration(t.Context(), tx, c)
+	})
+	alertTx(t, db, func(tx pg.Tx) error {
+		if err := alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Fields: map[string]string{"value": "12"}}); err != nil {
+			return err
+		}
+		signal := alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Resolved: resolved}
+		if !resolved {
+			signal.Fields = map[string]string{"value": next}
+		}
+		return alert.Persist(t.Context(), tx, uuid.NewV7(), signal)
+	})
+	got := alertCycle(t, db, now)
+	if len(got) != 1 || len(got[0].Receipts) != 1 || got[0].Receipts[0].Sequence != 0 {
+		t.Fatalf("completed window was lost: %+v", got)
+	}
+	eventValue := "1"
+	if resolved {
+		eventValue = "12"
+	}
+	if got[0].Fields["value"] != eventValue {
+		t.Fatalf("event did not keep the current sample: %+v", got[0])
+	}
+	checkFrozenReceipt(t, db, got[0].ID)
+	if resolved && got[0].State != "resolved" {
+		t.Fatalf("recovery did not resolve: %+v", got[0])
+	}
+}
+
 func TestPaymentCompletedWindowsSurviveConsumerDelay(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -324,49 +378,7 @@ func TestPaymentCompletedWindowsSurviveConsumerDelay(t *testing.T) {
 		{name: "recovery", resolved: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			db := openDB(t)
-			now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
-			alertTx(t, db, func(tx pg.Tx) error {
-				c, err := GetAlertConfiguration(t.Context(), tx)
-				if err != nil {
-					return err
-				}
-				c.Channels = []AlertChannel{{ID: "ops", Email: "ops@example.com"}}
-				c.Rules = []AlertRule{{ID: "verify", Kind: "payments.verify_failed", MinimumSeverity: "warning", Threshold: 10, Channel: "ops"}}
-				return SetAlertConfiguration(t.Context(), tx, c)
-			})
-			alertTx(t, db, func(tx pg.Tx) error {
-				if err := alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Fields: map[string]string{"value": "12"}}); err != nil {
-					return err
-				}
-				next := alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Resolved: tc.resolved}
-				if !tc.resolved {
-					next.Fields = map[string]string{"value": tc.next}
-				}
-				return alert.Persist(t.Context(), tx, uuid.NewV7(), next)
-			})
-			got := alertCycle(t, db, now)
-			if len(got) != 1 || len(got[0].Receipts) != 1 || got[0].Receipts[0].Sequence != 0 {
-				t.Fatalf("completed window was lost: %+v", got)
-			}
-			eventValue := "1"
-			if tc.resolved {
-				eventValue = "12"
-			}
-			if got[0].Fields["value"] != eventValue {
-				t.Fatalf("event did not keep the current sample: %+v", got[0])
-			}
-			var raw []byte
-			alertTx(t, db, func(tx pg.Tx) error {
-				return tx.QueryRow(t.Context(), `SELECT fields FROM observability.alert_receipts WHERE event_id=$1 AND sequence=0`, got[0].ID).Scan(&raw)
-			})
-			var display map[string]string
-			if err := jsonx.Unmarshal(raw, &display); err != nil || display["value"] != "12" {
-				t.Fatalf("receipt did not freeze the burst: %s %v", raw, err)
-			}
-			if tc.resolved && got[0].State != "resolved" {
-				t.Fatalf("recovery did not resolve: %+v", got[0])
-			}
+			checkDelayedPaymentWindow(t, tc.resolved, tc.next)
 		})
 	}
 }

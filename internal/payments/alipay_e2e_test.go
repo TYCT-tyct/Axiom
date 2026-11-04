@@ -96,188 +96,242 @@ func alipayE2EGateway(t *testing.T, state *alipayE2EState) *alipayTestGateway {
 	}}
 }
 
-//nolint:cyclop,gocognit // one protocol walk: each step's settled state is the next step's input
-func TestAlipayLocalGatewayEndToEnd(t *testing.T) {
-	w := newTestWorld(t, Alipay{})
-	state := &alipayE2EState{orders: map[string]*alipayE2EOrder{}, refunds: map[string]string{}}
-	gateway := alipayE2EGateway(t, state)
-	server := httptest.NewTLSServer(gateway)
+// alipayE2E is one local Alipay world across the walk's phases: the paid order is what the refund phase refunds.
+type alipayE2E struct {
+	t        *testing.T
+	w        *world
+	state    *alipayE2EState
+	gateway  *alipayTestGateway
+	merchant Merchant
+	keys     *alipayTestKeys
+	paid     Order
+}
+
+func newAlipayE2E(t *testing.T) *alipayE2E {
+	t.Helper()
+	f := &alipayE2E{
+		t: t, w: newTestWorld(t, Alipay{}),
+		state: &alipayE2EState{orders: map[string]*alipayE2EOrder{}, refunds: map[string]string{}},
+		keys:  alipayKeys(t),
+	}
+	f.gateway = alipayE2EGateway(t, f.state)
+	server := httptest.NewTLSServer(f.gateway)
 	t.Cleanup(server.Close)
 	cfg := alipayTestConfig(t, server.URL, server.Certificate())
-	w.p.client = cfg.Client
-	w.open(w.siteA, RoundRobin)
-	in := w.input(w.siteA, MethodInput{Method: "alipay", Upstream: alipayPagePay, Fee: Fee{PPM: 30_000}, Enabled: true})
+	f.w.p.client = cfg.Client
+	f.w.open(f.w.siteA, RoundRobin)
+	in := f.w.input(f.w.siteA, MethodInput{Method: "alipay", Upstream: alipayPagePay, Fee: Fee{PPM: 30_000}, Enabled: true})
 	in.Kind, in.Settings, in.Secrets = "alipay", cfg.Settings, cfg.Secrets
 	in.RefundEnabled, in.UserRefund = true, true
-	merchant := w.mustSave(siteScope(w.siteA), in)
+	f.merchant = f.w.mustSave(siteScope(f.w.siteA), in)
+	return f
+}
 
-	o, checkout, err := w.place(10*yuan, "alipay-paid")
-	if err != nil {
-		t.Fatal(err)
-	}
-	keys := alipayKeys(t)
+// checkCheckout asserts the checkout carries a verifiable signature and the right amount, and returns that amount.
+func (f *alipayE2E) checkCheckout(o Order, checkout Checkout) string {
+	f.t.Helper()
 	u, err := url.Parse(checkout.PayURL)
 	if err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
 	form := u.Query()
-	if !alipayVerify([]byte(alipaySignText(form, true)), form.Get("sign"), &keys.app.PublicKey) {
-		t.Fatal("checkout signature does not verify")
+	if !alipayVerify([]byte(alipaySignText(form, true)), form.Get("sign"), &f.keys.app.PublicKey) {
+		f.t.Fatal("checkout signature does not verify")
 	}
 	var biz map[string]string
 	if err := jsonx.Unmarshal([]byte(form.Get("biz_content")), &biz); err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
 	amount := biz["total_amount"]
 	if amount != formatMinorText(o.Total) || biz["out_trade_no"] != o.ID.TypeID() {
-		t.Fatalf("%v", biz)
+		f.t.Fatalf("%v", biz)
 	}
-	state.settle(o.ID.TypeID(), amount, "T-"+o.ID.TypeID())
+	return amount
+}
 
+// checkCheckoutAndCallback asserts the checkout carries a verifiable signature and the right amount, the callback
+// credits once with a confirmation query, and a replay neither queries nor credits again.
+func (f *alipayE2E) checkCheckoutAndCallback() {
+	f.t.Helper()
+	o, checkout, err := f.w.place(10*yuan, "alipay-paid")
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.paid = o
+	amount := f.checkCheckout(o, checkout)
+	f.state.settle(o.ID.TypeID(), amount, "T-"+o.ID.TypeID())
 	v := url.Values{
 		"app_id": {alipayTestAppID}, "seller_id": {alipayTestSellerID},
 		"out_trade_no": {o.ID.TypeID()}, "trade_no": {"T-" + o.ID.TypeID()},
 		"trade_status": {"TRADE_SUCCESS"}, "total_amount": {amount},
 		"notify_type": {"trade_status_sync"}, "sign_type": {"RSA2"},
 	}
-	v = alipayNotification(t, v, keys.alipay)
-	response := w.callback(MerchantID(merchant.ID), http.MethodPost, v)
+	v = alipayNotification(f.t, v, f.keys.alipay)
+	response := f.w.callback(MerchantID(f.merchant.ID), http.MethodPost, v)
 	if response.Code != http.StatusOK || response.Body.String() != "success" {
-		t.Fatalf("callback %d %s", response.Code, response.Body)
+		f.t.Fatalf("callback %d %s", response.Code, response.Body)
 	}
-	w.assertCredit(o, o.Credits)
-	if state, trade, _ := w.stored(o.ID); state != "paid" || trade != "T-"+o.ID.TypeID() {
-		t.Fatalf("%s %s", state, trade)
+	f.w.assertCredit(o, o.Credits)
+	if state, trade, _ := f.w.stored(o.ID); state != "paid" || trade != "T-"+o.ID.TypeID() {
+		f.t.Fatalf("%s %s", state, trade)
 	}
-	if queries := gateway.counts(); queries != 1 {
-		t.Fatalf("confirmation queried %d times", queries)
+	if queries := f.gateway.counts(); queries != 1 {
+		f.t.Fatalf("confirmation queried %d times", queries)
 	}
 
 	// A replay of the exact committed receipt neither queries nor credits again.
-	response = w.callback(MerchantID(merchant.ID), http.MethodPost, v)
+	response = f.w.callback(MerchantID(f.merchant.ID), http.MethodPost, v)
 	if response.Code != http.StatusOK || response.Body.String() != "success" {
-		t.Fatalf("replay %d %s", response.Code, response.Body)
+		f.t.Fatalf("replay %d %s", response.Code, response.Body)
 	}
-	w.assertCredit(o, o.Credits)
-	if queries := gateway.counts(); queries != 1 {
-		t.Fatalf("replay queried %d times", queries)
+	f.w.assertCredit(o, o.Credits)
+	if queries := f.gateway.counts(); queries != 1 {
+		f.t.Fatalf("replay queried %d times", queries)
 	}
+}
 
-	// An invalid amount is a verified payment with nowhere to go: review, no credit, one discrepancy.
-	bad, _, err := w.place(yuan, "alipay-invalid")
+// checkInvalidAmount asserts a verified payment whose amount cannot be parsed goes to review with one discrepancy.
+func (f *alipayE2E) checkInvalidAmount() {
+	f.t.Helper()
+	bad, _, err := f.w.place(yuan, "alipay-invalid")
 	if err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
-	state.settle(bad.ID.TypeID(), "1.001", "T-"+bad.ID.TypeID())
+	f.state.settle(bad.ID.TypeID(), "1.001", "T-"+bad.ID.TypeID())
 	badValues := url.Values{
 		"app_id": {alipayTestAppID}, "seller_id": {alipayTestSellerID},
 		"out_trade_no": {bad.ID.TypeID()}, "trade_no": {"T-" + bad.ID.TypeID()},
 		"trade_status": {"TRADE_SUCCESS"}, "total_amount": {"1.001"},
 		"notify_type": {"trade_status_sync"}, "sign_type": {"RSA2"},
 	}
-	if response := w.callback(MerchantID(merchant.ID), http.MethodPost, alipayNotification(t, badValues, keys.alipay)); response.Code != http.StatusOK {
-		t.Fatal(response.Code, response.Body)
+	if response := f.w.callback(MerchantID(f.merchant.ID), http.MethodPost, alipayNotification(f.t, badValues, f.keys.alipay)); response.Code != http.StatusOK {
+		f.t.Fatal(response.Code, response.Body)
 	}
-	w.assertCredit(bad, 0)
-	if state, _, _ := w.stored(bad.ID); state != "review" {
-		t.Fatalf("invalid amount state %s", state)
+	f.w.assertCredit(bad, 0)
+	if state, _, _ := f.w.stored(bad.ID); state != "review" {
+		f.t.Fatalf("invalid amount state %s", state)
 	}
-	if w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies") != 1 {
-		t.Fatal("invalid payment has no discrepancy")
+	if f.w.count(f.w.p.platform, "SELECT count(*) FROM payments.discrepancies") != 1 {
+		f.t.Fatal("invalid payment has no discrepancy")
 	}
+}
 
-	// A lost callback is recovered by the scheduled query.
-	lost, _, err := w.place(yuan, "alipay-lost")
+// checkLostCallback asserts the scheduled query recovers a payment whose callback never arrived.
+func (f *alipayE2E) checkLostCallback() Order {
+	f.t.Helper()
+	lost, _, err := f.w.place(yuan, "alipay-lost")
 	if err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
-	state.settle(lost.ID.TypeID(), formatMinorText(lost.Total), "T-"+lost.ID.TypeID())
-	w.exec(fmt.Sprintf("UPDATE payments.orders SET next_query_at = clock_timestamp() - interval '1 second' WHERE id = '%s'", uuid.UUID(lost.ID)))
-	w.p.pollOrder(t.Context(), lost.ID)
-	w.assertCredit(lost, lost.Credits)
-	if state, _, _ := w.stored(lost.ID); state != "paid" {
-		t.Fatalf("lost callback state %s", state)
+	f.state.settle(lost.ID.TypeID(), formatMinorText(lost.Total), "T-"+lost.ID.TypeID())
+	f.w.exec(fmt.Sprintf("UPDATE payments.orders SET next_query_at = clock_timestamp() - interval '1 second' WHERE id = '%s'", uuid.UUID(lost.ID)))
+	f.w.p.pollOrder(f.t.Context(), lost.ID)
+	f.w.assertCredit(lost, lost.Credits)
+	if state, _, _ := f.w.stored(lost.ID); state != "paid" {
+		f.t.Fatalf("lost callback state %s", state)
 	}
+	return lost
+}
 
-	// Close a waiting order, then refund the paid one through the core.
-	cancelled, _, err := w.place(yuan, "alipay-cancel")
+// checkCancelAndRefund closes a waiting order and refunds the paid one through the core, leaving that order's credit.
+func (f *alipayE2E) checkCancelAndRefund(paid, lost Order) {
+	f.t.Helper()
+	cancelled, _, err := f.w.place(yuan, "alipay-cancel")
 	if err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
-	if _, err := w.p.Cancel(t.Context(), w.accountA(), cancelled.ID); err != nil {
-		t.Fatal(err)
+	if _, err := f.w.p.Cancel(f.t.Context(), f.w.accountA(), cancelled.ID); err != nil {
+		f.t.Fatal(err)
 	}
-	if !state.isClosed(cancelled.ID.TypeID()) {
-		t.Fatal("close did not reach the gateway")
+	if !f.state.isClosed(cancelled.ID.TypeID()) {
+		f.t.Fatal("close did not reach the gateway")
 	}
 
-	refund := w.mustRefund(o, o.Credits, "alipay-refund")
+	refund := f.w.mustRefund(paid, paid.Credits, "alipay-refund")
 	if refund.State != "frozen" {
-		t.Fatalf("refund state %s", refund.State)
+		f.t.Fatalf("refund state %s", refund.State)
 	}
-	w.approve(refund)
-	w.dueRefunds()
-	stored, err := w.p.GetRefund(t.Context(), w.accountA(), refund.ID)
+	f.w.approve(refund)
+	f.w.dueRefunds()
+	stored, err := f.w.p.GetRefund(f.t.Context(), f.w.accountA(), refund.ID)
 	if err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
 	if stored.State != "succeeded" || stored.ProviderRef != refund.ID.TypeID() {
-		t.Fatalf("%+v", stored)
+		f.t.Fatalf("%+v", stored)
 	}
 	var balance int64
-	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), "SELECT balance FROM billing.balances WHERE account_id = $1", w.account).Scan(&balance)
+	if err := f.w.tx(f.w.p.platform, func(tx pg.Tx) error {
+		return tx.QueryRow(f.t.Context(), "SELECT balance FROM billing.balances WHERE account_id = $1", f.w.account).Scan(&balance)
 	}); err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
 	if balance != lost.Credits {
-		t.Fatalf("refund left balance %d, want the other paid order's %d", balance, lost.Credits)
+		f.t.Fatalf("refund left balance %d, want the other paid order's %d", balance, lost.Credits)
 	}
+}
 
-	// An unknown refund stays frozen from the money's point of view and then converges by query on the same request id.
-	unknown, _, err := w.place(yuan, "alipay-unknown")
+// checkUnknownRefund asserts an unknown refund stays frozen and converges by query on the same request id.
+func (f *alipayE2E) checkUnknownRefund() {
+	f.t.Helper()
+	unknown, _, err := f.w.place(yuan, "alipay-unknown")
 	if err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
-	state.settle(unknown.ID.TypeID(), formatMinorText(unknown.Total), "T-"+unknown.ID.TypeID())
+	f.state.settle(unknown.ID.TypeID(), formatMinorText(unknown.Total), "T-"+unknown.ID.TypeID())
 	unknownValues := url.Values{
 		"app_id": {alipayTestAppID}, "seller_id": {alipayTestSellerID},
 		"out_trade_no": {unknown.ID.TypeID()}, "trade_no": {"T-" + unknown.ID.TypeID()},
 		"trade_status": {"TRADE_SUCCESS"}, "total_amount": {formatMinorText(unknown.Total)},
 		"notify_type": {"trade_status_sync"}, "sign_type": {"RSA2"},
 	}
-	if response := w.callback(MerchantID(merchant.ID), http.MethodPost, alipayNotification(t, unknownValues, keys.alipay)); response.Code != http.StatusOK {
-		t.Fatal(response.Code, response.Body)
+	if response := f.w.callback(MerchantID(f.merchant.ID), http.MethodPost, alipayNotification(f.t, unknownValues, f.keys.alipay)); response.Code != http.StatusOK {
+		f.t.Fatal(response.Code, response.Body)
 	}
-	state.mu.Lock()
-	state.refundMode = "unknown"
-	state.mu.Unlock()
-	pending := w.mustRefund(unknown, unknown.Credits, "alipay-unknown-refund")
-	w.approve(pending)
-	w.dueRefunds()
-	stored, err = w.p.GetRefund(t.Context(), w.accountA(), pending.ID)
+	f.state.mu.Lock()
+	f.state.refundMode = "unknown"
+	f.state.mu.Unlock()
+	pending := f.w.mustRefund(unknown, unknown.Credits, "alipay-unknown-refund")
+	f.w.approve(pending)
+	f.w.dueRefunds()
+	stored, err := f.w.p.GetRefund(f.t.Context(), f.w.accountA(), pending.ID)
 	if err != nil || stored.State != "pending" {
-		t.Fatalf("%+v %v", stored, err)
+		f.t.Fatalf("%+v %v", stored, err)
 	}
-	state.mu.Lock()
-	state.refundMode = "success"
-	state.mu.Unlock()
-	w.dueRefunds()
-	stored, err = w.p.GetRefund(t.Context(), w.accountA(), pending.ID)
+	f.state.mu.Lock()
+	f.state.refundMode = "success"
+	f.state.mu.Unlock()
+	f.w.dueRefunds()
+	stored, err = f.w.p.GetRefund(f.t.Context(), f.w.accountA(), pending.ID)
 	if err != nil || stored.State != "succeeded" {
-		t.Fatalf("%+v %v", stored, err)
+		f.t.Fatalf("%+v %v", stored, err)
 	}
 	if stored.ProviderRef != pending.ID.TypeID() {
-		t.Fatalf("refund query changed the request id: %s", stored.ProviderRef)
+		f.t.Fatalf("refund query changed the request id: %s", stored.ProviderRef)
 	}
+}
 
-	// No secret in logs or order events.
+// checkNoSecrets asserts neither the log nor the order events carry a key or a signature.
+func (f *alipayE2E) checkNoSecrets() {
+	f.t.Helper()
 	var raw string
-	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), "SELECT string_agg(raw::text, '') FROM payments.order_events").Scan(&raw)
+	if err := f.w.tx(f.w.p.platform, func(tx pg.Tx) error {
+		return tx.QueryRow(f.t.Context(), "SELECT string_agg(raw::text, '') FROM payments.order_events").Scan(&raw)
 	}); err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
-	alipayNoSecrets(t, w.logs.String(), "PRIVATE KEY", "sign=")
-	alipayNoSecrets(t, raw, "PRIVATE KEY", "sign=")
+	alipayNoSecrets(f.t, f.w.logs.String(), "PRIVATE KEY", "sign=")
+	alipayNoSecrets(f.t, raw, "PRIVATE KEY", "sign=")
+}
+
+// TestAlipayLocalGatewayEndToEnd walks one Alipay gateway: checkout, callback, replay, an unparseable amount, a lost
+// callback, cancellation, a refund, and a refund whose answer is unknown first.
+func TestAlipayLocalGatewayEndToEnd(t *testing.T) {
+	f := newAlipayE2E(t)
+	f.checkCheckoutAndCallback()
+	f.checkInvalidAmount()
+	lost := f.checkLostCallback()
+	f.checkCancelAndRefund(f.paid, lost)
+	f.checkUnknownRefund()
+	f.checkNoSecrets()
 }
