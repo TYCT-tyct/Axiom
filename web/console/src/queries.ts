@@ -10,7 +10,8 @@ import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 // exists, and a new publication must be visible on the next visit.
 export const legalQuery = queryOptions({
   queryKey: ["legal"],
-  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/legal", { signal })),
+  queryFn: ({ signal }) =>
+    unwrap(consoleApi.GET("/api/console/v1/legal", { params: { query: { locales: "all" } }, signal })),
 });
 
 export const siteQuery = queryOptions({
