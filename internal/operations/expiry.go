@@ -30,6 +30,30 @@ func (expiryArgs) InsertOpts() river.InsertOpts {
 	}}}
 }
 
+// expireAll expires every approval past its expiry and releases every reservation past its windows, a batch at a time.
+// Each batch is two transactions: the approvals' signals are the last lock either takes (resolve), and the
+// reservations' counters must not be taken after them.
+func expireAll(ctx context.Context, db *pg.DB, scope pg.Scope) error {
+	for {
+		var approvals, reservations int
+		if err := db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
+			approvals, err = ExpireDue(ctx, tx, expiryBatch)
+			return err
+		}); err != nil {
+			return err
+		}
+		if err := db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
+			reservations, err = ExpireReservations(ctx, tx, expiryBatch)
+			return err
+		}); err != nil {
+			return err
+		}
+		if max(approvals, reservations) < expiryBatch {
+			return nil
+		}
+	}
+}
+
 // RegisterExpiry adds the sweep to queue, before it starts: every minute, on whichever node leads the queue, the
 // approvals past their expiry are expired with their operations, recorded and their signals resolved, and the money
 // reservations past the end of their windows are released. An approval is
@@ -39,28 +63,10 @@ func RegisterExpiry(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog.Log
 	// A failed run is logged and not retried: the next one comes within the minute, and a retrying job would keep it
 	// from being inserted.
 	work := func(ctx context.Context, _ *river.Job[expiryArgs]) error {
-		for {
-			// Two transactions: the approvals' signals are the last lock either takes (resolve), and the reservations'
-			// counters must not be taken after them.
-			var approvals, reservations int
-			err := db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
-				approvals, err = ExpireDue(ctx, tx, expiryBatch)
-				return err
-			})
-			if err == nil {
-				err = db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
-					reservations, err = ExpireReservations(ctx, tx, expiryBatch)
-					return err
-				})
-			}
-			if err != nil {
-				logger.Error("operations: the expiry of approvals and reservations stopped", "err", err)
-				return nil
-			}
-			if max(approvals, reservations) < expiryBatch {
-				return nil
-			}
+		if err := expireAll(ctx, db, scope); err != nil {
+			logger.Error("operations: the expiry of approvals and reservations stopped", "err", err)
 		}
+		return nil
 	}
 	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(work)); err != nil {
 		return fmt.Errorf("operations: %w", err)
