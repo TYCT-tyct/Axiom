@@ -56,3 +56,39 @@ WHERE t.site_id = @site_id AND t.created_at >= @since AND t.created_at < @until
     AND (t.created_at, t.id) < (@after_at::timestamptz, @after_id::uuid)
 ORDER BY t.created_at DESC, t.id DESC
 LIMIT @max;
+
+-- name: PlatformPaid :one
+-- The dashboard's commercial figures: distinct accounts with a paid top-up in the window, the credit those top-ups
+-- granted in the site's accounting currency, and the paying-account retention of the UTC month the window ends in.
+-- A paid batch is one row, so the time range and the partial index keep this a range read, not a scan of every credit.
+WITH paid AS (
+    SELECT account_id, created_at, amount
+    FROM billing.credit_batches
+    WHERE site_id = @site_id AND source = 'paid'
+        AND created_at >= @scan_since AND created_at < @until
+), accounts AS (
+    SELECT account_id,
+        bool_or(created_at >= @cohort_start AND created_at < @cohort_end) AS in_cohort,
+        bool_or(created_at >= @month_start AND created_at < @until) AS retained
+    FROM paid
+    GROUP BY account_id
+)
+SELECT
+    (SELECT count(DISTINCT account_id)::bigint FROM paid WHERE created_at >= @since) AS paid_users,
+    (SELECT coalesce(sum(amount::numeric), 0)::text FROM paid WHERE created_at >= @since) AS monthly_revenue,
+    (SELECT count(*)::bigint FROM accounts WHERE in_cohort) AS cohort,
+    (SELECT count(*)::bigint FROM accounts WHERE in_cohort AND retained) AS retained;
+
+-- name: ListPaidBatches :many
+-- The paid credit batches behind the dashboard's commercial figures, by the batch's own created_at. The time axis is
+-- the same one PlatformPaid counts, not an order's creation time, so a payment credited after midnight is in the
+-- window the dashboard counted. The partial index credit_batches_by_site_paid_created covers the range read.
+SELECT id, account_id, amount::text AS amount, created_at,
+    (merchant_id IS NOT NULL)::boolean AS online,
+    coalesce(offline_channel, '')::text AS offline_channel
+FROM billing.credit_batches
+WHERE site_id = @site_id AND source = 'paid'
+    AND created_at >= @since AND created_at < @until
+    AND (created_at, id) < (@after_at::timestamptz, @after_id::uuid)
+ORDER BY created_at DESC, id DESC
+LIMIT @max;

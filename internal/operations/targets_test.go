@@ -195,3 +195,85 @@ func TestTargetsCheck(t *testing.T) {
 		})
 	}
 }
+
+// TestTargetsCheckCommercial: paid users is a count, monthly revenue is money, and the two rates are basis points from
+// zero to 10000. A rate is not money and cannot carry a currency.
+func TestTargetsCheckCommercial(t *testing.T) {
+	t.Parallel()
+	valid := func() Targets {
+		return Targets{
+			Month: at(t, "2026-01-01T00:00:00Z"), PaidUsers: count(120),
+			MonthlyRevenue: &Money{Amount: "500000000000", Currency: usd(t)},
+			GrossMargin:    count(3500), Retention: count(8000),
+		}
+	}
+	checked := valid()
+	if err := checked.Check(); err != nil {
+		t.Fatalf("a valid commercial target was refused: %v", err)
+	}
+	for name, spoil := range map[string]func(*Targets){
+		"a negative paid-user count": func(t *Targets) { t.PaidUsers = count(-1) },
+		"a rate below zero":          func(t *Targets) { t.GrossMargin = count(-1) },
+		"a rate above 10000":         func(t *Targets) { t.Retention = count(10001) },
+		"monthly revenue in no currency": func(t *Targets) {
+			t.MonthlyRevenue.Currency = platform.Currency{}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			targets := valid()
+			spoil(&targets)
+			if err := targets.Check(); err == nil {
+				t.Fatal("an invalid commercial target was accepted")
+			}
+		})
+	}
+}
+
+// TestExpectedFromAppliesRatesToTheEndMonth: a rate is a level, not a quantity, so the target of the UTC month the
+// window ends in applies unchanged, and a rate from an earlier month does not leak into a window that ended later.
+func TestExpectedFromAppliesRatesToTheEndMonth(t *testing.T) {
+	t.Parallel()
+	rows := []storedTarget{
+		{Month: at(t, "2026-01-01T00:00:00Z"), Metric: GrossMargin, Amount: "2000"},
+		{Month: at(t, "2026-02-01T00:00:00Z"), Metric: GrossMargin, Amount: "3500"},
+		{Month: at(t, "2026-01-01T00:00:00Z"), Metric: Retention, Amount: "7000"},
+	}
+	got, err := expectedFromStored(rows, usd(t), at(t, "2026-01-15T00:00:00Z"), at(t, "2026-02-15T00:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GrossMargin == nil || *got.GrossMargin != 3500 {
+		t.Errorf("gross margin = %v, want February's 3500", got.GrossMargin)
+	}
+	if got.Retention != nil {
+		t.Errorf("retention = %v, want no February target", *got.Retention)
+	}
+	endOfJanuary := at(t, "2026-02-01T00:00:00Z")
+	got, err = expectedFromStored(rows[:1], usd(t), at(t, "2026-01-01T00:00:00Z"), endOfJanuary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GrossMargin == nil || *got.GrossMargin != 2000 {
+		t.Errorf("gross margin at a window ending at February's first instant = %v, want January's 2000", got.GrossMargin)
+	}
+}
+
+// TestExpectedFromProratesCommercialCountsAndMoney: the new quantity targets share the first-release proration, while
+// the rate targets stay whole.
+func TestExpectedFromProratesCommercialCountsAndMoney(t *testing.T) {
+	t.Parallel()
+	rows := []storedTarget{
+		{Month: at(t, "2026-01-01T00:00:00Z"), Metric: PaidUsers, Amount: "31"},
+		{Month: at(t, "2026-01-01T00:00:00Z"), Metric: MonthlyRevenue, Amount: "310000000000", Currency: new("USD")},
+	}
+	got, err := expectedFromStored(rows, usd(t), at(t, "2026-01-01T00:00:00Z"), at(t, "2026-01-16T00:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PaidUsers == nil || *got.PaidUsers != 15 {
+		t.Errorf("paid users = %v, want 15", got.PaidUsers)
+	}
+	if got.MonthlyRevenue == nil || got.MonthlyRevenue.Amount != "150000000000" {
+		t.Errorf("monthly revenue = %+v, want half the month", got.MonthlyRevenue)
+	}
+}

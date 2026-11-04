@@ -1,67 +1,39 @@
 import type { AdminSchemas } from "@axiom/api";
-import { LoadMore } from "@axiom/app";
-import { DataState, EmptyState, Panel, Table, Td, useFormat } from "@axiom/ui";
+import { Td, useFormat } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Code, Head } from "../parts";
+import { Code } from "../parts";
 import { cashMovementsQuery } from "../queries";
+import { LedgerList } from "./ledger-list";
 import { shortId } from "./states";
+import { type LedgerListProps, useListWindow } from "./window";
 
 // The cash behind the dashboard's figure. It is the ledger's own movements, by the transaction's time, so a refund of an
 // order made before the window and an offline top-up both appear where the dashboard counted them.
-export function CashMovements({
-  siteId,
-  since,
-  until,
-}: {
-  siteId: AdminSchemas["SiteId"];
-  since?: string;
-  until?: string;
-}) {
+export function CashMovements(props: LedgerListProps) {
   const { t } = useTranslation();
-  const [anchor] = useState(() => new Date());
-  const window = {
-    since: since ?? new Date(anchor.getTime() - 24 * 60 * 60 * 1000).toISOString(),
-    until: until ?? anchor.toISOString(),
-  };
-  const cash = useInfiniteQuery(cashMovementsQuery(siteId, window));
+  const window = useListWindow(props.since, props.until);
+  const cash = useInfiniteQuery(cashMovementsQuery(props.siteId, window));
   const rows = cash.data?.pages.flatMap((page) => page.data ?? []) ?? [];
   return (
-    <Panel title={t("orders.cash.title")}>
-      <p className="px-4 pt-4 text-t2">
-        {t("orders.cash.description")}{" "}
-        <Link to="/orders" className="text-accent underline-offset-4 hover:underline">
-          {t("orders.cash.back")}
-        </Link>
-      </p>
-      <DataState
-        query={cash}
-        isEmpty={() => rows.length === 0}
-        empty={<EmptyState title={t("orders.cash.emptyTitle")}>{t("orders.cash.emptyBody")}</EmptyState>}
-      >
-        {() => (
-          <Table label={t("orders.cash.title")}>
-            <Head
-              cols={[
-                [t("orders.cash.col.at")],
-                [t("orders.cash.col.kind")],
-                [t("orders.cash.col.account"), "hidden md:table-cell"],
-                [t("orders.cash.col.amount")],
-                [t("orders.cash.col.source"), "hidden sm:table-cell"],
-              ]}
-            />
-            <tbody>
-              {rows.map((movement, index) => (
-                <CashRow key={movement.id ?? index} movement={movement} />
-              ))}
-            </tbody>
-          </Table>
-        )}
-      </DataState>
-      <LoadMore list={cash} />
-    </Panel>
+    <LedgerList
+      title={t("orders.cash.title")}
+      description={t("orders.cash.description")}
+      back={t("orders.cash.back")}
+      query={cash}
+      rows={rows}
+      emptyTitle={t("orders.cash.emptyTitle")}
+      emptyBody={t("orders.cash.emptyBody")}
+      columns={[
+        [t("orders.cash.col.at")],
+        [t("orders.cash.col.kind")],
+        [t("orders.cash.col.account"), "hidden md:table-cell"],
+        [t("orders.cash.col.amount")],
+        [t("orders.cash.col.source"), "hidden sm:table-cell"],
+      ]}
+      keyOf={(movement, index) => movement.id ?? index}
+      renderRow={(movement) => <CashRow movement={movement} />}
+    />
   );
 }
 

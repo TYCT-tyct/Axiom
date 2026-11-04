@@ -11,8 +11,20 @@ export const tierId = (n: number) => `tier_${pad(n)}` as Schemas["TierId"];
 export const siteId = `site_${pad(1)}` as Schemas["SiteId"];
 export const usd = (units: string): Schemas["Money"] => ({ amount: `${units}000000000`, currency: "USD" });
 
-// The targets the admin mock starts with: the four values make every direction visible against the mocked calls, so
-// the screenshots show ahead, under and a missing target rather than an empty row.
+// The metrics this mock node stores, in the order the API lists them.
+export const targetMetrics: Schemas["OperationsTargetMetric"][] = [
+  "calls",
+  "errors",
+  "revenue",
+  "cost",
+  "paid_users",
+  "monthly_revenue",
+  "gross_margin",
+  "retention",
+];
+
+// The targets the admin mock starts with: every direction is visible against the mocked figures, so the screenshots
+// show ahead, behind and a missing target rather than an empty row.
 export function usualTargets(): Map<string, Schemas["OperationsTargets"]> {
   const month = new Date().toISOString().slice(0, 7);
   return new Map([
@@ -22,10 +34,15 @@ export function usualTargets(): Map<string, Schemas["OperationsTargets"]> {
         site_id: siteId,
         month,
         rev: 1,
+        metrics: targetMetrics,
         calls: 45,
         errors: 10,
         revenue: usd("2000"),
         cost: usd("1800"),
+        paid_users: 5,
+        monthly_revenue: usd("5000"),
+        gross_margin: 4500,
+        retention: 7000,
       },
     ],
   ]);

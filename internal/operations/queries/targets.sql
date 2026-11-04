@@ -33,3 +33,23 @@ INSERT INTO operations.target_revisions (site_id, month, revision)
 VALUES (@site_id, @month, @revision)
 ON CONFLICT (site_id, month) DO UPDATE
 SET revision = EXCLUDED.revision, updated_at = now();
+
+-- name: ReadCommercialTargets :many
+-- The site's commercial targets for the months in [from_month, to_month]. The table is separate so a node from before
+-- these metrics keeps reading operations.targets without meeting one it does not know.
+SELECT month, metric, amount::text AS amount, currency
+FROM operations.commercial_targets
+WHERE site_id = @site_id
+  AND month >= @from_month
+  AND month <= @to_month
+ORDER BY month, metric;
+
+-- name: UpsertCommercialTarget :exec
+INSERT INTO operations.commercial_targets (site_id, metric, month, amount, currency)
+VALUES (@site_id, @metric, @month, @amount, @currency)
+ON CONFLICT (site_id, metric, month) DO UPDATE
+SET amount = EXCLUDED.amount, currency = EXCLUDED.currency, updated_at = now();
+
+-- name: DeleteCommercialTarget :exec
+DELETE FROM operations.commercial_targets
+WHERE site_id = @site_id AND metric = @metric AND month = @month;

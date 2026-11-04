@@ -82,10 +82,33 @@ export interface paths {
          */
         get: operations["getOperationsTargets"];
         /**
-         * Set the site's business targets for a UTC calendar month.
-         * @description Replaces all four targets of the month: a target left out is cleared, not kept from before. The request carries the `rev` the editor read; a month that has moved since then is a 409 `stale_revision`, not a silent overwrite of another administrator's change. Counts are calls and errors; revenue and cost are exact money in the site's accounting currency, and another currency is a 400. The change is audited with the values it replaced and the reason. Targets are administrative data, not site settings, so `updateSiteSettings` leaves them as they are.
+         * Set the first-release business targets for a UTC calendar month.
+         * @description Replaces the first-release four targets, calls, errors, revenue and cost: a target left out is cleared, not kept from before. The request carries the `rev` the editor read; a month that has moved since then is a 409 `stale_revision`, not a silent overwrite of another administrator's change. Revenue and cost are exact money in the site's accounting currency, and another currency is a 400. The commercial metrics (paid users, monthly revenue, gross margin and retention) are left as stored, so an editor from a node before them cannot clear what it cannot see. A full replacement uses `replaceOperationsTargets`; this operation refuses the full-set header, body marker and commercial fields. It remains the write every node has, so a page from before the commercial metrics can keep using it during a rolling release. The change is audited with the values it replaced and the reason. Targets are administrative data, not site settings, so `updateSiteSettings` leaves them as they are.
          */
         put: operations["updateOperationsTargets"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/reports/targets/{month}/all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UTC calendar month, `YYYY-MM`. */
+                month: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace every business target for a UTC calendar month.
+         * @description The full-set write, for a page that read all eight metrics. The path is new with the commercial metrics: a node before them does not route it and returns 404 before the request can be mistaken for a legacy four-field write, so a clear cannot leave the commercial rows behind and still report success. The body replaces every metric; a target left out is cleared. `X-Axiom-Target-Metrics: all` and `all_metrics: true` are both required. `rev`, currency and audit rules are the same as `updateOperationsTargets`. Targets are administrative data, not site settings, so `updateSiteSettings` leaves them as they are.
+         */
+        put: operations["replaceOperationsTargets"];
         post?: never;
         delete?: never;
         options?: never;
@@ -770,6 +793,26 @@ export interface paths {
          * @description One site's cash movements in a window, newest first: paid credits in and refunds out, with the batch, order or offline channel they came from. The time is the ledger transaction's, not an order's creation time, so a refund of an older order and an offline top-up are both in the window the dashboard counted. `since` is inclusive and `until` exclusive; `account_id` narrows to one payer. Pages use `cursor` and `limit`; money is exact text in the payment's currency, and the site's accounting currency where the ledger leaves it NULL.
          */
         get: operations["listCashMovements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/payments/paid-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The paid top-ups behind the dashboard's business figures
+         * @description One site's paid credit batches in a window, newest first. A batch's `created_at` is the time both paid users and monthly revenue count; it is not an order's creation time, so an order created before the window and credited in it is here. `since` is inclusive and `until` exclusive; the window is at most 63 days so a retention drill can start at the previous UTC month's first day. Pages use `cursor` and `limit`; `amount` is the credit the batch granted in the site's accounting currency, exact decimal text.
+         */
+        get: operations["listPaidBatches"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2661,6 +2704,26 @@ export interface components {
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
+        /** @description A paid credit batch, the record behind the dashboard's paid users and monthly revenue. Its `created_at` is the time those figures count; an online batch uses the order's ID as its ID. */
+        PaidBatch: {
+            id: components["schemas"]["Uuid"];
+            account_id: components["schemas"]["AccountId"];
+            amount: components["schemas"]["Money"];
+            /**
+             * Format: date-time
+             * @description The batch's time, the same axis paid users and monthly revenue count.
+             */
+            created_at: string;
+            /** @description True for a batch paid through an order; false for an offline channel. */
+            online: boolean;
+            /** @description Where an offline payment was received; absent for an online batch. */
+            offline_channel?: string;
+        };
+        PaidBatchList: {
+            data: components["schemas"]["PaidBatch"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
         /** @description A merchant account of a payment channel, without its secrets. Every field is optional during rolling deployment. */
         Merchant: {
             id?: components["schemas"]["MerchantId"];
@@ -2960,7 +3023,7 @@ export interface components {
             calls?: number;
             /** Format: int64 */
             errors?: number;
-            /** @description True when the window crosses a month the call log no longer retains, so calls, errors and the two rankings omit archived calls; revenue, cost and cash still cover the whole window. An old node leaves it out, which the page shows as unavailable rather than complete. */
+            /** @description True when the window crosses a month the call log no longer retains, so calls, errors and the two rankings omit archived calls; revenue, cost, cash, paid users, monthly revenue and retention still cover the whole window. An old node leaves it out, which the page shows as unavailable rather than complete. */
             calls_incomplete?: boolean;
             /**
              * Format: date-time
@@ -2971,6 +3034,16 @@ export interface components {
             cost?: components["schemas"]["Money"];
             /** Format: int64 */
             unknown_cost_calls?: number;
+            /**
+             * Format: int64
+             * @description Distinct accounts with a paid top-up in the window. An old node leaves it out, which the page shows as unavailable.
+             */
+            paid_users?: number;
+            /** @description The credit paid top-ups granted in the window, in the site's accounting currency. It is not call revenue: a top-up is prepaid credit, recognized as call revenue when calls settle. */
+            monthly_revenue?: components["schemas"]["Money"];
+            /** @description (revenue - cost) / revenue in basis points, rounded half away from zero. Absent when the window has no settled revenue or when a call's supplier cost is unknown, because the cost total is then incomplete. */
+            gross_margin?: number;
+            retention?: components["schemas"]["OperationsRetention"];
             cash?: components["schemas"]["CashAmount"][];
             top_accounts?: components["schemas"]["OverviewAccount"][];
             top_models?: components["schemas"]["OverviewModel"][];
@@ -2986,14 +3059,25 @@ export interface components {
              * @description The revision to send back when replacing this month's targets.
              */
             rev: number;
+            /** @description The metrics this node stores. A node from before the commercial metrics leaves it out; the page then edits only calls, errors, revenue and cost and sends no commercial fields. */
+            metrics?: components["schemas"]["OperationsTargetMetric"][];
             /** Format: int64 */
             calls?: number;
             /** Format: int64 */
             errors?: number;
             revenue?: components["schemas"]["Money"];
             cost?: components["schemas"]["Money"];
+            /** Format: int64 */
+            paid_users?: number;
+            monthly_revenue?: components["schemas"]["Money"];
+            /** @description Basis points, hundredths of a percent. */
+            gross_margin?: number;
+            /** @description Basis points, hundredths of a percent. */
+            retention?: number;
         };
-        /** @description The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls and errors. */
+        /** @enum {string} */
+        OperationsTargetMetric: "calls" | "errors" | "revenue" | "cost" | "paid_users" | "monthly_revenue" | "gross_margin" | "retention";
+        /** @description The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls, errors and paid users; gross margin and retention are basis points from 0 to 10000. On `replaceOperationsTargets` both `X-Axiom-Target-Metrics: all` and `all_metrics: true` are required. `updateOperationsTargets` refuses both markers and commercial fields, leaving those metrics as stored. */
         OperationsTargetsUpdate: {
             reason: components["schemas"]["Reason"];
             /**
@@ -3007,13 +3091,43 @@ export interface components {
             errors?: number;
             revenue?: components["schemas"]["Money"];
             cost?: components["schemas"]["Money"];
+            /** @description True when the write replaces every metric the node stores; required on `replaceOperationsTargets` and refused on `updateOperationsTargets`. The full-replacement path is not routed by a node before the commercial metrics, so a full write cannot partly succeed there. */
+            all_metrics?: boolean;
+            /** Format: int64 */
+            paid_users?: number;
+            monthly_revenue?: components["schemas"]["Money"];
+            /** @description Basis points, hundredths of a percent. */
+            gross_margin?: number;
+            /** @description Basis points, hundredths of a percent. */
+            retention?: number;
         };
-        /** @description The monthly targets prorated to the dashboard's window, with `gap` = actual - target, in the metric's unit. An empty object means no monthly target covers the window. The count gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete. The cost gap is also absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target. */
+        /** @description The monthly targets with `gap` = actual - target, in the metric's unit. Counts and money are prorated to the window; gross margin and retention are the target of the UTC month the window ends in, unchanged. An empty object means no monthly target covers the window. The calls and errors gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete; paid users and monthly revenue come from credit batches and keep their gaps. The cost gap is absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. Gross margin and retention gaps are absent when their actual rate is unavailable. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target. */
         OperationsTargetComparison: {
             calls?: components["schemas"]["OperationsCountTarget"];
             errors?: components["schemas"]["OperationsCountTarget"];
             revenue?: components["schemas"]["OperationsMoneyTarget"];
             cost?: components["schemas"]["OperationsMoneyTarget"];
+            paid_users?: components["schemas"]["OperationsCountTarget"];
+            monthly_revenue?: components["schemas"]["OperationsMoneyTarget"];
+            gross_margin?: components["schemas"]["OperationsRateTarget"];
+            retention?: components["schemas"]["OperationsRateTarget"];
+        };
+        OperationsRateTarget: {
+            /** @description The monthly rate target in basis points, hundredths of a percent. */
+            target: number;
+            /** @description Actual minus target in basis points. Absent when the actual rate is unavailable, such as no settled revenue or no previous-month cohort. */
+            gap?: number;
+        };
+        /** @description Paying-account retention for the UTC month the window ends in. The cohort is the accounts with a paid top-up in the previous month; retained is those among them with a paid top-up from this month's first instant through the window's end. The current month is therefore month-to-date. */
+        OperationsRetention: {
+            /** @description The UTC calendar month the rate is measured in. */
+            month: string;
+            /** Format: int64 */
+            cohort: number;
+            /** Format: int64 */
+            retained: number;
+            /** @description Retained / cohort in basis points, rounded half up. Absent when the cohort is empty. */
+            rate?: number;
         };
         OperationsCountTarget: {
             /**
@@ -3023,13 +3137,13 @@ export interface components {
             target: number;
             /**
              * Format: int64
-             * @description Actual minus target. Absent when the call log is incomplete over the window.
+             * @description Actual minus target. Absent for calls and errors when the call log is incomplete over the window; paid users always state it because it reads credit batches, not the call log.
              */
             gap?: number;
         };
         OperationsMoneyTarget: {
             target: components["schemas"]["Money"];
-            /** @description Actual minus target. Absent when the cost total is incomplete (`unknown_cost_calls` above zero) or the target's currency is not the site's current accounting currency. */
+            /** @description Actual minus target. Absent when the cost total is incomplete (`unknown_cost_calls` above zero, cost only) or the target's currency is not the site's current accounting currency. Revenue and monthly revenue always state it when the currency matches. */
             gap?: components["schemas"]["Money"];
         };
         OverviewAccount: {
@@ -4466,6 +4580,8 @@ export interface components {
         Limit: number;
         /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
         IdempotencyKey: string;
+        /** @description `all` is required by `replaceOperationsTargets` and refused by `updateOperationsTargets`; it makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body. A node from before the commercial metrics does not route the full-replacement path, so a full replacement cannot clear only the legacy four there. */
+        TargetMetricSet: "all";
     };
     requestBodies: never;
     headers: {
@@ -4604,6 +4720,47 @@ export interface operations {
             header: {
                 /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description `all` is required by `replaceOperationsTargets` and refused by `updateOperationsTargets`; it makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body. A node from before the commercial metrics does not route the full-replacement path, so a full replacement cannot clear only the legacy four there. */
+                "X-Axiom-Target-Metrics"?: components["parameters"]["TargetMetricSet"];
+            };
+            path: {
+                /** @description A UTC calendar month, `YYYY-MM`. */
+                month: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperationsTargetsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The targets as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsTargets"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    replaceOperationsTargets: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description `all` is required by `replaceOperationsTargets` and refused by `updateOperationsTargets`; it makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body. A node from before the commercial metrics does not route the full-replacement path, so a full replacement cannot clear only the legacy four there. */
+                "X-Axiom-Target-Metrics"?: components["parameters"]["TargetMetricSet"];
             };
             path: {
                 /** @description A UTC calendar month, `YYYY-MM`. */
@@ -6132,6 +6289,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CashMovementList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPaidBatches: {
+        parameters: {
+            query: {
+                site_id: components["schemas"]["SiteId"];
+                /** @description Batches created at or after this time. */
+                since?: string;
+                /** @description Batches created before this time. */
+                until?: string;
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of the site's paid batches, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaidBatchList"];
                 };
             };
             400: components["responses"]["BadRequest"];

@@ -1,9 +1,11 @@
 import type { Page } from "@playwright/test";
 import { catalogHandlers } from "./admin-catalog.ts";
 import { type AdminState, emptyState, type Schemas, usualState, worstState } from "./admin-data.ts";
+import { listPaidBatches } from "./admin-paid-batches-api.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { supplyHandlers } from "./admin-supply.ts";
+import { getTargets, putTargets, replaceTargets, targetComparison } from "./admin-targets-api.ts";
 import { fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
 import { confirmTotp, regenerate, session, signIn, signOut, totpSetup, userId, verifyMfa } from "./mock-auth.ts";
 
@@ -115,66 +117,6 @@ const registration: Schemas["RegistrationPolicy"] = {
   domain_deny: ["mailinator.com"],
 };
 
-// The targets of a month, and the editor's write of them. The mock keeps one set per month and does not prorate it;
-// showing the page's target and empty states is enough.
-function getTargets({ params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "get">) {
-  const month = params.month ?? "";
-  return ok(state.targets.get(month) ?? { site_id: state.siteId, month, rev: 0 });
-}
-
-function putTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "put">) {
-  const month = params.month ?? "";
-  const current = state.targets.get(month);
-  if (body.rev !== (current?.rev ?? 0)) {
-    return fail(409, "stale_revision");
-  }
-  const stored: Schemas["OperationsTargets"] = {
-    site_id: state.siteId,
-    month,
-    rev: (current?.rev ?? 0) + 1,
-    calls: body.calls,
-    errors: body.errors,
-    revenue: body.revenue,
-    cost: body.cost,
-  };
-  state.targets.set(month, stored);
-  return ok(stored);
-}
-
-// targetComparison turns a stored month into the overview's prorated comparison. The mock states the month's targets
-// as they are; it exists to show the page's target and gap, not to re-test the server's arithmetic.
-function targetComparison(
-  stored: Schemas["OperationsTargets"] | undefined,
-  calls: number,
-  errors: number,
-  revenue: bigint,
-  cost: bigint,
-) {
-  if (!stored) {
-    return {};
-  }
-  return {
-    ...(stored.calls !== undefined ? { calls: { target: stored.calls, gap: calls - stored.calls } } : {}),
-    ...(stored.errors !== undefined ? { errors: { target: stored.errors, gap: errors - stored.errors } } : {}),
-    ...(stored.revenue
-      ? {
-          revenue: {
-            target: stored.revenue,
-            gap: { amount: String(revenue - BigInt(stored.revenue.amount)), currency: stored.revenue.currency },
-          },
-        }
-      : {}),
-    ...(stored.cost
-      ? {
-          cost: {
-            target: stored.cost,
-            gap: { amount: String(cost - BigInt(stored.cost.amount)), currency: stored.cost.currency },
-          },
-        }
-      : {}),
-  };
-}
-
 // The overview sums the mocked calls, so the worst data's long slugs, many accounts and int64 prices reach the page; the
 // cash comes back in two currencies, one of them negative, as a site with refunds in another currency would see.
 function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "get">) {
@@ -196,7 +138,19 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
   const errors = state.calls.filter((call) => call.error_kind).length;
   const month = (query.get("until") ?? new Date().toISOString()).slice(0, 7);
   const stored = state.targets.get(month);
-  const targets = targetComparison(stored, state.calls.length, errors, revenue, cost);
+  const grossMargin = revenue > 0n ? Number(((revenue - cost) * 10000n) / revenue) : undefined;
+  const retention = { ...state.retention, month };
+  const targets = targetComparison(
+    stored,
+    state.calls.length,
+    errors,
+    revenue,
+    cost,
+    state.paidUsers,
+    BigInt(state.monthlyRevenue.amount),
+    grossMargin,
+    retention,
+  );
   return ok({
     site_id: state.siteId,
     since: query.get("since") ?? "2026-10-29T00:00:00.000Z",
@@ -207,6 +161,10 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
     revenue: { amount: String(revenue), currency: "USD" },
     cost: { amount: String(cost), currency: "USD" },
     unknown_cost_calls: 0,
+    paid_users: state.paidUsers,
+    monthly_revenue: state.monthlyRevenue,
+    ...(grossMargin !== undefined ? { gross_margin: grossMargin } : {}),
+    retention,
     cash: [
       { amount: String(revenue / 2n), currency: "USD" },
       { amount: String(-revenue / 20n), currency: "CNY" },
@@ -507,6 +465,7 @@ const handlers: Handler<AdminState>[] = [
     query.get("site_id") === state.siteId ? ok({ data: state.merchants }) : fail(404, "not_found"),
   ),
   route("get", `${base}/payments/orders`, reads("sites.manage"), listPaymentOrders),
+  route("get", `${base}/payments/paid-batches`, reads("sites.manage"), listPaidBatches),
   route("get", `${base}/payments/refunds`, reads("sites.manage"), listPaymentRefunds),
   route("get", `${base}/payments/cash`, reads("sites.manage"), ({ query, state }) =>
     query.get("site_id") === state.siteId ? ok({ data: [], next_cursor: null }) : fail(404, "not_found"),
@@ -526,6 +485,7 @@ const handlers: Handler<AdminState>[] = [
   route("get", `${base}/reports/overview`, reads("sites.manage"), getOverview),
   route("get", `${base}/reports/targets/{month}`, reads("sites.manage"), getTargets),
   route("put", `${base}/reports/targets/{month}`, changes("sites.manage"), putTargets),
+  route("put", `${base}/reports/targets/{month}/all`, changes("sites.manage"), replaceTargets),
   route("get", `${base}/calls`, reads("calls.search"), listCalls),
   route("get", `${base}/calls/{call_id}/trace`, reads("calls.inspect"), getTrace),
   route("get", `${base}/audit`, reads("audit.view"), listAudit),

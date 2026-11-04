@@ -138,6 +138,64 @@ func TestAdminOperationsOverview(t *testing.T) {
 	expectAdmin(t, "overview window too wide", f.do(http.MethodGet, "/reports/overview?since=2020-01-01T00:00:00Z&until=2020-03-01T00:00:00Z", "", as(owner)), 400, "")
 }
 
+// TestAdminOperationsOverviewCommercial: paid top-ups, not gifts or calls, make the paying users and monthly revenue;
+// retention compares the previous UTC month's payers with this month through the window's end. The target comparison
+// states the gaps for the commercial quantities and the retention rate, and withholds no figure it has.
+func TestAdminOperationsOverviewCommercial(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	main, _, err := f.svc.SiteForHost(adminHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := uuid.UUID(main.ID).String()
+	account := f.text("SELECT id::text FROM accounts.accounts ORDER BY id LIMIT 1")
+	now := time.Date(2026, 2, 15, 12, 0, 0, 0, time.UTC)
+	f.clock.mu.Lock()
+	f.clock.now = now
+	f.clock.mu.Unlock()
+	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	previous := month.AddDate(0, -1, 0).Add(time.Hour)
+	f.run(fmt.Sprintf(`INSERT INTO billing.credit_batches
+		(id, site_id, account_id, source, amount, created_at, currency, paid, fee, offline_channel) VALUES
+		(uuidv7(), '%s', '%s', 'paid', 500, '%s', 'USD', 500, 0, 'bank'),
+		(uuidv7(), '%s', '%s', 'paid', 700, '%s', 'USD', 700, 0, 'bank')`,
+		site, account, previous.Format(time.RFC3339), site, account, now.Format(time.RFC3339)))
+
+	path := "/reports/targets/" + month.Format("2006-01")
+	rec := f.do(http.MethodPut, path+"/all",
+		`{"all_metrics":true,"paid_users":0,"monthly_revenue":{"amount":"0","currency":"USD"},"retention":9000,"rev":0,"reason":"commercial targets"}`,
+		as(owner), idempotent(newKey()), header("X-Axiom-Target-Metrics", "all"))
+	expectAdmin(t, "commercial targets", rec, 200, "")
+
+	since, until := now.Add(-time.Hour).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339)
+	rec = f.do(http.MethodGet, "/reports/overview?since="+url.QueryEscape(since)+"&until="+url.QueryEscape(until), "", as(owner))
+	expectAdmin(t, "commercial overview", rec, 200, "")
+	var overview adminapi.OperationsOverview
+	decode(t, rec, &overview)
+	wantPtr(t, rec, "paid users", overview.PaidUsers, int64(1))
+	wantPtr(t, rec, "monthly revenue", overview.MonthlyRevenue, adminapi.Money{Amount: "700", Currency: "USD"})
+	if overview.Retention == nil || overview.Retention.Month != month.Format("2006-01") ||
+		overview.Retention.Cohort != 1 || overview.Retention.Retained != 1 {
+		t.Fatalf("retention = %+v, want one cohort member retained in %s", overview.Retention, month.Format("2006-01"))
+	}
+	wantPtr(t, rec, "retention rate", overview.Retention.Rate, 10000)
+	if overview.GrossMargin != nil {
+		t.Errorf("gross margin without settled revenue = %d, want unavailable", *overview.GrossMargin)
+	}
+	if overview.Targets == nil || overview.Targets.PaidUsers == nil || overview.Targets.MonthlyRevenue == nil ||
+		overview.Targets.Retention == nil {
+		t.Fatalf("the commercial targets are missing: %s", rec.Body.String())
+	}
+	wantPtr(t, rec, "paid-user target", &overview.Targets.PaidUsers.Target, int64(0))
+	wantPtr(t, rec, "paid-user gap", overview.Targets.PaidUsers.Gap, int64(1))
+	wantPtr(t, rec, "monthly-revenue target", &overview.Targets.MonthlyRevenue.Target, adminapi.Money{Amount: "0", Currency: "USD"})
+	wantPtr(t, rec, "monthly-revenue gap", overview.Targets.MonthlyRevenue.Gap, adminapi.Money{Amount: "700", Currency: "USD"})
+	wantPtr(t, rec, "retention target", &overview.Targets.Retention.Target, 9000)
+	wantPtr(t, rec, "retention gap", overview.Targets.Retention.Gap, 1000)
+}
+
 // TestAdminOperationsOverviewSumsWiderThanInt64: two settled calls that each fit int64 add up past it; the dashboard
 // keeps the digits in decimal text instead of failing the page or wrapping the number.
 func TestAdminOperationsOverviewSumsWiderThanInt64(t *testing.T) {

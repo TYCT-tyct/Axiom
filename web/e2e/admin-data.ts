@@ -1,5 +1,6 @@
 import { long, nano, pad, range, type Schemas, siteId, tierId, usd, usualTargets, uuid } from "./admin-fixtures.ts";
-import { aMerchant, anOrder, aRefund } from "./admin-payments-data.ts";
+import { anOrder, aRefund, paymentData } from "./admin-payments-data.ts";
+import { allPermissions } from "./admin-permissions.ts";
 import type { AuthState } from "./mock.ts";
 import { accountId, authState, userId } from "./mock-auth.ts";
 
@@ -13,6 +14,12 @@ export { uuid } from "./admin-fixtures.ts";
 export type AdminState = AuthState & {
   siteId: Schemas["SiteId"];
   targets: Map<string, Schemas["OperationsTargets"]>;
+  // A node from before the commercial metrics, used to prove both mixed-version directions.
+  oldTargetRead?: boolean;
+  oldTargetWrite?: boolean;
+  paidUsers: number;
+  monthlyRevenue: Schemas["Money"];
+  retention: Schemas["OperationsRetention"];
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
   logo: Schemas["SiteLogoView"];
@@ -26,6 +33,7 @@ export type AdminState = AuthState & {
   traces: Map<string, Schemas["AdminCallTrace"]>;
   merchants: Schemas["Merchant"][];
   orders: Schemas["PaymentOrder"][];
+  paidBatches: Schemas["PaidBatch"][];
   refunds: Schemas["PaymentRefund"][];
   audit: Schemas["AuditEntry"][];
   auditEntries: Map<string, Schemas["AuditEntry"]>;
@@ -37,22 +45,6 @@ export type AdminState = AuthState & {
   models: Schemas["Model"][];
   rules: Schemas["PricingRule"][];
 };
-
-const allPermissions = [
-  "users.view",
-  "users.manage",
-  "credits.grant",
-  "calls.search",
-  "calls.inspect",
-  "audit.view",
-  "suppliers.view",
-  "suppliers.manage",
-  "catalog.view",
-  "catalog.manage",
-  "pricing.view",
-  "pricing.manage",
-  "sites.manage",
-];
 
 const tiers: Schemas["TierRef"][] = [
   { id: tierId(1), name: "Standard" },
@@ -359,21 +351,6 @@ function rules(): Schemas["PricingRule"][] {
   ];
 }
 
-function paymentData(people: Schemas["UserSummary"][]) {
-  const fallback = people[0] ?? aUser(1);
-  const orders = range(60).map((n) => anOrder(n, people[(n - 1) % Math.max(people.length, 1)] ?? fallback));
-  const refunds = range(3).map((n) =>
-    aRefund(n, orders[n - 1] ?? orders[0] ?? anOrder(1, fallback), people[n] ?? fallback),
-  );
-  for (const refund of refunds) {
-    const order = orders.find((candidate) => candidate.id === refund.order_id);
-    if (order) {
-      order.refunds = [...(order.refunds ?? []), refund];
-    }
-  }
-  return { merchants: [aMerchant()], orders, refunds };
-}
-
 export function usualState(): AdminState {
   const users = range(60).map((n) => aUser(n));
   const own = aUser(0, { email: "admin@example.com", mfa_enabled: true, tier: tiers[0] });
@@ -384,6 +361,14 @@ export function usualState(): AdminState {
     ...authState(allPermissions),
     siteId,
     targets: usualTargets(),
+    paidUsers: 3,
+    monthlyRevenue: usd("4200"),
+    retention: {
+      month: new Date().toISOString().slice(0, 7),
+      cohort: 8,
+      retained: 6,
+      rate: 7500,
+    },
     settings: {
       settings: { console_idle_timeout_seconds: 604800, new_key_daily_limit: usd("20") },
       defaults: {
@@ -402,7 +387,7 @@ export function usualState(): AdminState {
     accounts: new Map([own, ...users].map((user) => [user.account_id, anAccount(user)])),
     calls,
     traces: new Map(calls.map((call, i) => [call.id ?? uuid(11, i + 1), aTrace(call, i + 1)])),
-    ...paymentData(people),
+    ...paymentData(people, aUser(1)),
     audit,
     auditEntries: new Map(audit.map((entry) => [entry.id ?? uuid(12, 1), entry])),
     suppliers: suppliers(),
@@ -421,11 +406,15 @@ export function emptyState(): AdminState {
   return {
     ...usualState(),
     targets: new Map(),
+    paidUsers: 0,
+    monthlyRevenue: nano("0"),
+    retention: { month: new Date().toISOString().slice(0, 7), cohort: 0, retained: 0 },
     users: [],
     calls: [],
     traces: new Map(),
     merchants: [],
     orders: [],
+    paidBatches: [],
     refunds: [],
     audit: [],
     auditEntries: new Map(),
@@ -441,6 +430,14 @@ export function emptyState(): AdminState {
 // 182-character model slugs, the biggest amounts, and a lot of rows.
 export function worstState(): AdminState {
   const state = usualState();
+  state.paidUsers = 1_000_000;
+  state.monthlyRevenue = nano("9223372036854775807");
+  state.retention = {
+    month: new Date().toISOString().slice(0, 7),
+    cohort: 100_000,
+    retained: 99_999,
+    rate: 10_000,
+  };
   worstUsers(state);
   worstPayments(state);
   worstCalls(state);

@@ -822,6 +822,42 @@ func (e OAuthProvider) Valid() bool {
 	}
 }
 
+// Defines values for OperationsTargetMetric.
+const (
+	OperationsTargetMetricCalls          OperationsTargetMetric = "calls"
+	OperationsTargetMetricCost           OperationsTargetMetric = "cost"
+	OperationsTargetMetricErrors         OperationsTargetMetric = "errors"
+	OperationsTargetMetricGrossMargin    OperationsTargetMetric = "gross_margin"
+	OperationsTargetMetricMonthlyRevenue OperationsTargetMetric = "monthly_revenue"
+	OperationsTargetMetricPaidUsers      OperationsTargetMetric = "paid_users"
+	OperationsTargetMetricRetention      OperationsTargetMetric = "retention"
+	OperationsTargetMetricRevenue        OperationsTargetMetric = "revenue"
+)
+
+// Valid indicates whether the value is a known member of the OperationsTargetMetric enum.
+func (e OperationsTargetMetric) Valid() bool {
+	switch e {
+	case OperationsTargetMetricCalls:
+		return true
+	case OperationsTargetMetricCost:
+		return true
+	case OperationsTargetMetricErrors:
+		return true
+	case OperationsTargetMetricGrossMargin:
+		return true
+	case OperationsTargetMetricMonthlyRevenue:
+		return true
+	case OperationsTargetMetricPaidUsers:
+		return true
+	case OperationsTargetMetricRetention:
+		return true
+	case OperationsTargetMetricRevenue:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PaymentDiscrepancyState.
 const (
 	PaymentDiscrepancyStateOpen     PaymentDiscrepancyState = "open"
@@ -1791,6 +1827,21 @@ func (e VersionBasis) Valid() bool {
 	}
 }
 
+// Defines values for TargetMetricSet.
+const (
+	TargetMetricSetAll TargetMetricSet = "all"
+)
+
+// Valid indicates whether the value is a known member of the TargetMetricSet enum.
+func (e TargetMetricSet) Valid() bool {
+	switch e {
+	case TargetMetricSetAll:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListPaymentDiscrepanciesParamsState.
 const (
 	ListPaymentDiscrepanciesParamsStateOpen     ListPaymentDiscrepanciesParamsState = "open"
@@ -1803,6 +1854,36 @@ func (e ListPaymentDiscrepanciesParamsState) Valid() bool {
 	case ListPaymentDiscrepanciesParamsStateOpen:
 		return true
 	case ListPaymentDiscrepanciesParamsStateResolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateOperationsTargetsParamsXAxiomTargetMetrics.
+const (
+	UpdateOperationsTargetsParamsXAxiomTargetMetricsAll UpdateOperationsTargetsParamsXAxiomTargetMetrics = "all"
+)
+
+// Valid indicates whether the value is a known member of the UpdateOperationsTargetsParamsXAxiomTargetMetrics enum.
+func (e UpdateOperationsTargetsParamsXAxiomTargetMetrics) Valid() bool {
+	switch e {
+	case UpdateOperationsTargetsParamsXAxiomTargetMetricsAll:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplaceOperationsTargetsParamsXAxiomTargetMetrics.
+const (
+	ReplaceOperationsTargetsParamsXAxiomTargetMetricsAll ReplaceOperationsTargetsParamsXAxiomTargetMetrics = "all"
+)
+
+// Valid indicates whether the value is a known member of the ReplaceOperationsTargetsParamsXAxiomTargetMetrics enum.
+func (e ReplaceOperationsTargetsParamsXAxiomTargetMetrics) Valid() bool {
+	switch e {
+	case ReplaceOperationsTargetsParamsXAxiomTargetMetricsAll:
 		return true
 	default:
 		return false
@@ -3012,7 +3093,7 @@ type OfflinePayment struct {
 
 // OperationsCountTarget defines model for OperationsCountTarget.
 type OperationsCountTarget struct {
-	// Gap Actual minus target. Absent when the call log is incomplete over the window.
+	// Gap Actual minus target. Absent for calls and errors when the call log is incomplete over the window; paid users always state it because it reads credit batches, not the call log.
 	Gap *int64 `json:"gap,omitempty"`
 
 	// Target The monthly target, prorated to the part of the window inside its month.
@@ -3021,7 +3102,7 @@ type OperationsCountTarget struct {
 
 // OperationsMoneyTarget defines model for OperationsMoneyTarget.
 type OperationsMoneyTarget struct {
-	// Gap Actual minus target. Absent when the cost total is incomplete (`unknown_cost_calls` above zero) or the target's currency is not the site's current accounting currency.
+	// Gap Actual minus target. Absent when the cost total is incomplete (`unknown_cost_calls` above zero, cost only) or the target's currency is not the site's current accounting currency. Revenue and monthly revenue always state it when the currency matches.
 	Gap *Money `json:"gap,omitempty"`
 
 	// Target An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
@@ -3035,13 +3116,25 @@ type OperationsOverview struct {
 	// CallsAvailableSince The first instant of the oldest monthly partition the log still has; calls before it were archived. Absent with `calls_incomplete` true when no monthly partition remains, so no window can be answered from the log.
 	CallsAvailableSince *time.Time `json:"calls_available_since,omitempty"`
 
-	// CallsIncomplete True when the window crosses a month the call log no longer retains, so calls, errors and the two rankings omit archived calls; revenue, cost and cash still cover the whole window. An old node leaves it out, which the page shows as unavailable rather than complete.
+	// CallsIncomplete True when the window crosses a month the call log no longer retains, so calls, errors and the two rankings omit archived calls; revenue, cost, cash, paid users, monthly revenue and retention still cover the whole window. An old node leaves it out, which the page shows as unavailable rather than complete.
 	CallsIncomplete *bool         `json:"calls_incomplete,omitempty"`
 	Cash            *[]CashAmount `json:"cash,omitempty"`
 
 	// Cost An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Cost   *Money `json:"cost,omitempty"`
 	Errors *int64 `json:"errors,omitempty"`
+
+	// GrossMargin (revenue - cost) / revenue in basis points, rounded half away from zero. Absent when the window has no settled revenue or when a call's supplier cost is unknown, because the cost total is then incomplete.
+	GrossMargin *int `json:"gross_margin,omitempty"`
+
+	// MonthlyRevenue The credit paid top-ups granted in the window, in the site's accounting currency. It is not call revenue: a top-up is prepaid credit, recognized as call revenue when calls settle.
+	MonthlyRevenue *Money `json:"monthly_revenue,omitempty"`
+
+	// PaidUsers Distinct accounts with a paid top-up in the window. An old node leaves it out, which the page shows as unavailable.
+	PaidUsers *int64 `json:"paid_users,omitempty"`
+
+	// Retention Paying-account retention for the UTC month the window ends in. The cohort is the accounts with a paid top-up in the previous month; retained is those among them with a paid top-up from this month's first instant through the window's end. The current month is therefore month-to-date.
+	Retention *OperationsRetention `json:"retention,omitempty"`
 
 	// Revenue An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Revenue *Money     `json:"revenue,omitempty"`
@@ -3050,7 +3143,7 @@ type OperationsOverview struct {
 	// SiteId A site's ID (TypeID).
 	SiteId *SiteId `json:"site_id,omitempty"`
 
-	// Targets The monthly targets prorated to the dashboard's window, with `gap` = actual - target, in the metric's unit. An empty object means no monthly target covers the window. The count gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete. The cost gap is also absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target.
+	// Targets The monthly targets with `gap` = actual - target, in the metric's unit. Counts and money are prorated to the window; gross margin and retention are the target of the UTC month the window ends in, unchanged. An empty object means no monthly target covers the window. The calls and errors gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete; paid users and monthly revenue come from credit batches and keep their gaps. The cost gap is absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. Gross margin and retention gaps are absent when their actual rate is unavailable. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target.
 	Targets          *OperationsTargetComparison `json:"targets,omitempty"`
 	TopAccounts      *[]OverviewAccount          `json:"top_accounts,omitempty"`
 	TopModels        *[]OverviewModel            `json:"top_models,omitempty"`
@@ -3058,13 +3151,41 @@ type OperationsOverview struct {
 	Until            *time.Time                  `json:"until,omitempty"`
 }
 
-// OperationsTargetComparison The monthly targets prorated to the dashboard's window, with `gap` = actual - target, in the metric's unit. An empty object means no monthly target covers the window. The count gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete. The cost gap is also absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target.
-type OperationsTargetComparison struct {
-	Calls   *OperationsCountTarget `json:"calls,omitempty"`
-	Cost    *OperationsMoneyTarget `json:"cost,omitempty"`
-	Errors  *OperationsCountTarget `json:"errors,omitempty"`
-	Revenue *OperationsMoneyTarget `json:"revenue,omitempty"`
+// OperationsRateTarget defines model for OperationsRateTarget.
+type OperationsRateTarget struct {
+	// Gap Actual minus target in basis points. Absent when the actual rate is unavailable, such as no settled revenue or no previous-month cohort.
+	Gap *int `json:"gap,omitempty"`
+
+	// Target The monthly rate target in basis points, hundredths of a percent.
+	Target int `json:"target"`
 }
+
+// OperationsRetention Paying-account retention for the UTC month the window ends in. The cohort is the accounts with a paid top-up in the previous month; retained is those among them with a paid top-up from this month's first instant through the window's end. The current month is therefore month-to-date.
+type OperationsRetention struct {
+	Cohort int64 `json:"cohort"`
+
+	// Month The UTC calendar month the rate is measured in.
+	Month string `json:"month"`
+
+	// Rate Retained / cohort in basis points, rounded half up. Absent when the cohort is empty.
+	Rate     *int  `json:"rate,omitempty"`
+	Retained int64 `json:"retained"`
+}
+
+// OperationsTargetComparison The monthly targets with `gap` = actual - target, in the metric's unit. Counts and money are prorated to the window; gross margin and retention are the target of the UTC month the window ends in, unchanged. An empty object means no monthly target covers the window. The calls and errors gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete; paid users and monthly revenue come from credit batches and keep their gaps. The cost gap is absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. Gross margin and retention gaps are absent when their actual rate is unavailable. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target.
+type OperationsTargetComparison struct {
+	Calls          *OperationsCountTarget `json:"calls,omitempty"`
+	Cost           *OperationsMoneyTarget `json:"cost,omitempty"`
+	Errors         *OperationsCountTarget `json:"errors,omitempty"`
+	GrossMargin    *OperationsRateTarget  `json:"gross_margin,omitempty"`
+	MonthlyRevenue *OperationsMoneyTarget `json:"monthly_revenue,omitempty"`
+	PaidUsers      *OperationsCountTarget `json:"paid_users,omitempty"`
+	Retention      *OperationsRateTarget  `json:"retention,omitempty"`
+	Revenue        *OperationsMoneyTarget `json:"revenue,omitempty"`
+}
+
+// OperationsTargetMetric defines model for OperationsTargetMetric.
+type OperationsTargetMetric string
 
 // OperationsTargets A site's business targets for one UTC calendar month (docs/domains/operations.md「业务目标」). A target that is absent has not been set for that month; a target of zero is set and means zero. `rev` is the optimistic concurrency token for the month: 0 before the first write, and one more after every successful write.
 type OperationsTargets struct {
@@ -3074,8 +3195,21 @@ type OperationsTargets struct {
 	Cost   *Money `json:"cost,omitempty"`
 	Errors *int64 `json:"errors,omitempty"`
 
+	// GrossMargin Basis points, hundredths of a percent.
+	GrossMargin *int `json:"gross_margin,omitempty"`
+
+	// Metrics The metrics this node stores. A node from before the commercial metrics leaves it out; the page then edits only calls, errors, revenue and cost and sends no commercial fields.
+	Metrics *[]OperationsTargetMetric `json:"metrics,omitempty"`
+
 	// Month The UTC calendar month the targets cover.
 	Month string `json:"month"`
+
+	// MonthlyRevenue An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	MonthlyRevenue *Money `json:"monthly_revenue,omitempty"`
+	PaidUsers      *int64 `json:"paid_users,omitempty"`
+
+	// Retention Basis points, hundredths of a percent.
+	Retention *int `json:"retention,omitempty"`
 
 	// Rev The revision to send back when replacing this month's targets.
 	Rev int64 `json:"rev"`
@@ -3087,16 +3221,28 @@ type OperationsTargets struct {
 	SiteId SiteId `json:"site_id"`
 }
 
-// OperationsTargetsUpdate The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls and errors.
+// OperationsTargetsUpdate The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls, errors and paid users; gross margin and retention are basis points from 0 to 10000. On `replaceOperationsTargets` both `X-Axiom-Target-Metrics: all` and `all_metrics: true` are required. `updateOperationsTargets` refuses both markers and commercial fields, leaving those metrics as stored.
 type OperationsTargetsUpdate struct {
-	Calls *int64 `json:"calls,omitempty"`
+	// AllMetrics True when the write replaces every metric the node stores; required on `replaceOperationsTargets` and refused on `updateOperationsTargets`. The full-replacement path is not routed by a node before the commercial metrics, so a full write cannot partly succeed there.
+	AllMetrics *bool  `json:"all_metrics,omitempty"`
+	Calls      *int64 `json:"calls,omitempty"`
 
 	// Cost An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Cost   *Money `json:"cost,omitempty"`
 	Errors *int64 `json:"errors,omitempty"`
 
+	// GrossMargin Basis points, hundredths of a percent.
+	GrossMargin *int `json:"gross_margin,omitempty"`
+
+	// MonthlyRevenue An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	MonthlyRevenue *Money `json:"monthly_revenue,omitempty"`
+	PaidUsers      *int64 `json:"paid_users,omitempty"`
+
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
+
+	// Retention Basis points, hundredths of a percent.
+	Retention *int `json:"retention,omitempty"`
 
 	// Rev The revision the editor read; a changed revision is a 409 `stale_revision`.
 	Rev int64 `json:"rev"`
@@ -3121,6 +3267,35 @@ type OverviewModel struct {
 	Calls  *int64  `json:"calls,omitempty"`
 	Errors *int64  `json:"errors,omitempty"`
 	Model  *string `json:"model,omitempty"`
+}
+
+// PaidBatch A paid credit batch, the record behind the dashboard's paid users and monthly revenue. Its `created_at` is the time those figures count; an online batch uses the order's ID as its ID.
+type PaidBatch struct {
+	// AccountId An account's ID (TypeID).
+	AccountId AccountId `json:"account_id"`
+
+	// Amount An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Amount Money `json:"amount"`
+
+	// CreatedAt The batch's time, the same axis paid users and monthly revenue count.
+	CreatedAt time.Time `json:"created_at"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id Uuid `json:"id"`
+
+	// OfflineChannel Where an offline payment was received; absent for an online batch.
+	OfflineChannel *string `json:"offline_channel,omitempty"`
+
+	// Online True for a batch paid through an order; false for an offline channel.
+	Online bool `json:"online"`
+}
+
+// PaidBatchList defines model for PaidBatchList.
+type PaidBatchList struct {
+	Data []PaidBatch `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
 }
 
 // PayAmount An amount in the currency a method is paid in, which is not always the site's. `amount` is a non-negative integer in decimal text, in the currency's minor units (cents for USD, fen for CNY, none for JPY).
@@ -4927,6 +5102,9 @@ type IdempotencyKey = string
 // Limit defines model for Limit.
 type Limit = int
 
+// TargetMetricSet defines model for TargetMetricSet.
+type TargetMetricSet string
+
 // BadRequest The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
 type BadRequest = Error
 
@@ -5214,6 +5392,23 @@ type ListPaymentOrdersParams struct {
 	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListPaidBatchesParams defines parameters for ListPaidBatches.
+type ListPaidBatchesParams struct {
+	SiteId SiteId `form:"site_id" json:"site_id"`
+
+	// Since Batches created at or after this time.
+	Since *time.Time `form:"since,omitempty" json:"since,omitempty"`
+
+	// Until Batches created before this time.
+	Until *time.Time `form:"until,omitempty" json:"until,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // ListRedeemCodesParams defines parameters for ListRedeemCodes.
 type ListRedeemCodesParams struct {
 	SiteId SiteId           `form:"site_id" json:"site_id"`
@@ -5337,7 +5532,25 @@ type GetOperationsOverviewParams struct {
 type UpdateOperationsTargetsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+
+	// XAxiomTargetMetrics `all` is required by `replaceOperationsTargets` and refused by `updateOperationsTargets`; it makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body. A node from before the commercial metrics does not route the full-replacement path, so a full replacement cannot clear only the legacy four there.
+	XAxiomTargetMetrics *UpdateOperationsTargetsParamsXAxiomTargetMetrics `json:"X-Axiom-Target-Metrics,omitempty"`
 }
+
+// UpdateOperationsTargetsParamsXAxiomTargetMetrics defines parameters for UpdateOperationsTargets.
+type UpdateOperationsTargetsParamsXAxiomTargetMetrics string
+
+// ReplaceOperationsTargetsParams defines parameters for ReplaceOperationsTargets.
+type ReplaceOperationsTargetsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+
+	// XAxiomTargetMetrics `all` is required by `replaceOperationsTargets` and refused by `updateOperationsTargets`; it makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body. A node from before the commercial metrics does not route the full-replacement path, so a full replacement cannot clear only the legacy four there.
+	XAxiomTargetMetrics *ReplaceOperationsTargetsParamsXAxiomTargetMetrics `json:"X-Axiom-Target-Metrics,omitempty"`
+}
+
+// ReplaceOperationsTargetsParamsXAxiomTargetMetrics defines parameters for ReplaceOperationsTargets.
+type ReplaceOperationsTargetsParamsXAxiomTargetMetrics string
 
 // SetRetentionParams defines parameters for SetRetention.
 type SetRetentionParams struct {
@@ -5738,6 +5951,9 @@ type SetRateLimitJSONRequestBody SetRateLimitJSONBody
 
 // UpdateOperationsTargetsJSONRequestBody defines body for UpdateOperationsTargets for application/json ContentType.
 type UpdateOperationsTargetsJSONRequestBody = OperationsTargetsUpdate
+
+// ReplaceOperationsTargetsJSONRequestBody defines body for ReplaceOperationsTargets for application/json ContentType.
+type ReplaceOperationsTargetsJSONRequestBody = OperationsTargetsUpdate
 
 // SetRetentionJSONRequestBody defines body for SetRetention for application/json ContentType.
 type SetRetentionJSONRequestBody = RetentionRequest
