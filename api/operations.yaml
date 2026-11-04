@@ -1,0 +1,1256 @@
+# The operations API: what the operations agent calls through the MCP bridge on the ops node, on the core's operations
+# listener (docs/domains/operations.md「运营接口」). Code on both sides is generated from this file; change the contract
+# here first. The definitions it shares with api/admin.yaml are copies of them, kept identical by `just api`; the
+# conventions it follows are in internal/platform/README.md「接口约定」.
+openapi: 3.0.3
+info:
+  title: Axiom operations API
+  version: v1
+  description: >-
+    The API the operations agent calls, under `/api/operations/v1` on the operations listener of a core node
+    (docs/domains/operations.md「运营接口」). That listener is off by default and accepts only mutual TLS from a node
+    certificate of the `ops` purpose; on it, every request also carries an operations credential as
+    `Authorization: Bearer op-ax-v1-...`. There are no cookies, no CSRF token, no `Origin` check and no CORS.
+
+
+    Each operation names the permission it needs (`x-axiom-permission`) and where it acts (`x-axiom-scope`):
+    `platform` is the platform's own resources, which need the credential's platform grant; `sites` is the
+    credential's sites; `self` is the credential's own record. A resource outside the credential's scope answers
+    like one that does not exist (404). Every operation takes a `reason` of 1 to 1000 characters, which goes into the
+    operation log with the request's parameters, and may name the agent's run in `X-Axiom-Run-ID`. Each operation is
+    one MCP tool, named by `x-mcp-name`. Every response carries `X-Request-ID` and `Cache-Control: no-store`.
+tags:
+  - {name: Agent, description: "The credential itself and its operation log."}
+  - {name: Suppliers, description: "Suppliers, their groups and keys, and the upstream model names waiting to be mapped."}
+  - {name: Catalog, description: "Authors, models, their names, specs and reference prices."}
+  - {name: Calls, description: "Support summaries and operator traces."}
+paths:
+  /api/operations/v1/me:
+    get:
+      operationId: whoami
+      summary: The credential itself
+      description: The credential's ID, sites, platform grant, permissions, proposer vendors and expiry; never its token.
+      tags: [Agent]
+      security: [{credential: []}]
+      x-axiom-permission: operations.read
+      x-axiom-scope: self
+      x-mcp-name: whoami
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The credential
+          content: {application/json: {schema: {$ref: '#/components/schemas/AgentSelf'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/log:
+    get:
+      operationId: operationLogList
+      summary: The credential's own operation log
+      description: Every call this credential made of this API, reads included, newest first.
+      tags: [Agent]
+      security: [{credential: []}]
+      x-axiom-permission: operations.read
+      x-axiom-scope: self
+      x-mcp-name: operation_log_list
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of the log
+          content: {application/json: {schema: {$ref: '#/components/schemas/OperationLogList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/suppliers:
+    get:
+      operationId: suppliersList
+      summary: Suppliers
+      description: Newest first. The status filter is exact. No credential of a supplier is ever returned.
+      tags: [Suppliers]
+      security: [{credential: []}]
+      x-axiom-permission: suppliers.view
+      x-axiom-scope: platform
+      x-mcp-name: suppliers_list
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - {in: query, name: status, required: false, schema: {$ref: '#/components/schemas/SupplierStatus'}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of suppliers
+          content: {application/json: {schema: {$ref: '#/components/schemas/SupplierList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/suppliers/{supplier_id}:
+    get:
+      operationId: suppliersGet
+      summary: One supplier
+      description: >-
+        The supplier with its groups, the keys bound to them (their labels, never the keys) and its endpoints, as the
+        sync last stored them.
+      tags: [Suppliers]
+      security: [{credential: []}]
+      x-axiom-permission: suppliers.view
+      x-axiom-scope: platform
+      x-mcp-name: suppliers_get
+      parameters:
+        - {in: path, name: supplier_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The supplier
+          content: {application/json: {schema: {$ref: '#/components/schemas/SupplierDetail'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/pending-mappings:
+    get:
+      operationId: pendingMappingsList
+      summary: Upstream model names waiting to be mapped
+      description: The names suppliers list that no model of the catalog claims yet, optionally of one supplier.
+      tags: [Suppliers]
+      security: [{credential: []}]
+      x-axiom-permission: suppliers.view
+      x-axiom-scope: platform
+      x-mcp-name: pending_mappings_list
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - {in: query, name: supplier_id, required: false, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of pending names
+          content: {application/json: {schema: {$ref: '#/components/schemas/PendingMappingList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/models:
+    get:
+      operationId: modelsList
+      summary: Models
+      description: The catalog's models by slug, optionally of one status, author or slug prefix.
+      tags: [Catalog]
+      security: [{credential: []}]
+      x-axiom-permission: catalog.view
+      x-axiom-scope: platform
+      x-mcp-name: models_list
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - {in: query, name: status, required: false, schema: {$ref: '#/components/schemas/ModelStatus'}}
+        - {in: query, name: author, required: false, schema: {$ref: '#/components/schemas/AuthorSlug'}}
+        - {in: query, name: slug_prefix, required: false, schema: {type: string, minLength: 1, maxLength: 200}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of models
+          content: {application/json: {schema: {$ref: '#/components/schemas/ModelList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/models/{model_id}:
+    get:
+      operationId: modelGet
+      summary: One model
+      description: The model with its names, spec and reference prices.
+      tags: [Catalog]
+      security: [{credential: []}]
+      x-axiom-permission: catalog.view
+      x-axiom-scope: platform
+      x-mcp-name: model_get
+      parameters:
+        - {in: path, name: model_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The model
+          content: {application/json: {schema: {$ref: '#/components/schemas/Model'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/calls:
+    get:
+      operationId: callsList
+      summary: Call summaries
+      description: >-
+        The calls of the credential's sites in a window, newest first: metadata and cost only, never a request's or a
+        response's content.
+      tags: [Calls]
+      security: [{credential: []}]
+      x-axiom-permission: calls.search
+      x-axiom-scope: sites
+      x-mcp-name: calls_list
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - {in: query, name: since, schema: {type: string, format: date-time}}
+        - {in: query, name: until, schema: {type: string, format: date-time}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - {in: query, name: account_id, schema: {$ref: '#/components/schemas/AccountId'}}
+        - {in: query, name: request_id, schema: {type: string, format: uuid}}
+        - {in: query, name: model, schema: {type: string, minLength: 1, maxLength: 200}}
+        - {in: query, name: status, schema: {$ref: '#/components/schemas/AdminCallStatus'}}
+        - {in: query, name: site_id, schema: {$ref: '#/components/schemas/SiteId'}}
+      responses:
+        '200':
+          description: A page of calls
+          content: {application/json: {schema: {$ref: '#/components/schemas/AdminCallList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/calls/{call_id}:
+    get:
+      operationId: callGet
+      summary: One call's trace
+      description: The call's summary, cost, route and attempts in sequence order; never its content.
+      tags: [Calls]
+      security: [{credential: []}]
+      x-axiom-permission: calls.inspect
+      x-axiom-scope: sites
+      x-mcp-name: call_get
+      parameters:
+        - {in: path, name: call_id, required: true, schema: {type: string, maxLength: 64}}
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The trace
+          content: {application/json: {schema: {$ref: '#/components/schemas/AdminCallTrace'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+components:
+  securitySchemes:
+    credential:
+      type: http
+      scheme: bearer
+      description: >-
+        An operations credential's token, `op-ax-v1-` and 49 base62 characters, which the admin shows once when it is
+        made or rotated. A missing, malformed, unknown, retired, revoked or expired token is answered alike.
+  parameters:
+    Reason:
+      in: query
+      name: reason
+      required: true
+      description: Why the agent calls this, in its own words; recorded in the operation log as untrusted text.
+      schema: {type: string, minLength: 1, maxLength: 1000}
+    RunId:
+      in: header
+      name: X-Axiom-Run-ID
+      required: false
+      description: The agent's own ID of the task this call belongs to, recorded with it.
+      schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,64}$'}
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: 'Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid
+        for the same filters, and a malformed one is a 400.'
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 512
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: How many items a page holds at most.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+  responses:
+    CredentialRejected:
+      description: No live operations credential, or a missing, malformed, unknown, retired, revoked or expired token (`unauthenticated`).
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    CredentialForbidden:
+      description: The credential does not hold the permission the operation names (`forbidden`).
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    OutOfScope:
+      description: >-
+        There is no such resource, or it is outside the credential's scope: a site it is not given, or the platform's
+        own resources without the platform grant. A malformed ID and an unknown one answer alike (`not_found`).
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    BadRequest:
+      description: The request is malformed or breaks a constraint of the contract (`invalid_request`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Failure:
+      description: 'Any other failure: `internal` (500), `not_implemented` (501, the operation has no handler yet), `unavailable`
+        (503). A 500 never carries the internal error''s text.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: A limit on this operation is used up (`rate_limited`); wait `Retry-After` seconds.
+      headers:
+        Retry-After:
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    AgentSelf:
+      type: object
+      additionalProperties: false
+      required: [id, name, permissions, platform, proposer_vendors, expires_at]
+      properties:
+        id: {type: string, description: "The credential's ID, an `opcred_` TypeID."}
+        name: {type: string}
+        permissions: {type: array, items: {type: string}, description: Sorted.}
+        sites:
+          type: array
+          items: {$ref: '#/components/schemas/SiteId'}
+          description: The sites the credential acts on; absent for every site.
+        platform: {type: boolean, description: Whether it may act on the platform's own resources.}
+        proposer_vendors: {type: array, items: {type: string}}
+        expires_at: {type: string, format: date-time}
+    OperationLogList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/OperationLogEntry'}}
+        next_cursor: {type: string}
+    OperationLogEntry:
+      type: object
+      additionalProperties: false
+      required: [id, tool, reason, input, status, request_id, started_at, ended_at]
+      properties:
+        id: {type: string, description: "The entry's ID, which `cursor` takes to read on from it."}
+        run_id: {type: string}
+        tool: {type: string, description: The MCP name of the operation.}
+        reason: {type: string, description: The agent's own words; untrusted.}
+        input:
+          type: object
+          additionalProperties: true
+          x-go-type: jsonx.Raw
+          description: The request's path and query parameters other than the reason, or its size alone past 8 KiB.
+        status: {type: integer, description: The HTTP status of the answer.}
+        error_code: {type: string}
+        request_id: {type: string}
+        started_at: {type: string, format: date-time}
+        ended_at: {type: string, format: date-time}
+    AccountId:
+      type: string
+      pattern: ^acct_[0-9a-hjkmnp-tv-z]{26}$
+      description: An account's ID (TypeID).
+    AdminAttempt:
+      type: object
+      additionalProperties: false
+      properties:
+        seq:
+          type: integer
+        endpoint_id: &id001
+          type: string
+        supplier_id: *id001
+        source_class: *id001
+        egress: *id001
+        outcome: *id001
+        error_kind: *id001
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        first_token_ms:
+          type: integer
+    AdminCallList:
+      type: object
+      additionalProperties: false
+      properties:
+        since:
+          type: string
+          format: date-time
+        until:
+          type: string
+          format: date-time
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminCallSummary'
+        next_cursor: &id001
+          type: string
+        model_filter: *id001
+        status_filter:
+          $ref: '#/components/schemas/AdminCallStatus'
+        site_filter:
+          $ref: '#/components/schemas/SiteId'
+        incomplete:
+          type: boolean
+          description: 'True when the window crosses a month the call log no longer retains (archived and dropped): calls in
+            that month are missing, so an empty page does not mean the window had no calls. Calls before `available_since` were
+            archived. An old node leaves it out, which the page shows as unavailable rather than complete.'
+        available_since:
+          type: string
+          format: date-time
+          description: The first instant of the oldest monthly partition the log still has; calls before it were archived. Absent
+            with `incomplete` true when no monthly partition remains, so no window can be answered from the log.
+    AdminCallStatus:
+      type: string
+      enum:
+      - ok
+      - error
+      description: 'The result of a call: `ok` when its error_kind is empty, `error` otherwise. An old node may leave the filter
+        echo out of a list.'
+    AdminCallSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id: &id001
+          type: string
+        site_id:
+          $ref: '#/components/schemas/SiteId'
+        account_id:
+          $ref: '#/components/schemas/AccountId'
+        at:
+          type: string
+          format: date-time
+        model: *id001
+        error_kind: *id001
+        latency_ms:
+          type: integer
+        price:
+          $ref: '#/components/schemas/Money'
+    AdminCallTrace:
+      type: object
+      additionalProperties: false
+      properties:
+        summary:
+          $ref: '#/components/schemas/AdminCallSummary'
+        cost:
+          $ref: '#/components/schemas/Money'
+        route:
+          x-go-type: jsonx.Raw
+          type: object
+          additionalProperties: true
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAttempt'
+    AuthorSlug:
+      type: string
+      pattern: ^[a-z0-9][a-z0-9-]{0,39}$
+    BillingItem:
+      type: string
+      enum:
+      - input
+      - cache_read
+      - cache_write
+      - cache_write_1h
+      - output
+      - reasoning
+      - audio_in
+      - audio_out
+      - image_in
+      - image_out
+      - web_search
+      - code_execution
+      - file_search
+    ContextTier:
+      type: object
+      required:
+      - above
+      - rates
+      additionalProperties: false
+      properties:
+        above:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The tier applies when the basis items sum to more than this.
+        rates:
+          $ref: '#/components/schemas/Rates'
+    ContextTiers:
+      type: object
+      required:
+      - basis
+      - method
+      - tiers
+      additionalProperties: false
+      description: 'Whole-request tiers: when the basis items sum past a tier''s threshold, the tier''s rates replace the base
+        ones.'
+      properties:
+        basis:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillingItem'
+        method:
+          type: string
+          enum:
+          - whole
+        tiers:
+          type: array
+          description: Strictly increasing by `above`.
+          items:
+            $ref: '#/components/schemas/ContextTier'
+    Decimal:
+      type: string
+      pattern: ^-?(0|[1-9][0-9]{0,17})(\.[0-9]{1,15})?$
+      description: An exact decimal number in text, never a JSON number, so no digit is lost on the way.
+    Error:
+      type: object
+      required:
+      - error
+      description: The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+    ErrorCode:
+      type: string
+      description: The closed list of failure codes. A code is added in a contract change, so a client that translates every
+        code fails to compile until it knows the new one.
+      enum:
+      - invalid_request
+      - unauthenticated
+      - invalid_credentials
+      - invalid_code
+      - forbidden
+      - mfa_required
+      - consent_required
+      - origin_rejected
+      - not_found
+      - conflict
+      - login_domain_locked
+      - login_domain_required
+      - identity_taken
+      - identity_already_linked
+      - account_not_linked
+      - email_taken
+      - name_taken
+      - too_many_keys
+      - stale_revision
+      - idempotency_key_reused
+      - invalid_invite
+      - registration_closed
+      - human_check_failed
+      - email_domain_not_allowed
+      - invalid_verification
+      - weak_password
+      - not_ready
+      - unprocessable
+      - redeem_code_invalid
+      - redeem_code_expired
+      - redeem_code_disabled
+      - redeem_code_used
+      - rate_limited
+      - internal
+      - not_implemented
+      - unavailable
+    ErrorDetail:
+      type: object
+      required:
+      - code
+      - message
+      description: '`code` is what a client branches on and translates; `message` is English text for logs and developers.'
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+        fields:
+          type: array
+          description: Which parts of the request broke a constraint, for `invalid_request`.
+          items:
+            $ref: '#/components/schemas/ErrorField'
+    ErrorField:
+      type: object
+      required:
+      - pointer
+      - message
+      properties:
+        pointer:
+          type: string
+          description: JSON pointer into the request body, or the name of a query or path parameter.
+        message:
+          type: string
+    Model:
+      type: object
+      required:
+      - id
+      - slug
+      - author
+      - status
+      - version_basis
+      - price_source
+      - rev
+      - spec
+      - names
+      - prices
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        slug:
+          $ref: '#/components/schemas/ModelSlug'
+        author:
+          $ref: '#/components/schemas/AuthorSlug'
+        status:
+          $ref: '#/components/schemas/ModelStatus'
+        version_basis:
+          $ref: '#/components/schemas/VersionBasis'
+        price_source:
+          $ref: '#/components/schemas/PriceSource'
+        rev:
+          type: integer
+          format: int64
+          minimum: 0
+        spec:
+          $ref: '#/components/schemas/ModelSpec'
+        names:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelName'
+        prices:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReferencePrice'
+    ModelFormat:
+      type: string
+      enum:
+      - messages
+      - responses
+      - chat
+      - embeddings
+      - rerank
+      - completions
+    ModelList:
+      type: object
+      required:
+      - data
+      - next_cursor
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelSummary'
+        next_cursor:
+          type: string
+          nullable: true
+          description: Null on the last page.
+    ModelName:
+      type: object
+      required:
+      - name
+      - visibility
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        visibility:
+          type: string
+          enum:
+          - public
+          - internal
+          description: Only public names can be called by users.
+    ModelSlug:
+      type: string
+      maxLength: 187
+      pattern: ^[a-z0-9][a-z0-9-]{0,39}/[a-z0-9][a-z0-9._-]{0,99}(:free)?(@[a-z0-9][a-z0-9._-]{0,39})?$
+      description: '`<author>/<model>`, with optional `:free` and `@<version>` when the vendor gives one; lower case, as the
+        catalog stores it.'
+    ModelSpec:
+      type: object
+      description: The baseline facts about a model (context length, modalities, …), which are open for now, plus the two lists
+        the review needs. `items` and `tiers` say which billing items and service tiers the upstream may report; a model goes
+        on sale only if both are present, even if empty.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillingItem'
+        tiers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceTier'
+      additionalProperties: true
+    ModelStatus:
+      type: string
+      enum:
+      - draft
+      - listed
+      - retired
+      description: '`draft`: seen by the platform only; `listed`: on sale; `retired`: out of use for good.'
+    ModelSummary:
+      type: object
+      required:
+      - id
+      - slug
+      - author
+      - status
+      - version_basis
+      - price_source
+      - rev
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        slug:
+          $ref: '#/components/schemas/ModelSlug'
+        author:
+          $ref: '#/components/schemas/AuthorSlug'
+        status:
+          $ref: '#/components/schemas/ModelStatus'
+        version_basis:
+          $ref: '#/components/schemas/VersionBasis'
+        price_source:
+          $ref: '#/components/schemas/PriceSource'
+        rev:
+          type: integer
+          format: int64
+          minimum: 0
+    Money:
+      type: object
+      required:
+      - amount
+      - currency
+      description: An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths
+        of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53
+        (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount
+        that is written to the ledger must still fit 64 bits.
+      properties:
+        amount:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          maxLength: 39
+          example: '1500000000'
+        currency:
+          type: string
+          pattern: ^[A-Z]{3}$
+          example: USD
+    PendingMapping:
+      type: object
+      required:
+      - supplier_id
+      - group_id
+      - upstream_name
+      - formats
+      properties:
+        supplier_id:
+          $ref: '#/components/schemas/Uuid'
+        group_id:
+          $ref: '#/components/schemas/Uuid'
+        group_codename:
+          type: string
+        upstream_name:
+          type: string
+        formats:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelFormat'
+    PendingMappingList:
+      type: object
+      required:
+      - data
+      - next_cursor
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PendingMapping'
+        next_cursor:
+          type: string
+          nullable: true
+          description: Null on the last page.
+    PriceSchedule:
+      type: object
+      required:
+      - v
+      - currency
+      - rates
+      additionalProperties: false
+      description: 'A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing
+        item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard
+        one. A tier that lists no price for an item has none, it does not inherit the standard one.'
+      properties:
+        v:
+          type: integer
+          enum:
+          - 1
+        currency:
+          type: string
+          pattern: ^[A-Z]{3}$
+          description: XXX in a supplier's cost plan, which is in the supplier's own unit.
+        rates:
+          $ref: '#/components/schemas/Rates'
+        context_tiers:
+          $ref: '#/components/schemas/ContextTiers'
+        service_tiers:
+          type: object
+          additionalProperties: false
+          properties:
+            flex:
+              $ref: '#/components/schemas/ServiceTierRates'
+            priority:
+              $ref: '#/components/schemas/ServiceTierRates'
+            fast:
+              $ref: '#/components/schemas/ServiceTierRates'
+    PriceSource:
+      type: string
+      enum:
+      - litellm
+      - openrouter
+      - official
+      - manual
+    Rates:
+      type: object
+      description: The price per unit of each billing item the schedule prices; an item left out has no price here.
+      additionalProperties: false
+      properties:
+        input:
+          $ref: '#/components/schemas/UnitPrice'
+        cache_read:
+          $ref: '#/components/schemas/UnitPrice'
+        cache_write:
+          $ref: '#/components/schemas/UnitPrice'
+        cache_write_1h:
+          $ref: '#/components/schemas/UnitPrice'
+        output:
+          $ref: '#/components/schemas/UnitPrice'
+        reasoning:
+          $ref: '#/components/schemas/UnitPrice'
+        audio_in:
+          $ref: '#/components/schemas/UnitPrice'
+        audio_out:
+          $ref: '#/components/schemas/UnitPrice'
+        image_in:
+          $ref: '#/components/schemas/UnitPrice'
+        image_out:
+          $ref: '#/components/schemas/UnitPrice'
+        web_search:
+          $ref: '#/components/schemas/UnitPrice'
+        code_execution:
+          $ref: '#/components/schemas/UnitPrice'
+        file_search:
+          $ref: '#/components/schemas/UnitPrice'
+        file_parse:
+          $ref: '#/components/schemas/UnitPrice'
+    ReferencePrice:
+      type: object
+      required:
+      - id
+      - currency
+      - source
+      - published_at
+      description: The current version of a model's reference price in one currency.
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        currency:
+          type: string
+          pattern: ^[A-Z]{3}$
+        source:
+          $ref: '#/components/schemas/PriceSource'
+        schedule:
+          description: 'Absent when the price was withdrawn: the currency has no price now, but this row is still the current
+            one to build on.'
+          allOf:
+          - $ref: '#/components/schemas/PriceSchedule'
+        published_at:
+          type: string
+          format: date-time
+    ServiceTier:
+      type: string
+      enum:
+      - standard
+      - flex
+      - priority
+      - fast
+    ServiceTierRates:
+      type: object
+      required:
+      - rates
+      additionalProperties: false
+      properties:
+        rates:
+          $ref: '#/components/schemas/Rates'
+        context_tiers:
+          type: array
+          description: The same thresholds as the schedule's, in order; a tier that changes no price has empty rates.
+          items:
+            $ref: '#/components/schemas/ContextTier'
+    SiteId:
+      type: string
+      pattern: ^site_[0-9a-hjkmnp-tv-z]{26}$
+      description: A site's ID (TypeID).
+    Supplier:
+      type: object
+      required:
+      - id
+      - name
+      - kind
+      - origin
+      - upstream_account
+      - native_unit
+      - settlement_currency
+      - status
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        kind:
+          type: string
+          pattern: ^[a-z][a-z0-9]*$
+          description: The adapter's name, such as newapi or sub2api.
+        origin:
+          type: string
+          example: https://api.example.com
+        upstream_account:
+          type: string
+          description: The email or username Axiom logs in as.
+        generation:
+          type: string
+          description: The system's generation the adapter detected, such as 1.0.
+        detected_version:
+          type: string
+        native_unit:
+          type: string
+          enum:
+          - quota
+          - usd
+          description: The unit the supplier counts its balance in.
+        settlement_currency:
+          type: string
+          pattern: ^[A-Z]{3}$
+        status:
+          $ref: '#/components/schemas/SupplierStatus'
+        status_reason:
+          type: string
+          minLength: 1
+          maxLength: 200
+        balance_native:
+          $ref: '#/components/schemas/Decimal'
+        balance_observed_at:
+          type: string
+          format: date-time
+        low_balance_threshold:
+          $ref: '#/components/schemas/Decimal'
+        unit_value:
+          $ref: '#/components/schemas/Decimal'
+        unit_value_hint:
+          $ref: '#/components/schemas/Decimal'
+    SupplierCredential:
+      type: object
+      required:
+      - id
+      - group_id
+      - upstream_key_ref
+      - status
+      - max_concurrency
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        group_id:
+          $ref: '#/components/schemas/Uuid'
+        upstream_key_ref:
+          type: string
+        status:
+          type: string
+          enum:
+          - binding
+          - active
+          - upstream_disabled
+          - quota_exhausted
+          - expired
+          - disabled
+          - erased
+        cooldown_until:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        max_concurrency:
+          type: integer
+          minimum: 1
+        requests_per_minute:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          description: The upstream account's rolling-minute RPM ceiling for selecting this credential; absent when Axiom adds
+            no ceiling.
+    SupplierDetail:
+      type: object
+      required:
+      - supplier
+      - groups
+      - credentials
+      - unbound_keys
+      - endpoints
+      properties:
+        supplier:
+          $ref: '#/components/schemas/Supplier'
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupplierGroup'
+        credentials:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupplierCredential'
+        endpoints:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupplierEndpoint'
+        unbound_keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpstreamKey'
+    SupplierEndpoint:
+      type: object
+      required:
+      - id
+      - group_id
+      - model_id
+      - upstream_name
+      - formats
+      - cost_state
+      - enabled
+      description: 'One model in one of the supplier''s groups, as the sync projected it: what testSupplierEndpoint is given.
+        Only an enabled endpoint whose cost is `known` can be called, and so tested.'
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        group_id:
+          $ref: '#/components/schemas/Uuid'
+        model_id:
+          $ref: '#/components/schemas/Uuid'
+        upstream_name:
+          type: string
+          description: The model's name at the supplier.
+        formats:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/ModelFormat'
+        cost_state:
+          type: string
+          enum:
+          - known
+          - unknown
+          - conflict
+        enabled:
+          type: boolean
+        quantization:
+          type: string
+          nullable: true
+          enum:
+          - int4
+          - int8
+          - fp4
+          - mxfp4
+          - nvfp4
+          - fp6
+          - fp8
+          - mxfp8
+          - fp16
+          - bf16
+          - fp32
+          - unknown
+          description: The precision a person recorded for this endpoint. Absent or null when none is recorded, which is not
+            the level `unknown`; a request that filters by quantization does not match an endpoint without one.
+    SupplierGroup:
+      type: object
+      required:
+      - id
+      - upstream_ref
+      - name
+      - ratio
+      - selected
+      - present
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        upstream_ref:
+          type: string
+          description: The supplier's own ID of the group.
+        name:
+          type: string
+        ratio:
+          $ref: '#/components/schemas/Decimal'
+        selected:
+          type: boolean
+        codename:
+          type: string
+          description: What users see in place of the group's name. Set when first selected, never changed.
+        present:
+          type: boolean
+          description: False when the supplier no longer lists the group.
+        key_state:
+          type: string
+          enum:
+          - pending
+          - ready
+          - failed
+          - unavailable
+          description: 'How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will
+            make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`),
+            `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.'
+        key_reason:
+          type: string
+          enum:
+          - not_permitted
+          - group_unavailable
+          - refused
+          description: 'Why the last attempt to make a key failed: the login may not manage keys, the account may not use this
+            group, or the supplier refused. Present only with `key_state` `failed`.'
+        facts:
+          type: object
+          description: What the supplier says about the group (platform, subscription type, peak pricing, long context).
+          additionalProperties: true
+        pool:
+          $ref: '#/components/schemas/SupplierPool'
+    SupplierList:
+      type: object
+      required:
+      - data
+      - next_cursor
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Supplier'
+        next_cursor:
+          type: string
+          nullable: true
+          description: Null on the last page.
+    SupplierPool:
+      type: object
+      description: What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool,
+        or a read has not reported it yet.
+      required:
+      - accounts
+      - failed
+      - usable
+      - low
+      - observed_at
+      properties:
+        accounts:
+          type: integer
+          minimum: 1
+          description: The accounts assigned to the group.
+        failed:
+          type: integer
+          minimum: 0
+          description: 'How many of them the pool marks failed: they cannot serve.'
+        usable:
+          type: integer
+          minimum: 0
+          description: How many of them the pool may schedule now.
+        headroom:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: The mean room left in the tighter quota window of the accounts that can serve, in percent. Absent when
+            no account reported a window.
+        capacity:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 'The effective capacity this leaves: headroom times the share of accounts that can serve, in percent.
+            Absent when no account reported a window.'
+        low:
+          type: boolean
+          description: Routing halves the group's weight while this is true.
+        observed_at:
+          type: string
+          format: date-time
+          description: When these numbers were recorded.
+    SupplierStatus:
+      type: string
+      enum:
+      - connecting
+      - active
+      - low_balance
+      - needs_attention
+      - paused
+      - removing
+      - removed
+      description: '`connecting`: not yet read; `active`: syncing, and routable while its balance is above zero; `low_balance`:
+        syncing, balance under the alert line, routable on the same condition; `needs_attention`: polling stopped until a person
+        acts, `status_reason` says why; `paused`: stopped on purpose; `removed`: see `removeSupplier`; `removing` is only what
+        a removal of an earlier version left behind, and removing again ends it.'
+    UnitPrice:
+      type: string
+      pattern: ^(0|[1-9][0-9]{0,2})(\.[0-9]{1,15})?$|^1000$
+      description: A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with
+        at most 15 decimals and at most 1000 per unit.
+    UpstreamKey:
+      type: object
+      required:
+      - ref
+      - status
+      description: A key the supplier lists that Axiom has not bound to a group.
+      properties:
+        ref:
+          type: string
+        group_ref:
+          type: string
+          description: The supplier's ID of the group the key is for.
+        status:
+          type: string
+          enum:
+          - active
+          - disabled
+          - quota_exhausted
+          - expired
+    Uuid:
+      type: string
+      pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+      description: An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+    VersionBasis:
+      type: string
+      enum:
+      - dated
+      - floating
+      description: '`dated`: the model is one fixed version; `floating`: the vendor moves the model under a name.'

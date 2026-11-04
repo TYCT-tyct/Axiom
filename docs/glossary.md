@@ -147,7 +147,7 @@ API key → 路由按 key 的路由预设选端点 → 供应商选凭证 → �
 | 入口 | ingress | 节点角色之一 |
 | 核心 | core | 节点角色之一 |
 | 运维 | ops | 节点角色之一，见[总体架构的「部署拓扑」](architecture.md#部署拓扑) |
-| 公网监听 / 管理监听 / 节点监听 / 运营监听 / 探针监听 | public / admin / node / ops / probes | 节点上的五个 HTTP 监听：模型调用、官网、控制台和支付回调 / 管理后台和管理接口 / 核心给入口转发和探活的调用面，走双向 TLS / 运营接口（只接受 `ops` 用途客户端证书的双向 TLS，随 #565 落地）/ 健康检查和指标。各自提供什么、谁能访问，见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
+| 公网监听 / 管理监听 / 节点监听 / 运营监听 / 探针监听 | public / admin / node / operations / probes | 节点上的五个 HTTP 监听：模型调用、官网、控制台和支付回调 / 管理后台和管理接口 / 核心给入口转发和探活的调用面，走双向 TLS / 运营接口（只接受 `ops` 用途客户端证书的双向 TLS，`AXIOM_OPERATIONS_ADDR`；启动日志的字段是 `operations`，因为探针监听的字段沿用了 `ops`）/ 健康检查和指标。各自提供什么、谁能访问，见[总体架构的「技术选型」](architecture.md#技术选型)「前端交付」 |
 | 审批策略 | approval_policy | 一类运营操作需要怎样的审批，是后台数据，见[运营](domains/operations.md) |
 | 受控导出 | data_export | 由负责人两把离线私钥双签名批准、加密到负责人公钥并留审计的数据导出，是取用对话内容的唯一方式，见[记录与告警](domains/observability.md#受控导出) |
 | 收款渠道 | payment_channel（代码里 `payments.Kind`） | 一种收款协议的插件，如易支付、Stripe、支付宝官方；USDT 经易支付兼容的网关接入，见[支付的「收款渠道」](domains/payments.md#收款渠道) |

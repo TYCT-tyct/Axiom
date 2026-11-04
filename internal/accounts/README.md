@@ -41,6 +41,8 @@
 | `users` | `site_id`、`account_id`（个人账户）、`account_kind`（恒为 `personal` 的生成列）、`email`（规范化）、`email_verified_at`（邀请码注册为空，点击验证链接时写入）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_ciphertext`、`totp_nonce`、`totp_wrapped_dek`、`totp_key_version`（`secret.Sealed` 的四个字段，同为空或同不为空）、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, account_id, id)`；`UNIQUE (account_id)`、`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`：个人账户只属于这一个用户，不能绑到企业账户上，两个登录身份不会共用一个账户范围；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `password_hash`、`factor_version`、`status`、四个 `totp_` 密文列、`totp_last_step`、`mfa_enabled_at` |
 | `members` | `site_id`、`account_id`、`account_kind`、`user_id`、`user_account_id`、`role_id`、`personal_owner`（`GENERATED ALWAYS AS (CASE WHEN account_kind = 'personal' THEN account_id END) STORED`） | 主键 `(account_id, user_id)`；`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`；`(site_id, user_account_id, user_id) → users(site_id, account_id, id)`；`(site_id, personal_owner, user_id) → users(site_id, account_id, id)`：个人账户的成员只能是它唯一的用户，所以不需要另加部分唯一索引；`role_id → roles` | 账户 | 无，也没有 `UPDATE` 策略（移除成员随企业账户加 `removed_at`） |
 | `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`（授予者的用户 ID，命令行授予时为空）、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)`；部分唯一 `(user_id, role_id) WHERE revoked_at IS NULL`：一个用户同一角色只有一条有效授予 | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态；恢复插入新授予） |
+| `agent_credentials` | `name`、`permissions`、`sites`（NULL 为全部站点）、`platform`、`proposer_vendors`、`created_by`、`created_at`、`expires_at`、`revoked_at`、`last_used_at` | CHECK：含 `operations.read`，不含 `operations.manage`、`operations.approve`、`platform_grants.manage` | 平台 | `revoked_at`（终态）、`last_used_at` |
+| `agent_credential_tokens` | `secret_hash`（主键）、`secret_version`、`credential_id`、`last4`、`created_at`、`retires_at` | 部分唯一索引：每张凭证一个 `retires_at IS NULL` 的当前令牌 | 平台 | `retires_at` |
 | `presets` | `site_id`、`account_id`、slug、name、config、created_at、updated_at、deleted_at | 活跃 `(account_id,slug)` 唯一、复合账户外键 | 账户 | name、config、updated_at、deleted_at（终态） |
 | `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`updated_at`、`management_window`、`management_requests`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`、`rate_requests` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；请求计数 0–61（61 为已超限）；`limit_reset` 同工作区的 `budget_reset` | 账户 | `updated_at`、`management_window`、`management_requests`、`name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态）、`rate_requests` |
 | `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`expires_at` 和 `idle_timeout`（只往小改，见「站点缩短会话时长」）、`revoked_at`（终态）、`recovery_codes_ciphertext`、`recovery_codes_nonce`（用会话令牌派生的密钥加密，读出后同事务清空，撤销时由触发器清空） |
@@ -94,13 +96,35 @@
 | 平台管理员（管理后台） | 平台范围；要求会话的监听面是管理后台、`level = mfa`，且未撤销的平台授予含这项权限 |
 | 调用 key | `Admit` 打开的事务里是 key 所属账户的范围 |
 | 管理 key | `WithKeyManager` 打开的事务里是 key 所属账户与本站公开配置的范围 |
+| 运营凭证 | `AuthorizeAgent` 给出：平台资源要凭证的平台范围，否则是凭证的站点（`pg.SitesScope`，不限站点时是快照里的全部站点）；见下文「运营凭证」 |
 | 快照加载 | 平台范围的 `ReadTx` |
 
 - `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
 - `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。账户目标的范围是 `pg.AccountScopeIn(会话签发的站点, 账户)`：除了账户自己的行，还读这个站点的公开配置和共享计数（策略把站点列与 `platform.home_site()` 的 InitPlan 参数比较，如充值页的付款方式、每 IP 的下单计数），别的站点的读不到；站点来自会话，不来自账户能写的行。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
 - 权限在代码里声明名字和是否敏感；角色快照合并 permissions 与 additional_permissions，警告并忽略代码不认识的名字，避免新版本权限使旧节点快照过期。迁移 00010 将新增权限放进 additional_permissions，保留不支持忽略未知名字的旧节点所读 permissions 原样；`TestRolePermissionsRollingCompatibility` 同时核对旧投影及迁移权限的声明，防止拼写错误。敏感权限要求本次会话 `level = mfa`。
-- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`、`balance.top_up`，以及敏感的 `sites.manage`、`platform_grants.manage`、`users.manage`，和管理接口权限（含 `calls.search`、`calls.inspect`、`audit.view`）（见下文「管理接口」）。默认角色由迁移 00003 写入，00005、00006、00010 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
+- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`、`balance.top_up`，以及敏感的 `sites.manage`、`platform_grants.manage`、`users.manage`，和管理接口权限（含 `calls.search`、`calls.inspect`、`audit.view`）（见下文「管理接口」），以及运营的 `operations.read` 和敏感的 `operations.manage`（迁移 00032 放进内置 `admin` 角色的 additional_permissions）。默认角色由迁移 00003 写入，00005、00006、00010 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
 - `Authorize(ctx, principal, permission, target)`：账户目标读操作者在该账户的成员关系；企业账户的成员关系怎么归类待定，所以 M1 只有自己的个人账户能被授权，别的账户返回 `ErrNotFound`。平台目标要求会话在管理后台、`level = mfa`，再读未撤销的平台授予；有成员关系或授予但角色不含这项权限返回 `ErrForbidden`。
+
+## 运营凭证
+
+运营 agent 的操作者（[运营的「运营凭证」](../../docs/domains/operations.md#运营凭证)），和会话、管理 key 并列，只在运营监听有效。代码在 `agents.go`，表在迁移 00032。
+
+```go
+func (s *Service) CreateAgent(ctx, tx, actor audit.Actor, spec AgentSpec) (AgentToken, error)
+func (s *Service) RotateAgent(ctx, tx, actor, id AgentID, overlap time.Duration, reason string) (AgentToken, error)
+func (s *Service) RevokeAgent(ctx, tx, actor, id AgentID, reason string) error
+func (s *Service) StopAgents(ctx, tx, actor, reason string) (int, error)   // 紧急停止：吊销全部活的凭证
+func (s *Service) AgentCredentials(ctx, tx, after AgentID, pageSize int) ([]AgentCredential, bool, error)
+func (s *Service) AuthenticateAgent(ctx, raw string) (Agent, error)
+func (s *Service) AuthorizeAgent(a Agent, perm Permission, platform bool) (pg.Scope, error)
+```
+
+- **表**：`accounts.agent_credentials` 一行一张凭证：名字、权限、站点（NULL 是全部站点）、是否平台范围、提出方厂商、创建人、到期、吊销和最后使用时间；`accounts.agent_credential_tokens` 一行一个令牌：带密钥的哈希（主键）、哈希版本、末四位、`retires_at`（NULL 是当前令牌，部分唯一索引保证每张凭证只有一个）。两张表都是平台数据，策略只放行平台范围；`axiom_app` 只能改 `revoked_at`、`last_used_at` 和 `retires_at`。
+- **令牌**：`op-ax-v1-` 加 API key 同样的 43 位随机和 6 位校验（`newKeyText`、`wellFormedKey`），只在创建或轮换的返回值里出现一次；哈希用 key 的哈希密钥（`hashes.Sum`），查找时按所有版本各算一次。
+- **权限**：至少有 `operations.read`，`CreateAgent` 自动加上；`agentRefused`（`operations.manage`、`platform_grants.manage`）和代码没声明的名字被拒，表的 CHECK 还拒 `operations.approve`，所以凭证不能管理自己、不能审批、不能给别人平台角色。拒绝是 `*AgentSpecError`，带请求里出错位置的 JSON 指针。
+- **认证**：`AuthenticateAgent` 先查形状，再在平台范围的事务里按哈希读活的凭证（令牌当前或在重叠期内、凭证未吊销未过期，按 `Config.Now` 判断），每个请求都读库、不缓存，所以吊销、停止和过期从下一个请求生效；最后使用时间超过一分钟才写一次。认出后按凭证在本节点的令牌桶扣一次（突发 60、每 100 毫秒补一个，即每分钟 600），超了是 `*TooManyAttempts`。
+- **授权**：`AuthorizeAgent` 不读库：没有这项权限是 `ErrForbidden`；平台资源要凭证的平台范围，没有是 `ErrNotFound`（和不存在一样）；其余给凭证站点的范围。
+- **生命周期**：有效期默认并上限 `AgentLifetime`（90 天）；`RotateAgent` 先锁凭证行，把上一次轮换留下的旧令牌立即作废、当前令牌的 `retires_at` 设为现在加重叠（最多 `AgentOverlap`，24 小时），再插新令牌；吊销是终态，`StopAgents` 吊销全部活的凭证，每张一条 `operations_credential.revoke` 审计，再记一条 `operations_agent.stop`。创建、轮换、吊销都在调用方的事务里记审计。
 
 ## 登录前的查找
 
@@ -307,6 +331,8 @@
 | 站点的币种不可改 | `axiom_app` 对 `sites.currency` 没有 `UPDATE` 权限；`Money` 的币种由它决定 |
 | 站点 logo 的类型、尺寸和字节数在入库前受约束 | `site_logos` 的 CHECK；解析器只接受 SVG、PNG、WebP，PNG 解码头部核对尺寸，WebP 先限制尺寸，再完整解码校验，SVG 重建后的字节不超过 256 KiB；测试覆盖脚本、事件属性、外部引用、DTD、超限尺寸和不可读文件 |
 | 当前 logo 一定属于本站点，且旧地址不变 | `(id, logo_hash) → site_logos(site_id, hash)` 复合外键；地址里的 SHA-256 就是内容的哈希，行只插入不更新；测试换图后旧 hash 仍读出原字节 |
+| 运营凭证不能持有控制面的权限，令牌明文只出现一次 | `agentRefused` 和表的 CHECK；只存带密钥的哈希；测试 `TestCreateAgentRefuses` 连超级用户直接插入也被 CHECK 拒绝 |
+| 运营凭证的吊销、停止、过期和轮换后的旧令牌从下一个请求起失效 | `AuthenticateAgent` 每次读库；测试 `TestAgentCredentialLifecycle` |
 | 认证因素的修改都有审计 | 审计在修改的事务里写；测试：两种修改各一条，数据库拒绝审计时开启失败，因素、恢复码、会话都没有留下 |
 | 改了认证因素，旧会话、旧恢复码、进行中的登录都失效 | `factor_version` 相等才有效，签发在用户行锁内核对；测试两种先后：重置先提交，之后用旧密码算出的结果签发失败；签发先持锁时重置等待，签发成功，重置提交后刚签发的会话认证失败 |
 | 快照不决定能否访问 | 站点、域名的状态和注册策略在库里判定；测试：只停用域名，另一个 `Service` 的准入、会话、登录、注册立即被拒；重载持续失败 90 秒后全部 503 |
