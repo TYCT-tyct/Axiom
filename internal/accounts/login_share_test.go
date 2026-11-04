@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"axiom/internal/accounts"
@@ -30,12 +31,29 @@ func filledLoginKey(fill byte) (key secret.LoginKey) {
 	return key
 }
 
-// clientClock is the clock a test's cache client measures its offset from: the test's own frozen clock, moved up by how
-// long the test's setup took, so that the client opens within the second of the server's time that the startup check
-// allows (internal/platform/kv/README.md「时钟」). The test's own advances still move it.
+// clientClock is the clock a test's cache client measures its offset from: the wall clock plus the test's own advances
+// from here on. It must follow the wall clock, not a fixed offset, or a slow start leaves the client behind the server's
+// time and the startup check refuses the open (internal/platform/kv/README.md「时钟」).
 func clientClock(c *clock) func() time.Time {
-	offset := time.Since(c.Now())
-	return func() time.Time { return c.Now().Add(offset) }
+	base := c.Now()
+	return func() time.Time { return time.Now().Add(c.Now().Sub(base)) }
+}
+
+// TestClientClockFollowsTheWallClock: an open delayed after the helper was built still sees the server's time, and the
+// test's later advance still moves the client's clock.
+func TestClientClockFollowsTheWallClock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := &clock{now: time.Now()}
+		now := clientClock(c)
+		time.Sleep(2 * time.Second) // the start: the wall clock runs on while the test's own clock stays put
+		if got := time.Until(now()); got != 0 {
+			t.Fatalf("a delayed open left the client clock %v from the wall clock, want 0", got)
+		}
+		c.Advance(time.Minute)
+		if got := time.Until(now()); got != time.Minute {
+			t.Fatalf("after a one-minute advance the client clock is %v from the wall clock, want 1m", got)
+		}
+	})
 }
 
 // cachedNode is node with the attempts before sign-in counted in cache, as serve wires it.
