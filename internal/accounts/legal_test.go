@@ -26,127 +26,201 @@ const (
 // Chinese terms are version 3; a later cleanup can split the streams. A stale or extra version is refused, and the audit
 // entry carries the version and a digest rather than the text.
 //
-//nolint:cyclop,gocognit // one publication-to-acceptance flow: each step is the mechanism under test.
-func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
-	t.Parallel()
+// legalFlow is the publication-to-acceptance walk's database, service and site.
+type legalFlow struct {
+	t    *testing.T
+	db   *pg.DB
+	s    *accounts.Service
+	site accounts.SiteID
+	p    accounts.Principal
+}
+
+func newLegalFlow(t *testing.T) *legalFlow {
+	t.Helper()
 	db, _ := open(t)
 	s := node(t, db, hashKeys(t, 1), nil)
-	site, account, user := accounts.SiteID(s1), accounts.AccountID(a1), accounts.UserID(u1)
-	publish := func(kind, locale, body string) accounts.LegalDocument {
-		t.Helper()
-		var document accounts.LegalDocument
-		if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-			var err error
-			document, err = s.PublishLegalDocument(t.Context(), tx, system, site, kind, locale, body, "test")
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return document
+	site := accounts.SiteID(s1)
+	return &legalFlow{
+		t: t, db: db, s: s, site: site,
+		p: accounts.PrincipalForTest(site, accounts.AccountID(a1), accounts.UserID(u1)),
 	}
+}
 
-	terms1 := publish(accounts.LegalTerms, accounts.LegalLocaleZH, placeholderTerms)
+func (f *legalFlow) publish(kind, locale, body string) accounts.LegalDocument {
+	f.t.Helper()
+	var document accounts.LegalDocument
+	if err := f.db.Tx(f.t.Context(), platform, func(tx pg.Tx) error {
+		var err error
+		document, err = f.s.PublishLegalDocument(f.t.Context(), tx, system, f.site, kind, locale, body, "test")
+		return err
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+	return document
+}
+
+// checkPublishedVersions asserts versions count per kind and locale, and that the compatibility phase shares numbers
+// across locales.
+func (f *legalFlow) checkPublishedVersions() {
+	f.t.Helper()
+	terms1 := f.publish(accounts.LegalTerms, accounts.LegalLocaleZH, placeholderTerms)
 	if terms1.Kind != accounts.LegalTerms || terms1.Locale != accounts.LegalLocaleZH || terms1.Version != 1 || terms1.PublishedAt.IsZero() {
-		t.Fatalf("the first terms version: %+v", terms1)
+		f.t.Fatalf("the first terms version: %+v", terms1)
 	}
-	privacy1 := publish(accounts.LegalPrivacy, accounts.LegalLocaleZH, placeholderPrivacy)
+	privacy1 := f.publish(accounts.LegalPrivacy, accounts.LegalLocaleZH, placeholderPrivacy)
 	if privacy1.Kind != accounts.LegalPrivacy || privacy1.Locale != accounts.LegalLocaleZH || privacy1.Version != 1 {
-		t.Fatalf("the first privacy version: %+v", privacy1)
+		f.t.Fatalf("the first privacy version: %+v", privacy1)
 	}
-	terms2 := publish(accounts.LegalTerms, accounts.LegalLocaleZH, placeholderTerms+" Version two.")
-	if terms2.Version != 2 { // versions count per kind and locale, not per site
-		t.Fatalf("the second terms version: %+v", terms2)
+	if terms2 := f.publish(accounts.LegalTerms, accounts.LegalLocaleZH, placeholderTerms+" Version two."); terms2.Version != 2 {
+		f.t.Fatalf("the second terms version: %+v", terms2)
 	}
-	termsEN := publish(accounts.LegalTerms, accounts.LegalLocaleEN, "English placeholder terms for tests.")
-	if termsEN.Version != 3 { // the compatibility phase shares version numbers across locales
-		t.Fatalf("the first English terms version: %+v", termsEN)
+	if termsEN := f.publish(accounts.LegalTerms, accounts.LegalLocaleEN, "English placeholder terms for tests."); termsEN.Version != 3 {
+		f.t.Fatalf("the first English terms version: %+v", termsEN)
 	}
+}
 
-	current, err := s.CurrentLegalDocuments(t.Context(), site)
+// checkCurrentDocuments asserts each site sees its own newest documents.
+func (f *legalFlow) checkCurrentDocuments() {
+	f.t.Helper()
+	current, err := f.s.CurrentLegalDocuments(f.t.Context(), f.site)
 	if err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
-	if len(current) != 3 || current[0].Kind != accounts.LegalPrivacy || current[1].Locale != accounts.LegalLocaleEN || current[1].Version != 3 || current[2].Version != 2 {
-		t.Fatalf("current documents: %+v", current)
+	if len(current) != 3 || current[0].Kind != accounts.LegalPrivacy || current[1].Locale != accounts.LegalLocaleEN ||
+		current[1].Version != 3 || current[2].Version != 2 {
+		f.t.Fatalf("current documents: %+v", current)
 	}
-	if none, err := s.CurrentLegalDocuments(t.Context(), accounts.SiteID(s2)); err != nil || len(none) != 0 {
-		t.Fatalf("a site without documents: %+v, %v", none, err)
+	if none, err := f.s.CurrentLegalDocuments(f.t.Context(), accounts.SiteID(s2)); err != nil || len(none) != 0 {
+		f.t.Fatalf("a site without documents: %+v, %v", none, err)
 	}
+}
+
+// checkHistory asserts the full ordered history and that four documents are one page.
+func (f *legalFlow) checkHistory() {
+	f.t.Helper()
 	var history []accounts.LegalDocument
-	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+	if err := f.db.Tx(f.t.Context(), platform, func(tx pg.Tx) error {
 		var more bool
 		var err error
-		history, more, err = s.LegalDocumentHistory(t.Context(), tx, site, nil, 200)
+		history, more, err = f.s.LegalDocumentHistory(f.t.Context(), tx, f.site, nil, 200)
 		if err == nil && more {
-			t.Error("a site with four documents has a next page")
+			f.t.Error("a site with four documents has a next page")
 		}
 		return err
 	}); err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
 	if len(history) != 4 {
-		t.Fatalf("history: %+v", history)
+		f.t.Fatalf("history: %+v", history)
 	}
 	var pairVersions []string
 	for _, document := range history {
 		pairVersions = append(pairVersions, document.Kind+":"+document.Locale+":"+itoa(document.Version))
 	}
 	if !slices.Equal(pairVersions, []string{"privacy:zh:1", "terms:en:3", "terms:zh:2", "terms:zh:1"}) {
-		t.Fatalf("history: %v", pairVersions)
+		f.t.Fatalf("history: %v", pairVersions)
 	}
+}
 
-	p := accounts.PrincipalForTest(site, account, user)
-	pending, err := s.PendingLegalDocuments(t.Context(), p)
+// checkCurrentAndHistory asserts each site sees its own newest documents and the full ordered history.
+func (f *legalFlow) checkCurrentAndHistory() {
+	f.t.Helper()
+	f.checkCurrentDocuments()
+	f.checkHistory()
+}
+
+// checkPendingBeforeAcceptance asserts the two documents still pending.
+func (f *legalFlow) pendingBeforeAcceptance() []accounts.DocumentVersion {
+	f.t.Helper()
+	pending, err := f.s.PendingLegalDocuments(f.t.Context(), f.p)
 	if err != nil {
-		t.Fatal(err)
+		f.t.Fatal(err)
 	}
-	if len(pending) != 2 || pending[0].Kind != accounts.LegalPrivacy || pending[1].Version != 3 || pending[1].Locale != accounts.LegalLocaleEN {
-		t.Fatalf("pending before accepting: %+v", pending)
+	if len(pending) != 2 || pending[0].Kind != accounts.LegalPrivacy || pending[1].Version != 3 ||
+		pending[1].Locale != accounts.LegalLocaleEN {
+		f.t.Fatalf("pending before accepting: %+v", pending)
 	}
-	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{
+	return pending
+}
+
+// checkAcceptanceRefusals asserts a stale or partial acceptance is refused and nothing is written.
+func (f *legalFlow) checkAcceptanceRefusals(pending []accounts.DocumentVersion) {
+	f.t.Helper()
+	if err := f.s.AcceptLegalDocuments(f.t.Context(), f.p, []accounts.DocumentVersion{
 		{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleZH, Version: 2},
 		{Kind: accounts.LegalPrivacy, Locale: accounts.LegalLocaleZH, Version: 1},
 	}); !errors.Is(err, accounts.ErrConsentRequired) {
-		t.Fatalf("accepting a lower locale version: %v, want ErrConsentRequired", err)
+		f.t.Fatalf("accepting a lower locale version: %v, want ErrConsentRequired", err)
 	}
-	if err := s.AcceptLegalDocuments(t.Context(), p, pending[:1]); !errors.Is(err, accounts.ErrConsentRequired) {
-		t.Fatalf("accepting half the documents: %v, want ErrConsentRequired", err)
+	if err := f.s.AcceptLegalDocuments(f.t.Context(), f.p, pending[:1]); !errors.Is(err, accounts.ErrConsentRequired) {
+		f.t.Fatalf("accepting half the documents: %v, want ErrConsentRequired", err)
 	}
-	if err := s.AcceptLegalDocuments(t.Context(), p, pending); err != nil {
-		t.Fatal(err)
-	}
-	if got := texts(t, db, platform, "SELECT kind || ' ' || locale || ' ' || version FROM accounts.legal_acceptances ORDER BY kind, locale"); !slices.Equal(got, []string{"privacy zh 1", "terms en 3"}) {
-		t.Fatalf("acceptances: %v", got)
-	}
-	firstAccepted := texts(t, db, platform, "SELECT accepted_at::text FROM accounts.legal_acceptances WHERE kind = 'terms' AND locale = 'en' AND version = 3")[0]
-	if err := s.AcceptLegalDocuments(t.Context(), p, pending); err != nil {
-		t.Fatal(err)
-	}
-	if got := texts(t, db, platform, "SELECT accepted_at::text FROM accounts.legal_acceptances WHERE kind = 'terms' AND locale = 'en' AND version = 3"); len(got) != 1 || got[0] != firstAccepted {
-		t.Errorf("a retried acceptance: %v, want one row at %s", got, firstAccepted)
-	}
-	if pending, err := s.PendingLegalDocuments(t.Context(), p); err != nil || len(pending) != 0 {
-		t.Fatalf("pending after accepting: %+v, %v", pending, err)
-	}
+}
 
-	publish(accounts.LegalTerms, accounts.LegalLocaleEN, "English placeholder terms for tests. Version two.")
-	pending, err = s.PendingLegalDocuments(t.Context(), p)
+// checkAcceptanceRows asserts the whole acceptance writes one row per document and a retry leaves it alone.
+func (f *legalFlow) checkAcceptanceRows(pending []accounts.DocumentVersion) {
+	f.t.Helper()
+	if err := f.s.AcceptLegalDocuments(f.t.Context(), f.p, pending); err != nil {
+		f.t.Fatal(err)
+	}
+	if got := texts(f.t, f.db, platform, "SELECT kind || ' ' || locale || ' ' || version FROM accounts.legal_acceptances ORDER BY kind, locale"); !slices.Equal(got, []string{"privacy zh 1", "terms en 3"}) {
+		f.t.Fatalf("acceptances: %v", got)
+	}
+	firstAccepted := texts(f.t, f.db, platform, "SELECT accepted_at::text FROM accounts.legal_acceptances WHERE kind = 'terms' AND locale = 'en' AND version = 3")[0]
+	if err := f.s.AcceptLegalDocuments(f.t.Context(), f.p, pending); err != nil {
+		f.t.Fatal(err)
+	}
+	if got := texts(f.t, f.db, platform, "SELECT accepted_at::text FROM accounts.legal_acceptances WHERE kind = 'terms' AND locale = 'en' AND version = 3"); len(got) != 1 || got[0] != firstAccepted {
+		f.t.Errorf("a retried acceptance: %v, want one row at %s", got, firstAccepted)
+	}
+	if pending, err := f.s.PendingLegalDocuments(f.t.Context(), f.p); err != nil || len(pending) != 0 {
+		f.t.Fatalf("pending after accepting: %+v, %v", pending, err)
+	}
+}
+
+// checkAcceptance asserts stale, partial and extra acceptances are refused, the full one is idempotent, and each
+// acceptance row is written once.
+func (f *legalFlow) checkAcceptance() {
+	f.t.Helper()
+	pending := f.pendingBeforeAcceptance()
+	f.checkAcceptanceRefusals(pending)
+	f.checkAcceptanceRows(pending)
+}
+
+// checkNewVersion asserts a new version pends again, a superseded or extra kind is refused, and the new one is accepted.
+func (f *legalFlow) checkNewVersion() {
+	f.t.Helper()
+	f.publish(accounts.LegalTerms, accounts.LegalLocaleEN, "English placeholder terms for tests. Version two.")
+	pending, err := f.s.PendingLegalDocuments(f.t.Context(), f.p)
 	if err != nil || len(pending) != 1 || pending[0].Version != 4 || pending[0].Locale != accounts.LegalLocaleEN {
-		t.Fatalf("pending after a new version: %+v, %v", pending, err)
+		f.t.Fatalf("pending after a new version: %+v, %v", pending, err)
 	}
-	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleZH, Version: 2}}); !errors.Is(err, accounts.ErrConsentRequired) {
-		t.Errorf("accepting the superseded version: %v, want ErrConsentRequired", err)
+	if err := f.s.AcceptLegalDocuments(f.t.Context(), f.p, []accounts.DocumentVersion{
+		{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleZH, Version: 2},
+	}); !errors.Is(err, accounts.ErrConsentRequired) {
+		f.t.Errorf("accepting the superseded version: %v, want ErrConsentRequired", err)
 	}
-	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleEN, Version: 4}, {Kind: accounts.LegalPrivacy, Locale: accounts.LegalLocaleZH, Version: 1}, {Kind: "marketing", Locale: accounts.LegalLocaleZH, Version: 1}}); !errors.Is(err, accounts.ErrConsentRequired) {
-		t.Errorf("accepting an extra kind: %v, want ErrConsentRequired", err)
+	if err := f.s.AcceptLegalDocuments(f.t.Context(), f.p, []accounts.DocumentVersion{
+		{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleEN, Version: 4},
+		{Kind: accounts.LegalPrivacy, Locale: accounts.LegalLocaleZH, Version: 1},
+		{Kind: "marketing", Locale: accounts.LegalLocaleZH, Version: 1},
+	}); !errors.Is(err, accounts.ErrConsentRequired) {
+		f.t.Errorf("accepting an extra kind: %v, want ErrConsentRequired", err)
 	}
-	if err := s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleEN, Version: 4}, {Kind: accounts.LegalPrivacy, Locale: accounts.LegalLocaleZH, Version: 1}}); err != nil {
-		t.Fatal(err)
+	if err := f.s.AcceptLegalDocuments(f.t.Context(), f.p, []accounts.DocumentVersion{
+		{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleEN, Version: 4},
+		{Kind: accounts.LegalPrivacy, Locale: accounts.LegalLocaleZH, Version: 1},
+	}); err != nil {
+		f.t.Fatal(err)
 	}
-	if pending, err := s.PendingLegalDocuments(t.Context(), p); err != nil || len(pending) != 0 {
-		t.Fatalf("pending after accepting the new version: %+v, %v", pending, err)
+	if pending, err := f.s.PendingLegalDocuments(f.t.Context(), f.p); err != nil || len(pending) != 0 {
+		f.t.Fatalf("pending after accepting the new version: %+v, %v", pending, err)
 	}
+}
 
+// checkPublishRefusals asserts each malformed document names its field, and an unknown site is not found.
+func (f *legalFlow) checkPublishRefusals() {
+	f.t.Helper()
 	for _, c := range []struct {
 		name, kind, locale, body, field string
 	}{
@@ -155,30 +229,46 @@ func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
 		{"an empty body", accounts.LegalTerms, accounts.LegalLocaleZH, "", "body"},
 		{"a body past the limit", accounts.LegalTerms, accounts.LegalLocaleZH, strings.Repeat("x", 65537), "body"},
 	} {
-		err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-			_, err := s.PublishLegalDocument(t.Context(), tx, system, site, c.kind, c.locale, c.body, "test")
+		err := f.db.Tx(f.t.Context(), platform, func(tx pg.Tx) error {
+			_, err := f.s.PublishLegalDocument(f.t.Context(), tx, system, f.site, c.kind, c.locale, c.body, "test")
 			return err
 		})
 		var refusal *accounts.LegalDocumentError
 		if !errors.As(err, &refusal) || refusal.Field != c.field {
-			t.Errorf("%s: %v, want LegalDocumentError on %s", c.name, err, c.field)
+			f.t.Errorf("%s: %v, want LegalDocumentError on %s", c.name, err, c.field)
 		}
 	}
-	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		_, err := s.PublishLegalDocument(t.Context(), tx, system, accounts.SiteID(uuid.NewV7()), accounts.LegalTerms, accounts.LegalLocaleZH, "Text.", "test")
+	err := f.db.Tx(f.t.Context(), platform, func(tx pg.Tx) error {
+		_, err := f.s.PublishLegalDocument(f.t.Context(), tx, system, accounts.SiteID(uuid.NewV7()), accounts.LegalTerms,
+			accounts.LegalLocaleZH, "Text.", "test")
 		return err
 	})
 	if !errors.Is(err, accounts.ErrNotFound) {
-		t.Errorf("publishing for an unknown site: %v, want ErrNotFound", err)
+		f.t.Errorf("publishing for an unknown site: %v, want ErrNotFound", err)
 	}
+}
 
-	if got := texts(t, db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action = 'site_legal_document.publish'"); !slices.Equal(got, []string{"5"}) {
-		t.Errorf("publication audit entries: %v, want 5", got)
+// checkAudit asserts the publication entries count and carry the version, locale and a digest but not the body.
+func (f *legalFlow) checkAudit() {
+	f.t.Helper()
+	if got := texts(f.t, f.db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action = 'site_legal_document.publish'"); !slices.Equal(got, []string{"5"}) {
+		f.t.Errorf("publication audit entries: %v, want 5", got)
 	}
-	if got := texts(t, db, platform, `SELECT (detail->>'version') || ' ' || (detail->>'locale') || ' ' || (detail ? 'sha256')::text || ' ' || (detail ? 'body')::text
+	if got := texts(f.t, f.db, platform, `SELECT (detail->>'version') || ' ' || (detail->>'locale') || ' ' || (detail ? 'sha256')::text || ' ' || (detail ? 'body')::text
 		FROM platform.audit_log WHERE action = 'site_legal_document.publish' ORDER BY id LIMIT 1`); !slices.Equal(got, []string{"1 zh true false"}) {
-		t.Errorf("the first audit detail: %v", got)
+		f.t.Errorf("the first audit detail: %v", got)
 	}
+}
+
+func TestLegalDocumentVersionsAndAcceptance(t *testing.T) {
+	t.Parallel()
+	f := newLegalFlow(t)
+	f.checkPublishedVersions()
+	f.checkCurrentAndHistory()
+	f.checkAcceptance()
+	f.checkNewVersion()
+	f.checkPublishRefusals()
+	f.checkAudit()
 }
 
 // TestLegalOldNodeWritesAfterLocaleExpansion feeds the schema the statements an old node still runs. The old document

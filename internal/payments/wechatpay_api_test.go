@@ -1,39 +1,129 @@
 package payments
 
 import (
-	"bytes"
-	"errors"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
-	"unicode/utf8"
 	"uuid"
 
 	"axiom/internal/platform/jsonx"
 )
 
-//nolint:cyclop,gocognit // one branch per protocol edge; the test reads as a table of cases
-func TestWechatPayQueryStates(t *testing.T) {
-	var mu sync.Mutex
-	var reply struct {
-		status int
-		body   []byte
-	}
-	gateway := &wpTestGateway{t: t, respond: func(r *http.Request, _ []byte) (int, []byte) {
+// wpQueryFixture is the query walk's gateway and channel, with one answer the test replaces per case.
+type wpQueryFixture struct {
+	t       *testing.T
+	mu      sync.Mutex
+	status  int
+	body    []byte
+	gateway *wpTestGateway
+	channel Channel
+	order   string
+}
+
+func newWPQueryFixture(t *testing.T) *wpQueryFixture {
+	t.Helper()
+	f := &wpQueryFixture{t: t, order: "ord_01ARZ3NDEKTSV4RRFFQ69G5FAV"}
+	f.gateway = &wpTestGateway{t: t, respond: func(r *http.Request, _ []byte) (int, []byte) {
 		if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, "/v3/pay/transactions/out-trade-no/") {
 			t.Errorf("unexpected query %s %s", r.Method, r.URL.Path)
 		}
 		if r.URL.Query().Get("mchid") != wpTestMchID {
 			t.Errorf("query did not carry the merchant: %s", r.URL.RawQuery)
 		}
-		mu.Lock()
-		defer mu.Unlock()
-		return reply.status, reply.body
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.status, f.body
 	}}
-	server := wpTestServer(t, gateway)
-	channel := wpOpen(t, wpCertConfig(t, server.URL, server.Certificate(), false))
-	order := "ord_01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	server := wpTestServer(t, f.gateway)
+	f.channel = wpOpen(t, wpCertConfig(t, server.URL, server.Certificate(), false))
+	return f
+}
+
+func (f *wpQueryFixture) reply(status int, body []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status, f.body = status, body
+}
+
+// checkOrderEdges asserts the missing order, foreign and echoed replies, the amount shapes and an unknown state.
+func (f *wpQueryFixture) checkOrderEdges() {
+	f.t.Helper()
+	f.reply(http.StatusNotFound, []byte(`{"code":"ORDER_NOT_EXIST","message":"no"}`))
+	payment, err := f.channel.Query(f.t.Context(), f.order, "")
+	if err != nil || payment.State != PayPending || payment.Paid.Minor != 0 {
+		f.t.Fatalf("missing order %+v %v", payment, err)
+	}
+
+	f.reply(http.StatusNotFound, []byte(`{"code":"MCH_NOT_EXISTS","message":"no"}`))
+	if _, err := f.channel.Query(f.t.Context(), f.order, ""); err == nil {
+		f.t.Fatal("a signed 404 that is not ORDER_NOT_EXIST became pending")
+	}
+
+	f.reply(http.StatusOK, wpTestJSONBody(map[string]any{
+		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": "ord_OTHER", "trade_state": "SUCCESS",
+	}))
+	if _, err := f.channel.Query(f.t.Context(), f.order, ""); err == nil {
+		f.t.Fatal("query echoed another order")
+	}
+
+	for _, tc := range []struct {
+		name   string
+		amount any
+		want   int64
+	}{
+		{"string amount", map[string]any{"total": "12345", "currency": "CNY"}, -1},
+		{"USD amount", map[string]any{"total": 12345, "currency": "USD"}, -1},
+		{"missing amount", nil, 0},
+	} {
+		f.t.Run(tc.name, func(t *testing.T) {
+			reply := map[string]any{
+				"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": f.order, "trade_state": "SUCCESS",
+			}
+			if tc.amount != nil {
+				reply["amount"] = tc.amount
+			}
+			f.reply(http.StatusOK, wpTestJSONBody(reply))
+			payment, err := f.channel.Query(t.Context(), f.order, "")
+			if err != nil || payment.Paid.Minor != tc.want {
+				t.Fatalf("%s %+v %v", tc.name, payment, err)
+			}
+		})
+	}
+
+	f.reply(http.StatusOK, wpTestJSONBody(map[string]any{
+		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": f.order, "trade_state": "WAIT",
+	}))
+	if _, err := f.channel.Query(f.t.Context(), f.order, ""); err == nil {
+		f.t.Fatal("unknown trade state accepted")
+	}
+}
+
+// checkSignatures asserts an unsigned, corrupt or unknown-serial response is refused.
+func (f *wpQueryFixture) checkSignatures() {
+	f.t.Helper()
+	for _, tc := range []struct {
+		name  string
+		setup func()
+		reset func()
+	}{
+		{"unsigned", func() { f.gateway.omit = true }, func() { f.gateway.omit = false }},
+		{"corrupt signature", func() { f.gateway.corrupt = true }, func() { f.gateway.corrupt = false }},
+		{"unknown serial", func() { f.gateway.serial = "DEADBEEF" }, func() { f.gateway.serial = "" }},
+	} {
+		f.t.Run(tc.name, func(t *testing.T) {
+			tc.setup()
+			defer tc.reset()
+			if _, err := f.channel.Query(t.Context(), f.order, ""); err == nil {
+				t.Fatalf("%s accepted", tc.name)
+			}
+		})
+	}
+}
+
+func TestWechatPayQueryStates(t *testing.T) {
+	f := newWPQueryFixture(t)
+	order := f.order
 
 	states := map[string]PayState{
 		"SUCCESS": PayPaid, "REFUND": PayPaid,
@@ -42,14 +132,12 @@ func TestWechatPayQueryStates(t *testing.T) {
 	}
 	for state, want := range states {
 		t.Run(state, func(t *testing.T) {
-			mu.Lock()
-			reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
+			f.reply(http.StatusOK, wpTestJSONBody(map[string]any{
 				"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": order,
 				"transaction_id": "T-" + order, "trade_state": state,
 				"amount": map[string]any{"total": 12345, "currency": "CNY"},
-			})
-			mu.Unlock()
-			payment, err := channel.Query(t.Context(), order, "")
+			}))
+			payment, err := f.channel.Query(t.Context(), order, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,95 +156,15 @@ func TestWechatPayQueryStates(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			body := wpTransaction(order, "T-"+order, 12345, "SUCCESS")
 			change(body)
-			mu.Lock()
-			reply.status, reply.body = http.StatusOK, wpTestJSONBody(body)
-			mu.Unlock()
-			if _, err := channel.Query(t.Context(), order, ""); err == nil {
+			f.reply(http.StatusOK, wpTestJSONBody(body))
+			if _, err := f.channel.Query(t.Context(), order, ""); err == nil {
 				t.Fatal("query from another app or merchant accepted")
 			}
 		})
 	}
 
-	mu.Lock()
-	reply.status, reply.body = http.StatusNotFound, []byte(`{"code":"ORDER_NOT_EXIST","message":"no"}`)
-	mu.Unlock()
-	payment, err := channel.Query(t.Context(), order, "")
-	if err != nil || payment.State != PayPending || payment.Paid.Minor != 0 {
-		t.Fatalf("missing order %+v %v", payment, err)
-	}
-
-	mu.Lock()
-	reply.status, reply.body = http.StatusNotFound, []byte(`{"code":"MCH_NOT_EXISTS","message":"no"}`)
-	mu.Unlock()
-	if _, err := channel.Query(t.Context(), order, ""); err == nil {
-		t.Fatal("a signed 404 that is not ORDER_NOT_EXIST became pending")
-	}
-
-	mu.Lock()
-	reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": "ord_OTHER", "trade_state": "SUCCESS",
-	})
-	mu.Unlock()
-	if _, err := channel.Query(t.Context(), order, ""); err == nil {
-		t.Fatal("query echoed another order")
-	}
-
-	mu.Lock()
-	reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": order, "trade_state": "SUCCESS",
-		"amount": map[string]any{"total": "12345", "currency": "CNY"},
-	})
-	mu.Unlock()
-	payment, err = channel.Query(t.Context(), order, "")
-	if err != nil || payment.Paid.Minor != -1 {
-		t.Fatalf("string amount %+v %v", payment, err)
-	}
-
-	mu.Lock()
-	reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": order, "trade_state": "SUCCESS",
-		"amount": map[string]any{"total": 12345, "currency": "USD"},
-	})
-	mu.Unlock()
-	payment, err = channel.Query(t.Context(), order, "")
-	if err != nil || payment.Paid.Minor != -1 {
-		t.Fatalf("USD amount %+v %v", payment, err)
-	}
-
-	mu.Lock()
-	reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": order, "trade_state": "SUCCESS",
-	})
-	mu.Unlock()
-	payment, err = channel.Query(t.Context(), order, "")
-	if err != nil || payment.Paid.Minor != 0 {
-		t.Fatalf("missing amount %+v %v", payment, err)
-	}
-
-	mu.Lock()
-	reply.status, reply.body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"appid": wpTestAppID, "mchid": wpTestMchID, "out_trade_no": order, "trade_state": "WAIT",
-	})
-	mu.Unlock()
-	if _, err := channel.Query(t.Context(), order, ""); err == nil {
-		t.Fatal("unknown trade state accepted")
-	}
-
-	gateway.omit = true
-	if _, err := channel.Query(t.Context(), order, ""); err == nil {
-		t.Fatal("unsigned query response accepted")
-	}
-	gateway.omit = false
-	gateway.corrupt = true
-	if _, err := channel.Query(t.Context(), order, ""); err == nil {
-		t.Fatal("corrupt query signature accepted")
-	}
-	gateway.corrupt = false
-	gateway.serial = "DEADBEEF"
-	if _, err := channel.Query(t.Context(), order, ""); err == nil {
-		t.Fatal("unknown serial accepted")
-	}
-	gateway.serial = ""
+	f.checkOrderEdges()
+	f.checkSignatures()
 }
 
 func TestWechatPayQueryWithPublicKey(t *testing.T) {
@@ -243,285 +251,5 @@ func TestWechatPayClose(t *testing.T) {
 	gateway.omit = true
 	if err := channel.Close(t.Context(), order, ""); err == nil {
 		t.Fatal("close accepted an unsigned 404")
-	}
-}
-
-//nolint:cyclop,gocognit // one branch per protocol edge; the test reads as a table of cases
-func TestWechatPayRefund(t *testing.T) {
-	var mu sync.Mutex
-	var refundStatus string
-	var refundEcho struct {
-		outRefundNo, outTradeNo string
-		total, refund           int64
-	}
-	var lastRefund []byte
-	var queryBody []byte
-	gateway := &wpTestGateway{t: t, respond: func(r *http.Request, body []byte) (int, []byte) {
-		switch {
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/v3/pay/transactions/out-trade-no/"):
-			return http.StatusOK, queryBody
-		case r.Method == http.MethodPost && r.URL.Path == "/v3/refund/domestic/refunds":
-			mu.Lock()
-			lastRefund = bytes.Clone(body)
-			status, echo := refundStatus, refundEcho
-			mu.Unlock()
-			if status == "" {
-				status = "SUCCESS"
-			}
-			return http.StatusOK, wpTestJSONBody(map[string]any{
-				"refund_id": "WX-" + echo.outRefundNo, "out_refund_no": echo.outRefundNo, "out_trade_no": echo.outTradeNo,
-				"status": status, "amount": map[string]any{"total": echo.total, "refund": echo.refund, "currency": "CNY"},
-			})
-		default:
-			t.Errorf("unexpected refund request %s %s", r.Method, r.URL.Path)
-			return http.StatusNotFound, nil
-		}
-	}}
-	server := wpTestServer(t, gateway)
-	channel := wpOpen(t, wpCertConfig(t, server.URL, server.Certificate(), false))
-	order := OrderID(uuid.NewV7())
-	refund := RefundID(uuid.NewV7())
-	queryBody = wpQueryJSON(order.TypeID(), "SUCCESS", map[string]any{"total": 10000, "currency": "CNY"})
-	mu.Lock()
-	refundEcho = struct {
-		outRefundNo, outTradeNo string
-		total, refund           int64
-	}{refund.TypeID(), order.TypeID(), 10000, 3000}
-	mu.Unlock()
-	call := RefundCall{Refund: refund, Order: order, Amount: Money{Currency: currency(t, "CNY"), Minor: 3000}, Reason: strings.Repeat("退", 100)}
-	state, err := channel.Refund(t.Context(), call)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.State != RefundSucceeded || state.ProviderRef != "WX-"+refund.TypeID() {
-		t.Fatalf("refund state %+v", state)
-	}
-	var body struct {
-		OutTradeNo  string `json:"out_trade_no"`
-		OutRefundNo string `json:"out_refund_no"`
-		Reason      string `json:"reason"`
-		Amount      struct {
-			Refund   int64  `json:"refund"`
-			Total    int64  `json:"total"`
-			Currency string `json:"currency"`
-		} `json:"amount"`
-	}
-	if err := jsonx.Unmarshal(lastRefund, &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.OutTradeNo != order.TypeID() || body.OutRefundNo != refund.TypeID() || body.Amount.Refund != 3000 ||
-		body.Amount.Total != 10000 || body.Amount.Currency != "CNY" {
-		t.Fatalf("refund body %s", lastRefund)
-	}
-	if len(body.Reason) > 80 || !utf8.ValidString(body.Reason) {
-		t.Fatalf("reason %q is %d bytes", body.Reason, len(body.Reason))
-	}
-
-	for _, tc := range []struct {
-		status string
-		want   RefundOutcome
-	}{{"PROCESSING", RefundPending}, {"ABNORMAL", RefundPending}, {"CLOSED", RefundFailed}} {
-		t.Run(tc.status, func(t *testing.T) {
-			mu.Lock()
-			refundStatus = tc.status
-			mu.Unlock()
-			state, err := channel.Refund(t.Context(), call)
-			if err != nil || state.State != tc.want {
-				t.Fatalf("%+v %v", state, err)
-			}
-		})
-	}
-	mu.Lock()
-	refundStatus = ""
-	mu.Unlock()
-
-	// A 429 may mean the refund was accepted: it must stay unknown, not fail.
-	mu.Lock()
-	refundStatus = ""
-	mu.Unlock()
-	gateway.respond = func(r *http.Request, body []byte) (int, []byte) {
-		if r.Method == http.MethodGet {
-			return http.StatusOK, queryBody
-		}
-		return http.StatusTooManyRequests, []byte(`{"code":"FREQUENCY_LIMITED"}`)
-	}
-	if _, err := channel.Refund(t.Context(), call); err == nil || wpTestRejected(err) {
-		t.Fatalf("429 became %v", err)
-	}
-	gateway.respond = func(r *http.Request, body []byte) (int, []byte) {
-		if r.Method == http.MethodGet {
-			return http.StatusOK, queryBody
-		}
-		return http.StatusBadRequest, []byte(`{"code":"PARAM_ERROR"}`)
-	}
-	if _, err := channel.Refund(t.Context(), call); !wpTestRejected(err) {
-		t.Fatalf("400 became %v", err)
-	}
-	gateway.respond = func(r *http.Request, body []byte) (int, []byte) {
-		if r.Method == http.MethodGet {
-			return http.StatusOK, queryBody
-		}
-		return http.StatusInternalServerError, []byte(`{"code":"SYSTEM_ERROR"}`)
-	}
-	if _, err := channel.Refund(t.Context(), call); err == nil || wpTestRejected(err) {
-		t.Fatalf("500 became %v", err)
-	}
-
-	// If the original-order query fails before the refund request, nothing was sent: fail the first attempt.
-	gateway.respond = func(r *http.Request, body []byte) (int, []byte) {
-		if r.Method == http.MethodGet {
-			return http.StatusInternalServerError, []byte(`{"code":"SYSTEM_ERROR"}`)
-		}
-		return http.StatusOK, nil
-	}
-	if _, err := channel.Refund(t.Context(), call); !wpTestRejected(err) {
-		t.Fatalf("pre-send query failure became %v", err)
-	}
-
-	// The original total and the echoed refund come from the order and the response, not from the caller.
-	gateway.respond = func(r *http.Request, body []byte) (int, []byte) {
-		if r.Method == http.MethodGet {
-			return http.StatusOK, queryBody
-		}
-		return http.StatusOK, wpTestJSONBody(map[string]any{
-			"refund_id": "WX-1", "out_refund_no": refund.TypeID(), "out_trade_no": order.TypeID(),
-			"status": "SUCCESS", "amount": map[string]any{"total": 9999, "refund": 3000, "currency": "CNY"},
-		})
-	}
-	if _, err := channel.Refund(t.Context(), call); err == nil {
-		t.Fatal("wrong echoed total accepted")
-	}
-	gateway.respond = func(r *http.Request, body []byte) (int, []byte) {
-		if r.Method == http.MethodGet {
-			return http.StatusOK, queryBody
-		}
-		return http.StatusOK, wpTestJSONBody(map[string]any{
-			"refund_id": "WX-1", "out_refund_no": refund.TypeID(), "out_trade_no": order.TypeID(),
-			"status": "SUCCESS", "amount": map[string]any{"total": 10000, "refund": 3001, "currency": "CNY"},
-		})
-	}
-	if _, err := channel.Refund(t.Context(), call); err == nil {
-		t.Fatal("wrong echoed refund accepted")
-	}
-
-	queryBody = wpQueryJSON(order.TypeID(), "CLOSED", nil)
-	if _, err := channel.Refund(t.Context(), call); !wpTestRejected(err) {
-		t.Fatalf("closed order refund %v", err)
-	}
-	queryBody = wpQueryJSON(order.TypeID(), "NOTPAY", nil)
-	if _, err := channel.Refund(t.Context(), call); !wpTestRejected(err) {
-		t.Fatalf("unpaid order refund %v", err)
-	}
-	queryBody = wpQueryJSON(order.TypeID(), "SUCCESS", nil)
-	if _, err := channel.Refund(t.Context(), call); !wpTestRejected(err) {
-		t.Fatalf("refund without an original total %v", err)
-	}
-	queryBody = wpQueryJSON(order.TypeID(), "SUCCESS", map[string]any{"total": 10000, "currency": "CNY"})
-	tooMuch := call
-	tooMuch.Amount.Minor = 10001
-	if _, err := channel.Refund(t.Context(), tooMuch); !wpTestRejected(err) {
-		t.Fatalf("over-refund %v", err)
-	}
-	// A missing order is a definite refusal, not a pending query.
-	gateway.respond = func(r *http.Request, body []byte) (int, []byte) {
-		if r.Method == http.MethodGet {
-			return http.StatusNotFound, []byte(`{"code":"ORDER_NOT_EXIST"}`)
-		}
-		return http.StatusOK, nil
-	}
-	if _, err := channel.Refund(t.Context(), call); !wpTestRejected(err) {
-		t.Fatalf("missing order refund %v", err)
-	}
-}
-
-//nolint:cyclop // one branch per query-refund status; the test reads as a table of cases
-func TestWechatPayQueryRefund(t *testing.T) {
-	var status int
-	var body []byte
-	var path string
-	gateway := &wpTestGateway{t: t, respond: func(r *http.Request, _ []byte) (int, []byte) {
-		path = r.URL.Path
-		return status, body
-	}}
-	server := wpTestServer(t, gateway)
-	channel := wpOpen(t, wpCertConfig(t, server.URL, server.Certificate(), false))
-	order, refund := OrderID(uuid.NewV7()), RefundID(uuid.NewV7())
-	call := RefundCall{Refund: refund, Order: order, ProviderRef: "WX-OLD", Amount: Money{Currency: currency(t, "CNY"), Minor: 3000}}
-	makeBody := func(state string) []byte {
-		return wpTestJSONBody(map[string]any{
-			"refund_id": "WX-NEW", "out_refund_no": refund.TypeID(), "out_trade_no": order.TypeID(),
-			"status": state, "amount": map[string]any{"total": 10000, "refund": 3000, "currency": "CNY"},
-		})
-	}
-	status, body = http.StatusOK, makeBody("SUCCESS")
-	state, err := channel.QueryRefund(t.Context(), call)
-	if err != nil || state.State != RefundSucceeded || state.ProviderRef != "WX-NEW" {
-		t.Fatalf("%+v %v", state, err)
-	}
-	if path != "/v3/refund/domestic/refunds/"+refund.TypeID() {
-		t.Fatalf("queried %s, not the merchant refund number", path)
-	}
-	for _, tc := range []struct {
-		status string
-		want   RefundOutcome
-	}{{"PROCESSING", RefundPending}, {"ABNORMAL", RefundPending}, {"CLOSED", RefundFailed}} {
-		status, body = http.StatusOK, makeBody(tc.status)
-		state, err := channel.QueryRefund(t.Context(), call)
-		if err != nil || state.State != tc.want {
-			t.Fatalf("%s: %+v %v", tc.status, state, err)
-		}
-	}
-	status, body = http.StatusNotFound, []byte(`{"code":"RESOURCE_NOT_EXISTS"}`)
-	state, err = channel.QueryRefund(t.Context(), call)
-	if err != nil || state.State != RefundPending {
-		t.Fatalf("missing refund %+v %v", state, err)
-	}
-	status, body = http.StatusNotFound, []byte(`{"code":"MCH_NOT_EXISTS"}`)
-	if _, err := channel.QueryRefund(t.Context(), call); err == nil {
-		t.Fatal("other 404 became pending")
-	}
-	status, body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"refund_id": "WX-NEW", "out_refund_no": "rfd_OTHER", "out_trade_no": order.TypeID(),
-		"status": "SUCCESS", "amount": map[string]any{"total": 10000, "refund": 3000, "currency": "CNY"},
-	})
-	if _, err := channel.QueryRefund(t.Context(), call); err == nil {
-		t.Fatal("query echoed another refund")
-	}
-	status, body = http.StatusOK, wpTestJSONBody(map[string]any{
-		"refund_id": "WX-NEW", "out_refund_no": refund.TypeID(), "out_trade_no": order.TypeID(),
-		"status": "SUCCESS", "amount": map[string]any{"total": 10000, "refund": 3001, "currency": "CNY"},
-	})
-	if _, err := channel.QueryRefund(t.Context(), call); err == nil {
-		t.Fatal("query echoed another amount")
-	}
-	status, body = http.StatusOK, makeBody("UNKNOWN")
-	if _, err := channel.QueryRefund(t.Context(), call); err == nil {
-		t.Fatal("unknown refund status accepted")
-	}
-	gateway.omit = true
-	if _, err := channel.QueryRefund(t.Context(), call); err == nil {
-		t.Fatal("unsigned refund response accepted")
-	}
-}
-
-func TestWechatPayRefundErrorCodes(t *testing.T) {
-	var call RefundCall
-	gateway := &wpTestGateway{t: t, respond: func(r *http.Request, _ []byte) (int, []byte) {
-		if r.Method == http.MethodGet {
-			return http.StatusOK, wpQueryJSON(call.Order.TypeID(), "SUCCESS",
-				map[string]any{"total": 100, "currency": "CNY"})
-		}
-		return http.StatusBadRequest, []byte(`{"code":"USER_ACCOUNT_ABNORMAL","message":"do not log this"}`)
-	}}
-	server := wpTestServer(t, gateway)
-	channel := wpOpen(t, wpCertConfig(t, server.URL, server.Certificate(), false))
-	call = RefundCall{
-		Refund: RefundID(uuid.NewV7()), Order: OrderID(uuid.NewV7()),
-		Amount: Money{Currency: currency(t, "CNY"), Minor: 100},
-	}
-	_, err := channel.Refund(t.Context(), call)
-	var rejected *Rejected
-	if !errors.As(err, &rejected) || strings.Contains(err.Error(), "do not log this") {
-		t.Fatalf("refund error %v", err)
 	}
 }

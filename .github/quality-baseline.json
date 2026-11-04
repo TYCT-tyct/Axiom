@@ -1,8 +1,9 @@
 {
-  "version": 2,
-  "description": "The quality ratchet: each pull request could add one plausible exemption, so these numbers may only fall. scripts/ci/quality_ratchet.py measures them; a nolint directive naming several linters counts under each, so the per-linter counts sum above the number of directives. The ceiling lists name the only functions over cognitive complexity 30 and files over 800 lines, and each value may only shrink. coverage.packages is statement coverage per package in hundredths of a percentage point, measured from the profile the race test run writes, generated code excluded; tolerance_basis_points is how far a package may fall and floor_basis_points is where a new package must start.",
+  "version": 3,
+  "description": "The quality ratchet: each pull request could add one plausible exemption, so these numbers may only fall. scripts/ci/quality_ratchet.py measures them; a nolint directive naming several linters counts under each, so the per-linter counts sum above the number of directives. The ceiling lists name the only functions over cognitive complexity 30 and files over 800 lines, and each value may only shrink; test_functions_over_gocognit_15 and test_gocognit_ceiling do the same for functions in _test.go, with their own ceiling list so a test exception cannot excuse production code. coverage.packages is statement coverage per package in hundredths of a percentage point, measured from the profile the race test run writes, generated code excluded; tolerance_basis_points is how far a package may fall and floor_basis_points is where a new package must start. A write keeps the higher recorded value when a measurement is inside the tolerance, so the tolerance cannot lower the baseline repeatedly.",
   "ceilings": {
     "gocognit": 30,
+    "test_gocognit": 30,
     "file_lines": 800
   },
   "nolint": {
@@ -27,6 +28,8 @@
   },
   "functions_over_gocognit_15": 0,
   "gocognit_ceiling": [],
+  "test_functions_over_gocognit_15": 67,
+  "test_gocognit_ceiling": [],
   "files_over_500_lines": 17,
   "file_ceiling": [],
   "coverage": {

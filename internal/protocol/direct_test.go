@@ -12,89 +12,114 @@ import (
 	"axiom/internal/protocol"
 )
 
+// directSampleCase is one recorded direct-format sample: what the request says and what its usage must count.
+type directSampleCase struct {
+	dir       string
+	format    protocol.Format
+	input     int64
+	searches  int64
+	wantField string
+}
+
+// checkDirectSampleMeta asserts the sample records where it came from and when.
+func checkDirectSampleMeta(t *testing.T, meta []byte) {
+	t.Helper()
+	var m struct {
+		Source string `json:"source"`
+		Date   string `json:"date"`
+	}
+	if err := jsonx.Unmarshal(meta, &m); err != nil || m.Source == "" || m.Date == "" {
+		t.Fatalf("meta.json: %v %+v", err, m)
+	}
+}
+
+// prepareDirectSample reads and rewrites the sample's request, and asserts the model was replaced.
+func prepareDirectSample(t *testing.T, tc directSampleCase, request []byte) {
+	t.Helper()
+	req, err := protocol.Inspect(tc.format, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Format != tc.format || req.Model == "" || req.TextBytes == 0 {
+		t.Errorf("request %+v", req)
+	}
+	up, err := protocol.Prepare(&req, request, protocol.Target{Format: tc.format, Model: "upstream/model"},
+		protocol.Rewrites{Identity: func(string) string { return "derived" }, Device: "device"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prepared map[string]any
+	if err := jsonx.Unmarshal(up.Body, &prepared); err != nil {
+		t.Fatalf("%v:\n%s", err, up.Body)
+	}
+	if prepared["model"] != "upstream/model" {
+		t.Errorf("model was not rewritten:\n%s", up.Body)
+	}
+}
+
+// directSampleUsage asserts the reply's usage is one valid segment with the sample's counts.
+func directSampleUsage(t *testing.T, tc directSampleCase, response []byte) protocol.Usage {
+	t.Helper()
+	u, err := protocol.DirectUsage(tc.format, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Invalid != nil || len(u.Segments) != 1 {
+		t.Fatalf("usage %+v", u)
+	}
+	got := u.Segments[0].Usage
+	if got.Count(catalog.ItemInput) != tc.input || got.Count(catalog.ItemWebSearch) != tc.searches {
+		t.Errorf("usage input %d, searches %d; want %d, %d", got.Count(catalog.ItemInput),
+			got.Count(catalog.ItemWebSearch), tc.input, tc.searches)
+	}
+	return u
+}
+
+// checkRewrittenDirectSample asserts the rewritten reply keeps the upstream's data, takes Axiom's identity and cost,
+// and, for rerank, the search unit count.
+func checkRewrittenDirectSample(t *testing.T, tc directSampleCase, response []byte, u protocol.Usage) {
+	t.Helper()
+	if err := protocol.ValidateDirectReply(tc.format, response); err != nil {
+		t.Fatal(err)
+	}
+	body, err := protocol.RewriteDirectReply(tc.format, response, "gen-01", "client/model", u,
+		&protocol.Final{Usage: u, Cost: price.Mul(1234), Currency: usd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jsonx.Validate(body); err != nil {
+		t.Fatalf("%v:\n%s", err, body)
+	}
+	var reply map[string]any
+	if err := jsonx.Unmarshal(body, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply["model"] != "client/model" || reply[tc.wantField] == nil {
+		t.Errorf("reply lost its data or kept the upstream's model:\n%s", body)
+	}
+	if usage := obj(reply["usage"]); usage["cost"] == nil {
+		t.Errorf("no cost in the reply's usage:\n%s", body)
+	}
+	if tc.format == protocol.Rerank && (reply["id"] != "gen-01" || reply["usage"].(map[string]any)["search_units"] != 1.0) {
+		t.Errorf("rerank identity or search_units:\n%s", body)
+	}
+}
+
 // TestDirectSamples replays the recorded embeddings and rerank replies: Inspect and Prepare read the request, the usage
 // is the one the reply reports, and the rewritten reply is the upstream's data or results with Axiom's identity, usage
 // and cost. TestDirectSamples is the non-streaming half of README.md「录制样本」.
-//
-//nolint:cyclop,gocognit // the sample table and its assertions are the test
 func TestDirectSamples(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		dir       string
-		format    protocol.Format
-		input     int64
-		searches  int64
-		wantField string
-	}{
+	for _, tc := range []directSampleCase{
 		{"embeddings/text", protocol.Embeddings, 8, 0, "data"},
 		{"rerank/text", protocol.Rerank, 150, 1, "results"},
 	} {
 		t.Run(tc.dir, func(t *testing.T) {
 			request := sample(t, tc.dir+"/request.json")
 			response := sample(t, tc.dir+"/response.json")
-			meta := sample(t, tc.dir+"/meta.json")
-			var m struct {
-				Source string `json:"source"`
-				Date   string `json:"date"`
-			}
-			if err := jsonx.Unmarshal(meta, &m); err != nil || m.Source == "" || m.Date == "" {
-				t.Fatalf("meta.json: %v %+v", err, m)
-			}
-			req, err := protocol.Inspect(tc.format, request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if req.Format != tc.format || req.Model == "" || req.TextBytes == 0 {
-				t.Errorf("request %+v", req)
-			}
-			up, err := protocol.Prepare(&req, request, protocol.Target{Format: tc.format, Model: "upstream/model"},
-				protocol.Rewrites{Identity: func(string) string { return "derived" }, Device: "device"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			var prepared map[string]any
-			if err := jsonx.Unmarshal(up.Body, &prepared); err != nil {
-				t.Fatalf("%v:\n%s", err, up.Body)
-			}
-			if prepared["model"] != "upstream/model" {
-				t.Errorf("model was not rewritten:\n%s", up.Body)
-			}
-			u, err := protocol.DirectUsage(tc.format, response)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if u.Invalid != nil || len(u.Segments) != 1 {
-				t.Fatalf("usage %+v", u)
-			}
-			got := u.Segments[0].Usage
-			if got.Count(catalog.ItemInput) != tc.input || got.Count(catalog.ItemWebSearch) != tc.searches {
-				t.Errorf("usage input %d, searches %d; want %d, %d", got.Count(catalog.ItemInput),
-					got.Count(catalog.ItemWebSearch), tc.input, tc.searches)
-			}
-			if err := protocol.ValidateDirectReply(tc.format, response); err != nil {
-				t.Fatal(err)
-			}
-			body, err := protocol.RewriteDirectReply(tc.format, response, "gen-01", "client/model", u,
-				&protocol.Final{Usage: u, Cost: price.Mul(1234), Currency: usd})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := jsonx.Validate(body); err != nil {
-				t.Fatalf("%v:\n%s", err, body)
-			}
-			var reply map[string]any
-			if err := jsonx.Unmarshal(body, &reply); err != nil {
-				t.Fatal(err)
-			}
-			if reply["model"] != "client/model" || reply[tc.wantField] == nil {
-				t.Errorf("reply lost its data or kept the upstream's model:\n%s", body)
-			}
-			if usage := obj(reply["usage"]); usage["cost"] == nil {
-				t.Errorf("no cost in the reply's usage:\n%s", body)
-			}
-			if tc.format == protocol.Rerank && (reply["id"] != "gen-01" || reply["usage"].(map[string]any)["search_units"] != 1.0) {
-				t.Errorf("rerank identity or search_units:\n%s", body)
-			}
+			checkDirectSampleMeta(t, sample(t, tc.dir+"/meta.json"))
+			prepareDirectSample(t, tc, request)
+			checkRewrittenDirectSample(t, tc, response, directSampleUsage(t, tc, response))
 		})
 	}
 }
