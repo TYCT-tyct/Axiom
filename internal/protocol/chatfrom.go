@@ -179,7 +179,7 @@ func (c *converted) hold(reason string) []byte {
 // made of it. A role of heartbeat or end is the event's own; otherwise the delta decides, and finish, when set, is
 // the chunk to hold.
 func (c *converted) settle(e event, r role, finish []byte) (event, error) {
-	out := event{role: r, usageAt: -1, content: e.content, shape: e.shape, searches: e.searches, toolCalls: e.toolCalls, toolErrors: e.toolErrors, usage: e.usage, final: e.final}
+	out := event{role: r, usageAt: -1, content: e.content, shape: e.shape, searches: e.searches, toolCalls: e.toolCalls, toolChecks: e.toolChecks, toolErrors: e.toolErrors, usage: e.usage, final: e.final}
 	if r == heartbeat { // the client's own keep-alive, which the relay writes
 		return out, nil
 	}

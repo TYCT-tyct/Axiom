@@ -54,12 +54,14 @@ type event struct {
 	withheld                                                   []byte
 	usageAt                                                    int
 	content, searches, codeExecutions, fileSearches, toolCalls int64
-	// toolErrors are the client tool calls that ended with this event whose arguments are not one JSON text.
-	toolErrors int64
-	shape      textshape.Shape // the shape of the content's decoded strings
-	usage      bool            // it reported usage, which the meter has taken
-	final      bool            // it is the format's last usage event
-	ends       bool            // an ending that is also the normal end, as Responses' response.completed is
+	// toolChecks are the client tool calls whose arguments the answer that ended with this event had checked, and
+	// toolErrors those of them that were not one JSON text. An answer cut at its output cap reports none: its calls
+	// did not end, they were cut.
+	toolChecks, toolErrors int64
+	shape                  textshape.Shape // the shape of the content's decoded strings
+	usage                  bool            // it reported usage, which the meter has taken
+	final                  bool            // it is the format's last usage event
+	ends                   bool            // an ending that is also the normal end, as Responses' response.completed is
 }
 
 // edit replaces data[from:to] with with, then echo: a value of the event itself, copied again.

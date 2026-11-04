@@ -38,10 +38,13 @@ type messagesStream struct {
 	report                                                   *messagesUsage
 	reportErr                                                error // the usage object is not one messagesUsage can hold
 	// partial is the event's partial_json, in its data. inTool is set from a client tool call's content_block_start
-	// to its content_block_stop, while args checks the pieces: Messages streams one block at a time.
-	partial jsontext.Value
-	inTool  bool
-	args    argScan
+	// to its content_block_stop, while args checks the pieces: Messages streams one block at a time. checks and malformed
+	// are the calls checked so far and the ones that were not JSON, reported with the stop reason, which comes after
+	// them; capped is a max_tokens stop, whose calls were cut rather than ended.
+	partial           jsontext.Value
+	inTool, capped    bool
+	args              argScan
+	checks, malformed int64
 }
 
 func newMessagesStream(u UsageContext, o RelayOptions, charge func(int) error) upstream {
@@ -81,6 +84,7 @@ func (s *messagesStream) event(data []byte, m *meter) (event, error) {
 		return event{}, fmt.Errorf("%w: %w", ErrUpstream, err)
 	}
 	s.checkArgs()
+	s.partial = nil // the piece is the event's, and the event's buffer may be given back before the next
 	if s.failed {
 		// an error event ends the stream, so a usage object it carries is the upstream's last word on the attempt: it
 		// is taken here, before the error ends the reading (docs/domains/billing.md「用量来源与暂估」)
@@ -129,10 +133,20 @@ func (s *messagesStream) checkArgs() {
 			feedArgs(&s.args, s.partial)
 		}
 	case "content_block_stop":
-		if s.inTool && !s.args.ok() {
-			s.e.toolErrors = 1
+		if s.inTool {
+			s.checks++
+			if !s.args.ok() {
+				s.malformed++
+			}
 		}
 		s.inTool = false
+	case "message_delta":
+		if s.e.final {
+			if !s.capped {
+				s.e.toolChecks, s.e.toolErrors = s.checks, s.malformed
+			}
+			s.checks, s.malformed = 0, 0
+		}
 	}
 }
 
@@ -144,7 +158,7 @@ func (s *messagesStream) partialJSON() error {
 
 func (s *messagesStream) dropBuffers() {
 	s.eventReader.dropBuffers()
-	s.report, s.partial, s.inTool = nil, nil, false
+	s.report, s.partial, s.inTool, s.capped, s.checks, s.malformed = nil, nil, false, false, 0, 0
 }
 
 func (s *messagesStream) eventType() error {
@@ -170,6 +184,7 @@ func (s *messagesStream) eventType() error {
 func (s *messagesStream) stopReason() error {
 	v, err := s.raw()
 	s.e.final = v != nil
+	s.capped = v != nil && controlIs(v, "max_tokens")
 	return err
 }
 

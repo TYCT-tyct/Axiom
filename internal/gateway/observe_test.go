@@ -157,25 +157,53 @@ func TestThroughputLeavesOutOurOwnWaits(t *testing.T) {
 }
 
 // TestToolErrorsReachQuality: an answer whose tool call's arguments are not one JSON text is told to quality as a tool
-// error, so after five such calls the endpoint's measured tool-call error rate is 1.
+// error whatever the client's format: through a stream relayed as it is, through a Chat stream converted for a
+// Messages client and through a Messages reply aggregated, the last two of which fail the call because the client's
+// format cannot take the input. Five such calls make the endpoint's measured tool-call error rate 1. A call cut at the
+// output cap is no sample: its arguments were cut, not wrong.
 func TestToolErrorsReachQuality(t *testing.T) {
 	t.Parallel()
-	health := quality.New(nil)
-	var now time.Time
-	for range 5 {
-		run(t, func(t *testing.T, ctx context.Context) {
-			h := newHarness(t, ctx, options{health: health})
-			call := "event: content_block_start\n" +
-				`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"f","input":{}}}` + "\n\n" +
-				"event: content_block_delta\n" +
-				`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}` + "\n\n"
-			h.up.eps[uuidOf(ep(1))].script = []scripted{serve(beat{data: events(h.events, evStart) + call + events(h.events, evBlockStop, evMsgDelta, evMsgStop)})}
-			h.run()
-			now = time.Now()
+	messagesCall := "event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"f","input":{}}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}` + "\n\n"
+	chatCall := strings.NewReplacer(`"openrouter_web_search"`, `"f"`, `"{\"query\":\"axiom\"}"`, `"{\"query\":"`).Replace(chatToolCall)
+	chat, unstreamed := protocol.Chat, false
+	for _, tc := range []struct {
+		name   string
+		o      options
+		stream func(h *harness) string
+		want   float64
+	}{
+		{"a Messages stream", options{}, func(h *harness) string {
+			return events(h.events, evStart) + messagesCall + events(h.events, evBlockStop, evMsgDelta, evMsgStop)
+		}, 1},
+		{"a Chat stream converted for a Messages client", options{upstream: &chat}, func(*harness) string { return chatCall }, 1},
+		{"a Messages reply aggregated", options{stream: &unstreamed}, func(h *harness) string {
+			return events(h.events, evStart) + messagesCall + events(h.events, evBlockStop, evMsgDelta, evMsgStop)
+		}, 1},
+		{"a Chat stream cut at the length limit", options{client: protocol.Chat}, func(*harness) string {
+			return strings.Replace(chatCall, `"finish_reason":"tool_calls"`, `"finish_reason":"length"`, 1)
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			health := quality.New(nil)
+			var now time.Time
+			for range 5 {
+				run(t, func(t *testing.T, ctx context.Context) {
+					o := tc.o
+					o.health = health
+					h := newHarness(t, ctx, o)
+					h.up.eps[uuidOf(ep(1))].script = []scripted{serve(beat{data: tc.stream(h)})}
+					h.run()
+					now = time.Now()
+				})
+			}
+			if got := health.MeasuredFor(suppliers.Routable{ID: uuidOf(ep(1))}, now).ToolErrorRate; got != tc.want {
+				t.Errorf("tool-call error rate %v, want %v", got, tc.want)
+			}
 		})
-	}
-	if got := health.MeasuredFor(suppliers.Routable{ID: uuidOf(ep(1))}, now).ToolErrorRate; got != 1 {
-		t.Errorf("tool-call error rate %v, want 1", got)
 	}
 }
 

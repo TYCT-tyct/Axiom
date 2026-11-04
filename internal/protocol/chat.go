@@ -52,6 +52,7 @@ type chatStream struct {
 	extra      map[chatToolKey]struct{}
 	toolIndex  int64
 	toolArgs   jsontext.Value // the tool-call element's arguments piece, in the chunk
+	capped     bool           // a choice finished at its output cap, so its calls were cut rather than ended
 }
 
 // chatPending is a tool-call element of the choice being read: its index and its piece of the arguments, in the chunk.
@@ -192,6 +193,10 @@ func (s *chatStream) done() (event, error) {
 		}
 	}
 	s.e.role = end
+	if s.capped {
+		return s.e, nil
+	}
+	s.e.toolChecks = int64(s.nSeen)
 	for i := range s.scans[:s.nSeen] {
 		if !s.scans[i].ok() {
 			s.e.toolErrors++
@@ -223,6 +228,7 @@ func (s *chatStream) choice() error {
 		return nil
 	}
 	s.choices[s.index] = true
+	s.capped = s.capped || controlIs(s.finish, "length")
 	if s.index == 0 {
 		if err := s.charge(max(0, len(s.finish)-len(s.first))); err != nil {
 			return err
@@ -307,7 +313,7 @@ func (s *chatStream) toolCall() error {
 			return err
 		}
 	}
-	s.pending = append(s.pending, chatPending{tool: s.toolIndex, args: s.toolArgs})
+	s.pending, s.toolArgs = append(s.pending, chatPending{tool: s.toolIndex, args: s.toolArgs}), nil
 	return nil
 }
 
@@ -340,6 +346,7 @@ func (s *chatStream) countTools() error {
 		}
 		s.e.toolCalls++
 	}
+	clear(s.pending) // the pieces are the chunk's: a buffer the relay may give back must not stay reachable from here
 	return nil
 }
 
@@ -386,7 +393,9 @@ func (s *chatStream) usage() error {
 func (s *chatStream) dropBuffers() {
 	s.eventReader.dropBuffers()
 	s.choices, s.held, s.finish, s.first, s.report, s.reportErr = nil, nil, nil, "", nil, nil
-	s.pending, s.nSeen, s.extra, s.toolIndex, s.toolArgs = s.pendingBuf[:0], 0, nil, 0, nil
+	clear(s.pending[:cap(s.pending)]) // a chunk that failed before its choice was counted left its pieces here
+	clear(s.pendingBuf[:])
+	s.pending, s.nSeen, s.extra, s.toolIndex, s.toolArgs, s.capped = s.pendingBuf[:0], 0, nil, 0, nil, false
 	s.reasoning, s.reasoningContent = reasoningMember{}, reasoningMember{}
 }
 

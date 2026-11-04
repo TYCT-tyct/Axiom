@@ -29,6 +29,9 @@ type responsesStream struct {
 	reportErr                                                         error
 	topReport                                                         []byte         // borrowed from this event; only failures may use it when response.usage is absent
 	args                                                              jsontext.Value // its item's arguments, in its data
+	// checks and malformed are the function calls checked so far and the ones that were not JSON, reported with
+	// response.completed; response.incomplete reports none, as its calls may have been cut.
+	checks, malformed int64
 	// items is, for each output item added so far, the content its deltas carried: an item that completes counts only
 	// what it adds to them, so the bound never counts the same text twice.
 	items []int64
@@ -99,9 +102,15 @@ func (s *responsesStream) event(data []byte, m *meter) (event, error) {
 		s.created = true
 	case "response.completed", "response.incomplete":
 		s.e.role, s.e.ends, s.e.final = ending, true, true
+		if s.e.name == "response.completed" {
+			s.e.toolChecks, s.e.toolErrors = s.checks, s.malformed
+		}
+		s.checks, s.malformed = 0, 0
 	}
 	s.topReport = nil
-	if err := s.settle(); err != nil {
+	err := s.settle()
+	s.args = nil // the item's arguments are the event's, and its buffer may be given back before the next
+	if err != nil {
 		return event{}, err
 	}
 	if s.report != nil {
@@ -171,7 +180,7 @@ func (s *responsesStream) itemAdded() error {
 
 func (s *responsesStream) dropBuffers() {
 	s.eventReader.dropBuffers()
-	s.items, s.report, s.reportErr, s.topReport = nil, nil, nil, nil
+	s.items, s.report, s.reportErr, s.topReport, s.args, s.checks, s.malformed = nil, nil, nil, nil, nil, 0, 0
 }
 
 func (s *responsesStream) eventType() error {
@@ -257,8 +266,9 @@ func (s *responsesStream) itemArgs() error {
 func (s *responsesStream) checkArgs() {
 	var scan argScan
 	feedArgs(&scan, s.args)
+	s.checks++
 	if !scan.ok() {
-		s.e.toolErrors = 1
+		s.malformed++
 	}
 }
 

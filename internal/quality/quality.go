@@ -71,9 +71,9 @@ type Observation struct {
 	// InputTokens is the request's input as estimated before it was sent (billing.InputEstimate).
 	InputTokens  int64
 	OutputTokens int64
-	// ToolCalls are the client tool calls the answer made, and ToolErrors those whose arguments, once the call ended,
-	// were not one JSON text (protocol.Progress).
-	ToolCalls, ToolErrors int64
+	// ToolChecks are the client tool calls whose arguments were checked when the answer ended, and ToolErrors those that
+	// were not one JSON text (protocol.Progress); an answer cut at its output cap has none checked.
+	ToolChecks, ToolErrors int64
 	// Sent is when the attempt was sent; FirstToken when its first content came, zero when none did, whoever it went
 	// to; Ended when the upstream's end or failure was read, before any wait of the gateway's own, which dates the
 	// samples.
@@ -340,11 +340,17 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 	e.sampleTools(v, &o)
 }
 
-// sampleTools takes an answer with client tool calls as a sample of the tool-call error rate. Only an answer that ended
-// normally has calls that ended: one cut short says nothing of how the endpoint calls tools. An answer is one sample
-// however many calls it made, as OpenRouter counts requests (《Auto Exacto》). e.mu is held.
+// sampleTools takes an answer with client tool calls as a sample of the tool-call error rate, apart from the verdict on
+// the endpoint's health. An attempt the gateway failed because a call's input could not be given to the client
+// (protocol.FaultToolInput) is an error however the health judged it, which is not at all: the model got the call
+// wrong, the endpoint did not fail. Otherwise only an answer that ended normally has calls that ended: one cut short
+// says nothing of how the endpoint calls tools. An answer is one sample however many calls it made, as OpenRouter
+// counts requests (《Auto Exacto》). e.mu is held.
 func (e *State) sampleTools(v verdict, o *Observation) {
-	if v == success && o.Done && o.ToolCalls > 0 {
+	switch {
+	case o.Fault == protocol.FaultToolInput:
+		e.tools.add(1, o.Ended)
+	case v == success && o.Done && o.ToolChecks > 0:
 		e.tools.add(float64(min(o.ToolErrors, 1)), o.Ended)
 	}
 }

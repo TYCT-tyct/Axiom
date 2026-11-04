@@ -342,7 +342,7 @@ func TestRouteBuildRanksByToolErrors(t *testing.T) {
 	answer := func(id uuid.UUID, toolErrors int64) {
 		now := time.Now()
 		f.health.Observe(t.Context(), quality.Observation{
-			Endpoint: id, Done: true, Delivered: true, OutputTokens: 10, ToolCalls: 2, ToolErrors: toolErrors,
+			Endpoint: id, Done: true, Delivered: true, OutputTokens: 10, ToolChecks: 2, ToolErrors: toolErrors,
 			Sent: now.Add(-time.Second), FirstToken: now.Add(-time.Second / 2), Ended: now,
 		})
 	}
