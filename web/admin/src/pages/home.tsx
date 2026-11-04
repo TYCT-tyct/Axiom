@@ -175,10 +175,14 @@ function Figures({ data, window, anchor }: { data: Overview; window: Window; anc
       </div>
       <h2 className="text-ui font-medium text-t2">{t("overview.business")}</h2>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <PaidUsersFigure data={data} targets={targets} showTarget={targetNotes} />
-        <MonthlyRevenueFigure data={data} targets={targets} showTarget={targetNotes} />
-        <GrossMarginFigure data={data} targets={targets} showTarget={targetNotes} />
-        <RetentionFigure data={data} targets={targets} showTarget={targetNotes} />
+        <PaidUsersFigure data={data} targets={targets} showTarget={targetNotes && data.paid_users !== undefined} />
+        <MonthlyRevenueFigure
+          data={data}
+          targets={targets}
+          showTarget={targetNotes && data.monthly_revenue !== undefined}
+        />
+        <GrossMarginFigure data={data} targets={targets} showTarget={targetNotes && data.gross_margin !== undefined} />
+        <RetentionFigure data={data} targets={targets} showTarget={targetNotes && data.retention !== undefined} />
       </div>
       <div className="grid gap-4 xl:grid-cols-2">
         <TopAccounts data={data} window={window} site={site} />
