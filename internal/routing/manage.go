@@ -130,6 +130,10 @@ var tenantLimits = [...]struct {
 	{ScopeWorkspace, "workspace_id", 10, 100},
 }
 
+// keptVersions is how many rule versions a preset keeps, its current one included; the table's policy deletes no
+// newer one.
+const keptVersions = 50
+
 // The global budget: what every node's snapshot holds of the presets together.
 const (
 	maxPresets      = 100_000
@@ -258,17 +262,19 @@ func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID,
 	}
 	version := before.Version
 	if newRules {
-		if err := takeBudget(ctx, tx, before.Layer, 0, int64(len(rules)-len(before.Rules))); err != nil {
-			return StoredPreset{}, err
-		}
-		version++
-		if err := insertVersion(ctx, tx, actor, id, version, c.Currency, rules); err != nil {
+		if version, err = addVersion(ctx, tx, actor, before, c.Currency, rules); err != nil {
 			return StoredPreset{}, err
 		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE routing.presets SET name = $2, current_version = $3, revision = revision + 1,
 		updated_at = statement_timestamp() WHERE id = $1`, uuid.UUID(id), c.Name, version); err != nil {
 		return StoredPreset{}, presetWriteErr("update a preset", err)
+	}
+	// Only the last keptVersions stay, so rules that change without growing cannot pile versions up for good; the
+	// audit log keeps every version's hash.
+	if _, err := tx.Exec(ctx, `DELETE FROM routing.preset_versions WHERE preset_id = $1 AND version <= $2`,
+		uuid.UUID(id), version-keptVersions); err != nil {
+		return StoredPreset{}, presetWriteErr("prune the preset's versions", err)
 	}
 	p, err := GetPreset(ctx, tx, id)
 	if err != nil {
@@ -278,6 +284,14 @@ func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID,
 		"before": map[string]any{"name": before.Name, "version": before.Version, "rules_sha256": digest(string(before.Rules))},
 		"after":  map[string]any{"name": p.Name, "version": p.Version},
 	})
+}
+
+// addVersion adds the next version of the preset's rules, within the global budget, and returns its number.
+func addVersion(ctx context.Context, tx pg.Tx, actor audit.Actor, before StoredPreset, currency platform.Currency, rules string) (int64, error) {
+	if err := takeBudget(ctx, tx, before.Layer, 0, int64(len(rules)-len(before.Rules))); err != nil {
+		return 0, err
+	}
+	return before.Version + 1, insertVersion(ctx, tx, actor, before.ID, before.Version+1, currency, rules)
 }
 
 // DisablePreset disables the preset at revision: the keys bound to it keep routing by it, and no new key or default
@@ -474,7 +488,8 @@ func sameDefault(a, b *PresetID) bool {
 }
 
 // writeDefault clears the layer's default when preset is nil, or points it at preset: a new row when the layer had
-// none, or the next version of its row.
+// none, or a change of its row. Every write takes a new version from one sequence, so a version is never given twice,
+// not even to a layer that cleared its default and set it again.
 func writeDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, unset bool, preset *PresetID) error {
 	var err error
 	switch {
@@ -483,11 +498,11 @@ func writeDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer,
 		_, err = tx.Exec(ctx, `DELETE FROM routing.preset_defaults WHERE `+where, args...)
 	case unset:
 		site, account, workspace := layer.ids()
-		_, err = tx.Exec(ctx, `INSERT INTO routing.preset_defaults (scope, site_id, account_id, workspace_id, preset_id, updated_by)
-			VALUES ($1, $2, $3, $4, $5, $6)`, layer.Scope.String(), site, account, workspace, uuid.UUID(*preset), actorID(actor))
+		_, err = tx.Exec(ctx, `INSERT INTO routing.preset_defaults (scope, site_id, account_id, workspace_id, preset_id, updated_by, version)
+			VALUES ($1, $2, $3, $4, $5, $6, nextval('routing.preset_default_versions'))`, layer.Scope.String(), site, account, workspace, uuid.UUID(*preset), actorID(actor))
 	default:
 		where, args := layer.match(3)
-		_, err = tx.Exec(ctx, `UPDATE routing.preset_defaults SET preset_id = $1, version = version + 1, updated_by = $2,
+		_, err = tx.Exec(ctx, `UPDATE routing.preset_defaults SET preset_id = $1, version = nextval('routing.preset_default_versions'), updated_by = $2,
 			updated_at = statement_timestamp() WHERE `+where, append([]any{uuid.UUID(*preset), actorID(actor)}, args...)...)
 	}
 	return err

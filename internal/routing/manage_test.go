@@ -189,11 +189,11 @@ func TestPresetDefaultAndDisable(t *testing.T) {
 	m := newManager(t)
 	p := m.made(t, "strict", allowed)
 	d := m.defaulted(t, &p.ID, 0)
-	if d.Version != 1 || d.Preset == nil || *d.Preset != p.ID {
+	if d.Version < 1 || d.Preset == nil || *d.Preset != p.ID {
 		t.Fatalf("the default %+v", d)
 	}
 	wantErr(t, "disable the default", m.disable(t, p.ID, 1), routing.ErrPresetInUse)
-	if d = m.defaulted(t, nil, 1); d.Preset != nil || d.Version != 0 {
+	if d = m.defaulted(t, nil, d.Version); d.Preset != nil || d.Version != 0 {
 		t.Errorf("cleared %+v", d)
 	}
 	noErr(t, "disable", m.disable(t, p.ID, 1))
@@ -278,6 +278,53 @@ func TestPresetWritesRefused(t *testing.T) {
 		if c.forKey != (err == nil) || err != nil && !errors.Is(err, routing.ErrPresetNotSelectable) {
 			t.Errorf("a key bound to %s: %v", name, err)
 		}
+	}
+}
+
+// TestDefaultVersionsAreNeverReused: a default cleared and set again gets a version it never had, so a page holding
+// the version it read before the clear cannot overwrite the new default.
+func TestDefaultVersionsAreNeverReused(t *testing.T) {
+	t.Parallel()
+	m := newManager(t)
+	first, second := m.made(t, "first", allowed), m.made(t, "second", allowed)
+	read := m.defaulted(t, &first.ID, 0)
+	cleared := m.defaulted(t, nil, read.Version)
+	again := m.defaulted(t, &second.ID, cleared.Version)
+	if again.Version == read.Version {
+		t.Fatalf("the default set again is at version %d, the one read before the clear", again.Version)
+	}
+	_, err := m.setDefault(t, nil, read.Version)
+	wantErr(t, "a clear made against the version before", err, routing.ErrPresetStale)
+	var d routing.Default
+	noErr(t, "read", m.as(t, func(ctx context.Context, tx pg.Tx) (err error) {
+		d, err = routing.ReadDefault(ctx, tx, m.layer())
+		return err
+	}))
+	if d.Preset == nil || *d.Preset != second.ID {
+		t.Errorf("the default is %v, want %v", d.Preset, second.ID)
+	}
+}
+
+// TestPresetKeepsItsLastVersions: rules that change without growing, such as two orders of the same classes, keep
+// only the preset's last 50 versions, the current one among them, and the snapshot still routes by the current one.
+func TestPresetKeepsItsLastVersions(t *testing.T) {
+	t.Parallel()
+	m := newManager(t)
+	rules := [2]string{`{"default": {"classes": ["official", "cloud"]}}`, `{"default": {"classes": ["cloud", "official"]}}`}
+	p := m.made(t, "turns", rules[1])
+	for i := range 55 {
+		p = m.changed(t, p.ID, p.Revision, p.Name, rules[i%2])
+	}
+	var kept, oldest int64
+	noErr(t, "count the versions", m.db.ReadTx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT count(*), min(version) FROM routing.preset_versions WHERE preset_id = $1`,
+			uuid.UUID(p.ID)).Scan(&kept, &oldest)
+	}))
+	if p.Version != 56 || kept != 50 || oldest != 7 {
+		t.Errorf("at version %d the preset keeps %d versions from %d, want 50 from 7", p.Version, kept, oldest)
+	}
+	if loaded, ok := byID(m.load(t, &routing.Presets{}), uuid.UUID(p.ID)); !ok || loaded.Version != 56 {
+		t.Errorf("the snapshot holds %+v %v, want version 56", loaded, ok)
 	}
 }
 

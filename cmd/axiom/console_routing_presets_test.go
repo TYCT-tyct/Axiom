@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"strconv"
 	"testing"
 	"uuid"
 
@@ -103,11 +104,11 @@ func TestConsoleRoutingPresets(t *testing.T) {
 	expect(t, "set the default", rec, http.StatusOK, "")
 	var d consoleapi.RoutingDefault
 	decode(t, rec, &d)
-	if d.PresetId == nil || *d.PresetId != p.Id || d.Version != 1 {
+	if d.PresetId == nil || *d.PresetId != p.Id || d.Version < 1 {
 		t.Fatalf("default %+v", d)
 	}
 	expect(t, "disable the default", f.do(http.MethodDelete, path+"?revision=2", "", as(s)), http.StatusConflict, consoleapi.ErrorCodePresetInUse)
-	expect(t, "clear the default", f.do(http.MethodPut, "/routing-default", `{"preset_id":null,"version":1}`, as(s)), http.StatusOK, "")
+	expect(t, "clear the default", f.do(http.MethodPut, "/routing-default", `{"preset_id":null,"version":`+strconv.FormatInt(d.Version, 10)+`}`, as(s)), http.StatusOK, "")
 	expect(t, "disable", f.do(http.MethodDelete, path+"?revision=2", "", as(s)), http.StatusNoContent, "")
 	decode(t, f.do(http.MethodGet, path, "", as(s)), &p)
 	if !p.Disabled {
