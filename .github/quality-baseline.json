@@ -1,8 +1,9 @@
 {
-  "version": 2,
-  "description": "The quality ratchet: each pull request could add one plausible exemption, so these numbers may only fall. scripts/ci/quality_ratchet.py measures them; a nolint directive naming several linters counts under each, so the per-linter counts sum above the number of directives. The ceiling lists name the only functions over cognitive complexity 30 and files over 800 lines, and each value may only shrink. coverage.packages is statement coverage per package in hundredths of a percentage point, measured from the profile the race test run writes, generated code excluded; tolerance_basis_points is how far a package may fall and floor_basis_points is where a new package must start.",
+  "version": 3,
+  "description": "The quality ratchet: each pull request could add one plausible exemption, so these numbers may only fall. scripts/ci/quality_ratchet.py measures them; a nolint directive naming several linters counts under each, so the per-linter counts sum above the number of directives. The ceiling lists name the only functions over cognitive complexity 30 and files over 800 lines, and each value may only shrink; test_functions_over_gocognit_15 and test_gocognit_ceiling do the same for functions in _test.go, with their own ceiling list so a test exception cannot excuse production code. coverage.packages is statement coverage per package in hundredths of a percentage point, measured from the profile the race test run writes, generated code excluded; tolerance_basis_points is how far a package may fall and floor_basis_points is where a new package must start. A write keeps the higher recorded value when a measurement is inside the tolerance, so the tolerance cannot lower the baseline repeatedly.",
   "ceilings": {
     "gocognit": 30,
+    "test_gocognit": 30,
     "file_lines": 800
   },
   "nolint": {
@@ -27,6 +28,81 @@
   },
   "functions_over_gocognit_15": 0,
   "gocognit_ceiling": [],
+  "test_functions_over_gocognit_15": 85,
+  "test_gocognit_ceiling": [
+    {
+      "function": "cmd/axiom/legal_history_test.go:TestLegalDocumentHistoryPages",
+      "complexity": 31
+    },
+    {
+      "function": "internal/accounts/legal_test.go:TestLegalDocumentVersionsAndAcceptance",
+      "complexity": 46
+    },
+    {
+      "function": "internal/billing/subscription_test.go:TestSubscriptionExtendStaysInTheFrozenWindow",
+      "complexity": 57
+    },
+    {
+      "function": "internal/gateway/exec_helpers_test.go:(*harness).newCall",
+      "complexity": 33
+    },
+    {
+      "function": "internal/gateway/serverloop_test.go:TestServerLoopSearchesAndAnswersInOneStream",
+      "complexity": 31
+    },
+    {
+      "function": "internal/observability/alert_review_test.go:TestPaymentCompletedWindowsSurviveConsumerDelay",
+      "complexity": 31
+    },
+    {
+      "function": "internal/payments/alipay_api_test.go:TestAlipayRefund",
+      "complexity": 63
+    },
+    {
+      "function": "internal/payments/alipay_e2e_test.go:TestAlipayLocalGatewayEndToEnd",
+      "complexity": 37
+    },
+    {
+      "function": "internal/payments/wechatpay_api_test.go:TestWechatPayQueryStates",
+      "complexity": 31
+    },
+    {
+      "function": "internal/payments/wechatpay_api_test.go:TestWechatPayRefund",
+      "complexity": 47
+    },
+    {
+      "function": "internal/payments/wechatpay_e2e_test.go:(*wpE2EState).respond",
+      "complexity": 32
+    },
+    {
+      "function": "internal/payments/wechatpay_e2e_test.go:TestWechatPayLocalGatewayEndToEnd",
+      "complexity": 34
+    },
+    {
+      "function": "internal/payments/wechatpay_notify_test.go:TestWechatPayVerify",
+      "complexity": 42
+    },
+    {
+      "function": "internal/platform/objectstore/container_test.go:TestSeaweedFS",
+      "complexity": 32
+    },
+    {
+      "function": "internal/platform/objectstore/sign_test.go:TestSignsLikeAnS3Client",
+      "complexity": 36
+    },
+    {
+      "function": "internal/protocol/cached_test.go:TestACachedReplayUsesThisCallsTimestampAndCurrency",
+      "complexity": 34
+    },
+    {
+      "function": "internal/protocol/completions_test.go:TestCompletionsInspect",
+      "complexity": 31
+    },
+    {
+      "function": "internal/protocol/direct_test.go:TestDirectSamples",
+      "complexity": 56
+    }
+  ],
   "files_over_500_lines": 17,
   "file_ceiling": [],
   "coverage": {
