@@ -317,6 +317,71 @@ func TestLegalCompatibilityAcceptanceAcrossNodes(t *testing.T) {
 	}
 }
 
+// TestLegalSessionPendingUsesNewestVersion checks the session query, not just the pending list: accepting a lower
+// version in one locale must not make an authenticated session look consented while the newest version of that kind is
+// still unaccepted. Accepting the newest version then clears the flag.
+func TestLegalSessionPendingUsesNewestVersion(t *testing.T) {
+	t.Parallel()
+	x := newTestSite(t)
+	publish := func(kind, locale, body string) {
+		t.Helper()
+		if err := x.db.Tx(t.Context(), platform, func(tx pg.Tx) error {
+			_, err := x.s.PublishLegalDocument(t.Context(), tx, system, accounts.SiteID(s1), kind, locale, body, "test")
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish(accounts.LegalTerms, accounts.LegalLocaleZH, placeholderTerms)
+	publish(accounts.LegalTerms, accounts.LegalLocaleEN, "English placeholder terms for tests.")
+	publish(accounts.LegalPrivacy, accounts.LegalLocaleZH, placeholderPrivacy)
+
+	account := uuid.MustParse(texts(t, x.db, platform, "SELECT account_id::text FROM accounts.users WHERE id = '"+uuid.UUID(x.user).String()+"'")[0])
+	issued := x.signIn(t, console)
+	p, err := x.principal(t, console, issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.ConsentPending() {
+		t.Fatal("a session with no acceptance is not pending")
+	}
+	// These are both current rows in their own locales, but terms v1 is lower than the shared newest v2. The session
+	// must still be pending, exactly as an old node's max(version) check would be.
+	for _, statement := range []string{
+		fmt.Sprintf(`INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
+			VALUES (:x, :s1, '%s', '%s', 'terms', 1)`, account, uuid.UUID(x.user)),
+		fmt.Sprintf(`INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
+			VALUES (:y, :s1, '%s', '%s', 'privacy', 1)`, account, uuid.UUID(x.user)),
+	} {
+		if err := x.db.Tx(t.Context(), pg.AccountScope(account), func(tx pg.Tx) error {
+			_, err := tx.Exec(t.Context(), ids.Replace(statement))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err = x.principal(t, console, issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.ConsentPending() {
+		t.Fatal("accepting the lower Chinese terms cleared the session's pending flag")
+	}
+	if err := x.s.AcceptLegalDocuments(t.Context(), p, []accounts.DocumentVersion{
+		{Kind: accounts.LegalTerms, Locale: accounts.LegalLocaleEN, Version: 2},
+		{Kind: accounts.LegalPrivacy, Locale: accounts.LegalLocaleZH, Version: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, err = x.principal(t, console, issued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ConsentPending() {
+		t.Fatal("the session is still pending after accepting the newest versions")
+	}
+}
+
 // TestLegalLocaleMigrationDownKeepsOldWrites runs the migration's Down section after a Chinese and an English
 // document at different versions, then repeats the statements an old node runs. The expansion never created two rows
 // at one (site, kind, version), so removing the locale columns leaves the legacy primary key and unique constraint
