@@ -13,10 +13,10 @@ import (
 )
 
 const acceptedLegalVersions = `-- name: AcceptedLegalVersions :many
-SELECT kind, max(version)::integer AS version
+SELECT kind, locale, max(version)::integer AS version
 FROM accounts.legal_acceptances
 WHERE site_id = $1 AND user_id = $2
-GROUP BY kind
+GROUP BY kind, locale
 `
 
 type AcceptedLegalVersionsParams struct {
@@ -26,10 +26,12 @@ type AcceptedLegalVersionsParams struct {
 
 type AcceptedLegalVersionsRow struct {
 	Kind    string
+	Locale  string
 	Version int32
 }
 
-// The newest version each user accepted per kind. Versions only grow, so the newest one is what the user holds.
+// The newest version each user accepted per kind and locale. Versions only grow, so the newest one is what the user
+// holds in that locale.
 func (q *Queries) AcceptedLegalVersions(ctx context.Context, db DBTX, arg AcceptedLegalVersionsParams) ([]AcceptedLegalVersionsRow, error) {
 	rows, err := db.Query(ctx, acceptedLegalVersions, arg.SiteID, arg.UserID)
 	if err != nil {
@@ -39,7 +41,7 @@ func (q *Queries) AcceptedLegalVersions(ctx context.Context, db DBTX, arg Accept
 	var items []AcceptedLegalVersionsRow
 	for rows.Next() {
 		var i AcceptedLegalVersionsRow
-		if err := rows.Scan(&i.Kind, &i.Version); err != nil {
+		if err := rows.Scan(&i.Kind, &i.Locale, &i.Version); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -52,24 +54,28 @@ func (q *Queries) AcceptedLegalVersions(ctx context.Context, db DBTX, arg Accept
 
 const currentLegalDocuments = `-- name: CurrentLegalDocuments :many
 
-SELECT d.kind, d.version, d.body, d.published_at
+SELECT d.kind, d.locale, d.version, d.body, d.published_at
 FROM accounts.legal_documents d
 WHERE d.site_id = $1
     AND d.version = (SELECT max(x.version) FROM accounts.legal_documents x
-        WHERE x.site_id = d.site_id AND x.kind = d.kind)
-ORDER BY d.kind
+        WHERE x.site_id = d.site_id AND x.kind = d.kind AND x.locale = d.locale)
+ORDER BY d.kind, d.locale
 `
 
 type CurrentLegalDocumentsRow struct {
 	Kind        string
+	Locale      string
 	Version     int32
 	Body        string
 	PublishedAt pgtype.Timestamptz
 }
 
 // The versioned legal documents of a site and the versions its users accepted (README.md「注册同意」). The documents
-// are public data, readable in any scope; the acceptances are account data.
-// The latest version of each kind, which is what a registration or a page must accept.
+// are public data, readable in any scope; the acceptances are account data. A document names the locale it was
+// published in. During the rolling-release compatibility phase (migration 00035) version numbers remain unique per
+// kind across locales, so an old node's (kind, version) cursor and ON CONFLICT target keep working. A later cleanup may
+// give each locale its own stream once no old node remains.
+// The latest version of each kind in each locale, which is what a registration or a page may show.
 func (q *Queries) CurrentLegalDocuments(ctx context.Context, db DBTX, siteID uuid.UUID) ([]CurrentLegalDocumentsRow, error) {
 	rows, err := db.Query(ctx, currentLegalDocuments, siteID)
 	if err != nil {
@@ -81,6 +87,7 @@ func (q *Queries) CurrentLegalDocuments(ctx context.Context, db DBTX, siteID uui
 		var i CurrentLegalDocumentsRow
 		if err := rows.Scan(
 			&i.Kind,
+			&i.Locale,
 			&i.Version,
 			&i.Body,
 			&i.PublishedAt,
@@ -96,9 +103,9 @@ func (q *Queries) CurrentLegalDocuments(ctx context.Context, db DBTX, siteID uui
 }
 
 const insertLegalAcceptance = `-- name: InsertLegalAcceptance :exec
-INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (user_id, kind, version) DO NOTHING
+INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, locale, version)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (user_id, kind, locale, version) DO NOTHING
 `
 
 type InsertLegalAcceptanceParams struct {
@@ -107,10 +114,11 @@ type InsertLegalAcceptanceParams struct {
 	AccountID uuid.UUID
 	UserID    uuid.UUID
 	Kind      string
+	Locale    string
 	Version   int32
 }
 
-// A retried acceptance of the same version changes nothing: the first time is the time the person accepted it.
+// A retried acceptance of the same locale and version changes nothing: the first time is the time the person accepted it.
 func (q *Queries) InsertLegalAcceptance(ctx context.Context, db DBTX, arg InsertLegalAcceptanceParams) error {
 	_, err := db.Exec(ctx, insertLegalAcceptance,
 		arg.ID,
@@ -118,20 +126,22 @@ func (q *Queries) InsertLegalAcceptance(ctx context.Context, db DBTX, arg Insert
 		arg.AccountID,
 		arg.UserID,
 		arg.Kind,
+		arg.Locale,
 		arg.Version,
 	)
 	return err
 }
 
 const insertLegalDocument = `-- name: InsertLegalDocument :one
-INSERT INTO accounts.legal_documents (site_id, kind, version, body)
-VALUES ($1, $2, $3, $4)
+INSERT INTO accounts.legal_documents (site_id, kind, locale, version, body)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING published_at
 `
 
 type InsertLegalDocumentParams struct {
 	SiteID  uuid.UUID
 	Kind    string
+	Locale  string
 	Version int32
 	Body    string
 }
@@ -140,6 +150,7 @@ func (q *Queries) InsertLegalDocument(ctx context.Context, db DBTX, arg InsertLe
 	row := db.QueryRow(ctx, insertLegalDocument,
 		arg.SiteID,
 		arg.Kind,
+		arg.Locale,
 		arg.Version,
 		arg.Body,
 	)
@@ -149,7 +160,7 @@ func (q *Queries) InsertLegalDocument(ctx context.Context, db DBTX, arg InsertLe
 }
 
 const legalDocumentHistory = `-- name: LegalDocumentHistory :many
-SELECT kind, version, body, published_at
+SELECT kind, locale, version, body, published_at
 FROM accounts.legal_documents
 WHERE site_id = $1
     AND (
@@ -170,13 +181,16 @@ type LegalDocumentHistoryParams struct {
 
 type LegalDocumentHistoryRow struct {
 	Kind        string
+	Locale      string
 	Version     int32
 	Body        string
 	PublishedAt pgtype.Timestamptz
 }
 
-// Every version of every kind, newest first within a kind, after the cursor position (kind, version). The reads are the
-// admin's, in the platform scope.
+// Every version of every kind and locale, newest first within a kind, after the legacy cursor position (kind, version).
+// The reads are the admin's, in the platform scope. Version numbers are unique across locales during the
+// rolling-release compatibility phase, so (kind, version) still identifies a row; a new cursor that also names a
+// locale is accepted by the handler and reduced to this same position.
 func (q *Queries) LegalDocumentHistory(ctx context.Context, db DBTX, arg LegalDocumentHistoryParams) ([]LegalDocumentHistoryRow, error) {
 	rows, err := db.Query(ctx, legalDocumentHistory,
 		arg.SiteID,
@@ -193,6 +207,7 @@ func (q *Queries) LegalDocumentHistory(ctx context.Context, db DBTX, arg LegalDo
 		var i LegalDocumentHistoryRow
 		if err := rows.Scan(
 			&i.Kind,
+			&i.Locale,
 			&i.Version,
 			&i.Body,
 			&i.PublishedAt,
@@ -218,7 +233,9 @@ type NextLegalVersionParams struct {
 	Kind   string
 }
 
-// The next version of a kind, read under the site's lock so two publications cannot choose the same one.
+// The next version of a kind, read under the site's lock so two publications cannot choose the same one. The legacy
+// (site_id, kind, version) primary key still protects old nodes; it is why the compatibility phase allocates one
+// number across locales and a cleanup migration can switch to per-locale numbers only after old nodes exit.
 func (q *Queries) NextLegalVersion(ctx context.Context, db DBTX, arg NextLegalVersionParams) (int32, error) {
 	row := db.QueryRow(ctx, nextLegalVersion, arg.SiteID, arg.Kind)
 	var version int32

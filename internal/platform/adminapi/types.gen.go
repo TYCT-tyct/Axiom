@@ -651,6 +651,24 @@ func (e LegalDocumentKind) Valid() bool {
 	}
 }
 
+// Defines values for LegalDocumentLocale.
+const (
+	En LegalDocumentLocale = "en"
+	Zh LegalDocumentLocale = "zh"
+)
+
+// Valid indicates whether the value is a known member of the LegalDocumentLocale enum.
+func (e LegalDocumentLocale) Valid() bool {
+	switch e {
+	case En:
+		return true
+	case Zh:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LoginField.
 const (
 	LoginFieldAccessToken          LoginField = "access_token"
@@ -2675,12 +2693,14 @@ type KeyLimitsView struct {
 	Limits KeyLimits `json:"limits"`
 }
 
-// LegalDocument One version of one of the site's legal documents; the text is plain text, never HTML.
+// LegalDocument One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. `locale` is absent on a node that predates locale-aware documents; a page uses `zh` only as the display fallback and omits the locale from the acceptance.
 type LegalDocument struct {
-	Body        string            `json:"body"`
-	Kind        LegalDocumentKind `json:"kind"`
-	PublishedAt time.Time         `json:"published_at"`
-	Version     int               `json:"version"`
+	// Body Markdown headings, paragraphs, and lists. Rendered as React text, never interpreted as HTML.
+	Body        string               `json:"body"`
+	Kind        LegalDocumentKind    `json:"kind"`
+	Locale      *LegalDocumentLocale `json:"locale,omitempty"`
+	PublishedAt time.Time            `json:"published_at"`
+	Version     int                  `json:"version"`
 }
 
 // LegalDocumentHistory defines model for LegalDocumentHistory.
@@ -2688,26 +2708,31 @@ type LegalDocumentHistory struct {
 	// Documents Newest first within a kind, at most `limit` rows.
 	Documents []LegalDocument `json:"documents"`
 
-	// NextCursor Where the next page starts, or null on the last page.
+	// NextCursor Where the next page starts, or null on the last page. New nodes emit the legacy `kind:version` form for old nodes and accept both that and `kind:locale:version`.
 	NextCursor *string `json:"next_cursor"`
 }
 
 // LegalDocumentKind defines model for LegalDocumentKind.
 type LegalDocumentKind string
 
-// LegalDocumentPublish defines model for LegalDocumentPublish.
+// LegalDocumentLocale defines model for LegalDocumentLocale.
+type LegalDocumentLocale string
+
+// LegalDocumentPublish Publish one version of a kind in one locale, with the body and a reason. `locale` is optional while old admin clients remain: when absent, the publication is Chinese (`zh`) and takes the next version of the kind.
 type LegalDocumentPublish struct {
-	Body string            `json:"body"`
-	Kind LegalDocumentKind `json:"kind"`
+	Body   string               `json:"body"`
+	Kind   LegalDocumentKind    `json:"kind"`
+	Locale *LegalDocumentLocale `json:"locale,omitempty"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 }
 
-// LegalDocumentVersion defines model for LegalDocumentVersion.
+// LegalDocumentVersion A legal document version named by an acceptance or the session's pending list. `locale` is optional for rolling compatibility: when an old node's response omits it, the page also omits it from the acceptance, and the server resolves the kind and version to the one current document. The page may use `zh` as the display fallback.
 type LegalDocumentVersion struct {
-	Kind    LegalDocumentKind `json:"kind"`
-	Version int               `json:"version"`
+	Kind    LegalDocumentKind    `json:"kind"`
+	Locale  *LegalDocumentLocale `json:"locale,omitempty"`
+	Version int                  `json:"version"`
 }
 
 // LoginField defines model for LoginField.
@@ -4315,7 +4340,7 @@ type Session struct {
 
 // SessionConsent The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead.
 type SessionConsent struct {
-	// Required Current documents this user has not accepted; empty when every one is accepted.
+	// Required One newest current document per kind this user still has to accept during the compatibility phase; empty when each newest version is accepted.
 	Required []LegalDocumentVersion `json:"required"`
 }
 
