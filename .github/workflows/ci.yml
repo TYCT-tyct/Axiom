@@ -161,6 +161,10 @@ jobs:
         run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
       - run: just test
+      # The same race run wrote coverage.out; this reads it, so coverage is checked where the suite already runs, without
+      # a second run. PRs skip this job as they skip the tests; the train runs it for the batch.
+      - name: Check per-package coverage against the baseline
+        run: just quality-ratchet-coverage
       - name: Clean test containers after tests
         if: always()
         run: bash scripts/ci/clean-test-containers.sh
