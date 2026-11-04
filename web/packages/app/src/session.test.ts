@@ -94,6 +94,7 @@ it.each([
   { value: "/sign-in?next=/", want: undefined },
   { value: "/mfa", want: undefined },
   { value: "/register?invite=x", want: undefined },
+  { value: "/consent?next=/keys", want: undefined },
   { value: "/sign-ins", want: "/sign-ins" },
   { value: undefined, want: undefined },
   { value: ["/keys"], want: undefined },

@@ -95,16 +95,18 @@ export function createQueryClient() {
 export function AppProviders({
   api,
   requiresMfa,
+  requiresConsent = false,
   children,
 }: {
   api: AuthApi;
   requiresMfa: boolean;
+  requiresConsent?: boolean;
   children: ReactNode;
 }) {
   const [queryClient] = useState(createQueryClient);
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider api={api} requiresMfa={requiresMfa}>
+      <AuthProvider api={api} requiresMfa={requiresMfa} requiresConsent={requiresConsent}>
         <RecoveryCodesHost>{children}</RecoveryCodesHost>
       </AuthProvider>
     </QueryClientProvider>

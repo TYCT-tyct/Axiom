@@ -49,11 +49,12 @@ export function Button({
 // ends in two accounts, two keys or two charges; it stays in place so the form does not jump.
 export function SubmitButton({
   pending,
+  disabled,
   children,
   ...props
-}: Omit<ComponentProps<typeof Button>, "type" | "disabled"> & { pending: boolean }) {
+}: Omit<ComponentProps<typeof Button>, "type" | "disabled"> & { pending: boolean; disabled?: boolean }) {
   return (
-    <Button variant="primary" size="md" {...props} type="submit" disabled={pending} aria-busy={pending}>
+    <Button variant="primary" size="md" {...props} type="submit" disabled={pending || disabled} aria-busy={pending}>
       {pending ? <Icon name="refresh" className="animate-spin" /> : null}
       {children}
     </Button>

@@ -1,0 +1,179 @@
+Demo text, not legal advice; replace before launch.
+
+# Axiom Terms of Service (Demo)
+
+Effective date: 【effective date】
+
+## The Service
+
+1.1 Axiom is an API aggregation and relay platform for artificial intelligence models (the “Service”). Through a unified API, the Service routes your requests to upstream endpoints, including official provider APIs, third-party relay sites, and Axiom-operated account pools, and selects, retries, and falls back between endpoints.
+
+1.2 The features, available models, endpoints, endpoint attributes, prices, limits, and eligibility of the Service are those shown on the website, console, API documentation, and order page at the relevant time. We may add, remove, suspend, or change models, endpoints, routing rules, and features.
+
+1.3 The Service is intended primarily for developers and businesses. You may call the Service from your own applications, products, or internal systems, subject to these Terms and the terms of the upstream model providers.
+
+## Eligibility, Accounts, and Credentials
+
+2.1 You must have full legal capacity and the authority to enter into and perform these Terms. If you use the Service on behalf of an organization, you represent and warrant that you are authorized to bind that organization to these Terms.
+
+2.2 You must provide accurate, complete, and current registration information and keep it up to date. You are responsible for safeguarding your account, workspaces, API keys, management keys, passwords, passkeys, two-step verification credentials, and recovery codes, and for all activity under those credentials.
+
+2.3 If you discover or reasonably suspect that your account or credentials have been compromised, stolen, or used without authorization, you must promptly disable the affected keys, change your password, contact us, and cooperate with our investigation. We may require you to reset credentials, enable two-step verification, or take other reasonable security measures.
+
+2.4 An account may include multiple members and workspaces where the relevant features are available. Acts of an account’s owner, administrators, and members within their permissions are treated as acts of the account. You must ensure that members comply with these Terms.
+
+2.5 We may require email verification, two-step verification, a human check, identity verification, or age or region verification as required by law, upstream requirements, or security needs. If you refuse or fail verification, we may be unable to provide all or part of the Service.
+
+## Prepaid Credit and Balances
+
+3.1 The Service is prepaid. Before you pay, the page shows the amount to pay, payment currency, payment method, channel fee (if any), and the expected credit to be credited. The order takes effect when you confirm and pay.
+
+3.2 Credit is credited in batches from sources such as paid top-ups, gifts, redeem codes, and manual adjustments. Each batch may have an expiry date. Unless the top-up page or order says otherwise, paid credit does not expire by default; gift, redeem-code, offline-payment, and similar credit may expire on the date stated when issued. Unused amounts expire at that time, except where applicable law provides otherwise.
+
+3.3 Credit is not legal tender, is not a deposit, does not bear interest, and does not give you any property right. Credit is non-transferable, cannot be moved between accounts, cannot be exchanged for cash, and may be used only to purchase the Service. Except for refunds expressly allowed by these Terms, the site’s refund policy, or applicable law, credit is non-refundable and non-exchangeable.
+
+3.4 If your payment currency differs from the site’s accounting currency, the applicable exchange rate is locked when the order is placed. The credit actually received may be recalculated if the amount actually received by the payment channel, channel fees, exchange rate, or settlement time differ from the quote. The amounts and credit recorded on the order, statement, and receipt are conclusive.
+
+3.5 The sale price is calculated from the cost of the upstream endpoint that actually serves the request plus a markup; different endpoints may have different sale prices. The page shows the current price version; admission freezes the price version for the request, and settlement uses that frozen version. Changes in upstream costs, exchange rates, site markups, or pricing rules may change prices; we will not use a later price to rewrite a call that has already settled.
+
+3.6 Charges are based on actual usage, including input and output tokens, images, files, searches, parsing, and other per-call or metered items. Amounts below one billing unit are rounded as published on the page. If your balance is insufficient, a request may be refused, truncated, or ended early; usage already incurred may still be charged.
+
+3.7 A free call applies only to the cases expressly defined in the billing rules, such as an upstream that did not execute the request or delivered no content. Per-call items that did execute (for example, web search or file parsing) and content that was delivered may still be charged. A free call does not change the cost already incurred upstream.
+
+3.8 The available balance may not fall below the balance floor set by the site. Concurrent calls reserve credit, and settlement refunds or charges the difference based on actual usage. A chargeback, correction, exchange-rate change, or manual adjustment may make the balance negative; a negative balance may cause the account to be suspended.
+
+3.9 The console provides balances, credit batches, statements, orders, and receipts. The conditions, timing, and form of official invoices are governed by 【invoice policy】; a receipt is not an invoice.
+
+3.10 You are responsible for taxes arising from your use of the Service, except taxes we are required by law to withhold or collect.
+
+## Refunds
+
+4.1 Refunds apply only to the unused, unexpired, and unfrozen portion of a paid top-up batch. Gift credit, redeem codes, used, expired, frozen, or already refunded amounts are not refundable. Refunds are calculated in site credit and converted to cash using the amount paid, credit credited, and fee ratio recorded for that batch.
+
+4.2 Refunds are reviewed by an administrator, site owner, or operations personnel. A site may allow users to request a refund from the order page. When a request is submitted, the relevant credit is frozen so it cannot be spent or expired. If the request is declined, the credit is unfrozen; if approved, we initiate the refund through the original payment path.
+
+4.3 Refunds are made to the original payment path where possible. If the payment channel does not support refunds, the channel’s refund period has passed, or the original path cannot be used, we may refund offline and record an offline refund. The time for the refund to arrive depends on the payment channel, bank, or blockchain network and is outside our control.
+
+4.4 By default, payment-channel fees are not refunded, and cryptocurrency top-ups are non-refundable. A site may present a different refund policy before you pay; if the site policy differs from these Terms, the site policy shown before payment governs. Where applicable law requires a refund, that law governs.
+
+4.5 The refund request period is 【refund request period】. After that period, unused credit may no longer be refundable; if a site offers a longer period, that period governs.
+
+4.6 After a refund succeeds, the corresponding credit is deducted from your account. If a refund makes your balance negative, you must top up within a reasonable time; otherwise we may suspend or terminate the Service.
+
+## Upstream Models and Providers
+
+5.1 The Service forwards your requests to the upstream model providers that actually serve them, including official APIs, third-party relay sites, and Axiom-operated account pools. The upstream provider’s terms of service, acceptable-use policy, privacy policy, and data-processing rules apply to your use of the relevant model. You must review and comply with them.
+
+5.2 We may select one or more candidate endpoints based on your presets, price, endpoint health, capabilities, session stickiness, limits, and availability, and may retry or fall back on failure. A single request may try multiple endpoints. The call record lists the endpoint or code that ultimately served the request, the result of each attempt, and the corresponding charges.
+
+5.3 Upstream providers may record, store, use for training, use for improvement, or resell your inputs and outputs. We do not control upstream data practices and cannot guarantee that an upstream will handle data as we require. You should avoid sending data that the upstream is not permitted to process, and you should assess whether the upstream’s data practices meet your requirements.
+
+5.4 Model outputs are generated by upstream providers and are not guaranteed to be accurate, complete, timely, lawful, non-infringing, or fit for a particular purpose. You are responsible for your use of outputs and their consequences, and you should verify outputs before relying on them.
+
+5.5 Model names, versions, capabilities, context lengths, prices, and availability may change at any time. We may delist, down-rank, suspend, or replace endpoints, and may restrict use in certain regions or by certain users.
+
+5.6 Bring your own key (BYOK): where a site enables this feature, you may add your own upstream provider key. Requests will prefer your key and, on failure, fall back to platform endpoints as configured by the site; if your key is expressly set not to fall back, it will not. Your contract, fees, quotas, rate limits, and data practices with the upstream are your responsibility; the platform charges a service fee at the rate published by the site. Your key is stored encrypted, is not displayed after saving, and is not written to logs. You must ensure you have the right to use the key and comply with the upstream’s terms.
+
+5.7 Sub-sites: if a site allows you to open a sub-site, you are the operator for your own users and are responsible for the sub-site’s content, prices, collection, refunds, taxes, privacy, and compliance. You must enter into or comply with a separate sub-site agreement with us; if these Terms conflict with the sub-site agreement, the sub-site agreement governs.
+
+## User Content
+
+6.1 “User Content” includes the inputs you submit through the Service (text, images, PDFs, audio, files, system prompts, tool definitions, parameters, and similar materials), as well as the outputs, reasoning content, and tool calls returned by models.
+
+6.2 You retain the rights you hold in your inputs; ownership of outputs is determined by the upstream model terms and applicable law. To provide, operate, protect, bill, settle, troubleshoot, back up, and comply with legal obligations relating to the Service, you grant us a non-exclusive, worldwide, royalty-free license to copy, store, transmit, process, display (only to you), and delete User Content, solely for those purposes.
+
+6.3 You represent and warrant that: you hold all rights and consents needed to submit your inputs; your inputs do not infringe any third party’s intellectual property, privacy, or other rights; your inputs do not contain unlawful content; and your use of your inputs complies with upstream model terms and applicable law.
+
+6.4 Whether conversation content is stored is decided by the platform as a whole; sites and accounts cannot turn it off individually. When storage is enabled, content is retained for 90 days by default, adjustable in the backend, and may be retained long-term; when storage is disabled, message bodies are not stored. Stored content includes complete requests, complete responses, tool calls, and multimodal content such as images and files; message bodies are isolated per account, encrypted at rest, and deduplicated by content.
+
+6.5 No one can view conversation bodies through the product interface or ordinary APIs. Only the platform owner, under a controlled process with two signatures from independent keys, audit, and encrypted export, may access stored content for tracing, security, dispute handling, and, where necessary consent has been obtained, model improvement or training. We will not display message bodies to other users, site administrators, or third parties, except as required by law.
+
+6.6 Call records (metadata) are always stored and cannot be disabled. Call records include the account, workspace, key, IP address, client application, model, endpoint or source code, each attempt, usage, sale price, cost, latency, error type, and whether the call was free. You can view your own call records in the console and export their metadata; call records do not contain conversation bodies.
+
+6.7 We may access call records, and to the extent necessary access stored conversation content under controlled export, for security, anti-fraud, abuse investigation, dispute handling, legal compliance, or law-enforcement requests. We will process the minimum necessary data and keep audit records.
+
+6.8 You should back up important outputs yourself. We do not guarantee that conversation content or call records will be recoverable at any particular time, or that retention periods will meet your business requirements.
+
+## Acceptable Use
+
+7.1 You must not use the Service, and must not permit your users or any third party to use the Service, to:
+
+(a) violate applicable laws, regulations, sanctions, export controls, or regulatory requirements;
+(b) infringe the intellectual property, privacy, reputation, likeness, or other rights of others;
+(c) engage in fraud, money laundering, terrorist financing, gambling, pyramid schemes, or other unlawful activity;
+(d) access, attack, scan, probe, circumvent, or disrupt the Service, upstream providers, other users, or third-party systems, networks, limits, billing, or security mechanisms without authorization;
+(e) send malicious code, phishing content, spam, non-consensual sexual content, or child sexual abuse material, or use the Service to generate or distribute such content;
+(f) dox, stalk, harass, discriminate, promote hate, or collect or process another person’s personal data without consent;
+(g) violate upstream model terms, including prohibited uses, red-teaming restrictions, model-distillation restrictions, or other use restrictions;
+(h) resell, redistribute, rent, or share the Service or API keys, unless you have a sub-site agreement with us or our written permission;
+(i) use automated means to mass-register, steal or share accounts or keys, or evade region, age, identity, or limit restrictions;
+(j) provide false identity information, forge payment evidence, make malicious chargebacks, or use refunds, redeem codes, or promotions for fraud; or
+(k) engage in any other conduct we reasonably consider abusive of the Service or harmful to the platform or other users.
+
+7.2 We may investigate suspected violations and take measures including restriction, suspension, termination, content removal, refusal of refunds, and reporting to law enforcement. We are not obligated to monitor all User Content, but may act when we become aware of violations.
+
+## Suspension and Termination
+
+8.1 You may stop using the Service at any time and request account closure through the console or 【contact details】. Before closure, you must settle amounts due. After closure, your personal data is handled under the Privacy Policy, financial records and records required by law are retained, and remaining credit is handled under the site’s refund policy.
+
+8.2 We may suspend or terminate all or part of your access, without prior notice where the law does not require it, if: you violate these Terms or upstream terms; there is fraud, a chargeback, or a malicious refund; law enforcement or a regulator requires it; there is a security risk; there is a prolonged negative balance; there is an account dispute; or we reasonably consider it necessary.
+
+8.3 Chargebacks: if a bank or payment channel initiates a chargeback or dispute for your payment, we may claw back the corresponding credit (the balance may become negative) and suspend the account’s spending. Only an operator may lift the suspension; even if the dispute is won, we will only reverse the amount and will not automatically lift the suspension. You may contact 【contact details】 to request a manual review.
+
+8.4 During a suspension, non-spending functions such as signing in, viewing statements, and creating keys may remain available, but model calls will be refused. Suspension does not excuse payment obligations already incurred.
+
+8.5 After termination, if you have not violated these Terms, remaining unused paid credit that meets the refund conditions may be refunded under the refund policy; if termination is due to a violation, fraud, chargeback, or legal requirement, we may not refund unused credit. Applicable law prevails.
+
+8.6 We may modify, suspend, or discontinue all or part of the Service. For material changes, we will give advance notice through the website, console, or email, except in emergencies such as legal requirements, security incidents, or an upstream’s sudden discontinuation.
+
+## Intellectual Property
+
+9.1 The Service’s software, interfaces, documentation, trademarks, logos, model catalog, endpoint data, price data, and related materials are owned by us or our licensors and are protected by intellectual property laws. We grant you no rights except the limited right to use the Service under these Terms.
+
+9.2 You must not copy, modify, reverse engineer, decompile, disassemble, scrape, bulk-export, or create derivative works of the Service, except as permitted by applicable law or with our written consent. Your ordinary model calls, use of console export functions, and retrieval of your own data through the API are not restricted by this clause.
+
+9.3 If you provide suggestions, feedback, or improvements, we may use them without compensation and without obligation. You must not provide third-party confidential information that you are not authorized to disclose.
+
+## Disclaimers
+
+10.1 The Service is provided “as is” and “as available.” To the maximum extent permitted by law, we make no express or implied warranties, including warranties of merchantability, fitness for a particular purpose, non-infringement, accuracy, completeness, timeliness, uninterrupted operation, freedom from errors, or security.
+
+10.2 We do not guarantee that upstream models, endpoints, payment channels, networks, or third-party services will not be interrupted, changed, refused, or delayed, or that model outputs will be accurate, lawful, non-infringing, or fit for your purpose. You must verify outputs yourself and bear the consequences of your use.
+
+10.3 To the extent permitted by law, we are not liable for losses caused by third-party services, upstream providers, payment channels, networks, devices, force majeure, government action, or your own acts or omissions.
+
+10.4 Some jurisdictions do not allow the exclusion of certain implied warranties or the limitation of certain rights. If an exclusion or limitation in these Terms conflicts with mandatory law, it will be adjusted to the minimum extent necessary and the remaining provisions will continue to apply.
+
+## Limitation of Liability
+
+11.1 To the maximum extent permitted by law, we are not liable for indirect, incidental, special, punitive, exemplary, or consequential damages, including lost profits, revenue, goodwill, data, business opportunities, or anticipated savings, even if we have been advised of the possibility of such damages.
+
+11.2 To the maximum extent permitted by law, our aggregate liability to you for the Service will not exceed the amounts you actually paid for the Service in the 【twelve】 months before the claim arose; if that amount is less than 【one hundred】 US dollars or the equivalent, the floor is 【one hundred】 US dollars or the equivalent. Different jurisdictions have different rules on liability limits; applicable law governs.
+
+11.3 These limitations do not apply to intentional misconduct or gross negligence, personal injury, fraud, liability that cannot be limited by law, or rights that mandatory consumer law grants and that cannot be excluded by contract.
+
+## Changes to These Terms
+
+12.1 We may update these Terms from time to time. For material changes, we will give advance notice through the website, console, email, or another reasonable method, and update the version and effective date. After a change takes effect, your continued use of the Service means you accept it; if you do not accept it, you must stop using the Service and may request a refund of unused credit under the refund policy.
+
+12.2 If you stop using the Service before a change takes effect, amounts already incurred remain payable. If applicable law requires separate consent, we will obtain it separately.
+
+## Governing Law and Dispute Resolution
+
+13.1 These Terms are governed by 【governing law】, without regard to its conflict-of-laws rules. The parties will first attempt to resolve any dispute arising from these Terms or the Service through good-faith negotiation for 【thirty】 days; if negotiation fails, the dispute will be submitted to 【courts or arbitration institution】.
+
+13.2 During a dispute, the parties will continue to perform obligations that are not in dispute. Mandatory consumer rights under applicable law are not affected by these Terms.
+
+13.3 If mandatory consumer-protection, data-protection, or other laws in your country or region apply, these Terms do not exclude rights you have under those laws.
+
+## General
+
+14.1 These Terms constitute the entire agreement between the parties regarding the Service and supersede prior oral or written understandings. If any provision is held invalid or unenforceable, the remaining provisions remain in effect. Our failure or delay in exercising a right is not a waiver of that right.
+
+14.2 You may not assign or transfer these Terms or your rights or obligations under them without our written consent; we may assign these Terms in connection with a reorganization, merger, acquisition, or transfer of assets.
+
+14.3 Notices may be given through website announcements, console messages, the email address you registered, or 【contact details】. You must keep your email address valid and check it promptly.
+
+14.4 Headings are for convenience only and do not affect interpretation. If the Chinese and English versions of these Terms differ, the 【governing language】 version governs.
+
+14.5 Contact us: 【operating entity】, 【registered address】, 【contact details】. Effective date: 【effective date】.
