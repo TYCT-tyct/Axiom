@@ -40,6 +40,9 @@ type RouteDeps struct {
 	// ByokRules are the accounts' no-fallback choices. They are read apart from the endpoints, so a rejected credential
 	// does not lift the choice. Nil means none.
 	ByokRules func(context.Context) ([]routing.ByokRule, error)
+	// Presets reads the routing presets, the system allow-all among them (routing.Presets.Load); a build that cannot
+	// read them keeps the last snapshot. Nil routes every key by the code-built allow-all preset, for tests.
+	Presets func(context.Context) ([]routing.Preset, error)
 	// SiteCurrency is the main site's currency. A BYOK endpoint may serve a model the site does not sell, so it has no
 	// shared sale price to read the currency from; its fee is still in the site's currency.
 	SiteCurrency platform.Currency
@@ -120,6 +123,12 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 			return nil, nil, Count{}, fmt.Errorf("gateway: the provider keys' fallback rules: %w", err)
 		}
 	}
+	routePresets := presets()
+	if d.Presets != nil {
+		if routePresets, err = d.Presets(ctx); err != nil {
+			return nil, nil, Count{}, fmt.Errorf("gateway: the routing presets: %w", err)
+		}
+	}
 	items, err := d.UnknownItems(ctx)
 	if err != nil {
 		return nil, nil, Count{}, fmt.Errorf("gateway: the unknown billing items: %w", err)
@@ -147,7 +156,7 @@ func (d *RouteDeps) Build(ctx context.Context) (*routing.Snapshot, *openRouterLi
 	// with a failed endpoint, whether it still serves others or has no route at all, so an endpoint's absence has a
 	// cause in the log too.
 	d.report(left)
-	snap, err := d.Router.NewSnapshot(builtAt, built, presets(), byokRules...)
+	snap, err := d.Router.NewSnapshot(builtAt, built, routePresets, byokRules...)
 	if err != nil {
 		return nil, nil, Count{}, err
 	}
@@ -461,6 +470,7 @@ func endpointOf(snap *catalog.Snapshot, prices map[catalog.ModelID]billing.Sold,
 		// fingerprint check, which real traffic does not count for (docs/domains/quality.md「真伪检测」).
 		Quality: measured.Quality, Confidence: measured.Confidence, Health: measured.Health, ToolErrorRate: measured.ToolErrorRate,
 		Throughput: measured.Throughput, Latency: measured.Latency, Verified: measured.Verified,
+		Score: measured.ProductScore, ScoreConfidence: measured.ProductScoreConfidence,
 		LatencyPercentiles: measured.LatencyPercentiles, ThroughputPercentiles: measured.ThroughputPercentiles,
 		Quantization: r.Quantization,
 		ServiceTiers: tiers,
@@ -542,11 +552,11 @@ func abilityNames(c protocol.Capabilities) []string {
 	return names
 }
 
-// presets is the one preset M1 routes under: the zero ID, which a key without a preset of its own is routed by
-// (admit.go routingAdmission), admitting every class and every data policy, since no endpoint carries a measured one
-// yet. NewSnapshot refuses a preset that admits none. MaxAttempts is four: a route holds at most routing.MaxEntries
-// entries and one request makes at most platform.MaxAttempts attempts, so four is never reached, and the router's
-// default is written down here rather than left implicit.
+// presets is the system allow-all preset as code builds it, for a RouteDeps without a preset source: the zero ID, which
+// a key without a preset of its own is routed by (admit.go routingAdmission), admitting every class and every data
+// policy. It is the rules routing's migration writes for the same ID. MaxAttempts is four: a route holds at most
+// routing.MaxEntries entries and one request makes at most platform.MaxAttempts attempts, so four is never reached, and
+// the router's default is written down here rather than left implicit.
 func presets() []routing.Preset {
 	return []routing.Preset{{Classes: routing.AllClasses, Policies: routing.AllPolicies, MaxAttempts: 4}}
 }

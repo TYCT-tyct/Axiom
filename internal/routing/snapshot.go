@@ -131,15 +131,19 @@ type Endpoint struct {
 	PoolLow     bool // its group's pool has little capacity left: its weight is halved
 	Egresses    int  // how many egresses can reach it
 
-	Class         Class
-	Policy        Policy
-	Verified      bool          // it passed quality's checks
-	Quality       float64       // 0 to 1
-	Confidence    float64       // 0 to 1, how much the quality score rests on
-	Health        float64       // 0 to 1, the recent success rate
-	ToolErrorRate float64       // 0 to 1, measured on real traffic
-	Throughput    float64       // output tokens per second, measured
-	Latency       time.Duration // time to first token, measured
+	Class    Class
+	Policy   Policy
+	Verified bool // it passed quality's checks
+	// Score is the product score, the fixed benchmark against the official direct run (0 to 100, official 100), and
+	// ScoreConfidence how much it can be trusted (0 to 1); both 0 when not measured, which no preset minimum admits.
+	Score           float64
+	ScoreConfidence float64
+	Quality         float64       // 0 to 1
+	Confidence      float64       // 0 to 1, how much the quality score rests on
+	Health          float64       // 0 to 1, the recent success rate
+	ToolErrorRate   float64       // 0 to 1, measured on real traffic
+	Throughput      float64       // output tokens per second, measured
+	Latency         time.Duration // time to first token, measured
 	// The same two measures over a rolling five-minute window, p50/p75/p90/p99, 0 when not measured. They are copied
 	// from quality when the snapshot is built so the routing path reads no lock.
 	LatencyPercentiles    [4]time.Duration
@@ -300,21 +304,94 @@ const (
 
 // Preset is the configuration a request is routed under. Its contents come from the snapshot; admission names which
 // one applies. The zero value of a limit means none; the zero Classes and Policies allow nothing, so a preset says
-// AllClasses and AllPolicies to allow all.
+// AllClasses and AllPolicies to allow all. Rule is its default; Authors and Models are its rules for a model author or
+// a catalog model slug, already whole (ReadRules), and a model's own rule comes before its author's.
 type Preset struct {
-	ID            PresetID
-	Strategy      Strategy
-	Classes       ClassSet
-	Policies      PolicySet
+	ID      PresetID
+	Version int64 // the rules version it was compiled from; 0 for one built in code
+	// Scope and the owner say who may be routed by it: the platform's is everyone's, a site's its own accounts', an
+	// account's its own, a workspace's its own. Currency is a platform preset's price limits' currency, empty when it
+	// limits none; a site's preset is in its site's currency.
+	Scope     PresetScope
+	Site      SiteID
+	Account   AccountID
+	Workspace WorkspaceID
+	Currency  platform.Currency
+	Rule
+	Authors map[string]Rule
+	Models  map[string]Rule
+	// The platform's run-time settings. MinQuality and MinConfidence hold the operations quality ranking reads, not the
+	// product score; OrderNames is supplier group codenames, matched exactly.
 	MinQuality    float64
 	MinConfidence float64
-	VerifiedOnly  bool
-	MaxPrice      PriceLimit
-	Order         []SupplierID
+	OrderNames    []string
 	NoFallbacks   bool
 	StickyTTL     time.Duration // 0 uses the router's default
 	MaxAttempts   int           // 0 uses the router's default
 	AttemptWindow time.Duration // 0 uses the router's default
+}
+
+// visibleTo reports whether the admission may be routed by p: the layers of the default chain the key belongs to, and
+// a platform preset's price limits in the site's currency. Keys are bound only to presets they can see, so this fails
+// only when the data changed or broke since; Plan then refuses rather than route by a preset meant for someone else.
+func (p *Preset) visibleTo(a Admission) bool {
+	switch p.Scope {
+	case ScopePlatform:
+		return p.Currency == (platform.Currency{}) || p.Currency == a.Currency
+	case ScopeSite:
+		return p.Site == a.Site
+	case ScopeAccount:
+		return p.Site == a.Site && p.Account == a.Account
+	case ScopeWorkspace:
+		return p.Site == a.Site && p.Account == a.Account && p.Workspace == a.Workspace
+	}
+	return false
+}
+
+// preset is a Preset as the snapshot holds it, with its rules looked up by pointer so a plan copies none of them.
+type preset struct {
+	Preset
+	byModel, byAuthor map[string]*Rule
+}
+
+// ruleFor is the rule of the model with this catalog slug: its own, its author's, or the default.
+func (p *preset) ruleFor(slug string) *Rule {
+	if r, ok := p.byModel[slug]; ok {
+		return r
+	}
+	if r, ok := p.byAuthor[authorOf(slug)]; ok {
+		return r
+	}
+	return &p.Rule
+}
+
+// newPreset checks p for the snapshot and indexes its rules. The snapshot keeps copies of what can be shared, so a
+// caller that reuses p for the next build changes nothing this one holds.
+func newPreset(p Preset) (*preset, error) {
+	if p.NoFallbacks && len(p.OrderNames) == 0 {
+		return nil, fmt.Errorf("routing snapshot: preset %s closes the fallbacks but names no suppliers", uuid.UUID(p.ID))
+	}
+	p.OrderNames = slices.Clone(p.OrderNames)
+	out := &preset{byModel: make(map[string]*Rule, len(p.Models)), byAuthor: make(map[string]*Rule, len(p.Authors))}
+	for _, rules := range []struct {
+		from map[string]Rule
+		to   map[string]*Rule
+	}{{p.Authors, out.byAuthor}, {p.Models, out.byModel}} {
+		for k, r := range rules.from {
+			r.Classes = slices.Clone(r.Classes)
+			if r.Classes.Empty() || r.Policies == 0 {
+				return nil, fmt.Errorf("routing snapshot: preset %s's rule for %s allows no class or no data policy", uuid.UUID(p.ID), k)
+			}
+			rules.to[k] = &r
+		}
+	}
+	p.Classes = slices.Clone(p.Classes)
+	if p.Classes.Empty() || p.Policies == 0 {
+		return nil, fmt.Errorf("routing snapshot: preset %s allows no class or no data policy, which would filter out everything", uuid.UUID(p.ID))
+	}
+	p.Authors, p.Models = nil, nil // the indexes hold them
+	out.Preset = p
+	return out, nil
 }
 
 // Snapshot is the routing view of the world, built whole in the background and replaced whole: endpoints grouped by
@@ -324,7 +401,7 @@ type Snapshot struct {
 	byModel    map[catalog.ModelID][]*candidate
 	models     []catalog.ModelID // in id order, for openrouter/auto
 	free       []catalog.ModelID // the free ones, in id order, for openrouter/free
-	presets    map[PresetID]Preset
+	presets    map[PresetID]*preset
 	noFallback map[AccountID]map[catalog.ModelID]struct{}
 }
 
@@ -419,13 +496,11 @@ func priceOf(p PriceRef, direct bool) (candidatePrice, error) {
 
 // NewSnapshot groups the endpoints by model and checks them: an endpoint twice, or a preset twice, is a mistake in
 // the data that would otherwise surface as a wrong choice.
-//
-//nolint:gocognit // one linear pass over the endpoints and the accounts' rules
 func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset, rules ...ByokRule) (*Snapshot, error) {
 	s := &Snapshot{
 		built:      built,
 		byModel:    map[catalog.ModelID][]*candidate{},
-		presets:    make(map[PresetID]Preset, len(presets)),
+		presets:    make(map[PresetID]*preset, len(presets)),
 		noFallback: map[AccountID]map[catalog.ModelID]struct{}{},
 	}
 	for _, rule := range rules {
@@ -453,15 +528,11 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 		if _, dup := s.presets[p.ID]; dup {
 			return nil, fmt.Errorf("routing snapshot: preset %s twice", uuid.UUID(p.ID))
 		}
-		if p.NoFallbacks && len(p.Order) == 0 {
-			return nil, fmt.Errorf("routing snapshot: preset %s closes the fallbacks but names no suppliers", uuid.UUID(p.ID))
+		compiled, err := newPreset(p)
+		if err != nil {
+			return nil, err
 		}
-		p.Order = slices.Clone(p.Order)     // the caller keeps its slice; the snapshot never changes
-		p.Classes = slices.Clone(p.Classes) // and so does a preset that names classes
-		if p.Classes.Empty() || p.Policies == 0 {
-			return nil, fmt.Errorf("routing snapshot: preset %s allows no class or no data policy, which would filter out everything", uuid.UUID(p.ID))
-		}
-		s.presets[p.ID] = p
+		s.presets[p.ID] = compiled
 	}
 	return s, nil
 }

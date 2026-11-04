@@ -42,8 +42,8 @@ func audienceBenchmark(b *testing.B) (*Router, []*candidate, *need, *billing.Aud
 		candidates = append(candidates, c)
 	}
 	in := Input{Admission: Admission{Tier: tier}, Req: &protocol.Request{Format: protocol.Chat, ServiceTiers: 1 << catalog.ServiceTierStandard, Choices: 1}}
-	p := Preset{Classes: AllClasses, Policies: AllPolicies}
-	n := &need{in: &in, req: in.Req, preset: &p, over: &in.Override, now: time.Now()}
+	p := &preset{Classes: AllClasses, Policies: AllPolicies}
+	n := &need{in: &in, req: in.Req, preset: p, rule: &p.Rule, over: &in.Override, now: time.Now()}
 	return r, candidates, n, compiled
 }
 

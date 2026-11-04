@@ -16,7 +16,8 @@ import (
 type need struct {
 	in         *Input
 	req        *protocol.Request
-	preset     *Preset
+	preset     *preset
+	rule       *Rule // the preset's rule for the model being ranked
 	over       *Override
 	auto       bool                   // rank across every model: the request named openrouter/auto
 	free       bool                   // rank across the free models: the request named openrouter/free
@@ -65,6 +66,9 @@ func (r *Router) rankModels(snap *Snapshot, n *need, rec *Record) []ranked {
 			rec.Excluded = append(rec.Excluded, Excluded{Reason: NoCandidates})
 		}
 		_, n.noFallback = snap.noFallback[n.in.Admission.Account][m]
+		if len(cands) > 0 {
+			n.rule = n.preset.ruleFor(cands[0].ModelSlug)
+		}
 		order = append(order, r.rank(cands, n, rec)...)
 	}
 	return order
@@ -104,11 +108,11 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		return Plan{}, nil, ErrStale
 	}
 	preset, ok := snap.presets[in.Admission.Preset]
-	if !ok {
-		return Plan{}, nil, ErrUnknownPreset
+	if !ok || !preset.visibleTo(in.Admission) {
+		return Plan{}, nil, ErrPresetUnavailable
 	}
 	n := &need{
-		in: &in, req: in.Req, preset: &preset, over: &in.Override, auto: in.Auto, free: in.Free, now: now,
+		in: &in, req: in.Req, preset: preset, rule: &preset.Rule, over: &in.Override, auto: in.Auto, free: in.Free, now: now,
 		tokens: inputTokens(in.Req), demand: DemandOf(in.Req), tiers: in.Req.ServiceTiers,
 	}
 	if r.cfg.Segments != nil {
@@ -462,12 +466,13 @@ func (c *candidate) full() bool {
 	return c.MaxConcurrent > 0 && c.state.inflight.Load() >= c.MaxConcurrent
 }
 
-// presetAllows applies the preset's filters, and the price limit that the request's override may lower.
+// presetAllows applies the preset's rule for the model, its operations quality floor and closed order, and the price
+// limit that the request's override may lower.
 func (n *need) presetAllows(c *candidate, price *candidatePrice, spec Spec) bool {
-	p := n.preset
-	return p.Classes.Has(c.Class) && p.Policies.Has(c.Policy) && c.Quality >= p.MinQuality && c.Confidence >= p.MinConfidence &&
-		(!p.VerifiedOnly || c.Verified) && n.withinLimit(p.MaxPrice, c, price, spec) &&
-		(!p.NoFallbacks || listed(p.Order, c.Supplier))
+	p, r := n.preset, n.rule
+	return r.Classes.Has(c.Class) && r.Policies.Has(c.Policy) && c.Score >= r.MinScore && c.ScoreConfidence >= r.MinScoreConfidence &&
+		(!r.VerifiedOnly || c.Verified) && c.Quality >= p.MinQuality && c.Confidence >= p.MinConfidence &&
+		n.withinLimit(r.MaxPrice, c, price, spec) && (!p.NoFallbacks || slices.Contains(p.OrderNames, c.Codename))
 }
 
 // overrideAllows applies the request's filters. They only narrow what the preset allows: they are checked after it,
@@ -501,8 +506,6 @@ func (n *need) withinLimit(limit PriceLimit, c *candidate, price *candidatePrice
 	_, longest := billing.InputBound(n.demand, model)
 	return limit.within(price.Schedule, n.tiers, longest)
 }
-
-func listed(ids []SupplierID, id SupplierID) bool { return slices.Contains(ids, id) }
 
 // clearSlowFull drops slow-start marks when only those windows keep the untripped endpoints from serving: a
 // single-endpoint model does not queue behind its own recovery (docs/domains/quality.md「恢复」). A tripped endpoint is

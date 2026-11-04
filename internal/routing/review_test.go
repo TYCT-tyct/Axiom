@@ -77,7 +77,7 @@ func TestPriceLimitBindsTheTierBilled(t *testing.T) {
 func TestNamedOrderDoesNotLiftNoFallbacks(t *testing.T) {
 	t.Parallel()
 	preset := openPreset()
-	preset.NoFallbacks, preset.Order = true, []routing.SupplierID{sup(1)}
+	preset.NoFallbacks, preset.OrderNames = true, []string{"g1"}
 	h := newHarness(t, routing.Config{}, preset, endpoint(t, 1), endpoint(t, 2), endpoint(t, 3))
 	for name, order := range map[string][]string{
 		"no order": nil, "the same order": {"g1"}, "another order": {"g2", "g3"}, "a longer order": {"g1", "g2"},
@@ -255,11 +255,11 @@ func TestRepeatedModelsGiveDistinctEndpoints(t *testing.T) {
 // TestSnapshotCopiesWhatTheCallerKeeps: changing the slices the snapshot was built from does not change the snapshot.
 func TestSnapshotCopiesWhatTheCallerKeeps(t *testing.T) {
 	t.Parallel()
-	order := []routing.SupplierID{sup(2), sup(1)}
+	order := []string{"g2", "g1"}
 	preset := openPreset()
-	preset.Order = order
+	preset.OrderNames = order
 	h := newHarness(t, routing.Config{}, preset, endpoint(t, 1), endpoint(t, 2))
-	order[0], order[1] = sup(1), sup(2) // the caller reuses its slice
+	order[0], order[1] = "g1", "g2" // the caller reuses its slice
 	if p := h.plan(input()); first(p) != ep(2) {
 		t.Errorf("the snapshot followed the caller's slice: first %v", p.Entries)
 	}
