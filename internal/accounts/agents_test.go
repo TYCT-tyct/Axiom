@@ -50,11 +50,11 @@ func makeAgent(t *testing.T, db *pg.DB, s *accounts.Service, spec accounts.Agent
 // agentLife is how long the test's credentials live: the owner chooses it for each one.
 const agentLife = 30 * 24 * time.Hour
 
-// agentSpec is a credential of perms that expires agentLife after the wall clock, where the tests' clocks start.
-func agentSpec(perms ...string) accounts.AgentSpec {
+// agentSpec is a credential of perms that expires agentLife after clock's now, the clock the test moves.
+func agentSpec(clock *manualClock, perms ...string) accounts.AgentSpec {
 	return accounts.AgentSpec{
 		Name: "hermes", Permissions: perms, Vendors: []string{"deepseek"}, CreatedBy: accounts.UserID(u1),
-		ExpiresAt: time.Now().Add(agentLife), Reason: "r",
+		ExpiresAt: clock.Now().Add(agentLife), Reason: "r",
 	}
 }
 
@@ -63,7 +63,7 @@ func agentSpec(perms ...string) accounts.AgentSpec {
 func TestAgentCredentialLifecycle(t *testing.T) {
 	t.Parallel()
 	db, _, s, clock := agentSetup(t)
-	spec := agentSpec("suppliers.view", "calls.search", "suppliers.view")
+	spec := agentSpec(clock, "suppliers.view", "calls.search", "suppliers.view")
 	spec.Sites = []accounts.SiteID{accounts.SiteID(s1)}
 	made := makeAgent(t, db, s, spec)
 	if !strings.HasPrefix(made.Token.Reveal(), "op-ax-v1-") {
@@ -81,7 +81,7 @@ func TestAgentCredentialLifecycle(t *testing.T) {
 	if got := texts(t, db, platform, "SELECT (last_used_at IS NOT NULL)::text FROM accounts.agent_credentials")[0]; got != "true" {
 		t.Errorf("last use recorded: %s", got)
 	}
-	clock.advance(agentLife + time.Second) // agentSpec reads the wall clock after the test's clock started
+	clock.advance(agentLife) // the expiry itself: a credential is live only before it
 	expectAgent(t, s, made.Token.Reveal(), accounts.ErrUnknownAgent)
 }
 
@@ -90,7 +90,7 @@ func TestAgentCredentialLifecycle(t *testing.T) {
 func TestAgentCredentialRotation(t *testing.T) {
 	t.Parallel()
 	db, _, s, clock := agentSetup(t)
-	first := makeAgent(t, db, s, agentSpec())
+	first := makeAgent(t, db, s, agentSpec(clock))
 	rotate := func(overlap time.Duration) accounts.AgentToken {
 		t.Helper()
 		var made accounts.AgentToken
@@ -116,7 +116,7 @@ func TestAgentCredentialRotation(t *testing.T) {
 // revoked credential cannot be revoked again; a second stop revokes nothing; only a new credential works after it.
 func TestAgentCredentialRevocation(t *testing.T) {
 	t.Parallel()
-	db, _, s, _ := agentSetup(t)
+	db, _, s, clock := agentSetup(t)
 	revoke := func(id accounts.AgentID) error {
 		return db.Tx(t.Context(), platform, func(tx pg.Tx) error { return s.RevokeAgent(t.Context(), tx, system, id, "r") })
 	}
@@ -131,7 +131,7 @@ func TestAgentCredentialRevocation(t *testing.T) {
 		}
 		return n
 	}
-	first, other := makeAgent(t, db, s, agentSpec()), makeAgent(t, db, s, agentSpec())
+	first, other := makeAgent(t, db, s, agentSpec(clock)), makeAgent(t, db, s, agentSpec(clock))
 	if err := revoke(first.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestAgentCredentialRevocation(t *testing.T) {
 	if err := revoke(first.ID); !errors.Is(err, accounts.ErrAgentNotFound) {
 		t.Errorf("revoking twice: %v", err)
 	}
-	late := makeAgent(t, db, s, agentSpec())
+	late := makeAgent(t, db, s, agentSpec(clock))
 	if n := stop(); n != 2 {
 		t.Errorf("the stop revoked %d, want the 2 live ones", n)
 	}
@@ -152,7 +152,7 @@ func TestAgentCredentialRevocation(t *testing.T) {
 	if got := texts(t, db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action = 'operations_agent.stop'")[0]; got != "2" {
 		t.Errorf("%s stops audited", got)
 	}
-	expectAgent(t, s, makeAgent(t, db, s, agentSpec()).Token.Reveal(), nil)
+	expectAgent(t, s, makeAgent(t, db, s, agentSpec(clock)).Token.Reveal(), nil)
 }
 
 // TestExpiredAgentIsGone: an expired credential that nobody revoked is not found by a revocation, not counted by the
@@ -160,7 +160,7 @@ func TestAgentCredentialRevocation(t *testing.T) {
 func TestExpiredAgentIsGone(t *testing.T) {
 	t.Parallel()
 	db, _, s, clock := agentSetup(t)
-	spec := agentSpec()
+	spec := agentSpec(clock)
 	spec.ExpiresAt = clock.Now().Add(time.Hour) // before the rotation's overlap ends
 	expiring := makeAgent(t, db, s, spec)
 	if err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
@@ -201,8 +201,8 @@ func expectAgent(t *testing.T, s *accounts.Service, token string, want error) {
 // before the database is asked.
 func TestAgentTokenShape(t *testing.T) {
 	t.Parallel()
-	db, _, s, _ := agentSetup(t)
-	token := makeAgent(t, db, s, agentSpec()).Token.Reveal()
+	db, _, s, clock := agentSetup(t)
+	token := makeAgent(t, db, s, agentSpec(clock)).Token.Reveal()
 	for name, raw := range map[string]string{
 		"empty":            "",
 		"one character":    token[:len(token)-1] + string(token[len(token)-1]^1),
@@ -237,7 +237,7 @@ func TestCreateAgentRefuses(t *testing.T) {
 		{"no expiry", func(a *accounts.AgentSpec) { a.ExpiresAt = time.Time{} }, "/expires_at"},
 	}
 	for _, c := range cases {
-		spec := agentSpec()
+		spec := agentSpec(clock)
 		c.edit(&spec)
 		err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 			_, err := s.CreateAgent(t.Context(), tx, system, spec)
@@ -263,10 +263,10 @@ func TestCreateAgentRefuses(t *testing.T) {
 // and are otherwise not found; its sites bound everything else.
 func TestAuthorizeAgent(t *testing.T) {
 	t.Parallel()
-	db, _, s, _ := agentSetup(t)
-	siteOnly := agentSpec("calls.search", "suppliers.view")
+	db, _, s, clock := agentSetup(t)
+	siteOnly := agentSpec(clock, "calls.search", "suppliers.view")
 	siteOnly.Sites = []accounts.SiteID{accounts.SiteID(s1)}
-	withPlatform := agentSpec("suppliers.view")
+	withPlatform := agentSpec(clock, "suppliers.view")
 	withPlatform.Platform = true
 	for _, c := range []struct {
 		name     string
@@ -295,8 +295,8 @@ func TestAuthorizeAgent(t *testing.T) {
 func TestAgentRequestsAreLimited(t *testing.T) {
 	t.Parallel()
 	db, _, s, clock := agentSetup(t)
-	busy := makeAgent(t, db, s, agentSpec()).Token.Reveal()
-	quiet := makeAgent(t, db, s, agentSpec()).Token.Reveal()
+	busy := makeAgent(t, db, s, agentSpec(clock)).Token.Reveal()
+	quiet := makeAgent(t, db, s, agentSpec(clock)).Token.Reveal()
 	for range 60 {
 		expectAgent(t, s, busy, nil)
 	}
