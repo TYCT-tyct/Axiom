@@ -72,7 +72,9 @@ func CapPolicies(ctx context.Context, tx pg.Tx) ([]CapPolicy, error) {
 	}
 	policies := make([]CapPolicy, len(rows))
 	for i, r := range rows {
-		policies[i] = policyOf(r)
+		if policies[i], err = policyOf(r); err != nil {
+			return nil, err
+		}
 	}
 	return policies, nil
 }
@@ -80,40 +82,31 @@ func CapPolicies(ctx context.Context, tx pg.Tx) ([]CapPolicy, error) {
 // SetCapPolicy makes or changes p's policy as actor and records it. rev is the revision the caller read, 0 for a
 // policy not made yet; another is ErrPolicyChanged. The currency of a policy that exists cannot change.
 func SetCapPolicy(ctx context.Context, tx pg.Tx, actor audit.Actor, p CapPolicy, rev int64, reason string) (CapPolicy, error) {
-	if min(p.Single, p.Daily, p.Weekly, p.ObjectDaily, int64(p.DailyCount)) < 0 ||
-		p.HardSingle < p.Single || p.HardDaily < p.Daily || p.HardWeekly < p.Weekly {
-		return CapPolicy{}, ErrBadPolicy
+	if err := p.check(); err != nil {
+		return CapPolicy{}, err
 	}
-	q := New()
-	found, err := q.LockCapPolicyForUpdate(ctx, tx, LockCapPolicyForUpdateParams{Category: string(p.Category), SiteID: p.Site})
+	found, err := New().LockCapPolicyForUpdate(ctx, tx, LockCapPolicyForUpdateParams{Category: string(p.Category), SiteID: p.Site})
 	if err != nil {
 		return CapPolicy{}, fmt.Errorf("lock the cap policy: %w", err)
 	}
-	var before map[string]any
-	var row OperationsCapPolicy
 	switch {
 	case len(found) == 0 && rev != 0, len(found) > 0 && found[0].Rev != rev:
 		return CapPolicy{}, ErrPolicyChanged
 	case len(found) > 0 && found[0].Currency != p.Currency.String():
 		return CapPolicy{}, ErrCurrencyFixed
-	case len(found) == 0:
-		row, err = q.InsertCapPolicy(ctx, tx, InsertCapPolicyParams{
-			SiteID: p.Site, Category: string(p.Category), Currency: p.Currency.String(), SingleMax: p.Single,
-			DailyMax: p.Daily, WeeklyMax: p.Weekly, ObjectDailyMax: p.ObjectDaily, DailyCountMax: p.DailyCount,
-			HardSingleMax: p.HardSingle, HardDailyMax: p.HardDaily, HardWeeklyMax: p.HardWeekly,
-		})
-	default:
-		before = policyOf(found[0]).detail()
-		row, err = q.UpdateCapPolicy(ctx, tx, UpdateCapPolicyParams{
-			SiteID: p.Site, Category: string(p.Category), SingleMax: p.Single, DailyMax: p.Daily, WeeklyMax: p.Weekly,
-			ObjectDailyMax: p.ObjectDaily, DailyCountMax: p.DailyCount, HardSingleMax: p.HardSingle,
-			HardDailyMax: p.HardDaily, HardWeeklyMax: p.HardWeekly,
-		})
 	}
+	var before map[string]any
+	if len(found) > 0 {
+		old, err := policyOf(found[0])
+		if err != nil {
+			return CapPolicy{}, err
+		}
+		before = old.detail()
+	}
+	set, err := writePolicy(ctx, tx, p, len(found) == 0)
 	if err != nil {
-		return CapPolicy{}, fmt.Errorf("write the cap policy: %w", err)
+		return CapPolicy{}, err
 	}
-	set := policyOf(row)
 	scope := "platform"
 	if p.Site != nil {
 		scope = p.Site.String()
@@ -125,6 +118,39 @@ func SetCapPolicy(ctx context.Context, tx pg.Tx, actor audit.Actor, p CapPolicy,
 	})
 }
 
+// check refuses a negative limit and a hard limit below its autonomous one, as the table does.
+func (p CapPolicy) check() error {
+	if min(p.Single, p.Daily, p.Weekly, p.ObjectDaily, int64(p.DailyCount)) < 0 ||
+		p.HardSingle < p.Single || p.HardDaily < p.Daily || p.HardWeekly < p.Weekly {
+		return ErrBadPolicy
+	}
+	return nil
+}
+
+// writePolicy makes p's policy at revision 1, or replaces the limits of the one there and moves its revision.
+func writePolicy(ctx context.Context, tx pg.Tx, p CapPolicy, create bool) (CapPolicy, error) {
+	q := New()
+	var row OperationsCapPolicy
+	var err error
+	if create {
+		row, err = q.InsertCapPolicy(ctx, tx, InsertCapPolicyParams{
+			SiteID: p.Site, Category: string(p.Category), Currency: p.Currency.String(), SingleMax: p.Single,
+			DailyMax: p.Daily, WeeklyMax: p.Weekly, ObjectDailyMax: p.ObjectDaily, DailyCountMax: p.DailyCount,
+			HardSingleMax: p.HardSingle, HardDailyMax: p.HardDaily, HardWeeklyMax: p.HardWeekly,
+		})
+	} else {
+		row, err = q.UpdateCapPolicy(ctx, tx, UpdateCapPolicyParams{
+			SiteID: p.Site, Category: string(p.Category), SingleMax: p.Single, DailyMax: p.Daily, WeeklyMax: p.Weekly,
+			ObjectDailyMax: p.ObjectDaily, DailyCountMax: p.DailyCount, HardSingleMax: p.HardSingle,
+			HardDailyMax: p.HardDaily, HardWeeklyMax: p.HardWeekly,
+		})
+	}
+	if err != nil {
+		return CapPolicy{}, fmt.Errorf("write the cap policy: %w", err)
+	}
+	return policyOf(row)
+}
+
 func (p CapPolicy) detail() map[string]any {
 	return map[string]any{
 		"currency": p.Currency.String(), "single_max": p.Single, "daily_max": p.Daily, "weekly_max": p.Weekly,
@@ -133,13 +159,28 @@ func (p CapPolicy) detail() map[string]any {
 	}
 }
 
-func policyOf(r OperationsCapPolicy) CapPolicy {
-	currency, _ := platform.ParseCurrency(r.Currency) // the table's check holds it to three upper-case letters
+func policyOf(r OperationsCapPolicy) (CapPolicy, error) {
+	currency, err := platform.ParseCurrency(r.Currency)
+	if err != nil {
+		return CapPolicy{}, fmt.Errorf("the cap policy of %s: %w", r.Category, err)
+	}
 	return CapPolicy{
 		Site: r.SiteID, Category: Category(r.Category), Currency: currency, Single: r.SingleMax, Daily: r.DailyMax,
 		Weekly: r.WeeklyMax, ObjectDaily: r.ObjectDailyMax, DailyCount: r.DailyCountMax, HardSingle: r.HardSingleMax,
 		HardDaily: r.HardDailyMax, HardWeekly: r.HardWeeklyMax, Rev: r.Rev, Updated: r.UpdatedAt,
+	}, nil
+}
+
+// lockPolicy holds the policy of site and category for share until tx ends: a change of it waits for tx.
+func lockPolicy(ctx context.Context, tx pg.Tx, category Category, site *uuid.UUID) (CapPolicy, error) {
+	rows, err := New().LockCapPolicy(ctx, tx, LockCapPolicyParams{Category: string(category), SiteID: site})
+	if err != nil {
+		return CapPolicy{}, fmt.Errorf("lock the cap policy: %w", err)
 	}
+	if len(rows) == 0 {
+		return CapPolicy{}, ErrNoCapPolicy
+	}
+	return policyOf(rows[0])
 }
 
 // CapCurrency is the currency of the policy of site (nil: the platform) and category, which the caller turns the
@@ -153,7 +194,8 @@ func CapCurrency(ctx context.Context, tx pg.Tx, site *uuid.UUID, category Catego
 	if len(rows) == 0 {
 		return platform.Currency{}, ErrNoCapPolicy
 	}
-	return policyOf(rows[0]).Currency, nil
+	p, err := policyOf(rows[0])
+	return p.Currency, err
 }
 
 // Transfer is what a money proposal moves: in which scope (Site, nil for the platform) and category, on which object, the
@@ -218,18 +260,14 @@ func weigh(p CapPolicy, c counters, amount int64) (bool, error) {
 // ErrNoCapPolicy. The reservation ends when the operation is refused, expires or is canceled (release), when the
 // agent confirms the money (CommitReservation), or at the end of its day (ExpireReservations).
 func ProposeMoney(ctx context.Context, tx pg.Tx, p Proposal, m Transfer) (Operation, bool, error) {
-	q := New()
-	policies, err := q.LockCapPolicy(ctx, tx, LockCapPolicyParams{Category: string(m.Category), SiteID: m.Site})
+	policy, err := lockPolicy(ctx, tx, m.Category, m.Site)
 	if err != nil {
-		return Operation{}, false, fmt.Errorf("lock the cap policy: %w", err)
+		return Operation{}, false, err
 	}
-	if len(policies) == 0 {
-		return Operation{}, false, ErrNoCapPolicy
-	}
-	policy := policyOf(policies[0])
 	if policy.Currency != m.Currency {
 		return Operation{}, false, fmt.Errorf("a %s amount for a %s cap", m.Currency, policy.Currency)
 	}
+	q := New()
 	w, err := q.CapWindows(ctx, tx)
 	if err != nil {
 		return Operation{}, false, fmt.Errorf("read the cap windows: %w", err)
@@ -255,18 +293,24 @@ func ProposeMoney(ctx context.Context, tx pg.Tx, p Proposal, m Transfer) (Operat
 	if err != nil || replayed {
 		return op, replayed, err
 	}
+	return op, false, reserve(ctx, tx, op, m, policy, w, c)
+}
+
+// reserve records op's money action and adds its amount to the counters c, which tx holds, until the end of the day.
+func reserve(ctx context.Context, tx pg.Tx, op Operation, m Transfer, policy CapPolicy, w CapWindowsRow, c counters) error {
 	basis, err := jsonx.MarshalCanonical(m.Basis)
 	if err != nil {
-		return Operation{}, false, fmt.Errorf("encode the basis of operation %s: %w", op.ID, err)
+		return fmt.Errorf("encode the basis of operation %s: %w", op.ID, err)
 	}
+	q := New()
 	if err := q.InsertMoneyAction(ctx, tx, InsertMoneyActionParams{
 		OperationID: op.ID, Category: string(m.Category), SiteID: m.Site, ObjectKind: m.Object.Kind, ObjectID: m.Object.ID,
 		Amount: m.Amount, Currency: m.Currency.String(), Basis: basis, PolicyRev: policy.Rev, DayStart: w.DayStart,
 		WeekStart: w.WeekStart, ExpiresAt: w.DayEnd,
 	}); err != nil {
-		return Operation{}, false, fmt.Errorf("reserve operation %s: %w", op.ID, err)
+		return fmt.Errorf("reserve operation %s: %w", op.ID, err)
 	}
-	return op, false, q.MoveCapCounters(ctx, tx, MoveCapCountersParams{Ids: c.ids, Reserved: m.Amount, Count: 1})
+	return q.MoveCapCounters(ctx, tx, MoveCapCountersParams{Ids: c.ids, Reserved: m.Amount, Count: 1})
 }
 
 // byKey finds the operation p's credential made with p's key, as Propose would; found is false when there is none.
@@ -328,18 +372,14 @@ func CheckReservation(ctx context.Context, tx pg.Tx, op Operation) (Reservation,
 	if m.State != "reserved" || rows[0].Due {
 		return Reservation{}, ErrNotReserved
 	}
-	policies, err := q.LockCapPolicy(ctx, tx, LockCapPolicyParams{Category: m.Category, SiteID: m.SiteID})
+	p, err := lockPolicy(ctx, tx, Category(m.Category), m.SiteID)
 	if err != nil {
-		return Reservation{}, fmt.Errorf("lock the cap policy: %w", err)
-	}
-	if len(policies) == 0 {
-		return Reservation{}, ErrPolicyChanged
+		return Reservation{}, err
 	}
 	c, err := lockCounters(ctx, tx, m.SiteID, Category(m.Category), Target{Kind: m.ObjectKind, ID: m.ObjectID}, m.DayStart, m.WeekStart)
 	if err != nil {
 		return Reservation{}, err
 	}
-	p := policyOf(policies[0])
 	if m.Amount > p.HardSingle || used(c.day) > p.HardDaily || used(c.week) > p.HardWeekly {
 		return Reservation{}, ErrPolicyChanged
 	}
@@ -351,36 +391,41 @@ func CheckReservation(ctx context.Context, tx pg.Tx, op Operation) (Reservation,
 // to the money later. A proposal that is not the credential's, not a succeeded money proposal, or whose reservation
 // ended is refused (ErrNoOperation, ErrNotReserved), and nothing is written.
 func CommitReservation(ctx context.Context, tx pg.Tx, confirm Operation, proposal uuid.UUID, object Target, proof string) (Reservation, error) {
-	q := New()
-	locked, err := q.LockOperation(ctx, tx, proposal)
+	m, err := lockProposal(ctx, tx, confirm.Credential, proposal, object)
 	if err != nil {
-		return Reservation{}, fmt.Errorf("lock operation %s: %w", proposal, err)
-	}
-	if len(locked) == 0 || locked[0].CredentialID != confirm.Credential || locked[0].TargetKind != object.Kind || locked[0].TargetID != object.ID {
-		return Reservation{}, ErrNoOperation
-	}
-	if State(locked[0].State) != StateSucceeded {
-		return Reservation{}, ErrNotReserved
-	}
-	rows, err := q.LockMoneyAction(ctx, tx, proposal)
-	if err != nil {
-		return Reservation{}, fmt.Errorf("lock the reservation of operation %s: %w", proposal, err)
-	}
-	if len(rows) == 0 {
-		return Reservation{}, ErrNoOperation
-	}
-	m := rows[0].OperationsMoneyAction
-	if m.State != "reserved" || rows[0].Due {
-		return Reservation{}, ErrNotReserved
+		return Reservation{}, err
 	}
 	if err := moveReserved(ctx, tx, m, m.Amount); err != nil {
 		return Reservation{}, err
 	}
-	if err := q.SettleMoneyAction(ctx, tx, SettleMoneyActionParams{OperationID: proposal, State: "committed", Proof: &proof, ConfirmedBy: &confirm.ID}); err != nil {
+	if err := New().SettleMoneyAction(ctx, tx, SettleMoneyActionParams{OperationID: proposal, State: "committed", Proof: &proof, ConfirmedBy: &confirm.ID}); err != nil {
 		return Reservation{}, fmt.Errorf("commit the reservation of operation %s: %w", proposal, err)
 	}
 	m.State, m.Proof = "committed", &proof
 	return reservationOf(m), recordReservation(ctx, tx, audit.OperationsAgent(confirm.Credential), "reservation.commit", m, confirm.Reason)
+}
+
+// lockProposal locks credential's succeeded money proposal on object, then its reservation, which must still be held
+// and within its windows.
+func lockProposal(ctx context.Context, tx pg.Tx, credential, proposal uuid.UUID, object Target) (OperationsMoneyAction, error) {
+	q := New()
+	locked, err := q.LockOperation(ctx, tx, proposal)
+	if err != nil {
+		return OperationsMoneyAction{}, fmt.Errorf("lock operation %s: %w", proposal, err)
+	}
+	if len(locked) == 0 || locked[0].CredentialID != credential || locked[0].TargetKind != object.Kind || locked[0].TargetID != object.ID {
+		return OperationsMoneyAction{}, ErrNoOperation
+	}
+	rows, err := q.LockMoneyAction(ctx, tx, proposal)
+	switch {
+	case err != nil:
+		return OperationsMoneyAction{}, fmt.Errorf("lock the reservation of operation %s: %w", proposal, err)
+	case len(rows) == 0:
+		return OperationsMoneyAction{}, ErrNoOperation
+	case State(locked[0].State) != StateSucceeded || rows[0].OperationsMoneyAction.State != "reserved" || rows[0].Due:
+		return OperationsMoneyAction{}, ErrNotReserved
+	}
+	return rows[0].OperationsMoneyAction, nil
 }
 
 // moveReserved takes amount out of m's reservation in the windows it was made in, adding committed to them.

@@ -53,39 +53,62 @@ func (f supplierFixture) confirmTopUp(token, supplier, operation string) *httpte
 	return f.agentSend(token, http.MethodPost, "/suppliers/"+supplier+"/top-ups/"+operation+"/confirm", `{"proof":"receipt 42","reason":"the balance rose"}`, idempotent(newKey()))
 }
 
-// TestOperationsTopUp: a top-up needs operations.money, a confirmed unit value and a policy; within every autonomous
-// cap it is reserved at once, over one it waits for the owner, over a hard one it is refused; the agent confirms its
-// own reservation once, and an approval after the policy was lowered under it ends rejected and releases it.
-func TestOperationsTopUp(t *testing.T) {
+// topUpReady is a platform supplier worth 0.000002 USD a quota unit, the platform's USD policy and an agent that may
+// top it up.
+func topUpReady(t *testing.T) (f supplierFixture, supplier, token string) {
+	t.Helper()
+	f = newSupplierFixture(t)
+	supplier = f.connect().Id
+	token = f.moneyAgent(true)
+	f.unitValue(supplier, "0.000002") // 500000 quota to the dollar
+	expectAdmin(t, "the policy", f.setCaps("USD", 0, moneyLimits), http.StatusOK, "")
+	return f, supplier, token
+}
+
+// approve is the owner's approval of an approval the agent's top-up waits on.
+func (f supplierFixture) approve(approval string) adminapi.OperationsApproval {
+	f.t.Helper()
+	var approved adminapi.OperationsApproval
+	decode(f.t, f.change(f.s, http.MethodPost, "/operations/approvals/"+approval+"/approve", `{"reason":"pay it"}`, newKey()), &approved)
+	return approved
+}
+
+// TestOperationsTopUpRefusals: a top-up needs operations.money, a confirmed unit value and a policy, and one over a
+// hard cap is refused; none of them, nor a preview, leaves a reservation.
+func TestOperationsTopUpRefusals(t *testing.T) {
 	t.Parallel()
 	f := newSupplierFixture(t)
 	supplier := f.connect().Id
 	expectAdmin(t, "without operations.money", f.proposeTopUp(f.moneyAgent(false), supplier, "1", newKey(), ""), http.StatusForbidden, codeForbidden)
 	token := f.moneyAgent(true)
 	expectAdmin(t, "without a unit value", f.proposeTopUp(token, supplier, "1", newKey(), ""), http.StatusUnprocessableEntity, codeUnprocessable)
-	f.unitValue(supplier, "0.000002") // 500000 quota to the dollar
+	f.unitValue(supplier, "0.000002")
 	expectAdmin(t, "without a policy", f.proposeTopUp(token, supplier, "1", newKey(), ""), http.StatusUnprocessableEntity, codeCapExceeded)
 	expectAdmin(t, "the policy", f.setCaps("USD", 0, moneyLimits), http.StatusOK, "")
+	expectAdmin(t, "over the hard single cap", f.proposeTopUp(token, supplier, "10500000", newKey(), ""), http.StatusUnprocessableEntity, codeCapExceeded)
+	rec := f.proposeTopUp(token, supplier, "6000000", newKey(), `,"dry_run":true`)
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStatePendingApproval {
+		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
+	}
+	if got := f.text(`SELECT count(*)::text FROM operations.money_actions`); got != "0" {
+		t.Errorf("%s reservations after the refusals and the preview", got)
+	}
+}
 
+// TestOperationsTopUp: within every autonomous cap a top-up is reserved at once and found again under its key; over
+// one it waits for the owner, and the owner's approval keeps it reserved.
+func TestOperationsTopUp(t *testing.T) {
+	t.Parallel()
+	f, supplier, token := topUpReady(t)
 	key := newKey()
 	rec := f.proposeTopUp(token, supplier, "2500000", key, "")
-	expectAdmin(t, "five dollars", rec, http.StatusOK, "")
 	five := agentOperation(t, rec)
-	if five.State != operationsapi.OperationStateSucceeded || !strings.Contains(rec.Body.String(), `"amount":"5000000000"`) || !strings.Contains(rec.Body.String(), `"reservation":"reserved"`) {
-		t.Errorf("five dollars: %s", rec.Body)
+	if rec.Code != http.StatusOK || five.State != operationsapi.OperationStateSucceeded || !strings.Contains(rec.Body.String(), `"amount":"5000000000"`) || !strings.Contains(rec.Body.String(), `"reservation":"reserved"`) {
+		t.Errorf("five dollars: %d %s", rec.Code, rec.Body)
 	}
 	if rec := f.proposeTopUp(token, supplier, "2500000", key, ""); rec.Header().Get("Idempotency-Replayed") != "true" || *agentOperation(t, rec).OperationId != *five.OperationId {
 		t.Errorf("the retry: %d %s", rec.Code, rec.Body)
 	}
-	rec = f.proposeTopUp(token, supplier, "6000000", newKey(), `,"dry_run":true`)
-	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStatePendingApproval {
-		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
-	}
-	expectAdmin(t, "over the hard single cap", f.proposeTopUp(token, supplier, "10500000", newKey(), ""), http.StatusUnprocessableEntity, codeCapExceeded)
-	if got := f.text(`SELECT count(*) || ':' || sum(amount) FROM operations.money_actions`); got != "1:5000000000" {
-		t.Errorf("after the preview and the refusal the reservations are %s", got)
-	}
-
 	rec = f.proposeTopUp(token, supplier, "6000000", newKey(), "")
 	expectAdmin(t, "twelve dollars", rec, http.StatusAccepted, "")
 	twelve := agentOperation(t, rec)
@@ -93,41 +116,52 @@ func TestOperationsTopUp(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"amount":"12000000000"`) || !strings.Contains(rec.Body.String(), `"single_max":"10000000000"`) {
 		t.Errorf("the owner sees %s", rec.Body)
 	}
-	var approved adminapi.OperationsApproval
-	decode(t, f.change(f.s, http.MethodPost, "/operations/approvals/"+twelve.Approval.ApprovalId+"/approve", `{"reason":"pay it"}`, newKey()), &approved)
-	if approved.OperationState != adminapi.OperationStateSucceeded {
+	if approved := f.approve(twelve.Approval.ApprovalId); approved.OperationState != adminapi.OperationStateSucceeded {
 		t.Errorf("the approval: %+v", approved)
 	}
-
-	rec = f.confirmTopUp(token, supplier, *five.OperationId)
-	if expectAdmin(t, "the confirmation", rec, http.StatusOK, ""); !strings.Contains(rec.Body.String(), `"reservation":"committed"`) {
-		t.Errorf("the confirmation: %s", rec.Body)
-	}
-	expectAdmin(t, "confirming twice", f.confirmTopUp(token, supplier, *five.OperationId), http.StatusConflict, codeConflict)
-	expectAdmin(t, "another credential's", f.confirmTopUp(f.moneyAgent(true), supplier, *twelve.OperationId), http.StatusNotFound, codeNotFound)
-
-	rec = f.proposeTopUp(token, supplier, "6000000", newKey(), "")
-	stale := agentOperation(t, rec)
-	lowered := strings.NewReplacer(`"daily_max":"25000000000"`, `"daily_max":"5000000000"`, `"hard_daily_max":"50000000000"`, `"hard_daily_max":"15000000000"`).Replace(moneyLimits)
-	expectAdmin(t, "the policy lowered", f.setCaps("USD", 1, lowered), http.StatusOK, "")
-	decode(t, f.change(f.s, http.MethodPost, "/operations/approvals/"+stale.Approval.ApprovalId+"/approve", `{"reason":"pay it"}`, newKey()), &approved)
-	if approved.OperationState != adminapi.OperationStateRejected || approved.ErrorCode == nil || *approved.ErrorCode != string(codeStaleRevision) {
-		t.Errorf("the approval after the policy was lowered: %+v", approved)
-	}
-	if got := f.text(`SELECT string_agg(state || ':' || amount, ',' ORDER BY operation_id) FROM operations.money_actions`); got != "committed:5000000000,reserved:12000000000,released:12000000000" {
+	if got := f.text(`SELECT string_agg(state || ':' || amount, ',' ORDER BY operation_id) FROM operations.money_actions`); got != "reserved:5000000000,reserved:12000000000" {
 		t.Errorf("the reservations are %s", got)
 	}
-	if got := f.text(`SELECT reserved || '+' || committed || '#' || count FROM operations.cap_counters WHERE window_kind = 'day' AND object_kind = ''`); got != "12000000000+5000000000#3" {
+}
+
+// TestOperationsTopUpConfirm: the agent confirms its own reservation once with proof; another credential cannot.
+func TestOperationsTopUpConfirm(t *testing.T) {
+	t.Parallel()
+	f, supplier, token := topUpReady(t)
+	five := *agentOperation(t, f.proposeTopUp(token, supplier, "2500000", newKey(), "")).OperationId
+	expectAdmin(t, "another credential's", f.confirmTopUp(f.moneyAgent(true), supplier, five), http.StatusNotFound, codeNotFound)
+	rec := f.confirmTopUp(token, supplier, five)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"reservation":"committed"`) {
+		t.Errorf("the confirmation: %d %s", rec.Code, rec.Body)
+	}
+	expectAdmin(t, "confirming twice", f.confirmTopUp(token, supplier, five), http.StatusConflict, codeConflict)
+	if got := f.text(`SELECT reserved || '+' || committed FROM operations.cap_counters WHERE window_kind = 'day' AND object_kind = ''`); got != "0+5000000000" {
 		t.Errorf("the day's counter is %s", got)
+	}
+	f.expectAudit("reservation.commit", map[string]string{"actor_kind": "operations_agent", "reason": "the balance rose"})
+}
+
+// TestOperationsTopUpPolicy: an approval after the policy was lowered under the proposal ends rejected and releases
+// it; a policy keeps its currency and is changed from the revision read.
+func TestOperationsTopUpPolicy(t *testing.T) {
+	t.Parallel()
+	f, supplier, token := topUpReady(t)
+	stale := agentOperation(t, f.proposeTopUp(token, supplier, "6000000", newKey(), ""))
+	lowered := strings.NewReplacer(`"daily_max":"25000000000"`, `"daily_max":"5000000000"`, `"hard_daily_max":"50000000000"`, `"hard_daily_max":"11000000000"`).Replace(moneyLimits)
+	expectAdmin(t, "the policy lowered", f.setCaps("USD", 1, lowered), http.StatusOK, "")
+	if approved := f.approve(stale.Approval.ApprovalId); approved.OperationState != adminapi.OperationStateRejected || approved.ErrorCode == nil || *approved.ErrorCode != string(codeStaleRevision) {
+		t.Errorf("the approval after the policy was lowered: %+v", approved)
+	}
+	if got := f.text(`SELECT m.state || ' ' || c.reserved || '#' || c.count FROM operations.money_actions m, operations.cap_counters c WHERE c.window_kind = 'day' AND c.object_kind = ''`); got != "released 0#1" {
+		t.Errorf("after the refused approval: %s", got)
 	}
 	var list adminapi.OperationsCapPolicyList
 	decode(t, f.do(http.MethodGet, "/operations/cap-policies", "", as(f.s)), &list)
-	if len(list.Data) != 1 || list.Data[0].Rev != 2 || list.Data[0].Scope != "platform" || list.Data[0].Limits.HardDailyMax != "15000000000" {
+	if len(list.Data) != 1 || list.Data[0].Rev != 2 || list.Data[0].Scope != "platform" || list.Data[0].Limits.HardDailyMax != "11000000000" {
 		t.Errorf("the policies: %+v", list)
 	}
 	expectAdmin(t, "another currency", f.setCaps("CNY", 2, moneyLimits), http.StatusConflict, codeConflict)
 	expectAdmin(t, "a stale policy", f.setCaps("USD", 1, moneyLimits), http.StatusConflict, codeStaleRevision)
-	f.expectAudit("reservation.commit", map[string]string{"actor_kind": "operations_agent", "reason": "the balance rose"})
 }
 
 // TestOperationsTopUpExchange: a supplier that settles in another currency than the policy's is valued at the current

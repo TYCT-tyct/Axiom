@@ -12,7 +12,15 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-var usd, _ = platform.ParseCurrency("USD")
+var usd = currency("USD")
+
+func currency(code string) platform.Currency {
+	c, err := platform.ParseCurrency(code)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
 
 // limits is the policy every test sets unless it says otherwise: autonomous single 10, day 25, week 40, object day 15,
 // 3 a day; hard single 20, day 50, week 60.
@@ -155,9 +163,8 @@ func TestSetCapPolicy(t *testing.T) {
 	if _, err := db.setPolicy(t, limits(nil), 0); !errors.Is(err, operations.ErrPolicyChanged) {
 		t.Errorf("making it again: %v", err)
 	}
-	cny, _ := platform.ParseCurrency("CNY")
 	other := limits(nil)
-	other.Currency = cny
+	other.Currency = currency("CNY")
 	if _, err := db.setPolicy(t, other, 1); !errors.Is(err, operations.ErrCurrencyFixed) {
 		t.Errorf("another currency: %v", err)
 	}
@@ -177,160 +184,204 @@ func TestSetCapPolicy(t *testing.T) {
 	}
 }
 
-// TestReservations: a reservation is released when its proposal is rejected, withdrawn, canceled, refused because the
-// policy was lowered under it (one loosened leaves it alone), or its windows end unconfirmed; it is committed once when the agent confirms the money; a retry
-// reserves nothing twice.
-func TestReservations(t *testing.T) {
-	t.Parallel()
-	db := openOps(t)
-	policy := limits(nil)
-	policy.DailyCount, policy.ObjectDaily = 100, 100
-	if _, err := db.setPolicy(t, policy, 0); err != nil {
-		t.Fatal(err)
-	}
-	credential := uuid.NewV7()
-	pending := func() operations.Operation {
-		t.Helper()
-		op, _, err := db.proposeMoney(t, topUp(credential, uuid.NewV7(), nil, "s1", 12))
-		if err != nil || op.State != operations.StatePending {
-			t.Fatalf("a pending top-up: %+v %v", op, err)
-		}
-		return op
-	}
-	reservation := func(op operations.Operation) string {
-		return db.text(t, `SELECT state FROM operations.money_actions WHERE operation_id = '`+op.ID.String()+`'`)
-	}
+// reservations is a database with a platform policy that only the hard limits and the single limit bind, and one
+// credential that proposes.
+type reservations struct {
+	opsDB
+	t          *testing.T
+	policy     operations.CapPolicy
+	credential uuid.UUID
+}
 
-	rejected := pending()
-	if _, err := db.decide(t, rejected, false); err != nil {
+func newReservations(t *testing.T) reservations {
+	t.Helper()
+	r := reservations{opsDB: openOps(t), t: t, policy: limits(nil), credential: uuid.NewV7()}
+	r.policy.DailyCount, r.policy.ObjectDaily = 100, 100
+	if _, err := r.setPolicy(t, r.policy, 0); err != nil {
 		t.Fatal(err)
 	}
-	withdrawn := pending()
-	if _, err := db.in(t, func(tx pg.Tx) (operations.Operation, error) {
-		return operations.Withdraw(t.Context(), tx, credential, withdrawn.Approval.ID, "no")
+	return r
+}
+
+// pending proposes 12, over the single limit, so it waits for the owner.
+func (r reservations) pending() operations.Operation {
+	r.t.Helper()
+	op, _, err := r.proposeMoney(r.t, topUp(r.credential, uuid.NewV7(), nil, "s1", 12))
+	if err != nil || op.State != operations.StatePending {
+		r.t.Fatalf("a pending top-up: %+v %v", op, err)
+	}
+	return op
+}
+
+// direct proposes amount within every limit and settles it, as the handler does.
+func (r reservations) direct(amount int64) operations.Operation {
+	r.t.Helper()
+	op, _, err := r.proposeMoney(r.t, topUp(r.credential, uuid.NewV7(), nil, "s1", amount))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if op, err = r.in(r.t, func(tx pg.Tx) (operations.Operation, error) {
+		return operations.Settle(r.t.Context(), tx, op, map[string]any{}, "")
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+	return op
+}
+
+func (r reservations) state(op operations.Operation) string {
+	return r.text(r.t, `SELECT state FROM operations.money_actions WHERE operation_id = '`+op.ID.String()+`'`)
+}
+
+func (r reservations) audit() string {
+	return r.text(r.t, `SELECT coalesce(string_agg(action || ':' || actor_kind, ',' ORDER BY id), '') FROM platform.audit_log WHERE action LIKE 'reservation.%'`)
+}
+
+// confirm has the credential confirm proposal's money, in an operation of its own as the handler does.
+func (r reservations) confirm(proposal operations.Operation) (operations.Reservation, error) {
+	var got operations.Reservation
+	_, err := r.in(r.t, func(tx pg.Tx) (operations.Operation, error) {
+		c, _, err := operations.Propose(r.t.Context(), tx, operations.Proposal{
+			Credential: r.credential, Key: uuid.NewV7(), Tool: "supplier_top_up_confirm", Target: proposal.Target,
+			Params: map[string]any{"proposal": proposal.ID.String()}, Risk: operations.RiskTopUp, Reason: "paid",
+		})
+		if err != nil {
+			return c, err
+		}
+		got, err = operations.CommitReservation(r.t.Context(), tx, c, proposal.ID, proposal.Target, "receipt 42")
+		return c, err
+	})
+	return got, err
+}
+
+// approve approves op and ends it as the admin does, rejected and committed so when the recheck refuses it, and
+// returns the recheck's refusal.
+func (r reservations) approve(op operations.Operation) (checked error) {
+	r.t.Helper()
+	if _, err := r.in(r.t, func(tx pg.Tx) (operations.Operation, error) {
+		op, err := operations.Decide(r.t.Context(), tx, owner, op.Approval.ID, true, "ok")
+		if err != nil {
+			return op, err
+		}
+		refused := ""
+		if _, checked = operations.CheckReservation(r.t.Context(), tx, op); checked != nil {
+			refused = "stale_revision"
+		}
+		return operations.Settle(r.t.Context(), tx, op, map[string]any{}, refused)
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+	return checked
+}
+
+// TestReservationReleases: a proposal that is rejected, withdrawn or canceled by the stop releases its reservation,
+// recorded as whoever ended it; the day's count keeps every proposal.
+func TestReservationReleases(t *testing.T) {
+	t.Parallel()
+	r := newReservations(t)
+	rejected := r.pending()
+	if _, err := r.decide(t, rejected, false); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn := r.pending()
+	if _, err := r.in(t, func(tx pg.Tx) (operations.Operation, error) {
+		return operations.Withdraw(t.Context(), tx, r.credential, withdrawn.Approval.ID, "no")
 	}); err != nil {
 		t.Fatal(err)
 	}
-	canceled := pending()
-	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+	canceled := r.pending()
+	if err := r.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
 		_, err := operations.CancelLive(t.Context(), tx, owner, nil, "stop")
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, op := range []operations.Operation{rejected, withdrawn, canceled} {
-		if got := reservation(op); got != "released" {
-			t.Errorf("the reservation of a %s proposal is %s", op.State, got)
-		}
+	if got := r.state(rejected) + " " + r.state(withdrawn) + " " + r.state(canceled) + " " + r.counters(t, nil); got != "released released released 0+0#3 0+0#3 0+0#3" {
+		t.Errorf("after the releases: %s", got)
 	}
-	if got := db.counters(t, nil); got != "0+0#3 0+0#3 0+0#3" {
-		t.Errorf("after the releases the counters are %s", got)
+	if got := r.audit(); got != "reservation.release:user,reservation.release:operations_agent,reservation.release:user" {
+		t.Errorf("the reservations' audit is %s", got)
 	}
+}
 
-	// approve approves op and ends it as the admin does: rejected, and committed so, when the recheck refuses it.
-	approve := func(op operations.Operation) (checked error) {
-		if _, err := db.in(t, func(tx pg.Tx) (operations.Operation, error) {
-			op, err := operations.Decide(t.Context(), tx, owner, op.Approval.ID, true, "ok")
-			if err != nil {
-				return op, err
-			}
-			refused := ""
-			if _, checked = operations.CheckReservation(t.Context(), tx, op); checked != nil {
-				refused = "stale_revision"
-			}
-			return operations.Settle(t.Context(), tx, op, map[string]any{}, refused)
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return checked
-	}
-	loosened := pending()
-	raised := policy
+// TestReservationApproval: an approval after the policy was loosened runs; one after it was lowered under the
+// reservation is refused and releases it.
+func TestReservationApproval(t *testing.T) {
+	t.Parallel()
+	r := newReservations(t)
+	loosened := r.pending()
+	raised := r.policy
 	raised.HardWeekly = 100
-	if _, err := db.setPolicy(t, raised, 1); err != nil {
+	if _, err := r.setPolicy(t, raised, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := approve(loosened); err != nil {
+	if err := r.approve(loosened); err != nil {
 		t.Errorf("an approval after the policy was loosened: %v", err)
 	}
-	tightened := pending()
-	lowered := policy
+	tightened := r.pending()
+	lowered := r.policy
 	lowered.Daily, lowered.HardDaily = 5, 11
-	if _, err := db.setPolicy(t, lowered, 2); err != nil {
+	if _, err := r.setPolicy(t, lowered, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := approve(tightened); !errors.Is(err, operations.ErrPolicyChanged) {
+	if err := r.approve(tightened); !errors.Is(err, operations.ErrPolicyChanged) {
 		t.Errorf("an approval after the policy was lowered under it: %v", err)
 	}
-	if got := reservation(loosened) + " " + reservation(tightened); got != "reserved released" {
-		t.Errorf("the reservations of the loosened and the tightened: %s", got)
+	if got := r.state(loosened) + " " + r.state(tightened) + " " + r.counters(t, nil); got != "reserved released 12+0#2 12+0#2 12+0#2" {
+		t.Errorf("after the approvals: %s", got)
 	}
-	if _, err := db.setPolicy(t, policy, 3); err != nil {
-		t.Fatal(err)
-	}
+}
 
-	five := topUp(credential, uuid.NewV7(), nil, "s1", 5)
-	direct, _, err := db.proposeMoney(t, five)
+// TestReservationCommit: a retry reserves nothing twice; the agent's confirmation commits the reservation once.
+func TestReservationCommit(t *testing.T) {
+	t.Parallel()
+	r := newReservations(t)
+	five := topUp(r.credential, uuid.NewV7(), nil, "s1", 5)
+	first, _, err := r.proposeMoney(t, five)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again, replayed, err := db.proposeMoney(t, five); err != nil || !replayed || again.ID != direct.ID {
+	if again, replayed, err := r.proposeMoney(t, five); err != nil || !replayed || again.ID != first.ID {
 		t.Errorf("the retry: %+v %v %v", again, replayed, err)
 	}
-	if direct, err = db.in(t, func(tx pg.Tx) (operations.Operation, error) {
-		return operations.Settle(t.Context(), tx, direct, map[string]any{}, "")
-	}); err != nil {
-		t.Fatal(err)
+	if _, err := r.confirm(first); !errors.Is(err, operations.ErrNotReserved) {
+		t.Errorf("confirming a proposal not settled yet: %v", err)
 	}
-	confirm := func(proposal operations.Operation) (operations.Reservation, error) {
-		var r operations.Reservation
-		_, err := db.in(t, func(tx pg.Tx) (operations.Operation, error) {
-			c, _, err := operations.Propose(t.Context(), tx, operations.Proposal{
-				Credential: credential, Key: uuid.NewV7(), Tool: "supplier_top_up_confirm", Target: proposal.Target,
-				Params: map[string]any{"proposal": proposal.ID.String()}, Risk: operations.RiskTopUp, Reason: "paid",
-			})
-			if err != nil {
-				return c, err
-			}
-			r, err = operations.CommitReservation(t.Context(), tx, c, proposal.ID, proposal.Target, "receipt 42")
-			return c, err
-		})
-		return r, err
+	direct := r.direct(5)
+	if got, err := r.confirm(direct); err != nil || got.State != "committed" || got.Proof != "receipt 42" {
+		t.Errorf("the confirmation: %+v %v", got, err)
 	}
-	if r, err := confirm(direct); err != nil || r.State != "committed" || r.Proof != "receipt 42" {
-		t.Errorf("the confirmation: %+v %v", r, err)
-	}
-	if _, err := confirm(direct); !errors.Is(err, operations.ErrNotReserved) {
+	if _, err := r.confirm(direct); !errors.Is(err, operations.ErrNotReserved) {
 		t.Errorf("a second confirmation: %v", err)
 	}
-	if got := db.counters(t, nil); got != "12+5#6 12+5#6 12+5#6" {
+	if got := r.counters(t, nil); got != "5+5#2 5+5#2 5+5#2" {
 		t.Errorf("after the confirmation the counters are %s", got)
 	}
+	if got := r.audit(); got != "reservation.commit:operations_agent" {
+		t.Errorf("the reservations' audit is %s", got)
+	}
+}
 
-	unconfirmed, _, err := db.proposeMoney(t, topUp(credential, uuid.NewV7(), nil, "s1", 3))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if unconfirmed, err = db.in(t, func(tx pg.Tx) (operations.Operation, error) {
-		return operations.Settle(t.Context(), tx, unconfirmed, map[string]any{}, "")
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if n := db.expireReservations(t); n != 0 {
+// TestReservationExpiry: a reservation nobody confirmed by the end of its day cannot be confirmed, and the sweep
+// releases it as the system, once.
+func TestReservationExpiry(t *testing.T) {
+	t.Parallel()
+	r := newReservations(t)
+	unconfirmed := r.direct(3)
+	if n := r.expireReservations(t); n != 0 {
 		t.Errorf("the sweep released %d reservations still in their windows", n)
 	}
-	db.windowsEnded(t, unconfirmed)
-	if _, err := confirm(unconfirmed); !errors.Is(err, operations.ErrNotReserved) {
+	r.windowsEnded(t, unconfirmed)
+	if _, err := r.confirm(unconfirmed); !errors.Is(err, operations.ErrNotReserved) {
 		t.Errorf("a confirmation after the windows ended: %v", err)
 	}
-	if n := db.expireReservations(t); n != 1 {
+	if n := r.expireReservations(t); n != 1 {
 		t.Errorf("the sweep released %d", n)
 	}
-	if got := reservation(unconfirmed) + " " + db.counters(t, nil); got != "released 12+5#7 12+5#7 12+5#7" {
-		t.Errorf("after the sweep: %s", got)
+	if n := r.expireReservations(t); n != 0 {
+		t.Errorf("the second sweep released %d", n)
 	}
-	if got := db.text(t, `SELECT string_agg(action || ':' || actor_kind, ',' ORDER BY id) FROM platform.audit_log WHERE action LIKE 'reservation.%'`); got != "reservation.release:user,reservation.release:operations_agent,reservation.release:user,reservation.release:operations_agent,reservation.commit:operations_agent,reservation.release:system" {
-		t.Errorf("the reservations' audit is %s", got)
+	if got := r.state(unconfirmed) + " " + r.counters(t, nil) + " " + r.audit(); got != "released 0+0#1 0+0#1 0+0#1 reservation.release:system" {
+		t.Errorf("after the sweep: %s", got)
 	}
 }
 

@@ -137,7 +137,7 @@ func (a adminAPI) runOperation(ctx context.Context, tx pg.Tx, op operations.Oper
 		if err != nil {
 			return nil, err
 		}
-		return topUpResult(r), nil
+		return topUpResult(r)
 	}
 	return nil, fmt.Errorf("no way to run %s", op.Tool) // every tool that proposes is listed here, so this is a bug
 }

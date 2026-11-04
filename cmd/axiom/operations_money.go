@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -85,8 +86,7 @@ func (o operationsAPI) SupplierTopUpConfirm(ctx context.Context, r operationsapi
 		if err != nil {
 			return operations.Operation{}, false, err
 		}
-		op, err = operations.Settle(ctx, tx, op, topUpResult(reservation), "")
-		return op, false, err
+		return settleTopUp(ctx, tx, op, reservation)
 	})
 	if err != nil {
 		return nil, err
@@ -140,7 +140,16 @@ func (o operationsAPI) proposeTopUp(ctx context.Context, tx pg.Tx, id uuid.UUID,
 	if err != nil {
 		return operations.Operation{}, false, err
 	}
-	op, err = operations.Settle(ctx, tx, op, topUpResult(reservation), "")
+	return settleTopUp(ctx, tx, op, reservation)
+}
+
+// settleTopUp ends op succeeded with what its reservation is now.
+func settleTopUp(ctx context.Context, tx pg.Tx, op operations.Operation, r operations.Reservation) (operations.Operation, bool, error) {
+	result, err := topUpResult(r)
+	if err != nil {
+		return operations.Operation{}, false, err
+	}
+	op, err = operations.Settle(ctx, tx, op, result, "")
 	return op, false, err
 }
 
@@ -169,19 +178,11 @@ func topUpTransfer(ctx context.Context, tx pg.Tx, s suppliers.TopUpBasis, amount
 		"settlement_currency": s.SettlementCurrency,
 	}
 	if s.SettlementCurrency != currency.String() {
-		rate, factor, err := currentRate(ctx, tx, s.SettlementCurrency, currency)
-		if err != nil {
+		if err := convert(ctx, tx, value, s.SettlementCurrency, currency, basis); err != nil {
 			return operations.Transfer{}, err
 		}
-		value.Mul(value, factor)
-		basis["rate"] = map[string]any{"id": rate.ID.String(), "version": rate.Version, "base": rate.Base, "quote": rate.Quote,
-			"numerator": rate.Numerator, "denominator": rate.Denominator}
 	}
-	scaled := new(big.Int).Mul(value.Num(), nano)
-	amount, rest := new(big.Int).QuoRem(scaled, value.Denom(), new(big.Int))
-	if rest.Sign() > 0 {
-		amount.Add(amount, big.NewInt(1))
-	}
+	amount := nanosUp(value)
 	if !amount.IsInt64() {
 		return operations.Transfer{}, invalidField("/amount_native", "is more than a cap can count")
 	}
@@ -194,6 +195,29 @@ func topUpTransfer(ctx context.Context, tx pg.Tx, s suppliers.TopUpBasis, amount
 			"unit_value": s.UnitValue, "settlement_currency": s.SettlementCurrency, "amount": amount.String(), "currency": currency.String(),
 		},
 	}, nil
+}
+
+// convert turns value from one currency into to at the current reference rate, and records the rate in basis.
+func convert(ctx context.Context, tx pg.Tx, value *big.Rat, from string, to platform.Currency, basis map[string]any) error {
+	rate, factor, err := currentRate(ctx, tx, from, to)
+	if err != nil {
+		return err
+	}
+	value.Mul(value, factor)
+	basis["rate"] = map[string]any{
+		"id": rate.ID.String(), "version": rate.Version, "base": rate.Base, "quote": rate.Quote,
+		"numerator": rate.Numerator, "denominator": rate.Denominator,
+	}
+	return nil
+}
+
+// nanosUp is value in billionths, rounded up.
+func nanosUp(value *big.Rat) *big.Int {
+	amount, rest := new(big.Int).QuoRem(new(big.Int).Mul(value.Num(), nano), value.Denom(), new(big.Int))
+	if rest.Sign() > 0 {
+		amount.Add(amount, big.NewInt(1))
+	}
+	return amount
 }
 
 // currentRate is the current reference rate of the pair and how many units of to one unit of from is worth by it; a
@@ -217,13 +241,15 @@ func currentRate(ctx context.Context, tx pg.Tx, from string, to platform.Currenc
 
 // topUpResult is what a top-up operation answers: the amount its caps count, in which currency, what it was computed
 // from, and where its reservation is.
-func topUpResult(r operations.Reservation) map[string]any {
+func topUpResult(r operations.Reservation) (map[string]any, error) {
 	var basis map[string]any
-	_ = jsonx.Unmarshal(r.Basis, &basis) // the module wrote it as canonical JSON of a map
+	if err := jsonx.Unmarshal(r.Basis, &basis); err != nil {
+		return nil, fmt.Errorf("the basis of operation %s: %w", r.Operation, err)
+	}
 	return map[string]any{
 		"amount": strconv.FormatInt(r.Amount, 10), "currency": r.Currency, "basis": basis, "reservation": r.State,
 		"reserved_until": r.Expires.UTC().Format(time.RFC3339),
-	}
+	}, nil
 }
 
 // runOf is the request's X-Axiom-Run-ID, or "" without one.

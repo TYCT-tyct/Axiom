@@ -116,10 +116,10 @@ func ReservationOf(ctx, tx, id uuid.UUID) (Reservation, bool, error)
 |---|---|
 | 没有策略就不动钱 | `ProposeMoney`、`CapCurrency` 找不到策略都是 `ErrNoCapPolicy`。测试 `TestCapDimensions` |
 | 任何时候一个窗口里 `reserved + committed` 不超过硬上限（策略不调低时） | 判断和预留在同一个事务里、持有三行计数器的锁；超过的不建操作。测试 `TestCapDimensions`、`TestCapRaces`（两笔各自在内、合起来超过的并发提案，后一笔等前一笔提交后被拒） |
-| 待批的金额也占额度 | 待审批的提案同样记进 `reserved`；释放只在操作不再执行时发生。测试 `TestReservations` |
-| 同一个键不会预留两次 | 计数器锁之后先按键找重放。测试 `TestReservations`、`TestCapRaces` |
-| 批准不越过现在的硬上限 | 批准时锁住计数器，按现在的策略重算硬上限，装不下就 `rejected` 并释放；放宽的不作废。测试 `TestReservations`（放宽后批准成功、调低后被拒）、`cmd/axiom` 的 `TestOperationsTopUp` |
-| 预留只结一次 | 确认、释放、清扫都锁住资金操作再看状态；`settled_at` 的 CHECK 让 `reserved` 之外的状态都有结算时间。测试 `TestReservations`（第二次确认被拒）、`TestCapRaces`（清扫跳过被持有的预留） |
+| 待批的金额也占额度 | 待审批的提案同样记进 `reserved`；释放只在操作不再执行时发生。测试 `TestCapDimensions`、`TestReservationReleases` |
+| 同一个键不会预留两次 | 计数器锁之后先按键找重放。测试 `TestReservationCommit`、`TestCapRaces` |
+| 批准不越过现在的硬上限 | 批准时锁住计数器，按现在的策略重算硬上限，装不下就 `rejected` 并释放；放宽的不作废。测试 `TestReservationApproval`（放宽后批准成功、调低后被拒）、`cmd/axiom` 的 `TestOperationsTopUpPolicy` |
+| 预留只结一次 | 确认、释放、清扫都锁住资金操作再看状态；`settled_at` 的 CHECK 让 `reserved` 之外的状态都有结算时间。测试 `TestReservationCommit`（第二次确认被拒）、`TestReservationExpiry`、`TestCapRaces`（清扫跳过被持有的预留） |
 | 计数器里的币种只有一种 | 策略的币种建了就不变（`ErrCurrencyFixed`，应用角色也没有改这一列的权限）；`ProposeMoney` 再核对 `Transfer` 的币种 |
 
 ## 表
@@ -156,8 +156,8 @@ func ReservationOf(ctx, tx, id uuid.UUID) (Reservation, bool, error)
 - `actions_test.go`：`TestProposeOnceAKey` 覆盖直接执行与结算、按键重放、键复用、别的凭证同一个键、审批的到期上界、审计和信号；`TestDecide` 覆盖批准、重复决定、驳回、过期后拒绝决定与清扫、撤回只限自己；`TestCancelLive` 覆盖按凭证和全部取消；`TestRaces` 用持有事务等对方进入锁等待的显式顺序覆盖同键并发、批准与撤回、等锁期间到期的决定、清扫与决定。
 - `cmd/axiom/operations_writes_test.go`：`TestOperationsAPIWrites` 走真实 HTTP 和数据库，覆盖上架立即执行、重放、键复用、试运行和旧 `rev` 不写、下架等负责人、负责人看到的摘要和理由、批准后以 agent 的名义执行与审计、操作记录里的理由和输入；`TestOperationsApprovalOutcomes` 覆盖驳回、批准时模型已变、撤回与重放、紧急停止和吊销取消待审批、没有权限、别的凭证的审批、下架草稿；`TestOperationsApprovalAfterAnOldNodesStop` 覆盖旧节点停止后批准；`TestOperationsWithdrawalPreview` 覆盖撤回的试运行不改审批、审计和幂等键，以及撤回和重放的时间与详情一致。
 
-- `caps_test.go`：`TestCapDimensions` 表驱动覆盖每个自主上限（单笔、日、周、对象日、笔数）转人工、每个硬上限（单笔、日、周）拒绝且不写、刚好在上限上直接执行，以及没有策略的站点和平台；`TestSetCapPolicy` 覆盖建、按版本改、币种不变、硬上限不低于自主上限和审计；`TestReservations` 覆盖驳回、撤回、作废、策略调低后的批准各自释放，策略放宽后的批准照常成功，确认一次、第二次被拒，过了日的确认被拒和清扫释放，以及重放不重复预留；`TestCapRaces` 覆盖并发提案在计数器上排队、同键并发只预留一次、清扫跳过被持有的预留。
-- `cmd/axiom/operations_money_test.go`：`TestOperationsTopUp` 走真实 HTTP 和数据库，覆盖没有 `operations.money` 的 403、没有单位价值和没有策略的 422、直接执行与重放、试运行不写、硬上限拒绝、待审批与负责人看到的摘要和上限、确认与重复确认、别的凭证确认 404、策略调低后批准以 `stale_revision` 结束，以及策略的列表、币种不变和旧版本；`TestOperationsTopUpExchange` 覆盖跨币种按汇率折算、没有汇率 422 和向上取整到 10⁻⁹。
+- `caps_test.go`：`TestCapDimensions` 表驱动覆盖每个自主上限（单笔、日、周、对象日、笔数）转人工、每个硬上限（单笔、日、周）拒绝且不写、刚好在上限上直接执行，以及没有策略的站点和平台；`TestSetCapPolicy` 覆盖建、按版本改、币种不变、硬上限不低于自主上限和审计；`TestReservationReleases` 覆盖驳回、撤回、作废各自释放与审计的操作者；`TestReservationApproval` 覆盖策略放宽后的批准照常成功、调低后被拒并释放；`TestReservationCommit` 覆盖重放不重复预留、未结算的提案不能确认、确认一次、第二次被拒；`TestReservationExpiry` 覆盖过了日的确认被拒、清扫只释放一次；`TestCapRaces` 覆盖并发提案在计数器上排队、同键并发只预留一次、清扫跳过被持有的预留。
+- `cmd/axiom/operations_money_test.go`（走真实 HTTP 和数据库）：`TestOperationsTopUpRefusals` 覆盖没有 `operations.money` 的 403、没有单位价值和没有策略的 422、硬上限拒绝和试运行都不留预留；`TestOperationsTopUp` 覆盖直接执行与重放、待审批与负责人看到的摘要和上限、批准后仍是预留；`TestOperationsTopUpConfirm` 覆盖别的凭证确认 404、确认一次、重复确认 409 和审计；`TestOperationsTopUpPolicy` 覆盖策略调低后批准以 `stale_revision` 结束并释放，以及策略的列表、币种不变和旧版本；`TestOperationsTopUpExchange` 覆盖跨币种按汇率折算、没有汇率 422 和向上取整到 10⁻⁹。
 
 - `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖刚好 8192 字节的输入原样保存、多一个字节只记大小、站点范围读不到。
 

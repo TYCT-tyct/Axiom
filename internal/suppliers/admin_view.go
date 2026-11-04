@@ -241,7 +241,7 @@ type TopUpBasis struct {
 }
 
 // TopUpBasis reads supplier id's; ErrNoSupplier when there is none.
-func (a *Admin) TopUpBasis(ctx context.Context, tx pg.Tx, id uuid.UUID) (TopUpBasis, error) {
+func (*Admin) TopUpBasis(ctx context.Context, tx pg.Tx, id uuid.UUID) (TopUpBasis, error) {
 	rows, err := store.New().TopUpBasis(ctx, tx, id)
 	if err != nil {
 		return TopUpBasis{}, fmt.Errorf("read supplier %s: %w", id, err)

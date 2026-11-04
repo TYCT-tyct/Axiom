@@ -326,16 +326,17 @@ func approvalBody(op operations.Operation) adminapi.OperationsApproval {
 
 // ListOperationsCapPolicies lists every cap on the money the agent moves.
 func (a adminAPI) ListOperationsCapPolicies(ctx context.Context, _ adminapi.ListOperationsCapPoliciesRequestObject) (adminapi.ListOperationsCapPoliciesResponseObject, error) {
-	var policies []operations.CapPolicy
-	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		policies, err = operations.CapPolicies(ctx, tx)
+	var list adminapi.OperationsCapPolicyList
+	err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
+		policies, err := operations.CapPolicies(ctx, tx)
+		list.Data = make([]adminapi.OperationsCapPolicy, len(policies))
+		for i, p := range policies {
+			list.Data[i] = capPolicyBody(p)
+		}
 		return err
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
-	}
-	list := adminapi.OperationsCapPolicyList{Data: make([]adminapi.OperationsCapPolicy, len(policies))}
-	for i, p := range policies {
-		list.Data[i] = capPolicyBody(p)
 	}
 	return adminapi.ListOperationsCapPolicies200JSONResponse(list), nil
 }
@@ -362,9 +363,13 @@ func (a adminAPI) SetOperationsCapPolicy(ctx context.Context, r adminapi.SetOper
 		text  adminapi.OperationsCapAmount
 		into  *int64
 	}{
-		{"single_max", l.SingleMax, &p.Single}, {"daily_max", l.DailyMax, &p.Daily}, {"weekly_max", l.WeeklyMax, &p.Weekly},
-		{"object_daily_max", l.ObjectDailyMax, &p.ObjectDaily}, {"hard_single_max", l.HardSingleMax, &p.HardSingle},
-		{"hard_daily_max", l.HardDailyMax, &p.HardDaily}, {"hard_weekly_max", l.HardWeeklyMax, &p.HardWeekly},
+		{"single_max", l.SingleMax, &p.Single},
+		{"daily_max", l.DailyMax, &p.Daily},
+		{"weekly_max", l.WeeklyMax, &p.Weekly},
+		{"object_daily_max", l.ObjectDailyMax, &p.ObjectDaily},
+		{"hard_single_max", l.HardSingleMax, &p.HardSingle},
+		{"hard_daily_max", l.HardDailyMax, &p.HardDaily},
+		{"hard_weekly_max", l.HardWeeklyMax, &p.HardWeekly},
 	} {
 		if *f.into, err = strconv.ParseInt(f.text, 10, 64); err != nil {
 			return nil, invalidField("/limits/"+f.field, "not an amount a cap can count")
