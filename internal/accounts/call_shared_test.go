@@ -3,6 +3,7 @@ package accounts_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -76,6 +77,47 @@ func TestEachWaiterKeepsItsDeadline(t *testing.T) {
 	release()
 	if err := <-patient; err != nil {
 		t.Errorf("the request still waiting: %v", err)
+	}
+}
+
+// TestALookupKeepsItsCallersDeadline: the shared lookup has the deadline of the request that started it, and
+// LookupTimeout from its start when that request set none. The deadline is read where the lookup takes its slot, so
+// the test compares values instead of racing two clocks.
+func TestALookupKeepsItsCallersDeadline(t *testing.T) {
+	t.Parallel()
+	db, _, s, first := callSetup(t)
+	second := createKey(t, db, s)
+	var deadline time.Time
+	var set bool
+	gated, err := accounts.NewService(db, accounts.Config{
+		Platform: platform, Hashes: hashKeys(t, 1),
+		LookupSlot: func(ctx context.Context) (func(), error) {
+			deadline, set = ctx.Deadline()
+			return func() {}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gated.Load(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	callers := time.Now().Add(time.Hour)
+	ctx, cancel := context.WithDeadline(t.Context(), callers)
+	defer cancel()
+	if _, err := gated.AuthenticateKey(ctx, accounts.SiteID(s1), first); err != nil {
+		t.Fatal(err)
+	}
+	if !set || !deadline.Equal(callers) {
+		t.Errorf("a caller with a deadline: the lookup's is %v (set %v), want %v", deadline, set, callers)
+	}
+	before := time.Now()
+	if _, err := gated.AuthenticateKey(t.Context(), accounts.SiteID(s1), second); err != nil {
+		t.Fatal(err)
+	}
+	after := time.Now()
+	if !set || deadline.Before(before.Add(accounts.LookupTimeout)) || deadline.After(after.Add(accounts.LookupTimeout)) {
+		t.Errorf("a caller without one: the lookup's deadline is %v (set %v), want %v after its start", deadline, set, accounts.LookupTimeout)
 	}
 }
 
