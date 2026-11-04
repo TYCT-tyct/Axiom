@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
 	"net/http"
 	"sort"
@@ -110,37 +109,25 @@ func hashBody(ctx context.Context, body io.ReadSeeker, limit int64) (string, int
 
 // hashChunks copies at most limit+1 bytes into hash, checking ctx between reads and stopping as soon as the body is
 // over the limit.
-//
-//nolint:gocognit // one loop enforces cancellation, the limit, EOF and write errors in that order
 func hashChunks(ctx context.Context, hash io.Writer, body io.Reader, limit int64) (int64, error) {
-	buf := make([]byte, 32<<10)
-	var size int64
-	for {
+	source := readFunc(func(p []byte) (int, error) {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		want := int64(len(buf))
-		if remaining := limit + 1 - size; remaining < want {
-			want = remaining
-		}
-		if want <= 0 {
-			return 0, ErrTooLarge
-		}
-		n, err := body.Read(buf[:want])
-		if n > 0 {
-			size += int64(n)
-			if size > limit {
-				return 0, ErrTooLarge
-			}
-			if _, writeErr := hash.Write(buf[:n]); writeErr != nil {
-				return 0, writeErr
-			}
-		}
-		if errors.Is(err, io.EOF) {
-			return size, nil
-		}
-		if err != nil {
-			return 0, err
-		}
+		return body.Read(p)
+	})
+	size, err := io.Copy(hash, io.LimitReader(source, limit+1))
+	if err != nil {
+		return 0, err
 	}
+	if size > limit {
+		return 0, ErrTooLarge
+	}
+	return size, nil
 }
+
+// readFunc adapts a closure to io.Reader, so a copy can check a possibly blocking body's context between reads
+// without storing the context in a struct.
+type readFunc func([]byte) (int, error)
+
+func (f readFunc) Read(p []byte) (int, error) { return f(p) }

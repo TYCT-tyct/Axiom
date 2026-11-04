@@ -2,14 +2,10 @@ package payments
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
 	"net/url"
-	"slices"
-	"strings"
 	"time"
 	"uuid"
 
@@ -19,69 +15,6 @@ import (
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
-
-// State is where an order is (docs/domains/payments.md「订单」).
-type State string
-
-// The order states. A payment is confirmed by the callback, a query or a person (README.md「实现拆分」E1-2c).
-const (
-	Pending           State = "pending"
-	Paid              State = "paid"
-	Expired           State = "expired"
-	Cancelled         State = "cancelled"
-	Failed            State = "failed"
-	Review            State = "review"
-	PartiallyRefunded State = "partially_refunded"
-	Refunded          State = "refunded"
-	ChargedBack       State = "charged_back"
-)
-
-// states are all of them, in the order the design lists them, so a set of states is always the same slice.
-var states = []State{Pending, Paid, Expired, Cancelled, Failed, Review, PartiallyRefunded, Refunded, ChargedBack}
-
-// transitions is the one table of what an order may become (docs/domains/payments.md「订单」): an order's state moves
-// along these edges and no others, so a lost or repeated event cannot walk it backwards.
-var transitions = map[State][]State{
-	Pending:           {Paid, Review, Expired, Cancelled, Failed},
-	Expired:           {Paid, Review},
-	Cancelled:         {Paid, Review},
-	Failed:            {Paid, Review},
-	Review:            {Paid, Refunded},
-	Paid:              {PartiallyRefunded, Refunded, ChargedBack},
-	PartiallyRefunded: {PartiallyRefunded, Refunded, ChargedBack},
-	Refunded:          {ChargedBack},
-}
-
-// canMoveTo reports whether an order may go from s to next.
-func (s State) canMoveTo(next State) bool { return slices.Contains(transitions[s], next) }
-
-// predecessors is every state an order may come to next from: the condition a change of an order's state carries into
-// the database, so the row changes only along an edge of the table.
-func predecessors(next State) []string {
-	var from []string
-	for _, s := range states {
-		if s.canMoveTo(next) {
-			from = append(from, string(s))
-		}
-	}
-	return from
-}
-
-// The sources and kinds of the order events this module writes; the callback and the query add theirs (README.md
-// 「实现拆分」E1-2c).
-const (
-	sourceUser = "user"
-	sourceJob  = "job"
-
-	kindCreate   = "create"
-	kindCheckout = "checkout"
-	kindReject   = "reject"
-	kindCancel   = "cancel"
-	kindExpire   = "expire"
-)
-
-// maxRaw is what an order event's raw text holds, and so how far a gateway's answer is cut.
-const maxRaw = 8 << 10
 
 // Order is an order as the module passes it around. Checkout is the part of the channel's answer that was stored: the
 // Checkout CreateOrder returns beside it is the one to show the browser, which may carry a client secret of its own.
@@ -521,68 +454,4 @@ func move(ctx context.Context, tx pg.Tx, o LockOrderRow, to State, e event) erro
 		return fmt.Errorf("payments: record the order's event: %w", err)
 	}
 	return nil
-}
-
-// event is what happened to an order, as an order event records it.
-type event struct {
-	source  string
-	kind    string
-	tradeNo string
-	amount  *int64
-	raw     string
-}
-
-// cut is raw as far as the event's column holds.
-func cut(raw string) string {
-	raw = strings.ReplaceAll(raw, "\x00", "")
-	if len(raw) <= maxRaw {
-		return strings.ToValidUTF8(raw, "")
-	}
-	return strings.ToValidUTF8(raw[:maxRaw], "")
-}
-
-// lockOrder locks one order's row for a change of its state.
-func lockForChange(ctx context.Context, tx pg.Tx, id OrderID) (LockOrderRow, error) {
-	rows, err := queries.LockOrder(ctx, tx, uuid.UUID(id))
-	if err != nil {
-		return LockOrderRow{}, fmt.Errorf("payments: lock order %s: %w", id.TypeID(), err)
-	}
-	if len(rows) == 0 {
-		return LockOrderRow{}, ErrNotFound
-	}
-	return rows[0], nil
-}
-
-// boundOrderTx bounds the waits of an order's transaction, so a lock another request holds answers instead of holding
-// the connection (README.md「事务与任务」).
-func boundOrderTx(ctx context.Context, tx pg.Tx) error {
-	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '2s'; SET LOCAL statement_timeout = '5s'"); err != nil {
-		return fmt.Errorf("payments: bound the order's waits: %w", err)
-	}
-	return nil
-}
-
-// accountKey is the advisory lock key of an account's orders: its limits are read and its order written under it, so
-// two orders at once cannot both take the last place. The leading namespace byte separates these keys from the
-// exchange rate's pairs.
-func accountKey(account uuid.UUID) int64 {
-	return advisoryKey(0x4f, account)
-}
-
-// merchantKey keeps merchant identity locks separate from order (0x4f) and exchange-rate (0x46) locks.
-func merchantKey(id MerchantID) int64 { return advisoryKey(0x4d, uuid.UUID(id)) }
-
-func advisoryKey(namespace byte, id uuid.UUID) int64 {
-	hash := sha256.Sum256(id[:])
-	return int64(binary.BigEndian.Uint64(hash[:8])>>8) | int64(namespace)<<56
-}
-
-// channelOf opens a merchant account's channel in the platform scope, which alone reads merchant_configs.
-func (p *Payments) channelOf(ctx context.Context, id MerchantID) (Channel, error) {
-	var ch Channel
-	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) {
-		ch, err = p.channel(ctx, tx, id)
-		return err
-	})
-	return ch, err
 }

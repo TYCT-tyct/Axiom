@@ -110,50 +110,77 @@ type ByokKey struct {
 // CreateByok makes an account's provider key: one supplier, one selected group, the models, an endpoint with a zero
 // cost schedule for each, one sealed credential, the unit value and the balance that let routing pick it. models is
 // what the caller read from the catalog; an empty list is refused. Everything commits or nothing does.
-//
-//nolint:cyclop,funlen,gocognit // one transaction writes the rows in their dependency order; splitting it would break the all-or-nothing read
 func (a *Admin) CreateByok(ctx context.Context, tx pg.Tx, r ByokRequest, models []ByokModel) (ByokKey, error) {
 	if !a.byok {
 		return ByokKey{}, ErrByokDisabled
 	}
-	name := strings.TrimSpace(r.Name)
+	name, origin, key, err := byokInput(r, models)
+	if err != nil {
+		return ByokKey{}, err
+	}
+	q := store.New()
+	id, group, err := a.insertByokBase(ctx, tx, q, r, name, origin, key)
+	if err != nil {
+		return ByokKey{}, err
+	}
+	if err := insertByokModels(ctx, tx, q, id, group, models); err != nil {
+		return ByokKey{}, err
+	}
+	if err := a.recordByok(ctx, tx, r.Actor, "supplier.byok_create", r.Site, r.Account, id, "an account added its own provider key", map[string]any{
+		"provider": r.Provider, "hint": hintOf(key), "fallback": r.Fallback, "models": len(models),
+	}); err != nil {
+		return ByokKey{}, err
+	}
+	row, _, err := a.byokRow(ctx, tx, r.Site, r.Account, id)
+	if err != nil {
+		return ByokKey{}, err
+	}
+	return byokOf(row), nil
+}
+
+// byokInput validates the request and returns the trimmed name and key plus the provider's upstream origin.
+func byokInput(r ByokRequest, models []ByokModel) (name, origin, key string, err error) {
+	name = strings.TrimSpace(r.Name)
 	if name == "" || len([]rune(name)) > 200 {
-		return ByokKey{}, ErrByokName
+		return "", "", "", ErrByokName
 	}
 	origin, ok := byokProviders[r.Provider]
 	if !ok {
-		return ByokKey{}, ErrByokProvider
+		return "", "", "", ErrByokProvider
 	}
-	key := strings.TrimSpace(r.Key)
+	key = strings.TrimSpace(r.Key)
 	if len(key) < 8 || len(key) > 4096 {
-		return ByokKey{}, ErrByokKey
+		return "", "", "", ErrByokKey
 	}
 	for _, c := range key {
 		if c <= ' ' || c == unicode.ReplacementChar {
-			return ByokKey{}, ErrByokKey
+			return "", "", "", ErrByokKey
 		}
 	}
 	if len(models) == 0 {
-		return ByokKey{}, ErrByokModels
+		return "", "", "", ErrByokModels
 	}
+	return name, origin, key, nil
+}
 
-	q := store.New()
+// insertByokBase writes the supplier, its selected group and the sealed credential the rest of the module reads.
+func (a *Admin) insertByokBase(ctx context.Context, tx pg.Tx, q *store.Queries, r ByokRequest, name, origin, key string) (uuid.UUID, uuid.UUID, error) {
 	id, err := q.InsertByokSupplier(ctx, tx, store.InsertByokSupplierParams{
 		SiteID: &r.Site, AccountID: &r.Account, Name: name, UpstreamAccount: uuid.NewV7().String(),
 		ByokFallback: r.Fallback,
 	})
 	if err != nil {
-		return ByokKey{}, fmt.Errorf("make the provider key: %w", err)
+		return uuid.Nil(), uuid.Nil(), fmt.Errorf("make the provider key: %w", err)
 	}
 	group, err := q.InsertGroup(ctx, tx, store.InsertGroupParams{
 		SupplierID: id, UpstreamRef: origin, Name: r.Provider, Ratio: "1",
 	})
 	if err != nil {
-		return ByokKey{}, fmt.Errorf("make the provider key's group: %w", err)
+		return uuid.Nil(), uuid.Nil(), fmt.Errorf("make the provider key's group: %w", err)
 	}
 	code := store.Codename()
 	if err := q.SelectGroup(ctx, tx, store.SelectGroupParams{ID: group, Selected: true, Codename: &code}); err != nil {
-		return ByokKey{}, fmt.Errorf("select the provider key's group: %w", err)
+		return uuid.Nil(), uuid.Nil(), fmt.Errorf("select the provider key's group: %w", err)
 	}
 	credential := uuid.NewV7()
 	sealed := a.keys.Seal(secret.New(key), secret.Location{
@@ -166,13 +193,19 @@ func (a *Admin) CreateByok(ctx context.Context, tx pg.Tx, r ByokRequest, models 
 		Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK,
 		KeyVersion: &keyVersion, Hint: &hintText,
 	}); err != nil {
-		return ByokKey{}, fmt.Errorf("store the provider key: %w", err)
+		return uuid.Nil(), uuid.Nil(), fmt.Errorf("store the provider key: %w", err)
 	}
 	if err := q.InsertUnitValue(ctx, tx, store.InsertUnitValueParams{
 		SupplierID: id, Value: "1", Actor: "byok", Reason: "an account's own provider key: one unit, a dollar, costs its own price",
 	}); err != nil {
-		return ByokKey{}, fmt.Errorf("confirm the provider key's unit value: %w", err)
+		return uuid.Nil(), uuid.Nil(), fmt.Errorf("confirm the provider key's unit value: %w", err)
 	}
+	return id, group, nil
+}
+
+// insertByokModels projects each catalog model and gives it an endpoint with a zero cost schedule, so the key's
+// models are routable at their own price.
+func insertByokModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, models []ByokModel) error {
 	for _, m := range models {
 		formats, err := store.FormatNames(m.Formats)
 		if err != nil || len(formats) == 0 {
@@ -181,35 +214,26 @@ func (a *Admin) CreateByok(ctx context.Context, tx pg.Tx, r ByokRequest, models 
 		if err := q.UpsertProjectedModel(ctx, tx, store.UpsertProjectedModelParams{
 			SupplierID: id, SupplierGroupID: group, UpstreamName: m.Upstream, ModelID: &m.ID, Formats: formats,
 		}); err != nil {
-			return ByokKey{}, fmt.Errorf("map %s: %w", m.Upstream, err)
+			return fmt.Errorf("map %s: %w", m.Upstream, err)
 		}
 		endpoint, err := q.InsertEndpoint(ctx, tx, store.InsertEndpointParams{
 			SupplierID: id, SupplierGroupID: group, ModelID: m.ID, UpstreamName: m.Upstream, Formats: formats,
 		})
 		if err != nil {
-			return ByokKey{}, fmt.Errorf("make the endpoint for %s: %w", m.Upstream, err)
+			return fmt.Errorf("make the endpoint for %s: %w", m.Upstream, err)
 		}
 		schedule, err := q.InsertCostSchedule(ctx, tx, store.InsertCostScheduleParams{
 			SupplierID: id, EndpointID: endpoint, NativeUnit: "usd", Schedule: m.Schedule,
 			Basis: "confirmed", Fingerprint: "byok",
 		})
 		if err != nil {
-			return ByokKey{}, fmt.Errorf("price the endpoint for %s: %w", m.Upstream, err)
+			return fmt.Errorf("price the endpoint for %s: %w", m.Upstream, err)
 		}
 		if err := q.SetEndpointCost(ctx, tx, store.SetEndpointCostParams{ID: endpoint, CostScheduleID: &schedule}); err != nil {
-			return ByokKey{}, fmt.Errorf("put the endpoint for %s in service: %w", m.Upstream, err)
+			return fmt.Errorf("put the endpoint for %s in service: %w", m.Upstream, err)
 		}
 	}
-	if err := a.recordByok(ctx, tx, r.Actor, "supplier.byok_create", r.Site, r.Account, id, "an account added its own provider key", map[string]any{
-		"provider": r.Provider, "hint": hintOf(key), "fallback": r.Fallback, "models": len(models),
-	}); err != nil {
-		return ByokKey{}, err
-	}
-	row, _, err := a.byokRow(ctx, tx, r.Site, r.Account, id)
-	if err != nil {
-		return ByokKey{}, err
-	}
-	return byokOf(row), nil
+	return nil
 }
 
 // hintOf is the last four characters of a key, which is what the console shows after the key is saved.

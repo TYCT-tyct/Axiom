@@ -131,6 +131,19 @@ func TestDisputeUnmatchedAndAmountMismatchBecomeDiscrepancies(t *testing.T) {
 	if state, _, _ := w.stored(o.ID); state != "paid" {
 		t.Fatalf("a mismatched amount changed the order to %s", state)
 	}
+	// A notice that names another order for the same payment is a mismatch, not a reason to move money.
+	before = w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies WHERE state = 'open' AND detail->>'kind' = 'dispute_order'")
+	claimed := Dispute("stripe", "dp_z", o.TradeNo, o.Total, DisputeOpen, "needs_response")
+	claimed.Dispute.Order = "ord_other"
+	if err := w.p.dispute(t.Context(), MerchantID(merchant.ID), claimed); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies WHERE state = 'open' AND detail->>'kind' = 'dispute_order'"); got != before+1 {
+		t.Fatalf("claimed-order discrepancies = %d, want %d", got, before+1)
+	}
+	if state, _, _ := w.stored(o.ID); state != "paid" {
+		t.Fatalf("a claimed-order mismatch changed the order to %s", state)
+	}
 }
 
 func TestDailyCashReconcilesChargebackAndReversal(t *testing.T) {
