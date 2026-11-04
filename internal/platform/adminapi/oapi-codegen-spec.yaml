@@ -1,0 +1,7 @@
+package: adminapi
+output: spec.gen.go
+generate:
+  # The contract itself, for cmd/axiom to enforce: GetSwagger (internal/platform/README.md「接口约定」). Alone, because
+  # with the server in one file the output passed the 1 MB limit of scripts/check_artifacts.py again, as the models
+  # had before (oapi-codegen-types.yaml).
+  embedded-spec: true
