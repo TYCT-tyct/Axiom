@@ -53,6 +53,7 @@ type managedData struct {
 	Disabled  bool       `json:"disabled"`
 	Workspace string     `json:"workspace_id"`
 	Usage     float64    `json:"usage"`
+	Preset    *string    `json:"preset_id"`
 }
 
 func readManaged(t *testing.T, rec *httptest.ResponseRecorder, status int) (managedData, string) {
@@ -75,7 +76,7 @@ func checkManagedCreation(t *testing.T, created managedData, expires *time.Time)
 	t.Helper()
 	want := managedData{
 		Hash: created.Hash, Workspace: created.Workspace, Name: "child", Limit: new(1.000000001),
-		Remaining: new(1.000000001), Reset: new("daily"), Expires: expires,
+		Remaining: new(1.000000001), Reset: new("daily"), Expires: expires, Preset: new(systemPreset),
 	}
 	if diff := cmp.Diff(want, created); diff != "" {
 		t.Fatal(diff)

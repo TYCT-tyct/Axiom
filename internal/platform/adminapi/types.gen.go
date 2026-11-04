@@ -1335,6 +1335,30 @@ func (e RegistrationPolicyMode) Valid() bool {
 	}
 }
 
+// Defines values for RoutingPresetScope.
+const (
+	RoutingPresetScopeAccount   RoutingPresetScope = "account"
+	RoutingPresetScopePlatform  RoutingPresetScope = "platform"
+	RoutingPresetScopeSite      RoutingPresetScope = "site"
+	RoutingPresetScopeWorkspace RoutingPresetScope = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the RoutingPresetScope enum.
+func (e RoutingPresetScope) Valid() bool {
+	switch e {
+	case RoutingPresetScopeAccount:
+		return true
+	case RoutingPresetScopePlatform:
+		return true
+	case RoutingPresetScopeSite:
+		return true
+	case RoutingPresetScopeWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SearchEngineKind.
 const (
 	SearchEngineKindFirecrawl SearchEngineKind = "firecrawl"
@@ -2805,6 +2829,53 @@ type KeyLimitsView struct {
 
 	// Limits The limits set at this level.
 	Limits KeyLimits `json:"limits"`
+}
+
+// LayerRoutingDefaultUpdate defines model for LayerRoutingDefaultUpdate.
+type LayerRoutingDefaultUpdate struct {
+	// PresetId null clears the layer's default.
+	PresetId *openapi_types.UUID `json:"preset_id"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason  Reason `json:"reason"`
+	Version int64  `json:"version"`
+}
+
+// LayerRoutingPresetCreate defines model for LayerRoutingPresetCreate.
+type LayerRoutingPresetCreate struct {
+	// Currency The currency of a platform preset's price limits, required when it limits a price; a site's preset names none.
+	Currency *string `json:"currency,omitempty"`
+	Name     string  `json:"name"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
+	Rules RoutingRules `json:"rules"`
+
+	// Slug Unique among the layer's live presets; it cannot be changed.
+	Slug string `json:"slug"`
+}
+
+// LayerRoutingPresetDisable defines model for LayerRoutingPresetDisable.
+type LayerRoutingPresetDisable struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason   Reason `json:"reason"`
+	Revision int64  `json:"revision"`
+}
+
+// LayerRoutingPresetUpdate defines model for LayerRoutingPresetUpdate.
+type LayerRoutingPresetUpdate struct {
+	// Currency As on creation; left out, the preset limits no price in any currency.
+	Currency *string `json:"currency,omitempty"`
+	Name     string  `json:"name"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason   Reason `json:"reason"`
+	Revision int64  `json:"revision"`
+
+	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
+	Rules RoutingRules `json:"rules"`
 }
 
 // LegalDocument One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. `locale` is absent on a node that predates locale-aware documents; a page uses `zh` only as the display fallback and omits the locale from the acceptance.
@@ -4369,6 +4440,51 @@ type RetentionRequest struct {
 	Reason Reason `json:"reason"`
 }
 
+// RoutingDefault defines model for RoutingDefault.
+type RoutingDefault struct {
+	// PresetId Absent when the layer sets no default.
+	PresetId *openapi_types.UUID `json:"preset_id,omitempty"`
+
+	// Version 0 when the layer has no default; a change names the version it read.
+	Version int64 `json:"version"`
+}
+
+// RoutingPreset defines model for RoutingPreset.
+type RoutingPreset struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Currency The currency of a platform preset's price limits; absent for the others, which are in the site's.
+	Currency *string            `json:"currency,omitempty"`
+	Disabled bool               `json:"disabled"`
+	Id       openapi_types.UUID `json:"id"`
+	Name     string             `json:"name"`
+
+	// Revision Moves on every change; a change names the revision it read.
+	Revision int64 `json:"revision"`
+
+	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
+	Rules RoutingRules `json:"rules"`
+
+	// Scope The layer the preset belongs to.
+	Scope     RoutingPresetScope `json:"scope"`
+	Slug      string             `json:"slug"`
+	UpdatedAt time.Time          `json:"updated_at"`
+
+	// Version The rules' version, which moves only when the rules change.
+	Version int64 `json:"version"`
+}
+
+// RoutingPresetList defines model for RoutingPresetList.
+type RoutingPresetList struct {
+	Data []RoutingPreset `json:"data"`
+}
+
+// RoutingPresetScope The layer the preset belongs to.
+type RoutingPresetScope string
+
+// RoutingRules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
+type RoutingRules = jsonx.Raw
+
 // SearchConfigTest defines model for SearchConfigTest.
 type SearchConfigTest struct {
 	// Engine The engine to test. Absent tests the saved default, which is what a page built before engines existed asks for.
@@ -5915,6 +6031,24 @@ type SetRetentionParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// CreatePlatformRoutingPresetParams defines parameters for CreatePlatformRoutingPreset.
+type CreatePlatformRoutingPresetParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// DisableLayerRoutingPresetParams defines parameters for DisableLayerRoutingPreset.
+type DisableLayerRoutingPresetParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// UpdateLayerRoutingPresetParams defines parameters for UpdateLayerRoutingPreset.
+type UpdateLayerRoutingPresetParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetFileParserSettingsParams defines parameters for SetFileParserSettings.
 type SetFileParserSettingsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -5941,6 +6075,12 @@ type TestMailSettingsParams struct {
 
 // SetQualityProbeSettingsParams defines parameters for SetQualityProbeSettings.
 type SetQualityProbeSettingsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetPlatformRoutingDefaultParams defines parameters for SetPlatformRoutingDefault.
+type SetPlatformRoutingDefaultParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -6004,6 +6144,18 @@ type UpdateSiteLogoParams struct {
 
 // UpdateSiteRegistrationParams defines parameters for UpdateSiteRegistration.
 type UpdateSiteRegistrationParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetSiteRoutingDefaultParams defines parameters for SetSiteRoutingDefault.
+type SetSiteRoutingDefaultParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// CreateSiteRoutingPresetParams defines parameters for CreateSiteRoutingPreset.
+type CreateSiteRoutingPresetParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -6333,6 +6485,15 @@ type ReplaceOperationsTargetsJSONRequestBody = OperationsTargetsUpdate
 // SetRetentionJSONRequestBody defines body for SetRetention for application/json ContentType.
 type SetRetentionJSONRequestBody = RetentionRequest
 
+// CreatePlatformRoutingPresetJSONRequestBody defines body for CreatePlatformRoutingPreset for application/json ContentType.
+type CreatePlatformRoutingPresetJSONRequestBody = LayerRoutingPresetCreate
+
+// DisableLayerRoutingPresetJSONRequestBody defines body for DisableLayerRoutingPreset for application/json ContentType.
+type DisableLayerRoutingPresetJSONRequestBody = LayerRoutingPresetDisable
+
+// UpdateLayerRoutingPresetJSONRequestBody defines body for UpdateLayerRoutingPreset for application/json ContentType.
+type UpdateLayerRoutingPresetJSONRequestBody = LayerRoutingPresetUpdate
+
 // SetFileParserSettingsJSONRequestBody defines body for SetFileParserSettings for application/json ContentType.
 type SetFileParserSettingsJSONRequestBody = FileParserSettingsUpdate
 
@@ -6347,6 +6508,9 @@ type TestMailSettingsJSONRequestBody = MailConfigTest
 
 // SetQualityProbeSettingsJSONRequestBody defines body for SetQualityProbeSettings for application/json ContentType.
 type SetQualityProbeSettingsJSONRequestBody = ProbeSettingsUpdate
+
+// SetPlatformRoutingDefaultJSONRequestBody defines body for SetPlatformRoutingDefault for application/json ContentType.
+type SetPlatformRoutingDefaultJSONRequestBody = LayerRoutingDefaultUpdate
 
 // SetSearchSettingsJSONRequestBody defines body for SetSearchSettings for application/json ContentType.
 type SetSearchSettingsJSONRequestBody = SearchSettingsUpdate
@@ -6374,6 +6538,12 @@ type UpdateSiteLogoJSONRequestBody = SiteLogoUpdate
 
 // UpdateSiteRegistrationJSONRequestBody defines body for UpdateSiteRegistration for application/json ContentType.
 type UpdateSiteRegistrationJSONRequestBody = RegistrationPolicyUpdate
+
+// SetSiteRoutingDefaultJSONRequestBody defines body for SetSiteRoutingDefault for application/json ContentType.
+type SetSiteRoutingDefaultJSONRequestBody = LayerRoutingDefaultUpdate
+
+// CreateSiteRoutingPresetJSONRequestBody defines body for CreateSiteRoutingPreset for application/json ContentType.
+type CreateSiteRoutingPresetJSONRequestBody = LayerRoutingPresetCreate
 
 // UpdateSiteSettingsJSONRequestBody defines body for UpdateSiteSettings for application/json ContentType.
 type UpdateSiteSettingsJSONRequestBody = SiteSettingsUpdate

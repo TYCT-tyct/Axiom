@@ -58,7 +58,7 @@ func (c consoleAPI) CreateRoutingPreset(ctx context.Context, r consoleapi.Create
 	var p routing.StoredPreset
 	if err := c.db.Tx(ctx, cl.scope, func(tx pg.Tx) (err error) {
 		p, err = routing.CreatePreset(ctx, tx, actor(ctx), accountLayer(cl), r.Body.Slug,
-			routing.PresetContent{Name: r.Body.Name, Rules: r.Body.Rules})
+			routing.PresetContent{Name: r.Body.Name, Rules: r.Body.Rules}, "")
 		return rulesProblem(err)
 	}); err != nil {
 		return nil, err
@@ -71,7 +71,7 @@ func (c consoleAPI) UpdateRoutingPreset(ctx context.Context, r consoleapi.Update
 	var p routing.StoredPreset
 	if err := c.db.Tx(ctx, cl.scope, func(tx pg.Tx) (err error) {
 		p, err = routing.UpdatePreset(ctx, tx, actor(ctx), routing.PresetID(r.PresetId), r.Body.Revision,
-			routing.PresetContent{Name: r.Body.Name, Rules: r.Body.Rules})
+			routing.PresetContent{Name: r.Body.Name, Rules: r.Body.Rules}, "")
 		return rulesProblem(err)
 	}); err != nil {
 		return nil, err
@@ -82,7 +82,7 @@ func (c consoleAPI) UpdateRoutingPreset(ctx context.Context, r consoleapi.Update
 func (c consoleAPI) DisableRoutingPreset(ctx context.Context, r consoleapi.DisableRoutingPresetRequestObject) (consoleapi.DisableRoutingPresetResponseObject, error) {
 	cl := callOf(ctx)
 	if err := c.db.Tx(ctx, cl.scope, func(tx pg.Tx) error {
-		return routing.DisablePreset(ctx, tx, actor(ctx), routing.PresetID(r.PresetId), r.Params.Revision)
+		return routing.DisablePreset(ctx, tx, actor(ctx), routing.PresetID(r.PresetId), r.Params.Revision, "")
 	}); err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (c consoleAPI) SetRoutingDefault(ctx context.Context, r consoleapi.SetRouti
 	cl := callOf(ctx)
 	var d routing.Default
 	if err := c.db.Tx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-		d, err = routing.SetDefault(ctx, tx, actor(ctx), accountLayer(cl), cl.site.Currency, (*routing.PresetID)(r.Body.PresetId), r.Body.Version)
+		d, err = routing.SetDefault(ctx, tx, actor(ctx), accountLayer(cl), cl.site.Currency, (*routing.PresetID)(r.Body.PresetId), r.Body.Version, "")
 		return err
 	}); err != nil {
 		return nil, err

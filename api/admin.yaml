@@ -29,6 +29,7 @@ tags:
   - {name: Session, description: "Sign-in, two-step verification and the current session."}
   - {name: Site, description: "Site settings."}
   - {name: Quality, description: "Source classes and the fingerprint rules that recognize them."}
+  - {name: Routing, description: "The routing presets of the platform and the sites, and their defaults."}
   - {name: Users, description: "Users, accounts and manual credit."}
   - {name: Suppliers, description: "Suppliers, their groups and keys, and the upstream model names waiting to be mapped."}
   - {name: Catalog, description: "Authors, models, their names, specs and reference prices."}
@@ -1340,6 +1341,338 @@ paths:
           description: Retired; the same Idempotency-Key replays this answer without a second change.
           headers:
             Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/routing-presets:
+    get:
+      operationId: listPlatformRoutingPresets
+      tags: [Routing]
+      summary: The platform's routing presets
+      description: >-
+        Every preset of the platform layer, the live ones first and the disabled ones after, the system preset (ID all
+        zeros, `allow-all`) among them. Every key of every site may be bound to a live platform preset, except one that
+        limits prices in another currency than the key's site's (docs/domains/routing.md「路由预设」).
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The presets
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPresetList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createPlatformRoutingPreset
+      tags: [Routing]
+      summary: Make a routing preset of the platform
+      description: >-
+        Makes a platform preset with its first version of rules, checked whole (400 naming `/rules`): a platform preset
+        may set `advanced`, and one that limits a price names the `currency` of its limits. The slug is unique among the
+        platform's live presets (409 `name_taken`). The platform holds at most 50 live presets and makes at most 500 in
+        all, disabled ones counted (409 `preset_quota`). A key bound to a new preset may be refused 503
+        `preset_unavailable` for up to 5 seconds, until every node has read it.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LayerRoutingPresetCreate"}
+      responses:
+        "201":
+          description: The preset
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPreset"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/routing-presets:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: listSiteRoutingPresets
+      tags: [Routing]
+      summary: A site's routing presets
+      description: >-
+        Every preset of the site's own layer, the live ones first and the disabled ones after; the platform's and the
+        accounts' are not among them. Every key of the site may be bound to a live one.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The presets
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPresetList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createSiteRoutingPreset
+      tags: [Routing]
+      summary: Make a routing preset of a site
+      description: >-
+        Makes a site preset with its first version of rules, checked whole (400 naming `/rules`). Its price limits are
+        in the site's currency, so it names no `currency`, and it has no `advanced` settings. The slug is unique among
+        the site's live presets (409 `name_taken`). A site holds at most 50 live presets and makes at most 500 in all,
+        disabled ones counted (409 `preset_quota`).
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LayerRoutingPresetCreate"}
+      responses:
+        "201":
+          description: The preset
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPreset"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/routing-presets/{preset_id}:
+    parameters:
+      - in: path
+        name: preset_id
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      operationId: getLayerRoutingPreset
+      tags: [Routing]
+      summary: One routing preset of the platform or a site
+      description: >-
+        A preset of the platform or of a site, disabled or not, with its current rules. An account's or a workspace's
+        preset is 404: those are their owners' to manage.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The preset
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPreset"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateLayerRoutingPreset
+      tags: [Routing]
+      summary: Change a routing preset of the platform or a site
+      description: >-
+        Replaces the name, the rules and, for a platform preset, the `currency` of its price limits, at the `revision`
+        the page read (409 `stale_revision` when it moved on). Rules or a currency that differ from the current ones are
+        a new version, which every key bound to the preset is routed by from the next routing snapshot, within 5
+        seconds; a rename keeps the version. A platform preset never serves fewer sites than it did, so the defaults
+        and keys on it stay usable: one that limits no price takes no `currency`, and a priced one keeps its currency or
+        drops its prices (400). The system preset is 403; a disabled preset, and an account's or a workspace's, are
+        404.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LayerRoutingPresetUpdate"}
+      responses:
+        "200":
+          description: The preset as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPreset"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+    delete:
+      operationId: disableLayerRoutingPreset
+      tags: [Routing]
+      summary: Disable a routing preset of the platform or a site
+      description: >-
+        Disables the preset at `revision`. The keys bound to it keep routing by it; no new key or default can choose
+        it. A preset any layer's default still points at is refused 409 `preset_in_use`: change those defaults first. A
+        disabled preset still counts against what its layer may make. The system preset is 403.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LayerRoutingPresetDisable"}
+      responses:
+        "204":
+          description: Disabled; the same Idempotency-Key replays this answer without a second change.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/settings/routing:
+    get:
+      operationId: getPlatformRoutingDefault
+      tags: [Routing]
+      summary: The platform's default routing preset
+      description: >-
+        The preset a new key is bound to when neither its workspace, its account nor its site sets a default; absent
+        `preset_id` means the platform sets none either and such keys take the system preset.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The platform's default
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingDefault"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setPlatformRoutingDefault
+      tags: [Routing]
+      summary: Set the platform's default routing preset
+      description: >-
+        Points the platform's default at a live platform preset that limits no price, since it serves sites of every
+        currency, or at the system preset, or clears it with a null `preset_id`, at the `version` the page read (409
+        `stale_revision` when it moved on). Only keys made after the change take it. Any other preset is 400
+        `preset_not_selectable`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LayerRoutingDefaultUpdate"}
+      responses:
+        "200":
+          description: The platform's default as set
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingDefault"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/routing-default:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: getSiteRoutingDefault
+      tags: [Routing]
+      summary: A site's default routing preset
+      description: >-
+        The preset a new key of the site is bound to when neither its workspace nor its account sets a default; absent
+        `preset_id` means the site sets none and such keys take the platform's.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The site's default
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingDefault"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setSiteRoutingDefault
+      tags: [Routing]
+      summary: Set a site's default routing preset
+      description: >-
+        Points the site's default at a live preset of the platform (one that limits prices only in the site's currency)
+        or of the site, or clears it with a null `preset_id`, at the `version` the page read (409 `stale_revision` when
+        it moved on). Only keys made after the change take it. The system preset, a disabled preset and any other are
+        400 `preset_not_selectable`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LayerRoutingDefaultUpdate"}
+      responses:
+        "200":
+          description: The site's default as set
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingDefault"}
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
@@ -7234,6 +7567,82 @@ components:
       required: [rev, reason]
       properties:
         rev: {type: integer, format: int64, minimum: 1}
+        reason: {$ref: "#/components/schemas/Reason"}
+    RoutingRules:
+      x-go-type: jsonx.Raw
+      type: object
+      description: >-
+        A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`,
+        up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort`
+        (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all),
+        `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million
+        tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
+    RoutingPresetScope:
+      type: string
+      enum: [platform, site, account, workspace]
+      description: The layer the preset belongs to.
+    RoutingPreset:
+      type: object
+      required: [id, scope, slug, name, revision, version, rules, disabled, created_at, updated_at]
+      properties:
+        id: {type: string, format: uuid}
+        scope: {$ref: "#/components/schemas/RoutingPresetScope"}
+        slug: {type: string}
+        name: {type: string}
+        revision: {type: integer, format: int64, description: "Moves on every change; a change names the revision it read."}
+        version: {type: integer, format: int64, description: "The rules' version, which moves only when the rules change."}
+        currency: {type: string, description: "The currency of a platform preset's price limits; absent for the others, which are in the site's."}
+        rules: {$ref: "#/components/schemas/RoutingRules"}
+        disabled: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    RoutingPresetList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/RoutingPreset"}
+    RoutingDefault:
+      type: object
+      required: [version]
+      properties:
+        preset_id: {type: string, format: uuid, description: "Absent when the layer sets no default."}
+        version: {type: integer, format: int64, minimum: 0, description: "0 when the layer has no default; a change names the version it read."}
+    LayerRoutingPresetCreate:
+      type: object
+      additionalProperties: false
+      required: [slug, name, rules, reason]
+      properties:
+        slug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,63}$', description: "Unique among the layer's live presets; it cannot be changed."}
+        name: {type: string, minLength: 1, maxLength: 100}
+        currency: {type: string, pattern: '^[A-Z]{3}$', description: "The currency of a platform preset's price limits, required when it limits a price; a site's preset names none."}
+        rules: {$ref: "#/components/schemas/RoutingRules"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    LayerRoutingPresetUpdate:
+      type: object
+      additionalProperties: false
+      required: [name, rules, revision, reason]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        currency: {type: string, pattern: '^[A-Z]{3}$', description: "As on creation; left out, the preset limits no price in any currency."}
+        rules: {$ref: "#/components/schemas/RoutingRules"}
+        revision: {type: integer, format: int64, minimum: 1}
+        reason: {$ref: "#/components/schemas/Reason"}
+    LayerRoutingPresetDisable:
+      type: object
+      additionalProperties: false
+      required: [revision, reason]
+      properties:
+        revision: {type: integer, format: int64, minimum: 1}
+        reason: {$ref: "#/components/schemas/Reason"}
+    LayerRoutingDefaultUpdate:
+      type: object
+      additionalProperties: false
+      required: [preset_id, version, reason]
+      properties:
+        preset_id: {type: string, format: uuid, nullable: true, description: "null clears the layer's default."}
+        version: {type: integer, format: int64, minimum: 0}
         reason: {$ref: "#/components/schemas/Reason"}
     ProbeSettings:
       type: object
