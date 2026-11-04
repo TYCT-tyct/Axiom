@@ -77,7 +77,7 @@ function TargetsForm({
   // write is refused; reload then fills both from the query that the refusal has refreshed.
   const [read, reload] = useSnapshot(view);
   const metrics = read.metrics ?? legacyTargetMetrics;
-  const full = read.metrics !== undefined;
+  const full = read.metrics?.includes("paid_users") ?? false;
   return (
     <ChangeDialog
       operation={`operations-targets:${month}`}
