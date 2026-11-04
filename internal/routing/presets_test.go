@@ -3,6 +3,7 @@ package routing_test
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -115,6 +116,34 @@ func TestReadRulesRefuses(t *testing.T) {
 				t.Errorf("ReadRules: %v, want ErrRules", err)
 			}
 		})
+	}
+}
+
+// TestReadRulesBoundsTheDurations: the platform's sticky time and attempt window are held to their bounds in whole
+// seconds, so a number whose Duration would wrap negative is refused rather than taken as a window already over.
+func TestReadRulesBoundsTheDurations(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		field string
+		value int64
+		ok    bool
+	}{
+		{"sticky_ttl", 86400, true},
+		{"sticky_ttl", 86401, false},
+		{"sticky_ttl", -1, false},
+		{"sticky_ttl", math.MaxInt64, false},
+		{"attempt_window", 600, true},
+		{"attempt_window", 601, false},
+		{"attempt_window", math.MaxInt64, false},
+	} {
+		p := layered(routing.ScopePlatform)
+		err := p.ReadRules(fmt.Appendf(nil, `{"default":{},"advanced":{%q:%d}}`, tc.field, tc.value))
+		if (err == nil) != tc.ok || err != nil && !errors.Is(err, routing.ErrRules) {
+			t.Errorf("%s %d: %v", tc.field, tc.value, err)
+		}
+		if tc.ok && max(p.StickyTTL, p.AttemptWindow) != time.Duration(tc.value)*time.Second {
+			t.Errorf("%s %d: read as %v and %v", tc.field, tc.value, p.StickyTTL, p.AttemptWindow)
+		}
 	}
 }
 

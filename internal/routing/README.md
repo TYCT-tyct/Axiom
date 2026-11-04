@@ -71,7 +71,7 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 - **`Presets.Load`**：每次快照构建读一次全部预设的头（含停用的，绑定它的 key 仍按它走），只为没编译过的 `(id, version)` 读规则；编译过的版本留在进程里，不再指向的就丢掉。读不懂的版本记一行 `routing.preset_isolated` 警告（每个版本只记一次）并不进快照，其余照常；系统预设缺失或读不懂时返回错误，快照不换。
 - **`NewSnapshot`**：把每个预设的按作者、按模型规则建成指针表，`Plan` 每个模型查一到两次表，不复制规则、不分配（`BenchmarkPlanPreset`）。
 - **`DefaultPreset`**：在建 key 的事务里（key 自己的范围）取最深的、设了默认的层；没有任何层就是系统预设。默认指向的预设已停用、这把 key 看不到或币种不符时返回 `ErrDefaultInvalid`，不退到更宽的层。cmd 把它作为 `accounts.Config.KeyPreset` 接上。
-- **测试**：`TestReadRulesRefuses`、`TestReadRulesInherits` 覆盖规则的校验和继承；`TestPresetRulesRoute` 覆盖每种规则在默认、作者、模型三层的效果与平台的顺序、关闭回退、质量下限；`TestRequestOnlyTightensThePreset` 覆盖请求覆盖只能收紧；`TestPresetVisibility` 覆盖层与币种；`TestPresetsLoad`、`TestDefaultPresetLayers`、`TestPresetTablesKeepTenantsApart` 走真实数据库，覆盖系统预设、隔离、新版本、停用、默认链和租户隔离；`cmd/axiom` 的 `TestNewKeysTakeTheDefaultPreset` 覆盖控制台和管理 key 建 key 时落章。
+- **测试**：`TestReadRulesRefuses`、`TestReadRulesInherits` 覆盖规则的校验和继承，`TestReadRulesBoundsTheDurations` 覆盖平台时长按整秒比较上限、不因换算成 `time.Duration` 溢出而放过；`TestPresetRulesRoute` 覆盖每种规则在默认、作者、模型三层的效果与平台的顺序、关闭回退、质量下限；`TestRequestOnlyTightensThePreset` 覆盖请求覆盖只能收紧；`TestPresetVisibility` 覆盖层与币种；`TestPresetsLoad`、`TestDefaultPresetLayers`、`TestPresetTablesKeepTenantsApart` 走真实数据库，覆盖系统预设、隔离、新版本、停用、默认链和租户隔离；`cmd/axiom` 的 `TestNewKeysTakeTheDefaultPreset` 覆盖控制台和管理 key 建 key 时落章。
 
 ## 健康闭环
 

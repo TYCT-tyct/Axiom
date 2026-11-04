@@ -419,8 +419,9 @@ func (a *advancedJSON) check() error {
 		{slices.Contains(a.Order, "") || len(slices.Compact(slices.Sorted(slices.Values(a.Order)))) != len(a.Order), "order names empty or repeated groups"},
 		{a.NoFallbacks && len(a.Order) == 0, "no_fallbacks needs an order"},
 		{a.MaxAttempts < 0 || a.MaxAttempts > MaxEntries+1, fmt.Sprintf("max_attempts must be from 0 to %d", MaxEntries+1)},
-		{a.StickyTTL < 0 || time.Duration(a.StickyTTL)*time.Second > maxStickyTTL, fmt.Sprintf("sticky_ttl must be from 0 to %d seconds", int64(maxStickyTTL/time.Second))},
-		{a.AttemptWindow < 0 || time.Duration(a.AttemptWindow)*time.Second > maxAttemptWindow, fmt.Sprintf("attempt_window must be from 0 to %d seconds", int64(maxAttemptWindow/time.Second))},
+		// The seconds are compared before they become a Duration: a huge number times a second would wrap.
+		{!within(a.StickyTTL, maxStickyTTL), fmt.Sprintf("sticky_ttl must be from 0 to %d seconds", int64(maxStickyTTL/time.Second))},
+		{!within(a.AttemptWindow, maxAttemptWindow), fmt.Sprintf("attempt_window must be from 0 to %d seconds", int64(maxAttemptWindow/time.Second))},
 		{!fraction(a.MinQuality) || !fraction(a.MinConfidence), "min_quality and min_confidence must be from 0 to 1"},
 	} {
 		if c.bad {
@@ -431,3 +432,8 @@ func (a *advancedJSON) check() error {
 }
 
 func fraction(v float64) bool { return v >= 0 && v <= 1 } // false for NaN too
+
+// within reports whether seconds is from 0 to most, compared in whole seconds.
+func within(seconds int64, most time.Duration) bool {
+	return seconds >= 0 && seconds <= int64(most/time.Second)
+}
