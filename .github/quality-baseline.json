@@ -9,15 +9,14 @@
     "bodyclose": 1,
     "containedctx": 4,
     "contextcheck": 6,
-    "cyclop": 42,
+    "cyclop": 31,
     "depguard": 72,
     "dupl": 6,
     "errcheck": 132,
     "errorlint": 4,
     "exhaustive": 35,
     "forcetypeassert": 2,
-    "funlen": 11,
-    "gocognit": 15,
+    "funlen": 7,
     "gosec": 116,
     "modernize": 3,
     "nilerr": 7,
@@ -26,13 +25,8 @@
     "staticcheck": 1,
     "unparam": 1
   },
-  "functions_over_gocognit_15": 15,
-  "gocognit_ceiling": [
-    {
-      "function": "internal/quality/classes.go:compileClasses",
-      "complexity": 31
-    }
-  ],
-  "files_over_500_lines": 34,
+  "functions_over_gocognit_15": 0,
+  "gocognit_ceiling": [],
+  "files_over_500_lines": 17,
   "file_ceiling": []
 }
