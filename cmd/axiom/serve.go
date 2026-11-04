@@ -166,7 +166,7 @@ func runNode(ctx context.Context, cfg nodeSettings, servers []*listening, routes
 	logger *slog.Logger, queue *pg.Queue, recorder *observability.Recorder, cache *kv.Client, cancelSync context.CancelFunc,
 ) error {
 	health := httpserver.Health{Metrics: tel.MetricsHandler()}
-	node(servers, cfg, routes.public, routes.admin, &health, logger, requests)
+	node(servers, cfg, routes, &health, logger, requests)
 	served := startServing(cfg.roles, servers, logger)
 	// Not ready until a routing snapshot can route, which startCallPath has already published or will on its next
 	// rebuild.
@@ -238,18 +238,21 @@ func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error, los
 // enforces. The master key file is read once here; the database check (openCheckedDatabase) gives that one ring the
 // write version the database chose, and the login and mail keys were derived from the same snapshot.
 type consoleParts struct {
-	cfg            nodeSettings
-	gate           gateway.Config     // the in-process limits the call path and the accounts module share
-	masterKeys     *secret.MasterKeys // the one master-key read; the mail worker derives the recipient key from it
-	master         *secret.Keyring    // seals users' TOTP secrets and suppliers' credentials; openCheckedDatabase sets its write version
-	loginKey       secret.LoginKey    // from the same master-key snapshot, under the login label
-	hashes         *secret.MACKeys    // keys API keys are hashed with
-	identity       []byte             // derives what replaces the client's identifiers upstream
-	contract       *contract
-	adminContract  *contract
-	frontend       *webui.Frontend // the pages of the three apps
-	alerts         alert.Sink
-	paymentSignals *payments.SignalState
+	cfg           nodeSettings
+	gate          gateway.Config     // the in-process limits the call path and the accounts module share
+	masterKeys    *secret.MasterKeys // the one master-key read; the mail worker derives the recipient key from it
+	master        *secret.Keyring    // seals users' TOTP secrets and suppliers' credentials; openCheckedDatabase sets its write version
+	loginKey      secret.LoginKey    // from the same master-key snapshot, under the login label
+	hashes        *secret.MACKeys    // keys API keys are hashed with
+	identity      []byte             // derives what replaces the client's identifiers upstream
+	contract      *contract
+	adminContract *contract
+	// operationsContract is read even when the operations listener is off, so a contract this program cannot enforce
+	// fails every start, not the first one that opens the listener.
+	operationsContract *contract
+	frontend           *webui.Frontend // the pages of the three apps
+	alerts             alert.Sink
+	paymentSignals     *payments.SignalState
 }
 
 func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) {
@@ -280,12 +283,16 @@ func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) 
 	if err != nil {
 		return consoleParts{}, err
 	}
+	operations, err := operationsContract()
+	if err != nil {
+		return consoleParts{}, err
+	}
 	frontend, err := webui.Open(cfg.webAssetsDir)
 	if err != nil {
 		return consoleParts{}, err
 	}
 	return consoleParts{
-		cfg: cfg, gate: limits, masterKeys: master, master: master.Keyring(), loginKey: loginKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, frontend: frontend,
+		cfg: cfg, gate: limits, masterKeys: master, master: master.Keyring(), loginKey: loginKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, operationsContract: operations, frontend: frontend,
 	}, nil
 }
 

@@ -100,6 +100,12 @@ func TestRoleConfigurationRefusesContradictions(t *testing.T) {
 		{"a core that forwards", coreEnviron("AXIOM_CORE_URL=https://core.internal"), "AXIOM_CORE_URL: only an ingress forwards to a core"},
 		{"an admin listener without sources on every address", coreEnviron("AXIOM_ADMIN_ADDR=:8082"), "AXIOM_ADMIN_SOURCES: required"},
 		{"certificates without the listener", coreEnviron("AXIOM_NODE_TLS_DIR=" + tlsDir), "AXIOM_NODE_TLS_DIR: set without AXIOM_NODE_ADDR"},
+		{"an operations listener on an ops node", []string{"AXIOM_NODE_ROLES=ops", "AXIOM_OPERATIONS_ADDR=127.0.0.1:0"}, "AXIOM_OPERATIONS_ADDR: not used"},
+		{"an operations listener without sources on every address", coreEnviron("AXIOM_OPERATIONS_ADDR=:8084",
+			"AXIOM_NODE_TLS_DIR="+filepath.Join(t.TempDir(), "absent")), "AXIOM_OPERATIONS_SOURCES: required"},
+		{"operations sources without the listener", coreEnviron("AXIOM_OPERATIONS_SOURCES=10.0.0.0/8"), "AXIOM_OPERATIONS_SOURCES: set without AXIOM_OPERATIONS_ADDR"},
+		{"an operations listener without certificates", coreEnviron("AXIOM_OPERATIONS_ADDR=127.0.0.1:0",
+			"AXIOM_NODE_TLS_DIR="+filepath.Join(t.TempDir(), "absent")), "node.crt: file not found"},
 		{"a node listener without certificates", coreEnviron("AXIOM_NODE_ADDR=127.0.0.1:0",
 			"AXIOM_NODE_TLS_DIR="+filepath.Join(t.TempDir(), "absent")), "node.crt: file not found"},
 	}

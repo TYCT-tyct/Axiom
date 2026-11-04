@@ -88,6 +88,89 @@ components:
 `, "@", surface)
 }
 
+// agentFixture is a small valid operations contract: two reads, each one MCP tool. Each case breaks one thing in it.
+const agentFixture = `openapi: 3.0.3
+info: {title: t, version: v1}
+paths:
+  /api/operations/v1/things:
+    get:
+      operationId: thingsList
+      tags: [Things]
+      summary: s
+      security: [{credential: []}]
+      x-axiom-permission: things.view
+      x-axiom-scope: platform
+      x-mcp-name: things_list
+      parameters:
+        - $ref: "#/components/parameters/Reason"
+      responses:
+        "200": {description: ok}
+        "401": {$ref: "#/components/responses/Failure"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/operations/v1/me:
+    get:
+      operationId: whoami
+      tags: [Agent]
+      summary: s
+      security: [{credential: []}]
+      x-axiom-permission: operations.read
+      x-axiom-scope: self
+      x-mcp-name: whoami
+      parameters:
+        - $ref: "#/components/parameters/Reason"
+      responses:
+        "200": {description: ok}
+        "401": {$ref: "#/components/responses/Failure"}
+        default: {$ref: "#/components/responses/Failure"}
+components:
+  securitySchemes:
+    credential: {type: http, scheme: bearer}
+    session: {type: apiKey, in: cookie, name: s}
+  parameters:
+    Reason: {name: reason, in: query, required: true, schema: {type: string}}
+  responses:
+    Failure:
+      description: failed
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+  schemas:
+    Error:
+      type: object
+      properties: {error: {type: string}}
+`
+
+func TestCheckOperations(t *testing.T) {
+	const things = "operations.yaml: GET /api/operations/v1/things: "
+	cases := []struct{ name, from, to, want string }{
+		{"a valid contract", "", "", ""},
+		{"a session instead of the credential", "security: [{credential: []}]\n      x-axiom-permission: things.view", "security: [{session: []}]\n      x-axiom-permission: things.view", "security must be the one requirement credential"},
+		{"a session level", "x-axiom-scope: platform", "x-axiom-scope: platform\n      x-axiom-level: mfa", "an operations credential has no x-axiom-level"},
+		{"no permission", "x-axiom-permission: things.view", "x-axiom-permission: none", "x-axiom-permission must name a permission"},
+		{"an unknown scope", "x-axiom-scope: platform", "x-axiom-scope: everything", "x-axiom-scope must be one of [platform sites self]"},
+		{"no reason", "      parameters:\n        - $ref: \"#/components/parameters/Reason\"\n      responses:\n        \"200\": {description: ok}\n        \"401\": {$ref: \"#/components/responses/Failure\"}\n        default: {$ref: \"#/components/responses/Failure\"}\n  /api/operations/v1/me", "      responses:\n        \"200\": {description: ok}\n        \"401\": {$ref: \"#/components/responses/Failure\"}\n        default: {$ref: \"#/components/responses/Failure\"}\n  /api/operations/v1/me", "an operation takes the Reason parameter"},
+		{"a tool name that is not snake case", "x-mcp-name: things_list", "x-mcp-name: thingsList", "x-mcp-name must be lower_snake_case"},
+		{"no tool name", "      x-mcp-name: things_list\n", "", "x-mcp-name must be lower_snake_case"},
+		{"one tool name twice", "x-mcp-name: things_list", "x-mcp-name: whoami", "x-mcp-name whoami is also whoami's"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			text := strings.Replace(agentFixture, c.from, c.to, 1)
+			if text == agentFixture && c.from != "" {
+				t.Fatal("the case changes nothing")
+			}
+			var want []string
+			if c.want != "" {
+				want = []string{things + c.want}
+			}
+			got := check(map[string][]byte{"operations.yaml": []byte(text)})
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("problems (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestCheck(t *testing.T) {
 	cases := []struct {
 		name  string

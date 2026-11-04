@@ -20,6 +20,7 @@ var (
 	keyPrefix          = typeid.MustPrefix("key")
 	sessionPrefix      = typeid.MustPrefix("sess")
 	passkeyPrefix      = typeid.MustPrefix("pk")
+	agentPrefix        = typeid.MustPrefix("opcred")
 )
 
 // SiteID is a site's ID.
@@ -128,4 +129,16 @@ func (id AnnouncementID) TypeID() string { return announcementPrefix.Encode(uuid
 func ParseAnnouncementID(s string) (AnnouncementID, error) {
 	id, err := announcementPrefix.Decode(s)
 	return AnnouncementID(id), err
+}
+
+// AgentID is an operations credential's ID.
+type AgentID uuid.UUID
+
+// TypeID writes the ID as the API shows it.
+func (id AgentID) TypeID() string { return agentPrefix.Encode(uuid.UUID(id)) }
+
+// ParseAgentID reads only operations credential TypeIDs.
+func ParseAgentID(s string) (AgentID, error) {
+	id, err := agentPrefix.Decode(s)
+	return AgentID(id), err
 }
