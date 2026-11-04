@@ -467,11 +467,11 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	return h
 }
 
-//nolint:cyclop,gocognit // the harness fills every request field the scenario may need
-func (h *harness) newCall(o options, request []byte, client, upstream protocol.Format) *Call {
+// admitServerTool does what admission does for the server tool: strips it before routing, records the loop and counts
+// the searches the cap allows.
+func (h *harness) admitServerTool(o options, request []byte, client protocol.Format) ([]byte, protocol.Request) {
 	h.t.Helper()
-	n := max(o.entries, 1)
-	schedule, err := catalog.ParseSchedule([]byte(cmpOr(o.price, cheap)))
+	request, err := protocol.RemoveServerTool(client, request)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -479,35 +479,23 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	if o.server != nil {
-		// Admission strips the tool before routing and decides the loop; the harness builds its plan directly, so it
-		// does the same here, with the one backend it was given.
-		request, err = protocol.RemoveServerTool(client, request)
-		if err != nil {
-			h.t.Fatal(err)
-		}
-		req, err = protocol.Inspect(client, request)
-		if err != nil {
-			h.t.Fatal(err)
-		}
-		req.ServerSearch, req.Needs = o.server, req.Needs|protocol.Tools|protocol.WebSearch
-		o.server.Loop = true
-		cap := int(o.server.MaxUses)
-		if cap == 0 {
-			cap = protocol.DefaultServerToolCalls
-		}
-		if req.HasMaxToolCalls {
-			cap = min(cap, int(req.MaxToolCalls))
-		}
-		req.WebSearches = int64(cap)
+	req.ServerSearch, req.Needs = o.server, req.Needs|protocol.Tools|protocol.WebSearch
+	o.server.Loop = true
+	cap := int(o.server.MaxUses)
+	if cap == 0 {
+		cap = protocol.DefaultServerToolCalls
 	}
-	req.ServiceTiers = 1 << catalog.ServiceTierStandard // the schedule prices that tier only
-	req.FileParses = o.fileParses                       // the parse step ran before admission, so the quote sees it
-	req.FilePages = o.filePages
-	req.FileBilling = o.fileBilling
-	request = setStream(&req, request, o.stream)
-	var quotes []billing.Quotable
+	if req.HasMaxToolCalls {
+		cap = min(cap, int(req.MaxToolCalls))
+	}
+	req.WebSearches = int64(cap)
+	return request, req
+}
+
+// fillPlan builds the route's entries and their quotes for one scenario.
+func (h *harness) fillPlan(o options, schedule catalog.Schedule, upstream protocol.Format, n int) (routing.Plan, []billing.Quotable) {
 	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}
+	var quotes []billing.Quotable
 	for i := 1; i <= n; i++ {
 		limits := billing.Model{ContextLength: 100000, OutputSpeed: 100}
 		quotes = append(quotes, billing.Quotable{Price: schedule, Model: limits, MaxOutput: 1000, Segmentable: o.segmentable})
@@ -528,6 +516,60 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		}
 		h.up.eps[uuid.UUID(ep(i))] = &fakeEndpoint{script: script, policy: o.policy, noSlot: slices.Contains(o.noSlot, i)}
 	}
+	return plan, quotes
+}
+
+// attachSearch resolves the one search backend the harness was given, for the server loop or the web plugin.
+func (h *harness) attachSearch(c *Call, o options, req *protocol.Request, request []byte) {
+	h.t.Helper()
+	if req.Web != nil {
+		var err error
+		if c.search, err = protocol.ChatSearchQuery(request); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	if req.Web == nil && o.server == nil {
+		return
+	}
+	maxResults := 0
+	if req.Web != nil {
+		maxResults = req.Web.MaxResults
+	}
+	if o.server != nil {
+		maxResults = o.server.MaxResults
+	}
+	backend, ok := (singleSearch{o.search}).Default()
+	if !ok {
+		return
+	}
+	c.searchBackend = backend
+	var err error
+	if c.searchPrice, err = backend.Price(maxResults); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// newCall fills every request field the scenario may need.
+func (h *harness) newCall(o options, request []byte, client, upstream protocol.Format) *Call {
+	h.t.Helper()
+	n := max(o.entries, 1)
+	schedule, err := catalog.ParseSchedule([]byte(cmpOr(o.price, cheap)))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	req, err := protocol.Inspect(client, request)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if o.server != nil {
+		request, req = h.admitServerTool(o, request, client)
+	}
+	req.ServiceTiers = 1 << catalog.ServiceTierStandard // the schedule prices that tier only
+	req.FileParses = o.fileParses                       // the parse step ran before admission, so the quote sees it
+	req.FilePages = o.filePages
+	req.FileBilling = o.fileBilling
+	request = setStream(&req, request, o.stream)
+	plan, quotes := h.fillPlan(o, schedule, upstream, n)
 	if req.Web != nil {
 		req.SearchBytes = protocol.WebSearchMaxBytes
 	}
@@ -540,28 +582,8 @@ func (h *harness) newCall(o options, request []byte, client, upstream protocol.F
 		ID: uuid.NewV7(), Format: client, Request: req, Body: request,
 		Header: http.Header{"Anthropic-Beta": {"beta-1"}}, Hold: &billing.Hold{Reservation: r}, Plan: plan,
 	}
-	if o.server != nil {
-		c.serverLoop = true
-		if backend, ok := (singleSearch{o.search}).Default(); ok {
-			c.searchBackend = backend
-			if c.searchPrice, err = backend.Price(o.server.MaxResults); err != nil {
-				h.t.Fatal(err)
-			}
-		}
-	}
-	if req.Web != nil {
-		if c.search, err = protocol.ChatSearchQuery(request); err != nil {
-			h.t.Fatal(err)
-		}
-		// Admission resolves the engine in production; the harness builds its plan directly, so it resolves the one
-		// backend it was given here.
-		if backend, ok := (singleSearch{o.search}).Default(); ok {
-			c.searchBackend = backend
-			if c.searchPrice, err = backend.Price(req.Web.MaxResults); err != nil {
-				h.t.Fatal(err)
-			}
-		}
-	}
+	c.serverLoop = o.server != nil
+	h.attachSearch(c, o, &req, request)
 	c.hold(func() { close(h.released) })
 	if o.mutate != nil {
 		o.mutate(c)

@@ -64,7 +64,75 @@ func serverHarness(t *testing.T, ctx context.Context, searcher websearch.Searche
 	})
 }
 
-//nolint:cyclop,gocognit // one assertion per hop of the loop
+// checkServerLoopSearch asserts the search ran once with the request's text and cap.
+func checkServerLoopSearch(t *testing.T, searcher *recordingSearcher) {
+	t.Helper()
+	if len(searcher.queries) != 1 || searcher.queries[0].Text != "axiom" || searcher.queries[0].MaxResults != 2 {
+		t.Fatalf("searches = %+v", searcher.queries)
+	}
+}
+
+// checkServerLoopUpstream asserts the two hops declare the function and carry its result.
+func checkServerLoopUpstream(t *testing.T, h *harness) {
+	t.Helper()
+	calls := h.up.endpoint(1).calls
+	if len(calls) != 2 {
+		t.Fatalf("the upstream got %d calls, want 2", len(calls))
+	}
+	if !strings.Contains(string(calls[0].Body), `"name":"openrouter_web_search"`) ||
+		!strings.Contains(string(calls[0].Body), `"type":"function"`) {
+		t.Fatalf("the first hop does not declare the function: %s", calls[0].Body)
+	}
+	if strings.Contains(string(calls[0].Body), "openrouter:web_search") {
+		t.Fatalf("the first hop still carries the tool declaration: %s", calls[0].Body)
+	}
+	second := string(calls[1].Body)
+	if !strings.Contains(second, `"role":"tool"`) || !strings.Contains(second, "Search results for") ||
+		!strings.Contains(second, "https://example.com/one") {
+		t.Fatalf("the second hop does not carry the result: %s", second)
+	}
+}
+
+// checkServerLoopClient asserts the client saw the answer, not the tool hop, in one stream.
+func checkServerLoopClient(t *testing.T, h *harness) {
+	t.Helper()
+	if !strings.Contains(h.w.body(), "Axiom is a gateway.") || strings.Contains(h.w.body(), "call_1") ||
+		strings.Count(h.w.body(), "[DONE]") != 1 {
+		t.Fatalf("the client saw the tool hop or more than one stream: %s", h.w.body())
+	}
+}
+
+// checkServerLoopHops asserts the search ran once and the two upstream hops declare the function and carry its result.
+func checkServerLoopHops(t *testing.T, h *harness, searcher *recordingSearcher) {
+	t.Helper()
+	if h.w.status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", h.w.status, h.w.body())
+	}
+	checkServerLoopSearch(t, searcher)
+	checkServerLoopUpstream(t, h)
+	checkServerLoopClient(t, h)
+}
+
+// checkServerLoopSettlement asserts each hop settled as its own delivered attempt and the search was billed once.
+func checkServerLoopSettlement(t *testing.T, h *harness) {
+	t.Helper()
+	out := h.settlements[0].outcome
+	if len(out.Attempts) != 2 {
+		t.Fatalf("settled attempts = %+v, want one per supplier request", out.Attempts)
+	}
+	for i, at := range out.Attempts {
+		if at.Seq != i+1 || at.Continues != (i > 0) || len(at.Segments) != 1 || at.Result != billing.Committed {
+			t.Fatalf("attempt %d = %+v, want sampling %d of the loop, delivered", i, at, i+1)
+		}
+	}
+	if out.Attempts[0].Finish != billing.FinishToolUse || out.Attempts[1].Finish != billing.FinishStop {
+		t.Fatalf("finishes = %d, %d; want tool use, then stop", out.Attempts[0].Finish, out.Attempts[1].Finish)
+	}
+	if got := out.Attempts[0].Segments[0].Usage.Count(catalog.ItemWebSearch); got != 1 {
+		t.Fatalf("settled searches = %d, want 1", got)
+	}
+}
+
 func TestServerLoopSearchesAndAnswersInOneStream(t *testing.T) {
 	t.Parallel()
 	run(t, func(t *testing.T, ctx context.Context) {
@@ -74,48 +142,8 @@ func TestServerLoopSearchesAndAnswersInOneStream(t *testing.T) {
 		}}
 		h := serverHarness(t, ctx, searcher, serve(beat{data: chatToolCall}), serve(beat{data: chatAnswer}))
 		h.run()
-
-		if h.w.status != http.StatusOK {
-			t.Fatalf("status = %d, body = %s", h.w.status, h.w.body())
-		}
-		if len(searcher.queries) != 1 || searcher.queries[0].Text != "axiom" || searcher.queries[0].MaxResults != 2 {
-			t.Fatalf("searches = %+v", searcher.queries)
-		}
-		calls := h.up.endpoint(1).calls
-		if len(calls) != 2 {
-			t.Fatalf("the upstream got %d calls, want 2", len(calls))
-		}
-		if !strings.Contains(string(calls[0].Body), `"name":"openrouter_web_search"`) ||
-			!strings.Contains(string(calls[0].Body), `"type":"function"`) {
-			t.Fatalf("the first hop does not declare the function: %s", calls[0].Body)
-		}
-		if strings.Contains(string(calls[0].Body), "openrouter:web_search") {
-			t.Fatalf("the first hop still carries the tool declaration: %s", calls[0].Body)
-		}
-		second := string(calls[1].Body)
-		if !strings.Contains(second, `"role":"tool"`) || !strings.Contains(second, "Search results for") ||
-			!strings.Contains(second, "https://example.com/one") {
-			t.Fatalf("the second hop does not carry the result: %s", second)
-		}
-		if !strings.Contains(h.w.body(), "Axiom is a gateway.") || strings.Contains(h.w.body(), "call_1") ||
-			strings.Count(h.w.body(), "[DONE]") != 1 {
-			t.Fatalf("the client saw the tool hop or more than one stream: %s", h.w.body())
-		}
-		out := h.settlements[0].outcome
-		if len(out.Attempts) != 2 {
-			t.Fatalf("settled attempts = %+v, want one per supplier request", out.Attempts)
-		}
-		for i, at := range out.Attempts {
-			if at.Seq != i+1 || at.Continues != (i > 0) || len(at.Segments) != 1 || at.Result != billing.Committed {
-				t.Fatalf("attempt %d = %+v, want sampling %d of the loop, delivered", i, at, i+1)
-			}
-		}
-		if out.Attempts[0].Finish != billing.FinishToolUse || out.Attempts[1].Finish != billing.FinishStop {
-			t.Fatalf("finishes = %d, %d; want tool use, then stop", out.Attempts[0].Finish, out.Attempts[1].Finish)
-		}
-		if got := out.Attempts[0].Segments[0].Usage.Count(catalog.ItemWebSearch); got != 1 {
-			t.Fatalf("settled searches = %d, want 1", got)
-		}
+		checkServerLoopHops(t, h, searcher)
+		checkServerLoopSettlement(t, h)
 	})
 }
 

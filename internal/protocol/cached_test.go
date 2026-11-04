@@ -77,11 +77,44 @@ func TestCachedReplayZeroesUsage(t *testing.T) {
 	}
 }
 
+// replayCached runs a cached relay over body until the upstream is done, returning the client's bytes.
+func replayCached(t *testing.T, format protocol.Format, body string, currency platform.Currency, aggregate bool) string {
+	t.Helper()
+	r := protocol.NewRelay(format, format, strings.NewReader(body), protocol.UsageContext{}, protocol.RelayOptions{
+		ID: "gen", Model: "m", Created: 1760000000, Memory: protocol.NewMemory(1 << 20), Cached: true, Aggregate: aggregate,
+	})
+	var out []byte
+	for {
+		st, err := r.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, st.Out...)
+		if st.Kind == protocol.StepUpstreamDone {
+			out = append(out, r.Finish(protocol.Final{Currency: currency})...)
+			return string(out)
+		}
+	}
+}
+
+// checkCachedReplay asserts the replay names this call's time when the format has one, drops the stored generation's
+// time, and reports the site's currency.
+func checkCachedReplay(t *testing.T, name, out, callTime string) {
+	t.Helper()
+	if callTime != "" && !strings.Contains(out, callTime) {
+		t.Errorf("a cached %s replay does not name this call's time:\n%s", name, out)
+	}
+	if strings.Contains(out, "1741290958") {
+		t.Errorf("a cached %s replay kept the stored generation's time:\n%s", name, out)
+	}
+	if !strings.Contains(out, `"cost_currency":"USD"`) {
+		t.Errorf("a cached %s replay has no currency:\n%s", name, out)
+	}
+}
+
 // TestACachedReplayUsesThisCallsTimestampAndCurrency: a hit is a new call, not the generation it was stored from. Chat
 // and Responses name this call's start, in both streams and aggregates, and every format reports the site's currency
 // with its zero cost.
-//
-//nolint:gocognit // the table runs every format through both stream and aggregate
 func TestACachedReplayUsesThisCallsTimestampAndCurrency(t *testing.T) {
 	t.Parallel()
 	usd, err := platform.ParseCurrency("USD")
@@ -110,30 +143,7 @@ func TestACachedReplayUsesThisCallsTimestampAndCurrency(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
-				r := protocol.NewRelay(tc.f, tc.f, strings.NewReader(tc.body), protocol.UsageContext{}, protocol.RelayOptions{
-					ID: "gen", Model: "m", Created: 1760000000, Memory: protocol.NewMemory(1 << 20), Cached: true, Aggregate: aggregate,
-				})
-				var out []byte
-				for {
-					st, err := r.Next()
-					if err != nil {
-						t.Fatal(err)
-					}
-					out = append(out, st.Out...)
-					if st.Kind == protocol.StepUpstreamDone {
-						out = append(out, r.Finish(protocol.Final{Currency: usd})...)
-						break
-					}
-				}
-				if tc.time != "" && !strings.Contains(string(out), tc.time) {
-					t.Errorf("a cached %s replay does not name this call's time:\n%s", tc.name, out)
-				}
-				if strings.Contains(string(out), "1741290958") {
-					t.Errorf("a cached %s replay kept the stored generation's time:\n%s", tc.name, out)
-				}
-				if !strings.Contains(string(out), `"cost_currency":"USD"`) {
-					t.Errorf("a cached %s replay has no currency:\n%s", tc.name, out)
-				}
+				checkCachedReplay(t, tc.name, replayCached(t, tc.f, tc.body, usd, aggregate), tc.time)
 			})
 		}
 	}

@@ -1,8 +1,9 @@
 import { consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
-import { accountKey, useErrors } from "@axiom/app";
-import { Button, CopyButton, Dialog, FormError, SubmitButton } from "@axiom/ui";
+import { accountKey } from "@axiom/app";
+import { Button, CopyButton, Dialog, FormError } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { ConfirmDialog } from "./confirm-dialog";
 import { KeyForm } from "./key-form";
 import { keyGuide } from "./key-guide";
 import { siteQuery } from "./queries";
@@ -61,7 +62,9 @@ export function EditKeyDialog({ apiKey, onClose }: { apiKey: Key; onClose: () =>
         pending={update.isPending}
         error={update.error}
         onCancel={onClose}
-        onSubmit={({ expires_at: _expires, ...body }) => update.mutate(body)}
+        onSubmit={({ expires_at: _expires, preset_id, ...body }) =>
+          update.mutate(preset_id && preset_id !== apiKey.preset_id ? { ...body, preset_id } : body)
+        }
       />
     </Dialog>
   );
@@ -69,7 +72,6 @@ export function EditKeyDialog({ apiKey, onClose }: { apiKey: Key; onClose: () =>
 
 export function DeleteKeyDialog({ apiKey, onClose }: { apiKey: Key; onClose: () => void }) {
   const { t } = useTranslation();
-  const errors = useErrors();
   const refresh = useRefreshKeys();
   const remove = useMutation({
     mutationFn: () =>
@@ -80,27 +82,13 @@ export function DeleteKeyDialog({ apiKey, onClose }: { apiKey: Key; onClose: () 
     },
   });
   return (
-    <Dialog title={t("keys.delete.title")} onClose={onClose}>
-      <div className="space-y-4">
-        {remove.isError ? <FormError>{errors.message(remove.error)}</FormError> : null}
-        <p className="text-t2 [overflow-wrap:anywhere]">{t("keys.delete.body", { name: apiKey.name })}</p>
-        <div className="flex justify-end gap-2">
-          <Button size="md" onClick={onClose}>
-            {t("cancel", { ns: "common" })}
-          </Button>
-          <SubmitButton
-            pending={remove.isPending}
-            variant="danger"
-            onClick={(event) => {
-              event.preventDefault();
-              remove.mutate();
-            }}
-          >
-            {t("keys.delete.confirm")}
-          </SubmitButton>
-        </div>
-      </div>
-    </Dialog>
+    <ConfirmDialog
+      title={t("keys.delete.title")}
+      body={t("keys.delete.body", { name: apiKey.name })}
+      confirm={t("keys.delete.confirm")}
+      action={remove}
+      onClose={onClose}
+    />
   );
 }
 

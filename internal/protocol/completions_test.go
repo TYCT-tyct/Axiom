@@ -42,21 +42,69 @@ func completionsStreamOf(n, size int) string {
 	return b.String()
 }
 
+// completionsCase is one request body and the fields Inspect must read from it, or the error it must refuse it with.
+type completionsCase struct {
+	name                            string
+	body                            string
+	text, maxInput, choices, maxOut int64
+	tokens, repeated                int64 // TokenInputs and RepeatedTextBytes
+	stream, capSet, echo            bool
+	promptBytes                     []int64
+	err                             string
+}
+
+// checkCompletionsRefusal asserts the refusal names the offending member and counts as an invalid request.
+func checkCompletionsRefusal(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %v, want %q", err, want)
+	}
+	if !errors.Is(err, protocol.ErrInvalid) {
+		t.Errorf("%v is not an invalid request", err)
+	}
+}
+
+// checkCompletionsCounts asserts the counts the reservation is made of.
+func checkCompletionsCounts(t *testing.T, r protocol.Request, c completionsCase) {
+	t.Helper()
+	if r.Format != protocol.Completions || r.Model != "m" || r.TextBytes != c.text || r.MaxInputBytes != c.maxInput {
+		t.Errorf("request %+v, want text %d, largest %d", r, c.text, c.maxInput)
+	}
+	if r.Choices != c.choices || r.MaxOutput != c.maxOut || r.MaxOutputSet != c.capSet || r.Stream != c.stream {
+		t.Errorf("request %+v, want choices %d, cap %d/%v, stream %v", r, c.choices, c.maxOut, c.capSet, c.stream)
+	}
+	if r.Echo != c.echo || r.TokenInputs != c.tokens || r.RepeatedTextBytes != c.repeated {
+		t.Errorf("request %+v, want echo %v, unseen %d/%d", r, c.echo, c.tokens, c.repeated)
+	}
+}
+
+// checkCompletionsEcho asserts the echoed prompt sizes and the bytes they reserve.
+func checkCompletionsEcho(t *testing.T, r protocol.Request, c completionsCase) {
+	t.Helper()
+	var sizes []int64
+	if e := protocol.EchoOf([]byte(c.body), &r); e != nil {
+		sizes = e.Bytes
+	}
+	if !slices.Equal(sizes, c.promptBytes) || protocol.EchoSize(&r) != 8*int64(len(c.promptBytes)) {
+		t.Errorf("echo sizes %v (%d bytes), want %v", sizes, protocol.EchoSize(&r), c.promptBytes)
+	}
+	if r.InputItems != 1<<catalog.ItemInput || r.ServiceTiers != 1<<catalog.ServiceTierStandard {
+		t.Errorf("items %b, tiers %b", r.InputItems, r.ServiceTiers)
+	}
+}
+
+// checkCompletionsRequest asserts every count the reservation and the echo are made of.
+func checkCompletionsRequest(t *testing.T, r protocol.Request, c completionsCase) {
+	t.Helper()
+	checkCompletionsCounts(t, r, c)
+	checkCompletionsEcho(t, r, c)
+}
+
 // TestCompletionsInspect: the prompt's four forms, the counts the reservation is made of, and the members that are
 // refused before an upstream sees them.
-//
-//nolint:cyclop,gocognit // the table and its assertions are the test
 func TestCompletionsInspect(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct {
-		name                            string
-		body                            string
-		text, maxInput, choices, maxOut int64
-		tokens, repeated                int64 // TokenInputs and RepeatedTextBytes
-		stream, capSet, echo            bool
-		promptBytes                     []int64
-		err                             string
-	}{
+	for _, c := range []completionsCase{
 		{name: "string", body: `{"model":"m","prompt":"Say hi"}`, text: 6, maxInput: 6, choices: 1},
 		{name: "strings", body: `{"model":"m","prompt":["a","bc"]}`, text: 3, maxInput: 2, choices: 2},
 		{name: "strings with n", body: `{"model":"m","prompt":["a","bc"],"n":3}`, text: 3, maxInput: 2, choices: 6},
@@ -96,33 +144,13 @@ func TestCompletionsInspect(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			r, err := protocol.Inspect(protocol.Completions, []byte(c.body))
 			if c.err != "" {
-				if err == nil || !strings.Contains(err.Error(), c.err) {
-					t.Fatalf("error %v, want %q", err, c.err)
-				}
-				if !errors.Is(err, protocol.ErrInvalid) {
-					t.Errorf("%v is not an invalid request", err)
-				}
+				checkCompletionsRefusal(t, err, c.err)
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if r.Format != protocol.Completions || r.Model != "m" || r.TextBytes != c.text || r.MaxInputBytes != c.maxInput ||
-				r.Choices != c.choices || r.MaxOutput != c.maxOut || r.MaxOutputSet != c.capSet || r.Stream != c.stream ||
-				r.Echo != c.echo || r.TokenInputs != c.tokens || r.RepeatedTextBytes != c.repeated {
-				t.Errorf("request %+v, want text %d, largest %d, choices %d, cap %d/%v, stream %v, echo %v, unseen %d/%d",
-					r, c.text, c.maxInput, c.choices, c.maxOut, c.capSet, c.stream, c.echo, c.tokens, c.repeated)
-			}
-			var sizes []int64
-			if e := protocol.EchoOf([]byte(c.body), &r); e != nil {
-				sizes = e.Bytes
-			}
-			if !slices.Equal(sizes, c.promptBytes) || protocol.EchoSize(&r) != 8*int64(len(c.promptBytes)) {
-				t.Errorf("echo sizes %v (%d bytes), want %v", sizes, protocol.EchoSize(&r), c.promptBytes)
-			}
-			if r.InputItems != 1<<catalog.ItemInput || r.ServiceTiers != 1<<catalog.ServiceTierStandard {
-				t.Errorf("items %b, tiers %b", r.InputItems, r.ServiceTiers)
-			}
+			checkCompletionsRequest(t, r, c)
 		})
 	}
 }

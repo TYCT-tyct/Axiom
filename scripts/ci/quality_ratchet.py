@@ -11,9 +11,10 @@ What is measured, in hand-written non-test Go:
   linters counts once under each, so the per-linter counts sum above the number of directives.
 - functions over gocognit's configured threshold (15), using gocognit, the library golangci-lint's gocognit linter
   uses, pinned in tools/go.mod so the numbers match lint. //gocognit:ignore is not honored: the ratchet sees what lint
-  was told to skip.
+  was told to skip. Test functions (_test.go) are counted apart from non-test ones and ratchet the same threshold, so a
+  branching test cannot hide behind the test exclusion the other counts have.
 - files over 500 physical lines. This is stricter than revive's file-length-limit, which skips comments and blank
-  lines, and is what the review counted.
+  lines, and is what the review counted. Test files are not counted here: the test half is about function complexity.
 - statement coverage per package from the profile CI's race test run writes with -coverprofile, so the suite runs once.
   Generated code is dropped from both sides of the fraction, and so is the withcluster test command whose test skips
   under CI's Ryuk-disabled setting. The baseline stores hundredths of a percentage point
@@ -29,8 +30,10 @@ What is measured, in hand-written non-test Go:
   function, for example) has no statements to rate and is omitted.
 
 A hard ceiling applies even with a nolint or //gocognit:ignore: no function may exceed cognitive complexity 30 and no
-file may exceed 800 lines unless it is named in the baseline's gocognit_ceiling or file_ceiling, and each named value may
-only shrink. Tests are files ending in _test.go and anything under a testdata directory. Generated code is a file named
+file may exceed 800 lines unless it is named in the baseline's gocognit_ceiling, test_gocognit_ceiling or file_ceiling,
+and each named value may only shrink. Test functions have their own ceiling list at the same 30, so a test exception
+never excuses a production function (or the reverse); the 2026-11-04 review found 18 test functions over 30. Tests are files ending in _test.go and anything under a testdata directory; only
+_test.go functions are measured, because testdata is data, not compiled test code. Generated code is a file named
 *.gen.go (sqlc's output_files_suffix is .gen) or a Go file whose first declaration is preceded by the
 `// Code generated ... DO NOT EDIT.` header, which is what go/ast.IsGenerated and golangci-lint's generated-code
 exclusion recognize.
@@ -56,9 +59,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = Path(".github/quality-baseline.json")
-VERSION = 2
+VERSION = 3
 COGNITIVE_LIMIT = 15
 COGNITIVE_CEILING = 30
+TEST_COGNITIVE_CEILING = 30
 FILE_LIMIT = 500
 FILE_CEILING = 800
 # Hundredths of a percentage point. The floor is 60%: the measured distribution is p25 58.59%, median 84.61%, and the
@@ -72,7 +76,9 @@ DESCRIPTION = (
     "The quality ratchet: each pull request could add one plausible exemption, so these numbers may only fall. "
     "scripts/ci/quality_ratchet.py measures them; a nolint directive naming several linters counts under each, so the "
     "per-linter counts sum above the number of directives. The ceiling lists name the only functions over cognitive "
-    "complexity 30 and files over 800 lines, and each value may only shrink. coverage.packages is statement coverage "
+    "complexity 30 and files over 800 lines, and each value may only shrink; test_functions_over_gocognit_15 and "
+    "test_gocognit_ceiling do the same for functions in _test.go, with their own ceiling list so a test exception "
+    "cannot excuse production code. coverage.packages is statement coverage "
     "per package in hundredths of a percentage point, measured from the profile the race test run writes, generated "
     "code excluded; tolerance_basis_points is how far a package may fall and floor_basis_points is where a new package "
     "must start. A write keeps the higher recorded value when a measurement is inside the tolerance, so the tolerance "
@@ -109,15 +115,20 @@ def current(measured):
     """The counts and ceiling lists from a measurement of the tree, and its coverage when a profile was read."""
     nolint = measured.get("nolint")
     functions = measured.get("functions_over_15")
+    tests = measured.get("test_functions_over_15")
     files = measured.get("files_over_500")
-    if not isinstance(nolint, dict) or not isinstance(functions, list) or not isinstance(files, list):
-        raise SystemExit("quality ratchet: the measurement has no nolint map or function or file list")
+    if not isinstance(nolint, dict) or not isinstance(functions, list) or not isinstance(tests, list) \
+            or not isinstance(files, list):
+        raise SystemExit("quality ratchet: the measurement has no nolint map or function, test or file list")
     result = {
         "nolint_directives": measured.get("nolint_directives", 0),
         "nolint": {name: count for name, count in nolint.items() if count},
         "functions_over_gocognit_15": len(functions),
         "gocognit_ceiling": {function["name"]: function["complexity"] for function in functions
                              if function["complexity"] > COGNITIVE_CEILING},
+        "test_functions_over_gocognit_15": len(tests),
+        "test_gocognit_ceiling": {function["name"]: function["complexity"] for function in tests
+                                  if function["complexity"] > TEST_COGNITIVE_CEILING},
         "files_over_500_lines": len(files),
         "file_ceiling": {file["path"]: file["lines"] for file in files if file["lines"] > FILE_CEILING},
         "coverage": None,
@@ -183,18 +194,24 @@ def checked_coverage(value, path):
     return {"tolerance": tolerance, "floor": floor, "packages": found}
 
 
-def checked(data, path):
+def checked(data, path, allow_old=False):
     """The baseline data, checked enough that a typo cannot pass as a lower number.
 
-    Version 1 predates coverage. A base may still carry it (this ratchet's first introduction); only the current
-    baseline must be version 2, which load enforces.
+    Version 1 predates coverage and version 2 predates the test counts. Only a base or an explicit upgrade may carry
+    either; the current baseline must be version 3, which read and load enforce. A version 3 baseline may omit coverage
+    when it was written from a static-only run, so no coverage was measured rather than none was required.
     """
     version = data.get("version") if isinstance(data, dict) else None
-    if version not in (1, VERSION):
-        raise SystemExit(f"quality ratchet: {path}: version must be 1 or {VERSION}")
-    if data.get("ceilings") != {"gocognit": COGNITIVE_CEILING, "file_lines": FILE_CEILING}:
-        raise SystemExit(f"quality ratchet: {path}: ceilings must be gocognit {COGNITIVE_CEILING} "
-                         f"and file_lines {FILE_CEILING}")
+    allowed = (1, 2, VERSION) if allow_old else (VERSION,)
+    if version not in allowed:
+        wanted = f"1, 2 or {VERSION}" if allow_old else str(VERSION)
+        raise SystemExit(f"quality ratchet: {path}: version must be {wanted}")
+    ceilings = {"gocognit": COGNITIVE_CEILING, "file_lines": FILE_CEILING}
+    if version >= 3:
+        ceilings["test_gocognit"] = TEST_COGNITIVE_CEILING
+    if data.get("ceilings") != ceilings:
+        listed = ", ".join(f"{name} {value}" for name, value in ceilings.items())
+        raise SystemExit(f"quality ratchet: {path}: ceilings must be {listed}")
     nolint = data.get("nolint")
     if not isinstance(nolint, dict):
         raise SystemExit(f"quality ratchet: {path}: nolint must be a map of linter to count")
@@ -202,31 +219,49 @@ def checked(data, path):
         if not isinstance(name, str) or not name:
             raise SystemExit(f"quality ratchet: {path}: every nolint key must be a linter name")
         number(count, f"nolint.{name}", path)
-    return {
+    coverage = None
+    if version >= 3:
+        if "coverage" in data:
+            coverage = checked_coverage(data["coverage"], path)
+    elif version >= 2:
+        coverage = checked_coverage(data["coverage"], path)
+    result = {
         "version": version,
         "nolint": nolint,
         "functions_over_gocognit_15": number(data.get("functions_over_gocognit_15"),
                                             "functions_over_gocognit_15", path),
         "gocognit_ceiling": entries(data.get("gocognit_ceiling"), "function", "complexity", path),
+        "test_functions_over_gocognit_15": None,
+        "test_gocognit_ceiling": None,
         "files_over_500_lines": number(data.get("files_over_500_lines"), "files_over_500_lines", path),
         "file_ceiling": entries(data.get("file_ceiling"), "file", "lines", path),
-        "coverage": checked_coverage(data["coverage"], path) if version == VERSION else None,
+        "coverage": coverage,
     }
+    if version >= 3:
+        result["test_functions_over_gocognit_15"] = number(
+            data.get("test_functions_over_gocognit_15"), "test_functions_over_gocognit_15", path)
+        result["test_gocognit_ceiling"] = entries(
+            data.get("test_gocognit_ceiling"), "function", "complexity", path)
+    return result
 
 
-def read(path):
-    """The committed baseline, checked enough that a typo cannot pass as a lower number."""
+def read(path, allow_old=False):
+    """The committed baseline, checked enough that a typo cannot pass as a lower number.
+
+    allow_old is for an explicit upgrade: a static-only write may replace an older baseline, and must then write the
+    current version.
+    """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise SystemExit(f"quality ratchet: cannot read {path}: {exc}")
     except json.JSONDecodeError as exc:
         raise SystemExit(f"quality ratchet: {path} is not valid JSON: {exc}")
-    return checked(data, path)
+    return checked(data, path, allow_old=allow_old)
 
 
 def load(path):
-    """The committed baseline. Version 1 predates coverage; a static-only check can still use it."""
+    """The committed baseline. It must be the current version, so a downgraded file cannot skip the test checks."""
     return read(path)
 
 
@@ -261,7 +296,7 @@ def load_base(root, base):
         data = json.loads(shown.stdout)
     except json.JSONDecodeError as exc:
         raise SystemExit(f"quality ratchet: {base}:{path} is not valid JSON: {exc}")
-    return checked(data, f"{base}:{path}")
+    return checked(data, f"{base}:{path}", allow_old=True)
 
 
 def compare(now, baseline):
@@ -275,7 +310,10 @@ def compare(now, baseline):
             fallen.append(f"nolint:{linter} fell from {want} to {have}")
 
     for key, label in (("functions_over_gocognit_15", f"functions over gocognit {COGNITIVE_LIMIT}"),
+                       ("test_functions_over_gocognit_15", f"test functions over gocognit {COGNITIVE_LIMIT}"),
                        ("files_over_500_lines", f"files over {FILE_LIMIT} lines")):
+        if now[key] is None or baseline[key] is None:
+            continue
         have, want = now[key], baseline[key]
         if have > want:
             problems.append(f"{label} grew from {want} to {have}")
@@ -286,6 +324,11 @@ def compare(now, baseline):
                                  "function", f"cognitive-complexity ceiling {COGNITIVE_CEILING}")
     fallen += ceiling_falls(now["gocognit_ceiling"], baseline["gocognit_ceiling"],
                             "function", f"cognitive-complexity ceiling {COGNITIVE_CEILING}")
+    if baseline["test_gocognit_ceiling"] is not None:
+        problems += ceiling_problems(now["test_gocognit_ceiling"], baseline["test_gocognit_ceiling"],
+                                     "test function", f"cognitive-complexity ceiling {TEST_COGNITIVE_CEILING}")
+        fallen += ceiling_falls(now["test_gocognit_ceiling"], baseline["test_gocognit_ceiling"],
+                                "test function", f"cognitive-complexity ceiling {TEST_COGNITIVE_CEILING}")
     problems += ceiling_problems(now["file_ceiling"], baseline["file_ceiling"],
                                  "file", f"{FILE_CEILING}-line ceiling")
     fallen += ceiling_falls(now["file_ceiling"], baseline["file_ceiling"], "file", f"{FILE_CEILING}-line ceiling")
@@ -355,7 +398,10 @@ def base_problems(now, base):
             problems.append(f"base baseline: nolint:{linter} grew from {want} to {have}")
 
     for key, label in (("functions_over_gocognit_15", f"functions over gocognit {COGNITIVE_LIMIT}"),
+                       ("test_functions_over_gocognit_15", f"test functions over gocognit {COGNITIVE_LIMIT}"),
                        ("files_over_500_lines", f"files over {FILE_LIMIT} lines")):
+        if now[key] is None or base[key] is None:
+            continue
         have, want = now[key], base[key]
         if have > want:
             problems.append(f"base baseline: {label} grew from {want} to {have}")
@@ -363,6 +409,10 @@ def base_problems(now, base):
     problems += [f"base baseline: {problem}" for problem in ceiling_problems(
         now["gocognit_ceiling"], base["gocognit_ceiling"],
         "function", f"cognitive-complexity ceiling {COGNITIVE_CEILING}")]
+    if base["test_gocognit_ceiling"] is not None:
+        problems += [f"base baseline: {problem}" for problem in ceiling_problems(
+            now["test_gocognit_ceiling"], base["test_gocognit_ceiling"],
+            "test function", f"cognitive-complexity ceiling {TEST_COGNITIVE_CEILING}")]
     problems += [f"base baseline: {problem}" for problem in ceiling_problems(
         now["file_ceiling"], base["file_ceiling"], "file", f"{FILE_CEILING}-line ceiling")]
 
@@ -444,13 +494,17 @@ def document(now, baseline=None):
     """
     coverage = recorded_coverage(now, baseline)
     result = {
-        "version": VERSION if coverage is not None else (baseline or {}).get("version", 1),
+        "version": VERSION,
         "description": DESCRIPTION,
-        "ceilings": {"gocognit": COGNITIVE_CEILING, "file_lines": FILE_CEILING},
+        "ceilings": {"gocognit": COGNITIVE_CEILING, "test_gocognit": TEST_COGNITIVE_CEILING,
+                     "file_lines": FILE_CEILING},
         "nolint": {name: now["nolint"][name] for name in sorted(now["nolint"])},
         "functions_over_gocognit_15": now["functions_over_gocognit_15"],
         "gocognit_ceiling": [{"function": name, "complexity": now["gocognit_ceiling"][name]}
                              for name in sorted(now["gocognit_ceiling"])],
+        "test_functions_over_gocognit_15": now["test_functions_over_gocognit_15"],
+        "test_gocognit_ceiling": [{"function": name, "complexity": now["test_gocognit_ceiling"][name]}
+                                  for name in sorted(now["test_gocognit_ceiling"])],
         "files_over_500_lines": now["files_over_500_lines"],
         "file_ceiling": [{"file": name, "lines": now["file_ceiling"][name]}
                          for name in sorted(now["file_ceiling"])],
@@ -468,6 +522,7 @@ def summary(now):
     text = (f"quality ratchet: {now['nolint_directives']} nolint directives "
             f"({sum(now['nolint'].values())} per-linter entries) in {len(now['nolint'])} linters, "
             f"{now['functions_over_gocognit_15']} functions over {COGNITIVE_LIMIT}, "
+            f"{now['test_functions_over_gocognit_15']} test functions over {COGNITIVE_LIMIT}, "
             f"{now['files_over_500_lines']} files over {FILE_LIMIT} lines")
     if now["coverage"] is not None:
         text += f", coverage measured for {len(now['coverage']['packages'])} packages"
@@ -520,7 +575,7 @@ def main(argv=None):
 
     if args.write_baseline:
         problems = []
-        existing = read(path) if path.exists() else None
+        existing = read(path, allow_old=True) if path.exists() else None
         if existing is not None:
             current_problems, _ = compare(now, existing)
             problems += current_problems
@@ -534,8 +589,10 @@ def main(argv=None):
             problems += baseline_problems(recorded, base, now)
         if problems:
             return report(problems, [])
+        text = json.dumps(recorded, indent=2) + "\n"
+        checked(json.loads(text), f"{path} to write")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(recorded, indent=2) + "\n", encoding="utf-8")
+        path.write_text(text, encoding="utf-8")
         print(f"quality ratchet: wrote {path}")
         return 0
 

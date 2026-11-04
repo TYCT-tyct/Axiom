@@ -166,11 +166,69 @@ func TestSubscriptionWindowExhaustedFallsBackToTheWallet(t *testing.T) {
 	b.balanced()
 }
 
+// renewSubscription renews the plan in force and asserts the term and windows the renewal appends.
+func (b *bank) renewSubscription(plan Plan, first Subscription) {
+	b.t.Helper()
+	renewed := b.subscribe(plan, uuid.NewV7())
+	if renewed.ID != first.ID {
+		b.t.Fatalf("renewal made subscription %s, want %s", renewed.ID, first.ID)
+	}
+	if want := first.EndsAt.Add(2 * time.Hour); !renewed.EndsAt.Equal(want) {
+		b.t.Fatalf("renewed term ends at %s, want %s", renewed.EndsAt, want)
+	}
+	if renewed.CurrentSeq != 1 {
+		b.t.Fatalf("renewal moved the current window to %d, want 1", renewed.CurrentSeq)
+	}
+	if w := b.window(4); w.Seq != 4 || w.Quota != 300 {
+		b.t.Fatalf("window 4 = %+v after renewal, want the appended term with its own quota", w)
+	}
+}
+
+// passSubscriptionWindow moves window 1 into the past and asserts that window 2 becomes current.
+func (b *bank) passSubscriptionWindow(first Subscription) {
+	b.t.Helper()
+	b.sql("UPDATE billing.subscription_windows SET starts_at = now() - interval '2 hours', ends_at = now() - interval '1 hour' " +
+		"WHERE subscription_id = '" + first.ID.String() + "' AND seq = 1")
+	if w := b.advance(); w == nil || w.seq != 2 {
+		b.t.Fatalf("current window = %+v, want 2", w)
+	}
+	if sub := b.subscribed(); sub.CurrentSeq != 2 {
+		b.t.Fatalf("subscription points at window %d after the pass, want 2", sub.CurrentSeq)
+	}
+}
+
+// checkExtendInFrozenWindow asserts a refused and then a truncated extension still land in window 1.
+func (b *bank) checkExtendInFrozenWindow(h *Hold) {
+	b.t.Helper()
+	if w := b.window(1); w.Reserved != 250 {
+		b.t.Fatalf("window 1 reserves %d after the renewal or pass, want 250", w.Reserved)
+	}
+	err := b.billing.Extend(b.t.Context(), h, ExtendRequest{Seq: 2, Target: platform.AmountExact(350)})
+	var short *Insufficient
+	if !errors.As(err, &short) || short.Source != SourceBalance {
+		b.t.Fatalf("Extend by 100 over a window holding 50 = %v, want Insufficient on the balance", err)
+	}
+	if w := b.window(1); w.Reserved != 250 || w.Remaining() != 50 {
+		b.t.Errorf("window 1 is %+v after a refused extension, want 250 reserved and 50 left", w)
+	}
+	if w := b.window(2); w.Reserved != 0 {
+		b.t.Errorf("window 2 reserved %d after a refused extension, want 0", w.Reserved)
+	}
+	if err := b.billing.Extend(b.t.Context(), h, ExtendRequest{Seq: 3, Target: platform.AmountExact(290)}); err != nil {
+		b.t.Fatalf("Extend by 40 with 50 left: %v", err)
+	}
+	if w := b.window(1); w.Reserved != 290 || w.Remaining() != 10 {
+		b.t.Errorf("window 1 is %+v after the extension, want 290 reserved and 10 left", w)
+	}
+	if w := b.window(2); w.Reserved != 0 {
+		b.t.Errorf("window 2 reserved %d after the extension, want 0: the hold stays in its own window", w.Reserved)
+	}
+	b.consistent()
+}
+
 // TestSubscriptionExtendStaysInTheFrozenWindow: renewal and the window pointer moving do not loosen the window an open
 // reservation froze; an extension still draws on that window and is truncated when it is short
 // (docs/domains/billing.md「订阅套餐」).
-//
-//nolint:cyclop,gocognit // the renewal/pass table and its window assertions are the test
 func TestSubscriptionExtendStaysInTheFrozenWindow(t *testing.T) {
 	t.Parallel()
 
@@ -188,54 +246,12 @@ func TestSubscriptionExtendStaysInTheFrozenWindow(t *testing.T) {
 			first := b.subscribe(plan, uuid.NewV7())
 			h := b.holdOn(b.exact, 250)
 			if tc.renew {
-				renewed := b.subscribe(plan, uuid.NewV7())
-				if renewed.ID != first.ID {
-					t.Fatalf("renewal made subscription %s, want %s", renewed.ID, first.ID)
-				}
-				if want := first.EndsAt.Add(2 * time.Hour); !renewed.EndsAt.Equal(want) {
-					t.Fatalf("renewed term ends at %s, want %s", renewed.EndsAt, want)
-				}
-				if renewed.CurrentSeq != 1 {
-					t.Fatalf("renewal moved the current window to %d, want 1", renewed.CurrentSeq)
-				}
-				if w := b.window(4); w.Seq != 4 || w.Quota != 300 {
-					t.Fatalf("window 4 = %+v after renewal, want the appended term with its own quota", w)
-				}
+				b.renewSubscription(plan, first)
 			}
 			if tc.pass {
-				b.sql("UPDATE billing.subscription_windows SET starts_at = now() - interval '2 hours', ends_at = now() - interval '1 hour' " +
-					"WHERE subscription_id = '" + first.ID.String() + "' AND seq = 1")
-				if w := b.advance(); w == nil || w.seq != 2 {
-					t.Fatalf("current window = %+v, want 2", w)
-				}
-				if sub := b.subscribed(); sub.CurrentSeq != 2 {
-					t.Fatalf("subscription points at window %d after the pass, want 2", sub.CurrentSeq)
-				}
+				b.passSubscriptionWindow(first)
 			}
-			if w := b.window(1); w.Reserved != 250 {
-				t.Fatalf("window 1 reserves %d after the renewal or pass, want 250", w.Reserved)
-			}
-			err := b.billing.Extend(t.Context(), h, ExtendRequest{Seq: 2, Target: platform.AmountExact(350)})
-			var short *Insufficient
-			if !errors.As(err, &short) || short.Source != SourceBalance {
-				t.Fatalf("Extend by 100 over a window holding 50 = %v, want Insufficient on the balance", err)
-			}
-			if w := b.window(1); w.Reserved != 250 || w.Remaining() != 50 {
-				t.Errorf("window 1 is %+v after a refused extension, want 250 reserved and 50 left", w)
-			}
-			if w := b.window(2); w.Reserved != 0 {
-				t.Errorf("window 2 reserved %d after a refused extension, want 0", w.Reserved)
-			}
-			if err := b.billing.Extend(t.Context(), h, ExtendRequest{Seq: 3, Target: platform.AmountExact(290)}); err != nil {
-				t.Fatalf("Extend by 40 with 50 left: %v", err)
-			}
-			if w := b.window(1); w.Reserved != 290 || w.Remaining() != 10 {
-				t.Errorf("window 1 is %+v after the extension, want 290 reserved and 10 left", w)
-			}
-			if w := b.window(2); w.Reserved != 0 {
-				t.Errorf("window 2 reserved %d after the extension, want 0: the hold stays in its own window", w.Reserved)
-			}
-			b.consistent()
+			b.checkExtendInFrozenWindow(h)
 		})
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"axiom/internal/platform/jsonx"
 	axmail "axiom/internal/platform/mail"
 	"axiom/internal/platform/pg"
+	"axiom/internal/quality"
 )
 
 const (
@@ -136,7 +137,11 @@ func startNodeWithModels(c commandLine, clock *testClock, withRegistration bool,
 	if err := cat.Refresh(c.t.Context()); err != nil {
 		c.t.Fatal(err)
 	}
-	routes := publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, nil), exit: exit, version: "test", accounts: svc, payments: pay, catalog: cat, db: c.db, models: models}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger}, testFrontend(c.t), logger)
+	classes := quality.New(nil)
+	if err := classes.SetSourceClasses(quality.DefaultSourceClasses()); err != nil {
+		c.t.Fatal(err)
+	}
+	routes := publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, nil), exit: exit, version: "test", accounts: svc, payments: pay, catalog: cat, db: c.db, models: models, classes: classes}, &guard{contract: loadedContract(c.t), accounts: svc, logger: logger}, testFrontend(c.t), logger)
 	return consoleFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, pay: pay, gateway: gateway, queue: queue}
 }
 

@@ -79,6 +79,25 @@ export const keysQuery = (filters: KeyFilters = {}) =>
     getNextPageParam: nextCursor,
   });
 
+// The routing presets a key of the account may be bound to, the account's default for new keys, and the source classes
+// a rule can name. A change to a preset or the default makes the presets page and the key form ask again; the classes
+// are the platform's and change rarely.
+export const routingPresetsQuery = queryOptions({
+  queryKey: [accountKey, "routing-presets"],
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/routing-presets", { signal })),
+});
+
+export const routingDefaultQuery = queryOptions({
+  queryKey: [accountKey, "routing-presets", "default"],
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/routing-default", { signal })),
+});
+
+export const sourceClassesQuery = queryOptions({
+  queryKey: [accountKey, "source-classes"],
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/source-classes", { signal })),
+  staleTime: 5 * 60_000,
+});
+
 export const providerKeysQuery = queryOptions({
   queryKey: [accountKey, "provider-keys"],
   queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/provider-keys", { signal })),

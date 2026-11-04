@@ -66,6 +66,11 @@ const routeTree = root.addChildren([
     }),
     createRoute({
       getParentRoute: () => app,
+      path: "/routing-presets",
+      component: lazyRouteComponent(() => import("./pages/routing-presets")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
       path: "/provider-keys",
       component: lazyRouteComponent(() => import("./pages/provider-keys")),
     }),

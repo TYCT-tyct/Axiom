@@ -2,6 +2,7 @@ package objectstore
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
@@ -19,18 +20,44 @@ const (
 	vectorKey = "objectstore-test-secret"
 )
 
+// signVector is one botocore vector: the request, the expected Authorization and payload hash, and for a key whose
+// escaping is the point, the expected escaped path.
+type signVector struct {
+	name    string
+	cfg     Config
+	req     request
+	want    string
+	payload string
+	rawPath string
+}
+
+// checkSignVector asserts the escaped path, the signature, the payload hash and the two fixed headers.
+func checkSignVector(t *testing.T, c signVector, got *http.Request) {
+	t.Helper()
+	if got.URL.EscapedPath() != got.URL.RawPath {
+		t.Fatalf("escaped path %q is not the raw path %q", got.URL.EscapedPath(), got.URL.RawPath)
+	}
+	if c.rawPath != "" && got.URL.RawPath != c.rawPath {
+		t.Fatalf("raw path = %q, want %q", got.URL.RawPath, c.rawPath)
+	}
+	if auth := got.Header.Get("Authorization"); auth != c.want {
+		t.Fatalf("Authorization =\n%s\nwant\n%s", auth, c.want)
+	}
+	if payload := got.Header.Get("X-Amz-Content-Sha256"); payload != c.payload {
+		t.Fatalf("payload hash = %q, want %q", payload, c.payload)
+	}
+	if host := got.Header.Get("X-Amz-Date"); host != "20260102T030405Z" {
+		t.Fatalf("x-amz-date = %q", host)
+	}
+	if ua := got.Header.Get("User-Agent"); ua != "Axiom" {
+		t.Fatalf("User-Agent = %q", ua)
+	}
+}
+
 // The expected Authorization values come from botocore's S3 signer for the same request, date and credentials. They
 // pin the two things an S3 implementation actually checks: the escaped path and the canonical query and headers.
-//
-//nolint:cyclop,gocognit // one table drives every signature vector; the cases are the test
 func TestSignsLikeAnS3Client(t *testing.T) {
-	for _, c := range []struct {
-		name    string
-		cfg     Config
-		req     request
-		want    string
-		payload string
-	}{
+	for _, c := range []signVector{
 		{
 			name:    "get with a space in the key",
 			cfg:     pathStyle(),
@@ -75,6 +102,7 @@ func TestSignsLikeAnS3Client(t *testing.T) {
 			cfg:     pathStyle(),
 			req:     request{method: "GET", key: "a~b+c:d e.txt", payloadHash: emptySHA256},
 			payload: emptySHA256,
+			rawPath: "/axiom/a~b%2Bc%3Ad%20e.txt",
 			want: "AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/20260102/us-east-1/s3/aws4_request, " +
 				"SignedHeaders=host;x-amz-content-sha256;x-amz-date, " +
 				"Signature=ef1e29157c21e318fecbed136c9394969eda59498942d624172d3aefc365f275",
@@ -84,6 +112,7 @@ func TestSignsLikeAnS3Client(t *testing.T) {
 			cfg:     pathStyle(),
 			req:     request{method: "GET", key: "中文.txt", payloadHash: emptySHA256},
 			payload: emptySHA256,
+			rawPath: "/axiom/%E4%B8%AD%E6%96%87.txt",
 			want: "AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/20260102/us-east-1/s3/aws4_request, " +
 				"SignedHeaders=host;x-amz-content-sha256;x-amz-date, " +
 				"Signature=f517f0397d208236a4ec50defa32438a39efd60a0d23b04c87fcaf19f18d2f9c",
@@ -111,31 +140,7 @@ func TestSignsLikeAnS3Client(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.URL.EscapedPath() != got.URL.RawPath {
-				t.Fatalf("escaped path %q is not the raw path %q", got.URL.EscapedPath(), got.URL.RawPath)
-			}
-			if c.name == "escaped key" {
-				if want := "/axiom/a~b%2Bc%3Ad%20e.txt"; got.URL.RawPath != want {
-					t.Fatalf("raw path = %q, want %q", got.URL.RawPath, want)
-				}
-			}
-			if c.name == "unicode key" {
-				if want := "/axiom/%E4%B8%AD%E6%96%87.txt"; got.URL.RawPath != want {
-					t.Fatalf("raw path = %q, want %q", got.URL.RawPath, want)
-				}
-			}
-			if auth := got.Header.Get("Authorization"); auth != c.want {
-				t.Fatalf("Authorization =\n%s\nwant\n%s", auth, c.want)
-			}
-			if payload := got.Header.Get("X-Amz-Content-Sha256"); payload != c.payload {
-				t.Fatalf("payload hash = %q, want %q", payload, c.payload)
-			}
-			if host := got.Header.Get("X-Amz-Date"); host != "20260102T030405Z" {
-				t.Fatalf("x-amz-date = %q", host)
-			}
-			if ua := got.Header.Get("User-Agent"); ua != "Axiom" {
-				t.Fatalf("User-Agent = %q", ua)
-			}
+			checkSignVector(t, c, got)
 		})
 	}
 }
