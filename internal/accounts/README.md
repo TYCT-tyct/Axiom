@@ -102,12 +102,12 @@
 - `Caller`（认出的 key）、`Principal`（认出的用户）、`Admission`（准入结果）的字段都不导出，只有认证成功的函数能造出非零值；其他模块只读访问器。`Caller` 不带范围：带 key 的事务只能经 `Admit` 打开。零值的 `Caller` 交给 `Admit` 被拒，有测试。
 - `Authorize(principal, permission, target)` 只返回覆盖本次目标的范围。账户目标的范围是 `pg.AccountScopeIn(会话签发的站点, 账户)`：除了账户自己的行，还读这个站点的公开配置和共享计数（策略把站点列与 `platform.home_site()` 的 InitPlan 参数比较，如充值页的付款方式、每 IP 的下单计数），别的站点的读不到；站点来自会话，不来自账户能写的行。目标由服务端从 URL 里的 ID 解析，行级安全再挡一层：别的账户的工作区在这个账户的范围里不存在，返回 404。
 - 权限在代码里声明名字和是否敏感；角色快照合并 permissions 与 additional_permissions，警告并忽略代码不认识的名字，避免新版本权限使旧节点快照过期。迁移 00010 将新增权限放进 additional_permissions，保留不支持忽略未知名字的旧节点所读 permissions 原样；`TestRolePermissionsRollingCompatibility` 同时核对旧投影及迁移权限的声明，防止拼写错误。敏感权限要求本次会话 `level = mfa`。
-- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`、`balance.top_up`，以及敏感的 `sites.manage`、`platform_grants.manage`、`users.manage`，和管理接口权限（含 `calls.search`、`calls.inspect`、`audit.view`）（见下文「管理接口」），以及运营的 `operations.read` 和敏感的 `operations.manage`（迁移 00032 放进内置 `admin` 角色的 additional_permissions）。默认角色由迁移 00003 写入，00005、00006、00010 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
+- M1 声明的权限：`api_keys.view`、`api_keys.manage`、`workspaces.manage`、`calls.view`、`balance.view`、`balance.top_up`，以及敏感的 `sites.manage`、`platform_grants.manage`、`users.manage`，和管理接口权限（含 `calls.search`、`calls.inspect`、`audit.view`）（见下文「管理接口」），以及运营的 `operations.read` 和敏感的 `operations.manage`（迁移 00034 放进内置 `admin` 角色的 additional_permissions）。默认角色由迁移 00003 写入，00005、00006、00010 改成现在的集合，列在「管理接口」的表里；以后加权限的 PR 用迁移改这些集合。`PermissionNamed` 按名字取声明过的权限，契约里的 `x-axiom-permission` 靠它在启动时核对。
 - `Authorize(ctx, principal, permission, target)`：账户目标读操作者在该账户的成员关系；企业账户的成员关系怎么归类待定，所以 M1 只有自己的个人账户能被授权，别的账户返回 `ErrNotFound`。平台目标要求会话在管理后台、`level = mfa`，再读未撤销的平台授予；有成员关系或授予但角色不含这项权限返回 `ErrForbidden`。
 
 ## 运营凭证
 
-运营 agent 的操作者（[运营的「运营凭证」](../../docs/domains/operations.md#运营凭证)），和会话、管理 key 并列，只在运营监听有效。代码在 `agents.go`，表在迁移 00032。
+运营 agent 的操作者（[运营的「运营凭证」](../../docs/domains/operations.md#运营凭证)），和会话、管理 key 并列，只在运营监听有效。代码在 `agents.go`，表在迁移 00034。
 
 ```go
 func (s *Service) CreateAgent(ctx, tx, actor audit.Actor, spec AgentSpec) (AgentToken, error)
