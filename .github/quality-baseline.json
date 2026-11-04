@@ -9,16 +9,16 @@
     "bodyclose": 1,
     "containedctx": 4,
     "contextcheck": 6,
-    "cyclop": 62,
-    "depguard": 68,
+    "cyclop": 42,
+    "depguard": 72,
     "dupl": 6,
     "errcheck": 132,
     "errorlint": 4,
-    "exhaustive": 34,
+    "exhaustive": 35,
     "forcetypeassert": 2,
-    "funlen": 21,
-    "gocognit": 39,
-    "gosec": 119,
+    "funlen": 11,
+    "gocognit": 15,
+    "gosec": 116,
     "modernize": 3,
     "nilerr": 7,
     "nilnil": 24,
@@ -26,42 +26,13 @@
     "staticcheck": 1,
     "unparam": 1
   },
-  "functions_over_gocognit_15": 39,
+  "functions_over_gocognit_15": 15,
   "gocognit_ceiling": [
-    {
-      "function": "internal/gateway/hop.go:(*attempt).readHop",
-      "complexity": 64
-    },
-    {
-      "function": "internal/gateway/route.go:endpointOf",
-      "complexity": 32
-    },
-    {
-      "function": "internal/gateway/serverloop.go:(*attempt).search",
-      "complexity": 47
-    },
-    {
-      "function": "internal/protocol/servertoolparams.go:parseServerParams",
-      "complexity": 38
-    },
-    {
-      "function": "internal/protocol/servertools.go:AppendServerTurn",
-      "complexity": 36
-    },
-    {
-      "function": "internal/protocol/serverturn.go:serverAssistant",
-      "complexity": 32
-    },
     {
       "function": "internal/quality/classes.go:compileClasses",
       "complexity": 31
     }
   ],
-  "files_over_500_lines": 50,
-  "file_ceiling": [
-    {
-      "file": "internal/protocol/direct.go",
-      "lines": 1014
-    }
-  ]
+  "files_over_500_lines": 34,
+  "file_ceiling": []
 }
