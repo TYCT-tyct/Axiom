@@ -121,3 +121,11 @@ E3-3 最初把旧二进制、从未准入的新进程和重新加入的进程都
 建议（未改 `CONTRIBUTING.md`，需负责人同意）：在评审清单加一条「领域文档是否改写或偏离产品要求；改了就要有负责人同意的出处」，由流水线或评审人执行。本轮先记在这里，规则修改另起 PR。
 
 出现：2026-11-02
+
+## 测试设的期限没到达实际触发的那个期限
+
+证据：`main` 的 run [41738641864](https://github.com/TYCT-tyct/Axiom/actions/runs/41738641864)（cc4b851f）里 `TestAnUndeclaredTierStopsTheNextRoute` 在 rig 预热 key 时失败：`look up an API key: timeout: context deadline exceeded`。rig 把 `KeyLookup` 设成 30 秒，但共享的 key 查找脱离调用方运行，用的是 accounts 写死的 1 秒，`KeyLookup` 只管等待者；预热又是不带期限的直接调用。#623 把同时运行的 rig 从 3 个加到 8 个，理由正是「rig 的 key 查找有 30 秒」。本机复现：rig 数不是原因，3 个和 24 个 rig 的预热查找最长 54 ms 和 62 ms，CI 上是宿主停顿吃掉了那 1 秒。
+
+哪一层没拦住：rig 的注释和 #623 的说明都假定配置的期限管住了查找，没人对照实际报错的那条代码路径；评审只看了改动的行。现在共享的查找沿用发起请求的截止时间（`TestALookupKeepsItsCallersDeadline`），rig 的预热按自己的 `KeyLookup` 查（`rig.recognise`）。以后设测试期限时，要从报错的那一行反查它是哪个期限。
+
+出现：2026-11-04

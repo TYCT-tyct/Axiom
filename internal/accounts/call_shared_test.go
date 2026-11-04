@@ -79,6 +79,29 @@ func TestEachWaiterKeepsItsDeadline(t *testing.T) {
 	}
 }
 
+// TestALookupKeepsItsCallersDeadline: a lookup lasts as long as the request that started it may wait, not the second
+// accounts gives a caller with no deadline. The key table stays locked until that second has passed.
+func TestALookupKeepsItsCallersDeadline(t *testing.T) {
+	t.Parallel()
+	_, database, s, key := callSetup(t)
+	admin, release := lockTable(t, database, "accounts.api_keys")
+	fallback, cancel := context.WithTimeout(t.Context(), accounts.LookupTimeout)
+	defer cancel()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := s.AuthenticateKey(ctx, accounts.SiteID(s1), key)
+		result <- err
+	}()
+	awaitLookup(t, admin)
+	<-fallback.Done()
+	release()
+	if err := <-result; err != nil {
+		t.Fatalf("a lookup within its caller's minute: %v", err)
+	}
+}
+
 // deadlineContext passes its deadline when expire is closed, so a test controls the moment instead of waiting on a
 // clock. AuthenticateKey reads only Done and Err; the other methods keep the interface's contract.
 type deadlineContext struct {

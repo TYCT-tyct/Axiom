@@ -11,7 +11,7 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// lookupTimeout bounds a key lookup, which the gateway's first step must finish within a second.
+// lookupTimeout bounds a key lookup whose caller set no deadline of its own.
 const lookupTimeout = time.Second
 
 // Caller is a key recognised on a site: who it belongs to, nothing about whether it may be used, which Admit reads
@@ -50,10 +50,15 @@ func (s *Service) AuthenticateKey(ctx context.Context, site SiteID, raw string) 
 	if _, ok := s.unknown.get(at, now); ok {
 		return Caller{}, ErrUnknownKey
 	}
-	// The shared lookup runs detached from the request that started it, with its own deadline, so that request
-	// leaving does not fail the others waiting on it; each waiter still stops at its own context's end.
+	// The shared lookup runs detached from the request that started it, so that request leaving does not fail the
+	// others waiting on it; each waiter still stops at its own context's end. It keeps that request's deadline, the
+	// caller's budget for a lookup (the gateway's Config.KeyLookup), and has lookupTimeout when there is none.
 	shared := s.lookups.DoChan(string(at.site[:])+string(at.hash[:]), func() (any, error) {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lookupTimeout)
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			deadline = time.Now().Add(lookupTimeout)
+		}
+		ctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
 		defer cancel()
 		return s.lookUp(ctx, at, raw)
 	})
