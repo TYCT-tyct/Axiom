@@ -12,7 +12,7 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-var usd = currency("USD")
+var dollars = currency("USD")
 
 func currency(code string) platform.Currency {
 	c, err := platform.ParseCurrency(code)
@@ -26,7 +26,7 @@ func currency(code string) platform.Currency {
 // 3 a day; hard single 20, day 50, week 60.
 func limits(site *uuid.UUID) operations.CapPolicy {
 	return operations.CapPolicy{
-		Site: site, Category: operations.CategoryTopUp, Currency: usd, Single: 10, Daily: 25, Weekly: 40, ObjectDaily: 15,
+		Site: site, Category: operations.CategoryTopUp, Currency: dollars, Single: 10, Daily: 25, Weekly: 40, ObjectDaily: 15,
 		DailyCount: 3, HardSingle: 20, HardDaily: 50, HardWeekly: 60,
 	}
 }
@@ -53,7 +53,7 @@ func topUp(credential, key uuid.UUID, site *uuid.UUID, supplier string, amount i
 		Params: map[string]any{"amount_native": fmt.Sprint(amount)}, Risk: operations.RiskTopUp, Reason: "low balance",
 	}
 	return proposal{p, operations.Transfer{
-		Site: site, Category: operations.CategoryTopUp, Object: p.Target, Amount: amount, Currency: usd,
+		Site: site, Category: operations.CategoryTopUp, Object: p.Target, Amount: amount, Currency: dollars,
 		Basis: map[string]any{"amount_native": amount}, Summary: map[string]any{"supplier": supplier},
 	}}
 }
