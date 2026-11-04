@@ -50,9 +50,10 @@ func TestActorUserID(t *testing.T) {
 		t.Fatalf("User(%s).UserID() = (%s, %t), want (%s, true)", id, got, ok, id)
 	}
 	for name, actor := range map[string]audit.Actor{
-		"system":         audit.System("catalog.sync"),
-		"management key": audit.ManagementKey(id),
-		"zero":           {},
+		"system":           audit.System("catalog.sync"),
+		"management key":   audit.ManagementKey(id),
+		"operations agent": audit.OperationsAgent(id),
+		"zero":             {},
 	} {
 		if _, ok := actor.UserID(); ok {
 			t.Errorf("%s actor reported a user ID", name)
