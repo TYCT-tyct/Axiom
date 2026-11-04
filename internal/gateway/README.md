@@ -140,7 +140,7 @@ G9 的代码在 `readonly.go`（只读接口）、`count.go`（`count_tokens`）
 
 ## 尝试与转发
 
-G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个就不启动）的 `Run` 正是 `Deps.Run`，拿走准入后的 `Call`，把它做到最后一个字节并结算。文件：`exec.go`（`Executor`、`session`）、`conclude.go`（收尾）、`attempt.go`（尝试循环）、`forward.go`（提交点之后的转发），G6、G7 的在下一节。`session` 是一次调用的运行，归运行它的 goroutine；与它共享状态的只有保活计时器和取消尝试的函数，都经写锁。
+G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个就不启动）的 `Run` 正是 `Deps.Run`，拿走准入后的 `Call`，把它做到最后一个字节并结算。文件：`exec.go`（`Executor`、`session`）、`conclude.go`（收尾）、`attempt.go`（尝试循环）、`forward.go`（提交点之后的转发）、`write.go`（对客户端的每次写，都在写锁下），G6、G7 的在下一节。`session` 是一次调用的运行，归运行它的 goroutine；与它共享状态的只有保活计时器和取消尝试的函数，都经写锁。
 
 **循环**（`session.attempts`），每个条目一次 `try`，直到有一个应答、没有条目、或调用被别的原因结束：
 
