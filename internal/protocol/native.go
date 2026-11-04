@@ -115,8 +115,6 @@ func NativeSearchSupported(f Format) bool {
 // search on is returned as it is, so one request can never search twice.
 //
 // Each body it makes is drawn from b before it is made, and the one it replaces given back; the decoders read in place.
-//
-//nolint:cyclop,gocognit,funlen // one member per format and the tools splice are the grammar; splitting hides the order
 func injectNativeSearch(format Format, body []byte, maxUses int, b *budget) ([]byte, error) {
 	if maxUses < 1 {
 		maxUses = 1
@@ -124,77 +122,98 @@ func injectNativeSearch(format Format, body []byte, maxUses int, b *budget) ([]b
 	if !NativeSearchSupported(format) {
 		return nil, &NotSupported{Reason: "the endpoint's format has no native web search"}
 	}
-	trimmed := bytes.TrimRight(body, " \t\r\n")
-	if len(trimmed) == 0 || trimmed[len(trimmed)-1] != '}' {
-		return nil, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
-	}
-	close := len(trimmed) - 1
-	dec := newDecoder(body) // the prepared body: no names are repeated in it
-	if dec.PeekKind() != '{' {
-		return nil, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
-	}
-	if _, err := dec.ReadToken(); err != nil {
+	m, err := readSearchMembers(body)
+	if err != nil {
 		return nil, err
 	}
-	toolsStart, toolsEnd := -1, -1
-	var tools []byte
-	var hasOptions bool
-	for dec.PeekKind() != '}' {
-		name, err := dec.ReadValue()
-		if err != nil {
-			return nil, err
-		}
-		value, err := dec.ReadValue()
-		if err != nil {
-			return nil, err
-		}
-		end := int(dec.InputOffset())
-		switch {
-		case nameIs(name, "tools"):
-			toolsStart, toolsEnd = end-len(value), end
-			tools = bytes.TrimSpace(value) // a slice of body: the decoder reads a bytes.Buffer in place
-		case nameIs(name, "web_search_options"):
-			hasOptions = true
-		}
-	}
-	searches := false
-	if toolsStart >= 0 && (format != Chat || !hasOptions) {
-		var err error
-		if searches, err = hasWebSearchTool(format, tools, b); err != nil {
-			return nil, err
-		}
+	searches, err := m.searching(format, b)
+	if err != nil {
+		return nil, err
 	}
 	if format == Chat {
-		if hasOptions || searches {
+		if m.options || searches {
 			return body, nil
 		}
-		return splice(body, close, close, []byte(`,"web_search_options":{}`), b)
+		return splice(body, m.close, m.close, []byte(`,"web_search_options":{}`), b)
 	}
-	tool := nativeSearchTool(format, maxUses)
-	var out []byte
-	var err error
-	switch {
-	case toolsStart < 0:
-		out, err = splice(body, close, close, append(append([]byte(`,"tools":[`), tool...), ']'), b)
-	case bytes.Equal(tools, []byte("null")):
-		out, err = splice(body, toolsStart, toolsEnd, append(append([]byte{'['}, tool...), ']'), b)
-	case len(tools) == 0 || tools[0] != '[' || tools[len(tools)-1] != ']':
-		return nil, fmt.Errorf("%w: tools is not an array", ErrInvalid)
-	case searches:
-		out = body
-	default:
-		// Insert before the array's closing bracket, after a comma when it already holds a tool.
-		at := toolsStart + bytes.Index(body[toolsStart:toolsEnd], tools) + len(tools) - 1
-		insert := append([]byte{','}, tool...)
-		if len(bytes.TrimSpace(tools[1:len(tools)-1])) == 0 {
-			insert = tool
-		}
-		out, err = splice(body, at, at, insert, b)
-	}
+	out, err := m.addTool(body, nativeSearchTool(format, maxUses), searches, b)
 	if err != nil || format != Responses {
 		return out, err
 	}
 	return withMaxToolCalls(out, maxUses, b)
+}
+
+// searchMembers is where a prepared body declares its tools, and whether it sets Chat's web_search_options.
+type searchMembers struct {
+	close                int    // the body's closing brace
+	toolsStart, toolsEnd int    // the tools value's span, -1 when the body has none
+	tools                []byte // the tools value without its whitespace, a slice of the body
+	options              bool
+}
+
+func readSearchMembers(body []byte) (searchMembers, error) {
+	trimmed := bytes.TrimRight(body, " \t\r\n")
+	if len(trimmed) == 0 || trimmed[len(trimmed)-1] != '}' {
+		return searchMembers{}, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
+	}
+	m := searchMembers{close: len(trimmed) - 1, toolsStart: -1, toolsEnd: -1}
+	dec := newDecoder(body) // the prepared body: no names are repeated in it
+	if dec.PeekKind() != '{' {
+		return searchMembers{}, fmt.Errorf("%w: a prepared request is not an object", ErrInvalid)
+	}
+	if _, err := dec.ReadToken(); err != nil {
+		return searchMembers{}, err
+	}
+	for dec.PeekKind() != '}' {
+		name, err := dec.ReadValue()
+		if err != nil {
+			return searchMembers{}, err
+		}
+		value, err := dec.ReadValue()
+		if err != nil {
+			return searchMembers{}, err
+		}
+		end := int(dec.InputOffset())
+		switch {
+		case nameIs(name, "tools"):
+			m.toolsStart, m.toolsEnd = end-len(value), end
+			m.tools = bytes.TrimSpace(value) // a slice of body: the decoder reads a bytes.Buffer in place
+		case nameIs(name, "web_search_options"):
+			m.options = true
+		}
+	}
+	return m, nil
+}
+
+// searching reports whether the body's tools already turn the provider's search on. Chat's web_search_options does
+// so whatever its tools are, so they are not read.
+func (m *searchMembers) searching(format Format, b *budget) (bool, error) {
+	if m.toolsStart < 0 || format == Chat && m.options {
+		return false, nil
+	}
+	return hasWebSearchTool(format, m.tools, b)
+}
+
+// addTool adds tool to the body's tools; searches says one of them already turns the provider's search on.
+func (m *searchMembers) addTool(body, tool []byte, searches bool, b *budget) ([]byte, error) {
+	tools := m.tools
+	switch {
+	case m.toolsStart < 0:
+		return splice(body, m.close, m.close, append(append([]byte(`,"tools":[`), tool...), ']'), b)
+	case bytes.Equal(tools, []byte("null")):
+		return splice(body, m.toolsStart, m.toolsEnd, append(append([]byte{'['}, tool...), ']'), b)
+	case len(tools) == 0 || tools[0] != '[' || tools[len(tools)-1] != ']':
+		return nil, fmt.Errorf("%w: tools is not an array", ErrInvalid)
+	case searches:
+		return body, nil
+	}
+	// Insert before the array's closing bracket, after a comma when it already holds a tool.
+	at := m.toolsStart + bytes.Index(body[m.toolsStart:m.toolsEnd], tools) + len(tools) - 1
+	insert := append([]byte{','}, tool...)
+	if len(bytes.TrimSpace(tools[1:len(tools)-1])) == 0 {
+		insert = tool
+	}
+	return splice(body, at, at, insert, b)
 }
 
 // ResponsesMaxToolCalls reads Responses' max_tool_calls without rewriting the body. The gateway uses it to clamp a
