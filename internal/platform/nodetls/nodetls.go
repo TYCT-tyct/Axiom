@@ -45,6 +45,33 @@ func Server(dir string) (*tls.Config, error) {
 	}, nil
 }
 
+// OpsPurpose is the URI a node certificate names among its subject alternative names when it may call the operations
+// listener: the ops node's, for its MCP bridge. Any certificate the authority signed opens the node listener; only
+// one that carries this purpose opens the operations listener, so an ingress's certificate cannot reach the
+// operations API.
+const OpsPurpose = "urn:axiom:node-purpose:ops"
+
+// ErrPurpose is a peer whose verified certificate does not carry the purpose a listener requires.
+var ErrPurpose = errors.New("the client certificate does not carry the purpose this listener requires")
+
+// RequirePurpose is server, which must require and verify client certificates, also refusing a peer whose certificate
+// does not carry purpose. The check runs after the chain is verified, on the peer's own certificate.
+func RequirePurpose(server *tls.Config, purpose string) *tls.Config {
+	cfg := server.Clone()
+	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return ErrPurpose
+		}
+		for _, uri := range cs.PeerCertificates[0].URIs {
+			if uri.String() == purpose {
+				return nil
+			}
+		}
+		return ErrPurpose
+	}
+	return cfg
+}
+
 // Client is the configuration a node calls a peer with: this node's certificate, the authority that signed the peer's
 // certificate, and the name the peer's certificate must carry.
 func Client(dir, serverName string) (*tls.Config, error) {

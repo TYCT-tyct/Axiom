@@ -20,6 +20,8 @@ const (
 	nodeRolesVar             = "AXIOM_NODE_ROLES"
 	adminSourcesVar          = "AXIOM_ADMIN_SOURCES"
 	nodeAddrVar              = "AXIOM_NODE_ADDR"
+	operationsAddrVar        = "AXIOM_OPERATIONS_ADDR"
+	operationsSourcesVar     = "AXIOM_OPERATIONS_SOURCES"
 	coreURLVar               = "AXIOM_CORE_URL"
 	nodeTLSDirVar            = "AXIOM_NODE_TLS_DIR"
 	trustedProxiesVar        = "AXIOM_TRUSTED_PROXIES"

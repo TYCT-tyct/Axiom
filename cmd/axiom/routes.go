@@ -22,8 +22,8 @@ import (
 
 // nodeRoutes are what the node's listeners serve and the call path behind the public one.
 type nodeRoutes struct {
-	public, admin http.Handler
-	calls         callNode
+	public, admin, operations http.Handler
+	calls                     callNode
 }
 
 // plugins opens the search engines and the file parser the plugins call, each only when the deployment configured
@@ -134,7 +134,9 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 	adminAPI.fileParser = p.cfg.fileParser
 	admin := adminRoutes(adminAPI,
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
-	return nodeRoutes{public: public, admin: admin, calls: calls}, nil
+	ops := operationsRoutes(operationsAPI{admin: adminAPI, db: db},
+		&agentGuard{contract: p.operationsContract, accounts: service, db: db, logger: logger}, logger)
+	return nodeRoutes{public: public, admin: admin, operations: ops, calls: calls}, nil
 }
 
 // search reads the node's engine list, falling back to the old single-backend row and then the environment.
