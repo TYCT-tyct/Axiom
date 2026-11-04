@@ -55,8 +55,8 @@ type Config struct {
 	LoginKey secret.LoginKey
 	// OnAccountOpened runs in the transaction of every account a registration opens; nil does nothing.
 	OnAccountOpened OpenedFunc
-	// KeyPreset binds each new call key to a routing preset; nil leaves new keys without one, routed by the system
-	// preset.
+	// KeyPreset binds each new call key, and a key whose preset is changed, to a routing preset; nil leaves new keys
+	// without one, routed by the system preset, and refuses a chosen preset (ErrKeyPreset).
 	KeyPreset KeyPresetFunc
 	// Egress makes the provider requests of third-party sign-in; nil uses the production exit. Tests pass a client
 	// that reaches their fake provider.

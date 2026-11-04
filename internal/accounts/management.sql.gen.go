@@ -39,7 +39,7 @@ func (q *Queries) ChargeManagementRequest(ctx context.Context, db DBTX, id uuid.
 
 const listManagedKeys = `-- name: ListManagedKeys :many
 SELECT k.id, k.workspace_id, k.kind, k.created_by, k.name, k.prefix, k.last4, k.created_at, k.updated_at, k.expires_at,
-    k.status, k.spend_limit, k.limit_reset, k.models, k.ip_allow
+    k.status, k.spend_limit, k.limit_reset, k.models, k.ip_allow, k.preset_id
 FROM accounts.api_keys k
 WHERE k.account_id = $1 AND k.kind = 'call' AND k.deleted_at IS NULL
     AND ($2::boolean OR k.status = 'active')
@@ -73,6 +73,7 @@ type ListManagedKeysRow struct {
 	LimitReset  *string
 	Models      []string
 	IpAllow     []netip.Prefix
+	PresetID    *uuid.UUID
 }
 
 func (q *Queries) ListManagedKeys(ctx context.Context, db DBTX, arg ListManagedKeysParams) ([]ListManagedKeysRow, error) {
@@ -106,6 +107,7 @@ func (q *Queries) ListManagedKeys(ctx context.Context, db DBTX, arg ListManagedK
 			&i.LimitReset,
 			&i.Models,
 			&i.IpAllow,
+			&i.PresetID,
 		); err != nil {
 			return nil, err
 		}
@@ -147,7 +149,7 @@ func (q *Queries) ManagedWorkspace(ctx context.Context, db DBTX, id uuid.UUID) (
 
 const validManagementKey = `-- name: ValidManagementKey :one
 SELECT k.id, k.workspace_id, k.kind, k.created_by, k.name, k.prefix, k.last4, k.created_at, k.updated_at, k.expires_at,
-    k.status, k.spend_limit, k.limit_reset, k.models, k.ip_allow
+    k.status, k.spend_limit, k.limit_reset, k.models, k.ip_allow, k.preset_id
 FROM accounts.api_keys k
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
@@ -180,6 +182,7 @@ type ValidManagementKeyRow struct {
 	LimitReset  *string
 	Models      []string
 	IpAllow     []netip.Prefix
+	PresetID    *uuid.UUID
 }
 
 // Mutable authorization stays under the manager's row lock until its operation commits.
@@ -202,6 +205,7 @@ func (q *Queries) ValidManagementKey(ctx context.Context, db DBTX, arg ValidMana
 		&i.LimitReset,
 		&i.Models,
 		&i.IpAllow,
+		&i.PresetID,
 	)
 	return i, err
 }

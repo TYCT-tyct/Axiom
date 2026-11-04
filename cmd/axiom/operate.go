@@ -23,9 +23,14 @@ func openBalance(ctx context.Context, tx pg.Tx, site, account uuid.UUID) error {
 	return billing.OpenBalance(ctx, tx, site, account, 0)
 }
 
-// keyPreset binds a new call key to the routing preset its layers' defaults name (docs/domains/routing.md「默认链与
-// key 落章」), in the transaction that makes the key.
-func keyPreset(ctx context.Context, tx pg.Tx, site, account, workspace uuid.UUID, currency platform.Currency) (uuid.UUID, error) {
+// keyPreset binds a call key to the routing preset chosen for it, when the key may use it, or with none chosen to the
+// one its layers' defaults name (docs/domains/routing.md「默认链与 key 落章」), in the transaction that makes or
+// changes the key.
+func keyPreset(ctx context.Context, tx pg.Tx, site, account, workspace uuid.UUID, currency platform.Currency, chosen *uuid.UUID) (uuid.UUID, error) {
+	if chosen != nil {
+		key := routing.Admission{Site: routing.SiteID(site), Account: routing.AccountID(account), Workspace: routing.WorkspaceID(workspace), Currency: currency}
+		return *chosen, routing.SelectablePreset(ctx, tx, key, routing.PresetID(*chosen))
+	}
 	id, err := routing.DefaultPreset(ctx, tx, routing.SiteID(site), routing.AccountID(account), routing.WorkspaceID(workspace), currency)
 	return uuid.UUID(id), err
 }

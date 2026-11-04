@@ -214,7 +214,7 @@ func (q *Queries) DeleteKey(ctx context.Context, db DBTX, id uuid.UUID) ([]Delet
 }
 
 const getKey = `-- name: GetKey :many
-SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
+SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow, preset_id
 FROM accounts.api_keys WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -234,6 +234,7 @@ type GetKeyRow struct {
 	LimitReset  *string
 	Models      []string
 	IpAllow     []netip.Prefix
+	PresetID    *uuid.UUID
 }
 
 func (q *Queries) GetKey(ctx context.Context, db DBTX, id uuid.UUID) ([]GetKeyRow, error) {
@@ -261,6 +262,7 @@ func (q *Queries) GetKey(ctx context.Context, db DBTX, id uuid.UUID) ([]GetKeyRo
 			&i.LimitReset,
 			&i.Models,
 			&i.IpAllow,
+			&i.PresetID,
 		); err != nil {
 			return nil, err
 		}
@@ -411,7 +413,7 @@ func (q *Queries) ListAccountWorkspaces(ctx context.Context, db DBTX, accountID 
 }
 
 const listKeys = `-- name: ListKeys :many
-SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
+SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow, preset_id
 FROM accounts.api_keys
 WHERE account_id = $1 AND deleted_at IS NULL AND id < $2
   AND ($3::text IS NULL OR strpos(lower(name), lower($3::text)) > 0)
@@ -455,6 +457,7 @@ type ListKeysRow struct {
 	LimitReset  *string
 	Models      []string
 	IpAllow     []netip.Prefix
+	PresetID    *uuid.UUID
 }
 
 // An account's keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making. The
@@ -495,6 +498,7 @@ func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]
 			&i.LimitReset,
 			&i.Models,
 			&i.IpAllow,
+			&i.PresetID,
 		); err != nil {
 			return nil, err
 		}
@@ -526,20 +530,23 @@ func (q *Queries) LockAccount(ctx context.Context, db DBTX, id uuid.UUID) (LockA
 }
 
 const lockKey = `-- name: LockKey :one
-SELECT site_id, account_id, name, status, spend_limit, limit_reset, models, ip_allow
+SELECT site_id, account_id, workspace_id, kind, name, status, spend_limit, limit_reset, models, ip_allow, preset_id
 FROM accounts.api_keys WHERE id = $1 AND deleted_at IS NULL
 FOR UPDATE
 `
 
 type LockKeyRow struct {
-	SiteID     uuid.UUID
-	AccountID  uuid.UUID
-	Name       string
-	Status     string
-	SpendLimit *int64
-	LimitReset *string
-	Models     []string
-	IpAllow    []netip.Prefix
+	SiteID      uuid.UUID
+	AccountID   uuid.UUID
+	WorkspaceID uuid.UUID
+	Kind        string
+	Name        string
+	Status      string
+	SpendLimit  *int64
+	LimitReset  *string
+	Models      []string
+	IpAllow     []netip.Prefix
+	PresetID    *uuid.UUID
 }
 
 // The settings a change leaves behind, read in the key's row's turn in the transaction that writes: the audit entry
@@ -550,12 +557,15 @@ func (q *Queries) LockKey(ctx context.Context, db DBTX, id uuid.UUID) (LockKeyRo
 	err := row.Scan(
 		&i.SiteID,
 		&i.AccountID,
+		&i.WorkspaceID,
+		&i.Kind,
 		&i.Name,
 		&i.Status,
 		&i.SpendLimit,
 		&i.LimitReset,
 		&i.Models,
 		&i.IpAllow,
+		&i.PresetID,
 	)
 	return i, err
 }
@@ -595,8 +605,8 @@ func (q *Queries) RecentKeys(ctx context.Context, db DBTX, arg RecentKeysParams)
 
 const updateKey = `-- name: UpdateKey :exec
 UPDATE accounts.api_keys SET updated_at = statement_timestamp(), name = $1, status = $2, spend_limit = $3, limit_reset = $4,
-    models = $5, ip_allow = $6
-WHERE id = $7
+    models = $5, ip_allow = $6, preset_id = $7
+WHERE id = $8
 `
 
 type UpdateKeyParams struct {
@@ -606,11 +616,12 @@ type UpdateKeyParams struct {
 	LimitReset *string
 	Models     []string
 	IpAllow    []netip.Prefix
+	PresetID   *uuid.UUID
 	ID         uuid.UUID
 }
 
 // Every setting a user may change, replaced whole; the expiry is not among them. The caller holds the key's turn
-// (LockKey) and has read the settings this replaces.
+// (LockKey) and has read the settings this replaces, the routing preset it keeps when none is chosen among them.
 func (q *Queries) UpdateKey(ctx context.Context, db DBTX, arg UpdateKeyParams) error {
 	_, err := db.Exec(ctx, updateKey,
 		arg.Name,
@@ -619,6 +630,7 @@ func (q *Queries) UpdateKey(ctx context.Context, db DBTX, arg UpdateKeyParams) e
 		arg.LimitReset,
 		arg.Models,
 		arg.IpAllow,
+		arg.PresetID,
 		arg.ID,
 	)
 	return err

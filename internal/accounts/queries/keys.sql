@@ -79,7 +79,7 @@ SELECT id FROM accounts.workspaces WHERE account_id = @account_id AND is_default
 -- optional filters are applied while the keys are read in index order, so a later page starts after the last key
 -- read. With no filter, or a dense one, a page costs only the rows it reads; a sparse filter reads on through its
 -- range, and no filter changes the order.
-SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
+SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow, preset_id
 FROM accounts.api_keys
 WHERE account_id = @account_id AND deleted_at IS NULL AND id < @before
   AND (sqlc.narg('name')::text IS NULL OR strpos(lower(name), lower(sqlc.narg('name')::text)) > 0)
@@ -96,21 +96,21 @@ ORDER BY id DESC
 LIMIT @page_size;
 
 -- name: GetKey :many
-SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow
+SELECT id, workspace_id, kind, created_by, name, prefix, last4, created_at, updated_at, expires_at, status, spend_limit, limit_reset, models, ip_allow, preset_id
 FROM accounts.api_keys WHERE id = @id AND deleted_at IS NULL;
 
 -- name: LockKey :one
 -- The settings a change leaves behind, read in the key's row's turn in the transaction that writes: the audit entry
 -- names what this change replaced, and not what a change made at the same moment did.
-SELECT site_id, account_id, name, status, spend_limit, limit_reset, models, ip_allow
+SELECT site_id, account_id, workspace_id, kind, name, status, spend_limit, limit_reset, models, ip_allow, preset_id
 FROM accounts.api_keys WHERE id = @id AND deleted_at IS NULL
 FOR UPDATE;
 
 -- name: UpdateKey :exec
 -- Every setting a user may change, replaced whole; the expiry is not among them. The caller holds the key's turn
--- (LockKey) and has read the settings this replaces.
+-- (LockKey) and has read the settings this replaces, the routing preset it keeps when none is chosen among them.
 UPDATE accounts.api_keys SET updated_at = statement_timestamp(), name = @name, status = @status, spend_limit = @spend_limit, limit_reset = @limit_reset,
-    models = @models, ip_allow = @ip_allow
+    models = @models, ip_allow = @ip_allow, preset_id = @preset_id
 WHERE id = @id;
 
 -- name: DeleteKey :many

@@ -1,7 +1,7 @@
 -- name: ValidManagementKey :one
 -- Mutable authorization stays under the manager's row lock until its operation commits.
 SELECT k.id, k.workspace_id, k.kind, k.created_by, k.name, k.prefix, k.last4, k.created_at, k.updated_at, k.expires_at,
-    k.status, k.spend_limit, k.limit_reset, k.models, k.ip_allow
+    k.status, k.spend_limit, k.limit_reset, k.models, k.ip_allow, k.preset_id
 FROM accounts.api_keys k
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
@@ -23,7 +23,7 @@ RETURNING management_requests <= 60 AS allowed,
 
 -- name: ListManagedKeys :many
 SELECT k.id, k.workspace_id, k.kind, k.created_by, k.name, k.prefix, k.last4, k.created_at, k.updated_at, k.expires_at,
-    k.status, k.spend_limit, k.limit_reset, k.models, k.ip_allow
+    k.status, k.spend_limit, k.limit_reset, k.models, k.ip_allow, k.preset_id
 FROM accounts.api_keys k
 WHERE k.account_id = @account_id AND k.kind = 'call' AND k.deleted_at IS NULL
     AND (@include_disabled::boolean OR k.status = 'active')
