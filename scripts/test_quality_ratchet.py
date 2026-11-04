@@ -3,6 +3,7 @@ baseline fails too. The fixture trees are measured by tools/qualityratchet, so t
 numbers, the generated/test exclusions and the baseline comparison together."""
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -74,9 +75,22 @@ class Fixture:
     def baseline_data(self):
         return json.loads((self.root / ".github" / "quality-baseline.json").read_text(encoding="utf-8"))
 
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.root), *args],
+                              capture_output=True, text=True, encoding="utf-8", check=True)
+
+    def commit(self, message="base"):
+        self.git("init")
+        self.git("add", ".")
+        self.git("-c", "user.name=fixture", "-c", "user.email=fixture@example.com",
+                 "commit", "--no-gpg-sign", "-m", message)
+        return self.git("rev-parse", "HEAD").stdout.strip()
+
     def run(self, *args):
+        environment = dict(os.environ)
+        environment.pop("BASE", None)
         return subprocess.run([sys.executable, str(SCRIPT), "--root", str(self.root), *args],
-                              capture_output=True, text=True, encoding="utf-8")
+                              capture_output=True, text=True, encoding="utf-8", env=environment)
 
 
 class GrowsTest(unittest.TestCase):
@@ -189,6 +203,71 @@ class WriteBaselineTest(unittest.TestCase):
             self.assertEqual(raised.returncode, 1)
             self.assertIn("nolint:gosec grew from 0 to 1", raised.stderr)
             self.assertEqual(fixture.baseline_data()["nolint"], {})
+
+
+
+class BaseTest(unittest.TestCase):
+    def test_code_and_baseline_growing_together_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.baseline()
+            fixture.write("clean.go", go_file(("small", 1)))
+            base = fixture.commit()
+
+            fixture.write("nolint.go", "package fixture\n\nvar _ = 0 //nolint:gosec // fixture\n")
+            fixture.write("complex.go", go_file(("big", 31)))
+            fixture.baseline(
+                nolint={"gosec": 1},
+                functions_over_gocognit_15=1,
+                gocognit_ceiling=[{"function": "complex.go:big", "complexity": 31}],
+            )
+
+            run = fixture.run("--base", base)
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("base baseline: nolint:gosec grew from 0 to 1", run.stderr)
+            self.assertIn("base baseline: functions over gocognit 15 grew from 0 to 1", run.stderr)
+            self.assertIn("base baseline: new function over the cognitive-complexity ceiling 30: complex.go:big (31)",
+                          run.stderr)
+
+            refused = fixture.run("--base", base, "--write-baseline")
+
+            self.assertEqual(refused.returncode, 1, refused.stderr)
+            self.assertIn("base baseline: nolint:gosec grew from 0 to 1", refused.stderr)
+            self.assertEqual(fixture.baseline_data()["nolint"]["gosec"], 1)
+
+    def test_a_base_ceiling_value_raised_with_the_baseline_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.baseline(
+                functions_over_gocognit_15=1,
+                gocognit_ceiling=[{"function": "complex.go:big", "complexity": 31}],
+            )
+            fixture.write("complex.go", go_file(("big", 31)))
+            base = fixture.commit()
+
+            fixture.write("complex.go", go_file(("big", 32)))
+            fixture.baseline(
+                functions_over_gocognit_15=1,
+                gocognit_ceiling=[{"function": "complex.go:big", "complexity": 32}],
+            )
+
+            run = fixture.run("--base", base)
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("base baseline: function complex.go:big grew from 31 to 32", run.stderr)
+
+    def test_first_introduction_has_no_base_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.write("clean.go", go_file(("small", 1)))
+            base = fixture.commit()
+            fixture.baseline()
+
+            run = fixture.run("--base", base)
+
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn("has no baseline; treating this as its first introduction", run.stdout)
 
 
 if __name__ == "__main__":

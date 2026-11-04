@@ -22,13 +22,16 @@ only shrink. Tests are files ending in _test.go and anything under a testdata di
 `// Code generated ... DO NOT EDIT.` header, which is what go/ast.IsGenerated and golangci-lint's generated-code
 exclusion recognize.
 
-usage: python3 scripts/ci/quality_ratchet.py [--root DIR] [--write-baseline]
-       --write-baseline lowers the committed baseline to the tree, and refuses when a count grew, so it can create the
-       first baseline but never weaken one.
+usage: python3 scripts/ci/quality_ratchet.py [--root DIR] [--base REV] [--write-baseline]
+       --base (default: $BASE, the PR or train base) also reads the baseline committed at that revision and rejects any
+       count increase, new hard-ceiling exception or exception value increase. Without a baseline there, the tree is
+       the baseline's first introduction. --write-baseline lowers the committed baseline to the tree, and refuses when
+       a count grew or the base baseline says it may not be weakened.
 """
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -101,14 +104,8 @@ def entries(value, name, amount, path):
     return found
 
 
-def load(path):
-    """The committed baseline, checked enough that a typo cannot pass as a lower number."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise SystemExit(f"quality ratchet: cannot read {path}: {exc}")
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"quality ratchet: {path} is not valid JSON: {exc}")
+def checked(data, path):
+    """The baseline data, checked enough that a typo cannot pass as a lower number."""
     if not isinstance(data, dict) or data.get("version") != VERSION:
         raise SystemExit(f"quality ratchet: {path}: version must be {VERSION}")
     if data.get("ceilings") != {"gocognit": COGNITIVE_CEILING, "file_lines": FILE_CEILING}:
@@ -129,6 +126,51 @@ def load(path):
         "files_over_500_lines": number(data.get("files_over_500_lines"), "files_over_500_lines", path),
         "file_ceiling": entries(data.get("file_ceiling"), "file", "lines", path),
     }
+
+
+def load(path):
+    """The committed baseline, checked enough that a typo cannot pass as a lower number."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise SystemExit(f"quality ratchet: cannot read {path}: {exc}")
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"quality ratchet: {path} is not valid JSON: {exc}")
+    return checked(data, path)
+
+
+def git(root, *args):
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, encoding="utf-8")
+
+
+def load_base(root, base):
+    """The baseline committed at base, or None when that commit has no baseline (its first introduction).
+
+    The base's ceilings must match the current rule, so raising the hard ceiling and its baseline together cannot pass.
+    """
+    top = git(root, "rev-parse", "--show-toplevel")
+    if top.returncode:
+        raise SystemExit(f"quality ratchet: --base needs a git worktree: {top.stderr.strip()}")
+    if Path(top.stdout.strip()).resolve() != root.resolve():
+        raise SystemExit("quality ratchet: --base needs --root to be the git repository root")
+    commit = git(root, "rev-parse", "--verify", f"{base}^{{commit}}")
+    if commit.returncode:
+        raise SystemExit(f"quality ratchet: base {base!r} is not a commit: {commit.stderr.strip()}")
+    revision = commit.stdout.strip()
+    path = BASELINE.as_posix()
+    present = git(root, "ls-tree", "--name-only", revision, "--", path)
+    if present.returncode:
+        raise SystemExit(f"quality ratchet: cannot read {base}:{path}: {present.stderr.strip()}")
+    if not present.stdout.strip():
+        return None
+    shown = git(root, "show", f"{revision}:{path}")
+    if shown.returncode:
+        raise SystemExit(f"quality ratchet: cannot read {base}:{path}: {shown.stderr.strip()}")
+    try:
+        data = json.loads(shown.stdout)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"quality ratchet: {base}:{path} is not valid JSON: {exc}")
+    return checked(data, f"{base}:{path}")
 
 
 def compare(now, baseline):
@@ -183,6 +225,28 @@ def ceiling_falls(now, baseline, name, label):
     return fallen
 
 
+def base_problems(now, base):
+    """Growth against the baseline committed at the base: a pull request cannot raise a number and its baseline together."""
+    problems = []
+    for linter in sorted(set(now["nolint"]) | set(base["nolint"])):
+        have, want = now["nolint"].get(linter, 0), base["nolint"].get(linter, 0)
+        if have > want:
+            problems.append(f"base baseline: nolint:{linter} grew from {want} to {have}")
+
+    for key, label in (("functions_over_gocognit_15", f"functions over gocognit {COGNITIVE_LIMIT}"),
+                       ("files_over_500_lines", f"files over {FILE_LIMIT} lines")):
+        have, want = now[key], base[key]
+        if have > want:
+            problems.append(f"base baseline: {label} grew from {want} to {have}")
+
+    problems += [f"base baseline: {problem}" for problem in ceiling_problems(
+        now["gocognit_ceiling"], base["gocognit_ceiling"],
+        "function", f"cognitive-complexity ceiling {COGNITIVE_CEILING}")]
+    problems += [f"base baseline: {problem}" for problem in ceiling_problems(
+        now["file_ceiling"], base["file_ceiling"], "file", f"{FILE_CEILING}-line ceiling")]
+    return problems
+
+
 def report(problems, fallen):
     """Print both kinds of failure; 1 when either is present."""
     if problems:
@@ -222,19 +286,29 @@ def summary(now):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Fail when the quality ratchet's numbers grow.")
     parser.add_argument("--root", type=Path, default=ROOT, help="the tree to measure (default: this repository)")
+    parser.add_argument("--base", default=os.environ.get("BASE", ""),
+                        help="the commit whose committed baseline must not be exceeded (default: $BASE)")
     parser.add_argument("--write-baseline", action="store_true",
-                        help="lower the baseline to the tree; refuse when a count grew")
+                        help="lower the baseline to the tree; refuse when a count grew or the base baseline says no")
     args = parser.parse_args(argv)
 
     root = args.root.resolve()
     path = root / BASELINE
     now = current(measure(root))
+    base = load_base(root, args.base) if args.base else None
 
     if args.write_baseline:
+        problems = []
         if path.exists():
-            problems, _ = compare(now, load(path))
-            if problems:
-                return report(problems, [])
+            current_problems, _ = compare(now, load(path))
+            problems += current_problems
+        elif base is not None:
+            raise SystemExit(f"quality ratchet: {args.base} already has a baseline; restore {path} instead of "
+                             "creating a weaker one")
+        if base is not None:
+            problems += base_problems(now, base)
+        if problems:
+            return report(problems, [])
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(document(now), indent=2) + "\n", encoding="utf-8")
         print(f"quality ratchet: wrote {path}")
@@ -243,6 +317,11 @@ def main(argv=None):
     if not path.exists():
         raise SystemExit(f"quality ratchet: {path} is missing; run this script with --write-baseline to create it")
     problems, fallen = compare(now, load(path))
+    if args.base:
+        if base is None:
+            print(f"quality ratchet: {args.base} has no baseline; treating this as its first introduction")
+        else:
+            problems += base_problems(now, base)
     status = report(problems, fallen)
     if not status:
         print(summary(now))

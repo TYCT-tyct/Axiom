@@ -55,6 +55,8 @@ lint:
 # The quality ratchet: nolint per linter, functions over gocognit 15 and files over 500 lines may only fall, and no
 # function or file may newly cross the hard ceiling 30/800. .github/quality-baseline.json holds the counts and the named
 # exceptions; the script says which number to lower when one falls (`--write-baseline` lowers them, and refuses a rise).
+# With BASE set (PRs and trains), it also reads the baseline committed at the base, so code and baseline cannot grow
+# together; a base without the baseline is its first introduction.
 quality-ratchet:
     {{ python }} scripts/ci/quality_ratchet.py
 
