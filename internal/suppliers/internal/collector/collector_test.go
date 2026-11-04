@@ -7,10 +7,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 	"uuid"
+
+	"github.com/riverqueue/river/rivertype"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/pg"
@@ -304,5 +307,119 @@ func TestAuthBackoffSurvivesWorkersAndRestarts(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("a new login version was still blocked: calls = %d", calls)
+	}
+}
+
+// TestRegisterRefusesAnIncompleteConfig: a node that lacks one of the collector's dependencies refuses to start it,
+// instead of running a drain that cannot work.
+func TestRegisterRefusesAnIncompleteConfig(t *testing.T) {
+	if err := Register(Config{}); err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("Register with an empty config returned %v, want the missing-dependency error", err)
+	}
+}
+
+// TestDrainJobIsUnique: a drain still queued or running is not stacked with another; the next interval starts a fresh
+// pass and the queue keeps the records until then.
+func TestDrainJobIsUnique(t *testing.T) {
+	if got := (Args{}).Kind(); got != "suppliers.usage_drain" {
+		t.Fatalf("job kind = %q", got)
+	}
+	opts := (Args{}).InsertOpts()
+	if opts.MaxAttempts != 1 || !opts.UniqueOpts.ByArgs {
+		t.Fatalf("insert options = %+v", opts)
+	}
+	for _, state := range []rivertype.JobState{
+		rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning,
+		rivertype.JobStateRetryable, rivertype.JobStateScheduled,
+	} {
+		if !slices.Contains(opts.UniqueOpts.ByState, state) {
+			t.Errorf("a drain in state %s is not unique", state)
+		}
+	}
+}
+
+// recordQueue returns its records on the first drain and nothing afterwards, as a queue consumed once does.
+type recordQueue struct {
+	queueManager
+	records []adapter.UsageRecord
+	calls   int
+}
+
+func (q *recordQueue) DrainUsage(context.Context, int) ([]adapter.UsageRecord, error) {
+	q.calls++
+	if q.calls > 1 {
+		return nil, nil
+	}
+	return q.records, nil
+}
+
+// TestDrainStagesThenIngests: the records a drain takes are staged before they are parsed, and the same pass ingests
+// them into charge records and removes the staging rows.
+func TestDrainStagesThenIngests(t *testing.T) {
+	db := open(t)
+	id := insertSupplier(t, db)
+	w := worker(db)
+	hold, err := w.hold(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.release(t.Context(), hold, id)
+	queue := &recordQueue{records: []adapter.UsageRecord{{
+		Ref: "019c0f3e-6a4b-7c8d-9e0f-1a2b3c4d5e6f", Raw: []byte(`{"v":1,"ok":true}`),
+	}}}
+	if err := w.drain(t.Context(), supplier{id: id}, queue, 1, hold); err != nil {
+		t.Fatal(err)
+	}
+	if queue.calls != 2 {
+		t.Fatalf("drain calls = %d, want two (the second empty)", queue.calls)
+	}
+	if got := count(t, db, `SELECT count(*) FROM suppliers.charge_records WHERE supplier_id = $1`, id); got != 1 {
+		t.Fatalf("charge rows = %d", got)
+	}
+	if got := count(t, db, `SELECT count(*) FROM suppliers.usage_records WHERE supplier_id = $1`, id); got != 0 {
+		t.Fatalf("staging rows after ingest = %d", got)
+	}
+}
+
+// errorQueue fails every drain with one error.
+type errorQueue struct {
+	queueManager
+	err error
+}
+
+func (q errorQueue) DrainUsage(context.Context, int) ([]adapter.UsageRecord, error) {
+	return nil, q.err
+}
+
+// TestDrainErrorsKeepTheirMeaning: a blocked supplier or a full bucket delays the next attempt without failing the
+// job; any other error fails it, so the queue retries.
+func TestDrainErrorsKeepTheirMeaning(t *testing.T) {
+	db := open(t)
+	id := insertSupplier(t, db)
+	w := worker(db)
+	network := errors.New("network down")
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{
+		{"blocked", adapter.Blocked{Until: time.Now().Add(time.Minute)}, nil},
+		{"buckets full", adapter.ErrBucketsFull, nil},
+		{"network", network, network},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hold, err := w.hold(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.release(t.Context(), hold, id)
+			got := w.drain(t.Context(), supplier{id: id}, errorQueue{err: tc.err}, 1, hold)
+			if tc.want == nil && got != nil {
+				t.Fatalf("drain returned %v, want a delay", got)
+			}
+			if tc.want != nil && !errors.Is(got, tc.want) {
+				t.Fatalf("drain returned %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
