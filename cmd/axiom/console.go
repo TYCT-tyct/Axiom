@@ -77,7 +77,10 @@ type mounting struct {
 // and answered with a bare 500; the default would send the error's text, which may describe our internals, to the
 // client. Every response is uncached. The guard runs in front of the generated routes: they read the query before any
 // middleware of theirs would run, and its order of checks is the answer's.
-func apiRoutes(g *guard, logger *slog.Logger, mount func(mounting) http.Handler) http.Handler {
+func apiRoutes(g interface {
+	serve(w http.ResponseWriter, r *http.Request, pattern string, routes http.Handler)
+}, logger *slog.Logger, mount func(mounting) http.Handler,
+) http.Handler {
 	mux := http.NewServeMux()
 	routes := mount(mounting{
 		mux:           mux,

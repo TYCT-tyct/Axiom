@@ -35,6 +35,7 @@ type adminFixture struct {
 	commandLine
 	svc       *accounts.Service
 	routes    http.Handler
+	ops       http.Handler // the operations listener's routes on the same node
 	clock     *testClock
 	logs      *bytes.Buffer
 	upstreams *suppliers.Service
@@ -127,7 +128,12 @@ func startAdminNodeWithSignals(c commandLine, clock *testClock, exit *egress.Cli
 	api.keys, api.exit = masterKeys(c.t), exit
 	api.alerts, api.instance, api.paymentSignals = signals, instance, payments.NewSignalState()
 	routes := adminRoutes(api, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
-	return adminFixture{commandLine: c, svc: svc, routes: routes, clock: clock, logs: logs, upstreams: upstreams}
+	opsContract, err := operationsContract()
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	ops := operationsRoutes(operationsAPI{admin: api, db: c.db}, &agentGuard{contract: opsContract, accounts: svc, db: c.db, logger: logger}, logger)
+	return adminFixture{commandLine: c, svc: svc, routes: routes, ops: ops, clock: clock, logs: logs, upstreams: upstreams}
 }
 
 // restarted is a new node on the same database, as the reload loop would make the old one after 30 seconds.

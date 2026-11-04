@@ -5,8 +5,10 @@
 // the generated code and the two sides cannot see: its security is declared and says what the session must have
 // proved and which permission it needs, a request that changes data is protected against forgery and refused with a 403,
 // every failure has the one error body, a list takes the cursor and limit, and a contract that has idempotency keys
-// asks for one on every change. The surfaces share the session operations and a few schemas by being written twice, so
-// what two contracts both define under one name must be the same definition.
+// asks for one on every change. The operations API's operations take an operations credential instead of a session:
+// each names its permission, its scope and its MCP tool, which no other operation shares, and asks for a reason. The
+// surfaces share the session operations and a few schemas by being written twice, so what two contracts both define
+// under one name must be the same definition.
 //
 // Given the base's contracts too, it also fails when a schema newly requires a property (compat.go).
 //
@@ -21,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -31,8 +34,17 @@ import (
 const (
 	errorSchema    = "#/components/schemas/Error"
 	idempotencyRef = "#/components/parameters/IdempotencyKey"
+	reasonRef      = "#/components/parameters/Reason"
 	sessionTag     = "Session"
+	// agentContract is the operations API's, which an operations credential calls instead of a session.
+	agentContract = "operations.yaml"
 )
+
+// agentScopes are the values of x-axiom-scope: where an operation of the operations API acts.
+var agentScopes = []string{"platform", "sites", "self"}
+
+// mcpName is an x-mcp-name: the stable lower_snake_case name of the operation's MCP tool.
+var mcpName = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
 
 // levels are the values of x-axiom-level: what a session must have proved.
 var levels = []string{"any", "pending_mfa", "signed_in", "mfa"}
@@ -130,6 +142,9 @@ func (o operation) flag(name string) bool {
 func conventions(file string, doc *openapi3.T) []string {
 	var problems []string
 	prefix := "/api/" + strings.TrimSuffix(file, ".yaml") + "/v1/"
+	if file == agentContract {
+		problems = append(problems, toolNames(doc)...)
+	}
 	for _, o := range operations(doc) {
 		where := fmt.Sprintf("%s: %s %s", file, o.method, o.path)
 		var found []string
@@ -170,6 +185,9 @@ func platformOperation(file string, o operation) bool {
 
 // security: the session, the CSRF token for a change, the level and the permission, all written down.
 func security(file string, o operation) []string {
+	if file == agentContract {
+		return agentSecurity(o)
+	}
 	level, permission := o.op.Extensions["x-axiom-level"], o.op.Extensions["x-axiom-permission"]
 	platform := platformOperation(file, o)
 	switch {
@@ -197,6 +215,49 @@ func security(file string, o operation) []string {
 		found = append(found, platformProof(level, p)...)
 	}
 	return found
+}
+
+// agentSecurity: an operation of the operations API takes the credential and nothing else, names the permission and
+// where it acts, has an MCP tool, and asks why it is called; it has no session level to name.
+func agentSecurity(o operation) []string {
+	var found []string
+	if reqs := o.op.Security; reqs == nil || len(*reqs) != 1 || !sameKeys((*reqs)[0], []string{"credential"}) {
+		found = append(found, "security must be the one requirement credential")
+	}
+	if o.op.Extensions["x-axiom-level"] != nil {
+		found = append(found, "an operations credential has no x-axiom-level")
+	}
+	if p, _ := o.op.Extensions["x-axiom-permission"].(string); p == "" || p == "none" {
+		found = append(found, "x-axiom-permission must name a permission")
+	}
+	if scope, _ := o.op.Extensions["x-axiom-scope"].(string); !slices.Contains(agentScopes, scope) {
+		found = append(found, fmt.Sprintf("x-axiom-scope must be one of %v", agentScopes))
+	}
+	if !slices.ContainsFunc(o.op.Parameters, func(p *openapi3.ParameterRef) bool { return p.Ref == reasonRef }) {
+		found = append(found, "an operation takes the Reason parameter")
+	}
+	return found
+}
+
+// toolNames: every operation of the operations API is one MCP tool, by a stable name no other operation has.
+func toolNames(doc *openapi3.T) []string {
+	var problems []string
+	seen := map[string]string{}
+	ops := operations(doc)
+	slices.SortFunc(ops, func(a, b operation) int { return strings.Compare(a.path+" "+a.method, b.path+" "+b.method) })
+	for _, o := range ops {
+		name, _ := o.op.Extensions["x-mcp-name"].(string)
+		where := fmt.Sprintf("%s: %s %s", agentContract, o.method, o.path)
+		switch {
+		case !mcpName.MatchString(name):
+			problems = append(problems, where+": x-mcp-name must be lower_snake_case")
+		case seen[name] != "":
+			problems = append(problems, fmt.Sprintf("%s: x-mcp-name %s is also %s's", where, name, seen[name]))
+		default:
+			seen[name] = o.op.OperationID
+		}
+	}
+	return problems
 }
 
 func publicProblems(platform, proofs bool) []string {

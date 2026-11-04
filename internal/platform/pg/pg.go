@@ -57,6 +57,10 @@ func NewScope(platform bool, sites, accounts []uuid.UUID) Scope {
 // elsewhere, as it refuses PlatformScope.
 func SiteScope(site uuid.UUID) Scope { return Scope{sites: []uuid.UUID{site}} }
 
+// SitesScope is the rows of these sites, for an operations credential limited to them. Like SiteScope, only
+// internal/accounts builds it, after authorization.
+func SitesScope(sites ...uuid.UUID) Scope { return Scope{sites: sites} }
+
 // AccountScope is the rows of one account. Only internal/accounts builds it, after authorization or for the account a
 // registration creates; the lint rule refuses it elsewhere.
 func AccountScope(account uuid.UUID) Scope { return Scope{accounts: []uuid.UUID{account}} }

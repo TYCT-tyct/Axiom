@@ -138,7 +138,7 @@ linters:
         - pattern: ^pg\.(PlatformScope|NewScope)$
           pkg: ^axiom/internal/platform/pg$
           msg: "a scope decides which tenants' rows a module reads: only cmd/ builds the platform scope, and only tests build an arbitrary one (internal/platform/README.md)"
-        - pattern: ^pg\.(SiteScope|AccountScope|AccountScopeIn)$
+        - pattern: ^pg\.(SiteScope|SitesScope|AccountScope|AccountScopeIn)$
           pkg: ^axiom/internal/platform/pg$
           msg: "a scope decides which tenants' rows a module reads: only internal/accounts builds a site or account scope, after authorization (internal/accounts/README.md)"
   exclusions:
@@ -157,7 +157,7 @@ linters:
         text: from list 'json'
       - path: ^internal/accounts/ # authorization, which builds the tenant scopes
         linters: [forbidigo]
-        text: pg\.(SiteScope|AccountScope)
+        text: pg\.(SiteScope|SitesScope|AccountScope)
       - path: _test\.go # tests build whatever scope they test
         linters: [forbidigo]
         text: pg\.(PlatformScope|NewScope|SiteScope|AccountScope)
