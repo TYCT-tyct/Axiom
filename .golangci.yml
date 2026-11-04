@@ -150,6 +150,11 @@ linters:
       - path: ^(cmd|tools)/ # programs, which print their results and build the platform scope
         linters: [forbidigo]
         text: use of `(fmt\.Print|print|pg\.PlatformScope)
+      # The quality ratchet is a tool in the separate tools module and emits its measurement as JSON; it cannot import
+      # the platform's jsonx, which lives in the main module and is internal to it.
+      - path: ^tools/qualityratchet/
+        linters: [depguard]
+        text: from list 'json'
       - path: ^internal/accounts/ # authorization, which builds the tenant scopes
         linters: [forbidigo]
         text: pg\.(SiteScope|AccountScope)

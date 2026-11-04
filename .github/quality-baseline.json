@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "description": "The quality ratchet: each pull request could add one plausible exemption, so these numbers may only fall. scripts/ci/quality_ratchet.py measures them; a nolint directive naming several linters counts under each, so the per-linter counts sum above the number of directives. The ceiling lists name the only functions over cognitive complexity 30 and files over 800 lines, and each value may only shrink.",
+  "ceilings": {
+    "gocognit": 30,
+    "file_lines": 800
+  },
+  "nolint": {
+    "bodyclose": 1,
+    "containedctx": 4,
+    "contextcheck": 6,
+    "cyclop": 62,
+    "depguard": 68,
+    "dupl": 6,
+    "errcheck": 131,
+    "errorlint": 4,
+    "exhaustive": 34,
+    "forcetypeassert": 2,
+    "funlen": 21,
+    "gocognit": 39,
+    "gosec": 119,
+    "modernize": 3,
+    "nilerr": 7,
+    "nilnil": 24,
+    "recvcheck": 2,
+    "staticcheck": 1,
+    "unparam": 1
+  },
+  "functions_over_gocognit_15": 39,
+  "gocognit_ceiling": [
+    {
+      "function": "internal/gateway/hop.go:(*attempt).readHop",
+      "complexity": 64
+    },
+    {
+      "function": "internal/gateway/route.go:endpointOf",
+      "complexity": 32
+    },
+    {
+      "function": "internal/gateway/serverloop.go:(*attempt).search",
+      "complexity": 47
+    },
+    {
+      "function": "internal/protocol/servertoolparams.go:parseServerParams",
+      "complexity": 38
+    },
+    {
+      "function": "internal/protocol/servertools.go:AppendServerTurn",
+      "complexity": 36
+    },
+    {
+      "function": "internal/protocol/serverturn.go:serverAssistant",
+      "complexity": 32
+    },
+    {
+      "function": "internal/quality/classes.go:compileClasses",
+      "complexity": 31
+    }
+  ],
+  "files_over_500_lines": 50,
+  "file_ceiling": [
+    {
+      "file": "internal/protocol/direct.go",
+      "lines": 1014
+    }
+  ]
+}

@@ -13,7 +13,7 @@ check: docs check-static test secrets web
 
 # The checks that need no run of a test suite: CI's static job adds `script-tests` on a PR, and `docs` (which includes
 # `script-tests`) plus `secrets` on a train or main
-check-static: modules adapters-removable artifacts scope api doc-names tidy generated lint deadcode vuln
+check-static: modules adapters-removable artifacts scope api doc-names tidy generated quality-ratchet lint deadcode vuln
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
 generate: web-install
@@ -51,6 +51,12 @@ tidy:
 lint:
     {{ tool }} golangci-lint run
     cd tools && go tool golangci-lint run ./...
+
+# The quality ratchet: nolint per linter, functions over gocognit 15 and files over 500 lines may only fall, and no
+# function or file may newly cross the hard ceiling 30/800. .github/quality-baseline.json holds the counts and the named
+# exceptions; the script says which number to lower when one falls (`--write-baseline` lowers them, and refuses a rise).
+quality-ratchet:
+    {{ python }} scripts/ci/quality_ratchet.py
 
 # Module imports follow the dependency table in docs/architecture.md
 modules:
