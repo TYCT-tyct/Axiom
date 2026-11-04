@@ -31,51 +31,73 @@ func (a adminAPI) GetOperationsTargets(ctx context.Context, request adminapi.Get
 	return adminapi.GetOperationsTargets200JSONResponse(targetsBody(call.site.ID.TypeID(), month, targets)), nil
 }
 
-// UpdateOperationsTargets replaces a month's targets: a target left out is cleared. A full write replaces all eight;
-// a write from a page before the commercial metrics replaces only the first-release four and keeps the commercial rows
-// it cannot see. The write, the read of the values it replaced and the audit entry commit together, under the
-// site-and-month lock the module takes.
+// UpdateOperationsTargets replaces the first-release four targets. It is the write every node has, so a page from
+// before the commercial metrics keeps using it during a rolling release. The commercial rows are preserved; a full
+// replacement uses ReplaceOperationsTargets, whose path an old node does not route.
 func (a adminAPI) UpdateOperationsTargets(ctx context.Context, request adminapi.UpdateOperationsTargetsRequestObject) (adminapi.UpdateOperationsTargetsResponseObject, error) {
-	month, err := targetMonthIn(request.Month)
-	if err != nil {
-		return nil, err
+	if request.Params.XAxiomTargetMetrics != nil || request.Body.AllMetrics != nil ||
+		request.Body.PaidUsers != nil || request.Body.MonthlyRevenue != nil ||
+		request.Body.GrossMargin != nil || request.Body.Retention != nil {
+		return nil, invalidField("/all_metrics", "a full replacement uses PUT /api/admin/v1/reports/targets/{month}/all")
 	}
-	call := callOf(ctx)
-	site := uuid.UUID(call.site.ID)
-	set, err := targetsIn(request.Body, call.site.Currency, month)
-	if err != nil {
-		return nil, err
-	}
-	headerFull := request.Params.XAxiomTargetMetrics != nil && *request.Params.XAxiomTargetMetrics == "all"
-	if request.Body.AllMetrics != nil && !*request.Body.AllMetrics {
-		return nil, invalidField("/all_metrics", "must be true when present")
-	}
-	bodyFull := request.Body.AllMetrics != nil && *request.Body.AllMetrics
-	if headerFull != bodyFull {
-		return nil, invalidField("/all_metrics", "must be true exactly when X-Axiom-Target-Metrics is all")
-	}
-	full := bodyFull
-	// A legacy write keeps the first-release fingerprint [month, body] so a request an old node already completed
-	// replays here after a lost response. A full write adds its marker, which an old node rejects before writing.
-	fingerprint := []any{request.Month, request.Body}
-	if full {
-		fingerprint = append(fingerprint, true)
-	}
-	view, replayed, err := idempotently(ctx, a.db, "updateOperationsTargets", request.Params.IdempotencyKey, fingerprint,
-		func(tx pg.Tx) (adminapi.OperationsTargets, error) {
-			opts := operations.SetOptions{KeepCommercial: !full}
-			if err := operations.Set(ctx, tx, actor(ctx), site, set, request.Body.Rev, request.Body.Reason, opts); err != nil {
-				return adminapi.OperationsTargets{}, err
-			}
-			stored, err := operations.Read(ctx, tx, site, month)
-			return targetsBody(call.site.ID.TypeID(), month, stored), err
-		})
+	view, replayed, err := a.writeTargets(ctx, "updateOperationsTargets", request.Month, request.Params.IdempotencyKey, request.Body, false)
 	if err != nil {
 		return nil, err
 	}
 	return adminapi.UpdateOperationsTargets200JSONResponse{
 		Body: view, Headers: adminapi.UpdateOperationsTargets200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
 	}, nil
+}
+
+// ReplaceOperationsTargets replaces all eight targets. The operation is mounted at a path that a node before the
+// commercial metrics does not route: that node answers 404 before it can mistake the request for a legacy four-field
+// write and clear only half the set. The header and body marker are still required, so a page states its intent and a
+// new node never treats a half-marked request as a full write.
+func (a adminAPI) ReplaceOperationsTargets(ctx context.Context, request adminapi.ReplaceOperationsTargetsRequestObject) (adminapi.ReplaceOperationsTargetsResponseObject, error) {
+	headerFull := request.Params.XAxiomTargetMetrics != nil && string(*request.Params.XAxiomTargetMetrics) == "all"
+	bodyFull := request.Body.AllMetrics != nil && *request.Body.AllMetrics
+	if !headerFull || !bodyFull {
+		return nil, invalidField("/all_metrics", "must be true exactly when X-Axiom-Target-Metrics is all")
+	}
+	view, replayed, err := a.writeTargets(ctx, "replaceOperationsTargets", request.Month, request.Params.IdempotencyKey, request.Body, true)
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.ReplaceOperationsTargets200JSONResponse{
+		Body: view, Headers: adminapi.ReplaceOperationsTargets200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)},
+	}, nil
+}
+
+// writeTargets is the shared read-check-write of both target operations. A legacy write keeps the first-release
+// fingerprint [month, body], so a request an old node already completed replays here after a lost response; a full
+// write has its own idempotency namespace and appends its marker to the fingerprint.
+func (a adminAPI) writeTargets(ctx context.Context, operation, month, idempotencyKey string, body *adminapi.OperationsTargetsUpdate, full bool) (adminapi.OperationsTargets, bool, error) {
+	parsed, err := targetMonthIn(month)
+	if err != nil {
+		return adminapi.OperationsTargets{}, false, err
+	}
+	call := callOf(ctx)
+	site := uuid.UUID(call.site.ID)
+	set, err := targetsIn(body, call.site.Currency, parsed)
+	if err != nil {
+		return adminapi.OperationsTargets{}, false, err
+	}
+	fingerprint := []any{month, body}
+	if full {
+		fingerprint = append(fingerprint, true)
+	}
+	view, replayed, err := idempotently(ctx, a.db, operation, idempotencyKey, fingerprint,
+		func(tx pg.Tx) (adminapi.OperationsTargets, error) {
+			if err := operations.Set(ctx, tx, actor(ctx), site, set, body.Rev, body.Reason, operations.SetOptions{KeepCommercial: !full}); err != nil {
+				return adminapi.OperationsTargets{}, err
+			}
+			stored, err := operations.Read(ctx, tx, site, parsed)
+			return targetsBody(call.site.ID.TypeID(), parsed, stored), err
+		})
+	if err != nil {
+		return adminapi.OperationsTargets{}, false, err
+	}
+	return view, replayed, nil
 }
 
 // targetMonthIn parses the contract's YYYY-MM path parameter; the guard has already matched its shape, so a failure

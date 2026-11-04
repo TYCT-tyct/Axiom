@@ -4,7 +4,7 @@ import { type AdminState, emptyState, type Schemas, usualState, worstState } fro
 import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { supplyHandlers } from "./admin-supply.ts";
-import { getTargets, putTargets, targetComparison } from "./admin-targets-api.ts";
+import { getTargets, putTargets, replaceTargets, targetComparison } from "./admin-targets-api.ts";
 import { fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
 import { confirmTotp, regenerate, session, signIn, signOut, totpSetup, userId, verifyMfa } from "./mock-auth.ts";
 
@@ -483,6 +483,7 @@ const handlers: Handler<AdminState>[] = [
   route("get", `${base}/reports/overview`, reads("sites.manage"), getOverview),
   route("get", `${base}/reports/targets/{month}`, reads("sites.manage"), getTargets),
   route("put", `${base}/reports/targets/{month}`, changes("sites.manage"), putTargets),
+  route("put", `${base}/reports/targets/{month}/all`, changes("sites.manage"), replaceTargets),
   route("get", `${base}/calls`, reads("calls.search"), listCalls),
   route("get", `${base}/calls/{call_id}/trace`, reads("calls.inspect"), getTrace),
   route("get", `${base}/audit`, reads("audit.view"), listAudit),

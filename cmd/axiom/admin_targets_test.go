@@ -37,7 +37,7 @@ func TestAdminOperationsTargets(t *testing.T) {
 	}
 
 	key := newKey()
-	rec = f.do(http.MethodPut, path,
+	rec = f.do(http.MethodPut, path+"/all",
 		`{"calls":3100,"errors":12,"revenue":{"amount":"5000000000000","currency":"USD"},`+
 			`"cost":{"amount":"3000000000000","currency":"USD"},`+
 			`"paid_users":300,"monthly_revenue":{"amount":"600000000000","currency":"USD"},`+
@@ -105,7 +105,7 @@ func TestAdminOperationsTargets(t *testing.T) {
 	}
 
 	// Replaying the first request returns its response without writing or auditing again.
-	replay := f.do(http.MethodPut, path,
+	replay := f.do(http.MethodPut, path+"/all",
 		`{"calls":3100,"errors":12,"revenue":{"amount":"5000000000000","currency":"USD"},`+
 			`"cost":{"amount":"3000000000000","currency":"USD"},`+
 			`"paid_users":300,"monthly_revenue":{"amount":"600000000000","currency":"USD"},`+
@@ -151,7 +151,7 @@ func TestAdminOperationsTargets(t *testing.T) {
 	}
 
 	// Clearing the set is a write too: the month stays answerable, with every target absent.
-	rec = f.do(http.MethodPut, path, `{"all_metrics":true,"rev":2,"reason":"clear the month"}`,
+	rec = f.do(http.MethodPut, path+"/all", `{"all_metrics":true,"rev":2,"reason":"clear the month"}`,
 		as(owner), idempotent(newKey()), header("X-Axiom-Target-Metrics", "all"))
 	expectAdmin(t, "clear targets", rec, 200, "")
 	var cleared adminapi.OperationsTargets
@@ -417,9 +417,42 @@ func TestAdminOperationsTargetsKeepTheLegacyFingerprint(t *testing.T) {
 	}
 }
 
-// TestAdminOperationsTargetsFullWriteNeedsBothMarkers: a full write must carry the body marker as well as the header,
-// so an old node rejects it before it can clear only the legacy four and report success.
+// TestAdminOperationsTargetsFullWriteNeedsBothMarkers: the full-replacement endpoint requires the body marker as well
+// as the header, so a half-marked request cannot replace the set.
 func TestAdminOperationsTargetsFullWriteNeedsBothMarkers(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	path := "/reports/targets/2026-11/all"
+	for name, tc := range map[string]struct {
+		body   string
+		header string
+	}{
+		"header only": {`{"rev":0,"reason":"r"}`, "all"},
+		"body only":   {`{"all_metrics":true,"rev":0,"reason":"r"}`, ""},
+		"false body":  {`{"all_metrics":false,"rev":0,"reason":"r"}`, ""},
+	} {
+		var mods []mod
+		mods = append(mods, as(owner), idempotent(newKey()))
+		if tc.header != "" {
+			mods = append(mods, header("X-Axiom-Target-Metrics", tc.header))
+		}
+		rec := f.do(http.MethodPut, path, tc.body, mods...)
+		expectAdmin(t, name, rec, http.StatusBadRequest, codeInvalidRequest)
+		detail := errorDetailOf(t, rec)
+		if detail.Fields == nil || len(*detail.Fields) != 1 || (*detail.Fields)[0].Pointer != "/all_metrics" {
+			t.Fatalf("%s: the field error: %s", name, rec.Body.String())
+		}
+	}
+	if n := f.auditCount("targets.update"); n != "0" {
+		t.Fatalf("%s audit entries, want none", n)
+	}
+}
+
+// TestAdminOperationsTargetsLegacyRouteRefusesFull: the four-field endpoint is the one every node routes, so it does
+// not accept a full replacement. The page sends the full set to /all, whose absence on an old node is a 404 rather
+// than a legacy write.
+func TestAdminOperationsTargetsLegacyRouteRefusesFull(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)
 	owner := f.owner()
@@ -428,9 +461,10 @@ func TestAdminOperationsTargetsFullWriteNeedsBothMarkers(t *testing.T) {
 		body   string
 		header string
 	}{
-		"header only": {`{"rev":0,"reason":"r"}`, "all"},
-		"body only":   {`{"all_metrics":true,"rev":0,"reason":"r"}`, ""},
-		"false body":  {`{"all_metrics":false,"rev":0,"reason":"r"}`, ""},
+		"header only":     {`{"rev":0,"reason":"r"}`, "all"},
+		"body only":       {`{"all_metrics":true,"rev":0,"reason":"r"}`, ""},
+		"both":            {`{"all_metrics":true,"rev":0,"reason":"r"}`, "all"},
+		"commercial only": {`{"paid_users":3,"rev":0,"reason":"r"}`, ""},
 	} {
 		var mods []mod
 		mods = append(mods, as(owner), idempotent(newKey()))

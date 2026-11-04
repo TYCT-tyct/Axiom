@@ -98,20 +98,26 @@ function TargetsForm({
         )
       }
       reload={reload}
-      send={(targets, { reason, key }) =>
-        unwrapChange(
-          adminApi.PUT("/api/admin/v1/reports/targets/{month}", {
+      send={(targets, { reason, key }) => {
+        const body = { ...targets, rev: read.rev, reason };
+        if (!full) {
+          return unwrapChange(
+            adminApi.PUT("/api/admin/v1/reports/targets/{month}", {
+              params: { path: { month }, header: { "Idempotency-Key": key } },
+              body,
+            }),
+          );
+        }
+        return unwrapChange(
+          adminApi.PUT("/api/admin/v1/reports/targets/{month}/all", {
             params: {
               path: { month },
-              header: {
-                "Idempotency-Key": key,
-                ...(full ? { "X-Axiom-Target-Metrics": "all" as const } : {}),
-              },
+              header: { "Idempotency-Key": key, "X-Axiom-Target-Metrics": "all" },
             },
-            body: { ...targets, ...(full ? { all_metrics: true } : {}), rev: read.rev, reason },
+            body: { ...body, all_metrics: true },
           }),
-        )
-      }
+        );
+      }}
       done={() => <p>{t("overview.targets.saved")}</p>}
       onClose={onClose}
     />

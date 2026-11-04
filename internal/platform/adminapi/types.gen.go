@@ -1875,6 +1875,21 @@ func (e UpdateOperationsTargetsParamsXAxiomTargetMetrics) Valid() bool {
 	}
 }
 
+// Defines values for ReplaceOperationsTargetsParamsXAxiomTargetMetrics.
+const (
+	ReplaceOperationsTargetsParamsXAxiomTargetMetricsAll ReplaceOperationsTargetsParamsXAxiomTargetMetrics = "all"
+)
+
+// Valid indicates whether the value is a known member of the ReplaceOperationsTargetsParamsXAxiomTargetMetrics enum.
+func (e ReplaceOperationsTargetsParamsXAxiomTargetMetrics) Valid() bool {
+	switch e {
+	case ReplaceOperationsTargetsParamsXAxiomTargetMetricsAll:
+		return true
+	default:
+		return false
+	}
+}
+
 // AccountDetail defines model for AccountDetail.
 type AccountDetail struct {
 	// Balance An account's money in its site's accounting currency. `available` is `balance - reserved`; a call is admitted while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls settled for the current UTC calendar month.
@@ -3206,9 +3221,9 @@ type OperationsTargets struct {
 	SiteId SiteId `json:"site_id"`
 }
 
-// OperationsTargetsUpdate The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls, errors and paid users; gross margin and retention are basis points from 0 to 10000. Without `X-Axiom-Target-Metrics: all` and `all_metrics: true` the commercial metrics are left as stored; sending only one of the two is a 400.
+// OperationsTargetsUpdate The whole set of targets for one month: leaving a target out clears it. `rev` is the value read from the matching GET; if it has moved, the write is refused with 409 `stale_revision`. Money is in the site's accounting currency; another currency is a 400. Counts are calls, errors and paid users; gross margin and retention are basis points from 0 to 10000. On `replaceOperationsTargets` both `X-Axiom-Target-Metrics: all` and `all_metrics: true` are required. `updateOperationsTargets` refuses both markers and commercial fields, leaving those metrics as stored.
 type OperationsTargetsUpdate struct {
-	// AllMetrics True when the write replaces every metric the node stores; must be paired with `X-Axiom-Target-Metrics: all`. A node before the commercial metrics rejects this field, so a full replacement cannot partly succeed there.
+	// AllMetrics True when the write replaces every metric the node stores; required on `replaceOperationsTargets` and refused on `updateOperationsTargets`. The full-replacement path is not routed by a node before the commercial metrics, so a full write cannot partly succeed there.
 	AllMetrics *bool  `json:"all_metrics,omitempty"`
 	Calls      *int64 `json:"calls,omitempty"`
 
@@ -5472,12 +5487,24 @@ type UpdateOperationsTargetsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 
-	// XAxiomTargetMetrics `all` makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body; a node from before the commercial metrics rejects that field, so a full replacement cannot clear only the legacy four there. Without it, a write replaces only calls, errors, revenue and cost and leaves the commercial metrics as stored; a page from before them sends neither.
+	// XAxiomTargetMetrics `all` is required by `replaceOperationsTargets` and refused by `updateOperationsTargets`; it makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body. A node from before the commercial metrics does not route the full-replacement path, so a full replacement cannot clear only the legacy four there.
 	XAxiomTargetMetrics *UpdateOperationsTargetsParamsXAxiomTargetMetrics `json:"X-Axiom-Target-Metrics,omitempty"`
 }
 
 // UpdateOperationsTargetsParamsXAxiomTargetMetrics defines parameters for UpdateOperationsTargets.
 type UpdateOperationsTargetsParamsXAxiomTargetMetrics string
+
+// ReplaceOperationsTargetsParams defines parameters for ReplaceOperationsTargets.
+type ReplaceOperationsTargetsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+
+	// XAxiomTargetMetrics `all` is required by `replaceOperationsTargets` and refused by `updateOperationsTargets`; it makes a target write replace every metric the node stores, including paid users, monthly revenue, gross margin and retention. It must be paired with `all_metrics: true` in the body. A node from before the commercial metrics does not route the full-replacement path, so a full replacement cannot clear only the legacy four there.
+	XAxiomTargetMetrics *ReplaceOperationsTargetsParamsXAxiomTargetMetrics `json:"X-Axiom-Target-Metrics,omitempty"`
+}
+
+// ReplaceOperationsTargetsParamsXAxiomTargetMetrics defines parameters for ReplaceOperationsTargets.
+type ReplaceOperationsTargetsParamsXAxiomTargetMetrics string
 
 // SetRetentionParams defines parameters for SetRetention.
 type SetRetentionParams struct {
@@ -5878,6 +5905,9 @@ type SetRateLimitJSONRequestBody SetRateLimitJSONBody
 
 // UpdateOperationsTargetsJSONRequestBody defines body for UpdateOperationsTargets for application/json ContentType.
 type UpdateOperationsTargetsJSONRequestBody = OperationsTargetsUpdate
+
+// ReplaceOperationsTargetsJSONRequestBody defines body for ReplaceOperationsTargets for application/json ContentType.
+type ReplaceOperationsTargetsJSONRequestBody = OperationsTargetsUpdate
 
 // SetRetentionJSONRequestBody defines body for SetRetention for application/json ContentType.
 type SetRetentionJSONRequestBody = RetentionRequest

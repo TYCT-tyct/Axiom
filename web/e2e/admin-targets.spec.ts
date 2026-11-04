@@ -96,7 +96,7 @@ test.describe("business targets", () => {
     expect(state.targets.get(month)?.paid_users).toBe(before?.paid_users);
   });
 
-  test("a full clear is refused by an old node before it changes the legacy four", async ({ page }) => {
+  test("a full clear is refused by a node without the full-replacement route", async ({ page }) => {
     const state = await open(page, "");
     state.oldTargetWrite = true;
     const month = new Date().toISOString().slice(0, 7);
@@ -117,7 +117,7 @@ test.describe("business targets", () => {
     }
     await send(page);
 
-    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("errors.invalid_request"));
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("errors.not_found"));
     await expect(dialog(page).getByText(zhText("overview.targets.saved"))).toHaveCount(0);
     expect(state.targets.get(month)).toEqual(before);
   });

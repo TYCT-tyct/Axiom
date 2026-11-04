@@ -50,7 +50,7 @@ func (t *Targets) Check() error
 | 没设的目标不存在，0 是设了的目标 | `Targets` 用指针区分；`detail()` 省略 nil；API 的 `omitempty` 和页面分开显示“未设目标” |
 | 读者看不到半套目标 | 同一次写入的八个指标、旧值读取和审计在同一个事务；同一站点和月份的写入先取 advisory lock，并发写有先后 |
 | 旧表单不会覆盖新目标 | 每次成功写入（含清空）把月份版本加一；写入在锁内比较请求携带的 `expectedRev`，不符返回 `ErrStaleRevision`，不写、不审计 |
-| 旧节点不会遇到不认识的指标 | 后四项在独立表；旧节点的 `ReadTargets` 只读 `operations.targets`。新节点在没有 `X-Axiom-Target-Metrics: all` 和 `all_metrics: true` 时也不写后四项；旧节点会拒绝不认识的请求体字段，所以整组写入不会在旧节点上只执行一半 |
+| 旧节点不会遇到不认识的指标 | 后四项在独立表；旧节点的 `ReadTargets` 只读 `operations.targets`。整组替换走旧节点没有的 `/reports/targets/{month}/all`，旧节点直接 404；旧路径只接受前四项，新节点在没有 `X-Axiom-Target-Metrics: all` 和 `all_metrics: true` 时也不写后四项 |
 | 旧页面不会清掉它看不见的后四项 | `SetOptions.KeepCommercial` 跳过第二个写入循环，审计仍记录它们的现值 |
 | 窗口跨月时不丢数量或金额目标 | `ExpectedFor` 读 `since` 到 `until` 触及的每个月，逐月裁剪后相加；表驱动测试覆盖整月、部分月、跨月和空窗口 |
 | 比率只在结束月取值，不被折算 | `expectedFromStored` 先算 `endMonth = monthStart(until - 1ns)`，只把该月的比率行放进结果；测试覆盖跨月和月首边界 |
@@ -75,4 +75,4 @@ func (t *Targets) Check() error
 - **折算在 Go 里做，不在 SQL 里做**：窗口跨月、每月天数不同、半入规则和币种过滤都在纯函数里，测试不需要数据库；SQL 只按月份范围取行。比率另走一条不折算的路径，避免把百分比当成可加总的数量。
 - **毛利率在没有收入或成本未知时为空**：没有收入时除数为 0；成本未知时 `cost` 合计不含那些调用，用它会算出偏高的毛利率。两者都只隐藏实际值和差距，不隐藏负责人设的目标。
 - **留存用付费账户的月环比，不用注册同期群**：现有数据只有充值批次，月环比不需要新增埋点；它回答“上月付费的人本月还付费吗”，而不是“注册的人首次付费了吗”。窗口结束所在月是当期，分子只看到 `until`，所以当月是月初至今。
-- **API 的 `targets` 和 `metrics` 是可选字段**：滚动发布时旧节点不返回它们，新页面显示“不提供”而不是“没设目标”；新节点的 `metrics` 让页面知道能编辑后四项。整组替换同时用请求头 `X-Axiom-Target-Metrics: all` 和请求体的 `all_metrics: true` 表示：旧节点不认识请求体字段，会拒绝整个请求，不会先清掉前四项再报成功；旧页面不发后四项，新节点在没有两个标志时保留后四项并照实审计。
+- **API 的 `targets` 和 `metrics` 是可选字段**：滚动发布时旧节点不返回它们，新页面显示“不提供”而不是“没设目标”；新节点的 `metrics` 让页面知道能编辑后四项。整组替换走 `/reports/targets/{month}/all`，同时用请求头 `X-Axiom-Target-Metrics: all` 和请求体的 `all_metrics: true` 表示：旧节点没有这条路径，直接 404，不会把整组请求当成四项写入；旧页面不发后四项，新节点在旧路径上收到整组标志会返回 400。

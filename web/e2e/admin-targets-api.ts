@@ -23,23 +23,17 @@ export function getTargets({ params, state }: Ctx<"/api/admin/v1/reports/targets
   return ok(stored ?? { site_id: state.siteId, month, rev: 0, metrics: targetMetrics });
 }
 
-export function putTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "put">) {
-  const month = params.month ?? "";
+function writeTargets(
+  body: Schemas["OperationsTargetsUpdate"],
+  month: string,
+  state: Parameters<typeof getTargets>[0]["state"],
+  full: boolean,
+) {
   const current = state.targets.get(month);
-  const commercial = (["paid_users", "monthly_revenue", "gross_margin", "retention"] as const).some(
-    (field) => body[field] !== undefined,
-  );
-  if (state.oldTargetWrite && (body.all_metrics || commercial)) {
-    // The old contract has additionalProperties:false: it refuses the marker before changing anything.
-    return fail(400, "invalid_request");
-  }
-  if (body.all_metrics !== true && commercial) {
-    return fail(400, "invalid_request");
-  }
   if (body.rev !== (current?.rev ?? 0)) {
     return fail(409, "stale_revision");
   }
-  const kept = body.all_metrics === true ? body : current;
+  const kept = full ? body : current;
   const stored: Schemas["OperationsTargets"] = {
     site_id: state.siteId,
     month,
@@ -56,6 +50,30 @@ export function putTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/t
   };
   state.targets.set(month, stored);
   return ok(stored);
+}
+
+// The legacy endpoint is the four-field write every node has. It refuses the commercial fields and both full-set
+// markers, as the new node does; a page from before the commercial metrics sends none of them.
+export function putTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/targets/{month}", "put">) {
+  const commercial = (["paid_users", "monthly_revenue", "gross_margin", "retention"] as const).some(
+    (field) => body[field] !== undefined,
+  );
+  if (body.all_metrics !== undefined || commercial) {
+    return fail(400, "invalid_request");
+  }
+  return writeTargets(body, params.month ?? "", state, false);
+}
+
+// The full-replacement route is new with the commercial metrics; a node before them has no such path and answers 404
+// before it can mistake the request for a legacy four-field write.
+export function replaceTargets({ body, params, state }: Ctx<"/api/admin/v1/reports/targets/{month}/all", "put">) {
+  if (state.oldTargetWrite) {
+    return fail(404, "not_found");
+  }
+  if (body.all_metrics !== true) {
+    return fail(400, "invalid_request");
+  }
+  return writeTargets(body, params.month ?? "", state, true);
 }
 
 // targetComparison turns a stored month into the overview's prorated comparison. The mock states the month's targets
