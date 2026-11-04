@@ -33,6 +33,10 @@ func TestLegalConsentHTTP(t *testing.T) {
 	if _, err := admin.user(memberPassword+"\n", "create", "--email", memberEmail); err != nil {
 		t.Fatal(err)
 	}
+	const legacyEmail = "legacy-client@example.com"
+	if _, err := admin.user(memberPassword+"\n", "create", "--email", legacyEmail); err != nil {
+		t.Fatal(err)
+	}
 	console := startNode(c, clock)
 	site := admin.siteID()
 	path := "/sites/" + site + "/legal-documents"
@@ -58,7 +62,7 @@ func TestLegalConsentHTTP(t *testing.T) {
 	}
 	terms1 := publish("terms", "zh", testTerms)
 	privacy1 := publish("privacy", "zh", testPrivacy)
-	if terms1.Version != 1 || privacy1.Version != 1 || terms1.Locale != adminapi.LegalDocumentLocale("zh") {
+	if terms1.Version != 1 || privacy1.Version != 1 || terms1.Locale == nil || *terms1.Locale != adminapi.LegalDocumentLocale("zh") {
 		t.Fatalf("first versions: %+v %+v", terms1, privacy1)
 	}
 
@@ -73,14 +77,25 @@ func TestLegalConsentHTTP(t *testing.T) {
 		t.Errorf("%s publication audit entries, want 2", got)
 	}
 
-	rec = console.do(http.MethodGet, "/legal", "")
+	rec = console.do(http.MethodGet, "/legal?locales=all", "")
 	expect(t, "legal documents after publishing", rec, http.StatusOK, "")
 	decode(t, rec, &public)
 	if len(public.Documents) != 2 || public.Documents[0].Kind != consoleapi.LegalDocumentKind("privacy") ||
-		public.Documents[1].Body != testTerms || public.Documents[1].Locale != consoleapi.LegalDocumentLocale("zh") ||
+		public.Documents[1].Body != testTerms || public.Documents[1].Locale == nil || *public.Documents[1].Locale != consoleapi.LegalDocumentLocale("zh") ||
 		public.Documents[1].PublishedAt.IsZero() {
 		t.Fatalf("public documents: %+v", public.Documents)
 	}
+
+	// An old page sends no locale. The server resolves each kind and version to the one current document, so the
+	// acceptance is recorded against zh without the old client learning the new member.
+	legacy := console.signIn(legacyEmail, memberPassword)
+	expect(t, "an old acceptance without locale", console.do(http.MethodPost, "/legal/accept",
+		`{"consent":[{"kind":"terms","version":1},{"kind":"privacy","version":1}]}`, as(legacy)), http.StatusNoContent, "")
+	if got := admin.text(`SELECT string_agg(kind || ' ' || locale || ' ' || version, ',' ORDER BY kind) FROM accounts.legal_acceptances a
+		JOIN accounts.users u ON u.id = a.user_id WHERE u.email = '` + legacyEmail + `'`); got != "privacy zh 1,terms zh 1" {
+		t.Errorf("the old client's acceptances: %q", got)
+	}
+	expect(t, "an old key list after accepting without locale", console.do(http.MethodGet, "/keys", "", as(legacy)), http.StatusOK, "")
 
 	// An existing user, made before the documents existed, must accept before the console does anything else.
 	owner := console.signIn(memberEmail, memberPassword)
@@ -125,5 +140,42 @@ func TestLegalConsentHTTP(t *testing.T) {
 	if got := admin.text(`SELECT string_agg(a.kind || ' ' || a.locale || ' ' || a.version, ',' ORDER BY a.kind) FROM accounts.legal_acceptances a
 		JOIN accounts.users u ON u.id = a.user_id WHERE u.email = 'consented@example.com'`); got != "privacy zh 1,terms zh 2" {
 		t.Errorf("the registration's acceptances: %q", got)
+	}
+
+	// An old admin client omits locale when publishing. The new node defaults it to zh, takes the next version of the
+	// kind, and still returns locale in the response for a new client.
+	rec = admin.change(operator, http.MethodPost, path,
+		`{"kind":"terms","body":"Legacy admin terms.","reason":"legal test"}`, newKey())
+	expectAdmin(t, "an old publication without locale", rec, http.StatusCreated, "")
+	var legacyDocument adminapi.LegalDocument
+	decode(t, rec, &legacyDocument)
+	if legacyDocument.Version != 3 || legacyDocument.Locale == nil || *legacyDocument.Locale != adminapi.LegalDocumentLocale("zh") {
+		t.Fatalf("the old publication: %+v", legacyDocument)
+	}
+
+	termsEN := publish("terms", "en", "English placeholder terms.")
+	if termsEN.Version != 4 {
+		t.Fatalf("the English terms version: %+v", termsEN)
+	}
+	// An old page does not send locales=all and must keep its one-document-per-kind response, without locale. A new
+	// page asks for all locales and gets the rows it needs to choose by language.
+	rec = console.do(http.MethodGet, "/legal", "")
+	expect(t, "the legacy legal response", rec, http.StatusOK, "")
+	decode(t, rec, &public)
+	if len(public.Documents) != 2 || public.Documents[0].Kind != consoleapi.LegalDocumentKind("privacy") ||
+		public.Documents[1].Kind != consoleapi.LegalDocumentKind("terms") || public.Documents[1].Version != 4 ||
+		public.Documents[0].Locale != nil || public.Documents[1].Locale != nil {
+		t.Fatalf("the legacy legal response: %+v", public.Documents)
+	}
+	rec = console.do(http.MethodGet, "/legal?locales=all", "")
+	expect(t, "the locale-aware legal response", rec, http.StatusOK, "")
+	decode(t, rec, &public)
+	if len(public.Documents) != 3 {
+		t.Fatalf("the locale-aware response: %+v", public.Documents)
+	}
+	for _, document := range public.Documents {
+		if document.Locale == nil {
+			t.Fatalf("a locale-aware response member has no locale: %+v", document)
+		}
 	}
 }

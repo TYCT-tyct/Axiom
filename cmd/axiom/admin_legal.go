@@ -45,7 +45,9 @@ func (a adminAPI) ListLegalDocuments(ctx context.Context, request adminapi.ListL
 	var next *string
 	if more {
 		last := documents[len(documents)-1]
-		cursor := fmt.Sprintf("%s:%s:%d", last.Kind, last.Locale, last.Version)
+		// Emit the cursor an old node parses. New nodes accept both this and kind:locale:version; the cleanup migration
+		// switches the emitted form only after old nodes have exited.
+		cursor := fmt.Sprintf("%s:%d", last.Kind, last.Version)
 		next = &cursor
 	}
 	return adminapi.ListLegalDocuments200JSONResponse(adminapi.LegalDocumentHistory{
@@ -53,19 +55,30 @@ func (a adminAPI) ListLegalDocuments(ctx context.Context, request adminapi.ListL
 	}), nil
 }
 
-// legalHistoryCursor reads a next_cursor as the (kind, locale, version) it names. The order is the query's, so a cursor
+// legalHistoryCursor reads a next_cursor as the (kind, version) position. New nodes also accept the transitional
+// kind:locale:version form, and reduce it to the same position: the compatibility phase still keeps versions unique
+// across locales, so an old node can continue from a cursor a new node emitted. The order is the query's, so a cursor
 // after the last terms version continues with the privacy versions, and a malformed one is a 400.
 func legalHistoryCursor(raw *adminapi.Cursor) (accounts.DocumentVersion, bool, error) {
 	if raw == nil {
 		return accounts.DocumentVersion{}, false, nil
 	}
-	kind, rest, ok := strings.Cut(*raw, ":")
-	if !ok || (kind != accounts.LegalTerms && kind != accounts.LegalPrivacy) {
+	parts := strings.Split(*raw, ":")
+	if len(parts) != 2 && len(parts) != 3 {
 		return accounts.DocumentVersion{}, false, invalidField("/cursor", "is not a legal document cursor")
 	}
-	locale, versionText, ok := strings.Cut(rest, ":")
-	if !ok || (locale != accounts.LegalLocaleZH && locale != accounts.LegalLocaleEN) {
+	kind := parts[0]
+	if kind != accounts.LegalTerms && kind != accounts.LegalPrivacy {
 		return accounts.DocumentVersion{}, false, invalidField("/cursor", "is not a legal document cursor")
+	}
+	locale := ""
+	versionText := parts[1]
+	if len(parts) == 3 {
+		locale = parts[1]
+		versionText = parts[2]
+		if locale != accounts.LegalLocaleZH && locale != accounts.LegalLocaleEN {
+			return accounts.DocumentVersion{}, false, invalidField("/cursor", "is not a legal document cursor")
+		}
 	}
 	version, err := strconv.ParseInt(versionText, 10, 32)
 	if err != nil || version < 1 {
@@ -83,7 +96,11 @@ func (a adminAPI) PublishLegalDocument(ctx context.Context, request adminapi.Pub
 	}
 	document, replayed, err := idempotently(ctx, a.db, "publishLegalDocument", request.Params.IdempotencyKey, []any{request.SiteId, request.Body},
 		func(tx pg.Tx) (adminapi.LegalDocument, error) {
-			document, err := a.accounts.PublishLegalDocument(ctx, tx, actor(ctx), site, string(request.Body.Kind), string(request.Body.Locale), request.Body.Body, request.Body.Reason)
+			locale := accounts.LegalLocaleZH
+			if request.Body.Locale != nil {
+				locale = string(*request.Body.Locale)
+			}
+			document, err := a.accounts.PublishLegalDocument(ctx, tx, actor(ctx), site, string(request.Body.Kind), locale, request.Body.Body, request.Body.Reason)
 			if err != nil {
 				if refusal, ok := errors.AsType[*accounts.LegalDocumentError](err); ok {
 					return adminapi.LegalDocument{}, invalidField("/"+refusal.Field, refusal.Reason)
@@ -91,7 +108,7 @@ func (a adminAPI) PublishLegalDocument(ctx context.Context, request adminapi.Pub
 				return adminapi.LegalDocument{}, err
 			}
 			return adminapi.LegalDocument{
-				Kind: adminapi.LegalDocumentKind(document.Kind), Locale: adminapi.LegalDocumentLocale(document.Locale), Version: document.Version,
+				Kind: adminapi.LegalDocumentKind(document.Kind), Locale: legalLocalePtr(document.Locale), Version: document.Version,
 				Body: document.Body, PublishedAt: document.PublishedAt,
 			}, nil
 		})
@@ -107,9 +124,14 @@ func adminLegalDocuments(in []accounts.LegalDocument) []adminapi.LegalDocument {
 	out := make([]adminapi.LegalDocument, len(in))
 	for i, document := range in {
 		out[i] = adminapi.LegalDocument{
-			Kind: adminapi.LegalDocumentKind(document.Kind), Locale: adminapi.LegalDocumentLocale(document.Locale), Version: document.Version,
+			Kind: adminapi.LegalDocumentKind(document.Kind), Locale: legalLocalePtr(document.Locale), Version: document.Version,
 			Body: document.Body, PublishedAt: document.PublishedAt,
 		}
 	}
 	return out
+}
+
+func legalLocalePtr(locale string) *adminapi.LegalDocumentLocale {
+	value := adminapi.LegalDocumentLocale(locale)
+	return &value
 }

@@ -71,8 +71,10 @@ type CurrentLegalDocumentsRow struct {
 }
 
 // The versioned legal documents of a site and the versions its users accepted (README.md「注册同意」). The documents
-// are public data, readable in any scope; the acceptances are account data. A document has one version stream per
-// kind and locale, and an acceptance names the exact locale and version that was shown.
+// are public data, readable in any scope; the acceptances are account data. A document names the locale it was
+// published in. During the rolling-release compatibility phase (migration 00032) version numbers remain unique per
+// kind across locales, so an old node's (kind, version) cursor and ON CONFLICT target keep working. A later cleanup may
+// give each locale its own stream once no old node remains.
 // The latest version of each kind in each locale, which is what a registration or a page may show.
 func (q *Queries) CurrentLegalDocuments(ctx context.Context, db DBTX, siteID uuid.UUID) ([]CurrentLegalDocumentsRow, error) {
 	rows, err := db.Query(ctx, currentLegalDocuments, siteID)
@@ -164,17 +166,15 @@ WHERE site_id = $1
     AND (
         $2::text = ''
         OR kind > $2
-        OR (kind = $2 AND locale > $3)
-        OR (kind = $2 AND locale = $3 AND version < $4)
+        OR (kind = $2 AND version < $3)
     )
-ORDER BY kind, locale, version DESC
-LIMIT $5
+ORDER BY kind, version DESC
+LIMIT $4
 `
 
 type LegalDocumentHistoryParams struct {
 	SiteID        uuid.UUID
 	CursorKind    string
-	CursorLocale  string
 	CursorVersion int32
 	PageSize      int32
 }
@@ -187,13 +187,14 @@ type LegalDocumentHistoryRow struct {
 	PublishedAt pgtype.Timestamptz
 }
 
-// Every version of every kind and locale, newest first within a pair, after the cursor position
-// (kind, locale, version). The reads are the admin's, in the platform scope.
+// Every version of every kind and locale, newest first within a kind, after the legacy cursor position (kind, version).
+// The reads are the admin's, in the platform scope. Version numbers are unique across locales during the
+// rolling-release compatibility phase, so (kind, version) still identifies a row; a new cursor that also names a
+// locale is accepted by the handler and reduced to this same position.
 func (q *Queries) LegalDocumentHistory(ctx context.Context, db DBTX, arg LegalDocumentHistoryParams) ([]LegalDocumentHistoryRow, error) {
 	rows, err := db.Query(ctx, legalDocumentHistory,
 		arg.SiteID,
 		arg.CursorKind,
-		arg.CursorLocale,
 		arg.CursorVersion,
 		arg.PageSize,
 	)
@@ -224,18 +225,19 @@ func (q *Queries) LegalDocumentHistory(ctx context.Context, db DBTX, arg LegalDo
 const nextLegalVersion = `-- name: NextLegalVersion :one
 SELECT (coalesce(max(version), 0) + 1)::integer AS version
 FROM accounts.legal_documents
-WHERE site_id = $1 AND kind = $2 AND locale = $3
+WHERE site_id = $1 AND kind = $2
 `
 
 type NextLegalVersionParams struct {
 	SiteID uuid.UUID
 	Kind   string
-	Locale string
 }
 
-// The next version of a kind and locale, read under the site's lock so two publications cannot choose the same one.
+// The next version of a kind, read under the site's lock so two publications cannot choose the same one. The legacy
+// (site_id, kind, version) primary key still protects old nodes; it is why the compatibility phase allocates one
+// number across locales and a cleanup migration can switch to per-locale numbers only after old nodes exit.
 func (q *Queries) NextLegalVersion(ctx context.Context, db DBTX, arg NextLegalVersionParams) (int32, error) {
-	row := db.QueryRow(ctx, nextLegalVersion, arg.SiteID, arg.Kind, arg.Locale)
+	row := db.QueryRow(ctx, nextLegalVersion, arg.SiteID, arg.Kind)
 	var version int32
 	err := row.Scan(&version)
 	return version, err

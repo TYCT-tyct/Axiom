@@ -18,12 +18,22 @@ export type LegalConsentState = {
   reload: () => void;
 };
 
+// An old node predates locale-aware documents and omits the field. Those rows are the Chinese text (the migration's
+// default), so a new page treats the absence as zh instead of selecting no document and hiding the terms.
+export function documentLocale(document: Schemas["LegalDocument"]): Schemas["LegalDocumentLocale"] {
+  return document.locale ?? "zh";
+}
+
 // The versions a form sends are exactly the ones the visitor saw, including their locale. No documents means no
-// consent field at all.
+// consent field at all. A missing locale is sent as zh, and an old node ignores the extra member.
 export function legalVersions(documents: Schemas["LegalDocument"][]): Schemas["LegalDocumentVersion"][] | undefined {
   return documents.length === 0
     ? undefined
-    : documents.map((document) => ({ kind: document.kind, locale: document.locale, version: document.version }));
+    : documents.map((document) => ({
+        kind: document.kind,
+        locale: documentLocale(document),
+        version: document.version,
+      }));
 }
 
 // The site may publish Chinese and English separately. Show one document per kind in the language the console uses,
@@ -37,8 +47,8 @@ export function legalDocumentsForLanguage(
   return (["terms", "privacy"] as const).flatMap((kind) => {
     const sameKind = documents.filter((document) => document.kind === kind);
     const document =
-      sameKind.find((candidate) => candidate.locale === preferred) ??
-      sameKind.find((candidate) => candidate.locale === fallback);
+      sameKind.find((candidate) => documentLocale(candidate) === preferred) ??
+      sameKind.find((candidate) => documentLocale(candidate) === fallback);
     return document ? [document] : [];
   });
 }
@@ -53,7 +63,9 @@ export function useLegalConsent(): LegalConsentState {
   const query = useQuery(legalQuery);
   const [acceptedKey, setAcceptedKey] = useState<string | null>(null);
   const documents = legalDocumentsForLanguage(query.data?.documents ?? [], i18n.resolvedLanguage ?? i18n.language);
-  const versionKey = documents.map((document) => `${document.kind}:${document.locale}:${document.version}`).join("|");
+  const versionKey = documents
+    .map((document) => `${document.kind}:${documentLocale(document)}:${document.version}`)
+    .join("|");
   return {
     query,
     documents,
@@ -94,7 +106,7 @@ export function LegalConsent({ consent }: { consent: LegalConsentState }) {
         const title = t(`legal.${document.kind}`);
         return (
           <Panel
-            key={`${document.kind}:${document.locale}`}
+            key={`${document.kind}:${documentLocale(document)}`}
             title={title}
             action={<span className="text-label text-t4">{t("legal.version", { version: document.version })}</span>}
           >

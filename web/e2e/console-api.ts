@@ -41,7 +41,9 @@ function acceptsCurrent(documents: Schemas["LegalDocument"][], consent: Schemas[
       picked !== undefined &&
       documents.some(
         (document) =>
-          document.kind === kind && document.locale === picked.locale && document.version === picked.version,
+          document.kind === kind &&
+          (document.locale ?? "zh") === (picked.locale ?? "zh") &&
+          document.version === picked.version,
       )
     );
   });

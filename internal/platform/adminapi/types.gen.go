@@ -2693,22 +2693,22 @@ type KeyLimitsView struct {
 	Limits KeyLimits `json:"limits"`
 }
 
-// LegalDocument One version of one of the site's legal documents in one locale; the body is Markdown, never HTML.
+// LegalDocument One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. `locale` is absent on a node that predates locale-aware documents; a client treats the absent value as `zh`.
 type LegalDocument struct {
 	// Body Markdown headings, paragraphs, and lists. Rendered as React text, never interpreted as HTML.
-	Body        string              `json:"body"`
-	Kind        LegalDocumentKind   `json:"kind"`
-	Locale      LegalDocumentLocale `json:"locale"`
-	PublishedAt time.Time           `json:"published_at"`
-	Version     int                 `json:"version"`
+	Body        string               `json:"body"`
+	Kind        LegalDocumentKind    `json:"kind"`
+	Locale      *LegalDocumentLocale `json:"locale,omitempty"`
+	PublishedAt time.Time            `json:"published_at"`
+	Version     int                  `json:"version"`
 }
 
 // LegalDocumentHistory defines model for LegalDocumentHistory.
 type LegalDocumentHistory struct {
-	// Documents Newest first within a kind and locale, at most `limit` rows.
+	// Documents Newest first within a kind, at most `limit` rows.
 	Documents []LegalDocument `json:"documents"`
 
-	// NextCursor Where the next page starts, or null on the last page.
+	// NextCursor Where the next page starts, or null on the last page. New nodes emit the legacy `kind:version` form for old nodes and accept both that and `kind:locale:version`.
 	NextCursor *string `json:"next_cursor"`
 }
 
@@ -2718,21 +2718,21 @@ type LegalDocumentKind string
 // LegalDocumentLocale defines model for LegalDocumentLocale.
 type LegalDocumentLocale string
 
-// LegalDocumentPublish defines model for LegalDocumentPublish.
+// LegalDocumentPublish Publish one version of a kind in one locale, with the body and a reason. `locale` is optional while old admin clients remain: when absent, the publication is Chinese (`zh`) and takes the next version of the kind.
 type LegalDocumentPublish struct {
-	Body   string              `json:"body"`
-	Kind   LegalDocumentKind   `json:"kind"`
-	Locale LegalDocumentLocale `json:"locale"`
+	Body   string               `json:"body"`
+	Kind   LegalDocumentKind    `json:"kind"`
+	Locale *LegalDocumentLocale `json:"locale,omitempty"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 }
 
-// LegalDocumentVersion defines model for LegalDocumentVersion.
+// LegalDocumentVersion A legal document version named by an acceptance or the session's pending list. `locale` is optional for rolling compatibility: an old client omits it, and the server resolves the kind and version to the one current document; a page reading an old node's response treats the absent value as `zh`.
 type LegalDocumentVersion struct {
-	Kind    LegalDocumentKind   `json:"kind"`
-	Locale  LegalDocumentLocale `json:"locale"`
-	Version int                 `json:"version"`
+	Kind    LegalDocumentKind    `json:"kind"`
+	Locale  *LegalDocumentLocale `json:"locale,omitempty"`
+	Version int                  `json:"version"`
 }
 
 // LoginField defines model for LoginField.

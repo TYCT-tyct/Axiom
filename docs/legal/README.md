@@ -26,19 +26,42 @@ Last Updated: August 31, 2026，2026-11-04 只读核对）。它只用于演示�
 
 ## 语言、版本和同意
 
-`accounts.legal_documents` 现在按 `(site_id, kind, locale, version)` 保存：中文和英文是两个独立的版本流，
-发布英文修订不会强迫中文用户重新同意，反之亦然。`accounts.legal_acceptances` 也记录 `locale`，所以同意记录
-精确到“哪一种语言的哪一个版本”。
+`accounts.legal_documents` 保存 `(site_id, kind, locale, version)`：中文和英文分别成文、分别展示，当前版本是
+每个 `(kind, locale)` 的最大版本。`accounts.legal_acceptances` 也记录 `locale`，同意记录精确到“哪一种语言的
+哪一个版本”。
 
-- 控制台按界面语言选择每种文档的 `locale`；某种文档缺少当前语言时，才回退到另一种语言。
-- 页面只发送**屏幕上实际显示的**每种文档一个版本，连同 `locale`；服务端只接受每种 `kind` 一个当前版本。
+版本号在滚动发布阶段仍按 `kind` 跨语言共享：旧节点用 `(site, kind, version)` 主键发布和接受，旧页面的
+`kind:version` 游标也必须能继续使用。因此迁移只展开 schema，保留旧主键、旧接受唯一键和旧外键；新节点按
+`kind` 取下一个版本，旧节点退出后再由清理迁移改成每个 `(kind, locale)` 独立编号并切到
+`kind:locale:version` 游标。旧节点省略 `locale` 的接受请求由数据库触发器按 `(site, kind, version)` 解析成
+文档实际的语言，不会把英文文档记成中文同意。
+
+- 控制台按界面语言选择每种文档的 `locale`；旧节点不返回 `locale` 时按 `zh` 处理；某种文档缺少当前语言时，
+  才回退到另一种语言。
+- 新页面只发送**屏幕上实际显示的**每种文档一个版本，连同 `locale`；旧页面不带 `locale` 时，服务端按
+  `kind` 和 `version` 唯一解析到当前文档。服务端只接受每种 `kind` 一个当前版本。
 - 服务端判断“是否还要同意”时，每种 `kind` 只要有一个当前版本（无论 `locale`）被接受就通过；该 `kind` 的
   当前版本一个都未被接受时，下一次请求会要求同意。
 - 正文存的是 Markdown 子集（标题、段落、列表），前台按纯文本节点渲染，不解释 HTML；卡片和边框使用设计系统
   的 token，不再出现 ASCII 分隔线。
 
-迁移把此前的单一中英双语正文和对应接受记录标为 `zh`；开发站点重新发布四份拆分后的文本即可。正式站点在上线前
-由负责人发布真实文本。
+迁移把此前的单一中英双语正文和对应接受记录都标为 `zh`；开发站点重新发布四份拆分后的文本即可。快速发布后
+`terms/zh` 为第 1 版、`terms/en` 为第 2 版，隐私政策同理；这不是缺陷，是兼容阶段共享编号的结果。正式站点在
+上线前由负责人发布真实文本。
+
+## 兼容与回滚
+
+- **旧请求**：发布请求省略 `locale` 时按 `zh` 发布；接受请求省略 `locale` 时按当前 `kind` 和 `version`
+  解析，页面读取旧节点的响应时把缺失的 `locale` 当成 `zh`。
+- **旧响应**：新节点的 `GET /api/console/v1/legal` 不带 `locales=all` 时按旧页面返回每种 `kind` 一个当前版本、
+  不返回 `locale`；新页面带 `locales=all` 才取所有 locale。旧节点忽略这个查询参数，仍返回旧的单语言形状。
+- **旧游标**：新节点同时接受 `kind:version` 和过渡的 `kind:locale:version`，但只发出旧格式
+  `kind:version`；旧节点能从新节点的分页继续，新页面也能从旧节点继续。清理迁移完成后才发出新格式。
+- **旧写入**：迁移不删除旧 `(site_id, kind, version)` 主键、旧 `(user_id, kind, version)` 唯一键和旧外键；
+  旧节点的 `ON CONFLICT (user_id, kind, version)` 继续有效。新加的唯一键、外键和触发器只增加 locale 维度。
+- **回滚**：Down 只删除新约束、触发器和 `locale` 列，旧约束从未移除。兼容阶段版本号跨语言唯一，所以
+  回滚不会撞上 `terms/zh` 与 `terms/en` 同号；文档和接受记录保留。清理迁移必须在所有旧节点退出后单独进行，
+  不能和本次扩展放在同一次部署。
 
 ## 覆盖了什么
 
@@ -112,7 +135,8 @@ OpenRouter 的付款、退款、用户内容、终止、免责、责任限制、
    ```
 
    脚本先做离线检查（对应语言的横幅、大小），再登录、按需注册 TOTP、逐份 `POST`（`terms/zh`、`terms/en`、
-   `privacy/zh`、`privacy/en`），打印发布后的版本号；首次为账号开启
+   `privacy/zh`、`privacy/en`），打印发布后的版本号；兼容阶段编号按 `kind` 跨语言共享，首次运行通常得到
+   `terms/zh` 1、`terms/en` 2、`privacy/zh` 1、`privacy/en` 2。首次为账号开启
    TOTP 时会把 secret 打印到 stderr，保存它。如果账号已经开过 MFA，设置 `AXIOM_TOTP_SECRET` 为当前的 base32
    secret，脚本会用 TOTP 通过第二步验证。
 

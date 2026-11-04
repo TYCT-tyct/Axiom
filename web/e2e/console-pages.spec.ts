@@ -299,6 +299,31 @@ test.describe("accepting updated documents", () => {
     await submit.click();
     await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
   });
+
+  test("a member can leave the consent page for another account without accepting", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.legal = demoDocuments();
+    signedInAs(state);
+    await page.goto("/console/keys");
+    await expect(page.getByRole("heading", { level: 1, name: "更新后的条款" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "同意并继续" })).toBeDisabled();
+    await page.getByRole("button", { name: "换一个账户登录" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+  });
+
+  test("a member can leave the consent page when the documents fail to load", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.legal = demoDocuments();
+    signedInAs(state);
+    await page.route("**/api/console/v1/legal", (route) =>
+      route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } }),
+    );
+    await page.goto("/console/keys");
+    await expect(page.getByRole("heading", { level: 1, name: "更新后的条款" })).toBeVisible();
+    await expect(page.getByRole("alert")).toBeVisible();
+    await page.getByRole("button", { name: "换一个账户登录" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+  });
 });
 
 test.describe("registering", () => {

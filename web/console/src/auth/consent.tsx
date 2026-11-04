@@ -1,5 +1,5 @@
 import { ApiError, consoleApi, type Schemas, unwrapEmpty } from "@axiom/api";
-import { AuthFrame, Gate, useErrors, useSession } from "@axiom/app";
+import { AuthFrame, Gate, OtherAccount, useErrors, useSession } from "@axiom/app";
 import { FormError, SubmitButton } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -40,6 +40,7 @@ function ConsentPage() {
       wide
       title={t("legal.title")}
       description={t("legal.description", { email: session.user.email })}
+      footer={<OtherAccount />}
     >
       <form
         noValidate

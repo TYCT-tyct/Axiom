@@ -116,6 +116,18 @@ describe("legal consent", () => {
     expect(canSubmitWithLegal({ ready: true, documents: terms, accepted: true })).toBe(true);
   });
 
+  it("reads an old node's document without locale as the Chinese text", () => {
+    const legacy: Schemas["LegalDocument"] = {
+      kind: "terms",
+      version: 1,
+      body: "Legacy terms.",
+      published_at: "2026-11-04T00:00:00Z",
+    };
+    expect(legalDocumentsForLanguage([legacy], "en")).toEqual([legacy]);
+    expect(legalDocumentsForLanguage([legacy], "zh")).toEqual([legacy]);
+    expect(legalVersions([legacy])).toEqual([{ kind: "terms", locale: "zh", version: 1 }]);
+  });
+
   it("selects the UI language, falls back per document, and shows terms before privacy", () => {
     const privacy = document("privacy", 1, "en");
     const terms = document("terms", 4, "en");

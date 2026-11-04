@@ -1343,13 +1343,13 @@ export interface paths {
         };
         /**
          * A site's legal document versions
-         * @description Every published version of the site's terms of service and privacy policy in every locale, newest first within a kind and locale, with the Markdown body. The current version of each kind and locale is the first row for that pair; the earlier ones are what earlier acceptances name. One page holds at most `limit` rows; `next_cursor` continues after the last row, so a pair with more than one page does not hide another pair or its own older versions.
+         * @description Every published version of the site's terms of service and privacy policy, newest first within a kind, with the Markdown body and its locale. During the rolling-release compatibility phase version numbers are shared across locales, so the current version of each pair is its highest row and a `(kind, version)` cursor is unambiguous. One page holds at most `limit` rows; `next_cursor` continues after the last row. New nodes accept both `kind:version` and the transitional `kind:locale:version` cursor, but emit `kind:version` until old nodes exit.
          */
         get: operations["listLegalDocuments"];
         put?: never;
         /**
          * Publish a new version of a legal document
-         * @description Adds version 1 of the kind and locale, or the next number after the current one. The version and its text never change: a correction is another publication, which every user must accept before the console lets them continue. The text is supplied by the site's operator, stored and returned as Markdown; the request's reason and a digest, not the text, go to the audit log.
+         * @description Adds version 1 of the kind, or the next number after the current one. During the compatibility phase the number is shared across locales so old nodes keep their legacy primary key and publication statement; a later cleanup gives each locale its own stream. The version and its text never change: a correction is another publication, which every user must accept before the console lets them continue. The text is supplied by the site's operator, stored and returned as Markdown; the request's reason and a digest, not the text, go to the audit log.
          */
         post: operations["publishLegalDocument"];
         delete?: never;
@@ -3234,9 +3234,10 @@ export interface components {
             /** @description One current document per kind this user still has to accept; empty when one current version of every kind is accepted. */
             required: components["schemas"]["LegalDocumentVersion"][];
         };
+        /** @description A legal document version named by an acceptance or the session's pending list. `locale` is optional for rolling compatibility: an old client omits it, and the server resolves the kind and version to the one current document; a page reading an old node's response treats the absent value as `zh`. */
         LegalDocumentVersion: {
             kind: components["schemas"]["LegalDocumentKind"];
-            locale: components["schemas"]["LegalDocumentLocale"];
+            locale?: components["schemas"]["LegalDocumentLocale"];
             version: number;
         };
         TotpSetup: {
@@ -3432,10 +3433,10 @@ export interface components {
         LegalDocumentKind: "terms" | "privacy";
         /** @enum {string} */
         LegalDocumentLocale: "zh" | "en";
-        /** @description One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. */
+        /** @description One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. `locale` is absent on a node that predates locale-aware documents; a client treats the absent value as `zh`. */
         LegalDocument: {
             kind: components["schemas"]["LegalDocumentKind"];
-            locale: components["schemas"]["LegalDocumentLocale"];
+            locale?: components["schemas"]["LegalDocumentLocale"];
             version: number;
             /** @description Markdown headings, paragraphs, and lists. Rendered as React text, never interpreted as HTML. */
             body: string;
@@ -3443,14 +3444,15 @@ export interface components {
             published_at: string;
         };
         LegalDocumentHistory: {
-            /** @description Newest first within a kind and locale, at most `limit` rows. */
+            /** @description Newest first within a kind, at most `limit` rows. */
             documents: components["schemas"]["LegalDocument"][];
-            /** @description Where the next page starts, or null on the last page. */
+            /** @description Where the next page starts, or null on the last page. New nodes emit the legacy `kind:version` form for old nodes and accept both that and `kind:locale:version`. */
             next_cursor: string | null;
         };
+        /** @description Publish one version of a kind in one locale, with the body and a reason. `locale` is optional while old admin clients remain: when absent, the publication is Chinese (`zh`) and takes the next version of the kind. */
         LegalDocumentPublish: {
             kind: components["schemas"]["LegalDocumentKind"];
-            locale: components["schemas"]["LegalDocumentLocale"];
+            locale?: components["schemas"]["LegalDocumentLocale"];
             body: string;
             reason: components["schemas"]["Reason"];
         };

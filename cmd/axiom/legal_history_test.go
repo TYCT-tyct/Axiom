@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +45,17 @@ func TestLegalDocumentHistoryPages(t *testing.T) {
 	expectAdmin(t, "a legal document cursor beyond int32", rec, http.StatusBadRequest, "")
 	rec = admin.do(http.MethodGet, base+"?cursor=privacy:fr:1", "", as(operator))
 	expectAdmin(t, "a legal document cursor with an unknown locale", rec, http.StatusBadRequest, "")
+	// Both cursor forms are accepted: the old page emits kind:version, while a new page may carry the transitional
+	// kind:locale:version. They name the same position while versions remain unique across locales.
+	for _, cursor := range []string{"privacy:1", "privacy:zh:1"} {
+		rec = admin.do(http.MethodGet, base+"?cursor="+url.QueryEscape(cursor), "", as(operator))
+		expectAdmin(t, "a legal document cursor "+cursor, rec, http.StatusOK, "")
+		var page adminapi.LegalDocumentHistory
+		decode(t, rec, &page)
+		if len(page.Documents) != 1 || page.Documents[0].Kind != adminapi.LegalDocumentKind("terms") {
+			t.Fatalf("cursor %s: %+v", cursor, page.Documents)
+		}
+	}
 	seen := map[string]bool{}
 	cursor := ""
 	pages := 0
@@ -60,7 +72,11 @@ func TestLegalDocumentHistoryPages(t *testing.T) {
 			t.Fatalf("page %d is empty", pages+1)
 		}
 		for _, document := range page.Documents {
-			key := fmt.Sprintf("%s:%s:%d", document.Kind, document.Locale, document.Version)
+			locale := "zh"
+			if document.Locale != nil {
+				locale = string(*document.Locale)
+			}
+			key := fmt.Sprintf("%s:%s:%d", document.Kind, locale, document.Version)
 			if seen[key] {
 				t.Fatalf("version %s appears twice", key)
 			}
@@ -72,6 +88,9 @@ func TestLegalDocumentHistoryPages(t *testing.T) {
 		}
 		if *page.NextCursor == cursor {
 			t.Fatal("next_cursor does not move")
+		}
+		if strings.Count(*page.NextCursor, ":") != 1 {
+			t.Fatalf("next_cursor %q is not the legacy kind:version form", *page.NextCursor)
 		}
 		cursor = *page.NextCursor
 		if pages > 10 {

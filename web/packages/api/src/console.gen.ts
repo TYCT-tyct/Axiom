@@ -774,7 +774,7 @@ export interface paths {
         };
         /**
          * The site's current legal documents
-         * @description The terms of service and the privacy policy the site has published, at their current versions, in every published locale. Each body is Markdown (headings and paragraphs; never HTML). The registration page shows the locale that matches its language, falling back to the other locale when one is missing, and sends exactly those versions back with the registration or with `acceptLegalDocuments`. A site that publishes none answers an empty list and requires no acceptance. The text is public: no session is needed.
+         * @description The terms of service and the privacy policy the site has published, at their current versions, in every published locale. Each body is Markdown (headings and paragraphs; never HTML). The registration page shows the locale that matches its language, falling back to the other locale when one is missing; if an old node omits `locale`, the page treats the document as `zh`. It sends exactly the shown versions back with the registration or with `acceptLegalDocuments`. A site that publishes none answers an empty list and requires no acceptance. The text is public: no session is needed.
          */
         get: operations["getLegalDocuments"];
         put?: never;
@@ -796,7 +796,7 @@ export interface paths {
         put?: never;
         /**
          * Accept the current legal documents
-         * @description Records the signed-in user's acceptance of the current version of each kind, in the locale the request names, with the time. A missing, stale or duplicate kind is `consent_required`: the page sends exactly one current document per kind, as `getLegalDocuments` returned it. Accepting the same version again changes nothing. A session may call this while the rest of the console is refused for want of acceptance.
+         * @description Records the signed-in user's acceptance of the current version of each kind, with the time. A new page names the locale; an old page omits it, and the server resolves the kind and version to the one current document. A missing, stale or duplicate kind is `consent_required`: the page sends exactly one current document per kind, as `getLegalDocuments` returned it. Accepting the same version again changes nothing. A session may call this while the rest of the console is refused for want of acceptance.
          */
         post: operations["acceptLegalDocuments"];
         delete?: never;
@@ -1629,27 +1629,28 @@ export interface components {
         LegalDocumentKind: "terms" | "privacy";
         /** @enum {string} */
         LegalDocumentLocale: "zh" | "en";
-        /** @description One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. */
+        /** @description One version of one of the site's legal documents in one locale; the body is Markdown, never HTML. `locale` is absent on a node that predates locale-aware documents; a client treats the absent value as `zh`. */
         LegalDocument: {
             kind: components["schemas"]["LegalDocumentKind"];
-            locale: components["schemas"]["LegalDocumentLocale"];
+            locale?: components["schemas"]["LegalDocumentLocale"];
             version: number;
             /** @description Markdown headings, paragraphs, and lists. Rendered as React text, never interpreted as HTML. */
             body: string;
             /** Format: date-time */
             published_at: string;
         };
+        /** @description A legal document version named by an acceptance or the session's pending list. `locale` is optional for rolling compatibility: an old client omits it, and the server resolves the kind and version to the one current document; a page reading an old node's response treats the absent value as `zh`. */
         LegalDocumentVersion: {
             kind: components["schemas"]["LegalDocumentKind"];
-            locale: components["schemas"]["LegalDocumentLocale"];
+            locale?: components["schemas"]["LegalDocumentLocale"];
             version: number;
         };
         LegalDocuments: {
-            /** @description The current version of each kind in each published locale, at most one per kind and locale. */
+            /** @description The current version of each kind in each published locale, at most one per kind and locale. An old node returns one per kind without locale. */
             documents: components["schemas"]["LegalDocument"][];
         };
         LegalAcceptance: {
-            /** @description One current document per kind, with the locale shown, as getLegalDocuments returned it. */
+            /** @description One current document per kind, as getLegalDocuments returned it. A new page includes the locale; an old page may omit it, and the server resolves the kind and version to the current document. */
             consent: components["schemas"]["LegalDocumentVersion"][];
         };
         /** @description The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead. */
@@ -3639,14 +3640,17 @@ export interface operations {
     };
     getLegalDocuments: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description `all` asks for every published locale. Omit it to preserve the pre-locale response of one current document per kind for an old page; a new page sends it and shows the locale that matches its language. */
+                locales?: "all";
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The current documents, one per kind and locale. */
+            /** @description The current documents; one per kind and locale with `locales=all`, otherwise one per kind as an old node answered. */
             200: {
                 headers: {
                     [name: string]: unknown;
