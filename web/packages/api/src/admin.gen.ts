@@ -645,12 +645,12 @@ export interface paths {
         };
         /**
          * The saved limits on routing presets and the defaults in code
-         * @description How many presets each layer may hold, live and with the disabled ones, and how many rule versions a preset keeps. An absent value is the default in code. Every preset write reads them when it is made.
+         * @description How many presets each layer may hold, live and with the disabled ones, how many rule versions a preset keeps, and the global budget every node's snapshot holds. An absent value is the default in code. Every preset write reads them when it is made. `rev` is what a change names.
          */
         get: operations["getRoutingPresetLimits"];
         /**
          * Save the limits on routing presets, validated and audited
-         * @description Replaces the record: a value left out falls back to the default in code, and a record with no value is deleted. A layer's live limit must be at most its total once the defaults fill the rest. The next preset write is held to them; presets a layer already holds over a lowered limit stay, and only new ones are refused. A preset always keeps at least 50 rule versions.
+         * @description Replaces the record at the `rev` the page read (409 `stale_revision` when it moved on): a value left out falls back to the default in code. A layer's live limit must be at most its total once the defaults fill the rest. The next preset write is held to them; presets a layer already holds over a lowered limit stay, and only new ones are refused. A preset always keeps at least 50 rule versions. Every node holds the global budget's presets in memory: check the nodes' headroom before raising it.
          */
         put: operations["setRoutingPresetLimits"];
         post?: never;
@@ -4081,7 +4081,7 @@ export interface components {
              */
             total?: number;
         };
-        /** @description What each layer may hold of routing presets and the rule versions a preset keeps. An absent value is the default in code. An account's limits count its workspaces' presets too. */
+        /** @description What each layer may hold of routing presets, the rule versions a preset keeps, and the global budget. An absent value is the default in code. An account's limits count its workspaces' presets too. */
         RoutingPresetLimits: {
             platform?: components["schemas"]["RoutingLayerLimits"];
             site?: components["schemas"]["RoutingLayerLimits"];
@@ -4089,14 +4089,32 @@ export interface components {
             workspace?: components["schemas"]["RoutingLayerLimits"];
             /** Format: int64 */
             kept_versions?: number;
+            global?: components["schemas"]["RoutingGlobalBudget"];
+        };
+        /** @description What every preset takes together, the disabled ones included; every node's snapshot holds it. */
+        RoutingGlobalBudget: {
+            /** Format: int64 */
+            presets?: number;
+            /**
+             * Format: int64
+             * @description Bytes of every preset's current rules as PostgreSQL prints them.
+             */
+            bytes?: number;
         };
         RoutingPresetLimitsView: {
+            /**
+             * Format: int64
+             * @description 0 before any change; a change names the rev it read.
+             */
+            rev: number;
             limits: components["schemas"]["RoutingPresetLimits"];
             /** @description What applies where `limits` has no value. */
             defaults: components["schemas"]["RoutingPresetLimits"];
         };
         RoutingPresetLimitsUpdate: {
             limits: components["schemas"]["RoutingPresetLimits"];
+            /** Format: int64 */
+            rev: number;
             reason: components["schemas"]["Reason"];
         };
         /** @description The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds. */

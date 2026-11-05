@@ -11,11 +11,13 @@ import (
 )
 
 // Limits are the administrator's limits on routing presets (docs/domains/routing.md「滚动发布、失败与性能」): how many
-// presets each layer may hold, live and with the disabled ones, and how many rule versions a preset keeps. A zero value
-// is the default in code, so the record holds only deliberate departures; Effective fills the rest.
+// presets each layer may hold, live and with the disabled ones, how many rule versions a preset keeps, and the global
+// budget every node's snapshot holds, presets and bytes of current rules. A zero value is the default in code, so the
+// record holds only deliberate departures; Effective fills the rest.
 type Limits struct {
 	Platform, Site, Account, Workspace LayerLimits
 	KeptVersions                       int64
+	Presets, Bytes                     int64
 }
 
 // LayerLimits bound the presets of one layer: the live ones, and all of them with the disabled ones.
@@ -28,18 +30,23 @@ func DefaultLimits() Limits {
 	return Limits{
 		Platform: LayerLimits{50, 500}, Site: LayerLimits{50, 500},
 		Account: LayerLimits{20, 200}, Workspace: LayerLimits{10, 100},
-		KeptVersions: 50,
+		KeptVersions: 50, Presets: 100_000, Bytes: 256 << 20,
 	}
 }
 
 // The bounds a recorded limit must keep, which the table's checks repeat. The live presets of the four layers make the
 // list a key chooses from, so they stay at a size a page can show whole. A preset keeps at least the 50 versions the
-// table's delete policy keeps, and at most what 500 versions of 16 KiB rules take.
+// table's delete policy keeps, and at most what 500 versions of 16 KiB rules take. The global budget is what every
+// node holds in memory, so its ceilings are ten and eight times the defaults: a typo cannot ask a node for more than
+// that, and going beyond it is a change of the nodes' sizing, not a setting.
 const (
 	maxActiveLimit = 500
 	maxTotalLimit  = 5000
 	minKept        = 50
 	maxKept        = 500
+	maxPresets     = 1_000_000
+	minBytes       = 1 << 20
+	maxBytes       = 2 << 30
 )
 
 // Effective is the limits a write is held to: every zero value falls back to its code default.
@@ -52,6 +59,7 @@ func (l *Limits) Effective() Limits {
 		Platform: layer(l.Platform, d.Platform), Site: layer(l.Site, d.Site),
 		Account: layer(l.Account, d.Account), Workspace: layer(l.Workspace, d.Workspace),
 		KeptVersions: orDefault(l.KeptVersions, d.KeptVersions),
+		Presets:      orDefault(l.Presets, d.Presets), Bytes: orDefault(l.Bytes, d.Bytes),
 	}
 }
 
@@ -91,8 +99,17 @@ func (l *Limits) bounds() error {
 			return &LimitError{layer.name + "/total", fmt.Sprintf("must be from 1 to %d", maxTotalLimit)}
 		}
 	}
-	if v := l.KeptVersions; v != 0 && (v < minKept || v > maxKept) {
-		return &LimitError{"kept_versions", fmt.Sprintf("must be from %d to %d", minKept, maxKept)}
+	for _, b := range []struct {
+		field         string
+		value, lo, hi int64
+	}{
+		{"kept_versions", l.KeptVersions, minKept, maxKept},
+		{"global/presets", l.Presets, 1, maxPresets},
+		{"global/bytes", l.Bytes, minBytes, maxBytes},
+	} {
+		if b.value != 0 && (b.value < b.lo || b.value > b.hi) {
+			return &LimitError{b.field, fmt.Sprintf("must be from %d to %d", b.lo, b.hi)}
+		}
 	}
 	return nil
 }
@@ -103,79 +120,85 @@ type LimitError struct{ Field, Reason string }
 func (e *LimitError) Error() string { return "routing: limit " + e.Field + " " + e.Reason }
 
 const limitColumns = `platform_active, platform_total, site_active, site_total, account_active, account_total,
-	workspace_active, workspace_total, kept_versions`
+	workspace_active, workspace_total, kept_versions, max_presets, max_bytes`
 
-// ReadLimits reads the administrator's record, which every scope may read; no row is all defaults.
-func ReadLimits(ctx context.Context, tx pg.Tx) (Limits, error) {
+// ReadLimits reads the administrator's record, which every scope may read, and its revision, which a change names; no
+// row is all defaults at revision 0.
+func ReadLimits(ctx context.Context, tx pg.Tx) (Limits, int64, error) {
 	var (
 		l    Limits
-		cols [9]*int64
+		rev  int64
+		cols [11]*int64
 	)
-	dest := make([]any, len(cols))
+	dest := []any{&rev}
 	for i := range cols {
-		dest[i] = &cols[i]
+		dest = append(dest, &cols[i])
 	}
-	err := tx.QueryRow(ctx, `SELECT `+limitColumns+` FROM routing.preset_limits WHERE singleton`).Scan(dest...)
+	err := tx.QueryRow(ctx, `SELECT rev, `+limitColumns+` FROM routing.preset_limits WHERE singleton`).Scan(dest...)
 	if errors.Is(err, pg.ErrNoRows) {
-		return Limits{}, nil
+		return Limits{}, 0, nil
 	}
 	if err != nil {
-		return Limits{}, fmt.Errorf("routing: read the preset limits: %w", err)
+		return Limits{}, 0, fmt.Errorf("routing: read the preset limits: %w", err)
 	}
 	for i, v := range l.fields() {
 		if cols[i] != nil {
 			*v = *cols[i]
 		}
 	}
-	return l, nil
+	return l, rev, nil
 }
 
 // fields are l's values in limitColumns' order.
 func (l *Limits) fields() []*int64 {
 	return []*int64{
 		&l.Platform.Active, &l.Platform.Total, &l.Site.Active, &l.Site.Total, &l.Account.Active, &l.Account.Total,
-		&l.Workspace.Active, &l.Workspace.Total, &l.KeptVersions,
+		&l.Workspace.Active, &l.Workspace.Total, &l.KeptVersions, &l.Presets, &l.Bytes,
 	}
 }
 
-// SetLimits validates and replaces the record, in the platform scope, and records it with the actor's reason. A record
-// with no value is deleted, so the defaults stay the only source of what is not deliberately different. It takes the
-// budget row first, as every preset write does, so a write is held either to the limits before or to the ones after,
-// and two changes cannot interleave their before and after in the audit log.
-func SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, l Limits, reason string) error {
+// SetLimits validates and replaces the record at rev, the revision the caller read (ErrPresetStale when it moved on),
+// in the platform scope, records it with the actor's reason, and returns the new revision. The row stays when no value
+// is left, every column NULL, so the defaults are still the only source of what is not deliberately different and a
+// revision is never handed out twice. It takes the budget row first, as every preset write does, so a write is held
+// either to the limits before or to the ones after, and two changes cannot interleave their before and after.
+func SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, l Limits, rev int64, reason string) (int64, error) {
 	if err := l.Check(); err != nil {
-		return err
+		return 0, err
 	}
 	if err := lockBudget(ctx, tx); err != nil {
-		return err
+		return 0, err
 	}
-	before, err := ReadLimits(ctx, tx)
+	before, current, err := ReadLimits(ctx, tx)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if l == (Limits{}) {
-		_, err = tx.Exec(ctx, `DELETE FROM routing.preset_limits`)
-	} else {
-		args := make([]any, 0, 9)
-		for _, v := range l.fields() {
-			args = append(args, nullable(*v))
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO routing.preset_limits (`+limitColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-			ON CONFLICT (singleton) DO UPDATE SET (`+limitColumns+`) = ROW($1, $2, $3, $4, $5, $6, $7, $8, $9)`, args...)
+	if rev != current {
+		return 0, ErrPresetStale
 	}
-	if err != nil {
-		return presetWriteErr("write the preset limits", err)
+	args := []any{current + 1}
+	for _, v := range l.fields() {
+		args = append(args, nullable(*v))
 	}
-	return audit.Record(ctx, tx, audit.Event{
+	if _, err := tx.Exec(ctx, `INSERT INTO routing.preset_limits (rev, `+limitColumns+`)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		ON CONFLICT (singleton) DO UPDATE SET (rev, `+limitColumns+`) = ROW($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		args...); err != nil {
+		return 0, presetWriteErr("write the preset limits", err)
+	}
+	return current + 1, audit.Record(ctx, tx, audit.Event{
 		Actor: actor, Action: "routing.limits.update", Reason: reason,
 		Target: audit.Target{Module: "routing", Kind: "preset_limits", ID: uuid.Nil().String()},
-		Detail: map[string]any{"before": before.detail(), "after": l.detail()},
+		Detail: map[string]any{"before": before.detail(), "after": l.detail(), "rev": current + 1},
 	})
 }
 
 // detail is the record as the audit log keeps it: a value left to its default is null.
 func (l *Limits) detail() map[string]any {
-	out := map[string]any{"kept_versions": nullable(l.KeptVersions)}
+	out := map[string]any{
+		"kept_versions": nullable(l.KeptVersions),
+		"global":        map[string]any{"presets": nullable(l.Presets), "bytes": nullable(l.Bytes)},
+	}
 	for _, layer := range l.layers() {
 		out[layer.name] = map[string]any{"active": nullable(layer.limits.Active), "total": nullable(layer.limits.Total)}
 	}

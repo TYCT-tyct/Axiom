@@ -4449,6 +4449,13 @@ type RoutingDefault struct {
 	Version int64 `json:"version"`
 }
 
+// RoutingGlobalBudget What every preset takes together, the disabled ones included; every node's snapshot holds it.
+type RoutingGlobalBudget struct {
+	// Bytes Bytes of every preset's current rules as PostgreSQL prints them.
+	Bytes   *int64 `json:"bytes,omitempty"`
+	Presets *int64 `json:"presets,omitempty"`
+}
+
 // RoutingLayerLimits defines model for RoutingLayerLimits.
 type RoutingLayerLimits struct {
 	// Active Live presets the layer may hold.
@@ -4486,22 +4493,26 @@ type RoutingPreset struct {
 	Version int64 `json:"version"`
 }
 
-// RoutingPresetLimits What each layer may hold of routing presets and the rule versions a preset keeps. An absent value is the default in code. An account's limits count its workspaces' presets too.
+// RoutingPresetLimits What each layer may hold of routing presets, the rule versions a preset keeps, and the global budget. An absent value is the default in code. An account's limits count its workspaces' presets too.
 type RoutingPresetLimits struct {
-	Account      *RoutingLayerLimits `json:"account,omitempty"`
-	KeptVersions *int64              `json:"kept_versions,omitempty"`
-	Platform     *RoutingLayerLimits `json:"platform,omitempty"`
-	Site         *RoutingLayerLimits `json:"site,omitempty"`
-	Workspace    *RoutingLayerLimits `json:"workspace,omitempty"`
+	Account *RoutingLayerLimits `json:"account,omitempty"`
+
+	// Global What every preset takes together, the disabled ones included; every node's snapshot holds it.
+	Global       *RoutingGlobalBudget `json:"global,omitempty"`
+	KeptVersions *int64               `json:"kept_versions,omitempty"`
+	Platform     *RoutingLayerLimits  `json:"platform,omitempty"`
+	Site         *RoutingLayerLimits  `json:"site,omitempty"`
+	Workspace    *RoutingLayerLimits  `json:"workspace,omitempty"`
 }
 
 // RoutingPresetLimitsUpdate defines model for RoutingPresetLimitsUpdate.
 type RoutingPresetLimitsUpdate struct {
-	// Limits What each layer may hold of routing presets and the rule versions a preset keeps. An absent value is the default in code. An account's limits count its workspaces' presets too.
+	// Limits What each layer may hold of routing presets, the rule versions a preset keeps, and the global budget. An absent value is the default in code. An account's limits count its workspaces' presets too.
 	Limits RoutingPresetLimits `json:"limits"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
+	Rev    int64  `json:"rev"`
 }
 
 // RoutingPresetLimitsView defines model for RoutingPresetLimitsView.
@@ -4509,8 +4520,11 @@ type RoutingPresetLimitsView struct {
 	// Defaults What applies where `limits` has no value.
 	Defaults RoutingPresetLimits `json:"defaults"`
 
-	// Limits What each layer may hold of routing presets and the rule versions a preset keeps. An absent value is the default in code. An account's limits count its workspaces' presets too.
+	// Limits What each layer may hold of routing presets, the rule versions a preset keeps, and the global budget. An absent value is the default in code. An account's limits count its workspaces' presets too.
 	Limits RoutingPresetLimits `json:"limits"`
+
+	// Rev 0 before any change; a change names the rev it read.
+	Rev int64 `json:"rev"`
 }
 
 // RoutingPresetList defines model for RoutingPresetList.

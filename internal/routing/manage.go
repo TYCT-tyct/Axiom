@@ -148,12 +148,6 @@ func limitsOf(layer Layer, lim Limits) []layerLimit {
 	return nil
 }
 
-// The global budget: what every node's snapshot holds of the presets together.
-const (
-	maxPresets      = 100_000
-	maxPresetsBytes = 256 << 20
-)
-
 const presetColumns = `p.id, p.scope, p.site_id, p.account_id, p.workspace_id, p.slug, p.name, p.revision, p.current_version,
 	v.currency, v.rules::text, p.is_system, p.deleted_at IS NOT NULL, p.created_at, p.updated_at
 	FROM routing.presets p JOIN routing.preset_versions v ON v.preset_id = p.id AND v.version = p.current_version`
@@ -287,17 +281,7 @@ func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID,
 	if !newRules && c.Name == before.Name {
 		return before, nil
 	}
-	version := before.Version
-	if newRules {
-		if version, err = addVersion(ctx, tx, actor, before, c.Currency, rules); err != nil {
-			return StoredPreset{}, err
-		}
-	}
-	if _, err := tx.Exec(ctx, `UPDATE routing.presets SET name = $2, current_version = $3, revision = revision + 1,
-		updated_at = statement_timestamp() WHERE id = $1`, uuid.UUID(id), c.Name, version); err != nil {
-		return StoredPreset{}, presetWriteErr("update a preset", err)
-	}
-	if err := pruneVersions(ctx, tx, id, version); err != nil {
+	if err := writeHead(ctx, tx, actor, before, c, rules, newRules); err != nil {
 		return StoredPreset{}, err
 	}
 	p, err := GetPreset(ctx, tx, id)
@@ -310,11 +294,32 @@ func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID,
 	})
 }
 
+// writeHead writes the preset's new name and, when the rules changed, its next version, which it then prunes behind:
+// a rename alone deletes no version, even after the kept versions were lowered (the prune follows the head's update,
+// which the table's delete policy reads).
+func writeHead(ctx context.Context, tx pg.Tx, actor audit.Actor, before StoredPreset, c PresetContent, rules string, newRules bool) error {
+	version := before.Version
+	if newRules {
+		var err error
+		if version, err = addVersion(ctx, tx, actor, before, c.Currency, rules); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE routing.presets SET name = $2, current_version = $3, revision = revision + 1,
+		updated_at = statement_timestamp() WHERE id = $1`, uuid.UUID(before.ID), c.Name, version); err != nil {
+		return presetWriteErr("update a preset", err)
+	}
+	if !newRules {
+		return nil
+	}
+	return pruneVersions(ctx, tx, before.ID, version)
+}
+
 // pruneVersions keeps the preset's last versions, as many as the limits say, so rules that change without growing
 // cannot pile versions up for good; the audit log keeps every version's hash. The table's policy deletes none of the
 // last minKept, whatever the record says.
 func pruneVersions(ctx context.Context, tx pg.Tx, id PresetID, current int64) error {
-	lim, err := ReadLimits(ctx, tx)
+	lim, _, err := ReadLimits(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -441,8 +446,16 @@ func lockBudget(ctx context.Context, tx pg.Tx) error {
 // tenant limits, after the budget row is taken: every write that adds either takes it first, so two writes cannot
 // both take the last place. bytes is negative for rules that shrink, which pass even over a budget lowered since.
 func takeBudget(ctx context.Context, tx pg.Tx, layer Layer, presets, bytes int64) error {
+	if err := lockBudget(ctx, tx); err != nil { // the limits are read under the lock SetLimits takes
+		return err
+	}
+	saved, _, err := ReadLimits(ctx, tx)
+	if err != nil {
+		return err
+	}
+	lim := saved.Effective()
 	tag, err := tx.Exec(ctx, `UPDATE routing.preset_budget SET presets = presets + $1, bytes = greatest(bytes + $2, 0)
-		WHERE ($1 = 0 OR presets + $1 <= $3) AND ($2 <= 0 OR bytes + $2 <= $4)`, presets, bytes, maxPresets, maxPresetsBytes)
+		WHERE ($1 = 0 OR presets + $1 <= $3) AND ($2 <= 0 OR bytes + $2 <= $4)`, presets, bytes, lim.Presets, lim.Bytes)
 	if err != nil {
 		return fmt.Errorf("routing: take the preset budget: %w", err)
 	}
@@ -452,11 +465,7 @@ func takeBudget(ctx context.Context, tx pg.Tx, layer Layer, presets, bytes int64
 	if presets == 0 {
 		return nil
 	}
-	lim, err := ReadLimits(ctx, tx)
-	if err != nil {
-		return err
-	}
-	for _, limit := range limitsOf(layer, lim.Effective()) {
+	for _, limit := range limitsOf(layer, lim) {
 		var active, total int64
 		if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE deleted_at IS NULL), count(*) FROM routing.presets
 			WHERE `+limit.where, limit.args...).Scan(&active, &total); err != nil {

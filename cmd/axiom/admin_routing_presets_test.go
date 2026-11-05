@@ -238,8 +238,9 @@ func TestAdminRoutingPresetKeys(t *testing.T) {
 }
 
 // TestAdminRoutingPresetLimits: the admin reads the limits with their defaults, saves some once under one idempotency
-// key with one audit entry, and the next platform preset is held to them; a live limit above its layer's total is
-// refused by name, and saving none goes back to the defaults.
+// key with one audit entry, and the next platform preset is held to them; a change against a revision that moved on is
+// 409 stale_revision, a live limit above its layer's total is refused by name, and saving none goes back to the
+// defaults.
 func TestAdminRoutingPresetLimits(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)
@@ -250,9 +251,10 @@ func TestAdminRoutingPresetLimits(t *testing.T) {
 	}
 	f.wantLimits(s, adminapi.RoutingPresetLimitsView{Defaults: adminapi.RoutingPresetLimits{
 		Platform: layer(50, 500), Site: layer(50, 500), Account: layer(20, 200), Workspace: layer(10, 100), KeptVersions: new(int64(50)),
+		Global: &adminapi.RoutingGlobalBudget{Presets: new(int64(100_000)), Bytes: new(int64(256 << 20))},
 	}})
 
-	body := `{"limits":{"platform":{"active":1},"kept_versions":60},"reason":"one platform preset"}`
+	body := `{"limits":{"platform":{"active":1},"kept_versions":60},"rev":0,"reason":"one platform preset"}`
 	key := newKey()
 	expectAdmin(t, "save", f.change(s, http.MethodPut, path, body, key), http.StatusOK, "")
 	if rec := f.change(s, http.MethodPut, path, body, key); rec.Header().Get("Idempotency-Replayed") != "true" {
@@ -261,19 +263,21 @@ func TestAdminRoutingPresetLimits(t *testing.T) {
 	if n := f.auditCount("routing.limits.update"); n != "1" {
 		t.Fatalf("%s audit entries, want 1", n)
 	}
-	f.wantLimits(s, adminapi.RoutingPresetLimitsView{Limits: adminapi.RoutingPresetLimits{
+	f.wantLimits(s, adminapi.RoutingPresetLimitsView{Rev: 1, Limits: adminapi.RoutingPresetLimits{
 		Platform: &adminapi.RoutingLayerLimits{Active: new(int64(1))}, KeptVersions: new(int64(60)),
 	}})
+	expectAdmin(t, "a change against the revision before", f.change(s, http.MethodPut, path,
+		`{"limits":{},"rev":0,"reason":"r"}`, newKey()), http.StatusConflict, "stale_revision")
 	// The system preset is the platform's one live preset.
 	expectAdmin(t, "a platform preset over the limit", f.change(s, http.MethodPost, "/routing-presets",
 		`{"slug":"over","name":"Over","rules":{"default":{}},"reason":"r"}`, newKey()), http.StatusConflict, "preset_quota")
 
-	rec := f.change(s, http.MethodPut, path, `{"limits":{"account":{"active":300}},"reason":"r"}`, newKey())
+	rec := f.change(s, http.MethodPut, path, `{"limits":{"account":{"active":300}},"rev":1,"reason":"r"}`, newKey())
 	expectAdmin(t, "a live limit above the default total", rec, http.StatusBadRequest, "")
 	if !strings.Contains(rec.Body.String(), "/limits/account/active") {
 		t.Errorf("the refusal does not name the field: %s", rec.Body)
 	}
-	expectAdmin(t, "save none", f.change(s, http.MethodPut, path, `{"limits":{},"reason":"defaults"}`, newKey()), http.StatusOK, "")
+	expectAdmin(t, "save none", f.change(s, http.MethodPut, path, `{"limits":{},"rev":1,"reason":"defaults"}`, newKey()), http.StatusOK, "")
 	f.adminPreset(s, "/routing-presets", `{"slug":"back","name":"Back","rules":{"default":{}},"reason":"r"}`)
 }
 
@@ -283,6 +287,9 @@ func (f adminFixture) wantLimits(s session, want adminapi.RoutingPresetLimitsVie
 	f.t.Helper()
 	var got adminapi.RoutingPresetLimitsView
 	decode(f.t, f.do(http.MethodGet, "/settings/routing-limits", "", as(s)), &got)
+	if got.Rev != want.Rev {
+		f.t.Errorf("the limits are at rev %d, want %d", got.Rev, want.Rev)
+	}
 	if diff := cmp.Diff(want.Limits, got.Limits); diff != "" {
 		f.t.Errorf("the saved limits (-want +got):\n%s", diff)
 	}
