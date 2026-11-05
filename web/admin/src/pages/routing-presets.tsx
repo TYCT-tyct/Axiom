@@ -175,7 +175,9 @@ function PresetRow({ preset, manage, onOpen }: { preset: Preset; manage: boolean
         </div>
         <div className="pt-1 text-label md:hidden">
           <RulesSummary rules={preset.rules} />
-          <p className="text-t3 sm:hidden">{keys}</p>
+          <p className="text-t3 sm:hidden">
+            <Keys preset={preset} labelled />
+          </p>
         </div>
       </Td>
       <Td className="hidden md:table-cell">
@@ -206,12 +208,17 @@ function PresetRow({ preset, manage, onOpen }: { preset: Preset; manage: boolean
 }
 
 // Keys is how many keys of every account are bound to the preset. A node that does not count them, and the system
-// preset, give no number: that is said, not shown as none.
-function Keys({ preset }: { preset: Preset }) {
+// preset, give no number: that is said, not shown as none. labelled adds the unit where the column header is hidden.
+function Keys({ preset, labelled = false }: { preset: Preset; labelled?: boolean }) {
   const { t } = useTranslation();
   const format = useFormat();
   if (preset.id === systemPreset) {
     return t("routingPresets.keys.system");
   }
-  return preset.keys === undefined ? t("routingPresets.keys.unknown") : format.number(preset.keys);
+  if (preset.keys === undefined) {
+    return t("routingPresets.keys.unknown");
+  }
+  return labelled
+    ? t("routingPresets.keys.count", { count: preset.keys, keys: format.number(preset.keys) })
+    : format.number(preset.keys);
 }

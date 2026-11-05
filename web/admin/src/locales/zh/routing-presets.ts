@@ -10,7 +10,12 @@ export default {
   col: { name: "名称", rules: "规则", keys: "使用的 key", version: "版本" },
   system: "系统",
   disabled: "已停用",
-  keys: { system: "未绑定的 key 都按它", unknown: "节点没有给出" },
+  keys: {
+    system: "未绑定的 key 都按它",
+    unknown: "节点没有给出",
+    count_one: "{{keys}} 个 key",
+    count_other: "{{keys}} 个 key",
+  },
   edit: "修改",
   disable: "停用",
   editNamed: "修改 {{name}}",

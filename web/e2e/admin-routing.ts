@@ -75,6 +75,7 @@ function usualRouting(): RoutingState {
         slug: "cheap-usd",
         name: "Cheapest, in dollars",
         currency: "USD",
+        keys: 12_345,
         rules: rules({ default: { sort: "price", max_price: { prompt: "3", completion: "15" } } }),
       }),
       aPreset(3, {

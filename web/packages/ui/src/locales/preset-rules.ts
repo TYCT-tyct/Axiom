@@ -50,7 +50,8 @@ export const zh = {
     allClasses: "全部来源",
     priced: "限价",
     verified: "只走已验证",
-    overrides: "另有 {{count}} 条按厂商或模型的规则",
+    overrides_one: "另有 {{count}} 条按厂商或模型的规则",
+    overrides_other: "另有 {{count}} 条按厂商或模型的规则",
   },
 };
 
@@ -106,6 +107,7 @@ export const en: Messages<typeof zh> = {
     allClasses: "All sources",
     priced: "Price limit",
     verified: "Verified only",
-    overrides: "{{count}} more rules by vendor or model",
+    overrides_one: "{{count}} more rule by vendor or model",
+    overrides_other: "{{count}} more rules by vendor or model",
   },
 };
