@@ -187,3 +187,49 @@ func TestAdminRoutingPresets(t *testing.T) {
 		t.Errorf("audited %s, want %s", got, want)
 	}
 }
+
+// boundKeys is the SQL that writes n keys of a new account of the main site bound to preset, deleted ones when
+// deleted, made by a user of the site.
+func boundKeys(preset string, n int, deleted bool) string {
+	account, workspace, gone := uuid.NewV7().String(), uuid.NewV7().String(), "NULL"
+	if deleted {
+		gone = "now()"
+	}
+	return `INSERT INTO accounts.accounts (id, site_id, kind, name, status, tier_id)
+			SELECT '` + account + `', id, 'personal', 'Bound', 'active', default_tier_id FROM accounts.sites WHERE is_main;
+		INSERT INTO accounts.workspaces (id, site_id, account_id, name, status, is_default)
+			SELECT '` + workspace + `', site_id, id, 'Default', 'active', true FROM accounts.accounts WHERE id = '` + account + `';
+		INSERT INTO accounts.api_keys (id, site_id, account_id, workspace_id, kind, name, prefix, last4, secret_hash,
+			secret_version, created_by, status, preset_id, deleted_at)
+			SELECT uuidv7(), a.site_id, a.id, '` + workspace + `', 'call', 'k', 'sk-ax-v1-', 'abcd',
+				sha256(convert_to(gen_random_uuid()::text, 'UTF8')), 1, (SELECT id FROM accounts.users WHERE site_id = a.site_id LIMIT 1),
+				'active', '` + preset + `', ` + gone + `
+			FROM accounts.accounts a, generate_series(1, ` + strconv.Itoa(n) + `) WHERE a.id = '` + account + `'`
+}
+
+// TestAdminRoutingPresetKeys: the admin's presets carry the keys of every account bound to them, deleted keys left
+// out, when listed and read; the system preset carries none, since every unbound key follows it too.
+func TestAdminRoutingPresetKeys(t *testing.T) {
+	t.Parallel()
+	l := newAdminLayers(t)
+	f, s := l.f, l.s
+	f.run(boundKeys(l.open.Id.String(), 2, false), boundKeys(l.open.Id.String(), 3, false),
+		boundKeys(l.open.Id.String(), 1, true), boundKeys(l.official.Id.String(), 1, false))
+	var list adminapi.RoutingPresetList
+	decode(t, f.do(http.MethodGet, "/routing-presets", "", as(s)), &list)
+	got := map[string]*int64{}
+	for _, p := range list.Data {
+		got[p.Slug] = p.Keys
+	}
+	var one adminapi.RoutingPreset
+	decode(t, f.do(http.MethodGet, "/routing-presets/"+l.official.Id.String(), "", as(s)), &one)
+	got["read official"] = one.Keys
+	for slug, want := range map[string]int64{"open": 5, "cheap": 0, "read official": 1} {
+		if got[slug] == nil || *got[slug] != want {
+			t.Errorf("%s has keys %v, want %d", slug, got[slug], want)
+		}
+	}
+	if got["allow-all"] != nil {
+		t.Errorf("the system preset counted %d keys", *got["allow-all"])
+	}
+}

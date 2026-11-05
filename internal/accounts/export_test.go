@@ -14,6 +14,9 @@ var (
 	TOTPStep      = totpStep
 )
 
+// AccountKeysByPresetQuery is the query PresetKeys counts one account's keys with, for its plan's test.
+const AccountKeysByPresetQuery = accountKeysByPreset
+
 // LookupTimeout is how long a key lookup whose caller set no deadline may take.
 const LookupTimeout = lookupTimeout
 
