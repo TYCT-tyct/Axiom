@@ -660,6 +660,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/settings/routing-suspension": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether the platform has suspended routing presets
+         * @description The platform's kill switch on routing presets: `since` is when they were suspended, absent when they are not. A node that has no such switch answers 404.
+         */
+        get: operations["getRoutingPresetSuspension"];
+        /**
+         * Suspend or resume routing presets, audited
+         * @description Suspended, every node routes no key by a preset other than the system preset from its next read of the presets, within 5 seconds, even when the rest of that snapshot fails to build: a key bound to one is refused 503 `preset_unavailable`, its model lists too, rather than routed past the sources and prices its preset allows. Until presets are resumed, every preset and default write and every key's choice of a preset is refused 503 `presets_suspended`; a key made meanwhile is still bound to its layers' default and routes by it once they resume. Asking for the state presets are in changes and records nothing. Nodes released before the switch ignore it, so suspend only once every node has it.
+         */
+        put: operations["setRoutingPresetSuspension"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/sites/{site_id}/routing-default": {
         parameters: {
             query?: never;
@@ -3441,7 +3465,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "cap_exceeded" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable" | "preset_not_selectable" | "preset_default_invalid" | "preset_in_use" | "preset_quota";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "cap_exceeded" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable" | "preset_not_selectable" | "preset_default_invalid" | "preset_in_use" | "preset_quota" | "presets_suspended";
         OperationsOverview: {
             site_id?: components["schemas"]["SiteId"];
             /** Format: date-time */
@@ -4305,6 +4329,18 @@ export interface components {
             limits: components["schemas"]["RoutingPresetLimits"];
             /** Format: int64 */
             rev: number;
+            reason: components["schemas"]["Reason"];
+        };
+        RoutingPresetSuspension: {
+            suspended: boolean;
+            /**
+             * Format: date-time
+             * @description When presets were suspended; absent when they are not.
+             */
+            since?: string;
+        };
+        RoutingPresetSuspensionUpdate: {
+            suspended: boolean;
             reason: components["schemas"]["Reason"];
         };
         /** @description The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds. */
@@ -5340,7 +5376,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description Any other failure: `internal` (500), `not_implemented` (501, the operation has no handler yet), `unavailable` (503). A 500 never carries the internal error's text. */
+        /** @description Any other failure: `internal` (500), `not_implemented` (501, the operation has no handler yet), `unavailable` (503), `presets_suspended` (503, a routing preset or default write, or a key's choice of a preset, while the platform has suspended routing presets). A 500 never carries the internal error's text. */
         Failure: {
             headers: {
                 [name: string]: unknown;
@@ -6774,6 +6810,62 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RoutingPresetLimitsView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getRoutingPresetSuspension: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The switch. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPresetSuspension"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setRoutingPresetSuspension: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutingPresetSuspensionUpdate"];
+            };
+        };
+        responses: {
+            /** @description The switch as set. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPresetSuspension"];
                 };
             };
             400: components["responses"]["BadRequest"];

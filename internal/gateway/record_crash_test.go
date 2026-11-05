@@ -67,6 +67,69 @@ func TestACallSettledInTheBackgroundKeepsItsRecordThroughACrash(t *testing.T) {
 	}
 }
 
+// TestASettlementCommittingAfterItWasGivenUpReachesItsRecord: the background gives a settlement up while its last try
+// is still committing in the database, as a try whose answer the gateway stopped waiting for. The pending record is
+// then in the spill, and the writer reads the ledger before that commit lands. The read waits for the reservation the
+// try wrote, so the call's one row carries the ledger's amounts and the call is charged once; replaying the same
+// pending record, as a crash between its insert and the removal of its file would, changes nothing.
+func TestASettlementCommittingAfterItWasGivenUpReachesItsRecord(t *testing.T) {
+	t.Parallel()
+	n := newDyingNode(t)
+	n.call()
+	parked := t.TempDir()
+	if err := os.CopyFS(parked, os.DirFS(filepath.Join(n.dir, "pending"))); err != nil {
+		t.Fatal(err)
+	}
+	n.stray.Store(true)
+	n.r.exec.Outstanding.Drain(t.Context(), time.Minute) // given up: Release moved the pending record into the spill
+	select {
+	case <-n.strayWritten:
+	case err := <-n.strayDone:
+		t.Fatalf("the straggling settlement did not write: %v", err)
+	}
+
+	n.writeWhileTheStrayCommits()
+	checkRecordAndCharge(n.r, false, 1)
+
+	stored := n.storedRecord()
+	if err := os.CopyFS(filepath.Join(n.dir, "pending"), os.DirFS(parked)); err != nil {
+		t.Fatal(err)
+	}
+	n.restart()
+	if again := n.storedRecord(); again != stored {
+		t.Errorf("the record after the pending record was replayed:\n%s\nwant it unchanged:\n%s", again, stored)
+	}
+}
+
+// writeWhileTheStrayCommits drains the call log while the straggling settlement is still to commit, and lets it commit
+// once the writer waits on the reservation it wrote, or once the writer finished without waiting.
+func (n *dyingNode) writeWhileTheStrayCommits() {
+	closed := make(chan error, 1)
+	go func() { closed <- n.records.Close(n.t.Context()) }()
+	var err error
+	finished := false
+	waitFor(n.t, "the writer to wait for the settlement or finish without it", func() bool {
+		select {
+		case err = <-closed:
+			finished = true
+			return true
+		default:
+			return n.r.count(`SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+				AND wait_event_type = 'Lock' AND query LIKE '%FROM billing.reservations%FOR SHARE%'`) > 0
+		}
+	})
+	close(n.strayCommit)
+	if err := <-n.strayDone; err != nil {
+		n.t.Fatal(err)
+	}
+	if !finished {
+		err = <-closed
+	}
+	if err != nil {
+		n.t.Fatal(err)
+	}
+}
+
 // restart starts the node's call log again on its directory and closes it once the spill is written.
 func (n *dyingNode) restart() {
 	if err := callLog(n.t, n.r, n.dir).Close(n.t.Context()); err != nil {
@@ -101,10 +164,18 @@ type dyingNode struct {
 	hold     atomic.Bool   // a committed settlement waits for killed before its caller hears of it
 	commit   chan struct{} // closed when a held settlement has committed
 	killed   chan struct{}
+	// stray makes the next try write its settlement on a transaction of its own and fail as given up; that
+	// transaction closes strayWritten once its writes are in and commits when strayCommit is closed.
+	stray                     atomic.Bool
+	strayWritten, strayCommit chan struct{}
+	strayDone                 chan error
 }
 
 func newDyingNode(t *testing.T) *dyingNode {
-	n := &dyingNode{t: t, dir: t.TempDir(), commit: make(chan struct{}), killed: make(chan struct{})}
+	n := &dyingNode{
+		t: t, dir: t.TempDir(), commit: make(chan struct{}), killed: make(chan struct{}),
+		strayWritten: make(chan struct{}), strayCommit: make(chan struct{}), strayDone: make(chan error, 1),
+	}
 	n.r = newRig(t, func(o *rigOptions) {
 		o.segments = billing.Segments{Output: 100, Overshoot: time.Second}
 		o.endpoints = func(_ string, e *routing.Endpoint) {
@@ -112,7 +183,8 @@ func newDyingNode(t *testing.T) *dyingNode {
 		}
 		o.config = func(c *Config) { c.SettleRetry, c.SettleBackground = 200*time.Millisecond, 10*time.Minute }
 	})
-	n.up = withExecutor(n.r, &flakyLedger{
+	n.up = withCosts(n.r, strayLedger{n: n, flakyLedger: &flakyLedger{
+		Billing: n.r.billing,
 		settle: func() (bool, error) {
 			switch {
 			case n.dead.Load():
@@ -128,10 +200,36 @@ func newDyingNode(t *testing.T) *dyingNode {
 				<-n.killed
 			}
 		},
-	})
+	}}, fakeCosts{cost: 1000, known: true})
 	n.records = callLog(t, n.r, n.dir)
 	n.r.exec.Records, n.r.handler.Records = n.records, n.records
 	return n
+}
+
+// strayLedger is the dying node's ledger. A try taken while stray is set settles on a transaction the gateway does not
+// wait for and reports a failure no retry mends, so the background gives the settlement up while it is still to
+// commit, as a try whose commit the database finishes after the gateway stopped waiting for it.
+type strayLedger struct {
+	*flakyLedger
+	n *dyingNode
+}
+
+func (l strayLedger) SettleIn(ctx context.Context, tx pg.Tx, h *billing.Hold, o billing.Outcome) (billing.Final, func(), error) {
+	if !l.n.stray.CompareAndSwap(true, false) {
+		return l.flakyLedger.SettleIn(ctx, tx, h, o)
+	}
+	go func() {
+		ctx := context.WithoutCancel(ctx)
+		l.n.strayDone <- l.n.r.db.Tx(ctx, platformScope, func(tx pg.Tx) error {
+			if _, _, err := l.Billing.SettleIn(ctx, tx, h, o); err != nil {
+				return err
+			}
+			close(l.n.strayWritten)
+			<-l.n.strayCommit
+			return nil
+		})
+	}()
+	return billing.Final{}, nil, pg.ErrNoRows
 }
 
 // call makes the node's one call, whose ending must be out pending.

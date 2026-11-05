@@ -8,6 +8,7 @@ import { Code, Head, PageBody } from "../parts";
 import { DefaultCard, DisablePresetDialog, PresetDialog, systemPreset } from "../preset-dialogs";
 import { accountQuery, layerPresetsQuery, type PresetLayer } from "../queries";
 import { RoutingLimits } from "../routing-limits";
+import { RoutingSuspension } from "../routing-suspension";
 
 type Preset = AdminSchemas["RoutingPreset"];
 // The dialog open on a layer: a new preset, or a change to one, followed by ID in the list so a refresh after a stale
@@ -16,7 +17,8 @@ type Open = { kind: "create" } | { kind: "edit" | "disable"; id: string } | null
 
 // RoutingPresetsPage manages the two layers above the accounts: the platform's presets and default, which every site's
 // keys may use, and the presets and default of the site the admin's account is of (the admin has no list of sites, as
-// on the settings page); then the limits every layer is held to (docs/domains/routing.md「路由预设」).
+// on the settings page); then the limits every layer is held to and the platform's switch that suspends every preset
+// but the system's (docs/domains/routing.md「路由预设」).
 export default function RoutingPresetsPage() {
   const { t } = useTranslation();
   const owner = useQuery(accountQuery(useSession().account));
@@ -50,6 +52,7 @@ export default function RoutingPresetsPage() {
         )}
       </DataState>
       <RoutingLimits />
+      <RoutingSuspension />
     </Frame>
   );
 }

@@ -5,14 +5,7 @@ import en from "../locales/en";
 import { i18n, renderInDom } from "../test-dom";
 import { Classes } from "./source-classes";
 
-vi.mock("@axiom/app", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@axiom/app")>();
-  return {
-    ...actual,
-    useErrors: () => ({ message: () => "failed", field: () => undefined }),
-    useSession: () => ({ user: { id: "u1" }, account: "a1" }),
-  };
-});
+vi.mock("@axiom/app", async (importOriginal) => (await import("../test-dom")).signedIn(importOriginal));
 
 beforeAll(async () => {
   // jsdom has the dialog element but not its modal methods.

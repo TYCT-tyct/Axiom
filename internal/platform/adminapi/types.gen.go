@@ -544,6 +544,7 @@ const (
 	ErrorCodePresetInUse           ErrorCode = "preset_in_use"
 	ErrorCodePresetNotSelectable   ErrorCode = "preset_not_selectable"
 	ErrorCodePresetQuota           ErrorCode = "preset_quota"
+	ErrorCodePresetsSuspended      ErrorCode = "presets_suspended"
 	ErrorCodeRateLimited           ErrorCode = "rate_limited"
 	ErrorCodeRedeemCodeDisabled    ErrorCode = "redeem_code_disabled"
 	ErrorCodeRedeemCodeExpired     ErrorCode = "redeem_code_expired"
@@ -618,6 +619,8 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodePresetNotSelectable:
 		return true
 	case ErrorCodePresetQuota:
+		return true
+	case ErrorCodePresetsSuspended:
 		return true
 	case ErrorCodeRateLimited:
 		return true
@@ -4661,6 +4664,20 @@ type RoutingPresetList struct {
 // RoutingPresetScope The layer the preset belongs to.
 type RoutingPresetScope string
 
+// RoutingPresetSuspension defines model for RoutingPresetSuspension.
+type RoutingPresetSuspension struct {
+	// Since When presets were suspended; absent when they are not.
+	Since     *time.Time `json:"since,omitempty"`
+	Suspended bool       `json:"suspended"`
+}
+
+// RoutingPresetSuspensionUpdate defines model for RoutingPresetSuspensionUpdate.
+type RoutingPresetSuspensionUpdate struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason    Reason `json:"reason"`
+	Suspended bool   `json:"suspended"`
+}
+
 // RoutingRules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort` (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all), `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
 type RoutingRules = jsonx.Raw
 
@@ -6288,6 +6305,12 @@ type SetRoutingPresetLimitsParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetRoutingPresetSuspensionParams defines parameters for SetRoutingPresetSuspension.
+type SetRoutingPresetSuspensionParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetSearchSettingsParams defines parameters for SetSearchSettings.
 type SetSearchSettingsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -6726,6 +6749,9 @@ type SetPlatformRoutingDefaultJSONRequestBody = LayerRoutingDefaultUpdate
 
 // SetRoutingPresetLimitsJSONRequestBody defines body for SetRoutingPresetLimits for application/json ContentType.
 type SetRoutingPresetLimitsJSONRequestBody = RoutingPresetLimitsUpdate
+
+// SetRoutingPresetSuspensionJSONRequestBody defines body for SetRoutingPresetSuspension for application/json ContentType.
+type SetRoutingPresetSuspensionJSONRequestBody = RoutingPresetSuspensionUpdate
 
 // SetSearchSettingsJSONRequestBody defines body for SetSearchSettings for application/json ContentType.
 type SetSearchSettingsJSONRequestBody = SearchSettingsUpdate

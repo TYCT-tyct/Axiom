@@ -3,8 +3,8 @@ import { long, type Schemas, siteId, uuid } from "./admin-fixtures.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { fail, type Handler, type MockData, ok } from "./mock.ts";
 
-// The routing presets of the platform and the site (api/admin.yaml, tag Routing), their defaults and the limits on them,
-// answered from memory like the rest of the admin's API.
+// The routing presets of the platform and the site (api/admin.yaml, tag Routing), their defaults, the limits on them and
+// the platform's switch that suspends them, answered from memory like the rest of the admin's API.
 
 type Preset = Schemas["RoutingPreset"];
 
@@ -13,6 +13,7 @@ type RoutingState = {
   // The platform's default under "platform", a site's under its ID.
   defaults: Map<string, Schemas["RoutingDefault"]>;
   limits: Schemas["RoutingPresetLimitsView"];
+  suspension: Schemas["RoutingPresetSuspension"];
 };
 
 // Each mocked node's routing state, kept beside its handlers so the rest of the admin's data stays as it is.
@@ -94,11 +95,12 @@ function usualRouting(): RoutingState {
       [siteId, { preset_id: uuid(16, 3), version: 1 }],
     ]),
     limits: { rev: 1, limits: { kept_versions: 80 }, defaults },
+    suspension: { suspended: false },
   };
 }
 
-// The most a layer holds by default, with the longest names and slugs, numbers at their bounds and a node that does
-// not count keys.
+// The most a layer holds by default, with the longest names and slugs, numbers at their bounds, a node that does not
+// count keys, and presets suspended.
 function worstRouting(): RoutingState {
   const routing = usualRouting();
   routing.presets = Array.from({ length: 100 }, (_, n) =>
@@ -123,6 +125,7 @@ function worstRouting(): RoutingState {
     },
     defaults,
   };
+  routing.suspension = { suspended: true, since: at };
   return routing;
 }
 
@@ -246,5 +249,15 @@ export const routingHandlers: Handler<AdminState>[] = [
     }
     routing.limits = { ...routing.limits, rev: body.rev + 1, limits: body.limits };
     return ok(routing.limits);
+  }),
+  route("get", `${base}/settings/routing-suspension`, reads("sites.manage"), ({ state }) =>
+    ok(routingOf(state).suspension),
+  ),
+  route("put", `${base}/settings/routing-suspension`, changes("sites.manage"), ({ body, state }) => {
+    const routing = routingOf(state);
+    if (body.suspended !== routing.suspension.suspended) {
+      routing.suspension = body.suspended ? { suspended: true, since: new Date().toISOString() } : { suspended: false };
+    }
+    return ok(routing.suspension);
   }),
 ];
