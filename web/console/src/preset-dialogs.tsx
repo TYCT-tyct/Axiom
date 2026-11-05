@@ -79,14 +79,19 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
       onClose();
     },
   });
-  const submit = () => {
+  // A refusal may sit far down a long dialog, away from the button pressed: once it renders, it is scrolled into view.
+  const submit = (form: HTMLFormElement) => {
     const written = rulesOf(draft);
     const blank: Missing = edit.kind !== "edit" && !slugPattern.test(slug) ? "slug" : name.trim() ? null : "name";
     setInvalid("invalid" in written ? written.invalid : null);
     setMissing(blank);
     if ("rules" in written && !blank && !mutation.isPending) {
       mutation.mutate({ slug, name: name.trim(), rules: written.rules });
+      return;
     }
+    requestAnimationFrame(() =>
+      form.querySelector("[aria-invalid=true], [data-invalid]")?.scrollIntoView({ block: "center" }),
+    );
   };
   return (
     <Dialog title={t(`routingPresets.${edit.kind}Title`)} onClose={onClose}>
@@ -95,7 +100,7 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
         className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
-          submit();
+          submit(event.currentTarget);
         }}
       >
         <SaveError error={mutation.error} />

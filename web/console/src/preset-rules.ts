@@ -1,8 +1,8 @@
 import type { Schemas } from "@axiom/api";
 
 // A routing preset's rules as the editor holds them, and back (docs/domains/routing.md「规则内容」). The editor writes
-// what an account's preset may hold: the sort, the source classes and data policies allowed, the verified and score
-// thresholds and the highest unit prices. Every member it does not edit (a member a newer node added, the platform's
+// what an account's preset may hold: the sort, the source classes and data policies allowed, the verified threshold
+// and the highest unit prices. Every member it does not edit (a member a newer node added, the platform's
 // `advanced` on a copy's source) is kept as it was, so saving never drops a limit the page cannot show; the server
 // checks the whole.
 
@@ -21,8 +21,9 @@ export type RuleDraft = {
   classes: string[] | null;
   policies: string[] | null;
   verifiedOnly: boolean;
-  minScore: string;
-  minConfidence: string;
+  // The rule asks for a product score. Scoring is not live (docs/domains/routing.md「产品质量与来源类别」), so no
+  // endpoint has one and such a rule matches nothing: the editor offers no score, only removing one it read.
+  scored: boolean;
   maxPrice: Record<PriceItem, string>;
   rest: Json;
 };
@@ -38,8 +39,9 @@ export function newOverride(): OverrideDraft {
 
 export type RulesDraft = { base: RuleDraft; overrides: OverrideDraft[]; rest: Json };
 
-// The editor's fields a client check can refuse: the rule (`default` or the override's index) and the field.
-export type Invalid = { rule: "default" | number; field: "name" | "minScore" | "minConfidence" | PriceItem };
+// The editor's fields a client check can refuse: the rule (`default` or the override's index) and the field. Besides a
+// value it cannot read, it refuses a condition that excludes every endpoint, since such a preset fails every call.
+export type Invalid = { rule: "default" | number; field: "name" | "classes" | "policies" | "score" | PriceItem };
 
 const ruleMembers = ["sort", "classes", "policies", "verified_only", "min_score", "min_score_confidence", "max_price"];
 // The shape of a price the server reads (priceNumber in internal/routing/price.go): digits, an optional fraction and an
@@ -69,8 +71,7 @@ function emptyRule(): RuleDraft {
     classes: null,
     policies: null,
     verifiedOnly: false,
-    minScore: "",
-    minConfidence: "",
+    scored: false,
     maxPrice: { prompt: "", completion: "", request: "" },
     rest: {},
   };
@@ -84,8 +85,7 @@ function ruleDraft(value: unknown): RuleDraft {
     classes: texts(rule.classes),
     policies: texts(rule.policies),
     verifiedOnly: rule.verified_only === true,
-    minScore: text(rule.min_score),
-    minConfidence: text(rule.min_score_confidence),
+    scored: rule.min_score !== undefined || rule.min_score_confidence !== undefined,
     maxPrice: { prompt: text(price.prompt), completion: text(price.completion), request: text(price.request) },
     rest: without(rule, [...ruleMembers, "author", "model"]),
   };
@@ -107,28 +107,24 @@ export function draftOf(rules: Schemas["RoutingRules"] | undefined): RulesDraft 
   };
 }
 
-function number(value: string, max: number) {
-  const parsed = Number(value);
-  return value.trim() !== "" && Number.isFinite(parsed) && parsed >= 0 && parsed <= max ? parsed : null;
-}
-
 type Field = Invalid["field"];
 
-// limitsOf writes the rule's thresholds and price limits into out, or names the first field a client can tell is
-// wrong. The server holds the rest: that an override only narrows, and the prices' precision.
-function limitsOf(draft: RuleDraft, out: Json): Field | null {
-  for (const [field, key, max] of [
-    ["minScore", "min_score", 100],
-    ["minConfidence", "min_score_confidence", 1],
-  ] as const) {
-    const value = number(draft[field], max);
-    if (draft[field].trim() !== "" && value === null) {
-      return field;
-    }
-    if (value !== null) {
-      out[key] = value;
-    }
+// excludedBy names the rule's condition that no endpoint can meet today, if any. An empty list allows nothing. Every
+// endpoint is recorded as "may train" until suppliers record their data policies (「产品质量与来源类别」), so a
+// policy list without it matches nothing; this check goes when they do.
+function excludedBy(draft: RuleDraft): Field | null {
+  if (draft.classes?.length === 0) {
+    return "classes";
   }
+  if (draft.policies && !draft.policies.includes("may_train")) {
+    return "policies";
+  }
+  return draft.scored ? "score" : null;
+}
+
+// limitsOf writes the rule's price limits into out, or names the first field a client can tell is wrong. The server
+// holds the rest: that an override only narrows, and the prices' precision.
+function limitsOf(draft: RuleDraft, out: Json): Field | null {
   const price: Json = {};
   for (const item of priceItems) {
     const value = draft.maxPrice[item].trim();
@@ -157,7 +153,7 @@ function ruleOf(draft: RuleDraft): Json | Field {
   set("classes", draft.classes ?? undefined);
   set("policies", draft.policies ?? undefined);
   set("verified_only", draft.verifiedOnly || undefined);
-  return limitsOf(draft, out) ?? out;
+  return excludedBy(draft) ?? limitsOf(draft, out) ?? out;
 }
 
 // rulesOf writes the draft as the rules the API takes, or the first field it refuses.

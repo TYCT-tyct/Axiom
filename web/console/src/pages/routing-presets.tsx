@@ -242,7 +242,7 @@ function PresetsTable({
       <thead>
         <tr>
           <Th>{t("routingPresets.col.name")}</Th>
-          <Th>{t("routingPresets.col.layer")}</Th>
+          <Th className="hidden sm:table-cell">{t("routingPresets.col.layer")}</Th>
           <Th className="hidden md:table-cell">{t("routingPresets.col.rules")}</Th>
           <Th className="hidden lg:table-cell">{t("routingPresets.col.version")}</Th>
           {manage ? <Th className="w-0" /> : null}
@@ -298,20 +298,24 @@ function PresetRow({
   const { t } = useTranslation();
   return (
     <tr>
-      <Td className="w-full max-w-0 sm:w-auto sm:max-w-64 sm:min-w-40">
-        <p className="truncate text-t1" title={preset.name}>
-          {preset.name}
-        </p>
+      {/* On a phone the name takes the width the layer column would: the layer, and below md the rules summary, sit
+          under it, and it wraps rather than truncates. */}
+      <Td className="w-full max-w-0 space-y-0.5 md:w-auto md:max-w-64 md:min-w-40">
+        <p className="text-t1 [overflow-wrap:anywhere]">{preset.name}</p>
         <p className="truncate font-mono text-label text-t4">{preset.slug}</p>
         {isDefault ? <Badge tone="ok">{t("routingPresets.isDefault")}</Badge> : null}
+        <p className="text-label text-t3 sm:hidden">{t(`routingPresets.layer.${preset.scope}`)}</p>
+        <div className="pt-1 text-label md:hidden">
+          <RulesSummary rules={preset.rules} />
+        </div>
       </Td>
-      <Td className="whitespace-nowrap">{t(`routingPresets.layer.${preset.scope}`)}</Td>
+      <Td className="hidden w-0 whitespace-nowrap sm:table-cell">{t(`routingPresets.layer.${preset.scope}`)}</Td>
       <Td className="hidden md:table-cell">
         <RulesSummary rules={preset.rules} />
       </Td>
       <Td className="hidden tabular-nums lg:table-cell">{preset.version}</Td>
       {manage ? (
-        <Td className="whitespace-nowrap">
+        <Td className="w-0 whitespace-nowrap">
           <PresetActions preset={preset} onOpen={onOpen} />
         </Td>
       ) : null}
@@ -319,40 +323,40 @@ function PresetRow({
   );
 }
 
-// Every preset can be copied into one of the account's; only the account's own can be changed or disabled.
+const actions = [
+  { kind: "copy", icon: "copy" },
+  { kind: "edit", icon: "pencil" },
+  { kind: "disable", icon: "trash" },
+] as const;
+
+// Every preset can be copied into one of the account's; only the account's own can be changed or disabled. Each icon
+// shows its verb on hover and on keyboard focus; its accessible name adds the preset's, as the rows' icons look alike.
+// The tip sits to the button's start side, inside the row's height, so the table's scroll box never clips it.
 function PresetActions({ preset, onOpen }: { preset: Preset; onOpen: (dialog: Dialog) => void }) {
   const { t } = useTranslation();
   const own = preset.scope === "account";
   return (
-    <>
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label={t("routingPresets.copyNamed", { name: preset.name })}
-        onClick={() => onOpen({ kind: "copy", preset })}
-      >
-        <Icon name="copy" />
-      </Button>
-      {own ? (
-        <>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t("routingPresets.editNamed", { name: preset.name })}
-            onClick={() => onOpen({ kind: "edit", preset })}
-          >
-            <Icon name="pencil" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t("routingPresets.disableNamed", { name: preset.name })}
-            onClick={() => onOpen({ kind: "disable", preset })}
-          >
-            <Icon name="trash" />
-          </Button>
-        </>
-      ) : null}
-    </>
+    <div className="flex justify-end">
+      {actions
+        .filter((action) => own || action.kind === "copy")
+        .map(({ kind, icon }) => (
+          <span key={kind} className="group relative">
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={t(`routingPresets.${kind}Named`, { name: preset.name })}
+              onClick={() => onOpen({ kind, preset })}
+            >
+              <Icon name={icon} />
+            </Button>
+            <span
+              aria-hidden
+              className="pointer-events-none absolute end-full top-1/2 z-10 me-1 -translate-y-1/2 rounded-xs bg-btn px-2 py-1 text-label whitespace-nowrap text-btn-ink opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100"
+            >
+              {t(`routingPresets.actions.${kind}`)}
+            </span>
+          </span>
+        ))}
+    </div>
   );
 }
