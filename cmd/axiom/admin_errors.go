@@ -35,7 +35,7 @@ var adminRefusals = []refusal{
 	{operations.ErrBadPolicy, http.StatusBadRequest, codeInvalidRequest, "each limit is at least 0 and each hard limit at least its autonomous limit"},
 	{operations.ErrNoPriceEnvelope, http.StatusUnprocessableEntity, codeCapExceeded, "no price envelope covers this site, so the agent changes none of its prices"},
 	{operations.ErrEnvelopeChanged, http.StatusConflict, codeStaleRevision, "the price envelope changed since it was read"},
-	{operations.ErrBadEnvelope, http.StatusBadRequest, codeInvalidRequest, "the margin is 0 to 10000 basis points and each limit at least 0"},
+	{operations.ErrBadEnvelope, http.StatusBadRequest, codeInvalidRequest, "the margin is 0 to 10000 basis points, the daily move at most 100000000 and each limit at least 0"},
 	{operations.ErrWindowEnded, http.StatusConflict, codeConflict, "the UTC day ended while the proposal waited; propose it again"},
 	{operations.ErrNotReserved, http.StatusConflict, codeConflict, "the proposal holds no reservation now: it waits for approval, was confirmed or released, or its day ended"},
 	{payments.ErrTampered, http.StatusConflict, codeConflict, "the merchant account's settings do not match its sealed secrets; enter the secrets again"},

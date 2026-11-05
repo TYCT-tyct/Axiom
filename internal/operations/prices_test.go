@@ -77,16 +77,20 @@ func TestPriceEnvelopeDimensions(t *testing.T) {
 	db := openOps(t)
 	pct := func(n int64) *big.Rat { return big.NewRat(n, 100) }
 	for _, c := range []envelopeCase{
-		{"within every limit", 0, 0, 0, 0, pct(5), pct(30), "approved", "1/1 500#1"},
-		{"at every limit", 2, 1, 500, 0, pct(5), pct(20), "approved", "3/2 1000#1"},
-		{"a fraction of a basis point counts as one", 0, 0, 999, 0, big.NewRat(1, 30000), pct(30), "approved", "1/1 1000#1"},
-		{"a moved model is not another model", 1, 2, 200, 1, pct(5), pct(30), "approved", "2/2 700#2"},
-		{"under the margin", 0, 0, 0, 0, pct(5), big.NewRat(1999, 10000), "pending_approval", ""},
-		{"an unknown cost", 0, 0, 0, 0, pct(5), nil, "pending_approval", ""},
-		{"a move no share measures", 0, 0, 0, 0, nil, pct(30), "pending_approval", ""},
-		{"over the model's daily move", 0, 0, 600, 1, pct(5), pct(30), "pending_approval", ""},
-		{"over the daily publications", 3, 1, 0, 0, pct(1), pct(30), "pending_approval", ""},
-		{"over the daily models", 2, 2, 0, 0, pct(1), pct(30), "pending_approval", ""},
+		{"within every limit", 0, 0, 0, 0, pct(5), pct(30), "approved", "1/1 500#1", 0},
+		{"at every limit", 2, 1, 500, 0, pct(5), pct(20), "approved", "3/2 1000#1", 0},
+		{"a fraction of a basis point counts as one", 0, 0, 999, 0, big.NewRat(1, 30000), pct(30), "approved", "1/1 1000#1", 0},
+		{"a moved model is not another model", 1, 2, 200, 1, pct(5), pct(30), "approved", "2/2 700#2", 0},
+		{"under the margin", 0, 0, 0, 0, pct(5), big.NewRat(1999, 10000), "pending_approval", "", 0},
+		{"an unknown cost", 0, 0, 0, 0, pct(5), nil, "pending_approval", "", 0},
+		{"a move no share measures", 0, 0, 0, 0, nil, pct(30), "pending_approval", "", 0},
+		{"over the model's daily move", 0, 0, 600, 1, pct(5), pct(30), "pending_approval", "", 0},
+		{"over the daily publications", 3, 1, 0, 0, pct(1), pct(30), "pending_approval", "", 0},
+		{"over the daily models", 2, 2, 0, 0, pct(1), pct(30), "pending_approval", "", 0},
+		// The largest envelope holds a move of its own size; a larger one, which the day counts as one more, never fits.
+		{"a move the size of the largest envelope", 0, 0, 0, 0, big.NewRat(10_000, 1), pct(30), "approved", "1/1 100000000#1", 100_000_000},
+		{"a move beyond the largest envelope", 0, 0, 0, 0, big.NewRat(20_000, 1), pct(30), "pending_approval", "", 100_000_000},
+		{"a day that counted a move beyond it", 1, 1, 100_000_001, 1, big.NewRat(0, 1), pct(30), "pending_approval", "", 100_000_000},
 	} {
 		db.weigh(t, c)
 	}
@@ -102,13 +106,18 @@ type envelopeCase struct {
 	changes, models, moved, count int
 	change, margin                *big.Rat
 	want, counters                string
+	limit                         int64 // the model's daily move, when not the envelope's
 }
 
 // weigh proposes c's publication in a site of its own: one that waits counts nothing.
 func (db opsDB) weigh(t *testing.T, c envelopeCase) {
 	t.Helper()
 	site, model := uuid.NewV7(), uuid.NewV7()
-	if _, err := db.setEnvelope(t, envelope(site), 0); err != nil {
+	e := envelope(site)
+	if c.limit != 0 {
+		e.ModelDailyChange = c.limit
+	}
+	if _, err := db.setEnvelope(t, e, 0); err != nil {
 		t.Fatal(err)
 	}
 	want := c.counters
@@ -166,6 +175,7 @@ func TestSetPriceEnvelope(t *testing.T) {
 		func(e *operations.PriceEnvelope) { e.MinMargin = 10001 },
 		func(e *operations.PriceEnvelope) { e.MinMargin = -1 },
 		func(e *operations.PriceEnvelope) { e.DailyModels = -1 },
+		func(e *operations.PriceEnvelope) { e.ModelDailyChange = 100_000_001 },
 	} {
 		e := envelope(site)
 		bad(&e)
@@ -180,11 +190,12 @@ func TestSetPriceEnvelope(t *testing.T) {
 }
 
 // TestCountPrice: a publication the owner approved counts in the day it runs, a move no share measures as all of the
-// old price, with or without an envelope; and the use of every envelope today reads back.
+// old price and one beyond the largest envelope as one more than it, with or without an envelope; and the use of every
+// envelope today reads back.
 func TestCountPrice(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
-	site, model, other := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+	site, model, other, far := uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	if _, err := db.setEnvelope(t, envelope(site), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -192,19 +203,23 @@ func TestCountPrice(t *testing.T) {
 		{Site: site, Model: model},
 		{Site: site, Model: model, Change: big.NewRat(1, 4)},
 		{Site: site, Model: other, Change: big.NewRat(1, 100)},
+		{Site: site, Model: far, Change: big.NewRat(20_000, 1)},
 		{Site: uuid.NewV7(), Model: model, Change: big.NewRat(1, 100)},
 	} {
 		if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error { return operations.CountPrice(t.Context(), tx, r) }); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got := db.text(t, `SELECT count || '/' || models FROM operations.price_counters WHERE site_id = '`+site.String()+`' AND model_id IS NULL`); got != "3/2" {
+	if got := db.text(t, `SELECT count || '/' || models FROM operations.price_counters WHERE site_id = '`+site.String()+`' AND model_id IS NULL`); got != "4/3" {
 		t.Errorf("the site's row is %s", got)
 	}
-	db.expectMoves(t, site, map[uuid.UUID]operations.ModelMoves{model: {Model: model, Change: 12500, Count: 2}, other: {Model: other, Change: 100, Count: 1}})
+	db.expectMoves(t, site, map[uuid.UUID]operations.ModelMoves{
+		model: {Model: model, Change: 12500, Count: 2}, other: {Model: other, Change: 100, Count: 1},
+		far: {Model: far, Change: 100_000_001, Count: 1}, // a move beyond the largest envelope counts as one more than it
+	})
 }
 
-// expectMoves checks that the only envelope with use today is site's, with 3 publications of 2 models and want's moves.
+// expectMoves checks that the only envelope with use today is site's, with want's moves and their publications.
 func (db opsDB) expectMoves(t *testing.T, site uuid.UUID, want map[uuid.UUID]operations.ModelMoves) {
 	t.Helper()
 	var usage []operations.PriceUsage
@@ -214,7 +229,11 @@ func (db opsDB) expectMoves(t *testing.T, site uuid.UUID, want map[uuid.UUID]ope
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(usage) != 1 || usage[0].Envelope.Site != site || usage[0].Changes != 3 || usage[0].Models != 2 || len(usage[0].Moves) != len(want) {
+	var changes int32
+	for _, m := range want {
+		changes += m.Count
+	}
+	if len(usage) != 1 || usage[0].Envelope.Site != site || usage[0].Changes != changes || int(usage[0].Models) != len(want) || len(usage[0].Moves) != len(want) {
 		t.Fatalf("the use: %+v", usage)
 	}
 	for _, m := range usage[0].Moves {

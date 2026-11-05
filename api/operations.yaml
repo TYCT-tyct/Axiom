@@ -966,7 +966,7 @@ components:
         `daily_models` models. Publications the owner approves count too.
       properties:
         min_margin_bps: {type: integer, format: int32, minimum: 0, maximum: 10000}
-        model_daily_change_bps: {type: integer, format: int64, minimum: 0}
+        model_daily_change_bps: {type: integer, format: int64, minimum: 0, maximum: 100000000}
         daily_changes: {type: integer, format: int32, minimum: 0, maximum: 1000000}
         daily_models: {type: integer, format: int32, minimum: 0, maximum: 1000000}
     OperationsPriceEnvelopeUsage:

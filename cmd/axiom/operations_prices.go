@@ -94,15 +94,13 @@ func (o operationsAPI) publishPrice(ctx context.Context, tx pg.Tx, pub publicati
 	if err := o.admin.accounts.HoldAgent(ctx, tx, accounts.AgentID(p.Credential)); err != nil {
 		return operations.Operation{}, false, err
 	}
-	// A retry answers with its operation whatever the publisher has proposed since; only a first request is weighed.
+	// A retry of this key sent alongside the first request waits for it on the site's price policy and then finds its
+	// operation here, whatever the publisher has proposed since; only a first request is weighed.
+	if err := o.holdPrices(ctx, tx); err != nil {
+		return operations.Operation{}, false, err
+	}
 	if op, found, err := operations.Replay(ctx, tx, p); found || err != nil {
 		return op, found, err
-	}
-	// The prices are the main site's: a credential kept to other sites does not reach them.
-	if site, ok := o.admin.accounts.MainSite(); ok {
-		if sites := callOf(ctx).agent.Info().Sites; sites != nil && !slices.Contains(sites, site.ID) {
-			return operations.Operation{}, false, accounts.ErrAgentNotFound
-		}
 	}
 	site, r, err := o.admin.repricing(ctx, tx, pub)
 	if err != nil {
@@ -118,6 +116,20 @@ func (o operationsAPI) publishPrice(ctx context.Context, tx pg.Tx, pub publicati
 	}
 	op, err = operations.Settle(ctx, tx, op, result, "")
 	return op, false, err
+}
+
+// holdPrices locks the main site's price policy, which serializes every publication of its prices, for the caller's
+// credential: the prices are the main site's, and a credential kept to other sites does not reach them.
+func (o operationsAPI) holdPrices(ctx context.Context, tx pg.Tx) error {
+	site, ok := o.admin.accounts.MainSite()
+	if !ok {
+		return accounts.ErrNotFound
+	}
+	if sites := callOf(ctx).agent.Info().Sites; sites != nil && !slices.Contains(sites, site.ID) {
+		return accounts.ErrAgentNotFound
+	}
+	_, err := billing.LockPricePolicy(ctx, tx, uuid.UUID(site.ID))
+	return err
 }
 
 // repricing refreshes the main site's proposals, as the admin's confirmation does, and reads how far publishing pub

@@ -202,3 +202,40 @@ func TestOperationsPriceRefusals(t *testing.T) {
 		t.Errorf("the audit: %s", got)
 	}
 }
+
+// TestOperationsPricePublishRetryRace: a retry sent while the first request still runs waits for it on the site's
+// price policy and answers with its operation; the price is published and counted once.
+func TestOperationsPricePublishRetryRace(t *testing.T) {
+	t.Parallel()
+	f := newPriceFixture(t)
+	model := f.w.models[pricedModel].String()
+	expectAdmin(t, "the envelope", f.setEnvelope(priceEnvelope, "0"), http.StatusOK, "")
+	f.reprice("1.8")
+	p := f.waiting(model)
+	versions := f.w.query(`SELECT count(*)::text FROM billing.price_versions`)
+	key := newKey()
+	answers := make(chan *httptest.ResponseRecorder, 2)
+	if err := f.w.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
+		if _, err := tx.Exec(t.Context(), `SELECT 1 FROM billing.price_policies WHERE site_id = $1 FOR UPDATE`, f.w.site); err != nil {
+			return err
+		}
+		for range 2 {
+			go func() { answers <- f.publish(model, p, key, "") }()
+		}
+		waitUntil(t, 10*time.Second, func() bool {
+			return f.w.query(`SELECT count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`) == "2"
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first, second := <-answers, <-answers
+	a, b := agentOperation(t, first), agentOperation(t, second)
+	if first.Code != http.StatusOK || second.Code != http.StatusOK || a.OperationId == nil || b.OperationId == nil || *a.OperationId != *b.OperationId {
+		t.Fatalf("the two answers: %d %s / %d %s", first.Code, first.Body, second.Code, second.Body)
+	}
+	if got := f.w.query(`SELECT (count(*) - ` + versions + `)::text FROM billing.price_versions`); got != "1" {
+		t.Errorf("%s versions published", got)
+	}
+	f.expectUse(2000)
+}

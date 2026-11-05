@@ -28,6 +28,10 @@ func TestPriceMove(t *testing.T) {
 		}
 		return s
 	}
+	tiered := func(basis, input string) jsonx.Raw {
+		return jsonx.Raw(fmt.Sprintf(`{"v":1,"currency":"USD","rates":{"input":%[2]q,"cache_read":%[2]q,"output":%[2]q},`+
+			`"context_tiers":{"method":"whole","basis":%[1]s,"tiers":[{"above":1000,"rates":{"input":%[2]q,"cache_read":%[2]q,"output":%[2]q}}]}}`, basis, input))
+	}
 	a, b := uuid.NewV7(), uuid.NewV7()
 	head := new(uuid.NewV7())
 	for _, c := range []struct {
@@ -55,6 +59,11 @@ func TestPriceMove(t *testing.T) {
 			Endpoints: EndpointPrices{a: schedule("0.000001", "0.000001"), b: schedule("0.000001", "0.000001")},
 			Costs:     EndpointPrices{a: schedule("0.0000005", "0.0000005")},
 		}, "", ""},
+		// The tiers count the prompt otherwise: the new price is safe over its own cost, and the move goes to a person.
+		{"another context basis", Publication{
+			Current: head, CurrentSchedule: tiered(`["input"]`, "0.000001"), Schedule: tiered(`["input","cache_read"]`, "0.000002"),
+			Cost: tiered(`["input","cache_read"]`, "0.000001"),
+		}, "", "1/2"},
 		{"a shared price after endpoint prices", Publication{
 			Current: head, CurrentSchedule: raw("0.000002", "0.000002"), Schedule: raw("0.000002", "0.000002"),
 			CurrentEndpoints: EndpointPrices{a: schedule("0.000001", "0.000002"), b: schedule("0.000002", "0.000002")},

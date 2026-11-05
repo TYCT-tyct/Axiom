@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"errors"
 	"math/big"
 
 	"axiom/internal/catalog"
@@ -9,7 +10,8 @@ import (
 // PriceMove is how far publishing p moves what its model is charged now, and the least margin p keeps over its cost,
 // for the operations agent's price envelope (docs/domains/operations.md「售价的累计变动上限」). change is the largest
 // |new − now| ÷ now of any price an endpoint is charged, comparing each endpoint with its own current price; it is nil
-// when there is no current version, an endpoint has no current price, or a move is no share of an old price. margin is
+// when there is no current version, an endpoint has no current price, the context tiers count another prompt, or a
+// move is no share of an old price. margin is
 // the smallest (price − cost) ÷ price of any endpoint, against that endpoint's cost, or the model's dearest cost for a
 // price every endpoint shares; it is nil when the cost is unknown or does not measure so.
 func PriceMove(p Publication) (change, margin *big.Rat, err error) {
@@ -43,6 +45,10 @@ func priceChange(p Publication, next catalog.Schedule) (*big.Rat, bool, error) {
 	largest := new(big.Rat)
 	for _, c := range pairs {
 		move, measured, err := c.now.LargestChange(c.next)
+		if errors.Is(err, catalog.ErrTierBasisChanged) {
+			// The context tiers count another prompt: no share compares the two, so the move is unmeasured, not a fault.
+			return nil, false, nil
+		}
 		if err != nil || !measured {
 			return nil, measured, err
 		}

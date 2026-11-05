@@ -21,8 +21,9 @@ var (
 	ErrNoPriceEnvelope = errors.New("operations: no price envelope for this site, so the agent changes no price")
 	// ErrEnvelopeChanged is an envelope changed since the caller read it.
 	ErrEnvelopeChanged = errors.New("operations: the price envelope changed since it was read")
-	// ErrBadEnvelope is an envelope with a margin outside 0 to 10000 basis points or a negative limit.
-	ErrBadEnvelope = errors.New("operations: an envelope's margin is 0 to 10000 basis points and each limit at least 0")
+	// ErrBadEnvelope is an envelope with a margin outside 0 to 10000 basis points, a negative limit or a daily move
+	// over maxModelDailyChange.
+	ErrBadEnvelope = errors.New("operations: an envelope's margin is 0 to 10000 basis points, its daily move at most 100000000 and each limit at least 0")
 )
 
 // PriceEnvelope is how far the agent may move a site's sale prices without the owner: every price it publishes keeps
@@ -51,32 +52,39 @@ type Repricing struct {
 // and once the owner approves it the model's day holds at least this much.
 const unmeasuredMove = 10_000
 
-// maxMove bounds what one move counts, so the sum of a day's moves stays far from overflowing; a move of a million
-// percent fills any envelope anyway.
-const maxMove = 100_000_000
+// maxModelDailyChange is the largest daily move an envelope may allow a model, a million percent. A move counts in
+// the day as itself, or as one more than this when it is larger, so the day's row never overflows and a model that
+// moved further is never again within any envelope that day.
+const maxModelDailyChange = 100_000_000
 
-// changeBPS is r's move in basis points, rounded up so the envelope never counts less than the move.
-func (r Repricing) changeBPS() int64 {
+// changeBPS is r's move in basis points, rounded up so the envelope never counts less than the move, and exact however
+// large.
+func (r Repricing) changeBPS() *big.Int {
 	if r.Change == nil {
-		return unmeasuredMove
+		return big.NewInt(unmeasuredMove)
 	}
 	n := new(big.Rat).Mul(r.Change, big.NewRat(10_000, 1))
 	bps := new(big.Int).Quo(n.Num(), n.Denom())
 	if !n.IsInt() {
 		bps.Add(bps, big.NewInt(1))
 	}
-	if !bps.IsInt64() || bps.Int64() > maxMove {
-		return maxMove
+	return bps
+}
+
+// counted is what the day's counter records of r's move: the move, or maxModelDailyChange + 1 for one beyond it.
+func (r Repricing) counted() int64 {
+	if bps := r.changeBPS(); bps.Cmp(big.NewInt(maxModelDailyChange)) <= 0 {
+		return bps.Int64()
 	}
-	return bps.Int64()
+	return maxModelDailyChange + 1
 }
 
 // Detail is what an operation records of r: its move and margin in basis points, the margin rounded down, each nil
-// when it is not measured.
+// when it is not measured; a move beyond maxModelDailyChange is shown as one more than it.
 func (r Repricing) Detail() map[string]any {
 	d := map[string]any{"change_bps": nil, "margin_bps": nil}
 	if r.Change != nil {
-		d["change_bps"] = r.changeBPS()
+		d["change_bps"] = r.counted()
 	}
 	if r.Margin != nil {
 		n := new(big.Rat).Mul(r.Margin, big.NewRat(10_000, 1))
@@ -91,7 +99,8 @@ func (r Repricing) Detail() map[string]any {
 // within decides r against e and what the day's site and model rows hold.
 func (e PriceEnvelope) within(r Repricing, site, model OperationsPriceCounter) bool {
 	return r.Change != nil && r.Margin != nil && r.Margin.Cmp(big.NewRat(int64(e.MinMargin), 10_000)) >= 0 &&
-		model.ChangeBps+r.changeBPS() <= e.ModelDailyChange && site.Count < e.DailyChanges &&
+		new(big.Int).Add(big.NewInt(model.ChangeBps), r.changeBPS()).Cmp(big.NewInt(e.ModelDailyChange)) <= 0 &&
+		site.Count < e.DailyChanges &&
 		(model.Count > 0 || site.Models < e.DailyModels)
 }
 
@@ -122,7 +131,8 @@ func PriceEnvelopes(ctx context.Context, tx pg.Tx) ([]PriceEnvelope, error) {
 // SetPriceEnvelope makes or changes e's site's envelope as actor and records it. rev is the revision the caller read,
 // 0 for an envelope not made yet; another is ErrEnvelopeChanged.
 func SetPriceEnvelope(ctx context.Context, tx pg.Tx, actor audit.Actor, e PriceEnvelope, rev int64, reason string) (PriceEnvelope, error) {
-	if e.MinMargin < 0 || e.MinMargin > 10_000 || min(e.ModelDailyChange, int64(e.DailyChanges), int64(e.DailyModels)) < 0 {
+	if e.MinMargin < 0 || e.MinMargin > 10_000 || e.ModelDailyChange > maxModelDailyChange ||
+		min(e.ModelDailyChange, int64(e.DailyChanges), int64(e.DailyModels)) < 0 {
 		return PriceEnvelope{}, ErrBadEnvelope
 	}
 	q := New()
@@ -254,7 +264,7 @@ func CountPrice(ctx context.Context, tx pg.Tx, r Repricing) error {
 
 func countPrice(ctx context.Context, tx pg.Tx, r Repricing, day time.Time, model OperationsPriceCounter) error {
 	if err := New().CountPriceChange(ctx, tx, CountPriceChangeParams{
-		SiteID: r.Site, DayStart: day, ModelID: r.Model, ChangeBps: r.changeBPS(), FirstMove: model.Count == 0,
+		SiteID: r.Site, DayStart: day, ModelID: r.Model, ChangeBps: r.counted(), FirstMove: model.Count == 0,
 	}); err != nil {
 		return fmt.Errorf("count the price change of model %s: %w", r.Model, err)
 	}

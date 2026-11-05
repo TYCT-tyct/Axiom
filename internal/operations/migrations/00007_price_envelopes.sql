@@ -7,8 +7,9 @@ CREATE TABLE operations.price_envelopes (
     site_id uuid PRIMARY KEY,
     -- The least share (price − cost) ÷ price any price published within the envelope keeps of its cost.
     min_margin_bps integer NOT NULL CHECK (min_margin_bps BETWEEN 0 AND 10000),
-    -- How far one model's prices may move in a UTC day, up and down added together.
-    model_daily_change_bps bigint NOT NULL CHECK (model_daily_change_bps >= 0),
+    -- How far one model's prices may move in a UTC day, up and down added together. A move beyond the largest limit
+    -- counts as one more than it, so the bound keeps such a model outside every envelope for the rest of the day.
+    model_daily_change_bps bigint NOT NULL CHECK (model_daily_change_bps BETWEEN 0 AND 100000000),
     -- How many publications, and how many models, a UTC day may change.
     daily_changes integer NOT NULL CHECK (daily_changes >= 0),
     daily_models integer NOT NULL CHECK (daily_models >= 0),
