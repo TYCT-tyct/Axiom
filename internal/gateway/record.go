@@ -171,12 +171,13 @@ func validCategory(c string) bool {
 	return true
 }
 
-// log writes the call into the call log. The record's amounts are the settlement's, so it is written once that is: the
-// ledger's charge is what the call cost, and a record that said zero while the settlement was still to come would
-// disagree with it (docs/domains/observability.md「追溯」). The gateway reserved the record's room before admitting the
-// call, so Commit appends it to the node's spill before the ending is written; a failure here is a bug or a dead disk,
-// and the recorder refuses every further call until an operator fixes it.
-func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billing.Final, end time.Time) {
+// log writes the call into the call log. The record's amounts are the settlement's, so a record written before its
+// settlement is pending: it says so and carries none, and the settled record of the same call completes it once the
+// settlement commits (docs/domains/observability.md「写入路径」). The gateway reserved the record's room before admitting
+// the call, so Commit appends it to the node's spill before the ending is written; a failure here is a bug or a dead
+// disk, and the recorder refuses every further call until an operator fixes it. The pending and the settled record are
+// written with the same end, so the row the call log keeps does not depend on which of them reaches it first.
+func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billing.Final, pending bool, end time.Time) {
 	if x.Records == nil {
 		return
 	}
@@ -184,7 +185,11 @@ func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billin
 	if err != nil {
 		x.Logger.ErrorContext(ctx, "a call's route could not be recorded", "request_id", t.call.ID.String(), "err", err)
 	}
+	if pending {
+		f = billing.Final{} // a failed settlement's Final may be a try's whose transaction did not commit
+	}
 	rec := recordOf(t, route, o, f, end)
+	rec.BillingPending = pending
 	if t.call.record != nil {
 		err = t.call.record.Commit(rec)
 	} else {
