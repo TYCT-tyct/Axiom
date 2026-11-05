@@ -1,11 +1,11 @@
 import { ApiError, consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
 import { accountKey, draftOf, type Invalid, RulesEditor, rulesOf, useClassOptions, useErrors } from "@axiom/app";
-import { Button, Dialog, FormError, SubmitButton, TextField } from "@axiom/ui";
+import { Button, Dialog, FormError, SubmitButton, TextField, useFormat } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "./confirm-dialog";
-import { siteQuery, sourceClassesQuery } from "./queries";
+import { routingDefaultQuery, siteQuery, sourceClassesQuery } from "./queries";
 
 type Preset = Schemas["RoutingPreset"];
 export type PresetEdit = { kind: "create" } | { kind: "copy"; preset: Preset } | { kind: "edit"; preset: Preset };
@@ -182,10 +182,13 @@ function Names({
   );
 }
 
-// DisablePresetDialog disables one of the account's presets at the revision the list showed. A default that still
-// points at it refuses (preset_in_use), and the message says to change the default first.
+// DisablePresetDialog disables one of the account's presets at the revision the list showed. Before that it says how
+// many of the account's keys are bound to it and whether it is the account's default; a default that still points at
+// it refuses (preset_in_use), and the message says to change the default first.
 export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClose: () => void }) {
   const { t } = useTranslation();
+  const format = useFormat();
+  const isDefault = useQuery(routingDefaultQuery).data?.preset_id === preset.id;
   const refresh = useRefreshPresets();
   const disable = useMutation({
     mutationFn: () =>
@@ -202,7 +205,20 @@ export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClo
   return (
     <ConfirmDialog
       title={t("routingPresets.disable.title")}
-      body={t("routingPresets.disable.body", { name: preset.name })}
+      body={
+        <>
+          <p>{t("routingPresets.disable.body", { name: preset.name })}</p>
+          {/* A node that does not count the keys gives no number, and then none is said. */}
+          {preset.keys === undefined ? null : (
+            <p>
+              {preset.keys === 0
+                ? t("routingPresets.disable.noKeys")
+                : t("routingPresets.disable.keys", { count: preset.keys, keys: format.number(preset.keys) })}
+            </p>
+          )}
+          {isDefault ? <p className="text-warn">{t("routingPresets.disable.isDefault")}</p> : null}
+        </>
+      }
       confirm={t("routingPresets.disable.confirm")}
       action={disable}
       onClose={onClose}

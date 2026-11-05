@@ -42,6 +42,7 @@ export default function RoutingPresetsPage() {
         query={platform}
         currency={owner.data?.balance.balance.currency}
         platform={[]}
+        siteId={owner.data?.site_id}
       />
       <DataState query={owner}>
         {(account) => (
@@ -81,21 +82,23 @@ function SiteLayer({
 }) {
   const layer: PresetLayer = { scope: "site", siteId };
   const query = useQuery(layerPresetsQuery(layer));
-  return <Layer layer={layer} query={query} currency={currency} platform={platform} />;
+  return <Layer layer={layer} query={query} currency={currency} platform={platform} siteId={siteId} />;
 }
 
-// Layer is one layer's default for new keys and its presets. currency is the site's: a site preset's prices are in
-// it, and a platform preset's start in it.
+// Layer is one layer's default for new keys and its presets. currency and siteId are the admin's site's: a site
+// preset's prices are in its currency, and a platform preset's start in it; its default may point at either layer's.
 function Layer({
   layer,
   query,
   currency,
   platform,
+  siteId,
 }: {
   layer: PresetLayer;
   query: UseQueryResult<AdminSchemas["RoutingPresetList"]>;
   currency?: string;
   platform: Preset[];
+  siteId?: AdminSchemas["SiteId"];
 }) {
   const { t } = useTranslation();
   const manage = can(useSession(), "sites.manage");
@@ -126,7 +129,7 @@ function Layer({
         <PresetDialog key={chosen.id} layer={layer} preset={chosen} currency={currency} onClose={close} />
       ) : null}
       {open?.kind === "disable" && chosen ? (
-        <DisablePresetDialog key={chosen.id} preset={chosen} onClose={close} />
+        <DisablePresetDialog key={chosen.id} preset={chosen} siteId={siteId} onClose={close} />
       ) : null}
     </>
   );

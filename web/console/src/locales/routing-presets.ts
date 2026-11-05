@@ -43,6 +43,10 @@ export const zh = {
     title: "停用路由预设",
     body: "停用“{{name}}”？绑定它的 key 继续按它路由，新的 key 和默认值不能再选它。停用的预设仍计入账户最多 200 条的累计数。",
     confirm: "停用",
+    noKeys: "你的 key 都没有绑定它。",
+    keys_one: "你有 {{keys}} 个 key 绑定它。",
+    keys_other: "你有 {{keys}} 个 key 绑定它。",
+    isDefault: "它是新 key 的默认预设：先在上方换一个默认，否则停用会被拒绝。",
   },
   key: {
     col: "路由预设",
@@ -103,6 +107,10 @@ export const en: Messages<typeof zh> = {
     title: "Disable routing preset",
     body: "Disable “{{name}}”? Keys bound to it keep routing by it; new keys and defaults can’t choose it. A disabled preset still counts towards the 200 an account may make.",
     confirm: "Disable",
+    noKeys: "None of your keys is bound to it.",
+    keys_one: "{{keys}} of your keys is bound to it.",
+    keys_other: "{{keys}} of your keys are bound to it.",
+    isDefault: "It’s the default for new keys: choose another default above first, or disabling it is refused.",
   },
   key: {
     col: "Routing preset",

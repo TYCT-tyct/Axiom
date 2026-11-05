@@ -11,6 +11,14 @@ import en from "./locales/en";
 // React 19 asks for this before act() runs outside a test renderer.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+// jsdom has the dialog element but not its modal methods, which every dialog of the admin opens and closes with.
+HTMLDialogElement.prototype.showModal = function () {
+  this.open = true;
+};
+HTMLDialogElement.prototype.close = function () {
+  this.open = false;
+};
+
 export const i18n = createInstance();
 const ready = i18n.init({ lng: "en", defaultNS: "admin", resources: { en: { admin: en } } });
 
@@ -45,4 +53,10 @@ export async function signedIn(importOriginal: <T>() => Promise<T>, permissions:
     useErrors: () => ({ message: () => "failed", field: () => undefined }),
     useSession: () => ({ user: { id: "u1" }, account: "a1", permissions }),
   };
+}
+
+// withAdminApi is @axiom/api for vi.mock, with adminApi answering by the given methods:
+// vi.mock("@axiom/api", async (original) => (await import("./test-dom")).withAdminApi(original, { GET: vi.fn(...) })).
+export async function withAdminApi(importOriginal: <T>() => Promise<T>, adminApi: Record<string, unknown>) {
+  return { ...(await importOriginal<typeof import("@axiom/api")>()), adminApi };
 }

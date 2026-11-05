@@ -1,7 +1,7 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange, unwrapEmptyChange } from "@axiom/api";
 import { draftOf, type Invalid, RulesEditor, rulesOf, summaryOf, useClassOptions, useErrors } from "@axiom/app";
-import { Button, DataState, Icon, SelectField, TextField } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
+import { Button, DataState, Icon, SelectField, TextField, useFormat } from "@axiom/ui";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -361,16 +361,50 @@ function savePreset(layer: PresetLayer, preset: Preset | undefined, input: Prese
   );
 }
 
-// DisablePresetDialog disables a preset at the revision it was opened with. A default that still points at it refuses
-// (preset_in_use), whose words say to change the default first.
-export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClose: () => void }) {
+// DisablePresetDialog disables a preset at the revision it was opened with. Before that it says how many keys are bound
+// to it and which of the defaults this page shows point at it: the platform's (for a platform preset) and the admin's
+// site's. Another site's default the page cannot read; it, like these, refuses the disabling (preset_in_use), whose
+// words say to change the default first.
+export function DisablePresetDialog({
+  preset,
+  siteId,
+  onClose,
+}: {
+  preset: Preset;
+  siteId?: AdminSchemas["SiteId"];
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
+  const format = useFormat();
   const [read, reload] = useSnapshot(preset);
+  const layers: PresetLayer[] = [
+    ...(preset.scope === "platform" ? [{ scope: "platform" } as const] : []),
+    ...(siteId ? [{ scope: "site", siteId } as const] : []),
+  ];
+  const defaults = useQueries({ queries: layers.map(layerDefaultQuery) });
+  const pointing = layers.filter((_, i) => defaults[i]?.data?.preset_id === read.id);
   return (
     <ChangeDialog<number, null>
       operation={`routing-preset-disable:${preset.id}`}
       title={t("routingPresets.disableTitle", { name: read.name })}
-      intro={<p>{t("routingPresets.disableBody")}</p>}
+      intro={
+        <>
+          <p>{t("routingPresets.disableBody")}</p>
+          {/* A node that does not count the keys gives no number, and then none is said. */}
+          {read.keys === undefined ? null : (
+            <p>
+              {read.keys === 0
+                ? t("routingPresets.disableKeys.none")
+                : t("routingPresets.disableKeys.count", { count: read.keys, keys: format.number(read.keys) })}
+            </p>
+          )}
+          {pointing.map((layer) => (
+            <p key={layer.scope} className="text-warn">
+              {t(`routingPresets.disableDefault.${layer.scope}`)}
+            </p>
+          ))}
+        </>
+      }
       action={t("routingPresets.disable")}
       danger
       reload={reload}
