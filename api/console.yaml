@@ -2640,7 +2640,7 @@ components:
     Unprocessable:
       description: >-
         The request is well formed but a rule refuses it (`invalid_invite`, `weak_password`, `not_ready`,
-        `unprocessable`); `message` says which.
+        `unprocessable`, `cap_exceeded`); `message` says which.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -3080,6 +3080,7 @@ components:
         - weak_password
         - not_ready
         - unprocessable
+        - cap_exceeded
         - redeem_code_invalid
         - redeem_code_expired
         - redeem_code_disabled

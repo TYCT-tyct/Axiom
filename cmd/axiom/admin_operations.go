@@ -9,6 +9,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/operations"
+	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
@@ -320,5 +321,82 @@ func approvalBody(op operations.Operation) adminapi.OperationsApproval {
 		Params: jsonx.Raw(op.Params), Summary: jsonx.Raw(ap.Summary), AgentReason: op.Reason,
 		OperationState: adminapi.OperationState(op.State), DecidedBy: optionalText(ap.DecidedBy),
 		DecisionReason: optionalText(ap.DecisionReason), RunId: optionalText(op.Run), ErrorCode: optionalText(op.Error),
+	}
+}
+
+// ListOperationsCapPolicies lists every cap on the money the agent moves.
+func (a adminAPI) ListOperationsCapPolicies(ctx context.Context, _ adminapi.ListOperationsCapPoliciesRequestObject) (adminapi.ListOperationsCapPoliciesResponseObject, error) {
+	var list adminapi.OperationsCapPolicyList
+	err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
+		policies, err := operations.CapPolicies(ctx, tx)
+		list.Data = make([]adminapi.OperationsCapPolicy, len(policies))
+		for i, p := range policies {
+			list.Data[i] = capPolicyBody(p)
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.ListOperationsCapPolicies200JSONResponse(list), nil
+}
+
+// SetOperationsCapPolicy makes or changes the caps of a scope and category from the revision the owner read.
+func (a adminAPI) SetOperationsCapPolicy(ctx context.Context, r adminapi.SetOperationsCapPolicyRequestObject) (adminapi.SetOperationsCapPolicyResponseObject, error) {
+	b := r.Body
+	l := b.Limits
+	p := operations.CapPolicy{Category: operations.Category(r.Category), DailyCount: l.DailyCountMax}
+	if r.Scope != "platform" {
+		site, err := accounts.ParseSiteID(r.Scope)
+		if err != nil {
+			return nil, invalidField("scope", "not platform or a site ID")
+		}
+		p.Site = new(uuid.UUID(site))
+	}
+	currency, err := platform.ParseCurrency(b.Currency)
+	if err != nil {
+		return nil, invalidField("/currency", "not a currency code")
+	}
+	p.Currency = currency
+	for _, f := range []struct {
+		field string
+		text  adminapi.OperationsCapAmount
+		into  *int64
+	}{
+		{"single_max", l.SingleMax, &p.Single},
+		{"daily_max", l.DailyMax, &p.Daily},
+		{"weekly_max", l.WeeklyMax, &p.Weekly},
+		{"object_daily_max", l.ObjectDailyMax, &p.ObjectDaily},
+		{"hard_single_max", l.HardSingleMax, &p.HardSingle},
+		{"hard_daily_max", l.HardDailyMax, &p.HardDaily},
+		{"hard_weekly_max", l.HardWeeklyMax, &p.HardWeekly},
+	} {
+		if *f.into, err = strconv.ParseInt(f.text, 10, 64); err != nil {
+			return nil, invalidField("/limits/"+f.field, "not an amount a cap can count")
+		}
+	}
+	body, replayed, err := idempotently(ctx, a.db, "setOperationsCapPolicy", r.Params.IdempotencyKey, r, func(tx pg.Tx) (adminapi.OperationsCapPolicy, error) {
+		set, err := operations.SetCapPolicy(ctx, tx, actor(ctx), p, b.Rev, b.Reason)
+		return capPolicyBody(set), err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.SetOperationsCapPolicy200JSONResponse{Body: body, Headers: adminapi.SetOperationsCapPolicy200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+func capPolicyBody(p operations.CapPolicy) adminapi.OperationsCapPolicy {
+	scope := "platform"
+	if p.Site != nil {
+		scope = accounts.SiteID(*p.Site).TypeID()
+	}
+	text := func(n int64) string { return strconv.FormatInt(n, 10) }
+	return adminapi.OperationsCapPolicy{
+		Scope: scope, Category: adminapi.OperationsCapCategory(p.Category), Currency: p.Currency.String(), Rev: p.Rev,
+		UpdatedAt: p.Updated, Limits: adminapi.OperationsCapLimits{
+			SingleMax: text(p.Single), DailyMax: text(p.Daily), WeeklyMax: text(p.Weekly), ObjectDailyMax: text(p.ObjectDaily),
+			DailyCountMax: p.DailyCount, HardSingleMax: text(p.HardSingle), HardDailyMax: text(p.HardDaily),
+			HardWeeklyMax: text(p.HardWeekly),
+		},
 	}
 }

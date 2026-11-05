@@ -148,6 +148,12 @@ type ServerInterface interface {
 	// RejectOperationsApproval Reject what the operations agent asked for
 	// (POST /api/admin/v1/operations/approvals/{approval_id}/reject)
 	RejectOperationsApproval(w http.ResponseWriter, r *http.Request, approvalId Uuid, params RejectOperationsApprovalParams)
+	// ListOperationsCapPolicies The caps on the money the operations agent moves
+	// (GET /api/admin/v1/operations/cap-policies)
+	ListOperationsCapPolicies(w http.ResponseWriter, r *http.Request)
+	// SetOperationsCapPolicy Set the caps of a scope and category
+	// (PUT /api/admin/v1/operations/cap-policies/{scope}/{category})
+	SetOperationsCapPolicy(w http.ResponseWriter, r *http.Request, scope string, category OperationsCapCategory, params SetOperationsCapPolicyParams)
 	// ListOperationsCredentials The operations credentials
 	// (GET /api/admin/v1/operations/credentials)
 	ListOperationsCredentials(w http.ResponseWriter, r *http.Request, params ListOperationsCredentialsParams)
@@ -2487,6 +2493,83 @@ func (siw *ServerInterfaceWrapper) RejectOperationsApproval(w http.ResponseWrite
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RejectOperationsApproval(w, r, approvalId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListOperationsCapPolicies operation middleware
+func (siw *ServerInterfaceWrapper) ListOperationsCapPolicies(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListOperationsCapPolicies(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetOperationsCapPolicy operation middleware
+func (siw *ServerInterfaceWrapper) SetOperationsCapPolicy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "scope" -------------
+	var scope string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "scope", r.PathValue("scope"), &scope, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "scope", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "category" -------------
+	var category OperationsCapCategory
+
+	err = runtime.BindStyledParameterWithOptions("simple", "category", r.PathValue("category"), &category, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "category", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetOperationsCapPolicyParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetOperationsCapPolicy(w, r, scope, category, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7944,6 +8027,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/credentials/{credential_id}/rotate", wrapper.RotateOperationsCredential)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/credentials/{credential_id}/revoke", wrapper.RevokeOperationsCredential)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/agent/stop", wrapper.StopOperationsAgent)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/cap-policies", wrapper.ListOperationsCapPolicies)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/operations/cap-policies/{scope}/{category}", wrapper.SetOperationsCapPolicy)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/approvals", wrapper.ListOperationsApprovals)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/approvals/{approval_id}", wrapper.GetOperationsApproval)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/approvals/{approval_id}/approve", wrapper.ApproveOperationsApproval)
@@ -12677,6 +12762,180 @@ type RejectOperationsApprovaldefaultJSONResponse struct {
 }
 
 func (response RejectOperationsApprovaldefaultJSONResponse) VisitRejectOperationsApprovalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsCapPoliciesRequestObject struct {
+}
+
+type ListOperationsCapPoliciesResponseObject interface {
+	VisitListOperationsCapPoliciesResponse(w http.ResponseWriter) error
+}
+
+type ListOperationsCapPolicies200JSONResponse OperationsCapPolicyList
+
+func (response ListOperationsCapPolicies200JSONResponse) VisitListOperationsCapPoliciesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsCapPolicies401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListOperationsCapPolicies401JSONResponse) VisitListOperationsCapPoliciesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsCapPolicies403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListOperationsCapPolicies403JSONResponse) VisitListOperationsCapPoliciesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsCapPoliciesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListOperationsCapPoliciesdefaultJSONResponse) VisitListOperationsCapPoliciesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsCapPolicyRequestObject struct {
+	Scope    string                `json:"scope"`
+	Category OperationsCapCategory `json:"category"`
+	Params   SetOperationsCapPolicyParams
+	Body     *SetOperationsCapPolicyJSONRequestBody
+}
+
+type SetOperationsCapPolicyResponseObject interface {
+	VisitSetOperationsCapPolicyResponse(w http.ResponseWriter) error
+}
+
+type SetOperationsCapPolicy200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetOperationsCapPolicy200JSONResponse struct {
+	Body    OperationsCapPolicy
+	Headers SetOperationsCapPolicy200ResponseHeaders
+}
+
+func (response SetOperationsCapPolicy200JSONResponse) VisitSetOperationsCapPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsCapPolicy400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetOperationsCapPolicy400JSONResponse) VisitSetOperationsCapPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsCapPolicy401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetOperationsCapPolicy401JSONResponse) VisitSetOperationsCapPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsCapPolicy403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetOperationsCapPolicy403JSONResponse) VisitSetOperationsCapPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsCapPolicy409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetOperationsCapPolicy409JSONResponse) VisitSetOperationsCapPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsCapPolicydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetOperationsCapPolicydefaultJSONResponse) VisitSetOperationsCapPolicyResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -25324,6 +25583,12 @@ type StrictServerInterface interface {
 	// RejectOperationsApproval Reject what the operations agent asked for
 	// (POST /api/admin/v1/operations/approvals/{approval_id}/reject)
 	RejectOperationsApproval(ctx context.Context, request RejectOperationsApprovalRequestObject) (RejectOperationsApprovalResponseObject, error)
+	// ListOperationsCapPolicies The caps on the money the operations agent moves
+	// (GET /api/admin/v1/operations/cap-policies)
+	ListOperationsCapPolicies(ctx context.Context, request ListOperationsCapPoliciesRequestObject) (ListOperationsCapPoliciesResponseObject, error)
+	// SetOperationsCapPolicy Set the caps of a scope and category
+	// (PUT /api/admin/v1/operations/cap-policies/{scope}/{category})
+	SetOperationsCapPolicy(ctx context.Context, request SetOperationsCapPolicyRequestObject) (SetOperationsCapPolicyResponseObject, error)
 	// ListOperationsCredentials The operations credentials
 	// (GET /api/admin/v1/operations/credentials)
 	ListOperationsCredentials(ctx context.Context, request ListOperationsCredentialsRequestObject) (ListOperationsCredentialsResponseObject, error)
@@ -26994,6 +27259,65 @@ func (sh *strictHandler) RejectOperationsApproval(w http.ResponseWriter, r *http
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RejectOperationsApprovalResponseObject); ok {
 		if err := validResponse.VisitRejectOperationsApprovalResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListOperationsCapPolicies operation middleware
+func (sh *strictHandler) ListOperationsCapPolicies(w http.ResponseWriter, r *http.Request) {
+	var request ListOperationsCapPoliciesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListOperationsCapPolicies(ctx, request.(ListOperationsCapPoliciesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListOperationsCapPolicies")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListOperationsCapPoliciesResponseObject); ok {
+		if err := validResponse.VisitListOperationsCapPoliciesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetOperationsCapPolicy operation middleware
+func (sh *strictHandler) SetOperationsCapPolicy(w http.ResponseWriter, r *http.Request, scope string, category OperationsCapCategory, params SetOperationsCapPolicyParams) {
+	var request SetOperationsCapPolicyRequestObject
+
+	request.Scope = scope
+	request.Category = category
+	request.Params = params
+
+	var body SetOperationsCapPolicyJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetOperationsCapPolicy(ctx, request.(SetOperationsCapPolicyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetOperationsCapPolicy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetOperationsCapPolicyResponseObject); ok {
+		if err := validResponse.VisitSetOperationsCapPolicyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

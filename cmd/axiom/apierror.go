@@ -37,6 +37,7 @@ const (
 	codeWeakPassword          errorCode = "weak_password"
 	codeNotReady              errorCode = "not_ready"
 	codeUnprocessable         errorCode = "unprocessable"
+	codeCapExceeded           errorCode = "cap_exceeded"
 	codeRedeemInvalid         errorCode = "redeem_code_invalid"
 	codeRedeemExpired         errorCode = "redeem_code_expired"
 	codeRedeemDisabled        errorCode = "redeem_code_disabled"
