@@ -55,11 +55,11 @@ func (t *presetTally) routedOnce() {
 
 // presetWatch counts the calls the presets refuse and reports the platform's and sites' presets that refuse every call.
 type presetWatch struct {
-	refusals    metric.Int64Counter
-	unavailable []metric.AddOption
-	filtered    []metric.AddOption
-	alerts      alert.Sink
-	node        string
+	// unavailable and filtered are the calls refused by reason, which the meter reads when it is collected: Plan has
+	// no context to record a measurement with, and an atomic add is all the call path pays.
+	unavailable, filtered atomic.Int64
+	alerts                alert.Sink
+	node                  string
 
 	mu      sync.Mutex
 	tallies map[PresetID]*presetTally // the platform's and sites' presets: never deleted, so bounded by their quotas
@@ -67,26 +67,25 @@ type presetWatch struct {
 }
 
 func newPresetWatch(cfg Config) (*presetWatch, error) {
+	w := &presetWatch{alerts: cfg.Alerts, node: cfg.Node, tallies: map[PresetID]*presetTally{}, started: cfg.Now()}
 	meter := cfg.Meter
 	if meter == nil {
 		meter = noop.NewMeterProvider().Meter("routing")
 	}
-	refusals, err := meter.Int64Counter("axiom.routing.preset_refusals",
-		metric.WithDescription("Calls refused because of the key's routing preset, by reason (docs/domains/routing.md「滚动发布、失败与性能」)."))
-	if err != nil {
-		return nil, err
-	}
-	reason := func(r string) []metric.AddOption {
-		return []metric.AddOption{metric.WithAttributes(attribute.String("reason", r))}
-	}
-	return &presetWatch{
-		refusals: refusals, unavailable: reason("preset_unavailable"), filtered: reason(PresetFilter.String()),
-		alerts: cfg.Alerts, node: cfg.Node, tallies: map[PresetID]*presetTally{}, started: cfg.Now(),
-	}, nil
+	unavailable := metric.WithAttributes(attribute.String("reason", "preset_unavailable"))
+	filtered := metric.WithAttributes(attribute.String("reason", PresetFilter.String()))
+	_, err := meter.Int64ObservableCounter("axiom.routing.preset_refusals",
+		metric.WithDescription("Calls refused because of the key's routing preset, by reason (docs/domains/routing.md「滚动发布、失败与性能」)."),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			o.Observe(w.unavailable.Load(), unavailable)
+			o.Observe(w.filtered.Load(), filtered)
+			return nil
+		}))
+	return w, err
 }
 
 // unavailableRefused counts a call refused because the node cannot route by its key's preset.
-func (w *presetWatch) unavailableRefused() { w.refusals.Add(context.Background(), 1, w.unavailable...) }
+func (w *presetWatch) unavailableRefused() { w.unavailable.Add(1) }
 
 // nothing counts a plan that left no entry: a 404 the preset took part in is a preset_filter refusal, and one more
 // call the preset refused. A wait or a transient refusal is the endpoints' state, not the preset's.
@@ -95,7 +94,7 @@ func (w *presetWatch) nothing(p *preset, err error) {
 	if !ok || !none.Permanent || !none.has(PresetFilter) {
 		return
 	}
-	w.refusals.Add(context.Background(), 1, w.filtered...)
+	w.filtered.Add(1)
 	if p.tally != nil {
 		p.tally.filtered.Add(1)
 	}
