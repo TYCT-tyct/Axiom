@@ -42,7 +42,8 @@ const dialog = (name: string, path: string, ...buttons: string[]): Scene =>
   );
 
 // The routing presets page with the platform's switch in a given state whatever the data set says (the worst set has it
-// on), so the suspended page and each of its two dialogs are in every width, scheme and language.
+// on), so the suspended page and each of its two dialogs are in every width, scheme and language. The dialogs that
+// change presets open with it off: while it is on their buttons are disabled.
 async function routingPage(p: Page, suspended: boolean) {
   await p.route("**/api/admin/v1/settings/routing-suspension", (route) =>
     route.request().method() === "GET"
@@ -159,9 +160,9 @@ const scenes: Scene[] = [
   ...audienceScenes,
   view("settings", "settings"),
   view("routing-presets", "routing-presets"),
-  dialog("routing-preset-create", "routing-presets", "routingPresets.create"),
-  dialog("routing-preset-edit", "routing-presets", "routingPresets.editNamed"),
-  dialog("routing-default", "routing-presets", "routingPresets.defaults.edit"),
+  routingSwitch("routing-preset-create", false, "routingPresets.create"),
+  routingSwitch("routing-preset-edit", false, "routingPresets.editNamed"),
+  routingSwitch("routing-default", false, "routingPresets.defaults.edit"),
   dialog("routing-limits", "routing-presets", "routingPresets.limits.edit"),
   routingSuspended,
   routingSwitch("routing-suspend", false, "routingPresets.suspension.suspend"),
