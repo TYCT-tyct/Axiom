@@ -112,7 +112,7 @@ func TestStopRefusesFurtherAppends(t *testing.T) {
 	}
 	t.Cleanup(s.finish)
 	s.stopNow()
-	if _, err := s.append([]byte("{}")); !errors.Is(err, ErrClosed) {
+	if _, err := s.append([]byte("{}"), false); !errors.Is(err, ErrClosed) {
 		t.Errorf("append after stop = %v, want ErrClosed", err)
 	}
 }

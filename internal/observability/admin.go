@@ -17,6 +17,7 @@ type CallSummary struct {
 	LatencyMS         int
 	PriceNano         int64
 	Currency          string
+	Pending           bool // the call's settlement never reached the log: PriceNano is not its price (README「写入」)
 }
 
 // AdminQuery filters the platform's call summaries. The HTTP boundary bounds time and page size.
@@ -30,7 +31,7 @@ type AdminQuery struct {
 	PageSize           int
 }
 
-const adminCallsSQL = `SELECT id, at, site_id, account_id, model, error_kind, latency_ms, price_nano, currency
+const adminCallsSQL = `SELECT id, at, site_id, account_id, model, error_kind, latency_ms, price_nano, currency, billing_pending
  FROM observability.call_log
  WHERE (%[1]s,id) < (%[2]s,$2::uuid) AND at >= $3 AND at < $4
  AND ($5::text = '' OR account_id = nullif($5,'')::uuid)
@@ -68,7 +69,7 @@ func ListAdmin(ctx context.Context, tx pg.Tx, q AdminQuery) ([]CallSummary, *Cur
 	out := make([]CallSummary, 0, q.PageSize+1)
 	for rows.Next() {
 		var c CallSummary
-		if err := rows.Scan(&c.ID, &c.At, &c.Site, &c.Account, &c.Model, &c.ErrorKind, &c.LatencyMS, &c.PriceNano, &c.Currency); err != nil {
+		if err := rows.Scan(&c.ID, &c.At, &c.Site, &c.Account, &c.Model, &c.ErrorKind, &c.LatencyMS, &c.PriceNano, &c.Currency, &c.Pending); err != nil {
 			return nil, nil, Coverage{}, err
 		}
 		out = append(out, c)

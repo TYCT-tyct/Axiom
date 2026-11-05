@@ -137,7 +137,7 @@ func TestCompleteTailCorruptionRefusesStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := encodedRecord(t)
-	if err := sp.appendSynced(body); err != nil {
+	if err := sp.appendSynced(body, false); err != nil {
 		t.Fatal(err)
 	}
 	sp.finish()
@@ -271,7 +271,7 @@ func TestWriterReadsOnlyDurableRecords(t *testing.T) {
 	}
 	defer sp.finish()
 	body := encodedRecord(t)
-	pos, err := sp.append(body)
+	pos, err := sp.append(body, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestNewSegmentIsDurableInItsDirectory(t *testing.T) {
 		return nil
 	}
 	sp.mu.Lock()
-	err = sp.rotateLocked()
+	err = sp.rotateLocked(false)
 	sp.mu.Unlock()
 	if err != nil {
 		t.Fatal(err)
@@ -327,10 +327,10 @@ func TestNewSegmentIsDurableInItsDirectory(t *testing.T) {
 	sp.mu.Lock()
 	sp.active.size = spillSegmentBytes // the next append must rotate
 	sp.mu.Unlock()
-	if err := sp.appendSynced(body); !errors.Is(err, failure) {
+	if err := sp.appendSynced(body, false); !errors.Is(err, failure) {
 		t.Fatalf("Commit into a segment whose directory sync failed = %v, want the failure", err)
 	}
-	if err := sp.appendSynced(body); err == nil {
+	if err := sp.appendSynced(body, false); err == nil {
 		t.Fatal("the spill took another record after a failed directory sync")
 	}
 }
@@ -390,7 +390,7 @@ func TestRestartSyncsTheDirectoryChain(t *testing.T) {
 			t.Errorf("the restart did not sync %s (synced %v)", want, synced)
 		}
 	}
-	if err := sp.appendSynced(encodedRecord(t)); err != nil {
+	if err := sp.appendSynced(encodedRecord(t), false); err != nil {
 		t.Fatalf("Commit after the restart: %v", err)
 	}
 }

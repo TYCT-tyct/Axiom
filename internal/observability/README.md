@@ -10,8 +10,8 @@
 func Module() pg.Module                                   // 迁移，交给 cmd/axiom
 func NewRecorder(ctx, db *pg.DB, scope pg.Scope, cfg Config, logger *slog.Logger) (*Recorder, error) // 锁定并校验 spill；目录被占用、不可写、段损坏时启动失败
 func (r *Recorder) Admit() (*Slot, error)                 // 调用准入前预占一条记录的位置；spill 满返回 ErrBacklog，已坏返回 ErrBroken
-func (s *Slot) Commit(rec CallRecord) error               // 把记录追加到本机 spill 并 fsync；返回后进程崩溃、主机断电也能重放
-func (s *Slot) Release()                                  // 调用结束但没有记录时归还位置；Commit 之后是空操作
+func (s *Slot) Commit(rec CallRecord) error               // 把记录追加到本机 spill 并 fsync；返回后进程崩溃、主机断电也能重放。待定记录（BillingPending）改为停放，Slot 不关，等同一调用的已结算记录替换它
+func (s *Slot) Release()                                  // 调用结束但没有记录时归还位置；有停放的待定记录时把它移进 spill；已结算记录 Commit 之后是空操作
 func (r *Recorder) Enqueue(rec CallRecord) error          // Admit + Commit 的便捷入口，给测试和非 gateway 调用方
 func (r *Recorder) Close(ctx context.Context) error       // 写完 spill；ctx 到期则报告还留在磁盘上的条数
 func (r *Recorder) Done() <-chan struct{}                 // 写入协程退出时关闭；Close 返回前已等待它，测试据此断言没有写入协程留下
@@ -43,6 +43,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 - **谁**：`site_id`、`account_id`（行级安全看这两列）、`workspace_id`、`key_id`、`end_user_hash`（HMAC-SHA256 的十六进制）、`ip`。
 - **走了哪**：`model`（客户端要的公开名字）；`endpoint_id`、`source_class`、`egress`、`attempt_count` 都取自最后一个 `AttemptRecord`（没有尝试时分别是全零 UUID、`''`、`''`、0）；`route`（路由过程，≤ 8 KiB 的 JSON 对象，结构由 routing 定）。**每次尝试在 `call_attempt`**，供应商的成本和对账键仍在 suppliers，按同一个请求 ID 和尝试序号关联；账本交易不抄在这里，按请求 ID 从 billing 读（见「追溯」）。
 - **结果**：`usage`（计费项名字到数量的 JSON，含原生 token）、`service_tier`、`price_nano`、`cost_nano`（计费的最小单位）、`currency`、`free_of_charge`、`streamed`、`physical_input`（写入时能确定的物理输入；未知为 −1 的库内哨兵，读取时转成可空）、`latency_ms`、`first_token_ms`、`finish_reason`、`error_kind`。
+- **待定**：`billing_pending`（迁移 `00021`，默认 false）：这条记录写在结算之前，而结算再也不会写进日志（交给了清理，或节点先死了），用量、`service_tier`、`price_version`、`price_nano`、`free_of_charge`、`physical_input` 都不是结算的数。账户的读取跳过它，运营的追溯和列表标出它（「写入」）。
 - **权利**：`consent_version`、`training_allowed`，只能在写入时记下。
 - **写入标签**：`client_app`、`session_id`、`subagent_id`、`request_class`、`language`、`used_tools`、`has_image`、`has_file`；应用自己报的名字在 `app_referer`（URL，≤2048，只留 scheme、host 和 path）、`app_title`（≤200）、`app_categories`（最多两个小写连字符类别，≤64），由 gateway 从 `HTTP-Referer`、`X-OpenRouter-Title`（或旧的 `X-Title`）、`X-OpenRouter-Categories` 取出、去控制字符并截断后写入。分析标签随后台分类器加入，另表保存。
 
@@ -98,9 +99,10 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 | 一个导出批准只能用一次 | `content_exports.approval_digest` 唯一，命令在读取正文前 `ON CONFLICT DO NOTHING`；测试第二次使用同一批准失败且不产生第二条开始审计 |
 | 导出文件在服务端没有明文 | 服务端只把 tar.gz 写进加密流，临时文件是密文；测试导出缓冲区不含正文，换密钥、篡改、截断都解不开 |
 | 每次尝试有且只有一行，且能从调用找到 | `call_attempt` 的主键 `(request_id, at, attempt_seq)`；`Seq` 必须从 1 连续递增，最多 `platform.MaxAttemptSeq` 次（`TestALoopsAttemptsAreKept`）；调用行的端点、来源类别、出口和次数由最后一个尝试算出。测试：写两次只有一行，按序号读回每次尝试，调用行与最后尝试一致 |
-| 同一个请求写两次是一行 | 两张表都是 `ON CONFLICT … DO NOTHING`；`at` 是请求开始时间，不是写入时间，所以重试的是同一个键。测试：同一个 `CallRecord` 写两次，调用一行、每次尝试一行 |
+| 同一个请求写两次是一行 | 两张表都是 `ON CONFLICT … DO NOTHING`；`at` 是请求开始时间，不是写入时间，所以重试的是同一个键。测试：同一个 `CallRecord` 写两次，调用一行、每次尝试一行。一次调用的待定记录与已结算记录之中只有一条进 spill；崩溃留下的停放文件在下一次启动时排到 spill 末尾，已结算的行先到、保留（`TestAPendingRecordIsReplacedOrKept`） |
+| 待定的调用不读成 0 | 账户的列表（含 CSV 导出）、汇总、活动和按 ID 取都带 `NOT billing_pending`；运营的 `GetTrace` 给出 `BillingPending`，`ListAdmin` 给出 `CallSummary.Pending`，管理接口对它不给价格。测试：`TestAPendingCallIsNotReadAsZero` |
 | 写入从不因没有分区而失败 | 两张表都有默认分区兜底；测试写入 2001 年和 2090 年的调用和尝试 |
-| 记录不在过载时丢失 | 调用准入前 `Admit` 预占一条记录的位置；记录在响应结束前追加到本机 spill 并 fsync，满时 `Admit` 返回 `ErrBacklog`，gateway 答 503 并拒绝新调用，不丢已接受的记录。测试：写协程卡住、两个位置占满时第三次 `Enqueue` 立即返回 `ErrBacklog`，前两条照常写入；崩溃后重启按顺序重放；同一批重放不重复；坏行之后在途的调用仍能写入 |
+| 记录不在过载时丢失 | 调用准入前 `Admit` 预占一条记录的位置，停放的待定记录占的也是这个位置（`TestAPendingRecordKeepsItsSlotsRoom`）；记录在响应结束前追加到本机 spill 并 fsync，满时 `Admit` 返回 `ErrBacklog`，gateway 答 503 并拒绝新调用，不丢已接受的记录。测试：写协程卡住、两个位置占满时第三次 `Enqueue` 立即返回 `ErrBacklog`，前两条照常写入；崩溃后重启按顺序重放；同一批重放不重复；坏行之后在途的调用仍能写入 |
 | 所有表和分区都过启动检查 | 每个分区各自强制行级安全并有策略（分区不继承）；测试 `DB.Check` 通过 |
 | 一次异常只通知一次 | `spend_anomalies` 的 `(account_id, kind)` 主键让重复检测 `ON CONFLICT DO NOTHING`，只有首次插入才持久化信号和用户提醒；异常消失后删除状态并只发一次恢复。测试：连续两轮同一异常只有一条 raise，窗口移走后一条 resolve |
 | 阈值不随旧节点替换丢失 | `spend_detection` 独立于 `alert_configuration.body`；管理 PUT 省略 `spend_detection` 时保留已存值，管理 GET 合并返回默认值或已存值。测试：保存后模拟旧节点替换，阈值不变 |
@@ -108,6 +110,10 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 ## 写入
 
 **记录先落本机并持久化，再异步入库。** gateway 在准入时调用 `Admit`，为这次调用预占一条记录的位置；调用结算后、响应结束前，`Executor` 用这个位置 `Commit`：记录先校验、编码成一行 JSON，追加到 `AXIOM_CALL_LOG_DIR` 下的段文件，并 `fsync` 后才返回。并发的 `Commit` 登记位置后共用一次 `file.Sync()`：一个领导者 sync 活动段到当前末尾，释放所有被覆盖的等待者，sync 期间到达的留给下一轮；顺序调用仍各付一次，并发调用把这段固定成本摊薄。`Commit` 返回后记录已经在磁盘上，进程崩溃和主机断电都不会丢。写协程按段内顺序读出来，只读到已经 fsync 的位置，批量写数据库，写成功才删段：否则它可能把一条还没 fsync 的记录写进库并把确认位置记到它后面，断电后段比确认位置短，下一次启动只能拒绝。这样调用路径不等待数据库，也不会因为积压到上限而把已服务的调用丢掉。
+
+**结算留给后台的调用。** gateway 的前台结算没写成时，结尾写着「费用待定」，记录照样在结尾之前 `Commit`，`CallRecord.BillingPending` 为真，用量、售价、价格版本和免单留空。这条待定记录不进段文件，而是停放在 spill 目录下的 `pending/<请求 ID>.rec`：4 字节 CRC32C 加与段内相同的记录字节，先写临时文件并 fsync，再改名、fsync 目录，所以 `Commit` 返回时它同样持久；文件经 `os.Root` 打开，名字出不了这个目录。`Slot` 不关，占着原来的位置：后台结算提交后 gateway 用它 `Commit` 已结算记录（同一个结束时间），记录照常进段文件，然后删掉停放的文件；结算放弃或交给清理时 `Release` 把停放的记录移进段文件，它就是这次调用的记录；第二条待定记录被拒（`ErrClosed`）。每次启动在写协程开始前，把所有停放的记录追加到段文件末尾再删掉，打断的临时文件直接删掉，校验和不对的拒绝启动并给出文件名（`TestADamagedParkedRecordFailsTheStart`）。因此一次调用只有一条记录进数据库，表仍然只插入，归档的行数核对照旧成立；崩溃在已结算记录追加之后、删文件之前，重放的待定记录排在已结算记录后面，被 `ON CONFLICT DO NOTHING` 挡掉。
+
+**旧版本碰不到待定记录。** 不认识待定记录的版本会把它当成一条已结算、价格为 0 的调用存下，所以待定记录在哪里都要挡住它。停放的文件在 `pending/` 里，旧版本不看这个目录。移进段文件的待定记录（`Release` 或启动时移入）只写进段头为 `AXIOM-WAL-2\n` 的段：追加待定记录时活动段不是这种段就先换段，之后的普通记录可以跟在同一段里。旧版本只接受 `AXIOM-WAL-1\n`，遇到这种段拒绝启动并报出文件名，而不是读走它；回滚前要让新版本把 spill 写完。写完时这种段被换掉，`Close` 关闭期间也换，所以排空的 spill 里不留它（`TestPendingRecordsKeepOldBinariesOut`）。用 `origin/main` 的代码实测过：有这种段时拒绝启动，排空后照常启动，重新升级后两条记录都写入。`Close` 报告的未写条数含停放的记录，由 Slot 计数，不读目录（`TestCloseReportsParkedRecords`）。
 
 **spill 的格式、所有权与恢复。** 目录里是 `call-<16 位序号>.wal`，每个段以 `AXIOM-WAL-1\n` 开头，之后每条记录是 4 字节长度、4 字节 CRC32C（Castagnoli）和 JSON 正文字节。一个段 8 MiB，写满就换下一个。新段的段头 fsync 之后还要 fsync 所在目录，然后才可能有 `Commit` 落进去：文件的 fsync 不保证目录项持久，否则断电可能连段带已回复的记录一起丢掉；目录同步失败时这次 `Commit` 失败、spill 停止接收。每次启动在接收 `Commit` 之前同步 spill 目录和它之上的每一级目录，直到根：上次崩溃若发生在新段或新目录的同步之前，留下的链接这次在页缓存里看得见，断电仍可能丢，所以不能把「已经存在」当作已持久。同步失败就拒绝启动；节点因此要能以只读方式打开这些目录。打开目录时先对 `call-log.lock` 取 `flock` 排他锁，第二个进程直接拒绝启动：两个进程从同一偏移追加会互相覆盖，而两次 `Commit` 都会看起来成功。节点必须各用各的目录（`.env.example` 与 `deploy/compose.yaml` 的说明）。启动时先读 `call-log.pos`：写协程每次确认一批，就把它原子替换地写成新的已确认位置，然后删掉整段已确认的段；排空时把活动段也换掉，所以低流量节点的段不会长期留着已经入库的记录。之后按序号读所有段，逐条校验长度和 CRC：最后一段末尾短头或短正文是崩溃时还没返回的 `Commit`，截掉；长度完整但 CRC 不匹配的记录是损坏，中间段损坏也一样，启动失败而不是静默丢掉一条可能已经服务的记录。错误信息给出段文件和偏移，文件保持原样，由运维判断后修复或截断再启动。已确认位置之前的记录不重放、也不计入 `pending`；崩溃恰在数据库提交与位置写入之间时，下一段会重放一小段已提交记录，`ON CONFLICT DO NOTHING` 仍然去重，归档并删除分区后的重放因此不会把旧记录插回默认分区。
 
@@ -117,7 +123,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 **关闭。** `Close` 先拒绝新的 `Admit`，让写协程把 spill 写完；ctx 到期就停止重试和读取，`Done` 关闭，记录留在段文件里，下一次启动接着写。cmd 的退出顺序是：监听停止并排空，`Close`，最后关数据库；启动失败等其他返回路径也会关闭它，不留写入协程。`Close` 返回 `ErrPending` 时报告还留在磁盘上的条数，不把它们算成丢失。
 
-**容量和磁盘上限。** `Capacity`（cmd 里 5000）是在途调用和未写记录的合计上限：`Admit` 的原子计数到顶就返回 `ErrBacklog`，gateway 在准入前答 503 `overloaded`，既不服务无记录的调用，也不把数据库的慢传成无界磁盘增长。单条记录编码上限 64 KiB，所以磁盘上限约 `Capacity × (64 KiB + 8) + 8 MiB`；超过时 `Commit` 失败、计入 `records.lost{reason="spill"}` 并标记不可记录。已准入的调用如果在本机磁盘写失败或 fsync 失败，记录无法确认保存，节点会拒绝后续调用；fsync 失败后内核可能已丢掉脏页、之后的 fsync 却照样成功，所以 spill 同时停止追加和读取，留给下一次启动按磁盘上的内容恢复；这是无法从事后补救的尾部窗口，日志和 `records.lost` 会指出请求 ID。
+**容量和磁盘上限。** `Capacity`（cmd 里 5000）是在途调用和未写记录的合计上限：`Admit` 的原子计数到顶就返回 `ErrBacklog`，gateway 在准入前答 503 `overloaded`，既不服务无记录的调用，也不把数据库的慢传成无界磁盘增长。单条记录编码上限 64 KiB，所以磁盘上限约 `Capacity × (64 KiB + 8) + 8 MiB`，停放的待定记录另占至多 `Capacity` 个文件；超过时 `Commit` 失败、计入 `records.lost{reason="spill"}` 并标记不可记录。已准入的调用如果在本机磁盘写失败或 fsync 失败，记录无法确认保存，节点会拒绝后续调用；fsync 失败后内核可能已丢掉脏页、之后的 fsync 却照样成功，所以 spill 同时停止追加和读取，留给下一次启动按磁盘上的内容恢复；这是无法从事后补救的尾部窗口，日志和 `records.lost` 会指出请求 ID。
 
 **基准。** `BenchmarkEnqueue` 与 `BenchmarkEnqueueParallel` 量的是调用付的这一段：准入、校验、规范 JSON 编码、追加和组提交 fsync。两个基准在计时前先写一条记录，等后台写库者把它读走、停在一次数据库写入上（基准里写库是 sink），计时区间里于是没有写库者的工作：否则它会按调度读走并解码计时区间开头的一批记录，这些后台工作除以固定迭代数，让同一提交的 allocs/op 在运行之间跳动。写库者自己的分配不属于调用路径的预算；`BenchmarkEncodeRecord` 和 `BenchmarkSpillAppend` 分别定位编码与追加加 fsync。四个基准的 allocs/op 都由合并队列的基准门槛比较（[性能的「怎么验证」](../../docs/performance.md#怎么验证)）。
 

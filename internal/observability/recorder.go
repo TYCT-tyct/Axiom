@@ -61,7 +61,11 @@ type Recorder struct {
 	fatal  func(error) bool // the error says the records themselves are bad: retrying cannot help
 	logger *slog.Logger
 	spill  *spill
-	ctx    context.Context //nolint:containedctx // the writer's values, used for metrics on the record path too
+	// parking holds pending records until their call's settled record replaces them or Release moves them into the
+	// spill. A parked record holds its slot's room, which is how Capacity also bounds the parked files.
+	parking parking
+	parked  atomic.Int64    // slots holding a parked record now: what Close reports left for the next start
+	ctx     context.Context //nolint:containedctx // the writer's values, used for metrics on the record path too
 
 	mu      sync.Mutex // guards closing
 	closing bool
@@ -83,15 +87,6 @@ type Recorder struct {
 	lostAttempts atomic.Int64
 
 	written, attemptsWritten, retries, lostMetric, attemptsLostMetric metric.Int64Counter
-}
-
-// Slot is one call's reserved room in the call log. Admit returns it; Commit puts the call's record in the spill, and
-// Release gives the room back if the call ends without one. It is safe to call Release after Commit: the writer then
-// owns the reservation until the record reaches the database.
-type Slot struct {
-	r     *Recorder
-	mu    sync.Mutex
-	state uint8 // 0 open, 1 committed, 2 released
 }
 
 // NewRecorder starts a Recorder that writes through db in scope, the platform scope: one batch holds the records of
@@ -159,7 +154,7 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 	if logger == nil {
 		logger = slog.Default()
 	}
-	sp, err := openSpill(cfg.Dir, cfg.Capacity, syncDir)
+	sp, parked, err := openDisk(cfg, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +163,7 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 	}
 	run, giveUp := context.WithCancel(context.WithoutCancel(ctx))
 	r := &Recorder{
-		cfg: cfg, write: write, fatal: fatal, logger: logger, spill: sp, ctx: context.WithoutCancel(ctx),
+		cfg: cfg, write: write, fatal: fatal, logger: logger, spill: sp, parking: parked, ctx: context.WithoutCancel(ctx),
 		giveUp: giveUp, done: make(chan struct{}), quiet: make(chan struct{}),
 	}
 	r.outstanding.Store(sp.pendingCount())
@@ -186,11 +181,35 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 			return nil
 		}))
 	if err != nil {
-		sp.finish()
+		r.closeDisk()
 		return nil, err // the instrument names are constants
 	}
 	go r.writer(run)
 	return r, nil
+}
+
+// openDisk opens the spill and the parked records, and moves every record a dead process left parked into the spill.
+func openDisk(cfg Config, logger *slog.Logger) (*spill, parking, error) {
+	sp, err := openSpill(cfg.Dir, cfg.Capacity, syncDir)
+	if err != nil {
+		return nil, parking{}, err
+	}
+	parked, err := openParking(cfg.Dir, syncDir, logger)
+	if err == nil {
+		err = parked.recover(sp)
+	}
+	if err != nil {
+		parked.close()
+		sp.finish()
+		return nil, parking{}, err
+	}
+	return sp, parked, nil
+}
+
+// closeDisk releases what openDisk opened; the directory lock goes last.
+func (r *Recorder) closeDisk() {
+	r.parking.close()
+	r.spill.finish()
 }
 
 func counter(m metric.Meter, name, description string) metric.Int64Counter {
@@ -230,57 +249,6 @@ func (r *Recorder) Admit() (*Slot, error) {
 	}
 }
 
-// Commit puts the call's record in the spill and makes it durable before returning: it survives the process and the
-// host from here on, and the writer replays it on the next start. The response may be served after this returns.
-func (s *Slot) Commit(rec CallRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state != 0 {
-		return ErrClosed
-	}
-	call, attempts, err := newRows(rec)
-	if err != nil {
-		s.state = 2
-		s.r.outstanding.Add(-1)
-		s.r.reject(rec, "invalid", err)
-		s.r.finishSlot()
-		return fmt.Errorf("call record %s: %w", rec.ID, err)
-	}
-	body, err := encodeRecord(call, attempts)
-	if err != nil {
-		s.state = 2
-		s.r.outstanding.Add(-1)
-		s.r.reject(rec, "invalid", err)
-		s.r.finishSlot()
-		return fmt.Errorf("call record %s: %w", rec.ID, err)
-	}
-	if err := s.r.spill.appendSynced(body); err != nil {
-		s.state = 2
-		s.r.outstanding.Add(-1)
-		reason := "spill"
-		if errors.Is(err, ErrClosed) {
-			reason = "shutdown"
-		}
-		s.r.reject(rec, reason, err)
-		s.r.finishSlot()
-		return fmt.Errorf("call record %s: %w", rec.ID, err)
-	}
-	s.state = 1
-	s.r.finishSlot()
-	return nil
-}
-
-// Release gives back a reservation whose call produced no record. It is a no-op after a successful Commit.
-func (s *Slot) Release() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state == 0 {
-		s.state = 2
-		s.r.outstanding.Add(-1)
-		s.r.finishSlot()
-	}
-}
-
 // finishSlot marks one admitted call done with the append path. Once a failure has stopped admission and the last call
 // has finished, the writer may close the append file: no call that reserved room can still need it.
 func (r *Recorder) finishSlot() {
@@ -290,12 +258,14 @@ func (r *Recorder) finishSlot() {
 }
 
 // Enqueue admits and commits one record in the caller's goroutine. It is the whole call-log write for code that is not
-// a gateway call (tests, tools); the gateway reserves at admission with Admit and commits with the returned Slot.
+// a gateway call (tests, tools); the gateway reserves at admission with Admit and commits with the returned Slot. A
+// pending record enqueued here is final: no settled record can replace it, so it goes into the spill as it is.
 func (r *Recorder) Enqueue(rec CallRecord) error {
 	slot, err := r.Admit()
 	if err != nil {
 		return err
 	}
+	defer slot.Release()
 	return slot.Commit(rec)
 }
 
@@ -310,8 +280,8 @@ func (r *Recorder) reject(rec CallRecord, reason string, err error) {
 }
 
 // Close stops accepting records and writes what the spill holds, retrying failures until ctx ends. It returns nil when
-// everything is written; otherwise it reports records left in the spill for the next start, and records that could not
-// be kept at all.
+// everything is written; otherwise it reports records left in the spill or parked for the next start, and records that
+// could not be kept at all.
 func (r *Recorder) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closing = true
@@ -325,7 +295,7 @@ func (r *Recorder) Close(ctx context.Context) error {
 		<-r.done
 	}
 	r.giveUp()
-	pending := r.spill.pendingCount()
+	pending := r.spill.pendingCount() + r.parked.Load() // a parked record is moved into the spill at the next start
 	lost, attempts := r.lost.Load(), r.lostAttempts.Load()
 	if pending > 0 {
 		return fmt.Errorf("%w: %d calls remain for the next start (%d calls and %d attempts were not kept)",
@@ -344,7 +314,7 @@ func (r *Recorder) Done() <-chan struct{} { return r.done }
 // writer drains the spill into the database, one batch at a time, in spill order.
 func (r *Recorder) writer(ctx context.Context) {
 	defer close(r.done)
-	defer r.spill.finish()
+	defer r.closeDisk()
 	for {
 		batch, end, open, err := r.spill.nextBatch(r.cfg.BatchSize, r.cfg.FlushInterval)
 		if err != nil {

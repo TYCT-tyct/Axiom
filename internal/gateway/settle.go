@@ -222,14 +222,16 @@ func writeSettlements(ctx context.Context, batch []*gateItem, items []billing.Se
 }
 
 // settled follows the settlement up, and reports whether the call's slots are now the background's to give back. One
-// that may still be written is retried in the background with the same outcome, until SettleBackground; one that never
-// will be, or is given up on, is the cleanup's, which records the request as lost when its reservation runs out. The
+// that may still be written is retried in the background with the same outcome, until SettleBackground, and replaces
+// the call's pending record with the settled one, written with end, once it commits; one that never will be, or is
+// given up on, is the cleanup's, which records the request as lost when its reservation runs out, and the pending
+// record becomes the call's record when the slot is released. The
 // supplier's side of the attempts is written in the settlement's own transaction, so there is nothing else to wait for.
-func (x *Executor) settled(ctx context.Context, s *session, o billing.Outcome, err error) bool {
+func (x *Executor) settled(ctx context.Context, t trail, o billing.Outcome, end time.Time, err error) bool {
 	if err == nil {
 		return false
 	}
-	c, trail := s.c, s.trail()
+	c := t.call
 	logger := x.Logger.With("request_id", c.ID.String())
 	if permanent(err) {
 		logger.Error("a settlement cannot be written; the cleanup takes it", "err", err)
@@ -243,7 +245,7 @@ func (x *Executor) settled(ctx context.Context, s *session, o billing.Outcome, e
 			logger.Error("a settlement was not written in time; the cleanup takes it", "err", err)
 			return
 		}
-		x.log(ctx, trail, o, f, time.Now())
+		x.log(ctx, t, o, f, false, end)
 	})
 	return true
 }

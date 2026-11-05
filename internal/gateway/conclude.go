@@ -12,10 +12,10 @@ import (
 
 // conclude settles the call and writes what is left to tell the client. The order is the one that keeps the money
 // right: the attempt is over (its upstream cancelled, its read returned) before Settle, and Settle is committed before
-// the ending that reports the cost is written (I3). The call's record enters the spill after the settlement and before
-// the ending, so a crash after the client has the answer cannot leave that call unrecorded when the settlement was
-// written here. A settlement not written in time goes on in the background once the ending is out; its record is
-// written after that settlement commits, so a kill between the two leaves a charged, pending call without a record.
+// the ending that reports the cost is written (I3). The call's record is durable after the settlement and before the
+// ending, so a crash after the client has the answer cannot leave the call unrecorded. A settlement not written in time
+// goes on in the background once the ending is out; the call's record is then a pending one, which the settled record
+// replaces when that settlement commits.
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
@@ -33,14 +33,13 @@ func (s *session) conclude(ctx context.Context, e ended) {
 		// this the pending ending would report is_byok false (docs/domains/gateway.md「用量与费用」).
 		fin = &protocol.Final{Pending: true, IsBYOK: true, Files: s.files}
 	}
-	// The record is in the spill before the ending is written when the settlement was written here: a process crash
-	// after the client sees the answer cannot leave that call unrecorded. The settlement committed first, so the
-	// record's amounts are final. A settlement left for the background records itself only after it commits there.
-	if err == nil {
-		s.x.log(ctx, s.trail(), o, f, time.Now())
-	}
+	// The record is in the spill before the ending is written: a process crash after the client sees the answer cannot
+	// leave the call unrecorded. A settlement that committed here gives the record its amounts; one left for the
+	// background leaves it pending until that settlement commits.
+	t, end := s.trail(), time.Now()
+	s.x.log(ctx, t, o, f, err != nil, end)
 	s.writeEnding(ctx, e, fin, err)
-	s.handedOff = s.x.settled(ctx, s, o, err)
+	s.handedOff = s.x.settled(ctx, t, o, end, err)
 	if err == nil {
 		s.storeCache(ctx)
 	}
@@ -229,10 +228,9 @@ func (s *session) settleOnPanic(ctx context.Context) {
 		}
 		o := billing.Outcome{Attempts: s.ends}
 		f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
-		s.handedOff = s.x.settled(ctx, s, o, err)
-		if err == nil {
-			s.x.log(ctx, s.trail(), o, f, time.Now())
-		}
+		t, end := s.trail(), time.Now()
+		s.x.log(ctx, t, o, f, err != nil, end)
+		s.handedOff = s.x.settled(ctx, t, o, end, err)
 	}
 	panic(p)
 }
