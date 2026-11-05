@@ -29,6 +29,12 @@ const (
 	// agentBurst and agentRefill are a credential's requests on one node: 60 at once, 600 a minute.
 	agentBurst  = 60
 	agentRefill = 100 * time.Millisecond
+	// A credential's money writes on one node: never more than 30 in any minute nor 300 in any hour. A bucket lets
+	// its size through at once and its refill over the window, so each holds half its window's limit.
+	agentMoneyBurst      = 15
+	agentMoneyRefill     = 4 * time.Second
+	agentMoneyHourBurst  = 150
+	agentMoneyHourRefill = 24 * time.Second
 )
 
 var (
@@ -382,6 +388,22 @@ func (s *Service) AuthenticateAgent(ctx context.Context, raw string) (Agent, err
 		return Agent{}, &TooManyAttempts{RetryAfter: wait}
 	}
 	return a, nil
+}
+
+// SpendAgentMoney spends one of a's money writes on this node, besides the request AuthenticateAgent spent: past the
+// minute's or the hour's limit it is *TooManyAttempts with the wait.
+func (s *Service) SpendAgentMoney(a Agent) error {
+	now := s.now()
+	for _, b := range []struct {
+		buckets *buckets[AgentID]
+		size    int
+		per     time.Duration
+	}{{s.agentMoney, agentMoneyBurst, agentMoneyRefill}, {s.agentMoneyHours, agentMoneyHourBurst, agentMoneyHourRefill}} {
+		if wait := b.buckets.take(a.id, b.size, b.per, now); wait > 0 {
+			return &TooManyAttempts{RetryAfter: wait}
+		}
+	}
+	return nil
 }
 
 // AuthorizeAgent returns the scope a may act in with perm: the platform's for an operation on the platform's own

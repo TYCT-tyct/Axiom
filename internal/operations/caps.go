@@ -111,9 +111,9 @@ func weigh(p CapPolicy, c counters, amount int64) (bool, error) {
 
 // ProposeMoney is Propose for a proposal that moves m: it locks m's policy and counters, finds a retry of the key as
 // Propose does, and then refuses an amount over a hard limit (*CapExceeded, nothing written), asks the owner for one
-// over an autonomous limit, and reserves the amount in the category's day and week and the object's day until the end
-// of the UTC day. The caller runs one that needs nobody in tx and settles it, as with Propose. A policy-less scope is
-// ErrNoCapPolicy. The reservation ends when the operation is refused, expires or is canceled (release), when the
+// over an autonomous limit or in a paused scope, and reserves the amount in the category's day and week and the
+// object's day until the end of the UTC day. The caller runs one that needs nobody in tx and settles it, as with
+// Propose. A policy-less scope is ErrNoCapPolicy. The reservation ends when the operation is refused, expires or is canceled (release), when the
 // agent confirms the money (CommitReservation), or at the end of its day (ExpireReservations).
 func ProposeMoney(ctx context.Context, tx pg.Tx, p Proposal, m Transfer) (Operation, bool, error) {
 	policy, err := lockPolicy(ctx, tx, m.Category, m.Site)
@@ -141,7 +141,7 @@ func ProposeMoney(ctx context.Context, tx pg.Tx, p Proposal, m Transfer) (Operat
 	if err != nil {
 		return Operation{}, false, err
 	}
-	if !within {
+	if !within || policy.Paused != nil {
 		p.Summary = maps.Clone(m.Summary)
 		p.Summary["cap"] = capDetail(policy, c, m.Amount)
 	}
@@ -212,7 +212,7 @@ func capDetail(p CapPolicy, c counters, amount int64) map[string]any {
 		"daily_used": text(used(c.day)), "daily_max": text(p.Daily), "hard_daily_max": text(p.HardDaily),
 		"weekly_used": text(used(c.week)), "weekly_max": text(p.Weekly), "hard_weekly_max": text(p.HardWeekly),
 		"object_daily_used": text(used(c.objectDay)), "object_daily_max": text(p.ObjectDaily),
-		"daily_count": c.day.Count, "daily_count_max": p.DailyCount,
+		"daily_count": c.day.Count, "daily_count_max": p.DailyCount, "paused": p.Paused != nil,
 	}
 }
 

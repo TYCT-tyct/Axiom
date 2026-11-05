@@ -3445,7 +3445,10 @@ type OperationsCapPolicy struct {
 
 	// Limits The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or not: one proposal, the day and the week. Reserved and committed amounts both count.
 	Limits OperationsCapLimits `json:"limits"`
-	Rev    int64               `json:"rev"`
+
+	// PausedAt When the reconciliation found this scope's counters differ from the money they count; every proposal here then waits for the owner until the counters are repaired. Absent when it is not paused, and from a node that predates the reconciliation.
+	PausedAt *time.Time `json:"paused_at,omitempty"`
+	Rev      int64      `json:"rev"`
 
 	// Scope `platform` or a site's ID.
 	Scope     string    `json:"scope"`
@@ -5847,6 +5850,12 @@ type SetOperationsCapPolicyParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// RepairOperationsCapCountersParams defines parameters for RepairOperationsCapCounters.
+type RepairOperationsCapCountersParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListOperationsCredentialsParams defines parameters for ListOperationsCredentials.
 type ListOperationsCredentialsParams struct {
 	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
@@ -6516,6 +6525,9 @@ type RejectOperationsApprovalJSONRequestBody = ReasonRequest
 
 // SetOperationsCapPolicyJSONRequestBody defines body for SetOperationsCapPolicy for application/json ContentType.
 type SetOperationsCapPolicyJSONRequestBody = OperationsCapPolicyUpdate
+
+// RepairOperationsCapCountersJSONRequestBody defines body for RepairOperationsCapCounters for application/json ContentType.
+type RepairOperationsCapCountersJSONRequestBody = ReasonRequest
 
 // CreateOperationsCredentialJSONRequestBody defines body for CreateOperationsCredential for application/json ContentType.
 type CreateOperationsCredentialJSONRequestBody = OperationsCredentialCreate

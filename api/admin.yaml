@@ -5395,6 +5395,48 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/cap-policies/{scope}/{category}/repair:
+    parameters:
+      - name: scope
+        in: path
+        required: true
+        description: "`platform`, for what no site owns such as a platform supplier, or a site's ID."
+        schema: {type: string, pattern: '^(platform|site_[0-9a-hjkmnp-tv-z]{26})$'}
+      - {name: category, in: path, required: true, schema: {$ref: "#/components/schemas/OperationsCapCategory"}}
+    post:
+      operationId: repairOperationsCapCounters
+      tags: [Operations]
+      summary: Recompute the cap counters and resume the scope
+      description: >-
+        Sets each counter of the scope and category in the current UTC day and ISO week to what its money actions add
+        up to, with every proposal there held off meanwhile, and resumes a scope the reconciliation paused. Every
+        counter it changed is recorded in the audit log, as it was and as it is now. A scope and category without a
+        policy is a 404.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The policy, resumed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsCapPolicy"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/operations/approvals:
     get:
       operationId: listOperationsApprovals
@@ -7199,6 +7241,13 @@ components:
         limits: {$ref: "#/components/schemas/OperationsCapLimits"}
         rev: {type: integer, format: int64, minimum: 1}
         updated_at: {type: string, format: date-time}
+        paused_at:
+          type: string
+          format: date-time
+          description: >-
+            When the reconciliation found this scope's counters differ from the money they count; every proposal here
+            then waits for the owner until the counters are repaired. Absent when it is not paused, and from a node
+            that predates the reconciliation.
     OperationsCapPolicyList:
       type: object
       additionalProperties: false

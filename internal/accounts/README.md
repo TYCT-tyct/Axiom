@@ -118,12 +118,13 @@ func (s *Service) AgentCredentials(ctx, tx, after AgentID, pageSize int) ([]Agen
 func (s *Service) AuthenticateAgent(ctx, raw string) (Agent, error)
 func (s *Service) AuthorizeAgent(a Agent, perm Permission, platform bool) (pg.Scope, error)
 func (s *Service) HoldAgent(ctx, tx, id AgentID) error                  // 运营操作提出时持有凭证，吊销等它提交
+func (s *Service) SpendAgentMoney(a Agent) error                         // 资金写在本节点的单独限频
 ```
 
 - **表**：`accounts.agent_credentials` 一行一张凭证：名字、权限、站点（NULL 是全部站点）、是否平台范围、提出方厂商、创建人、到期、吊销和最后使用时间；`accounts.agent_credential_tokens` 一行一个令牌：带密钥的哈希（主键）、哈希版本、末四位、`retires_at`（NULL 是当前令牌，部分唯一索引保证每张凭证只有一个）。两张表都是平台数据，策略只放行平台范围；`axiom_app` 只能改 `revoked_at`、`last_used_at` 和 `retires_at`。
 - **令牌**：`op-ax-v1-` 加 API key 同样的 43 位随机和 6 位校验（`newKeyText`、`wellFormedKey`），只在创建或轮换的返回值里出现一次；哈希用 key 的哈希密钥（`hashes.Sum`），查找时按所有版本各算一次。
 - **权限**：至少有 `operations.read`，`CreateAgent` 自动加上；`agentRefused`（`operations.manage`、`operations.approve`、`platform_grants.manage`）和代码没声明的名字被拒，表的 CHECK 也拒这三个，所以凭证不能管理自己、不能审批、不能给别人平台角色。拒绝是 `*AgentSpecError`，带请求里出错位置的 JSON 指针。
-- **认证**：`AuthenticateAgent` 先查形状，再在平台范围的事务里按哈希读活的凭证（令牌当前或在重叠期内、凭证未吊销未过期，按 `Config.Now` 判断），每个请求都读库、不缓存，所以吊销、停止和过期从下一个请求生效；最后使用时间超过一分钟才写一次。认出后按凭证在本节点的令牌桶扣一次（突发 60、每 100 毫秒补一个，即每分钟 600），超了是 `*TooManyAttempts`。
+- **认证**：`AuthenticateAgent` 先查形状，再在平台范围的事务里按哈希读活的凭证（令牌当前或在重叠期内、凭证未吊销未过期，按 `Config.Now` 判断），每个请求都读库、不缓存，所以吊销、停止和过期从下一个请求生效；最后使用时间超过一分钟才写一次。认出后按凭证在本节点的令牌桶扣一次（突发 60、每 100 毫秒补一个，即每分钟 600），超了是 `*TooManyAttempts`。资金写另由守卫调 `SpendAgentMoney` 再扣两个桶（15 次起、每 4 秒回一次；150 次起、每 24 秒回一次），保证任何 60 秒内不超过 30 次、任何一小时内不超过 300 次，超了同样是 `*TooManyAttempts`。测试 `TestAgentRequestsAreLimited`、`TestAgentMoneyIsLimited`。
 - **授权**：`AuthorizeAgent` 不读库：没有这项权限是 `ErrForbidden`；平台资源要凭证的平台范围，没有是 `ErrNotFound`（和不存在一样）；其余给凭证站点的范围。
 - **生命周期**：到期时间由负责人为每张凭证给出（必填、在未来即可，代码不带默认值和上限）；到期的凭证和吊销的一样，认证、`RevokeAgent`（`ErrAgentNotFound`）、`StopAgents` 的计数和列表的旧令牌期限都把它当作已不存在；`RotateAgent` 先锁凭证行，把上一次轮换留下的旧令牌立即作废、当前令牌的 `retires_at` 设为现在加重叠（最多 `AgentOverlap`，24 小时），再插新令牌；吊销是终态，`StopAgents` 吊销全部活的凭证，每张一条 `operations_credential.revoke` 审计，再记一条 `operations_agent.stop`。创建、轮换、吊销都在调用方的事务里记审计。
 - **持有**：`HoldAgent` 在调用方的事务里对活的凭证行加 `FOR SHARE`，吊销、过期或不存在是 `ErrUnknownAgent`（401）。运营接口提出一个运营操作前先持有：吊销和紧急停止要改这一行，只能在提案提交前失败、或等它提交后再把它和别的待审批提案一起取消，不会在两者之间漏掉一个。同一凭证的多个提案互不等待。测试 `TestHoldAgent`。

@@ -143,7 +143,9 @@ func (g *agentGuard) serve(w http.ResponseWriter, r *http.Request, pattern strin
 func (g *agentGuard) answer(w *bufferedResponse, r *http.Request, rl *rules, agent accounts.Agent, routes http.Handler) {
 	scope, err := g.accounts.AuthorizeAgent(agent, rl.agent.permission, rl.agent.scope == agentPlatform)
 	if err == nil && rl.agent.money {
-		_, err = g.accounts.AuthorizeAgent(agent, accounts.OperationsMoney, rl.agent.scope == agentPlatform)
+		if _, err = g.accounts.AuthorizeAgent(agent, accounts.OperationsMoney, rl.agent.scope == agentPlatform); err == nil {
+			err = g.accounts.SpendAgentMoney(agent) // a preview and a retry are writes asked for too
+		}
 	}
 	if err != nil {
 		respond(w, r, g.logger, err)

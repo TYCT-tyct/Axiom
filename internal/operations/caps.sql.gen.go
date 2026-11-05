@@ -12,8 +12,106 @@ import (
 	"uuid"
 )
 
+const capDrift = `-- name: CapDrift :many
+WITH w AS (
+    SELECT $4::timestamptz AS day_start, $5::timestamptz AS week_start
+), entries AS (
+    SELECT c.category, c.site_id, c.window_kind, c.window_start, c.object_kind, c.object_id, c.reserved, c.committed,
+        c.count, 0::bigint AS want_reserved, 0::bigint AS want_committed, 0 AS want_count
+    FROM operations.cap_counters c, w
+    WHERE (c.window_kind = 'day' AND c.window_start = w.day_start) OR (c.window_kind = 'week' AND c.window_start = w.week_start)
+    UNION ALL
+    SELECT m.category, m.site_id, k.window_kind, k.window_start, k.object_kind, k.object_id, 0, 0, 0,
+        CASE WHEN m.state = 'reserved' THEN m.amount ELSE 0 END, CASE WHEN m.state = 'committed' THEN m.amount ELSE 0 END, 1
+    FROM operations.money_actions m
+    CROSS JOIN w
+    CROSS JOIN LATERAL (VALUES ('day', m.day_start, '', ''), ('week', m.week_start, '', ''),
+        ('day', m.day_start, m.object_kind, m.object_id)) k (window_kind, window_start, object_kind, object_id)
+    WHERE m.week_start = w.week_start
+        AND ((k.window_kind = 'day' AND k.window_start = w.day_start) OR (k.window_kind = 'week' AND k.window_start = w.week_start))
+)
+SELECT r.category::text AS category, r.site_id AS site_id, r.window_kind::text AS window_kind,
+    r.window_start::timestamptz AS window_start, r.object_kind::text AS object_kind, r.object_id::text AS object_id,
+    sum(r.reserved)::bigint AS reserved, sum(r.committed)::bigint AS committed, sum(r.count)::integer AS count,
+    sum(r.want_reserved)::bigint AS want_reserved, sum(r.want_committed)::bigint AS want_committed,
+    sum(r.want_count)::integer AS want_count
+FROM entries r
+WHERE $1::bool OR (r.category = $2::text AND r.site_id IS NOT DISTINCT FROM $3::uuid)
+GROUP BY r.category, r.site_id, r.window_kind, r.window_start, r.object_kind, r.object_id
+HAVING (sum(r.reserved), sum(r.committed), sum(r.count)) IS DISTINCT FROM
+    (sum(r.want_reserved), sum(r.want_committed), sum(r.want_count))
+ORDER BY 1, 2 NULLS FIRST, 5, 3, 6
+`
+
+type CapDriftParams struct {
+	Every     bool
+	Category  string
+	SiteID    *uuid.UUID
+	DayStart  time.Time
+	WeekStart time.Time
+}
+
+type CapDriftRow struct {
+	Category      string
+	SiteID        *uuid.UUID
+	WindowKind    string
+	WindowStart   time.Time
+	ObjectKind    string
+	ObjectID      string
+	Reserved      int64
+	Committed     int64
+	Count         int32
+	WantReserved  int64
+	WantCommitted int64
+	WantCount     int32
+}
+
+// The counters of the current UTC day and ISO week that differ from what the money actions reserved in them add up
+// to: every action counts once in its day, its week and its object's day, reserved or committed by its state, and in
+// the count whatever its state. The windows are the caller's (CapWindows), so a repair recomputes the rows it locked
+// even across midnight. Of every scope with @every, otherwise of @category and @site_id. One statement, so it sees
+// each transaction that moved an action and its counters whole or not at all.
+func (q *Queries) CapDrift(ctx context.Context, db DBTX, arg CapDriftParams) ([]CapDriftRow, error) {
+	rows, err := db.Query(ctx, capDrift,
+		arg.Every,
+		arg.Category,
+		arg.SiteID,
+		arg.DayStart,
+		arg.WeekStart,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CapDriftRow
+	for rows.Next() {
+		var i CapDriftRow
+		if err := rows.Scan(
+			&i.Category,
+			&i.SiteID,
+			&i.WindowKind,
+			&i.WindowStart,
+			&i.ObjectKind,
+			&i.ObjectID,
+			&i.Reserved,
+			&i.Committed,
+			&i.Count,
+			&i.WantReserved,
+			&i.WantCommitted,
+			&i.WantCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const capPolicies = `-- name: CapPolicies :many
-SELECT site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at FROM operations.cap_policies ORDER BY category, site_id NULLS FIRST
+SELECT site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at, paused_at FROM operations.cap_policies ORDER BY category, site_id NULLS FIRST
 `
 
 func (q *Queries) CapPolicies(ctx context.Context, db DBTX) ([]OperationsCapPolicy, error) {
@@ -39,6 +137,7 @@ func (q *Queries) CapPolicies(ctx context.Context, db DBTX) ([]OperationsCapPoli
 			&i.HardWeeklyMax,
 			&i.Rev,
 			&i.UpdatedAt,
+			&i.PausedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -51,7 +150,7 @@ func (q *Queries) CapPolicies(ctx context.Context, db DBTX) ([]OperationsCapPoli
 }
 
 const capPolicyOf = `-- name: CapPolicyOf :many
-SELECT site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at FROM operations.cap_policies WHERE category = $1 AND site_id IS NOT DISTINCT FROM $2::uuid
+SELECT site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at, paused_at FROM operations.cap_policies WHERE category = $1 AND site_id IS NOT DISTINCT FROM $2::uuid
 `
 
 type CapPolicyOfParams struct {
@@ -82,6 +181,79 @@ func (q *Queries) CapPolicyOf(ctx context.Context, db DBTX, arg CapPolicyOfParam
 			&i.HardWeeklyMax,
 			&i.Rev,
 			&i.UpdatedAt,
+			&i.PausedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const capUsage = `-- name: CapUsage :many
+SELECT p.site_id, p.category, p.currency, p.single_max, p.daily_max, p.weekly_max, p.object_daily_max, p.daily_count_max, p.hard_single_max, p.hard_daily_max, p.hard_weekly_max, p.rev, p.updated_at, p.paused_at, w.day_start, w.week_start,
+    coalesce(d.reserved, 0)::bigint AS day_reserved, coalesce(d.committed, 0)::bigint AS day_committed,
+    coalesce(d.count, 0)::integer AS day_count,
+    coalesce(k.reserved, 0)::bigint AS week_reserved, coalesce(k.committed, 0)::bigint AS week_committed,
+    coalesce(k.count, 0)::integer AS week_count
+FROM operations.cap_policies p
+CROSS JOIN (SELECT date_trunc('day', clock_timestamp(), 'UTC')::timestamptz AS day_start,
+    date_trunc('week', clock_timestamp(), 'UTC')::timestamptz AS week_start) w
+LEFT JOIN operations.cap_counters d ON d.category = p.category AND d.site_id IS NOT DISTINCT FROM p.site_id
+    AND d.window_kind = 'day' AND d.window_start = w.day_start AND d.object_kind = ''
+LEFT JOIN operations.cap_counters k ON k.category = p.category AND k.site_id IS NOT DISTINCT FROM p.site_id
+    AND k.window_kind = 'week' AND k.window_start = w.week_start AND k.object_kind = ''
+ORDER BY p.category, p.site_id NULLS FIRST
+`
+
+type CapUsageRow struct {
+	OperationsCapPolicy OperationsCapPolicy
+	DayStart            time.Time
+	WeekStart           time.Time
+	DayReserved         int64
+	DayCommitted        int64
+	DayCount            int32
+	WeekReserved        int64
+	WeekCommitted       int64
+	WeekCount           int32
+}
+
+// Every policy with what its category's counters of the current UTC day and ISO week hold, zero where there is no row.
+func (q *Queries) CapUsage(ctx context.Context, db DBTX) ([]CapUsageRow, error) {
+	rows, err := db.Query(ctx, capUsage)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CapUsageRow
+	for rows.Next() {
+		var i CapUsageRow
+		if err := rows.Scan(
+			&i.OperationsCapPolicy.SiteID,
+			&i.OperationsCapPolicy.Category,
+			&i.OperationsCapPolicy.Currency,
+			&i.OperationsCapPolicy.SingleMax,
+			&i.OperationsCapPolicy.DailyMax,
+			&i.OperationsCapPolicy.WeeklyMax,
+			&i.OperationsCapPolicy.ObjectDailyMax,
+			&i.OperationsCapPolicy.DailyCountMax,
+			&i.OperationsCapPolicy.HardSingleMax,
+			&i.OperationsCapPolicy.HardDailyMax,
+			&i.OperationsCapPolicy.HardWeeklyMax,
+			&i.OperationsCapPolicy.Rev,
+			&i.OperationsCapPolicy.UpdatedAt,
+			&i.OperationsCapPolicy.PausedAt,
+			&i.DayStart,
+			&i.WeekStart,
+			&i.DayReserved,
+			&i.DayCommitted,
+			&i.DayCount,
+			&i.WeekReserved,
+			&i.WeekCommitted,
+			&i.WeekCount,
 		); err != nil {
 			return nil, err
 		}
@@ -149,7 +321,7 @@ INSERT INTO operations.cap_policies (site_id, category, currency, single_max, da
     daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev)
 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7,
     $8, $9, $10, $11, 1)
-RETURNING site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at
+RETURNING site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at, paused_at
 `
 
 type InsertCapPolicyParams struct {
@@ -195,6 +367,7 @@ func (q *Queries) InsertCapPolicy(ctx context.Context, db DBTX, arg InsertCapPol
 		&i.HardWeeklyMax,
 		&i.Rev,
 		&i.UpdatedAt,
+		&i.PausedAt,
 	)
 	return i, err
 }
@@ -298,7 +471,7 @@ func (q *Queries) LockCapCounters(ctx context.Context, db DBTX, arg LockCapCount
 }
 
 const lockCapPolicy = `-- name: LockCapPolicy :many
-SELECT site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at FROM operations.cap_policies WHERE category = $1 AND site_id IS NOT DISTINCT FROM $2::uuid
+SELECT site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at, paused_at FROM operations.cap_policies WHERE category = $1 AND site_id IS NOT DISTINCT FROM $2::uuid
 FOR SHARE
 `
 
@@ -332,6 +505,7 @@ func (q *Queries) LockCapPolicy(ctx context.Context, db DBTX, arg LockCapPolicyP
 			&i.HardWeeklyMax,
 			&i.Rev,
 			&i.UpdatedAt,
+			&i.PausedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -344,7 +518,7 @@ func (q *Queries) LockCapPolicy(ctx context.Context, db DBTX, arg LockCapPolicyP
 }
 
 const lockCapPolicyForUpdate = `-- name: LockCapPolicyForUpdate :many
-SELECT site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at FROM operations.cap_policies WHERE category = $1 AND site_id IS NOT DISTINCT FROM $2::uuid
+SELECT site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at, paused_at FROM operations.cap_policies WHERE category = $1 AND site_id IS NOT DISTINCT FROM $2::uuid
 FOR UPDATE
 `
 
@@ -376,6 +550,7 @@ func (q *Queries) LockCapPolicyForUpdate(ctx context.Context, db DBTX, arg LockC
 			&i.HardWeeklyMax,
 			&i.Rev,
 			&i.UpdatedAt,
+			&i.PausedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -468,6 +643,33 @@ func (q *Queries) LockMoneyAction(ctx context.Context, db DBTX, operationID uuid
 	return items, nil
 }
 
+const lockScopeCounters = `-- name: LockScopeCounters :exec
+SELECT c.id FROM operations.cap_counters c
+WHERE c.category = $1 AND c.site_id IS NOT DISTINCT FROM $2::uuid AND (
+    (c.window_kind = 'day' AND c.window_start = $3) OR (c.window_kind = 'week' AND c.window_start = $4))
+ORDER BY c.object_kind, c.window_kind, c.object_id
+FOR UPDATE
+`
+
+type LockScopeCountersParams struct {
+	Category  string
+	SiteID    *uuid.UUID
+	DayStart  time.Time
+	WeekStart time.Time
+}
+
+// Every counter of a scope and category in a UTC day and ISO week, in the order every path locks its own
+// three (LockCapCounters), the object's days by object after them.
+func (q *Queries) LockScopeCounters(ctx context.Context, db DBTX, arg LockScopeCountersParams) error {
+	_, err := db.Exec(ctx, lockScopeCounters,
+		arg.Category,
+		arg.SiteID,
+		arg.DayStart,
+		arg.WeekStart,
+	)
+	return err
+}
+
 const moneyActionOf = `-- name: MoneyActionOf :many
 SELECT operation_id, category, site_id, object_kind, object_id, amount, currency, basis, policy_rev, day_start, week_start, expires_at, state, proof, confirmed_by, settled_at FROM operations.money_actions WHERE operation_id = $1
 `
@@ -531,6 +733,62 @@ func (q *Queries) MoveCapCounters(ctx context.Context, db DBTX, arg MoveCapCount
 	return err
 }
 
+const setCapCounter = `-- name: SetCapCounter :exec
+INSERT INTO operations.cap_counters (category, window_kind, window_start, object_kind, object_id, site_id, reserved,
+    committed, count)
+VALUES ($1, $2, $3, $4, $5, $6::uuid, $7,
+    $8, $9)
+ON CONFLICT (category, window_kind, window_start, object_kind, object_id, site_id)
+DO UPDATE SET reserved = excluded.reserved, committed = excluded.committed, count = excluded.count
+`
+
+type SetCapCounterParams struct {
+	Category    string
+	WindowKind  string
+	WindowStart time.Time
+	ObjectKind  string
+	ObjectID    string
+	SiteID      *uuid.UUID
+	Reserved    int64
+	Committed   int64
+	Count       int32
+}
+
+func (q *Queries) SetCapCounter(ctx context.Context, db DBTX, arg SetCapCounterParams) error {
+	_, err := db.Exec(ctx, setCapCounter,
+		arg.Category,
+		arg.WindowKind,
+		arg.WindowStart,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.SiteID,
+		arg.Reserved,
+		arg.Committed,
+		arg.Count,
+	)
+	return err
+}
+
+const setCapPaused = `-- name: SetCapPaused :execrows
+UPDATE operations.cap_policies SET paused_at = CASE WHEN $1::bool THEN now() END
+WHERE category = $2 AND site_id IS NOT DISTINCT FROM $3::uuid AND (paused_at IS NULL) = $1::bool
+`
+
+type SetCapPausedParams struct {
+	Paused   bool
+	Category string
+	SiteID   *uuid.UUID
+}
+
+// Pauses (@paused) or resumes a policy the caller holds FOR UPDATE; no row when it already is.
+func (q *Queries) SetCapPaused(ctx context.Context, db DBTX, arg SetCapPausedParams) (int64, error) {
+	result, err := db.Exec(ctx, setCapPaused, arg.Paused, arg.Category, arg.SiteID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const settleMoneyAction = `-- name: SettleMoneyAction :exec
 UPDATE operations.money_actions SET state = $1, proof = $2, confirmed_by = $3, settled_at = now()
 WHERE operation_id = $4
@@ -558,7 +816,7 @@ UPDATE operations.cap_policies SET single_max = $1, daily_max = $2, weekly_max =
     object_daily_max = $4, daily_count_max = $5, hard_single_max = $6,
     hard_daily_max = $7, hard_weekly_max = $8, rev = rev + 1, updated_at = now()
 WHERE category = $9 AND site_id IS NOT DISTINCT FROM $10::uuid
-RETURNING site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at
+RETURNING site_id, category, currency, single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max, rev, updated_at, paused_at
 `
 
 type UpdateCapPolicyParams struct {
@@ -602,6 +860,7 @@ func (q *Queries) UpdateCapPolicy(ctx context.Context, db DBTX, arg UpdateCapPol
 		&i.HardWeeklyMax,
 		&i.Rev,
 		&i.UpdatedAt,
+		&i.PausedAt,
 	)
 	return i, err
 }
