@@ -39,12 +39,14 @@ function choices(all: Option[], parent: string[] | null, value: string[] | null)
 }
 
 // SetField is an allow list: unlimited (no limit on the default rule, the rule above's on an override), or exactly the
-// values checked. Limiting starts from every value offered, so the user removes what they don't want.
+// values checked. Limiting starts from every value offered, so the user removes what they don't want. The checkbox says
+// what checking does; unchecked, the line under it says what holds instead.
 function SetField({
   legend,
   limit,
   free,
   hint,
+  error,
   options,
   value,
   onChange,
@@ -53,18 +55,20 @@ function SetField({
   limit: string;
   free: string;
   hint?: string;
+  error?: string;
   options: Option[];
   value: string[] | null;
   onChange: (value: string[] | null) => void;
 }) {
+  const { t } = useTranslation();
   const toggle = (option: string, on: boolean) =>
     onChange(on ? [...(value ?? []), option] : (value ?? []).filter((v) => v !== option));
   return (
     <fieldset className="space-y-2">
       <legend className="text-ui font-medium text-t2">{legend}</legend>
       <CheckField
-        label={value === null ? `${limit} · ${free}` : limit}
-        hint={hint}
+        label={limit}
+        hint={value === null ? t("routingPresets.editor.now", { state: free }) : undefined}
         checked={value !== null}
         // With nothing to offer, limiting would write an empty list, which allows no endpoint at all.
         disabled={value === null && options.length === 0}
@@ -82,7 +86,18 @@ function SetField({
           ))}
         </div>
       ) : null}
+      {hint ? <p className="text-label text-t4">{hint}</p> : null}
+      {error ? <Refusal>{error}</Refusal> : null}
     </fieldset>
+  );
+}
+
+// Refusal says why a save was refused, under what it refuses; the dialog scrolls the first one into view.
+function Refusal({ children }: { children: ReactNode }) {
+  return (
+    <p data-invalid className="text-label text-bad">
+      {children}
+    </p>
   );
 }
 
@@ -112,7 +127,7 @@ function SortField({ rule, parent, onChange }: Pick<RuleProps, "rule" | "parent"
   );
 }
 
-function SetFields({ rule, parent, onChange }: Pick<RuleProps, "rule" | "parent" | "onChange">) {
+function SetFields({ rule, parent, invalid, onChange }: Omit<RuleProps, "currency">) {
   const { t } = useTranslation();
   const classes = useClassOptions();
   const free = parent ? t("routingPresets.editor.inherit") : null;
@@ -124,6 +139,7 @@ function SetFields({ rule, parent, onChange }: Pick<RuleProps, "rule" | "parent"
         limit={t("routingPresets.editor.limitClasses")}
         free={free ?? t("routingPresets.editor.allClasses")}
         hint={classes.unavailable ? t("routingPresets.editor.classesUnavailable") : undefined}
+        error={invalid === "classes" ? t("routingPresets.editor.invalid.classes") : undefined}
         options={choices(classes.options, parent?.classes ?? null, rule.classes)}
         value={rule.classes}
         onChange={(value) => onChange({ ...rule, classes: value })}
@@ -133,6 +149,7 @@ function SetFields({ rule, parent, onChange }: Pick<RuleProps, "rule" | "parent"
         limit={t("routingPresets.editor.limitPolicies")}
         free={free ?? t("routingPresets.editor.allPolicies")}
         hint={t("routingPresets.editor.policiesHint")}
+        error={invalid === "policies" ? t("routingPresets.editor.invalid.policies") : undefined}
         options={choices(policyOptions, parent?.policies ?? null, rule.policies)}
         value={rule.policies}
         onChange={(value) => onChange({ ...rule, policies: value })}
@@ -152,23 +169,9 @@ function LimitFields({ rule, invalid, currency, onChange }: Omit<RuleProps, "par
         checked={rule.verifiedOnly}
         onChange={(event) => onChange({ ...rule, verifiedOnly: event.currentTarget.checked })}
       />
-      <div className="grid gap-4 sm:grid-cols-2">
-        <TextField
-          label={t("routingPresets.editor.minScore")}
-          inputMode="decimal"
-          value={rule.minScore}
-          error={wrong("minScore", t("routingPresets.editor.invalid.minScore"))}
-          onChange={(event) => onChange({ ...rule, minScore: event.currentTarget.value })}
-        />
-        <TextField
-          label={t("routingPresets.editor.minConfidence")}
-          inputMode="decimal"
-          value={rule.minConfidence}
-          error={wrong("minConfidence", t("routingPresets.editor.invalid.minConfidence"))}
-          onChange={(event) => onChange({ ...rule, minConfidence: event.currentTarget.value })}
-        />
-      </div>
-      <p className="text-label text-t4">{t("routingPresets.editor.scoreHint")}</p>
+      {rule.scored ? (
+        <ScoreNotice refused={invalid === "score"} onRemove={() => onChange({ ...rule, scored: false })} />
+      ) : null}
       <fieldset className="space-y-2">
         <legend className="text-ui font-medium text-t2">{t("routingPresets.editor.maxPrice", { currency })}</legend>
         <div className="grid gap-4 sm:grid-cols-3">
@@ -189,6 +192,19 @@ function LimitFields({ rule, invalid, currency, onChange }: Omit<RuleProps, "par
         <p className="text-label text-t4">{t("routingPresets.editor.priceHint")}</p>
       </fieldset>
     </>
+  );
+}
+
+// ScoreNotice stands for the score fields while scoring is not live: a rule read with a score (a copy, or one written
+// through the API) says it matches nothing and offers to drop the score.
+function ScoreNotice({ refused, onRemove }: { refused: boolean; onRemove: () => void }) {
+  const { t } = useTranslation();
+  const text = t("routingPresets.editor.scored");
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-btn bg-warn-soft px-3 py-2">
+      {refused ? <Refusal>{text}</Refusal> : <p className="text-label text-t1">{text}</p>}
+      <Button onClick={onRemove}>{t("routingPresets.editor.removeScore")}</Button>
+    </div>
   );
 }
 

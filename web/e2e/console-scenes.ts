@@ -40,6 +40,39 @@ const scenes: Scene[] = [
   dialogScene("routing-preset-create", "routing-presets", (page) =>
     page.getByRole("button", { name: /^(新建预设|New preset)$/ }).click(),
   ),
+  // A copy of a preset that asks for a product score, which the editor offers only to remove.
+  dialogScene("routing-preset-copy", "routing-presets", (page) =>
+    page
+      .getByRole("button", { name: /^(复制|Copy) / })
+      .first()
+      .click(),
+  ),
+  // A rule whose data policies match no endpoint today, refused on save.
+  dialogScene("routing-preset-refused", "routing-presets", async (page) => {
+    await page.getByRole("button", { name: /^(新建预设|New preset)$/ }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog
+      .getByLabel(/^(限定数据政策|Limit the data policies)$/)
+      .first()
+      .check();
+    await dialog
+      .getByLabel(/^(可能用于训练|May train on data)$/)
+      .first()
+      .uncheck();
+    await dialog.locator("button[type=submit]").click();
+    await dialog.locator("[data-invalid]").waitFor();
+  }),
+  {
+    name: "routing-presets-tip",
+    signedIn: true,
+    open: async (page) => {
+      await goto(page, "routing-presets");
+      await page
+        .getByRole("button", { name: /^(修改|Edit) / })
+        .first()
+        .hover();
+    },
+  },
   { name: "calls", signedIn: true, open: (page) => goto(page, "calls") },
   { name: "call", signedIn: true, open: (page) => goto(page, "calls/00000000-0000-4000-8000-000000000001") },
   { name: "security", signedIn: true, open: (page) => goto(page, "security") },
