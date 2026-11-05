@@ -318,8 +318,14 @@ func lockProposal(ctx context.Context, tx pg.Tx, credential, proposal uuid.UUID,
 	return rows[0].OperationsMoneyAction, nil
 }
 
-// moveReserved takes amount out of m's reservation in the windows it was made in, adding committed to them.
+// moveReserved takes amount out of m's reservation in the windows it was made in, adding committed to them. It holds
+// the policy first, as every path does before it makes or locks a counter: a repair holds the policy and the counters
+// that exist and then writes back the ones that are missing, so a confirmation or release that made a missing row and
+// then waited for the repair's counters would wait in a cycle.
 func moveReserved(ctx context.Context, tx pg.Tx, m OperationsMoneyAction, committed int64) error {
+	if _, err := lockPolicy(ctx, tx, Category(m.Category), m.SiteID); err != nil && !errors.Is(err, ErrNoCapPolicy) {
+		return err
+	}
 	c, err := lockCounters(ctx, tx, m.SiteID, Category(m.Category), Target{Kind: m.ObjectKind, ID: m.ObjectID}, m.DayStart, m.WeekStart)
 	if err != nil {
 		return err

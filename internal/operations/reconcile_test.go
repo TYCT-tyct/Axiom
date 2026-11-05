@@ -3,6 +3,7 @@ package operations_test
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -239,5 +240,138 @@ func TestCapReconcileRaces(t *testing.T) {
 	}, nil)
 	if paused != 0 || db.paused(t, site) != "false" {
 		t.Errorf("the reconciliation paused a scope the owner repaired while it ran: %d", paused)
+	}
+}
+
+// TestCapDriftAuditParts: drift in more counters than one audit entry's 8 KiB detail holds is recorded in as many
+// numbered entries as it needs, every counter in one of them, so the pause, its alert and the repair still commit.
+func TestCapDriftAuditParts(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	site := uuid.NewV7()
+	db.spend(t, site)
+	if err := pgtest.Run(t.Context(), db.superuser, `INSERT INTO operations.cap_counters (category, window_kind, window_start, object_kind, object_id, site_id, committed)
+		SELECT 'money.top_up', 'day', date_trunc('day', now(), 'UTC'), 'supplier', n || repeat('x', 200), '`+site.String()+`', 1
+		FROM generate_series(1, 40) n`); err != nil {
+		t.Fatal(err)
+	}
+	if n := db.reconcile(t); n != 1 {
+		t.Fatalf("paused %d scopes", n)
+	}
+	if _, err := db.repair(t, &site); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"cap_policy.pause", "cap_counters.repair"} {
+		db.expect(t, action, `SELECT (count(*) > 1) || ' ' || sum(jsonb_array_length(detail->'counters')) || ' ' || bool_and((detail->>'parts')::int = count)
+			|| ' ' || max(char_length(detail->'counters'->0->>'object_id'))
+			FROM (SELECT *, count(*) OVER () AS count FROM platform.audit_log WHERE action = '`+action+`') a`, "true 40 true 128")
+	}
+	db.expect(t, "the alert", `SELECT count(*)::text FROM platform.alert_signals WHERE body->>'kind' = 'operations.cap_drift'`, "2")
+}
+
+// TestCapRepairLockOrder: a confirmation or a release whose object's counter is missing waits for a repair that holds
+// the scope at the policy, before it makes the missing row, instead of making it and then waiting for the repair's
+// counters while the repair waits to write that row back. The order is made by holding the repair's locks until the
+// other is seen waiting, never by time.
+func TestCapRepairLockOrder(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		// reserve makes a reservation on supplier s1 and returns what ends it.
+		reserve func(r reservations) func() error
+	}{
+		{"a confirmation", func(r reservations) func() error {
+			op := r.direct(5)
+			return func() error { _, err := r.confirm(op); return err }
+		}},
+		{"a withdrawal", func(r reservations) func() error {
+			op := r.pending()
+			return func() error {
+				_, err := r.in(r.t, func(tx pg.Tx) (operations.Operation, error) {
+					return operations.Withdraw(r.t.Context(), tx, r.credential, op.Approval.ID, "no")
+				})
+				return err
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newReservations(t)
+			end := c.reserve(r)
+			if err := pgtest.Run(t.Context(), r.superuser, `DELETE FROM operations.cap_counters WHERE object_kind = 'supplier'`); err != nil {
+				t.Fatal(err)
+			}
+			var repair pg.Tx
+			r.whileWaited(t, func(tx pg.Tx) error {
+				repair = tx // the repair's first locks: the policy, then the counters that exist
+				if _, err := tx.Exec(t.Context(), `SELECT 1 FROM operations.cap_policies WHERE site_id IS NULL FOR UPDATE`); err != nil {
+					return err
+				}
+				_, err := tx.Exec(t.Context(), `SELECT id FROM operations.cap_counters WHERE site_id IS NULL ORDER BY object_kind, window_kind FOR UPDATE`)
+				return err
+			}, end, func() {
+				if _, err := operations.RepairCaps(t.Context(), repair, owner, operations.CategoryTopUp, nil, "recount"); err != nil {
+					t.Errorf("the repair beside %s: %v", c.name, err)
+				}
+			})
+			if n := r.reconcile(t); n != 0 {
+				t.Errorf("the counters drift after the repair and %s: %d", c.name, n)
+			}
+		})
+	}
+}
+
+// reserveAsOldNode proposes pm and reserves it as ProposeMoney did before the pause: within the caps at once.
+func (db opsDB) reserveAsOldNode(t *testing.T, pm proposal) error {
+	t.Helper()
+	_, err := db.in(t, func(tx pg.Tx) (operations.Operation, error) {
+		op, _, err := operations.Propose(t.Context(), tx, pm.p)
+		if err != nil {
+			return op, err
+		}
+		w, err := operations.New().CapWindows(t.Context(), tx)
+		if err != nil {
+			return op, err
+		}
+		return op, operations.New().InsertMoneyAction(t.Context(), tx, operations.InsertMoneyActionParams{
+			OperationID: op.ID, Category: string(pm.m.Category), SiteID: pm.m.Site, ObjectKind: pm.m.Object.Kind,
+			ObjectID: pm.m.Object.ID, Amount: pm.m.Amount, Currency: pm.m.Currency.String(), Basis: []byte(`{}`), PolicyRev: 1,
+			DayStart: w.DayStart, WeekStart: w.WeekStart, ExpiresAt: w.DayEnd,
+		})
+	})
+	return err
+}
+
+// TestCapPauseHoldsOldNodes: a node that predates the pause, or this one rolled back to, reserves a proposal within
+// the caps without asking the owner; the database refuses that reservation in a paused scope, and keeps reserving one
+// that waits for the owner there, and any in a scope that is not paused.
+func TestCapPauseHoldsOldNodes(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	paused, running := uuid.NewV7(), uuid.NewV7()
+	for _, site := range []uuid.UUID{paused, running} {
+		db.spend(t, site)
+	}
+	if err := pgtest.Run(t.Context(), db.superuser, `UPDATE operations.cap_policies SET paused_at = now() WHERE site_id = '`+paused.String()+`'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name  string
+		site  uuid.UUID
+		owner bool // the proposal waits for the owner
+		fails bool
+	}{
+		{"an old node's proposal in a paused scope", paused, false, true},
+		{"a proposal for the owner in a paused scope", paused, true, false},
+		{"an old node's proposal in a scope not paused", running, false, false},
+	} {
+		pm := topUp(uuid.NewV7(), uuid.NewV7(), &c.site, "s1", 1)
+		if c.owner {
+			pm.p.Summary = pm.m.Summary
+		}
+		err := db.reserveAsOldNode(t, pm)
+		if failed := err != nil && strings.Contains(err.Error(), "paused"); failed != c.fails || (err != nil && !failed) {
+			t.Errorf("%s: %v", c.name, err)
+		}
 	}
 }

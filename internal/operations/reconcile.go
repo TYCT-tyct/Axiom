@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"axiom/internal/platform/alert"
 	"axiom/internal/platform/audit"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
 
@@ -152,21 +154,56 @@ func RepairCaps(ctx context.Context, tx pg.Tx, actor audit.Actor, category Categ
 }
 
 // recordDrift records action on the policy of site and category with every counter that drifted, as it was and as its
-// money actions add up.
+// money actions add up, in as many entries as the audit log's 8 KiB detail needs: each is numbered part of parts, and
+// a scope with nothing drifted is one entry with no counters.
 func recordDrift(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, category Category, site *uuid.UUID, drift []CapDriftRow, reason string) error {
-	counters := make([]map[string]any, len(drift))
-	for i, d := range drift {
-		counters[i] = map[string]any{
-			"window_kind": d.WindowKind, "window_start": d.WindowStart, "object_kind": d.ObjectKind, "object_id": d.ObjectID,
-			"before": map[string]any{"reserved": d.Reserved, "committed": d.Committed, "count": d.Count},
-			"after":  map[string]any{"reserved": d.WantReserved, "committed": d.WantCommitted, "count": d.WantCount},
+	parts, err := driftParts(drift)
+	if err != nil {
+		return err
+	}
+	for i, counters := range parts {
+		if err := audit.Record(ctx, tx, audit.Event{
+			Actor: actor, Action: action, Reason: reason,
+			Target: audit.Target{Module: "operations", Kind: "cap_policy", ID: scopeName(site) + ":" + string(category)},
+			Detail: map[string]any{"counters": counters, "part": i + 1, "parts": len(parts)},
+		}); err != nil {
+			return err
 		}
 	}
-	return audit.Record(ctx, tx, audit.Event{
-		Actor: actor, Action: action, Reason: reason,
-		Target: audit.Target{Module: "operations", Kind: "cap_policy", ID: scopeName(site) + ":" + string(category)},
-		Detail: map[string]any{"counters": counters},
-	})
+	return nil
+}
+
+// driftBudget is how much of the audit log's 8192-byte detail the counters of one entry may take, leaving the rest to
+// the envelope ({"counters": [...], "part": n, "parts": n}).
+const driftBudget = 8192 - 64
+
+// driftParts packs the counters into parts that fit driftBudget each. A row's size as the database prints the detail
+// is at most its compact JSON plus a space after each colon and comma (jsonb's text form; Go escapes at least as much
+// as it does), so the sum of those bounds is a bound. An object ID is cut to the 128 characters a money action allows,
+// so a row written by hand cannot outgrow a part on its own.
+func driftParts(drift []CapDriftRow) ([][]map[string]any, error) {
+	parts := [][]map[string]any{{}}
+	used := 0
+	for _, d := range drift {
+		id := []rune(d.ObjectID)
+		row := map[string]any{
+			"window_kind": d.WindowKind, "window_start": d.WindowStart, "object_kind": d.ObjectKind,
+			"object_id": string(id[:min(len(id), 128)]),
+			"before":    map[string]any{"reserved": d.Reserved, "committed": d.Committed, "count": d.Count},
+			"after":     map[string]any{"reserved": d.WantReserved, "committed": d.WantCommitted, "count": d.WantCount},
+		}
+		encoded, err := jsonx.MarshalCanonical(row)
+		if err != nil {
+			return nil, fmt.Errorf("encode a drifted counter: %w", err)
+		}
+		size := len(encoded) + bytes.Count(encoded, []byte(":")) + bytes.Count(encoded, []byte(",")) + 2 // ", " between rows
+		if last := len(parts) - 1; used+size > driftBudget && len(parts[last]) > 0 {
+			parts, used = append(parts, nil), 0
+		}
+		parts[len(parts)-1] = append(parts[len(parts)-1], row)
+		used += size
+	}
+	return parts, nil
 }
 
 // scopeName is how a scope is named in the audit and alerts: the site's ID, or platform.
