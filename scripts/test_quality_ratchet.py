@@ -1,7 +1,8 @@
 """Tests for the quality ratchet: a fixture tree that grows a count fails, one that falls without lowering the baseline
-fails too, and a package whose coverage falls, rises or starts below the floor must move the baseline. The fixture trees
-are measured by tools/qualityratchet, so the tests exercise the real gocognit numbers, the coverage profile parser, the
-generated/test exclusions and the baseline comparison together."""
+fails too, and a package whose coverage falls, rises or starts below the floor must move the baseline. A train or main
+build passes an improvement no pull request recorded and still fails a worsening; a pull request build keeps requiring
+the improvement to be recorded. The fixture trees are measured by tools/qualityratchet, so the tests exercise the real
+gocognit numbers, the coverage profile parser, the generated/test exclusions and the baseline comparison together."""
 
 import json
 import os
@@ -421,6 +422,92 @@ class FallsTest(unittest.TestCase):
 
             self.assertEqual(run.returncode, 1, run.stderr)
             self.assertIn("function complex.go:big fell from 40 to 31; lower its baseline value", run.stderr)
+
+
+class ModeTest(unittest.TestCase):
+    def test_a_pr_gain_still_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.baseline(nolint={"gosec": 1})
+            fixture.write("clean.go", go_file(("small", 1)))
+
+            run = fixture.run()
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("nolint:gosec fell from 1 to 0", run.stderr)
+            self.assertIn("record them in .github/quality-baseline.json in this PR", run.stderr)
+
+    def test_a_train_gain_passes_and_names_what_to_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.baseline(nolint={"gosec": 1})
+            fixture.write("clean.go", go_file(("small", 1)))
+
+            run = fixture.run("--allow-unrecorded-gains")
+
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn("nolint:gosec fell from 1 to 0", run.stdout)
+            self.assertIn("record them in the next pull request that touches the package", run.stdout)
+            self.assertIn("the baseline is behind the measurement", run.stdout)
+
+    def test_a_train_coverage_gain_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=3, total=5)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 4000}})
+
+            run = fixture.run("--coverage", fixture.profile(), "--allow-unrecorded-gains")
+
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn("coverage of fixture/pkg rose from 40.00% to 60.00%; raise its baseline", run.stdout)
+
+    def test_a_train_loss_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=2, total=5)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 6000}})
+            fixture.write("nolint.go", "package fixture\n\nvar _ = 0 //nolint:gosec // fixture\n")
+
+            run = fixture.run("--coverage", fixture.profile(), "--allow-unrecorded-gains")
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("nolint:gosec grew from 0 to 1", run.stderr)
+            self.assertIn("coverage of fixture/pkg fell from 60.00% to 40.00% (tolerance 0.50%)", run.stderr)
+
+    def test_a_train_baseline_lowering_against_the_base_still_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=99, total=200)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 5000}})
+            base = fixture.commit()
+
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 4950}})
+
+            run = fixture.run("--coverage", fixture.profile(), "--base", base, "--allow-unrecorded-gains")
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("base baseline: the baseline of fixture/pkg fell from 50.00% to 49.50%", run.stderr)
+
+    def test_a_train_coverage_fall_against_the_base_still_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.coverage(covered=4, total=5)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 8000}})
+            base = fixture.commit()
+
+            fixture.coverage(covered=2, total=5)
+            fixture.baseline(coverage={"tolerance_basis_points": 50, "floor_basis_points": 6000,
+                                       "packages": {"fixture/pkg": 4000}})
+
+            run = fixture.run("--coverage", fixture.profile(), "--base", base, "--allow-unrecorded-gains")
+
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertIn("base baseline: coverage of fixture/pkg fell from 80.00% to 40.00%", run.stderr)
 
 
 class ExclusionTest(unittest.TestCase):

@@ -12,8 +12,10 @@ web := "pnpm --dir web"
 check: docs check-static test quality-ratchet-coverage secrets web
 
 # The checks that need no run of a test suite: CI's static job adds `script-tests` on a PR, and `docs` (which includes
-# `script-tests`) plus `secrets` on a train or main
-check-static: modules adapters-removable artifacts scope api doc-names tidy generated quality-ratchet lint deadcode vuln
+# `script-tests`) plus `secrets` on a train or main. The mode selects the quality ratchet's behaviour: `pr` (the default)
+# requires every improvement to be recorded in the baseline, `train` passes --allow-unrecorded-gains for a train or main
+# build and reports what to record (see the quality-ratchet recipe).
+check-static mode="pr": modules adapters-removable artifacts scope api doc-names tidy generated (quality-ratchet mode) lint deadcode vuln
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
 generate: web-install
@@ -55,21 +57,26 @@ lint:
 # The quality ratchet: nolint per linter, functions over gocognit 15, test functions over 15 and files over 500 lines
 # may only fall, and no function or file may newly cross the hard ceiling 30, test functions included, or 800. Test
 # functions have their own ceiling list, so a test exception cannot excuse production code. .github/quality-baseline.json
-# holds the counts and the named exceptions; the script says which number to lower when one falls (`--write-baseline`
-# lowers them, and refuses a rise).
+# holds the counts and the named exceptions; the script says which number to record when one improves (`--write-baseline`
+# lowers the counts and raises coverage, and refuses a worsening).
+# The default `pr` mode requires every improvement past the tolerance to be recorded in the same pull request. A train or
+# main build passes `train`, which adds --allow-unrecorded-gains: several PRs can improve the same number by less than the
+# tolerance each and cross it together, so the build reports the improvement instead of failing and ejecting one of them.
+# Every worsening still fails. The next PR's static check records an unrecorded static gain; main's run is the report for
+# coverage, whose suite does not run on a PR. The workflow chooses the mode explicitly; the script does not guess it.
 # With BASE set (PRs and trains), it also reads the baseline committed at the base, so code and baseline cannot grow
 # together; a base without the baseline is its first introduction. A static-only write keeps the recorded coverage.
 # The static half of the quality ratchet: nolint, complexity and file length may only fall.
-quality-ratchet:
-    {{ python }} scripts/ci/quality_ratchet.py
+quality-ratchet mode="pr":
+    {{ python }} scripts/ci/quality_ratchet.py {{ if mode == "train" { "--allow-unrecorded-gains" } else { "" } }}
 
 # After `just test` wrote coverage.out: a package may not fall below its baseline by more than the tolerance, a new
-# package must start at or above the floor, and a rise must raise the baseline in the same PR. Generated code and the
-# withcluster test command are excluded; tools/ is another module and is not measured here. It reads the profile the
-# race suite already wrote, so the suite runs once.
+# package must start at or above the floor, and an improvement past the tolerance is recorded by the PR that made it, or
+# reported by a train or main build (`train`). Generated code and the withcluster test command are excluded; tools/ is
+# another module and is not measured here. It reads the profile the race suite already wrote, so the suite runs once.
 # The coverage half of the quality ratchet: per-package statement coverage may only fall.
-quality-ratchet-coverage:
-    {{ python }} scripts/ci/quality_ratchet.py --coverage coverage.out
+quality-ratchet-coverage mode="pr":
+    {{ python }} scripts/ci/quality_ratchet.py --coverage coverage.out {{ if mode == "train" { "--allow-unrecorded-gains" } else { "" } }}
 
 # Module imports follow the dependency table in docs/architecture.md
 modules:
