@@ -119,35 +119,6 @@ type PresetContent struct {
 	Rules    []byte
 }
 
-// layerLimit bounds the presets of a layer: the live ones, and all of them with the disabled ones, which keep their
-// rows for the keys bound to them (docs/domains/routing.md「滚动发布、失败与性能」). where picks the presets it counts,
-// with args. Limits bound no bytes: a version's rules are at most maxRulesBytes, so the most presets a layer holds
-// already bound what it can write.
-type layerLimit struct {
-	owner string
-	where string
-	args  []any
-	LayerLimits
-}
-
-// limitsOf are the limits of lim a new preset of the layer is held to. An account's count its workspaces' presets too,
-// since the account is the tenant, so a workspace's preset is held to both.
-func limitsOf(layer Layer, lim Limits) []layerLimit {
-	site, account, workspace := uuid.UUID(layer.Site), uuid.UUID(layer.Account), uuid.UUID(layer.Workspace)
-	accountLimit := layerLimit{"account", "site_id = $1 AND account_id = $2", []any{site, account}, lim.Account}
-	switch layer.Scope {
-	case ScopePlatform:
-		return []layerLimit{{"platform", "scope = 'platform'", nil, lim.Platform}}
-	case ScopeSite:
-		return []layerLimit{{"site", "scope = 'site' AND site_id = $1", []any{site}, lim.Site}}
-	case ScopeAccount:
-		return []layerLimit{accountLimit}
-	case ScopeWorkspace:
-		return []layerLimit{accountLimit, {"workspace", "site_id = $1 AND workspace_id = $2", []any{site, workspace}, lim.Workspace}}
-	}
-	return nil
-}
-
 const presetColumns = `p.id, p.scope, p.site_id, p.account_id, p.workspace_id, p.slug, p.name, p.revision, p.current_version,
 	v.currency, v.rules::text, p.is_system, p.deleted_at IS NOT NULL, p.created_at, p.updated_at
 	FROM routing.presets p JOIN routing.preset_versions v ON v.preset_id = p.id AND v.version = p.current_version`
