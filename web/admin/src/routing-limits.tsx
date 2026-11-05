@@ -105,25 +105,51 @@ export function RoutingLimits() {
   return <LimitsState query={useQuery(routingLimitsQuery)} />;
 }
 
-// LimitsState shows the card, or for a node of a release before part six of the presets, which answers 404, says the
-// limits are not there yet and offers to ask again: DataState would call it a missing page and offer none.
+// LimitsState shows the card, or for a node of a release before part six of the presets says the limits are not there
+// yet.
 export function LimitsState({ query }: { query: UseQueryResult<View> }) {
+  const { t } = useTranslation();
+  return (
+    <NodeState
+      query={query}
+      title={t("routingPresets.limits.title")}
+      unavailable={t("routingPresets.limits.unavailable")}
+    >
+      {(view) => <LimitsCard view={view} />}
+    </NodeState>
+  );
+}
+
+// NodeState shows a card of the routing presets page from what query read. A node of an earlier release, which has no
+// such operation, answers 404: the card says the node does not have it yet and offers to ask again, where DataState
+// would call it a missing page and offer nothing.
+export function NodeState<T>({
+  query,
+  title,
+  unavailable,
+  children,
+}: {
+  query: UseQueryResult<T>;
+  title: string;
+  unavailable: string;
+  children: (data: T) => ReactNode;
+}) {
   const { t } = useTranslation();
   if (query.error instanceof ApiError && query.error.status === 404) {
     return (
       <Facts
-        title={t("routingPresets.limits.title")}
+        title={title}
         action={
           <Button size="md" disabled={query.isFetching} onClick={() => void query.refetch()}>
             <Icon name="refresh" />
             {t("routingPresets.limits.retry")}
           </Button>
         }
-        rows={[[t("routingPresets.unavailableTitle"), t("routingPresets.limits.unavailable")]]}
+        rows={[[t("routingPresets.unavailableTitle"), unavailable]]}
       />
     );
   }
-  return <DataState query={query}>{(view) => <LimitsCard view={view} />}</DataState>;
+  return <DataState query={query}>{children}</DataState>;
 }
 
 function LimitsCard({ view }: { view: View }) {

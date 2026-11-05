@@ -84,4 +84,22 @@ export default {
     save: "Save limits",
     saved: "Saved. The next preset made or changed is checked against them.",
   },
+  suspension: {
+    title: "Suspend routing presets",
+    state: "State",
+    running: "In effect",
+    suspended: "Suspended",
+    since: "Since",
+    suspend: "Suspend presets",
+    resume: "Resume presets",
+    suspendTitle: "Suspend routing presets",
+    suspendIntro:
+      "For an incident with presets themselves. Within 5 seconds every key bound to a preset is refused (503 preset_unavailable) on every model call and model list, rather than routed past the sources and prices its preset allows; keys without one keep working. Nobody can make, change or disable a preset, change a default or choose a key’s preset until you resume. Keys made meanwhile still take their default. Only nodes of this release obey it: suspend once every node runs it.",
+    resumeTitle: "Resume routing presets",
+    resumeIntro:
+      "Within 5 seconds keys route by their presets again, and presets, defaults and keys’ presets can be changed again.",
+    suspendedDone: "Suspended. Keys bound to a preset are refused within 5 seconds.",
+    resumedDone: "Resumed. Keys route by their presets again within 5 seconds.",
+    unavailable: "This node has no switch to suspend routing presets yet. Try again once it’s updated.",
+  },
 };

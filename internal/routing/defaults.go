@@ -44,7 +44,7 @@ func ReadDefault(ctx context.Context, tx pg.Tx, layer Layer) (Default, error) {
 // default may point at no preset that limits a price, since it serves sites of every currency. New keys of the layer
 // are bound to the new default; the keys already made keep theirs. The change is recorded with the actor's reason.
 func SetDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, currency platform.Currency, preset *PresetID, version int64, reason string) (Default, error) {
-	if err := lockBudget(ctx, tx); err != nil { // ordered with DisablePreset: a default never points at a disabled preset
+	if err := lockWrites(ctx, tx); err != nil { // ordered with DisablePreset: a default never points at a disabled preset
 		return Default{}, err
 	}
 	before, err := ReadDefault(ctx, tx, layer)
@@ -103,8 +103,12 @@ func writeDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer,
 
 // SelectablePreset checks that a key of a may be bound to the preset, when it is made or changed: a live preset of a
 // layer the key belongs to, priced in the key's site's currency, and not the system preset, which only a key with no
-// default anywhere ends up with.
+// default anywhere ends up with. While presets are suspended no key chooses one; a key made then is still bound to
+// its layers' default (DefaultPreset), which it routes by once they resume.
 func SelectablePreset(ctx context.Context, tx pg.Tx, a Admission, id PresetID) error {
+	if err := refuseSuspended(ctx, tx); err != nil {
+		return err
+	}
 	return selectable(ctx, tx, a, id, false)
 }
 
