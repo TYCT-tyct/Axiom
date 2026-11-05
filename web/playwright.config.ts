@@ -26,7 +26,7 @@ const address = (url: string) => `localhost:${new URL(url).port}`;
 // with the version and calls routes answered 2.7 s late because the test process had no CPU. On an 8-core box under 32
 // busy loops, two 4-worker runs failed 2 of 60 checks while two 3-worker runs passed 60 of 60; two 2-worker runs also
 // passed, but took 53% longer on the same check. A sharded run may therefore use three quarters of the quota across the
-// host (six workers on eight cores), split evenly; one shard keeps the half-quota cap.
+// host (six workers on eight cores), split evenly; one shard keeps the old count, capped at eight.
 const shards = (() => {
   const fromEnv = Number(process.env.E2E_SHARD_COUNT);
   if (Number.isInteger(fromEnv) && fromEnv > 0) {
@@ -35,8 +35,8 @@ const shards = (() => {
   const shard = process.argv.find((argument) => argument.startsWith("--shard="));
   return Number(shard?.match(/^--shard=\d+\/(\d+)$/)?.[1]) || 1;
 })();
+const single = Math.min(8, Math.max(1, Math.floor(availableParallelism() / 2)));
 const quota = Math.min(8, availableParallelism());
-const single = Math.max(1, Math.floor(quota / 2));
 const workers = shards > 1 ? Math.max(1, Math.floor((quota * 3) / 4 / shards)) : single;
 
 export default defineConfig({
