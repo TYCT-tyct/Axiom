@@ -264,6 +264,11 @@ func ChargedCalls(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID
 // version, charge and waiver, which is what the call log keeps of a settlement. A request the scope cannot see, or one
 // not settled, is absent. So is one whose stored usage this build cannot read (a newer node may have written it): it is
 // logged and counted, and the caller keeps what it had, because a query failure is the only error worth retrying.
+//
+// The read locks the named reservations for share until tx ends, so a settlement that has written its reservation and
+// is still committing is waited for and read as it committed. A settlement can commit only after it has written the
+// row, so once the caller has given up on every try and none starts again, a call this returns no Final for is one no
+// settlement will charge.
 func (reader *ChargeReader) SettledFinals(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]Final, error) {
 	rows, err := queries.SettledFinals(ctx, tx, ids)
 	if err != nil {
@@ -271,6 +276,9 @@ func (reader *ChargeReader) SettledFinals(ctx context.Context, tx pg.Tx, ids []u
 	}
 	out := make(map[uuid.UUID]Final, len(rows))
 	for _, r := range rows {
+		if r.State != "settled" {
+			continue
+		}
 		segments, err := decodeUsage(r.FinalUsage)
 		if err != nil {
 			reader.logger.ErrorContext(ctx, "billing: a settled call's usage is unreadable", "request_id", r.RequestID.String(), "err", err)

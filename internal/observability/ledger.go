@@ -11,7 +11,8 @@ import (
 )
 
 // Ledger is the Amounts of the named calls whose settlement committed, keyed by request ID; a call it has no settled
-// charge for is absent. An error is a read that failed: the batch is retried.
+// charge for is absent. It waits for a settlement still committing, so for a record in the spill, whose call starts no
+// further try, absent is final and the record is stored pending. An error is a read that failed: the batch is retried.
 type Ledger func(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]Amounts, error)
 
 // settlePending gives the batch's pending records the amounts the ledger holds for them. It runs only when the batch
