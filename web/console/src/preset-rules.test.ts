@@ -14,10 +14,8 @@ it.each([
       default: {
         sort: "price",
         classes: ["official", "cloud"],
-        policies: ["no_retention"],
+        policies: ["no_retention", "may_train"],
         verified_only: true,
-        min_score: 90,
-        min_score_confidence: 0.8,
         max_price: { prompt: "3", completion: "15", request: "0.01" },
       },
       rules: [
@@ -46,9 +44,10 @@ it("leaves out what writes nothing and what only the platform may hold", () => {
 });
 
 it.each([
-  { case: "a score above 100", edit: { minScore: "101" }, field: "minScore" },
-  { case: "a confidence above 1", edit: { minConfidence: "1.5" }, field: "minConfidence" },
-  { case: "a negative score", edit: { minScore: "-1" }, field: "minScore" },
+  { case: "no source checked", edit: { classes: [] }, field: "classes" },
+  { case: "policies that leave out may_train", edit: { policies: ["no_retention"] }, field: "policies" },
+  { case: "no policy checked", edit: { policies: [] }, field: "policies" },
+  { case: "a product score", edit: { scored: true }, field: "score" },
   { case: "a price in words", edit: { maxPrice: { prompt: "three", completion: "", request: "" } }, field: "prompt" },
   {
     case: "a price with a comma",
@@ -58,6 +57,22 @@ it.each([
 ])("refuses $case in the default rule", ({ edit, field }) => {
   const draft = draftOf(rules({ default: {} }));
   expect(rulesOf({ ...draft, base: { ...draft.base, ...edit } })).toEqual({ invalid: { rule: "default", field } });
+});
+
+// Scoring is not live, so a stored score (a copy, or rules written through the API) is refused rather than kept, and
+// dropping it writes the rule without one.
+it.each([{ min_score: 90 }, { min_score_confidence: 0.5 }])("refuses a stored score until it is removed", (score) => {
+  const draft = draftOf(rules({ default: {}, rules: [{ author: "openai", ...score }] }));
+  expect(rulesOf(draft)).toEqual({ invalid: { rule: 0, field: "score" } });
+  draft.overrides = draft.overrides.map((override) => ({ ...override, scored: false }));
+  expect(rulesOf(draft)).toEqual({
+    rules: { default: {}, rules: [{ author: "openai" }] },
+  });
+});
+
+// A null score is no threshold to the server, so the rule saves, without it.
+it.each([{ min_score: null }, { min_score_confidence: null }])("saves a null score as no score", (score) => {
+  expect(rulesOf(draftOf(rules({ default: score })))).toEqual({ rules: { default: {} } });
 });
 
 it("refuses an override that names nothing, by its place", () => {

@@ -4075,6 +4075,11 @@ export interface components {
             currency?: string;
             rules: components["schemas"]["RoutingRules"];
             disabled: boolean;
+            /**
+             * Format: int64
+             * @description The keys bound to the preset that are not deleted: the caller's account's in the console, every account's in the admin API. Given when a preset is listed or read, never for the system preset, which every unbound key also follows; absent from nodes that do not count them.
+             */
+            keys?: number;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */

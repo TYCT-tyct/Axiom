@@ -7708,6 +7708,7 @@ components:
         currency: {type: string, description: "The currency of a platform preset's price limits; absent for the others, which are in the site's."}
         rules: {$ref: "#/components/schemas/RoutingRules"}
         disabled: {type: boolean}
+        keys: {type: integer, format: int64, minimum: 0, description: "The keys bound to the preset that are not deleted: the caller's account's in the console, every account's in the admin API. Given when a preset is listed or read, never for the system preset, which every unbound key also follows; absent from nodes that do not count them."}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
     RoutingPresetList:

@@ -39,16 +39,16 @@ func (a adminAPI) ListSiteRoutingPresets(ctx context.Context, r adminapi.ListSit
 }
 
 func (a adminAPI) layerPresets(ctx context.Context, layer routing.Layer) (adminapi.RoutingPresetList, error) {
-	var presets []routing.StoredPreset
-	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		presets, err = routing.LayerPresets(ctx, tx, layer)
+	var out consoleapi.RoutingPresetList
+	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
+		presets, err := routing.LayerPresets(ctx, tx, layer)
+		if err != nil {
+			return err
+		}
+		out.Data, err = countedPresets(ctx, tx, a.accounts, nil, presets)
 		return err
 	}); err != nil {
 		return adminapi.RoutingPresetList{}, err
-	}
-	out := consoleapi.RoutingPresetList{Data: make([]consoleapi.RoutingPreset, len(presets))}
-	for i, p := range presets {
-		out.Data[i] = routingPresetBody(p)
 	}
 	return converted[adminapi.RoutingPresetList](out)
 }
@@ -95,15 +95,19 @@ func (a adminAPI) createLayerPreset(ctx context.Context, operation, key string, 
 }
 
 func (a adminAPI) GetLayerRoutingPreset(ctx context.Context, r adminapi.GetLayerRoutingPresetRequestObject) (adminapi.GetLayerRoutingPresetResponseObject, error) {
-	var p routing.StoredPreset
-	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		p, err = layerPreset(ctx, tx, r.PresetId)
+	var body []consoleapi.RoutingPreset
+	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
+		p, err := layerPreset(ctx, tx, r.PresetId)
+		if err != nil {
+			return err
+		}
+		body, err = countedPresets(ctx, tx, a.accounts, nil, []routing.StoredPreset{p})
 		return err
 	}); err != nil {
 		return nil, err
 	}
-	body, err := adminRoutingPreset(p)
-	return adminapi.GetLayerRoutingPreset200JSONResponse(body), err
+	out, err := converted[adminapi.RoutingPreset](body[0])
+	return adminapi.GetLayerRoutingPreset200JSONResponse(out), err
 }
 
 func (a adminAPI) UpdateLayerRoutingPreset(ctx context.Context, r adminapi.UpdateLayerRoutingPresetRequestObject) (adminapi.UpdateLayerRoutingPresetResponseObject, error) {

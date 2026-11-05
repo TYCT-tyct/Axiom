@@ -317,6 +317,31 @@ func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error) {
 	return keyOf(rows[0]), nil
 }
 
+// PresetKeys counts the keys bound to each of presets that are not deleted, disabled and expired ones included: those
+// in tx's scope, or only account's when account is not nil. A preset no key is bound to is not in the map, nor is the
+// zero ID, which names every unbound key (routing's system preset). One indexed read whatever the number of presets.
+func (s *Service) PresetKeys(ctx context.Context, tx pg.Tx, account *AccountID, presets []uuid.UUID) (map[uuid.UUID]int64, error) {
+	var rows []KeysByPresetRow
+	var err error
+	if account == nil {
+		rows, err = s.queries.KeysByPreset(ctx, tx, presets)
+	} else {
+		var own []AccountKeysByPresetRow
+		own, err = s.queries.AccountKeysByPreset(ctx, tx, AccountKeysByPresetParams{Presets: presets, AccountID: uuid.UUID(*account)})
+		for _, r := range own {
+			rows = append(rows, KeysByPresetRow(r))
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("count the keys by routing preset: %w", err)
+	}
+	out := make(map[uuid.UUID]int64, len(rows))
+	for _, r := range rows {
+		out[r.PresetID] = r.Keys
+	}
+	return out, nil
+}
+
 // UpdateKey replaces id's settings in tx, records what it changed, and returns the key as changed. Turning a disabled
 // key on again is a change of settings like any other. The old settings are read in the key's row's turn, in this
 // transaction, so the audit entry names what this change replaced and not what a change made at the same moment did.

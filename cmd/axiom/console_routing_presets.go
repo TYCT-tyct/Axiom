@@ -27,30 +27,36 @@ func accountLayer(cl call) routing.Layer {
 func (c consoleAPI) ListRoutingPresets(ctx context.Context, _ consoleapi.ListRoutingPresetsRequestObject) (consoleapi.ListRoutingPresetsResponseObject, error) {
 	cl := callOf(ctx)
 	layer := accountLayer(cl)
-	var presets []routing.StoredPreset
-	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-		presets, err = routing.ListPresets(ctx, tx, routing.Admission{Site: layer.Site, Account: layer.Account, Currency: cl.site.Currency})
+	account := cl.principal.AccountID()
+	var out consoleapi.RoutingPresetList
+	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
+		presets, err := routing.ListPresets(ctx, tx, routing.Admission{Site: layer.Site, Account: layer.Account, Currency: cl.site.Currency})
+		if err != nil {
+			return err
+		}
+		out.Data, err = countedPresets(ctx, tx, c.accounts, &account, presets)
 		return err
 	}); err != nil {
 		return nil, err
-	}
-	out := consoleapi.RoutingPresetList{Data: make([]consoleapi.RoutingPreset, len(presets))}
-	for i, p := range presets {
-		out.Data[i] = routingPresetBody(p)
 	}
 	return consoleapi.ListRoutingPresets200JSONResponse(out), nil
 }
 
 func (c consoleAPI) GetRoutingPreset(ctx context.Context, r consoleapi.GetRoutingPresetRequestObject) (consoleapi.GetRoutingPresetResponseObject, error) {
 	cl := callOf(ctx)
-	var p routing.StoredPreset
-	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-		p, err = routing.GetPreset(ctx, tx, routing.PresetID(r.PresetId))
+	account := cl.principal.AccountID()
+	var body []consoleapi.RoutingPreset
+	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
+		p, err := routing.GetPreset(ctx, tx, routing.PresetID(r.PresetId))
+		if err != nil {
+			return err
+		}
+		body, err = countedPresets(ctx, tx, c.accounts, &account, []routing.StoredPreset{p})
 		return err
 	}); err != nil {
 		return nil, err
 	}
-	return consoleapi.GetRoutingPreset200JSONResponse(routingPresetBody(p)), nil
+	return consoleapi.GetRoutingPreset200JSONResponse(body[0]), nil
 }
 
 func (c consoleAPI) CreateRoutingPreset(ctx context.Context, r consoleapi.CreateRoutingPresetRequestObject) (consoleapi.CreateRoutingPresetResponseObject, error) {
@@ -143,6 +149,30 @@ func routingPresetBody(p routing.StoredPreset) consoleapi.RoutingPreset {
 		body.Currency = &code
 	}
 	return body
+}
+
+// countedPresets are the presets' bodies with the keys bound to each, account's alone when it is not nil. The system
+// preset is not counted: every unbound key follows it too, and nobody edits or disables it.
+func countedPresets(ctx context.Context, tx pg.Tx, keys *accounts.Service, account *accounts.AccountID, presets []routing.StoredPreset) ([]consoleapi.RoutingPreset, error) {
+	ids := make([]uuid.UUID, 0, len(presets))
+	for _, p := range presets {
+		if !p.System {
+			ids = append(ids, uuid.UUID(p.ID))
+		}
+	}
+	counts, err := keys.PresetKeys(ctx, tx, account, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]consoleapi.RoutingPreset, len(presets))
+	for i, p := range presets {
+		out[i] = routingPresetBody(p)
+		if !p.System {
+			n := counts[uuid.UUID(p.ID)]
+			out[i].Keys = &n
+		}
+	}
+	return out, nil
 }
 
 func routingDefaultBody(d routing.Default) consoleapi.RoutingDefault {

@@ -4543,7 +4543,10 @@ type RoutingPreset struct {
 	Currency *string            `json:"currency,omitempty"`
 	Disabled bool               `json:"disabled"`
 	Id       openapi_types.UUID `json:"id"`
-	Name     string             `json:"name"`
+
+	// Keys The keys bound to the preset that are not deleted: the caller's account's in the console, every account's in the admin API. Given when a preset is listed or read, never for the system preset, which every unbound key also follows; absent from nodes that do not count them.
+	Keys *int64 `json:"keys,omitempty"`
+	Name string `json:"name"`
 
 	// Revision Moves on every change; a change names the revision it read.
 	Revision int64 `json:"revision"`
