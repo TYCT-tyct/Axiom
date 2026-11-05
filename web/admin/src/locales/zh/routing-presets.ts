@@ -78,9 +78,9 @@ export default {
   suspension: {
     title: "暂停路由预设",
     state: "状态",
-    running: "生效中",
-    suspended: "已暂停",
-    since: "暂停于",
+    running: "预设照常生效",
+    suspendedSince: "已暂停，自 {{time}}",
+    held: "预设已暂停，先恢复才能改。",
     suspend: "暂停预设",
     resume: "恢复预设",
     suspendTitle: "暂停路由预设",

@@ -87,9 +87,9 @@ export default {
   suspension: {
     title: "Suspend routing presets",
     state: "State",
-    running: "In effect",
-    suspended: "Suspended",
-    since: "Since",
+    running: "Presets apply",
+    suspendedSince: "Suspended since {{time}}",
+    held: "Presets are suspended: resume them first.",
     suspend: "Suspend presets",
     resume: "Resume presets",
     suspendTitle: "Suspend routing presets",

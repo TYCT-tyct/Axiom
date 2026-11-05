@@ -8,7 +8,7 @@ import { Code, Head, PageBody } from "../parts";
 import { DefaultCard, DisablePresetDialog, PresetDialog, systemPreset } from "../preset-dialogs";
 import { accountQuery, layerPresetsQuery, type PresetLayer } from "../queries";
 import { RoutingLimits } from "../routing-limits";
-import { RoutingSuspension } from "../routing-suspension";
+import { RoutingSuspension, SuspendedNotice, usePresetsHold } from "../routing-suspension";
 
 type Preset = AdminSchemas["RoutingPreset"];
 // The dialog open on a layer: a new preset, or a change to one, followed by ID in the list so a refresh after a stale
@@ -35,6 +35,7 @@ export default function RoutingPresetsPage() {
   }
   return (
     <Frame>
+      <SuspendedNotice />
       {/* A new platform preset's prices start in the admin's site's currency, the one an operator most likely means. */}
       <Layer
         layer={{ scope: "platform" }}
@@ -99,11 +100,12 @@ function Layer({
   const { t } = useTranslation();
   const manage = can(useSession(), "sites.manage");
   const [open, setOpen] = useState<Open>(null);
+  const hold = usePresetsHold();
   const presets = query.data?.data ?? [];
   const chosen = open?.kind === "create" ? undefined : presets.find((preset) => preset.id === open?.id);
   const close = () => setOpen(null);
   const create = manage ? (
-    <Button variant="primary" size="md" onClick={() => setOpen({ kind: "create" })}>
+    <Button variant="primary" size="md" onClick={() => setOpen({ kind: "create" })} {...hold}>
       {t("routingPresets.create")}
     </Button>
   ) : undefined;
@@ -162,6 +164,7 @@ function PresetsTable({
 
 function PresetRow({ preset, manage, onOpen }: { preset: Preset; manage: boolean; onOpen: (open: Open) => void }) {
   const { t } = useTranslation();
+  const hold = usePresetsHold();
   // The system preset is the one every unbound key follows; it is not changed, and it counts no keys.
   const fixed = preset.id === systemPreset || preset.disabled;
   const keys = <Keys preset={preset} />;
@@ -198,6 +201,7 @@ function PresetRow({ preset, manage, onOpen }: { preset: Preset; manage: boolean
                   size="sm"
                   aria-label={t(`routingPresets.${kind}Named`, { name: preset.name })}
                   onClick={() => onOpen({ kind, id: preset.id })}
+                  {...hold}
                 >
                   {t(`routingPresets.${kind}`)}
                 </Button>
