@@ -8,9 +8,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/platform/alert"
 )
 
 // Config holds the router's settings. Defaults live here, in New; a zero field takes its default.
@@ -35,6 +38,13 @@ type Config struct {
 	// whole. Nil, or a zero segment size, segments none.
 	Segments *billing.SegmentPolicy
 
+	// Meter counts the calls refused because of their key's preset; nil counts nowhere. Alerts is told of a platform
+	// or site preset that refuses every call it sees, under keys prefixed with Node, this node's name; nil watches no
+	// preset (presetWatch).
+	Meter  metric.Meter
+	Alerts alert.Sink
+	Node   string
+
 	Now  func() time.Time // default time.Now
 	Rand func() float64   // uniform in [0, 1); default math/rand/v2
 }
@@ -49,6 +59,7 @@ type Router struct {
 	// suspended is the platform's kill switch as Presets.Load last read it. It is apart from the snapshot so that it
 	// holds from the moment it is read, even when the rest of that build fails and the last snapshot stands.
 	suspended atomic.Bool
+	watch     *presetWatch
 }
 
 // New returns a router with no snapshot: Plan returns ErrStale until Replace gives it one.
@@ -57,9 +68,13 @@ func New(cfg Config) (*Router, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	watch, err := newPresetWatch(cfg)
+	if err != nil {
+		return nil, err
+	}
 	return &Router{
 		cfg: cfg, state: &state{endpoints: map[EndpointID]*epState{}, suppliers: map[SupplierID]*cooldown{}}, sticky: newSticky(cfg.StickyMax),
-		budget: newBudget(cfg.RetryRatio, cfg.RetryFloor, cfg.RetryWindow),
+		budget: newBudget(cfg.RetryRatio, cfg.RetryFloor, cfg.RetryWindow), watch: watch,
 	}, nil
 }
 
@@ -96,6 +111,9 @@ func (c *Config) validate() error {
 		if n < 0 {
 			return errors.New("routing: a limit is negative")
 		}
+	}
+	if c.Alerts != nil && c.Node == "" {
+		return errors.New("routing: an alert sink needs the node's name, which tells one node's signals from another's")
 	}
 	if c.ThrottleFloor <= 0 || c.ThrottleFloor > 1 || c.RetryRatio < 0 {
 		return fmt.Errorf("routing: the throttle floor %v must be in (0, 1] and the retry ratio %v not negative", c.ThrottleFloor, c.RetryRatio)
@@ -188,8 +206,9 @@ func (v KeyView) allows(c *candidate) bool {
 }
 
 // Replace makes s the snapshot Plan uses, if it is newer than the current one: a build that finishes late never
-// replaces a newer one.
+// replaces a newer one. It runs once a rebuild, which is also the clock the presets' windows close by.
 func (r *Router) Replace(s *Snapshot) {
+	r.watch.tick(r.cfg.Now())
 	for {
 		old := r.snap.Load()
 		if old != nil && !s.built.After(old.built) {

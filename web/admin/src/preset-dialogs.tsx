@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { ChangeDialog, isProblem, type Problem, useSnapshot } from "./change";
 import { Code, Facts } from "./parts";
 import { layerDefaultQuery, type PresetLayer, sourceClassesQuery } from "./queries";
+import { usePresetsHold } from "./routing-suspension";
 
 type Preset = AdminSchemas["RoutingPreset"];
 type Default = AdminSchemas["RoutingDefault"];
@@ -67,9 +68,10 @@ export function DefaultCard({
   const { t } = useTranslation();
   const query = useQuery(layerDefaultQuery(layer));
   const [open, setOpen] = useState(false);
+  const hold = usePresetsHold();
   const title = t(`routingPresets.defaults.title.${layer.scope}`);
   const edit = manage ? (
-    <Button size="md" onClick={() => setOpen(true)}>
+    <Button size="md" onClick={() => setOpen(true)} {...hold}>
       <Icon name="pencil" />
       {t("routingPresets.defaults.edit")}
     </Button>

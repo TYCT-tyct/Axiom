@@ -131,7 +131,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	entries = entries[:min(len(entries), attempts)] // an entry past the most attempts could never be reached
 	if len(entries) == 0 {
 		wait, err := r.nothing(&rec)
-		return Plan{Record: rec}, wait, err
+		return Plan{Record: rec, tally: preset.tally}, wait, err
 	}
 	for _, e := range entries {
 		rec.Route = append(rec.Route, e.Endpoint)
@@ -139,6 +139,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	return Plan{
 		Entries: entries, Segments: n.segments, MaxAttempts: attempts,
 		StartBy: now.Add(orDefault(preset.AttemptWindow, r.cfg.AttemptWindow)), StickyTTL: preset.StickyTTL, Record: rec,
+		tally: preset.tally,
 	}, nil, nil
 }
 

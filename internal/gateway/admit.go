@@ -173,16 +173,17 @@ func (h *Handler) planAdmission(it *admissionItem) error {
 	// search re-plans below with that bound; a retry after a queued backend attempt starts here again without it.
 	c.Request.SearchBytes = 0
 	plan, err := h.planRoute(c, it.admission)
-	if err != nil {
-		return err
+	if err == nil {
+		h.outage.recovered(depRouting)
+		it.admitted = billingAdmitted(it.admission, c)
+		plan, err = h.resolveSearch(c, plan, func() (routing.Plan, error) {
+			// The backend's injected results are input the context check must see. The request is the same pointer, so
+			// a second plan reads the SearchBytes the backend path just reserved and recomputes the output limit with it.
+			return h.planRoute(c, it.admission)
+		})
 	}
-	h.outage.recovered(depRouting)
-	it.admitted = billingAdmitted(it.admission, c)
-	plan, err = h.resolveSearch(c, plan, func() (routing.Plan, error) {
-		// The backend's injected results are input the context check must see. The request is the same pointer, so a
-		// second plan reads the SearchBytes the backend path just reserved and recomputes the output limit with it.
-		return h.planRoute(c, it.admission)
-	})
+	// Once a call, with the plan it is admitted by: the first plan of a backend search only chooses the path.
+	h.Router.Planned(plan, err)
 	if err != nil {
 		return err
 	}
