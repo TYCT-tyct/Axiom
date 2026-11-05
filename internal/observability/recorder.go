@@ -92,7 +92,7 @@ type Recorder struct {
 	// The attempts of the calls above, for the same reasons.
 	lostAttempts atomic.Int64
 
-	written, attemptsWritten, retries, lostMetric, attemptsLostMetric metric.Int64Counter
+	written, attemptsWritten, retries, lostMetric, attemptsLostMetric, unsettled metric.Int64Counter
 }
 
 // NewRecorder starts a Recorder that writes through db in scope, the platform scope: one batch holds the records of
@@ -180,6 +180,8 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 	r.written = counter(cfg.Meter, "axiom.observability.records.written", "Call records stored.")
 	r.attemptsWritten = counter(cfg.Meter, "axiom.observability.attempts.written", "Attempt records stored.")
 	r.retries = counter(cfg.Meter, "axiom.observability.write.retries", "Batch writes that failed and were tried again.")
+	r.unsettled = counter(cfg.Meter, "axiom.observability.records.unsettled",
+		"Call records stored pending: the ledger held no settled charge of the call when its record was written.")
 	r.lostMetric = counter(cfg.Meter, "axiom.observability.records.lost",
 		"Call records not kept, by reason: invalid, spill or shutdown.")
 	r.attemptsLostMetric = counter(cfg.Meter, "axiom.observability.attempts.lost",
@@ -416,11 +418,15 @@ func (r *Recorder) accepted(ctx context.Context, batch []queued, end position) {
 	}
 	r.outstanding.Add(-int64(len(batch)))
 	r.written.Add(ctx, int64(len(batch)))
-	var attempts int64
+	var attempts, unsettled int64
 	for _, q := range batch {
 		attempts += int64(len(q.attempts))
+		if q.call.BillingPending {
+			unsettled++
+		}
 	}
 	r.attemptsWritten.Add(ctx, attempts)
+	r.unsettled.Add(ctx, unsettled)
 }
 
 // fatalBatch stops admission for a failure the same rows will repeat. The batch stays in the spill so an operator can

@@ -98,12 +98,13 @@ func (q *Queries) ReadCharges(ctx context.Context, db DBTX, ids []uuid.UUID) ([]
 }
 
 const settledFinals = `-- name: SettledFinals :many
-SELECT request_id, price_versions, entry, charged, waived, final_usage FROM billing.reservations
-WHERE request_id = ANY($1::uuid[]) AND state = 'settled'
+SELECT request_id, state, price_versions, entry, charged, waived, final_usage FROM billing.reservations
+WHERE request_id = ANY($1::uuid[]) ORDER BY request_id FOR SHARE
 `
 
 type SettledFinalsRow struct {
 	RequestID     uuid.UUID
+	State         string
 	PriceVersions pgtype.FlatArray[uuid.UUID]
 	Entry         *int32
 	Charged       int64
@@ -112,7 +113,10 @@ type SettledFinalsRow struct {
 }
 
 // What a settlement stored of the named calls, for the call log to complete a record written before its settlement
-// committed. Corrections move charged and final_usage on the same row, so this is the charge as it stands now.
+// committed. Corrections move charged and final_usage on the same row, so this is the charge as it stands now. FOR
+// SHARE waits for a settlement that has written the row and not yet committed, then reads the row it committed: a
+// try the gateway gave up on may still be committing. The rows are locked by ID alone and their state is the caller's
+// to check, because a lock read skips a row whose visible version fails the WHERE clause without waiting for its writer.
 func (q *Queries) SettledFinals(ctx context.Context, db DBTX, ids []uuid.UUID) ([]SettledFinalsRow, error) {
 	rows, err := db.Query(ctx, settledFinals, ids)
 	if err != nil {
@@ -124,6 +128,7 @@ func (q *Queries) SettledFinals(ctx context.Context, db DBTX, ids []uuid.UUID) (
 		var i SettledFinalsRow
 		if err := rows.Scan(
 			&i.RequestID,
+			&i.State,
 			&i.PriceVersions,
 			&i.Entry,
 			&i.Charged,

@@ -11,6 +11,9 @@ import (
 	"time"
 	"uuid"
 
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
@@ -45,7 +48,8 @@ func TestRestartDoesNotDuplicateCommittedRecords(t *testing.T) {
 // without a settled charge it stays pending. A record moved into the spill twice (the node died between the move and
 // the removal of its file) puts two copies in one batch, and both are completed, so whichever is inserted carries the
 // amounts. A parked record that outlives its settled record (the node died between the two) is replayed after it and
-// changes nothing. The table is only inserted into, so none of this depends on how batches fall.
+// changes nothing. The table is only inserted into, so none of this depends on how batches fall. A record stored
+// pending is counted, so an operator sees a call whose charge the ledger does not hold.
 func TestAPendingRecordIsReplacedOrKept(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
@@ -88,7 +92,11 @@ func TestAPendingRecordIsReplacedOrKept(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := settledCall
 			rec.ID = uuid.NewV7()
-			cfg := Config{Dir: t.TempDir(), BatchSize: 10, FlushInterval: time.Hour, Ledger: ledgerOf(rec.ID, booked, tc.charged)}
+			reader := sdkmetric.NewManualReader()
+			cfg := Config{
+				Dir: t.TempDir(), BatchSize: 10, FlushInterval: time.Hour, Ledger: ledgerOf(rec.ID, booked, tc.charged),
+				Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"),
+			}
 			r := recorderOfDB(t, db, cfg)
 			slot, err := r.Admit()
 			if err != nil {
@@ -103,8 +111,40 @@ func TestAPendingRecordIsReplacedOrKept(t *testing.T) {
 			if got := readStoredCall(t, db, rec.ID); got != tc.want {
 				t.Errorf("stored %+v, want %+v", got, tc.want)
 			}
+			checkUnsettled(t, reader, tc.want.pending)
 		})
 	}
+}
+
+// checkUnsettled: the one record written is counted as stored pending when it is, and not otherwise.
+func checkUnsettled(t *testing.T, reader *sdkmetric.ManualReader, pending bool) {
+	t.Helper()
+	want := int64(0)
+	if pending {
+		want = 1
+	}
+	if got := counted(t, reader, "axiom.observability.records.unsettled"); got != want {
+		t.Errorf("%d records counted as stored pending, want %d", got, want)
+	}
+}
+
+// counted is the total of the named counter.
+func counted(t *testing.T, reader *sdkmetric.ManualReader, name string) (total int64) {
+	t.Helper()
+	var data metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &data); err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range data.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name == name {
+				for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
+					total += point.Value
+				}
+			}
+		}
+	}
+	return total
 }
 
 // ledgerOf is a ledger that holds a settled charge of amounts for id when charged, and none for any other call.
