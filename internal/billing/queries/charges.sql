@@ -11,3 +11,9 @@ WHERE request_id = ANY(@ids::uuid[]) AND state = 'settled' AND entry IS NOT NULL
 -- snapshot: a corrected reservation's charged amount moved, and the ledger is the authority.
 SELECT request_id, charged FROM billing.reservations
 WHERE request_id = ANY(@ids::uuid[]) AND state IN ('settled', 'cleanup_settled');
+
+-- name: SettledFinals :many
+-- What a settlement stored of the named calls, for the call log to complete a record written before its settlement
+-- committed. Corrections move charged and final_usage on the same row, so this is the charge as it stands now.
+SELECT request_id, price_versions, entry, charged, waived, final_usage FROM billing.reservations
+WHERE request_id = ANY(@ids::uuid[]) AND state = 'settled';

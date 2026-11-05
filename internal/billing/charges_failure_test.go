@@ -6,6 +6,7 @@ import (
 	"testing"
 	"uuid"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/telemetry"
 	"axiom/internal/platform/telemetry/telemetrytest"
@@ -59,4 +60,53 @@ func checkChargeReadFailure(t *testing.T, mutation string) {
 	if got := telemetrytest.Metric(t, tel, "axiom_billing_charge_details_unavailable_total"); got != "1" {
 		t.Errorf("failed reads: %s", got)
 	}
+}
+
+// TestSettledFinalsReadsWhatSettlementStored: the call log completes a record written before its settlement from what
+// the settlement stored, in the platform scope: the charge, the waiver, the price version and the usage, as Settle
+// returned them. A call not settled is absent, and so is one whose stored usage this build cannot read, which is
+// logged and counted rather than failing the read: the call log's writer retries a failed read forever.
+func TestSettledFinalsReadsWhatSettlementStored(t *testing.T) {
+	t.Parallel()
+	b := newBank(t, 10000, 0, Config{})
+	good, unreadable, unsettled := b.hold(100), b.hold(100), b.hold(100)
+	want := b.settleWith(good, outcome(Committed, FinishStop, used(t, 3, 2, 0)))
+	b.settleWith(unreadable, outcome(Committed, FinishStop, used(t, 3, 2, 0)))
+	b.sql(fmt.Sprintf(`UPDATE billing.reservations SET final_usage='[{"future_usage":true}]'::jsonb WHERE request_id='%s'`, unreadable.id))
+	tel, err := telemetry.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := tel.Shutdown(t.Context()); err != nil {
+			t.Error(err)
+		}
+	}()
+	logs := new(telemetrytest.Buffer)
+	reader := NewChargeReader(logs.Logger(), tel.Metrics.Meter("billing/test"))
+	var got map[uuid.UUID]Final
+	if err := b.app.Tx(t.Context(), b.platform, func(tx pg.Tx) (err error) {
+		got, err = reader.SettledFinals(t.Context(), tx, []uuid.UUID{good.id, unreadable.id, unsettled.id})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f, ok := got[good.id]
+	if !ok || len(got) != 1 {
+		t.Fatalf("settled finals %+v, want only %s", got, good.id)
+	}
+	if f.Charged.Cmp(want.Charged) != 0 || f.Waived != want.Waived || !samePriceVersion(f.PriceVersion, want.PriceVersion) ||
+		len(f.Segments) != len(want.Segments) || f.Segments[0].Usage.Count(catalog.ItemOutput) != want.Segments[0].Usage.Count(catalog.ItemOutput) {
+		t.Errorf("settled final %+v, want what Settle returned, %+v", f, want)
+	}
+	if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), unreadable.id.String()) {
+		t.Errorf("unreadable usage not logged by request ID: %s", logs.String())
+	}
+	if got := telemetrytest.Metric(t, tel, "axiom_billing_charge_details_unavailable_total"); got != "1" {
+		t.Errorf("failed reads: %s", got)
+	}
+}
+
+func samePriceVersion(a, b *uuid.UUID) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
 }

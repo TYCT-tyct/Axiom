@@ -259,3 +259,28 @@ func ChargedCalls(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID
 	}
 	return out, nil
 }
+
+// SettledFinals returns the Final stored on the named settled calls, after corrections, keyed by request: usage, price
+// version, charge and waiver, which is what the call log keeps of a settlement. A request the scope cannot see, or one
+// not settled, is absent. So is one whose stored usage this build cannot read (a newer node may have written it): it is
+// logged and counted, and the caller keeps what it had, because a query failure is the only error worth retrying.
+func (reader *ChargeReader) SettledFinals(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]Final, error) {
+	rows, err := queries.SettledFinals(ctx, tx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("billing: read settled calls: %w", err)
+	}
+	out := make(map[uuid.UUID]Final, len(rows))
+	for _, r := range rows {
+		segments, err := decodeUsage(r.FinalUsage)
+		if err != nil {
+			reader.logger.ErrorContext(ctx, "billing: a settled call's usage is unreadable", "request_id", r.RequestID.String(), "err", err)
+			reader.failed.Add(ctx, 1)
+			continue
+		}
+		out[r.RequestID] = Final{
+			PriceVersion: settledVersion(r.PriceVersions, r.Entry), Segments: segments,
+			Charged: platform.AmountExact(r.Charged), Waived: r.Waived,
+		}
+	}
+	return out, nil
+}

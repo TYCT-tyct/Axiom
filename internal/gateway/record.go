@@ -14,6 +14,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
 	"axiom/internal/platform"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 )
@@ -222,27 +223,49 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 		Model: c.Request.Model, ClientApp: t.clientApp,
 		AppReferer: t.app.referer, AppTitle: t.app.title, AppCategories: t.app.categories,
 		Class: "chat", ConsentVersion: noConsent,
-		Usage:       usageOf(f),
-		ServiceTier: tierOf(f),
-		// The charge is what the floor let the user pay; the cost is what the attempts cost us, whether or not the user
-		// paid it. Free is the waiver rules' verdict and nothing else: a model priced at zero, or a charge the balance's
-		// floor cut to nothing, is not a free call.
-		PriceNano: f.Charged.CeilAmount(), CostNano: costOf(o), Currency: t.currency,
-		Free:          f.Waived,
-		Latency:       end.Sub(t.start),
-		Route:         route,
-		Streamed:      c.Request.Stream,
-		CacheHit:      t.cacheHit,
-		PhysicalInput: physicalInputOf(f),
-	}
-	if f.PriceVersion != nil {
-		rec.PriceVersion = f.PriceVersion.String()
+		// The cost is what the attempts cost us, whether or not the user paid it.
+		Amounts: amountsOf(f), CostNano: costOf(o), Currency: t.currency,
+		Latency:  end.Sub(t.start),
+		Route:    route,
+		Streamed: c.Request.Stream,
+		CacheHit: t.cacheHit,
 	}
 	rec.Attempts = attemptsOf(o, t.tries)
 	if n := len(rec.Attempts); n > 0 {
 		rec.FinishReason = finishOf(o.Attempts[n-1])
 	}
 	return rec
+}
+
+// amountsOf is what the settlement charged, as the call log keeps it. The charge is what the floor let the user pay.
+// Free is the waiver rules' verdict and nothing else: a model priced at zero, or a charge the balance's floor cut to
+// nothing, is not a free call.
+func amountsOf(f billing.Final) observability.Amounts {
+	a := observability.Amounts{
+		Usage: usageOf(f), ServiceTier: tierOf(f), PriceNano: f.Charged.CeilAmount(), Free: f.Waived,
+		PhysicalInput: physicalInputOf(f),
+	}
+	if f.PriceVersion != nil {
+		a.PriceVersion = f.PriceVersion.String()
+	}
+	return a
+}
+
+// LedgerAmounts is the call log's Ledger (observability.Config.Ledger): the Amounts of the settled calls among ids, read
+// from billing in the call log writer's transaction and converted as the call path converts its own Final, so a pending
+// record the writer completes is stored as its settled record would have been.
+func LedgerAmounts(charges *billing.ChargeReader) observability.Ledger {
+	return func(ctx context.Context, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]observability.Amounts, error) {
+		finals, err := charges.SettledFinals(ctx, tx, ids)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[uuid.UUID]observability.Amounts, len(finals))
+		for id, f := range finals {
+			out[id] = amountsOf(f)
+		}
+		return out, nil
+	}
 }
 
 // physicalInputOf is the prompt total the upstream reported, added over the billed samplings; nil when none reported

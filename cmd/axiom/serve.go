@@ -516,11 +516,13 @@ func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.K
 	return queue, recorder, recovery, registration, signals, paymentSignals, nil
 }
 
-// startRecorder starts the call-record writer, reporting to the node's metrics.
+// startRecorder starts the call-record writer, reporting to the node's metrics. It completes a pending record from
+// billing's ledger when the call's settlement committed after all.
 func startRecorder(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, dir string, logger *slog.Logger) (*observability.Recorder, error) {
 	cfg := callRecords
 	cfg.Dir = dir
 	cfg.Meter = tel.Metrics.Meter("axiom/observability")
+	cfg.Ledger = gateway.LedgerAmounts(billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")))
 	return observability.NewRecorder(ctx, db, pg.PlatformScope(), cfg, logger)
 }
 
