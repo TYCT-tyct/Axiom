@@ -184,16 +184,22 @@ func TestSetPriceEnvelope(t *testing.T) {
 			t.Errorf("%+v: %v", e, err)
 		}
 	}
+	db.expectEnvelope(t, site, 2, 2000)
+	if got := db.text(t, `SELECT string_agg(coalesce(detail->'before'->>'rev', '-') || '>' || (detail->'after'->>'rev'), ' ' ORDER BY id)
+		FROM platform.audit_log WHERE action = 'price_envelope.set' AND target_id = '`+site.String()+`'`); got != "->1 1>2" {
+		t.Errorf("the audit: %s", got)
+	}
+}
+
+// expectEnvelope checks that site's is the only envelope, at revision rev with a model's daily move of change.
+func (db opsDB) expectEnvelope(t *testing.T, site uuid.UUID, rev, change int64) {
+	t.Helper()
 	var listed []operations.PriceEnvelope
 	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
 		listed, err = operations.PriceEnvelopes(t.Context(), tx)
 		return err
-	}); err != nil || len(listed) != 1 || listed[0].Site != site || listed[0].Rev != 2 || listed[0].ModelDailyChange != 2000 {
+	}); err != nil || len(listed) != 1 || listed[0].Site != site || listed[0].Rev != rev || listed[0].ModelDailyChange != change {
 		t.Errorf("the envelopes: %+v %v", listed, err)
-	}
-	if got := db.text(t, `SELECT string_agg(coalesce(detail->'before'->>'rev', '-') || '>' || (detail->'after'->>'rev'), ' ' ORDER BY id)
-		FROM platform.audit_log WHERE action = 'price_envelope.set' AND target_id = '`+site.String()+`'`); got != "->1 1>2" {
-		t.Errorf("the audit: %s", got)
 	}
 }
 
