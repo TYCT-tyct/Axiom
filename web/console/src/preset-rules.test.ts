@@ -70,6 +70,11 @@ it.each([{ min_score: 90 }, { min_score_confidence: 0.5 }])("refuses a stored sc
   });
 });
 
+// A null score is no threshold to the server, so the rule saves, without it.
+it.each([{ min_score: null }, { min_score_confidence: null }])("saves a null score as no score", (score) => {
+  expect(rulesOf(draftOf(rules({ default: score })))).toEqual({ rules: { default: {} } });
+});
+
 it("refuses an override that names nothing, by its place", () => {
   const draft = draftOf(rules({ default: {}, rules: [{ author: "openai" }, { model: " " }] }));
   expect(rulesOf(draft)).toEqual({ invalid: { rule: 1, field: "name" } });

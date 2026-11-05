@@ -85,7 +85,8 @@ function ruleDraft(value: unknown): RuleDraft {
     classes: texts(rule.classes),
     policies: texts(rule.policies),
     verifiedOnly: rule.verified_only === true,
-    scored: rule.min_score !== undefined || rule.min_score_confidence !== undefined,
+    // The server reads null as no threshold (a nil pointer in internal/routing/rules.go), so only a value asks for one.
+    scored: rule.min_score != null || rule.min_score_confidence != null,
     maxPrice: { prompt: text(price.prompt), completion: text(price.completion), request: text(price.request) },
     rest: without(rule, [...ruleMembers, "author", "model"]),
   };
