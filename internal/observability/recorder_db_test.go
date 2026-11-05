@@ -40,36 +40,56 @@ func TestRestartDoesNotDuplicateCommittedRecords(t *testing.T) {
 
 // TestAPendingRecordIsReplacedOrKept: a pending record is parked, and only one record of its call reaches the call log:
 // the settled one when it comes, the pending one when the settlement goes to the cleanup or the node dies first. A
-// parked record that outlives its settled record (the node died between the two) is replayed after it and changes
-// nothing. The table is only inserted into, so none of this depends on how batches fall.
+// pending record whose settlement committed all the same (the node died before keeping the settled record, or the last
+// try committed after it was given up) is written with the ledger's amounts, which a correction may have moved since;
+// without a settled charge it stays pending. A record moved into the spill twice (the node died between the move and
+// the removal of its file) puts two copies in one batch, and both are completed, so whichever is inserted carries the
+// amounts. A parked record that outlives its settled record (the node died between the two) is replayed after it and
+// changes nothing. The table is only inserted into, so none of this depends on how batches fall.
 func TestAPendingRecordIsReplacedOrKept(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
 	settledCall := record(uuid.NewV7(), now)
+	booked := settledCall.Amounts
+	booked.PriceNano++ // a correction moved the charge after the call ended
 	settled := storedCall{1, 2, settledCall.PriceNano, false, settledCall.Free}
+	fromLedger := storedCall{1, 2, booked.PriceNano, false, booked.Free}
 	pending := storedCall{1, 2, 0, true, false}
 	for _, tc := range []struct {
-		name string
-		end  func(t *testing.T, r *Recorder, slot *Slot, settled CallRecord)
-		want storedCall
+		name    string
+		end     func(t *testing.T, r *Recorder, slot *Slot, settled CallRecord)
+		charged bool // the ledger holds the call's settled charge
+		want    storedCall
 	}{
 		{"replaced by its settled record", func(t *testing.T, _ *Recorder, slot *Slot, rec CallRecord) {
 			commit(t, slot, rec)
-		}, settled},
-		{"left to the cleanup", func(_ *testing.T, _ *Recorder, slot *Slot, _ CallRecord) { slot.Release() }, pending},
-		{"parked when the node died", func(_ *testing.T, r *Recorder, _ *Slot, _ CallRecord) { crash(r) }, pending},
+		}, true, settled},
+		{"left to the cleanup", func(_ *testing.T, _ *Recorder, slot *Slot, _ CallRecord) { slot.Release() }, false, pending},
+		{"given up on after its last try committed", func(_ *testing.T, _ *Recorder, slot *Slot, _ CallRecord) {
+			slot.Release()
+		}, true, fromLedger},
+		{"parked when the node died", func(_ *testing.T, r *Recorder, _ *Slot, _ CallRecord) { crash(r) }, false, pending},
+		{"parked when the node died after its settlement committed", func(_ *testing.T, r *Recorder, _ *Slot, _ CallRecord) {
+			crash(r)
+		}, true, fromLedger},
+		{"moved into the spill twice when the node died before removing it", func(t *testing.T, r *Recorder, _ *Slot, rec CallRecord) {
+			crash(r)
+			parked := readParked(t, r.cfg.Dir, rec.ID)
+			crash(recorderOfDB(t, db, r.cfg))         // the start moved the parked record into the spill, then died
+			writeParked(t, r.cfg.Dir, rec.ID, parked) // before its removal survived: the next start moves it again
+		}, true, fromLedger},
 		{"parked after its settled record when the node died", func(t *testing.T, r *Recorder, slot *Slot, rec CallRecord) {
 			parked := readParked(t, r.cfg.Dir, rec.ID)
 			commit(t, slot, rec)
 			crash(r)
 			writeParked(t, r.cfg.Dir, rec.ID, parked) // the removal after the settled record did not survive
-		}, settled},
+		}, true, settled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := settledCall
 			rec.ID = uuid.NewV7()
-			dir := t.TempDir()
-			r := recorderOfDB(t, db, Config{Dir: dir, BatchSize: 10, FlushInterval: time.Hour})
+			cfg := Config{Dir: t.TempDir(), BatchSize: 10, FlushInterval: time.Hour, Ledger: ledgerOf(rec.ID, booked, tc.charged)}
+			r := recorderOfDB(t, db, cfg)
 			slot, err := r.Admit()
 			if err != nil {
 				t.Fatal(err)
@@ -77,13 +97,26 @@ func TestAPendingRecordIsReplacedOrKept(t *testing.T) {
 			commit(t, slot, pendingOf(rec))
 			tc.end(t, r, slot, rec)
 			crash(r) // a no-op when the case already stopped it
-			if err := recorderOfDB(t, db, Config{Dir: dir, BatchSize: 10, FlushInterval: time.Hour}).Close(t.Context()); err != nil {
+			if err := recorderOfDB(t, db, cfg).Close(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			if got := readStoredCall(t, db, rec.ID); got != tc.want {
 				t.Errorf("stored %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// ledgerOf is a ledger that holds a settled charge of amounts for id when charged, and none for any other call.
+func ledgerOf(id uuid.UUID, amounts Amounts, charged bool) Ledger {
+	return func(_ context.Context, _ pg.Tx, ids []uuid.UUID) (map[uuid.UUID]Amounts, error) {
+		out := map[uuid.UUID]Amounts{}
+		for _, asked := range ids {
+			if asked == id && charged {
+				out[id] = amounts
+			}
+		}
+		return out, nil
 	}
 }
 
@@ -152,10 +185,9 @@ func commit(t *testing.T, slot *Slot, rec CallRecord) {
 	}
 }
 
-// pendingOf is rec recorded before its settlement: no usage, price, price version or waiver.
+// pendingOf is rec recorded before its settlement: none of its Amounts.
 func pendingOf(rec CallRecord) CallRecord {
-	rec.BillingPending, rec.PriceNano, rec.Free, rec.PriceVersion = true, 0, false, ""
-	rec.Usage, rec.PhysicalInput = nil, nil
+	rec.BillingPending, rec.Amounts = true, Amounts{}
 	return rec
 }
 

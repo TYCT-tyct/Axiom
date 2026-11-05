@@ -9,6 +9,7 @@
 ```go
 func Module() pg.Module                                   // 迁移，交给 cmd/axiom
 func NewRecorder(ctx, db *pg.DB, scope pg.Scope, cfg Config, logger *slog.Logger) (*Recorder, error) // 锁定并校验 spill；目录被占用、不可写、段损坏时启动失败
+type Ledger func(ctx, tx pg.Tx, ids []uuid.UUID) (map[uuid.UUID]Amounts, error) // Config.Ledger：结算已提交的调用存下的金额，写库者补全待定记录用；cmd 接 gateway.LedgerAmounts
 func (r *Recorder) Admit() (*Slot, error)                 // 调用准入前预占一条记录的位置；spill 满返回 ErrBacklog，已坏返回 ErrBroken
 func (s *Slot) Commit(rec CallRecord) error               // 把记录追加到本机 spill 并 fsync；返回后进程崩溃、主机断电也能重放。待定记录（BillingPending）改为停放，Slot 不关，等同一调用的已结算记录替换它
 func (s *Slot) Release()                                  // 调用结束但没有记录时归还位置；有停放的待定记录时把它移进 spill；已结算记录 Commit 之后是空操作
@@ -33,7 +34,7 @@ func HashEndUser(key []byte, id string) EndUserHash       // 带密钥的哈希�
 var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spill 满 / 已无法记录 / Close 仍有未写记录
 ```
 
-`CallRecord` 带一个请求的元数据和它的每次尝试（`AttemptRecord`）；`call_log` 一行是调用，`call_attempt` 一行是尝试。尝试的 `Seq` 从 1 连续到最多 `platform.MaxAttemptSeq`（33：路由的 3 次回退加模型侧循环的每次采样，迁移 `00016_loop_attempts.sql` 放宽了表上的 CHECK），写入时校验；调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 由最后一个尝试算出，因此不会与尝试表不一致。查询和生成的代码在 `internal/store`（sqlc，`sqlc.yaml` 的 `observability` 项），包外引用不到，所以所有写入都经过 `CallRecord`、`AttemptRecord`、`Recorder`，所有读取都经过下面按账户的查询和「追溯」的 `GetTrace`。`CallRecord` 只用本模块、`catalog`、`platform` 的类型和 `uuid.UUID`（`accounts` 的带类型 ID 随它的表加入后换上）；`AttemptRecord` 用 `uuid.UUID`、`platform.AttemptSeq` 和时间。HTTP 处理器随 gateway 加入，调用的就是 `ListOwn`、`GetOwn` 和按日/模型/工作区的 `ActivityOwn`；尝试不向用户开放（用户看不到端点、成本和路由）。
+`CallRecord` 带一个请求的元数据和它的每次尝试（`AttemptRecord`），结算的金额（用量、档位、价格版本、实收、免单、物理输入）合在内嵌的 `Amounts` 里，待定记录没有它，补全时整组换上；`call_log` 一行是调用，`call_attempt` 一行是尝试。尝试的 `Seq` 从 1 连续到最多 `platform.MaxAttemptSeq`（33：路由的 3 次回退加模型侧循环的每次采样，迁移 `00016_loop_attempts.sql` 放宽了表上的 CHECK），写入时校验；调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 由最后一个尝试算出，因此不会与尝试表不一致。查询和生成的代码在 `internal/store`（sqlc，`sqlc.yaml` 的 `observability` 项），包外引用不到，所以所有写入都经过 `CallRecord`、`AttemptRecord`、`Recorder`，所有读取都经过下面按账户的查询和「追溯」的 `GetTrace`。`CallRecord` 只用本模块、`catalog`、`platform` 的类型和 `uuid.UUID`（`accounts` 的带类型 ID 随它的表加入后换上）；`AttemptRecord` 用 `uuid.UUID`、`platform.AttemptSeq` 和时间。HTTP 处理器随 gateway 加入，调用的就是 `ListOwn`、`GetOwn` 和按日/模型/工作区的 `ActivityOwn`；尝试不向用户开放（用户看不到端点、成本和路由）。
 
 ## 表（schema `observability`）
 
@@ -43,7 +44,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 - **谁**：`site_id`、`account_id`（行级安全看这两列）、`workspace_id`、`key_id`、`end_user_hash`（HMAC-SHA256 的十六进制）、`ip`。
 - **走了哪**：`model`（客户端要的公开名字）；`endpoint_id`、`source_class`、`egress`、`attempt_count` 都取自最后一个 `AttemptRecord`（没有尝试时分别是全零 UUID、`''`、`''`、0）；`route`（路由过程，≤ 8 KiB 的 JSON 对象，结构由 routing 定）。**每次尝试在 `call_attempt`**，供应商的成本和对账键仍在 suppliers，按同一个请求 ID 和尝试序号关联；账本交易不抄在这里，按请求 ID 从 billing 读（见「追溯」）。
 - **结果**：`usage`（计费项名字到数量的 JSON，含原生 token）、`service_tier`、`price_nano`、`cost_nano`（计费的最小单位）、`currency`、`free_of_charge`、`streamed`、`physical_input`（写入时能确定的物理输入；未知为 −1 的库内哨兵，读取时转成可空）、`latency_ms`、`first_token_ms`、`finish_reason`、`error_kind`。
-- **待定**：`billing_pending`（迁移 `00021`，默认 false）：这条记录写在结算之前，而结算再也不会写进日志（交给了清理，或节点先死了），用量、`service_tier`、`price_version`、`price_nano`、`free_of_charge`、`physical_input` 都不是结算的数。账户的读取跳过它，运营的追溯和列表标出它（「写入」）。
+- **待定**：`billing_pending`（迁移 `00021`，默认 false）：这条记录写在结算之前，入库时账本里也没有它已结算的收费（结算交给了清理，或节点死在结算提交之前），用量、`service_tier`、`price_version`、`price_nano`、`free_of_charge`、`physical_input` 都不是结算的数。结算已提交的待定记录入库时按账本补全，不再待定（「写入」）。账户的读取跳过它，运营的追溯和列表标出它（「写入」）。
 - **权利**：`consent_version`、`training_allowed`，只能在写入时记下。
 - **写入标签**：`client_app`、`session_id`、`subagent_id`、`request_class`、`language`、`used_tools`、`has_image`、`has_file`；应用自己报的名字在 `app_referer`（URL，≤2048，只留 scheme、host 和 path）、`app_title`（≤200）、`app_categories`（最多两个小写连字符类别，≤64），由 gateway 从 `HTTP-Referer`、`X-OpenRouter-Title`（或旧的 `X-Title`）、`X-OpenRouter-Categories` 取出、去控制字符并截断后写入。分析标签随后台分类器加入，另表保存。
 
@@ -112,6 +113,8 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 **记录先落本机并持久化，再异步入库。** gateway 在准入时调用 `Admit`，为这次调用预占一条记录的位置；调用结算后、响应结束前，`Executor` 用这个位置 `Commit`：记录先校验、编码成一行 JSON，追加到 `AXIOM_CALL_LOG_DIR` 下的段文件，并 `fsync` 后才返回。并发的 `Commit` 登记位置后共用一次 `file.Sync()`：一个领导者 sync 活动段到当前末尾，释放所有被覆盖的等待者，sync 期间到达的留给下一轮；顺序调用仍各付一次，并发调用把这段固定成本摊薄。`Commit` 返回后记录已经在磁盘上，进程崩溃和主机断电都不会丢。写协程按段内顺序读出来，只读到已经 fsync 的位置，批量写数据库，写成功才删段：否则它可能把一条还没 fsync 的记录写进库并把确认位置记到它后面，断电后段比确认位置短，下一次启动只能拒绝。这样调用路径不等待数据库，也不会因为积压到上限而把已服务的调用丢掉。
 
 **结算留给后台的调用。** gateway 的前台结算没写成时，结尾写着「费用待定」，记录照样在结尾之前 `Commit`，`CallRecord.BillingPending` 为真，用量、售价、价格版本和免单留空。这条待定记录不进段文件，而是停放在 spill 目录下的 `pending/<请求 ID>.rec`：4 字节 CRC32C 加与段内相同的记录字节，先写临时文件并 fsync，再改名、fsync 目录，所以 `Commit` 返回时它同样持久；文件经 `os.Root` 打开，名字出不了这个目录。`Slot` 不关，占着原来的位置：后台结算提交后 gateway 用它 `Commit` 已结算记录（同一个结束时间），记录照常进段文件，然后删掉停放的文件；结算放弃或交给清理时 `Release` 把停放的记录移进段文件，它就是这次调用的记录；第二条待定记录被拒（`ErrClosed`）。每次启动在写协程开始前，把所有停放的记录追加到段文件末尾再删掉，打断的临时文件直接删掉，校验和不对的拒绝启动并给出文件名（`TestADamagedParkedRecordFailsTheStart`）。因此一次调用只有一条记录进数据库，表仍然只插入，归档的行数核对照旧成立；崩溃在已结算记录追加之后、删文件之前，重放的待定记录排在已结算记录后面，被 `ON CONFLICT DO NOTHING` 挡掉。
+
+**待定记录按账本补全。** 进了段文件的待定记录，结算仍可能已经提交：节点死在后台结算提交之后、已结算记录 fsync 之前，或后台结算的最后一次尝试在放弃之后才确认提交。`dbWriter` 插入一批之前，在同一个事务里把批里待定记录的请求 ID 交给 `Config.Ledger`（cmd 接的是 `gateway.LedgerAmounts`，读 billing 已结算预留存的 `Final`），返回的 `Amounts` 经 `row.settle` 写进这一行并去掉待定（同一请求在一批里有几份待定记录时每份都补全：启动把停放的记录移进 spill 之后、删文件之前崩溃，下一次启动会再移一次，先插入的那份才是留下的），和 `newCallRow` 写记录自己的金额是同一个函数；没返回的照原样存成待定。批里没有待定记录时不调用它。账本读失败按普通写失败退避重试；补全后批在内存里保留补全的值，重试不再读账本。`Ledger` 为 nil（测试）时待定记录照原样写。测试：`TestAPendingRecordIsReplacedOrKept` 覆盖放弃后、节点死后结算已提交的补全（账本的值被更正过也照它），没有收费的仍待定，移进 spill 两次的同批两份都补全，停放文件晚于已结算记录重放时保留已结算行。
 
 **旧版本碰不到待定记录。** 不认识待定记录的版本会把它当成一条已结算、价格为 0 的调用存下，所以待定记录在哪里都要挡住它。停放的文件在 `pending/` 里，旧版本不看这个目录。移进段文件的待定记录（`Release` 或启动时移入）只写进段头为 `AXIOM-WAL-2\n` 的段：追加待定记录时活动段不是这种段就先换段，之后的普通记录可以跟在同一段里。旧版本只接受 `AXIOM-WAL-1\n`，遇到这种段拒绝启动并报出文件名，而不是读走它；回滚前要让新版本把 spill 写完。写完时这种段被换掉，`Close` 关闭期间也换，所以排空的 spill 里不留它（`TestPendingRecordsKeepOldBinariesOut`）。用 `origin/main` 的代码实测过：有这种段时拒绝启动，排空后照常启动，重新升级后两条记录都写入。`Close` 报告的未写条数含停放的记录，由 Slot 计数，不读目录（`TestCloseReportsParkedRecords`）。
 

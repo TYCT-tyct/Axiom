@@ -130,7 +130,7 @@ func recorderOfDB(t *testing.T, db *pg.DB, cfg Config) *Recorder {
 	if cfg.WriteTimeout == 0 {
 		cfg.WriteTimeout = 5 * time.Second
 	}
-	r, err := newRecorder(context.Background(), cfg, dbWriter(db, platformScope), isBadRow, quiet)
+	r, err := newRecorder(context.Background(), cfg, dbWriter(db, platformScope, cfg.Ledger), isBadRow, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}

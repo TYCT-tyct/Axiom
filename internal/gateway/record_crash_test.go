@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,33 +24,65 @@ import (
 // pending, before its ending is written, and the background settlement completes that record once it commits. A node
 // killed before the background settlement, or after it committed and before its settled record was kept, still has
 // the call's record on the next start, once, and the call is charged once by the settlement that committed or not at
-// all, which leaves the reservation to the cleanup. The kill stops the call log without a drain, as a killed process
-// leaves its spill, and fences the dead node's background goroutine off the ledger and the log. A record left pending
-// is kept but not read as a call without a cost: the account's generation lookup does not find it.
+// all, which leaves the reservation to the cleanup. The record of a settlement that committed carries the ledger's
+// amounts, which the next start's writer reads from billing; one without a settlement stays pending. Replaying the
+// same parked record again, as a crash between its insert and the removal of its file would, changes nothing. The kill
+// stops the call log without a drain, as a killed process leaves its spill, and fences the dead node's background
+// goroutine off the ledger and the log. A record left pending is kept but not read as a call without a cost: the
+// account's generation lookup does not find it.
 func TestACallSettledInTheBackgroundKeepsItsRecordThroughACrash(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		end     func(*dyingNode)
 		charges int64
-		pending bool // the record has no amounts: none were known when the node died
+		pending bool // the record has no amounts: the ledger has no settlement of the call
 	}{
 		{"not killed", (*dyingNode).live, 1, false},
 		{"killed before the background settlement", (*dyingNode).dieBeforeSettlement, 0, true},
-		{"killed after the background settlement committed", (*dyingNode).dieAfterCommit, 1, true},
+		{"killed after the background settlement committed", (*dyingNode).dieAfterCommit, 1, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			n := newDyingNode(t)
 			n.call()
 			tc.end(n)
-			if err := callLog(t, n.r, n.dir).Close(t.Context()); err != nil { // the next start replays the spill
+			parked := t.TempDir()
+			if err := os.CopyFS(parked, os.DirFS(filepath.Join(n.dir, "pending"))); err != nil {
 				t.Fatal(err)
 			}
+			n.restart() // the next start replays the spill
 			checkRecordAndCharge(n.r, tc.pending, tc.charges)
 			n.checkGeneration(tc.pending)
+
+			stored := n.storedRecord()
+			if err := os.CopyFS(filepath.Join(n.dir, "pending"), os.DirFS(parked)); err != nil {
+				t.Fatal(err)
+			}
+			n.restart()
+			if again := n.storedRecord(); again != stored {
+				t.Errorf("the record after the repair ran again:\n%s\nwant it unchanged:\n%s", again, stored)
+			}
 		})
 	}
+}
+
+// restart starts the node's call log again on its directory and closes it once the spill is written.
+func (n *dyingNode) restart() {
+	if err := callLog(n.t, n.r, n.dir).Close(n.t.Context()); err != nil {
+		n.t.Fatal(err)
+	}
+}
+
+// storedRecord is the call's one row in the call log, every column.
+func (n *dyingNode) storedRecord() (row string) {
+	n.t.Helper()
+	if err := n.r.db.Tx(n.t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(n.t.Context(), "SELECT to_jsonb(l)::text FROM observability.call_log l").Scan(&row)
+	}); err != nil {
+		n.t.Fatal(err)
+	}
+	return row
 }
 
 // dyingNode is one node whose ledger takes no settlement until writable is set, so its call's ending goes out pending
@@ -165,8 +199,8 @@ func (n *dyingNode) checkGeneration(pending bool) {
 	}
 }
 
-// checkRecordAndCharge: the call has one record, pending without amounts or settled at the ledger's charge, and the
-// ledger booked charges settlements.
+// checkRecordAndCharge: the call has one record, pending without amounts or settled at the ledger's charge, price
+// version and waiver, and the ledger booked charges settlements.
 func checkRecordAndCharge(r *rig, pending bool, charges int64) {
 	r.t.Helper()
 	settled, wantPending := int64(1), int64(0)
@@ -181,7 +215,8 @@ func checkRecordAndCharge(r *rig, pending bool, charges int64) {
 		r.t.Errorf("%d pending records without amounts, want %d", n, wantPending)
 	}
 	if n := r.count(`SELECT count(*) FROM observability.call_log l JOIN billing.reservations v ON v.request_id = l.id
-		WHERE NOT l.billing_pending AND v.charged > 0 AND l.price_nano = v.charged`); n != settled {
+		WHERE NOT l.billing_pending AND v.state = 'settled' AND v.charged > 0 AND l.price_nano = v.charged
+		AND l.price_version = v.price_versions[v.entry + 1] AND l.free_of_charge = v.waived AND l.usage <> '{}'`); n != settled {
 		r.t.Errorf("%d settled records at the ledger's charge, want %d", n, settled)
 	}
 	if n := r.count("SELECT count(*) FROM billing.transactions WHERE kind = 'settle'"); n != charges {
@@ -195,6 +230,7 @@ func callLog(t *testing.T, r *rig, dir string) *observability.Recorder {
 	records, err := observability.NewRecorder(t.Context(), r.db, platformScope, observability.Config{
 		Dir: dir, Capacity: 8, BatchSize: 8, FlushInterval: time.Hour,
 		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
+		Ledger: LedgerAmounts(billing.NewChargeReader(nil, nil)),
 	}, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)

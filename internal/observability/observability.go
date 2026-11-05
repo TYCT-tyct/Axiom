@@ -82,7 +82,6 @@ type AttemptRecord struct {
 // call's endpoint, source class, egress and attempt count are the last attempt's, so the row cannot disagree with its
 // attempts.
 type CallRecord struct {
-	PriceVersion                     string
 	ID                               uuid.UUID // the request ID
 	At                               time.Time // when the request started
 	Site, Account, Workspace, Key    uuid.UUID
@@ -97,22 +96,31 @@ type CallRecord struct {
 	Model                            string // the public name the client asked for
 	Attempts                         []AttemptRecord
 	Route                            []byte // a JSON object, routing's record of how the endpoint was chosen
-	Usage                            map[catalog.Item]int64
-	ServiceTier                      catalog.ServiceTier
-	PriceNano, CostNano              int64
-	Currency                         platform.Currency
-	Free                             bool
-	Latency, FirstToken              time.Duration // FirstToken is 0 when no output was produced
-	FinishReason, ErrorKind          string
-	ConsentVersion                   string
-	TrainingAllowed                  bool
-	Streamed                         bool
-	CacheHit                         bool   // answered from the response cache, with no upstream attempt
-	PhysicalInput                    *int64 // the upstream's prompt total, nil when it reported none
-	// BillingPending is a record written before the call's settlement was: its usage, price and waiver are not known
-	// yet. Slot.Commit parks it and stays open for the settled record of the same call, which replaces it; it reaches
-	// the call log only when none will (README「写入」).
+	Amounts
+	CostNano                int64
+	Currency                platform.Currency
+	Latency, FirstToken     time.Duration // FirstToken is 0 when no output was produced
+	FinishReason, ErrorKind string
+	ConsentVersion          string
+	TrainingAllowed         bool
+	Streamed                bool
+	CacheHit                bool // answered from the response cache, with no upstream attempt
+	// BillingPending is a record written before the call's settlement was: its Amounts are not known yet. Slot.Commit
+	// parks it and stays open for the settled record of the same call, which replaces it; it reaches the call log only
+	// when none will, and the writer then takes its Amounts from the ledger if the settlement did commit (README「写入」).
 	BillingPending bool
+}
+
+// Amounts is what the call's settlement charged, as the ledger stores it: the usage it billed, the tier and price
+// version it priced at, the charge, whether the waiver rules made it free, and the upstream's prompt total. A record
+// written before its settlement has none of them; Config.Ledger reads them back for such a record.
+type Amounts struct {
+	PriceVersion  string
+	Usage         map[catalog.Item]int64
+	ServiceTier   catalog.ServiceTier
+	PriceNano     int64
+	Free          bool
+	PhysicalInput *int64 // nil when the upstream reported none
 }
 
 // row is a CallRecord as the insert statement reads it: its members are the table's column names.
@@ -225,13 +233,6 @@ func newCallRow(r CallRecord) (row, error) {
 	if n := jsonbTextLen(route); n > maxRouteText {
 		return row{}, fmt.Errorf("route: %d bytes as jsonb text, at most %d", n, maxRouteText)
 	}
-	usage := make(map[string]int64, len(r.Usage))
-	for item, n := range r.Usage {
-		if item >= catalog.NumItems {
-			return row{}, fmt.Errorf("usage: unknown billing item %d", uint8(item))
-		}
-		usage[item.String()] = n
-	}
 	if err := checkText(map[string]string{
 		"client app": r.ClientApp, "session": r.SessionID, "subagent": r.SubagentID,
 		"app referer": r.AppReferer, "app title": r.AppTitle, "app categories": r.AppCategories,
@@ -239,9 +240,6 @@ func newCallRow(r CallRecord) (row, error) {
 		"finish reason": r.FinishReason, "error kind": r.ErrorKind, "consent version": r.ConsentVersion,
 	}); err != nil {
 		return row{}, err
-	}
-	if r.ServiceTier > catalog.ServiceTierFast {
-		return row{}, fmt.Errorf("service tier: unknown value %d", uint8(r.ServiceTier))
 	}
 	if !r.IP.IsValid() {
 		return row{}, errors.New("ip: not set")
@@ -255,19 +253,39 @@ func newCallRow(r CallRecord) (row, error) {
 		last := r.Attempts[n-1]
 		endpoint, sourceClass, egress = last.Endpoint.String(), last.SourceClass, last.Egress
 	}
-	return row{
+	call := row{
 		ID: r.ID.String(), At: r.At, SiteID: r.Site.String(), AccountID: r.Account.String(),
 		WorkspaceID: r.Workspace.String(), KeyID: r.Key.String(), EndUserHash: endUser, IP: r.IP.String(),
 		ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID, RequestClass: r.Class,
 		AppReferer: r.AppReferer, AppTitle: r.AppTitle, AppCategories: r.AppCategories,
 		Language: r.Language, UsedTools: r.UsedTools, HasImage: r.HasImage, HasFile: r.HasFile, Model: r.Model,
 		EndpointID: endpoint, SourceClass: sourceClass, Egress: egress, AttemptCount: len(r.Attempts), Route: route,
-		PriceVersion: r.PriceVersion, Usage: usage, ServiceTier: r.ServiceTier.String(), PriceNano: r.PriceNano,
-		CostNano: r.CostNano, Currency: r.Currency.String(), FreeOfCharge: r.Free, LatencyMs: r.Latency.Milliseconds(),
+		CostNano: r.CostNano, Currency: r.Currency.String(), LatencyMs: r.Latency.Milliseconds(),
 		FirstTokenMs: r.FirstToken.Milliseconds(), FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
 		ConsentVersion: r.ConsentVersion, TrainingAllowed: r.TrainingAllowed, Streamed: r.Streamed,
-		CacheHit: r.CacheHit, PhysicalInput: physicalInput(r.PhysicalInput), BillingPending: r.BillingPending,
-	}, nil
+		CacheHit: r.CacheHit,
+	}
+	err := call.settle(r.Amounts)
+	call.BillingPending = r.BillingPending
+	return call, err
+}
+
+// settle puts the settlement's amounts in the row and marks it settled. A record's own amounts go through it, and so do
+// the ledger's for a record written pending, so both are stored the same way.
+func (w *row) settle(a Amounts) error {
+	usage := make(map[string]int64, len(a.Usage))
+	for item, n := range a.Usage {
+		if item >= catalog.NumItems {
+			return fmt.Errorf("usage: unknown billing item %d", uint8(item))
+		}
+		usage[item.String()] = n
+	}
+	if a.ServiceTier > catalog.ServiceTierFast {
+		return fmt.Errorf("service tier: unknown value %d", uint8(a.ServiceTier))
+	}
+	w.PriceVersion, w.Usage, w.ServiceTier, w.PriceNano = a.PriceVersion, usage, a.ServiceTier.String(), a.PriceNano
+	w.FreeOfCharge, w.PhysicalInput, w.BillingPending = a.Free, physicalInput(a.PhysicalInput), false
+	return nil
 }
 
 // physicalInput is the stored prompt total, -1 when the upstream reported none.
