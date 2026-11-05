@@ -59,12 +59,17 @@ type Profile = typeof phone;
 // because the overview runs the shell's JavaScript, API calls and a table and sign-in much less; CPU contention stretches
 // them differently (docs/frontend.md「实测」). Its gate is therefore the CPU time of its own load, from a trace: the sum
 // of the main-thread tasks' `tdur`, which excludes the time the thread was descheduled, taken as the smallest of three
-// loads because contention can only add to it. The ceilings keep the LCP budgets' headroom over the clean build's 340 ms
-// (desktop) and 1900 ms (phone) main-thread time: 340 x 1500/948 and 1900 x 6000/3496.
+// loads because contention can only add to it. Those loads run without the CPU throttle in both viewports: the throttle
+// suspends the main thread by busy-waiting in a signal handler for (rate - 1) times the wall time since it last let the
+// thread run, up to 1 ms of it (Chromium's thread_cpu_throttler.cc), so under it `tdur` is the page's work plus a spin
+// sized by how the host schedules the thread, which moved the phone's smallest load from 1900 to 3607 ms on CI with the
+// page unchanged. A slower CPU scales the same work, so the throttle adds nothing to a CPU-time gate; the throttled LCP
+// is still reported (docs/frontend.md「实测」). The ceilings keep the LCP budgets' headroom over the clean build's unthrottled main-thread
+// time, 340 ms (desktop) and 400 ms (phone): 340 x 1500/948 and 400 x 6000/3496.
 const overviewMs = { phone: 3496, desktop: 948 } as Record<"phone" | "desktop", number>;
 const overviewCpu = {
   desktop: { baseline: 340, target: 540, ceiling: 540 },
-  phone: { baseline: 1900, target: 3260, ceiling: 3260 },
+  phone: { baseline: 400, target: 690, ceiling: 690 },
 } satisfies Record<"phone" | "desktop", { baseline: number } & Limit>;
 
 // web-vitals' IIFE build, which a page gets before its own scripts so it sees the whole load.
@@ -123,24 +128,25 @@ async function load(
   return result;
 }
 
-// busyLoad is one scene in a fresh context with the profile's throttle, traced from before the navigation to after the
-// page settled. The context is closed even when the load fails, so a trace cannot outlive its test.
+// busyLoad is the main-thread CPU time of one scene in a fresh context with the profile's throttle, traced from before
+// the navigation to after the page settled. The context is closed even when the load fails, so a trace cannot outlive its
+// test.
 async function busyLoad(
   browser: Browser,
   profile: Profile,
   device: Parameters<Browser["newContext"]>[0],
   suite: Suite,
   scene: Scene,
-): Promise<Vitals & { busyMs: number }> {
+): Promise<number> {
   const page = await measuredPage(browser, profile, device);
   try {
     await suite.prepare(page, scene);
     const session = await page.context().newCDPSession(page);
-    const { result, busyMs } = await traced(session, async () => {
+    const { busyMs } = await traced(session, async () => {
       await scene.open(page);
-      return vitals(page);
+      await vitals(page);
     });
-    return { ...result, busyMs };
+    return busyMs;
   } finally {
     await page.context().close();
   }
@@ -228,9 +234,10 @@ async function measurePage(
   record(`CLS ${label}`, Math.max(...pairs.map((pair) => pair.cls)), budget.cls);
 }
 
-// measureOverview loads the overview three times and gates the smallest main-thread CPU time of the three. It reports the
-// LCP and CLS beside it: the LCP is what the page budget speaks of, but it is only reported, because the host stretches
-// it in ways the CPU time does not (docs/frontend.md「实测」).
+// measureOverview loads the overview three times without the CPU throttle and gates the smallest main-thread CPU time of
+// the three, then loads it three times with the profile's throttle and reports the LCP and CLS: the LCP is what the page
+// budget speaks of, but it is only reported, because the host stretches it in ways the CPU time does not
+// (docs/frontend.md「实测」).
 async function measureOverview(
   browser: Browser,
   profile: Profile,
@@ -239,24 +246,26 @@ async function measureOverview(
   lcp: Limit,
 ) {
   const label = `console overview ${name}`;
-  const loads: { busyMs: number; lcp: number; cls: number }[] = [];
+  const busy: number[] = [];
+  const loads: Vitals[] = [];
   for (let i = 0; i < 3; i++) {
-    const result = await busyLoad(browser, profile, device, consoleSuite, overview);
-    loads.push({
-      busyMs: result.busyMs,
-      lcp: result.LCP ?? Number.POSITIVE_INFINITY,
-      cls: result.CLS ?? 0,
-    });
+    busy.push(await busyLoad(browser, { ...profile, cpu: 1 }, device, consoleSuite, overview));
+    loads.push(await load(browser, profile, device, consoleSuite, overview));
   }
   const cpu = overviewCpu[name];
   record(
     `main-thread time ${label}`,
-    Math.min(...loads.map((load) => load.busyMs)),
+    Math.min(...busy),
     cpu,
-    `baseline ${cpu.baseline} ms, loads ${loads.map((load) => load.busyMs.toFixed(0)).join("/")} ms`,
+    `unthrottled, baseline ${cpu.baseline} ms, loads ${busy.map((ms) => ms.toFixed(0)).join("/")} ms`,
   );
-  record(`LCP ${label}`, median(loads.map((load) => load.lcp)), { target: lcp.target }, "reported only");
-  record(`CLS ${label}`, Math.max(...loads.map((load) => load.cls)), budget.cls);
+  record(
+    `LCP ${label}`,
+    median(loads.map((load) => load.LCP ?? Number.POSITIVE_INFINITY)),
+    { target: lcp.target },
+    "reported only",
+  );
+  record(`CLS ${label}`, Math.max(...loads.map((load) => load.CLS ?? 0)), budget.cls);
 }
 
 test.describe("loading", () => {
