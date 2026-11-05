@@ -256,7 +256,7 @@ func (a managementAPI) failure(w http.ResponseWriter, r *http.Request, err error
 	if status == http.StatusUnauthorized {
 		w.Header().Set("Connection", "close")
 	}
-	if status >= 500 && a.logger != nil {
+	if status >= 500 && a.logger != nil && !errors.Is(err, routing.ErrPresetsSuspended) { // the platform's choice, not a failure
 		a.logger.ErrorContext(r.Context(), "key management failed", "error", err)
 	}
 	body, encodeErr := jsonx.MarshalCanonical(map[string]any{"error": map[string]any{"code": status, "message": http.StatusText(status)}})
@@ -285,7 +285,8 @@ func managementStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, errManagementMethod):
 		return http.StatusMethodNotAllowed
-	case errors.Is(err, accounts.ErrStale), errors.Is(err, accounts.ErrManagementBusy), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, accounts.ErrStale), errors.Is(err, accounts.ErrManagementBusy), errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, routing.ErrPresetsSuspended):
 		return http.StatusServiceUnavailable
 	default:
 		if _, unavailable := pg.Unavailable(err); unavailable {

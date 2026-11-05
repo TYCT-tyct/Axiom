@@ -299,3 +299,44 @@ func (f adminFixture) wantLimits(s session, want adminapi.RoutingPresetLimitsVie
 		}
 	}
 }
+
+// TestAdminRoutingPresetSuspension: the platform suspends routing presets with a reason, once however often it is
+// asked, and while they are suspended a preset write is refused 503 `presets_suspended`; resumed, it passes again.
+func TestAdminRoutingPresetSuspension(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	const path = "/settings/routing-suspension"
+	read := func() (got adminapi.RoutingPresetSuspension) {
+		decode(t, f.do(http.MethodGet, path, "", as(s)), &got)
+		return got
+	}
+	if got := read(); got.Suspended || got.Since != nil {
+		t.Fatalf("presets start suspended: %+v", got)
+	}
+	expectAdmin(t, "suspend without a reason", f.change(s, http.MethodPut, path, `{"suspended":true}`, newKey()), http.StatusBadRequest, "")
+	key := newKey()
+	expectAdmin(t, "suspend", f.change(s, http.MethodPut, path, `{"suspended":true,"reason":"incident"}`, key), http.StatusOK, "")
+	if rec := f.change(s, http.MethodPut, path, `{"suspended":true,"reason":"incident"}`, key); rec.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("the second suspension was not replayed: %d %s", rec.Code, rec.Body)
+	}
+	suspended := read()
+	if !suspended.Suspended || suspended.Since == nil {
+		t.Fatalf("presets after the suspension: %+v", suspended)
+	}
+	expectAdmin(t, "suspend again", f.change(s, http.MethodPut, path, `{"suspended":true,"reason":"still"}`, newKey()), http.StatusOK, "")
+	if again := read(); !again.Since.Equal(*suspended.Since) {
+		t.Errorf("suspending again moved the time to %v from %v", again.Since, suspended.Since)
+	}
+	if n := f.auditCount("routing.presets.suspend"); n != "1" {
+		t.Errorf("%s suspensions audited, want 1", n)
+	}
+	const preset = `{"slug":"later","name":"Later","rules":{"default":{}},"reason":"r"}`
+	expectAdmin(t, "a preset while suspended", f.change(s, http.MethodPost, "/routing-presets", preset, newKey()), http.StatusServiceUnavailable, "presets_suspended")
+
+	expectAdmin(t, "resume", f.change(s, http.MethodPut, path, `{"suspended":false,"reason":"fixed"}`, newKey()), http.StatusOK, "")
+	if got := read(); got.Suspended || got.Since != nil {
+		t.Errorf("presets after resuming: %+v", got)
+	}
+	f.adminPreset(s, "/routing-presets", preset)
+}

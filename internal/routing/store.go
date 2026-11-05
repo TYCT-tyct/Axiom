@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"slices"
 	"sync"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform"
@@ -92,12 +94,15 @@ func orZero(id *uuid.UUID) uuid.UUID {
 // Presets reads the routing presets a snapshot is built with. It compiles a version once and keeps it while the preset
 // points at it, so a rebuild reads the rules of the versions that changed only. A preset whose rules this node cannot
 // read is left out of the snapshot and logged once: the keys bound to it are refused as unavailable, and every other
-// preset still routes. Disabled presets are read too, because the keys bound to them still route by them.
+// preset still routes. Disabled presets are read too, because the keys bound to them still route by them. While the
+// platform has suspended presets (SetSuspension) the snapshot holds the system preset alone, and the others stay
+// compiled for when they resume.
 type Presets struct {
 	Logger *slog.Logger
 
-	mu       sync.Mutex
-	compiled map[presetVersion]compiledVersion
+	mu        sync.Mutex
+	compiled  map[presetVersion]compiledVersion
+	suspended bool // as the last load read it, so a change is logged once
 }
 
 type presetVersion struct {
@@ -124,6 +129,10 @@ type presetHeader struct {
 // with no preset of its own would be refused.
 func (s *Presets) Load(ctx context.Context, tx pg.Tx) ([]Preset, error) {
 	headers, err := readHeaders(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	since, err := ReadSuspension(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +168,26 @@ func (s *Presets) Load(ctx context.Context, tx pg.Tx) ([]Preset, error) {
 	if !system {
 		return nil, errors.New("routing: the system preset is missing")
 	}
-	return out, nil
+	return s.suspendedTo(since, out), nil
+}
+
+// suspendedTo is the presets a snapshot holds while the platform has suspended them since since, a zero time when it
+// has not: the system preset alone, or all of them. A change is logged once per node: while it lasts, every key bound
+// to a preset other than the system's is refused.
+func (s *Presets) suspendedTo(since time.Time, presets []Preset) []Preset {
+	suspended := !since.IsZero()
+	if suspended != s.suspended && s.Logger != nil {
+		if suspended {
+			s.Logger.Warn("routing presets are suspended: keys bound to a preset are refused", "event", "routing.presets_suspended", "since", since)
+		} else {
+			s.Logger.Info("routing presets are resumed", "event", "routing.presets_resumed")
+		}
+	}
+	s.suspended = suspended
+	if !suspended {
+		return presets
+	}
+	return slices.DeleteFunc(presets, func(p Preset) bool { return p.ID != SystemPreset })
 }
 
 func readHeaders(ctx context.Context, tx pg.Tx) ([]presetHeader, error) {

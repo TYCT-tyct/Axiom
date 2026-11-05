@@ -44,6 +44,7 @@ const codes = {
   preset_default_invalid: "默认的路由预设现在不能用于新 key，请管理员改一下默认。",
   preset_in_use: "还有默认值在用这个路由预设，先改默认值。",
   preset_quota: "这个账户的路由预设已达上限，改一个现有的吧。",
+  presets_suspended: "平台暂停了路由预设，现在不能改预设、默认值或 key 的预设，恢复后再试。",
 } satisfies Record<ErrorCode, string>;
 
 // Messages the shared components show, in Chinese: the source every other language follows.

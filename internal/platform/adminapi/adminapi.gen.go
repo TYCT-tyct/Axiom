@@ -334,6 +334,12 @@ type ServerInterface interface {
 	// SetRoutingPresetLimits Save the limits on routing presets, validated and audited
 	// (PUT /api/admin/v1/settings/routing-limits)
 	SetRoutingPresetLimits(w http.ResponseWriter, r *http.Request, params SetRoutingPresetLimitsParams)
+	// GetRoutingPresetSuspension Whether the platform has suspended routing presets
+	// (GET /api/admin/v1/settings/routing-suspension)
+	GetRoutingPresetSuspension(w http.ResponseWriter, r *http.Request)
+	// SetRoutingPresetSuspension Suspend or resume routing presets, audited
+	// (PUT /api/admin/v1/settings/routing-suspension)
+	SetRoutingPresetSuspension(w http.ResponseWriter, r *http.Request, params SetRoutingPresetSuspensionParams)
 	// GetSearchSettings The configured search engines, their published prices and where the list came from. Keys are never returned.
 	// (GET /api/admin/v1/settings/search)
 	GetSearchSettings(w http.ResponseWriter, r *http.Request)
@@ -5302,6 +5308,65 @@ func (siw *ServerInterfaceWrapper) SetRoutingPresetLimits(w http.ResponseWriter,
 	handler.ServeHTTP(w, r)
 }
 
+// GetRoutingPresetSuspension operation middleware
+func (siw *ServerInterfaceWrapper) GetRoutingPresetSuspension(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetRoutingPresetSuspension(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetRoutingPresetSuspension operation middleware
+func (siw *ServerInterfaceWrapper) SetRoutingPresetSuspension(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetRoutingPresetSuspensionParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetRoutingPresetSuspension(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetSearchSettings operation middleware
 func (siw *ServerInterfaceWrapper) GetSearchSettings(w http.ResponseWriter, r *http.Request) {
 
@@ -8049,6 +8114,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/settings/routing", wrapper.SetPlatformRoutingDefault)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/settings/routing-limits", wrapper.GetRoutingPresetLimits)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/settings/routing-limits", wrapper.SetRoutingPresetLimits)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/settings/routing-suspension", wrapper.GetRoutingPresetSuspension)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/settings/routing-suspension", wrapper.SetRoutingPresetSuspension)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/routing-default", wrapper.GetSiteRoutingDefault)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/routing-default", wrapper.SetSiteRoutingDefault)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/payments/merchants", wrapper.ListMerchants)
@@ -19570,6 +19637,178 @@ func (response SetRoutingPresetLimitsdefaultJSONResponse) VisitSetRoutingPresetL
 	return err
 }
 
+type GetRoutingPresetSuspensionRequestObject struct {
+}
+
+type GetRoutingPresetSuspensionResponseObject interface {
+	VisitGetRoutingPresetSuspensionResponse(w http.ResponseWriter) error
+}
+
+type GetRoutingPresetSuspension200JSONResponse RoutingPresetSuspension
+
+func (response GetRoutingPresetSuspension200JSONResponse) VisitGetRoutingPresetSuspensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRoutingPresetSuspension401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetRoutingPresetSuspension401JSONResponse) VisitGetRoutingPresetSuspensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRoutingPresetSuspension403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetRoutingPresetSuspension403JSONResponse) VisitGetRoutingPresetSuspensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRoutingPresetSuspensiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetRoutingPresetSuspensiondefaultJSONResponse) VisitGetRoutingPresetSuspensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetSuspensionRequestObject struct {
+	Params SetRoutingPresetSuspensionParams
+	Body   *SetRoutingPresetSuspensionJSONRequestBody
+}
+
+type SetRoutingPresetSuspensionResponseObject interface {
+	VisitSetRoutingPresetSuspensionResponse(w http.ResponseWriter) error
+}
+
+type SetRoutingPresetSuspension200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetRoutingPresetSuspension200JSONResponse struct {
+	Body    RoutingPresetSuspension
+	Headers SetRoutingPresetSuspension200ResponseHeaders
+}
+
+func (response SetRoutingPresetSuspension200JSONResponse) VisitSetRoutingPresetSuspensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetSuspension400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetRoutingPresetSuspension400JSONResponse) VisitSetRoutingPresetSuspensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetSuspension401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetRoutingPresetSuspension401JSONResponse) VisitSetRoutingPresetSuspensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetSuspension403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetRoutingPresetSuspension403JSONResponse) VisitSetRoutingPresetSuspensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetSuspension409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetRoutingPresetSuspension409JSONResponse) VisitSetRoutingPresetSuspensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetSuspensiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetRoutingPresetSuspensiondefaultJSONResponse) VisitSetRoutingPresetSuspensionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetSearchSettingsRequestObject struct {
 }
 
@@ -26183,6 +26422,12 @@ type StrictServerInterface interface {
 	// SetRoutingPresetLimits Save the limits on routing presets, validated and audited
 	// (PUT /api/admin/v1/settings/routing-limits)
 	SetRoutingPresetLimits(ctx context.Context, request SetRoutingPresetLimitsRequestObject) (SetRoutingPresetLimitsResponseObject, error)
+	// GetRoutingPresetSuspension Whether the platform has suspended routing presets
+	// (GET /api/admin/v1/settings/routing-suspension)
+	GetRoutingPresetSuspension(ctx context.Context, request GetRoutingPresetSuspensionRequestObject) (GetRoutingPresetSuspensionResponseObject, error)
+	// SetRoutingPresetSuspension Suspend or resume routing presets, audited
+	// (PUT /api/admin/v1/settings/routing-suspension)
+	SetRoutingPresetSuspension(ctx context.Context, request SetRoutingPresetSuspensionRequestObject) (SetRoutingPresetSuspensionResponseObject, error)
 	// GetSearchSettings The configured search engines, their published prices and where the list came from. Keys are never returned.
 	// (GET /api/admin/v1/settings/search)
 	GetSearchSettings(ctx context.Context, request GetSearchSettingsRequestObject) (GetSearchSettingsResponseObject, error)
@@ -29530,6 +29775,63 @@ func (sh *strictHandler) SetRoutingPresetLimits(w http.ResponseWriter, r *http.R
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SetRoutingPresetLimitsResponseObject); ok {
 		if err := validResponse.VisitSetRoutingPresetLimitsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetRoutingPresetSuspension operation middleware
+func (sh *strictHandler) GetRoutingPresetSuspension(w http.ResponseWriter, r *http.Request) {
+	var request GetRoutingPresetSuspensionRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetRoutingPresetSuspension(ctx, request.(GetRoutingPresetSuspensionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetRoutingPresetSuspension")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetRoutingPresetSuspensionResponseObject); ok {
+		if err := validResponse.VisitGetRoutingPresetSuspensionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetRoutingPresetSuspension operation middleware
+func (sh *strictHandler) SetRoutingPresetSuspension(w http.ResponseWriter, r *http.Request, params SetRoutingPresetSuspensionParams) {
+	var request SetRoutingPresetSuspensionRequestObject
+
+	request.Params = params
+
+	var body SetRoutingPresetSuspensionJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetRoutingPresetSuspension(ctx, request.(SetRoutingPresetSuspensionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetRoutingPresetSuspension")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetRoutingPresetSuspensionResponseObject); ok {
+		if err := validResponse.VisitSetRoutingPresetSuspensionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

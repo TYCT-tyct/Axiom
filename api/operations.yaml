@@ -605,7 +605,8 @@ components:
             $ref: '#/components/schemas/Error'
     Failure:
       description: 'Any other failure: `internal` (500), `not_implemented` (501, the operation has no handler yet), `unavailable`
-        (503). A 500 never carries the internal error''s text.'
+        (503), `presets_suspended` (503, a routing preset or default write, or a key''s choice of a preset, while the
+        platform has suspended routing presets). A 500 never carries the internal error''s text.'
       content:
         application/json:
           schema:
@@ -1053,6 +1054,7 @@ components:
       - preset_default_invalid
       - preset_in_use
       - preset_quota
+      - presets_suspended
     ErrorDetail:
       type: object
       required:

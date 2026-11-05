@@ -522,3 +522,8 @@ export const routingLimitsQuery = queryOptions({
   queryKey: [accountKey, "routing-limits"],
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/routing-limits`, { signal })),
 });
+
+export const routingSuspensionQuery = queryOptions({
+  queryKey: [accountKey, "routing-suspension"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/routing-suspension`, { signal })),
+});
