@@ -1,6 +1,7 @@
 package operations_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
@@ -150,8 +151,8 @@ func (db opsDB) summaryHas(t *testing.T, op operations.Operation, member string)
 	return db.text(t, `SELECT (summary::jsonb ? '`+member+`')::text FROM operations.approvals WHERE id = '`+op.Approval.ID.String()+`'`) == "true"
 }
 
-// TestSetPriceEnvelope: an envelope is made at revision 1 and changed from the revision read, with both audited; an
-// old revision and a limit out of range are refused.
+// TestSetPriceEnvelope: an envelope is made at revision 1 and changed from the revision read, with both audited, and
+// reads back as changed; an old revision and a limit out of range are refused.
 func TestSetPriceEnvelope(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
@@ -182,6 +183,13 @@ func TestSetPriceEnvelope(t *testing.T) {
 		if _, err := db.setEnvelope(t, e, 2); !errors.Is(err, operations.ErrBadEnvelope) {
 			t.Errorf("%+v: %v", e, err)
 		}
+	}
+	var listed []operations.PriceEnvelope
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
+		listed, err = operations.PriceEnvelopes(t.Context(), tx)
+		return err
+	}); err != nil || len(listed) != 1 || listed[0].Site != site || listed[0].Rev != 2 || listed[0].ModelDailyChange != 2000 {
+		t.Errorf("the envelopes: %+v %v", listed, err)
 	}
 	if got := db.text(t, `SELECT string_agg(coalesce(detail->'before'->>'rev', '-') || '>' || (detail->'after'->>'rev'), ' ' ORDER BY id)
 		FROM platform.audit_log WHERE action = 'price_envelope.set' AND target_id = '`+site.String()+`'`); got != "->1 1>2" {
@@ -270,5 +278,36 @@ func TestPriceRaces(t *testing.T) {
 	}
 	if got := db.priceCounters(t, site); got != "1/1 600#1" {
 		t.Errorf("the counters are %s", got)
+	}
+}
+
+// TestPriceFailuresReachTheCaller: every price call hands a failing database back to its caller.
+func TestPriceFailuresReachTheCaller(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	site := uuid.NewV7()
+	if _, err := db.setEnvelope(t, envelope(site), 0); err != nil {
+		t.Fatal(err)
+	}
+	pr := publish(site, uuid.NewV7(), big.NewRat(1, 100), big.NewRat(1, 2))
+	calls := map[string]func(ctx context.Context, tx pg.Tx) error{
+		"PriceEnvelopes": func(ctx context.Context, tx pg.Tx) error { _, err := operations.PriceEnvelopes(ctx, tx); return err },
+		"PriceUsages":    func(ctx context.Context, tx pg.Tx) error { _, err := operations.PriceUsages(ctx, tx); return err },
+		"SetPriceEnvelope": func(ctx context.Context, tx pg.Tx) error {
+			_, err := operations.SetPriceEnvelope(ctx, tx, owner, envelope(site), 1, "r")
+			return err
+		},
+		"ProposePrice": func(ctx context.Context, tx pg.Tx) error {
+			_, _, err := operations.ProposePrice(ctx, tx, pr.p, pr.r)
+			return err
+		},
+		"CountPrice": func(ctx context.Context, tx pg.Tx) error { return operations.CountPrice(ctx, tx, pr.r) },
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	for name, call := range calls {
+		if got := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error { return call(canceled, tx) }); !errors.Is(got, context.Canceled) {
+			t.Errorf("%s with a failing database: %v", name, got)
+		}
 	}
 }
