@@ -33,9 +33,9 @@ if (directory && !process.env.AXIOM_VERSION) {
 
 const widths = [360, 768, 1280, 2560] as const;
 
-async function shoot(page: Page, name: string) {
+async function shoot(page: Page, name: string, fullPage = true) {
   mkdirSync(directory as string, { recursive: true });
-  await page.screenshot({ path: join(directory as string, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(directory as string, `${name}.png`), fullPage });
 }
 
 for (const suite of suites) {
@@ -63,6 +63,11 @@ for (const suite of suites) {
         await suite.prepare(page, scene, "worst");
         await page.setViewportSize({ width, height: 900 });
         await scene.open(page);
+        // A full-page capture of the worst data is tens of thousands of pixels tall and puts a modal far from its
+        // top; the viewport is where the dialog can be judged.
+        if (await page.getByRole("dialog").isVisible()) {
+          await shoot(page, `worst-${name}-${width}-dialog`, false);
+        }
         await shoot(page, `worst-${name}-${width}`);
       });
     }

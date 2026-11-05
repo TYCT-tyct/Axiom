@@ -207,7 +207,6 @@ export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClo
       title={t("routingPresets.disable.title")}
       body={
         <>
-          <p>{t("routingPresets.disable.body", { name: preset.name })}</p>
           {isDefault ? (
             <p className="flex gap-2 rounded-btn bg-warn-soft px-3 py-2 text-warn">
               <Icon name="alert" className="mt-0.5 shrink-0" />
@@ -222,9 +221,11 @@ export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClo
                 : t("routingPresets.disable.keys", { count: preset.keys, keys: format.number(preset.keys) })}
             </p>
           )}
+          <p>{t("routingPresets.disable.body", { name: preset.name })}</p>
         </>
       }
       confirm={t("routingPresets.disable.confirm")}
+      blocked={isDefault}
       action={disable}
       onClose={onClose}
     />

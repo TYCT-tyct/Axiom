@@ -29,6 +29,9 @@ type Props<Input, Out> = {
   intro?: ReactNode;
   action: string;
   danger?: boolean;
+  // The page already knows the node will refuse this change, so the button is off and the intro says what to do first.
+  // A try already sent stays resendable: its outcome is not known.
+  blocked?: boolean;
   // A name the person must type before a risky change is sent.
   confirm?: string;
   // The fields of the change, besides the reason; error is the failure of the last try, to mark a field.
@@ -210,6 +213,7 @@ function ChangeForm<Input, Out>({
   intro,
   action,
   danger,
+  blocked,
   confirm,
   fields,
   read,
@@ -272,6 +276,7 @@ function ChangeForm<Input, Out>({
         state={attempt.state}
         action={action}
         danger={danger}
+        blocked={blocked}
         pending={mutation.isPending}
         reload={reload}
         onClose={onClose}
@@ -345,6 +350,7 @@ type Moves = {
   state: State;
   action: string;
   danger?: boolean;
+  blocked?: boolean;
   pending: boolean;
   reload?: () => void;
   onClose: () => void;
@@ -375,7 +381,7 @@ function Footer(props: Moves) {
 
 // Next is the button that moves the change on: send it, send the same request again, fill the form from what is
 // current (once that has arrived), or close.
-function Next({ state, action, danger, pending, reload, onClose }: Moves) {
+function Next({ state, action, danger, blocked, pending, reload, onClose }: Moves) {
   const { t } = useTranslation();
   const fetching = useIsFetching({ queryKey: [accountKey] }) > 0;
   if (state === "stale" && reload) {
@@ -394,7 +400,7 @@ function Next({ state, action, danger, pending, reload, onClose }: Moves) {
     );
   }
   return (
-    <SubmitButton pending={pending} variant={danger ? "danger" : "primary"}>
+    <SubmitButton pending={pending} disabled={blocked && state !== "unknown"} variant={danger ? "danger" : "primary"}>
       {state === "unknown" ? t("change.resend") : action}
     </SubmitButton>
   );

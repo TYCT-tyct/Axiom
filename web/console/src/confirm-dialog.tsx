@@ -10,12 +10,15 @@ export function ConfirmDialog({
   body,
   confirm,
   action,
+  blocked,
   onClose,
 }: {
   title: string;
   body: ReactNode;
   confirm: string;
   action: UseMutationResult<unknown, Error, void>;
+  // The page already knows the node will refuse: the button is off and the body says what to do first.
+  blocked?: boolean;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -31,6 +34,7 @@ export function ConfirmDialog({
           </Button>
           <SubmitButton
             pending={action.isPending}
+            disabled={blocked}
             variant="danger"
             onClick={(event) => {
               event.preventDefault();
