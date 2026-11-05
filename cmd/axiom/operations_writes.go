@@ -126,12 +126,25 @@ func preview(p operations.Proposal) operations.Operation {
 	return op
 }
 
-// runOperation makes the change op asks for in tx, as the agent's, and answers what it left. The catalog takes the
-// operation's ID as its own key, so the change is applied once for an operation.
+// runOperation makes the change op asks for in tx, as the agent's, and answers what it left. A top-up proposal changes
+// nothing yet: its reservation, rechecked here, holds until the agent confirms the money.
 func (a adminAPI) runOperation(ctx context.Context, tx pg.Tx, op operations.Operation) (map[string]any, error) {
-	if op.Tool != "model_set_status" { // every tool that proposes is listed here, so this is a bug
-		return nil, fmt.Errorf("no way to run %s", op.Tool)
+	switch op.Tool {
+	case "model_set_status":
+		return a.runModelStatus(ctx, tx, op)
+	case "supplier_top_up_propose":
+		r, err := operations.CheckReservation(ctx, tx, op)
+		if err != nil {
+			return nil, err
+		}
+		return topUpResult(r)
 	}
+	return nil, fmt.Errorf("no way to run %s", op.Tool) // every tool that proposes is listed here, so this is a bug
+}
+
+// runModelStatus lists or retires the model of op. The catalog takes the operation's ID as its own key, so the change
+// is applied once for an operation.
+func (a adminAPI) runModelStatus(ctx context.Context, tx pg.Tx, op operations.Operation) (map[string]any, error) {
 	var params struct {
 		Status string `json:"status"`
 		Rev    int64  `json:"rev"`

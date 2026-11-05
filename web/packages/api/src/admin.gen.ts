@@ -2558,6 +2558,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/operations/cap-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caps on the money the operations agent moves
+         * @description Every cap policy, by category and scope (the platform's first). A scope and category without one moves no money.
+         */
+        get: operations["listOperationsCapPolicies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/cap-policies/{scope}/{category}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `platform`, for what no site owns such as a platform supplier, or a site's ID. */
+                scope: string;
+                category: components["schemas"]["OperationsCapCategory"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the caps of a scope and category
+         * @description Makes the policy (`rev` 0) or replaces its limits (`rev` as read; another is a 409 `stale_revision`). A policy keeps the currency it was made with (another is a 409 `conflict`), and every hard limit is at least its autonomous one (otherwise a 400). A proposal waiting for the owner is weighed again against the hard limits when it is approved: one they no longer hold ends `rejected` with `stale_revision`; loosening leaves it alone.
+         */
+        put: operations["setOperationsCapPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/operations/approvals": {
         parameters: {
             query?: never;
@@ -3331,7 +3375,7 @@ export interface components {
          * @description The closed list of failure codes. A code is added in a contract change, so a client that translates every code fails to compile until it knows the new one.
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable" | "preset_not_selectable" | "preset_default_invalid" | "preset_in_use" | "preset_quota";
+        ErrorCode: "invalid_request" | "unauthenticated" | "invalid_credentials" | "invalid_code" | "forbidden" | "mfa_required" | "consent_required" | "origin_rejected" | "not_found" | "conflict" | "login_domain_locked" | "login_domain_required" | "identity_taken" | "identity_already_linked" | "account_not_linked" | "email_taken" | "name_taken" | "too_many_keys" | "stale_revision" | "idempotency_key_reused" | "invalid_invite" | "registration_closed" | "human_check_failed" | "email_domain_not_allowed" | "invalid_verification" | "weak_password" | "not_ready" | "unprocessable" | "cap_exceeded" | "redeem_code_invalid" | "redeem_code_expired" | "redeem_code_disabled" | "redeem_code_used" | "rate_limited" | "internal" | "not_implemented" | "unavailable" | "preset_not_selectable" | "preset_default_invalid" | "preset_in_use" | "preset_quota";
         OperationsOverview: {
             site_id?: components["schemas"]["SiteId"];
             /** Format: date-time */
@@ -3656,6 +3700,50 @@ export interface components {
              */
             previous_token_until?: string;
         };
+        /**
+         * @description A kind of money the agent moves, each with its own caps; top-ups of suppliers for now.
+         * @enum {string}
+         */
+        OperationsCapCategory: "money.top_up";
+        /** @description An amount in billionths of one unit of the policy's currency, as integer text. */
+        OperationsCapAmount: string;
+        /** @description The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or not: one proposal, the day and the week. Reserved and committed amounts both count. */
+        OperationsCapLimits: {
+            single_max: components["schemas"]["OperationsCapAmount"];
+            daily_max: components["schemas"]["OperationsCapAmount"];
+            weekly_max: components["schemas"]["OperationsCapAmount"];
+            object_daily_max: components["schemas"]["OperationsCapAmount"];
+            /** Format: int32 */
+            daily_count_max: number;
+            hard_single_max: components["schemas"]["OperationsCapAmount"];
+            hard_daily_max: components["schemas"]["OperationsCapAmount"];
+            hard_weekly_max: components["schemas"]["OperationsCapAmount"];
+        };
+        OperationsCapPolicy: {
+            /** @description `platform` or a site's ID. */
+            scope: string;
+            category: components["schemas"]["OperationsCapCategory"];
+            currency: string;
+            limits: components["schemas"]["OperationsCapLimits"];
+            /** Format: int64 */
+            rev: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        OperationsCapPolicyList: {
+            data: components["schemas"]["OperationsCapPolicy"][];
+        };
+        OperationsCapPolicyUpdate: {
+            /** @description Fixed when the policy is made. */
+            currency: string;
+            limits: components["schemas"]["OperationsCapLimits"];
+            /**
+             * Format: int64
+             * @description The revision read; 0 makes the policy.
+             */
+            rev: number;
+            reason: string;
+        };
         OperationsCredentialList: {
             data: components["schemas"]["OperationsCredential"][];
             next_cursor?: string;
@@ -3740,7 +3828,7 @@ export interface components {
          * @description The operation's class, which decides whether it waits for the owner.
          * @enum {string}
          */
-        OperationRisk: "routine" | "delisting";
+        OperationRisk: "routine" | "delisting" | "top_up";
         OperationTarget: {
             /** @description What the operation acts on, such as `model`. */
             kind: string;
@@ -5131,7 +5219,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The request is well formed but a rule refuses it (`invalid_invite`, `weak_password`, `not_ready`, `unprocessable`); `message` says which. */
+        /** @description The request is well formed but a rule refuses it (`invalid_invite`, `weak_password`, `not_ready`, `unprocessable`, `cap_exceeded`); `message` says which. */
         Unprocessable: {
             headers: {
                 [name: string]: unknown;
@@ -10215,6 +10303,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OperationsAgentStopped"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listOperationsCapPolicies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The policies */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsCapPolicyList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setOperationsCapPolicy: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description `platform`, for what no site owns such as a platform supplier, or a site's ID. */
+                scope: string;
+                category: components["schemas"]["OperationsCapCategory"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperationsCapPolicyUpdate"];
+            };
+        };
+        responses: {
+            /** @description The policy as it is now */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsCapPolicy"];
                 };
             };
             400: components["responses"]["BadRequest"];

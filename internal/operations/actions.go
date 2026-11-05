@@ -211,7 +211,18 @@ func Settle(ctx context.Context, tx pg.Tx, op Operation, result map[string]any, 
 	if err := setState(ctx, tx, &op, state, body, refused); err != nil {
 		return Operation{}, err
 	}
-	return op, record(ctx, tx, audit.OperationsAgent(op.Credential), action, op, op.Reason, nil)
+	if err := record(ctx, tx, audit.OperationsAgent(op.Credential), action, op, op.Reason, nil); err != nil {
+		return Operation{}, err
+	}
+	if refused != "" {
+		if err := release(ctx, tx, audit.OperationsAgent(op.Credential), op); err != nil {
+			return Operation{}, err
+		}
+	}
+	if op.Approval != nil { // an approved one: its signal is resolved last, after every row lock its run took
+		return op, resolve(ctx, tx, op.Approval.ID)
+	}
+	return op, nil
 }
 
 // Decide is a person's decision on approval id: approve leaves its operation approved for the caller to run in tx and
@@ -222,11 +233,13 @@ func Decide(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, appr
 	if err != nil {
 		return Operation{}, err
 	}
-	action, state, decided := "approval.reject", StateRejected, ApprovalRejected
-	if approve {
-		action, state, decided = "approval.approve", StateApproved, ApprovalApproved
+	if approve { // Settle resolves the signal once the caller has run it
+		return op, finish(ctx, tx, actor, "approval.approve", &op, StateApproved, ApprovalApproved, reason)
 	}
-	return op, finish(ctx, tx, actor, action, &op, state, decided, reason)
+	if err := finish(ctx, tx, actor, "approval.reject", &op, StateRejected, ApprovalRejected, reason); err != nil {
+		return Operation{}, err
+	}
+	return op, resolve(ctx, tx, op.Approval.ID)
 }
 
 // Withdraw is the agent taking back its own pending proposal; another credential's approval is ErrNoApproval.
@@ -235,7 +248,10 @@ func Withdraw(ctx context.Context, tx pg.Tx, credential, id uuid.UUID, reason st
 	if err != nil {
 		return Operation{}, err
 	}
-	return op, finish(ctx, tx, audit.OperationsAgent(credential), "operation.cancel", &op, StateCanceled, ApprovalCanceled, reason)
+	if err := finish(ctx, tx, audit.OperationsAgent(credential), "operation.cancel", &op, StateCanceled, ApprovalCanceled, reason); err != nil {
+		return Operation{}, err
+	}
+	return op, resolve(ctx, tx, op.Approval.ID)
 }
 
 // Cancel ends pending approval id and its operation as actor's, whoever proposed it: the proposal of a credential that
@@ -245,7 +261,10 @@ func Cancel(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, reas
 	if err != nil {
 		return Operation{}, err
 	}
-	return op, finish(ctx, tx, actor, "operation.cancel", &op, StateCanceled, ApprovalCanceled, reason)
+	if err := finish(ctx, tx, actor, "operation.cancel", &op, StateCanceled, ApprovalCanceled, reason); err != nil {
+		return Operation{}, err
+	}
+	return op, resolve(ctx, tx, op.Approval.ID)
 }
 
 // CancelLive cancels, as actor, the proposals a credential is waiting on, or every credential's when credential is nil:
@@ -260,16 +279,7 @@ func CancelLive(ctx context.Context, tx pg.Tx, actor audit.Actor, credential *uu
 	if err != nil {
 		return 0, fmt.Errorf("cancel the operations not started: %w", err)
 	}
-	for _, id := range ids {
-		op, err := Get(ctx, tx, id)
-		if err != nil {
-			return 0, err
-		}
-		if err := cancelLocked(ctx, tx, actor, &op, StateCanceled, ApprovalCanceled, "operation.cancel", reason); err != nil {
-			return 0, err
-		}
-	}
-	return len(ids), nil
+	return len(ids), endLocked(ctx, tx, ids, actor, StateCanceled, ApprovalCanceled, "operation.cancel", reason)
 }
 
 // expiryActor is who expires an approval nobody decided in time.
@@ -282,16 +292,25 @@ func ExpireDue(ctx context.Context, tx pg.Tx, batch int) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("expire the approvals past their time: %w", err)
 	}
-	for _, id := range ids {
+	return len(ids), endLocked(ctx, tx, ids, expiryActor, StateExpired, ApprovalExpired, "approval.expire", "")
+}
+
+// endLocked ends the pending operations ids, which tx has locked, with their approvals, and resolves their signals only
+// after all of them: a batch that took the signals' lock after the first would hold it while it waits for the next
+// one's counters, which a proposal holding them waits on the signals' lock to release.
+func endLocked(ctx context.Context, tx pg.Tx, ids []uuid.UUID, actor audit.Actor, state State, decided ApprovalState, action, reason string) error {
+	approvals := make([]uuid.UUID, len(ids))
+	for i, id := range ids {
 		op, err := Get(ctx, tx, id)
 		if err != nil {
-			return 0, err
+			return err
 		}
-		if err := cancelLocked(ctx, tx, expiryActor, &op, StateExpired, ApprovalExpired, "approval.expire", ""); err != nil {
-			return 0, err
+		if err := cancelLocked(ctx, tx, actor, &op, state, decided, action, reason); err != nil {
+			return err
 		}
+		approvals[i] = op.Approval.ID
 	}
-	return len(ids), nil
+	return resolve(ctx, tx, approvals...)
 }
 
 // cancelLocked ends op, which tx has locked while it is pending_approval, and its approval, which moves with it.
@@ -334,7 +353,9 @@ func lockApproval(ctx context.Context, tx pg.Tx, id, credential uuid.UUID) (Oper
 	return op, nil
 }
 
-// finish ends op's pending approval as decided and moves op to state, records it and resolves the approval's signal.
+// finish ends op's pending approval as decided and moves op to state and records it. One that ends without its change
+// releases its reservation; one approved holds its reservation's rows for the caller's run, in the order every path
+// takes them. The approval's signal is left to the caller to resolve last.
 func finish(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, op *Operation, state State, decided ApprovalState, reason string) error {
 	at, err := New().DecideApproval(ctx, tx, DecideApprovalParams{
 		ID: op.Approval.ID, State: string(decided), DecidedBy: new(actor.String()), DecisionReason: optionalText(reason),
@@ -349,7 +370,21 @@ func finish(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, op 
 	if err := record(ctx, tx, actor, action, *op, reason, map[string]any{"approval_id": op.Approval.ID.String()}); err != nil {
 		return err
 	}
-	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: approvalSignal, Key: op.Approval.ID.String(), Severity: "info", Resolved: true})
+	if state == StateApproved {
+		return holdReservation(ctx, tx, op.ID)
+	}
+	return release(ctx, tx, actor, *op)
+}
+
+// resolve resolves the signals of approvals. alert.Persist holds one lock every producer shares until tx ends, so it
+// is the last lock any path of this module takes: a transaction holding it never waits for a row another one holds.
+func resolve(ctx context.Context, tx pg.Tx, approvals ...uuid.UUID) error {
+	for _, id := range approvals {
+		if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: approvalSignal, Key: id.String(), Severity: "info", Resolved: true}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func setState(ctx context.Context, tx pg.Tx, op *Operation, state State, result []byte, code string) error {
@@ -382,113 +417,4 @@ func record(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, op 
 		Actor: actor, Action: action, Reason: reason, Detail: detail,
 		Target: audit.Target{Module: "operations", Kind: kind, ID: id},
 	})
-}
-
-// Get reads operation id with its approval, in tx.
-func Get(ctx context.Context, tx pg.Tx, id uuid.UUID) (Operation, error) {
-	rows, err := New().OperationByID(ctx, tx, id)
-	if err != nil {
-		return Operation{}, fmt.Errorf("read operation %s: %w", id, err)
-	}
-	if len(rows) == 0 {
-		return Operation{}, ErrNoOperation
-	}
-	return withApproval(ctx, tx, operationOf(rows[0]))
-}
-
-// Operations is a page of credential's operations newest first, in state or all of them ("" ), after the operation
-// after (the zero ID: from the start), and whether more follow.
-func Operations(ctx context.Context, tx pg.Tx, credential uuid.UUID, state State, after uuid.UUID, pageSize int) ([]Operation, bool, error) {
-	rows, err := New().OperationsOf(ctx, tx, OperationsOfParams{
-		CredentialID: credential, State: optionalText(string(state)), After: after, PageSize: int32(pageSize + 1), // #nosec G115 -- the API bounds the page to 200
-	})
-	if err != nil {
-		return nil, false, fmt.Errorf("read the operations: %w", err)
-	}
-	more := len(rows) > pageSize
-	ops := make([]Operation, min(len(rows), pageSize))
-	ids := make([]uuid.UUID, len(ops))
-	for i := range ops {
-		ops[i], ids[i] = operationOf(rows[i]), rows[i].ID
-	}
-	approvals, err := New().ApprovalsOf(ctx, tx, ids)
-	if err != nil {
-		return nil, false, fmt.Errorf("read the operations' approvals: %w", err)
-	}
-	byOperation := make(map[uuid.UUID]*Approval, len(approvals))
-	for _, a := range approvals {
-		byOperation[a.OperationID] = approvalOf(a)
-	}
-	for i := range ops {
-		ops[i].Approval = byOperation[ops[i].ID]
-	}
-	return ops, more, nil
-}
-
-// Approvals is a page of every approval newest first, in state or all of them (""), after the approval after, each
-// with its operation, and whether more follow: the owner's queue.
-func Approvals(ctx context.Context, tx pg.Tx, state ApprovalState, after uuid.UUID, pageSize int) ([]Operation, bool, error) {
-	q := New()
-	rows, err := q.Approvals(ctx, tx, ApprovalsParams{State: optionalText(string(state)), After: after, PageSize: int32(pageSize + 1)}) // #nosec G115 -- the API bounds the page to 200
-	if err != nil {
-		return nil, false, fmt.Errorf("read the approvals: %w", err)
-	}
-	more := len(rows) > pageSize
-	rows = rows[:min(len(rows), pageSize)]
-	ids := make([]uuid.UUID, len(rows))
-	for i, r := range rows {
-		ids[i] = r.OperationID
-	}
-	found, err := q.OperationsByID(ctx, tx, ids)
-	if err != nil {
-		return nil, false, fmt.Errorf("read the approvals' operations: %w", err)
-	}
-	byID := make(map[uuid.UUID]OperationsOperation, len(found))
-	for _, o := range found {
-		byID[o.ID] = o
-	}
-	ops := make([]Operation, len(rows))
-	for i, r := range rows {
-		ops[i] = operationOf(byID[r.OperationID])
-		ops[i].Approval = approvalOf(r)
-	}
-	return ops, more, nil
-}
-
-// ApprovalOperation reads approval id's operation with it.
-func ApprovalOperation(ctx context.Context, tx pg.Tx, id uuid.UUID) (Operation, error) {
-	found, err := New().ApprovalByID(ctx, tx, id)
-	if err != nil {
-		return Operation{}, fmt.Errorf("read approval %s: %w", id, err)
-	}
-	if len(found) == 0 {
-		return Operation{}, ErrNoApproval
-	}
-	return Get(ctx, tx, found[0].OperationID)
-}
-
-func withApproval(ctx context.Context, tx pg.Tx, op Operation) (Operation, error) {
-	rows, err := New().ApprovalsOf(ctx, tx, []uuid.UUID{op.ID})
-	if err != nil {
-		return Operation{}, fmt.Errorf("read the approval of operation %s: %w", op.ID, err)
-	}
-	if len(rows) > 0 {
-		op.Approval = approvalOf(rows[0])
-	}
-	return op, nil
-}
-
-func operationOf(r OperationsOperation) Operation {
-	return Operation{
-		ID: r.ID, Credential: r.CredentialID, Tool: r.Tool, Target: Target{Kind: r.TargetKind, ID: r.TargetID},
-		Params: r.Params, Risk: Risk(r.Risk), State: State(r.State), Reason: r.Reason, Run: deref(r.RunID),
-		Result: r.Result, Error: deref(r.ErrorCode), Created: r.CreatedAt, Updated: r.UpdatedAt,
-	}
-}
-
-func approvalOf(r OperationsApproval) *Approval {
-	return &Approval{
-		ID: r.ID, Operation: r.OperationID, State: ApprovalState(r.State), Summary: r.Summary, Requested: r.RequestedAt,
-		Expires: r.ExpiresAt, Decided: r.DecidedAt, DecidedBy: deref(r.DecidedBy), DecisionReason: deref(r.DecisionReason),
-	}
 }

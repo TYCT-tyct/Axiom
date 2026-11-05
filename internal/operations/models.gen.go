@@ -23,6 +23,54 @@ type OperationsApproval struct {
 	DecisionReason *string
 }
 
+type OperationsCapCounter struct {
+	ID          int64
+	Category    string
+	WindowKind  string
+	WindowStart time.Time
+	ObjectKind  string
+	ObjectID    string
+	SiteID      *uuid.UUID
+	Reserved    int64
+	Committed   int64
+	Count       int32
+}
+
+type OperationsCapPolicy struct {
+	SiteID         *uuid.UUID
+	Category       string
+	Currency       string
+	SingleMax      int64
+	DailyMax       int64
+	WeeklyMax      int64
+	ObjectDailyMax int64
+	DailyCountMax  int32
+	HardSingleMax  int64
+	HardDailyMax   int64
+	HardWeeklyMax  int64
+	Rev            int64
+	UpdatedAt      time.Time
+}
+
+type OperationsMoneyAction struct {
+	OperationID uuid.UUID
+	Category    string
+	SiteID      *uuid.UUID
+	ObjectKind  string
+	ObjectID    string
+	Amount      int64
+	Currency    string
+	Basis       []byte
+	PolicyRev   int64
+	DayStart    time.Time
+	WeekStart   time.Time
+	ExpiresAt   time.Time
+	State       string
+	Proof       *string
+	ConfirmedBy *uuid.UUID
+	SettledAt   *time.Time
+}
+
 type OperationsOperation struct {
 	ID             uuid.UUID
 	CredentialID   uuid.UUID

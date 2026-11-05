@@ -8,6 +8,9 @@ RETURNING id;
 -- name: OperationByKey :one
 SELECT * FROM operations.operations WHERE credential_id = @credential_id AND idempotency_key = @idempotency_key;
 
+-- name: OperationsByKey :many
+SELECT * FROM operations.operations WHERE credential_id = @credential_id AND idempotency_key = @idempotency_key;
+
 -- name: OperationByID :many
 SELECT * FROM operations.operations WHERE id = @id;
 
@@ -48,10 +51,12 @@ UPDATE operations.operations SET state = @state, result = @result, error_code = 
 RETURNING updated_at;
 
 -- name: InsertApproval :one
--- It waits @ttl_seconds at most, and never past the end of the UTC day it was asked on.
-INSERT INTO operations.approvals (id, operation_id, tier, state, summary, expires_at)
-VALUES (@id, @operation_id, 'human', 'pending', @summary,
-    least(now() + make_interval(secs => @ttl_seconds::float8), date_trunc('day', now(), 'UTC') + interval '1 day'))
+-- It waits @ttl_seconds at most, and never past the end of the UTC day it was asked on, by the clock as it is now: a
+-- proposal that began before midnight and waited for a lock past it is asked on the new day.
+INSERT INTO operations.approvals (id, operation_id, tier, state, summary, requested_at, expires_at)
+SELECT @id, @operation_id, 'human', 'pending', @summary, c.at,
+    least(c.at + make_interval(secs => @ttl_seconds::float8), date_trunc('day', c.at, 'UTC') + interval '1 day')
+FROM (SELECT clock_timestamp() AS at) c
 RETURNING *;
 
 -- name: ApprovalByID :many

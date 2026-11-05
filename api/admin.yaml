@@ -5390,6 +5390,68 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/cap-policies:
+    get:
+      operationId: listOperationsCapPolicies
+      tags: [Operations]
+      summary: The caps on the money the operations agent moves
+      description: >-
+        Every cap policy, by category and scope (the platform's first). A scope and category without one moves no money.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      responses:
+        "200":
+          description: The policies
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsCapPolicyList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/cap-policies/{scope}/{category}:
+    parameters:
+      - name: scope
+        in: path
+        required: true
+        description: "`platform`, for what no site owns such as a platform supplier, or a site's ID."
+        schema: {type: string, pattern: '^(platform|site_[0-9a-hjkmnp-tv-z]{26})$'}
+      - {name: category, in: path, required: true, schema: {$ref: "#/components/schemas/OperationsCapCategory"}}
+    put:
+      operationId: setOperationsCapPolicy
+      tags: [Operations]
+      summary: Set the caps of a scope and category
+      description: >-
+        Makes the policy (`rev` 0) or replaces its limits (`rev` as read; another is a 409 `stale_revision`). A policy
+        keeps the currency it was made with (another is a 409 `conflict`), and every hard limit is at least its
+        autonomous one (otherwise a 400). A proposal waiting for the owner is weighed again against the hard limits when
+        it is approved: one they no longer hold ends `rejected` with `stale_revision`; loosening leaves it alone.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationsCapPolicyUpdate"}
+      responses:
+        "200":
+          description: The policy as it is now
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsCapPolicy"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/operations/approvals:
     get:
       operationId: listOperationsApprovals
@@ -5611,7 +5673,7 @@ components:
     Unprocessable:
       description: >-
         The request is well formed but a rule refuses it (`invalid_invite`, `weak_password`, `not_ready`,
-        `unprocessable`); `message` says which.
+        `unprocessable`, `cap_exceeded`); `message` says which.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -6663,6 +6725,7 @@ components:
         - weak_password
         - not_ready
         - unprocessable
+        - cap_exceeded
         - redeem_code_invalid
         - redeem_code_expired
         - redeem_code_disabled
@@ -7157,6 +7220,57 @@ components:
           type: string
           format: date-time
           description: When the token the last rotation replaced stops working; absent once it has.
+    OperationsCapCategory:
+      type: string
+      enum: [money.top_up]
+      description: A kind of money the agent moves, each with its own caps; top-ups of suppliers for now.
+    OperationsCapAmount:
+      type: string
+      pattern: ^(0|[1-9][0-9]{0,17})$
+      description: An amount in billionths of one unit of the policy's currency, as integer text.
+    OperationsCapLimits:
+      type: object
+      additionalProperties: false
+      required: [single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max]
+      description: >-
+        The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one
+        object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or
+        not: one proposal, the day and the week. Reserved and committed amounts both count.
+      properties:
+        single_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        daily_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        weekly_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        object_daily_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        daily_count_max: {type: integer, format: int32, minimum: 0, maximum: 1000000}
+        hard_single_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        hard_daily_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        hard_weekly_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+    OperationsCapPolicy:
+      type: object
+      additionalProperties: false
+      required: [scope, category, currency, limits, rev, updated_at]
+      properties:
+        scope: {type: string, description: "`platform` or a site's ID."}
+        category: {$ref: "#/components/schemas/OperationsCapCategory"}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        limits: {$ref: "#/components/schemas/OperationsCapLimits"}
+        rev: {type: integer, format: int64, minimum: 1}
+        updated_at: {type: string, format: date-time}
+    OperationsCapPolicyList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/OperationsCapPolicy"}}
+    OperationsCapPolicyUpdate:
+      type: object
+      additionalProperties: false
+      required: [currency, limits, rev, reason]
+      properties:
+        currency: {type: string, pattern: '^[A-Z]{3}$', description: "Fixed when the policy is made."}
+        limits: {$ref: "#/components/schemas/OperationsCapLimits"}
+        rev: {type: integer, format: int64, minimum: 0, description: "The revision read; 0 makes the policy."}
+        reason: {type: string, minLength: 1, maxLength: 1000}
     OperationsCredentialList:
       type: object
       additionalProperties: false
@@ -7268,7 +7382,7 @@ components:
         compensating operation reverts it.
     OperationRisk:
       type: string
-      enum: [routine, delisting]
+      enum: [routine, delisting, top_up]
       description: The operation's class, which decides whether it waits for the owner.
     OperationTarget:
       type: object
