@@ -99,8 +99,7 @@ func (f priceFixture) setEnvelope(limits string, rev string) *httptest.ResponseR
 
 // TestOperationsPricePublish: within the envelope the agent publishes a proposal at once, as itself, and it counts in
 // the day; a retry finds it, a proposal read against an older head is stale, and a published one is not published
-// again. Without an envelope nothing is
-// published, and a preview writes nothing.
+// again. Without an envelope nothing is published, and a preview writes nothing.
 func TestOperationsPricePublish(t *testing.T) {
 	t.Parallel()
 	f := newPriceFixture(t)
@@ -121,17 +120,29 @@ func TestOperationsPricePublish(t *testing.T) {
 	if rec.Code != http.StatusOK || done.State != operationsapi.OperationStateSucceeded || !strings.Contains(rec.Body.String(), `"change_bps":2000`) || versions() == before {
 		t.Errorf("the publication: %d %s", rec.Code, rec.Body)
 	}
-	if got := f.text(`SELECT actor_kind FROM platform.audit_log WHERE action = 'price.publish' ORDER BY id DESC LIMIT 1`); got != "operations_agent" {
-		t.Errorf("published as %s", got)
-	}
-	if rec := f.publish(model, p, key, ""); rec.Header().Get("Idempotency-Replayed") != "true" || *agentOperation(t, rec).OperationId != *done.OperationId {
-		t.Errorf("the retry: %d %s", rec.Code, rec.Body)
-	}
+	f.expectReplayed(model, p, key, *done.OperationId)
 	expectAdmin(t, "an old head", f.publish(model, p, newKey(), ""), http.StatusConflict, codeStaleRevision)
 	expectAdmin(t, "published already", f.publish(model, f.publication(model), newKey(), ""), http.StatusConflict, codeConflict)
+	f.expectUse(2000)
+}
+
+// expectUse checks that caps_get shows one envelope with one publication of one model that moved by bps.
+func (f priceFixture) expectUse(bps int64) {
+	f.t.Helper()
 	use := f.caps(f.token).PriceEnvelopes
-	if use == nil || len(*use) != 1 || (*use)[0].Changes != 1 || (*use)[0].Models != 1 || len((*use)[0].Moves) != 1 || (*use)[0].Moves[0].ChangeBps != 2000 {
-		t.Errorf("the envelope's use: %+v", use)
+	if use == nil || len(*use) != 1 || (*use)[0].Changes != 1 || (*use)[0].Models != 1 || len((*use)[0].Moves) != 1 || (*use)[0].Moves[0].ChangeBps != bps {
+		f.t.Errorf("the envelope's use: %+v", use)
+	}
+}
+
+// expectReplayed checks that the publication was audited as the agent's and that its retry under key finds it.
+func (f priceFixture) expectReplayed(model string, p operationsapi.PricePublication, key, operation string) {
+	f.t.Helper()
+	if got := f.text(`SELECT actor_kind FROM platform.audit_log WHERE action = 'price.publish' ORDER BY id DESC LIMIT 1`); got != "operations_agent" {
+		f.t.Errorf("published as %s", got)
+	}
+	if rec := f.publish(model, p, key, ""); rec.Header().Get("Idempotency-Replayed") != "true" || *agentOperation(f.t, rec).OperationId != operation {
+		f.t.Errorf("the retry: %d %s", rec.Code, rec.Body)
 	}
 }
 

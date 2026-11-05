@@ -201,6 +201,12 @@ func TestCountPrice(t *testing.T) {
 	if got := db.text(t, `SELECT count || '/' || models FROM operations.price_counters WHERE site_id = '`+site.String()+`' AND model_id IS NULL`); got != "3/2" {
 		t.Errorf("the site's row is %s", got)
 	}
+	db.expectMoves(t, site, map[uuid.UUID]operations.ModelMoves{model: {Model: model, Change: 12500, Count: 2}, other: {Model: other, Change: 100, Count: 1}})
+}
+
+// expectMoves checks that the only envelope with use today is site's, with 3 publications of 2 models and want's moves.
+func (db opsDB) expectMoves(t *testing.T, site uuid.UUID, want map[uuid.UUID]operations.ModelMoves) {
+	t.Helper()
 	var usage []operations.PriceUsage
 	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
 		usage, err = operations.PriceUsages(t.Context(), tx)
@@ -208,15 +214,13 @@ func TestCountPrice(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(usage) != 1 || usage[0].Envelope.Site != site || usage[0].Changes != 3 || usage[0].Models != 2 || len(usage[0].Moves) != 2 {
+	if len(usage) != 1 || usage[0].Envelope.Site != site || usage[0].Changes != 3 || usage[0].Models != 2 || len(usage[0].Moves) != len(want) {
 		t.Fatalf("the use: %+v", usage)
 	}
-	moves := map[uuid.UUID]operations.ModelMoves{}
 	for _, m := range usage[0].Moves {
-		moves[m.Model] = m
-	}
-	if moves[model].Change != 12500 || moves[model].Count != 2 || moves[other].Change != 100 || moves[other].Count != 1 {
-		t.Errorf("the moves: %+v", usage[0].Moves)
+		if m != want[m.Model] {
+			t.Errorf("the moves of %s: %+v", m.Model, m)
+		}
 	}
 }
 

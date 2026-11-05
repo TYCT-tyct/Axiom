@@ -12,14 +12,16 @@ import (
 
 // ListOperationsPriceEnvelopes lists every site's envelope for the agent's sale prices.
 func (a adminAPI) ListOperationsPriceEnvelopes(ctx context.Context, _ adminapi.ListOperationsPriceEnvelopesRequestObject) (adminapi.ListOperationsPriceEnvelopesResponseObject, error) {
-	var list adminapi.OperationsPriceEnvelopeList
+	list := adminapi.OperationsPriceEnvelopeList{Data: []adminapi.OperationsPriceEnvelopeSetting{}}
 	err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
 		envelopes, err := operations.PriceEnvelopes(ctx, tx)
-		list.Data = make([]adminapi.OperationsPriceEnvelopeSetting, len(envelopes))
-		for i, e := range envelopes {
-			list.Data[i] = envelopeBody(e)
+		if err != nil {
+			return err
 		}
-		return err
+		for _, e := range envelopes {
+			list.Data = append(list.Data, envelopeBody(e))
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
