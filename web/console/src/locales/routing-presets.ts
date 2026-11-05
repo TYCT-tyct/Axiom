@@ -200,7 +200,8 @@ export const en: Messages<typeof zh> = {
     invalid: {
       name: "Enter a vendor or model ID.",
       classes: "Check at least one source; with none, no endpoint is left.",
-      policies: "Check “may train on data”: no endpoint has another policy yet, so without it the rule finds no endpoint.",
+      policies:
+        "Check “may train on data”: no endpoint has another policy yet, so without it the rule finds no endpoint.",
       price: "Enter an amount, such as 2.5.",
     },
   },

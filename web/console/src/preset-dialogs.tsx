@@ -60,6 +60,13 @@ function save(edit: PresetEdit, body: { slug: string; name: string; rules: Schem
 
 type Missing = "slug" | "name" | null;
 
+// A refusal may sit far down a long dialog, away from the button pressed: once it renders, it is scrolled into view.
+function showRefusal(form: HTMLFormElement) {
+  requestAnimationFrame(() =>
+    form.querySelector("[aria-invalid=true], [data-invalid]")?.scrollIntoView({ block: "center" }),
+  );
+}
+
 // PresetDialog makes a preset, makes one from a copy of another's rules, or changes one of the account's. An edit is
 // fixed to the revision it opened with: a change made elsewhere meanwhile is refused, not overwritten.
 export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () => void }) {
@@ -79,7 +86,6 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
       onClose();
     },
   });
-  // A refusal may sit far down a long dialog, away from the button pressed: once it renders, it is scrolled into view.
   const submit = (form: HTMLFormElement) => {
     const written = rulesOf(draft);
     const blank: Missing = edit.kind !== "edit" && !slugPattern.test(slug) ? "slug" : name.trim() ? null : "name";
@@ -89,9 +95,7 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
       mutation.mutate({ slug, name: name.trim(), rules: written.rules });
       return;
     }
-    requestAnimationFrame(() =>
-      form.querySelector("[aria-invalid=true], [data-invalid]")?.scrollIntoView({ block: "center" }),
-    );
+    showRefusal(form);
   };
   return (
     <Dialog title={t(`routingPresets.${edit.kind}Title`)} onClose={onClose}>
