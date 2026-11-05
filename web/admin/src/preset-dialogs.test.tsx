@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { AdminSchemas } from "@axiom/api";
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import en from "./locales/en";
 import { DisablePresetDialog } from "./preset-dialogs";
 import { renderInDom } from "./test-dom";
@@ -9,27 +9,16 @@ const platformPreset = "00000000-0000-4000-9000-000000000001";
 const sitePreset = "00000000-0000-4000-9000-000000000002";
 const site = "site_01jbz3x0000000000000000000";
 
+// The platform's default and the site's both point at the platform preset; the site preset is no layer's default.
+vi.mock("@axiom/api", async (importOriginal) =>
+  (await import("./test-dom")).withAdminApi(importOriginal, {
+    GET: vi.fn(() => Promise.resolve({ data: { preset_id: platformPreset, version: 1 }, response: new Response() })),
+  }),
+);
+
 vi.mock("@axiom/app", async (importOriginal) =>
   (await import("./test-dom")).signedIn(importOriginal, ["sites.manage"]),
 );
-
-// The platform's default and the site's both point at the platform preset; the site preset is no layer's default.
-vi.mock("@axiom/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@axiom/api")>();
-  return {
-    ...actual,
-    adminApi: {
-      GET: vi.fn(() => Promise.resolve({ data: { preset_id: platformPreset, version: 1 }, response: new Response() })),
-    },
-  };
-});
-
-beforeAll(() => {
-  // jsdom has the dialog element but not its modal methods.
-  HTMLDialogElement.prototype.showModal = function () {
-    this.open = true;
-  };
-});
 
 const preset = (id: string, scope: "platform" | "site", keys?: number): AdminSchemas["RoutingPreset"] => ({
   id,

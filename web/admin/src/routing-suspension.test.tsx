@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, useState } from "react";
-import { beforeAll, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import en from "./locales/en";
 import { SuspensionCard, usePresetsHold } from "./routing-suspension";
 import { renderInDom } from "./test-dom";
@@ -11,31 +11,17 @@ vi.mock("@axiom/app", async (importOriginal) =>
   (await import("./test-dom")).signedIn(importOriginal, ["sites.manage"]),
 );
 
-vi.mock("@axiom/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@axiom/api")>();
-  return {
-    ...actual,
-    adminApi: {
-      GET: vi.fn(() =>
-        Promise.resolve({ data: { suspended: true, since: "2026-11-05T00:00:00Z" }, response: new Response() }),
-      ),
-      PUT: vi.fn((_path: string, { body }: { body: unknown }) => {
-        sent.push(body);
-        return Promise.resolve({ data: { suspended: true, since: "2026-11-05T00:00:00Z" }, response: new Response() });
-      }),
-    },
-  };
-});
-
-beforeAll(() => {
-  // jsdom has the dialog element but not its modal methods.
-  HTMLDialogElement.prototype.showModal = function () {
-    this.open = true;
-  };
-  HTMLDialogElement.prototype.close = function () {
-    this.open = false;
-  };
-});
+vi.mock("@axiom/api", async (importOriginal) =>
+  (await import("./test-dom")).withAdminApi(importOriginal, {
+    GET: vi.fn(() =>
+      Promise.resolve({ data: { suspended: true, since: "2026-11-05T00:00:00Z" }, response: new Response() }),
+    ),
+    PUT: vi.fn((_path: string, { body }: { body: unknown }) => {
+      sent.push(body);
+      return Promise.resolve({ data: { suspended: true, since: "2026-11-05T00:00:00Z" }, response: new Response() });
+    }),
+  }),
+);
 
 type Suspension = { suspended: boolean; since?: string };
 let refetched: (s: Suspension) => void = () => {};
