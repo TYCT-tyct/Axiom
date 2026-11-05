@@ -1,6 +1,7 @@
 // Command qualityratchet measures the quality ratchet's numbers for the tree named by -root: nolint directives per
 // linter, functions over gocognit's configured threshold, files over the length limit, and, with -coverage, statement
-// coverage per package from a `go test -coverprofile` profile.
+// coverage per package from a `go test -coverprofile` profile. Test functions are counted separately from non-test
+// functions, so the same threshold can ratchet both while the test hard ceiling stays lower.
 //
 // gocognit is the library golangci-lint's gocognit linter uses, pinned in tools/go.mod, so the complexity numbers match
 // lint. //gocognit:ignore is deliberately not honored: the ratchet must see what lint was told to skip. File length is
@@ -67,11 +68,12 @@ type packageCoverage struct {
 }
 
 type measurement struct {
-	NolintDirectives int                        `json:"nolint_directives"`
-	Nolint           map[string]int             `json:"nolint"`
-	FunctionsOver15  []functionMetric           `json:"functions_over_15"`
-	FilesOver500     []fileMetric               `json:"files_over_500"`
-	Coverage         map[string]packageCoverage `json:"coverage"`
+	NolintDirectives    int                        `json:"nolint_directives"`
+	Nolint              map[string]int             `json:"nolint"`
+	FunctionsOver15     []functionMetric           `json:"functions_over_15"`
+	TestFunctionsOver15 []functionMetric           `json:"test_functions_over_15"`
+	FilesOver500        []fileMetric               `json:"files_over_500"`
+	Coverage            map[string]packageCoverage `json:"coverage"`
 }
 
 func main() {
@@ -127,9 +129,10 @@ func (s *sourceTree) own(dir string) bool {
 
 func measure(root, coverage string) (measurement, error) {
 	result := measurement{
-		Nolint:          map[string]int{},
-		FunctionsOver15: []functionMetric{},
-		FilesOver500:    []fileMetric{},
+		Nolint:              map[string]int{},
+		FunctionsOver15:     []functionMetric{},
+		TestFunctionsOver15: []functionMetric{},
+		FilesOver500:        []fileMetric{},
 	}
 	sources := newSourceTree()
 	fset := token.NewFileSet()
@@ -143,6 +146,9 @@ func measure(root, coverage string) (measurement, error) {
 
 	sort.Slice(result.FunctionsOver15, func(i, j int) bool {
 		return result.FunctionsOver15[i].Name < result.FunctionsOver15[j].Name
+	})
+	sort.Slice(result.TestFunctionsOver15, func(i, j int) bool {
+		return result.TestFunctionsOver15[i].Name < result.TestFunctionsOver15[j].Name
 	})
 	sort.Slice(result.FilesOver500, func(i, j int) bool {
 		return result.FilesOver500[i].Path < result.FilesOver500[j].Path
@@ -168,14 +174,14 @@ func walk(
 	if entry.IsDir() {
 		return walkDir(tree, filePath, entry, sources)
 	}
-	if !strings.HasSuffix(filePath, ".go") || strings.HasSuffix(filePath, "_test.go") {
+	if !strings.HasSuffix(filePath, ".go") {
 		return nil
 	}
 	if strings.HasSuffix(filePath, ".gen.go") {
 		sources.generated[filePath] = true
 		return nil
 	}
-	return measureFile(tree, fset, filePath, result, sources)
+	return measureFile(tree, fset, filePath, strings.HasSuffix(filePath, "_test.go"), result, sources)
 }
 
 func walkDir(tree fs.FS, filePath string, entry fs.DirEntry, sources *sourceTree) error {
@@ -191,7 +197,9 @@ func walkDir(tree fs.FS, filePath string, entry fs.DirEntry, sources *sourceTree
 	return nil
 }
 
-func measureFile(tree fs.FS, fset *token.FileSet, filePath string, result *measurement, sources *sourceTree) error {
+func measureFile(
+	tree fs.FS, fset *token.FileSet, filePath string, isTest bool, result *measurement, sources *sourceTree,
+) error {
 	source, err := fs.ReadFile(tree, filePath)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", filePath, err)
@@ -204,12 +212,21 @@ func measureFile(tree fs.FS, fset *token.FileSet, filePath string, result *measu
 		sources.generated[filePath] = true
 		return nil
 	}
+	if isTest {
+		countTestComplexity(file, filePath, result)
+		return nil
+	}
+	measureProduction(file, filePath, source, sources.own(path.Dir(filePath)), result, sources)
+	return nil
+}
+
+// measureProduction records a non-test file's nolint directives, length and functions over the limit, and whether the
+// file holds code that coverage can measure.
+func measureProduction(file *ast.File, filePath string, source []byte, measured bool, result *measurement, sources *sourceTree) {
 	dir := path.Dir(filePath)
-	measured := sources.own(dir)
 	if measured {
 		sources.packages[dir] = true
 	}
-
 	countNolint(file, result)
 	if lines := lineCount(source); lines > fileLimit {
 		result.FilesOver500 = append(result.FilesOver500, fileMetric{Path: filePath, Lines: lines})
@@ -229,7 +246,23 @@ func measureFile(tree fs.FS, fset *token.FileSet, filePath string, result *measu
 			})
 		}
 	}
-	return nil
+}
+
+// countTestComplexity records the test functions over the limit. Nolint directives and file length stay non-test: the
+// ratchet's existing counts are about production code, and the test half is only about how hard a test is to read.
+func countTestComplexity(file *ast.File, filePath string, result *measurement) {
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		if complexity := gocognit.Complexity(function); complexity > cognitiveLimit {
+			result.TestFunctionsOver15 = append(result.TestFunctionsOver15, functionMetric{
+				Name:       filePath + ":" + functionName(function),
+				Complexity: complexity,
+			})
+		}
+	}
 }
 
 func countNolint(file *ast.File, result *measurement) {

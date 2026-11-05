@@ -100,7 +100,95 @@ func TestAlipayClose(t *testing.T) {
 	}
 }
 
-//nolint:cyclop,gocognit // one outcome per row; the table is the test
+// alipayRefundCase is one row of TestAlipayRefund: the gateway's answer and what the channel must make of it.
+type alipayRefundCase struct {
+	fundChange string
+	failure    string
+	signed     bool
+	state      RefundOutcome
+	rejected   bool
+	wantErr    bool
+	refundFee  string
+	omitFee    bool
+	emptyFee   bool
+}
+
+// alipayRefundReply is the gateway's answer for a row, and whether it is signed.
+func alipayRefundReply(t *testing.T, tc alipayRefundCase, r RefundCall) (string, bool) {
+	t.Helper()
+	if tc.failure != "" {
+		return fmt.Sprintf(`{"code":"40004","msg":"Business Failed","sub_code":%q}`, tc.failure), tc.signed
+	}
+	if tc.omitFee {
+		return fmt.Sprintf(`{"code":"10000","msg":"Success","out_trade_no":%q,"trade_no":"T1","fund_change":%q}`,
+			r.Order.TypeID(), tc.fundChange), tc.signed
+	}
+	fee := tc.refundFee
+	if tc.emptyFee {
+		fee = ""
+	} else if fee == "" {
+		fee = "12.34"
+	}
+	return fmt.Sprintf(`{"code":"10000","msg":"Success","out_trade_no":%q,"trade_no":"T1","fund_change":%q,"refund_fee":%q}`,
+		r.Order.TypeID(), tc.fundChange, fee), tc.signed
+}
+
+// checkAlipayRefundRequest asserts the request names the order, the refund and the truncated reason.
+func checkAlipayRefundRequest(t *testing.T, method string, biz map[string]jsonx.Raw, r RefundCall) {
+	t.Helper()
+	if method != "alipay.trade.refund" {
+		t.Errorf("method %s", method)
+	}
+	if alipayBiz(t, biz, "out_trade_no") != r.Order.TypeID() || alipayBiz(t, biz, "out_request_no") != r.Refund.TypeID() ||
+		alipayBiz(t, biz, "refund_amount") != "12.34" {
+		t.Errorf("refund biz %v", biz)
+	}
+	if got := utf8.RuneCountInString(alipayBiz(t, biz, "refund_reason")); got != 256 {
+		t.Errorf("reason runes %d", got)
+	}
+}
+
+// checkAlipayRejected asserts the error is a definite refusal that names the gateway's code.
+func checkAlipayRejected(t *testing.T, failure string, err error) {
+	t.Helper()
+	var rejected *Rejected
+	if !errors.As(err, &rejected) || rejected.Code != "alipay."+failure {
+		t.Fatalf("%v %+v", err, rejected)
+	}
+}
+
+// checkAlipayUnknown asserts the error is not a definite refusal.
+func checkAlipayUnknown(t *testing.T, err error) {
+	t.Helper()
+	var rejected *Rejected
+	if err == nil || errors.As(err, &rejected) {
+		t.Fatalf("%v", err)
+	}
+}
+
+// checkAlipayState asserts the refund succeeded with the request's own provider reference.
+func checkAlipayState(t *testing.T, r RefundCall, state RefundState, err error, want RefundOutcome) {
+	t.Helper()
+	if err != nil || state.State != want || state.ProviderRef != r.Refund.TypeID() {
+		t.Fatalf("%+v %v", state, err)
+	}
+}
+
+// checkAlipayRefundOutcome asserts the outcome the row asks for, and that the gateway's code survives in the error.
+func checkAlipayRefundOutcome(t *testing.T, tc alipayRefundCase, r RefundCall, state RefundState, err error) {
+	t.Helper()
+	if tc.rejected {
+		checkAlipayRejected(t, tc.failure, err)
+	} else if tc.wantErr {
+		checkAlipayUnknown(t, err)
+	} else {
+		checkAlipayState(t, r, state, err, tc.state)
+	}
+	if tc.failure != "" && err != nil && !strings.Contains(err.Error(), tc.failure) {
+		t.Fatalf("error lost the gateway code: %v", err)
+	}
+}
+
 func TestAlipayRefund(t *testing.T) {
 	call := func() RefundCall {
 		return RefundCall{
@@ -110,18 +198,7 @@ func TestAlipayRefund(t *testing.T) {
 			Reason: strings.Repeat("退", 300),
 		}
 	}
-	requestID := func(r RefundCall) string { return r.Refund.TypeID() }
-	for name, tc := range map[string]struct {
-		fundChange string
-		failure    string
-		signed     bool
-		state      RefundOutcome
-		rejected   bool
-		wantErr    bool
-		refundFee  string
-		omitFee    bool
-		emptyFee   bool
-	}{
+	for name, tc := range map[string]alipayRefundCase{
 		"succeeded":    {fundChange: "Y", signed: true, state: RefundSucceeded},
 		"pending":      {fundChange: "N", signed: true, state: RefundPending},
 		"not exists":   {failure: "ACQ.TRADE_NOT_EXIST", signed: true, rejected: true},
@@ -136,52 +213,13 @@ func TestAlipayRefund(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := call()
 			ch, gateway := alipayChannelWith(t, func(method string, biz map[string]jsonx.Raw, _ url.Values) (string, bool) {
-				if method != "alipay.trade.refund" {
-					t.Errorf("method %s", method)
-				}
-				if alipayBiz(t, biz, "out_trade_no") != r.Order.TypeID() || alipayBiz(t, biz, "out_request_no") != requestID(r) ||
-					alipayBiz(t, biz, "refund_amount") != "12.34" {
-					t.Errorf("refund biz %v", biz)
-				}
-				if got := utf8.RuneCountInString(alipayBiz(t, biz, "refund_reason")); got != 256 {
-					t.Errorf("reason runes %d", got)
-				}
-				if tc.failure != "" {
-					return fmt.Sprintf(`{"code":"40004","msg":"Business Failed","sub_code":%q}`, tc.failure), tc.signed
-				}
-				if tc.omitFee {
-					return fmt.Sprintf(`{"code":"10000","msg":"Success","out_trade_no":%q,"trade_no":"T1","fund_change":%q}`,
-						r.Order.TypeID(), tc.fundChange), tc.signed
-				}
-				fee := tc.refundFee
-				if tc.emptyFee {
-					fee = ""
-				} else if fee == "" {
-					fee = "12.34"
-				}
-				return fmt.Sprintf(`{"code":"10000","msg":"Success","out_trade_no":%q,"trade_no":"T1","fund_change":%q,"refund_fee":%q}`,
-					r.Order.TypeID(), tc.fundChange, fee), tc.signed
+				checkAlipayRefundRequest(t, method, biz, r)
+				return alipayRefundReply(t, tc, r)
 			})
 			state, err := ch.Refund(t.Context(), r)
-			var rejected *Rejected
-			if tc.rejected {
-				if !errors.As(err, &rejected) || rejected.Code != "alipay."+tc.failure {
-					t.Fatalf("%v %+v", err, rejected)
-				}
-			} else if tc.wantErr {
-				if err == nil || errors.As(err, &rejected) {
-					t.Fatalf("%v", err)
-				}
-			} else {
-				if err != nil || state.State != tc.state || state.ProviderRef != requestID(r) {
-					t.Fatalf("%+v %v", state, err)
-				}
-			}
+			checkAlipayRefundOutcome(t, tc, r, state, err)
 			if gateway.refunds != 1 {
 				t.Fatalf("refunds %d", gateway.refunds)
-			}
-			if tc.failure != "" && err != nil && !strings.Contains(err.Error(), tc.failure) {
-				t.Fatalf("error lost the gateway code: %v", err)
 			}
 		})
 	}

@@ -15,7 +15,86 @@ import (
 // TestLegalDocumentHistoryPages publishes more privacy versions than one page and one terms version. Every version must
 // be reachable through next_cursor, including the terms version that a single kind-ordered page would hide.
 //
-//nolint:cyclop,gocognit // one publish-and-page journey: each step is the pagination contract under test.
+// checkLegalCursors asserts malformed cursors are refused and both cursor forms name the same position.
+func checkLegalCursors(t *testing.T, admin adminFixture, base string, operator session) {
+	t.Helper()
+	for name, cursor := range map[string]string{
+		"a malformed legal document cursor":              "not-a-cursor",
+		"a legal document cursor beyond int32":           "privacy:zh:2147483648",
+		"a legal document cursor with an unknown locale": "privacy:fr:1",
+	} {
+		rec := admin.do(http.MethodGet, base+"?cursor="+url.QueryEscape(cursor), "", as(operator))
+		expectAdmin(t, name, rec, http.StatusBadRequest, "")
+	}
+	// Both cursor forms are accepted: the old page emits kind:version, while a new page may carry the transitional
+	// kind:locale:version. They name the same position while versions remain unique across locales.
+	for _, cursor := range []string{"privacy:1", "privacy:zh:1"} {
+		rec := admin.do(http.MethodGet, base+"?cursor="+url.QueryEscape(cursor), "", as(operator))
+		expectAdmin(t, "a legal document cursor "+cursor, rec, http.StatusOK, "")
+		var page adminapi.LegalDocumentHistory
+		decode(t, rec, &page)
+		if len(page.Documents) != 1 || page.Documents[0].Kind != adminapi.LegalDocumentKind("terms") {
+			t.Fatalf("cursor %s: %+v", cursor, page.Documents)
+		}
+	}
+}
+
+// collectLegalPage reads one page, records every version in seen and returns the page's next cursor.
+func collectLegalPage(t *testing.T, admin adminFixture, path string, operator session, pageNumber int, seen map[string]bool) *string {
+	t.Helper()
+	rec := admin.do(http.MethodGet, path, "", as(operator))
+	expectAdmin(t, "list legal documents page", rec, http.StatusOK, "")
+	var page adminapi.LegalDocumentHistory
+	decode(t, rec, &page)
+	if len(page.Documents) == 0 {
+		t.Fatalf("page %d is empty", pageNumber)
+	}
+	for _, document := range page.Documents {
+		locale := "zh"
+		if document.Locale != nil {
+			locale = string(*document.Locale)
+		}
+		key := fmt.Sprintf("%s:%s:%d", document.Kind, locale, document.Version)
+		if seen[key] {
+			t.Fatalf("version %s appears twice", key)
+		}
+		seen[key] = true
+	}
+	return page.NextCursor
+}
+
+// readLegalHistory pages through the history and returns every version read and the page count.
+func readLegalHistory(t *testing.T, admin adminFixture, base string, operator session) (map[string]bool, int) {
+	t.Helper()
+	seen := map[string]bool{}
+	cursor := ""
+	pages := 0
+	for {
+		path := base + "?limit=50"
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		next := collectLegalPage(t, admin, path, operator, pages+1, seen)
+		pages++
+		if next == nil {
+			break
+		}
+		if *next == cursor {
+			t.Fatal("next_cursor does not move")
+		}
+		if strings.Count(*next, ":") != 1 {
+			t.Fatalf("next_cursor %q is not the legacy kind:version form", *next)
+		}
+		cursor = *next
+		if pages > 10 {
+			t.Fatal("the history did not end")
+		}
+	}
+	return seen, pages
+}
+
+// TestLegalDocumentHistoryPages publishes more privacy versions than one page and one terms version. Every version must
+// be reachable through next_cursor, including the terms version that a single kind-ordered page would hide.
 func TestLegalDocumentHistoryPages(t *testing.T) {
 	t.Parallel()
 	c, _ := ownerFixture.get(t, buildOwnerDatabase)
@@ -39,64 +118,8 @@ func TestLegalDocumentHistoryPages(t *testing.T) {
 
 	operator := admin.owner()
 	base := "/sites/" + site + "/legal-documents"
-	rec := admin.do(http.MethodGet, base+"?cursor=not-a-cursor", "", as(operator))
-	expectAdmin(t, "a malformed legal document cursor", rec, http.StatusBadRequest, "")
-	rec = admin.do(http.MethodGet, base+"?cursor=privacy:zh:2147483648", "", as(operator))
-	expectAdmin(t, "a legal document cursor beyond int32", rec, http.StatusBadRequest, "")
-	rec = admin.do(http.MethodGet, base+"?cursor=privacy:fr:1", "", as(operator))
-	expectAdmin(t, "a legal document cursor with an unknown locale", rec, http.StatusBadRequest, "")
-	// Both cursor forms are accepted: the old page emits kind:version, while a new page may carry the transitional
-	// kind:locale:version. They name the same position while versions remain unique across locales.
-	for _, cursor := range []string{"privacy:1", "privacy:zh:1"} {
-		rec = admin.do(http.MethodGet, base+"?cursor="+url.QueryEscape(cursor), "", as(operator))
-		expectAdmin(t, "a legal document cursor "+cursor, rec, http.StatusOK, "")
-		var page adminapi.LegalDocumentHistory
-		decode(t, rec, &page)
-		if len(page.Documents) != 1 || page.Documents[0].Kind != adminapi.LegalDocumentKind("terms") {
-			t.Fatalf("cursor %s: %+v", cursor, page.Documents)
-		}
-	}
-	seen := map[string]bool{}
-	cursor := ""
-	pages := 0
-	for {
-		path := base + "?limit=50"
-		if cursor != "" {
-			path += "&cursor=" + url.QueryEscape(cursor)
-		}
-		rec := admin.do(http.MethodGet, path, "", as(operator))
-		expectAdmin(t, "list legal documents page", rec, http.StatusOK, "")
-		var page adminapi.LegalDocumentHistory
-		decode(t, rec, &page)
-		if len(page.Documents) == 0 {
-			t.Fatalf("page %d is empty", pages+1)
-		}
-		for _, document := range page.Documents {
-			locale := "zh"
-			if document.Locale != nil {
-				locale = string(*document.Locale)
-			}
-			key := fmt.Sprintf("%s:%s:%d", document.Kind, locale, document.Version)
-			if seen[key] {
-				t.Fatalf("version %s appears twice", key)
-			}
-			seen[key] = true
-		}
-		pages++
-		if page.NextCursor == nil {
-			break
-		}
-		if *page.NextCursor == cursor {
-			t.Fatal("next_cursor does not move")
-		}
-		if strings.Count(*page.NextCursor, ":") != 1 {
-			t.Fatalf("next_cursor %q is not the legacy kind:version form", *page.NextCursor)
-		}
-		cursor = *page.NextCursor
-		if pages > 10 {
-			t.Fatal("the history did not end")
-		}
-	}
+	checkLegalCursors(t, admin, base, operator)
+	seen, pages := readLegalHistory(t, admin, base, operator)
 	if len(seen) != 202 {
 		t.Fatalf("%d versions read, want 202", len(seen))
 	}

@@ -87,6 +87,24 @@ func TestSourceClassClassification(t *testing.T) {
 	}
 }
 
+// TestSourceClassNames: the names a preset editor offers are every live class in evaluation order, the fallback last,
+// and follow a renamed or added class on the next reload.
+func TestSourceClassNames(t *testing.T) {
+	m := New(nil)
+	classes := DefaultSourceClasses()
+	classes = append(classes, SourceClass{Slug: "pool", Name: "Pool", NameZh: "号池", Position: 500, Rules: Rules{Match: "all"}})
+	classes[1].NameZh = "云"
+	if err := m.SetSourceClasses(classes); err != nil {
+		t.Fatal(err)
+	}
+	want := []ClassName{
+		{"official", "Official", "官方直连"}, {"cloud", "Cloud", "云"}, {"pool", "Pool", "号池"}, {"relay", "Relay", "中转站"},
+	}
+	if got := m.SourceClassNames(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("names %v, want %v", got, want)
+	}
+}
+
 // TestSourceClassNewHeaderIsUnknown: adding a rule for a header the old rules did not check must fall back for both
 // present and absent; an unchecked header is unknown, not evidence that it was missing.
 func TestSourceClassNewHeaderIsUnknown(t *testing.T) {

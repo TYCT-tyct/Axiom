@@ -211,6 +211,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/source-classes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The source classes a routing preset can name
+         * @description Every live source class in recognition order, the fallback last, as this node last read them: the slugs a rule's `classes` allows and the names a page shows for them. Classes are the platform's data and change without a release; a class added later is in `["*"]` but not in a list written before it (docs/domains/routing.md 「规则内容」).
+         */
+        get: operations["listRoutingSourceClasses"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/notification-preferences": {
         parameters: {
             query?: never;
@@ -1463,6 +1483,15 @@ export interface components {
             preset_id: string | null;
             /** Format: int64 */
             version: number;
+        };
+        SourceClassName: {
+            slug: string;
+            name: string;
+            /** @description The Chinese name; empty when the platform gave none. */
+            name_zh: string;
+        };
+        SourceClassNameList: {
+            data: components["schemas"]["SourceClassName"][];
         };
         /** @description Inference defaults. Only deliberate configuration, no transient input. */
         PresetConfig: {
@@ -3030,6 +3059,29 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listRoutingSourceClasses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The classes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceClassNameList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             default: components["responses"]["Failure"];
         };
     };

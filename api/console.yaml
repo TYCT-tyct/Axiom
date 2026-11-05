@@ -480,6 +480,29 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/source-classes:
+    get:
+      operationId: listRoutingSourceClasses
+      tags: [Keys]
+      summary: The source classes a routing preset can name
+      description: >-
+        Every live source class in recognition order, the fallback last, as this node last read them: the slugs a
+        rule's `classes` allows and the names a page shows for them. Classes are the platform's data and change without
+        a release; a class added later is in `["*"]` but not in a list written before it (docs/domains/routing.md
+        「规则内容」).
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The classes.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SourceClassNameList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/notification-preferences:
     get:
       operationId: getNotificationPreferences
@@ -2712,6 +2735,20 @@ components:
       properties:
         preset_id: {type: string, format: uuid, nullable: true, description: "null clears the account's default."}
         version: {type: integer, format: int64, minimum: 0}
+    SourceClassName:
+      type: object
+      required: [slug, name, name_zh]
+      properties:
+        slug: {type: string}
+        name: {type: string}
+        name_zh: {type: string, description: "The Chinese name; empty when the platform gave none."}
+    SourceClassNameList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/SourceClassName"}
     PresetConfig:
       x-go-type: jsonx.Raw
       type: object

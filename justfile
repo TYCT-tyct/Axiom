@@ -52,9 +52,11 @@ lint:
     {{ tool }} golangci-lint run
     cd tools && go tool golangci-lint run ./...
 
-# The quality ratchet: nolint per linter, functions over gocognit 15 and files over 500 lines may only fall, and no
-# function or file may newly cross the hard ceiling 30/800. .github/quality-baseline.json holds the counts and the named
-# exceptions; the script says which number to lower when one falls (`--write-baseline` lowers them, and refuses a rise).
+# The quality ratchet: nolint per linter, functions over gocognit 15, test functions over 15 and files over 500 lines
+# may only fall, and no function or file may newly cross the hard ceiling 30, test functions included, or 800. Test
+# functions have their own ceiling list, so a test exception cannot excuse production code. .github/quality-baseline.json
+# holds the counts and the named exceptions; the script says which number to lower when one falls (`--write-baseline`
+# lowers them, and refuses a rise).
 # With BASE set (PRs and trains), it also reads the baseline committed at the base, so code and baseline cannot grow
 # together; a base without the baseline is its first introduction. A static-only write keeps the recorded coverage.
 # The static half of the quality ratchet: nolint, complexity and file length may only fall.
