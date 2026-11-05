@@ -1,13 +1,11 @@
 import { ApiError, consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
-import { accountKey, useErrors } from "@axiom/app";
+import { accountKey, draftOf, type Invalid, RulesEditor, rulesOf, useClassOptions, useErrors } from "@axiom/app";
 import { Button, Dialog, FormError, SubmitButton, TextField } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "./confirm-dialog";
-import { RulesEditor } from "./preset-editor";
-import { draftOf, type Invalid, rulesOf } from "./preset-rules";
-import { siteQuery } from "./queries";
+import { siteQuery, sourceClassesQuery } from "./queries";
 
 type Preset = Schemas["RoutingPreset"];
 export type PresetEdit = { kind: "create" } | { kind: "copy"; preset: Preset } | { kind: "edit"; preset: Preset };
@@ -67,16 +65,23 @@ function showRefusal(form: HTMLFormElement) {
   );
 }
 
+// What the rules editor offers: prices in the site's currency, and the source classes the node routes by.
+function useEditorChoices() {
+  const currency = useQuery(siteQuery).data?.currency ?? "";
+  const classes = useClassOptions(useQuery({ ...sourceClassesQuery, select: (view) => view.data }));
+  return { currency, classes };
+}
+
 // PresetDialog makes a preset, makes one from a copy of another's rules, or changes one of the account's. An edit is
 // fixed to the revision it opened with: a change made elsewhere meanwhile is refused, not overwritten.
 export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () => void }) {
   const { t } = useTranslation();
   const refresh = useRefreshPresets();
-  const site = useQuery(siteQuery);
+  const choices = useEditorChoices();
   const source = edit.kind === "create" ? undefined : edit.preset;
   const [slug, setSlug] = useState(edit.kind === "copy" ? edit.preset.slug : "");
   const [name, setName] = useState(source?.name ?? "");
-  const [draft, setDraft] = useState(() => draftOf(source?.rules));
+  const [draft, setDraft] = useState(() => draftOf(source?.rules, edit.kind === "copy"));
   const [invalid, setInvalid] = useState<Invalid | null>(null);
   const [missing, setMissing] = useState<Missing>(null);
   const mutation = useMutation({
@@ -118,7 +123,7 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
           onSlug={setSlug}
           onName={setName}
         />
-        <RulesEditor draft={draft} invalid={invalid} currency={site.data?.currency ?? ""} onChange={setDraft} />
+        <RulesEditor draft={draft} invalid={invalid} {...choices} onChange={setDraft} />
         <div className="flex justify-end gap-2 pt-2">
           <Button size="md" onClick={onClose}>
             {t("cancel", { ns: "common" })}

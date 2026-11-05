@@ -124,6 +124,7 @@ const routeTree = root.addChildren([
     ),
     shellPage("/models/$modelId", () => import("./pages/model")),
     shellPage("/source-classes", () => import("./pages/source-classes")),
+    shellPage("/routing-presets", () => import("./pages/routing-presets")),
     shellPage("/pricing", () => import("./pages/pricing")),
     shellPage("/settings", () => import("./pages/settings")),
     createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),

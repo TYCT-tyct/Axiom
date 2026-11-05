@@ -1,4 +1,5 @@
 import type { Messages } from "../i18n";
+import { en as presetRules } from "./preset-rules";
 import type zh from "./zh";
 
 export default {
@@ -115,6 +116,7 @@ export default {
     reload: "Reload",
   },
   copy: { copy: "Copy", copied: "Copied", failed: "Couldn’t copy. Select it by hand.", id: "Copy ID" },
+  presetRules,
   publicModels: {
     title: "Models & prices",
     description:

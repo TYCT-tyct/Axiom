@@ -1,4 +1,5 @@
 import type { ErrorCode } from "@axiom/api";
+import { zh as presetRules } from "./preset-rules";
 
 // What each failure code tells the user. The list is the contract's, so a new code stops the build until it has words.
 const codes = {
@@ -116,6 +117,7 @@ export default {
     reload: "刷新",
   },
   copy: { copy: "复制", copied: "已复制", failed: "没能复制，请手动选中", id: "复制 ID" },
+  presetRules,
   publicModels: {
     title: "模型与价格",
     description:

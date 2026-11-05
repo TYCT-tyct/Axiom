@@ -5,6 +5,7 @@ import models from "./models";
 import orders from "./orders";
 import pricing from "./pricing";
 import redeem from "./redeem";
+import routingPresets from "./routing-presets";
 import settings from "./settings";
 import sourceClasses from "./source-classes";
 import suppliers from "./suppliers";
@@ -27,10 +28,12 @@ export default {
     pricing: "定价",
     settings: "站点设置",
     sourceClasses: "来源类别",
+    routingPresets: "路由预设",
   },
   calls,
   audit,
   sourceClasses,
+  routingPresets,
   signIn: { description: "管理后台只对运营人员开放，登录后还要完成两步验证。" },
   home: {
     title: "运营看板",

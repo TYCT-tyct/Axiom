@@ -4,6 +4,7 @@ import { type AdminState, emptyState, type Schemas, usualState, worstState } fro
 import { listPaidBatches } from "./admin-paid-batches-api.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
+import { routingHandlers, startRouting } from "./admin-routing.ts";
 import { supplyHandlers } from "./admin-supply.ts";
 import { getTargets, putTargets, replaceTargets, targetComparison } from "./admin-targets-api.ts";
 import { fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
@@ -494,6 +495,7 @@ const handlers: Handler<AdminState>[] = [
   ...supplyHandlers,
   ...catalogHandlers,
   ...pricingHandlers,
+  ...routingHandlers,
 ];
 
 // mockAdmin answers the admin's API for a page. The returned state is live: a test reads what the page did to it
@@ -501,5 +503,6 @@ const handlers: Handler<AdminState>[] = [
 export async function mockAdmin(page: Page, data: MockData = "usual", over: Partial<AdminState> = {}) {
   const state = { usual: usualState, empty: emptyState, worst: worstState }[data]();
   Object.assign(state, over);
+  startRouting(state, data);
   return mockApi(page, base, handlers, state);
 }

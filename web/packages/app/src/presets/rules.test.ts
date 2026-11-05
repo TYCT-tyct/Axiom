@@ -1,6 +1,6 @@
 import type { Schemas } from "@axiom/api";
 import { expect, it } from "vitest";
-import { draftOf, newOverride, rulesOf, summaryOf } from "./preset-rules";
+import { draftOf, newOverride, rulesOf, summaryOf } from "./rules";
 
 const rules = (value: object) => value as Schemas["RoutingRules"];
 
@@ -33,14 +33,16 @@ it.each([
   expect(rulesOf(draftOf(rules(stored)))).toEqual({ rules: stored });
 });
 
-it("leaves out what writes nothing and what only the platform may hold", () => {
-  const draft = draftOf(
-    rules({
-      default: { classes: ["*"], verified_only: false, max_price: {} },
-      advanced: { order: ["g1"] },
-    }),
-  );
-  expect(rulesOf(draft)).toEqual({ rules: { default: {} } });
+// An edit keeps a platform preset's run-time settings; a copy, which may be an account's, leaves them out.
+it.each([
+  { copy: false, written: { default: {}, advanced: { order: ["g1"] } } },
+  { copy: true, written: { default: {} } },
+])("leaves out what writes nothing, and advanced on a copy ($copy)", ({ copy, written }) => {
+  const stored = rules({
+    default: { classes: ["*"], verified_only: false, max_price: {} },
+    advanced: { order: ["g1"] },
+  });
+  expect(rulesOf(draftOf(stored, copy))).toEqual({ rules: written });
 });
 
 it.each([

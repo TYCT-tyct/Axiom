@@ -1,0 +1,82 @@
+export default {
+  title: "Routing presets",
+  description:
+    "A preset decides which endpoints a key may use and in what order. Here you manage the platform’s and this site’s layers: their presets, the default for new keys, and how many presets each layer may hold. Accounts manage their own presets in the console.",
+  unavailableTitle: "Not available yet",
+  unavailableBody: "This node can’t manage routing presets in the admin yet. Refresh once it’s updated.",
+  layer: { platform: "Platform presets", site: "This site’s presets" },
+  create: "New preset",
+  empty: "This layer has no presets yet.",
+  col: { name: "Name", rules: "Rules", keys: "Keys using it", version: "Version" },
+  system: "System",
+  disabled: "Disabled",
+  keys: { system: "Every unbound key", unknown: "Not given by the node" },
+  edit: "Edit",
+  disable: "Disable",
+  editNamed: "Edit {{name}}",
+  disableNamed: "Disable {{name}}",
+  createTitle: { platform: "New platform preset", site: "New preset for this site" },
+  editTitle: "Edit {{name}}",
+  saved: "Saved “{{name}}”. Keys bound to it route by the new rules within 5 seconds.",
+  disableTitle: "Disable {{name}}",
+  disableBody:
+    "Keys bound to it keep routing by it; new keys and the layers’ defaults can’t choose it. It’s refused while a default still points at it: change the default first. A disabled preset still counts towards the layer’s total.",
+  disabledDone: "Disabled “{{name}}”.",
+  quota:
+    "This layer has reached its limit of routing presets. Disabling one doesn’t free its place in the total; raise the limits below if more are needed.",
+  form: {
+    name: "Name",
+    nameMissing: "Give the preset a name.",
+    slug: "Identifier",
+    slugHint: "Lower-case letters, digits and hyphens, up to 64 characters. It can’t be changed later.",
+    slugInvalid: "Use lower-case letters, digits and hyphens, starting with a letter or digit.",
+    currency: "Currency of the price limits",
+    currencyHint:
+      "Only used when a highest unit price is set: a priced platform preset serves only the sites in this currency, an unpriced one serves every site. It can’t be changed later.",
+    currencyInvalid: "Enter a three-letter currency code in capitals, such as USD.",
+    currencyFixed:
+      "This preset is in {{currency}}: only sites in that currency use it, and its unit prices are limited in it. The currency can’t change.",
+    unpriced:
+      "This preset limits no price, so every site can use it. It can’t gain a highest unit price, which would take it away from sites in other currencies; make a new preset to limit prices.",
+    cannotPrice: "This preset limits no price and can’t gain one: clear the unit prices, or make a new priced preset.",
+    rulesInvalid: "Some rules can’t be saved; see the marked fields.",
+    rulesRefused: "The rules didn’t pass the check: {{detail}}",
+    save: "Save",
+    create: "Create",
+  },
+  defaults: {
+    title: { platform: "Platform: default preset for new keys", site: "This site: default preset for new keys" },
+    label: "Default preset",
+    none: { platform: "None (new keys take the system allow-all preset)", site: "None (use the platform’s default)" },
+    hint: "New keys are bound to this when neither their account nor their workspace sets a default. Only keys made from now on take it; existing keys keep their presets.",
+    edit: "Change default",
+    save: "Save default",
+    saved: "Saved. Keys made from now on are bound to it.",
+  },
+  limits: {
+    title: "Limits on routing presets",
+    edit: "Change limits",
+    intro:
+      "How many presets each layer may hold (live, and in total with the disabled ones), how many rule versions a preset keeps, and the budget of all presets together. Leave a field empty for the default in code. Lowering a limit deletes no preset; it only refuses new ones. Every node holds all presets in memory: check the nodes’ headroom before raising the global budget.",
+    layer: {
+      platform: "Platform",
+      site: "Each site",
+      account: "Each account (with its workspaces)",
+      workspace: "Each workspace",
+    },
+    field: {
+      active: "Live",
+      total: "Total",
+      kept: "Rule versions each preset keeps",
+      presets: "Presets in all",
+      bytes: "Size of all rules",
+    },
+    hint: "{{min}} to {{max}}; empty for the default, {{standard}}.",
+    invalid: "A value is outside its range or not a whole number.",
+    unavailable:
+      "This node can’t read or change these limits yet; presets are held to the defaults in code. Try again once it’s updated.",
+    retry: "Try again",
+    save: "Save limits",
+    saved: "Saved. The next preset made or changed is checked against them.",
+  },
+};
