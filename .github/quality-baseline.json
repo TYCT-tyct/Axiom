@@ -36,7 +36,7 @@
     "tolerance_basis_points": 50,
     "floor_basis_points": 6000,
     "packages": {
-      "axiom/cmd/axiom": 7612,
+      "axiom/cmd/axiom": 7663,
       "axiom/internal/accounts": 7854,
       "axiom/internal/billing": 8000,
       "axiom/internal/catalog": 8886,
