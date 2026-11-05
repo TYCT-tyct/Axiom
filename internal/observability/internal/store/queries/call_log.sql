@@ -6,7 +6,7 @@ INSERT INTO observability.call_log (id, at, site_id, account_id, workspace_id, k
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, language, used_tools, has_image,
     has_file, model, endpoint_id, source_class, egress, attempt_count, route, usage, service_tier, price_version, price_nano,
     cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, consent_version,
-    training_allowed, streamed, cache_hit, physical_input)
+    training_allowed, streamed, cache_hit, physical_input, billing_pending)
 SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (r ->> 'account_id')::uuid,
     (r ->> 'workspace_id')::uuid, (r ->> 'key_id')::uuid, r ->> 'end_user_hash', (r ->> 'ip')::inet,
     r ->> 'client_app', r ->> 'session_id', r ->> 'subagent_id', r ->> 'app_referer', r ->> 'app_title',
@@ -17,11 +17,14 @@ SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (
     nullif(r ->> 'price_version', '')::uuid, (r ->> 'price_nano')::bigint, (r ->> 'cost_nano')::bigint, r ->> 'currency', (r ->> 'free_of_charge')::boolean,
     (r ->> 'latency_ms')::integer, (r ->> 'first_token_ms')::integer, r ->> 'finish_reason', r ->> 'error_kind',
     r ->> 'consent_version', (r ->> 'training_allowed')::boolean, (r ->> 'streamed')::boolean,
-    coalesce((r ->> 'cache_hit')::boolean, false), (r ->> 'physical_input')::bigint
+    coalesce((r ->> 'cache_hit')::boolean, false), (r ->> 'physical_input')::bigint,
+    coalesce((r ->> 'billing_pending')::boolean, false)
 FROM jsonb_array_elements(@rows::jsonb) AS r
 ON CONFLICT (id, at) DO NOTHING;
 
 -- name: ListOwnCalls :many
+-- The reads an account makes skip a pending call (README「写入」): the log never knew its usage or price, and an account
+-- must not read them as zero. The operator's trace and list name it pending instead.
 -- Custom plans fold absent filters away and select an ordered index for the remaining filters.
 -- Keep the row upper bound before the scalar window: PostgreSQL 18 uses the first as its
 -- B-tree start key even when EXPLAIN lists both in Index Cond (README.md「读」, #408).
@@ -39,6 +42,7 @@ WHERE account_id = (@account_id::text)::uuid
     AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
     AND (@status::text = '' OR (error_kind IS DISTINCT FROM '') = (@status = 'error'))
     AND (@request_id::text = '' OR id = nullif(@request_id, '')::uuid)
+    AND NOT billing_pending
 -- Qualified names preserve UUID index order rather than sorting the output's id::text.
 ORDER BY call_log.at DESC, call_log.id DESC
 LIMIT @page_size;
@@ -57,6 +61,7 @@ SELECT count(*)::int AS count FROM (
         AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
         AND (@status::text = '' OR (error_kind IS DISTINCT FROM '') = (@status = 'error'))
         AND (@request_id::text = '' OR id = nullif(@request_id, '')::uuid)
+        AND NOT billing_pending
     ORDER BY call_log.at DESC, call_log.id DESC
     LIMIT @row_limit
 ) AS bounded_calls;
@@ -76,6 +81,7 @@ WHERE account_id = (@account_id::text)::uuid
     AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
     AND (@status::text = '' OR (error_kind IS DISTINCT FROM '') = (@status = 'error'))
     AND (@request_id::text = '' OR id = nullif(@request_id, '')::uuid)
+    AND NOT billing_pending
 GROUP BY bucket, currency
 ORDER BY bucket, currency
 LIMIT @group_limit;
@@ -86,7 +92,7 @@ SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS k
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
     free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input
 FROM observability.call_log
-WHERE id = (@id::text)::uuid;
+WHERE id = (@id::text)::uuid AND NOT billing_pending;
 
 -- name: GetCallTrace :one
 -- One call in full, for the chain read (README.md「追溯」): route included, and its request ID is the key the attempts,
@@ -97,7 +103,7 @@ SELECT id::text AS id, at, site_id::text AS site_id, account_id::text AS account
     app_categories, request_class, language, used_tools, has_image, has_file, model, route::text AS route,
     usage::text AS usage, service_tier,
     coalesce(price_version::text, '')::text AS price_version, price_nano, cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind,
-    consent_version, training_allowed
+    consent_version, training_allowed, billing_pending
 FROM observability.call_log
 WHERE id = (@id::text)::uuid;
 
@@ -126,5 +132,6 @@ WHERE account_id = (@account_id::text)::uuid
     AND at >= @since AND at < @until
     AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
     AND (@key_id::text = '' OR key_id = nullif(@key_id, '')::uuid)
+    AND NOT billing_pending
 GROUP BY date, model, CASE WHEN @group_workspace::boolean THEN workspace_id::text ELSE '' END
 ORDER BY date, model, workspace_id;

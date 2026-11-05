@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 	"time"
+	"uuid"
 
 	"axiom/internal/observability"
 
@@ -183,4 +184,18 @@ func testSearchText(raw string) *string {
 		return nil
 	}
 	return &raw
+}
+
+// TestAPendingCallsSummaryHasNoPrice: a call whose settlement never reached the log has no price to show, so its
+// summary leaves the price out, as the pages expect of a call without one, rather than saying it cost nothing.
+func TestAPendingCallsSummaryHasNoPrice(t *testing.T) {
+	t.Parallel()
+	for _, pending := range []bool{false, true} {
+		body, err := summaryBody(observability.CallSummary{
+			ID: uuid.NewV7(), Site: uuid.NewV7(), Account: uuid.NewV7(), At: time.Now(), Model: "m", Currency: "USD", Pending: pending,
+		})
+		if err != nil || (body.Price == nil) != pending {
+			t.Errorf("pending %v: price %v (%v)", pending, body.Price, err)
+		}
+	}
 }

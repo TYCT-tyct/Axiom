@@ -117,7 +117,7 @@ func BenchmarkSpillAppend(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := sp.appendSynced(body); err != nil {
+		if err := sp.appendSynced(body, false); err != nil {
 			b.Fatal(err)
 		}
 	}

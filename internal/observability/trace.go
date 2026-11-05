@@ -53,7 +53,7 @@ func traceCall(r store.GetCallTraceRow) (CallRecord, error) {
 		Latency:      time.Duration(r.LatencyMs) * time.Millisecond,
 		FirstToken:   time.Duration(r.FirstTokenMs) * time.Millisecond,
 		FinishReason: r.FinishReason, ErrorKind: r.ErrorKind, ConsentVersion: r.ConsentVersion,
-		TrainingAllowed: r.TrainingAllowed,
+		TrainingAllowed: r.TrainingAllowed, BillingPending: r.BillingPending,
 	}
 	for _, p := range []struct {
 		dst *uuid.UUID

@@ -136,14 +136,14 @@ func (s *spill) loadSegments(files []segmentFile, checkpoint position) error {
 		if f.seq == checkpoint.seq {
 			from = checkpoint.offset
 		}
-		size, after, err := scanSegment(f.path, i == len(files)-1, from)
+		size, after, pending, err := scanSegment(f.path, i == len(files)-1, from)
 		if err != nil {
 			return err
 		}
 		if size == 0 {
 			continue // scanSegment removed an empty or torn-header last segment
 		}
-		s.segments = append(s.segments, &spillSegment{seq: f.seq, path: f.path, size: size})
+		s.segments = append(s.segments, &spillSegment{seq: f.seq, path: f.path, size: size, pending: pending})
 		s.totalBytes += size
 		s.pending += after
 	}
@@ -157,7 +157,7 @@ func (s *spill) openActive(checkpoint position) error {
 	next := checkpoint.seq + 1
 	if len(s.segments) == 0 {
 		s.nextSeq = next
-		return s.createSegmentLocked(next)
+		return s.createSegmentLocked(next, false)
 	}
 	last := s.segments[len(s.segments)-1]
 	if last.seq >= next {
@@ -174,7 +174,7 @@ func (s *spill) openActive(checkpoint position) error {
 			}
 		}
 		s.nextSeq = next
-		return s.createSegmentLocked(next)
+		return s.createSegmentLocked(next, false)
 	}
 	file, err := os.OpenFile(last.path, os.O_RDWR, 0)
 	if err != nil {
@@ -238,39 +238,39 @@ func spillSeq(name string) (uint64, bool) {
 // A torn tail is allowed only on the last segment, where it is what a crash during Commit leaves; it is truncated away.
 // Any other damage stops startup instead of being repaired: losing a complete record would be worse than refusing to
 // start.
-func scanSegment(path string, last bool, from int64) (size, after int64, err error) {
+func scanSegment(path string, last bool, from int64) (size, after int64, pending bool, err error) {
 	file, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // path is the configured spill directory plus a validated segment name
 	if err != nil {
-		return 0, 0, fmt.Errorf("observability: open call log segment %s: %w", path, err)
+		return 0, 0, false, fmt.Errorf("observability: open call log segment %s: %w", path, err)
 	}
 	defer closeQuietly(file)
 	info, err := file.Stat()
 	if err != nil {
-		return 0, 0, fmt.Errorf("observability: stat call log segment %s: %w", path, err)
+		return 0, 0, false, fmt.Errorf("observability: stat call log segment %s: %w", path, err)
 	}
 	size = info.Size()
 	if size < int64(len(spillHeader)) {
-		return 0, 0, dropHeaderlessSegment(path, size, last)
+		return 0, 0, false, dropHeaderlessSegment(path, size, last)
 	}
-	if err := checkSegmentHeader(file, path); err != nil {
-		return 0, 0, err
+	if pending, err = checkSegmentHeader(file, path); err != nil {
+		return 0, 0, false, err
 	}
 	valid, after, err := scanRecords(file, path, last, size, from)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
 	if valid != size { // only the last segment may have a torn tail: scanRecords refuses one elsewhere
 		if err := truncateSegment(file, valid); err != nil {
-			return 0, 0, err
+			return 0, 0, false, err
 		}
 	} else if last {
 		// A process crash leaves the last Commits' bytes in the page cache, maybe unsynced; make them durable before
 		// the writer stores them and checkpoints past them.
 		if err := file.Sync(); err != nil {
-			return 0, 0, fmt.Errorf("observability: sync call log segment %s: %w", path, err)
+			return 0, 0, false, fmt.Errorf("observability: sync call log segment %s: %w", path, err)
 		}
 	}
-	return valid, after, nil
+	return valid, after, pending, nil
 }
 
 // dropHeaderlessSegment removes a segment a crash left before its header was durable. Only the last one can be in that
@@ -288,13 +288,21 @@ func dropHeaderlessSegment(path string, size int64, last bool) error {
 	return nil
 }
 
-// checkSegmentHeader reads and verifies the fixed header.
-func checkSegmentHeader(file *os.File, path string) error {
-	header := make([]byte, len(spillHeader))
-	if _, err := io.ReadFull(file, header); err != nil || string(header) != spillHeader {
-		return fmt.Errorf("observability: call log segment %s has no %q header", path, spillHeader)
+// segmentHeader is the header of a segment headed for pending records, or of one that is not.
+func segmentHeader(pending bool) string {
+	if pending {
+		return spillHeaderPending
 	}
-	return nil
+	return spillHeader
+}
+
+// checkSegmentHeader reads and verifies the fixed header, and reports whether it heads pending records.
+func checkSegmentHeader(file *os.File, path string) (pending bool, err error) {
+	header := make([]byte, len(spillHeader))
+	if _, err := io.ReadFull(file, header); err != nil || string(header) != spillHeader && string(header) != spillHeaderPending {
+		return false, fmt.Errorf("observability: call log segment %s has no %q header", path, spillHeader)
+	}
+	return string(header) == spillHeaderPending, nil
 }
 
 // scanRecords validates complete records until the first torn one, which is allowed only at the tail of the last

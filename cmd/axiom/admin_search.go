@@ -29,8 +29,14 @@ func adminSearchWindow(since, until *time.Time, cursor *string) (time.Time, time
 	return q.Since, q.Until, q.After, nil
 }
 
+// summaryBody is a call's summary. A pending call has no price to show, so the summary leaves it out, as the pages do
+// for any call without one, rather than showing zero.
 func summaryBody(c observability.CallSummary) (adminapi.AdminCallSummary, error) {
-	return adminJSON[adminapi.AdminCallSummary](map[string]any{"id": c.ID.String(), "site_id": accounts.SiteID(c.Site).TypeID(), "account_id": accounts.AccountID(c.Account).TypeID(), "at": c.At, "model": c.Model, "error_kind": c.ErrorKind, "latency_ms": c.LatencyMS, "price": map[string]string{"amount": strconv.FormatInt(c.PriceNano, 10), "currency": c.Currency}})
+	body := map[string]any{"id": c.ID.String(), "site_id": accounts.SiteID(c.Site).TypeID(), "account_id": accounts.AccountID(c.Account).TypeID(), "at": c.At, "model": c.Model, "error_kind": c.ErrorKind, "latency_ms": c.LatencyMS}
+	if !c.Pending {
+		body["price"] = map[string]string{"amount": strconv.FormatInt(c.PriceNano, 10), "currency": c.Currency}
+	}
+	return adminJSON[adminapi.AdminCallSummary](body)
 }
 
 // adminCallFilters adds the call list's optional exact filters: the dashboard's drill-down links carry the same
@@ -122,7 +128,7 @@ func (a adminAPI) GetAdminCallTrace(ctx context.Context, r adminapi.GetAdminCall
 	if err != nil {
 		return nil, err
 	}
-	summary, err := summaryBody(observability.CallSummary{ID: c.ID, Site: c.Site, Account: c.Account, At: c.At, Model: c.Model, ErrorKind: c.ErrorKind, LatencyMS: int(c.Latency.Milliseconds()), PriceNano: c.PriceNano, Currency: c.Currency.String()})
+	summary, err := summaryBody(observability.CallSummary{ID: c.ID, Site: c.Site, Account: c.Account, At: c.At, Model: c.Model, ErrorKind: c.ErrorKind, LatencyMS: int(c.Latency.Milliseconds()), PriceNano: c.PriceNano, Currency: c.Currency.String(), Pending: c.BillingPending})
 	if err != nil {
 		return nil, err
 	}

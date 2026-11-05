@@ -171,12 +171,13 @@ func validCategory(c string) bool {
 	return true
 }
 
-// log writes the call into the call log. The record's amounts are the settlement's, so it is written once that is: the
-// ledger's charge is what the call cost, and a record that said zero while the settlement was still to come would
-// disagree with it (docs/domains/observability.md「追溯」). The gateway reserved the record's room before admitting the
-// call, so Commit appends it to the node's spill before the ending is written; a failure here is a bug or a dead disk,
-// and the recorder refuses every further call until an operator fixes it.
-func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billing.Final, end time.Time) {
+// log writes the call into the call log. The record's amounts are the settlement's, so a record written before its
+// settlement is pending: it says so and carries none, and the settled record of the same call, written with the same
+// end once the settlement commits, replaces it (docs/domains/observability.md「写入路径」). The gateway reserved the
+// record's room before admitting the call, so Commit makes the record durable on the node before the ending is
+// written; a failure here is a bug or a dead disk, and the recorder refuses every further call until an operator fixes
+// it.
+func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billing.Final, pending bool, end time.Time) {
 	if x.Records == nil {
 		return
 	}
@@ -184,12 +185,18 @@ func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billin
 	if err != nil {
 		x.Logger.ErrorContext(ctx, "a call's route could not be recorded", "request_id", t.call.ID.String(), "err", err)
 	}
+	if pending {
+		f = billing.Final{} // a failed settlement's Final may be a try's whose transaction did not commit
+	}
 	rec := recordOf(t, route, o, f, end)
-	if t.call.record != nil {
+	rec.BillingPending = pending
+	switch {
+	case t.call.record != nil:
 		err = t.call.record.Commit(rec)
-	} else {
+	case !pending:
 		// A call run without the handler, as the executor's tests do: it has no admission reservation, so the record
-		// takes its own room. Production always goes through the handler and the slot.
+		// takes its own room, and no slot to park a pending record in. Production always goes through the handler and
+		// the slot.
 		err = x.Records.Enqueue(rec)
 	}
 	if err != nil {

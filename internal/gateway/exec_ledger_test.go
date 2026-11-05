@@ -35,7 +35,8 @@ type flakyLedger struct {
 	mu        sync.Mutex
 	extend    func() (write bool, err error)
 	settle    func() (write bool, err error)
-	commitErr error // a fault of a write that did commit, reported after the batch's commit
+	commitErr error  // a fault of a write that did commit, reported after the batch's commit
+	committed func() // run after a settlement SettleIn wrote has committed, before its caller hears of it
 }
 
 func (l *flakyLedger) fault(f func() (bool, error)) (bool, error) {
@@ -69,6 +70,15 @@ func (l *flakyLedger) SettleIn(ctx context.Context, tx pg.Tx, h *billing.Hold, o
 		return f, nil, err
 	}
 	l.lost(fail)
+	if hook := l.committed; hook != nil {
+		report := after
+		after = func() {
+			if report != nil {
+				report()
+			}
+			hook()
+		}
+	}
 	return f, after, nil
 }
 
