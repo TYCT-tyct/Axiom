@@ -125,3 +125,17 @@ SELECT name, prefix, last4, expires_at FROM accounts.api_keys WHERE id = @id AND
 -- name: ListAccountWorkspaces :many
 -- Every workspace of the scope's account, deleted ones included: what billing summed once belongs to them still.
 SELECT id FROM accounts.workspaces WHERE account_id = @account_id ORDER BY id;
+
+-- name: KeysByPreset :many
+-- The keys in the scope that are not deleted, counted by the preset they are bound to, through api_keys_by_preset;
+-- the condition on the zero ID is the index's, which the planner cannot otherwise prove of the presets asked for.
+SELECT preset_id::uuid AS preset_id, count(*) AS keys FROM accounts.api_keys
+WHERE preset_id = ANY (@presets::uuid[]) AND preset_id <> '00000000-0000-0000-0000-000000000000' AND deleted_at IS NULL
+GROUP BY preset_id;
+
+-- name: AccountKeysByPreset :many
+-- KeysByPreset for one account's keys, which reads only that account's entries of each preset.
+SELECT preset_id::uuid AS preset_id, count(*) AS keys FROM accounts.api_keys
+WHERE preset_id = ANY (@presets::uuid[]) AND preset_id <> '00000000-0000-0000-0000-000000000000' AND deleted_at IS NULL
+  AND account_id = @account_id
+GROUP BY preset_id;
