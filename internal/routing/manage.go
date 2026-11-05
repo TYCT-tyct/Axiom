@@ -124,35 +124,29 @@ type PresetContent struct {
 // with args. Limits bound no bytes: a version's rules are at most maxRulesBytes, so the most presets a layer holds
 // already bound what it can write.
 type layerLimit struct {
-	owner         string
-	where         string
-	args          []any
-	active, total int64
+	owner string
+	where string
+	args  []any
+	LayerLimits
 }
 
-// limitsOf are the limits a new preset of the layer is held to. An account's count its workspaces' presets too, since
-// the account is the tenant, so a workspace's preset is held to both. The platform's and a site's are wider than an
-// account's because every key of the platform or the site chooses among them, and narrow enough that the list a key
-// chooses from, every layer's live presets together, stays one a page can show whole.
-func limitsOf(layer Layer) []layerLimit {
+// limitsOf are the limits of lim a new preset of the layer is held to. An account's count its workspaces' presets too,
+// since the account is the tenant, so a workspace's preset is held to both.
+func limitsOf(layer Layer, lim Limits) []layerLimit {
 	site, account, workspace := uuid.UUID(layer.Site), uuid.UUID(layer.Account), uuid.UUID(layer.Workspace)
-	accountLimit := layerLimit{"account", "site_id = $1 AND account_id = $2", []any{site, account}, 20, 200}
+	accountLimit := layerLimit{"account", "site_id = $1 AND account_id = $2", []any{site, account}, lim.Account}
 	switch layer.Scope {
 	case ScopePlatform:
-		return []layerLimit{{"platform", "scope = 'platform'", nil, 50, 500}}
+		return []layerLimit{{"platform", "scope = 'platform'", nil, lim.Platform}}
 	case ScopeSite:
-		return []layerLimit{{"site", "scope = 'site' AND site_id = $1", []any{site}, 50, 500}}
+		return []layerLimit{{"site", "scope = 'site' AND site_id = $1", []any{site}, lim.Site}}
 	case ScopeAccount:
 		return []layerLimit{accountLimit}
 	case ScopeWorkspace:
-		return []layerLimit{accountLimit, {"workspace", "site_id = $1 AND workspace_id = $2", []any{site, workspace}, 10, 100}}
+		return []layerLimit{accountLimit, {"workspace", "site_id = $1 AND workspace_id = $2", []any{site, workspace}, lim.Workspace}}
 	}
 	return nil
 }
-
-// keptVersions is how many rule versions a preset keeps, its current one included; the table's policy deletes no
-// newer one.
-const keptVersions = 50
 
 // The global budget: what every node's snapshot holds of the presets together.
 const (
@@ -303,11 +297,10 @@ func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID,
 		updated_at = statement_timestamp() WHERE id = $1`, uuid.UUID(id), c.Name, version); err != nil {
 		return StoredPreset{}, presetWriteErr("update a preset", err)
 	}
-	// Only the last keptVersions stay, so rules that change without growing cannot pile versions up for good; the
-	// audit log keeps every version's hash.
-	if _, err := tx.Exec(ctx, `DELETE FROM routing.preset_versions WHERE preset_id = $1 AND version <= $2`,
-		uuid.UUID(id), version-keptVersions); err != nil {
-		return StoredPreset{}, presetWriteErr("prune the preset's versions", err)
+	if newRules {
+		if err := pruneVersions(ctx, tx, id, version); err != nil {
+			return StoredPreset{}, err
+		}
 	}
 	p, err := GetPreset(ctx, tx, id)
 	if err != nil {
@@ -317,6 +310,21 @@ func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID,
 		"before": map[string]any{"name": before.Name, "version": before.Version, "rules_sha256": digest(string(before.Rules))},
 		"after":  map[string]any{"name": p.Name, "version": p.Version},
 	})
+}
+
+// pruneVersions keeps the preset's last versions, as many as the limits say, so rules that change without growing
+// cannot pile versions up for good; the audit log keeps every version's hash. The table's policy deletes none of the
+// last minKept, whatever the record says.
+func pruneVersions(ctx context.Context, tx pg.Tx, id PresetID, current int64) error {
+	lim, err := ReadLimits(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM routing.preset_versions WHERE preset_id = $1 AND version <= $2`,
+		uuid.UUID(id), current-lim.Effective().KeptVersions); err != nil {
+		return presetWriteErr("prune the preset's versions", err)
+	}
+	return nil
 }
 
 // checkChange is checkContent for a change of before, which may not make a platform preset serve fewer sites. It serves
@@ -446,13 +454,17 @@ func takeBudget(ctx context.Context, tx pg.Tx, layer Layer, presets, bytes int64
 	if presets == 0 {
 		return nil
 	}
-	for _, limit := range limitsOf(layer) {
+	lim, err := ReadLimits(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, limit := range limitsOf(layer, lim.Effective()) {
 		var active, total int64
 		if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE deleted_at IS NULL), count(*) FROM routing.presets
 			WHERE `+limit.where, limit.args...).Scan(&active, &total); err != nil {
 			return fmt.Errorf("routing: count the %s's presets: %w", limit.owner, err)
 		}
-		if active+presets > limit.active || total+presets > limit.total {
+		if active+presets > limit.Active || total+presets > limit.Total {
 			return ErrPresetQuota
 		}
 	}

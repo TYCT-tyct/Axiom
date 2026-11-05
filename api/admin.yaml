@@ -1617,6 +1617,61 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/settings/routing-limits:
+    get:
+      operationId: getRoutingPresetLimits
+      tags: [Routing]
+      summary: The saved limits on routing presets and the defaults in code
+      description: >-
+        How many presets each layer may hold, live and with the disabled ones, and how many rule versions a preset
+        keeps. An absent value is the default in code. Every preset write reads them when it is made.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The limits and defaults.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPresetLimitsView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setRoutingPresetLimits
+      tags: [Routing]
+      summary: Save the limits on routing presets, validated and audited
+      description: >-
+        Replaces the record: a value left out falls back to the default in code, and a record with no value is deleted.
+        A layer's live limit must be at most its total once the defaults fill the rest. The next preset write is held
+        to them; presets a layer already holds over a lowered limit stay, and only new ones are refused. A preset
+        always keeps at least 50 rule versions.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RoutingPresetLimitsUpdate"}
+      responses:
+        "200":
+          description: The limits as saved.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPresetLimitsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/sites/{site_id}/routing-default:
     parameters:
       - name: site_id
@@ -7644,6 +7699,39 @@ components:
       properties:
         preset_id: {type: string, format: uuid, nullable: true, description: "null clears the layer's default."}
         version: {type: integer, format: int64, minimum: 0}
+        reason: {$ref: "#/components/schemas/Reason"}
+    RoutingLayerLimits:
+      type: object
+      additionalProperties: false
+      properties:
+        active: {type: integer, format: int64, minimum: 1, maximum: 500, description: "Live presets the layer may hold."}
+        total: {type: integer, format: int64, minimum: 1, maximum: 5000, description: "Presets the layer may hold with the disabled ones."}
+    RoutingPresetLimits:
+      type: object
+      additionalProperties: false
+      description: >-
+        What each layer may hold of routing presets and the rule versions a preset keeps. An absent value is the
+        default in code. An account's limits count its workspaces' presets too.
+      properties:
+        platform: {$ref: "#/components/schemas/RoutingLayerLimits"}
+        site: {$ref: "#/components/schemas/RoutingLayerLimits"}
+        account: {$ref: "#/components/schemas/RoutingLayerLimits"}
+        workspace: {$ref: "#/components/schemas/RoutingLayerLimits"}
+        kept_versions: {type: integer, format: int64, minimum: 50, maximum: 500}
+    RoutingPresetLimitsView:
+      type: object
+      required: [limits, defaults]
+      properties:
+        limits: {$ref: "#/components/schemas/RoutingPresetLimits"}
+        defaults:
+          description: What applies where `limits` has no value.
+          allOf: [{$ref: "#/components/schemas/RoutingPresetLimits"}]
+    RoutingPresetLimitsUpdate:
+      type: object
+      additionalProperties: false
+      required: [limits, reason]
+      properties:
+        limits: {$ref: "#/components/schemas/RoutingPresetLimits"}
         reason: {$ref: "#/components/schemas/Reason"}
     ProbeSettings:
       type: object

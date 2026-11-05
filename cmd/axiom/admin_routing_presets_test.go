@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -232,4 +233,50 @@ func TestAdminRoutingPresetKeys(t *testing.T) {
 	if got["allow-all"] != nil {
 		t.Errorf("the system preset counted %d keys", *got["allow-all"])
 	}
+}
+
+// TestAdminRoutingPresetLimits: the admin reads the limits with their defaults, saves some once under one idempotency
+// key with one audit entry, and the next platform preset is held to them; a live limit above its layer's total is
+// refused by name, and saving none goes back to the defaults.
+func TestAdminRoutingPresetLimits(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	s := f.owner()
+	const path = "/settings/routing-limits"
+	var view adminapi.RoutingPresetLimitsView
+	decode(t, f.do(http.MethodGet, path, "", as(s)), &view)
+	d := view.Defaults
+	if view.Limits != (adminapi.RoutingPresetLimits{}) || d.Account == nil || *d.Account.Active != 20 || *d.Account.Total != 200 ||
+		d.Platform == nil || *d.Platform.Active != 50 || d.KeptVersions == nil || *d.KeptVersions != 50 {
+		t.Fatalf("the limits before any is saved: %+v", view)
+	}
+
+	body := `{"limits":{"platform":{"active":1},"kept_versions":60},"reason":"one platform preset"}`
+	key := newKey()
+	for i := range 2 {
+		rec := f.change(s, http.MethodPut, path, body, key)
+		expectAdmin(t, "save", rec, http.StatusOK, "")
+		if i == 1 && rec.Header().Get("Idempotency-Replayed") != "true" {
+			t.Fatal("the second save was not replayed")
+		}
+	}
+	if n := f.auditCount("routing.limits.update"); n != "1" {
+		t.Fatalf("%s audit entries, want 1", n)
+	}
+	decode(t, f.do(http.MethodGet, path, "", as(s)), &view)
+	if l := view.Limits; l.Platform == nil || *l.Platform.Active != 1 || l.Platform.Total != nil || l.KeptVersions == nil ||
+		*l.KeptVersions != 60 || l.Account != nil {
+		t.Fatalf("the saved limits: %+v", l)
+	}
+	// The system preset is the platform's one live preset.
+	expectAdmin(t, "a platform preset over the limit", f.change(s, http.MethodPost, "/routing-presets",
+		`{"slug":"over","name":"Over","rules":{"default":{}},"reason":"r"}`, newKey()), http.StatusConflict, "preset_quota")
+
+	rec := f.change(s, http.MethodPut, path, `{"limits":{"account":{"active":300}},"reason":"r"}`, newKey())
+	expectAdmin(t, "a live limit above the default total", rec, http.StatusBadRequest, "")
+	if !strings.Contains(rec.Body.String(), "/limits/account/active") {
+		t.Errorf("the refusal does not name the field: %s", rec.Body)
+	}
+	expectAdmin(t, "save none", f.change(s, http.MethodPut, path, `{"limits":{},"reason":"defaults"}`, newKey()), http.StatusOK, "")
+	f.adminPreset(s, "/routing-presets", `{"slug":"back","name":"Back","rules":{"default":{}},"reason":"r"}`)
 }

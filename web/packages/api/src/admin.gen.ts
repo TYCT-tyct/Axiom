@@ -636,6 +636,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/settings/routing-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The saved limits on routing presets and the defaults in code
+         * @description How many presets each layer may hold, live and with the disabled ones, and how many rule versions a preset keeps. An absent value is the default in code. Every preset write reads them when it is made.
+         */
+        get: operations["getRoutingPresetLimits"];
+        /**
+         * Save the limits on routing presets, validated and audited
+         * @description Replaces the record: a value left out falls back to the default in code, and a record with no value is deleted. A layer's live limit must be at most its total once the defaults fill the rest. The next preset write is held to them; presets a layer already holds over a lowered limit stay, and only new ones are refused. A preset always keeps at least 50 rule versions.
+         */
+        put: operations["setRoutingPresetLimits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/sites/{site_id}/routing-default": {
         parameters: {
             query?: never;
@@ -4045,6 +4069,36 @@ export interface components {
             version: number;
             reason: components["schemas"]["Reason"];
         };
+        RoutingLayerLimits: {
+            /**
+             * Format: int64
+             * @description Live presets the layer may hold.
+             */
+            active?: number;
+            /**
+             * Format: int64
+             * @description Presets the layer may hold with the disabled ones.
+             */
+            total?: number;
+        };
+        /** @description What each layer may hold of routing presets and the rule versions a preset keeps. An absent value is the default in code. An account's limits count its workspaces' presets too. */
+        RoutingPresetLimits: {
+            platform?: components["schemas"]["RoutingLayerLimits"];
+            site?: components["schemas"]["RoutingLayerLimits"];
+            account?: components["schemas"]["RoutingLayerLimits"];
+            workspace?: components["schemas"]["RoutingLayerLimits"];
+            /** Format: int64 */
+            kept_versions?: number;
+        };
+        RoutingPresetLimitsView: {
+            limits: components["schemas"]["RoutingPresetLimits"];
+            /** @description What applies where `limits` has no value. */
+            defaults: components["schemas"]["RoutingPresetLimits"];
+        };
+        RoutingPresetLimitsUpdate: {
+            limits: components["schemas"]["RoutingPresetLimits"];
+            reason: components["schemas"]["Reason"];
+        };
         /** @description The recovery probe budget, the fingerprint check's schedule, and the first probe delay. A value that is absent is the default in code. Times are seconds. */
         ProbeSettings: {
             hourly_budget?: number;
@@ -6456,6 +6510,62 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RoutingDefault"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getRoutingPresetLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The limits and defaults. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPresetLimitsView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setRoutingPresetLimits: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutingPresetLimitsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The limits as saved. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingPresetLimitsView"];
                 };
             };
             400: components["responses"]["BadRequest"];
