@@ -326,9 +326,9 @@ func checkFrozenReceipt(t *testing.T, db *pg.DB, event uuid.UUID) {
 	}
 }
 
-// checkDelayedPaymentWindow writes a high sample and then a low one or a recovery in the same batch, and asserts the
+// checkDelayedWindow writes a high sample and then a low one or a recovery in the same batch, and asserts the
 // completed window keeps the current sample and its receipt.
-func checkDelayedPaymentWindow(t *testing.T, resolved bool, next string) {
+func checkDelayedWindow(t *testing.T, kind, key string, resolved bool, next string) {
 	t.Helper()
 	db := openDB(t)
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
@@ -338,14 +338,14 @@ func checkDelayedPaymentWindow(t *testing.T, resolved bool, next string) {
 			return err
 		}
 		c.Channels = []AlertChannel{{ID: "ops", Email: "ops@example.com"}}
-		c.Rules = []AlertRule{{ID: "verify", Kind: "payments.verify_failed", MinimumSeverity: "warning", Threshold: 10, Channel: "ops"}}
+		c.Rules = []AlertRule{{ID: "verify", Kind: kind, MinimumSeverity: "warning", Threshold: 10, Channel: "ops"}}
 		return SetAlertConfiguration(t.Context(), tx, c)
 	})
 	alertTx(t, db, func(tx pg.Tx) error {
-		if err := alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Fields: map[string]string{"value": "12"}}); err != nil {
+		if err := alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: kind, Key: key, Severity: "warning", Fields: map[string]string{"value": "12"}}); err != nil {
 			return err
 		}
-		signal := alert.Signal{Kind: "payments.verify_failed", Key: "node/callbacks", Severity: "warning", Resolved: resolved}
+		signal := alert.Signal{Kind: kind, Key: key, Severity: "warning", Resolved: resolved}
 		if !resolved {
 			signal.Fields = map[string]string{"value": next}
 		}
@@ -368,17 +368,21 @@ func checkDelayedPaymentWindow(t *testing.T, resolved bool, next string) {
 	}
 }
 
+// TestPaymentCompletedWindowsSurviveConsumerDelay: a completed window of a node's per-minute count, the payments' and
+// routing's preset refusals alike, is evaluated before a later window in the same batch lowers or resolves it.
 func TestPaymentCompletedWindowsSurviveConsumerDelay(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		next     string
-		resolved bool
+		name, kind, key string
+		next            string
+		resolved        bool
 	}{
-		{name: "low value", next: "1"},
-		{name: "recovery", resolved: true},
+		{name: "low value", kind: "payments.verify_failed", key: "node/callbacks", next: "1"},
+		{name: "recovery", kind: "payments.verify_failed", key: "node/callbacks", resolved: true},
+		{name: "preset low value", kind: "routing.preset_refuses_all", key: "node/00000000-0000-7000-8000-000000000c01", next: "1"},
+		{name: "preset recovery", kind: "routing.preset_refuses_all", key: "node/00000000-0000-7000-8000-000000000c01", resolved: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			checkDelayedPaymentWindow(t, tc.resolved, tc.next)
+			checkDelayedWindow(t, tc.kind, tc.key, tc.resolved, tc.next)
 		})
 	}
 }

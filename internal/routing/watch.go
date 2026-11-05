@@ -27,17 +27,21 @@ const PresetRefusesAll = "routing.preset_refuses_all"
 // make an incident.
 const presetWindow = time.Minute
 
-// presetTally is one platform or site preset's calls on this node in the current window. Plan writes it; report reads
-// and clears it once a window. routed is a flag, read before it is set, so the calls a working preset routes share a
-// read-mostly cache line instead of contending on a counter.
+// presetTally is one platform or site preset's calls on this node in the current window. Router.Planned writes it once
+// a call; report reads and clears it once a window. routed is a flag, read before it is set, so the calls a working
+// preset routes share a read-mostly cache line instead of contending on a counter.
 type presetTally struct {
 	routed   atomic.Bool
 	filtered atomic.Int64
-	signal   signalState // report's own, under presetWatch.mu
+	// The rest is report's own, under presetWatch.mu: what the sink last accepted, and the signal a window owes it, kept
+	// until the sink takes it or a later window with calls replaces it.
+	sent  signalState
+	owed  signalState // signalUnknown when nothing is owed
+	value int64       // the refusals of the window the owed raise reports
 }
 
-// signalState is what this node last told the alert sink about a preset. signalUnknown is the state after a start: the node
-// may have raised the signal before it restarted, so the first routed window resolves it.
+// signalState is what the sink was told about a preset: firing or clear. signalUnknown is the state after a start: the
+// node may have raised the signal before it restarted, so the first routed window resolves it.
 type signalState uint8
 
 const (
@@ -84,19 +88,28 @@ func newPresetWatch(cfg Config) (*presetWatch, error) {
 	return w, err
 }
 
-// unavailableRefused counts a call refused because the node cannot route by its key's preset.
-func (w *presetWatch) unavailableRefused() { w.unavailable.Add(1) }
-
-// nothing counts a plan that left no entry: a 404 the preset took part in is a preset_filter refusal, and one more
-// call the preset refused. A wait or a transient refusal is the endpoints' state, not the preset's.
-func (w *presetWatch) nothing(p *preset, err error) {
-	none, ok := errors.AsType[*NoEndpoint](err)
-	if !ok || !none.Permanent || !none.has(PresetFilter) {
-		return
-	}
-	w.filtered.Add(1)
-	if p.tally != nil {
-		p.tally.filtered.Add(1)
+// Planned counts how a call's route came out: p and err are what the call's last Plan returned, or the error that
+// ended its admission after it. A call may be planned more than once (a backend search plans again with the results'
+// bound), and only the plan it is admitted by says whether the preset served it, so the caller tells the router once,
+// with the last. A route counts as routed; ErrPresetUnavailable as a preset_unavailable refusal; a permanent 404 the
+// preset took part in as a preset_filter refusal. A wait, a transient refusal or any other error is the endpoints' or
+// the request's, not the preset's, and counts nothing.
+func (r *Router) Planned(p Plan, err error) {
+	w := r.watch
+	switch {
+	case err == nil:
+		p.tally.routedOnce()
+	case errors.Is(err, ErrPresetUnavailable):
+		w.unavailable.Add(1)
+	default:
+		none, ok := errors.AsType[*NoEndpoint](err)
+		if !ok || !none.Permanent || !none.has(PresetFilter) {
+			return
+		}
+		w.filtered.Add(1)
+		if p.tally != nil {
+			p.tally.filtered.Add(1)
+		}
 	}
 }
 
@@ -139,22 +152,32 @@ func (w *presetWatch) tick(now time.Time) {
 	}
 }
 
-// report closes the window: a preset that routed a call resolves its signal, one that refused every call it saw raises
-// it with their count, and one that saw no call keeps its state. A signal the bounded sink refused keeps the state too,
-// so the next window tries again.
+// report closes the window: a preset that routed a call owes a resolution, unless the sink already holds one; one that
+// refused every call it saw owes a raise with their count; one that saw no call keeps what it owed. Then it sends what
+// is owed. A signal the bounded sink refused stays owed, so a later window sends it, with no call in between too; a
+// later window with calls replaces it, because it describes the preset as it is now.
 func (w *presetWatch) report() {
 	for id, t := range w.tallies {
 		routed, filtered := t.routed.Swap(false), t.filtered.Swap(0)
-		key := w.node + "/" + uuid.UUID(id).String()
 		switch {
-		case routed && t.signal != signalClear:
-			if w.alerts.Resolve(PresetRefusesAll, key) == nil {
-				t.signal = signalClear
-			}
-		case !routed && filtered > 0:
-			if w.alerts.Raise(PresetRefusesAll, key, "warning", map[string]string{"value": strconv.FormatInt(filtered, 10)}) == nil {
-				t.signal = signalFiring
-			}
+		case routed:
+			t.owed = signalClear
+		case filtered > 0:
+			t.owed, t.value = signalFiring, filtered
+		}
+		if t.owed == signalClear && t.sent == signalClear {
+			t.owed = signalUnknown // a resolution the sink already holds; a raise is sent each window, with its count
+		}
+		if t.owed != signalUnknown && w.send(id, t) == nil {
+			t.sent, t.owed = t.owed, signalUnknown
 		}
 	}
+}
+
+func (w *presetWatch) send(id PresetID, t *presetTally) error {
+	key := w.node + "/" + uuid.UUID(id).String()
+	if t.owed == signalClear {
+		return w.alerts.Resolve(PresetRefusesAll, key)
+	}
+	return w.alerts.Raise(PresetRefusesAll, key, "warning", map[string]string{"value": strconv.FormatInt(t.value, 10)})
 }

@@ -259,7 +259,8 @@ func applyAlert(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time) er
 // rules have seen it, and a resolution must not overtake an un-evaluated spike.
 func sampleKind(kind string) bool {
 	switch kind {
-	case "accounts.authentication_failures", "payments.verify_failed", "payments.query_failed", "payments.rate_limited", "payments.merchant_unreadable":
+	case "accounts.authentication_failures", "payments.verify_failed", "payments.query_failed", "payments.rate_limited", "payments.merchant_unreadable",
+		"routing.preset_refuses_all":
 		return true
 	}
 	return false
