@@ -119,7 +119,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 		n.segments = r.cfg.Segments.Load()
 	}
 	n.tiers.Add(catalog.ServiceTierStandard)
-	var rec Record
+	rec := Record{Preset: preset.ID, PresetVersion: preset.Version, Overrides: in.Override.overrides()}
 	order := r.rankModels(snap, n, &rec)
 	if n.rankAll() {
 		r.sort(order, n.strategy())

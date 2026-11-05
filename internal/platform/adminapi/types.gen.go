@@ -4538,6 +4538,22 @@ type RoutingDefault struct {
 	Version int64 `json:"version"`
 }
 
+// RoutingGlobalBudget What every preset takes together, the disabled ones included; every node's snapshot holds it.
+type RoutingGlobalBudget struct {
+	// Bytes Bytes of every preset's current rules as PostgreSQL prints them.
+	Bytes   *int64 `json:"bytes,omitempty"`
+	Presets *int64 `json:"presets,omitempty"`
+}
+
+// RoutingLayerLimits defines model for RoutingLayerLimits.
+type RoutingLayerLimits struct {
+	// Active Live presets the layer may hold.
+	Active *int64 `json:"active,omitempty"`
+
+	// Total Presets the layer may hold with the disabled ones.
+	Total *int64 `json:"total,omitempty"`
+}
+
 // RoutingPreset defines model for RoutingPreset.
 type RoutingPreset struct {
 	CreatedAt time.Time `json:"created_at"`
@@ -4564,6 +4580,40 @@ type RoutingPreset struct {
 
 	// Version The rules' version, which moves only when the rules change.
 	Version int64 `json:"version"`
+}
+
+// RoutingPresetLimits What each layer may hold of routing presets, the rule versions a preset keeps, and the global budget. An absent value is the default in code. An account's limits count its workspaces' presets too.
+type RoutingPresetLimits struct {
+	Account *RoutingLayerLimits `json:"account,omitempty"`
+
+	// Global What every preset takes together, the disabled ones included; every node's snapshot holds it.
+	Global       *RoutingGlobalBudget `json:"global,omitempty"`
+	KeptVersions *int64               `json:"kept_versions,omitempty"`
+	Platform     *RoutingLayerLimits  `json:"platform,omitempty"`
+	Site         *RoutingLayerLimits  `json:"site,omitempty"`
+	Workspace    *RoutingLayerLimits  `json:"workspace,omitempty"`
+}
+
+// RoutingPresetLimitsUpdate defines model for RoutingPresetLimitsUpdate.
+type RoutingPresetLimitsUpdate struct {
+	// Limits What each layer may hold of routing presets, the rule versions a preset keeps, and the global budget. An absent value is the default in code. An account's limits count its workspaces' presets too.
+	Limits RoutingPresetLimits `json:"limits"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+	Rev    int64  `json:"rev"`
+}
+
+// RoutingPresetLimitsView defines model for RoutingPresetLimitsView.
+type RoutingPresetLimitsView struct {
+	// Defaults What applies where `limits` has no value.
+	Defaults RoutingPresetLimits `json:"defaults"`
+
+	// Limits What each layer may hold of routing presets, the rule versions a preset keeps, and the global budget. An absent value is the default in code. An account's limits count its workspaces' presets too.
+	Limits RoutingPresetLimits `json:"limits"`
+
+	// Rev 0 before any change; a change names the rev it read.
+	Rev int64 `json:"rev"`
 }
 
 // RoutingPresetList defines model for RoutingPresetList.
@@ -6189,6 +6239,12 @@ type SetPlatformRoutingDefaultParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetRoutingPresetLimitsParams defines parameters for SetRoutingPresetLimits.
+type SetRoutingPresetLimitsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetSearchSettingsParams defines parameters for SetSearchSettings.
 type SetSearchSettingsParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -6621,6 +6677,9 @@ type SetQualityProbeSettingsJSONRequestBody = ProbeSettingsUpdate
 
 // SetPlatformRoutingDefaultJSONRequestBody defines body for SetPlatformRoutingDefault for application/json ContentType.
 type SetPlatformRoutingDefaultJSONRequestBody = LayerRoutingDefaultUpdate
+
+// SetRoutingPresetLimitsJSONRequestBody defines body for SetRoutingPresetLimits for application/json ContentType.
+type SetRoutingPresetLimitsJSONRequestBody = RoutingPresetLimitsUpdate
 
 // SetSearchSettingsJSONRequestBody defines body for SetSearchSettings for application/json ContentType.
 type SetSearchSettingsJSONRequestBody = SearchSettingsUpdate

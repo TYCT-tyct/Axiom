@@ -1,6 +1,8 @@
 package routing_test
 
 import (
+	"math"
+	"slices"
 	"strings"
 	"testing"
 	"uuid"
@@ -12,7 +14,12 @@ import (
 
 // storedRoute is the JSON the call log keeps, decoded for the assertions.
 type storedRoute struct {
-	Excluded []struct {
+	Preset *struct {
+		ID      string `json:"id"`
+		Version int64  `json:"version"`
+	} `json:"preset"`
+	Overrides []string `json:"overrides"`
+	Excluded  []struct {
 		Endpoint string `json:"endpoint"`
 		Reason   string `json:"reason"`
 	} `json:"excluded"`
@@ -31,6 +38,7 @@ type storedRoute struct {
 func TestRecordIsBounded(t *testing.T) {
 	t.Parallel()
 	record := routing.Record{
+		Preset: routing.PresetID(uuid.NewV7()), PresetVersion: math.MaxInt64, Overrides: math.MaxUint16,
 		Route:      ids(routing.MaxEntries),
 		Attempts:   attempts(platform.MaxAttemptSeq),
 		Unmeasured: true,
@@ -65,6 +73,47 @@ func TestRecordIsBounded(t *testing.T) {
 	}
 	if len(stored.Attempts) != platform.MaxAttemptSeq {
 		t.Errorf("%d attempts recorded, want %d", len(stored.Attempts), platform.MaxAttemptSeq)
+	}
+}
+
+// TestRecordNamesThePresetAndTheOverrides: a plan's record says which preset and version routed the call, and names the
+// provider members that changed the route on top of it, in a fixed order, and not those written to no effect.
+func TestRecordNamesThePresetAndTheOverrides(t *testing.T) {
+	t.Parallel()
+	p := compiled(t, allowed)
+	p.Version = 7
+	h := presetHarness(t, p)
+	cheapest := routing.Cheapest
+	for _, tc := range []struct {
+		name string
+		over routing.Override
+		want []string
+	}{
+		{"no provider object", routing.Override{}, nil},
+		{"members with no effect", routing.Override{OnlyNames: []string{}, Quantizations: nil}, nil},
+		{"filters and an order", routing.Override{
+			OrderNames: []string{"g1"}, NoFallbacks: true, Sort: &cheapest, Policies: routing.AllPolicies,
+			MaxLatencyPercentiles: routing.Cutoffs{Set: 1 << routing.P90}, RequireParameters: true,
+		}, []string{"order", "allow_fallbacks", "sort", "data_collection", "preferred_max_latency", "require_parameters"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := presetInput()
+			in.Override = tc.over
+			body, err := h.plan(in).Record.JSON()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stored storedRoute
+			if err := jsonx.Unmarshal(body, &stored); err != nil {
+				t.Fatal(err)
+			}
+			if stored.Preset == nil || stored.Preset.ID != uuid.UUID(pre).String() || stored.Preset.Version != 7 {
+				t.Errorf("preset = %+v, want %s at version 7", stored.Preset, uuid.UUID(pre))
+			}
+			if !slices.Equal(stored.Overrides, tc.want) {
+				t.Errorf("overrides = %v, want %v", stored.Overrides, tc.want)
+			}
+		})
 	}
 }
 
