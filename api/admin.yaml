@@ -1674,6 +1674,64 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/settings/routing-suspension:
+    get:
+      operationId: getRoutingPresetSuspension
+      tags: [Routing]
+      summary: Whether the platform has suspended routing presets
+      description: >-
+        The platform's kill switch on routing presets: `since` is when they were suspended, absent when they are not.
+        A node that has no such switch answers 404.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The switch.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPresetSuspension"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setRoutingPresetSuspension
+      tags: [Routing]
+      summary: Suspend or resume routing presets, audited
+      description: >-
+        Suspended, every node routes no key by a preset other than the system preset from its next read of the
+        presets, within 5 seconds, even when the rest of that snapshot fails to build: a key bound to one is refused
+        503 `preset_unavailable`, its model lists too, rather than routed past the sources and prices its preset
+        allows. Until presets are resumed, every preset and default write and every key's choice of a preset is refused
+        503 `presets_suspended`; a key made meanwhile is still bound to its layers' default and routes by it once they
+        resume. Asking for the state presets are in changes and records nothing. Nodes released before the switch
+        ignore it, so suspend only once every node has it.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RoutingPresetSuspensionUpdate"}
+      responses:
+        "200":
+          description: The switch as set.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingPresetSuspension"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/sites/{site_id}/routing-default:
     parameters:
       - name: site_id
@@ -5731,7 +5789,8 @@ components:
     Failure:
       description: >-
         Any other failure: `internal` (500), `not_implemented` (501, the operation has no handler yet), `unavailable`
-        (503). A 500 never carries the internal error's text.
+        (503), `presets_suspended` (503, a routing preset or default write, or a key's choice of a preset, while the
+        platform has suspended routing presets). A 500 never carries the internal error's text.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/Error"}
@@ -6780,6 +6839,7 @@ components:
         - preset_default_invalid
         - preset_in_use
         - preset_quota
+        - presets_suspended
     OperationsOverview:
       type: object
       additionalProperties: false
@@ -7907,6 +7967,19 @@ components:
       properties:
         limits: {$ref: "#/components/schemas/RoutingPresetLimits"}
         rev: {type: integer, format: int64, minimum: 0}
+        reason: {$ref: "#/components/schemas/Reason"}
+    RoutingPresetSuspension:
+      type: object
+      required: [suspended]
+      properties:
+        suspended: {type: boolean}
+        since: {type: string, format: date-time, description: When presets were suspended; absent when they are not.}
+    RoutingPresetSuspensionUpdate:
+      type: object
+      additionalProperties: false
+      required: [suspended, reason]
+      properties:
+        suspended: {type: boolean}
         reason: {$ref: "#/components/schemas/Reason"}
     ProbeSettings:
       type: object

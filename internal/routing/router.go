@@ -46,6 +46,9 @@ type Router struct {
 	state  *state
 	sticky *sticky
 	budget *budget
+	// suspended is the platform's kill switch as Presets.Load last read it. It is apart from the snapshot so that it
+	// holds from the moment it is read, even when the rest of that build fails and the last snapshot stands.
+	suspended atomic.Bool
 }
 
 // New returns a router with no snapshot: Plan returns ErrStale until Replace gives it one.
@@ -135,12 +138,26 @@ func (r *Router) KeyView(a Admission) (KeyView, error) {
 	if snap == nil {
 		return KeyView{}, nil
 	}
-	p, ok := snap.presets[a.Preset]
-	if !ok || !p.visibleTo(a) {
-		return KeyView{}, ErrPresetUnavailable
+	p, err := r.presetOf(snap, a)
+	if err != nil {
+		return KeyView{}, err
 	}
 	return KeyView{snap: snap, preset: p, a: a}, nil
 }
+
+// presetOf is the preset the key routes by in snap: ErrPresetUnavailable when snap does not hold it, when it is not of
+// the key's layers or currency, or when it is not the system preset and the platform has suspended presets.
+func (r *Router) presetOf(snap *Snapshot, a Admission) (*preset, error) {
+	p, ok := snap.presets[a.Preset]
+	if !ok || !p.visibleTo(a) || a.Preset != SystemPreset && r.suspended.Load() {
+		return nil, ErrPresetUnavailable
+	}
+	return p, nil
+}
+
+// suspendPresets sets the platform's kill switch (SetSuspension) as Presets.Load read it, and reports whether that
+// changed it.
+func (r *Router) suspendPresets(on bool) bool { return r.suspended.Swap(on) != on }
 
 // Serves reports whether some endpoint of the model is in the key's view.
 func (v KeyView) Serves(m catalog.ModelID) bool {

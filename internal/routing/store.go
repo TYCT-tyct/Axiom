@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"sync"
+	"time"
 	"uuid"
 
 	"axiom/internal/platform"
@@ -92,9 +93,14 @@ func orZero(id *uuid.UUID) uuid.UUID {
 // Presets reads the routing presets a snapshot is built with. It compiles a version once and keeps it while the preset
 // points at it, so a rebuild reads the rules of the versions that changed only. A preset whose rules this node cannot
 // read is left out of the snapshot and logged once: the keys bound to it are refused as unavailable, and every other
-// preset still routes. Disabled presets are read too, because the keys bound to them still route by them.
+// preset still routes. Disabled presets are read too, because the keys bound to them still route by them. Each load
+// also reads the platform's kill switch (SetSuspension) first and tells Router at once, so a suspension holds even when
+// the rest of that build fails and the last snapshot stands.
 type Presets struct {
 	Logger *slog.Logger
+	// Router is told whether presets are suspended: while they are, it routes no key by a preset other than the system
+	// preset, whatever its snapshot holds. Nil tells no one, for tests of the presets read alone.
+	Router *Router
 
 	mu       sync.Mutex
 	compiled map[presetVersion]compiledVersion
@@ -123,6 +129,11 @@ type presetHeader struct {
 // replaced, only when the tables cannot be read or the system preset is missing or unreadable: without it, every key
 // with no preset of its own would be refused.
 func (s *Presets) Load(ctx context.Context, tx pg.Tx) ([]Preset, error) {
+	since, err := ReadSuspension(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	s.tell(since)
 	headers, err := readHeaders(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -160,6 +171,20 @@ func (s *Presets) Load(ctx context.Context, tx pg.Tx) ([]Preset, error) {
 		return nil, errors.New("routing: the system preset is missing")
 	}
 	return out, nil
+}
+
+// tell gives Router the kill switch as read, since being zero when presets are not suspended, and logs a change once
+// per node: while it lasts, every key bound to a preset other than the system's is refused.
+func (s *Presets) tell(since time.Time) {
+	suspended := !since.IsZero()
+	if s.Router == nil || !s.Router.suspendPresets(suspended) || s.Logger == nil {
+		return
+	}
+	if suspended {
+		s.Logger.Warn("routing presets are suspended: keys bound to a preset are refused", "event", "routing.presets_suspended", "since", since)
+		return
+	}
+	s.Logger.Info("routing presets are resumed", "event", "routing.presets_resumed")
 }
 
 func readHeaders(ctx context.Context, tx pg.Tx) ([]presetHeader, error) {

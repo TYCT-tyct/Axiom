@@ -251,7 +251,7 @@ func routeDeps(d callDeps, router *routing.Router, upstreams *suppliers.Service,
 		SiteCurrency:  siteCurrency,
 		Models:        models,
 		UnknownItems:  unknownItems(d.db),
-		Presets:       routePresets(d.db, d.logger),
+		Presets:       routePresets(d.db, d.logger, router),
 		Quality:       health,
 		Router:        router,
 		Logger:        d.logger,
@@ -431,9 +431,10 @@ func unknownItems(db *pg.DB) func(context.Context) ([]billing.UnknownItem, error
 	}
 }
 
-// routePresets reads the routing presets for each build, keeping the versions it compiled (routing.Presets).
-func routePresets(db *pg.DB, logger *slog.Logger) func(context.Context) ([]routing.Preset, error) {
-	source := &routing.Presets{Logger: logger}
+// routePresets reads the routing presets for each build, keeping the versions it compiled, and tells router whether the
+// platform has suspended them as soon as it reads that (routing.Presets).
+func routePresets(db *pg.DB, logger *slog.Logger, router *routing.Router) func(context.Context) ([]routing.Preset, error) {
+	source := &routing.Presets{Logger: logger, Router: router}
 	return func(ctx context.Context) (presets []routing.Preset, err error) {
 		err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
 			presets, err = source.Load(ctx, tx)

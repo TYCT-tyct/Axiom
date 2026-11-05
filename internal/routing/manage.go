@@ -207,6 +207,9 @@ func GetPreset(ctx context.Context, tx pg.Tx, id PresetID) (StoredPreset, error)
 // CreatePreset makes a preset of layer with its first version, in tx, which must be in a scope that may write the
 // layer, and records it with the actor's reason, which the platform's and sites' changes give.
 func CreatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, slug string, c PresetContent, reason string) (StoredPreset, error) {
+	if err := lockWrites(ctx, tx); err != nil {
+		return StoredPreset{}, err
+	}
 	rules, err := checkContent(ctx, tx, layer, c)
 	if err != nil {
 		return StoredPreset{}, err
@@ -237,7 +240,7 @@ func CreatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer,
 // UpdatePreset replaces the name and the rules of the preset at revision. Rules that differ from the current ones are
 // a new version; the same rules keep it, and a write that changes nothing changes nothing, its revision included.
 func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID, revision int64, c PresetContent, reason string) (StoredPreset, error) {
-	if err := lockBudget(ctx, tx); err != nil { // before the preset's row, in the order DisablePreset takes them
+	if err := lockWrites(ctx, tx); err != nil { // before the preset's row, in the order DisablePreset takes them
 		return StoredPreset{}, err
 	}
 	before, err := lockPreset(ctx, tx, id, revision)
@@ -326,7 +329,7 @@ func addVersion(ctx context.Context, tx pg.Tx, actor audit.Actor, before StoredP
 // making and disabling presets in turn cannot grow the table without bound.
 func DisablePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID, revision int64, reason string) error {
 	// The budget row orders this with the default writes, which check that the preset they point at is live.
-	if err := lockBudget(ctx, tx); err != nil {
+	if err := lockWrites(ctx, tx); err != nil {
 		return err
 	}
 	before, err := lockPreset(ctx, tx, id, revision)

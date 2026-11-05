@@ -107,9 +107,9 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	if snap == nil || !r.fresh(snap, now) {
 		return Plan{}, nil, ErrStale
 	}
-	preset, ok := snap.presets[in.Admission.Preset]
-	if !ok || !preset.visibleTo(in.Admission) {
-		return Plan{}, nil, ErrPresetUnavailable
+	preset, unavailable := r.presetOf(snap, in.Admission)
+	if unavailable != nil {
+		return Plan{}, nil, unavailable
 	}
 	n := &need{
 		in: &in, req: in.Req, preset: preset, rule: preset.def, over: &in.Override, auto: in.Auto, free: in.Free, now: now,

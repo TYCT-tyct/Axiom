@@ -96,6 +96,7 @@ var refusals = []refusal{
 	{routing.ErrPresetStale, http.StatusConflict, codeStaleRevision, "the routing preset or default changed since it was read"},
 	{routing.ErrPresetInUse, http.StatusConflict, codePresetInUse, "a default still points at the routing preset; change the default first"},
 	{routing.ErrPresetQuota, http.StatusConflict, codePresetQuota, "over the limit of routing presets"},
+	{routing.ErrPresetsSuspended, http.StatusServiceUnavailable, codePresetsSuspended, "the platform has suspended routing presets; try again once they are resumed"},
 	{accounts.ErrTooManyAttempts, http.StatusTooManyRequests, codeRateLimited, "too many attempts"},
 	{accounts.ErrBusy, http.StatusServiceUnavailable, codeUnavailable, "busy, try again shortly"},
 	{accounts.ErrStale, http.StatusServiceUnavailable, codeUnavailable, "temporarily unavailable"},

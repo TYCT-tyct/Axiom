@@ -86,6 +86,8 @@ var adminOperations = []adminOperation{
 	{"setPlatformRoutingDefault", http.MethodPut, "/settings/routing", `{"preset_id":null,"version":0,"reason":"r"}`, "sites.manage", true},
 	{"getRoutingPresetLimits", http.MethodGet, "/settings/routing-limits", "", "sites.manage", false},
 	{"setRoutingPresetLimits", http.MethodPut, "/settings/routing-limits", `{"limits":{},"rev":0,"reason":"r"}`, "sites.manage", true},
+	{"getRoutingPresetSuspension", http.MethodGet, "/settings/routing-suspension", "", "sites.manage", false},
+	{"setRoutingPresetSuspension", http.MethodPut, "/settings/routing-suspension", `{"suspended":true,"reason":"r"}`, "sites.manage", true},
 	{"getSiteRoutingDefault", http.MethodGet, strings.Replace(someSite, "/settings", "/routing-default", 1), "", "sites.manage", false},
 	{"setSiteRoutingDefault", http.MethodPut, strings.Replace(someSite, "/settings", "/routing-default", 1), `{"preset_id":null,"version":0,"reason":"r"}`, "sites.manage", true},
 	{"listMerchants", http.MethodGet, "/payments/merchants?site_id=site_00000000000000000000000000", "", "sites.manage", false},

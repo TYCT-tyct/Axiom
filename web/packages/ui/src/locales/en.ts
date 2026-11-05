@@ -67,6 +67,8 @@ export default {
     preset_default_invalid: "The default routing preset can’t be used for new keys. Ask an administrator to change it.",
     preset_in_use: "A default still uses this routing preset. Change the default first.",
     preset_quota: "This account has as many routing presets as it may hold. Edit one instead.",
+    presets_suspended:
+      "The platform has paused routing presets, so presets, defaults and a key’s preset can’t be changed now. Try again once they’re resumed.",
     network: "Can’t reach Axiom. Check your connection and try again.",
     unknown: "Something went wrong. Try again in a moment.",
     field: "This doesn’t meet the requirements.",

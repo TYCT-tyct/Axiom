@@ -14,6 +14,9 @@ WHERE request_id = ANY(@ids::uuid[]) AND state IN ('settled', 'cleanup_settled')
 
 -- name: SettledFinals :many
 -- What a settlement stored of the named calls, for the call log to complete a record written before its settlement
--- committed. Corrections move charged and final_usage on the same row, so this is the charge as it stands now.
-SELECT request_id, price_versions, entry, charged, waived, final_usage FROM billing.reservations
-WHERE request_id = ANY(@ids::uuid[]) AND state = 'settled';
+-- committed. Corrections move charged and final_usage on the same row, so this is the charge as it stands now. FOR
+-- SHARE waits for a settlement that has written the row and not yet committed, then reads the row it committed: a
+-- try the gateway gave up on may still be committing. The rows are locked by ID alone and their state is the caller's
+-- to check, because a lock read skips a row whose visible version fails the WHERE clause without waiting for its writer.
+SELECT request_id, state, price_versions, entry, charged, waived, final_usage FROM billing.reservations
+WHERE request_id = ANY(@ids::uuid[]) ORDER BY request_id FOR SHARE;

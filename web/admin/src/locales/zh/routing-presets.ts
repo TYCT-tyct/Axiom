@@ -75,4 +75,21 @@ export default {
     save: "保存上限",
     saved: "已保存。下一次预设的新建和修改就按它检查。",
   },
+  suspension: {
+    title: "暂停路由预设",
+    state: "状态",
+    running: "生效中",
+    suspended: "已暂停",
+    since: "暂停于",
+    suspend: "暂停预设",
+    resume: "恢复预设",
+    suspendTitle: "暂停路由预设",
+    suspendIntro:
+      "用于预设本身出事故的时候。5 秒内，所有绑定了预设的 key 调用模型和读模型列表都被拒绝（503 preset_unavailable），不会绕过预设限定的来源和价格；没有预设的 key 照常可用。恢复之前，谁都不能建、改、停用预设，改默认值或给 key 选预设；这期间新建的 key 仍按默认值落章。只有这个版本的节点认这个开关：所有节点都更新后再暂停。",
+    resumeTitle: "恢复路由预设",
+    resumeIntro: "5 秒内 key 重新按各自的预设路由，预设、默认值和 key 的预设也能再改。",
+    suspendedDone: "已暂停。5 秒内绑定了预设的 key 都会被拒绝。",
+    resumedDone: "已恢复。5 秒内 key 重新按各自的预设路由。",
+    unavailable: "这个节点还没有暂停路由预设的开关。节点更新后再试。",
+  },
 };
