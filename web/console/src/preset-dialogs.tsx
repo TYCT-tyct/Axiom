@@ -1,6 +1,6 @@
 import { ApiError, consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
 import { accountKey, draftOf, type Invalid, RulesEditor, rulesOf, useClassOptions, useErrors } from "@axiom/app";
-import { Button, Dialog, FormError, SubmitButton, TextField, useFormat } from "@axiom/ui";
+import { Button, Dialog, FormError, Icon, SubmitButton, TextField, useFormat } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -208,6 +208,12 @@ export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClo
       body={
         <>
           <p>{t("routingPresets.disable.body", { name: preset.name })}</p>
+          {isDefault ? (
+            <p className="flex gap-2 rounded-btn bg-warn-soft px-3 py-2 text-warn">
+              <Icon name="alert" className="mt-0.5 shrink-0" />
+              {t("routingPresets.disable.isDefault")}
+            </p>
+          ) : null}
           {/* A node that does not count the keys gives no number, and then none is said. */}
           {preset.keys === undefined ? null : (
             <p>
@@ -216,7 +222,6 @@ export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClo
                 : t("routingPresets.disable.keys", { count: preset.keys, keys: format.number(preset.keys) })}
             </p>
           )}
-          {isDefault ? <p className="text-warn">{t("routingPresets.disable.isDefault")}</p> : null}
         </>
       }
       confirm={t("routingPresets.disable.confirm")}

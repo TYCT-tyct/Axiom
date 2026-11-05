@@ -215,7 +215,7 @@ it("sends the default at the version the choice was made against", async () => {
 // account's default for new keys (preset 1 here), that the default must be changed first; a node that counts no keys
 // has no number said for it. The words are i18n keys: the test has no messages.
 it.each([
-  { name: "the default, with keys", n: 1, keys: 3, said: ["keys", "isDefault"] },
+  { name: "the default, with keys", n: 1, keys: 3, said: ["isDefault", "keys"] },
   { name: "no keys", n: 2, keys: 0, said: ["noKeys"] },
   { name: "a node that counts none", n: 2, keys: undefined, said: [] },
 ])("says what disabling meets: $name", async ({ n, keys, said }) => {
