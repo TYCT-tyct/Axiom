@@ -82,6 +82,7 @@ type Plan struct {
 	StartBy     time.Time
 	StickyTTL   time.Duration // how long the session sticks to the endpoint that serves it; the preset's, 0 for the router's default
 	Record      Record
+	tally       *presetTally // the preset's, for Router.Planned; nil when it is not watched
 }
 
 // MaxEntries is the longest route.

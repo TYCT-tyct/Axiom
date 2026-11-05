@@ -15,7 +15,7 @@ func TestSegmentSettingsComeFromOneSource(t *testing.T) {
 	want := billing.Segments{Output: 321, Overshoot: 7 * time.Second}
 	policy := billing.NewSegmentPolicy(want)
 	gate := gateway.DefaultConfig()
-	if got := routingConfig(gate, policy).Segments; got != policy {
+	if got := routingConfig(callDeps{gate: gate}, policy).Segments; got != policy {
 		t.Errorf("routing's policy = %p, want the same policy billing gets %p", got, policy)
 	}
 	if got := ledgerConfig(gate, policy, nil, nil, nil).Segments; got != policy {

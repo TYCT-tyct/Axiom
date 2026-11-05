@@ -125,7 +125,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	}
 	// The window in which a call may start another attempt is the gateway's StartBy, so the two cannot differ: routing
 	// stamps it on every plan and the executor reads it from there, not from the configuration.
-	router, err := routing.New(routingConfig(d.gate, ledger.Segments()))
+	router, err := routing.New(routingConfig(d, ledger.Segments()))
 	if err != nil {
 		return callNode{}, err
 	}
@@ -171,8 +171,8 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 // routingConfig is what the router gets from the node's settings and the live segment policy the ledger loaded. The
 // policy is the one ledgerConfig hands billing, so routing never marks an entry segmentable with no sizes for billing
 // to reserve it by (#229).
-func routingConfig(gate gateway.Config, segments *billing.SegmentPolicy) routing.Config {
-	return routing.Config{AttemptWindow: gate.StartBy, Segments: segments}
+func routingConfig(d callDeps, segments *billing.SegmentPolicy) routing.Config {
+	return routing.Config{AttemptWindow: d.gate.StartBy, Segments: segments, Meter: d.meter, Alerts: d.alerts, Node: d.nodeID}
 }
 
 // ledgerConfig is what billing gets from the node's settings; it holds the same live policy routingConfig reads, so an

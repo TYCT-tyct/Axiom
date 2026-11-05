@@ -363,7 +363,7 @@ func TestPresetVisibility(t *testing.T) {
 
 // BenchmarkPlanPreset is BenchmarkPlan's fifty candidates under the open preset and under one of a hundred rules, half by
 // author and half by model, one of which is the planned model's: the rule lookup is one or two map reads per model, and
-// allocates nothing.
+// allocates nothing, nor does counting the plan for the preset's alert (watched).
 func BenchmarkPlanPreset(b *testing.B) {
 	var rules []string
 	for i := range 50 {
@@ -371,12 +371,14 @@ func BenchmarkPlanPreset(b *testing.B) {
 	}
 	ruled := compiled(b, `{"default":{"classes":["*"],"policies":["*"]},"rules":[`+strings.Join(rules, ",")+`]}`)
 	ruled.ID = pre
+	watched := routing.Config{Alerts: &signals{}, Node: "n1"} // a platform preset is then counted on every plan
 	for _, tc := range []struct {
 		name   string
+		cfg    routing.Config
 		preset routing.Preset
-	}{{"open", openPreset()}, {"100 rules", ruled}} {
+	}{{"open", routing.Config{}, openPreset()}, {"100 rules", routing.Config{}, ruled}, {"100 rules watched", watched, ruled}} {
 		b.Run(tc.name, func(b *testing.B) {
-			h, in := candidatesUnder(b, 50, routing.Config{}, tc.preset)
+			h, in := candidatesUnder(b, 50, tc.cfg, tc.preset)
 			in.Admission.Currency = usd
 			b.ReportAllocs()
 			for b.Loop() {

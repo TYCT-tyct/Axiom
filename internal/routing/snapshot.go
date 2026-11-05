@@ -355,6 +355,7 @@ type preset struct {
 	Preset
 	def               *Rule
 	byModel, byAuthor map[string]*Rule
+	tally             *presetTally // the calls a platform or site preset routed and refused (presetWatch.tally)
 }
 
 // ruleFor is the rule of the model with this catalog slug: its own, its author's, or the default.
@@ -536,6 +537,7 @@ func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Pr
 		if err != nil {
 			return nil, err
 		}
+		compiled.tally = r.watch.tally(p)
 		s.presets[p.ID] = compiled
 	}
 	return s, nil
