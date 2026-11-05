@@ -71,16 +71,24 @@ test("a new platform preset that limits a price names its currency, and one that
   ]);
 });
 
-test("one vendor rule reads in the singular, and a phone gives the key count its unit", async ({ page }) => {
+test("one vendor rule reads in the singular, and a phone labels the key count", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("axiom.language", "en"));
   await open(page, "/routing-presets");
   await page.setViewportSize({ width: 360, height: 900 });
   // The site preset has one rule by vendor or model, and the summary under the name counts it as one.
   await expect(page.getByText(words("presetRules.summary.overrides_one")).first()).toBeVisible();
-  // Below sm the keys column is gone, so the count under the rules says what it counts.
-  const counted = page.getByRole("row").filter({ hasText: "Official only" });
-  await expect(counted.getByText(words("routingPresets.keys.count_other"))).toBeVisible();
+  // Below sm the keys column is gone, so the count under the rules says what it counts, in the page's number format.
+  const counted = page.getByRole("row").filter({ hasText: "Cheapest, in dollars" });
+  await expect(counted.getByText("12,345 keys", { exact: true })).toBeVisible();
   // The system preset has no count: it says what it is, as its own text does in the hidden column.
   const system = page.getByRole("row").filter({ hasText: "Allow all" });
   await expect(system.getByText(words("routingPresets.keys.system")).first()).toBeVisible();
+});
+
+test("a phone labels the key count in Chinese with the same number format", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("axiom.language", "zh"));
+  await open(page, "/routing-presets");
+  await page.setViewportSize({ width: 360, height: 900 });
+  const counted = page.getByRole("row").filter({ hasText: "Cheapest, in dollars" });
+  await expect(counted.getByText("12,345 个 key", { exact: true })).toBeVisible();
 });

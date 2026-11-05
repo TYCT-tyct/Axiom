@@ -218,5 +218,7 @@ function Keys({ preset, labelled = false }: { preset: Preset; labelled?: boolean
   if (preset.keys === undefined) {
     return t("routingPresets.keys.unknown");
   }
-  return labelled ? t("routingPresets.keys.count", { count: preset.keys }) : format.number(preset.keys);
+  return labelled
+    ? t("routingPresets.keys.count", { count: preset.keys, keys: format.number(preset.keys) })
+    : format.number(preset.keys);
 }

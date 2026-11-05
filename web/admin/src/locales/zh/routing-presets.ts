@@ -13,8 +13,8 @@ export default {
   keys: {
     system: "未绑定的 key 都按它",
     unknown: "节点没有给出",
-    count_one: "{{count}} 个 key",
-    count_other: "{{count}} 个 key",
+    count_one: "{{keys}} 个 key",
+    count_other: "{{keys}} 个 key",
   },
   edit: "修改",
   disable: "停用",
