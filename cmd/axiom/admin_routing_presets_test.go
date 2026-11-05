@@ -8,6 +8,8 @@ import (
 	"testing"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/platform/adminapi"
 )
 
@@ -243,31 +245,25 @@ func TestAdminRoutingPresetLimits(t *testing.T) {
 	f := newAdminFixture(t)
 	s := f.owner()
 	const path = "/settings/routing-limits"
-	var view adminapi.RoutingPresetLimitsView
-	decode(t, f.do(http.MethodGet, path, "", as(s)), &view)
-	d := view.Defaults
-	if view.Limits != (adminapi.RoutingPresetLimits{}) || d.Account == nil || *d.Account.Active != 20 || *d.Account.Total != 200 ||
-		d.Platform == nil || *d.Platform.Active != 50 || d.KeptVersions == nil || *d.KeptVersions != 50 {
-		t.Fatalf("the limits before any is saved: %+v", view)
+	layer := func(active, total int64) *adminapi.RoutingLayerLimits {
+		return &adminapi.RoutingLayerLimits{Active: new(active), Total: new(total)}
 	}
+	f.wantLimits(s, adminapi.RoutingPresetLimitsView{Defaults: adminapi.RoutingPresetLimits{
+		Platform: layer(50, 500), Site: layer(50, 500), Account: layer(20, 200), Workspace: layer(10, 100), KeptVersions: new(int64(50)),
+	}})
 
 	body := `{"limits":{"platform":{"active":1},"kept_versions":60},"reason":"one platform preset"}`
 	key := newKey()
-	for i := range 2 {
-		rec := f.change(s, http.MethodPut, path, body, key)
-		expectAdmin(t, "save", rec, http.StatusOK, "")
-		if i == 1 && rec.Header().Get("Idempotency-Replayed") != "true" {
-			t.Fatal("the second save was not replayed")
-		}
+	expectAdmin(t, "save", f.change(s, http.MethodPut, path, body, key), http.StatusOK, "")
+	if rec := f.change(s, http.MethodPut, path, body, key); rec.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("the second save was not replayed: %d %s", rec.Code, rec.Body)
 	}
 	if n := f.auditCount("routing.limits.update"); n != "1" {
 		t.Fatalf("%s audit entries, want 1", n)
 	}
-	decode(t, f.do(http.MethodGet, path, "", as(s)), &view)
-	if l := view.Limits; l.Platform == nil || *l.Platform.Active != 1 || l.Platform.Total != nil || l.KeptVersions == nil ||
-		*l.KeptVersions != 60 || l.Account != nil {
-		t.Fatalf("the saved limits: %+v", l)
-	}
+	f.wantLimits(s, adminapi.RoutingPresetLimitsView{Limits: adminapi.RoutingPresetLimits{
+		Platform: &adminapi.RoutingLayerLimits{Active: new(int64(1))}, KeptVersions: new(int64(60)),
+	}})
 	// The system preset is the platform's one live preset.
 	expectAdmin(t, "a platform preset over the limit", f.change(s, http.MethodPost, "/routing-presets",
 		`{"slug":"over","name":"Over","rules":{"default":{}},"reason":"r"}`, newKey()), http.StatusConflict, "preset_quota")
@@ -279,4 +275,20 @@ func TestAdminRoutingPresetLimits(t *testing.T) {
 	}
 	expectAdmin(t, "save none", f.change(s, http.MethodPut, path, `{"limits":{},"reason":"defaults"}`, newKey()), http.StatusOK, "")
 	f.adminPreset(s, "/routing-presets", `{"slug":"back","name":"Back","rules":{"default":{}},"reason":"r"}`)
+}
+
+// wantLimits checks the limits the admin reads: the saved ones as want has them, and the defaults when want names
+// them.
+func (f adminFixture) wantLimits(s session, want adminapi.RoutingPresetLimitsView) {
+	f.t.Helper()
+	var got adminapi.RoutingPresetLimitsView
+	decode(f.t, f.do(http.MethodGet, "/settings/routing-limits", "", as(s)), &got)
+	if diff := cmp.Diff(want.Limits, got.Limits); diff != "" {
+		f.t.Errorf("the saved limits (-want +got):\n%s", diff)
+	}
+	if want.Defaults != (adminapi.RoutingPresetLimits{}) {
+		if diff := cmp.Diff(want.Defaults, got.Defaults); diff != "" {
+			f.t.Errorf("the defaults (-want +got):\n%s", diff)
+		}
+	}
 }

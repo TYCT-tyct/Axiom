@@ -297,10 +297,8 @@ func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID,
 		updated_at = statement_timestamp() WHERE id = $1`, uuid.UUID(id), c.Name, version); err != nil {
 		return StoredPreset{}, presetWriteErr("update a preset", err)
 	}
-	if newRules {
-		if err := pruneVersions(ctx, tx, id, version); err != nil {
-			return StoredPreset{}, err
-		}
+	if err := pruneVersions(ctx, tx, id, version); err != nil {
+		return StoredPreset{}, err
 	}
 	p, err := GetPreset(ctx, tx, id)
 	if err != nil {

@@ -43,9 +43,11 @@ const (
 )
 
 // Effective is the limits a write is held to: every zero value falls back to its code default.
-func (l Limits) Effective() Limits {
+func (l *Limits) Effective() Limits {
 	d := DefaultLimits()
-	layer := func(v, d LayerLimits) LayerLimits { return LayerLimits{orDefault(v.Active, d.Active), orDefault(v.Total, d.Total)} }
+	layer := func(v, d LayerLimits) LayerLimits {
+		return LayerLimits{orDefault(v.Active, d.Active), orDefault(v.Total, d.Total)}
+	}
 	return Limits{
 		Platform: layer(l.Platform, d.Platform), Site: layer(l.Site, d.Site),
 		Account: layer(l.Account, d.Account), Workspace: layer(l.Workspace, d.Workspace),
@@ -66,7 +68,21 @@ func (l *Limits) layers() []struct {
 
 // Check reports the first value outside its bounds, and a layer whose effective live limit is above its total, which
 // would let no more presets live than the total does anyway and so says something it does not do.
-func (l Limits) Check() error {
+func (l *Limits) Check() error {
+	if err := l.bounds(); err != nil {
+		return err
+	}
+	e := l.Effective()
+	for _, layer := range e.layers() {
+		if layer.limits.Active > layer.limits.Total {
+			return &LimitError{layer.name + "/active", "must be at most the layer's total"}
+		}
+	}
+	return nil
+}
+
+// bounds reports the first recorded value outside its bounds.
+func (l *Limits) bounds() error {
 	for _, layer := range l.layers() {
 		if v := layer.limits.Active; v != 0 && (v < 1 || v > maxActiveLimit) {
 			return &LimitError{layer.name + "/active", fmt.Sprintf("must be from 1 to %d", maxActiveLimit)}
@@ -77,12 +93,6 @@ func (l Limits) Check() error {
 	}
 	if v := l.KeptVersions; v != 0 && (v < minKept || v > maxKept) {
 		return &LimitError{"kept_versions", fmt.Sprintf("must be from %d to %d", minKept, maxKept)}
-	}
-	e := l.Effective()
-	for _, layer := range e.layers() {
-		if layer.limits.Active > layer.limits.Total {
-			return &LimitError{layer.name + "/active", "must be at most the layer's total"}
-		}
 	}
 	return nil
 }
@@ -164,7 +174,7 @@ func SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, l Limits, reaso
 }
 
 // detail is the record as the audit log keeps it: a value left to its default is null.
-func (l Limits) detail() map[string]any {
+func (l *Limits) detail() map[string]any {
 	out := map[string]any{"kept_versions": nullable(l.KeptVersions)}
 	for _, layer := range l.layers() {
 		out[layer.name] = map[string]any{"active": nullable(layer.limits.Active), "total": nullable(layer.limits.Total)}
