@@ -917,6 +917,60 @@ func (q *Queries) SetSupplierStatusBumpingConfigGen(ctx context.Context, db DBTX
 	return err
 }
 
+const topUpBasis = `-- name: TopUpBasis :many
+SELECT s.id, s.name, s.owner_scope, s.site_id, s.status, s.native_unit, s.settlement_currency,
+    coalesce(u.id::text, '')::text AS unit_value_id, coalesce(u.value::text, '')::text AS unit_value
+FROM suppliers.suppliers s
+LEFT JOIN LATERAL (SELECT v.id, v.value FROM suppliers.unit_values v
+    WHERE v.supplier_id = s.id AND v.currency = s.settlement_currency AND v.native_unit = s.native_unit
+    ORDER BY v.id DESC LIMIT 1) u ON true
+WHERE s.id = $1
+`
+
+type TopUpBasisRow struct {
+	ID                 uuid.UUID
+	Name               string
+	OwnerScope         string
+	SiteID             *uuid.UUID
+	Status             string
+	NativeUnit         string
+	SettlementCurrency string
+	UnitValueID        string
+	UnitValue          string
+}
+
+// What a top-up proposal is computed from: who owns the supplier, its units and the unit value now in force, the
+// empty text when there is none.
+func (q *Queries) TopUpBasis(ctx context.Context, db DBTX, id uuid.UUID) ([]TopUpBasisRow, error) {
+	rows, err := db.Query(ctx, topUpBasis, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TopUpBasisRow
+	for rows.Next() {
+		var i TopUpBasisRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.OwnerScope,
+			&i.SiteID,
+			&i.Status,
+			&i.NativeUnit,
+			&i.SettlementCurrency,
+			&i.UnitValueID,
+			&i.UnitValue,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateAliasFormats = `-- name: UpdateAliasFormats :exec
 UPDATE suppliers.supplier_aliases SET formats = $1 WHERE id = $2
 `

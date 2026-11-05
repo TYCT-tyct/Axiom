@@ -226,3 +226,32 @@ func (*Admin) view(ctx context.Context, tx pg.Tx, id uuid.UUID) (Supplier, error
 	}
 	return supplierOf(rows[0]), nil
 }
+
+// TopUpBasis is what a top-up of a supplier is computed from (docs/domains/operations.md「转账的累计金额上限」): who
+// owns it (Site nil for the platform; Account for a key an account brought, which is never topped up through Axiom),
+// its units, and the unit value in force, UnitValue empty when none is confirmed.
+type TopUpBasis struct {
+	ID                             uuid.UUID
+	Name                           string
+	Site                           *uuid.UUID
+	Account                        bool
+	Status                         Status
+	NativeUnit, SettlementCurrency string
+	UnitValueID, UnitValue         string
+}
+
+// TopUpBasis reads supplier id's; ErrNoSupplier when there is none.
+func (*Admin) TopUpBasis(ctx context.Context, tx pg.Tx, id uuid.UUID) (TopUpBasis, error) {
+	rows, err := store.New().TopUpBasis(ctx, tx, id)
+	if err != nil {
+		return TopUpBasis{}, fmt.Errorf("read supplier %s: %w", id, err)
+	}
+	if len(rows) == 0 {
+		return TopUpBasis{}, ErrNoSupplier
+	}
+	r := rows[0]
+	return TopUpBasis{
+		ID: r.ID, Name: r.Name, Site: r.SiteID, Account: r.OwnerScope == "account", Status: Status(r.Status),
+		NativeUnit: r.NativeUnit, SettlementCurrency: r.SettlementCurrency, UnitValueID: r.UnitValueID, UnitValue: r.UnitValue,
+	}, nil
+}
