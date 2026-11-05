@@ -10,7 +10,12 @@ export default {
   col: { name: "Name", rules: "Rules", keys: "Keys using it", version: "Version" },
   system: "System",
   disabled: "Disabled",
-  keys: { system: "Every unbound key", unknown: "Not given by the node" },
+  keys: {
+    system: "Every unbound key",
+    unknown: "Not given by the node",
+    count_one: "{{count}} key",
+    count_other: "{{count}} keys",
+  },
   edit: "Edit",
   disable: "Disable",
   editNamed: "Edit {{name}}",
