@@ -42,9 +42,10 @@ func TestRestartDoesNotDuplicateCommittedRecords(t *testing.T) {
 // the settled one when it comes, the pending one when the settlement goes to the cleanup or the node dies first. A
 // pending record whose settlement committed all the same (the node died before keeping the settled record, or the last
 // try committed after it was given up) is written with the ledger's amounts, which a correction may have moved since;
-// without a settled charge it stays pending. A parked record that outlives its settled record (the node died between
-// the two) is replayed after it and changes nothing. The table is only inserted into, so none of this depends on how
-// batches fall.
+// without a settled charge it stays pending. A record moved into the spill twice (the node died between the move and
+// the removal of its file) puts two copies in one batch, and both are completed, so whichever is inserted carries the
+// amounts. A parked record that outlives its settled record (the node died between the two) is replayed after it and
+// changes nothing. The table is only inserted into, so none of this depends on how batches fall.
 func TestAPendingRecordIsReplacedOrKept(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
@@ -70,6 +71,12 @@ func TestAPendingRecordIsReplacedOrKept(t *testing.T) {
 		{"parked when the node died", func(_ *testing.T, r *Recorder, _ *Slot, _ CallRecord) { crash(r) }, false, pending},
 		{"parked when the node died after its settlement committed", func(_ *testing.T, r *Recorder, _ *Slot, _ CallRecord) {
 			crash(r)
+		}, true, fromLedger},
+		{"moved into the spill twice when the node died before removing it", func(t *testing.T, r *Recorder, _ *Slot, rec CallRecord) {
+			crash(r)
+			parked := readParked(t, r.cfg.Dir, rec.ID)
+			crash(recorderOfDB(t, db, r.cfg))         // the start moved the parked record into the spill, then died
+			writeParked(t, r.cfg.Dir, rec.ID, parked) // before its removal survived: the next start moves it again
 		}, true, fromLedger},
 		{"parked after its settled record when the node died", func(t *testing.T, r *Recorder, slot *Slot, rec CallRecord) {
 			parked := readParked(t, r.cfg.Dir, rec.ID)
