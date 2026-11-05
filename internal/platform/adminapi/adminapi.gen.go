@@ -325,6 +325,12 @@ type ServerInterface interface {
 	// SetPlatformRoutingDefault Set the platform's default routing preset
 	// (PUT /api/admin/v1/settings/routing)
 	SetPlatformRoutingDefault(w http.ResponseWriter, r *http.Request, params SetPlatformRoutingDefaultParams)
+	// GetRoutingPresetLimits The saved limits on routing presets and the defaults in code
+	// (GET /api/admin/v1/settings/routing-limits)
+	GetRoutingPresetLimits(w http.ResponseWriter, r *http.Request)
+	// SetRoutingPresetLimits Save the limits on routing presets, validated and audited
+	// (PUT /api/admin/v1/settings/routing-limits)
+	SetRoutingPresetLimits(w http.ResponseWriter, r *http.Request, params SetRoutingPresetLimitsParams)
 	// GetSearchSettings The configured search engines, their published prices and where the list came from. Keys are never returned.
 	// (GET /api/admin/v1/settings/search)
 	GetSearchSettings(w http.ResponseWriter, r *http.Request)
@@ -5171,6 +5177,65 @@ func (siw *ServerInterfaceWrapper) SetPlatformRoutingDefault(w http.ResponseWrit
 	handler.ServeHTTP(w, r)
 }
 
+// GetRoutingPresetLimits operation middleware
+func (siw *ServerInterfaceWrapper) GetRoutingPresetLimits(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetRoutingPresetLimits(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetRoutingPresetLimits operation middleware
+func (siw *ServerInterfaceWrapper) SetRoutingPresetLimits(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetRoutingPresetLimitsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetRoutingPresetLimits(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetSearchSettings operation middleware
 func (siw *ServerInterfaceWrapper) GetSearchSettings(w http.ResponseWriter, r *http.Request) {
 
@@ -7916,6 +7981,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/routing-presets/{preset_id}", wrapper.UpdateLayerRoutingPreset)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/settings/routing", wrapper.GetPlatformRoutingDefault)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/settings/routing", wrapper.SetPlatformRoutingDefault)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/settings/routing-limits", wrapper.GetRoutingPresetLimits)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/settings/routing-limits", wrapper.SetRoutingPresetLimits)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/routing-default", wrapper.GetSiteRoutingDefault)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/routing-default", wrapper.SetSiteRoutingDefault)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/payments/merchants", wrapper.ListMerchants)
@@ -19156,6 +19223,178 @@ func (response SetPlatformRoutingDefaultdefaultJSONResponse) VisitSetPlatformRou
 	return err
 }
 
+type GetRoutingPresetLimitsRequestObject struct {
+}
+
+type GetRoutingPresetLimitsResponseObject interface {
+	VisitGetRoutingPresetLimitsResponse(w http.ResponseWriter) error
+}
+
+type GetRoutingPresetLimits200JSONResponse RoutingPresetLimitsView
+
+func (response GetRoutingPresetLimits200JSONResponse) VisitGetRoutingPresetLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRoutingPresetLimits401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetRoutingPresetLimits401JSONResponse) VisitGetRoutingPresetLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRoutingPresetLimits403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetRoutingPresetLimits403JSONResponse) VisitGetRoutingPresetLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRoutingPresetLimitsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetRoutingPresetLimitsdefaultJSONResponse) VisitGetRoutingPresetLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetLimitsRequestObject struct {
+	Params SetRoutingPresetLimitsParams
+	Body   *SetRoutingPresetLimitsJSONRequestBody
+}
+
+type SetRoutingPresetLimitsResponseObject interface {
+	VisitSetRoutingPresetLimitsResponse(w http.ResponseWriter) error
+}
+
+type SetRoutingPresetLimits200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetRoutingPresetLimits200JSONResponse struct {
+	Body    RoutingPresetLimitsView
+	Headers SetRoutingPresetLimits200ResponseHeaders
+}
+
+func (response SetRoutingPresetLimits200JSONResponse) VisitSetRoutingPresetLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetLimits400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetRoutingPresetLimits400JSONResponse) VisitSetRoutingPresetLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetLimits401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetRoutingPresetLimits401JSONResponse) VisitSetRoutingPresetLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetLimits403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetRoutingPresetLimits403JSONResponse) VisitSetRoutingPresetLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetLimits409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetRoutingPresetLimits409JSONResponse) VisitSetRoutingPresetLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetRoutingPresetLimitsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetRoutingPresetLimitsdefaultJSONResponse) VisitSetRoutingPresetLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetSearchSettingsRequestObject struct {
 }
 
@@ -25760,6 +25999,12 @@ type StrictServerInterface interface {
 	// SetPlatformRoutingDefault Set the platform's default routing preset
 	// (PUT /api/admin/v1/settings/routing)
 	SetPlatformRoutingDefault(ctx context.Context, request SetPlatformRoutingDefaultRequestObject) (SetPlatformRoutingDefaultResponseObject, error)
+	// GetRoutingPresetLimits The saved limits on routing presets and the defaults in code
+	// (GET /api/admin/v1/settings/routing-limits)
+	GetRoutingPresetLimits(ctx context.Context, request GetRoutingPresetLimitsRequestObject) (GetRoutingPresetLimitsResponseObject, error)
+	// SetRoutingPresetLimits Save the limits on routing presets, validated and audited
+	// (PUT /api/admin/v1/settings/routing-limits)
+	SetRoutingPresetLimits(ctx context.Context, request SetRoutingPresetLimitsRequestObject) (SetRoutingPresetLimitsResponseObject, error)
 	// GetSearchSettings The configured search engines, their published prices and where the list came from. Keys are never returned.
 	// (GET /api/admin/v1/settings/search)
 	GetSearchSettings(ctx context.Context, request GetSearchSettingsRequestObject) (GetSearchSettingsResponseObject, error)
@@ -29015,6 +29260,63 @@ func (sh *strictHandler) SetPlatformRoutingDefault(w http.ResponseWriter, r *htt
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SetPlatformRoutingDefaultResponseObject); ok {
 		if err := validResponse.VisitSetPlatformRoutingDefaultResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetRoutingPresetLimits operation middleware
+func (sh *strictHandler) GetRoutingPresetLimits(w http.ResponseWriter, r *http.Request) {
+	var request GetRoutingPresetLimitsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetRoutingPresetLimits(ctx, request.(GetRoutingPresetLimitsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetRoutingPresetLimits")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetRoutingPresetLimitsResponseObject); ok {
+		if err := validResponse.VisitGetRoutingPresetLimitsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetRoutingPresetLimits operation middleware
+func (sh *strictHandler) SetRoutingPresetLimits(w http.ResponseWriter, r *http.Request, params SetRoutingPresetLimitsParams) {
+	var request SetRoutingPresetLimitsRequestObject
+
+	request.Params = params
+
+	var body SetRoutingPresetLimitsJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetRoutingPresetLimits(ctx, request.(SetRoutingPresetLimitsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetRoutingPresetLimits")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetRoutingPresetLimitsResponseObject); ok {
+		if err := validResponse.VisitSetRoutingPresetLimitsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
