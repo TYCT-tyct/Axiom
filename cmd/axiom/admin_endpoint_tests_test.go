@@ -27,7 +27,8 @@ func TestTestEndpointRefusals(t *testing.T) {
 }
 
 // TestTheContractNamesEveryProblemATestCanHave: the module's names of what a test found are the contract's enum values,
-// so that a result the module describes is one the API can answer.
+// so that a result the module describes is one the API can answer. ProblemCauses is derived from the registered cause
+// samples and fault mappings; suppliers' TestEveryProblemVariantIsRegistered keeps every declared variant in it.
 func TestTheContractNamesEveryProblemATestCanHave(t *testing.T) {
 	t.Parallel()
 	for _, cause := range suppliers.ProblemCauses() {
