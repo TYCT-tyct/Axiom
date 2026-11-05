@@ -9,6 +9,7 @@ import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { KeyForm, type KeyValues } from "./key-form";
 import RoutingPresets from "./pages/routing-presets";
+import { DisablePresetDialog } from "./preset-dialogs";
 
 // What the mocked console answers, which a test changes between reads: the presets a key may use (or a failed read),
 // the account's default, and every default the page sends.
@@ -78,6 +79,10 @@ const i18n = createInstance();
 
 beforeAll(async () => {
   await i18n.init({ lng: "en", resources: {} });
+  // jsdom has the dialog element but not its modal methods.
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
 });
 
 beforeEach(() => {
@@ -204,4 +209,18 @@ it("sends the default at the version the choice was made against", async () => {
     { preset_id: preset(2).id, version: 2 },
   ]);
   expect(api.routingDefault).toEqual({ preset_id: preset(2).id, version: 3 });
+});
+
+// Before disabling, the dialog says how many of the account's keys still route by the preset and, when it is the
+// account's default for new keys (preset 1 here), that the default must be changed first; a node that counts no keys
+// has no number said for it. The words are i18n keys: the test has no messages.
+it.each([
+  { name: "the default, with keys", n: 1, keys: 3, said: ["keys", "isDefault"] },
+  { name: "no keys", n: 2, keys: 0, said: ["noKeys"] },
+  { name: "a node that counts none", n: 2, keys: undefined, said: [] },
+])("says what disabling meets: $name", async ({ n, keys, said }) => {
+  const disabling: Schemas["RoutingPreset"] = { ...preset(n), scope: "account", rules: {}, keys };
+  await render(<DisablePresetDialog preset={disabling} onClose={() => {}} />);
+  const lines = [...document.querySelectorAll("dialog p")].map((p) => p.textContent);
+  expect(lines).toEqual(["body", ...said].map((key) => `routingPresets.disable.${key}`));
 });

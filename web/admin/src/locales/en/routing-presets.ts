@@ -27,6 +27,15 @@ export default {
   disableBody:
     "Keys bound to it keep routing by it; new keys and the layers’ defaults can’t choose it. It’s refused while a default still points at it: change the default first. A disabled preset still counts towards the layer’s total.",
   disabledDone: "Disabled “{{name}}”.",
+  disableKeys: {
+    none: "No key is bound to it.",
+    count_one: "Accounts have {{keys}} key bound to it.",
+    count_other: "Accounts have {{keys}} keys bound to it.",
+  },
+  disableDefault: {
+    platform: "It’s the platform’s default for new keys: change that default first.",
+    site: "It’s this site’s default for new keys: change that default first.",
+  },
   quota:
     "This layer has reached its limit of routing presets. Disabling one doesn’t free its place in the total; raise the limits below if more are needed.",
   form: {
