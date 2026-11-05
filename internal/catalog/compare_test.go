@@ -72,3 +72,45 @@ func TestPriceChangeZeroAndMissingPrices(t *testing.T) {
 		}
 	}
 }
+
+func TestLargestChangeAndSmallestMargin(t *testing.T) {
+	plain := func(input, output string) Schedule {
+		t.Helper()
+		s, err := ParseSchedule(fmt.Appendf(nil, `{"v":1,"currency":"USD","rates":{"input":%q,"output":%q}}`, input, output))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	inputOnly, err := ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"input":"0.000001"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name      string
+		old, next Schedule
+		change    string // "" is unmeasured
+		cost      Schedule
+		margin    string // "" is unmeasured
+	}{
+		{"unchanged", plain("0.000001", "0.000002"), plain("0.000001", "0.000002"), "0", plain("0.0000005", "0.000001"), "1/2"},
+		{"largest move wins, either way", plain("0.000001", "0.000002"), plain("0.0000012", "0.000001"), "1/2", plain("0.0000006", "0.0000009"), "1/10"},
+		// Above 128 tokens the next prices change by a quarter; the base band stays the same.
+		{"a band only one side has", compareSchedule(t, 1000, "0.000001", "0.000001"), compareSchedule(t, 128, "0.000001", "0.00000125"), "1/4", compareSchedule(t, 128, "0.000001", "0.000001"), "0"},
+		{"zero to a price", plain("0", "0.000002"), plain("0.000001", "0.000002"), "", plain("0", "0.000001"), "1/2"},
+		{"a price lost", plain("0.000001", "0.000002"), inputOnly, "", plain("0.000001", "0.000001"), ""},
+		{"a loss", plain("0.000001", "0.000001"), plain("0.000001", "0.000001"), "0", plain("0.000002", "0.000001"), "-1"},
+		{"no cost under a zero price", plain("0", "0"), plain("0", "0"), "0", plain("0", "0.000001"), ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			change, measured, err := c.old.LargestChange(c.next)
+			if err != nil || measured != (c.change != "") || measured && change.RatString() != c.change {
+				t.Fatalf("change %v measured %v err %v, want %q", change, measured, err, c.change)
+			}
+			margin, measured, err := c.next.SmallestMargin(c.cost)
+			if err != nil || measured != (c.margin != "") || measured && margin.RatString() != c.margin {
+				t.Fatalf("margin %v measured %v err %v, want %q", margin, measured, err, c.margin)
+			}
+		})
+	}
+}

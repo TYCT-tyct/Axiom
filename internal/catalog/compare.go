@@ -187,3 +187,94 @@ func (s Schedule) combinedLevel(other Schedule, st ServiceTier, bands []int64, a
 	}
 	return out, nil
 }
+
+// LargestChange is the largest move |next − s| ÷ s of any effective unit price, over every band of both schedules and
+// every service tier. measured is false when a move is no share of an old price: a price added or lost, or a zero price
+// that is not zero any more. The agent's price envelope weighs a publication by it (docs/domains/operations.md
+// 「售价的累计变动上限」).
+func (s Schedule) LargestChange(next Schedule) (change *big.Rat, measured bool, err error) {
+	change, measured = new(big.Rat), true
+	err = s.eachRate(next, func(old, now platform.UnitPrice, had, has bool) bool {
+		switch {
+		case had != has, had && old.IsZero() && !now.IsZero():
+			measured = false
+			return false
+		case had && old.Cmp(now) != 0:
+			move := new(big.Rat).Quo(new(big.Rat).Sub(now.Rat(), old.Rat()), old.Rat())
+			if move.Abs(move).Cmp(change) > 0 {
+				change = move
+			}
+		}
+		return true
+	})
+	if err != nil || !measured {
+		return nil, false, err
+	}
+	return change, true, nil
+}
+
+// SmallestMargin is the smallest share (price − cost) ÷ price that s keeps of any known cost, over every band and
+// service tier. measured is false when a known cost has no price, or a zero one, which no share measures, and when no
+// cost is known at all. An item without a cost, such as a site default per-use price, is not weighed, and one free on
+// both sides is skipped: the same items CoversCost checks.
+func (s Schedule) SmallestMargin(cost Schedule) (margin *big.Rat, measured bool, err error) {
+	measured = true
+	err = s.eachRate(cost, func(p, c platform.UnitPrice, has, known bool) bool {
+		switch {
+		case !known || c.IsZero() && p.IsZero():
+			return true
+		case !has || p.IsZero():
+			measured = false
+			return false
+		}
+		share := new(big.Rat).Quo(new(big.Rat).Sub(p.Rat(), c.Rat()), p.Rat())
+		if margin == nil || share.Cmp(margin) < 0 {
+			margin = share
+		}
+		return true
+	})
+	if err != nil || !measured || margin == nil {
+		return nil, false, err
+	}
+	return margin, true, nil
+}
+
+// eachRate calls visit with the effective price of every item in s and in other, and whether each has one, at every
+// service tier and every band of both, until visit returns false. Both must be in one currency.
+func (s Schedule) eachRate(other Schedule, visit func(mine, theirs platform.UnitPrice, hasMine, hasTheirs bool) bool) error {
+	bands, err := comparisonBands(s, other)
+	if err != nil {
+		return err
+	}
+	if s.currency != other.currency {
+		return errors.New("price schedules have different currencies")
+	}
+	for st := range numServiceTiers {
+		for b, above := range bands {
+			if !s.visitBand(other, st, bandLength(b, above), visit) {
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+func (s Schedule) visitBand(other Schedule, st ServiceTier, length int64, visit func(mine, theirs platform.UnitPrice, hasMine, hasTheirs bool) bool) bool {
+	for it := range NumItems {
+		mine, hasMine := s.price(st, s.bandOf(length), it)
+		theirs, hasTheirs := other.price(st, other.bandOf(length), it)
+		if !visit(mine, theirs, hasMine, hasTheirs) {
+			return false
+		}
+	}
+	return true
+}
+
+// bandLength is a prompt length inside band b of comparisonBands: the base band at zero, every other just above its
+// strict threshold.
+func bandLength(b int, above int64) int64 {
+	if b > 0 {
+		return above + 1
+	}
+	return above
+}
