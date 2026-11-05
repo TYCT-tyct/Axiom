@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"sync/atomic"
 	"time"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 )
@@ -114,19 +116,58 @@ func (r *Router) Fresh() bool {
 
 func (r *Router) fresh(s *Snapshot, now time.Time) bool { return now.Sub(s.built) <= r.cfg.MaxStale }
 
-// ServesFor reports whether an endpoint has a published price for this account and its admission tier.
-// It ignores transient state and snapshot freshness, so a busy or stale router keeps its model list.
-func (r *Router) ServesFor(m catalog.ModelID, a billing.Audience) bool {
+// KeyView is what the model lists may say a key can reach (docs/domains/routing.md「请求覆盖与组合」): the snapshot's
+// endpoints the key can see, priced for its account and tier, that its preset's rule for the model passes. It applies
+// the rule's hard conditions only, by the same presetAllows Plan applies, and never a request's: the price limit is
+// held at the standard tier and the shortest prompt, the price the list shows. Nothing transient (load, breakers,
+// pauses, the snapshot's age) enters it, so a model does not come and go from the list with load.
+type KeyView struct {
+	snap   *Snapshot
+	preset *preset
+	a      Admission
+}
+
+// KeyView is the key's view of the current snapshot. A router without a snapshot shows nothing. A preset the snapshot
+// does not hold, or one not of the key's layers or currency, is ErrPresetUnavailable, as Plan refuses it: the key can
+// call nothing, and a list of models would say it can.
+func (r *Router) KeyView(a Admission) (KeyView, error) {
 	snap := r.snap.Load()
 	if snap == nil {
+		return KeyView{}, nil
+	}
+	p, ok := snap.presets[a.Preset]
+	if !ok || !p.visibleTo(a) {
+		return KeyView{}, ErrPresetUnavailable
+	}
+	return KeyView{snap: snap, preset: p, a: a}, nil
+}
+
+// Serves reports whether some endpoint of the model is in the key's view.
+func (v KeyView) Serves(m catalog.ModelID) bool {
+	if v.snap == nil {
 		return false
 	}
-	for _, c := range snap.byModel[m] {
-		if p := c.priceFor(a); p != nil && !p.none() {
-			return true
-		}
+	return slices.ContainsFunc(v.snap.byModel[m], func(c *candidate) bool {
+		return c.Owner.visibleTo(v.a) && v.allows(c)
+	})
+}
+
+// Allows reports whether endpoint e of the model is in the key's view, whoever owns it.
+func (v KeyView) Allows(m catalog.ModelID, e EndpointID) bool {
+	if v.snap == nil {
+		return false
 	}
-	return false
+	i := slices.IndexFunc(v.snap.byModel[m], func(c *candidate) bool { return c.ID == e })
+	return i >= 0 && v.allows(v.snap.byModel[m][i])
+}
+
+func (v KeyView) allows(c *candidate) bool {
+	price := c.priceFor(billing.Audience{Account: accounts.AccountID(v.a.Account), Tier: v.a.Tier})
+	if price == nil || price.none() {
+		return false
+	}
+	n := need{preset: v.preset, rule: v.preset.ruleFor(c.ModelSlug), tiers: 1 << catalog.ServiceTierStandard}
+	return n.presetAllows(c, price, Spec{Context: c.Context})
 }
 
 // Replace makes s the snapshot Plan uses, if it is newer than the current one: a build that finishes late never

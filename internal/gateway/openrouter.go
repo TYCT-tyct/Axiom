@@ -47,13 +47,14 @@ func (h *Handler) listOpenRouterModels(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, format, err)
 		return
 	}
-	writeBody(w, h.Models.published().encode(v, q)) // no-store: the list is this key's, and its prices are the site's
+	writeBody(w, v.listing.encode(v, q)) // no-store: the list is this key's, and its prices are the site's
 }
 
 // retrieveOpenRouterModel answers GET /api/v1/models/{model} in OpenRouter's shape (spec `ModelResponse`): the object the
 // list shows for the model the name resolves to, under the model's own id whichever of its names was asked for, because
 // OpenRouter's shape has one id per model. A name the catalog does not know, a model nothing serves, one this key may not
-// use and one whose spec or price cannot fill the object are the same 404 the list leaves them out with.
+// use, one its preset leaves no endpoint and one whose spec or price cannot fill the object are the same 404 the list
+// leaves them out with.
 func (h *Handler) retrieveOpenRouterModel(w http.ResponseWriter, r *http.Request) {
 	format := formatFor(r)
 	release, ok := h.ipSlot(w, r, format)
@@ -64,7 +65,12 @@ func (h *Handler) retrieveOpenRouterModel(w http.ResponseWriter, r *http.Request
 	var entry *orModel
 	v, err := h.visible(r)
 	if err == nil {
-		entry, err = h.Models.published().find(v, r.PathValue("model"))
+		entry, err = v.listing.find(v, r.PathValue("model"))
+	}
+	if err == nil {
+		if entry = v.listing.narrow(v, entry); entry == nil {
+			err = errNoModel
+		}
 	}
 	if err != nil {
 		h.fail(w, r, format, err)
@@ -73,7 +79,8 @@ func (h *Handler) retrieveOpenRouterModel(w http.ResponseWriter, r *http.Request
 	writeJSON(w, orModelResponse{Data: entry.orEntry})
 }
 
-// find resolves names against the published catalog, so an endpoint and its model detail describe the same build.
+// find resolves names against the published catalog, so an endpoint and its model detail describe the same build. It
+// does not narrow the entry to the key's preset: the endpoints of a model are a public projection (narrow).
 func (l *openRouterListing) find(v visibility, name string) (*orModel, error) {
 	parsed, ref := parseModelName(name)
 	if ref != nil {
@@ -117,6 +124,10 @@ func NewModelList() *ModelList { return &ModelList{} }
 func (m *ModelList) published() *openRouterListing {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.lastLocked()
+}
+
+func (m *ModelList) lastLocked() *openRouterListing {
 	if m.last != nil {
 		return m.last
 	}
