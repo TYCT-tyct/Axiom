@@ -94,9 +94,9 @@ DESCRIPTION = (
     "per package in hundredths of a percentage point, measured from the profile the race test run writes, generated "
     "code excluded; tolerance_basis_points is how far a package may fall and floor_basis_points is where a new package "
     "must start. A pull request records every improvement past the tolerance here; a train or main build passes "
-    "--allow-unrecorded-gains and reports it instead, because no single pull request in the batch made it, and the next "
-    "pull request that touches the package records it. A write keeps the higher recorded value when a measurement is "
-    "inside the tolerance, so the tolerance cannot lower the baseline repeatedly."
+    "--allow-unrecorded-gains and reports it instead, because a batch can cross the tolerance with no single pull "
+    "request crossing it, and the next pull request records it. A write keeps the higher recorded value when a "
+    "measurement is inside the tolerance, so the tolerance cannot lower the baseline repeatedly."
 )
 
 
