@@ -8,6 +8,9 @@
 set -euo pipefail
 
 commit=$1
+# The measuring run's port choice reaches this script, and web_cache keys every AXIOM_ variable it does not know: left
+# set, it would make every run build the base again. The addresses come in as arguments.
+unset AXIOM_VITALS_BASE_PORT
 git worktree prune
 dir=$(mktemp -d)
 git worktree add --quiet --detach "$dir" "$commit"
