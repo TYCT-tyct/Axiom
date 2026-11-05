@@ -231,17 +231,21 @@ func (reconcileArgs) InsertOpts() river.InsertOpts {
 	}}}
 }
 
-// RegisterReconcile adds the reconciliation to queue, before it starts: every minute, on whichever node leads the
-// queue, ReconcileCaps. scope is the platform's, which only cmd/ builds.
-func RegisterReconcile(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog.Logger) error {
-	// A failed run is logged and not retried: the next one comes within the minute.
-	work := func(ctx context.Context, _ *river.Job[reconcileArgs]) error {
+// reconcileWork is one run of the job. A failed run is logged and not retried: the next one comes within the minute,
+// and a retrying job would keep it from being inserted.
+func reconcileWork(db *pg.DB, scope pg.Scope, logger *slog.Logger) func(context.Context, *river.Job[reconcileArgs]) error {
+	return func(ctx context.Context, _ *river.Job[reconcileArgs]) error {
 		if _, err := ReconcileCaps(ctx, db, scope); err != nil {
 			logger.Error("operations: the reconciliation of the cap counters stopped", "err", err)
 		}
 		return nil
 	}
-	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(work)); err != nil {
+}
+
+// RegisterReconcile adds the reconciliation to queue, before it starts: every minute, on whichever node leads the
+// queue, ReconcileCaps. scope is the platform's, which only cmd/ builds.
+func RegisterReconcile(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog.Logger) error {
+	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(reconcileWork(db, scope, logger))); err != nil {
 		return fmt.Errorf("operations: %w", err)
 	}
 	queue.Every(time.Minute, func() river.JobArgs { return reconcileArgs{} })
