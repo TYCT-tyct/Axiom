@@ -2602,6 +2602,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/operations/cap-policies/{scope}/{category}/repair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `platform`, for what no site owns such as a platform supplier, or a site's ID. */
+                scope: string;
+                category: components["schemas"]["OperationsCapCategory"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recompute the cap counters and resume the scope
+         * @description Sets each counter of the scope and category in the current UTC day and ISO week to what its money actions add up to, with every proposal there held off meanwhile, and resumes a scope the reconciliation paused. Every counter it changed is recorded in the audit log, as it was and as it is now. A scope and category without a policy is a 404.
+         */
+        post: operations["repairOperationsCapCounters"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/operations/approvals": {
         parameters: {
             query?: never;
@@ -3729,6 +3753,11 @@ export interface components {
             rev: number;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * Format: date-time
+             * @description When the reconciliation found this scope's counters differ from the money they count; every proposal here then waits for the owner until the counters are repaired. Absent when it is not paused, and from a node that predates the reconciliation.
+             */
+            paused_at?: string;
         };
         OperationsCapPolicyList: {
             data: components["schemas"]["OperationsCapPolicy"][];
@@ -10369,6 +10398,43 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    repairOperationsCapCounters: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description `platform`, for what no site owns such as a platform supplier, or a site's ID. */
+                scope: string;
+                category: components["schemas"]["OperationsCapCategory"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The policy, resumed */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsCapPolicy"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             default: components["responses"]["Failure"];
         };
     };

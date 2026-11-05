@@ -50,6 +50,7 @@ type OperationsCapPolicy struct {
 	HardWeeklyMax  int64
 	Rev            int64
 	UpdatedAt      time.Time
+	PausedAt       *time.Time
 }
 
 type OperationsMoneyAction struct {

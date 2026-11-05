@@ -89,3 +89,76 @@ FOR UPDATE OF o, m SKIP LOCKED;
 -- name: SettleMoneyAction :exec
 UPDATE operations.money_actions SET state = @state, proof = @proof, confirmed_by = @confirmed_by, settled_at = now()
 WHERE operation_id = @operation_id;
+
+-- name: CapUsage :many
+-- Every policy with what its category's counters of the current UTC day and ISO week hold, zero where there is no row.
+SELECT sqlc.embed(p), w.day_start, w.week_start,
+    coalesce(d.reserved, 0)::bigint AS day_reserved, coalesce(d.committed, 0)::bigint AS day_committed,
+    coalesce(d.count, 0)::integer AS day_count,
+    coalesce(k.reserved, 0)::bigint AS week_reserved, coalesce(k.committed, 0)::bigint AS week_committed,
+    coalesce(k.count, 0)::integer AS week_count
+FROM operations.cap_policies p
+CROSS JOIN (SELECT date_trunc('day', clock_timestamp(), 'UTC')::timestamptz AS day_start,
+    date_trunc('week', clock_timestamp(), 'UTC')::timestamptz AS week_start) w
+LEFT JOIN operations.cap_counters d ON d.category = p.category AND d.site_id IS NOT DISTINCT FROM p.site_id
+    AND d.window_kind = 'day' AND d.window_start = w.day_start AND d.object_kind = ''
+LEFT JOIN operations.cap_counters k ON k.category = p.category AND k.site_id IS NOT DISTINCT FROM p.site_id
+    AND k.window_kind = 'week' AND k.window_start = w.week_start AND k.object_kind = ''
+ORDER BY p.category, p.site_id NULLS FIRST;
+
+-- name: CapDrift :many
+-- The counters of the current UTC day and ISO week that differ from what the money actions reserved in them add up
+-- to: every action counts once in its day, its week and its object's day, reserved or committed by its state, and in
+-- the count whatever its state. The windows are the caller's (CapWindows), so a repair recomputes the rows it locked
+-- even across midnight. Of every scope with @every, otherwise of @category and @site_id. One statement, so it sees
+-- each transaction that moved an action and its counters whole or not at all.
+WITH w AS (
+    SELECT sqlc.arg(day_start)::timestamptz AS day_start, sqlc.arg(week_start)::timestamptz AS week_start
+), entries AS (
+    SELECT c.category, c.site_id, c.window_kind, c.window_start, c.object_kind, c.object_id, c.reserved, c.committed,
+        c.count, 0::bigint AS want_reserved, 0::bigint AS want_committed, 0 AS want_count
+    FROM operations.cap_counters c, w
+    WHERE (c.window_kind = 'day' AND c.window_start = w.day_start) OR (c.window_kind = 'week' AND c.window_start = w.week_start)
+    UNION ALL
+    SELECT m.category, m.site_id, k.window_kind, k.window_start, k.object_kind, k.object_id, 0, 0, 0,
+        CASE WHEN m.state = 'reserved' THEN m.amount ELSE 0 END, CASE WHEN m.state = 'committed' THEN m.amount ELSE 0 END, 1
+    FROM operations.money_actions m
+    CROSS JOIN w
+    CROSS JOIN LATERAL (VALUES ('day', m.day_start, '', ''), ('week', m.week_start, '', ''),
+        ('day', m.day_start, m.object_kind, m.object_id)) k (window_kind, window_start, object_kind, object_id)
+    WHERE m.week_start = w.week_start
+        AND ((k.window_kind = 'day' AND k.window_start = w.day_start) OR (k.window_kind = 'week' AND k.window_start = w.week_start))
+)
+SELECT r.category::text AS category, r.site_id AS site_id, r.window_kind::text AS window_kind,
+    r.window_start::timestamptz AS window_start, r.object_kind::text AS object_kind, r.object_id::text AS object_id,
+    sum(r.reserved)::bigint AS reserved, sum(r.committed)::bigint AS committed, sum(r.count)::integer AS count,
+    sum(r.want_reserved)::bigint AS want_reserved, sum(r.want_committed)::bigint AS want_committed,
+    sum(r.want_count)::integer AS want_count
+FROM entries r
+WHERE @every::bool OR (r.category = @category::text AND r.site_id IS NOT DISTINCT FROM sqlc.narg(site_id)::uuid)
+GROUP BY r.category, r.site_id, r.window_kind, r.window_start, r.object_kind, r.object_id
+HAVING (sum(r.reserved), sum(r.committed), sum(r.count)) IS DISTINCT FROM
+    (sum(r.want_reserved), sum(r.want_committed), sum(r.want_count))
+ORDER BY 1, 2 NULLS FIRST, 5, 3, 6;
+
+-- name: LockScopeCounters :exec
+-- Every counter of a scope and category in a UTC day and ISO week, in the order every path locks its own
+-- three (LockCapCounters), the object's days by object after them.
+SELECT c.id FROM operations.cap_counters c
+WHERE c.category = @category AND c.site_id IS NOT DISTINCT FROM sqlc.narg(site_id)::uuid AND (
+    (c.window_kind = 'day' AND c.window_start = @day_start) OR (c.window_kind = 'week' AND c.window_start = @week_start))
+ORDER BY c.object_kind, c.window_kind, c.object_id
+FOR UPDATE;
+
+-- name: SetCapCounter :exec
+INSERT INTO operations.cap_counters (category, window_kind, window_start, object_kind, object_id, site_id, reserved,
+    committed, count)
+VALUES (@category, @window_kind, @window_start, @object_kind, @object_id, sqlc.narg(site_id)::uuid, @reserved,
+    @committed, @count)
+ON CONFLICT (category, window_kind, window_start, object_kind, object_id, site_id)
+DO UPDATE SET reserved = excluded.reserved, committed = excluded.committed, count = excluded.count;
+
+-- name: SetCapPaused :execrows
+-- Pauses (@paused) or resumes a policy the caller holds FOR UPDATE; no row when it already is.
+UPDATE operations.cap_policies SET paused_at = CASE WHEN @paused::bool THEN now() END
+WHERE category = @category AND site_id IS NOT DISTINCT FROM sqlc.narg(site_id)::uuid AND (paused_at IS NULL) = @paused::bool;

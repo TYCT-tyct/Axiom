@@ -432,6 +432,33 @@ paths:
         '404': {$ref: '#/components/responses/OutOfScope'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/caps:
+    get:
+      operationId: capsGet
+      summary: The caps on the credential's money and their use
+      description: >-
+        The cap policy of each scope and category the credential's money writes act in, its sites' and, with the
+        platform grant, the platform's, with what the category has reserved and committed in the current UTC day and
+        ISO week and how many proposals it made in them. A scope and category without a policy moves no money and is
+        not listed. While `paused` is true every proposal there waits for the owner, within the autonomous limits or
+        not: the counters were found to differ from the money they count, and only the owner resumes it.
+      tags: [Agent]
+      security: [{credential: []}]
+      x-axiom-permission: operations.read
+      x-axiom-scope: self
+      x-mcp-name: caps_get
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The caps
+          content: {application/json: {schema: {$ref: '#/components/schemas/OperationsCapUsageList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
   /api/operations/v1/approvals/{approval_id}:
     get:
       operationId: approvalGet
@@ -719,6 +746,62 @@ components:
         next_check_after_seconds: {type: integer, minimum: 1, description: "While it waits: when to read it again."}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
+    OperationsCapUsageList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/OperationsCapUsage'}}
+    OperationsCapUsage:
+      type: object
+      additionalProperties: false
+      required: [scope, category, currency, limits, rev, paused, day, week]
+      properties:
+        scope: {type: string, description: "`platform` or a site's ID."}
+        category: {$ref: '#/components/schemas/OperationsCapCategory'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        limits: {$ref: '#/components/schemas/OperationsCapLimits'}
+        rev: {type: integer, format: int64, minimum: 1}
+        paused: {type: boolean, description: "Whether every proposal waits for the owner until the owner repairs the counters."}
+        day: {$ref: '#/components/schemas/OperationsCapWindow'}
+        week: {$ref: '#/components/schemas/OperationsCapWindow'}
+    OperationsCapWindow:
+      type: object
+      additionalProperties: false
+      required: [start, reserved, committed, count]
+      description: >-
+        What the category holds in one window. Reserved is proposed and not yet confirmed or ended; committed was
+        confirmed and stays, whatever happens to the money later. Both count against every limit.
+      properties:
+        start: {type: string, format: date-time}
+        reserved: {$ref: '#/components/schemas/OperationsCapAmount'}
+        committed: {$ref: '#/components/schemas/OperationsCapAmount'}
+        count: {type: integer, format: int32, minimum: 0, description: "Every proposal made in the window, however it ended."}
+    OperationsCapCategory:
+      type: string
+      enum: [money.top_up]
+      description: A kind of money the agent moves, each with its own caps; top-ups of suppliers for now.
+    OperationsCapAmount:
+      type: string
+      pattern: ^(0|[1-9][0-9]{0,17})$
+      description: An amount in billionths of one unit of the policy's currency, as integer text.
+    OperationsCapLimits:
+      type: object
+      additionalProperties: false
+      required: [single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max]
+      description: >-
+        The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one
+        object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or
+        not: one proposal, the day and the week. Reserved and committed amounts both count.
+      properties:
+        single_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        daily_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        weekly_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        object_daily_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        daily_count_max: {type: integer, format: int32, minimum: 0, maximum: 1000000}
+        hard_single_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        hard_daily_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+        hard_weekly_max: {$ref: "#/components/schemas/OperationsCapAmount"}
     OperationApproval:
       type: object
       additionalProperties: false

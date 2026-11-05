@@ -12,7 +12,8 @@ import (
 )
 
 // CapPolicy is what the owner allows in a scope (Site, nil for the platform) and category, in 10⁻⁹ of Currency. The
-// autonomous limits decide whether a proposal waits for the owner; the Hard ones refuse it.
+// autonomous limits decide whether a proposal waits for the owner; the Hard ones refuse it. Paused is when the
+// reconciliation found its counters drifted (ReconcileCaps), nil when it is not: every proposal then waits for the owner.
 type CapPolicy struct {
 	Site                               *uuid.UUID
 	Category                           Category
@@ -22,6 +23,7 @@ type CapPolicy struct {
 	HardSingle, HardDaily, HardWeekly  int64
 	Rev                                int64
 	Updated                            time.Time
+	Paused                             *time.Time
 }
 
 // CapPolicies reads every policy, the platform's first in each category.
@@ -67,13 +69,9 @@ func SetCapPolicy(ctx context.Context, tx pg.Tx, actor audit.Actor, p CapPolicy,
 	if err != nil {
 		return CapPolicy{}, err
 	}
-	scope := "platform"
-	if p.Site != nil {
-		scope = p.Site.String()
-	}
 	return set, audit.Record(ctx, tx, audit.Event{
 		Actor: actor, Action: "cap_policy.set", Reason: reason,
-		Target: audit.Target{Module: "operations", Kind: "cap_policy", ID: scope + ":" + string(p.Category)},
+		Target: audit.Target{Module: "operations", Kind: "cap_policy", ID: scopeName(p.Site) + ":" + string(p.Category)},
 		Detail: map[string]any{"before": before, "after": set.detail()},
 	})
 }
@@ -127,7 +125,7 @@ func policyOf(r OperationsCapPolicy) (CapPolicy, error) {
 	return CapPolicy{
 		Site: r.SiteID, Category: Category(r.Category), Currency: currency, Single: r.SingleMax, Daily: r.DailyMax,
 		Weekly: r.WeeklyMax, ObjectDaily: r.ObjectDailyMax, DailyCount: r.DailyCountMax, HardSingle: r.HardSingleMax,
-		HardDaily: r.HardDailyMax, HardWeekly: r.HardWeeklyMax, Rev: r.Rev, Updated: r.UpdatedAt,
+		HardDaily: r.HardDailyMax, HardWeekly: r.HardWeeklyMax, Rev: r.Rev, Updated: r.UpdatedAt, Paused: r.PausedAt,
 	}, nil
 }
 
@@ -156,4 +154,38 @@ func CapCurrency(ctx context.Context, tx pg.Tx, site *uuid.UUID, category Catego
 	}
 	p, err := policyOf(rows[0])
 	return p.Currency, err
+}
+
+// CapUsage is a policy with what its category's counters of the current UTC day and ISO week hold.
+type CapUsage struct {
+	Policy              CapPolicy
+	DayStart, WeekStart time.Time
+	Day, Week           WindowUsage
+}
+
+// WindowUsage is what a counter holds: reserved and committed amounts, and the proposals made in it.
+type WindowUsage struct {
+	Reserved, Committed int64
+	Count               int32
+}
+
+// CapUsages reads every policy with its usage now, the platform's first in each category.
+func CapUsages(ctx context.Context, tx pg.Tx) ([]CapUsage, error) {
+	rows, err := New().CapUsage(ctx, tx)
+	if err != nil {
+		return nil, fmt.Errorf("read the cap usage: %w", err)
+	}
+	usage := make([]CapUsage, len(rows))
+	for i, r := range rows {
+		p, err := policyOf(r.OperationsCapPolicy)
+		if err != nil {
+			return nil, err
+		}
+		usage[i] = CapUsage{
+			Policy: p, DayStart: r.DayStart, WeekStart: r.WeekStart,
+			Day:  WindowUsage{Reserved: r.DayReserved, Committed: r.DayCommitted, Count: r.DayCount},
+			Week: WindowUsage{Reserved: r.WeekReserved, Committed: r.WeekCommitted, Count: r.WeekCount},
+		}
+	}
+	return usage, nil
 }

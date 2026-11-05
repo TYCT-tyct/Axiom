@@ -328,7 +328,10 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, ca
 	}
 	// What the operations agent asked the owner to approve expires once its time is up, on whichever node leads the
 	// queue (docs/domains/operations.md「风险分级与审批」).
-	if err := operations.RegisterExpiry(db, pg.PlatformScope(), queue, logger); err != nil {
+	// The cap counters are added up again from the money they count; a scope where they differ is paused until the
+	// owner repairs it (docs/domains/operations.md「转账的累计金额上限」).
+	if err := errors.Join(operations.RegisterExpiry(db, pg.PlatformScope(), queue, logger),
+		operations.RegisterReconcile(db, pg.PlatformScope(), queue, logger)); err != nil {
 		return nil, nil, nil, err
 	}
 
