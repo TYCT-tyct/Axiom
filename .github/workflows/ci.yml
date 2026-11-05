@@ -129,9 +129,11 @@ jobs:
       - if: needs.changes.outputs.docs_only == 'true'
         run: just md-checks ${{ github.event_name != 'pull_request' && 'secrets' || '' }}
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name == 'pull_request'
-        run: just script-tests check-static
+        run: just script-tests check-static pr
+      # `train` is explicit: a batch can improve a number by more than the tolerance with no single PR crossing it, so
+      # the ratchet reports the improvement instead of failing; the PR branch above passes `pr` and keeps it strict.
       - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
-        run: just docs check-static secrets
+        run: just docs check-static train secrets
       # A PR or train is checked like a pull request from its base: merged migrations never change, and a schema does not
       # newly require a field that old nodes or pages lack during a rolling release. Main has no base.
       - if: env.BASE != ''
@@ -162,9 +164,10 @@ jobs:
       - uses: ./.github/actions/setup
       - run: just test
       # The same race run wrote coverage.out; this reads it, so coverage is checked where the suite already runs, without
-      # a second run. PRs skip this job as they skip the tests; the train runs it for the batch.
+      # a second run. PRs skip this job as they skip the tests; the train runs it for the batch and passes `train`, so a
+      # gain no PR recorded is reported for the next PR instead of ejecting one.
       - name: Check per-package coverage against the baseline
-        run: just quality-ratchet-coverage
+        run: just quality-ratchet-coverage train
       - name: Clean test containers after tests
         if: always()
         run: bash scripts/ci/clean-test-containers.sh
