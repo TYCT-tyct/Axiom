@@ -95,8 +95,7 @@ func TestSettledFinalsReadsWhatSettlementStored(t *testing.T) {
 	if !ok || len(got) != 1 {
 		t.Fatalf("settled finals %+v, want only %s", got, good.id)
 	}
-	if f.Charged.Cmp(want.Charged) != 0 || f.Waived != want.Waived || !samePriceVersion(f.PriceVersion, want.PriceVersion) ||
-		len(f.Segments) != len(want.Segments) || f.Segments[0].Usage.Count(catalog.ItemOutput) != want.Segments[0].Usage.Count(catalog.ItemOutput) {
+	if !sameFinal(f, want) {
 		t.Errorf("settled final %+v, want what Settle returned, %+v", f, want)
 	}
 	if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), unreadable.id.String()) {
@@ -107,6 +106,18 @@ func TestSettledFinalsReadsWhatSettlementStored(t *testing.T) {
 	}
 }
 
-func samePriceVersion(a, b *uuid.UUID) bool {
-	return (a == nil) == (b == nil) && (a == nil || *a == *b)
+// sameFinal compares what the call log keeps of a Final: the charge, the waiver, the price version and the usage.
+func sameFinal(a, b Final) bool {
+	if a.Charged.Cmp(b.Charged) != 0 || a.Waived != b.Waived || (a.PriceVersion == nil) != (b.PriceVersion == nil) ||
+		a.PriceVersion != nil && *a.PriceVersion != *b.PriceVersion || len(a.Segments) != len(b.Segments) {
+		return false
+	}
+	for i := range a.Segments {
+		for it := range catalog.NumItems {
+			if a.Segments[i].Usage.Count(it) != b.Segments[i].Usage.Count(it) {
+				return false
+			}
+		}
+	}
+	return true
 }
