@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when the quality ratchet's numbers grow, and say which baseline numbers to lower when they fall.
+"""Fail when the quality ratchet's numbers grow, and say which baseline numbers to record when they improve.
 
 Why: the 2026-11-04 review found 474 nolint directives in hand-written non-test Go, 40 functions over cognitive
 complexity 15, and 50 files over 500 lines, and nothing in CI counted them, so every pull request could add one with a
@@ -19,10 +19,11 @@ What is measured, in hand-written non-test Go:
   Generated code is dropped from both sides of the fraction, and so is the withcluster test command whose test skips
   under CI's Ryuk-disabled setting. The baseline stores hundredths of a percentage point
   (basis points) per package: a package may fall by at most tolerance_basis_points (0.50 point) below its baseline, a
-  rise beyond the same tolerance must raise the baseline in the same pull request, and a package absent from the
-  baseline is new and must start at or above floor_basis_points (60%). The tolerance is not slack for new code: two runs
-  of the same commit on the same machine differed by at most 0.32 point (platform/kv 93.31% vs 92.99%), and 0.50 point
-  is one statement in a package of up to 200, the smallest change the arithmetic can resolve in a package of that size.
+  rise beyond the same tolerance must be recorded in the baseline by the pull request that made it, and a package absent
+  from the baseline is new and must start at or above floor_basis_points (60%). The tolerance is not slack for new code:
+  two runs of the same commit on the same machine differed by at most 0.32 point (platform/kv 93.31% vs 92.99%), and
+  0.50 point is one statement in a package of up to 200, the smallest change the arithmetic can resolve in a package of
+  that size.
   A committed package baseline may not be lower than the base's, so a manual lowering cannot turn the tolerance into a
   repeated allowance.
 - packages with a hand-written function body containing statements but no test files are reported as zero, so a new
@@ -38,13 +39,24 @@ _test.go functions are measured, because testdata is data, not compiled test cod
 `// Code generated ... DO NOT EDIT.` header, which is what go/ast.IsGenerated and golangci-lint's generated-code
 exclusion recognize.
 
+An improvement past the tolerance that the committed baseline did not record fails a pull request build: the pull
+request made the gain and must keep it in the baseline. A train or main build passes --allow-unrecorded-gains instead:
+several pull requests can improve the same number by less than the tolerance each and cross it together, so no single
+pull request is responsible and ejecting one for a gain would be wrong. That build prints every improvement it did not
+find recorded and still fails every worsening. The next pull request records a static gain because its static half runs
+this script without the flag; main's run is the report for coverage, whose test suite does not run on a pull request, so
+a follow-up pull request records it. Nothing pushes to main automatically. The workflow passes the flag explicitly for a
+train or main build; the script never guesses a mode from GITHUB_EVENT_NAME, CI or any other environment variable.
+
 usage: python3 scripts/ci/quality_ratchet.py [--root DIR] [--base REV] [--coverage PROFILE] [--write-baseline]
-       [--report-coverage]
+       [--report-coverage] [--allow-unrecorded-gains]
        --base (default: $BASE, the PR or train base) also reads the baseline committed at that revision and rejects any
        count increase, new hard-ceiling exception, exception value increase, or committed coverage baseline below the
        base. With coverage, a package below the base baseline by more than the tolerance or a new package below the floor
        is rejected too. Without a baseline there, the tree is the baseline's first introduction. --coverage reads the
        profile and compares per-package coverage; --report-coverage prints the measured numbers lowest first and exits.
+       --allow-unrecorded-gains is for a train or main build: an improvement past the tolerance that the committed
+       baseline did not record passes and is printed for the next pull request to record; a worsening still fails.
        --write-baseline lowers the static counts and raises coverage, keeping a higher recorded coverage value when a
        measurement is inside the tolerance; it refuses when a count grew, coverage fell by more than the tolerance, a
        new package is below the floor, or the base baseline says it may not be weakened.
@@ -81,8 +93,10 @@ DESCRIPTION = (
     "cannot excuse production code. coverage.packages is statement coverage "
     "per package in hundredths of a percentage point, measured from the profile the race test run writes, generated "
     "code excluded; tolerance_basis_points is how far a package may fall and floor_basis_points is where a new package "
-    "must start. A write keeps the higher recorded value when a measurement is inside the tolerance, so the tolerance "
-    "cannot lower the baseline repeatedly."
+    "must start. A pull request records every improvement past the tolerance here; a train or main build passes "
+    "--allow-unrecorded-gains and reports it instead, because a batch can cross the tolerance with no single pull "
+    "request crossing it, and the next pull request records it. A write keeps the higher recorded value when a "
+    "measurement is inside the tolerance, so the tolerance cannot lower the baseline repeatedly."
 )
 
 
@@ -453,17 +467,27 @@ def baseline_problems(baseline, base, now):
     return problems
 
 
-def report(problems, fallen):
-    """Print both kinds of failure; 1 when either is present."""
+def report(problems, fallen, allow_unrecorded=False):
+    """Print both kinds of failure; 1 when either is present.
+
+    allow_unrecorded is the train and main mode: an improvement whose baseline did not move passes, because no single
+    pull request in the batch made it, but it is printed so the next pull request records it. A worsening is a problem
+    in every mode.
+    """
     if problems:
         print("quality ratchet: the tree grew past the baseline:", file=sys.stderr)
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
     if fallen:
-        print(f"quality ratchet: these numbers fell; lower {BASELINE.as_posix()} in this PR:", file=sys.stderr)
+        if allow_unrecorded:
+            print("quality ratchet: these numbers improved without the baseline moving; record them in the next pull "
+                  "request that touches the package:", file=sys.stdout)
+        else:
+            print(f"quality ratchet: these numbers improved past the baseline; record them in "
+                  f"{BASELINE.as_posix()} in this PR:", file=sys.stderr)
         for fall in fallen:
-            print(f"  - {fall}", file=sys.stderr)
-    return 1 if problems or fallen else 0
+            print(f"  - {fall}", file=sys.stdout if allow_unrecorded else sys.stderr)
+    return 1 if problems or (fallen and not allow_unrecorded) else 0
 
 
 def recorded_coverage(now, baseline):
@@ -518,7 +542,7 @@ def document(now, baseline=None):
     return result
 
 
-def summary(now):
+def summary(now, recorded=True):
     text = (f"quality ratchet: {now['nolint_directives']} nolint directives "
             f"({sum(now['nolint'].values())} per-linter entries) in {len(now['nolint'])} linters, "
             f"{now['functions_over_gocognit_15']} functions over {COGNITIVE_LIMIT}, "
@@ -526,7 +550,7 @@ def summary(now):
             f"{now['files_over_500_lines']} files over {FILE_LIMIT} lines")
     if now["coverage"] is not None:
         text += f", coverage measured for {len(now['coverage']['packages'])} packages"
-    return text + "; baseline matches"
+    return text + ("; baseline matches" if recorded else "; the baseline is behind the measurement")
 
 
 def print_coverage(coverage, measured):
@@ -560,6 +584,9 @@ def main(argv=None):
     parser.add_argument("--write-baseline", action="store_true",
                         help="lower the static counts and raise coverage, keeping a higher coverage baseline; refuse "
                              "when a count grew, coverage fell beyond the tolerance, or the base baseline says no")
+    parser.add_argument("--allow-unrecorded-gains", action="store_true",
+                        help="train or main mode: print an improvement past the tolerance that the baseline did not "
+                             "record instead of failing it; a worsening still fails")
     args = parser.parse_args(argv)
     if args.report_coverage and args.coverage is None:
         parser.error("--report-coverage needs --coverage")
@@ -609,9 +636,9 @@ def main(argv=None):
         else:
             problems += base_problems(now, base)
             problems += baseline_problems(baseline, base, now)
-    status = report(problems, fallen)
+    status = report(problems, fallen, args.allow_unrecorded_gains)
     if not status:
-        print(summary(now))
+        print(summary(now, recorded=not (fallen and args.allow_unrecorded_gains)))
     return status
 
 
