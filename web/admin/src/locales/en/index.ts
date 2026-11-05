@@ -7,6 +7,7 @@ import models from "./models";
 import orders from "./orders";
 import pricing from "./pricing";
 import redeem from "./redeem";
+import routingPresets from "./routing-presets";
 import settings from "./settings";
 import sourceClasses from "./source-classes";
 import suppliers from "./suppliers";
@@ -28,10 +29,12 @@ export default {
     pricing: "Pricing",
     settings: "Site settings",
     sourceClasses: "Source classes",
+    routingPresets: "Routing presets",
   },
   calls,
   audit,
   sourceClasses,
+  routingPresets,
   signIn: { description: "The admin is for operators. After signing in you also complete two-step verification." },
   home: {
     title: "Operations",

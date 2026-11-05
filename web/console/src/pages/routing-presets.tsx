@@ -14,6 +14,7 @@ import {
   Table,
   Td,
   Th,
+  useFormat,
 } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -243,6 +244,7 @@ function PresetsTable({
           <Th>{t("routingPresets.col.name")}</Th>
           <Th className="hidden sm:table-cell">{t("routingPresets.col.layer")}</Th>
           <Th className="hidden md:table-cell">{t("routingPresets.col.rules")}</Th>
+          <Th className="hidden sm:table-cell">{t("routingPresets.col.keys")}</Th>
           <Th className="hidden lg:table-cell">{t("routingPresets.col.version")}</Th>
           {manage ? <Th className="w-0" /> : null}
         </tr>
@@ -274,6 +276,7 @@ function PresetRow({
   onOpen: (dialog: Dialog) => void;
 }) {
   const { t } = useTranslation();
+  const format = useFormat();
   return (
     <tr>
       {/* On a phone the name takes the width the layer column would: the layer, and below md the rules summary, sit
@@ -290,6 +293,10 @@ function PresetRow({
       <Td className="hidden w-0 whitespace-nowrap sm:table-cell">{t(`routingPresets.layer.${preset.scope}`)}</Td>
       <Td className="hidden md:table-cell">
         <RulesSummary rules={preset.rules} />
+      </Td>
+      <Td className="hidden whitespace-nowrap tabular-nums sm:table-cell">
+        {/* The account's own keys bound to it; a node that does not count them, and the system preset, give none. */}
+        {preset.keys === undefined ? "—" : format.number(preset.keys)}
       </Td>
       <Td className="hidden tabular-nums lg:table-cell">{preset.version}</Td>
       {manage ? (

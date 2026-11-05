@@ -486,3 +486,39 @@ export const paymentRefundsQuery = (siteId: AdminSchemas["SiteId"], state?: Admi
     initialPageParam: firstPage,
     getNextPageParam: nextCursor,
   });
+
+// A layer whose routing presets the admin manages: the platform's, or a site's (docs/domains/routing.md「路由预设」).
+export type PresetLayer = { scope: "platform" } | { scope: "site"; siteId: AdminSchemas["SiteId"] };
+
+export const layerPresetsQuery = (layer: PresetLayer) =>
+  queryOptions({
+    queryKey: [accountKey, "routing-presets", layer],
+    queryFn: ({ signal }) =>
+      unwrap(
+        layer.scope === "platform"
+          ? adminApi.GET(`${base}/routing-presets`, { signal })
+          : adminApi.GET(`${base}/sites/{site_id}/routing-presets`, {
+              params: { path: { site_id: layer.siteId } },
+              signal,
+            }),
+      ),
+  });
+
+export const layerDefaultQuery = (layer: PresetLayer) =>
+  queryOptions({
+    queryKey: [accountKey, "routing-default", layer],
+    queryFn: ({ signal }) =>
+      unwrap(
+        layer.scope === "platform"
+          ? adminApi.GET(`${base}/settings/routing`, { signal })
+          : adminApi.GET(`${base}/sites/{site_id}/routing-default`, {
+              params: { path: { site_id: layer.siteId } },
+              signal,
+            }),
+      ),
+  });
+
+export const routingLimitsQuery = queryOptions({
+  queryKey: [accountKey, "routing-limits"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/routing-limits`, { signal })),
+});

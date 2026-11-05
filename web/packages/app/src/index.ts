@@ -7,7 +7,7 @@ export { useErrors } from "./errors";
 export { readForm, toInstant, toLocalInput } from "./forms";
 export { LoadMore, Stat } from "./parts";
 export { RulesEditor, useClassOptions } from "./presets/editor";
-export { draftOf, type Invalid, rulesOf } from "./presets/rules";
+export { draftOf, type Invalid, rulesOf, summaryOf } from "./presets/rules";
 export { RulesSummary } from "./presets/summary";
 export { AppProviders } from "./providers";
 export { QrCode } from "./qr";
