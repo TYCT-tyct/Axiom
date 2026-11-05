@@ -15,6 +15,7 @@ import (
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/webui"
+	"axiom/internal/quality"
 	"axiom/internal/suppliers"
 	"axiom/internal/websearch"
 )
@@ -35,6 +36,8 @@ type consoleAPI struct {
 	search []websearch.Engine
 	// suppliers saves and tests the account's own provider keys (BYOK), with the module's sealing and status rules.
 	suppliers *suppliers.Admin
+	// classes is the node's source classes, which the routing preset pages offer.
+	classes *quality.Monitor
 }
 
 // GetVersion tells the console which build answers, uncached, so a page left open across a deployment notices it.

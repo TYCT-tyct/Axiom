@@ -14,10 +14,65 @@ import (
 	"axiom/internal/platform/secret"
 )
 
+// checkBucketCreation asserts a new bucket is created and an existing one is not.
+func checkBucketCreation(t *testing.T, ctx context.Context, client *objectstore.Client) {
+	t.Helper()
+	if created, err := client.Create(ctx, false); err != nil || !created {
+		t.Fatalf("create the bucket = %v, %v; want true, nil", created, err)
+	}
+	if created, err := client.Create(ctx, true); err != nil || created {
+		t.Fatalf("create the existing bucket = %v, %v; want false, nil", created, err)
+	}
+}
+
+// getAndCompare reads key back and asserts it equals want.
+func getAndCompare(t *testing.T, ctx context.Context, client *objectstore.Client, key string, want []byte) {
+	t.Helper()
+	object, err := client.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("get %q: %v", key, err)
+	}
+	got, readErr := io.ReadAll(object.Body)
+	closeErr := object.Body.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read %q: %v, %v", key, readErr, closeErr)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("%q read %d bytes that differ from the %d written", key, len(got), len(want))
+	}
+}
+
+// checkMultipart asserts a body above the multipart threshold goes through initiate, part and complete, and reads back.
+func checkMultipart(t *testing.T, ctx context.Context, client *objectstore.Client, body []byte) {
+	t.Helper()
+	large := bytes.Repeat(body, 20)
+	key := "archive/2026/large.bin"
+	if info, err := client.Put(ctx, objectstore.Upload{Key: key, Body: bytes.NewReader(large), Size: int64(len(large))}); err != nil || info.Size != int64(len(large)) {
+		t.Fatalf("multipart put = %+v, %v", info, err)
+	}
+	getAndCompare(t, ctx, client, key, large)
+}
+
+// checkListing asserts every key written is in the list.
+func checkListing(t *testing.T, ctx context.Context, client *objectstore.Client, keys ...string) {
+	t.Helper()
+	page, err := client.List(ctx, objectstore.ListOptions{Prefix: "archive/"})
+	if err != nil || len(page.Objects) != len(keys) {
+		t.Fatalf("list = %+v, %v", page, err)
+	}
+	seen := map[string]bool{}
+	for _, object := range page.Objects {
+		seen[object.Key] = true
+	}
+	for _, key := range keys {
+		if !seen[key] {
+			t.Fatalf("list keys = %v, want %q", seen, key)
+		}
+	}
+}
+
 // TestSeaweedFS runs the client against a real S3 server, because a hand-written signer can pass its own fake and
 // still disagree with an implementation about escaping, headers or list pagination.
-//
-//nolint:cyclop,gocognit // one end-to-end flow: start, create, write, read, list, delete
 func TestSeaweedFS(t *testing.T) {
 	ctx := t.Context()
 	s3 := containertest.StartSeaweedFS(t, "axiom")
@@ -40,12 +95,7 @@ func TestSeaweedFS(t *testing.T) {
 		t.Fatalf("open the creating client: %v", err)
 	}
 	defer creating.Close()
-	if created, err := creating.Create(opCtx, false); err != nil || !created {
-		t.Fatalf("create the bucket = %v, %v; want true, nil", created, err)
-	}
-	if created, err := creating.Create(opCtx, true); err != nil || created {
-		t.Fatalf("create the existing bucket = %v, %v; want false, nil", created, err)
-	}
+	checkBucketCreation(t, opCtx, creating)
 	if err := client.Check(opCtx); err != nil {
 		t.Fatalf("check the bucket: %v", err)
 	}
@@ -61,65 +111,47 @@ func TestSeaweedFS(t *testing.T) {
 	}
 	// Above the multipart threshold: a real server has to accept the initiate, part and complete requests, not just the
 	// single PUT that a fake can imitate.
-	large := bytes.Repeat(body, 20)
-	largeKey := "archive/2026/large.bin"
-	if info, err := client.Put(opCtx, objectstore.Upload{Key: largeKey, Body: bytes.NewReader(large), Size: int64(len(large))}); err != nil || info.Size != int64(len(large)) {
-		t.Fatalf("multipart put = %+v, %v", info, err)
-	}
-	largeObject, err := client.Get(opCtx, largeKey)
-	if err != nil {
-		t.Fatalf("get the multipart object: %v", err)
-	}
-	largeGot, largeReadErr := io.ReadAll(largeObject.Body)
-	largeCloseErr := largeObject.Body.Close()
-	if largeReadErr != nil || largeCloseErr != nil {
-		t.Fatalf("read the multipart object: %v, %v", largeReadErr, largeCloseErr)
-	}
-	if !bytes.Equal(largeGot, large) {
-		t.Fatalf("read %d multipart bytes that differ from the %d written", len(largeGot), len(large))
-	}
-	object, err := client.Get(opCtx, key)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	got, readErr := io.ReadAll(object.Body)
-	closeErr := object.Body.Close()
-	if readErr != nil || closeErr != nil {
-		t.Fatalf("read the object: %v, %v", readErr, closeErr)
-	}
-	if !bytes.Equal(got, body) {
-		t.Fatalf("read %d bytes that differ from the %d written", len(got), len(body))
-	}
-	head, err := client.Head(opCtx, key)
-	if err != nil || head.Size != int64(len(body)) {
-		t.Fatalf("head = %+v, %v", head, err)
-	}
+	checkMultipart(t, opCtx, client, body)
+	getAndCompare(t, opCtx, client, key, body)
+	checkHead(t, opCtx, client, key, int64(len(body)))
 	// A non-ASCII key: the signature must escape its UTF-8 bytes the way S3 does, not double-encode or normalize them.
-	unicodeKey := "archive/中文.txt"
-	if _, err := client.Put(opCtx, objectstore.Upload{Key: unicodeKey, Body: strings.NewReader("unicode"), Size: 7}); err != nil {
-		t.Fatalf("put unicode key: %v", err)
-	}
-	page, err := client.List(opCtx, objectstore.ListOptions{Prefix: "archive/"})
-	if err != nil || len(page.Objects) != 3 {
-		t.Fatalf("list = %+v, %v", page, err)
-	}
-	seen := map[string]bool{}
-	for _, object := range page.Objects {
-		seen[object.Key] = true
-	}
-	if !seen[key] || !seen[unicodeKey] || !seen[largeKey] {
-		t.Fatalf("list keys = %v, want %q, %q and %q", seen, key, unicodeKey, largeKey)
-	}
-	if err := client.Delete(opCtx, key); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
-	if _, err := client.Head(opCtx, key); !errors.Is(err, objectstore.ErrNotFound) {
-		t.Fatalf("head after delete = %v, want ErrNotFound", err)
-	}
+	unicodeKey := putUnicode(t, opCtx, client)
+	checkListing(t, opCtx, client, key, unicodeKey, "archive/2026/large.bin")
+	checkDeleted(t, opCtx, client, key)
 	if err := client.Delete(opCtx, unicodeKey); err != nil {
 		t.Fatalf("delete unicode key: %v", err)
 	}
-	if err := client.Delete(opCtx, largeKey); err != nil {
+	if err := client.Delete(opCtx, "archive/2026/large.bin"); err != nil {
 		t.Fatalf("delete the multipart key: %v", err)
+	}
+}
+
+// checkHead asserts the stored object's size.
+func checkHead(t *testing.T, ctx context.Context, client *objectstore.Client, key string, size int64) {
+	t.Helper()
+	head, err := client.Head(ctx, key)
+	if err != nil || head.Size != size {
+		t.Fatalf("head %q = %+v, %v", key, head, err)
+	}
+}
+
+// putUnicode writes a non-ASCII key and returns it.
+func putUnicode(t *testing.T, ctx context.Context, client *objectstore.Client) string {
+	t.Helper()
+	unicodeKey := "archive/中文.txt"
+	if _, err := client.Put(ctx, objectstore.Upload{Key: unicodeKey, Body: strings.NewReader("unicode"), Size: 7}); err != nil {
+		t.Fatalf("put unicode key: %v", err)
+	}
+	return unicodeKey
+}
+
+// checkDeleted deletes key and asserts a head now reports ErrNotFound.
+func checkDeleted(t *testing.T, ctx context.Context, client *objectstore.Client, key string) {
+	t.Helper()
+	if err := client.Delete(ctx, key); err != nil {
+		t.Fatalf("delete %q: %v", key, err)
+	}
+	if _, err := client.Head(ctx, key); !errors.Is(err, objectstore.ErrNotFound) {
+		t.Fatalf("head after delete = %v, want ErrNotFound", err)
 	}
 }

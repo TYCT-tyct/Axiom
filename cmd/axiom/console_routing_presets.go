@@ -113,6 +113,17 @@ func (c consoleAPI) SetRoutingDefault(ctx context.Context, r consoleapi.SetRouti
 	return consoleapi.SetRoutingDefault200JSONResponse(routingDefaultBody(d)), nil
 }
 
+// ListRoutingSourceClasses answers from the classes the node routes by, so a page offers exactly the slugs a rule can
+// name here; the table is the platform's and its fingerprints are not for tenants to read.
+func (c consoleAPI) ListRoutingSourceClasses(context.Context, consoleapi.ListRoutingSourceClassesRequestObject) (consoleapi.ListRoutingSourceClassesResponseObject, error) {
+	names := c.classes.SourceClassNames()
+	out := consoleapi.SourceClassNameList{Data: make([]consoleapi.SourceClassName, len(names))}
+	for i, n := range names {
+		out.Data[i] = consoleapi.SourceClassName{Slug: n.Slug, Name: n.Name, NameZh: n.NameZh}
+	}
+	return consoleapi.ListRoutingSourceClasses200JSONResponse(out), nil
+}
+
 // rulesProblem is a refusal of a preset's rules as the 400 that names them, with what is wrong; every other error is
 // itself.
 func rulesProblem(err error) error {

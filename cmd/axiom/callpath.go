@@ -95,6 +95,8 @@ type callNode struct {
 	// search is the node's enabled engines, also read by the public model pages to show what a search costs.
 	search gateway.SearchBackends
 	cache  *gateway.ResponseCache // the response cache's writer and expiry loop, started with the other loops
+	// health is the node's endpoint evaluation; the console reads the source classes it routes by from it.
+	health *quality.Monitor
 }
 
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
@@ -222,7 +224,7 @@ func newCallNode(d callDeps, router *routing.Router, upstreams *suppliers.Servic
 		Memory: memory, Run: executor.Run, Logger: d.logger, Meter: d.meter, Models: models, Proxies: d.proxies, KV: d.kv,
 		Outstanding: outstanding, Search: d.search, Parser: d.fileParser, Records: d.records,
 	})
-	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models, search: d.search, cache: cache}, err
+	return callNode{handler: handler, executor: executor, outstanding: outstanding, upstreams: upstreams, models: models, search: d.search, cache: cache, health: health}, err
 }
 
 // routeDeps are the sources of the routing snapshot. routable holds whether the latest published snapshot can route, and

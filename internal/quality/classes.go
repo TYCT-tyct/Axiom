@@ -215,12 +215,23 @@ func validSlug(s string) bool {
 
 // compiledClasses is the immutable rule set the call path reads: classes in evaluation order, the fallback, and the
 // header names whose values are kept as evidence. Version changes when anything that affects matching or display does,
-// so a reload can tell whether it has work to do.
+// so a reload can tell whether it has work to do. Names are every class, the fallback included, in evaluation order.
 type compiledClasses struct {
 	version  string
 	classes  []compiledClass
 	fallback string
 	headers  []string
+	names    []ClassName
+}
+
+// ClassName is what a routing preset's editor shows of a class: the slug a preset names and the class's names. A
+// class's fingerprint rules are the platform's and are not part of it.
+type ClassName struct{ Slug, Name, NameZh string }
+
+// SourceClassNames are the live classes in evaluation order, as the node last read them. The routing preset pages
+// offer these: the same set the routing snapshot classifies endpoints into, read from memory, not the table.
+func (m *Monitor) SourceClassNames() []ClassName {
+	return slices.Clone(m.classes.Load().names)
 }
 
 type compiledClass struct {
@@ -329,6 +340,7 @@ func compileOrdered(ordered []SourceClass, fallbackAt int) (*compiledClasses, ma
 	out := &compiledClasses{}
 	names := map[string]bool{}
 	for i, c := range ordered {
+		out.names = append(out.names, ClassName{Slug: c.Slug, Name: c.Name, NameZh: c.NameZh})
 		if i == fallbackAt {
 			out.fallback = c.Slug
 			continue
