@@ -35,7 +35,7 @@ export default {
       "Only used when a highest unit price is set: a priced platform preset serves only the sites in this currency, an unpriced one serves every site. It can’t be changed later.",
     currencyInvalid: "Enter a three-letter currency code in capitals, such as USD.",
     currencyFixed:
-      "Prices are limited in {{currency}}, so only sites in that currency use it; the currency can’t change.",
+      "This preset is in {{currency}}: only sites in that currency use it, and its unit prices are limited in it. The currency can’t change.",
     unpriced:
       "This preset limits no price, so every site can use it. It can’t gain a highest unit price, which would take it away from sites in other currencies; make a new preset to limit prices.",
     cannotPrice: "This preset limits no price and can’t gain one: clear the unit prices, or make a new priced preset.",
@@ -73,6 +73,9 @@ export default {
     },
     hint: "{{min}} to {{max}}; empty for the default, {{standard}}.",
     invalid: "A value is outside its range or not a whole number.",
+    unavailable:
+      "This node can’t read or change these limits yet; presets are held to the defaults in code. Try again once it’s updated.",
+    retry: "Try again",
     save: "Save limits",
     saved: "Saved. The next preset made or changed is checked against them.",
   },

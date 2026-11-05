@@ -1,7 +1,7 @@
-import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
+import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
 import { Button, DataState, Icon, TextField, useFormat } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
+import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem, useSnapshot } from "./change";
@@ -102,7 +102,27 @@ export function readLimits(values: Record<string, string>, problem: string): Lim
 // RoutingLimits is what every layer may hold of routing presets, the rule versions a preset keeps and the global budget
 // every node holds in memory, each the saved value or the default in code.
 export function RoutingLimits() {
-  const query = useQuery(routingLimitsQuery);
+  return <LimitsState query={useQuery(routingLimitsQuery)} />;
+}
+
+// LimitsState shows the card, or for a node of a release before part six of the presets, which answers 404, says the
+// limits are not there yet and offers to ask again: DataState would call it a missing page and offer none.
+export function LimitsState({ query }: { query: UseQueryResult<View> }) {
+  const { t } = useTranslation();
+  if (query.error instanceof ApiError && query.error.status === 404) {
+    return (
+      <Facts
+        title={t("routingPresets.limits.title")}
+        action={
+          <Button size="md" disabled={query.isFetching} onClick={() => void query.refetch()}>
+            <Icon name="refresh" />
+            {t("routingPresets.limits.retry")}
+          </Button>
+        }
+        rows={[[t("routingPresets.unavailableTitle"), t("routingPresets.limits.unavailable")]]}
+      />
+    );
+  }
   return <DataState query={query}>{(view) => <LimitsCard view={view} />}</DataState>;
 }
 

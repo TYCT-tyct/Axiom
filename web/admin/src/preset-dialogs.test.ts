@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { expect, it } from "vitest";
-import { selectable, systemPreset } from "./preset-dialogs";
+import { currencyOf, selectable, systemPreset } from "./preset-dialogs";
 import type { PresetLayer } from "./queries";
 
 const preset = (over: Partial<AdminSchemas["RoutingPreset"]>) =>
@@ -30,4 +30,48 @@ it.each([
   { layer: site, over: { id: systemPreset }, offered: false },
 ])("$layer.scope default, preset $over: $offered", ({ layer, over, offered }) => {
   expect(selectable(layer, preset(over), "USD")).toBe(offered);
+});
+
+const cannotPrice = { problem: "routingPresets.form.cannotPrice" };
+const invalid = { problem: "routingPresets.form.currencyInvalid" };
+
+// The currency a write names (internal/routing ErrPresetCurrency): a changed platform preset keeps the one it has,
+// priced or not, so a rename of one with a currency and no price never makes it serve every site; one without a
+// currency cannot gain a price; a new one names a valid code only when priced; a site's names none.
+it.each([
+  {
+    case: "a rename of a platform preset with a currency and no price",
+    layer: platform,
+    preset: preset({ currency: "USD" }),
+    priced: false,
+    sent: "USD",
+  },
+  {
+    case: "a priced platform preset changed",
+    layer: platform,
+    preset: preset({ currency: "USD" }),
+    priced: true,
+    sent: "USD",
+  },
+  { case: "an unpriced platform preset changed", layer: platform, preset: preset({}), priced: false, sent: undefined },
+  {
+    case: "an unpriced platform preset given a price",
+    layer: platform,
+    preset: preset({}),
+    priced: true,
+    sent: cannotPrice,
+  },
+  { case: "a new priced platform preset", layer: platform, preset: undefined, priced: true, sent: "EUR" },
+  { case: "a new unpriced platform preset", layer: platform, preset: undefined, priced: false, sent: undefined },
+  {
+    case: "a new platform preset with a bad code",
+    layer: platform,
+    preset: undefined,
+    priced: true,
+    code: "eu",
+    sent: invalid,
+  },
+  { case: "a site preset", layer: site, preset: preset({ scope: "site" }), priced: true, sent: undefined },
+])("$case names $sent", ({ layer, preset: before, priced, code = "EUR", sent }) => {
+  expect(currencyOf(layer, before, code, priced)).toEqual(sent);
 });

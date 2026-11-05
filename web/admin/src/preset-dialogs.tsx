@@ -202,12 +202,10 @@ export function PresetDialog({
       showRefusal();
       return { problem: t("routingPresets.form.rulesInvalid") };
     }
-    // Only a priced platform preset names a currency: a site's is in the site's, and an unpriced one serves every site.
-    const priced = layer.scope === "platform" && summaryOf(written.rules).priced;
-    const problem = priced ? currencyProblem(read, code.trim()) : null;
-    return problem
-      ? { problem: t(problem) }
-      : { ...names, rules: written.rules, currency: priced ? code.trim() : undefined };
+    const currency = currencyOf(layer, read, code.trim(), summaryOf(written.rules).priced);
+    return typeof currency === "object"
+      ? { problem: t(currency.problem) }
+      : { ...names, rules: written.rules, currency };
   };
   return (
     <ChangeDialog<PresetInput, Preset>
@@ -250,14 +248,27 @@ function readNames(
   return name === "" ? { problem: t("routingPresets.form.nameMissing") } : { slug, name };
 }
 
-// A platform preset serves the sites of its prices' currency, or every site when it limits none, and it never serves
-// fewer than it did: a new one names a currency when it is priced, and a changed one keeps its own, or limits no price
-// when it had none (internal/routing ErrPresetCurrency).
-function currencyProblem(preset: Preset | undefined, code: string) {
-  if (preset && preset.currency === undefined) {
-    return "routingPresets.form.cannotPrice" as const;
+// currencyOf is the currency a write names, or the words for why it cannot. A site's preset names none: it is in its
+// site's. A platform preset serves the sites of its currency, or every site when it has none, and a change never makes
+// it serve more or fewer (internal/routing ErrPresetCurrency, visibleTo): a changed one keeps the currency it has, priced
+// or not, so a rename never widens it, and one without a currency cannot gain a price. A new one names a currency only
+// when it limits a price.
+export function currencyOf(
+  layer: PresetLayer,
+  preset: Preset | undefined,
+  code: string,
+  priced: boolean,
+): string | undefined | { problem: "routingPresets.form.cannotPrice" | "routingPresets.form.currencyInvalid" } {
+  if (layer.scope === "site") {
+    return undefined;
   }
-  return currencyPattern.test(code) ? null : ("routingPresets.form.currencyInvalid" as const);
+  if (preset) {
+    return preset.currency ?? (priced ? { problem: "routingPresets.form.cannotPrice" } : undefined);
+  }
+  if (!priced) {
+    return undefined;
+  }
+  return currencyPattern.test(code) ? code : { problem: "routingPresets.form.currencyInvalid" };
 }
 
 // A refusal may sit far down the rules, away from the button pressed: once it renders, it is scrolled into view.
