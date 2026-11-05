@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"errors"
 	"net/netip"
 	"regexp"
 	"slices"
@@ -109,8 +110,7 @@ func checkAttemptScopes(t *testing.T, db *pg.DB, a, b uuid.UUID) {
 }
 
 // TestTenantsCannotWriteOthersCalls: the policy binds writes too, so a scope of one account cannot insert a row of
-// another, and the application can neither change nor delete a row of either table (completing a pending call is
-// the one change, TestOnlyAPendingCallIsCompletedOnce).
+// another, and the application can neither change nor delete a row of either table.
 func TestTenantsCannotWriteOthersCalls(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
@@ -152,7 +152,7 @@ func TestTenantsCannotWriteOthersCalls(t *testing.T) {
 		t.Errorf("account B's scope could not insert its own attempts: %v", err)
 	}
 	for _, statement := range []string{
-		"UPDATE observability.call_log SET model = ''", "DELETE FROM observability.call_log",
+		"UPDATE observability.call_log SET price_nano = 0", "DELETE FROM observability.call_log",
 		"TRUNCATE observability.call_log", "UPDATE observability.call_attempt SET outcome = 'committed'",
 		"DELETE FROM observability.call_attempt", "TRUNCATE observability.call_attempt",
 	} {
@@ -162,37 +162,6 @@ func TestTenantsCannotWriteOthersCalls(t *testing.T) {
 		})
 		if err == nil {
 			t.Errorf("%s was allowed", statement)
-		}
-	}
-}
-
-// TestOnlyAPendingCallIsCompletedOnce: the application may change a call in one way, the settlement's columns of a
-// pending row to a settled one; a settled row, a row left pending and any other column stay as they were written.
-func TestOnlyAPendingCallIsCompletedOnce(t *testing.T) {
-	t.Parallel()
-	db := openDB(t)
-	settled, pending := record(uuid.NewV7(), now), record(uuid.NewV7(), now)
-	pending.BillingPending = true
-	keep(t, db, settled, pending)
-	for _, tc := range []struct {
-		statement string
-		id        uuid.UUID
-		changed   int64 // -1 for a statement the database refuses
-	}{
-		{"UPDATE observability.call_log SET price_nano = 1 WHERE id = $1", settled.ID, 0},
-		{"UPDATE observability.call_log SET price_nano = 1 WHERE id = $1", pending.ID, -1},
-		{"UPDATE observability.call_log SET model = 'x', billing_pending = false WHERE id = $1", pending.ID, -1},
-		{"UPDATE observability.call_log SET price_nano = 7, billing_pending = false WHERE id = $1", pending.ID, 1},
-		{"UPDATE observability.call_log SET price_nano = 8, billing_pending = false WHERE id = $1", pending.ID, 0},
-	} {
-		var changed int64
-		err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-			tag, err := tx.Exec(t.Context(), tc.statement, tc.id.String())
-			changed = tag.RowsAffected()
-			return err
-		})
-		if tc.changed < 0 && err == nil || tc.changed >= 0 && (err != nil || changed != tc.changed) {
-			t.Errorf("%s on %v: %d rows changed (%v), want %d", tc.statement, tc.id, changed, err, tc.changed)
 		}
 	}
 }
@@ -486,6 +455,56 @@ func TestOwnCallPriceVersionAndLegacy(t *testing.T) {
 		}
 		if call.PriceVersion != fresh.PriceVersion {
 			t.Fatalf("get own version: %s", call.PriceVersion)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAPendingCallIsNotReadAsZero: the log never knew a pending call's usage or price, so the reads an account makes
+// skip it (the list the CSV export pages through, the aggregates, the activity and the call by ID) rather than show
+// zeros, while the operator's trace and list name it pending and the list gives it no price.
+func TestAPendingCallIsNotReadAsZero(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	a := uuid.NewV7()
+	settled, pending := record(a, now), pendingOf(record(a, now.Add(-time.Second)))
+	keep(t, db, settled, pending)
+	if got := list(t, db, accountScope(a), day(a)); len(got) != 1 || got[0].ID != settled.ID {
+		t.Errorf("the account lists %d calls, want only the settled one", len(got))
+	}
+	if err := db.ReadTx(t.Context(), accountScope(a), func(tx pg.Tx) error {
+		if _, err := GetOwn(t.Context(), tx, pending.ID); !errors.Is(err, pg.ErrNoRows) {
+			t.Errorf("GetOwn of the pending call = %v, want no rows", err)
+		}
+		groups, err := AggregateOwn(t.Context(), tx, day(a), "model")
+		if err != nil || len(groups) != 1 || groups[0].Calls != "1" {
+			t.Errorf("aggregates %+v (%v), want the settled call alone", groups, err)
+		}
+		items, err := ActivityOwn(t.Context(), tx, ActivityQuery{Account: a, Since: day(a).Since, Until: day(a).Until})
+		if err != nil || len(items) != 1 || items[0].Requests != 1 {
+			t.Errorf("activity %+v (%v), want the settled call alone", items, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	checkOperatorSeesPending(t, db, a, pending.ID)
+}
+
+// checkOperatorSeesPending: the operator's trace of the pending call says so, and the operator's list of account a
+// has the settled call and then the pending one, marked.
+func checkOperatorSeesPending(t *testing.T, db *pg.DB, a, pending uuid.UUID) {
+	t.Helper()
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		trace, err := GetTrace(t.Context(), tx, pending)
+		if err != nil || !trace.BillingPending {
+			t.Errorf("the trace of the pending call says pending %v (%v), want true", trace.BillingPending, err)
+		}
+		calls, _, _, err := ListAdmin(t.Context(), tx, AdminQuery{Since: day(a).Since, Until: day(a).Until, Account: &a, PageSize: 10})
+		if err != nil || len(calls) != 2 || calls[0].Pending || !calls[1].Pending {
+			t.Errorf("the operator lists %+v (%v), want the settled call, then the pending one", calls, err)
 		}
 		return nil
 	}); err != nil {

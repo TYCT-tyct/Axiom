@@ -110,7 +110,8 @@ type CallRecord struct {
 	CacheHit                         bool   // answered from the response cache, with no upstream attempt
 	PhysicalInput                    *int64 // the upstream's prompt total, nil when it reported none
 	// BillingPending is a record written before the call's settlement was: its usage, price and waiver are not known
-	// yet. Its Slot then stays open for the settled record of the same call, which completes it (README「写入」).
+	// yet. Slot.Commit parks it and stays open for the settled record of the same call, which replaces it; it reaches
+	// the call log only when none will (README「写入」).
 	BillingPending bool
 }
 

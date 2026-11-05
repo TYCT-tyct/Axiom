@@ -61,7 +61,10 @@ type Recorder struct {
 	fatal  func(error) bool // the error says the records themselves are bad: retrying cannot help
 	logger *slog.Logger
 	spill  *spill
-	ctx    context.Context //nolint:containedctx // the writer's values, used for metrics on the record path too
+	// parking holds pending records until their call's settled record replaces them or Release moves them into the
+	// spill. A parked record holds its slot's room, which is how Capacity also bounds the parked files.
+	parking parking
+	ctx     context.Context //nolint:containedctx // the writer's values, used for metrics on the record path too
 
 	mu      sync.Mutex // guards closing
 	closing bool
@@ -120,23 +123,12 @@ var errEncoding = errors.New("encode call records")
 func isBadRow(err error) bool { return pg.IsDataError(err) || errors.Is(err, errEncoding) }
 
 // marshalQueued writes the batch as the two JSON arrays the insert statements take, one for calls and one for
-// attempts. It returns a nil attempts array when the batch has none. Each call is one member: the statement that
-// completes a pending row may not touch a row twice (SQLSTATE 21000, which no retry mends). A repeated record is dropped,
-// as the insert would leave it, except that a settled record takes the place of its pending one; the attempts are the
-// same call's either way.
+// attempts. It returns a nil attempts array when the batch has none.
 func marshalQueued(batch []queued) (calls, attempts []byte, err error) {
-	callRows := make([]row, 0, len(batch))
+	callRows := make([]row, len(batch))
 	var attemptRows []attemptRow
-	seen := make(map[string]int, len(batch)) // a request ID's member in callRows
-	for _, q := range batch {
-		if i, ok := seen[q.call.ID]; ok {
-			if callRows[i].BillingPending && !q.call.BillingPending {
-				callRows[i] = q.call
-			}
-			continue
-		}
-		seen[q.call.ID] = len(callRows)
-		callRows = append(callRows, q.call)
+	for i, q := range batch {
+		callRows[i] = q.call
 		attemptRows = append(attemptRows, q.attempts...)
 	}
 	calls, err = jsonx.MarshalCanonical(callRows)
@@ -161,7 +153,7 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 	if logger == nil {
 		logger = slog.Default()
 	}
-	sp, err := openSpill(cfg.Dir, 2*cfg.Capacity, syncDir) // a call left pending holds two records (Slot.Commit)
+	sp, parked, err := openDisk(cfg, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +162,7 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 	}
 	run, giveUp := context.WithCancel(context.WithoutCancel(ctx))
 	r := &Recorder{
-		cfg: cfg, write: write, fatal: fatal, logger: logger, spill: sp, ctx: context.WithoutCancel(ctx),
+		cfg: cfg, write: write, fatal: fatal, logger: logger, spill: sp, parking: parked, ctx: context.WithoutCancel(ctx),
 		giveUp: giveUp, done: make(chan struct{}), quiet: make(chan struct{}),
 	}
 	r.outstanding.Store(sp.pendingCount())
@@ -188,11 +180,35 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 			return nil
 		}))
 	if err != nil {
-		sp.finish()
+		r.closeDisk()
 		return nil, err // the instrument names are constants
 	}
 	go r.writer(run)
 	return r, nil
+}
+
+// openDisk opens the spill and the parked records, and moves every record a dead process left parked into the spill.
+func openDisk(cfg Config, logger *slog.Logger) (*spill, parking, error) {
+	sp, err := openSpill(cfg.Dir, cfg.Capacity, syncDir)
+	if err != nil {
+		return nil, parking{}, err
+	}
+	parked, err := openParking(cfg.Dir, syncDir, logger)
+	if err == nil {
+		err = parked.recover(sp)
+	}
+	if err != nil {
+		parked.close()
+		sp.finish()
+		return nil, parking{}, err
+	}
+	return sp, parked, nil
+}
+
+// closeDisk releases what openDisk opened; the directory lock goes last.
+func (r *Recorder) closeDisk() {
+	r.parking.close()
+	r.spill.finish()
 }
 
 func counter(m metric.Meter, name, description string) metric.Int64Counter {
@@ -242,7 +258,7 @@ func (r *Recorder) finishSlot() {
 
 // Enqueue admits and commits one record in the caller's goroutine. It is the whole call-log write for code that is not
 // a gateway call (tests, tools); the gateway reserves at admission with Admit and commits with the returned Slot. A
-// pending record's settled one is a record of its own here, with its own room.
+// pending record enqueued here is final: no settled record can replace it, so it goes into the spill as it is.
 func (r *Recorder) Enqueue(rec CallRecord) error {
 	slot, err := r.Admit()
 	if err != nil {
@@ -263,8 +279,8 @@ func (r *Recorder) reject(rec CallRecord, reason string, err error) {
 }
 
 // Close stops accepting records and writes what the spill holds, retrying failures until ctx ends. It returns nil when
-// everything is written; otherwise it reports records left in the spill for the next start, and records that could not
-// be kept at all.
+// everything is written; otherwise it reports records left in the spill or parked for the next start, and records that
+// could not be kept at all.
 func (r *Recorder) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closing = true
@@ -278,7 +294,7 @@ func (r *Recorder) Close(ctx context.Context) error {
 		<-r.done
 	}
 	r.giveUp()
-	pending := r.spill.pendingCount()
+	pending := r.spill.pendingCount() + int64(r.parking.count()) // a parked record is moved into the spill at the next start
 	lost, attempts := r.lost.Load(), r.lostAttempts.Load()
 	if pending > 0 {
 		return fmt.Errorf("%w: %d calls remain for the next start (%d calls and %d attempts were not kept)",
@@ -297,7 +313,7 @@ func (r *Recorder) Done() <-chan struct{} { return r.done }
 // writer drains the spill into the database, one batch at a time, in spill order.
 func (r *Recorder) writer(ctx context.Context) {
 	defer close(r.done)
-	defer r.spill.finish()
+	defer r.closeDisk()
 	for {
 		batch, end, open, err := r.spill.nextBatch(r.cfg.BatchSize, r.cfg.FlushInterval)
 		if err != nil {

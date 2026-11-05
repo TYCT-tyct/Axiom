@@ -8,88 +8,128 @@ import (
 
 // Slot is one call's reserved room in the call log. Admit returns it; Commit puts the call's record in the spill, and
 // Release gives the room back if the call ends without one. It is safe to call Release after Commit: the writer then
-// owns the reservation until the record reaches the database. A pending record (CallRecord.BillingPending) does not
-// close the slot: the room stays reserved for the settled record that completes it, and Release gives that room back
-// when the settlement is left to the cleanup.
+// owns the reservation until the record reaches the database. A pending record (CallRecord.BillingPending) is parked
+// instead and keeps the slot open: the call's settled record replaces it, or Release moves it into the spill when the
+// settlement is left to the cleanup. Either way one record of the call takes the slot's room.
 type Slot struct {
-	r     *Recorder
-	mu    sync.Mutex
-	state slotState
+	r      *Recorder
+	mu     sync.Mutex
+	state  slotState
+	id     string // the parked record's request ID, while parked
+	parked []byte // the parked record's encoding, while parked
 }
 
 type slotState uint8
 
 const (
-	slotOpen      slotState = iota
-	slotPending             // a pending record is in the spill; the slot's own room waits for the settled one
-	slotCommitted           // the call's settled record is in the spill
+	slotOpen   slotState = iota
+	slotParked           // a pending record is parked; the slot's room waits for the call's settled record
+	slotCommitted
 	slotReleased
 )
 
 // Commit puts the call's record in the spill and makes it durable before returning: it survives the process and the
-// host from here on, and the writer replays it on the next start. The response may be served after this returns.
-//
-// A pending record leaves the slot open for one settled record of the same call. The pending record is counted as one
-// more outstanding record beyond the slot's own room, so a node can hold at most twice Capacity records when every
-// call it admitted was left pending.
+// host from here on, and the writer replays it on the next start. The response may be served after this returns. A
+// pending record is parked rather than put in the spill, equally durable, and the slot then takes one settled record
+// of the same call.
 func (s *Slot) Commit(rec CallRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state != slotOpen && (s.state != slotPending || rec.BillingPending) {
+	if s.state != slotOpen && (s.state != slotParked || rec.BillingPending) {
 		return ErrClosed
 	}
-	if rec.BillingPending {
-		s.r.outstanding.Add(1) // before the append: the writer may take the record off the count as soon as it is there
+	body, err := s.r.encode(rec)
+	if err == nil && rec.BillingPending {
+		err = s.r.park(rec, body)
+	} else if err == nil {
+		err = s.r.append(rec, body)
 	}
-	err := s.append(rec)
 	switch {
 	case err != nil:
-		if rec.BillingPending {
-			s.r.outstanding.Add(-1)
-		}
+		// A parked record stays parked: it is the call's record, which the next start moves into the spill.
 		s.state = slotReleased
 		s.r.outstanding.Add(-1)
 		s.r.finishSlot()
 		return fmt.Errorf("call record %s: %w", rec.ID, err)
 	case rec.BillingPending:
-		s.state = slotPending
+		s.state, s.id, s.parked = slotParked, rec.ID.String(), body
 	default:
-		s.state = slotCommitted
+		if s.state == slotParked {
+			s.r.parking.unpark(s.id)
+		}
+		s.state, s.parked = slotCommitted, nil
 		s.r.finishSlot()
 	}
 	return nil
 }
 
-// append validates, encodes and appends rec, making it durable; a record that cannot be kept stops the recorder.
-func (s *Slot) append(rec CallRecord) error {
+// Release gives back a reservation whose call produced no record. A parked record whose settlement went to the
+// cleanup is the call's record: Release moves it into the spill, in the slot's room. When the spill no longer takes
+// records (a shutdown, or a disk that failed), the record stays parked for the next start. Release is a no-op after
+// the settled record's Commit.
+func (s *Slot) Release() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch s.state {
+	case slotOpen:
+		s.r.outstanding.Add(-1)
+	case slotParked:
+		if s.r.spill.appendSynced(s.parked) == nil {
+			s.r.parking.unpark(s.id)
+		} else {
+			s.r.outstanding.Add(-1)
+		}
+		s.parked = nil
+	case slotCommitted, slotReleased:
+		return
+	}
+	s.state = slotReleased
+	s.r.finishSlot()
+}
+
+// encode validates and encodes rec; a record that cannot be encoded stops the recorder.
+func (r *Recorder) encode(rec CallRecord) ([]byte, error) {
 	call, attempts, err := newRows(rec)
 	var body []byte
 	if err == nil {
 		body, err = encodeRecord(call, attempts)
 	}
 	if err != nil {
-		s.r.reject(rec, "invalid", err)
-		return err
+		r.reject(rec, "invalid", err)
 	}
-	if err := s.r.spill.appendSynced(body); err != nil {
-		reason := "spill"
-		if errors.Is(err, ErrClosed) {
-			reason = "shutdown"
-		}
-		s.r.reject(rec, reason, err)
-		return err
-	}
-	return nil
+	return body, err
 }
 
-// Release gives back a reservation whose call produced no record, or the room a pending record held for its settled
-// one. It is a no-op after the settled record's Commit.
-func (s *Slot) Release() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state == slotOpen || s.state == slotPending {
-		s.state = slotReleased
-		s.r.outstanding.Add(-1)
-		s.r.finishSlot()
+// append puts an encoded record in the spill; a record the spill does not keep stops the recorder.
+func (r *Recorder) append(rec CallRecord, body []byte) error {
+	err := r.spill.appendSynced(body)
+	if err != nil {
+		r.rejectUnkept(rec, err)
 	}
+	return err
+}
+
+// park parks an encoded pending record. Once Close has begun nothing is parked: the directory is about to pass to the
+// next process.
+func (r *Recorder) park(rec CallRecord, body []byte) error {
+	r.mu.Lock()
+	closing := r.closing
+	r.mu.Unlock()
+	err := ErrClosed
+	if !closing {
+		err = r.parking.park(rec.ID.String(), body)
+	}
+	if err != nil {
+		r.rejectUnkept(rec, err)
+	}
+	return err
+}
+
+// rejectUnkept rejects a record the disk did not keep, naming a shutdown as such.
+func (r *Recorder) rejectUnkept(rec CallRecord, err error) {
+	reason := "spill"
+	if errors.Is(err, ErrClosed) {
+		reason = "shutdown"
+	}
+	r.reject(rec, reason, err)
 }

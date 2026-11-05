@@ -13,6 +13,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/observability"
+	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 )
@@ -22,7 +23,8 @@ import (
 // killed before the background settlement, or after it committed and before its settled record was kept, still has
 // the call's record on the next start, once, and the call is charged once by the settlement that committed or not at
 // all, which leaves the reservation to the cleanup. The kill stops the call log without a drain, as a killed process
-// leaves its spill, and fences the dead node's background goroutine off the ledger and the log.
+// leaves its spill, and fences the dead node's background goroutine off the ledger and the log. A record left pending
+// is kept but not read as a call without a cost: the account's generation lookup does not find it.
 func TestACallSettledInTheBackgroundKeepsItsRecordThroughACrash(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -44,19 +46,24 @@ func TestACallSettledInTheBackgroundKeepsItsRecordThroughACrash(t *testing.T) {
 				t.Fatal(err)
 			}
 			checkRecordAndCharge(n.r, tc.pending, tc.charges)
+			n.checkGeneration(tc.pending)
 		})
 	}
 }
 
 // dyingNode is one node whose ledger takes no settlement until writable is set, so its call's ending goes out pending
-// and the settlement is left to the background.
+// and the settlement is left to the background. Nothing here waits on a clock: the background retries until the
+// test lets the settlement through or kills the node, and SettleBackground is far longer than the test.
 type dyingNode struct {
 	t        *testing.T
 	r        *rig
 	dir      string
 	records  *observability.Recorder
 	up       *fakeUpstreams
+	key      string
+	callID   string
 	writable atomic.Bool
+	dead     atomic.Bool   // the ledger refuses for good, as a dead node's writes never arrive
 	hold     atomic.Bool   // a committed settlement waits for killed before its caller hears of it
 	commit   chan struct{} // closed when a held settlement has committed
 	killed   chan struct{}
@@ -69,11 +76,14 @@ func newDyingNode(t *testing.T) *dyingNode {
 		o.endpoints = func(_ string, e *routing.Endpoint) {
 			e.OutputSpeed, e.Target = 100, protocol.Target{Model: "up"}
 		}
-		o.config = func(c *Config) { c.SettleRetry, c.SettleBackground = 200*time.Millisecond, 2*time.Second }
+		o.config = func(c *Config) { c.SettleRetry, c.SettleBackground = 200*time.Millisecond, 10*time.Minute }
 	})
 	n.up = withExecutor(n.r, &flakyLedger{
 		settle: func() (bool, error) {
-			if n.writable.Load() {
+			switch {
+			case n.dead.Load():
+				return false, pg.ErrNoRows // permanent: the background gives the settlement up at once
+			case n.writable.Load():
 				return true, nil
 			}
 			return false, io.ErrUnexpectedEOF
@@ -90,9 +100,10 @@ func newDyingNode(t *testing.T) *dyingNode {
 	return n
 }
 
-// call makes the node's one call, whose ending must be out pending with the call's record already kept.
+// call makes the node's one call, whose ending must be out pending.
 func (n *dyingNode) call() {
 	a := n.r.funded(1e12)
+	n.key = a.key
 	sample, _ := sample(n.t, protocol.Messages)
 	for _, e := range n.up.eps {
 		e.script = []scripted{streamed(sample, 3, 50, false)}
@@ -101,9 +112,7 @@ func (n *dyingNode) call() {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"billing_pending":true`) {
 		n.t.Fatalf("%d:\n%s", resp.StatusCode, body)
 	}
-	if kept, _ := n.records.AlertSample(); kept != 1 {
-		n.t.Fatalf("%d records kept when the ending was written, want the call's pending one", kept)
-	}
+	n.callID = resp.Header.Get("X-Generation-Id")
 }
 
 // live lets the background settlement commit and the node shut down cleanly.
@@ -118,6 +127,7 @@ func (n *dyingNode) live() {
 // dieBeforeSettlement kills the node while the ledger is still closed: its settlement never commits.
 func (n *dyingNode) dieBeforeSettlement() {
 	kill(n.t, n.records)
+	n.dead.Store(true)
 	n.r.exec.Outstanding.Drain(n.t.Context(), time.Minute)
 }
 
@@ -127,10 +137,32 @@ func (n *dyingNode) dieBeforeSettlement() {
 func (n *dyingNode) dieAfterCommit() {
 	n.hold.Store(true)
 	n.writable.Store(true)
-	<-n.commit
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		n.r.exec.Outstanding.Drain(n.t.Context(), time.Minute)
+	}()
+	select {
+	case <-n.commit:
+	case <-drained:
+		n.t.Fatal("the background settlement ended without committing")
+	}
 	kill(n.t, n.records)
 	close(n.killed)
-	n.r.exec.Outstanding.Drain(n.t.Context(), time.Minute)
+	<-drained
+}
+
+// checkGeneration: the account finds a settled call by its number and does not find a pending one, whose cost and usage
+// are not known to the log.
+func (n *dyingNode) checkGeneration(pending bool) {
+	resp, body := n.r.do(http.MethodGet, "/api/v1/generation?id="+n.callID, n.key, nil)
+	want := http.StatusOK
+	if pending {
+		want = http.StatusNotFound
+	}
+	if resp.StatusCode != want {
+		n.t.Errorf("generation of the call: %d, want %d:\n%s", resp.StatusCode, want, body)
+	}
 }
 
 // checkRecordAndCharge: the call has one record, pending without amounts or settled at the ledger's charge, and the

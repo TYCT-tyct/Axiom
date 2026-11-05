@@ -12,10 +12,10 @@ import (
 
 // conclude settles the call and writes what is left to tell the client. The order is the one that keeps the money
 // right: the attempt is over (its upstream cancelled, its read returned) before Settle, and Settle is committed before
-// the ending that reports the cost is written (I3). The call's record enters the spill after the settlement and before
-// the ending, so a crash after the client has the answer cannot leave the call unrecorded. A settlement not written in
-// time goes on in the background once the ending is out; the call's record is then pending, and the background
-// completes it when that settlement commits.
+// the ending that reports the cost is written (I3). The call's record is durable after the settlement and before the
+// ending, so a crash after the client has the answer cannot leave the call unrecorded. A settlement not written in time
+// goes on in the background once the ending is out; the call's record is then a pending one, which the settled record
+// replaces when that settlement commits.
 func (s *session) conclude(ctx context.Context, e ended) {
 	s.concluded = true
 	s.stick() //nolint:contextcheck // the queued write outlives the call: Later never waits, and the request's context is often over by now
