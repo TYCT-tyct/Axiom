@@ -14,6 +14,44 @@ import (
 	"uuid"
 )
 
+const accountKeysByPreset = `-- name: AccountKeysByPreset :many
+SELECT preset_id::uuid AS preset_id, count(*) AS keys FROM accounts.api_keys
+WHERE preset_id = ANY ($1::uuid[]) AND preset_id <> '00000000-0000-0000-0000-000000000000' AND deleted_at IS NULL
+  AND account_id = $2
+GROUP BY preset_id
+`
+
+type AccountKeysByPresetParams struct {
+	Presets   []uuid.UUID
+	AccountID uuid.UUID
+}
+
+type AccountKeysByPresetRow struct {
+	PresetID uuid.UUID
+	Keys     int64
+}
+
+// KeysByPreset for one account's keys, which reads only that account's entries of each preset.
+func (q *Queries) AccountKeysByPreset(ctx context.Context, db DBTX, arg AccountKeysByPresetParams) ([]AccountKeysByPresetRow, error) {
+	rows, err := db.Query(ctx, accountKeysByPreset, arg.Presets, arg.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AccountKeysByPresetRow
+	for rows.Next() {
+		var i AccountKeysByPresetRow
+		if err := rows.Scan(&i.PresetID, &i.Keys); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const admitKey = `-- name: AdmitKey :many
 SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE CASE WHEN coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true) THEN coalesce(a.billing_preference, p.preference, 'subscription_first') ELSE 'subscription_first' END WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
 FROM accounts.api_keys k
@@ -377,6 +415,39 @@ func (q *Queries) KeyTenant(ctx context.Context, db DBTX, arg KeyTenantParams) (
 	for rows.Next() {
 		var i KeyTenantRow
 		if err := rows.Scan(&i.KeyID, &i.AccountID, &i.WorkspaceID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const keysByPreset = `-- name: KeysByPreset :many
+SELECT preset_id::uuid AS preset_id, count(*) AS keys FROM accounts.api_keys
+WHERE preset_id = ANY ($1::uuid[]) AND preset_id <> '00000000-0000-0000-0000-000000000000' AND deleted_at IS NULL
+GROUP BY preset_id
+`
+
+type KeysByPresetRow struct {
+	PresetID uuid.UUID
+	Keys     int64
+}
+
+// The keys in the scope that are not deleted, counted by the preset they are bound to, through api_keys_by_preset;
+// the condition on the zero ID is the index's, which the planner cannot otherwise prove of the presets asked for.
+func (q *Queries) KeysByPreset(ctx context.Context, db DBTX, presets []uuid.UUID) ([]KeysByPresetRow, error) {
+	rows, err := db.Query(ctx, keysByPreset, presets)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []KeysByPresetRow
+	for rows.Next() {
+		var i KeysByPresetRow
+		if err := rows.Scan(&i.PresetID, &i.Keys); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

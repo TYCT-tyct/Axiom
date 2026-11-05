@@ -121,6 +121,38 @@ func TestConsoleRoutingPresets(t *testing.T) {
 	}
 }
 
+// TestConsoleRoutingPresetKeys: a console's presets carry the keys of its own account bound to them, deleted keys
+// left out, when listed and read; another account's keys bound to the same platform preset are not counted.
+func TestConsoleRoutingPresetKeys(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	platformID := uuid.NewV7().String()
+	f.run(`INSERT INTO routing.presets (id, scope, slug, name, current_version) VALUES ('` + platformID + `', 'platform', 'shared', 'Shared', 1);
+		INSERT INTO routing.preset_versions (preset_id, version, rules) VALUES ('` + platformID + `', 1, '{"default": {}}')`)
+	own := f.routingPreset(s, `{"slug":"own","name":"Own","rules":{"default":{}}}`)
+	for _, preset := range []string{own.Id.String(), own.Id.String(), platformID} {
+		f.createKey(s, `{"name":"bound","preset_id":"`+preset+`"}`)
+	}
+	deleted := f.createKey(s, `{"name":"deleted","preset_id":"`+own.Id.String()+`"}`).Key.Id
+	expect(t, "delete a key", f.do(http.MethodDelete, "/keys/"+deleted, "", as(s)), http.StatusNoContent, "")
+	f.run(boundKeys(platformID, 1, false)) // another account's key, bound to the platform preset both may use
+	var list consoleapi.RoutingPresetList
+	decode(t, f.do(http.MethodGet, "/routing-presets", "", as(s)), &list)
+	got := map[string]*int64{}
+	for _, p := range list.Data {
+		got[p.Slug] = p.Keys
+	}
+	var one consoleapi.RoutingPreset
+	decode(t, f.do(http.MethodGet, "/routing-presets/"+own.Id.String(), "", as(s)), &one)
+	got["read own"] = one.Keys
+	for slug, want := range map[string]int64{"own": 2, "shared": 1, "read own": 2} {
+		if got[slug] == nil || *got[slug] != want {
+			t.Errorf("%s has keys %v, want %d", slug, got[slug], want)
+		}
+	}
+}
+
 // TestConsoleKeyPresets: a new key takes the account's default with the preset's summary; a key may be bound and
 // rebound to presets it may use, and keeps its preset when changed without naming one; the system preset, another
 // account's preset and any for a management key are refused.
