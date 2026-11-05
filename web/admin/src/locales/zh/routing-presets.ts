@@ -27,6 +27,15 @@ export default {
   disableBody:
     "绑定它的 key 继续按它路由；新的 key 和各层的默认不能再选它。还有默认指着它时会被拒绝，先改默认。停用的预设仍计入这一层的累计数。",
   disabledDone: "已停用“{{name}}”。",
+  disableKeys: {
+    none: "没有 key 绑定它。",
+    count_one: "各账户共有 {{keys}} 个 key 绑定它。",
+    count_other: "各账户共有 {{keys}} 个 key 绑定它。",
+  },
+  disableDefault: {
+    platform: "它是平台新 key 的默认预设，先改这个默认。",
+    site: "它是本站新 key 的默认预设，先改这个默认。",
+  },
   quota: "这一层的路由预设已达上限。停用不用的预设不会腾出累计数；需要更多时在下方调高上限。",
   form: {
     name: "名称",
