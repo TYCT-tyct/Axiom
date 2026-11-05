@@ -1,11 +1,11 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { Button } from "@axiom/ui";
+import { Button, useFormat } from "@axiom/ui";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "./change";
-import { Facts, State, Time } from "./parts";
+import { Facts, State } from "./parts";
 import { routingSuspensionQuery } from "./queries";
 import { NodeState } from "./routing-limits";
 
@@ -15,6 +15,24 @@ type Suspension = AdminSchemas["RoutingPresetSuspension"];
 // whether they are suspended, and the change to the other state.
 export function RoutingSuspension() {
   return <SuspensionState query={useQuery(routingSuspensionQuery)} />;
+}
+
+// usePresetsHold is what a control that changes presets, defaults or keys' presets takes while the switch is on: the
+// node refuses the change, so the control is disabled and says why. A node without the switch never holds.
+export function usePresetsHold() {
+  const { t } = useTranslation();
+  const { data } = useQuery(routingSuspensionQuery);
+  return data?.suspended ? { disabled: true, title: t("routingPresets.suspension.held") } : {};
+}
+
+// SuspendedNotice says at the top of the page, where a touch screen has no tooltip, why its controls are disabled.
+export function SuspendedNotice() {
+  const { title } = usePresetsHold();
+  return title ? (
+    <p role="status">
+      <State tone="warn">{title}</State>
+    </p>
+  ) : null;
 }
 
 // SuspensionState shows the card, or for a node of a release without the switch says it is not there yet.
@@ -36,6 +54,7 @@ export function SuspensionState({ query }: { query: UseQueryResult<Suspension> }
 // suspension the person is writing a reason for into a resumption, or the other way round.
 export function SuspensionCard({ suspension }: { suspension: Suspension }) {
   const { t } = useTranslation();
+  const format = useFormat();
   const manage = can(useSession(), "sites.manage");
   const [target, setTarget] = useState<boolean>();
   const { suspended } = suspension;
@@ -54,12 +73,11 @@ export function SuspensionCard({ suspension }: { suspension: Suspension }) {
           [
             t("routingPresets.suspension.state"),
             suspended ? (
-              <span className="space-y-1">
-                <State tone="bad">{t("routingPresets.suspension.suspended")}</State>
-                <span className="block text-t2">
-                  {t("routingPresets.suspension.since")} <Time at={suspension.since} />
-                </span>
-              </span>
+              <State tone="warn">
+                {t("routingPresets.suspension.suspendedSince", {
+                  time: suspension.since ? format.dateTime(new Date(suspension.since)) : "—",
+                })}
+              </State>
             ) : (
               <State tone="good">{t("routingPresets.suspension.running")}</State>
             ),

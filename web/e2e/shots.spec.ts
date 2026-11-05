@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { type Page, test } from "@playwright/test";
+import { adminUrl } from "./apps.ts";
 import { applyBrand, brands } from "./brand.ts";
 import { suites } from "./suites.ts";
 
@@ -15,6 +16,20 @@ test.skip(!directory, "set AXIOM_SHOTS_DIR to take the screenshots");
 // local time with its zone, which is what the product shows.
 test.use({ timezoneId: "Asia/Shanghai" });
 test.describe.configure({ mode: "parallel" });
+
+// The apps are stamped with the version of the program built from this tree, and the page asks the API for it to notice
+// a deployment (packages/app/src/version.tsx). The mocks answer AXIOM_VERSION, empty when the shots are taken by hand,
+// so every screenshot showed the "Axiom has been updated" banner. Read the stamp from the entry script the server
+// serves, which is the build under test, so the shots show the page as users see it.
+if (directory && !process.env.AXIOM_VERSION) {
+  const html = await (await fetch(adminUrl())).text();
+  const entry = html.match(/<script type="module"[^>]*src="([^"]+)"/)?.[1];
+  const stamp = entry && (await (await fetch(adminUrl(entry))).text()).match(/axiom v[^"'`]+/)?.[0];
+  if (!stamp) {
+    throw new Error("the admin build carries no version stamp: run just web-embed first");
+  }
+  process.env.AXIOM_VERSION = stamp;
+}
 
 const widths = [360, 768, 1280, 2560] as const;
 

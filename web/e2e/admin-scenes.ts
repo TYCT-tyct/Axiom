@@ -41,6 +41,25 @@ const dialog = (name: string, path: string, ...buttons: string[]): Scene =>
     },
   );
 
+// The routing presets page with the platform's switch in a given state whatever the data set says (the worst set has it
+// on), so the suspended page and each of its two dialogs are in every width, scheme and language.
+async function routingPage(p: Page, suspended: boolean) {
+  await p.route("**/api/admin/v1/settings/routing-suspension", (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({ json: suspended ? { suspended, since: "2026-11-01T08:00:00Z" } : { suspended } })
+      : route.fallback(),
+  );
+  await goto(p, "routing-presets");
+}
+
+const routingSuspended: Scene = { name: "routing-suspended", signedIn: true, open: (p) => routingPage(p, true) };
+const routingSwitch = (name: string, suspended: boolean, button: string) =>
+  scene(
+    name,
+    (p) => routingPage(p, suspended),
+    (p) => press(p, button),
+  );
+
 const audienceScenes = (["tier", "account"] as const).map((kind) =>
   scene(
     `rule-${kind}`,
@@ -144,6 +163,9 @@ const scenes: Scene[] = [
   dialog("routing-preset-edit", "routing-presets", "routingPresets.editNamed"),
   dialog("routing-default", "routing-presets", "routingPresets.defaults.edit"),
   dialog("routing-limits", "routing-presets", "routingPresets.limits.edit"),
+  routingSuspended,
+  routingSwitch("routing-suspend", false, "routingPresets.suspension.suspend"),
+  routingSwitch("routing-resume", true, "routingPresets.suspension.resume"),
   dialog("credit", `accounts/${acct(1)}`, "users.credit.open"),
   dialog("refund-approve", "orders", "orders.refund.approve"),
   dialog("refund-reject", "orders", "orders.refund.reject"),
