@@ -320,6 +320,59 @@ func TestReservationRelease(t *testing.T) {
 	}
 }
 
+// TestAPendingRecordKeepsRoomForItsSettledOne: a pending record goes into the spill and leaves its slot holding the
+// call's room, so the record and the room both count against Capacity; the slot takes one settled record, not a
+// second pending one, and Release gives the room back when the settlement is left to the cleanup.
+func TestAPendingRecordKeepsRoomForItsSettledOne(t *testing.T) {
+	t.Parallel()
+	s := &sink{gate: make(chan struct{})}
+	r := recorderOf(t, s, Config{Capacity: 2, BatchSize: 10, FlushInterval: time.Hour})
+	admit := func() *Slot {
+		t.Helper()
+		slot, err := r.Admit()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slot
+	}
+	refused := func(when string) {
+		t.Helper()
+		if _, err := r.Admit(); !errors.Is(err, ErrBacklog) {
+			t.Fatalf("Admit %s = %v, want ErrBacklog", when, err)
+		}
+	}
+	pending := func(rec CallRecord) CallRecord { rec.BillingPending = true; return rec }
+
+	left, kept := record(uuid.NewV7(), now), record(uuid.NewV7(), now)
+	slot := admit()
+	if err := slot.Commit(pending(left)); err != nil {
+		t.Fatal(err)
+	}
+	refused("with a pending record and its room")
+	slot.Release() // the settlement went to the cleanup
+	admit().Release()
+
+	slot = admit()
+	if err := slot.Commit(pending(kept)); err != nil {
+		t.Fatal(err)
+	}
+	if err := slot.Commit(pending(kept)); !errors.Is(err, ErrClosed) {
+		t.Errorf("a second pending Commit = %v, want ErrClosed", err)
+	}
+	if err := slot.Commit(kept); err != nil {
+		t.Fatalf("the settled Commit after a pending one: %v", err)
+	}
+	slot.Release() // after the settled Commit this must not free the writer's room
+	refused("with three records waiting")
+	s.open()
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.stored(); !slices.Equal(got, []string{left.ID.String(), kept.ID.String(), kept.ID.String()}) {
+		t.Errorf("stored %v, want the left pending record, then the kept one pending and settled", got)
+	}
+}
+
 // TestCloseDrainsTheSpill: every call and its attempts are written before Close returns, although the interval is
 // long and the batch not full, and Enqueue refuses afterwards.
 func TestCloseDrainsTheSpill(t *testing.T) {

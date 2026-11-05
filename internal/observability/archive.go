@@ -34,8 +34,9 @@ var partitionName = regexp.MustCompile(`^(call_log|call_attempt)_([0-9]{4})_([0-
 var errNothingToArchive = errors.New("observability: nothing left to archive")
 
 // errArchiveChanged says the partition gained rows after its snapshot; the old manifest cannot justify a drop, so the
-// month is copied again. The call log is append-only (the application holds only SELECT and INSERT), which is why an
-// equal row count under the drop lock proves the snapshot is complete.
+// month is copied again. The call log is append-only but for completing a pending call (migrations/00021), which
+// follows its pending row within the background settlement's deadline, long before a month leaves the hot window; so
+// an equal row count under the drop lock proves the snapshot is complete.
 var errArchiveChanged = errors.New("observability: the partition changed after it was archived")
 
 // archiveAttempts bounds how often one run rewrites a month that keeps receiving late writes. A run that still sees

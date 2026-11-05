@@ -85,15 +85,6 @@ type Recorder struct {
 	written, attemptsWritten, retries, lostMetric, attemptsLostMetric metric.Int64Counter
 }
 
-// Slot is one call's reserved room in the call log. Admit returns it; Commit puts the call's record in the spill, and
-// Release gives the room back if the call ends without one. It is safe to call Release after Commit: the writer then
-// owns the reservation until the record reaches the database.
-type Slot struct {
-	r     *Recorder
-	mu    sync.Mutex
-	state uint8 // 0 open, 1 committed, 2 released
-}
-
 // NewRecorder starts a Recorder that writes through db in scope, the platform scope: one batch holds the records of
 // many accounts. The writer takes ctx's values, such as the tracing provider, but not its end: only Close stops it.
 func NewRecorder(ctx context.Context, db *pg.DB, scope pg.Scope, cfg Config, logger *slog.Logger) (*Recorder, error) {
@@ -129,12 +120,23 @@ var errEncoding = errors.New("encode call records")
 func isBadRow(err error) bool { return pg.IsDataError(err) || errors.Is(err, errEncoding) }
 
 // marshalQueued writes the batch as the two JSON arrays the insert statements take, one for calls and one for
-// attempts. It returns a nil attempts array when the batch has none.
+// attempts. It returns a nil attempts array when the batch has none. Each call is one member: the statement that
+// completes a pending row may not touch a row twice (SQLSTATE 21000, which no retry mends). A repeated record is dropped,
+// as the insert would leave it, except that a settled record takes the place of its pending one; the attempts are the
+// same call's either way.
 func marshalQueued(batch []queued) (calls, attempts []byte, err error) {
-	callRows := make([]row, len(batch))
+	callRows := make([]row, 0, len(batch))
 	var attemptRows []attemptRow
-	for i, q := range batch {
-		callRows[i] = q.call
+	seen := make(map[string]int, len(batch)) // a request ID's member in callRows
+	for _, q := range batch {
+		if i, ok := seen[q.call.ID]; ok {
+			if callRows[i].BillingPending && !q.call.BillingPending {
+				callRows[i] = q.call
+			}
+			continue
+		}
+		seen[q.call.ID] = len(callRows)
+		callRows = append(callRows, q.call)
 		attemptRows = append(attemptRows, q.attempts...)
 	}
 	calls, err = jsonx.MarshalCanonical(callRows)
@@ -159,7 +161,7 @@ func newRecorder(ctx context.Context, cfg Config, write func(context.Context, []
 	if logger == nil {
 		logger = slog.Default()
 	}
-	sp, err := openSpill(cfg.Dir, cfg.Capacity, syncDir)
+	sp, err := openSpill(cfg.Dir, 2*cfg.Capacity, syncDir) // a call left pending holds two records (Slot.Commit)
 	if err != nil {
 		return nil, err
 	}
@@ -230,57 +232,6 @@ func (r *Recorder) Admit() (*Slot, error) {
 	}
 }
 
-// Commit puts the call's record in the spill and makes it durable before returning: it survives the process and the
-// host from here on, and the writer replays it on the next start. The response may be served after this returns.
-func (s *Slot) Commit(rec CallRecord) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state != 0 {
-		return ErrClosed
-	}
-	call, attempts, err := newRows(rec)
-	if err != nil {
-		s.state = 2
-		s.r.outstanding.Add(-1)
-		s.r.reject(rec, "invalid", err)
-		s.r.finishSlot()
-		return fmt.Errorf("call record %s: %w", rec.ID, err)
-	}
-	body, err := encodeRecord(call, attempts)
-	if err != nil {
-		s.state = 2
-		s.r.outstanding.Add(-1)
-		s.r.reject(rec, "invalid", err)
-		s.r.finishSlot()
-		return fmt.Errorf("call record %s: %w", rec.ID, err)
-	}
-	if err := s.r.spill.appendSynced(body); err != nil {
-		s.state = 2
-		s.r.outstanding.Add(-1)
-		reason := "spill"
-		if errors.Is(err, ErrClosed) {
-			reason = "shutdown"
-		}
-		s.r.reject(rec, reason, err)
-		s.r.finishSlot()
-		return fmt.Errorf("call record %s: %w", rec.ID, err)
-	}
-	s.state = 1
-	s.r.finishSlot()
-	return nil
-}
-
-// Release gives back a reservation whose call produced no record. It is a no-op after a successful Commit.
-func (s *Slot) Release() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state == 0 {
-		s.state = 2
-		s.r.outstanding.Add(-1)
-		s.r.finishSlot()
-	}
-}
-
 // finishSlot marks one admitted call done with the append path. Once a failure has stopped admission and the last call
 // has finished, the writer may close the append file: no call that reserved room can still need it.
 func (r *Recorder) finishSlot() {
@@ -290,12 +241,14 @@ func (r *Recorder) finishSlot() {
 }
 
 // Enqueue admits and commits one record in the caller's goroutine. It is the whole call-log write for code that is not
-// a gateway call (tests, tools); the gateway reserves at admission with Admit and commits with the returned Slot.
+// a gateway call (tests, tools); the gateway reserves at admission with Admit and commits with the returned Slot. A
+// pending record's settled one is a record of its own here, with its own room.
 func (r *Recorder) Enqueue(rec CallRecord) error {
 	slot, err := r.Admit()
 	if err != nil {
 		return err
 	}
+	defer slot.Release()
 	return slot.Commit(rec)
 }
 

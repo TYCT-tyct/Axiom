@@ -109,6 +109,9 @@ type CallRecord struct {
 	Streamed                         bool
 	CacheHit                         bool   // answered from the response cache, with no upstream attempt
 	PhysicalInput                    *int64 // the upstream's prompt total, nil when it reported none
+	// BillingPending is a record written before the call's settlement was: its usage, price and waiver are not known
+	// yet. Its Slot then stays open for the settled record of the same call, which completes it (README「写入」).
+	BillingPending bool
 }
 
 // row is a CallRecord as the insert statement reads it: its members are the table's column names.
@@ -154,6 +157,7 @@ type row struct {
 	Streamed        bool             `json:"streamed"`
 	CacheHit        bool             `json:"cache_hit"`
 	PhysicalInput   int64            `json:"physical_input"`
+	BillingPending  bool             `json:"billing_pending,omitempty"` // omitted when settled: a settled record's bytes are as they were
 }
 
 // attemptRow is an AttemptRecord as the insert statement reads it: the call's ID, start and tenant, then its own
@@ -261,7 +265,7 @@ func newCallRow(r CallRecord) (row, error) {
 		CostNano: r.CostNano, Currency: r.Currency.String(), FreeOfCharge: r.Free, LatencyMs: r.Latency.Milliseconds(),
 		FirstTokenMs: r.FirstToken.Milliseconds(), FinishReason: r.FinishReason, ErrorKind: r.ErrorKind,
 		ConsentVersion: r.ConsentVersion, TrainingAllowed: r.TrainingAllowed, Streamed: r.Streamed,
-		CacheHit: r.CacheHit, PhysicalInput: physicalInput(r.PhysicalInput),
+		CacheHit: r.CacheHit, PhysicalInput: physicalInput(r.PhysicalInput), BillingPending: r.BillingPending,
 	}, nil
 }
 

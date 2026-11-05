@@ -109,7 +109,8 @@ func checkAttemptScopes(t *testing.T, db *pg.DB, a, b uuid.UUID) {
 }
 
 // TestTenantsCannotWriteOthersCalls: the policy binds writes too, so a scope of one account cannot insert a row of
-// another, and the application can neither change nor delete a row of either table.
+// another, and the application can neither change nor delete a row of either table (completing a pending call is
+// the one change, TestOnlyAPendingCallIsCompletedOnce).
 func TestTenantsCannotWriteOthersCalls(t *testing.T) {
 	t.Parallel()
 	db := openDB(t)
@@ -151,7 +152,7 @@ func TestTenantsCannotWriteOthersCalls(t *testing.T) {
 		t.Errorf("account B's scope could not insert its own attempts: %v", err)
 	}
 	for _, statement := range []string{
-		"UPDATE observability.call_log SET price_nano = 0", "DELETE FROM observability.call_log",
+		"UPDATE observability.call_log SET model = ''", "DELETE FROM observability.call_log",
 		"TRUNCATE observability.call_log", "UPDATE observability.call_attempt SET outcome = 'committed'",
 		"DELETE FROM observability.call_attempt", "TRUNCATE observability.call_attempt",
 	} {
@@ -161,6 +162,37 @@ func TestTenantsCannotWriteOthersCalls(t *testing.T) {
 		})
 		if err == nil {
 			t.Errorf("%s was allowed", statement)
+		}
+	}
+}
+
+// TestOnlyAPendingCallIsCompletedOnce: the application may change a call in one way, the settlement's columns of a
+// pending row to a settled one; a settled row, a row left pending and any other column stay as they were written.
+func TestOnlyAPendingCallIsCompletedOnce(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	settled, pending := record(uuid.NewV7(), now), record(uuid.NewV7(), now)
+	pending.BillingPending = true
+	keep(t, db, settled, pending)
+	for _, tc := range []struct {
+		statement string
+		id        uuid.UUID
+		changed   int64 // -1 for a statement the database refuses
+	}{
+		{"UPDATE observability.call_log SET price_nano = 1 WHERE id = $1", settled.ID, 0},
+		{"UPDATE observability.call_log SET price_nano = 1 WHERE id = $1", pending.ID, -1},
+		{"UPDATE observability.call_log SET model = 'x', billing_pending = false WHERE id = $1", pending.ID, -1},
+		{"UPDATE observability.call_log SET price_nano = 7, billing_pending = false WHERE id = $1", pending.ID, 1},
+		{"UPDATE observability.call_log SET price_nano = 8, billing_pending = false WHERE id = $1", pending.ID, 0},
+	} {
+		var changed int64
+		err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+			tag, err := tx.Exec(t.Context(), tc.statement, tc.id.String())
+			changed = tag.RowsAffected()
+			return err
+		})
+		if tc.changed < 0 && err == nil || tc.changed >= 0 && (err != nil || changed != tc.changed) {
+			t.Errorf("%s on %v: %d rows changed (%v), want %d", tc.statement, tc.id, changed, err, tc.changed)
 		}
 	}
 }

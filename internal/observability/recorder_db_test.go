@@ -9,6 +9,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
 
@@ -33,6 +34,77 @@ func TestRestartDoesNotDuplicateCommittedRecords(t *testing.T) {
 	if got := list(t, db, accountScope(a), day(a)); len(got) != len(records) {
 		t.Errorf("%d rows after the replay, want %d: replay must not duplicate", len(got), len(records))
 	}
+}
+
+// TestASettledRecordCompletesItsPendingOne: a call recorded before its settlement is one row, which its settled record
+// completes whether the two reach the database in one batch or in two, and which no replay of either changes again; a
+// pending record whose settlement never came stays pending, without amounts. Each run is a recorder that drains its
+// records in one batch, as a restart replays the spill.
+func TestASettledRecordCompletesItsPendingOne(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	settled := record(uuid.NewV7(), now)
+	for _, tc := range []struct {
+		name string
+		runs [][]bool // each run's records, true for the pending one
+		want storedCall
+	}{
+		{"in one batch", [][]bool{{true, false}}, storedCall{1, 2, settled.PriceNano, false, settled.Free}},
+		{"in two batches", [][]bool{{true}, {false}}, storedCall{1, 2, settled.PriceNano, false, settled.Free}},
+		{"replayed after it", [][]bool{{true, false}, {true, false}, {true}}, storedCall{1, 2, settled.PriceNano, false, settled.Free}},
+		{"never settled", [][]bool{{true}, {true}}, storedCall{1, 2, 0, true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settled := settled
+			settled.ID = uuid.NewV7()
+			pending := settled
+			pending.BillingPending, pending.PriceNano, pending.Free, pending.PriceVersion = true, 0, false, ""
+			pending.Usage, pending.PhysicalInput = nil, nil
+			for _, run := range tc.runs {
+				writeRun(t, db, run, pending, settled)
+			}
+			if got := readStoredCall(t, db, settled.ID); got != tc.want {
+				t.Errorf("stored %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// writeRun writes one recorder's records, the pending one for true and the settled one for false, and drains them.
+func writeRun(t *testing.T, db *pg.DB, run []bool, pending, settled CallRecord) {
+	t.Helper()
+	r := recorderOfDB(t, db, Config{BatchSize: 10, FlushInterval: time.Hour})
+	for _, isPending := range run {
+		rec := settled
+		if isPending {
+			rec = pending
+		}
+		if err := r.Enqueue(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// storedCall is what the call log holds of one call: its rows, its attempts and the settlement's columns.
+type storedCall struct {
+	rows, attempts int64
+	price          int64
+	pending, free  bool
+}
+
+func readStoredCall(t *testing.T, db *pg.DB, id uuid.UUID) (c storedCall) {
+	t.Helper()
+	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT count(*), max(price_nano), bool_and(billing_pending), bool_and(free_of_charge),
+			(SELECT count(*) FROM observability.call_attempt WHERE request_id = $1)
+			FROM observability.call_log WHERE id = $1`, id.String()).Scan(&c.rows, &c.price, &c.pending, &c.free, &c.attempts)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c
 }
 
 // TestRecorderWritesThroughTheDatabase: the whole path, on a real database, in the platform scope.

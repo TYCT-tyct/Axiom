@@ -405,7 +405,7 @@ INSERT INTO observability.call_log (id, at, site_id, account_id, workspace_id, k
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, language, used_tools, has_image,
     has_file, model, endpoint_id, source_class, egress, attempt_count, route, usage, service_tier, price_version, price_nano,
     cost_nano, currency, free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, consent_version,
-    training_allowed, streamed, cache_hit, physical_input)
+    training_allowed, streamed, cache_hit, physical_input, billing_pending)
 SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (r ->> 'account_id')::uuid,
     (r ->> 'workspace_id')::uuid, (r ->> 'key_id')::uuid, r ->> 'end_user_hash', (r ->> 'ip')::inet,
     r ->> 'client_app', r ->> 'session_id', r ->> 'subagent_id', r ->> 'app_referer', r ->> 'app_title',
@@ -416,14 +416,19 @@ SELECT (r ->> 'id')::uuid, (r ->> 'at')::timestamptz, (r ->> 'site_id')::uuid, (
     nullif(r ->> 'price_version', '')::uuid, (r ->> 'price_nano')::bigint, (r ->> 'cost_nano')::bigint, r ->> 'currency', (r ->> 'free_of_charge')::boolean,
     (r ->> 'latency_ms')::integer, (r ->> 'first_token_ms')::integer, r ->> 'finish_reason', r ->> 'error_kind',
     r ->> 'consent_version', (r ->> 'training_allowed')::boolean, (r ->> 'streamed')::boolean,
-    coalesce((r ->> 'cache_hit')::boolean, false), (r ->> 'physical_input')::bigint
+    coalesce((r ->> 'cache_hit')::boolean, false), (r ->> 'physical_input')::bigint,
+    coalesce((r ->> 'billing_pending')::boolean, false)
 FROM jsonb_array_elements($1::jsonb) AS r
-ON CONFLICT (id, at) DO NOTHING
+ON CONFLICT (id, at) DO UPDATE SET usage = excluded.usage, service_tier = excluded.service_tier,
+    price_version = excluded.price_version, price_nano = excluded.price_nano,
+    free_of_charge = excluded.free_of_charge, physical_input = excluded.physical_input, billing_pending = false
+WHERE call_log.billing_pending AND NOT excluded.billing_pending
 `
 
 // One statement writes a whole batch: the rows arrive as one JSON array whose members carry the column names, and the
 // table's own types and checks refuse a malformed value. A row that is already there, from a write whose outcome
-// was unknown and is retried, is left as it is.
+// was unknown and is retried, is left as it is, except that a settled record completes a pending one: it writes the
+// settlement's columns, which the pending row was written without (README「写入」). The batch holds each call once.
 func (q *Queries) InsertCallLogs(ctx context.Context, db DBTX, rows []byte) (int64, error) {
 	result, err := db.Exec(ctx, insertCallLogs, rows)
 	if err != nil {
