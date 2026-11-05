@@ -25,8 +25,8 @@ func (l *openRouterListing) encodePage(v visibility, q orQuery, matched, size in
 	buf := append(make([]byte, 0, orRoom+len(next)+size), `{"data":[`...)
 	seen, written := 0, 0
 	for i := range l.models {
-		e := l.models[i].forAudience(v.audience)
-		if e == nil || !l.shows(v, e.model) || !q.keeps(e) {
+		e := l.entry(v, i)
+		if e == nil || !q.keeps(e) {
 			continue
 		}
 		if seen++; seen <= first || seen > last {
@@ -47,7 +47,7 @@ func (l *openRouterListing) encodePage(v visibility, q orQuery, matched, size in
 func (l *openRouterListing) encodeOrdered(v visibility, q orQuery) []byte {
 	matches := make([]*orModel, 0, len(l.models))
 	for i := range l.models {
-		if e := l.models[i].forAudience(v.audience); e != nil && l.shows(v, e.model) && q.keeps(e) {
+		if e := l.entry(v, i); e != nil && q.keeps(e) {
 			matches = append(matches, e)
 		}
 	}
@@ -71,8 +71,8 @@ func (l *openRouterListing) encodeOrdered(v visibility, q orQuery) []byte {
 // pageStats counts all matches but sizes only the page; subtraction avoids adding an unbounded offset to the limit.
 func (l *openRouterListing) pageStats(v visibility, q orQuery) (matched, size int) {
 	for i := range l.models {
-		e := l.models[i].forAudience(v.audience)
-		if e == nil || !l.shows(v, e.model) || !q.keeps(e) {
+		e := l.entry(v, i)
+		if e == nil || !q.keeps(e) {
 			continue
 		}
 		matched++

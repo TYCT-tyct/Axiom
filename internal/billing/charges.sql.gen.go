@@ -8,6 +8,7 @@ package billing
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -85,6 +86,49 @@ func (q *Queries) ReadCharges(ctx context.Context, db DBTX, ids []uuid.UUID) ([]
 			&i.Estimated,
 			&i.Price,
 			&i.Charged,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const settledFinals = `-- name: SettledFinals :many
+SELECT request_id, price_versions, entry, charged, waived, final_usage FROM billing.reservations
+WHERE request_id = ANY($1::uuid[]) AND state = 'settled'
+`
+
+type SettledFinalsRow struct {
+	RequestID     uuid.UUID
+	PriceVersions pgtype.FlatArray[uuid.UUID]
+	Entry         *int32
+	Charged       int64
+	Waived        bool
+	FinalUsage    []byte
+}
+
+// What a settlement stored of the named calls, for the call log to complete a record written before its settlement
+// committed. Corrections move charged and final_usage on the same row, so this is the charge as it stands now.
+func (q *Queries) SettledFinals(ctx context.Context, db DBTX, ids []uuid.UUID) ([]SettledFinalsRow, error) {
+	rows, err := db.Query(ctx, settledFinals, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SettledFinalsRow
+	for rows.Next() {
+		var i SettledFinalsRow
+		if err := rows.Scan(
+			&i.RequestID,
+			&i.PriceVersions,
+			&i.Entry,
+			&i.Charged,
+			&i.Waived,
+			&i.FinalUsage,
 		); err != nil {
 			return nil, err
 		}

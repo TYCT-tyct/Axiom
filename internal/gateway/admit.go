@@ -195,7 +195,7 @@ func (h *Handler) planAdmission(it *admissionItem) error {
 // be chosen only because the search results were not counted yet.
 func (h *Handler) planRoute(c *Call, admission accounts.Admission) (routing.Plan, error) {
 	plan, wait, err := h.Models.plan(h.Router, routing.Input{
-		Admission: routingAdmission(admission, c), Req: &c.Request, Models: c.models, Auto: c.auto, Free: c.free, Override: c.over, Sticky: c.sticky,
+		Admission: routingAdmission(admission, c.caller, c.site, c.snap), Req: &c.Request, Models: c.models, Auto: c.auto, Free: c.free, Override: c.over, Sticky: c.sticky,
 		// Compaction has no Chat counterpart; only the three chat formats convert. Direct formats and legacy
 		// completions have no counterpart either.
 		NativeOnly: c.Compact || !c.Request.Format.Convertible(),
@@ -212,18 +212,18 @@ func (h *Handler) planRoute(c *Call, admission accounts.Admission) (routing.Plan
 	return plan, err
 }
 
-// routingAdmission is what routing reads of the admission. A key with no preset is routed by the preset with the zero
-// ID, which the routing snapshot must hold.
-func routingAdmission(a accounts.Admission, c *Call) routing.Admission {
+// routingAdmission is what routing reads of the admission, for a call and for the model lists alike. A key with no
+// preset is routed by the preset with the zero ID, which the routing snapshot must hold.
+func routingAdmission(a accounts.Admission, caller accounts.Caller, site accounts.Site, snap *catalog.Snapshot) routing.Admission {
 	ra := routing.Admission{
-		Tier: a.Tier(), Account: routing.AccountID(c.caller.AccountID()), Site: routing.SiteID(c.site.ID),
-		Workspace: routing.WorkspaceID(c.caller.WorkspaceID()), Currency: c.site.Currency,
+		Tier: a.Tier(), Account: routing.AccountID(caller.AccountID()), Site: routing.SiteID(site.ID),
+		Workspace: routing.WorkspaceID(caller.WorkspaceID()), Currency: site.Currency,
 	}
 	if p, ok := a.Preset(); ok {
 		ra.Preset = routing.PresetID(p)
 	}
 	if names := a.Models(); names != nil { // nil allows every model, an empty list none
-		ra.Allowed = allowedModels(c.snap, names)
+		ra.Allowed = allowedModels(snap, names)
 	}
 	return ra
 }

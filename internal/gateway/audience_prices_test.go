@@ -46,7 +46,8 @@ func TestModelDiscoveryUsesAudiencePrices(t *testing.T) {
 		in.Admission.Account = routing.AccountID(account)
 		plan, _, err := f.router.Plan(in)
 		if blocked {
-			if err == nil || f.router.ServesFor(f.served, audience) || bytes.Contains(raw, []byte("acme/served")) || list.count(visibility, orQuery{}) != 0 {
+			keys, _ := f.router.KeyView(in.Admission) //nolint:errcheck // the fixture's snapshot holds the zero-ID preset
+			if err == nil || keys.Serves(f.served) || bytes.Contains(raw, []byte("acme/served")) || list.count(visibility, orQuery{}) != 0 {
 				t.Fatal("blocked audience still listed or routed")
 			}
 			continue

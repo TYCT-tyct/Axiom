@@ -43,6 +43,12 @@ type Config struct {
 	RetryMax      time.Duration
 	WriteTimeout  time.Duration // one write attempt; after it the batch is retried (the outcome of a timed-out write is unknown)
 	Meter         metric.Meter  // nil for none
+	// Ledger reads, in the writer's transaction, the Amounts the ledger holds for the named calls. The writer asks it
+	// only about the pending records of a batch, before inserting them: a settlement that committed while its record
+	// stayed pending (the node died before the settled record was kept, or the settlement's last try committed after
+	// it was given up) gives the record its amounts, and one that did not leaves the record pending (README「写入」).
+	// cmd/axiom gives billing's; nil leaves every pending record as it is.
+	Ledger Ledger
 }
 
 // queued is one call with its attempts, the unit a caller hands over and the writer keeps or loses whole.
@@ -92,18 +98,22 @@ type Recorder struct {
 // NewRecorder starts a Recorder that writes through db in scope, the platform scope: one batch holds the records of
 // many accounts. The writer takes ctx's values, such as the tracing provider, but not its end: only Close stops it.
 func NewRecorder(ctx context.Context, db *pg.DB, scope pg.Scope, cfg Config, logger *slog.Logger) (*Recorder, error) {
-	return newRecorder(ctx, cfg, dbWriter(db, scope), isBadRow, logger)
+	return newRecorder(ctx, cfg, dbWriter(db, scope, cfg.Ledger), isBadRow, logger)
 }
 
 // dbWriter writes a batch in one transaction in scope: the calls first, then their attempts, so a retried batch can
-// never leave attempts whose call is missing.
-func dbWriter(db *pg.DB, scope pg.Scope) func(context.Context, []queued) error {
+// never leave attempts whose call is missing. A pending record is completed from the ledger first, in the same
+// transaction.
+func dbWriter(db *pg.DB, scope pg.Scope, ledger Ledger) func(context.Context, []queued) error {
 	return func(ctx context.Context, batch []queued) error {
-		calls, attempts, err := marshalQueued(batch)
-		if err != nil {
-			return err
-		}
 		return db.Tx(ctx, scope, func(tx pg.Tx) error {
+			if err := settlePending(ctx, tx, ledger, batch); err != nil {
+				return err
+			}
+			calls, attempts, err := marshalQueued(batch)
+			if err != nil {
+				return err
+			}
 			queries := store.New()
 			if _, err := queries.InsertCallLogs(ctx, tx, calls); err != nil {
 				return err
@@ -111,7 +121,7 @@ func dbWriter(db *pg.DB, scope pg.Scope) func(context.Context, []queued) error {
 			if len(attempts) == 0 {
 				return nil
 			}
-			_, err := queries.InsertCallAttempts(ctx, tx, attempts)
+			_, err = queries.InsertCallAttempts(ctx, tx, attempts)
 			return err
 		})
 	}
