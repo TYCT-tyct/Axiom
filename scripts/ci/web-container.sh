@@ -42,6 +42,7 @@ if [ -n "${PGTEST_CLUSTER_URL:-}" ]; then
 fi
 # The shared 80-core budget / eight runners allows ten cores each; eight leaves room for host-side setup.
 # A private cgroup namespace lets Node count this quota, rather than the parent's 80 cores.
+# BASE (the commit a PR or train is measured against) lets the vitals serve that commit's frontend beside this one.
 docker create --name "$name" \
   --cpus 8 --cgroup-parent=axiom-ci.slice --cgroupns=private --user "$(id -u):$(id -g)" \
   --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --workdir "$GITHUB_WORKSPACE" \
@@ -49,7 +50,7 @@ docker create --name "$name" \
   --volume "$go_cache:$go_cache" --volume "$module_cache:$module_cache" \
   --volume "$pnpm_store:$pnpm_store" \
   --volume "$web_cache:/ci/axiom" \
-  --env PATH --env CI --env GATE_STRESS --env E2E_SHARD_INDEX --env E2E_SHARD_COUNT --env HOME=/tmp/axiom-web-home \
+  --env PATH --env CI --env GATE_STRESS --env E2E_SHARD_INDEX --env E2E_SHARD_COUNT --env BASE --env HOME=/tmp/axiom-web-home \
   --env GOCACHE="$go_cache" --env GOMODCACHE="$module_cache" --env AXIOM_CACHE_DIR=/ci/axiom \
   --env npm_config_store_dir="$(dirname "$pnpm_store")" \
   "${shared[@]}" \
