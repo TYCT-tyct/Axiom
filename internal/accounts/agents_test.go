@@ -325,6 +325,58 @@ func TestAuthorizeAgent(t *testing.T) {
 	}
 }
 
+// TestAgentMoneyIsLimited: a credential that asks for a money write every second for two hours never gets more than 30
+// in any minute nor 300 in any hour, yet keeps getting them at the hour's pace; another credential is not held up.
+func TestAgentMoneyIsLimited(t *testing.T) {
+	t.Parallel()
+	db, _, s, clock := agentSetup(t)
+	agent := func() accounts.Agent {
+		a, err := s.AuthenticateAgent(t.Context(), makeAgent(t, db, s, agentSpec(clock, "operations.money")).Token.Reveal())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	busy, quiet := agent(), agent()
+	start := clock.Now()
+	var granted []time.Duration
+	for range 2 * 3600 {
+		err := s.SpendAgentMoney(busy)
+		if wait, ok := errors.AsType[*accounts.TooManyAttempts](err); err != nil && (!ok || wait.RetryAfter <= 0) {
+			t.Fatalf("a refusal without a wait: %v", err)
+		}
+		if err == nil {
+			granted = append(granted, clock.Now().Sub(start))
+		}
+		clock.advance(time.Second)
+	}
+	for window, limit := range map[time.Duration]int{time.Minute: 30, time.Hour: 300} {
+		if n, from := busiest(granted, window); n > limit {
+			t.Errorf("%d money writes in the %s from %s, over %d", n, window, from, limit)
+		}
+	}
+	if len(granted) < 440 {
+		t.Errorf("%d money writes in two hours: the limit holds the agent back more than it says", len(granted))
+	}
+	if err := s.SpendAgentMoney(quiet); err != nil {
+		t.Errorf("another credential is held up: %v", err)
+	}
+}
+
+// busiest is the most of the sorted times that fall in one window, and where that window starts.
+func busiest(times []time.Duration, window time.Duration) (most int, from time.Duration) {
+	end := 0
+	for start, at := range times {
+		for end < len(times) && times[end]-at < window {
+			end++
+		}
+		if end-start > most {
+			most, from = end-start, at
+		}
+	}
+	return most, from
+}
+
 // TestAgentRequestsAreLimited: a credential gets its burst on a node and then waits; another credential is not held up.
 func TestAgentRequestsAreLimited(t *testing.T) {
 	t.Parallel()

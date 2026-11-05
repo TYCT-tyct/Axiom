@@ -175,13 +175,16 @@ func TestCancel(t *testing.T) {
 	}
 }
 
-// TestRegisterExpiry: the sweep registers on the queue before it starts.
+// TestRegisterExpiry: the sweep and the reconciliation register on the queue before it starts.
 func TestRegisterExpiry(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
 	logger := slog.New(slog.DiscardHandler)
 	queue := db.NewQueue(logger, platformScope, nil)
 	if err := operations.RegisterExpiry(db.DB, platformScope, queue, logger); err != nil {
+		t.Fatal(err)
+	}
+	if err := operations.RegisterReconcile(db.DB, platformScope, queue, logger); err != nil {
 		t.Fatal(err)
 	}
 }

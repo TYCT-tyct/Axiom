@@ -99,6 +99,31 @@ func TestExpiryJobRun(t *testing.T) {
 	}
 }
 
+// TestCapUsages: each policy is read with what its category holds in the current day and week, a waiting proposal's
+// reservation included, and a policy nothing was proposed under holds nothing.
+func TestCapUsages(t *testing.T) {
+	t.Parallel()
+	r := newReservations(t)
+	site := uuid.NewV7()
+	if _, err := r.setPolicy(t, limits(&site), 0); err != nil {
+		t.Fatal(err)
+	}
+	r.direct(5)
+	r.pending()
+	var usage []operations.CapUsage
+	if err := r.ReadTx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
+		usage, err = operations.CapUsages(t.Context(), tx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(usage) != 2 || usage[0].Policy.Site != nil || usage[0].Day != usage[0].Week ||
+		usage[0].Day != (operations.WindowUsage{Reserved: 17, Count: 2}) || usage[1].Day != (operations.WindowUsage{}) ||
+		usage[0].DayStart.Before(usage[0].WeekStart) {
+		t.Errorf("the usage: %+v", usage)
+	}
+}
+
 // TestCapPolicyReads: the policies are listed the platform's first, a scope's currency is its policy's, and a scope
 // without one has none.
 func TestCapPolicyReads(t *testing.T) {
@@ -209,6 +234,11 @@ func TestFailuresReachTheCaller(t *testing.T) {
 	p := topUp(r.credential, uuid.NewV7(), nil, "s1", 1)
 	calls := map[string]func(ctx context.Context, tx pg.Tx) error{
 		"CapPolicies": func(ctx context.Context, tx pg.Tx) error { _, err := operations.CapPolicies(ctx, tx); return err },
+		"CapUsages":   func(ctx context.Context, tx pg.Tx) error { _, err := operations.CapUsages(ctx, tx); return err },
+		"RepairCaps": func(ctx context.Context, tx pg.Tx) error {
+			_, err := operations.RepairCaps(ctx, tx, owner, operations.CategoryTopUp, nil, "r")
+			return err
+		},
 		"SetCapPolicy": func(ctx context.Context, tx pg.Tx) error {
 			_, err := operations.SetCapPolicy(ctx, tx, owner, r.policy, 1, "r")
 			return err
@@ -272,5 +302,8 @@ func TestFailuresReachTheCaller(t *testing.T) {
 		if !errors.Is(got, context.Canceled) {
 			t.Errorf("%s with a failing database: %v", name, got)
 		}
+	}
+	if _, err := operations.ReconcileCaps(canceled, r.DB, platformScope); !errors.Is(err, context.Canceled) {
+		t.Errorf("ReconcileCaps with a failing database: %v", err)
 	}
 }

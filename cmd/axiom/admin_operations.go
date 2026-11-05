@@ -345,14 +345,11 @@ func (a adminAPI) ListOperationsCapPolicies(ctx context.Context, _ adminapi.List
 func (a adminAPI) SetOperationsCapPolicy(ctx context.Context, r adminapi.SetOperationsCapPolicyRequestObject) (adminapi.SetOperationsCapPolicyResponseObject, error) {
 	b := r.Body
 	l := b.Limits
-	p := operations.CapPolicy{Category: operations.Category(r.Category), DailyCount: l.DailyCountMax}
-	if r.Scope != "platform" {
-		site, err := accounts.ParseSiteID(r.Scope)
-		if err != nil {
-			return nil, invalidField("scope", "not platform or a site ID")
-		}
-		p.Site = new(uuid.UUID(site))
+	site, err := capScopeOf(r.Scope)
+	if err != nil {
+		return nil, err
 	}
+	p := operations.CapPolicy{Site: site, Category: operations.Category(r.Category), DailyCount: l.DailyCountMax}
 	currency, err := platform.ParseCurrency(b.Currency)
 	if err != nil {
 		return nil, invalidField("/currency", "not a currency code")
@@ -385,6 +382,37 @@ func (a adminAPI) SetOperationsCapPolicy(ctx context.Context, r adminapi.SetOper
 	return adminapi.SetOperationsCapPolicy200JSONResponse{Body: body, Headers: adminapi.SetOperationsCapPolicy200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
+// RepairOperationsCapCounters recomputes the counters of a scope and category from its money actions and resumes it.
+func (a adminAPI) RepairOperationsCapCounters(ctx context.Context, r adminapi.RepairOperationsCapCountersRequestObject) (adminapi.RepairOperationsCapCountersResponseObject, error) {
+	site, err := capScopeOf(r.Scope)
+	if err != nil {
+		return nil, err
+	}
+	body, replayed, err := idempotently(ctx, a.db, "repairOperationsCapCounters", r.Params.IdempotencyKey, r, func(tx pg.Tx) (adminapi.OperationsCapPolicy, error) {
+		p, err := operations.RepairCaps(ctx, tx, actor(ctx), operations.Category(r.Category), site, r.Body.Reason)
+		if errors.Is(err, operations.ErrNoCapPolicy) {
+			return adminapi.OperationsCapPolicy{}, accounts.ErrNotFound
+		}
+		return capPolicyBody(p), err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return adminapi.RepairOperationsCapCounters200JSONResponse{Body: body, Headers: adminapi.RepairOperationsCapCounters200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// capScopeOf is the site a cap policy's scope names, nil for the platform.
+func capScopeOf(scope string) (site *uuid.UUID, err error) {
+	if scope != "platform" {
+		id, err := accounts.ParseSiteID(scope)
+		if err != nil {
+			return nil, invalidField("scope", "not platform or a site ID")
+		}
+		site = new(uuid.UUID(id))
+	}
+	return site, nil
+}
+
 func capPolicyBody(p operations.CapPolicy) adminapi.OperationsCapPolicy {
 	scope := "platform"
 	if p.Site != nil {
@@ -393,7 +421,7 @@ func capPolicyBody(p operations.CapPolicy) adminapi.OperationsCapPolicy {
 	text := func(n int64) string { return strconv.FormatInt(n, 10) }
 	return adminapi.OperationsCapPolicy{
 		Scope: scope, Category: adminapi.OperationsCapCategory(p.Category), Currency: p.Currency.String(), Rev: p.Rev,
-		UpdatedAt: p.Updated, Limits: adminapi.OperationsCapLimits{
+		UpdatedAt: p.Updated, PausedAt: p.Paused, Limits: adminapi.OperationsCapLimits{
 			SingleMax: text(p.Single), DailyMax: text(p.Daily), WeeklyMax: text(p.Weekly), ObjectDailyMax: text(p.ObjectDaily),
 			DailyCountMax: p.DailyCount, HardSingleMax: text(p.HardSingle), HardDailyMax: text(p.HardDaily),
 			HardWeeklyMax: text(p.HardWeekly),

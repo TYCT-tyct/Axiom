@@ -56,6 +56,11 @@ class Artifacts(unittest.TestCase):
             # the allowlist, and a file with nothing wrong with it
             ("a recorded sample", {"note.txt": "kept\n"},
              {"internal/protocol/testdata/plant/upstream.sse": "a" * (LIMIT + 1) + "\0"}, True, None, ""),
+            ("a contract's generated server", {"note.txt": "kept\n"},
+             {"internal/platform/adminapi/adminapi.gen.go": "a" * (LIMIT + 1)}, True, None, ""),
+            ("a hand-written file beside it", {"note.txt": "kept\n"},
+             {"internal/platform/adminapi/big.go": "a" * (LIMIT + 1)}, True, "internal/platform/adminapi/big.go",
+             "bytes is over the 1 MB limit"),
             ("a source file", {"note.txt": "kept\n"}, {"internal/plant/plant.go": "package plant\n"}, True, None, ""),
         ]
         for name, main, branch, origin_main, refused, why in cases:

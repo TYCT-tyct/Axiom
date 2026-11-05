@@ -39,6 +39,9 @@ BINARY_SUFFIXES = frozenset((
 ALLOWED = (
     ("internal/protocol/testdata/*",
      "recorded streams keep the upstream's bytes (.gitattributes), and a planned one is a 16 MiB output"),
+    ("internal/platform/*api/*.gen.go",
+     "the Go just generate writes from api/*.yaml, where a change is reviewed; the generated check writes it again and "
+     "fails on any difference, and the admin contract's server passed 1 MB with its operations"),
 )
 
 

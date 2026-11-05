@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -92,6 +93,45 @@ func (o operationsAPI) SupplierTopUpConfirm(ctx context.Context, r operationsapi
 		return nil, err
 	}
 	return operationsapi.SupplierTopUpConfirm200JSONResponse{Body: operationBody(op), Headers: operationsapi.SupplierTopUpConfirm200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// CapsGet reads the caps of the scopes the credential's money writes act in, its sites' and with the platform grant the
+// platform's, with what each holds now.
+func (o operationsAPI) CapsGet(ctx context.Context, _ operationsapi.CapsGetRequestObject) (operationsapi.CapsGetResponseObject, error) {
+	c := callOf(ctx)
+	self := c.agent.Info()
+	reaches := func(site *uuid.UUID) bool {
+		if site == nil {
+			return self.Platform
+		}
+		return self.Sites == nil || slices.Contains(self.Sites, accounts.SiteID(*site))
+	}
+	list := operationsapi.OperationsCapUsageList{Data: []operationsapi.OperationsCapUsage{}}
+	err := o.db.ReadTx(ctx, c.scope, func(tx pg.Tx) error {
+		usage, err := operations.CapUsages(ctx, tx)
+		for _, u := range usage {
+			if !reaches(u.Policy.Site) {
+				continue
+			}
+			p := capPolicyBody(u.Policy)
+			list.Data = append(list.Data, operationsapi.OperationsCapUsage{
+				Scope: p.Scope, Category: operationsapi.OperationsCapCategory(p.Category), Currency: p.Currency,
+				Limits: operationsapi.OperationsCapLimits(p.Limits), Rev: p.Rev, Paused: p.PausedAt != nil,
+				Day: capWindow(u.DayStart, u.Day), Week: capWindow(u.WeekStart, u.Week),
+			})
+		}
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return operationsapi.CapsGet200JSONResponse(list), nil
+}
+
+func capWindow(start time.Time, u operations.WindowUsage) operationsapi.OperationsCapWindow {
+	return operationsapi.OperationsCapWindow{
+		Start: start, Reserved: strconv.FormatInt(u.Reserved, 10), Committed: strconv.FormatInt(u.Committed, 10), Count: u.Count,
+	}
 }
 
 // money runs a money write in one transaction; a preview runs it to its end and rolls it back, so every check ran and
