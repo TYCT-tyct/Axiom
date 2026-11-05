@@ -237,7 +237,8 @@ func (h *harness) route(in routing.Input) []routing.EndpointID {
 }
 
 // TestPresetRulesRoute: each kind of rule changes the route as it says, on the default rule, on the model's author's
-// rule and on the model's own; a rule for another author or model changes nothing.
+// rule and on the model's own; a rule for another author or model changes nothing. The model lists' view of the key
+// keeps the endpoints the route may take, and the model while it keeps one.
 func TestPresetRulesRoute(t *testing.T) {
 	t.Parallel()
 	cheapFirst, fastFirst := []routing.EndpointID{ep(2), ep(1)}, []routing.EndpointID{ep(1), ep(2)}
@@ -265,11 +266,29 @@ func TestPresetRulesRoute(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			p := compiled(t, tc.rules)
-			if got := presetHarness(t, p).route(presetInput()); !slices.Equal(got, tc.want) {
+			h := presetHarness(t, compiled(t, tc.rules))
+			if got := h.route(presetInput()); !slices.Equal(got, tc.want) {
 				t.Errorf("route %v, want %v", got, tc.want)
 			}
+			checkView(t, h, tc.want)
 		})
+	}
+}
+
+// checkView checks that the key's view for the model lists keeps exactly the endpoints the route may take.
+func checkView(t *testing.T, h *harness, route []routing.EndpointID) {
+	t.Helper()
+	v, err := h.r.KeyView(presetInput().Admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []routing.EndpointID{ep(1), ep(2)} {
+		if v.Allows(model, e) != slices.Contains(route, e) {
+			t.Errorf("the view allows %v: %v", e, v.Allows(model, e))
+		}
+	}
+	if v.Serves(model) != (len(route) > 0) {
+		t.Errorf("the view serves the model: %v", v.Serves(model))
 	}
 }
 
@@ -304,7 +323,8 @@ func TestRequestOnlyTightensThePreset(t *testing.T) {
 }
 
 // TestPresetVisibility: a key is routed only by a preset of its own layers, and by a platform preset whose price limits
-// are in its site's currency. Anything else is unavailable rather than routed by, whatever bound the key to it.
+// are in its site's currency. Anything else is unavailable rather than routed by, whatever bound the key to it, and the
+// model lists refuse it alike.
 func TestPresetVisibility(t *testing.T) {
 	t.Parallel()
 	elsewhere := func(p *routing.Preset) {}
@@ -333,6 +353,9 @@ func TestPresetVisibility(t *testing.T) {
 			_, _, err := h.r.Plan(presetInput())
 			if unavailable := errors.Is(err, routing.ErrPresetUnavailable); unavailable == tc.ok || !tc.ok && err == nil {
 				t.Errorf("Plan: %v", err)
+			}
+			if _, err := h.r.KeyView(presetInput().Admission); errors.Is(err, routing.ErrPresetUnavailable) == tc.ok {
+				t.Errorf("KeyView: %v", err)
 			}
 		})
 	}

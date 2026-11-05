@@ -10,10 +10,15 @@ import (
 	"axiom/internal/routing"
 )
 
-// benchListing is a listing of n models, two names each, and a router whose snapshot has an endpoint for every one.
-func benchListing(b *testing.B, n int) (*listing, *routing.Router, []catalog.ModelID) {
+// benchListing is a listing of n models, two names each, and the view of a key without a preset of a snapshot that has
+// a priced endpoint for every one, under the open zero-ID preset such a key is routed by.
+func benchListing(b *testing.B, n int) (*listing, *routing.KeyView, []catalog.ModelID) {
 	b.Helper()
 	router, err := routing.New(routing.Config{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	price, err := catalog.ParseSchedule([]byte(cheap))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -33,14 +38,21 @@ func benchListing(b *testing.B, n int) (*listing, *routing.Router, []catalog.Mod
 		}
 		l.models = append(l.models, m)
 		ids = append(ids, id)
-		endpoints = append(endpoints, routing.Endpoint{ID: routing.EndpointID(uuid.NewV7()), Model: id, Context: 1, ServiceTiers: 1 << catalog.ServiceTierStandard})
+		endpoints = append(endpoints, routing.Endpoint{
+			ID: routing.EndpointID(uuid.NewV7()), Model: id, Context: 1, ServiceTiers: 1 << catalog.ServiceTierStandard,
+			Class: routing.ClassOfficial, Price: routing.PriceRef{Version: uuid.NewV7(), Schedule: price},
+		})
 	}
-	snap, err := router.NewSnapshot(time.Now(), endpoints, nil)
+	snap, err := router.NewSnapshot(time.Now(), endpoints, []routing.Preset{{Classes: routing.AllClasses, Policies: routing.AllPolicies}})
 	if err != nil {
 		b.Fatal(err)
 	}
 	router.Replace(snap)
-	return l, router, ids
+	keys, err := router.KeyView(routing.Admission{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return l, &keys, ids
 }
 
 // BenchmarkModelList is what a request to GET /v1/models costs after its key is admitted: choosing the entries its key
@@ -49,7 +61,7 @@ func benchListing(b *testing.B, n int) (*listing, *routing.Router, []catalog.Mod
 // benchmark fails if it grows, and bench-compare holds the count after that.
 func BenchmarkModelList(b *testing.B) {
 	for _, n := range []int{50, 300} {
-		l, router, ids := benchListing(b, n)
+		l, keys, ids := benchListing(b, n)
 		half := map[catalog.ModelID]struct{}{}
 		for i := 0; i < len(ids); i += 2 {
 			half[ids[i]] = struct{}{}
@@ -58,7 +70,7 @@ func BenchmarkModelList(b *testing.B) {
 			name    string
 			allowed map[catalog.ModelID]struct{}
 		}{{"all", nil}, {"half", half}} {
-			v := visibility{allowed: key.allowed, router: router}
+			v := visibility{allowed: key.allowed, keys: keys}
 			b.Run(fmt.Sprintf("models=%d/key=%s", n, key.name), func(b *testing.B) {
 				if allocs := testing.AllocsPerRun(10, func() { l.encode(v) }); allocs > 1 {
 					b.Fatalf("encode allocates %v times, want the one buffer", allocs)

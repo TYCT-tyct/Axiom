@@ -28,7 +28,7 @@ func (h *Handler) discoverOpenRouter(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, format, err)
 		return
 	}
-	l := h.Models.published()
+	l := v.listing
 	switch r.URL.Path {
 	case orListPath + "/count":
 		q, err := readORCountQuery(r)
@@ -58,7 +58,7 @@ const orProviders = `{"data":[{"datacenters":null,"headquarters":null,"name":"Ax
 func (l *openRouterListing) count(v visibility, q orQuery) int {
 	n := 0
 	for i := range l.models {
-		if e := l.models[i].forAudience(v.audience); e != nil && l.shows(v, e.model) && q.keeps(e) {
+		if e := l.entry(v, i); e != nil && q.keeps(e) {
 			n++
 		}
 	}

@@ -22,15 +22,17 @@ const (
 )
 
 // visibility is what the model endpoints show: the catalog snapshot, the models this key may call (nil is every model)
-// and the router that says which models have a route. A model is shown when both agree. Capacity is not part of it: an
-// endpoint that is full, broken or out of budget must not make its model vanish from the list, because a call is what
-// waits for capacity and the list is not (routing.Router.Serves). The list in OpenRouter's shape asks the router nothing:
-// the build that made it recorded which models it served, so one response is one build's (openRouterListing.shows).
+// and the key's view of the routing snapshot, which says which models have an endpoint its preset leaves it. A model is
+// shown when both agree. Capacity is not part of it: an endpoint that is full, broken or out of budget must not make its
+// model vanish from the list, because a call is what waits for capacity and the list is not (routing.KeyView). The list
+// in OpenRouter's shape is the one published with the snapshot the view is of, so one response is one build's
+// (openRouterListing.entry).
 type visibility struct {
 	audience billing.Audience
 	snap     *catalog.Snapshot
 	allowed  map[catalog.ModelID]struct{} // nil: every model
-	router   *routing.Router
+	listing  *openRouterListing
+	keys     *routing.KeyView // nil only where tests read a projection with no key: then no preset narrows it
 }
 
 // modelRoutes adds the model list and the single model. The list under /api/v1 is OpenRouter's shape and the one under /v1
@@ -115,10 +117,11 @@ func formatFor(r *http.Request) protocol.Format {
 }
 
 // visible reads the catalog and the key's models, judging the key as an admission does: the database says whether it
-// may be used now, and allowedModels, the function the call path filters its route with (routingAdmission), says which
-// models its names stand for. The two answers cannot drift apart.
+// may be used now, and routingAdmission, what the call path routes with, says which models its names stand for and
+// which preset is its. The answers cannot drift apart. A key whose preset routing cannot use is the call's 503
+// preset_unavailable here too: it can call nothing, and a list would say it can.
 func (h *Handler) visible(r *http.Request) (visibility, error) {
-	_, caller, err := h.authenticate(r)
+	site, caller, err := h.authenticate(r)
 	if err != nil {
 		return visibility{}, err
 	}
@@ -126,24 +129,27 @@ func (h *Handler) visible(r *http.Request) (visibility, error) {
 	if err != nil {
 		return visibility{}, err
 	}
-	var allowed map[catalog.ModelID]struct{}
-	var audience billing.Audience
+	var ra routing.Admission
 	err = h.authorise(r, caller, func(_ context.Context, _ pg.Tx, a accounts.Admission) error {
-		audience = billing.Audience{Account: a.Caller().AccountID(), Tier: a.Tier()}
-		if names := a.Models(); names != nil { // nil allows every model, an empty list none
-			allowed = allowedModels(snap, names)
-		}
+		ra = routingAdmission(a, caller, site, snap)
 		return nil
 	})
 	if err != nil {
 		return visibility{}, err
 	}
-	return visibility{snap: snap, allowed: allowed, router: h.Router, audience: audience}, nil
+	listing, keys, err := h.Models.keyView(h.Router, ra)
+	if err != nil {
+		return visibility{}, err
+	}
+	return visibility{
+		snap: snap, allowed: ra.Allowed, listing: listing, keys: &keys,
+		audience: billing.Audience{Account: accounts.AccountID(ra.Account), Tier: ra.Tier},
+	}, nil
 }
 
-// shows says whether the model is for this key to see: it may call it, and a call has a route to take.
+// shows says whether the model is for this key to see: it may call it, and its preset leaves it an endpoint.
 func (v visibility) shows(m catalog.ModelID) bool {
-	return v.allows(m) && v.router.ServesFor(m, v.audience)
+	return v.allows(m) && v.keys.Serves(m)
 }
 
 // allows says whether this key may call the model, whatever routing holds now: the half of shows that the list in

@@ -399,22 +399,30 @@ func TestWait(t *testing.T) {
 	}
 }
 
-// TestServes: a model is served when the snapshot has an endpoint for it, whatever state the endpoint is in right now,
-// and however old the snapshot is; a model without one, or a router without a snapshot, serves nothing.
-func TestServes(t *testing.T) {
+// TestKeyView: the model lists' view keeps a model while the snapshot has an endpoint for it that the key can see, whatever
+// state the endpoint is in right now and however old the snapshot is; a model without one, or a router without a
+// snapshot, has none. A preset Plan refuses is refused here too.
+func TestKeyView(t *testing.T) {
 	t.Parallel()
-	if mustRouter(t).ServesFor(model, billing.Audience{}) {
-		t.Error("a router without a snapshot serves a model")
+	in := input()
+	if v, err := mustRouter(t).KeyView(in.Admission); err != nil || v.Serves(model) || v.Allows(model, ep(1)) {
+		t.Errorf("a router without a snapshot: serves %v, error %v", v.Serves(model), err)
 	}
+	foreign := func(e *routing.Endpoint) { e.Model, e.Owner = other, routing.Owner{Account: routing.AccountID(id(77))} }
 	h := newHarness(t, routing.Config{}, openPreset(),
-		endpoint(t, 1, func(e *routing.Endpoint) { e.Enabled, e.BreakerOpen, e.MaxConcurrent = false, true, 1 }))
+		endpoint(t, 1, func(e *routing.Endpoint) { e.Enabled, e.BreakerOpen, e.MaxConcurrent = false, true, 1 }), endpoint(t, 2, foreign))
 	h.r.Begin(ep(1))
 	h.now = t0.Add(time.Hour) // far past MaxStale: Plan refuses, the list still knows the route
-	if _, _, err := h.r.Plan(input()); !errors.Is(err, routing.ErrStale) {
+	if _, _, err := h.r.Plan(in); !errors.Is(err, routing.ErrStale) {
 		t.Fatalf("a snapshot an hour old: %v, want ErrStale", err)
 	}
-	if !h.r.ServesFor(model, billing.Audience{}) || h.r.ServesFor(other, billing.Audience{}) {
-		t.Errorf("served: model %v, other %v; want true, false", h.r.ServesFor(model, billing.Audience{}), h.r.ServesFor(other, billing.Audience{}))
+	v, err := h.r.KeyView(in.Admission)
+	if err != nil || !v.Serves(model) || !v.Allows(model, ep(1)) || v.Serves(other) {
+		t.Errorf("served: model %v, other's only by another account %v, error %v; want true, false", v.Serves(model), v.Serves(other), err)
+	}
+	in.Admission.Preset = routing.PresetID(id(404))
+	if _, err := h.r.KeyView(in.Admission); !errors.Is(err, routing.ErrPresetUnavailable) {
+		t.Errorf("a preset the snapshot does not hold: %v", err)
 	}
 }
 
