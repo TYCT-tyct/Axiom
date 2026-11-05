@@ -1,12 +1,13 @@
-import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
+import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { Button, DataState, Icon } from "@axiom/ui";
+import { Button } from "@axiom/ui";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "./change";
 import { Facts, State, Time } from "./parts";
 import { routingSuspensionQuery } from "./queries";
+import { NodeState } from "./routing-limits";
 
 type Suspension = AdminSchemas["RoutingPresetSuspension"];
 
@@ -16,25 +17,18 @@ export function RoutingSuspension() {
   return <SuspensionState query={useQuery(routingSuspensionQuery)} />;
 }
 
-// SuspensionState shows the card, or for a node of a release without the switch, which answers 404, says so and offers
-// to ask again: DataState would call it a missing page and offer nothing.
+// SuspensionState shows the card, or for a node of a release without the switch says it is not there yet.
 export function SuspensionState({ query }: { query: UseQueryResult<Suspension> }) {
   const { t } = useTranslation();
-  if (query.error instanceof ApiError && query.error.status === 404) {
-    return (
-      <Facts
-        title={t("routingPresets.suspension.title")}
-        action={
-          <Button size="md" disabled={query.isFetching} onClick={() => void query.refetch()}>
-            <Icon name="refresh" />
-            {t("routingPresets.limits.retry")}
-          </Button>
-        }
-        rows={[[t("routingPresets.unavailableTitle"), t("routingPresets.suspension.unavailable")]]}
-      />
-    );
-  }
-  return <DataState query={query}>{(suspension) => <SuspensionCard suspension={suspension} />}</DataState>;
+  return (
+    <NodeState
+      query={query}
+      title={t("routingPresets.suspension.title")}
+      unavailable={t("routingPresets.suspension.unavailable")}
+    >
+      {(suspension) => <SuspensionCard suspension={suspension} />}
+    </NodeState>
+  );
 }
 
 // SuspensionCard is the switch's state, which a refetch keeps current, and the change to the other state. The dialog

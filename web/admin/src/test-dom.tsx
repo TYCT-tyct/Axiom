@@ -35,3 +35,14 @@ export async function renderInDom(node: ReactNode) {
     },
   };
 }
+
+// signedIn is @axiom/app for vi.mock, with an operator signed in who holds permissions, and errors that read "failed":
+// vi.mock("@axiom/app", async (original) => (await import("./test-dom")).signedIn(original, ["sites.manage"])).
+export async function signedIn(importOriginal: <T>() => Promise<T>, permissions: string[] = []) {
+  const actual = await importOriginal<typeof import("@axiom/app")>();
+  return {
+    ...actual,
+    useErrors: () => ({ message: () => "failed", field: () => undefined }),
+    useSession: () => ({ user: { id: "u1" }, account: "a1", permissions }),
+  };
+}

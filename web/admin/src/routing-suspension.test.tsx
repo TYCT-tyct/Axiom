@@ -7,15 +7,9 @@ import { renderInDom } from "./test-dom";
 
 const sent = vi.hoisted(() => [] as unknown[]);
 
-vi.mock("@axiom/app", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@axiom/app")>();
-  return {
-    ...actual,
-    can: () => true,
-    useErrors: () => ({ message: () => "failed", field: () => undefined }),
-    useSession: () => ({ user: { id: "u1" }, account: "a1" }),
-  };
-});
+vi.mock("@axiom/app", async (importOriginal) =>
+  (await import("./test-dom")).signedIn(importOriginal, ["sites.manage"]),
+);
 
 vi.mock("@axiom/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@axiom/api")>();
