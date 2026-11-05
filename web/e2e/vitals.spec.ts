@@ -11,6 +11,7 @@ import { consoleSuite } from "./console-scenes.ts";
 import { signedInAs } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
 import type { Scene, Suite } from "./scene.ts";
+import { traced } from "./vitals-cpu.ts";
 import { words } from "./words.ts";
 
 // The performance budgets of docs/frontend.md「前端性能指标」 as checks: LCP and CLS of the main pages on a phone over a
@@ -19,7 +20,9 @@ import { words } from "./words.ts";
 // and the long-task observer), written to the report (each test's annotations, which Playwright's reporters list), and compared
 // with the budget (below); a page over its ceiling fails the run. The numbers are timings of the host in this run, so
 // each page load is scaled by the reference page measured beside it (below): the measurements are the median of three
-// page loads, each between two reference loads (LCP), or the worst of the operation (INP), as the document states.
+// page loads, each between two reference loads (LCP), or the worst of the operation (INP), as the document states. The
+// overview cannot be scaled that way (docs/frontend.md「实测」), so its gate is the main-thread CPU time of its own
+// three loads, measured from a trace.
 
 // target is the budget of the document; ceiling is what fails the run. Where the pages do not meet a target yet, the
 // ceiling is the first measurement with room for a slower host (docs/frontend.md「实测」), so the gate stops a page from
@@ -46,19 +49,23 @@ const desktop = { rtt: 40, down: 10 * 1024 * 0.9 * 128, up: 10 * 1024 * 0.9 * 12
 type Profile = typeof phone;
 
 // Every number here is a timing of this host, and the vitals job shares its host with the other jobs of its train and of
-// every pull request building beside it. Each page load is therefore measured between two loads of the console overview,
-// the lightest page with the same shell and a table of mocked data, each in a fresh context with the same throttle. The
-// page's LCP is scaled to the mean of the two reference loads around it on the 2026-10-30 run the ceilings came from, and
-// the median of the three scaled loads drops the one a burst landed in (docs/frontend.md「实测」). A burst stretches a
-// whole load, not one side of it, and contention can only delay a load, never hurry one.
+// every pull request building beside it. Each page load except the overview is therefore measured between two loads of
+// the console overview, the lightest page with the same shell and a table of mocked data, each in a fresh context with
+// the same throttle. The page's LCP is scaled to the mean of the two reference loads around it on the 2026-10-30 run the
+// ceilings came from, and the median of the three scaled loads drops the one a burst landed in (docs/frontend.md
+// 「实测」). A burst stretches a whole load, not one side of it, and contention can only delay a load, never hurry one.
 //
-// The overview cannot be its own reference: a gate on its raw LCP is a gate on the host. Its reference is the sign-in
-// page, a static page of the same build (the same entry, styles and fonts) but outside the shell, so a slower overview or
-// a slower shared shell shows against it while host load stretches both. The two pages check each other: each is measured
-// between two loads of the other, scaled to the other's LCP on the baseline run. The sign-in LCP there is the overview's
-// 3.496/0.948 s times the 0.88/1.15 ratio measured beside it on the 2026-11-04 host.
+// The overview cannot be scaled that way: sign-in's LCP moved 1.24x while the overview's moved 3.5x on run 41983413805,
+// because the overview runs the shell's JavaScript, API calls and a table and sign-in much less; CPU contention stretches
+// them differently (docs/frontend.md「实测」). Its gate is therefore the CPU time of its own load, from a trace: the sum
+// of the main-thread tasks' `tdur`, which excludes the time the thread was descheduled, taken as the smallest of three
+// loads because contention can only add to it. The ceilings keep the LCP budgets' headroom over the clean build's 340 ms
+// (desktop) and 1900 ms (phone) main-thread time: 340 x 1500/948 and 1900 x 6000/3496.
 const overviewMs = { phone: 3496, desktop: 948 } as Record<"phone" | "desktop", number>;
-const signInMs = { phone: 3076, desktop: 1090 } as Record<"phone" | "desktop", number>;
+const overviewCpu = {
+  desktop: { baseline: 340, target: 540, ceiling: 540 },
+  phone: { baseline: 1900, target: 3260, ceiling: 3260 },
+} satisfies Record<"phone" | "desktop", { baseline: number } & Limit>;
 
 // web-vitals' IIFE build, which a page gets before its own scripts so it sees the whole load.
 // The package does not export its IIFE file, so it is found beside the CommonJS one the package does.
@@ -116,6 +123,29 @@ async function load(
   return result;
 }
 
+// busyLoad is one scene in a fresh context with the profile's throttle, traced from before the navigation to after the
+// page settled. The context is closed even when the load fails, so a trace cannot outlive its test.
+async function busyLoad(
+  browser: Browser,
+  profile: Profile,
+  device: Parameters<Browser["newContext"]>[0],
+  suite: Suite,
+  scene: Scene,
+): Promise<Vitals & { busyMs: number }> {
+  const page = await measuredPage(browser, profile, device);
+  try {
+    await suite.prepare(page, scene);
+    const session = await page.context().newCDPSession(page);
+    const { result, busyMs } = await traced(session, async () => {
+      await scene.open(page);
+      return vitals(page);
+    });
+    return { ...result, busyMs };
+  } finally {
+    await page.context().close();
+  }
+}
+
 // A throttled page is slow by design: the 4x CPU and the slow network stretch a load and its waits well past the 30 s.
 test.describe.configure({ timeout: 120_000 });
 
@@ -138,17 +168,13 @@ function sceneOf(suite: Suite, name: string) {
 
 // The console overview is the reference for the pages with its shell: the lightest page with that shell and a mocked
 // table, so a slow host or a busy neighbour stretches both, and scaling keeps the ceiling a page budget rather than a
-// host budget. The overview is the sign-in page's reference in the same way; its own LCP is gated against sign-in.
+// host budget. The overview's own gate is the main-thread CPU time of its three loads (measureOverview), not a ratio.
 const overview = sceneOf(consoleSuite, "overview");
-const signIn = sceneOf(consoleSuite, "sign-in");
 
-// The pages a person lands on and works in, by their names in the suites' scene lists. The overview and sign-in are the
-// two ends of the chain of references, so a regression of either shows against the other.
+// The pages a person lands on and works in, by their names in the suites' scene lists. The overview is not here: it is
+// the reference for all of these and has its own test.
 const pages: [Suite, string][] = [
-  ...["sign-in", "overview", "keys", "calls", "balance", "statement"].map((name): [Suite, string] => [
-    consoleSuite,
-    name,
-  ]),
+  ...["sign-in", "keys", "calls", "balance", "statement"].map((name): [Suite, string] => [consoleSuite, name]),
   ...["users", "suppliers", "models", "pricing", "settings"].map((name): [Suite, string] => [adminSuite, name]),
 ];
 
@@ -202,15 +228,46 @@ async function measurePage(
   record(`CLS ${label}`, Math.max(...pairs.map((pair) => pair.cls)), budget.cls);
 }
 
+// measureOverview loads the overview three times and gates the smallest main-thread CPU time of the three. It reports the
+// LCP and CLS beside it: the LCP is what the page budget speaks of, but it is only reported, because the host stretches
+// it in ways the CPU time does not (docs/frontend.md「实测」).
+async function measureOverview(
+  browser: Browser,
+  profile: Profile,
+  device: Parameters<Browser["newContext"]>[0],
+  name: "phone" | "desktop",
+  lcp: Limit,
+) {
+  const label = `console overview ${name}`;
+  const loads: { busyMs: number; lcp: number; cls: number }[] = [];
+  for (let i = 0; i < 3; i++) {
+    const result = await busyLoad(browser, profile, device, consoleSuite, overview);
+    loads.push({
+      busyMs: result.busyMs,
+      lcp: result.LCP ?? Number.POSITIVE_INFINITY,
+      cls: result.CLS ?? 0,
+    });
+  }
+  const cpu = overviewCpu[name];
+  record(
+    `main-thread time ${label}`,
+    Math.min(...loads.map((load) => load.busyMs)),
+    cpu,
+    `baseline ${cpu.baseline} ms, loads ${loads.map((load) => load.busyMs.toFixed(0)).join("/")} ms`,
+  );
+  record(`LCP ${label}`, median(loads.map((load) => load.lcp)), { target: lcp.target }, "reported only");
+  record(`CLS ${label}`, Math.max(...loads.map((load) => load.cls)), budget.cls);
+}
+
 test.describe("loading", () => {
   for (const { name, profile, device, lcp } of profiles) {
+    test(`console overview: main-thread time and CLS on ${name}`, async ({ browser }) => {
+      await measureOverview(browser, profile, device, name, lcp);
+    });
     for (const [suite, sceneName] of pages) {
       test(`${suite.app} ${sceneName}: LCP and CLS on ${name}`, async ({ browser }) => {
         const scene = sceneOf(suite, sceneName);
-        const reference =
-          scene === overview
-            ? { suite: consoleSuite, scene: signIn, lcp: signInMs[name] }
-            : { suite: consoleSuite, scene: overview, lcp: overviewMs[name] };
+        const reference = { suite: consoleSuite, scene: overview, lcp: overviewMs[name] };
         await measurePage(browser, profile, device, suite, scene, reference, name, lcp);
       });
     }
