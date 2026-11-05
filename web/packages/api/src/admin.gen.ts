@@ -2626,6 +2626,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/operations/price-envelopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The envelopes the operations agent changes sale prices within
+         * @description Every site's price envelope. A site without one has none of its sale prices changed by the agent.
+         */
+        get: operations["listOperationsPriceEnvelopes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/operations/price-envelopes/{site_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set a site's price envelope
+         * @description Makes the envelope (`rev` 0) or replaces its limits (`rev` as read; another is a 409 `stale_revision`). It decides only whether the agent's publication of a sale price needs the owner; the owner's approval of one outside it publishes it all the same, and every publication counts against the day.
+         */
+        put: operations["setOperationsPriceEnvelope"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/operations/approvals": {
         parameters: {
             query?: never;
@@ -3773,6 +3815,37 @@ export interface components {
             rev: number;
             reason: string;
         };
+        /** @description How far the agent moves a site's sale prices without the owner, in basis points: every price it publishes keeps at least `min_margin_bps` of its price over its cost; one model's prices move at most `model_daily_change_bps` in a UTC day, up and down added together; a UTC day publishes at most `daily_changes` prices of at most `daily_models` models. Publications the owner approves count too. */
+        OperationsPriceEnvelope: {
+            /** Format: int32 */
+            min_margin_bps: number;
+            /** Format: int64 */
+            model_daily_change_bps: number;
+            /** Format: int32 */
+            daily_changes: number;
+            /** Format: int32 */
+            daily_models: number;
+        };
+        OperationsPriceEnvelopeSetting: {
+            site_id: components["schemas"]["SiteId"];
+            limits: components["schemas"]["OperationsPriceEnvelope"];
+            /** Format: int64 */
+            rev: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        OperationsPriceEnvelopeList: {
+            data: components["schemas"]["OperationsPriceEnvelopeSetting"][];
+        };
+        OperationsPriceEnvelopeUpdate: {
+            limits: components["schemas"]["OperationsPriceEnvelope"];
+            /**
+             * Format: int64
+             * @description The revision read; 0 makes the envelope.
+             */
+            rev: number;
+            reason: string;
+        };
         OperationsCredentialList: {
             data: components["schemas"]["OperationsCredential"][];
             next_cursor?: string;
@@ -3857,7 +3930,7 @@ export interface components {
          * @description The operation's class, which decides whether it waits for the owner.
          * @enum {string}
          */
-        OperationRisk: "routine" | "delisting" | "top_up";
+        OperationRisk: "routine" | "delisting" | "top_up" | "price";
         OperationTarget: {
             /** @description What the operation acts on, such as `model`. */
             kind: string;
@@ -10435,6 +10508,64 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listOperationsPriceEnvelopes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The envelopes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsPriceEnvelopeList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setOperationsPriceEnvelope: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperationsPriceEnvelopeUpdate"];
+            };
+        };
+        responses: {
+            /** @description The envelope as it is now */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsPriceEnvelopeSetting"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };

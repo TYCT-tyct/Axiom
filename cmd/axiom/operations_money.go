@@ -96,7 +96,7 @@ func (o operationsAPI) SupplierTopUpConfirm(ctx context.Context, r operationsapi
 }
 
 // CapsGet reads the caps of the scopes the credential's money writes act in, its sites' and with the platform grant the
-// platform's, with what each holds now.
+// platform's, with what each holds now, and the price envelopes of its sites with their use today.
 func (o operationsAPI) CapsGet(ctx context.Context, _ operationsapi.CapsGetRequestObject) (operationsapi.CapsGetResponseObject, error) {
 	c := callOf(ctx)
 	self := c.agent.Info()
@@ -108,6 +108,10 @@ func (o operationsAPI) CapsGet(ctx context.Context, _ operationsapi.CapsGetReque
 	}
 	list := operationsapi.OperationsCapUsageList{Data: []operationsapi.OperationsCapUsage{}}
 	err := o.db.ReadTx(ctx, c.scope, func(tx pg.Tx) error {
+		var err error
+		if list.PriceEnvelopes, err = priceUsages(ctx, tx, reaches); err != nil {
+			return err
+		}
 		usage, err := operations.CapUsages(ctx, tx)
 		for _, u := range usage {
 			if !reaches(u.Policy.Site) {
@@ -126,6 +130,33 @@ func (o operationsAPI) CapsGet(ctx context.Context, _ operationsapi.CapsGetReque
 		return nil, err
 	}
 	return operationsapi.CapsGet200JSONResponse(list), nil
+}
+
+// priceUsages is the price envelopes of the sites reaches says the credential acts in, with their use today.
+func priceUsages(ctx context.Context, tx pg.Tx, reaches func(*uuid.UUID) bool) (*[]operationsapi.OperationsPriceEnvelopeUsage, error) {
+	usage, err := operations.PriceUsages(ctx, tx)
+	list := []operationsapi.OperationsPriceEnvelopeUsage{}
+	for _, u := range usage {
+		if reaches(&u.Envelope.Site) {
+			list = append(list, priceUsageBody(u))
+		}
+	}
+	return &list, err
+}
+
+func priceUsageBody(u operations.PriceUsage) operationsapi.OperationsPriceEnvelopeUsage {
+	e := u.Envelope
+	body := operationsapi.OperationsPriceEnvelopeUsage{
+		SiteId: accounts.SiteID(e.Site).TypeID(), Rev: e.Rev, DayStart: u.DayStart, Changes: u.Changes, Models: u.Models,
+		Limits: operationsapi.OperationsPriceEnvelope{
+			MinMarginBps: e.MinMargin, ModelDailyChangeBps: e.ModelDailyChange, DailyChanges: e.DailyChanges, DailyModels: e.DailyModels,
+		},
+		Moves: make([]operationsapi.OperationsPriceMoves, len(u.Moves)),
+	}
+	for i, m := range u.Moves {
+		body.Moves[i] = operationsapi.OperationsPriceMoves{ModelId: m.Model.String(), ChangeBps: m.Change, Count: m.Count}
+	}
+	return body
 }
 
 func capWindow(start time.Time, u operations.WindowUsage) operationsapi.OperationsCapWindow {

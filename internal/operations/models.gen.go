@@ -90,3 +90,22 @@ type OperationsOperation struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
+
+type OperationsPriceCounter struct {
+	SiteID    uuid.UUID
+	DayStart  time.Time
+	ModelID   *uuid.UUID
+	ChangeBps int64
+	Count     int32
+	Models    int32
+}
+
+type OperationsPriceEnvelope struct {
+	SiteID              uuid.UUID
+	MinMarginBps        int32
+	ModelDailyChangeBps int64
+	DailyChanges        int32
+	DailyModels         int32
+	Rev                 int64
+	UpdatedAt           time.Time
+}

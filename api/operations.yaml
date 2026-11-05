@@ -24,6 +24,7 @@ tags:
   - {name: Suppliers, description: "Suppliers, their groups and keys, and the upstream model names waiting to be mapped."}
   - {name: Catalog, description: "Authors, models, their names, specs and reference prices."}
   - {name: Calls, description: "Support summaries and operator traces."}
+  - {name: Pricing, description: "Sale prices, their proposals, and publishing them within the price envelope."}
 paths:
   /api/operations/v1/me:
     get:
@@ -442,6 +443,8 @@ paths:
         ISO week and how many proposals it made in them. A scope and category without a policy moves no money and is
         not listed. While `paused` is true every proposal there waits for the owner, within the autonomous limits or
         not: the counters were found to differ from the money they count, and only the owner resumes it.
+        `price_envelopes` lists the envelope of each site the agent publishes sale prices of, with what its UTC day has
+        used; a node that predates them leaves it out.
       tags: [Agent]
       security: [{credential: []}]
       x-axiom-permission: operations.read
@@ -457,6 +460,80 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/CredentialRejected'}
         '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/prices:
+    get:
+      operationId: pricesList
+      summary: The main site's sale prices and the proposals waiting to be published
+      description: >-
+        Each model's published sale price and the proposal the automatic publisher made for it, as the admin reads them:
+        a proposal whose `status` is `pending` or `blocked` waits for someone to publish it (`pricePublish`) with
+        its `candidate_id` and `current_id`. The publisher refreshes the proposals every few seconds, so a proposal read
+        here may be replaced before it is published.
+      tags: [Pricing]
+      security: [{credential: []}]
+      x-axiom-permission: pricing.view
+      x-axiom-scope: platform
+      x-mcp-name: prices_list
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The publication state
+          content: {application/json: {schema: {$ref: '#/components/schemas/PricePublicationList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/prices/{model_id}/publish:
+    post:
+      operationId: pricePublish
+      summary: Publish a sale price proposal
+      description: >-
+        Publishes the proposal `candidate_id` of the model, read against its current version `current_id` (absent when
+        the model has none), as the admin's confirmation does: never below the site's floor. The server weighs it
+        against the main site's price envelope (docs/domains/operations.md「售价的累计变动上限」) from the prices it
+        reads, never the agent's: within the least margin over cost, the model's daily move and the day's publications
+        and models it is published at once (200, `succeeded`); outside any of them, with an unknown cost, or with a move
+        no share of the old price measures (a first price, a price added or lost, zero to non-zero) it waits for the
+        owner (202). A site without an envelope is a 422 `cap_exceeded`. A proposal or version that is no longer the
+        model's is a 409 `stale_revision`, at once or when the owner approves; one with nothing waiting is a 409
+        `conflict`. The result has the version published, `change_bps` and `margin_bps`. With `dry_run` the same
+        checks run and nothing is written.
+      tags: [Pricing]
+      security: [{credential: []}]
+      x-axiom-permission: pricing.manage
+      x-axiom-money: true
+      x-axiom-scope: platform
+      x-mcp-name: price_publish
+      parameters:
+        - {in: path, name: model_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/SalePricePublication'}}}
+      responses:
+        '200':
+          description: The publication, run, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '202':
+          description: The publication, waiting for the owner's approval
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/Failure'}
   /api/operations/v1/approvals/{approval_id}:
@@ -752,6 +829,7 @@ components:
       required: [data]
       properties:
         data: {type: array, items: {$ref: '#/components/schemas/OperationsCapUsage'}}
+        price_envelopes: {type: array, items: {$ref: '#/components/schemas/OperationsPriceEnvelopeUsage'}}
     OperationsCapUsage:
       type: object
       additionalProperties: false
@@ -802,6 +880,116 @@ components:
         hard_single_max: {$ref: "#/components/schemas/OperationsCapAmount"}
         hard_daily_max: {$ref: "#/components/schemas/OperationsCapAmount"}
         hard_weekly_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+    PricePublicationList:
+      type: object
+      properties:
+        policy: {$ref: "#/components/schemas/PricePolicy"}
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PricePublication"}
+    PricePolicy:
+      type: object
+      properties:
+        rev: {type: integer, format: int64}
+        floor_multiplier: {type: string}
+        change_ratio: {type: string}
+        max_increase_ratio: {type: string}
+        byok_fee_bps:
+          type: integer
+          minimum: 0
+          maximum: 10000
+          description: >-
+            The share of a model's normal sale price charged when an account's own provider key serves the request,
+            in basis points (500 is 5%, docs/domains/billing.md「定价」).
+    PricePublication:
+      type: object
+      properties:
+        audience: {$ref: "#/components/schemas/PricingAudience"}
+        model_id: {$ref: "#/components/schemas/Uuid"}
+        candidate_id: {$ref: "#/components/schemas/Uuid"}
+        current_id: {$ref: "#/components/schemas/Uuid"}
+        status: {type: string, enum: [published, pending, blocked, unpriced]}
+        requested: {$ref: "#/components/schemas/PriceSchedule"}
+        schedule: {$ref: "#/components/schemas/PriceSchedule"}
+        floor: {$ref: "#/components/schemas/PriceSchedule"}
+        endpoints:
+          description: The proposed price of each endpoint for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        requested_endpoints:
+          description: The rule price of each endpoint before the site floor, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        current_endpoints:
+          description: The price each endpoint currently serves, when the current version prices endpoints separately.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        current_schedule:
+          description: The current model-level price schedule, including the envelope of a per-endpoint version.
+          allOf: [{$ref: "#/components/schemas/PriceSchedule"}]
+        costs:
+          description: The proposal's cost of each endpoint in the site currency, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        floors:
+          description: The proposal's break-even price of each endpoint in the site currency, for a cost-plus proposal.
+          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
+        problem: {type: string}
+    PricingAudience:
+      type: object
+      required: [kind]
+      description: >-
+        Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for
+        `all`. Account and tier IDs must belong to this site.
+      properties:
+        kind: {type: string, enum: [account, tier, all]}
+        id: {type: string, maxLength: 64}
+    PriceEndpointMap:
+      type: object
+      description: Per-endpoint prices, keyed by endpoint UUID.
+      additionalProperties: {$ref: "#/components/schemas/PriceSchedule"}
+    SalePricePublication:
+      type: object
+      additionalProperties: false
+      required: [candidate_id, reason]
+      properties:
+        candidate_id: {$ref: '#/components/schemas/Uuid'}
+        current_id:
+          allOf: [{$ref: '#/components/schemas/Uuid'}]
+          description: The model's current version as read with the proposal; absent when it has none.
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
+    OperationsPriceEnvelope:
+      type: object
+      additionalProperties: false
+      required: [min_margin_bps, model_daily_change_bps, daily_changes, daily_models]
+      description: >-
+        How far the agent moves a site's sale prices without the owner, in basis points: every price it publishes keeps
+        at least `min_margin_bps` of its price over its cost; one model's prices move at most `model_daily_change_bps`
+        in a UTC day, up and down added together; a UTC day publishes at most `daily_changes` prices of at most
+        `daily_models` models. Publications the owner approves count too.
+      properties:
+        min_margin_bps: {type: integer, format: int32, minimum: 0, maximum: 10000}
+        model_daily_change_bps: {type: integer, format: int64, minimum: 0}
+        daily_changes: {type: integer, format: int32, minimum: 0, maximum: 1000000}
+        daily_models: {type: integer, format: int32, minimum: 0, maximum: 1000000}
+    OperationsPriceEnvelopeUsage:
+      type: object
+      additionalProperties: false
+      required: [site_id, limits, rev, day_start, changes, models, moves]
+      properties:
+        site_id: {type: string, description: The site's ID.}
+        limits: {$ref: '#/components/schemas/OperationsPriceEnvelope'}
+        rev: {type: integer, format: int64, minimum: 1}
+        day_start: {type: string, format: date-time}
+        changes: {type: integer, format: int32, minimum: 0, description: The publications the UTC day counted.}
+        models: {type: integer, format: int32, minimum: 0, description: The models whose prices the UTC day moved.}
+        moves: {type: array, items: {$ref: '#/components/schemas/OperationsPriceMoves'}}
+    OperationsPriceMoves:
+      type: object
+      additionalProperties: false
+      required: [model_id, change_bps, count]
+      description: A model moved today, with its moves in basis points added together and how many.
+      properties:
+        model_id: {$ref: '#/components/schemas/Uuid'}
+        change_bps: {type: integer, format: int64, minimum: 0}
+        count: {type: integer, format: int32, minimum: 0}
     OperationApproval:
       type: object
       additionalProperties: false
@@ -821,7 +1009,7 @@ components:
         compensating operation reverts it.
     OperationRisk:
       type: string
-      enum: [routine, delisting, top_up]
+      enum: [routine, delisting, top_up, price]
       description: The operation's class, which decides whether it waits for the owner.
     OperationTarget:
       type: object

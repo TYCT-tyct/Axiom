@@ -169,6 +169,12 @@ type ServerInterface interface {
 	// RotateOperationsCredential Give an operations credential a new token
 	// (POST /api/admin/v1/operations/credentials/{credential_id}/rotate)
 	RotateOperationsCredential(w http.ResponseWriter, r *http.Request, credentialId OperationsCredentialId, params RotateOperationsCredentialParams)
+	// ListOperationsPriceEnvelopes The envelopes the operations agent changes sale prices within
+	// (GET /api/admin/v1/operations/price-envelopes)
+	ListOperationsPriceEnvelopes(w http.ResponseWriter, r *http.Request)
+	// SetOperationsPriceEnvelope Set a site's price envelope
+	// (PUT /api/admin/v1/operations/price-envelopes/{site_id})
+	SetOperationsPriceEnvelope(w http.ResponseWriter, r *http.Request, siteId SiteId, params SetOperationsPriceEnvelopeParams)
 	// ListCashMovements The cash behind the dashboard, by ledger time
 	// (GET /api/admin/v1/payments/cash)
 	ListCashMovements(w http.ResponseWriter, r *http.Request, params ListCashMovementsParams)
@@ -2841,6 +2847,74 @@ func (siw *ServerInterfaceWrapper) RotateOperationsCredential(w http.ResponseWri
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.RotateOperationsCredential(w, r, credentialId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListOperationsPriceEnvelopes operation middleware
+func (siw *ServerInterfaceWrapper) ListOperationsPriceEnvelopes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListOperationsPriceEnvelopes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetOperationsPriceEnvelope operation middleware
+func (siw *ServerInterfaceWrapper) SetOperationsPriceEnvelope(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "site_id" -------------
+	var siteId SiteId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "site_id", r.PathValue("site_id"), &siteId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetOperationsPriceEnvelopeParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetOperationsPriceEnvelope(w, r, siteId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8163,6 +8237,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/cap-policies", wrapper.ListOperationsCapPolicies)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/operations/cap-policies/{scope}/{category}", wrapper.SetOperationsCapPolicy)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/cap-policies/{scope}/{category}/repair", wrapper.RepairOperationsCapCounters)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/price-envelopes", wrapper.ListOperationsPriceEnvelopes)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/operations/price-envelopes/{site_id}", wrapper.SetOperationsPriceEnvelope)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/approvals", wrapper.ListOperationsApprovals)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/approvals/{approval_id}", wrapper.GetOperationsApproval)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/approvals/{approval_id}/approve", wrapper.ApproveOperationsApproval)
@@ -13607,6 +13683,179 @@ type RotateOperationsCredentialdefaultJSONResponse struct {
 }
 
 func (response RotateOperationsCredentialdefaultJSONResponse) VisitRotateOperationsCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsPriceEnvelopesRequestObject struct {
+}
+
+type ListOperationsPriceEnvelopesResponseObject interface {
+	VisitListOperationsPriceEnvelopesResponse(w http.ResponseWriter) error
+}
+
+type ListOperationsPriceEnvelopes200JSONResponse OperationsPriceEnvelopeList
+
+func (response ListOperationsPriceEnvelopes200JSONResponse) VisitListOperationsPriceEnvelopesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsPriceEnvelopes401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListOperationsPriceEnvelopes401JSONResponse) VisitListOperationsPriceEnvelopesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsPriceEnvelopes403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListOperationsPriceEnvelopes403JSONResponse) VisitListOperationsPriceEnvelopesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListOperationsPriceEnvelopesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListOperationsPriceEnvelopesdefaultJSONResponse) VisitListOperationsPriceEnvelopesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsPriceEnvelopeRequestObject struct {
+	SiteId SiteId `json:"site_id"`
+	Params SetOperationsPriceEnvelopeParams
+	Body   *SetOperationsPriceEnvelopeJSONRequestBody
+}
+
+type SetOperationsPriceEnvelopeResponseObject interface {
+	VisitSetOperationsPriceEnvelopeResponse(w http.ResponseWriter) error
+}
+
+type SetOperationsPriceEnvelope200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetOperationsPriceEnvelope200JSONResponse struct {
+	Body    OperationsPriceEnvelopeSetting
+	Headers SetOperationsPriceEnvelope200ResponseHeaders
+}
+
+func (response SetOperationsPriceEnvelope200JSONResponse) VisitSetOperationsPriceEnvelopeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsPriceEnvelope400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetOperationsPriceEnvelope400JSONResponse) VisitSetOperationsPriceEnvelopeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsPriceEnvelope401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetOperationsPriceEnvelope401JSONResponse) VisitSetOperationsPriceEnvelopeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsPriceEnvelope403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetOperationsPriceEnvelope403JSONResponse) VisitSetOperationsPriceEnvelopeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsPriceEnvelope409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetOperationsPriceEnvelope409JSONResponse) VisitSetOperationsPriceEnvelopeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsPriceEnvelopedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetOperationsPriceEnvelopedefaultJSONResponse) VisitSetOperationsPriceEnvelopeResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -26018,6 +26267,12 @@ type StrictServerInterface interface {
 	// RotateOperationsCredential Give an operations credential a new token
 	// (POST /api/admin/v1/operations/credentials/{credential_id}/rotate)
 	RotateOperationsCredential(ctx context.Context, request RotateOperationsCredentialRequestObject) (RotateOperationsCredentialResponseObject, error)
+	// ListOperationsPriceEnvelopes The envelopes the operations agent changes sale prices within
+	// (GET /api/admin/v1/operations/price-envelopes)
+	ListOperationsPriceEnvelopes(ctx context.Context, request ListOperationsPriceEnvelopesRequestObject) (ListOperationsPriceEnvelopesResponseObject, error)
+	// SetOperationsPriceEnvelope Set a site's price envelope
+	// (PUT /api/admin/v1/operations/price-envelopes/{site_id})
+	SetOperationsPriceEnvelope(ctx context.Context, request SetOperationsPriceEnvelopeRequestObject) (SetOperationsPriceEnvelopeResponseObject, error)
 	// ListCashMovements The cash behind the dashboard, by ledger time
 	// (GET /api/admin/v1/payments/cash)
 	ListCashMovements(ctx context.Context, request ListCashMovementsRequestObject) (ListCashMovementsResponseObject, error)
@@ -27903,6 +28158,64 @@ func (sh *strictHandler) RotateOperationsCredential(w http.ResponseWriter, r *ht
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RotateOperationsCredentialResponseObject); ok {
 		if err := validResponse.VisitRotateOperationsCredentialResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListOperationsPriceEnvelopes operation middleware
+func (sh *strictHandler) ListOperationsPriceEnvelopes(w http.ResponseWriter, r *http.Request) {
+	var request ListOperationsPriceEnvelopesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListOperationsPriceEnvelopes(ctx, request.(ListOperationsPriceEnvelopesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListOperationsPriceEnvelopes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListOperationsPriceEnvelopesResponseObject); ok {
+		if err := validResponse.VisitListOperationsPriceEnvelopesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetOperationsPriceEnvelope operation middleware
+func (sh *strictHandler) SetOperationsPriceEnvelope(w http.ResponseWriter, r *http.Request, siteId SiteId, params SetOperationsPriceEnvelopeParams) {
+	var request SetOperationsPriceEnvelopeRequestObject
+
+	request.SiteId = siteId
+	request.Params = params
+
+	var body SetOperationsPriceEnvelopeJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetOperationsPriceEnvelope(ctx, request.(SetOperationsPriceEnvelopeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetOperationsPriceEnvelope")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetOperationsPriceEnvelopeResponseObject); ok {
+		if err := validResponse.VisitSetOperationsPriceEnvelopeResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
