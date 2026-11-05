@@ -255,7 +255,7 @@ function usualPresets(): Pick<MockState, "presets" | "routingDefault"> {
         scope: "platform",
         slug: "official",
         name: "Official only",
-        rules: rules({ default: { classes: ["official"] } }),
+        rules: rules({ default: { classes: ["official"], min_score: 90 } }),
       }),
       aPreset(2, {
         scope: "site",
@@ -420,7 +420,12 @@ function worstPresets(state: MockState) {
       name: n === 1 ? long("Official sources at official quality, cheapest first ", 100) : `プリセット ${n}`,
       version: Number.MAX_SAFE_INTEGER,
       rules: rules({
-        default: { sort: "throughput", classes: range(32).map((c) => `class-${c}`), verified_only: true },
+        default: {
+          sort: "throughput",
+          classes: range(32).map((c) => `class-${c}`),
+          verified_only: true,
+          min_score: 100,
+        },
         rules: range(100).map((r) => ({ model: `vendor/${long("model-", 100)}${r}` })),
       }),
     }),
