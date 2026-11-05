@@ -53,9 +53,11 @@ func (s *Slot) Commit(rec CallRecord) error {
 		return fmt.Errorf("call record %s: %w", rec.ID, err)
 	case rec.BillingPending:
 		s.state, s.id, s.parked = slotParked, rec.ID.String(), body
+		s.r.parked.Add(1)
 	default:
 		if s.state == slotParked {
 			s.r.parking.unpark(s.id)
+			s.r.parked.Add(-1)
 		}
 		s.state, s.parked = slotCommitted, nil
 		s.r.finishSlot()
@@ -74,8 +76,9 @@ func (s *Slot) Release() {
 	case slotOpen:
 		s.r.outstanding.Add(-1)
 	case slotParked:
-		if s.r.spill.appendSynced(s.parked) == nil {
+		if s.r.spill.appendSynced(s.parked, true) == nil {
 			s.r.parking.unpark(s.id)
+			s.r.parked.Add(-1)
 		} else {
 			s.r.outstanding.Add(-1)
 		}
@@ -102,7 +105,7 @@ func (r *Recorder) encode(rec CallRecord) ([]byte, error) {
 
 // append puts an encoded record in the spill; a record the spill does not keep stops the recorder.
 func (r *Recorder) append(rec CallRecord, body []byte) error {
-	err := r.spill.appendSynced(body)
+	err := r.spill.appendSynced(body, false)
 	if err != nil {
 		r.rejectUnkept(rec, err)
 	}

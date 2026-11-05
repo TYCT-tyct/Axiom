@@ -64,6 +64,7 @@ type Recorder struct {
 	// parking holds pending records until their call's settled record replaces them or Release moves them into the
 	// spill. A parked record holds its slot's room, which is how Capacity also bounds the parked files.
 	parking parking
+	parked  atomic.Int64    // slots holding a parked record now: what Close reports left for the next start
 	ctx     context.Context //nolint:containedctx // the writer's values, used for metrics on the record path too
 
 	mu      sync.Mutex // guards closing
@@ -294,7 +295,7 @@ func (r *Recorder) Close(ctx context.Context) error {
 		<-r.done
 	}
 	r.giveUp()
-	pending := r.spill.pendingCount() + int64(r.parking.count()) // a parked record is moved into the spill at the next start
+	pending := r.spill.pendingCount() + r.parked.Load() // a parked record is moved into the spill at the next start
 	lost, attempts := r.lost.Load(), r.lostAttempts.Load()
 	if pending > 0 {
 		return fmt.Errorf("%w: %d calls remain for the next start (%d calls and %d attempts were not kept)",

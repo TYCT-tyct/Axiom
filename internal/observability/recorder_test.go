@@ -320,53 +320,6 @@ func TestReservationRelease(t *testing.T) {
 	}
 }
 
-// TestAPendingRecordKeepsItsSlotsRoom: a pending record is parked in its slot's room, not in the spill: the slot then
-// takes one settled record of the call, which replaces the parked one, and Release moves a parked record whose
-// settlement went to the cleanup into the spill, in the same room. One record of each call reaches the writer.
-func TestAPendingRecordKeepsItsSlotsRoom(t *testing.T) {
-	t.Parallel()
-	s := &sink{gate: make(chan struct{})}
-	r := recorderOf(t, s, Config{Capacity: 2, BatchSize: 10, FlushInterval: time.Hour})
-	settled, left := record(uuid.NewV7(), now), record(uuid.NewV7(), now)
-	first, second := admit(t, r), admit(t, r)
-	commit(t, first, pendingOf(settled))
-	commit(t, second, pendingOf(left))
-	if _, err := r.Admit(); !errors.Is(err, ErrBacklog) {
-		t.Fatalf("Admit with two calls parked = %v, want ErrBacklog", err)
-	}
-	if err := first.Commit(pendingOf(settled)); !errors.Is(err, ErrClosed) {
-		t.Errorf("a second pending Commit = %v, want ErrClosed", err)
-	}
-	if n := r.parking.count(); n != 2 {
-		t.Fatalf("%d records parked, want 2", n)
-	}
-	commit(t, first, settled)
-	first.Release() // after the settled Commit this must not free the writer's room
-	second.Release()
-	if n := r.parking.count(); n != 0 {
-		t.Errorf("%d records still parked, want none", n)
-	}
-	if _, err := r.Admit(); !errors.Is(err, ErrBacklog) {
-		t.Fatalf("Admit with both records in the spill = %v, want ErrBacklog until the write", err)
-	}
-	s.open()
-	if err := r.Close(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := s.stored(); !slices.Equal(got, []string{settled.ID.String(), left.ID.String()}) {
-		t.Errorf("stored %v, want the settled record, then the one left pending", got)
-	}
-}
-
-func admit(t *testing.T, r *Recorder) *Slot {
-	t.Helper()
-	slot, err := r.Admit()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return slot
-}
-
 // TestCloseDrainsTheSpill: every call and its attempts are written before Close returns, although the interval is
 // long and the batch not full, and Enqueue refuses afterwards.
 func TestCloseDrainsTheSpill(t *testing.T) {

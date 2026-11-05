@@ -31,15 +31,20 @@ import (
 // When the next record would exceed the bound, Commit returns ErrBacklog and the gateway refuses new calls instead of
 // serving one it cannot record.
 const (
-	spillHeader       = "AXIOM-WAL-1\n"
-	spillPrefix       = "call-"
-	spillSuffix       = ".wal"
-	spillLockName     = "call-log.lock"
-	spillPosName      = "call-log.pos"
-	spillPosHeader    = "AXIOM-WAL-POS-1\n"
-	spillSegmentBytes = 8 << 20
-	maxRecordBytes    = 64 << 10
-	recordHeaderBytes = 8
+	spillHeader = "AXIOM-WAL-1\n"
+	// spillHeaderPending heads a segment that holds a pending record (CallRecord.BillingPending), and only such a
+	// segment. A binary that predates pending records accepts no header but spillHeader, so it refuses to start on
+	// this spill instead of storing a pending record as a settled one: a node rolled back over one must be rolled
+	// forward until the spill drains. The two headers are the same length, so every offset is the same in both.
+	spillHeaderPending = "AXIOM-WAL-2\n"
+	spillPrefix        = "call-"
+	spillSuffix        = ".wal"
+	spillLockName      = "call-log.lock"
+	spillPosName       = "call-log.pos"
+	spillPosHeader     = "AXIOM-WAL-POS-1\n"
+	spillSegmentBytes  = 8 << 20
+	maxRecordBytes     = 64 << 10
+	recordHeaderBytes  = 8
 )
 
 var (
@@ -106,10 +111,11 @@ func (w walRecord) queued() queued { return queued{call: w.Call, attempts: w.Att
 
 // spillSegment is one append-only segment file. size includes the header and every complete record.
 type spillSegment struct {
-	seq  uint64
-	path string
-	size int64
-	file *os.File // the append handle, only on the active segment
+	seq     uint64
+	path    string
+	size    int64
+	file    *os.File // the append handle, only on the active segment
+	pending bool     // headed by spillHeaderPending: it may hold pending records
 }
 
 // position is a point in the spill: a segment and the offset after a record in it. The writer acknowledges a batch with
@@ -184,15 +190,16 @@ func lockDir(dir string) (*os.File, error) {
 	return file, nil
 }
 
-// createSegmentLocked creates the next segment and makes it active. The header is written before any record and the
-// file is synced, so a later crash can tell a real segment from a file a crash left with no header.
-func (s *spill) createSegmentLocked(seq uint64) error {
+// createSegmentLocked creates the next segment and makes it active, headed for pending records when pending is set.
+// The header is written before any record and the file is synced, so a later crash can tell a real segment from a file
+// a crash left with no header.
+func (s *spill) createSegmentLocked(seq uint64, pending bool) error {
 	path := filepath.Join(s.dir, spillPrefix+fmt.Sprintf("%016d", seq)+spillSuffix)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600) //nolint:gosec // path is the configured spill directory plus a validated sequence
 	if err != nil {
 		return fmt.Errorf("observability: create call log segment: %w", err)
 	}
-	if _, err := file.WriteString(spillHeader); err != nil {
+	if _, err := file.WriteString(segmentHeader(pending)); err != nil {
 		closeQuietly(file)
 		removeQuietly(path)
 		return fmt.Errorf("observability: write call log segment header: %w", err)
@@ -209,7 +216,7 @@ func (s *spill) createSegmentLocked(seq uint64) error {
 		removeQuietly(path)
 		return err
 	}
-	segment := &spillSegment{seq: seq, path: path, size: int64(len(spillHeader)), file: file}
+	segment := &spillSegment{seq: seq, path: path, size: int64(len(spillHeader)), file: file, pending: pending}
 	s.segments = append(s.segments, segment)
 	s.active = segment
 	s.synced = segment.size
@@ -220,9 +227,10 @@ func (s *spill) createSegmentLocked(seq uint64) error {
 	return nil
 }
 
-// rotateLocked closes the active segment and starts the next one. The old segment is synced before it is closed: once
-// the writer has acknowledged it, it will be deleted, and a power loss must not lose a record the database never saw.
-func (s *spill) rotateLocked() error {
+// rotateLocked closes the active segment and starts the next one, headed for pending records when pending is set. The
+// old segment is synced before it is closed: once the writer has acknowledged it, it will be deleted, and a power loss
+// must not lose a record the database never saw.
+func (s *spill) rotateLocked(pending bool) error {
 	if s.active != nil {
 		if err := s.active.file.Sync(); err != nil {
 			return fmt.Errorf("observability: sync call log segment: %w", err)
@@ -232,12 +240,12 @@ func (s *spill) rotateLocked() error {
 		}
 		s.active = nil
 	}
-	return s.createSegmentLocked(s.nextSeq)
+	return s.createSegmentLocked(s.nextSeq, pending)
 }
 
-// append writes one encoded record and returns its position. It does not sync: Commit calls sync before it returns, so
-// the bytes survive a host power loss by then.
-func (s *spill) append(record []byte) (position, error) {
+// append writes one encoded record and returns its position; a pending record goes only into a segment headed for one.
+// It does not sync: Commit calls sync before it returns, so the bytes survive a host power loss by then.
+func (s *spill) append(record []byte, pending bool) (position, error) {
 	if len(record) > maxRecordBytes {
 		return position{}, errRecordTooLarge
 	}
@@ -250,7 +258,7 @@ func (s *spill) append(record []byte) (position, error) {
 		return position{}, ErrClosed
 	}
 	need := int64(recordHeaderBytes + len(record))
-	if err := s.ensureSegmentLocked(need); err != nil {
+	if err := s.ensureSegmentLocked(need, pending); err != nil {
 		return position{}, err
 	}
 	if s.totalBytes+need > s.maxBytes {
@@ -280,8 +288,8 @@ func (s *spill) append(record []byte) (position, error) {
 
 // appendSynced appends one record and makes it durable before returning. Commit calls it: once it returns, the record
 // survives a host power loss, not only a process crash (docs/domains/observability.md「写入路径」).
-func (s *spill) appendSynced(record []byte) error {
-	pos, err := s.append(record)
+func (s *spill) appendSynced(record []byte, pending bool) error {
+	pos, err := s.append(record, pending)
 	if err != nil {
 		return err
 	}
@@ -391,13 +399,15 @@ func (s *spill) awaitingSyncLocked() bool {
 	return s.broken == nil && s.active != nil && s.active.file != nil && s.active.size > s.synced
 }
 
-// ensureSegmentLocked rotates when the active segment cannot hold the next record. A rotation failure makes the spill
-// unrecordable: the old segment has already been closed, so later appends cannot pass it.
-func (s *spill) ensureSegmentLocked(need int64) error {
-	if s.active != nil && (s.active.size == int64(len(spillHeader)) || s.active.size+need <= spillSegmentBytes) {
+// ensureSegmentLocked rotates when the active segment cannot hold the next record: it is full, or the record is pending
+// and the segment is not headed for one. A rotation failure makes the spill unrecordable: the old segment has already
+// been closed, so later appends cannot pass it.
+func (s *spill) ensureSegmentLocked(need int64, pending bool) error {
+	if s.active != nil && (s.active.size == int64(len(spillHeader)) || s.active.size+need <= spillSegmentBytes) &&
+		(!pending || s.active.pending) {
 		return nil
 	}
-	if err := s.rotateLocked(); err != nil {
+	if err := s.rotateLocked(pending); err != nil {
 		s.broken = err
 		return err
 	}
@@ -562,9 +572,11 @@ func (s *spill) ack(end position, records int) error {
 	if s.pending < 0 {
 		s.pending = 0
 	}
-	if s.pending == 0 && !s.closed && !s.stopped() && s.active != nil &&
+	if s.pending == 0 && (!s.closed || s.active != nil && s.active.pending) && !s.stopped() && s.active != nil &&
 		s.active.size > int64(len(spillHeader)) {
-		if err := s.rotateLocked(); err != nil {
+		// A drained segment headed for pending records is rotated away even when the spill is closing: left behind, it
+		// would keep a binary that predates them from starting although it holds nothing to write.
+		if err := s.rotateLocked(false); err != nil {
 			s.mu.Unlock()
 			return err
 		}

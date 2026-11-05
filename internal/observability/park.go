@@ -110,21 +110,6 @@ func (p parking) names() ([]string, error) {
 	return d.Readdirnames(-1)
 }
 
-// count is the number of records parked now.
-func (p parking) count() int {
-	names, err := p.names()
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, name := range names {
-		if strings.HasSuffix(name, parkSuffix) {
-			n++
-		}
-	}
-	return n
-}
-
 // recover moves every parked record into the spill, after the records already there, and removes it: the process that
 // parked it is gone, so no settled record will replace it. A record whose bytes do not match their checksum fails the
 // start, as a damaged segment does: it may be a call that was served.
@@ -149,7 +134,7 @@ func (p parking) recover(sp *spill) error {
 		if len(b) < 4 || crc32.Checksum(b[4:], crcTable) != binary.BigEndian.Uint32(b) {
 			return fmt.Errorf("observability: parked call record %s: %w", path, errDamagedPark)
 		}
-		if err := sp.appendSynced(b[4:]); err != nil {
+		if err := sp.appendSynced(b[4:], true); err != nil {
 			return fmt.Errorf("observability: parked call record %s: %w", path, err)
 		}
 		p.remove(file)
