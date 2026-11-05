@@ -6,7 +6,6 @@ import (
 	"slices"
 	"testing"
 	"time"
-	"uuid"
 
 	"axiom/internal/platform/pg"
 	"axiom/internal/routing"
@@ -21,18 +20,14 @@ func (m manager) suspend(t *testing.T, scope pg.Scope, suspend bool) (since time
 	return since, err
 }
 
-// TestPresetSuspension: suspended by the platform, a snapshot holds the system preset alone, and every preset and
-// default write and every key's choice of a preset is refused, while a new key is still bound to its layers' default;
-// a tenant cannot suspend them; asking again changes nothing; resumed, the snapshot holds the presets and writes pass.
+// TestPresetSuspension: suspended by the platform, every preset and default write and every key's choice of a preset
+// is refused, while a new key is still bound to its layers' default; a tenant cannot suspend them; asking again
+// changes nothing; resumed, writes pass, and each change is audited.
 func TestPresetSuspension(t *testing.T) {
 	t.Parallel()
 	m := newManager(t)
 	p := m.made(t, "mine", `{"default":{"sort":"price"}}`)
 	d := m.defaulted(t, &p.ID, 0)
-	source := &routing.Presets{}
-	if _, ok := byID(m.load(t, source), uuid.UUID(p.ID)); !ok {
-		t.Fatal("the account's preset is not in the snapshot")
-	}
 
 	if _, err := m.suspend(t, pg.AccountScopeIn(m.site, m.account), true); !errors.Is(err, routing.ErrPresetReadOnly) {
 		t.Fatalf("an account suspended presets: %v", err)
@@ -45,30 +40,16 @@ func TestPresetSuspension(t *testing.T) {
 	if again, err := m.suspend(t, pg.PlatformScope(), true); err != nil || !again.Equal(since) {
 		t.Fatalf("suspending again = %v, %v; want %v", again, err, since)
 	}
-	checkSystemOnly(t, m.load(t, source))
-
 	m.checkSuspendedWrites(t, p, d)
 
 	if resumed, err := m.suspend(t, pg.PlatformScope(), false); err != nil || !resumed.IsZero() {
 		t.Fatalf("resume = %v, %v", resumed, err)
-	}
-	if _, ok := byID(m.load(t, source), uuid.UUID(p.ID)); !ok {
-		t.Error("the account's preset is not back in the snapshot")
 	}
 	m.changed(t, p.ID, p.Revision, "renamed", `{"default":{"sort":"price"}}`)
 	if got, want := m.actions(t), []string{
 		"routing.preset.create", "routing.default.update", "routing.presets.suspend", "routing.presets.resume", "routing.preset.update",
 	}; !slices.Equal(got, want) {
 		t.Errorf("audit actions %v, want %v", got, want)
-	}
-}
-
-// checkSystemOnly checks that a snapshot holds the system preset and nothing else.
-func checkSystemOnly(t *testing.T, presets []routing.Preset) {
-	t.Helper()
-	checkSystem(t, presets)
-	if len(presets) != 1 {
-		t.Errorf("the snapshot holds %d presets while suspended, want the system preset alone", len(presets))
 	}
 }
 
@@ -96,4 +77,43 @@ func (m manager) checkSuspendedWrites(t *testing.T, p routing.StoredPreset, d ro
 		}
 		return err
 	}))
+}
+
+// TestSuspensionNeedsNoNewSnapshot: the router refuses every key bound to a preset other than the system's from the
+// load that reads the suspension, though no snapshot built after it is ever published (a later source of that build
+// failed), calls and model lists alike; the system preset still routes; resumed, the same snapshot routes the preset
+// again.
+func TestSuspensionNeedsNoNewSnapshot(t *testing.T) {
+	t.Parallel()
+	m := newManager(t)
+	p := m.made(t, "mine", allowed)
+	loaded := m.load(t, &routing.Presets{})
+	system := loaded[slices.IndexFunc(loaded, func(p routing.Preset) bool { return p.ID == routing.SystemPreset })]
+	h := newHarness(t, routing.Config{}, system, endpoint(t, 1))
+	snap, err := h.r.NewSnapshot(h.now.Add(time.Nanosecond), []routing.Endpoint{endpoint(t, 1)}, loaded)
+	noErr(t, "build the snapshot", err)
+	h.r.Replace(snap)
+	h.now = h.now.Add(time.Nanosecond)
+	bound := input()
+	bound.Admission = routing.Admission{Site: routing.SiteID(m.site), Account: routing.AccountID(m.account), Currency: usd, Preset: p.ID}
+	unbound := bound
+	unbound.Admission.Preset = routing.SystemPreset
+	h.plan(bound)
+
+	source := &routing.Presets{Router: h.r}
+	_, err = m.suspend(t, pg.PlatformScope(), true)
+	noErr(t, "suspend", err)
+	m.load(t, source) // and the build it was read for is dropped
+	if _, _, err := h.r.Plan(bound); !errors.Is(err, routing.ErrPresetUnavailable) {
+		t.Errorf("a bound key's call while suspended: %v", err)
+	}
+	if _, err := h.r.KeyView(bound.Admission); !errors.Is(err, routing.ErrPresetUnavailable) {
+		t.Errorf("a bound key's model list while suspended: %v", err)
+	}
+	h.plan(unbound)
+
+	_, err = m.suspend(t, pg.PlatformScope(), false)
+	noErr(t, "resume", err)
+	m.load(t, source)
+	h.plan(bound)
 }

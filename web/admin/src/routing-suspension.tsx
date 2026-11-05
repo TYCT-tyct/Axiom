@@ -37,20 +37,22 @@ export function SuspensionState({ query }: { query: UseQueryResult<Suspension> }
   return <DataState query={query}>{(suspension) => <SuspensionCard suspension={suspension} />}</DataState>;
 }
 
-function SuspensionCard({ suspension }: { suspension: Suspension }) {
+// SuspensionCard is the switch's state, which a refetch keeps current, and the change to the other state. The dialog
+// takes the state it changes to when it opens: another administrator's change seen meanwhile must not turn a
+// suspension the person is writing a reason for into a resumption, or the other way round.
+export function SuspensionCard({ suspension }: { suspension: Suspension }) {
   const { t } = useTranslation();
   const manage = can(useSession(), "sites.manage");
-  const [open, setOpen] = useState(false);
+  const [target, setTarget] = useState<boolean>();
   const { suspended } = suspension;
-  const action = suspended ? "resume" : "suspend";
   return (
     <>
       <Facts
         title={t("routingPresets.suspension.title")}
         action={
           manage ? (
-            <Button size="md" onClick={() => setOpen(true)}>
-              {t(`routingPresets.suspension.${action}`)}
+            <Button size="md" onClick={() => setTarget(!suspended)}>
+              {t(suspended ? "routingPresets.suspension.resume" : "routingPresets.suspension.suspend")}
             </Button>
           ) : undefined
         }
@@ -70,26 +72,35 @@ function SuspensionCard({ suspension }: { suspension: Suspension }) {
           ],
         ]}
       />
-      {open ? (
-        <ChangeDialog<{ suspended: boolean }, Suspension>
-          operation="routing-suspension"
-          title={t(`routingPresets.suspension.${action}Title`)}
-          intro={<p>{t(`routingPresets.suspension.${action}Intro`)}</p>}
-          action={t(`routingPresets.suspension.${action}`)}
-          danger={!suspended}
-          read={() => ({ suspended: !suspended })}
-          send={(body, { reason, key }) =>
-            unwrapChange(
-              adminApi.PUT("/api/admin/v1/settings/routing-suspension", {
-                params: { header: { "Idempotency-Key": key } },
-                body: { ...body, reason },
-              }),
-            )
-          }
-          done={(now) => <p>{t(now.suspended ? "routingPresets.suspension.suspendedDone" : "routingPresets.suspension.resumedDone")}</p>}
-          onClose={() => setOpen(false)}
-        />
-      ) : null}
+      {target === undefined ? null : <SuspensionDialog suspend={target} onClose={() => setTarget(undefined)} />}
     </>
+  );
+}
+
+// SuspensionDialog suspends presets, or resumes them when suspend is false, with the person's reason.
+function SuspensionDialog({ suspend, onClose }: { suspend: boolean; onClose: () => void }) {
+  const { t } = useTranslation();
+  const action = suspend ? "suspend" : "resume";
+  return (
+    <ChangeDialog<{ suspended: boolean }, Suspension>
+      operation="routing-suspension"
+      title={t(`routingPresets.suspension.${action}Title`)}
+      intro={<p>{t(`routingPresets.suspension.${action}Intro`)}</p>}
+      action={t(`routingPresets.suspension.${action}`)}
+      danger={suspend}
+      read={() => ({ suspended: suspend })}
+      send={(body, { reason, key }) =>
+        unwrapChange(
+          adminApi.PUT("/api/admin/v1/settings/routing-suspension", {
+            params: { header: { "Idempotency-Key": key } },
+            body: { ...body, reason },
+          }),
+        )
+      }
+      done={(now) => (
+        <p>{t(now.suspended ? "routingPresets.suspension.suspendedDone" : "routingPresets.suspension.resumedDone")}</p>
+      )}
+      onClose={onClose}
+    />
   );
 }

@@ -674,7 +674,7 @@ export interface paths {
         get: operations["getRoutingPresetSuspension"];
         /**
          * Suspend or resume routing presets, audited
-         * @description Suspended, every node's next snapshot, within 5 seconds, routes no key by a preset other than the system preset: a key bound to one is refused 503 `preset_unavailable`, its model lists too, rather than routed past the sources and prices its preset allows. Until presets are resumed, every preset and default write and every key's choice of a preset is refused 503 `presets_suspended`; a key made meanwhile is still bound to its layers' default and routes by it once they resume. Asking for the state presets are in changes and records nothing. Nodes released before the switch ignore it, so suspend only once every node has it.
+         * @description Suspended, every node routes no key by a preset other than the system preset from its next read of the presets, within 5 seconds, even when the rest of that snapshot fails to build: a key bound to one is refused 503 `preset_unavailable`, its model lists too, rather than routed past the sources and prices its preset allows. Until presets are resumed, every preset and default write and every key's choice of a preset is refused 503 `presets_suspended`; a key made meanwhile is still bound to its layers' default and routes by it once they resume. Asking for the state presets are in changes and records nothing. Nodes released before the switch ignore it, so suspend only once every node has it.
          */
         put: operations["setRoutingPresetSuspension"];
         post?: never;
