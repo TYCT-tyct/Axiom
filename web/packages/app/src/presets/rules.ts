@@ -1,10 +1,9 @@
 import type { Schemas } from "@axiom/api";
 
 // A routing preset's rules as the editor holds them, and back (docs/domains/routing.md「规则内容」). The editor writes
-// what an account's preset may hold: the sort, the source classes and data policies allowed, the verified threshold
-// and the highest unit prices. Every member it does not edit (a member a newer node added, the platform's
-// `advanced` on a copy's source) is kept as it was, so saving never drops a limit the page cannot show; the server
-// checks the whole.
+// what every layer's preset may hold: the sort, the source classes and data policies allowed, the verified threshold
+// and the highest unit prices. Every member it does not edit (a member a newer node added, a platform preset's
+// `advanced`) is kept as it was, so saving never drops a limit the page cannot show; the server checks the whole.
 
 export const sorts = ["balanced", "price", "throughput", "latency", "quality"] as const;
 export type Sort = (typeof sorts)[number];
@@ -92,9 +91,10 @@ function ruleDraft(value: unknown): RuleDraft {
   };
 }
 
-// draftOf reads stored rules. Without a copy's run-time settings: `advanced` is the platform's and an account's preset
-// may not hold it, so a copy of a platform preset leaves it out (docs/domains/routing.md「默认链与 key 落章」).
-export function draftOf(rules: Schemas["RoutingRules"] | undefined): RulesDraft {
+// draftOf reads stored rules. A copy leaves out the run-time settings: `advanced` is the platform's and an account's
+// preset may not hold it (docs/domains/routing.md「默认链与 key 落章」). An edit keeps them, so the admin saving a
+// platform preset never drops what the editor cannot show.
+export function draftOf(rules: Schemas["RoutingRules"] | undefined, copy = false): RulesDraft {
   const source = object(rules);
   const overrides = Array.isArray(source.rules) ? source.rules : [];
   return {
@@ -104,7 +104,7 @@ export function draftOf(rules: Schemas["RoutingRules"] | undefined): RulesDraft 
       const target = typeof rule.model === "string" ? "model" : "author";
       return { ...ruleDraft(rule), key: keys++, target, name: text(rule[target]) };
     }),
-    rest: without(source, ["default", "rules", "advanced"]),
+    rest: without(source, copy ? ["default", "rules", "advanced"] : ["default", "rules"]),
   };
 }
 

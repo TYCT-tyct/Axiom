@@ -1,5 +1,5 @@
 import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { can, useErrors, useSession } from "@axiom/app";
+import { can, RulesSummary, useErrors, useSession } from "@axiom/app";
 import {
   Badge,
   Button,
@@ -20,7 +20,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { PresetOptions } from "../key-form";
 import { DisablePresetDialog, PresetDialog, type PresetEdit } from "../preset-dialogs";
-import { type Sort, sorts, summaryOf } from "../preset-rules";
 import { routingDefaultQuery, routingPresetsQuery } from "../queries";
 
 type Preset = Schemas["RoutingPreset"];
@@ -260,27 +259,6 @@ function PresetsTable({
         ))}
       </tbody>
     </Table>
-  );
-}
-
-function RulesSummary({ rules }: { rules: Schemas["RoutingRules"] }) {
-  const { t } = useTranslation();
-  const summary = summaryOf(rules);
-  // A sort a newer node added has no words here yet; its name is shown as it is.
-  const known = (sorts as readonly string[]).includes(summary.sort);
-  const parts = [
-    known ? t(`routingPresets.editor.sorts.${summary.sort as Sort}`) : summary.sort,
-    summary.classes ? summary.classes.join(", ") : t("routingPresets.summary.allClasses"),
-    summary.verifiedOnly ? t("routingPresets.summary.verified") : null,
-    summary.priced ? t("routingPresets.summary.priced") : null,
-  ].filter(Boolean);
-  return (
-    <>
-      <p className="[overflow-wrap:anywhere] text-t2">{parts.join(" · ")}</p>
-      {summary.overrides > 0 ? (
-        <p className="text-label text-t4">{t("routingPresets.summary.overrides", { count: summary.overrides })}</p>
-      ) : null}
-    </>
   );
 }
 
