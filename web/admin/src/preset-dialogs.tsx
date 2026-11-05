@@ -408,7 +408,6 @@ export function DisablePresetDialog({
       }
       action={t("routingPresets.disable")}
       danger
-      blocked={pointing.length > 0}
       reload={reload}
       read={() => read.revision}
       send={(revision, { reason, key }) =>

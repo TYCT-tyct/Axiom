@@ -33,9 +33,8 @@ export default {
     count_other: "Accounts have {{keys}} keys bound to it.",
   },
   disableDefault: {
-    platform:
-      "It’s the platform’s default for new keys, so it can’t be disabled. Change that default first, then come back.",
-    site: "It’s this site’s default for new keys, so it can’t be disabled. Change that default first, then come back.",
+    platform: "It’s the platform’s default for new keys: change that default first.",
+    site: "It’s this site’s default for new keys: change that default first.",
   },
   quota:
     "This layer has reached its limit of routing presets. Disabling one doesn’t free its place in the total; raise the limits below if more are needed.",

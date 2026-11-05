@@ -213,16 +213,17 @@ it("sends the default at the version the choice was made against", async () => {
 
 // Before disabling, the dialog says how many of the account's keys still route by the preset and, when it is the
 // account's default for new keys (preset 1 here), that the default must be changed first; a node that counts no keys
-// has no number said for it, then what disabling does. A default's disabling is refused, so its button is off. The
+// has no number said for it, then what disabling does. The warning never turns the button off: the page's default may be stale and the node
+// decides (docs/domains/routing.md). The
 // words are i18n keys: the test has no messages.
 it.each([
-  { name: "the default, with keys", n: 1, keys: 3, said: ["isDefault", "keys"], blocked: true },
-  { name: "no keys", n: 2, keys: 0, said: ["noKeys"], blocked: false },
-  { name: "a node that counts none", n: 2, keys: undefined, said: [], blocked: false },
-])("says what disabling meets: $name", async ({ n, keys, said, blocked }) => {
+  { name: "the default, with keys", n: 1, keys: 3, said: ["isDefault", "keys"] },
+  { name: "no keys", n: 2, keys: 0, said: ["noKeys"] },
+  { name: "a node that counts none", n: 2, keys: undefined, said: [] },
+])("says what disabling meets: $name", async ({ n, keys, said }) => {
   const disabling: Schemas["RoutingPreset"] = { ...preset(n), scope: "account", rules: {}, keys };
   await render(<DisablePresetDialog preset={disabling} onClose={() => {}} />);
   const lines = [...document.querySelectorAll("dialog p")].map((p) => p.textContent);
   expect(lines).toEqual([...said, "body"].map((key) => `routingPresets.disable.${key}`));
-  expect(document.querySelector<HTMLButtonElement>("dialog button[type=submit]")?.disabled).toBe(blocked);
+  expect(document.querySelector<HTMLButtonElement>("dialog button[type=submit]")?.disabled).toBe(false);
 });

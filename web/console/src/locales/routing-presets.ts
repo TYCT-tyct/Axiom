@@ -46,7 +46,7 @@ export const zh = {
     noKeys: "你的 key 都没有绑定它。",
     keys_one: "你有 {{keys}} 个 key 绑定它。",
     keys_other: "你有 {{keys}} 个 key 绑定它。",
-    isDefault: "它是新 key 的默认预设，不能停用。先在上方换一个默认，再回来停用。",
+    isDefault: "它是新 key 的默认预设：先在上方换一个默认，否则停用会被拒绝。",
   },
   key: {
     col: "路由预设",
@@ -110,8 +110,7 @@ export const en: Messages<typeof zh> = {
     noKeys: "None of your keys is bound to it.",
     keys_one: "{{keys}} of your keys is bound to it.",
     keys_other: "{{keys}} of your keys are bound to it.",
-    isDefault:
-      "It’s the default for new keys, so it can’t be disabled. Choose another default above first, then come back.",
+    isDefault: "It’s the default for new keys: choose another default above first, or disabling it is refused.",
   },
   key: {
     col: "Routing preset",

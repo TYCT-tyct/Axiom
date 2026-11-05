@@ -225,7 +225,6 @@ export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClo
         </>
       }
       confirm={t("routingPresets.disable.confirm")}
-      blocked={isDefault}
       action={disable}
       onClose={onClose}
     />

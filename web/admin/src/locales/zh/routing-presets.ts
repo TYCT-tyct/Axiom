@@ -33,8 +33,8 @@ export default {
     count_other: "各账户共有 {{keys}} 个 key 绑定它。",
   },
   disableDefault: {
-    platform: "它是平台新 key 的默认预设，不能停用。先改这个默认，再回来停用。",
-    site: "它是本站新 key 的默认预设，不能停用。先改这个默认，再回来停用。",
+    platform: "它是平台新 key 的默认预设，先改这个默认。",
+    site: "它是本站新 key 的默认预设，先改这个默认。",
   },
   quota: "这一层的路由预设已达上限。停用不用的预设不会腾出累计数；需要更多时在下方调高上限。",
   form: {
