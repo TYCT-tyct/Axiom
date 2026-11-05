@@ -16,7 +16,9 @@ vi.mock("@axiom/api", async (importOriginal) => {
   return {
     ...actual,
     adminApi: {
-      GET: vi.fn(() => Promise.resolve({ data: { suspended: true, since: "2026-11-05T00:00:00Z" }, response: new Response() })),
+      GET: vi.fn(() =>
+        Promise.resolve({ data: { suspended: true, since: "2026-11-05T00:00:00Z" }, response: new Response() }),
+      ),
       PUT: vi.fn((_path: string, { body }: { body: unknown }) => {
         sent.push(body);
         return Promise.resolve({ data: { suspended: true, since: "2026-11-05T00:00:00Z" }, response: new Response() });
