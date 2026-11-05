@@ -109,6 +109,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	preset, unavailable := r.presetOf(snap, in.Admission)
 	if unavailable != nil {
+		r.watch.unavailableRefused()
 		return Plan{}, nil, unavailable
 	}
 	n := &need{
@@ -131,8 +132,10 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	entries = entries[:min(len(entries), attempts)] // an entry past the most attempts could never be reached
 	if len(entries) == 0 {
 		wait, err := r.nothing(&rec)
+		r.watch.nothing(preset, err)
 		return Plan{Record: rec}, wait, err
 	}
+	preset.tally.routedOnce()
 	for _, e := range entries {
 		rec.Route = append(rec.Route, e.Endpoint)
 	}

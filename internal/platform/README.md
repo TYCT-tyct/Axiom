@@ -241,6 +241,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
   | `axiom_pg_queue_discarded_jobs_total` | 计数 | 任务类型：队列报告的被丢弃的任务（`pg.Queue`） |
   | `axiom_pg_queue_oldest_job_wait_seconds` | 仪表 | `queue`：每个队列最老的可用任务已经等了多久，没有在等的为 0（`pg.Queue`；它上升说明这个队列的 worker 跟不上；采集的数据库访问有 2 秒期限，超时这次采集报错、不报数（不伪报 0）。测试：`TestTheOldestWaitingJobOfEachQueueIsMeasured` 经 `telemetry.New` 的处理器读到这个名字和四个队列；`TestACollectionEndsWhileTheDatabaseBlocksAndRecovers` 锁住任务表，采集仍会结束，锁放开后恢复） |
   | `axiom_observability_records_pending` | 仪表 | 无（spill 中尚未写入数据库的调用数） |
+| `axiom_routing_preset_refusals_total` | 计数 | `reason`（`preset_unavailable`、`preset_filter`）：因 key 的路由预设被拒的调用数，不按预设 ID 分（测试：`TestPresetRefusalsAreCounted` 经 `telemetry.New` 的处理器读到这个名字） |
 | `axiom_gateway_outage_refusals_total` | 计数 | `dependency`（`database`、`accounts`、`catalog`、`routing`）：因依赖故障被拒的请求数，日志只在故障开始和结束时各记一条（#294；测试：`TestAnOutageIsLoggedOnceNotPerRequest` 经 `telemetry.New` 的处理器读到这个名字） |
   | `axiom_billing_platform_borne_total`、`axiom_billing_platform_borne_amount_total`、`axiom_billing_reconcile_problems_total` | 计数 | 无：账户的余额底线没让它付清的结算次数和平台承担的金额（十亿分之一额度），账本每日自平找到的问题数（测试：`TestThePlatformBearingASettlementIsReported`、`TestTheReconciliationReportsWhatItRefuses` 经 `telemetry.New` 的处理器读到这些名字） |
   | `axiom_billing_expire_deferred_total`、`axiom_billing_expire_deferred_amount_total` | 计数 | 无：一轮到期作废里没能全部作废的批次数和剩下的金额（十亿分之一额度）——仍被冻结、被在途预留占着或超出余额的部分，每轮每个仍有剩余的到期批次各加一次；怎么读和处理见[计费的「额度批次」](../../docs/domains/billing.md#额度批次)（#308；测试：`TestTheWriteOffHeldBackIsCounted`、`TestTheWriteOffFrozenAtExpiryIsCounted` 经 `telemetry.New` 的处理器读到这两个名字） |
