@@ -160,7 +160,9 @@ OpenRouter 的付款、退款、用户内容、终止、免责、责任限制、
 1. 用持 `sites.manage` 的账号登录正式站点的后台，完成两步验证，取得 MFA 会话和 CSRF 令牌。
 2. 每种文档、每种语言各发一次 `POST /api/admin/v1/sites/{site_id}/legal-documents`，请求体
    `{"kind": "terms" | "privacy", "locale": "zh" | "en", "body": "<Markdown 正文>", "reason": "<审计理由>"}`，
-   带 `X-CSRF-Token` 和每次新生成的 `Idempotency-Key`；超时重试时沿用同一个键，不会发出两个版本。
+   带上登录得到的会话 Cookie 和这些请求头：`Content-Type: application/json`；`Origin`，必须与后台域名登记的
+   origin（协议、主机和端口）逐字相同，不能用控制台的 origin，缺了或不符都返回 403 `origin_rejected`；
+   `X-CSRF-Token`；每次新生成的 `Idempotency-Key`，超时重试时沿用同一个键，不会发出两个版本。
 3. 中英文都发完再通知用户：兼容阶段每种 `kind` 只认最新版本，只发了一种语言时，另一种语言的用户会看到这个
    最新版本的实际语言。
 4. 发布即生效：已登录用户下一次使用控制台时被要求同意新版本，新注册用户必须同意它。发错了就再发一个新版本，
