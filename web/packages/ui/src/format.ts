@@ -67,18 +67,33 @@ function monthFormats(locale: string) {
 const built = new Map<string, ReturnType<typeof build>>();
 
 export function formatters(language: Language, timeZone?: string) {
-  const key = `${language} ${timeZone ?? ""}`;
+  const zone = timeZone ?? viewerZone();
+  const key = `${language} ${zone}`;
   let format = built.get(key);
   if (!format) {
-    format = build(language, timeZone);
+    format = build(language, zone);
     built.set(key, format);
   }
   return format;
 }
 
-function build(language: Language, timeZone?: string) {
+// The viewer's zone can change while the page is open, when the system's does. Resolving it builds an Intl format,
+// half the cost the cache above saves, so it is resolved again only when the zone a Date prints, its offset and name,
+// changes: that costs microseconds. Zones that print the same offset and name show today's times alike.
+let viewer = { printed: "", zone: "" };
+
+function viewerZone() {
+  const text = new Date().toString();
+  const printed = text.slice(text.indexOf("GMT"));
+  if (printed !== viewer.printed) {
+    viewer = { printed, zone: Intl.DateTimeFormat().resolvedOptions().timeZone };
+  }
+  return viewer.zone;
+}
+
+function build(language: Language, timeZone: string) {
   const locale = locales[language];
-  const zone = { timeZone: timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone };
+  const zone = { timeZone };
   const integers = new Intl.NumberFormat(locale);
   // An exact decimal in text, such as a ratio or a supplier's own balance: grouped for the language, every digit kept.
   const decimals = new Intl.NumberFormat(locale, { maximumFractionDigits: 100 });

@@ -90,3 +90,17 @@ it("builds the formats once, however many rows use them", () => {
     built.mockRestore();
   }
 });
+
+// The cache must not keep the viewer in the zone the page opened in: after the system's zone changes, a time shows in
+// the new one.
+it("follows the viewer's zone when the system's changes", () => {
+  const instant = new Date("2026-10-14T12:30:00Z");
+  try {
+    vi.stubEnv("TZ", "UTC");
+    expect(formatters("en").dateTime(instant)).toBe("Oct 14, 2026, 12:30:00 UTC");
+    vi.stubEnv("TZ", "Asia/Shanghai");
+    expect(formatters("en").dateTime(instant)).toBe("Oct 14, 2026, 20:30:00 GMT+8");
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
