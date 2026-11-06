@@ -40,7 +40,8 @@ let unmount = async () => {};
 afterEach(() => unmount());
 
 // Before disabling, the dialog says how many keys still route by the preset and which default this page reads points
-// at it, so the operator changes that first; a node that counts no keys has no number said for it.
+// at it, so the operator changes that first. The warning never turns the button off: the page's default may be stale
+// and the node decides (docs/domains/routing.md); a node that counts no keys has no number said for it.
 it.each([
   {
     name: "the platform's and the site's default, with keys",
@@ -77,4 +78,5 @@ it.each([
   for (const text of unsaid) {
     expect(dialog?.textContent).not.toContain(text);
   }
+  expect(dialog?.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(false);
 });
