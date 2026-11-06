@@ -107,7 +107,7 @@ func TestOperationsCreditGrant(t *testing.T) {
 		t.Errorf("while it waits: %s", got)
 	}
 	rec = f.do(http.MethodGet, "/operations/approvals/"+op.Approval.ApprovalId, "", as(f.s))
-	for _, want := range []string{`"account_id":"` + f.account + `"`, `"amount":"5000000000"`, `"hard_single_max":"20000000000"`} {
+	for _, want := range []string{`"account_id":"` + f.account + `"`, `"email":"alice@example.com"`, `"amount":"5000000000"`, `"hard_single_max":"20000000000"`} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("the owner does not see %s in %s", want, rec.Body)
 		}
