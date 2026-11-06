@@ -64,6 +64,7 @@ export const zh = {
     byDefaultRefused: "按默认（现在的默认不可用，建 key 会被拒绝；请选一个预设）",
     system: "系统放行",
     current: "现在的默认",
+    labelled: "预设：{{name}}",
     notDefault: "不是现在的默认",
     notDefaultNamed: "现在的默认：{{name}}",
     notDefaultHint: "默认改了不影响已经建好的 key。要让这把 key 用现在的默认，修改它、选标着“现在的默认”的预设。",
@@ -137,6 +138,7 @@ export const en: Messages<typeof zh> = {
     byDefaultRefused: "Default (it can’t be used now, so the key would be refused; choose a preset)",
     system: "System allow-all",
     current: "current default",
+    labelled: "Preset: {{name}}",
     notDefault: "Not the current default",
     notDefaultNamed: "Current default: {{name}}",
     notDefaultHint:

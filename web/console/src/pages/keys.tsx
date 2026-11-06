@@ -271,19 +271,21 @@ function KeyLimit({ apiKey }: { apiKey: Key }) {
 // A management key calls no model, so it has no preset. A call key without one routes by the system's allow-all: an
 // older key, or a node that gives no preset. A key keeps the preset it was made with when the default moves on
 // (docs/domains/routing.md「默认链与 key 落章」), so one bound to another than a key made now takes says so; a key
-// without a preset is not compared, since the node that listed it may be one that gives none.
-function KeyPreset({ apiKey }: { apiKey: Key }) {
+// without a preset is not compared, since the node that listed it may be one that gives none. Under the key's name, where
+// narrow screens show it instead of the column, it is labelled, and a management key shows nothing.
+function KeyPreset({ apiKey, labelled = false }: { apiKey: Key; labelled?: boolean }) {
   const { t } = useTranslation();
   const presetName = usePresetName();
   const newKeys = useNewKeys();
+  const label = (text: string) => (labelled ? t("routingPresets.key.labelled", { name: text }) : text);
   if (apiKey.kind === "management") {
-    return <span className="text-t4">{t("routingPresets.key.notApplicable")}</span>;
+    return labelled ? null : <span className="text-t4">{t("routingPresets.key.notApplicable")}</span>;
   }
   if (!apiKey.preset_id) {
     return (
-      <span className="text-t4" title={t("routingPresets.key.noneHint")}>
-        {t("routingPresets.key.none")}
-      </span>
+      <p className="truncate text-t4" title={t("routingPresets.key.noneHint")}>
+        {label(t("routingPresets.key.none"))}
+      </p>
     );
   }
   const name = presetName(apiKey);
@@ -294,7 +296,7 @@ function KeyPreset({ apiKey }: { apiKey: Key }) {
   return (
     <>
       <p className="truncate" title={name}>
-        {name}
+        {label(name)}
       </p>
       {moved ? (
         <p className="truncate text-label text-t4" title={t("routingPresets.key.notDefaultHint")}>
@@ -326,6 +328,9 @@ function KeyRow({
           {apiKey.name}
         </p>
         <p className="truncate font-mono text-label text-t4">{maskedKey(apiKey)}</p>
+        <div className="text-label text-t3 xl:hidden">
+          <KeyPreset apiKey={apiKey} labelled />
+        </div>
         {retired ? (
           <p className="truncate text-label text-warn" title={t("keys.retiredModels", { models: retired })}>
             {t("keys.retiredModels", { models: retired })}

@@ -307,5 +307,9 @@ it.each([
   // The rows ask for the default and the presets only once the keys are in.
   const keys = await render(<Keys />);
   await settle();
-  expect(texts(keys.container.querySelectorAll("td p.text-t4[title]"))).toEqual(moved);
+  // jsdom applies no breakpoints: every row has both the preset column and the labelled line narrow screens show under
+  // the name, so a key bound elsewhere is noted twice and every call key is labelled once.
+  const lines = texts(keys.container.querySelectorAll("td p"));
+  expect(lines.filter((line) => line?.startsWith("routingPresets.key.notDefault"))).toEqual([...moved, ...moved]);
+  expect(lines.filter((line) => line === "routingPresets.key.labelled")).toHaveLength(3);
 });
