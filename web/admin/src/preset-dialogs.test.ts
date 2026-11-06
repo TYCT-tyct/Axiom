@@ -1,6 +1,7 @@
 import type { AdminSchemas } from "@axiom/api";
+import { systemPreset } from "@axiom/app";
 import { expect, it } from "vitest";
-import { currencyOf, selectable, systemPreset } from "./preset-dialogs";
+import { currencyOf, selectable } from "./preset-dialogs";
 import type { PresetLayer } from "./queries";
 
 const preset = (over: Partial<AdminSchemas["RoutingPreset"]>) =>
