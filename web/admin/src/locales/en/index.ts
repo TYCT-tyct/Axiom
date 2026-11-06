@@ -1,5 +1,6 @@
 import type { Messages } from "@axiom/ui";
 import type zh from "../zh";
+import approvals from "./approvals";
 import audit from "./audit";
 import calls from "./calls";
 import mappings from "./mappings";
@@ -18,6 +19,7 @@ export default {
   forbiddenHint: "Ask the site owner to grant the permission.",
   nav: {
     overview: "Overview",
+    approvals: "Approvals",
     users: "Users",
     orders: "Orders",
     redeemCodes: "Redeem codes",
@@ -156,4 +158,5 @@ export default {
   pricing,
   redeem,
   settings,
+  approvals,
 } satisfies Messages<typeof zh>;

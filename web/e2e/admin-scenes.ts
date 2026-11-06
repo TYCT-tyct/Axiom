@@ -170,6 +170,12 @@ const scenes: Scene[] = [
   routingSwitch("routing-suspend", false, "routingPresets.suspension.suspend"),
   routingSwitch("routing-resume", true, "routingPresets.suspension.resume"),
   dialog("credit", `accounts/${acct(1)}`, "users.credit.open"),
+  view("approvals", "approvals"),
+  // The first approval is a credit grant with its caps, the third a sale price with its envelope (admin-operations.ts).
+  view("approval", `approvals/${uuid(17, 1)}`),
+  view("approval-price", `approvals/${uuid(17, 3)}`),
+  dialog("approval-approve", `approvals/${uuid(17, 1)}`, "approvals.approve"),
+  dialog("approval-reject", `approvals/${uuid(17, 1)}`, "approvals.reject"),
   dialog("refund-approve", "orders", "orders.refund.approve"),
   dialog("refund-reject", "orders", "orders.refund.reject"),
   dialog("account-suspend", `accounts/${acct(1)}`, "users.account.suspend"),

@@ -527,3 +527,34 @@ export const routingSuspensionQuery = queryOptions({
   queryKey: [accountKey, "routing-suspension"],
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/routing-suspension`, { signal })),
 });
+
+// What the operations agent asked the owner to approve, newest first, optionally in one state.
+export const approvalsQuery = (state?: AdminSchemas["OperationsApprovalState"]) =>
+  infiniteQueryOptions({
+    queryKey: [accountKey, "operations-approvals", state ?? ""],
+    queryFn: ({ pageParam, signal }) =>
+      unwrap(
+        adminApi.GET(`${base}/operations/approvals`, {
+          params: { query: { state, cursor: pageParam, limit: pageSize } },
+          signal,
+        }),
+      ),
+    initialPageParam: firstPage,
+    getNextPageParam: (page) => page.next_cursor,
+  });
+
+// One approval, its summary and parameters read as written: they are shown as JSON, and an integer in them is data.
+export const approvalQuery = (id: string) =>
+  queryOptions({
+    queryKey: [accountKey, "operations-approval", id],
+    queryFn: async ({ signal }) =>
+      parseJSONLossless(
+        await unwrap(
+          adminApi.GET(`${base}/operations/approvals/{approval_id}`, {
+            params: { path: { approval_id: id } },
+            parseAs: "text",
+            signal,
+          }),
+        ),
+      ) as AdminSchemas["OperationsApproval"],
+  });

@@ -5,6 +5,7 @@ import type { IconName } from "@axiom/ui";
 // is sent to the first page they may open.
 export const nav = [
   { to: "/", label: "nav.overview", icon: "grid", permission: "sites.manage" },
+  { to: "/approvals", label: "nav.approvals", icon: "check", permission: "operations.approve" },
   { to: "/users", label: "nav.users", icon: "card", permission: "users.view" },
   { to: "/orders", label: "nav.orders", icon: "card", permission: "sites.manage" },
   { to: "/redeem-codes", label: "nav.redeemCodes", icon: "card", permission: "sites.manage" },
