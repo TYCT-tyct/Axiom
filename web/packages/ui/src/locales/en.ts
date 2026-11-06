@@ -164,7 +164,7 @@ export default {
     endpoints: "Endpoints",
     endpoint: "Public name",
     endpointsNote:
-      "Name an endpoint here in provider.only, provider.ignore or a preset to require or exclude it. A reseller group’s name is an anonymous codename, the same on every model.",
+      "Name an endpoint here in provider.only, provider.ignore or a preset to require or exclude it. A reseller group’s name is an anonymous codename, the same on every model. This lists every endpoint, and a key’s routing preset may exclude some of them: which models a key can use is what the model list read with that key returns.",
     endpointPrice: "Endpoint price",
     endpointPriceDetails: "Full price schedule",
     endpointsUnavailable: "This server’s older version doesn’t list endpoints yet; they appear after it updates.",
