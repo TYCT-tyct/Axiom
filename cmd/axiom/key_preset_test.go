@@ -12,7 +12,8 @@ import (
 // TestNewKeysTakeTheDefaultPreset: a new call key is bound to the routing preset of the deepest layer that has a
 // default, by the console and by a management key alike; a later change of the default binds the next keys only, and a
 // default the key cannot use refuses the key instead of binding it to a wider layer's (docs/domains/routing.md「默认链与
-// key 落章」). A management key is never bound.
+// key 落章」). A management key is never bound. The console's read of the default names, at each step, the preset the
+// next key takes, or says it is refused.
 func TestNewKeysTakeTheDefaultPreset(t *testing.T) {
 	t.Parallel()
 	f := newConsoleFixture(t)
@@ -22,6 +23,21 @@ func TestNewKeysTakeTheDefaultPreset(t *testing.T) {
 		t.Helper()
 		return f.text(`SELECT coalesce(preset_id::text, 'none') FROM accounts.api_keys WHERE name = '` + name + `'`)
 	}
+	// nextKeys checks what the read of the default says the next key takes; "" is that it is refused.
+	nextKeys := func(when, want string) {
+		t.Helper()
+		var d consoleapi.AccountRoutingDefault
+		decode(t, f.do(http.MethodGet, "/routing-default", "", as(s)), &d)
+		got := ""
+		if d.NewKeysPresetId != nil {
+			got = d.NewKeysPresetId.String()
+		}
+		refused := d.NewKeysRefused != nil && *d.NewKeysRefused
+		if got != want || refused != (want == "") {
+			t.Errorf("%s: the default says new keys take %q refused %v, want %q", when, got, refused, want)
+		}
+	}
+	nextKeys("with only the platform's default", uuid.UUID(routing.SystemPreset).String())
 	f.createKey(s, `{"name":"before"}`)
 	if got := presetOf("before"); got != uuid.UUID(routing.SystemPreset).String() {
 		t.Errorf("a key with only the platform's default: %s, want the system preset", got)
@@ -39,6 +55,7 @@ func TestNewKeysTakeTheDefaultPreset(t *testing.T) {
 			('` + strict.String() + `', 1, '{"default": {"classes": ["official"]}}'), ('` + disabled.String() + `', 1, '{"default": {}}');
 		INSERT INTO routing.preset_defaults (scope, site_id, account_id, preset_id)
 			VALUES ('account', '` + site.String() + `', '` + account.String() + `', '` + strict.String() + `')`)
+	nextKeys("with the account's default", strict.String())
 	f.createKey(s, `{"name":"after"}`)
 	if _, secret := readManaged(t, f.managementRequest(http.MethodPost, "", `{"name":"managed"}`, manager.Secret), http.StatusCreated); secret == "" {
 		t.Fatal("the management key made no key")
@@ -52,6 +69,7 @@ func TestNewKeysTakeTheDefaultPreset(t *testing.T) {
 	}
 
 	f.run(`UPDATE routing.preset_defaults SET preset_id = '` + disabled.String() + `' WHERE account_id = '` + account.String() + `'`)
+	nextKeys("under a disabled default", "")
 	expect(t, "a key under a disabled default", f.do(http.MethodPost, "/keys", `{"name":"refused"}`, as(s)),
 		http.StatusConflict, consoleapi.ErrorCodePresetDefaultInvalid)
 	if rec := f.managementRequest(http.MethodPost, "", `{"name":"refused too"}`, manager.Secret); rec.Code != http.StatusConflict {

@@ -196,7 +196,7 @@ export interface paths {
         };
         /**
          * The account's default routing preset
-         * @description The preset the account's new keys are bound to, when the account sets one; absent `preset_id` means the account sets none and new keys take the site's or the platform's default.
+         * @description The preset the account's new keys are bound to, when the account sets one; absent `preset_id` means the account sets none and new keys take the site's or the platform's default. `new_keys_preset_id` names the preset that chain gives a key made now, so a page can show which keys are bound to another.
          */
         get: operations["getRoutingDefault"];
         /**
@@ -1468,7 +1468,7 @@ export interface components {
             version: number;
             disabled?: boolean;
         };
-        RoutingDefault: {
+        AccountRoutingDefault: {
             /**
              * Format: uuid
              * @description Absent when the layer sets no default.
@@ -1479,6 +1479,13 @@ export interface components {
              * @description 0 when the layer has no default; a change names the version it read.
              */
             version: number;
+            /**
+             * Format: uuid
+             * @description The preset a call key the account makes now is bound to: the account's default when it sets one, else the site's, else the platform's, else the system preset (the zero UUID). Absent when that default cannot be used (`new_keys_refused`) and from older nodes.
+             */
+            new_keys_preset_id?: string;
+            /** @description True when the deepest default set is one the account cannot use, so a call key made now without a preset is refused 409 `preset_default_invalid` until that default is changed. Absent otherwise. */
+            new_keys_refused?: boolean;
         };
         RoutingDefaultUpdate: {
             /**
@@ -3030,7 +3037,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RoutingDefault"];
+                    "application/json": components["schemas"]["AccountRoutingDefault"];
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -3057,7 +3064,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RoutingDefault"];
+                    "application/json": components["schemas"]["AccountRoutingDefault"];
                 };
             };
             400: components["responses"]["BadRequest"];

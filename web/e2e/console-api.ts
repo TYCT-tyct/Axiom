@@ -7,6 +7,7 @@ import {
   goodInvite,
   type MockState,
   type Schemas,
+  systemPreset,
   usualState,
   worstState,
 } from "./console-data.ts";
@@ -267,7 +268,12 @@ function setDefault({ body, state }: Ctx<"/api/console/v1/routing-default", "put
   if (body.version !== state.routingDefault.version) {
     return fail(409, "stale_revision");
   }
-  state.routingDefault = { preset_id: body.preset_id ?? undefined, version: state.routingDefault.version + 1 };
+  // The mock has no site or platform default: with the account's cleared, new keys take the system preset.
+  state.routingDefault = {
+    preset_id: body.preset_id ?? undefined,
+    version: state.routingDefault.version + 1,
+    new_keys_preset_id: body.preset_id ?? systemPreset,
+  };
   return ok(state.routingDefault);
 }
 

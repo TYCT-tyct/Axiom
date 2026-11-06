@@ -436,7 +436,8 @@ paths:
       summary: The account's default routing preset
       description: >-
         The preset the account's new keys are bound to, when the account sets one; absent `preset_id` means the
-        account sets none and new keys take the site's or the platform's default.
+        account sets none and new keys take the site's or the platform's default. `new_keys_preset_id` names the
+        preset that chain gives a key made now, so a page can show which keys are bound to another.
       security:
         - session: []
       x-axiom-level: signed_in
@@ -446,7 +447,7 @@ paths:
           description: The account's default.
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/RoutingDefault"}
+              schema: {$ref: "#/components/schemas/AccountRoutingDefault"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
@@ -474,7 +475,7 @@ paths:
           description: The account's default as set.
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/RoutingDefault"}
+              schema: {$ref: "#/components/schemas/AccountRoutingDefault"}
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
@@ -2724,12 +2725,24 @@ components:
         scope: {$ref: "#/components/schemas/RoutingPresetScope"}
         version: {type: integer, format: int64}
         disabled: {type: boolean}
-    RoutingDefault:
+    AccountRoutingDefault:
       type: object
       required: [version]
       properties:
         preset_id: {type: string, format: uuid, description: "Absent when the layer sets no default."}
         version: {type: integer, format: int64, minimum: 0, description: "0 when the layer has no default; a change names the version it read."}
+        new_keys_preset_id:
+          type: string
+          format: uuid
+          description: >-
+            The preset a call key the account makes now is bound to: the account's default when it sets one, else the
+            site's, else the platform's, else the system preset (the zero UUID). Absent when that default cannot be
+            used (`new_keys_refused`) and from older nodes.
+        new_keys_refused:
+          type: boolean
+          description: >-
+            True when the deepest default set is one the account cannot use, so a call key made now without a preset
+            is refused 409 `preset_default_invalid` until that default is changed. Absent otherwise.
     RoutingDefaultUpdate:
       type: object
       additionalProperties: false
