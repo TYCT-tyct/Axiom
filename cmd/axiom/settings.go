@@ -46,6 +46,7 @@ type nodeSettings struct {
 	operationsAddr                  string
 	operationsTLS                   *tls.Config
 	operationsSources               []netip.Prefix
+	mcp                             *bridgeSettings // the ops node's MCP bridge, nil while it is off
 	startupTimeout, shutdownTimeout time.Duration
 	databaseURL                     string
 	completionReserve               int
@@ -63,6 +64,16 @@ type nodeSettings struct {
 	objectstore                     objectstore.Config
 	retentionURL                    string
 	exchangeSource                  string
+}
+
+// bridgeSettings are what the ops node's MCP bridge needs (docs/domains/operations.md「MCP 映射」): the loopback address
+// Hermes reaches it on, the core's operations listener it forwards to, the node's certificate it presents there, the
+// file holding the operations credential, and the file it writes the token of each start to, which Hermes presents.
+type bridgeSettings struct {
+	addr                      string
+	operations                *url.URL
+	tls                       *tls.Config
+	tokenFile, localTokenFile string
 }
 
 // readSettings reads and checks every variable the node's roles use, so a node started wrong fails with the whole list.
@@ -241,10 +252,15 @@ func readDirectFormats(env *config.Env, s *nodeSettings) error {
 // use.
 func readNonCoreSettings(env *config.Env, s *nodeSettings) []error {
 	errs := rejectCoreSettings(env)
-	if !s.roles.has(roleIngress) {
-		return append(errs, rejectIngressSettings(env, s)...)
+	if s.roles.has(roleIngress) {
+		errs = append(errs, readIngressSettings(env, s)...)
+	} else {
+		errs = append(errs, rejectIngressSettings(env, s)...)
 	}
-	return append(errs, readIngressSettings(env, s)...)
+	if s.roles.has(roleOps) {
+		errs = append(errs, readBridgeSettings(env, s)...)
+	}
+	return errs
 }
 
 // rejectCoreSettings names the settings a node without the core role may not carry. Reading them here, rather than
@@ -259,10 +275,15 @@ func rejectCoreSettings(env *config.Env) []error {
 	return errs
 }
 
-// rejectIngressSettings names what only an ingress uses, for the ops node that has none of it.
+// rejectIngressSettings names what only an ingress uses, for the ops node that has none of it. The node's certificates
+// are the MCP bridge's too, so they belong to an ops node whose bridge is on.
 func rejectIngressSettings(env *config.Env, s *nodeSettings) []error {
+	names := []string{publicAddrVar, coreURLVar}
+	if !env.Set(mcpAddrVar) {
+		names = append(names, nodeTLSDirVar)
+	}
 	var errs []error
-	for _, name := range []string{publicAddrVar, coreURLVar, nodeTLSDirVar} {
+	for _, name := range names {
 		if env.Set(name) {
 			errs = append(errs, fmt.Errorf("%s: not used by a node with the %s role", name, s.roles))
 		}
@@ -274,7 +295,7 @@ func rejectIngressSettings(env *config.Env, s *nodeSettings) []error {
 func readIngressSettings(env *config.Env, s *nodeSettings) []error {
 	var errs []error
 	if value := env.Required(coreURLVar); value != "" {
-		core, err := parseCoreURL(value)
+		core, err := parseNodeURL(coreURLVar, value)
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -290,6 +311,54 @@ func readIngressSettings(env *config.Env, s *nodeSettings) []error {
 		}
 	}
 	return errs
+}
+
+// readBridgeSettings reads the MCP bridge of an ops node, which is on when AXIOM_MCP_ADDR is set. The bridge serves
+// only Hermes on the same machine, so its address must be loopback; with the address everything else it needs is
+// required, and without it any of the rest is a contradiction, like certificates without a listener.
+func readBridgeSettings(env *config.Env, s *nodeSettings) []error {
+	var errs []error
+	addr := env.Addr(mcpAddrVar, "")
+	if addr == "" {
+		for _, name := range []string{operationsURLVar, operationsTokenFileVar, mcpTokenFileVar} {
+			if env.Set(name) {
+				errs = append(errs, fmt.Errorf("%s: set without %s", name, mcpAddrVar))
+			}
+		}
+		return errs
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil && !isLoopbackIP(host) {
+		errs = append(errs, fmt.Errorf("%s: want a loopback address such as 127.0.0.1:8090, the bridge serves only this machine", mcpAddrVar))
+	}
+	s.mcp = &bridgeSettings{addr: addr, tokenFile: env.Required(operationsTokenFileVar), localTokenFile: env.Required(mcpTokenFileVar)}
+	return append(errs, readBridgeTarget(env, s.mcp)...)
+}
+
+// isLoopbackIP reports whether host is a loopback IP literal; a name could resolve anywhere.
+func isLoopbackIP(host string) bool {
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
+}
+
+// readBridgeTarget reads the core's operations listener the bridge calls and the node certificate it presents there.
+func readBridgeTarget(env *config.Env, b *bridgeSettings) []error {
+	value := env.Required(operationsURLVar)
+	dir := env.Required(nodeTLSDirVar)
+	if value == "" {
+		return nil // Required reported it
+	}
+	operations, err := parseNodeURL(operationsURLVar, value)
+	if err != nil {
+		return []error{err}
+	}
+	b.operations = operations
+	if dir == "" {
+		return nil
+	}
+	if b.tls, err = nodetls.Client(dir, operations.Hostname()); err != nil {
+		return []error{err}
+	}
+	return nil
 }
 
 // readSources is a listener's source restriction, named by variable: the configured networks, or loopback when the
@@ -360,13 +429,15 @@ func readOperationsSources(env *config.Env, s *nodeSettings) error {
 	return err
 }
 
-// parseCoreURL checks the one address an ingress forwards to. Node-to-node traffic is always mutual TLS, so the scheme is
-// https and the certificate must carry the URL's host; credentials in the URL would end up in errors and logs.
-func parseCoreURL(value string) (*url.URL, error) {
+// parseNodeURL checks the address of a core listener another node calls, named by variable: the node listener an
+// ingress forwards to, or the operations listener the MCP bridge calls. Node-to-node traffic is always mutual TLS, so
+// the scheme is https and the certificate must carry the URL's host; credentials in the URL would end up in errors and
+// logs.
+func parseNodeURL(variable, value string) (*url.URL, error) {
 	core, err := url.Parse(value)
 	if err != nil || core.Scheme != "https" || core.Host == "" || core.Hostname() == "" || core.User != nil ||
 		(core.Path != "" && core.Path != "/") || core.RawQuery != "" || core.Fragment != "" {
-		return nil, fmt.Errorf("%s: want an https URL such as https://core.internal:8083, with no path, query or credentials", coreURLVar)
+		return nil, fmt.Errorf("%s: want an https URL such as https://core.internal:8083, with no path, query or credentials", variable)
 	}
 	return core, nil
 }

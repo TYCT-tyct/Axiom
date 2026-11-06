@@ -307,6 +307,7 @@ func checkGuard(t *testing.T, url string) {
 type addresses struct {
 	Msg                      string `json:"msg"`
 	Public, Admin, Node, Ops string `json:",case:ignore"`
+	MCP                      string `json:"mcp"`
 	MaxConnections           int    `json:"max_connections"`
 	Reserved                 int    `json:"reserved"`
 	Nodes                    int    `json:"nodes"`

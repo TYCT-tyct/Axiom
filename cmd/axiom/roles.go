@@ -17,8 +17,8 @@ const (
 	// roleIngress terminates clients' connections and forwards every request to a core node over mutual TLS. It holds
 	// no state of its own.
 	roleIngress nodeRole = "ingress"
-	// roleOps runs the operator and monitoring side. Its operations interface is not built yet, so it serves only its
-	// probes.
+	// roleOps runs the operator side: its probes and, when configured, the MCP bridge that offers the operations API
+	// to the agent on the same machine.
 	roleOps nodeRole = "ops"
 )
 
