@@ -1,5 +1,14 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange, unwrapEmptyChange } from "@axiom/api";
-import { draftOf, type Invalid, RulesEditor, rulesOf, summaryOf, useClassOptions, useErrors } from "@axiom/app";
+import {
+  draftOf,
+  type Invalid,
+  RulesEditor,
+  rulesOf,
+  summaryOf,
+  systemPreset,
+  useClassOptions,
+  useErrors,
+} from "@axiom/app";
 import { Button, DataState, Icon, SelectField, TextField, useFormat } from "@axiom/ui";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
@@ -12,8 +21,6 @@ import { usePresetsHold } from "./routing-suspension";
 
 type Preset = AdminSchemas["RoutingPreset"];
 type Default = AdminSchemas["RoutingDefault"];
-
-export const systemPreset = "00000000-0000-0000-0000-000000000000";
 
 const slugPattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const currencyPattern = /^[A-Z]{3}$/;

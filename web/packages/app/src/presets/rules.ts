@@ -5,6 +5,10 @@ import type { Schemas } from "@axiom/api";
 // and the highest unit prices. Every member it does not edit (a member a newer node added, a platform preset's
 // `advanced`) is kept as it was, so saving never drops a limit the page cannot show; the server checks the whole.
 
+// The system preset: the allow-all every layer falls back to and a key without a preset routes by. Its ID is the zero
+// UUID, and nobody edits, disables or chooses it.
+export const systemPreset = "00000000-0000-0000-0000-000000000000";
+
 export const sorts = ["balanced", "price", "throughput", "latency", "quality"] as const;
 export type Sort = (typeof sorts)[number];
 export const policies = ["no_retention", "retained", "may_train"] as const;

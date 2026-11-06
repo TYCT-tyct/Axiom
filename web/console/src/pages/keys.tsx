@@ -21,7 +21,7 @@ import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CreateKeyDialog, DeleteKeyDialog, EditKeyDialog, SecretDialog } from "../key-dialogs";
 import { keyFiltersApplied } from "../key-filters";
-import { usePresetName } from "../key-form";
+import { useNewKeys, usePresetName } from "../key-form";
 import { maskedKey, toInstant, toLocalInput } from "../parts";
 import { type KeyFilters, keysQuery } from "../queries";
 
@@ -269,10 +269,13 @@ function KeyLimit({ apiKey }: { apiKey: Key }) {
 }
 
 // A management key calls no model, so it has no preset. A call key without one routes by the system's allow-all: an
-// older key, or a node that gives no preset.
+// older key, or a node that gives no preset. A key keeps the preset it was made with when the default moves on
+// (docs/domains/routing.md「默认链与 key 落章」), so one bound to another than a key made now takes says so; a key
+// without a preset is not compared, since the node that listed it may be one that gives none.
 function KeyPreset({ apiKey }: { apiKey: Key }) {
   const { t } = useTranslation();
   const presetName = usePresetName();
+  const newKeys = useNewKeys();
   if (apiKey.kind === "management") {
     return <span className="text-t4">{t("routingPresets.key.notApplicable")}</span>;
   }
@@ -284,10 +287,21 @@ function KeyPreset({ apiKey }: { apiKey: Key }) {
     );
   }
   const name = presetName(apiKey);
+  const moved = newKeys.id !== undefined && newKeys.id !== apiKey.preset_id;
+  const note = newKeys.name
+    ? t("routingPresets.key.notDefaultNamed", { name: newKeys.name })
+    : t("routingPresets.key.notDefault");
   return (
-    <p className="truncate" title={name}>
-      {name}
-    </p>
+    <>
+      <p className="truncate" title={name}>
+        {name}
+      </p>
+      {moved ? (
+        <p className="truncate text-label text-t4" title={t("routingPresets.key.notDefaultHint")}>
+          {note}
+        </p>
+      ) : null}
+    </>
   );
 }
 

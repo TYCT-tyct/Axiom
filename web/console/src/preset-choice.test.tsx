@@ -8,15 +8,17 @@ import { createRoot } from "react-dom/client";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { KeyForm, type KeyValues } from "./key-form";
+import Keys from "./pages/keys";
 import RoutingPresets from "./pages/routing-presets";
 import { DisablePresetDialog } from "./preset-dialogs";
 
 // What the mocked console answers, which a test changes between reads: the presets a key may use (or a failed read),
-// the account's default, and every default the page sends.
+// the account's default, the account's keys, and every default the page sends.
 const api = vi.hoisted(() => ({
   presetsFail: false,
   defaultFail: false,
-  routingDefault: { preset_id: "", version: 0 } as { preset_id?: string; version: number },
+  routingDefault: { preset_id: "", version: 0 } as Schemas["AccountRoutingDefault"],
+  keys: [] as Schemas["Key"][],
   sent: [] as unknown[],
 }));
 
@@ -51,6 +53,8 @@ vi.mock("@axiom/api", async (importOriginal) => {
             return api.presetsFail ? answer(503, "unavailable") : answer(200, { data: [preset(1), preset(2)] });
           case "/api/console/v1/routing-default":
             return api.defaultFail ? answer(503, "unavailable") : answer(200, api.routingDefault);
+          case "/api/console/v1/keys":
+            return answer(200, { data: api.keys });
           case "/api/console/v1/balance":
             return answer(500, "internal");
           default:
@@ -68,6 +72,13 @@ vi.mock("@axiom/api", async (importOriginal) => {
     },
   };
 });
+
+// The keys page keeps its filters in the address; here there are none.
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children }: { children: ReactNode }) => children,
+  useNavigate: () => () => Promise.resolve(),
+  useSearch: () => ({}),
+}));
 
 vi.mock("@axiom/app", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@axiom/app")>();
@@ -89,6 +100,7 @@ beforeEach(() => {
   api.presetsFail = false;
   api.defaultFail = false;
   api.routingDefault = { preset_id: preset(1).id, version: 1 };
+  api.keys = [];
   api.sent = [];
 });
 
@@ -226,4 +238,74 @@ it.each([
   const lines = [...document.querySelectorAll("dialog p")].map((p) => p.textContent);
   expect(lines).toEqual([...said, "body"].map((key) => `routingPresets.disable.${key}`));
   expect(document.querySelector<HTMLButtonElement>("dialog button[type=submit]")?.disabled).toBe(false);
+});
+
+const callKey = (name: string, bound?: number) =>
+  ({
+    id: `key_${name}`,
+    kind: "call",
+    name,
+    prefix: "sk-ax-v1-",
+    last4: "1234",
+    workspace_id: "ws_1",
+    created_at: "2026-11-01T00:00:00Z",
+    disabled: false,
+    preset_id: bound ? preset(bound).id : undefined,
+    preset: bound ? { id: preset(bound).id, name: `Preset ${bound}`, scope: "account", version: 1 } : undefined,
+  }) as Schemas["Key"];
+
+const texts = (nodes: NodeListOf<Element>) => [...nodes].map((node) => node.textContent);
+
+// The default's read names the preset a key made now takes (preset 2 here, the site's, as the account sets none) or
+// says the default refuses new keys; an older node says neither, and the pages say what they said before. The key
+// form's first option and its mark on that preset, the default panel's "none" and warning, and the keys bound to
+// another preset all follow the read. A key without a preset is not compared: the node that listed it may give none.
+it.each([
+  {
+    name: "a node that names it",
+    read: { version: 0, new_keys_preset_id: preset(2).id },
+    option: "byDefault",
+    marked: [preset(2).id],
+    none: "defaults.noneNamed",
+    refused: [],
+    moved: ["routingPresets.key.notDefaultNamed"],
+  },
+  {
+    name: "a default that refuses new keys",
+    read: { version: 0, new_keys_refused: true },
+    option: "byDefaultRefused",
+    marked: [],
+    none: "defaults.none",
+    refused: ["routingPresets.defaults.refused"],
+    moved: [],
+  },
+  {
+    name: "an older node",
+    read: { version: 0 },
+    option: "byLayers",
+    marked: [],
+    none: "defaults.none",
+    refused: [],
+    moved: [],
+  },
+])("follows what new keys take: $name", async ({ read, option, marked, none, refused, moved }) => {
+  api.routingDefault = read;
+  api.keys = [callKey("old", 1), callKey("current", 2), callKey("legacy")];
+  const form = await render(<KeyForm pending={false} error={null} onSubmit={() => {}} onCancel={() => {}} />);
+  const options = [...form.container.querySelectorAll<HTMLOptionElement>("select[name=preset_id] option")];
+  expect(options[0]?.textContent).toBe(`routingPresets.key.${option}`);
+  expect(options.filter((o) => o.textContent?.endsWith("routingPresets.key.current")).map((o) => o.value)).toEqual(
+    marked,
+  );
+  document.body.replaceChildren();
+
+  const page = await render(<RoutingPresets />);
+  expect(page.container.querySelector("form select option")?.textContent).toBe(`routingPresets.${none}`);
+  expect(texts(page.container.querySelectorAll("form p.text-warn"))).toEqual(refused);
+  document.body.replaceChildren();
+
+  // The rows ask for the default and the presets only once the keys are in.
+  const keys = await render(<Keys />);
+  await settle();
+  expect(texts(keys.container.querySelectorAll("td p.text-t4[title]"))).toEqual(moved);
 });
