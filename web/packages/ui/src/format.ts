@@ -1,10 +1,9 @@
-import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { type Language, locales } from "./i18n";
 
 // Money is an exact signed integer in billionths of one unit of a currency, as decimal text, because a JSON number would
 // round it in the browser (docs/domains/billing.md「钱的表示」).
-export type Money = { amount: string; currency: string };
+type Money = { amount: string; currency: string };
 const moneyDigits = 9;
 
 // decimalOf writes the integer as the decimal it stands for, "1500000000" as "1.500000000", which Intl formats without
@@ -75,9 +74,41 @@ function dateTimes(locale: string, zone: { timeZone: string }, seconds: boolean)
 // given, such as an account's setting, and says which zone it is in, so a time read off a screenshot is never ambiguous.
 // The clock has 24 two-digit hours, so times line up in a column, and the zone comes last: Chinese would otherwise put
 // it between the date and the time.
+//
+// Building the Intl formats costs over a millisecond on a fast core, and a page calls useFormat in every row and every
+// time it shows: rebuilt per component, the 50 rows of the admin's calls list took 0.7 s to render after their data
+// arrived, and over 5 s on a starved CI runner. So each language and zone builds them once for the page's lifetime.
+const built = new Map<string, ReturnType<typeof build>>();
+
 export function formatters(language: Language, timeZone?: string) {
+  const zone = timeZone ?? viewerZone();
+  const key = `${language} ${zone}`;
+  let format = built.get(key);
+  if (!format) {
+    format = build(language, zone);
+    built.set(key, format);
+  }
+  return format;
+}
+
+// The viewer's zone can change while the page is open, when the system's does. Resolving it builds an Intl format,
+// half the cost the cache above saves if every row did it, so one task resolves it once: a render of a whole list runs
+// in one task, and the next task reads the zone afresh.
+let viewer: string | undefined;
+
+function viewerZone() {
+  if (viewer === undefined) {
+    viewer = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    queueMicrotask(() => {
+      viewer = undefined;
+    });
+  }
+  return viewer;
+}
+
+function build(language: Language, timeZone: string) {
   const locale = locales[language];
-  const zone = { timeZone: timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone };
+  const zone = { timeZone };
   const integers = new Intl.NumberFormat(locale);
   // An exact decimal in text, such as a ratio or a supplier's own balance: grouped for the language, every digit kept.
   const decimals = new Intl.NumberFormat(locale, { maximumFractionDigits: 100 });
@@ -143,5 +174,5 @@ export function formatters(language: Language, timeZone?: string) {
 export function useFormat(timeZone?: string) {
   const { i18n } = useTranslation("common");
   const language = i18n.language as Language;
-  return useMemo(() => formatters(language, timeZone), [language, timeZone]);
+  return formatters(language, timeZone);
 }

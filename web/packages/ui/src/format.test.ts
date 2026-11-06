@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { formatters, moneyInput, parseMoney } from "./format";
+import { createInstance } from "i18next";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { I18nextProvider } from "react-i18next";
+import { describe, expect, it, vi } from "vitest";
+import { formatters, moneyInput, parseMoney, useFormat } from "./format";
 
 describe("money", () => {
   // Amounts are billionths of a unit; none may pass through a floating point number.
@@ -78,4 +82,35 @@ describe("dateTimeMinute", () => {
     expect(formatters("en", "UTC").dateTimeMinute(at)).toBe("Nov 6, 2026, 03:14 UTC");
     expect(formatters("zh", "Asia/Shanghai").dateTimeMinute(at)).toBe("2026年11月6日 11:14 GMT+8");
   });
+});
+
+// Building the Intl formats per component made the admin's 50-row calls list take seconds to render on a starved CI
+// runner after its data arrived: a page's rows and times must share one set per language and zone.
+it("builds the formats once, however many rows use them", () => {
+  const i18n = createInstance();
+  i18n.init({ lng: "en", defaultNS: "common", initAsync: false, resources: { en: { common: {} } } });
+  const Row = () => useFormat().dateTime(new Date("2026-10-14T12:30:00Z"));
+  const rows = Array.from({ length: 50 }, (_, index) => createElement(Row, { key: index }));
+  const built = vi.spyOn(Intl, "DateTimeFormat");
+  try {
+    renderToStaticMarkup(createElement(I18nextProvider, { i18n }, rows));
+    expect(built.mock.calls.length).toBeLessThan(rows.length);
+  } finally {
+    built.mockRestore();
+  }
+});
+
+// The cache must not keep the viewer in the zone the page opened in: after the system's zone changes, a time shows in
+// the new one, even between zones that print the same offset and name today but keep different summer times.
+it("follows the viewer's zone when the system's changes", async () => {
+  const instant = new Date("2026-10-14T12:30:00Z");
+  try {
+    vi.stubEnv("TZ", "America/Phoenix");
+    expect(formatters("en").dateTime(instant)).toBe("Oct 14, 2026, 05:30:00 MST");
+    await Promise.resolve(); // the change arrives in a later task than the render
+    vi.stubEnv("TZ", "America/Denver");
+    expect(formatters("en").dateTime(instant)).toBe("Oct 14, 2026, 06:30:00 MDT");
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
