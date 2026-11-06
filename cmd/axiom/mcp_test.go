@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -437,4 +438,107 @@ func TestServeOpsNodeBridgesToTheCore(t *testing.T) {
 		t.Error("the bridge called model_get, which a credential without catalog.view is not offered")
 	}
 	awaitStop(t, cancel, done)
+}
+
+// redirectingCore answers whoami for the credential op-ax-v1-test and redirects every other operation to location;
+// a whoami at /me redirects too when redirectWhoami is set.
+func redirectingCore(t *testing.T, location string, redirectWhoami bool) *httptest.Server {
+	t.Helper()
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/operations/v1/me" || redirectWhoami {
+			http.Redirect(w, r, location+"/elsewhere", http.StatusTemporaryRedirect)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := io.WriteString(w, `{"id":"opcred_test","name":"hermes","permissions":["operations.read","suppliers.view"],`+
+			`"platform":true,"proposer_vendors":[],"expires_at":"2099-01-01T00:00:00Z"}`); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(core.Close)
+	return core
+}
+
+// TestMCPBridgeNeverFollowsARedirect: a redirect from the core, to a plain-HTTP port of the same host or to another
+// host, is never followed, so neither the credential nor a write's body leaves the mutual-TLS connection: at start the
+// bridge refuses, and on a call the model gets a tool error. The place the redirect names receives nothing.
+func TestMCPBridgeNeverFollowsARedirect(t *testing.T) {
+	t.Parallel()
+	var reached atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached.Add(1) }))
+	t.Cleanup(elsewhere.Close)
+	sameHost := elsewhere.URL // 127.0.0.1 on another port, without TLS
+	otherHost := strings.Replace(elsewhere.URL, "127.0.0.1", "localhost", 1)
+	for name, location := range map[string]string{"the same host in plain HTTP": sameHost, "another host": otherHost} {
+		t.Run(name, func(t *testing.T) {
+			bridgeURL, local := startTestBridge(t, redirectingCore(t, location, false).URL, "op-ax-v1-test")
+			session := connectBridge(t, bridgeURL, local)
+			expectToolAnswer(t, session, "suppliers_list", map[string]any{"reason": "patrol"}, true, "Temporary Redirect")
+
+			dir := t.TempDir()
+			core, err := url.Parse(redirectingCore(t, location, true).URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := bridgeSettings{operations: core, tokenFile: writeFile(t, dir, "operations-token", "op-ax-v1-test\n"), localTokenFile: filepath.Join(dir, "mcp-token")}
+			if _, err := startBridge(t.Context(), cfg, http.DefaultTransport, slog.New(slog.DiscardHandler)); err == nil || !strings.Contains(err.Error(), "307") {
+				t.Fatalf("a redirected whoami: startBridge = %v, want a refusal with 307", err)
+			}
+		})
+	}
+	if n := reached.Load(); n != 0 {
+		t.Fatalf("the redirect's target received %d requests", n)
+	}
+}
+
+// TestMCPBridgeKeepsItsIdentityFiles: a token file for Hermes that is the credential or one of the node's certificate
+// files, under any name, stops the start before anything is written, and the file keeps its bytes.
+func TestMCPBridgeKeepsItsIdentityFiles(t *testing.T) {
+	t.Parallel()
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	core, err := url.Parse(gone.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]func(dir, credential, key string) string{
+		"the credential's path": func(_, credential, _ string) string { return credential },
+		"the credential, spelled again": func(dir, _, _ string) string {
+			return filepath.Join(dir, ".", "keys", "..", "keys", "operations-token")
+		},
+		"a link to the credential": func(dir, credential, _ string) string {
+			link := filepath.Join(dir, "mcp-token")
+			if err := os.Symlink(credential, link); err != nil {
+				t.Fatal(err)
+			}
+			return link
+		},
+		"the node's key": func(_, _, key string) string { return key },
+	}
+	for name, localFile := range cases {
+		t.Run(name, func(t *testing.T) { expectIdentityKept(t, core, localFile) })
+	}
+}
+
+// expectIdentityKept starts the bridge with a credential and a node key in dir/keys and the token file localFile names:
+// the start is refused for the token file, and both files keep their bytes.
+func expectIdentityKept(t *testing.T, core *url.URL, localFile func(dir, credential, key string) string) {
+	t.Helper()
+	dir := t.TempDir()
+	keys := filepath.Join(dir, "keys")
+	if err := os.Mkdir(keys, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	credential := writeFile(t, keys, "operations-token", "op-ax-v1-test\n")
+	key := writeFile(t, keys, nodetls.KeyFile, "the node's key\n")
+	cfg := bridgeSettings{operations: core, tlsDir: keys, tokenFile: credential, localTokenFile: localFile(dir, credential, key)}
+	_, err := startBridge(t.Context(), cfg, http.DefaultTransport, slog.New(slog.DiscardHandler))
+	if err == nil || !strings.Contains(err.Error(), mcpTokenFileVar+": names the same file") {
+		t.Fatalf("startBridge = %v, want a refusal of %s", err, mcpTokenFileVar)
+	}
+	for path, want := range map[string]string{credential: "op-ax-v1-test\n", key: "the node's key\n"} { // #nosec G101 -- a fake token this test wrote
+		if got, err := os.ReadFile(filepath.Clean(path)); err != nil || string(got) != want {
+			t.Errorf("%s now holds %q (%v)", path, got, err)
+		}
+	}
 }

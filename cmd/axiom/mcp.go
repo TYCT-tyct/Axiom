@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/nodetls"
 	"axiom/internal/platform/operationsapi"
 	"axiom/internal/platform/privfile"
 )
@@ -61,7 +63,16 @@ func startBridge(ctx context.Context, cfg bridgeSettings, transport http.RoundTr
 	if err != nil {
 		return nil, fmt.Errorf("the operations contract: %w", err)
 	}
-	b := &mcpBridge{core: cfg.operations, client: &http.Client{Transport: transport, Timeout: bridgeCallLimit}, tokenFile: cfg.tokenFile, logger: logger}
+	if err := guardLocalTokenFile(cfg); err != nil {
+		return nil, err
+	}
+	// A redirect is never followed: it would carry the credential, and a write's body, past the mutual TLS to wherever
+	// the answer points, a plain-HTTP port of the same host included. The core never redirects, so one is an error.
+	client := &http.Client{
+		Transport: transport, Timeout: bridgeCallLimit,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	b := &mcpBridge{core: cfg.operations, client: client, tokenFile: cfg.tokenFile, logger: logger}
 	me, err := b.whoami(ctx, tools)
 	if err != nil {
 		return nil, err
@@ -82,6 +93,32 @@ func startBridge(ctx context.Context, cfg bridgeSettings, transport http.RoundTr
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, Logger: logger})
 	return requireLocalToken(local, http.NewCrossOriginProtection().Handler(handler)), nil
+}
+
+// guardLocalTokenFile refuses a token file for Hermes that is a file the bridge reads its identity from, under any name
+// (a dot segment, a link, another mount of the directory): the rename that writes the token would replace the
+// credential or the node's key, and the bridge would go on to report ready with neither. It runs before anything is
+// written. A path that names no file yet cannot be one of them.
+func guardLocalTokenFile(cfg bridgeSettings) error {
+	target, err := os.Stat(cfg.localTokenFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", mcpTokenFileVar, err)
+	}
+	kept := map[string]string{operationsTokenFileVar: cfg.tokenFile}
+	if cfg.tlsDir != "" {
+		for _, name := range []string{nodetls.CertFile, nodetls.KeyFile, nodetls.CAFile} {
+			kept[nodeTLSDirVar+"'s "+name] = filepath.Join(cfg.tlsDir, name)
+		}
+	}
+	for what, path := range kept {
+		if info, err := os.Stat(path); err == nil && os.SameFile(target, info) {
+			return fmt.Errorf("%s: names the same file as %s, which the token would replace", mcpTokenFileVar, what)
+		}
+	}
+	return nil
 }
 
 // whoami asks the core for the credential: it is live, and what it holds decides the tools.
@@ -117,7 +154,8 @@ func mayCall(rules *agentRules, me operationsapi.AgentSelf) bool {
 		(rules.scope != agentPlatform || me.Platform)
 }
 
-// handler answers a call of t with the core's answer as JSON text. What the core refuses is a tool error the model can
+// handler answers a call of t with the core's answer as JSON text. What the core refuses, and a redirect it should never
+// give, is a tool error the model can
 // read and act on; so is a call the bridge could not make, and one whose answer it lost, which for a write says to
 // repeat it under the same key.
 func (b *mcpBridge) handler(t bridgeTool) mcp.ToolHandler {
@@ -133,7 +171,7 @@ func (b *mcpBridge) handler(t bridgeTool) mcp.ToolHandler {
 		if len(body) == 0 {
 			body = []byte(http.StatusText(status))
 		}
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(body)}}, IsError: status >= http.StatusBadRequest}, nil
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(body)}}, IsError: status >= http.StatusMultipleChoices}, nil
 	}
 }
 

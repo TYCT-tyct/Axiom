@@ -73,6 +73,7 @@ type bridgeSettings struct {
 	addr                      string
 	operations                *url.URL
 	tls                       *tls.Config
+	tlsDir                    string // where the node's certificate and key are, which the token file must not replace
 	tokenFile, localTokenFile string
 }
 
@@ -355,6 +356,7 @@ func readBridgeTarget(env *config.Env, b *bridgeSettings) []error {
 	if dir == "" {
 		return nil
 	}
+	b.tlsDir = dir
 	if b.tls, err = nodetls.Client(dir, operations.Hostname()); err != nil {
 		return []error{err}
 	}
