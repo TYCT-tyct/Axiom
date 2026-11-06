@@ -58,7 +58,7 @@ Effective date: 【effective date】
 
 4.5 Expiry and deletion: conversation content expires based on the last time it was referenced; after the last call referencing it expires, it is moved to cold storage or deleted by a periodic cleanup job. Call records are partitioned by time and moved to object storage after the default 90-day hot window; ledgers, financial records, and audit records are retained long-term under law and internal policy.
 
-4.6 Response cache: if a site enables the response cache, cached content is stored as separate encrypted entries for at most 24 hours and is included in account deletion and export scope; the cache does not change the access restrictions in this Policy.
+4.6 Response cache: if a site enables the response cache, cached content is stored as separate encrypted entries for at most 24 hours and is included in the scope of the controlled export; the cache does not change the access restrictions in this Policy.
 
 ## Sharing, Disclosure, and Processing by Others
 
@@ -88,7 +88,7 @@ Effective date: 【effective date】
 
 ## Retention
 
-7.1 Account and identity data: retained while the account exists; after account closure, records required by law are retained and the rest are deleted or anonymized.
+7.1 Account and identity data: retained while the account exists; after account closure, personal data is erased, records required by law are retained, and financial records are kept. After closure, stored conversation content and call records (including IP addresses and end-user identifiers) are handled as follows: 【handling of conversation content and call records after closure】.
 
 7.2 Call records: all call records are retained. The hot window is 90 days by default (adjustable), after which records are archived to object storage; archived objects are not deleted, to meet the product requirement that all call records be kept. Ledgers, financial records, and audit records are retained long-term under law and internal policy.
 
@@ -110,7 +110,7 @@ Effective date: 【effective date】
 
 ## Your Rights
 
-9.1 To the extent provided by applicable law, you have the right to access, copy, correct, supplement, and delete your personal data, to restrict or object to processing, to withdraw consent, to obtain a portable copy, and to complain to a regulator.
+9.1 To the extent provided by applicable law, you have the right to access, copy, correct, supplement, and delete your personal data, to restrict or object to processing, to withdraw consent, to obtain a portable copy, and to complain to a regulator. You can view and export your own call-record metadata in the console yourself (CSV, up to 31 days and 10,000 rows per export, with no conversation bodies, credentials, our costs, endpoints, or routing), as well as your credit history (the latest 10,000 entries).
 
 9.2 You may make a request through the console or 【contact details】. We may need to verify your identity and will respond within the period permitted by law. For repetitive, excessive, or vexatious requests, we may charge a reasonable fee or refuse.
 
@@ -118,7 +118,7 @@ Effective date: 【effective date】
 
 9.4 Conversation bodies cannot be viewed through the product interface or ordinary APIs. If applicable law gives you the right to access or copy conversation content, please contact 【contact details】; we will verify your identity and handle the request through a controlled process to the extent permitted by law.
 
-9.5 Account closure: you may request closure through the console or 【contact details】. After closure, your personal data is handled under this Policy, financial records and records required by law are retained, remaining credit is handled under the site’s refund policy, and the same email address may register again but will receive a new account.
+9.5 Account closure: you may request closure through 【contact details】; an account’s sole owner must first transfer ownership. After closure, your personal data is handled under this Policy, financial records and records required by law are retained, remaining credit is handled under the site’s refund policy, and the same email address may register again but will receive a new account.
 
 9.6 Marketing opt-out: you may opt out of marketing messages at any time through the unsubscribe link in an email or 【contact details】. Service, security, and billing notices are not marketing and cannot be opted out of.
 
@@ -143,6 +143,8 @@ Effective date: 【effective date】
 12.2 After a change takes effect, your continued use of the Service means you accept the updated Policy; if you do not accept it, you must stop using the Service and may request a refund of unused credit under the refund policy.
 
 12.3 If applicable law requires separate consent, we will obtain it separately.
+
+12.4 This Policy is published in versions, with separate Chinese and English texts. A published version is never edited or deleted; an update is always a new version. After a new version is published, you must read and accept it the next time you use the console before you can continue using it. We record the document type, language, version, and time of each acceptance.
 
 ## Contact Us
 
