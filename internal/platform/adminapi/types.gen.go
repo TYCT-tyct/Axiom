@@ -860,22 +860,25 @@ func (e OAuthProvider) Valid() bool {
 
 // Defines values for OperationRisk.
 const (
-	Delisting OperationRisk = "delisting"
-	Price     OperationRisk = "price"
-	Routine   OperationRisk = "routine"
-	TopUp     OperationRisk = "top_up"
+	OperationRiskDelisting OperationRisk = "delisting"
+	OperationRiskGift      OperationRisk = "gift"
+	OperationRiskPrice     OperationRisk = "price"
+	OperationRiskRoutine   OperationRisk = "routine"
+	OperationRiskTopUp     OperationRisk = "top_up"
 )
 
 // Valid indicates whether the value is a known member of the OperationRisk enum.
 func (e OperationRisk) Valid() bool {
 	switch e {
-	case Delisting:
+	case OperationRiskDelisting:
 		return true
-	case Price:
+	case OperationRiskGift:
 		return true
-	case Routine:
+	case OperationRiskPrice:
 		return true
-	case TopUp:
+	case OperationRiskRoutine:
+		return true
+	case OperationRiskTopUp:
 		return true
 	default:
 		return false
@@ -968,12 +971,15 @@ func (e OperationsApprovalTier) Valid() bool {
 
 // Defines values for OperationsCapCategory.
 const (
-	MoneyTopUp OperationsCapCategory = "money.top_up"
+	MoneyCredit OperationsCapCategory = "money.credit"
+	MoneyTopUp  OperationsCapCategory = "money.top_up"
 )
 
 // Valid indicates whether the value is a known member of the OperationsCapCategory enum.
 func (e OperationsCapCategory) Valid() bool {
 	switch e {
+	case MoneyCredit:
+		return true
 	case MoneyTopUp:
 		return true
 	default:
@@ -3414,7 +3420,7 @@ type OperationsApprovalTier string
 // OperationsCapAmount An amount in billionths of one unit of the policy's currency, as integer text.
 type OperationsCapAmount = string
 
-// OperationsCapCategory A kind of money the agent moves, each with its own caps; top-ups of suppliers for now.
+// OperationsCapCategory A kind of money the agent moves, each with its own caps; top-ups of suppliers and credit grants to accounts.
 type OperationsCapCategory string
 
 // OperationsCapLimits The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or not: one proposal, the day and the week. Reserved and committed amounts both count.
@@ -3445,7 +3451,7 @@ type OperationsCapLimits struct {
 
 // OperationsCapPolicy defines model for OperationsCapPolicy.
 type OperationsCapPolicy struct {
-	// Category A kind of money the agent moves, each with its own caps; top-ups of suppliers for now.
+	// Category A kind of money the agent moves, each with its own caps; top-ups of suppliers and credit grants to accounts.
 	Category OperationsCapCategory `json:"category"`
 	Currency string                `json:"currency"`
 

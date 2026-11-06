@@ -58,6 +58,13 @@ func topUp(credential, key uuid.UUID, site *uuid.UUID, supplier string, amount i
 	}}
 }
 
+// gift is pm as a credit grant to an account: the same amounts in the money.credit caps.
+func gift(pm proposal) proposal {
+	pm.p.Tool, pm.p.Risk, pm.p.Target = "credit_grant", operations.RiskGift, operations.Target{Kind: "account", ID: pm.p.Target.ID}
+	pm.m.Category, pm.m.Object = operations.CategoryCredit, pm.p.Target
+	return pm
+}
+
 func (db opsDB) proposeMoney(t *testing.T, pm proposal) (operations.Operation, bool, error) {
 	t.Helper()
 	var op operations.Operation
@@ -69,16 +76,16 @@ func (db opsDB) proposeMoney(t *testing.T, pm proposal) (operations.Operation, b
 	return op, replayed, err
 }
 
-// seed puts used amounts in a site's counters for today: the category's day, its week, and supplier s1's day, with
-// the day's count of proposals.
-func (db opsDB) seed(t *testing.T, site uuid.UUID, day, week, object int64, count int) {
+// seed puts used amounts in a site's counters of category for today: the category's day, its week, and object s1's
+// day, with the day's count of proposals.
+func (db opsDB) seed(t *testing.T, category operations.Category, object string, site uuid.UUID, day, week, used int64, count int) {
 	t.Helper()
 	if err := pgtest.Run(t.Context(), db.superuser, fmt.Sprintf(`INSERT INTO operations.cap_counters
 		(category, window_kind, window_start, object_kind, object_id, site_id, committed, count) VALUES
-		('money.top_up', 'day', date_trunc('day', now(), 'UTC'), '', '', '%[1]s', %[2]d, %[5]d),
-		('money.top_up', 'week', date_trunc('week', now(), 'UTC'), '', '', '%[1]s', %[3]d, 0),
-		('money.top_up', 'day', date_trunc('day', now(), 'UTC'), 'supplier', 's1', '%[1]s', %[4]d, 0)`,
-		site, day, week, object, count)); err != nil {
+		('%[6]s', 'day', date_trunc('day', now(), 'UTC'), '', '', '%[1]s', %[2]d, %[5]d),
+		('%[6]s', 'week', date_trunc('week', now(), 'UTC'), '', '', '%[1]s', %[3]d, 0),
+		('%[6]s', 'day', date_trunc('day', now(), 'UTC'), '%[7]s', 's1', '%[1]s', %[4]d, 0)`,
+		site, day, week, used, count, category, object)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -94,49 +101,35 @@ func (db opsDB) counters(t *testing.T, site *uuid.UUID) string {
 		FROM operations.cap_counters WHERE `+where)
 }
 
-// TestCapDimensions: each autonomous limit sends a proposal over it to the owner, each hard limit refuses one over it
-// with nothing written, and a scope without a policy moves no money. Every case is its own site.
+// dimension is a case of TestCapDimensions: what the counters hold before a proposal of amount, and what it comes to,
+// a state for top-ups or the hard limit that refuses it.
+type dimension struct {
+	name                     string
+	day, week, object, count int64
+	amount                   int64
+	want                     string
+}
+
+// TestCapDimensions: each autonomous limit sends a top-up over it to the owner, each hard limit refuses one over it
+// with nothing written, and a scope without a policy moves no money. A credit grant has the same hard limits but
+// always waits for the owner, within every autonomous limit too. Every case is its own site.
 func TestCapDimensions(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
-	for _, c := range []struct {
-		name                     string
-		day, week, object, count int64
-		amount                   int64
-		want                     string
-	}{
-		{"within every limit", 0, 0, 0, 0, 5, "approved"},
-		{"at every limit", 15, 30, 5, 2, 10, "approved"},
-		{"over the single limit", 0, 0, 0, 0, 11, "pending_approval"},
-		{"over the daily limit", 20, 20, 0, 0, 6, "pending_approval"},
-		{"over the weekly limit", 0, 36, 0, 0, 5, "pending_approval"},
-		{"over the object's daily limit", 12, 12, 12, 0, 4, "pending_approval"},
-		{"over the daily count", 0, 0, 0, 3, 1, "pending_approval"},
-		{"over the hard single limit", 0, 0, 0, 0, 21, "hard_single"},
-		{"over the hard daily limit", 46, 46, 0, 0, 5, "hard_daily"},
-		{"over the hard weekly limit", 0, 56, 0, 0, 5, "hard_weekly"},
-	} {
-		site := uuid.NewV7()
-		if _, err := db.setPolicy(t, limits(&site), 0); err != nil {
-			t.Fatal(err)
-		}
-		db.seed(t, site, c.day, c.week, c.object, int(c.count))
-		op, _, err := db.proposeMoney(t, topUp(uuid.NewV7(), uuid.NewV7(), &site, "s1", c.amount))
-		got := string(op.State)
-		if exceeded := (*operations.CapExceeded)(nil); errors.As(err, &exceeded) {
-			got = exceeded.Limit
-		} else if err != nil {
-			t.Fatalf("%s: %v", c.name, err)
-		}
-		if got != c.want {
-			t.Errorf("%s: %s, want %s", c.name, got, c.want)
-		}
-		want := fmt.Sprintf("%d+%d#%d %d+%d#1 %d+%d#1", c.amount, c.day, c.count+1, c.amount, c.week, c.amount, c.object)
-		if op.ID == (uuid.UUID{}) {
-			want = fmt.Sprintf("0+%d#%d 0+%d#0 0+%d#0", c.day, c.count, c.week, c.object)
-		}
-		if got := db.counters(t, &site); got != want {
-			t.Errorf("%s: the counters are %s, want %s", c.name, got, want)
+	for _, category := range []operations.Category{operations.CategoryTopUp, operations.CategoryCredit} {
+		for _, c := range []dimension{
+			{"within every limit", 0, 0, 0, 0, 5, "approved"},
+			{"at every limit", 15, 30, 5, 2, 10, "approved"},
+			{"over the single limit", 0, 0, 0, 0, 11, "pending_approval"},
+			{"over the daily limit", 20, 20, 0, 0, 6, "pending_approval"},
+			{"over the weekly limit", 0, 36, 0, 0, 5, "pending_approval"},
+			{"over the object's daily limit", 12, 12, 12, 0, 4, "pending_approval"},
+			{"over the daily count", 0, 0, 0, 3, 1, "pending_approval"},
+			{"over the hard single limit", 0, 0, 0, 0, 21, "hard_single"},
+			{"over the hard daily limit", 46, 46, 0, 0, 5, "hard_daily"},
+			{"over the hard weekly limit", 0, 56, 0, 0, 5, "hard_weekly"},
+		} {
+			db.expectDimension(t, category, c)
 		}
 	}
 	other := uuid.NewV7()
@@ -146,8 +139,48 @@ func TestCapDimensions(t *testing.T) {
 	if _, _, err := db.proposeMoney(t, topUp(uuid.NewV7(), uuid.NewV7(), nil, "s1", 1)); !errors.Is(err, operations.ErrNoCapPolicy) {
 		t.Errorf("the platform without a policy: %v", err)
 	}
+	if _, _, err := db.proposeMoney(t, gift(topUp(uuid.NewV7(), uuid.NewV7(), &other, "s1", 1))); !errors.Is(err, operations.ErrNoCapPolicy) {
+		t.Errorf("a site without a credit policy: %v", err)
+	}
 	if got := db.text(t, `SELECT count(*)::text FROM operations.operations WHERE state NOT IN ('approved', 'pending_approval')`); got != "0" {
 		t.Errorf("%s operations were left by refusals", got)
+	}
+}
+
+// expectDimension proposes c in a site of its own with the test's limits for category and checks what it came to and
+// what the counters hold after it.
+func (db opsDB) expectDimension(t *testing.T, category operations.Category, c dimension) {
+	t.Helper()
+	site := uuid.NewV7()
+	policy := limits(&site)
+	policy.Category = category
+	if _, err := db.setPolicy(t, policy, 0); err != nil {
+		t.Fatal(err)
+	}
+	pm, want := topUp(uuid.NewV7(), uuid.NewV7(), &site, "s1", c.amount), c.want
+	if category == operations.CategoryCredit {
+		pm = gift(pm)
+		if want == "approved" {
+			want = "pending_approval"
+		}
+	}
+	db.seed(t, category, pm.m.Object.Kind, site, c.day, c.week, c.object, int(c.count))
+	op, _, err := db.proposeMoney(t, pm)
+	got := string(op.State)
+	if exceeded := (*operations.CapExceeded)(nil); errors.As(err, &exceeded) {
+		got = exceeded.Limit
+	} else if err != nil {
+		t.Fatalf("%s %s: %v", category, c.name, err)
+	}
+	if got != want {
+		t.Errorf("%s %s: %s, want %s", category, c.name, got, want)
+	}
+	counted := fmt.Sprintf("%d+%d#%d %d+%d#1 %d+%d#1", c.amount, c.day, c.count+1, c.amount, c.week, c.amount, c.object)
+	if op.ID == (uuid.UUID{}) {
+		counted = fmt.Sprintf("0+%d#%d 0+%d#0 0+%d#0", c.day, c.count, c.week, c.object)
+	}
+	if got := db.counters(t, &site); got != counted {
+		t.Errorf("%s %s: the counters are %s, want %s", category, c.name, got, counted)
 	}
 }
 
@@ -368,6 +401,67 @@ func TestReservationCommit(t *testing.T) {
 	}
 }
 
+// TestCreditCommit: an approved credit grant commits its own reservation once, confirmed by itself, as the agent's;
+// one released or already committed has nothing to commit.
+func TestCreditCommit(t *testing.T) {
+	t.Parallel()
+	r := newReservations(t)
+	credit := r.policy
+	credit.Category = operations.CategoryCredit
+	if _, err := r.setPolicy(t, credit, 0); err != nil {
+		t.Fatal(err)
+	}
+	given := r.gift()
+	if got, err := r.commitApproved(given, true); err != nil || got.State != "committed" || got.Proof != "credit_batch:"+given.ID.String() {
+		t.Errorf("the commit: %+v %v", got, err)
+	}
+	if _, err := r.commitApproved(given, false); !errors.Is(err, operations.ErrNotReserved) {
+		t.Errorf("committing twice: %v", err)
+	}
+	refused := r.gift()
+	if _, err := r.decide(t, refused, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.commitApproved(refused, false); !errors.Is(err, operations.ErrNotReserved) {
+		t.Errorf("committing a released reservation: %v", err)
+	}
+	if got := r.text(t, `SELECT (SELECT string_agg(state || ':' || coalesce((confirmed_by = operation_id)::text, '-'), ',' ORDER BY operation_id)
+		FROM operations.money_actions) || ' ' || (SELECT string_agg(reserved || '+' || committed || '#' || count, ' ' ORDER BY window_kind)
+		FROM operations.cap_counters WHERE category = 'money.credit' AND object_kind = '')`); got != "committed:true,released:- 0+5#2 0+5#2" {
+		t.Errorf("after the commit and the release: %s", got)
+	}
+	if got := r.audit(); got != "reservation.commit:operations_agent,reservation.release:user" {
+		t.Errorf("the reservations' audit is %s", got)
+	}
+}
+
+// gift proposes a credit grant of 5, which waits for the owner.
+func (r reservations) gift() operations.Operation {
+	r.t.Helper()
+	op, _, err := r.proposeMoney(r.t, gift(topUp(r.credential, uuid.NewV7(), nil, "acct_1", 5)))
+	if err != nil || op.State != operations.StatePending {
+		r.t.Fatalf("a credit grant: %+v %v", op, err)
+	}
+	return op
+}
+
+// commitApproved commits op as its approval's run does, approving it first when decide says so.
+func (r reservations) commitApproved(op operations.Operation, decide bool) (got operations.Reservation, err error) {
+	_, err = r.in(r.t, func(tx pg.Tx) (operations.Operation, error) {
+		if decide {
+			if op, err = operations.Decide(r.t.Context(), tx, owner, op.Approval.ID, true, "ok"); err != nil {
+				return op, err
+			}
+		}
+		if _, err := operations.CheckReservation(r.t.Context(), tx, op); err != nil {
+			return op, err
+		}
+		got, err = operations.CommitApproved(r.t.Context(), tx, op, "credit_batch:"+op.ID.String())
+		return op, err
+	})
+	return got, err
+}
+
 // TestReservationExpiry: a reservation nobody confirmed by the end of its day cannot be confirmed, and the sweep
 // releases it as the system, once.
 func TestReservationExpiry(t *testing.T) {
@@ -424,7 +518,7 @@ func TestCapRaces(t *testing.T) {
 	if _, err := db.setPolicy(t, limits(&site), 0); err != nil {
 		t.Fatal(err)
 	}
-	db.seed(t, site, 35, 35, 0, 0)
+	db.seed(t, operations.CategoryTopUp, "supplier", site, 35, 35, 0, 0)
 	var second error
 	db.whileWaited(t, func(tx pg.Tx) error {
 		ten := topUp(uuid.NewV7(), uuid.NewV7(), &site, "s1", 10)

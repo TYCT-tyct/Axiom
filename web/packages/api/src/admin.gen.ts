@@ -3791,10 +3791,10 @@ export interface components {
             previous_token_until?: string;
         };
         /**
-         * @description A kind of money the agent moves, each with its own caps; top-ups of suppliers for now.
+         * @description A kind of money the agent moves, each with its own caps; top-ups of suppliers and credit grants to accounts.
          * @enum {string}
          */
-        OperationsCapCategory: "money.top_up";
+        OperationsCapCategory: "money.top_up" | "money.credit";
         /** @description An amount in billionths of one unit of the policy's currency, as integer text. */
         OperationsCapAmount: string;
         /** @description The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or not: one proposal, the day and the week. Reserved and committed amounts both count. */
@@ -3954,7 +3954,7 @@ export interface components {
          * @description The operation's class, which decides whether it waits for the owner.
          * @enum {string}
          */
-        OperationRisk: "routine" | "delisting" | "top_up" | "price";
+        OperationRisk: "routine" | "delisting" | "top_up" | "price" | "gift";
         OperationTarget: {
             /** @description What the operation acts on, such as `model`. */
             kind: string;

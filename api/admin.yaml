@@ -7380,8 +7380,8 @@ components:
           description: When the token the last rotation replaced stops working; absent once it has.
     OperationsCapCategory:
       type: string
-      enum: [money.top_up]
-      description: A kind of money the agent moves, each with its own caps; top-ups of suppliers for now.
+      enum: [money.top_up, money.credit]
+      description: A kind of money the agent moves, each with its own caps; top-ups of suppliers and credit grants to accounts.
     OperationsCapAmount:
       type: string
       pattern: ^(0|[1-9][0-9]{0,17})$
@@ -7584,7 +7584,7 @@ components:
         compensating operation reverts it.
     OperationRisk:
       type: string
-      enum: [routine, delisting, top_up, price]
+      enum: [routine, delisting, top_up, price, gift]
       description: The operation's class, which decides whether it waits for the owner.
     OperationTarget:
       type: object
