@@ -407,7 +407,7 @@ type SyncResult struct{ Model ModelID; Slug, Entry string; Base *uuid.UUID; Outc
 - 定时同步的用例（`sync_job_test.go`、`sync_job_recovery_test.go`）：队列启动即执行，健康或上游 503 的轮次均完成，`queue=syncs`、`max_attempts=1`，信号用 `sync.Once`；成功、失败、恢复及部分发布后的下一轮不重复发布；失败保留最后成功和完整待确认数，取消后仍记录并完成；恰在 48 小时不触发兜底、超过后日志和计数上升、恢复停止、从未成功也有兜底；manual/official 来源和涨跌幅安全阀保持不变。
 - 状态指标和边界用例（`sync_metrics_test.go`）：没有下一轮时 gauge 仍按受控时钟增长，从未成功、失败和恢复均能读到；生产记录时间在前后两次数据库 `clock_timestamp()` 之间；缺条目的 held 不计入待确认数且保持价格；记录写入失败仍返回错误。
 
-`Schedule.Aligned` 合并两张表的门槛并逐项取高（或相加），`Schedule.AddMarkup` 把固定加价应用到各服务等级，`Schedule.CoversCost` 与 `Schedule.PriceChange` 分别比较保本和相对变化；都复用实际计费的有效取价，口径不同返回 `ErrTierBasisChanged`。这些是后台售价发布的纯运算，不在逐事件调用路径执行。
+`Schedule.Aligned` 合并两张表的门槛并逐项取高（或相加），`Schedule.AddMarkup` 把固定加价应用到各服务等级，`Schedule.CoversCost` 与 `Schedule.PriceChange` 分别比较保本和相对变化，`Schedule.LargestChange` 与 `Schedule.SmallestMargin` 给出最大的相对变动和最小的毛利率（运营 agent 的售价包络用，量不出比例时 `measured` 为假）；都复用实际计费的有效取价，口径不同返回 `ErrTierBasisChanged`。这些是后台售价发布的纯运算，不在逐事件调用路径执行。
 
 ## 决策与理由
 

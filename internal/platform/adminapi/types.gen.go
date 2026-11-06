@@ -861,6 +861,7 @@ func (e OAuthProvider) Valid() bool {
 // Defines values for OperationRisk.
 const (
 	Delisting OperationRisk = "delisting"
+	Price     OperationRisk = "price"
 	Routine   OperationRisk = "routine"
 	TopUp     OperationRisk = "top_up"
 )
@@ -869,6 +870,8 @@ const (
 func (e OperationRisk) Valid() bool {
 	switch e {
 	case Delisting:
+		return true
+	case Price:
 		return true
 	case Routine:
 		return true
@@ -3615,6 +3618,40 @@ type OperationsOverview struct {
 	Until            *time.Time                  `json:"until,omitempty"`
 }
 
+// OperationsPriceEnvelope How far the agent moves a site's sale prices without the owner, in basis points: every price it publishes keeps at least `min_margin_bps` of its price over its cost; one model's prices move at most `model_daily_change_bps` in a UTC day, up and down added together; a UTC day publishes at most `daily_changes` prices of at most `daily_models` models. Publications the owner approves count too.
+type OperationsPriceEnvelope struct {
+	DailyChanges        int32 `json:"daily_changes"`
+	DailyModels         int32 `json:"daily_models"`
+	MinMarginBps        int32 `json:"min_margin_bps"`
+	ModelDailyChangeBps int64 `json:"model_daily_change_bps"`
+}
+
+// OperationsPriceEnvelopeList defines model for OperationsPriceEnvelopeList.
+type OperationsPriceEnvelopeList struct {
+	Data []OperationsPriceEnvelopeSetting `json:"data"`
+}
+
+// OperationsPriceEnvelopeSetting defines model for OperationsPriceEnvelopeSetting.
+type OperationsPriceEnvelopeSetting struct {
+	// Limits How far the agent moves a site's sale prices without the owner, in basis points: every price it publishes keeps at least `min_margin_bps` of its price over its cost; one model's prices move at most `model_daily_change_bps` in a UTC day, up and down added together; a UTC day publishes at most `daily_changes` prices of at most `daily_models` models. Publications the owner approves count too.
+	Limits OperationsPriceEnvelope `json:"limits"`
+	Rev    int64                   `json:"rev"`
+
+	// SiteId A site's ID (TypeID).
+	SiteId    SiteId    `json:"site_id"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// OperationsPriceEnvelopeUpdate defines model for OperationsPriceEnvelopeUpdate.
+type OperationsPriceEnvelopeUpdate struct {
+	// Limits How far the agent moves a site's sale prices without the owner, in basis points: every price it publishes keeps at least `min_margin_bps` of its price over its cost; one model's prices move at most `model_daily_change_bps` in a UTC day, up and down added together; a UTC day publishes at most `daily_changes` prices of at most `daily_models` models. Publications the owner approves count too.
+	Limits OperationsPriceEnvelope `json:"limits"`
+	Reason string                  `json:"reason"`
+
+	// Rev The revision read; 0 makes the envelope.
+	Rev int64 `json:"rev"`
+}
+
 // OperationsRateTarget defines model for OperationsRateTarget.
 type OperationsRateTarget struct {
 	// Gap Actual minus target in basis points. Absent when the actual rate is unavailable, such as no settled revenue or no previous-month cohort.
@@ -5950,6 +5987,12 @@ type RotateOperationsCredentialParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetOperationsPriceEnvelopeParams defines parameters for SetOperationsPriceEnvelope.
+type SetOperationsPriceEnvelopeParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListCashMovementsParams defines parameters for ListCashMovements.
 type ListCashMovementsParams struct {
 	SiteId    SiteId     `form:"site_id" json:"site_id"`
@@ -6616,6 +6659,9 @@ type RevokeOperationsCredentialJSONRequestBody = ReasonRequest
 
 // RotateOperationsCredentialJSONRequestBody defines body for RotateOperationsCredential for application/json ContentType.
 type RotateOperationsCredentialJSONRequestBody = OperationsCredentialRotate
+
+// SetOperationsPriceEnvelopeJSONRequestBody defines body for SetOperationsPriceEnvelope for application/json ContentType.
+type SetOperationsPriceEnvelopeJSONRequestBody = OperationsPriceEnvelopeUpdate
 
 // InvestigatePaymentDiscrepancyJSONRequestBody defines body for InvestigatePaymentDiscrepancy for application/json ContentType.
 type InvestigatePaymentDiscrepancyJSONRequestBody = ReasonRequest

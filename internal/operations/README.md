@@ -1,6 +1,6 @@
 # operations
 
-运营看板的业务目标、运营接口的操作记录、运营操作与审批、资金上限在代码里的接口、表和不变量。规则和理由见[运营的「业务目标」](../../docs/domains/operations.md#业务目标)、[「审计」](../../docs/domains/operations.md#审计)、[「风险分级与审批」](../../docs/domains/operations.md#风险分级与审批)和[「资金操作上限」](../../docs/domains/operations.md#资金操作上限)；本文只写实现时依赖的部分。
+运营看板的业务目标、运营接口的操作记录、运营操作与审批、资金上限和售价包络在代码里的接口、表和不变量。规则和理由见[运营的「业务目标」](../../docs/domains/operations.md#业务目标)、[「审计」](../../docs/domains/operations.md#审计)、[「风险分级与审批」](../../docs/domains/operations.md#风险分级与审批)和[「资金操作上限」](../../docs/domains/operations.md#资金操作上限)；本文只写实现时依赖的部分。
 
 ## 接口
 
@@ -130,6 +130,41 @@ func RegisterReconcile(db, scope, queue, logger) error
 | 计数器等于资金操作加起来的数；不等时自主提案停止 | 计数器只由资金操作的预留、确认和释放在同一个事务里改；每分钟对账，不一致就暂停、转人工，修复只按资金操作重算。测试 `TestCapReconcile`（日、周、对象日的三个数，丢行和多出的行，各自只暂停自己的范围，暂停时小额也转人工）、`TestCapRepair`（修复后等于资金操作并恢复）、`TestCapReconcileRaces`（进行中的提案不算漂移；修复等进行中的提案并算上它；暂停前重比，不暂停刚修好的范围）、`TestCapPauseHoldsOldNodes`（旧节点的额度内预留在暂停的范围里被数据库拒绝）、`cmd/axiom` 的 `TestOperationsCapRepair` |
 | 计数器里的币种只有一种 | 策略的币种建了就不变（`ErrCurrencyFixed`，应用角色也没有改这一列的权限）；`ProposeMoney` 再核对 `Transfer` 的币种 |
 
+## 售价包络
+
+```go
+const RiskPrice Risk = "price"
+type PriceEnvelope struct {
+    Site uuid.UUID; MinMargin int32; ModelDailyChange int64; DailyChanges, DailyModels int32 // 基点或整数
+    Rev int64; Updated time.Time
+}
+type Repricing struct { Site, Model uuid.UUID; Change, Margin *big.Rat; Summary map[string]any } // nil：量不出比例、成本未知
+func PriceEnvelopes(ctx, tx) ([]PriceEnvelope, error)
+func SetPriceEnvelope(ctx, tx, actor, e PriceEnvelope, rev int64, reason string) (PriceEnvelope, error)
+func ProposePrice(ctx, tx, p Proposal, r Repricing) (Operation, bool, error)
+func CountPrice(ctx, tx, r Repricing) error                   // 负责人批准的发布，在批准时计数
+func (r Repricing) Detail() map[string]any                    // change_bps、margin_bps，量不出的是 null
+type PriceUsage struct { Envelope PriceEnvelope; DayStart time.Time; Changes, Models int32; Moves []ModelMoves }
+type ModelMoves struct { Model uuid.UUID; Change int64; Count int32 }
+func PriceUsages(ctx, tx) ([]PriceUsage, error)
+```
+
+- **谁调**：`cmd/axiom` 的 `pricePublish`（`operations_prices.go`）先 `HoldAgent`，再锁主站的定价政策行（`billing.LockPricePolicy`）、按键 `Replay`：同一个键并发的重试在政策行上等第一个请求提交，然后找到它的操作，不会被它刚发布的新版本判成过时；再 `repricing`：像管理接口的确认一样 `refreshSalePrices`，读 `billing.PriceState` 里这个模型的提案（候选和当前版本都要和 agent 读到的一样，否则 `billing.ErrStalePrice`），用 `billing.PriceMove` 算变动和毛利率（上下文分档的口径变了算量不出比例），然后 `ProposePrice`；直接执行的在同一个事务里 `billing.PublishPrice`（以 agent 的名义、`confirmed`、不豁免保本线）再 `Settle`。批准时 `runOperation` 的 `runPricePublish` 重新 `repricing`，`CountPrice`，再发布。管理接口的 `listOperationsPriceEnvelopes`、`setOperationsPriceEnvelope` 调 `PriceEnvelopes`、`SetPriceEnvelope`；`capsGet` 调 `PriceUsages`，按凭证的站点过滤。本模块不引用 `billing`：变动和毛利率由调用方算好放进 `Repricing`。
+- **表**：`prices.go`、`migrations/00007_price_envelopes.sql`。`operations.price_envelopes` 每个站点一行：最低毛利率（0–10000 基点）、单个模型单日变动（基点）、单日笔数、单日模型数、版本。`operations.price_counters` 每个 `(站点, UTC 日, 模型)` 一行（`UNIQUE NULLS NOT DISTINCT`）：模型为空的站点行记当天笔数（`count`）和改过价的模型数（`models`），模型行记累计变动（`change_bps`）和笔数；CHECK 让站点行没有变动、模型行没有模型数，都不为负。平台数据；应用角色只能改包络的四个限值和版本、计数器的三个数，不能删。`risk` 的 CHECK 加上 `price`。
+- **一次发布**：`ProposePrice` 先 `FOR SHARE` 锁包络（没有就是 `ErrNoPriceEnvelope`），用数据库时钟取当天（`CapWindows`），补齐并按「站点行、模型行」`FOR UPDATE` 锁两行计数器，再判断：`Change` 和 `Margin` 都有，毛利率不低于 `MinMargin ÷ 10000`，模型行的变动加这一笔（向上取整到基点，按精确值比较，不截断）不超过 `ModelDailyChange`，站点行笔数小于 `DailyChanges`，模型当天第一次改价时站点行的模型数也小于 `DailyModels`，就直接 `approved`、在同一个事务里计数；否则把 `envelope`（限值、版本、这一笔的变动和毛利率、已用数）放进摘要建待审批提案，不计数。计数后所有锁都已拿到，再看一次这一天是否结束，结束了是 `ErrWindowEnded`、整体回滚。`CountPrice` 按同样的顺序（有包络就先 `FOR SHARE` 锁它）锁批准那一刻当天的两行并计数；量不出比例的变动计 10000 基点；超过包络最大允许值（`maxModelDailyChange`，10⁸ 基点，表的 CHECK 同样限制）的变动计这个值加一，计数器不会溢出，当天这个模型也不会再落进任何包络。计数只增不减，所以改回去也要再占一次变动。
+- **锁的顺序**：发布是「凭证 → billing 的站点定价政策行（刷新提案时拿）→ 包络 → 计数器（站点、模型）→ 新的运营操作 → 审批信号」；批准是「运营操作 → 审批 → billing 的站点定价政策行 → 包络 → 计数器」。刷新提案可能在政策行之后就写定价的告警信号，比计数器早拿信号的锁，违反了本模块「信号最后拿」的顺序；这里不会成环，因为每条持有售价计数器的路径都先持有同一个站点的政策行，等计数器的人和持有计数器的人不可能同时存在。改包络只锁包络。
+- **滚动发布**：迁移只加两张表和放宽 `risk` 的 CHECK，旧节点不发布售价。旧节点批准一个售价提案时不认识这个工具，整个批准回滚，提案仍待批；旧节点驳回、撤回、作废或到期它都和别的提案一样，售价提案没有预留要释放。`caps_get` 的 `price_envelopes` 是可选字段，旧节点不返回它。
+
+| 不变量 | 怎么保证 |
+|---|---|
+| 没有包络就不改价 | `ProposePrice` 找不到包络是 `ErrNoPriceEnvelope`。测试 `TestPriceEnvelopeDimensions`、`cmd/axiom` 的 `TestOperationsPricePublish` |
+| 包络内才不经过人；量不出、成本未知都转人工 | 判断在持有两行计数器的事务里，`within` 要求变动和毛利率都量得出。测试 `TestPriceEnvelopeDimensions`（每个限值、刚好在限值上、不足一个基点算一个、已改过价的模型不再占模型数） |
+| 两笔并发的改价合起来也不越过包络 | 同一个站点的发布在站点行上排队，后一笔按前一笔提交后的计数判断。测试 `TestPriceRaces` |
+| 同一个键的并发重试只发布一次、答同一个操作 | 先锁定价政策行再按键重放。测试 `cmd/axiom` 的 `TestOperationsPricePublishRetryRace` |
+| 超出包络最大值的变动不会被截断后放行 | 判断用精确的基点数；计数器记最大值加一。测试 `TestPriceEnvelopeDimensions`（与最大包络等大的变动、超过它的变动、记过超大变动的一天）、`TestCountPrice` |
+| 人批过的改价照样计数 | 批准时 `CountPrice`，在发布的同一个事务里。测试 `TestCountPrice`、`cmd/axiom` 的 `TestOperationsPriceApproval` |
+| 批准的就是发布的 | 参数里有候选和当前版本，应用角色改不了；批准时重新刷新，候选或当前版本变了是 `stale_revision`，操作 `rejected`。测试 `TestOperationsPriceApproval` |
+
 ## 表
 
 `targets.go`、`migrations/00001_targets.sql` 与 `migrations/00002_commercial_targets.sql`：
@@ -168,6 +203,9 @@ func RegisterReconcile(db, scope, queue, logger) error
 - `reconcile_test.go`：`TestCapReconcile` 表驱动覆盖日的预留、周的已用、对象日的笔数、丢了的计数器行和没有资金的计数器行各自只暂停自己的范围（旁边一个没有策略、暂停不了的范围不影响它们）、审计和告警只发一次、暂停时额度内的小额也转人工；`TestCapRepair` 覆盖修复后计数器等于资金操作、恢复和解除告警、带理由的审计、没有策略的修复和没有漂移的修复；`TestCapDriftAuditParts` 覆盖 40 行漂移的审计拆成几条、每行都在、对象 ID 截到 128；`TestCapRepairLockOrder` 用持有修复的锁覆盖缺了对象行时确认和撤回等在策略上、不和修复互相等待；`TestCapPauseHoldsOldNodes` 覆盖旧节点在暂停的范围里写不进额度内的预留；`reconcile_job_test.go` 的 `TestReconcileWork` 覆盖任务的一次运行失败时只记日志、不重试，以及各步把数据库失败带回；`TestCapReconcileRaces` 用持有事务覆盖进行中的提案不算漂移、修复等进行中的提案并算上它、对账在策略锁下重比不暂停刚修好的范围。
 - `cmd/axiom/operations_money_test.go`（走真实 HTTP 和数据库）：`TestOperationsTopUpRefusals` 覆盖没有 `operations.money` 的 403、没有单位价值和没有策略的 422、硬上限拒绝和试运行都不留预留；`TestOperationsTopUp` 覆盖直接执行与重放、待审批与负责人看到的摘要和上限、批准后仍是预留；`TestOperationsTopUpConfirm` 覆盖别的凭证确认 404、确认一次、重复确认 409 和审计；`TestOperationsTopUpPolicy` 覆盖策略调低后批准以 `stale_revision` 结束并释放，以及策略的列表、币种不变和旧版本；`TestOperationsTopUpReplay` 覆盖成功后供应商被移除、同键重试仍拿回原操作而新提案被拒；`TestOperationsTopUpExchange` 覆盖跨币种按汇率折算、没有汇率 422 和向上取整到 10⁻⁹。
 - `cmd/axiom/operations_caps_test.go`（走真实 HTTP 和数据库）：`TestOperationsCapsScope` 覆盖 `caps_get` 只列凭证够得着的范围（站点凭证看不到平台），`TestOperationsCapsUse` 覆盖日、周的预留、已用、笔数；`TestOperationsCapRepair` 覆盖对账暂停后管理接口的 `paused_at` 和 `caps_get` 的 `paused`、暂停时小额转人工、修复不存在的策略 404、修复后计数器重算、审计并恢复直接执行；`TestOperationsMoneyRate` 覆盖资金写（含试运行）的单独限频、429 和 `Retry-After`、记进操作记录、读不受影响。`internal/accounts` 的 `TestAgentMoneyIsLimited` 用受控时钟每秒请求两小时，检查任何 60 秒不超过 30 次、任何一小时不超过 300 次，且持续速度不低于每小时 150。
+
+- `prices_test.go`（真实 PostgreSQL）：`TestPriceEnvelopeDimensions` 表驱动覆盖每个限值转人工且不计数、在内的计数、没有包络的站点；`TestSetPriceEnvelope` 覆盖建、按版本改、`PriceEnvelopes` 读回、旧版本和越界的限值、审计；`TestCountPrice` 覆盖批准后的计数（量不出比例按 10000）、没有包络的站点也计数，以及 `PriceUsages`；`TestPriceRaces` 用持有事务覆盖同一个模型两笔各自在内、合起来超出的并发发布。`TestPriceFailuresReachTheCaller` 覆盖数据库失败时每个售价调用都把失败带回给调用方。
+- `cmd/axiom/operations_prices_test.go`（真实 HTTP 和数据库，调用世界里带成本的端点）：`TestOperationsPricePublish` 覆盖没有包络 422、试运行不发布、包络内以 agent 的名义发布并计数、重放、旧的当前版本 409 `stale_revision`、已发布的提案 409、`caps_get` 的包络用量；`TestOperationsPriceApproval` 覆盖超出包络转负责人、负责人看到包络、批准后发布并计数、提案在批准前被换掉以 `stale_revision` 结束；`TestOperationsPricePublishRetryRace` 用持有定价政策行的事务覆盖同一个键的两个并发请求答同一个操作、只发布并计数一次；`TestOperationsPriceRefusals` 覆盖没有 `operations.money` 的 403、包络的旧版本 409 和越界 400、列表和审计。`internal/billing` 的 `TestPriceMove` 覆盖共用售价、没有当前版本、没有成本、端点各自的变动和毛利率、端点现在没有价、端点价换回共用价、上下文分档口径改变；`internal/catalog` 的 `TestLargestChangeAndSmallestMargin` 覆盖两个量在各档、增删价格、零价和亏本上的取值。
 
 - `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖刚好 8192 字节的输入原样保存、多一个字节只记大小、站点范围读不到。
 

@@ -5552,6 +5552,62 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/price-envelopes:
+    get:
+      operationId: listOperationsPriceEnvelopes
+      tags: [Operations]
+      summary: The envelopes the operations agent changes sale prices within
+      description: >-
+        Every site's price envelope. A site without one has none of its sale prices changed by the agent.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      responses:
+        "200":
+          description: The envelopes
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsPriceEnvelopeList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/price-envelopes/{site_id}:
+    parameters:
+      - {name: site_id, in: path, required: true, schema: {$ref: "#/components/schemas/SiteId"}}
+    put:
+      operationId: setOperationsPriceEnvelope
+      tags: [Operations]
+      summary: Set a site's price envelope
+      description: >-
+        Makes the envelope (`rev` 0) or replaces its limits (`rev` as read; another is a 409 `stale_revision`). It
+        decides only whether the agent's publication of a sale price needs the owner; the owner's approval of one
+        outside it publishes it all the same, and every publication counts against the day.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationsPriceEnvelopeUpdate"}
+      responses:
+        "200":
+          description: The envelope as it is now
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsPriceEnvelopeSetting"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/operations/approvals:
     get:
       operationId: listOperationsApprovals
@@ -7380,6 +7436,43 @@ components:
         limits: {$ref: "#/components/schemas/OperationsCapLimits"}
         rev: {type: integer, format: int64, minimum: 0, description: "The revision read; 0 makes the policy."}
         reason: {type: string, minLength: 1, maxLength: 1000}
+    OperationsPriceEnvelope:
+      type: object
+      additionalProperties: false
+      required: [min_margin_bps, model_daily_change_bps, daily_changes, daily_models]
+      description: >-
+        How far the agent moves a site's sale prices without the owner, in basis points: every price it publishes keeps
+        at least `min_margin_bps` of its price over its cost; one model's prices move at most `model_daily_change_bps`
+        in a UTC day, up and down added together; a UTC day publishes at most `daily_changes` prices of at most
+        `daily_models` models. Publications the owner approves count too.
+      properties:
+        min_margin_bps: {type: integer, format: int32, minimum: 0, maximum: 10000}
+        model_daily_change_bps: {type: integer, format: int64, minimum: 0, maximum: 100000000}
+        daily_changes: {type: integer, format: int32, minimum: 0, maximum: 1000000}
+        daily_models: {type: integer, format: int32, minimum: 0, maximum: 1000000}
+    OperationsPriceEnvelopeSetting:
+      type: object
+      additionalProperties: false
+      required: [site_id, limits, rev, updated_at]
+      properties:
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        limits: {$ref: "#/components/schemas/OperationsPriceEnvelope"}
+        rev: {type: integer, format: int64, minimum: 1}
+        updated_at: {type: string, format: date-time}
+    OperationsPriceEnvelopeList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: "#/components/schemas/OperationsPriceEnvelopeSetting"}}
+    OperationsPriceEnvelopeUpdate:
+      type: object
+      additionalProperties: false
+      required: [limits, rev, reason]
+      properties:
+        limits: {$ref: "#/components/schemas/OperationsPriceEnvelope"}
+        rev: {type: integer, format: int64, minimum: 0, description: "The revision read; 0 makes the envelope."}
+        reason: {type: string, minLength: 1, maxLength: 1000}
     OperationsCredentialList:
       type: object
       additionalProperties: false
@@ -7491,7 +7584,7 @@ components:
         compensating operation reverts it.
     OperationRisk:
       type: string
-      enum: [routine, delisting, top_up]
+      enum: [routine, delisting, top_up, price]
       description: The operation's class, which decides whether it waits for the owner.
     OperationTarget:
       type: object
