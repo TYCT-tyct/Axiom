@@ -272,7 +272,8 @@ function KeyLimit({ apiKey }: { apiKey: Key }) {
 // older key, or a node that gives no preset. A key keeps the preset it was made with when the default moves on
 // (docs/domains/routing.md「默认链与 key 落章」), so one bound to another than a key made now takes says so; a key
 // without a preset is not compared, since the node that listed it may be one that gives none. Under the key's name, where
-// narrow screens show it instead of the column, it is labelled, and a management key shows nothing.
+// narrow screens show it instead of the column, it is labelled, and a management key shows nothing. Names wrap rather
+// than truncate (docs/frontend.md「中英文」): two presets may differ only at the end.
 function KeyPreset({ apiKey, labelled = false }: { apiKey: Key; labelled?: boolean }) {
   const { t } = useTranslation();
   const presetName = usePresetName();
@@ -283,7 +284,7 @@ function KeyPreset({ apiKey, labelled = false }: { apiKey: Key; labelled?: boole
   }
   if (!apiKey.preset_id) {
     return (
-      <p className="truncate text-t4" title={t("routingPresets.key.noneHint")}>
+      <p className="text-t4" title={t("routingPresets.key.noneHint")}>
         {label(t("routingPresets.key.none"))}
       </p>
     );
@@ -295,11 +296,9 @@ function KeyPreset({ apiKey, labelled = false }: { apiKey: Key; labelled?: boole
     : t("routingPresets.key.notDefault");
   return (
     <>
-      <p className="truncate" title={name}>
-        {label(name)}
-      </p>
+      <p className="wrap-anywhere">{label(name)}</p>
       {moved ? (
-        <p className="truncate text-label text-t4" title={t("routingPresets.key.notDefaultHint")}>
+        <p className="text-label text-t4 wrap-anywhere" title={t("routingPresets.key.notDefaultHint")}>
           {note}
         </p>
       ) : null}
