@@ -7,8 +7,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
+	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/operationsapi"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -261,4 +265,45 @@ func TestOperationsPricePublishRetryRace(t *testing.T) {
 		t.Errorf("%s versions published", got)
 	}
 	f.expectUse(2000)
+}
+
+// TestBasePrices: the base rates are a complete comparison only when neither side prices endpoints or tiers. An
+// endpoint whose own price rises under an unchanged model envelope, or a tier that moves, leaves the base rates equal,
+// which must not read as "no price changes".
+func TestBasePrices(t *testing.T) {
+	t.Parallel()
+	flat := func(input string) jsonx.Raw {
+		return jsonx.Raw(`{"v":1,"currency":"USD","rates":{"input":"` + input + `"}}`)
+	}
+	tiered := jsonx.Raw(`{"v":1,"currency":"USD","rates":{"input":"0.000001"},` +
+		`"context_tiers":{"method":"whole","basis":["input"],"tiers":[{"above":1000,"rates":{"input":"0.000003"}}]}}`)
+	endpoint := func(input string) catalog.Schedule {
+		s, err := catalog.ParseSchedule(flat(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	a, b := uuid.NewV7(), uuid.NewV7()
+	for _, c := range []struct {
+		name     string
+		p        billing.Publication
+		complete bool
+	}{
+		{"one shared price each side", billing.Publication{CurrentSchedule: flat("0.000001"), Schedule: flat("0.0000012"), Cost: tiered}, true},
+		{"an endpoint up under the same envelope", billing.Publication{
+			CurrentSchedule: flat("0.000002"), Schedule: flat("0.000002"),
+			CurrentEndpoints: billing.EndpointPrices{a: endpoint("0.000001"), b: endpoint("0.000002")},
+			Endpoints:        billing.EndpointPrices{a: endpoint("0.0000015"), b: endpoint("0.000002")},
+		}, false},
+		{"a tier moves", billing.Publication{CurrentSchedule: flat("0.000001"), Schedule: tiered}, false},
+	} {
+		prices, complete, err := basePrices(c.p)
+		if err != nil || complete != c.complete {
+			t.Errorf("%s: complete %v, %v", c.name, complete, err)
+		}
+		if prices["current"] == nil || prices["proposed"] == nil {
+			t.Errorf("%s: %v", c.name, prices)
+		}
+	}
 }

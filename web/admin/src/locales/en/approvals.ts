@@ -139,9 +139,13 @@ export default {
   prices: {
     title: "Sale price ({{currency}})",
     intro:
-      "The prices this publication changes: what is charged now, what is proposed, and the cost where the server knows it. Prices not listed stay as they are.",
-    perEndpoint: "This model is priced per endpoint; these are the highest of its endpoints' prices.",
+      "The prices this publication changes: what is charged now, what is proposed, and the cost where the server knows it.",
+    partial:
+      "Only the model's base prices are compared here (for per-endpoint pricing, the highest of its endpoints' prices). This model is priced per endpoint or has context or service tier prices, so prices not listed may change too: check each endpoint's or tier's price on the pricing page or in the raw data.",
     none: "The proposed prices are the same as now.",
+    unlisted: "Prices not listed stay as they are.",
+    partialNone:
+      "The base prices do not change, but endpoint or tier prices may: check them on the pricing page or in the raw data.",
     item: "Item",
     current: "Now",
     proposed: "Proposed",

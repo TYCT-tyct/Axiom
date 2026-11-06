@@ -160,14 +160,16 @@ export function PriceTable({ approval }: { approval: Approval }) {
       </>
     );
   const title = t("approvals.prices.title", { currency });
+  // Equal base prices say nothing of an endpoint's or a tier's own price; only the server knows whether they are all.
+  const complete = (approval.summary as { prices_complete?: unknown }).prices_complete === true;
   return (
     <Panel title={title}>
       <p className="px-4 pt-4 text-t2">{t("approvals.prices.intro")}</p>
-      {(approval.summary as { per_endpoint?: boolean }).per_endpoint ? (
-        <p className="px-4 pt-2 text-label text-t3">{t("approvals.prices.perEndpoint")}</p>
-      ) : null}
+      <p className={complete ? "px-4 pt-2 text-t2" : "px-4 pt-2 text-warn"}>
+        {t(complete ? "approvals.prices.unlisted" : "approvals.prices.partial")}
+      </p>
       {rows.length === 0 ? (
-        <p className="p-4 text-t3">{t("approvals.prices.none")}</p>
+        <p className="p-4 text-t3">{t(complete ? "approvals.prices.none" : "approvals.prices.partialNone")}</p>
       ) : (
         <>
           <PriceBlocks rows={rows} title={title} show={show} />

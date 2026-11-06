@@ -1,8 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { mockAdmin } from "./admin-api.ts";
 import { uuid } from "./admin-data.ts";
 import { approvalsOf } from "./admin-operations.ts";
 import { close, dialog, open, send } from "./admin-page.ts";
 import { apps } from "./apps.ts";
+import { signedInAs } from "./mock-auth.ts";
 import { words, zhText } from "./words.ts";
 
 // The operations approvals against the mocked API (admin-operations.ts): the list and its state filter, what an
@@ -93,6 +95,21 @@ test.describe("operations approvals", () => {
     await dialog(page).locator("button[type=submit]").click();
     await expect(dialog(page).getByText(zhText("approvals.done.delisting"))).toBeVisible();
     expect(approvalsOf(state)[3]?.state).toBe("approved");
+  });
+
+  // An endpoint can rise under an unchanged model envelope (TestBasePrices): equal base prices are no proof then.
+  test("equal base prices of a partial comparison do not read as no change", async ({ page }) => {
+    const state = await mockAdmin(page, "usual");
+    signedInAs(state, "mfa");
+    const price = approvalsOf(state)[2];
+    if (!price) throw new Error("the usual approvals have no price");
+    const summary = price.summary as Record<string, unknown>;
+    price.summary = { ...summary, proposed: summary.current, prices_complete: false };
+    await page.goto(`/approvals/${uuid(17, 3)}`);
+    await expect(page.getByText(zhText("approvals.prices.partialNone"))).toBeVisible();
+    await expect(page.getByText(zhText("approvals.prices.partial"))).toBeVisible();
+    await expect(page.getByText(zhText("approvals.prices.none"), { exact: true })).toHaveCount(0);
+    await expect(page.getByText(zhText("approvals.prices.unlisted"), { exact: true })).toHaveCount(0);
   });
 
   test("on a phone each price is a block with its three values and their currency", async ({ page }) => {
