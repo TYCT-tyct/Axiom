@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { type Browser, devices, expect, type Locator, type Page, test } from "@playwright/test";
 import { bracketed, median, scaledLcp } from "../scripts/vitals.ts";
+import { servedOffset } from "../vite.shared.ts";
 import { mockAdmin } from "./admin-api.ts";
 import { adminSuite } from "./admin-scenes.ts";
 import { adminUrl } from "./apps.ts";
@@ -58,14 +59,28 @@ type Profile = typeof phone;
 // The overview cannot be scaled that way: sign-in's LCP moved 1.24x while the overview's moved 3.5x on run 41983413805,
 // because the overview runs the shell's JavaScript, API calls and a table and sign-in much less; CPU contention stretches
 // them differently (docs/frontend.md「实测」). Its gate is therefore the CPU time of its own load, from a trace: the sum
-// of the main-thread tasks' `tdur`, which excludes the time the thread was descheduled, taken as the smallest of three
-// loads because contention can only add to it. The ceilings keep the LCP budgets' headroom over the clean build's 340 ms
-// (desktop) and 1900 ms (phone) main-thread time: 340 x 1500/948 and 1900 x 6000/3496.
+// of the main-thread tasks' `tdur`, which excludes the time the thread was descheduled. Those loads run without the CPU
+// throttle in both viewports: the throttle suspends the main thread by busy-waiting in a signal handler for (rate - 1)
+// times the wall time since it last let the thread run, up to 1 ms of it (Chromium's thread_cpu_throttler.cc), so
+// under it `tdur` is the page's work plus a spin sized by how the host schedules the thread. Unthrottled, the same work
+// still costs 1.4-1.9x the CPU time on a busy CI host, which no fixed ceiling can tell from a slower page. So the gate
+// is relative, as bench-compare is for Go: where BASE names the commit this tree is measured against
+// (playwright.vitals.config.ts), that commit's overview is loaded in turns with this one, unthrottled, in the same job,
+// and the ratio of the two medians is gated. Loads seconds apart see the same host. On main the same tree already
+// passed its train, so the time is only reported there and a busy host cannot turn main red. The absolute backstop
+// stops a slow creep that each PR's ratio lets through: it is three times the clean build's time, above the 1.9x a busy
+// host added on CI (docs/frontend.md「实测」).
 const overviewMs = { phone: 3496, desktop: 948 } as Record<"phone" | "desktop", number>;
+// The backstop: the clean build's 340 ms (desktop) and 400 ms (phone), three times.
 const overviewCpu = {
-  desktop: { baseline: 340, target: 540, ceiling: 540 },
-  phone: { baseline: 1900, target: 3260, ceiling: 3260 },
-} satisfies Record<"phone" | "desktop", { baseline: number } & Limit>;
+  desktop: { target: 1020, ceiling: 1020 },
+  phone: { target: 1200, ceiling: 1200 },
+} satisfies Record<"phone" | "desktop", Limit>;
+const overviewRatio: Limit = { target: 1.25, ceiling: 1.25 };
+// The base's overview, beside this tree's: its origin, where playwright.vitals.config.ts serves it, or none.
+const baseOrigin = process.env.AXIOM_VITALS_BASE_PORT
+  ? `http://localhost:${Number(process.env.AXIOM_VITALS_BASE_PORT) + servedOffset}`
+  : undefined;
 
 // web-vitals' IIFE build, which a page gets before its own scripts so it sees the whole load.
 // The package does not export its IIFE file, so it is found beside the CommonJS one the package does.
@@ -123,24 +138,25 @@ async function load(
   return result;
 }
 
-// busyLoad is one scene in a fresh context with the profile's throttle, traced from before the navigation to after the
-// page settled. The context is closed even when the load fails, so a trace cannot outlive its test.
+// busyLoad is the main-thread CPU time of one scene in a fresh context with the profile's throttle, traced from before
+// the navigation to after the page settled. The context is closed even when the load fails, so a trace cannot outlive its
+// test.
 async function busyLoad(
   browser: Browser,
   profile: Profile,
   device: Parameters<Browser["newContext"]>[0],
   suite: Suite,
   scene: Scene,
-): Promise<Vitals & { busyMs: number }> {
+): Promise<number> {
   const page = await measuredPage(browser, profile, device);
   try {
     await suite.prepare(page, scene);
     const session = await page.context().newCDPSession(page);
-    const { result, busyMs } = await traced(session, async () => {
+    const { busyMs } = await traced(session, async () => {
       await scene.open(page);
-      return vitals(page);
+      await vitals(page);
     });
-    return { ...result, busyMs };
+    return busyMs;
   } finally {
     await page.context().close();
   }
@@ -228,9 +244,12 @@ async function measurePage(
   record(`CLS ${label}`, Math.max(...pairs.map((pair) => pair.cls)), budget.cls);
 }
 
-// measureOverview loads the overview three times and gates the smallest main-thread CPU time of the three. It reports the
-// LCP and CLS beside it: the LCP is what the page budget speaks of, but it is only reported, because the host stretches
-// it in ways the CPU time does not (docs/frontend.md「实测」).
+// measureOverview loads the overview unthrottled in five pairs, each this tree's and, where there is one, the base's, in
+// alternating order so a host whose load drifts during the sample charges both sides alike. It gates the ratio of the
+// two sides' median main-thread time and this tree's median against the backstop; without a base it only reports. It
+// then loads the overview three times with the profile's throttle and reports the LCP and CLS: the LCP is what the page
+// budget speaks of, but it is only reported, because the host stretches it in ways the CPU time does not
+// (docs/frontend.md「实测」).
 async function measureOverview(
   browser: Browser,
   profile: Profile,
@@ -239,29 +258,59 @@ async function measureOverview(
   lcp: Limit,
 ) {
   const label = `console overview ${name}`;
-  const loads: { busyMs: number; lcp: number; cls: number }[] = [];
-  for (let i = 0; i < 3; i++) {
-    const result = await busyLoad(browser, profile, device, consoleSuite, overview);
-    loads.push({
-      busyMs: result.busyMs,
-      lcp: result.LCP ?? Number.POSITIVE_INFINITY,
-      cls: result.CLS ?? 0,
-    });
+  const unthrottled = { ...profile, cpu: 1 };
+  const head: number[] = [];
+  const base: number[] = [];
+  const sides = [
+    async () => head.push(await busyLoad(browser, unthrottled, device, consoleSuite, overview)),
+    ...(baseOrigin
+      ? [
+          async () =>
+            base.push(await busyLoad(browser, unthrottled, { ...device, baseURL: baseOrigin }, consoleSuite, overview)),
+        ]
+      : []),
+  ];
+  for (let i = 0; i < 5; i++) {
+    for (const side of i % 2 ? [...sides].reverse() : sides) {
+      await side();
+    }
   }
   const cpu = overviewCpu[name];
+  const loads = (values: number[]) => values.map((ms) => ms.toFixed(0)).join("/");
+  if (base.length) {
+    record(`main-thread time ${label}`, median(head), cpu, `unthrottled, backstop, loads ${loads(head)} ms`);
+    record(
+      `main-thread time ratio ${label}`,
+      median(head) / median(base),
+      overviewRatio,
+      `this tree ${median(head).toFixed(0)} ms over base ${median(base).toFixed(0)} ms (loads ${loads(base)} ms)`,
+    );
+  } else {
+    record(
+      `main-thread time ${label}`,
+      median(head),
+      { target: cpu.target },
+      `unthrottled, reported only: no base to compare with, loads ${loads(head)} ms`,
+    );
+  }
+  const throttled: Vitals[] = [];
+  for (let i = 0; i < 3; i++) {
+    throttled.push(await load(browser, profile, device, consoleSuite, overview));
+  }
   record(
-    `main-thread time ${label}`,
-    Math.min(...loads.map((load) => load.busyMs)),
-    cpu,
-    `baseline ${cpu.baseline} ms, loads ${loads.map((load) => load.busyMs.toFixed(0)).join("/")} ms`,
+    `LCP ${label}`,
+    median(throttled.map((load) => load.LCP ?? Number.POSITIVE_INFINITY)),
+    { target: lcp.target },
+    "reported only",
   );
-  record(`LCP ${label}`, median(loads.map((load) => load.lcp)), { target: lcp.target }, "reported only");
-  record(`CLS ${label}`, Math.max(...loads.map((load) => load.cls)), budget.cls);
+  record(`CLS ${label}`, Math.max(...throttled.map((load) => load.CLS ?? 0)), budget.cls);
 }
 
 test.describe("loading", () => {
   for (const { name, profile, device, lcp } of profiles) {
     test(`console overview: main-thread time and CLS on ${name}`, async ({ browser }) => {
+      // Five pairs of unthrottled loads with the base and three throttled ones, against nine loads in a page's test.
+      test.setTimeout(240_000);
       await measureOverview(browser, profile, device, name, lcp);
     });
     for (const [suite, sceneName] of pages) {
