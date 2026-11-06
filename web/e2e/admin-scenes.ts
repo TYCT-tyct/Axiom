@@ -163,6 +163,8 @@ const scenes: Scene[] = [
   routingSwitch("routing-preset-create", false, "routingPresets.create"),
   routingSwitch("routing-preset-edit", false, "routingPresets.editNamed"),
   routingSwitch("routing-default", false, "routingPresets.defaults.edit"),
+  // The first preset the page may disable is a default and has keys bound (admin-routing.ts), so the dialog says both.
+  routingSwitch("routing-preset-disable", false, "routingPresets.disableNamed"),
   dialog("routing-limits", "routing-presets", "routingPresets.limits.edit"),
   routingSuspended,
   routingSwitch("routing-suspend", false, "routingPresets.suspension.suspend"),

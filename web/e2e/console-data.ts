@@ -247,7 +247,8 @@ const bound = {
   preset: { id: presetId(3), name: "Official, cheapest first", scope: "account", version: 2 },
 } as const;
 
-// The platform's, the site's and the account's presets, the account's being its default and the Laptop key's.
+// The platform's, the site's and the account's presets, the account's being its default and the Laptop key's (the one
+// key bound to it).
 function usualPresets(): Pick<MockState, "presets" | "routingDefault"> {
   return {
     presets: [
@@ -266,6 +267,7 @@ function usualPresets(): Pick<MockState, "presets" | "routingDefault"> {
       aPreset(3, {
         name: "Official, cheapest first",
         version: 2,
+        keys: 1,
         rules: rules({
           default: { sort: "price", classes: ["official", "cloud"], max_price: { prompt: "3", completion: "15" } },
           rules: [{ author: "anthropic", sort: "quality" }],
@@ -410,15 +412,18 @@ export function worstState(): MockState {
 }
 
 // The most presets a key may choose from (the platform's and the site's 50 live each, the account's 20, a workspace's
-// 10), with the longest names and the most overrides a rule may hold.
+// 10), with the longest names and the most overrides a rule may hold. The account's first preset also has the most keys
+// and is its default, so its disable dialog says everything it can.
 function worstPresets(state: MockState) {
   const scope = (n: number) => (n < 50 ? "platform" : n < 100 ? "site" : n < 120 ? "account" : "workspace");
   state.presets = range(130).map((n) =>
     aPreset(n + 10, {
       scope: scope(n),
       slug: long(`preset-${n}-`, 64),
-      name: n === 1 ? long("Official sources at official quality, cheapest first ", 100) : `プリセット ${n}`,
+      name:
+        n === 1 || n === 100 ? long("Official sources at official quality, cheapest first ", 100) : `プリセット ${n}`,
       version: Number.MAX_SAFE_INTEGER,
+      keys: n === 100 ? Number.MAX_SAFE_INTEGER : undefined,
       rules: rules({
         default: {
           sort: "throughput",
@@ -438,6 +443,7 @@ function worstPresets(state: MockState) {
     disabled: true,
   } as const;
   state.keys = state.keys.map((key, n) => (n === 0 ? { ...key, preset_id: preset.id, preset } : key));
+  state.routingDefault = { preset_id: presetId(110), version: Number.MAX_SAFE_INTEGER };
 }
 
 // The worst top-up data: int64 credits and payments, a 64-character method, six refunds on an order and many methods.

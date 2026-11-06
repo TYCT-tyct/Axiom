@@ -100,14 +100,15 @@ function usualRouting(): RoutingState {
 }
 
 // The most a layer holds by default, with the longest names and slugs, numbers at their bounds, a node that does not
-// count keys, and presets suspended.
+// count keys, and presets suspended. The first platform preset has the longest name, the most keys, and is both the
+// platform's and the site's default, so its disable dialog says everything it can.
 function worstRouting(): RoutingState {
   const routing = usualRouting();
   routing.presets = Array.from({ length: 100 }, (_, n) =>
     aPreset(n + 10, {
       scope: n < 50 ? "platform" : "site",
       slug: long(`preset-${n}-`, 64),
-      name: n === 1 ? long("Official sources at official quality, cheapest first ", 100) : `プリセット ${n}`,
+      name: n === 0 ? long("Official sources at official quality, cheapest first ", 100) : `プリセット ${n}`,
       version: Number.MAX_SAFE_INTEGER,
       keys: n % 2 ? undefined : Number.MAX_SAFE_INTEGER,
       rules: rules({
@@ -125,6 +126,10 @@ function worstRouting(): RoutingState {
     },
     defaults,
   };
+  routing.defaults = new Map([
+    ["platform", { preset_id: uuid(16, 10), version: Number.MAX_SAFE_INTEGER }],
+    [siteId, { preset_id: uuid(16, 10), version: Number.MAX_SAFE_INTEGER }],
+  ]);
   routing.suspension = { suspended: true, since: at };
   return routing;
 }

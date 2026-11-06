@@ -62,6 +62,13 @@ const scenes: Scene[] = [
     await dialog.locator("button[type=submit]").click();
     await dialog.locator("[data-invalid]").waitFor();
   }),
+  // The account's first preset is its default and has keys bound (console-data.ts), so the dialog says both.
+  dialogScene("routing-preset-disable", "routing-presets", (page) =>
+    page
+      .getByRole("button", { name: /^(停用|Disable) / })
+      .first()
+      .click(),
+  ),
   {
     name: "routing-presets-tip",
     signedIn: true,

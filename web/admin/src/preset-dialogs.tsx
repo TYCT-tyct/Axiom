@@ -389,7 +389,12 @@ export function DisablePresetDialog({
       title={t("routingPresets.disableTitle", { name: read.name })}
       intro={
         <>
-          <p>{t("routingPresets.disableBody")}</p>
+          {pointing.map((layer) => (
+            <p key={layer.scope} className="flex gap-2 rounded-btn bg-warn-soft px-3 py-2 text-warn">
+              <Icon name="alert" className="mt-0.5 shrink-0" />
+              {t(`routingPresets.disableDefault.${layer.scope}`)}
+            </p>
+          ))}
           {/* A node that does not count the keys gives no number, and then none is said. */}
           {read.keys === undefined ? null : (
             <p>
@@ -398,11 +403,7 @@ export function DisablePresetDialog({
                 : t("routingPresets.disableKeys.count", { count: read.keys, keys: format.number(read.keys) })}
             </p>
           )}
-          {pointing.map((layer) => (
-            <p key={layer.scope} className="text-warn">
-              {t(`routingPresets.disableDefault.${layer.scope}`)}
-            </p>
-          ))}
+          <p>{t("routingPresets.disableBody")}</p>
         </>
       }
       action={t("routingPresets.disable")}
