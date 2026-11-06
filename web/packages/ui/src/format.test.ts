@@ -70,3 +70,12 @@ describe("pay", () => {
     expect(formatters("zh").pay({ amount: "1030", currency: "USD" })).toBe("US$10.30");
   });
 });
+
+describe("dateTimeMinute", () => {
+  // A list shows a moment to the minute with its zone; the exact time stays in a title.
+  it("drops the seconds and keeps the zone", () => {
+    const at = new Date("2026-11-06T03:14:59Z");
+    expect(formatters("en", "UTC").dateTimeMinute(at)).toBe("Nov 6, 2026, 03:14 UTC");
+    expect(formatters("zh", "Asia/Shanghai").dateTimeMinute(at)).toBe("2026年11月6日 11:14 GMT+8");
+  });
+});

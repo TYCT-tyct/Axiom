@@ -1,3 +1,4 @@
+import approvals from "./approvals";
 import audit from "./audit";
 import calls from "./calls";
 import mappings from "./mappings";
@@ -17,6 +18,7 @@ export default {
   forbiddenHint: "请联系站长授予权限。",
   nav: {
     overview: "运营看板",
+    approvals: "运营审批",
     users: "用户",
     orders: "订单与退款",
     redeemCodes: "兑换码",
@@ -150,4 +152,5 @@ export default {
   pricing,
   redeem,
   settings,
+  approvals,
 };

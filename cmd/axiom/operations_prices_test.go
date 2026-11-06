@@ -1,13 +1,18 @@
 package main
 
 import (
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
+	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/operationsapi"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -158,8 +163,30 @@ func TestOperationsPriceApproval(t *testing.T) {
 	expectAdmin(t, "a 20% move", rec, http.StatusAccepted, "")
 	waits := agentOperation(t, rec)
 	rec = f.do(http.MethodGet, "/operations/approvals/"+waits.Approval.ApprovalId, "", as(f.s))
-	if !strings.Contains(rec.Body.String(), `"model_daily_change_bps":1000`) || !strings.Contains(rec.Body.String(), `"change_bps":2000`) {
-		t.Errorf("the owner sees %s", rec.Body)
+	var asked struct {
+		Summary struct {
+			Slug     string            `json:"slug"`
+			Current  map[string]string `json:"current"`
+			Proposed map[string]string `json:"proposed"`
+			Cost     map[string]string `json:"cost"`
+			Envelope struct {
+				ModelDailyChangeBps int64 `json:"model_daily_change_bps"`
+				ChangeBps           int64 `json:"change_bps"`
+			} `json:"envelope"`
+		} `json:"summary"`
+	}
+	decode(t, rec, &asked)
+	summary := asked.Summary
+	// The owner sees the model by name and each price now, as proposed and as it costs, beside the envelope: a 20%
+	// move of the 1.5× price is the 1.8× one, so the input price is 1.2 times what it is now.
+	if summary.Slug != pricedModel || summary.Envelope.ModelDailyChangeBps != 1000 || summary.Envelope.ChangeBps != 2000 ||
+		summary.Cost["input"] == "" {
+		t.Fatalf("the owner sees %s", rec.Body)
+	}
+	now, _ := new(big.Rat).SetString(summary.Current["input"])
+	next, _ := new(big.Rat).SetString(summary.Proposed["input"])
+	if now == nil || next == nil || next.Cmp(new(big.Rat).Mul(now, big.NewRat(6, 5))) != 0 {
+		t.Errorf("the input price: %s now, %s proposed", summary.Current["input"], summary.Proposed["input"])
 	}
 	if approved := f.approve(waits.Approval.ApprovalId); approved.OperationState != adminapi.OperationStateSucceeded {
 		t.Errorf("the approval: %+v", approved)
@@ -238,4 +265,45 @@ func TestOperationsPricePublishRetryRace(t *testing.T) {
 		t.Errorf("%s versions published", got)
 	}
 	f.expectUse(2000)
+}
+
+// TestBasePrices: the base rates are a complete comparison only when neither side prices endpoints or tiers. An
+// endpoint whose own price rises under an unchanged model envelope, or a tier that moves, leaves the base rates equal,
+// which must not read as "no price changes".
+func TestBasePrices(t *testing.T) {
+	t.Parallel()
+	flat := func(input string) jsonx.Raw {
+		return jsonx.Raw(`{"v":1,"currency":"USD","rates":{"input":"` + input + `"}}`)
+	}
+	tiered := jsonx.Raw(`{"v":1,"currency":"USD","rates":{"input":"0.000001"},` +
+		`"context_tiers":{"method":"whole","basis":["input"],"tiers":[{"above":1000,"rates":{"input":"0.000003"}}]}}`)
+	endpoint := func(input string) catalog.Schedule {
+		s, err := catalog.ParseSchedule(flat(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	a, b := uuid.NewV7(), uuid.NewV7()
+	for _, c := range []struct {
+		name     string
+		p        billing.Publication
+		complete bool
+	}{
+		{"one shared price each side", billing.Publication{CurrentSchedule: flat("0.000001"), Schedule: flat("0.0000012"), Cost: tiered}, true},
+		{"an endpoint up under the same envelope", billing.Publication{
+			CurrentSchedule: flat("0.000002"), Schedule: flat("0.000002"),
+			CurrentEndpoints: billing.EndpointPrices{a: endpoint("0.000001"), b: endpoint("0.000002")},
+			Endpoints:        billing.EndpointPrices{a: endpoint("0.0000015"), b: endpoint("0.000002")},
+		}, false},
+		{"a tier moves", billing.Publication{CurrentSchedule: flat("0.000001"), Schedule: tiered}, false},
+	} {
+		prices, complete, err := basePrices(c.p)
+		if err != nil || complete != c.complete {
+			t.Errorf("%s: complete %v, %v", c.name, complete, err)
+		}
+		if prices["current"] == nil || prices["proposed"] == nil {
+			t.Errorf("%s: %v", c.name, prices)
+		}
+	}
 }
