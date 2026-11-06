@@ -281,7 +281,12 @@ it.each([
   },
   {
     name: "a default of the default workspace",
-    read: { preset_id: preset(1).id, version: 1, new_keys_preset_id: preset(2).id, new_keys_layer: "workspace" as const },
+    read: {
+      preset_id: preset(1).id,
+      version: 1,
+      new_keys_preset_id: preset(2).id,
+      new_keys_layer: "workspace" as const,
+    },
     option: "byDefault",
     marked: [preset(2).id],
     none: "defaults.none",
