@@ -7162,6 +7162,7 @@ components:
             equality.
           example: axiom v0.0.0-20261014044725-4daa4538fcac
     UserId: {type: string, pattern: '^user_[0-9a-hjkmnp-tv-z]{26}$', description: "A user's ID (TypeID)."}
+    WorkspaceId: {type: string, pattern: '^ws_[0-9a-hjkmnp-tv-z]{26}$', description: "A workspace's ID (TypeID)."}
     AccountId: {type: string, pattern: '^acct_[0-9a-hjkmnp-tv-z]{26}$', description: "An account's ID (TypeID)."}
     SignInRequest:
       type: object
@@ -7965,6 +7966,9 @@ components:
         revision: {type: integer, format: int64, description: "Moves on every change; a change names the revision it read."}
         version: {type: integer, format: int64, description: "The rules' version, which moves only when the rules change."}
         currency: {type: string, description: "The currency of a platform preset's price limits; absent for the others, which are in the site's."}
+        workspace_id:
+          allOf: [{$ref: "#/components/schemas/WorkspaceId"}]
+          description: The workspace of a workspace's preset; absent for the other layers' and from older nodes.
         rules: {$ref: "#/components/schemas/RoutingRules"}
         disabled: {type: boolean}
         keys: {type: integer, format: int64, minimum: 0, description: "The keys bound to the preset that are not deleted: the caller's account's in the console, every account's in the admin API. Given when a preset is listed or read, never for the system preset, which every unbound key also follows; absent from nodes that do not count them."}

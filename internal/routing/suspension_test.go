@@ -71,7 +71,7 @@ func (m manager) checkSuspendedWrites(t *testing.T, p routing.StoredPreset, d ro
 		}
 	}
 	noErr(t, "bind a new key", m.as(t, func(ctx context.Context, tx pg.Tx) error {
-		got, err := routing.DefaultPreset(ctx, tx, routing.SiteID(m.site), routing.AccountID(m.account), routing.WorkspaceID(m.workspace), usd)
+		got, _, err := routing.DefaultPreset(ctx, tx, routing.SiteID(m.site), routing.AccountID(m.account), routing.WorkspaceID(m.workspace), usd)
 		if err == nil && got != p.ID {
 			t.Errorf("a new key is bound to %v, want the default %v", got, p.ID)
 		}

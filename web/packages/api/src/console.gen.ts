@@ -142,13 +142,13 @@ export interface paths {
         };
         /**
          * The routing presets the account's keys may use
-         * @description The live routing presets a key of the account may be bound to, the widest layer first: the platform's (those that limit prices only in the site's currency), the site's and the account's own. The system preset that keys made before presets route by is not among them. Disabled presets are not listed; `getRoutingPreset` still reads them. Routing presets are not the request presets of `/presets`: they choose which endpoints a key is routed to (docs/domains/routing.md「路由预设」).
+         * @description The live routing presets a key of the workspace may be bound to, the widest layer first: the platform's (those that limit prices only in the site's currency), the site's, the account's and the workspace's own. Without `workspace_id` the workspace is the account's default one, where the console makes keys. The system preset that keys made before presets route by is not among them. Disabled presets are not listed; `getRoutingPreset` still reads them. Routing presets are not the request presets of `/presets`: they choose which endpoints a key is routed to (docs/domains/routing.md「路由预设」).
          */
         get: operations["listRoutingPresets"];
         put?: never;
         /**
-         * Make a routing preset of the account
-         * @description Makes an account preset with its first version of rules. The rules are checked whole: a member the format does not have, an override that widens what it inherits, or the platform's `advanced` settings are a 400 naming `/rules`. The slug is the account's own, unique among its live presets (409 `name_taken`). An account holds at most 20 live presets and makes at most 200 in all, disabled ones counted (409 `preset_quota`). A key bound to a new preset may be refused 503 `preset_unavailable` for up to 5 seconds, until every node has read it.
+         * Make a routing preset of the account or one of its workspaces
+         * @description Makes an account preset with its first version of rules, or with `workspace_id` a preset of that workspace, which only the workspace's keys and default may choose (404 for another account's workspace or a deleted one). The rules are checked whole: a member the format does not have, an override that widens what it inherits, or the platform's `advanced` settings are a 400 naming `/rules`. The slug is the layer's own, unique among its live presets (409 `name_taken`). An account holds at most 20 live presets and makes at most 200 in all, disabled ones counted; a workspace at most 10 and 100, which count against its account's too (409 `preset_quota`). A key bound to a new preset may be refused 503 `preset_unavailable` for up to 5 seconds, until every node has read it.
          */
         post: operations["createRoutingPreset"];
         delete?: never;
@@ -173,13 +173,13 @@ export interface paths {
         get: operations["getRoutingPreset"];
         /**
          * Change a routing preset of the account
-         * @description Replaces the name and the rules of one of the account's presets, at the `revision` the page read (409 `stale_revision` when it moved on). Rules that differ from the current ones are a new version, which every key bound to the preset is routed by from the next routing snapshot, within 5 seconds; a rename keeps the version. A preset of the platform or the site is 403; a disabled one is 404.
+         * @description Replaces the name and the rules of one of the account's presets or its workspaces', at the `revision` the page read (409 `stale_revision` when it moved on). Rules that differ from the current ones are a new version, which every key bound to the preset is routed by from the next routing snapshot, within 5 seconds; a rename keeps the version. A preset of the platform or the site is 403; a disabled one is 404.
          */
         put: operations["updateRoutingPreset"];
         post?: never;
         /**
          * Disable a routing preset of the account
-         * @description Disables one of the account's presets at `revision`. The keys bound to it keep routing by it; no new key or default can choose it. A preset a default still points at is refused 409 `preset_in_use`: change the default first. A disabled preset still counts against the 200 the account may make.
+         * @description Disables one of the account's presets or its workspaces' at `revision`. The keys bound to it keep routing by it; no new key or default can choose it. A preset a default still points at is refused 409 `preset_in_use`: change the default first. A disabled preset still counts against the 200 the account may make.
          */
         delete: operations["disableRoutingPreset"];
         options?: never;
@@ -196,7 +196,7 @@ export interface paths {
         };
         /**
          * The account's default routing preset
-         * @description The preset the account's new keys are bound to, when the account sets one; absent `preset_id` means the account sets none and new keys take the site's or the platform's default. `new_keys_preset_id` names the preset that chain gives a key made now, so a page can show which keys are bound to another.
+         * @description The preset the account's new keys are bound to, when the account sets one; absent `preset_id` means the account sets none and new keys take the site's or the platform's default. `new_keys_preset_id` names the preset a key made now in the account's default workspace takes, where the console makes keys, so a page can show which keys are bound to another; a default of that workspace's own comes before the account's.
          */
         get: operations["getRoutingDefault"];
         /**
@@ -204,6 +204,33 @@ export interface paths {
          * @description Points the account's default at a live preset of the platform, the site or the account, or clears it with a null `preset_id`, at the `version` the page read (409 `stale_revision` when it moved on). Only keys made after the change take it; the keys already made keep their presets. The system preset, a disabled preset and one the account cannot use are 400 `preset_not_selectable`.
          */
         put: operations["setRoutingDefault"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/workspaces/{workspace_id}/routing-default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A workspace of the account; another account's, or a deleted one, is 404. */
+                workspace_id: components["schemas"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A workspace's default routing preset
+         * @description The preset the workspace's new keys are bound to, when the workspace sets one; absent `preset_id` means it sets none and its new keys take the account's, the site's or the platform's default. `new_keys_preset_id` names the preset that chain gives a key made now in the workspace.
+         */
+        get: operations["getWorkspaceRoutingDefault"];
+        /**
+         * Set a workspace's default routing preset
+         * @description Points the workspace's default at a live preset of the platform, the site, the account or the workspace, or clears it with a null `preset_id`, at the `version` the page read (409 `stale_revision` when it moved on). Only keys made in the workspace after the change take it; the keys already made keep their presets. The system preset, a disabled preset and one the workspace cannot use, another workspace's included, are 400 `preset_not_selectable`.
+         */
+        put: operations["setWorkspaceRoutingDefault"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1431,6 +1458,8 @@ export interface components {
             version: number;
             /** @description The currency of a platform preset's price limits; absent for the others, which are in the site's. */
             currency?: string;
+            /** @description The workspace of a workspace's preset; absent for the other layers' and from older nodes. */
+            workspace_id?: components["schemas"]["WorkspaceId"];
             rules: components["schemas"]["RoutingRules"];
             disabled: boolean;
             /**
@@ -1447,10 +1476,12 @@ export interface components {
             data: components["schemas"]["RoutingPreset"][];
         };
         RoutingPresetCreate: {
-            /** @description Unique among the account's live presets; it cannot be changed. */
+            /** @description Unique among the layer's live presets; it cannot be changed. */
             slug: string;
             name: string;
             rules: components["schemas"]["RoutingRules"];
+            /** @description Makes the preset the workspace's; absent makes it the account's. */
+            workspace_id?: components["schemas"]["WorkspaceId"];
         };
         RoutingPresetUpdate: {
             name: string;
@@ -1481,16 +1512,18 @@ export interface components {
             version: number;
             /**
              * Format: uuid
-             * @description The preset a call key the account makes now is bound to: the account's default when it sets one, else the site's, else the platform's, else the system preset (the zero UUID). Absent when that default cannot be used (`new_keys_refused`) and from older nodes.
+             * @description The preset a call key made now is bound to: the default of the first layer that sets one, from the workspace (the account's default workspace, for the account's default) up to the account, the site and the platform, else the system preset (the zero UUID). Absent when that default cannot be used (`new_keys_refused`) and from older nodes.
              */
             new_keys_preset_id?: string;
-            /** @description True when the deepest default set is one the account cannot use, so a call key made now without a preset is refused 409 `preset_default_invalid` until that default is changed. Absent otherwise. */
+            /** @description True when the deepest default set is one the key cannot use, so a call key made now without a preset is refused 409 `preset_default_invalid` until that default is changed. Absent otherwise. */
             new_keys_refused?: boolean;
+            /** @description The layer whose default decides what a key made now takes: the one `new_keys_preset_id` follows, or the one whose default refuses (`new_keys_refused`); `platform` when no layer sets one and new keys take the system preset. `workspace` on the account's default means the default workspace sets its own, which comes before the account's. Absent from older nodes. */
+            new_keys_layer?: components["schemas"]["RoutingPresetScope"];
         };
         RoutingDefaultUpdate: {
             /**
              * Format: uuid
-             * @description null clears the account's default.
+             * @description null clears the layer's default.
              */
             preset_id: string | null;
             /** Format: int64 */
@@ -2886,7 +2919,10 @@ export interface operations {
     };
     listRoutingPresets: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description A workspace of the account; another account's, or a deleted one, is 404. */
+                workspace_id?: components["schemas"]["WorkspaceId"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2902,8 +2938,10 @@ export interface operations {
                     "application/json": components["schemas"]["RoutingPresetList"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             default: components["responses"]["Failure"];
         };
     };
@@ -2932,6 +2970,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
@@ -3070,6 +3109,67 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getWorkspaceRoutingDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A workspace of the account; another account's, or a deleted one, is 404. */
+                workspace_id: components["schemas"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workspace's default. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRoutingDefault"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setWorkspaceRoutingDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A workspace of the account; another account's, or a deleted one, is 404. */
+                workspace_id: components["schemas"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutingDefaultUpdate"];
+            };
+        };
+        responses: {
+            /** @description The workspace's default as set. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountRoutingDefault"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };

@@ -167,7 +167,7 @@ func TestDefaultPresetLayers(t *testing.T) {
 	resolve := func(account, workspace uuid.UUID) (routing.PresetID, error) {
 		var id routing.PresetID
 		err := d.db.Tx(t.Context(), pg.AccountScopeIn(d.site, account), func(tx pg.Tx) (err error) {
-			id, err = routing.DefaultPreset(t.Context(), tx, routing.SiteID(d.site), routing.AccountID(account), routing.WorkspaceID(workspace), usd)
+			id, _, err = routing.DefaultPreset(t.Context(), tx, routing.SiteID(d.site), routing.AccountID(account), routing.WorkspaceID(workspace), usd)
 			return err
 		})
 		return id, err

@@ -4626,6 +4626,9 @@ type RoutingPreset struct {
 
 	// Version The rules' version, which moves only when the rules change.
 	Version int64 `json:"version"`
+
+	// WorkspaceId The workspace of a workspace's preset; absent for the other layers' and from older nodes.
+	WorkspaceId *WorkspaceId `json:"workspace_id,omitempty"`
 }
 
 // RoutingPresetLimits What each layer may hold of routing presets, the rule versions a preset keeps, and the global budget. An absent value is the default in code. An account's limits count its workspaces' presets too.
@@ -5711,6 +5714,9 @@ type Version struct {
 
 // VersionBasis `dated`: the model is one fixed version; `floating`: the vendor moves the model under a name.
 type VersionBasis string
+
+// WorkspaceId A workspace's ID (TypeID).
+type WorkspaceId = string
 
 // Cursor defines model for Cursor.
 type Cursor = string

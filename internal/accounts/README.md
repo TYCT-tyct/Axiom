@@ -395,6 +395,7 @@ func (s *Service) DeleteKey(ctx context.Context, tx pg.Tx, actor audit.Actor, ke
 func (s *Service) AuthenticateKey(ctx context.Context, site SiteID, raw string) (Caller, error) // 只认出，不判定能否使用
 func (s *Service) GetKeyInfo(ctx context.Context, tx pg.Tx, key KeyID) (KeyInfo, error)      // 名称、标签（前缀...末四位）、过期时间，供 GET /key；别的账户的 key 是 ErrKeyNotFound
 func (s *Service) AccountWorkspaces(ctx context.Context, tx pg.Tx, account AccountID) ([]uuid.UUID, error) // 账户全部工作区的 ID（含已删除），供 billing 汇总累计花费
+func (s *Service) Workspace(ctx context.Context, tx pg.Tx, account AccountID, id *WorkspaceID) (WorkspaceID, error) // 账户没删除的工作区，nil 是默认工作区；别的账户的或已删除的是 ErrNotFound，供工作区自己的设置（如路由的默认预设）核对归属
 func (s *Service) GatesLookups() bool                    // Config.LookupSlot 是否配了；gateway 的 NewHandler 要求配了
 func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest,
 	fn func(tx pg.Tx, a Admission) error) error              // fn 由 gateway 组装：定规则、路由、billing 的准入；只收调用 key
