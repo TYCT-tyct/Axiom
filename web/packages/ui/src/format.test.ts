@@ -75,6 +75,15 @@ describe("pay", () => {
   });
 });
 
+describe("dateTimeMinute", () => {
+  // A list shows a moment to the minute with its zone; the exact time stays in a title.
+  it("drops the seconds and keeps the zone", () => {
+    const at = new Date("2026-11-06T03:14:59Z");
+    expect(formatters("en", "UTC").dateTimeMinute(at)).toBe("Nov 6, 2026, 03:14 UTC");
+    expect(formatters("zh", "Asia/Shanghai").dateTimeMinute(at)).toBe("2026年11月6日 11:14 GMT+8");
+  });
+});
+
 // Building the Intl formats per component made the admin's 50-row calls list take seconds to render on a starved CI
 // runner after its data arrived: a page's rows and times must share one set per language and zone.
 it("builds the formats once, however many rows use them", () => {

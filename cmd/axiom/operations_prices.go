@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"uuid"
@@ -162,14 +163,65 @@ func (a adminAPI) repricing(ctx context.Context, tx pg.Tx, pub publication) (acc
 	if err != nil {
 		return site, operations.Repricing{}, err
 	}
+	summary, err := a.priceSummary(ctx, tx, p, site.Currency.String())
+	if err != nil {
+		return site, operations.Repricing{}, err
+	}
+	return site, operations.Repricing{Site: uuid.UUID(site.ID), Model: uuid.UUID(p.Model), Change: change, Margin: margin, Summary: summary}, nil
+}
+
+// priceSummary is what the owner is shown of publishing p: the model by name, and the base price of each billing item
+// now, as proposed and as it costs, in the site's currency per unit (basePrices).
+func (a adminAPI) priceSummary(ctx context.Context, tx pg.Tx, p billing.Publication, currency string) (map[string]any, error) {
+	model, err := a.readModelIn(ctx, tx, p.Model)
+	if err != nil {
+		return nil, err
+	}
 	summary := map[string]any{
 		"model_id": p.Model.String(), "candidate_id": p.Candidate.String(), "status": p.Status,
 		"audience": map[string]any{"kind": p.Audience.Kind, "id": p.Audience.ID},
+		"slug":     model.Slug, "currency": currency,
+	}
+	if i := slices.IndexFunc(model.Names, func(n adminapi.ModelName) bool { return n.Visibility == adminapi.ModelNameVisibilityPublic }); i >= 0 {
+		summary["name"] = model.Names[i].Name
 	}
 	if p.Current != nil {
 		summary["current_id"] = p.Current.String()
 	}
-	return site, operations.Repricing{Site: uuid.UUID(site.ID), Model: uuid.UUID(p.Model), Change: change, Margin: margin, Summary: summary}, nil
+	prices, complete, err := basePrices(p)
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(summary, prices)
+	summary["prices_complete"] = complete
+	return summary, nil
+}
+
+// basePrices is the base rate of each item now (`current`), as proposed (`proposed`) and as it costs (`cost`). Only the
+// base rates are kept, not the context or service tiers nor each endpoint's own price, so the summary stays well within
+// its 8 KiB; complete says whether they are every price either side charges. When it is false, equal base rates prove
+// nothing: an endpoint's price or a tier's can move under an unchanged model envelope.
+func basePrices(p billing.Publication) (map[string]any, bool, error) {
+	prices := map[string]any{}
+	complete := p.Endpoints == nil && p.CurrentEndpoints == nil
+	for key, raw := range map[string]jsonx.Raw{"current": p.CurrentSchedule, "proposed": p.Schedule, "cost": p.Cost} {
+		if len(raw) == 0 {
+			continue
+		}
+		var schedule struct {
+			Rates        map[string]string `json:"rates"`
+			ContextTiers jsonx.Raw         `json:"context_tiers"`
+			ServiceTiers jsonx.Raw         `json:"service_tiers"`
+		}
+		if err := jsonx.Unmarshal(raw, &schedule); err != nil {
+			return nil, false, fmt.Errorf("read the %s price of model %s: %w", key, p.Model, err)
+		}
+		prices[key] = schedule.Rates
+		if key != "cost" && (len(schedule.ContextTiers) > 0 || len(schedule.ServiceTiers) > 0) {
+			complete = false
+		}
+	}
+	return prices, complete, nil
 }
 
 func sameVersion(a, b *uuid.UUID) bool {

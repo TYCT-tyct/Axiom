@@ -2,6 +2,7 @@ import { safeNext } from "@axiom/app";
 import { focusPage, NotFoundState, routerDefaults } from "@axiom/ui";
 import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { approvalState } from "./approvals";
 import { Layout } from "./layout";
 import { modelStatus } from "./models/catalog";
 import { paymentOrderState } from "./orders/states";
@@ -45,6 +46,12 @@ const routeTree = root.addChildren([
       () => import("./pages/home"),
       (search) => ({ range: overviewRange(search.range) }),
     ),
+    shellPage(
+      "/approvals",
+      () => import("./pages/approvals"),
+      (search) => ({ state: approvalState(search.state) }),
+    ),
+    shellPage("/approvals/$approvalId", () => import("./pages/approval")),
     shellPage(
       "/users",
       () => import("./pages/users"),

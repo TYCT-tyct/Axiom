@@ -164,7 +164,7 @@ export default {
     endpoints: "端点",
     endpoint: "公开名称",
     endpointsNote:
-      "在 provider.only、provider.ignore 或预设里用这里的公开名称指定或排除端点；中转分组的名称是匿名代号，同一分组在所有模型上相同。",
+      "在 provider.only、provider.ignore 或预设里用这里的公开名称指定或排除端点；中转分组的名称是匿名代号，同一分组在所有模型上相同。这里列出全部端点，key 的路由预设可能排除其中一些；一把 key 能用哪些模型，以用这把 key 读到的模型列表为准。",
     endpointPrice: "端点价格",
     endpointPriceDetails: "完整价目",
     endpointsUnavailable: "这台服务器的旧版本还没有端点列表，更新后可看到。",
