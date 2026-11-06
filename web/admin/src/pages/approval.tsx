@@ -5,10 +5,11 @@ import { Link, useParams } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ApprovalState, CapTable, EnvelopeTable } from "../approval-parts";
+import { ApprovalState, CapTable, EnvelopeTable, Minute, Target, useNow } from "../approval-parts";
+import { PriceTable, RawData, RequestFacts, WhyAsked } from "../approval-request";
 import { capOf, envelopeOf, open, outcomeOf } from "../approvals";
 import { ChangeDialog } from "../change";
-import { Actions, Code, Facts, Json, PageBody, Time } from "../parts";
+import { Actions, Code, Facts, PageBody } from "../parts";
 import { approvalQuery } from "../queries";
 
 type Approval = AdminSchemas["OperationsApproval"];
@@ -28,21 +29,13 @@ export default function ApprovalPage() {
           <PageHeader title={t(`approvals.risk.${approval.risk}`)} description={t("approvals.description")} />
           <PageBody>
             <Decide approval={approval} />
+            <WhyAsked approval={approval} />
             <ApprovalFacts approval={approval} />
-            <AgentReason text={approval.agent_reason} />
+            <RequestFacts approval={approval} />
+            <PriceTable approval={approval} />
             <Limits summary={approval.summary} />
-            <Panel title={t("approvals.summary")}>
-              <div className="space-y-2 p-4">
-                <p className="text-t2">{t("approvals.summaryHint")}</p>
-                <Json value={approval.summary} />
-              </div>
-            </Panel>
-            <Panel title={t("approvals.params")}>
-              <div className="space-y-2 p-4">
-                <p className="text-t2">{t("approvals.paramsHint")}</p>
-                <Json value={approval.params} />
-              </div>
-            </Panel>
+            <AgentReason text={approval.agent_reason} />
+            <RawData approval={approval} />
           </PageBody>
         </>
       )}
@@ -53,6 +46,7 @@ export default function ApprovalPage() {
 function Decide({ approval }: { approval: Approval }) {
   const { t } = useTranslation();
   const [decision, setDecision] = useState<Decision | null>(null);
+  const now = useNow();
   return (
     <Actions>
       <Button asChild>
@@ -61,7 +55,7 @@ function Decide({ approval }: { approval: Approval }) {
           {t("approvals.back")}
         </Link>
       </Button>
-      {open(approval, Date.now()) ? (
+      {open(approval, now) ? (
         <>
           <Button variant="primary" size="md" onClick={() => setDecision("approve")}>
             {t("approvals.approve")}
@@ -78,19 +72,14 @@ function Decide({ approval }: { approval: Approval }) {
 
 function ApprovalFacts({ approval }: { approval: Approval }) {
   const { t } = useTranslation();
+  const now = useNow();
   const rows: [string, ReactNode][] = [
-    [t("approvals.fact.state"), <ApprovalState key="state" approval={approval} />],
+    [t("approvals.fact.target"), <Target key="target" approval={approval} />],
+    [t("approvals.fact.state"), <ApprovalState key="state" approval={approval} now={now} />],
     [t("approvals.fact.operation"), t(`approvals.operationState.${approval.operation_state}`)],
+    [t("approvals.fact.requested"), <Minute key="requested" at={approval.requested_at} />],
+    [t("approvals.fact.expires"), <Minute key="expires" at={approval.expires_at} />],
     [t("approvals.fact.tool"), <Code key="tool">{approval.tool}</Code>],
-    [
-      t("approvals.fact.target"),
-      <span key="target">
-        <span className="block text-label text-t3">{approval.target.kind}</span>
-        <Id value={approval.target.id} />
-      </span>,
-    ],
-    [t("approvals.fact.requested"), <Time key="requested" at={approval.requested_at} />],
-    [t("approvals.fact.expires"), <Time key="expires" at={approval.expires_at} />],
     [t("approvals.fact.credential"), <Id key="credential" value={approval.credential_id} />],
   ];
   if (approval.run_id) {
@@ -98,7 +87,7 @@ function ApprovalFacts({ approval }: { approval: Approval }) {
   }
   if (approval.decided_at) {
     rows.push(
-      [t("approvals.fact.decided"), <Time key="decided" at={approval.decided_at} />],
+      [t("approvals.fact.decided"), <Minute key="decided" at={approval.decided_at} />],
       [t("approvals.fact.decidedBy"), <Code key="by">{approval.decided_by ?? "—"}</Code>],
       [t("approvals.fact.decisionReason"), approval.decision_reason ?? "—"],
     );
@@ -155,7 +144,9 @@ function DecisionDialog({ kind, approval, onClose }: { kind: Decision; approval:
         </>
       }
       action={t(approve ? "approvals.approveAction" : "approvals.rejectAction")}
-      danger={approve}
+      // As the admin's own changes: retiring a model is the destructive one; a grant, a top-up and a price publication
+      // are confirmed like the credit and price dialogs, which are not.
+      danger={approve && approval.risk === "delisting"}
       read={() => ({})}
       send={(_, { reason, key }) =>
         unwrapChange(

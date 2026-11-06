@@ -162,14 +162,46 @@ func (a adminAPI) repricing(ctx context.Context, tx pg.Tx, pub publication) (acc
 	if err != nil {
 		return site, operations.Repricing{}, err
 	}
+	summary, err := a.priceSummary(ctx, tx, p, site.Currency.String())
+	if err != nil {
+		return site, operations.Repricing{}, err
+	}
+	return site, operations.Repricing{Site: uuid.UUID(site.ID), Model: uuid.UUID(p.Model), Change: change, Margin: margin, Summary: summary}, nil
+}
+
+// priceSummary is what the owner is shown of publishing p: the model by name, and the base price of each billing item
+// now, as proposed and as it costs, in the site's currency per unit. Only the base rates are kept, not the context or
+// service tiers, so the summary stays well within its 8 KiB; a version priced per endpoint is shown by the model's
+// envelope of them, which is what PriceMove weighs too.
+func (a adminAPI) priceSummary(ctx context.Context, tx pg.Tx, p billing.Publication, currency string) (map[string]any, error) {
+	model, err := a.readModelIn(ctx, tx, p.Model)
+	if err != nil {
+		return nil, err
+	}
 	summary := map[string]any{
 		"model_id": p.Model.String(), "candidate_id": p.Candidate.String(), "status": p.Status,
 		"audience": map[string]any{"kind": p.Audience.Kind, "id": p.Audience.ID},
+		"slug":     model.Slug, "currency": currency, "per_endpoint": p.Endpoints != nil || p.CurrentEndpoints != nil,
+	}
+	if i := slices.IndexFunc(model.Names, func(n adminapi.ModelName) bool { return n.Visibility == adminapi.ModelNameVisibilityPublic }); i >= 0 {
+		summary["name"] = model.Names[i].Name
 	}
 	if p.Current != nil {
 		summary["current_id"] = p.Current.String()
 	}
-	return site, operations.Repricing{Site: uuid.UUID(site.ID), Model: uuid.UUID(p.Model), Change: change, Margin: margin, Summary: summary}, nil
+	for key, raw := range map[string]jsonx.Raw{"current": p.CurrentSchedule, "proposed": p.Schedule, "cost": p.Cost} {
+		if len(raw) == 0 {
+			continue
+		}
+		var schedule struct {
+			Rates map[string]string `json:"rates"`
+		}
+		if err := jsonx.Unmarshal(raw, &schedule); err != nil {
+			return nil, fmt.Errorf("read the %s price of model %s: %w", key, p.Model, err)
+		}
+		summary[key] = schedule.Rates
+	}
+	return summary, nil
 }
 
 func sameVersion(a, b *uuid.UUID) bool {

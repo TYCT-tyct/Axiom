@@ -18,6 +18,10 @@ test.describe("operations approvals", () => {
     await open(page, "/approvals");
     const list = page.getByRole("table", { name: zhText("approvals.list") });
     await expect(list.getByRole("row")).toHaveCount(9);
+    // A target by its name before its ID, and a waiting one by the time it has left.
+    const first = list.getByRole("row").nth(1);
+    await expect(first).toContainText("Northwind");
+    await expect(first.getByText(words("approvals.expiresIn_other"))).toBeVisible();
     await page.getByLabel(zhText("approvals.filters.state")).selectOption("pending");
     await page.getByRole("button", { name: zhText("filter.apply") }).click();
     expect(new URL(page.url()).searchParams.get("state")).toBe("pending");
@@ -32,6 +36,17 @@ test.describe("operations approvals", () => {
     await expect(page.locator("p", { hasText: zhText("approvals.cap.amount") })).toContainText("25.00");
     await expect(caps.getByRole("row").filter({ hasText: zhText("approvals.cap.daily") })).toContainText("500.00");
     await expect(page.getByText(approvalsOf(state)[0]?.agent_reason ?? "")).toBeVisible();
+    // Why it waited: $25 is over the $10 autonomous cap for one operation, and the row says so in words.
+    await expect(page.getByText(words("approvals.why.single"))).toContainText("10.00");
+    await expect(caps.getByRole("row").filter({ hasText: zhText("approvals.cap.single") })).toContainText(
+      zhText("approvals.cap.over"),
+    );
+    await expect(page.getByText("ops@northwind.example").first()).toBeVisible();
+    // The raw data is there, closed.
+    const raw = page.getByText(zhText("approvals.raw.title"));
+    await expect(page.getByText(/"policy_rev": 3/)).toBeHidden();
+    await raw.click();
+    await expect(page.getByText(/"policy_rev": 3/)).toBeVisible();
     await page.getByRole("button", { name: zhText("approvals.approve") }).click();
     await expect(dialog(page)).toContainText("25.00");
     await send(page, "checked the incident and the account");
@@ -72,14 +87,22 @@ test.describe("operations approvals", () => {
     await expect(dialog(page).getByText(zhText("approvals.conflict"))).toBeVisible();
   });
 
-  test("a sale price shows its envelope, and a measurement that could not be made says so", async ({ page }) => {
+  test("a sale price shows its prices and envelope, and warns of what the envelope could not check", async ({
+    page,
+  }) => {
     await open(page, `/approvals/${uuid(17, 3)}`);
+    await expect(page.getByText("Claude Opus 5.5").first()).toBeVisible();
+    const prices = page.getByRole("table", { name: words("approvals.prices.title") });
+    // Input moves from 4 to 4.5 per million tokens; cache reads keep their price, so they are not listed.
+    await expect(prices.getByRole("row").filter({ hasText: zhText("models.item.input") })).toContainText(/4\D.*4\.5/);
+    await expect(prices.getByRole("row").filter({ hasText: zhText("models.item.cache_read") })).toHaveCount(0);
+    await expect(page.getByText(words("approvals.why.envelope.unknownCost"))).toBeVisible();
     const table = page.getByRole("table", { name: zhText("approvals.envelope.title") });
     await expect(table.getByRole("row").filter({ hasText: zhText("approvals.envelope.change") })).toContainText(
       "12.5%",
     );
-    await expect(table.getByRole("row").filter({ hasText: zhText("approvals.envelope.margin") })).toContainText(
-      zhText("approvals.envelope.unknownCost"),
-    );
+    const margin = table.getByRole("row").filter({ hasText: zhText("approvals.envelope.margin") });
+    await expect(margin).toContainText(zhText("approvals.envelope.unknownCost"));
+    await expect(margin).toContainText(zhText("approvals.envelope.flag.unknownCost"));
   });
 });

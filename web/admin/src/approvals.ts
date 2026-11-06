@@ -28,6 +28,8 @@ export type CapLimits = {
   objectDaily: { used: Money; max: Money };
   count: { used: number; max: number };
   paused: boolean;
+  // The revision of the cap policy the server weighed it against.
+  rev?: number;
 };
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
@@ -77,6 +79,7 @@ export function capOf(summary: unknown): CapLimits | undefined {
       objectDaily: { used: v.objectUsed, max: v.object },
       count: { used: v.countUsed, max: v.countMax },
       paused: cap.paused === true,
+      rev: count(cap.policy_rev),
     }
   );
 }
@@ -92,6 +95,7 @@ export type EnvelopeLimits = {
   changes: { used: number; max: number };
   models: { used: number; max: number };
   movedToday: boolean;
+  rev?: number;
 };
 
 export function envelopeOf(summary: unknown): EnvelopeLimits | undefined {
@@ -122,6 +126,7 @@ export function envelopeOf(summary: unknown): EnvelopeLimits | undefined {
       changes: { used: v.changesUsed, max: v.changesMax },
       models: { used: v.modelsUsed, max: v.modelsMax },
       movedToday: e.model_moved_today === true,
+      rev: count(e.rev),
     }
   );
 }
@@ -145,4 +150,80 @@ export function outcomeOf(approval: Approval): Outcome {
     default:
       return "other";
   }
+}
+
+// The autonomous limits a transfer goes over, as internal/operations weigh decides them: why it waited for the owner.
+// None means it waited because the category always asks (a credit grant) or the scope is paused.
+export type CapLimit = "single" | "daily" | "weekly" | "objectDaily" | "count";
+
+export function capOver(cap: CapLimits): CapLimit[] {
+  const n = (m: Money) => BigInt(m.amount);
+  const amount = n(cap.amount);
+  const over: [CapLimit, boolean][] = [
+    ["single", amount > n(cap.single.max)],
+    ["daily", n(cap.daily.used) + amount > n(cap.daily.max)],
+    ["weekly", n(cap.weekly.used) + amount > n(cap.weekly.max)],
+    ["objectDaily", n(cap.objectDaily.used) + amount > n(cap.objectDaily.max)],
+    ["count", cap.count.used >= cap.count.max],
+  ];
+  return over.filter(([, is]) => is).map(([limit]) => limit);
+}
+
+// The parts of a price envelope a publication does not keep within, as internal/operations within decides them. A move
+// or margin the server could not measure is never within: the envelope cannot vouch for it.
+export type EnvelopeLimit = "unmeasured" | "unknownCost" | "margin" | "modelChange" | "changes" | "models";
+
+export function envelopeOver(e: EnvelopeLimits): EnvelopeLimit[] {
+  const over: [EnvelopeLimit, boolean][] = [
+    ["unmeasured", e.change === null],
+    ["unknownCost", e.margin === null],
+    ["margin", e.margin !== null && e.margin < e.minMargin],
+    ["modelChange", e.change !== null && e.modelChange.used + e.change > e.modelChange.max],
+    ["changes", e.changes.used >= e.changes.max],
+    ["models", !e.movedToday && e.models.used >= e.models.max],
+  ];
+  return over.filter(([, is]) => is).map(([limit]) => limit);
+}
+
+// Who or what an approval acts on, in the words the server read when the agent asked: an account by its name and its
+// owner's email, a supplier by its name, a model by its public name or slug. An approval asked on an older node may
+// have none of them; the page shows the ID alone then.
+export function targetName(approval: Approval): { name: string; detail?: string } | undefined {
+  const summary = record(approval.summary);
+  const text = (key: string) => (typeof summary?.[key] === "string" && summary[key] !== "" ? summary[key] : undefined);
+  const names: Record<string, [string | undefined, string | undefined]> = {
+    account: [text("account"), text("email")],
+    supplier: [text("supplier"), undefined],
+    model: [text("name") ?? text("slug"), text("name") ? text("slug") : undefined],
+  };
+  const [name, detail] = names[approval.target.kind] ?? [undefined, undefined];
+  return name ? { name, detail: detail === name ? undefined : detail } : undefined;
+}
+
+// A price item a publication sets, beside what it is now and what it costs, per unit of the site's currency.
+export type PriceRow<I extends string> = { item: I; current?: string; proposed?: string; cost?: string };
+
+const rates = (value: unknown) => {
+  const r = record(value);
+  return r && Object.values(r).every((price) => typeof price === "string") ? (r as Record<string, string>) : undefined;
+};
+
+// priceRows is each item whose price the publication changes, in the order of items: one priced now and not after,
+// or the other way, changes too. Nothing is shown when the summary has no proposed prices (an older node).
+export function priceRows<I extends string>(summary: unknown, items: readonly I[]): PriceRow<I>[] | undefined {
+  const s = record(summary);
+  const proposed = rates(s?.proposed);
+  if (!proposed) {
+    return undefined;
+  }
+  const current = rates(s?.current) ?? {};
+  const cost = rates(s?.cost) ?? {};
+  return items
+    .filter((item) => (item in proposed || item in current) && proposed[item] !== current[item])
+    .map((item) => ({ item, current: current[item], proposed: proposed[item], cost: cost[item] }));
+}
+
+// minutesLeft is how many whole minutes an open approval has before it expires, at least 0.
+export function minutesLeft(approval: Approval, now: number) {
+  return Math.max(0, Math.floor((Date.parse(approval.expires_at) - now) / 60_000));
 }

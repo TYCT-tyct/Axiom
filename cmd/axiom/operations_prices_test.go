@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -158,8 +159,30 @@ func TestOperationsPriceApproval(t *testing.T) {
 	expectAdmin(t, "a 20% move", rec, http.StatusAccepted, "")
 	waits := agentOperation(t, rec)
 	rec = f.do(http.MethodGet, "/operations/approvals/"+waits.Approval.ApprovalId, "", as(f.s))
-	if !strings.Contains(rec.Body.String(), `"model_daily_change_bps":1000`) || !strings.Contains(rec.Body.String(), `"change_bps":2000`) {
-		t.Errorf("the owner sees %s", rec.Body)
+	var asked struct {
+		Summary struct {
+			Slug     string            `json:"slug"`
+			Current  map[string]string `json:"current"`
+			Proposed map[string]string `json:"proposed"`
+			Cost     map[string]string `json:"cost"`
+			Envelope struct {
+				ModelDailyChangeBps int64 `json:"model_daily_change_bps"`
+				ChangeBps           int64 `json:"change_bps"`
+			} `json:"envelope"`
+		} `json:"summary"`
+	}
+	decode(t, rec, &asked)
+	summary := asked.Summary
+	// The owner sees the model by name and each price now, as proposed and as it costs, beside the envelope: a 20%
+	// move of the 1.5× price is the 1.8× one, so the input price is 1.2 times what it is now.
+	if summary.Slug != pricedModel || summary.Envelope.ModelDailyChangeBps != 1000 || summary.Envelope.ChangeBps != 2000 ||
+		summary.Cost["input"] == "" {
+		t.Fatalf("the owner sees %s", rec.Body)
+	}
+	now, _ := new(big.Rat).SetString(summary.Current["input"])
+	next, _ := new(big.Rat).SetString(summary.Proposed["input"])
+	if now == nil || next == nil || next.Cmp(new(big.Rat).Mul(now, big.NewRat(6, 5))) != 0 {
+		t.Errorf("the input price: %s now, %s proposed", summary.Current["input"], summary.Proposed["input"])
 	}
 	if approved := f.approve(waits.Approval.ApprovalId); approved.OperationState != adminapi.OperationStateSucceeded {
 		t.Errorf("the approval: %+v", approved)

@@ -122,7 +122,7 @@ func creditTransfer(ctx context.Context, tx pg.Tx, account accounts.AccountDetai
 	}
 	basis["amount"], basis["currency"] = strconv.FormatInt(amount, 10), capCurrency.String()
 	summary := map[string]any{
-		"account_id": account.ID.TypeID(), "account": account.Name, "site_id": account.Site.TypeID(), "amount": face,
+		"account_id": account.ID.TypeID(), "account": account.Name, "email": account.Owner.Email, "site_id": account.Site.TypeID(), "amount": face,
 		"currency": currency.String(),
 	}
 	if g.expires != nil {

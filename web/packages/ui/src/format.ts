@@ -57,6 +57,20 @@ function monthFormats(locale: string) {
   };
 }
 
+// dateTimes writes a moment as date and 24-hour clock time, with or without the seconds.
+function dateTimes(locale: string, zone: { timeZone: string }, seconds: boolean) {
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: seconds ? "2-digit" : undefined,
+    hourCycle: "h23",
+    ...zone,
+  });
+}
+
 // Numbers and times are always formatted for the page's language. A time shows in the viewer's time zone unless one is
 // given, such as an account's setting, and says which zone it is in, so a time read off a screenshot is never ambiguous.
 // The clock has 24 two-digit hours, so times line up in a column, and the zone comes last: Chinese would otherwise put
@@ -67,16 +81,9 @@ export function formatters(language: Language, timeZone?: string) {
   const integers = new Intl.NumberFormat(locale);
   // An exact decimal in text, such as a ratio or a supplier's own balance: grouped for the language, every digit kept.
   const decimals = new Intl.NumberFormat(locale, { maximumFractionDigits: 100 });
-  const times = new Intl.DateTimeFormat(locale, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-    ...zone,
-  });
+  const times = dateTimes(locale, zone, true);
+  // The same moment to the minute, for a list where seconds are noise; the page keeps the exact time in a title.
+  const minutes = dateTimes(locale, zone, false);
   const zones = new Intl.DateTimeFormat(locale, { timeZoneName: "short", ...zone });
   const months = monthFormats(locale);
   const currencies = new Map<string, Intl.NumberFormat>();
@@ -123,6 +130,8 @@ export function formatters(language: Language, timeZone?: string) {
     },
     dateTime: (value: Date) =>
       `${times.format(value)} ${zones.formatToParts(value).find((part) => part.type === "timeZoneName")?.value}`,
+    dateTimeMinute: (value: Date) =>
+      `${minutes.format(value)} ${zones.formatToParts(value).find((part) => part.type === "timeZoneName")?.value}`,
     // The short name of the zone dateTime uses, for a sentence that says which zone the page's times are in.
     zone: () => zones.formatToParts(new Date()).find((part) => part.type === "timeZoneName")?.value ?? zone.timeZone,
     // The month's name alone for a picker's options, and "YYYY-MM" as a month and year for a title.
