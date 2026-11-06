@@ -78,17 +78,18 @@ export function formatters(language: Language, timeZone?: string) {
 }
 
 // The viewer's zone can change while the page is open, when the system's does. Resolving it builds an Intl format,
-// half the cost the cache above saves, so it is resolved again only when the zone a Date prints, its offset and name,
-// changes: that costs microseconds. Zones that print the same offset and name show today's times alike.
-let viewer = { printed: "", zone: "" };
+// half the cost the cache above saves if every row did it, so one task resolves it once: a render of a whole list runs
+// in one task, and the next task reads the zone afresh.
+let viewer: string | undefined;
 
 function viewerZone() {
-  const text = new Date().toString();
-  const printed = text.slice(text.indexOf("GMT"));
-  if (printed !== viewer.printed) {
-    viewer = { printed, zone: Intl.DateTimeFormat().resolvedOptions().timeZone };
+  if (viewer === undefined) {
+    viewer = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    queueMicrotask(() => {
+      viewer = undefined;
+    });
   }
-  return viewer.zone;
+  return viewer;
 }
 
 function build(language: Language, timeZone: string) {

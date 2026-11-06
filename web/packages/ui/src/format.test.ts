@@ -80,7 +80,7 @@ describe("pay", () => {
 it("builds the formats once, however many rows use them", () => {
   const i18n = createInstance();
   i18n.init({ lng: "en", defaultNS: "common", initAsync: false, resources: { en: { common: {} } } });
-  const Row = () => useFormat("Pacific/Chatham").dateTime(new Date("2026-10-14T12:30:00Z"));
+  const Row = () => useFormat().dateTime(new Date("2026-10-14T12:30:00Z"));
   const rows = Array.from({ length: 50 }, (_, index) => createElement(Row, { key: index }));
   const built = vi.spyOn(Intl, "DateTimeFormat");
   try {
@@ -92,14 +92,15 @@ it("builds the formats once, however many rows use them", () => {
 });
 
 // The cache must not keep the viewer in the zone the page opened in: after the system's zone changes, a time shows in
-// the new one.
-it("follows the viewer's zone when the system's changes", () => {
+// the new one, even between zones that print the same offset and name today but keep different summer times.
+it("follows the viewer's zone when the system's changes", async () => {
   const instant = new Date("2026-10-14T12:30:00Z");
   try {
-    vi.stubEnv("TZ", "UTC");
-    expect(formatters("en").dateTime(instant)).toBe("Oct 14, 2026, 12:30:00 UTC");
-    vi.stubEnv("TZ", "Asia/Shanghai");
-    expect(formatters("en").dateTime(instant)).toBe("Oct 14, 2026, 20:30:00 GMT+8");
+    vi.stubEnv("TZ", "America/Phoenix");
+    expect(formatters("en").dateTime(instant)).toBe("Oct 14, 2026, 05:30:00 MST");
+    await Promise.resolve(); // the change arrives in a later task than the render
+    vi.stubEnv("TZ", "America/Denver");
+    expect(formatters("en").dateTime(instant)).toBe("Oct 14, 2026, 06:30:00 MDT");
   } finally {
     vi.unstubAllEnvs();
   }
