@@ -3,7 +3,7 @@ import { type Language, locales } from "./i18n";
 
 // Money is an exact signed integer in billionths of one unit of a currency, as decimal text, because a JSON number would
 // round it in the browser (docs/domains/billing.md「钱的表示」).
-export type Money = { amount: string; currency: string };
+type Money = { amount: string; currency: string };
 const moneyDigits = 9;
 
 // decimalOf writes the integer as the decimal it stands for, "1500000000" as "1.500000000", which Intl formats without
