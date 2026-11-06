@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { type Language, locales } from "./i18n";
 
@@ -61,7 +60,23 @@ function monthFormats(locale: string) {
 // given, such as an account's setting, and says which zone it is in, so a time read off a screenshot is never ambiguous.
 // The clock has 24 two-digit hours, so times line up in a column, and the zone comes last: Chinese would otherwise put
 // it between the date and the time.
+//
+// Building the Intl formats costs over a millisecond on a fast core, and a page calls useFormat in every row and every
+// time it shows: rebuilt per component, the 50 rows of the admin's calls list took 0.7 s to render after their data
+// arrived, and over 5 s on a starved CI runner. So each language and zone builds them once for the page's lifetime.
+const built = new Map<string, ReturnType<typeof build>>();
+
 export function formatters(language: Language, timeZone?: string) {
+  const key = `${language} ${timeZone ?? ""}`;
+  let format = built.get(key);
+  if (!format) {
+    format = build(language, timeZone);
+    built.set(key, format);
+  }
+  return format;
+}
+
+function build(language: Language, timeZone?: string) {
   const locale = locales[language];
   const zone = { timeZone: timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone };
   const integers = new Intl.NumberFormat(locale);
@@ -134,5 +149,5 @@ export function formatters(language: Language, timeZone?: string) {
 export function useFormat(timeZone?: string) {
   const { i18n } = useTranslation("common");
   const language = i18n.language as Language;
-  return useMemo(() => formatters(language, timeZone), [language, timeZone]);
+  return formatters(language, timeZone);
 }

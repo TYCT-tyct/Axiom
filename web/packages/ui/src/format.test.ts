@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { formatters, moneyInput, parseMoney } from "./format";
+import { createInstance } from "i18next";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { I18nextProvider } from "react-i18next";
+import { describe, expect, it, vi } from "vitest";
+import { formatters, moneyInput, parseMoney, useFormat } from "./format";
 
 describe("money", () => {
   // Amounts are billionths of a unit; none may pass through a floating point number.
@@ -69,4 +73,20 @@ describe("pay", () => {
   it("formats in the page's language", () => {
     expect(formatters("zh").pay({ amount: "1030", currency: "USD" })).toBe("US$10.30");
   });
+});
+
+// Building the Intl formats per component made the admin's 50-row calls list take seconds to render on a starved CI
+// runner after its data arrived: a page's rows and times must share one set per language and zone.
+it("builds the formats once, however many rows use them", () => {
+  const i18n = createInstance();
+  i18n.init({ lng: "en", defaultNS: "common", initAsync: false, resources: { en: { common: {} } } });
+  const Row = () => useFormat("Pacific/Chatham").dateTime(new Date("2026-10-14T12:30:00Z"));
+  const rows = Array.from({ length: 50 }, (_, index) => createElement(Row, { key: index }));
+  const built = vi.spyOn(Intl, "DateTimeFormat");
+  try {
+    renderToStaticMarkup(createElement(I18nextProvider, { i18n }, rows));
+    expect(built.mock.calls.length).toBeLessThan(rows.length);
+  } finally {
+    built.mockRestore();
+  }
 });
