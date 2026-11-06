@@ -141,11 +141,10 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 		return CreatedKey{}, err
 	}
 	if r.Workspace == (WorkspaceID{}) {
-		found, err := s.queries.DefaultWorkspace(ctx, tx, uuid.UUID(r.Account))
-		if err != nil || len(found) == 0 {
-			return CreatedKey{}, fmt.Errorf("create an API key: the account's default workspace: %w", errors.Join(err, ErrKeyNotFound))
+		var err error
+		if r.Workspace, err = s.defaultWorkspace(ctx, tx, r.Account); err != nil {
+			return CreatedKey{}, fmt.Errorf("create an API key: %w", errors.Join(err, ErrKeyNotFound))
 		}
-		r.Workspace = WorkspaceID(found[0])
 	}
 	limit, reset := r.SpendLimit, r.LimitReset
 	if limit == nil && defaults && r.Kind == CallKey {

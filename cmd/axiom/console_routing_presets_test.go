@@ -7,6 +7,7 @@ import (
 	"testing"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/routing"
 )
@@ -260,4 +261,122 @@ func TestConsoleSourceClasses(t *testing.T) {
 	if !slices.Equal(got.Data, want) {
 		t.Errorf("classes %v, want %v", got.Data, want)
 	}
+}
+
+// TestConsoleWorkspaceRoutingPresets: an account makes a preset of one of its workspaces and points that workspace's
+// default at it; the workspace's keys may use it and its new keys take it, ahead of the account's default, while the
+// account's other workspaces' keys and defaults may not. The account's default says what a key the console makes now,
+// in the default workspace, takes, a default of that workspace's own included. Another account's workspace and a
+// deleted one are 404 (docs/domains/routing.md「默认链与 key 落章」).
+func TestConsoleWorkspaceRoutingPresets(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	main, second, deleted, theirs, secondUUID := f.workspaces(s)
+	own := f.routingPreset(s, `{"slug":"own","name":"Own","rules":{"default":{}},"workspace_id":"`+second+`"}`)
+	if own.Scope != consoleapi.RoutingPresetScopeWorkspace || own.WorkspaceId == nil || *own.WorkspaceId != second {
+		t.Errorf("made in %s of %v, want the second workspace's", own.Scope, own.WorkspaceId)
+	}
+	mainPreset := f.routingPreset(s, `{"slug":"main","name":"Main","rules":{"default":{}},"workspace_id":"`+main+`"}`)
+	for query, want := range map[string][]string{"": {"main"}, "?workspace_id=" + main: {"main"}, "?workspace_id=" + second: {"own"}} {
+		if got := f.presetSlugs(s, query); !slices.Equal(got, want) {
+			t.Errorf("listed %v for %q, want %v", got, query, want)
+		}
+	}
+
+	ownDefault := `{"preset_id":"` + own.Id.String() + `","version":0}`
+	for _, c := range []struct {
+		what, method, path, body string
+		status                   int
+		code                     consoleapi.ErrorCode
+	}{
+		{"another account's workspace's presets", http.MethodGet, "/routing-presets?workspace_id=" + theirs, "", http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+		{"a deleted workspace's presets", http.MethodGet, "/routing-presets?workspace_id=" + deleted, "", http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+		{"a preset of another account's workspace", http.MethodPost, "/routing-presets", `{"slug":"x","name":"X","rules":{"default":{}},"workspace_id":"` + theirs + `"}`, http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+		{"another account's workspace's default", http.MethodGet, "/workspaces/" + theirs + "/routing-default", "", http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+		{"a deleted workspace's default", http.MethodPut, "/workspaces/" + deleted + "/routing-default", ownDefault, http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+		{"another workspace's preset as the default", http.MethodPut, "/workspaces/" + main + "/routing-default", ownDefault, http.StatusBadRequest, consoleapi.ErrorCodePresetNotSelectable},
+		{"another workspace's preset as the account's default", http.MethodPut, "/routing-default", ownDefault, http.StatusBadRequest, consoleapi.ErrorCodePresetNotSelectable},
+		{"a key of the main workspace bound to another's", http.MethodPost, "/keys", `{"name":"x","preset_id":"` + own.Id.String() + `"}`, http.StatusBadRequest, consoleapi.ErrorCodePresetNotSelectable},
+		{"the second workspace's default", http.MethodPut, "/workspaces/" + second + "/routing-default", ownDefault, http.StatusOK, ""},
+		{"the main workspace's default", http.MethodPut, "/workspaces/" + main + "/routing-default", `{"preset_id":"` + mainPreset.Id.String() + `","version":0}`, http.StatusOK, ""},
+	} {
+		expect(t, c.what, f.do(c.method, c.path, c.body, as(s)), c.status, c.code)
+	}
+
+	for path, want := range map[string]readDefault{
+		"/workspaces/" + second + "/routing-default": {own.Id.String(), own.Id.String()},
+		"/workspaces/" + main + "/routing-default":   {mainPreset.Id.String(), mainPreset.Id.String()},
+		"/routing-default":                           {"none", mainPreset.Id.String()},
+	} {
+		if got := f.routingDefault(s, path); got != want {
+			t.Errorf("%s: %+v, want %+v", path, got, want)
+		}
+	}
+	f.createKey(s, `{"name":"made in main"}`)
+	manager := f.managementKey(s, `"name":"manager"`).Secret
+	readManaged(t, f.managementRequest(http.MethodPost, "", `{"name":"made in second","workspace_id":"`+secondUUID.String()+`"}`, manager), http.StatusCreated)
+	bound := f.text(`SELECT string_agg(name || ':' || preset_id, ',' ORDER BY name) FROM accounts.api_keys WHERE name LIKE 'made in %'`)
+	if want := "made in main:" + mainPreset.Id.String() + ",made in second:" + own.Id.String(); bound != want {
+		t.Errorf("keys bound %s, want %s: each to its workspace's default", bound, want)
+	}
+
+	expect(t, "disable a workspace's default", f.do(http.MethodDelete, "/routing-presets/"+own.Id.String()+"?revision=1", "", as(s)),
+		http.StatusConflict, consoleapi.ErrorCodePresetInUse)
+	audited := f.text(`SELECT string_agg(action || ':' || coalesce(detail->>'scope', ''), ',' ORDER BY id) FROM platform.audit_log
+		WHERE module = 'routing' AND target_id IN ('` + secondUUID.String() + `', '` + own.Id.String() + `')`)
+	if want := "routing.preset.create:workspace,routing.default.update:workspace"; audited != want {
+		t.Errorf("audited %s, want %s", audited, want)
+	}
+}
+
+// workspaces are the session's account's default workspace, a second one, a deleted one, and another account's
+// default workspace, by their TypeIDs, and the second one's UUID, as the management API names it.
+func (f consoleFixture) workspaces(s session) (main, second, deleted, theirs string, secondUUID uuid.UUID) {
+	f.t.Helper()
+	account, site := f.account(s)
+	main = f.createKey(s, `{"name":"main"}`).Key.WorkspaceId
+	ids := [2]uuid.UUID{uuid.NewV7(), uuid.NewV7()}
+	f.run(`INSERT INTO accounts.workspaces (id, site_id, account_id, name, status, is_default, deleted_at) VALUES
+		('` + ids[0].String() + `', '` + site.String() + `', '` + account.String() + `', 'Second', 'active', false, NULL),
+		('` + ids[1].String() + `', '` + site.String() + `', '` + account.String() + `', 'Deleted', 'active', false, now())`)
+	if _, err := f.user(secondPW, "create", "--email", "other@example.com"); err != nil {
+		f.t.Fatal(err)
+	}
+	theirs = f.createKey(f.signIn("other@example.com", secondPW), `{"name":"theirs"}`).Key.WorkspaceId
+	return main, accounts.WorkspaceID(ids[0]).TypeID(), accounts.WorkspaceID(ids[1]).TypeID(), theirs, ids[0]
+}
+
+// presetSlugs are the slugs of the routing presets the console lists for query.
+func (f consoleFixture) presetSlugs(s session, query string) []string {
+	f.t.Helper()
+	rec := f.do(http.MethodGet, "/routing-presets"+query, "", as(s))
+	expect(f.t, "list "+query, rec, http.StatusOK, "")
+	var list consoleapi.RoutingPresetList
+	decode(f.t, rec, &list)
+	slugs := make([]string, len(list.Data))
+	for i, p := range list.Data {
+		slugs[i] = p.Slug
+	}
+	return slugs
+}
+
+// readDefault is a read of a default: the preset it points at, "none" when it sets none, and the one it says a key
+// made now takes, "refused" when it is refused.
+type readDefault struct{ set, newKeys string }
+
+func (f consoleFixture) routingDefault(s session, path string) readDefault {
+	f.t.Helper()
+	rec := f.do(http.MethodGet, path, "", as(s))
+	expect(f.t, "read "+path, rec, http.StatusOK, "")
+	var d consoleapi.AccountRoutingDefault
+	decode(f.t, rec, &d)
+	got := readDefault{"none", "refused"}
+	if d.PresetId != nil {
+		got.set = d.PresetId.String()
+	}
+	if d.NewKeysPresetId != nil {
+		got.newKeys = d.NewKeysPresetId.String()
+	}
+	return got
 }

@@ -581,6 +581,35 @@ func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]
 	return items, nil
 }
 
+const liveWorkspace = `-- name: LiveWorkspace :many
+SELECT id FROM accounts.workspaces WHERE account_id = $1 AND id = $2 AND deleted_at IS NULL
+`
+
+type LiveWorkspaceParams struct {
+	AccountID uuid.UUID
+	ID        uuid.UUID
+}
+
+func (q *Queries) LiveWorkspace(ctx context.Context, db DBTX, arg LiveWorkspaceParams) ([]uuid.UUID, error) {
+	rows, err := db.Query(ctx, liveWorkspace, arg.AccountID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockAccount = `-- name: LockAccount :one
 SELECT max_keys, key_creations_per_hour FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
 `

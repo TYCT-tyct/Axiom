@@ -15,22 +15,46 @@ import (
 	"axiom/internal/routing"
 )
 
-// The console's routing presets are the account layer's (docs/domains/routing.md「接口、权限与审计」): an account
-// reads the presets its keys may use, writes its own, and sets its own default. The tables' policies keep it to its
-// tenant; these handlers only name the layer.
+// The console's routing presets are the account layer's and its workspaces' (docs/domains/routing.md「接口、权限与
+// 审计」): an account reads the presets its keys may use, writes its own and its workspaces', and sets its own default
+// and theirs. The tables' policies keep it to its tenant; these handlers only name the layer, and check that a
+// workspace they name is the account's, which routing's tables cannot.
 
 // accountLayer is the layer of the session's account.
 func accountLayer(cl call) routing.Layer {
 	return routing.Layer{Scope: routing.ScopeAccount, Site: routing.SiteID(cl.site.ID), Account: routing.AccountID(cl.principal.AccountID())}
 }
 
-func (c consoleAPI) ListRoutingPresets(ctx context.Context, _ consoleapi.ListRoutingPresetsRequestObject) (consoleapi.ListRoutingPresetsResponseObject, error) {
-	cl := callOf(ctx)
+// workspaceLayer is the layer of the session's account's workspace id, or of its default workspace, where the console
+// makes keys, when id is nil. A malformed ID, another account's workspace and a deleted one are the same 404.
+func (c consoleAPI) workspaceLayer(ctx context.Context, tx pg.Tx, cl call, id *string) (routing.Layer, error) {
+	var named *accounts.WorkspaceID
+	if id != nil {
+		parsed, err := accounts.ParseWorkspaceID(*id)
+		if err != nil {
+			return routing.Layer{}, accounts.ErrNotFound
+		}
+		named = &parsed
+	}
+	ws, err := c.accounts.Workspace(ctx, tx, cl.principal.AccountID(), named)
+	if err != nil {
+		return routing.Layer{}, err
+	}
 	layer := accountLayer(cl)
+	layer.Scope, layer.Workspace = routing.ScopeWorkspace, routing.WorkspaceID(ws)
+	return layer, nil
+}
+
+func (c consoleAPI) ListRoutingPresets(ctx context.Context, r consoleapi.ListRoutingPresetsRequestObject) (consoleapi.ListRoutingPresetsResponseObject, error) {
+	cl := callOf(ctx)
 	account := cl.principal.AccountID()
 	var out consoleapi.RoutingPresetList
 	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
-		presets, err := routing.ListPresets(ctx, tx, routing.Admission{Site: layer.Site, Account: layer.Account, Currency: cl.site.Currency})
+		layer, err := c.workspaceLayer(ctx, tx, cl, r.Params.WorkspaceId)
+		if err != nil {
+			return err
+		}
+		presets, err := routing.ListPresets(ctx, tx, routing.Admission{Site: layer.Site, Account: layer.Account, Workspace: layer.Workspace, Currency: cl.site.Currency})
 		if err != nil {
 			return err
 		}
@@ -63,7 +87,13 @@ func (c consoleAPI) CreateRoutingPreset(ctx context.Context, r consoleapi.Create
 	cl := callOf(ctx)
 	var p routing.StoredPreset
 	if err := c.db.Tx(ctx, cl.scope, func(tx pg.Tx) (err error) {
-		p, err = routing.CreatePreset(ctx, tx, actor(ctx), accountLayer(cl), r.Body.Slug,
+		layer := accountLayer(cl)
+		if r.Body.WorkspaceId != nil {
+			if layer, err = c.workspaceLayer(ctx, tx, cl, r.Body.WorkspaceId); err != nil {
+				return err
+			}
+		}
+		p, err = routing.CreatePreset(ctx, tx, actor(ctx), layer, r.Body.Slug,
 			routing.PresetContent{Name: r.Body.Name, Rules: r.Body.Rules}, "")
 		return rulesProblem(err)
 	}); err != nil {
@@ -96,35 +126,71 @@ func (c consoleAPI) DisableRoutingPreset(ctx context.Context, r consoleapi.Disab
 }
 
 func (c consoleAPI) GetRoutingDefault(ctx context.Context, _ consoleapi.GetRoutingDefaultRequestObject) (consoleapi.GetRoutingDefaultResponseObject, error) {
-	cl := callOf(ctx)
-	var body consoleapi.AccountRoutingDefault
-	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
-		d, err := routing.ReadDefault(ctx, tx, accountLayer(cl))
-		if err != nil {
-			return err
-		}
-		body, err = accountDefault(ctx, tx, cl, d)
-		return err
-	}); err != nil {
-		return nil, err
-	}
-	return consoleapi.GetRoutingDefault200JSONResponse(body), nil
+	body, err := c.readDefault(ctx, nil)
+	return consoleapi.GetRoutingDefault200JSONResponse(body), err
 }
 
 func (c consoleAPI) SetRoutingDefault(ctx context.Context, r consoleapi.SetRoutingDefaultRequestObject) (consoleapi.SetRoutingDefaultResponseObject, error) {
+	body, err := c.setDefault(ctx, nil, *r.Body)
+	return consoleapi.SetRoutingDefault200JSONResponse(body), err
+}
+
+func (c consoleAPI) GetWorkspaceRoutingDefault(ctx context.Context, r consoleapi.GetWorkspaceRoutingDefaultRequestObject) (consoleapi.GetWorkspaceRoutingDefaultResponseObject, error) {
+	body, err := c.readDefault(ctx, &r.WorkspaceId)
+	return consoleapi.GetWorkspaceRoutingDefault200JSONResponse(body), err
+}
+
+func (c consoleAPI) SetWorkspaceRoutingDefault(ctx context.Context, r consoleapi.SetWorkspaceRoutingDefaultRequestObject) (consoleapi.SetWorkspaceRoutingDefaultResponseObject, error) {
+	body, err := c.setDefault(ctx, &r.WorkspaceId, *r.Body)
+	return consoleapi.SetWorkspaceRoutingDefault200JSONResponse(body), err
+}
+
+// readDefault is the workspace's own default, or the account's when workspace is nil, with what a key made now in the
+// workspace takes: in the account's default workspace, where the console makes keys, for the account's default.
+func (c consoleAPI) readDefault(ctx context.Context, workspace *string) (consoleapi.AccountRoutingDefault, error) {
 	cl := callOf(ctx)
 	var body consoleapi.AccountRoutingDefault
-	if err := c.db.Tx(ctx, cl.scope, func(tx pg.Tx) error {
-		d, err := routing.SetDefault(ctx, tx, actor(ctx), accountLayer(cl), cl.site.Currency, (*routing.PresetID)(r.Body.PresetId), r.Body.Version, "")
+	err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) error {
+		ws, layer, err := c.defaultLayers(ctx, tx, cl, workspace)
 		if err != nil {
 			return err
 		}
-		body, err = accountDefault(ctx, tx, cl, d)
+		d, err := routing.ReadDefault(ctx, tx, layer)
+		if err != nil {
+			return err
+		}
+		body, err = newKeysDefault(ctx, tx, cl, ws, d)
 		return err
-	}); err != nil {
-		return nil, err
+	})
+	return body, err
+}
+
+// setDefault is readDefault after the layer's default is set as u says.
+func (c consoleAPI) setDefault(ctx context.Context, workspace *string, u consoleapi.RoutingDefaultUpdate) (consoleapi.AccountRoutingDefault, error) {
+	cl := callOf(ctx)
+	var body consoleapi.AccountRoutingDefault
+	err := c.db.Tx(ctx, cl.scope, func(tx pg.Tx) error {
+		ws, layer, err := c.defaultLayers(ctx, tx, cl, workspace)
+		if err != nil {
+			return err
+		}
+		d, err := routing.SetDefault(ctx, tx, actor(ctx), layer, cl.site.Currency, (*routing.PresetID)(u.PresetId), u.Version, "")
+		if err != nil {
+			return err
+		}
+		body, err = newKeysDefault(ctx, tx, cl, ws, d)
+		return err
+	})
+	return body, err
+}
+
+// defaultLayers are the workspace whose new keys a default is read for, and the layer whose default it is: the
+// workspace named, or the account of its default one.
+func (c consoleAPI) defaultLayers(ctx context.Context, tx pg.Tx, cl call, workspace *string) (ws, layer routing.Layer, err error) {
+	if ws, err = c.workspaceLayer(ctx, tx, cl, workspace); err != nil || workspace != nil {
+		return ws, ws, err
 	}
-	return consoleapi.SetRoutingDefault200JSONResponse(body), nil
+	return ws, accountLayer(cl), nil
 }
 
 // ListRoutingSourceClasses answers from the classes the node routes by, so a page offers exactly the slugs a rule can
@@ -156,6 +222,10 @@ func routingPresetBody(p routing.StoredPreset) consoleapi.RoutingPreset {
 		code := p.Currency.String()
 		body.Currency = &code
 	}
+	if p.Scope == routing.ScopeWorkspace {
+		ws := accounts.WorkspaceID(p.Workspace).TypeID()
+		body.WorkspaceId = &ws
+	}
 	return body
 }
 
@@ -183,14 +253,12 @@ func countedPresets(ctx context.Context, tx pg.Tx, keys *accounts.Service, accou
 	return out, nil
 }
 
-// accountDefault is the account's default d with the preset a call key the account makes now is bound to, which the
-// keys page sets each key's preset against. It is the chain from the account up: no workspace sets a default of its
-// own yet, so every workspace of the account resolves the same. A default the key could not use is said, not failed:
-// it is making the key that it refuses.
-func accountDefault(ctx context.Context, tx pg.Tx, cl call, d routing.Default) (consoleapi.AccountRoutingDefault, error) {
+// newKeysDefault is a layer's default d with the preset a call key made now in the workspace ws is bound to, which the
+// keys page sets each key's preset against: the chain from the workspace up, the one key creation resolves. A default
+// the key could not use is said, not failed: it is making the key that it refuses.
+func newKeysDefault(ctx context.Context, tx pg.Tx, cl call, ws routing.Layer, d routing.Default) (consoleapi.AccountRoutingDefault, error) {
 	body := consoleapi.AccountRoutingDefault{PresetId: (*openapi_types.UUID)(d.Preset), Version: d.Version}
-	layer := accountLayer(cl)
-	id, err := routing.DefaultPreset(ctx, tx, layer.Site, layer.Account, routing.WorkspaceID{}, cl.site.Currency)
+	id, err := routing.DefaultPreset(ctx, tx, ws.Site, ws.Account, ws.Workspace, cl.site.Currency)
 	switch {
 	case errors.Is(err, routing.ErrDefaultInvalid):
 		refused := true
