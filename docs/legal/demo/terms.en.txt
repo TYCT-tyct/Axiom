@@ -28,7 +28,7 @@ Effective date: 【effective date】
 
 3.1 The Service is prepaid. Before you pay, the page shows the amount to pay, payment currency, payment method, channel fee (if any), and the expected credit to be credited. The order takes effect when you confirm and pay.
 
-3.2 Credit is credited in batches from sources such as paid top-ups, gifts, redeem codes, and manual adjustments. Each batch may have an expiry date. Unless the top-up page or order says otherwise, paid credit does not expire by default; gift, redeem-code, offline-payment, and similar credit may expire on the date stated when issued. Unused amounts expire at that time, except where applicable law provides otherwise.
+3.2 Credit is credited in batches from sources such as paid top-ups, gifts, redeem codes, and manual adjustments. Each batch may have an expiry date. Unless the top-up page or order says otherwise, paid credit does not expire by default; gift, redeem-code, offline-payment, and similar credit may expire on the date stated when issued. Unused amounts expire at that time, except where applicable law provides otherwise. Each redeem code can be redeemed once. The code’s validity period only decides whether it can still be redeemed; the credit it grants expires on the validity recorded on the code at redemption, and disabling or changing the code afterwards does not affect credit already redeemed. Redeem-code credit is not a paid top-up and cannot be refunded or exchanged for cash.
 
 3.3 Credit is not legal tender, is not a deposit, does not bear interest, and does not give you any property right. Credit is non-transferable, cannot be moved between accounts, cannot be exchanged for cash, and may be used only to purchase the Service. Except for refunds expressly allowed by these Terms, the site’s refund policy, or applicable law, credit is non-refundable and non-exchangeable.
 
@@ -64,7 +64,7 @@ Effective date: 【effective date】
 
 5.1 The Service forwards your requests to the upstream model providers that actually serve them, including official APIs, third-party relay sites, and Axiom-operated account pools. The upstream provider’s terms of service, acceptable-use policy, privacy policy, and data-processing rules apply to your use of the relevant model. You must review and comply with them.
 
-5.2 We may select one or more candidate endpoints based on your presets, price, endpoint health, capabilities, session stickiness, limits, and availability, and may retry or fall back on failure. A single request may try multiple endpoints. The call record lists the endpoint or code that ultimately served the request, the result of each attempt, and the corresponding charges.
+5.2 We may select one or more candidate endpoints based on your presets, price, endpoint health, capabilities, session stickiness, limits, and availability, and may retry or fall back on failure. A single request may try multiple endpoints. Our call records keep the endpoint that ultimately served the request and the endpoint and cost of each attempt; the console shows you the model, usage, and the amount you actually paid for each call, not our cost, endpoints, or routing.
 
 5.3 Upstream providers may record, store, use for training, use for improvement, or resell your inputs and outputs. We do not control upstream data practices and cannot guarantee that an upstream will handle data as we require. You should avoid sending data that the upstream is not permitted to process, and you should assess whether the upstream’s data practices meet your requirements.
 
@@ -88,7 +88,7 @@ Effective date: 【effective date】
 
 6.5 No one can view conversation bodies through the product interface or ordinary APIs. Only the platform owner, under a controlled process with two signatures from independent keys, audit, and encrypted export, may access stored content for tracing, security, dispute handling, and, where necessary consent has been obtained, model improvement or training. We will not display message bodies to other users, site administrators, or third parties, except as required by law.
 
-6.6 Call records (metadata) are always stored and cannot be disabled. Call records include the account, workspace, key, IP address, client application, model, endpoint or source code, each attempt, usage, sale price, cost, latency, error type, and whether the call was free. You can view your own call records in the console and export their metadata; call records do not contain conversation bodies.
+6.6 Call records (metadata) are always stored and cannot be disabled. Call records include the account, workspace, key, IP address, client application, model, endpoint or source code, each attempt, usage, sale price, cost, latency, error type, and whether the call was free. You can view your own call records in the console and export their metadata for a time window (CSV, up to 31 days and 10,000 rows per export), and export your credit history (the latest 10,000 entries); exports contain no conversation bodies, credentials, our costs, endpoints, or routing. Call records do not contain conversation bodies.
 
 6.7 We may access call records, and to the extent necessary access stored conversation content under controlled export, for security, anti-fraud, abuse investigation, dispute handling, legal compliance, or law-enforcement requests. We will process the minimum necessary data and keep audit records.
 
@@ -114,7 +114,7 @@ Effective date: 【effective date】
 
 ## Suspension and Termination
 
-8.1 You may stop using the Service at any time and request account closure through the console or 【contact details】. Before closure, you must settle amounts due. After closure, your personal data is handled under the Privacy Policy, financial records and records required by law are retained, and remaining credit is handled under the site’s refund policy.
+8.1 You may stop using the Service at any time and request account closure through 【contact details】. Before closure, you must settle amounts due, and an account’s sole owner must first transfer ownership. After closure, your personal data is erased, financial records and records required by law are retained, remaining credit is handled under the site’s refund policy, and stored conversation content and call records are handled as follows: 【handling of conversation content and call records after closure】.
 
 8.2 We may suspend or terminate all or part of your access, without prior notice where the law does not require it, if: you violate these Terms or upstream terms; there is fraud, a chargeback, or a malicious refund; law enforcement or a regulator requires it; there is a security risk; there is a prolonged negative balance; there is an account dispute; or we reasonably consider it necessary.
 
@@ -157,6 +157,8 @@ Effective date: 【effective date】
 12.1 We may update these Terms from time to time. For material changes, we will give advance notice through the website, console, email, or another reasonable method, and update the version and effective date. After a change takes effect, your continued use of the Service means you accept it; if you do not accept it, you must stop using the Service and may request a refund of unused credit under the refund policy.
 
 12.2 If you stop using the Service before a change takes effect, amounts already incurred remain payable. If applicable law requires separate consent, we will obtain it separately.
+
+12.3 These Terms and the Privacy Policy are published in versions, with separate Chinese and English texts. A published version is never edited or deleted; an update is always a new version. You must accept the current versions to register; after a new version is published, you must read and accept it the next time you use the console before you can continue using it. We record the document type, language, version, and time of each acceptance.
 
 ## Governing Law and Dispute Resolution
 
