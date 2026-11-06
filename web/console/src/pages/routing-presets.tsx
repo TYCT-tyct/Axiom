@@ -55,7 +55,7 @@ export default function RoutingPresets() {
             {(data) => (
               <PresetsTable
                 presets={data.data}
-                defaultId={defaults.data?.new_keys_preset_id ?? defaults.data?.preset_id}
+                defaultId={newKeysPreset(defaults.data)}
                 manage={manage}
                 onOpen={setDialog}
               />
@@ -67,6 +67,12 @@ export default function RoutingPresets() {
       {dialog && dialog.kind !== "disable" ? <PresetDialog edit={dialog} onClose={close} /> : null}
     </>
   );
+}
+
+// newKeysPreset is the preset a key made now takes, which the list marks: the node names it, or names none because the
+// default refuses new keys; only an older node, which says neither, leaves the account's own default to stand for it.
+function newKeysPreset(read: Schemas["AccountRoutingDefault"] | undefined) {
+  return read?.new_keys_refused ? undefined : (read?.new_keys_preset_id ?? read?.preset_id);
 }
 
 // DefaultPanel shows and sets the account's default for new keys. A later read that fails keeps the form and what the

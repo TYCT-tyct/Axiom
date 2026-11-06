@@ -291,7 +291,7 @@ it.each([
   },
   {
     name: "a default workspace's default that refuses new keys",
-    read: { version: 0, new_keys_refused: true, new_keys_layer: "workspace" as const },
+    read: { preset_id: preset(1).id, version: 1, new_keys_refused: true, new_keys_layer: "workspace" as const },
     option: "byDefaultRefused",
     marked: [],
     none: "defaults.none",
