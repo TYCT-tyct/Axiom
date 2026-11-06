@@ -19,7 +19,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { PresetOptions } from "../key-form";
+import { PresetOptions, useNewKeys } from "../key-form";
 import { DisablePresetDialog, PresetDialog, type PresetEdit } from "../preset-dialogs";
 import { routingDefaultQuery, routingPresetsQuery } from "../queries";
 
@@ -89,11 +89,11 @@ function DefaultPanel({ presets, manage }: { presets: Preset[]; manage: boolean 
 // overwritten. A saved default becomes the new base; after a refusal the user reloads, which takes the latest default
 // as the base and drops the choice made against the old one. A reload that fails keeps the old base and the refusal,
 // so it can be tried again, and says why it failed.
-function useDefaultEdit(first: Schemas["RoutingDefault"]) {
+function useDefaultEdit(first: Schemas["AccountRoutingDefault"]) {
   const queryClient = useQueryClient();
   const [base, setBase] = useState(first);
   const [chosen, setChosen] = useState(first.preset_id ?? "");
-  const rebase = (next: Schemas["RoutingDefault"]) => {
+  const rebase = (next: Schemas["AccountRoutingDefault"]) => {
     setBase(next);
     setChosen(next.preset_id ?? "");
   };
@@ -125,13 +125,18 @@ function DefaultForm({
   presets,
   manage,
 }: {
-  first: Schemas["RoutingDefault"];
+  first: Schemas["AccountRoutingDefault"];
   presets: Preset[];
   manage: boolean;
 }) {
   const { t } = useTranslation();
   const errors = useErrors();
   const { chosen, setChosen, unchanged, save, reload, stale } = useDefaultEdit(first);
+  // What the site's or the platform's default gives is known only while the account sets none: the node names what a
+  // key made now takes, and with the account's own default that is the account's.
+  const latest = useQuery(routingDefaultQuery).data;
+  const newKeys = useNewKeys();
+  const inherited = latest && !latest.preset_id ? newKeys.name : undefined;
   return (
     <Panel className="p-4">
       <form
@@ -148,7 +153,7 @@ function DefaultForm({
         {save.isError ? <FormError>{errors.message(save.error)}</FormError> : null}
         {reload.isError ? <FormError>{errors.message(reload.error)}</FormError> : null}
         <div className="flex flex-wrap items-end gap-3">
-          <DefaultSelect presets={presets} chosen={chosen} manage={manage} onChoose={setChosen} />
+          <DefaultSelect presets={presets} chosen={chosen} inherited={inherited} manage={manage} onChoose={setChosen} />
           {manage ? (
             <DefaultAction
               stale={stale}
@@ -159,6 +164,7 @@ function DefaultForm({
             />
           ) : null}
         </div>
+        {newKeys.refused ? <p className="text-label text-warn">{t("routingPresets.defaults.refused")}</p> : null}
         {save.isSuccess ? (
           <p role="status" className="text-label text-ok">
             {t("routingPresets.defaults.saved")}
@@ -198,11 +204,13 @@ function DefaultAction({
 function DefaultSelect({
   presets,
   chosen,
+  inherited,
   manage,
   onChoose,
 }: {
   presets: Preset[];
   chosen: string;
+  inherited: string | undefined;
   manage: boolean;
   onChoose: (id: string) => void;
 }) {
@@ -218,7 +226,9 @@ function DefaultSelect({
       disabled={!manage}
       onChange={(event) => onChoose(event.currentTarget.value)}
     >
-      <option value="">{t("routingPresets.defaults.none")}</option>
+      <option value="">
+        {inherited ? t("routingPresets.defaults.noneNamed", { name: inherited }) : t("routingPresets.defaults.none")}
+      </option>
       {known ? null : <option value={chosen}>{chosen}</option>}
       <PresetOptions presets={presets} />
     </SelectField>

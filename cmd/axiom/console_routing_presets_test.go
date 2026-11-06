@@ -103,7 +103,7 @@ func TestConsoleRoutingPresets(t *testing.T) {
 	}
 	rec = f.do(http.MethodPut, "/routing-default", `{"preset_id":"`+p.Id.String()+`","version":0}`, as(s))
 	expect(t, "set the default", rec, http.StatusOK, "")
-	var d consoleapi.RoutingDefault
+	var d consoleapi.AccountRoutingDefault
 	decode(t, rec, &d)
 	if d.PresetId == nil || *d.PresetId != p.Id || d.Version < 1 {
 		t.Fatalf("default %+v", d)

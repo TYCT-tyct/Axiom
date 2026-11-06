@@ -1,5 +1,5 @@
 import type { Schemas } from "@axiom/api";
-import { readForm, useErrors } from "@axiom/app";
+import { readForm, systemPreset, useErrors } from "@axiom/app";
 import {
   Button,
   CheckField,
@@ -158,6 +158,7 @@ function PresetField({ apiKey, error }: Section) {
   const errors = useErrors();
   const presets = useQuery(routingPresetsQuery);
   const defaults = useQuery(routingDefaultQuery);
+  const newKeys = useNewKeys();
   const presetName = usePresetName();
   const current = apiKey?.preset_id;
   const [chosen, setChosen] = useState(current ?? "");
@@ -169,7 +170,6 @@ function PresetField({ apiKey, error }: Section) {
   }
   const list = presets.data.data;
   const named = (id: string | undefined) => list.find((preset) => preset.id === id)?.name;
-  const fallback = named(defaults.data?.preset_id);
   return (
     <SelectField
       label={t("routingPresets.key.field")}
@@ -180,27 +180,55 @@ function PresetField({ apiKey, error }: Section) {
       error={errors.field(error, "preset_id")}
     >
       {apiKey && !current ? <option value="">{t("routingPresets.key.legacy")}</option> : null}
-      {apiKey ? null : (
-        <option value="">
-          {fallback ? t("routingPresets.key.byDefault", { name: fallback }) : t("routingPresets.key.byLayers")}
-        </option>
-      )}
+      {apiKey ? null : <ByDefault newKeys={newKeys} accountDefault={named(defaults.data?.preset_id)} />}
       {chosen && !named(chosen) ? (
         <option value={chosen}>{presetName(chosen === current ? apiKey : undefined)}</option>
       ) : null}
-      <PresetOptions presets={list} />
+      <PresetOptions presets={list} newKeys={newKeys.id} />
     </SelectField>
   );
 }
 
-// PresetOptions offers presets by name and the layer they come from, as every preset choice shows them.
-export function PresetOptions({ presets }: { presets: Schemas["RoutingPreset"][] }) {
+// ByDefault is a new key's choice to take its layers' default: named by what the node says a key made now takes, or by
+// the account's own default when an older node says nothing.
+function ByDefault({ newKeys, accountDefault }: { newKeys: NewKeys; accountDefault: string | undefined }) {
+  const { t } = useTranslation();
+  const name = newKeys.id ? newKeys.name : accountDefault;
+  if (newKeys.refused) {
+    return <option value="">{t("routingPresets.key.byDefaultRefused")}</option>;
+  }
+  return (
+    <option value="">{name ? t("routingPresets.key.byDefault", { name }) : t("routingPresets.key.byLayers")}</option>
+  );
+}
+
+// PresetOptions offers presets by name and the layer they come from, as every preset choice shows them; the one a key
+// made now takes is marked, so moving a key onto the current default is choosing it.
+export function PresetOptions({ presets, newKeys }: { presets: Schemas["RoutingPreset"][]; newKeys?: string }) {
   const { t } = useTranslation();
   return presets.map((preset) => (
     <option key={preset.id} value={preset.id}>
       {`${preset.name} · ${t(`routingPresets.layer.${preset.scope}`)}`}
+      {preset.id === newKeys ? ` · ${t("routingPresets.key.current")}` : ""}
     </option>
   ));
+}
+
+type NewKeys = { id?: string; name?: string; refused: boolean };
+
+// useNewKeys is the preset a key made now takes, as the account's default read says: its ID, and its name among the
+// presets the account may use (the system preset by its label; none for one the list lacks), or that the default
+// refuses new keys. An older node says neither, and the page then says what it said before.
+export function useNewKeys(): NewKeys {
+  const { t } = useTranslation();
+  const defaults = useQuery(routingDefaultQuery).data;
+  const presets = useQuery(routingPresetsQuery).data?.data;
+  const id = defaults?.new_keys_preset_id;
+  if (!id) {
+    return { refused: defaults?.new_keys_refused === true };
+  }
+  const name = id === systemPreset ? t("routingPresets.key.system") : presets?.find((preset) => preset.id === id)?.name;
+  return { id, name, refused: false };
 }
 
 // usePresetName names a key's preset as the account can see it: its name, marked when disabled, or a placeholder for

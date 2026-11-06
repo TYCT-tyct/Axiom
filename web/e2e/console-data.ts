@@ -22,7 +22,7 @@ export type MockState = AuthState & {
   methods: Schemas["PaymentMethod"][];
   notifications: Schemas["NotificationPreferences"];
   presets: Schemas["RoutingPreset"][];
-  routingDefault: Schemas["RoutingDefault"];
+  routingDefault: Schemas["AccountRoutingDefault"];
 };
 
 const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "balance.top_up", "calls.view"];
@@ -242,13 +242,22 @@ const aBatch = (n: number, over: Partial<Schemas["CreditBatch"]> = {}): Schemas[
   ...over,
 });
 
-const bound = {
+// The system preset, which new keys take when no layer sets a default.
+export const systemPreset = "00000000-0000-0000-0000-000000000000";
+
+const onDefault = {
   preset_id: presetId(3),
   preset: { id: presetId(3), name: "Official, cheapest first", scope: "account", version: 2 },
 } as const;
 
-// The platform's, the site's and the account's presets, the account's being its default and the Laptop key's (the one
-// key bound to it).
+// A key bound to the platform's preset while new keys take the account's default, so the list says so.
+const offDefault = {
+  preset_id: presetId(1),
+  preset: { id: presetId(1), name: "Official only", scope: "platform", version: 1 },
+} as const;
+
+// The platform's, the site's and the account's presets, the account's being its default and the CI runner's; the
+// Laptop key is bound to the platform's, made before the default changed.
 function usualPresets(): Pick<MockState, "presets" | "routingDefault"> {
   return {
     presets: [
@@ -256,6 +265,7 @@ function usualPresets(): Pick<MockState, "presets" | "routingDefault"> {
         scope: "platform",
         slug: "official",
         name: "Official only",
+        keys: 1,
         rules: rules({ default: { classes: ["official"], min_score: 90 } }),
       }),
       aPreset(2, {
@@ -274,7 +284,7 @@ function usualPresets(): Pick<MockState, "presets" | "routingDefault"> {
         }),
       }),
     ],
-    routingDefault: { preset_id: presetId(3), version: 4 },
+    routingDefault: { preset_id: presetId(3), version: 4, new_keys_preset_id: presetId(3) },
   };
 }
 
@@ -303,8 +313,20 @@ export function usualState(): MockState {
       ],
     },
     keys: [
-      aKey(3, { name: "Laptop", spend_limit: usd("20"), limit_reset: "monthly", limit_remaining: usd("17"), ...bound }),
-      aKey(2, { name: "CI runner", disabled: true, models: ["openai/gpt-5"], ip_allow: ["203.0.113.0/24"] }),
+      aKey(3, {
+        name: "Laptop",
+        spend_limit: usd("20"),
+        limit_reset: "monthly",
+        limit_remaining: usd("17"),
+        ...offDefault,
+      }),
+      aKey(2, {
+        name: "CI runner",
+        disabled: true,
+        models: ["openai/gpt-5"],
+        ip_allow: ["203.0.113.0/24"],
+        ...onDefault,
+      }),
       aKey(1, { name: "Old key", expires_at: "2026-09-01T00:00:00Z" }),
     ],
     passkeys: [],
@@ -339,7 +361,7 @@ export function emptyState(): MockState {
     orders: [],
     methods: [],
     presets: [],
-    routingDefault: { version: 0 },
+    routingDefault: { version: 0, new_keys_preset_id: systemPreset },
   };
   state.balance = { ...state.balance, batches: [] };
   return state;
@@ -443,7 +465,11 @@ function worstPresets(state: MockState) {
     disabled: true,
   } as const;
   state.keys = state.keys.map((key, n) => (n === 0 ? { ...key, preset_id: preset.id, preset } : key));
-  state.routingDefault = { preset_id: presetId(110), version: Number.MAX_SAFE_INTEGER };
+  state.routingDefault = {
+    preset_id: presetId(110),
+    version: Number.MAX_SAFE_INTEGER,
+    new_keys_preset_id: presetId(110),
+  };
 }
 
 // The worst top-up data: int64 credits and payments, a 64-character method, six refunds on an order and many methods.
