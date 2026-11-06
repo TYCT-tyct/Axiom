@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -100,21 +99,16 @@ func (o operationsAPI) SupplierTopUpConfirm(ctx context.Context, r operationsapi
 func (o operationsAPI) CapsGet(ctx context.Context, _ operationsapi.CapsGetRequestObject) (operationsapi.CapsGetResponseObject, error) {
 	c := callOf(ctx)
 	self := c.agent.Info()
-	reaches := func(site *uuid.UUID) bool {
-		if site == nil {
-			return self.Platform
-		}
-		return self.Sites == nil || slices.Contains(self.Sites, accounts.SiteID(*site))
-	}
+	inScope := func(site *uuid.UUID) bool { return reaches(self, site) }
 	list := operationsapi.OperationsCapUsageList{Data: []operationsapi.OperationsCapUsage{}}
 	err := o.db.ReadTx(ctx, c.scope, func(tx pg.Tx) error {
 		var err error
-		if list.PriceEnvelopes, err = priceUsages(ctx, tx, reaches); err != nil {
+		if list.PriceEnvelopes, err = priceUsages(ctx, tx, inScope); err != nil {
 			return err
 		}
 		usage, err := operations.CapUsages(ctx, tx)
 		for _, u := range usage {
-			if !reaches(u.Policy.Site) {
+			if !inScope(u.Policy.Site) {
 				continue
 			}
 			p := capPolicyBody(u.Policy)
@@ -220,7 +214,7 @@ func (o operationsAPI) proposeTopUp(ctx context.Context, tx pg.Tx, id uuid.UUID,
 
 // settleTopUp ends op succeeded with what its reservation is now.
 func settleTopUp(ctx context.Context, tx pg.Tx, op operations.Operation, r operations.Reservation) (operations.Operation, bool, error) {
-	result, err := topUpResult(r)
+	result, err := moneyResult(r)
 	if err != nil {
 		return operations.Operation{}, false, err
 	}
@@ -314,9 +308,9 @@ func currentRate(ctx context.Context, tx pg.Tx, from string, to platform.Currenc
 	return platform.ExchangeRate{}, nil, &apiError{status: http.StatusUnprocessableEntity, code: codeUnprocessable, message: "no exchange rate from the supplier's currency to the cap's"}
 }
 
-// topUpResult is what a top-up operation answers: the amount its caps count, in which currency, what it was computed
+// moneyResult is what a money operation answers: the amount its caps count, in which currency, what it was computed
 // from, and where its reservation is.
-func topUpResult(r operations.Reservation) (map[string]any, error) {
+func moneyResult(r operations.Reservation) (map[string]any, error) {
 	var basis map[string]any
 	if err := jsonx.Unmarshal(r.Basis, &basis); err != nil {
 		return nil, fmt.Errorf("the basis of operation %s: %w", r.Operation, err)

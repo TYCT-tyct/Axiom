@@ -20,11 +20,23 @@ import (
 // Category is a kind of money the agent moves, each with its own caps (docs/domains/operations.md「转账的累计金额上限」).
 type Category string
 
-// CategoryTopUp is a top-up of a supplier: the agent proposes it, the owner pays, the agent confirms it arrived.
-const CategoryTopUp Category = "money.top_up"
+// The categories: a top-up of a supplier, which the agent proposes, the owner pays and the agent confirms arrived; and a
+// credit grant to an account, which the owner approves and which gives the credit when it runs.
+const (
+	CategoryTopUp  Category = "money.top_up"
+	CategoryCredit Category = "money.credit"
+)
 
-// RiskTopUp is the risk class of a top-up.
-const RiskTopUp Risk = "top_up"
+// The risk classes of a top-up and a credit grant.
+const (
+	RiskTopUp Risk = "top_up"
+	RiskGift  Risk = "gift"
+)
+
+// autonomous is whether a proposal of c within every autonomous limit needs nobody: a top-up does; a credit grant
+// always waits for the owner (「退款与赠额默认人工」), so its autonomous limits bind nothing and only its hard limits
+// refuse.
+func (c Category) autonomous() bool { return c == CategoryTopUp }
 
 var (
 	// ErrNoCapPolicy is a scope and category the owner set no caps for: no money moves there.
@@ -93,8 +105,8 @@ func lockCounters(ctx context.Context, tx pg.Tx, site *uuid.UUID, category Categ
 // used is what a counter holds, reserved and committed.
 func used(c OperationsCapCounter) int64 { return c.Reserved + c.Committed }
 
-// weigh decides amount against p and what c holds: a *CapExceeded over a hard limit, otherwise whether it is within
-// every autonomous limit. A sum that does not fit int64 is over any limit.
+// weigh decides amount against p and what c holds: a *CapExceeded over a hard limit, otherwise whether it needs nobody,
+// within every autonomous limit of a category that has them. A sum that does not fit int64 is over any limit.
 func weigh(p CapPolicy, c counters, amount int64) (bool, error) {
 	over := func(u, limit int64) bool { return u > math.MaxInt64-amount || u+amount > limit }
 	switch {
@@ -105,13 +117,13 @@ func weigh(p CapPolicy, c counters, amount int64) (bool, error) {
 	case over(used(c.week), p.HardWeekly):
 		return false, &CapExceeded{Limit: "hard_weekly", Max: p.HardWeekly, Used: used(c.week), Amount: amount}
 	}
-	return amount <= p.Single && !over(used(c.day), p.Daily) && !over(used(c.week), p.Weekly) &&
+	return p.Category.autonomous() && amount <= p.Single && !over(used(c.day), p.Daily) && !over(used(c.week), p.Weekly) &&
 		!over(used(c.objectDay), p.ObjectDaily) && c.day.Count < p.DailyCount, nil
 }
 
 // ProposeMoney is Propose for a proposal that moves m: it locks m's policy and counters, finds a retry of the key as
 // Propose does, and then refuses an amount over a hard limit (*CapExceeded, nothing written), asks the owner for one
-// over an autonomous limit or in a paused scope, and reserves the amount in the category's day and week and the
+// over an autonomous limit, in a paused scope or of a category that always asks, and reserves the amount in the category's day and week and the
 // object's day until the end of the UTC day. The caller runs one that needs nobody in tx and settles it, as with
 // Propose. A policy-less scope is ErrNoCapPolicy. The reservation ends when the operation is refused, expires or is canceled (release), when the
 // agent confirms the money (CommitReservation), or at the end of its day (ExpireReservations).
@@ -285,14 +297,33 @@ func CommitReservation(ctx context.Context, tx pg.Tx, confirm Operation, proposa
 	if err != nil {
 		return Reservation{}, err
 	}
+	return commit(ctx, tx, m, confirm, proof)
+}
+
+// CommitApproved is the run of op, a money operation the owner approved, that moved its money in tx: its reservation,
+// which CheckReservation rechecked in tx, becomes committed in the windows it was reserved in, with proof of where the
+// money went and op as what confirmed it. A credit grant commits so, as the credit is given in the same transaction.
+func CommitApproved(ctx context.Context, tx pg.Tx, op Operation, proof string) (Reservation, error) {
+	rows, err := New().LockMoneyAction(ctx, tx, op.ID)
+	switch {
+	case err != nil:
+		return Reservation{}, fmt.Errorf("lock the reservation of operation %s: %w", op.ID, err)
+	case len(rows) == 0 || rows[0].OperationsMoneyAction.State != "reserved" || rows[0].Due:
+		return Reservation{}, ErrNotReserved
+	}
+	return commit(ctx, tx, rows[0].OperationsMoneyAction, op, proof)
+}
+
+// commit moves m, which tx holds reserved, to committed, confirmed by operation by with proof, as the agent's.
+func commit(ctx context.Context, tx pg.Tx, m OperationsMoneyAction, by Operation, proof string) (Reservation, error) {
 	if err := moveReserved(ctx, tx, m, m.Amount); err != nil {
 		return Reservation{}, err
 	}
-	if err := New().SettleMoneyAction(ctx, tx, SettleMoneyActionParams{OperationID: proposal, State: "committed", Proof: &proof, ConfirmedBy: &confirm.ID}); err != nil {
-		return Reservation{}, fmt.Errorf("commit the reservation of operation %s: %w", proposal, err)
+	if err := New().SettleMoneyAction(ctx, tx, SettleMoneyActionParams{OperationID: m.OperationID, State: "committed", Proof: &proof, ConfirmedBy: &by.ID}); err != nil {
+		return Reservation{}, fmt.Errorf("commit the reservation of operation %s: %w", m.OperationID, err)
 	}
 	m.State, m.Proof = "committed", &proof
-	return reservationOf(m), recordReservation(ctx, tx, audit.OperationsAgent(confirm.Credential), "reservation.commit", m, confirm.Reason)
+	return reservationOf(m), recordReservation(ctx, tx, audit.OperationsAgent(by.Credential), "reservation.commit", m, by.Reason)
 }
 
 // lockProposal locks credential's succeeded money proposal on object, then its reservation, which must still be held
