@@ -160,6 +160,7 @@ export default {
     price: "售价已发布。",
     gift: "额度已以 agent 的名义赠出，计入已用。",
   },
+  outcome: { done: "已执行", refused: "没有执行", canceled: "已作废", rejected: "已驳回", other: "已记下" },
   refused: "批准已记下，但目标在提出之后变了，操作没有执行（{{code}}）。需要的话，让 agent 重新提出。",
   canceled: "提出它的运营凭证已吊销、停止或过期，什么都没有执行，审批已作废。",
   rejected: "已驳回，什么都没有改。",

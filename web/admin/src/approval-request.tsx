@@ -4,7 +4,7 @@ import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { percentOf } from "./approval-parts";
-import { capOf, capOver, envelopeOf, envelopeOver, priceRows } from "./approvals";
+import { capOf, capOver, envelopeOf, envelopeOver, type PriceRow, priceRows } from "./approvals";
 import { formatJSON } from "./lossless";
 import { isPerUse, rateItems } from "./models/catalog";
 import { showRate } from "./models/price-fields";
@@ -136,6 +136,9 @@ export function RequestFacts({ approval }: { approval: Approval }) {
   return rows.length === 0 ? null : <Facts title={t("approvals.request.title")} rows={rows} />;
 }
 
+const priceColumns = ["current", "proposed", "cost"] as const;
+type PriceView = { rows: PriceRow<Item>[]; title: string; show: (item: Item, price: string | undefined) => ReactNode };
+
 // PriceTable is each price a publication changes, now and as proposed, per unit as the catalog shows it, with what it
 // costs when the server knew; a price the owner approves is read here, not as a percentage.
 export function PriceTable({ approval }: { approval: Approval }) {
@@ -146,10 +149,13 @@ export function PriceTable({ approval }: { approval: Approval }) {
     return null;
   }
   const currency = field(approval.summary, "currency") ?? "";
+  // Every value carries its currency and unit, so one read on its own, as on a phone, is never ambiguous.
   const show = (item: Item, price: string | undefined) =>
-    price === undefined ? undefined : (
+    price === undefined ? (
+      "—"
+    ) : (
       <>
-        {decimal(showRate(item, price))}
+        {decimal(showRate(item, price))} {currency}
         <span className="ml-1 text-label text-t3">{t(`models.prices.unit.${isPerUse(item) ? "use" : "million"}`)}</span>
       </>
     );
@@ -163,30 +169,62 @@ export function PriceTable({ approval }: { approval: Approval }) {
       {rows.length === 0 ? (
         <p className="p-4 text-t3">{t("approvals.prices.none")}</p>
       ) : (
-        <Table label={title}>
-          <Head
-            cols={[
-              [t("approvals.prices.item")],
-              [t("approvals.prices.current"), "text-right"],
-              [t("approvals.prices.proposed"), "text-right"],
-              [t("approvals.prices.cost"), "text-right"],
-            ]}
-          />
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.item}>
-                <Td>{t(`models.item.${row.item}`)}</Td>
-                {[row.current, row.proposed, row.cost].map((price, i) => (
-                  <Td key={["current", "proposed", "cost"][i]} className="whitespace-nowrap text-right tabular-nums">
-                    {show(row.item, price) ?? "—"}
-                  </Td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </Table>
+        <>
+          <PriceBlocks rows={rows} title={title} show={show} />
+          <PriceRows rows={rows} title={title} show={show} />
+        </>
       )}
     </Panel>
+  );
+}
+
+// Below sm a table of four columns cannot show its numbers, so each item is a block of its three values.
+function PriceBlocks({ rows, show }: PriceView) {
+  const { t } = useTranslation();
+  return (
+    <ul className="divide-y divide-b1 sm:hidden">
+      {rows.map((row) => (
+        <li key={row.item} className="px-4 py-3">
+          <p className="font-medium text-t1">{t(`models.item.${row.item}`)}</p>
+          <dl className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 tabular-nums">
+            {priceColumns.map((column) => (
+              <div key={column} className="contents">
+                <dt className="text-label text-t3">{t(`approvals.prices.${column}`)}</dt>
+                <dd className="text-t1 [overflow-wrap:anywhere]">{show(row.item, row[column])}</dd>
+              </div>
+            ))}
+          </dl>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function PriceRows({ rows, title, show }: PriceView) {
+  const { t } = useTranslation();
+  return (
+    <div className="hidden sm:block">
+      <Table label={title}>
+        <Head
+          cols={[
+            [t("approvals.prices.item")],
+            ...priceColumns.map((column): [string, string] => [t(`approvals.prices.${column}`), "text-right"]),
+          ]}
+        />
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.item}>
+              <Td>{t(`models.item.${row.item}`)}</Td>
+              {priceColumns.map((column) => (
+                <Td key={column} className="whitespace-nowrap text-right tabular-nums">
+                  {show(row.item, row[column])}
+                </Td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </Table>
+    </div>
   );
 }
 

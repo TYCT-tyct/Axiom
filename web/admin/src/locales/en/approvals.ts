@@ -171,6 +171,7 @@ export default {
     price: "The sale price is published.",
     gift: "The credit was given as the agent's and counts as used.",
   },
+  outcome: { done: "Done", refused: "Not run", canceled: "Canceled", rejected: "Rejected", other: "Recorded" },
   refused:
     "The approval is recorded, but the target changed since the agent asked, so the operation did not run ({{code}}). Have the agent ask again if it is still needed.",
   canceled:

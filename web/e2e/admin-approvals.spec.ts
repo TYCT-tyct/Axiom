@@ -58,24 +58,51 @@ test.describe("operations approvals", () => {
     await expect(page.getByText(zhText("approvals.state.approved"), { exact: true })).toBeVisible();
   });
 
-  test("an approval whose target changed says the operation did not run", async ({ page }) => {
-    const state = await open(page, credit);
-    await page.route(
-      approvePath,
-      (route) =>
-        route.fulfill({
-          json: {
-            ...approvalsOf(state)[0],
-            state: "approved",
-            operation_state: "rejected",
-            error_code: "unprocessable",
-          },
-        }),
-      { times: 1 },
-    );
+  // An answer whose operation did not run is no success: neither the generic "Done" nor a good tone.
+  for (const [name, answer, outcome, text] of [
+    [
+      "whose target changed",
+      { state: "approved", operation_state: "rejected", error_code: "unprocessable" },
+      "refused",
+      "approvals.refused",
+    ],
+    ["whose proposer is gone", { state: "canceled", operation_state: "canceled" }, "canceled", "approvals.canceled"],
+  ] as const) {
+    test(`an approval ${name} says the operation did not run`, async ({ page }) => {
+      const state = await open(page, credit);
+      await page.route(approvePath, (route) => route.fulfill({ json: { ...approvalsOf(state)[0], ...answer } }), {
+        times: 1,
+      });
+      await page.getByRole("button", { name: zhText("approvals.approve") }).click();
+      await send(page);
+      await expect(dialog(page).getByText(words(text))).toBeVisible();
+      await expect(dialog(page).getByText(zhText(`approvals.outcome.${outcome}`), { exact: true })).toBeVisible();
+      await expect(dialog(page).getByText(zhText("change.done"), { exact: true })).toHaveCount(0);
+    });
+  }
+
+  test("approving a retirement asks for the model's name, as retiring it on its page does", async ({ page }) => {
+    const state = await open(page, `/approvals/${uuid(17, 4)}`);
     await page.getByRole("button", { name: zhText("approvals.approve") }).click();
     await send(page);
-    await expect(dialog(page).getByText(words("approvals.refused"))).toContainText("unprocessable");
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("change.confirmMismatch"));
+    expect(approvalsOf(state)[3]?.state).toBe("pending");
+    await dialog(page)
+      .getByLabel(/输入“vendor\/old-model”以确认/)
+      .fill("vendor/old-model");
+    await dialog(page).locator("button[type=submit]").click();
+    await expect(dialog(page).getByText(zhText("approvals.done.delisting"))).toBeVisible();
+    expect(approvalsOf(state)[3]?.state).toBe("approved");
+  });
+
+  test("on a phone each price is a block with its three values and their currency", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await open(page, `/approvals/${uuid(17, 3)}`);
+    const input = page.getByRole("listitem").filter({ hasText: zhText("models.item.input") });
+    await expect(input).toContainText("4 USD");
+    await expect(input).toContainText("4.5 USD");
+    await expect(input.getByText(zhText("approvals.prices.cost"), { exact: true })).toBeVisible();
+    await expect(page.getByRole("table", { name: words("approvals.prices.title") })).toBeHidden();
   });
 
   test("an approval decided elsewhere meanwhile is refused with why", async ({ page }) => {
