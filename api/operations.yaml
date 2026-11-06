@@ -25,6 +25,7 @@ tags:
   - {name: Catalog, description: "Authors, models, their names, specs and reference prices."}
   - {name: Calls, description: "Support summaries and operator traces."}
   - {name: Pricing, description: "Sale prices, their proposals, and publishing them within the price envelope."}
+  - {name: Accounts, description: "Credit grants to accounts, which the owner approves."}
 paths:
   /api/operations/v1/me:
     get:
@@ -373,6 +374,53 @@ paths:
       responses:
         '200':
           description: The confirmation, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/accounts/{account_id}/credit-grants:
+    post:
+      operationId: creditGrant
+      summary: Propose giving an account credit
+      description: >-
+        Proposes a gift of `amount`, in the currency of the account's site, to the account, as the admin's
+        `grantCredit` gives one: at most 10,000 units, and a batch given an `expires_at` expires then. The owner
+        always approves it (202): when approved, the credit is given as the agent's in the approval's transaction. The
+        face value, converted at the current reference rate when the cap policy of the site counts in another currency
+        and rounded up to 10⁻⁹, is reserved against the site's `money.credit` caps until then; over a hard limit, or
+        without a policy, it is a 422 `cap_exceeded` and nothing is written. An amount in another currency than the
+        site's is a 400; one out of range, an expiry that has passed, or a currency pair without a rate is a 422
+        `unprocessable`; an account outside the credential's sites is not found. A proposal that waited past UTC midnight is a 409
+        `conflict`: propose it again. A retry under the key finds the first proposal. With `dry_run` the same checks
+        run and nothing is written.
+      tags: [Accounts]
+      security: [{credential: []}]
+      x-axiom-permission: credits.grant
+      x-axiom-money: true
+      x-axiom-scope: platform
+      x-mcp-name: credit_grant
+      parameters:
+        - {in: path, name: account_id, required: true, schema: {$ref: '#/components/schemas/AccountId'}}
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CreditGrantProposal'}}}
+      responses:
+        '200':
+          description: The proposal found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '202':
+          description: The proposal, reserved and waiting for the owner's approval
           headers:
             Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
           content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
@@ -779,6 +827,15 @@ components:
           description: What shows the payment arrived, such as the supplier's receipt number or the balance seen after it; recorded as untrusted text.
         reason: {$ref: '#/components/schemas/AgentReason'}
         dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
+    CreditGrantProposal:
+      type: object
+      additionalProperties: false
+      required: [amount, reason]
+      properties:
+        amount: {$ref: '#/components/schemas/Money'}
+        expires_at: {type: string, format: date-time, description: "When the credit expires, in the future. Absent: it does not expire."}
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written or reserved."}
     AgentReason:
       type: string
       minLength: 1
@@ -858,8 +915,8 @@ components:
         count: {type: integer, format: int32, minimum: 0, description: "Every proposal made in the window, however it ended."}
     OperationsCapCategory:
       type: string
-      enum: [money.top_up]
-      description: A kind of money the agent moves, each with its own caps; top-ups of suppliers for now.
+      enum: [money.top_up, money.credit]
+      description: A kind of money the agent moves, each with its own caps; top-ups of suppliers and credit grants to accounts.
     OperationsCapAmount:
       type: string
       pattern: ^(0|[1-9][0-9]{0,17})$
@@ -1010,7 +1067,7 @@ components:
         compensating operation reverts it.
     OperationRisk:
       type: string
-      enum: [routine, delisting, top_up, price]
+      enum: [routine, delisting, top_up, price, gift]
       description: The operation's class, which decides whether it waits for the owner.
     OperationTarget:
       type: object
