@@ -214,21 +214,23 @@ export function PresetOptions({ presets, newKeys }: { presets: Schemas["RoutingP
   ));
 }
 
-type NewKeys = { id?: string; name?: string; refused: boolean };
+type NewKeys = { id?: string; name?: string; refused: boolean; layer?: Schemas["RoutingPresetScope"] };
 
 // useNewKeys is the preset a key made now takes, as the account's default read says: its ID, and its name among the
 // presets the account may use (the system preset by its label; none for one the list lacks), or that the default
-// refuses new keys. An older node says neither, and the page then says what it said before.
+// refuses new keys, with the layer whose default decides. An older node says neither, and the page then says what it
+// said before.
 export function useNewKeys(): NewKeys {
   const { t } = useTranslation();
   const defaults = useQuery(routingDefaultQuery).data;
   const presets = useQuery(routingPresetsQuery).data?.data;
   const id = defaults?.new_keys_preset_id;
+  const layer = defaults?.new_keys_layer;
   if (!id) {
-    return { refused: defaults?.new_keys_refused === true };
+    return { refused: defaults?.new_keys_refused === true, layer };
   }
   const name = id === systemPreset ? t("routingPresets.key.system") : presets?.find((preset) => preset.id === id)?.name;
-  return { id, name, refused: false };
+  return { id, name, refused: false, layer };
 }
 
 // usePresetName names a key's preset as the account can see it: its name, marked when disabled, or a placeholder for

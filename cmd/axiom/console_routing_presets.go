@@ -258,7 +258,9 @@ func countedPresets(ctx context.Context, tx pg.Tx, keys *accounts.Service, accou
 // the key could not use is said, not failed: it is making the key that it refuses.
 func newKeysDefault(ctx context.Context, tx pg.Tx, cl call, ws routing.Layer, d routing.Default) (consoleapi.AccountRoutingDefault, error) {
 	body := consoleapi.AccountRoutingDefault{PresetId: (*openapi_types.UUID)(d.Preset), Version: d.Version}
-	id, err := routing.DefaultPreset(ctx, tx, ws.Site, ws.Account, ws.Workspace, cl.site.Currency)
+	id, layer, err := routing.DefaultPreset(ctx, tx, ws.Site, ws.Account, ws.Workspace, cl.site.Currency)
+	from := consoleapi.RoutingPresetScope(layer.String())
+	body.NewKeysLayer = &from
 	switch {
 	case errors.Is(err, routing.ErrDefaultInvalid):
 		refused := true

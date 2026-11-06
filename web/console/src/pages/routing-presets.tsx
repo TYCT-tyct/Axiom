@@ -55,7 +55,7 @@ export default function RoutingPresets() {
             {(data) => (
               <PresetsTable
                 presets={data.data}
-                defaultId={defaults.data?.preset_id}
+                defaultId={defaults.data?.new_keys_preset_id ?? defaults.data?.preset_id}
                 manage={manage}
                 onOpen={setDialog}
               />
@@ -133,10 +133,14 @@ function DefaultForm({
   const errors = useErrors();
   const { chosen, setChosen, unchanged, save, reload, stale } = useDefaultEdit(first);
   // What the site's or the platform's default gives is known only while the account sets none: the node names what a
-  // key made now takes, and with the account's own default that is the account's.
+  // key made now takes, and with the account's own default that is the account's. A default of the default workspace,
+  // where the console makes keys, comes before the account's: the node says so (new_keys_layer), and the form then
+  // says the account's default does not reach new keys. The account's default can point at no workspace's preset.
   const latest = useQuery(routingDefaultQuery).data;
   const newKeys = useNewKeys();
-  const inherited = latest && !latest.preset_id ? newKeys.name : undefined;
+  const byWorkspace = newKeys.layer === "workspace";
+  const inherited = latest && !latest.preset_id && !byWorkspace ? newKeys.name : undefined;
+  const choosable = presets.filter((preset) => preset.scope !== "workspace");
   return (
     <Panel className="p-4">
       <form
@@ -153,7 +157,13 @@ function DefaultForm({
         {save.isError ? <FormError>{errors.message(save.error)}</FormError> : null}
         {reload.isError ? <FormError>{errors.message(reload.error)}</FormError> : null}
         <div className="flex flex-wrap items-end gap-3">
-          <DefaultSelect presets={presets} chosen={chosen} inherited={inherited} manage={manage} onChoose={setChosen} />
+          <DefaultSelect
+            presets={choosable}
+            chosen={chosen}
+            inherited={inherited}
+            manage={manage}
+            onChoose={setChosen}
+          />
           {manage ? (
             <DefaultAction
               stale={stale}
@@ -164,7 +174,16 @@ function DefaultForm({
             />
           ) : null}
         </div>
-        {newKeys.refused ? <p className="text-label text-warn">{t("routingPresets.defaults.refused")}</p> : null}
+        {newKeys.refused ? (
+          <p className="text-label text-warn">
+            {t(byWorkspace ? "routingPresets.defaults.refusedWorkspace" : "routingPresets.defaults.refused")}
+          </p>
+        ) : null}
+        {byWorkspace && newKeys.id ? (
+          <p className="text-label text-warn [overflow-wrap:anywhere]">
+            {t("routingPresets.defaults.workspace", { name: newKeys.name ?? newKeys.id })}
+          </p>
+        ) : null}
         {save.isSuccess ? (
           <p role="status" className="text-label text-ok">
             {t("routingPresets.defaults.saved")}

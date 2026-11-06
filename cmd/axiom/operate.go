@@ -31,7 +31,7 @@ func keyPreset(ctx context.Context, tx pg.Tx, site, account, workspace uuid.UUID
 		key := routing.Admission{Site: routing.SiteID(site), Account: routing.AccountID(account), Workspace: routing.WorkspaceID(workspace), Currency: currency}
 		return *chosen, routing.SelectablePreset(ctx, tx, key, routing.PresetID(*chosen))
 	}
-	id, err := routing.DefaultPreset(ctx, tx, routing.SiteID(site), routing.AccountID(account), routing.WorkspaceID(workspace), currency)
+	id, _, err := routing.DefaultPreset(ctx, tx, routing.SiteID(site), routing.AccountID(account), routing.WorkspaceID(workspace), currency)
 	return uuid.UUID(id), err
 }
 

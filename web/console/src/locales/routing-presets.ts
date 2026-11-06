@@ -25,6 +25,9 @@ export const zh = {
     none: "不设置（沿用站点或平台的默认）",
     noneNamed: "不设置（沿用站点或平台的默认：{{name}}）",
     refused: "现在的默认不可用：不选预设的新 key 会被拒绝。设一个账户的默认，或者请站点管理员换掉站点的默认。",
+    refusedWorkspace:
+      "默认工作区自己的默认不可用：不选预设的新 key 会被拒绝。改账户的默认没有用，要先换掉或清空工作区的默认。",
+    workspace: "默认工作区设了自己的默认“{{name}}”，新 key 落在它上面；账户的默认要等工作区清空自己的默认才生效。",
     save: "保存默认",
     saved: "已保存。",
     reload: "载入最新的默认",
@@ -98,6 +101,10 @@ export const en: Messages<typeof zh> = {
     noneNamed: "None (use the site’s or the platform’s default: {{name}})",
     refused:
       "The current default can’t be used: new keys made without a preset are refused. Set an account default, or ask the site’s administrator to change the site’s.",
+    refusedWorkspace:
+      "The default workspace’s own default can’t be used: new keys made without a preset are refused. Changing the account’s default won’t help; change or clear the workspace’s first.",
+    workspace:
+      "The default workspace sets its own default, “{{name}}”, and new keys take it. The account’s default applies only once the workspace clears its own.",
     save: "Save default",
     saved: "Saved.",
     reload: "Load the latest default",

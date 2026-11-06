@@ -266,7 +266,7 @@ func TestConsoleSourceClasses(t *testing.T) {
 // TestConsoleWorkspaceRoutingPresets: an account makes a preset of one of its workspaces and points that workspace's
 // default at it; the workspace's keys may use it and its new keys take it, ahead of the account's default, while the
 // account's other workspaces' keys and defaults may not. The account's default says what a key the console makes now,
-// in the default workspace, takes, a default of that workspace's own included. Another account's workspace and a
+// in the default workspace, takes, and which layer decides it, a default of that workspace's own included. Another account's workspace and a
 // deleted one are 404 (docs/domains/routing.md「默认链与 key 落章」).
 func TestConsoleWorkspaceRoutingPresets(t *testing.T) {
 	t.Parallel()
@@ -278,6 +278,9 @@ func TestConsoleWorkspaceRoutingPresets(t *testing.T) {
 		t.Errorf("made in %s of %v, want the second workspace's", own.Scope, own.WorkspaceId)
 	}
 	mainPreset := f.routingPreset(s, `{"slug":"main","name":"Main","rules":{"default":{}},"workspace_id":"`+main+`"}`)
+	if got, want := f.routingDefault(s, "/routing-default"), (readDefault{"none", systemPreset, "platform"}); got != want {
+		t.Errorf("before any workspace default: %+v, want %+v", got, want)
+	}
 	for query, want := range map[string][]string{"": {"main"}, "?workspace_id=" + main: {"main"}, "?workspace_id=" + second: {"own"}} {
 		if got := f.presetSlugs(s, query); !slices.Equal(got, want) {
 			t.Errorf("listed %v for %q, want %v", got, query, want)
@@ -305,9 +308,9 @@ func TestConsoleWorkspaceRoutingPresets(t *testing.T) {
 	}
 
 	for path, want := range map[string]readDefault{
-		"/workspaces/" + second + "/routing-default": {own.Id.String(), own.Id.String()},
-		"/workspaces/" + main + "/routing-default":   {mainPreset.Id.String(), mainPreset.Id.String()},
-		"/routing-default":                           {"none", mainPreset.Id.String()},
+		"/workspaces/" + second + "/routing-default": {own.Id.String(), own.Id.String(), "workspace"},
+		"/workspaces/" + main + "/routing-default":   {mainPreset.Id.String(), mainPreset.Id.String(), "workspace"},
+		"/routing-default":                           {"none", mainPreset.Id.String(), "workspace"},
 	} {
 		if got := f.routingDefault(s, path); got != want {
 			t.Errorf("%s: %+v, want %+v", path, got, want)
@@ -361,9 +364,9 @@ func (f consoleFixture) presetSlugs(s session, query string) []string {
 	return slugs
 }
 
-// readDefault is a read of a default: the preset it points at, "none" when it sets none, and the one it says a key
-// made now takes, "refused" when it is refused.
-type readDefault struct{ set, newKeys string }
+// readDefault is a read of a default: the preset it points at, "none" when it sets none, the one it says a key made
+// now takes, "refused" when it says new keys are refused, and the layer it says decides; empty for what it leaves out.
+type readDefault struct{ set, newKeys, layer string }
 
 func (f consoleFixture) routingDefault(s session, path string) readDefault {
 	f.t.Helper()
@@ -371,12 +374,18 @@ func (f consoleFixture) routingDefault(s session, path string) readDefault {
 	expect(f.t, "read "+path, rec, http.StatusOK, "")
 	var d consoleapi.AccountRoutingDefault
 	decode(f.t, rec, &d)
-	got := readDefault{"none", "refused"}
+	got := readDefault{set: "none"}
 	if d.PresetId != nil {
 		got.set = d.PresetId.String()
 	}
-	if d.NewKeysPresetId != nil {
+	switch {
+	case d.NewKeysPresetId != nil:
 		got.newKeys = d.NewKeysPresetId.String()
+	case d.NewKeysRefused != nil && *d.NewKeysRefused:
+		got.newKeys = "refused"
+	}
+	if d.NewKeysLayer != nil {
+		got.layer = string(*d.NewKeysLayer)
 	}
 	return got
 }

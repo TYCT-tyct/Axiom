@@ -1517,6 +1517,8 @@ export interface components {
             new_keys_preset_id?: string;
             /** @description True when the deepest default set is one the key cannot use, so a call key made now without a preset is refused 409 `preset_default_invalid` until that default is changed. Absent otherwise. */
             new_keys_refused?: boolean;
+            /** @description The layer whose default decides what a key made now takes: the one `new_keys_preset_id` follows, or the one whose default refuses (`new_keys_refused`); `platform` when no layer sets one and new keys take the system preset. `workspace` on the account's default means the default workspace sets its own, which comes before the account's. Absent from older nodes. */
+            new_keys_layer?: components["schemas"]["RoutingPresetScope"];
         };
         RoutingDefaultUpdate: {
             /**

@@ -35,6 +35,9 @@ const preset = (n: number) => ({
   updated_at: "2026-11-01T00:00:00Z",
 });
 
+// The default workspace's own preset, which its keys may choose and the account's default may not.
+const workspacePreset = { ...preset(3), scope: "workspace", workspace_id: "ws_1" };
+
 vi.mock("@axiom/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@axiom/api")>();
   const answer = (status: number, data: unknown) =>
@@ -50,7 +53,9 @@ vi.mock("@axiom/api", async (importOriginal) => {
       GET: vi.fn((path: string) => {
         switch (path) {
           case "/api/console/v1/routing-presets":
-            return api.presetsFail ? answer(503, "unavailable") : answer(200, { data: [preset(1), preset(2)] });
+            return api.presetsFail
+              ? answer(503, "unavailable")
+              : answer(200, { data: [preset(1), preset(2), workspacePreset] });
           case "/api/console/v1/routing-default":
             return api.defaultFail ? answer(503, "unavailable") : answer(200, api.routingDefault);
           case "/api/console/v1/keys":
@@ -257,9 +262,12 @@ const callKey = (name: string, bound?: number) =>
 const texts = (nodes: NodeListOf<Element>) => [...nodes].map((node) => node.textContent);
 
 // The default's read names the preset a key made now takes (preset 2 here, the site's, as the account sets none) or
-// says the default refuses new keys; an older node says neither, and the pages say what they said before. The key
-// form's first option and its mark on that preset, the default panel's "none" and warning, and the keys bound to
-// another preset all follow the read. A key without a preset is not compared: the node that listed it may give none.
+// says the default refuses new keys, and which layer decides; an older node says neither, and the pages say what they
+// said before. The key form's first option and its mark on that preset, the default panel's "none" and warnings, the
+// preset marked as the default for new keys, and the keys bound to another preset all follow the read. When the
+// default workspace sets its own default, the panel says the account's does not reach new keys. The account's default
+// never offers the workspace's preset, which a key may choose. A key without a preset is not compared: the node that
+// listed it may give none.
 it.each([
   {
     name: "a node that names it",
@@ -268,7 +276,28 @@ it.each([
     marked: [preset(2).id],
     none: "defaults.noneNamed",
     refused: [],
+    badge: preset(2).id,
     moved: ["routingPresets.key.notDefaultNamed"],
+  },
+  {
+    name: "a default of the default workspace",
+    read: { preset_id: preset(1).id, version: 1, new_keys_preset_id: preset(2).id, new_keys_layer: "workspace" as const },
+    option: "byDefault",
+    marked: [preset(2).id],
+    none: "defaults.none",
+    refused: ["routingPresets.defaults.workspace"],
+    badge: preset(2).id,
+    moved: ["routingPresets.key.notDefaultNamed"],
+  },
+  {
+    name: "a default workspace's default that refuses new keys",
+    read: { version: 0, new_keys_refused: true, new_keys_layer: "workspace" as const },
+    option: "byDefaultRefused",
+    marked: [],
+    none: "defaults.none",
+    refused: ["routingPresets.defaults.refusedWorkspace"],
+    badge: undefined,
+    moved: [],
   },
   {
     name: "a default that refuses new keys",
@@ -277,6 +306,7 @@ it.each([
     marked: [],
     none: "defaults.none",
     refused: ["routingPresets.defaults.refused"],
+    badge: undefined,
     moved: [],
   },
   {
@@ -286,9 +316,10 @@ it.each([
     marked: [],
     none: "defaults.none",
     refused: [],
+    badge: undefined,
     moved: [],
   },
-])("follows what new keys take: $name", async ({ read, option, marked, none, refused, moved }) => {
+])("follows what new keys take: $name", async ({ read, option, marked, none, refused, badge, moved }) => {
   api.routingDefault = read;
   api.keys = [callKey("old", 1), callKey("current", 2), callKey("legacy")];
   const form = await render(<KeyForm pending={false} error={null} onSubmit={() => {}} onCancel={() => {}} />);
@@ -297,11 +328,21 @@ it.each([
   expect(options.filter((o) => o.textContent?.endsWith("routingPresets.key.current")).map((o) => o.value)).toEqual(
     marked,
   );
+  expect(options.map((o) => o.value)).toContain(workspacePreset.id);
   document.body.replaceChildren();
 
   const page = await render(<RoutingPresets />);
-  expect(page.container.querySelector("form select option")?.textContent).toBe(`routingPresets.${none}`);
+  const defaultOptions = [...page.container.querySelectorAll<HTMLOptionElement>("form select option")];
+  expect(defaultOptions[0]?.textContent).toBe(`routingPresets.${none}`);
+  expect(defaultOptions.map((o) => o.value)).not.toContain(workspacePreset.id);
   expect(texts(page.container.querySelectorAll("form p.text-warn"))).toEqual(refused);
+  // Each row's slug sits right under its name, and the badge after it.
+  const badged = [...page.container.querySelectorAll("tbody tr")].filter((row) =>
+    row.textContent?.includes("routingPresets.isDefault"),
+  );
+  expect(badged.map((row) => row.querySelector("p.font-mono")?.textContent)).toEqual(
+    badge ? [`p${badge.slice(-1)}`] : [],
+  );
   document.body.replaceChildren();
 
   // The rows ask for the default and the presets only once the keys are in.
