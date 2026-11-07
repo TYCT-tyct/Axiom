@@ -130,7 +130,7 @@ func (q *Queries) ListWorkspaces(ctx context.Context, db DBTX, accountID uuid.UU
 const lockWorkspace = `-- name: LockWorkspace :many
 SELECT site_id, name, status, is_default FROM accounts.workspaces
 WHERE account_id = $1 AND id = $2 AND deleted_at IS NULL
-FOR UPDATE
+FOR NO KEY UPDATE
 `
 
 type LockWorkspaceParams struct {
@@ -146,7 +146,8 @@ type LockWorkspaceRow struct {
 }
 
 // The settings a change replaces, read in the row's turn, so the audit entry names what this change replaced and not
-// what a change made at the same moment did.
+// what a change made at the same moment did. NO KEY: a key being made in the workspace holds its row FOR KEY SHARE
+// through the foreign key, and need not wait for a rename.
 func (q *Queries) LockWorkspace(ctx context.Context, db DBTX, arg LockWorkspaceParams) ([]LockWorkspaceRow, error) {
 	rows, err := db.Query(ctx, lockWorkspace, arg.AccountID, arg.ID)
 	if err != nil {

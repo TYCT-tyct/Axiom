@@ -19,10 +19,11 @@ VALUES (@id, @site_id, @account_id, @name, 'active', false);
 
 -- name: LockWorkspace :many
 -- The settings a change replaces, read in the row's turn, so the audit entry names what this change replaced and not
--- what a change made at the same moment did.
+-- what a change made at the same moment did. NO KEY: a key being made in the workspace holds its row FOR KEY SHARE
+-- through the foreign key, and need not wait for a rename.
 SELECT site_id, name, status, is_default FROM accounts.workspaces
 WHERE account_id = @account_id AND id = @id AND deleted_at IS NULL
-FOR UPDATE;
+FOR NO KEY UPDATE;
 
 -- name: UpdateWorkspace :exec
 UPDATE accounts.workspaces SET name = @name, status = @status WHERE id = @id;
