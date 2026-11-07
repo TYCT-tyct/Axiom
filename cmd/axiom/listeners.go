@@ -43,6 +43,8 @@ func listenerKey(variable string) string {
 		return "node"
 	case operationsAddrVar:
 		return "operations"
+	case mcpAddrVar:
+		return "mcp"
 	default:
 		return "ops"
 	}
@@ -52,7 +54,8 @@ func listenerKey(variable string) string {
 // Startup claims them after the bounded configuration checks and before the slow steps (database, cache, queue, call
 // path), so a taken address is refused at once with the variable's name. The public listener comes first, so at
 // shutdown it drains while the probes still answer. The admin listener exists only on a core node (#171), the node
-// listener only when mutual TLS is configured, and the operations listener only when its address is set.
+// listener only when mutual TLS is configured, the operations listener only when its address is set, and the MCP
+// bridge's only on an ops node that configures it.
 func listeners(cfg nodeSettings) []*listening {
 	var servers []*listening
 	if cfg.roles.has(roleCore) || cfg.roles.has(roleIngress) {
@@ -66,6 +69,9 @@ func listeners(cfg nodeSettings) []*listening {
 		if cfg.operationsTLS != nil {
 			servers = append(servers, &listening{variable: operationsAddrVar, addr: cfg.operationsAddr, tls: true})
 		}
+	}
+	if cfg.mcp != nil {
+		servers = append(servers, &listening{variable: mcpAddrVar, addr: cfg.mcp.addr})
 	}
 	return append(servers, &listening{variable: probesAddrVar, addr: cfg.probesAddr})
 }
