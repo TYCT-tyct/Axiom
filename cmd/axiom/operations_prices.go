@@ -49,7 +49,7 @@ func (o operationsAPI) PricePublish(ctx context.Context, r operationsapi.PricePu
 		Credential: uuid.UUID(c.agent.ID()), Key: key, Tool: "price_publish", Target: operations.Target{Kind: "model", ID: r.ModelId},
 		Params: params, Risk: operations.RiskPrice, Reason: b.Reason, Run: runOf(r.Params.XAxiomRunID),
 	}
-	op, replayed, err := o.money(ctx, b.DryRun, func(tx pg.Tx) (operations.Operation, bool, error) {
+	op, replayed, err := o.runWrite(ctx, b.DryRun, func(tx pg.Tx) (operations.Operation, bool, error) {
 		return o.publishPrice(ctx, tx, pub, p)
 	})
 	if err != nil {

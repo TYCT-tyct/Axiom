@@ -4098,6 +4098,50 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled:
+    put:
+      operationId: setSupplierEndpointEnabled
+      tags: [Suppliers]
+      summary: Turn an endpoint on or off for routing
+      description: >-
+        A person's switch, which the operations agent also holds (`endpoint_set_enabled`): the supplier sync never
+        writes it, so an endpoint turned off stays off until someone turns it on. Only an enabled endpoint whose cost is
+        `known` is routed to. Every node applies the change on its next reload.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: endpoint_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/EndpointEnabledUpdate"}
+      responses:
+        "200":
+          description: The endpoint as changed.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierEndpoint"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/suppliers/{supplier_id}/status:
     put:
       operationId: setSupplierStatus
@@ -8828,6 +8872,12 @@ components:
           nullable: true
           enum: [int4, int8, fp4, mxfp4, nvfp4, fp6, fp8, mxfp8, fp16, bf16, fp32, unknown]
           description: One of OpenRouter's levels, or null to clear the record.
+        reason: {$ref: "#/components/schemas/Reason"}
+    EndpointEnabledUpdate:
+      type: object
+      required: [enabled, reason]
+      properties:
+        enabled: {type: boolean, description: "Whether the endpoint may be routed to."}
         reason: {$ref: "#/components/schemas/Reason"}
     SupplierDetail:
       type: object

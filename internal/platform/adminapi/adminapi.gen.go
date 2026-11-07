@@ -496,6 +496,9 @@ type ServerInterface interface {
 	// SetSupplierCredentialLimits Set a credential's concurrency and account RPM ceiling
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits)
 	SetSupplierCredentialLimits(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params SetSupplierCredentialLimitsParams)
+	// SetSupplierEndpointEnabled Turn an endpoint on or off for routing
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled)
+	SetSupplierEndpointEnabled(w http.ResponseWriter, r *http.Request, supplierId Uuid, endpointId Uuid, params SetSupplierEndpointEnabledParams)
 	// SetSupplierEndpointQuantization Record the precision an endpoint serves at
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/quantization)
 	SetSupplierEndpointQuantization(w http.ResponseWriter, r *http.Request, supplierId Uuid, endpointId Uuid, params SetSupplierEndpointQuantizationParams)
@@ -7507,6 +7510,69 @@ func (siw *ServerInterfaceWrapper) SetSupplierCredentialLimits(w http.ResponseWr
 	handler.ServeHTTP(w, r)
 }
 
+// SetSupplierEndpointEnabled operation middleware
+func (siw *ServerInterfaceWrapper) SetSupplierEndpointEnabled(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "endpoint_id" -------------
+	var endpointId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "endpoint_id", r.PathValue("endpoint_id"), &endpointId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "endpoint_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetSupplierEndpointEnabledParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetSupplierEndpointEnabled(w, r, supplierId, endpointId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SetSupplierEndpointQuantization operation middleware
 func (siw *ServerInterfaceWrapper) SetSupplierEndpointQuantization(w http.ResponseWriter, r *http.Request) {
 
@@ -8406,6 +8472,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/endpoint-tests", wrapper.TestSupplierEndpoint)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}", wrapper.GetSupplier)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/quantization", wrapper.SetSupplierEndpointQuantization)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled", wrapper.SetSupplierEndpointEnabled)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/status", wrapper.SetSupplierStatus)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/removal", wrapper.RemoveSupplier)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/login", wrapper.ReplaceSupplierLogin)
@@ -25431,6 +25498,142 @@ func (response SetSupplierCredentialLimitsdefaultJSONResponse) VisitSetSupplierC
 	return err
 }
 
+type SetSupplierEndpointEnabledRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	EndpointId Uuid `json:"endpoint_id"`
+	Params     SetSupplierEndpointEnabledParams
+	Body       *SetSupplierEndpointEnabledJSONRequestBody
+}
+
+type SetSupplierEndpointEnabledResponseObject interface {
+	VisitSetSupplierEndpointEnabledResponse(w http.ResponseWriter) error
+}
+
+type SetSupplierEndpointEnabled200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetSupplierEndpointEnabled200JSONResponse struct {
+	Body    SupplierEndpoint
+	Headers SetSupplierEndpointEnabled200ResponseHeaders
+}
+
+func (response SetSupplierEndpointEnabled200JSONResponse) VisitSetSupplierEndpointEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierEndpointEnabled400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetSupplierEndpointEnabled400JSONResponse) VisitSetSupplierEndpointEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierEndpointEnabled401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetSupplierEndpointEnabled401JSONResponse) VisitSetSupplierEndpointEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierEndpointEnabled403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetSupplierEndpointEnabled403JSONResponse) VisitSetSupplierEndpointEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierEndpointEnabled404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetSupplierEndpointEnabled404JSONResponse) VisitSetSupplierEndpointEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierEndpointEnabled409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetSupplierEndpointEnabled409JSONResponse) VisitSetSupplierEndpointEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierEndpointEnabled422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response SetSupplierEndpointEnabled422JSONResponse) VisitSetSupplierEndpointEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierEndpointEnableddefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetSupplierEndpointEnableddefaultJSONResponse) VisitSetSupplierEndpointEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type SetSupplierEndpointQuantizationRequestObject struct {
 	SupplierId Uuid `json:"supplier_id"`
 	EndpointId Uuid `json:"endpoint_id"`
@@ -27302,6 +27505,9 @@ type StrictServerInterface interface {
 	// SetSupplierCredentialLimits Set a credential's concurrency and account RPM ceiling
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits)
 	SetSupplierCredentialLimits(ctx context.Context, request SetSupplierCredentialLimitsRequestObject) (SetSupplierCredentialLimitsResponseObject, error)
+	// SetSupplierEndpointEnabled Turn an endpoint on or off for routing
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled)
+	SetSupplierEndpointEnabled(ctx context.Context, request SetSupplierEndpointEnabledRequestObject) (SetSupplierEndpointEnabledResponseObject, error)
 	// SetSupplierEndpointQuantization Record the precision an endpoint serves at
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/quantization)
 	SetSupplierEndpointQuantization(ctx context.Context, request SetSupplierEndpointQuantizationRequestObject) (SetSupplierEndpointQuantizationResponseObject, error)
@@ -32141,6 +32347,41 @@ func (sh *strictHandler) SetSupplierCredentialLimits(w http.ResponseWriter, r *h
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SetSupplierCredentialLimitsResponseObject); ok {
 		if err := validResponse.VisitSetSupplierCredentialLimitsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetSupplierEndpointEnabled operation middleware
+func (sh *strictHandler) SetSupplierEndpointEnabled(w http.ResponseWriter, r *http.Request, supplierId Uuid, endpointId Uuid, params SetSupplierEndpointEnabledParams) {
+	var request SetSupplierEndpointEnabledRequestObject
+
+	request.SupplierId = supplierId
+	request.EndpointId = endpointId
+	request.Params = params
+
+	var body SetSupplierEndpointEnabledJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetSupplierEndpointEnabled(ctx, request.(SetSupplierEndpointEnabledRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetSupplierEndpointEnabled")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetSupplierEndpointEnabledResponseObject); ok {
+		if err := validResponse.VisitSetSupplierEndpointEnabledResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
