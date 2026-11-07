@@ -86,6 +86,7 @@ var refusals = []refusal{
 	{accounts.ErrTOTPOn, http.StatusConflict, codeConflict, "two-step verification is already on"},
 	{accounts.ErrTOTPOff, http.StatusConflict, codeConflict, "two-step verification is not on"},
 	{accounts.ErrTooManyKeys, http.StatusConflict, codeTooManyKeys, "the account may not make another key"},
+	{accounts.ErrWorkspaceNotFound, http.StatusBadRequest, codeInvalidRequest, "workspace_id is not a workspace of the account"},
 	{accounts.ErrWorkspaceDisabled, http.StatusConflict, codeConflict, "the workspace is disabled; enable it or choose another"},
 	{accounts.ErrWorkspaceNameTaken, http.StatusConflict, codeNameTaken, "a workspace of the account has that name"},
 	{accounts.ErrTooManyWorkspaces, http.StatusConflict, codeConflict, "the account holds the most workspaces it may"},
@@ -127,9 +128,6 @@ func failure(err error) *apiError {
 	}
 	if errors.Is(err, accounts.ErrBadSecret) {
 		return invalidField("/secret", "not a TOTP secret this API gave out")
-	}
-	if errors.Is(err, accounts.ErrWorkspaceNotFound) {
-		return invalidField("/workspace_id", "not a workspace of the account")
 	}
 	for _, r := range slices.Concat(refusals, adminRefusals, orderRefusals) {
 		if !errors.Is(err, r.target) {

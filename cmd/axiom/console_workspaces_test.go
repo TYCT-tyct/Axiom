@@ -46,13 +46,13 @@ func TestWorkspaces(t *testing.T) {
 	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
-	initial := f.listWorkspaces(s)
-	if len(initial) != 1 || !initial[0].IsDefault || initial[0].Disabled || initial[0].Name != "Default" {
-		t.Fatalf("a new account's workspaces: %+v", initial)
+	main := f.createKey(s, `{"name":"in the default workspace"}`).Key.WorkspaceId
+	if diff := cmp.Diff([]consoleapi.Workspace{{Id: main, Name: "Default", IsDefault: true}}, f.listWorkspaces(s)); diff != "" {
+		t.Fatalf("a new account's workspaces (-want +got):\n%s", diff)
 	}
 	prod := f.workspace(s, "Prod")
-	if prod.IsDefault || prod.Disabled || !strings.HasPrefix(prod.Id, "ws_") {
-		t.Errorf("a new workspace: %+v", prod)
+	if diff := cmp.Diff(consoleapi.Workspace{Id: prod.Id, Name: "Prod"}, prod); diff != "" {
+		t.Errorf("a new workspace (-want +got):\n%s", diff)
 	}
 	for _, step := range []struct {
 		id, body string
@@ -62,7 +62,7 @@ func TestWorkspaces(t *testing.T) {
 		{prod.Id, `{"name":"Production","disabled":false}`, consoleapi.Workspace{Id: prod.Id, Name: "Production"}},
 		{prod.Id, `{"name":"Production","disabled":true}`, consoleapi.Workspace{Id: prod.Id, Name: "Production", Disabled: true}},
 		{prod.Id, `{"name":"Production","disabled":false}`, consoleapi.Workspace{Id: prod.Id, Name: "Production"}},
-		{initial[0].Id, `{"name":"Main","disabled":false}`, consoleapi.Workspace{Id: initial[0].Id, Name: "Main", IsDefault: true}},
+		{main, `{"name":"Main","disabled":false}`, consoleapi.Workspace{Id: main, Name: "Main", IsDefault: true}},
 	} {
 		if diff := cmp.Diff(step.want, f.putWorkspace(s, step.id, step.body)); diff != "" {
 			t.Errorf("%s (-want +got):\n%s", step.body, diff)
@@ -183,14 +183,14 @@ func TestWorkspacePermissions(t *testing.T) {
 	t.Parallel()
 	f := newConsoleFixture(t)
 	s := f.owner()
-	prod := f.workspace(s, "Prod").Id
+	staging := f.workspace(s, "Staging").Id
 	f.run(`UPDATE accounts.members SET role_id = (SELECT id FROM accounts.roles WHERE name = 'member')`)
 	if got := len(f.listWorkspaces(s)); got != 2 {
 		t.Errorf("a member lists %d workspaces", got)
 	}
-	expect(t, "a member reads one", f.do(http.MethodGet, "/workspaces/"+prod, "", as(s)), http.StatusOK, "")
-	f.createKey(s, `{"name":"member's","workspace_id":"`+prod+`"}`)
+	expect(t, "a member reads one", f.do(http.MethodGet, "/workspaces/"+staging, "", as(s)), http.StatusOK, "")
+	f.createKey(s, `{"name":"member's","workspace_id":"`+staging+`"}`)
 	expect(t, "a member makes one", f.do(http.MethodPost, "/workspaces", `{"name":"Mine"}`, as(s)), http.StatusForbidden, consoleapi.ErrorCodeForbidden)
-	expect(t, "a member disables one", f.do(http.MethodPut, "/workspaces/"+prod, `{"name":"Prod","disabled":true}`, as(s)),
+	expect(t, "a member disables one", f.do(http.MethodPut, "/workspaces/"+staging, `{"name":"Staging","disabled":true}`, as(s)),
 		http.StatusForbidden, consoleapi.ErrorCodeForbidden)
 }
