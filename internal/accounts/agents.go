@@ -35,9 +35,6 @@ const (
 	agentMoneyRefill     = 4 * time.Second
 	agentMoneyHourBurst  = 150
 	agentMoneyHourRefill = 24 * time.Second
-	// A credential's alerts on one node: never more than 60 in any hour, each of which may notify the owner.
-	agentAlertBurst  = 30
-	agentAlertRefill = 2 * time.Minute
 )
 
 var (
@@ -399,9 +396,12 @@ func (s *Service) SpendAgentMoney(a Agent) error {
 	return s.spendAgent(a, agentLimit{s.agentMoney, agentMoneyBurst, agentMoneyRefill}, agentLimit{s.agentMoneyHours, agentMoneyHourBurst, agentMoneyHourRefill})
 }
 
-// SpendAgentAlert spends one of a's alerts on this node, as SpendAgentMoney does its money writes.
-func (s *Service) SpendAgentAlert(a Agent) error {
-	return s.spendAgent(a, agentLimit{s.agentAlerts, agentAlertBurst, agentAlertRefill})
+// SpendAgentAlert spends one of a's alerts on this node, of which it may raise perHour in any hour, as SpendAgentMoney
+// does its money writes: the bucket holds half of them at once and gives the rest back over the hour. perHour is the
+// owner's limit, read for each alert, so a change applies to the next one.
+func (s *Service) SpendAgentAlert(a Agent, perHour int) error {
+	size := max(perHour/2, 1)
+	return s.spendAgent(a, agentLimit{s.agentAlerts, size, time.Hour / time.Duration(max(perHour-size, 1))})
 }
 
 // agentLimit is one bucket of a credential's writes of a kind: size at once, one more every per.

@@ -3357,6 +3357,28 @@ type OperationTarget struct {
 	Kind string `json:"kind"`
 }
 
+// OperationsAgentLimits defines model for OperationsAgentLimits.
+type OperationsAgentLimits struct {
+	// AlertsPerHour The alerts each credential may raise in any hour on a core node.
+	AlertsPerHour *int `json:"alerts_per_hour,omitempty"`
+
+	// AlertsPerHourMax The ceiling of `alerts_per_hour`, which is also its default.
+	AlertsPerHourMax *int `json:"alerts_per_hour_max,omitempty"`
+
+	// Rev 0 until the owner first sets the limits.
+	Rev       *int64     `json:"rev,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// OperationsAgentLimitsUpdate defines model for OperationsAgentLimitsUpdate.
+type OperationsAgentLimitsUpdate struct {
+	AlertsPerHour int    `json:"alerts_per_hour"`
+	Reason        string `json:"reason"`
+
+	// Rev The revision read; 0 when the limits were never set.
+	Rev int64 `json:"rev"`
+}
+
 // OperationsAgentStopped defines model for OperationsAgentStopped.
 type OperationsAgentStopped struct {
 	// Canceled How many proposals waiting for the owner this stop canceled; absent from a node older than approvals.
@@ -5940,6 +5962,12 @@ type SetModelStatusParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetOperationsAgentLimitsParams defines parameters for SetOperationsAgentLimits.
+type SetOperationsAgentLimitsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // StopOperationsAgentParams defines parameters for StopOperationsAgent.
 type StopOperationsAgentParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -6662,6 +6690,9 @@ type UpdateModelSpecJSONRequestBody = SpecUpdate
 
 // SetModelStatusJSONRequestBody defines body for SetModelStatus for application/json ContentType.
 type SetModelStatusJSONRequestBody = ModelStatusUpdate
+
+// SetOperationsAgentLimitsJSONRequestBody defines body for SetOperationsAgentLimits for application/json ContentType.
+type SetOperationsAgentLimitsJSONRequestBody = OperationsAgentLimitsUpdate
 
 // StopOperationsAgentJSONRequestBody defines body for StopOperationsAgent for application/json ContentType.
 type StopOperationsAgentJSONRequestBody = ReasonRequest

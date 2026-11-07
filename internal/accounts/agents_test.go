@@ -345,7 +345,9 @@ func TestAgentWritesAreLimited(t *testing.T) {
 		least  int
 	}{
 		{"money writes", s.SpendAgentMoney, map[time.Duration]int{time.Minute: 30, time.Hour: 300}, 440},
-		{"alerts", s.SpendAgentAlert, map[time.Duration]int{time.Hour: 60}, 85},
+		{"alerts", func(a accounts.Agent) error { return s.SpendAgentAlert(a, 60) }, map[time.Duration]int{time.Hour: 60}, 85},
+		{"alerts lowered to 10", func(a accounts.Agent) error { return s.SpendAgentAlert(a, 10) }, map[time.Duration]int{time.Hour: 10}, 14},
+		{"alerts lowered to 1", func(a accounts.Agent) error { return s.SpendAgentAlert(a, 1) }, map[time.Duration]int{time.Hour: 1}, 2},
 	} {
 		busy, quiet := agent(), agent()
 		granted := grantedEverySecond(t, clock, func() error { return c.spend(busy) })

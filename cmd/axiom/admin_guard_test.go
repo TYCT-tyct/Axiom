@@ -45,6 +45,8 @@ var adminOperations = []adminOperation{
 	{"stopOperationsAgent", http.MethodPost, "/operations/agent/stop", `{"reason":"r"}`, "operations.manage", true},
 	{"listOperationsCapPolicies", http.MethodGet, "/operations/cap-policies", "", "operations.manage", false},
 	{"setOperationsCapPolicy", http.MethodPut, "/operations/cap-policies/platform/money.top_up", `{"currency":"USD",` + moneyLimits + `,"rev":0,"reason":"r"}`, "operations.manage", true},
+	{"getOperationsAgentLimits", http.MethodGet, "/operations/agent-limits", "", "operations.manage", false},
+	{"setOperationsAgentLimits", http.MethodPut, "/operations/agent-limits", `{"alerts_per_hour":10,"rev":0,"reason":"r"}`, "operations.manage", true},
 	{"repairOperationsCapCounters", http.MethodPost, "/operations/cap-policies/platform/money.top_up/repair", `{"reason":"r"}`, "operations.manage", true},
 	{"listOperationsPriceEnvelopes", http.MethodGet, "/operations/price-envelopes", "", "operations.manage", false},
 	{"setOperationsPriceEnvelope", http.MethodPut, "/operations/price-envelopes/site_00000000000000000000000000", `{"limits":` + priceEnvelope + `,"rev":0,"reason":"r"}`, "operations.manage", true},

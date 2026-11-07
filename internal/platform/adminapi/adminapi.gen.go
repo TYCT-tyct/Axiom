@@ -133,6 +133,12 @@ type ServerInterface interface {
 	// SetModelStatus Put a model on sale or retire it
 	// (PUT /api/admin/v1/models/{model_id}/status)
 	SetModelStatus(w http.ResponseWriter, r *http.Request, modelId Uuid, params SetModelStatusParams)
+	// GetOperationsAgentLimits The limits on what the operations agent may do
+	// (GET /api/admin/v1/operations/agent-limits)
+	GetOperationsAgentLimits(w http.ResponseWriter, r *http.Request)
+	// SetOperationsAgentLimits Lower the limits on what the operations agent may do
+	// (PUT /api/admin/v1/operations/agent-limits)
+	SetOperationsAgentLimits(w http.ResponseWriter, r *http.Request, params SetOperationsAgentLimitsParams)
 	// StopOperationsAgent Emergency stop of the operations agent
 	// (POST /api/admin/v1/operations/agent/stop)
 	StopOperationsAgent(w http.ResponseWriter, r *http.Request, params StopOperationsAgentParams)
@@ -2279,6 +2285,65 @@ func (siw *ServerInterfaceWrapper) SetModelStatus(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SetModelStatus(w, r, modelId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetOperationsAgentLimits operation middleware
+func (siw *ServerInterfaceWrapper) GetOperationsAgentLimits(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetOperationsAgentLimits(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetOperationsAgentLimits operation middleware
+func (siw *ServerInterfaceWrapper) SetOperationsAgentLimits(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetOperationsAgentLimitsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetOperationsAgentLimits(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8370,6 +8435,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/agent/stop", wrapper.StopOperationsAgent)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/cap-policies", wrapper.ListOperationsCapPolicies)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/operations/cap-policies/{scope}/{category}", wrapper.SetOperationsCapPolicy)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/agent-limits", wrapper.GetOperationsAgentLimits)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/operations/agent-limits", wrapper.SetOperationsAgentLimits)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/cap-policies/{scope}/{category}/repair", wrapper.RepairOperationsCapCounters)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/price-envelopes", wrapper.ListOperationsPriceEnvelopes)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/operations/price-envelopes/{site_id}", wrapper.SetOperationsPriceEnvelope)
@@ -12582,6 +12649,178 @@ type SetModelStatusdefaultJSONResponse struct {
 }
 
 func (response SetModelStatusdefaultJSONResponse) VisitSetModelStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsAgentLimitsRequestObject struct {
+}
+
+type GetOperationsAgentLimitsResponseObject interface {
+	VisitGetOperationsAgentLimitsResponse(w http.ResponseWriter) error
+}
+
+type GetOperationsAgentLimits200JSONResponse OperationsAgentLimits
+
+func (response GetOperationsAgentLimits200JSONResponse) VisitGetOperationsAgentLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsAgentLimits401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetOperationsAgentLimits401JSONResponse) VisitGetOperationsAgentLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsAgentLimits403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetOperationsAgentLimits403JSONResponse) VisitGetOperationsAgentLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsAgentLimitsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetOperationsAgentLimitsdefaultJSONResponse) VisitGetOperationsAgentLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsAgentLimitsRequestObject struct {
+	Params SetOperationsAgentLimitsParams
+	Body   *SetOperationsAgentLimitsJSONRequestBody
+}
+
+type SetOperationsAgentLimitsResponseObject interface {
+	VisitSetOperationsAgentLimitsResponse(w http.ResponseWriter) error
+}
+
+type SetOperationsAgentLimits200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetOperationsAgentLimits200JSONResponse struct {
+	Body    OperationsAgentLimits
+	Headers SetOperationsAgentLimits200ResponseHeaders
+}
+
+func (response SetOperationsAgentLimits200JSONResponse) VisitSetOperationsAgentLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsAgentLimits400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetOperationsAgentLimits400JSONResponse) VisitSetOperationsAgentLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsAgentLimits401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetOperationsAgentLimits401JSONResponse) VisitSetOperationsAgentLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsAgentLimits403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetOperationsAgentLimits403JSONResponse) VisitSetOperationsAgentLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsAgentLimits409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetOperationsAgentLimits409JSONResponse) VisitSetOperationsAgentLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetOperationsAgentLimitsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetOperationsAgentLimitsdefaultJSONResponse) VisitSetOperationsAgentLimitsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -26673,6 +26912,12 @@ type StrictServerInterface interface {
 	// SetModelStatus Put a model on sale or retire it
 	// (PUT /api/admin/v1/models/{model_id}/status)
 	SetModelStatus(ctx context.Context, request SetModelStatusRequestObject) (SetModelStatusResponseObject, error)
+	// GetOperationsAgentLimits The limits on what the operations agent may do
+	// (GET /api/admin/v1/operations/agent-limits)
+	GetOperationsAgentLimits(ctx context.Context, request GetOperationsAgentLimitsRequestObject) (GetOperationsAgentLimitsResponseObject, error)
+	// SetOperationsAgentLimits Lower the limits on what the operations agent may do
+	// (PUT /api/admin/v1/operations/agent-limits)
+	SetOperationsAgentLimits(ctx context.Context, request SetOperationsAgentLimitsRequestObject) (SetOperationsAgentLimitsResponseObject, error)
 	// StopOperationsAgent Emergency stop of the operations agent
 	// (POST /api/admin/v1/operations/agent/stop)
 	StopOperationsAgent(ctx context.Context, request StopOperationsAgentRequestObject) (StopOperationsAgentResponseObject, error)
@@ -28235,6 +28480,63 @@ func (sh *strictHandler) SetModelStatus(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SetModelStatusResponseObject); ok {
 		if err := validResponse.VisitSetModelStatusResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetOperationsAgentLimits operation middleware
+func (sh *strictHandler) GetOperationsAgentLimits(w http.ResponseWriter, r *http.Request) {
+	var request GetOperationsAgentLimitsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetOperationsAgentLimits(ctx, request.(GetOperationsAgentLimitsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetOperationsAgentLimits")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetOperationsAgentLimitsResponseObject); ok {
+		if err := validResponse.VisitGetOperationsAgentLimitsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetOperationsAgentLimits operation middleware
+func (sh *strictHandler) SetOperationsAgentLimits(w http.ResponseWriter, r *http.Request, params SetOperationsAgentLimitsParams) {
+	var request SetOperationsAgentLimitsRequestObject
+
+	request.Params = params
+
+	var body SetOperationsAgentLimitsJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetOperationsAgentLimits(ctx, request.(SetOperationsAgentLimitsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetOperationsAgentLimits")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetOperationsAgentLimitsResponseObject); ok {
+		if err := validResponse.VisitSetOperationsAgentLimitsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

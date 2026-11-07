@@ -38,13 +38,20 @@ func (o operationsAPI) AlertsList(ctx context.Context, r operationsapi.AlertsLis
 	return adminJSON[operationsapi.AlertsList200JSONResponse](list)
 }
 
-// AlertRaise raises the agent's alert under its key at once: a routine write, within the credential's alert limit.
+// AlertRaise raises the agent's alert under its key at once: a routine write, within the alert limit the owner set.
 func (o operationsAPI) AlertRaise(ctx context.Context, r operationsapi.AlertRaiseRequestObject) (operationsapi.AlertRaiseResponseObject, error) {
 	b := r.Body
 	if len(b.Summary) > maxAlertSummary {
 		return nil, invalidField("/summary", fmt.Sprintf("is more than %d bytes of UTF-8", maxAlertSummary))
 	}
-	if err := o.admin.accounts.SpendAgentAlert(callOf(ctx).agent); err != nil {
+	var limits operations.AgentLimits
+	if err := o.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		limits, err = operations.ReadAgentLimits(ctx, tx)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if err := o.admin.accounts.SpendAgentAlert(callOf(ctx).agent, limits.AlertsPerHour); err != nil {
 		return nil, err
 	}
 	params := map[string]any{"severity": string(b.Severity), "summary": b.Summary}

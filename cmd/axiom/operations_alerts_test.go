@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/operationsapi"
 )
 
@@ -176,4 +177,40 @@ func TestOperationsAlertsList(t *testing.T) {
 	_, sites := f.makeCredential(owner, `{"name":"sites","permissions":["calls.search"],"platform":false,
 		"sites":["`+f.siteID()+`"],"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`)
 	expectAdmin(t, "the platform's alerts without the grant", f.agent(sites, because("/alerts", "x")), http.StatusNotFound, codeNotFound)
+}
+
+// TestOperationsAlertLimit: the owner lowers the alerts a credential may raise in an hour, from the revision read and
+// within the ceiling, and the agent is held back sooner from its next alert on.
+func TestOperationsAlertLimit(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	token := f.alerter(owner)
+	limits := func(rec *httptest.ResponseRecorder) string {
+		t.Helper()
+		var l adminapi.OperationsAgentLimits
+		decode(t, rec, &l)
+		return fmt.Sprintf("%d/%d rev %d", *l.AlertsPerHour, *l.AlertsPerHourMax, *l.Rev)
+	}
+	if got := limits(f.do(http.MethodGet, "/operations/agent-limits", "", as(owner))); got != "60/60 rev 0" {
+		t.Errorf("before the owner sets them: %s", got)
+	}
+	set := func(body string) *httptest.ResponseRecorder {
+		return f.change(owner, http.MethodPut, "/operations/agent-limits", body, newKey())
+	}
+	expectAdmin(t, "past the ceiling", set(`{"alerts_per_hour":61,"rev":0,"reason":"more"}`), http.StatusBadRequest, codeInvalidRequest)
+	rec := set(`{"alerts_per_hour":10,"rev":0,"reason":"fewer pages at night"}`)
+	expectAdmin(t, "lowering it", rec, http.StatusOK, "")
+	if got := limits(rec); got != "10/60 rev 1" {
+		t.Errorf("after lowering it: %s", got)
+	}
+	expectAdmin(t, "from a stale revision", set(`{"alerts_per_hour":20,"rev":0,"reason":"r"}`), http.StatusConflict, codeStaleRevision)
+	f.expectAudit("agent_limits.set", map[string]string{
+		"actor_kind": "user", "detail->'before'->>'alerts_per_hour'": "60", "detail->'after'->>'alerts_per_hour'": "10",
+		"reason": "fewer pages at night",
+	})
+	for i := range 5 { // half of the 10 at once, where the default lets 30 through
+		expectAdmin(t, fmt.Sprintf("alert %d", i), f.alertAs(token, "/alerts", raise(fmt.Sprintf("k%d", i), "info", "x"), newKey()), http.StatusOK, "")
+	}
+	expectAdmin(t, "the sixth alert", f.alertAs(token, "/alerts", raise("k5", "info", "x"), newKey()), http.StatusTooManyRequests, codeRateLimited)
 }

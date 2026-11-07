@@ -5554,6 +5554,60 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/operations/agent-limits:
+    get:
+      operationId: getOperationsAgentLimits
+      tags: [Operations]
+      summary: The limits on what the operations agent may do
+      description: >-
+        The limits as they apply now, with their ceilings: until the owner first sets them (`rev` 0) the ceilings
+        apply. Each credential is limited on each core node.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      responses:
+        "200":
+          description: The limits
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsAgentLimits"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setOperationsAgentLimits
+      tags: [Operations]
+      summary: Lower the limits on what the operations agent may do
+      description: >-
+        Replaces the limits from the revision read (`rev`; another is a 409 `stale_revision`). A limit is from 1 to its
+        ceiling (otherwise a 400): the owner can lower it, never raise it past what the code allows. Every core node
+        applies it from the agent's next request.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: operations.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationsAgentLimitsUpdate"}
+      responses:
+        "200":
+          description: The limits as they are now
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsAgentLimits"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/operations/cap-policies/{scope}/{category}/repair:
     parameters:
       - name: scope
@@ -7472,6 +7526,21 @@ components:
       required: [data]
       properties:
         data: {type: array, items: {$ref: "#/components/schemas/OperationsCapPolicy"}}
+    OperationsAgentLimits:
+      type: object
+      properties:
+        alerts_per_hour: {type: integer, description: "The alerts each credential may raise in any hour on a core node."}
+        alerts_per_hour_max: {type: integer, description: "The ceiling of `alerts_per_hour`, which is also its default."}
+        rev: {type: integer, format: int64, description: "0 until the owner first sets the limits."}
+        updated_at: {type: string, format: date-time}
+    OperationsAgentLimitsUpdate:
+      type: object
+      additionalProperties: false
+      required: [alerts_per_hour, rev, reason]
+      properties:
+        alerts_per_hour: {type: integer, minimum: 1, maximum: 60}
+        rev: {type: integer, format: int64, minimum: 0, description: "The revision read; 0 when the limits were never set."}
+        reason: {type: string, minLength: 1, maxLength: 1000}
     OperationsCapPolicyUpdate:
       type: object
       additionalProperties: false
