@@ -43,7 +43,7 @@ func (o operationsAPI) CreditGrant(ctx context.Context, r operationsapi.CreditGr
 		Credential: uuid.UUID(c.agent.ID()), Key: key, Tool: "credit_grant", Target: operations.Target{Kind: "account", ID: r.AccountId},
 		Params: params, Risk: operations.RiskGift, Reason: b.Reason, Run: runOf(r.Params.XAxiomRunID),
 	}
-	op, replayed, err := o.money(ctx, b.DryRun, func(tx pg.Tx) (operations.Operation, bool, error) {
+	op, replayed, err := o.runWrite(ctx, b.DryRun, func(tx pg.Tx) (operations.Operation, bool, error) {
 		return o.proposeCredit(ctx, tx, id, p, b)
 	})
 	if err != nil {
