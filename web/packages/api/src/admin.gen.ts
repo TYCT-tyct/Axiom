@@ -4003,7 +4003,7 @@ export interface components {
             params: {
                 [key: string]: unknown;
             };
-            /** @description What the server read of the target when the agent asked, never the agent's words. */
+            /** @description What the server read of the target when the agent asked, never the agent's words. Its members depend on the `tool`, and a member an older node did not know is absent, so a page shows what is there. A write that moves money carries `cap`: `currency`, `amount`, `policy_rev`, the limits `single_max`, `daily_max`, `weekly_max`, `object_daily_max`, `daily_count_max` and their hard ones (`hard_single_max`, `hard_daily_max`, `hard_weekly_max`), the amounts already used in each window (`daily_used`, `weekly_used`, `object_daily_used`, `daily_count`) and `paused`; amounts are integer text in the cap's currency. A credit grant names `account_id`, `account`, `email`, `site_id`, `amount`, `currency` and `expires_at`; a supplier top-up `supplier`, `supplier_id`, `amount_native`, `native_unit`, `unit_value`, `settlement_currency`, `amount` and `currency`; a price publication `model_id`, `candidate_id`, `slug`, `name`, `status`, `audience`, `currency`, `current_id`, the base rates per item as `current`, `proposed` and `cost`, and `prices_complete`, with `envelope` when it falls outside the site's price envelope: `change_bps` and `margin_bps` (null when not measurable), the envelope's limits (`min_margin_bps`, `model_daily_change_bps`, `daily_changes`, `daily_models`) and what the day has used (`model_change_used`, `daily_changes_used`, `daily_models_used`, `model_moved_today`). */
             summary: {
                 [key: string]: unknown;
             };
@@ -8733,6 +8733,7 @@ export interface operations {
                     "application/json": components["schemas"]["LegalDocumentHistory"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -10350,6 +10351,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionPlanList"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             default: components["responses"]["Failure"];
@@ -10826,6 +10828,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };
