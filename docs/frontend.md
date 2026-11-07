@@ -232,6 +232,7 @@ CI 上不降速的手机档对固定上限也不够稳：#674 的 run `420829027
 ### 前端工程
 
 - 代码在 `web/`，是一个 pnpm 工作区；结构、命令和必须遵守的规则见 [web/README.md](../web/README.md)。
+- 页面只通过 HTTP 接口取数据；要用别的前端替换它，或对接某个约定（会话、CSRF、错误、分页、幂等、金额），读[前端接口指南](frontend-api.md)。
 - 官网在公网监听的 `/`，控制台在 `/console/`，管理后台只在管理监听上。
 - 控制台和管理后台构建时写入同一棵代码树构建出的程序的版本号（`axiom version` 输出的整行），之后定时和切回标签页时向 `GET /api/console/v1/version`（后台是 `/api/admin/v1/version`）询问正在运行的版本，不同就提示刷新。
 - 内容安全策略只在 `web/vite.shared.ts` 定义一次。构建产物嵌入 Go 程序时（`just web-embed`），这个字符串一并写进嵌入的文件，Go 服务原样发送，不另写一份；缓存、压缩和回退的规则见[平台的「前端文件」](../internal/platform/README.md#前端文件)。
