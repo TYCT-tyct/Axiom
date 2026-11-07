@@ -2105,6 +2105,9 @@ type AccountDetail struct {
 	SiteId SiteId              `json:"site_id"`
 	Status AccountDetailStatus `json:"status"`
 	Tier   TierRef             `json:"tier"`
+
+	// WorkspaceLimit The account's limit on its workspaces. Absent from a node that predates workspace limits.
+	WorkspaceLimit *WorkspaceLimitView `json:"workspace_limit,omitempty"`
 }
 
 // AccountDetailKind defines model for AccountDetail.Kind.
@@ -5718,6 +5721,27 @@ type VersionBasis string
 // WorkspaceId A workspace's ID (TypeID).
 type WorkspaceId = string
 
+// WorkspaceLimit How many workspaces an account may hold that are not deleted, disabled ones included. Lowering it disables no workspace; the account only cannot make more.
+type WorkspaceLimit = int
+
+// WorkspaceLimitUpdate defines model for WorkspaceLimitUpdate.
+type WorkspaceLimitUpdate struct {
+	// MaxWorkspaces The limit to set at this level; absent clears it, so the level above applies.
+	MaxWorkspaces *WorkspaceLimit `json:"max_workspaces,omitempty"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// WorkspaceLimitView defines model for WorkspaceLimitView.
+type WorkspaceLimitView struct {
+	// Effective What applies here, the limit set here over the level above, down to the default in code, 50.
+	Effective WorkspaceLimit `json:"effective"`
+
+	// MaxWorkspaces The limit set at this level; absent when it sets none and the level above applies.
+	MaxWorkspaces *WorkspaceLimit `json:"max_workspaces,omitempty"`
+}
+
 // Cursor defines model for Cursor.
 type Cursor = string
 
@@ -5792,6 +5816,12 @@ type SetAccountSuspensionParams struct {
 
 // SetAccountTierParams defines parameters for SetAccountTier.
 type SetAccountTierParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// UpdateAccountWorkspaceLimitParams defines parameters for UpdateAccountWorkspaceLimit.
+type UpdateAccountWorkspaceLimitParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -6434,6 +6464,12 @@ type SetPaymentSettingsParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// UpdateSiteWorkspaceLimitParams defines parameters for UpdateSiteWorkspaceLimit.
+type UpdateSiteWorkspaceLimitParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // CreateSourceClassParams defines parameters for CreateSourceClass.
 type CreateSourceClassParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -6596,6 +6632,9 @@ type SetAccountSuspensionJSONRequestBody = AccountSuspension
 
 // SetAccountTierJSONRequestBody defines body for SetAccountTier for application/json ContentType.
 type SetAccountTierJSONRequestBody = AccountTierChange
+
+// UpdateAccountWorkspaceLimitJSONRequestBody defines body for UpdateAccountWorkspaceLimit for application/json ContentType.
+type UpdateAccountWorkspaceLimitJSONRequestBody = WorkspaceLimitUpdate
 
 // RotateAlertWebhookSecretJSONRequestBody defines body for RotateAlertWebhookSecret for application/json ContentType.
 type RotateAlertWebhookSecretJSONRequestBody = AlertWebhookSecretRequest
@@ -6815,6 +6854,9 @@ type SetSystemSettingsJSONRequestBody = SystemSettingsUpdate
 
 // SetPaymentSettingsJSONRequestBody defines body for SetPaymentSettings for application/json ContentType.
 type SetPaymentSettingsJSONRequestBody = PaymentSettingsUpdate
+
+// UpdateSiteWorkspaceLimitJSONRequestBody defines body for UpdateSiteWorkspaceLimit for application/json ContentType.
+type UpdateSiteWorkspaceLimitJSONRequestBody = WorkspaceLimitUpdate
 
 // CreateSourceClassJSONRequestBody defines body for CreateSourceClass for application/json ContentType.
 type CreateSourceClassJSONRequestBody = SourceClassCreate

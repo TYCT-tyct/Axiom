@@ -42,8 +42,8 @@ WHERE k.id = @key_id
 -- name: LockAccount :one
 -- Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the
 -- second one's count sees the first: a count read before the insert without this lock would let both through. The
--- account's own limits come with it.
-SELECT max_keys, key_creations_per_hour FROM accounts.accounts WHERE id = @id FOR NO KEY UPDATE;
+-- account's own limits come with it. Making a workspace takes the same turn.
+SELECT max_keys, key_creations_per_hour, max_workspaces FROM accounts.accounts WHERE id = @id FOR NO KEY UPDATE;
 
 -- name: CountKeys :one
 -- The keys the account holds that are not deleted: what the limit of keys held bounds. Read in the account's turn

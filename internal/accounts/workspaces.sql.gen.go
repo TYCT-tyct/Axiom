@@ -101,7 +101,7 @@ type ListWorkspacesRow struct {
 }
 
 // An account's workspaces that are not deleted, its default first and then in the order they were made: an ID is a
-// UUIDv7. An account holds at most maxWorkspaces, so one read is the whole list.
+// UUIDv7. An account holds at most its limit, never over 1,000, so one read is the whole list.
 func (q *Queries) ListWorkspaces(ctx context.Context, db DBTX, accountID uuid.UUID) ([]ListWorkspacesRow, error) {
 	rows, err := db.Query(ctx, listWorkspaces, accountID)
 	if err != nil {
@@ -173,6 +173,37 @@ func (q *Queries) LockWorkspace(ctx context.Context, db DBTX, arg LockWorkspaceP
 	return items, nil
 }
 
+const readAccountWorkspaceLimit = `-- name: ReadAccountWorkspaceLimit :one
+SELECT a.site_id, a.max_workspaces, t.max_workspaces_per_account AS site_max_workspaces
+FROM accounts.accounts a LEFT JOIN accounts.site_settings t ON t.site_id = a.site_id WHERE a.id = $1
+`
+
+type ReadAccountWorkspaceLimitRow struct {
+	SiteID            uuid.UUID
+	MaxWorkspaces     *int32
+	SiteMaxWorkspaces *int32
+}
+
+// The account's own limit and its site's, which it falls back to; no row means no such account.
+func (q *Queries) ReadAccountWorkspaceLimit(ctx context.Context, db DBTX, accountID uuid.UUID) (ReadAccountWorkspaceLimitRow, error) {
+	row := db.QueryRow(ctx, readAccountWorkspaceLimit, accountID)
+	var i ReadAccountWorkspaceLimitRow
+	err := row.Scan(&i.SiteID, &i.MaxWorkspaces, &i.SiteMaxWorkspaces)
+	return i, err
+}
+
+const readSiteWorkspaceLimit = `-- name: ReadSiteWorkspaceLimit :one
+SELECT t.max_workspaces_per_account FROM accounts.sites s LEFT JOIN accounts.site_settings t ON t.site_id = s.id WHERE s.id = $1
+`
+
+// The site's own limit on an account's workspaces (NULL is not set); no row means no such site.
+func (q *Queries) ReadSiteWorkspaceLimit(ctx context.Context, db DBTX, siteID uuid.UUID) (*int32, error) {
+	row := db.QueryRow(ctx, readSiteWorkspaceLimit, siteID)
+	var max_workspaces_per_account *int32
+	err := row.Scan(&max_workspaces_per_account)
+	return max_workspaces_per_account, err
+}
+
 const updateWorkspace = `-- name: UpdateWorkspace :exec
 UPDATE accounts.workspaces SET name = $1, status = $2 WHERE id = $3
 `
@@ -185,5 +216,35 @@ type UpdateWorkspaceParams struct {
 
 func (q *Queries) UpdateWorkspace(ctx context.Context, db DBTX, arg UpdateWorkspaceParams) error {
 	_, err := db.Exec(ctx, updateWorkspace, arg.Name, arg.Status, arg.ID)
+	return err
+}
+
+const writeAccountWorkspaceLimit = `-- name: WriteAccountWorkspaceLimit :exec
+UPDATE accounts.accounts SET max_workspaces = $1::integer WHERE id = $2
+`
+
+type WriteAccountWorkspaceLimitParams struct {
+	MaxWorkspaces *int32
+	AccountID     uuid.UUID
+}
+
+func (q *Queries) WriteAccountWorkspaceLimit(ctx context.Context, db DBTX, arg WriteAccountWorkspaceLimitParams) error {
+	_, err := db.Exec(ctx, writeAccountWorkspaceLimit, arg.MaxWorkspaces, arg.AccountID)
+	return err
+}
+
+const writeSiteWorkspaceLimit = `-- name: WriteSiteWorkspaceLimit :exec
+INSERT INTO accounts.site_settings (site_id, max_workspaces_per_account) VALUES ($1, $2::integer)
+ON CONFLICT (site_id) DO UPDATE SET max_workspaces_per_account = excluded.max_workspaces_per_account
+`
+
+type WriteSiteWorkspaceLimitParams struct {
+	SiteID        uuid.UUID
+	MaxWorkspaces *int32
+}
+
+// Replaces the site's own limit and leaves its other settings as they are.
+func (q *Queries) WriteSiteWorkspaceLimit(ctx context.Context, db DBTX, arg WriteSiteWorkspaceLimitParams) error {
+	_, err := db.Exec(ctx, writeSiteWorkspaceLimit, arg.SiteID, arg.MaxWorkspaces)
 	return err
 }

@@ -585,21 +585,22 @@ func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]
 }
 
 const lockAccount = `-- name: LockAccount :one
-SELECT max_keys, key_creations_per_hour FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
+SELECT max_keys, key_creations_per_hour, max_workspaces FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
 `
 
 type LockAccountRow struct {
 	MaxKeys             *int32
 	KeyCreationsPerHour *int32
+	MaxWorkspaces       *int32
 }
 
 // Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the
 // second one's count sees the first: a count read before the insert without this lock would let both through. The
-// account's own limits come with it.
+// account's own limits come with it. Making a workspace takes the same turn.
 func (q *Queries) LockAccount(ctx context.Context, db DBTX, id uuid.UUID) (LockAccountRow, error) {
 	row := db.QueryRow(ctx, lockAccount, id)
 	var i LockAccountRow
-	err := row.Scan(&i.MaxKeys, &i.KeyCreationsPerHour)
+	err := row.Scan(&i.MaxKeys, &i.KeyCreationsPerHour, &i.MaxWorkspaces)
 	return i, err
 }
 

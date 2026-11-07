@@ -220,13 +220,13 @@ export interface paths {
         };
         /**
          * The account's workspaces
-         * @description Every workspace of the account that is not deleted, disabled ones included: the default workspace first, then the others in the order they were made. An account holds at most 50, so this is the whole list and has no pages. A page that shows workspaces only once there is a second one (docs/domains/accounts.md「工作区」) decides from the length of `data`. A node that predates workspaces answers 404.
+         * @description Every workspace of the account that is not deleted, disabled ones included: the default workspace first, then the others in the order they were made. An account holds at most its limit, 50 unless an administrator sets another and never over 1,000, so this is the whole list and has no pages. A page that shows workspaces only once there is a second one (docs/domains/accounts.md「工作区」) decides from the length of `data`. A node that predates workspaces answers 404.
          */
         get: operations["listWorkspaces"];
         put?: never;
         /**
          * Make a workspace
-         * @description Makes an enabled workspace with no budget and no default routing preset of its own, so its new keys take the account's. Another live workspace of the account with the same name, ignoring case, is 409 `name_taken`; an account that holds 50 workspaces, disabled ones included, is 409 `conflict`.
+         * @description Makes an enabled workspace with no budget and no default routing preset of its own, so its new keys take the account's. Another live workspace of the account with the same name, ignoring case, is 409 `name_taken`; an account that holds as many workspaces as its limit allows, disabled ones included, is 409 `conflict`.
          */
         post: operations["createWorkspace"];
         delete?: never;

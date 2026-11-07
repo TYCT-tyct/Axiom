@@ -91,7 +91,8 @@ func TestWorkspaces(t *testing.T) {
 }
 
 // TestWorkspaceRefusals: a name taken ignoring case, an empty one, disabling the default, another account's workspace
-// and a 51st workspace are refused, and none of them is audited.
+// and one over the account's limit are refused, and none of them is audited; the limit is the account's own, else the
+// site's, else 50.
 func TestWorkspaceRefusals(t *testing.T) {
 	t.Parallel()
 	f := newConsoleFixture(t)
@@ -116,9 +117,18 @@ func TestWorkspaceRefusals(t *testing.T) {
 	}
 	f.run(fmt.Sprintf(`INSERT INTO accounts.workspaces (id, site_id, account_id, name, status, is_default)
 		SELECT gen_random_uuid(), '%s', '%s', 'Filler ' || n, 'disabled', false FROM generate_series(1, 48) AS n`, site, account))
-	expect(t, "the 51st workspace", f.do(http.MethodPost, "/workspaces", `{"name":"One too many"}`, as(s)), http.StatusConflict, consoleapi.ErrorCodeConflict)
-	if got := f.text(`SELECT count(*)::text FROM platform.audit_log WHERE target_kind = 'workspace'`); got != "1" {
-		t.Errorf("%s workspace audit entries, want only the one made", got)
+	expect(t, "the 51st workspace under the default limit", f.do(http.MethodPost, "/workspaces", `{"name":"One too many"}`, as(s)), http.StatusConflict, consoleapi.ErrorCodeConflict)
+	// The limit is data: the account's own raises it over the default, and without it the site's applies, which the
+	// node reads from its snapshot of the sites.
+	f.run(`UPDATE accounts.accounts SET max_workspaces = 51 WHERE id = '` + account.String() + `'`)
+	f.workspace(s, "Fifty-first")
+	f.run(`UPDATE accounts.accounts SET max_workspaces = NULL WHERE id = '`+account.String()+`'`,
+		`INSERT INTO accounts.site_settings (site_id, max_workspaces_per_account) VALUES ('`+site.String()+`', 60)
+			ON CONFLICT (site_id) DO UPDATE SET max_workspaces_per_account = 60`)
+	f = f.restarted()
+	f.workspace(s, "Fifty-second")
+	if got := f.text(`SELECT count(*)::text FROM platform.audit_log WHERE target_kind = 'workspace'`); got != "3" {
+		t.Errorf("%s workspace audit entries, want only the three made", got)
 	}
 }
 
