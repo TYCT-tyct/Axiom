@@ -74,9 +74,6 @@ VALUES (@id, @site_id, @account_id, @workspace_id, @kind, @name, @prefix, @last4
 -- name: DefaultWorkspace :many
 SELECT id FROM accounts.workspaces WHERE account_id = @account_id AND is_default;
 
--- name: LiveWorkspace :many
-SELECT id FROM accounts.workspaces WHERE account_id = @account_id AND id = @id AND deleted_at IS NULL;
-
 -- name: ListKeys :many
 -- An account's keys that are not deleted, newest first: an ID is a UUIDv7, so its order is the order of making. The
 -- optional filters are applied while the keys are read in index order, so a later page starts after the last key
@@ -95,6 +92,7 @@ WHERE account_id = @account_id AND deleted_at IS NULL AND id < @before
       AND (expires_at IS NULL OR expires_at > statement_timestamp())))
   AND (sqlc.narg('created_after')::timestamptz IS NULL OR created_at >= sqlc.narg('created_after')::timestamptz)
   AND (sqlc.narg('created_before')::timestamptz IS NULL OR created_at < sqlc.narg('created_before')::timestamptz)
+  AND (sqlc.narg('workspace')::uuid IS NULL OR workspace_id = sqlc.narg('workspace')::uuid)
 ORDER BY id DESC
 LIMIT @page_size;
 

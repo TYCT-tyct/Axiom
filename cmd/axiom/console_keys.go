@@ -138,6 +138,10 @@ func keyFilterEcho(q accounts.KeyQuery) *consoleapi.KeyFilterEcho {
 		status := consoleapi.KeyStatus(q.Status)
 		echo.Status = &status
 	}
+	if q.Workspace != nil {
+		ws := q.Workspace.TypeID()
+		echo.WorkspaceId = &ws
+	}
 	return echo
 }
 
@@ -163,6 +167,13 @@ func keyQueryOf(p consoleapi.ListKeysParams) (accounts.KeyQuery, error) {
 			return accounts.KeyQuery{}, invalidField("cursor", "not a cursor this API gave out")
 		}
 		q.After = after
+	}
+	if p.WorkspaceId != nil {
+		ws, err := accounts.ParseWorkspaceID(*p.WorkspaceId)
+		if err != nil {
+			return accounts.KeyQuery{}, invalidField("workspace_id", "not a workspace ID")
+		}
+		q.Workspace = &ws
 	}
 	if q.CreatedAfter != nil && q.CreatedBefore != nil && !q.CreatedAfter.Before(*q.CreatedBefore) {
 		return accounts.KeyQuery{}, invalidField("created_after", "must be before created_before")
@@ -206,12 +217,19 @@ func (c consoleAPI) ListKeys(ctx context.Context, request consoleapi.ListKeysReq
 	return consoleapi.ListKeys200JSONResponse(list), nil
 }
 
-// CreateKey makes a key in the account's default workspace; its text is in this response only.
+// CreateKey makes a key in the workspace the request names, or the account's default one; its text is in this response
+// only.
 func (c consoleAPI) CreateKey(ctx context.Context, request consoleapi.CreateKeyRequestObject) (consoleapi.CreateKeyResponseObject, error) {
 	cl := callOf(ctx)
 	settings, expires, err := createInput(request.Body).settings(cl.site.Currency, time.Now())
 	if err != nil {
 		return nil, err
+	}
+	var workspace accounts.WorkspaceID // zero: the default workspace
+	if request.Body.WorkspaceId != nil {
+		if workspace, err = accounts.ParseWorkspaceID(*request.Body.WorkspaceId); err != nil {
+			return nil, invalidField("/workspace_id", "not a workspace ID")
+		}
 	}
 	kind := accounts.CallKey
 	if request.Body.Kind != nil {
@@ -230,7 +248,7 @@ func (c consoleAPI) CreateKey(ctx context.Context, request consoleapi.CreateKeyR
 	var presets map[uuid.UUID]routing.StoredPreset
 	err = c.db.Tx(ctx, cl.scope, func(tx pg.Tx) error {
 		if created, err = c.accounts.CreateKey(ctx, tx, audit.User(uuid.UUID(cl.principal.UserID())), accounts.KeyRequest{
-			Kind: kind, Site: cl.site.ID, Account: cl.principal.AccountID(), CreatedBy: cl.principal.UserID(), ExpiresAt: expires, KeySettings: settings,
+			Kind: kind, Site: cl.site.ID, Account: cl.principal.AccountID(), Workspace: workspace, CreatedBy: cl.principal.UserID(), ExpiresAt: expires, KeySettings: settings,
 		}); err != nil {
 			return err
 		}

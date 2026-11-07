@@ -104,7 +104,7 @@ type Key struct {
 }
 
 // KeyRequest is a new key in a workspace, made by a user of its site. A zero Workspace is the account's default
-// workspace.
+// workspace; another must be the account's, not deleted (ErrWorkspaceNotFound) and enabled (ErrWorkspaceDisabled).
 type KeyRequest struct {
 	Kind      string // empty is call; management requires an expiry
 	Site      SiteID
@@ -145,6 +145,8 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 		if r.Workspace, err = s.defaultWorkspace(ctx, tx, r.Account); err != nil {
 			return CreatedKey{}, fmt.Errorf("create an API key: %w", errors.Join(err, ErrKeyNotFound))
 		}
+	} else if err := s.usableWorkspace(ctx, tx, r.Account, r.Workspace); err != nil {
+		return CreatedKey{}, fmt.Errorf("create an API key: %w", err)
 	}
 	limit, reset := r.SpendLimit, r.LimitReset
 	if limit == nil && defaults && r.Kind == CallKey {
@@ -262,6 +264,7 @@ type KeyQuery struct {
 	Status        string
 	CreatedAfter  *time.Time
 	CreatedBefore *time.Time
+	Workspace     *WorkspaceID // nil: every workspace's keys
 }
 
 // ListKeys is up to q.Limit of account's keys that are not deleted and match q's filters, disabled ones included,
@@ -285,7 +288,7 @@ func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, q K
 	rows, err := s.queries.ListKeys(ctx, tx, ListKeysParams{
 		AccountID: uuid.UUID(account), Before: before, PageSize: int32(q.Limit) + 1, // #nosec G115 -- limit is the contract's 1 to 200
 		Name: nullable(q.Name), Prefix: nullable(q.Prefix), Status: nullable(q.Status),
-		CreatedAfter: q.CreatedAfter, CreatedBefore: q.CreatedBefore,
+		CreatedAfter: q.CreatedAfter, CreatedBefore: q.CreatedBefore, Workspace: (*uuid.UUID)(q.Workspace),
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("list API keys: %w", err)

@@ -148,18 +148,15 @@ func (m KeyManager) Create(ctx context.Context, workspace WorkspaceID, expires *
 	if err := m.permits(k, expires); err != nil {
 		return CreatedKey{}, err
 	}
-	if workspace != (WorkspaceID{}) {
-		if _, err := m.service.queries.ManagedWorkspace(ctx, m.tx, uuid.UUID(workspace)); err != nil {
-			if errors.Is(err, pg.ErrNoRows) {
-				return CreatedKey{}, ErrKeyNotFound
-			}
-			return CreatedKey{}, err
-		}
-	}
-	return m.service.createKey(ctx, m.tx, audit.ManagementKey(uuid.UUID(m.caller.key)), KeyRequest{
+	created, err := m.service.createKey(ctx, m.tx, audit.ManagementKey(uuid.UUID(m.caller.key)), KeyRequest{
 		Site: m.caller.site, Account: m.caller.account, Workspace: workspace, CreatedBy: m.ceiling.CreatedBy,
 		ExpiresAt: expires, KeySettings: k,
 	}, false)
+	if errors.Is(err, ErrWorkspaceNotFound) || errors.Is(err, ErrWorkspaceDisabled) {
+		// The management API has answered an unusable workspace as an unknown key since before workspaces were managed.
+		return CreatedKey{}, ErrKeyNotFound
+	}
+	return created, err
 }
 
 // Update permits bounded grants and reductions of existing authority, including disabling older permanent keys. A new

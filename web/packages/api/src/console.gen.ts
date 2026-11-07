@@ -211,6 +211,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's workspaces
+         * @description Every workspace of the account that is not deleted, disabled ones included: the default workspace first, then the others in the order they were made. An account holds at most 50, so this is the whole list and has no pages. A page that shows workspaces only once there is a second one (docs/domains/accounts.md「工作区」) decides from the length of `data`. A node that predates workspaces answers 404.
+         */
+        get: operations["listWorkspaces"];
+        put?: never;
+        /**
+         * Make a workspace
+         * @description Makes an enabled workspace with no budget and no default routing preset of its own, so its new keys take the account's. Another live workspace of the account with the same name, ignoring case, is 409 `name_taken`; an account that holds 50 workspaces, disabled ones included, is 409 `conflict`.
+         */
+        post: operations["createWorkspace"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/workspaces/{workspace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A workspace of the account; another account's, or a deleted one, is 404. */
+                workspace_id: components["schemas"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        /** One workspace */
+        get: operations["getWorkspace"];
+        /**
+         * Rename, disable or enable a workspace
+         * @description Replaces the workspace's name and whether it is disabled. Disabling refuses the next call of every key of the workspace on every node, and keys cannot be made in it; its keys stay listed and editable, and `disabled: false` makes them usable again. The default workspace cannot be disabled (409 `conflict`): it is where keys go when no workspace is named; disable the account instead. A name another live workspace of the account has, ignoring case, is 409 `name_taken`.
+         */
+        put: operations["updateWorkspace"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/workspaces/{workspace_id}/routing-default": {
         parameters: {
             query?: never;
@@ -1023,13 +1071,13 @@ export interface paths {
         };
         /**
          * The account's API keys
-         * @description Every key of the session's account that is not deleted, disabled and expired ones included, newest first by making. `name` and `prefix` search part of a key's name or prefix, ignoring case; `status` keeps active, disabled or expired keys; `created_after` and `created_before` keep the keys made in a range. A page reads the keys in the index's order and applies the filters as it goes, so a later page starts after the last key read, whatever the filters match. The text of a key is never returned again after `createKey`.
+         * @description Every key of the session's account that is not deleted, disabled and expired ones included, newest first by making. `name` and `prefix` search part of a key's name or prefix, ignoring case; `status` keeps active, disabled or expired keys; `created_after` and `created_before` keep the keys made in a range; `workspace_id` keeps one workspace's keys. A page reads the keys in the index's order and applies the filters as it goes, so a later page starts after the last key read, whatever the filters match. The text of a key is never returned again after `createKey`.
          */
         get: operations["listKeys"];
         put?: never;
         /**
          * Make an API key
-         * @description Makes a call or management key in the account's default workspace, with the site's prefix. A call key without `spend_limit` gets the site's daily default. A management key requires `expires_at` and both api_keys.manage and api_keys.view. It does not use the site's default spending limit: omitted `spend_limit` means its delegation ceiling is unrestricted; child call keys created with an omitted limit inherit that ceiling. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it. The site may cap the keys an account holds, answered 409 `too_many_keys`, and the keys it makes in an hour, answered 429 with `Retry-After`; the message names the limit and how many the account has.
+         * @description Makes a call or management key in the workspace named, or the account's default one, with the site's prefix. A call key without `spend_limit` gets the site's daily default. A management key requires `expires_at` and both api_keys.manage and api_keys.view. It does not use the site's default spending limit: omitted `spend_limit` means its delegation ceiling is unrestricted; child call keys created with an omitted limit inherit that ceiling. The key text is in this response only; only its hash is stored. This operation takes no idempotency key: if the response is lost, the key shows in the list unused, and the user deletes it. The site may cap the keys an account holds, answered 409 `too_many_keys`, and the keys it makes in an hour, answered 429 with `Retry-After`; the message names the limit and how many the account has.
          */
         post: operations["createKey"];
         delete?: never;
@@ -2038,6 +2086,26 @@ export interface components {
         SessionId: string;
         /** @description A workspace's ID (TypeID). */
         WorkspaceId: string;
+        /** @description A part of the account with its own keys, budget and default routing preset. Every account has one default workspace, which cannot be disabled; keys made without naming a workspace go there. */
+        Workspace: {
+            id: components["schemas"]["WorkspaceId"];
+            name: string;
+            is_default: boolean;
+            /** @description A disabled workspace's keys are refused on every call. */
+            disabled: boolean;
+        };
+        WorkspaceList: {
+            data: components["schemas"]["Workspace"][];
+        };
+        WorkspaceCreate: {
+            /** @description Unique among the account's live workspaces, ignoring case. */
+            name: string;
+        };
+        WorkspaceSettings: {
+            /** @description Unique among the account's live workspaces, ignoring case. */
+            name: string;
+            disabled: boolean;
+        };
         /** @description A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`. */
         CallId: string;
         Site: {
@@ -2240,6 +2308,8 @@ export interface components {
              * @description The applied exclusive upper bound.
              */
             created_before?: string;
+            /** @description The applied workspace filter. Absent from a node that predates it, which returned every workspace's keys. */
+            workspace_id?: components["schemas"]["WorkspaceId"];
         };
         /**
          * @description When the spend limit's count starts again, at midnight UTC, Monday midnight UTC, or the first of the month. Absent means never; it needs a `spend_limit`.
@@ -2253,6 +2323,8 @@ export interface components {
              */
             kind?: "call" | "management";
             name: string;
+            /** @description The enabled workspace of the account the key belongs to, for good; absent is the default workspace. Another account's or a deleted one is 400, a disabled one 409 `conflict`. A node that predates workspaces ignores it and makes the key in the default workspace, so a page compares the response's `workspace_id`. */
+            workspace_id?: components["schemas"]["WorkspaceId"];
             /**
              * Format: date-time
              * @description UTC, in the future. It cannot be set later.
@@ -2621,6 +2693,8 @@ export interface components {
         KeyCreatedAfter: string;
         /** @description Keys the database stamped before this instant. */
         KeyCreatedBefore: string;
+        /** @description Keys of this workspace only; another account's workspace has none. */
+        KeyWorkspace: components["schemas"]["WorkspaceId"];
         /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
         Cursor: string;
         /** @description How many items a page holds at most. */
@@ -3109,6 +3183,119 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listWorkspaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workspaces */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceCreate"];
+            };
+        };
+        responses: {
+            /** @description The workspace made. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workspace"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A workspace of the account; another account's, or a deleted one, is 404. */
+                workspace_id: components["schemas"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workspace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workspace"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateWorkspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A workspace of the account; another account's, or a deleted one, is 404. */
+                workspace_id: components["schemas"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceSettings"];
+            };
+        };
+        responses: {
+            /** @description The workspace as changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workspace"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
@@ -4345,6 +4532,8 @@ export interface operations {
                 created_after?: components["parameters"]["KeyCreatedAfter"];
                 /** @description Keys the database stamped before this instant. */
                 created_before?: components["parameters"]["KeyCreatedBefore"];
+                /** @description Keys of this workspace only; another account's workspace has none. */
+                workspace_id?: components["parameters"]["KeyWorkspace"];
                 /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
                 cursor?: components["parameters"]["Cursor"];
                 /** @description How many items a page holds at most. */

@@ -86,6 +86,10 @@ var refusals = []refusal{
 	{accounts.ErrTOTPOn, http.StatusConflict, codeConflict, "two-step verification is already on"},
 	{accounts.ErrTOTPOff, http.StatusConflict, codeConflict, "two-step verification is not on"},
 	{accounts.ErrTooManyKeys, http.StatusConflict, codeTooManyKeys, "the account may not make another key"},
+	{accounts.ErrWorkspaceDisabled, http.StatusConflict, codeConflict, "the workspace is disabled; enable it or choose another"},
+	{accounts.ErrWorkspaceNameTaken, http.StatusConflict, codeNameTaken, "a workspace of the account has that name"},
+	{accounts.ErrTooManyWorkspaces, http.StatusConflict, codeConflict, "the account holds the most workspaces it may"},
+	{accounts.ErrDefaultWorkspace, http.StatusConflict, codeConflict, "the default workspace cannot be disabled; disable the account instead"},
 	{routing.ErrDefaultInvalid, http.StatusConflict, codePresetDefaultInvalid, "the default routing preset of this workspace cannot be used; an administrator must change it"},
 	{routing.ErrPresetNotSelectable, http.StatusBadRequest, codePresetNotSelectable, "the routing preset cannot be chosen here"},
 	{accounts.ErrKeyPreset, http.StatusBadRequest, codePresetNotSelectable, "a management key has no routing preset"},
@@ -123,6 +127,9 @@ func failure(err error) *apiError {
 	}
 	if errors.Is(err, accounts.ErrBadSecret) {
 		return invalidField("/secret", "not a TOTP secret this API gave out")
+	}
+	if errors.Is(err, accounts.ErrWorkspaceNotFound) {
+		return invalidField("/workspace_id", "not a workspace of the account")
 	}
 	for _, r := range slices.Concat(refusals, adminRefusals, orderRefusals) {
 		if !errors.Is(err, r.target) {
