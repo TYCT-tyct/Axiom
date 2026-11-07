@@ -17,12 +17,12 @@ func (b *bank) inWorkspace(budget *Limit) (first, second Admitted) {
 	return first, second
 }
 
-// workspaceUse is the bank's workspace's spent and in-flight amounts over the window reset covers.
-func (b *bank) workspaceUse(reset Reset) BudgetUsage {
+// workspaceUse is the bank's workspace's spent and in-flight amounts, all of them: these tests' budgets never reset.
+func (b *bank) workspaceUse() BudgetUsage {
 	b.t.Helper()
 	var use BudgetUsage
 	if err := b.app.ReadTx(b.t.Context(), b.admitted.Scope, func(tx pg.Tx) (err error) {
-		use, err = ReadBudgetUsage(b.t.Context(), tx, b.admitted.Workspace, reset)
+		use, err = ReadBudgetUsage(b.t.Context(), tx, b.admitted.Workspace, ResetNever)
 		return err
 	}); err != nil {
 		b.t.Fatal(err)
@@ -48,7 +48,7 @@ func TestWorkspaceBudgetPool(t *testing.T) {
 			t.Errorf("refused %d with %d left", n, 1500-total)
 		}
 	}
-	if use := b.workspaceUse(ResetNever); use.Reserved != total || use.Spent != 0 {
+	if use := b.workspaceUse(); use.Reserved != total || use.Spent != 0 {
 		t.Errorf("the workspace holds %+v, want %d in flight", use, total)
 	}
 	b.consistent()
@@ -92,21 +92,21 @@ func TestWorkspaceBudgetSettlement(t *testing.T) {
 			t.Fatalf("charged %v, want 300", f.Charged)
 		}
 	}
-	if use := b.workspaceUse(ResetNever); use.Spent != 300 || use.Reserved != 0 {
+	if use := b.workspaceUse(); use.Spent != 300 || use.Reserved != 0 {
 		t.Errorf("after the charge the workspace holds %+v, want 300 spent", use)
 	}
 	late := b.mustReserve(second, 700)
 	budget.Amount = 500
 	refusedByWorkspace(first, 1)
 	b.settleWith(late, outcome(Committed, FinishStop, used(t, 700, 0, 0)))
-	if use := b.workspaceUse(ResetNever); use.Spent != 1000 || use.Reserved != 0 {
+	if use := b.workspaceUse(); use.Spent != 1000 || use.Reserved != 0 {
 		t.Errorf("an admitted call charged past the lowered budget: %+v, want 1000 spent", use)
 	}
 	budget.Amount = 2000
 	unrun := b.mustReserve(first, 900)
 	b.settleWith(unrun, outcome(NotExecuted, FinishNone))
 	b.mustReserve(second, 1000)
-	if use := b.workspaceUse(ResetNever); use.Spent != 1000 || use.Reserved != 1000 {
+	if use := b.workspaceUse(); use.Spent != 1000 || use.Reserved != 1000 {
 		t.Errorf("after a call that did not run: %+v, want 1000 spent and 1000 in flight", use)
 	}
 	b.balanced()
