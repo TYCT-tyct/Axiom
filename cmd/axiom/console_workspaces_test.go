@@ -156,8 +156,11 @@ func TestWorkspaceKeys(t *testing.T) {
 	}
 	var list consoleapi.KeyList
 	decode(t, f.do(http.MethodGet, "/keys?workspace_id="+prod, "", as(s)), &list)
-	if diff := cmp.Diff([]string{inProd.Id}, idsOf(list)); diff != "" || list.Filters == nil || list.Filters.WorkspaceId == nil || *list.Filters.WorkspaceId != prod {
-		t.Errorf("the workspace's keys (-want +got):\n%s\nfilters %+v", diff, list.Filters)
+	if diff := cmp.Diff([]string{inProd.Id}, idsOf(list)); diff != "" {
+		t.Errorf("the workspace's keys (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(&consoleapi.KeyFilterEcho{WorkspaceId: &prod}, list.Filters); diff != "" {
+		t.Errorf("the filters echoed (-want +got):\n%s", diff)
 	}
 	decode(t, f.do(http.MethodGet, "/keys", "", as(s)), &list)
 	if len(list.Data) != 2 {
