@@ -93,7 +93,7 @@ func createKey(t testing.TB, db *pg.DB, s *accounts.Service) string {
 	if err := db.Tx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{a1}), func(tx pg.Tx) error {
 		var err error
 		created, err = s.CreateKey(t.Context(), tx, system, accounts.KeyRequest{
-			Site: accounts.SiteID(s1), Account: accounts.AccountID(a1), Workspace: accounts.WorkspaceID(w1),
+			Site: accounts.SiteID(s1), Account: accounts.AccountID(a1), Workspace: new(accounts.WorkspaceID(w1)),
 			CreatedBy: accounts.UserID(u1), Name: "Test",
 		})
 		return err

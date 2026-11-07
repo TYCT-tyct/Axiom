@@ -466,7 +466,7 @@ func (r *rig) newKey(a account) (string, accounts.KeyID) {
 	var created accounts.CreatedKey
 	if err := r.db.Tx(r.t.Context(), platformScope, func(tx pg.Tx) (err error) {
 		created, err = r.accounts.CreateKey(r.t.Context(), tx, audit.System("gateway.test"), accounts.KeyRequest{
-			Site: accounts.SiteID(siteID), Account: accounts.AccountID(a.id), Workspace: accounts.WorkspaceID(a.workspace),
+			Site: accounts.SiteID(siteID), Account: accounts.AccountID(a.id), Workspace: new(accounts.WorkspaceID(a.workspace)),
 			CreatedBy: accounts.UserID(userID), Name: "Test",
 		})
 		return err

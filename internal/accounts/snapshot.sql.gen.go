@@ -86,7 +86,7 @@ SELECT s.id, s.is_main, s.name, s.status, s.key_prefix, s.registration, s.curren
     coalesce(extract(epoch FROM t.admin_idle_timeout)::bigint, 0)::bigint AS admin_idle_seconds,
     coalesce(extract(epoch FROM t.admin_max_age)::bigint, 0)::bigint AS admin_max_age_seconds,
     t.ip_attempt_burst, t.ip_attempts_per_minute, t.email_sign_in_failures, t.user_code_failures,
-    t.challenge_code_attempts, t.max_keys_per_account, t.key_creations_per_hour,
+    t.challenge_code_attempts, t.max_keys_per_account, t.key_creations_per_hour, t.max_workspaces_per_account,
     t.registration_human_check, t.registration_human_check_bits, t.registration_domain_burst,
     t.registration_domain_per_hour, t.registration_domain_allow, t.registration_domain_deny,
     coalesce(t.model_prices_public, true) AS model_prices_public,
@@ -119,6 +119,7 @@ type ListSitesRow struct {
 	ChallengeCodeAttempts      *int32
 	MaxKeysPerAccount          *int32
 	KeyCreationsPerHour        *int32
+	MaxWorkspacesPerAccount    *int32
 	RegistrationHumanCheck     *bool
 	RegistrationHumanCheckBits *int32
 	RegistrationDomainBurst    *int32
@@ -165,6 +166,7 @@ func (q *Queries) ListSites(ctx context.Context, db DBTX) ([]ListSitesRow, error
 			&i.ChallengeCodeAttempts,
 			&i.MaxKeysPerAccount,
 			&i.KeyCreationsPerHour,
+			&i.MaxWorkspacesPerAccount,
 			&i.RegistrationHumanCheck,
 			&i.RegistrationHumanCheckBits,
 			&i.RegistrationDomainBurst,

@@ -20,7 +20,7 @@ func managementKey(t *testing.T, db *pg.DB, s *accounts.Service, settings accoun
 	inPlatform(t, db, func(tx pg.Tx) (err error) {
 		created, err = s.CreateKey(t.Context(), tx, system, accounts.KeyRequest{
 			Kind: accounts.ManagementKey, Site: accounts.SiteID(s1), Account: accounts.AccountID(a1),
-			Workspace: accounts.WorkspaceID(w1), CreatedBy: accounts.UserID(u1), ExpiresAt: &expiry, KeySettings: settings,
+			Workspace: new(accounts.WorkspaceID(w1)), CreatedBy: accounts.UserID(u1), ExpiresAt: &expiry, KeySettings: settings,
 		})
 		return err
 	})
@@ -52,7 +52,7 @@ func TestManagementCRUDAndAudit(t *testing.T) {
 		settings := m.Ceiling().KeySettings
 		settings.Name = "child"
 		var err error
-		child, err = m.Create(t.Context(), accounts.WorkspaceID{}, nil, settings)
+		child, err = m.Create(t.Context(), nil, nil, settings)
 		wantManagementError(t, err, nil)
 		key, err := m.Get(t.Context(), child.ID)
 		wantManagementError(t, err, nil)
@@ -103,7 +103,7 @@ func TestManagementKeyTypeAndScope(t *testing.T) {
 			wantManagementError(t, err, accounts.ErrKeyNotFound)
 			wantManagementError(t, m.Delete(t.Context(), id), accounts.ErrKeyNotFound)
 		}
-		_, err := m.Create(t.Context(), accounts.WorkspaceID(w2), nil, m.Ceiling().KeySettings)
+		_, err := m.Create(t.Context(), new(accounts.WorkspaceID(w2)), nil, m.Ceiling().KeySettings)
 		wantManagementError(t, err, accounts.ErrKeyNotFound)
 		return nil
 	})
@@ -148,13 +148,13 @@ func TestManagementDelegationNeverExpands(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := manage(t, s, manager.Text.Reveal(), func(m accounts.KeyManager, tx pg.Tx) error {
 				parent := m.Ceiling()
-				child, err := m.Create(t.Context(), accounts.WorkspaceID{}, nil, parent.KeySettings)
+				child, err := m.Create(t.Context(), nil, nil, parent.KeySettings)
 				if err != nil {
 					return err
 				}
 				settings, expiry := parent.KeySettings, parent.ExpiresAt
 				tc.change(&settings, &expiry)
-				_, err = m.Create(t.Context(), accounts.WorkspaceID{}, expiry, settings)
+				_, err = m.Create(t.Context(), nil, expiry, settings)
 				wantManagementError(t, err, accounts.ErrForbidden)
 				if tc.name != "longer expiry" {
 					_, err = m.Update(t.Context(), child.ID, settings)
@@ -173,7 +173,7 @@ func TestManagementDelegationNeverExpands(t *testing.T) {
 		k.IPAllow = []netip.Prefix{netip.MustParsePrefix("203.0.113.7/32")}
 		n := int64(50)
 		k.SpendLimit = &n
-		_, err := m.Create(t.Context(), accounts.WorkspaceID{}, nil, k)
+		_, err := m.Create(t.Context(), nil, nil, k)
 		return err
 	}); err != nil {
 		t.Fatal("subset refused", err)
@@ -189,7 +189,7 @@ func TestManagementRateAndAuditFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manage(t, a, manager.Text.Reveal(), func(m accounts.KeyManager, tx pg.Tx) error {
-		_, err := m.Create(t.Context(), accounts.WorkspaceID{}, nil, m.Ceiling().KeySettings)
+		_, err := m.Create(t.Context(), nil, nil, m.Ceiling().KeySettings)
 		return err
 	}); err == nil {
 		t.Fatal("unaudited create committed")
@@ -278,7 +278,7 @@ func TestManagementCeilingIsIndependent(t *testing.T) {
 		*copy.SpendLimit = 101
 		copy.Models[0] = "other"
 		*copy.ExpiresAt = copy.ExpiresAt.Add(time.Hour)
-		_, err := m.Create(t.Context(), accounts.WorkspaceID{}, copy.ExpiresAt, copy.KeySettings)
+		_, err := m.Create(t.Context(), nil, copy.ExpiresAt, copy.KeySettings)
 		wantManagementError(t, err, accounts.ErrForbidden)
 		return nil
 	})

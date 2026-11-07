@@ -136,17 +136,6 @@ func (q *Queries) LockKeyKind(ctx context.Context, db DBTX, arg LockKeyKindParam
 	return id, err
 }
 
-const managedWorkspace = `-- name: ManagedWorkspace :one
-SELECT id FROM accounts.workspaces WHERE id = $1 AND status = 'active' AND deleted_at IS NULL
-`
-
-func (q *Queries) ManagedWorkspace(ctx context.Context, db DBTX, id uuid.UUID) (uuid.UUID, error) {
-	row := db.QueryRow(ctx, managedWorkspace, id)
-	var id_2 uuid.UUID
-	err := row.Scan(&id_2)
-	return id_2, err
-}
-
 const validManagementKey = `-- name: ValidManagementKey :one
 SELECT k.id, k.workspace_id, k.kind, k.created_by, k.name, k.prefix, k.last4, k.created_at, k.updated_at, k.expires_at,
     k.status, k.spend_limit, k.limit_reset, k.models, k.ip_allow, k.preset_id
