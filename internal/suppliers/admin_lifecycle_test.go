@@ -178,3 +178,36 @@ func TestEndpointQuantization(t *testing.T) {
 	refuses(t, "an endpoint the supplier lacks", err, ErrNoSupplierEndpoint)
 	same(t, "the audit entries", "2", a.text(`SELECT count(*)::text FROM platform.audit_log WHERE action = 'supplier.endpoint.quantization'`))
 }
+
+// TestEndpointEnabled: a person turns an endpoint off and on again, the detail shows the switch, and each change is
+// recorded with what it was; an endpoint the supplier lacks and a removed supplier are refused.
+func TestEndpointEnabled(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	id := a.connect("https://api.example.com", "ops@example.com").ID
+	group := a.group(id, "g", true)
+	endpoint := uuid.NewV7()
+	a.sql(fmt.Sprintf(`INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
+		VALUES ('%s', '%s', '%s', '%s', 'alpha', ARRAY['messages'])`, endpoint, id, group, uuid.NewV7()))
+	set := func(supplier, endpoint uuid.UUID, enabled bool) (Endpoint, error) {
+		return inTx(a, func(ctx context.Context, tx pg.Tx) (Endpoint, error) {
+			return a.admin.SetEndpointEnabled(ctx, tx, a.actor, supplier, endpoint, enabled, "it times out")
+		})
+	}
+	for _, enabled := range []bool{false, true} {
+		got, err := set(id, endpoint, enabled)
+		refuses(t, "switching", err, nil)
+		same(t, "the endpoint", enabled, got.Enabled)
+		detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+		refuses(t, "the detail", err, nil)
+		same(t, "the detail's switch", enabled, detail.Endpoints[0].Enabled)
+	}
+	same(t, "the audit entries", "true>false,false>true", a.text(`SELECT string_agg((detail->>'from') || '>' || (detail->>'to'), ','
+		ORDER BY at, id) FROM platform.audit_log WHERE action = 'supplier.endpoint.enabled' AND reason = 'it times out'`))
+
+	_, err := set(id, uuid.NewV7(), false)
+	refuses(t, "an endpoint the supplier lacks", err, ErrNoSupplierEndpoint)
+	a.sql(fmt.Sprintf(`UPDATE suppliers.suppliers SET status = 'removed' WHERE id = '%s'`, id))
+	_, err = set(id, endpoint, false)
+	refuses(t, "a removed supplier", err, ErrStatusLocked)
+}
