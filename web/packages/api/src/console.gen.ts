@@ -2856,6 +2856,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProviderKey"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -4479,6 +4480,7 @@ export interface operations {
                     "application/json": components["schemas"]["LegalDocuments"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             404: components["responses"]["NotFound"];
             default: components["responses"]["Failure"];
         };
@@ -5046,6 +5048,7 @@ export interface operations {
                     "application/json": components["schemas"]["PublicModelList"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -5077,6 +5080,7 @@ export interface operations {
                     "application/json": components["schemas"]["PublicModelList"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             404: components["responses"]["NotFound"];
             default: components["responses"]["Failure"];
         };

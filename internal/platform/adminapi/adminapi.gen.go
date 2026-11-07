@@ -13649,6 +13649,20 @@ func (response RepairOperationsCapCounters404JSONResponse) VisitRepairOperations
 	return err
 }
 
+type RepairOperationsCapCounters409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RepairOperationsCapCounters409JSONResponse) VisitRepairOperationsCapCountersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RepairOperationsCapCountersdefaultJSONResponse struct {
 	Body       Error
 	StatusCode int
@@ -21500,6 +21514,20 @@ func (response ListLegalDocuments200JSONResponse) VisitListLegalDocumentsRespons
 	return err
 }
 
+type ListLegalDocuments400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListLegalDocuments400JSONResponse) VisitListLegalDocumentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListLegalDocuments401JSONResponse struct{ UnauthenticatedJSONResponse }
 
 func (response ListLegalDocuments401JSONResponse) VisitListLegalDocumentsResponse(w http.ResponseWriter) error {
@@ -24396,6 +24424,20 @@ func (response ListSubscriptionPlans200JSONResponse) VisitListSubscriptionPlansR
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSubscriptionPlans400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListSubscriptionPlans400JSONResponse) VisitListSubscriptionPlansResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
 	_, err := buf.WriteTo(w)
 	return err
 }

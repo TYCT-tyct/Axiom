@@ -130,6 +130,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ProviderKey"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
@@ -1780,6 +1781,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/LegalDocuments"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/legal/accept:
@@ -2352,6 +2354,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PublicModelList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
@@ -2386,6 +2389,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PublicModelList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/payment-methods:
