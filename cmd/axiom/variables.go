@@ -23,6 +23,10 @@ const (
 	operationsAddrVar        = "AXIOM_OPERATIONS_ADDR"
 	operationsSourcesVar     = "AXIOM_OPERATIONS_SOURCES"
 	coreURLVar               = "AXIOM_CORE_URL"
+	mcpAddrVar               = "AXIOM_MCP_ADDR"
+	operationsURLVar         = "AXIOM_OPERATIONS_URL"
+	operationsTokenFileVar   = "AXIOM_OPERATIONS_TOKEN_FILE"
+	mcpTokenFileVar          = "AXIOM_MCP_TOKEN_FILE" // #nosec G101 -- the name of a variable, not a credential
 	nodeTLSDirVar            = "AXIOM_NODE_TLS_DIR"
 	trustedProxiesVar        = "AXIOM_TRUSTED_PROXIES"
 	migrateConnectTimeoutVar = "AXIOM_MIGRATE_CONNECT_TIMEOUT"

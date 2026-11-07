@@ -18,6 +18,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -77,6 +78,17 @@ func TestRoleConfigurationRefusesContradictions(t *testing.T) {
 			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0",
 		}, extra...)
 	}
+	bridge := func(extra ...string) []string {
+		environ := []string{
+			"AXIOM_NODE_ROLES=ops", "AXIOM_MCP_ADDR=127.0.0.1:0", "AXIOM_OPERATIONS_URL=https://core.internal:8084",
+			"AXIOM_OPERATIONS_TOKEN_FILE=/keys/operations-token", "AXIOM_MCP_TOKEN_FILE=/run/mcp/token",
+		}
+		for _, e := range extra { // a later value of the same variable replaces the default here
+			name, _, _ := strings.Cut(e, "=")
+			environ = slices.DeleteFunc(environ, func(d string) bool { return strings.HasPrefix(d, name+"=") })
+		}
+		return append(environ, extra...)
+	}
 	cases := []struct {
 		name    string
 		environ []string
@@ -108,6 +120,13 @@ func TestRoleConfigurationRefusesContradictions(t *testing.T) {
 			"AXIOM_NODE_TLS_DIR="+filepath.Join(t.TempDir(), "absent")), "node.crt: file not found"},
 		{"a node listener without certificates", coreEnviron("AXIOM_NODE_ADDR=127.0.0.1:0",
 			"AXIOM_NODE_TLS_DIR="+filepath.Join(t.TempDir(), "absent")), "node.crt: file not found"},
+		{"an MCP bridge on a core", coreEnviron("AXIOM_MCP_ADDR=127.0.0.1:0"), "AXIOM_MCP_ADDR: unknown variable"},
+		{"an MCP bridge open beyond the machine", bridge("AXIOM_MCP_ADDR=0.0.0.0:8090"), "AXIOM_MCP_ADDR: want a loopback address"},
+		{"an MCP bridge without its credential", []string{"AXIOM_NODE_ROLES=ops", "AXIOM_MCP_ADDR=127.0.0.1:0"}, "AXIOM_OPERATIONS_TOKEN_FILE: required"},
+		{"an MCP bridge without certificates", bridge("AXIOM_NODE_TLS_DIR=" + filepath.Join(t.TempDir(), "absent")), "node.crt: file not found"},
+		{"an operations URL without the bridge", []string{"AXIOM_NODE_ROLES=ops", "AXIOM_OPERATIONS_URL=https://core.internal:8084"}, "AXIOM_OPERATIONS_URL: set without AXIOM_MCP_ADDR"},
+		{"certificates on an ops node without the bridge", []string{"AXIOM_NODE_ROLES=ops", "AXIOM_NODE_TLS_DIR=" + tlsDir}, "AXIOM_NODE_TLS_DIR: not used"},
+		{"an operations URL with a path", bridge("AXIOM_OPERATIONS_URL=https://core.internal:8084/api"), "AXIOM_OPERATIONS_URL: want an https URL"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -35,9 +35,9 @@ const (
 )
 
 // serveWithoutCore runs a node whose roles need no state: an ingress forwards every request to a core over mutual TLS,
-// and an ops node serves its probes while the operations interface is still to be built. Neither touches the database,
-// the key ring or the job queue, so an ingress machine holds no tenant data and its compromise cannot read or write
-// any (docs/architecture.md「部署拓扑」).
+// and an ops node serves its probes and, when configured, the MCP bridge, which forwards the agent's tool calls to a
+// core's operations listener. Neither touches the database, the key ring or the job queue, so such a machine holds no
+// tenant data and its compromise cannot read or write any (docs/architecture.md「部署拓扑」).
 func serveWithoutCore(ctx context.Context, cfg nodeSettings, logger *slog.Logger) error {
 	servers := listeners(cfg)
 	if err := listen(ctx, servers); err != nil {
@@ -58,7 +58,16 @@ func serveWithoutCore(ctx context.Context, cfg nodeSettings, logger *slog.Logger
 	if cfg.roles.has(roleIngress) {
 		transport = ingressTransport(cfg.clientTLS)
 	}
-	nonCoreServers(servers, cfg, transport, &health, requests, logger)
+	var bridge http.Handler
+	if cfg.mcp != nil {
+		startCtx, cancel := context.WithTimeout(ctx, cfg.startupTimeout)
+		bridge, err = startBridge(startCtx, *cfg.mcp, ingressTransport(cfg.mcp.tls), logger)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+	nonCoreServers(servers, cfg, transport, bridge, &health, requests, logger)
 	if transport == nil { // an ops node has nothing to wait for: it is ready as soon as its probes answer
 		health.SetReady(true)
 	}
@@ -79,14 +88,16 @@ func serveWithoutCore(ctx context.Context, cfg nodeSettings, logger *slog.Logger
 }
 
 // nonCoreServers attaches the ingress's or the ops node's handlers to the listeners startup claimed. The public proxy
-// comes first, then the probes, which keep answering while it drains. The public proxy refuses a request that starts
-// during the drain.
-func nonCoreServers(servers []*listening, cfg nodeSettings, transport http.RoundTripper, health *httpserver.Health, requests httpserver.Telemetry, logger *slog.Logger) {
+// comes first, then the MCP bridge, then the probes, which keep answering while the others drain. The public proxy and
+// the bridge refuse a request that starts during the drain.
+func nonCoreServers(servers []*listening, cfg nodeSettings, transport http.RoundTripper, bridge http.Handler, health *httpserver.Health, requests httpserver.Telemetry, logger *slog.Logger) {
 	for _, s := range servers {
 		switch s.variable {
 		case publicAddrVar:
 			s.server = httpserver.New(httpserver.Public(health.Gate(ingressHandler(cfg.coreURL, transport, logger)), logger, bodyTimeout,
 				httpserver.WithTelemetry(requests)), logger)
+		case mcpAddrVar:
+			s.server = httpserver.New(httpserver.Public(health.Gate(bridge), logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger)
 		case probesAddrVar:
 			s.server = health.Server(logger)
 		}
