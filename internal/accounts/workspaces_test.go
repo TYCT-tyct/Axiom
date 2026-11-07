@@ -59,7 +59,9 @@ func (r workspaceRig) list() []accounts.WorkspaceInfo {
 }
 
 // inPlatform runs fn in the platform scope, as the admin API does.
-func (r workspaceRig) inPlatform(fn func(tx pg.Tx) error) error { return r.db.Tx(r.t.Context(), platform, fn) }
+func (r workspaceRig) inPlatform(fn func(tx pg.Tx) error) error {
+	return r.db.Tx(r.t.Context(), platform, fn)
+}
 
 // setLimits sets s1's and a1's own workspace limits, nil for none.
 func (r workspaceRig) setLimits(site, account *int32) error {
@@ -175,9 +177,8 @@ func TestWorkspaceOfKeys(t *testing.T) {
 	}
 }
 
-// TestWorkspaceLimitLevels: the limit is the account's own over the site's over 50; making a workspace meets the limit
-// in force, the site's read from the node's snapshot; lowering it below what the account holds takes none away; every
-// change is audited.
+// TestWorkspaceLimitLevels: the limit is the account's own over the site's over 50, and making a workspace meets the
+// limit in force, the site's read from the node's snapshot.
 func TestWorkspaceLimitLevels(t *testing.T) {
 	t.Parallel()
 	r := newWorkspaceRig(t)
@@ -205,6 +206,18 @@ func TestWorkspaceLimitLevels(t *testing.T) {
 	if _, err := r.create("Third"); err != nil {
 		t.Errorf("the third under the account's 3: %v", err)
 	}
+}
+
+// TestWorkspaceLimitLowered: lowering an account's limit below what it holds takes no workspace away, and each change
+// of a level is audited.
+func TestWorkspaceLimitLowered(t *testing.T) {
+	t.Parallel()
+	r := newWorkspaceRig(t)
+	for _, name := range []string{"Second", "Third"} {
+		if _, err := r.create(name); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := r.setLimits(nil, new(int32(1))); err != nil {
 		t.Fatal(err)
 	}
@@ -217,9 +230,9 @@ func TestWorkspaceLimitLevels(t *testing.T) {
 	}
 	var audited string
 	if err := r.inPlatform(func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT count(*)::text FROM platform.audit_log WHERE action LIKE '%workspace_limit.update'`).Scan(&audited)
-	}); err != nil || audited != "6" {
-		t.Errorf("%s limit changes audited (%v), want 6", audited, err)
+		return tx.QueryRow(t.Context(), `SELECT string_agg(action, ',' ORDER BY id) FROM platform.audit_log WHERE action LIKE '%workspace_limit.update'`).Scan(&audited)
+	}); err != nil || audited != "site_workspace_limit.update,account_workspace_limit.update" {
+		t.Errorf("audited %q (%v), want one change of each level", audited, err)
 	}
 }
 
@@ -229,7 +242,7 @@ func TestWorkspaceLimitRefusals(t *testing.T) {
 	t.Parallel()
 	r := newWorkspaceRig(t)
 	for name, set := range map[string][2]*int32{"a site limit of 0": {new(int32(0)), nil}, "an account limit of 1001": {nil, new(int32(1001))}} {
-		if _, ok := errors.AsType[*accounts.SettingError](r.setLimits(set[0], set[1])); !ok {
+		if refused, ok := errors.AsType[*accounts.SettingError](r.setLimits(set[0], set[1])); !ok || refused.Field != "max_workspaces" {
 			t.Errorf("%s was not refused as a setting", name)
 		}
 	}
