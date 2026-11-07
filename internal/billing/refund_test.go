@@ -263,7 +263,7 @@ func TestFreezeSerializesAdmission(t *testing.T) {
 	if err := <-done; !errors.As(err, new(*Insufficient)) {
 		t.Fatalf("waiting admission = %v, want insufficient", err)
 	}
-	total, refused := b.storm(b.admitted, SourceBalance)
+	total, refused := b.storm(SourceBalance, b.admitted)
 	if total > 200 || len(refused) == 0 {
 		t.Fatalf("concurrent admissions reserved %d with %d refused", total, len(refused))
 	}

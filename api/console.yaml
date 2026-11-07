@@ -604,6 +604,66 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/workspaces/{workspace_id}/budget:
+    parameters:
+      - in: path
+        name: workspace_id
+        required: true
+        description: A workspace of the account; another account's, or a deleted one, is 404.
+        schema: {$ref: "#/components/schemas/WorkspaceId"}
+    get:
+      operationId: getWorkspaceBudget
+      tags: [Keys]
+      summary: A workspace's budget and what its keys have used of it
+      description: >-
+        The most the workspace's keys may spend together in a window, and what they have used in the current one,
+        counted as admission counts it. A workspace without a budget answers an empty object. A node that predates
+        workspace budgets answers 404, and a page shows the budget as unavailable.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The workspace's budget
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceBudget"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setWorkspaceBudget
+      tags: [Keys]
+      summary: Set or remove a workspace's budget
+      description: >-
+        Replaces the workspace's budget: without `limit` it has none. The next call of each of its keys, on every node,
+        is checked against it; calls already admitted finish and are charged even past it. A budget below what the
+        window has used refuses the next call with 403 and `limit_source` `openrouter_workspace_budget`. The default
+        workspace and disabled ones take a budget too.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: workspaces.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WorkspaceBudgetSettings"}
+      responses:
+        "200":
+          description: The workspace's budget as set
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceBudget"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/workspaces/{workspace_id}/routing-default:
     parameters:
       - in: path
@@ -3735,6 +3795,36 @@ components:
       properties:
         name: {type: string, minLength: 1, maxLength: 100, description: "Unique among the account's live workspaces, ignoring case."}
         disabled: {type: boolean}
+    WorkspaceBudget:
+      type: object
+      description: >-
+        A workspace's budget, which all its keys share, and the current window's use of it. Every field is absent for
+        a workspace without a budget.
+      properties:
+        limit: {$ref: "#/components/schemas/Money"}
+        limit_reset: {$ref: "#/components/schemas/LimitReset"}
+        used:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: >-
+            What the workspace's keys were charged in the current window, and what calls in flight hold: the figure
+            admission compares with `limit`. It can pass `limit` when calls already admitted are charged.
+        limit_remaining:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: "`limit` less `used`, not below zero."
+        resets_at:
+          type: string
+          format: date-time
+          description: When the current window ends and `used` starts again, in UTC; absent for a budget that never resets.
+    WorkspaceBudgetSettings:
+      type: object
+      properties:
+        limit:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: >-
+            In the site's currency and not negative; 0 lets no call through. Absent removes the budget.
+        limit_reset:
+          allOf: [{$ref: "#/components/schemas/LimitReset"}]
+          description: "When `used` starts again; absent never. It needs a `limit`."
     CallId:
       type: string
       pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'

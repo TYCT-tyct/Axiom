@@ -259,6 +259,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/workspaces/{workspace_id}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A workspace of the account; another account's, or a deleted one, is 404. */
+                workspace_id: components["schemas"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A workspace's budget and what its keys have used of it
+         * @description The most the workspace's keys may spend together in a window, and what they have used in the current one, counted as admission counts it. A workspace without a budget answers an empty object. A node that predates workspace budgets answers 404, and a page shows the budget as unavailable.
+         */
+        get: operations["getWorkspaceBudget"];
+        /**
+         * Set or remove a workspace's budget
+         * @description Replaces the workspace's budget: without `limit` it has none. The next call of each of its keys, on every node, is checked against it; calls already admitted finish and are charged even past it. A budget below what the window has used refuses the next call with 403 and `limit_source` `openrouter_workspace_budget`. The default workspace and disabled ones take a budget too.
+         */
+        put: operations["setWorkspaceBudget"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/workspaces/{workspace_id}/routing-default": {
         parameters: {
             query?: never;
@@ -2106,6 +2133,26 @@ export interface components {
             name: string;
             disabled: boolean;
         };
+        /** @description A workspace's budget, which all its keys share, and the current window's use of it. Every field is absent for a workspace without a budget. */
+        WorkspaceBudget: {
+            limit?: components["schemas"]["Money"];
+            limit_reset?: components["schemas"]["LimitReset"];
+            /** @description What the workspace's keys were charged in the current window, and what calls in flight hold: the figure admission compares with `limit`. It can pass `limit` when calls already admitted are charged. */
+            used?: components["schemas"]["Money"];
+            /** @description `limit` less `used`, not below zero. */
+            limit_remaining?: components["schemas"]["Money"];
+            /**
+             * Format: date-time
+             * @description When the current window ends and `used` starts again, in UTC; absent for a budget that never resets.
+             */
+            resets_at?: string;
+        };
+        WorkspaceBudgetSettings: {
+            /** @description In the site's currency and not negative; 0 lets no call through. Absent removes the budget. */
+            limit?: components["schemas"]["Money"];
+            /** @description When `used` starts again; absent never. It needs a `limit`. */
+            limit_reset?: components["schemas"]["LimitReset"];
+        };
         /** @description A call's ID, which is the request ID that every response of a model call carries as `X-Request-ID`. */
         CallId: string;
         Site: {
@@ -3297,6 +3344,66 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getWorkspaceBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A workspace of the account; another account's, or a deleted one, is 404. */
+                workspace_id: components["schemas"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workspace's budget */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceBudget"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setWorkspaceBudget: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A workspace of the account; another account's, or a deleted one, is 404. */
+                workspace_id: components["schemas"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceBudgetSettings"];
+            };
+        };
+        responses: {
+            /** @description The workspace's budget as set */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceBudget"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             default: components["responses"]["Failure"];
         };
     };

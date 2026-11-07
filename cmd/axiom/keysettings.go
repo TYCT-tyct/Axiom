@@ -55,7 +55,7 @@ func updateInput(b *consoleapi.KeySettings) keyInput {
 // network is taken as its masked form, the table's cidr type allows no host bits), and an expiry after now, in UTC.
 func (in keyInput) settings(currency platform.Currency, now time.Time) (accounts.KeySettings, *time.Time, error) {
 	var p problems
-	s := accounts.KeySettings{Name: in.name, Disabled: in.disabled, SpendLimit: spendLimit(in.limit, currency, &p), Preset: (*uuid.UUID)(in.preset)}
+	s := accounts.KeySettings{Name: in.name, Disabled: in.disabled, SpendLimit: spendLimit(in.limit, currency, "/spend_limit", &p), Preset: (*uuid.UUID)(in.preset)}
 	var expires *time.Time
 	if in.expires != nil {
 		if !in.expires.After(now) {
@@ -84,18 +84,19 @@ func (in keyInput) settings(currency platform.Currency, now time.Time) (accounts
 	return s, expires, p.err()
 }
 
-// spendLimit is the limit's amount in billionths, when it is money of the site's currency and not negative.
-func spendLimit(m *consoleapi.Money, currency platform.Currency, p *problems) *int64 {
+// spendLimit is the amount in billionths of the limit at pointer, a key's spend limit or a workspace's budget, when it
+// is money of the site's currency and not negative.
+func spendLimit(m *consoleapi.Money, currency platform.Currency, pointer string, p *problems) *int64 {
 	if m == nil {
 		return nil
 	}
 	if m.Currency != currency.String() {
-		p.add("/spend_limit/currency", "the site's currency is "+currency.String())
+		p.add(pointer+"/currency", "the site's currency is "+currency.String())
 		return nil
 	}
 	n, err := strconv.ParseInt(m.Amount, 10, 64)
 	if err != nil || n < 0 {
-		p.add("/spend_limit/amount", "must be a whole number of billionths, not negative, that fits in 63 bits")
+		p.add(pointer+"/amount", "must be a whole number of billionths, not negative, that fits in 63 bits")
 		return nil
 	}
 	return &n
