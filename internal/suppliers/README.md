@@ -370,6 +370,7 @@ func RegisterReconcile(ReconcileJobConfig) error                            // �
 | `TopUpBasis` | 只读：运营 agent 提议给这家供应商充值时，服务端算金额用的事实——归属（平台、站点或账户自带的 key）、状态、原生单位、结算币种和现行的单位价值（ID 与值，没确认过是空）；不加锁，充值提案不改供应商，串行由运营的上限计数器负责（见 [operations 的「资金上限」](../operations/README.md#资金上限)） | `ErrNoSupplier` |
 | `PendingMappings` | 还没有模型的上游名字，最早出现的在前（`first_seen_at`），被别名盖住的不出现，键集分页 | |
 | `SetEndpointQuantization` | 记录或清除一个端点的量化级别（OpenRouter 的 12 个级别之一，null 清除）；只改这一列并记审计 `supplier.endpoint.quantization`，同步不写它，不改配置代次 | `ErrNoSupplierEndpoint`（不是这家供应商的端点也算没有） |
+| `SetEndpointEnabled` | 启用或停用一个端点：只改 `enabled` 并记审计 `supplier.endpoint.enabled`（`from`、`to`，没变也记）；同步不写它，所以停用的端点一直停着，直到有人启用；不改配置代次，各节点下一次 `Reload` 按它路由（`ListRoutable` 只取启用的）。管理员经 `setSupplierEndpointEnabled`、运营 agent 经 `endpoint_set_enabled` 调用 | `ErrNoSupplierEndpoint`、`ErrStatusLocked`（供应商移除中、已移除） |
 
 处理器的 `Idempotency-Key` 指纹里没有登录的值，只有给了哪几个成员：指纹存在库里，带值会让它成为猜密码的依据；代价是同一个键换一个密钥重发得到第一次的结果，所以页面每次尝试用新键。
 

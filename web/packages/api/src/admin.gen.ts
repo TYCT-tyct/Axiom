@@ -1853,6 +1853,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn an endpoint on or off for routing
+         * @description A person's switch, which the operations agent also holds (`endpoint_set_enabled`): the supplier sync never writes it, so an endpoint turned off stays off until someone turns it on. Only an enabled endpoint whose cost is `known` is routed to. Every node applies the change on its next reload.
+         */
+        put: operations["setSupplierEndpointEnabled"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/suppliers/{supplier_id}/status": {
         parameters: {
             query?: never;
@@ -4856,6 +4876,11 @@ export interface components {
              * @enum {string|null}
              */
             quantization: "int4" | "int8" | "fp4" | "mxfp4" | "nvfp4" | "fp6" | "fp8" | "mxfp8" | "fp16" | "bf16" | "fp32" | "unknown" | null;
+            reason: components["schemas"]["Reason"];
+        };
+        EndpointEnabledUpdate: {
+            /** @description Whether the endpoint may be routed to. */
+            enabled: boolean;
             reason: components["schemas"]["Reason"];
         };
         SupplierDetail: {
@@ -9119,6 +9144,44 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["EndpointQuantizationUpdate"];
+            };
+        };
+        responses: {
+            /** @description The endpoint as changed. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierEndpoint"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSupplierEndpointEnabled: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                endpoint_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EndpointEnabledUpdate"];
             };
         };
         responses: {

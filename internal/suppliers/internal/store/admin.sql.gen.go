@@ -882,6 +882,23 @@ func (q *Queries) SetCredentialLimits(ctx context.Context, db DBTX, arg SetCrede
 	return result.RowsAffected(), nil
 }
 
+const setEndpointEnabled = `-- name: SetEndpointEnabled :exec
+UPDATE suppliers.endpoints SET enabled = $1
+WHERE supplier_id = $2 AND id = $3
+`
+
+type SetEndpointEnabledParams struct {
+	Enabled    bool
+	SupplierID uuid.UUID
+	ID         uuid.UUID
+}
+
+// A person's or the agent's switch: the sync never writes it, so an endpoint turned off stays off across syncs.
+func (q *Queries) SetEndpointEnabled(ctx context.Context, db DBTX, arg SetEndpointEnabledParams) error {
+	_, err := db.Exec(ctx, setEndpointEnabled, arg.Enabled, arg.SupplierID, arg.ID)
+	return err
+}
+
 const setEndpointQuantization = `-- name: SetEndpointQuantization :exec
 UPDATE suppliers.endpoints SET quantization = $1
 WHERE supplier_id = $2 AND id = $3

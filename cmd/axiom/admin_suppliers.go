@@ -330,13 +330,9 @@ func (a adminAPI) SetSupplierStatus(ctx context.Context, request adminapi.SetSup
 
 // SetSupplierEndpointQuantization records the precision an endpoint serves at, or clears it.
 func (a adminAPI) SetSupplierEndpointQuantization(ctx context.Context, request adminapi.SetSupplierEndpointQuantizationRequestObject) (adminapi.SetSupplierEndpointQuantizationResponseObject, error) {
-	supplier, err := supplierIDOf(request.SupplierId)
+	supplier, endpoint, err := endpointIDsOf(request.SupplierId, request.EndpointId)
 	if err != nil {
 		return nil, err
-	}
-	endpoint, err := supplierIDOf(request.EndpointId)
-	if err != nil {
-		return nil, suppliers.ErrNoSupplierEndpoint
 	}
 	var level *suppliers.Quantization
 	if request.Body.Quantization != nil {

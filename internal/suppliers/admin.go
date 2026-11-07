@@ -312,17 +312,10 @@ func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid
 func (a *Admin) SetEndpointQuantization(ctx context.Context, tx pg.Tx, actor audit.Actor, supplierID, endpointID uuid.UUID,
 	level *Quantization, reason string,
 ) (Endpoint, error) {
-	if _, err := a.locked(ctx, tx, supplierID); err != nil {
+	e, err := a.lockedEndpoint(ctx, tx, supplierID, endpointID)
+	if err != nil {
 		return Endpoint{}, err
 	}
-	rows, err := store.New().GetEndpointOf(ctx, tx, store.GetEndpointOfParams{SupplierID: supplierID, ID: endpointID})
-	if err != nil {
-		return Endpoint{}, fmt.Errorf("read the endpoint: %w", err)
-	}
-	if len(rows) == 0 {
-		return Endpoint{}, ErrNoSupplierEndpoint
-	}
-	e := rows[0]
 	var stored *string
 	if level != nil {
 		value := string(*level)
@@ -349,4 +342,47 @@ func (a *Admin) SetEndpointQuantization(ctx context.Context, tx pg.Tx, actor aud
 		ID: e.ID, Group: e.SupplierGroupID, Model: e.ModelID, UpstreamName: e.UpstreamName, Formats: e.Formats,
 		CostState: e.CostState, Enabled: e.Enabled, Quantization: to,
 	}, nil
+}
+
+// SetEndpointEnabled turns an endpoint on or off for routing. It is a person's or the agent's switch: the sync never
+// writes it, so an endpoint turned off stays off until someone turns it on. Every node routes by it from its next
+// Reload; an endpoint whose cost is not known stays out of routing either way.
+func (a *Admin) SetEndpointEnabled(ctx context.Context, tx pg.Tx, actor audit.Actor, supplierID, endpointID uuid.UUID,
+	enabled bool, reason string,
+) (Endpoint, error) {
+	e, err := a.lockedEndpoint(ctx, tx, supplierID, endpointID)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	if err := store.New().SetEndpointEnabled(ctx, tx, store.SetEndpointEnabledParams{
+		SupplierID: supplierID, ID: endpointID, Enabled: enabled,
+	}); err != nil {
+		return Endpoint{}, fmt.Errorf("switch the endpoint: %w", err)
+	}
+	if err := audit.Record(ctx, tx, audit.Event{
+		Actor: actor, Action: "supplier.endpoint.enabled", Reason: reason,
+		Target: audit.Target{Module: "suppliers", Kind: "endpoint", ID: endpointID.String()},
+		Detail: map[string]any{"supplier": supplierID.String(), "from": e.Enabled, "to": enabled},
+	}); err != nil {
+		return Endpoint{}, err
+	}
+	return Endpoint{
+		ID: e.ID, Group: e.SupplierGroupID, Model: e.ModelID, UpstreamName: e.UpstreamName, Formats: e.Formats,
+		CostState: e.CostState, Enabled: enabled, Quantization: derefQuantization(e.Quantization),
+	}, nil
+}
+
+// lockedEndpoint is an endpoint of the supplier, whose row is locked for a change as locked locks it.
+func (a *Admin) lockedEndpoint(ctx context.Context, tx pg.Tx, supplierID, endpointID uuid.UUID) (store.GetEndpointOfRow, error) {
+	if _, err := a.locked(ctx, tx, supplierID); err != nil {
+		return store.GetEndpointOfRow{}, err
+	}
+	rows, err := store.New().GetEndpointOf(ctx, tx, store.GetEndpointOfParams{SupplierID: supplierID, ID: endpointID})
+	if err != nil {
+		return store.GetEndpointOfRow{}, fmt.Errorf("read the endpoint: %w", err)
+	}
+	if len(rows) == 0 {
+		return store.GetEndpointOfRow{}, ErrNoSupplierEndpoint
+	}
+	return rows[0], nil
 }
