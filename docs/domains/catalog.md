@@ -134,6 +134,7 @@
 | OpenRouter 保留为可选来源，不因条款自动停用 | 负责人决定（Issue #24），条款第 7 条的风险已记录；是否选用由每个模型的设置决定 |
 | 数据集取数失败记入持久化状态，等待下一日轮次 | 负责人在 #365 评审后的修复指令中选择：不让一次短暂故障经短退避变成队列丢弃告警；运维按状态 gauge 的后台阈值判断，节点保留代码默认 overdue 兜底。实现与指标语义见[目录模块](../../internal/catalog/README.md#参考价的录入) |
 | 官方价格页靠页面监测、审核录入，不写解析器 | 页面是渲染后的文档，版式一改解析器就静默出错，变化时仍要审核；只靠人工录入，改价没人发现。监测按登记间隔检查改价，每个价格都能追到页面原文 |
+| 官方价格页的定时抓取按厂商条款逐家放行，条款不明的不启用、价格人工更新 | 2026-11-07 逐条读过四家条文和 robots（见上表）：只有 Google 的限制明确限于违反 robots；OpenAI、Anthropic、DeepSeek 的禁止自动提取或抓取条文是否覆盖公开价格页读不出，属法律解释，待负责人决定。不选“全部启用”：条款风险由负责人承担；不选“全部不启用”：Google 的条文明示 robots 是边界，一刀切会放弃可用的改价发现。这不改变抓取器行为，只决定登记哪些页面 |
 | 同源请求登记间隔限制为 1–60 秒，robots 间隔按本次结果预约，不累积为站点设置 | 两次 GET 在 4 分钟预算与 5 分钟租约内留有余量；超过 60 秒的 Crawl-delay 明确拒绝并留下退避。延长租约会让失联节点长期占页，当前不采用；新登记可调整同源设置，已预约的 robots/Retry-After 等待仍保留 |
 | 核对按整张价目表比较，只用本轮取数成功的数据 | 逐字段投票会拼出没人发布过的价目表；过期的数据不能冒充当前证据 |
 | 每个模型每个币种一条参考价的历史 | 中国厂商同时发布人民币和美元价，两者不是汇率关系；只存美元就得自己换算，官方页面的价格就不再是原价 |
@@ -154,14 +155,16 @@
 
 风险与检查：网络期限、重定向、大小限制与 robots 拒绝由假 HTTP 服务验证；内容归一化与缺标记测试防止把导航变化或空抽取当作改价；真实 PostgreSQL 验证租约代次、事务回滚、快照复用、审核去重、平台范围和证据锁；调度启动与取消由队列集成测试验证。完整四家目录验收仍依赖已有真实目录数据，不能用空目录或自填价格冒充通过。
 
-2026-10-29 的条款取证（只记录依据和选择，不作法律许可结论）：
+2026-11-07 的条款取证（只读条文与 robots.txt，不作法律意见；"读取日"是取得该页面文本的日期，取自读取工具的获取时间）。对象是每小时一次、只取登记的公开价格页、遵守 robots.txt、固定 UA、不登录的抓取（见上文「取数」）：
 
-| 厂商 | 官方依据 | 本次选择 |
-|---|---|---|
-| OpenAI | [Terms of Use](https://openai.com/policies/row-terms-of-use/) 的 Using our Services 禁止自动提取，API/商业条款另行适用 | 保守排除价格页自动 GET，交负责人审阅公共文档的适用范围 |
-| Anthropic | [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) §3 限制 scraping 与非人工访问，API key 等另有例外 | 保守排除价格页自动 GET，交负责人审阅公共文档的适用范围 |
-| Google | [Google Terms](https://policies.google.com/terms) 禁止违反机器可读限制的自动访问；[Gemini 附加条款](https://ai.google.dev/gemini-api/terms) | 未见公开价格文档的绝对自动访问禁令；本次只读低频 GET、逐次检查 robots，不当作每小时读取的法律许可 |
-| DeepSeek | [Terms of Use](https://cdn.deepseek.com/policies/en-US/deepseek-terms-of-use.html) §3.5(3) 限制用 robots 等复制服务内容 | 保守排除两个币种的价格页自动 GET，公共文档的适用范围交负责人审阅；首次诊断读取先于该条款的完整识别，不计为准入通过 |
+| 厂商 | 条文（原文，读取日） | robots.txt（读取日 2026-11-07） | 结论 | 抓取器怎么办 |
+|---|---|---|---|---|
+| OpenAI | [Terms of Use](https://openai.com/policies/row-terms-of-use/)「Using our Services」，读取日 2026-10-22：“Automatically or programmatically extract data or Output”（列在不得做的事里）；价格页本身无单独的网站条款 | `openai.com/robots.txt`：`User-agent: *` `Allow: /` `Disallow: /microsoft-for-startups/`；`/api/pricing/` 允许 | 待定，需负责人决定：robots 允许，但条款禁止“自动提取数据”，读不出它是否只指服务内的数据；2026-10-31 的实读还被 403 拦截（见下） | 不启用；价格人工更新，负责人决定前不登记该页 |
+| Anthropic | [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) §3，读取日 2026-11-07：禁止“crawl, scrape, or otherwise harvest data or information from our Services other than as permitted”，以及除通过 Anthropic API key 或明确许可外“access the Services through automated or non-human means, whether through a bot, script, or otherwise”（读到的是该页韩文版，英文措辞据其对应条目转述，英文原文待核）；[Commercial Terms](https://www.anthropic.com/legal/commercial-terms)（读取日 2026-11-06）未见对公开文档页的抓取条款；未找到专门覆盖 `platform.claude.com` 文档站的网站条款 | `platform.claude.com/robots.txt`：`User-Agent: *` `Disallow: /api/`；`/docs/en/about-claude/pricing` 允许 | 待定，需负责人决定：robots 允许；消费者条款的适用范围（是否含公开文档页）读不出，商业条款没有对应禁令 | 不启用；价格人工更新 |
+| Google（Gemini API） | [Google Terms](https://policies.google.com/terms)「Don't abuse our services」，读取日 2026-11-07：“using automated means to access content from any of our services in violation of the machine-readable instructions on our web pages (for example, robots.txt files that disallow crawling, training, or other activities)”；[Gemini API Additional Terms](https://ai.google.dev/gemini-api/terms)（读取日 2026-11-02）的抓取限制只针对 Grounding 与 Maps 数据，不涉及文档页；文档内容按 [Site Policies](https://developers.google.com/site-policies)（读取日 2026-10-14）以 CC BY 4.0 授权 | `ai.google.dev/robots.txt`：`User-agent: *` `Disallow: /*?*authuser=`；`/gemini-api/docs/pricing` 允许 | 有条件允许：只禁违反 robots 的自动访问，价格页未被禁止。条件：每次先读 robots 并照做；不带 `authuser` 参数；固定 UA；间隔不早于 robots 许可；robots 变得禁止时停取 | 条件已由抓取器的不变量满足；仍按「人工确认后才登记」由负责人登记 |
+| DeepSeek | [Terms of Use](https://cdn.deepseek.com/policies/en-US/deepseek-terms-of-use.html) §3.5(3)，读取日 2026-11-06：“Engage in activities to steal network data, such as: … capturing, copying any content of the Services, including but not limited to using any robots, spiders, or other automatic setups, setting mirrors.” | `www.deepseek.com/robots.txt`：`Allow: /`；`api-docs.deepseek.com/robots.txt` 返回的是文档首页 HTML，没有任何指令（读取日 2026-10-28） | 待定，需负责人决定：条文字面上禁止用 robots、spiders 等自动方式“复制服务内容”，但它列在“窃取网络数据”之下，读不出是否含公开价格文档；站点本身没有 robots 指令 | 不启用；价格人工更新 |
+
+四家都没有明文允许每小时抓价格页；Google 是唯一条文把限制写成“违反 robots”的，其余三家的字面禁令是否覆盖公开价格页，只有负责人能定，不在这里替他定。负责人未决定前抓取器只做诊断读取，不定时抓取，价格走人工录入；决定后在 `deploy/catalog/price-pages.json` 登记，抓取器不需要改。2026-10-31 的 OpenAI 403 说明它也可能在技术上拒绝抓取，被拦时按既有规则保留旧快照并告警，不换 UA 绕过。
 
 清单在 `deploy/catalog/price-pages.json`，只是 live 验收输入，不自动启用；页面 GET 的结果、hash、失败与重试原因留在本文的 2026-10-31 运行一节和 PR。完整四家逐模型验收仍须真实目录数据，检验上架、名字、每币种当前价与来源、分档、证据和未处理核对；没有真实目录连接时如实报告未验证。
 
