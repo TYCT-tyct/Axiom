@@ -497,8 +497,9 @@ WHERE account_id = $1 AND deleted_at IS NULL AND id < $2
       AND (expires_at IS NULL OR expires_at > statement_timestamp())))
   AND ($6::timestamptz IS NULL OR created_at >= $6::timestamptz)
   AND ($7::timestamptz IS NULL OR created_at < $7::timestamptz)
+  AND ($8::uuid IS NULL OR workspace_id = $8::uuid)
 ORDER BY id DESC
-LIMIT $8
+LIMIT $9
 `
 
 type ListKeysParams struct {
@@ -509,6 +510,7 @@ type ListKeysParams struct {
 	Status        *string
 	CreatedAfter  *time.Time
 	CreatedBefore *time.Time
+	Workspace     *uuid.UUID
 	PageSize      int32
 }
 
@@ -544,6 +546,7 @@ func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]
 		arg.Status,
 		arg.CreatedAfter,
 		arg.CreatedBefore,
+		arg.Workspace,
 		arg.PageSize,
 	)
 	if err != nil {
@@ -581,51 +584,23 @@ func (q *Queries) ListKeys(ctx context.Context, db DBTX, arg ListKeysParams) ([]
 	return items, nil
 }
 
-const liveWorkspace = `-- name: LiveWorkspace :many
-SELECT id FROM accounts.workspaces WHERE account_id = $1 AND id = $2 AND deleted_at IS NULL
-`
-
-type LiveWorkspaceParams struct {
-	AccountID uuid.UUID
-	ID        uuid.UUID
-}
-
-func (q *Queries) LiveWorkspace(ctx context.Context, db DBTX, arg LiveWorkspaceParams) ([]uuid.UUID, error) {
-	rows, err := db.Query(ctx, liveWorkspace, arg.AccountID, arg.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const lockAccount = `-- name: LockAccount :one
-SELECT max_keys, key_creations_per_hour FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
+SELECT max_keys, key_creations_per_hour, max_workspaces FROM accounts.accounts WHERE id = $1 FOR NO KEY UPDATE
 `
 
 type LockAccountRow struct {
 	MaxKeys             *int32
 	KeyCreationsPerHour *int32
+	MaxWorkspaces       *int32
 }
 
 // Takes the account's turn before a key is made for it, so two keys made at once are made one after the other and the
 // second one's count sees the first: a count read before the insert without this lock would let both through. The
-// account's own limits come with it.
+// account's own limits come with it. Making a workspace takes the same turn.
 func (q *Queries) LockAccount(ctx context.Context, db DBTX, id uuid.UUID) (LockAccountRow, error) {
 	row := db.QueryRow(ctx, lockAccount, id)
 	var i LockAccountRow
-	err := row.Scan(&i.MaxKeys, &i.KeyCreationsPerHour)
+	err := row.Scan(&i.MaxKeys, &i.KeyCreationsPerHour, &i.MaxWorkspaces)
 	return i, err
 }
 

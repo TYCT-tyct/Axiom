@@ -140,7 +140,7 @@ func TestRegisterSignInAndUse(t *testing.T) {
 	workspace := texts(t, x.db, platform, "SELECT id::text FROM accounts.workspaces WHERE account_id = '"+uuid.UUID(p.AccountID()).String()+"'")[0]
 	if err := x.db.Tx(t.Context(), scope, func(tx pg.Tx) error {
 		_, err := x.s.CreateKey(t.Context(), tx, system, accounts.KeyRequest{
-			Site: accounts.SiteID(s1), Account: p.AccountID(), Workspace: accounts.WorkspaceID(uuid.MustParse(workspace)),
+			Site: accounts.SiteID(s1), Account: p.AccountID(), Workspace: new(accounts.WorkspaceID(uuid.MustParse(workspace))),
 			CreatedBy: p.UserID(), Name: "Mine",
 		})
 		return err

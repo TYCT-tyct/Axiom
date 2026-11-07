@@ -35,6 +35,3 @@ ORDER BY k.created_at DESC, k.id DESC LIMIT 100 OFFSET @page_offset::bigint;
 -- name: LockKeyKind :one
 -- Lock first, then validate in a new statement: a lock wait must not preserve the pre-wait authorization snapshot.
 SELECT id FROM accounts.api_keys WHERE id = @id AND kind = @kind AND deleted_at IS NULL FOR UPDATE;
-
--- name: ManagedWorkspace :one
-SELECT id FROM accounts.workspaces WHERE id = @id AND status = 'active' AND deleted_at IS NULL;

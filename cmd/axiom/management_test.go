@@ -301,6 +301,10 @@ func TestManagementAPIUnlimitedAndPageFilters(t *testing.T) {
 	f.run(`INSERT INTO accounts.workspaces(id,site_id,account_id,name,status,is_default)
         SELECT '` + workspace.String() + `',site_id,account_id,'other','active',false FROM accounts.workspaces WHERE is_default`)
 	readManaged(t, f.managementRequest(http.MethodPost, "", `{"name":"other workspace","workspace_id":"`+workspace.String()+`"}`, manager.Secret), http.StatusCreated)
+	// The zero ID names no workspace: it is not taken for the default one, which an omitted workspace_id means.
+	if rec := f.managementRequest(http.MethodPost, "", `{"name":"zero","workspace_id":"`+uuid.UUID{}.String()+`"}`, manager.Secret); rec.Code != http.StatusNotFound {
+		t.Fatalf("the zero workspace: %d %s", rec.Code, rec.Body)
+	}
 	var list struct {
 		Data []managedData `json:"data"`
 	}

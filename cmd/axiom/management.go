@@ -183,13 +183,13 @@ func createManagedKey(r *http.Request, m accounts.KeyManager, tx pg.Tx, input ma
 	if input.Creator != nil && *input.Creator != uuid.UUID(ceiling.CreatedBy).String() {
 		return nil, 0, accounts.ErrForbidden
 	}
-	var workspace accounts.WorkspaceID
+	var workspace *accounts.WorkspaceID // nil: the default workspace
 	if input.Workspace != nil {
 		id, err := uuid.Parse(*input.Workspace)
 		if err != nil {
 			return nil, 0, errManagementInput
 		}
-		workspace = accounts.WorkspaceID(id)
+		workspace = (*accounts.WorkspaceID)(&id)
 	}
 	created, err := m.Create(r.Context(), workspace, expires, settings)
 	if err != nil {

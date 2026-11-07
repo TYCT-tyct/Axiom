@@ -107,6 +107,7 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 	var account accounts.AccountDetail
 	var balance billing.BalanceView
 	var limits adminapi.KeyLimitsView
+	var workspaces accounts.WorkspaceLimit
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
 		if account, err = a.accounts.Account(ctx, tx, id); err != nil {
 			return err
@@ -116,6 +117,9 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 			return err
 		}
 		limits = keyLimitsBody(own, effective)
+		if workspaces, err = a.accounts.AccountWorkspaceLimit(ctx, tx, id); err != nil {
+			return err
+		}
 		balance, err = a.readBalance(ctx, tx, id)
 		return err
 	}); err != nil {
@@ -129,7 +133,7 @@ func (a adminAPI) GetAccount(ctx context.Context, request adminapi.GetAccountReq
 		Id: account.ID.TypeID(), SiteId: account.Site.TypeID(), Name: account.Name, Kind: adminapi.AccountDetailKind(account.Kind),
 		Status: adminapi.AccountDetailStatus(account.Status), Tier: tierRef(account.Tier), Balance: balanceBody(balance, currency),
 		CallsSuspended: new(account.Status == "disabled"), SignInDisabled: new(account.Owner.SignInDisabled),
-		KeyLimits: limits, CreatedAt: account.CreatedAt,
+		KeyLimits: limits, WorkspaceLimit: new(workspaceLimitBody(workspaces)), CreatedAt: account.CreatedAt,
 	}
 	body.Owner.Id, body.Owner.Email = account.Owner.ID.TypeID(), account.Owner.Email
 	return adminapi.GetAccount200JSONResponse(body), nil

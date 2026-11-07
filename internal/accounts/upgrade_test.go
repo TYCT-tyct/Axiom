@@ -44,7 +44,7 @@ func TestUpgradeRegistersExistingTenants(t *testing.T) {
 	scope := pg.NewScope(false, nil, []uuid.UUID{a1})
 	if err := db.Tx(t.Context(), scope, func(tx pg.Tx) error {
 		created, err := s.CreateKey(t.Context(), tx, system, accounts.KeyRequest{
-			Site: accounts.SiteID(s1), Account: accounts.AccountID(a1), Workspace: accounts.WorkspaceID(w1),
+			Site: accounts.SiteID(s1), Account: accounts.AccountID(a1), Workspace: new(accounts.WorkspaceID(w1)),
 			CreatedBy: accounts.UserID(u1), Name: "After the upgrade",
 		})
 		if err != nil {

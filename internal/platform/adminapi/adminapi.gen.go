@@ -49,6 +49,9 @@ type ServerInterface interface {
 	// SetAccountTier Move an account to another tier
 	// (PUT /api/admin/v1/accounts/{account_id}/tier)
 	SetAccountTier(w http.ResponseWriter, r *http.Request, accountId AccountId, params SetAccountTierParams)
+	// UpdateAccountWorkspaceLimit Set an account's own limit on its workspaces
+	// (PUT /api/admin/v1/accounts/{account_id}/workspace-limit)
+	UpdateAccountWorkspaceLimit(w http.ResponseWriter, r *http.Request, accountId AccountId, params UpdateAccountWorkspaceLimitParams)
 	// RotateAlertWebhookSecret Set or rotate a webhook signing secret
 	// (PUT /api/admin/v1/alerts/channels/{channel_id}/secret)
 	RotateAlertWebhookSecret(w http.ResponseWriter, r *http.Request, channelId string, params RotateAlertWebhookSecretParams)
@@ -445,6 +448,12 @@ type ServerInterface interface {
 	// SetPaymentSettings Collection switch, accepted credit range and top-up buffer.
 	// (PUT /api/admin/v1/sites/{site_id}/system-settings/payments)
 	SetPaymentSettings(w http.ResponseWriter, r *http.Request, siteId SiteId, params SetPaymentSettingsParams)
+	// GetSiteWorkspaceLimit A site's limit on the workspaces of an account
+	// (GET /api/admin/v1/sites/{site_id}/workspace-limit)
+	GetSiteWorkspaceLimit(w http.ResponseWriter, r *http.Request, siteId SiteId)
+	// UpdateSiteWorkspaceLimit Set a site's limit on the workspaces of an account
+	// (PUT /api/admin/v1/sites/{site_id}/workspace-limit)
+	UpdateSiteWorkspaceLimit(w http.ResponseWriter, r *http.Request, siteId SiteId, params UpdateSiteWorkspaceLimitParams)
 	// ListSourceClasses The source classes in recognition order and their fingerprint rules.
 	// (GET /api/admin/v1/source-classes)
 	ListSourceClasses(w http.ResponseWriter, r *http.Request)
@@ -979,6 +988,60 @@ func (siw *ServerInterfaceWrapper) SetAccountTier(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SetAccountTier(w, r, accountId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateAccountWorkspaceLimit operation middleware
+func (siw *ServerInterfaceWrapper) UpdateAccountWorkspaceLimit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "account_id" -------------
+	var accountId AccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "account_id", r.PathValue("account_id"), &accountId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "account_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateAccountWorkspaceLimitParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateAccountWorkspaceLimit(w, r, accountId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -6762,6 +6825,86 @@ func (siw *ServerInterfaceWrapper) SetPaymentSettings(w http.ResponseWriter, r *
 	handler.ServeHTTP(w, r)
 }
 
+// GetSiteWorkspaceLimit operation middleware
+func (siw *ServerInterfaceWrapper) GetSiteWorkspaceLimit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "site_id" -------------
+	var siteId SiteId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "site_id", r.PathValue("site_id"), &siteId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSiteWorkspaceLimit(w, r, siteId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateSiteWorkspaceLimit operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSiteWorkspaceLimit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "site_id" -------------
+	var siteId SiteId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "site_id", r.PathValue("site_id"), &siteId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateSiteWorkspaceLimitParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateSiteWorkspaceLimit(w, r, siteId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListSourceClasses operation middleware
 func (siw *ServerInterfaceWrapper) ListSourceClasses(w http.ResponseWriter, r *http.Request) {
 
@@ -8304,6 +8447,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/sign-in/providers/{provider}/delete", wrapper.DeleteSiteOAuthProvider)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/key-limits", wrapper.GetSiteKeyLimits)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/key-limits", wrapper.UpdateSiteKeyLimits)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/workspace-limit", wrapper.GetSiteWorkspaceLimit)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/workspace-limit", wrapper.UpdateSiteWorkspaceLimit)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/login-limits", wrapper.GetSiteLoginLimits)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/login-limits", wrapper.UpdateSiteLoginLimits)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/registration", wrapper.GetSiteRegistration)
@@ -8319,6 +8464,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/users", wrapper.ListUsers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}", wrapper.GetAccount)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}/key-limits", wrapper.UpdateAccountKeyLimits)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}/workspace-limit", wrapper.UpdateAccountWorkspaceLimit)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}/credit-grants", wrapper.GrantCredit)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers", wrapper.ListSuppliers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers", wrapper.CreateSupplier)
@@ -9458,6 +9604,127 @@ type SetAccountTierdefaultJSONResponse struct {
 }
 
 func (response SetAccountTierdefaultJSONResponse) VisitSetAccountTierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountWorkspaceLimitRequestObject struct {
+	AccountId AccountId `json:"account_id"`
+	Params    UpdateAccountWorkspaceLimitParams
+	Body      *UpdateAccountWorkspaceLimitJSONRequestBody
+}
+
+type UpdateAccountWorkspaceLimitResponseObject interface {
+	VisitUpdateAccountWorkspaceLimitResponse(w http.ResponseWriter) error
+}
+
+type UpdateAccountWorkspaceLimit200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type UpdateAccountWorkspaceLimit200JSONResponse struct {
+	Body    WorkspaceLimitView
+	Headers UpdateAccountWorkspaceLimit200ResponseHeaders
+}
+
+func (response UpdateAccountWorkspaceLimit200JSONResponse) VisitUpdateAccountWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountWorkspaceLimit400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateAccountWorkspaceLimit400JSONResponse) VisitUpdateAccountWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountWorkspaceLimit401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response UpdateAccountWorkspaceLimit401JSONResponse) VisitUpdateAccountWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountWorkspaceLimit403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateAccountWorkspaceLimit403JSONResponse) VisitUpdateAccountWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountWorkspaceLimit404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateAccountWorkspaceLimit404JSONResponse) VisitUpdateAccountWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountWorkspaceLimit409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateAccountWorkspaceLimit409JSONResponse) VisitUpdateAccountWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateAccountWorkspaceLimitdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateAccountWorkspaceLimitdefaultJSONResponse) VisitUpdateAccountWorkspaceLimitResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -23531,6 +23798,208 @@ func (response SetPaymentSettingsdefaultJSONResponse) VisitSetPaymentSettingsRes
 	return err
 }
 
+type GetSiteWorkspaceLimitRequestObject struct {
+	SiteId SiteId `json:"site_id"`
+}
+
+type GetSiteWorkspaceLimitResponseObject interface {
+	VisitGetSiteWorkspaceLimitResponse(w http.ResponseWriter) error
+}
+
+type GetSiteWorkspaceLimit200JSONResponse WorkspaceLimitView
+
+func (response GetSiteWorkspaceLimit200JSONResponse) VisitGetSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteWorkspaceLimit401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetSiteWorkspaceLimit401JSONResponse) VisitGetSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteWorkspaceLimit403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSiteWorkspaceLimit403JSONResponse) VisitGetSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteWorkspaceLimit404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSiteWorkspaceLimit404JSONResponse) VisitGetSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSiteWorkspaceLimitdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSiteWorkspaceLimitdefaultJSONResponse) VisitGetSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteWorkspaceLimitRequestObject struct {
+	SiteId SiteId `json:"site_id"`
+	Params UpdateSiteWorkspaceLimitParams
+	Body   *UpdateSiteWorkspaceLimitJSONRequestBody
+}
+
+type UpdateSiteWorkspaceLimitResponseObject interface {
+	VisitUpdateSiteWorkspaceLimitResponse(w http.ResponseWriter) error
+}
+
+type UpdateSiteWorkspaceLimit200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type UpdateSiteWorkspaceLimit200JSONResponse struct {
+	Body    WorkspaceLimitView
+	Headers UpdateSiteWorkspaceLimit200ResponseHeaders
+}
+
+func (response UpdateSiteWorkspaceLimit200JSONResponse) VisitUpdateSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteWorkspaceLimit400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response UpdateSiteWorkspaceLimit400JSONResponse) VisitUpdateSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteWorkspaceLimit401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response UpdateSiteWorkspaceLimit401JSONResponse) VisitUpdateSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteWorkspaceLimit403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateSiteWorkspaceLimit403JSONResponse) VisitUpdateSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteWorkspaceLimit404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateSiteWorkspaceLimit404JSONResponse) VisitUpdateSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteWorkspaceLimit409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateSiteWorkspaceLimit409JSONResponse) VisitUpdateSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSiteWorkspaceLimitdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateSiteWorkspaceLimitdefaultJSONResponse) VisitUpdateSiteWorkspaceLimitResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListSourceClassesRequestObject struct {
 }
 
@@ -26631,6 +27100,9 @@ type StrictServerInterface interface {
 	// SetAccountTier Move an account to another tier
 	// (PUT /api/admin/v1/accounts/{account_id}/tier)
 	SetAccountTier(ctx context.Context, request SetAccountTierRequestObject) (SetAccountTierResponseObject, error)
+	// UpdateAccountWorkspaceLimit Set an account's own limit on its workspaces
+	// (PUT /api/admin/v1/accounts/{account_id}/workspace-limit)
+	UpdateAccountWorkspaceLimit(ctx context.Context, request UpdateAccountWorkspaceLimitRequestObject) (UpdateAccountWorkspaceLimitResponseObject, error)
 	// RotateAlertWebhookSecret Set or rotate a webhook signing secret
 	// (PUT /api/admin/v1/alerts/channels/{channel_id}/secret)
 	RotateAlertWebhookSecret(ctx context.Context, request RotateAlertWebhookSecretRequestObject) (RotateAlertWebhookSecretResponseObject, error)
@@ -27027,6 +27499,12 @@ type StrictServerInterface interface {
 	// SetPaymentSettings Collection switch, accepted credit range and top-up buffer.
 	// (PUT /api/admin/v1/sites/{site_id}/system-settings/payments)
 	SetPaymentSettings(ctx context.Context, request SetPaymentSettingsRequestObject) (SetPaymentSettingsResponseObject, error)
+	// GetSiteWorkspaceLimit A site's limit on the workspaces of an account
+	// (GET /api/admin/v1/sites/{site_id}/workspace-limit)
+	GetSiteWorkspaceLimit(ctx context.Context, request GetSiteWorkspaceLimitRequestObject) (GetSiteWorkspaceLimitResponseObject, error)
+	// UpdateSiteWorkspaceLimit Set a site's limit on the workspaces of an account
+	// (PUT /api/admin/v1/sites/{site_id}/workspace-limit)
+	UpdateSiteWorkspaceLimit(ctx context.Context, request UpdateSiteWorkspaceLimitRequestObject) (UpdateSiteWorkspaceLimitResponseObject, error)
 	// ListSourceClasses The source classes in recognition order and their fingerprint rules.
 	// (GET /api/admin/v1/source-classes)
 	ListSourceClasses(ctx context.Context, request ListSourceClassesRequestObject) (ListSourceClassesResponseObject, error)
@@ -27437,6 +27915,40 @@ func (sh *strictHandler) SetAccountTier(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SetAccountTierResponseObject); ok {
 		if err := validResponse.VisitSetAccountTierResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateAccountWorkspaceLimit operation middleware
+func (sh *strictHandler) UpdateAccountWorkspaceLimit(w http.ResponseWriter, r *http.Request, accountId AccountId, params UpdateAccountWorkspaceLimitParams) {
+	var request UpdateAccountWorkspaceLimitRequestObject
+
+	request.AccountId = accountId
+	request.Params = params
+
+	var body UpdateAccountWorkspaceLimitJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateAccountWorkspaceLimit(ctx, request.(UpdateAccountWorkspaceLimitRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateAccountWorkspaceLimit")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateAccountWorkspaceLimitResponseObject); ok {
+		if err := validResponse.VisitUpdateAccountWorkspaceLimitResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -31381,6 +31893,66 @@ func (sh *strictHandler) SetPaymentSettings(w http.ResponseWriter, r *http.Reque
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SetPaymentSettingsResponseObject); ok {
 		if err := validResponse.VisitSetPaymentSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSiteWorkspaceLimit operation middleware
+func (sh *strictHandler) GetSiteWorkspaceLimit(w http.ResponseWriter, r *http.Request, siteId SiteId) {
+	var request GetSiteWorkspaceLimitRequestObject
+
+	request.SiteId = siteId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSiteWorkspaceLimit(ctx, request.(GetSiteWorkspaceLimitRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSiteWorkspaceLimit")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSiteWorkspaceLimitResponseObject); ok {
+		if err := validResponse.VisitGetSiteWorkspaceLimitResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateSiteWorkspaceLimit operation middleware
+func (sh *strictHandler) UpdateSiteWorkspaceLimit(w http.ResponseWriter, r *http.Request, siteId SiteId, params UpdateSiteWorkspaceLimitParams) {
+	var request UpdateSiteWorkspaceLimitRequestObject
+
+	request.SiteId = siteId
+	request.Params = params
+
+	var body UpdateSiteWorkspaceLimitJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateSiteWorkspaceLimit(ctx, request.(UpdateSiteWorkspaceLimitRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateSiteWorkspaceLimit")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateSiteWorkspaceLimitResponseObject); ok {
+		if err := validResponse.VisitUpdateSiteWorkspaceLimitResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
