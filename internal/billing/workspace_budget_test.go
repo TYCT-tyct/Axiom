@@ -37,7 +37,8 @@ func TestWorkspaceBudgetPool(t *testing.T) {
 	t.Parallel()
 
 	b := newBank(t, 1e6, 0, Config{})
-	first, second := b.inWorkspace(&Limit{Amount: 1500, Reset: ResetDaily})
+	// Never resetting: a window that turns over at midnight UTC during the storm would split it in two.
+	first, second := b.inWorkspace(&Limit{Amount: 1500, Reset: ResetNever})
 	total, refused := b.storm(SourceWorkspace, first, second)
 	if total > 1500 || len(refused) == 0 {
 		t.Fatalf("reserved %d of the budget's 1500 with %d refusals", total, len(refused))
@@ -47,9 +48,24 @@ func TestWorkspaceBudgetPool(t *testing.T) {
 			t.Errorf("refused %d with %d left", n, 1500-total)
 		}
 	}
-	if use := b.workspaceUse(ResetDaily); use.Reserved != total || use.Spent != 0 {
+	if use := b.workspaceUse(ResetNever); use.Reserved != total || use.Spent != 0 {
 		t.Errorf("the workspace holds %+v, want %d in flight", use, total)
 	}
+	b.consistent()
+}
+
+// TestWorkspaceBudgetZero: a budget of zero refuses every call that would reserve something, and, as every limit
+// does, lets through one quoted at nothing: a call is refused only when its quote is above what is left.
+func TestWorkspaceBudgetZero(t *testing.T) {
+	t.Parallel()
+
+	b := newBank(t, 1e6, 0, Config{})
+	first, _ := b.inWorkspace(&Limit{Amount: 0, Reset: ResetNever})
+	var short *Insufficient
+	if _, err := b.reserve(first, 1); !errors.As(err, &short) || short.Source != SourceWorkspace {
+		t.Errorf("reserving 1 under a zero budget: %v, want the workspace budget short", err)
+	}
+	b.mustReserve(first, 0)
 	b.consistent()
 }
 

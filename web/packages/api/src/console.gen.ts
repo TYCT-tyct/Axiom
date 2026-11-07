@@ -2148,7 +2148,7 @@ export interface components {
             resets_at?: string;
         };
         WorkspaceBudgetSettings: {
-            /** @description In the site's currency and not negative; 0 lets no call through. Absent removes the budget. */
+            /** @description In the site's currency and not negative. 0 refuses every call that would reserve anything; a call quoted at zero still passes, as under any limit. Absent removes the budget. */
             limit?: components["schemas"]["Money"];
             /** @description When `used` starts again; absent never. It needs a `limit`. */
             limit_reset?: components["schemas"]["LimitReset"];

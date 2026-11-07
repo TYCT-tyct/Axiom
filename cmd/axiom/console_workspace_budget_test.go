@@ -40,39 +40,44 @@ func TestWorkspaceBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	account, site := f.account(s)
-	// Today 1200 charged and 300 in flight; 40 days ago 1000, which only a budget that never resets counts.
-	f.run(fmt.Sprintf(`INSERT INTO billing.spend (subject, window_start, site_id, account_id, spent, reserved) VALUES
-		('%[1]s', date_trunc('day', now(), 'UTC'), '%[2]s', '%[3]s', 1200, 300),
-		('%[1]s', date_trunc('day', now(), 'UTC') - interval '40 days', '%[2]s', '%[3]s', 1000, 0)`, uuid.UUID(id), site, account))
+	// 1200 charged and 300 in flight on the database's day and on the next, so a daily window holds 1500 whether or not
+	// midnight UTC passes before the reads (the node reads the database's clock, which a test cannot stop); 40 days ago
+	// 1000, which only a budget that never resets counts, with both days: 4000.
+	f.run(fmt.Sprintf(`INSERT INTO billing.spend (subject, window_start, site_id, account_id, spent, reserved) SELECT
+		'%[1]s', date_trunc('day', now(), 'UTC') + d * interval '1 day', '%[2]s', '%[3]s', CASE d WHEN -40 THEN 1000 ELSE 1200 END,
+		CASE d WHEN -40 THEN 0 ELSE 300 END FROM unnest(ARRAY[0, 1, -40]) AS d`, uuid.UUID(id), site, account))
 	if diff := cmp.Diff(consoleapi.WorkspaceBudget{}, f.budget(s, http.MethodGet, prod, "")); diff != "" {
 		t.Errorf("a new workspace's budget (-want +got):\n%s", diff)
 	}
-	tomorrow := time.Now().UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
 	daily := new(consoleapi.LimitReset("daily"))
+	started := time.Now()
 	for _, step := range []struct {
 		method, body string
 		want         consoleapi.WorkspaceBudget
 	}{
 		{
 			http.MethodPut, `{"limit":{"amount":"1000","currency":"USD"},"limit_reset":"daily"}`,
-			consoleapi.WorkspaceBudget{Limit: dollars("1000"), LimitReset: daily, Used: dollars("1500"), LimitRemaining: dollars("0"), ResetsAt: &tomorrow},
+			consoleapi.WorkspaceBudget{Limit: dollars("1000"), LimitReset: daily, Used: dollars("1500"), LimitRemaining: dollars("0")},
 		},
 		{
 			http.MethodPut, `{"limit":{"amount":"1000","currency":"USD"},"limit_reset":"daily"}`,
-			consoleapi.WorkspaceBudget{Limit: dollars("1000"), LimitReset: daily, Used: dollars("1500"), LimitRemaining: dollars("0"), ResetsAt: &tomorrow},
+			consoleapi.WorkspaceBudget{Limit: dollars("1000"), LimitReset: daily, Used: dollars("1500"), LimitRemaining: dollars("0")},
 		},
-		{http.MethodGet, "", consoleapi.WorkspaceBudget{Limit: dollars("1000"), LimitReset: daily, Used: dollars("1500"), LimitRemaining: dollars("0"), ResetsAt: &tomorrow}},
+		{http.MethodGet, "", consoleapi.WorkspaceBudget{Limit: dollars("1000"), LimitReset: daily, Used: dollars("1500"), LimitRemaining: dollars("0")}},
 		{
 			http.MethodPut, `{"limit":{"amount":"5000","currency":"USD"}}`,
-			consoleapi.WorkspaceBudget{Limit: dollars("5000"), Used: dollars("2500"), LimitRemaining: dollars("2500")},
+			consoleapi.WorkspaceBudget{Limit: dollars("5000"), Used: dollars("4000"), LimitRemaining: dollars("1000")},
 		},
 		{http.MethodPut, `{}`, consoleapi.WorkspaceBudget{}},
 		{http.MethodGet, "", consoleapi.WorkspaceBudget{}},
 	} {
 		got := f.budget(s, step.method, prod, step.body)
-		if got.ResetsAt != nil {
-			got.ResetsAt = new(got.ResetsAt.UTC())
+		// A daily window ends at the UTC midnight after the read, whichever day that was.
+		if at := got.ResetsAt; (at != nil) != (step.want.LimitReset != nil) ||
+			at != nil && (!at.Equal(at.UTC().Truncate(24*time.Hour)) || !at.After(started) || at.After(time.Now().Add(24*time.Hour))) {
+			t.Errorf("%s %s: resets at %v", step.method, step.body, at)
 		}
+		got.ResetsAt = nil
 		if diff := cmp.Diff(step.want, got); diff != "" {
 			t.Errorf("%s %s (-want +got):\n%s", step.method, step.body, diff)
 		}

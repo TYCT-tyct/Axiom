@@ -3821,7 +3821,7 @@ components:
         limit:
           allOf: [{$ref: "#/components/schemas/Money"}]
           description: >-
-            In the site's currency and not negative; 0 lets no call through. Absent removes the budget.
+            In the site's currency and not negative. 0 refuses every call that would reserve anything; a call quoted at zero still passes, as under any limit. Absent removes the budget.
         limit_reset:
           allOf: [{$ref: "#/components/schemas/LimitReset"}]
           description: "When `used` starts again; absent never. It needs a `limit`."
