@@ -30,9 +30,18 @@ func (f consoleFixture) listWorkspaces(s session) []consoleapi.Workspace {
 	return list.Data
 }
 
+// putWorkspace replaces a workspace's settings with body and returns it as changed.
+func (f consoleFixture) putWorkspace(s session, id, body string) consoleapi.Workspace {
+	f.t.Helper()
+	rec := f.do(http.MethodPut, "/workspaces/"+id, body, as(s))
+	expect(f.t, "updateWorkspace "+body, rec, http.StatusOK, "")
+	var w consoleapi.Workspace
+	decode(f.t, rec, &w)
+	return w
+}
+
 // TestWorkspaces: an account starts with its default workspace alone; it makes, renames, disables and enables others,
-// with names unique ignoring case, the default never disabled, at most 50, another account's unseen, and every change
-// audited once while refusals and no-op changes are not.
+// the default listed first; every change is audited once, in a key change's shape, and a change of nothing is not.
 func TestWorkspaces(t *testing.T) {
 	t.Parallel()
 	f := newConsoleFixture(t)
@@ -41,76 +50,75 @@ func TestWorkspaces(t *testing.T) {
 	if len(initial) != 1 || !initial[0].IsDefault || initial[0].Disabled || initial[0].Name != "Default" {
 		t.Fatalf("a new account's workspaces: %+v", initial)
 	}
-	main := initial[0]
 	prod := f.workspace(s, "Prod")
 	if prod.IsDefault || prod.Disabled || !strings.HasPrefix(prod.Id, "ws_") {
 		t.Errorf("a new workspace: %+v", prod)
 	}
-	expect(t, "a name taken, ignoring case", f.do(http.MethodPost, "/workspaces", `{"name":"prod"}`, as(s)), http.StatusConflict, consoleapi.ErrorCodeNameTaken)
-	expect(t, "an empty name", f.do(http.MethodPost, "/workspaces", `{"name":""}`, as(s)), http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
-
-	put := func(id, body string) consoleapi.Workspace {
-		t.Helper()
-		rec := f.do(http.MethodPut, "/workspaces/"+id, body, as(s))
-		expect(t, "updateWorkspace "+body, rec, http.StatusOK, "")
-		var w consoleapi.Workspace
-		decode(t, rec, &w)
-		return w
+	for _, step := range []struct {
+		id, body string
+		want     consoleapi.Workspace
+	}{
+		{prod.Id, `{"name":"Production","disabled":false}`, consoleapi.Workspace{Id: prod.Id, Name: "Production"}},
+		{prod.Id, `{"name":"Production","disabled":false}`, consoleapi.Workspace{Id: prod.Id, Name: "Production"}},
+		{prod.Id, `{"name":"Production","disabled":true}`, consoleapi.Workspace{Id: prod.Id, Name: "Production", Disabled: true}},
+		{prod.Id, `{"name":"Production","disabled":false}`, consoleapi.Workspace{Id: prod.Id, Name: "Production"}},
+		{initial[0].Id, `{"name":"Main","disabled":false}`, consoleapi.Workspace{Id: initial[0].Id, Name: "Main", IsDefault: true}},
+	} {
+		if diff := cmp.Diff(step.want, f.putWorkspace(s, step.id, step.body)); diff != "" {
+			t.Errorf("%s (-want +got):\n%s", step.body, diff)
+		}
 	}
-	if got := put(prod.Id, `{"name":"Production","disabled":false}`); got.Name != "Production" || got.Disabled {
-		t.Errorf("renamed: %+v", got)
-	}
-	put(prod.Id, `{"name":"Production","disabled":false}`) // changes nothing, so it is not audited
-	if got := put(prod.Id, `{"name":"Production","disabled":true}`); !got.Disabled {
-		t.Errorf("disabled: %+v", got)
-	}
-	if got := put(prod.Id, `{"name":"Production","disabled":false}`); got.Disabled {
-		t.Errorf("enabled again: %+v", got)
-	}
-	expect(t, "renaming to the default's name", f.do(http.MethodPut, "/workspaces/"+prod.Id, `{"name":"DEFAULT","disabled":false}`, as(s)),
-		http.StatusConflict, consoleapi.ErrorCodeNameTaken)
-	expect(t, "disabling the default", f.do(http.MethodPut, "/workspaces/"+main.Id, `{"name":"Default","disabled":true}`, as(s)),
-		http.StatusConflict, consoleapi.ErrorCodeConflict)
-	if got := put(main.Id, `{"name":"Main","disabled":false}`); got.Name != "Main" || !got.IsDefault {
-		t.Errorf("the default renamed: %+v", got)
-	}
-
 	var read consoleapi.Workspace
 	decode(t, f.do(http.MethodGet, "/workspaces/"+prod.Id, "", as(s)), &read)
-	if read.Name != "Production" || read.Disabled {
-		t.Errorf("read back: %+v", read)
+	if diff := cmp.Diff(consoleapi.Workspace{Id: prod.Id, Name: "Production"}, read); diff != "" {
+		t.Errorf("read back (-want +got):\n%s", diff)
 	}
 	if diff := cmp.Diff([]string{"Main", "Production"}, workspaceNames(f.listWorkspaces(s))); diff != "" {
 		t.Errorf("the list, default first (-want +got):\n%s", diff)
 	}
-
-	other := f.registered(s, "other@example.com")
-	theirs := f.listWorkspaces(other)[0].Id
-	f.assertNotFound(s, "/workspaces/"+theirs)
-	expect(t, "changing another account's", f.do(http.MethodPut, "/workspaces/"+theirs, `{"name":"Mine","disabled":true}`, as(s)),
-		http.StatusNotFound, consoleapi.ErrorCodeNotFound)
-	f.assertNotFound(s, "/workspaces/ws_00000000000000000000000000")
-
-	account, site := f.account(s)
-	f.run(fmt.Sprintf(`INSERT INTO accounts.workspaces (id, site_id, account_id, name, status, is_default)
-		SELECT gen_random_uuid(), '%s', '%s', 'Filler ' || n, 'disabled', false FROM generate_series(1, 48) AS n`, site, account))
-	expect(t, "the 51st workspace", f.do(http.MethodPost, "/workspaces", `{"name":"One too many"}`, as(s)), http.StatusConflict, consoleapi.ErrorCodeConflict)
-
 	audited := f.text(`SELECT string_agg(action || ' ' || detail::text, '; ' ORDER BY id) FROM platform.audit_log
 		WHERE module = 'accounts' AND target_kind = 'workspace'`)
-	for _, want := range []string{
+	want := strings.Join([]string{
 		`workspace.create {"name": "Prod"}`,
 		`workspace.update {"after": {"name": "Production"}, "before": {"name": "Prod"}, "changed": ["name"]}`,
 		`workspace.update {"after": {"disabled": true}, "before": {"disabled": false}, "changed": ["disabled"]}`,
 		`workspace.update {"after": {"disabled": false}, "before": {"disabled": true}, "changed": ["disabled"]}`,
 		`workspace.update {"after": {"name": "Main"}, "before": {"name": "Default"}, "changed": ["name"]}`,
-	} {
-		if !strings.Contains(audited, want) {
-			t.Errorf("audit %q lacks %q", audited, want)
-		}
+	}, "; ")
+	if audited != want {
+		t.Errorf("audited\n%s\nwant\n%s", audited, want)
 	}
-	if n := strings.Count(audited, "workspace."); n != 5 {
-		t.Errorf("%d audit entries, want 5: %s", n, audited)
+}
+
+// TestWorkspaceRefusals: a name taken ignoring case, an empty one, disabling the default, another account's workspace
+// and a 51st workspace are refused, and none of them is audited.
+func TestWorkspaceRefusals(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	main, prod := f.listWorkspaces(s)[0].Id, f.workspace(s, "Prod").Id
+	theirs := f.listWorkspaces(f.registered(s, "other@example.com"))[0].Id
+	account, site := f.account(s)
+	for _, r := range []struct {
+		what, method, path, body string
+		status                   int
+		code                     consoleapi.ErrorCode
+	}{
+		{"a name taken, ignoring case", http.MethodPost, "/workspaces", `{"name":"prod"}`, http.StatusConflict, consoleapi.ErrorCodeNameTaken},
+		{"an empty name", http.MethodPost, "/workspaces", `{"name":""}`, http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest},
+		{"renaming to the default's name", http.MethodPut, "/workspaces/" + prod, `{"name":"DEFAULT","disabled":false}`, http.StatusConflict, consoleapi.ErrorCodeNameTaken},
+		{"disabling the default", http.MethodPut, "/workspaces/" + main, `{"name":"Default","disabled":true}`, http.StatusConflict, consoleapi.ErrorCodeConflict},
+		{"reading another account's", http.MethodGet, "/workspaces/" + theirs, "", http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+		{"changing another account's", http.MethodPut, "/workspaces/" + theirs, `{"name":"Mine","disabled":true}`, http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+		{"reading one that is none", http.MethodGet, "/workspaces/ws_00000000000000000000000000", "", http.StatusNotFound, consoleapi.ErrorCodeNotFound},
+	} {
+		expect(t, r.what, f.do(r.method, r.path, r.body, as(s)), r.status, r.code)
+	}
+	f.run(fmt.Sprintf(`INSERT INTO accounts.workspaces (id, site_id, account_id, name, status, is_default)
+		SELECT gen_random_uuid(), '%s', '%s', 'Filler ' || n, 'disabled', false FROM generate_series(1, 48) AS n`, site, account))
+	expect(t, "the 51st workspace", f.do(http.MethodPost, "/workspaces", `{"name":"One too many"}`, as(s)), http.StatusConflict, consoleapi.ErrorCodeConflict)
+	if got := f.text(`SELECT count(*)::text FROM platform.audit_log WHERE target_kind = 'workspace'`); got != "1" {
+		t.Errorf("%s workspace audit entries, want only the one made", got)
 	}
 }
 

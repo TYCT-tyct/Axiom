@@ -137,15 +137,11 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	if !ok {
 		return CreatedKey{}, fmt.Errorf("create an API key: site %s is not in the snapshot", r.Site.TypeID())
 	}
-	if err := s.admitKey(ctx, tx, site, r.Account); err != nil {
+	err := s.admitKey(ctx, tx, site, r.Account)
+	if err != nil {
 		return CreatedKey{}, err
 	}
-	if r.Workspace == (WorkspaceID{}) {
-		var err error
-		if r.Workspace, err = s.defaultWorkspace(ctx, tx, r.Account); err != nil {
-			return CreatedKey{}, fmt.Errorf("create an API key: %w", errors.Join(err, ErrKeyNotFound))
-		}
-	} else if err := s.usableWorkspace(ctx, tx, r.Account, r.Workspace); err != nil {
+	if r.Workspace, err = s.keyWorkspace(ctx, tx, r.Account, r.Workspace); err != nil {
 		return CreatedKey{}, fmt.Errorf("create an API key: %w", err)
 	}
 	limit, reset := r.SpendLimit, r.LimitReset
@@ -162,10 +158,10 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 		SecretHash: hash[:], SecretVersion: int64(version), CreatedBy: uuid.UUID(r.CreatedBy),
 		ExpiresAt: r.ExpiresAt, SpendLimit: limit, LimitReset: nullable(reset), Models: nilIfEmpty(r.Models), IpAllow: nilIfEmpty(r.IPAllow),
 	}
-	if err := s.insertKey(ctx, tx, &key, site.Currency, r.Preset); err != nil {
+	if err = s.insertKey(ctx, tx, &key, site.Currency, r.Preset); err != nil {
 		return CreatedKey{}, err
 	}
-	if err := recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account), presetDetail(key.PresetID)); err != nil {
+	if err = recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account), presetDetail(key.PresetID)); err != nil {
 		return CreatedKey{}, err
 	}
 	return CreatedKey{id, secret.New(text)}, nil
