@@ -74,16 +74,26 @@ signIn ──200 status=signed_in──────────────▶ �
           └─ beginPasskeyMfa → 浏览器 WebAuthn → finishPasskeyMfa ───────▶ level=mfa
 ```
 
-- 每一步响应都带新的 `Set-Cookie` 和新的 `csrf_token`，页面要换掉内存里的旧令牌。待验证会话只被 `verifyMfa`、通行密钥的第二步、`getSession` 和 `signOut` 接受，别的操作对它一律 401。
+- 只有签发会话的响应带新的 `Set-Cookie` 和 `csrf_token`（`SessionGrant`）：`signIn`、`verifyMfa`、`finishPasskeySignIn`、`finishPasskeyMfa`，页面要换掉内存里的旧令牌。`beginPasskeyMfa`、`beginPasskeySignIn` 只回挑战，不带令牌，**不要拿它的响应更新令牌**，否则下一个改数据的请求会因令牌为空而 403 `origin_rejected`。待验证会话只被 `verifyMfa`、通行密钥的第二步、`getSession` 和 `signOut` 接受，别的操作对它一律 401。
 - 邮箱不存在、密码错、用户停用的答案相同（`unauthenticated` 或 `invalid_credentials`）；页面不要区分。
 - **后台只认 `mfa` 级会话。** 没有 TOTP 的管理员登录后（`level=password`、`mfa_enabled=false`）只能走开启流程：`beginTotpSetup` 拿到密钥和 `otpauth` 地址（现有页面在本地画二维码，不把密钥交给外部服务）→ `confirmTotpSetup`（再填一次密码和新密钥生成的码）。后台没有通行密钥和第三方登录。
-- 改了认证因素（密码、TOTP、恢复码、通行密钥、第三方身份）后，这个用户的旧会话全部失效，当前设备拿到新会话：响应是 `FactorChange`，带新 `csrf_token` 和新的 10 个恢复码（`recovery_codes`，**只在这一个响应里出现**，要放在用户确认前不能关掉的界面里）。细节与取舍见[账户与租户](domains/accounts.md#登录与会话)。
+- 改了认证因素（密码、TOTP、恢复码、通行密钥、第三方身份）后，这个用户的旧会话全部失效，当前设备拿到新会话（响应的 `Set-Cookie`）。令牌和恢复码怎么回来，**按操作区分**，不能一概按 `FactorChange` 处理：
+
+  | 操作 | 响应 | 新 `csrf_token` | 恢复码 |
+  |---|---|---|---|
+  | `confirmTotpSetup`、`replaceTotp`、`regenerateRecoveryCodes` | `FactorChange` | 有 | `recovery_codes`，10 个 |
+  | `changePassword` | 同形的对象 | 有 | 仅在开着 TOTP 时有 |
+  | `deletePasskey`、`unlinkIdentity` | `CredentialChange` | 有 | 仅在开着 TOTP 时有 |
+  | `finishPasskeyRegistration` | `Passkey` | **没有**：成功后调 `getSession` 取新令牌 | `recovery_codes` 仅在开着 TOTP 时有 |
+  | 第三方身份绑定（`startOAuthLink` → 303 回 `/console/security`） | 重定向，没有响应体 | 没有：调 `getSession` | 没有：调 `takeRecoveryCodes` 读一次 |
+
+  恢复码**只显示一次**，要放在用户确认前不能关掉的界面里。细节与取舍见[账户与租户](domains/accounts.md#登录与会话)。
 - `signOut` 撤销当前会话并让 Cookie 过期；`listSessions`、`revokeSession`、`revokeOtherSessions` 管登录设备。
 
 ### 第三方登录与通行密钥
 
 - **第三方登录**：`startOAuthSignIn` 返回 `authorize_url` 和一个一次性 nonce Cookie；页面把浏览器整页跳到 `authorize_url`。供应商回来时访问 `/api/console/v1/auth/oauth/{provider}/callback`，服务端换码、种会话、**303 回页面**（路径见上表），浏览器不会落在 JSON 上。只在站点的**登录域名**（`getSite` 的 `login_domain`、`login_origin`）上能发起；在别的控制台域名上，页面把访客带到 `login_origin`。第三方身份不会按邮箱并入已有账户：没绑定过的 subject 登不进来（`account_not_linked`），要先登录再 `startOAuthLink`；绑定回来的新恢复码放在会话上，用 `takeRecoveryCodes` 读一次。
-- **通行密钥**：`beginPasskeySignIn` / `finishPasskeySignIn` 是不输邮箱的登录（discoverable credential），`beginPasskeyRegistration` / `finishPasskeyRegistration` 注册，WebAuthn 的请求和凭证 JSON 原样在浏览器 API 和这些接口之间传；`flow_id` 由 begin 给、finish 带回。同样只在登录域名上能用，限制见[账户与租户](domains/accounts.md#登录与会话)的「通行密钥」。
+- **通行密钥**：`beginPasskeySignIn` / `finishPasskeySignIn` 是不输邮箱的登录（discoverable credential），`beginPasskeyMfa` / `finishPasskeyMfa` 是密码之后的第二因素，`beginPasskeyRegistration` / `finishPasskeyRegistration` 注册（要当前密码）；`flow_id` 由 begin 给、finish 带回。同样只在登录域名上能用，限制见[账户与租户](domains/accounts.md#登录与会话)的「通行密钥」。**接口的 JSON 不能直接交给浏览器的 WebAuthn API**：选项里的 `challenge`、`user.id`、`allowCredentials` 和 `excludeCredentials` 里的凭证 `id` 是 base64url 字符串，`navigator.credentials.create/get` 要二进制缓冲区；回传时 `rawId` 和 `response` 里的二进制成员（`clientDataJSON`、`attestationObject`、`authenticatorData`、`signature`、`userHandle`）要转回无填充的 base64url 文本。现有转换在 `web/console/src/webauthn.ts`。
 
 ### 注册与找回密码
 
