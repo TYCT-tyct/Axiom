@@ -2652,6 +2652,15 @@ type EffectiveKeyLimits struct {
 	MaxKeys          int `json:"max_keys"`
 }
 
+// EndpointEnabledUpdate defines model for EndpointEnabledUpdate.
+type EndpointEnabledUpdate struct {
+	// Enabled Whether the endpoint may be routed to.
+	Enabled bool `json:"enabled"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
 // EndpointQuantizationUpdate defines model for EndpointQuantizationUpdate.
 type EndpointQuantizationUpdate struct {
 	// Quantization One of OpenRouter's levels, or null to clear the record.
@@ -6540,6 +6549,12 @@ type SetSupplierCredentialLimitsParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetSupplierEndpointEnabledParams defines parameters for SetSupplierEndpointEnabled.
+type SetSupplierEndpointEnabledParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetSupplierEndpointQuantizationParams defines parameters for SetSupplierEndpointQuantization.
 type SetSupplierEndpointQuantizationParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -6887,6 +6902,9 @@ type BindSupplierKeyJSONRequestBody = BindKey
 
 // SetSupplierCredentialLimitsJSONRequestBody defines body for SetSupplierCredentialLimits for application/json ContentType.
 type SetSupplierCredentialLimitsJSONRequestBody = CredentialLimits
+
+// SetSupplierEndpointEnabledJSONRequestBody defines body for SetSupplierEndpointEnabled for application/json ContentType.
+type SetSupplierEndpointEnabledJSONRequestBody = EndpointEnabledUpdate
 
 // SetSupplierEndpointQuantizationJSONRequestBody defines body for SetSupplierEndpointQuantization for application/json ContentType.
 type SetSupplierEndpointQuantizationJSONRequestBody = EndpointQuantizationUpdate

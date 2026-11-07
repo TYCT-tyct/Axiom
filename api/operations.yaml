@@ -301,6 +301,43 @@ paths:
         '422': {$ref: '#/components/responses/Unprocessable'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled:
+    put:
+      operationId: endpointSetEnabled
+      summary: Turn an endpoint on or off for routing
+      description: >-
+        Turns one of the supplier's endpoints (`suppliers_get` lists them) on or off for routing, as the admin does,
+        and runs at once (200, `succeeded`); the result is the endpoint's switch as it now is. Every node routes by it
+        from its next reload; only an enabled endpoint whose cost is `known` is routed to, and the supplier sync never
+        turns an endpoint back on. A supplier that is being removed or was removed is a 409 `conflict`. With `dry_run`
+        the same checks run and nothing is written.
+      tags: [Suppliers]
+      security: [{credential: []}]
+      x-axiom-permission: suppliers.manage
+      x-axiom-scope: platform
+      x-mcp-name: endpoint_set_enabled
+      parameters:
+        - {in: path, name: supplier_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - {in: path, name: endpoint_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/EndpointEnabledChange'}}}
+      responses:
+        '200':
+          description: The operation run, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
   /api/operations/v1/suppliers/{supplier_id}/top-ups:
     post:
       operationId: supplierTopUpPropose
@@ -804,6 +841,14 @@ components:
         rev: {type: integer, format: int64, minimum: 0}
         reason: {$ref: '#/components/schemas/AgentReason'}
         dry_run: {type: boolean, description: "Preview only: nothing is written and the model is not changed."}
+    EndpointEnabledChange:
+      type: object
+      additionalProperties: false
+      required: [enabled, reason]
+      properties:
+        enabled: {type: boolean, description: "Whether the endpoint may be routed to."}
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
     TopUpProposal:
       type: object
       additionalProperties: false

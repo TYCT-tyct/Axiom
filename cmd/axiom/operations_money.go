@@ -44,7 +44,7 @@ func (o operationsAPI) SupplierTopUpPropose(ctx context.Context, r operationsapi
 		Credential: uuid.UUID(c.agent.ID()), Key: key, Tool: "supplier_top_up_propose", Target: operations.Target{Kind: "supplier", ID: r.SupplierId},
 		Params: map[string]any{"amount_native": b.AmountNative}, Risk: operations.RiskTopUp, Reason: b.Reason, Run: runOf(r.Params.XAxiomRunID),
 	}
-	op, replayed, err := o.money(ctx, b.DryRun, func(tx pg.Tx) (operations.Operation, bool, error) {
+	op, replayed, err := o.runWrite(ctx, b.DryRun, func(tx pg.Tx) (operations.Operation, bool, error) {
 		return o.proposeTopUp(ctx, tx, id, p, b.AmountNative)
 	})
 	if err != nil {
@@ -77,7 +77,7 @@ func (o operationsAPI) SupplierTopUpConfirm(ctx context.Context, r operationsapi
 		Params: map[string]any{"proposal": r.OperationId, "proof": b.Proof}, Risk: operations.RiskTopUp, Reason: b.Reason,
 		Run: runOf(r.Params.XAxiomRunID),
 	}
-	op, replayed, err := o.money(ctx, b.DryRun, func(tx pg.Tx) (operations.Operation, bool, error) {
+	op, replayed, err := o.runWrite(ctx, b.DryRun, func(tx pg.Tx) (operations.Operation, bool, error) {
 		op, replayed, err := o.propose(ctx, tx, p)
 		if err != nil || replayed {
 			return op, replayed, err
@@ -159,9 +159,9 @@ func capWindow(start time.Time, u operations.WindowUsage) operationsapi.Operatio
 	}
 }
 
-// money runs a money write in one transaction; a preview runs it to its end and rolls it back, so every check ran and
-// nothing it wrote stays, the reservation included. A hard cap's refusal says which cap and by how much.
-func (o operationsAPI) money(ctx context.Context, dryRun *bool, do func(tx pg.Tx) (operations.Operation, bool, error)) (operations.Operation, bool, error) {
+// runWrite runs a write in one transaction; a preview runs it to its end and rolls it back, so every check ran and
+// nothing it wrote stays, a reservation included. A hard cap's refusal says which cap and by how much.
+func (o operationsAPI) runWrite(ctx context.Context, dryRun *bool, do func(tx pg.Tx) (operations.Operation, bool, error)) (operations.Operation, bool, error) {
 	preview := dryRun != nil && *dryRun
 	var op operations.Operation
 	var replayed bool

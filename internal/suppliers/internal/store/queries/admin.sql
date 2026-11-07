@@ -51,6 +51,11 @@ FROM suppliers.endpoints WHERE supplier_id = @supplier_id AND id = @id;
 UPDATE suppliers.endpoints SET quantization = sqlc.narg(quantization)
 WHERE supplier_id = @supplier_id AND id = @id;
 
+-- name: SetEndpointEnabled :exec
+-- A person's or the agent's switch: the sync never writes it, so an endpoint turned off stays off across syncs.
+UPDATE suppliers.endpoints SET enabled = @enabled
+WHERE supplier_id = @supplier_id AND id = @id;
+
 -- name: GetCredentialOf :many
 -- One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
 SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
