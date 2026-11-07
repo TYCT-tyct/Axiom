@@ -85,13 +85,14 @@ func alertWrite(ctx context.Context, idempotencyKey string, run *string, tool, k
 	}, nil
 }
 
-// runAlert raises or resolves the agent's alert op names, and answers where alerts_list shows it.
+// runAlert raises or resolves the credential's alert op names, and answers the incident's kind and key as alerts_list
+// shows them.
 func runAlert(ctx context.Context, tx pg.Tx, op operations.Operation) (map[string]any, error) {
 	if op.Tool == "alert_resolve" {
 		if err := operations.ResolveAlert(ctx, tx, op); err != nil {
 			return nil, err
 		}
-		return map[string]any{"kind": operations.AgentAlert, "key": op.Target.ID, "resolved": true}, nil
+		return map[string]any{"kind": operations.AgentAlert, "key": operations.AlertKey(op), "resolved": true}, nil
 	}
 	var params struct {
 		Severity string `json:"severity"`
@@ -103,5 +104,5 @@ func runAlert(ctx context.Context, tx pg.Tx, op operations.Operation) (map[strin
 	if err := operations.RaiseAlert(ctx, tx, op, params.Severity, params.Summary); err != nil {
 		return nil, err
 	}
-	return map[string]any{"kind": operations.AgentAlert, "key": op.Target.ID, "resolved": false}, nil
+	return map[string]any{"kind": operations.AgentAlert, "key": operations.AlertKey(op), "resolved": false}, nil
 }

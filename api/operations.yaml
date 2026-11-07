@@ -268,7 +268,7 @@ paths:
       description: >-
         The platform's alert incidents, newest first, with the delivery receipts of each: what the fixed rules and
         the agent raised, whether the owner was notified and whether it recovered. `open` keeps the ones not yet
-        resolved. The agent's own alerts are of kind `operations.agent_alert`, under the key it gave.
+        resolved. The agent's own alerts are of kind `operations.agent_alert`, keyed `<credential ID>/<key>`.
       tags: [Alerts]
       security: [{credential: []}]
       x-axiom-permission: calls.search
@@ -295,7 +295,8 @@ paths:
       summary: Raise an alert to the owner
       description: >-
         Raises an alert of kind `operations.agent_alert` under `key`, at once (200, `succeeded`), through the same
-        rules and channels as every other alert: the owner is notified when a rule for that kind and severity is
+        rules and channels as every other alert. The incident's key is `<credential ID>/<key>`, which the result
+        gives: another credential's alert under the same words is another incident. The owner is notified when a rule for that kind and severity is
         bound to a channel. One key is one incident until it is resolved: raising it again while it is open counts
         another occurrence and updates its summary without notifying again, and raising it after `alert_resolve` is a
         new incident. The incident appears in `alerts_list` within about a minute. A credential may raise at most 60
@@ -329,9 +330,10 @@ paths:
       operationId: alertResolve
       summary: Resolve an alert the agent raised
       description: >-
-        Resolves the open `operations.agent_alert` incident under `key`, at once (200, `succeeded`): the owner gets
+        Resolves the credential's own open `operations.agent_alert` incident under `key`, at once (200, `succeeded`):
+        the owner gets
         the recovery notice when the first one reached them, and the key's next `alert_raise` is a new incident. A
-        key with no open incident is left as it is. Only the agent's own kind can be resolved here; the other kinds
+        key with no open incident is left as it is. Only the credential's own alerts can be resolved here; the other kinds
         recover by their own rules or are closed by the owner. With `dry_run` the same checks run and nothing is
         written.
       tags: [Alerts]

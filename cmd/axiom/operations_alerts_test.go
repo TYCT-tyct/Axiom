@@ -29,9 +29,9 @@ func raise(key, severity, summary string) string {
 	return fmt.Sprintf(`{"key":%q,"severity":%q,"summary":%q,"reason":"the patrol saw it"}`, key, severity, summary)
 }
 
-// TestOperationsAlertRaise: the agent's alert is a signal of its own kind under its key, written with the operation and
-// audited as the agent's; a retry under the key raises nothing more and the key with another alert is refused. A
-// resolution is a recovery signal for the same key.
+// TestOperationsAlertRaise: the agent's alert is a signal of its own kind under its credential and key, written with
+// the operation and audited as the agent's; a retry under the key raises nothing more and the key with another alert
+// is refused. A resolution is a recovery signal for the same key.
 func TestOperationsAlertRaise(t *testing.T) {
 	t.Parallel()
 	f := newAdminFixture(t)
@@ -45,7 +45,7 @@ func TestOperationsAlertRaise(t *testing.T) {
 	}
 	signal := `SELECT concat_ws('|', body->>'key', body->>'severity', body->'fields'->>'summary', body->'fields'->>'operation', coalesce(body->>'resolved', 'false'))
  FROM platform.alert_signals WHERE body->>'kind' = 'operations.agent_alert' ORDER BY seq`
-	want := "supplier/acme/balance|warning|Acme 余额只够 2 小时|" + *raised.OperationId + "|false"
+	want := f.credentialUUID("hermes") + "/supplier/acme/balance|warning|Acme 余额只够 2 小时|" + *raised.OperationId + "|false"
 	if got := f.text(signal); got != want {
 		t.Errorf("the signal is %q, want %q", got, want)
 	}
@@ -58,6 +58,35 @@ func TestOperationsAlertRaise(t *testing.T) {
 	f.expectResolved(token, "supplier/acme/balance")
 }
 
+// credentialUUID is the ID of the credential named name, as the alerts' keys and the audit log write it.
+func (f adminFixture) credentialUUID(name string) string {
+	f.t.Helper()
+	return f.text(`SELECT id::text FROM accounts.agent_credentials WHERE name = '` + name + `'`)
+}
+
+// TestOperationsAlertsAreTheCredentials: another credential, even one without the platform grant, raising and
+// resolving the same words acts on an incident of its own, never on the first credential's.
+func TestOperationsAlertsAreTheCredentials(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	first := f.alerter(owner)
+	_, other := f.makeCredential(owner, `{"name":"other","permissions":["operations.write"],"platform":false,
+		"sites":["`+f.siteID()+`"],"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`)
+	expectAdmin(t, "the first raise", f.alertAs(first, "/alerts", raise("supplier/acme/balance", "warning", "low"), newKey()), http.StatusOK, "")
+	expectAdmin(t, "the other's raise", f.alertAs(other, "/alerts", raise("supplier/acme/balance", "info", "fine"), newKey()), http.StatusOK, "")
+	rec := f.alertAs(other, "/alerts/resolve", `{"key":"supplier/acme/balance","reason":"it passed"}`, newKey())
+	theirs := f.credentialUUID("other") + "/supplier/acme/balance"
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"key":"`+theirs+`"`) {
+		t.Fatalf("the other's resolution: %d %s", rec.Code, rec.Body)
+	}
+	keys := `SELECT string_agg(body->>'key' || ':' || coalesce(body->>'resolved', 'false'), ',' ORDER BY seq) FROM platform.alert_signals`
+	mine := f.credentialUUID("hermes") + "/supplier/acme/balance"
+	if got := f.text(keys); got != mine+":false,"+theirs+":false,"+theirs+":true" {
+		t.Errorf("the signals: %s", got)
+	}
+}
+
 // expectResolved has the agent resolve the alert it raised under key, which is a recovery signal for the key; the
 // raise and the resolution are both audited as the agent's.
 func (f adminFixture) expectResolved(token, key string) {
@@ -67,7 +96,7 @@ func (f adminFixture) expectResolved(token, key string) {
 		f.t.Fatalf("resolving: %d %s", rec.Code, rec.Body)
 	}
 	resolution := `SELECT body->>'key' FROM platform.alert_signals WHERE body->>'kind' = 'operations.agent_alert' AND (body->>'resolved')::bool`
-	if got, n := f.text(resolution), f.text(`SELECT count(*)::text FROM platform.alert_signals`); got != key || n != "2" {
+	if got, n := f.text(resolution), f.text(`SELECT count(*)::text FROM platform.alert_signals`); got != f.credentialUUID("hermes")+"/"+key || n != "2" {
 		f.t.Errorf("the resolution is of %q among %s signals", got, n)
 	}
 	if got := f.text(`SELECT string_agg(actor_kind || ':' || reason, ',' ORDER BY at, id) FROM platform.audit_log WHERE action = 'operation.succeed'`); got != "operations_agent:the patrol saw it,operations_agent:the owner topped it up" {
