@@ -141,7 +141,7 @@ func (m KeyManager) Get(ctx context.Context, id KeyID) (Key, error) {
 }
 
 // Create issues a call key within this manager's current authority. Workspace is resolved inside its account scope.
-func (m KeyManager) Create(ctx context.Context, workspace WorkspaceID, expires *time.Time, k KeySettings) (CreatedKey, error) {
+func (m KeyManager) Create(ctx context.Context, workspace *WorkspaceID, expires *time.Time, k KeySettings) (CreatedKey, error) {
 	if expires == nil {
 		expires = m.ceiling.ExpiresAt
 	}

@@ -225,11 +225,13 @@ func (c consoleAPI) CreateKey(ctx context.Context, request consoleapi.CreateKeyR
 	if err != nil {
 		return nil, err
 	}
-	var workspace accounts.WorkspaceID // zero: the default workspace
+	var workspace *accounts.WorkspaceID // nil: the default workspace
 	if request.Body.WorkspaceId != nil {
-		if workspace, err = accounts.ParseWorkspaceID(*request.Body.WorkspaceId); err != nil {
+		id, err := accounts.ParseWorkspaceID(*request.Body.WorkspaceId)
+		if err != nil {
 			return nil, invalidField("/workspace_id", "not a workspace ID")
 		}
+		workspace = &id
 	}
 	kind := accounts.CallKey
 	if request.Body.Kind != nil {

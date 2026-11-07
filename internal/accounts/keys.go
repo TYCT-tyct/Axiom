@@ -103,13 +103,13 @@ type Key struct {
 	KeySettings
 }
 
-// KeyRequest is a new key in a workspace, made by a user of its site. A zero Workspace is the account's default
-// workspace; another must be the account's, not deleted (ErrWorkspaceNotFound) and enabled (ErrWorkspaceDisabled).
+// KeyRequest is a new key in a workspace, made by a user of its site. A nil Workspace is the account's default
+// workspace; one named must be the account's, not deleted (ErrWorkspaceNotFound) and enabled (ErrWorkspaceDisabled).
 type KeyRequest struct {
 	Kind      string // empty is call; management requires an expiry
 	Site      SiteID
 	Account   AccountID
-	Workspace WorkspaceID
+	Workspace *WorkspaceID
 	CreatedBy UserID
 	ExpiresAt *time.Time // only set when the key is made
 	KeySettings
@@ -141,7 +141,8 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	if err != nil {
 		return CreatedKey{}, err
 	}
-	if r.Workspace, err = s.keyWorkspace(ctx, tx, r.Account, r.Workspace); err != nil {
+	workspace, err := s.keyWorkspace(ctx, tx, r.Account, r.Workspace)
+	if err != nil {
 		return CreatedKey{}, fmt.Errorf("create an API key: %w", err)
 	}
 	limit, reset := r.SpendLimit, r.LimitReset
@@ -154,7 +155,7 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	hash := s.hashes.Sum(version, []byte(text))
 	key := InsertKeyParams{
 		Kind: r.Kind, ID: uuid.UUID(id), SiteID: uuid.UUID(r.Site), AccountID: uuid.UUID(r.Account),
-		WorkspaceID: uuid.UUID(r.Workspace), Name: r.Name, Prefix: site.KeyPrefix, Last4: text[len(text)-4:],
+		WorkspaceID: uuid.UUID(workspace), Name: r.Name, Prefix: site.KeyPrefix, Last4: text[len(text)-4:],
 		SecretHash: hash[:], SecretVersion: int64(version), CreatedBy: uuid.UUID(r.CreatedBy),
 		ExpiresAt: r.ExpiresAt, SpendLimit: limit, LimitReset: nullable(reset), Models: nilIfEmpty(r.Models), IpAllow: nilIfEmpty(r.IPAllow),
 	}

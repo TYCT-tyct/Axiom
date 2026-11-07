@@ -169,8 +169,16 @@ func TestWorkspaceKeys(t *testing.T) {
 	f.createKey(s, `{"name":"again","workspace_id":"`+prod+`"}`)
 
 	theirs := f.listWorkspaces(f.registered(s, "other@example.com"))[0].Id
-	expect(t, "another account's workspace", f.do(http.MethodPost, "/keys", `{"name":"x","workspace_id":"`+theirs+`"}`, as(s)),
-		http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
+	// The zero ID decodes, but names no workspace: it is not taken for the default one, which an omitted ID means.
+	for _, named := range []string{theirs, "ws_00000000000000000000000000"} {
+		expect(t, "a key in "+named, f.do(http.MethodPost, "/keys", `{"name":"x","workspace_id":"`+named+`"}`, as(s)),
+			http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
+	}
+	account, _ := f.account(s)
+	if got := f.text(`SELECT (SELECT count(*) FROM accounts.api_keys WHERE account_id = '` + account.String() + `')::text || ' ' ||
+		(SELECT count(*) FROM platform.audit_log WHERE action = 'api_key.create' AND account_id = '` + account.String() + `')::text`); got != "3 3" {
+		t.Errorf("keys and their audit entries %s, want the three accepted", got)
+	}
 	decode(t, f.do(http.MethodGet, "/keys?workspace_id="+theirs, "", as(s)), &list)
 	if len(list.Data) != 0 {
 		t.Errorf("another account's workspace lists %d keys", len(list.Data))

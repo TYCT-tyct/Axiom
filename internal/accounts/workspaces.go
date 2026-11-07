@@ -60,16 +60,16 @@ func (s *Service) defaultWorkspace(ctx context.Context, tx pg.Tx, account Accoun
 }
 
 // keyWorkspace is the workspace a new key of the account goes to: id, which must be usable, or the default workspace
-// when id is zero.
-func (s *Service) keyWorkspace(ctx context.Context, tx pg.Tx, account AccountID, id WorkspaceID) (WorkspaceID, error) {
-	if id == (WorkspaceID{}) {
+// when id is nil. A named ID is never taken for the default, the zero one included: it names no workspace.
+func (s *Service) keyWorkspace(ctx context.Context, tx pg.Tx, account AccountID, id *WorkspaceID) (WorkspaceID, error) {
+	if id == nil {
 		found, err := s.defaultWorkspace(ctx, tx, account)
 		if err != nil {
 			return WorkspaceID{}, errors.Join(err, ErrKeyNotFound)
 		}
 		return found, nil
 	}
-	w, err := s.GetWorkspace(ctx, tx, account, id)
+	w, err := s.GetWorkspace(ctx, tx, account, *id)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return WorkspaceID{}, ErrWorkspaceNotFound
@@ -78,7 +78,7 @@ func (s *Service) keyWorkspace(ctx context.Context, tx pg.Tx, account AccountID,
 	case w.Disabled:
 		return WorkspaceID{}, ErrWorkspaceDisabled
 	}
-	return id, nil
+	return *id, nil
 }
 
 // ListWorkspaces is every workspace of the account that is not deleted: its default first, then in the order they
