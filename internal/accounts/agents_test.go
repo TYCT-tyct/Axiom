@@ -325,9 +325,10 @@ func TestAuthorizeAgent(t *testing.T) {
 	}
 }
 
-// TestAgentMoneyIsLimited: a credential that asks for a money write every second for two hours never gets more than 30
-// in any minute nor 300 in any hour, yet keeps getting them at the hour's pace; another credential is not held up.
-func TestAgentMoneyIsLimited(t *testing.T) {
+// TestAgentWritesAreLimited: a credential that asks for a money write, or an alert, every second for two hours never
+// gets more than the limits in any of their windows, yet keeps getting them at the slowest window's pace; another
+// credential is not held up.
+func TestAgentWritesAreLimited(t *testing.T) {
 	t.Parallel()
 	db, _, s, clock := agentSetup(t)
 	agent := func() accounts.Agent {
@@ -337,11 +338,39 @@ func TestAgentMoneyIsLimited(t *testing.T) {
 		}
 		return a
 	}
-	busy, quiet := agent(), agent()
+	for _, c := range []struct {
+		name   string
+		spend  func(accounts.Agent) error
+		limits map[time.Duration]int
+		least  int
+	}{
+		{"money writes", s.SpendAgentMoney, map[time.Duration]int{time.Minute: 30, time.Hour: 300}, 440},
+		{"alerts", s.SpendAgentAlert, map[time.Duration]int{time.Hour: 60}, 85},
+	} {
+		busy, quiet := agent(), agent()
+		granted := grantedEverySecond(t, clock, func() error { return c.spend(busy) })
+		for window, limit := range c.limits {
+			if n, from := busiest(granted, window); n > limit {
+				t.Errorf("%d %s in the %s from %s, over %d", n, c.name, window, from, limit)
+			}
+		}
+		if len(granted) < c.least {
+			t.Errorf("%d %s in two hours: the limit holds the agent back more than it says", len(granted), c.name)
+		}
+		if err := c.spend(quiet); err != nil {
+			t.Errorf("%s: another credential is held up: %v", c.name, err)
+		}
+	}
+}
+
+// grantedEverySecond asks spend once a second for two hours and returns when it was granted, from the first ask; a
+// refusal must say how long to wait.
+func grantedEverySecond(t *testing.T, clock *manualClock, spend func() error) []time.Duration {
+	t.Helper()
 	start := clock.Now()
 	var granted []time.Duration
 	for range 2 * 3600 {
-		err := s.SpendAgentMoney(busy)
+		err := spend()
 		if wait, ok := errors.AsType[*accounts.TooManyAttempts](err); err != nil && (!ok || wait.RetryAfter <= 0) {
 			t.Fatalf("a refusal without a wait: %v", err)
 		}
@@ -350,17 +379,7 @@ func TestAgentMoneyIsLimited(t *testing.T) {
 		}
 		clock.advance(time.Second)
 	}
-	for window, limit := range map[time.Duration]int{time.Minute: 30, time.Hour: 300} {
-		if n, from := busiest(granted, window); n > limit {
-			t.Errorf("%d money writes in the %s from %s, over %d", n, window, from, limit)
-		}
-	}
-	if len(granted) < 440 {
-		t.Errorf("%d money writes in two hours: the limit holds the agent back more than it says", len(granted))
-	}
-	if err := s.SpendAgentMoney(quiet); err != nil {
-		t.Errorf("another credential is held up: %v", err)
-	}
+	return granted
 }
 
 // busiest is the most of the sorted times that fall in one window, and where that window starts.
