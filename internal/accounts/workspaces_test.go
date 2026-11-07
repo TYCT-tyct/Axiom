@@ -258,3 +258,45 @@ func TestWorkspaceLimitRefusals(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkspaceBudgetIsAdmitted: a budget set through one node is what the next admission of the workspace's key reads
+// on another, with no cache to tell, and removing it leaves the key's call without one.
+func TestWorkspaceBudgetIsAdmitted(t *testing.T) {
+	t.Parallel()
+	db, _, s, key := callSetup(t)
+	other := node(t, db, hashKeys(t, 1), nil)
+	set := func(b accounts.Budget) {
+		t.Helper()
+		if err := db.Tx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{a1}), func(tx pg.Tx) error {
+			_, err := s.SetWorkspaceBudget(t.Context(), tx, system, accounts.AccountID(a1), accounts.WorkspaceID(w1), b)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admitted := func() (amount int64, reset string, ok bool) {
+		t.Helper()
+		c, err := other.AuthenticateKey(t.Context(), accounts.SiteID(s1), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := other.Admit(t.Context(), c, accounts.AdmitRequest{Domain: apiDomain, ClientIP: client}, func(_ pg.Tx, a accounts.Admission) error {
+			amount, reset, ok = a.Budget()
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return amount, reset, ok
+	}
+	if _, _, ok := admitted(); ok {
+		t.Fatal("a budget before one was set")
+	}
+	set(accounts.Budget{Amount: new(int64(500)), Reset: "weekly"})
+	if amount, reset, ok := admitted(); !ok || amount != 500 || reset != "weekly" {
+		t.Errorf("admitted %d %q %v, want 500 weekly", amount, reset, ok)
+	}
+	set(accounts.Budget{})
+	if _, _, ok := admitted(); ok {
+		t.Error("a budget after it was removed")
+	}
+}

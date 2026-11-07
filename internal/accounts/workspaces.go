@@ -40,6 +40,28 @@ type WorkspaceInfo struct {
 	Name     string
 	Default  bool
 	Disabled bool
+	Budget   Budget
+}
+
+// Budget is a workspace's budget, which all its keys share: the most they may spend together in a window, in
+// billionths of the site's currency, and when the window starts again ("daily", "weekly", "monthly", or "" for never).
+// A nil Amount is no budget, and then Reset is "": the table allows no reset without an amount.
+type Budget struct {
+	Amount *int64
+	Reset  string
+}
+
+func budgetOf(amount *int64, reset *string) Budget {
+	b := Budget{Amount: amount}
+	if reset != nil {
+		b.Reset = *reset
+	}
+	return b
+}
+
+func workspaceOf[R ListWorkspacesRow | GetWorkspaceRow](row R) WorkspaceInfo {
+	r := GetWorkspaceRow(row)
+	return WorkspaceInfo{ID: WorkspaceID(r.ID), Name: r.Name, Default: r.IsDefault, Disabled: r.Status == "disabled", Budget: budgetOf(r.Budget, r.BudgetReset)}
 }
 
 // Workspace is the account's workspace id when it is not deleted, and the account's default workspace, where the
@@ -97,7 +119,7 @@ func (s *Service) ListWorkspaces(ctx context.Context, tx pg.Tx, account AccountI
 	}
 	list := make([]WorkspaceInfo, len(rows))
 	for i, r := range rows {
-		list[i] = WorkspaceInfo{ID: WorkspaceID(r.ID), Name: r.Name, Default: r.IsDefault, Disabled: r.Status == "disabled"}
+		list[i] = workspaceOf(r)
 	}
 	return list, nil
 }
@@ -111,8 +133,7 @@ func (s *Service) GetWorkspace(ctx context.Context, tx pg.Tx, account AccountID,
 	case len(rows) == 0:
 		return WorkspaceInfo{}, ErrNotFound
 	}
-	r := rows[0]
-	return WorkspaceInfo{ID: id, Name: r.Name, Default: r.IsDefault, Disabled: r.Status == "disabled"}, nil
+	return workspaceOf(rows[0]), nil
 }
 
 // CreateWorkspace makes an enabled workspace of the account named name, and records it in the audit log in the same
@@ -161,19 +182,19 @@ func (s *Service) UpdateWorkspace(ctx context.Context, tx pg.Tx, actor audit.Act
 		return WorkspaceInfo{}, ErrNotFound
 	}
 	before := rows[0]
-	after := WorkspaceInfo{ID: id, Name: name, Default: before.IsDefault, Disabled: disabled}
+	after := lockedWorkspace(id, before)
+	after.Name, after.Disabled = name, disabled
 	if disabled && before.IsDefault {
 		return WorkspaceInfo{}, ErrDefaultWorkspace
 	}
-	changed := []string{}
-	was, now := map[string]any{}, map[string]any{}
+	c := newChange()
 	if name != before.Name {
-		changed, was["name"], now["name"] = append(changed, "name"), before.Name, name
+		c.note("name", before.Name, name)
 	}
 	if wasDisabled := before.Status == "disabled"; disabled != wasDisabled {
-		changed, was["disabled"], now["disabled"] = append(changed, "disabled"), wasDisabled, disabled
+		c.note("disabled", wasDisabled, disabled)
 	}
-	if len(changed) == 0 {
+	if c.none() {
 		return after, nil
 	}
 	status := "active"
@@ -183,11 +204,71 @@ func (s *Service) UpdateWorkspace(ctx context.Context, tx pg.Tx, actor audit.Act
 	if err := s.queries.UpdateWorkspace(ctx, tx, UpdateWorkspaceParams{ID: uuid.UUID(id), Name: name, Status: status}); err != nil {
 		return WorkspaceInfo{}, fmt.Errorf("change a workspace: %w", workspaceErr(err))
 	}
-	detail := map[string]any{"changed": changed, "before": was, "after": now}
-	if err := recordWorkspace(ctx, tx, actor, "workspace.update", id, before.SiteID, account, detail); err != nil {
+	if err := recordWorkspace(ctx, tx, actor, "workspace.update", id, before.SiteID, account, c.detail()); err != nil {
 		return WorkspaceInfo{}, err
 	}
 	return after, nil
+}
+
+// SetWorkspaceBudget replaces the budget of the account's workspace id, in the row's turn as UpdateWorkspace changes
+// it, and records what changed in the audit log in the same transaction, in the shape a key's spend limit has; a change
+// that changes nothing is not recorded. The next admission of each of its keys reads it, on every node, and billing
+// checks it beside the balance; calls already admitted are charged whatever it now is.
+func (s *Service) SetWorkspaceBudget(ctx context.Context, tx pg.Tx, actor audit.Actor, account AccountID, id WorkspaceID, b Budget) (WorkspaceInfo, error) {
+	rows, err := s.queries.LockWorkspace(ctx, tx, LockWorkspaceParams{AccountID: uuid.UUID(account), ID: uuid.UUID(id)})
+	switch {
+	case err != nil:
+		return WorkspaceInfo{}, fmt.Errorf("set a workspace's budget: %w", err)
+	case len(rows) == 0:
+		return WorkspaceInfo{}, ErrNotFound
+	}
+	before := rows[0]
+	after := lockedWorkspace(id, before)
+	after.Budget = b
+	c := newChange()
+	if !sameOptional(before.Budget, b.Amount) {
+		c.note("budget", before.Budget, b.Amount)
+	}
+	if reset := nullable(b.Reset); !sameOptional(before.BudgetReset, reset) {
+		c.note("budget_reset", before.BudgetReset, reset)
+	}
+	if c.none() {
+		return after, nil
+	}
+	err = s.queries.UpdateWorkspaceBudget(ctx, tx, UpdateWorkspaceBudgetParams{ID: uuid.UUID(id), Budget: b.Amount, BudgetReset: nullable(b.Reset)})
+	if err != nil {
+		return WorkspaceInfo{}, fmt.Errorf("set a workspace's budget: %w", err)
+	}
+	if err := recordWorkspace(ctx, tx, actor, "workspace.update", id, before.SiteID, account, c.detail()); err != nil {
+		return WorkspaceInfo{}, err
+	}
+	return after, nil
+}
+
+func lockedWorkspace(id WorkspaceID, r LockWorkspaceRow) WorkspaceInfo {
+	return WorkspaceInfo{ID: id, Name: r.Name, Default: r.IsDefault, Disabled: r.Status == "disabled", Budget: budgetOf(r.Budget, r.BudgetReset)}
+}
+
+// change is what a change to a workspace replaced, as its audit entry records it: the names of the settings that
+// changed, and their values as they were and as they now are. A setting that did not change is in neither.
+type change struct {
+	changed       []string
+	before, after map[string]any
+}
+
+func newChange() *change {
+	return &change{changed: []string{}, before: map[string]any{}, after: map[string]any{}}
+}
+
+func (c *change) note(name string, was, now any) {
+	c.changed = append(c.changed, name)
+	c.before[name], c.after[name] = was, now
+}
+
+func (c *change) none() bool { return len(c.changed) == 0 }
+
+func (c *change) detail() map[string]any {
+	return map[string]any{"changed": c.changed, "before": c.before, "after": c.after}
 }
 
 // workspaceErr is ErrWorkspaceNameTaken for the unique index on live workspaces' names (migration 00038), and err

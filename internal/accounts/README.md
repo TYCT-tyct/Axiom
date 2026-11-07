@@ -402,6 +402,7 @@ func (s *Service) CreateWorkspace(ctx context.Context, tx pg.Tx, actor audit.Act
 func (s *Service) SiteWorkspaceLimit(ctx context.Context, tx pg.Tx, site SiteID) (WorkspaceLimit, error) // 站点自己的工作区上限和生效值；SetSiteWorkspaceLimit 锁站点行、校验、写、审计
 func (s *Service) AccountWorkspaceLimit(ctx context.Context, tx pg.Tx, account AccountID) (WorkspaceLimit, error) // 账户自己的和生效值；SetAccountWorkspaceLimit 锁账户行（建工作区用的那把）、校验、写、审计
 func (s *Service) UpdateWorkspace(ctx context.Context, tx pg.Tx, actor audit.Actor, account AccountID, id WorkspaceID, name string, disabled bool) (WorkspaceInfo, error) // 锁工作区行，停用默认工作区是 ErrDefaultWorkspace；有变化才写并审计 workspace.update
+func (s *Service) SetWorkspaceBudget(ctx context.Context, tx pg.Tx, actor audit.Actor, account AccountID, id WorkspaceID, b Budget) (WorkspaceInfo, error) // 锁同一把工作区行锁后整体替换预算（Amount 为 nil 即没有预算）；有变化才写并审计 workspace.update；下一次准入读到，计费与余额一起检查
 func (s *Service) GatesLookups() bool                    // Config.LookupSlot 是否配了；gateway 的 NewHandler 要求配了
 func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest,
 	fn func(tx pg.Tx, a Admission) error) error              // fn 由 gateway 组装：定规则、路由、billing 的准入；只收调用 key

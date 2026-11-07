@@ -262,7 +262,7 @@ Axiom 对 `provider` 对象的处理在 `gw/provider.go`：认识的成员读进
 | `GET/PATCH/DELETE /api/v1/keys/{hash}` | 查询/修改（含停用）/删除 | api/api-keys/get-a-single-api-key、update-an-api-key、delete-an-api-key | 有：`cmd/axiom/management.go`，data/deleted 外壳；PATCH 只改设置，不改到期或工作区 | 同上 | 同上 | 同上 |
 | key 限额：`limit`(USD)、`limit_reset`(daily/weekly/monthly，UTC)、`expires_at` | 每 key 限额 | 同上 | 有：key 的限额、重置周期、过期（`gw/readonly.go:86-125`、`internal/accounts/keys.go`） | 有 | 有 | 周期的边界（UTC、周一起算）与 OpenRouter 是否一致未核实 |
 | OAuth PKCE 换 key（`/auth/keys/code`、`/auth/keys`） | 第三方应用让用户授权拿 key | docs/guides/overview/auth/oauth | 没有（范围「以后」：第三方应用用户用自己账户付费，`docs/product.md:96`） | 无 | 无 | 归「新建」 |
-| 工作区 `/workspaces`、成员、预算 `/workspaces/{id}/budgets`；护栏 `/guardrails`；组织 `/organization/*`；SCIM/SSO | 企业管理 API | docs/guides/features/workspaces、guardrails、sso | 部分：控制台 `/api/console/v1/workspaces` 列出、新建、改名、停用（#690，停用而不删除，无 `slug`，理由见[账户的「工作区」](domains/accounts.md#工作区)）；预算接口、成员和对外管理 API 没有 | 无 | 无 | #315 / #317 |
+| 工作区 `/workspaces`、成员、预算 `/workspaces/{id}/budgets`；护栏 `/guardrails`；组织 `/organization/*`；SCIM/SSO | 企业管理 API | docs/guides/features/workspaces、guardrails、sso | 部分：控制台 `/api/console/v1/workspaces` 列出、新建、改名、停用，`/workspaces/{id}/budget` 读写预算和当期用量（#690，停用而不删除，无 `slug`，每个工作区一个预算而不是每个周期一个，理由见[账户的「工作区」](domains/accounts.md#工作区)）；成员和对外管理 API 没有 | 无 | 无 | #315 / #317 |
 | 终端用户登记 `/end-users`（`user` 归因） | 按终端用户追踪 | api/end-users/* | 没有 | 无 | 无 | 低优先 |
 
 ## 16. 其他面向开发者的能力

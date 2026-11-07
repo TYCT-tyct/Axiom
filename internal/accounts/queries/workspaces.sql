@@ -1,12 +1,12 @@
 -- name: ListWorkspaces :many
 -- An account's workspaces that are not deleted, its default first and then in the order they were made: an ID is a
 -- UUIDv7. An account holds at most its limit, never over 1,000, so one read is the whole list.
-SELECT id, name, status, is_default FROM accounts.workspaces
+SELECT id, name, status, is_default, budget, budget_reset FROM accounts.workspaces
 WHERE account_id = @account_id AND deleted_at IS NULL
 ORDER BY is_default DESC, id;
 
 -- name: GetWorkspace :many
-SELECT id, name, status, is_default FROM accounts.workspaces
+SELECT id, name, status, is_default, budget, budget_reset FROM accounts.workspaces
 WHERE account_id = @account_id AND id = @id AND deleted_at IS NULL;
 
 -- name: CountWorkspaces :one
@@ -21,12 +21,15 @@ VALUES (@id, @site_id, @account_id, @name, 'active', false);
 -- The settings a change replaces, read in the row's turn, so the audit entry names what this change replaced and not
 -- what a change made at the same moment did. NO KEY: a key being made in the workspace holds its row FOR KEY SHARE
 -- through the foreign key, and need not wait for a rename.
-SELECT site_id, name, status, is_default FROM accounts.workspaces
+SELECT site_id, name, status, is_default, budget, budget_reset FROM accounts.workspaces
 WHERE account_id = @account_id AND id = @id AND deleted_at IS NULL
 FOR NO KEY UPDATE;
 
 -- name: UpdateWorkspace :exec
 UPDATE accounts.workspaces SET name = @name, status = @status WHERE id = @id;
+
+-- name: UpdateWorkspaceBudget :exec
+UPDATE accounts.workspaces SET budget = sqlc.narg(budget)::bigint, budget_reset = sqlc.narg(budget_reset)::text WHERE id = @id;
 
 -- name: ReadSiteWorkspaceLimit :one
 -- The site's own limit on an account's workspaces (NULL is not set); no row means no such site.

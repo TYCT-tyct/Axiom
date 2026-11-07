@@ -147,7 +147,7 @@ func TestReserveStorm(t *testing.T) {
 			b := newBank(t, 1000+1800*boolInt(tc.limit != nil), -200, Config{})
 			a := b.admitted
 			a.KeyLimit = tc.limit
-			total, refused := b.storm(a, tc.source)
+			total, refused := b.storm(tc.source, a)
 			if total > tc.capacity || len(refused) == 0 {
 				t.Fatalf("reserved %d of %d with %d refusals", total, tc.capacity, len(refused))
 			}
@@ -161,14 +161,15 @@ func TestReserveStorm(t *testing.T) {
 	}
 }
 
-// storm reserves 40 random amounts at once and returns the total reserved and the amounts source refused.
-func (b *bank) storm(a Admitted, source Source) (total int64, refused []int64) {
+// storm reserves 40 random amounts at once, taking turns among callers, and returns the total reserved and the amounts
+// source refused.
+func (b *bank) storm(source Source, callers ...Admitted) (total int64, refused []int64) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for i := range 40 {
 		amount := rand.Int64N(100) + 1 + int64(i%2)*50 //nolint:gosec // test data
 		wg.Go(func() {
-			_, err := b.reserve(a, amount)
+			_, err := b.reserve(callers[i%len(callers)], amount)
 			mu.Lock()
 			defer mu.Unlock()
 			if refusedBy(b.t, err, source) {

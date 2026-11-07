@@ -24,7 +24,7 @@ func (q *Queries) CountWorkspaces(ctx context.Context, db DBTX, accountID uuid.U
 }
 
 const getWorkspace = `-- name: GetWorkspace :many
-SELECT id, name, status, is_default FROM accounts.workspaces
+SELECT id, name, status, is_default, budget, budget_reset FROM accounts.workspaces
 WHERE account_id = $1 AND id = $2 AND deleted_at IS NULL
 `
 
@@ -34,10 +34,12 @@ type GetWorkspaceParams struct {
 }
 
 type GetWorkspaceRow struct {
-	ID        uuid.UUID
-	Name      string
-	Status    string
-	IsDefault bool
+	ID          uuid.UUID
+	Name        string
+	Status      string
+	IsDefault   bool
+	Budget      *int64
+	BudgetReset *string
 }
 
 func (q *Queries) GetWorkspace(ctx context.Context, db DBTX, arg GetWorkspaceParams) ([]GetWorkspaceRow, error) {
@@ -54,6 +56,8 @@ func (q *Queries) GetWorkspace(ctx context.Context, db DBTX, arg GetWorkspacePar
 			&i.Name,
 			&i.Status,
 			&i.IsDefault,
+			&i.Budget,
+			&i.BudgetReset,
 		); err != nil {
 			return nil, err
 		}
@@ -88,16 +92,18 @@ func (q *Queries) InsertWorkspace(ctx context.Context, db DBTX, arg InsertWorksp
 }
 
 const listWorkspaces = `-- name: ListWorkspaces :many
-SELECT id, name, status, is_default FROM accounts.workspaces
+SELECT id, name, status, is_default, budget, budget_reset FROM accounts.workspaces
 WHERE account_id = $1 AND deleted_at IS NULL
 ORDER BY is_default DESC, id
 `
 
 type ListWorkspacesRow struct {
-	ID        uuid.UUID
-	Name      string
-	Status    string
-	IsDefault bool
+	ID          uuid.UUID
+	Name        string
+	Status      string
+	IsDefault   bool
+	Budget      *int64
+	BudgetReset *string
 }
 
 // An account's workspaces that are not deleted, its default first and then in the order they were made: an ID is a
@@ -116,6 +122,8 @@ func (q *Queries) ListWorkspaces(ctx context.Context, db DBTX, accountID uuid.UU
 			&i.Name,
 			&i.Status,
 			&i.IsDefault,
+			&i.Budget,
+			&i.BudgetReset,
 		); err != nil {
 			return nil, err
 		}
@@ -128,7 +136,7 @@ func (q *Queries) ListWorkspaces(ctx context.Context, db DBTX, accountID uuid.UU
 }
 
 const lockWorkspace = `-- name: LockWorkspace :many
-SELECT site_id, name, status, is_default FROM accounts.workspaces
+SELECT site_id, name, status, is_default, budget, budget_reset FROM accounts.workspaces
 WHERE account_id = $1 AND id = $2 AND deleted_at IS NULL
 FOR NO KEY UPDATE
 `
@@ -139,10 +147,12 @@ type LockWorkspaceParams struct {
 }
 
 type LockWorkspaceRow struct {
-	SiteID    uuid.UUID
-	Name      string
-	Status    string
-	IsDefault bool
+	SiteID      uuid.UUID
+	Name        string
+	Status      string
+	IsDefault   bool
+	Budget      *int64
+	BudgetReset *string
 }
 
 // The settings a change replaces, read in the row's turn, so the audit entry names what this change replaced and not
@@ -162,6 +172,8 @@ func (q *Queries) LockWorkspace(ctx context.Context, db DBTX, arg LockWorkspaceP
 			&i.Name,
 			&i.Status,
 			&i.IsDefault,
+			&i.Budget,
+			&i.BudgetReset,
 		); err != nil {
 			return nil, err
 		}
@@ -216,6 +228,21 @@ type UpdateWorkspaceParams struct {
 
 func (q *Queries) UpdateWorkspace(ctx context.Context, db DBTX, arg UpdateWorkspaceParams) error {
 	_, err := db.Exec(ctx, updateWorkspace, arg.Name, arg.Status, arg.ID)
+	return err
+}
+
+const updateWorkspaceBudget = `-- name: UpdateWorkspaceBudget :exec
+UPDATE accounts.workspaces SET budget = $1::bigint, budget_reset = $2::text WHERE id = $3
+`
+
+type UpdateWorkspaceBudgetParams struct {
+	Budget      *int64
+	BudgetReset *string
+	ID          uuid.UUID
+}
+
+func (q *Queries) UpdateWorkspaceBudget(ctx context.Context, db DBTX, arg UpdateWorkspaceBudgetParams) error {
+	_, err := db.Exec(ctx, updateWorkspaceBudget, arg.Budget, arg.BudgetReset, arg.ID)
 	return err
 }
 
