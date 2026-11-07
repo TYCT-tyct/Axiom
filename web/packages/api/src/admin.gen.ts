@@ -3636,6 +3636,8 @@ export interface components {
         };
         /** @description A user's ID (TypeID). */
         UserId: string;
+        /** @description A workspace's ID (TypeID). */
+        WorkspaceId: string;
         /** @description An account's ID (TypeID). */
         AccountId: string;
         SignInRequest: {
@@ -4223,6 +4225,8 @@ export interface components {
             version: number;
             /** @description The currency of a platform preset's price limits; absent for the others, which are in the site's. */
             currency?: string;
+            /** @description The workspace of a workspace's preset; absent for the other layers' and from older nodes. */
+            workspace_id?: components["schemas"]["WorkspaceId"];
             rules: components["schemas"]["RoutingRules"];
             disabled: boolean;
             /**

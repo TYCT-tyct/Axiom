@@ -55,7 +55,7 @@ export default function RoutingPresets() {
             {(data) => (
               <PresetsTable
                 presets={data.data}
-                defaultId={defaults.data?.preset_id}
+                defaultId={newKeysPreset(defaults.data)}
                 manage={manage}
                 onOpen={setDialog}
               />
@@ -67,6 +67,12 @@ export default function RoutingPresets() {
       {dialog && dialog.kind !== "disable" ? <PresetDialog edit={dialog} onClose={close} /> : null}
     </>
   );
+}
+
+// newKeysPreset is the preset a key made now takes, which the list marks: the node names it, or names none because the
+// default refuses new keys; only an older node, which says neither, leaves the account's own default to stand for it.
+function newKeysPreset(read: Schemas["AccountRoutingDefault"] | undefined) {
+  return read?.new_keys_refused ? undefined : (read?.new_keys_preset_id ?? read?.preset_id);
 }
 
 // DefaultPanel shows and sets the account's default for new keys. A later read that fails keeps the form and what the
@@ -133,10 +139,12 @@ function DefaultForm({
   const errors = useErrors();
   const { chosen, setChosen, unchanged, save, reload, stale } = useDefaultEdit(first);
   // What the site's or the platform's default gives is known only while the account sets none: the node names what a
-  // key made now takes, and with the account's own default that is the account's.
+  // key made now takes, and with the account's own default that is the account's. The default workspace's own default
+  // is not the site's or the platform's (NewKeysWarning says it), and the account's can point at no workspace's preset.
   const latest = useQuery(routingDefaultQuery).data;
   const newKeys = useNewKeys();
-  const inherited = latest && !latest.preset_id ? newKeys.name : undefined;
+  const inherited = latest && !latest.preset_id && newKeys.layer !== "workspace" ? newKeys.name : undefined;
+  const choosable = presets.filter((preset) => preset.scope !== "workspace");
   return (
     <Panel className="p-4">
       <form
@@ -153,7 +161,13 @@ function DefaultForm({
         {save.isError ? <FormError>{errors.message(save.error)}</FormError> : null}
         {reload.isError ? <FormError>{errors.message(reload.error)}</FormError> : null}
         <div className="flex flex-wrap items-end gap-3">
-          <DefaultSelect presets={presets} chosen={chosen} inherited={inherited} manage={manage} onChoose={setChosen} />
+          <DefaultSelect
+            presets={choosable}
+            chosen={chosen}
+            inherited={inherited}
+            manage={manage}
+            onChoose={setChosen}
+          />
           {manage ? (
             <DefaultAction
               stale={stale}
@@ -164,7 +178,7 @@ function DefaultForm({
             />
           ) : null}
         </div>
-        {newKeys.refused ? <p className="text-label text-warn">{t("routingPresets.defaults.refused")}</p> : null}
+        <NewKeysWarning newKeys={newKeys} />
         {save.isSuccess ? (
           <p role="status" className="text-label text-ok">
             {t("routingPresets.defaults.saved")}
@@ -173,6 +187,26 @@ function DefaultForm({
       </form>
     </Panel>
   );
+}
+
+// NewKeysWarning says when the account's default does not decide what a key made now takes: the default refuses new
+// keys, or the default workspace, where the console makes keys, sets its own default, which comes before the
+// account's (new_keys_layer). An older node says neither, and nothing is said.
+function NewKeysWarning({ newKeys }: { newKeys: ReturnType<typeof useNewKeys> }) {
+  const { t } = useTranslation();
+  const byWorkspace = newKeys.layer === "workspace";
+  if (newKeys.refused) {
+    return (
+      <p className="text-label text-warn">
+        {t(byWorkspace ? "routingPresets.defaults.refusedWorkspace" : "routingPresets.defaults.refused")}
+      </p>
+    );
+  }
+  return byWorkspace && newKeys.id ? (
+    <p className="text-label text-warn [overflow-wrap:anywhere]">
+      {t("routingPresets.defaults.workspace", { name: newKeys.name ?? newKeys.id })}
+    </p>
+  ) : null;
 }
 
 // DefaultAction saves the choice, or after a refusal loads the latest default, which is the only way on from there.

@@ -37,19 +37,21 @@ var SystemPreset PresetID
 var ErrDefaultInvalid = errors.New("routing: the default routing preset cannot be used for this key")
 
 // DefaultPreset is the preset a new call key of the workspace is bound to: the default of the first layer, from the
-// workspace up to the platform, that sets one, and the system preset when none does. tx is the transaction that makes
-// the key, in the key's own scope, so a layer the key's account cannot read is not one of its layers; it reads the
-// defaults as they are now, not the routing snapshot's.
-func DefaultPreset(ctx context.Context, tx pg.Tx, site SiteID, account AccountID, workspace WorkspaceID, currency platform.Currency) (PresetID, error) {
+// workspace up to the platform, that sets one, and the system preset when none does. layer is the layer that decides,
+// the one whose default it follows or refuses (ErrDefaultInvalid); the platform's, whose built-in fallback the system
+// preset is, when none sets one. tx is the transaction that makes the key, in the key's own scope, so a layer the
+// key's account cannot read is not one of its layers; it reads the defaults as they are now, not the routing
+// snapshot's.
+func DefaultPreset(ctx context.Context, tx pg.Tx, site SiteID, account AccountID, workspace WorkspaceID, currency platform.Currency) (id PresetID, layer PresetScope, err error) {
 	var (
 		found                   *uuid.UUID
-		scope                   *string
+		scope, layerName        *string
 		siteID, accountID, work *uuid.UUID
 		disabled                bool
 		priced                  *string
 	)
 	// The unique index on the layer columns leaves at most four rows; the deepest layer is the one with most owners.
-	err := tx.QueryRow(ctx, `SELECT p.id, p.scope, p.site_id, p.account_id, p.workspace_id, p.deleted_at IS NOT NULL, v.currency
+	err = tx.QueryRow(ctx, `SELECT d.scope, p.id, p.scope, p.site_id, p.account_id, p.workspace_id, p.deleted_at IS NOT NULL, v.currency
 		FROM routing.preset_defaults d
 		LEFT JOIN routing.presets p ON p.id = d.preset_id
 		LEFT JOIN routing.preset_versions v ON v.preset_id = p.id AND v.version = p.current_version
@@ -58,29 +60,32 @@ func DefaultPreset(ctx context.Context, tx pg.Tx, site SiteID, account AccountID
 			OR d.site_id = $1 AND d.account_id = $2 AND (d.workspace_id IS NULL OR d.workspace_id = $3)
 		ORDER BY (d.site_id IS NOT NULL)::int + (d.account_id IS NOT NULL)::int + (d.workspace_id IS NOT NULL)::int DESC
 		LIMIT 1`, uuid.UUID(site), uuid.UUID(account), uuid.UUID(workspace),
-	).Scan(&found, &scope, &siteID, &accountID, &work, &disabled, &priced)
+	).Scan(&layerName, &found, &scope, &siteID, &accountID, &work, &disabled, &priced)
 	if errors.Is(err, pg.ErrNoRows) {
-		return SystemPreset, nil
+		return SystemPreset, ScopePlatform, nil
 	}
 	if err != nil {
-		return PresetID{}, fmt.Errorf("routing: read the default preset: %w", err)
+		return PresetID{}, 0, fmt.Errorf("routing: read the default preset: %w", err)
+	}
+	if layer, err = ParseScope(*layerName); err != nil {
+		return PresetID{}, 0, err
 	}
 	if found == nil { // the default names a preset this scope cannot read; its columns are all NULL
-		return PresetID{}, ErrDefaultInvalid
+		return PresetID{}, layer, ErrDefaultInvalid
 	}
 	p := Preset{ID: PresetID(*found), Site: SiteID(orZero(siteID)), Account: AccountID(orZero(accountID)), Workspace: WorkspaceID(orZero(work))}
 	if p.Scope, err = ParseScope(*scope); err != nil {
-		return PresetID{}, err
+		return PresetID{}, 0, err
 	}
 	if priced != nil {
 		if p.Currency, err = platform.ParseCurrency(*priced); err != nil {
-			return PresetID{}, fmt.Errorf("routing: preset %s: %w", uuid.UUID(p.ID), err)
+			return PresetID{}, 0, fmt.Errorf("routing: preset %s: %w", uuid.UUID(p.ID), err)
 		}
 	}
 	if disabled || !p.visibleTo(Admission{Site: site, Account: account, Workspace: workspace, Currency: currency}) {
-		return PresetID{}, ErrDefaultInvalid
+		return PresetID{}, layer, ErrDefaultInvalid
 	}
-	return p.ID, nil
+	return p.ID, layer, nil
 }
 
 func orZero(id *uuid.UUID) uuid.UUID {

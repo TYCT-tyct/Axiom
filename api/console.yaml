@@ -298,34 +298,44 @@ paths:
       tags: [Keys]
       summary: The routing presets the account's keys may use
       description: >-
-        The live routing presets a key of the account may be bound to, the widest layer first: the platform's (those
-        that limit prices only in the site's currency), the site's and the account's own. The system preset that keys
-        made before presets route by is not among them. Disabled presets are not listed; `getRoutingPreset` still reads
-        them. Routing presets are not the request presets of `/presets`: they choose which endpoints a key is routed to
-        (docs/domains/routing.md「路由预设」).
+        The live routing presets a key of the workspace may be bound to, the widest layer first: the platform's (those
+        that limit prices only in the site's currency), the site's, the account's and the workspace's own. Without
+        `workspace_id` the workspace is the account's default one, where the console makes keys. The system preset that
+        keys made before presets route by is not among them. Disabled presets are not listed; `getRoutingPreset` still
+        reads them. Routing presets are not the request presets of `/presets`: they choose which endpoints a key is
+        routed to (docs/domains/routing.md「路由预设」).
       security:
         - session: []
       x-axiom-level: signed_in
       x-axiom-permission: api_keys.view
+      parameters:
+        - in: query
+          name: workspace_id
+          description: A workspace of the account; another account's, or a deleted one, is 404.
+          schema: {$ref: "#/components/schemas/WorkspaceId"}
       responses:
         "200":
           description: The presets.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/RoutingPresetList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
     post:
       operationId: createRoutingPreset
       tags: [Keys]
-      summary: Make a routing preset of the account
+      summary: Make a routing preset of the account or one of its workspaces
       description: >-
-        Makes an account preset with its first version of rules. The rules are checked whole: a member the format does
-        not have, an override that widens what it inherits, or the platform's `advanced` settings are a 400 naming
-        `/rules`. The slug is the account's own, unique among its live presets (409 `name_taken`). An account holds at
-        most 20 live presets and makes at most 200 in all, disabled ones counted (409 `preset_quota`). A key bound to a
-        new preset may be refused 503 `preset_unavailable` for up to 5 seconds, until every node has read it.
+        Makes an account preset with its first version of rules, or with `workspace_id` a preset of that workspace,
+        which only the workspace's keys and default may choose (404 for another account's workspace or a deleted one).
+        The rules are checked whole: a member the format does not have, an override that widens what it inherits, or
+        the platform's `advanced` settings are a 400 naming `/rules`. The slug is the layer's own, unique among its live
+        presets (409 `name_taken`). An account holds at most 20 live presets and makes at most 200 in all, disabled ones
+        counted; a workspace at most 10 and 100, which count against its account's too (409 `preset_quota`). A key bound
+        to a new preset may be refused 503 `preset_unavailable` for up to 5 seconds, until every node has read it.
       security:
         - session: []
           csrf: []
@@ -345,6 +355,7 @@ paths:
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/routing-presets/{preset_id}:
@@ -377,7 +388,7 @@ paths:
       tags: [Keys]
       summary: Change a routing preset of the account
       description: >-
-        Replaces the name and the rules of one of the account's presets, at the `revision` the page read (409
+        Replaces the name and the rules of one of the account's presets or its workspaces', at the `revision` the page read (409
         `stale_revision` when it moved on). Rules that differ from the current ones are a new version, which every key
         bound to the preset is routed by from the next routing snapshot, within 5 seconds; a rename keeps the version.
         A preset of the platform or the site is 403; a disabled one is 404.
@@ -408,7 +419,7 @@ paths:
       tags: [Keys]
       summary: Disable a routing preset of the account
       description: >-
-        Disables one of the account's presets at `revision`. The keys bound to it keep routing by it; no new key or
+        Disables one of the account's presets or its workspaces' at `revision`. The keys bound to it keep routing by it; no new key or
         default can choose it. A preset a default still points at is refused 409 `preset_in_use`: change the default
         first. A disabled preset still counts against the 200 the account may make.
       security:
@@ -437,7 +448,8 @@ paths:
       description: >-
         The preset the account's new keys are bound to, when the account sets one; absent `preset_id` means the
         account sets none and new keys take the site's or the platform's default. `new_keys_preset_id` names the
-        preset that chain gives a key made now, so a page can show which keys are bound to another.
+        preset a key made now in the account's default workspace takes, where the console makes keys, so a page can
+        show which keys are bound to another; a default of that workspace's own comes before the account's.
       security:
         - session: []
       x-axiom-level: signed_in
@@ -479,6 +491,68 @@ paths:
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/workspaces/{workspace_id}/routing-default:
+    parameters:
+      - in: path
+        name: workspace_id
+        required: true
+        description: A workspace of the account; another account's, or a deleted one, is 404.
+        schema: {$ref: "#/components/schemas/WorkspaceId"}
+    get:
+      operationId: getWorkspaceRoutingDefault
+      tags: [Keys]
+      summary: A workspace's default routing preset
+      description: >-
+        The preset the workspace's new keys are bound to, when the workspace sets one; absent `preset_id` means it sets
+        none and its new keys take the account's, the site's or the platform's default. `new_keys_preset_id` names the
+        preset that chain gives a key made now in the workspace.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The workspace's default.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AccountRoutingDefault"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setWorkspaceRoutingDefault
+      tags: [Keys]
+      summary: Set a workspace's default routing preset
+      description: >-
+        Points the workspace's default at a live preset of the platform, the site, the account or the workspace, or
+        clears it with a null `preset_id`, at the `version` the page read (409 `stale_revision` when it moved on). Only
+        keys made in the workspace after the change take it; the keys already made keep their presets. The system
+        preset, a disabled preset and one the workspace cannot use, another workspace's included, are 400
+        `preset_not_selectable`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RoutingDefaultUpdate"}
+      responses:
+        "200":
+          description: The workspace's default as set.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AccountRoutingDefault"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/source-classes:
@@ -2687,6 +2761,9 @@ components:
         revision: {type: integer, format: int64, description: "Moves on every change; a change names the revision it read."}
         version: {type: integer, format: int64, description: "The rules' version, which moves only when the rules change."}
         currency: {type: string, description: "The currency of a platform preset's price limits; absent for the others, which are in the site's."}
+        workspace_id:
+          allOf: [{$ref: "#/components/schemas/WorkspaceId"}]
+          description: The workspace of a workspace's preset; absent for the other layers' and from older nodes.
         rules: {$ref: "#/components/schemas/RoutingRules"}
         disabled: {type: boolean}
         keys: {type: integer, format: int64, minimum: 0, description: "The keys bound to the preset that are not deleted: the caller's account's in the console, every account's in the admin API. Given when a preset is listed or read, never for the system preset, which every unbound key also follows; absent from nodes that do not count them."}
@@ -2704,9 +2781,12 @@ components:
       additionalProperties: false
       required: [slug, name, rules]
       properties:
-        slug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,63}$', description: "Unique among the account's live presets; it cannot be changed."}
+        slug: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,63}$', description: "Unique among the layer's live presets; it cannot be changed."}
         name: {type: string, minLength: 1, maxLength: 100}
         rules: {$ref: "#/components/schemas/RoutingRules"}
+        workspace_id:
+          allOf: [{$ref: "#/components/schemas/WorkspaceId"}]
+          description: Makes the preset the workspace's; absent makes it the account's.
     RoutingPresetUpdate:
       type: object
       additionalProperties: false
@@ -2735,20 +2815,28 @@ components:
           type: string
           format: uuid
           description: >-
-            The preset a call key the account makes now is bound to: the account's default when it sets one, else the
-            site's, else the platform's, else the system preset (the zero UUID). Absent when that default cannot be
-            used (`new_keys_refused`) and from older nodes.
+            The preset a call key made now is bound to: the default of the first layer that sets one, from the
+            workspace (the account's default workspace, for the account's default) up to the account, the site and the
+            platform, else the system preset (the zero UUID). Absent when that default cannot be used
+            (`new_keys_refused`) and from older nodes.
         new_keys_refused:
           type: boolean
           description: >-
-            True when the deepest default set is one the account cannot use, so a call key made now without a preset
+            True when the deepest default set is one the key cannot use, so a call key made now without a preset
             is refused 409 `preset_default_invalid` until that default is changed. Absent otherwise.
+        new_keys_layer:
+          allOf: [{$ref: "#/components/schemas/RoutingPresetScope"}]
+          description: >-
+            The layer whose default decides what a key made now takes: the one `new_keys_preset_id` follows, or the
+            one whose default refuses (`new_keys_refused`); `platform` when no layer sets one and new keys take the
+            system preset. `workspace` on the account's default means the default workspace sets its own, which comes
+            before the account's. Absent from older nodes.
     RoutingDefaultUpdate:
       type: object
       additionalProperties: false
       required: [preset_id, version]
       properties:
-        preset_id: {type: string, format: uuid, nullable: true, description: "null clears the account's default."}
+        preset_id: {type: string, format: uuid, nullable: true, description: "null clears the layer's default."}
         version: {type: integer, format: int64, minimum: 0}
     SourceClassName:
       type: object
