@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"axiom/internal/accounts"
+	"axiom/internal/operations"
 	"axiom/internal/platform/clientip"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
@@ -25,8 +26,9 @@ type call struct {
 	site      accounts.Site
 	ip        netip.Addr
 	principal accounts.Principal
-	scope     pg.Scope       // the account's, when the operation needs a permission on it
-	agent     accounts.Agent // the operations credential, on the operations listener
+	scope     pg.Scope               // the account's, when the operation needs a permission on it
+	agent     accounts.Agent         // the operations credential, on the operations listener
+	limits    operations.AgentLimits // the owner's limits as the credential's request read them, on the same
 }
 
 type callKey struct{}

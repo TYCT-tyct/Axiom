@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -112,5 +113,66 @@ func TestOperationsMoneyRate(t *testing.T) {
 	}
 	if got := f.text(`SELECT count(*)::text FROM operations.money_actions`); got != "0" {
 		t.Errorf("%s reservations after previews and a refusal", got)
+	}
+}
+
+// TestOperationsAgentLimitsLowered: the owner lowers a credential's money writes in a minute, then in an hour, then its
+// requests, each from the revision read and keeping the limits left out, and the agent is held back sooner from its
+// next request on; previews count as money writes.
+func TestOperationsAgentLimitsLowered(t *testing.T) {
+	t.Parallel()
+	f, supplier, token := topUpReady(t)
+	limits := func(rec *httptest.ResponseRecorder) string {
+		t.Helper()
+		var l adminapi.OperationsAgentLimits
+		decode(t, rec, &l)
+		return fmt.Sprintf("requests %d/%d, money %d/%d a minute and %d/%d an hour, alerts %d/%d, rev %d", *l.RequestsPerMinute,
+			*l.RequestsPerMinuteMax, *l.MoneyWritesPerMinute, *l.MoneyWritesPerMinuteMax, *l.MoneyWritesPerHour,
+			*l.MoneyWritesPerHourMax, *l.AlertsPerHour, *l.AlertsPerHourMax, *l.Rev)
+	}
+	set := func(body, want string) {
+		t.Helper()
+		rec := f.change(f.s, http.MethodPut, "/operations/agent-limits", body, newKey())
+		if got := limits(rec); rec.Code != http.StatusOK || got != want {
+			t.Fatalf("setting %s: %d %s", body, rec.Code, got)
+		}
+	}
+	if got := limits(f.do(http.MethodGet, "/operations/agent-limits", "", as(f.s))); got != "requests 600/600, money 30/30 a minute and 300/300 an hour, alerts 60/60, rev 0" {
+		t.Errorf("before the owner sets them: %s", got)
+	}
+	preview := func(token string) *httptest.ResponseRecorder {
+		return f.proposeTopUp(token, supplier, "1", newKey(), `,"dry_run":true`)
+	}
+	for i := range 2 {
+		expectAdmin(t, "a money write before lowering "+strconv.Itoa(i), preview(token), http.StatusOK, "")
+	}
+	set(`{"alerts_per_hour":60,"money_writes_per_minute":2,"rev":0,"reason":"slower spending"}`,
+		"requests 600/600, money 2/30 a minute and 300/300 an hour, alerts 60/60, rev 1")
+	expectAdmin(t, "the third money write, which the default lets through", preview(token), http.StatusTooManyRequests, codeRateLimited)
+	expectAdmin(t, "a read", f.agent(token, because("/caps", "x")), http.StatusOK, "")
+
+	set(`{"alerts_per_hour":60,"money_writes_per_minute":30,"money_writes_per_hour":2,"rev":1,"reason":"fewer an hour"}`,
+		"requests 600/600, money 30/30 a minute and 2/300 an hour, alerts 60/60, rev 2")
+	fresh := f.moneyAgent(true)
+	expectAdmin(t, "the first money write under 2 an hour", preview(fresh), http.StatusOK, "")
+	expectAdmin(t, "the second money write under 2 an hour", preview(fresh), http.StatusTooManyRequests, codeRateLimited)
+
+	set(`{"alerts_per_hour":60,"requests_per_minute":10,"rev":2,"reason":"a quieter patrol"}`,
+		"requests 10/600, money 30/30 a minute and 2/300 an hour, alerts 60/60, rev 3")
+	reader := f.moneyAgent(false)
+	expectAdmin(t, "the first request under 10 a minute", f.agent(reader, because("/me", "x")), http.StatusOK, "")
+	rec := f.agent(reader, because("/me", "x"))
+	expectAdmin(t, "the second request under 10 a minute", rec, http.StatusTooManyRequests, codeRateLimited)
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("no Retry-After")
+	}
+	expectAdmin(t, "from a stale revision", f.change(f.s, http.MethodPut, "/operations/agent-limits",
+		`{"alerts_per_hour":60,"requests_per_minute":20,"rev":2,"reason":"r"}`, newKey()), http.StatusConflict, codeStaleRevision)
+	expectAdmin(t, "past a ceiling", f.change(f.s, http.MethodPut, "/operations/agent-limits",
+		`{"alerts_per_hour":60,"money_writes_per_hour":301,"rev":3,"reason":"r"}`, newKey()), http.StatusBadRequest, codeInvalidRequest)
+	got := f.text(`SELECT string_agg(concat_ws(':', detail->'after'->>'requests_per_minute', detail->'after'->>'money_writes_per_minute',
+		detail->'after'->>'money_writes_per_hour', actor_kind), ',' ORDER BY at, id) FROM platform.audit_log WHERE action = 'agent_limits.set'`)
+	if got != "600:2:300:user,600:30:2:user,10:30:2:user" {
+		t.Errorf("the audit: %s", got)
 	}
 }

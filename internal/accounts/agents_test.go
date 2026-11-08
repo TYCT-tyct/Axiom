@@ -344,7 +344,8 @@ func TestAgentWritesAreLimited(t *testing.T) {
 		limits map[time.Duration]int
 		least  int
 	}{
-		{"money writes", s.SpendAgentMoney, map[time.Duration]int{time.Minute: 30, time.Hour: 300}, 440},
+		{"money writes", func(a accounts.Agent) error { return s.SpendAgentMoney(a, 30, 300) }, map[time.Duration]int{time.Minute: 30, time.Hour: 300}, 440},
+		{"money writes lowered to 4 and 20", func(a accounts.Agent) error { return s.SpendAgentMoney(a, 4, 20) }, map[time.Duration]int{time.Minute: 4, time.Hour: 20}, 29},
 		{"alerts", func(a accounts.Agent) error { return s.SpendAgentAlert(a, 60) }, map[time.Duration]int{time.Hour: 60}, 85},
 		{"alerts lowered to 10", func(a accounts.Agent) error { return s.SpendAgentAlert(a, 10) }, map[time.Duration]int{time.Hour: 10}, 14},
 		{"alerts lowered to 1", func(a accounts.Agent) error { return s.SpendAgentAlert(a, 1) }, map[time.Duration]int{time.Hour: 1}, 2},
@@ -361,6 +362,38 @@ func TestAgentWritesAreLimited(t *testing.T) {
 		}
 		if err := c.spend(quiet); err != nil {
 			t.Errorf("%s: another credential is held up: %v", c.name, err)
+		}
+	}
+}
+
+// TestAgentLimitsLoweredMidWindow: calls granted under a limit still count against it once the owner lowers it, so the
+// lowered limit holds over the window that already let them through: past the bucket's own refill and its forgetting
+// a full bucket, until the window has passed.
+func TestAgentLimitsLoweredMidWindow(t *testing.T) {
+	t.Parallel()
+	db, _, s, clock := agentSetup(t)
+	for _, c := range []struct {
+		name          string
+		before, after func(accounts.Agent) error
+		calls         int
+		window        time.Duration
+	}{
+		{"money writes an hour", func(a accounts.Agent) error { return s.SpendAgentMoney(a, 30, 300) }, func(a accounts.Agent) error { return s.SpendAgentMoney(a, 30, 1) }, 1, time.Hour},
+		{"money writes a minute", func(a accounts.Agent) error { return s.SpendAgentMoney(a, 30, 300) }, func(a accounts.Agent) error { return s.SpendAgentMoney(a, 1, 300) }, 1, time.Minute},
+		{"alerts", func(a accounts.Agent) error { return s.SpendAgentAlert(a, 60) }, func(a accounts.Agent) error { return s.SpendAgentAlert(a, 1) }, 1, time.Hour},
+		{"requests", func(a accounts.Agent) error { return s.SpendAgentRequest(a, 600) }, func(a accounts.Agent) error { return s.SpendAgentRequest(a, 10) }, 10, time.Minute},
+	} {
+		a, err := s.AuthenticateAgent(t.Context(), makeAgent(t, db, s, agentSpec(clock, "operations.money")).Token.Reveal())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range c.calls {
+			if err := c.before(a); err != nil {
+				t.Fatalf("%s before lowering: %v", c.name, err)
+			}
+		}
+		if granted := grantedEverySecond(t, clock, func() error { return c.after(a) }); granted[0] != c.window {
+			t.Errorf("%s: first granted %s after the window's first calls, want once the window has passed (%s)", c.name, granted[0], c.window)
 		}
 	}
 }
@@ -398,20 +431,48 @@ func busiest(times []time.Duration, window time.Duration) (most int, from time.D
 	return most, from
 }
 
-// TestAgentRequestsAreLimited: a credential gets its burst on a node and then waits; another credential is not held up.
+// TestAgentRequestsAreLimited: a credential gets a tenth of its requests a minute at once on a node and then one in
+// each of its minute's shares; another credential is not held up.
 func TestAgentRequestsAreLimited(t *testing.T) {
 	t.Parallel()
 	db, _, s, clock := agentSetup(t)
-	busy := makeAgent(t, db, s, agentSpec(clock)).Token.Reveal()
-	quiet := makeAgent(t, db, s, agentSpec(clock)).Token.Reveal()
-	for range 60 {
-		expectAgent(t, s, busy, nil)
+	for _, c := range []struct {
+		perMinute, burst int
+		every            time.Duration
+	}{{600, 60, 100 * time.Millisecond}, {10, 1, 6 * time.Second}} {
+		agent := func() accounts.Agent {
+			a, err := s.AuthenticateAgent(t.Context(), makeAgent(t, db, s, agentSpec(clock)).Token.Reveal())
+			if err != nil {
+				t.Fatal(err)
+			}
+			return a
+		}
+		busy, quiet := agent(), agent()
+		var got []string
+		ask := func(a accounts.Agent) {
+			err := s.SpendAgentRequest(a, c.perMinute)
+			switch wait, ok := errors.AsType[*accounts.TooManyAttempts](err); {
+			case err == nil:
+				got = append(got, "ok")
+			case ok && wait.RetryAfter > 0:
+				got = append(got, "wait")
+			default:
+				got = append(got, err.Error())
+			}
+		}
+		for range c.burst {
+			ask(busy)
+		}
+		ask(busy)
+		ask(quiet)
+		clock.advance(c.every - time.Millisecond)
+		ask(busy)
+		clock.advance(time.Millisecond)
+		ask(busy)
+		// the burst, the request past it, another credential's, one just before a share comes back, one when it has
+		want := strings.Repeat("ok ", c.burst) + "wait ok wait ok"
+		if strings.Join(got, " ") != want {
+			t.Errorf("%d a minute: %s, want %s", c.perMinute, strings.Join(got, " "), want)
+		}
 	}
-	_, err := s.AuthenticateAgent(t.Context(), busy)
-	if wait, ok := errors.AsType[*accounts.TooManyAttempts](err); !ok || wait.RetryAfter <= 0 {
-		t.Fatalf("the 61st request: %v", err)
-	}
-	expectAgent(t, s, quiet, nil)
-	clock.advance(100 * time.Millisecond)
-	expectAgent(t, s, busy, nil)
 }
