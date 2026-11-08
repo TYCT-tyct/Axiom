@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"testing"
 	"uuid"
 
@@ -77,21 +78,25 @@ func TestPriceEnvelopeDimensions(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
 	pct := func(n int64) *big.Rat { return big.NewRat(n, 100) }
+	type r = []operations.Reason
 	for _, c := range []envelopeCase{
-		{"within every limit", 0, 0, 0, 0, pct(5), pct(30), "approved", "1/1 500#1", 0},
-		{"at every limit", 2, 1, 500, 0, pct(5), pct(20), "approved", "3/2 1000#1", 0},
-		{"a fraction of a basis point counts as one", 0, 0, 999, 0, big.NewRat(1, 30000), pct(30), "approved", "1/1 1000#1", 0},
-		{"a moved model is not another model", 1, 2, 200, 1, pct(5), pct(30), "approved", "2/2 700#2", 0},
-		{"under the margin", 0, 0, 0, 0, pct(5), big.NewRat(1999, 10000), "pending_approval", "", 0},
-		{"an unknown cost", 0, 0, 0, 0, pct(5), nil, "pending_approval", "", 0},
-		{"a move no share measures", 0, 0, 0, 0, nil, pct(30), "pending_approval", "", 0},
-		{"over the model's daily move", 0, 0, 600, 1, pct(5), pct(30), "pending_approval", "", 0},
-		{"over the daily publications", 3, 1, 0, 0, pct(1), pct(30), "pending_approval", "", 0},
-		{"over the daily models", 2, 2, 0, 0, pct(1), pct(30), "pending_approval", "", 0},
+		{"within every limit", 0, 0, 0, 0, pct(5), pct(30), "approved", "1/1 500#1", 0, nil},
+		{"at every limit", 2, 1, 500, 0, pct(5), pct(20), "approved", "3/2 1000#1", 0, nil},
+		{"a fraction of a basis point counts as one", 0, 0, 999, 0, big.NewRat(1, 30000), pct(30), "approved", "1/1 1000#1", 0, nil},
+		{"a moved model is not another model", 1, 2, 200, 1, pct(5), pct(30), "approved", "2/2 700#2", 0, nil},
+		{"under the margin", 0, 0, 0, 0, pct(5), big.NewRat(1999, 10000), "pending_approval", "", 0, r{operations.ReasonMinMargin}},
+		{"an unknown cost", 0, 0, 0, 0, pct(5), nil, "pending_approval", "", 0, r{operations.ReasonUnknownCost}},
+		{"a move no share measures", 0, 0, 0, 0, nil, pct(30), "pending_approval", "", 0, r{operations.ReasonUnmeasuredChange}},
+		{"over the model's daily move", 0, 0, 600, 1, pct(5), pct(30), "pending_approval", "", 0, r{operations.ReasonModelDailyChange}},
+		{"over the daily publications", 3, 1, 0, 0, pct(1), pct(30), "pending_approval", "", 0, r{operations.ReasonDailyChanges}},
+		{"over the daily models", 2, 2, 0, 0, pct(1), pct(30), "pending_approval", "", 0, r{operations.ReasonDailyModels}},
+		{"outside every part", 3, 2, 0, 0, nil, nil, "pending_approval", "", 0, r{
+			operations.ReasonUnmeasuredChange, operations.ReasonUnknownCost, operations.ReasonDailyChanges, operations.ReasonDailyModels,
+		}},
 		// The largest envelope holds a move of its own size; a larger one, which the day counts as one more, never fits.
-		{"a move the size of the largest envelope", 0, 0, 0, 0, big.NewRat(10_000, 1), pct(30), "approved", "1/1 100000000#1", 100_000_000},
-		{"a move beyond the largest envelope", 0, 0, 0, 0, big.NewRat(20_000, 1), pct(30), "pending_approval", "", 100_000_000},
-		{"a day that counted a move beyond it", 1, 1, 100_000_001, 1, big.NewRat(0, 1), pct(30), "pending_approval", "", 100_000_000},
+		{"a move the size of the largest envelope", 0, 0, 0, 0, big.NewRat(10_000, 1), pct(30), "approved", "1/1 100000000#1", 100_000_000, nil},
+		{"a move beyond the largest envelope", 0, 0, 0, 0, big.NewRat(20_000, 1), pct(30), "pending_approval", "", 100_000_000, r{operations.ReasonModelDailyChange}},
+		{"a day that counted a move beyond it", 1, 1, 100_000_001, 1, big.NewRat(0, 1), pct(30), "pending_approval", "", 100_000_000, r{operations.ReasonModelDailyChange}},
 	} {
 		db.weigh(t, c)
 	}
@@ -100,14 +105,15 @@ func TestPriceEnvelopeDimensions(t *testing.T) {
 	}
 }
 
-// envelopeCase is today's use of a site's counters, a publication weighed against it, where it should start and
-// what the counters should hold after it.
+// envelopeCase is today's use of a site's counters, a publication weighed against it, where it should start, what the
+// counters should hold after it and the reasons one that waits is shown.
 type envelopeCase struct {
 	name                          string
 	changes, models, moved, count int
 	change, margin                *big.Rat
 	want, counters                string
 	limit                         int64 // the model's daily move, when not the envelope's
+	reasons                       []operations.Reason
 }
 
 // weigh proposes c's publication in a site of its own: one that waits counts nothing.
@@ -140,8 +146,21 @@ func (db opsDB) weigh(t *testing.T, c envelopeCase) {
 	case op.State == operations.StatePending && !db.summaryHas(t, op, "envelope"):
 		t.Errorf("%s: the owner is not shown the envelope", c.name)
 	}
+	expectReasons(t, c.name, op, c.reasons)
 	if got := db.priceCounters(t, site); got != want {
 		t.Errorf("%s: the counters are %s, want %s", c.name, got, want)
+	}
+}
+
+// expectReasons checks why op waits, none when it does not.
+func expectReasons(t *testing.T, name string, op operations.Operation, want []operations.Reason) {
+	t.Helper()
+	var got []operations.Reason
+	if op.Approval != nil {
+		got = op.Approval.Reasons
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("%s: it waits for %v, want %v", name, got, want)
 	}
 }
 

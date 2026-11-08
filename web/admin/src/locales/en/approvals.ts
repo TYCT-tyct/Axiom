@@ -124,7 +124,10 @@ export default {
     always: {
       gift: "Credit grants always need your approval, whatever the amount.",
       delisting: "Retiring a model always needs your approval.",
+      other: "This kind of operation always needs your approval.",
     },
+    unknown: "A reason this page cannot name; see the raw data below.",
+    unavailable: "The server that asked did not record why; judge it from the limits and the raw data below.",
   },
   request: {
     title: "What is asked",
@@ -156,6 +159,7 @@ export default {
     hint: "What the server stored, as stored: everything above is read from it. Amounts are integers in billionths.",
     summary: "What the server read",
     params: "What runs",
+    reasons: "Why it waits",
   },
   approve: "Approve",
   reject: "Reject",

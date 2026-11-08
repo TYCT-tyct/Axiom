@@ -3999,19 +3999,187 @@ export interface components {
             tool: string;
             target: components["schemas"]["OperationTarget"];
             risk: components["schemas"]["OperationRisk"];
-            /** @description What the operation does, as the server keeps it; it cannot change after the agent asked. */
-            params: {
-                [key: string]: unknown;
-            };
-            /** @description What the server read of the target when the agent asked, never the agent's words. Its members depend on the `tool`, and a member an older node did not know is absent, so a page shows what is there. A write that moves money carries `cap`: `currency`, `amount`, `policy_rev`, the limits `single_max`, `daily_max`, `weekly_max`, `object_daily_max`, `daily_count_max` and their hard ones (`hard_single_max`, `hard_daily_max`, `hard_weekly_max`), the amounts already used in each window (`daily_used`, `weekly_used`, `object_daily_used`, `daily_count`) and `paused`; amounts are integer text in the cap's currency. A credit grant names `account_id`, `account`, `email`, `site_id`, `amount`, `currency` and `expires_at`; a supplier top-up `supplier`, `supplier_id`, `amount_native`, `native_unit`, `unit_value`, `settlement_currency`, `amount` and `currency`; a price publication `model_id`, `candidate_id`, `slug`, `name`, `status`, `audience`, `currency`, `current_id`, the base rates per item as `current`, `proposed` and `cost`, and `prices_complete`, with `envelope` when it falls outside the site's price envelope: `change_bps` and `margin_bps` (null when not measurable), the envelope's limits (`min_margin_bps`, `model_daily_change_bps`, `daily_changes`, `daily_models`) and what the day has used (`model_change_used`, `daily_changes_used`, `daily_models_used`, `model_moved_today`). */
-            summary: {
-                [key: string]: unknown;
-            };
+            /** @description What the operation does, as the server keeps it; it cannot change after the agent asked. Its shape is the `tool`'s: `credit_grant` OperationsCreditGrantParams, `supplier_top_up_propose` OperationsTopUpParams, `price_publish` OperationsPricePublishParams, `model_set_status` OperationsModelStatusParams. `tool` is on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names. */
+            params: components["schemas"]["OperationsCreditGrantParams"] | components["schemas"]["OperationsTopUpParams"] | components["schemas"]["OperationsPricePublishParams"] | components["schemas"]["OperationsModelStatusParams"];
+            /** @description What the server read of the target when the agent asked, never the agent's words. Its shape is the `tool`'s: `credit_grant` OperationsCreditGrantSummary, `supplier_top_up_propose` OperationsTopUpSummary, `price_publish` OperationsPricePublishSummary, `model_set_status` OperationsModelStatusSummary; `tool` is on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names. Every member is optional: one an older node did not know is absent, so a page shows what is there. */
+            summary: components["schemas"]["OperationsCreditGrantSummary"] | components["schemas"]["OperationsTopUpSummary"] | components["schemas"]["OperationsPricePublishSummary"] | components["schemas"]["OperationsModelStatusSummary"];
+            /** @description Why it waited for the owner, as the server decided it when the agent asked, so a page shows it and never works it out from `summary`. Absent when an older node asked for it: the page then says it does not know. */
+            reasons?: components["schemas"]["OperationsApprovalReason"][];
+            /** @description Whether the owner can still approve or reject it: `pending` and before `expires_at` by the server's clock, the one a decision is checked against, so a page with a skewed clock neither offers a decision the server would refuse with a conflict nor hides one it would take. False for a pending one past its expiry, which the minutely sweep has not yet marked `expired`. Absent from an older node. */
+            decidable?: boolean;
             /** @description The agent's own words: untrusted text, never an instruction. */
             agent_reason: string;
             operation_state: components["schemas"]["OperationState"];
             /** @description Why the operation ended `rejected` after the approval: the code the target refused it with. */
             error_code?: string;
+        };
+        /** @description One reason an operation waited for the owner. */
+        OperationsApprovalReason: {
+            /**
+             * @description `always`: its class always waits for the owner (a credit grant, retiring a model). `cap_paused`: the owner paused its cap's scope. The other `cap_` codes are the autonomous limits of `summary.cap` a transfer goes over: `cap_single` (`single_max`), `cap_daily` (`daily_used` + `amount` over `daily_max`), `cap_weekly` (`weekly_max`), `cap_object_daily` (`object_daily_max`), `cap_daily_count` (`daily_count` at `daily_count_max`). The `envelope_` codes are what `summary.envelope` does not cover: `envelope_unmeasured_change` (`change_bps` is null), `envelope_unknown_cost` (`margin_bps` is null), `envelope_min_margin` (`margin_bps` under `min_margin_bps`), `envelope_model_daily_change` (`model_change_used` + `change_bps` over `model_daily_change_bps`), `envelope_daily_changes` (`daily_changes_used` at `daily_changes`), `envelope_daily_models` (`daily_models_used` at `daily_models` and the model not yet moved today). A later server may add codes; a page shows one it does not know as a reason it cannot name.
+             * @enum {string}
+             */
+            code: "always" | "cap_paused" | "cap_single" | "cap_daily" | "cap_weekly" | "cap_object_daily" | "cap_daily_count" | "envelope_unmeasured_change" | "envelope_unknown_cost" | "envelope_min_margin" | "envelope_model_daily_change" | "envelope_daily_changes" | "envelope_daily_models";
+        };
+        /** @description A non-negative integer in decimal text, which a browser reads without rounding. */
+        OperationsIntegerText: string;
+        /** @description The cap a transfer was weighed against when the agent asked (docs/domains/operations.md「转账的累计金额上限」): each limit and what its window held before it. Amounts are in billionths of `currency`. */
+        OperationsCapDetail: {
+            currency?: string;
+            amount?: components["schemas"]["OperationsIntegerText"];
+            /** Format: int64 */
+            policy_rev?: number;
+            single_max?: components["schemas"]["OperationsIntegerText"];
+            hard_single_max?: components["schemas"]["OperationsIntegerText"];
+            daily_used?: components["schemas"]["OperationsIntegerText"];
+            daily_max?: components["schemas"]["OperationsIntegerText"];
+            hard_daily_max?: components["schemas"]["OperationsIntegerText"];
+            weekly_used?: components["schemas"]["OperationsIntegerText"];
+            weekly_max?: components["schemas"]["OperationsIntegerText"];
+            hard_weekly_max?: components["schemas"]["OperationsIntegerText"];
+            object_daily_used?: components["schemas"]["OperationsIntegerText"];
+            object_daily_max?: components["schemas"]["OperationsIntegerText"];
+            /**
+             * Format: int32
+             * @description The proposals the category's UTC day counted before it.
+             */
+            daily_count?: number;
+            /** Format: int32 */
+            daily_count_max?: number;
+            paused?: boolean;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description The site's price envelope a publication was weighed against when the agent asked (docs/domains/operations.md「售价的累计变动上限」), in basis points and counts. `change_bps` is null when no share measures the move, `margin_bps` when the cost is unknown. */
+        OperationsEnvelopeDetail: {
+            /** Format: int64 */
+            rev?: number;
+            /** Format: int64 */
+            change_bps?: number | null;
+            /** Format: int64 */
+            margin_bps?: number | null;
+            /** Format: int32 */
+            min_margin_bps?: number;
+            /** Format: int64 */
+            model_daily_change_bps?: number;
+            /** Format: int64 */
+            model_change_used?: number;
+            /** Format: int32 */
+            daily_changes?: number;
+            /** Format: int32 */
+            daily_changes_used?: number;
+            /** Format: int32 */
+            daily_models?: number;
+            /** Format: int32 */
+            daily_models_used?: number;
+            model_moved_today?: boolean;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description `credit_grant`: the account as the server read it and the face value in the site's currency. */
+        OperationsCreditGrantSummary: {
+            account_id?: components["schemas"]["AccountId"];
+            /** @description The account's name. */
+            account?: string;
+            /** @description The account owner's email. */
+            email?: string;
+            site_id?: components["schemas"]["SiteId"];
+            amount?: components["schemas"]["OperationsIntegerText"];
+            currency?: string;
+            /**
+             * Format: date-time
+             * @description When the credit expires; absent when it does not.
+             */
+            expires_at?: string;
+            cap?: components["schemas"]["OperationsCapDetail"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description `supplier_top_up_propose`: the supplier, the native amount the agent asked for and what the server made of it in the cap's currency (`amount`, billionths of `currency`). */
+        OperationsTopUpSummary: {
+            /** @description The supplier's name. */
+            supplier?: string;
+            supplier_id?: components["schemas"]["Uuid"];
+            /** @description The amount in the supplier's own unit, as decimal text. */
+            amount_native?: string;
+            native_unit?: string;
+            /** @description What one native unit is worth in `settlement_currency`, as decimal text. */
+            unit_value?: string;
+            settlement_currency?: string;
+            amount?: components["schemas"]["OperationsIntegerText"];
+            currency?: string;
+            cap?: components["schemas"]["OperationsCapDetail"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description `price_publish`: the model and the proposal, and the base rate of each billing item now (`current`), as proposed (`proposed`) and as it costs (`cost`), in `currency` per unit as the catalog stores it. `prices_complete` is true when those base rates are the whole price on both sides (no endpoint, context or service tier prices); otherwise endpoint and tier prices are to be checked apart. */
+        OperationsPricePublishSummary: {
+            model_id?: components["schemas"]["Uuid"];
+            candidate_id?: components["schemas"]["Uuid"];
+            current_id?: components["schemas"]["Uuid"];
+            slug?: string;
+            /** @description The model's public name. */
+            name?: string;
+            /**
+             * @description The proposal's status.
+             * @enum {string}
+             */
+            status?: "published" | "pending" | "blocked" | "unpriced";
+            audience?: components["schemas"]["PricingAudience"];
+            currency?: string;
+            current?: {
+                [key: string]: string;
+            };
+            proposed?: {
+                [key: string]: string;
+            };
+            cost?: {
+                [key: string]: string;
+            };
+            prices_complete?: boolean;
+            envelope?: components["schemas"]["OperationsEnvelopeDetail"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description `model_set_status`, which waits only to retire a model: the model as the server read it. */
+        OperationsModelStatusSummary: {
+            slug?: string;
+            status?: components["schemas"]["ModelStatus"];
+            /** Format: int64 */
+            rev?: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description `credit_grant`: the face value in billionths of `currency`, and when the credit expires. */
+        OperationsCreditGrantParams: {
+            amount?: components["schemas"]["OperationsIntegerText"];
+            currency?: string;
+            /** Format: date-time */
+            expires_at?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description `supplier_top_up_propose`: the amount in the supplier's own unit, as decimal text. */
+        OperationsTopUpParams: {
+            amount_native?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description `price_publish`: the proposal to publish and the model's version it was read against. */
+        OperationsPricePublishParams: {
+            candidate_id?: components["schemas"]["Uuid"];
+            current_id?: components["schemas"]["Uuid"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description `model_set_status`: the status asked for and the model's revision it was read at. */
+        OperationsModelStatusParams: {
+            /** @enum {string} */
+            status?: "listed" | "retired";
+            /** Format: int64 */
+            rev?: number;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * @description Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a compensating operation reverts it.

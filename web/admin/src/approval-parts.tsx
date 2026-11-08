@@ -5,20 +5,17 @@ import { useTranslation } from "react-i18next";
 import {
   type CapLimit,
   type CapLimits,
-  capOver,
+  decidable,
   type EnvelopeLimit,
   type EnvelopeLimits,
-  envelopeOver,
   minutesLeft,
-  open,
   targetName,
 } from "./approvals";
 import { Head, State } from "./parts";
 
 type Approval = AdminSchemas["OperationsApproval"];
 
-// useNow is the time, again every 15 seconds: an approval's minutes left and whether it can still be decided change
-// while the page is open.
+// useNow is the time, again every 15 seconds: an approval's minutes left change while the page is open.
 export function useNow() {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -28,12 +25,13 @@ export function useNow() {
   return now;
 }
 
-// ApprovalState is where an approval is, in words: one still pending past its expiry can no longer be decided, though
-// the sweep has not marked it yet; one still open says how long it has left, which matters more than the clock time.
+// ApprovalState is where an approval is, in words: one still pending that the server says can no longer be decided is
+// past its expiry, though the sweep has not marked it yet; one still open says how long it has left, which matters more
+// than the clock time.
 export function ApprovalState({ approval, now }: { approval: Approval; now: number }) {
   const { t } = useTranslation();
   if (approval.state === "pending") {
-    return open(approval, now) ? (
+    return decidable(approval) ? (
       <span className="inline-flex flex-col items-start gap-1">
         <State tone="warn">{t("approvals.state.pending")}</State>
         <span className="text-label text-t3">{t("approvals.expiresIn", { count: minutesLeft(approval, now) })}</span>
@@ -134,12 +132,11 @@ function Limits({
 }
 
 // CapTable shows a transfer's amount against each window of its cap policy, as the server read them when the agent
-// asked, and marks the autonomous limits it goes over.
-export function CapTable({ cap }: { cap: CapLimits }) {
+// asked, and marks the autonomous limits the server says it goes over.
+export function CapTable({ cap, over }: { cap: CapLimits; over: Set<CapLimit> }) {
   const { t } = useTranslation();
   const format = useFormat();
   const money = format.money;
-  const over = new Set<CapLimit>(capOver(cap));
   const flag = (limit: CapLimit) => (over.has(limit) ? t("approvals.cap.over") : undefined);
   return (
     <Limits
@@ -193,13 +190,12 @@ export function CapTable({ cap }: { cap: CapLimits }) {
 
 export const percentOf = (decimal: (text: string) => string) => (bps: number) => `${decimal((bps / 100).toString())}%`;
 
-// EnvelopeTable shows a sale price's move and margin against the site's envelope, and marks what the envelope does
-// not cover: a limit it goes over, and one it cannot check because the move or the cost is unknown.
-export function EnvelopeTable({ envelope }: { envelope: EnvelopeLimits }) {
+// EnvelopeTable shows a sale price's move and margin against the site's envelope, and marks what the server says the
+// envelope does not cover: a limit it goes over, and one it cannot check because the move or the cost is unknown.
+export function EnvelopeTable({ envelope, over }: { envelope: EnvelopeLimits; over: Set<EnvelopeLimit> }) {
   const { t } = useTranslation();
   const format = useFormat();
   const percent = percentOf(format.decimal);
-  const over = new Set<EnvelopeLimit>(envelopeOver(envelope));
   const flag = (limit: EnvelopeLimit) => (over.has(limit) ? t(`approvals.envelope.flag.${limit}`) : undefined);
   return (
     <Limits

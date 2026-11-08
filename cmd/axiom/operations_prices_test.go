@@ -164,6 +164,7 @@ func TestOperationsPriceApproval(t *testing.T) {
 	waits := agentOperation(t, rec)
 	rec = f.do(http.MethodGet, "/operations/approvals/"+waits.Approval.ApprovalId, "", as(f.s))
 	var asked struct {
+		Reasons []adminapi.OperationsApprovalReason `json:"reasons"`
 		Summary struct {
 			Slug     string            `json:"slug"`
 			Current  map[string]string `json:"current"`
@@ -183,6 +184,8 @@ func TestOperationsPriceApproval(t *testing.T) {
 		summary.Cost["input"] == "" {
 		t.Fatalf("the owner sees %s", rec.Body)
 	}
+	// It waits because the move is past the model's daily move, and only for that.
+	expectReasons(t, "a 20% move", asked.Reasons, `[{"code":"envelope_model_daily_change"}]`)
 	now, _ := new(big.Rat).SetString(summary.Current["input"])
 	next, _ := new(big.Rat).SetString(summary.Proposed["input"])
 	if now == nil || next == nil || next.Cmp(new(big.Rat).Mul(now, big.NewRat(6, 5))) != 0 {

@@ -73,6 +73,7 @@ func (o operationsAPI) setModelStatus(ctx context.Context, tx pg.Tx, id catalog.
 	retiring := p.Risk == operations.RiskDelisting
 	if retiring {
 		p.Summary = map[string]any{"slug": model.Slug, "status": string(model.Status), "rev": model.Rev}
+		p.Reasons = []operations.Reason{operations.ReasonAlways}
 	}
 	if b.DryRun != nil && *b.DryRun {
 		return preview(p), false, refuseRetiring(model, b.Rev, retiring)
@@ -242,6 +243,13 @@ func operationBody(op operations.Operation) operationsapi.Operation {
 		body.Approval = &operationsapi.OperationApproval{
 			ApprovalId: a.ID.String(), State: operationsapi.OperationsApprovalState(a.State),
 			Tier: operationsapi.OperationsApprovalTier("human"), ExpiresAt: a.Expires, DecidedAt: a.Decided,
+		}
+		if a.Reasons != nil { // nil: an older node proposed it without them
+			reasons := make([]operationsapi.OperationsApprovalReason, len(a.Reasons))
+			for i, r := range a.Reasons {
+				reasons[i].Code = operationsapi.OperationsApprovalReasonCode(r)
+			}
+			body.Approval.Reasons = &reasons
 		}
 	}
 	return body

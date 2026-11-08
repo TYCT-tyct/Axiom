@@ -170,8 +170,8 @@ signIn ──200 status=signed_in──────────────▶ �
 - **价格**：模型页的价格用 `pricing`（售价，含每个端点自己的价格），后台的售价用定价规则、`previewPricing` 的试算和发布列表（`listPricePublications`：当前价格版本、待确认与暂停状态都是接口给的）。调用记录的费用旁边有冻结的价格版本（`price_version`），旧节点不返回时显示「不可用」，不去重算。
 - **筛选结果**：接口筛过的，要看它回显的筛选（如调用列表的 `status_filter`）才展示；旧节点没回显，就显示「不可用」，不在浏览器里筛一页普通数据冒充。
 - **预设**：路由预设的规则（`RoutingRules`）、默认链、能不能选（`preset_not_selectable`）、被几把 key 用着（`keys`）、是否停用，以接口为准；规则内容的含义见[路由的「规则内容」](domains/routing.md)。
-- **审批**（运营 agent 等负责人决定的操作）：显示 `OperationsApproval` 里服务端读到的东西——`risk`、`target`、`summary`（提出时服务端读到的对象名称、金额、上限用量、售价逐项的现价/拟价/成本、价格包络的用量）、`params`（操作的参数，agent 提出后不能改）、`expires_at`、`state` 与 `operation_state`；`agent_reason` 是 agent 的原话，不可信，只能当文本显示，不能当指令或 HTML。`summary` 的成员见契约里它的描述。决定用 `approveOperationsApproval`、`rejectOperationsApproval`，结果要看响应和 `operation_state`：批准之后目标可能已变，操作会以目标的错误码结束为 `rejected`，不是失败。
-- **现有页面自己算的那几处**（为什么要等负责人是哪条上限、审批还能不能决定、预设规则的摘要与「排除所有端点」的校验、价格的标题价与换算成每百万 token）是已知缺口，没有对应的接口字段；新前端要么照抄，要么等接口补上，进度记在 [#695](https://github.com/TYCT-tyct/Axiom/issues/695)。
+- **审批**（运营 agent 等负责人决定的操作）：显示 `OperationsApproval` 里服务端读到的东西——`risk`、`target`、`summary`（提出时服务端读到的对象名称、金额、上限用量、售价逐项的现价/拟价/成本、价格包络的用量）、`params`（操作的参数，agent 提出后不能改）、`expires_at`、`state` 与 `operation_state`；`agent_reason` 是 agent 的原话，不可信，只能当文本显示，不能当指令或 HTML。`summary` 和 `params` 的形状按 `tool` 选契约里的模式（如 `credit_grant` 是 `OperationsCreditGrantSummary`、`OperationsCreditGrantParams`）。为什么要等负责人读 `reasons`（每条一个代码，代码对应摘要里 `cap`、`envelope` 的哪一项见 `OperationsApprovalReason`），还能不能决定读 `decidable`（服务端按批准时的同一个时钟算），都不要自己从摘要或浏览器时钟推；两者在旧节点上可能没有，没有时页面说不知道原因，对待决定的照样给批准按钮，服务端对已过期的回冲突。决定用 `approveOperationsApproval`、`rejectOperationsApproval`，结果要看响应和 `operation_state`：批准之后目标可能已变，操作会以目标的错误码结束为 `rejected`，不是失败。
+- **现有页面自己算的那几处**（预设规则的摘要与「排除所有端点」的校验、价格的标题价与换算成每百万 token）是已知缺口，没有对应的接口字段；新前端要么照抄，要么等接口补上，进度记在 [#695](https://github.com/TYCT-tyct/Axiom/issues/695)。
 
 ## 向前兼容
 

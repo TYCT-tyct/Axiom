@@ -53,8 +53,8 @@ RETURNING updated_at;
 -- name: InsertApproval :one
 -- It waits @ttl_seconds at most, and never past the end of the UTC day it was asked on, by the clock as it is now: a
 -- proposal that began before midnight and waited for a lock past it is asked on the new day.
-INSERT INTO operations.approvals (id, operation_id, tier, state, summary, requested_at, expires_at)
-SELECT @id, @operation_id, 'human', 'pending', @summary, c.at,
+INSERT INTO operations.approvals (id, operation_id, tier, state, summary, reasons, requested_at, expires_at)
+SELECT @id, @operation_id, 'human', 'pending', @summary, sqlc.narg(reasons)::text[], c.at,
     least(c.at + make_interval(secs => @ttl_seconds::float8), date_trunc('day', c.at, 'UTC') + interval '1 day')
 FROM (SELECT clock_timestamp() AS at) c
 RETURNING *;
@@ -63,7 +63,10 @@ RETURNING *;
 SELECT * FROM operations.approvals WHERE id = @id;
 
 -- name: ApprovalsOf :many
-SELECT * FROM operations.approvals WHERE operation_id = ANY (@operations::uuid[]);
+-- The approvals of operations, each with whether a person can still decide it by the clock a decision checks
+-- (LockApprovalOf), so a page needs no clock of its own.
+SELECT sqlc.embed(a), (a.state = 'pending' AND a.expires_at > clock_timestamp())::bool AS decidable
+FROM operations.approvals a WHERE a.operation_id = ANY (@operations::uuid[]);
 
 -- name: LockApprovalOf :many
 -- The approval of an operation its caller has locked, and whether it is past its expiry by the database's clock as it
@@ -71,11 +74,12 @@ SELECT * FROM operations.approvals WHERE operation_id = ANY (@operations::uuid[]
 SELECT sqlc.embed(a), (a.expires_at <= clock_timestamp())::bool AS due FROM operations.approvals a WHERE a.operation_id = @operation_id FOR UPDATE;
 
 -- name: Approvals :many
--- Every approval newest first, a page after the cursor's ID, in one state or all: the owner's queue.
-SELECT * FROM operations.approvals
-WHERE (sqlc.narg(state)::text IS NULL OR state = sqlc.narg(state)::text)
-  AND (@after::uuid = '00000000-0000-0000-0000-000000000000' OR id < @after::uuid)
-ORDER BY id DESC
+-- Every approval newest first, a page after the cursor's ID, in one state or all: the owner's queue, decidable as in
+-- ApprovalsOf.
+SELECT sqlc.embed(a), (a.state = 'pending' AND a.expires_at > clock_timestamp())::bool AS decidable FROM operations.approvals a
+WHERE (sqlc.narg(state)::text IS NULL OR a.state = sqlc.narg(state)::text)
+  AND (@after::uuid = '00000000-0000-0000-0000-000000000000' OR a.id < @after::uuid)
+ORDER BY a.id DESC
 LIMIT @page_size;
 
 -- name: DecideApproval :one

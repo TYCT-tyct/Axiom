@@ -11,10 +11,11 @@ export function approvalState(value: unknown) {
   return approvalStates.find((state) => state === value);
 }
 
-// open says whether the owner can still decide: the server answers a decision on one past its expiry with a conflict
-// even before the minutely sweep has marked it expired.
-export function open(approval: Approval, now: number) {
-  return approval.state === "pending" && Date.parse(approval.expires_at) > now;
+// decidable says whether the owner can still decide, as the server says by the clock it checks a decision against. A
+// node older than that answer does not say: a pending one is offered, and the server refuses a lapsed one with a
+// conflict.
+export function decidable(approval: Approval) {
+  return approval.decidable ?? approval.state === "pending";
 }
 
 // The caps a transfer was weighed against when the agent asked (internal/operations capDetail): each window's use
@@ -152,38 +153,42 @@ export function outcomeOf(approval: Approval): Outcome {
   }
 }
 
-// The autonomous limits a transfer goes over, as internal/operations weigh decides them: why it waited for the owner.
-// None means it waited because the category always asks (a credit grant) or the scope is paused.
+// The rows of the cap and envelope tables, and the reason the server gives (api/admin.yaml OperationsApprovalReason)
+// for each limit a proposal goes over: the server decides them, the page only names them.
 export type CapLimit = "single" | "daily" | "weekly" | "objectDaily" | "count";
-
-export function capOver(cap: CapLimits): CapLimit[] {
-  const n = (m: Money) => BigInt(m.amount);
-  const amount = n(cap.amount);
-  const over: [CapLimit, boolean][] = [
-    ["single", amount > n(cap.single.max)],
-    ["daily", n(cap.daily.used) + amount > n(cap.daily.max)],
-    ["weekly", n(cap.weekly.used) + amount > n(cap.weekly.max)],
-    ["objectDaily", n(cap.objectDaily.used) + amount > n(cap.objectDaily.max)],
-    ["count", cap.count.used >= cap.count.max],
-  ];
-  return over.filter(([, is]) => is).map(([limit]) => limit);
-}
-
-// The parts of a price envelope a publication does not keep within, as internal/operations within decides them. A move
-// or margin the server could not measure is never within: the envelope cannot vouch for it.
 export type EnvelopeLimit = "unmeasured" | "unknownCost" | "margin" | "modelChange" | "changes" | "models";
+export type Reason =
+  | { kind: "always" | "paused" | "unknown" }
+  | { kind: "cap"; limit: CapLimit }
+  | { kind: "envelope"; limit: EnvelopeLimit };
 
-export function envelopeOver(e: EnvelopeLimits): EnvelopeLimit[] {
-  const over: [EnvelopeLimit, boolean][] = [
-    ["unmeasured", e.change === null],
-    ["unknownCost", e.margin === null],
-    ["margin", e.margin !== null && e.margin < e.minMargin],
-    ["modelChange", e.change !== null && e.modelChange.used + e.change > e.modelChange.max],
-    ["changes", e.changes.used >= e.changes.max],
-    ["models", !e.movedToday && e.models.used >= e.models.max],
-  ];
-  return over.filter(([, is]) => is).map(([limit]) => limit);
+const reasons: Record<AdminSchemas["OperationsApprovalReason"]["code"], Reason> = {
+  always: { kind: "always" },
+  cap_paused: { kind: "paused" },
+  cap_single: { kind: "cap", limit: "single" },
+  cap_daily: { kind: "cap", limit: "daily" },
+  cap_weekly: { kind: "cap", limit: "weekly" },
+  cap_object_daily: { kind: "cap", limit: "objectDaily" },
+  cap_daily_count: { kind: "cap", limit: "count" },
+  envelope_unmeasured_change: { kind: "envelope", limit: "unmeasured" },
+  envelope_unknown_cost: { kind: "envelope", limit: "unknownCost" },
+  envelope_min_margin: { kind: "envelope", limit: "margin" },
+  envelope_model_daily_change: { kind: "envelope", limit: "modelChange" },
+  envelope_daily_changes: { kind: "envelope", limit: "changes" },
+  envelope_daily_models: { kind: "envelope", limit: "models" },
+};
+
+// reasonsOf is why the approval waited for the owner, as the server gave it; a code from a later server is unknown.
+// Nothing when an older node asked for it without them: the page cannot tell, and says so.
+export function reasonsOf(approval: Approval): Reason[] | undefined {
+  return approval.reasons?.map(({ code }) => reasons[code] ?? { kind: "unknown" });
 }
+
+// capOver and envelopeOver are the limits the server says a proposal went over: the rows its tables mark.
+export const capOver = (approval: Approval) =>
+  new Set((reasonsOf(approval) ?? []).flatMap((reason) => (reason.kind === "cap" ? [reason.limit] : [])));
+export const envelopeOver = (approval: Approval) =>
+  new Set((reasonsOf(approval) ?? []).flatMap((reason) => (reason.kind === "envelope" ? [reason.limit] : [])));
 
 // Who or what an approval acts on, in the words the server read when the agent asked: an account by its name and its
 // owner's email, a supplier by its name, a model by its public name or slug. An approval asked on an older node may

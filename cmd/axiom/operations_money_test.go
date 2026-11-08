@@ -113,7 +113,9 @@ func TestOperationsTopUp(t *testing.T) {
 	expectAdmin(t, "twelve dollars", rec, http.StatusAccepted, "")
 	twelve := agentOperation(t, rec)
 	rec = f.do(http.MethodGet, "/operations/approvals/"+twelve.Approval.ApprovalId, "", as(f.s))
-	if !strings.Contains(rec.Body.String(), `"amount":"12000000000"`) || !strings.Contains(rec.Body.String(), `"single_max":"10000000000"`) {
+	// Twelve is over the single limit of ten and, after five, the supplier's daily fifteen: both are why it waits.
+	if !strings.Contains(rec.Body.String(), `"amount":"12000000000"`) || !strings.Contains(rec.Body.String(), `"single_max":"10000000000"`) ||
+		!strings.Contains(rec.Body.String(), `"reasons":[{"code":"cap_single"},{"code":"cap_object_daily"}]`) {
 		t.Errorf("the owner sees %s", rec.Body)
 	}
 	if approved := f.approve(twelve.Approval.ApprovalId); approved.OperationState != adminapi.OperationStateSucceeded {

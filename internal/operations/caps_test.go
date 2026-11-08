@@ -102,32 +102,37 @@ func (db opsDB) counters(t *testing.T, site *uuid.UUID) string {
 }
 
 // dimension is a case of TestCapDimensions: what the counters hold before a proposal of amount, and what it comes to,
-// a state for top-ups or the hard limit that refuses it.
+// a state for top-ups or the hard limit that refuses it, with the reasons a top-up that waits is shown.
 type dimension struct {
 	name                     string
 	day, week, object, count int64
 	amount                   int64
 	want                     string
+	reasons                  []operations.Reason
 }
 
 // TestCapDimensions: each autonomous limit sends a top-up over it to the owner, each hard limit refuses one over it
-// with nothing written, and a scope without a policy moves no money. A credit grant has the same hard limits but
-// always waits for the owner, within every autonomous limit too. Every case is its own site.
+// with nothing written, and a scope without a policy moves no money; one that waits names each limit it goes over. A
+// credit grant has the same hard limits but always waits for the owner, within every autonomous limit too, and only
+// for that reason. Every case is its own site.
 func TestCapDimensions(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
 	for _, category := range []operations.Category{operations.CategoryTopUp, operations.CategoryCredit} {
 		for _, c := range []dimension{
-			{"within every limit", 0, 0, 0, 0, 5, "approved"},
-			{"at every limit", 15, 30, 5, 2, 10, "approved"},
-			{"over the single limit", 0, 0, 0, 0, 11, "pending_approval"},
-			{"over the daily limit", 20, 20, 0, 0, 6, "pending_approval"},
-			{"over the weekly limit", 0, 36, 0, 0, 5, "pending_approval"},
-			{"over the object's daily limit", 12, 12, 12, 0, 4, "pending_approval"},
-			{"over the daily count", 0, 0, 0, 3, 1, "pending_approval"},
-			{"over the hard single limit", 0, 0, 0, 0, 21, "hard_single"},
-			{"over the hard daily limit", 46, 46, 0, 0, 5, "hard_daily"},
-			{"over the hard weekly limit", 0, 56, 0, 0, 5, "hard_weekly"},
+			{"within every limit", 0, 0, 0, 0, 5, "approved", nil},
+			{"at every limit", 15, 30, 5, 2, 10, "approved", nil},
+			{"over the single limit", 0, 0, 0, 0, 11, "pending_approval", []operations.Reason{operations.ReasonSingle}},
+			{"over the daily limit", 20, 20, 0, 0, 6, "pending_approval", []operations.Reason{operations.ReasonDaily}},
+			{"over the weekly limit", 0, 36, 0, 0, 5, "pending_approval", []operations.Reason{operations.ReasonWeekly}},
+			{"over the object's daily limit", 12, 12, 12, 0, 4, "pending_approval", []operations.Reason{operations.ReasonObjectDaily}},
+			{"over the daily count", 0, 0, 0, 3, 1, "pending_approval", []operations.Reason{operations.ReasonDailyCount}},
+			{"over several limits", 20, 36, 12, 3, 11, "pending_approval", []operations.Reason{
+				operations.ReasonSingle, operations.ReasonDaily, operations.ReasonWeekly, operations.ReasonObjectDaily, operations.ReasonDailyCount,
+			}},
+			{"over the hard single limit", 0, 0, 0, 0, 21, "hard_single", nil},
+			{"over the hard daily limit", 46, 46, 0, 0, 5, "hard_daily", nil},
+			{"over the hard weekly limit", 0, 56, 0, 0, 5, "hard_weekly", nil},
 		} {
 			db.expectDimension(t, category, c)
 		}
@@ -157,11 +162,14 @@ func (db opsDB) expectDimension(t *testing.T, category operations.Category, c di
 	if _, err := db.setPolicy(t, policy, 0); err != nil {
 		t.Fatal(err)
 	}
-	pm, want := topUp(uuid.NewV7(), uuid.NewV7(), &site, "s1", c.amount), c.want
+	pm, want, reasons := topUp(uuid.NewV7(), uuid.NewV7(), &site, "s1", c.amount), c.want, c.reasons
 	if category == operations.CategoryCredit {
 		pm = gift(pm)
 		if want == "approved" {
 			want = "pending_approval"
+		}
+		if want == "pending_approval" {
+			reasons = []operations.Reason{operations.ReasonAlways}
 		}
 	}
 	db.seed(t, category, pm.m.Object.Kind, site, c.day, c.week, c.object, int(c.count))
@@ -175,6 +183,7 @@ func (db opsDB) expectDimension(t *testing.T, category operations.Category, c di
 	if got != want {
 		t.Errorf("%s %s: %s, want %s", category, c.name, got, want)
 	}
+	expectReasons(t, fmt.Sprint(category, " ", c.name), op, reasons)
 	counted := fmt.Sprintf("%d+%d#%d %d+%d#1 %d+%d#1", c.amount, c.day, c.count+1, c.amount, c.week, c.amount, c.object)
 	if op.ID == (uuid.UUID{}) {
 		counted = fmt.Sprintf("0+%d#%d 0+%d#0 0+%d#0", c.day, c.count, c.week, c.object)

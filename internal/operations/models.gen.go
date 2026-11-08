@@ -21,6 +21,7 @@ type OperationsApproval struct {
 	DecidedAt      *time.Time
 	DecidedBy      *string
 	DecisionReason *string
+	Reasons        []string
 }
 
 type OperationsCapCounter struct {

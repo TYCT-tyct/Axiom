@@ -62,8 +62,9 @@ const items = [
   "file_parse",
 ];
 
-// What the agent asked for, by kind: the tool, its target, its parameters and what the server read of the target.
-const asks: Pick<Approval, "tool" | "target" | "risk" | "params" | "summary" | "agent_reason">[] = [
+// What the agent asked for, by kind: the tool, its target, its parameters, what the server read of the target and why
+// it decided the owner must decide (internal/operations weigh and outside).
+const asks: Pick<Approval, "tool" | "target" | "risk" | "params" | "summary" | "reasons" | "agent_reason">[] = [
   {
     tool: "credit_grant",
     target: { kind: "account", id: `acct_${"1".repeat(26)}` },
@@ -76,6 +77,8 @@ const asks: Pick<Approval, "tool" | "target" | "risk" | "params" | "summary" | "
       currency: "USD",
       cap: cap("25"),
     },
+    // A credit grant always asks; its autonomous caps bind nothing.
+    reasons: [{ code: "always" }],
     agent_reason:
       "The account lost credit to a failed upstream during the 14:00 incident; refund it as a goodwill credit.",
   },
@@ -94,6 +97,7 @@ const asks: Pick<Approval, "tool" | "target" | "risk" | "params" | "summary" | "
       currency: "USD",
       cap: cap("60"),
     },
+    reasons: [{ code: "cap_single" }, { code: "cap_daily" }, { code: "cap_object_daily" }],
     agent_reason: "The balance covers less than a day of traffic at today's rate.",
   },
   {
@@ -114,6 +118,7 @@ const asks: Pick<Approval, "tool" | "target" | "risk" | "params" | "summary" | "
       proposed: { input: "0.0000045", output: "0.0000225", cache_read: "0.0000004" },
       envelope,
     },
+    reasons: [{ code: "envelope_unknown_cost" }, { code: "envelope_model_daily_change" }],
     agent_reason: "The supplier raised its price; publish the proposal that keeps the margin.",
   },
   {
@@ -122,6 +127,7 @@ const asks: Pick<Approval, "tool" | "target" | "risk" | "params" | "summary" | "
     risk: "delisting",
     params: { status: "retired", rev: 7 },
     summary: { slug: "vendor/old-model", status: "listed", rev: 7 },
+    reasons: [{ code: "always" }],
     agent_reason: "No endpoint has served it for a week.",
   },
 ];
@@ -214,13 +220,21 @@ function worstApprovals(): Approval[] {
   ];
 }
 
+// served is an approval as the server answers it, with whether it can still be decided by the server's clock.
+const served = (approval: Approval): Approval => ({
+  ...approval,
+  decidable: approval.state === "pending" && Date.parse(approval.expires_at) > Date.now(),
+});
+
 function listApprovals({ query, state }: Ctx<"/api/admin/v1/operations/approvals", "get">) {
   const wanted = query.get("state");
   const page = paged(
     approvalsOf(state).filter((approval) => !wanted || approval.state === wanted),
     query,
   );
-  return page ? ok({ data: page.data, next_cursor: page.next_cursor ?? undefined }) : fail(400, "invalid_request");
+  return page
+    ? ok({ data: page.data.map(served), next_cursor: page.next_cursor ?? undefined })
+    : fail(400, "invalid_request");
 }
 
 // A decision runs the operation at once, as the server does; one no longer pending is a conflict, as one decided by
@@ -243,14 +257,14 @@ function decide(
     decided_by: `user:${userId(state.account)}`,
     decision_reason: body.reason,
   });
-  return ok(approval);
+  return ok(served(approval));
 }
 
 export const operationsHandlers = [
   route("get", `${base}/operations/approvals`, reads("operations.approve"), listApprovals),
   route("get", `${base}/operations/approvals/{approval_id}`, reads("operations.approve"), ({ params, state }) => {
     const approval = approvalsOf(state).find((candidate) => candidate.id === params.approval_id);
-    return approval ? ok(approval) : fail(404, "not_found");
+    return approval ? ok(served(approval)) : fail(404, "not_found");
   }),
   route("post", `${base}/operations/approvals/{approval_id}/approve`, changes("operations.approve"), (ctx) =>
     decide("approve", ctx),

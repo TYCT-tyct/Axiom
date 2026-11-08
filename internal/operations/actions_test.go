@@ -40,7 +40,7 @@ func retire(credential, key uuid.UUID, rev int, needsApproval bool) operations.P
 		Params: map[string]any{"status": "retired", "rev": rev}, Risk: operations.RiskDelisting, Reason: "unused",
 	}
 	if needsApproval {
-		p.Summary = map[string]any{"slug": "acme/m1"}
+		p.Summary, p.Reasons = map[string]any{"slug": "acme/m1"}, []operations.Reason{operations.ReasonAlways}
 	}
 	return p
 }
