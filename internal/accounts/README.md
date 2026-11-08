@@ -107,7 +107,7 @@
 
 ## 运营凭证
 
-运营 agent 的操作者（[运营的「运营凭证」](../../docs/domains/operations.md#运营凭证)），和会话、管理 key 并列，只在运营监听有效。代码在 `agents.go`，表在迁移 00034。
+运营 agent 的操作者（[运营的「运营凭证」](../../docs/domains/operations.md#运营凭证)），和会话、管理 key 并列，只在运营监听有效。代码在 `agents.go`，限频在 `agent_limits.go`，表在迁移 00034。
 
 ```go
 func (s *Service) CreateAgent(ctx, tx, actor audit.Actor, spec AgentSpec) (AgentToken, error)
@@ -127,7 +127,7 @@ func (s *Service) SpendAgentAlert(a Agent, perHour int) error            // 发�
 - **令牌**：`op-ax-v1-` 加 API key 同样的 43 位随机和 6 位校验（`newKeyText`、`wellFormedKey`），只在创建或轮换的返回值里出现一次；哈希用 key 的哈希密钥（`hashes.Sum`），查找时按所有版本各算一次。
 - **权限**：至少有 `operations.read`，`CreateAgent` 自动加上；`agentRefused`（`operations.manage`、`operations.approve`、`platform_grants.manage`）和代码没声明的名字被拒，表的 CHECK 也拒这三个，所以凭证不能管理自己、不能审批、不能给别人平台角色。拒绝是 `*AgentSpecError`，带请求里出错位置的 JSON 指针。
 - **认证**：`AuthenticateAgent` 先查形状，再在平台范围的事务里按哈希读活的凭证（令牌当前或在重叠期内、凭证未吊销未过期，按 `Config.Now` 判断），每个请求都读库、不缓存，所以吊销、停止和过期从下一个请求生效；最后使用时间超过一分钟才写一次。
-- **限频**：次数都是负责人设的值，由调用方每个请求读一次传进来（`operations.AgentLimits`），所以改了从下一个请求起生效；本模块只管按凭证在本节点扣令牌桶，超了是 `*TooManyAttempts`。守卫认出凭证后调 `SpendAgentRequest`：桶装每分钟次数的十分之一、按每分钟的次数均匀补（600 是突发 60、每 100 毫秒补一个）。资金写另由守卫调 `SpendAgentMoney` 再扣两个桶，发告警由处理器调 `SpendAgentAlert` 扣一个；这三个桶都装窗口次数的一半、其余在窗口里均匀回来（每分钟 30 是 15 次起、每 4 秒回一次；每小时 300 是 150 次起、每 24 秒回一次），保证任何一个窗口里不超过设的次数。测试 `TestAgentRequestsAreLimited`、`TestAgentWritesAreLimited`。
+- **限频**：次数都是负责人设的值，由调用方每个请求读一次传进来（`operations.AgentLimits`），所以改了从下一个请求起生效；本模块只管按凭证在本节点扣令牌桶，超了是 `*TooManyAttempts`。守卫认出凭证后调 `SpendAgentRequest`：桶装每分钟次数的十分之一、按每分钟的次数均匀补（600 是突发 60、每 100 毫秒补一个）。资金写另由守卫调 `SpendAgentMoney` 再扣两个桶，发告警由处理器调 `SpendAgentAlert` 扣一个；这三个桶都装窗口次数的一半、其余在窗口里均匀回来（每分钟 30 是 15 次起、每 4 秒回一次；每小时 300 是 150 次起、每 24 秒回一次），保证次数不变时任何一个窗口里不超过设的次数。桶只存按它的补充速度何时装满，次数调低后算不出窗口里已经放行了几次（装满后条目还会过期），所以每类另有 `agentCounter.granted` 记最近放行的时刻（最多设的次数个）：窗口里已有设的次数就拒绝，等最早那次离开窗口；请求同样按每分钟的次数记。`spendAgent` 在一把锁里先查所有窗口、再扣桶、最后记下放行，两个同时的调用不会都拿到窗口里最后一个名额。测试 `TestAgentRequestsAreLimited`、`TestAgentWritesAreLimited`、`TestAgentLimitsLoweredMidWindow`。
 - **授权**：`AuthorizeAgent` 不读库：没有这项权限是 `ErrForbidden`；平台资源要凭证的平台范围，没有是 `ErrNotFound`（和不存在一样）；其余给凭证站点的范围。
 - **生命周期**：到期时间由负责人为每张凭证给出（必填、在未来即可，代码不带默认值和上限）；到期的凭证和吊销的一样，认证、`RevokeAgent`（`ErrAgentNotFound`）、`StopAgents` 的计数和列表的旧令牌期限都把它当作已不存在；`RotateAgent` 先锁凭证行，把上一次轮换留下的旧令牌立即作废、当前令牌的 `retires_at` 设为现在加重叠（最多 `AgentOverlap`，24 小时），再插新令牌；吊销是终态，`StopAgents` 吊销全部活的凭证，每张一条 `operations_credential.revoke` 审计，再记一条 `operations_agent.stop`。创建、轮换、吊销都在调用方的事务里记审计。
 - **持有**：`HoldAgent` 在调用方的事务里对活的凭证行加 `FOR SHARE`，吊销、过期或不存在是 `ErrUnknownAgent`（401）。运营接口提出一个运营操作前先持有：吊销和紧急停止要改这一行，只能在提案提交前失败、或等它提交后再把它和别的待审批提案一起取消，不会在两者之间漏掉一个。同一凭证的多个提案互不等待。测试 `TestHoldAgent`。

@@ -377,48 +377,6 @@ func (s *Service) AuthenticateAgent(ctx context.Context, raw string) (Agent, err
 	return a, nil
 }
 
-// SpendAgentRequest spends one of a's requests on this node, of which it may make perMinute a minute and a tenth of
-// that at once (600 a minute is 60 at once): past them it is *TooManyAttempts with the wait. perMinute, like the other
-// limits below, is the owner's, read for each request, so a change applies to the next one.
-func (s *Service) SpendAgentRequest(a Agent, perMinute int) error {
-	return s.spendAgent(a, agentLimit{s.agentRequests, max(perMinute/10, 1), time.Minute / time.Duration(perMinute)})
-}
-
-// SpendAgentMoney spends one of a's money writes on this node, besides its request, of which it may do perMinute in any
-// minute and perHour in any hour: past either it is *TooManyAttempts with the wait.
-func (s *Service) SpendAgentMoney(a Agent, perMinute, perHour int) error {
-	return s.spendAgent(a, within(s.agentMoney, perMinute, time.Minute), within(s.agentMoneyHours, perHour, time.Hour))
-}
-
-// SpendAgentAlert spends one of a's alerts on this node, of which it may raise perHour in any hour.
-func (s *Service) SpendAgentAlert(a Agent, perHour int) error {
-	return s.spendAgent(a, within(s.agentAlerts, perHour, time.Hour))
-}
-
-// within is a bucket that lets no more than n through in any window: it holds half of them at once and gives the rest
-// back over the window (30 a minute is 15 at once and one every 4 seconds).
-func within(b *buckets[AgentID], n int, window time.Duration) agentLimit {
-	size := max(n/2, 1)
-	return agentLimit{b, size, window / time.Duration(max(n-size, 1))}
-}
-
-// agentLimit is one bucket of a credential's writes of a kind: size at once, one more every per.
-type agentLimit struct {
-	buckets *buckets[AgentID]
-	size    int
-	per     time.Duration
-}
-
-func (s *Service) spendAgent(a Agent, limits ...agentLimit) error {
-	now := s.now()
-	for _, b := range limits {
-		if wait := b.buckets.take(a.id, b.size, b.per, now); wait > 0 {
-			return &TooManyAttempts{RetryAfter: wait}
-		}
-	}
-	return nil
-}
-
 // AuthorizeAgent returns the scope a may act in with perm: the platform's for an operation on the platform's own
 // resources, which needs the credential's platform grant, otherwise the credential's sites. A permission it does not
 // hold is ErrForbidden; the platform without the grant is ErrNotFound, as if the resource did not exist.

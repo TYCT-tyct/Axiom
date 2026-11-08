@@ -366,6 +366,38 @@ func TestAgentWritesAreLimited(t *testing.T) {
 	}
 }
 
+// TestAgentLimitsLoweredMidWindow: calls granted under a limit still count against it once the owner lowers it, so the
+// lowered limit holds over the window that already let them through: past the bucket's own refill and its forgetting
+// a full bucket, until the window has passed.
+func TestAgentLimitsLoweredMidWindow(t *testing.T) {
+	t.Parallel()
+	db, _, s, clock := agentSetup(t)
+	for _, c := range []struct {
+		name          string
+		before, after func(accounts.Agent) error
+		calls         int
+		window        time.Duration
+	}{
+		{"money writes an hour", func(a accounts.Agent) error { return s.SpendAgentMoney(a, 30, 300) }, func(a accounts.Agent) error { return s.SpendAgentMoney(a, 30, 1) }, 1, time.Hour},
+		{"money writes a minute", func(a accounts.Agent) error { return s.SpendAgentMoney(a, 30, 300) }, func(a accounts.Agent) error { return s.SpendAgentMoney(a, 1, 300) }, 1, time.Minute},
+		{"alerts", func(a accounts.Agent) error { return s.SpendAgentAlert(a, 60) }, func(a accounts.Agent) error { return s.SpendAgentAlert(a, 1) }, 1, time.Hour},
+		{"requests", func(a accounts.Agent) error { return s.SpendAgentRequest(a, 600) }, func(a accounts.Agent) error { return s.SpendAgentRequest(a, 10) }, 10, time.Minute},
+	} {
+		a, err := s.AuthenticateAgent(t.Context(), makeAgent(t, db, s, agentSpec(clock, "operations.money")).Token.Reveal())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range c.calls {
+			if err := c.before(a); err != nil {
+				t.Fatalf("%s before lowering: %v", c.name, err)
+			}
+		}
+		if granted := grantedEverySecond(t, clock, func() error { return c.after(a) }); granted[0] != c.window {
+			t.Errorf("%s: first granted %s after the window's first calls, want once the window has passed (%s)", c.name, granted[0], c.window)
+		}
+	}
+}
+
 // grantedEverySecond asks spend once a second for two hours and returns when it was granted, from the first ask; a
 // refusal must say how long to wait.
 func grantedEverySecond(t *testing.T, clock *manualClock, spend func() error) []time.Duration {
