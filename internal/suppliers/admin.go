@@ -141,9 +141,23 @@ func (a *Admin) onboarding(kind string) (adapter.Onboarding, error) {
 	return o, nil
 }
 
+// Owners is whose suppliers a read sees. The reads run in the platform scope, where row-level security lets every
+// owner's row through, so the scope cannot say it: a grant of the platform's resources reaches the platform's own
+// suppliers, never a site's or an account's (an account's own key), whatever sites the caller may also read.
+type Owners bool
+
+const (
+	// PlatformOwned is the platform's own suppliers only; it is the zero value, so a read that names no owner sees no
+	// tenant's.
+	PlatformOwned Owners = false
+	// EveryOwner is the platform's and every site's and account's: the admin's, which manages the whole platform.
+	EveryOwner Owners = true
+)
+
 // SupplierQuery chooses the suppliers to list, newest first. After is the last supplier of the page before, the zero
 // UUID for the first page; an empty Status is every status.
 type SupplierQuery struct {
+	Owners   Owners
 	Status   Status
 	After    uuid.UUID
 	PageSize int
@@ -151,7 +165,7 @@ type SupplierQuery struct {
 
 // Suppliers lists a page of suppliers; more tells whether suppliers remain beyond it.
 func (*Admin) Suppliers(ctx context.Context, tx pg.Tx, q SupplierQuery) (suppliers []Supplier, more bool, err error) {
-	params := store.ListSuppliersPageParams{PageSize: int32(q.PageSize + 1)} // #nosec G115 -- a page is at most 200
+	params := store.ListSuppliersPageParams{EveryOwner: bool(q.Owners), PageSize: int32(q.PageSize + 1)} // #nosec G115 -- a page is at most 200
 	if q.Status != "" {
 		status := string(q.Status)
 		params.Status = &status
@@ -173,9 +187,9 @@ func (*Admin) Suppliers(ctx context.Context, tx pg.Tx, q SupplierQuery) (supplie
 	return suppliers, more, nil
 }
 
-// Supplier is one supplier with its groups, credentials and endpoints; ErrNoSupplier when there is none.
-func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID) (Detail, error) {
-	summary, err := a.view(ctx, tx, id)
+// Supplier is one supplier of the owners with its groups, credentials and endpoints; ErrNoSupplier when there is none.
+func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID, owners Owners) (Detail, error) {
+	summary, err := a.view(ctx, tx, id, owners)
 	if err != nil {
 		return Detail{}, err
 	}
@@ -274,7 +288,7 @@ func (a *Admin) SetStatus(ctx context.Context, tx pg.Tx, actor audit.Actor, id u
 			return Supplier{}, err
 		}
 	}
-	return a.view(ctx, tx, id)
+	return a.view(ctx, tx, id, EveryOwner)
 }
 
 // Remove takes a supplier out for good, in the one transaction: its status is `removed` and its configuration generation
@@ -290,7 +304,7 @@ func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid
 		return Supplier{}, err
 	}
 	if Status(row.Status) == Removed {
-		return a.view(ctx, tx, id)
+		return a.view(ctx, tx, id, EveryOwner)
 	}
 	q := store.New()
 	creds, err := q.ListCredentialsOf(ctx, tx, id)
@@ -309,7 +323,7 @@ func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid
 	if err := a.record(ctx, tx, actor, "supplier.remove", id, reason, map[string]any{"from": row.Status, "keys_to_revoke_count": len(creds)}); err != nil {
 		return Supplier{}, err
 	}
-	return a.view(ctx, tx, id)
+	return a.view(ctx, tx, id, EveryOwner)
 }
 
 // SetEndpointQuantization records the level an endpoint serves at, or clears it with nil. Only an admin sets it: the
