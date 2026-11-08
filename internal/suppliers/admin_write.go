@@ -36,7 +36,7 @@ func (a *Admin) ConfirmUnitValue(ctx context.Context, tx pg.Tx, actor audit.Acto
 	if err := a.record(ctx, tx, actor, "supplier.unit_value", id, reason, map[string]any{"value": value, "status": row.Status}); err != nil {
 		return Supplier{}, err
 	}
-	return a.view(ctx, tx, id)
+	return a.view(ctx, tx, id, EveryOwner)
 }
 
 // SelectGroup chooses whether a supplier's group is used. The first time it is selected it gets its code name, which
@@ -268,6 +268,7 @@ type PendingMapping struct {
 // PendingQuery chooses the names to list, oldest first. A zero Supplier is every supplier; After is the last name of
 // the page before, nil for the first page.
 type PendingQuery struct {
+	Owners   Owners
 	Supplier uuid.UUID
 	After    *PendingMapping
 	PageSize int
@@ -275,7 +276,7 @@ type PendingQuery struct {
 
 // PendingMappings lists a page of names that map to no model; more tells whether names remain beyond it.
 func (*Admin) PendingMappings(ctx context.Context, tx pg.Tx, q PendingQuery) (names []PendingMapping, more bool, err error) {
-	params := store.PendingMappingsPageParams{PageSize: int32(q.PageSize + 1)} // #nosec G115 -- a page is at most 200
+	params := store.PendingMappingsPageParams{EveryOwner: bool(q.Owners), PageSize: int32(q.PageSize + 1)} // #nosec G115 -- a page is at most 200
 	if q.Supplier != (uuid.UUID{}) {
 		params.SupplierID = &q.Supplier
 	}

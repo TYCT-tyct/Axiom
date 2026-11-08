@@ -22,6 +22,7 @@ import (
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/operationsapi"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers"
 )
 
 // The operations API (api/operations.yaml, docs/domains/operations.md「运营接口」): what the operations agent calls through
@@ -335,25 +336,29 @@ func relayed[T, A any](answer any, err error) (T, error) {
 	return adminJSON[T](body)
 }
 
-// SuppliersList lists suppliers as the admin does.
+// The supplier reads are of the platform's own suppliers only (suppliers.PlatformOwned): the guard's platform scope lets
+// every owner's row through, and a grant of the platform's resources is no grant of a site's or an account's, such as
+// an account's own provider key, whatever sites the credential may also read.
+
+// SuppliersList lists the platform's suppliers as the admin does.
 func (o operationsAPI) SuppliersList(ctx context.Context, r operationsapi.SuppliersListRequestObject) (operationsapi.SuppliersListResponseObject, error) {
-	answer, err := o.admin.ListSuppliers(ctx, adminapi.ListSuppliersRequestObject{Params: adminapi.ListSuppliersParams{
+	answer, err := o.admin.listSuppliers(ctx, adminapi.ListSuppliersRequestObject{Params: adminapi.ListSuppliersParams{
 		Status: (*adminapi.SupplierStatus)(r.Params.Status), Cursor: r.Params.Cursor, Limit: r.Params.Limit,
-	}})
+	}}, suppliers.PlatformOwned)
 	return relayed[operationsapi.SuppliersList200JSONResponse, adminapi.ListSuppliers200JSONResponse](answer, err)
 }
 
-// SuppliersGet reads one supplier as the admin does.
+// SuppliersGet reads one of the platform's suppliers as the admin does; another owner's is not found.
 func (o operationsAPI) SuppliersGet(ctx context.Context, r operationsapi.SuppliersGetRequestObject) (operationsapi.SuppliersGetResponseObject, error) {
-	answer, err := o.admin.GetSupplier(ctx, adminapi.GetSupplierRequestObject{SupplierId: r.SupplierId})
+	answer, err := o.admin.getSupplier(ctx, adminapi.GetSupplierRequestObject{SupplierId: r.SupplierId}, suppliers.PlatformOwned)
 	return relayed[operationsapi.SuppliersGet200JSONResponse, adminapi.GetSupplier200JSONResponse](answer, err)
 }
 
-// PendingMappingsList lists the upstream names waiting to be mapped as the admin does.
+// PendingMappingsList lists the upstream names of the platform's suppliers waiting to be mapped as the admin does.
 func (o operationsAPI) PendingMappingsList(ctx context.Context, r operationsapi.PendingMappingsListRequestObject) (operationsapi.PendingMappingsListResponseObject, error) {
-	answer, err := o.admin.ListPendingMappings(ctx, adminapi.ListPendingMappingsRequestObject{Params: adminapi.ListPendingMappingsParams{
+	answer, err := o.admin.listPendingMappings(ctx, adminapi.ListPendingMappingsRequestObject{Params: adminapi.ListPendingMappingsParams{
 		SupplierId: r.Params.SupplierId, Cursor: r.Params.Cursor, Limit: r.Params.Limit,
-	}})
+	}}, suppliers.PlatformOwned)
 	return relayed[operationsapi.PendingMappingsList200JSONResponse, adminapi.ListPendingMappings200JSONResponse](answer, err)
 }
 

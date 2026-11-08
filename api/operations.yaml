@@ -79,7 +79,10 @@ paths:
     get:
       operationId: suppliersList
       summary: Suppliers
-      description: Newest first. The status filter is exact. No credential of a supplier is ever returned.
+      description: >-
+        The platform's own suppliers, newest first; a site's or an account's (an account's own provider key) is never
+        listed, whatever sites the credential may read. The status filter is exact. No credential of a supplier is ever
+        returned.
       tags: [Suppliers]
       security: [{credential: []}]
       x-axiom-permission: suppliers.view
@@ -106,8 +109,9 @@ paths:
       operationId: suppliersGet
       summary: One supplier
       description: >-
-        The supplier with its groups, the keys bound to them (their labels, never the keys) and its endpoints, as the
-        sync last stored them.
+        One of the platform's own suppliers with its groups, the keys bound to them (their labels, never the keys) and
+        its endpoints, as the sync last stored them. A site's or an account's supplier answers 404, as one that does not
+        exist.
       tags: [Suppliers]
       security: [{credential: []}]
       x-axiom-permission: suppliers.view
@@ -131,7 +135,7 @@ paths:
     get:
       operationId: pendingMappingsList
       summary: Upstream model names waiting to be mapped
-      description: The names suppliers list that no model of the catalog claims yet, optionally of one supplier.
+      description: The names the platform's own suppliers list that no model of the catalog claims yet, optionally of one supplier.
       tags: [Suppliers]
       security: [{credential: []}]
       x-axiom-permission: suppliers.view

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"sync"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers"
 )
@@ -108,9 +106,14 @@ func supplierCursor(cursor *string) (uuid.UUID, error) {
 	return idIn("cursor", *cursor)
 }
 
-// ListSuppliers lists suppliers, newest first, a page at a time.
+// ListSuppliers lists suppliers of every owner, newest first, a page at a time.
 func (a adminAPI) ListSuppliers(ctx context.Context, request adminapi.ListSuppliersRequestObject) (adminapi.ListSuppliersResponseObject, error) {
-	q := suppliers.SupplierQuery{PageSize: pageSize(request.Params.Limit)}
+	return a.listSuppliers(ctx, request, suppliers.EveryOwner)
+}
+
+// listSuppliers is ListSuppliers of the owners.
+func (a adminAPI) listSuppliers(ctx context.Context, request adminapi.ListSuppliersRequestObject, owners suppliers.Owners) (adminapi.ListSuppliersResponseObject, error) {
+	q := suppliers.SupplierQuery{Owners: owners, PageSize: pageSize(request.Params.Limit)}
 	if request.Params.Status != nil {
 		q.Status = suppliers.Status(*request.Params.Status)
 	}
@@ -138,15 +141,20 @@ func (a adminAPI) ListSuppliers(ctx context.Context, request adminapi.ListSuppli
 }
 
 // GetSupplier reads one supplier with its groups, the keys bound to them and its endpoints, as the sync last stored them.
-// The keys the supplier lists that are bound to none are the sync's to say, and are not stored yet.
+// The keys the supplier lists that are bound to none are the sync's to say, and are not stored yet. Any owner's.
 func (a adminAPI) GetSupplier(ctx context.Context, request adminapi.GetSupplierRequestObject) (adminapi.GetSupplierResponseObject, error) {
+	return a.getSupplier(ctx, request, suppliers.EveryOwner)
+}
+
+// getSupplier is GetSupplier of the owners: another owner's supplier is no supplier.
+func (a adminAPI) getSupplier(ctx context.Context, request adminapi.GetSupplierRequestObject, owners suppliers.Owners) (adminapi.GetSupplierResponseObject, error) {
 	id, err := supplierIDOf(request.SupplierId)
 	if err != nil {
 		return nil, err
 	}
 	var detail suppliers.Detail
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		detail, err = a.suppliers.Supplier(ctx, tx, id)
+		detail, err = a.suppliers.Supplier(ctx, tx, id, owners)
 		return err
 	}); err != nil {
 		return nil, err
@@ -478,65 +486,6 @@ func (a adminAPI) SetSupplierCredentialLimits(ctx context.Context, request admin
 		return nil, err
 	}
 	return adminapi.SetSupplierCredentialLimits200JSONResponse{Body: changed, Headers: adminapi.SetSupplierCredentialLimits200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
-}
-
-// pendingCursor is where a page of the queue of names to map ended, in the cursor's own form.
-type pendingCursor struct {
-	Seen  time.Time `json:"s"`
-	Group uuid.UUID `json:"g"`
-	Name  string    `json:"n"`
-}
-
-func pendingAfter(cursor *string) (*suppliers.PendingMapping, error) {
-	if cursor == nil {
-		return nil, nil //nolint:nilnil // no cursor is the first page
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(*cursor)
-	var c pendingCursor
-	if err != nil || jsonx.Unmarshal(decoded, &c) != nil || c.Name == "" {
-		return nil, invalidField("cursor", "not a cursor this API gave out")
-	}
-	return &suppliers.PendingMapping{FirstSeen: c.Seen, Group: c.Group, UpstreamName: c.Name}, nil
-}
-
-// ListPendingMappings lists the upstream names no model is mapped to, oldest first, a page at a time.
-func (a adminAPI) ListPendingMappings(ctx context.Context, request adminapi.ListPendingMappingsRequestObject) (adminapi.ListPendingMappingsResponseObject, error) {
-	p := request.Params
-	q := suppliers.PendingQuery{PageSize: pageSize(p.Limit)}
-	var err error
-	if p.SupplierId != nil {
-		if q.Supplier, err = idIn("supplier_id", *p.SupplierId); err != nil {
-			return nil, err
-		}
-	}
-	if q.After, err = pendingAfter(p.Cursor); err != nil {
-		return nil, err
-	}
-	var names []suppliers.PendingMapping
-	var more bool
-	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		names, more, err = a.suppliers.PendingMappings(ctx, tx, q)
-		return err
-	}); err != nil {
-		return nil, err
-	}
-	list := adminapi.PendingMappingList{Data: make([]adminapi.PendingMapping, len(names))}
-	for i, n := range names {
-		list.Data[i] = adminapi.PendingMapping{
-			SupplierId: n.Supplier.String(), GroupId: n.Group.String(), GroupCodename: text(n.GroupCodename), UpstreamName: n.UpstreamName,
-			Formats: modelFormats(n.Formats),
-		}
-	}
-	if more {
-		last := names[len(names)-1]
-		encoded, err := jsonx.MarshalCanonical(pendingCursor{last.FirstSeen, last.Group, last.UpstreamName})
-		if err != nil {
-			return nil, err
-		}
-		next := base64.RawURLEncoding.EncodeToString(encoded)
-		list.NextCursor = &next
-	}
-	return adminapi.ListPendingMappings200JSONResponse(list), nil
 }
 
 // MapSupplierModel makes an alias: the supplier's name means this model, in one group or in the whole supplier.
