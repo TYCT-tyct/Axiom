@@ -134,7 +134,7 @@ func digestOf(ctx context.Context, tx pg.Tx, start time.Time, replicaOn bool) (A
 	for _, r := range approvals {
 		d.Approvals = append(d.Approvals, DigestApproval(r))
 	}
-	refused, err := q.AuditDayRefusals(ctx, tx, AuditDayRefusalsParams{FirstID: v7Floor(start), EndID: v7Floor(end)})
+	refused, err := q.AuditDayRefusals(ctx, tx, AuditDayRefusalsParams{DayStart: start, DayEnd: end})
 	if err != nil {
 		return d, fmt.Errorf("read the day's refused calls: %w", err)
 	}
@@ -150,16 +150,6 @@ func digestOf(ctx context.Context, tx pg.Tx, start time.Time, replicaOn bool) (A
 	d.Replica, err = digestReplica(ctx, tx, replicaOn)
 	d.MadeAt = time.Now().UTC()
 	return d, err
-}
-
-// v7Floor is the least UUIDv7 made at t: t's milliseconds and zeros, at or below every ID made from t on.
-func v7Floor(t time.Time) uuid.UUID {
-	var id uuid.UUID
-	ms := uint64(t.UnixMilli()) //nolint:gosec // a time after 1970, as every UUIDv7's is
-	for i := range 6 {
-		id[i] = byte(ms >> (40 - 8*i))
-	}
-	return id
 }
 
 // digestMoney reads every cap policy's counter of the day starting at start.
@@ -242,7 +232,7 @@ func digestAlert(d AuditDigest) alert.Signal {
 // AuditDigests reads up to n digests newest first, those of the days before the one starting at before when it is
 // set, and whether more follow.
 func AuditDigests(ctx context.Context, tx pg.Tx, before *time.Time, n int) ([]AuditDigest, bool, error) {
-	rows, err := New().AuditDigests(ctx, tx, AuditDigestsParams{Before: before, N: int32(n + 1)}) //nolint:gosec // a page size, at most 200
+	rows, err := New().AuditDigests(ctx, tx, AuditDigestsParams{Before: before, N: int64(n) + 1})
 	if err != nil {
 		return nil, false, fmt.Errorf("read the audit digests: %w", err)
 	}

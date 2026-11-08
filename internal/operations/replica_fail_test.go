@@ -40,19 +40,24 @@ type iotestErrReader struct{}
 
 func (iotestErrReader) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
 
-// TestReplicaAndDigestFail: each step of the copy and the digest hands a failure of its database or bucket to its
-// caller, a failing run of either job is logged and not retried, and a successful one logs nothing.
-func TestReplicaAndDigestFail(t *testing.T) {
-	t.Parallel()
-	database := pgtest.New(t, Module())
-	db, err := pg.Open(t.Context(), database.App)
+// openFailing is a database with the module's tables, the platform scope and a context already canceled.
+func openFailing(t *testing.T) (*pg.DB, pg.Scope, context.Context) {
+	t.Helper()
+	db, err := pg.Open(t.Context(), pgtest.New(t, Module()).App)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	scope := pg.NewScope(true, nil, nil)
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
+	return db, pg.NewScope(true, nil, nil), canceled
+}
+
+// TestReplicaAndDigestStepsFail: each step of the copy and the digest hands a failure of its database or bucket to
+// its caller, and the copy writes nothing it could not first read.
+func TestReplicaAndDigestStepsFail(t *testing.T) {
+	t.Parallel()
+	db, scope, canceled := openFailing(t)
 	for name, step := range map[string]func(tx pg.Tx) error{
 		"nextReplicaBatch": func(tx pg.Tx) error { _, _, err := nextReplicaBatch(canceled, tx); return err },
 		"signalReplicaLag": func(tx pg.Tx) error { return signalReplicaLag(canceled, tx) },
@@ -83,8 +88,15 @@ func TestReplicaAndDigestFail(t *testing.T) {
 		t.Errorf("a failure that is not a conflict raised: %v", err)
 	}
 
+}
+
+// TestReplicaAndDigestWork: a failing run of either job is logged and not retried, and a successful one logs nothing.
+func TestReplicaAndDigestWork(t *testing.T) {
+	t.Parallel()
+	db, scope, canceled := openFailing(t)
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	down := &failingStore{err: errors.New("bucket down")}
 	replica, digest := replicaWork(db, scope, down, logger), digestWork(db, scope, false, logger)
 	if err := errors.Join(replica(t.Context(), nil), digest(t.Context(), nil)); err != nil || logs.Len() != 0 {
 		t.Errorf("runs with nothing to copy and a digest to make: %v %s", err, logs.String())

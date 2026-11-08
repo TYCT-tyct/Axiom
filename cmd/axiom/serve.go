@@ -97,15 +97,11 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		archiveStore = archive
 		defer archive.Close()
 	}
-	replica, err := openBucket(cfg.auditReplica)
+	replicaStore, closeReplica, err := openReplica(cfg.auditReplica)
 	if err != nil {
-		return fmt.Errorf("audit replica:\n%w", err)
+		return err
 	}
-	var replicaStore operations.ReplicaStore
-	if replica != nil {
-		replicaStore = replica
-		defer replica.Close()
-	}
+	defer closeReplica()
 	// Claim every listener before the slow steps (database check, cache, queue, call path), so a taken address is named
 	// at once instead of after them. The same listeners serve; shutdown closes them, and a failed start closes them here.
 	servers := listeners(cfg)
@@ -608,6 +604,18 @@ func registerAuditReplica(db *pg.DB, queue *pg.Queue, replica operations.Replica
 		return nil
 	}
 	return operations.RegisterAuditReplica(db, pg.PlatformScope(), queue, replica, logger)
+}
+
+// openReplica opens the audit chain's replica bucket, or none (a nil store); close releases what it opened.
+func openReplica(cfg objectstore.Config) (store operations.ReplicaStore, closeIt func(), err error) {
+	client, err := openBucket(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("audit replica:\n%w", err)
+	}
+	if client == nil {
+		return nil, func() {}, nil
+	}
+	return client, client.Close, nil
 }
 
 // openBucket opens a configured bucket, or none: a bucket that is not configured turns off what writes to it (the call

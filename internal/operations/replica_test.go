@@ -80,40 +80,49 @@ func objectKey(first, last int) string {
 	return fmt.Sprintf("audit-chain/v1/%020d-%020d.jsonl", first, last)
 }
 
+// replicaLink is one line of a replica object.
+type replicaLink struct {
+	Seq      int64  `json:"seq"`
+	PrevHash string `json:"prev_hash"`
+	Hash     string `json:"hash"`
+	Entry    []any  `json:"entry"`
+}
+
 // verifyReplica recomputes the chain from the bucket alone, as a verifier outside Axiom would: each line's hash is
 // SHA-256 of the previous line's hash and the entry's canonical JSON, the first following 32 zero bytes. It returns the
 // entry IDs in the chain's order.
 func verifyReplica(t *testing.T, b *bucket) []string {
 	t.Helper()
-	prev, next, ids := make([]byte, sha256.Size), int64(1), []string{}
+	prev, ids := make([]byte, sha256.Size), []string{}
 	for _, key := range b.keys() {
 		lines := bufio.NewScanner(bytes.NewReader(b.objects[key]))
 		for lines.Scan() {
-			var link struct {
-				Seq      int64  `json:"seq"`
-				PrevHash string `json:"prev_hash"`
-				Hash     string `json:"hash"`
-				Entry    []any  `json:"entry"`
-			}
+			var link replicaLink
 			if err := jsonx.Unmarshal(lines.Bytes(), &link); err != nil {
 				t.Fatalf("%s: %v", key, err)
 			}
-			if link.Seq != next || link.PrevHash != hex.EncodeToString(prev) {
-				t.Fatalf("%s: link %d follows %x, want %d after %x", key, link.Seq, link.PrevHash, next, prev)
-			}
-			encoded, err := jsonx.MarshalCanonical(link.Entry)
-			if err != nil {
-				t.Fatal(err)
-			}
-			sum := sha256.Sum256(append(slices.Clone(prev), encoded...))
-			if hex.EncodeToString(sum[:]) != link.Hash {
-				t.Fatalf("%s: link %d does not hash to %s", key, link.Seq, link.Hash)
-			}
-			prev, next = sum[:], next+1
+			prev = checkReplicaLink(t, key, link, int64(len(ids))+1, prev)
 			ids = append(ids, link.Entry[1].(string)) //nolint:forcetypeassert // the encoding's second field is the entry ID
 		}
 	}
 	return ids
+}
+
+// checkReplicaLink checks that link is seq after the link whose hash is prev and hashes as it says; it returns its hash.
+func checkReplicaLink(t *testing.T, key string, link replicaLink, seq int64, prev []byte) []byte {
+	t.Helper()
+	if link.Seq != seq || link.PrevHash != hex.EncodeToString(prev) {
+		t.Fatalf("%s: link %d follows %s, want %d after %x", key, link.Seq, link.PrevHash, seq, prev)
+	}
+	encoded, err := jsonx.MarshalCanonical(link.Entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(append(slices.Clone(prev), encoded...))
+	if hex.EncodeToString(sum[:]) != link.Hash {
+		t.Fatalf("%s: link %d does not hash to %s", key, link.Seq, link.Hash)
+	}
+	return sum[:]
 }
 
 // TestAuditReplicaCopiesTheChain: each run copies the links chained since the last, an object of at most a batch at a

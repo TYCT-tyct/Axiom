@@ -160,14 +160,18 @@ func (q *Queries) AuditDayOperations(ctx context.Context, db DBTX, arg AuditDayO
 }
 
 const auditDayRefusals = `-- name: AuditDayRefusals :many
-SELECT coalesce(error_code, '')::text AS code, count(*)::integer AS count FROM operations.operation_log
-WHERE id >= $1 AND id < $2 AND status BETWEEN 400 AND 499
+WITH b AS (
+    SELECT (lpad(to_hex((extract(epoch FROM $1::timestamptz) * 1000)::bigint), 12, '0') || repeat('0', 20))::uuid AS first_id,
+        (lpad(to_hex((extract(epoch FROM $2::timestamptz) * 1000)::bigint), 12, '0') || repeat('0', 20))::uuid AS end_id
+)
+SELECT coalesce(l.error_code, '')::text AS code, count(*)::integer AS count FROM operations.operation_log l, b
+WHERE l.id >= b.first_id AND l.id < b.end_id AND l.status BETWEEN 400 AND 499
 GROUP BY 1 ORDER BY 1
 `
 
 type AuditDayRefusalsParams struct {
-	FirstID uuid.UUID
-	EndID   uuid.UUID
+	DayStart time.Time
+	DayEnd   time.Time
 }
 
 type AuditDayRefusalsRow struct {
@@ -175,10 +179,11 @@ type AuditDayRefusalsRow struct {
 	Count int32
 }
 
-// The calls of [@first_id, @end_id) the guards or the target refused (4xx), by error code. The log's IDs are UUIDv7 made
-// when the call was logged, so the day is a range of the primary key; the caller derives the bounds from the day.
+// The calls of [@day_start, @day_end) the guards or the target refused (4xx), by error code. The log's IDs are UUIDv7
+// made when the call was logged, so the day is a range of the primary key: the least UUIDv7 of a moment is its
+// milliseconds as 12 hex digits followed by zeros, at or below every ID made from then on.
 func (q *Queries) AuditDayRefusals(ctx context.Context, db DBTX, arg AuditDayRefusalsParams) ([]AuditDayRefusalsRow, error) {
-	rows, err := db.Query(ctx, auditDayRefusals, arg.FirstID, arg.EndID)
+	rows, err := db.Query(ctx, auditDayRefusals, arg.DayStart, arg.DayEnd)
 	if err != nil {
 		return nil, err
 	}
@@ -218,12 +223,12 @@ func (q *Queries) AuditDigestDue(ctx context.Context, db DBTX) (AuditDigestDueRo
 const auditDigests = `-- name: AuditDigests :many
 SELECT body FROM operations.audit_digests
 WHERE $1::timestamptz IS NULL OR day < ($1::timestamptz AT TIME ZONE 'UTC')::date
-ORDER BY day DESC LIMIT $2
+ORDER BY day DESC LIMIT $2::bigint
 `
 
 type AuditDigestsParams struct {
 	Before *time.Time
-	N      int32
+	N      int64
 }
 
 // The digests newest first, those of the days before the one starting at @before when it is set.

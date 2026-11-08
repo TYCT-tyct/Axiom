@@ -16,10 +16,15 @@ WHERE requested_at >= @day_start AND requested_at < @day_end
 GROUP BY state ORDER BY state;
 
 -- name: AuditDayRefusals :many
--- The calls of [@first_id, @end_id) the guards or the target refused (4xx), by error code. The log's IDs are UUIDv7 made
--- when the call was logged, so the day is a range of the primary key; the caller derives the bounds from the day.
-SELECT coalesce(error_code, '')::text AS code, count(*)::integer AS count FROM operations.operation_log
-WHERE id >= @first_id AND id < @end_id AND status BETWEEN 400 AND 499
+-- The calls of [@day_start, @day_end) the guards or the target refused (4xx), by error code. The log's IDs are UUIDv7
+-- made when the call was logged, so the day is a range of the primary key: the least UUIDv7 of a moment is its
+-- milliseconds as 12 hex digits followed by zeros, at or below every ID made from then on.
+WITH b AS (
+    SELECT (lpad(to_hex((extract(epoch FROM @day_start::timestamptz) * 1000)::bigint), 12, '0') || repeat('0', 20))::uuid AS first_id,
+        (lpad(to_hex((extract(epoch FROM @day_end::timestamptz) * 1000)::bigint), 12, '0') || repeat('0', 20))::uuid AS end_id
+)
+SELECT coalesce(l.error_code, '')::text AS code, count(*)::integer AS count FROM operations.operation_log l, b
+WHERE l.id >= b.first_id AND l.id < b.end_id AND l.status BETWEEN 400 AND 499
 GROUP BY 1 ORDER BY 1;
 
 -- name: AuditDayMoney :many
@@ -48,4 +53,4 @@ ON CONFLICT (day) DO NOTHING;
 -- The digests newest first, those of the days before the one starting at @before when it is set.
 SELECT body FROM operations.audit_digests
 WHERE sqlc.narg(before)::timestamptz IS NULL OR day < (sqlc.narg(before)::timestamptz AT TIME ZONE 'UTC')::date
-ORDER BY day DESC LIMIT @n;
+ORDER BY day DESC LIMIT sqlc.arg(n)::bigint;
