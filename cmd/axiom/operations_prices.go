@@ -253,7 +253,7 @@ func (a adminAPI) runPricePublish(ctx context.Context, tx pg.Tx, op operations.O
 	if err != nil {
 		return nil, err
 	}
-	if err := operations.CountPrice(ctx, tx, r); err != nil {
+	if err := operations.CountPrices(ctx, tx, r.Site, []operations.Repricing{r}); err != nil {
 		return nil, err
 	}
 	return publish(ctx, tx, site, pub, op, r)

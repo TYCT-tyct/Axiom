@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
@@ -109,6 +110,11 @@ func TestProposeOnceAKey(t *testing.T) {
 	}
 	if _, replayed, err := db.propose(t, retire(uuid.NewV7(), key, 3, false)); err != nil || replayed {
 		t.Errorf("another credential's key is its own: %v %v", replayed, err)
+	}
+	large := retire(credential, uuid.NewV7(), 3, false)
+	large.Params["note"] = strings.Repeat("x", 8192)
+	if _, _, err := db.propose(t, large); !errors.Is(err, operations.ErrParamsTooLarge) {
+		t.Errorf("parameters over 8 KiB: %v", err)
 	}
 	if got := db.text(t, `SELECT string_agg(action || ':' || actor_kind, ',') FROM platform.audit_log`); got != "operation.succeed:operations_agent" {
 		t.Errorf("the audit is %s", got)

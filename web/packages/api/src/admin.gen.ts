@@ -4191,10 +4191,10 @@ export interface components {
             tool: string;
             target: components["schemas"]["OperationTarget"];
             risk: components["schemas"]["OperationRisk"];
-            /** @description What the operation does, as the server keeps it; it cannot change after the agent asked. Its shape is the `tool`'s: `credit_grant` OperationsCreditGrantParams, `supplier_top_up_propose` OperationsTopUpParams, `price_publish` OperationsPricePublishParams, `model_set_status` OperationsModelStatusParams. `tool` is on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names. */
-            params: components["schemas"]["OperationsCreditGrantParams"] | components["schemas"]["OperationsTopUpParams"] | components["schemas"]["OperationsPricePublishParams"] | components["schemas"]["OperationsModelStatusParams"];
-            /** @description What the server read of the target when the agent asked, never the agent's words. Its shape is the `tool`'s: `credit_grant` OperationsCreditGrantSummary, `supplier_top_up_propose` OperationsTopUpSummary, `price_publish` OperationsPricePublishSummary, `model_set_status` OperationsModelStatusSummary; `tool` is on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names. Every member is optional: one an older node did not know is absent, so a page shows what is there. */
-            summary: components["schemas"]["OperationsCreditGrantSummary"] | components["schemas"]["OperationsTopUpSummary"] | components["schemas"]["OperationsPricePublishSummary"] | components["schemas"]["OperationsModelStatusSummary"];
+            /** @description What the operation does, as the server keeps it; it cannot change after the agent asked. Its shape is the `tool`'s: `credit_grant` OperationsCreditGrantParams, `supplier_top_up_propose` OperationsTopUpParams, `price_publish` OperationsPricePublishParams, `model_set_status` OperationsModelStatusParams, `pricing_rule_create` and `pricing_rule_update` OperationsPricingRuleParams. `tool` is on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names. */
+            params: components["schemas"]["OperationsCreditGrantParams"] | components["schemas"]["OperationsTopUpParams"] | components["schemas"]["OperationsPricePublishParams"] | components["schemas"]["OperationsModelStatusParams"] | components["schemas"]["OperationsPricingRuleParams"];
+            /** @description What the server read of the target when the agent asked, never the agent's words. Its shape is the `tool`'s: `credit_grant` OperationsCreditGrantSummary, `supplier_top_up_propose` OperationsTopUpSummary, `price_publish` OperationsPricePublishSummary, `model_set_status` OperationsModelStatusSummary, `pricing_rule_create` and `pricing_rule_update` OperationsPricingRuleSummary; `tool` is on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names. Every member is optional: one an older node did not know is absent, so a page shows what is there. */
+            summary: components["schemas"]["OperationsCreditGrantSummary"] | components["schemas"]["OperationsTopUpSummary"] | components["schemas"]["OperationsPricePublishSummary"] | components["schemas"]["OperationsModelStatusSummary"] | components["schemas"]["OperationsPricingRuleSummary"];
             /** @description Why it waited for the owner, as the server decided it when the agent asked, so a page shows it and never works it out from `summary`. Absent when an older node asked for it: the page then says it does not know. */
             reasons?: components["schemas"]["OperationsApprovalReason"][];
             /** @description Whether the owner can still approve or reject it: `pending` and before `expires_at` by the server's clock, the one a decision is checked against, so a page with a skewed clock neither offers a decision the server would refuse with a conflict nor hides one it would take. False for a pending one past its expiry, which the minutely sweep has not yet marked `expired`. Absent from an older node. */
@@ -4333,6 +4333,37 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** @description `pricing_rule_create` and `pricing_rule_update`: the rule changed (absent for a new one) and every sale price of the main site the change moved when the agent asked, each weighed against the envelope, which shows the day before the change. The change itself is in `params`. */
+        OperationsPricingRuleSummary: {
+            rule_id?: components["schemas"]["Uuid"];
+            /**
+             * Format: int64
+             * @description The rule's revision the change is made as of.
+             */
+            rule_rev?: number;
+            currency?: string;
+            envelope?: components["schemas"]["OperationsEnvelopeDetail"];
+            /** @description How many prices it moved; `moves` lists the first 12. */
+            moves_total?: number;
+            moves?: components["schemas"]["OperationsPriceMove"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description One published sale price a pricing rule change moved: the model and the audience it is sold to, how far it moved and the margin it keeps, in basis points (`change_bps` null when no share measures the move, as for a first price or one taken away; `margin_bps` null when the cost is unknown), and what the model's day held before it. */
+        OperationsPriceMove: {
+            model_id?: components["schemas"]["Uuid"];
+            slug?: string;
+            audience?: components["schemas"]["PricingAudience"];
+            /** Format: int64 */
+            change_bps?: number | null;
+            /** Format: int64 */
+            margin_bps?: number | null;
+            /** Format: int64 */
+            model_change_used?: number;
+            model_moved_today?: boolean;
+        } & {
+            [key: string]: unknown;
+        };
         /** @description `model_set_status`, which waits only to retire a model: the model as the server read it. */
         OperationsModelStatusSummary: {
             slug?: string;
@@ -4361,6 +4392,14 @@ export interface components {
         OperationsPricePublishParams: {
             candidate_id?: components["schemas"]["Uuid"];
             current_id?: components["schemas"]["Uuid"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description `pricing_rule_create` and `pricing_rule_update`: the rule as the agent asked for it and, for a change, the revision it was read at. */
+        OperationsPricingRuleParams: {
+            rule?: components["schemas"]["PricingRuleInput"];
+            /** Format: int64 */
+            rev?: number;
         } & {
             [key: string]: unknown;
         };
