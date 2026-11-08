@@ -16,13 +16,19 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// The owner's daily digest (docs/domains/operations.md「审计」): once a UTC day has ended, one digest of it is made and
-// kept, and a signal tells the owner. Inserting the day's row and the signal share a transaction, and the row's key is
-// the day, so the digest is made and announced exactly once, whichever node or attempt gets there first.
+// The owner's daily digest (docs/domains/operations.md「审计」). Its invariant: every UTC day from the first one on has
+// exactly one digest, made from one snapshot taken after every transaction that could still write into the day has
+// ended, and announced as an incident of its own. The days are made in order from the day after the last one, so a
+// node that was down catches up; the row's key is the day and inserting it shares a transaction with the signal, so
+// whichever node or attempt gets there first makes and announces it, once.
 
-// digestSignal is the alert that carries the digest's headline to the owner's channels. One incident, keyed platform,
-// whose fields each day's digest replaces: a rule that repeats every day delivers the latest.
-const digestSignal = "operations.audit_digest"
+const (
+	// digestSignal is the alert that carries a digest's headline to the owner's channels, keyed by its day. The
+	// alert module treats it as a notice: closing it sends nothing.
+	digestSignal = "operations.audit_digest"
+	// digestDays bounds the days one run makes, so a node that was down for weeks catches up a week a minute.
+	digestDays = 7
+)
 
 // AuditDigest is one UTC day as the owner reads it, kept as it was made. The JSON is the contract's AuditDigest.
 type AuditDigest struct {
@@ -85,35 +91,93 @@ type DigestReplica struct {
 	ReplicatedAt  *time.Time `json:"replicated_at,omitempty"`
 }
 
-// MakeAuditDigest makes yesterday's digest unless it has been made, and signals it; it reports whether it made one.
-// replicaOn says whether this node copies the chain, which the digest reports.
-func MakeAuditDigest(ctx context.Context, db *pg.DB, scope pg.Scope, replicaOn bool) (bool, error) {
-	var made bool
+// MakeAuditDigests closes the incidents of the digests told a day ago, then makes the digests of the days that have
+// ended since the last one, up to digestDays, each announced by a signal. It returns how many it made. replicaOn says
+// whether this node copies the chain, which the digests report.
+func MakeAuditDigests(ctx context.Context, db *pg.DB, scope pg.Scope, replicaOn bool) (int, error) {
+	return makeAuditDigests(ctx, db, scope, replicaOn, chainSettle)
+}
+
+// makeAuditDigests is MakeAuditDigests with the settling time of the day's last transactions, which the tests lengthen.
+func makeAuditDigests(ctx context.Context, db *pg.DB, scope pg.Scope, replicaOn bool, settle time.Duration) (int, error) {
+	if err := db.Tx(ctx, scope, func(tx pg.Tx) error { return closeDigests(ctx, tx) }); err != nil {
+		return 0, err
+	}
+	made := 0
+	for range digestDays {
+		day, ok, err := nextDigestDay(ctx, db, scope, settle)
+		if err != nil || !ok {
+			return made, err
+		}
+		var d AuditDigest
+		// One snapshot for the whole day, so a sweep that commits between two reads cannot show an operation still
+		// waiting beside its approval expired.
+		if err := db.ReadTx(ctx, scope, func(tx pg.Tx) (err error) { d, err = digestOf(ctx, tx, day, replicaOn); return err }); err != nil {
+			return made, err
+		}
+		saved, err := saveDigest(ctx, db, scope, day, d)
+		if err != nil || !saved { // another node made it, and carries on from there
+			return made, err
+		}
+		made++
+	}
+	return made, nil
+}
+
+// closeDigests closes the incidents of the digests made a day ago or more.
+func closeDigests(ctx context.Context, tx pg.Tx) error {
+	days, err := New().CloseAuditDigests(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("close the audit digests' incidents: %w", err)
+	}
+	for _, day := range days {
+		key := day.UTC().Format(time.DateOnly)
+		if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: digestSignal, Key: key, Severity: "info", Resolved: true}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// nextDigestDay is the day the next digest is of, and whether it is final: it has ended, and so has every transaction
+// that began before its end (AuditChainFrontier), so nothing can still commit into it. The frontier is read in a
+// transaction of its own, before the day's snapshot, so every transaction it saw end is in that snapshot.
+func nextDigestDay(ctx context.Context, db *pg.DB, scope pg.Scope, settle time.Duration) (time.Time, bool, error) {
+	var day time.Time
+	var final bool
 	err := db.Tx(ctx, scope, func(tx pg.Tx) error {
 		q := New()
-		due, err := q.AuditDigestDue(ctx, tx)
-		if err != nil || due.Made {
-			return err
+		var err error
+		if day, err = q.AuditDigestNext(ctx, tx); err != nil {
+			return fmt.Errorf("read the next audit digest's day: %w", err)
 		}
-		d, err := digestOf(ctx, tx, due.DayStart, replicaOn)
-		if err != nil {
-			return err
-		}
-		body, err := jsonx.MarshalCanonical(d)
-		if err != nil {
-			return fmt.Errorf("encode the digest of %s: %w", d.Day, err)
-		}
-		n, err := q.InsertAuditDigest(ctx, tx, InsertAuditDigestParams{DayStart: due.DayStart, Body: body})
+		clock, err := q.AuditChainFrontier(ctx, tx, settle.Seconds())
+		final = !day.Add(24 * time.Hour).After(clock.Frontier)
+		return err
+	})
+	return day, final, err
+}
+
+// saveDigest stores d as the digest of day and signals it, unless that day's is stored already; it reports whether it
+// stored it.
+func saveDigest(ctx context.Context, db *pg.DB, scope pg.Scope, day time.Time, d AuditDigest) (bool, error) {
+	body, err := jsonx.MarshalCanonical(d)
+	if err != nil {
+		return false, fmt.Errorf("encode the digest of %s: %w", d.Day, err)
+	}
+	var saved bool
+	err = db.Tx(ctx, scope, func(tx pg.Tx) error {
+		n, err := New().InsertAuditDigest(ctx, tx, InsertAuditDigestParams{DayStart: day, Body: body})
 		if err != nil || n == 0 {
 			return err
 		}
-		made = true
+		saved = true
 		return alert.Persist(ctx, tx, uuid.NewV7(), digestAlert(d))
 	})
 	if err != nil {
-		return false, fmt.Errorf("make the audit digest: %w", err)
+		return false, fmt.Errorf("save the audit digest of %s: %w", d.Day, err)
 	}
-	return made, nil
+	return saved, nil
 }
 
 // digestOf reads the day starting at start.
@@ -222,7 +286,7 @@ func digestAlert(d AuditDigest) alert.Signal {
 		refused += int64(r.Count)
 	}
 	text := func(n int64) string { return strconv.FormatInt(n, 10) }
-	return alert.Signal{Kind: digestSignal, Key: "platform", Severity: "info", Fields: map[string]string{
+	return alert.Signal{Kind: digestSignal, Key: d.Day, Severity: "info", Fields: map[string]string{
 		"day": d.Day, "operations": text(ops), "money_proposals": text(proposals), "approvals": text(approvals),
 		"refused": text(refused), "chain_head": text(d.Chain.HeadSeq), "chain_faults": text(d.Chain.Faults),
 		"replica": d.Replica.State, "replicated_seq": text(d.Replica.ReplicatedSeq),
@@ -266,15 +330,16 @@ func (digestArgs) InsertOpts() river.InsertOpts {
 // digestWork is one run of the job, logged when it fails.
 func digestWork(db *pg.DB, scope pg.Scope, replicaOn bool, logger *slog.Logger) func(context.Context, *river.Job[digestArgs]) error {
 	return func(ctx context.Context, _ *river.Job[digestArgs]) error {
-		if _, err := MakeAuditDigest(ctx, db, scope, replicaOn); err != nil {
+		if _, err := MakeAuditDigests(ctx, db, scope, replicaOn); err != nil {
 			logger.Error("operations: the audit digest stopped", "err", err)
 		}
 		return nil
 	}
 }
 
-// RegisterAuditDigest adds the daily digest to queue: every minute it looks for yesterday's, so it is made in the first
-// minutes of each UTC day, on whichever node leads the queue. A failed run is logged; the next minute tries again.
+// RegisterAuditDigest adds the daily digest to queue: every minute it looks for a day that has ended without one, so a
+// day's is made in the first minutes after it, on whichever node leads the queue. A failed run is logged; the next
+// minute tries again.
 func RegisterAuditDigest(db *pg.DB, scope pg.Scope, queue *pg.Queue, replicaOn bool, logger *slog.Logger) error {
 	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(digestWork(db, scope, replicaOn, logger))); err != nil {
 		return fmt.Errorf("operations: %w", err)

@@ -337,3 +337,57 @@ func TestRescuedMailDiscardPersistsFailedReceiptAndSignal(t *testing.T) {
 		t.Fatal("rescued mail receipt not failed")
 	}
 }
+
+// configureDigestRule sends every audit digest to one mail channel.
+func configureDigestRule(t *testing.T, db *pg.DB) {
+	t.Helper()
+	alertTx(t, db, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		c.Channels = []AlertChannel{{ID: "ops", Email: "ops@example.com"}}
+		c.Rules = []AlertRule{{ID: "digest", Kind: "operations.audit_digest", Channel: "ops", MinimumSeverity: "info", Threshold: 1}}
+		return SetAlertConfiguration(t.Context(), tx, c)
+	})
+}
+
+// TestAlertNoticeClosesWithoutRecovery: each day's audit digest is an incident of its own, told once even when the next
+// one arrives before it was delivered, and closing a delivered one sends no recovery and leaves nothing pending.
+func TestAlertNoticeClosesWithoutRecovery(t *testing.T) {
+	db, _ := openDBWithURL(t)
+	configureDigestRule(t, db)
+	digest := func(day string, resolved bool) {
+		alertTx(t, db, func(tx pg.Tx) error {
+			return alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{
+				Kind: "operations.audit_digest", Key: day,
+				Severity: "info", Fields: map[string]string{"day": day}, Resolved: resolved,
+			})
+		})
+	}
+	now := time.Date(2026, 11, 9, 0, 2, 0, 0, time.UTC)
+	digest("2026-11-07", false)
+	digest("2026-11-08", false) // the next day's, before the first was delivered
+	events := alertCycle(t, db, now)
+	if len(events) != 2 || len(events[0].Receipts) != 1 || len(events[1].Receipts) != 1 {
+		t.Fatalf("two days: %+v", events)
+	}
+	worker := alertWorker{db: db, scope: platformScope, now: func() time.Time { return now }}
+	for _, e := range events {
+		reportAlertReceipt(t, &worker, e.Receipts[0].ID, true)
+	}
+	digest("2026-11-07", true)
+	want := map[string]string{"2026-11-07": "resolved", "2026-11-08": "delivered"}
+	for _, e := range alertCycle(t, db, now.Add(time.Minute)) {
+		if e.State != want[e.Key] || len(e.Receipts) != 1 {
+			t.Errorf("notice %s: %+v", e.Key, e)
+		}
+	}
+	var pending int
+	alertTx(t, db, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT count(*) FROM observability.alert_events WHERE pending_recovery`).Scan(&pending)
+	})
+	if pending != 0 {
+		t.Errorf("%d incidents wait for a recovery", pending)
+	}
+}

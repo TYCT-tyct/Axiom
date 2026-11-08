@@ -10,14 +10,25 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-func (db opsDB) digest(t *testing.T, replicaOn bool) bool {
+// digest runs the job once, with the day's last transactions given settle to end, and returns how many it made.
+func (db opsDB) digest(t *testing.T, replicaOn bool, settle time.Duration) int {
 	t.Helper()
-	made, err := operations.MakeAuditDigest(t.Context(), db.DB, platformScope, replicaOn)
+	made, err := operations.MakeAuditDigestsAfter(t.Context(), db.DB, platformScope, replicaOn, settle)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return made
 }
+
+// digestSignals are the digest's signals in the order they were raised, each its key and whether it resolves.
+func (db opsDB) digestSignals(t *testing.T) string {
+	t.Helper()
+	return db.text(t, `SELECT coalesce(string_agg((body->>'key') || ':' || coalesce(body->>'resolved', 'false'), ',' ORDER BY id), '')
+		FROM platform.alert_signals WHERE body->>'kind' = 'operations.audit_digest'`)
+}
+
+// utcDay is the UTC day days from today, as a digest names it.
+func utcDay(days int) string { return time.Now().UTC().AddDate(0, 0, days).Format(time.DateOnly) }
 
 func (db opsDB) digests(t *testing.T, before *time.Time, n int) ([]operations.AuditDigest, bool) {
 	t.Helper()
@@ -68,7 +79,7 @@ func TestAuditDigest(t *testing.T) {
 	db.backdated(t, "5 minutes")
 	db.chain(t, time.Minute)
 
-	if !db.digest(t, false) || db.digest(t, true) {
+	if db.digest(t, false, time.Minute) != 1 || db.digest(t, true, time.Minute) != 0 {
 		t.Fatal("the digest was not made exactly once")
 	}
 	digests, more := db.digests(t, nil, 5)
@@ -76,7 +87,7 @@ func TestAuditDigest(t *testing.T) {
 		t.Fatalf("%d digests, more %v", len(digests), more)
 	}
 	d := digests[0]
-	if d.Day != time.Now().UTC().AddDate(0, 0, -1).Format(time.DateOnly) || d.MadeAt.IsZero() {
+	if d.Day != utcDay(-1) || d.MadeAt.IsZero() {
 		t.Errorf("day %s made at %s", d.Day, d.MadeAt)
 	}
 	d.Day, d.MadeAt, d.Chain.HeadAt, d.Chain.CheckedAt = "", time.Time{}, nil, nil
@@ -95,13 +106,16 @@ func TestAuditDigest(t *testing.T) {
 	db.expect(t, "the signal", `SELECT string_agg((body->>'severity') || ' ' || (body->'fields'->>'operations') || ' ' ||
 		(body->'fields'->>'refused') || ' ' || (body->'fields'->>'money_proposals') || ' ' || (body->'fields'->>'replica'), ',')
 		FROM platform.alert_signals WHERE body->>'kind' = 'operations.audit_digest'`, "info 1 3 2 unconfigured")
+	if got := db.digestSignals(t); got != utcDay(-1)+":false" {
+		t.Errorf("signals %s", got)
+	}
 }
 
 // TestAuditDigestPages: the digests read back newest first, a page at a time from the day the last page ended on.
 func TestAuditDigestPages(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
-	if !db.digest(t, false) {
+	if db.digest(t, false, time.Minute) != 1 {
 		t.Fatal("no digest made")
 	}
 	digests, _ := db.digests(t, nil, 1)
@@ -118,5 +132,47 @@ func TestAuditDigestPages(t *testing.T) {
 	last, more := db.digests(t, &before, 2)
 	if len(last) != 1 || more || last[0].Day != before.AddDate(0, 0, -1).Format(time.DateOnly) {
 		t.Errorf("last page %+v, more %v", last, more)
+	}
+}
+
+// TestAuditDigestCatchesUp: after days without a run, the next one makes every day that ended since the last digest,
+// oldest first, each its own signal; before the first digest it starts with yesterday.
+func TestAuditDigestCatchesUp(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	superuser(t, db, `INSERT INTO operations.audit_digests (day, body)
+		VALUES ((now() AT TIME ZONE 'UTC')::date - 4, '{"day": "-"}')`)
+	if n := db.digest(t, false, time.Minute); n != 3 || db.digest(t, false, time.Minute) != 0 {
+		t.Fatalf("made %d", n)
+	}
+	if got, want := db.digestSignals(t), utcDay(-3)+":false,"+utcDay(-2)+":false,"+utcDay(-1)+":false"; got != want {
+		t.Errorf("signals %s, want %s", got, want)
+	}
+}
+
+// TestAuditDigestWaitsForTheDay: a day is not made while a transaction that began before its end may still commit into
+// it, which the frontier the audit chain waits on stands for; once it has passed, the day is made.
+func TestAuditDigestWaitsForTheDay(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	if n := db.digest(t, false, 48*time.Hour); n != 0 {
+		t.Errorf("made %d before the day's transactions could have ended", n)
+	}
+	if n := db.digest(t, false, time.Minute); n != 1 {
+		t.Errorf("made %d once they had", n)
+	}
+}
+
+// TestAuditDigestCloses: a digest's incident is closed a day after it was made, once.
+func TestAuditDigestCloses(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.digest(t, false, time.Minute)
+	db.digest(t, false, time.Minute)
+	superuser(t, db, `UPDATE operations.audit_digests SET created_at = now() - interval '25 hours'`)
+	db.digest(t, false, time.Minute)
+	db.digest(t, false, time.Minute)
+	if got, want := db.digestSignals(t), utcDay(-1)+":false,"+utcDay(-1)+":true"; got != want {
+		t.Errorf("signals %s, want %s", got, want)
 	}
 }

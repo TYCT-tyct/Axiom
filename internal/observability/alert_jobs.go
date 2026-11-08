@@ -156,8 +156,8 @@ func evaluateIncident(ctx context.Context, tx pg.Tx, e AlertEvent, rules []Alert
 	}
 	_, err := tx.Exec(ctx, `UPDATE observability.alert_events e SET checked_at=$2,pending_recovery=resolved_at IS NOT NULL AND (
  EXISTS(SELECT FROM observability.alert_receipts WHERE event_id=e.id AND state IN ('pending','queued')) OR
- (e.kind<>'alert.test' AND EXISTS(SELECT FROM observability.alert_receipts r WHERE r.event_id=e.id AND r.sequence=0 AND
- NOT EXISTS(SELECT FROM observability.alert_receipts recovery WHERE recovery.event_id=e.id AND recovery.rule_id=r.rule_id AND recovery.sequence=-1)))) WHERE id=$1`, e.ID, now)
+ (NOT $3 AND EXISTS(SELECT FROM observability.alert_receipts r WHERE r.event_id=e.id AND r.sequence=0 AND
+ NOT EXISTS(SELECT FROM observability.alert_receipts recovery WHERE recovery.event_id=e.id AND recovery.rule_id=r.rule_id AND recovery.sequence=-1)))) WHERE id=$1`, e.ID, now, noticeKind(e.Kind))
 	return err
 }
 
@@ -305,8 +305,15 @@ func (a *alertWorker) deliveryReceipt(ctx context.Context, id uuid.UUID, deliver
 	})
 }
 
+// noticeKind reports the incidents that tell one fact rather than a fault, a channel test or the daily audit digest
+// (docs/domains/operations.md「审计」): their producer closes them once they are told, and nothing recovered, so closing
+// one sends no recovery and does not wait for one.
+func noticeKind(kind string) bool {
+	return kind == "alert.test" || kind == "operations.audit_digest"
+}
+
 func recoverAlerts(ctx context.Context, tx pg.Tx, e AlertEvent, now time.Time) error {
-	if e.Kind == "alert.test" {
+	if noticeKind(e.Kind) {
 		return nil
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO observability.alert_receipts(id,event_id,rule_id,sequence,channel,quiet_start,quiet_end,fields,at,state)

@@ -224,3 +224,20 @@ func TestAuditReplicaHoldsItsPlace(t *testing.T) {
 		t.Errorf("objects %v", keys)
 	}
 }
+
+// TestAuditReplicaLagOutlivesTheDeadline: a run whose context ends before it could copy anything, as the job's deadline
+// ends a run stuck behind a backlog, still records the lag.
+func TestAuditReplicaLagOutlivesTheDeadline(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.backdated(t, "5 minutes")
+	db.chain(t, time.Minute)
+	superuser(t, db, `UPDATE operations.audit_chain SET chained_at = now() - interval '11 minutes'`)
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	if n, err := operations.ReplicateAuditChain(ended, db.DB, platformScope, newBucket()); n != 0 || !errors.Is(err, context.Canceled) {
+		t.Errorf("copied %d after the deadline: %v", n, err)
+	}
+	db.expect(t, "the lag", `SELECT string_agg((body->>'severity') || ' ' || (body->'fields'->>'behind_links'), ',')
+		FROM platform.alert_signals WHERE body->>'kind' = 'operations.audit_replica_lag'`, "warning 1")
+}

@@ -54,7 +54,7 @@ multipart，`-1` 仍是单次 PUT（最多 5 GiB）。
 失败并一次列出缺的变量名；错误只报变量名和要求的形状，不报值，密钥赋错变量时不会进日志。
 
 副本桶用 `ReadConfigAt(env, "AXIOM_AUDIT_REPLICA")` 读 `AXIOM_AUDIT_REPLICA_ENDPOINT` 等同样的六个变量，规则相同，错误报的是
-这一组的变量名。它的凭证与归档的分开：归档要删过期对象，副本的凭证不能删、不能覆盖（[运营的「审计」](../../../docs/domains/operations.md#审计)）。
+这一组的变量名。它的凭证与归档的分开：归档要删过期对象，副本的凭证能写、读和列举，不能删、不能覆盖（S3 对没有列举权限的调用方把不存在的键答 403）（[运营的「审计」](../../../docs/domains/operations.md#审计)）。
 
 `serve` 启动时读取并校验这组变量：设了但不成组会启动失败，全不设则对象存储关闭，调用记录的保留任务只预建分区、
 不删除任何东西（[observability 的分区](../../../internal/observability/README.md#分区)）。程序里的写入方是调用记录的

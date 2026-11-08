@@ -202,22 +202,17 @@ func (q *Queries) AuditDayRefusals(ctx context.Context, db DBTX, arg AuditDayRef
 	return items, nil
 }
 
-const auditDigestDue = `-- name: AuditDigestDue :one
-SELECT (date_trunc('day', now(), 'UTC') - interval '1 day')::timestamptz AS day_start,
-    EXISTS (SELECT 1 FROM operations.audit_digests WHERE day = (now() AT TIME ZONE 'UTC')::date - 1) AS made
+const auditDigestNext = `-- name: AuditDigestNext :one
+SELECT coalesce(((SELECT max(day) FROM operations.audit_digests) + 1)::timestamp AT TIME ZONE 'UTC',
+    date_trunc('day', now(), 'UTC') - interval '1 day')::timestamptz AS day_start
 `
 
-type AuditDigestDueRow struct {
-	DayStart time.Time
-	Made     bool
-}
-
-// The UTC day before today, and whether its digest has been made.
-func (q *Queries) AuditDigestDue(ctx context.Context, db DBTX) (AuditDigestDueRow, error) {
-	row := db.QueryRow(ctx, auditDigestDue)
-	var i AuditDigestDueRow
-	err := row.Scan(&i.DayStart, &i.Made)
-	return i, err
+// The UTC day the next digest is of: the day after the last one made, or yesterday before the first.
+func (q *Queries) AuditDigestNext(ctx context.Context, db DBTX) (time.Time, error) {
+	row := db.QueryRow(ctx, auditDigestNext)
+	var day_start time.Time
+	err := row.Scan(&day_start)
+	return day_start, err
 }
 
 const auditDigests = `-- name: AuditDigests :many
@@ -245,6 +240,33 @@ func (q *Queries) AuditDigests(ctx context.Context, db DBTX, arg AuditDigestsPar
 			return nil, err
 		}
 		items = append(items, body)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const closeAuditDigests = `-- name: CloseAuditDigests :many
+UPDATE operations.audit_digests SET closed_at = now()
+WHERE closed_at IS NULL AND created_at <= now() - interval '1 day'
+RETURNING (day::timestamp AT TIME ZONE 'UTC')::timestamptz AS day_start
+`
+
+// The digests made a day ago or more and not yet closed, marked closed now: their incidents have had a day to be told.
+func (q *Queries) CloseAuditDigests(ctx context.Context, db DBTX) ([]time.Time, error) {
+	rows, err := db.Query(ctx, closeAuditDigests)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []time.Time
+	for rows.Next() {
+		var day_start time.Time
+		if err := rows.Scan(&day_start); err != nil {
+			return nil, err
+		}
+		items = append(items, day_start)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

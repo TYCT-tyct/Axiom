@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"time"
 	"uuid"
@@ -40,6 +41,9 @@ const (
 	// replicaLagAfter is how long a link may wait to be copied before the lag is alerted: a bucket that is down for a
 	// few minutes is not news, one that is down for ten is.
 	replicaLagAfter = 10 * time.Minute
+	// replicaLagTimeout bounds judging the lag after the copy, which has its own time so that a copy cut off by the
+	// job's deadline is still reported; one short transaction needs far less.
+	replicaLagTimeout = 10 * time.Second
 )
 
 // The alerts of the copy: links waiting longer than replicaLagAfter (warning, resolved when the copy catches up), and
@@ -49,8 +53,9 @@ const (
 	replicaConflictSignal = "operations.audit_replica_conflict"
 )
 
-// ReplicaStore is the bucket the chain is copied to. Its credentials write new objects and read them, and can neither
-// overwrite nor delete one: the bucket's versioning and object lock keep what was written.
+// ReplicaStore is the bucket the chain is copied to. Its credentials write new objects, read them and list the bucket
+// (without which S3 answers a missing key 403, not 404), and can neither overwrite nor delete one: the bucket's
+// versioning and object lock keep what was written.
 type ReplicaStore interface {
 	Get(ctx context.Context, key string) (*objectstore.Object, error)
 	Put(ctx context.Context, up objectstore.Upload) (objectstore.ObjectInfo, error)
@@ -72,7 +77,11 @@ type replicaBatch struct {
 // stays uncopied.
 func ReplicateAuditChain(ctx context.Context, db *pg.DB, scope pg.Scope, store ReplicaStore) (int, error) {
 	n, err := replicate(ctx, db, scope, store)
-	return n, errors.Join(err, db.Tx(ctx, scope, func(tx pg.Tx) error { return signalReplicaLag(ctx, tx) }))
+	// The lag is judged even when the copy ran out of its job's deadline, which is when it matters most: a backlog that
+	// takes every run's whole deadline must still be reported.
+	lagCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replicaLagTimeout)
+	defer cancel()
+	return n, errors.Join(err, db.Tx(lagCtx, scope, func(tx pg.Tx) error { return signalReplicaLag(lagCtx, tx) }))
 }
 
 // replicate is the copying of ReplicateAuditChain.
@@ -170,10 +179,15 @@ func writeReplica(ctx context.Context, store ReplicaStore, b replicaBatch) error
 // wraps errReplicaConflict when the key holds other bytes.
 func holds(ctx context.Context, store ReplicaStore, b replicaBatch) error {
 	object, err := store.Get(ctx, b.key)
-	if errors.Is(err, objectstore.ErrNotFound) {
+	var refused *objectstore.Error
+	switch {
+	case errors.Is(err, objectstore.ErrNotFound):
 		return err
-	}
-	if err != nil {
+	case errors.As(err, &refused) && refused.Status == http.StatusForbidden:
+		// S3 answers 403, not 404, for a key that does not exist when the caller may not list the bucket, so a 403 is
+		// not taken for "absent": that would write over whatever the credentials cannot see.
+		return fmt.Errorf("read %s from the audit replica: the credentials need s3:GetObject and s3:ListBucket: %w", b.key, err)
+	case err != nil:
 		return fmt.Errorf("read %s from the audit replica: %w", b.key, err)
 	}
 	got, readErr := io.ReadAll(io.LimitReader(object.Body, int64(len(b.body))+1))

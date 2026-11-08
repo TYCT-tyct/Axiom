@@ -257,8 +257,8 @@ func TestCancel(t *testing.T) {
 	}
 }
 
-// TestRegisterExpiry: the sweep, the reconciliation and the audit chain register on the queue before it starts, each
-// once.
+// TestRegisterExpiry: the sweep, the reconciliation, the audit chain, its digest and its copy register on the queue
+// before it starts, each once.
 func TestRegisterExpiry(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
@@ -275,6 +275,17 @@ func TestRegisterExpiry(t *testing.T) {
 	}
 	if err := operations.RegisterAuditChain(db.DB, platformScope, queue, logger); err == nil {
 		t.Error("the audit chain registered twice")
+	}
+	for name, register := range map[string]func() error{
+		"the audit digest":  func() error { return operations.RegisterAuditDigest(db.DB, platformScope, queue, false, logger) },
+		"the audit replica": func() error { return operations.RegisterAuditReplica(db.DB, platformScope, queue, newBucket(), logger) },
+	} {
+		if err := register(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := register(); err == nil {
+			t.Errorf("%s registered twice", name)
+		}
 	}
 }
 

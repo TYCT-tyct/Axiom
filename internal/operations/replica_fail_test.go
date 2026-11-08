@@ -66,16 +66,37 @@ func TestReplicaAndDigestStepsFail(t *testing.T) {
 		"digestChain":      func(tx pg.Tx) error { _, err := digestChain(canceled, tx); return err },
 		"digestReplica":    func(tx pg.Tx) error { _, err := digestReplica(canceled, tx, true); return err },
 		"AuditDigests":     func(tx pg.Tx) error { _, _, err := AuditDigests(canceled, tx, nil, 1); return err },
+		"closeDigests":     func(tx pg.Tx) error { return closeDigests(canceled, tx) },
 	} {
 		if err := db.Tx(t.Context(), scope, step); !errors.Is(err, context.Canceled) {
 			t.Errorf("%s with a failing database: %v", name, err)
 		}
 	}
 
+	for name, run := range map[string]func() error{
+		"nextDigestDay":    func() error { _, _, err := nextDigestDay(canceled, db, scope, 0); return err },
+		"saveDigest":       func() error { _, err := saveDigest(canceled, db, scope, time.Now(), AuditDigest{}); return err },
+		"makeAuditDigests": func() error { _, err := makeAuditDigests(canceled, db, scope, false, 0); return err },
+	} {
+		if err := run(); !errors.Is(err, context.Canceled) {
+			t.Errorf("%s with a failing database: %v", name, err)
+		}
+	}
+}
+
+// TestWriteReplicaRefusals: the copy writes nothing it could not first read, a 403 on the read included, and passes a
+// refused write or an unreadable body to its caller; only a conflict is alerted.
+func TestWriteReplicaRefusals(t *testing.T) {
+	t.Parallel()
+	db, scope, _ := openFailing(t)
 	b := replicaBatch{key: "audit-chain/v1/k", body: []byte("line\n")}
 	down := &failingStore{err: errors.New("bucket down")}
 	if err := writeReplica(t.Context(), down, b); err == nil || !strings.Contains(err.Error(), "bucket down") || down.putCalls != 0 {
 		t.Errorf("a failing read: %v, %d writes", err, down.putCalls)
+	}
+	unlisted := &failingStore{err: &objectstore.Error{Status: 403, Code: "AccessDenied"}} // S3's answer for a missing key without s3:ListBucket
+	if err := writeReplica(t.Context(), unlisted, b); err == nil || !strings.Contains(err.Error(), "s3:ListBucket") || unlisted.putCalls != 0 {
+		t.Errorf("a 403 on the read: %v, %d writes", err, unlisted.putCalls)
 	}
 	refusing := &failingStore{err: &objectstore.Error{Status: 404}}
 	if err := writeReplica(t.Context(), refusing, b); err == nil || refusing.putCalls != 1 {
