@@ -4,7 +4,16 @@ import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { percentOf } from "./approval-parts";
-import { capOf, capOver, envelopeOf, envelopeOver, type PriceRow, priceRows } from "./approvals";
+import {
+  type CapLimit,
+  capOf,
+  type EnvelopeLimit,
+  envelopeOf,
+  type PriceRow,
+  priceRows,
+  type Reason,
+  reasonsOf,
+} from "./approvals";
 import { formatJSON } from "./lossless";
 import { isPerUse, rateItems } from "./models/catalog";
 import { showRate } from "./models/price-fields";
@@ -19,65 +28,72 @@ const field = (summary: unknown, key: string) => {
   return typeof value === "string" && value !== "" ? value : undefined;
 };
 
-// WhyAsked says in a line each why this approval needed a person: the autonomous limits a transfer goes over, what the
-// price envelope does not cover, or the rule that the kind always asks.
+// WhyAsked says in a line each why this approval needed a person, as the server decided it: the autonomous limits a
+// transfer goes over, what the price envelope does not cover, or the rule that the kind always asks. The limits come
+// from the server's summary; one it did not keep is shown as unknown. An approval an older node asked for has no
+// reasons, and the panel says it cannot tell.
 export function WhyAsked({ approval }: { approval: Approval }) {
   const { t } = useTranslation();
   const format = useFormat();
-  const reasons = reasonsOf(t, format, approval);
-  if (reasons.length === 0) {
+  const reasons = reasonsOf(approval);
+  // Two codes a later server added read the same here, so each line is shown once.
+  const lines = reasons && [...new Set(reasons.map((reason) => sentenceOf(t, format, approval, reason)))];
+  if (lines?.length === 0) {
     return null;
   }
   return (
     <Panel title={t("approvals.why.title")}>
-      <ul className="list-disc space-y-1 py-3 pr-4 pl-9 text-t1">
-        {reasons.map((reason) => (
-          <li key={reason}>{reason}</li>
-        ))}
-      </ul>
+      {lines ? (
+        <ul className="list-disc space-y-1 py-3 pr-4 pl-9 text-t1">
+          {lines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="p-4 text-t3">{t("approvals.why.unavailable")}</p>
+      )}
     </Panel>
   );
 }
 
-function reasonsOf(t: TFunction, format: Format, approval: Approval): string[] {
+// unknown stands for a limit the summary did not keep, so a sentence never shows a placeholder.
+const unknown = "—";
+
+function sentenceOf(t: TFunction, format: Format, approval: Approval, reason: Reason): string {
+  switch (reason.kind) {
+    case "always":
+      return approval.risk === "gift" || approval.risk === "delisting"
+        ? t(`approvals.why.always.${approval.risk}`)
+        : t("approvals.why.always.other");
+    case "paused":
+      return t("approvals.why.paused");
+    case "cap":
+      return capSentence(t, format, approval, reason.limit);
+    case "envelope":
+      return envelopeSentence(t, format, approval, reason.limit);
+    default:
+      return t("approvals.why.unknown");
+  }
+}
+
+function capSentence(t: TFunction, format: Format, approval: Approval, limit: CapLimit): string {
   const cap = capOf(approval.summary);
+  if (limit === "count") {
+    return t("approvals.why.count", { max: cap ? format.number(cap.count.max) : unknown });
+  }
+  const max = cap?.[limit].max;
+  return t(`approvals.why.${limit}`, { max: max ? format.money(max) : unknown });
+}
+
+function envelopeSentence(t: TFunction, format: Format, approval: Approval, limit: EnvelopeLimit): string {
   const envelope = envelopeOf(approval.summary);
-  const reasons: string[] = [];
-  if (cap) {
-    const limits = {
-      single: cap.single.max,
-      daily: cap.daily.max,
-      weekly: cap.weekly.max,
-      objectDaily: cap.objectDaily.max,
-    };
-    for (const limit of capOver(cap)) {
-      reasons.push(
-        limit === "count"
-          ? t("approvals.why.count", { max: format.number(cap.count.max) })
-          : t(`approvals.why.${limit}`, { max: format.money(limits[limit]) }),
-      );
-    }
-    if (cap.paused) {
-      reasons.push(t("approvals.why.paused"));
-    }
-  }
-  if (envelope) {
-    const percent = percentOf(format.decimal);
-    for (const limit of envelopeOver(envelope)) {
-      reasons.push(
-        t(`approvals.why.envelope.${limit}`, {
-          min: percent(envelope.minMargin),
-          max: percent(envelope.modelChange.max),
-          changes: format.number(envelope.changes.max),
-          models: format.number(envelope.models.max),
-        }),
-      );
-    }
-  }
-  if (approval.risk === "gift" || approval.risk === "delisting") {
-    reasons.push(t(`approvals.why.always.${approval.risk}`));
-  }
-  return reasons;
+  const percent = percentOf(format.decimal);
+  return t(`approvals.why.envelope.${limit}`, {
+    min: envelope ? percent(envelope.minMargin) : unknown,
+    max: envelope ? percent(envelope.modelChange.max) : unknown,
+    changes: envelope ? format.number(envelope.changes.max) : unknown,
+    models: envelope ? format.number(envelope.models.max) : unknown,
+  });
 }
 
 type Fact = [string, ReactNode] | undefined;

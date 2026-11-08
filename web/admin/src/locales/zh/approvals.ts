@@ -115,7 +115,13 @@ export default {
       changes: "当天改价的笔数已满（{{changes}} 笔）。",
       models: "当天改价的模型数已满（{{models}} 个）。",
     },
-    always: { gift: "给账户赠额总要你批准，不论金额。", delisting: "下架模型总要你批准。" },
+    always: {
+      gift: "给账户赠额总要你批准，不论金额。",
+      delisting: "下架模型总要你批准。",
+      other: "这一类操作总要你批准。",
+    },
+    unknown: "一条这个页面叫不出名字的原因，请看下面的原始数据。",
+    unavailable: "提出它的服务端没有记下原因，请对照下面的上限和原始数据判断。",
   },
   request: {
     title: "请求内容",
