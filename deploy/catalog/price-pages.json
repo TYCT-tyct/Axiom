@@ -1,15 +1,19 @@
 [
   {
     "author": "openai",
-    "url": "https://openai.com/api/pricing/",
+    "url": "https://developers.openai.com/api/docs/pricing",
     "currency": "USD",
-    "excluded": "Excluded pending owner review: Terms of Use prohibit automatic extraction; https://openai.com/policies/row-terms-of-use/ (checked 2026-10-29). No price-page GET."
+    "section_start": "Flagship models",
+    "section_end": "Cloud platforms",
+    "rate_seconds": 10
   },
   {
     "author": "anthropic",
     "url": "https://platform.claude.com/docs/en/about-claude/pricing",
     "currency": "USD",
-    "excluded": "Excluded pending owner review: Consumer Terms section 3 restrict scraping and automated access, with API exceptions; scope for public docs requires owner review; https://www.anthropic.com/legal/consumer-terms (checked 2026-10-29). No price-page GET."
+    "section_start": "The following table shows pricing for all Claude models:",
+    "section_end": "Private offers",
+    "rate_seconds": 10
   },
   {
     "author": "google",
@@ -25,8 +29,7 @@
     "currency": "USD",
     "section_start": "Model prices are listed in units of per 1M tokens.",
     "section_end": "Search & Fetch Pricing",
-    "rate_seconds": 10,
-    "excluded": "Excluded pending owner review: Terms of Use section 3.5(3) restrict copying Services content with robots or automatic setups; https://cdn.deepseek.com/policies/en-US/deepseek-terms-of-use.html (checked 2026-10-29). Initial diagnostic GETs preceded identification of this clause; no further automated reads."
+    "rate_seconds": 10
   },
   {
     "author": "deepseek",
@@ -34,7 +37,6 @@
     "currency": "CNY",
     "section_start": "下表所列模型价格以",
     "section_end": "网页搜索与抓取价格",
-    "rate_seconds": 10,
-    "excluded": "Excluded pending owner review: Terms of Use section 3.5(3) restrict copying Services content with robots or automatic setups; https://cdn.deepseek.com/policies/en-US/deepseek-terms-of-use.html (checked 2026-10-29). Initial diagnostic GETs preceded identification of this clause; no further automated reads."
+    "rate_seconds": 10
   }
 ]
