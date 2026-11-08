@@ -34,14 +34,26 @@ CREATE TRIGGER audit_chain_follows BEFORE INSERT ON operations.audit_chain
     FOR EACH ROW EXECUTE FUNCTION operations.audit_chain_follows();
 
 -- What the chaining found wrong: an entry behind the head that was never chained (late), a link whose entry is gone
--- (missing) or no longer hashes to it (mismatch), or a link that does not follow the one before it (broken). While a
--- row is here the chain is not extended; the application can neither change nor remove one.
+-- (missing) or no longer hashes to it (mismatch), or a link that does not follow the one before it or no longer
+-- carries its entry's time (broken). While a row is here the chain is not extended; the application can neither change
+-- nor remove one.
 CREATE TABLE operations.audit_chain_faults (
     id uuid PRIMARY KEY DEFAULT uuidv7(),
     found_at timestamptz NOT NULL DEFAULT now(),
     kind text NOT NULL CHECK (kind IN ('late', 'missing', 'mismatch', 'broken')),
     seq bigint NOT NULL,
     entry_id uuid NOT NULL
+);
+
+-- The round of the check of the whole chain: started once a day up to the head of then (target_seq), advanced a few
+-- batches per run with next_seq saved in the transaction of each batch, so a run cut short by its deadline is carried
+-- on by the next one instead of starting over. One row; none before the first round.
+CREATE TABLE operations.audit_chain_checks (
+    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+    target_seq bigint NOT NULL CHECK (target_seq >= 0),
+    next_seq bigint NOT NULL CHECK (next_seq >= 1),
+    started_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz
 );
 
 ALTER TABLE operations.audit_chain ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
@@ -54,7 +66,16 @@ CREATE POLICY reads ON operations.audit_chain_faults FOR SELECT USING ((SELECT p
 CREATE POLICY inserts ON operations.audit_chain_faults FOR INSERT WITH CHECK ((SELECT platform.in_platform_scope()));
 GRANT SELECT, INSERT (kind, seq, entry_id) ON operations.audit_chain_faults TO axiom_app;
 
+ALTER TABLE operations.audit_chain_checks ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+CREATE POLICY reads ON operations.audit_chain_checks FOR SELECT USING ((SELECT platform.in_platform_scope()));
+CREATE POLICY inserts ON operations.audit_chain_checks FOR INSERT WITH CHECK ((SELECT platform.in_platform_scope()));
+CREATE POLICY updates ON operations.audit_chain_checks FOR UPDATE USING ((SELECT platform.in_platform_scope()))
+    WITH CHECK ((SELECT platform.in_platform_scope()));
+GRANT SELECT, INSERT (target_seq, next_seq), UPDATE (target_seq, next_seq, started_at, finished_at)
+    ON operations.audit_chain_checks TO axiom_app;
+
 -- +goose Down
+DROP TABLE operations.audit_chain_checks;
 DROP TABLE operations.audit_chain_faults;
 DROP TABLE operations.audit_chain;
 DROP FUNCTION operations.audit_chain_follows();

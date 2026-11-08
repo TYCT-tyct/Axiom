@@ -149,8 +149,8 @@ func superuser(t *testing.T, db opsDB, statement string) {
 	}
 }
 
-// TestAuditChainHalts: an entry slipped in behind the head, one removed, one changed and a link changed are each found
-// by the next run, recorded once with its audit entry and alert, and stop the chaining until the owner acts.
+// TestAuditChainHalts: an entry slipped in behind the head, one removed, one changed, a link changed and the head's
+// time moved past the entries still to link are each found by the next run, recorded once with its audit entry and alert, and stop the chaining until the owner acts.
 func TestAuditChainHalts(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]haltCase{
@@ -165,6 +165,10 @@ func TestAuditChainHalts(t *testing.T) {
 		}, "mismatch:2"},
 		"broken": {func(t *testing.T, db opsDB, _ uuid.UUID) uuid.UUID {
 			superuser(t, db, `UPDATE operations.audit_chain SET prev_hash = hash WHERE seq = 3`)
+			return uuid.MustParse(db.text(t, `SELECT entry_id::text FROM operations.audit_chain WHERE seq = 3`))
+		}, "broken:3"},
+		"head moved": {func(t *testing.T, db opsDB, _ uuid.UUID) uuid.UUID {
+			superuser(t, db, `UPDATE operations.audit_chain SET at = at + interval '1 year' WHERE seq = 3`)
 			return uuid.MustParse(db.text(t, `SELECT entry_id::text FROM operations.audit_chain WHERE seq = 3`))
 		}, "broken:3"},
 	} {
@@ -202,29 +206,72 @@ func (c haltCase) expect(t *testing.T) {
 }
 
 // TestAuditChainChecksBeyondTheWindow: a change to an entry further behind the head than each run looks is found by
-// the check of the whole chain, which pages through it.
+// the check of the whole chain, whose round carries on where a run stopped, by its batch limit or a failure, instead
+// of starting over.
 func TestAuditChainChecksBeyondTheWindow(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
-	if err := pgtest.Run(t.Context(), db.superuser, `INSERT INTO platform.audit_log (at, actor_kind, actor_id, action, module,
-		target_kind, target_id, detail) SELECT now() - interval '10 minutes' + g * interval '1 millisecond', 'system',
-		'test.chain', 'thing.touch', 'operations', 'thing', 't' || g, '{}' FROM generate_series(1, 1001) g`); err != nil {
-		t.Fatal(err)
+	superuser(t, db, `INSERT INTO platform.audit_log (at, actor_kind, actor_id, action, module, target_kind, target_id,
+		detail) SELECT now() - interval '10 minutes' + g * interval '1 millisecond', 'system', 'test.chain', 'thing.touch',
+		'operations', 'thing', 't' || g, '{}' FROM generate_series(1, 1501) g`)
+	if n := db.chain(t, time.Minute); n != 1501 {
+		t.Fatalf("linked %d", n)
 	}
-	if n := db.chain(t, time.Minute); n != 1001 || db.verifyChain(t) {
-		t.Fatalf("linked %d, or the chain does not check out", n)
-	}
-	if err := pgtest.Run(t.Context(), db.superuser, `UPDATE platform.audit_log SET target_id = 'x' WHERE target_id = 't1'`); err != nil {
-		t.Fatal(err)
-	}
+	superuser(t, db, `UPDATE platform.audit_log SET target_id = 'x' WHERE target_id = 't501'`)
 	db.backdated(t, "2 minutes")
 	if n := db.chain(t, time.Minute); n != 1 {
 		t.Errorf("a run linked %d", n)
 	}
-	if !db.verifyChain(t) {
+	check := func(ctx context.Context) bool {
+		t.Helper()
+		halted, err := operations.VerifyAuditChainBy(ctx, db.DB, platformScope, 2)
+		if err != nil && ctx.Err() == nil {
+			t.Fatal(err)
+		}
+		return halted
+	}
+	round := `SELECT target_seq || ' ' || next_seq || ' ' || (finished_at IS NOT NULL) FROM operations.audit_chain_checks`
+	if check(t.Context()) { // the round starts, and its first batch passes
+		t.Error("the first batch halted")
+	}
+	db.expect(t, "the round after a run", round, "1502 501 false")
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if check(canceled) {
+		t.Error("a failed run halted")
+	}
+	db.expect(t, "the round after a failed run", round, "1502 501 false")
+	if !check(t.Context()) {
 		t.Error("the check passed a changed entry")
 	}
-	db.expect(t, "the fault", `SELECT string_agg(kind || ':' || seq, ',') FROM operations.audit_chain_faults`, "mismatch:1")
+	db.expect(t, "the fault", `SELECT string_agg(kind || ':' || seq, ',') FROM operations.audit_chain_faults`, "mismatch:501")
+}
+
+// TestAuditChainCheckRounds: a round starts once a day, not before, and a round still running a day after it began
+// raises the overdue alert, which finishing it resolves.
+func TestAuditChainCheckRounds(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.backdated(t, "5 minutes")
+	db.chain(t, time.Minute)
+	started := `SELECT started_at::text FROM operations.audit_chain_checks`
+	if db.verifyChain(t) {
+		t.Fatal("halted")
+	}
+	first := db.text(t, started)
+	db.verifyChain(t)
+	if db.text(t, started) != first {
+		t.Error("a round started within the day")
+	}
+	superuser(t, db, `UPDATE operations.audit_chain_checks SET started_at = now() - interval '25 hours'`)
+	db.verifyChain(t)
+	db.expect(t, "the next day's round", `SELECT (started_at > now() - interval '1 hour' AND finished_at IS NOT NULL)::text
+		FROM operations.audit_chain_checks`, "true")
+	superuser(t, db, `UPDATE operations.audit_chain_checks SET started_at = now() - interval '25 hours', finished_at = NULL, next_seq = 1`)
+	db.verifyChain(t)
+	db.expect(t, "the alerts", `SELECT string_agg(coalesce(body->>'severity', '') || ':' || coalesce(body->>'resolved', 'false'), ',' ORDER BY id)
+		FROM platform.alert_signals WHERE body->>'kind' = 'operations.audit_chain_check_overdue'`,
+		"info:true,info:true,warning:false,info:true")
 }
 
 // TestAuditChainLag: an entry not linked a minute past the settling time raises the lag, which the run that links it

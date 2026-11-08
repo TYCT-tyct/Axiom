@@ -31,3 +31,20 @@ INSERT INTO operations.audit_chain (seq, entry_id, at, prev_hash, hash) VALUES (
 
 -- name: InsertAuditChainFault :exec
 INSERT INTO operations.audit_chain_faults (kind, seq, entry_id) VALUES (@kind, @seq, @entry_id);
+
+-- name: AuditChainCheck :many
+-- The round of the check of the whole chain, with whether a new one is due (the last finished and began a day ago or
+-- more) or the one in progress is overdue (began a day ago or more and has not finished), by the database's clock.
+SELECT target_seq, next_seq,
+    (finished_at IS NOT NULL AND started_at <= now() - interval '1 day')::bool AS due,
+    (finished_at IS NULL AND started_at <= now() - interval '1 day')::bool AS overdue,
+    (finished_at IS NOT NULL)::bool AS finished
+FROM operations.audit_chain_checks;
+
+-- name: StartAuditChainCheck :exec
+INSERT INTO operations.audit_chain_checks (target_seq, next_seq) VALUES (@target_seq, 1)
+ON CONFLICT (singleton) DO UPDATE SET target_seq = EXCLUDED.target_seq, next_seq = 1, started_at = now(), finished_at = NULL;
+
+-- name: AdvanceAuditChainCheck :exec
+UPDATE operations.audit_chain_checks SET next_seq = @next_seq,
+    finished_at = CASE WHEN @finished::bool THEN now() END;

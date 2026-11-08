@@ -12,6 +12,21 @@ import (
 	"uuid"
 )
 
+const advanceAuditChainCheck = `-- name: AdvanceAuditChainCheck :exec
+UPDATE operations.audit_chain_checks SET next_seq = $1,
+    finished_at = CASE WHEN $2::bool THEN now() END
+`
+
+type AdvanceAuditChainCheckParams struct {
+	NextSeq  int64
+	Finished bool
+}
+
+func (q *Queries) AdvanceAuditChainCheck(ctx context.Context, db DBTX, arg AdvanceAuditChainCheckParams) error {
+	_, err := db.Exec(ctx, advanceAuditChainCheck, arg.NextSeq, arg.Finished)
+	return err
+}
+
 const appendAuditChain = `-- name: AppendAuditChain :exec
 INSERT INTO operations.audit_chain (seq, entry_id, at, prev_hash, hash) VALUES ($1, $2, $3, $4, $5)
 `
@@ -33,6 +48,50 @@ func (q *Queries) AppendAuditChain(ctx context.Context, db DBTX, arg AppendAudit
 		arg.Hash,
 	)
 	return err
+}
+
+const auditChainCheck = `-- name: AuditChainCheck :many
+SELECT target_seq, next_seq,
+    (finished_at IS NOT NULL AND started_at <= now() - interval '1 day')::bool AS due,
+    (finished_at IS NULL AND started_at <= now() - interval '1 day')::bool AS overdue,
+    (finished_at IS NOT NULL)::bool AS finished
+FROM operations.audit_chain_checks
+`
+
+type AuditChainCheckRow struct {
+	TargetSeq int64
+	NextSeq   int64
+	Due       bool
+	Overdue   bool
+	Finished  bool
+}
+
+// The round of the check of the whole chain, with whether a new one is due (the last finished and began a day ago or
+// more) or the one in progress is overdue (began a day ago or more and has not finished), by the database's clock.
+func (q *Queries) AuditChainCheck(ctx context.Context, db DBTX) ([]AuditChainCheckRow, error) {
+	rows, err := db.Query(ctx, auditChainCheck)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditChainCheckRow
+	for rows.Next() {
+		var i AuditChainCheckRow
+		if err := rows.Scan(
+			&i.TargetSeq,
+			&i.NextSeq,
+			&i.Due,
+			&i.Overdue,
+			&i.Finished,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const auditChainFrontier = `-- name: AuditChainFrontier :one
@@ -175,5 +234,15 @@ SELECT pg_advisory_xact_lock(hashtextextended('operations.audit_chain', 0))
 // head it left.
 func (q *Queries) LockAuditChain(ctx context.Context, db DBTX) error {
 	_, err := db.Exec(ctx, lockAuditChain)
+	return err
+}
+
+const startAuditChainCheck = `-- name: StartAuditChainCheck :exec
+INSERT INTO operations.audit_chain_checks (target_seq, next_seq) VALUES ($1, 1)
+ON CONFLICT (singleton) DO UPDATE SET target_seq = EXCLUDED.target_seq, next_seq = 1, started_at = now(), finished_at = NULL
+`
+
+func (q *Queries) StartAuditChainCheck(ctx context.Context, db DBTX, targetSeq int64) error {
+	_, err := db.Exec(ctx, startAuditChainCheck, targetSeq)
 	return err
 }

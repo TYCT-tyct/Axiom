@@ -23,7 +23,7 @@ import (
 // The hash chain over the audit log (docs/domains/operations.md「审计」). Its invariant: the links, by seq, are the audit
 // entries up to the head's, in (at, id) order, each hashing the previous link's hash and its entry. Every minute a run
 // checks the last chainWindow links against the log and then links the entries that have committed since; once a day
-// every link is checked. Whatever breaks the invariant is recorded as a fault, alerted and stops the chaining: an entry
+// a round checks every link, a few batches a run, saving its place. Whatever breaks the invariant is recorded as a fault, alerted and stops the chaining: an entry
 // is never put in the middle, and a link is never written over.
 
 const (
@@ -33,16 +33,21 @@ const (
 	// a bug changed in the newest entries is found within the minute, and the rest by the daily check, at a cost that
 	// does not grow with the log.
 	chainWindow = 1000
+	// chainCheckBatches bounds one run of the check of the whole chain to that many batches, far within the queue's
+	// ten-minute job deadline; the round carries on in the next run, a minute later.
+	chainCheckBatches = 20
 	// chainSettle is how long after its transaction began an entry is linked at the soonest (AuditChainFrontier). The
 	// lag is alerted when the oldest entry not yet linked is a minute older than that.
 	chainSettle = time.Minute
 )
 
-// The alerts of the chain: a fault (critical, one incident until the owner closes it) and the lag (warning, resolved
-// when the chain catches up).
+// The alerts of the chain: a fault (critical, one incident until the owner closes it), the lag (warning, resolved
+// when the chain catches up) and a check of the whole chain that has not finished in a day (warning, resolved when it
+// does).
 const (
 	chainFaultSignal = "operations.audit_chain_fault"
 	chainLagSignal   = "operations.audit_chain_lag"
+	chainCheckSignal = "operations.audit_chain_check_overdue"
 )
 
 // chainActor is who records a fault.
@@ -224,26 +229,98 @@ func signalLag(ctx context.Context, tx pg.Tx, settle time.Duration) error {
 	})
 }
 
-// VerifyAuditChain checks every link against the log, a batch per transaction, and halts the chain at the first
-// fault. It reports whether the chain is halted, by this check or before it.
+// VerifyAuditChain advances the check of the whole chain by at most chainCheckBatches batches, a batch per
+// transaction: it starts a round up to the head of then once a day, and carries on the round in progress where the
+// last run left it, so a run cut short by its deadline loses nothing. It halts the chain at the first fault and
+// reports whether the chain is halted, by this check or before it.
 func VerifyAuditChain(ctx context.Context, db *pg.DB, scope pg.Scope) (bool, error) {
-	from, halted := int64(1), false
-	for from != 0 {
+	return verifyAuditChain(ctx, db, scope, chainCheckBatches)
+}
+
+// verifyAuditChain is VerifyAuditChain with at most batches transactions.
+func verifyAuditChain(ctx context.Context, db *pg.DB, scope pg.Scope, batches int) (bool, error) {
+	for i := range batches {
+		var more, halted bool
 		if err := db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
-			if halted, err = lockChain(ctx, tx); err != nil || halted {
-				return err
-			}
-			var f *fault
-			if f, from, err = verifyBatch(ctx, tx, from); err != nil || f == nil {
-				return err
-			}
-			halted = true
-			return haltAt(ctx, tx, f, nil)
-		}); err != nil || halted {
+			more, halted, err = checkStep(ctx, tx, i == 0)
+			return err
+		}); err != nil || halted || !more {
 			return halted, err
 		}
 	}
 	return false, nil
+}
+
+// checkStep is one transaction of the check of the whole chain: it starts a round when one is due, or checks the next
+// batch of the round in progress and saves how far it got, in the same transaction. On the first step of a run it
+// raises the overdue alert when the round began a day ago; finishing a round resolves it. It reports whether the
+// round has more to check now and whether the chain is halted.
+func checkStep(ctx context.Context, tx pg.Tx, first bool) (bool, bool, error) {
+	halted, err := lockChain(ctx, tx)
+	if err != nil || halted {
+		return false, halted, err
+	}
+	q := New()
+	rounds, err := q.AuditChainCheck(ctx, tx)
+	if err != nil {
+		return false, false, fmt.Errorf("read the check of the audit chain: %w", err)
+	}
+	if len(rounds) == 0 || rounds[0].Due {
+		return true, false, startCheck(ctx, tx)
+	}
+	round := rounds[0]
+	if round.Finished {
+		return false, false, nil
+	}
+	if first && round.Overdue {
+		if err := signalCheck(ctx, tx, round); err != nil {
+			return false, false, err
+		}
+	}
+	return advanceCheck(ctx, tx, round)
+}
+
+// advanceCheck checks the next batch of round and saves how far it got, finishing the round once it passes its
+// target; it returns as checkStep does.
+func advanceCheck(ctx context.Context, tx pg.Tx, round AuditChainCheckRow) (bool, bool, error) {
+	f, next, err := verifyBatch(ctx, tx, round.NextSeq)
+	if err != nil || f != nil {
+		return false, f != nil, haltAt(ctx, tx, f, err)
+	}
+	done := next == 0 || next > round.TargetSeq
+	if done {
+		next = round.TargetSeq + 1
+	}
+	if err := New().AdvanceAuditChainCheck(ctx, tx, AdvanceAuditChainCheckParams{NextSeq: next, Finished: done}); err != nil {
+		return false, false, fmt.Errorf("save the check of the audit chain: %w", err)
+	}
+	if !done {
+		return true, false, nil
+	}
+	return false, false, signalCheck(ctx, tx, AuditChainCheckRow{})
+}
+
+// startCheck begins a round of the check up to the chain's head as it is now.
+func startCheck(ctx context.Context, tx pg.Tx) error {
+	head, _, err := headOf(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := New().StartAuditChainCheck(ctx, tx, head.Seq); err != nil {
+		return fmt.Errorf("start the check of the audit chain: %w", err)
+	}
+	return nil
+}
+
+// signalCheck raises the overdue alert for a round still running a day after it began, and resolves it otherwise.
+func signalCheck(ctx context.Context, tx pg.Tx, round AuditChainCheckRow) error {
+	if !round.Overdue {
+		return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: chainCheckSignal, Key: "platform", Severity: "info", Resolved: true})
+	}
+	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{
+		Kind: chainCheckSignal, Key: "platform", Severity: "warning",
+		Fields: map[string]string{"next_seq": strconv.FormatInt(round.NextSeq, 10), "target_seq": strconv.FormatInt(round.TargetSeq, 10)},
+	})
 }
 
 // verifyBatch checks up to chainBatch links from seq from: each follows the link before it, the entry at its place in
@@ -304,10 +381,15 @@ func checkLink(l AuditChainLinksRow, prev []byte, entries []audit.Entry) (fault,
 		return fault{"late", l.Seq, e.ID}, nil // an entry the chain passed over
 	}
 	hash, err := linkHash(prev, e)
-	if err != nil || bytes.Equal(hash, l.Hash) {
+	switch {
+	case err != nil:
 		return fault{}, err
+	case !bytes.Equal(hash, l.Hash):
+		return fault{"mismatch", l.Seq, l.EntryID}, nil
+	case !e.At.Equal(l.At): // the hash covers the entry's time, not the link's copy that places the next entries
+		return fault{"broken", l.Seq, l.EntryID}, nil
 	}
-	return fault{"mismatch", l.Seq, l.EntryID}, nil
+	return fault{}, nil
 }
 
 // behind reports whether entry e comes after link l in (at, id) order.
@@ -371,14 +453,14 @@ func chainWork(db *pg.DB, scope pg.Scope, logger *slog.Logger) func(context.Cont
 	}
 }
 
-// RegisterAuditChain adds the chaining (every minute) and the check of the whole chain (every day, and when a node
-// starts) to queue, before it starts, on whichever node leads the queue. scope is the platform's, which only cmd/
-// builds.
+// RegisterAuditChain adds the chaining and the check of the whole chain, each every minute, to queue, before it
+// starts, on whichever node leads the queue; the check starts a round once a day and carries it on a few batches a
+// run. scope is the platform's, which only cmd/ builds.
 func RegisterAuditChain(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog.Logger) error {
 	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(chainWork(db, scope, logger))); err != nil {
 		return fmt.Errorf("operations: %w", err)
 	}
 	queue.Every(time.Minute, func() river.JobArgs { return chainArgs{} })
-	queue.Every(24*time.Hour, func() river.JobArgs { return chainArgs{Whole: true} })
+	queue.Every(time.Minute, func() river.JobArgs { return chainArgs{Whole: true} })
 	return nil
 }

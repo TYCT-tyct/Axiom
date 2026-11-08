@@ -189,10 +189,11 @@ func RegisterAuditChain(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog
 
 `chain.go`、`migrations/00012_audit_chain.sql`。规则见[运营的「审计」](../../docs/domains/operations.md#审计)的「防篡改现在的实现」。
 
-- **任务**：`RegisterAuditChain` 在 `archive` 队列上登记一种任务 `operations.audit_chain`，按参数排两个周期：每分钟一次 `ChainAudit`，每天和节点启动时一次带 `whole` 的 `VerifyAuditChain`；两者各自一次只跑一个，失败只记日志不重试。`scope` 是平台范围，审计日志只有它读得全。
+- **任务**：`RegisterAuditChain` 在 `archive` 队列上登记一种任务 `operations.audit_chain`，按参数排两个每分钟的周期：`ChainAudit`，以及带 `whole` 的 `VerifyAuditChain`；两者各自一次只跑一个，失败只记日志不重试。
 - **一轮**：每个事务先 `LockAuditChain`（事务级咨询锁），有 `audit_chain_faults` 就什么都不做。第一个事务先用 `verifyBatch` 核对链头往回 `chainWindow`（1000）条，再接最多 `chainBatch`（500）条：`AuditChainFrontier` 单独一条语句读出边界（60 秒前和本库每个开着的事务的 `xact_start` 取早的），之后才用 `audit.Since` 读边界之前、链头之后的条目，所以在两条语句之间提交的事务一定在读到的快照里。满 500 条就开下一个事务接着接；最后在一个事务里按还没接的最早一条发或恢复 `operations.audit_chain_lag`。
 - **哈希**：`linkHash` 是 SHA-256(前一条的哈希 ‖ RFC 8785 编码的字段数组)，字段和顺序见领域文档；`TestLinkHash` 的期望值是在 Go 之外另行算出的，改编码就是改链的格式，要换掉第一个元素 `axiom.audit.v1`。
-- **核对**：`verifyBatch` 读 `from - 1` 那一条（取它的哈希和在日志里的位置）和其后最多 500 条，再用 `audit.Since` 从那个位置读同样多的条目，逐个对位：前一条的哈希不对是 `broken`，对位的条目 ID 不同时，条目排在链的后面是 `missing`、排在前面是 `late`，ID 相同但重算的哈希不同是 `mismatch`。前一条不在了也是 `broken`。`haltAt` 在同一个事务里写故障、审计 `audit_chain.halt` 和 critical 信号 `operations.audit_chain_fault`。
+- **核对**：`verifyBatch` 读 `from - 1` 那一条（取它的哈希和在日志里的位置）和其后最多 500 条，再用 `audit.Since` 从那个位置读同样多的条目，逐个对位：前一条的哈希不对是 `broken`，对位的条目 ID 不同时，条目排在链的后面是 `missing`、排在前面是 `late`，ID 相同但重算的哈希不同是 `mismatch`，哈希相同而链上的 `at` 和条目的不同也是 `broken`（`extend` 按链头的 `at` 往后读，只改它就能让接链停下）。前一条不在了也是 `broken`。`haltAt` 在同一个事务里写故障、审计 `audit_chain.halt` 和 critical 信号 `operations.audit_chain_fault`。
+- **整条核对**：`VerifyAuditChain` 每次最多 `chainCheckBatches`（20）个事务，每个事务是一步 `checkStep`：没有进行中的一轮、且上一轮开始已满一天（`AuditChainCheck` 的 `due`）时，`startCheck` 以当时的链头为目标开新的一轮；否则 `advanceCheck` 用 `verifyBatch` 核对 `next_seq` 起的一批，并在同一个事务里存下新的 `next_seq`，过了目标就记 `finished_at`、恢复 `operations.audit_chain_check_overdue`。一次运行的第一步发现这一轮开始已满一天还没完，就发这个 warning。所以被期限或数据库失败打断的一次只丢掉没提交的那一批。
 
 ## 表
 
@@ -211,6 +212,7 @@ func RegisterAuditChain(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog
 
 - `operations.audit_chain(seq, entry_id, at, prev_hash, hash, chained_at)`，主键 `seq`，`entry_id` 唯一，两个哈希都是 32 字节；不对 `platform.audit_log` 建外键，条目被删后链还在、核对才找得到。触发器 `audit_chain_follows` 只收接在链头之后的一条（`seq = 1` 且前面是 32 个零字节，或 `seq - 1` 存在且它的哈希等于 `prev_hash`）。`axiom_app` 只有 SELECT 和数据列的 INSERT，`chained_at` 由数据库填。
 - `operations.audit_chain_faults(id, found_at, kind, seq, entry_id)`，`kind` 是 `late`、`missing`、`mismatch`、`broken` 之一；`axiom_app` 只有 SELECT 和 `kind`、`seq`、`entry_id` 的 INSERT。
+- `operations.audit_chain_checks(singleton, target_seq, next_seq, started_at, finished_at)`，只有一行，第一轮之前没有；`axiom_app` 能读、插入目标和位置、更新四个值。
 - 两张表只有平台范围能读写。
 
 ## 不变量
@@ -246,7 +248,7 @@ func RegisterAuditChain(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog
 - `prices_test.go`（真实 PostgreSQL）：`TestPriceEnvelopeDimensions` 表驱动覆盖每个限值转人工、给出那一条原因且不计数、在内的计数、没有包络的站点；`TestSetPriceEnvelope` 覆盖建、按版本改、`PriceEnvelopes` 读回、旧版本和越界的限值、审计；`TestCountPrice` 覆盖批准后的计数（量不出比例按 10000）、没有包络的站点也计数，以及 `PriceUsages`；`TestPriceRaces` 用持有事务覆盖同一个模型两笔各自在内、合起来超出的并发发布。`TestPriceFailuresReachTheCaller` 覆盖数据库失败时每个售价调用都把失败带回给调用方。
 - `cmd/axiom/operations_prices_test.go`（真实 HTTP 和数据库，调用世界里带成本的端点）：`TestOperationsPricePublish` 覆盖没有包络 422、试运行不发布、包络内以 agent 的名义发布并计数、重放、旧的当前版本 409 `stale_revision`、已发布的提案 409、`caps_get` 的包络用量；`TestOperationsPriceApproval` 覆盖超出包络转负责人、负责人看到包络、批准后发布并计数、提案在批准前被换掉以 `stale_revision` 结束；`TestOperationsPricePublishRetryRace` 用持有定价政策行的事务覆盖同一个键的两个并发请求答同一个操作、只发布并计数一次；`TestOperationsPriceRefusals` 覆盖没有 `operations.money` 的 403、包络的旧版本 409 和越界 400、列表和审计。`internal/billing` 的 `TestPriceMove` 覆盖共用售价、没有当前版本、没有成本、端点各自的变动和毛利率、端点现在没有价、端点价换回共用价、上下文分档口径改变；`internal/catalog` 的 `TestLargestChangeAndSmallestMargin` 覆盖两个量在各档、增删价格、零价和亏本上的取值。
 
-- `chain_test.go`（真实 PostgreSQL）：`TestAuditChainLinksCommittedEntries` 覆盖按开始时刻的顺序接链、没过 60 秒的不接、不重复接、整条链核对通过，以及表只收接在链头之后的一条、应用改不了链也删不了故障；`TestAuditChainWaitsForOpenTransactions` 用持有一个写了审计的事务覆盖后提交的条目不越过它；`TestAuditChainHalts` 表驱动覆盖插到链头之前、删掉、改掉一条和改掉一条链各自被下一轮发现，故障、审计和告警各只有一次，之后不再接链；`TestAuditChainChecksBeyondTheWindow` 覆盖 1001 条分三个事务接完，改动第一条时每轮的核对看不到、整条核对发现；`TestAuditChainLag` 覆盖落后告警和赶上后的恢复。`chain_hash_test.go` 的 `TestLinkHash` 固定哈希的编码；`chain_fail_test.go` 的 `TestChainStepsFail` 覆盖每一步把数据库失败带回、只读事务里不写链和故障，`TestAuditChainWork` 覆盖接链和整条核对失败时只记日志。
+- `chain_test.go`（真实 PostgreSQL）：`TestAuditChainLinksCommittedEntries` 覆盖按开始时刻的顺序接链、没过 60 秒的不接、不重复接、整条链核对通过，以及表只收接在链头之后的一条、应用改不了链也删不了故障；`TestAuditChainWaitsForOpenTransactions` 用持有一个写了审计的事务覆盖后提交的条目不越过它；`TestAuditChainHalts` 表驱动覆盖插到链头之前、删掉、改掉一条、改掉一条链和把链头的时刻改到将来各自被下一轮发现，故障、审计和告警各只有一次，之后不再接链；`TestAuditChainChecksBeyondTheWindow` 覆盖 1501 条分四个事务接完，改动第 501 条时每轮的核对看不到；整条核对每次两个事务时，第一次开一轮并核对到 500，取消的一次不动位置，下一次从 501 接着做并发现它；`TestAuditChainCheckRounds` 覆盖一天之内不开新的一轮、满一天开、开始满一天还没完时发逾期告警、核对完恢复；`TestAuditChainLag` 覆盖落后告警和赶上后的恢复。`chain_hash_test.go` 的 `TestLinkHash` 固定哈希的编码；`chain_fail_test.go` 的 `TestChainStepsFail` 覆盖每一步把数据库失败带回、只读事务里不写链和故障，`TestAuditChainWork` 覆盖接链和整条核对失败时只记日志。
 - `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖刚好 8192 字节的输入原样保存、多一个字节只记大小、站点范围读不到。
 
 - `targets_test.go`：`TestExpectedFromProratesEachMonthByDuration` 表驱动覆盖整月、部分月、跨月、闰年、空窗口、金额币种不符、四种指标的半入和带毫秒的跨月折算；`TestExpectedFromRefusesACountWiderThanItsType` 覆盖超宽；`TestTargetsCheck` 覆盖月份、负数、非法金额、币种和 38 位上限；`TestTargetsCheckCommercial` 覆盖付费用户、月流水和两个比率的范围；`TestExpectedFromAppliesRatesToTheEndMonth` 覆盖比率的结束月规则和月首边界；`TestExpectedFromProratesCommercialCountsAndMoney` 覆盖后两项数量/金额的折算。
