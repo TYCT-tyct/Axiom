@@ -34,6 +34,8 @@ var (
 	ErrTooLarge = errors.New("objectstore: object is over the single PUT limit")
 	// ErrNotFound marks a missing object or bucket, and can be tested with errors.Is on any *Error with status 404.
 	ErrNotFound = errors.New("objectstore: not found")
+	// ErrExists says a NoOverwrite upload found its key taken (412), and can be tested with errors.Is.
+	ErrExists = errors.New("objectstore: the key exists")
 )
 
 // requireDeadline is the rule every operation follows before it waits on anything: the caller must bound the whole
@@ -63,11 +65,14 @@ type Object struct {
 // Upload is one Put: the object's key and bytes. Size is the byte count when the caller knows it, which a file's
 // Stat normally does; -1 counts the body while hashing it. ContentType defaults to application/octet-stream. The body
 // is read from its start; a Read that blocks must be unblocked by the body's owner, because ctx cannot interrupt it.
+// NoOverwrite sends If-None-Match: *, so the bucket refuses a key that exists with ErrExists instead of replacing it;
+// such an upload is always one PUT, because a multipart upload checks the condition only when it completes.
 type Upload struct {
 	Key         string
 	Body        io.ReadSeeker
 	Size        int64
 	ContentType string
+	NoOverwrite bool
 }
 
 // ListOptions filters one page. Prefix may be empty for the whole bucket; MaxKeys defaults to 1000, S3's maximum.
@@ -242,8 +247,9 @@ func createBucketBody(region string) ([]byte, string, error) {
 }
 
 // Put writes one object. A failed attempt re-sends the body from its start, so the body must be seekable; the same
-// key is overwritten, as S3 defines PUT. A known size over the multipart threshold goes up in parts, so an archive is
-// not bounded by the single PUT limit; an unknown size is counted while hashing and stays a single PUT.
+// key is overwritten, as S3 defines PUT, unless the upload says NoOverwrite. A known size over the multipart threshold
+// goes up in parts, so an archive is not bounded by the single PUT limit; an unknown size is counted while hashing and
+// stays a single PUT.
 func (c *Client) Put(ctx context.Context, up Upload) (ObjectInfo, error) {
 	if err := checkKey(up.Key); err != nil {
 		return ObjectInfo{}, err
@@ -254,7 +260,7 @@ func (c *Client) Put(ctx context.Context, up Upload) (ObjectInfo, error) {
 	if up.Size > maxObjectSize {
 		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte object limit: %w", up.Key, int64(maxObjectSize), ErrTooLarge)
 	}
-	if up.Size > c.threshold {
+	if up.Size > c.threshold && !up.NoOverwrite {
 		return c.putMultipart(ctx, up, up.Size)
 	}
 	hash, size, err := hashBody(ctx, up.Body, maxSinglePut)
@@ -278,6 +284,7 @@ func (c *Client) Put(ctx context.Context, up Upload) (ObjectInfo, error) {
 		size:        size,
 		contentType: contentType,
 		payloadHash: hash,
+		ifNoneMatch: up.NoOverwrite,
 	})
 	if err != nil {
 		return ObjectInfo{}, fmt.Errorf("objectstore: put %q: %w", up.Key, err)
@@ -485,9 +492,11 @@ func (e *Error) Error() string {
 // Unwrap exposes a body read or close failure beside the server's answer.
 func (e *Error) Unwrap() error { return e.cause }
 
-// Is lets a caller test errors.Is(err, ErrNotFound) without knowing which implementation answered 404.
+// Is lets a caller test errors.Is(err, ErrNotFound) without knowing which implementation answered 404, and
+// errors.Is(err, ErrExists) for the 412 of a conditional PUT.
 func (e *Error) Is(target error) bool {
-	return target == ErrNotFound && e.Status == http.StatusNotFound
+	return target == ErrNotFound && e.Status == http.StatusNotFound ||
+		target == ErrExists && e.Status == http.StatusPreconditionFailed
 }
 
 func truncate(value string, limit int) string {

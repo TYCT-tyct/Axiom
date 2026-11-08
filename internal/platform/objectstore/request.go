@@ -48,6 +48,7 @@ type request struct {
 	size        int64
 	contentType string
 	payloadHash string
+	ifNoneMatch bool // If-None-Match: *, signed like the content type
 }
 
 // do sends the request, retrying only what may succeed later: a transport failure, 408, 429 and 5xx. A retryable
@@ -153,6 +154,9 @@ func (c *Client) request(ctx context.Context, r request) (*http.Request, error) 
 	req.Header.Set("User-Agent", "Axiom")
 	if r.contentType != "" {
 		req.Header.Set("Content-Type", r.contentType)
+	}
+	if r.ifNoneMatch {
+		req.Header.Set("If-None-Match", "*")
 	}
 	c.sign(req, r.payloadHash, c.now())
 	return req, nil

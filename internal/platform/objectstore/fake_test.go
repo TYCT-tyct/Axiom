@@ -183,6 +183,11 @@ func (f *fakeS3) object(w http.ResponseWriter, r *http.Request, key string) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		if _, taken := f.objects[key]; taken && r.Header.Get("If-None-Match") == "*" {
+			w.WriteHeader(http.StatusPreconditionFailed)
+			writeTest(w, "<Error><Code>PreconditionFailed</Code></Error>")
+			return
+		}
 		f.objects[key] = body
 		w.Header().Set("ETag", `"`+sumHex(body)+`"`)
 		w.WriteHeader(http.StatusOK)

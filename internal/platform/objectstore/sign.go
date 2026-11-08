@@ -28,8 +28,10 @@ func (c *Client) sign(req *http.Request, payloadHash string, now time.Time) {
 	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
 
 	headers := []string{"host", "x-amz-content-sha256", "x-amz-date"}
-	if req.Header.Get("Content-Type") != "" {
-		headers = append(headers, "content-type")
+	for _, name := range []string{"content-type", "if-none-match"} {
+		if req.Header.Get(name) != "" {
+			headers = append(headers, name)
+		}
 	}
 	sort.Strings(headers)
 

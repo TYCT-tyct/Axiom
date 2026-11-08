@@ -118,11 +118,27 @@ func TestSeaweedFS(t *testing.T) {
 	unicodeKey := putUnicode(t, opCtx, client)
 	checkListing(t, opCtx, client, key, unicodeKey, "archive/2026/large.bin")
 	checkDeleted(t, opCtx, client, key)
+	checkNoOverwrite(t, opCtx, client)
 	if err := client.Delete(opCtx, unicodeKey); err != nil {
 		t.Fatalf("delete unicode key: %v", err)
 	}
 	if err := client.Delete(opCtx, "archive/2026/large.bin"); err != nil {
 		t.Fatalf("delete the multipart key: %v", err)
+	}
+}
+
+// checkNoOverwrite asserts a real server accepts the signed If-None-Match of a conditional PUT. SeaweedFS 3.80 does not
+// enforce the condition (a second PUT replaces the object), so the refusal itself is the fake's to test, and the audit
+// chain's replica reads a key before it writes one.
+func checkNoOverwrite(t *testing.T, ctx context.Context, client *objectstore.Client) {
+	t.Helper()
+	const key = "audit/once.jsonl"
+	if _, err := client.Put(ctx, objectstore.Upload{Key: key, Body: strings.NewReader("first"), Size: 5, NoOverwrite: true}); err != nil {
+		t.Fatalf("conditional put of a new key: %v", err)
+	}
+	getAndCompare(t, ctx, client, key, []byte("first"))
+	if err := client.Delete(ctx, key); err != nil {
+		t.Fatalf("delete %q: %v", key, err)
 	}
 }
 

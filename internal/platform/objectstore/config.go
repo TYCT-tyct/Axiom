@@ -11,8 +11,8 @@ import (
 	"axiom/internal/platform/secret"
 )
 
-// The variables that configure the bucket. They are named here, where they are read, so the errors and the
-// documentation spell them the same way.
+// The variables that configure the program's bucket. They are named here, where they are read, so the errors and the
+// documentation spell them the same way. Another bucket (ReadConfigAt) has the same six under its own prefix.
 const (
 	endpointVar  = "AXIOM_OBJECTSTORE_ENDPOINT"
 	bucketVar    = "AXIOM_OBJECTSTORE_BUCKET"
@@ -35,6 +35,27 @@ type Config struct {
 	AccessKeyID     string
 	SecretAccessKey secret.Secret // never printed: the type redacts it in every formatter
 	PathStyle       bool          // true addresses the bucket in the path, as SeaweedFS, R2 and MinIO expect
+	names           names         // the variables it was read from, which its errors name; zero is the program's
+}
+
+// names are the six variables of one bucket's configuration.
+type names struct{ endpoint, bucket, region, accessKey, secretKey, pathStyle string }
+
+// programNames are the program's bucket's variables.
+var programNames = names{endpointVar, bucketVar, regionVar, accessKeyVar, secretKeyVar, pathStyleVar}
+
+// namesAt are the variables of a bucket configured under prefix, such as AXIOM_AUDIT_REPLICA_ENDPOINT.
+func namesAt(prefix string) names {
+	return names{prefix + "_ENDPOINT", prefix + "_BUCKET", prefix + "_REGION", prefix + "_ACCESS_KEY_ID",
+		prefix + "_SECRET_ACCESS_KEY", prefix + "_PATH_STYLE"}
+}
+
+// vars is who c's errors name.
+func (c Config) vars() names {
+	if c.names == (names{}) {
+		return programNames
+	}
+	return c.names
 }
 
 // Configured reports whether the deployment has an object store. A node with none of the variables set has the zero
@@ -49,18 +70,30 @@ func (c Config) Configured() bool { return c.Endpoint != "" }
 // Errors name the variable and the shape wanted, never the value: the secret key is a credential, and a credential
 // assigned to the wrong variable must not reach the logs.
 func ReadConfig(env *config.Env) (Config, error) {
+	return readConfig(env, programNames)
+}
+
+// ReadConfigAt reads another bucket the way ReadConfig reads the program's, from the six variables named prefix and
+// _ENDPOINT, _BUCKET, _REGION, _ACCESS_KEY_ID, _SECRET_ACCESS_KEY and _PATH_STYLE: a bucket with credentials of its own,
+// which the program's variables must not reach.
+func ReadConfigAt(env *config.Env, prefix string) (Config, error) {
+	return readConfig(env, namesAt(prefix))
+}
+
+// readConfig reads the bucket named by n.
+func readConfig(env *config.Env, n names) (Config, error) {
 	raw := rawConfig{
-		endpoint:  env.String(endpointVar, ""),
-		bucket:    env.String(bucketVar, ""),
-		region:    env.String(regionVar, ""),
-		accessKey: env.String(accessKeyVar, ""),
-		secretKey: env.String(secretKeyVar, ""),
-		pathStyle: env.String(pathStyleVar, ""),
+		endpoint:  env.String(n.endpoint, ""),
+		bucket:    env.String(n.bucket, ""),
+		region:    env.String(n.region, ""),
+		accessKey: env.String(n.accessKey, ""),
+		secretKey: env.String(n.secretKey, ""),
+		pathStyle: env.String(n.pathStyle, ""),
 	}
 	if raw == (rawConfig{}) {
 		return Config{}, nil
 	}
-	return raw.parse()
+	return raw.parse(n)
 }
 
 // rawConfig is the six values as the environment spells them, before any check.
@@ -70,7 +103,7 @@ type rawConfig struct {
 
 // parse checks the whole configuration at once and reports every problem it finds, so a node started with half of it
 // hears about all of it at startup rather than at the first upload.
-func (r rawConfig) parse() (Config, error) {
+func (r rawConfig) parse(n names) (Config, error) {
 	cfg := Config{
 		Endpoint:        strings.TrimSuffix(strings.TrimSpace(r.endpoint), "/"),
 		Bucket:          strings.TrimSpace(r.bucket),
@@ -78,6 +111,7 @@ func (r rawConfig) parse() (Config, error) {
 		AccessKeyID:     r.accessKey,
 		SecretAccessKey: secret.New(r.secretKey),
 		PathStyle:       true,
+		names:           n,
 	}
 	var errs []error
 	if cfg.Region == "" {
@@ -89,7 +123,7 @@ func (r rawConfig) parse() (Config, error) {
 	case "false":
 		cfg.PathStyle = false
 	default:
-		errs = append(errs, fmt.Errorf("%s: want true or false", pathStyleVar))
+		errs = append(errs, fmt.Errorf("%s: want true or false", n.pathStyle))
 	}
 	if _, err := cfg.check(); err != nil {
 		errs = append(errs, err)
@@ -100,27 +134,28 @@ func (r rawConfig) parse() (Config, error) {
 // check reports every problem in c and returns the parsed endpoint.
 func (c Config) check() (*url.URL, error) {
 	var errs []error
-	endpoint, endpointErr := parseEndpoint(c.Endpoint)
+	n := c.vars()
+	endpoint, endpointErr := parseEndpoint(c.Endpoint, n.endpoint)
 	errs = append(errs, endpointErr)
-	if err := checkBucket(c.Bucket); err != nil {
+	if err := checkBucket(c.Bucket, n.bucket); err != nil {
 		errs = append(errs, err)
 	}
 	if c.Region == "" {
-		errs = append(errs, fmt.Errorf("%s: required", regionVar))
+		errs = append(errs, fmt.Errorf("%s: required", n.region))
 	} else if !plainToken(c.Region) {
-		errs = append(errs, fmt.Errorf("%s: want a region such as us-east-1", regionVar))
+		errs = append(errs, fmt.Errorf("%s: want a region such as us-east-1", n.region))
 	}
 	switch {
 	case c.AccessKeyID == "" && c.SecretAccessKey.Reveal() == "":
-		errs = append(errs, fmt.Errorf("%s and %s: required", accessKeyVar, secretKeyVar))
+		errs = append(errs, fmt.Errorf("%s and %s: required", n.accessKey, n.secretKey))
 	case c.AccessKeyID == "":
-		errs = append(errs, fmt.Errorf("%s: required when %s is set", accessKeyVar, secretKeyVar))
+		errs = append(errs, fmt.Errorf("%s: required when %s is set", n.accessKey, n.secretKey))
 	case c.SecretAccessKey.Reveal() == "":
-		errs = append(errs, fmt.Errorf("%s: required when %s is set", secretKeyVar, accessKeyVar))
+		errs = append(errs, fmt.Errorf("%s: required when %s is set", n.secretKey, n.accessKey))
 	}
 	if endpoint != nil && !c.PathStyle && net.ParseIP(endpoint.Hostname()) != nil {
 		errs = append(errs, fmt.Errorf("%s: a virtual-host bucket needs a DNS name, not an IP address; set %s=true",
-			endpointVar, pathStyleVar))
+			n.endpoint, n.pathStyle))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
@@ -130,22 +165,22 @@ func (c Config) check() (*url.URL, error) {
 
 // parseEndpoint accepts an absolute http(s) address without user information, query or fragment. A base path is
 // allowed because some gateways mount the S3 API under one; every request is made below it.
-func parseEndpoint(raw string) (*url.URL, error) {
+func parseEndpoint(raw, name string) (*url.URL, error) {
 	if raw == "" {
-		return nil, fmt.Errorf("%s: required to use object storage", endpointVar)
+		return nil, fmt.Errorf("%s: required to use object storage", name)
 	}
 	if strings.IndexFunc(raw, func(r rune) bool { return r < ' ' || r == 0x7f }) >= 0 {
-		return nil, fmt.Errorf("%s: want an address such as https://s3.example.com", endpointVar)
+		return nil, fmt.Errorf("%s: want an address such as https://s3.example.com", name)
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%s: want an absolute http or https address such as https://s3.example.com", endpointVar)
+		return nil, fmt.Errorf("%s: want an absolute http or https address such as https://s3.example.com", name)
 	}
-	if err := endpointShape(u); err != nil {
+	if err := endpointShape(u, name); err != nil {
 		return nil, err
 	}
 	if u.Path != "" && u.Path != "/" && !strings.HasPrefix(u.Path, "/") {
-		return nil, fmt.Errorf("%s: want a base path such as /s3", endpointVar)
+		return nil, fmt.Errorf("%s: want a base path such as /s3", name)
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/")
 	u.RawPath = ""
@@ -154,25 +189,25 @@ func parseEndpoint(raw string) (*url.URL, error) {
 
 // endpointShape refuses an address that is not an absolute http(s) URL with a host and nothing that would make the
 // request address ambiguous.
-func endpointShape(u *url.URL) error {
+func endpointShape(u *url.URL, name string) error {
 	if u.Scheme != "http" && u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("%s: want an absolute http or https address such as https://s3.example.com", endpointVar)
+		return fmt.Errorf("%s: want an absolute http or https address such as https://s3.example.com", name)
 	}
 	return nil
 }
 
 // checkBucket refuses what cannot be a path or host label, not the naming policy of one vendor: every S3 server
 // enforces its own, and this side cannot know which one the deployment chose.
-func checkBucket(bucket string) error {
+func checkBucket(bucket, name string) error {
 	switch {
 	case bucket == "":
-		return fmt.Errorf("%s: required to use object storage", bucketVar)
+		return fmt.Errorf("%s: required to use object storage", name)
 	case len(bucket) > 255:
-		return fmt.Errorf("%s: want at most 255 characters", bucketVar)
+		return fmt.Errorf("%s: want at most 255 characters", name)
 	case strings.ContainsAny(bucket, "/ \t\r\n"):
-		return fmt.Errorf("%s: want a bucket name without a slash or space", bucketVar)
+		return fmt.Errorf("%s: want a bucket name without a slash or space", name)
 	case bucket == "." || bucket == "..":
-		return fmt.Errorf("%s: want a bucket name, not a dot segment", bucketVar)
+		return fmt.Errorf("%s: want a bucket name, not a dot segment", name)
 	}
 	return nil
 }
