@@ -158,11 +158,6 @@ func TestRoleConfigurationRefusesContradictions(t *testing.T) {
 	if settings.webAssetsDir != "/srv/web-assets" {
 		t.Fatalf("shared frontend assets are %q", settings.webAssetsDir)
 	}
-	settings, err = readSettings(coreEnviron("AXIOM_AUDIT_REPLICA_ENDPOINT=https://s3.example.com", "AXIOM_AUDIT_REPLICA_BUCKET=audit",
-		"AXIOM_AUDIT_REPLICA_ACCESS_KEY_ID=A", "AXIOM_AUDIT_REPLICA_SECRET_ACCESS_KEY=S"))
-	if err != nil || settings.auditReplica.Bucket != "audit" || settings.objectstore.Configured() {
-		t.Fatalf("an audit replica reads as %+v, the archive as %+v: %v", settings.auditReplica, settings.objectstore, err)
-	}
 }
 
 // TestServeOpsNodeOpensOnlyProbes: an ops node holds no database and serves nothing but its probes.
@@ -446,4 +441,13 @@ func writeTestNode(t *testing.T, dir string, certPEM, keyPEM, caPEM []byte) stri
 		}
 	}
 	return dir
+}
+
+// TestAuditReplicaSettings: the replica bucket is read from its own variables and leaves the archive's alone.
+func TestAuditReplicaSettings(t *testing.T) {
+	settings, err := readSettings(coreEnviron("AXIOM_AUDIT_REPLICA_ENDPOINT=https://s3.example.com", "AXIOM_AUDIT_REPLICA_BUCKET=audit",
+		"AXIOM_AUDIT_REPLICA_ACCESS_KEY_ID=A", "AXIOM_AUDIT_REPLICA_SECRET_ACCESS_KEY=S"))
+	if err != nil || settings.auditReplica.Bucket != "audit" || settings.objectstore.Configured() {
+		t.Fatalf("an audit replica reads as %+v, the archive as %+v: %v", settings.auditReplica, settings.objectstore, err)
+	}
 }

@@ -87,7 +87,6 @@ func TestReplicaAndDigestStepsFail(t *testing.T) {
 	if err := raiseConflict(t.Context(), db, scope, b, errors.New("other")); err != nil {
 		t.Errorf("a failure that is not a conflict raised: %v", err)
 	}
-
 }
 
 // TestReplicaAndDigestWork: a failing run of either job is logged and not retried, and a successful one logs nothing.

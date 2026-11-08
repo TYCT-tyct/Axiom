@@ -75,6 +75,9 @@ type Upload struct {
 	NoOverwrite bool
 }
 
+// multipart reports whether up goes in parts: a known size over threshold, and no condition to keep.
+func (up Upload) multipart(threshold int64) bool { return up.Size > threshold && !up.NoOverwrite }
+
 // ListOptions filters one page. Prefix may be empty for the whole bucket; MaxKeys defaults to 1000, S3's maximum.
 type ListOptions struct {
 	Prefix            string
@@ -260,7 +263,7 @@ func (c *Client) Put(ctx context.Context, up Upload) (ObjectInfo, error) {
 	if up.Size > maxObjectSize {
 		return ObjectInfo{}, fmt.Errorf("objectstore: %q is over the %d-byte object limit: %w", up.Key, int64(maxObjectSize), ErrTooLarge)
 	}
-	if up.Size > c.threshold && !up.NoOverwrite {
+	if up.multipart(c.threshold) {
 		return c.putMultipart(ctx, up, up.Size)
 	}
 	hash, size, err := hashBody(ctx, up.Body, maxSinglePut)

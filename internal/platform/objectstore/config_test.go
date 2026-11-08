@@ -159,8 +159,10 @@ func TestReadConfigAtNamesItsOwnVariables(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	_, err = ReadConfigAt(config.New(env(prefix+"_ENDPOINT", "s3.example.com", prefix+"_PATH_STYLE", "yes")), prefix)
-	for _, want := range []string{prefix + "_ENDPOINT: want", prefix + "_BUCKET: required", prefix + "_PATH_STYLE: want",
-		prefix + "_ACCESS_KEY_ID and " + prefix + "_SECRET_ACCESS_KEY: required"} {
+	for _, want := range []string{
+		prefix + "_ENDPOINT: want", prefix + "_BUCKET: required", prefix + "_PATH_STYLE: want",
+		prefix + "_ACCESS_KEY_ID and " + prefix + "_SECRET_ACCESS_KEY: required",
+	} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("err = %v, want it to say %q", err, want)
 		}

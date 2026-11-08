@@ -46,8 +46,10 @@ var programNames = names{endpointVar, bucketVar, regionVar, accessKeyVar, secret
 
 // namesAt are the variables of a bucket configured under prefix, such as AXIOM_AUDIT_REPLICA_ENDPOINT.
 func namesAt(prefix string) names {
-	return names{prefix + "_ENDPOINT", prefix + "_BUCKET", prefix + "_REGION", prefix + "_ACCESS_KEY_ID",
-		prefix + "_SECRET_ACCESS_KEY", prefix + "_PATH_STYLE"}
+	return names{
+		prefix + "_ENDPOINT", prefix + "_BUCKET", prefix + "_REGION", prefix + "_ACCESS_KEY_ID",
+		prefix + "_SECRET_ACCESS_KEY", prefix + "_PATH_STYLE",
+	}
 }
 
 // vars is who c's errors name.

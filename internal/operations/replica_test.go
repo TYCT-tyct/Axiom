@@ -158,8 +158,8 @@ func TestAuditReplicaCopiesTheChain(t *testing.T) {
 
 // TestAuditReplicaNeverOverwrites: a key the bucket holds with the same bytes (a run that wrote and then failed to save)
 // is passed over without a write; one with other bytes is a conflict that is alerted and stops the copy, the bucket
-// keeping what it had though it does not enforce If-None-Match; a bucket that is down and a link that does not check
-// leave the copy where it is; a link waiting too long raises the lag, which the run that copies it resolves.
+// keeping what it had though it does not enforce If-None-Match; a link waiting too long raises the lag, which the run
+// that copies it resolves.
 func TestAuditReplicaNeverOverwrites(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
@@ -195,20 +195,32 @@ func TestAuditReplicaNeverOverwrites(t *testing.T) {
 		t.Errorf("copied %d once the conflict was cleared: %v", n, err)
 	}
 	db.expect(t, "the recovery", lag, "info -,info -,warning 1,info -")
+}
 
-	db.backdated(t, "2 minutes")
+// TestAuditReplicaHoldsItsPlace: a bucket that is down and an entry changed after it was chained both leave the copy
+// where it was, with nothing written.
+func TestAuditReplicaHoldsItsPlace(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.backdated(t, "5 minutes")
+	db.chain(t, time.Minute)
+	b := newBucket()
+	if _, err := db.replicate(t, b); err != nil {
+		t.Fatal(err)
+	}
+	db.backdated(t, "4 minutes")
 	db.chain(t, time.Minute)
 	b.down = true
 	if n, err := db.replicate(t, b); n != 0 || err == nil {
 		t.Errorf("copied %d to a bucket that is down: %v", n, err)
 	}
 	b.down = false
-	superuser(t, db, `UPDATE platform.audit_log SET detail = '{"n": 2}' WHERE id = (SELECT entry_id FROM operations.audit_chain WHERE seq = 4)`)
-	if n, err := db.replicate(t, b); n != 0 || err == nil || !strings.Contains(err.Error(), "link 4 does not check (mismatch)") {
+	superuser(t, db, `UPDATE platform.audit_log SET detail = '{"n": 2}' WHERE id = (SELECT entry_id FROM operations.audit_chain WHERE seq = 2)`)
+	if n, err := db.replicate(t, b); n != 0 || err == nil || !strings.Contains(err.Error(), "link 2 does not check (mismatch)") {
 		t.Errorf("copied %d of a changed entry: %v", n, err)
 	}
-	db.expect(t, "the copy", `SELECT replicated_seq::text FROM operations.audit_replica`, "3")
-	if keys := b.keys(); len(keys) != 2 {
+	db.expect(t, "the copy", `SELECT replicated_seq::text FROM operations.audit_replica`, "1")
+	if keys := b.keys(); len(keys) != 1 {
 		t.Errorf("objects %v", keys)
 	}
 }

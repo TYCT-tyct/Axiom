@@ -32,12 +32,11 @@ func (db opsDB) digests(t *testing.T, before *time.Time, n int) ([]operations.Au
 	return digests, more
 }
 
-// TestAuditDigest: yesterday's digest counts what happened in that UTC day alone (operations by tool and state,
-// approvals, refused calls, each cap policy's day) with the chain and its copy as they are, is made and signalled once
-// however often the job runs, and is read back as it was made.
-func TestAuditDigest(t *testing.T) {
-	t.Parallel()
-	db := openOps(t)
+// seedYesterday writes what the digest of yesterday counts, and beside it what it must leave out: an operation and its
+// approval proposed yesterday and one today, the operations calls of yesterday (refused, succeeded, failed) and of today
+// and the day before, and a cap policy with yesterday's and today's counters.
+func (db opsDB) seedYesterday(t *testing.T) {
+	t.Helper()
 	if _, _, err := db.propose(t, retire(uuid.NewV7(), uuid.NewV7(), 1, true)); err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +56,15 @@ func TestAuditDigest(t *testing.T) {
 		INSERT INTO operations.cap_counters (category, window_kind, window_start, reserved, committed, count)
 		VALUES ('money.top_up', 'day', date_trunc('day', now(), 'UTC') - interval '1 day', 30, 20, 2),
 		('money.top_up', 'day', date_trunc('day', now(), 'UTC'), 7, 0, 1)`)
+}
+
+// TestAuditDigest: yesterday's digest counts what happened in that UTC day alone (operations by tool and state,
+// approvals, refused calls, each cap policy's day) with the chain and its copy as they are, and is made and signalled
+// once however often the job runs.
+func TestAuditDigest(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.seedYesterday(t)
 	db.backdated(t, "5 minutes")
 	db.chain(t, time.Minute)
 
@@ -87,7 +95,16 @@ func TestAuditDigest(t *testing.T) {
 	db.expect(t, "the signal", `SELECT string_agg((body->>'severity') || ' ' || (body->'fields'->>'operations') || ' ' ||
 		(body->'fields'->>'refused') || ' ' || (body->'fields'->>'money_proposals') || ' ' || (body->'fields'->>'replica'), ',')
 		FROM platform.alert_signals WHERE body->>'kind' = 'operations.audit_digest'`, "info 1 3 2 unconfigured")
+}
 
+// TestAuditDigestPages: the digests read back newest first, a page at a time from the day the last page ended on.
+func TestAuditDigestPages(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	if !db.digest(t, false) {
+		t.Fatal("no digest made")
+	}
+	digests, _ := db.digests(t, nil, 1)
 	superuser(t, db, `INSERT INTO operations.audit_digests (day, body) SELECT day - g, jsonb_set(body, '{day}',
 		to_jsonb((day - g)::text)) FROM operations.audit_digests, generate_series(1, 2) g`)
 	page, more := db.digests(t, nil, 2)
