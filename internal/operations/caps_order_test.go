@@ -3,6 +3,7 @@ package operations_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 	"uuid"
@@ -54,6 +55,100 @@ func TestCapLockOrder(t *testing.T) {
 	}
 	if n := r.expireReservations(t); n != 1 {
 		t.Errorf("the sweep after the operation was let go: %d", n)
+	}
+}
+
+// TestBatchLockOrder: two revocations whose credentials wait on proposals in two scopes, each credential's in the
+// other order, both cancel and release them all. Released one by one, the first would hold the platform's counters
+// and wait for the site's, which the second holds while it waits for the platform's, and the database would roll one
+// back with its revocation. The first is stopped between its two proposals by a lock on its second approval, and let go
+// once the second revocation is seen waiting behind it.
+func TestBatchLockOrder(t *testing.T) {
+	t.Parallel()
+	r := newReservations(t)
+	site := uuid.NewV7()
+	credit := limits(&site)
+	credit.Category = operations.CategoryCredit
+	if _, err := r.setPolicy(t, credit, 0); err != nil {
+		t.Fatal(err)
+	}
+	one, two := uuid.NewV7(), uuid.NewV7()
+	oneFirst, twoFirst, oneLast, twoLast := r.waiting(one, nil), r.waiting(two, &site), r.waiting(one, &site), r.waiting(two, nil)
+	if oneFirst.ID.String() > oneLast.ID.String() || twoFirst.ID.String() > twoLast.ID.String() {
+		t.Fatal("CancelLive takes a credential's proposals in ID order, and these are not in the order they were made")
+	}
+	done := make(chan error, 2)
+	if err := r.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		if _, err := tx.Exec(t.Context(), `SELECT 1 FROM operations.approvals WHERE id = $1 FOR UPDATE`, oneLast.Approval.ID); err != nil {
+			return err
+		}
+		go r.revoke(one, done)
+		if err := r.waitersSeen(t, 1); err != nil {
+			return err
+		}
+		go r.revoke(two, done)
+		return r.waitersSeen(t, 2)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Errorf("a revocation: %v", err)
+		}
+	}
+	if got := r.text(t, `SELECT string_agg(DISTINCT state, ',') FROM operations.money_actions`) + " " +
+		r.text(t, `SELECT sum(reserved)::text FROM operations.cap_counters`); got != "released 0" {
+		t.Errorf("after both revocations: %s", got)
+	}
+}
+
+// waiting proposes for credential what waits for the owner: a top-up of 12 of the platform, over its single limit, or
+// with a site a credit grant of 1 there.
+func (r reservations) waiting(credential uuid.UUID, site *uuid.UUID) operations.Operation {
+	r.t.Helper()
+	pm := topUp(credential, uuid.NewV7(), nil, "s1", 12)
+	if site != nil {
+		pm = gift(topUp(credential, uuid.NewV7(), site, "a1", 1))
+	}
+	op, _, err := r.proposeMoney(r.t, pm)
+	if err != nil || op.State != operations.StatePending {
+		r.t.Fatalf("a pending proposal: %+v %v", op, err)
+	}
+	return op
+}
+
+// revoke cancels credential's proposals as its revocation does and sends how it ended to done, the two it waits on
+// canceled or the failure.
+func (r reservations) revoke(credential uuid.UUID, done chan<- error) {
+	done <- r.Tx(r.t.Context(), platformScope, func(tx pg.Tx) error {
+		n, err := operations.CancelLive(r.t.Context(), tx, owner, &credential, "revoked")
+		if err == nil && n != 2 {
+			err = fmt.Errorf("canceled %d", n)
+		}
+		return err
+	})
+}
+
+// TestConfirmWaitingPastTheDay: a confirmation that waited for the counters while its proposal's day ended is refused
+// and leaves nothing behind, the reservation for the sweep; the day is checked by the database's clock once every lock
+// is held, not before the wait.
+func TestConfirmWaitingPastTheDay(t *testing.T) {
+	t.Parallel()
+	r := newReservations(t)
+	paid := r.direct(1)
+	var confirmed error
+	r.whileWaited(t, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `SELECT id FROM operations.cap_counters WHERE site_id IS NULL ORDER BY object_kind, window_kind FOR UPDATE`)
+		return err
+	}, func() error {
+		_, confirmed = r.confirm(paid)
+		return nil
+	}, func() { r.windowsEnded(t, paid) })
+	if !errors.Is(confirmed, operations.ErrNotReserved) {
+		t.Errorf("a confirmation that waited past the day: %v", confirmed)
+	}
+	if got := r.state(paid) + " " + r.counters(t, nil) + " " + r.text(t, `SELECT count(*)::text FROM operations.operations`); got != "reserved 1+0#1 1+0#1 1+0#1 1" {
+		t.Errorf("after the refused confirmation: %s", got)
 	}
 }
 

@@ -308,10 +308,14 @@ func ExpireDue(ctx context.Context, tx pg.Tx, batch int) (int, error) {
 	return len(ids), endLocked(ctx, tx, ids, expiryActor, StateExpired, ApprovalExpired, "approval.expire", "")
 }
 
-// endLocked ends the pending operations ids, which tx has locked, with their approvals, and resolves their signals only
-// after all of them: a batch that took the signals' lock after the first would hold it while it waits for the next
-// one's counters, which a proposal holding them waits on the signals' lock to release.
+// endLocked ends the pending operations ids, which tx has locked, with their approvals. It holds the caps of every
+// reservation among them before it releases the first (holdScopes), and resolves their signals only after all of them:
+// a batch that took the signals' lock after the first would hold it while it waits for the next one's counters, which
+// a proposal holding them waits on the signals' lock to release.
 func endLocked(ctx context.Context, tx pg.Tx, ids []uuid.UUID, actor audit.Actor, state State, decided ApprovalState, action, reason string) error {
+	if err := holdScopes(ctx, tx, ids); err != nil {
+		return err
+	}
 	approvals := make([]uuid.UUID, len(ids))
 	for i, id := range ids {
 		op, err := Get(ctx, tx, id)
