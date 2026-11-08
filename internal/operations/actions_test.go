@@ -243,12 +243,12 @@ func (db opsDB) state(t *testing.T, id uuid.UUID) string {
 		JOIN operations.approvals a ON a.operation_id = o.id WHERE o.id = '`+id.String()+`'`)
 }
 
-// waiterSeen returns once a session of the database waits on a lock.
-func (db opsDB) waiterSeen(t *testing.T) error {
+// waitersSeen returns once n sessions of the database wait on a lock.
+func (db opsDB) waitersSeen(t *testing.T, n int) error {
 	t.Helper()
 	for t.Context().Err() == nil {
-		n, err := strconv.Atoi(db.text(t, `SELECT count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`))
-		if err != nil || n > 0 {
+		seen, err := strconv.Atoi(db.text(t, `SELECT count(*)::text FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`))
+		if err != nil || seen >= n {
 			return err
 		}
 		runtime.Gosched()
@@ -392,7 +392,7 @@ func (db opsDB) whileWaited(t *testing.T, hold func(tx pg.Tx) error, wait func()
 			return err
 		}
 		go func() { done <- wait() }()
-		if err := db.waiterSeen(t); err != nil {
+		if err := db.waitersSeen(t, 1); err != nil {
 			return err
 		}
 		if meanwhile != nil {
