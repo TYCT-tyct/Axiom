@@ -287,7 +287,7 @@ func TestFailuresReachTheCaller(t *testing.T) {
 			return err
 		},
 		"Approvals": func(ctx context.Context, tx pg.Tx) error {
-			_, _, err := operations.Approvals(ctx, tx, "", uuid.UUID{}, 10)
+			_, _, err := operations.Approvals(ctx, tx, uuid.UUID{}, "", uuid.UUID{}, 10)
 			return err
 		},
 		"ApprovalOperation": func(ctx context.Context, tx pg.Tx) error {

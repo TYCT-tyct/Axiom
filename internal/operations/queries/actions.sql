@@ -74,10 +74,12 @@ FROM operations.approvals a WHERE a.operation_id = ANY (@operations::uuid[]);
 SELECT sqlc.embed(a), (a.expires_at <= clock_timestamp())::bool AS due FROM operations.approvals a WHERE a.operation_id = @operation_id FOR UPDATE;
 
 -- name: Approvals :many
--- Every approval newest first, a page after the cursor's ID, in one state or all: the owner's queue, decidable as in
--- ApprovalsOf.
+-- The approvals newest first, a page after the cursor's ID, in one state or all, of one credential's operations or of
+-- every one's (the owner's queue), decidable as in ApprovalsOf.
 SELECT sqlc.embed(a), (a.state = 'pending' AND a.expires_at > clock_timestamp())::bool AS decidable FROM operations.approvals a
 WHERE (sqlc.narg(state)::text IS NULL OR a.state = sqlc.narg(state)::text)
+  AND (sqlc.narg(credential_id)::uuid IS NULL
+       OR a.operation_id IN (SELECT o.id FROM operations.operations o WHERE o.credential_id = sqlc.narg(credential_id)::uuid))
   AND (@after::uuid = '00000000-0000-0000-0000-000000000000' OR a.id < @after::uuid)
 ORDER BY a.id DESC
 LIMIT @page_size;

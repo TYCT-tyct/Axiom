@@ -196,7 +196,7 @@ func (a adminAPI) ListOperationsApprovals(ctx context.Context, r adminapi.ListOp
 	var page []operations.Operation
 	var more bool
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		page, more, err = operations.Approvals(ctx, tx, state, after, pageSize(r.Params.Limit))
+		page, more, err = operations.Approvals(ctx, tx, uuid.UUID{}, state, after, pageSize(r.Params.Limit))
 		return err
 	}); err != nil {
 		return nil, err

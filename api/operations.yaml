@@ -720,6 +720,33 @@ paths:
         '422': {$ref: '#/components/responses/Unprocessable'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/approvals:
+    get:
+      operationId: approvalsList
+      summary: The approvals the credential's proposals asked for
+      description: >-
+        Each approval one of the credential's own writes waits or waited on, newest first, optionally in one state, with
+        the operation as it is now; another credential's are not listed. `pending` lists what still waits for the owner.
+      tags: [Agent]
+      security: [{credential: []}]
+      x-axiom-permission: operations.read
+      x-axiom-scope: self
+      x-mcp-name: approvals_list
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - {in: query, name: state, required: false, schema: {$ref: '#/components/schemas/OperationsApprovalState'}}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of operations, each with its approval
+          content: {application/json: {schema: {$ref: '#/components/schemas/OperationList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
   /api/operations/v1/approvals/{approval_id}:
     get:
       operationId: approvalGet
@@ -737,6 +764,36 @@ paths:
       responses:
         '200':
           description: The operation
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/approvals/{approval_id}/wait:
+    get:
+      operationId: approvalWait
+      summary: Wait for the owner to decide an approval
+      description: >-
+        Reads the credential's operation that waits on this approval, as `approvalGet` does, and while the owner can
+        still decide it reads it again every second, answering as soon as it is decided, withdrawn, canceled or past its
+        expiry, or when `wait_seconds` have passed (10 at most), whichever comes first. An answer whose approval is
+        still `pending` means nobody decided in the wait: wait again or do something else first. Another credential's
+        approval is not found, at once.
+      tags: [Agent]
+      security: [{credential: []}]
+      x-axiom-permission: operations.read
+      x-axiom-scope: self
+      x-mcp-name: approval_wait
+      parameters:
+        - {in: path, name: approval_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - {in: query, name: wait_seconds, required: false, description: How long to wait at most., schema: {type: integer, minimum: 1, maximum: 10, default: 10}}
+      responses:
+        '200':
+          description: The operation, decided or still waiting
           content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/CredentialRejected'}

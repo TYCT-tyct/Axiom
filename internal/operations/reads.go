@@ -51,11 +51,18 @@ func Operations(ctx context.Context, tx pg.Tx, credential uuid.UUID, state State
 	return ops, more, nil
 }
 
-// Approvals is a page of every approval newest first, in state or all of them (""), after the approval after, each
-// with its operation, and whether more follow: the owner's queue.
-func Approvals(ctx context.Context, tx pg.Tx, state ApprovalState, after uuid.UUID, pageSize int) ([]Operation, bool, error) {
+// Approvals is a page of the approvals newest first, of credential's operations or, with the zero ID, of every one's
+// (the owner's queue), in state or all of them (""), after the approval after, each with its operation, and whether
+// more follow.
+func Approvals(ctx context.Context, tx pg.Tx, credential uuid.UUID, state ApprovalState, after uuid.UUID, pageSize int) ([]Operation, bool, error) {
 	q := New()
-	rows, err := q.Approvals(ctx, tx, ApprovalsParams{State: optionalText(string(state)), After: after, PageSize: int32(pageSize + 1)}) // #nosec G115 -- the API bounds the page to 200
+	var of *uuid.UUID
+	if credential != (uuid.UUID{}) {
+		of = &credential
+	}
+	rows, err := q.Approvals(ctx, tx, ApprovalsParams{
+		State: optionalText(string(state)), CredentialID: of, After: after, PageSize: int32(pageSize + 1), // #nosec G115 -- the API bounds the page to 200
+	})
 	if err != nil {
 		return nil, false, fmt.Errorf("read the approvals: %w", err)
 	}
