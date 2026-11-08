@@ -77,7 +77,8 @@ test.describe("business targets", () => {
     expect(landed.searchParams.get("paid")).toBe("batches");
     expect(landed.searchParams.get("since")).toBe(revenue.searchParams.get("since"));
     expect(landed.searchParams.get("until")).toBe(revenue.searchParams.get("until"));
-    await expect(page.getByText(zhText("orders.paidBatches.title"))).toBeVisible();
+    // Exact: the URL changes before the overview unmounts, and its notes contain the title as a substring.
+    await expect(page.getByText(zhText("orders.paidBatches.title"), { exact: true })).toBeVisible();
     await expect(page.getByText("bank transfer")).toBeVisible();
   });
 
