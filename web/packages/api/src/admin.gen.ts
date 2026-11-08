@@ -1458,6 +1458,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/sites/{site_id}/workspace-limit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A site's limit on the workspaces of an account
+         * @description The limit the site sets itself and what it comes to over the default in code, 50. An account without a limit of its own is held to it. A node that predates workspace limits answers 404.
+         */
+        get: operations["getSiteWorkspaceLimit"];
+        /**
+         * Set a site's limit on the workspaces of an account
+         * @description Replaces the limit the site sets itself: left out, it falls back to the default in code. It is a resource of its own, not part of the key limits or the site's settings, so a request that replaces those whole leaves it as it is. Outside the bounds `WorkspaceLimit` states is a 400. A node applies the change at once if it served the request, and the others when they reload the sites, within 30 seconds; the change is audited.
+         */
+        put: operations["updateSiteWorkspaceLimit"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/sites/{site_id}/login-limits": {
         parameters: {
             query?: never;
@@ -1714,6 +1740,26 @@ export interface paths {
          * @description Replaces the limits of the account itself: a limit left out is the site's. The account's limits are in `AccountDetail`. A request outside the bounds `KeyLimits` states is a 400. The change is audited, and a key being made meets the limits whole, the new or the old. Lowering a limit below what the account holds deletes no key: the account only cannot make more.
          */
         put: operations["updateAccountKeyLimits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/accounts/{account_id}/workspace-limit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set an account's own limit on its workspaces
+         * @description Replaces the limit of the account itself: left out, the site's applies. The account's limit is in `AccountDetail`. Outside the bounds `WorkspaceLimit` states is a 400. The change is audited, and a workspace being made meets the new limit or the old one whole. Lowering it below what the account holds disables no workspace: the account only cannot make more.
+         */
+        put: operations["updateAccountWorkspaceLimit"];
         post?: never;
         delete?: never;
         options?: never;
@@ -4003,7 +4049,7 @@ export interface components {
             params: {
                 [key: string]: unknown;
             };
-            /** @description What the server read of the target when the agent asked, never the agent's words. */
+            /** @description What the server read of the target when the agent asked, never the agent's words. Its members depend on the `tool`, and a member an older node did not know is absent, so a page shows what is there. A write that moves money carries `cap`: `currency`, `amount`, `policy_rev`, the limits `single_max`, `daily_max`, `weekly_max`, `object_daily_max`, `daily_count_max` and their hard ones (`hard_single_max`, `hard_daily_max`, `hard_weekly_max`), the amounts already used in each window (`daily_used`, `weekly_used`, `object_daily_used`, `daily_count`) and `paused`; amounts are integer text in the cap's currency. A credit grant names `account_id`, `account`, `email`, `site_id`, `amount`, `currency` and `expires_at`; a supplier top-up `supplier`, `supplier_id`, `amount_native`, `native_unit`, `unit_value`, `settlement_currency`, `amount` and `currency`; a price publication `model_id`, `candidate_id`, `slug`, `name`, `status`, `audience`, `currency`, `current_id`, the base rates per item as `current`, `proposed` and `cost`, and `prices_complete`, with `envelope` when it falls outside the site's price envelope: `change_bps` and `margin_bps` (null when not measurable), the envelope's limits (`min_margin_bps`, `model_daily_change_bps`, `daily_changes`, `daily_models`) and what the day has used (`model_change_used`, `daily_changes_used`, `daily_models_used`, `model_moved_today`). */
             summary: {
                 [key: string]: unknown;
             };
@@ -4505,6 +4551,19 @@ export interface components {
             /** @description What applies here, `limits` over the level above. */
             effective: components["schemas"]["EffectiveKeyLimits"];
         };
+        /** @description How many workspaces an account may hold that are not deleted, disabled ones included. Lowering it disables no workspace; the account only cannot make more. */
+        WorkspaceLimit: number;
+        WorkspaceLimitView: {
+            /** @description The limit set at this level; absent when it sets none and the level above applies. */
+            max_workspaces?: components["schemas"]["WorkspaceLimit"];
+            /** @description What applies here, the limit set here over the level above, down to the default in code, 50. */
+            effective: components["schemas"]["WorkspaceLimit"];
+        };
+        WorkspaceLimitUpdate: {
+            /** @description The limit to set at this level; absent clears it, so the level above applies. */
+            max_workspaces?: components["schemas"]["WorkspaceLimit"];
+            reason: components["schemas"]["Reason"];
+        };
         KeyLimitsUpdate: {
             limits: components["schemas"]["KeyLimits"];
             reason: components["schemas"]["Reason"];
@@ -4545,6 +4604,8 @@ export interface components {
             };
             balance: components["schemas"]["Balance"];
             key_limits: components["schemas"]["KeyLimitsView"];
+            /** @description The account's limit on its workspaces. Absent from a node that predates workspace limits. */
+            workspace_limit?: components["schemas"]["WorkspaceLimitView"];
             /** Format: date-time */
             created_at: string;
         };
@@ -8507,6 +8568,68 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    getSiteWorkspaceLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The limit */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceLimitView"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateSiteWorkspaceLimit: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                site_id: components["schemas"]["SiteId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceLimitUpdate"];
+            };
+        };
+        responses: {
+            /** @description The limit as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceLimitView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getSiteLoginLimits: {
         parameters: {
             query?: never;
@@ -8656,6 +8779,7 @@ export interface operations {
                     "application/json": components["schemas"]["LegalDocumentHistory"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -8972,6 +9096,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["KeyLimitsView"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    updateAccountWorkspaceLimit: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                account_id: components["schemas"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceLimitUpdate"];
+            };
+        };
+        responses: {
+            /** @description The limit as stored */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceLimitView"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -10237,6 +10397,7 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionPlanList"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             default: components["responses"]["Failure"];
@@ -10769,6 +10930,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             default: components["responses"]["Failure"];
         };
     };

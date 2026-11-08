@@ -3,6 +3,7 @@ import type { paths } from "../packages/api/src/console.gen.ts";
 import {
   aKey,
   aPreset,
+  defaultWorkspace,
   emptyState,
   goodInvite,
   type MockState,
@@ -373,6 +374,9 @@ const handlers: Handler<MockState>[] = [
   route("post", `${base}/keys`, { ...signedIn, permission: "api_keys.manage" }, createKey),
   route("put", `${base}/keys/{key_id}`, { ...signedIn, permission: "api_keys.manage" }, updateKey),
   route("delete", `${base}/keys/{key_id}`, { ...signedIn, permission: "api_keys.manage" }, deleteKey),
+  route("get", `${base}/workspaces`, { ...signedIn, permission: "api_keys.view" }, () =>
+    ok({ data: [defaultWorkspace] }),
+  ),
   route("get", `${base}/routing-presets`, { ...signedIn, permission: "api_keys.view" }, ({ state }) =>
     ok({ data: state.presets.filter((preset) => !preset.disabled) }),
   ),

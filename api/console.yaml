@@ -130,6 +130,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ProviderKey"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
@@ -492,6 +493,177 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/workspaces:
+    get:
+      operationId: listWorkspaces
+      tags: [Keys]
+      summary: The account's workspaces
+      description: >-
+        Every workspace of the account that is not deleted, disabled ones included: the default workspace first, then
+        the others in the order they were made. An account holds at most its limit, 50 unless an administrator sets
+        another and never over 1,000, so this is the whole list and has no
+        pages. A page that shows workspaces only once there is a second one (docs/domains/accounts.md「工作区」)
+        decides from the length of `data`. A node that predates workspaces answers 404.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The workspaces
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceList"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createWorkspace
+      tags: [Keys]
+      summary: Make a workspace
+      description: >-
+        Makes an enabled workspace with no budget and no default routing preset of its own, so its new keys take the
+        account's. Another live workspace of the account with the same name, ignoring case, is 409 `name_taken`; an
+        account that holds as many workspaces as its limit allows, disabled ones included, is 409 `conflict`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: workspaces.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WorkspaceCreate"}
+      responses:
+        "201":
+          description: The workspace made.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Workspace"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/workspaces/{workspace_id}:
+    parameters:
+      - in: path
+        name: workspace_id
+        required: true
+        description: A workspace of the account; another account's, or a deleted one, is 404.
+        schema: {$ref: "#/components/schemas/WorkspaceId"}
+    get:
+      operationId: getWorkspace
+      tags: [Keys]
+      summary: One workspace
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The workspace
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Workspace"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateWorkspace
+      tags: [Keys]
+      summary: Rename, disable or enable a workspace
+      description: >-
+        Replaces the workspace's name and whether it is disabled. Disabling refuses the next call of every key of the
+        workspace on every node, and keys cannot be made in it; its keys stay listed and editable, and `disabled:
+        false` makes them usable again. The default workspace cannot be disabled (409 `conflict`): it is where keys go
+        when no workspace is named; disable the account instead. A name another live workspace of the account has,
+        ignoring case, is 409 `name_taken`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: workspaces.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WorkspaceSettings"}
+      responses:
+        "200":
+          description: The workspace as changed
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Workspace"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/workspaces/{workspace_id}/budget:
+    parameters:
+      - in: path
+        name: workspace_id
+        required: true
+        description: A workspace of the account; another account's, or a deleted one, is 404.
+        schema: {$ref: "#/components/schemas/WorkspaceId"}
+    get:
+      operationId: getWorkspaceBudget
+      tags: [Keys]
+      summary: A workspace's budget and what its keys have used of it
+      description: >-
+        The most the workspace's keys may spend together in a window, and what they have used in the current one,
+        counted as admission counts it. A workspace without a budget answers an empty object. A node that predates
+        workspace budgets answers 404, and a page shows the budget as unavailable.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: api_keys.view
+      responses:
+        "200":
+          description: The workspace's budget
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceBudget"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: setWorkspaceBudget
+      tags: [Keys]
+      summary: Set or remove a workspace's budget
+      description: >-
+        Replaces the workspace's budget: without `limit` it has none. The next call of each of its keys, on every node,
+        is checked against it; calls already admitted finish and are charged even past it. A budget below what the
+        window has used refuses the next call with 403 and `limit_source` `openrouter_workspace_budget`. The default
+        workspace and disabled ones take a budget too.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: workspaces.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WorkspaceBudgetSettings"}
+      responses:
+        "200":
+          description: The workspace's budget as set
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceBudget"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/workspaces/{workspace_id}/routing-default:
     parameters:
@@ -1609,6 +1781,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/LegalDocuments"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/legal/accept:
@@ -1771,7 +1944,7 @@ paths:
       description: >-
         Every key of the session's account that is not deleted, disabled and expired ones included, newest first by
         making. `name` and `prefix` search part of a key's name or prefix, ignoring case; `status` keeps active,
-        disabled or expired keys; `created_after` and `created_before` keep the keys made in a range. A page reads the
+        disabled or expired keys; `created_after` and `created_before` keep the keys made in a range; `workspace_id` keeps one workspace's keys. A page reads the
         keys in the index's order and applies the filters as it goes, so a later page starts after the last key read,
         whatever the filters match. The text of a key is never returned again after `createKey`.
       security:
@@ -1784,6 +1957,7 @@ paths:
         - $ref: "#/components/parameters/KeyStatus"
         - $ref: "#/components/parameters/KeyCreatedAfter"
         - $ref: "#/components/parameters/KeyCreatedBefore"
+        - $ref: "#/components/parameters/KeyWorkspace"
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -1801,7 +1975,7 @@ paths:
       tags: [Keys]
       summary: Make an API key
       description: >-
-        Makes a call or management key in the account's default workspace, with the site's prefix. A call key without
+        Makes a call or management key in the workspace named, or the account's default one, with the site's prefix. A call key without
         `spend_limit` gets the site's daily default. A management key requires `expires_at` and both api_keys.manage
         and api_keys.view. It does not use the site's default spending limit: omitted `spend_limit` means its
         delegation ceiling is unrestricted; child call keys created with an omitted limit inherit that ceiling.
@@ -2180,6 +2354,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PublicModelList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
@@ -2214,6 +2389,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PublicModelList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "404": {$ref: "#/components/responses/NotFound"}
         default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/payment-methods:
@@ -2661,6 +2837,11 @@ components:
       in: query
       description: Keys the database stamped before this instant.
       schema: {type: string, format: date-time}
+    KeyWorkspace:
+      name: workspace_id
+      in: query
+      description: Keys of this workspace only; another account's workspace has none.
+      schema: {$ref: "#/components/schemas/WorkspaceId"}
     Cursor:
       name: cursor
       in: query
@@ -3589,6 +3770,65 @@ components:
     KeyId: {type: string, pattern: '^key_[0-9a-hjkmnp-tv-z]{26}$', description: "An API key's ID (TypeID)."}
     SessionId: {type: string, pattern: '^sess_[0-9a-hjkmnp-tv-z]{26}$', description: "A session's ID (TypeID)."}
     WorkspaceId: {type: string, pattern: '^ws_[0-9a-hjkmnp-tv-z]{26}$', description: "A workspace's ID (TypeID)."}
+    Workspace:
+      type: object
+      required: [id, name, is_default, disabled]
+      description: >-
+        A part of the account with its own keys, budget and default routing preset. Every account has one default
+        workspace, which cannot be disabled; keys made without naming a workspace go there.
+      properties:
+        id: {$ref: "#/components/schemas/WorkspaceId"}
+        name: {type: string, minLength: 1, maxLength: 100}
+        is_default: {type: boolean}
+        disabled: {type: boolean, description: "A disabled workspace's keys are refused on every call."}
+    WorkspaceList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Workspace"}
+    WorkspaceCreate:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100, description: "Unique among the account's live workspaces, ignoring case."}
+    WorkspaceSettings:
+      type: object
+      required: [name, disabled]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100, description: "Unique among the account's live workspaces, ignoring case."}
+        disabled: {type: boolean}
+    WorkspaceBudget:
+      type: object
+      description: >-
+        A workspace's budget, which all its keys share, and the current window's use of it. Every field is absent for
+        a workspace without a budget.
+      properties:
+        limit: {$ref: "#/components/schemas/Money"}
+        limit_reset: {$ref: "#/components/schemas/LimitReset"}
+        used:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: >-
+            What the workspace's keys were charged in the current window, and what calls in flight hold: the figure
+            admission compares with `limit`. It can pass `limit` when calls already admitted are charged.
+        limit_remaining:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: "`limit` less `used`, not below zero."
+        resets_at:
+          type: string
+          format: date-time
+          description: When the current window ends and `used` starts again, in UTC; absent for a budget that never resets.
+    WorkspaceBudgetSettings:
+      type: object
+      properties:
+        limit:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: >-
+            In the site's currency and not negative. 0 refuses every call that would reserve anything; a call quoted at zero still passes, as under any limit. Absent removes the budget.
+        limit_reset:
+          allOf: [{$ref: "#/components/schemas/LimitReset"}]
+          description: "When `used` starts again; absent never. It needs a `limit`."
     CallId:
       type: string
       pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -3840,6 +4080,9 @@ components:
         status: {$ref: "#/components/schemas/KeyStatus"}
         created_after: {type: string, format: date-time, description: The applied inclusive lower bound.}
         created_before: {type: string, format: date-time, description: The applied exclusive upper bound.}
+        workspace_id:
+          allOf: [{$ref: "#/components/schemas/WorkspaceId"}]
+          description: The applied workspace filter. Absent from a node that predates it, which returned every workspace's keys.
     LimitReset:
       type: string
       enum: [daily, weekly, monthly]
@@ -3852,6 +4095,12 @@ components:
       properties:
         kind: {type: string, enum: [call, management], description: "Defaults to call. Management keys require expires_at and cannot call models."}
         name: {type: string, minLength: 1, maxLength: 100}
+        workspace_id:
+          allOf: [{$ref: "#/components/schemas/WorkspaceId"}]
+          description: >-
+            The enabled workspace of the account the key belongs to, for good; absent is the default workspace. Another
+            account's or a deleted one is 400, a disabled one 409 `conflict`. A node that predates workspaces ignores
+            it and makes the key in the default workspace, so a page compares the response's `workspace_id`.
         expires_at: {type: string, format: date-time, description: "UTC, in the future. It cannot be set later."}
         spend_limit: {$ref: "#/components/schemas/Money"}
         limit_reset: {$ref: "#/components/schemas/LimitReset"}

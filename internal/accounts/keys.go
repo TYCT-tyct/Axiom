@@ -103,13 +103,13 @@ type Key struct {
 	KeySettings
 }
 
-// KeyRequest is a new key in a workspace, made by a user of its site. A zero Workspace is the account's default
-// workspace.
+// KeyRequest is a new key in a workspace, made by a user of its site. A nil Workspace is the account's default
+// workspace; one named must be the account's, not deleted (ErrWorkspaceNotFound) and enabled (ErrWorkspaceDisabled).
 type KeyRequest struct {
 	Kind      string // empty is call; management requires an expiry
 	Site      SiteID
 	Account   AccountID
-	Workspace WorkspaceID
+	Workspace *WorkspaceID
 	CreatedBy UserID
 	ExpiresAt *time.Time // only set when the key is made
 	KeySettings
@@ -137,14 +137,13 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	if !ok {
 		return CreatedKey{}, fmt.Errorf("create an API key: site %s is not in the snapshot", r.Site.TypeID())
 	}
-	if err := s.admitKey(ctx, tx, site, r.Account); err != nil {
+	err := s.admitKey(ctx, tx, site, r.Account)
+	if err != nil {
 		return CreatedKey{}, err
 	}
-	if r.Workspace == (WorkspaceID{}) {
-		var err error
-		if r.Workspace, err = s.defaultWorkspace(ctx, tx, r.Account); err != nil {
-			return CreatedKey{}, fmt.Errorf("create an API key: %w", errors.Join(err, ErrKeyNotFound))
-		}
+	workspace, err := s.keyWorkspace(ctx, tx, r.Account, r.Workspace)
+	if err != nil {
+		return CreatedKey{}, fmt.Errorf("create an API key: %w", err)
 	}
 	limit, reset := r.SpendLimit, r.LimitReset
 	if limit == nil && defaults && r.Kind == CallKey {
@@ -156,14 +155,14 @@ func (s *Service) createKey(ctx context.Context, tx pg.Tx, actor audit.Actor, r 
 	hash := s.hashes.Sum(version, []byte(text))
 	key := InsertKeyParams{
 		Kind: r.Kind, ID: uuid.UUID(id), SiteID: uuid.UUID(r.Site), AccountID: uuid.UUID(r.Account),
-		WorkspaceID: uuid.UUID(r.Workspace), Name: r.Name, Prefix: site.KeyPrefix, Last4: text[len(text)-4:],
+		WorkspaceID: uuid.UUID(workspace), Name: r.Name, Prefix: site.KeyPrefix, Last4: text[len(text)-4:],
 		SecretHash: hash[:], SecretVersion: int64(version), CreatedBy: uuid.UUID(r.CreatedBy),
 		ExpiresAt: r.ExpiresAt, SpendLimit: limit, LimitReset: nullable(reset), Models: nilIfEmpty(r.Models), IpAllow: nilIfEmpty(r.IPAllow),
 	}
-	if err := s.insertKey(ctx, tx, &key, site.Currency, r.Preset); err != nil {
+	if err = s.insertKey(ctx, tx, &key, site.Currency, r.Preset); err != nil {
 		return CreatedKey{}, err
 	}
-	if err := recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account), presetDetail(key.PresetID)); err != nil {
+	if err = recordKey(ctx, tx, actor, "api_key.create", id, uuid.UUID(r.Site), uuid.UUID(r.Account), presetDetail(key.PresetID)); err != nil {
 		return CreatedKey{}, err
 	}
 	return CreatedKey{id, secret.New(text)}, nil
@@ -262,6 +261,7 @@ type KeyQuery struct {
 	Status        string
 	CreatedAfter  *time.Time
 	CreatedBefore *time.Time
+	Workspace     *WorkspaceID // nil: every workspace's keys
 }
 
 // ListKeys is up to q.Limit of account's keys that are not deleted and match q's filters, disabled ones included,
@@ -285,7 +285,7 @@ func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, q K
 	rows, err := s.queries.ListKeys(ctx, tx, ListKeysParams{
 		AccountID: uuid.UUID(account), Before: before, PageSize: int32(q.Limit) + 1, // #nosec G115 -- limit is the contract's 1 to 200
 		Name: nullable(q.Name), Prefix: nullable(q.Prefix), Status: nullable(q.Status),
-		CreatedAfter: q.CreatedAfter, CreatedBefore: q.CreatedBefore,
+		CreatedAfter: q.CreatedAfter, CreatedBefore: q.CreatedBefore, Workspace: (*uuid.UUID)(q.Workspace),
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("list API keys: %w", err)

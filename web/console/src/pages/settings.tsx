@@ -1,16 +1,20 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { useErrors } from "@axiom/app";
+import { can, useErrors, useSession } from "@axiom/app";
 import { DataState, FormError, Notice, PageHeader, Panel, SelectField, SubmitButton } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { billingPreferenceQuery } from "../queries";
 
 // Settings is where the account chooses how calls are paid for (docs/domains/billing.md「资金来源」). The site sets a
-// default; the account may follow it or choose one of the four orders.
+// default; the account may follow it or choose one of the four orders. It is also the way to the workspaces page before
+// the menu shows it, which is once the account has a second workspace.
 export default function Settings() {
   const { t } = useTranslation();
   const preference = useQuery(billingPreferenceQuery);
+  const session = useSession();
+  const workspaces = can(session, "workspaces.manage") && can(session, "api_keys.view");
   return (
     <>
       <PageHeader title={t("nav.settings")} description={t("settings.description")} />
@@ -18,6 +22,16 @@ export default function Settings() {
         <Panel title={t("settings.billing.title")}>
           <DataState query={preference}>{(data) => <PreferenceForm data={data} />}</DataState>
         </Panel>
+        {workspaces ? (
+          <Panel title={t("workspaces.settings.title")}>
+            <div className="max-w-xl space-y-3 p-4">
+              <p className="max-w-prose text-ui text-t3">{t("workspaces.settings.body")}</p>
+              <Link to="/workspaces" className="text-ui text-accent underline-offset-4 hover:underline">
+                {t("workspaces.settings.link")}
+              </Link>
+            </div>
+          </Panel>
+        ) : null}
       </div>
     </>
   );

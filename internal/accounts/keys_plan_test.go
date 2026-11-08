@@ -69,7 +69,7 @@ func TestKeyPagePlansFollowTheIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	heavy, light := uuid.MustParse(planHeavy), uuid.MustParse(planLight)
+	heavy, light, heavyWorkspace := uuid.MustParse(planHeavy), uuid.MustParse(planLight), uuid.MustParse(planHeavyWS)
 	var deep uuid.UUID
 	if err := db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT id FROM accounts.api_keys WHERE account_id = $1 ORDER BY id DESC OFFSET $2 LIMIT 1`,
@@ -92,6 +92,7 @@ func TestKeyPagePlansFollowTheIndex(t *testing.T) {
 		{"light, first page", base(light, uuid.Max()), 100, true},
 		{"a dense name", ListKeysParams{AccountID: heavy, Before: uuid.Max(), PageSize: planPage, Name: &dense}, 100, true},
 		{"a name that matches nothing", ListKeysParams{AccountID: heavy, Before: uuid.Max(), PageSize: planPage, Name: &absent}, 1500, true},
+		{"its workspace", ListKeysParams{AccountID: heavy, Before: uuid.Max(), PageSize: planPage, Workspace: &heavyWorkspace}, 100, true},
 	} {
 		plan := explainKeys(t, db, c.q)
 		t.Logf("%s: %d buffers\n%s", c.name, keyBuffers(t, plan), plan)
@@ -119,7 +120,7 @@ func explainKeys(t *testing.T, db *pg.DB, q ListKeysParams) string {
 			}
 		}
 		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+listKeys,
-			q.AccountID, q.Before, q.Name, q.Prefix, q.Status, q.CreatedAfter, q.CreatedBefore, q.PageSize)
+			q.AccountID, q.Before, q.Name, q.Prefix, q.Status, q.CreatedAfter, q.CreatedBefore, q.Workspace, q.PageSize)
 		if err != nil {
 			return err
 		}

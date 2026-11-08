@@ -40,6 +40,8 @@ type Site struct {
 	// MaxKeysPerAccount and KeyCreationsPerHour bound an account's call keys: how many it may hold that are not
 	// deleted, and how many it may make in an hour.
 	MaxKeysPerAccount, KeyCreationsPerHour int
+	// MaxWorkspacesPerAccount bounds how many workspaces an account may hold that are not deleted.
+	MaxWorkspacesPerAccount int
 	// ModelPricesPublic is whether anonymous visitors see the site's model prices (docs/domains/gateway.md). A site
 	// that sets nothing is public.
 	ModelPricesPublic bool
@@ -236,6 +238,7 @@ func readSite(r ListSitesRow) (Site, error) {
 	}
 	site.MaxKeysPerAccount = setting(r.MaxKeysPerAccount, defaultMaxKeysPerAccount)
 	site.KeyCreationsPerHour = setting(r.KeyCreationsPerHour, defaultKeyCreationsPerHour)
+	site.MaxWorkspacesPerAccount = setting(r.MaxWorkspacesPerAccount, defaultMaxWorkspaces)
 	site.ModelPricesPublic = r.ModelPricesPublic
 	site.ModelPricesPublicReady = r.ModelPricesPublicReady
 	site.RegistrationHumanCheck = boolSetting(r.RegistrationHumanCheck, defaultHumanCheck)

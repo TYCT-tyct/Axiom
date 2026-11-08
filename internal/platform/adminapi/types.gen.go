@@ -2105,6 +2105,9 @@ type AccountDetail struct {
 	SiteId SiteId              `json:"site_id"`
 	Status AccountDetailStatus `json:"status"`
 	Tier   TierRef             `json:"tier"`
+
+	// WorkspaceLimit The account's limit on its workspaces. Absent from a node that predates workspace limits.
+	WorkspaceLimit *WorkspaceLimitView `json:"workspace_limit,omitempty"`
 }
 
 // AccountDetailKind defines model for AccountDetail.Kind.
@@ -3425,7 +3428,7 @@ type OperationsApproval struct {
 	// State `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its credential).
 	State OperationsApprovalState `json:"state"`
 
-	// Summary What the server read of the target when the agent asked, never the agent's words.
+	// Summary What the server read of the target when the agent asked, never the agent's words. Its members depend on the `tool`, and a member an older node did not know is absent, so a page shows what is there. A write that moves money carries `cap`: `currency`, `amount`, `policy_rev`, the limits `single_max`, `daily_max`, `weekly_max`, `object_daily_max`, `daily_count_max` and their hard ones (`hard_single_max`, `hard_daily_max`, `hard_weekly_max`), the amounts already used in each window (`daily_used`, `weekly_used`, `object_daily_used`, `daily_count`) and `paused`; amounts are integer text in the cap's currency. A credit grant names `account_id`, `account`, `email`, `site_id`, `amount`, `currency` and `expires_at`; a supplier top-up `supplier`, `supplier_id`, `amount_native`, `native_unit`, `unit_value`, `settlement_currency`, `amount` and `currency`; a price publication `model_id`, `candidate_id`, `slug`, `name`, `status`, `audience`, `currency`, `current_id`, the base rates per item as `current`, `proposed` and `cost`, and `prices_complete`, with `envelope` when it falls outside the site's price envelope: `change_bps` and `margin_bps` (null when not measurable), the envelope's limits (`min_margin_bps`, `model_daily_change_bps`, `daily_changes`, `daily_models`) and what the day has used (`model_change_used`, `daily_changes_used`, `daily_models_used`, `model_moved_today`).
 	Summary jsonx.Raw       `json:"summary"`
 	Target  OperationTarget `json:"target"`
 
@@ -5749,6 +5752,27 @@ type VersionBasis string
 // WorkspaceId A workspace's ID (TypeID).
 type WorkspaceId = string
 
+// WorkspaceLimit How many workspaces an account may hold that are not deleted, disabled ones included. Lowering it disables no workspace; the account only cannot make more.
+type WorkspaceLimit = int
+
+// WorkspaceLimitUpdate defines model for WorkspaceLimitUpdate.
+type WorkspaceLimitUpdate struct {
+	// MaxWorkspaces The limit to set at this level; absent clears it, so the level above applies.
+	MaxWorkspaces *WorkspaceLimit `json:"max_workspaces,omitempty"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// WorkspaceLimitView defines model for WorkspaceLimitView.
+type WorkspaceLimitView struct {
+	// Effective What applies here, the limit set here over the level above, down to the default in code, 50.
+	Effective WorkspaceLimit `json:"effective"`
+
+	// MaxWorkspaces The limit set at this level; absent when it sets none and the level above applies.
+	MaxWorkspaces *WorkspaceLimit `json:"max_workspaces,omitempty"`
+}
+
 // Cursor defines model for Cursor.
 type Cursor = string
 
@@ -5823,6 +5847,12 @@ type SetAccountSuspensionParams struct {
 
 // SetAccountTierParams defines parameters for SetAccountTier.
 type SetAccountTierParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// UpdateAccountWorkspaceLimitParams defines parameters for UpdateAccountWorkspaceLimit.
+type UpdateAccountWorkspaceLimitParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -6471,6 +6501,12 @@ type SetPaymentSettingsParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// UpdateSiteWorkspaceLimitParams defines parameters for UpdateSiteWorkspaceLimit.
+type UpdateSiteWorkspaceLimitParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // CreateSourceClassParams defines parameters for CreateSourceClass.
 type CreateSourceClassParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -6639,6 +6675,9 @@ type SetAccountSuspensionJSONRequestBody = AccountSuspension
 
 // SetAccountTierJSONRequestBody defines body for SetAccountTier for application/json ContentType.
 type SetAccountTierJSONRequestBody = AccountTierChange
+
+// UpdateAccountWorkspaceLimitJSONRequestBody defines body for UpdateAccountWorkspaceLimit for application/json ContentType.
+type UpdateAccountWorkspaceLimitJSONRequestBody = WorkspaceLimitUpdate
 
 // RotateAlertWebhookSecretJSONRequestBody defines body for RotateAlertWebhookSecret for application/json ContentType.
 type RotateAlertWebhookSecretJSONRequestBody = AlertWebhookSecretRequest
@@ -6861,6 +6900,9 @@ type SetSystemSettingsJSONRequestBody = SystemSettingsUpdate
 
 // SetPaymentSettingsJSONRequestBody defines body for SetPaymentSettings for application/json ContentType.
 type SetPaymentSettingsJSONRequestBody = PaymentSettingsUpdate
+
+// UpdateSiteWorkspaceLimitJSONRequestBody defines body for UpdateSiteWorkspaceLimit for application/json ContentType.
+type UpdateSiteWorkspaceLimitJSONRequestBody = WorkspaceLimitUpdate
 
 // CreateSourceClassJSONRequestBody defines body for CreateSourceClass for application/json ContentType.
 type CreateSourceClassJSONRequestBody = SourceClassCreate

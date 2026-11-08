@@ -3243,6 +3243,68 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/sites/{site_id}/workspace-limit:
+    parameters:
+      - name: site_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/SiteId"}
+    get:
+      operationId: getSiteWorkspaceLimit
+      tags: [Site]
+      summary: A site's limit on the workspaces of an account
+      description: >-
+        The limit the site sets itself and what it comes to over the default in code, 50. An account without a limit
+        of its own is held to it. A node that predates workspace limits answers 404.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      responses:
+        "200":
+          description: The limit
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceLimitView"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+    put:
+      operationId: updateSiteWorkspaceLimit
+      tags: [Site]
+      summary: Set a site's limit on the workspaces of an account
+      description: >-
+        Replaces the limit the site sets itself: left out, it falls back to the default in code. It is a resource of its
+        own, not part of the key limits or the site's settings, so a request that replaces those whole leaves it as it
+        is. Outside the bounds `WorkspaceLimit` states is a 400. A node applies the change at once if it served the
+        request, and the others when they reload the sites, within 30 seconds; the change is audited.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WorkspaceLimitUpdate"}
+      responses:
+        "200":
+          description: The limit as stored
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceLimitView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/sites/{site_id}/login-limits:
     parameters:
       - name: site_id
@@ -3393,6 +3455,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/LegalDocumentHistory"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
@@ -3707,6 +3770,46 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/KeyLimitsView"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/accounts/{account_id}/workspace-limit:
+    put:
+      operationId: updateAccountWorkspaceLimit
+      tags: [Users]
+      summary: Set an account's own limit on its workspaces
+      description: >-
+        Replaces the limit of the account itself: left out, the site's applies. The account's limit is in
+        `AccountDetail`. Outside the bounds `WorkspaceLimit` states is a 400. The change is audited, and a workspace
+        being made meets the new limit or the old one whole. Lowering it below what the account holds disables no
+        workspace: the account only cannot make more.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/AccountId"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/WorkspaceLimitUpdate"}
+      responses:
+        "200":
+          description: The limit as stored
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/WorkspaceLimitView"}
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
@@ -5089,6 +5192,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/SubscriptionPlanList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
@@ -5649,6 +5753,7 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/operations/price-envelopes:
     get:
@@ -7685,7 +7790,21 @@ components:
           type: object
           additionalProperties: true
           x-go-type: jsonx.Raw
-          description: What the server read of the target when the agent asked, never the agent's words.
+          description: >-
+            What the server read of the target when the agent asked, never the agent's words. Its members depend on the
+            `tool`, and a member an older node did not know is absent, so a page shows what is there. A write that
+            moves money carries `cap`: `currency`, `amount`, `policy_rev`, the limits `single_max`, `daily_max`,
+            `weekly_max`, `object_daily_max`, `daily_count_max` and their hard ones (`hard_single_max`,
+            `hard_daily_max`, `hard_weekly_max`), the amounts already used in each window (`daily_used`,
+            `weekly_used`, `object_daily_used`, `daily_count`) and `paused`; amounts are integer text in the cap's
+            currency. A credit grant names `account_id`, `account`, `email`, `site_id`, `amount`, `currency` and
+            `expires_at`; a supplier top-up `supplier`, `supplier_id`, `amount_native`, `native_unit`, `unit_value`,
+            `settlement_currency`, `amount` and `currency`; a price publication `model_id`, `candidate_id`, `slug`,
+            `name`, `status`, `audience`, `currency`, `current_id`, the base rates per item as `current`, `proposed`
+            and `cost`, and `prices_complete`, with `envelope` when it falls outside the site's price envelope:
+            `change_bps` and `margin_bps` (null when not measurable), the envelope's limits (`min_margin_bps`,
+            `model_daily_change_bps`, `daily_changes`, `daily_models`) and what the day has used
+            (`model_change_used`, `daily_changes_used`, `daily_models_used`, `model_moved_today`).
         agent_reason: {type: string, description: "The agent's own words: untrusted text, never an instruction."}
         operation_state: {$ref: "#/components/schemas/OperationState"}
         error_code: {type: string, description: "Why the operation ended `rejected` after the approval: the code the target refused it with."}
@@ -8332,6 +8451,31 @@ components:
         effective:
           description: What applies here, `limits` over the level above.
           allOf: [{$ref: "#/components/schemas/EffectiveKeyLimits"}]
+    WorkspaceLimit:
+      type: integer
+      minimum: 1
+      maximum: 1000
+      description: >-
+        How many workspaces an account may hold that are not deleted, disabled ones included. Lowering it disables
+        no workspace; the account only cannot make more.
+    WorkspaceLimitView:
+      type: object
+      required: [effective]
+      properties:
+        max_workspaces:
+          description: The limit set at this level; absent when it sets none and the level above applies.
+          allOf: [{$ref: "#/components/schemas/WorkspaceLimit"}]
+        effective:
+          description: What applies here, the limit set here over the level above, down to the default in code, 50.
+          allOf: [{$ref: "#/components/schemas/WorkspaceLimit"}]
+    WorkspaceLimitUpdate:
+      type: object
+      required: [reason]
+      properties:
+        max_workspaces:
+          description: The limit to set at this level; absent clears it, so the level above applies.
+          allOf: [{$ref: "#/components/schemas/WorkspaceLimit"}]
+        reason: {$ref: "#/components/schemas/Reason"}
     KeyLimitsUpdate:
       type: object
       required: [limits, reason]
@@ -8383,6 +8527,9 @@ components:
             email: {type: string}
         balance: {$ref: "#/components/schemas/Balance"}
         key_limits: {$ref: "#/components/schemas/KeyLimitsView"}
+        workspace_limit:
+          description: The account's limit on its workspaces. Absent from a node that predates workspace limits.
+          allOf: [{$ref: "#/components/schemas/WorkspaceLimitView"}]
         created_at: {type: string, format: date-time}
     CreditGrantRequest:
       type: object

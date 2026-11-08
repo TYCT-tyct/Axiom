@@ -28,7 +28,7 @@ func tryKey(t *testing.T, db *pg.DB, s *accounts.Service, name string, workspace
 	t.Helper()
 	return db.Tx(t.Context(), pg.NewScope(false, nil, []uuid.UUID{a1}), func(tx pg.Tx) error {
 		_, err := s.CreateKey(t.Context(), tx, system, accounts.KeyRequest{
-			Site: accounts.SiteID(s1), Account: accounts.AccountID(a1), Workspace: workspace,
+			Site: accounts.SiteID(s1), Account: accounts.AccountID(a1), Workspace: &workspace,
 			CreatedBy: accounts.UserID(u1), Name: name,
 		})
 		return err
