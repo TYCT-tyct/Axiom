@@ -307,6 +307,36 @@ paths:
         '404': {$ref: '#/components/responses/OutOfScope'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/audit/digests:
+    get:
+      operationId: auditDigestsList
+      summary: Daily audit digests
+      description: >-
+        The owner's digest of each UTC day, newest first, made once every transaction that could write into the day has
+        ended, and kept as it was made: the operations proposed that day by tool and where each is now, every cap
+        policy's day against its daily limits, the approvals asked that day by state, the calls refused that day by
+        error code, and how far the audit chain had got when it was made. The same headline reaches the owner's channels
+        as the alert `operations.audit_digest`, keyed by the day.
+      tags: [Audit]
+      security: [{credential: []}]
+      x-axiom-permission: audit.view
+      x-axiom-scope: platform
+      x-mcp-name: audit_digests
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of digests
+          content: {application/json: {schema: {$ref: '#/components/schemas/AuditDigestList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
   /api/operations/v1/audit/{entry_id}:
     get:
       operationId: auditGet
@@ -1977,6 +2007,80 @@ components:
             writes it, so they are not typed here (one schema per action would be a second registry of every change
             every module makes); show it as a tree of labelled values and decide nothing from it. Large integers are
             written as they were, so read it with a parser that keeps them exact.
+    AuditDigestList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/AuditDigest'}}
+        next_cursor: {type: string}
+    AuditDigest:
+      type: object
+      additionalProperties: false
+      required: [day, made_at, operations, money, approvals, refused, chain]
+      properties:
+        day: {type: string, format: date, description: The UTC day.}
+        made_at: {type: string, format: date-time}
+        operations:
+          type: array
+          description: The agent's operations proposed that day, by tool and the state each is in now.
+          items:
+            type: object
+            additionalProperties: false
+            required: [tool, state, count]
+            properties:
+              tool: {type: string}
+              state: {type: string}
+              count: {type: integer, format: int32, minimum: 1}
+        money:
+          type: array
+          description: >-
+            Every cap policy with what its category held for that UTC day when the digest was made, against the
+            autonomous and hard daily limits.
+          items:
+            type: object
+            additionalProperties: false
+            required: [scope, category, currency, reserved, committed, count, daily_max, hard_daily_max, daily_count_max]
+            properties:
+              scope: {type: string, description: "`platform` or a site's ID."}
+              category: {$ref: '#/components/schemas/OperationsCapCategory'}
+              currency: {type: string, pattern: '^[A-Z]{3}$'}
+              reserved: {$ref: '#/components/schemas/OperationsCapAmount'}
+              committed: {$ref: '#/components/schemas/OperationsCapAmount'}
+              count: {type: integer, format: int32, minimum: 0}
+              daily_max: {$ref: '#/components/schemas/OperationsCapAmount'}
+              hard_daily_max: {$ref: '#/components/schemas/OperationsCapAmount'}
+              daily_count_max: {type: integer, format: int32, minimum: 0}
+        approvals:
+          type: array
+          description: The approvals asked that day, by the state each is in now.
+          items:
+            type: object
+            additionalProperties: false
+            required: [state, count]
+            properties:
+              state: {$ref: '#/components/schemas/OperationsApprovalState'}
+              count: {type: integer, format: int32, minimum: 1}
+        refused:
+          type: array
+          description: The operations calls refused that day (HTTP 4xx), dated by when the database logged them, by error code; empty for a refusal without one.
+          items:
+            type: object
+            additionalProperties: false
+            required: [code, count]
+            properties:
+              code: {type: string}
+              count: {type: integer, format: int32, minimum: 1}
+        chain:
+          type: object
+          additionalProperties: false
+          required: [head_seq, faults]
+          description: The audit hash chain when the digest was made.
+          properties:
+            head_seq: {type: integer, format: int64, minimum: 0, description: The last link; 0 before the first.}
+            head_at: {type: string, format: date-time, description: The time of the last link's entry.}
+            faults: {type: integer, format: int64, minimum: 0, description: Faults found; any stops the chaining until the owner acts.}
+            checked_at: {type: string, format: date-time, description: 'When a check of the whole chain last finished; while a round runs, when the one before it finished.'}
     AuditEntryList:
       type: object
       additionalProperties: false

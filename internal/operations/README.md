@@ -41,7 +41,7 @@ func LoggedCalls(ctx context.Context, tx pg.Tx, credential, after uuid.UUID, pag
 ```
 
 - **谁调**：`cmd/axiom` 的运营接口守卫（`agentGuard`）在每个认出凭证的请求结束时调 `RecordCall`，写进去才把缓存的答案发出；`operationLogList` 用 `LoggedCalls` 让凭证读自己的记录。本模块不认凭证，`Credential` 只是 ID。
-- **表**：`migrations/00003_operation_log.sql` 的 `operations.operation_log`：ID（UUIDv7）、凭证、运行 ID、工具名（`x-mcp-name`）、理由（agent 写的，不可信；可以为空：缺理由被拒的请求也记）、输入（规范 JSON，最多 8 KiB）、HTTP 状态、错误码、请求 ID、开始和结束时间，以及写操作建出或按键找到的运营操作（`operation_id`，迁移 00004 加的可空列；旧节点不写写操作，留空）。索引 `(credential_id, id DESC)` 供按凭证从新到旧分页。平台数据：只有平台范围能读写；只插入，没有 UPDATE 和 DELETE 权限。
+- **表**：`migrations/00003_operation_log.sql` 的 `operations.operation_log`：ID（UUIDv7）、凭证、运行 ID、工具名（`x-mcp-name`）、理由（agent 写的，不可信；可以为空：缺理由被拒的请求也记）、输入（规范 JSON，最多 8 KiB）、HTTP 状态、错误码、请求 ID、开始和结束时间、记下的时刻（`logged_at`，迁移 00015 加的列，默认是记录事务开始的 `now()`，即数据库的时钟，摘要按它归日；之前的行取结束时间），以及写操作建出或按键找到的运营操作（`operation_id`，迁移 00004 加的可空列；旧节点不写写操作，留空）。索引 `(credential_id, id DESC)` 供按凭证从新到旧分页。平台数据：只有平台范围能读写；只插入，没有 UPDATE 和 DELETE 权限。
 - **输入**：读是路径和查询参数（不含理由），写还有请求体除 `reason` 以外的成员（`body`），理由取自请求体。`RecordCall` 用 `jsonx.MarshalCanonical` 编码，超过 8 KiB 改记 `{"truncated":true,"bytes":n}`，表的 CHECK 再兜一层。列是 `json` 而不是 `jsonb`：`json` 原样保存文本，CHECK 量的字节和 Go 量的相同；`jsonb` 输出时在冒号和逗号后加空格，会让刚好 8 KiB 以内的输入在库里超限、整次调用答 503。
 
 ## 运营操作与审批
@@ -190,6 +190,10 @@ func PriceUsages(ctx, tx) ([]PriceUsage, error)
 func ChainAudit(ctx context.Context, db *pg.DB, scope pg.Scope) (int, error)       // 一轮接链，回接了几条
 func VerifyAuditChain(ctx context.Context, db *pg.DB, scope pg.Scope) (bool, error) // 核对整条链，回链是否已停
 func RegisterAuditChain(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog.Logger) error
+
+func MakeAuditDigests(ctx context.Context, db *pg.DB, scope pg.Scope) (int, error)             // 补做已结束的日子，回做了几份
+func AuditDigests(ctx context.Context, tx pg.Tx, before *time.Time, n int) ([]AuditDigest, bool, error)
+func RegisterAuditDigest(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog.Logger) error
 ```
 
 `chain.go`、`migrations/00012_audit_chain.sql`。规则见[运营的「审计」](../../docs/domains/operations.md#审计)的「防篡改现在的实现」。
@@ -198,7 +202,9 @@ func RegisterAuditChain(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog
 - **一轮**：每个事务先 `LockAuditChain`（事务级咨询锁），有 `audit_chain_faults` 就什么都不做。第一个事务先用 `verifyBatch` 核对链头往回 `chainWindow`（1000）条，再接最多 `chainBatch`（500）条：`AuditChainFrontier` 单独一条语句读出边界（60 秒前和本库每个开着的事务的 `xact_start` 取早的），之后才用 `audit.Since` 读边界之前、链头之后的条目，所以在两条语句之间提交的事务一定在读到的快照里。满 500 条就开下一个事务接着接；最后在一个事务里按还没接的最早一条发或恢复 `operations.audit_chain_lag`。
 - **哈希**：`linkHash` 是 SHA-256(前一条的哈希 ‖ RFC 8785 编码的字段数组)，字段和顺序见领域文档；`TestLinkHash` 的期望值是在 Go 之外另行算出的，改编码就是改链的格式，要换掉第一个元素 `axiom.audit.v1`。
 - **核对**：`verifyBatch` 读 `from - 1` 那一条（取它的哈希和在日志里的位置）和其后最多 500 条，再用 `audit.Since` 从那个位置读同样多的条目，逐个对位：前一条的哈希不对是 `broken`，对位的条目 ID 不同时，条目排在链的后面是 `missing`、排在前面是 `late`，ID 相同但重算的哈希不同是 `mismatch`，哈希相同而链上的 `at` 和条目的不同也是 `broken`（`extend` 按链头的 `at` 往后读，只改它就能让接链停下）。前一条不在了也是 `broken`。`haltAt` 在同一个事务里写故障、审计 `audit_chain.halt` 和 critical 信号 `operations.audit_chain_fault`。
-- **整条核对**：`VerifyAuditChain` 每次最多 `chainCheckBatches`（20）个事务，每个事务是一步 `checkStep`：没有进行中的一轮、且上一轮开始已满一天（`AuditChainCheck` 的 `due`）时，`startCheck` 以当时的链头为目标开新的一轮；否则 `advanceCheck` 用 `verifyBatch` 核对 `next_seq` 起的一批，并在同一个事务里存下新的 `next_seq`，过了目标就记 `finished_at`、恢复 `operations.audit_chain_check_overdue`。一次运行的第一步发现这一轮开始已满一天还没完，就发这个 warning。所以被期限或数据库失败打断的一次只丢掉没提交的那一批。
+- **整条核对**：`VerifyAuditChain` 每次最多 `chainCheckBatches`（20）个事务，每个事务是一步 `checkStep`：没有进行中的一轮、且上一轮开始已满一天（`AuditChainCheck` 的 `due`）时，`startCheck` 以当时的链头为目标开新的一轮；否则 `advanceCheck` 用 `verifyBatch` 核对 `next_seq` 起的一批，并在同一个事务里存下新的 `next_seq`，过了目标就记 `finished_at`（开新的一轮时把它移进 `last_finished_at`，摘要读两者中有的那个）、恢复 `operations.audit_chain_check_overdue`。一次运行的第一步发现这一轮开始已满一天还没完，就发这个 warning。所以被期限或数据库失败打断的一次只丢掉没提交的那一批。
+
+- **每天的摘要**：`digest.go`。`RegisterAuditDigest` 每分钟排一次 `operations.audit_digest`；`MakeAuditDigests` 一天一天地做：`nextDigestDay` 在一个事务里读时钟（`digestClock`：生产是 `databaseClock`，数据库的 `now()` 和 `AuditChainFrontier`；测试固定）和下一天（`AuditDigestNext`：上一份的后一天，没有时是时钟所在那天的前一天），这一天结束得早于边界才往下做；`digestOf` 在 `ReadTx`（可重复读的只读事务）里读那一天的运营操作（按工具和现在的状态）、审批（按现在的状态）、被拒的调用（`operation_log` 里 4xx 的，按错误码；按 `logged_at` 归日：ID 是节点的时钟，慢了的节点会把调用记进已经做完的那一天）、每条上限策略那一天的计数器和日上限，以及现在的链头、故障数和整条核对最后完成的时间，`made_at` 取时钟的 `now`；`saveDigest` 以 `AuditDigest` 的 JSON 插进 `audit_digests`，插进去了才在同一个事务里发 info 信号 `operations.audit_digest`（键是日期，字段是各项合计、链头和故障数），从不发恢复：告警模块把它当作通知，告知之后自己关闭。插入是 0 行（别的节点先做了）就停下，每次最多 `digestDays`（7）天。边界先在自己的事务里读，再开快照，所以边界看到已结束的事务都在快照里。
 
 ## 表
 
@@ -217,8 +223,13 @@ func RegisterAuditChain(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog
 
 - `operations.audit_chain(seq, entry_id, at, prev_hash, hash, chained_at)`，主键 `seq`，`entry_id` 唯一，两个哈希都是 32 字节；不对 `platform.audit_log` 建外键，条目被删后链还在、核对才找得到。触发器 `audit_chain_follows` 只收接在链头之后的一条（`seq = 1` 且前面是 32 个零字节，或 `seq - 1` 存在且它的哈希等于 `prev_hash`）。`axiom_app` 只有 SELECT 和数据列的 INSERT，`chained_at` 由数据库填。
 - `operations.audit_chain_faults(id, found_at, kind, seq, entry_id)`，`kind` 是 `late`、`missing`、`mismatch`、`broken` 之一；`axiom_app` 只有 SELECT 和 `kind`、`seq`、`entry_id` 的 INSERT。
-- `operations.audit_chain_checks(singleton, target_seq, next_seq, started_at, finished_at)`，只有一行，第一轮之前没有；`axiom_app` 能读、插入目标和位置、更新四个值。
+- `operations.audit_chain_checks(singleton, target_seq, next_seq, started_at, finished_at, last_finished_at)`，只有一行，第一轮之前没有；`axiom_app` 能读、插入目标和位置、更新后五个值（`last_finished_at` 由迁移 00015 加）。
 - 两张表只有平台范围能读写。
+
+`migrations/00015_audit_digests.sql`：
+
+- `operations.audit_digests(day, body, created_at)`，主键 `day`（UTC 日期），`body` 是 `AuditDigest` 的 JSON，不限大小（资金部分随上限策略的条数增长）；`axiom_app` 只有 SELECT 和 `day`、`body` 的 INSERT，做出的摘要改不了也删不掉；只有平台范围能读写。
+- 同一迁移给 `operation_log` 加 `logged_at` 和 4xx 的部分索引 `operation_log_refused(logged_at)`，给 `operations(created_at)`、`approvals(requested_at)` 加索引，给 `audit_chain_checks` 加 `last_finished_at`：摘要只读那一天的行，历史多长都一样。
 
 ## 不变量
 
@@ -235,6 +246,7 @@ func RegisterAuditChain(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog
 | 金额不经过浮点，超出 64 位的中间结果不溢出 | 表和查询用 `numeric(38,0)` 文本，折算用 `big.Int`；目标本身可超过 int64，写入只受 38 位上限约束；超宽的结果被 `countTarget` 拒绝而不是截断 |
 | 币种不符的金额目标不参与对照 | `addExpected` 跳过；`Expected` 的金额只按站点当前币种呈现 |
 | 审计链按 `(at, id)` 依次覆盖链头之前的每条审计条目，不分叉、不跳号 | 主键 `seq` 和触发器 `audit_chain_follows`；只接 `AuditChainFrontier` 之前的条目，比所有开着的事务都早的条目不会再有更早的提交；核对时对位比较，链头之前多出、少了或改了的条目都停下接链（`TestAuditChainHalts`、`TestAuditChainWaitsForOpenTransactions`） |
+| 每个 UTC 日恰好一份摘要、一个事件，内容来自这一天的事务都提交之后的一个快照 | `audit_digests` 的主键是日期，`ON CONFLICT DO NOTHING` 插进去了才在同一事务发以日期为键的信号；从上一份的后一天往后做；等时钟的边界（生产是 `AuditChainFrontier`）过了这一天；`ReadTx` 是可重复读（`TestAuditDigest`、`TestAuditDigestDays`；通知的生命周期见领域文档「每天的摘要现在的实现」的不变量，告警这一侧由 observability 的 `TestDigestNotificationLifecycle` 覆盖） |
 | 未记录的成功改动不能留下 | `audit.Record` 和写入同一事务；`TestAdminOperationsTargets` 读审计的 `before`/`after`，包括旧页面写入时后四项的现值 |
 
 ## 测试
@@ -256,6 +268,8 @@ func RegisterAuditChain(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog
 - `cmd/axiom/operations_prices_test.go`（真实 HTTP 和数据库，调用世界里带成本的端点）：`TestOperationsPricePublish` 覆盖没有包络 422、试运行不发布、包络内以 agent 的名义发布并计数、重放、旧的当前版本 409 `stale_revision`、已发布的提案 409、`caps_get` 的包络用量；`TestOperationsPriceApproval` 覆盖超出包络转负责人、负责人看到包络、批准后发布并计数、提案在批准前被换掉以 `stale_revision` 结束；`TestOperationsPricePublishRetryRace` 用持有定价政策行的事务覆盖同一个键的两个并发请求答同一个操作、只发布并计数一次；`TestOperationsPriceRefusals` 覆盖没有 `operations.money` 的 403、包络的旧版本 409 和越界 400、列表和审计。`internal/billing` 的 `TestPriceMove` 覆盖共用售价、没有当前版本、没有成本、端点各自的变动和毛利率、端点现在没有价、端点价换回共用价、上下文分档口径改变；`internal/catalog` 的 `TestLargestChangeAndSmallestMargin` 覆盖两个量在各档、增删价格、零价和亏本上的取值。
 
 - `chain_test.go`（真实 PostgreSQL）：`TestAuditChainLinksCommittedEntries` 覆盖按开始时刻的顺序接链、没过 60 秒的不接、不重复接、整条链核对通过，以及表只收接在链头之后的一条、应用改不了链也删不了故障；`TestAuditChainWaitsForOpenTransactions` 用持有一个写了审计的事务覆盖后提交的条目不越过它；`TestAuditChainHalts` 表驱动覆盖插到链头之前、删掉、改掉一条、改掉一条链和把链头的时刻改到将来各自被下一轮发现，故障、审计和告警各只有一次，之后不再接链；`TestAuditChainChecksBeyondTheWindow` 覆盖 1501 条分四个事务接完，改动第 501 条时每轮的核对看不到；整条核对每次两个事务时，第一次开一轮并核对到 500，取消的一次不动位置，下一次从 501 接着做并发现它；`TestAuditChainCheckRounds` 覆盖一天之内不开新的一轮、满一天开、开始满一天还没完时发逾期告警、核对完恢复；`TestAuditChainLag` 覆盖落后告警和赶上后的恢复。`chain_hash_test.go` 的 `TestLinkHash` 固定哈希的编码；`chain_fail_test.go` 的 `TestChainStepsFail` 覆盖每一步把数据库失败带回、只读事务里不写链和故障，`TestAuditChainWork` 覆盖接链和整条核对失败时只记日志。
+- `digest_test.go`（真实 PostgreSQL，时钟固定在 2026-11-08，不看墙钟）：`TestAuditDigest` 覆盖只算 11-07 的运营操作、审批、4xx 被拒的调用（前后两天的不算、2xx 和 5xx 不算）、上限策略那一天的计数器和链的状态，`made_at` 是时钟的时刻，摘要只做一次、信号只发一次、键是日期；`TestAuditDigestDatesCallsByTheDatabase` 覆盖调用按数据库的 `logged_at` 归日（节点时钟慢 90 秒、昨天的摘要做完后才记下的拒绝算进今天）；`TestAuditDigestCheckedAt` 覆盖新一轮在跑时 `checked_at` 是上一轮完成的时刻；`TestAuditDigestPages` 覆盖从新到旧翻页；`TestAuditDigestDays` 表驱动覆盖第一次只做昨天、午夜前开始午夜后提交的写入（边界没过时不做，过了之后算进去）、任务停了几天后按顺序补做每一天、超过 64 KiB 的摘要照常保存且后面的日子接着做、两个节点同时做只有一份和一个信号。`digest_fail_test.go`：`TestDigestStepsFail` 覆盖每一步把数据库失败交给调用方，`TestDigestWork` 覆盖任务失败时只记日志、不重试。
+- `cmd/axiom/operations_audit_test.go` 的 `TestOperationsAuditDigests`（真实 HTTP 和数据库）覆盖 `audit_digests` 的翻页、不是日期的游标 400 和只有站点范围的凭证 404。
 - `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖刚好 8192 字节的输入原样保存、多一个字节只记大小、站点范围读不到。
 
 - `targets_test.go`：`TestExpectedFromProratesEachMonthByDuration` 表驱动覆盖整月、部分月、跨月、闰年、空窗口、金额币种不符、四种指标的半入和带毫秒的跨月折算；`TestExpectedFromRefusesACountWiderThanItsType` 覆盖超宽；`TestTargetsCheck` 覆盖月份、负数、非法金额、币种和 38 位上限；`TestTargetsCheckCommercial` 覆盖付费用户、月流水和两个比率的范围；`TestExpectedFromAppliesRatesToTheEndMonth` 覆盖比率的结束月规则和月首边界；`TestExpectedFromProratesCommercialCountsAndMoney` 覆盖后两项数量/金额的折算。
