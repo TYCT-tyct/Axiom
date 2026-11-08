@@ -129,6 +129,23 @@ export default {
     unknown: "A reason this page cannot name; see the raw data below.",
     unavailable: "The server that asked did not record why; judge it from the limits and the raw data below.",
   },
+  rule: {
+    title: "The pricing rule asked for",
+    target: "Prices",
+    audience: "For",
+    method: "Method",
+    enabled: "Rule",
+    on: "On",
+    off: "Off",
+    rev: "Changes the rule as of revision",
+    moves: "Sale prices it moves",
+    movesIntro:
+      "What buyers would pay differently, as the server measured it when the agent asked: each change of a model's price once, with its move, its margin over cost, and the model's change so far today. Approving it makes the change again and counts what it moves then.",
+    day: "Today before it: {{changes}} of {{changesMax}} price changes, {{models}} of {{modelsMax}} models repriced.",
+    truncated: "It moves {{total}} prices; the server kept the first {{shown}}.",
+    none: "It moves no published price.",
+    move: "Change {{change}} · margin {{margin}} · this model's change today before it {{used}}",
+  },
   request: {
     title: "What is asked",
     amount: "Amount",

@@ -4406,7 +4406,7 @@ type OperationsPriceEnvelopeUpdate struct {
 	Rev int64 `json:"rev"`
 }
 
-// OperationsPriceMove One published sale price a pricing rule change moved: the model and the audience it is sold to, how far it moved and the margin it keeps, in basis points (`change_bps` null when no share measures the move, as for a first price or one taken away; `margin_bps` null when the cost is unknown), and what the model's day held before it.
+// OperationsPriceMove One change in what buyers pay for a model that a pricing rule change made: the model and the first buyer seen paying it (a tier, or an account with a price of its own), how far it moved and the margin it keeps, in basis points (`change_bps` null when no share measures the move, as for a first price or one taken away; `margin_bps` null when the cost is unknown), and what the model's day held before it.
 type OperationsPriceMove struct {
 	// Audience Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. Account and tier IDs must belong to this site.
 	Audience        *PricingAudience `json:"audience,omitempty"`

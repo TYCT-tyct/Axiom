@@ -123,6 +123,23 @@ export default {
     unknown: "一条这个页面叫不出名字的原因，请看下面的原始数据。",
     unavailable: "提出它的服务端没有记下原因，请对照下面的上限和原始数据判断。",
   },
+  rule: {
+    title: "要改的定价规则",
+    target: "定价对象",
+    audience: "适用于",
+    method: "方法",
+    enabled: "规则",
+    on: "启用",
+    off: "停用",
+    rev: "基于规则版本",
+    moves: "会变动的售价",
+    movesIntro:
+      "agent 提出时服务端量出的、买家要付的价会怎么变：一个模型的每种变化记一笔，列出变动、相对成本的毛利率和这个模型今天已有的变动。批准时会重新改一遍，并计入那时的变动。",
+    day: "此前今天已用：改价 {{changes}}/{{changesMax}} 笔，改价模型 {{models}}/{{modelsMax}} 个。",
+    truncated: "共变动 {{total}} 个售价，服务端只保留了前 {{shown}} 个。",
+    none: "不变动任何已发布的售价。",
+    move: "变动 {{change}} · 毛利率 {{margin}} · 此前这个模型今天已变动 {{used}}",
+  },
   request: {
     title: "请求内容",
     amount: "金额",

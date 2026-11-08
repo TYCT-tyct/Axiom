@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
@@ -51,8 +53,11 @@ type ruleMoves struct {
 	Rev        int64  `json:"rev"`
 	MovesTotal int    `json:"moves_total"`
 	Moves      []struct {
-		ModelID   string `json:"model_id"`
-		Slug      string `json:"slug"`
+		ModelID  string `json:"model_id"`
+		Slug     string `json:"slug"`
+		Audience struct {
+			Kind string `json:"kind"`
+		} `json:"audience"`
 		ChangeBps *int64 `json:"change_bps"`
 		MarginBps *int64 `json:"margin_bps"`
 	} `json:"moves"`
@@ -167,6 +172,40 @@ func TestOperationsPricingRuleCreate(t *testing.T) {
 		t.Fatalf("the rule: %s: %s", got, rec.Body)
 	}
 	f.expectMovedBy667(result, "pricing_rule.create")
+}
+
+// TestOperationsPricingRuleOutranks: a rule the agent adds for one model and everyone wins over an account's own rule
+// for every model (a more specific target), so that account's price moves even though everyone else's does not: the
+// account paid 1.4 times the reference and now pays 1.5, a move of 1/14 (714.29 basis points, counted as 715).
+func TestOperationsPricingRuleOutranks(t *testing.T) {
+	t.Parallel()
+	f := newPriceFixture(t)
+	expectAdmin(t, "the envelope", f.setEnvelope(priceEnvelope, "0"), http.StatusOK, "")
+	account := accounts.AccountID(uuid.MustParse(f.text(`SELECT account_id::text FROM accounts.users WHERE email = 'rich@example.com'`)))
+	own := strings.Replace(multiplied(`{"kind":"all"}`, "1.4"), `"audience":{"kind":"all"}`, `"audience":{"kind":"account","id":"`+account.TypeID()+`"}`, 1)
+	expectAdmin(t, "the account's own rule", f.change(f.s, http.MethodPost, "/pricing/rules", `{"rule":`+own+`,"reason":"a discount"}`, newKey()), http.StatusCreated, "")
+	f.refresh()
+	model := f.w.models[pricedModel].String()
+	rec := f.agentSend(f.token, http.MethodPost, "/pricing/rules", `{"rule":`+multiplied(`{"kind":"model","id":"`+model+`"}`, "1.5")+`,"reason":"r"}`, idempotent(newKey()))
+	op := agentOperation(t, rec)
+	var moved []string
+	for _, m := range movesOf(t, op).Moves {
+		if m.ModelID == model && m.ChangeBps != nil {
+			moved = append(moved, m.Audience.Kind+":"+strconv.FormatInt(*m.ChangeBps, 10))
+		}
+	}
+	if got := fmt.Sprint(rec.Code, " ", op.State, " ", moved); got != "200 succeeded [tier:0 account:715]" {
+		t.Errorf("the moves: %s: %s", got, rec.Body)
+	}
+}
+
+// refresh lets the publisher propose and publish from the rules as they are, as its job would.
+func (f priceFixture) refresh() {
+	f.t.Helper()
+	site, _ := f.svc.MainSite()
+	if err := f.w.db.Tx(f.t.Context(), pg.PlatformScope(), func(tx pg.Tx) error { return refreshSalePrices(f.t.Context(), tx, f.w.site, site.Currency) }); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 // TestOperationsPricingRuleApproval: a change whose moves are over the envelope together is taken back and waits for
@@ -284,51 +323,99 @@ func TestOperationsPricingRuleRetryRace(t *testing.T) {
 	}
 }
 
-// TestSaleMoves: a rule change moves the prices sold at another version than before, each measured from the version
-// before: a price sold on at the same version, or still unsold, does not move; a first price has no measured move but a
-// margin; a price taken away, or stopped as blocked, has neither.
+// TestSaleMoves: a rule change moves what a buyer pays, as billing selects it from the audience layers, each distinct
+// change of a model counted once however many buyers it reaches. A layer republished moves every buyer it serves, once.
+// A new model-specific layer for everyone wins over an account's own cheaper layer for every model, so that account
+// pays the new price: 0.5 to 1.5 is a 200% move, while everyone else's price does not move. An account layer that now
+// matches but is blocked stops the account's sales: neither a move nor a margin. A first price has a margin but no
+// measured move, and a model whose layers did not change does not move.
 func TestSaleMoves(t *testing.T) {
 	t.Parallel()
-	site := uuid.NewV7()
 	schedule := func(input string) jsonx.Raw {
 		return jsonx.Raw(`{"v":1,"currency":"USD","rates":{"input":"` + input + `"}}`)
 	}
-	sold := func(model catalog.ModelID, status, input string) billing.Publication {
-		version := uuid.NewV7()
-		p := billing.Publication{Model: model, Audience: billing.Selector{Kind: "all"}, Status: status, Cost: schedule("0.000001")}
-		p.Current, p.Schedule, p.CurrentSchedule = &version, schedule(input), schedule(input)
-		return p
+	tier, account := accounts.TierID(uuid.NewV7()), accounts.AccountID(uuid.NewV7())
+	buyers := []buyer{
+		{billing.Audience{Tier: tier}, billing.Selector{Kind: "tier", ID: tier.TypeID()}},
+		{billing.Audience{Account: account, Tier: tier}, billing.Selector{Kind: "account", ID: account.TypeID()}},
 	}
-	steady, repriced, first, gone, blocked, unsold := catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7()),
-		catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7())
-	kept := sold(steady, "published", "0.000002")
-	pendingAfter := kept
-	pendingAfter.Status = "pending"
-	stopped := sold(blocked, "published", "0.000002")
-	stoppedAfter := stopped
-	stoppedAfter.Status = "blocked"
-	before := []billing.Publication{kept, sold(repriced, "published", "0.000002"), sold(gone, "published", "0.000002"), stopped, {Model: unsold, Status: "unpriced"}}
-	after := []billing.Publication{pendingAfter, sold(repriced, "published", "0.0000025"), sold(first, "published", "0.000004"), stoppedAfter, {Model: unsold, Status: "unpriced"}}
-	moves, err := saleMoves(site, before, after)
+	everyone, theAccount := billing.Audience{}, billing.Audience{Account: account}
+	view := func(models map[catalog.ModelID][]layer) priceView { return layeredView(models, schedule) }
+	repriced, preferred, blocked, first, steady := catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7()),
+		catalog.ModelID(uuid.NewV7()), catalog.ModelID(uuid.NewV7())
+	before := view(map[catalog.ModelID][]layer{
+		repriced:  {{everyone, "all", "0.000002"}},
+		preferred: {{everyone, "all", "0.0000015"}, {theAccount, "all", "0.0000005"}},
+		blocked:   {{everyone, "all", "0.000002"}},
+		steady:    {{everyone, "all", "0.000002"}},
+	})
+	after := view(map[catalog.ModelID][]layer{
+		repriced:  {{everyone, "all", "0.0000025"}},
+		preferred: {{everyone, "model", "0.0000015"}, {theAccount, "all", "0.0000005"}},
+		first:     {{everyone, "all", "0.000004"}},
+	})
+	// steady's layer, and blocked's for everyone, are the same version after: carried over, not republished.
+	after.sold[steady] = before.sold[steady]
+	after.sold[blocked] = billing.Sold{Audiences: billing.CompilePrices([]billing.AudiencePrice{
+		{Target: billing.Selector{Kind: "all"}, Sold: before.sold[blocked].For(everyone)},
+		{Audience: theAccount, Target: billing.Selector{Kind: "model"}},
+	})}
+	moves, err := saleMoves(uuid.NewV7(), buyers, before, after)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[catalog.ModelID]string{repriced: "1/4 3/5", first: "- 3/4", gone: "- -", blocked: "- -"}
-	if len(moves) != len(want) {
-		t.Fatalf("%d moves: %+v", len(moves), moves)
-	}
-	rat := func(r *big.Rat) string {
-		if r == nil {
-			return "-"
-		}
-		return r.RatString()
-	}
+	got := map[catalog.ModelID][]string{}
 	for i, m := range moves {
-		if got := rat(m.Change) + " " + rat(m.Margin); got != want[catalog.ModelID(m.Model)] || m.Site != site {
-			t.Errorf("the move of %s: %s, want %s", m.Model, got, want[catalog.ModelID(m.Model)])
-		}
-		if i > 0 && strings.Compare(moves[i-1].Model.String(), m.Model.String()) > 0 {
+		audience := m.Summary["audience"].(map[string]any)["kind"]
+		got[catalog.ModelID(m.Model)] = append(got[catalog.ModelID(m.Model)], fmt.Sprint(audience, " ", ratText(m.Change), " ", ratText(m.Margin)))
+		if i > 0 && bytes.Compare(moves[i-1].Model[:], m.Model[:]) > 0 {
 			t.Errorf("the moves are not in the order of their models")
 		}
 	}
+	want := map[catalog.ModelID][]string{
+		repriced:  {"tier 1/4 24/25"},
+		preferred: {"tier 0 14/15", "account 2 14/15"},
+		blocked:   {"account - -"},
+		first:     {"tier - 39/40"},
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("the moves:\n got %v\nwant %v", got, want)
+	}
+}
+
+// layer is an audience layer of a model's prices in a test: whom it is for, its target's kind, and its input price, ""
+// for a layer that matches but sells nothing, as a blocked one.
+type layer struct {
+	audience billing.Audience
+	target   string
+	input    string
+}
+
+// layeredView is the prices of models, each its layers; every sold layer is a publication of its own version, costing
+// a tenth of a millionth a token.
+func layeredView(models map[catalog.ModelID][]layer, schedule func(string) jsonx.Raw) priceView {
+	v := priceView{sold: map[catalog.ModelID]billing.Sold{}}
+	for model, layers := range models {
+		var compiled []billing.AudiencePrice
+		for _, l := range layers {
+			price := billing.AudiencePrice{Audience: l.audience, Target: billing.Selector{Kind: l.target}}
+			if l.input != "" {
+				version := uuid.NewV7()
+				price.Sold.Version = version
+				v.publications = append(v.publications, billing.Publication{
+					Model: model, Status: "published", Current: &version, Schedule: schedule(l.input), CurrentSchedule: schedule(l.input), Cost: schedule("0.0000001"),
+				})
+			}
+			compiled = append(compiled, price)
+		}
+		v.sold[model] = billing.Sold{Audiences: billing.CompilePrices(compiled)}
+	}
+	return v
+}
+
+func ratText(r *big.Rat) string {
+	if r == nil {
+		return "-"
+	}
+	return r.RatString()
 }

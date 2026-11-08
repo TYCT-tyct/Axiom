@@ -2,9 +2,10 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"uuid"
 
@@ -206,19 +207,30 @@ func (a adminAPI) runPricingRule(ctx context.Context, tx pg.Tx, op operations.Op
 	return ruleResult(rule, moves), nil
 }
 
+// priceView is a site's sale prices at one moment: each publication, and the audience layers routing selects a
+// model's price from (billing.PublishedPrices).
+type priceView struct {
+	publications []billing.Publication
+	sold         map[catalog.ModelID]billing.Sold
+}
+
 // refreshedPrices refreshes the site's proposals, publishing what the publisher would, and reads them: what a rule change
 // is measured from and to.
-func refreshedPrices(ctx context.Context, tx pg.Tx, site accounts.Site) ([]billing.Publication, error) {
+func refreshedPrices(ctx context.Context, tx pg.Tx, site accounts.Site) (priceView, error) {
 	if err := refreshSalePrices(ctx, tx, uuid.UUID(site.ID), site.Currency); err != nil {
-		return nil, err
+		return priceView{}, err
 	}
-	_, prices, err := billing.PriceState(ctx, tx, uuid.UUID(site.ID))
-	return prices, err
+	_, publications, err := billing.PriceState(ctx, tx, uuid.UUID(site.ID))
+	if err != nil {
+		return priceView{}, err
+	}
+	sold, err := billing.PublishedPrices(ctx, tx, uuid.UUID(site.ID))
+	return priceView{publications, sold}, err
 }
 
 // applyRule makes c as actor, with the admin's checks, and answers the rule and every published price of site it
 // moved from before, each with the model's slug.
-func (a adminAPI) applyRule(ctx context.Context, tx pg.Tx, site accounts.Site, c ruleChange, actor audit.Actor, reason string, before []billing.Publication) (billing.Rule, []operations.Repricing, error) {
+func (a adminAPI) applyRule(ctx context.Context, tx pg.Tx, site accounts.Site, c ruleChange, actor audit.Actor, reason string, before priceView) (billing.Rule, []operations.Repricing, error) {
 	rule, err := a.writeRule(ctx, tx, site, c, actor, reason)
 	if err != nil {
 		return rule, nil, ruleProblem(err)
@@ -227,7 +239,11 @@ func (a adminAPI) applyRule(ctx context.Context, tx pg.Tx, site accounts.Site, c
 	if err != nil {
 		return rule, nil, err
 	}
-	moves, err := saleMoves(uuid.UUID(site.ID), before, after)
+	buyers, err := a.buyers(ctx, tx, site, before, after)
+	if err != nil {
+		return rule, nil, err
+	}
+	moves, err := saleMoves(uuid.UUID(site.ID), buyers, before, after)
 	if err != nil {
 		return rule, nil, err
 	}
@@ -263,65 +279,118 @@ func (a adminAPI) writeRule(ctx context.Context, tx pg.Tx, site accounts.Site, c
 	return billing.CreateRule(ctx, tx, actor, uuid.UUID(site.ID), site.Currency, c.in, a.catalog.AllowSchedule, reason)
 }
 
-// saleMoves is every published sale price of site that after sells at another version than before: one sold at a new
-// version, given where none was sold, or taken away. Each is measured from the version before, as a publication is,
-// so a price given or taken away has no share that measures its move, and one taken away has no margin either. They
-// are in the order of their models and audiences.
-func saleMoves(site uuid.UUID, before, after []billing.Publication) ([]operations.Repricing, error) {
-	type sold struct {
-		model    uuid.UUID
-		audience billing.Selector
+// buyer is one kind of buyer whose sale price a rule change can move, as billing selects it (billing.Audience), and how
+// the owner is shown it.
+type buyer struct {
+	audience billing.Audience
+	shown    billing.Selector
+}
+
+// buyers is every kind of buyer of site: each tier's accounts without a price of their own, and each account that has
+// one before or after the change, in its tier. Every account is in a tier, so together they are every price an account
+// pays. An account layer of an account that no longer exists has nobody to sell to.
+func (a adminAPI) buyers(ctx context.Context, tx pg.Tx, site accounts.Site, prices ...priceView) ([]buyer, error) {
+	tiers, err := a.accounts.Tiers(ctx, tx, site.ID)
+	if err != nil {
+		return nil, err
 	}
-	was, is := map[sold]billing.Publication{}, map[sold]billing.Publication{}
-	var keys []sold
-	for _, p := range before {
-		k := sold{uuid.UUID(p.Model), p.Audience}
-		was[k], keys = p, append(keys, k)
+	var out []buyer
+	for _, t := range tiers {
+		out = append(out, buyer{billing.Audience{Tier: t.ID}, billing.Selector{Kind: "tier", ID: t.ID.TypeID()}})
 	}
-	for _, p := range after {
-		k := sold{uuid.UUID(p.Model), p.Audience}
-		if _, ok := was[k]; !ok {
-			keys = append(keys, k)
+	for _, shown := range accountLayers(prices) {
+		id, err := accounts.ParseAccountID(shown.ID)
+		if err != nil {
+			return nil, fmt.Errorf("the audience of a price: %w", err)
 		}
-		is[k] = p
-	}
-	slices.SortFunc(keys, func(a, b sold) int {
-		return cmp.Or(bytes.Compare(a.model[:], b.model[:]), cmp.Compare(a.audience.Kind, b.audience.Kind), cmp.Compare(a.audience.ID, b.audience.ID))
-	})
-	var moves []operations.Repricing
-	for _, k := range keys {
-		then, now := soldVersion(was[k]), soldVersion(is[k])
-		if then == now {
+		detail, err := a.accounts.Account(ctx, tx, id)
+		if errors.Is(err, accounts.ErrNotFound) {
 			continue
 		}
-		r := operations.Repricing{Site: site, Model: k.model, Summary: map[string]any{
-			"model_id": k.model.String(), "audience": map[string]any{"kind": k.audience.Kind, "id": k.audience.ID},
-		}}
-		if now != (uuid.UUID{}) {
-			moved := is[k]
-			moved.Schedule, moved.Endpoints = moved.CurrentSchedule, moved.CurrentEndpoints
-			moved.Current, moved.CurrentSchedule, moved.CurrentEndpoints = nil, nil, nil
-			if then != (uuid.UUID{}) {
-				old := was[k]
-				moved.Current, moved.CurrentSchedule, moved.CurrentEndpoints = old.Current, old.CurrentSchedule, old.CurrentEndpoints
-			}
-			var err error
-			if r.Change, r.Margin, err = billing.PriceMove(moved); err != nil {
-				return nil, fmt.Errorf("measure the move of model %s: %w", k.model, err)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, buyer{billing.Audience{Account: id, Tier: detail.Tier.ID}, shown})
+	}
+	return out, nil
+}
+
+// accountLayers is each account audience that has a layer in any of prices, once, in the order first seen.
+func accountLayers(prices []priceView) []billing.Selector {
+	var out []billing.Selector
+	for _, p := range prices {
+		for _, pub := range p.publications {
+			if pub.Audience.Kind == "account" && !slices.Contains(out, pub.Audience) {
+				out = append(out, pub.Audience)
 			}
 		}
-		moves = append(moves, r)
+	}
+	return out
+}
+
+// saleMoves is every change in what buyers pay for a model of site: the version billing selects for a buyer after is
+// not the one it selected before, because a layer was published, given, taken away or stopped, or because another layer
+// now wins (a more specific target, docs/domains/billing.md「定价」). Each distinct change of a model, from one version
+// to another, is one move, however many buyers it reaches, measured from the version before as a publication is: a
+// price given or taken away has no share that measures its move, and one taken away has no margin either. They are in
+// the order of their models, then of buyers.
+func saleMoves(site uuid.UUID, buyers []buyer, before, after priceView) ([]operations.Repricing, error) {
+	was, is := byVersion(before.publications), byVersion(after.publications)
+	models := slices.Collect(maps.Keys(before.sold))
+	for m := range after.sold {
+		if _, ok := before.sold[m]; !ok {
+			models = append(models, m)
+		}
+	}
+	slices.SortFunc(models, func(a, b catalog.ModelID) int { return bytes.Compare(a[:], b[:]) })
+	type change struct {
+		model     catalog.ModelID
+		then, now uuid.UUID
+	}
+	seen := map[change]bool{}
+	var moves []operations.Repricing
+	for _, m := range models {
+		for _, b := range buyers {
+			c := change{m, before.sold[m].For(b.audience).Version, after.sold[m].For(b.audience).Version}
+			if c.then == c.now || seen[c] {
+				continue
+			}
+			seen[c] = true
+			r := operations.Repricing{Site: site, Model: uuid.UUID(m), Summary: map[string]any{
+				"model_id": m.String(), "audience": map[string]any{"kind": b.shown.Kind, "id": b.shown.ID},
+			}}
+			if err := measure(&r, was[c.then], is[c.now]); err != nil {
+				return nil, fmt.Errorf("measure the move of model %s: %w", m, err)
+			}
+			moves = append(moves, r)
+		}
 	}
 	return moves, nil
 }
 
-// soldVersion is the version p sells at, which routing serves (billing's publishedLayer), or the zero ID when it sells
-// none.
-func soldVersion(p billing.Publication) uuid.UUID {
-	if p.Current == nil || p.Status != "published" && p.Status != "pending" {
-		return uuid.UUID{}
+// measure sets r's move and margin from then, the publication a buyer was sold before, to now, the one it is sold after;
+// either is the zero Publication when the buyer was or is sold nothing, which measures nothing.
+func measure(r *operations.Repricing, then, now billing.Publication) error {
+	if now.Current == nil {
+		return nil
 	}
-	return *p.Current
+	moved := now
+	moved.Schedule, moved.Endpoints = now.CurrentSchedule, now.CurrentEndpoints
+	moved.Current, moved.CurrentSchedule, moved.CurrentEndpoints = then.Current, then.CurrentSchedule, then.CurrentEndpoints
+	var err error
+	r.Change, r.Margin, err = billing.PriceMove(moved)
+	return err
+}
+
+// byVersion is each publication by the version it sells, which is its own: a version is published for one publication.
+func byVersion(publications []billing.Publication) map[uuid.UUID]billing.Publication {
+	out := make(map[uuid.UUID]billing.Publication, len(publications))
+	for _, p := range publications {
+		if p.Current != nil {
+			out[*p.Current] = p
+		}
+	}
+	return out
 }
 
 // movesResult is what a rule write answers of the prices it moves: how many, and the first of them.

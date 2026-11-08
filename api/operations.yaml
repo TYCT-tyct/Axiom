@@ -903,7 +903,9 @@ paths:
         Adds a rule to the main site as the admin does, with the same checks (`createPricingRule`), and weighs every sale
         price the rule moves at once against the main site's price envelope (docs/domains/operations.md「售价的累计变动上限」):
         the publisher's own threshold publishes small moves at once, so the server makes the change, refreshes the
-        prices and measures each published price that changed, never taking the agent's numbers. Moves within the least
+        prices and measures each change in what a buyer pays, as billing selects it from the audience layers (each tier,
+        and each account with a price of its own in its tier; a new layer for a more specific target can move an
+        account whose own layer did not change), never taking the agent's numbers. Moves within the least
         margin over cost, the models' daily moves and the day's publications and models, all of them together, are
         kept and counted (200, `succeeded`); a change that moves no published price is always kept. Otherwise the change
         is taken back and waits for the owner (202), who sees each move; so does a change that gives a model its first
@@ -911,7 +913,7 @@ paths:
         as proposals, which `pricePublish` publishes within the envelope. A site without an envelope is a 422
         `cap_exceeded`; a rule for a target and audience that have one is a 409 `conflict`, at once or when the owner
         approves; a rule over 8 KiB as JSON is a 422 `unprocessable`. The result has `rule_id`, `rev`, `moves_total` and `moves`: up to 12 of the moves, each with
-        `model_id`, `audience`, `change_bps` and `margin_bps`. With `dry_run` the same checks run, nothing is written
+        `model_id`, `slug`, `audience` (the tier or account first seen paying it), `change_bps` and `margin_bps`. With `dry_run` the same checks run, nothing is written
         and `result` has `moves_total` and `moves` the change would make now.
       tags: [Pricing]
       security: [{credential: []}]

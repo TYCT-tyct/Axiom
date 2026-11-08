@@ -8185,7 +8185,8 @@ components:
       type: object
       additionalProperties: true
       description: >-
-        One published sale price a pricing rule change moved: the model and the audience it is sold to, how far it moved
+        One change in what buyers pay for a model that a pricing rule change made: the model and the first buyer seen
+        paying it (a tier, or an account with a price of its own), how far it moved
         and the margin it keeps, in basis points (`change_bps` null when no share measures the move, as for a first
         price or one taken away; `margin_bps` null when the cost is unknown), and what the model's day held before it.
       properties:
