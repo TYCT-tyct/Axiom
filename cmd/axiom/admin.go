@@ -19,6 +19,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/webui"
+	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 	"axiom/internal/websearch"
 )
@@ -47,6 +48,8 @@ type adminAPI struct {
 	calls      *suppliers.Service
 	detections *windowLimiter
 	tests      *windowLimiter
+	// router is the node's call path routing, whose snapshot a check of a preset's rules is judged against.
+	router *routing.Router
 }
 
 // detectionsPerMinute is how many times a session may run detectSupplier in a minute; testsPerMinute is the same for

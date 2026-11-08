@@ -25,6 +25,7 @@ import {
   totpSetup,
   verifyMfa,
 } from "./mock-auth.ts";
+import { checkOf, withSummary } from "./routing-check.ts";
 
 // The console API (api/console.yaml), answered from memory (mock.ts) with the data of console-data.ts.
 
@@ -378,7 +379,10 @@ const handlers: Handler<MockState>[] = [
     ok({ data: [defaultWorkspace] }),
   ),
   route("get", `${base}/routing-presets`, { ...signedIn, permission: "api_keys.view" }, ({ state }) =>
-    ok({ data: state.presets.filter((preset) => !preset.disabled) }),
+    ok({ data: state.presets.filter((preset) => !preset.disabled).map(withSummary) }),
+  ),
+  route("post", `${base}/routing-presets/checks`, { ...signedIn, permission: "api_keys.view" }, ({ body }) =>
+    ok(checkOf(body.rules)),
   ),
   route("post", `${base}/routing-presets`, { ...signedIn, permission: "api_keys.manage" }, createPreset),
   route("put", `${base}/routing-presets/{preset_id}`, { ...signedIn, permission: "api_keys.manage" }, updatePreset),

@@ -9,10 +9,20 @@ import type { Schemas } from "@axiom/api";
 // UUID, and nobody edits, disables or chooses it.
 export const systemPreset = "00000000-0000-0000-0000-000000000000";
 
-export const sorts = ["balanced", "price", "throughput", "latency", "quality"] as const;
+// The values the editor offers, in its order. The contract's enums type them, so a value it drops fails the typecheck;
+// one it adds is offered once it is listed here, and a stored one the page does not list is kept as it is.
+export const sorts = [
+  "balanced",
+  "price",
+  "throughput",
+  "latency",
+  "quality",
+] as const satisfies Schemas["RoutingSort"][];
 export type Sort = (typeof sorts)[number];
-export const policies = ["no_retention", "retained", "may_train"] as const;
-export const priceItems = ["prompt", "completion", "request"] as const;
+export const policies = ["no_retention", "retained", "may_train"] as const satisfies NonNullable<
+  Schemas["RoutingRule"]["policies"]
+>;
+export const priceItems = ["prompt", "completion", "request"] as const satisfies (keyof Schemas["RoutingPriceLimit"])[];
 type PriceItem = (typeof priceItems)[number];
 
 type Json = Record<string, unknown>;
@@ -24,9 +34,6 @@ export type RuleDraft = {
   classes: string[] | null;
   policies: string[] | null;
   verifiedOnly: boolean;
-  // The rule asks for a product score. Scoring is not live (docs/domains/routing.md「产品质量与来源类别」), so no
-  // endpoint has one and such a rule matches nothing: the editor offers no score, only removing one it read.
-  scored: boolean;
   maxPrice: Record<PriceItem, string>;
   rest: Json;
 };
@@ -42,15 +49,32 @@ export function newOverride(): OverrideDraft {
 
 export type RulesDraft = { base: RuleDraft; overrides: OverrideDraft[]; rest: Json };
 
-// The editor's fields a client check can refuse: the rule (`default` or the override's index) and the field. Besides a
-// value it cannot read, it refuses a condition that excludes every endpoint, since such a preset fails every call.
-export type Invalid = { rule: "default" | number; field: "name" | "classes" | "policies" | "score" | PriceItem };
+// The editor's fields a save is refused for: the rule (`default` or the override's index) and the field, or `rule` for
+// the rule as a whole. The page refuses a value it cannot write; the server's check (checkRoutingRules) refuses a rule
+// that keeps no endpoint, since such a preset fails every call.
+export type Invalid = {
+  rule: "default" | number;
+  field: "name" | "classes" | "policies" | "score" | "verified" | "rule" | PriceItem;
+};
 
-const ruleMembers = ["sort", "classes", "policies", "verified_only", "min_score", "min_score_confidence", "max_price"];
+const ruleMembers = ["sort", "classes", "policies", "verified_only", "max_price"];
+// The product score a rule asks for is kept in rest, as read: scoring is not live (docs/domains/routing.md「产品质量与
+// 来源类别」), so the editor offers no score, only removing one it read.
+const scoreMembers = ["min_score", "min_score_confidence"];
+
+// scored tells whether the rule asks for a product score. The server reads null as no threshold (a nil pointer in
+// internal/routing/rules.go), so only a value asks for one.
+export function scored(rule: RuleDraft) {
+  return scoreMembers.some((member) => rule.rest[member] != null);
+}
+
+export function withoutScore<Rule extends RuleDraft>(rule: Rule): Rule {
+  return { ...rule, rest: without(rule.rest, scoreMembers) };
+}
 // The shape of a price the server reads (priceNumber in internal/routing/price.go): digits, an optional fraction and an
 // optional exponent of at most three digits. The value is sent as it was typed, as text, never through a float; the
 // server alone checks the bounds and precision, so a price it once accepted always passes here.
-const decimal = /^[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,3})?$/;
+export const decimal = /^[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]{1,3})?$/;
 
 function object(value: unknown): Json {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
@@ -74,7 +98,6 @@ function emptyRule(): RuleDraft {
     classes: null,
     policies: null,
     verifiedOnly: false,
-    scored: false,
     maxPrice: { prompt: "", completion: "", request: "" },
     rest: {},
   };
@@ -88,10 +111,9 @@ function ruleDraft(value: unknown): RuleDraft {
     classes: texts(rule.classes),
     policies: texts(rule.policies),
     verifiedOnly: rule.verified_only === true,
-    // The server reads null as no threshold (a nil pointer in internal/routing/rules.go), so only a value asks for one.
-    scored: rule.min_score != null || rule.min_score_confidence != null,
     maxPrice: { prompt: text(price.prompt), completion: text(price.completion), request: text(price.request) },
-    rest: without(rule, [...ruleMembers, "author", "model"]),
+    // A null score is no threshold to the server, so it is left out rather than kept.
+    rest: without(rule, [...ruleMembers, "author", "model", ...scoreMembers.filter((member) => rule[member] == null)]),
   };
 }
 
@@ -113,19 +135,6 @@ export function draftOf(rules: Schemas["RoutingRules"] | undefined, copy = false
 }
 
 type Field = Invalid["field"];
-
-// excludedBy names the rule's condition that no endpoint can meet today, if any. An empty list allows nothing. Every
-// endpoint is recorded as "may train" until suppliers record their data policies (「产品质量与来源类别」), so a
-// policy list without it matches nothing; this check goes when they do.
-function excludedBy(draft: RuleDraft): Field | null {
-  if (draft.classes?.length === 0) {
-    return "classes";
-  }
-  if (draft.policies && !draft.policies.includes("may_train")) {
-    return "policies";
-  }
-  return draft.scored ? "score" : null;
-}
 
 // limitsOf writes the rule's price limits into out, or names the first field a client can tell is wrong. The server
 // holds the rest: that an override only narrows, and the prices' precision.
@@ -158,7 +167,11 @@ function ruleOf(draft: RuleDraft): Json | Field {
   set("classes", draft.classes ?? undefined);
   set("policies", draft.policies ?? undefined);
   set("verified_only", draft.verifiedOnly || undefined);
-  return excludedBy(draft) ?? limitsOf(draft, out) ?? out;
+  // An empty list allows nothing, which the server refuses as a mistake rather than a rule.
+  if (draft.classes?.length === 0) {
+    return "classes";
+  }
+  return draft.policies?.length === 0 ? "policies" : (limitsOf(draft, out) ?? out);
 }
 
 // rulesOf writes the draft as the rules the API takes, or the first field it refuses.
@@ -186,15 +199,33 @@ export function rulesOf(draft: RulesDraft): { rules: Schemas["RoutingRules"] } |
   return { rules: out as Schemas["RoutingRules"] };
 }
 
-// The few facts of a preset a list shows: the default rule's sort, the classes it keeps, whether any rule limits prices,
-// and how many overrides it has.
-export function summaryOf(rules: Schemas["RoutingRules"]) {
-  const { base, overrides } = draftOf(rules);
-  return {
-    sort: base.sort || "balanced",
-    classes: base.classes,
-    priced: [base, ...overrides].some((rule) => priceItems.some((item) => rule.maxPrice[item] !== "")),
-    verifiedOnly: base.verifiedOnly,
-    overrides: overrides.length,
-  };
+// priced tells whether any rule of the draft limits a price, which decides whether a platform preset names a currency.
+export function priced(draft: RulesDraft) {
+  return [draft.base, ...draft.overrides].some((rule) => priceItems.some((item) => rule.maxPrice[item].trim() !== ""));
+}
+
+type Unmatched = Schemas["RoutingRuleUnmatched"];
+
+// The editor's field for each condition the server names; both score conditions are the one score notice.
+const unmatchedFields: Record<Unmatched["fields"][number], Field> = {
+  classes: "classes",
+  policies: "policies",
+  min_score: "score",
+  min_score_confidence: "score",
+  verified_only: "verified",
+  "max_price.prompt": "prompt",
+  "max_price.completion": "completion",
+  "max_price.request": "request",
+};
+
+// invalidOf is the first rule the server's check says keeps no endpoint, as the editor marks it: the first condition
+// it names, or the rule as a whole when it names none (only the conditions together, or what the rule inherits, keep
+// none) or one this page does not know.
+export function invalidOf(check: { unmatched: Unmatched[] }): Invalid | null {
+  const first = check.unmatched[0];
+  if (!first) {
+    return null;
+  }
+  const named = first.fields[0];
+  return { rule: first.index ?? "default", field: (named && unmatchedFields[named]) || "rule" };
 }

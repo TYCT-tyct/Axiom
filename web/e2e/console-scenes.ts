@@ -47,7 +47,7 @@ const scenes: Scene[] = [
       .first()
       .click(),
   ),
-  // A rule whose data policies match no endpoint today, refused on save.
+  // A rule whose data policies keep no endpoint, as the check says, refused on save.
   dialogScene("routing-preset-refused", "routing-presets", async (page) => {
     await page.getByRole("button", { name: /^(新建预设|New preset)$/ }).click();
     const dialog = page.getByRole("dialog");

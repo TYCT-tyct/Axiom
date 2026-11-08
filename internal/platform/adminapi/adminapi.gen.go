@@ -301,6 +301,9 @@ type ServerInterface interface {
 	// CreatePlatformRoutingPreset Make a routing preset of the platform
 	// (POST /api/admin/v1/routing-presets)
 	CreatePlatformRoutingPreset(w http.ResponseWriter, r *http.Request, params CreatePlatformRoutingPresetParams)
+	// CheckLayerRoutingRules Check a platform or site preset's rules before saving them
+	// (POST /api/admin/v1/routing-presets/checks)
+	CheckLayerRoutingRules(w http.ResponseWriter, r *http.Request)
 	// DisableLayerRoutingPreset Disable a routing preset of the platform or a site
 	// (DELETE /api/admin/v1/routing-presets/{preset_id})
 	DisableLayerRoutingPreset(w http.ResponseWriter, r *http.Request, presetId openapi_types.UUID, params DisableLayerRoutingPresetParams)
@@ -4980,6 +4983,20 @@ func (siw *ServerInterfaceWrapper) CreatePlatformRoutingPreset(w http.ResponseWr
 	handler.ServeHTTP(w, r)
 }
 
+// CheckLayerRoutingRules operation middleware
+func (siw *ServerInterfaceWrapper) CheckLayerRoutingRules(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CheckLayerRoutingRules(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // DisableLayerRoutingPreset operation middleware
 func (siw *ServerInterfaceWrapper) DisableLayerRoutingPreset(w http.ResponseWriter, r *http.Request) {
 
@@ -8455,6 +8472,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/routing-presets", wrapper.CreatePlatformRoutingPreset)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/routing-presets", wrapper.ListSiteRoutingPresets)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/routing-presets", wrapper.CreateSiteRoutingPreset)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/routing-presets/checks", wrapper.CheckLayerRoutingRules)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/admin/v1/routing-presets/{preset_id}", wrapper.DisableLayerRoutingPreset)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/routing-presets/{preset_id}", wrapper.GetLayerRoutingPreset)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/routing-presets/{preset_id}", wrapper.UpdateLayerRoutingPreset)
@@ -18894,6 +18912,101 @@ func (response CreatePlatformRoutingPresetdefaultJSONResponse) VisitCreatePlatfo
 	return err
 }
 
+type CheckLayerRoutingRulesRequestObject struct {
+	Body *CheckLayerRoutingRulesJSONRequestBody
+}
+
+type CheckLayerRoutingRulesResponseObject interface {
+	VisitCheckLayerRoutingRulesResponse(w http.ResponseWriter) error
+}
+
+type CheckLayerRoutingRules200JSONResponse RoutingRulesCheck
+
+func (response CheckLayerRoutingRules200JSONResponse) VisitCheckLayerRoutingRulesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckLayerRoutingRules400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CheckLayerRoutingRules400JSONResponse) VisitCheckLayerRoutingRulesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckLayerRoutingRules401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response CheckLayerRoutingRules401JSONResponse) VisitCheckLayerRoutingRulesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckLayerRoutingRules403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CheckLayerRoutingRules403JSONResponse) VisitCheckLayerRoutingRulesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckLayerRoutingRules404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CheckLayerRoutingRules404JSONResponse) VisitCheckLayerRoutingRulesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CheckLayerRoutingRulesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CheckLayerRoutingRulesdefaultJSONResponse) VisitCheckLayerRoutingRulesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DisableLayerRoutingPresetRequestObject struct {
 	PresetId openapi_types.UUID `json:"preset_id"`
 	Params   DisableLayerRoutingPresetParams
@@ -27591,6 +27704,9 @@ type StrictServerInterface interface {
 	// CreatePlatformRoutingPreset Make a routing preset of the platform
 	// (POST /api/admin/v1/routing-presets)
 	CreatePlatformRoutingPreset(ctx context.Context, request CreatePlatformRoutingPresetRequestObject) (CreatePlatformRoutingPresetResponseObject, error)
+	// CheckLayerRoutingRules Check a platform or site preset's rules before saving them
+	// (POST /api/admin/v1/routing-presets/checks)
+	CheckLayerRoutingRules(ctx context.Context, request CheckLayerRoutingRulesRequestObject) (CheckLayerRoutingRulesResponseObject, error)
 	// DisableLayerRoutingPreset Disable a routing preset of the platform or a site
 	// (DELETE /api/admin/v1/routing-presets/{preset_id})
 	DisableLayerRoutingPreset(ctx context.Context, request DisableLayerRoutingPresetRequestObject) (DisableLayerRoutingPresetResponseObject, error)
@@ -30681,6 +30797,37 @@ func (sh *strictHandler) CreatePlatformRoutingPreset(w http.ResponseWriter, r *h
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CreatePlatformRoutingPresetResponseObject); ok {
 		if err := validResponse.VisitCreatePlatformRoutingPresetResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CheckLayerRoutingRules operation middleware
+func (sh *strictHandler) CheckLayerRoutingRules(w http.ResponseWriter, r *http.Request) {
+	var request CheckLayerRoutingRulesRequestObject
+
+	var body CheckLayerRoutingRulesJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CheckLayerRoutingRules(ctx, request.(CheckLayerRoutingRulesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CheckLayerRoutingRules")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CheckLayerRoutingRulesResponseObject); ok {
+		if err := validResponse.VisitCheckLayerRoutingRulesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -83,6 +83,7 @@ var adminOperations = []adminOperation{
 	{"createPlatformRoutingPreset", http.MethodPost, "/routing-presets", `{"slug":"p","name":"P","rules":{},"reason":"r"}`, "sites.manage", true},
 	{"listSiteRoutingPresets", http.MethodGet, strings.Replace(someSite, "/settings", "/routing-presets", 1), "", "sites.manage", false},
 	{"createSiteRoutingPreset", http.MethodPost, strings.Replace(someSite, "/settings", "/routing-presets", 1), `{"slug":"p","name":"P","rules":{},"reason":"r"}`, "sites.manage", true},
+	{"checkLayerRoutingRules", http.MethodPost, "/routing-presets/checks", `{"rules":{}}`, "sites.manage", false},
 	{"getLayerRoutingPreset", http.MethodGet, somePreset, "", "sites.manage", false},
 	{"updateLayerRoutingPreset", http.MethodPut, somePreset, `{"name":"P","rules":{},"revision":1,"reason":"r"}`, "sites.manage", true},
 	{"disableLayerRoutingPreset", http.MethodDelete, somePreset, `{"revision":1,"reason":"r"}`, "sites.manage", true},

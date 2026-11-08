@@ -331,12 +331,12 @@ function PresetRow({
         {isDefault ? <Badge tone="ok">{t("routingPresets.isDefault")}</Badge> : null}
         <p className="text-label text-t3 sm:hidden">{t(`routingPresets.layer.${preset.scope}`)}</p>
         <div className="pt-1 text-label md:hidden">
-          <RulesSummary rules={preset.rules} />
+          <RulesSummary summary={preset.summary} />
         </div>
       </Td>
       <Td className="hidden w-0 whitespace-nowrap sm:table-cell">{t(`routingPresets.layer.${preset.scope}`)}</Td>
       <Td className="hidden md:table-cell">
-        <RulesSummary rules={preset.rules} />
+        <RulesSummary summary={preset.summary} />
       </Td>
       <Td className="hidden whitespace-nowrap tabular-nums sm:table-cell">
         {/* The account's own keys bound to it; a node that does not count them, and the system preset, give none. */}

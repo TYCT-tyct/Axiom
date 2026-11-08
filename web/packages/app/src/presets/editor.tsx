@@ -3,6 +3,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  decimal,
   type Invalid,
   newOverride,
   type OverrideDraft,
@@ -10,7 +11,9 @@ import {
   priceItems,
   type RuleDraft,
   type RulesDraft,
+  scored,
   sorts,
+  withoutScore,
 } from "./rules";
 
 type Option = { value: string; label: string };
@@ -141,7 +144,11 @@ function SetFields({ rule, parent, invalid, classes, onChange }: Omit<RuleProps,
         limit={t("presetRules.limitClasses")}
         free={free ?? t("presetRules.allClasses")}
         hint={classes.unavailable ? t("presetRules.classesUnavailable") : undefined}
-        error={invalid === "classes" ? t("presetRules.invalid.classes") : undefined}
+        error={
+          invalid === "classes"
+            ? t(rule.classes?.length === 0 ? "presetRules.invalid.classes" : "presetRules.unmatched.classes")
+            : undefined
+        }
         options={choices(classes.options, parent?.classes ?? null, rule.classes)}
         value={rule.classes}
         onChange={(value) => onChange({ ...rule, classes: value })}
@@ -151,7 +158,11 @@ function SetFields({ rule, parent, invalid, classes, onChange }: Omit<RuleProps,
         limit={t("presetRules.limitPolicies")}
         free={free ?? t("presetRules.allPolicies")}
         hint={t("presetRules.policiesHint")}
-        error={invalid === "policies" ? t("presetRules.invalid.policies") : undefined}
+        error={
+          invalid === "policies"
+            ? t(rule.policies?.length === 0 ? "presetRules.invalid.policies" : "presetRules.unmatched.policies")
+            : undefined
+        }
         options={choices(policyOptions, parent?.policies ?? null, rule.policies)}
         value={rule.policies}
         onChange={(value) => onChange({ ...rule, policies: value })}
@@ -163,7 +174,12 @@ function SetFields({ rule, parent, invalid, classes, onChange }: Omit<RuleProps,
 function LimitFields({ rule, invalid, currency, onChange }: Omit<RuleProps, "parent" | "classes">) {
   const { t } = useTranslation("common");
   const wrong = (field: Field, message: string) => (invalid === field ? message : undefined);
-  const price = t("presetRules.invalid.price");
+  // The page refuses only a price it cannot write, so one it can is the server's: no endpoint sells at or below it.
+  const price = t(
+    priceItems.some((item) => invalid === item && decimal.test(rule.maxPrice[item].trim()))
+      ? "presetRules.unmatched.price"
+      : "presetRules.invalid.price",
+  );
   return (
     <>
       <CheckField
@@ -171,8 +187,9 @@ function LimitFields({ rule, invalid, currency, onChange }: Omit<RuleProps, "par
         checked={rule.verifiedOnly}
         onChange={(event) => onChange({ ...rule, verifiedOnly: event.currentTarget.checked })}
       />
-      {rule.scored ? (
-        <ScoreNotice refused={invalid === "score"} onRemove={() => onChange({ ...rule, scored: false })} />
+      {invalid === "verified" ? <Refusal>{t("presetRules.unmatched.verified")}</Refusal> : null}
+      {scored(rule) ? (
+        <ScoreNotice refused={invalid === "score"} onRemove={() => onChange(withoutScore(rule))} />
       ) : null}
       <fieldset className="space-y-2">
         <legend className="text-ui font-medium text-t2">{t("presetRules.maxPrice", { currency })}</legend>
@@ -211,8 +228,10 @@ function ScoreNotice({ refused, onRemove }: { refused: boolean; onRemove: () => 
 }
 
 function RuleFields(props: RuleProps) {
+  const { t } = useTranslation("common");
   return (
     <div className="space-y-4">
+      {props.invalid === "rule" ? <Refusal>{t("presetRules.unmatched.rule")}</Refusal> : null}
       <SortField {...props} />
       <SetFields {...props} />
       <LimitFields {...props} />

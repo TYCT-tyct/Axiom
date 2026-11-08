@@ -1,13 +1,14 @@
-import { type AdminSchemas, ApiError, adminApi, unwrapChange, unwrapEmptyChange } from "@axiom/api";
+import { type AdminSchemas, ApiError, adminApi, unwrap, unwrapChange, unwrapEmptyChange } from "@axiom/api";
 import {
   draftOf,
   type Invalid,
+  priced,
   RulesEditor,
   rulesOf,
-  summaryOf,
   systemPreset,
   useClassOptions,
   useErrors,
+  useRulesCheck,
 } from "@axiom/app";
 import { Button, DataState, Icon, SelectField, TextField, useFormat } from "@axiom/ui";
 import { useQueries, useQuery } from "@tanstack/react-query";
@@ -194,6 +195,11 @@ export function PresetDialog({
   const [draft, setDraft] = useState(() => draftOf(read?.rules));
   const [invalid, setInvalid] = useState<Invalid | null>(null);
   const [code, setCode] = useState(read?.currency ?? currency ?? "");
+  // A rule the server says keeps no endpoint the layer's keys can see is marked as the rules change, and refuses a save.
+  const unmatched = useRulesCheck(draft, (rules) => checkRules(layer, rules, code.trim()), [
+    layerName(layer),
+    code.trim(),
+  ]);
   const refill = () => {
     reload();
     setDraft(draftOf(preset?.rules));
@@ -207,11 +213,11 @@ export function PresetDialog({
     }
     const written = rulesOf(draft);
     setInvalid("invalid" in written ? written.invalid : null);
-    if ("invalid" in written) {
+    if ("invalid" in written || unmatched) {
       showRefusal();
       return { problem: t("routingPresets.form.rulesInvalid") };
     }
-    const currency = currencyOf(layer, read, code.trim(), summaryOf(written.rules).priced);
+    const currency = currencyOf(layer, read, code.trim(), priced(draft));
     return typeof currency === "object"
       ? { problem: t(currency.problem) }
       : { ...names, rules: written.rules, currency };
@@ -229,7 +235,7 @@ export function PresetDialog({
           {layer.scope === "platform" ? <CurrencyField preset={read} code={code} onCode={setCode} /> : null}
           <RulesEditor
             draft={draft}
-            invalid={invalid}
+            invalid={invalid ?? unmatched}
             currency={layer.scope === "platform" ? code : (currency ?? "")}
             classes={classes}
             onChange={setDraft}
@@ -242,6 +248,16 @@ export function PresetDialog({
       onClose={onClose}
     />
   );
+}
+
+// checkRules asks how the layer's keys would be routed by the rules: a platform preset's with the currency typed, when it
+// is one, a site's in the site's own.
+function checkRules(layer: PresetLayer, rules: AdminSchemas["RoutingRules"], code: string) {
+  const body =
+    layer.scope === "site"
+      ? { rules, site_id: layer.siteId }
+      : { rules, currency: currencyPattern.test(code) ? code : undefined };
+  return unwrap(adminApi.POST("/api/admin/v1/routing-presets/checks", { body }));
 }
 
 function readNames(

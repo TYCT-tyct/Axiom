@@ -1,7 +1,8 @@
 import type { AdminState } from "./admin-data.ts";
 import { long, type Schemas, siteId, uuid } from "./admin-fixtures.ts";
-import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
+import { base, type Ctx, changes, reads, route, safe } from "./admin-route.ts";
 import { fail, type Handler, type MockData, ok } from "./mock.ts";
+import { checkOf, withSummary } from "./routing-check.ts";
 
 // The routing presets of the platform and the site (api/admin.yaml, tag Routing), their defaults, the limits on them and
 // the platform's switch that suspends them, answered from memory like the rest of the admin's API.
@@ -150,7 +151,8 @@ const sourceClasses = ["official", "cloud", "relay"].map((slug, position) => ({
 const layerOf = (state: AdminState, scope: "platform" | "site") => ({
   data: routingOf(state)
     .presets.filter((preset) => preset.scope === scope)
-    .sort((a, b) => Number(a.disabled) - Number(b.disabled)),
+    .sort((a, b) => Number(a.disabled) - Number(b.disabled))
+    .map(withSummary),
 });
 
 function create(state: AdminState, scope: "platform" | "site", body: Schemas["LayerRoutingPresetCreate"]) {
@@ -232,6 +234,7 @@ export const routingHandlers: Handler<AdminState>[] = [
   route("post", `${base}/sites/{site_id}/routing-presets`, changes("sites.manage"), ({ body, params, state }) =>
     ofSite(params.site_id) ? create(state, "site", body) : fail(404, "not_found"),
   ),
+  route("post", `${base}/routing-presets/checks`, safe("sites.manage"), ({ body }) => ok(checkOf(body.rules))),
   route("put", `${base}/routing-presets/{preset_id}`, changes("sites.manage"), update),
   route("delete", `${base}/routing-presets/{preset_id}`, changes("sites.manage"), disable),
   route("get", `${base}/settings/routing`, reads("sites.manage"), ({ state }) =>

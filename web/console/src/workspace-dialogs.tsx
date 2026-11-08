@@ -26,7 +26,8 @@ function useRefreshWorkspaces() {
   return () => queryClient.invalidateQueries({ queryKey: [accountKey, "workspaces"] });
 }
 
-function Actions({ pending, submit, onCancel }: { pending: boolean; submit: string; onCancel: () => void }) {
+// Actions are a dialog form's cancel and submit buttons.
+export function Actions({ pending, submit, onCancel }: { pending: boolean; submit: string; onCancel: () => void }) {
   const { t } = useTranslation();
   return (
     <div className="flex justify-end gap-2 pt-2">
