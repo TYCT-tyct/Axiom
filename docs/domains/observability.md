@@ -206,6 +206,7 @@ River 的 `observability.alerts` 每分钟读取最多 1000 条信号。持久�
 | `payments.discrepancy` | 差异记录 UUID | 标记已调查 |
 | `payments.query_paused` | 商户 TypeID | 暂停后成功查单 |
 | `accounts.account_suspended` | 账户 TypeID | 操作员解除暂停 |
+| `operations.agent_alert` | `<运营凭证 UUID>/<agent 给的键>` | agent 调 `alert_resolve`，或管理员关闭（见[运营的「运营接口」](operations.md#运营接口)） |
 | `routing.preset_refuses_all` | `<节点>/<预设 UUID>` | 该节点下一个路由成功过的一分钟窗口（遗留事件管理员关闭） |
 | `payments.verify_failed` | `<节点>/callbacks` | 上报后的下一个完整分钟没有同类事件 |
 | `payments.query_failed` | `<节点>/queries` | 上报后的下一个完整分钟没有同类事件 |

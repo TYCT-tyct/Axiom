@@ -43,3 +43,11 @@ regexes = ['''^a044d7461cfe6481920ca58ce533adf7$''', '''^b7338b55a6e7bc634a11ddd
 [[allowlists]]
 description = "owner key file name in the content export tests"
 regexes = ['''^owner-signing-2\.pub$''']
+
+# The operations alert tests raise and resolve an alert under the key `supplier/acme/balance`. The generic-api-key rule
+# reads the keyword before it (a `token` argument, a `"key":` member) as an assignment and the key, at entropy 3.56, as
+# its value. It is an alert's merge key, not a credential, and it is already in commits 9d1dba02 and a81dd28e, which
+# cannot be rewritten, so allow that exact string and nothing else; a real key in the same tests still fails.
+[[allowlists]]
+description = "alert key in the operations alert tests"
+regexes = ['''^supplier/acme/balance$''']

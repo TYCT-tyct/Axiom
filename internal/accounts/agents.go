@@ -393,12 +393,27 @@ func (s *Service) AuthenticateAgent(ctx context.Context, raw string) (Agent, err
 // SpendAgentMoney spends one of a's money writes on this node, besides the request AuthenticateAgent spent: past the
 // minute's or the hour's limit it is *TooManyAttempts with the wait.
 func (s *Service) SpendAgentMoney(a Agent) error {
+	return s.spendAgent(a, agentLimit{s.agentMoney, agentMoneyBurst, agentMoneyRefill}, agentLimit{s.agentMoneyHours, agentMoneyHourBurst, agentMoneyHourRefill})
+}
+
+// SpendAgentAlert spends one of a's alerts on this node, of which it may raise perHour in any hour, as SpendAgentMoney
+// does its money writes: the bucket holds half of them at once and gives the rest back over the hour. perHour is the
+// owner's limit, read for each alert, so a change applies to the next one.
+func (s *Service) SpendAgentAlert(a Agent, perHour int) error {
+	size := max(perHour/2, 1)
+	return s.spendAgent(a, agentLimit{s.agentAlerts, size, time.Hour / time.Duration(max(perHour-size, 1))})
+}
+
+// agentLimit is one bucket of a credential's writes of a kind: size at once, one more every per.
+type agentLimit struct {
+	buckets *buckets[AgentID]
+	size    int
+	per     time.Duration
+}
+
+func (s *Service) spendAgent(a Agent, limits ...agentLimit) error {
 	now := s.now()
-	for _, b := range []struct {
-		buckets *buckets[AgentID]
-		size    int
-		per     time.Duration
-	}{{s.agentMoney, agentMoneyBurst, agentMoneyRefill}, {s.agentMoneyHours, agentMoneyHourBurst, agentMoneyHourRefill}} {
+	for _, b := range limits {
 		if wait := b.buckets.take(a.id, b.size, b.per, now); wait > 0 {
 			return &TooManyAttempts{RetryAfter: wait}
 		}

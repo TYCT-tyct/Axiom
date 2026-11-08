@@ -108,7 +108,10 @@ func (a adminAPI) ListAlertEvents(ctx context.Context, r adminapi.ListAlertEvent
 		}
 	}
 	var events []observability.AlertEvent
-	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) { events, err = observability.ListAlertEvents(ctx, tx, before); return err })
+	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		events, err = observability.ListAlertEvents(ctx, tx, observability.AlertEventPage{Before: before, Limit: 100})
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

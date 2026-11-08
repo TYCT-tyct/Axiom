@@ -26,6 +26,7 @@ tags:
   - {name: Calls, description: "Support summaries and operator traces."}
   - {name: Pricing, description: "Sale prices, their proposals, and publishing them within the price envelope."}
   - {name: Accounts, description: "Credit grants to accounts, which the owner approves."}
+  - {name: Alerts, description: "The platform's alert incidents, and the alerts the agent raises to the owner."}
 paths:
   /api/operations/v1/me:
     get:
@@ -258,6 +259,104 @@ paths:
         '401': {$ref: '#/components/responses/CredentialRejected'}
         '403': {$ref: '#/components/responses/CredentialForbidden'}
         '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/alerts:
+    get:
+      operationId: alertsList
+      summary: Alert incidents
+      description: >-
+        The platform's alert incidents, newest first, with the delivery receipts of each: what the fixed rules and
+        the agent raised, whether the owner was notified and whether it recovered. `open` keeps the ones not yet
+        resolved. The agent's own alerts are of kind `operations.agent_alert`, keyed `<credential ID>/<key>`.
+      tags: [Alerts]
+      security: [{credential: []}]
+      x-axiom-permission: calls.search
+      x-axiom-scope: platform
+      x-mcp-name: alerts_list
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - {in: query, name: open, required: false, schema: {type: boolean}, description: "Only the incidents not yet resolved."}
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of incidents
+          content: {application/json: {schema: {$ref: '#/components/schemas/OperationsAlertList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+    post:
+      operationId: alertRaise
+      summary: Raise an alert to the owner
+      description: >-
+        Raises an alert of kind `operations.agent_alert` under `key`, at once (200, `succeeded`), through the same
+        rules and channels as every other alert. The incident's key is `<credential ID>/<key>`, which the result
+        gives: another credential's alert under the same words is another incident. The owner is notified when a rule for that kind and severity is
+        bound to a channel. One key is one incident until it is resolved: raising it again while it is open counts
+        another occurrence and updates its summary without notifying again, and raising it after `alert_resolve` is a
+        new incident. The incident appears in `alerts_list` within about a minute. A credential may raise at most 60
+        alerts in any hour on a node, previews and retries included; past that it is a 429. With `dry_run` the same
+        checks run and nothing is written.
+      tags: [Alerts]
+      security: [{credential: []}]
+      x-axiom-permission: operations.write
+      x-axiom-scope: self
+      x-mcp-name: alert_raise
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/AlertRaise'}}}
+      responses:
+        '200':
+          description: The operation run, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/alerts/resolve:
+    post:
+      operationId: alertResolve
+      summary: Resolve an alert the agent raised
+      description: >-
+        Resolves the credential's own open `operations.agent_alert` incident under `key`, at once (200, `succeeded`):
+        the owner gets
+        the recovery notice when the first one reached them, and the key's next `alert_raise` is a new incident. A
+        key with no open incident is left as it is. Only the credential's own alerts can be resolved here; the other kinds
+        recover by their own rules or are closed by the owner. With `dry_run` the same checks run and nothing is
+        written.
+      tags: [Alerts]
+      security: [{credential: []}]
+      x-axiom-permission: operations.write
+      x-axiom-scope: self
+      x-mcp-name: alert_resolve
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/AlertResolve'}}}
+      responses:
+        '200':
+          description: The operation run, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/Failure'}
   /api/operations/v1/models/{model_id}/status:
@@ -881,6 +980,66 @@ components:
         expires_at: {type: string, format: date-time, description: "When the credit expires, in the future. Absent: it does not expire."}
         reason: {$ref: '#/components/schemas/AgentReason'}
         dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written or reserved."}
+    AlertKey:
+      type: string
+      pattern: '^[A-Za-z0-9._:/-]{1,128}$'
+      description: >-
+        The incident the alert is about, in the agent's own words, such as `supplier/<id>/balance`: the same key is the
+        same incident until it is resolved.
+    AlertRaise:
+      type: object
+      additionalProperties: false
+      required: [key, severity, summary, reason]
+      properties:
+        key: {$ref: '#/components/schemas/AlertKey'}
+        severity: {type: string, enum: [info, warning, critical], description: "Which rules notify the owner of it."}
+        summary:
+          type: string
+          minLength: 1
+          maxLength: 512
+          pattern: '^[^\x00]+$'
+          description: >-
+            What the owner reads in the notification: at most 512 bytes of UTF-8 (about 170 Chinese characters), no
+            NUL. It is shown as the agent's untrusted text.
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
+    AlertResolve:
+      type: object
+      additionalProperties: false
+      required: [key, reason]
+      properties:
+        key: {$ref: '#/components/schemas/AlertKey'}
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
+    OperationsAlertList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/AlertEvent'}}
+        next_cursor: {type: string}
+    AlertEvent:
+      type: object
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        kind: {type: string}
+        key: {type: string}
+        severity: {type: string}
+        fields: {type: object, additionalProperties: {type: string}}
+        occurrences: {type: integer, format: int64}
+        state: {type: string, enum: [firing, delivered, resolved], x-enum-varnames: [AlertFiring, AlertDelivered, AlertResolved]}
+        fired_at: {type: string, format: date-time}
+        resolved_at: {type: string, format: date-time}
+        receipts: {type: array, items: {$ref: "#/components/schemas/AlertReceipt"}}
+    AlertReceipt:
+      type: object
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        rule_id: {type: string}
+        sequence: {type: integer, description: "0 is the first notification; -1 is recovery; positive values are repeats."}
+        state: {type: string, enum: [pending, queued, delivered, failed], x-enum-varnames: [AlertPendingReceipt, AlertQueuedReceipt, AlertDeliveredReceipt, AlertFailedReceipt]}
+        at: {type: string, format: date-time}
+        delivered_at: {type: string, format: date-time}
     AgentReason:
       type: string
       minLength: 1

@@ -129,7 +129,8 @@ func preview(p operations.Proposal) operations.Operation {
 
 // runOperation makes the change op asks for in tx, as the agent's, and answers what it left. A top-up proposal changes
 // nothing yet: its reservation, rechecked here, holds until the agent confirms the money. A sale price is published and
-// counted in the day's envelope. A credit is given and its reservation committed. An endpoint is switched.
+// counted in the day's envelope. A credit is given and its reservation committed. An endpoint is switched. An alert
+// is raised or resolved.
 func (a adminAPI) runOperation(ctx context.Context, tx pg.Tx, op operations.Operation) (map[string]any, error) {
 	switch op.Tool {
 	case "model_set_status":
@@ -140,6 +141,8 @@ func (a adminAPI) runOperation(ctx context.Context, tx pg.Tx, op operations.Oper
 		return a.runCreditGrant(ctx, tx, op)
 	case "endpoint_set_enabled":
 		return a.runEndpointEnabled(ctx, tx, op)
+	case "alert_raise", "alert_resolve":
+		return runAlert(ctx, tx, op)
 	case "supplier_top_up_propose":
 		r, err := operations.CheckReservation(ctx, tx, op)
 		if err != nil {

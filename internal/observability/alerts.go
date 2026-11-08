@@ -289,10 +289,19 @@ func evaluateSample(ctx context.Context, tx pg.Tx, s alert.Signal, now time.Time
 	return nil
 }
 
+// AlertEventPage selects incidents newest first: those before the ID Before (none for the first page), at most Limit
+// of them, and only the unresolved when Open.
+type AlertEventPage struct {
+	Before uuid.UUID
+	Limit  int
+	Open   bool
+}
+
 // ListAlertEvents uses a UUID keyset and caps the page; receipts belong to the returned incidents only.
-func ListAlertEvents(ctx context.Context, tx pg.Tx, before uuid.UUID) ([]AlertEvent, error) {
+func ListAlertEvents(ctx context.Context, tx pg.Tx, p AlertEventPage) ([]AlertEvent, error) {
 	events, err := readAlertEvents(ctx, tx, `SELECT id,kind,key,severity,fields,occurrences,state,fired_at,resolved_at
- FROM observability.alert_events WHERE ($1::uuid='00000000-0000-0000-0000-000000000000' OR id<$1) ORDER BY id DESC LIMIT 100`, before)
+ FROM observability.alert_events WHERE ($1::uuid='00000000-0000-0000-0000-000000000000' OR id<$1) AND (NOT $3 OR resolved_at IS NULL)
+ ORDER BY id DESC LIMIT $2`, p.Before, p.Limit, p.Open)
 	if err != nil {
 		return nil, err
 	}
