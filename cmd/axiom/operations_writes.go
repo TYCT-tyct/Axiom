@@ -56,7 +56,7 @@ func (o operationsAPI) ModelSetStatus(ctx context.Context, r operationsapi.Model
 	}); err != nil {
 		return nil, err
 	}
-	o.admin.refreshCatalog(ctx, replayed || op.State != operations.StateSucceeded)
+	o.admin.refreshAfterCommit(ctx, replayed || op.State != operations.StateSucceeded)
 	headers := operationsapi.ModelSetStatus200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}
 	if op.State == operations.StatePending && op.ID != (uuid.UUID{}) {
 		return operationsapi.ModelSetStatus202JSONResponse{Body: operationBody(op), Headers: operationsapi.ModelSetStatus202ResponseHeaders(headers)}, nil
