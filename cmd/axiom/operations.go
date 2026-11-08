@@ -480,3 +480,20 @@ func (o operationsAPI) CallGet(ctx context.Context, r operationsapi.CallGetReque
 	answer, err := o.admin.GetAdminCallTrace(ctx, adminapi.GetAdminCallTraceRequestObject{CallId: r.CallId})
 	return relayed[operationsapi.CallGet200JSONResponse, adminapi.GetAdminCallTrace200JSONResponse](answer, err)
 }
+
+// AuditList lists the platform's audit entries as the admin's search does; the guard has required the platform grant.
+func (o operationsAPI) AuditList(ctx context.Context, r operationsapi.AuditListRequestObject) (operationsapi.AuditListResponseObject, error) {
+	p := r.Params
+	answer, err := o.admin.ListAuditEntries(ctx, adminapi.ListAuditEntriesRequestObject{Params: adminapi.ListAuditEntriesParams{
+		Since: p.Since, Until: p.Until, Cursor: p.Cursor, Limit: p.Limit, SiteId: p.SiteId, AccountId: p.AccountId,
+		RequestId: p.RequestId, ActorKind: p.ActorKind, ActorId: p.ActorId, Action: p.Action, Module: p.Module,
+		TargetKind: p.TargetKind, TargetId: p.TargetId,
+	}})
+	return relayed[operationsapi.AuditList200JSONResponse, adminapi.ListAuditEntries200JSONResponse](answer, err)
+}
+
+// AuditGet reads one audit entry as the admin does.
+func (o operationsAPI) AuditGet(ctx context.Context, r operationsapi.AuditGetRequestObject) (operationsapi.AuditGetResponseObject, error) {
+	answer, err := o.admin.GetAuditEntry(ctx, adminapi.GetAuditEntryRequestObject{EntryId: r.EntryId})
+	return relayed[operationsapi.AuditGet200JSONResponse, adminapi.GetAuditEntry200JSONResponse](answer, err)
+}

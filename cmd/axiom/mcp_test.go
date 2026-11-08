@@ -49,8 +49,9 @@ func TestBridgeToolsFollowTheContract(t *testing.T) {
 	t.Parallel()
 	tools := contractTools(t)
 	want := []string{
-		"alert_raise", "alert_resolve", "alerts_list", "approval_get", "approval_wait", "approval_withdraw", "approvals_list", "call_get", "calls_list", "caps_get",
-		"credit_grant", "endpoint_set_enabled", "model_get", "model_set_status", "models_list", "operation_get", "operation_log_list",
+		"alert_raise", "alert_resolve", "alerts_list", "approval_get", "approval_wait", "approval_withdraw", "approvals_list", "audit_get",
+		"audit_list", "call_get", "calls_list", "caps_get", "credit_grant", "endpoint_set_enabled", "model_get", "model_set_status",
+		"models_list", "operation_get", "operation_log_list",
 		"operations_list", "pending_mappings_list", "price_publish", "prices_list", "supplier_top_up_confirm", "supplier_top_up_propose",
 		"suppliers_get", "suppliers_list", "whoami",
 	}

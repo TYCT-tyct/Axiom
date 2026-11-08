@@ -355,7 +355,7 @@ worker 返回的错误也一样：River 把它的文本写进 `river.river_job.e
 
 ## 审计日志
 
-管理 API 使用 `audit.List`、`audit.Get` 读取不可变条目，需要独立平台 `audit.view`（MFA）。列表提供账户、站点、请求 ID、操作者类别/ID、动作、模块和目标类别/ID 精确筛选；窗口与游标由 HTTP 边界校验，默认 24 小时、上限 31 天和 200 行、10 秒期限。审计 detail 以 `jsonx.Raw` 保留原始 JSON，避免大整数在通用对象解码中被 float64 舍入。按 `(at,id)` 倒序、复合游标上界优先，每个单项筛选由迁移 00017 的有序索引支持，组合筛选沿所选索引检查剩余条件；不承诺所有相关条件的读取量只是一页。custom plan 折叠空条件，列表禁用排序，不做 OFFSET 或清空。`TestAuditSearchFiltersPagesAndScope` 检查分页、精确过滤、RLS 和详情；`TestAuditPagesFollowIndexOrder` 在 2 万条记录中检查首页、深页、稀疏和无命中的索引计划及缓冲读取预算。
+管理 API 使用 `audit.List`、`audit.Get` 读取不可变条目，需要独立平台 `audit.view`（MFA）。运营接口的 `audit_list`、`audit_get` 转给同一组管理处理器，要凭证持有 `audit.view` 和平台范围（见[运营的「审计」](../../docs/domains/operations.md#审计)）。列表提供账户、站点、请求 ID、操作者类别/ID、动作、模块和目标类别/ID 精确筛选；窗口与游标由 HTTP 边界校验，默认 24 小时、上限 31 天和 200 行、10 秒期限。审计 detail 以 `jsonx.Raw` 保留原始 JSON，避免大整数在通用对象解码中被 float64 舍入。按 `(at,id)` 倒序、复合游标上界优先，每个单项筛选由迁移 00017 的有序索引支持，组合筛选沿所选索引检查剩余条件；不承诺所有相关条件的读取量只是一页。custom plan 折叠空条件，列表禁用排序，不做 OFFSET 或清空。`TestAuditSearchFiltersPagesAndScope` 检查分页、精确过滤、RLS 和详情；`TestAuditPagesFollowIndexOrder` 在 2 万条记录中检查首页、深页、稀疏和无命中的索引计划及缓冲读取预算。
 
 谁在何时对什么做了什么改动，记在 `platform.audit_log`，由 `audit.Record` 写入。所有模块都写这一张表，[运营](../../docs/domains/operations.md#审计)读取、检索和回放。它在平台，是因为 accounts、billing、catalog、payments 都要留审计，又都不能引用 `operations`。
 
