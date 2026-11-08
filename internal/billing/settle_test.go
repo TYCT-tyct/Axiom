@@ -26,6 +26,7 @@ type supplies struct {
 	resolved map[uuid.UUID]bool        // the requests a late settlement resolved
 	ended    map[uuid.UUID]int         // how many times each request was told to have ended
 	stuck    chan struct{}             // when set, recording a lost request waits for it to close or the context to end
+	stuckAt  chan struct{}             // when set, receives one value as a recording starts waiting on stuck
 	failLost map[uuid.UUID]error       // the requests whose recording as lost fails, with the error
 }
 
@@ -47,6 +48,10 @@ func (s *supplies) RecordAttempts(_ context.Context, _ pg.Tx, attempts []supplie
 
 func (s *supplies) RecordLostRequest(ctx context.Context, _ pg.Tx, id, _, _ uuid.UUID, route []uuid.UUID) error {
 	if s.stuck != nil {
+		select {
+		case s.stuckAt <- struct{}{}:
+		default:
+		}
 		select {
 		case <-s.stuck:
 		case <-ctx.Done():
