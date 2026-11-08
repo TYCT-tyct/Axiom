@@ -125,7 +125,7 @@ func startAdminNodeWithSignals(c commandLine, clock *testClock, exit *egress.Cli
 		c.t.Fatal(err)
 	}
 	api := newAdminAPI("test", svc, cat, supplierAdmin, upstreams, c.db, logger)
-	api.keys, api.exit = masterKeys(c.t), exit
+	api.keys, api.exit, api.router = masterKeys(c.t), exit, checkRouter(c.t)
 	api.alerts, api.instance, api.paymentSignals = signals, instance, payments.NewSignalState()
 	routes := adminRoutes(api, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
 	opsContract, err := operationsContract()

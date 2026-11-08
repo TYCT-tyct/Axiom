@@ -97,8 +97,11 @@ type Owner struct {
 // Platform reports whether the endpoint has no tenant owner.
 func (o Owner) Platform() bool { return o.Site == (SiteID{}) && o.Account == (AccountID{}) }
 
+// visibleTo reports whether the admission's keys may be routed to the endpoint. An admission without an account (a
+// layer's check of rules, not a call) sees no account's endpoints: a zero account matching every site's own endpoints
+// would let one site's supply answer for another's.
 func (o Owner) visibleTo(a Admission) bool {
-	return o.Platform() || o.Site == a.Site && o.Account == AccountID{} || o.Account == a.Account
+	return o.Platform() || o.Site == a.Site && o.Account == AccountID{} || a.Account != AccountID{} && o.Account == a.Account
 }
 
 // Capacity reports whether an endpoint's credentials can take another call now: any key with a free concurrency slot

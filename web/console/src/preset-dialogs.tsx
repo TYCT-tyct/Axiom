@@ -1,11 +1,21 @@
 import { ApiError, consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
-import { accountKey, draftOf, type Invalid, RulesEditor, rulesOf, useClassOptions, useErrors } from "@axiom/app";
-import { Button, Dialog, FormError, Icon, SubmitButton, TextField, useFormat } from "@axiom/ui";
+import {
+  accountKey,
+  draftOf,
+  type Invalid,
+  RulesEditor,
+  rulesOf,
+  useClassOptions,
+  useErrors,
+  useRulesCheck,
+} from "@axiom/app";
+import { Dialog, FormError, Icon, TextField, useFormat } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "./confirm-dialog";
 import { routingDefaultQuery, siteQuery, sourceClassesQuery } from "./queries";
+import { Actions } from "./workspace-dialogs";
 
 type Preset = Schemas["RoutingPreset"];
 export type PresetEdit = { kind: "create" } | { kind: "copy"; preset: Preset } | { kind: "edit"; preset: Preset };
@@ -58,6 +68,12 @@ function save(edit: PresetEdit, body: { slug: string; name: string; rules: Schem
 
 type Missing = "slug" | "name" | null;
 
+// checkRules asks which rules keep no endpoint the account's keys can use: the editor marks them as the rules change,
+// and a save is refused while one does.
+function checkRules(rules: Schemas["RoutingRules"]) {
+  return unwrap(consoleApi.POST("/api/console/v1/routing-presets/checks", { body: { rules } }));
+}
+
 // A refusal may sit far down a long dialog, away from the button pressed: once it renders, it is scrolled into view.
 function showRefusal(form: HTMLFormElement) {
   requestAnimationFrame(() =>
@@ -84,6 +100,7 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
   const [draft, setDraft] = useState(() => draftOf(source?.rules, edit.kind === "copy"));
   const [invalid, setInvalid] = useState<Invalid | null>(null);
   const [missing, setMissing] = useState<Missing>(null);
+  const unmatched = useRulesCheck(draft, checkRules, []);
   const mutation = useMutation({
     mutationFn: (body: Parameters<typeof save>[1]) => save(edit, body),
     onSuccess: async () => {
@@ -96,7 +113,7 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
     const blank: Missing = edit.kind !== "edit" && !slugPattern.test(slug) ? "slug" : name.trim() ? null : "name";
     setInvalid("invalid" in written ? written.invalid : null);
     setMissing(blank);
-    if ("rules" in written && !blank && !mutation.isPending) {
+    if ("rules" in written && !blank && !unmatched && !mutation.isPending) {
       mutation.mutate({ slug, name: name.trim(), rules: written.rules });
       return;
     }
@@ -123,15 +140,12 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
           onSlug={setSlug}
           onName={setName}
         />
-        <RulesEditor draft={draft} invalid={invalid} {...choices} onChange={setDraft} />
-        <div className="flex justify-end gap-2 pt-2">
-          <Button size="md" onClick={onClose}>
-            {t("cancel", { ns: "common" })}
-          </Button>
-          <SubmitButton pending={mutation.isPending}>
-            {edit.kind === "edit" ? t("routingPresets.form.save") : t("routingPresets.form.create")}
-          </SubmitButton>
-        </div>
+        <RulesEditor draft={draft} invalid={invalid ?? unmatched} {...choices} onChange={setDraft} />
+        <Actions
+          pending={mutation.isPending}
+          submit={edit.kind === "edit" ? t("routingPresets.form.save") : t("routingPresets.form.create")}
+          onCancel={onClose}
+        />
       </form>
     </Dialog>
   );

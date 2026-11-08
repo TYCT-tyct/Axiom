@@ -123,7 +123,7 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 		return nodeRoutes{}, err
 	}
 	public := withModelCalls(
-		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, catalog: cat, db: db, models: calls.models, search: calls.search.List(), suppliers: supplierAdmin, classes: calls.health},
+		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, catalog: cat, db: db, models: calls.models, search: calls.search.List(), suppliers: supplierAdmin, classes: calls.health, router: calls.router},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
 	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger, keyLookup: p.gate.KeyLookup})
@@ -131,7 +131,7 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 	adminAPI := newAdminAPI(version(), service, cat, supplierAdmin, calls.upstreams, db, logger)
 	adminAPI.keys, adminAPI.exit, adminAPI.smtp, adminAPI.search = p.master, exit, p.cfg.smtp, p.cfg.search
 	adminAPI.alerts, adminAPI.instance, adminAPI.paymentSignals = p.alerts, p.cfg.valkey.NodeID, p.paymentSignals
-	adminAPI.fileParser = p.cfg.fileParser
+	adminAPI.fileParser, adminAPI.router = p.cfg.fileParser, calls.router
 	admin := adminRoutes(adminAPI,
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	ops := operationsRoutes(operationsAPI{admin: adminAPI, db: db},

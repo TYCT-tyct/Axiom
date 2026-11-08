@@ -183,14 +183,14 @@ function PresetRow({ preset, manage, onOpen }: { preset: Preset; manage: boolean
           {preset.currency ? <Badge tone="neutral">{preset.currency}</Badge> : null}
         </div>
         <div className="pt-1 text-label md:hidden">
-          <RulesSummary rules={preset.rules} />
+          <RulesSummary summary={preset.summary} />
           <p className="text-t3 sm:hidden">
             <Keys preset={preset} labelled />
           </p>
         </div>
       </Td>
       <Td className="hidden md:table-cell">
-        <RulesSummary rules={preset.rules} />
+        <RulesSummary summary={preset.summary} />
       </Td>
       <Td className="hidden whitespace-nowrap tabular-nums sm:table-cell">{keys}</Td>
       <Td className="hidden tabular-nums lg:table-cell">{preset.version}</Td>
