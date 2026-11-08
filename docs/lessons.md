@@ -24,7 +24,10 @@
 `TestCallCSVUsesOneSnapshot` 经 HTTP 守卫导出 300 条调用，中途写入迟到的一条，整段跑在导出的 10 秒请求期限里，main 的完整 CI 负载下用尽期限。处理器在期限内调用的读事务提成 `consoleAPI.writeCalls`，快照测试和满额导出测试直接用测试上下文调用它，不再各自复制事务体。
 
 证据：main run [41569157437](https://github.com/TYCT-tyct/Axiom/actions/runs/41569157437) 的 `panic: console: stream calls: timeout: context deadline exceeded`；本地让迟到的写入拖过期限，得到同一 panic。
-出现：2026-10-20、2026-10-29、2026-11-03
+gateway 的账本 rig 把准入和 key 查找的期限放到 30 秒，追加却仍用生产的 1 秒 `ExtendWait`：`TestAnEstimateIsNeverChargedBeyondTheReservation` 断言的是预留上限，一次追加事务在 CI 负载下超过 1 秒，流就以 `billing_unavailable` 截断。账本 rig 和 `newDyingNode` 改为等追加 25 秒，同时把模型速度降到每秒 4 个 token，超额额度仍是 100 个 token（不低于等待期限，I1 成立），金额不变；按期限截断仍由 `synctest` 下的 `TestATruncatedStreamConsumesNoMoreThanItsAllowance` 验证。
+
+证据：main run [42491552063](https://github.com/TYCT-tyct/Axiom/actions/runs/42491552063) 的 `exec_ledger_test.go:248: 503 … billing_unavailable`；本地让账本的追加多用 1.5 秒，改前得到同一个 503，改后通过。
+出现：2026-10-20、2026-10-29、2026-11-03、2026-11-08
 
 ## 凭证份额测试遗漏注册空档和路由投影外的占用
 
