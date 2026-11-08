@@ -1873,7 +1873,7 @@ components:
             head_seq: {type: integer, format: int64, minimum: 0, description: The last link; 0 before the first.}
             head_at: {type: string, format: date-time, description: The time of the last link's entry.}
             faults: {type: integer, format: int64, minimum: 0, description: Faults found; any stops the chaining until the owner acts.}
-            checked_at: {type: string, format: date-time, description: When a check of the whole chain last finished; while a round runs, when the one before it finished.}
+            checked_at: {type: string, format: date-time, description: 'When a check of the whole chain last finished; while a round runs, when the one before it finished.'}
     AuditEntryList:
       type: object
       additionalProperties: false
