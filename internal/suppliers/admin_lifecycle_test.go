@@ -161,14 +161,18 @@ func TestEndpointQuantization(t *testing.T) {
 	got, err := set(&level)
 	refuses(t, "recording a level", err, nil)
 	same(t, "the endpoint", QuantizationFP8, got.Quantization)
-	detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+	detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) {
+		return a.admin.Supplier(ctx, tx, id, PlatformOwned)
+	})
 	refuses(t, "the detail", err, nil)
 	same(t, "the detail's level", QuantizationFP8, detail.Endpoints[0].Quantization)
 
 	got, err = set(nil)
 	refuses(t, "clearing the level", err, nil)
 	same(t, "a cleared level", Quantization(""), got.Quantization)
-	detail, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+	detail, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) {
+		return a.admin.Supplier(ctx, tx, id, PlatformOwned)
+	})
 	refuses(t, "the detail after clearing", err, nil)
 	same(t, "the cleared detail", Quantization(""), detail.Endpoints[0].Quantization)
 
@@ -198,7 +202,9 @@ func TestEndpointEnabled(t *testing.T) {
 		got, err := set(id, endpoint, enabled)
 		refuses(t, "switching", err, nil)
 		same(t, "the endpoint", enabled, got.Enabled)
-		detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+		detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) {
+			return a.admin.Supplier(ctx, tx, id, PlatformOwned)
+		})
 		refuses(t, "the detail", err, nil)
 		same(t, "the detail's switch", enabled, detail.Endpoints[0].Enabled)
 	}

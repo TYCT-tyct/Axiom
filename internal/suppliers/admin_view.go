@@ -214,10 +214,10 @@ func applyKeyStates(groups []Group, credentials []Credential) {
 	}
 }
 
-// view reads the supplier as it is, without its groups and credentials: a change answers with the supplier while it
-// holds the supplier's row lock, and must not read more than that.
-func (*Admin) view(ctx context.Context, tx pg.Tx, id uuid.UUID) (Supplier, error) {
-	rows, err := store.New().GetSupplierView(ctx, tx, id)
+// view reads the supplier of the owners as it is, without its groups and credentials: a change answers with the
+// supplier it changed, of every owner, while it holds the supplier's row lock, and must not read more than that.
+func (*Admin) view(ctx context.Context, tx pg.Tx, id uuid.UUID, owners Owners) (Supplier, error) {
+	rows, err := store.New().GetSupplierView(ctx, tx, store.GetSupplierViewParams{ID: id, EveryOwner: bool(owners)})
 	if err != nil {
 		return Supplier{}, fmt.Errorf("read the supplier: %w", err)
 	}

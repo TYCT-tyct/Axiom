@@ -42,8 +42,8 @@ func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, suppl
 	return a.reviseMapping(ctx, tx, q, actor, supplier, model, declared, formats, rows[0], m, detail, reason)
 }
 
-// MapPending makes a group alias for a name the group lists as waiting for a model (what PendingMappings lists), to a
-// model the group has no name for yet, and for nothing else: the result is a new endpoint and moves no traffic that
+// MapPending makes a group alias for a name the group lists as waiting for a model (what PendingMappings lists of the
+// PlatformOwned suppliers, the agent's), to a model the group has no name for yet, and for nothing else: the result is a new endpoint and moves no traffic that
 // already flows. An alias of a name the catalog recognised or a supplier alias covers would change what that name
 // means; a second name for a model the group has would take its endpoint over, since the projection keeps one endpoint
 // for a group's model and prefers an alias. Both checks run under the supplier lock that MapModel takes, so no alias

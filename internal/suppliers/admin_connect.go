@@ -197,7 +197,7 @@ func (a *Admin) Connect(ctx context.Context, tx pg.Tx, actor audit.Actor, r Conn
 	}); err != nil {
 		return Supplier{}, err
 	}
-	return a.view(ctx, tx, id)
+	return a.view(ctx, tx, id, EveryOwner)
 }
 
 // ReplaceLogin seals a new login in place of the old one and has the sync log in with it: the supplier is `connecting`
@@ -244,5 +244,5 @@ func (a *Admin) ReplaceLogin(ctx context.Context, tx pg.Tx, actor audit.Actor, i
 	if err := a.record(ctx, tx, actor, "supplier.replace_login", id, reason, map[string]any{"from": row.Status}); err != nil {
 		return Supplier{}, err
 	}
-	return a.view(ctx, tx, id)
+	return a.view(ctx, tx, id, EveryOwner)
 }
