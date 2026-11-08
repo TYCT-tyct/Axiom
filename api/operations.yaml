@@ -1103,6 +1103,47 @@ components:
         tier: {$ref: '#/components/schemas/OperationsApprovalTier'}
         expires_at: {type: string, format: date-time}
         decided_at: {type: string, format: date-time}
+        reasons:
+          type: array
+          maxItems: 16
+          items: {$ref: '#/components/schemas/OperationsApprovalReason'}
+          description: >-
+            Why it waits for the owner, as the server decided it when the operation was proposed: which cap or envelope
+            limit it goes over, a paused scope, or a class that always asks. Absent when an older node proposed it.
+    OperationsApprovalReason:
+      type: object
+      additionalProperties: false
+      required: [code]
+      description: One reason an operation waited for the owner.
+      properties:
+        code:
+          type: string
+          enum:
+            - always
+            - cap_paused
+            - cap_single
+            - cap_daily
+            - cap_weekly
+            - cap_object_daily
+            - cap_daily_count
+            - envelope_unmeasured_change
+            - envelope_unknown_cost
+            - envelope_min_margin
+            - envelope_model_daily_change
+            - envelope_daily_changes
+            - envelope_daily_models
+          description: >-
+            `always`: its class always waits for the owner (a credit grant, retiring a model). `cap_paused`: the
+            owner paused its cap's scope. The other `cap_` codes are the autonomous limits of `summary.cap` a transfer
+            goes over: `cap_single` (`single_max`), `cap_daily` (`daily_used` + `amount` over `daily_max`),
+            `cap_weekly` (`weekly_max`), `cap_object_daily` (`object_daily_max`), `cap_daily_count` (`daily_count`
+            at `daily_count_max`). The `envelope_` codes are what `summary.envelope` does not cover:
+            `envelope_unmeasured_change` (`change_bps` is null), `envelope_unknown_cost` (`margin_bps` is null),
+            `envelope_min_margin` (`margin_bps` under `min_margin_bps`), `envelope_model_daily_change`
+            (`model_change_used` + `change_bps` over `model_daily_change_bps`), `envelope_daily_changes`
+            (`daily_changes_used` at `daily_changes`), `envelope_daily_models` (`daily_models_used` at
+            `daily_models` and the model not yet moved today). A later server may add codes; a page shows one it
+            does not know as a reason it cannot name.
     OperationState:
       type: string
       enum: [pending_approval, approved, executing, succeeded, failed, unknown, canceled, expired, rejected, reverted]

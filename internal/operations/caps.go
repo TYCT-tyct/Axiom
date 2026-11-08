@@ -102,23 +102,55 @@ func lockCounters(ctx context.Context, tx pg.Tx, site *uuid.UUID, category Categ
 	return counters{ids: []int64{rows[0].ID, rows[1].ID, rows[2].ID}, day: rows[0], week: rows[1], objectDay: rows[2], dayStart: day, weekStart: week}, nil
 }
 
+// The reasons a money proposal waits: its scope is paused, or it goes over an autonomous limit of a category that has
+// them (capDetail's single_max, daily_max, weekly_max, object_daily_max and daily_count_max).
+const (
+	ReasonPaused      Reason = "cap_paused"
+	ReasonSingle      Reason = "cap_single"
+	ReasonDaily       Reason = "cap_daily"
+	ReasonWeekly      Reason = "cap_weekly"
+	ReasonObjectDaily Reason = "cap_object_daily"
+	ReasonDailyCount  Reason = "cap_daily_count"
+)
+
 // used is what a counter holds, reserved and committed.
 func used(c OperationsCapCounter) int64 { return c.Reserved + c.Committed }
 
-// weigh decides amount against p and what c holds: a *CapExceeded over a hard limit, otherwise whether it needs nobody,
-// within every autonomous limit of a category that has them. A sum that does not fit int64 is over any limit.
-func weigh(p CapPolicy, c counters, amount int64) (bool, error) {
+// weigh decides amount against p and what c holds: a *CapExceeded over a hard limit, otherwise why it waits for a
+// person, none when it needs nobody: a paused scope, a category that always asks, or each autonomous limit it goes
+// over. A sum that does not fit int64 is over any limit.
+func weigh(p CapPolicy, c counters, amount int64) ([]Reason, error) {
 	over := func(u, limit int64) bool { return u > math.MaxInt64-amount || u+amount > limit }
 	switch {
 	case amount > p.HardSingle:
-		return false, &CapExceeded{Limit: "hard_single", Max: p.HardSingle, Amount: amount}
+		return nil, &CapExceeded{Limit: "hard_single", Max: p.HardSingle, Amount: amount}
 	case over(used(c.day), p.HardDaily):
-		return false, &CapExceeded{Limit: "hard_daily", Max: p.HardDaily, Used: used(c.day), Amount: amount}
+		return nil, &CapExceeded{Limit: "hard_daily", Max: p.HardDaily, Used: used(c.day), Amount: amount}
 	case over(used(c.week), p.HardWeekly):
-		return false, &CapExceeded{Limit: "hard_weekly", Max: p.HardWeekly, Used: used(c.week), Amount: amount}
+		return nil, &CapExceeded{Limit: "hard_weekly", Max: p.HardWeekly, Used: used(c.week), Amount: amount}
 	}
-	return p.Category.autonomous() && amount <= p.Single && !over(used(c.day), p.Daily) && !over(used(c.week), p.Weekly) &&
-		!over(used(c.objectDay), p.ObjectDaily) && c.day.Count < p.DailyCount, nil
+	var reasons []Reason
+	if p.Paused != nil {
+		reasons = append(reasons, ReasonPaused)
+	}
+	if !p.Category.autonomous() { // its autonomous limits bind nothing, so none of them is why it waits
+		return append(reasons, ReasonAlways), nil
+	}
+	for _, limit := range []struct {
+		reason Reason
+		over   bool
+	}{
+		{ReasonSingle, amount > p.Single},
+		{ReasonDaily, over(used(c.day), p.Daily)},
+		{ReasonWeekly, over(used(c.week), p.Weekly)},
+		{ReasonObjectDaily, over(used(c.objectDay), p.ObjectDaily)},
+		{ReasonDailyCount, c.day.Count >= p.DailyCount},
+	} {
+		if limit.over {
+			reasons = append(reasons, limit.reason)
+		}
+	}
+	return reasons, nil
 }
 
 // ProposeMoney is Propose for a proposal that moves m: it locks m's policy and counters, finds a retry of the key as
@@ -149,12 +181,12 @@ func ProposeMoney(ctx context.Context, tx pg.Tx, p Proposal, m Transfer) (Operat
 	if op, found, err := Replay(ctx, tx, p); found || err != nil {
 		return op, found, err
 	}
-	within, err := weigh(policy, c, m.Amount)
+	reasons, err := weigh(policy, c, m.Amount)
 	if err != nil {
 		return Operation{}, false, err
 	}
-	if !within || policy.Paused != nil {
-		p.Summary = maps.Clone(m.Summary)
+	if len(reasons) > 0 {
+		p.Summary, p.Reasons = maps.Clone(m.Summary), reasons
 		p.Summary["cap"] = capDetail(policy, c, m.Amount)
 	}
 	op, replayed, err := Propose(ctx, tx, p)

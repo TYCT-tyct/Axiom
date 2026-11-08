@@ -9,6 +9,7 @@ import (
 
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/audit"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/operationsapi"
 	"axiom/internal/platform/pg"
 )
@@ -95,6 +96,7 @@ func TestOperationsAPIApproval(t *testing.T) {
 	if asked.State != operationsapi.OperationStatePendingApproval || asked.Approval == nil || asked.NextCheckAfterSeconds == nil {
 		t.Fatalf("the proposal: %+v", asked)
 	}
+	expectReasons(t, "the agent's proposal", asked.Approval.Reasons, `[{"code":"always"}]`)
 	if got := f.send(http.MethodGet, "/models/"+model.Id, "", http.StatusOK); got.Status != adminapi.ModelStatusListed {
 		t.Errorf("the model is %s before the approval", got.Status)
 	}
@@ -103,7 +105,8 @@ func TestOperationsAPIApproval(t *testing.T) {
 	rec := f.decide(asked.Approval.ApprovalId, "approve")
 	var approved adminapi.OperationsApproval
 	decode(t, rec, &approved)
-	if rec.Code != http.StatusOK || approved.State != adminapi.OperationsApprovalStateApproved || approved.OperationState != adminapi.OperationStateSucceeded {
+	if rec.Code != http.StatusOK || approved.State != adminapi.OperationsApprovalStateApproved || approved.OperationState != adminapi.OperationStateSucceeded ||
+		!strings.Contains(rec.Body.String(), `"decidable":false`) {
 		t.Errorf("the approval: %s", rec.Body)
 	}
 	if got := f.send(http.MethodGet, "/models/"+model.Id, "", http.StatusOK); got.Status != adminapi.ModelStatusRetired {
@@ -118,8 +121,8 @@ func TestOperationsAPIApproval(t *testing.T) {
 	expectOperation(t, f.agent(token, because("/operations/"+*asked.OperationId, "did it run")), "succeeded", "approved")
 }
 
-// expectOwnerSees checks the owner's queue: the pending approval, with what the server read of the model apart from
-// the agent's reason and run.
+// expectOwnerSees checks the owner's queue: the pending approval, which the owner can still decide, with what the
+// server read of the model apart from the agent's reason and run, and why it waits.
 func (f catalogFixture) expectOwnerSees(approval, slug string) {
 	f.t.Helper()
 	rec := f.do(http.MethodGet, "/operations/approvals?state=pending", "", as(f.s))
@@ -128,8 +131,18 @@ func (f catalogFixture) expectOwnerSees(approval, slug string) {
 	if len(queue.Data) != 1 {
 		f.t.Fatalf("the owner's queue: %s", rec.Body)
 	}
-	if a := queue.Data[0]; a.Id != approval || a.AgentReason != "its sales stopped" || !strings.Contains(string(a.Summary), `"slug":"`+slug+`"`) || deref(a.RunId) != "run-7" {
+	if a := queue.Data[0]; a.Id != approval || a.AgentReason != "its sales stopped" || !strings.Contains(string(a.Summary), `"slug":"`+slug+`"`) || deref(a.RunId) != "run-7" ||
+		a.Decidable == nil || !*a.Decidable {
 		f.t.Errorf("the owner sees %s", rec.Body)
+	}
+	expectReasons(f.t, "the owner's approval", queue.Data[0].Reasons, `[{"code":"always"}]`)
+}
+
+// expectReasons checks why an answer says an approval waits, as its JSON writes the reasons.
+func expectReasons(t *testing.T, what string, reasons any, want string) {
+	t.Helper()
+	if got, err := jsonx.MarshalCanonical(reasons); err != nil || string(got) != want {
+		t.Errorf("%s waits for %s (%v), want %s", what, got, err, want)
 	}
 }
 

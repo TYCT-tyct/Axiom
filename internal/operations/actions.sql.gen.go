@@ -13,7 +13,7 @@ import (
 )
 
 const approvalByID = `-- name: ApprovalByID :many
-SELECT id, operation_id, tier, state, summary, requested_at, expires_at, decided_at, decided_by, decision_reason FROM operations.approvals WHERE id = $1
+SELECT id, operation_id, tier, state, summary, requested_at, expires_at, decided_at, decided_by, decision_reason, reasons FROM operations.approvals WHERE id = $1
 `
 
 func (q *Queries) ApprovalByID(ctx context.Context, db DBTX, id uuid.UUID) ([]OperationsApproval, error) {
@@ -36,6 +36,7 @@ func (q *Queries) ApprovalByID(ctx context.Context, db DBTX, id uuid.UUID) ([]Op
 			&i.DecidedAt,
 			&i.DecidedBy,
 			&i.DecisionReason,
+			&i.Reasons,
 		); err != nil {
 			return nil, err
 		}
@@ -48,10 +49,10 @@ func (q *Queries) ApprovalByID(ctx context.Context, db DBTX, id uuid.UUID) ([]Op
 }
 
 const approvals = `-- name: Approvals :many
-SELECT id, operation_id, tier, state, summary, requested_at, expires_at, decided_at, decided_by, decision_reason FROM operations.approvals
-WHERE ($1::text IS NULL OR state = $1::text)
-  AND ($2::uuid = '00000000-0000-0000-0000-000000000000' OR id < $2::uuid)
-ORDER BY id DESC
+SELECT a.id, a.operation_id, a.tier, a.state, a.summary, a.requested_at, a.expires_at, a.decided_at, a.decided_by, a.decision_reason, a.reasons, (a.state = 'pending' AND a.expires_at > clock_timestamp())::bool AS decidable FROM operations.approvals a
+WHERE ($1::text IS NULL OR a.state = $1::text)
+  AND ($2::uuid = '00000000-0000-0000-0000-000000000000' OR a.id < $2::uuid)
+ORDER BY a.id DESC
 LIMIT $3
 `
 
@@ -61,27 +62,35 @@ type ApprovalsParams struct {
 	PageSize int32
 }
 
-// Every approval newest first, a page after the cursor's ID, in one state or all: the owner's queue.
-func (q *Queries) Approvals(ctx context.Context, db DBTX, arg ApprovalsParams) ([]OperationsApproval, error) {
+type ApprovalsRow struct {
+	OperationsApproval OperationsApproval
+	Decidable          bool
+}
+
+// Every approval newest first, a page after the cursor's ID, in one state or all: the owner's queue, decidable as in
+// ApprovalsOf.
+func (q *Queries) Approvals(ctx context.Context, db DBTX, arg ApprovalsParams) ([]ApprovalsRow, error) {
 	rows, err := db.Query(ctx, approvals, arg.State, arg.After, arg.PageSize)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []OperationsApproval
+	var items []ApprovalsRow
 	for rows.Next() {
-		var i OperationsApproval
+		var i ApprovalsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.OperationID,
-			&i.Tier,
-			&i.State,
-			&i.Summary,
-			&i.RequestedAt,
-			&i.ExpiresAt,
-			&i.DecidedAt,
-			&i.DecidedBy,
-			&i.DecisionReason,
+			&i.OperationsApproval.ID,
+			&i.OperationsApproval.OperationID,
+			&i.OperationsApproval.Tier,
+			&i.OperationsApproval.State,
+			&i.OperationsApproval.Summary,
+			&i.OperationsApproval.RequestedAt,
+			&i.OperationsApproval.ExpiresAt,
+			&i.OperationsApproval.DecidedAt,
+			&i.OperationsApproval.DecidedBy,
+			&i.OperationsApproval.DecisionReason,
+			&i.OperationsApproval.Reasons,
+			&i.Decidable,
 		); err != nil {
 			return nil, err
 		}
@@ -94,29 +103,39 @@ func (q *Queries) Approvals(ctx context.Context, db DBTX, arg ApprovalsParams) (
 }
 
 const approvalsOf = `-- name: ApprovalsOf :many
-SELECT id, operation_id, tier, state, summary, requested_at, expires_at, decided_at, decided_by, decision_reason FROM operations.approvals WHERE operation_id = ANY ($1::uuid[])
+SELECT a.id, a.operation_id, a.tier, a.state, a.summary, a.requested_at, a.expires_at, a.decided_at, a.decided_by, a.decision_reason, a.reasons, (a.state = 'pending' AND a.expires_at > clock_timestamp())::bool AS decidable
+FROM operations.approvals a WHERE a.operation_id = ANY ($1::uuid[])
 `
 
-func (q *Queries) ApprovalsOf(ctx context.Context, db DBTX, operations []uuid.UUID) ([]OperationsApproval, error) {
+type ApprovalsOfRow struct {
+	OperationsApproval OperationsApproval
+	Decidable          bool
+}
+
+// The approvals of operations, each with whether a person can still decide it by the clock a decision checks
+// (LockApprovalOf), so a page needs no clock of its own.
+func (q *Queries) ApprovalsOf(ctx context.Context, db DBTX, operations []uuid.UUID) ([]ApprovalsOfRow, error) {
 	rows, err := db.Query(ctx, approvalsOf, operations)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []OperationsApproval
+	var items []ApprovalsOfRow
 	for rows.Next() {
-		var i OperationsApproval
+		var i ApprovalsOfRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.OperationID,
-			&i.Tier,
-			&i.State,
-			&i.Summary,
-			&i.RequestedAt,
-			&i.ExpiresAt,
-			&i.DecidedAt,
-			&i.DecidedBy,
-			&i.DecisionReason,
+			&i.OperationsApproval.ID,
+			&i.OperationsApproval.OperationID,
+			&i.OperationsApproval.Tier,
+			&i.OperationsApproval.State,
+			&i.OperationsApproval.Summary,
+			&i.OperationsApproval.RequestedAt,
+			&i.OperationsApproval.ExpiresAt,
+			&i.OperationsApproval.DecidedAt,
+			&i.OperationsApproval.DecidedBy,
+			&i.OperationsApproval.DecisionReason,
+			&i.OperationsApproval.Reasons,
+			&i.Decidable,
 		); err != nil {
 			return nil, err
 		}
@@ -154,17 +173,18 @@ func (q *Queries) DecideApproval(ctx context.Context, db DBTX, arg DecideApprova
 }
 
 const insertApproval = `-- name: InsertApproval :one
-INSERT INTO operations.approvals (id, operation_id, tier, state, summary, requested_at, expires_at)
-SELECT $1, $2, 'human', 'pending', $3, c.at,
-    least(c.at + make_interval(secs => $4::float8), date_trunc('day', c.at, 'UTC') + interval '1 day')
+INSERT INTO operations.approvals (id, operation_id, tier, state, summary, reasons, requested_at, expires_at)
+SELECT $1, $2, 'human', 'pending', $3, $4::text[], c.at,
+    least(c.at + make_interval(secs => $5::float8), date_trunc('day', c.at, 'UTC') + interval '1 day')
 FROM (SELECT clock_timestamp() AS at) c
-RETURNING id, operation_id, tier, state, summary, requested_at, expires_at, decided_at, decided_by, decision_reason
+RETURNING id, operation_id, tier, state, summary, requested_at, expires_at, decided_at, decided_by, decision_reason, reasons
 `
 
 type InsertApprovalParams struct {
 	ID          uuid.UUID
 	OperationID uuid.UUID
 	Summary     []byte
+	Reasons     []string
 	TtlSeconds  float64
 }
 
@@ -175,6 +195,7 @@ func (q *Queries) InsertApproval(ctx context.Context, db DBTX, arg InsertApprova
 		arg.ID,
 		arg.OperationID,
 		arg.Summary,
+		arg.Reasons,
 		arg.TtlSeconds,
 	)
 	var i OperationsApproval
@@ -189,6 +210,7 @@ func (q *Queries) InsertApproval(ctx context.Context, db DBTX, arg InsertApprova
 		&i.DecidedAt,
 		&i.DecidedBy,
 		&i.DecisionReason,
+		&i.Reasons,
 	)
 	return i, err
 }
@@ -250,7 +272,7 @@ func (q *Queries) InsertOperation(ctx context.Context, db DBTX, arg InsertOperat
 }
 
 const lockApprovalOf = `-- name: LockApprovalOf :many
-SELECT a.id, a.operation_id, a.tier, a.state, a.summary, a.requested_at, a.expires_at, a.decided_at, a.decided_by, a.decision_reason, (a.expires_at <= clock_timestamp())::bool AS due FROM operations.approvals a WHERE a.operation_id = $1 FOR UPDATE
+SELECT a.id, a.operation_id, a.tier, a.state, a.summary, a.requested_at, a.expires_at, a.decided_at, a.decided_by, a.decision_reason, a.reasons, (a.expires_at <= clock_timestamp())::bool AS due FROM operations.approvals a WHERE a.operation_id = $1 FOR UPDATE
 `
 
 type LockApprovalOfRow struct {
@@ -280,6 +302,7 @@ func (q *Queries) LockApprovalOf(ctx context.Context, db DBTX, operationID uuid.
 			&i.OperationsApproval.DecidedAt,
 			&i.OperationsApproval.DecidedBy,
 			&i.OperationsApproval.DecisionReason,
+			&i.OperationsApproval.Reasons,
 			&i.Due,
 		); err != nil {
 			return nil, err
