@@ -57,6 +57,28 @@ WHERE category = @category AND site_id IS NOT DISTINCT FROM sqlc.narg(site_id)::
 ORDER BY object_kind, window_kind
 FOR UPDATE;
 
+-- name: LockReservedPolicies :exec
+-- The policies of the reservations still held by operations @ids, which the caller holds, in the order every batch
+-- takes them: by category, the platform's first, then by site.
+SELECT p.category FROM operations.cap_policies p
+WHERE EXISTS (SELECT 1 FROM operations.money_actions m WHERE m.operation_id = ANY (@ids::uuid[]) AND m.state = 'reserved'
+    AND m.category = p.category AND m.site_id IS NOT DISTINCT FROM p.site_id)
+ORDER BY p.category, p.site_id NULLS FIRST
+FOR SHARE OF p;
+
+-- name: LockReservedCounters :exec
+-- The counters of the reservations still held by operations @ids, which the caller holds, every scope's in one order:
+-- by scope as LockReservedPolicies, then as LockCapCounters takes a scope's three (object kind, window kind), then by
+-- window and object. Every lock sequence of one scope (LockCapCounters, LockScopeCounters) follows the same order.
+SELECT c.id FROM operations.cap_counters c
+WHERE EXISTS (SELECT 1 FROM operations.money_actions m WHERE m.operation_id = ANY (@ids::uuid[]) AND m.state = 'reserved'
+    AND m.category = c.category AND m.site_id IS NOT DISTINCT FROM c.site_id AND (
+        (c.window_kind = 'day' AND c.window_start = m.day_start AND c.object_kind = '')
+        OR (c.window_kind = 'week' AND c.window_start = m.week_start AND c.object_kind = '')
+        OR (c.window_kind = 'day' AND c.window_start = m.day_start AND c.object_kind = m.object_kind AND c.object_id = m.object_id)))
+ORDER BY c.category, c.site_id NULLS FIRST, c.object_kind, c.window_kind, c.window_start, c.object_id
+FOR UPDATE OF c;
+
 -- name: MoveCapCounters :exec
 UPDATE operations.cap_counters SET reserved = reserved + @reserved, committed = committed + @committed, count = count + @count
 WHERE id = ANY (@ids::bigint[]);

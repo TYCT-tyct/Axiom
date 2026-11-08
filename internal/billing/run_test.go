@@ -20,17 +20,21 @@ func TestRunKeepsTheHolderAlive(t *testing.T) {
 	t.Parallel()
 
 	b := newBank(t, 0, 0, Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Hour})
-	beats := b.billing.beat.Load()
-	stop := runInBackground(t, b)
-	for deadline := time.Now().Add(12 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		if !b.billing.Alive() {
-			t.Fatal("the holder went stale while its loop was beating")
+	synctest.Test(t, func(t *testing.T) {
+		startInBubble(t, b)
+		beats := b.billing.beat.Load()
+		stop := runInBackground(t, b)
+		for range 12 {
+			time.Sleep(time.Second)
+			if !b.billing.Alive() {
+				t.Fatal("the holder went stale while its loop was beating")
+			}
 		}
-	}
-	if b.billing.beat.Load() <= beats+int64(9*time.Second) {
-		t.Error("the holder's expiry was not pushed out twice, once in each default heartbeat period")
-	}
-	stop()
+		if b.billing.beat.Load() <= beats+int64(9*time.Second) {
+			t.Error("the holder's expiry was not pushed out twice, once in each default heartbeat period")
+		}
+		stop()
+	})
 }
 
 // TestRunStopsWhenTheHolderIsReaped: once another node has reaped this one's holder, nothing this process writes is
@@ -85,6 +89,26 @@ func TestRunCleansUpAtOnce(t *testing.T) {
 	}
 }
 
+// startInBubble replaces the bank's billing by one started inside the bubble, on a pool opened there too: a pool or
+// connection made outside cannot be used in a bubble, but Start's registration time, which Alive measures from, has to
+// be on the bubble's clock like the beats after it. The container is the bank's.
+func startInBubble(t *testing.T, b *bank) {
+	t.Helper()
+	app, err := pg.Open(t.Context(), b.db.App)
+	if err != nil {
+		t.Fatal(err)
+	}
+	billing, err := Start(t.Context(), app, b.platform, b.billing.config, b.supplies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		billing.conn.Close(context.WithoutCancel(t.Context()))
+		app.Close()
+	})
+	b.billing = billing
+}
+
 // runInBackground starts the billing's loop and returns the function that stops it and waits for it.
 func runInBackground(t *testing.T, b *bank) (stop func()) {
 	t.Helper()
@@ -120,17 +144,26 @@ func TestRunBeatsWhileTheCleanupIsStuck(t *testing.T) {
 	b := newBank(t, 1_000_000, 0, Config{HolderTTL: 15 * time.Second, ReapGrace: time.Hour, Lifetime: time.Millisecond})
 	b.hold(1000)
 	b.pastDeadline()
-	b.supplies.stuck = make(chan struct{})
-	stop := runInBackground(t, b)
-	for deadline := time.Now().Add(12 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		if !b.billing.Alive() {
-			t.Fatal("the holder went stale while a cleanup was stuck")
+	synctest.Test(t, func(t *testing.T) {
+		startInBubble(t, b)
+		b.supplies.stuck = make(chan struct{})
+		b.supplies.stuckAt = make(chan struct{}, 1)
+		stop := runInBackground(t, b)
+		// Only a cleanup waiting in the supplier's side makes the heartbeat below a proof; a reservation that stays
+		// pending also when no cleanup ever started would pass the same assertions.
+		select {
+		case <-b.supplies.stuckAt:
+		case <-time.After(time.Minute):
+			t.Fatal("the cleanup never reached the supplier's side, so the test proved nothing")
 		}
-	}
-	if b.state() != "pending" {
-		t.Errorf("the reservation is %s: the cleanup was not stuck, so the test proved nothing", b.state())
-	}
-	stop()
+		for range 12 {
+			time.Sleep(time.Second)
+			if !b.billing.Alive() {
+				t.Fatal("the holder went stale while a cleanup was stuck")
+			}
+		}
+		stop()
+	})
 }
 
 // TestHeartbeatBeatsWhileThePoolIsExhausted: a call holding every connection of the ordinary pool still lets a beat
