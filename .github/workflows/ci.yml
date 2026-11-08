@@ -364,6 +364,7 @@ jobs:
         run: bash scripts/ci/release-check.sh
         timeout-minutes: 40
         env:
+          GH_TOKEN: ${{ github.token }} # release-asset.sh's API fallback
           RELEASE_DIR: ${{ runner.temp }}/release-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Retain release image, signature and provenance
         if: github.ref == 'refs/heads/main'
@@ -396,6 +397,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Sign a throwaway image and verify it
         run: bash scripts/ci/signing-check.sh
+        env:
+          GH_TOKEN: ${{ github.token }} # release-asset.sh's API fallback
 
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
   # check counts as passed on GitHub. Markdown-only builds may skip parts; PRs skip go-test/e2e/bench/deploy/signing and

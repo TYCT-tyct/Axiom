@@ -376,3 +376,83 @@ class ReleaseChecks(unittest.TestCase):
         self.assertLess(script.index("cosign attest"), script.index("verify-release.sh"))
         self.assertLess(script.index("verify-release.sh"), script.index("docker pull"))
         self.assertIn("CI_DEPLOY_RELEASE", script)
+
+
+class FetchReleaseBinary(unittest.TestCase):
+    SCRIPT = ROOT / "scripts" / "ci" / "fetch-release-binary.sh"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", self.tmp.as_posix()])
+        src = self.tmp / "src"
+        src.mkdir()
+        (src / "tool").write_text("#!/bin/sh\necho ok\n")
+        self.tarball = self.tmp / "tool.tar.gz"
+        subprocess.run(["tar", "-czf", self.tarball, "-C", src, "tool"], check=True)
+        self.sha = subprocess.run(["sha256sum", self.tarball], capture_output=True, text=True,
+                                  check=True).stdout.split()[0]
+        # A curl that logs each URL and serves the "release" from the API path only when BROWSER_DOWN is set; the
+        # network is never touched
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        curl = bin_dir / "curl"
+        curl.write_text(textwrap.dedent("""\
+            #!/bin/sh
+            for last; do :; done
+            echo "$last" >> "$CALLS"
+            out=
+            while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
+            case "$last" in
+              https://github.com/*) [ -z "$BROWSER_DOWN" ] || exit 22; cp "$SERVED" "$out";;
+              https://api.github.com/*) echo '{"assets":[{"name":"tool.tar.gz","url":"https://api.example/asset"}]}';;
+              https://api.example/asset) cp "$SERVED" "$out";;
+            esac
+            """))
+        curl.chmod(0o755)
+        self.cache = self.tmp / "cache"
+        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "CALLS": (self.tmp / "calls").as_posix(),
+                    "SERVED": self.tarball.as_posix(), "RUNNER_TOOL_CACHE": self.cache.as_posix(), "BROWSER_DOWN": ""}
+
+    def fetch(self, sha=None, **env):
+        dest = Path(tempfile.mkdtemp(dir=self.tmp))
+        result = subprocess.run([BASH, self.SCRIPT, "tool", "1.0", sha or self.sha, "o/r", "v1", "tool.tar.gz", dest],
+                                env={**self.env, **env}, capture_output=True, text=True)
+        return result, dest
+
+    def calls(self):
+        path = self.tmp / "calls"
+        return path.read_text().splitlines() if path.exists() else []
+
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_downloads_once_then_reuses_the_verified_copy(self):
+        for _ in range(2):
+            result, dest = self.fetch()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((dest / "tool").exists())
+        self.assertEqual(len(self.calls()), 1)
+
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_a_tampered_cached_copy_is_downloaded_again(self):
+        self.fetch()
+        (self.cache / "tool" / "1.0" / "tool.tar.gz").write_bytes(b"swapped")
+        result, dest = self.fetch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((dest / "tool").exists())
+        self.assertEqual(len(self.calls()), 2)
+
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_the_api_serves_the_asset_when_the_download_url_is_down(self):
+        result, dest = self.fetch(BROWSER_DOWN="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((dest / "tool").exists())
+        self.assertTrue(any(c.startswith("https://api.github.com/repos/o/r/releases/tags/v1") for c in self.calls()))
+
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_a_swapped_download_fails_on_either_path_and_is_not_cached(self):
+        for down in ("", "1"):
+            with self.subTest(browser_down=down):
+                result, dest = self.fetch(sha="0" * 64, BROWSER_DOWN=down)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("checksum mismatch", result.stderr)
+                self.assertFalse((dest / "tool").exists())
+                self.assertEqual(list((self.cache / "tool" / "1.0").iterdir()), [])
