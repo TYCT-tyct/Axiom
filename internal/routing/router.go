@@ -197,11 +197,23 @@ func (v KeyView) Allows(m catalog.ModelID, e EndpointID) bool {
 }
 
 func (v KeyView) allows(c *candidate) bool {
-	price := c.priceFor(billing.Audience{Account: accounts.AccountID(v.a.Account), Tier: v.a.Tier})
+	price := c.viewPrice(v.a)
+	return price != nil && viewAllows(v.preset, v.preset.ruleFor(c.ModelSlug), c, price)
+}
+
+// viewPrice is the endpoint's price for the admission's account and tier, nil when it has none for them.
+func (c *candidate) viewPrice(a Admission) *candidatePrice {
+	price := c.priceFor(billing.Audience{Account: accounts.AccountID(a.Account), Tier: a.Tier})
 	if price == nil || price.none() {
-		return false
+		return nil
 	}
-	n := need{preset: v.preset, rule: v.preset.ruleFor(c.ModelSlug), tiers: 1 << catalog.ServiceTierStandard}
+	return price
+}
+
+// viewAllows is whether rule r of preset p keeps the endpoint at price as a view judges it: its hard conditions only,
+// the price at the standard tier and the shortest prompt.
+func viewAllows(p *preset, r *Rule, c *candidate, price *candidatePrice) bool {
+	n := need{preset: p, rule: r, tiers: 1 << catalog.ServiceTierStandard}
 	return n.presetAllows(c, price, Spec{Context: c.Context})
 }
 

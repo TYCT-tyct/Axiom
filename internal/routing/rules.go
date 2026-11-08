@@ -369,16 +369,7 @@ func atLeast(v *float64, parent, most float64, where string) (float64, error) {
 // out keeps parent's. The values have the request's max_price range and precision (PricePerMillion, PricePerRequest).
 func (j priceJSON) narrow(parent PriceLimit, where string) (PriceLimit, error) {
 	out := parent
-	for _, it := range [...]struct {
-		value *string
-		item  catalog.Item
-		name  string
-		read  func([]byte) (platform.UnitPrice, bool)
-	}{
-		{j.Prompt, catalog.ItemInput, "prompt", PricePerMillion},
-		{j.Completion, catalog.ItemOutput, "completion", PricePerMillion},
-		{j.Request, catalog.ItemRequest, "request", PricePerRequest},
-	} {
+	for _, it := range j.items() {
 		if it.value == nil {
 			continue
 		}
@@ -393,6 +384,23 @@ func (j priceJSON) narrow(parent PriceLimit, where string) (PriceLimit, error) {
 		out.Max[it.item] = price
 	}
 	return out, nil
+}
+
+// priceItem is one item a max_price may name: its value as written, the billing item it limits, its name in the rules
+// and how its value reads.
+type priceItem struct {
+	value *string
+	item  catalog.Item
+	name  string
+	read  func([]byte) (platform.UnitPrice, bool)
+}
+
+func (j priceJSON) items() [3]priceItem {
+	return [...]priceItem{
+		{j.Prompt, catalog.ItemInput, "prompt", PricePerMillion},
+		{j.Completion, catalog.ItemOutput, "completion", PricePerMillion},
+		{j.Request, catalog.ItemRequest, "request", PricePerRequest},
+	}
 }
 
 // readAdvanced fills the platform's run-time settings, which only a platform preset has.

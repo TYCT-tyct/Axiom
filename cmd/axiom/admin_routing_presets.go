@@ -94,6 +94,29 @@ func (a adminAPI) createLayerPreset(ctx context.Context, operation, key string, 
 	})
 }
 
+// CheckLayerRoutingRules answers for the keys of the platform's layer, or of the site's: the endpoints they can see, at
+// the prices every account pays.
+func (a adminAPI) CheckLayerRoutingRules(_ context.Context, r adminapi.CheckLayerRoutingRulesRequestObject) (adminapi.CheckLayerRoutingRulesResponseObject, error) {
+	currency, err := presetCurrency(r.Body.Currency)
+	if err != nil {
+		return nil, err
+	}
+	p, view := routing.Preset{Scope: routing.ScopePlatform, Currency: currency}, routing.Admission{Currency: currency}
+	if r.Body.SiteId != nil {
+		layer, siteCurrency, err := a.siteLayer(*r.Body.SiteId)
+		if err != nil {
+			return nil, err
+		}
+		p.Scope, p.Site, view = routing.ScopeSite, layer.Site, routing.Admission{Site: layer.Site, Currency: siteCurrency}
+	}
+	body, err := checkRules(a.router, p, r.Body.Rules, view)
+	if err != nil {
+		return nil, err
+	}
+	out, err := converted[adminapi.RoutingRulesCheck](body)
+	return adminapi.CheckLayerRoutingRules200JSONResponse(out), err
+}
+
 func (a adminAPI) GetLayerRoutingPreset(ctx context.Context, r adminapi.GetLayerRoutingPresetRequestObject) (adminapi.GetLayerRoutingPresetResponseObject, error) {
 	var body []consoleapi.RoutingPreset
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {

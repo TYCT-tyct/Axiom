@@ -33,7 +33,7 @@ export const zh = {
   limitPolicies: "限定数据政策",
   allPolicies: "不限",
   policyNames: { no_retention: "不留存", retained: "留存", may_train: "可能用于训练" },
-  policiesHint: "目前所有端点都按“可能用于训练”记录：只选“不留存”或“留存”的规则找不到端点，不能保存。",
+  policiesHint: "供应商记录数据政策之前，端点都按“可能用于训练”算。",
   verified: "只走通过真伪检测的端点",
   scored: "这条规则要求产品成绩。成绩的检测还没上线，没有端点有成绩，所以它找不到端点；移除后才能保存。",
   removeScore: "移除成绩要求",
@@ -43,8 +43,16 @@ export const zh = {
   invalid: {
     name: "请填写厂商或模型 ID。",
     classes: "至少勾选一个来源类别；一个都不勾就没有端点可走。",
-    policies: "请勾选“可能用于训练”：目前没有端点是别的数据政策，不勾它这条规则找不到端点。",
+    policies: "至少勾选一种数据政策；一种都不勾就没有端点可走。",
     price: "请输入金额，例如 2.5。",
+  },
+  // A rule that keeps none of the endpoints the keys can use now, as the server's check names it.
+  unmatched: {
+    classes: "现在能用的端点没有属于这些来源类别的，这条规则找不到端点。",
+    policies: "现在能用的端点没有这些数据政策的，这条规则找不到端点。",
+    verified: "现在能用的端点没有通过真伪检测的，这条规则找不到端点。",
+    price: "现在能用的端点没有不高于这个单价的，这条规则找不到端点。",
+    rule: "这条规则找不到现在能用的端点：是几个条件合在一起，或上面的规则，把端点都排除了。",
   },
   summary: {
     allClasses: "全部来源",
@@ -52,6 +60,7 @@ export const zh = {
     verified: "只走已验证",
     overrides_one: "另有 {{count}} 条按厂商或模型的规则",
     overrides_other: "另有 {{count}} 条按厂商或模型的规则",
+    unavailable: "暂时读不到规则摘要。",
   },
 };
 
@@ -87,8 +96,7 @@ export const en: Messages<typeof zh> = {
   limitPolicies: "Limit the data policies",
   allPolicies: "Any",
   policyNames: { no_retention: "No retention", retained: "Retained", may_train: "May train on data" },
-  policiesHint:
-    "Every endpoint is recorded as “may train on data” for now: a rule that allows only no retention or retained finds no endpoint and can’t be saved.",
+  policiesHint: "Until suppliers record their data policies, every endpoint counts as “may train on data”.",
   verified: "Only endpoints that passed the identity check",
   scored:
     "This rule asks for a product score. Scoring isn’t live yet, so no endpoint has a score and the rule finds none; remove it to save.",
@@ -99,9 +107,15 @@ export const en: Messages<typeof zh> = {
   invalid: {
     name: "Enter a vendor or model ID.",
     classes: "Check at least one source; with none, no endpoint is left.",
-    policies:
-      "Check “may train on data”: no endpoint has another policy yet, so without it the rule finds no endpoint.",
+    policies: "Check at least one data policy; with none, no endpoint is left.",
     price: "Enter an amount, such as 2.5.",
+  },
+  unmatched: {
+    classes: "No endpoint you can use now is from these sources, so this rule finds none.",
+    policies: "No endpoint you can use now has these data policies, so this rule finds none.",
+    verified: "No endpoint you can use now has passed the identity check, so this rule finds none.",
+    price: "No endpoint you can use now sells at or below this price, so this rule finds none.",
+    rule: "This rule finds no endpoint you can use now: its conditions together, or the rule above it, leave none.",
   },
   summary: {
     allClasses: "All sources",
@@ -109,5 +123,6 @@ export const en: Messages<typeof zh> = {
     verified: "Verified only",
     overrides_one: "{{count}} more rule by vendor or model",
     overrides_other: "{{count}} more rules by vendor or model",
+    unavailable: "The rules’ summary isn’t available right now.",
   },
 };
