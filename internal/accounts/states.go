@@ -165,25 +165,28 @@ func (*Service) SetPlatformGrantRevoked(ctx context.Context, tx pg.Tx, p Princip
 		if _, err := tx.Exec(ctx, `UPDATE accounts.platform_grants SET revoked_at=now() WHERE id=$1`, grant); err != nil {
 			return fmt.Errorf("revoke platform grant: %w", err)
 		}
-	} else {
-		var subset bool
-		if err := tx.QueryRow(ctx, `SELECT (r.permissions || r.additional_permissions) <@ ARRAY(
+	} else if restored, err := restorePlatformGrant(ctx, tx, p, id, roleID, site, account); err != nil || !restored {
+		return err
+	}
+	return audit.Record(ctx, tx, audit.Event{Actor: audit.User(uuid.UUID(p.user)), Action: "platform_grant.status_change", Reason: reason, Target: userTarget(site, account, uuid.UUID(id)), Detail: map[string]any{"role": role, "before_revoked": before, "after_revoked": revoked}})
+}
+
+// restorePlatformGrant inserts a new row for a revoked grant. It reports false when a concurrent restore already did.
+func restorePlatformGrant(ctx context.Context, tx pg.Tx, p Principal, id UserID, roleID, site, account uuid.UUID) (bool, error) {
+	var subset bool
+	if err := tx.QueryRow(ctx, `SELECT (r.permissions || r.additional_permissions) <@ ARRAY(
             SELECT DISTINCT unnest(held.permissions || held.additional_permissions)
             FROM accounts.platform_grants g JOIN accounts.roles held ON held.id=g.role_id
             WHERE g.user_id=$1 AND g.revoked_at IS NULL)
             FROM accounts.roles r WHERE r.id=$2`, uuid.UUID(p.user), roleID).Scan(&subset); err != nil {
-			return fmt.Errorf("check restored grant permissions: %w", err)
-		}
-		if !subset {
-			return ErrForbidden
-		}
-		inserted, err := tx.Exec(ctx, `INSERT INTO accounts.platform_grants(id,site_id,account_id,user_id,role_id,granted_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(user_id,role_id) WHERE revoked_at IS NULL DO NOTHING`, uuid.NewV7(), site, account, uuid.UUID(id), roleID, uuid.UUID(p.user))
-		if err != nil {
-			return fmt.Errorf("restore platform grant: %w", err)
-		}
-		if inserted.RowsAffected() == 0 {
-			return nil
-		}
+		return false, fmt.Errorf("check restored grant permissions: %w", err)
 	}
-	return audit.Record(ctx, tx, audit.Event{Actor: audit.User(uuid.UUID(p.user)), Action: "platform_grant.status_change", Reason: reason, Target: userTarget(site, account, uuid.UUID(id)), Detail: map[string]any{"role": role, "before_revoked": before, "after_revoked": revoked}})
+	if !subset {
+		return false, ErrForbidden
+	}
+	inserted, err := tx.Exec(ctx, `INSERT INTO accounts.platform_grants(id,site_id,account_id,user_id,role_id,granted_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(user_id,role_id) WHERE revoked_at IS NULL DO NOTHING`, uuid.NewV7(), site, account, uuid.UUID(id), roleID, uuid.UUID(p.user))
+	if err != nil {
+		return false, fmt.Errorf("restore platform grant: %w", err)
+	}
+	return inserted.RowsAffected() > 0, nil
 }
