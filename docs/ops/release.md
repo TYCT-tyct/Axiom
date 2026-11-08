@@ -52,7 +52,7 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
 
 它要求引用是 `repo@sha256:…`，`release.json` 的 `image_digest` 与它相同、`signing_identity` 与本次期望的身份相同；`cosign verify` 只接受该 workflow/ref 用 GitHub OIDC 签出的证书，`cosign verify-attestation --type spdxjson` 还要证明 attestation 的 subject 就是这个 digest。`release.json` 必须与 `sbom.spdx.json` 放在一起：脚本先核对文件哈希等于 `sbom_sha256`（只能发现拷贝损坏），再把本地 SBOM 规范化后与验证成功的 attestation 的 predicate 逐字段比较。记录和 SBOM 都没有签名，换掉文件再改哈希也能互相对上，只有这一步能把随交付物保存的 SBOM 绑到签名上。没有签名、签名来自别的 workflow 或 ref、digest 与记录不一致、没有 SPDX attestation 或 SBOM 不是该 predicate 时，命令退出 1，部署停下，不会 pull 或启动镜像。生产期望的身份固定为 `https://github.com/TYCT-tyct/Axiom/.github/workflows/ci.yml@refs/heads/main`；在 GitHub Actions 内运行时按 `GITHUB_REPOSITORY` 和 `GITHUB_REF` 取当前运行的身份，列车因此能验证自己签的演练镜像。
 
-`install-release-tools.sh` 把 cosign 和 syft 按版本与发布页 SHA-256 装进作业私有的 `RUNNER_TEMP` 目录，不写共享的 home。
+`install-release-tools.sh` 把 cosign 和 syft 按版本与发布页 SHA-256 装进作业私有的 `RUNNER_TEMP` 目录，不写共享的 home；下载网址失败时经 `scripts/ci/release-asset.sh` 改走 GitHub REST API，校验和仍然裁决。
 
 `ci.yml` 的 `signing` 作业在列车和 `main` 上签一个一次性镜像，再证明 `verify-release.sh` 接受这个 digest 和它的 SBOM、`cosign save`/`load` 之后仍接受，并拒绝未签名或与记录不一致的 digest、tag、把 A 的签名搬到 B、错误 issuer、别的仓库/workflow/ref（元数据与期望身份一致，由 cosign 拒绝）、subject 指向别的 digest 的 SBOM attestation，以及同时替换 SBOM 和 `sbom_sha256`。它用与发布相同的脚本，所以签名流程坏了会在合并前失败，而不是等到发布。
 

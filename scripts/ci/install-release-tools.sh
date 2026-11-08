@@ -31,30 +31,22 @@ esac
 dir="${1:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/axiom-release-tools}"
 mkdir -p "$dir"
 
-tmp=
-cleanup() { [ -z "$tmp" ] || rm -f "$tmp"; }
-trap cleanup EXIT
-
 sha256() { sha256sum "$1" | cut -d ' ' -f1; }
 
-download() { # url sha256 destination
-  tmp="$(mktemp "$3.part.XXXXXX")"
-  curl -sSfL --retry 3 --retry-all-errors -o "$tmp" "$1"
-  [ "$(sha256 "$tmp")" = "$2" ] || { echo "checksum mismatch for $1" >&2; exit 1; }
+# release-asset.sh tries the download URL, then the REST API, and leaves a file at $5 only if it matches the checksum
+download() { # owner/repo tag asset sha256 destination
+  bash "$(dirname "$0")/release-asset.sh" "$@"
 }
 
 if [ ! -x "$dir/cosign" ] || [ "$(sha256 "$dir/cosign")" != "$cosign_sha256" ]; then
-  download "https://github.com/sigstore/cosign/releases/download/v$cosign_version/$cosign_asset" "$cosign_sha256" "$dir/cosign"
-  chmod 0755 "$tmp"
-  mv -f "$tmp" "$dir/cosign"
-  tmp=
+  download sigstore/cosign "v$cosign_version" "$cosign_asset" "$cosign_sha256" "$dir/cosign"
+  chmod 0755 "$dir/cosign"
 fi
 
 if [ ! -x "$dir/syft" ] || [ "$(sha256 "$dir/syft")" != "$syft_sha256" ]; then
-  download "https://github.com/anchore/syft/releases/download/v$syft_version/$syft_asset" "$syft_sha256" "$dir/syft.tar.gz"
-  tar -xzf "$tmp" -C "$dir" syft
-  rm -f "$tmp"
-  tmp=
+  download anchore/syft "v$syft_version" "$syft_asset" "$syft_sha256" "$dir/syft.tar.gz"
+  tar -xzf "$dir/syft.tar.gz" -C "$dir" syft
+  rm -f "$dir/syft.tar.gz"
   chmod 0755 "$dir/syft"
 fi
 
