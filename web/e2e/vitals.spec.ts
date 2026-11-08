@@ -22,8 +22,8 @@ import { words } from "./words.ts";
 // with the budget (below); a page over its ceiling fails the run. The numbers are timings of the host in this run, so
 // each page load is scaled by the reference page measured beside it (below): the measurements are the median of three
 // page loads, each between two reference loads (LCP), or the worst of the operation (INP), as the document states. The
-// overview cannot be scaled that way (docs/frontend.md「实测」), so its gate is the main-thread CPU time of its own
-// three loads, measured from a trace.
+// overview cannot be scaled that way (docs/frontend.md「实测」), so its gate is its main-thread CPU time, measured from a
+// trace, against the base commit's in pairs of loads.
 
 // target is the budget of the document; ceiling is what fails the run. Where the pages do not meet a target yet, the
 // ceiling is the first measurement with room for a slower host (docs/frontend.md「实测」), so the gate stops a page from
@@ -66,10 +66,10 @@ type Profile = typeof phone;
 // still costs 1.4-1.9x the CPU time on a busy CI host, which no fixed ceiling can tell from a slower page. So the gate
 // is relative, as bench-compare is for Go: where BASE names the commit this tree is measured against
 // (playwright.vitals.config.ts), that commit's overview is loaded in turns with this one, unthrottled, in the same job,
-// and the ratio of the two medians is gated. Loads seconds apart see the same host. On main the same tree already
-// passed its train, so the time is only reported there and a busy host cannot turn main red. The absolute backstop
-// stops a slow creep that each PR's ratio lets through: it is three times the clean build's time, above the 1.9x a busy
-// host added on CI (docs/frontend.md「实测」).
+// and the median of the pairs' ratios is gated: the two loads of a pair, back to back, see the same host. On main the
+// same tree already passed its train, so the time is only reported there and a busy host cannot turn main red. The
+// absolute backstop stops a slow creep that each PR's ratio lets through: it is three times the clean build's time,
+// above the 1.9x a busy host added on CI (docs/frontend.md「实测」).
 const overviewMs = { phone: 3496, desktop: 948 } as Record<"phone" | "desktop", number>;
 // The backstop: the clean build's 340 ms (desktop) and 400 ms (phone), three times.
 const overviewCpu = {
@@ -77,6 +77,10 @@ const overviewCpu = {
   phone: { target: 1200, ceiling: 1200 },
 } satisfies Record<"phone" | "desktop", Limit>;
 const overviewRatio: Limit = { target: 1.25, ceiling: 1.25 };
+// Nine pairs: on 62 CI runs to 2026-11-08 one pair's ratio scattered 0.62-1.65 around 1, independently of its
+// neighbours, so the median of nine fails an unchanged tree about once in 8600 runs on the phone, where the ratio of
+// two five-load medians failed about once in 60 (docs/frontend.md「实测」).
+const overviewPairs = 9;
 // The base's overview, beside this tree's: its origin, where playwright.vitals.config.ts serves it, or none.
 const baseOrigin = process.env.AXIOM_VITALS_BASE_PORT
   ? `http://localhost:${Number(process.env.AXIOM_VITALS_BASE_PORT) + servedOffset}`
@@ -184,7 +188,7 @@ function sceneOf(suite: Suite, name: string) {
 
 // The console overview is the reference for the pages with its shell: the lightest page with that shell and a mocked
 // table, so a slow host or a busy neighbour stretches both, and scaling keeps the ceiling a page budget rather than a
-// host budget. The overview's own gate is the main-thread CPU time of its three loads (measureOverview), not a ratio.
+// host budget. The overview's own gate is its main-thread CPU time against the base's (measureOverview), not its LCP.
 const overview = sceneOf(consoleSuite, "overview");
 
 // The pages a person lands on and works in, by their names in the suites' scene lists. The overview is not here: it is
@@ -244,12 +248,12 @@ async function measurePage(
   record(`CLS ${label}`, Math.max(...pairs.map((pair) => pair.cls)), budget.cls);
 }
 
-// measureOverview loads the overview unthrottled in five pairs, each this tree's and, where there is one, the base's, in
-// alternating order so a host whose load drifts during the sample charges both sides alike. It gates the ratio of the
-// two sides' median main-thread time and this tree's median against the backstop; without a base it only reports. It
-// then loads the overview three times with the profile's throttle and reports the LCP and CLS: the LCP is what the page
-// budget speaks of, but it is only reported, because the host stretches it in ways the CPU time does not
-// (docs/frontend.md「实测」).
+// measureOverview loads the overview unthrottled in nine pairs, each this tree's and, where there is one, the base's, back
+// to back in alternating order so the side loaded first is not always the same. It gates the median of the pairs'
+// ratios, so a slow load on either side moves one pair and the median drops it, and this tree's median against the
+// backstop; without a base it only reports. It then loads the overview three times with the profile's throttle and
+// reports the LCP and CLS: the LCP is what the page budget speaks of, but it is only reported, because the host
+// stretches it in ways the CPU time does not (docs/frontend.md「实测」).
 async function measureOverview(
   browser: Browser,
   profile: Profile,
@@ -270,7 +274,7 @@ async function measureOverview(
         ]
       : []),
   ];
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < overviewPairs; i++) {
     for (const side of i % 2 ? [...sides].reverse() : sides) {
       await side();
     }
@@ -278,12 +282,13 @@ async function measureOverview(
   const cpu = overviewCpu[name];
   const loads = (values: number[]) => values.map((ms) => ms.toFixed(0)).join("/");
   if (base.length) {
+    const ratios = base.map((ms, i) => (head[i] ?? Number.POSITIVE_INFINITY) / ms);
     record(`main-thread time ${label}`, median(head), cpu, `unthrottled, backstop, loads ${loads(head)} ms`);
     record(
       `main-thread time ratio ${label}`,
-      median(head) / median(base),
+      median(ratios),
       overviewRatio,
-      `this tree ${median(head).toFixed(0)} ms over base ${median(base).toFixed(0)} ms (loads ${loads(base)} ms)`,
+      `median of pairs ${ratios.map((ratio) => ratio.toFixed(2)).join("/")}; this tree ${median(head).toFixed(0)} ms, base ${median(base).toFixed(0)} ms (loads ${loads(base)} ms)`,
     );
   } else {
     record(
@@ -309,7 +314,7 @@ async function measureOverview(
 test.describe("loading", () => {
   for (const { name, profile, device, lcp } of profiles) {
     test(`console overview: main-thread time and CLS on ${name}`, async ({ browser }) => {
-      // Five pairs of unthrottled loads with the base and three throttled ones, against nine loads in a page's test.
+      // Nine pairs of unthrottled loads with the base and three throttled ones, against nine loads in a page's test.
       test.setTimeout(240_000);
       await measureOverview(browser, profile, device, name, lcp);
     });
