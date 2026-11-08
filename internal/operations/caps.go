@@ -312,18 +312,14 @@ func holdReservation(ctx context.Context, tx pg.Tx, id uuid.UUID) error {
 	if len(rows) == 0 || rows[0].OperationsMoneyAction.State != "reserved" {
 		return nil
 	}
-	m := rows[0].OperationsMoneyAction
-	if _, err := lockPolicy(ctx, tx, Category(m.Category), m.SiteID); err != nil && !errors.Is(err, ErrNoCapPolicy) {
-		return err
-	}
-	_, err = lockCounters(ctx, tx, m.SiteID, Category(m.Category), Target{Kind: m.ObjectKind, ID: m.ObjectID}, m.DayStart, m.WeekStart)
+	_, err = lockScope(ctx, tx, rows[0].OperationsMoneyAction)
 	return err
 }
 
 // CommitReservation is the agent's confirmation, in operation confirm, that the money of its own proposal arrived,
 // with proof: the reservation moves to committed in the windows it was reserved in, and stays there whatever happens
 // to the money later. A proposal that is not the credential's, not a succeeded money proposal, or whose reservation
-// ended is refused (ErrNoOperation, ErrNotReserved), and nothing is written.
+// ended (as commit checks it) is refused (ErrNoOperation, ErrNotReserved), and nothing is written.
 func CommitReservation(ctx context.Context, tx pg.Tx, confirm Operation, proposal uuid.UUID, object Target, proof string) (Reservation, error) {
 	m, err := lockProposal(ctx, tx, confirm.Credential, proposal, object)
 	if err != nil {
@@ -336,30 +332,43 @@ func CommitReservation(ctx context.Context, tx pg.Tx, confirm Operation, proposa
 // which CheckReservation rechecked in tx, becomes committed in the windows it was reserved in, with proof of where the
 // money went and op as what confirmed it. A credit grant commits so, as the credit is given in the same transaction.
 func CommitApproved(ctx context.Context, tx pg.Tx, op Operation, proof string) (Reservation, error) {
-	rows, err := New().LockMoneyAction(ctx, tx, op.ID)
+	rows, err := New().MoneyActionOf(ctx, tx, op.ID)
 	switch {
 	case err != nil:
-		return Reservation{}, fmt.Errorf("lock the reservation of operation %s: %w", op.ID, err)
+		return Reservation{}, fmt.Errorf("read the reservation of operation %s: %w", op.ID, err)
+	case len(rows) == 0:
+		return Reservation{}, ErrNotReserved
+	}
+	return commit(ctx, tx, rows[0], op, proof)
+}
+
+// commit moves m, the reservation of an operation tx holds, to committed, confirmed by operation by with proof, as the
+// agent's. Only the holder of its operation locks a reservation, so it is locked last, after its scope, and checked
+// then by the clock after every wait: a confirmation that waited past midnight does not commit yesterday's.
+func commit(ctx context.Context, tx pg.Tx, m OperationsMoneyAction, by Operation, proof string) (Reservation, error) {
+	c, err := lockScope(ctx, tx, m)
+	if err != nil {
+		return Reservation{}, err
+	}
+	q := New()
+	rows, err := q.LockMoneyAction(ctx, tx, m.OperationID)
+	switch {
+	case err != nil:
+		return Reservation{}, fmt.Errorf("lock the reservation of operation %s: %w", m.OperationID, err)
 	case len(rows) == 0 || rows[0].OperationsMoneyAction.State != "reserved" || rows[0].Due:
 		return Reservation{}, ErrNotReserved
 	}
-	return commit(ctx, tx, rows[0].OperationsMoneyAction, op, proof)
-}
-
-// commit moves m, which tx holds reserved, to committed, confirmed by operation by with proof, as the agent's.
-func commit(ctx context.Context, tx pg.Tx, m OperationsMoneyAction, by Operation, proof string) (Reservation, error) {
-	if err := moveReserved(ctx, tx, m, m.Amount); err != nil {
-		return Reservation{}, err
+	if err := q.MoveCapCounters(ctx, tx, MoveCapCountersParams{Ids: c.ids, Reserved: -m.Amount, Committed: m.Amount}); err != nil {
+		return Reservation{}, fmt.Errorf("commit the reservation of operation %s: %w", m.OperationID, err)
 	}
-	if err := New().SettleMoneyAction(ctx, tx, SettleMoneyActionParams{OperationID: m.OperationID, State: "committed", Proof: &proof, ConfirmedBy: &by.ID}); err != nil {
+	if err := q.SettleMoneyAction(ctx, tx, SettleMoneyActionParams{OperationID: m.OperationID, State: "committed", Proof: &proof, ConfirmedBy: &by.ID}); err != nil {
 		return Reservation{}, fmt.Errorf("commit the reservation of operation %s: %w", m.OperationID, err)
 	}
 	m.State, m.Proof = "committed", &proof
 	return reservationOf(m), recordReservation(ctx, tx, audit.OperationsAgent(by.Credential), "reservation.commit", m, by.Reason)
 }
 
-// lockProposal locks credential's succeeded money proposal on object, then its reservation, which must still be held
-// and within its windows.
+// lockProposal locks credential's succeeded money proposal on object and reads its reservation, which commit locks.
 func lockProposal(ctx context.Context, tx pg.Tx, credential, proposal uuid.UUID, object Target) (OperationsMoneyAction, error) {
 	q := New()
 	locked, err := q.LockOperation(ctx, tx, proposal)
@@ -369,31 +378,42 @@ func lockProposal(ctx context.Context, tx pg.Tx, credential, proposal uuid.UUID,
 	if len(locked) == 0 || locked[0].CredentialID != credential || locked[0].TargetKind != object.Kind || locked[0].TargetID != object.ID {
 		return OperationsMoneyAction{}, ErrNoOperation
 	}
-	rows, err := q.LockMoneyAction(ctx, tx, proposal)
+	rows, err := q.MoneyActionOf(ctx, tx, proposal)
 	switch {
 	case err != nil:
-		return OperationsMoneyAction{}, fmt.Errorf("lock the reservation of operation %s: %w", proposal, err)
+		return OperationsMoneyAction{}, fmt.Errorf("read the reservation of operation %s: %w", proposal, err)
 	case len(rows) == 0:
 		return OperationsMoneyAction{}, ErrNoOperation
-	case State(locked[0].State) != StateSucceeded || rows[0].OperationsMoneyAction.State != "reserved" || rows[0].Due:
+	case State(locked[0].State) != StateSucceeded:
 		return OperationsMoneyAction{}, ErrNotReserved
 	}
-	return rows[0].OperationsMoneyAction, nil
+	return rows[0], nil
 }
 
-// moveReserved takes amount out of m's reservation in the windows it was made in, adding committed to them. It holds
-// the policy first, as every path does before it makes or locks a counter: a repair holds the policy and the counters
-// that exist and then writes back the ones that are missing, so a confirmation or release that made a missing row and
-// then waited for the repair's counters would wait in a cycle.
-func moveReserved(ctx context.Context, tx pg.Tx, m OperationsMoneyAction, committed int64) error {
+// lockScope locks m's policy, if it still has one, then its counters in the windows m was made in. It holds the policy
+// first, as every path does before it makes or locks a counter: a repair holds the policy and the counters that exist
+// and then writes back the ones that are missing, so a confirmation or release that made a missing row and then waited
+// for the repair's counters would wait in a cycle.
+func lockScope(ctx context.Context, tx pg.Tx, m OperationsMoneyAction) (counters, error) {
 	if _, err := lockPolicy(ctx, tx, Category(m.Category), m.SiteID); err != nil && !errors.Is(err, ErrNoCapPolicy) {
-		return err
+		return counters{}, err
 	}
-	c, err := lockCounters(ctx, tx, m.SiteID, Category(m.Category), Target{Kind: m.ObjectKind, ID: m.ObjectID}, m.DayStart, m.WeekStart)
-	if err != nil {
-		return err
+	return lockCounters(ctx, tx, m.SiteID, Category(m.Category), Target{Kind: m.ObjectKind, ID: m.ObjectID}, m.DayStart, m.WeekStart)
+}
+
+// holdScopes locks the policies and then the counters of every reservation still held by the operations ids, which tx
+// holds, each in one order across scopes, windows and objects, before a batch releases the first: released one by one,
+// two batches over two scopes in opposite order would wait on each other. A reservation's counters are made with it and
+// never deleted (the application cannot), so the rows that exist are every one the batch moves.
+func holdScopes(ctx context.Context, tx pg.Tx, ids []uuid.UUID) error {
+	q := New()
+	if err := q.LockReservedPolicies(ctx, tx, ids); err != nil {
+		return fmt.Errorf("lock the cap policies of %d operations: %w", len(ids), err)
 	}
-	return New().MoveCapCounters(ctx, tx, MoveCapCountersParams{Ids: c.ids, Reserved: -m.Amount, Committed: committed})
+	if err := q.LockReservedCounters(ctx, tx, ids); err != nil {
+		return fmt.Errorf("lock the cap counters of %d operations: %w", len(ids), err)
+	}
+	return nil
 }
 
 // release ends op's reservation, if it has one still held, when op ends without its money: refused, expired or
@@ -410,8 +430,12 @@ func release(ctx context.Context, tx pg.Tx, actor audit.Actor, op Operation) err
 }
 
 func releaseLocked(ctx context.Context, tx pg.Tx, actor audit.Actor, m OperationsMoneyAction) error {
-	if err := moveReserved(ctx, tx, m, 0); err != nil {
+	c, err := lockScope(ctx, tx, m)
+	if err != nil {
 		return err
+	}
+	if err := New().MoveCapCounters(ctx, tx, MoveCapCountersParams{Ids: c.ids, Reserved: -m.Amount}); err != nil {
+		return fmt.Errorf("release the reservation of operation %s: %w", m.OperationID, err)
 	}
 	if err := New().SettleMoneyAction(ctx, tx, SettleMoneyActionParams{OperationID: m.OperationID, State: "released"}); err != nil {
 		return fmt.Errorf("release the reservation of operation %s: %w", m.OperationID, err)
@@ -431,6 +455,9 @@ func ExpireReservations(ctx context.Context, tx pg.Tx, batch int) (int, error) {
 	ids, err := q.LockDueMoneyActions(ctx, tx, int32(batch)) // #nosec G115 -- a small constant
 	if err != nil {
 		return 0, fmt.Errorf("expire the reservations past their windows: %w", err)
+	}
+	if err := holdScopes(ctx, tx, ids); err != nil {
+		return 0, err
 	}
 	for _, id := range ids {
 		rows, err := q.MoneyActionOf(ctx, tx, id)
