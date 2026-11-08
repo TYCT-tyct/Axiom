@@ -11,6 +11,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
 	"axiom/internal/fileparse"
+	"axiom/internal/gateway"
 	"axiom/internal/payments"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/alert"
@@ -48,8 +49,10 @@ type adminAPI struct {
 	calls      *suppliers.Service
 	detections *windowLimiter
 	tests      *windowLimiter
-	// router is the node's call path routing, whose snapshot a check of a preset's rules is judged against.
+	// router is the node's call path routing, whose snapshot a check of a preset's rules is judged against; routes
+	// builds that snapshot, and a committed change of what it is built from rebuilds it (refreshAfterCommit).
 	router *routing.Router
+	routes *gateway.RouteDeps
 }
 
 // detectionsPerMinute is how many times a session may run detectSupplier in a minute; testsPerMinute is the same for
