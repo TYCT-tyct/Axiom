@@ -9,12 +9,13 @@ import {
   useErrors,
   useRulesCheck,
 } from "@axiom/app";
-import { Button, Dialog, FormError, Icon, SubmitButton, TextField, useFormat } from "@axiom/ui";
+import { Dialog, FormError, Icon, TextField, useFormat } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "./confirm-dialog";
 import { routingDefaultQuery, siteQuery, sourceClassesQuery } from "./queries";
+import { Actions } from "./workspace-dialogs";
 
 type Preset = Schemas["RoutingPreset"];
 export type PresetEdit = { kind: "create" } | { kind: "copy"; preset: Preset } | { kind: "edit"; preset: Preset };
@@ -67,6 +68,8 @@ function save(edit: PresetEdit, body: { slug: string; name: string; rules: Schem
 
 type Missing = "slug" | "name" | null;
 
+// checkRules asks which rules keep no endpoint the account's keys can use: the editor marks them as the rules change,
+// and a save is refused while one does.
 function checkRules(rules: Schemas["RoutingRules"]) {
   return unwrap(consoleApi.POST("/api/console/v1/routing-presets/checks", { body: { rules } }));
 }
@@ -97,7 +100,6 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
   const [draft, setDraft] = useState(() => draftOf(source?.rules, edit.kind === "copy"));
   const [invalid, setInvalid] = useState<Invalid | null>(null);
   const [missing, setMissing] = useState<Missing>(null);
-  // A rule the server says keeps no endpoint the account's keys can use is marked as the rules change, and refuses a save.
   const unmatched = useRulesCheck(draft, checkRules, []);
   const mutation = useMutation({
     mutationFn: (body: Parameters<typeof save>[1]) => save(edit, body),
@@ -139,14 +141,11 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
           onName={setName}
         />
         <RulesEditor draft={draft} invalid={invalid ?? unmatched} {...choices} onChange={setDraft} />
-        <div className="flex justify-end gap-2 pt-2">
-          <Button size="md" onClick={onClose}>
-            {t("cancel", { ns: "common" })}
-          </Button>
-          <SubmitButton pending={mutation.isPending}>
-            {edit.kind === "edit" ? t("routingPresets.form.save") : t("routingPresets.form.create")}
-          </SubmitButton>
-        </div>
+        <Actions
+          pending={mutation.isPending}
+          submit={edit.kind === "edit" ? t("routingPresets.form.save") : t("routingPresets.form.create")}
+          onCancel={onClose}
+        />
       </form>
     </Dialog>
   );
