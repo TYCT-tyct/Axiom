@@ -159,7 +159,6 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 		return callNode{}, err
 	}
 	routes.Publish(snap, list, count)
-	n.routes = routes
 	if !count.Routable() {
 		d.logger.Warn("the node is not ready: none of the endpoints suppliers offer can be routed, so every model call "+
 			"answers 404 no_endpoint until each model has a spec and a sale price",
@@ -169,7 +168,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 	loops, stop := context.WithCancel(context.WithoutCancel(ctx))
 	healthDone := make(chan struct{})
 	go func() { defer close(healthDone); healthLoop.Run(loops) }()
-	n.ready, n.reaped, n.stop = func() bool { return routable.Load() && router.Fresh() }, startLoops(loops, d, n.cache, ledger, upstreams, routes), func() { stop(); <-healthDone }
+	n.ready, n.reaped, n.stop, n.routes = func() bool { return routable.Load() && router.Fresh() }, startLoops(loops, d, n.cache, ledger, upstreams, routes), func() { stop(); <-healthDone }, routes
 	return n, nil
 }
 
