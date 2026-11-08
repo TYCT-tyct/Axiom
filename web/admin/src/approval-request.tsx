@@ -302,23 +302,46 @@ function RuleFacts({ change }: { change: RuleChange }) {
     [t("approvals.rule.method"), <MethodSummary key="method" method={rule.method} />],
     [t("approvals.rule.enabled"), t(rule.enabled ? "approvals.rule.on" : "approvals.rule.off")],
   ];
+  const conversion = rule.method.currency_conversion;
+  if (conversion) {
+    rows.push([t("pricing.method.conversion"), t(`pricing.method.${conversion}`)]);
+  }
   if (change.rev !== undefined) {
     rows.push([t("approvals.rule.rev"), String(change.rev)]);
   }
-  // A fixed price is the price itself: the owner approves the numbers, not the method's name.
-  const schedule = rule.method.kind === "fixed" ? rule.method.schedule : undefined;
+  const prices = methodPrices(rule.method, change.currency);
   return (
     <>
       <Facts title={t("approvals.rule.title")} rows={rows} />
-      {schedule ? (
-        <Panel title={t("approvals.rule.schedule", { currency: schedule.currency })}>
+      {prices ? (
+        <Panel title={t(prices.title, { currency: prices.schedule.currency })}>
           <div className="space-y-2 pb-3">
-            <Rates schedule={schedule} />
+            <Rates schedule={prices.schedule} />
           </div>
         </Panel>
       ) : null}
     </>
   );
+}
+
+// methodPrices is every price a rule's method states as an amount, as a price list: a fixed price, or the fixed markup
+// a cost-plus rule adds to cost in the site's currency. The owner approves those numbers, not the method's name.
+function methodPrices(
+  method: AdminSchemas["PricingMethod"],
+  currency: string | undefined,
+):
+  | { title: "approvals.rule.schedule" | "approvals.rule.fixedMarkup"; schedule: AdminSchemas["PriceSchedule"] }
+  | undefined {
+  if (method.kind === "fixed" && method.schedule) {
+    return { title: "approvals.rule.schedule", schedule: method.schedule };
+  }
+  if (method.fixed_markup && Object.keys(method.fixed_markup).length > 0) {
+    return {
+      title: "approvals.rule.fixedMarkup",
+      schedule: { v: 1, currency: currency ?? "", rates: method.fixed_markup },
+    };
+  }
+  return undefined;
 }
 
 function DayUse({ day }: { day: NonNullable<RuleChange["day"]> }) {

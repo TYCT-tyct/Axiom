@@ -170,3 +170,30 @@ it("shows the whole price list a fixed-price rule asks for", async () => {
   expect(container.textContent).not.toContain("kept as they are");
   await unmount();
 });
+
+// A cost-plus rule's fixed markup is an amount the owner approves, shown per unit in the site's currency beside the
+// markup ratio; a reference multiple says how it converts the reference price.
+it("shows a cost-plus rule's fixed markup and a reference rule's conversion", async () => {
+  const withMethod = (method: AdminSchemas["PricingMethod"]): Approval => ({
+    ...ruleApproval,
+    params: { rev: 3, rule: { ...(ruleApproval.params as { rule: object }).rule, method } as never },
+  });
+  const markup = await renderInDom(
+    <RuleChangePanel
+      approval={withMethod({ kind: "cost_plus", markup_ratio: "0.2", fixed_markup: { input: "0.0000004" } })}
+    />,
+  );
+  const text = markup.container.textContent ?? "";
+  expect(text).toContain("Cost plus 20%");
+  expect(text).toContain("The fixed markup added to cost (USD)");
+  expect(text).toContain("Input0.4per 1M tokens");
+  await markup.unmount();
+  const reference = await renderInDom(
+    <RuleChangePanel
+      approval={withMethod({ kind: "reference_multiplier", multiplier: "1.6", currency_conversion: "exchange" })}
+    />,
+  );
+  expect(reference.container.textContent).toContain("Convert at the exchange rate");
+  expect(reference.container.textContent).not.toContain("The fixed markup");
+  await reference.unmount();
+});

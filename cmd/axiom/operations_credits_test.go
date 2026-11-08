@@ -2,14 +2,12 @@ package main
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
-	"uuid"
 
 	"axiom/internal/accounts"
 	"axiom/internal/platform/adminapi"
@@ -154,15 +152,7 @@ func TestOperationsCreditGrantRefusals(t *testing.T) {
 	f := newCreditFixture(t)
 	expectAdmin(t, "without a policy", f.propose(f.token, "1000000000", newKey(), ""), http.StatusUnprocessableEntity, codeCapExceeded)
 	expectAdmin(t, "the policy", f.setCreditCaps(creditLimits, 0), http.StatusOK, "")
-	child, childTier := uuid.NewV7(), uuid.NewV7()
-	f.run("BEGIN",
-		fmt.Sprintf(`INSERT INTO accounts.sites (id,parent_site_id,owner_account_id,name,status,key_prefix,registration,default_tier_id)
-			SELECT '%s',id,(SELECT a.id FROM accounts.accounts a WHERE a.site_id=s.id LIMIT 1),'Other','active','sk-other-','closed','%s'
-			FROM accounts.sites s WHERE s.is_main`, child, childTier),
-		fmt.Sprintf(`INSERT INTO accounts.tiers(id,site_id,name) VALUES ('%s','%s','Other')`, childTier, child), "COMMIT")
-	if err := f.svc.Load(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
-		t.Fatal(err)
-	}
+	child := f.childSite()
 	elsewhere := f.creditAgent(`"credits.grant","operations.money"`, `"platform":true,"sites":["`+accounts.SiteID(child).TypeID()+`"]`)
 	past := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
 	for _, c := range []struct {

@@ -24,8 +24,11 @@ import (
 // what margin it keeps are the server's, from the proposal and the current version, never the agent's; within the
 // site's price envelope it publishes at once, otherwise the owner approves it.
 
-// PricesList reads the main site's sale prices and proposals as the admin does.
+// PricesList reads the main site's sale prices and proposals as the admin does, for a credential that reaches it.
 func (o operationsAPI) PricesList(ctx context.Context, _ operationsapi.PricesListRequestObject) (operationsapi.PricesListResponseObject, error) {
+	if _, err := o.mainSite(ctx); err != nil {
+		return nil, err
+	}
 	answer, err := o.admin.ListPricePublications(ctx, adminapi.ListPricePublicationsRequestObject{})
 	return relayed[operationsapi.PricesList200JSONResponse, adminapi.ListPricePublications200JSONResponse](answer, err)
 }
@@ -120,17 +123,28 @@ func (o operationsAPI) publishPrice(ctx context.Context, tx pg.Tx, pub publicati
 	return op, false, err
 }
 
-// holdPrices locks the main site's price policy, which serializes every publication of its prices, for the caller's
-// credential: the prices are the main site's, and a credential kept to other sites does not reach them.
-func (o operationsAPI) holdPrices(ctx context.Context, tx pg.Tx) error {
+// mainSite is the main site, whose prices and pricing rules the operations API reads and writes, for a credential
+// that reaches it (reaches): a credential kept to other sites does not, and is answered as for nothing there, the
+// platform grant notwithstanding.
+func (o operationsAPI) mainSite(ctx context.Context) (accounts.Site, error) {
 	site, ok := o.admin.accounts.MainSite()
 	if !ok {
-		return accounts.ErrNotFound
+		return site, accounts.ErrNotFound
 	}
-	if sites := callOf(ctx).agent.Info().Sites; sites != nil && !slices.Contains(sites, site.ID) {
-		return accounts.ErrAgentNotFound
+	if id := uuid.UUID(site.ID); !reaches(callOf(ctx).agent.Info(), &id) {
+		return site, accounts.ErrAgentNotFound
 	}
-	_, err := billing.LockPricePolicy(ctx, tx, uuid.UUID(site.ID))
+	return site, nil
+}
+
+// holdPrices locks the main site's price policy, which serializes every publication of its prices, for the caller's
+// credential, which must reach the main site.
+func (o operationsAPI) holdPrices(ctx context.Context, tx pg.Tx) error {
+	site, err := o.mainSite(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = billing.LockPricePolicy(ctx, tx, uuid.UUID(site.ID))
 	return err
 }
 

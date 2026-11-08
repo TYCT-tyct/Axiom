@@ -27,17 +27,20 @@ import (
 // the change is kept and counted; otherwise it is undone to a savepoint and waits for the owner, whose approval makes
 // it again and counts what it moves then.
 
-// PricingRulesList reads the main site's rules as the admin does.
+// PricingRulesList reads the main site's rules as the admin does, for a credential that reaches it.
 func (o operationsAPI) PricingRulesList(ctx context.Context, _ operationsapi.PricingRulesListRequestObject) (operationsapi.PricingRulesListResponseObject, error) {
+	if _, err := o.mainSite(ctx); err != nil {
+		return nil, err
+	}
 	answer, err := o.admin.ListPricingRules(ctx, adminapi.ListPricingRulesRequestObject{})
 	return relayed[operationsapi.PricingRulesList200JSONResponse, adminapi.ListPricingRules200JSONResponse](answer, err)
 }
 
 // PricingRuleCreate adds a rule to the main site within its price envelope, or asks the owner to.
 func (o operationsAPI) PricingRuleCreate(ctx context.Context, r operationsapi.PricingRuleCreateRequestObject) (operationsapi.PricingRuleCreateResponseObject, error) {
-	site, ok := o.admin.accounts.MainSite()
-	if !ok {
-		return nil, accounts.ErrNotFound
+	site, err := o.mainSite(ctx)
+	if err != nil {
+		return nil, err
 	}
 	b := r.Body
 	target := operations.Target{Kind: "site", ID: uuid.UUID(site.ID).String()}
@@ -45,6 +48,7 @@ func (o operationsAPI) PricingRuleCreate(ctx context.Context, r operationsapi.Pr
 	if err != nil {
 		return nil, err
 	}
+	o.admin.refreshAfterCommit(ctx, replayed || op.State != operations.StateSucceeded)
 	headers := operationsapi.PricingRuleCreate200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}
 	if op.State == operations.StatePending && op.ID != (uuid.UUID{}) {
 		return operationsapi.PricingRuleCreate202JSONResponse{Body: operationBody(op), Headers: operationsapi.PricingRuleCreate202ResponseHeaders(headers)}, nil
@@ -61,6 +65,7 @@ func (o operationsAPI) PricingRuleUpdate(ctx context.Context, r operationsapi.Pr
 	if err != nil {
 		return nil, err
 	}
+	o.admin.refreshAfterCommit(ctx, replayed || op.State != operations.StateSucceeded)
 	headers := operationsapi.PricingRuleUpdate200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}
 	if op.State == operations.StatePending && op.ID != (uuid.UUID{}) {
 		return operationsapi.PricingRuleUpdate202JSONResponse{Body: operationBody(op), Headers: operationsapi.PricingRuleUpdate202ResponseHeaders(headers)}, nil
@@ -365,7 +370,35 @@ func saleMoves(site uuid.UUID, buyers []buyer, before, after priceView) ([]opera
 			moves = append(moves, r)
 		}
 	}
+	moves = append(moves, unsoldMoves(site, before, after)...)
+	slices.SortStableFunc(moves, func(a, b operations.Repricing) int { return bytes.Compare(a.Model[:], b.Model[:]) })
 	return moves, nil
+}
+
+// unsoldMoves is each price the change gives that is not on sale yet: a layer whose proposal the change replaced and
+// that sells nothing (`unpriced`: no endpoint, an endpoint switched off, or the cost unknown). The publisher publishes
+// such a price by itself as soon as the model can be served, outside any envelope, so the change is weighed as giving
+// it, a move no share measures, which the owner decides. A proposal that waits for a confirmation (`pending`,
+// `blocked`) is weighed when it is published.
+func unsoldMoves(site uuid.UUID, before, after priceView) []operations.Repricing {
+	type layer struct {
+		model    catalog.ModelID
+		audience billing.Selector
+	}
+	was := make(map[layer]uuid.UUID, len(before.publications))
+	for _, p := range before.publications {
+		was[layer{p.Model, p.Audience}] = p.Candidate
+	}
+	var moves []operations.Repricing
+	for _, p := range after.publications {
+		if p.Status != "unpriced" || was[layer{p.Model, p.Audience}] == p.Candidate {
+			continue
+		}
+		moves = append(moves, operations.Repricing{Site: site, Model: uuid.UUID(p.Model), Summary: map[string]any{
+			"model_id": p.Model.String(), "audience": map[string]any{"kind": p.Audience.Kind, "id": p.Audience.ID},
+		}})
+	}
+	return moves
 }
 
 // measure sets r's move and margin from then, the publication a buyer was sold before, to now, the one it is sold after;

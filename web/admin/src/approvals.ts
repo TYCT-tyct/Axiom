@@ -166,6 +166,8 @@ export type RuleMove = {
 // at; every price it moved, at most the first few of total; and the day's price changes and repriced models before it.
 export type RuleChange = {
   rule?: Rule;
+  // The site's currency, in which a cost-plus rule's fixed markup is stated.
+  currency?: string;
   rev?: number;
   moves: RuleMove[];
   total: number;
@@ -226,6 +228,7 @@ export function ruleChangeOf(approval: Approval): RuleChange | undefined {
     });
   return {
     rule: ruleOf(params?.rule),
+    currency: typeof summary.currency === "string" ? summary.currency : undefined,
     rev: approval.tool === "pricing_rule_update" ? count(params?.rev) : undefined,
     moves,
     total: count(summary.moves_total) ?? moves.length,

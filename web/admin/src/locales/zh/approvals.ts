@@ -132,6 +132,7 @@ export default {
     on: "启用",
     off: "停用",
     rev: "基于规则版本",
+    fixedMarkup: "在成本之上固定加的价（{{currency}}）",
     schedule: "要定的固定价（{{currency}}）",
     moves: "会变动的售价",
     movesIntro:

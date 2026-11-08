@@ -138,6 +138,7 @@ export default {
     on: "On",
     off: "Off",
     rev: "Changes the rule as of revision",
+    fixedMarkup: "The fixed markup added to cost ({{currency}})",
     schedule: "The fixed price asked for ({{currency}})",
     moves: "Sale prices it moves",
     movesIntro:

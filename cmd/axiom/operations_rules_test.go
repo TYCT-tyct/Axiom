@@ -89,6 +89,7 @@ func (f priceFixture) counters() string {
 func TestOperationsPricingRules(t *testing.T) {
 	t.Parallel()
 	f := newPriceFixture(t)
+	f.servedOnly()
 	rule := f.rule()
 	expectAdmin(t, "without an envelope", f.changeRule(rule.Id, rule.Rev, "1.6", newKey(), ""), http.StatusUnprocessableEntity, codeCapExceeded)
 	expectAdmin(t, "the envelope", f.setEnvelope(priceEnvelope, "0"), http.StatusOK, "")
@@ -144,6 +145,7 @@ func (f priceFixture) expectMovedBy667(result ruleMoves, action string) {
 func TestOperationsPricingRuleOverThePublisher(t *testing.T) {
 	t.Parallel()
 	f := newPriceFixture(t)
+	f.servedOnly()
 	expectAdmin(t, "the envelope", f.setEnvelope(priceEnvelope, "0"), http.StatusOK, "")
 	rule := f.rule()
 	// 1.5 to 1.8 is 20%, over the publisher's 10%.
@@ -208,11 +210,56 @@ func (f priceFixture) refresh() {
 	}
 }
 
+// servedOnly takes the call world's model that nothing serves off sale, so a rule for every model moves only prices that
+// are on sale now: a price for a model nothing serves would wait for the owner (TestOperationsPricingRuleUnsold).
+func (f priceFixture) servedOnly() {
+	f.t.Helper()
+	f.run(`UPDATE catalog.model SET status = 'retired' WHERE slug = 'acme/unserved'`)
+	f.refresh()
+}
+
+// TestOperationsPricingRuleUnsold: a rule that prices a model nothing can be sold at yet changes no price on sale, but
+// the publisher would publish that price by itself as soon as the model could be served, outside any envelope; so the
+// change is weighed as giving a price no share measures, waits for the owner and is not kept, even where the envelope
+// allows no change at all today. A rule for every model that reaches such a model waits the same way.
+func TestOperationsPricingRuleUnsold(t *testing.T) {
+	t.Parallel()
+	f := newPriceFixture(t)
+	expectAdmin(t, "the envelope", f.setEnvelope(`{"min_margin_bps":0,"model_daily_change_bps":2500,"daily_changes":0,"daily_models":5}`, "0"), http.StatusOK, "")
+	unserved := f.w.models["acme/unserved"].String()
+	fixed := `{"enabled":true,"target":{"kind":"model","id":"` + unserved + `"},"audience":{"kind":"all"},` +
+		`"method":{"kind":"fixed","schedule":{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015"}}},"constraints":{}}`
+	rec := f.agentSend(f.token, http.MethodPost, "/pricing/rules", `{"rule":`+fixed+`,"reason":"a first price"}`, idempotent(newKey()))
+	expectAdmin(t, "a price for a model nothing serves", rec, http.StatusAccepted, "")
+	waits := agentOperation(t, rec)
+	expectReasons(t, "a first price", *waits.Approval.Reasons, `[{"code":"envelope_unmeasured_change"},{"code":"envelope_unknown_cost"},{"code":"envelope_daily_changes"}]`)
+	if got := f.text(`SELECT count(*)::text FROM billing.pricing_rules`); got != "1" {
+		t.Errorf("a rule that waits was kept: %s rules", got)
+	}
+	rule := f.rule()
+	rec = f.changeRule(rule.Id, rule.Rev, "1.6", newKey(), "")
+	expectAdmin(t, "a rule for every model, one of them unserved", rec, http.StatusAccepted, "")
+}
+
+// TestOperationsPricingReadsKeepToSites: a credential with the platform grant but kept to another site reads neither
+// the main site's pricing rules nor its prices: both are answered as for nothing there.
+func TestOperationsPricingReadsKeepToSites(t *testing.T) {
+	t.Parallel()
+	f := newPriceFixture(t)
+	child := f.childSite()
+	_, token := f.makeCredential(f.s, `{"name":"elsewhere","permissions":["pricing.view"],"platform":true,"sites":["`+
+		accounts.SiteID(child).TypeID()+`"],"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`)
+	expectAdmin(t, "the rules", f.agent(token, because("/pricing/rules", "r")), http.StatusNotFound, codeNotFound)
+	expectAdmin(t, "the prices", f.agent(token, because("/prices", "r")), http.StatusNotFound, codeNotFound)
+	expectAdmin(t, "the rules, reached", f.agent(f.token, because("/pricing/rules", "r")), http.StatusOK, "")
+}
+
 // TestOperationsPricingRuleApproval: a change whose moves are over the envelope together is taken back and waits for
 // the owner, who sees every move; approved, it is made again as the agent's and counted.
 func TestOperationsPricingRuleApproval(t *testing.T) {
 	t.Parallel()
 	f := newPriceFixture(t)
+	f.servedOnly()
 	expectAdmin(t, "the envelope", f.setEnvelope(narrowEnvelope, "0"), http.StatusOK, "")
 	rule := f.rule()
 	versions := f.versions()
@@ -295,6 +342,7 @@ func pgUpdate(f priceFixture, statement string) error {
 func TestOperationsPricingRuleRetryRace(t *testing.T) {
 	t.Parallel()
 	f := newPriceFixture(t)
+	f.servedOnly()
 	expectAdmin(t, "the envelope", f.setEnvelope(priceEnvelope, "0"), http.StatusOK, "")
 	rule := f.rule()
 	key := newKey()
