@@ -55,6 +55,7 @@ func (o operationsAPI) PricePublish(ctx context.Context, r operationsapi.PricePu
 	if err != nil {
 		return nil, err
 	}
+	o.admin.refreshAfterCommit(ctx, replayed || op.State != operations.StateSucceeded)
 	headers := operationsapi.PricePublish200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}
 	if op.State == operations.StatePending && op.ID != (uuid.UUID{}) {
 		return operationsapi.PricePublish202JSONResponse{Body: operationBody(op), Headers: operationsapi.PricePublish202ResponseHeaders(headers)}, nil

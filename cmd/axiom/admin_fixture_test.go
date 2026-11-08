@@ -13,6 +13,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/catalog"
+	"axiom/internal/gateway"
 	"axiom/internal/payments"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/alert"
@@ -39,6 +40,7 @@ type adminFixture struct {
 	clock     *testClock
 	logs      *bytes.Buffer
 	upstreams *suppliers.Service
+	mount     func(*gateway.RouteDeps) (admin, ops http.Handler) // the two listeners' routes over the node's handlers
 }
 
 // newAdminFixture is the main site with its admin domain and one operator, the owner, who holds the admin role.
@@ -127,13 +129,25 @@ func startAdminNodeWithSignals(c commandLine, clock *testClock, exit *egress.Cli
 	api := newAdminAPI("test", svc, cat, supplierAdmin, upstreams, c.db, logger)
 	api.keys, api.exit, api.router = masterKeys(c.t), exit, checkRouter(c.t)
 	api.alerts, api.instance, api.paymentSignals = signals, instance, payments.NewSignalState()
-	routes := adminRoutes(api, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger)
 	opsContract, err := operationsContract()
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	ops := operationsRoutes(operationsAPI{admin: api, db: c.db}, &agentGuard{contract: opsContract, accounts: svc, db: c.db, logger: logger}, logger)
-	return adminFixture{commandLine: c, svc: svc, routes: routes, ops: ops, clock: clock, logs: logs, upstreams: upstreams}
+	mount := func(routes *gateway.RouteDeps) (http.Handler, http.Handler) {
+		api := api
+		api.routes = routes
+		return adminRoutes(api, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger),
+			operationsRoutes(operationsAPI{admin: api, db: c.db}, &agentGuard{contract: opsContract, accounts: svc, db: c.db, logger: logger}, logger)
+	}
+	routes, ops := mount(nil)
+	return adminFixture{commandLine: c, svc: svc, routes: routes, ops: ops, clock: clock, logs: logs, upstreams: upstreams, mount: mount}
+}
+
+// routing is the node with a call path whose routing routes builds: each change it commits rebuilds that routing, as on
+// a node that serves calls.
+func (f adminFixture) routing(routes *gateway.RouteDeps) adminFixture {
+	f.routes, f.ops = f.mount(routes)
+	return f
 }
 
 // restarted is a new node on the same database, as the reload loop would make the old one after 30 seconds.
