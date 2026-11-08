@@ -15,7 +15,7 @@ type Dialog = { kind: "create" } | { kind: "edit"; workspace: Workspace } | { ki
 export default function Workspaces() {
   const { t } = useTranslation();
   const manage = can(useSession(), "workspaces.manage");
-  const { query, list } = useWorkspaces();
+  const { view, query, list } = useWorkspaces();
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const close = () => setDialog(null);
   // A node before workspaces answers 404 to the list; that is not a missing page but a feature not there yet.
@@ -24,14 +24,17 @@ export default function Workspaces() {
     <>
       <PageHeader title={t("workspaces.title")} description={t("workspaces.description")} />
       <div className="space-y-4 p-4 sm:p-6">
-        {manage && !unavailable ? (
+        {manage && view && !unavailable ? (
           <Button variant="primary" size="md" onClick={() => setDialog({ kind: "create" })}>
             <Icon name="plus" />
             {t("workspaces.create")}
           </Button>
         ) : null}
         <Panel>
-          {unavailable ? (
+          {/* Without api_keys.view the list is never asked for, so it would wait forever: say why instead. */}
+          {!view ? (
+            <EmptyState title={t("workspaces.noPermission.title")}>{t("workspaces.noPermission.body")}</EmptyState>
+          ) : unavailable ? (
             <EmptyState title={t("workspaces.unavailable.title")}>{t("workspaces.unavailable.body")}</EmptyState>
           ) : (
             <DataState query={query}>

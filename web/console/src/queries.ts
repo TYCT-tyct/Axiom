@@ -93,6 +93,34 @@ export const routingDefaultQuery = queryOptions({
   queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/routing-default", { signal })),
 });
 
+// The presets a key of one workspace may choose and the default a key made there takes. The account's default workspace
+// is what the two reads above answer; another workspace has presets of its own and a default chain that starts at it,
+// so it is asked for by name.
+export function workspacePresetQueries(workspace: string | undefined) {
+  if (!workspace) {
+    return { presets: routingPresetsQuery, defaults: routingDefaultQuery };
+  }
+  return {
+    presets: queryOptions({
+      queryKey: [accountKey, "routing-presets", "workspace", workspace],
+      queryFn: ({ signal }) =>
+        unwrap(
+          consoleApi.GET("/api/console/v1/routing-presets", { params: { query: { workspace_id: workspace } }, signal }),
+        ),
+    }),
+    defaults: queryOptions({
+      queryKey: [accountKey, "routing-presets", "default", workspace],
+      queryFn: ({ signal }) =>
+        unwrap(
+          consoleApi.GET("/api/console/v1/workspaces/{workspace_id}/routing-default", {
+            params: { path: { workspace_id: workspace } },
+            signal,
+          }),
+        ),
+    }),
+  };
+}
+
 export const sourceClassesQuery = queryOptions({
   queryKey: [accountKey, "source-classes"],
   queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/source-classes", { signal })),

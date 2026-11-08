@@ -5,18 +5,23 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { SecretDialog } from "./key-dialogs";
 import { KeyForm, type KeyValues } from "./key-form";
 import Workspaces from "./pages/workspaces";
-import { render, setUpPages, submit } from "./testing";
+import { choose, render, settle, setUpPages, submit } from "./testing";
 import { BudgetDialog } from "./workspace-dialogs";
 
 type Workspace = Schemas["Workspace"];
 
 // What the mocked console answers, which a test sets: the account's workspaces (or a status for a node without them),
-// a workspace's budget (or a status), and every budget the page sends.
+// a workspace's budget (or a status), the permissions the session lacks, and every budget the page sends. Presets: the
+// default workspace ws_1 offers p1 and its own p2 and gives new keys p1; ws_2 offers p1 and its own p3 and gives p3.
 const api = vi.hoisted(() => ({
   workspaces: [] as Workspace[] | number,
   budget: {} as Schemas["WorkspaceBudget"] | number,
+  denied: [] as string[],
   sent: [] as unknown[],
+  read: [] as string[],
 }));
+
+const presetId = (n: number) => `00000000-0000-4000-9000-00000000000${n}`;
 
 vi.mock("@axiom/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@axiom/api")>();
@@ -27,8 +32,23 @@ vi.mock("@axiom/api", async (importOriginal) => {
     ...actual,
     consoleApi: {
       ...actual.consoleApi,
-      GET: vi.fn((path: string) => {
+      GET: vi.fn((path: string, options?: { params?: { query?: object; path?: object } }) => {
+        const where = { ...options?.params?.query, ...options?.params?.path } as { workspace_id?: string };
+        const preset = (n: number) => ({
+          id: `00000000-0000-4000-9000-00000000000${n}`,
+          scope: "account",
+          name: `P${n}`,
+        });
         switch (path) {
+          case "/api/console/v1/routing-presets":
+            api.read.push(`presets ${where.workspace_id ?? "default"}`);
+            return answer(200, { data: where.workspace_id ? [preset(1), preset(3)] : [preset(1), preset(2)] });
+          case "/api/console/v1/routing-default":
+            api.read.push("default default");
+            return answer(200, { version: 1, new_keys_preset_id: preset(1).id });
+          case "/api/console/v1/workspaces/{workspace_id}/routing-default":
+            api.read.push(`default ${where.workspace_id}`);
+            return answer(200, { version: 1, new_keys_preset_id: preset(3).id });
           case "/api/console/v1/workspaces":
             return read(api.workspaces, (data) => ({ data }));
           case "/api/console/v1/workspaces/{workspace_id}/budget":
@@ -53,7 +73,10 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ children }: { children: ReactNode }) => children,
 }));
 
-vi.mock("@axiom/app", async (importOriginal) => (await import("./testing")).everyPermission(importOriginal));
+vi.mock("@axiom/app", async (importOriginal) => {
+  const session = await (await import("./testing")).everyPermission(importOriginal);
+  return { ...session, can: (_session: unknown, permission: string) => !api.denied.includes(permission) };
+});
 
 const workspace = (n: number, extra: Partial<Workspace> = {}): Workspace => ({
   id: `ws_${n}`,
@@ -68,7 +91,9 @@ setUpPages();
 beforeEach(() => {
   api.workspaces = [workspace(1)];
   api.budget = {};
+  api.denied = [];
   api.sent = [];
+  api.read = [];
 });
 
 // An account with one workspace makes keys as before, with no workspace field; with several, a key goes to the one the
@@ -109,6 +134,51 @@ it.each([
   expect(values.map((v) => v.workspace_id)).toEqual([sent]);
 });
 
+// Each workspace has presets and a default of its own: choosing one asks for its presets and its default, and a preset
+// chosen in another workspace is dropped rather than sent where the server refuses it.
+it("offers the presets of the workspace chosen", async () => {
+  api.workspaces = [workspace(1), workspace(2)];
+  const values: KeyValues[] = [];
+  const { container } = await render(
+    <KeyForm pending={false} error={null} onSubmit={(v) => values.push(v)} onCancel={() => {}} />,
+  );
+  const presets = () => container.querySelector("select[name=preset_id]") as HTMLSelectElement;
+  const offered = () => [...presets().options].map((option) => option.value);
+  expect(offered()).toEqual(["", presetId(1), presetId(2)]);
+  await choose(presets(), presetId(2));
+  await choose(container.querySelector("select[name=workspace_id]") as HTMLSelectElement, "ws_2");
+  await settle();
+  expect(api.read).toEqual(expect.arrayContaining(["presets ws_2", "default ws_2"]));
+  expect(offered()).toEqual(["", presetId(1), presetId(3)]);
+  expect(presets().value).toBe("");
+  (container.querySelector("input[name=name]") as HTMLInputElement).value = "Bot";
+  await submit(container.querySelector("form") as HTMLFormElement);
+  expect(values.map((v) => [v.workspace_id, v.preset_id])).toEqual([["ws_2", undefined]]);
+});
+
+// A workspace the user chose and another tab then disabled stays chosen: the form says why and refuses to submit, rather
+// than making the key in the default workspace, against its budget.
+it("keeps a chosen workspace that was disabled and refuses to submit", async () => {
+  api.workspaces = [workspace(1), workspace(2)];
+  const values: KeyValues[] = [];
+  const { client, container } = await render(
+    <KeyForm pending={false} error={null} onSubmit={(v) => values.push(v)} onCancel={() => {}} />,
+  );
+  const field = () => container.querySelector("select[name=workspace_id]") as HTMLSelectElement;
+  await choose(field(), "ws_2");
+  api.workspaces = [workspace(1), workspace(2, { disabled: true })];
+  await client.refetchQueries({ queryKey: ["account", "workspaces"] });
+  await settle();
+  expect(field().value).toBe("ws_2");
+  expect(container.textContent).toContain("workspaces.key.lost");
+  (container.querySelector("input[name=name]") as HTMLInputElement).value = "Bot";
+  await submit(container.querySelector("form") as HTMLFormElement);
+  expect(values).toEqual([]);
+  await choose(field(), "ws_1");
+  await submit(container.querySelector("form") as HTMLFormElement);
+  expect(values.map((v) => v.workspace_id)).toEqual(["ws_1"]);
+});
+
 // A node before workspaces makes the key in the default workspace whatever was asked; the dialog that shows the key
 // says so, and says nothing when the key is where it was asked for or no workspace was asked.
 it.each([
@@ -129,6 +199,14 @@ it("says workspaces are unavailable on a node without them", async () => {
   api.workspaces = 404;
   const { container } = await render(<Workspaces />);
   expect(container.textContent).toContain("workspaces.unavailable.title");
+  expect(container.textContent).not.toContain("workspaces.create");
+});
+
+// Without api_keys.view the list is never asked for; the page says why instead of loading for ever.
+it("says the session may not see workspaces", async () => {
+  api.denied = ["api_keys.view"];
+  const { container } = await render(<Workspaces />);
+  expect(container.textContent).toContain("workspaces.noPermission.title");
   expect(container.textContent).not.toContain("workspaces.create");
 });
 

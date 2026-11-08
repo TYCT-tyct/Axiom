@@ -47,7 +47,12 @@ export const zh = {
     filter: "工作区",
     any: "全部工作区",
     in: "工作区：{{name}}",
+    lost: "“{{name}}”已停用，不能在里面建 key。请另选一个工作区。",
     moved: "这个 key 建在了“{{actual}}”，不是你选的“{{asked}}”：处理请求的服务器还不支持工作区。删除它，稍后再建。",
+  },
+  noPermission: {
+    title: "没有查看工作区的权限",
+    body: "向工作区管理员申请 api_keys.view 权限。",
   },
   settings: {
     title: "工作区",
@@ -101,8 +106,13 @@ export const en: Messages<typeof zh> = {
     filter: "Workspace",
     any: "Any workspace",
     in: "Workspace: {{name}}",
+    lost: "“{{name}}” was disabled, so no key can be made in it. Choose another workspace.",
     moved:
       "This key was made in “{{actual}}”, not in “{{asked}}”: the server that took the request doesn’t support workspaces yet. Delete it and make it again later.",
+  },
+  noPermission: {
+    title: "No access to workspaces",
+    body: "Ask an admin of the workspace for the api_keys.view permission.",
   },
   settings: {
     title: "Workspaces",

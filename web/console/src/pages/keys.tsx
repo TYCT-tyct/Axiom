@@ -315,13 +315,15 @@ function KeyLimit({ apiKey }: { apiKey: Key }) {
 // A management key calls no model, so it has no preset. A call key without one routes by the system's allow-all: an
 // older key, or a node that gives no preset. A key keeps the preset it was made with when the default moves on
 // (docs/domains/routing.md「默认链与 key 落章」), so one bound to another than a key made now takes says so; a key
-// without a preset is not compared, since the node that listed it may be one that gives none. Under the key's name, where
+// without a preset is not compared, since the node that listed it may be one that gives none, and neither is a key of
+// another than the default workspace, whose own default chain the page does not read. Under the key's name, where
 // narrow screens show it instead of the column, it is labelled, and a management key shows nothing. Names wrap rather
 // than truncate (docs/frontend.md「中英文」): two presets may differ only at the end.
 function KeyPreset({ apiKey, labelled = false }: { apiKey: Key; labelled?: boolean }) {
   const { t } = useTranslation();
   const presetName = usePresetName();
   const newKeys = useNewKeys();
+  const elsewhere = useWorkspaces().scopeOf(apiKey.workspace_id) !== undefined;
   const label = (text: string) => (labelled ? t("routingPresets.key.labelled", { name: text }) : text);
   if (apiKey.kind === "management") {
     return labelled ? null : <span className="text-t4">{t("routingPresets.key.notApplicable")}</span>;
@@ -334,7 +336,7 @@ function KeyPreset({ apiKey, labelled = false }: { apiKey: Key; labelled?: boole
     );
   }
   const name = presetName(apiKey);
-  const moved = newKeys.id !== undefined && newKeys.id !== apiKey.preset_id;
+  const moved = !elsewhere && newKeys.id !== undefined && newKeys.id !== apiKey.preset_id;
   const note = newKeys.name
     ? t("routingPresets.key.notDefaultNamed", { name: newKeys.name })
     : t("routingPresets.key.notDefault");

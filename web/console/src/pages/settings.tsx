@@ -13,7 +13,8 @@ import { billingPreferenceQuery } from "../queries";
 export default function Settings() {
   const { t } = useTranslation();
   const preference = useQuery(billingPreferenceQuery);
-  const workspaces = can(useSession(), "workspaces.manage");
+  const session = useSession();
+  const workspaces = can(session, "workspaces.manage") && can(session, "api_keys.view");
   return (
     <>
       <PageHeader title={t("nav.settings")} description={t("settings.description")} />
