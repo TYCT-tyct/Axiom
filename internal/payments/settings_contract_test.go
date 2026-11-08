@@ -32,8 +32,8 @@ func TestSettingsKeepTheirContract(t *testing.T) {
 			t.Parallel()
 			typ := reflect.TypeOf(tc.settings)
 			read := make([]string, 0, typ.NumField())
-			for i := range typ.NumField() {
-				name, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+			for field := range typ.Fields() {
+				name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 				read = append(read, name)
 			}
 			slices.Sort(read)
