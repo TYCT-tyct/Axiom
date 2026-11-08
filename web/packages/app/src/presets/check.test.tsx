@@ -54,3 +54,26 @@ it("marks the rules the latest answer is for, once they rest", async () => {
   expect(check).toHaveBeenCalledTimes(2);
   await act(async () => root.unmount());
 });
+
+// An answer that named a rule stops holding the save once asking again fails, as against a node without the check.
+it("drops the mark when asking again fails", async () => {
+  vi.useFakeTimers();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const client = new QueryClient();
+  const settle = () => act(async () => vi.advanceTimersByTimeAsync(500));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <Probe draft={narrow} />
+      </QueryClientProvider>,
+    ),
+  );
+  await settle();
+  expect(container.textContent).toBe("default:policies");
+  check.mockRejectedValueOnce(new Error("404"));
+  await act(async () => client.refetchQueries());
+  await settle();
+  expect(container.textContent).toBe("none");
+  await act(async () => root.unmount());
+});

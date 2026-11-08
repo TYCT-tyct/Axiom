@@ -29,5 +29,7 @@ export function useRulesCheck(draft: RulesDraft, check: Check, scope: readonly u
     retry: false,
     staleTime: 60_000,
   });
-  return answer.data && settled === text ? invalidOf(answer.data) : null;
+  // A failed ask again keeps the last answer in data, so an error must clear the mark too: a node that cannot check, or
+  // a lost request, holds no save.
+  return answer.data && !answer.isError && settled === text ? invalidOf(answer.data) : null;
 }
