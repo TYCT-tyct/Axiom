@@ -643,6 +643,40 @@ func (q *Queries) LockMoneyAction(ctx context.Context, db DBTX, operationID uuid
 	return items, nil
 }
 
+const lockReservedCounters = `-- name: LockReservedCounters :exec
+SELECT c.id FROM operations.cap_counters c
+WHERE EXISTS (SELECT 1 FROM operations.money_actions m WHERE m.operation_id = ANY ($1::uuid[]) AND m.state = 'reserved'
+    AND m.category = c.category AND m.site_id IS NOT DISTINCT FROM c.site_id AND (
+        (c.window_kind = 'day' AND c.window_start = m.day_start AND c.object_kind = '')
+        OR (c.window_kind = 'week' AND c.window_start = m.week_start AND c.object_kind = '')
+        OR (c.window_kind = 'day' AND c.window_start = m.day_start AND c.object_kind = m.object_kind AND c.object_id = m.object_id)))
+ORDER BY c.category, c.site_id NULLS FIRST, c.object_kind, c.window_kind, c.window_start, c.object_id
+FOR UPDATE OF c
+`
+
+// The counters of the reservations still held by operations @ids, which the caller holds, every scope's in one order:
+// by scope as LockReservedPolicies, then as LockCapCounters takes a scope's three (object kind, window kind), then by
+// window and object. Every lock sequence of one scope (LockCapCounters, LockScopeCounters) follows the same order.
+func (q *Queries) LockReservedCounters(ctx context.Context, db DBTX, ids []uuid.UUID) error {
+	_, err := db.Exec(ctx, lockReservedCounters, ids)
+	return err
+}
+
+const lockReservedPolicies = `-- name: LockReservedPolicies :exec
+SELECT p.category FROM operations.cap_policies p
+WHERE EXISTS (SELECT 1 FROM operations.money_actions m WHERE m.operation_id = ANY ($1::uuid[]) AND m.state = 'reserved'
+    AND m.category = p.category AND m.site_id IS NOT DISTINCT FROM p.site_id)
+ORDER BY p.category, p.site_id NULLS FIRST
+FOR SHARE OF p
+`
+
+// The policies of the reservations still held by operations @ids, which the caller holds, in the order every batch
+// takes them: by category, the platform's first, then by site.
+func (q *Queries) LockReservedPolicies(ctx context.Context, db DBTX, ids []uuid.UUID) error {
+	_, err := db.Exec(ctx, lockReservedPolicies, ids)
+	return err
+}
+
 const lockScopeCounters = `-- name: LockScopeCounters :exec
 SELECT c.id FROM operations.cap_counters c
 WHERE c.category = $1 AND c.site_id IS NOT DISTINCT FROM $2::uuid AND (
