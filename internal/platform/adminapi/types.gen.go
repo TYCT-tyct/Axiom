@@ -3928,15 +3928,36 @@ type OperationsAgentLimits struct {
 	// AlertsPerHourMax The ceiling of `alerts_per_hour`, which is also its default.
 	AlertsPerHourMax *int `json:"alerts_per_hour_max,omitempty"`
 
+	// MoneyWritesPerHour The money writes, previews included, each credential may ask for in any hour on a core node. Absent from a node that does not apply it yet.
+	MoneyWritesPerHour *int `json:"money_writes_per_hour,omitempty"`
+
+	// MoneyWritesPerHourMax The ceiling of `money_writes_per_hour`, which is also its default.
+	MoneyWritesPerHourMax *int `json:"money_writes_per_hour_max,omitempty"`
+
+	// MoneyWritesPerMinute The money writes, previews included, each credential may ask for in any minute on a core node. Absent from a node that does not apply it yet.
+	MoneyWritesPerMinute *int `json:"money_writes_per_minute,omitempty"`
+
+	// MoneyWritesPerMinuteMax The ceiling of `money_writes_per_minute`, which is also its default.
+	MoneyWritesPerMinuteMax *int `json:"money_writes_per_minute_max,omitempty"`
+
+	// RequestsPerMinute The requests each credential may make a minute on a core node, a tenth of them at once. Absent from a node that does not apply it yet.
+	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
+
+	// RequestsPerMinuteMax The ceiling of `requests_per_minute`, which is also its default.
+	RequestsPerMinuteMax *int `json:"requests_per_minute_max,omitempty"`
+
 	// Rev 0 until the owner first sets the limits.
 	Rev       *int64     `json:"rev,omitempty"`
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
-// OperationsAgentLimitsUpdate defines model for OperationsAgentLimitsUpdate.
+// OperationsAgentLimitsUpdate A limit left out keeps what it is.
 type OperationsAgentLimitsUpdate struct {
-	AlertsPerHour int    `json:"alerts_per_hour"`
-	Reason        string `json:"reason"`
+	AlertsPerHour        int    `json:"alerts_per_hour"`
+	MoneyWritesPerHour   *int   `json:"money_writes_per_hour,omitempty"`
+	MoneyWritesPerMinute *int   `json:"money_writes_per_minute,omitempty"`
+	Reason               string `json:"reason"`
+	RequestsPerMinute    *int   `json:"requests_per_minute,omitempty"`
 
 	// Rev The revision read; 0 when the limits were never set.
 	Rev int64 `json:"rev"`

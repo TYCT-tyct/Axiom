@@ -26,15 +26,6 @@ const (
 	// agentTouchEvery is how stale the last use may be before a request writes it again: a write per request would be
 	// a write per tool call.
 	agentTouchEvery = time.Minute
-	// agentBurst and agentRefill are a credential's requests on one node: 60 at once, 600 a minute.
-	agentBurst  = 60
-	agentRefill = 100 * time.Millisecond
-	// A credential's money writes on one node: never more than 30 in any minute nor 300 in any hour. A bucket lets
-	// its size through at once and its refill over the window, so each holds half its window's limit.
-	agentMoneyBurst      = 15
-	agentMoneyRefill     = 4 * time.Second
-	agentMoneyHourBurst  = 150
-	agentMoneyHourRefill = 24 * time.Second
 )
 
 var (
@@ -349,8 +340,7 @@ func siteIDs(ids []uuid.UUID) []SiteID {
 }
 
 // AuthenticateAgent recognises raw as a live credential's token, read from the database on every call, so a revocation,
-// a stop or an expiry holds from the next request; no answer is cached. It also spends one of the credential's
-// requests on this node: past the burst it is *TooManyAttempts with the wait.
+// a stop or an expiry holds from the next request; no answer is cached.
 func (s *Service) AuthenticateAgent(ctx context.Context, raw string) (Agent, error) {
 	if !strings.HasPrefix(raw, agentTokenPrefix) || !wellFormedKey(raw) {
 		return Agent{}, ErrUnknownAgent
@@ -384,24 +374,32 @@ func (s *Service) AuthenticateAgent(ctx context.Context, raw string) (Agent, err
 	if a.id == (AgentID{}) {
 		return Agent{}, ErrUnknownAgent
 	}
-	if wait := s.agentRequests.take(a.id, agentBurst, agentRefill, now); wait > 0 {
-		return Agent{}, &TooManyAttempts{RetryAfter: wait}
-	}
 	return a, nil
 }
 
-// SpendAgentMoney spends one of a's money writes on this node, besides the request AuthenticateAgent spent: past the
-// minute's or the hour's limit it is *TooManyAttempts with the wait.
-func (s *Service) SpendAgentMoney(a Agent) error {
-	return s.spendAgent(a, agentLimit{s.agentMoney, agentMoneyBurst, agentMoneyRefill}, agentLimit{s.agentMoneyHours, agentMoneyHourBurst, agentMoneyHourRefill})
+// SpendAgentRequest spends one of a's requests on this node, of which it may make perMinute a minute and a tenth of
+// that at once (600 a minute is 60 at once): past them it is *TooManyAttempts with the wait. perMinute, like the other
+// limits below, is the owner's, read for each request, so a change applies to the next one.
+func (s *Service) SpendAgentRequest(a Agent, perMinute int) error {
+	return s.spendAgent(a, agentLimit{s.agentRequests, max(perMinute/10, 1), time.Minute / time.Duration(perMinute)})
 }
 
-// SpendAgentAlert spends one of a's alerts on this node, of which it may raise perHour in any hour, as SpendAgentMoney
-// does its money writes: the bucket holds half of them at once and gives the rest back over the hour. perHour is the
-// owner's limit, read for each alert, so a change applies to the next one.
+// SpendAgentMoney spends one of a's money writes on this node, besides its request, of which it may do perMinute in any
+// minute and perHour in any hour: past either it is *TooManyAttempts with the wait.
+func (s *Service) SpendAgentMoney(a Agent, perMinute, perHour int) error {
+	return s.spendAgent(a, within(s.agentMoney, perMinute, time.Minute), within(s.agentMoneyHours, perHour, time.Hour))
+}
+
+// SpendAgentAlert spends one of a's alerts on this node, of which it may raise perHour in any hour.
 func (s *Service) SpendAgentAlert(a Agent, perHour int) error {
-	size := max(perHour/2, 1)
-	return s.spendAgent(a, agentLimit{s.agentAlerts, size, time.Hour / time.Duration(max(perHour-size, 1))})
+	return s.spendAgent(a, within(s.agentAlerts, perHour, time.Hour))
+}
+
+// within is a bucket that lets no more than n through in any window: it holds half of them at once and gives the rest
+// back over the window (30 a minute is 15 at once and one every 4 seconds).
+func within(b *buckets[AgentID], n int, window time.Duration) agentLimit {
+	size := max(n/2, 1)
+	return agentLimit{b, size, window / time.Duration(max(n-size, 1))}
 }
 
 // agentLimit is one bucket of a credential's writes of a kind: size at once, one more every per.

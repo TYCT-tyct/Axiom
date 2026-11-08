@@ -5717,9 +5717,10 @@ paths:
       tags: [Operations]
       summary: Lower the limits on what the operations agent may do
       description: >-
-        Replaces the limits from the revision read (`rev`; another is a 409 `stale_revision`). A limit is from 1 to its
-        ceiling (otherwise a 400): the owner can lower it, never raise it past what the code allows. Every core node
-        applies it from the agent's next request.
+        Replaces the limits from the revision read (`rev`; another is a 409 `stale_revision`); a limit left out keeps
+        what it is. A limit is from 1 to its ceiling (otherwise a 400): the owner can lower it, never raise it past
+        what the code allows. Every core node applies it from the agent's next request; a node of an older version
+        refuses a limit it does not know (400) and holds the agent to its ceilings for the limits it does not read.
       security:
         - session: []
           csrf: []
@@ -7817,6 +7818,24 @@ components:
     OperationsAgentLimits:
       type: object
       properties:
+        requests_per_minute:
+          type: integer
+          description: >-
+            The requests each credential may make a minute on a core node, a tenth of them at once. Absent from a node
+            that does not apply it yet.
+        requests_per_minute_max: {type: integer, description: "The ceiling of `requests_per_minute`, which is also its default."}
+        money_writes_per_minute:
+          type: integer
+          description: >-
+            The money writes, previews included, each credential may ask for in any minute on a core node. Absent from a
+            node that does not apply it yet.
+        money_writes_per_minute_max: {type: integer, description: "The ceiling of `money_writes_per_minute`, which is also its default."}
+        money_writes_per_hour:
+          type: integer
+          description: >-
+            The money writes, previews included, each credential may ask for in any hour on a core node. Absent from a
+            node that does not apply it yet.
+        money_writes_per_hour_max: {type: integer, description: "The ceiling of `money_writes_per_hour`, which is also its default."}
         alerts_per_hour: {type: integer, description: "The alerts each credential may raise in any hour on a core node."}
         alerts_per_hour_max: {type: integer, description: "The ceiling of `alerts_per_hour`, which is also its default."}
         rev: {type: integer, format: int64, description: "0 until the owner first sets the limits."}
@@ -7825,7 +7844,11 @@ components:
       type: object
       additionalProperties: false
       required: [alerts_per_hour, rev, reason]
+      description: A limit left out keeps what it is.
       properties:
+        requests_per_minute: {type: integer, minimum: 1, maximum: 600}
+        money_writes_per_minute: {type: integer, minimum: 1, maximum: 30}
+        money_writes_per_hour: {type: integer, minimum: 1, maximum: 300}
         alerts_per_hour: {type: integer, minimum: 1, maximum: 60}
         rev: {type: integer, format: int64, minimum: 0, description: "The revision read; 0 when the limits were never set."}
         reason: {type: string, minLength: 1, maxLength: 1000}

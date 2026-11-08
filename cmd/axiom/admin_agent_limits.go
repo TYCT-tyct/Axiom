@@ -21,11 +21,25 @@ func (a adminAPI) GetOperationsAgentLimits(ctx context.Context, _ adminapi.GetOp
 	return adminapi.GetOperationsAgentLimits200JSONResponse(agentLimitsBody(l)), nil
 }
 
-// SetOperationsAgentLimits lowers the limits on the operations agent from the revision the owner read.
+// SetOperationsAgentLimits lowers the limits on the operations agent from the revision the owner read. A limit left out
+// keeps what that revision holds: SetAgentLimits refuses any other revision, so what this reads is what it replaces.
 func (a adminAPI) SetOperationsAgentLimits(ctx context.Context, r adminapi.SetOperationsAgentLimitsRequestObject) (adminapi.SetOperationsAgentLimitsResponseObject, error) {
 	b := r.Body
 	body, replayed, err := idempotently(ctx, a.db, "setOperationsAgentLimits", r.Params.IdempotencyKey, r, func(tx pg.Tx) (adminapi.OperationsAgentLimits, error) {
-		set, err := operations.SetAgentLimits(ctx, tx, actor(ctx), operations.AgentLimits{AlertsPerHour: b.AlertsPerHour}, b.Rev, b.Reason)
+		l, err := operations.ReadAgentLimits(ctx, tx)
+		if err != nil {
+			return adminapi.OperationsAgentLimits{}, err
+		}
+		l.AlertsPerHour = b.AlertsPerHour
+		for _, given := range []struct {
+			to   *int
+			from *int
+		}{{&l.RequestsPerMinute, b.RequestsPerMinute}, {&l.MoneyWritesPerMinute, b.MoneyWritesPerMinute}, {&l.MoneyWritesPerHour, b.MoneyWritesPerHour}} {
+			if given.from != nil {
+				*given.to = *given.from
+			}
+		}
+		set, err := operations.SetAgentLimits(ctx, tx, actor(ctx), l, b.Rev, b.Reason)
 		return agentLimitsBody(set), err
 	})
 	if err != nil {
@@ -36,6 +50,9 @@ func (a adminAPI) SetOperationsAgentLimits(ctx context.Context, r adminapi.SetOp
 
 func agentLimitsBody(l operations.AgentLimits) adminapi.OperationsAgentLimits {
 	return adminapi.OperationsAgentLimits{
+		RequestsPerMinute: &l.RequestsPerMinute, RequestsPerMinuteMax: new(operations.MaxRequestsPerMinute),
+		MoneyWritesPerMinute: &l.MoneyWritesPerMinute, MoneyWritesPerMinuteMax: new(operations.MaxMoneyWritesPerMinute),
+		MoneyWritesPerHour: &l.MoneyWritesPerHour, MoneyWritesPerHourMax: new(operations.MaxMoneyWritesPerHour),
 		AlertsPerHour: &l.AlertsPerHour, AlertsPerHourMax: new(operations.MaxAlertsPerHour), Rev: &l.Rev, UpdatedAt: l.Updated,
 	}
 }

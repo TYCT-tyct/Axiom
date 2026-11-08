@@ -11,10 +11,13 @@ import (
 )
 
 type OperationsAgentLimit struct {
-	Singleton     bool
-	AlertsPerHour int32
-	Rev           int64
-	UpdatedAt     time.Time
+	Singleton            bool
+	AlertsPerHour        int32
+	Rev                  int64
+	UpdatedAt            time.Time
+	RequestsPerMinute    *int32
+	MoneyWritesPerMinute *int32
+	MoneyWritesPerHour   *int32
 }
 
 type OperationsApproval struct {

@@ -87,7 +87,7 @@ type Service struct {
 	known   *lru[keyHash, Caller]
 	unknown *lru[keyHash, struct{}]
 	lookups singleflight.Group
-	// agentRequests spends each operations credential's requests on this node (AuthenticateAgent).
+	// agentRequests spends each operations credential's requests on this node (SpendAgentRequest).
 	agentRequests *buckets[AgentID]
 	// agentMoney and agentMoneyHours spend each credential's money writes on this node (SpendAgentMoney), agentAlerts
 	// its alerts (SpendAgentAlert).
