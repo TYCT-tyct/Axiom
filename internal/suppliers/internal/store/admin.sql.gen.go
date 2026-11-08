@@ -741,6 +741,34 @@ func (q *Queries) LockSupplierForChange(ctx context.Context, db DBTX, id uuid.UU
 	return items, nil
 }
 
+const modelTakenInGroup = `-- name: ModelTakenInGroup :one
+SELECT (EXISTS (SELECT FROM suppliers.endpoints e WHERE e.supplier_group_id = $1 AND e.model_id = $2)
+    OR EXISTS (SELECT FROM suppliers.supplier_models m WHERE m.supplier_group_id = $1 AND m.model_id = $2)
+    OR EXISTS (
+        SELECT FROM suppliers.supplier_aliases a
+        LEFT JOIN LATERAL (SELECT r.model_id FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY r.revision DESC LIMIT 1) r ON true
+        WHERE a.supplier_id = $3 AND COALESCE(r.model_id, a.model_id) = $2
+            AND (a.supplier_group_id = $1 OR (a.supplier_group_id IS NULL AND EXISTS (
+                SELECT FROM suppliers.supplier_models m WHERE m.supplier_group_id = $1 AND m.upstream_name = a.upstream_name)))))::boolean
+`
+
+type ModelTakenInGroupParams struct {
+	GroupID    uuid.UUID
+	ModelID    uuid.UUID
+	SupplierID uuid.UUID
+}
+
+// Whether the group already has a name for the model, or will at the next sync: an endpoint of the group's model, a
+// name the group lists that the sync resolved to it, or an alias at its current revision that maps a name to it (one of
+// the group's, or one of the whole supplier's for a name the group lists), projected or not yet. The projection keeps
+// one endpoint for a group's model, so another name for it would take that endpoint over rather than add one.
+func (q *Queries) ModelTakenInGroup(ctx context.Context, db DBTX, arg ModelTakenInGroupParams) (bool, error) {
+	row := db.QueryRow(ctx, modelTakenInGroup, arg.GroupID, arg.ModelID, arg.SupplierID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const pendingMappingsPage = `-- name: PendingMappingsPage :many
 SELECT m.supplier_id, m.supplier_group_id, g.codename, m.upstream_name, m.formats, m.first_seen_at
 FROM suppliers.supplier_models m
@@ -748,22 +776,26 @@ JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
 JOIN suppliers.suppliers s ON s.id = m.supplier_id
 WHERE m.model_id IS NULL AND m.present AND g.present AND s.status <> 'removed'
     AND ($1::uuid IS NULL OR m.supplier_id = $1)
+    AND ($2::uuid IS NULL OR m.supplier_group_id = $2)
+    AND ($3::text IS NULL OR m.upstream_name = $3)
     AND NOT EXISTS (
         SELECT FROM suppliers.supplier_aliases a
         WHERE a.supplier_id = m.supplier_id AND a.upstream_name = m.upstream_name
             AND (a.supplier_group_id IS NULL OR a.supplier_group_id = m.supplier_group_id))
-    AND ($2::timestamptz IS NULL
-        OR (m.first_seen_at, m.supplier_group_id, m.upstream_name) > ($2, $3::uuid, $4::text))
+    AND ($4::timestamptz IS NULL
+        OR (m.first_seen_at, m.supplier_group_id, m.upstream_name) > ($4, $5::uuid, $6::text))
 ORDER BY m.first_seen_at, m.supplier_group_id, m.upstream_name
-LIMIT $5::int
+LIMIT $7::int
 `
 
 type PendingMappingsPageParams struct {
-	SupplierID *uuid.UUID
-	AfterSeen  *time.Time
-	AfterGroup *uuid.UUID
-	AfterName  *string
-	PageSize   int32
+	SupplierID   *uuid.UUID
+	GroupID      *uuid.UUID
+	UpstreamName *string
+	AfterSeen    *time.Time
+	AfterGroup   *uuid.UUID
+	AfterName    *string
+	PageSize     int32
 }
 
 type PendingMappingsPageRow struct {
@@ -776,10 +808,13 @@ type PendingMappingsPageRow struct {
 }
 
 // The upstream names the catalog could not recognise (no model) that no alias of the supplier or of the group covers,
-// oldest first, a page starting after the last row of the one before.
+// oldest first, a page starting after the last row of the one before. A group and a name narrow it to one name, which
+// is how an agent's mapping is checked to be of a name that waits.
 func (q *Queries) PendingMappingsPage(ctx context.Context, db DBTX, arg PendingMappingsPageParams) ([]PendingMappingsPageRow, error) {
 	rows, err := db.Query(ctx, pendingMappingsPage,
 		arg.SupplierID,
+		arg.GroupID,
+		arg.UpstreamName,
 		arg.AfterSeen,
 		arg.AfterGroup,
 		arg.AfterName,

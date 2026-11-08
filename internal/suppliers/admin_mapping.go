@@ -42,6 +42,36 @@ func (a *Admin) MapModel(ctx context.Context, tx pg.Tx, actor audit.Actor, suppl
 	return a.reviseMapping(ctx, tx, q, actor, supplier, model, declared, formats, rows[0], m, detail, reason)
 }
 
+// MapPending makes a group alias for a name the group lists as waiting for a model (what PendingMappings lists), to a
+// model the group has no name for yet, and for nothing else: the result is a new endpoint and moves no traffic that
+// already flows. An alias of a name the catalog recognised or a supplier alias covers would change what that name
+// means; a second name for a model the group has would take its endpoint over, since the projection keeps one endpoint
+// for a group's model and prefers an alias. Both checks run under the supplier lock that MapModel takes, so no alias
+// can be made between them, and they count aliases the sync has not projected yet.
+func (a *Admin) MapPending(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier, group uuid.UUID, name string, model uuid.UUID, reason string) (Mapping, error) {
+	if err := a.lockAlias(ctx, tx, supplier, &group); err != nil {
+		return Mapping{}, err
+	}
+	q := store.New()
+	rows, err := q.PendingMappingsPage(ctx, tx, store.PendingMappingsPageParams{
+		SupplierID: &supplier, GroupID: &group, UpstreamName: &name, PageSize: 1,
+	})
+	switch {
+	case err != nil:
+		return Mapping{}, fmt.Errorf("read the name: %w", err)
+	case len(rows) == 0:
+		return Mapping{}, ErrNotPending
+	}
+	taken, err := q.ModelTakenInGroup(ctx, tx, store.ModelTakenInGroupParams{SupplierID: supplier, GroupID: group, ModelID: model})
+	switch {
+	case err != nil:
+		return Mapping{}, fmt.Errorf("read the group's names for the model: %w", err)
+	case taken:
+		return Mapping{}, ErrModelTaken
+	}
+	return a.MapModel(ctx, tx, actor, supplier, &group, name, model, nil, nil, reason)
+}
+
 // lockAlias serializes alias writes for a supplier and checks that the named group belongs to it.
 func (a *Admin) lockAlias(ctx context.Context, tx pg.Tx, supplier uuid.UUID, group *uuid.UUID) error {
 	if _, err := a.locked(ctx, tx, supplier); err != nil {

@@ -130,13 +130,16 @@ UPDATE suppliers.supplier_aliases SET formats = @formats WHERE id = @id;
 
 -- name: PendingMappingsPage :many
 -- The upstream names the catalog could not recognise (no model) that no alias of the supplier or of the group covers,
--- oldest first, a page starting after the last row of the one before.
+-- oldest first, a page starting after the last row of the one before. A group and a name narrow it to one name, which
+-- is how an agent's mapping is checked to be of a name that waits.
 SELECT m.supplier_id, m.supplier_group_id, g.codename, m.upstream_name, m.formats, m.first_seen_at
 FROM suppliers.supplier_models m
 JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
 JOIN suppliers.suppliers s ON s.id = m.supplier_id
 WHERE m.model_id IS NULL AND m.present AND g.present AND s.status <> 'removed'
     AND (sqlc.narg(supplier_id)::uuid IS NULL OR m.supplier_id = sqlc.narg(supplier_id))
+    AND (sqlc.narg(group_id)::uuid IS NULL OR m.supplier_group_id = sqlc.narg(group_id))
+    AND (sqlc.narg(upstream_name)::text IS NULL OR m.upstream_name = sqlc.narg(upstream_name))
     AND NOT EXISTS (
         SELECT FROM suppliers.supplier_aliases a
         WHERE a.supplier_id = m.supplier_id AND a.upstream_name = m.upstream_name
@@ -145,6 +148,20 @@ WHERE m.model_id IS NULL AND m.present AND g.present AND s.status <> 'removed'
         OR (m.first_seen_at, m.supplier_group_id, m.upstream_name) > (sqlc.narg(after_seen), sqlc.narg(after_group)::uuid, sqlc.narg(after_name)::text))
 ORDER BY m.first_seen_at, m.supplier_group_id, m.upstream_name
 LIMIT @page_size::int;
+
+-- name: ModelTakenInGroup :one
+-- Whether the group already has a name for the model, or will at the next sync: an endpoint of the group's model, a
+-- name the group lists that the sync resolved to it, or an alias at its current revision that maps a name to it (one of
+-- the group's, or one of the whole supplier's for a name the group lists), projected or not yet. The projection keeps
+-- one endpoint for a group's model, so another name for it would take that endpoint over rather than add one.
+SELECT (EXISTS (SELECT FROM suppliers.endpoints e WHERE e.supplier_group_id = @group_id AND e.model_id = @model_id)
+    OR EXISTS (SELECT FROM suppliers.supplier_models m WHERE m.supplier_group_id = @group_id AND m.model_id = @model_id)
+    OR EXISTS (
+        SELECT FROM suppliers.supplier_aliases a
+        LEFT JOIN LATERAL (SELECT r.model_id FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY r.revision DESC LIMIT 1) r ON true
+        WHERE a.supplier_id = @supplier_id AND COALESCE(r.model_id, a.model_id) = @model_id
+            AND (a.supplier_group_id = @group_id OR (a.supplier_group_id IS NULL AND EXISTS (
+                SELECT FROM suppliers.supplier_models m WHERE m.supplier_group_id = @group_id AND m.upstream_name = a.upstream_name)))))::boolean;
 
 -- name: TopUpBasis :many
 -- What a top-up proposal is computed from: who owns the supplier, its units and the unit value now in force, the
