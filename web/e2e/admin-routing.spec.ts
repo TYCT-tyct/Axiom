@@ -13,7 +13,8 @@ test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 function writes(page: Page) {
   const sent: { method: string; path: string; body: Record<string, unknown> }[] = [];
   page.on("request", (request) => {
-    if (request.method() !== "GET" && request.url().includes("/routing-presets")) {
+    const url = request.url();
+    if (request.method() !== "GET" && url.includes("/routing-presets") && !url.includes("/routing-presets/checks")) {
       sent.push({ method: request.method(), path: new URL(request.url()).pathname, body: request.postDataJSON() });
     }
   });

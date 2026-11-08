@@ -1,6 +1,6 @@
 import type { Schemas } from "@axiom/api";
 import { expect, it } from "vitest";
-import { draftOf, newOverride, rulesOf, summaryOf } from "./rules";
+import { draftOf, invalidOf, newOverride, rulesOf, withoutScore } from "./rules";
 
 const rules = (value: object) => value as Schemas["RoutingRules"];
 
@@ -47,9 +47,7 @@ it.each([
 
 it.each([
   { case: "no source checked", edit: { classes: [] }, field: "classes" },
-  { case: "policies that leave out may_train", edit: { policies: ["no_retention"] }, field: "policies" },
   { case: "no policy checked", edit: { policies: [] }, field: "policies" },
-  { case: "a product score", edit: { scored: true }, field: "score" },
   { case: "a price in words", edit: { maxPrice: { prompt: "three", completion: "", request: "" } }, field: "prompt" },
   {
     case: "a price with a comma",
@@ -61,15 +59,13 @@ it.each([
   expect(rulesOf({ ...draft, base: { ...draft.base, ...edit } })).toEqual({ invalid: { rule: "default", field } });
 });
 
-// Scoring is not live, so a stored score (a copy, or rules written through the API) is refused rather than kept, and
-// dropping it writes the rule without one.
-it.each([{ min_score: 90 }, { min_score_confidence: 0.5 }])("refuses a stored score until it is removed", (score) => {
+// A stored score (a copy, or rules written through the API) is written back as it was, for the server's check to judge,
+// until it is removed.
+it.each([{ min_score: 90 }, { min_score_confidence: 0.5 }])("keeps a stored score until it is removed", (score) => {
   const draft = draftOf(rules({ default: {}, rules: [{ author: "openai", ...score }] }));
-  expect(rulesOf(draft)).toEqual({ invalid: { rule: 0, field: "score" } });
-  draft.overrides = draft.overrides.map((override) => ({ ...override, scored: false }));
-  expect(rulesOf(draft)).toEqual({
-    rules: { default: {}, rules: [{ author: "openai" }] },
-  });
+  expect(rulesOf(draft)).toEqual({ rules: { default: {}, rules: [{ author: "openai", ...score }] } });
+  draft.overrides = draft.overrides.map(withoutScore);
+  expect(rulesOf(draft)).toEqual({ rules: { default: {}, rules: [{ author: "openai" }] } });
 });
 
 // A null score is no threshold to the server, so the rule saves, without it.
@@ -88,12 +84,21 @@ it("writes an override's target and trims its name", () => {
   expect(rulesOf(draft)).toEqual({ rules: { default: {}, rules: [{ model: "openai/gpt-5", verified_only: true }] } });
 });
 
-it("sums a preset up", () => {
-  expect(summaryOf(rules({ default: {}, rules: [{ author: "openai", max_price: { prompt: "1" } }] }))).toEqual({
-    sort: "balanced",
-    classes: null,
-    priced: true,
-    verifiedOnly: false,
-    overrides: 1,
-  });
+// The server's check marks the first rule it names: at its first condition, both score conditions at the one score
+// notice, and the rule as a whole when it names none.
+it.each([
+  { case: "every rule keeps an endpoint", unmatched: [], want: null },
+  {
+    case: "the default's price",
+    unmatched: [{ fields: ["max_price.completion" as const, "classes" as const] }, { index: 2, fields: [] }],
+    want: { rule: "default", field: "completion" },
+  },
+  {
+    case: "an override's score",
+    unmatched: [{ index: 1, fields: ["min_score_confidence" as const] }],
+    want: { rule: 1, field: "score" },
+  },
+  { case: "conditions only together", unmatched: [{ index: 0, fields: [] }], want: { rule: 0, field: "rule" } },
+])("marks $case", ({ unmatched, want }) => {
+  expect(invalidOf({ unmatched })).toEqual(want);
 });

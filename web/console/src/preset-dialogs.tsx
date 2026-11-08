@@ -1,5 +1,14 @@
 import { ApiError, consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
-import { accountKey, draftOf, type Invalid, RulesEditor, rulesOf, useClassOptions, useErrors } from "@axiom/app";
+import {
+  accountKey,
+  draftOf,
+  type Invalid,
+  RulesEditor,
+  rulesOf,
+  useClassOptions,
+  useErrors,
+  useRulesCheck,
+} from "@axiom/app";
 import { Button, Dialog, FormError, Icon, SubmitButton, TextField, useFormat } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -58,6 +67,10 @@ function save(edit: PresetEdit, body: { slug: string; name: string; rules: Schem
 
 type Missing = "slug" | "name" | null;
 
+function checkRules(rules: Schemas["RoutingRules"]) {
+  return unwrap(consoleApi.POST("/api/console/v1/routing-presets/checks", { body: { rules } }));
+}
+
 // A refusal may sit far down a long dialog, away from the button pressed: once it renders, it is scrolled into view.
 function showRefusal(form: HTMLFormElement) {
   requestAnimationFrame(() =>
@@ -84,6 +97,8 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
   const [draft, setDraft] = useState(() => draftOf(source?.rules, edit.kind === "copy"));
   const [invalid, setInvalid] = useState<Invalid | null>(null);
   const [missing, setMissing] = useState<Missing>(null);
+  // A rule the server says keeps no endpoint the account's keys can use is marked as the rules change, and refuses a save.
+  const unmatched = useRulesCheck(draft, checkRules, []);
   const mutation = useMutation({
     mutationFn: (body: Parameters<typeof save>[1]) => save(edit, body),
     onSuccess: async () => {
@@ -96,7 +111,7 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
     const blank: Missing = edit.kind !== "edit" && !slugPattern.test(slug) ? "slug" : name.trim() ? null : "name";
     setInvalid("invalid" in written ? written.invalid : null);
     setMissing(blank);
-    if ("rules" in written && !blank && !mutation.isPending) {
+    if ("rules" in written && !blank && !unmatched && !mutation.isPending) {
       mutation.mutate({ slug, name: name.trim(), rules: written.rules });
       return;
     }
@@ -123,7 +138,7 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
           onSlug={setSlug}
           onName={setName}
         />
-        <RulesEditor draft={draft} invalid={invalid} {...choices} onChange={setDraft} />
+        <RulesEditor draft={draft} invalid={invalid ?? unmatched} {...choices} onChange={setDraft} />
         <div className="flex justify-end gap-2 pt-2">
           <Button size="md" onClick={onClose}>
             {t("cancel", { ns: "common" })}
