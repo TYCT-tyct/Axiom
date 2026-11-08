@@ -55,7 +55,7 @@ func TestReplicaStepsFail(t *testing.T) {
 	t.Parallel()
 	db, scope, canceled := openFailing(t)
 	for name, step := range map[string]func(tx pg.Tx) error{
-		"nextReplicaBatch": func(tx pg.Tx) error { _, _, err := nextReplicaBatch(canceled, tx, "t"); return err },
+		"nextReplicaBatch": func(tx pg.Tx) error { _, err := nextReplicaBatch(canceled, tx, "t"); return err },
 		"signalReplicaLag": func(tx pg.Tx) error { return signalReplicaLag(canceled, tx, "t") },
 	} {
 		if err := db.Tx(t.Context(), scope, step); !errors.Is(err, context.Canceled) {

@@ -27,6 +27,7 @@ type bucket struct {
 	objects map[string][]byte
 	puts    int
 	down    bool
+	lost    bool   // a write is stored but its answer never arrives, as when the connection drops after the upload
 	target  string // the replica's target, its endpoint and bucket
 }
 
@@ -59,6 +60,9 @@ func (b *bucket) Put(ctx context.Context, up objectstore.Upload) (objectstore.Ob
 	body, err := io.ReadAll(up.Body)
 	b.objects[up.Key] = body
 	b.puts++
+	if b.lost {
+		return objectstore.ObjectInfo{}, errors.New("connection reset after the upload")
+	}
 	return objectstore.ObjectInfo{Key: up.Key, Size: int64(len(body))}, err
 }
 
@@ -159,10 +163,10 @@ func TestAuditReplicaCopiesTheChain(t *testing.T) {
 	db.expect(t, "the copy", `SELECT replicated_seq || ' ' || object_key FROM operations.audit_replica`, "1002 "+objectKey(1002, 1002))
 }
 
-// TestAuditReplicaNeverOverwrites: a key the bucket holds with the same bytes (a run that wrote and then failed to save)
-// is passed over without a write; one with other bytes is a conflict that is alerted and stops the copy, the bucket
-// keeping what it had though it does not enforce If-None-Match; a link waiting too long raises the lag, which the run
-// that copies it resolves.
+// TestAuditReplicaNeverOverwrites: a key the bucket holds with other bytes is a conflict that is alerted and stops the copy, the bucket
+// keeping what it had though it does not enforce If-None-Match, and keeps stopping it after the chain has grown: the
+// conflicting batch stays planned, so no batch named after the later head steps over it; a link waiting too long raises
+// the lag, which the run that copies it resolves.
 func TestAuditReplicaNeverOverwrites(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
@@ -170,12 +174,8 @@ func TestAuditReplicaNeverOverwrites(t *testing.T) {
 	db.backdated(t, "4 minutes")
 	db.chain(t, time.Minute)
 	b := newBucket()
-	if _, err := db.replicate(t, b); err != nil {
-		t.Fatal(err)
-	}
-	superuser(t, db, `DELETE FROM operations.audit_replica`)
-	if n, err := db.replicate(t, b); n != 2 || err != nil || b.puts != 1 {
-		t.Errorf("copied %d with %d writes after a lost save: %v", n, b.puts, err)
+	if n, err := db.replicate(t, b); n != 2 || err != nil {
+		t.Fatalf("copied %d: %v", n, err)
 	}
 
 	db.backdated(t, "3 minutes")
@@ -191,13 +191,27 @@ func TestAuditReplicaNeverOverwrites(t *testing.T) {
 	db.expect(t, "the copy", `SELECT replicated_seq::text FROM operations.audit_replica`, "2")
 	lag := `SELECT string_agg((body->>'severity') || ' ' || coalesce(body->'fields'->>'behind_links', '-'), ',' ORDER BY id)
 		FROM platform.alert_signals WHERE body->>'kind' = 'operations.audit_replica_lag'`
-	db.expect(t, "the lag", lag, "info -,info -,warning 1")
+	db.expect(t, "the lag", lag, "info -,warning 1")
+
+	db.backdated(t, "2 minutes")
+	db.chain(t, time.Minute)
+	if n, err := db.replicate(t, b); n != 0 || !errors.Is(err, operations.ErrReplicaConflict) {
+		t.Errorf("copied %d after the chain grew past a conflict: %v", n, err)
+	}
+	if keys := b.keys(); !slices.Equal(keys, []string{objectKey(1, 2), objectKey(3, 3)}) {
+		t.Errorf("objects %v after the chain grew past a conflict", keys)
+	}
+	db.expect(t, "the copy after the chain grew", `SELECT replicated_seq::text FROM operations.audit_replica`, "2")
+	db.expect(t, "the lag after the chain grew", lag, "info -,warning 1,warning 2")
 
 	delete(b.objects, objectKey(3, 3))
-	if n, err := db.replicate(t, b); n != 1 || err != nil {
+	if n, err := db.replicate(t, b); n != 2 || err != nil {
 		t.Errorf("copied %d once the conflict was cleared: %v", n, err)
 	}
-	db.expect(t, "the recovery", lag, "info -,info -,warning 1,info -")
+	if keys := b.keys(); !slices.Equal(keys, []string{objectKey(1, 2), objectKey(3, 3), objectKey(4, 4)}) {
+		t.Errorf("objects %v once the conflict was cleared", keys)
+	}
+	db.expect(t, "the recovery", lag, "info -,warning 1,warning 2,info -")
 }
 
 // TestAuditReplicaHoldsItsPlace: a bucket that is down and an entry changed after it was chained both leave the copy
@@ -219,7 +233,7 @@ func TestAuditReplicaHoldsItsPlace(t *testing.T) {
 	}
 	b.down = false
 	superuser(t, db, `UPDATE platform.audit_log SET detail = '{"n": 2}' WHERE id = (SELECT entry_id FROM operations.audit_chain WHERE seq = 2)`)
-	if n, err := db.replicate(t, b); n != 0 || err == nil || !strings.Contains(err.Error(), "link 2 does not check (mismatch)") {
+	if n, err := db.replicate(t, b); n != 0 || err == nil || !strings.Contains(err.Error(), "the planned links 2 to 2 no longer all check") {
 		t.Errorf("copied %d of a changed entry: %v", n, err)
 	}
 	db.expect(t, "the copy", `SELECT replicated_seq::text FROM operations.audit_replica`, "1")
@@ -270,4 +284,74 @@ func TestAuditReplicaFollowsItsBucket(t *testing.T) {
 	}
 	db.expect(t, "the progress", `SELECT string_agg(target || ' ' || replicated_seq, ',' ORDER BY target) FROM operations.audit_replica`,
 		"https://s3.example.com/a 2,https://s3.example.com/b 3")
+}
+
+// TestAuditReplicaFinishesItsPlan: a batch whose upload landed but whose answer was lost is finished as planned after
+// the chain has grown: the next run reads back the same key and bytes instead of writing an overlapping object, then
+// carries on, so the objects' ranges follow one another and recompute the chain.
+func TestAuditReplicaFinishesItsPlan(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.backdated(t, "5 minutes")
+	db.chain(t, time.Minute)
+	b := newBucket()
+	if _, err := db.replicate(t, b); err != nil {
+		t.Fatal(err)
+	}
+	db.backdated(t, "4 minutes")
+	db.chain(t, time.Minute)
+	b.lost = true
+	if n, err := db.replicate(t, b); n != 0 || err == nil {
+		t.Fatalf("copied %d though the answer was lost: %v", n, err)
+	}
+	db.expect(t, "the plan", `SELECT replicated_seq || ' ' || pending_last FROM operations.audit_replica`, "1 2")
+	b.lost = false
+	db.backdated(t, "3 minutes")
+	db.chain(t, time.Minute)
+	if n, err := db.replicate(t, b); n != 2 || err != nil || b.puts != 3 {
+		t.Fatalf("copied %d with %d writes after the lost answer: %v", n, b.puts, err)
+	}
+	if keys := b.keys(); !slices.Equal(keys, []string{objectKey(1, 1), objectKey(2, 2), objectKey(3, 3)}) {
+		t.Errorf("objects %v, want consecutive ranges", keys)
+	}
+	if got := strings.Join(verifyReplica(t, b), ","); got != db.linked(t) {
+		t.Error("the replica's chain is not the database's")
+	}
+	db.expect(t, "the copy", `SELECT replicated_seq || ' ' || coalesce(pending_last::text, '-') FROM operations.audit_replica`, "3 -")
+}
+
+// TestAuditReplicaReadsBackALostSave: a key the bucket holds with the same bytes, as after a run that wrote and then
+// lost its progress, is passed over without a write.
+func TestAuditReplicaReadsBackALostSave(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.backdated(t, "5 minutes")
+	db.backdated(t, "4 minutes")
+	db.chain(t, time.Minute)
+	b := newBucket()
+	if _, err := db.replicate(t, b); err != nil {
+		t.Fatal(err)
+	}
+	superuser(t, db, `DELETE FROM operations.audit_replica`)
+	if n, err := db.replicate(t, b); n != 2 || err != nil || b.puts != 1 {
+		t.Errorf("copied %d with %d writes after a lost save: %v", n, b.puts, err)
+	}
+}
+
+// TestAuditReplicaCopiesOnlyWhatChecks: a first link whose entry was changed after it was chained is neither planned
+// nor written.
+func TestAuditReplicaCopiesOnlyWhatChecks(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.backdated(t, "5 minutes")
+	db.chain(t, time.Minute)
+	superuser(t, db, `UPDATE platform.audit_log SET detail = '{"n": 2}'`)
+	b := newBucket()
+	if n, err := db.replicate(t, b); n != 0 || err == nil || !strings.Contains(err.Error(), "link 1 does not check (mismatch)") {
+		t.Errorf("copied %d of a changed entry: %v", n, err)
+	}
+	db.expect(t, "the copy", `SELECT count(*)::text FROM operations.audit_replica`, "0")
+	if keys := b.keys(); len(keys) != 0 {
+		t.Errorf("objects %v", keys)
+	}
 }

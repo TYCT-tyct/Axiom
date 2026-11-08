@@ -11,26 +11,24 @@ import (
 )
 
 const advanceAuditReplica = `-- name: AdvanceAuditReplica :execrows
-INSERT INTO operations.audit_replica (target, replicated_seq, object_key) VALUES ($1, $2, $3)
-ON CONFLICT (target) DO UPDATE SET replicated_seq = EXCLUDED.replicated_seq, object_key = EXCLUDED.object_key,
+UPDATE operations.audit_replica SET replicated_seq = $1, object_key = $2::text, pending_last = NULL,
     replicated_at = now()
-WHERE operations.audit_replica.replicated_seq = $4
+WHERE target = $3 AND replicated_seq = $4 AND pending_last = $1
 `
 
 type AdvanceAuditReplicaParams struct {
-	Target    string
 	LastSeq   int64
 	ObjectKey string
+	Target    string
 	FromSeq   int64
 }
 
-// Moves the copy to target from from_seq, where the run read it, to last_seq: 0 rows when another run moved it first.
-// from_seq 0 is no copy yet, which only the first insert matches, since replicated_seq is at least 1.
+// Confirms the planned batch to last_seq, whose object is object_key: 0 rows when another run confirmed it first.
 func (q *Queries) AdvanceAuditReplica(ctx context.Context, db DBTX, arg AdvanceAuditReplicaParams) (int64, error) {
 	result, err := db.Exec(ctx, advanceAuditReplica,
-		arg.Target,
 		arg.LastSeq,
 		arg.ObjectKey,
+		arg.Target,
 		arg.FromSeq,
 	)
 	if err != nil {
@@ -71,16 +69,16 @@ func (q *Queries) AuditReplicaLag(ctx context.Context, db DBTX, target string) (
 }
 
 const auditReplicaState = `-- name: AuditReplicaState :many
-SELECT replicated_seq, object_key, replicated_at FROM operations.audit_replica WHERE target = $1
+SELECT replicated_seq, coalesce(pending_last, 0)::bigint AS pending_last FROM operations.audit_replica WHERE target = $1
 `
 
 type AuditReplicaStateRow struct {
 	ReplicatedSeq int64
-	ObjectKey     string
-	ReplicatedAt  time.Time
+	PendingLast   int64
 }
 
-// How far the copy to target has got; no row before its first object.
+// How far the copy to target has got, and the last link of the batch planned and not yet confirmed (0 for none); no
+// row before the first plan.
 func (q *Queries) AuditReplicaState(ctx context.Context, db DBTX, target string) ([]AuditReplicaStateRow, error) {
 	rows, err := db.Query(ctx, auditReplicaState, target)
 	if err != nil {
@@ -90,7 +88,7 @@ func (q *Queries) AuditReplicaState(ctx context.Context, db DBTX, target string)
 	var items []AuditReplicaStateRow
 	for rows.Next() {
 		var i AuditReplicaStateRow
-		if err := rows.Scan(&i.ReplicatedSeq, &i.ObjectKey, &i.ReplicatedAt); err != nil {
+		if err := rows.Scan(&i.ReplicatedSeq, &i.PendingLast); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -99,4 +97,26 @@ func (q *Queries) AuditReplicaState(ctx context.Context, db DBTX, target string)
 		return nil, err
 	}
 	return items, nil
+}
+
+const planAuditReplica = `-- name: PlanAuditReplica :execrows
+INSERT INTO operations.audit_replica (target, replicated_seq, pending_last) VALUES ($1, $2, $3::bigint)
+ON CONFLICT (target) DO UPDATE SET pending_last = EXCLUDED.pending_last
+WHERE operations.audit_replica.replicated_seq = $2 AND operations.audit_replica.pending_last IS NULL
+`
+
+type PlanAuditReplicaParams struct {
+	Target  string
+	FromSeq int64
+	LastSeq int64
+}
+
+// Records the batch from_seq + 1 to last_seq for target, from the state the run read: nothing planned and the copy at
+// from_seq (no row is from_seq 0). 0 rows when another run planned or moved first.
+func (q *Queries) PlanAuditReplica(ctx context.Context, db DBTX, arg PlanAuditReplicaParams) (int64, error) {
+	result, err := db.Exec(ctx, planAuditReplica, arg.Target, arg.FromSeq, arg.LastSeq)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

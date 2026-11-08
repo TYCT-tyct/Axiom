@@ -17,22 +17,25 @@ import (
 	"github.com/riverqueue/river/rivertype"
 
 	"axiom/internal/platform/alert"
+	"axiom/internal/platform/audit"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/objectstore"
 	"axiom/internal/platform/pg"
 )
 
-// The copy of the audit chain to a bucket outside the deployment (docs/domains/operations.md「审计」). Its invariant: every
-// link up to the replicated seq is in an object there whose bytes never change. An object is the links first..last of
-// one batch, each line a link with the fields its hash covers, so the bucket alone is enough to recompute the chain. The
-// copy reads a batch in a transaction, writes it with no transaction open, then moves the replicated seq on from where
-// it read it; a run that fails between the two writes the same bytes to the same key next time, which the bucket
-// already has. A key that holds other bytes is never written over: that is the tampering the copy exists to expose.
+// The copy of the audit chain to a bucket outside the deployment (docs/domains/operations.md「审计」). Its invariants: every
+// link up to the replicated seq is in an object there whose bytes never change; the objects' ranges follow one another
+// without overlap; and a batch, once planned, is the next and only one written until it is confirmed. An object is the
+// links first..last of one batch, each line a link with the fields its hash covers, so the bucket alone is enough to
+// recompute the chain. The copy plans a batch in a transaction (records its range), writes it with no transaction open,
+// then confirms it from the state it read; a run that fails between the two finds the same plan next time and writes
+// the same bytes to the same key, which the bucket already has, however the chain has grown since. A key that holds
+// other bytes is never written over and, its batch staying planned, stops the copy: that is the tampering the copy
+// exists to expose, and nothing may step over it.
 
 const (
 	// replicaKeys is where the objects are: <first seq>-<last seq>.jsonl, both 20 digits, so the keys sort as the
-	// chain does. A run that read more links than a failed one wrote makes a second object over the same first seq;
-	// the links they share are the same bytes.
+	// chain does.
 	replicaKeys = "audit-chain/v1/"
 	// replicaObjects bounds one run, like chainCheckBatches; the next run carries on a minute later.
 	replicaObjects = 20
@@ -97,8 +100,9 @@ func replicate(ctx context.Context, db *pg.DB, scope pg.Scope, r Replica) (int, 
 	copied := 0
 	for range replicaObjects {
 		var b replicaBatch
-		var full bool
-		if err := db.ReadTx(ctx, scope, func(tx pg.Tx) (err error) { b, full, err = nextReplicaBatch(ctx, tx, r.Target); return err }); err != nil || b.key == "" {
+		// Choosing a new batch records it, so this transaction writes; it runs only short statements and calls nothing
+		// outside the database.
+		if err := db.Tx(ctx, scope, func(tx pg.Tx) (err error) { b, err = nextReplicaBatch(ctx, tx, r.Target); return err }); err != nil || b.key == "" {
 			return copied, err
 		}
 		if err := writeReplica(ctx, r.Store, b); err != nil {
@@ -111,37 +115,20 @@ func replicate(ctx context.Context, db *pg.DB, scope pg.Scope, r Replica) (int, 
 		}); err != nil {
 			return copied, fmt.Errorf("save the audit replica at %d: %w", b.last, err)
 		}
-		if moved == 0 { // another run copied it first, and carries on from there
+		if moved == 0 { // another run confirmed it first, and carries on from there
 			return copied, nil
 		}
 		copied += int(b.last - b.from)
-		if !full {
-			return copied, nil
-		}
 	}
 	return copied, nil
 }
 
-// nextReplicaBatch reads the links after the seq replicated to target that check against the log and encodes them, and
-// reports whether the batch is full, so more may follow. A batch with no key is nothing to copy; a fault at the first
-// link is an error.
-func nextReplicaBatch(ctx context.Context, tx pg.Tx, target string) (replicaBatch, bool, error) {
-	state, err := New().AuditReplicaState(ctx, tx, target)
-	if err != nil {
-		return replicaBatch{}, false, fmt.Errorf("read the audit replica: %w", err)
-	}
-	var from int64
-	if len(state) > 0 {
-		from = state[0].ReplicatedSeq
-	}
-	links, entries, f, err := checkedLinks(ctx, tx, from+1)
-	switch {
-	case err != nil:
-		return replicaBatch{}, false, err
-	case len(links) == 0 && f != nil:
-		return replicaBatch{}, false, fmt.Errorf("link %d does not check (%s), so it is not copied", f.seq, f.kind)
-	case len(links) == 0:
-		return replicaBatch{}, false, nil
+// nextReplicaBatch is the batch to write to target next, encoded (nextLinks). A batch with no key is nothing to copy
+// now.
+func nextReplicaBatch(ctx context.Context, tx pg.Tx, target string) (replicaBatch, error) {
+	from, planned, links, entries, err := nextLinks(ctx, tx, target)
+	if err != nil || len(links) == 0 {
+		return replicaBatch{}, err
 	}
 	var body bytes.Buffer
 	for i, l := range links {
@@ -150,14 +137,52 @@ func nextReplicaBatch(ctx context.Context, tx pg.Tx, target string) (replicaBatc
 			"entry": entryFields(entries[i]),
 		})
 		if err != nil {
-			return replicaBatch{}, false, fmt.Errorf("encode link %d: %w", l.Seq, err)
+			return replicaBatch{}, fmt.Errorf("encode link %d: %w", l.Seq, err)
 		}
 		body.Write(line)
 		body.WriteByte('\n')
 	}
-	last := links[len(links)-1].Seq
-	key := fmt.Sprintf("%s%020d-%020d.jsonl", replicaKeys, from+1, last)
-	return replicaBatch{from: from, last: last, key: key, body: body.Bytes()}, f == nil && len(links) == chainBatch, nil
+	key := fmt.Sprintf("%s%020d-%020d.jsonl", replicaKeys, from+1, planned)
+	return replicaBatch{from: from, last: planned, key: key, body: body.Bytes()}, nil
+}
+
+// nextLinks is the batch to copy to target next: the links from+1 to planned with their entries. It is the batch
+// planned and not yet confirmed when there is one, exactly as planned, so a retry writes the key and bytes it wrote
+// before whatever the chain's head has become; otherwise the links after the replicated seq that check against the
+// log, up to chainBatch, which it records in tx as the planned batch. No links is nothing to copy now: no new link, or
+// another run planned first. A planned link, or the first new one, that no longer checks is an error, which the
+// chain's own check explains.
+func nextLinks(ctx context.Context, tx pg.Tx, target string) (from, planned int64, links []AuditChainLinksRow, entries []audit.Entry, err error) {
+	q := New()
+	state, err := q.AuditReplicaState(ctx, tx, target)
+	if err != nil {
+		return 0, 0, nil, nil, fmt.Errorf("read the audit replica: %w", err)
+	}
+	if len(state) > 0 {
+		from, planned = state[0].ReplicatedSeq, state[0].PendingLast
+	}
+	links, entries, f, err := checkedLinks(ctx, tx, from+1)
+	switch {
+	case err != nil:
+		return 0, 0, nil, nil, err
+	case planned > 0 && int64(len(links)) < planned-from:
+		return 0, 0, nil, nil, fmt.Errorf("the planned links %d to %d no longer all check, so they are not copied", from+1, planned)
+	case planned > 0:
+		return from, planned, links[:planned-from], entries[:planned-from], nil
+	case len(links) == 0 && f != nil:
+		return 0, 0, nil, nil, fmt.Errorf("link %d does not check (%s), so it is not copied", f.seq, f.kind)
+	case len(links) == 0:
+		return 0, 0, nil, nil, nil
+	}
+	planned = links[len(links)-1].Seq
+	n, err := q.PlanAuditReplica(ctx, tx, PlanAuditReplicaParams{Target: target, FromSeq: from, LastSeq: planned})
+	if err != nil {
+		return 0, 0, nil, nil, fmt.Errorf("plan links %d to %d of the audit replica: %w", from+1, planned, err)
+	}
+	if n == 0 { // another run planned first, and writes it
+		return 0, 0, nil, nil, nil
+	}
+	return from, planned, links, entries, nil
 }
 
 // writeReplica puts b's object unless the bucket has it already. The key is read first, because a bucket may ignore
