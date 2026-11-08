@@ -2726,7 +2726,7 @@ export interface paths {
         get: operations["getOperationsAgentLimits"];
         /**
          * Lower the limits on what the operations agent may do
-         * @description Replaces the limits from the revision read (`rev`; another is a 409 `stale_revision`). A limit is from 1 to its ceiling (otherwise a 400): the owner can lower it, never raise it past what the code allows. Every core node applies it from the agent's next request.
+         * @description Replaces the limits from the revision read (`rev`; another is a 409 `stale_revision`); a limit left out keeps what it is. A limit is from 1 to its ceiling (otherwise a 400): the owner can lower it, never raise it past what the code allows. Every core node applies it from the agent's next request; a node of an older version refuses a limit it does not know (400) and holds the agent to its ceilings for the limits it does not read.
          */
         put: operations["setOperationsAgentLimits"];
         post?: never;
@@ -4051,6 +4051,18 @@ export interface components {
             data: components["schemas"]["OperationsCapPolicy"][];
         };
         OperationsAgentLimits: {
+            /** @description The requests each credential may make a minute on a core node, a tenth of them at once. Absent from a node that does not apply it yet. */
+            requests_per_minute?: number;
+            /** @description The ceiling of `requests_per_minute`, which is also its default. */
+            requests_per_minute_max?: number;
+            /** @description The money writes, previews included, each credential may ask for in any minute on a core node. Absent from a node that does not apply it yet. */
+            money_writes_per_minute?: number;
+            /** @description The ceiling of `money_writes_per_minute`, which is also its default. */
+            money_writes_per_minute_max?: number;
+            /** @description The money writes, previews included, each credential may ask for in any hour on a core node. Absent from a node that does not apply it yet. */
+            money_writes_per_hour?: number;
+            /** @description The ceiling of `money_writes_per_hour`, which is also its default. */
+            money_writes_per_hour_max?: number;
             /** @description The alerts each credential may raise in any hour on a core node. */
             alerts_per_hour?: number;
             /** @description The ceiling of `alerts_per_hour`, which is also its default. */
@@ -4063,7 +4075,11 @@ export interface components {
             /** Format: date-time */
             updated_at?: string;
         };
+        /** @description A limit left out keeps what it is. */
         OperationsAgentLimitsUpdate: {
+            requests_per_minute?: number;
+            money_writes_per_minute?: number;
+            money_writes_per_hour?: number;
             alerts_per_hour: number;
             /**
              * Format: int64

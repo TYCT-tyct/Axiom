@@ -5,15 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 	"uuid"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -118,7 +115,7 @@ func (g *agentGuard) serve(w http.ResponseWriter, r *http.Request, pattern strin
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
-	agent, err := g.accounts.AuthenticateAgent(ctx, bearerToken(r))
+	agent, limits, err := g.authenticate(ctx, r)
 	if err != nil {
 		respond(w, r, g.logger, err)
 		return
@@ -129,7 +126,7 @@ func (g *agentGuard) serve(w http.ResponseWriter, r *http.Request, pattern strin
 	if err != nil {
 		respond(answer, r, g.logger, invalidField("", "the request body is unreadable or larger than 1 MiB"))
 	} else {
-		g.answer(answer, r, rl, agent, routes)
+		g.answer(answer, r, rl, agent, limits, routes)
 	}
 	if err := g.record(ctx, r, pattern, rl.agent.tool, agent, body, answer, started); err != nil {
 		g.logger.Error("recording an operations call", "err", err, "request_id", httpserver.RequestID(ctx))
@@ -139,12 +136,30 @@ func (g *agentGuard) serve(w http.ResponseWriter, r *http.Request, pattern strin
 	answer.sendTo(w)
 }
 
+// authenticate recognises the request's credential and spends one of its requests under the limits the owner set,
+// which it returns for the request's other limits: one read of them per request, so a change applies to the next.
+func (g *agentGuard) authenticate(ctx context.Context, r *http.Request) (accounts.Agent, operations.AgentLimits, error) {
+	agent, err := g.accounts.AuthenticateAgent(ctx, bearerToken(r))
+	if err != nil {
+		return accounts.Agent{}, operations.AgentLimits{}, err
+	}
+	var limits operations.AgentLimits
+	if err := g.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
+		limits, err = operations.ReadAgentLimits(ctx, tx)
+		return err
+	}); err != nil {
+		return accounts.Agent{}, operations.AgentLimits{}, err
+	}
+	return agent, limits, g.accounts.SpendAgentRequest(agent, limits.RequestsPerMinute)
+}
+
 // answer authorizes the credential, checks the request and runs the handler, writing whatever the answer is to w.
-func (g *agentGuard) answer(w *bufferedResponse, r *http.Request, rl *rules, agent accounts.Agent, routes http.Handler) {
+func (g *agentGuard) answer(w *bufferedResponse, r *http.Request, rl *rules, agent accounts.Agent, limits operations.AgentLimits, routes http.Handler) {
 	scope, err := g.accounts.AuthorizeAgent(agent, rl.agent.permission, rl.agent.scope == agentPlatform)
 	if err == nil && rl.agent.money {
 		if _, err = g.accounts.AuthorizeAgent(agent, accounts.OperationsMoney, rl.agent.scope == agentPlatform); err == nil {
-			err = g.accounts.SpendAgentMoney(agent) // a preview and a retry are writes asked for too
+			// a preview and a retry are writes asked for too
+			err = g.accounts.SpendAgentMoney(agent, limits.MoneyWritesPerMinute, limits.MoneyWritesPerHour)
 		}
 	}
 	if err != nil {
@@ -161,7 +176,7 @@ func (g *agentGuard) answer(w *bufferedResponse, r *http.Request, rl *rules, age
 		})
 		return
 	}
-	routes.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callKey{}, call{r: r, scope: scope, agent: agent})))
+	routes.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callKey{}, call{r: r, scope: scope, agent: agent, limits: limits})))
 }
 
 // bearerToken is the request's Authorization bearer token, or "" when it has none.
@@ -171,114 +186,6 @@ func bearerToken(r *http.Request) string {
 		return ""
 	}
 	return token
-}
-
-// runIDPattern is the contract's X-Axiom-Run-ID, which the operation log's check repeats: a run ID that breaks it is a
-// 400, and is not recorded.
-var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
-
-// maxReason is the longest reason the contract and the log accept, in characters.
-const maxReason = 1000
-
-// heldBody reads a write's body for its record and leaves it for the handler to read again; a read has none.
-func heldBody(r *http.Request) ([]byte, error) {
-	if r.Method == http.MethodGet {
-		return nil, nil
-	}
-	body, err := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	return body, err
-}
-
-// record writes the request's entry in the operation log, on its own deadline: a request that ran out of time still
-// leaves its record. A read's reason is in its query, a write's in its body, whose other members are its input.
-func (g *agentGuard) record(ctx context.Context, r *http.Request, pattern, tool string, agent accounts.Agent, body []byte, answer *bufferedResponse, started time.Time) error {
-	entry := operations.LoggedCall{
-		Credential: uuid.UUID(agent.ID()), Tool: tool, Reason: r.URL.Query().Get("reason"), Input: inputOf(pattern, r),
-		Status: answer.statusCode(), Error: answer.errorCode(), RequestID: httpserver.RequestID(ctx), Started: started,
-		Ended: time.Now(),
-	}
-	if r.Method != http.MethodGet {
-		entry.Reason, entry.Operation = bodyInput(body, entry.Input), answer.operation()
-	}
-	entry.Reason = truncate(entry.Reason, maxReason)
-	if run := r.Header.Get("X-Axiom-Run-Id"); runIDPattern.MatchString(run) {
-		entry.Run = run
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordDeadline)
-	defer cancel()
-	return g.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) error {
-		_, err := operations.RecordCall(ctx, tx, entry)
-		return err
-	})
-}
-
-// truncate is s cut to at most n characters, for a reason the contract refused as too long but the log still keeps.
-func truncate(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
-		return s
-	}
-	return string([]rune(s)[:n])
-}
-
-// inputOf is what the request asked with: its path parameters by name, as the route pattern names them, and its query
-// parameters but the reason, which the record keeps apart.
-func inputOf(pattern string, r *http.Request) map[string]any {
-	input := map[string]any{}
-	if path := pathInput(pattern, r.URL.Path); len(path) > 0 {
-		input["path"] = path
-	}
-	if query := queryInput(r); len(query) > 0 {
-		input["query"] = query
-	}
-	return input
-}
-
-// bodyInput puts a write's JSON body but its reason into input, and returns the reason; a body that is not a JSON
-// object, which the contract refused, is left out.
-func bodyInput(body []byte, input map[string]any) string {
-	var members map[string]any
-	if jsonx.Unmarshal(body, &members) != nil || members == nil {
-		return ""
-	}
-	reason, _ := members["reason"].(string)
-	delete(members, "reason")
-	if len(members) > 0 {
-		input["body"] = members
-	}
-	return reason
-}
-
-// pathInput is the path's parameters by the names the route pattern gives them.
-func pathInput(pattern, path string) map[string]any {
-	_, route, _ := strings.Cut(pattern, " ")
-	names, values := strings.Split(route, "/"), strings.Split(path, "/")
-	params := map[string]any{}
-	if len(names) != len(values) {
-		return params
-	}
-	for i, name := range names {
-		if strings.HasPrefix(name, "{") && strings.HasSuffix(name, "}") {
-			params[name[1:len(name)-1]] = values[i]
-		}
-	}
-	return params
-}
-
-// queryInput is the query's parameters but the reason: one value as itself, several as a list.
-func queryInput(r *http.Request) map[string]any {
-	query := map[string]any{}
-	for name, vals := range r.URL.Query() {
-		if name == "reason" {
-			continue
-		}
-		if len(vals) == 1 {
-			query[name] = vals[0]
-		} else {
-			query[name] = vals
-		}
-	}
-	return query
 }
 
 // bufferedResponse holds an answer until its record is written: the guard sends it only then.

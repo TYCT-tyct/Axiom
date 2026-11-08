@@ -10,7 +10,7 @@ import (
 )
 
 const agentLimits = `-- name: AgentLimits :many
-SELECT singleton, alerts_per_hour, rev, updated_at FROM operations.agent_limits
+SELECT singleton, alerts_per_hour, rev, updated_at, requests_per_minute, money_writes_per_minute, money_writes_per_hour FROM operations.agent_limits
 `
 
 func (q *Queries) AgentLimits(ctx context.Context, db DBTX) ([]OperationsAgentLimit, error) {
@@ -27,6 +27,9 @@ func (q *Queries) AgentLimits(ctx context.Context, db DBTX) ([]OperationsAgentLi
 			&i.AlertsPerHour,
 			&i.Rev,
 			&i.UpdatedAt,
+			&i.RequestsPerMinute,
+			&i.MoneyWritesPerMinute,
+			&i.MoneyWritesPerHour,
 		); err != nil {
 			return nil, err
 		}
@@ -39,13 +42,27 @@ func (q *Queries) AgentLimits(ctx context.Context, db DBTX) ([]OperationsAgentLi
 }
 
 const insertAgentLimits = `-- name: InsertAgentLimits :many
-INSERT INTO operations.agent_limits (alerts_per_hour, rev) VALUES ($1, 1) ON CONFLICT DO NOTHING RETURNING singleton, alerts_per_hour, rev, updated_at
+INSERT INTO operations.agent_limits (alerts_per_hour, requests_per_minute, money_writes_per_minute, money_writes_per_hour, rev)
+VALUES ($1, $2, $3, $4, 1)
+ON CONFLICT DO NOTHING RETURNING singleton, alerts_per_hour, rev, updated_at, requests_per_minute, money_writes_per_minute, money_writes_per_hour
 `
+
+type InsertAgentLimitsParams struct {
+	AlertsPerHour        int32
+	RequestsPerMinute    *int32
+	MoneyWritesPerMinute *int32
+	MoneyWritesPerHour   *int32
+}
 
 // The lock above holds no row before the first set, so two first sets race here; the one that finds the row made is
 // answered as a stale revision.
-func (q *Queries) InsertAgentLimits(ctx context.Context, db DBTX, alertsPerHour int32) ([]OperationsAgentLimit, error) {
-	rows, err := db.Query(ctx, insertAgentLimits, alertsPerHour)
+func (q *Queries) InsertAgentLimits(ctx context.Context, db DBTX, arg InsertAgentLimitsParams) ([]OperationsAgentLimit, error) {
+	rows, err := db.Query(ctx, insertAgentLimits,
+		arg.AlertsPerHour,
+		arg.RequestsPerMinute,
+		arg.MoneyWritesPerMinute,
+		arg.MoneyWritesPerHour,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +75,9 @@ func (q *Queries) InsertAgentLimits(ctx context.Context, db DBTX, alertsPerHour 
 			&i.AlertsPerHour,
 			&i.Rev,
 			&i.UpdatedAt,
+			&i.RequestsPerMinute,
+			&i.MoneyWritesPerMinute,
+			&i.MoneyWritesPerHour,
 		); err != nil {
 			return nil, err
 		}
@@ -70,7 +90,7 @@ func (q *Queries) InsertAgentLimits(ctx context.Context, db DBTX, alertsPerHour 
 }
 
 const lockAgentLimits = `-- name: LockAgentLimits :many
-SELECT singleton, alerts_per_hour, rev, updated_at FROM operations.agent_limits FOR UPDATE
+SELECT singleton, alerts_per_hour, rev, updated_at, requests_per_minute, money_writes_per_minute, money_writes_per_hour FROM operations.agent_limits FOR UPDATE
 `
 
 func (q *Queries) LockAgentLimits(ctx context.Context, db DBTX) ([]OperationsAgentLimit, error) {
@@ -87,6 +107,9 @@ func (q *Queries) LockAgentLimits(ctx context.Context, db DBTX) ([]OperationsAge
 			&i.AlertsPerHour,
 			&i.Rev,
 			&i.UpdatedAt,
+			&i.RequestsPerMinute,
+			&i.MoneyWritesPerMinute,
+			&i.MoneyWritesPerHour,
 		); err != nil {
 			return nil, err
 		}
@@ -99,17 +122,35 @@ func (q *Queries) LockAgentLimits(ctx context.Context, db DBTX) ([]OperationsAge
 }
 
 const updateAgentLimits = `-- name: UpdateAgentLimits :one
-UPDATE operations.agent_limits SET alerts_per_hour = $1, rev = rev + 1, updated_at = now() RETURNING singleton, alerts_per_hour, rev, updated_at
+UPDATE operations.agent_limits SET alerts_per_hour = $1, requests_per_minute = $2,
+    money_writes_per_minute = $3, money_writes_per_hour = $4,
+    rev = rev + 1, updated_at = now()
+RETURNING singleton, alerts_per_hour, rev, updated_at, requests_per_minute, money_writes_per_minute, money_writes_per_hour
 `
 
-func (q *Queries) UpdateAgentLimits(ctx context.Context, db DBTX, alertsPerHour int32) (OperationsAgentLimit, error) {
-	row := db.QueryRow(ctx, updateAgentLimits, alertsPerHour)
+type UpdateAgentLimitsParams struct {
+	AlertsPerHour        int32
+	RequestsPerMinute    *int32
+	MoneyWritesPerMinute *int32
+	MoneyWritesPerHour   *int32
+}
+
+func (q *Queries) UpdateAgentLimits(ctx context.Context, db DBTX, arg UpdateAgentLimitsParams) (OperationsAgentLimit, error) {
+	row := db.QueryRow(ctx, updateAgentLimits,
+		arg.AlertsPerHour,
+		arg.RequestsPerMinute,
+		arg.MoneyWritesPerMinute,
+		arg.MoneyWritesPerHour,
+	)
 	var i OperationsAgentLimit
 	err := row.Scan(
 		&i.Singleton,
 		&i.AlertsPerHour,
 		&i.Rev,
 		&i.UpdatedAt,
+		&i.RequestsPerMinute,
+		&i.MoneyWritesPerMinute,
+		&i.MoneyWritesPerHour,
 	)
 	return i, err
 }

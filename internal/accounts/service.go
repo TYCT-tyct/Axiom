@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"sync"
 	"sync/atomic"
 	"time"
 	"uuid"
@@ -87,11 +88,11 @@ type Service struct {
 	known   *lru[keyHash, Caller]
 	unknown *lru[keyHash, struct{}]
 	lookups singleflight.Group
-	// agentRequests spends each operations credential's requests on this node (AuthenticateAgent).
-	agentRequests *buckets[AgentID]
-	// agentMoney and agentMoneyHours spend each credential's money writes on this node (SpendAgentMoney), agentAlerts
-	// its alerts (SpendAgentAlert).
-	agentMoney, agentMoneyHours, agentAlerts *buckets[AgentID]
+	// agentRequests counts each operations credential's requests on this node (SpendAgentRequest), agentMoney and
+	// agentMoneyHours its money writes (SpendAgentMoney) and agentAlerts its alerts (SpendAgentAlert); agentSpend
+	// makes each spend one step.
+	agentRequests, agentMoney, agentMoneyHours, agentAlerts *agentCounter
+	agentSpend                                              sync.Mutex
 	// lookupJoined, when set by a test, is called after a request joined the shared lookup, before it waits for the
 	// result; it is how a timing test observes every waiter instead of sleeping.
 	lookupJoined func()
@@ -144,8 +145,8 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 		recovery: cfg.Recovery, registration: cfg.Registration, misses: misses, db: db, platform: cfg.Platform, hashes: cfg.Hashes, keyring: cfg.Keyring, versions: versions, now: now, opened: cfg.OnAccountOpened, keyPreset: cfg.KeyPreset,
 		exit: exit, providers: maps.Clone(oauthProviders),
 		slot: slot, gated: cfg.LookupSlot != nil,
-		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit), agentRequests: newBuckets[AgentID](),
-		agentMoney: newBuckets[AgentID](), agentMoneyHours: newBuckets[AgentID](), agentAlerts: newBuckets[AgentID](),
+		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit), agentRequests: newAgentCounter(),
+		agentMoney: newAgentCounter(), agentMoneyHours: newAgentCounter(), agentAlerts: newAgentCounter(),
 		guards: newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),
 		cache: cfg.Cache, loginKey: cfg.LoginKey,
 	}, nil

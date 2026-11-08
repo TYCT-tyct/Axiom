@@ -43,14 +43,7 @@ func (o operationsAPI) AlertRaise(ctx context.Context, r operationsapi.AlertRais
 	if len(b.Summary) > maxAlertSummary {
 		return nil, invalidField("/summary", fmt.Sprintf("is more than %d bytes of UTF-8", maxAlertSummary))
 	}
-	var limits operations.AgentLimits
-	if err := o.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		limits, err = operations.ReadAgentLimits(ctx, tx)
-		return err
-	}); err != nil {
-		return nil, err
-	}
-	if err := o.admin.accounts.SpendAgentAlert(callOf(ctx).agent, limits.AlertsPerHour); err != nil {
+	if err := o.admin.accounts.SpendAgentAlert(callOf(ctx).agent, callOf(ctx).limits.AlertsPerHour); err != nil {
 		return nil, err
 	}
 	params := map[string]any{"severity": string(b.Severity), "summary": b.Summary}
