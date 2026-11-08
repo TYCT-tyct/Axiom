@@ -3308,7 +3308,7 @@ type ErrorField struct {
 }
 
 // Evidence What supports a price, kept as it was sent. Its shape is the price source's: for `official`, OfficialPriceEvidence, which the server checks against the page's current snapshot and refuses otherwise; for any other source, any non-empty object, which the server keeps unread for the reviewer (the admin page sends `note` and, when given, `url`). `source` is beside it, not in it, so the schemas are `anyOf`.
-type Evidence = jsonx.Raw
+type Evidence = map[string]interface{}
 
 // ExchangeRate defines model for ExchangeRate.
 type ExchangeRate struct {

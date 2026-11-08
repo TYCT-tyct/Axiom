@@ -9881,7 +9881,7 @@ components:
         rev: {type: integer, format: int64, minimum: 0}
         reason: {$ref: "#/components/schemas/Reason"}
     Evidence:
-      x-go-type: jsonx.Raw
+      x-go-type: map[string]interface{}
       description: >-
         What supports a price, kept as it was sent. Its shape is the price source's: for `official`,
         OfficialPriceEvidence, which the server checks against the page's current snapshot and refuses otherwise; for
