@@ -35,6 +35,14 @@ const keyId = (n: number) => `key_${String(n).padStart(26, "0")}` as Schemas["Ke
 const callId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const workspace = `ws_${"0".repeat(26)}` as Schemas["WorkspaceId"];
 
+// The only workspace of the mocked account, its default, which holds every key: the console shows no workspace then.
+export const defaultWorkspace: Schemas["Workspace"] = {
+  id: workspace,
+  name: "Default",
+  is_default: true,
+  disabled: false,
+};
+
 export function aKey(n: number, over: Partial<Schemas["Key"]> = {}): Schemas["Key"] {
   return {
     id: keyId(n),

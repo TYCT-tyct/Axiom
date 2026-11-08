@@ -1,19 +1,14 @@
 // The console's messages in Chinese, the source every other language follows.
+import { zh as announcements } from "./announcements";
 import { zh as providerKeys } from "./provider-keys";
 import { zh as receipt } from "./receipt";
 import { zh as routingPresets } from "./routing-presets";
 import { zh as settings } from "./settings";
 import { zh as statement } from "./statement";
+import { zh as workspaces } from "./workspaces";
 
 export default {
-  announcements: {
-    title: "站内公告",
-    loading: "正在加载公告…",
-    unavailable: "公告暂不可用。",
-    error: "公告加载失败，请重试。",
-    retry: "重试",
-    empty: "暂无有效公告。",
-  },
+  announcements,
 
   forbiddenHint: "请联系工作区的管理员。",
 
@@ -357,6 +352,7 @@ export default {
     },
   },
   providerKeys,
+  workspaces,
   routingPresets,
   calls: {
     priceVersion: "价格版本 {{version}}",

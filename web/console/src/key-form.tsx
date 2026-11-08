@@ -14,10 +14,11 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { balanceQuery, routingDefaultQuery, routingPresetsQuery } from "./queries";
+import { balanceQuery, workspacePresetQueries } from "./queries";
+import { useWorkspaceChoice, useWorkspaces, WorkspaceField } from "./workspaces";
 
-// What the form collects. A key is made with an expiry and changed with an on/off switch; the contract's two requests
-// share the rest.
+// What the form collects. A key is made with an expiry in a workspace and changed with an on/off switch; the contract's
+// two requests share the rest.
 export type KeyValues = {
   name: string;
   disabled: boolean;
@@ -27,6 +28,7 @@ export type KeyValues = {
   models?: string[];
   ip_allow?: string[];
   preset_id?: string;
+  workspace_id?: string;
 };
 
 const resets = ["daily", "weekly", "monthly"] as const;
@@ -68,17 +70,33 @@ function readValues(form: HTMLFormElement, currency: string | undefined): KeyVal
     models: lines(values.models),
     ip_allow: lines(values.ip_allow),
     preset_id: values.preset_id || undefined,
+    workspace_id: values.workspace_id || undefined,
   };
+}
+
+// ResetField is when a limit's count starts again, which a key's spend limit and a workspace's budget share.
+export function ResetField({ value }: { value: Schemas["LimitReset"] | undefined }) {
+  const { t } = useTranslation();
+  return (
+    <SelectField label={t("keys.form.reset")} name="limit_reset" defaultValue={value ?? ""}>
+      <option value="">{t("keys.form.resetNever")}</option>
+      {resets.map((reset) => (
+        <option key={reset} value={reset}>
+          {t(`keys.reset.${reset}`)}
+        </option>
+      ))}
+    </SelectField>
+  );
 }
 
 type Section = { apiKey?: Schemas["Key"]; error: unknown };
 
-// The currency a limit is in is the account's, which the balance tells; a key that has a limit also carries it. A key
-// without one is where a limit is first set (or set again after it was cleared), so the field waits for the balance and
-// says why when it cannot have it.
-function useCurrency(apiKey: Schemas["Key"] | undefined) {
+// The currency a limit is in is the account's, which the balance tells; a limit already set also carries it. Without
+// one is where a limit is first set (or set again after it was cleared), so the field waits for the balance and says
+// why when it cannot have it.
+export function useCurrency(limit: Schemas["Money"] | undefined) {
   const balance = useQuery(balanceQuery);
-  const unit = apiKey?.spend_limit?.currency ?? balance.data?.balance.currency;
+  const unit = limit?.currency ?? balance.data?.balance.currency;
   return { unit, unavailable: !unit && balance.isError };
 }
 
@@ -105,14 +123,7 @@ function Limit({
         defaultValue={apiKey?.spend_limit ? moneyInput(apiKey.spend_limit.amount) : ""}
         error={invalid === "limit" ? t("keys.form.limitInvalid") : errors.field(error, "spend_limit")}
       />
-      <SelectField label={t("keys.form.reset")} name="limit_reset" defaultValue={apiKey?.limit_reset ?? ""}>
-        <option value="">{t("keys.form.resetNever")}</option>
-        {resets.map((reset) => (
-          <option key={reset} value={reset}>
-            {t(`keys.reset.${reset}`)}
-          </option>
-        ))}
-      </SelectField>
+      <ResetField value={apiKey?.limit_reset} />
     </div>
   );
 }
@@ -147,18 +158,20 @@ function Restrictions({ apiKey, error }: Section) {
   );
 }
 
-// PresetField chooses the key's routing preset among those the account's keys may use. A new key left at the first
+// PresetField chooses the key's routing preset among those a key of its workspace may use (scope; none is the default
+// workspace), which differ by workspace: each has presets and a default of its own. A new key left at the first
 // option takes its layers' default when it is made; a changed key keeps its preset unless another is chosen, so the
 // form sends the field only for a choice. The choice is held here, not in the list: a later read of the list that fails
 // or no longer has it keeps the choice and its option, so a submit never falls back to the default the user moved
 // away from. Presets that could not be read at all leave the field out and the key keeps what it has. A management
 // key has no preset.
-function PresetField({ apiKey, error }: Section) {
+function PresetField({ apiKey, error, scope }: Section & { scope: string | undefined }) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const presets = useQuery(routingPresetsQuery);
-  const defaults = useQuery(routingDefaultQuery);
-  const newKeys = useNewKeys();
+  const queries = workspacePresetQueries(scope);
+  const presets = useQuery(queries.presets);
+  const defaults = useQuery(queries.defaults);
+  const newKeys = useNewKeys(scope);
   const presetName = usePresetName();
   const current = apiKey?.preset_id;
   const [chosen, setChosen] = useState(current ?? "");
@@ -216,14 +229,15 @@ export function PresetOptions({ presets, newKeys }: { presets: Schemas["RoutingP
 
 type NewKeys = { id?: string; name?: string; refused: boolean; layer?: Schemas["RoutingPresetScope"] };
 
-// useNewKeys is the preset a key made now takes, as the account's default read says: its ID, and its name among the
-// presets the account may use (the system preset by its label; none for one the list lacks), or that the default
+// useNewKeys is the preset a key made now in workspace scope (none: the default one) takes, as that workspace's default
+// read says: its ID, and its name among the presets its keys may use (the system preset by its label; none for one the list lacks), or that the default
 // refuses new keys, with the layer whose default decides. An older node says neither, and the page then says what it
 // said before.
-export function useNewKeys(): NewKeys {
+export function useNewKeys(scope?: string): NewKeys {
   const { t } = useTranslation();
-  const defaults = useQuery(routingDefaultQuery).data;
-  const presets = useQuery(routingPresetsQuery).data?.data;
+  const queries = workspacePresetQueries(scope);
+  const defaults = useQuery(queries.defaults).data;
+  const presets = useQuery(queries.presets).data?.data;
   const id = defaults?.new_keys_preset_id;
   const layer = defaults?.new_keys_layer;
   if (!id) {
@@ -247,14 +261,18 @@ export function usePresetName() {
 }
 
 // KeyForm is the settings of a key, for making one (no key) and for changing one (filled with its current settings,
-// because the contract replaces them all). The expiry is asked once, when the key is made.
+// because the contract replaces them all). The expiry and the workspace are asked once, when the key is made; workspace
+// is the one the form starts on. The presets offered are those of the key's workspace, and a change of workspace starts
+// the preset choice again, since a preset of one workspace cannot be chosen in another.
 export function KeyForm({
   apiKey,
+  workspace,
   pending,
   error,
   onSubmit,
   onCancel,
 }: Section & {
+  workspace?: string;
   pending: boolean;
   onSubmit: (values: KeyValues) => void;
   onCancel: () => void;
@@ -262,7 +280,10 @@ export function KeyForm({
   const { t } = useTranslation();
   const errors = useErrors();
   const [invalid, setInvalid] = useState<Invalid>(null);
-  const currency = useCurrency(apiKey);
+  const currency = useCurrency(apiKey?.spend_limit);
+  const choice = useWorkspaceChoice(workspace);
+  const scope = useWorkspaces().scopeOf(apiKey?.workspace_id);
+  const presetScope = apiKey ? scope : choice.scope;
   return (
     <form
       noValidate
@@ -271,7 +292,7 @@ export function KeyForm({
         event.preventDefault();
         const values = readValues(event.currentTarget, currency.unit);
         setInvalid(typeof values === "object" ? null : values);
-        if (typeof values === "object" && !pending) {
+        if (typeof values === "object" && !pending && (apiKey || !choice.lost)) {
           onSubmit(values);
         }
       }}
@@ -285,8 +306,9 @@ export function KeyForm({
         autoComplete="off"
         error={invalid === "name" ? t("keys.form.nameMissing") : errors.field(error, "name")}
       />
+      {apiKey ? null : <WorkspaceField choice={choice} />}
       <Limit apiKey={apiKey} error={error} invalid={invalid} {...currency} />
-      <PresetField apiKey={apiKey} error={error} />
+      <PresetField key={presetScope} apiKey={apiKey} error={error} scope={presetScope} />
       <Restrictions apiKey={apiKey} error={error} />
       {apiKey ? (
         <CheckField

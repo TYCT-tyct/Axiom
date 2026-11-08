@@ -63,6 +63,7 @@ export type KeyFilters = {
   status?: "active" | "disabled" | "expired";
   created_after?: string;
   created_before?: string;
+  workspace_id?: string;
 };
 
 export const keysQuery = (filters: KeyFilters = {}) =>
@@ -92,11 +93,58 @@ export const routingDefaultQuery = queryOptions({
   queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/routing-default", { signal })),
 });
 
+// The presets a key of one workspace may choose and the default a key made there takes. The account's default workspace
+// is what the two reads above answer; another workspace has presets of its own and a default chain that starts at it,
+// so it is asked for by name.
+export function workspacePresetQueries(workspace: string | undefined) {
+  if (!workspace) {
+    return { presets: routingPresetsQuery, defaults: routingDefaultQuery };
+  }
+  return {
+    presets: queryOptions({
+      queryKey: [accountKey, "routing-presets", "workspace", workspace],
+      queryFn: ({ signal }) =>
+        unwrap(
+          consoleApi.GET("/api/console/v1/routing-presets", { params: { query: { workspace_id: workspace } }, signal }),
+        ),
+    }),
+    defaults: queryOptions({
+      queryKey: [accountKey, "routing-presets", "default", workspace],
+      queryFn: ({ signal }) =>
+        unwrap(
+          consoleApi.GET("/api/console/v1/workspaces/{workspace_id}/routing-default", {
+            params: { path: { workspace_id: workspace } },
+            signal,
+          }),
+        ),
+    }),
+  };
+}
+
 export const sourceClassesQuery = queryOptions({
   queryKey: [accountKey, "source-classes"],
   queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/source-classes", { signal })),
   staleTime: 5 * 60_000,
 });
+
+// The account's workspaces, the whole list (it has a limit and no pages). The keys page, the key form and the menu read
+// it: workspaces show only once there is a second one (docs/domains/accounts.md「工作区」).
+export const workspacesQuery = queryOptions({
+  queryKey: [accountKey, "workspaces"],
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/workspaces", { signal })),
+});
+
+export const workspaceBudgetQuery = (id: string) =>
+  queryOptions({
+    queryKey: [accountKey, "workspaces", id, "budget"],
+    queryFn: ({ signal }) =>
+      unwrap(
+        consoleApi.GET("/api/console/v1/workspaces/{workspace_id}/budget", {
+          params: { path: { workspace_id: id } },
+          signal,
+        }),
+      ),
+  });
 
 export const providerKeysQuery = queryOptions({
   queryKey: [accountKey, "provider-keys"],

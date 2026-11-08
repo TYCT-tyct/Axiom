@@ -1,16 +1,13 @@
 // @vitest-environment jsdom
 import type { Schemas } from "@axiom/api";
 import { accountKey } from "@axiom/app";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createInstance } from "i18next";
 import { act, type ReactNode } from "react";
-import { createRoot } from "react-dom/client";
-import { I18nextProvider } from "react-i18next";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { KeyForm, type KeyValues } from "./key-form";
 import Keys from "./pages/keys";
 import RoutingPresets from "./pages/routing-presets";
 import { DisablePresetDialog } from "./preset-dialogs";
+import { choose, render, settle, setUpPages, submit } from "./testing";
 
 // What the mocked console answers, which a test changes between reads: the presets a key may use (or a failed read),
 // the account's default, the account's keys, and every default the page sends.
@@ -40,12 +37,7 @@ const workspacePreset = { ...preset(3), scope: "workspace", workspace_id: "ws_1"
 
 vi.mock("@axiom/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@axiom/api")>();
-  const answer = (status: number, data: unknown) =>
-    Promise.resolve(
-      status === 200
-        ? { data, response: new Response(null, { status }) }
-        : { error: { error: { code: data, message: "" } }, response: new Response(null, { status }) },
-    );
+  const { answer } = await import("./testing");
   return {
     ...actual,
     consoleApi: {
@@ -85,21 +77,9 @@ vi.mock("@tanstack/react-router", () => ({
   useSearch: () => ({}),
 }));
 
-vi.mock("@axiom/app", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@axiom/app")>();
-  return { ...actual, can: () => true, useSession: () => ({}) };
-});
+vi.mock("@axiom/app", async (importOriginal) => (await import("./testing")).everyPermission(importOriginal));
 
-const i18n = createInstance();
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-beforeAll(async () => {
-  await i18n.init({ lng: "en", resources: {} });
-  // jsdom has the dialog element but not its modal methods.
-  HTMLDialogElement.prototype.showModal = function () {
-    this.open = true;
-  };
-});
+setUpPages();
 
 beforeEach(() => {
   api.presetsFail = false;
@@ -108,43 +88,6 @@ beforeEach(() => {
   api.keys = [];
   api.sent = [];
 });
-
-afterEach(() => {
-  document.body.replaceChildren();
-});
-
-// settle lets answered reads reach the page: the query cache tells its observers on a later task, after act's own.
-const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
-
-async function render(node: ReactNode) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
-  const container = document.createElement("div");
-  document.body.append(container);
-  await act(async () => {
-    createRoot(container).render(
-      <QueryClientProvider client={client}>
-        <I18nextProvider i18n={i18n}>{node}</I18nextProvider>
-      </QueryClientProvider>,
-    );
-  });
-  await settle();
-  return { client, container };
-}
-
-// choose picks an option the way a user does: the browser sets the value, then reports the change.
-async function choose(select: HTMLSelectElement, value: string) {
-  await act(async () => {
-    select.value = value;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-}
-
-async function submit(form: HTMLFormElement) {
-  await act(async () => {
-    form.requestSubmit();
-  });
-  await settle();
-}
 
 // A preset chosen for a new key is sent even when the list is read again and that read fails: the choice must not fall
 // back to the layers' default, which may not limit what the chosen preset limits.

@@ -26,5 +26,5 @@ export {
   useSignIn,
   useStartSession,
 } from "./session";
-export { Shell } from "./shell";
+export { type NavItem, Shell } from "./shell";
 export { RecoveryDialog, TotpSetupDialog, useBeginTotp, useShowRecoveryCodes } from "./totp-dialogs";
