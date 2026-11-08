@@ -117,6 +117,7 @@ type Rejected struct{ Code, Message string }                      // 渠道明�
 - **拒付是回调的一种**：`Notice.Dispute != nil` 时核心只走拒付流程（找订单、记 `order_disputes`、按规则扣钱或记差异），不看 `Success`/`Paid`。插件把渠道状态归一成 `DisputeAction`，核心不解析 Stripe 的状态字符串；`Warning` 只记录，`Open`/`Lost` 扣钱，`Won` 对已扣的钱做反向分录。订单是否进入被拒付、钱扣多少，由核心和 billing 决定，插件不碰数据库。
 - **链接**：核心在存库和返回之前检查 `PayURL`、`QRCode` 里的链接，只放行 `https` 和 `alipays://`、`weixin://`、`wxp://`，以 `//` 开头的和其他协议当作 `*Rejected`。插件只负责把以单个 `/` 开头的相对链接按网关地址补全。
 - **金额**：`Notice.Paid`、`Payment.Paid` 由插件把网关的十进制文本精确解析成最小单位。`Minor == 0` 表示缺失，`Minor == -1` 表示无效付款并转待处理；不做容差。没有币种字段的渠道填商户账户的币种。具体规则见[支付宝配置与边界](#支付宝配置与边界)和[易支付配置与边界](#易支付配置与边界)。
+- **非密配置的契约**：每种插件严格读取的 `settings` 成员在管理契约里各有模式（`AlipaySettings`、`EasyPaySettings`、`WechatPaySettings`、`StripeSettings`，`Merchant.settings` 按 `kind` 选用），新前端据此做表单；请求里的 `settings` 仍不由契约校验，未知成员和用不了的值照旧由插件以 422 拒绝。`TestSettingsKeepTheirContract` 对照每个插件的结构和契约的成员，插件加了成员而契约没写就失败。
 - **插件拿不到数据库**：只拿到配置、密钥和出站客户端；状态和钱都在核心里。插件的错误和日志不带请求的查询串和表单（易支付把密钥放在查询串里）。
 
 ### 支付宝配置与边界

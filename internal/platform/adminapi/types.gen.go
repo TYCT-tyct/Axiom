@@ -229,6 +229,132 @@ func (e BillingPreferenceName) Valid() bool {
 	}
 }
 
+// Defines values for CallRouteOverrides.
+const (
+	OverrideAllowFallbacks         CallRouteOverrides = "allow_fallbacks"
+	OverrideClasses                CallRouteOverrides = "classes"
+	OverrideDataCollection         CallRouteOverrides = "data_collection"
+	OverrideIgnore                 CallRouteOverrides = "ignore"
+	OverrideMaxPrice               CallRouteOverrides = "max_price"
+	OverrideOnly                   CallRouteOverrides = "only"
+	OverrideOrder                  CallRouteOverrides = "order"
+	OverridePreferredMaxLatency    CallRouteOverrides = "preferred_max_latency"
+	OverridePreferredMinThroughput CallRouteOverrides = "preferred_min_throughput"
+	OverrideQuantizations          CallRouteOverrides = "quantizations"
+	OverrideRequireParameters      CallRouteOverrides = "require_parameters"
+	OverrideSort                   CallRouteOverrides = "sort"
+	OverrideSortPartition          CallRouteOverrides = "sort.partition"
+	OverrideVerifiedOnly           CallRouteOverrides = "verified_only"
+)
+
+// Valid indicates whether the value is a known member of the CallRouteOverrides enum.
+func (e CallRouteOverrides) Valid() bool {
+	switch e {
+	case OverrideAllowFallbacks:
+		return true
+	case OverrideClasses:
+		return true
+	case OverrideDataCollection:
+		return true
+	case OverrideIgnore:
+		return true
+	case OverrideMaxPrice:
+		return true
+	case OverrideOnly:
+		return true
+	case OverrideOrder:
+		return true
+	case OverridePreferredMaxLatency:
+		return true
+	case OverridePreferredMinThroughput:
+		return true
+	case OverrideQuantizations:
+		return true
+	case OverrideRequireParameters:
+		return true
+	case OverrideSort:
+		return true
+	case OverrideSortPartition:
+		return true
+	case OverrideVerifiedOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CallRouteExclusionReason.
+const (
+	CallRouteExclusionReasonBreakerOpen          CallRouteExclusionReason = "breaker_open"
+	CallRouteExclusionReasonByokNoFallback       CallRouteExclusionReason = "byok_no_fallback"
+	CallRouteExclusionReasonContextTooSmall      CallRouteExclusionReason = "context_too_small"
+	CallRouteExclusionReasonCoolingDown          CallRouteExclusionReason = "cooling_down"
+	CallRouteExclusionReasonDisabled             CallRouteExclusionReason = "disabled"
+	CallRouteExclusionReasonFormatNotServed      CallRouteExclusionReason = "format_not_served"
+	CallRouteExclusionReasonFull                 CallRouteExclusionReason = "full"
+	CallRouteExclusionReasonMissingCapability    CallRouteExclusionReason = "missing_capability"
+	CallRouteExclusionReasonModelNotAllowed      CallRouteExclusionReason = "model_not_allowed"
+	CallRouteExclusionReasonNoCandidates         CallRouteExclusionReason = "no_candidates"
+	CallRouteExclusionReasonNoEgress             CallRouteExclusionReason = "no_egress"
+	CallRouteExclusionReasonNoPrice              CallRouteExclusionReason = "no_price"
+	CallRouteExclusionReasonNotVerified          CallRouteExclusionReason = "not_verified"
+	CallRouteExclusionReasonOverrideFilter       CallRouteExclusionReason = "override_filter"
+	CallRouteExclusionReasonPresetFilter         CallRouteExclusionReason = "preset_filter"
+	CallRouteExclusionReasonRetryBudget          CallRouteExclusionReason = "retry_budget"
+	CallRouteExclusionReasonServiceTierNotServed CallRouteExclusionReason = "service_tier_not_served"
+	CallRouteExclusionReasonSupplierBalance      CallRouteExclusionReason = "supplier_balance"
+	CallRouteExclusionReasonUnknownItem          CallRouteExclusionReason = "unknown_item"
+	CallRouteExclusionReasonUnquotableCost       CallRouteExclusionReason = "unquotable_cost"
+)
+
+// Valid indicates whether the value is a known member of the CallRouteExclusionReason enum.
+func (e CallRouteExclusionReason) Valid() bool {
+	switch e {
+	case CallRouteExclusionReasonBreakerOpen:
+		return true
+	case CallRouteExclusionReasonByokNoFallback:
+		return true
+	case CallRouteExclusionReasonContextTooSmall:
+		return true
+	case CallRouteExclusionReasonCoolingDown:
+		return true
+	case CallRouteExclusionReasonDisabled:
+		return true
+	case CallRouteExclusionReasonFormatNotServed:
+		return true
+	case CallRouteExclusionReasonFull:
+		return true
+	case CallRouteExclusionReasonMissingCapability:
+		return true
+	case CallRouteExclusionReasonModelNotAllowed:
+		return true
+	case CallRouteExclusionReasonNoCandidates:
+		return true
+	case CallRouteExclusionReasonNoEgress:
+		return true
+	case CallRouteExclusionReasonNoPrice:
+		return true
+	case CallRouteExclusionReasonNotVerified:
+		return true
+	case CallRouteExclusionReasonOverrideFilter:
+		return true
+	case CallRouteExclusionReasonPresetFilter:
+		return true
+	case CallRouteExclusionReasonRetryBudget:
+		return true
+	case CallRouteExclusionReasonServiceTierNotServed:
+		return true
+	case CallRouteExclusionReasonSupplierBalance:
+		return true
+	case CallRouteExclusionReasonUnknownItem:
+		return true
+	case CallRouteExclusionReasonUnquotableCost:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CashMovementKind.
 const (
 	Chargeback        CashMovementKind = "chargeback"
@@ -328,6 +454,57 @@ func (e CreditSource) Valid() bool {
 	case CreditSourceGift:
 		return true
 	case CreditSourceOfflinePayment:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EasyPaySettingsMode.
+const (
+	Api      EasyPaySettingsMode = "api"
+	Redirect EasyPaySettingsMode = "redirect"
+)
+
+// Valid indicates whether the value is a known member of the EasyPaySettingsMode enum.
+func (e EasyPaySettingsMode) Valid() bool {
+	switch e {
+	case Api:
+		return true
+	case Redirect:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EasyPaySettingsPreset.
+const (
+	Epusdt EasyPaySettingsPreset = "epusdt"
+	Ezpay  EasyPaySettingsPreset = "ezpay"
+)
+
+// Valid indicates whether the value is a known member of the EasyPaySettingsPreset enum.
+func (e EasyPaySettingsPreset) Valid() bool {
+	switch e {
+	case Epusdt:
+		return true
+	case Ezpay:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EasyPaySettingsSignType.
+const (
+	MD5 EasyPaySettingsSignType = "MD5"
+)
+
+// Valid indicates whether the value is a known member of the EasyPaySettingsSignType enum.
+func (e EasyPaySettingsSignType) Valid() bool {
+	switch e {
+	case MD5:
 		return true
 	default:
 		return false
@@ -2429,7 +2606,9 @@ type AdminCallTrace struct {
 	Attempts *[]AdminAttempt `json:"attempts,omitempty"`
 
 	// Cost An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
-	Cost    *Money            `json:"cost,omitempty"`
+	Cost *Money `json:"cost,omitempty"`
+
+	// Route How routing chose the call's endpoints, passed on as it was stored with the call.
 	Route   *jsonx.Raw        `json:"route,omitempty"`
 	Summary *AdminCallSummary `json:"summary,omitempty"`
 }
@@ -2575,6 +2754,18 @@ type AlertWebhookSecretRequest struct {
 	Secret *string `json:"secret,omitempty"`
 }
 
+// AlipaySettings An `alipay` merchant account's settings (internal/payments/README.md「支付宝配置与边界」).
+type AlipaySettings struct {
+	// AppId The application's ID: digits, at most 32. Required.
+	AppId *string `json:"app_id,omitempty"`
+
+	// Gateway The gateway's HTTPS address; omitted for Alipay's own, which the server fills in.
+	Gateway *string `json:"gateway,omitempty"`
+
+	// SellerId The seller's ID, digits; when set, callbacks must name it.
+	SellerId *string `json:"seller_id,omitempty"`
+}
+
 // Announcement defines model for Announcement.
 type Announcement struct {
 	Body   *string    `json:"body,omitempty"`
@@ -2618,6 +2809,8 @@ type AuditEntry struct {
 	ActorId   *string    `json:"actor_id,omitempty"`
 	ActorKind *string    `json:"actor_kind,omitempty"`
 	At        *time.Time `json:"at,omitempty"`
+
+	// Detail What the module that made the change recorded about it, kept as written: small and structured, such as the IDs and names involved and the values before and after; never a secret, a password, a key, call content or personal data beyond IDs. Its members are the `action`'s own and change with the module that writes it, so they are not typed here (one schema per action would be a second registry of every change every module makes); show it as a tree of labelled values and decide nothing from it. Large integers are written as they were, so read it with a parser that keeps them exact.
 	Detail    *jsonx.Raw `json:"detail,omitempty"`
 	Id        *string    `json:"id,omitempty"`
 	Module    *string    `json:"module,omitempty"`
@@ -2695,6 +2888,73 @@ type BindKey struct {
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason         Reason `json:"reason"`
 	UpstreamKeyRef string `json:"upstream_key_ref"`
+}
+
+// CallRoute How routing chose the endpoints of one call, as it was stored with the call (docs/domains/routing.md「路由记录」). Every member is optional: a call recorded by an earlier release lacks the ones added since. Endpoints are named by their internal ID, which the endpoint pages of this contract also use.
+type CallRoute struct {
+	// Attempts Each endpoint tried, in order.
+	Attempts *[]CallRouteAttempt `json:"attempts,omitempty"`
+
+	// BreakerOpenFallback Written only by releases before endpoints were taken offline; the endpoints kept as a last resort because their breaker was open.
+	BreakerOpenFallback *[]openapi_types.UUID `json:"breaker_open_fallback,omitempty"`
+
+	// Excluded The candidates left out, at most 16 by name; `excluded_more` counts the rest.
+	Excluded *[]CallRouteExclusion `json:"excluded,omitempty"`
+
+	// ExcludedMore How many more candidates were left out than `excluded` names.
+	ExcludedMore *int `json:"excluded_more,omitempty"`
+
+	// ExcludedReasons How many candidates were left out for each reason, all of them, by the reason's name (`CallRouteExclusion.reason`).
+	ExcludedReasons *map[string]int `json:"excluded_reasons,omitempty"`
+
+	// FastestUnmeasured True when the request asked for the fastest endpoint first and none of its candidates was measured, so the route is in the balanced, price-weighted order and says nothing about speed. Absent means false.
+	FastestUnmeasured *bool `json:"fastest_unmeasured,omitempty"`
+
+	// Overrides The members of the request's `provider` object that changed what the key's routing preset allows or how it orders the route, by name; a member written with no effect is not listed. `data_collection` stands for `zdr` too, and `verified_only` is what the `:exacto` variant asks.
+	Overrides *[]CallRouteOverrides `json:"overrides,omitempty"`
+
+	// Preset The routing preset the call was held to, at the version routing compiled.
+	Preset *CallRoutePreset `json:"preset,omitempty"`
+
+	// Route The endpoints the call could try, in order.
+	Route *[]openapi_types.UUID `json:"route,omitempty"`
+}
+
+// CallRouteOverrides defines model for CallRoute.Overrides.
+type CallRouteOverrides string
+
+// CallRouteAttempt defines model for CallRouteAttempt.
+type CallRouteAttempt struct {
+	// Action What routing did after a failure: 0 the next endpoint of the route, 1 the same endpoint with another key, 2 return the error to the client. Absent means 0.
+	Action *int `json:"action,omitempty"`
+
+	// Egress Written only by early releases; the egress now lies on the call's attempts (`AdminAttempt.egress`).
+	Egress   *string             `json:"egress,omitempty"`
+	Endpoint *openapi_types.UUID `json:"endpoint,omitempty"`
+
+	// Failed True when the attempt failed. Absent means false.
+	Failed *bool `json:"failed,omitempty"`
+
+	// Scope What a failure blamed: 0 the request itself, 1 the route to the supplier, 2 the endpoint, 3 the key, 4 the supplier's group, 5 the supplier. Absent means 0.
+	Scope *int `json:"scope,omitempty"`
+}
+
+// CallRouteExclusion defines model for CallRouteExclusion.
+type CallRouteExclusion struct {
+	// Endpoint Absent for `no_candidates` and `model_not_allowed`, which name no endpoint.
+	Endpoint *openapi_types.UUID `json:"endpoint,omitempty"`
+
+	// Reason Why the candidate was left out (docs/domains/routing.md「一个请求的路由步骤」).
+	Reason *CallRouteExclusionReason `json:"reason,omitempty"`
+}
+
+// CallRouteExclusionReason Why the candidate was left out (docs/domains/routing.md「一个请求的路由步骤」).
+type CallRouteExclusionReason string
+
+// CallRoutePreset The routing preset the call was held to, at the version routing compiled.
+type CallRoutePreset struct {
+	Id      *openapi_types.UUID `json:"id,omitempty"`
+	Version *int64              `json:"version,omitempty"`
 }
 
 // CashAmount An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it, and a report's sum can be wider than 64 bits.
@@ -2881,6 +3141,45 @@ type DetectionRequest struct {
 	Origin string `json:"origin"`
 }
 
+// EasyPaySettings An `easypay` merchant account's settings (internal/payments/README.md「易支付配置与边界」).
+type EasyPaySettings struct {
+	// Cids The gateway's channel ID for each of the site's payment methods that has one.
+	Cids *map[string]string `json:"cids,omitempty"`
+
+	// Close The gateway closes unpaid orders. Absent means it does not.
+	Close *bool `json:"close,omitempty"`
+
+	// Gateway The gateway's HTTPS address, without the PHP endpoint. Required.
+	Gateway *string `json:"gateway,omitempty"`
+
+	// Mode How an order is placed: by sending the user to the gateway, or through its API. Required unless a preset fills it in.
+	Mode *EasyPaySettingsMode `json:"mode,omitempty"`
+
+	// Pid The merchant ID at the gateway. Required.
+	Pid *string `json:"pid,omitempty"`
+
+	// Preset A gateway the plugin knows the rules of, which fixes some of the members below; omitted for a generic EasyPay gateway.
+	Preset *EasyPaySettingsPreset `json:"preset,omitempty"`
+
+	// Query The gateway answers order queries. Absent means it does not.
+	Query *bool `json:"query,omitempty"`
+
+	// Refund The gateway takes refunds. Absent means it does not.
+	Refund *bool `json:"refund,omitempty"`
+
+	// SignType Omitted means MD5, which the server fills in.
+	SignType *EasyPaySettingsSignType `json:"sign_type,omitempty"`
+}
+
+// EasyPaySettingsMode How an order is placed: by sending the user to the gateway, or through its API. Required unless a preset fills it in.
+type EasyPaySettingsMode string
+
+// EasyPaySettingsPreset A gateway the plugin knows the rules of, which fixes some of the members below; omitted for a generic EasyPay gateway.
+type EasyPaySettingsPreset string
+
+// EasyPaySettingsSignType Omitted means MD5, which the server fills in.
+type EasyPaySettingsSignType string
+
 // EffectiveKeyLimits defines model for EffectiveKeyLimits.
 type EffectiveKeyLimits struct {
 	CreationsPerHour int `json:"creations_per_hour"`
@@ -3008,8 +3307,8 @@ type ErrorField struct {
 	Pointer string `json:"pointer"`
 }
 
-// Evidence What supports a price (a page excerpt, a dataset entry), kept as the person entered it.
-type Evidence map[string]interface{}
+// Evidence What supports a price, kept as it was sent. Its shape is the price source's: for `official`, OfficialPriceEvidence, which the server checks against the page's current snapshot and refuses otherwise; for any other source, any non-empty object, which the server keeps unread for the reviewer (the admin page sends `note` and, when given, `url`). `source` is beside it, not in it, so the schemas are `anyOf`.
+type Evidence = map[string]interface{}
 
 // ExchangeRate defines model for ExchangeRate.
 type ExchangeRate struct {
@@ -3298,7 +3597,7 @@ type Merchant struct {
 	// Rev The revision a change must be decided against.
 	Rev *int64 `json:"rev,omitempty"`
 
-	// Settings The plugin's non-secret configuration, canonical JSON.
+	// Settings The plugin's non-secret configuration as it normalised it (defaults filled in), canonical JSON. Its shape is the `kind`'s: `alipay` AlipaySettings, `easypay` EasyPaySettings, `wechatpay` WechatPaySettings, `stripe` StripeSettings. `kind` is beside it, not in it, so the schemas are `anyOf`: pick the one the `kind` names.
 	Settings *jsonx.Raw `json:"settings,omitempty"`
 
 	// SiteId A site's ID (TypeID).
@@ -3343,7 +3642,7 @@ type MerchantInput struct {
 	// Secrets The channel's secrets, such as key, sealed on arrival and never returned. Required when creating; omit on update to keep the sealed ones.
 	Secrets *map[string]string `json:"secrets,omitempty"`
 
-	// Settings The plugin's non-secret configuration as a JSON object; the plugin validates its members strictly.
+	// Settings The plugin's non-secret configuration as a JSON object, with the members of the `kind`'s schema listed on `Merchant.settings` (AlipaySettings, EasyPaySettings, WechatPaySettings, StripeSettings). The plugin reads them strictly: a member it does not know, or a value it cannot use, is a 422 naming `/merchant/settings` or the member. The contract does not check them itself, so that refusal stays the plugin's one answer.
 	Settings   jsonx.Raw `json:"settings"`
 	Sort       int       `json:"sort"`
 	TtlSeconds int       `json:"ttl_seconds"`
@@ -3581,8 +3880,22 @@ type NameAdd struct {
 // NameAddVisibility defines model for NameAdd.Visibility.
 type NameAddVisibility string
 
+// NotedPriceEvidence Evidence for a source other than `official`, in the words of the person who publishes the price; the server checks only that it is a non-empty object.
+type NotedPriceEvidence map[string]interface{}
+
 // OAuthProvider A third-party sign-in provider.
 type OAuthProvider string
+
+// OfficialPriceEvidence Quotations from the model's official price page. Each excerpt must appear verbatim in the page's current extracted price section, and the snapshot must be the page's current one in the price's currency; otherwise the publication is refused.
+type OfficialPriceEvidence struct {
+	Excerpts []string `json:"excerpts"`
+
+	// PageId The official price page.
+	PageId openapi_types.UUID `json:"page_id"`
+
+	// SnapshotId The page's current snapshot, which the excerpts quote.
+	SnapshotId openapi_types.UUID `json:"snapshot_id"`
+}
 
 // OfflinePayment Money received outside the payment channels. `amount` is what was paid, in its own currency, one an exchange rate can be kept for, and in whole minor units of it.
 type OfflinePayment struct {
@@ -4306,9 +4619,11 @@ type PayAmount struct {
 // PaymentDiscrepancy All fields optional during rolling deployment. Resolved records contain an investigation note, not a financial resolution.
 type PaymentDiscrepancy struct {
 	// AccountId An account's ID (TypeID).
-	AccountId *AccountId              `json:"account_id,omitempty"`
-	CreatedAt *time.Time              `json:"created_at,omitempty"`
-	Detail    *map[string]interface{} `json:"detail,omitempty"`
+	AccountId *AccountId `json:"account_id,omitempty"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+
+	// Detail The facts the check that raised it recorded, for the person investigating: what identifies the payment, refund, dispute or day (`order`, `trade_no`, `refund`, `dispute`, `day`, `batch`), and the amounts that differ (`amount`, `expected`, `actual`): whole numbers, as JSON numbers or decimal text, in the smallest unit of the payment's currency unless a `unit` member names another. Its members depend on `kind` and grow with each channel and reconciliation check, so they are not typed here; show them as labelled values. What to act on is in the typed fields: `kind`, `state`, `order_id`, `merchant_id`, `account_id`.
+	Detail *map[string]interface{} `json:"detail,omitempty"`
 
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	Id             *Uuid      `json:"id,omitempty"`
@@ -4609,7 +4924,7 @@ type PricePublish struct {
 	Base               *Uuid `json:"base,omitempty"`
 	ConfirmBasisChange *bool `json:"confirm_basis_change,omitempty"`
 
-	// Evidence What supports a price (a page excerpt, a dataset entry), kept as the person entered it.
+	// Evidence What supports a price, kept as it was sent. Its shape is the price source's: for `official`, OfficialPriceEvidence, which the server checks against the page's current snapshot and refuses otherwise; for any other source, any non-empty object, which the server keeps unread for the reviewer (the admin page sends `note` and, when given, `url`). `source` is beside it, not in it, so the schemas are `anyOf`.
 	Evidence Evidence `json:"evidence"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
@@ -5707,7 +6022,7 @@ type SourceClassUpdate struct {
 
 // SourcePrice defines model for SourcePrice.
 type SourcePrice struct {
-	// Evidence What supports a price (a page excerpt, a dataset entry), kept as the person entered it.
+	// Evidence What supports a price, kept as it was sent. Its shape is the price source's: for `official`, OfficialPriceEvidence, which the server checks against the page's current snapshot and refuses otherwise; for any other source, any non-empty object, which the server keeps unread for the reviewer (the admin page sends `note` and, when given, `url`). `source` is beside it, not in it, so the schemas are `anyOf`.
 	Evidence Evidence `json:"evidence"`
 
 	// Schedule A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard one. A tier that lists no price for an item has none, it does not inherit the standard one.
@@ -5744,6 +6059,9 @@ type SpendDetection struct {
 	// WindowSeconds Recent window compared with the baseline. The detector runs every 10 minutes, so the window is at least 15 minutes and consecutive windows overlap.
 	WindowSeconds int `json:"window_seconds"`
 }
+
+// StripeSettings A `stripe` merchant account has no non-secret settings; everything it needs is in its secrets.
+type StripeSettings = map[string]interface{}
 
 // Subscription defines model for Subscription.
 type Subscription struct {
@@ -6091,7 +6409,7 @@ type SupplierGroup struct {
 	// Codename What users see in place of the group's name. Set when first selected, never changed.
 	Codename *string `json:"codename,omitempty"`
 
-	// Facts What the supplier says about the group (platform, subscription type, peak pricing, long context).
+	// Facts What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves.
 	Facts *map[string]interface{} `json:"facts,omitempty"`
 
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
@@ -6327,6 +6645,27 @@ type Version struct {
 
 // VersionBasis `dated`: the model is one fixed version; `floating`: the vendor moves the model under a name.
 type VersionBasis string
+
+// WechatPaySettings A `wechatpay` merchant account's settings (internal/payments/README.md「微信支付配置与边界」).
+type WechatPaySettings struct {
+	// AppId The application's ID: 6 to 32 letters or digits. Required.
+	AppId *string `json:"app_id,omitempty"`
+
+	// Gateway The gateway's HTTPS address; omitted for WeChat Pay's own, which the server fills in.
+	Gateway *string `json:"gateway,omitempty"`
+
+	// MchId The merchant ID: 6 to 32 digits. Required.
+	MchId *string `json:"mch_id,omitempty"`
+
+	// OldPlatformPublicKeyId The ID of the previous public key while it is rotated out.
+	OldPlatformPublicKeyId *string `json:"old_platform_public_key_id,omitempty"`
+
+	// PlatformPublicKeyId The ID of WeChat Pay's public key; required when verifying with a public key rather than a platform certificate.
+	PlatformPublicKeyId *string `json:"platform_public_key_id,omitempty"`
+
+	// SerialNo The serial number of the merchant's API certificate, hexadecimal. Required.
+	SerialNo *string `json:"serial_no,omitempty"`
+}
 
 // WorkspaceId A workspace's ID (TypeID).
 type WorkspaceId = string

@@ -1649,12 +1649,92 @@ components:
           $ref: '#/components/schemas/Money'
         route:
           x-go-type: jsonx.Raw
-          type: object
-          additionalProperties: true
+          description: How routing chose the call's endpoints, passed on as it was stored with the call.
+          allOf: [{$ref: '#/components/schemas/CallRoute'}]
         attempts:
           type: array
           items:
             $ref: '#/components/schemas/AdminAttempt'
+    CallRoute:
+      type: object
+      additionalProperties: false
+      description: >-
+        How routing chose the endpoints of one call, as it was stored with the call (docs/domains/routing.md「路由记录」).
+        Every member is optional: a call recorded by an earlier release lacks the ones added since. Endpoints are named
+        by their internal ID, which the endpoint pages of this contract also use.
+      properties:
+        preset: {$ref: "#/components/schemas/CallRoutePreset"}
+        overrides:
+          type: array
+          description: >-
+            The members of the request's `provider` object that changed what the key's routing preset allows or how it
+            orders the route, by name; a member written with no effect is not listed. `data_collection` stands for
+            `zdr` too, and `verified_only` is what the `:exacto` variant asks.
+          items:
+            type: string
+            enum: [only, ignore, order, allow_fallbacks, sort, sort.partition, verified_only, classes, data_collection, max_price, preferred_min_throughput, preferred_max_latency, quantizations, require_parameters]
+            x-enum-varnames: [OverrideOnly, OverrideIgnore, OverrideOrder, OverrideAllowFallbacks, OverrideSort, OverrideSortPartition, OverrideVerifiedOnly, OverrideClasses, OverrideDataCollection, OverrideMaxPrice, OverridePreferredMinThroughput, OverridePreferredMaxLatency, OverrideQuantizations, OverrideRequireParameters]
+        fastest_unmeasured:
+          type: boolean
+          description: >-
+            True when the request asked for the fastest endpoint first and none of its candidates was measured, so the
+            route is in the balanced, price-weighted order and says nothing about speed. Absent means false.
+        excluded:
+          type: array
+          description: The candidates left out, at most 16 by name; `excluded_more` counts the rest.
+          items: {$ref: "#/components/schemas/CallRouteExclusion"}
+        excluded_more: {type: integer, minimum: 1, description: "How many more candidates were left out than `excluded` names."}
+        excluded_reasons:
+          type: object
+          description: How many candidates were left out for each reason, all of them, by the reason's name (`CallRouteExclusion.reason`).
+          additionalProperties: {type: integer, minimum: 1}
+        route:
+          type: array
+          description: The endpoints the call could try, in order.
+          items: {type: string, format: uuid}
+        attempts:
+          type: array
+          description: Each endpoint tried, in order.
+          items: {$ref: "#/components/schemas/CallRouteAttempt"}
+        breaker_open_fallback:
+          type: array
+          description: Written only by releases before endpoints were taken offline; the endpoints kept as a last resort because their breaker was open.
+          items: {type: string, format: uuid}
+    CallRoutePreset:
+      type: object
+      additionalProperties: false
+      description: The routing preset the call was held to, at the version routing compiled.
+      properties:
+        id: {type: string, format: uuid}
+        version: {type: integer, format: int64, minimum: 1}
+    CallRouteExclusion:
+      type: object
+      additionalProperties: false
+      properties:
+        endpoint: {type: string, format: uuid, description: "Absent for `no_candidates` and `model_not_allowed`, which name no endpoint."}
+        reason:
+          type: string
+          description: Why the candidate was left out (docs/domains/routing.md「一个请求的路由步骤」).
+          enum: [no_candidates, model_not_allowed, disabled, breaker_open, supplier_balance, missing_capability, context_too_small, format_not_served, service_tier_not_served, preset_filter, override_filter, not_verified, no_price, no_egress, retry_budget, full, unknown_item, cooling_down, unquotable_cost, byok_no_fallback]
+    CallRouteAttempt:
+      type: object
+      additionalProperties: false
+      properties:
+        endpoint: {type: string, format: uuid}
+        failed: {type: boolean, description: "True when the attempt failed. Absent means false."}
+        scope:
+          type: integer
+          minimum: 0
+          maximum: 5
+          description: >-
+            What a failure blamed: 0 the request itself, 1 the route to the supplier, 2 the endpoint, 3 the key, 4 the
+            supplier's group, 5 the supplier. Absent means 0.
+        action:
+          type: integer
+          minimum: 0
+          maximum: 2
+          description: "What routing did after a failure: 0 the next endpoint of the route, 1 the same endpoint with another key, 2 return the error to the client. Absent means 0."
+        egress: {type: string, description: "Written only by early releases; the egress now lies on the call's attempts (`AdminAttempt.egress`)."}
     AuditEntry:
       type: object
       additionalProperties: false
@@ -1679,6 +1759,13 @@ components:
           x-go-type: jsonx.Raw
           type: object
           additionalProperties: true
+          description: >-
+            What the module that made the change recorded about it, kept as written: small and structured, such as
+            the IDs and names involved and the values before and after; never a secret, a password, a key, call
+            content or personal data beyond IDs. Its members are the `action`'s own and change with the module that
+            writes it, so they are not typed here (one schema per action would be a second registry of every change
+            every module makes); show it as a tree of labelled values and decide nothing from it. Large integers are
+            written as they were, so read it with a parser that keeps them exact.
     AuditEntryList:
       type: object
       additionalProperties: false
@@ -2366,7 +2453,12 @@ components:
             group, or the supplier refused. Present only with `key_state` `failed`.'
         facts:
           type: object
-          description: What the supplier says about the group (platform, subscription type, peak pricing, long context).
+          description: >-
+            What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for
+            example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a
+            declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not
+            typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in
+            the other fields: `ratio`, `key_state`, and the endpoints the group serves.
           additionalProperties: true
         pool:
           $ref: '#/components/schemas/SupplierPool'

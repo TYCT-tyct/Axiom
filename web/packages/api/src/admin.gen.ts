@@ -2934,10 +2934,62 @@ export interface components {
         AdminCallTrace: {
             summary?: components["schemas"]["AdminCallSummary"];
             cost?: components["schemas"]["Money"];
-            route?: {
-                [key: string]: unknown;
-            };
+            /** @description How routing chose the call's endpoints, passed on as it was stored with the call. */
+            route?: components["schemas"]["CallRoute"];
             attempts?: components["schemas"]["AdminAttempt"][];
+        };
+        /** @description How routing chose the endpoints of one call, as it was stored with the call (docs/domains/routing.md「路由记录」). Every member is optional: a call recorded by an earlier release lacks the ones added since. Endpoints are named by their internal ID, which the endpoint pages of this contract also use. */
+        CallRoute: {
+            preset?: components["schemas"]["CallRoutePreset"];
+            /** @description The members of the request's `provider` object that changed what the key's routing preset allows or how it orders the route, by name; a member written with no effect is not listed. `data_collection` stands for `zdr` too, and `verified_only` is what the `:exacto` variant asks. */
+            overrides?: ("only" | "ignore" | "order" | "allow_fallbacks" | "sort" | "sort.partition" | "verified_only" | "classes" | "data_collection" | "max_price" | "preferred_min_throughput" | "preferred_max_latency" | "quantizations" | "require_parameters")[];
+            /** @description True when the request asked for the fastest endpoint first and none of its candidates was measured, so the route is in the balanced, price-weighted order and says nothing about speed. Absent means false. */
+            fastest_unmeasured?: boolean;
+            /** @description The candidates left out, at most 16 by name; `excluded_more` counts the rest. */
+            excluded?: components["schemas"]["CallRouteExclusion"][];
+            /** @description How many more candidates were left out than `excluded` names. */
+            excluded_more?: number;
+            /** @description How many candidates were left out for each reason, all of them, by the reason's name (`CallRouteExclusion.reason`). */
+            excluded_reasons?: {
+                [key: string]: number;
+            };
+            /** @description The endpoints the call could try, in order. */
+            route?: string[];
+            /** @description Each endpoint tried, in order. */
+            attempts?: components["schemas"]["CallRouteAttempt"][];
+            /** @description Written only by releases before endpoints were taken offline; the endpoints kept as a last resort because their breaker was open. */
+            breaker_open_fallback?: string[];
+        };
+        /** @description The routing preset the call was held to, at the version routing compiled. */
+        CallRoutePreset: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: int64 */
+            version?: number;
+        };
+        CallRouteExclusion: {
+            /**
+             * Format: uuid
+             * @description Absent for `no_candidates` and `model_not_allowed`, which name no endpoint.
+             */
+            endpoint?: string;
+            /**
+             * @description Why the candidate was left out (docs/domains/routing.md「一个请求的路由步骤」).
+             * @enum {string}
+             */
+            reason?: "no_candidates" | "model_not_allowed" | "disabled" | "breaker_open" | "supplier_balance" | "missing_capability" | "context_too_small" | "format_not_served" | "service_tier_not_served" | "preset_filter" | "override_filter" | "not_verified" | "no_price" | "no_egress" | "retry_budget" | "full" | "unknown_item" | "cooling_down" | "unquotable_cost" | "byok_no_fallback";
+        };
+        CallRouteAttempt: {
+            /** Format: uuid */
+            endpoint?: string;
+            /** @description True when the attempt failed. Absent means false. */
+            failed?: boolean;
+            /** @description What a failure blamed: 0 the request itself, 1 the route to the supplier, 2 the endpoint, 3 the key, 4 the supplier's group, 5 the supplier. Absent means 0. */
+            scope?: number;
+            /** @description What routing did after a failure: 0 the next endpoint of the route, 1 the same endpoint with another key, 2 return the error to the client. Absent means 0. */
+            action?: number;
+            /** @description Written only by early releases; the egress now lies on the call's attempts (`AdminAttempt.egress`). */
+            egress?: string;
         };
         AuditEntry: {
             id?: string;
@@ -2953,6 +3005,7 @@ export interface components {
             at?: string;
             site_id?: components["schemas"]["SiteId"];
             account_id?: components["schemas"]["AccountId"];
+            /** @description What the module that made the change recorded about it, kept as written: small and structured, such as the IDs and names involved and the values before and after; never a secret, a password, a key, call content or personal data beyond IDs. Its members are the `action`'s own and change with the module that writes it, so they are not typed here (one schema per action would be a second registry of every change every module makes); show it as a tree of labelled values and decide nothing from it. Large integers are written as they were, so read it with a parser that keeps them exact. */
             detail?: {
                 [key: string]: unknown;
             };
@@ -3310,12 +3363,68 @@ export interface components {
              * @description The revision a change must be decided against.
              */
             rev?: number;
-            /** @description The plugin's non-secret configuration, canonical JSON. */
-            settings?: {
-                [key: string]: unknown;
-            };
+            /** @description The plugin's non-secret configuration as it normalised it (defaults filled in), canonical JSON. Its shape is the `kind`'s: `alipay` AlipaySettings, `easypay` EasyPaySettings, `wechatpay` WechatPaySettings, `stripe` StripeSettings. `kind` is beside it, not in it, so the schemas are `anyOf`: pick the one the `kind` names. */
+            settings?: components["schemas"]["AlipaySettings"] | components["schemas"]["EasyPaySettings"] | components["schemas"]["WechatPaySettings"] | components["schemas"]["StripeSettings"];
             methods?: components["schemas"]["MerchantMethod"][];
         };
+        /** @description An `alipay` merchant account's settings (internal/payments/README.md「支付宝配置与边界」). */
+        AlipaySettings: {
+            /** @description The application's ID: digits, at most 32. Required. */
+            app_id?: string;
+            /** @description The seller's ID, digits; when set, callbacks must name it. */
+            seller_id?: string;
+            /** @description The gateway's HTTPS address; omitted for Alipay's own, which the server fills in. */
+            gateway?: string;
+        };
+        /** @description An `easypay` merchant account's settings (internal/payments/README.md「易支付配置与边界」). */
+        EasyPaySettings: {
+            /**
+             * @description A gateway the plugin knows the rules of, which fixes some of the members below; omitted for a generic EasyPay gateway.
+             * @enum {string}
+             */
+            preset?: "epusdt" | "ezpay";
+            /** @description The gateway's HTTPS address, without the PHP endpoint. Required. */
+            gateway?: string;
+            /** @description The merchant ID at the gateway. Required. */
+            pid?: string;
+            /**
+             * @description How an order is placed: by sending the user to the gateway, or through its API. Required unless a preset fills it in.
+             * @enum {string}
+             */
+            mode?: "redirect" | "api";
+            /**
+             * @description Omitted means MD5, which the server fills in.
+             * @enum {string}
+             */
+            sign_type?: "MD5";
+            /** @description The gateway's channel ID for each of the site's payment methods that has one. */
+            cids?: {
+                [key: string]: string;
+            };
+            /** @description The gateway answers order queries. Absent means it does not. */
+            query?: boolean;
+            /** @description The gateway closes unpaid orders. Absent means it does not. */
+            close?: boolean;
+            /** @description The gateway takes refunds. Absent means it does not. */
+            refund?: boolean;
+        };
+        /** @description A `wechatpay` merchant account's settings (internal/payments/README.md「微信支付配置与边界」). */
+        WechatPaySettings: {
+            /** @description The application's ID: 6 to 32 letters or digits. Required. */
+            app_id?: string;
+            /** @description The merchant ID: 6 to 32 digits. Required. */
+            mch_id?: string;
+            /** @description The serial number of the merchant's API certificate, hexadecimal. Required. */
+            serial_no?: string;
+            /** @description The ID of WeChat Pay's public key; required when verifying with a public key rather than a platform certificate. */
+            platform_public_key_id?: string;
+            /** @description The ID of the previous public key while it is rotated out. */
+            old_platform_public_key_id?: string;
+            /** @description The gateway's HTTPS address; omitted for WeChat Pay's own, which the server fills in. */
+            gateway?: string;
+        };
+        /** @description A `stripe` merchant account has no non-secret settings; everything it needs is in its secrets. */
+        StripeSettings: Record<string, never>;
         /** @description One payment method a merchant account offers. Every field is optional during rolling deployment. */
         MerchantMethod: {
             /** @description The site's method code, such as alipay or usdt.tron. */
@@ -3356,7 +3465,7 @@ export interface components {
             refund_enabled: boolean;
             user_refund: boolean;
             sort: number;
-            /** @description The plugin's non-secret configuration as a JSON object; the plugin validates its members strictly. */
+            /** @description The plugin's non-secret configuration as a JSON object, with the members of the `kind`'s schema listed on `Merchant.settings` (AlipaySettings, EasyPaySettings, WechatPaySettings, StripeSettings). The plugin reads them strictly: a member it does not know, or a value it cannot use, is a 422 naming `/merchant/settings` or the member. The contract does not check them itself, so that refusal stays the plugin's one answer. */
             settings: {
                 [key: string]: unknown;
             };
@@ -3388,6 +3497,7 @@ export interface components {
             kind?: string;
             /** @enum {string} */
             state?: "open" | "resolved";
+            /** @description The facts the check that raised it recorded, for the person investigating: what identifies the payment, refund, dispute or day (`order`, `trade_no`, `refund`, `dispute`, `day`, `batch`), and the amounts that differ (`amount`, `expected`, `actual`): whole numbers, as JSON numbers or decimal text, in the smallest unit of the payment's currency unless a `unit` member names another. Its members depend on `kind` and grow with each channel and reconciliation check, so they are not typed here; show them as labelled values. What to act on is in the typed fields: `kind`, `state`, `order_id`, `merchant_id`, `account_id`. */
             detail?: {
                 [key: string]: unknown;
             };
@@ -5167,7 +5277,7 @@ export interface components {
              * @enum {string}
              */
             key_reason?: "not_permitted" | "group_unavailable" | "refused";
-            /** @description What the supplier says about the group (platform, subscription type, peak pricing, long context). */
+            /** @description What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves. */
             facts?: {
                 [key: string]: unknown;
             };
@@ -5530,8 +5640,24 @@ export interface components {
             rev: number;
             reason: components["schemas"]["Reason"];
         };
-        /** @description What supports a price (a page excerpt, a dataset entry), kept as the person entered it. */
-        Evidence: {
+        /** @description What supports a price, kept as it was sent. Its shape is the price source's: for `official`, OfficialPriceEvidence, which the server checks against the page's current snapshot and refuses otherwise; for any other source, any non-empty object, which the server keeps unread for the reviewer (the admin page sends `note` and, when given, `url`). `source` is beside it, not in it, so the schemas are `anyOf`. */
+        Evidence: components["schemas"]["OfficialPriceEvidence"] | components["schemas"]["NotedPriceEvidence"];
+        /** @description Quotations from the model's official price page. Each excerpt must appear verbatim in the page's current extracted price section, and the snapshot must be the page's current one in the price's currency; otherwise the publication is refused. */
+        OfficialPriceEvidence: {
+            /**
+             * Format: uuid
+             * @description The official price page.
+             */
+            page_id: string;
+            /**
+             * Format: uuid
+             * @description The page's current snapshot, which the excerpts quote.
+             */
+            snapshot_id: string;
+            excerpts: string[];
+        };
+        /** @description Evidence for a source other than `official`, in the words of the person who publishes the price; the server checks only that it is a non-empty object. */
+        NotedPriceEvidence: {
             [key: string]: unknown;
         };
         PricePublish: {

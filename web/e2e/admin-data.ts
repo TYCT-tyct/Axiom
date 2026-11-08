@@ -1,3 +1,4 @@
+import { callRoute } from "./admin-call-route.ts";
 import { long, nano, pad, range, type Schemas, siteId, tierId, usd, usualTargets, uuid } from "./admin-fixtures.ts";
 import { anOrder, aRefund, paymentData } from "./admin-payments-data.ts";
 import { allPermissions } from "./admin-permissions.ts";
@@ -112,7 +113,7 @@ function aTrace(call: Schemas["AdminCallSummary"], n: number): Schemas["AdminCal
   return {
     summary: call,
     cost: nano(String(n * 900_000_000)),
-    route: { requested_model: call.model, endpoint_id: uuid(6, 1), retries: 1, note: long("route ", 40) },
+    route: callRoute(failed),
     attempts: [
       {
         seq: 1,

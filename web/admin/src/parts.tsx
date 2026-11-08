@@ -49,10 +49,14 @@ export function Code({ children, title }: { children: ReactNode; title?: string 
 }
 
 // Json keeps a record's shape: the route of a call and an audit entry's detail are nested and meant to be read as they
-// were written, not flattened into one line.
-export function Json({ value }: { value: unknown }) {
+// were written, not flattened into one line. A long record scrolls inside its box, which keyboard users can only do
+// when the box takes focus, so it is a named region in the tab order, as a wide table is.
+export function Json({ value, label }: { value: unknown; label: string }) {
   return (
-    <pre className="max-h-96 overflow-auto rounded-md bg-s2 p-3 font-mono text-label text-t2">{formatJSON(value)}</pre>
+    // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need focus to scroll a long record.
+    <section className="max-h-96 overflow-auto rounded-md bg-s2 p-3" aria-label={label} tabIndex={0}>
+      <pre className="font-mono text-label text-t2">{formatJSON(value)}</pre>
+    </section>
   );
 }
 
