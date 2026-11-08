@@ -229,16 +229,16 @@ func testRefundSendingCrash(t *testing.T, keyed bool) {
 		if got.State != "succeeded" {
 			t.Fatal(got, calls.Load())
 		}
-	} else {
-		if calls.Load() != 0 || got.State != "pending" {
-			t.Fatal(got, calls.Load())
-		}
-		if n := w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies WHERE kind='refund_unknown'"); n != 1 {
-			t.Fatal(n)
-		}
-		if _, err := w.p.Refund(t.Context(), w.accountA(), refundRequest(w, o, 1, "second")); !errors.Is(err, ErrRefundInFlight) {
-			t.Fatal(err)
-		}
+		return
+	}
+	if calls.Load() != 0 || got.State != "pending" {
+		t.Fatal(got, calls.Load())
+	}
+	if n := w.count(w.p.platform, "SELECT count(*) FROM payments.discrepancies WHERE kind='refund_unknown'"); n != 1 {
+		t.Fatal(n)
+	}
+	if _, err := w.p.Refund(t.Context(), w.accountA(), refundRequest(w, o, 1, "second")); !errors.Is(err, ErrRefundInFlight) {
+		t.Fatal(err)
 	}
 }
 
