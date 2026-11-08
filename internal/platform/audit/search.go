@@ -61,8 +61,8 @@ func List(ctx context.Context, tx pg.Tx, q Search) ([]Entry, *page.Cursor, error
 	defer rows.Close()
 	out := make([]Entry, 0, q.Limit+1)
 	for rows.Next() {
-		var e Entry
-		if err := rows.Scan(&e.ID, &e.At, &e.ActorKind, &e.ActorID, &e.RequestID, &e.Action, &e.Module, &e.TargetKind, &e.TargetID, &e.Site, &e.Account, &e.Reason, &e.Detail); err != nil {
+		e, err := scan(rows)
+		if err != nil {
 			return nil, nil, err
 		}
 		out = append(out, e)
@@ -79,9 +79,34 @@ func List(ctx context.Context, tx pg.Tx, q Search) ([]Entry, *page.Cursor, error
 	return out, next, nil
 }
 
+// Since returns at most limit entries after the position after, oldest first, in the order operations chains them: by
+// (at, id), stopping before until. The zero cursor is before every entry.
+func Since(ctx context.Context, tx pg.Tx, after page.Cursor, until time.Time, limit int) ([]Entry, error) {
+	rows, err := tx.Query(ctx, `SELECT `+entryColumns+` FROM platform.audit_log WHERE (at,id) > ($1::timestamptz,$2::uuid)
+ AND at < $3 ORDER BY at,id LIMIT $4`, after.At, after.ID, until, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Entry
+	for rows.Next() {
+		e, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // Get returns a single entry within the caller's authorized scope.
 func Get(ctx context.Context, tx pg.Tx, id uuid.UUID) (Entry, error) {
+	return scan(tx.QueryRow(ctx, `SELECT `+entryColumns+` FROM platform.audit_log WHERE id=$1`, id))
+}
+
+// scan reads one row of entryColumns.
+func scan(row interface{ Scan(...any) error }) (Entry, error) {
 	var e Entry
-	err := tx.QueryRow(ctx, `SELECT `+entryColumns+` FROM platform.audit_log WHERE id=$1`, id).Scan(&e.ID, &e.At, &e.ActorKind, &e.ActorID, &e.RequestID, &e.Action, &e.Module, &e.TargetKind, &e.TargetID, &e.Site, &e.Account, &e.Reason, &e.Detail)
+	err := row.Scan(&e.ID, &e.At, &e.ActorKind, &e.ActorID, &e.RequestID, &e.Action, &e.Module, &e.TargetKind, &e.TargetID, &e.Site, &e.Account, &e.Reason, &e.Detail)
 	return e, err
 }

@@ -1,7 +1,10 @@
 package audit_test
 
 import (
+	"bytes"
+	"cmp"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -123,5 +126,54 @@ func auditSearchIDs(t *testing.T, db *pg.DB, base audit.Search) []uuid.UUID {
 			return ids
 		}
 		base.After = next
+	}
+}
+
+// TestSince: entries come oldest first by (at, id), from after a position and before a time, at most the limit, and
+// only those the scope may read.
+func TestSince(t *testing.T) {
+	t.Parallel()
+	db := open(t)
+	seedAuditSearch(t, db)
+	since := func(scope pg.Scope, after page.Cursor, until time.Time, limit int) []audit.Entry {
+		t.Helper()
+		var rows []audit.Entry
+		if err := db.ReadTx(t.Context(), scope, func(tx pg.Tx) (err error) {
+			rows, err = audit.Since(t.Context(), tx, after, until, limit)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	later := time.Now().Add(time.Hour)
+	all := since(platform, page.Cursor{}, later, 10)
+	if len(all) != 3 || !slices.IsSortedFunc(all, func(a, b audit.Entry) int {
+		return cmp.Or(a.At.Compare(b.At), bytes.Compare(a.ID[:], b.ID[:]))
+	}) {
+		t.Fatalf("all: %+v", all)
+	}
+	for name, c := range map[string]struct {
+		scope pg.Scope
+		after page.Cursor
+		until time.Time
+		limit int
+		want  []audit.Entry
+	}{
+		"a page":            {platform, page.Cursor{}, later, 2, all[:2]},
+		"after the first":   {platform, page.Cursor{At: all[0].At, ID: all[0].ID}, later, 10, all[1:]},
+		"before their time": {platform, page.Cursor{}, all[0].At, 10, nil},
+		"an account's":      {pg.NewScope(false, nil, []uuid.UUID{account}), page.Cursor{}, later, 10, []audit.Entry{all[1]}},
+	} {
+		got := since(c.scope, c.after, c.until, c.limit)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: %d entries, want %d", name, len(got), len(c.want))
+			continue
+		}
+		for i := range got {
+			if got[i].ID != c.want[i].ID {
+				t.Errorf("%s: entry %d is %s, want %s", name, i, got[i].ID, c.want[i].ID)
+			}
+		}
 	}
 }
