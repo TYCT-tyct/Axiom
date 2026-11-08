@@ -42,6 +42,7 @@ func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 		"observability.spend":             QueueNotifications,
 		"observability.webhook":           QueueNotifications,
 		"operations.approval_expiry":      QueueArchive,
+		"operations.audit_chain":          QueueArchive,
 		"operations.cap_reconcile":        QueueMoney,
 		"payments.reconcile":              QueueReconcile,
 		"payments.poll":                   QueueMoney,
