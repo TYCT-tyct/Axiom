@@ -31,7 +31,7 @@ func TestStoredPresetSummary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := routing.StoredPreset{Layer: routing.Layer{Scope: routing.ScopeAccount}, Rules: jsonx.Raw(tc.rules)}
+			s := routing.StoredPreset{Scope: routing.ScopeAccount, Rules: jsonx.Raw(tc.rules)}
 			got, ok := s.Summary()
 			if ok != tc.ok || !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("Summary() = %+v, %v; want %+v, %v", got, ok, tc.want, tc.ok)
@@ -46,7 +46,9 @@ func TestStoredPresetSummary(t *testing.T) {
 // scored 100 at 0.9, 1 and 2 per million; 2 relay, may train, unverified, unscored, 0.5 and 1.
 func TestCheckRules(t *testing.T) {
 	t.Parallel()
-	def := func(fields ...string) routing.Unmatched { return routing.Unmatched{Rule: -1, Fields: append([]string{}, fields...)} }
+	def := func(fields ...string) routing.Unmatched {
+		return routing.Unmatched{Rule: -1, Fields: append([]string{}, fields...)}
+	}
 	for _, tc := range []struct {
 		name, rules string
 		want        []routing.Unmatched
