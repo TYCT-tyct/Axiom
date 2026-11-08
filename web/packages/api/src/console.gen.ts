@@ -1828,7 +1828,7 @@ export interface components {
             unit: components["schemas"]["ModelUnit"];
             /** @description Exact currency units per unit, decimal text with up to 15 fractional digits. */
             amount: string;
-            /** @description Whether this is the rate a model list shows as the item's price: for each item, the standard tier's base band, or the first offered tier's base band when the standard tier does not price the item. Exactly one rate per priced item is true. Absent from a node that does not name it yet; a page then shows the list price as unavailable rather than choosing one. */
+            /** @description Whether this is the rate a model list shows as the item's price: for each item, the standard tier's base band, or the first offered tier's base band when the standard tier does not price the item. Exactly one rate is true for each item that has a base-band price; an item priced only above a context threshold has no headline, and a list shows its price as unavailable. Absent from a node that does not name it yet; a page then shows the list price as unavailable rather than choosing one. */
             headline?: boolean;
             /** @description The price of `display_per` units, exactly `amount` × `display_per` as decimal text with up to 15 fractional digits (at most 9 for tokens), so every page shows the same number without moving the decimal point itself. Absent together with `display_per` from a node that does not send them. */
             display_amount?: string;
