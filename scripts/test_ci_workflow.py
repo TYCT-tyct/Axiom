@@ -376,3 +376,62 @@ class ReleaseChecks(unittest.TestCase):
         self.assertLess(script.index("cosign attest"), script.index("verify-release.sh"))
         self.assertLess(script.index("verify-release.sh"), script.index("docker pull"))
         self.assertIn("CI_DEPLOY_RELEASE", script)
+
+
+class FetchReleaseBinary(unittest.TestCase):
+    SCRIPT = ROOT / "scripts" / "ci" / "fetch-release-binary.sh"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", self.tmp.as_posix()])
+        src = self.tmp / "src"
+        src.mkdir()
+        (src / "tool").write_text("#!/bin/sh\necho ok\n")
+        self.tarball = self.tmp / "tool.tar.gz"
+        subprocess.run(["tar", "-czf", self.tarball, "-C", src, "tool"], check=True)
+        self.sha = subprocess.run(["sha256sum", self.tarball], capture_output=True, text=True,
+                                  check=True).stdout.split()[0]
+        # A curl that copies the "release" and counts its calls; the network is never touched
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        curl = bin_dir / "curl"
+        curl.write_text('#!/bin/sh\necho x >> "$CALLS"\nwhile [ "$1" != -o ]; do shift; done\ncp "$SERVED" "$2"\n')
+        curl.chmod(0o755)
+        self.cache = self.tmp / "cache"
+        self.env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "CALLS": (self.tmp / "calls").as_posix(),
+                    "SERVED": self.tarball.as_posix(), "RUNNER_TOOL_CACHE": self.cache.as_posix()}
+
+    def fetch(self, sha=None):
+        dest = Path(tempfile.mkdtemp(dir=self.tmp))
+        result = subprocess.run([BASH, self.SCRIPT, "tool", "1.0", sha or self.sha, "https://example.invalid/t", dest],
+                                env=self.env, capture_output=True, text=True)
+        return result, dest
+
+    def downloads(self):
+        calls = self.tmp / "calls"
+        return len(calls.read_text().splitlines()) if calls.exists() else 0
+
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_downloads_once_then_reuses_the_verified_copy(self):
+        for _ in range(2):
+            result, dest = self.fetch()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((dest / "tool").exists())
+        self.assertEqual(self.downloads(), 1)
+
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_a_tampered_cached_copy_is_downloaded_again(self):
+        self.fetch()
+        (self.cache / "tool" / "1.0" / "tool.tar.gz").write_bytes(b"swapped")
+        result, dest = self.fetch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((dest / "tool").exists())
+        self.assertEqual(self.downloads(), 2)
+
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_a_swapped_download_fails_and_is_not_cached(self):
+        result, dest = self.fetch(sha="0" * 64)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checksum mismatch", result.stderr)
+        self.assertFalse((dest / "tool").exists())
+        self.assertEqual(list((self.cache / "tool" / "1.0").iterdir()), [])
