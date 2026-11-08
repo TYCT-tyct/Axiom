@@ -3,13 +3,15 @@
 -- name: ListSuppliersPage :many
 -- Newest first: an ID is a UUIDv7, so its order is the order of connecting, and a page starts after the last ID of the
 -- one before. The unit value is the latest confirmed for this currency and native unit. A missing balance, threshold
--- or unit value is the empty text, which no number is.
+-- or unit value is the empty text, which no number is. The platform scope lets every owner's row through, so the
+-- caller says whose it reads: the platform's own, or every owner's too (Owners).
 SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detected_version, s.native_unit,
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
     coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
 FROM suppliers.suppliers s
-WHERE (sqlc.narg(status)::text IS NULL OR s.status = sqlc.narg(status))
+WHERE (@every_owner::boolean OR s.owner_scope = 'platform')
+    AND (sqlc.narg(status)::text IS NULL OR s.status = sqlc.narg(status))
     AND (sqlc.narg(after)::uuid IS NULL OR s.id < sqlc.narg(after))
 ORDER BY s.id DESC
 LIMIT @page_size::int;
@@ -19,7 +21,7 @@ SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detec
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
     coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
-FROM suppliers.suppliers s WHERE s.id = @id;
+FROM suppliers.suppliers s WHERE s.id = @id AND (@every_owner::boolean OR s.owner_scope = 'platform');
 
 -- name: ListGroupsOf :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible, key_error,
@@ -131,12 +133,13 @@ UPDATE suppliers.supplier_aliases SET formats = @formats WHERE id = @id;
 -- name: PendingMappingsPage :many
 -- The upstream names the catalog could not recognise (no model) that no alias of the supplier or of the group covers,
 -- oldest first, a page starting after the last row of the one before. A group and a name narrow it to one name, which
--- is how an agent's mapping is checked to be of a name that waits.
+-- is how an agent's mapping is checked to be of a name that waits. Whose suppliers as in ListSuppliersPage.
 SELECT m.supplier_id, m.supplier_group_id, g.codename, m.upstream_name, m.formats, m.first_seen_at
 FROM suppliers.supplier_models m
 JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
 JOIN suppliers.suppliers s ON s.id = m.supplier_id
 WHERE m.model_id IS NULL AND m.present AND g.present AND s.status <> 'removed'
+    AND (@every_owner::boolean OR s.owner_scope = 'platform')
     AND (sqlc.narg(supplier_id)::uuid IS NULL OR m.supplier_id = sqlc.narg(supplier_id))
     AND (sqlc.narg(group_id)::uuid IS NULL OR m.supplier_group_id = sqlc.narg(group_id))
     AND (sqlc.narg(upstream_name)::text IS NULL OR m.upstream_name = sqlc.narg(upstream_name))

@@ -64,7 +64,7 @@ func (w *world) checkUnitValueReaders(want string) {
 		if err != nil {
 			return err
 		}
-		view, err := q.GetSupplierView(ctx, tx, w.supplier)
+		view, err := q.GetSupplierView(ctx, tx, store.GetSupplierViewParams{ID: w.supplier})
 		if err != nil {
 			return err
 		}
