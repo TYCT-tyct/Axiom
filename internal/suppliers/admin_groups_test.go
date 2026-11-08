@@ -179,6 +179,45 @@ func TestAnAliasTakesANameOutOfTheQueue(t *testing.T) {
 	same(t, "after an alias in the whole supplier", []string{}, namesOf(left))
 }
 
+// TestMapPending: only a name the group lists as waiting is mapped. One the sync recognised, one an alias of the whole
+// supplier covers, one only another group lists, and one mapped already are refused, as is a supplier being removed.
+func TestMapPending(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	id, one, two := a.queue()
+	a.model(id, two, "covered", time.Minute)
+	a.model(id, two, "recognised", time.Minute)
+	a.sql(fmt.Sprintf(`UPDATE suppliers.supplier_models SET model_id = '%s' WHERE upstream_name = 'recognised'`, uuid.NewV7()))
+	_, err := a.mapIn(id, nil, "covered", uuid.NewV7())
+	refuses(t, "the owner's alias for the whole supplier", err, nil)
+	mapPending := func(group uuid.UUID, name string) (Mapping, error) {
+		return inTx(a, func(ctx context.Context, tx pg.Tx) (Mapping, error) {
+			return a.admin.MapPending(ctx, tx, a.actor, id, group, name, uuid.NewV7(), "it waits")
+		})
+	}
+	m, err := mapPending(one, "oldest")
+	refuses(t, "a name that waits", err, nil)
+	same(t, "the alias", []any{"oldest", &one, int64(1)}, []any{m.UpstreamName, m.Group, m.Revision})
+	for name, c := range map[string]struct {
+		group uuid.UUID
+		name  string
+		want  error
+	}{
+		"mapped already":                 {one, "oldest", ErrNotPending},
+		"recognised by the sync":         {two, "recognised", ErrNotPending},
+		"covered by a supplier alias":    {two, "covered", ErrNotPending},
+		"listed only by the other group": {two, "oldest", ErrNotPending},
+		"listed by no group":             {one, "nothing", ErrNotPending},
+		"in a group the supplier lacks":  {uuid.NewV7(), "newest", ErrNoGroup},
+	} {
+		_, err := mapPending(c.group, c.name)
+		refuses(t, name, err, c.want)
+	}
+	a.setStatus(id, "removing")
+	_, err = mapPending(two, "newest")
+	refuses(t, "a supplier being removed", err, ErrStatusLocked)
+}
+
 // TestMapModel: supplier-wide aliases are immutable; the same name in a group has its own alias;
 // a group the supplier lacks, and a supplier being removed, are refused.
 func TestMapModel(t *testing.T) {

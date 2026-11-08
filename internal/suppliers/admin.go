@@ -47,6 +47,9 @@ var (
 	ErrKeyBound = errors.New("suppliers: that key is already bound")
 	// ErrAliasExists is an upstream name that already has an alias in the scope.
 	ErrAliasExists = errors.New("suppliers: that name already has an alias in that scope")
+	// ErrNotPending is a name the group does not list as waiting for a model: it is not listed, the catalog
+	// recognised it, or an alias of the group or of the whole supplier covers it.
+	ErrNotPending = errors.New("suppliers: the group does not list that name as waiting for a model")
 	// ErrUnknownFormat is a formats declaration naming a call format this node does not know.
 	ErrUnknownFormat = errors.New("suppliers: unknown call format")
 	// ErrAliasRevision is a correction based on an alias revision that is no longer current.

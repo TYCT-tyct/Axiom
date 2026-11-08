@@ -504,6 +504,88 @@ paths:
         '422': {$ref: '#/components/responses/Unprocessable'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/suppliers/{supplier_id}/groups/{group_id}:
+    put:
+      operationId: supplierGroupSelect
+      summary: Choose whether a supplier's group is used
+      description: >-
+        Selects or unselects one of the supplier's groups (`suppliers_get` lists them), as the admin does, and runs at
+        once (200, `succeeded`); the result is the group's `selected` and `codename` as they now are. A group selected
+        for the first time gets its code name, which never changes; the next sync makes a key for it where the adapter
+        needs one and makes the group's mapped models endpoints. Unselecting takes the group out of routing and keeps the code name. Asking for what the group already is
+        changes nothing and still succeeds. A group the supplier no longer lists cannot be selected (409 `conflict`),
+        nor can anything change on a supplier being removed or removed (409 `conflict`). With `dry_run` the same checks
+        run and nothing is written.
+      tags: [Suppliers]
+      security: [{credential: []}]
+      x-axiom-permission: suppliers.manage
+      x-axiom-scope: platform
+      x-mcp-name: supplier_group_select
+      parameters:
+        - {in: path, name: supplier_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - {in: path, name: group_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/GroupSelectionChange'}}}
+      responses:
+        '200':
+          description: The operation run, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/suppliers/{supplier_id}/groups/{group_id}/model-mappings:
+    post:
+      operationId: supplierModelMap
+      summary: Map a name a group lists to a model
+      description: >-
+        Says which catalog model (`models_list`) a name the group lists as waiting for a model means, for that group
+        only, as the admin's mapping does, and runs at once (200, `succeeded`); `pending_mappings_list` gives the names
+        that wait. The result is the alias: `alias_id`, `upstream_name`, `model_id` and `revision`. The name leaves the
+        queue; from the next sync it is an endpoint when the group is selected and the model is listed with a cost,
+        routed like any other. The authenticity check then checks it: until it passes, the endpoint is not `verified`,
+        so `:exacto` and presets that route only verified endpoints skip it, and a name that answers as another model
+        raises an alert. Only a name that waits can be mapped: one the group does not list, that the catalog
+        recognised, or that an alias of the group or of the whole supplier covers is a 409 `conflict`, since an alias
+        for it would move traffic that already flows; correcting an alias stays with the owner in the admin. A model
+        the catalog lacks or has retired is a 422 `unprocessable`; a supplier being removed or removed is a 409
+        `conflict`. With `dry_run` the same checks run and nothing is written.
+      tags: [Suppliers]
+      security: [{credential: []}]
+      x-axiom-permission: suppliers.manage
+      x-axiom-scope: platform
+      x-mcp-name: supplier_model_map
+      parameters:
+        - {in: path, name: supplier_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - {in: path, name: group_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ModelMappingChange'}}}
+      responses:
+        '200':
+          description: The operation run, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
   /api/operations/v1/suppliers/{supplier_id}/top-ups:
     post:
       operationId: supplierTopUpPropose
@@ -1070,6 +1152,23 @@ components:
       required: [enabled, reason]
       properties:
         enabled: {type: boolean, description: "Whether the endpoint may be routed to."}
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
+    GroupSelectionChange:
+      type: object
+      additionalProperties: false
+      required: [selected, reason]
+      properties:
+        selected: {type: boolean, description: "Whether the group is used."}
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
+    ModelMappingChange:
+      type: object
+      additionalProperties: false
+      required: [upstream_name, model_id, reason]
+      properties:
+        upstream_name: {type: string, minLength: 1, maxLength: 200, description: "The name as the group lists it."}
+        model_id: {$ref: '#/components/schemas/Uuid'}
         reason: {$ref: '#/components/schemas/AgentReason'}
         dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
     TopUpProposal:

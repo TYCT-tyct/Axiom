@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"uuid"
 
 	"axiom/internal/observability"
 	"axiom/internal/operations"
@@ -55,11 +54,8 @@ func (o operationsAPI) AlertRaise(ctx context.Context, r operationsapi.AlertRais
 		return nil, err
 	}
 	params := map[string]any{"severity": string(b.Severity), "summary": b.Summary}
-	p, err := alertWrite(ctx, r.Params.IdempotencyKey, r.Params.XAxiomRunID, "alert_raise", b.Key, params, b.Reason)
-	if err != nil {
-		return nil, err
-	}
-	op, replayed, err := o.runRoutine(ctx, p, b.DryRun)
+	p := operations.Proposal{Tool: "alert_raise", Target: operations.Target{Kind: "alert", ID: b.Key}, Params: params, Reason: b.Reason}
+	op, replayed, err := o.runRoutine(ctx, r.Params.IdempotencyKey, r.Params.XAxiomRunID, p, b.DryRun)
 	if err != nil {
 		return nil, err
 	}
@@ -69,27 +65,12 @@ func (o operationsAPI) AlertRaise(ctx context.Context, r operationsapi.AlertRais
 // AlertResolve resolves the agent's alert under its key at once.
 func (o operationsAPI) AlertResolve(ctx context.Context, r operationsapi.AlertResolveRequestObject) (operationsapi.AlertResolveResponseObject, error) {
 	b := r.Body
-	p, err := alertWrite(ctx, r.Params.IdempotencyKey, r.Params.XAxiomRunID, "alert_resolve", b.Key, map[string]any{}, b.Reason)
-	if err != nil {
-		return nil, err
-	}
-	op, replayed, err := o.runRoutine(ctx, p, b.DryRun)
+	p := operations.Proposal{Tool: "alert_resolve", Target: operations.Target{Kind: "alert", ID: b.Key}, Params: map[string]any{}, Reason: b.Reason}
+	op, replayed, err := o.runRoutine(ctx, r.Params.IdempotencyKey, r.Params.XAxiomRunID, p, b.DryRun)
 	if err != nil {
 		return nil, err
 	}
 	return operationsapi.AlertResolve200JSONResponse{Body: operationBody(op), Headers: operationsapi.AlertResolve200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
-}
-
-// alertWrite is the routine write tool on the agent's alert key.
-func alertWrite(ctx context.Context, idempotencyKey string, run *string, tool, key string, params map[string]any, reason string) (operations.Proposal, error) {
-	k, err := keyOf(idempotencyKey)
-	if err != nil {
-		return operations.Proposal{}, err
-	}
-	return operations.Proposal{
-		Credential: uuid.UUID(callOf(ctx).agent.ID()), Key: k, Tool: tool, Target: operations.Target{Kind: "alert", ID: key},
-		Params: params, Risk: operations.RiskRoutine, Reason: reason, Run: runOf(run),
-	}, nil
 }
 
 // runAlert raises or resolves the credential's alert op names, and answers the incident's kind and key as alerts_list

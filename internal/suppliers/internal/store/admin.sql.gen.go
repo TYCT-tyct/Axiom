@@ -748,22 +748,26 @@ JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
 JOIN suppliers.suppliers s ON s.id = m.supplier_id
 WHERE m.model_id IS NULL AND m.present AND g.present AND s.status <> 'removed'
     AND ($1::uuid IS NULL OR m.supplier_id = $1)
+    AND ($2::uuid IS NULL OR m.supplier_group_id = $2)
+    AND ($3::text IS NULL OR m.upstream_name = $3)
     AND NOT EXISTS (
         SELECT FROM suppliers.supplier_aliases a
         WHERE a.supplier_id = m.supplier_id AND a.upstream_name = m.upstream_name
             AND (a.supplier_group_id IS NULL OR a.supplier_group_id = m.supplier_group_id))
-    AND ($2::timestamptz IS NULL
-        OR (m.first_seen_at, m.supplier_group_id, m.upstream_name) > ($2, $3::uuid, $4::text))
+    AND ($4::timestamptz IS NULL
+        OR (m.first_seen_at, m.supplier_group_id, m.upstream_name) > ($4, $5::uuid, $6::text))
 ORDER BY m.first_seen_at, m.supplier_group_id, m.upstream_name
-LIMIT $5::int
+LIMIT $7::int
 `
 
 type PendingMappingsPageParams struct {
-	SupplierID *uuid.UUID
-	AfterSeen  *time.Time
-	AfterGroup *uuid.UUID
-	AfterName  *string
-	PageSize   int32
+	SupplierID   *uuid.UUID
+	GroupID      *uuid.UUID
+	UpstreamName *string
+	AfterSeen    *time.Time
+	AfterGroup   *uuid.UUID
+	AfterName    *string
+	PageSize     int32
 }
 
 type PendingMappingsPageRow struct {
@@ -776,10 +780,13 @@ type PendingMappingsPageRow struct {
 }
 
 // The upstream names the catalog could not recognise (no model) that no alias of the supplier or of the group covers,
-// oldest first, a page starting after the last row of the one before.
+// oldest first, a page starting after the last row of the one before. A group and a name narrow it to one name, which
+// is how an agent's mapping is checked to be of a name that waits.
 func (q *Queries) PendingMappingsPage(ctx context.Context, db DBTX, arg PendingMappingsPageParams) ([]PendingMappingsPageRow, error) {
 	rows, err := db.Query(ctx, pendingMappingsPage,
 		arg.SupplierID,
+		arg.GroupID,
+		arg.UpstreamName,
 		arg.AfterSeen,
 		arg.AfterGroup,
 		arg.AfterName,

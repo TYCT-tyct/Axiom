@@ -130,13 +130,16 @@ UPDATE suppliers.supplier_aliases SET formats = @formats WHERE id = @id;
 
 -- name: PendingMappingsPage :many
 -- The upstream names the catalog could not recognise (no model) that no alias of the supplier or of the group covers,
--- oldest first, a page starting after the last row of the one before.
+-- oldest first, a page starting after the last row of the one before. A group and a name narrow it to one name, which
+-- is how an agent's mapping is checked to be of a name that waits.
 SELECT m.supplier_id, m.supplier_group_id, g.codename, m.upstream_name, m.formats, m.first_seen_at
 FROM suppliers.supplier_models m
 JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
 JOIN suppliers.suppliers s ON s.id = m.supplier_id
 WHERE m.model_id IS NULL AND m.present AND g.present AND s.status <> 'removed'
     AND (sqlc.narg(supplier_id)::uuid IS NULL OR m.supplier_id = sqlc.narg(supplier_id))
+    AND (sqlc.narg(group_id)::uuid IS NULL OR m.supplier_group_id = sqlc.narg(group_id))
+    AND (sqlc.narg(upstream_name)::text IS NULL OR m.upstream_name = sqlc.narg(upstream_name))
     AND NOT EXISTS (
         SELECT FROM suppliers.supplier_aliases a
         WHERE a.supplier_id = m.supplier_id AND a.upstream_name = m.upstream_name

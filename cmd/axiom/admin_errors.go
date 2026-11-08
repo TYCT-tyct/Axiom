@@ -84,6 +84,7 @@ var adminRefusals = []refusal{
 	{suppliers.ErrKeyBound, http.StatusConflict, codeConflict, "that key is already bound"},
 	{suppliers.ErrAliasRevision, http.StatusConflict, codeStaleRevision, "the alias changed since it was read"},
 	{suppliers.ErrAliasExists, http.StatusConflict, codeConflict, "that name already has an alias in that scope"},
+	{suppliers.ErrNotPending, http.StatusConflict, codeConflict, "the group does not list that name as waiting for a model"},
 	{suppliers.ErrUnknownFormat, http.StatusUnprocessableEntity, codeUnprocessable, "a call format is not one this node knows"},
 	{suppliers.ErrNoAdapter, http.StatusUnprocessableEntity, codeUnprocessable, "no adapter of that kind that can be connected"},
 	{suppliers.ErrAddressRefused, http.StatusUnprocessableEntity, codeUnprocessable, "the outbound client refuses that address"},
