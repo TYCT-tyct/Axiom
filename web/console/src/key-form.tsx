@@ -15,9 +15,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { balanceQuery, routingDefaultQuery, routingPresetsQuery } from "./queries";
+import { WorkspaceField } from "./workspaces";
 
-// What the form collects. A key is made with an expiry and changed with an on/off switch; the contract's two requests
-// share the rest.
+// What the form collects. A key is made with an expiry in a workspace and changed with an on/off switch; the contract's
+// two requests share the rest.
 export type KeyValues = {
   name: string;
   disabled: boolean;
@@ -27,6 +28,7 @@ export type KeyValues = {
   models?: string[];
   ip_allow?: string[];
   preset_id?: string;
+  workspace_id?: string;
 };
 
 const resets = ["daily", "weekly", "monthly"] as const;
@@ -68,17 +70,33 @@ function readValues(form: HTMLFormElement, currency: string | undefined): KeyVal
     models: lines(values.models),
     ip_allow: lines(values.ip_allow),
     preset_id: values.preset_id || undefined,
+    workspace_id: values.workspace_id || undefined,
   };
+}
+
+// ResetField is when a limit's count starts again, which a key's spend limit and a workspace's budget share.
+export function ResetField({ value }: { value: Schemas["LimitReset"] | undefined }) {
+  const { t } = useTranslation();
+  return (
+    <SelectField label={t("keys.form.reset")} name="limit_reset" defaultValue={value ?? ""}>
+      <option value="">{t("keys.form.resetNever")}</option>
+      {resets.map((reset) => (
+        <option key={reset} value={reset}>
+          {t(`keys.reset.${reset}`)}
+        </option>
+      ))}
+    </SelectField>
+  );
 }
 
 type Section = { apiKey?: Schemas["Key"]; error: unknown };
 
-// The currency a limit is in is the account's, which the balance tells; a key that has a limit also carries it. A key
-// without one is where a limit is first set (or set again after it was cleared), so the field waits for the balance and
-// says why when it cannot have it.
-function useCurrency(apiKey: Schemas["Key"] | undefined) {
+// The currency a limit is in is the account's, which the balance tells; a limit already set also carries it. Without
+// one is where a limit is first set (or set again after it was cleared), so the field waits for the balance and says
+// why when it cannot have it.
+export function useCurrency(limit: Schemas["Money"] | undefined) {
   const balance = useQuery(balanceQuery);
-  const unit = apiKey?.spend_limit?.currency ?? balance.data?.balance.currency;
+  const unit = limit?.currency ?? balance.data?.balance.currency;
   return { unit, unavailable: !unit && balance.isError };
 }
 
@@ -105,14 +123,7 @@ function Limit({
         defaultValue={apiKey?.spend_limit ? moneyInput(apiKey.spend_limit.amount) : ""}
         error={invalid === "limit" ? t("keys.form.limitInvalid") : errors.field(error, "spend_limit")}
       />
-      <SelectField label={t("keys.form.reset")} name="limit_reset" defaultValue={apiKey?.limit_reset ?? ""}>
-        <option value="">{t("keys.form.resetNever")}</option>
-        {resets.map((reset) => (
-          <option key={reset} value={reset}>
-            {t(`keys.reset.${reset}`)}
-          </option>
-        ))}
-      </SelectField>
+      <ResetField value={apiKey?.limit_reset} />
     </div>
   );
 }
@@ -247,14 +258,17 @@ export function usePresetName() {
 }
 
 // KeyForm is the settings of a key, for making one (no key) and for changing one (filled with its current settings,
-// because the contract replaces them all). The expiry is asked once, when the key is made.
+// because the contract replaces them all). The expiry and the workspace are asked once, when the key is made; workspace
+// is the one the form starts on.
 export function KeyForm({
   apiKey,
+  workspace,
   pending,
   error,
   onSubmit,
   onCancel,
 }: Section & {
+  workspace?: string;
   pending: boolean;
   onSubmit: (values: KeyValues) => void;
   onCancel: () => void;
@@ -262,7 +276,7 @@ export function KeyForm({
   const { t } = useTranslation();
   const errors = useErrors();
   const [invalid, setInvalid] = useState<Invalid>(null);
-  const currency = useCurrency(apiKey);
+  const currency = useCurrency(apiKey?.spend_limit);
   return (
     <form
       noValidate
@@ -285,6 +299,7 @@ export function KeyForm({
         autoComplete="off"
         error={invalid === "name" ? t("keys.form.nameMissing") : errors.field(error, "name")}
       />
+      {apiKey ? null : <WorkspaceField wanted={workspace} />}
       <Limit apiKey={apiKey} error={error} invalid={invalid} {...currency} />
       <PresetField apiKey={apiKey} error={error} />
       <Restrictions apiKey={apiKey} error={error} />

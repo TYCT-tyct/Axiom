@@ -63,6 +63,7 @@ export type KeyFilters = {
   status?: "active" | "disabled" | "expired";
   created_after?: string;
   created_before?: string;
+  workspace_id?: string;
 };
 
 export const keysQuery = (filters: KeyFilters = {}) =>
@@ -97,6 +98,25 @@ export const sourceClassesQuery = queryOptions({
   queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/source-classes", { signal })),
   staleTime: 5 * 60_000,
 });
+
+// The account's workspaces, the whole list (it has a limit and no pages). The keys page, the key form and the menu read
+// it: workspaces show only once there is a second one (docs/domains/accounts.md「工作区」).
+export const workspacesQuery = queryOptions({
+  queryKey: [accountKey, "workspaces"],
+  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/workspaces", { signal })),
+});
+
+export const workspaceBudgetQuery = (id: string) =>
+  queryOptions({
+    queryKey: [accountKey, "workspaces", id, "budget"],
+    queryFn: ({ signal }) =>
+      unwrap(
+        consoleApi.GET("/api/console/v1/workspaces/{workspace_id}/budget", {
+          params: { path: { workspace_id: id } },
+          signal,
+        }),
+      ),
+  });
 
 export const providerKeysQuery = queryOptions({
   queryKey: [accountKey, "provider-keys"],

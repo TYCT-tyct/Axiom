@@ -35,7 +35,8 @@ export function keyFiltersApplied(filters: KeyFilters, pages: KeyListPage[]): bo
       sameText(filters.prefix, applied.prefix) &&
       sameText(filters.status, applied.status) &&
       sameInstant(filters.created_after, applied.created_after) &&
-      sameInstant(filters.created_before, applied.created_before)
+      sameInstant(filters.created_before, applied.created_before) &&
+      sameText(filters.workspace_id, applied.workspace_id)
     );
   });
 }

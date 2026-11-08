@@ -24,13 +24,14 @@ import { keyFiltersApplied } from "../key-filters";
 import { useNewKeys, usePresetName } from "../key-form";
 import { maskedKey, toInstant, toLocalInput } from "../parts";
 import { type KeyFilters, keysQuery } from "../queries";
+import { useWorkspaces } from "../workspaces";
 
 type Key = Schemas["Key"];
 type Dialog =
   | { kind: "create" }
   | { kind: "edit"; key: Key }
   | { kind: "delete"; key: Key }
-  | { kind: "secret"; created: Schemas["CreatedKey"] };
+  | { kind: "secret"; created: Schemas["CreatedKey"]; asked: string | undefined };
 
 export default function Keys() {
   const { t } = useTranslation();
@@ -43,6 +44,9 @@ export default function Keys() {
   const rows = useMemo(() => keys.data?.pages.flatMap((page) => page.data) ?? [], [keys.data]);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const close = () => setDialog(null);
+  const workspaces = useWorkspaces();
+  // With one workspace, a key's needs no saying.
+  const workspaceOf = (key: Key) => (workspaces.several ? (workspaces.named(key.workspace_id) ?? "—") : undefined);
   return (
     <>
       <PageHeader title={t("nav.keys")} description={t("keys.description")} />
@@ -65,6 +69,7 @@ export default function Keys() {
                 <KeysTable
                   keys={rows}
                   manage={manage}
+                  workspaceOf={workspaceOf}
                   onEdit={(key) => setDialog({ kind: "edit", key })}
                   onDelete={(key) => setDialog({ kind: "delete", key })}
                 />
@@ -77,11 +82,17 @@ export default function Keys() {
         </Panel>
       </div>
       {dialog?.kind === "create" ? (
-        <CreateKeyDialog onClose={close} onCreated={(created) => setDialog({ kind: "secret", created })} />
+        <CreateKeyDialog
+          workspace={filters.workspace_id}
+          onClose={close}
+          onCreated={(created, asked) => setDialog({ kind: "secret", created, asked })}
+        />
       ) : null}
       {dialog?.kind === "edit" ? <EditKeyDialog apiKey={dialog.key} onClose={close} /> : null}
       {dialog?.kind === "delete" ? <DeleteKeyDialog apiKey={dialog.key} onClose={close} /> : null}
-      {dialog?.kind === "secret" ? <SecretDialog created={dialog.created} onClose={close} /> : null}
+      {dialog?.kind === "secret" ? (
+        <SecretDialog created={dialog.created} asked={dialog.asked} onClose={close} />
+      ) : null}
     </>
   );
 }
@@ -103,6 +114,7 @@ function filtersOf(form: HTMLFormElement): KeyFilters {
     status: statusOf(values.status),
     created_after: toInstant(values.created_after),
     created_before: toInstant(values.created_before),
+    workspace_id: values.workspace_id || undefined,
   };
 }
 
@@ -171,7 +183,29 @@ function KeyFilterFields({ filters }: { filters: KeyFilters }) {
         type="datetime-local"
         defaultValue={toLocalInput(filters.created_before)}
       />
+      <WorkspaceFilter value={filters.workspace_id} />
     </>
+  );
+}
+
+// The workspace filter is offered once there is a second workspace. A workspace in the address that the list no longer
+// has stays chosen, so applying the other filters does not drop it.
+function WorkspaceFilter({ value }: { value: string | undefined }) {
+  const { t } = useTranslation();
+  const { list, several, named } = useWorkspaces();
+  if (!several) {
+    return value ? <input type="hidden" name="workspace_id" value={value} /> : null;
+  }
+  return (
+    <SelectField label={t("workspaces.key.filter")} name="workspace_id" defaultValue={value ?? ""}>
+      <option value="">{t("workspaces.key.any")}</option>
+      {value && !named(value) ? <option value={value}>{value}</option> : null}
+      {list.map((workspace) => (
+        <option key={workspace.id} value={workspace.id}>
+          {workspace.name}
+        </option>
+      ))}
+    </SelectField>
   );
 }
 
@@ -191,6 +225,7 @@ function KeyFilterActions({ onClear }: { onClear: () => void }) {
             status: undefined,
             created_after: undefined,
             created_before: undefined,
+            workspace_id: undefined,
           }}
           onClick={onClear}
         >
@@ -204,11 +239,13 @@ function KeyFilterActions({ onClear }: { onClear: () => void }) {
 function KeysTable({
   keys,
   manage,
+  workspaceOf,
   onEdit,
   onDelete,
 }: {
   keys: Key[];
   manage: boolean;
+  workspaceOf: (key: Key) => string | undefined;
   onEdit: (key: Key) => void;
   onDelete: (key: Key) => void;
 }) {
@@ -228,7 +265,14 @@ function KeysTable({
       </thead>
       <tbody>
         {keys.map((key) => (
-          <KeyRow key={key.id} apiKey={key} manage={manage} onEdit={onEdit} onDelete={onDelete} />
+          <KeyRow
+            key={key.id}
+            apiKey={key}
+            workspace={workspaceOf(key)}
+            manage={manage}
+            onEdit={onEdit}
+            onDelete={onDelete}
+          />
         ))}
       </tbody>
     </Table>
@@ -308,11 +352,13 @@ function KeyPreset({ apiKey, labelled = false }: { apiKey: Key; labelled?: boole
 
 function KeyRow({
   apiKey,
+  workspace,
   manage,
   onEdit,
   onDelete,
 }: {
   apiKey: Key;
+  workspace: string | undefined;
   manage: boolean;
   onEdit: (key: Key) => void;
   onDelete: (key: Key) => void;
@@ -327,6 +373,9 @@ function KeyRow({
           {apiKey.name}
         </p>
         <p className="truncate font-mono text-label text-t4">{maskedKey(apiKey)}</p>
+        {workspace ? (
+          <p className="text-label text-t3 wrap-anywhere">{t("workspaces.key.in", { name: workspace })}</p>
+        ) : null}
         <div className="text-label text-t3 xl:hidden">
           <KeyPreset apiKey={apiKey} labelled />
         </div>

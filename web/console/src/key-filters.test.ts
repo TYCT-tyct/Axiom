@@ -36,6 +36,18 @@ it.each([
     want: true,
   },
   {
+    case: "a workspace, a matching page",
+    filters: { workspace_id: "ws_1" },
+    pages: [page({ workspace_id: "ws_1" })],
+    want: true,
+  },
+  {
+    case: "a workspace, a node that ignores it",
+    filters: { workspace_id: "ws_1" },
+    pages: [page({ status: undefined })],
+    want: false,
+  },
+  {
     case: "a missing bound",
     filters: { created_after: "2026-01-02T03:04:05Z" },
     pages: [page()],

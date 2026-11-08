@@ -61,8 +61,14 @@ const routeTree = root.addChildren([
         status: keyStatus(search.status),
         created_after: text(search.created_after),
         created_before: text(search.created_before),
+        workspace_id: text(search.workspace_id),
       }),
       component: lazyRouteComponent(() => import("./pages/keys")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
+      path: "/workspaces",
+      component: lazyRouteComponent(() => import("./pages/workspaces")),
     }),
     createRoute({
       getParentRoute: () => app,

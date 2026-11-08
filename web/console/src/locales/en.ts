@@ -1,20 +1,15 @@
 import type { Messages } from "@axiom/ui";
+import { en as announcements } from "./announcements";
 import { en as providerKeys } from "./provider-keys";
 import { en as receipt } from "./receipt";
 import { en as routingPresets } from "./routing-presets";
 import { en as settings } from "./settings";
 import { en as statement } from "./statement";
+import { en as workspaces } from "./workspaces";
 import type zh from "./zh";
 
 export default {
-  announcements: {
-    title: "Site announcements",
-    loading: "Loading announcements…",
-    unavailable: "Announcements are currently unavailable.",
-    error: "Could not load announcements. Try again.",
-    retry: "Try again",
-    empty: "No active announcements.",
-  },
+  announcements,
 
   forbiddenHint: "Ask an admin of the workspace if you need it.",
 
@@ -370,6 +365,7 @@ export default {
     },
   },
   providerKeys,
+  workspaces,
   routingPresets,
   calls: {
     priceVersion: "Price version {{version}}",
