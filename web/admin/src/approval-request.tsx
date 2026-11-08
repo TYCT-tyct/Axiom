@@ -4,18 +4,15 @@ import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { percentOf } from "./approval-parts";
+import { envelopeMaximaOf, type RuleChange, type RuleMove, ruleChangeOf } from "./approval-rule";
 import {
   type CapLimit,
   capOf,
   type EnvelopeLimit,
-  envelopeMaximaOf,
   type PriceRow,
   priceRows,
   type Reason,
-  type RuleChange,
-  type RuleMove,
   reasonsOf,
-  ruleChangeOf,
 } from "./approvals";
 import { formatJSON } from "./lossless";
 import { isPerUse, rateItems } from "./models/catalog";
@@ -294,13 +291,13 @@ function RuleFacts({ change }: { change: RuleChange }) {
     return null;
   }
   const rows: [string, ReactNode][] = [
-    [t("approvals.rule.target"), [t(`pricing.target.${rule.target.kind}`), rule.target.id].filter(Boolean).join(" · ")],
+    [t("pricing.rules.target"), [t(`pricing.target.${rule.target.kind}`), rule.target.id].filter(Boolean).join(" · ")],
     [
-      t("approvals.rule.audience"),
+      t("pricing.rules.audience"),
       [t(`pricing.audience.${rule.audience.kind}`), rule.audience.id].filter(Boolean).join(" · "),
     ],
-    [t("approvals.rule.method"), <MethodSummary key="method" method={rule.method} />],
-    [t("approvals.rule.enabled"), t(rule.enabled ? "approvals.rule.on" : "approvals.rule.off")],
+    [t("pricing.rules.method"), <MethodSummary key="method" method={rule.method} />],
+    [t("pricing.rules.state"), t(rule.enabled ? "pricing.on" : "pricing.off")],
   ];
   const conversion = rule.method.currency_conversion;
   if (conversion) {

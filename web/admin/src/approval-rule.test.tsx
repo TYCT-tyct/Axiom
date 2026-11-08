@@ -2,7 +2,7 @@
 import type { AdminSchemas } from "@axiom/api";
 import { expect, it } from "vitest";
 import { RuleChangePanel, WhyAsked } from "./approval-request";
-import { envelopeMaximaOf, ruleChangeOf } from "./approvals";
+import { envelopeMaximaOf, ruleChangeOf } from "./approval-rule";
 import { renderInDom } from "./test-dom";
 
 type Approval = AdminSchemas["OperationsApproval"];
