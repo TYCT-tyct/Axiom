@@ -109,3 +109,19 @@ func TestAdminRoutingRulesCheck(t *testing.T) {
 		expectAdmin(t, c.what, f.do(http.MethodPost, "/routing-presets/checks", c.body, as(s)), c.status, c.code)
 	}
 }
+
+// TestRoutingRulesWithNulls: rules that write a member as null, or the sort as "", which the server has always read as
+// leaving it out, pass the contracts as before, so a page writes stored rules back unchanged.
+func TestRoutingRulesWithNulls(t *testing.T) {
+	t.Parallel()
+	nulls := `{"default":{"sort":"","classes":null,"policies":null,"min_score":null,"min_score_confidence":null,"verified_only":null,` +
+		`"max_price":{"prompt":null,"completion":"5","request":null}},"rules":[{"author":"acme","model":null,"max_price":null}],"advanced":null}`
+	c := newConsoleFixture(t)
+	s := c.owner()
+	expect(t, "check", c.do(http.MethodPost, "/routing-presets/checks", `{"rules":`+nulls+`}`, as(s)), http.StatusOK, "")
+	c.routingPreset(s, `{"slug":"nulls","name":"Nulls","rules":`+nulls+`}`)
+	a := newAdminFixture(t)
+	advanced := `{"default":{},"rules":null,"advanced":{"order":null,"no_fallbacks":null,"max_attempts":null,"sticky_ttl":null,` +
+		`"attempt_window":null,"min_quality":null,"min_confidence":null}}`
+	a.adminPreset(a.owner(), "/routing-presets", `{"slug":"nulls","name":"Nulls","rules":`+advanced+`,"reason":"stored before"}`)
+}

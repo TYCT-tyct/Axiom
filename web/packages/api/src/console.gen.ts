@@ -1528,11 +1528,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show. */
+        /** @description A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show. A member written `null`, and a `sort` written `""`, is the same as leaving it out, as the server has always read them, so rules stored that way can be written back unchanged. */
         RoutingRules: {
-            default?: components["schemas"]["RoutingRule"];
-            rules?: components["schemas"]["RoutingRuleOverride"][];
-            advanced?: components["schemas"]["RoutingAdvanced"];
+            default?: components["schemas"]["RoutingRule"] | null;
+            rules?: components["schemas"]["RoutingRuleOverride"][] | null;
+            advanced?: components["schemas"]["RoutingAdvanced"] | null;
         };
         /**
          * @description How a rule orders the endpoints it keeps: `balanced` (price-weighted random, the default rule's when it names none), `price`, `throughput`, `latency`, or `quality` (operations quality: fast and steady, not the product score).
@@ -1541,43 +1541,43 @@ export interface components {
         RoutingSort: "balanced" | "price" | "throughput" | "latency" | "quality";
         /** @description The rule every model is held to, or the conditions of an override. */
         RoutingRule: {
-            sort?: components["schemas"]["RoutingSort"];
+            sort?: (components["schemas"]["RoutingSort"] | "") | null;
             /** @description The source classes kept, by slug (the classes `listRoutingSourceClasses` names), or `["*"]` for every class now and later. A slug the node does not know matches no endpoint. */
-            classes?: string[];
+            classes?: string[] | null;
             /** @description The data policies kept, or `["*"]` for every one. */
-            policies?: ("*" | "no_retention" | "retained" | "may_train")[];
+            policies?: ("*" | "no_retention" | "retained" | "may_train")[] | null;
             /** @description The product score an endpoint needs (official direct = 100); an endpoint with none has 0. */
-            min_score?: number;
+            min_score?: number | null;
             /** @description The confidence of that score an endpoint needs. */
-            min_score_confidence?: number;
+            min_score_confidence?: number | null;
             /** @description Only endpoints verified as the model they claim; an override cannot turn it off. */
-            verified_only?: boolean;
-            max_price?: components["schemas"]["RoutingPriceLimit"];
+            verified_only?: boolean | null;
+            max_price?: components["schemas"]["RoutingPriceLimit"] | null;
         };
         /** @description A rule for one model author or one model, by its catalog slug: exactly one of `author` and `model`, each named at most once in a preset. A model's rule narrows its author's rule when there is one, the default otherwise. */
         RoutingRuleOverride: components["schemas"]["RoutingRule"] & {
             /** @description A catalog author slug, such as `anthropic`. */
-            author?: string;
+            author?: string | null;
             /** @description A catalog model slug, such as `anthropic/claude-opus-4.1`. */
-            model?: string;
+            model?: string | null;
         };
         /** @description The highest unit price an endpoint may sell at, per item, in the preset's currency, as decimal strings, never JSON numbers: `prompt` and `completion` per million tokens (0 to 10^9, at most 9 decimals), `request` per call (0 to 1000, at most 15 decimals). An item left out is not limited; 0 keeps only endpoints that charge nothing for it. */
         RoutingPriceLimit: {
-            prompt?: string;
-            completion?: string;
-            request?: string;
+            prompt?: string | null;
+            completion?: string | null;
+            request?: string | null;
         };
         /** @description The platform's run-time settings, which only a platform preset may hold: `order`, supplier group codenames tried first (at most 20); `no_fallbacks`, only those groups (needs an order); `max_attempts` (0 to 4, 0 the router's default); `sticky_ttl` (0 to 86400 seconds) and `attempt_window` (0 to 600 seconds), 0 the router's defaults; `min_quality` and `min_confidence`, the operations quality floor (0 to 1). */
         RoutingAdvanced: {
-            order?: string[];
-            no_fallbacks?: boolean;
-            max_attempts?: number;
+            order?: string[] | null;
+            no_fallbacks?: boolean | null;
+            max_attempts?: number | null;
             /** Format: int64 */
-            sticky_ttl?: number;
+            sticky_ttl?: number | null;
             /** Format: int64 */
-            attempt_window?: number;
-            min_quality?: number;
-            min_confidence?: number;
+            attempt_window?: number | null;
+            min_quality?: number | null;
+            min_confidence?: number | null;
         };
         /** @description What a list shows of a preset's rules, worked out by the server so every page says the same: the default rule's `sort` (`balanced` when it names none) and `classes` (absent when it keeps every class), whether it keeps only verified endpoints, whether any rule limits a price, and how many overrides follow. */
         RoutingRulesSummary: {

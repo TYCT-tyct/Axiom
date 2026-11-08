@@ -2958,14 +2958,21 @@ components:
         up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override
         leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not
         know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset
-        unavailable there rather than half applied; a page that edits rules keeps every member it does not show.
+        unavailable there rather than half applied; a page that edits rules keeps every member it does not show. A
+        member written `null`, and a `sort` written `""`, is the same as leaving it out, as the server has always read
+        them, so rules stored that way can be written back unchanged.
       properties:
-        default: {$ref: "#/components/schemas/RoutingRule"}
+        default:
+          allOf: [{$ref: "#/components/schemas/RoutingRule"}]
+          nullable: true
         rules:
           type: array
+          nullable: true
           maxItems: 100
           items: {$ref: "#/components/schemas/RoutingRuleOverride"}
-        advanced: {$ref: "#/components/schemas/RoutingAdvanced"}
+        advanced:
+          allOf: [{$ref: "#/components/schemas/RoutingAdvanced"}]
+          nullable: true
     RoutingSort:
       type: string
       enum: [balanced, price, throughput, latency, quality]
@@ -2977,9 +2984,14 @@ components:
       type: object
       description: The rule every model is held to, or the conditions of an override.
       properties:
-        sort: {$ref: "#/components/schemas/RoutingSort"}
+        sort:
+          nullable: true
+          anyOf:
+            - $ref: "#/components/schemas/RoutingSort"
+            - {type: string, enum: [""]}
         classes:
           type: array
+          nullable: true
           minItems: 1
           items: {type: string}
           description: >-
@@ -2987,15 +2999,18 @@ components:
             now and later. A slug the node does not know matches no endpoint.
         policies:
           type: array
+          nullable: true
           minItems: 1
           items:
             type: string
             enum: ["*", no_retention, retained, may_train]
           description: The data policies kept, or `["*"]` for every one.
-        min_score: {type: number, minimum: 0, maximum: 100, description: "The product score an endpoint needs (official direct = 100); an endpoint with none has 0."}
-        min_score_confidence: {type: number, minimum: 0, maximum: 1, description: "The confidence of that score an endpoint needs."}
-        verified_only: {type: boolean, description: "Only endpoints verified as the model they claim; an override cannot turn it off."}
-        max_price: {$ref: "#/components/schemas/RoutingPriceLimit"}
+        min_score: {type: number, nullable: true, minimum: 0, maximum: 100, description: "The product score an endpoint needs (official direct = 100); an endpoint with none has 0."}
+        min_score_confidence: {type: number, nullable: true, minimum: 0, maximum: 1, description: "The confidence of that score an endpoint needs."}
+        verified_only: {type: boolean, nullable: true, description: "Only endpoints verified as the model they claim; an override cannot turn it off."}
+        max_price:
+          allOf: [{$ref: "#/components/schemas/RoutingPriceLimit"}]
+          nullable: true
     RoutingRuleOverride:
       description: >-
         A rule for one model author or one model, by its catalog slug: exactly one of `author` and `model`, each named
@@ -3004,8 +3019,8 @@ components:
         - $ref: "#/components/schemas/RoutingRule"
         - type: object
           properties:
-            author: {type: string, description: "A catalog author slug, such as `anthropic`."}
-            model: {type: string, description: "A catalog model slug, such as `anthropic/claude-opus-4.1`."}
+            author: {type: string, nullable: true, description: "A catalog author slug, such as `anthropic`."}
+            model: {type: string, nullable: true, description: "A catalog model slug, such as `anthropic/claude-opus-4.1`."}
     RoutingPriceLimit:
       type: object
       description: >-
@@ -3013,9 +3028,9 @@ components:
         numbers: `prompt` and `completion` per million tokens (0 to 10^9, at most 9 decimals), `request` per call (0 to
         1000, at most 15 decimals). An item left out is not limited; 0 keeps only endpoints that charge nothing for it.
       properties:
-        prompt: {type: string, pattern: '^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]{1,3})?$'}
-        completion: {type: string, pattern: '^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]{1,3})?$'}
-        request: {type: string, pattern: '^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]{1,3})?$'}
+        prompt: {type: string, nullable: true, pattern: '^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]{1,3})?$'}
+        completion: {type: string, nullable: true, pattern: '^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]{1,3})?$'}
+        request: {type: string, nullable: true, pattern: '^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]{1,3})?$'}
     RoutingAdvanced:
       type: object
       description: >-
@@ -3026,14 +3041,15 @@ components:
       properties:
         order:
           type: array
+          nullable: true
           maxItems: 20
           items: {type: string}
-        no_fallbacks: {type: boolean}
-        max_attempts: {type: integer, minimum: 0, maximum: 4}
-        sticky_ttl: {type: integer, format: int64, minimum: 0, maximum: 86400}
-        attempt_window: {type: integer, format: int64, minimum: 0, maximum: 600}
-        min_quality: {type: number, minimum: 0, maximum: 1}
-        min_confidence: {type: number, minimum: 0, maximum: 1}
+        no_fallbacks: {type: boolean, nullable: true}
+        max_attempts: {type: integer, nullable: true, minimum: 0, maximum: 4}
+        sticky_ttl: {type: integer, nullable: true, format: int64, minimum: 0, maximum: 86400}
+        attempt_window: {type: integer, nullable: true, format: int64, minimum: 0, maximum: 600}
+        min_quality: {type: number, nullable: true, minimum: 0, maximum: 1}
+        min_confidence: {type: number, nullable: true, minimum: 0, maximum: 1}
     RoutingRulesSummary:
       type: object
       required: [sort, verified_only, priced, overrides]

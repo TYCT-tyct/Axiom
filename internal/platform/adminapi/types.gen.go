@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
@@ -1509,6 +1510,21 @@ func (e RoutingRulePolicies) Valid() bool {
 	}
 }
 
+// Defines values for RoutingRuleSort1.
+const (
+	RoutingRuleSort1Empty RoutingRuleSort1 = ""
+)
+
+// Valid indicates whether the value is a known member of the RoutingRuleSort1 enum.
+func (e RoutingRuleSort1) Valid() bool {
+	switch e {
+	case RoutingRuleSort1Empty:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RoutingRuleOverridePolicies.
 const (
 	RoutingRuleOverridePoliciesAsterisk    RoutingRuleOverridePolicies = "*"
@@ -1527,6 +1543,21 @@ func (e RoutingRuleOverridePolicies) Valid() bool {
 	case RoutingRuleOverridePoliciesNoRetention:
 		return true
 	case RoutingRuleOverridePoliciesRetained:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RoutingRuleOverrideSort1.
+const (
+	RoutingRuleOverrideSort1Empty RoutingRuleOverrideSort1 = ""
+)
+
+// Valid indicates whether the value is a known member of the RoutingRuleOverrideSort1 enum.
+func (e RoutingRuleOverrideSort1) Valid() bool {
+	switch e {
+	case RoutingRuleOverrideSort1Empty:
 		return true
 	default:
 		return false
@@ -3099,7 +3130,7 @@ type LayerRoutingPresetCreate struct {
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`
 
-	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show.
+	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show. A member written `null`, and a `sort` written `""`, is the same as leaving it out, as the server has always read them, so rules stored that way can be written back unchanged.
 	Rules RoutingRules `json:"rules"`
 
 	// Slug Unique among the layer's live presets; it cannot be changed.
@@ -3123,7 +3154,7 @@ type LayerRoutingPresetUpdate struct {
 	Reason   Reason `json:"reason"`
 	Revision int64  `json:"revision"`
 
-	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show.
+	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show. A member written `null`, and a `sort` written `""`, is the same as leaving it out, as the server has always read them, so rules stored that way can be written back unchanged.
 	Rules RoutingRules `json:"rules"`
 }
 
@@ -3132,7 +3163,7 @@ type LayerRoutingRulesCheckRequest struct {
 	// Currency A platform preset's currency, as on creation; a site's preset names none.
 	Currency *string `json:"currency,omitempty"`
 
-	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show.
+	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show. A member written `null`, and a `sort` written `""`, is the same as leaving it out, as the server has always read them, so rules stored that way can be written back unchanged.
 	Rules RoutingRules `json:"rules"`
 
 	// SiteId Checks them as the site's preset; absent, as a platform preset.
@@ -5063,7 +5094,7 @@ type RoutingPreset struct {
 	// Revision Moves on every change; a change names the revision it read.
 	Revision int64 `json:"revision"`
 
-	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show.
+	// Rules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show. A member written `null`, and a `sort` written `""`, is the same as leaving it out, as the server has always read them, so rules stored that way can be written back unchanged.
 	Rules RoutingRules `json:"rules"`
 
 	// Scope The layer the preset belongs to.
@@ -5147,9 +5178,7 @@ type RoutingPriceLimit struct {
 // RoutingRule The rule every model is held to, or the conditions of an override.
 type RoutingRule struct {
 	// Classes The source classes kept, by slug (the classes `listRoutingSourceClasses` names), or `["*"]` for every class now and later. A slug the node does not know matches no endpoint.
-	Classes *[]string `json:"classes,omitempty"`
-
-	// MaxPrice The highest unit price an endpoint may sell at, per item, in the preset's currency, as decimal strings, never JSON numbers: `prompt` and `completion` per million tokens (0 to 10^9, at most 9 decimals), `request` per call (0 to 1000, at most 15 decimals). An item left out is not limited; 0 keeps only endpoints that charge nothing for it.
+	Classes  *[]string          `json:"classes,omitempty"`
 	MaxPrice *RoutingPriceLimit `json:"max_price,omitempty"`
 
 	// MinScore The product score an endpoint needs (official direct = 100); an endpoint with none has 0.
@@ -5160,9 +5189,7 @@ type RoutingRule struct {
 
 	// Policies The data policies kept, or `["*"]` for every one.
 	Policies *[]RoutingRulePolicies `json:"policies,omitempty"`
-
-	// Sort How a rule orders the endpoints it keeps: `balanced` (price-weighted random, the default rule's when it names none), `price`, `throughput`, `latency`, or `quality` (operations quality: fast and steady, not the product score).
-	Sort *RoutingSort `json:"sort,omitempty"`
+	Sort     *RoutingRule_Sort      `json:"sort,omitempty"`
 
 	// VerifiedOnly Only endpoints verified as the model they claim; an override cannot turn it off.
 	VerifiedOnly *bool `json:"verified_only,omitempty"`
@@ -5171,15 +5198,21 @@ type RoutingRule struct {
 // RoutingRulePolicies defines model for RoutingRule.Policies.
 type RoutingRulePolicies string
 
+// RoutingRuleSort1 defines model for RoutingRule.Sort.1.
+type RoutingRuleSort1 string
+
+// RoutingRule_Sort defines model for RoutingRule.Sort.
+type RoutingRule_Sort struct {
+	union json.RawMessage
+}
+
 // RoutingRuleOverride A rule for one model author or one model, by its catalog slug: exactly one of `author` and `model`, each named at most once in a preset. A model's rule narrows its author's rule when there is one, the default otherwise.
 type RoutingRuleOverride struct {
 	// Author A catalog author slug, such as `anthropic`.
 	Author *string `json:"author,omitempty"`
 
 	// Classes The source classes kept, by slug (the classes `listRoutingSourceClasses` names), or `["*"]` for every class now and later. A slug the node does not know matches no endpoint.
-	Classes *[]string `json:"classes,omitempty"`
-
-	// MaxPrice The highest unit price an endpoint may sell at, per item, in the preset's currency, as decimal strings, never JSON numbers: `prompt` and `completion` per million tokens (0 to 10^9, at most 9 decimals), `request` per call (0 to 1000, at most 15 decimals). An item left out is not limited; 0 keeps only endpoints that charge nothing for it.
+	Classes  *[]string          `json:"classes,omitempty"`
 	MaxPrice *RoutingPriceLimit `json:"max_price,omitempty"`
 
 	// MinScore The product score an endpoint needs (official direct = 100); an endpoint with none has 0.
@@ -5193,9 +5226,7 @@ type RoutingRuleOverride struct {
 
 	// Policies The data policies kept, or `["*"]` for every one.
 	Policies *[]RoutingRuleOverridePolicies `json:"policies,omitempty"`
-
-	// Sort How a rule orders the endpoints it keeps: `balanced` (price-weighted random, the default rule's when it names none), `price`, `throughput`, `latency`, or `quality` (operations quality: fast and steady, not the product score).
-	Sort *RoutingSort `json:"sort,omitempty"`
+	Sort     *RoutingRuleOverride_Sort      `json:"sort,omitempty"`
 
 	// VerifiedOnly Only endpoints verified as the model they claim; an override cannot turn it off.
 	VerifiedOnly *bool `json:"verified_only,omitempty"`
@@ -5203,6 +5234,14 @@ type RoutingRuleOverride struct {
 
 // RoutingRuleOverridePolicies defines model for RoutingRuleOverride.Policies.
 type RoutingRuleOverridePolicies string
+
+// RoutingRuleOverrideSort1 defines model for RoutingRuleOverride.Sort.1.
+type RoutingRuleOverrideSort1 string
+
+// RoutingRuleOverride_Sort defines model for RoutingRuleOverride.Sort.
+type RoutingRuleOverride_Sort struct {
+	union json.RawMessage
+}
 
 // RoutingRuleUnmatched A rule that keeps none of the endpoints in view, judged as a model list judges a key's endpoints: hard conditions only, the price at the standard tier and the shortest prompt, nothing transient such as load or a tripped breaker. An override is judged against its author's or model's endpoints, and one whose author or model has none in view is not judged.
 type RoutingRuleUnmatched struct {
@@ -5216,7 +5255,7 @@ type RoutingRuleUnmatched struct {
 // RoutingRuleUnmatchedFields defines model for RoutingRuleUnmatched.Fields.
 type RoutingRuleUnmatchedFields string
 
-// RoutingRules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show.
+// RoutingRules A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`, up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset unavailable there rather than half applied; a page that edits rules keeps every member it does not show. A member written `null`, and a `sort` written `""`, is the same as leaving it out, as the server has always read them, so rules stored that way can be written back unchanged.
 type RoutingRules = jsonx.Raw
 
 // RoutingRulesCheck defines model for RoutingRulesCheck.
@@ -9107,4 +9146,128 @@ func (a OperationsTopUpSummary) MarshalJSON() ([]byte, error) {
 		}
 	}
 	return json.Marshal(object)
+}
+
+// AsRoutingSort returns the union data inside the RoutingRule_Sort as a RoutingSort
+func (t RoutingRule_Sort) AsRoutingSort() (RoutingSort, error) {
+	var body RoutingSort
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRoutingSort overwrites any union data inside the RoutingRule_Sort as the provided RoutingSort
+func (t *RoutingRule_Sort) FromRoutingSort(v RoutingSort) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRoutingSort performs a merge with any union data inside the RoutingRule_Sort, using the provided RoutingSort
+func (t *RoutingRule_Sort) MergeRoutingSort(v RoutingSort) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsRoutingRuleSort1 returns the union data inside the RoutingRule_Sort as a RoutingRuleSort1
+func (t RoutingRule_Sort) AsRoutingRuleSort1() (RoutingRuleSort1, error) {
+	var body RoutingRuleSort1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRoutingRuleSort1 overwrites any union data inside the RoutingRule_Sort as the provided RoutingRuleSort1
+func (t *RoutingRule_Sort) FromRoutingRuleSort1(v RoutingRuleSort1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRoutingRuleSort1 performs a merge with any union data inside the RoutingRule_Sort, using the provided RoutingRuleSort1
+func (t *RoutingRule_Sort) MergeRoutingRuleSort1(v RoutingRuleSort1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RoutingRule_Sort) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RoutingRule_Sort) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsRoutingSort returns the union data inside the RoutingRuleOverride_Sort as a RoutingSort
+func (t RoutingRuleOverride_Sort) AsRoutingSort() (RoutingSort, error) {
+	var body RoutingSort
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRoutingSort overwrites any union data inside the RoutingRuleOverride_Sort as the provided RoutingSort
+func (t *RoutingRuleOverride_Sort) FromRoutingSort(v RoutingSort) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRoutingSort performs a merge with any union data inside the RoutingRuleOverride_Sort, using the provided RoutingSort
+func (t *RoutingRuleOverride_Sort) MergeRoutingSort(v RoutingSort) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsRoutingRuleOverrideSort1 returns the union data inside the RoutingRuleOverride_Sort as a RoutingRuleOverrideSort1
+func (t RoutingRuleOverride_Sort) AsRoutingRuleOverrideSort1() (RoutingRuleOverrideSort1, error) {
+	var body RoutingRuleOverrideSort1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRoutingRuleOverrideSort1 overwrites any union data inside the RoutingRuleOverride_Sort as the provided RoutingRuleOverrideSort1
+func (t *RoutingRuleOverride_Sort) FromRoutingRuleOverrideSort1(v RoutingRuleOverrideSort1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRoutingRuleOverrideSort1 performs a merge with any union data inside the RoutingRuleOverride_Sort, using the provided RoutingRuleOverrideSort1
+func (t *RoutingRuleOverride_Sort) MergeRoutingRuleOverrideSort1(v RoutingRuleOverrideSort1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RoutingRuleOverride_Sort) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RoutingRuleOverride_Sort) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
 }

@@ -29,6 +29,7 @@ it.each([
     stored: { default: { max_price: { prompt: "1e3", completion: "0.1000000000000000", request: "2.5E-3" } } },
   },
   { case: "members it does not know", stored: { default: { sort: "price", future: [1] }, later: true } },
+  { case: "a null an older write stored", stored: { default: {}, advanced: null } },
 ])("$case comes back as it was", ({ stored }) => {
   expect(rulesOf(draftOf(rules(stored)))).toEqual({ rules: stored });
 });
