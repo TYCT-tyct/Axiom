@@ -223,7 +223,7 @@ func RegisterAuditReplica(db *pg.DB, scope pg.Scope, queue *pg.Queue, r Replica,
 - `operations.audit_chain_checks(singleton, target_seq, next_seq, started_at, finished_at)`，只有一行，第一轮之前没有；`axiom_app` 能读、插入目标和位置、更新四个值。
 - 两张表只有平台范围能读写。
 
-`migrations/00014_audit_replica.sql`：
+`migrations/00016_audit_replica.sql`：
 
 - `operations.audit_replica(target, replicated_seq, object_key, pending_last, replicated_at)`，主键 `target`（目标桶的端点加桶名，不含凭证），每个复制过的桶一行，第一次记下批次之前没有；`replicated_seq` 从 0 起，`pending_last` 是记下还没确认的那一批的最后一条（大于 `replicated_seq`，没有时为空）；`axiom_app` 能读，能插入 `target`、`replicated_seq`、`pending_last`，能更新后四个值。
 - 只有平台范围能读写。
