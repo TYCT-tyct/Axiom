@@ -35,7 +35,7 @@ test("register, sign in, key, top-up, call, and see the call and its charge", as
   await page.getByLabel("名称", { exact: true }).fill("Journey");
   await page.getByRole("button", { name: "创建", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "复制你的 key" });
-  const key = await dialog.locator("code").first().innerText();
+  const key = (await dialog.locator("code").first().textContent()) ?? "";
   await dialog.getByRole("button", { name: "我已保存" }).click();
   await expect(page.getByRole("row", { name: /Journey/ })).toBeVisible();
 
