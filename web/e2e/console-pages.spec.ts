@@ -203,7 +203,7 @@ test.describe("API keys", () => {
 
     const secret = page.getByRole("dialog", { name: "复制你的 key" });
     await expect(secret).toBeVisible();
-    const text = await secret.locator("code").innerText();
+    const text = (await secret.locator("code").textContent()) ?? "";
     expect(text).toMatch(/^sk-ax-v1-x{45}\d{4}$/);
     // The guide sends every client to the site's API domain, taken from its own site config, and carries the key while
     // this dialog is open: three request formats, then the three clients the docs name.
@@ -230,7 +230,7 @@ test.describe("API keys", () => {
       const copy = secret.getByRole("button", { name: `复制 ${name}`, exact: true });
       await copy.focus();
       await copy.press(index % 2 === 0 ? "Enter" : "Space");
-      const expected = await snippets.nth(index).innerText();
+      const expected = (await snippets.nth(index).textContent()) ?? "";
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
     }
     // Escape and a click outside do not close it; the user is the one to say the key is saved.
