@@ -264,8 +264,13 @@ SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detec
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
     coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
-FROM suppliers.suppliers s WHERE s.id = $1
+FROM suppliers.suppliers s WHERE s.id = $1 AND ($2::boolean OR s.owner_scope = 'platform')
 `
+
+type GetSupplierViewParams struct {
+	ID         uuid.UUID
+	EveryOwner bool
+}
 
 type GetSupplierViewRow struct {
 	ID                  uuid.UUID
@@ -285,8 +290,8 @@ type GetSupplierViewRow struct {
 	UnitValue           string
 }
 
-func (q *Queries) GetSupplierView(ctx context.Context, db DBTX, id uuid.UUID) ([]GetSupplierViewRow, error) {
-	rows, err := db.Query(ctx, getSupplierView, id)
+func (q *Queries) GetSupplierView(ctx context.Context, db DBTX, arg GetSupplierViewParams) ([]GetSupplierViewRow, error) {
+	rows, err := db.Query(ctx, getSupplierView, arg.ID, arg.EveryOwner)
 	if err != nil {
 		return nil, err
 	}
@@ -584,16 +589,18 @@ SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detec
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
     coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
 FROM suppliers.suppliers s
-WHERE ($1::text IS NULL OR s.status = $1)
-    AND ($2::uuid IS NULL OR s.id < $2)
+WHERE ($1::boolean OR s.owner_scope = 'platform')
+    AND ($2::text IS NULL OR s.status = $2)
+    AND ($3::uuid IS NULL OR s.id < $3)
 ORDER BY s.id DESC
-LIMIT $3::int
+LIMIT $4::int
 `
 
 type ListSuppliersPageParams struct {
-	Status   *string
-	After    *uuid.UUID
-	PageSize int32
+	EveryOwner bool
+	Status     *string
+	After      *uuid.UUID
+	PageSize   int32
 }
 
 type ListSuppliersPageRow struct {
@@ -617,9 +624,15 @@ type ListSuppliersPageRow struct {
 // What the admin API reads and writes of suppliers, in the platform scope (internal/suppliers/README.md「管理接口」).
 // Newest first: an ID is a UUIDv7, so its order is the order of connecting, and a page starts after the last ID of the
 // one before. The unit value is the latest confirmed for this currency and native unit. A missing balance, threshold
-// or unit value is the empty text, which no number is.
+// or unit value is the empty text, which no number is. The platform scope lets every owner's row through, so the
+// caller says whose it reads: the platform's own, or every owner's too (Owners).
 func (q *Queries) ListSuppliersPage(ctx context.Context, db DBTX, arg ListSuppliersPageParams) ([]ListSuppliersPageRow, error) {
-	rows, err := db.Query(ctx, listSuppliersPage, arg.Status, arg.After, arg.PageSize)
+	rows, err := db.Query(ctx, listSuppliersPage,
+		arg.EveryOwner,
+		arg.Status,
+		arg.After,
+		arg.PageSize,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -775,20 +788,22 @@ FROM suppliers.supplier_models m
 JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
 JOIN suppliers.suppliers s ON s.id = m.supplier_id
 WHERE m.model_id IS NULL AND m.present AND g.present AND s.status <> 'removed'
-    AND ($1::uuid IS NULL OR m.supplier_id = $1)
-    AND ($2::uuid IS NULL OR m.supplier_group_id = $2)
-    AND ($3::text IS NULL OR m.upstream_name = $3)
+    AND ($1::boolean OR s.owner_scope = 'platform')
+    AND ($2::uuid IS NULL OR m.supplier_id = $2)
+    AND ($3::uuid IS NULL OR m.supplier_group_id = $3)
+    AND ($4::text IS NULL OR m.upstream_name = $4)
     AND NOT EXISTS (
         SELECT FROM suppliers.supplier_aliases a
         WHERE a.supplier_id = m.supplier_id AND a.upstream_name = m.upstream_name
             AND (a.supplier_group_id IS NULL OR a.supplier_group_id = m.supplier_group_id))
-    AND ($4::timestamptz IS NULL
-        OR (m.first_seen_at, m.supplier_group_id, m.upstream_name) > ($4, $5::uuid, $6::text))
+    AND ($5::timestamptz IS NULL
+        OR (m.first_seen_at, m.supplier_group_id, m.upstream_name) > ($5, $6::uuid, $7::text))
 ORDER BY m.first_seen_at, m.supplier_group_id, m.upstream_name
-LIMIT $7::int
+LIMIT $8::int
 `
 
 type PendingMappingsPageParams struct {
+	EveryOwner   bool
 	SupplierID   *uuid.UUID
 	GroupID      *uuid.UUID
 	UpstreamName *string
@@ -809,9 +824,10 @@ type PendingMappingsPageRow struct {
 
 // The upstream names the catalog could not recognise (no model) that no alias of the supplier or of the group covers,
 // oldest first, a page starting after the last row of the one before. A group and a name narrow it to one name, which
-// is how an agent's mapping is checked to be of a name that waits.
+// is how an agent's mapping is checked to be of a name that waits. Whose suppliers as in ListSuppliersPage.
 func (q *Queries) PendingMappingsPage(ctx context.Context, db DBTX, arg PendingMappingsPageParams) ([]PendingMappingsPageRow, error) {
 	rows, err := db.Query(ctx, pendingMappingsPage,
+		arg.EveryOwner,
 		arg.SupplierID,
 		arg.GroupID,
 		arg.UpstreamName,

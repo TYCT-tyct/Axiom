@@ -76,7 +76,9 @@ func TestSupplierDetailShowsPool(t *testing.T) {
 	a.sql(fmt.Sprintf(`UPDATE suppliers.supplier_groups
 SET pool_accounts = 10, pool_failed = 2, pool_usable = 8, pool_headroom = 40, pool_capacity = 32, pool_low = false,
     pool_observed_at = '2026-10-15T12:00:00Z' WHERE id = '%s'`, pooled))
-	detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+	detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) {
+		return a.admin.Supplier(ctx, tx, id, PlatformOwned)
+	})
 	refuses(t, "the detail", err, nil)
 	if len(detail.Groups) != 2 {
 		t.Fatalf("groups %+v, want two", detail.Groups)
@@ -106,7 +108,9 @@ func TestSupplierDetail(t *testing.T) {
 		fmt.Sprintf(`INSERT INTO suppliers.endpoints (id, supplier_id, supplier_group_id, model_id, upstream_name, formats, enabled)
 			VALUES ('%s', '%[2]s', '%[3]s', '%[4]s', 'zeta', ARRAY['messages', 'chat'], true),
 				('%[5]s', '%[2]s', '%[3]s', '%[6]s', 'alpha', ARRAY['responses'], false)`, zeta, id, group, one, alpha, two))
-	detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+	detail, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) {
+		return a.admin.Supplier(ctx, tx, id, PlatformOwned)
+	})
 	refuses(t, "the detail", err, nil)
 	same(t, "its groups", []Group{{ID: group, UpstreamRef: "g", Name: "Group g", Ratio: "1.5", Present: true, Facts: map[string]any{"platform": "anthropic"}, KeyState: "pending"}}, detail.Groups)
 	same(t, "its keys", []Credential{{ID: key, Group: group, UpstreamKeyRef: "k1", Status: "binding", MaxConcurrency: 4}}, detail.Credentials)
@@ -118,11 +122,45 @@ func TestSupplierDetail(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.sql(fmt.Sprintf(`UPDATE suppliers.supplier_groups SET key_error = 'not_permitted', key_retry_at = now() WHERE id = '%s'`, group))
-	detail, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, id) })
+	detail, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) {
+		return a.admin.Supplier(ctx, tx, id, PlatformOwned)
+	})
 	refuses(t, "the detail after a failed binding", err, nil)
 	if g := detail.Groups[0]; g.KeyState != "failed" || g.KeyReason != "not_permitted" {
 		t.Errorf("a binding whose read failed: %q, %q", g.KeyState, g.KeyReason)
 	}
-	_, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, uuid.NewV7()) })
+	_, err = inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) {
+		return a.admin.Supplier(ctx, tx, uuid.NewV7(), PlatformOwned)
+	})
 	refuses(t, "a supplier that is not there", err, ErrNoSupplier)
+}
+
+// TestReadsSeeTheOwnersAsked: in the platform scope, which lets every owner's row through, the reads see an account's
+// own key only when the caller asks for every owner: the platform's own suppliers are what PlatformOwned lists, reads
+// and has waiting names of, and the account's supplier is not there at all.
+func TestReadsSeeTheOwnersAsked(t *testing.T) {
+	t.Parallel()
+	a := newAdmins(t)
+	platform := a.connect("https://api.example.com", "ops@example.com").ID
+	a.model(platform, a.group(platform, "g", true), "platform-name", time.Minute)
+	byok := byokFixture(t, a, uuid.NewV7(), uuid.NewV7()).ID
+	byokGroup := uuid.MustParse(a.text(`SELECT id::text FROM suppliers.supplier_groups WHERE supplier_id = $1`, byok))
+	a.model(byok, byokGroup, "account-name", 2*time.Minute) // a supplier the sync never reads, so only a test lists one
+	for _, c := range []struct {
+		what   string
+		owners Owners
+		want   []uuid.UUID
+		names  []string
+		detail error
+	}{
+		{"PlatformOwned", PlatformOwned, []uuid.UUID{platform}, []string{"platform-name"}, ErrNoSupplier},
+		{"EveryOwner", EveryOwner, []uuid.UUID{byok, platform}, []string{"account-name", "platform-name"}, nil},
+	} {
+		listed, _ := a.list(SupplierQuery{Owners: c.owners, PageSize: 10})
+		same(t, "the suppliers of "+c.what, c.want, supplierIDs(listed))
+		names, _ := a.pending(PendingQuery{Owners: c.owners, PageSize: 10})
+		same(t, "the waiting names of "+c.what, c.names, namesOf(names))
+		_, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Detail, error) { return a.admin.Supplier(ctx, tx, byok, c.owners) })
+		refuses(t, "the account's key read for "+c.what, err, c.detail)
+	}
 }
