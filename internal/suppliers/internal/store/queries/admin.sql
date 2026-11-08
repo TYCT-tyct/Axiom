@@ -149,6 +149,20 @@ WHERE m.model_id IS NULL AND m.present AND g.present AND s.status <> 'removed'
 ORDER BY m.first_seen_at, m.supplier_group_id, m.upstream_name
 LIMIT @page_size::int;
 
+-- name: ModelTakenInGroup :one
+-- Whether the group already has a name for the model, or will at the next sync: an endpoint of the group's model, a
+-- name the group lists that the sync resolved to it, or an alias at its current revision that maps a name to it (one of
+-- the group's, or one of the whole supplier's for a name the group lists), projected or not yet. The projection keeps
+-- one endpoint for a group's model, so another name for it would take that endpoint over rather than add one.
+SELECT (EXISTS (SELECT FROM suppliers.endpoints e WHERE e.supplier_group_id = @group_id AND e.model_id = @model_id)
+    OR EXISTS (SELECT FROM suppliers.supplier_models m WHERE m.supplier_group_id = @group_id AND m.model_id = @model_id)
+    OR EXISTS (
+        SELECT FROM suppliers.supplier_aliases a
+        LEFT JOIN LATERAL (SELECT r.model_id FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY r.revision DESC LIMIT 1) r ON true
+        WHERE a.supplier_id = @supplier_id AND COALESCE(r.model_id, a.model_id) = @model_id
+            AND (a.supplier_group_id = @group_id OR (a.supplier_group_id IS NULL AND EXISTS (
+                SELECT FROM suppliers.supplier_models m WHERE m.supplier_group_id = @group_id AND m.upstream_name = a.upstream_name)))))::boolean;
+
 -- name: TopUpBasis :many
 -- What a top-up proposal is computed from: who owns the supplier, its units and the unit value now in force, the
 -- empty text when there is none.

@@ -83,9 +83,10 @@ func TestOperationsSupplierModelMap(t *testing.T) {
 }
 
 // TestOperationsSupplierMappingRefusals: a preview, a name that does not wait (not listed, or covered by the owner's
-// alias for the whole supplier), a model the catalog lacks or has retired, a group the supplier lacks, a credential
-// without suppliers.manage and one without the platform grant leave no operation and no alias, and the name still
-// waits.
+// alias for the whole supplier), a model the group already serves through another name (whose endpoint the waiting
+// name, first by name and an alias, would take over), a model the catalog lacks or has retired, a group the supplier
+// lacks, a credential without suppliers.manage and one without the platform grant leave no operation and no alias,
+// the name still waits and the endpoint is as it was.
 func TestOperationsSupplierMappingRefusals(t *testing.T) {
 	t.Parallel()
 	f := newSupplierFixture(t)
@@ -94,9 +95,15 @@ func TestOperationsSupplierMappingRefusals(t *testing.T) {
 	f.listed(supplier, group, "waiting")
 	f.listed(supplier, group, "covered")
 	catalog := catalogFixture(f)
-	model, retired := catalog.ready("acme/beta"), catalog.ready("acme/gamma")
+	model, retired, served := catalog.ready("acme/beta"), catalog.ready("acme/gamma"), catalog.ready("acme/delta")
 	f.run(fmt.Sprintf("UPDATE catalog.model SET status = 'retired' WHERE id = '%s'", retired.Id))
-	owners := `{"upstream_name":"covered","model_id":"` + model.Id + `","reason":"the whole supplier serves it"}`
+	f.run(fmt.Sprintf(`INSERT INTO suppliers.endpoints (supplier_id, supplier_group_id, model_id, upstream_name, formats)
+		VALUES ('%s', '%s', '%s', 'zz-delta', '{chat}')`, supplier, group, served.Id))
+	endpoint := func() string {
+		return f.text(`SELECT upstream_name || ' ' || cost_state || ' ' || enabled FROM suppliers.endpoints WHERE model_id = '` + served.Id + `'`)
+	}
+	before := endpoint()
+	owners := `{"upstream_name":"covered","model_id":"` + catalog.ready("acme/epsilon").Id + `","reason":"the whole supplier serves it"}`
 	expectAdmin(t, "the owner's alias", f.change(f.s, http.MethodPost, "/suppliers/"+supplier+"/model-mappings", owners, newKey()), http.StatusCreated, "")
 
 	token := f.moneyAgent(false)
@@ -115,6 +122,7 @@ func TestOperationsSupplierMappingRefusals(t *testing.T) {
 	}{
 		{"a name the group does not list", token, group, "unlisted", model.Id, http.StatusConflict, codeConflict},
 		{"a name the owner's supplier alias covers", token, group, "covered", model.Id, http.StatusConflict, codeConflict},
+		{"a model the group serves through another name", token, group, "waiting", served.Id, http.StatusConflict, codeConflict},
 		{"a model the catalog lacks", token, group, "waiting", uuid.NewV7().String(), http.StatusUnprocessableEntity, codeUnprocessable},
 		{"a retired model", token, group, "waiting", retired.Id, http.StatusUnprocessableEntity, codeUnprocessable},
 		{"a group the supplier lacks", token, uuid.NewV7().String(), "waiting", model.Id, http.StatusNotFound, codeNotFound},
@@ -123,8 +131,8 @@ func TestOperationsSupplierMappingRefusals(t *testing.T) {
 	} {
 		expectAdmin(t, c.name, f.mapAs(c.token, supplier, c.group, c.upstream, c.model, newKey(), ""), c.status, c.code)
 	}
-	if got := f.text(`SELECT count(*)::text FROM operations.operations`); got != "0" {
-		t.Errorf("%s operations after the refusals and the preview", got)
+	if got := f.text(`SELECT count(*)::text FROM operations.operations`); got != "0" || endpoint() != before {
+		t.Errorf("%s operations after the refusals and the preview, and the endpoint went from %q to %q", got, before, endpoint())
 	}
 	if names, _ := f.pendingNames("supplier_id=" + supplier); !slices.Equal(names, []string{"waiting"}) {
 		t.Errorf("the queue after the refusals: %v", names)

@@ -29,8 +29,8 @@ func (o operationsAPI) SupplierGroupSelect(ctx context.Context, r operationsapi.
 }
 
 // SupplierModelMap maps a name one of a supplier's groups lists as waiting for a model to a catalog model for that
-// group, at once. The agent maps only names that wait: any other alias moves traffic that already flows, which stays
-// with the owner in the admin.
+// group, at once. The agent maps only names that wait, to a model the group has no name for (suppliers.MapPending):
+// any other alias could move traffic that already flows, which stays with the owner in the admin.
 func (o operationsAPI) SupplierModelMap(ctx context.Context, r operationsapi.SupplierModelMapRequestObject) (operationsapi.SupplierModelMapResponseObject, error) {
 	b := r.Body
 	p := operations.Proposal{

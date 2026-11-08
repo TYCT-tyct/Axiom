@@ -741,6 +741,34 @@ func (q *Queries) LockSupplierForChange(ctx context.Context, db DBTX, id uuid.UU
 	return items, nil
 }
 
+const modelTakenInGroup = `-- name: ModelTakenInGroup :one
+SELECT (EXISTS (SELECT FROM suppliers.endpoints e WHERE e.supplier_group_id = $1 AND e.model_id = $2)
+    OR EXISTS (SELECT FROM suppliers.supplier_models m WHERE m.supplier_group_id = $1 AND m.model_id = $2)
+    OR EXISTS (
+        SELECT FROM suppliers.supplier_aliases a
+        LEFT JOIN LATERAL (SELECT r.model_id FROM suppliers.supplier_alias_revisions r WHERE r.alias_id = a.id ORDER BY r.revision DESC LIMIT 1) r ON true
+        WHERE a.supplier_id = $3 AND COALESCE(r.model_id, a.model_id) = $2
+            AND (a.supplier_group_id = $1 OR (a.supplier_group_id IS NULL AND EXISTS (
+                SELECT FROM suppliers.supplier_models m WHERE m.supplier_group_id = $1 AND m.upstream_name = a.upstream_name)))))::boolean
+`
+
+type ModelTakenInGroupParams struct {
+	GroupID    uuid.UUID
+	ModelID    uuid.UUID
+	SupplierID uuid.UUID
+}
+
+// Whether the group already has a name for the model, or will at the next sync: an endpoint of the group's model, a
+// name the group lists that the sync resolved to it, or an alias at its current revision that maps a name to it (one of
+// the group's, or one of the whole supplier's for a name the group lists), projected or not yet. The projection keeps
+// one endpoint for a group's model, so another name for it would take that endpoint over rather than add one.
+func (q *Queries) ModelTakenInGroup(ctx context.Context, db DBTX, arg ModelTakenInGroupParams) (bool, error) {
+	row := db.QueryRow(ctx, modelTakenInGroup, arg.GroupID, arg.ModelID, arg.SupplierID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const pendingMappingsPage = `-- name: PendingMappingsPage :many
 SELECT m.supplier_id, m.supplier_group_id, g.codename, m.upstream_name, m.formats, m.first_seen_at
 FROM suppliers.supplier_models m

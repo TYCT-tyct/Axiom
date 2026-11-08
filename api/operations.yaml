@@ -556,9 +556,11 @@ paths:
         so `:exacto` and presets that route only verified endpoints skip it, and a name that answers as another model
         raises an alert. Only a name that waits can be mapped: one the group does not list, that the catalog
         recognised, or that an alias of the group or of the whole supplier covers is a 409 `conflict`, since an alias
-        for it would move traffic that already flows; correcting an alias stays with the owner in the admin. A model
-        the catalog lacks or has retired is a 422 `unprocessable`; a supplier being removed or removed is a 409
-        `conflict`. With `dry_run` the same checks run and nothing is written.
+        for it would move traffic that already flows. Nor can it be mapped to a model the group already has a name
+        for (an endpoint, a listed name the sync resolved to it, or an alias, even one the next sync has not applied
+        yet): a group has one endpoint per model, and the new name could take that endpoint over; that is a 409
+        `conflict` too. Correcting an alias stays with the owner in the admin. A model the catalog lacks or has retired
+        is a 422 `unprocessable`; a supplier being removed or removed is a 409 `conflict`. With `dry_run` the same checks run and nothing is written.
       tags: [Suppliers]
       security: [{credential: []}]
       x-axiom-permission: suppliers.manage

@@ -179,42 +179,55 @@ func TestAnAliasTakesANameOutOfTheQueue(t *testing.T) {
 	same(t, "after an alias in the whole supplier", []string{}, namesOf(left))
 }
 
-// TestMapPending: only a name the group lists as waiting is mapped. One the sync recognised, one an alias of the whole
-// supplier covers, one only another group lists, and one mapped already are refused, as is a supplier being removed.
+// TestMapPending: only a name the group lists as waiting is mapped, and only to a model the group has no name for. One
+// the sync recognised, one an alias of the whole supplier covers, one only another group lists, and one mapped already
+// are refused; so is a model the group has an endpoint for, one a listed name resolved to, one an alias maps a listed
+// name to, and one an alias the sync has not projected yet maps to. A model another group has is no reason to refuse.
 func TestMapPending(t *testing.T) {
 	t.Parallel()
 	a := newAdmins(t)
 	id, one, two := a.queue()
 	a.model(id, two, "covered", time.Minute)
 	a.model(id, two, "recognised", time.Minute)
-	a.sql(fmt.Sprintf(`UPDATE suppliers.supplier_models SET model_id = '%s' WHERE upstream_name = 'recognised'`, uuid.NewV7()))
-	_, err := a.mapIn(id, nil, "covered", uuid.NewV7())
+	a.model(id, two, "waiting", time.Minute)
+	resolved, covering, endpoint, first := uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
+	a.sql(fmt.Sprintf(`UPDATE suppliers.supplier_models SET model_id = '%s' WHERE upstream_name = 'recognised'`, resolved),
+		fmt.Sprintf(`INSERT INTO suppliers.endpoints (supplier_id, supplier_group_id, model_id, upstream_name, formats)
+			VALUES ('%s', '%s', '%s', 'served', '{chat}')`, id, two, endpoint))
+	_, err := a.mapIn(id, nil, "covered", covering)
 	refuses(t, "the owner's alias for the whole supplier", err, nil)
-	mapPending := func(group uuid.UUID, name string) (Mapping, error) {
+	mapPending := func(group uuid.UUID, name string, model uuid.UUID) (Mapping, error) {
 		return inTx(a, func(ctx context.Context, tx pg.Tx) (Mapping, error) {
-			return a.admin.MapPending(ctx, tx, a.actor, id, group, name, uuid.NewV7(), "it waits")
+			return a.admin.MapPending(ctx, tx, a.actor, id, group, name, model, "it waits")
 		})
 	}
-	m, err := mapPending(one, "oldest")
+	m, err := mapPending(one, "oldest", first)
 	refuses(t, "a name that waits", err, nil)
 	same(t, "the alias", []any{"oldest", &one, int64(1)}, []any{m.UpstreamName, m.Group, m.Revision})
 	for name, c := range map[string]struct {
 		group uuid.UUID
 		name  string
+		model uuid.UUID
 		want  error
 	}{
-		"mapped already":                 {one, "oldest", ErrNotPending},
-		"recognised by the sync":         {two, "recognised", ErrNotPending},
-		"covered by a supplier alias":    {two, "covered", ErrNotPending},
-		"listed only by the other group": {two, "oldest", ErrNotPending},
-		"listed by no group":             {one, "nothing", ErrNotPending},
-		"in a group the supplier lacks":  {uuid.NewV7(), "newest", ErrNoGroup},
+		"mapped already":                        {one, "oldest", uuid.NewV7(), ErrNotPending},
+		"recognised by the sync":                {two, "recognised", uuid.NewV7(), ErrNotPending},
+		"covered by a supplier alias":           {two, "covered", uuid.NewV7(), ErrNotPending},
+		"listed only by the other group":        {two, "oldest", uuid.NewV7(), ErrNotPending},
+		"listed by no group":                    {one, "nothing", uuid.NewV7(), ErrNotPending},
+		"in a group the supplier lacks":         {uuid.NewV7(), "newest", uuid.NewV7(), ErrNoGroup},
+		"a model the group has an endpoint for": {two, "waiting", endpoint, ErrModelTaken},
+		"a model a listed name resolved to":     {two, "waiting", resolved, ErrModelTaken},
+		"a model a supplier alias maps to":      {two, "waiting", covering, ErrModelTaken},
+		"a model an unprojected alias maps to":  {one, "newest", first, ErrModelTaken},
 	} {
-		_, err := mapPending(c.group, c.name)
+		_, err := mapPending(c.group, c.name, c.model)
 		refuses(t, name, err, c.want)
 	}
+	_, err = mapPending(two, "waiting", first)
+	refuses(t, "a model only another group has", err, nil)
 	a.setStatus(id, "removing")
-	_, err = mapPending(two, "newest")
+	_, err = mapPending(two, "newest", uuid.NewV7())
 	refuses(t, "a supplier being removed", err, ErrStatusLocked)
 }
 
