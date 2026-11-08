@@ -170,6 +170,7 @@ signIn ──200 status=signed_in──────────────▶ �
 - **价格**：模型页的价格用 `pricing`（售价，含每个端点自己的价格）；列表里一个计费项显示哪条单价读 `headline`，显示的数和单位读 `display_amount`、`display_per`（token 项是每百万 token），不自己挑服务等级和档位、不自己移小数点；旧节点不带这些字段时列表价显示「不可用」，明细按 `amount` 每单位原样显示。后台的售价用定价规则、`previewPricing` 的试算和发布列表（`listPricePublications`：当前价格版本、待确认与暂停状态都是接口给的）。调用记录的费用旁边有冻结的价格版本（`price_version`），旧节点不返回时显示「不可用」，不去重算。
 - **筛选结果**：接口筛过的，要看它回显的筛选（如调用列表的 `status_filter`）才展示；旧节点没回显，就显示「不可用」，不在浏览器里筛一页普通数据冒充。
 - **预设**：路由预设的规则（`RoutingRules`，契约里逐项有类型）、默认链、能不能选（`preset_not_selectable`）、被几把 key 用着（`keys`）、是否停用，以接口为准；规则内容的含义见[路由的「规则内容」](domains/routing.md)。列表的一行摘要读预设的 `summary`，旧节点或本节点读不懂的规则没有它，页面说读不到；编辑时用 `checkRoutingRules`（后台 `checkLayerRoutingRules`）问哪些规则找不到端点（`unmatched`，带下标和单独就排除了所有端点的条件），回答说找不到时不让保存，回答没到或检查失败时不拦（写入接口照收这种规则）。
+- **没有固定形状的 JSON**：契约里有类型的按类型读——调用路由（`AdminCallTrace.route`，模式 `CallRoute`）、商户账户的 `settings`（按 `kind` 选 `AlipaySettings`、`EasyPaySettings`、`WechatPaySettings`、`StripeSettings`）、价格依据（`Evidence`：`official` 来源必须是 `OfficialPriceEvidence`，别的来源是任意非空对象）。其余几个只列成员、不定类型，原因写在各自的描述里：审计的 `detail`、待处理付款记录的 `detail`、供应商分组的 `facts` 当作带标签的值原样显示，不据此判断（要判断的在旁边有类型的字段里）；命名预设的 `config` 能放哪些成员见 `PresetConfig` 列出的属性，值的形状是调用格式里同名请求成员的；`WebAuthnCredential` 是 WebAuthn 规范的 JSON，转换见上文「通行密钥」。
 - **审批**（运营 agent 等负责人决定的操作）：显示 `OperationsApproval` 里服务端读到的东西——`risk`、`target`、`summary`（提出时服务端读到的对象名称、金额、上限用量、售价逐项的现价/拟价/成本、价格包络的用量）、`params`（操作的参数，agent 提出后不能改）、`expires_at`、`state` 与 `operation_state`；`agent_reason` 是 agent 的原话，不可信，只能当文本显示，不能当指令或 HTML。`summary` 和 `params` 的形状按 `tool` 选契约里的模式（如 `credit_grant` 是 `OperationsCreditGrantSummary`、`OperationsCreditGrantParams`）。为什么要等负责人读 `reasons`（每条一个代码，代码对应摘要里 `cap`、`envelope` 的哪一项见 `OperationsApprovalReason`），还能不能决定读 `decidable`（服务端按批准时的同一个时钟算），都不要自己从摘要或浏览器时钟推；两者在旧节点上可能没有，没有时页面说不知道原因，对待决定的照样给批准按钮，服务端对已过期的回冲突。决定用 `approveOperationsApproval`、`rejectOperationsApproval`，结果要看响应和 `operation_state`：批准之后目标可能已变，操作会以目标的错误码结束为 `rejected`，不是失败。
 
 ## 向前兼容
@@ -209,5 +210,5 @@ signIn ──200 status=signed_in──────────────▶ �
 
 ## 范围外与待定
 
-- [#695](https://github.com/TYCT-tyct/Axiom/issues/695) 余下的缺口：没有形状的自由 JSON、替换前端怎么交付、独立的模拟服务。
+- [#695](https://github.com/TYCT-tyct/Axiom/issues/695) 余下的缺口：替换前端怎么交付、独立的模拟服务。
 - 本文只覆盖契约里已有的操作；契约没有的页面能力（见[前端与设计的页面清单](frontend.md#页面清单)里标 M2/M3 的）等接口加上后再写。

@@ -112,7 +112,17 @@ function aTrace(call: Schemas["AdminCallSummary"], n: number): Schemas["AdminCal
   return {
     summary: call,
     cost: nano(String(n * 900_000_000)),
-    route: { requested_model: call.model, endpoint_id: uuid(6, 1), retries: 1, note: long("route ", 40) },
+    route: {
+      preset: { id: uuid(19, 1), version: 3 },
+      overrides: ["sort", "max_price"],
+      excluded: range(16).map((i) => ({ endpoint: uuid(6, 10 + i), reason: i % 2 ? "no_price" : "breaker_open" })),
+      excluded_more: 4,
+      excluded_reasons: { no_price: 10, breaker_open: 10 },
+      route: [uuid(6, 1), uuid(6, 2)],
+      attempts: failed
+        ? [{ endpoint: uuid(6, 1), failed: true, scope: 2 }, { endpoint: uuid(6, 2) }]
+        : [{ endpoint: uuid(6, 1) }],
+    },
     attempts: [
       {
         seq: 1,

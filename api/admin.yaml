@@ -6171,12 +6171,92 @@ components:
           $ref: '#/components/schemas/Money'
         route:
           x-go-type: jsonx.Raw
-          type: object
-          additionalProperties: true
+          description: How routing chose the call's endpoints, passed on as it was stored with the call.
+          allOf: [{$ref: '#/components/schemas/CallRoute'}]
         attempts:
           type: array
           items:
             $ref: '#/components/schemas/AdminAttempt'
+    CallRoute:
+      type: object
+      additionalProperties: false
+      description: >-
+        How routing chose the endpoints of one call, as it was stored with the call (docs/domains/routing.md「路由记录」).
+        Every member is optional: a call recorded by an earlier release lacks the ones added since. Endpoints are named
+        by their internal ID, which the endpoint pages of this contract also use.
+      properties:
+        preset: {$ref: "#/components/schemas/CallRoutePreset"}
+        overrides:
+          type: array
+          description: >-
+            The members of the request's `provider` object that changed what the key's routing preset allows or how it
+            orders the route, by name; a member written with no effect is not listed. `data_collection` stands for
+            `zdr` too, and `verified_only` is what the `:exacto` variant asks.
+          items:
+            type: string
+            enum: [only, ignore, order, allow_fallbacks, sort, sort.partition, verified_only, classes, data_collection, max_price, preferred_min_throughput, preferred_max_latency, quantizations, require_parameters]
+            x-enum-varnames: [OverrideOnly, OverrideIgnore, OverrideOrder, OverrideAllowFallbacks, OverrideSort, OverrideSortPartition, OverrideVerifiedOnly, OverrideClasses, OverrideDataCollection, OverrideMaxPrice, OverridePreferredMinThroughput, OverridePreferredMaxLatency, OverrideQuantizations, OverrideRequireParameters]
+        fastest_unmeasured:
+          type: boolean
+          description: >-
+            True when the request asked for the fastest endpoint first and none of its candidates was measured, so the
+            route is in the balanced, price-weighted order and says nothing about speed. Absent means false.
+        excluded:
+          type: array
+          description: The candidates left out, at most 16 by name; `excluded_more` counts the rest.
+          items: {$ref: "#/components/schemas/CallRouteExclusion"}
+        excluded_more: {type: integer, minimum: 1, description: "How many more candidates were left out than `excluded` names."}
+        excluded_reasons:
+          type: object
+          description: How many candidates were left out for each reason, all of them, by the reason's name (`CallRouteExclusion.reason`).
+          additionalProperties: {type: integer, minimum: 1}
+        route:
+          type: array
+          description: The endpoints the call could try, in order.
+          items: {type: string, format: uuid}
+        attempts:
+          type: array
+          description: Each endpoint tried, in order.
+          items: {$ref: "#/components/schemas/CallRouteAttempt"}
+        breaker_open_fallback:
+          type: array
+          description: Written only by releases before endpoints were taken offline; the endpoints kept as a last resort because their breaker was open.
+          items: {type: string, format: uuid}
+    CallRoutePreset:
+      type: object
+      additionalProperties: false
+      description: The routing preset the call was held to, at the version routing compiled.
+      properties:
+        id: {type: string, format: uuid}
+        version: {type: integer, format: int64, minimum: 1}
+    CallRouteExclusion:
+      type: object
+      additionalProperties: false
+      properties:
+        endpoint: {type: string, format: uuid, description: "Absent for `no_candidates` and `model_not_allowed`, which name no endpoint."}
+        reason:
+          type: string
+          description: Why the candidate was left out (docs/domains/routing.md「一个请求的路由步骤」).
+          enum: [no_candidates, model_not_allowed, disabled, breaker_open, supplier_balance, missing_capability, context_too_small, format_not_served, service_tier_not_served, preset_filter, override_filter, not_verified, no_price, no_egress, retry_budget, full, unknown_item, cooling_down, unquotable_cost, byok_no_fallback]
+    CallRouteAttempt:
+      type: object
+      additionalProperties: false
+      properties:
+        endpoint: {type: string, format: uuid}
+        failed: {type: boolean, description: "True when the attempt failed. Absent means false."}
+        scope:
+          type: integer
+          minimum: 0
+          maximum: 5
+          description: >-
+            What a failure blamed: 0 the request itself, 1 the route to the supplier, 2 the endpoint, 3 the key, 4 the
+            supplier's group, 5 the supplier. Absent means 0.
+        action:
+          type: integer
+          minimum: 0
+          maximum: 2
+          description: "What routing did after a failure: 0 the next endpoint of the route, 1 the same endpoint with another key, 2 return the error to the client. Absent means 0."
+        egress: {type: string, description: "Written only by early releases; the egress now lies on the call's attempts (`AdminAttempt.egress`)."}
     AuditEntry:
       type: object
       additionalProperties: false
@@ -6201,6 +6281,13 @@ components:
           x-go-type: jsonx.Raw
           type: object
           additionalProperties: true
+          description: >-
+            What the module that made the change recorded about it, kept as written: small and structured, such as
+            the IDs and names involved and the values before and after; never a secret, a password, a key, call
+            content or personal data beyond IDs. Its members are the `action`'s own and change with the module that
+            writes it, so they are not typed here (one schema per action would be a second registry of every change
+            every module makes); show it as a tree of labelled values and decide nothing from it. Large integers are
+            written as they were, so read it with a parser that keeps them exact.
     AuditEntryList:
       type: object
       additionalProperties: false
@@ -6809,12 +6896,62 @@ components:
         rev: {type: integer, format: int64, description: "The revision a change must be decided against."}
         settings:
           x-go-type: jsonx.Raw
-          type: object
-          additionalProperties: true
-          description: "The plugin's non-secret configuration, canonical JSON."
+          description: >-
+            The plugin's non-secret configuration as it normalised it (defaults filled in), canonical JSON. Its shape
+            is the `kind`'s: `alipay` AlipaySettings, `easypay` EasyPaySettings, `wechatpay` WechatPaySettings,
+            `stripe` StripeSettings. `kind` is beside it, not in it, so the schemas are `anyOf`: pick the one the
+            `kind` names.
+          anyOf:
+            - $ref: "#/components/schemas/AlipaySettings"
+            - $ref: "#/components/schemas/EasyPaySettings"
+            - $ref: "#/components/schemas/WechatPaySettings"
+            - $ref: "#/components/schemas/StripeSettings"
         methods:
           type: array
           items: {$ref: "#/components/schemas/MerchantMethod"}
+    AlipaySettings:
+      type: object
+      additionalProperties: false
+      description: An `alipay` merchant account's settings (internal/payments/README.md「支付宝配置与边界」).
+      properties:
+        app_id: {type: string, description: "The application's ID: digits, at most 32. Required."}
+        seller_id: {type: string, description: "The seller's ID, digits; when set, callbacks must name it."}
+        gateway: {type: string, description: "The gateway's HTTPS address; omitted for Alipay's own, which the server fills in."}
+    EasyPaySettings:
+      type: object
+      additionalProperties: false
+      description: An `easypay` merchant account's settings (internal/payments/README.md「易支付配置与边界」).
+      properties:
+        preset:
+          type: string
+          enum: [epusdt, ezpay]
+          description: A gateway the plugin knows the rules of, which fixes some of the members below; omitted for a generic EasyPay gateway.
+        gateway: {type: string, description: "The gateway's HTTPS address, without the PHP endpoint. Required."}
+        pid: {type: string, description: "The merchant ID at the gateway. Required."}
+        mode: {type: string, enum: [redirect, api], description: "How an order is placed: by sending the user to the gateway, or through its API. Required unless a preset fills it in."}
+        sign_type: {type: string, enum: [MD5], description: "Omitted means MD5, which the server fills in."}
+        cids:
+          type: object
+          description: The gateway's channel ID for each of the site's payment methods that has one.
+          additionalProperties: {type: string}
+        query: {type: boolean, description: "The gateway answers order queries. Absent means it does not."}
+        close: {type: boolean, description: "The gateway closes unpaid orders. Absent means it does not."}
+        refund: {type: boolean, description: "The gateway takes refunds. Absent means it does not."}
+    WechatPaySettings:
+      type: object
+      additionalProperties: false
+      description: A `wechatpay` merchant account's settings (internal/payments/README.md「微信支付配置与边界」).
+      properties:
+        app_id: {type: string, description: "The application's ID: 6 to 32 letters or digits. Required."}
+        mch_id: {type: string, description: "The merchant ID: 6 to 32 digits. Required."}
+        serial_no: {type: string, description: "The serial number of the merchant's API certificate, hexadecimal. Required."}
+        platform_public_key_id: {type: string, description: "The ID of WeChat Pay's public key; required when verifying with a public key rather than a platform certificate."}
+        old_platform_public_key_id: {type: string, description: "The ID of the previous public key while it is rotated out."}
+        gateway: {type: string, description: "The gateway's HTTPS address; omitted for WeChat Pay's own, which the server fills in."}
+    StripeSettings:
+      type: object
+      additionalProperties: false
+      description: A `stripe` merchant account has no non-secret settings; everything it needs is in its secrets.
     MerchantMethod:
       type: object
       description: One payment method a merchant account offers. Every field is optional during rolling deployment.
@@ -6870,7 +7007,11 @@ components:
           x-go-type: jsonx.Raw
           type: object
           additionalProperties: true
-          description: "The plugin's non-secret configuration as a JSON object; the plugin validates its members strictly."
+          description: >-
+            The plugin's non-secret configuration as a JSON object, with the members of the `kind`'s schema listed on
+            `Merchant.settings` (AlipaySettings, EasyPaySettings, WechatPaySettings, StripeSettings). The plugin reads
+            them strictly: a member it does not know, or a value it cannot use, is a 422 naming `/merchant/settings`
+            or the member. The contract does not check them itself, so that refusal stays the plugin's one answer.
         secrets:
           type: object
           writeOnly: true
@@ -6908,7 +7049,16 @@ components:
         merchant_id: {$ref: "#/components/schemas/MerchantId"}
         kind: {type: string}
         state: {type: string, enum: [open, resolved]}
-        detail: {type: object, additionalProperties: true}
+        detail:
+          type: object
+          additionalProperties: true
+          description: >-
+            The facts the check that raised it recorded, for the person investigating: what identifies the payment,
+            refund, dispute or day (`order`, `trade_no`, `refund`, `dispute`, `day`, `batch`), and the amounts that
+            differ (`amount`, `expected`, `actual`): whole numbers, as JSON numbers or decimal text, in the smallest
+            unit of the payment's currency unless a `unit` member names another. Its members depend on `kind` and grow with each channel and reconciliation check,
+            so they are not typed here; show them as labelled values. What to act on is in the typed fields:
+            `kind`, `state`, `order_id`, `merchant_id`, `account_id`.
         created_at: {type: string, format: date-time}
         investigated_by: {type: string}
         investigated_at: {type: string, format: date-time}
@@ -9220,7 +9370,12 @@ components:
             group, or the supplier refused. Present only with `key_state` `failed`.
         facts:
           type: object
-          description: What the supplier says about the group (platform, subscription type, peak pricing, long context).
+          description: >-
+            What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for
+            example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a
+            declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not
+            typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in
+            the other fields: `ratio`, `key_state`, and the endpoints the group serves.
           additionalProperties: true
         pool: {$ref: "#/components/schemas/SupplierPool"}
     SupplierPool:
@@ -9726,10 +9881,35 @@ components:
         rev: {type: integer, format: int64, minimum: 0}
         reason: {$ref: "#/components/schemas/Reason"}
     Evidence:
+      x-go-type: jsonx.Raw
+      description: >-
+        What supports a price, kept as it was sent. Its shape is the price source's: for `official`,
+        OfficialPriceEvidence, which the server checks against the page's current snapshot and refuses otherwise; for
+        any other source, any non-empty object, which the server keeps unread for the reviewer (the admin page sends
+        `note` and, when given, `url`). `source` is beside it, not in it, so the schemas are `anyOf`.
+      anyOf:
+        - $ref: "#/components/schemas/OfficialPriceEvidence"
+        - $ref: "#/components/schemas/NotedPriceEvidence"
+    OfficialPriceEvidence:
+      type: object
+      additionalProperties: false
+      required: [page_id, snapshot_id, excerpts]
+      description: >-
+        Quotations from the model's official price page. Each excerpt must appear verbatim in the page's current
+        extracted price section, and the snapshot must be the page's current one in the price's currency; otherwise
+        the publication is refused.
+      properties:
+        page_id: {type: string, format: uuid, description: "The official price page."}
+        snapshot_id: {type: string, format: uuid, description: "The page's current snapshot, which the excerpts quote."}
+        excerpts:
+          type: array
+          minItems: 1
+          items: {type: string, minLength: 1}
+    NotedPriceEvidence:
       type: object
       minProperties: 1
       additionalProperties: true
-      description: What supports a price (a page excerpt, a dataset entry), kept as the person entered it.
+      description: Evidence for a source other than `official`, in the words of the person who publishes the price; the server checks only that it is a non-empty object.
     PricePublish:
       type: object
       required: [source, schedule, evidence, reason]

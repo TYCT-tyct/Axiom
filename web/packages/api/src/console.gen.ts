@@ -1707,8 +1707,89 @@ export interface components {
         SourceClassNameList: {
             data: components["schemas"]["SourceClassName"][];
         };
-        /** @description Inference defaults. Only deliberate configuration, no transient input. */
+        /** @description Inference defaults a call that names the preset starts from, its own members overriding them (docs/domains/routing.md「命名预设」): only deliberate configuration, never messages, input, stream or session identifiers. At most 16 KiB. The members it may hold are listed; any other is refused with 422. They are request members of the call formats (Chat Completions, Responses, Messages), whose shapes differ by format and are checked by the gateway when a call merges them, so this contract names them without typing them: typing would restate three request schemas here, and would move the refusal of a bad value from the server's 422 to the contract's 400. On saving, the server checks the values of only the five members whose description gives a rule. */
         PresetConfig: {
+            /** @description The model, a string of 1 to 200 characters that names no other preset (`@preset/`). */
+            model?: unknown;
+            /** @description Fallback models, an array of at most 8 strings like `model`; without `model` the first is the main one. */
+            models?: unknown;
+            /** @description A system prompt, a string; added to a request that has none (docs/domains/routing.md「命名预设」). */
+            system?: unknown;
+            /** @description Whether calls with this preset use the response cache, a boolean. Never sent upstream. */
+            cache_enabled?: unknown;
+            /** @description How long a cached response lives, an integer from 1 to 86400. Never sent upstream. */
+            cache_ttl_seconds?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            provider?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            route?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            temperature?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            top_p?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            top_k?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            min_p?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            max_tokens?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            max_completion_tokens?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            max_output_tokens?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            frequency_penalty?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            presence_penalty?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            repetition_penalty?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            seed?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            stop?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            stop_sequences?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            logit_bias?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            logprobs?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            top_logprobs?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            response_format?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            text?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            reasoning?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            reasoning_effort?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            thinking?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            output_config?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            output_format?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            tools?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            tool_choice?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            parallel_tool_calls?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            max_tool_calls?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            service_tier?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            speed?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            cache_control?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            context_management?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            plugins?: unknown;
+            /** @description As the request member of the same name in the call format the preset is used with. */
+            transforms?: unknown;
+        } & {
             [key: string]: unknown;
         };
         PresetRequest: {
@@ -2321,7 +2402,7 @@ export interface components {
              */
             authorize_url: string;
         };
-        /** @description The browser's `PublicKeyCredential` JSON, passed through to the WebAuthn verifier unchanged. Its shape is the WebAuthn specification's, not this contract's. */
+        /** @description WebAuthn JSON, whose shape is the WebAuthn specification's (https://www.w3.org/TR/webauthn-3/), not this contract's, so it is not typed here: restating a standard's dictionaries would only let the two drift. In a challenge (`public_key`) it is the options for `navigator.credentials.create()` or `get()`, as `{"publicKey": …}` holding a `PublicKeyCredentialCreationOptionsJSON` or `PublicKeyCredentialRequestOptionsJSON`; in a finish request it is the credential the browser returned, a `RegistrationResponseJSON` or `AuthenticationResponseJSON`, passed through to the WebAuthn verifier unchanged. Binary members are unpadded base64url text both ways, where the browser API takes and gives buffers. */
         WebAuthnCredential: {
             [key: string]: unknown;
         };
