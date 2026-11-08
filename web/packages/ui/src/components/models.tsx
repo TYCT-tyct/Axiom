@@ -15,8 +15,6 @@ import {
 } from "./model-pricing";
 import { Badge, Table, Td, Th } from "./panel";
 
-export { baseRate, perMillionBillionths } from "./model-pricing";
-
 // The public models and prices page: what a visitor may see of the catalog, at the price of the audience that asked.
 // Every member but the identity is optional, so a page served by an older node shows what it has and marks the rest
 // unavailable instead of failing (docs/frontend.md「滚动发布」). `pricing` is absent on every model and endpoint when

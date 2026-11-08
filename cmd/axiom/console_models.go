@@ -119,19 +119,35 @@ func modelAbilities(abilities []string) []consoleapi.ModelAbility {
 }
 
 // publicPricing writes a schedule view in the contract's shape. It is used for a model's cheapest endpoint and for each
-// endpoint's own price, so the two can never describe the same schedule differently.
+// endpoint's own price, so the two can never describe the same schedule differently. It also names each item's
+// headline rate and its display amount, so every frontend shows the same list price (#695).
 func publicPricing(pricing catalog.ScheduleView) consoleapi.ModelPricing {
 	basis := make([]consoleapi.ModelItem, len(pricing.Basis))
 	for i, item := range pricing.Basis {
 		basis[i] = consoleapi.ModelItem(item.String())
 	}
 	rates := make([]consoleapi.ModelRate, len(pricing.Rates))
+	var headlined catalog.ItemSet
 	for i, rate := range pricing.Rates {
+		// The view lists service tiers in enumeration order with standard first, so the first base-band rate of an
+		// item is the standard tier's, or the first offered tier's when standard leaves the item out.
+		headline := rate.Base && !headlined.Has(rate.Item)
+		if headline {
+			headlined.Add(rate.Item)
+		}
+		per := consoleapi.N1
+		if rate.Item.Unit() == catalog.UnitToken {
+			per = consoleapi.N1e06
+		}
+		display := string(rate.Price.Mul(int64(per)).AppendDecimal(nil))
 		body := consoleapi.ModelRate{
-			ServiceTier: consoleapi.ModelServiceTier(rate.ServiceTier.String()),
-			Item:        consoleapi.ModelItem(rate.Item.String()),
-			Unit:        consoleapi.ModelUnit(rate.Item.Unit().String()),
-			Amount:      rate.Price.String(),
+			ServiceTier:   consoleapi.ModelServiceTier(rate.ServiceTier.String()),
+			Item:          consoleapi.ModelItem(rate.Item.String()),
+			Unit:          consoleapi.ModelUnit(rate.Item.Unit().String()),
+			Amount:        rate.Price.String(),
+			Headline:      &headline,
+			DisplayAmount: &display,
+			DisplayPer:    &per,
 		}
 		if !rate.Base {
 			above := rate.Above

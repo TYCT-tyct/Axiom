@@ -49,7 +49,10 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 			Abilities: []string{"tools"},
 			Pricing: catalog.ScheduleView{Currency: platform.CurrencyNone, Rates: []catalog.ScheduleRate{
 				{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemInput, Price: price("0.000001")},
+				{ServiceTier: catalog.ServiceTierStandard, Base: true, Item: catalog.ItemRequest, Price: price("0.01")},
 				{ServiceTier: catalog.ServiceTierStandard, Above: 0, Item: catalog.ItemInput, Price: price("0.000003")},
+				{ServiceTier: catalog.ServiceTierPriority, Base: true, Item: catalog.ItemInput, Price: price("0.000005")},
+				{ServiceTier: catalog.ServiceTierPriority, Base: true, Item: catalog.ItemOutput, Price: price("0.000004")},
 				{ServiceTier: catalog.ServiceTierPriority, Above: 100000, Item: catalog.ItemOutput, Price: price("0.000002")},
 			}},
 			Endpoints: []gateway.PublicEndpoint{{
@@ -109,13 +112,28 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 			Rates:    []consoleapi.ModelRate{},
 		},
 	}}
+	// The headline is each item's first base-band rate: standard's input and request, and priority's output because
+	// standard does not price it; an explicit band above 0 is not the base band.
+	rate := func(tier consoleapi.ModelServiceTier, item consoleapi.ModelItem, unit consoleapi.ModelUnit, amount string, above *int64, headline bool, shown string) consoleapi.ModelRate {
+		per := consoleapi.N1e06
+		if unit != consoleapi.ModelUnitToken {
+			per = consoleapi.N1
+		}
+		return consoleapi.ModelRate{
+			ServiceTier: tier, Item: item, Unit: unit, Amount: amount, Above: above,
+			Headline: &headline, DisplayAmount: &shown, DisplayPer: &per,
+		}
+	}
 	pricing := consoleapi.ModelPricing{
 		Currency: "XXX",
 		Basis:    []consoleapi.ModelItem{},
 		Rates: []consoleapi.ModelRate{
-			{ServiceTier: consoleapi.Standard, Item: consoleapi.ModelItemInput, Unit: consoleapi.ModelUnitToken, Amount: "0.000001"},
-			{ServiceTier: consoleapi.Standard, Item: consoleapi.ModelItemInput, Unit: consoleapi.ModelUnitToken, Amount: "0.000003", Above: &zero},
-			{ServiceTier: consoleapi.Priority, Item: consoleapi.ModelItemOutput, Unit: consoleapi.ModelUnitToken, Amount: "0.000002", Above: &above},
+			rate(consoleapi.Standard, consoleapi.ModelItemInput, consoleapi.ModelUnitToken, "0.000001", nil, true, "1"),
+			rate(consoleapi.Standard, consoleapi.ModelItemRequest, consoleapi.ModelUnitUse, "0.01", nil, true, "0.01"),
+			rate(consoleapi.Standard, consoleapi.ModelItemInput, consoleapi.ModelUnitToken, "0.000003", &zero, false, "3"),
+			rate(consoleapi.Priority, consoleapi.ModelItemInput, consoleapi.ModelUnitToken, "0.000005", nil, false, "5"),
+			rate(consoleapi.Priority, consoleapi.ModelItemOutput, consoleapi.ModelUnitToken, "0.000004", nil, true, "4"),
+			rate(consoleapi.Priority, consoleapi.ModelItemOutput, consoleapi.ModelUnitToken, "0.000002", &above, false, "2"),
 		},
 	}
 	want := consoleapi.PublicModel{
@@ -126,6 +144,33 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, body); diff != "" {
 		t.Errorf("body (-want +got):\n%s", diff)
+	}
+}
+
+// TestPublicPricingDisplayAmountIsExact: the display amount is the unit price moved six places for a token and kept for
+// every other unit, without rounding at either end of the unit price's range.
+func TestPublicPricingDisplayAmountIsExact(t *testing.T) {
+	for _, tc := range []struct {
+		item   catalog.Item
+		amount string
+		want   string
+		per    consoleapi.ModelRateDisplayPer
+	}{
+		{catalog.ItemInput, "0.000000000000001", "0.000000001", consoleapi.N1e06},
+		{catalog.ItemOutput, "1000", "1000000000", consoleapi.N1e06},
+		{catalog.ItemCacheRead, "0.0000003", "0.3", consoleapi.N1e06},
+		{catalog.ItemImageOutPiece, "0.000000000000001", "0.000000000000001", consoleapi.N1},
+		{catalog.ItemAudioInSecond, "1000", "1000", consoleapi.N1},
+		{catalog.ItemInput, "0", "0", consoleapi.N1e06},
+	} {
+		price, err := platform.ParseUnitPrice(tc.amount)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := publicPricing(catalog.ScheduleView{Rates: []catalog.ScheduleRate{{Base: true, Item: tc.item, Price: price}}}).Rates[0]
+		if *got.DisplayAmount != tc.want || *got.DisplayPer != tc.per || !*got.Headline {
+			t.Errorf("%s at %s: display %s per %v headline %v, want %s per %v headline", tc.item, tc.amount, *got.DisplayAmount, *got.DisplayPer, *got.Headline, tc.want, tc.per)
+		}
 	}
 }
 

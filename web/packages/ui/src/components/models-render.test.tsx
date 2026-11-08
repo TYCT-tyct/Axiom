@@ -33,7 +33,17 @@ const model: PublicModel = {
 
 const price = {
   currency: "USD",
-  rates: [{ service_tier: "standard", item: "input", unit: "token", amount: "0.000001" }],
+  rates: [
+    {
+      service_tier: "standard",
+      item: "input",
+      unit: "token",
+      amount: "0.000001",
+      headline: true,
+      display_amount: "1",
+      display_per: 1_000_000,
+    },
+  ],
 };
 
 const render = (models: PublicModel[]) =>
@@ -65,4 +75,52 @@ it("shows the model and endpoint prices when the site publishes them", () => {
   ]);
   expect(html).toContain("$1.00");
   expect(html).not.toContain("Prices are visible to signed-in members");
+});
+
+// The list shows the rate the server names as the headline and the amount it says to show, not a rate the page picks:
+// here the server names a priority rate, which the page must not replace with the standard one.
+it("shows the headline rate and display amount the server names", () => {
+  const named = {
+    currency: "USD",
+    rates: [
+      {
+        service_tier: "standard",
+        item: "output",
+        unit: "token",
+        amount: "0.000003",
+        headline: false,
+        display_amount: "3",
+        display_per: 1_000_000,
+      },
+      {
+        service_tier: "priority",
+        item: "output",
+        unit: "token",
+        amount: "0.000007",
+        headline: true,
+        display_amount: "7",
+        display_per: 1_000_000,
+      },
+    ],
+  };
+  const html = render([{ ...model, pricing: named, endpoints: [] }]);
+  expect(html).toMatch(/\$7\.00<\/span><span[^>]*>per 1M tokens/);
+  expect(html).not.toMatch(/\$3\.00<\/span><span[^>]*>per 1M tokens/);
+});
+
+// An older node names no headline and no display amount: the list says the price is unavailable rather than choosing
+// one, and the full rate table shows each price per unit exactly as it came.
+it("shows an older node's prices per unit and no headline", () => {
+  const html = render([
+    {
+      ...model,
+      pricing: {
+        currency: "USD",
+        rates: [{ service_tier: "standard", item: "input", unit: "token", amount: "0.000001" }],
+      },
+      endpoints: [],
+    },
+  ]);
+  expect(html).toContain("Prices unavailable");
+  expect(html).not.toContain("$1.00");
 });
