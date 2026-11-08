@@ -162,17 +162,3 @@ func TestAuditDigestWaitsForTheDay(t *testing.T) {
 		t.Errorf("made %d once they had", n)
 	}
 }
-
-// TestAuditDigestCloses: a digest's incident is closed a day after it was made, once.
-func TestAuditDigestCloses(t *testing.T) {
-	t.Parallel()
-	db := openOps(t)
-	db.digest(t, false, time.Minute)
-	db.digest(t, false, time.Minute)
-	superuser(t, db, `UPDATE operations.audit_digests SET created_at = now() - interval '25 hours'`)
-	db.digest(t, false, time.Minute)
-	db.digest(t, false, time.Minute)
-	if got, want := db.digestSignals(t), utcDay(-1)+":false,"+utcDay(-1)+":true"; got != want {
-		t.Errorf("signals %s, want %s", got, want)
-	}
-}

@@ -3,12 +3,6 @@
 SELECT coalesce(((SELECT max(day) FROM operations.audit_digests) + 1)::timestamp AT TIME ZONE 'UTC',
     date_trunc('day', now(), 'UTC') - interval '1 day')::timestamptz AS day_start;
 
--- name: CloseAuditDigests :many
--- The digests made a day ago or more and not yet closed, marked closed now: their incidents have had a day to be told.
-UPDATE operations.audit_digests SET closed_at = now()
-WHERE closed_at IS NULL AND created_at <= now() - interval '1 day'
-RETURNING (day::timestamp AT TIME ZONE 'UTC')::timestamptz AS day_start;
-
 -- name: AuditDayOperations :many
 -- The agent's operations proposed in [@day_start, @day_end), by tool and where each is now.
 SELECT tool, state, count(*)::integer AS count FROM operations.operations

@@ -23,8 +23,8 @@ import (
 // whichever node or attempt gets there first makes and announces it, once.
 
 const (
-	// digestSignal is the alert that carries a digest's headline to the owner's channels, keyed by its day. The
-	// alert module treats it as a notice: closing it sends nothing.
+	// digestSignal is the alert that carries a digest's headline to the owner's channels, keyed by its day. It is
+	// never resolved here: the alert module treats it as a notice, which closes itself once told and sends no recovery.
 	digestSignal = "operations.audit_digest"
 	// digestDays bounds the days one run makes, so a node that was down for weeks catches up a week a minute.
 	digestDays = 7
@@ -91,8 +91,8 @@ type DigestReplica struct {
 	ReplicatedAt  *time.Time `json:"replicated_at,omitempty"`
 }
 
-// MakeAuditDigests closes the incidents of the digests told a day ago, then makes the digests of the days that have
-// ended since the last one, up to digestDays, each announced by a signal. It returns how many it made. replicaOn says
+// MakeAuditDigests makes the digests of the days that have ended since the last one, up to digestDays, each announced
+// by a signal. It returns how many it made. replicaOn says
 // whether this node copies the chain, which the digests report.
 func MakeAuditDigests(ctx context.Context, db *pg.DB, scope pg.Scope, replicaOn bool) (int, error) {
 	return makeAuditDigests(ctx, db, scope, replicaOn, chainSettle)
@@ -100,9 +100,6 @@ func MakeAuditDigests(ctx context.Context, db *pg.DB, scope pg.Scope, replicaOn 
 
 // makeAuditDigests is MakeAuditDigests with the settling time of the day's last transactions, which the tests lengthen.
 func makeAuditDigests(ctx context.Context, db *pg.DB, scope pg.Scope, replicaOn bool, settle time.Duration) (int, error) {
-	if err := db.Tx(ctx, scope, func(tx pg.Tx) error { return closeDigests(ctx, tx) }); err != nil {
-		return 0, err
-	}
 	made := 0
 	for range digestDays {
 		day, ok, err := nextDigestDay(ctx, db, scope, settle)
@@ -122,21 +119,6 @@ func makeAuditDigests(ctx context.Context, db *pg.DB, scope pg.Scope, replicaOn 
 		made++
 	}
 	return made, nil
-}
-
-// closeDigests closes the incidents of the digests made a day ago or more.
-func closeDigests(ctx context.Context, tx pg.Tx) error {
-	days, err := New().CloseAuditDigests(ctx, tx)
-	if err != nil {
-		return fmt.Errorf("close the audit digests' incidents: %w", err)
-	}
-	for _, day := range days {
-		key := day.UTC().Format(time.DateOnly)
-		if err := alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: digestSignal, Key: key, Severity: "info", Resolved: true}); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // nextDigestDay is the day the next digest is of, and whether it is final: it has ended, and so has every transaction

@@ -247,33 +247,6 @@ func (q *Queries) AuditDigests(ctx context.Context, db DBTX, arg AuditDigestsPar
 	return items, nil
 }
 
-const closeAuditDigests = `-- name: CloseAuditDigests :many
-UPDATE operations.audit_digests SET closed_at = now()
-WHERE closed_at IS NULL AND created_at <= now() - interval '1 day'
-RETURNING (day::timestamp AT TIME ZONE 'UTC')::timestamptz AS day_start
-`
-
-// The digests made a day ago or more and not yet closed, marked closed now: their incidents have had a day to be told.
-func (q *Queries) CloseAuditDigests(ctx context.Context, db DBTX) ([]time.Time, error) {
-	rows, err := db.Query(ctx, closeAuditDigests)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []time.Time
-	for rows.Next() {
-		var day_start time.Time
-		if err := rows.Scan(&day_start); err != nil {
-			return nil, err
-		}
-		items = append(items, day_start)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const insertAuditDigest = `-- name: InsertAuditDigest :execrows
 INSERT INTO operations.audit_digests (day, body)
 VALUES (($1::timestamptz AT TIME ZONE 'UTC')::date, $2)

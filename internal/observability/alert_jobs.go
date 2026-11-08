@@ -146,11 +146,18 @@ func evaluateIncident(ctx context.Context, tx pg.Tx, e AlertEvent, rules []Alert
 			return err
 		}
 	} else {
+		var told []string
 		for _, r := range rules {
 			if ch, ok := channels[r.Channel]; ok && r.Kind == e.Kind {
 				if err := evaluateRule(ctx, tx, e, r, ch, now); err != nil {
 					return err
 				}
+				told = append(told, r.ID)
+			}
+		}
+		if noticeKind(e.Kind) {
+			if err := closeTold(ctx, tx, e, told, now); err != nil {
+				return err
 			}
 		}
 	}
@@ -306,10 +313,21 @@ func (a *alertWorker) deliveryReceipt(ctx context.Context, id uuid.UUID, deliver
 }
 
 // noticeKind reports the incidents that tell one fact rather than a fault, a channel test or the daily audit digest
-// (docs/domains/operations.md「审计」): their producer closes them once they are told, and nothing recovered, so closing
-// one sends no recovery and does not wait for one.
+// (docs/domains/operations.md「审计」): nothing recovers, so closing one sends no recovery and does not wait for one.
+// An open one closes itself once told (closeTold); its producer never resolves it, so a backlog that holds its signal
+// back cannot close it before it was told.
 func noticeKind(kind string) bool {
 	return kind == "alert.test" || kind == "operations.audit_digest"
+}
+
+// closeTold closes notice e once every rule that matches it (rules, by ID) has made its first notification and none
+// of its notifications is still to be sent; with no rule it closes at once, as there is nobody to tell.
+func closeTold(ctx context.Context, tx pg.Tx, e AlertEvent, rules []string, now time.Time) error {
+	_, err := tx.Exec(ctx, `UPDATE observability.alert_events e SET resolved_at=$2,state='resolved' WHERE id=$1 AND resolved_at IS NULL
+ AND NOT EXISTS(SELECT FROM observability.alert_receipts WHERE event_id=e.id AND state IN ('pending','queued'))
+ AND NOT EXISTS(SELECT FROM unnest($3::text[]) m(rule_id) WHERE NOT EXISTS(
+ SELECT FROM observability.alert_receipts r WHERE r.event_id=e.id AND r.rule_id=m.rule_id AND r.sequence=0))`, e.ID, now, rules)
+	return err
 }
 
 func recoverAlerts(ctx context.Context, tx pg.Tx, e AlertEvent, now time.Time) error {

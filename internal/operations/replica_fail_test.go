@@ -66,7 +66,6 @@ func TestReplicaAndDigestStepsFail(t *testing.T) {
 		"digestChain":      func(tx pg.Tx) error { _, err := digestChain(canceled, tx); return err },
 		"digestReplica":    func(tx pg.Tx) error { _, err := digestReplica(canceled, tx, true); return err },
 		"AuditDigests":     func(tx pg.Tx) error { _, _, err := AuditDigests(canceled, tx, nil, 1); return err },
-		"closeDigests":     func(tx pg.Tx) error { return closeDigests(canceled, tx) },
 	} {
 		if err := db.Tx(t.Context(), scope, step); !errors.Is(err, context.Canceled) {
 			t.Errorf("%s with a failing database: %v", name, err)
