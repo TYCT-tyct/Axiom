@@ -41,7 +41,7 @@ for (const language of ["zh", "en"] as const) {
         : route.fallback(),
     );
     const dialog = await createSecret(page, language);
-    const key = await dialog.locator("code").innerText();
+    const key = (await dialog.locator("code").textContent()) ?? "";
     await expect(dialog.getByRole("alert")).toHaveText(labels[language].error);
     await expect(dialog.locator("pre")).toHaveCount(0);
     fail = false;
