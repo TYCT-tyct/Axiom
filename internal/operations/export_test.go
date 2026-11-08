@@ -14,3 +14,6 @@ var VerifyAuditChainBy = verifyAuditChain
 
 // ErrReplicaConflict is a replica key that holds other bytes.
 var ErrReplicaConflict = errReplicaConflict
+
+// ReplicaAlertKey is a replica target's part of its alerts' keys.
+var ReplicaAlertKey = replicaAlertKey

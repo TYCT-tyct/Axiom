@@ -187,7 +187,7 @@ func TestAuditReplicaNeverOverwrites(t *testing.T) {
 		t.Errorf("copied %d over a conflict: %v", n, err)
 	}
 	db.expect(t, "the conflict", `SELECT string_agg((body->>'severity') || ' ' || (body->>'key'), ',') FROM platform.alert_signals
-		WHERE body->>'kind' = 'operations.audit_replica_conflict'`, "critical "+objectKey(3, 3))
+		WHERE body->>'kind' = 'operations.audit_replica_conflict'`, "critical "+operations.ReplicaAlertKey(b.target)+"/"+objectKey(3, 3))
 	db.expect(t, "the copy", `SELECT replicated_seq::text FROM operations.audit_replica`, "2")
 	lag := `SELECT string_agg((body->>'severity') || ' ' || coalesce(body->'fields'->>'behind_links', '-'), ',' ORDER BY id)
 		FROM platform.alert_signals WHERE body->>'kind' = 'operations.audit_replica_lag'`
@@ -354,4 +354,42 @@ func TestAuditReplicaCopiesOnlyWhatChecks(t *testing.T) {
 	if keys := b.keys(); len(keys) != 0 {
 		t.Errorf("objects %v", keys)
 	}
+}
+
+// TestAuditReplicaAlertsPerBucket: while some nodes copy to one bucket and some to another, as when the deployment is
+// moved, each bucket's alerts are its own: the bucket that caught up resolves its own lag and not the other's, and the
+// same conflicting key in both is two alerts.
+func TestAuditReplicaAlertsPerBucket(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.backdated(t, "5 minutes")
+	db.chain(t, time.Minute)
+	superuser(t, db, `UPDATE operations.audit_chain SET chained_at = now() - interval '11 minutes'`)
+	first, second := newBucket(), newBucket()
+	second.target, second.down = "https://s3.example.com/b", true
+	if _, err := db.replicate(t, second); err == nil {
+		t.Fatal("copied to a bucket that is down")
+	}
+	if _, err := db.replicate(t, first); err != nil {
+		t.Fatal(err)
+	}
+	last := `SELECT (SELECT body->>'severity' || ' ' || coalesce(body->>'resolved', 'false') FROM platform.alert_signals
+		WHERE body->>'kind' = 'operations.audit_replica_lag' AND body->>'key' = '%s' ORDER BY id DESC LIMIT 1)`
+	db.expect(t, "the lagging bucket's lag", fmt.Sprintf(last, operations.ReplicaAlertKey(second.target)), "warning false")
+	db.expect(t, "the bucket that caught up", fmt.Sprintf(last, operations.ReplicaAlertKey(first.target)), "info true")
+
+	second.down = false
+	if n, err := db.replicate(t, second); n != 1 || err != nil {
+		t.Fatalf("copied %d to the second bucket once it was back: %v", n, err)
+	}
+	db.backdated(t, "4 minutes")
+	db.chain(t, time.Minute)
+	for _, b := range []*bucket{first, second} {
+		b.objects[objectKey(2, 2)] = []byte("other bytes")
+		if _, err := db.replicate(t, b); !errors.Is(err, operations.ErrReplicaConflict) {
+			t.Fatalf("%s: %v", b.target, err)
+		}
+	}
+	db.expect(t, "the conflicts", `SELECT count(DISTINCT body->>'key')::text || ' ' || count(*) FILTER (WHERE body->'fields'->>'object' = '`+
+		objectKey(2, 2)+`')::text FROM platform.alert_signals WHERE body->>'kind' = 'operations.audit_replica_conflict'`, "2 2")
 }

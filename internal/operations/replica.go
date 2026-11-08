@@ -3,6 +3,7 @@ package operations
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -49,12 +50,32 @@ const (
 	replicaLagTimeout = 10 * time.Second
 )
 
-// The alerts of the copy: links waiting longer than replicaLagAfter (warning, resolved when the copy catches up), and
-// a key the bucket holds with other bytes (critical, keyed by the key, until the owner closes it).
+// The alerts of the copy, each of one target as its progress is: links waiting longer than replicaLagAfter (warning,
+// keyed by the target, resolved when the copy to that target catches up), and a key a bucket holds with other bytes
+// (critical, keyed by the target and the object's key, until the owner closes it). Keyed by target, a node that copies
+// to another bucket, as while the deployment is moved from one to another, neither resolves nor merges this one's.
 const (
 	replicaLagSignal      = "operations.audit_replica_lag"
 	replicaConflictSignal = "operations.audit_replica_conflict"
+	// targetFieldMax is the longest target an alert carries as a field, the alert fields' limit; a longer one is
+	// still told apart by the key.
+	targetFieldMax = 512
 )
+
+// replicaAlertKey is target's part of an alert's key: the hex of the first 16 bytes of its SHA-256, a fixed length
+// within the alerts' 256-character key whatever the target's.
+func replicaAlertKey(target string) string {
+	sum := sha256.Sum256([]byte(target))
+	return hex.EncodeToString(sum[:16])
+}
+
+// replicaAlertFields are fields with the target added, when it fits a field.
+func replicaAlertFields(target string, fields map[string]string) map[string]string {
+	if len(target) <= targetFieldMax {
+		fields["target"] = target
+	}
+	return fields
+}
 
 // ReplicaStore is the bucket the chain is copied to. Its credentials write new objects, read them and list the bucket
 // (without which S3 answers a missing key 403, not 404), and can neither overwrite nor delete one: the bucket's
@@ -106,7 +127,7 @@ func replicate(ctx context.Context, db *pg.DB, scope pg.Scope, r Replica) (int, 
 			return copied, err
 		}
 		if err := writeReplica(ctx, r.Store, b); err != nil {
-			return copied, errors.Join(err, raiseConflict(ctx, db, scope, b, err))
+			return copied, errors.Join(err, raiseConflict(ctx, db, scope, r.Target, b, err))
 		}
 		var moved int64
 		if err := db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
@@ -233,15 +254,17 @@ func holds(ctx context.Context, store ReplicaStore, b replicaBatch) error {
 	return nil
 }
 
-// raiseConflict alerts err when it is a conflict; the copy stays where it is, so the lag follows.
-func raiseConflict(ctx context.Context, db *pg.DB, scope pg.Scope, b replicaBatch, err error) error {
+// raiseConflict alerts err when it is a conflict in target's bucket; the copy stays where it is, so the lag follows.
+func raiseConflict(ctx context.Context, db *pg.DB, scope pg.Scope, target string, b replicaBatch, err error) error {
 	if !errors.Is(err, errReplicaConflict) {
 		return nil
 	}
 	return db.Tx(ctx, scope, func(tx pg.Tx) error {
 		return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{
-			Kind: replicaConflictSignal, Key: b.key, Severity: "critical",
-			Fields: map[string]string{"first_seq": strconv.FormatInt(b.from+1, 10), "last_seq": strconv.FormatInt(b.last, 10)},
+			Kind: replicaConflictSignal, Key: replicaAlertKey(target) + "/" + b.key, Severity: "critical",
+			Fields: replicaAlertFields(target, map[string]string{
+				"object": b.key, "first_seq": strconv.FormatInt(b.from+1, 10), "last_seq": strconv.FormatInt(b.last, 10),
+			}),
 		})
 	})
 }
@@ -254,14 +277,14 @@ func signalReplicaLag(ctx context.Context, tx pg.Tx, target string) error {
 		return fmt.Errorf("read the audit replica's lag: %w", err)
 	}
 	if lag.PendingSince == nil || lag.Now.Sub(*lag.PendingSince) <= replicaLagAfter {
-		return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: replicaLagSignal, Key: "platform", Severity: "info", Resolved: true})
+		return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: replicaLagSignal, Key: replicaAlertKey(target), Severity: "info", Resolved: true})
 	}
 	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{
-		Kind: replicaLagSignal, Key: "platform", Severity: "warning",
-		Fields: map[string]string{
+		Kind: replicaLagSignal, Key: replicaAlertKey(target), Severity: "warning",
+		Fields: replicaAlertFields(target, map[string]string{
 			"behind_links":   strconv.FormatInt(lag.HeadSeq-lag.ReplicatedSeq, 10),
 			"behind_seconds": strconv.FormatInt(int64(lag.Now.Sub(*lag.PendingSince)/time.Second), 10),
-		},
+		}),
 	})
 }
 

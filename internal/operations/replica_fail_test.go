@@ -85,7 +85,7 @@ func TestWriteReplicaRefusals(t *testing.T) {
 	if err := writeReplica(t.Context(), &failingStore{badBody: true}, b); err == nil || !strings.Contains(err.Error(), "connection reset") {
 		t.Errorf("a body that fails to read: %v", err)
 	}
-	if err := raiseConflict(t.Context(), db, scope, b, errors.New("other")); err != nil {
+	if err := raiseConflict(t.Context(), db, scope, "t", b, errors.New("other")); err != nil {
 		t.Errorf("a failure that is not a conflict raised: %v", err)
 	}
 }
