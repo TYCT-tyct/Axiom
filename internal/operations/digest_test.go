@@ -1,6 +1,10 @@
 package operations_test
 
 import (
+	"maps"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
@@ -135,30 +139,83 @@ func TestAuditDigestPages(t *testing.T) {
 	}
 }
 
-// TestAuditDigestCatchesUp: after days without a run, the next one makes every day that ended since the last digest,
-// oldest first, each its own signal; before the first digest it starts with yesterday.
-func TestAuditDigestCatchesUp(t *testing.T) {
+// digestDays is one row of TestAuditDigestDays: what happened before the job ran (given the database and how many
+// runs to make at once), and the digests and signals it must have left: the days by their offset from today, each
+// with how many operations of the day it counted.
+type digestDays struct {
+	before func(t *testing.T, db opsDB)
+	runs   int
+	days   map[int]int
+}
+
+// TestAuditDigestDays: the digests follow docs/domains/operations.md「每天的摘要现在的实现」 1 and 2: each UTC day once,
+// in order from the day after the last, after the day's last transactions, with every write committed into it, each
+// announced by one signal keyed by its day, whatever ran before or races beside it.
+func TestAuditDigestDays(t *testing.T) {
 	t.Parallel()
-	db := openOps(t)
-	superuser(t, db, `INSERT INTO operations.audit_digests (day, body)
-		VALUES ((now() AT TIME ZONE 'UTC')::date - 4, '{"day": "-"}')`)
-	if n := db.digest(t, false, time.Minute); n != 3 || db.digest(t, false, time.Minute) != 0 {
-		t.Fatalf("made %d", n)
-	}
-	if got, want := db.digestSignals(t), utcDay(-3)+":false,"+utcDay(-2)+":false,"+utcDay(-1)+":false"; got != want {
-		t.Errorf("signals %s, want %s", got, want)
+	for name, c := range map[string]digestDays{
+		"the first run makes yesterday": {runs: 1, days: map[int]int{-1: 0}},
+		"midnight between commit and digest": {before: func(t *testing.T, db opsDB) {
+			// A transaction begun before midnight is still open: the frontier has not passed the day, which a
+			// settling time longer than the day stands for, so nothing is made yet.
+			if n := db.digest(t, false, 48*time.Hour); n != 0 {
+				t.Fatalf("made %d before the day's transactions ended", n)
+			}
+			// It commits after midnight with yesterday's time, as an operation begun at 23:59:59 does.
+			if _, _, err := db.propose(t, retire(uuid.NewV7(), uuid.NewV7(), 1, false)); err != nil {
+				t.Fatal(err)
+			}
+			superuser(t, db, `UPDATE operations.operations SET created_at = date_trunc('day', now(), 'UTC') - interval '1 second'`)
+		}, runs: 1, days: map[int]int{-1: 1}},
+		"the job down for days": {before: func(t *testing.T, db opsDB) {
+			superuser(t, db, `INSERT INTO operations.audit_digests (day, body) VALUES ((now() AT TIME ZONE 'UTC')::date - 4, '{"day": "-"}')`)
+		}, runs: 1, days: map[int]int{-3: 0, -2: 0, -1: 0}},
+		"two nodes racing": {runs: 2, days: map[int]int{-1: 0}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c.expect(t)
+		})
 	}
 }
 
-// TestAuditDigestWaitsForTheDay: a day is not made while a transaction that began before its end may still commit into
-// it, which the frontier the audit chain waits on stands for; once it has passed, the day is made.
-func TestAuditDigestWaitsForTheDay(t *testing.T) {
-	t.Parallel()
+func (c digestDays) expect(t *testing.T) {
 	db := openOps(t)
-	if n := db.digest(t, false, 48*time.Hour); n != 0 {
-		t.Errorf("made %d before the day's transactions could have ended", n)
+	if c.before != nil {
+		c.before(t, db)
 	}
-	if n := db.digest(t, false, time.Minute); n != 1 {
-		t.Errorf("made %d once they had", n)
+	seeded := db.text(t, `SELECT count(*)::text FROM operations.audit_digests`)
+	errs := make(chan error, c.runs)
+	for range c.runs {
+		go func() {
+			_, err := operations.MakeAuditDigestsAfter(t.Context(), db.DB, platformScope, false, time.Minute)
+			errs <- err
+		}()
+	}
+	for range c.runs {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := db.digest(t, false, time.Minute); n != 0 {
+		t.Errorf("a later run made %d", n)
+	}
+	digests, _ := db.digests(t, nil, 10)
+	counted := map[string]int{}
+	for _, d := range digests {
+		counted[d.Day] = len(d.Operations)
+	}
+	var want []string
+	for _, day := range slices.Sorted(maps.Keys(c.days)) {
+		want = append(want, utcDay(day)+":false")
+		if got, ok := counted[utcDay(day)]; !ok || got != c.days[day] {
+			t.Errorf("%s counted %d operations (made %v), want %d", utcDay(day), got, ok, c.days[day])
+		}
+	}
+	if got := db.digestSignals(t); got != strings.Join(want, ",") {
+		t.Errorf("signals %s, want %s", got, strings.Join(want, ","))
+	}
+	if got := len(digests); strconv.Itoa(got-len(c.days)) != seeded {
+		t.Errorf("%d digests beside the %s seeded, want %d", got, seeded, len(c.days))
 	}
 }

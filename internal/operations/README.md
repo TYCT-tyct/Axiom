@@ -248,7 +248,7 @@ func RegisterAuditDigest(db *pg.DB, scope pg.Scope, queue *pg.Queue, replicaOn b
 | 币种不符的金额目标不参与对照 | `addExpected` 跳过；`Expected` 的金额只按站点当前币种呈现 |
 | 审计链按 `(at, id)` 依次覆盖链头之前的每条审计条目，不分叉、不跳号 | 主键 `seq` 和触发器 `audit_chain_follows`；只接 `AuditChainFrontier` 之前的条目，比所有开着的事务都早的条目不会再有更早的提交；核对时对位比较，链头之前多出、少了或改了的条目都停下接链（`TestAuditChainHalts`、`TestAuditChainWaitsForOpenTransactions`） |
 | 副本里每条链都核对过，写过的对象不被改写 | 只复制 `checkedLinks` 通过的；写前先读键，字节不同就停下告警，不覆盖；位置从读到的值推进（`TestAuditReplicaNeverOverwrites`） |
-| 每个 UTC 日恰好一份摘要、一个事件，内容来自这一天的事务都提交之后的一个快照 | `audit_digests` 的主键是日期，`ON CONFLICT DO NOTHING` 插进去了才在同一事务发以日期为键的信号；从上一份的后一天往后做；等 `AuditChainFrontier` 过了这一天；`ReadTx` 是可重复读（`TestAuditDigest`、`TestAuditDigestCatchesUp`、`TestAuditDigestWaitsForTheDay`；告警这一侧见 observability 的 `TestAlertNoticeClosesOnceTold`） |
+| 每个 UTC 日恰好一份摘要、一个事件，内容来自这一天的事务都提交之后的一个快照 | `audit_digests` 的主键是日期，`ON CONFLICT DO NOTHING` 插进去了才在同一事务发以日期为键的信号；从上一份的后一天往后做；等 `AuditChainFrontier` 过了这一天；`ReadTx` 是可重复读（`TestAuditDigest`、`TestAuditDigestDays`；通知的生命周期见领域文档「每天的摘要现在的实现」的不变量，告警这一侧由 observability 的 `TestDigestNotificationLifecycle` 覆盖） |
 | 未记录的成功改动不能留下 | `audit.Record` 和写入同一事务；`TestAdminOperationsTargets` 读审计的 `before`/`after`，包括旧页面写入时后四项的现值 |
 
 ## 测试
@@ -271,7 +271,7 @@ func RegisterAuditDigest(db *pg.DB, scope pg.Scope, queue *pg.Queue, replicaOn b
 
 - `chain_test.go`（真实 PostgreSQL）：`TestAuditChainLinksCommittedEntries` 覆盖按开始时刻的顺序接链、没过 60 秒的不接、不重复接、整条链核对通过，以及表只收接在链头之后的一条、应用改不了链也删不了故障；`TestAuditChainWaitsForOpenTransactions` 用持有一个写了审计的事务覆盖后提交的条目不越过它；`TestAuditChainHalts` 表驱动覆盖插到链头之前、删掉、改掉一条、改掉一条链和把链头的时刻改到将来各自被下一轮发现，故障、审计和告警各只有一次，之后不再接链；`TestAuditChainChecksBeyondTheWindow` 覆盖 1501 条分四个事务接完，改动第 501 条时每轮的核对看不到；整条核对每次两个事务时，第一次开一轮并核对到 500，取消的一次不动位置，下一次从 501 接着做并发现它；`TestAuditChainCheckRounds` 覆盖一天之内不开新的一轮、满一天开、开始满一天还没完时发逾期告警、核对完恢复；`TestAuditChainLag` 覆盖落后告警和赶上后的恢复。`chain_hash_test.go` 的 `TestLinkHash` 固定哈希的编码；`chain_fail_test.go` 的 `TestChainStepsFail` 覆盖每一步把数据库失败带回、只读事务里不写链和故障，`TestAuditChainWork` 覆盖接链和整条核对失败时只记日志。
 - `replica_test.go`（真实 PostgreSQL，内存里的桶，和 SeaweedFS 一样不理 `If-None-Match`）：`TestAuditReplicaCopiesTheChain` 覆盖 1001 条分 500、500、1 三个对象复制、之后一条一个对象、没有新链不写，以及只凭桶里的对象另行重算出和库里一样的链；`TestAuditReplicaNeverOverwrites` 覆盖丢了位置后再跑不重写同样的字节、键里是别的字节时不覆盖并发冲突告警、落后告警与恢复；`TestAuditReplicaHoldsItsPlace` 覆盖桶不可用和条目被改时位置不动、不写对象。`replica_fail_test.go`：`TestReplicaAndDigestStepsFail` 覆盖复制和摘要的每一步把数据库或桶的失败交给调用方，`TestReplicaAndDigestWork` 覆盖两个任务失败时只记日志、不重试。
-- `digest_test.go`（真实 PostgreSQL）：`TestAuditDigest` 覆盖只算昨天的运营操作、审批、4xx 被拒的调用（今天和前天的不算、2xx 和 5xx 不算）、上限策略那一天的计数器，链和复制状态，摘要只做一次、信号只发一次、键是日期；`TestAuditDigestPages` 覆盖从新到旧翻页；`TestAuditDigestCatchesUp` 覆盖停了几天后按顺序补做每一天、各自一个信号；`TestAuditDigestWaitsForTheDay` 覆盖边界没过这一天时不做。`TestAuditReplicaLagOutlivesTheDeadline` 覆盖上下文已结束的一轮仍记下落后告警；`TestReplicaAndDigestStepsFail` 还覆盖读键时的 403 不写对象、提示列举权限。
+- `digest_test.go`（真实 PostgreSQL）：`TestAuditDigest` 覆盖只算昨天的运营操作、审批、4xx 被拒的调用（今天和前天的不算、2xx 和 5xx 不算）、上限策略那一天的计数器，链和复制状态，摘要只做一次、信号只发一次、键是日期；`TestAuditDigestPages` 覆盖从新到旧翻页；`TestAuditDigestDays` 表驱动覆盖第一次只做昨天、午夜前开始午夜后提交的写入（边界没过时不做，过了之后算进去）、任务停了几天后按顺序补做每一天、两个节点同时做只有一份和一个信号。`TestAuditReplicaLagOutlivesTheDeadline` 覆盖上下文已结束的一轮仍记下落后告警；`TestReplicaAndDigestStepsFail` 还覆盖读键时的 403 不写对象、提示列举权限。
 - `cmd/axiom/operations_audit_test.go` 的 `TestOperationsAuditDigests`（真实 HTTP 和数据库）覆盖 `audit_digests` 的翻页、不是日期的游标 400 和只有站点范围的凭证 404。
 - `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖刚好 8192 字节的输入原样保存、多一个字节只记大小、站点范围读不到。
 

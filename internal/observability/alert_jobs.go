@@ -146,17 +146,12 @@ func evaluateIncident(ctx context.Context, tx pg.Tx, e AlertEvent, rules []Alert
 			return err
 		}
 	} else {
-		var told []string
-		for _, r := range rules {
-			if ch, ok := channels[r.Channel]; ok && r.Kind == e.Kind {
-				if err := evaluateRule(ctx, tx, e, r, ch, now); err != nil {
-					return err
-				}
-				told = append(told, r.ID)
-			}
+		tellers, err := tellIncident(ctx, tx, e, rules, channels, now)
+		if err != nil {
+			return err
 		}
 		if noticeKind(e.Kind) {
-			if err := closeTold(ctx, tx, e, told, now); err != nil {
+			if err := closeTold(ctx, tx, e, tellers, now); err != nil {
 				return err
 			}
 		}
@@ -168,10 +163,46 @@ func evaluateIncident(ctx context.Context, tx pg.Tx, e AlertEvent, rules []Alert
 	return err
 }
 
-func evaluateRule(ctx context.Context, tx pg.Tx, e AlertEvent, r AlertRule, ch AlertChannel, now time.Time) error {
-	if e.Kind == "alert.channel_unavailable" && e.Key == ch.ID {
-		return nil
+// tellIncident evaluates open incident e against every rule on its kind whose channel exists, and returns the IDs of
+// the rules that must tell it (mustTell); a rule that does not hold for it now has its duration start over.
+func tellIncident(ctx context.Context, tx pg.Tx, e AlertEvent, rules []AlertRule, channels map[string]AlertChannel, now time.Time) ([]string, error) {
+	var tellers []string
+	for _, r := range rules {
+		ch, ok := channels[r.Channel]
+		if !ok || r.Kind != e.Kind {
+			continue
+		}
+		if !mustTell(e, r, ch) {
+			if err := forgetWindow(ctx, tx, e, r); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		tellers = append(tellers, r.ID)
+		if err := evaluateRule(ctx, tx, e, r, ch, now); err != nil {
+			return nil, err
+		}
 	}
+	return tellers, nil
+}
+
+// mustTell reports whether rule r, delivering on ch, must tell incident e: its whole condition holds for e (kind,
+// minimum severity, threshold), and ch is not the channel e reports unavailable. It is the one answer to "who must be
+// told": evaluation tells e through exactly these rules once their duration has passed, and a notice closes only when
+// each of them has (closeTold).
+func mustTell(e AlertEvent, r AlertRule, ch AlertChannel) bool {
+	return eligibleAlert(e, r) && (e.Kind != "alert.channel_unavailable" || e.Key != ch.ID)
+}
+
+// forgetWindow drops how long e has met r, for a rule that does not hold for it now: its duration starts over.
+func forgetWindow(ctx context.Context, tx pg.Tx, e AlertEvent, r AlertRule) error {
+	_, err := tx.Exec(ctx, `DELETE FROM observability.alert_windows WHERE event_id=$1 AND rule_id=$2`, e.ID, r.ID)
+	return err
+}
+
+// evaluateRule makes r's next notification of e when r's duration has passed and the notification is due; r must tell
+// e (mustTell).
+func evaluateRule(ctx context.Context, tx pg.Tx, e AlertEvent, r AlertRule, ch AlertChannel, now time.Time) error {
 	breached, err := alertBreached(ctx, tx, e, r, now)
 	if err != nil || !breached {
 		return err
@@ -193,11 +224,8 @@ func evaluateRule(ctx context.Context, tx pg.Tx, e AlertEvent, r AlertRule, ch A
 	return err
 }
 
+// alertBreached reports whether r, which holds for e, has held for its duration, starting the window the first time.
 func alertBreached(ctx context.Context, tx pg.Tx, e AlertEvent, r AlertRule, now time.Time) (bool, error) {
-	if !eligibleAlert(e, r) {
-		_, err := tx.Exec(ctx, `DELETE FROM observability.alert_windows WHERE event_id=$1 AND rule_id=$2`, e.ID, r.ID)
-		return false, err
-	}
 	var since time.Time
 	err := tx.QueryRow(ctx, `INSERT INTO observability.alert_windows(event_id,rule_id,since) VALUES($1,$2,$3) ON CONFLICT(event_id,rule_id) DO UPDATE SET since=observability.alert_windows.since RETURNING since`, e.ID, r.ID, now).Scan(&since)
 	return now.Sub(since) >= time.Duration(r.DurationSeconds)*time.Second, err
@@ -314,19 +342,20 @@ func (a *alertWorker) deliveryReceipt(ctx context.Context, id uuid.UUID, deliver
 
 // noticeKind reports the incidents that tell one fact rather than a fault, a channel test or the daily audit digest
 // (docs/domains/operations.md「审计」): nothing recovers, so closing one sends no recovery and does not wait for one.
-// An open one closes itself once told (closeTold); its producer never resolves it, so a backlog that holds its signal
-// back cannot close it before it was told.
+// An open one closes itself once every rule that must tell it has (closeTold); its producer never resolves it, so a
+// backlog that holds its signal back cannot close it before it was told.
 func noticeKind(kind string) bool {
 	return kind == "alert.test" || kind == "operations.audit_digest"
 }
 
-// closeTold closes notice e once every rule that matches it (rules, by ID) has made its first notification and none
-// of its notifications is still to be sent; with no rule it closes at once, as there is nobody to tell.
-func closeTold(ctx context.Context, tx pg.Tx, e AlertEvent, rules []string, now time.Time) error {
+// closeTold closes notice e once every rule that must tell it (tellers, by ID: mustTell) has made its first
+// notification and none of its notifications is still to be sent; with none it closes at once, as there is nobody to
+// tell. Only evaluation calls it, after the rules were evaluated, so no notice closes before it was weighed.
+func closeTold(ctx context.Context, tx pg.Tx, e AlertEvent, tellers []string, now time.Time) error {
 	_, err := tx.Exec(ctx, `UPDATE observability.alert_events e SET resolved_at=$2,state='resolved' WHERE id=$1 AND resolved_at IS NULL
  AND NOT EXISTS(SELECT FROM observability.alert_receipts WHERE event_id=e.id AND state IN ('pending','queued'))
  AND NOT EXISTS(SELECT FROM unnest($3::text[]) m(rule_id) WHERE NOT EXISTS(
- SELECT FROM observability.alert_receipts r WHERE r.event_id=e.id AND r.rule_id=m.rule_id AND r.sequence=0))`, e.ID, now, rules)
+ SELECT FROM observability.alert_receipts r WHERE r.event_id=e.id AND r.rule_id=m.rule_id AND r.sequence=0))`, e.ID, now, tellers)
 	return err
 }
 

@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 	"uuid"
@@ -338,53 +339,122 @@ func TestRescuedMailDiscardPersistsFailedReceiptAndSignal(t *testing.T) {
 	}
 }
 
-// configureDigestRule sends every audit digest to one mail channel.
-func configureDigestRule(t *testing.T, db *pg.DB) {
-	t.Helper()
+// digestLifecycle is one row of TestDigestNotificationLifecycle: the rules on the digest's kind, how many days'
+// digests wait in the backlog before the first evaluation, how long after it the second one runs, whether two consumers
+// race on the first, and the first notices each rule must have made per day.
+type digestLifecycle struct {
+	rules  []AlertRule
+	days   int
+	behind time.Duration // how long the notifications queue was down before the first evaluation
+	wait   time.Duration
+	racing bool
+	told   map[string]int
+}
+
+// TestDigestNotificationLifecycle: the audit digest's incidents follow docs/domains/operations.md「每天的摘要现在的实现」:
+// one per day; told by exactly the rules whose whole condition holds (severity, threshold), each once, after its
+// duration; open while a notice is owed or unsent, then closed without a recovery; closed at once when nobody must
+// tell it; none lost or sent twice when the queue was down past a day or two consumers race.
+func TestDigestNotificationLifecycle(t *testing.T) {
+	t.Parallel()
+	info := func(id string) AlertRule {
+		return AlertRule{ID: id, Kind: "operations.audit_digest", Channel: id, MinimumSeverity: "info", Threshold: 1}
+	}
+	warning, above, later := info("warning"), info("above"), info("later")
+	warning.MinimumSeverity, above.Threshold, later.DurationSeconds = "warning", 2, 300
+	for name, c := range map[string]digestLifecycle{
+		"no matching rule":            {days: 1, told: map[string]int{}},
+		"one matching rule":           {rules: []AlertRule{info("ops")}, days: 1, told: map[string]int{"ops": 1}},
+		"a rule above its severity":   {rules: []AlertRule{info("ops"), warning}, days: 1, told: map[string]int{"ops": 1}},
+		"a rule above its threshold":  {rules: []AlertRule{info("ops"), above}, days: 1, told: map[string]int{"ops": 1}},
+		"only rules that do not hold": {rules: []AlertRule{warning, above}, days: 1, told: map[string]int{}},
+		"a duration not yet passed":   {rules: []AlertRule{later}, days: 1, wait: 5 * time.Minute, told: map[string]int{"later": 1}},
+		"the queue down past a day":   {rules: []AlertRule{info("ops")}, days: 3, behind: 50 * time.Hour, told: map[string]int{"ops": 1}},
+		"two consumers racing":        {rules: []AlertRule{info("ops"), info("second")}, days: 2, racing: true, told: map[string]int{"ops": 1, "second": 1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c.expect(t)
+		})
+	}
+}
+
+func (c digestLifecycle) expect(t *testing.T) {
+	db, _ := openDBWithURL(t)
 	alertTx(t, db, func(tx pg.Tx) error {
-		c, err := GetAlertConfiguration(t.Context(), tx)
+		conf, err := GetAlertConfiguration(t.Context(), tx)
 		if err != nil {
 			return err
 		}
-		c.Channels = []AlertChannel{{ID: "ops", Email: "ops@example.com"}}
-		c.Rules = []AlertRule{{ID: "digest", Kind: "operations.audit_digest", Channel: "ops", MinimumSeverity: "info", Threshold: 1}}
-		return SetAlertConfiguration(t.Context(), tx, c)
+		conf.Channels, conf.Rules = nil, c.rules // a channel of its own for each rule: one rule per kind and channel
+		for _, r := range c.rules {
+			conf.Channels = append(conf.Channels, AlertChannel{ID: r.Channel, Email: r.Channel + "@example.com"})
+		}
+		return SetAlertConfiguration(t.Context(), tx, conf)
 	})
-}
-
-// TestAlertNoticeClosesOnceTold: a notice with no rule closes at its first evaluation; two days' audit digests that
-// waited in a backlog and are consumed in one batch each get their first notification, stay open while it is unsent,
-// and close once it was delivered, with no recovery and nothing left pending.
-func TestAlertNoticeClosesOnceTold(t *testing.T) {
-	db, _ := openDBWithURL(t)
-	digest := func(day string) {
+	for d := range c.days {
+		day := time.Date(2026, 11, 6+d, 0, 0, 0, 0, time.UTC).Format(time.DateOnly)
 		alertTx(t, db, func(tx pg.Tx) error {
 			return alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{
-				Kind: "operations.audit_digest", Key: day,
-				Severity: "info", Fields: map[string]string{"day": day},
+				Kind: "operations.audit_digest", Key: day, Severity: "info", Fields: map[string]string{"day": day},
 			})
 		})
 	}
-	now := time.Date(2026, 11, 9, 0, 2, 0, 0, time.UTC)
-	digest("2026-11-06")
-	if events := alertCycle(t, db, now); len(events) != 1 || events[0].State != "resolved" || len(events[0].Receipts) != 0 {
-		t.Fatalf("a notice nobody is told of: %+v", events)
-	}
-	configureDigestRule(t, db)
-	digest("2026-11-07")
-	digest("2026-11-08")
-	told := incidentsByKey(t, db, now.Add(time.Minute))
+	now := time.Date(2026, 11, 9, 0, 2, 0, 0, time.UTC).Add(c.behind)
+	c.evaluate(t, db, now)
+	owed := alertCycle(t, db, now.Add(c.wait))
 	worker := alertWorker{db: db, scope: platformScope, now: func() time.Time { return now }}
-	for _, day := range []string{"2026-11-07", "2026-11-08"} {
-		if e := told[day]; e.State == "resolved" || len(e.Receipts) != 1 {
-			t.Fatalf("%s before delivery: %+v", day, e)
+	for _, e := range owed {
+		if len(c.told) > 0 && e.State == "resolved" {
+			t.Errorf("%s closed before it was told: %+v", e.Key, e)
 		}
-		reportAlertReceipt(t, &worker, told[day].Receipts[0].ID, true)
+		for _, r := range e.Receipts {
+			reportAlertReceipt(t, &worker, r.ID, true)
+		}
 	}
-	closed := incidentsByKey(t, db, now.Add(2*time.Minute))
-	for _, day := range []string{"2026-11-07", "2026-11-08"} {
-		if e := closed[day]; e.State != "resolved" || len(e.Receipts) != 1 {
-			t.Errorf("%s after delivery: %+v", day, e)
+	c.expectClosed(t, db, alertCycle(t, db, now.Add(c.wait+time.Minute)))
+}
+
+// evaluate is the first evaluation, by one consumer or two at once.
+func (c digestLifecycle) evaluate(t *testing.T, db *pg.DB, now time.Time) {
+	t.Helper()
+	if !c.racing {
+		alertCycle(t, db, now)
+		return
+	}
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			errs <- db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+				if err := alert.Consume(t.Context(), tx, func(s alert.Signal) error { return applyAlert(t.Context(), tx, s, now) }); err != nil {
+					return err
+				}
+				return evaluateAlerts(t.Context(), tx, now)
+			})
+		}()
+	}
+	if err := errors.Join(<-errs, <-errs); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// expectClosed checks every day's incident is closed, told once by each rule that must, with no recovery, and that
+// nothing waits for one.
+func (c digestLifecycle) expectClosed(t *testing.T, db *pg.DB, events []AlertEvent) {
+	t.Helper()
+	if len(events) != c.days {
+		t.Fatalf("%d incidents for %d days", len(events), c.days)
+	}
+	for _, e := range events {
+		told := map[string]int{}
+		for _, r := range e.Receipts {
+			told[r.RuleID]++
+			if r.Sequence != 0 {
+				t.Errorf("%s: notification %d of %s", e.Key, r.Sequence, r.RuleID)
+			}
+		}
+		if e.State != "resolved" || !maps.Equal(told, c.told) {
+			t.Errorf("%s: %s, told %v, want resolved and %v", e.Key, e.State, told, c.told)
 		}
 	}
 	var pending int
@@ -394,14 +464,4 @@ func TestAlertNoticeClosesOnceTold(t *testing.T) {
 	if pending != 0 {
 		t.Errorf("%d incidents wait for a recovery", pending)
 	}
-}
-
-// incidentsByKey runs a cycle at at and returns the incidents by key.
-func incidentsByKey(t *testing.T, db *pg.DB, at time.Time) map[string]AlertEvent {
-	t.Helper()
-	got := map[string]AlertEvent{}
-	for _, e := range alertCycle(t, db, at) {
-		got[e.Key] = e
-	}
-	return got
 }
