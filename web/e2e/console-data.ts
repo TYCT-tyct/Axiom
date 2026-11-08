@@ -103,6 +103,22 @@ function aCall(n: number, over: Partial<Schemas["Call"]> = {}): Schemas["Call"] 
   };
 }
 
+// tokenRate is a per-token rate as a node sends it: the amount per million tokens to show (the amount with its point
+// moved six places in text) and whether a list shows it as the item's price (#695).
+const tokenRate = (
+  rate: Pick<Schemas["ModelRate"], "service_tier" | "above" | "item" | "amount">,
+): Schemas["ModelRate"] => {
+  const [whole = "0", fraction = ""] = rate.amount.split(".");
+  const shifted = `${whole}${fraction.padEnd(6, "0").slice(0, 6)}`.replace(/^0+(?=\d)/, "");
+  return {
+    ...rate,
+    unit: "token",
+    headline: rate.above === undefined && rate.service_tier === "standard",
+    display_amount: fraction.length > 6 ? `${shifted}.${fraction.slice(6)}` : shifted,
+    display_per: 1000000,
+  };
+};
+
 function aModel(n: number, over: Partial<Schemas["PublicModel"]> = {}): Schemas["PublicModel"] {
   const abilities: NonNullable<Schemas["PublicModel"]["abilities"]> =
     n % 2 === 0 ? ["tools", "reasoning"] : ["tools", "images"];
@@ -110,10 +126,10 @@ function aModel(n: number, over: Partial<Schemas["PublicModel"]> = {}): Schemas[
     currency: "USD",
     basis: ["input", "output"],
     rates: [
-      { service_tier: "standard", item: "input", unit: "token", amount: `0.00000${1 + (n % 9)}` },
-      { service_tier: "standard", above: 128000, item: "input", unit: "token", amount: "0.00001" },
-      { service_tier: "standard", item: "output", unit: "token", amount: `0.00000${2 + (n % 9)}` },
-      { service_tier: "priority", above: 200000, item: "output", unit: "token", amount: "0.00002" },
+      tokenRate({ service_tier: "standard", item: "input", amount: `0.00000${1 + (n % 9)}` }),
+      tokenRate({ service_tier: "standard", above: 128000, item: "input", amount: "0.00001" }),
+      tokenRate({ service_tier: "standard", item: "output", amount: `0.00000${2 + (n % 9)}` }),
+      tokenRate({ service_tier: "priority", above: 200000, item: "output", amount: "0.00002" }),
     ],
     search_engines: [{ name: "exa", price_per_search: "0", price_per_extra_result: "0.001", default: true }],
   };
@@ -140,8 +156,8 @@ function aModel(n: number, over: Partial<Schemas["PublicModel"]> = {}): Schemas[
       pricing: {
         ...pricing,
         rates: [
-          { service_tier: "standard", item: "input", unit: "token", amount: `0.00000${4 + (n % 9)}` },
-          { service_tier: "standard", item: "output", unit: "token", amount: `0.00000${5 + (n % 9)}` },
+          tokenRate({ service_tier: "standard", item: "input", amount: `0.00000${4 + (n % 9)}` }),
+          tokenRate({ service_tier: "standard", item: "output", amount: `0.00000${5 + (n % 9)}` }),
         ],
       },
     },

@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { useFormat } from "../format";
+import { parseMoney, useFormat } from "../format";
 import { Table, Td, Th } from "./panel";
 
 type PublicModelRate = {
@@ -9,6 +9,10 @@ type PublicModelRate = {
   item: string;
   unit: string;
   amount: string;
+  // The server names the rate a list shows for each item and the amount to show; an older node sends neither (#695).
+  headline?: boolean;
+  display_amount?: string;
+  display_per?: number;
 };
 
 export type PublicSearchEnginePrice = {
@@ -25,44 +29,27 @@ export type PublicModelPricing = {
   search_engines?: PublicSearchEnginePrice[];
 };
 
-// perMillionBillionths turns a price per token into billionths of a currency unit per million tokens, without a
-// floating point number: a UnitPrice has at most 15 decimals, and moving the point six places leaves at most nine.
-export function perMillionBillionths(amount: string): string | null {
-  const [whole = "0", fraction = ""] = amount.split(".");
-  if (fraction.length > 15) {
-    return null;
-  }
-  const digits = (whole + fraction).replace(/^0+(?=\d)/, "");
-  return (digits + "0".repeat(15 - fraction.length)).replace(/^0+(?=\d)/, "");
-}
-
 export const label = (t: TFunction<"common">, group: string, name: string) =>
   (t as unknown as (key: string, options?: { defaultValue?: string }) => string)(`publicModels.${group}.${name}`, {
     defaultValue: name,
   });
 
+const perMillion = 1_000_000;
+
+// priceText shows the amount the server says to show: per million tokens as money, any other unit as an exact decimal.
+// An older node sends no display amount, so the price per unit is shown as it came instead of being converted here.
 function priceText(format: ReturnType<typeof useFormat>, rate: PublicModelRate, currency: string): string {
-  if (rate.unit === "token") {
-    const perMillion = perMillionBillionths(rate.amount);
-    if (perMillion !== null) {
-      return format.money({ amount: perMillion, currency });
+  if (rate.display_amount !== undefined && rate.display_per === perMillion) {
+    const amount = parseMoney(rate.display_amount);
+    if (amount !== null) {
+      return format.money({ amount, currency });
     }
   }
-  return `${format.decimal(rate.amount)} ${currency}`;
+  return `${format.decimal(rate.display_amount ?? rate.amount)} ${currency}`;
 }
 
-// baseRate is the headline price: the standard tier's price in the base band. An explicit above: 0 tier is a different
-// band even though its threshold is zero, so it must not stand in for the base price.
-export function baseRate<T extends Pick<PublicModelRate, "item" | "above" | "service_tier">>(
-  rates: T[],
-  item: string,
-): T | undefined {
-  return (
-    rates.find(
-      (candidate) => candidate.item === item && candidate.above === undefined && candidate.service_tier === "standard",
-    ) ?? rates.find((candidate) => candidate.item === item && candidate.above === undefined)
-  );
-}
+const perText = (t: TFunction<"common">, rate: PublicModelRate) =>
+  rate.display_per === perMillion ? t("publicModels.perMillion") : `/ ${label(t, "unit", rate.unit)}`;
 
 // PriceHeads are the input and output price column heads the model list and the endpoint table share; they render
 // nothing when the site keeps its prices to signed-in members, so the columns go with them.
@@ -82,14 +69,14 @@ export function PriceHeads({ show }: { show: boolean }) {
 export function PricingPrice({ pricing, item }: { pricing?: PublicModelPricing; item: "input" | "output" }) {
   const { t } = useTranslation("common");
   const format = useFormat();
-  const rate = pricing?.rates ? baseRate(pricing.rates, item) : undefined;
+  const rate = pricing?.rates?.find((candidate) => candidate.item === item && candidate.headline);
   if (!pricing || !rate) {
     return <span className="text-t3">{t("publicModels.priceUnavailable")}</span>;
   }
   return (
     <>
       <span className="whitespace-nowrap">{priceText(format, rate, pricing.currency)}</span>
-      {rate.unit === "token" ? <span className="block text-label text-t3">{t("publicModels.perMillion")}</span> : null}
+      <span className="block text-label text-t3">{perText(t, rate)}</span>
     </>
   );
 }
@@ -135,9 +122,7 @@ export function RateTable({
             <Td>{label(t, "item", rate.item)}</Td>
             <Td className="text-right whitespace-nowrap tabular-nums">
               {priceText(format, rate, currency)}
-              <span className="block text-label text-t3">
-                {rate.unit === "token" ? t("publicModels.perMillion") : `/ ${label(t, "unit", rate.unit)}`}
-              </span>
+              <span className="block text-label text-t3">{perText(t, rate)}</span>
             </Td>
           </tr>
         ))}
