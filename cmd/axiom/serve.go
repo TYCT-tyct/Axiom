@@ -336,10 +336,11 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, ca
 	// The cap counters are added up again from the money they count; a scope where they differ is paused until the
 	// owner repairs it (docs/domains/operations.md「转账的累计金额上限」).
 	// Every committed audit entry is linked into a hash chain after it commits, and the whole chain is checked daily
-	// and copied to the replica bucket (docs/domains/operations.md「审计」).
+	// and copied to the replica bucket; each UTC day ends with the owner's digest (docs/domains/operations.md「审计」).
 	if err := errors.Join(operations.RegisterExpiry(db, pg.PlatformScope(), queue, logger),
 		operations.RegisterReconcile(db, pg.PlatformScope(), queue, logger),
 		operations.RegisterAuditChain(db, pg.PlatformScope(), queue, logger),
+		operations.RegisterAuditDigest(db, pg.PlatformScope(), queue, logger),
 		registerAuditReplica(db, queue, replica, logger)); err != nil {
 		return nil, nil, nil, err
 	}
