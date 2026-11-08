@@ -127,6 +127,7 @@ func TestRoleConfigurationRefusesContradictions(t *testing.T) {
 		{"an operations URL without the bridge", []string{"AXIOM_NODE_ROLES=ops", "AXIOM_OPERATIONS_URL=https://core.internal:8084"}, "AXIOM_OPERATIONS_URL: set without AXIOM_MCP_ADDR"},
 		{"certificates on an ops node without the bridge", []string{"AXIOM_NODE_ROLES=ops", "AXIOM_NODE_TLS_DIR=" + tlsDir}, "AXIOM_NODE_TLS_DIR: not used"},
 		{"an operations URL with a path", bridge("AXIOM_OPERATIONS_URL=https://core.internal:8084/api"), "AXIOM_OPERATIONS_URL: want an https URL"},
+		{"half an audit replica", coreEnviron("AXIOM_AUDIT_REPLICA_ENDPOINT=https://s3.example.com"), "AXIOM_AUDIT_REPLICA_BUCKET: required"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -156,6 +157,11 @@ func TestRoleConfigurationRefusesContradictions(t *testing.T) {
 	}
 	if settings.webAssetsDir != "/srv/web-assets" {
 		t.Fatalf("shared frontend assets are %q", settings.webAssetsDir)
+	}
+	settings, err = readSettings(coreEnviron("AXIOM_AUDIT_REPLICA_ENDPOINT=https://s3.example.com", "AXIOM_AUDIT_REPLICA_BUCKET=audit",
+		"AXIOM_AUDIT_REPLICA_ACCESS_KEY_ID=A", "AXIOM_AUDIT_REPLICA_SECRET_ACCESS_KEY=S"))
+	if err != nil || settings.auditReplica.Bucket != "audit" || settings.objectstore.Configured() {
+		t.Fatalf("an audit replica reads as %+v, the archive as %+v: %v", settings.auditReplica, settings.objectstore, err)
 	}
 }
 

@@ -62,6 +62,7 @@ type nodeSettings struct {
 	search                          websearch.Config
 	fileParser                      fileparse.Config
 	objectstore                     objectstore.Config
+	auditReplica                    objectstore.Config
 	retentionURL                    string
 	exchangeSource                  string
 }
@@ -210,16 +211,22 @@ func readFileParserSettings(env *config.Env, s *nodeSettings) error {
 	return err
 }
 
-// readArchiveSettings reads the retention login and the archive bucket. Both are optional: without the URL the job does
-// not run, and without a bucket the call log keeps every partition. Half a bucket configuration is a startup error, not
-// a surprise for the first archive run; `axiom objectstore` and the backup job use the same client, the latter with its
-// own bucket. A configured bucket without the retention URL is a startup error in serveWith.
+// readArchiveSettings reads the retention login, the archive bucket and the audit chain's replica bucket. All are
+// optional: without the URL the job does not run, without a bucket the call log keeps every partition, and without a
+// replica the chain stays in this database alone, which the daily digest reports. Half a bucket configuration is a
+// startup error, not a surprise for the first upload; `axiom objectstore` and the backup job use the same client, the
+// latter with its own bucket. A configured bucket without the retention URL is a startup error in serveWith.
 func readArchiveSettings(env *config.Env, s *nodeSettings) error {
 	s.retentionURL = env.String(retentionDatabaseURLVar, "")
 	store, err := objectstore.ReadConfig(env)
-	s.objectstore = store
-	return err
+	replica, replicaErr := objectstore.ReadConfigAt(env, auditReplicaPrefix)
+	s.objectstore, s.auditReplica = store, replica
+	return errors.Join(err, replicaErr)
 }
+
+// auditReplicaPrefix names the replica bucket's six variables (AXIOM_AUDIT_REPLICA_ENDPOINT and so on): a bucket outside
+// the deployment with credentials that write new objects only, apart from the archive's, which may delete.
+const auditReplicaPrefix = "AXIOM_AUDIT_REPLICA"
 
 // readByok reads the gate on creating provider keys. Like the direct formats, it is off until every node knows the
 // openai adapter and the byok status: an old node that finds one at startup refuses to start.

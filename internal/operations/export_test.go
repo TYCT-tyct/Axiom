@@ -11,3 +11,6 @@ var SignalChainLag = signalLag
 
 // VerifyAuditChainBy is VerifyAuditChain with at most batches transactions a run.
 var VerifyAuditChainBy = verifyAuditChain
+
+// ErrReplicaConflict is a replica key that holds other bytes.
+var ErrReplicaConflict = errReplicaConflict

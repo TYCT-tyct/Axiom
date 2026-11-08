@@ -56,3 +56,41 @@ func TestOperationsAuditReads(t *testing.T) {
 		expectAdmin(t, c.what, f.agent(c.token, because(c.path, "x")), c.status, c.code)
 	}
 }
+
+// TestOperationsAuditDigests: the owner's daily digests list newest first, a page at a time by the cursor the last page
+// gave, under the same grant as the audit; a cursor that is not a day is a 400.
+func TestOperationsAuditDigests(t *testing.T) {
+	t.Parallel()
+	f := newAdminFixture(t)
+	owner := f.owner()
+	_, token := f.makeCredential(owner, `{"name":"hermes","permissions":["audit.view"],"platform":true,
+		"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`)
+	_, sites := f.makeCredential(owner, `{"name":"sites","permissions":["audit.view"],"platform":false,"sites":["`+f.siteID()+`"],
+		"proposer_vendors":["deepseek"],"expires_at":"2099-01-01T00:00:00Z","reason":"r"}`)
+	f.run(`INSERT INTO operations.audit_digests (day, body) SELECT d, jsonb_build_object('day', d::date::text,
+		'made_at', '2026-11-08T00:01:00Z', 'operations', '[]'::jsonb, 'money', jsonb_build_array(jsonb_build_object(
+		'scope', 'platform', 'category', 'money.top_up', 'currency', 'USD', 'reserved', '30', 'committed', '20', 'count', 2,
+		'daily_max', '100', 'hard_daily_max', '200', 'daily_count_max', 5)), 'approvals', '[]'::jsonb,
+		'refused', jsonb_build_array(jsonb_build_object('code', 'forbidden', 'count', 2)),
+		'chain', jsonb_build_object('head_seq', 7, 'faults', 0),
+		'replica', jsonb_build_object('state', 'unconfigured', 'replicated_seq', 0))
+		FROM generate_series(date '2026-11-05', date '2026-11-07', interval '1 day') d`)
+
+	rec := f.agent(token, because("/audit/digests?limit=2", "read the digests"))
+	expectAdmin(t, "auditDigestsList", rec, http.StatusOK, "")
+	var page operationsapi.AuditDigestList
+	decode(t, rec, &page)
+	if len(page.Data) != 2 || page.Data[0].Day.String() != "2026-11-07" || page.NextCursor == nil || *page.NextCursor != "2026-11-06" ||
+		page.Data[0].Money[0].Reserved != "30" || page.Data[0].Replica.State != operationsapi.Unconfigured {
+		t.Fatalf("the first page is %s", rec.Body)
+	}
+	rec = f.agent(token, because("/audit/digests?limit=2&cursor="+*page.NextCursor, "read on"))
+	expectAdmin(t, "auditDigestsList", rec, http.StatusOK, "")
+	var last operationsapi.AuditDigestList
+	decode(t, rec, &last)
+	if len(last.Data) != 1 || last.Data[0].Day.String() != "2026-11-05" || last.NextCursor != nil {
+		t.Errorf("the last page is %s", rec.Body)
+	}
+	expectAdmin(t, "a cursor that is not a day", f.agent(token, because("/audit/digests?cursor=nope", "x")), http.StatusBadRequest, codeInvalidRequest)
+	expectAdmin(t, "the digests without the platform grant", f.agent(sites, because("/audit/digests", "x")), http.StatusNotFound, codeNotFound)
+}
