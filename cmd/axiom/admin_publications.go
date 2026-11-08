@@ -68,6 +68,7 @@ func (a adminAPI) PublishSalePrice(ctx context.Context, r adminapi.PublishSalePr
 	if err != nil {
 		return nil, err
 	}
+	a.refreshAfterCommit(ctx, replayed)
 	return adminapi.PublishSalePrice200JSONResponse{Body: body, Headers: adminapi.PublishSalePrice200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
@@ -93,6 +94,7 @@ func (a adminAPI) UpdatePricePolicy(ctx context.Context, r adminapi.UpdatePriceP
 	if err != nil {
 		return nil, err
 	}
+	a.refreshAfterCommit(ctx, replayed) // the policy's BYOK fee is routing's, and its refresh may publish
 	return adminapi.UpdatePricePolicy200JSONResponse{Body: body, Headers: adminapi.UpdatePricePolicy200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 

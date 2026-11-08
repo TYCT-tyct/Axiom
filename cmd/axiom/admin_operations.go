@@ -269,7 +269,7 @@ func (a adminAPI) decide(ctx context.Context, operation, approval, key, reason s
 		succeeded = op.State == operations.StateSucceeded
 		return approvalBody(op), nil
 	})
-	a.refreshCatalog(ctx, err != nil || !succeeded)
+	a.refreshAfterCommit(ctx, err != nil || !succeeded)
 	return body, replayed, err
 }
 

@@ -533,7 +533,7 @@ func TestRouteBuildTellsAStandingReasonOnce(t *testing.T) {
 	t.Parallel()
 	f := newRouteFixture(t)
 	f.build([]suppliers.Routable{routable(f.unpriced, protocol.Messages)})
-	deps, offered := f.deps, []suppliers.Routable{routable(f.unpriced, protocol.Messages)}
+	deps, offered := &f.deps, []suppliers.Routable{routable(f.unpriced, protocol.Messages)}
 	deps.Endpoints = func(context.Context) ([]suppliers.Routable, error) { return offered, nil }
 	for range 3 {
 		if _, _, _, err := deps.Build(t.Context()); err != nil {

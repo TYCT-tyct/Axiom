@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"regexp"
+	"time"
 	"uuid"
 
 	"axiom/internal/catalog"
@@ -80,7 +81,7 @@ func (a adminAPI) SaveAuthor(ctx context.Context, request adminapi.SaveAuthorReq
 	if err != nil {
 		return nil, err
 	}
-	a.refreshCatalog(ctx, replayed)
+	a.refreshAfterCommit(ctx, replayed)
 	return adminapi.SaveAuthor200JSONResponse{Body: body, Headers: adminapi.SaveAuthor200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
@@ -189,14 +190,32 @@ func (a adminAPI) GetModel(ctx context.Context, request adminapi.GetModelRequest
 	return adminapi.GetModel200JSONResponse(body), nil
 }
 
-// refreshCatalog rebuilds this node's snapshot after a change committed. A failure is not the change's: the other nodes
-// poll for the revision, and so does this one.
-func (a adminAPI) refreshCatalog(ctx context.Context, replayed bool) {
-	if replayed {
+// refreshLimit is the most a committed change waits for this node's refresh: the period the routing snapshot is rebuilt
+// in anyway, well inside the admin's and the operations' 30-second write deadline.
+const refreshLimit = 5 * time.Second
+
+// refreshAfterCommit rebuilds this node's catalog snapshot and then its routing snapshot and model list from it, after
+// a change of a model or a sale price committed, so this node's next call is admitted at what the change left
+// (docs/architecture.md「模块边界规则」). A failure is not the change's: the other nodes poll for it, and so does this
+// one. skip is a change that did not commit, or a replay whose change was rebuilt after the first request.
+//
+// The refresh outlives the request's cancellation, since the change is committed whether or not its client is still
+// there, but not refreshLimit: a source that is stuck (a table lock) must not hold up the answer to a write that has
+// committed, and the periodic rebuild brings the change once the source frees.
+func (a adminAPI) refreshAfterCommit(ctx context.Context, skip bool) {
+	if skip {
 		return
 	}
-	if err := a.catalog.Refresh(context.WithoutCancel(ctx)); err != nil {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshLimit)
+	defer cancel()
+	if err := a.catalog.Refresh(ctx); err != nil {
 		a.logger.WarnContext(ctx, "catalog change saved but this node did not reload it", "err", err)
+	}
+	if a.routes == nil { // the admin's tests run no call path
+		return
+	}
+	if err := a.routes.Rebuild(ctx); err != nil {
+		a.logger.WarnContext(ctx, "change saved but this node did not rebuild its routing", "err", err)
 	}
 }
 
@@ -219,7 +238,7 @@ func (a adminAPI) changed(ctx context.Context, operation, model, key string, req
 		}
 		return a.readModelIn(ctx, tx, id)
 	})
-	a.refreshCatalog(ctx, replayed || err != nil)
+	a.refreshAfterCommit(ctx, replayed || err != nil)
 	return body, replayedHeader(replayed), err
 }
 
@@ -254,7 +273,7 @@ func (a adminAPI) CreateModel(ctx context.Context, request adminapi.CreateModelR
 	if err != nil {
 		return nil, err
 	}
-	a.refreshCatalog(ctx, replayed)
+	a.refreshAfterCommit(ctx, replayed)
 	return adminapi.CreateModel201JSONResponse{Body: body, Headers: adminapi.CreateModel201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
