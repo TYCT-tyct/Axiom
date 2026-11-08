@@ -21,6 +21,11 @@ import (
 // snapshot that merges them follows at the same pace (docs/domains/routing.md「快照从哪来」).
 const rebuildEvery = 5 * time.Second
 
+// buildLimit bounds one of Run's builds: a snapshot is stamped with the moment its build began, so one that took longer
+// than routing's default MaxStale (30s) is stale when published, and a build stuck on a source (a table lock) must free
+// the slot for the next one.
+const buildLimit = 30 * time.Second
+
 // RouteDeps are the sources of a routing snapshot and the router it is published to.
 type RouteDeps struct {
 	// ExchangeRates reads once for the whole build. Nil means no configured pairs; production supplies the reader.
@@ -61,7 +66,10 @@ type RouteDeps struct {
 	// Quality is what real traffic measured of each endpoint, the same Monitor the executor reports attempts to.
 	Quality *quality.Monitor
 
-	building sync.Mutex                 // one Rebuild at a time: Build writes told, and Run and a write's Rebuild may meet
+	// slot holds a token while a Rebuild runs: Build writes told, and Run and a write's Rebuild may meet. It is a
+	// channel, not a mutex, so a write that waits for a stuck rebuild can give up when its own deadline passes.
+	slot     chan struct{}
+	slotOnce sync.Once
 	told     map[catalog.ModelID]string // why each model left out was last reported, so a standing reason is told once
 }
 
@@ -242,7 +250,10 @@ func (d *RouteDeps) Run(ctx context.Context) {
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
-		if err := d.Rebuild(ctx); err != nil && ctx.Err() == nil {
+		build, cancel := context.WithTimeout(ctx, buildLimit)
+		err := d.Rebuild(build)
+		cancel()
+		if err != nil && ctx.Err() == nil {
 			d.Logger.Error("gateway: the routing snapshot was not rebuilt; the last one stands until it is stale", "err", err)
 		}
 		select {
@@ -256,10 +267,16 @@ func (d *RouteDeps) Run(ctx context.Context) {
 // Rebuild builds a snapshot and publishes it with its model list. Run calls it every Every; the node that committed a
 // change routing reads (a sale price, a model's status) calls it once the change is committed, so its next call is
 // admitted at the new state rather than at the one Run last read (docs/architecture.md「模块边界规则」, rule 3). A build that fails
-// publishes nothing, and the last snapshot stands.
+// publishes nothing, and the last snapshot stands. It waits for a rebuild in progress, which may have read the sources
+// before the change, and gives up, as its reads do, when ctx ends.
 func (d *RouteDeps) Rebuild(ctx context.Context) error {
-	d.building.Lock()
-	defer d.building.Unlock()
+	d.slotOnce.Do(func() { d.slot = make(chan struct{}, 1) })
+	select {
+	case d.slot <- struct{}{}:
+	case <-ctx.Done():
+		return fmt.Errorf("gateway: waiting for the rebuild in progress: %w", context.Cause(ctx))
+	}
+	defer func() { <-d.slot }()
 	s, l, n, err := d.Build(ctx)
 	if err != nil {
 		return err

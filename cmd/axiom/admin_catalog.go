@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"regexp"
+	"time"
 	"uuid"
 
 	"axiom/internal/catalog"
@@ -189,15 +190,24 @@ func (a adminAPI) GetModel(ctx context.Context, request adminapi.GetModelRequest
 	return adminapi.GetModel200JSONResponse(body), nil
 }
 
+// refreshLimit is the most a committed change waits for this node's refresh: the period the routing snapshot is rebuilt
+// in anyway, well inside the admin's and the operations' 30-second write deadline.
+const refreshLimit = 5 * time.Second
+
 // refreshAfterCommit rebuilds this node's catalog snapshot and then its routing snapshot and model list from it, after
 // a change of a model or a sale price committed, so this node's next call is admitted at what the change left
 // (docs/architecture.md「模块边界规则」). A failure is not the change's: the other nodes poll for it, and so does this
 // one. skip is a change that did not commit, or a replay whose change was rebuilt after the first request.
+//
+// The refresh outlives the request's cancellation, since the change is committed whether or not its client is still
+// there, but not refreshLimit: a source that is stuck (a table lock) must not hold up the answer to a write that has
+// committed, and the periodic rebuild brings the change once the source frees.
 func (a adminAPI) refreshAfterCommit(ctx context.Context, skip bool) {
 	if skip {
 		return
 	}
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshLimit)
+	defer cancel()
 	if err := a.catalog.Refresh(ctx); err != nil {
 		a.logger.WarnContext(ctx, "catalog change saved but this node did not reload it", "err", err)
 	}

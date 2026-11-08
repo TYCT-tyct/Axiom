@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -356,4 +357,55 @@ func TestPricePublishRoutesAtOnce(t *testing.T) {
 	body := `{"candidate_id":"` + *p.CandidateId + `","current_id":"` + *p.CurrentId + `","confirmed":true,"override_floor":false,"reason":"the rule moved"}`
 	expectAdmin(t, "the administrator's publication", f.change(f.s, http.MethodPost, "/pricing/publications/"+model, body, newKey()), http.StatusOK, "")
 	admitsAtCurrent("after an administrator published")
+
+	// A rebuild stuck on a source does not hold up a publication that committed: it answers once the refresh's limit
+	// passes, says so in the log, keeps the version it published, and the next rebuild routes at it.
+	release := f.lockPresets()
+	f.reprice("3")
+	p = f.waiting(model)
+	body = `{"candidate_id":"` + *p.CandidateId + `","current_id":"` + *p.CurrentId + `","confirmed":true,"override_floor":false,"reason":"the rule moved"}`
+	expectAdmin(t, "a publication while routing cannot be read", f.change(f.s, http.MethodPost, "/pricing/publications/"+model, body, newKey()), http.StatusOK, "")
+	if !strings.Contains(f.logs.String(), "did not rebuild its routing") {
+		t.Errorf("the stuck rebuild was not logged: %s", f.logs)
+	}
+	if current := f.publication(model).CurrentId; current == nil || *current == *p.CurrentId {
+		t.Fatalf("the publication did not stay: the current version is %v", current)
+	}
+	release()
+	if err := routes.Rebuild(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	admitsAtCurrent("after the source freed")
+}
+
+// lockPresets holds routing's preset table, which every routing build reads, until the returned function is called.
+func (f priceFixture) lockPresets() (release func()) {
+	f.t.Helper()
+	db, err := pg.Open(f.t.Context(), f.w.database.Superuser)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	locked, free, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- db.Tx(context.WithoutCancel(f.t.Context()), pg.PlatformScope(), func(tx pg.Tx) error {
+			if _, err := tx.Exec(f.t.Context(), `LOCK TABLE routing.presets IN ACCESS EXCLUSIVE MODE`); err != nil {
+				return err
+			}
+			close(locked)
+			<-free
+			return nil
+		})
+	}()
+	select {
+	case <-locked:
+	case err := <-done:
+		f.t.Fatalf("locking the presets: %v", err)
+	}
+	return func() {
+		close(free)
+		if err := <-done; err != nil {
+			f.t.Error(err)
+		}
+		db.Close()
+	}
 }
