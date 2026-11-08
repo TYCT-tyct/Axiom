@@ -3,6 +3,7 @@ package routing_test
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	"axiom/internal/platform/jsonx"
@@ -89,5 +90,46 @@ func TestCheckRulesRefusesAndWaits(t *testing.T) {
 	summary, unmatched, err := mustRouter(t).CheckRules(layered(routing.ScopeAccount), []byte(`{"default":{"classes":["cloud"]}}`), presetInput().Admission)
 	if err != nil || unmatched != nil || summary.Sort != "balanced" {
 		t.Errorf("without a snapshot: %+v, %+v, %v", summary, unmatched, err)
+	}
+}
+
+// TestCheckRulesSeesTheLayersEndpoints: a check judges a rule against the endpoints of the layer it is for. The
+// platform's view (no site, no account) has the platform's endpoints, a site's has its own too, an account's has its own
+// as well; another site's and another account's endpoints answer for none of them.
+func TestCheckRulesSeesTheLayersEndpoints(t *testing.T) {
+	t.Parallel()
+	owned := func(class routing.Class, owner routing.Owner) func(*routing.Endpoint) {
+		return func(e *routing.Endpoint) { e.ModelSlug, e.Class, e.Owner = "acme/m", class, owner }
+	}
+	elsewhere := routing.SiteID(id(901))
+	h := newHarness(t, routing.Config{}, compiled(t, allowed),
+		endpoint(t, 1, owned(routing.ClassRelay, routing.Owner{})),
+		endpoint(t, 2, owned(routing.ClassCloud, routing.Owner{Site: site})),
+		endpoint(t, 3, owned(routing.ClassOfficial, routing.Owner{Site: elsewhere})),
+		endpoint(t, 4, owned("pool", routing.Owner{Site: site, Account: acct})),
+		endpoint(t, 5, owned("own", routing.Owner{Site: elsewhere, Account: routing.AccountID(id(902))})),
+	)
+	views := map[string]routing.Admission{
+		"platform": {}, "site": {Site: site}, "account": {Site: site, Account: acct},
+	}
+	for _, tc := range []struct {
+		class string
+		keeps []string // the views in which some endpoint of the class is kept
+	}{
+		{"relay", []string{"platform", "site", "account"}},
+		{"cloud", []string{"site", "account"}},
+		{"official", nil},
+		{"pool", []string{"account"}},
+		{"own", nil},
+	} {
+		for view, a := range views {
+			_, unmatched, err := h.r.CheckRules(layered(routing.ScopeAccount), []byte(`{"default":{"classes":["`+tc.class+`"]}}`), a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kept := unmatched == nil; kept != slices.Contains(tc.keeps, view) {
+				t.Errorf("%s in the %s view: unmatched %+v", tc.class, view, unmatched)
+			}
+		}
 	}
 }
