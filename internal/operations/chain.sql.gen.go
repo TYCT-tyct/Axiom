@@ -239,9 +239,11 @@ func (q *Queries) LockAuditChain(ctx context.Context, db DBTX) error {
 
 const startAuditChainCheck = `-- name: StartAuditChainCheck :exec
 INSERT INTO operations.audit_chain_checks (target_seq, next_seq) VALUES ($1, 1)
-ON CONFLICT (singleton) DO UPDATE SET target_seq = EXCLUDED.target_seq, next_seq = 1, started_at = now(), finished_at = NULL
+ON CONFLICT (singleton) DO UPDATE SET target_seq = EXCLUDED.target_seq, next_seq = 1, started_at = now(), finished_at = NULL,
+    last_finished_at = audit_chain_checks.finished_at
 `
 
+// A round starts only once the one before finished, whose finish it keeps as the last.
 func (q *Queries) StartAuditChainCheck(ctx context.Context, db DBTX, targetSeq int64) error {
 	_, err := db.Exec(ctx, startAuditChainCheck, targetSeq)
 	return err
