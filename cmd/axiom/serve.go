@@ -97,7 +97,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		archiveStore = archive
 		defer archive.Close()
 	}
-	replicaStore, closeReplica, err := openReplica(cfg.auditReplica)
+	replica, closeReplica, err := openReplica(cfg.auditReplica)
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer stopCache()
-	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, replicaStore, tel, logger, cfg.valkey.NodeID, cfg.shutdownTimeout, cfg.callLogDir, record)
+	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, replica, tel, logger, cfg.valkey.NodeID, cfg.shutdownTimeout, cfg.callLogDir, record)
 	if err != nil {
 		return err
 	}
@@ -308,7 +308,7 @@ func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) 
 // the datasets through exit, the client the whole node shares.
 func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
 	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	directFormats bool, archive observability.ArchiveStore, replica operations.ReplicaStore, tel *telemetry.Telemetry,
+	directFormats bool, archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
 	logger *slog.Logger, signals *alert.Bus, paymentSignals *payments.SignalState, nodeID string,
 ) (*pg.Queue, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
@@ -335,13 +335,11 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, ca
 	// queue (docs/domains/operations.md「风险分级与审批」).
 	// The cap counters are added up again from the money they count; a scope where they differ is paused until the
 	// owner repairs it (docs/domains/operations.md「转账的累计金额上限」).
-	// Every committed audit entry is linked into a hash chain after it commits, and the whole chain is checked daily;
-	// the chain is copied to the replica bucket, and each UTC day ends with the owner's digest
-	// (docs/domains/operations.md「审计」).
+	// Every committed audit entry is linked into a hash chain after it commits, and the whole chain is checked daily
+	// and copied to the replica bucket (docs/domains/operations.md「审计」).
 	if err := errors.Join(operations.RegisterExpiry(db, pg.PlatformScope(), queue, logger),
 		operations.RegisterReconcile(db, pg.PlatformScope(), queue, logger),
 		operations.RegisterAuditChain(db, pg.PlatformScope(), queue, logger),
-		operations.RegisterAuditDigest(db, pg.PlatformScope(), queue, replica != nil, logger),
 		registerAuditReplica(db, queue, replica, logger)); err != nil {
 		return nil, nil, nil, err
 	}
@@ -501,7 +499,7 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 // failing step, including the queue, is closed here, since the caller has no defer of its own yet.
 func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	directFormats bool, archive observability.ArchiveStore, replica operations.ReplicaStore, tel *telemetry.Telemetry,
+	directFormats bool, archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
 	logger *slog.Logger, nodeID string, timeout time.Duration, callLogDir string,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, *alert.Bus, *payments.SignalState, error) {

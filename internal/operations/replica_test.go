@@ -27,9 +27,12 @@ type bucket struct {
 	objects map[string][]byte
 	puts    int
 	down    bool
+	target  string // the replica's target, its endpoint and bucket
 }
 
-func newBucket() *bucket { return &bucket{objects: map[string][]byte{}} }
+func newBucket() *bucket {
+	return &bucket{objects: map[string][]byte{}, target: "https://s3.example.com/a"}
+}
 
 func (b *bucket) Get(ctx context.Context, key string) (*objectstore.Object, error) {
 	b.mu.Lock()
@@ -71,9 +74,9 @@ func (b *bucket) keys() []string {
 	return keys
 }
 
-func (db opsDB) replicate(t *testing.T, store operations.ReplicaStore) (int, error) {
+func (db opsDB) replicate(t *testing.T, b *bucket) (int, error) {
 	t.Helper()
-	return operations.ReplicateAuditChain(t.Context(), db.DB, platformScope, store)
+	return operations.ReplicateAuditChain(t.Context(), db.DB, platformScope, operations.Replica{Store: b, Target: b.target})
 }
 
 func objectKey(first, last int) string {
@@ -235,9 +238,36 @@ func TestAuditReplicaLagOutlivesTheDeadline(t *testing.T) {
 	superuser(t, db, `UPDATE operations.audit_chain SET chained_at = now() - interval '11 minutes'`)
 	ended, cancel := context.WithCancel(t.Context())
 	cancel()
-	if n, err := operations.ReplicateAuditChain(ended, db.DB, platformScope, newBucket()); n != 0 || !errors.Is(err, context.Canceled) {
+	if n, err := operations.ReplicateAuditChain(ended, db.DB, platformScope, operations.Replica{Store: newBucket(), Target: "t"}); n != 0 || !errors.Is(err, context.Canceled) {
 		t.Errorf("copied %d after the deadline: %v", n, err)
 	}
 	db.expect(t, "the lag", `SELECT string_agg((body->>'severity') || ' ' || (body->'fields'->>'behind_links'), ',')
 		FROM platform.alert_signals WHERE body->>'kind' = 'operations.audit_replica_lag'`, "warning 1")
+}
+
+// TestAuditReplicaFollowsItsBucket: a deployment pointed at another bucket copies the whole chain there from the first
+// link, not from where the first bucket had got, so the new bucket alone recomputes the chain; the first bucket keeps
+// its own progress.
+func TestAuditReplicaFollowsItsBucket(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.backdated(t, "5 minutes")
+	db.backdated(t, "4 minutes")
+	db.chain(t, time.Minute)
+	first := newBucket()
+	if n, err := db.replicate(t, first); n != 2 || err != nil {
+		t.Fatalf("copied %d to the first bucket: %v", n, err)
+	}
+	db.backdated(t, "3 minutes")
+	db.chain(t, time.Minute)
+	second := newBucket()
+	second.target = "https://s3.example.com/b"
+	if n, err := db.replicate(t, second); n != 3 || err != nil {
+		t.Fatalf("copied %d to the new bucket: %v", n, err)
+	}
+	if got := strings.Join(verifyReplica(t, second), ","); got != db.linked(t) {
+		t.Error("the new bucket's chain is not the database's")
+	}
+	db.expect(t, "the progress", `SELECT string_agg(target || ' ' || replicated_seq, ',' ORDER BY target) FROM operations.audit_replica`,
+		"https://s3.example.com/a 2,https://s3.example.com/b 3")
 }

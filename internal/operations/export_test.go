@@ -14,6 +14,3 @@ var VerifyAuditChainBy = verifyAuditChain
 
 // ErrReplicaConflict is a replica key that holds other bytes.
 var ErrReplicaConflict = errReplicaConflict
-
-// MakeAuditDigestsAfter is MakeAuditDigests with the day's last transactions given settle to end.
-var MakeAuditDigestsAfter = makeAuditDigests

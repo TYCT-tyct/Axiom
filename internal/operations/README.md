@@ -188,12 +188,10 @@ func ChainAudit(ctx context.Context, db *pg.DB, scope pg.Scope) (int, error)    
 func VerifyAuditChain(ctx context.Context, db *pg.DB, scope pg.Scope) (bool, error) // 核对整条链，回链是否已停
 func RegisterAuditChain(db *pg.DB, scope pg.Scope, queue *pg.Queue, logger *slog.Logger) error
 
-type ReplicaStore interface { Get(...); Put(...) }                                              // objectstore.Client 满足它
-func ReplicateAuditChain(ctx context.Context, db *pg.DB, scope pg.Scope, store ReplicaStore) (int, error) // 一轮复制，回复制了几条
-func RegisterAuditReplica(db *pg.DB, scope pg.Scope, queue *pg.Queue, store ReplicaStore, logger *slog.Logger) error
-func MakeAuditDigest(ctx context.Context, db *pg.DB, scope pg.Scope, replicaOn bool) (bool, error)  // 做昨天的摘要，回这次是否做了
-func AuditDigests(ctx context.Context, tx pg.Tx, before *time.Time, n int) ([]AuditDigest, bool, error)
-func RegisterAuditDigest(db *pg.DB, scope pg.Scope, queue *pg.Queue, replicaOn bool, logger *slog.Logger) error
+type ReplicaStore interface { Get(...); Put(...) }                                          // objectstore.Client 满足它
+type Replica struct { Store ReplicaStore; Target string }                                    // Target：端点加桶名，进度按它记
+func ReplicateAuditChain(ctx context.Context, db *pg.DB, scope pg.Scope, r Replica) (int, error) // 一轮复制，回复制了几条
+func RegisterAuditReplica(db *pg.DB, scope pg.Scope, queue *pg.Queue, r Replica, logger *slog.Logger) error
 ```
 
 `chain.go`、`migrations/00012_audit_chain.sql`。规则见[运营的「审计」](../../docs/domains/operations.md#审计)的「防篡改现在的实现」。
@@ -203,8 +201,7 @@ func RegisterAuditDigest(db *pg.DB, scope pg.Scope, queue *pg.Queue, replicaOn b
 - **哈希**：`linkHash` 是 SHA-256(前一条的哈希 ‖ RFC 8785 编码的字段数组)，字段和顺序见领域文档；`TestLinkHash` 的期望值是在 Go 之外另行算出的，改编码就是改链的格式，要换掉第一个元素 `axiom.audit.v1`。
 - **核对**：`verifyBatch` 用 `checkedLinks` 读 `from - 1` 那一条（取它的哈希和在日志里的位置）和其后最多 500 条，再用 `audit.Since` 从那个位置读同样多的条目，逐个对位：前一条的哈希不对是 `broken`，对位的条目 ID 不同时，条目排在链的后面是 `missing`、排在前面是 `late`，ID 相同但重算的哈希不同是 `mismatch`，哈希相同而链上的 `at` 和条目的不同也是 `broken`（`extend` 按链头的 `at` 往后读，只改它就能让接链停下）。前一条不在了也是 `broken`。`haltAt` 在同一个事务里写故障、审计 `audit_chain.halt` 和 critical 信号 `operations.audit_chain_fault`。
 - **整条核对**：`VerifyAuditChain` 每次最多 `chainCheckBatches`（20）个事务，每个事务是一步 `checkStep`：没有进行中的一轮、且上一轮开始已满一天（`AuditChainCheck` 的 `due`）时，`startCheck` 以当时的链头为目标开新的一轮；否则 `advanceCheck` 用 `verifyBatch` 核对 `next_seq` 起的一批，并在同一个事务里存下新的 `next_seq`，过了目标就记 `finished_at`、恢复 `operations.audit_chain_check_overdue`。一次运行的第一步发现这一轮开始已满一天还没完，就发这个 warning。所以被期限或数据库失败打断的一次只丢掉没提交的那一批。
-- **异地复制**：`replica.go`（读键时的 403 当错误报出、提示凭证要有 `s3:ListBucket`；每轮最后判断落后用自己的 `replicaLagTimeout` 期限，复制被任务期限打断也照样记）。`RegisterAuditReplica` 在 `archive` 队列上每分钟排一次 `operations.audit_replica`（只在节点配了副本桶时登记，见 `cmd/axiom` 的 `registerAuditReplica`）。一轮最多 `replicaObjects`（20）个对象：只读事务里读 `audit_replica` 的位置，用 `checkedLinks` 读其后最多 500 条并逐条核对，只复制核对通过的（第一条就不通过是错误，由接链的核对记故障）；不开事务写对象，再在新事务里用 `AdvanceAuditReplica` 从读到的位置推进（被别的运行推进过就是 0 行，停下）。对象键 `audit-chain/v1/<首序号>-<末序号>.jsonl`（各 20 位），每行是规范 JSON `{"entry": [...], "hash", "prev_hash", "seq"}`，`entry` 正是哈希覆盖的字段数组（`entryFields`），只凭桶里的对象就能重算整条链。写之前先 `Get` 这个键：有且字节相同（上一轮写了没存下位置）就跳过；字节不同是冲突，不覆盖，发 critical `operations.audit_replica_conflict`（键是对象键），位置不动；没有才 `Put`（`NoOverwrite`），412 时再读一遍比较。每轮最后按还没复制的最早一条的 `chained_at` 发或恢复 `operations.audit_replica_lag`（超过 `replicaLagAfter` 10 分钟是 warning，字段 `behind_links`、`behind_seconds`）。
-- **每天的摘要**：`digest.go`。`RegisterAuditDigest` 每分钟排一次 `operations.audit_digest`；`MakeAuditDigests` 一天一天地做：`nextDigestDay` 在一个事务里读下一天（`AuditDigestNext`：上一份的后一天，没有时是昨天）和 `AuditChainFrontier`，这一天结束得早于边界才往下做；`digestOf` 在 `ReadTx`（可重复读的只读事务）里读那一天的运营操作（按工具和现在的状态）、审批（按现在的状态）、被拒的调用（`operation_log` 里 4xx 的，按错误码；那一天是 UUIDv7 主键的一段范围，边界在 SQL 里由那一刻的毫秒数后接零算出）、每条上限策略那一天的计数器和日上限，以及现在的链头、故障数、整条核对最后完成的时间和复制的位置与状态（`unconfigured`、`behind`、`current`）；`saveDigest` 以 `AuditDigest` 的 JSON 插进 `audit_digests`，插进去了才在同一个事务里发 info 信号 `operations.audit_digest`（键是日期，字段是各项合计、链头、故障数和复制状态），从不发恢复：告警模块把它当作通知，告知之后自己关闭。插入是 0 行（别的节点先做了）就停下，每次最多 `digestDays`（7）天。边界先在自己的事务里读，再开快照，所以边界看到已结束的事务都在快照里。
+- **异地复制**：`replica.go`（读键时的 403 当错误报出、提示凭证要有 `s3:ListBucket`；每轮最后判断落后用自己的 `replicaLagTimeout` 期限，复制被任务期限打断也照样记）。`RegisterAuditReplica` 在 `archive` 队列上每分钟排一次 `operations.audit_replica`（只在节点配了副本桶时登记，见 `cmd/axiom` 的 `registerAuditReplica`）。一轮最多 `replicaObjects`（20）个对象：只读事务里读 `audit_replica` 里这个目标（`Replica.Target`，端点加桶名）的位置，没有就从第一条起，用 `checkedLinks` 读其后最多 500 条并逐条核对，只复制核对通过的（第一条就不通过是错误，由接链的核对记故障）；不开事务写对象，再在新事务里用 `AdvanceAuditReplica` 从读到的位置推进（被别的运行推进过就是 0 行，停下）。对象键 `audit-chain/v1/<首序号>-<末序号>.jsonl`（各 20 位），每行是规范 JSON `{"entry": [...], "hash", "prev_hash", "seq"}`，`entry` 正是哈希覆盖的字段数组（`entryFields`），只凭桶里的对象就能重算整条链。写之前先 `Get` 这个键：有且字节相同（上一轮写了没存下位置）就跳过；字节不同是冲突，不覆盖，发 critical `operations.audit_replica_conflict`（键是对象键），位置不动；没有才 `Put`（`NoOverwrite`，客户端同时带 SHA-256 内容校验），412 时再读一遍比较。每轮最后按还没复制的最早一条的 `chained_at` 发或恢复 `operations.audit_replica_lag`（超过 `replicaLagAfter` 10 分钟是 warning，字段 `behind_links`、`behind_seconds`）。
 
 ## 表
 
@@ -228,9 +225,8 @@ func RegisterAuditDigest(db *pg.DB, scope pg.Scope, queue *pg.Queue, replicaOn b
 
 `migrations/00014_audit_replica.sql`：
 
-- `operations.audit_replica(singleton, replicated_seq, object_key, replicated_at)`，只有一行，第一次复制之前没有；`axiom_app` 能读、插入和更新这三个值。
-- `operations.audit_digests(day, body, created_at)`，主键 `day`（UTC 日期），`body` 是 `AuditDigest` 的 JSON，最多 64 KiB；`axiom_app` 只有 SELECT 和 `day`、`body` 的 INSERT，做出的摘要改不了也删不掉。
-- 两张表只有平台范围能读写。
+- `operations.audit_replica(target, replicated_seq, object_key, replicated_at)`，主键 `target`（目标桶的端点加桶名，不含凭证），每个复制过的桶一行，第一次复制之前没有；`axiom_app` 能读、插入，能更新后三个值。
+- 只有平台范围能读写。
 
 ## 不变量
 
@@ -248,7 +244,6 @@ func RegisterAuditDigest(db *pg.DB, scope pg.Scope, queue *pg.Queue, replicaOn b
 | 币种不符的金额目标不参与对照 | `addExpected` 跳过；`Expected` 的金额只按站点当前币种呈现 |
 | 审计链按 `(at, id)` 依次覆盖链头之前的每条审计条目，不分叉、不跳号 | 主键 `seq` 和触发器 `audit_chain_follows`；只接 `AuditChainFrontier` 之前的条目，比所有开着的事务都早的条目不会再有更早的提交；核对时对位比较，链头之前多出、少了或改了的条目都停下接链（`TestAuditChainHalts`、`TestAuditChainWaitsForOpenTransactions`） |
 | 副本里每条链都核对过，写过的对象不被改写 | 只复制 `checkedLinks` 通过的；写前先读键，字节不同就停下告警，不覆盖；位置从读到的值推进（`TestAuditReplicaNeverOverwrites`） |
-| 每个 UTC 日恰好一份摘要、一个事件，内容来自这一天的事务都提交之后的一个快照 | `audit_digests` 的主键是日期，`ON CONFLICT DO NOTHING` 插进去了才在同一事务发以日期为键的信号；从上一份的后一天往后做；等 `AuditChainFrontier` 过了这一天；`ReadTx` 是可重复读（`TestAuditDigest`、`TestAuditDigestDays`；通知的生命周期见领域文档「每天的摘要现在的实现」的不变量，告警这一侧由 observability 的 `TestDigestNotificationLifecycle` 覆盖） |
 | 未记录的成功改动不能留下 | `audit.Record` 和写入同一事务；`TestAdminOperationsTargets` 读审计的 `before`/`after`，包括旧页面写入时后四项的现值 |
 
 ## 测试
@@ -270,9 +265,7 @@ func RegisterAuditDigest(db *pg.DB, scope pg.Scope, queue *pg.Queue, replicaOn b
 - `cmd/axiom/operations_prices_test.go`（真实 HTTP 和数据库，调用世界里带成本的端点）：`TestOperationsPricePublish` 覆盖没有包络 422、试运行不发布、包络内以 agent 的名义发布并计数、重放、旧的当前版本 409 `stale_revision`、已发布的提案 409、`caps_get` 的包络用量；`TestOperationsPriceApproval` 覆盖超出包络转负责人、负责人看到包络、批准后发布并计数、提案在批准前被换掉以 `stale_revision` 结束；`TestOperationsPricePublishRetryRace` 用持有定价政策行的事务覆盖同一个键的两个并发请求答同一个操作、只发布并计数一次；`TestOperationsPriceRefusals` 覆盖没有 `operations.money` 的 403、包络的旧版本 409 和越界 400、列表和审计。`internal/billing` 的 `TestPriceMove` 覆盖共用售价、没有当前版本、没有成本、端点各自的变动和毛利率、端点现在没有价、端点价换回共用价、上下文分档口径改变；`internal/catalog` 的 `TestLargestChangeAndSmallestMargin` 覆盖两个量在各档、增删价格、零价和亏本上的取值。
 
 - `chain_test.go`（真实 PostgreSQL）：`TestAuditChainLinksCommittedEntries` 覆盖按开始时刻的顺序接链、没过 60 秒的不接、不重复接、整条链核对通过，以及表只收接在链头之后的一条、应用改不了链也删不了故障；`TestAuditChainWaitsForOpenTransactions` 用持有一个写了审计的事务覆盖后提交的条目不越过它；`TestAuditChainHalts` 表驱动覆盖插到链头之前、删掉、改掉一条、改掉一条链和把链头的时刻改到将来各自被下一轮发现，故障、审计和告警各只有一次，之后不再接链；`TestAuditChainChecksBeyondTheWindow` 覆盖 1501 条分四个事务接完，改动第 501 条时每轮的核对看不到；整条核对每次两个事务时，第一次开一轮并核对到 500，取消的一次不动位置，下一次从 501 接着做并发现它；`TestAuditChainCheckRounds` 覆盖一天之内不开新的一轮、满一天开、开始满一天还没完时发逾期告警、核对完恢复；`TestAuditChainLag` 覆盖落后告警和赶上后的恢复。`chain_hash_test.go` 的 `TestLinkHash` 固定哈希的编码；`chain_fail_test.go` 的 `TestChainStepsFail` 覆盖每一步把数据库失败带回、只读事务里不写链和故障，`TestAuditChainWork` 覆盖接链和整条核对失败时只记日志。
-- `replica_test.go`（真实 PostgreSQL，内存里的桶，和 SeaweedFS 一样不理 `If-None-Match`）：`TestAuditReplicaCopiesTheChain` 覆盖 1001 条分 500、500、1 三个对象复制、之后一条一个对象、没有新链不写，以及只凭桶里的对象另行重算出和库里一样的链；`TestAuditReplicaNeverOverwrites` 覆盖丢了位置后再跑不重写同样的字节、键里是别的字节时不覆盖并发冲突告警、落后告警与恢复；`TestAuditReplicaHoldsItsPlace` 覆盖桶不可用和条目被改时位置不动、不写对象。`replica_fail_test.go`：`TestReplicaAndDigestStepsFail` 覆盖复制和摘要的每一步把数据库或桶的失败交给调用方，`TestReplicaAndDigestWork` 覆盖两个任务失败时只记日志、不重试。
-- `digest_test.go`（真实 PostgreSQL）：`TestAuditDigest` 覆盖只算昨天的运营操作、审批、4xx 被拒的调用（今天和前天的不算、2xx 和 5xx 不算）、上限策略那一天的计数器，链和复制状态，摘要只做一次、信号只发一次、键是日期；`TestAuditDigestPages` 覆盖从新到旧翻页；`TestAuditDigestDays` 表驱动覆盖第一次只做昨天、午夜前开始午夜后提交的写入（边界没过时不做，过了之后算进去）、任务停了几天后按顺序补做每一天、两个节点同时做只有一份和一个信号。`TestAuditReplicaLagOutlivesTheDeadline` 覆盖上下文已结束的一轮仍记下落后告警；`TestReplicaAndDigestStepsFail` 还覆盖读键时的 403 不写对象、提示列举权限。
-- `cmd/axiom/operations_audit_test.go` 的 `TestOperationsAuditDigests`（真实 HTTP 和数据库）覆盖 `audit_digests` 的翻页、不是日期的游标 400 和只有站点范围的凭证 404。
+- `replica_test.go`（真实 PostgreSQL，内存里的桶，和 SeaweedFS 一样不理 `If-None-Match`）：`TestAuditReplicaCopiesTheChain` 覆盖 1001 条分 500、500、1 三个对象复制、之后一条一个对象、没有新链不写，以及只凭桶里的对象另行重算出和库里一样的链；`TestAuditReplicaNeverOverwrites` 覆盖丢了位置后再跑不重写同样的字节、键里是别的字节时不覆盖并发冲突告警、落后告警与恢复；`TestAuditReplicaHoldsItsPlace` 覆盖桶不可用和条目被改时位置不动、不写对象；`TestAuditReplicaFollowsItsBucket` 覆盖改指向一个新桶后从第一条起完整复制、新桶单凭自己重算出同一条链、两个桶各有自己的进度；`TestAuditReplicaLagOutlivesTheDeadline` 覆盖上下文已结束的一轮仍记下落后告警。`replica_fail_test.go`：`TestReplicaStepsFail` 覆盖复制的每一步把数据库失败交给调用方，`TestWriteReplicaRefusals` 覆盖读键时的 403 不写对象并提示列举权限、读失败和写被拒交给调用方，`TestReplicaWork` 覆盖任务失败时只记日志、不重试。
 - `log_test.go`：`TestOperationLog` 在真实 PostgreSQL 上覆盖从新到旧分页、只读自己凭证的记录；`TestOperationLogBounds` 覆盖刚好 8192 字节的输入原样保存、多一个字节只记大小、站点范围读不到。
 
 - `targets_test.go`：`TestExpectedFromProratesEachMonthByDuration` 表驱动覆盖整月、部分月、跨月、闰年、空窗口、金额币种不符、四种指标的半入和带毫秒的跨月折算；`TestExpectedFromRefusesACountWiderThanItsType` 覆盖超宽；`TestTargetsCheck` 覆盖月份、负数、非法金额、币种和 38 位上限；`TestTargetsCheckCommercial` 覆盖付费用户、月流水和两个比率的范围；`TestExpectedFromAppliesRatesToTheEndMonth` 覆盖比率的结束月规则和月首边界；`TestExpectedFromProratesCommercialCountsAndMoney` 覆盖后两项数量/金额的折算。

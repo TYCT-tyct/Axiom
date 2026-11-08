@@ -11,22 +11,28 @@ import (
 )
 
 const advanceAuditReplica = `-- name: AdvanceAuditReplica :execrows
-INSERT INTO operations.audit_replica (replicated_seq, object_key) VALUES ($1, $2)
-ON CONFLICT (singleton) DO UPDATE SET replicated_seq = EXCLUDED.replicated_seq, object_key = EXCLUDED.object_key,
+INSERT INTO operations.audit_replica (target, replicated_seq, object_key) VALUES ($1, $2, $3)
+ON CONFLICT (target) DO UPDATE SET replicated_seq = EXCLUDED.replicated_seq, object_key = EXCLUDED.object_key,
     replicated_at = now()
-WHERE operations.audit_replica.replicated_seq = $3
+WHERE operations.audit_replica.replicated_seq = $4
 `
 
 type AdvanceAuditReplicaParams struct {
+	Target    string
 	LastSeq   int64
 	ObjectKey string
 	FromSeq   int64
 }
 
-// Moves the copy from from_seq, where the run read it, to last_seq: 0 rows when another run moved it first. from_seq 0
-// is no copy yet, which only the first insert matches, since replicated_seq is at least 1.
+// Moves the copy to target from from_seq, where the run read it, to last_seq: 0 rows when another run moved it first.
+// from_seq 0 is no copy yet, which only the first insert matches, since replicated_seq is at least 1.
 func (q *Queries) AdvanceAuditReplica(ctx context.Context, db DBTX, arg AdvanceAuditReplicaParams) (int64, error) {
-	result, err := db.Exec(ctx, advanceAuditReplica, arg.LastSeq, arg.ObjectKey, arg.FromSeq)
+	result, err := db.Exec(ctx, advanceAuditReplica,
+		arg.Target,
+		arg.LastSeq,
+		arg.ObjectKey,
+		arg.FromSeq,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -37,7 +43,7 @@ const auditReplicaLag = `-- name: AuditReplicaLag :one
 SELECT now()::timestamptz AS now, coalesce(r.replicated_seq, 0)::bigint AS replicated_seq, r.replicated_at,
     h.seq AS head_seq, c.chained_at AS pending_since
 FROM (SELECT coalesce(max(seq), 0)::bigint AS seq FROM operations.audit_chain) h
-LEFT JOIN operations.audit_replica r ON true
+LEFT JOIN operations.audit_replica r ON r.target = $1
 LEFT JOIN operations.audit_chain c ON c.seq = coalesce(r.replicated_seq, 0) + 1
 `
 
@@ -49,10 +55,10 @@ type AuditReplicaLagRow struct {
 	PendingSince  *time.Time
 }
 
-// The chain's head, how far the copy has got, and when the oldest link not yet copied was chained (none when the copy
-// has the head), by the database's clock.
-func (q *Queries) AuditReplicaLag(ctx context.Context, db DBTX) (AuditReplicaLagRow, error) {
-	row := db.QueryRow(ctx, auditReplicaLag)
+// The chain's head, how far the copy to target has got, and when the oldest link not yet copied there was chained
+// (none when the copy has the head), by the database's clock.
+func (q *Queries) AuditReplicaLag(ctx context.Context, db DBTX, target string) (AuditReplicaLagRow, error) {
+	row := db.QueryRow(ctx, auditReplicaLag, target)
 	var i AuditReplicaLagRow
 	err := row.Scan(
 		&i.Now,
@@ -65,7 +71,7 @@ func (q *Queries) AuditReplicaLag(ctx context.Context, db DBTX) (AuditReplicaLag
 }
 
 const auditReplicaState = `-- name: AuditReplicaState :many
-SELECT replicated_seq, object_key, replicated_at FROM operations.audit_replica
+SELECT replicated_seq, object_key, replicated_at FROM operations.audit_replica WHERE target = $1
 `
 
 type AuditReplicaStateRow struct {
@@ -74,8 +80,9 @@ type AuditReplicaStateRow struct {
 	ReplicatedAt  time.Time
 }
 
-func (q *Queries) AuditReplicaState(ctx context.Context, db DBTX) ([]AuditReplicaStateRow, error) {
-	rows, err := db.Query(ctx, auditReplicaState)
+// How far the copy to target has got; no row before its first object.
+func (q *Queries) AuditReplicaState(ctx context.Context, db DBTX, target string) ([]AuditReplicaStateRow, error) {
+	rows, err := db.Query(ctx, auditReplicaState, target)
 	if err != nil {
 		return nil, err
 	}

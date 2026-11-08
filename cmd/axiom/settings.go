@@ -213,7 +213,7 @@ func readFileParserSettings(env *config.Env, s *nodeSettings) error {
 
 // readArchiveSettings reads the retention login, the archive bucket and the audit chain's replica bucket. All are
 // optional: without the URL the job does not run, without a bucket the call log keeps every partition, and without a
-// replica the chain stays in this database alone, which the daily digest reports. Half a bucket configuration is a
+// replica the chain stays in this database alone, which the node logs at startup. Half a bucket configuration is a
 // startup error, not a surprise for the first upload; `axiom objectstore` and the backup job use the same client, the
 // latter with its own bucket. A configured bucket without the retention URL is a startup error in serveWith.
 func readArchiveSettings(env *config.Env, s *nodeSettings) error {

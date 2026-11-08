@@ -8,9 +8,6 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/riverqueue/river"
 
 	"axiom/internal/platform/objectstore"
 	"axiom/internal/platform/pg"
@@ -53,31 +50,15 @@ func openFailing(t *testing.T) (*pg.DB, pg.Scope, context.Context) {
 	return db, pg.NewScope(true, nil, nil), canceled
 }
 
-// TestReplicaAndDigestStepsFail: each step of the copy and the digest hands a failure of its database or bucket to
-// its caller, and the copy writes nothing it could not first read.
-func TestReplicaAndDigestStepsFail(t *testing.T) {
+// TestReplicaStepsFail: each step of the copy hands a failure of its database to its caller.
+func TestReplicaStepsFail(t *testing.T) {
 	t.Parallel()
 	db, scope, canceled := openFailing(t)
 	for name, step := range map[string]func(tx pg.Tx) error{
-		"nextReplicaBatch": func(tx pg.Tx) error { _, _, err := nextReplicaBatch(canceled, tx); return err },
-		"signalReplicaLag": func(tx pg.Tx) error { return signalReplicaLag(canceled, tx) },
-		"digestOf":         func(tx pg.Tx) error { _, err := digestOf(canceled, tx, time.Now(), true); return err },
-		"digestMoney":      func(tx pg.Tx) error { _, err := digestMoney(canceled, tx, time.Now()); return err },
-		"digestChain":      func(tx pg.Tx) error { _, err := digestChain(canceled, tx); return err },
-		"digestReplica":    func(tx pg.Tx) error { _, err := digestReplica(canceled, tx, true); return err },
-		"AuditDigests":     func(tx pg.Tx) error { _, _, err := AuditDigests(canceled, tx, nil, 1); return err },
+		"nextReplicaBatch": func(tx pg.Tx) error { _, _, err := nextReplicaBatch(canceled, tx, "t"); return err },
+		"signalReplicaLag": func(tx pg.Tx) error { return signalReplicaLag(canceled, tx, "t") },
 	} {
 		if err := db.Tx(t.Context(), scope, step); !errors.Is(err, context.Canceled) {
-			t.Errorf("%s with a failing database: %v", name, err)
-		}
-	}
-
-	for name, run := range map[string]func() error{
-		"nextDigestDay":    func() error { _, _, err := nextDigestDay(canceled, db, scope, 0); return err },
-		"saveDigest":       func() error { _, err := saveDigest(canceled, db, scope, time.Now(), AuditDigest{}); return err },
-		"makeAuditDigests": func() error { _, err := makeAuditDigests(canceled, db, scope, false, 0); return err },
-	} {
-		if err := run(); !errors.Is(err, context.Canceled) {
 			t.Errorf("%s with a failing database: %v", name, err)
 		}
 	}
@@ -109,27 +90,20 @@ func TestWriteReplicaRefusals(t *testing.T) {
 	}
 }
 
-// TestReplicaAndDigestWork: a failing run of either job is logged and not retried, and a successful one logs nothing.
-func TestReplicaAndDigestWork(t *testing.T) {
+// TestReplicaWork: a failing run of the job is logged and not retried, and a successful one logs nothing.
+func TestReplicaWork(t *testing.T) {
 	t.Parallel()
 	db, scope, canceled := openFailing(t)
 	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	down := &failingStore{err: errors.New("bucket down")}
-	replica, digest := replicaWork(db, scope, down, logger), digestWork(db, scope, false, logger)
-	if err := errors.Join(replica(t.Context(), nil), digest(t.Context(), nil)); err != nil || logs.Len() != 0 {
-		t.Errorf("runs with nothing to copy and a digest to make: %v %s", err, logs.String())
+	work := replicaWork(db, scope, Replica{Store: &failingStore{err: errors.New("bucket down")}, Target: "t"},
+		slog.New(slog.NewTextHandler(&logs, nil)))
+	if err := work(t.Context(), nil); err != nil || logs.Len() != 0 {
+		t.Errorf("a run with nothing to copy: %v %s", err, logs.String())
 	}
-	if err := errors.Join(replica(canceled, nil), digest(canceled, nil)); err != nil ||
-		!strings.Contains(logs.String(), "the copy of the audit chain stopped") || !strings.Contains(logs.String(), "the audit digest stopped") {
-		t.Errorf("failing runs: %v %s", err, logs.String())
+	if err := work(canceled, nil); err != nil || !strings.Contains(logs.String(), "the copy of the audit chain stopped") {
+		t.Errorf("a failing run: %v %s", err, logs.String())
 	}
-	for kind, args := range map[string]interface {
-		river.JobArgs
-		river.JobArgsWithInsertOpts
-	}{"operations.audit_replica": replicaArgs{}, "operations.audit_digest": digestArgs{}} {
-		if opts := args.InsertOpts(); args.Kind() != kind || opts.Queue != pg.QueueArchive || !opts.UniqueOpts.ByArgs {
-			t.Errorf("%s: %+v", kind, opts)
-		}
+	if opts := (replicaArgs{}).InsertOpts(); (replicaArgs{}).Kind() != "operations.audit_replica" || opts.Queue != pg.QueueArchive || !opts.UniqueOpts.ByArgs {
+		t.Errorf("the replica's job: %+v", opts)
 	}
 }

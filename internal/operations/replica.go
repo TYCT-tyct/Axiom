@@ -61,6 +61,14 @@ type ReplicaStore interface {
 	Put(ctx context.Context, up objectstore.Upload) (objectstore.ObjectInfo, error)
 }
 
+// Replica is the bucket the chain is copied to: Store reaches it and Target names it, its endpoint and bucket and never
+// its credentials. The copy's progress is kept per Target, so a deployment pointed at another bucket copies the whole
+// chain there from the first link instead of carrying on from where the old bucket had got.
+type Replica struct {
+	Store  ReplicaStore
+	Target string
+}
+
 // errReplicaConflict is a key that holds other bytes than the links it is named for.
 var errReplicaConflict = errors.New("the replica holds other bytes")
 
@@ -75,30 +83,30 @@ type replicaBatch struct {
 // and at most replicaObjects a run, then raises or resolves the lag. It returns how many links it copied. It copies
 // only links that check against the log (checkedLinks): one that does not is the chain's own fault to report, and
 // stays uncopied.
-func ReplicateAuditChain(ctx context.Context, db *pg.DB, scope pg.Scope, store ReplicaStore) (int, error) {
-	n, err := replicate(ctx, db, scope, store)
+func ReplicateAuditChain(ctx context.Context, db *pg.DB, scope pg.Scope, r Replica) (int, error) {
+	n, err := replicate(ctx, db, scope, r)
 	// The lag is judged even when the copy ran out of its job's deadline, which is when it matters most: a backlog that
 	// takes every run's whole deadline must still be reported.
 	lagCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replicaLagTimeout)
 	defer cancel()
-	return n, errors.Join(err, db.Tx(lagCtx, scope, func(tx pg.Tx) error { return signalReplicaLag(lagCtx, tx) }))
+	return n, errors.Join(err, db.Tx(lagCtx, scope, func(tx pg.Tx) error { return signalReplicaLag(lagCtx, tx, r.Target) }))
 }
 
 // replicate is the copying of ReplicateAuditChain.
-func replicate(ctx context.Context, db *pg.DB, scope pg.Scope, store ReplicaStore) (int, error) {
+func replicate(ctx context.Context, db *pg.DB, scope pg.Scope, r Replica) (int, error) {
 	copied := 0
 	for range replicaObjects {
 		var b replicaBatch
 		var full bool
-		if err := db.ReadTx(ctx, scope, func(tx pg.Tx) (err error) { b, full, err = nextReplicaBatch(ctx, tx); return err }); err != nil || b.key == "" {
+		if err := db.ReadTx(ctx, scope, func(tx pg.Tx) (err error) { b, full, err = nextReplicaBatch(ctx, tx, r.Target); return err }); err != nil || b.key == "" {
 			return copied, err
 		}
-		if err := writeReplica(ctx, store, b); err != nil {
+		if err := writeReplica(ctx, r.Store, b); err != nil {
 			return copied, errors.Join(err, raiseConflict(ctx, db, scope, b, err))
 		}
 		var moved int64
 		if err := db.Tx(ctx, scope, func(tx pg.Tx) (err error) {
-			moved, err = New().AdvanceAuditReplica(ctx, tx, AdvanceAuditReplicaParams{LastSeq: b.last, ObjectKey: b.key, FromSeq: b.from})
+			moved, err = New().AdvanceAuditReplica(ctx, tx, AdvanceAuditReplicaParams{Target: r.Target, LastSeq: b.last, ObjectKey: b.key, FromSeq: b.from})
 			return err
 		}); err != nil {
 			return copied, fmt.Errorf("save the audit replica at %d: %w", b.last, err)
@@ -114,11 +122,11 @@ func replicate(ctx context.Context, db *pg.DB, scope pg.Scope, store ReplicaStor
 	return copied, nil
 }
 
-// nextReplicaBatch reads the links after the replicated seq that check against the log and encodes them, and reports
-// whether the batch is full, so more may follow. A batch with no key is nothing to copy; a fault at the first link is
-// an error.
-func nextReplicaBatch(ctx context.Context, tx pg.Tx) (replicaBatch, bool, error) {
-	state, err := New().AuditReplicaState(ctx, tx)
+// nextReplicaBatch reads the links after the seq replicated to target that check against the log and encodes them, and
+// reports whether the batch is full, so more may follow. A batch with no key is nothing to copy; a fault at the first
+// link is an error.
+func nextReplicaBatch(ctx context.Context, tx pg.Tx, target string) (replicaBatch, bool, error) {
+	state, err := New().AuditReplicaState(ctx, tx, target)
 	if err != nil {
 		return replicaBatch{}, false, fmt.Errorf("read the audit replica: %w", err)
 	}
@@ -213,29 +221,14 @@ func raiseConflict(ctx context.Context, db *pg.DB, scope pg.Scope, b replicaBatc
 	})
 }
 
-// replicaLag is how far the copy is behind the chain, by the database's clock.
-type replicaLag struct {
-	AuditReplicaLagRow
-	behind bool // the oldest link not copied was chained more than replicaLagAfter ago
-}
-
-// readReplicaLag reads the copy's lag.
-func readReplicaLag(ctx context.Context, tx pg.Tx) (replicaLag, error) {
-	row, err := New().AuditReplicaLag(ctx, tx)
+// signalReplicaLag raises the lag when a link has waited longer than replicaLagAfter to be copied to target, by the
+// database's clock, and resolves it otherwise.
+func signalReplicaLag(ctx context.Context, tx pg.Tx, target string) error {
+	lag, err := New().AuditReplicaLag(ctx, tx, target)
 	if err != nil {
-		return replicaLag{}, fmt.Errorf("read the audit replica's lag: %w", err)
+		return fmt.Errorf("read the audit replica's lag: %w", err)
 	}
-	return replicaLag{row, row.PendingSince != nil && row.Now.Sub(*row.PendingSince) > replicaLagAfter}, nil
-}
-
-// signalReplicaLag raises the lag when a link has waited longer than replicaLagAfter to be copied, and resolves it
-// otherwise.
-func signalReplicaLag(ctx context.Context, tx pg.Tx) error {
-	lag, err := readReplicaLag(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if !lag.behind {
+	if lag.PendingSince == nil || lag.Now.Sub(*lag.PendingSince) <= replicaLagAfter {
 		return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{Kind: replicaLagSignal, Key: "platform", Severity: "info", Resolved: true})
 	}
 	return alert.Persist(ctx, tx, uuid.NewV7(), alert.Signal{
@@ -262,20 +255,20 @@ func (replicaArgs) InsertOpts() river.InsertOpts {
 }
 
 // replicaWork is one run of the job, logged when it fails.
-func replicaWork(db *pg.DB, scope pg.Scope, store ReplicaStore, logger *slog.Logger) func(context.Context, *river.Job[replicaArgs]) error {
+func replicaWork(db *pg.DB, scope pg.Scope, r Replica, logger *slog.Logger) func(context.Context, *river.Job[replicaArgs]) error {
 	return func(ctx context.Context, _ *river.Job[replicaArgs]) error {
-		if _, err := ReplicateAuditChain(ctx, db, scope, store); err != nil {
+		if _, err := ReplicateAuditChain(ctx, db, scope, r); err != nil {
 			logger.Error("operations: the copy of the audit chain stopped", "err", err)
 		}
 		return nil
 	}
 }
 
-// RegisterAuditReplica adds the copy of the chain to store, every minute, to queue, on whichever node leads it. A
+// RegisterAuditReplica adds the copy of the chain to r, every minute, to queue, on whichever node leads it. A
 // failed run is logged and not retried, like the chaining: the next comes on its own, and the lag alert reports a copy
 // that keeps failing. scope is the platform's, which only cmd/ builds.
-func RegisterAuditReplica(db *pg.DB, scope pg.Scope, queue *pg.Queue, store ReplicaStore, logger *slog.Logger) error {
-	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(replicaWork(db, scope, store, logger))); err != nil {
+func RegisterAuditReplica(db *pg.DB, scope pg.Scope, queue *pg.Queue, r Replica, logger *slog.Logger) error {
+	if err := river.AddWorkerSafely(queue.Workers(), river.WorkFunc(replicaWork(db, scope, r, logger))); err != nil {
 		return fmt.Errorf("operations: %w", err)
 	}
 	queue.Every(time.Minute, func() river.JobArgs { return replicaArgs{} })
