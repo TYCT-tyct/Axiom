@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 	"uuid"
 
 	"axiom/internal/accounts"
@@ -314,19 +315,99 @@ func (o operationsAPI) OperationGet(ctx context.Context, r operationsapi.Operati
 	return operationsapi.OperationGet200JSONResponse(operationBody(op)), nil
 }
 
+// ApprovalsList is a page of the approvals the credential's own operations asked for, each with its operation.
+func (o operationsAPI) ApprovalsList(ctx context.Context, r operationsapi.ApprovalsListRequestObject) (operationsapi.ApprovalsListResponseObject, error) {
+	after, err := cursorID(r.Params.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	var state operations.ApprovalState
+	if r.Params.State != nil {
+		state = operations.ApprovalState(*r.Params.State)
+	}
+	c := callOf(ctx)
+	var page []operations.Operation
+	var more bool
+	if err := o.db.ReadTx(ctx, c.scope, func(tx pg.Tx) (err error) {
+		page, more, err = operations.Approvals(ctx, tx, uuid.UUID(c.agent.ID()), state, after, pageSize(r.Params.Limit))
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	list := operationsapi.OperationList{Data: make([]operationsapi.Operation, len(page))}
+	for i, op := range page {
+		list.Data[i] = operationBody(op)
+	}
+	if more {
+		list.NextCursor = new(page[len(page)-1].Approval.ID.String())
+	}
+	return operationsapi.ApprovalsList200JSONResponse(list), nil
+}
+
 // ApprovalGet reads the credential's operation that waits or waited on an approval.
 func (o operationsAPI) ApprovalGet(ctx context.Context, r operationsapi.ApprovalGetRequestObject) (operationsapi.ApprovalGetResponseObject, error) {
-	op, err := o.ownOperation(ctx, func(tx pg.Tx) (operations.Operation, error) {
-		id, err := uuid.Parse(r.ApprovalId)
-		if err != nil {
-			return operations.Operation{}, operations.ErrNoApproval
-		}
-		return operations.ApprovalOperation(ctx, tx, id)
-	})
+	op, err := o.ownApproval(ctx, r.ApprovalId)
 	if err != nil {
 		return nil, err
 	}
 	return operationsapi.ApprovalGet200JSONResponse(operationBody(op)), nil
+}
+
+// The longest approval_wait waits, and how often it reads the approval again meanwhile: a wait costs one indexed read
+// a second and no connection between reads, and an owner who decides waits a second at most to see the agent go on.
+// The read deadline (15 s) leaves the last read and the answer five seconds.
+const (
+	approvalWaitLimit = 10 * time.Second
+	approvalWaitPoll  = time.Second
+)
+
+// ApprovalWait answers the credential's operation that waits on an approval as soon as nobody can decide it any more,
+// or as it is when the wait ends.
+func (o operationsAPI) ApprovalWait(ctx context.Context, r operationsapi.ApprovalWaitRequestObject) (operationsapi.ApprovalWaitResponseObject, error) {
+	wait := approvalWaitLimit
+	if r.Params.WaitSeconds != nil {
+		wait = time.Duration(*r.Params.WaitSeconds) * time.Second
+	}
+	op, err := awaitDecision(ctx, wait, approvalWaitPoll, func() (operations.Operation, error) { return o.ownApproval(ctx, r.ApprovalId) })
+	if err != nil {
+		return nil, err
+	}
+	return operationsapi.ApprovalWait200JSONResponse(operationBody(op)), nil
+}
+
+// awaitDecision reads the operation every poll until nobody can decide its approval any more (decided, withdrawn,
+// canceled or past its expiry by the database's clock), or until wait has passed, and answers the last read. Its
+// caller's context ending ends it with that error.
+func awaitDecision(ctx context.Context, wait, poll time.Duration, read func() (operations.Operation, error)) (operations.Operation, error) {
+	end := time.NewTimer(wait)
+	defer end.Stop()
+	again := time.NewTicker(poll)
+	defer again.Stop()
+	for {
+		op, err := read()
+		if err != nil || !op.Approval.Decidable {
+			return op, err
+		}
+		select {
+		case <-ctx.Done():
+			return operations.Operation{}, ctx.Err()
+		case <-end.C:
+			return op, nil
+		case <-again.C:
+		}
+	}
+}
+
+// ownApproval reads the operation that waits or waited on approval id, which is not found unless it is the
+// credential's own.
+func (o operationsAPI) ownApproval(ctx context.Context, id string) (operations.Operation, error) {
+	return o.ownOperation(ctx, func(tx pg.Tx) (operations.Operation, error) {
+		approval, err := uuid.Parse(id)
+		if err != nil {
+			return operations.Operation{}, operations.ErrNoApproval
+		}
+		return operations.ApprovalOperation(ctx, tx, approval)
+	})
 }
 
 // ownOperation reads an operation, which is not found unless it is the credential's own.

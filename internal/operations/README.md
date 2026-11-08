@@ -59,7 +59,7 @@ func Withdraw(ctx, tx, credential, approval uuid.UUID, reason string) (Operation
 func Cancel(ctx, tx, actor audit.Actor, approval uuid.UUID, reason string) (Operation, error) // 提出方已不在
 func CancelLive(ctx, tx, actor audit.Actor, credential *uuid.UUID, reason string) (int, error) // nil：全部凭证
 func ExpireDue(ctx, tx, batch int) (int, error)
-func Get / Operations / Approvals / ApprovalOperation                       // 读
+func Get / Operations / Approvals / ApprovalOperation                       // 读；Approvals 给凭证只列它自己的操作的审批，零 ID 是负责人的全部队列
 func RegisterExpiry(db, scope, queue, logger) error
 func RaiseAlert(ctx, tx, op Operation, severity, summary string) error       // alert_raise：AgentAlert 信号，键是 AlertKey(op)
 func ResolveAlert(ctx, tx, op Operation) error                               // alert_resolve：同一个键的恢复信号

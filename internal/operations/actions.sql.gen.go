@@ -51,15 +51,18 @@ func (q *Queries) ApprovalByID(ctx context.Context, db DBTX, id uuid.UUID) ([]Op
 const approvals = `-- name: Approvals :many
 SELECT a.id, a.operation_id, a.tier, a.state, a.summary, a.requested_at, a.expires_at, a.decided_at, a.decided_by, a.decision_reason, a.reasons, (a.state = 'pending' AND a.expires_at > clock_timestamp())::bool AS decidable FROM operations.approvals a
 WHERE ($1::text IS NULL OR a.state = $1::text)
-  AND ($2::uuid = '00000000-0000-0000-0000-000000000000' OR a.id < $2::uuid)
+  AND ($2::uuid IS NULL
+       OR a.operation_id IN (SELECT o.id FROM operations.operations o WHERE o.credential_id = $2::uuid))
+  AND ($3::uuid = '00000000-0000-0000-0000-000000000000' OR a.id < $3::uuid)
 ORDER BY a.id DESC
-LIMIT $3
+LIMIT $4
 `
 
 type ApprovalsParams struct {
-	State    *string
-	After    uuid.UUID
-	PageSize int32
+	State        *string
+	CredentialID *uuid.UUID
+	After        uuid.UUID
+	PageSize     int32
 }
 
 type ApprovalsRow struct {
@@ -67,10 +70,15 @@ type ApprovalsRow struct {
 	Decidable          bool
 }
 
-// Every approval newest first, a page after the cursor's ID, in one state or all: the owner's queue, decidable as in
-// ApprovalsOf.
+// The approvals newest first, a page after the cursor's ID, in one state or all, of one credential's operations or of
+// every one's (the owner's queue), decidable as in ApprovalsOf.
 func (q *Queries) Approvals(ctx context.Context, db DBTX, arg ApprovalsParams) ([]ApprovalsRow, error) {
-	rows, err := db.Query(ctx, approvals, arg.State, arg.After, arg.PageSize)
+	rows, err := db.Query(ctx, approvals,
+		arg.State,
+		arg.CredentialID,
+		arg.After,
+		arg.PageSize,
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -23,12 +23,12 @@ func (db opsDB) operationsPage(t *testing.T, credential uuid.UUID, state operati
 	return ops, more, err
 }
 
-func (db opsDB) approvalsPage(t *testing.T, state operations.ApprovalState, after uuid.UUID, pageSize int) ([]operations.Operation, bool, error) {
+func (db opsDB) approvalsPage(t *testing.T, credential uuid.UUID, state operations.ApprovalState, after uuid.UUID, pageSize int) ([]operations.Operation, bool, error) {
 	t.Helper()
 	var ops []operations.Operation
 	var more bool
 	err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
-		ops, more, err = operations.Approvals(t.Context(), tx, state, after, pageSize)
+		ops, more, err = operations.Approvals(t.Context(), tx, credential, state, after, pageSize)
 		return err
 	})
 	return ops, more, err
@@ -100,13 +100,40 @@ func TestApprovalsQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page, more, err := db.approvalsPage(t, operations.ApprovalPending, uuid.UUID{}, 1)
+	page, more, err := db.approvalsPage(t, uuid.UUID{}, operations.ApprovalPending, uuid.UUID{}, 1)
 	if err != nil || len(page) != 1 || !more || page[0].ID != second.ID {
 		t.Fatalf("the first approval page: %+v more=%t err=%v", page, more, err)
 	}
-	next, more, err := db.approvalsPage(t, operations.ApprovalPending, page[0].Approval.ID, 1)
+	next, more, err := db.approvalsPage(t, uuid.UUID{}, operations.ApprovalPending, page[0].Approval.ID, 1)
 	if err != nil || len(next) != 1 || more || next[0].ID != first.ID {
 		t.Fatalf("the next approval page: %+v more=%t err=%v", next, more, err)
+	}
+}
+
+// TestCredentialApprovals: a credential's approvals are those of its own operations, newest first, paged by
+// approval ID past another credential's in between.
+func TestCredentialApprovals(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	credential := uuid.NewV7()
+	var own []operations.Operation
+	for i, of := range []uuid.UUID{credential, uuid.NewV7(), credential} {
+		op, _, err := db.propose(t, retire(of, uuid.NewV7(), i+1, true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if of == credential {
+			own = append(own, op)
+		}
+	}
+
+	after := uuid.UUID{}
+	for i, want := range []operations.Operation{own[1], own[0]} {
+		page, more, err := db.approvalsPage(t, credential, operations.ApprovalPending, after, 1)
+		if err != nil || len(page) != 1 || more != (i == 0) || page[0].ID != want.ID {
+			t.Fatalf("page %d: %+v more=%t err=%v", i, page, more, err)
+		}
+		after = page[0].Approval.ID
 	}
 }
 
@@ -134,7 +161,7 @@ func TestApprovalDecidable(t *testing.T) {
 	if !open.Approval.Decidable {
 		t.Error("an approval just asked for is not decidable")
 	}
-	queue, _, err := db.approvalsPage(t, "", uuid.UUID{}, 10)
+	queue, _, err := db.approvalsPage(t, uuid.UUID{}, "", uuid.UUID{}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +197,7 @@ func TestApprovalsQueueEmpty(t *testing.T) {
 	if _, _, err := db.propose(t, retire(uuid.NewV7(), uuid.NewV7(), 1, true)); err != nil {
 		t.Fatal(err)
 	}
-	empty, more, err := db.approvalsPage(t, operations.ApprovalExpired, uuid.UUID{}, 10)
+	empty, more, err := db.approvalsPage(t, uuid.UUID{}, operations.ApprovalExpired, uuid.UUID{}, 10)
 	if err != nil || len(empty) != 0 || more {
 		t.Fatalf("the expired approvals: %+v more=%t err=%v", empty, more, err)
 	}
