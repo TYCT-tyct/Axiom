@@ -111,9 +111,32 @@ it("shows a pricing rule change and why it waits", async () => {
   await unmount();
 });
 
-// A fixed price is approved by its numbers: the owner reads each item's price per unit, not only the method's name. A
-// first price has no share of an old one to show, so the price list is all there is to judge it by.
-it("shows the prices a fixed-price rule asks for", async () => {
+// A fixed price is approved by its numbers: the owner reads the whole price list the rule would publish, the standard
+// prices, every context band with its threshold and every service tier, each per unit, and nothing says a tier is kept
+// as it is. A first price has no share of an old one to show, so the price list is all there is to judge it by.
+it("shows the whole price list a fixed-price rule asks for", async () => {
+  const schedule = {
+    v: 1,
+    currency: "USD",
+    rates: { input: "0.000003", output: "0.000015", web_search: "0.01" },
+    context_tiers: {
+      basis: ["input"],
+      method: "whole",
+      tiers: [
+        { above: 200000, rates: { input: "0.000006", output: "0.0000225" } },
+        { above: 1000000, rates: { input: "0.000012", output: "0.00003" } },
+      ],
+    },
+    service_tiers: {
+      priority: {
+        rates: { input: "0.00003", output: "0.00015" },
+        context_tiers: [
+          { above: 200000, rates: { input: "0.00006" } },
+          { above: 1000000, rates: {} },
+        ],
+      },
+    },
+  } as const;
   const fixed: Approval = {
     ...ruleApproval,
     tool: "pricing_rule_create",
@@ -123,23 +146,27 @@ it("shows the prices a fixed-price rule asks for", async () => {
         enabled: true,
         target: { kind: "model", id: "m1" },
         audience: { kind: "all" },
-        method: {
-          kind: "fixed",
-          schedule: { v: 1, currency: "USD", rates: { input: "0.000003", output: "0.000015", web_search: "0.01" } },
-        },
+        method: { kind: "fixed", schedule },
         constraints: {},
       },
     },
   };
   const { container, unmount } = await renderInDom(<RuleChangePanel approval={fixed} />);
-  const text = container.textContent ?? "";
-  for (const want of [
-    "The fixed price asked for (USD)",
-    "Input3per 1M tokens",
-    "Output15per 1M tokens",
-    "0.01per use",
-  ]) {
-    expect(text).toContain(want);
-  }
+  // Each heading with the prices under it, as the table reads row by row: item, price, unit.
+  const section = (name: string) =>
+    [...container.querySelectorAll("h4")].find((h) => h.textContent === name)?.parentElement?.textContent ?? "";
+  expect(container.textContent).toContain("The fixed price asked for (USD)");
+  expect(section("Standard prices (USD)")).toContain("Input3per 1M tokens");
+  expect(section("Standard prices (USD)")).toContain("Output15per 1M tokens");
+  expect(section("Standard prices (USD)")).toContain("0.01per use");
+  expect(section("Above 200,000 tokens of Input")).toContain("Input6per 1M tokens");
+  expect(section("Above 200,000 tokens of Input")).toContain("Output22.5per 1M tokens");
+  expect(section("Above 1,000,000 tokens of Input")).toContain("Input12per 1M tokens");
+  expect(section("Above 1,000,000 tokens of Input")).toContain("Output30per 1M tokens");
+  expect(section("Priority service tier")).toContain("Input30per 1M tokens");
+  expect(section("Priority service tier")).toContain("Output150per 1M tokens");
+  expect(section("Priority service tier, Above 200,000 tokens of Input")).toContain("Input60per 1M tokens");
+  expect(section("Priority service tier, Above 1,000,000 tokens of Input")).toContain("lists no prices of its own");
+  expect(container.textContent).not.toContain("kept as they are");
   await unmount();
 });

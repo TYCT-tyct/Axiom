@@ -4,7 +4,7 @@ import { Button, EmptyState, Icon, Panel, Table, Td, Th, useFormat } from "@axio
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Time } from "../parts";
-import { isPerUse, rateItems } from "./catalog";
+import { isPerUse, rateItems, serviceTiers } from "./catalog";
 import { PublishPriceDialog, SourceDialog } from "./price-dialogs";
 import { showRate } from "./price-fields";
 
@@ -90,41 +90,79 @@ function PriceCard({ price, onPublish }: { price: Price; onPublish: (() => void)
   );
 }
 
-// Rates is a price list item by item, per unit as the catalog shows it, with a note of its context and service tiers.
-export function Rates({ schedule }: { schedule: AdminSchemas["PriceSchedule"] }) {
+type Schedule = AdminSchemas["PriceSchedule"];
+type RateList = AdminSchemas["Rates"];
+type ServiceTier = (typeof serviceTiers)[number];
+
+// Rates is a whole price list as the catalog stores it: the standard prices, each context band by its threshold, and
+// each service tier with its own bands, every price per unit as the catalog shows it. A band or tier is shown with the
+// prices it lists, as stored.
+export function Rates({ schedule }: { schedule: Schedule }) {
+  const { t } = useTranslation();
+  const { number } = useFormat();
+  const basis = (schedule.context_tiers?.basis ?? []).map((item) => t(`models.item.${item}`)).join(" + ");
+  const above = (tokens: number) => t("models.prices.above", { above: number(tokens), basis });
+  const tiers = Object.entries(schedule.service_tiers ?? {}).sort(
+    ([a], [b]) => serviceTiers.indexOf(a as ServiceTier) - serviceTiers.indexOf(b as ServiceTier),
+  );
+  return (
+    <div className="space-y-4">
+      <RateTable title={t("models.prices.rates", { currency: schedule.currency })} rates={schedule.rates} />
+      {schedule.context_tiers?.tiers.map((band) => (
+        <RateTable key={`band:${band.above}`} title={above(band.above)} rates={band.rates} />
+      ))}
+      {tiers.map(([tier, prices]) => {
+        const name = t(`models.tier.${tier as ServiceTier}`);
+        return (
+          <div key={tier} className="space-y-4">
+            <RateTable title={t("models.prices.serviceTier", { tier: name })} rates={prices.rates} />
+            {prices.context_tiers?.map((band) => (
+              <RateTable
+                key={`${tier}:${band.above}`}
+                title={t("models.prices.serviceTierBand", { tier: name, band: above(band.above) })}
+                rates={band.rates}
+              />
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// RateTable is one set of prices under its heading, item by item in the catalog's order.
+function RateTable({ title, rates }: { title: string; rates: RateList }) {
   const { t } = useTranslation();
   const { decimal } = useFormat();
-  const priced = rateItems.filter((item) => schedule.rates[item] !== undefined);
-  const extra = [
-    schedule.context_tiers ? t("models.prices.contextTiers", { count: schedule.context_tiers.tiers.length }) : null,
-    schedule.service_tiers
-      ? t("models.prices.serviceTiers", { tiers: Object.keys(schedule.service_tiers).join(", ") })
-      : null,
-  ].filter(Boolean);
+  const priced = rateItems.filter((item) => rates[item] !== undefined);
   return (
-    <>
-      <Table label={t("models.prices.rates", { currency: schedule.currency })}>
-        <thead>
-          <tr>
-            <Th>{t("models.prices.item")}</Th>
-            <Th className="text-right">{t("models.prices.price")}</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {priced.map((item) => (
-            <tr key={item}>
-              <Td>{t(`models.item.${item}`)}</Td>
-              <Td className="text-right tabular-nums">
-                {schedule.rates[item] === undefined ? "—" : decimal(showRate(item, schedule.rates[item]))}
-                <span className="ml-1 text-label text-t4">
-                  {t(`models.prices.unit.${isPerUse(item) ? "use" : "million"}`)}
-                </span>
-              </Td>
+    <div className="space-y-1">
+      <h4 className="text-label text-t2">{title}</h4>
+      {priced.length === 0 ? (
+        <p className="text-label text-t3">{t("models.prices.noRates")}</p>
+      ) : (
+        <Table label={title}>
+          <thead>
+            <tr>
+              <Th>{t("models.prices.item")}</Th>
+              <Th className="text-right">{t("models.prices.price")}</Th>
             </tr>
-          ))}
-        </tbody>
-      </Table>
-      {extra.length > 0 ? <p className="text-label text-t3">{extra.join(" · ")}</p> : null}
-    </>
+          </thead>
+          <tbody>
+            {priced.map((item) => (
+              <tr key={item}>
+                <Td>{t(`models.item.${item}`)}</Td>
+                <Td className="text-right tabular-nums">
+                  {decimal(showRate(item, rates[item] ?? ""))}
+                  <span className="ml-1 text-label text-t4">
+                    {t(`models.prices.unit.${isPerUse(item) ? "use" : "million"}`)}
+                  </span>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </div>
   );
 }
