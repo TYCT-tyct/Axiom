@@ -138,6 +138,7 @@ export default {
     on: "On",
     off: "Off",
     rev: "Changes the rule as of revision",
+    schedule: "The fixed price asked for ({{currency}})",
     moves: "Sale prices it moves",
     movesIntro:
       "What buyers would pay differently, as the server measured it when the agent asked: each change of a model's price once, with its move, its margin over cost, and the model's change so far today. Approving it makes the change again and counts what it moves then.",

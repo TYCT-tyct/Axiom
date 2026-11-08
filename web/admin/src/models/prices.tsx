@@ -90,7 +90,8 @@ function PriceCard({ price, onPublish }: { price: Price; onPublish: (() => void)
   );
 }
 
-function Rates({ schedule }: { schedule: AdminSchemas["PriceSchedule"] }) {
+// Rates is a price list item by item, per unit as the catalog shows it, with a note of its context and service tiers.
+export function Rates({ schedule }: { schedule: AdminSchemas["PriceSchedule"] }) {
   const { t } = useTranslation();
   const { decimal } = useFormat();
   const priced = rateItems.filter((item) => schedule.rates[item] !== undefined);

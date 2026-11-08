@@ -20,6 +20,7 @@ import {
 import { formatJSON } from "./lossless";
 import { isPerUse, rateItems } from "./models/catalog";
 import { showRate } from "./models/price-fields";
+import { Rates } from "./models/prices";
 import { Facts, Head } from "./parts";
 import { MethodSummary } from "./pricing/describe";
 
@@ -304,7 +305,20 @@ function RuleFacts({ change }: { change: RuleChange }) {
   if (change.rev !== undefined) {
     rows.push([t("approvals.rule.rev"), String(change.rev)]);
   }
-  return <Facts title={t("approvals.rule.title")} rows={rows} />;
+  // A fixed price is the price itself: the owner approves the numbers, not the method's name.
+  const schedule = rule.method.kind === "fixed" ? rule.method.schedule : undefined;
+  return (
+    <>
+      <Facts title={t("approvals.rule.title")} rows={rows} />
+      {schedule ? (
+        <Panel title={t("approvals.rule.schedule", { currency: schedule.currency })}>
+          <div className="space-y-2 pb-3">
+            <Rates schedule={schedule} />
+          </div>
+        </Panel>
+      ) : null}
+    </>
+  );
 }
 
 function DayUse({ day }: { day: NonNullable<RuleChange["day"]> }) {

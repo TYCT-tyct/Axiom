@@ -110,3 +110,36 @@ it("shows a pricing rule change and why it waits", async () => {
   }
   await unmount();
 });
+
+// A fixed price is approved by its numbers: the owner reads each item's price per unit, not only the method's name. A
+// first price has no share of an old one to show, so the price list is all there is to judge it by.
+it("shows the prices a fixed-price rule asks for", async () => {
+  const fixed: Approval = {
+    ...ruleApproval,
+    tool: "pricing_rule_create",
+    target: { kind: "site", id: "s" },
+    params: {
+      rule: {
+        enabled: true,
+        target: { kind: "model", id: "m1" },
+        audience: { kind: "all" },
+        method: {
+          kind: "fixed",
+          schedule: { v: 1, currency: "USD", rates: { input: "0.000003", output: "0.000015", web_search: "0.01" } },
+        },
+        constraints: {},
+      },
+    },
+  };
+  const { container, unmount } = await renderInDom(<RuleChangePanel approval={fixed} />);
+  const text = container.textContent ?? "";
+  for (const want of [
+    "The fixed price asked for (USD)",
+    "Input3per 1M tokens",
+    "Output15per 1M tokens",
+    "0.01per use",
+  ]) {
+    expect(text).toContain(want);
+  }
+  await unmount();
+});
