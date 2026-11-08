@@ -1,6 +1,8 @@
 package objectstore
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -183,6 +185,9 @@ func (f *fakeS3) object(w http.ResponseWriter, r *http.Request, key string) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+		if !digestMatches(w, r, body) {
+			return
+		}
 		if _, taken := f.objects[key]; taken && r.Header.Get("If-None-Match") == "*" {
 			w.WriteHeader(http.StatusPreconditionFailed)
 			writeTest(w, "<Error><Code>PreconditionFailed</Code></Error>")
@@ -255,6 +260,9 @@ func (f *fakeS3) uploadPart(w http.ResponseWriter, r *http.Request, parts map[in
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	if !digestMatches(w, r, body) {
+		return
+	}
 	parts[number] = body
 	w.Header().Set("ETag", fmt.Sprintf(`"part-%d-%s"`, number, sumHex(body)))
 	w.WriteHeader(http.StatusOK)
@@ -323,4 +331,17 @@ func (*fakeS3) list(w http.ResponseWriter, r *http.Request) {
 <ListBucketResult><Name>axiom</Name><IsTruncated>false</IsTruncated>
 <Contents><Key>b.txt</Key><Size>4</Size><ETag>"y"</ETag><LastModified>2026-01-02T03:04:06Z</LastModified></Contents>
 </ListBucketResult>`)
+}
+
+// digestMatches answers 400 BadDigest, as S3 does, when the request's SHA-256 checksum is missing or is not body's, and
+// reports whether it matched.
+func digestMatches(w http.ResponseWriter, r *http.Request, body []byte) bool {
+	sum := sha256.Sum256(body)
+	if r.Header.Get("X-Amz-Sdk-Checksum-Algorithm") == "SHA256" &&
+		r.Header.Get("X-Amz-Checksum-Sha256") == base64.StdEncoding.EncodeToString(sum[:]) {
+		return true
+	}
+	w.WriteHeader(http.StatusBadRequest)
+	writeTest(w, "<Error><Code>BadDigest</Code></Error>")
+	return false
 }

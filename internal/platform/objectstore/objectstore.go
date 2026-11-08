@@ -205,7 +205,7 @@ func (c *Client) createBucketPut(ctx context.Context) (request, error) {
 	if err != nil {
 		return request{}, fmt.Errorf("objectstore: create bucket %q: %w", c.bucket, err)
 	}
-	put.body, put.size, put.payloadHash = reader, size, hash
+	put.body, put.size, put.payloadHash, put.checksum = reader, size, hash.sha256, hash.checksum
 	return put, nil
 }
 
@@ -286,7 +286,8 @@ func (c *Client) Put(ctx context.Context, up Upload) (ObjectInfo, error) {
 		body:        up.Body,
 		size:        size,
 		contentType: contentType,
-		payloadHash: hash,
+		payloadHash: hash.sha256,
+		checksum:    hash.checksum,
 		ifNoneMatch: up.NoOverwrite,
 	})
 	if err != nil {

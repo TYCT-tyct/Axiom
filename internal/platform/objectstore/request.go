@@ -48,7 +48,8 @@ type request struct {
 	size        int64
 	contentType string
 	payloadHash string
-	ifNoneMatch bool // If-None-Match: *, signed like the content type
+	checksum    string // base64 SHA-256 of the body, for a request with one; signed like the content type
+	ifNoneMatch bool   // If-None-Match: *, signed like the content type
 }
 
 // do sends the request, retrying only what may succeed later: a transport failure, 408, 429 and 5xx. A retryable
@@ -154,6 +155,10 @@ func (c *Client) request(ctx context.Context, r request) (*http.Request, error) 
 	req.Header.Set("User-Agent", "Axiom")
 	if r.contentType != "" {
 		req.Header.Set("Content-Type", r.contentType)
+	}
+	if r.checksum != "" {
+		req.Header.Set("X-Amz-Sdk-Checksum-Algorithm", "SHA256")
+		req.Header.Set("X-Amz-Checksum-Sha256", r.checksum)
 	}
 	if r.ifNoneMatch {
 		req.Header.Set("If-None-Match", "*")

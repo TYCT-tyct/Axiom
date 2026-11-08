@@ -33,6 +33,11 @@ func (c *Client) List(ctx, ListOptions) (ListPage, error)
 判断的错误，不覆盖；这样的上传总是一次 PUT，因为 multipart 只在完成时才检查条件。不是每个实现都执行这个条件：
 SeaweedFS 3.80 照收不误、照样覆盖，所以调用方不能只靠它，审计链的副本在写前先读这个键。
 
+每个带正文的请求（单次 PUT、multipart 的每一片、建桶）都带 S3 的内容校验 `x-amz-sdk-checksum-algorithm: SHA256` 和
+`x-amz-checksum-sha256`（就是 SigV4 已经算出的那个 SHA-256 的 base64，签进签名）：开了 Object Lock 默认保留期的 S3 桶
+要求上传带 `Content-MD5` 或这样的校验，没有就拒绝；别的桶也用它核对收到的字节。用 SHA-256 而不用 MD5，是因为它已经算好、
+不必再读一遍，也不引入弱哈希。
+
 `List` 一次返回一页和下一页的令牌；要整个前缀的调用方顺着 `NextToken` 循环。`Upload.Size` 在调用方知道字节数时给出
 （文件 `Stat` 一般知道），`-1` 表示由客户端边算哈希边数；给了但对不上是错误，不发请求。知道大小且超过 16 MiB 时走
 multipart，`-1` 仍是单次 PUT（最多 5 GiB）。

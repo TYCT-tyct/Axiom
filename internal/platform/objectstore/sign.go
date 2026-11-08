@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ const (
 	dayFormat     = "20060102"
 	algorithm     = "AWS4-HMAC-SHA256"
 	emptySHA256   = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	emptyChecksum = "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=" // base64 SHA-256 of no bytes
 )
 
 // sign adds the SigV4 headers of one S3 request. The canonical URI is the request's already-escaped path, which is
@@ -28,7 +30,7 @@ func (c *Client) sign(req *http.Request, payloadHash string, now time.Time) {
 	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
 
 	headers := []string{"host", "x-amz-content-sha256", "x-amz-date"}
-	for _, name := range []string{"content-type", "if-none-match"} {
+	for _, name := range []string{"content-type", "if-none-match", "x-amz-checksum-sha256", "x-amz-sdk-checksum-algorithm"} {
 		if req.Header.Get(name) != "" {
 			headers = append(headers, name)
 		}
@@ -84,29 +86,35 @@ func sumHex(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// hashBody returns the payload hash and size of body, and rewinds it for the request that follows. It starts at the
-// beginning whatever position the caller left the reader in, so the hash and the bytes sent are the same range. A nil
-// body is the empty payload. It reads at most limit+1 bytes and returns ErrTooLarge past the limit; a Read that itself
-// blocks cannot be interrupted here, so a body that may block must be closed by its owner.
-func hashBody(ctx context.Context, body io.ReadSeeker, limit int64) (string, int64, error) {
+// digest is the SHA-256 of a request's body in the two forms S3 reads: hex, which SigV4 signs, and base64, which
+// x-amz-checksum-sha256 carries. A bucket with Object Lock refuses an upload without such a checksum (or Content-MD5),
+// and every bucket checks the bytes it received against it.
+type digest struct{ sha256, checksum string }
+
+// hashBody returns the digest and size of body, and rewinds it for the request that follows. It starts at the
+// beginning whatever position the caller left the reader in, so the digest and the bytes sent are the same range. A
+// nil body is the empty payload. It reads at most limit+1 bytes and returns ErrTooLarge past the limit; a Read that itself blocks cannot be interrupted
+// here, so a body that may block must be closed by its owner.
+func hashBody(ctx context.Context, body io.ReadSeeker, limit int64) (digest, int64, error) {
 	if body == nil {
-		return emptySHA256, 0, nil
+		return digest{emptySHA256, emptyChecksum}, 0, nil
 	}
 	if err := requireDeadline(ctx); err != nil {
-		return "", 0, err
+		return digest{}, 0, err
 	}
 	if _, err := body.Seek(0, io.SeekStart); err != nil {
-		return "", 0, err
+		return digest{}, 0, err
 	}
 	hash := sha256.New()
 	size, err := hashChunks(ctx, hash, body, limit)
 	if err != nil {
-		return "", 0, err
+		return digest{}, 0, err
 	}
 	if _, err := body.Seek(0, io.SeekStart); err != nil {
-		return "", 0, err
+		return digest{}, 0, err
 	}
-	return hex.EncodeToString(hash.Sum(nil)), size, nil
+	sum := hash.Sum(nil)
+	return digest{hex.EncodeToString(sum), base64.StdEncoding.EncodeToString(sum)}, size, nil
 }
 
 // hashChunks copies at most limit+1 bytes into hash, checking ctx between reads and stopping as soon as the body is
