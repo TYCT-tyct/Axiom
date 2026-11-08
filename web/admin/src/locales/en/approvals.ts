@@ -159,6 +159,7 @@ export default {
     hint: "What the server stored, as stored: everything above is read from it. Amounts are integers in billionths.",
     summary: "What the server read",
     params: "What runs",
+    reasons: "Why it waits",
   },
   approve: "Approve",
   reject: "Reject",

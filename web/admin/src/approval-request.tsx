@@ -259,6 +259,8 @@ export function RawData({ approval }: { approval: Approval }) {
           {[
             [t("approvals.raw.summary"), approval.summary],
             [t("approvals.raw.params"), approval.params],
+            // A reason this page cannot name is read here, as the server sent it.
+            ...(approval.reasons ? [[t("approvals.raw.reasons"), approval.reasons]] : []),
           ].map(([label, value]) => (
             <section key={label as string} className="space-y-1">
               <h3 className="text-label text-t2">{label as string}</h3>

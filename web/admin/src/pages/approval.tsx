@@ -1,6 +1,7 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
+import { accountKey } from "@axiom/app";
 import { Button, DataState, Icon, Id, PageHeader, Panel, useFormat } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { type ReactNode, useState } from "react";
@@ -46,6 +47,14 @@ export default function ApprovalPage() {
 function Decide({ approval }: { approval: Approval }) {
   const { t } = useTranslation();
   const [decision, setDecision] = useState<Decision | null>(null);
+  const queryClient = useQueryClient();
+  // A decision the server refused (a conflict: it lapsed or was decided elsewhere) leaves the page showing what it read;
+  // closing the dialog reads it again, so the page says what the server says now.
+  const close = () => {
+    setDecision(null);
+    void queryClient.invalidateQueries({ queryKey: approvalQuery(approval.id).queryKey });
+    void queryClient.invalidateQueries({ queryKey: [accountKey, "operations-approvals"] });
+  };
   return (
     <Actions>
       <Button asChild>
@@ -64,7 +73,7 @@ function Decide({ approval }: { approval: Approval }) {
           </Button>
         </>
       ) : null}
-      {decision ? <DecisionDialog kind={decision} approval={approval} onClose={() => setDecision(null)} /> : null}
+      {decision ? <DecisionDialog kind={decision} approval={approval} onClose={close} /> : null}
     </Actions>
   );
 }

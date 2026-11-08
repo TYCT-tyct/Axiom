@@ -151,6 +151,7 @@ export default {
     hint: "服务端存下的原样数据：上面整理过的内容都来自这里；金额是十亿分之一的整数。",
     summary: "服务端读到的情况",
     params: "执行的参数",
+    reasons: "为什么要等",
   },
   approve: "批准",
   reject: "驳回",
