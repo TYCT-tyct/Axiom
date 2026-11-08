@@ -4,12 +4,13 @@ import {
   approvalState,
   capOf,
   capOver,
+  decidable,
   envelopeOf,
   envelopeOver,
   minutesLeft,
-  open,
   outcomeOf,
   priceRows,
+  reasonsOf,
   targetName,
 } from "./approvals";
 
@@ -128,12 +129,14 @@ it.each([
   expect(outcomeOf(approval(over))).toBe(outcome);
 });
 
-it("is open while pending and before its expiry", () => {
-  const before = Date.parse("2026-11-06T08:29:59Z");
-  const at = Date.parse("2026-11-06T08:30:00Z");
-  expect(open(approval({}), before)).toBe(true);
-  expect(open(approval({}), at)).toBe(false);
-  expect(open(approval({ state: "approved" }), before)).toBe(false);
+it.each([
+  [{ decidable: true }, true],
+  [{ decidable: false }, false],
+  // A node older than the answer: a pending one is offered, and the server refuses a lapsed one.
+  [{}, true],
+  [{ state: "expired" }, false],
+] as const)("is decidable as the server says: %o", (over, want) => {
+  expect(decidable(approval(over))).toBe(want);
 });
 
 it("keeps only a state the page knows", () => {
@@ -142,33 +145,26 @@ it("keeps only a state the page knows", () => {
 });
 
 describe("why it asked", () => {
-  // cap: 5 asked, 1 per operation, 3 a day with 0 used, 9 a week with 7 used, 3 a target a day, 1 of 10 operations.
-  it("names each autonomous cap a transfer goes over", () => {
-    const read = capOf({ cap });
-    expect(read && capOver(read)).toEqual(["single", "daily", "weekly", "objectDaily"]);
-    const within = capOf({ cap: { ...cap, amount: "1000000000", weekly_used: "0", daily_count: 10 } });
-    expect(within && capOver(within)).toEqual(["count"]);
+  type Code = AdminSchemas["OperationsApprovalReason"]["code"];
+  const asked = (...codes: string[]) => approval({ reasons: codes.map((code) => ({ code: code as Code })) });
+
+  it("reads the server's reasons and the rows they mark", () => {
+    const a = asked("always", "cap_paused", "cap_single", "cap_daily_count", "envelope_min_margin", "later_code");
+    expect(reasonsOf(a)).toEqual([
+      { kind: "always" },
+      { kind: "paused" },
+      { kind: "cap", limit: "single" },
+      { kind: "cap", limit: "count" },
+      { kind: "envelope", limit: "margin" },
+      { kind: "unknown" },
+    ]);
+    expect([...capOver(a)]).toEqual(["single", "count"]);
+    expect([...envelopeOver(a)]).toEqual(["margin"]);
   });
 
-  it.each([
-    ["an unknown cost and the model's day", envelope, ["unknownCost"]],
-    ["a margin under the minimum", { ...envelope, margin_bps: 900 }, ["margin"]],
-    [
-      "an unmeasured move, full days",
-      {
-        ...envelope,
-        change_bps: null,
-        margin_bps: 2000,
-        daily_changes_used: 20,
-        model_moved_today: false,
-        daily_models_used: 5,
-      },
-      ["unmeasured", "changes", "models"],
-    ],
-    ["a move past the model's day", { ...envelope, margin_bps: 2000, change_bps: 800 }, ["modelChange"]],
-  ])("names what an envelope does not cover: %s", (_, e, want) => {
-    const read = envelopeOf({ envelope: e });
-    expect(read && envelopeOver(read)).toEqual(want);
+  it("cannot tell when an older node asked", () => {
+    expect(reasonsOf(approval({}))).toBeUndefined();
+    expect(capOver(approval({})).size).toBe(0);
   });
 });
 

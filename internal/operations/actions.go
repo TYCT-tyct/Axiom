@@ -71,12 +71,20 @@ var (
 	ErrNotPending = errors.New("operations: the approval is not pending")
 )
 
+// Reason is why a proposal waits for a person, as the server decided it when the agent asked: the decision's own
+// output, so a page never derives it again from the summary (OperationsApprovalReason in api/admin.yaml).
+type Reason string
+
+// ReasonAlways is a class of operation that waits for a person whatever it moves: a credit grant, retiring a model.
+// The cap's and the envelope's reasons are in caps.go and prices.go.
+const ReasonAlways Reason = "always"
+
 // Target is the one object an operation acts on: its kind, such as model, and its ID.
 type Target struct{ Kind, ID string }
 
 // Proposal is a write the agent asks for: which credential with which Idempotency-Key, the tool, its target and
 // parameters, the risk and the agent's reason. Summary, when not nil, makes the operation wait for a person, who is
-// shown it: what the server read of the target, never the agent's words.
+// shown it: what the server read of the target, never the agent's words; Reasons, at least one then, say why it waits.
 type Proposal struct {
 	Credential uuid.UUID
 	Key        uuid.UUID
@@ -87,6 +95,7 @@ type Proposal struct {
 	Reason     string
 	Run        string
 	Summary    map[string]any
+	Reasons    []Reason
 }
 
 // Operation is one write of the operations API. Params and Result are canonical JSON; Error is the code it ended with;
@@ -108,13 +117,16 @@ type Operation struct {
 	Approval   *Approval
 }
 
-// Approval is a person's decision an operation waits or waited on. Summary is canonical JSON; DecidedBy is the actor
-// who decided, expired or withdrew it.
+// Approval is a person's decision an operation waits or waited on. Summary is canonical JSON; Reasons are why it waits,
+// nil when an older node asked for it; Decidable is whether a person can still decide it, by the database's clock when
+// it was read, as Decide checks it; DecidedBy is the actor who decided, expired or withdrew it.
 type Approval struct {
 	ID             uuid.UUID
 	Operation      uuid.UUID
 	State          ApprovalState
 	Summary        []byte
+	Reasons        []Reason
+	Decidable      bool
 	Requested      time.Time
 	Expires        time.Time
 	Decided        *time.Time
@@ -161,7 +173,7 @@ func Propose(ctx context.Context, tx pg.Tx, p Proposal) (op Operation, replayed 
 	if err != nil || p.Summary == nil {
 		return op, false, err
 	}
-	return op, false, requestApproval(ctx, tx, &op, p.Summary)
+	return op, false, requestApproval(ctx, tx, &op, p.Summary, p.Reasons)
 }
 
 // requestHash tells requests under one key apart: the same tool, target and parameters are the same request.
@@ -169,19 +181,20 @@ func requestHash(tool string, t Target, params []byte) [32]byte {
 	return sha256.Sum256(fmt.Appendf(nil, "%s\x00%s\x00%s\x00%s", tool, t.Kind, t.ID, params))
 }
 
-// requestApproval asks a person to decide op, which waits until approvalTTL has passed at most.
-func requestApproval(ctx context.Context, tx pg.Tx, op *Operation, summary map[string]any) error {
+// requestApproval asks a person to decide op for reasons, which waits until approvalTTL has passed at most.
+func requestApproval(ctx context.Context, tx pg.Tx, op *Operation, summary map[string]any, reasons []Reason) error {
 	body, err := jsonx.MarshalCanonical(summary)
 	if err != nil {
 		return fmt.Errorf("request an approval: encode the summary: %w", err)
 	}
 	row, err := New().InsertApproval(ctx, tx, InsertApprovalParams{
-		ID: uuid.NewV7(), OperationID: op.ID, Summary: body, TtlSeconds: approvalTTL.Seconds(),
+		ID: uuid.NewV7(), OperationID: op.ID, Summary: body, Reasons: reasonTexts(reasons), TtlSeconds: approvalTTL.Seconds(),
 	})
 	if err != nil {
 		return fmt.Errorf("request an approval: %w", err)
 	}
-	op.Approval = approvalOf(row)
+	// It expires after the clock it was asked by (InsertApproval), so it is decidable as it is made.
+	op.Approval = approvalOf(row, true)
 	if err := record(ctx, tx, audit.OperationsAgent(op.Credential), "approval.request", *op, op.Reason, nil); err != nil {
 		return err
 	}
@@ -319,7 +332,7 @@ func cancelLocked(ctx context.Context, tx pg.Tx, actor audit.Actor, op *Operatio
 	if err != nil || len(rows) == 0 {
 		return fmt.Errorf("lock the approval of operation %s: %w", op.ID, err)
 	}
-	op.Approval = approvalOf(rows[0].OperationsApproval)
+	op.Approval = approvalOf(rows[0].OperationsApproval, false)
 	return finish(ctx, tx, actor, action, op, state, decided, reason)
 }
 
@@ -346,8 +359,8 @@ func lockApproval(ctx context.Context, tx pg.Tx, id, credential uuid.UUID) (Oper
 	if err != nil || len(rows) == 0 {
 		return Operation{}, fmt.Errorf("lock approval %s: %w", id, err)
 	}
-	op.Approval = approvalOf(rows[0].OperationsApproval)
-	if op.Approval.State != ApprovalPending || rows[0].Due {
+	op.Approval = approvalOf(rows[0].OperationsApproval, rows[0].OperationsApproval.State == string(ApprovalPending) && !rows[0].Due)
+	if !op.Approval.Decidable {
 		return Operation{}, ErrNotPending
 	}
 	return op, nil
@@ -363,7 +376,8 @@ func finish(ctx context.Context, tx pg.Tx, actor audit.Actor, action string, op 
 	if err != nil {
 		return fmt.Errorf("decide approval %s: %w", op.Approval.ID, err)
 	}
-	op.Approval.State, op.Approval.Decided, op.Approval.DecidedBy, op.Approval.DecisionReason = decided, at, actor.String(), reason
+	op.Approval.State, op.Approval.Decidable, op.Approval.Decided = decided, false, at
+	op.Approval.DecidedBy, op.Approval.DecisionReason = actor.String(), reason
 	if err := setState(ctx, tx, op, state, nil, ""); err != nil {
 		return err
 	}

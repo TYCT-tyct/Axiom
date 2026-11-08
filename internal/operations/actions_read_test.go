@@ -3,11 +3,13 @@ package operations_test
 import (
 	"errors"
 	"log/slog"
+	"slices"
 	"testing"
 	"uuid"
 
 	"axiom/internal/operations"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 )
 
 func (db opsDB) operationsPage(t *testing.T, credential uuid.UUID, state operations.State, after uuid.UUID, pageSize int) ([]operations.Operation, bool, error) {
@@ -105,6 +107,59 @@ func TestApprovalsQueue(t *testing.T) {
 	next, more, err := db.approvalsPage(t, operations.ApprovalPending, page[0].Approval.ID, 1)
 	if err != nil || len(next) != 1 || more || next[0].ID != first.ID {
 		t.Fatalf("the next approval page: %+v more=%t err=%v", next, more, err)
+	}
+}
+
+// TestApprovalDecidable: every read says whether the owner can still decide an approval, by the clock a decision is
+// checked against: one pending and in time is, one pending past its expiry before the sweep is not, nor one decided;
+// each read carries the reasons it was asked with, and one an older node asked for without them has none.
+func TestApprovalDecidable(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	propose := func() operations.Operation {
+		op, _, err := db.propose(t, retire(uuid.NewV7(), uuid.NewV7(), 1, true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return op
+	}
+	open, late, decided, older := propose(), propose(), propose(), propose()
+	db.pastDue(t, late)
+	if _, err := db.decide(t, decided, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := pgtest.Run(t.Context(), db.superuser, `UPDATE operations.approvals SET reasons = NULL WHERE id = '`+older.Approval.ID.String()+`'`); err != nil {
+		t.Fatal(err)
+	}
+	if !open.Approval.Decidable {
+		t.Error("an approval just asked for is not decidable")
+	}
+	queue, _, err := db.approvalsPage(t, "", uuid.UUID{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	always := []operations.Reason{operations.ReasonAlways}
+	for _, c := range []struct {
+		name      string
+		op        operations.Operation
+		decidable bool
+		reasons   []operations.Reason
+	}{
+		{"pending in time", open, true, always},
+		{"pending past its expiry", late, false, always},
+		{"decided", decided, false, always},
+		{"asked by an older node", older, true, nil},
+	} {
+		got, err := db.in(t, func(tx pg.Tx) (operations.Operation, error) { return operations.Get(t.Context(), tx, c.op.ID) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := slices.IndexFunc(queue, func(op operations.Operation) bool { return op.ID == c.op.ID })
+		for read, a := range map[string]*operations.Approval{"read": got.Approval, "queue": queue[at].Approval} {
+			if a.Decidable != c.decidable || !slices.Equal(a.Reasons, c.reasons) {
+				t.Errorf("%s, in the %s: decidable %t for %v, want %t for %v", c.name, read, a.Decidable, a.Reasons, c.decidable, c.reasons)
+			}
+		}
 	}
 }
 

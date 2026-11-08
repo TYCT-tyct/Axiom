@@ -96,12 +96,40 @@ func (r Repricing) Detail() map[string]any {
 	return d
 }
 
-// within decides r against e and what the day's site and model rows hold.
-func (e PriceEnvelope) within(r Repricing, site, model OperationsPriceCounter) bool {
-	return r.Change != nil && r.Margin != nil && r.Margin.Cmp(big.NewRat(int64(e.MinMargin), 10_000)) >= 0 &&
-		new(big.Int).Add(big.NewInt(model.ChangeBps), r.changeBPS()).Cmp(big.NewInt(e.ModelDailyChange)) <= 0 &&
-		site.Count < e.DailyChanges &&
-		(model.Count > 0 || site.Models < e.DailyModels)
+// The reasons a publication waits, each a part of the envelope it does not keep within (envelopeDetail's members):
+// a move no share measures or a cost that is unknown, which the envelope cannot vouch for; a margin under
+// min_margin_bps; the model's move today past model_daily_change_bps; a day that has published daily_changes prices,
+// or moved daily_models models and this is another.
+const (
+	ReasonUnmeasuredChange Reason = "envelope_unmeasured_change"
+	ReasonUnknownCost      Reason = "envelope_unknown_cost"
+	ReasonMinMargin        Reason = "envelope_min_margin"
+	ReasonModelDailyChange Reason = "envelope_model_daily_change"
+	ReasonDailyChanges     Reason = "envelope_daily_changes"
+	ReasonDailyModels      Reason = "envelope_daily_models"
+)
+
+// outside decides r against e and what the day's site and model rows hold: the parts of e it does not keep within,
+// none when the envelope covers it.
+func (e PriceEnvelope) outside(r Repricing, site, model OperationsPriceCounter) []Reason {
+	var reasons []Reason
+	for _, part := range []struct {
+		reason Reason
+		out    bool
+	}{
+		{ReasonUnmeasuredChange, r.Change == nil},
+		{ReasonUnknownCost, r.Margin == nil},
+		{ReasonMinMargin, r.Margin != nil && r.Margin.Cmp(big.NewRat(int64(e.MinMargin), 10_000)) < 0},
+		{ReasonModelDailyChange, r.Change != nil &&
+			new(big.Int).Add(big.NewInt(model.ChangeBps), r.changeBPS()).Cmp(big.NewInt(e.ModelDailyChange)) > 0},
+		{ReasonDailyChanges, site.Count >= e.DailyChanges},
+		{ReasonDailyModels, model.Count == 0 && site.Models >= e.DailyModels},
+	} {
+		if part.out {
+			reasons = append(reasons, part.reason)
+		}
+	}
+	return reasons
 }
 
 // envelopeDetail is what the owner is shown of the envelope a publication is weighed against.
@@ -223,8 +251,8 @@ func ProposePrice(ctx context.Context, tx pg.Tx, p Proposal, r Repricing) (Opera
 	if err != nil {
 		return Operation{}, false, err
 	}
-	if !e.within(r, site, model) {
-		p.Summary = maps.Clone(r.Summary)
+	if reasons := e.outside(r, site, model); len(reasons) > 0 {
+		p.Summary, p.Reasons = maps.Clone(r.Summary), reasons
 		p.Summary["envelope"] = e.envelopeDetail(r, site, model)
 	}
 	op, replayed, err := Propose(ctx, tx, p)

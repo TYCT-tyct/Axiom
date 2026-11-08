@@ -1,6 +1,7 @@
 import { type AdminSchemas, adminApi, unwrap } from "@axiom/api";
 import { accountKey } from "@axiom/app";
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { decidable } from "./approvals";
 import { parseJSONLossless } from "./lossless";
 
 // The calls the pages make, one place for each so a page and the change that alters its data agree on the key.
@@ -528,6 +529,12 @@ export const routingSuspensionQuery = queryOptions({
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/settings/routing-suspension`, { signal })),
 });
 
+// recheck is how often a page showing an approval the owner can still decide asks the server again: it lapses at its
+// expiry, which only the server's answer says, so the buttons and the state follow it rather than the browser's clock.
+export const recheck = 15_000;
+export const whileDecidable = (approvals: AdminSchemas["OperationsApproval"][]) =>
+  approvals.some(decidable) ? recheck : false;
+
 // What the operations agent asked the owner to approve, newest first, optionally in one state.
 export const approvalsQuery = (state?: AdminSchemas["OperationsApprovalState"]) =>
   infiniteQueryOptions({
@@ -541,6 +548,7 @@ export const approvalsQuery = (state?: AdminSchemas["OperationsApprovalState"]) 
       ),
     initialPageParam: firstPage,
     getNextPageParam: (page) => page.next_cursor,
+    refetchInterval: ({ state }) => whileDecidable(state.data?.pages.flatMap((page) => page.data) ?? []),
   });
 
 // One approval, its summary and parameters read as written: they are shown as JSON, and an integer in them is data.
@@ -557,4 +565,5 @@ export const approvalQuery = (id: string) =>
           }),
         ),
       ) as AdminSchemas["OperationsApproval"],
+    refetchInterval: ({ state }) => whileDecidable(state.data ? [state.data] : []),
   });

@@ -3,6 +3,7 @@ package operations_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"uuid"
@@ -144,7 +145,7 @@ func TestCapReconcile(t *testing.T) {
 	db.expect(t, "the pauses alerted", `SELECT count(*)::text FROM platform.alert_signals WHERE body->>'kind' = 'operations.cap_drift' AND body->>'severity' = 'critical'`, "5")
 
 	waits, _, err := db.proposeMoney(t, topUp(uuid.NewV7(), uuid.NewV7(), &sites[0], "s2", 1))
-	if err != nil || waits.State != operations.StatePending {
+	if err != nil || waits.State != operations.StatePending || !slices.Equal(waits.Approval.Reasons, []operations.Reason{operations.ReasonPaused}) {
 		t.Fatalf("a proposal within every limit in a paused scope: %+v %v", waits, err)
 	}
 	db.expect(t, "the owner is told the scope is paused", `SELECT summary->'cap'->>'paused' FROM operations.approvals WHERE id = '`+waits.Approval.ID.String()+`'`, "true")

@@ -927,6 +927,57 @@ func (e OperationState) Valid() bool {
 	}
 }
 
+// Defines values for OperationsApprovalReasonCode.
+const (
+	Always                   OperationsApprovalReasonCode = "always"
+	CapDaily                 OperationsApprovalReasonCode = "cap_daily"
+	CapDailyCount            OperationsApprovalReasonCode = "cap_daily_count"
+	CapObjectDaily           OperationsApprovalReasonCode = "cap_object_daily"
+	CapPaused                OperationsApprovalReasonCode = "cap_paused"
+	CapSingle                OperationsApprovalReasonCode = "cap_single"
+	CapWeekly                OperationsApprovalReasonCode = "cap_weekly"
+	EnvelopeDailyChanges     OperationsApprovalReasonCode = "envelope_daily_changes"
+	EnvelopeDailyModels      OperationsApprovalReasonCode = "envelope_daily_models"
+	EnvelopeMinMargin        OperationsApprovalReasonCode = "envelope_min_margin"
+	EnvelopeModelDailyChange OperationsApprovalReasonCode = "envelope_model_daily_change"
+	EnvelopeUnknownCost      OperationsApprovalReasonCode = "envelope_unknown_cost"
+	EnvelopeUnmeasuredChange OperationsApprovalReasonCode = "envelope_unmeasured_change"
+)
+
+// Valid indicates whether the value is a known member of the OperationsApprovalReasonCode enum.
+func (e OperationsApprovalReasonCode) Valid() bool {
+	switch e {
+	case Always:
+		return true
+	case CapDaily:
+		return true
+	case CapDailyCount:
+		return true
+	case CapObjectDaily:
+		return true
+	case CapPaused:
+		return true
+	case CapSingle:
+		return true
+	case CapWeekly:
+		return true
+	case EnvelopeDailyChanges:
+		return true
+	case EnvelopeDailyModels:
+		return true
+	case EnvelopeMinMargin:
+		return true
+	case EnvelopeModelDailyChange:
+		return true
+	case EnvelopeUnknownCost:
+		return true
+	case EnvelopeUnmeasuredChange:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OperationsApprovalState.
 const (
 	OperationsApprovalStateApproved OperationsApprovalState = "approved"
@@ -981,6 +1032,48 @@ func (e OperationsCapCategory) Valid() bool {
 	case MoneyCredit:
 		return true
 	case MoneyTopUp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationsModelStatusParamsStatus.
+const (
+	OperationsModelStatusParamsStatusListed  OperationsModelStatusParamsStatus = "listed"
+	OperationsModelStatusParamsStatusRetired OperationsModelStatusParamsStatus = "retired"
+)
+
+// Valid indicates whether the value is a known member of the OperationsModelStatusParamsStatus enum.
+func (e OperationsModelStatusParamsStatus) Valid() bool {
+	switch e {
+	case OperationsModelStatusParamsStatusListed:
+		return true
+	case OperationsModelStatusParamsStatusRetired:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationsPricePublishSummaryStatus.
+const (
+	OperationsPricePublishSummaryStatusBlocked   OperationsPricePublishSummaryStatus = "blocked"
+	OperationsPricePublishSummaryStatusPending   OperationsPricePublishSummaryStatus = "pending"
+	OperationsPricePublishSummaryStatusPublished OperationsPricePublishSummaryStatus = "published"
+	OperationsPricePublishSummaryStatusUnpriced  OperationsPricePublishSummaryStatus = "unpriced"
+)
+
+// Valid indicates whether the value is a known member of the OperationsPricePublishSummaryStatus enum.
+func (e OperationsPricePublishSummaryStatus) Valid() bool {
+	switch e {
+	case OperationsPricePublishSummaryStatusBlocked:
+		return true
+	case OperationsPricePublishSummaryStatusPending:
+		return true
+	case OperationsPricePublishSummaryStatusPublished:
+		return true
+	case OperationsPricePublishSummaryStatusUnpriced:
 		return true
 	default:
 		return false
@@ -3398,7 +3491,10 @@ type OperationsApproval struct {
 
 	// CredentialId An operations credential's ID (TypeID).
 	CredentialId OperationsCredentialId `json:"credential_id"`
-	DecidedAt    *time.Time             `json:"decided_at,omitempty"`
+
+	// Decidable Whether the owner can still approve or reject it: `pending` and before `expires_at` by the server's clock, the one a decision is checked against, so a page with a skewed clock neither offers a decision the server would refuse with a conflict nor hides one it would take. False for a pending one past its expiry, which the minutely sweep has not yet marked `expired`. Absent from an older node.
+	Decidable *bool      `json:"decidable,omitempty"`
+	DecidedAt *time.Time `json:"decided_at,omitempty"`
 
 	// DecidedBy Who decided, expired or withdrew it, as `<kind>:<id>` like the audit log's actor.
 	DecidedBy      *string `json:"decided_by,omitempty"`
@@ -3417,9 +3513,12 @@ type OperationsApproval struct {
 	// OperationState Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a compensating operation reverts it.
 	OperationState OperationState `json:"operation_state"`
 
-	// Params What the operation does, as the server keeps it; it cannot change after the agent asked.
-	Params      jsonx.Raw `json:"params"`
-	RequestedAt time.Time `json:"requested_at"`
+	// Params What the operation does, as the server keeps it; it cannot change after the agent asked. Its shape is the `tool`'s: `credit_grant` OperationsCreditGrantParams, `supplier_top_up_propose` OperationsTopUpParams, `price_publish` OperationsPricePublishParams, `model_set_status` OperationsModelStatusParams. `tool` is on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names.
+	Params jsonx.Raw `json:"params"`
+
+	// Reasons Why it waited for the owner, as the server decided it when the agent asked, so a page shows it and never works it out from `summary`. Absent when an older node asked for it: the page then says it does not know.
+	Reasons     *[]OperationsApprovalReason `json:"reasons,omitempty"`
+	RequestedAt time.Time                   `json:"requested_at"`
 
 	// Risk The operation's class, which decides whether it waits for the owner.
 	Risk  OperationRisk `json:"risk"`
@@ -3428,7 +3527,7 @@ type OperationsApproval struct {
 	// State `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its credential).
 	State OperationsApprovalState `json:"state"`
 
-	// Summary What the server read of the target when the agent asked, never the agent's words. Its members depend on the `tool`, and a member an older node did not know is absent, so a page shows what is there. A write that moves money carries `cap`: `currency`, `amount`, `policy_rev`, the limits `single_max`, `daily_max`, `weekly_max`, `object_daily_max`, `daily_count_max` and their hard ones (`hard_single_max`, `hard_daily_max`, `hard_weekly_max`), the amounts already used in each window (`daily_used`, `weekly_used`, `object_daily_used`, `daily_count`) and `paused`; amounts are integer text in the cap's currency. A credit grant names `account_id`, `account`, `email`, `site_id`, `amount`, `currency` and `expires_at`; a supplier top-up `supplier`, `supplier_id`, `amount_native`, `native_unit`, `unit_value`, `settlement_currency`, `amount` and `currency`; a price publication `model_id`, `candidate_id`, `slug`, `name`, `status`, `audience`, `currency`, `current_id`, the base rates per item as `current`, `proposed` and `cost`, and `prices_complete`, with `envelope` when it falls outside the site's price envelope: `change_bps` and `margin_bps` (null when not measurable), the envelope's limits (`min_margin_bps`, `model_daily_change_bps`, `daily_changes`, `daily_models`) and what the day has used (`model_change_used`, `daily_changes_used`, `daily_models_used`, `model_moved_today`).
+	// Summary What the server read of the target when the agent asked, never the agent's words. Its shape is the `tool`'s: `credit_grant` OperationsCreditGrantSummary, `supplier_top_up_propose` OperationsTopUpSummary, `price_publish` OperationsPricePublishSummary, `model_set_status` OperationsModelStatusSummary; `tool` is on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names. Every member is optional: one an older node did not know is absent, so a page shows what is there.
 	Summary jsonx.Raw       `json:"summary"`
 	Target  OperationTarget `json:"target"`
 
@@ -3445,6 +3544,15 @@ type OperationsApprovalList struct {
 	NextCursor *string              `json:"next_cursor,omitempty"`
 }
 
+// OperationsApprovalReason One reason an operation waited for the owner.
+type OperationsApprovalReason struct {
+	// Code `always`: its class always waits for the owner (a credit grant, retiring a model). `cap_paused`: the owner paused its cap's scope. The other `cap_` codes are the autonomous limits of `summary.cap` a transfer goes over: `cap_single` (`single_max`), `cap_daily` (`daily_used` + `amount` over `daily_max`), `cap_weekly` (`weekly_max`), `cap_object_daily` (`object_daily_max`), `cap_daily_count` (`daily_count` at `daily_count_max`). The `envelope_` codes are what `summary.envelope` does not cover: `envelope_unmeasured_change` (`change_bps` is null), `envelope_unknown_cost` (`margin_bps` is null), `envelope_min_margin` (`margin_bps` under `min_margin_bps`), `envelope_model_daily_change` (`model_change_used` + `change_bps` over `model_daily_change_bps`), `envelope_daily_changes` (`daily_changes_used` at `daily_changes`), `envelope_daily_models` (`daily_models_used` at `daily_models` and the model not yet moved today). A later server may add codes; a page shows one it does not know as a reason it cannot name.
+	Code OperationsApprovalReasonCode `json:"code"`
+}
+
+// OperationsApprovalReasonCode `always`: its class always waits for the owner (a credit grant, retiring a model). `cap_paused`: the owner paused its cap's scope. The other `cap_` codes are the autonomous limits of `summary.cap` a transfer goes over: `cap_single` (`single_max`), `cap_daily` (`daily_used` + `amount` over `daily_max`), `cap_weekly` (`weekly_max`), `cap_object_daily` (`object_daily_max`), `cap_daily_count` (`daily_count` at `daily_count_max`). The `envelope_` codes are what `summary.envelope` does not cover: `envelope_unmeasured_change` (`change_bps` is null), `envelope_unknown_cost` (`margin_bps` is null), `envelope_min_margin` (`margin_bps` under `min_margin_bps`), `envelope_model_daily_change` (`model_change_used` + `change_bps` over `model_daily_change_bps`), `envelope_daily_changes` (`daily_changes_used` at `daily_changes`), `envelope_daily_models` (`daily_models_used` at `daily_models` and the model not yet moved today). A later server may add codes; a page shows one it does not know as a reason it cannot name.
+type OperationsApprovalReasonCode string
+
 // OperationsApprovalState `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its credential).
 type OperationsApprovalState string
 
@@ -3456,6 +3564,50 @@ type OperationsCapAmount = string
 
 // OperationsCapCategory A kind of money the agent moves, each with its own caps; top-ups of suppliers and credit grants to accounts.
 type OperationsCapCategory string
+
+// OperationsCapDetail The cap a transfer was weighed against when the agent asked (docs/domains/operations.md「转账的累计金额上限」): each limit and what its window held before it. Amounts are in billionths of `currency`.
+type OperationsCapDetail struct {
+	// Amount A non-negative integer in decimal text, which a browser reads without rounding.
+	Amount   *OperationsIntegerText `json:"amount,omitempty"`
+	Currency *string                `json:"currency,omitempty"`
+
+	// DailyCount The proposals the category's UTC day counted before it.
+	DailyCount    *int32 `json:"daily_count,omitempty"`
+	DailyCountMax *int32 `json:"daily_count_max,omitempty"`
+
+	// DailyMax A non-negative integer in decimal text, which a browser reads without rounding.
+	DailyMax *OperationsIntegerText `json:"daily_max,omitempty"`
+
+	// DailyUsed A non-negative integer in decimal text, which a browser reads without rounding.
+	DailyUsed *OperationsIntegerText `json:"daily_used,omitempty"`
+
+	// HardDailyMax A non-negative integer in decimal text, which a browser reads without rounding.
+	HardDailyMax *OperationsIntegerText `json:"hard_daily_max,omitempty"`
+
+	// HardSingleMax A non-negative integer in decimal text, which a browser reads without rounding.
+	HardSingleMax *OperationsIntegerText `json:"hard_single_max,omitempty"`
+
+	// HardWeeklyMax A non-negative integer in decimal text, which a browser reads without rounding.
+	HardWeeklyMax *OperationsIntegerText `json:"hard_weekly_max,omitempty"`
+
+	// ObjectDailyMax A non-negative integer in decimal text, which a browser reads without rounding.
+	ObjectDailyMax *OperationsIntegerText `json:"object_daily_max,omitempty"`
+
+	// ObjectDailyUsed A non-negative integer in decimal text, which a browser reads without rounding.
+	ObjectDailyUsed *OperationsIntegerText `json:"object_daily_used,omitempty"`
+	Paused          *bool                  `json:"paused,omitempty"`
+	PolicyRev       *int64                 `json:"policy_rev,omitempty"`
+
+	// SingleMax A non-negative integer in decimal text, which a browser reads without rounding.
+	SingleMax *OperationsIntegerText `json:"single_max,omitempty"`
+
+	// WeeklyMax A non-negative integer in decimal text, which a browser reads without rounding.
+	WeeklyMax *OperationsIntegerText `json:"weekly_max,omitempty"`
+
+	// WeeklyUsed A non-negative integer in decimal text, which a browser reads without rounding.
+	WeeklyUsed           *OperationsIntegerText `json:"weekly_used,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // OperationsCapLimits The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or not: one proposal, the day and the week. Reserved and committed amounts both count.
 type OperationsCapLimits struct {
@@ -3607,6 +3759,80 @@ type OperationsCredentialToken struct {
 	Token *string `json:"token,omitempty"`
 }
 
+// OperationsCreditGrantParams `credit_grant`: the face value in billionths of `currency`, and when the credit expires.
+type OperationsCreditGrantParams struct {
+	// Amount A non-negative integer in decimal text, which a browser reads without rounding.
+	Amount               *OperationsIntegerText `json:"amount,omitempty"`
+	Currency             *string                `json:"currency,omitempty"`
+	ExpiresAt            *time.Time             `json:"expires_at,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// OperationsCreditGrantSummary `credit_grant`: the account as the server read it and the face value in the site's currency.
+type OperationsCreditGrantSummary struct {
+	// Account The account's name.
+	Account *string `json:"account,omitempty"`
+
+	// AccountId An account's ID (TypeID).
+	AccountId *AccountId `json:"account_id,omitempty"`
+
+	// Amount A non-negative integer in decimal text, which a browser reads without rounding.
+	Amount *OperationsIntegerText `json:"amount,omitempty"`
+
+	// Cap The cap a transfer was weighed against when the agent asked (docs/domains/operations.md「转账的累计金额上限」): each limit and what its window held before it. Amounts are in billionths of `currency`.
+	Cap      *OperationsCapDetail `json:"cap,omitempty"`
+	Currency *string              `json:"currency,omitempty"`
+
+	// Email The account owner's email.
+	Email *string `json:"email,omitempty"`
+
+	// ExpiresAt When the credit expires; absent when it does not.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// SiteId A site's ID (TypeID).
+	SiteId               *SiteId                `json:"site_id,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// OperationsEnvelopeDetail The site's price envelope a publication was weighed against when the agent asked (docs/domains/operations.md「售价的累计变动上限」), in basis points and counts. `change_bps` is null when no share measures the move, `margin_bps` when the cost is unknown.
+type OperationsEnvelopeDetail struct {
+	ChangeBps            *int64                 `json:"change_bps,omitempty"`
+	DailyChanges         *int32                 `json:"daily_changes,omitempty"`
+	DailyChangesUsed     *int32                 `json:"daily_changes_used,omitempty"`
+	DailyModels          *int32                 `json:"daily_models,omitempty"`
+	DailyModelsUsed      *int32                 `json:"daily_models_used,omitempty"`
+	MarginBps            *int64                 `json:"margin_bps,omitempty"`
+	MinMarginBps         *int32                 `json:"min_margin_bps,omitempty"`
+	ModelChangeUsed      *int64                 `json:"model_change_used,omitempty"`
+	ModelDailyChangeBps  *int64                 `json:"model_daily_change_bps,omitempty"`
+	ModelMovedToday      *bool                  `json:"model_moved_today,omitempty"`
+	Rev                  *int64                 `json:"rev,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// OperationsIntegerText A non-negative integer in decimal text, which a browser reads without rounding.
+type OperationsIntegerText = string
+
+// OperationsModelStatusParams `model_set_status`: the status asked for and the model's revision it was read at.
+type OperationsModelStatusParams struct {
+	Rev                  *int64                             `json:"rev,omitempty"`
+	Status               *OperationsModelStatusParamsStatus `json:"status,omitempty"`
+	AdditionalProperties map[string]interface{}             `json:"-"`
+}
+
+// OperationsModelStatusParamsStatus defines model for OperationsModelStatusParams.Status.
+type OperationsModelStatusParamsStatus string
+
+// OperationsModelStatusSummary `model_set_status`, which waits only to retire a model: the model as the server read it.
+type OperationsModelStatusSummary struct {
+	Rev  *int64  `json:"rev,omitempty"`
+	Slug *string `json:"slug,omitempty"`
+
+	// Status `draft`: seen by the platform only; `listed`: on sale; `retired`: out of use for good.
+	Status               *ModelStatus           `json:"status,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
 // OperationsMoneyTarget defines model for OperationsMoneyTarget.
 type OperationsMoneyTarget struct {
 	// Gap Actual minus target. Absent when the cost total is incomplete (`unknown_cost_calls` above zero, cost only) or the target's currency is not the site's current accounting currency. Revenue and monthly revenue always state it when the currency matches.
@@ -3691,6 +3917,50 @@ type OperationsPriceEnvelopeUpdate struct {
 	// Rev The revision read; 0 makes the envelope.
 	Rev int64 `json:"rev"`
 }
+
+// OperationsPricePublishParams `price_publish`: the proposal to publish and the model's version it was read against.
+type OperationsPricePublishParams struct {
+	// CandidateId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	CandidateId *Uuid `json:"candidate_id,omitempty"`
+
+	// CurrentId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	CurrentId            *Uuid                  `json:"current_id,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// OperationsPricePublishSummary `price_publish`: the model and the proposal, and the base rate of each billing item now (`current`), as proposed (`proposed`) and as it costs (`cost`), in `currency` per unit as the catalog stores it. `prices_complete` is true when those base rates are the whole price on both sides (no endpoint, context or service tier prices); otherwise endpoint and tier prices are to be checked apart.
+type OperationsPricePublishSummary struct {
+	// Audience Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for `all`. Account and tier IDs must belong to this site.
+	Audience *PricingAudience `json:"audience,omitempty"`
+
+	// CandidateId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	CandidateId *Uuid              `json:"candidate_id,omitempty"`
+	Cost        *map[string]string `json:"cost,omitempty"`
+	Currency    *string            `json:"currency,omitempty"`
+	Current     *map[string]string `json:"current,omitempty"`
+
+	// CurrentId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	CurrentId *Uuid `json:"current_id,omitempty"`
+
+	// Envelope The site's price envelope a publication was weighed against when the agent asked (docs/domains/operations.md「售价的累计变动上限」), in basis points and counts. `change_bps` is null when no share measures the move, `margin_bps` when the cost is unknown.
+	Envelope *OperationsEnvelopeDetail `json:"envelope,omitempty"`
+
+	// ModelId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	ModelId *Uuid `json:"model_id,omitempty"`
+
+	// Name The model's public name.
+	Name           *string            `json:"name,omitempty"`
+	PricesComplete *bool              `json:"prices_complete,omitempty"`
+	Proposed       *map[string]string `json:"proposed,omitempty"`
+	Slug           *string            `json:"slug,omitempty"`
+
+	// Status The proposal's status.
+	Status               *OperationsPricePublishSummaryStatus `json:"status,omitempty"`
+	AdditionalProperties map[string]interface{}               `json:"-"`
+}
+
+// OperationsPricePublishSummaryStatus The proposal's status.
+type OperationsPricePublishSummaryStatus string
 
 // OperationsRateTarget defines model for OperationsRateTarget.
 type OperationsRateTarget struct {
@@ -3790,6 +4060,37 @@ type OperationsTargetsUpdate struct {
 
 	// Revenue An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Revenue *Money `json:"revenue,omitempty"`
+}
+
+// OperationsTopUpParams `supplier_top_up_propose`: the amount in the supplier's own unit, as decimal text.
+type OperationsTopUpParams struct {
+	AmountNative         *string                `json:"amount_native,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// OperationsTopUpSummary `supplier_top_up_propose`: the supplier, the native amount the agent asked for and what the server made of it in the cap's currency (`amount`, billionths of `currency`).
+type OperationsTopUpSummary struct {
+	// Amount A non-negative integer in decimal text, which a browser reads without rounding.
+	Amount *OperationsIntegerText `json:"amount,omitempty"`
+
+	// AmountNative The amount in the supplier's own unit, as decimal text.
+	AmountNative *string `json:"amount_native,omitempty"`
+
+	// Cap The cap a transfer was weighed against when the agent asked (docs/domains/operations.md「转账的累计金额上限」): each limit and what its window held before it. Amounts are in billionths of `currency`.
+	Cap                *OperationsCapDetail `json:"cap,omitempty"`
+	Currency           *string              `json:"currency,omitempty"`
+	NativeUnit         *string              `json:"native_unit,omitempty"`
+	SettlementCurrency *string              `json:"settlement_currency,omitempty"`
+
+	// Supplier The supplier's name.
+	Supplier *string `json:"supplier,omitempty"`
+
+	// SupplierId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	SupplierId *Uuid `json:"supplier_id,omitempty"`
+
+	// UnitValue What one native unit is worth in `settlement_currency`, as decimal text.
+	UnitValue            *string                `json:"unit_value,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // OrderId A top-up order's ID (TypeID), also the order number the payment channel sees.
@@ -7035,6 +7336,1556 @@ func (a ModelSpec) MarshalJSON() ([]byte, error) {
 		object["tiers"], err = json.Marshal(a.Tiers)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'tiers': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for OperationsCapDetail. Returns the specified
+// element and whether it was found
+func (a OperationsCapDetail) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OperationsCapDetail
+func (a *OperationsCapDetail) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OperationsCapDetail to handle AdditionalProperties
+func (a *OperationsCapDetail) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["amount"]; found {
+		err = json.Unmarshal(raw, &a.Amount)
+		if err != nil {
+			return fmt.Errorf("error reading 'amount': %w", err)
+		}
+		delete(object, "amount")
+	}
+
+	if raw, found := object["currency"]; found {
+		err = json.Unmarshal(raw, &a.Currency)
+		if err != nil {
+			return fmt.Errorf("error reading 'currency': %w", err)
+		}
+		delete(object, "currency")
+	}
+
+	if raw, found := object["daily_count"]; found {
+		err = json.Unmarshal(raw, &a.DailyCount)
+		if err != nil {
+			return fmt.Errorf("error reading 'daily_count': %w", err)
+		}
+		delete(object, "daily_count")
+	}
+
+	if raw, found := object["daily_count_max"]; found {
+		err = json.Unmarshal(raw, &a.DailyCountMax)
+		if err != nil {
+			return fmt.Errorf("error reading 'daily_count_max': %w", err)
+		}
+		delete(object, "daily_count_max")
+	}
+
+	if raw, found := object["daily_max"]; found {
+		err = json.Unmarshal(raw, &a.DailyMax)
+		if err != nil {
+			return fmt.Errorf("error reading 'daily_max': %w", err)
+		}
+		delete(object, "daily_max")
+	}
+
+	if raw, found := object["daily_used"]; found {
+		err = json.Unmarshal(raw, &a.DailyUsed)
+		if err != nil {
+			return fmt.Errorf("error reading 'daily_used': %w", err)
+		}
+		delete(object, "daily_used")
+	}
+
+	if raw, found := object["hard_daily_max"]; found {
+		err = json.Unmarshal(raw, &a.HardDailyMax)
+		if err != nil {
+			return fmt.Errorf("error reading 'hard_daily_max': %w", err)
+		}
+		delete(object, "hard_daily_max")
+	}
+
+	if raw, found := object["hard_single_max"]; found {
+		err = json.Unmarshal(raw, &a.HardSingleMax)
+		if err != nil {
+			return fmt.Errorf("error reading 'hard_single_max': %w", err)
+		}
+		delete(object, "hard_single_max")
+	}
+
+	if raw, found := object["hard_weekly_max"]; found {
+		err = json.Unmarshal(raw, &a.HardWeeklyMax)
+		if err != nil {
+			return fmt.Errorf("error reading 'hard_weekly_max': %w", err)
+		}
+		delete(object, "hard_weekly_max")
+	}
+
+	if raw, found := object["object_daily_max"]; found {
+		err = json.Unmarshal(raw, &a.ObjectDailyMax)
+		if err != nil {
+			return fmt.Errorf("error reading 'object_daily_max': %w", err)
+		}
+		delete(object, "object_daily_max")
+	}
+
+	if raw, found := object["object_daily_used"]; found {
+		err = json.Unmarshal(raw, &a.ObjectDailyUsed)
+		if err != nil {
+			return fmt.Errorf("error reading 'object_daily_used': %w", err)
+		}
+		delete(object, "object_daily_used")
+	}
+
+	if raw, found := object["paused"]; found {
+		err = json.Unmarshal(raw, &a.Paused)
+		if err != nil {
+			return fmt.Errorf("error reading 'paused': %w", err)
+		}
+		delete(object, "paused")
+	}
+
+	if raw, found := object["policy_rev"]; found {
+		err = json.Unmarshal(raw, &a.PolicyRev)
+		if err != nil {
+			return fmt.Errorf("error reading 'policy_rev': %w", err)
+		}
+		delete(object, "policy_rev")
+	}
+
+	if raw, found := object["single_max"]; found {
+		err = json.Unmarshal(raw, &a.SingleMax)
+		if err != nil {
+			return fmt.Errorf("error reading 'single_max': %w", err)
+		}
+		delete(object, "single_max")
+	}
+
+	if raw, found := object["weekly_max"]; found {
+		err = json.Unmarshal(raw, &a.WeeklyMax)
+		if err != nil {
+			return fmt.Errorf("error reading 'weekly_max': %w", err)
+		}
+		delete(object, "weekly_max")
+	}
+
+	if raw, found := object["weekly_used"]; found {
+		err = json.Unmarshal(raw, &a.WeeklyUsed)
+		if err != nil {
+			return fmt.Errorf("error reading 'weekly_used': %w", err)
+		}
+		delete(object, "weekly_used")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OperationsCapDetail to handle AdditionalProperties
+func (a OperationsCapDetail) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Amount != nil {
+		object["amount"], err = json.Marshal(a.Amount)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'amount': %w", err)
+		}
+	}
+
+	if a.Currency != nil {
+		object["currency"], err = json.Marshal(a.Currency)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'currency': %w", err)
+		}
+	}
+
+	if a.DailyCount != nil {
+		object["daily_count"], err = json.Marshal(a.DailyCount)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'daily_count': %w", err)
+		}
+	}
+
+	if a.DailyCountMax != nil {
+		object["daily_count_max"], err = json.Marshal(a.DailyCountMax)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'daily_count_max': %w", err)
+		}
+	}
+
+	if a.DailyMax != nil {
+		object["daily_max"], err = json.Marshal(a.DailyMax)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'daily_max': %w", err)
+		}
+	}
+
+	if a.DailyUsed != nil {
+		object["daily_used"], err = json.Marshal(a.DailyUsed)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'daily_used': %w", err)
+		}
+	}
+
+	if a.HardDailyMax != nil {
+		object["hard_daily_max"], err = json.Marshal(a.HardDailyMax)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'hard_daily_max': %w", err)
+		}
+	}
+
+	if a.HardSingleMax != nil {
+		object["hard_single_max"], err = json.Marshal(a.HardSingleMax)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'hard_single_max': %w", err)
+		}
+	}
+
+	if a.HardWeeklyMax != nil {
+		object["hard_weekly_max"], err = json.Marshal(a.HardWeeklyMax)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'hard_weekly_max': %w", err)
+		}
+	}
+
+	if a.ObjectDailyMax != nil {
+		object["object_daily_max"], err = json.Marshal(a.ObjectDailyMax)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'object_daily_max': %w", err)
+		}
+	}
+
+	if a.ObjectDailyUsed != nil {
+		object["object_daily_used"], err = json.Marshal(a.ObjectDailyUsed)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'object_daily_used': %w", err)
+		}
+	}
+
+	if a.Paused != nil {
+		object["paused"], err = json.Marshal(a.Paused)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'paused': %w", err)
+		}
+	}
+
+	if a.PolicyRev != nil {
+		object["policy_rev"], err = json.Marshal(a.PolicyRev)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'policy_rev': %w", err)
+		}
+	}
+
+	if a.SingleMax != nil {
+		object["single_max"], err = json.Marshal(a.SingleMax)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'single_max': %w", err)
+		}
+	}
+
+	if a.WeeklyMax != nil {
+		object["weekly_max"], err = json.Marshal(a.WeeklyMax)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'weekly_max': %w", err)
+		}
+	}
+
+	if a.WeeklyUsed != nil {
+		object["weekly_used"], err = json.Marshal(a.WeeklyUsed)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'weekly_used': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for OperationsCreditGrantParams. Returns the specified
+// element and whether it was found
+func (a OperationsCreditGrantParams) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OperationsCreditGrantParams
+func (a *OperationsCreditGrantParams) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OperationsCreditGrantParams to handle AdditionalProperties
+func (a *OperationsCreditGrantParams) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["amount"]; found {
+		err = json.Unmarshal(raw, &a.Amount)
+		if err != nil {
+			return fmt.Errorf("error reading 'amount': %w", err)
+		}
+		delete(object, "amount")
+	}
+
+	if raw, found := object["currency"]; found {
+		err = json.Unmarshal(raw, &a.Currency)
+		if err != nil {
+			return fmt.Errorf("error reading 'currency': %w", err)
+		}
+		delete(object, "currency")
+	}
+
+	if raw, found := object["expires_at"]; found {
+		err = json.Unmarshal(raw, &a.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("error reading 'expires_at': %w", err)
+		}
+		delete(object, "expires_at")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OperationsCreditGrantParams to handle AdditionalProperties
+func (a OperationsCreditGrantParams) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Amount != nil {
+		object["amount"], err = json.Marshal(a.Amount)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'amount': %w", err)
+		}
+	}
+
+	if a.Currency != nil {
+		object["currency"], err = json.Marshal(a.Currency)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'currency': %w", err)
+		}
+	}
+
+	if a.ExpiresAt != nil {
+		object["expires_at"], err = json.Marshal(a.ExpiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'expires_at': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for OperationsCreditGrantSummary. Returns the specified
+// element and whether it was found
+func (a OperationsCreditGrantSummary) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OperationsCreditGrantSummary
+func (a *OperationsCreditGrantSummary) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OperationsCreditGrantSummary to handle AdditionalProperties
+func (a *OperationsCreditGrantSummary) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["account"]; found {
+		err = json.Unmarshal(raw, &a.Account)
+		if err != nil {
+			return fmt.Errorf("error reading 'account': %w", err)
+		}
+		delete(object, "account")
+	}
+
+	if raw, found := object["account_id"]; found {
+		err = json.Unmarshal(raw, &a.AccountId)
+		if err != nil {
+			return fmt.Errorf("error reading 'account_id': %w", err)
+		}
+		delete(object, "account_id")
+	}
+
+	if raw, found := object["amount"]; found {
+		err = json.Unmarshal(raw, &a.Amount)
+		if err != nil {
+			return fmt.Errorf("error reading 'amount': %w", err)
+		}
+		delete(object, "amount")
+	}
+
+	if raw, found := object["cap"]; found {
+		err = json.Unmarshal(raw, &a.Cap)
+		if err != nil {
+			return fmt.Errorf("error reading 'cap': %w", err)
+		}
+		delete(object, "cap")
+	}
+
+	if raw, found := object["currency"]; found {
+		err = json.Unmarshal(raw, &a.Currency)
+		if err != nil {
+			return fmt.Errorf("error reading 'currency': %w", err)
+		}
+		delete(object, "currency")
+	}
+
+	if raw, found := object["email"]; found {
+		err = json.Unmarshal(raw, &a.Email)
+		if err != nil {
+			return fmt.Errorf("error reading 'email': %w", err)
+		}
+		delete(object, "email")
+	}
+
+	if raw, found := object["expires_at"]; found {
+		err = json.Unmarshal(raw, &a.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("error reading 'expires_at': %w", err)
+		}
+		delete(object, "expires_at")
+	}
+
+	if raw, found := object["site_id"]; found {
+		err = json.Unmarshal(raw, &a.SiteId)
+		if err != nil {
+			return fmt.Errorf("error reading 'site_id': %w", err)
+		}
+		delete(object, "site_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OperationsCreditGrantSummary to handle AdditionalProperties
+func (a OperationsCreditGrantSummary) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Account != nil {
+		object["account"], err = json.Marshal(a.Account)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'account': %w", err)
+		}
+	}
+
+	if a.AccountId != nil {
+		object["account_id"], err = json.Marshal(a.AccountId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'account_id': %w", err)
+		}
+	}
+
+	if a.Amount != nil {
+		object["amount"], err = json.Marshal(a.Amount)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'amount': %w", err)
+		}
+	}
+
+	if a.Cap != nil {
+		object["cap"], err = json.Marshal(a.Cap)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'cap': %w", err)
+		}
+	}
+
+	if a.Currency != nil {
+		object["currency"], err = json.Marshal(a.Currency)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'currency': %w", err)
+		}
+	}
+
+	if a.Email != nil {
+		object["email"], err = json.Marshal(a.Email)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'email': %w", err)
+		}
+	}
+
+	if a.ExpiresAt != nil {
+		object["expires_at"], err = json.Marshal(a.ExpiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'expires_at': %w", err)
+		}
+	}
+
+	if a.SiteId != nil {
+		object["site_id"], err = json.Marshal(a.SiteId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'site_id': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for OperationsEnvelopeDetail. Returns the specified
+// element and whether it was found
+func (a OperationsEnvelopeDetail) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OperationsEnvelopeDetail
+func (a *OperationsEnvelopeDetail) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OperationsEnvelopeDetail to handle AdditionalProperties
+func (a *OperationsEnvelopeDetail) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["change_bps"]; found {
+		err = json.Unmarshal(raw, &a.ChangeBps)
+		if err != nil {
+			return fmt.Errorf("error reading 'change_bps': %w", err)
+		}
+		delete(object, "change_bps")
+	}
+
+	if raw, found := object["daily_changes"]; found {
+		err = json.Unmarshal(raw, &a.DailyChanges)
+		if err != nil {
+			return fmt.Errorf("error reading 'daily_changes': %w", err)
+		}
+		delete(object, "daily_changes")
+	}
+
+	if raw, found := object["daily_changes_used"]; found {
+		err = json.Unmarshal(raw, &a.DailyChangesUsed)
+		if err != nil {
+			return fmt.Errorf("error reading 'daily_changes_used': %w", err)
+		}
+		delete(object, "daily_changes_used")
+	}
+
+	if raw, found := object["daily_models"]; found {
+		err = json.Unmarshal(raw, &a.DailyModels)
+		if err != nil {
+			return fmt.Errorf("error reading 'daily_models': %w", err)
+		}
+		delete(object, "daily_models")
+	}
+
+	if raw, found := object["daily_models_used"]; found {
+		err = json.Unmarshal(raw, &a.DailyModelsUsed)
+		if err != nil {
+			return fmt.Errorf("error reading 'daily_models_used': %w", err)
+		}
+		delete(object, "daily_models_used")
+	}
+
+	if raw, found := object["margin_bps"]; found {
+		err = json.Unmarshal(raw, &a.MarginBps)
+		if err != nil {
+			return fmt.Errorf("error reading 'margin_bps': %w", err)
+		}
+		delete(object, "margin_bps")
+	}
+
+	if raw, found := object["min_margin_bps"]; found {
+		err = json.Unmarshal(raw, &a.MinMarginBps)
+		if err != nil {
+			return fmt.Errorf("error reading 'min_margin_bps': %w", err)
+		}
+		delete(object, "min_margin_bps")
+	}
+
+	if raw, found := object["model_change_used"]; found {
+		err = json.Unmarshal(raw, &a.ModelChangeUsed)
+		if err != nil {
+			return fmt.Errorf("error reading 'model_change_used': %w", err)
+		}
+		delete(object, "model_change_used")
+	}
+
+	if raw, found := object["model_daily_change_bps"]; found {
+		err = json.Unmarshal(raw, &a.ModelDailyChangeBps)
+		if err != nil {
+			return fmt.Errorf("error reading 'model_daily_change_bps': %w", err)
+		}
+		delete(object, "model_daily_change_bps")
+	}
+
+	if raw, found := object["model_moved_today"]; found {
+		err = json.Unmarshal(raw, &a.ModelMovedToday)
+		if err != nil {
+			return fmt.Errorf("error reading 'model_moved_today': %w", err)
+		}
+		delete(object, "model_moved_today")
+	}
+
+	if raw, found := object["rev"]; found {
+		err = json.Unmarshal(raw, &a.Rev)
+		if err != nil {
+			return fmt.Errorf("error reading 'rev': %w", err)
+		}
+		delete(object, "rev")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OperationsEnvelopeDetail to handle AdditionalProperties
+func (a OperationsEnvelopeDetail) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.ChangeBps != nil {
+		object["change_bps"], err = json.Marshal(a.ChangeBps)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'change_bps': %w", err)
+		}
+	}
+
+	if a.DailyChanges != nil {
+		object["daily_changes"], err = json.Marshal(a.DailyChanges)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'daily_changes': %w", err)
+		}
+	}
+
+	if a.DailyChangesUsed != nil {
+		object["daily_changes_used"], err = json.Marshal(a.DailyChangesUsed)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'daily_changes_used': %w", err)
+		}
+	}
+
+	if a.DailyModels != nil {
+		object["daily_models"], err = json.Marshal(a.DailyModels)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'daily_models': %w", err)
+		}
+	}
+
+	if a.DailyModelsUsed != nil {
+		object["daily_models_used"], err = json.Marshal(a.DailyModelsUsed)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'daily_models_used': %w", err)
+		}
+	}
+
+	if a.MarginBps != nil {
+		object["margin_bps"], err = json.Marshal(a.MarginBps)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'margin_bps': %w", err)
+		}
+	}
+
+	if a.MinMarginBps != nil {
+		object["min_margin_bps"], err = json.Marshal(a.MinMarginBps)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'min_margin_bps': %w", err)
+		}
+	}
+
+	if a.ModelChangeUsed != nil {
+		object["model_change_used"], err = json.Marshal(a.ModelChangeUsed)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'model_change_used': %w", err)
+		}
+	}
+
+	if a.ModelDailyChangeBps != nil {
+		object["model_daily_change_bps"], err = json.Marshal(a.ModelDailyChangeBps)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'model_daily_change_bps': %w", err)
+		}
+	}
+
+	if a.ModelMovedToday != nil {
+		object["model_moved_today"], err = json.Marshal(a.ModelMovedToday)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'model_moved_today': %w", err)
+		}
+	}
+
+	if a.Rev != nil {
+		object["rev"], err = json.Marshal(a.Rev)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rev': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for OperationsModelStatusParams. Returns the specified
+// element and whether it was found
+func (a OperationsModelStatusParams) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OperationsModelStatusParams
+func (a *OperationsModelStatusParams) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OperationsModelStatusParams to handle AdditionalProperties
+func (a *OperationsModelStatusParams) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["rev"]; found {
+		err = json.Unmarshal(raw, &a.Rev)
+		if err != nil {
+			return fmt.Errorf("error reading 'rev': %w", err)
+		}
+		delete(object, "rev")
+	}
+
+	if raw, found := object["status"]; found {
+		err = json.Unmarshal(raw, &a.Status)
+		if err != nil {
+			return fmt.Errorf("error reading 'status': %w", err)
+		}
+		delete(object, "status")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OperationsModelStatusParams to handle AdditionalProperties
+func (a OperationsModelStatusParams) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Rev != nil {
+		object["rev"], err = json.Marshal(a.Rev)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rev': %w", err)
+		}
+	}
+
+	if a.Status != nil {
+		object["status"], err = json.Marshal(a.Status)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'status': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for OperationsModelStatusSummary. Returns the specified
+// element and whether it was found
+func (a OperationsModelStatusSummary) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OperationsModelStatusSummary
+func (a *OperationsModelStatusSummary) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OperationsModelStatusSummary to handle AdditionalProperties
+func (a *OperationsModelStatusSummary) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["rev"]; found {
+		err = json.Unmarshal(raw, &a.Rev)
+		if err != nil {
+			return fmt.Errorf("error reading 'rev': %w", err)
+		}
+		delete(object, "rev")
+	}
+
+	if raw, found := object["slug"]; found {
+		err = json.Unmarshal(raw, &a.Slug)
+		if err != nil {
+			return fmt.Errorf("error reading 'slug': %w", err)
+		}
+		delete(object, "slug")
+	}
+
+	if raw, found := object["status"]; found {
+		err = json.Unmarshal(raw, &a.Status)
+		if err != nil {
+			return fmt.Errorf("error reading 'status': %w", err)
+		}
+		delete(object, "status")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OperationsModelStatusSummary to handle AdditionalProperties
+func (a OperationsModelStatusSummary) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Rev != nil {
+		object["rev"], err = json.Marshal(a.Rev)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'rev': %w", err)
+		}
+	}
+
+	if a.Slug != nil {
+		object["slug"], err = json.Marshal(a.Slug)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'slug': %w", err)
+		}
+	}
+
+	if a.Status != nil {
+		object["status"], err = json.Marshal(a.Status)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'status': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for OperationsPricePublishParams. Returns the specified
+// element and whether it was found
+func (a OperationsPricePublishParams) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OperationsPricePublishParams
+func (a *OperationsPricePublishParams) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OperationsPricePublishParams to handle AdditionalProperties
+func (a *OperationsPricePublishParams) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["candidate_id"]; found {
+		err = json.Unmarshal(raw, &a.CandidateId)
+		if err != nil {
+			return fmt.Errorf("error reading 'candidate_id': %w", err)
+		}
+		delete(object, "candidate_id")
+	}
+
+	if raw, found := object["current_id"]; found {
+		err = json.Unmarshal(raw, &a.CurrentId)
+		if err != nil {
+			return fmt.Errorf("error reading 'current_id': %w", err)
+		}
+		delete(object, "current_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OperationsPricePublishParams to handle AdditionalProperties
+func (a OperationsPricePublishParams) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.CandidateId != nil {
+		object["candidate_id"], err = json.Marshal(a.CandidateId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'candidate_id': %w", err)
+		}
+	}
+
+	if a.CurrentId != nil {
+		object["current_id"], err = json.Marshal(a.CurrentId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'current_id': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for OperationsPricePublishSummary. Returns the specified
+// element and whether it was found
+func (a OperationsPricePublishSummary) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OperationsPricePublishSummary
+func (a *OperationsPricePublishSummary) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OperationsPricePublishSummary to handle AdditionalProperties
+func (a *OperationsPricePublishSummary) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["audience"]; found {
+		err = json.Unmarshal(raw, &a.Audience)
+		if err != nil {
+			return fmt.Errorf("error reading 'audience': %w", err)
+		}
+		delete(object, "audience")
+	}
+
+	if raw, found := object["candidate_id"]; found {
+		err = json.Unmarshal(raw, &a.CandidateId)
+		if err != nil {
+			return fmt.Errorf("error reading 'candidate_id': %w", err)
+		}
+		delete(object, "candidate_id")
+	}
+
+	if raw, found := object["cost"]; found {
+		err = json.Unmarshal(raw, &a.Cost)
+		if err != nil {
+			return fmt.Errorf("error reading 'cost': %w", err)
+		}
+		delete(object, "cost")
+	}
+
+	if raw, found := object["currency"]; found {
+		err = json.Unmarshal(raw, &a.Currency)
+		if err != nil {
+			return fmt.Errorf("error reading 'currency': %w", err)
+		}
+		delete(object, "currency")
+	}
+
+	if raw, found := object["current"]; found {
+		err = json.Unmarshal(raw, &a.Current)
+		if err != nil {
+			return fmt.Errorf("error reading 'current': %w", err)
+		}
+		delete(object, "current")
+	}
+
+	if raw, found := object["current_id"]; found {
+		err = json.Unmarshal(raw, &a.CurrentId)
+		if err != nil {
+			return fmt.Errorf("error reading 'current_id': %w", err)
+		}
+		delete(object, "current_id")
+	}
+
+	if raw, found := object["envelope"]; found {
+		err = json.Unmarshal(raw, &a.Envelope)
+		if err != nil {
+			return fmt.Errorf("error reading 'envelope': %w", err)
+		}
+		delete(object, "envelope")
+	}
+
+	if raw, found := object["model_id"]; found {
+		err = json.Unmarshal(raw, &a.ModelId)
+		if err != nil {
+			return fmt.Errorf("error reading 'model_id': %w", err)
+		}
+		delete(object, "model_id")
+	}
+
+	if raw, found := object["name"]; found {
+		err = json.Unmarshal(raw, &a.Name)
+		if err != nil {
+			return fmt.Errorf("error reading 'name': %w", err)
+		}
+		delete(object, "name")
+	}
+
+	if raw, found := object["prices_complete"]; found {
+		err = json.Unmarshal(raw, &a.PricesComplete)
+		if err != nil {
+			return fmt.Errorf("error reading 'prices_complete': %w", err)
+		}
+		delete(object, "prices_complete")
+	}
+
+	if raw, found := object["proposed"]; found {
+		err = json.Unmarshal(raw, &a.Proposed)
+		if err != nil {
+			return fmt.Errorf("error reading 'proposed': %w", err)
+		}
+		delete(object, "proposed")
+	}
+
+	if raw, found := object["slug"]; found {
+		err = json.Unmarshal(raw, &a.Slug)
+		if err != nil {
+			return fmt.Errorf("error reading 'slug': %w", err)
+		}
+		delete(object, "slug")
+	}
+
+	if raw, found := object["status"]; found {
+		err = json.Unmarshal(raw, &a.Status)
+		if err != nil {
+			return fmt.Errorf("error reading 'status': %w", err)
+		}
+		delete(object, "status")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OperationsPricePublishSummary to handle AdditionalProperties
+func (a OperationsPricePublishSummary) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Audience != nil {
+		object["audience"], err = json.Marshal(a.Audience)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'audience': %w", err)
+		}
+	}
+
+	if a.CandidateId != nil {
+		object["candidate_id"], err = json.Marshal(a.CandidateId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'candidate_id': %w", err)
+		}
+	}
+
+	if a.Cost != nil {
+		object["cost"], err = json.Marshal(a.Cost)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'cost': %w", err)
+		}
+	}
+
+	if a.Currency != nil {
+		object["currency"], err = json.Marshal(a.Currency)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'currency': %w", err)
+		}
+	}
+
+	if a.Current != nil {
+		object["current"], err = json.Marshal(a.Current)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'current': %w", err)
+		}
+	}
+
+	if a.CurrentId != nil {
+		object["current_id"], err = json.Marshal(a.CurrentId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'current_id': %w", err)
+		}
+	}
+
+	if a.Envelope != nil {
+		object["envelope"], err = json.Marshal(a.Envelope)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'envelope': %w", err)
+		}
+	}
+
+	if a.ModelId != nil {
+		object["model_id"], err = json.Marshal(a.ModelId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'model_id': %w", err)
+		}
+	}
+
+	if a.Name != nil {
+		object["name"], err = json.Marshal(a.Name)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'name': %w", err)
+		}
+	}
+
+	if a.PricesComplete != nil {
+		object["prices_complete"], err = json.Marshal(a.PricesComplete)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'prices_complete': %w", err)
+		}
+	}
+
+	if a.Proposed != nil {
+		object["proposed"], err = json.Marshal(a.Proposed)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'proposed': %w", err)
+		}
+	}
+
+	if a.Slug != nil {
+		object["slug"], err = json.Marshal(a.Slug)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'slug': %w", err)
+		}
+	}
+
+	if a.Status != nil {
+		object["status"], err = json.Marshal(a.Status)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'status': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for OperationsTopUpParams. Returns the specified
+// element and whether it was found
+func (a OperationsTopUpParams) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OperationsTopUpParams
+func (a *OperationsTopUpParams) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OperationsTopUpParams to handle AdditionalProperties
+func (a *OperationsTopUpParams) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["amount_native"]; found {
+		err = json.Unmarshal(raw, &a.AmountNative)
+		if err != nil {
+			return fmt.Errorf("error reading 'amount_native': %w", err)
+		}
+		delete(object, "amount_native")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OperationsTopUpParams to handle AdditionalProperties
+func (a OperationsTopUpParams) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.AmountNative != nil {
+		object["amount_native"], err = json.Marshal(a.AmountNative)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'amount_native': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for OperationsTopUpSummary. Returns the specified
+// element and whether it was found
+func (a OperationsTopUpSummary) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for OperationsTopUpSummary
+func (a *OperationsTopUpSummary) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for OperationsTopUpSummary to handle AdditionalProperties
+func (a *OperationsTopUpSummary) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["amount"]; found {
+		err = json.Unmarshal(raw, &a.Amount)
+		if err != nil {
+			return fmt.Errorf("error reading 'amount': %w", err)
+		}
+		delete(object, "amount")
+	}
+
+	if raw, found := object["amount_native"]; found {
+		err = json.Unmarshal(raw, &a.AmountNative)
+		if err != nil {
+			return fmt.Errorf("error reading 'amount_native': %w", err)
+		}
+		delete(object, "amount_native")
+	}
+
+	if raw, found := object["cap"]; found {
+		err = json.Unmarshal(raw, &a.Cap)
+		if err != nil {
+			return fmt.Errorf("error reading 'cap': %w", err)
+		}
+		delete(object, "cap")
+	}
+
+	if raw, found := object["currency"]; found {
+		err = json.Unmarshal(raw, &a.Currency)
+		if err != nil {
+			return fmt.Errorf("error reading 'currency': %w", err)
+		}
+		delete(object, "currency")
+	}
+
+	if raw, found := object["native_unit"]; found {
+		err = json.Unmarshal(raw, &a.NativeUnit)
+		if err != nil {
+			return fmt.Errorf("error reading 'native_unit': %w", err)
+		}
+		delete(object, "native_unit")
+	}
+
+	if raw, found := object["settlement_currency"]; found {
+		err = json.Unmarshal(raw, &a.SettlementCurrency)
+		if err != nil {
+			return fmt.Errorf("error reading 'settlement_currency': %w", err)
+		}
+		delete(object, "settlement_currency")
+	}
+
+	if raw, found := object["supplier"]; found {
+		err = json.Unmarshal(raw, &a.Supplier)
+		if err != nil {
+			return fmt.Errorf("error reading 'supplier': %w", err)
+		}
+		delete(object, "supplier")
+	}
+
+	if raw, found := object["supplier_id"]; found {
+		err = json.Unmarshal(raw, &a.SupplierId)
+		if err != nil {
+			return fmt.Errorf("error reading 'supplier_id': %w", err)
+		}
+		delete(object, "supplier_id")
+	}
+
+	if raw, found := object["unit_value"]; found {
+		err = json.Unmarshal(raw, &a.UnitValue)
+		if err != nil {
+			return fmt.Errorf("error reading 'unit_value': %w", err)
+		}
+		delete(object, "unit_value")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for OperationsTopUpSummary to handle AdditionalProperties
+func (a OperationsTopUpSummary) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Amount != nil {
+		object["amount"], err = json.Marshal(a.Amount)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'amount': %w", err)
+		}
+	}
+
+	if a.AmountNative != nil {
+		object["amount_native"], err = json.Marshal(a.AmountNative)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'amount_native': %w", err)
+		}
+	}
+
+	if a.Cap != nil {
+		object["cap"], err = json.Marshal(a.Cap)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'cap': %w", err)
+		}
+	}
+
+	if a.Currency != nil {
+		object["currency"], err = json.Marshal(a.Currency)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'currency': %w", err)
+		}
+	}
+
+	if a.NativeUnit != nil {
+		object["native_unit"], err = json.Marshal(a.NativeUnit)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'native_unit': %w", err)
+		}
+	}
+
+	if a.SettlementCurrency != nil {
+		object["settlement_currency"], err = json.Marshal(a.SettlementCurrency)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'settlement_currency': %w", err)
+		}
+	}
+
+	if a.Supplier != nil {
+		object["supplier"], err = json.Marshal(a.Supplier)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'supplier': %w", err)
+		}
+	}
+
+	if a.SupplierId != nil {
+		object["supplier_id"], err = json.Marshal(a.SupplierId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'supplier_id': %w", err)
+		}
+	}
+
+	if a.UnitValue != nil {
+		object["unit_value"], err = json.Marshal(a.UnitValue)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'unit_value': %w", err)
 		}
 	}
 

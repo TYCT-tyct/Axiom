@@ -43,7 +43,7 @@ func Operations(ctx context.Context, tx pg.Tx, credential uuid.UUID, state State
 	}
 	byOperation := make(map[uuid.UUID]*Approval, len(approvals))
 	for _, a := range approvals {
-		byOperation[a.OperationID] = approvalOf(a)
+		byOperation[a.OperationsApproval.OperationID] = approvalOf(a.OperationsApproval, a.Decidable)
 	}
 	for i := range ops {
 		ops[i].Approval = byOperation[ops[i].ID]
@@ -63,7 +63,7 @@ func Approvals(ctx context.Context, tx pg.Tx, state ApprovalState, after uuid.UU
 	rows = rows[:min(len(rows), pageSize)]
 	ids := make([]uuid.UUID, len(rows))
 	for i, r := range rows {
-		ids[i] = r.OperationID
+		ids[i] = r.OperationsApproval.OperationID
 	}
 	found, err := q.OperationsByID(ctx, tx, ids)
 	if err != nil {
@@ -75,8 +75,8 @@ func Approvals(ctx context.Context, tx pg.Tx, state ApprovalState, after uuid.UU
 	}
 	ops := make([]Operation, len(rows))
 	for i, r := range rows {
-		ops[i] = operationOf(byID[r.OperationID])
-		ops[i].Approval = approvalOf(r)
+		ops[i] = operationOf(byID[r.OperationsApproval.OperationID])
+		ops[i].Approval = approvalOf(r.OperationsApproval, r.Decidable)
 	}
 	return ops, more, nil
 }
@@ -99,7 +99,7 @@ func withApproval(ctx context.Context, tx pg.Tx, op Operation) (Operation, error
 		return Operation{}, fmt.Errorf("read the approval of operation %s: %w", op.ID, err)
 	}
 	if len(rows) > 0 {
-		op.Approval = approvalOf(rows[0])
+		op.Approval = approvalOf(rows[0].OperationsApproval, rows[0].Decidable)
 	}
 	return op, nil
 }
@@ -112,9 +112,23 @@ func operationOf(r OperationsOperation) Operation {
 	}
 }
 
-func approvalOf(r OperationsApproval) *Approval {
-	return &Approval{
-		ID: r.ID, Operation: r.OperationID, State: ApprovalState(r.State), Summary: r.Summary, Requested: r.RequestedAt,
-		Expires: r.ExpiresAt, Decided: r.DecidedAt, DecidedBy: deref(r.DecidedBy), DecisionReason: deref(r.DecisionReason),
+func approvalOf(r OperationsApproval, decidable bool) *Approval {
+	var reasons []Reason
+	for _, text := range r.Reasons {
+		reasons = append(reasons, Reason(text))
 	}
+	return &Approval{
+		ID: r.ID, Operation: r.OperationID, State: ApprovalState(r.State), Summary: r.Summary, Reasons: reasons, Decidable: decidable,
+		Requested: r.RequestedAt, Expires: r.ExpiresAt, Decided: r.DecidedAt, DecidedBy: deref(r.DecidedBy),
+		DecisionReason: deref(r.DecisionReason),
+	}
+}
+
+// reasonTexts is reasons as the column stores them: none is NULL, which the column's CHECK keeps for an older node.
+func reasonTexts(reasons []Reason) []string {
+	var texts []string
+	for _, r := range reasons {
+		texts = append(texts, string(r))
+	}
+	return texts
 }

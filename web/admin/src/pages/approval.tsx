@@ -1,13 +1,14 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
+import { accountKey } from "@axiom/app";
 import { Button, DataState, Icon, Id, PageHeader, Panel, useFormat } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ApprovalState, CapTable, EnvelopeTable, Minute, Target, useNow } from "../approval-parts";
 import { PriceTable, RawData, RequestFacts, WhyAsked } from "../approval-request";
-import { capOf, envelopeOf, open, outcomeOf } from "../approvals";
+import { capOf, capOver, decidable, envelopeOf, envelopeOver, outcomeOf } from "../approvals";
 import { ChangeDialog } from "../change";
 import { Actions, Code, Facts, PageBody, State } from "../parts";
 import { approvalQuery } from "../queries";
@@ -33,7 +34,7 @@ export default function ApprovalPage() {
             <ApprovalFacts approval={approval} />
             <RequestFacts approval={approval} />
             <PriceTable approval={approval} />
-            <Limits summary={approval.summary} />
+            <Limits approval={approval} />
             <AgentReason text={approval.agent_reason} />
             <RawData approval={approval} />
           </PageBody>
@@ -46,7 +47,14 @@ export default function ApprovalPage() {
 function Decide({ approval }: { approval: Approval }) {
   const { t } = useTranslation();
   const [decision, setDecision] = useState<Decision | null>(null);
-  const now = useNow();
+  const queryClient = useQueryClient();
+  // A decision the server refused (a conflict: it lapsed or was decided elsewhere) leaves the page showing what it read;
+  // closing the dialog reads it again, so the page says what the server says now.
+  const close = () => {
+    setDecision(null);
+    void queryClient.invalidateQueries({ queryKey: approvalQuery(approval.id).queryKey });
+    void queryClient.invalidateQueries({ queryKey: [accountKey, "operations-approvals"] });
+  };
   return (
     <Actions>
       <Button asChild>
@@ -55,7 +63,7 @@ function Decide({ approval }: { approval: Approval }) {
           {t("approvals.back")}
         </Link>
       </Button>
-      {open(approval, now) ? (
+      {decidable(approval) ? (
         <>
           <Button variant="primary" size="md" onClick={() => setDecision("approve")}>
             {t("approvals.approve")}
@@ -65,7 +73,7 @@ function Decide({ approval }: { approval: Approval }) {
           </Button>
         </>
       ) : null}
-      {decision ? <DecisionDialog kind={decision} approval={approval} onClose={() => setDecision(null)} /> : null}
+      {decision ? <DecisionDialog kind={decision} approval={approval} onClose={close} /> : null}
     </Actions>
   );
 }
@@ -114,13 +122,13 @@ function AgentReason({ text }: { text: string }) {
   );
 }
 
-function Limits({ summary }: { summary: unknown }) {
-  const cap = capOf(summary);
-  const envelope = envelopeOf(summary);
+function Limits({ approval }: { approval: Approval }) {
+  const cap = capOf(approval.summary);
+  const envelope = envelopeOf(approval.summary);
   return (
     <>
-      {cap ? <CapTable cap={cap} /> : null}
-      {envelope ? <EnvelopeTable envelope={envelope} /> : null}
+      {cap ? <CapTable cap={cap} over={capOver(approval)} /> : null}
+      {envelope ? <EnvelopeTable envelope={envelope} over={envelopeOver(approval)} /> : null}
     </>
   );
 }

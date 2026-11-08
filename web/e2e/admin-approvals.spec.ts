@@ -38,11 +38,10 @@ test.describe("operations approvals", () => {
     await expect(page.locator("p", { hasText: zhText("approvals.cap.amount") })).toContainText("25.00");
     await expect(caps.getByRole("row").filter({ hasText: zhText("approvals.cap.daily") })).toContainText("500.00");
     await expect(page.getByText(approvalsOf(state)[0]?.agent_reason ?? "")).toBeVisible();
-    // Why it waited: $25 is over the $10 autonomous cap for one operation, and the row says so in words.
-    await expect(page.getByText(words("approvals.why.single"))).toContainText("10.00");
-    await expect(caps.getByRole("row").filter({ hasText: zhText("approvals.cap.single") })).toContainText(
-      zhText("approvals.cap.over"),
-    );
+    // Why it waited, as the server says: a credit grant always asks, and its autonomous caps bind nothing, so no row
+    // is marked over though $25 is more than the $10 for one operation.
+    await expect(page.getByText(zhText("approvals.why.always.gift"))).toBeVisible();
+    await expect(caps.getByText(zhText("approvals.cap.over"))).toHaveCount(0);
     await expect(page.getByText("ops@northwind.example").first()).toBeVisible();
     // The raw data is there, closed.
     const raw = page.getByText(zhText("approvals.raw.title"));
@@ -120,6 +119,37 @@ test.describe("operations approvals", () => {
     await expect(input).toContainText("4.5 USD");
     await expect(input.getByText(zhText("approvals.prices.cost"), { exact: true })).toBeVisible();
     await expect(page.getByRole("table", { name: words("approvals.prices.title") })).toBeHidden();
+  });
+
+  test("a top-up says each autonomous cap the server found it over, and marks those rows", async ({ page }) => {
+    await open(page, `/approvals/${uuid(17, 2)}`);
+    await expect(page.getByText(words("approvals.why.single"))).toContainText("10.00");
+    await expect(page.getByText(words("approvals.why.objectDaily"))).toContainText("20.00");
+    const caps = page.getByRole("table", { name: zhText("approvals.cap.title") });
+    for (const [row, marked] of [
+      ["single", 1],
+      ["daily", 1],
+      ["weekly", 0],
+      ["objectDaily", 1],
+      ["count", 0],
+    ] as const) {
+      await expect(
+        caps
+          .getByRole("row")
+          .filter({ hasText: zhText(`approvals.cap.${row}`) })
+          .getByText(zhText("approvals.cap.over")),
+      ).toHaveCount(marked);
+    }
+  });
+
+  test("an approval an older node asked for without reasons says it cannot tell why", async ({ page }) => {
+    const state = await mockAdmin(page, "usual");
+    signedInAs(state, "mfa");
+    const topUp = approvalsOf(state)[1];
+    if (topUp) topUp.reasons = undefined;
+    await page.goto(`/approvals/${uuid(17, 2)}`);
+    await expect(page.getByText(zhText("approvals.why.unavailable"))).toBeVisible();
+    await expect(page.getByText(zhText("approvals.cap.over"))).toHaveCount(0);
   });
 
   test("an approval decided elsewhere meanwhile is refused with why", async ({ page }) => {

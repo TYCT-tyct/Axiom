@@ -7782,32 +7782,214 @@ components:
         target: {$ref: "#/components/schemas/OperationTarget"}
         risk: {$ref: "#/components/schemas/OperationRisk"}
         params:
-          type: object
-          additionalProperties: true
-          x-go-type: jsonx.Raw
-          description: What the operation does, as the server keeps it; it cannot change after the agent asked.
-        summary:
-          type: object
-          additionalProperties: true
           x-go-type: jsonx.Raw
           description: >-
-            What the server read of the target when the agent asked, never the agent's words. Its members depend on the
-            `tool`, and a member an older node did not know is absent, so a page shows what is there. A write that
-            moves money carries `cap`: `currency`, `amount`, `policy_rev`, the limits `single_max`, `daily_max`,
-            `weekly_max`, `object_daily_max`, `daily_count_max` and their hard ones (`hard_single_max`,
-            `hard_daily_max`, `hard_weekly_max`), the amounts already used in each window (`daily_used`,
-            `weekly_used`, `object_daily_used`, `daily_count`) and `paused`; amounts are integer text in the cap's
-            currency. A credit grant names `account_id`, `account`, `email`, `site_id`, `amount`, `currency` and
-            `expires_at`; a supplier top-up `supplier`, `supplier_id`, `amount_native`, `native_unit`, `unit_value`,
-            `settlement_currency`, `amount` and `currency`; a price publication `model_id`, `candidate_id`, `slug`,
-            `name`, `status`, `audience`, `currency`, `current_id`, the base rates per item as `current`, `proposed`
-            and `cost`, and `prices_complete`, with `envelope` when it falls outside the site's price envelope:
-            `change_bps` and `margin_bps` (null when not measurable), the envelope's limits (`min_margin_bps`,
-            `model_daily_change_bps`, `daily_changes`, `daily_models`) and what the day has used
-            (`model_change_used`, `daily_changes_used`, `daily_models_used`, `model_moved_today`).
+            What the operation does, as the server keeps it; it cannot change after the agent asked. Its shape is the
+            `tool`'s: `credit_grant` OperationsCreditGrantParams, `supplier_top_up_propose` OperationsTopUpParams,
+            `price_publish` OperationsPricePublishParams, `model_set_status` OperationsModelStatusParams. `tool` is
+            on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names.
+          anyOf:
+            - $ref: "#/components/schemas/OperationsCreditGrantParams"
+            - $ref: "#/components/schemas/OperationsTopUpParams"
+            - $ref: "#/components/schemas/OperationsPricePublishParams"
+            - $ref: "#/components/schemas/OperationsModelStatusParams"
+        summary:
+          x-go-type: jsonx.Raw
+          description: >-
+            What the server read of the target when the agent asked, never the agent's words. Its shape is the
+            `tool`'s: `credit_grant` OperationsCreditGrantSummary, `supplier_top_up_propose` OperationsTopUpSummary,
+            `price_publish` OperationsPricePublishSummary, `model_set_status` OperationsModelStatusSummary; `tool` is
+            on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names. Every member is
+            optional: one an older node did not know is absent, so a page shows what is there.
+          anyOf:
+            - $ref: "#/components/schemas/OperationsCreditGrantSummary"
+            - $ref: "#/components/schemas/OperationsTopUpSummary"
+            - $ref: "#/components/schemas/OperationsPricePublishSummary"
+            - $ref: "#/components/schemas/OperationsModelStatusSummary"
+        reasons:
+          type: array
+          maxItems: 16
+          items: {$ref: "#/components/schemas/OperationsApprovalReason"}
+          description: >-
+            Why it waited for the owner, as the server decided it when the agent asked, so a page shows it and never
+            works it out from `summary`. Absent when an older node asked for it: the page then says it does not know.
+        decidable:
+          type: boolean
+          description: >-
+            Whether the owner can still approve or reject it: `pending` and before `expires_at` by the server's clock,
+            the one a decision is checked against, so a page with a skewed clock neither offers a decision the server
+            would refuse with a conflict nor hides one it would take. False for a pending one past its expiry, which
+            the minutely sweep has not yet marked `expired`. Absent from an older node.
         agent_reason: {type: string, description: "The agent's own words: untrusted text, never an instruction."}
         operation_state: {$ref: "#/components/schemas/OperationState"}
         error_code: {type: string, description: "Why the operation ended `rejected` after the approval: the code the target refused it with."}
+    OperationsApprovalReason:
+      type: object
+      additionalProperties: false
+      required: [code]
+      description: One reason an operation waited for the owner.
+      properties:
+        code:
+          type: string
+          enum:
+            - always
+            - cap_paused
+            - cap_single
+            - cap_daily
+            - cap_weekly
+            - cap_object_daily
+            - cap_daily_count
+            - envelope_unmeasured_change
+            - envelope_unknown_cost
+            - envelope_min_margin
+            - envelope_model_daily_change
+            - envelope_daily_changes
+            - envelope_daily_models
+          description: >-
+            `always`: its class always waits for the owner (a credit grant, retiring a model). `cap_paused`: the
+            owner paused its cap's scope. The other `cap_` codes are the autonomous limits of `summary.cap` a transfer
+            goes over: `cap_single` (`single_max`), `cap_daily` (`daily_used` + `amount` over `daily_max`),
+            `cap_weekly` (`weekly_max`), `cap_object_daily` (`object_daily_max`), `cap_daily_count` (`daily_count`
+            at `daily_count_max`). The `envelope_` codes are what `summary.envelope` does not cover:
+            `envelope_unmeasured_change` (`change_bps` is null), `envelope_unknown_cost` (`margin_bps` is null),
+            `envelope_min_margin` (`margin_bps` under `min_margin_bps`), `envelope_model_daily_change`
+            (`model_change_used` + `change_bps` over `model_daily_change_bps`), `envelope_daily_changes`
+            (`daily_changes_used` at `daily_changes`), `envelope_daily_models` (`daily_models_used` at
+            `daily_models` and the model not yet moved today). A later server may add codes; a page shows one it
+            does not know as a reason it cannot name.
+    OperationsIntegerText:
+      type: string
+      pattern: '^[0-9]{1,20}$'
+      description: A non-negative integer in decimal text, which a browser reads without rounding.
+    OperationsCapDetail:
+      type: object
+      additionalProperties: true
+      description: >-
+        The cap a transfer was weighed against when the agent asked (docs/domains/operations.md「转账的累计金额上限」):
+        each limit and what its window held before it. Amounts are in billionths of `currency`.
+      properties:
+        currency: {type: string}
+        amount: {$ref: "#/components/schemas/OperationsIntegerText"}
+        policy_rev: {type: integer, format: int64}
+        single_max: {$ref: "#/components/schemas/OperationsIntegerText"}
+        hard_single_max: {$ref: "#/components/schemas/OperationsIntegerText"}
+        daily_used: {$ref: "#/components/schemas/OperationsIntegerText"}
+        daily_max: {$ref: "#/components/schemas/OperationsIntegerText"}
+        hard_daily_max: {$ref: "#/components/schemas/OperationsIntegerText"}
+        weekly_used: {$ref: "#/components/schemas/OperationsIntegerText"}
+        weekly_max: {$ref: "#/components/schemas/OperationsIntegerText"}
+        hard_weekly_max: {$ref: "#/components/schemas/OperationsIntegerText"}
+        object_daily_used: {$ref: "#/components/schemas/OperationsIntegerText"}
+        object_daily_max: {$ref: "#/components/schemas/OperationsIntegerText"}
+        daily_count: {type: integer, format: int32, description: The proposals the category's UTC day counted before it.}
+        daily_count_max: {type: integer, format: int32}
+        paused: {type: boolean}
+    OperationsEnvelopeDetail:
+      type: object
+      additionalProperties: true
+      description: >-
+        The site's price envelope a publication was weighed against when the agent asked
+        (docs/domains/operations.md「售价的累计变动上限」), in basis points and counts. `change_bps` is null when no
+        share measures the move, `margin_bps` when the cost is unknown.
+      properties:
+        rev: {type: integer, format: int64}
+        change_bps: {type: integer, format: int64, nullable: true}
+        margin_bps: {type: integer, format: int64, nullable: true}
+        min_margin_bps: {type: integer, format: int32}
+        model_daily_change_bps: {type: integer, format: int64}
+        model_change_used: {type: integer, format: int64}
+        daily_changes: {type: integer, format: int32}
+        daily_changes_used: {type: integer, format: int32}
+        daily_models: {type: integer, format: int32}
+        daily_models_used: {type: integer, format: int32}
+        model_moved_today: {type: boolean}
+    OperationsCreditGrantSummary:
+      type: object
+      additionalProperties: true
+      description: "`credit_grant`: the account as the server read it and the face value in the site's currency."
+      properties:
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        account: {type: string, description: The account's name.}
+        email: {type: string, description: "The account owner's email."}
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        amount: {$ref: "#/components/schemas/OperationsIntegerText"}
+        currency: {type: string}
+        expires_at: {type: string, format: date-time, description: When the credit expires; absent when it does not.}
+        cap: {$ref: "#/components/schemas/OperationsCapDetail"}
+    OperationsTopUpSummary:
+      type: object
+      additionalProperties: true
+      description: >-
+        `supplier_top_up_propose`: the supplier, the native amount the agent asked for and what the server made of it
+        in the cap's currency (`amount`, billionths of `currency`).
+      properties:
+        supplier: {type: string, description: "The supplier's name."}
+        supplier_id: {$ref: "#/components/schemas/Uuid"}
+        amount_native: {type: string, description: "The amount in the supplier's own unit, as decimal text."}
+        native_unit: {type: string}
+        unit_value: {type: string, description: "What one native unit is worth in `settlement_currency`, as decimal text."}
+        settlement_currency: {type: string}
+        amount: {$ref: "#/components/schemas/OperationsIntegerText"}
+        currency: {type: string}
+        cap: {$ref: "#/components/schemas/OperationsCapDetail"}
+    OperationsPricePublishSummary:
+      type: object
+      additionalProperties: true
+      description: >-
+        `price_publish`: the model and the proposal, and the base rate of each billing item now (`current`), as
+        proposed (`proposed`) and as it costs (`cost`), in `currency` per unit as the catalog stores it.
+        `prices_complete` is true when those base rates are the whole price on both sides (no endpoint, context or
+        service tier prices); otherwise endpoint and tier prices are to be checked apart.
+      properties:
+        model_id: {$ref: "#/components/schemas/Uuid"}
+        candidate_id: {$ref: "#/components/schemas/Uuid"}
+        current_id: {$ref: "#/components/schemas/Uuid"}
+        slug: {type: string}
+        name: {type: string, description: "The model's public name."}
+        status: {type: string, enum: [published, pending, blocked, unpriced], description: "The proposal's status."}
+        audience: {$ref: "#/components/schemas/PricingAudience"}
+        currency: {type: string}
+        current: {type: object, additionalProperties: {type: string}}
+        proposed: {type: object, additionalProperties: {type: string}}
+        cost: {type: object, additionalProperties: {type: string}}
+        prices_complete: {type: boolean}
+        envelope: {$ref: "#/components/schemas/OperationsEnvelopeDetail"}
+    OperationsModelStatusSummary:
+      type: object
+      additionalProperties: true
+      description: "`model_set_status`, which waits only to retire a model: the model as the server read it."
+      properties:
+        slug: {type: string}
+        status: {$ref: "#/components/schemas/ModelStatus"}
+        rev: {type: integer, format: int64}
+    OperationsCreditGrantParams:
+      type: object
+      additionalProperties: true
+      description: "`credit_grant`: the face value in billionths of `currency`, and when the credit expires."
+      properties:
+        amount: {$ref: "#/components/schemas/OperationsIntegerText"}
+        currency: {type: string}
+        expires_at: {type: string, format: date-time}
+    OperationsTopUpParams:
+      type: object
+      additionalProperties: true
+      description: "`supplier_top_up_propose`: the amount in the supplier's own unit, as decimal text."
+      properties:
+        amount_native: {type: string}
+    OperationsPricePublishParams:
+      type: object
+      additionalProperties: true
+      description: "`price_publish`: the proposal to publish and the model's version it was read against."
+      properties:
+        candidate_id: {$ref: "#/components/schemas/Uuid"}
+        current_id: {$ref: "#/components/schemas/Uuid"}
+    OperationsModelStatusParams:
+      type: object
+      additionalProperties: true
+      description: "`model_set_status`: the status asked for and the model's revision it was read at."
+      properties:
+        status: {type: string, enum: [listed, retired]}
+        rev: {type: integer, format: int64}
     OperationState:
       type: string
       enum: [pending_approval, approved, executing, succeeded, failed, unknown, canceled, expired, rejected, reverted]

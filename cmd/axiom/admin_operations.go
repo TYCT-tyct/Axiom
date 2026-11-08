@@ -313,7 +313,7 @@ func approvalIDOf(s string) (uuid.UUID, error) {
 // approvalBody is an approval with its operation as the admin contract answers it.
 func approvalBody(op operations.Operation) adminapi.OperationsApproval {
 	ap := op.Approval
-	return adminapi.OperationsApproval{
+	body := adminapi.OperationsApproval{
 		Id: ap.ID.String(), State: adminapi.OperationsApprovalState(ap.State), Tier: adminapi.OperationsApprovalTier("human"),
 		RequestedAt: ap.Requested, ExpiresAt: ap.Expires, DecidedAt: ap.Decided,
 		OperationId: op.ID.String(), CredentialId: accounts.AgentID(op.Credential).TypeID(), Tool: op.Tool,
@@ -321,7 +321,16 @@ func approvalBody(op operations.Operation) adminapi.OperationsApproval {
 		Params: jsonx.Raw(op.Params), Summary: jsonx.Raw(ap.Summary), AgentReason: op.Reason,
 		OperationState: adminapi.OperationState(op.State), DecidedBy: optionalText(ap.DecidedBy),
 		DecisionReason: optionalText(ap.DecisionReason), RunId: optionalText(op.Run), ErrorCode: optionalText(op.Error),
+		Decidable: &ap.Decidable,
 	}
+	if ap.Reasons != nil { // nil: an older node asked for it without them
+		reasons := make([]adminapi.OperationsApprovalReason, len(ap.Reasons))
+		for i, r := range ap.Reasons {
+			reasons[i].Code = adminapi.OperationsApprovalReasonCode(r)
+		}
+		body.Reasons = &reasons
+	}
+	return body
 }
 
 // ListOperationsCapPolicies lists every cap on the money the agent moves.
