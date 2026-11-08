@@ -11,11 +11,11 @@
     "@axiom/api": "workspace:*",
     "@axiom/app": "workspace:*",
     "@axiom/ui": "workspace:*",
-    "@tanstack/react-query": "5.104.4",
-    "@tanstack/react-router": "1.170.45",
-    "i18next": "26.5.2",
+    "@tanstack/react-query": "5.105.1",
+    "@tanstack/react-router": "1.170.46",
+    "i18next": "26.6.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "react-i18next": "17.1.0"
+    "react-i18next": "17.1.10"
   }
 }
