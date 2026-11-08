@@ -125,6 +125,20 @@ func (c consoleAPI) DisableRoutingPreset(ctx context.Context, r consoleapi.Disab
 	return consoleapi.DisableRoutingPreset204Response{}, nil
 }
 
+// CheckRoutingRules answers for the keys of the session's account, at its tier: an editor checks a preset's rules
+// against the endpoints the keys bound to it would be routed among.
+func (c consoleAPI) CheckRoutingRules(ctx context.Context, r consoleapi.CheckRoutingRulesRequestObject) (consoleapi.CheckRoutingRulesResponseObject, error) {
+	cl := callOf(ctx)
+	tier, err := c.accounts.AccountTier(ctx, cl.principal)
+	if err != nil {
+		return nil, err
+	}
+	layer := accountLayer(cl)
+	a := routing.Admission{Tier: tier, Account: layer.Account, Site: layer.Site, Currency: cl.site.Currency}
+	body, err := checkRules(c.router, routing.Preset{Scope: routing.ScopeAccount}, r.Body.Rules, a)
+	return consoleapi.CheckRoutingRules200JSONResponse(body), err
+}
+
 func (c consoleAPI) GetRoutingDefault(ctx context.Context, _ consoleapi.GetRoutingDefaultRequestObject) (consoleapi.GetRoutingDefaultResponseObject, error) {
 	body, err := c.readDefault(ctx, nil)
 	return consoleapi.GetRoutingDefault200JSONResponse(body), err
@@ -213,6 +227,33 @@ func rulesProblem(err error) error {
 	return invalidField("/rules", strings.TrimPrefix(err.Error(), routing.ErrRules.Error()+": "))
 }
 
+// checkRules is the answer to a check of rules held as p's layer holds them, for the keys of admission a.
+func checkRules(router *routing.Router, p routing.Preset, rules []byte, a routing.Admission) (consoleapi.RoutingRulesCheck, error) {
+	summary, unmatched, err := router.CheckRules(p, rules, a)
+	if err != nil {
+		return consoleapi.RoutingRulesCheck{}, rulesProblem(err)
+	}
+	out := consoleapi.RoutingRulesCheck{Summary: rulesSummary(summary), Unmatched: make([]consoleapi.RoutingRuleUnmatched, len(unmatched))}
+	for i, u := range unmatched {
+		out.Unmatched[i].Fields = make([]consoleapi.RoutingRuleUnmatchedFields, len(u.Fields))
+		for j, f := range u.Fields {
+			out.Unmatched[i].Fields[j] = consoleapi.RoutingRuleUnmatchedFields(f)
+		}
+		if u.Rule >= 0 {
+			out.Unmatched[i].Index = &u.Rule
+		}
+	}
+	return out, nil
+}
+
+func rulesSummary(s routing.RulesSummary) consoleapi.RoutingRulesSummary {
+	out := consoleapi.RoutingRulesSummary{Sort: consoleapi.RoutingSort(s.Sort), VerifiedOnly: s.VerifiedOnly, Priced: s.Priced, Overrides: s.Overrides}
+	if s.Classes != nil {
+		out.Classes = &s.Classes
+	}
+	return out
+}
+
 func routingPresetBody(p routing.StoredPreset) consoleapi.RoutingPreset {
 	body := consoleapi.RoutingPreset{
 		Id: openapi_types.UUID(p.ID), Scope: consoleapi.RoutingPresetScope(p.Scope.String()), Slug: p.Slug, Name: p.Name,
@@ -225,6 +266,10 @@ func routingPresetBody(p routing.StoredPreset) consoleapi.RoutingPreset {
 	if p.Scope == routing.ScopeWorkspace {
 		ws := accounts.WorkspaceID(p.Workspace).TypeID()
 		body.WorkspaceId = &ws
+	}
+	if s, ok := p.Summary(); ok {
+		summary := rulesSummary(s)
+		body.Summary = &summary
 	}
 	return body
 }

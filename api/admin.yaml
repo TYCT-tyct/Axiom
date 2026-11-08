@@ -1466,6 +1466,39 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/routing-presets/checks:
+    post:
+      operationId: checkLayerRoutingRules
+      tags: [Routing]
+      summary: Check a platform or site preset's rules before saving them
+      description: >-
+        Checks rules as a platform preset's (without `site_id`) or the site's (with it) would be checked on a write, 400
+        naming `/rules` for what a write refuses and 404 for an unknown site, and says what a list shows of them
+        (`summary`) and which rules keep no endpoint in view of the layer's keys now (`unmatched`): the platform's own
+        endpoints for a platform preset, the site's too for a site's, at the prices every account pays. Nothing is
+        stored, and a write still takes rules that keep nothing (docs/domains/routing.md「接口、权限与审计」).
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      x-axiom-safe: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/LayerRoutingRulesCheckRequest"}
+      responses:
+        "200":
+          description: The answer
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoutingRulesCheck"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/routing-presets/{preset_id}:
     parameters:
       - in: path
@@ -8292,10 +8325,142 @@ components:
       type: object
       description: >-
         A preset's rules (docs/domains/routing.md「规则内容」): `default`, the rule every model is held to, and `rules`,
-        up to 100 overrides by model `author` or `model`, each only narrowing what it inherits. A rule may set `sort`
-        (balanced, price, throughput, latency, quality), `classes` and `policies` (allow lists, `["*"]` for all),
-        `min_score`, `min_score_confidence`, `verified_only`, and `max_price` (`prompt`, `completion` per million
-        tokens, `request` per call, decimal strings in the preset's currency). At most 16 KiB.
+        up to 100 overrides by model `author` or `model`, each only narrowing what it inherits; a member an override
+        leaves out is what it inherits. At most 16 KiB. The server checks them whole, and refuses a member it does not
+        know (400 naming `/rules`), so a member a newer node added and an older one cannot read keeps that preset
+        unavailable there rather than half applied; a page that edits rules keeps every member it does not show.
+      properties:
+        default: {$ref: "#/components/schemas/RoutingRule"}
+        rules:
+          type: array
+          maxItems: 100
+          items: {$ref: "#/components/schemas/RoutingRuleOverride"}
+        advanced: {$ref: "#/components/schemas/RoutingAdvanced"}
+    RoutingSort:
+      type: string
+      enum: [balanced, price, throughput, latency, quality]
+      description: >-
+        How a rule orders the endpoints it keeps: `balanced` (price-weighted random, the default rule's when it names
+        none), `price`, `throughput`, `latency`, or `quality` (operations quality: fast and steady, not the product
+        score).
+    RoutingRule:
+      type: object
+      description: The rule every model is held to, or the conditions of an override.
+      properties:
+        sort: {$ref: "#/components/schemas/RoutingSort"}
+        classes:
+          type: array
+          minItems: 1
+          items: {type: string}
+          description: >-
+            The source classes kept, by slug (the classes `listRoutingSourceClasses` names), or `["*"]` for every class
+            now and later. A slug the node does not know matches no endpoint.
+        policies:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: ["*", no_retention, retained, may_train]
+          description: The data policies kept, or `["*"]` for every one.
+        min_score: {type: number, minimum: 0, maximum: 100, description: "The product score an endpoint needs (official direct = 100); an endpoint with none has 0."}
+        min_score_confidence: {type: number, minimum: 0, maximum: 1, description: "The confidence of that score an endpoint needs."}
+        verified_only: {type: boolean, description: "Only endpoints verified as the model they claim; an override cannot turn it off."}
+        max_price: {$ref: "#/components/schemas/RoutingPriceLimit"}
+    RoutingRuleOverride:
+      description: >-
+        A rule for one model author or one model, by its catalog slug: exactly one of `author` and `model`, each named
+        at most once in a preset. A model's rule narrows its author's rule when there is one, the default otherwise.
+      allOf:
+        - $ref: "#/components/schemas/RoutingRule"
+        - type: object
+          properties:
+            author: {type: string, description: "A catalog author slug, such as `anthropic`."}
+            model: {type: string, description: "A catalog model slug, such as `anthropic/claude-opus-4.1`."}
+    RoutingPriceLimit:
+      type: object
+      description: >-
+        The highest unit price an endpoint may sell at, per item, in the preset's currency, as decimal strings, never JSON
+        numbers: `prompt` and `completion` per million tokens (0 to 10^9, at most 9 decimals), `request` per call (0 to
+        1000, at most 15 decimals). An item left out is not limited; 0 keeps only endpoints that charge nothing for it.
+      properties:
+        prompt: {type: string, pattern: '^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]{1,3})?$'}
+        completion: {type: string, pattern: '^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]{1,3})?$'}
+        request: {type: string, pattern: '^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]{1,3})?$'}
+    RoutingAdvanced:
+      type: object
+      description: >-
+        The platform's run-time settings, which only a platform preset may hold: `order`, supplier group codenames tried
+        first (at most 20); `no_fallbacks`, only those groups (needs an order); `max_attempts` (0 to 4, 0 the router's
+        default); `sticky_ttl` (0 to 86400 seconds) and `attempt_window` (0 to 600 seconds), 0 the router's defaults;
+        `min_quality` and `min_confidence`, the operations quality floor (0 to 1).
+      properties:
+        order:
+          type: array
+          maxItems: 20
+          items: {type: string}
+        no_fallbacks: {type: boolean}
+        max_attempts: {type: integer, minimum: 0, maximum: 4}
+        sticky_ttl: {type: integer, format: int64, minimum: 0, maximum: 86400}
+        attempt_window: {type: integer, format: int64, minimum: 0, maximum: 600}
+        min_quality: {type: number, minimum: 0, maximum: 1}
+        min_confidence: {type: number, minimum: 0, maximum: 1}
+    RoutingRulesSummary:
+      type: object
+      required: [sort, verified_only, priced, overrides]
+      description: >-
+        What a list shows of a preset's rules, worked out by the server so every page says the same: the default rule's
+        `sort` (`balanced` when it names none) and `classes` (absent when it keeps every class), whether it keeps only
+        verified endpoints, whether any rule limits a price, and how many overrides follow.
+      properties:
+        sort: {$ref: "#/components/schemas/RoutingSort"}
+        classes:
+          type: array
+          items: {type: string}
+        verified_only: {type: boolean}
+        priced: {type: boolean}
+        overrides: {type: integer, minimum: 0, maximum: 100}
+    RoutingRuleUnmatched:
+      type: object
+      required: [fields]
+      description: >-
+        A rule that keeps none of the endpoints in view, judged as a model list judges a key's endpoints: hard
+        conditions only, the price at the standard tier and the shortest prompt, nothing transient such as load or a
+        tripped breaker. An override is judged against its author's or model's endpoints, and one whose author or model
+        has none in view is not judged.
+      properties:
+        index:
+          type: integer
+          minimum: 0
+          description: The override's index in `rules`; absent for the default rule.
+        fields:
+          type: array
+          description: >-
+            The conditions the rule itself writes that alone keep no endpoint, by their names in the rule
+            (`max_price.prompt` for an item of its price limit). Empty when only the conditions together keep none, or
+            when the rule keeps none because of what it inherits, which the rule above is named for.
+          items:
+            type: string
+            enum: [classes, policies, min_score, min_score_confidence, verified_only, max_price.prompt, max_price.completion, max_price.request]
+    RoutingRulesCheck:
+      type: object
+      required: [summary, unmatched]
+      properties:
+        summary: {$ref: "#/components/schemas/RoutingRulesSummary"}
+        unmatched:
+          type: array
+          maxItems: 101
+          items: {$ref: "#/components/schemas/RoutingRuleUnmatched"}
+          description: The rules that keep no endpoint, the default first, then the overrides in order; empty when every rule keeps one.
+    LayerRoutingRulesCheckRequest:
+      type: object
+      additionalProperties: false
+      required: [rules]
+      properties:
+        rules: {$ref: "#/components/schemas/RoutingRules"}
+        site_id:
+          allOf: [{$ref: "#/components/schemas/SiteId"}]
+          description: Checks them as the site's preset; absent, as a platform preset.
+        currency: {type: string, pattern: '^[A-Z]{3}$', description: "A platform preset's currency, as on creation; a site's preset names none."}
     RoutingPresetScope:
       type: string
       enum: [platform, site, account, workspace]
@@ -8317,6 +8482,9 @@ components:
         rules: {$ref: "#/components/schemas/RoutingRules"}
         disabled: {type: boolean}
         keys: {type: integer, format: int64, minimum: 0, description: "The keys bound to the preset that are not deleted: the caller's account's in the console, every account's in the admin API. Given when a preset is listed or read, never for the system preset, which every unbound key also follows; absent from nodes that do not count them."}
+        summary:
+          allOf: [{$ref: "#/components/schemas/RoutingRulesSummary"}]
+          description: What a list shows of the rules; absent from older nodes and for rules this node cannot read, which a page then says it does not know.
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
     RoutingPresetList:

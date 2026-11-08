@@ -16,6 +16,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/webui"
 	"axiom/internal/quality"
+	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 	"axiom/internal/websearch"
 )
@@ -38,6 +39,8 @@ type consoleAPI struct {
 	suppliers *suppliers.Admin
 	// classes is the node's source classes, which the routing preset pages offer.
 	classes *quality.Monitor
+	// router is the node's call path routing, whose snapshot a check of a preset's rules is judged against.
+	router *routing.Router
 }
 
 // GetVersion tells the console which build answers, uncached, so a page left open across a deployment notices it.
