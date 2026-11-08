@@ -28,7 +28,17 @@ func (o operationsAPI) EndpointSetEnabled(ctx context.Context, r operationsapi.E
 		Params: map[string]any{"supplier_id": r.SupplierId, "enabled": b.Enabled}, Risk: operations.RiskRoutine, Reason: b.Reason,
 		Run: runOf(r.Params.XAxiomRunID),
 	}
-	op, replayed, err := o.runWrite(ctx, b.DryRun, func(tx pg.Tx) (operations.Operation, bool, error) {
+	op, replayed, err := o.runRoutine(ctx, p, b.DryRun)
+	if err != nil {
+		return nil, err
+	}
+	return operationsapi.EndpointSetEnabled200JSONResponse{Body: operationBody(op), Headers: operationsapi.EndpointSetEnabled200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// runRoutine proposes p, a routine write, with the credential held and runs it in the same transaction as the agent's;
+// a retry under its key finds the operation as it is now.
+func (o operationsAPI) runRoutine(ctx context.Context, p operations.Proposal, dryRun *bool) (operations.Operation, bool, error) {
+	return o.runWrite(ctx, dryRun, func(tx pg.Tx) (operations.Operation, bool, error) {
 		op, replayed, err := o.propose(ctx, tx, p)
 		if err != nil || replayed {
 			return op, replayed, err
@@ -40,10 +50,6 @@ func (o operationsAPI) EndpointSetEnabled(ctx context.Context, r operationsapi.E
 		op, err = operations.Settle(ctx, tx, op, result, "")
 		return op, false, err
 	})
-	if err != nil {
-		return nil, err
-	}
-	return operationsapi.EndpointSetEnabled200JSONResponse{Body: operationBody(op), Headers: operationsapi.EndpointSetEnabled200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
 // runEndpointEnabled switches the endpoint of op as the agent's, and answers the switch as it now is.

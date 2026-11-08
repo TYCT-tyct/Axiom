@@ -53,7 +53,7 @@ func alertCycle(t *testing.T, db *pg.DB, now time.Time) []AlertEvent {
 			return err
 		}
 		var err error
-		events, err = ListAlertEvents(t.Context(), tx, uuid.Nil())
+		events, err = ListAlertEvents(t.Context(), tx, AlertEventPage{Limit: 100})
 		return err
 	})
 	return events
@@ -217,7 +217,7 @@ func TestAlertConfigurationAndScope(t *testing.T) {
 		return err
 	})
 	if err := db.ReadTx(t.Context(), accountScope(uuid.NewV7()), func(tx pg.Tx) error {
-		events, err := ListAlertEvents(t.Context(), tx, uuid.Nil())
+		events, err := ListAlertEvents(t.Context(), tx, AlertEventPage{Limit: 100})
 		if len(events) != 0 {
 			t.Fatal("tenant read platform events")
 		}

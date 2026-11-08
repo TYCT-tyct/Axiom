@@ -10,6 +10,13 @@ import (
 	"uuid"
 )
 
+type OperationsAgentLimit struct {
+	Singleton     bool
+	AlertsPerHour int32
+	Rev           int64
+	UpdatedAt     time.Time
+}
+
 type OperationsApproval struct {
 	ID             uuid.UUID
 	OperationID    uuid.UUID
