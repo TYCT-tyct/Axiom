@@ -114,11 +114,7 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 	}}
 	// The headline is each item's first base-band rate: standard's input and request, and priority's output because
 	// standard does not price it; an explicit band above 0 is not the base band.
-	rate := func(tier consoleapi.ModelServiceTier, item consoleapi.ModelItem, unit consoleapi.ModelUnit, amount string, above *int64, headline bool, shown string) consoleapi.ModelRate {
-		per := consoleapi.N1e06
-		if unit != consoleapi.ModelUnitToken {
-			per = consoleapi.N1
-		}
+	rate := func(tier consoleapi.ModelServiceTier, item consoleapi.ModelItem, unit consoleapi.ModelUnit, amount string, above *int64, headline bool, shown string, per consoleapi.ModelRateDisplayPer) consoleapi.ModelRate {
 		return consoleapi.ModelRate{
 			ServiceTier: tier, Item: item, Unit: unit, Amount: amount, Above: above,
 			Headline: &headline, DisplayAmount: &shown, DisplayPer: &per,
@@ -128,12 +124,12 @@ func TestPublicModelsFilterAndProject(t *testing.T) {
 		Currency: "XXX",
 		Basis:    []consoleapi.ModelItem{},
 		Rates: []consoleapi.ModelRate{
-			rate(consoleapi.Standard, consoleapi.ModelItemInput, consoleapi.ModelUnitToken, "0.000001", nil, true, "1"),
-			rate(consoleapi.Standard, consoleapi.ModelItemRequest, consoleapi.ModelUnitUse, "0.01", nil, true, "0.01"),
-			rate(consoleapi.Standard, consoleapi.ModelItemInput, consoleapi.ModelUnitToken, "0.000003", &zero, false, "3"),
-			rate(consoleapi.Priority, consoleapi.ModelItemInput, consoleapi.ModelUnitToken, "0.000005", nil, false, "5"),
-			rate(consoleapi.Priority, consoleapi.ModelItemOutput, consoleapi.ModelUnitToken, "0.000004", nil, true, "4"),
-			rate(consoleapi.Priority, consoleapi.ModelItemOutput, consoleapi.ModelUnitToken, "0.000002", &above, false, "2"),
+			rate(consoleapi.Standard, consoleapi.ModelItemInput, consoleapi.ModelUnitToken, "0.000001", nil, true, "1", consoleapi.N1e06),
+			rate(consoleapi.Standard, consoleapi.ModelItemRequest, consoleapi.ModelUnitUse, "0.01", nil, true, "0.01", consoleapi.N1),
+			rate(consoleapi.Standard, consoleapi.ModelItemInput, consoleapi.ModelUnitToken, "0.000003", &zero, false, "3", consoleapi.N1e06),
+			rate(consoleapi.Priority, consoleapi.ModelItemInput, consoleapi.ModelUnitToken, "0.000005", nil, false, "5", consoleapi.N1e06),
+			rate(consoleapi.Priority, consoleapi.ModelItemOutput, consoleapi.ModelUnitToken, "0.000004", nil, true, "4", consoleapi.N1e06),
+			rate(consoleapi.Priority, consoleapi.ModelItemOutput, consoleapi.ModelUnitToken, "0.000002", &above, false, "2", consoleapi.N1e06),
 		},
 	}
 	want := consoleapi.PublicModel{
