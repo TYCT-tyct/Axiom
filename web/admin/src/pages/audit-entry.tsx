@@ -48,7 +48,7 @@ export default function AuditEntry() {
                 {data.detail === undefined ? (
                   <p className="text-t3">{t("audit.detailUnavailable")}</p>
                 ) : (
-                  <Json value={data.detail} />
+                  <Json value={data.detail} label={t("audit.detail")} />
                 )}
               </div>
             </Panel>

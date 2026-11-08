@@ -95,7 +95,11 @@ function Route({ route }: { route: Trace["route"] }) {
   return (
     <Panel title={t("calls.routeTitle")}>
       <div className="p-4">
-        {route === undefined ? <p className="text-t3">{t("calls.unavailable")}</p> : <Json value={route} />}
+        {route === undefined ? (
+          <p className="text-t3">{t("calls.unavailable")}</p>
+        ) : (
+          <Json value={route} label={t("calls.routeTitle")} />
+        )}
       </div>
     </Panel>
   );
