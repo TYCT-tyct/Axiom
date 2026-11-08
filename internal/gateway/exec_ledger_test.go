@@ -169,12 +169,25 @@ func ledgerRigNoCacheWriter(t *testing.T) *rig { return ledgerRigWith(t, true) }
 
 func ledgerRigWith(t *testing.T, noCacheWriter bool) *rig {
 	return newRig(t, func(o *rigOptions) {
-		o.segments = billing.Segments{Output: 100, Overshoot: time.Second}
-		o.endpoints = func(_ string, e *routing.Endpoint) {
-			e.OutputSpeed, e.Target = 100, protocol.Target{Model: "up"}
-		}
+		ledgerSegments(o)
+		o.config = func(c *Config) { c.ExtendWait = ledgerExtendWait }
 		o.noCacheWriter = noCacheWriter
 	})
+}
+
+// ledgerExtendWait is how long a ledger rig waits for an extension. Production's second is not enough for a transaction
+// on a busy machine, as newRig says of admissions and key lookups: in main run 42491552063 an extension of a rig took
+// longer and cut its stream short with billing_unavailable. The overshoot allowance must cover the wait (README I1).
+const ledgerExtendWait = 25 * time.Second
+
+// ledgerSegments reserves by segments of 100 output tokens with 100 more set aside as the overshoot allowance: 4 tokens
+// a second over ledgerExtendWait. A slow model rather than a large allowance keeps every amount what it would be at
+// production's wait, and the allowance well under the 1000-token output limit, so the calls still segment.
+func ledgerSegments(o *rigOptions) {
+	o.segments = billing.Segments{Output: 100, Overshoot: ledgerExtendWait}
+	o.endpoints = func(_ string, e *routing.Endpoint) {
+		e.OutputSpeed, e.Target = 4, protocol.Target{Model: "up"}
+	}
 }
 
 // stream is a Messages request that streams.

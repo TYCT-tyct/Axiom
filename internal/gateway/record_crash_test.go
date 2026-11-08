@@ -17,7 +17,6 @@ import (
 	"axiom/internal/observability"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
-	"axiom/internal/routing"
 )
 
 // TestACallSettledInTheBackgroundKeepsItsRecordThroughACrash: a call whose settlement misses its response is recorded,
@@ -177,11 +176,10 @@ func newDyingNode(t *testing.T) *dyingNode {
 		strayWritten: make(chan struct{}), strayCommit: make(chan struct{}), strayDone: make(chan error, 1),
 	}
 	n.r = newRig(t, func(o *rigOptions) {
-		o.segments = billing.Segments{Output: 100, Overshoot: time.Second}
-		o.endpoints = func(_ string, e *routing.Endpoint) {
-			e.OutputSpeed, e.Target = 100, protocol.Target{Model: "up"}
+		ledgerSegments(o)
+		o.config = func(c *Config) {
+			c.ExtendWait, c.SettleRetry, c.SettleBackground = ledgerExtendWait, 200*time.Millisecond, 10*time.Minute
 		}
-		o.config = func(c *Config) { c.SettleRetry, c.SettleBackground = 200*time.Millisecond, 10*time.Minute }
 	})
 	n.up = withCosts(n.r, strayLedger{n: n, flakyLedger: &flakyLedger{
 		Billing: n.r.billing,
