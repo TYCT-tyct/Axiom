@@ -70,8 +70,8 @@ func (db opsDB) seedYesterday(t *testing.T) {
 	}
 	superuser(t, db, `UPDATE operations.operations SET created_at = '2026-11-08 09:00+00' WHERE created_at > '2026-11-08';
 		INSERT INTO operations.operation_log (id, credential_id, tool, reason, input, status, error_code,
-		request_id, started_at, ended_at) SELECT uuidv7(d.at - now()), uuidv7(), 'model_get', '', '{}', d.status, d.code, 'r',
-		d.at, d.at FROM (VALUES ('2026-11-07 10:00+00'::timestamptz, 403, 'forbidden'), ('2026-11-07 11:00+00', 403, 'forbidden'),
+		request_id, started_at, ended_at, logged_at) SELECT uuidv7(d.at - now()), uuidv7(), 'model_get', '', '{}', d.status,
+		d.code, 'r', d.at, d.at, d.at FROM (VALUES ('2026-11-07 10:00+00'::timestamptz, 403, 'forbidden'), ('2026-11-07 11:00+00', 403, 'forbidden'),
 		('2026-11-07 12:00+00', 400, NULL), ('2026-11-07 13:00+00', 200, NULL), ('2026-11-07 14:00+00', 500, 'internal'),
 		('2026-11-08 10:00+00', 403, 'forbidden'), ('2026-11-06 23:59:59+00', 403, 'forbidden')) d (at, status, code);
 		INSERT INTO operations.cap_policies (category, currency, single_max, daily_max, weekly_max, object_daily_max,
@@ -118,6 +118,75 @@ func TestAuditDigest(t *testing.T) {
 	db.expect(t, "the signal", `SELECT string_agg((body->>'key') || ' ' || (body->>'severity') || ' ' || (body->'fields'->>'operations') || ' ' ||
 		(body->'fields'->>'refused') || ' ' || (body->'fields'->>'money_proposals'), ',')
 		FROM platform.alert_signals WHERE body->>'kind' = 'operations.audit_digest'`, day(-1)+" info 1 3 2")
+}
+
+// TestAuditDigestDatesCallsByTheDatabase: a call counts in the day the database logged it, the clock the digest's
+// boundary is on, not the day of its ID: a node whose clock runs 90 seconds behind logs a refusal at 00:01:10 with an
+// ID of 23:59:40, after yesterday's digest was made; it is in today's, not lost.
+func TestAuditDigestDatesCallsByTheDatabase(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		id, err := operations.RecordCall(t.Context(), tx, operations.LoggedCall{
+			Credential: uuid.NewV7(), Tool: "whoami", Status: 200, RequestID: "r", Started: noon, Ended: noon,
+		})
+		if err != nil {
+			return err
+		}
+		var now bool
+		if err := tx.QueryRow(t.Context(), `SELECT logged_at = now() FROM operations.operation_log WHERE id = $1`, id).Scan(&now); err != nil || !now {
+			t.Errorf("a recorded call is not dated by its transaction's start: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if db.digestAt(t, noon, settled) != 1 {
+		t.Fatal("yesterday's digest was not made")
+	}
+	superuser(t, db, `INSERT INTO operations.operation_log (id, credential_id, tool, reason, input, status, error_code,
+		request_id, started_at, ended_at, logged_at) SELECT uuidv7('2026-11-07 23:59:40+00' - now()), uuidv7(), 'model_get',
+		'', '{}', 403, 'forbidden', 'r', '2026-11-07 23:59:39+00', '2026-11-07 23:59:40+00', '2026-11-08 00:01:10+00'`)
+	if db.digestAt(t, noon.Add(24*time.Hour), settled.Add(24*time.Hour)) != 1 {
+		t.Fatal("today's digest was not made")
+	}
+	digests, _ := db.digests(t, nil, 2)
+	refused := map[string][]operations.DigestRefusal{}
+	for _, d := range digests {
+		refused[d.Day] = d.Refused
+	}
+	if len(refused[day(-1)]) != 0 || len(refused[day(0)]) != 1 || refused[day(0)][0] != (operations.DigestRefusal{Code: "forbidden", Count: 1}) {
+		t.Errorf("refused by day %+v", refused)
+	}
+}
+
+// TestAuditDigestCheckedAt: while a round of the check of the whole chain runs, the digest names when the one before
+// it finished.
+func TestAuditDigestCheckedAt(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.backdated(t, "5 minutes")
+	db.chain(t, time.Minute)
+	if db.verifyChain(t) {
+		t.Fatal("halted")
+	}
+	finished := db.text(t, `SELECT finished_at::text FROM operations.audit_chain_checks`)
+	superuser(t, db, `UPDATE operations.audit_chain_checks SET started_at = now() - interval '25 hours'`)
+	if _, err := operations.VerifyAuditChainBy(t.Context(), db.DB, platformScope, 1); err != nil { // starts the next round alone
+		t.Fatal(err)
+	}
+	db.expect(t, "the round in progress", `SELECT (finished_at IS NULL)::text FROM operations.audit_chain_checks`, "true")
+	if db.digestAt(t, noon, settled) != 1 {
+		t.Fatal("no digest made")
+	}
+	digests, _ := db.digests(t, nil, 1)
+	want, err := time.Parse("2006-01-02 15:04:05.999999-07", finished)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := digests[0].Chain.CheckedAt; c == nil || !c.Equal(want) {
+		t.Errorf("checked at %v, want %s", c, finished)
+	}
 }
 
 // TestAuditDigestPages: the digests read back newest first, a page at a time from the day the last page ended on.

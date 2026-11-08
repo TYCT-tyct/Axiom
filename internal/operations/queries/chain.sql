@@ -42,8 +42,10 @@ SELECT target_seq, next_seq,
 FROM operations.audit_chain_checks;
 
 -- name: StartAuditChainCheck :exec
+-- A round starts only once the one before finished, whose finish it keeps as the last.
 INSERT INTO operations.audit_chain_checks (target_seq, next_seq) VALUES (@target_seq, 1)
-ON CONFLICT (singleton) DO UPDATE SET target_seq = EXCLUDED.target_seq, next_seq = 1, started_at = now(), finished_at = NULL;
+ON CONFLICT (singleton) DO UPDATE SET target_seq = EXCLUDED.target_seq, next_seq = 1, started_at = now(), finished_at = NULL,
+    last_finished_at = audit_chain_checks.finished_at;
 
 -- name: AdvanceAuditChainCheck :exec
 UPDATE operations.audit_chain_checks SET next_seq = @next_seq,

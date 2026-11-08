@@ -16,15 +16,10 @@ WHERE requested_at >= @day_start AND requested_at < @day_end
 GROUP BY state ORDER BY state;
 
 -- name: AuditDayRefusals :many
--- The calls of [@day_start, @day_end) the guards or the target refused (4xx), by error code. The log's IDs are UUIDv7
--- made when the call was logged, so the day is a range of the primary key: the least UUIDv7 of a moment is its
--- milliseconds as 12 hex digits followed by zeros, at or below every ID made from then on.
-WITH b AS (
-    SELECT (lpad(to_hex((extract(epoch FROM @day_start::timestamptz) * 1000)::bigint), 12, '0') || repeat('0', 20))::uuid AS first_id,
-        (lpad(to_hex((extract(epoch FROM @day_end::timestamptz) * 1000)::bigint), 12, '0') || repeat('0', 20))::uuid AS end_id
-)
-SELECT coalesce(l.error_code, '')::text AS code, count(*)::integer AS count FROM operations.operation_log l, b
-WHERE l.id >= b.first_id AND l.id < b.end_id AND l.status BETWEEN 400 AND 499
+-- The calls logged in [@day_start, @day_end) that the guards or the target refused (4xx), by error code. The day is
+-- logged_at, the logging transaction's start on the database's clock, the clock the digest's boundary is read on.
+SELECT coalesce(error_code, '')::text AS code, count(*)::integer AS count FROM operations.operation_log
+WHERE logged_at >= @day_start AND logged_at < @day_end AND status BETWEEN 400 AND 499
 GROUP BY 1 ORDER BY 1;
 
 -- name: AuditDayMoney :many
@@ -38,8 +33,9 @@ LEFT JOIN operations.cap_counters d ON d.category = p.category AND d.site_id IS 
 ORDER BY p.category, p.site_id NULLS FIRST;
 
 -- name: AuditChainState :one
--- How many faults have stopped the chain and when the last check of the whole chain finished.
-SELECT f.n AS faults, k.finished_at AS checked_at
+-- How many faults have stopped the chain and when a check of the whole chain last finished: the round in progress has
+-- not, so it is the one before.
+SELECT f.n AS faults, coalesce(k.finished_at, k.last_finished_at) AS checked_at
 FROM (SELECT count(*)::bigint AS n FROM operations.audit_chain_faults) f
 LEFT JOIN operations.audit_chain_checks k ON true;
 

@@ -13,7 +13,7 @@ import (
 )
 
 const auditChainState = `-- name: AuditChainState :one
-SELECT f.n AS faults, k.finished_at AS checked_at
+SELECT f.n AS faults, coalesce(k.finished_at, k.last_finished_at) AS checked_at
 FROM (SELECT count(*)::bigint AS n FROM operations.audit_chain_faults) f
 LEFT JOIN operations.audit_chain_checks k ON true
 `
@@ -23,7 +23,8 @@ type AuditChainStateRow struct {
 	CheckedAt *time.Time
 }
 
-// How many faults have stopped the chain and when the last check of the whole chain finished.
+// How many faults have stopped the chain and when a check of the whole chain last finished: the round in progress has
+// not, so it is the one before.
 func (q *Queries) AuditChainState(ctx context.Context, db DBTX) (AuditChainStateRow, error) {
 	row := db.QueryRow(ctx, auditChainState)
 	var i AuditChainStateRow
@@ -160,12 +161,8 @@ func (q *Queries) AuditDayOperations(ctx context.Context, db DBTX, arg AuditDayO
 }
 
 const auditDayRefusals = `-- name: AuditDayRefusals :many
-WITH b AS (
-    SELECT (lpad(to_hex((extract(epoch FROM $1::timestamptz) * 1000)::bigint), 12, '0') || repeat('0', 20))::uuid AS first_id,
-        (lpad(to_hex((extract(epoch FROM $2::timestamptz) * 1000)::bigint), 12, '0') || repeat('0', 20))::uuid AS end_id
-)
-SELECT coalesce(l.error_code, '')::text AS code, count(*)::integer AS count FROM operations.operation_log l, b
-WHERE l.id >= b.first_id AND l.id < b.end_id AND l.status BETWEEN 400 AND 499
+SELECT coalesce(error_code, '')::text AS code, count(*)::integer AS count FROM operations.operation_log
+WHERE logged_at >= $1 AND logged_at < $2 AND status BETWEEN 400 AND 499
 GROUP BY 1 ORDER BY 1
 `
 
@@ -179,9 +176,8 @@ type AuditDayRefusalsRow struct {
 	Count int32
 }
 
-// The calls of [@day_start, @day_end) the guards or the target refused (4xx), by error code. The log's IDs are UUIDv7
-// made when the call was logged, so the day is a range of the primary key: the least UUIDv7 of a moment is its
-// milliseconds as 12 hex digits followed by zeros, at or below every ID made from then on.
+// The calls logged in [@day_start, @day_end) that the guards or the target refused (4xx), by error code. The day is
+// logged_at, the logging transaction's start on the database's clock, the clock the digest's boundary is read on.
 func (q *Queries) AuditDayRefusals(ctx context.Context, db DBTX, arg AuditDayRefusalsParams) ([]AuditDayRefusalsRow, error) {
 	rows, err := db.Query(ctx, auditDayRefusals, arg.DayStart, arg.DayEnd)
 	if err != nil {
