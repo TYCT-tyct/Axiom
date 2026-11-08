@@ -97,8 +97,10 @@ type callNode struct {
 	cache  *gateway.ResponseCache // the response cache's writer and expiry loop, started with the other loops
 	// health is the node's endpoint evaluation; the console reads the source classes it routes by from it.
 	health *quality.Monitor
-	// router is the path's routing, which the console and the admin check a preset's rules against.
+	// router is the path's routing, which the console and the admin check a preset's rules against; routes rebuilds its
+	// snapshot, every period and whenever the admin commits a change it is built from.
 	router *routing.Router
+	routes *gateway.RouteDeps
 }
 
 // startCallPath builds everything a model call needs from admission to the ledger, starts the loops that keep its
@@ -157,6 +159,7 @@ func startCallPath(ctx context.Context, d callDeps) (callNode, error) {
 		return callNode{}, err
 	}
 	routes.Publish(snap, list, count)
+	n.routes = routes
 	if !count.Routable() {
 		d.logger.Warn("the node is not ready: none of the endpoints suppliers offer can be routed, so every model call "+
 			"answers 404 no_endpoint until each model has a spec and a sale price",

@@ -16,6 +16,7 @@ import (
 	"axiom/internal/platform/operationsapi"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/quality"
 )
 
 // priceEnvelope is the main site's envelope in the tests: any margin, a model's prices moved by 25% a day, 5
@@ -309,4 +310,50 @@ func TestBasePrices(t *testing.T) {
 			t.Errorf("%s: %v", c.name, prices)
 		}
 	}
+}
+
+// TestPricePublishRoutesAtOnce: every way a sale price is published rebuilds the publishing node's routing once it has
+// committed, so the node's next call is admitted at the new version, not at the one the periodic rebuild last read.
+// The call path here has no periodic rebuild at all: only the publication's rebuild can bring the new version.
+func TestPricePublishRoutesAtOnce(t *testing.T) {
+	t.Parallel()
+	f := newPriceFixture(t)
+	model := f.w.models[pricedModel].String()
+	n, _, _, _, routes := f.w.healthCallPath(&testClock{now: time.Now()}, quality.Observe)
+	f.adminFixture = f.routing(routes)
+	expectAdmin(t, "the envelope", f.setEnvelope(priceEnvelope, "0"), http.StatusOK, "")
+	admitsAtCurrent := func(how string) {
+		t.Helper()
+		if status := f.w.callControlled(n, messagesCall); status != http.StatusOK {
+			t.Fatalf("%s: the call answered %d", how, status)
+		}
+		current := f.publication(model).CurrentId
+		if current == nil {
+			t.Fatalf("%s: no version is current", how)
+		}
+		if frozen := f.text(`SELECT price_versions[1]::text FROM billing.reservations ORDER BY created_at DESC LIMIT 1`); frozen != *current {
+			t.Errorf("%s: the call was admitted at %s, the current version is %s", how, frozen, *current)
+		}
+	}
+	admitsAtCurrent("before any publication")
+
+	f.reprice("1.8") // 20%, inside the envelope's 25%: the agent publishes it itself
+	if rec := f.publish(model, f.waiting(model), newKey(), ""); rec.Code != http.StatusOK {
+		t.Fatalf("the agent's publication: %d %s", rec.Code, rec.Body)
+	}
+	admitsAtCurrent("after the agent published")
+
+	f.reprice("2.16") // another 20%, past the model's 25% a day: the owner approves it
+	rec := f.publish(model, f.waiting(model), newKey(), "")
+	expectAdmin(t, "a second move", rec, http.StatusAccepted, "")
+	if approved := f.approve(agentOperation(t, rec).Approval.ApprovalId); approved.OperationState != adminapi.OperationStateSucceeded {
+		t.Fatalf("the approval: %+v", approved)
+	}
+	admitsAtCurrent("after the owner approved")
+
+	f.reprice("2.6")
+	p := f.waiting(model)
+	body := `{"candidate_id":"` + *p.CandidateId + `","current_id":"` + *p.CurrentId + `","confirmed":true,"override_floor":false,"reason":"the rule moved"}`
+	expectAdmin(t, "the administrator's publication", f.change(f.s, http.MethodPost, "/pricing/publications/"+model, body, newKey()), http.StatusOK, "")
+	admitsAtCurrent("after an administrator published")
 }

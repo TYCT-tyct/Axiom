@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 	"uuid"
 
@@ -60,7 +61,8 @@ type RouteDeps struct {
 	// Quality is what real traffic measured of each endpoint, the same Monitor the executor reports attempts to.
 	Quality *quality.Monitor
 
-	told map[catalog.ModelID]string // why each model left out was last reported, so a standing reason is told once
+	building sync.Mutex                 // one Rebuild at a time: Build writes told, and Run and a write's Rebuild may meet
+	told     map[catalog.ModelID]string // why each model left out was last reported, so a standing reason is told once
 }
 
 // Count is what one build made of the endpoints suppliers offer: how many are in the snapshot, and how many there were
@@ -240,12 +242,8 @@ func (d *RouteDeps) Run(ctx context.Context) {
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
-		if s, l, n, err := d.Build(ctx); err != nil {
-			if ctx.Err() == nil {
-				d.Logger.Error("gateway: the routing snapshot was not rebuilt; the last one stands until it is stale", "err", err)
-			}
-		} else {
-			d.Publish(s, l, n)
+		if err := d.Rebuild(ctx); err != nil && ctx.Err() == nil {
+			d.Logger.Error("gateway: the routing snapshot was not rebuilt; the last one stands until it is stale", "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -253,6 +251,21 @@ func (d *RouteDeps) Run(ctx context.Context) {
 		case <-tick.C:
 		}
 	}
+}
+
+// Rebuild builds a snapshot and publishes it with its model list. Run calls it every Every; the node that committed a
+// change routing reads (a sale price, a model's status) calls it once the change is committed, so its next call is
+// admitted at the new state rather than at the one Run last read (docs/architecture.md「模块边界规则」, rule 3). A build that fails
+// publishes nothing, and the last snapshot stands.
+func (d *RouteDeps) Rebuild(ctx context.Context) error {
+	d.building.Lock()
+	defer d.building.Unlock()
+	s, l, n, err := d.Build(ctx)
+	if err != nil {
+		return err
+	}
+	d.Publish(s, l, n)
+	return nil
 }
 
 // leftOut is why some or all of a model's endpoints take no requests, and how many of them are left out.
