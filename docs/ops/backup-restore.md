@@ -36,12 +36,14 @@ set 只在程序停着、调用日志写完之后转储。一次调用的收费�
 卷里的 spill），再由写协程入库（[observability 的「写入」](../../internal/observability/README.md#写入)）。写协程落后时转储，
 set 里有这些调用的收费，却没有它们的记录；之后机器一丢，这些记录就再也找不回来。所以一次备份是：
 
-1. `scripts/ops/backup.sh` 停掉程序：`compose stop` 发 SIGTERM，程序排空监听，`Close` 把 spill 写进库再退出（`stop_grace_period`
+1. `scripts/ops/backup.sh` 在看程序之前先对环境文件旁的 `<环境文件>.backup-lock` 取 `flock`：上一次运行还在上传时，第二次
+   直接退出 75，不去停刚被重启的程序；作业自己的锁仍然挡住直接 `docker compose run --rm backup` 的并发。
+2. 包装脚本停掉程序：`compose stop` 发 SIGTERM，程序排空监听，`Close` 把 spill 写进库再退出（`stop_grace_period`
    170 秒内）。原来就没在跑的程序不动它。
-2. 备份作业只读挂载调用日志，先对 `call-log.lock` 取共享锁：运行中的程序持有排他锁，这时作业退出 1；作业持锁期间程序也启动
+3. 备份作业只读挂载调用日志，先对 `call-log.lock` 取共享锁：运行中的程序持有排他锁，这时作业退出 1；作业持锁期间程序也启动
    不了，转储时不会有新的结算。再跑 `axiom call-log check`（`observability.SpillBacklog`，只读）：检查点之后的记录和停放的
    待定记录，不是 0 就退出 1，此时还没转储、没上传，桶里什么也不留。
-3. 转储完成后作业释放锁并打印 `backup: dumped the database; the program may start`，包装脚本看到这一行就启动程序；加密、
+4. 转储完成后作业释放锁并打印 `backup: dumped the database; the program may start`，包装脚本看到这一行就启动程序；加密、
    打包密钥环和上传在程序运行时进行。作业在哪一步失败，包装脚本都会把它停掉的程序再启动起来。
 
 停机时间是程序退出（在途调用最多 170 秒）、转储和重启，不含上传。写不完（数据库不可用、超过宽限被杀）时记录留在 spill 里，
@@ -372,7 +374,8 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 - set 里配了审计副本（`AXIOM_AUDIT_REPLICA_*`）时，第 1 步把这六个变量在装好的 `deploy/.env` 里清空，并追加一行注释记下旧桶
   （`# <时间>: restored set <set>; the audit replica <端点>/<桶> holds the history this restore abandoned ...`）。旧桶里有
   丢掉的库在 set 之后接上的链，恢复的链接着 set 写，不能再进这个桶（程序也会拒绝：见[运营的「审计」](../domains/operations.md#审计)）。
-  所以恢复的程序启动时不复制，日志里有 `the audit chain is not copied off-site`。核对完恢复，新建一个开版本控制和对象锁的桶，
+  清空按部署支持的所有写法识别（`export `、名字前的空白、等号两边的空白、引号，与 `scripts/ops/up.sh` 共用
+  `scripts/ops/env-file.sh`）：删掉每个变量的所有赋值，再在文件末尾各留一行空值；WAL 桶也这样处理。所以恢复的程序启动时不复制，日志里有 `the audit chain is not copied off-site`。核对完恢复，新建一个开版本控制和对象锁的桶，
   把六个变量填成新桶，`docker compose ... up --detach --wait axiom`：新桶没有进度，从第一条起复制整条恢复的链。旧桶保持原样，
   注释行随以后的 set 一起留着两者的关系。
 - 恢复之后核对 `manifest.txt` 里的镜像引用与本机部署的 digest 是否一致；不一致的话，先让程序在第 5 步的迁移上跑通再对外。
@@ -442,6 +445,7 @@ worker（副本已关），River 的 rescuer 会把它丢弃，多出一行丢�
 | 2026-10-31 08:50 | 20261031084908-c274fc | 29s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
 | 2026-11-09 13:15 | 20261109130615-f4c580 | 66s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确；日志积压时拒绝备份、排空后的四条调用随 set 恢复，覆盖恢复隔离后来的两条；副本领先时旧桶不动、新桶从第一条复制 | 通过 |
 | 2026-11-09 14:15 | 20261109140626-2e4007 | 67s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确；日志积压时拒绝备份、排空后的四条调用随 set 恢复，覆盖恢复隔离后来的两条；副本领先时旧桶不动、新桶从第一条复制 | 通过 |
+| 2026-11-09 14:49 | 20261109143915-31f13c | 76s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确；日志积压时拒绝备份、排空后的四条调用随 set 恢复，覆盖恢复隔离后来的两条；副本领先时旧桶不动、新桶从第一条复制 | 通过 |
 
 ## 生产入口
 

@@ -11,6 +11,8 @@
 #
 # The exit status is the job's: 75 while another run holds its lock, 1 for every refusal, a call log that did not drain
 # included. The flags are restore.sh's: -f names the compose files the deployment runs, deploy/compose.yaml by default.
+# A run takes a lock of its own, next to the environment file, before it looks at the program: a second run while the
+# first one uploads exits 75 at once instead of stopping the program the first one has started again.
 set -euo pipefail
 
 env_file=deploy/.env
@@ -35,6 +37,15 @@ done
 compose_args=()
 for file in "${files[@]}"; do compose_args+=(-f "$file"); done
 compose() { docker compose "${compose_args[@]}" --env-file "$env_file" "$@"; }
+
+# The job's own lock guards a direct `docker compose run backup` as well; this one covers the stop and the start around
+# it. flock(1) is util-linux, on every Linux host.
+command -v flock > /dev/null || { echo "backup: flock is missing: install util-linux" >&2; exit 1; }
+exec 9>> "$env_file.backup-lock"
+flock -n 9 || {
+  echo "backup: another run holds $env_file.backup-lock, nothing to do"
+  exit 75
+}
 
 # The line deploy/ops/backup.sh logs once pg_dump has finished.
 dumped="backup: dumped the database; the program may start"

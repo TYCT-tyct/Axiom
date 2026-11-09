@@ -47,6 +47,7 @@ die() {
   printf 'up: %s\n' "$*" >&2
   exit 1
 }
+. "${BASH_SOURCE[0]%/*}/env-file.sh"
 
 compose_args=()
 for file in "${files[@]}"; do
@@ -59,20 +60,12 @@ compose() { docker compose "${compose_args[@]}" --env-file "$env_file" "$@"; }
 # value (the edge fixes AXIOM_TRUSTED_PROXIES) removes the earlier reference with it. $${...} is the container's shell.
 known="$(compose --profile '*' config --no-interpolate --format json |
   { grep -oE '(^|[^$])\$\{AXIOM_[A-Za-z0-9_]+' || true; } | sed -E 's/.*\$\{//' | sort -u)"
-# A setting's value as Compose's env file gives it: the last assignment wins, a quoted value ends at its closing quote,
-# and an unquoted one at a space before #. Empty is unset to the program; .env.example carries such lines.
+# A setting's value as Compose's env file gives it (env-file.sh). Empty is unset to the program; .env.example carries
+# such lines.
 declare -A values=()
-while IFS= read -r line || [ -n "$line" ]; do
-  [[ ${line%$'\r'} =~ ^[[:space:]]*(export[[:space:]]+)?(AXIOM_[A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*(.*)$ ]] || continue
-  value=${BASH_REMATCH[3]}
-  case $value in
-  \"*) value=${value#\"} value=${value%%\"*} ;;
-  \'*) value=${value#\'} value=${value%%\'*} ;;
-  \#*) value= ;;
-  *) value=${value%%[[:space:]]#*} value=${value%"${value##*[![:space:]]}"} ;;
-  esac
-  values[${BASH_REMATCH[2]}]=$value
-done < "$env_file"
+while IFS=$'\t' read -r name value; do
+  values[$name]=$value
+done < <(env_assignments "$env_file")
 unread=()
 for name in $(printf '%s\n' "${!values[@]}" | sort); do
   [ -z "${values[$name]}" ] || grep -qxF "$name" <<< "$known" || unread+=("$name")

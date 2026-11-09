@@ -156,6 +156,7 @@ teardown() {
   docker compose --project-name "$project" down --volumes --timeout 5 > /dev/null 2>&1 || true
   # The call logs a restore set aside are volumes of their own, outside the project's.
   docker volume ls --quiet --filter "name=^${project}_call_log_before_" | xargs -r docker volume rm > /dev/null 2>&1 || true
+  rm -f "$env_file.backup-lock" # scripts/ops/backup.sh's, next to the environment file
   docker image rm --force "$DEPLOY_IMAGE" "$DEPLOY_OPS_IMAGE" > /dev/null 2>&1 || true
   rm -rf "$work"
   exit "$status"
