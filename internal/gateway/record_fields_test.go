@@ -86,10 +86,16 @@ func TestCallRecordKeepsErrorKindsAndFirstTokens(t *testing.T) {
 			}
 			return answersLate(s, false)
 		}, "", []loggedAttempt{{"unknown", 0}, {"", 1}}},
-		{"the stream breaks after content", func(s []string, _ int64) scripted { return answersLate(s, true) },
-			"upstream_error", []loggedAttempt{{"upstream_error", 1}}},
-		{"every attempt fails", func([]string, int64) scripted { return failsUnknown },
-			"upstream_error", []loggedAttempt{{"unknown", 0}, {"unknown", 0}}},
+		{
+			"the stream breaks after content", func(s []string, _ int64) scripted { return answersLate(s, true) },
+			"upstream_error",
+			[]loggedAttempt{{"upstream_error", 1}},
+		},
+		{
+			"every attempt fails", func([]string, int64) scripted { return failsUnknown },
+			"upstream_error",
+			[]loggedAttempt{{"unknown", 0}, {"unknown", 0}},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
