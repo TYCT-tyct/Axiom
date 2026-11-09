@@ -423,6 +423,13 @@ PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
 入口回 502；先停掉宿主上定时的备份作业，做完再恢复。没有节点在跑时（首次部署、整套栈已停）没有要排空的东西，直接走同一条
 构建数据库的路径。数据库镜像只在这条路径上构建：即使缓存命中，重新构建也会得到新的镜像 ID，Compose 会因此替换数据库（#605）。
 
+**配置原样传给程序。** Compose 只把它列出的变量交给容器，程序拒绝未知变量也只能拒绝它看得到的。`deploy/compose.yaml`
+把核心读的设置逐个传给 `axiom` 服务（`deploy/.env.example` 列出，留空即程序默认，运营监听因此默认关闭）；它自己定下的不传：
+监听地址（发布的端口和入口按它们写）、密钥/spill/前端文件的路径（卷）、数据库和缓存的地址，以及 `AXIOM_SHUTDOWN_TIMEOUT`
+（`stop_grace_period` 按它算）。`up.sh` 动手前先核对 `deploy/.env`：每个非空的 `AXIOM_*` 都必须被这次 `-f` 合并后的
+Compose 文件引用（按未插值的配置找 `${AXIOM_…}`，后面的文件覆盖掉的引用不算），否则报出变量名并停下。所以拼错的名字、这个
+部署固定下来的变量，以及带入口时的 `AXIOM_TRUSTED_PROXIES`（入口把它固定成自己的地址）都会挡住部署，不会被悄悄丢掉。
+
 迁移和程序使用同一 digest；备份 manifest 的镜像字段也因此记录这个引用。恢复和回滚沿用发布记录里的摘要，不能将
 本地开发的 `axiom:local` 当生产交付物。数据库镜像不是发布产物：它的 Dockerfile 钉住 PostgreSQL 的基础 tag，pgBackRest 和
 三个入口脚本随本仓库走，所以由 `scripts/ops/up.sh` 在替换数据库的路径上 `build postgres`，再用 `--no-build` 启动；升级它的
@@ -510,6 +517,10 @@ PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
   普通发布只换节点、不碰数据库，数据库升级有明确的排空和停机。不选「按 Compose 自己判断是否重建」：它在镜像 ID 变化时就会重建，
   正是要避免的；不选「普通发布照常构建、只在 Dockerfile 变了才重建」：部署机拿不到上次构建的输入，只能靠镜像 ID 判断。
   代价是改了 `deploy/postgres/` 或数据库读的环境后，部署要显式加 `--database` 并承受一次停机；忘了加时失败，什么都不改。
+- **部署前核对 `deploy/.env` 的每个 `AXIOM_*` 都有服务读，而不是让 Compose 读整份文件**：`env_file` 会把超级用户口令和备份桶的
+  凭证一起交给程序（程序还会把它们当未知变量拒绝启动），所以仍逐个列出要传的设置；核对按合并后、未插值的配置找引用，一次
+  `docker compose config --no-interpolate`，后面的文件覆盖掉的引用也看得出来。不核对 shell 里导出的 `AXIOM_*`：CI 与运维机器
+  会导出与这次部署无关的变量。
 
 ## 待定
 

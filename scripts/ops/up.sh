@@ -12,6 +12,10 @@
 # image under deploy/postgres or its environment in the env file — is an upgrade of its own: --database stops the node
 # first, which drains it, and only then builds and replaces the database. With no node running there is nothing to
 # drain, so the first start and a stack that is down take that same path.
+#
+# Before anything else, every non-empty AXIOM_* setting in the env file must be one these Compose files read: Compose
+# passes nothing it is not told to, so a setting no service names reaches no program, and the program cannot refuse a
+# variable it never sees.
 set -euo pipefail
 
 env_file=deploy/.env
@@ -49,6 +53,19 @@ for file in "${files[@]}"; do
   compose_args+=(-f "$file")
 done
 compose() { docker compose "${compose_args[@]}" --env-file "$env_file" "$@"; }
+
+# The variables the merged files interpolate, read before interpolation: a later file that replaces a value (the edge
+# fixes AXIOM_TRUSTED_PROXIES) removes the earlier reference with it. $${...} is the container's shell, not Compose.
+known="$(compose config --no-interpolate --format json | { grep -oE '(^|[^$])\$\{AXIOM_[A-Za-z0-9_]+' || true; } |
+  sed -E 's/.*\$\{//' | sort -u)"
+unread=()
+while IFS= read -r line || [ -n "$line" ]; do
+  [[ $line =~ ^[[:space:]]*(export[[:space:]]+)?(AXIOM_[A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*(.*)$ ]] || continue
+  # Empty is unset to the program; .env.example carries such lines for settings a deployment may not use.
+  case ${BASH_REMATCH[3]} in '' | '""' | "''" | '#'*) continue ;; esac
+  grep -qxF "${BASH_REMATCH[2]}" <<< "$known" || unread+=("${BASH_REMATCH[2]}")
+done < "$env_file"
+[ ${#unread[@]} -eq 0 ] || die "$env_file sets ${unread[*]}, which no service in ${files[*]} reads: fix the name, or remove it if this deployment fixes or does not use it (deploy/.env.example)"
 
 running() { compose ps --status running --quiet "$1"; }
 node="$(running axiom)"

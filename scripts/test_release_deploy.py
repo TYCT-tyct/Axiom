@@ -25,10 +25,12 @@ bash() {
     *) command bash "$@" ;;
   esac
 }
-# scripts/ops/up.sh as test_deploy_up.py pins it, with the containers as numbered files: a running node gets a new container and keeps its database unless the database's environment changed, which
+# scripts/ops/up.sh as test_deploy_up.py pins it, with the containers as numbered files: a setting no service reads is
+# refused; a running node gets a new container and keeps its database unless the database's environment changed, which
 # only --database applies; with --database or no node, both are replaced.
 up() {
   printf 'bash %s\n' "$*" >> "$CALLS"
+  if grep -q AXIOM_HEALTH_MOOD deploy/.env; then echo 'up: deploy/.env sets AXIOM_HEALTH_MOOD' >&2; return 1; fi
   local env
   env="$(grep '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env)"
   if [ -f node ] && [ "${!#}" != --database ] && [ -z "${UP_REPLACES_DATABASE-}" ]; then
@@ -127,9 +129,9 @@ curl() {
                 self.assertFalse([call for call in calls if call.startswith("compose ") and " up " in call], calls)
                 starts = [call.removeprefix("bash scripts/ops/up.sh --env-file deploy/.env").strip()
                           for call in calls if call.startswith("bash scripts/ops/up.sh")]
-                # The first start, an application release, the legacy upgrade refused under the running node and then
-                # applied with --database, and the start that repeats the grants.
-                self.assertEqual(starts, ["", "", "", "--database", ""])
+                # The first start, an application release, a misspelled setting, the legacy upgrade refused under the
+                # running node and then applied with --database, and the start that repeats the grants.
+                self.assertEqual(starts, ["", "", "", "", "--database", ""])
                 self.assertEqual(calls[-1], "image rm --force axiom-ci-postgres:fixture")
 
     def test_a_failed_check_prints_the_containers_output_before_removing_them(self):

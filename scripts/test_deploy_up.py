@@ -83,6 +83,33 @@ class Up(unittest.TestCase):
                 self.assertIn("--database", result.stderr)
                 self.assertFalse([c for c in commands if c.split()[0] in ("build", "up", "exec", "stop")], commands)
 
+    @unittest.skipUnless(REAL_DOCKER, "Docker Compose is unavailable")
+    def test_settings_no_service_reads_are_refused_before_anything_starts(self):
+        edge = ("-f", "deploy/compose.yaml", "-f", "deploy/compose.edge.yaml")
+        supported = ["AXIOM_OPERATIONS_ADDR=:8084", "AXIOM_OPERATIONS_SOURCES=10.0.0.0/8", "AXIOM_CORE_NODES=2",
+                     "AXIOM_BYOK=on", "AXIOM_DIRECT_FORMATS=on", "AXIOM_SMTP_HOST=smtp.example",
+                     "AXIOM_BACKUP_BUCKET=sets", "AXIOM_KEYRING_GENERATE=false", "AXIOM_UNUSED=", 'AXIOM_QUOTED=""',
+                     "# AXIOM_COMMENTED=1"]
+        cases = [
+            ("supported settings", (), supported, None),
+            ("a misspelled name", (), ["AXIOM_BYOOK=on"], "AXIOM_BYOOK"),
+            ("a setting the file fixes", (), ["AXIOM_SHUTDOWN_TIMEOUT=60s", "export AXIOM_PUBLIC_ADDR=:9000"],
+             "AXIOM_SHUTDOWN_TIMEOUT AXIOM_PUBLIC_ADDR"),
+            ("trusted proxies without the edge", (), ["AXIOM_TRUSTED_PROXIES=10.0.0.1"], None),
+            # The edge fixes the program's trusted proxy to its own address.
+            ("trusted proxies with the edge", edge, ["AXIOM_TRUSTED_PROXIES=10.0.0.1"], "AXIOM_TRUSTED_PROXIES"),
+            ("the edge's settings without the edge", (), ["AXIOM_EDGE_API_HOST=api.example"], "AXIOM_EDGE_API_HOST"),
+        ]
+        for name, files, settings, refused in cases:
+            with self.subTest(name):
+                result, commands = self.run_up(*files, settings=settings, real_compose=True)
+                if refused is None:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    continue
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"sets {refused}, which no service", result.stderr)
+                self.assertEqual(len(commands), 1, commands)  # only the configuration was read
+
 
 if __name__ == "__main__":
     unittest.main()

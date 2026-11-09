@@ -201,6 +201,11 @@ printf 'AXIOM_HEALTH_MODE=observe\n' >> deploy/.env
 start
 [ "$(compose ps --quiet postgres)" = "$db" ] || { echo "::error::an application release replaced the database under a running node"; exit 1; }
 [ "$(compose ps --quiet axiom)" != "$node" ] || { echo "::error::an application release did not replace the node"; exit 1; }
+# A setting no service reads stops the start before it changes anything (#735).
+printf 'AXIOM_HEALTH_MOOD=observe\n' >> deploy/.env
+if refusal="$(bash scripts/ops/up.sh --env-file deploy/.env 2>&1)"; then echo "::error::a misspelled setting was dropped silently"; exit 1; fi
+grep -q AXIOM_HEALTH_MOOD <<< "$refusal" || { echo "$refusal"; echo "::error::the refusal does not name the setting"; exit 1; }
+sed -i '/^AXIOM_HEALTH_MOOD=/d' deploy/.env
 
 # A deployment from before the migration administrator: no such role, an owner role that role did not create, and
 # a deploy/.env without its password, readable by others and lacking a final newline. just up upgrades it in place.

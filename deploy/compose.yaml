@@ -258,6 +258,34 @@ services:
       # Off unless the platform permits reply content in the response cache (docs/domains/gateway.md「响应缓存」).
       AXIOM_RESPONSE_CACHE_CONTENT: ${AXIOM_RESPONSE_CACHE_CONTENT-}
       AXIOM_EXCHANGE_SOURCE: ${AXIOM_EXCHANGE_SOURCE-}
+      # Every other setting a core reads that this file does not fix itself, passed as written in deploy/.env: Compose
+      # passes nothing it is not told to, and the program can refuse only what reaches it. scripts/ops/up.sh refuses an
+      # AXIOM_* setting no service here reads. Fixed here and not passed: the listen addresses (the published ports and
+      # the edge name them), the key, spill and asset paths (the volumes), the database and cache URLs, and
+      # AXIOM_SHUTDOWN_TIMEOUT, which stop_grace_period above is computed from.
+      AXIOM_MODEL_VERIFICATION: ${AXIOM_MODEL_VERIFICATION-}
+      AXIOM_DIRECT_FORMATS: ${AXIOM_DIRECT_FORMATS-}
+      AXIOM_BYOK: ${AXIOM_BYOK-}
+      AXIOM_TRUSTED_PROXIES: ${AXIOM_TRUSTED_PROXIES-}
+      AXIOM_STARTUP_TIMEOUT: ${AXIOM_STARTUP_TIMEOUT-}
+      AXIOM_DB_COMPLETION_RESERVE: ${AXIOM_DB_COMPLETION_RESERVE-}
+      AXIOM_HASH_CONCURRENCY: ${AXIOM_HASH_CONCURRENCY-}
+      AXIOM_HASH_WAIT: ${AXIOM_HASH_WAIT-}
+      AXIOM_CORE_NODES: ${AXIOM_CORE_NODES-}
+      AXIOM_NODE_ID: ${AXIOM_NODE_ID-}
+      # The operations listener stays off unless its address is set (docs/security.md「运营调用面」); this file
+      # publishes no port for it.
+      AXIOM_OPERATIONS_ADDR: ${AXIOM_OPERATIONS_ADDR-}
+      AXIOM_OPERATIONS_SOURCES: ${AXIOM_OPERATIONS_SOURCES-}
+      AXIOM_SMTP_HOST: ${AXIOM_SMTP_HOST-}
+      AXIOM_SMTP_PORT: ${AXIOM_SMTP_PORT-}
+      AXIOM_SMTP_USERNAME: ${AXIOM_SMTP_USERNAME-}
+      AXIOM_SMTP_PASSWORD: ${AXIOM_SMTP_PASSWORD-}
+      AXIOM_SMTP_FROM: ${AXIOM_SMTP_FROM-}
+      AXIOM_SEARCH_URL: ${AXIOM_SEARCH_URL-}
+      AXIOM_SEARCH_KEY: ${AXIOM_SEARCH_KEY-}
+      AXIOM_FILE_PARSER_URL: ${AXIOM_FILE_PARSER_URL-}
+      AXIOM_FILE_PARSER_KEY: ${AXIOM_FILE_PARSER_KEY-}
       # The shared cache, in this single-core deployment too: a rate count that survives this process is one more thing
       # a restart does not take, and it is what `AXIOM_CORE_NODES` above 1 will need (internal/platform/kv/README.md
       # 「配置与启动」). The password is the file, never this environment.
