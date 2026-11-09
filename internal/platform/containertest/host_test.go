@@ -1,13 +1,17 @@
 package containertest
 
 import (
+	"errors"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 )
 
@@ -41,7 +45,7 @@ func checkHostConfig(t *testing.T, want string) {
 	})(&req); err != nil {
 		t.Fatal(err)
 	}
-	if err := WithHostPolicy()(&req); err != nil {
+	if err := WithHostPolicy(t.Context())(&req); err != nil {
 		t.Fatal(err)
 	}
 	var host container.HostConfig
@@ -58,7 +62,7 @@ func TestJobLabel(t *testing.T) {
 			req := testcontainers.GenericContainerRequest{
 				Labels: map[string]string{"service": "kept"},
 			}
-			if err := WithHostPolicy()(&req); err != nil {
+			if err := WithHostPolicy(t.Context())(&req); err != nil {
 				t.Fatal(err)
 			}
 			value, exists := req.Labels["axiom.ci.job"]
@@ -73,7 +77,7 @@ func TestJobLabel(t *testing.T) {
 func TestHostPolicyCacheInputs(t *testing.T) {
 	if os.Getenv("AXIOM_HOST_POLICY_HELPER") == "true" {
 		var req testcontainers.GenericContainerRequest
-		if err := WithHostPolicy()(&req); err != nil {
+		if err := WithHostPolicy(t.Context())(&req); err != nil {
 			t.Fatal(err)
 		}
 		if req.Labels["axiom.ci.job"] != "cache-check" {
@@ -103,5 +107,61 @@ func TestHostPolicyCacheInputs(t *testing.T) {
 	}
 	if !strings.Contains(inputs, "getenv AXIOM_TEST_CGROUP_PARENT\n") {
 		t.Fatalf("missing control cache input:\n%s", inputs)
+	}
+}
+
+// Every exposed port, named once or twice, with or without its protocol, is published on loopback below the ephemeral
+// range, so Docker never picks one there.
+func TestHostPolicyPublishesBelowTheEphemeralRange(t *testing.T) {
+	var req testcontainers.GenericContainerRequest
+	req.ExposedPorts = []string{"5432/tcp", "80", "5432/tcp"}
+	if err := WithHostPolicy(t.Context())(&req); err != nil {
+		t.Fatal(err)
+	}
+	var host container.HostConfig
+	req.HostConfigModifier(&host)
+	if len(host.PortBindings) != 2 {
+		t.Fatalf("bindings = %v, want one for each of the two ports", host.PortBindings)
+	}
+	for _, port := range []string{"5432/tcp", "80/tcp"} {
+		bindings := host.PortBindings[network.MustParsePort(port)]
+		if len(bindings) != 1 {
+			t.Fatalf("%s bindings = %v, want one", port, bindings)
+		}
+		number, err := strconv.Atoi(bindings[0].HostPort)
+		if bindings[0].HostIP != netip.MustParseAddr("127.0.0.1") || err != nil || number < firstHostPort || number > lastHostPort {
+			t.Fatalf("%s binding = %+v, want 127.0.0.1 and a port from %d to %d", port, bindings[0], firstHostPort, lastHostPort)
+		}
+	}
+}
+
+func TestStartTriesAnotherPortOnlyWhenTheBindLost(t *testing.T) {
+	lost := errors.New("start container: failed to set up container networking: driver failed programming external " +
+		"connectivity on endpoint x: failed to bind host port 0.0.0.0:46182/tcp: address already in use")
+	other := errors.New("start container: image not found")
+	for _, c := range []struct {
+		name  string
+		fails []error
+		tries int
+		err   error
+	}{
+		{"started", nil, 1, nil},
+		{"lost twice", []error{lost, lost}, 3, nil},
+		{"other failure", []error{other, lost}, 1, other},
+		{"lost every time", []error{lost, lost, lost, lost, lost, lost, lost, lost, lost}, startAttempts, lost},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tries := 0
+			_, err := Start(t.Context(), func() (*testcontainers.DockerContainer, error) {
+				tries++
+				if tries <= len(c.fails) {
+					return nil, c.fails[tries-1]
+				}
+				return new(testcontainers.DockerContainer), nil
+			})
+			if tries != c.tries || !errors.Is(err, c.err) {
+				t.Fatalf("tries = %d, err = %v; want %d and %v", tries, err, c.tries, c.err)
+			}
+		})
 	}
 }

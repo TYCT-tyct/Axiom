@@ -51,13 +51,15 @@ func startNewAPI(t *testing.T, up *diffUpstream) newAPI {
 			host.ExtraHosts = append(host.ExtraHosts, testcontainers.HostInternal+":host-gateway")
 		})
 	}
-	container, err := testcontainers.Run(ctx, newAPIImage,
-		containertest.WithHostPolicy(),
-		testcontainers.WithExposedPorts("3000/tcp"),
-		hostAccess,
-		testcontainers.WithEnv(map[string]string{"SESSION_SECRET": "diff-test-session-secret", "TZ": "UTC"}), //nolint:gosec // a throwaway container's, not a credential
-		testcontainers.WithWaitStrategy(wait.ForHTTP("/api/status").WithPort("3000/tcp").WithStartupTimeout(2*time.Minute)),
-	)
+	container, err := containertest.Start(ctx, func() (*testcontainers.DockerContainer, error) {
+		return testcontainers.Run(ctx, newAPIImage,
+			testcontainers.WithExposedPorts("3000/tcp"),
+			hostAccess,
+			testcontainers.WithEnv(map[string]string{"SESSION_SECRET": "diff-test-session-secret", "TZ": "UTC"}), //nolint:gosec // a throwaway container's, not a credential
+			testcontainers.WithWaitStrategy(wait.ForHTTP("/api/status").WithPort("3000/tcp").WithStartupTimeout(2*time.Minute)),
+			containertest.WithHostPolicy(ctx),
+		)
+	})
 	if err != nil {
 		t.Fatalf("starting new-api: %v", err)
 	}

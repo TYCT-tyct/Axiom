@@ -267,12 +267,14 @@ func StartCluster(ctx context.Context) (string, func(context.Context) error, err
 			return "", nil, err
 		}
 	}
-	container, err := postgres.Run(ctx, "postgres:18.6-alpine",
-		postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.BasicWaitStrategies(),
-		testcontainers.WithHostConfigModifier(func(host *container.HostConfig) { host.ShmSize = clusterShmSize }),
-		containertest.WithHostPolicy(),
-		testcontainers.WithCmdArgs("-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off",
-			"-c", "max_connections=1000", "-c", "min_wal_size=32MB", "-c", "max_wal_size=128MB"))
+	container, err := containertest.Start(ctx, func() (*postgres.PostgresContainer, error) {
+		return postgres.Run(ctx, "postgres:18.6-alpine",
+			postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.BasicWaitStrategies(),
+			testcontainers.WithHostConfigModifier(func(host *container.HostConfig) { host.ShmSize = clusterShmSize }),
+			testcontainers.WithCmdArgs("-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off",
+				"-c", "max_connections=1000", "-c", "min_wal_size=32MB", "-c", "max_wal_size=128MB"),
+			containertest.WithHostPolicy(ctx))
+	})
 	if err != nil {
 		return "", nil, err
 	}

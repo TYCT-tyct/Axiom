@@ -209,8 +209,10 @@ func startPostgres(t *testing.T, ctx context.Context, image string, restore bool
 		opts = append(opts, testcontainers.WithEntrypoint("/usr/local/bin/pitr.sh"))
 	}
 	// Last: it sets a host-config modifier, and it must see the options above.
-	opts = append(opts, containertest.WithHostPolicy())
-	ctr, err := testcontainers.Run(ctx, image, opts...)
+	opts = append(opts, containertest.WithHostPolicy(ctx))
+	ctr, err := containertest.Start(ctx, func() (*testcontainers.DockerContainer, error) {
+		return testcontainers.Run(ctx, image, opts...)
+	})
 	if err != nil {
 		t.Fatalf("start the database image: %v", err)
 	}
