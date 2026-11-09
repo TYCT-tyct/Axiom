@@ -78,9 +78,12 @@ type Upload struct {
 // multipart reports whether up goes in parts: a known size over threshold, and no condition to keep.
 func (up Upload) multipart(threshold int64) bool { return up.Size > threshold && !up.NoOverwrite }
 
-// ListOptions filters one page. Prefix may be empty for the whole bucket; MaxKeys defaults to 1000, S3's maximum.
+// ListOptions filters one page. Prefix may be empty for the whole bucket; StartAfter, when set, lists only the keys
+// that sort after it (S3's start-after, ignored once a ContinuationToken is given); MaxKeys defaults to 1000, S3's
+// maximum.
 type ListOptions struct {
 	Prefix            string
+	StartAfter        string
 	ContinuationToken string
 	MaxKeys           int
 }
@@ -404,8 +407,8 @@ func (c *Client) List(ctx context.Context, opts ListOptions) (ListPage, error) {
 
 // listQuery turns the page options into the S3 list-type=2 query, checking the limits S3 defines.
 func listQuery(opts ListOptions) (url.Values, error) {
-	if len(opts.Prefix) > 1024 {
-		return nil, errors.New("objectstore: prefix is longer than 1024 bytes")
+	if len(opts.Prefix) > 1024 || len(opts.StartAfter) > 1024 {
+		return nil, errors.New("objectstore: prefix or start-after is longer than 1024 bytes")
 	}
 	maxKeys := opts.MaxKeys
 	if maxKeys == 0 {
@@ -420,6 +423,9 @@ func listQuery(opts ListOptions) (url.Values, error) {
 	}
 	if opts.Prefix != "" {
 		query.Set("prefix", opts.Prefix)
+	}
+	if opts.StartAfter != "" {
+		query.Set("start-after", opts.StartAfter)
 	}
 	if opts.ContinuationToken != "" {
 		query.Set("continuation-token", opts.ContinuationToken)

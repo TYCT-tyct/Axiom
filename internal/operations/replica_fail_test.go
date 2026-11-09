@@ -14,9 +14,11 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-// failingStore answers every request with err, or for Get an object whose body fails to read.
+// failingStore answers every Get and Put with err, or for Get an object whose body fails to read, and a List with
+// listErr or an empty page.
 type failingStore struct {
 	err      error
+	listErr  error
 	badBody  bool
 	putCalls int
 }
@@ -31,6 +33,10 @@ func (s *failingStore) Get(context.Context, string) (*objectstore.Object, error)
 func (s *failingStore) Put(context.Context, objectstore.Upload) (objectstore.ObjectInfo, error) {
 	s.putCalls++
 	return objectstore.ObjectInfo{}, s.err
+}
+
+func (s *failingStore) List(context.Context, objectstore.ListOptions) (objectstore.ListPage, error) {
+	return objectstore.ListPage{}, s.listErr
 }
 
 type iotestErrReader struct{}
@@ -87,6 +93,16 @@ func TestWriteReplicaRefusals(t *testing.T) {
 	}
 	if err := raiseConflict(t.Context(), db, scope, "t", b, errors.New("other")); err != nil {
 		t.Errorf("a failure that is not a conflict raised: %v", err)
+	}
+}
+
+// TestWriteReplicaNeedsTheListing: a new key is not written when the bucket cannot say what its range overlaps.
+func TestWriteReplicaNeedsTheListing(t *testing.T) {
+	t.Parallel()
+	b := replicaBatch{key: "audit-chain/v1/k", body: []byte("line\n")}
+	unlistable := &failingStore{err: &objectstore.Error{Status: 404}, listErr: errors.New("list refused")}
+	if err := writeReplica(t.Context(), unlistable, b); err == nil || !strings.Contains(err.Error(), "list refused") || unlistable.putCalls != 0 {
+		t.Errorf("a failing listing: %v, %d writes", err, unlistable.putCalls)
 	}
 }
 

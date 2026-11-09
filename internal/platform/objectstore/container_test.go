@@ -69,6 +69,11 @@ func checkListing(t *testing.T, ctx context.Context, client *objectstore.Client,
 			t.Fatalf("list keys = %v, want %q", seen, key)
 		}
 	}
+	// start-after with one key a page is how the audit replica finds the first object after a sequence number.
+	page, err = client.List(ctx, objectstore.ListOptions{Prefix: "archive/", StartAfter: "archive/2026/a b.txt", MaxKeys: 1})
+	if err != nil || len(page.Objects) != 1 || page.Objects[0].Key != "archive/2026/large.bin" {
+		t.Fatalf("list after the first key = %+v, %v; want archive/2026/large.bin alone", page, err)
+	}
 }
 
 // TestSeaweedFS runs the client against a real S3 server, because a hand-written signer can pass its own fake and

@@ -32,7 +32,10 @@ import (
 // then confirms it from the state it read; a run that fails between the two finds the same plan next time and writes
 // the same bytes to the same key, which the bucket already has, however the chain has grown since. A key that holds
 // other bytes is never written over and, its batch staying planned, stops the copy: that is the tampering the copy
-// exists to expose, and nothing may step over it.
+// exists to expose, and nothing may step over it. A new key is written only when no object in the bucket starts inside
+// its range: a database restored to an earlier point carries on from where its own copy stood while the bucket holds the
+// abandoned history beyond it, and a batch cut at other boundaries would otherwise lay a second, different history over
+// the first under keys that never collide.
 
 const (
 	// replicaKeys is where the objects are: <first seq>-<last seq>.jsonl, both 20 digits, so the keys sort as the
@@ -78,11 +81,12 @@ func replicaAlertFields(target string, fields map[string]string) map[string]stri
 }
 
 // ReplicaStore is the bucket the chain is copied to. Its credentials write new objects, read them and list the bucket
-// (without which S3 answers a missing key 403, not 404), and can neither overwrite nor delete one: the bucket's
-// versioning and object lock keep what was written.
+// (without which S3 answers a missing key 403, not 404, and the copy could not see what a key's range overlaps), and can
+// neither overwrite nor delete one: the bucket's versioning and object lock keep what was written.
 type ReplicaStore interface {
 	Get(ctx context.Context, key string) (*objectstore.Object, error)
 	Put(ctx context.Context, up objectstore.Upload) (objectstore.ObjectInfo, error)
+	List(ctx context.Context, opts objectstore.ListOptions) (objectstore.ListPage, error)
 }
 
 // Replica is the bucket the chain is copied to: Store reaches it and Target names it, its endpoint and bucket and never
@@ -93,7 +97,8 @@ type Replica struct {
 	Target string
 }
 
-// errReplicaConflict is a key that holds other bytes than the links it is named for.
+// errReplicaConflict is a key that holds other bytes than the links it is named for, or another object that starts
+// inside a new key's range.
 var errReplicaConflict = errors.New("the replica holds other bytes")
 
 // replicaBatch is one object to write: the links first..last.
@@ -208,12 +213,16 @@ func nextLinks(ctx context.Context, tx pg.Tx, target string) (from, planned int6
 
 // writeReplica puts b's object unless the bucket has it already. The key is read first, because a bucket may ignore
 // If-None-Match (SeaweedFS does): a retry finds its own earlier write, and a key with other bytes is a conflict, never
-// overwritten. NoOverwrite then covers a bucket whose policy demands the condition, and a write that raced the read.
+// overwritten. A new key whose range another object already starts in is a conflict too (overlapping). NoOverwrite
+// then covers a bucket whose policy demands the condition, and a write that raced the read.
 func writeReplica(ctx context.Context, store ReplicaStore, b replicaBatch) error {
 	ctx, cancel := context.WithTimeout(ctx, replicaTimeout)
 	defer cancel()
 	err := holds(ctx, store, b)
 	if !errors.Is(err, objectstore.ErrNotFound) {
+		return err
+	}
+	if err := overlapping(ctx, store, b); err != nil {
 		return err
 	}
 	_, err = store.Put(ctx, objectstore.Upload{
@@ -250,6 +259,25 @@ func holds(ctx context.Context, store ReplicaStore, b replicaBatch) error {
 	}
 	if !bytes.Equal(got, b.body) {
 		return fmt.Errorf("%w at %s: links %d to %d", errReplicaConflict, b.key, b.from+1, b.last)
+	}
+	return nil
+}
+
+// overlapping is nil when no object in the bucket starts inside b's range, which b's own key does not (writeReplica
+// read it). Keys sort as their first seq does, so the first key after every key that starts at or before b.from is the
+// only one to look at: it starts inside the range exactly when it sorts before the keys that start after b.last. The
+// objects a copy writes this way never overlap, so none can start before b's range and reach into it either: it would
+// overlap the object that ends at b.from.
+func overlapping(ctx context.Context, store ReplicaStore, b replicaBatch) error {
+	// '.' sorts after the '-' that ends every key's first seq, so these bounds fall between the keys of two seqs.
+	after, beyond := fmt.Sprintf("%s%020d.", replicaKeys, b.from), fmt.Sprintf("%s%020d.", replicaKeys, b.last)
+	page, err := store.List(ctx, objectstore.ListOptions{Prefix: replicaKeys, StartAfter: after, MaxKeys: 1})
+	if err != nil {
+		return fmt.Errorf("list the audit replica after %s: %w", after, err)
+	}
+	if len(page.Objects) > 0 && page.Objects[0].Key < beyond {
+		return fmt.Errorf("%w: %s starts inside links %d to %d, so %s is not written over a history it does not continue",
+			errReplicaConflict, page.Objects[0].Key, b.from+1, b.last, b.key)
 	}
 	return nil
 }
