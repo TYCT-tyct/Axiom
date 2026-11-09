@@ -1,7 +1,7 @@
 """The host halves of the backup and the restore (scripts/ops/backup.sh, scripts/ops/restore.sh) against a stub docker:
-what they do to the program and to the environment file they install. Run with `python3 -m unittest discover -s scripts`."""
+what they do to the program and to the environment file they install; and the backup job's lock on the call log
+(deploy/ops/common.sh). Run with `python3 -m unittest discover -s scripts`."""
 
-import fcntl
 import json
 import os
 import shutil
@@ -12,8 +12,14 @@ from pathlib import Path
 
 from test_runner_host import BASH
 
+try:
+    import fcntl  # flock(2), as the program's spill and the scripts' locks take it; Windows has neither
+except ImportError:
+    fcntl = None
+
 ROOT = Path(__file__).parents[1]
 REAL_DOCKER = shutil.which("docker")
+FLOCK = shutil.which("flock")
 
 # Every call is recorded. The restore stops at its second step, the cluster's start: everything the test looks at is
 # done by then. Step 1's job writes the set's environment file into the directory mounted at /out.
@@ -31,7 +37,7 @@ case "$*" in
     for arg in "$@"; do case $arg in *:/out) cp "$SET_ENV" "${arg%:/out}/deploy.env" ;; esac; done ;;
   *" up --detach --wait --wait-timeout 120 postgres") exit 1 ;;
   *" ps --status running --quiet axiom") echo "${NODE-}" ;;
-  *" run --rm -T backup") echo "backup: dumped the database; the program may start"; exit "${JOB_STATUS:-0}" ;;
+  *" run --rm -T backup") printf 'archives %s\n' "${AXIOM_BACKUP_ENV_FILE-}" >> "$CALLS"; echo "backup: dumped the database; the program may start"; exit "${JOB_STATUS:-0}" ;;
 esac
 '''
 
@@ -105,7 +111,7 @@ class Restore(unittest.TestCase):
         return json.loads(config)["services"]["axiom"]["environment"]["AXIOM_AUDIT_REPLICA_BUCKET"]
 
 
-@unittest.skipUnless(BASH, "Bash is unavailable")
+@unittest.skipUnless(BASH and FLOCK and fcntl, "Bash, flock(1) or flock(2) is unavailable")
 class Backup(unittest.TestCase):
     def run_backup(self, root: Path, env_file: Path, **state: str) -> tuple[subprocess.CompletedProcess, list]:
         result = subprocess.run([BASH, "scripts/ops/backup.sh", "--env-file", str(env_file)], cwd=ROOT,
@@ -124,6 +130,17 @@ class Backup(unittest.TestCase):
                 self.assertEqual(result.returncode, int(status), result.stderr)
                 self.assertEqual([c for c in calls if c.split()[0] in ("stop", "run", "start")],
                                  ["stop axiom", "run --rm -T backup", "start axiom", "start axiom"])
+                # The set archives the file this run was given, though nothing set AXIOM_BACKUP_ENV_FILE.
+                self.assertIn(f"archives {env_file.resolve()}", calls)
+
+    def test_an_unreadable_environment_file_stops_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stub(root)
+            result, calls = self.run_backup(root, root / "missing.env", NODE="n1")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("cannot read", result.stderr)
+            self.assertEqual(calls, [])
 
     def test_a_second_run_leaves_the_program_alone(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -136,6 +153,58 @@ class Backup(unittest.TestCase):
                 result, calls = self.run_backup(root, env_file, NODE="n1")
             self.assertEqual(result.returncode, 75, result.stderr)
             self.assertEqual(calls, [])
+
+
+
+@unittest.skipUnless(BASH and FLOCK and fcntl, "Bash, flock(1) or flock(2) is unavailable")
+class CallLogLock(unittest.TestCase):
+    """hold_call_log against the node's own lock: an exclusive non-blocking flock(2) on call-log.lock, as lockDir takes."""
+
+    def hold(self, spill: Path) -> subprocess.Popen:
+        held = subprocess.Popen([BASH, "-c", '. deploy/ops/common.sh; hold_call_log "$1"; echo held; read -r _ || true', "_",
+                                 str(spill)], cwd=ROOT, env={**os.environ, "PROGRAM": "backup"}, text=True,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # A failed assertion must not leave the child waiting on its stdin: closing it ends the run.
+        self.addCleanup(held.wait)
+        self.addCleanup(lambda: held.stdin.closed or held.stdin.close())
+        return held
+
+    @staticmethod
+    def node_starts(spill: Path) -> bool:
+        with open(spill / "call-log.lock", "a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            return True
+
+    def test_a_first_start_cannot_slip_in_after_the_check_of_an_empty_spill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            spill = Path(tmp)
+            held = self.hold(spill)
+            if held.stdout.readline() != "held\n":
+                held.stdin.close()
+                self.fail(held.stderr.read())
+            lock = (spill / "call-log.lock").stat()
+            self.assertEqual((lock.st_uid, lock.st_mode & 0o777), (spill.stat().st_uid, 0o600))
+            self.assertEqual(sorted(p.name for p in spill.iterdir()), ["call-log.lock"])
+            self.assertFalse(self.node_starts(spill), "a node started while the backup held the call log")
+            held.stdin.close()
+            self.assertEqual(held.wait(), 0)
+            self.assertTrue(self.node_starts(spill), "the lock outlived the backup")
+
+    def test_a_running_node_refuses_the_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            spill = Path(tmp)
+            with open(spill / "call-log.lock", "a") as node:
+                fcntl.flock(node, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held = self.hold(spill)
+                held.stdin.close()
+                self.assertEqual(held.wait(), 1)
+                self.assertIn("the program holds the call log", held.stderr.read())
+            for stream in (held.stdout, held.stderr):
+                stream.close()
 
 
 if __name__ == "__main__":

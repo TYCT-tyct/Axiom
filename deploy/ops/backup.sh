@@ -60,15 +60,10 @@ log "backing up into $set_name"
 # The call log first. A call's record is fsynced into the program's spill before the call ends and reaches the database
 # after it, while its charge is already in the ledger; a dump taken while records wait there has the charges without the
 # records, and the records go with the machine. So the program is stopped, which drains the spill on its way out, and
-# the dump waits for proof: a shared lock on the spill, which a running program holds exclusively and a starting one
-# cannot take while this run holds it, then a count of what the database has not confirmed. The lock is held until the
-# dump is complete, so the program cannot start and settle a call in between. No lock file means no program ever opened
-# this directory; the count still runs.
-lock="$AXIOM_CALL_LOG_DIR/call-log.lock"
-if [ -e "$lock" ]; then
-  exec 8<"$lock"
-  flock -n -s 8 || die "the program holds the call log: a set is taken with it stopped (scripts/ops/backup.sh)"
-fi
+# the dump waits for proof: a shared lock on the spill (hold_call_log), which a running program holds exclusively and a
+# starting one cannot take while this run holds it, then a count of what the database has not confirmed. The lock is
+# held until the dump is complete, so the program cannot start and settle a call in between.
+hold_call_log "$AXIOM_CALL_LOG_DIR"
 axiom call-log check "$AXIOM_CALL_LOG_DIR" >/dev/null || die "the call log did not drain, so no set is taken"
 
 # The database, as the superuser: every table forces row security, and a dump that obeyed it would silently lose rows.

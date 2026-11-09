@@ -366,9 +366,10 @@ services:
     <<: *hardened
 
   # The scheduled backup (docs/ops/backup-restore.md), which scripts/ops/backup.sh runs with the program stopped. It
-  # sees the key ring and the call log read-only, the environment file it archives, and a volume for the lock file that
+  # sees the key ring read-only, the call log, the environment file it archives, and a volume for the lock file that
   # keeps two runs from overlapping. The call log is there for its lock and for the check that it drained: a dump is
-  # taken only while no record waits in it for the database.
+  # taken only while no record waits in it for the database. It is writable for one file alone, the lock a directory no
+  # node has opened yet does not have (hold_call_log in deploy/ops/common.sh).
   backup:
     <<: *ops
     entrypoint: [/ops/backup.sh]
@@ -383,7 +384,7 @@ services:
       AXIOM_CALL_LOG_DIR: /call-log
     volumes:
       - keys:/keys:ro
-      - call_log:/call-log:ro
+      - call_log:/call-log
       - ${AXIOM_BACKUP_ENV_FILE:-./.env}:/deploy/.env:ro
       - backup_state:/state
     depends_on:

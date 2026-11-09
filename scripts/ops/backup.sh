@@ -38,6 +38,16 @@ compose_args=()
 for file in "${files[@]}"; do compose_args+=(-f "$file"); done
 compose() { docker compose "${compose_args[@]}" --env-file "$env_file" "$@"; }
 
+# The set archives the environment file this run was given, not whichever file AXIOM_BACKUP_ENV_FILE or the compose
+# default would mount: one belonging to another deployment would restore that deployment's hosts, images and
+# credentials next to this database. Absolute, because compose resolves a relative mount against deploy/; checked before
+# anything stops, because a missing file would otherwise become a directory mounted in its place.
+[ -f "$env_file" ] && [ -r "$env_file" ] || { echo "backup: cannot read $env_file" >&2; exit 1; }
+AXIOM_BACKUP_ENV_FILE="$(cd "$(dirname "$env_file")" && pwd)/$(basename "$env_file")"
+# Docker Desktop on Windows needs the Windows form of a git bash path, as in restore.sh.
+if command -v cygpath > /dev/null 2>&1; then AXIOM_BACKUP_ENV_FILE=$(cygpath -w "$AXIOM_BACKUP_ENV_FILE"); fi
+export AXIOM_BACKUP_ENV_FILE
+
 # The job's own lock guards a direct `docker compose run backup` as well; this one covers the stop and the start around
 # it. flock(1) is util-linux, on every Linux host.
 command -v flock > /dev/null || { echo "backup: flock is missing: install util-linux" >&2; exit 1; }
