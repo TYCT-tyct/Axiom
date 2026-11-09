@@ -184,6 +184,11 @@ record format scenario request:
 bench-compare base:
     go run -C tools ./benchgate .. {{ quote(base) }}
 
+# Start containers while other sockets churn the ephemeral ports, in a privileged Docker-in-Docker with a range of its
+# own: Docker's own port pick must fail there and containertest.Start must not (docs/architecture.md「测试容器」).
+port-stress containers="20":
+    bash scripts/ci/port-stress.sh {{ quote(containers) }}
+
 # Send the same requests to Axiom and to the official new-api image, both served by one fake upstream that replays the
 # protocol samples, and fail on any difference docs/domains/gateway.md「与 new-api 的有意差异」 does not explain. It pulls
 # an image and starts a container, so it is not part of `check`; run it on the CI server: remote-check.sh <worktree> diff

@@ -8,12 +8,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	mrand "math/rand/v2"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -93,7 +91,7 @@ func Own(t testing.TB, opts ...Option) *Server {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), startTimeout)
 	t.Cleanup(cancel)
-	b, err := startOnAPort(ctx, acl(password, admin, false), settings)
+	b, err := startServer(ctx, acl(password, admin, false), settings)
 	if err != nil {
 		t.Fatalf("start valkey: %v", err)
 	}
@@ -135,48 +133,14 @@ func (s *Server) Start(t testing.TB) {
 type Option func(*options)
 
 type options struct {
-	memory   string
-	policy   string
-	hostPort string // the port on this machine, fixed so that a restarted container is found where it was
+	memory string
+	policy string
 }
 
 const (
 	defaultMemory = "256mb"
 	defaultPolicy = "noeviction"
 )
-
-// startOnAPort starts a server of a test's own on a port of this machine that it chooses. Docker gives a restarted
-// container a new port when it is left to choose one, and a client dials the address it was given: a test that restarts the
-// server needs the same port back. The port is picked below the range Docker and the system hand out, and another test
-// may pick the same one between the check and the bind, so a bind that fails is tried again on another port.
-func startOnAPort(ctx context.Context, users string, settings options) (*box, error) {
-	var err error
-	for range 8 {
-		if settings.hostPort, err = unusedPort(ctx); err != nil {
-			return nil, err
-		}
-		b, startErr := startServer(ctx, users, settings)
-		if startErr == nil {
-			return b, nil
-		}
-		if err = startErr; !strings.Contains(startErr.Error(), "programming external connectivity") {
-			break
-		}
-	}
-	return nil, err
-}
-
-// unusedPort is a port from 20000 to 29999 that nothing on this machine listens on now.
-func unusedPort(ctx context.Context) (string, error) {
-	for range 100 {
-		port := strconv.Itoa(20000 + mrand.IntN(10000)) //nolint:gosec // a port to try, not a secret
-		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort("127.0.0.1", port))
-		if err == nil {
-			return port, listener.Close()
-		}
-	}
-	return "", errors.New("no unused port from 20000 to 29999")
-}
 
 // Memory sets maxmemory, for the test that fills the server: a limit small enough to fill in a test.
 func Memory(limit string) Option { return func(o *options) { o.memory = limit } }

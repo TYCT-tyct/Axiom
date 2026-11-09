@@ -105,21 +105,23 @@ rm -f "$frontend/NOT_BUILT.txt"
   exit 1
 }
 
-# A database of its own, created and migrated the way a deployment does it. The kernel picks the host port, so jobs
-# sharing a runner never collide; the container is only named and labelled for teardown and for clean_stale.
+# A database of its own, created and migrated the way a deployment does it, on a host port run_published picks; the
+# container is only named and labelled for teardown and for clean_stale.
 postgres_image="${DEPLOY_POSTGRES_IMAGE:-postgres:18.6-alpine}"
 postgres_password="$(openssl rand -hex 16)"
 app_password="$(openssl rand -hex 16)"
 migrator_password="$(openssl rand -hex 16)"
 cgroup=()
 [ -z "${AXIOM_TEST_CGROUP_PARENT:-}" ] || cgroup=(--cgroup-parent "$AXIOM_TEST_CGROUP_PARENT")
-docker run --detach --name "$pg_name" \
+# shellcheck source=scripts/ci/publish.sh
+. "$repo/scripts/ci/publish.sh"
+database_port="$(run_published "$pg_name" 5432 \
   --label axiom.ci.old-binary-check=true \
   --restart no "${cgroup[@]}" \
   -e POSTGRES_PASSWORD="$postgres_password" -e POSTGRES_DB=axiom \
   -e AXIOM_APP_PASSWORD="$app_password" -e AXIOM_MIGRATOR_PASSWORD="$migrator_password" \
   -v "$repo/deploy/postgres/roles.sh:/docker-entrypoint-initdb.d/roles.sh:ro" \
-  -p 127.0.0.1::5432 "$postgres_image" > /dev/null || {
+  "$postgres_image")" || {
   echo "::error::cannot start the old-binary check's database" >&2
   exit 1
 }
@@ -141,8 +143,6 @@ if [ "$database_ready" != true ]; then
   docker logs --tail 100 "$pg_name" >&2 || true
   exit 1
 fi
-database_port="$(docker port "$pg_name" 5432/tcp | head -1)"
-database_port="${database_port##*:}"
 migrator_url="postgres://axiom_migrator:$migrator_password@127.0.0.1:$database_port/axiom?sslmode=disable"
 app_url="postgres://axiom_app:$app_password@127.0.0.1:$database_port/axiom?sslmode=disable"
 

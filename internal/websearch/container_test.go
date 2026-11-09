@@ -68,29 +68,33 @@ func TestSearXNGContainer(t *testing.T) {
 		}
 	})
 
-	mock, err := testcontainers.Run(ctx, "nginx:alpine",
-		network.WithNetwork([]string{"mock"}, nw),
-		testcontainers.WithExposedPorts("80/tcp"),
-		testcontainers.WithFiles(testcontainers.ContainerFile{
-			Reader: strings.NewReader(mockResults), ContainerFilePath: "/usr/share/nginx/html/results.json", FileMode: 0o644,
-		}),
-		testcontainers.WithWaitStrategyAndDeadline(2*time.Minute, wait.ForHTTP("/results.json").WithPort("80/tcp")),
-		containertest.WithHostPolicy(),
-	)
+	mock, err := containertest.Start(ctx, func() (*testcontainers.DockerContainer, error) {
+		return testcontainers.Run(ctx, "nginx:alpine",
+			network.WithNetwork([]string{"mock"}, nw),
+			testcontainers.WithExposedPorts("80/tcp"),
+			testcontainers.WithFiles(testcontainers.ContainerFile{
+				Reader: strings.NewReader(mockResults), ContainerFilePath: "/usr/share/nginx/html/results.json", FileMode: 0o644,
+			}),
+			testcontainers.WithWaitStrategyAndDeadline(2*time.Minute, wait.ForHTTP("/results.json").WithPort("80/tcp")),
+			containertest.WithHostPolicy(ctx),
+		)
+	})
 	if err != nil {
 		t.Fatalf("start the mock results server: %v", err)
 	}
 	containertest.Cleanup(t, mock, "mock results server")
 
-	searxng, err := testcontainers.Run(ctx, searxngImage,
-		network.WithNetwork([]string{"searxng"}, nw),
-		testcontainers.WithExposedPorts("8080/tcp"),
-		testcontainers.WithFiles(testcontainers.ContainerFile{
-			Reader: strings.NewReader(searxngSettings), ContainerFilePath: "/etc/searxng/settings.yml", FileMode: 0o644,
-		}),
-		testcontainers.WithWaitStrategyAndDeadline(2*time.Minute, wait.ForHTTP("/healthz").WithPort("8080/tcp")),
-		containertest.WithHostPolicy(),
-	)
+	searxng, err := containertest.Start(ctx, func() (*testcontainers.DockerContainer, error) {
+		return testcontainers.Run(ctx, searxngImage,
+			network.WithNetwork([]string{"searxng"}, nw),
+			testcontainers.WithExposedPorts("8080/tcp"),
+			testcontainers.WithFiles(testcontainers.ContainerFile{
+				Reader: strings.NewReader(searxngSettings), ContainerFilePath: "/etc/searxng/settings.yml", FileMode: 0o644,
+			}),
+			testcontainers.WithWaitStrategyAndDeadline(2*time.Minute, wait.ForHTTP("/healthz").WithPort("8080/tcp")),
+			containertest.WithHostPolicy(ctx),
+		)
+	})
 	if err != nil {
 		t.Fatalf("start SearXNG: %v", err)
 	}

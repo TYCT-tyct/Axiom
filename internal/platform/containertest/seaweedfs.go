@@ -39,17 +39,19 @@ type SeaweedFS struct {
 func StartSeaweedFS(t testing.TB, buckets ...string) SeaweedFS {
 	t.Helper()
 	ctx := t.Context()
-	container, err := testcontainers.Run(ctx, SeaweedFSImage,
-		testcontainers.WithExposedPorts("8333/tcp"),
-		testcontainers.WithFiles(testcontainers.ContainerFile{
-			Reader:            strings.NewReader(seaweedfsS3Config),
-			ContainerFilePath: "/tmp/s3.json",
-			FileMode:          0o444,
-		}),
-		testcontainers.WithCmd("server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/tmp/s3.json"),
-		testcontainers.WithWaitStrategyAndDeadline(2*time.Minute, wait.ForListeningPort("8333/tcp")),
-		WithHostPolicy(),
-	)
+	container, err := Start(ctx, func() (*testcontainers.DockerContainer, error) {
+		return testcontainers.Run(ctx, SeaweedFSImage,
+			testcontainers.WithExposedPorts("8333/tcp"),
+			testcontainers.WithFiles(testcontainers.ContainerFile{
+				Reader:            strings.NewReader(seaweedfsS3Config),
+				ContainerFilePath: "/tmp/s3.json",
+				FileMode:          0o444,
+			}),
+			testcontainers.WithCmd("server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/tmp/s3.json"),
+			testcontainers.WithWaitStrategyAndDeadline(2*time.Minute, wait.ForListeningPort("8333/tcp")),
+			WithHostPolicy(ctx),
+		)
+	})
 	if err != nil {
 		t.Fatalf("start SeaweedFS: %v", err)
 	}
