@@ -50,7 +50,7 @@
   - 计数免费，但有单独的频率限制：每个 key 的计数请求与调用各算各的（`CountRate`、`KeyRate`），互不占用。
 - **鉴权**：`Authorization: Bearer` 和 `x-api-key` 两种写法都接受。key 只能在所属站点登记的 API 域名上使用（见[账户与租户的「API key」](accounts.md#api-key)）。只凭域名和请求头认 key，认出之前不读请求体，认不出立即返回 401 并关闭连接。
 - **浏览器跨域**：调用接口默认不允许，因为把 key 放在网页里不安全；站点可以为指定的来源开放。
-- **限制**：请求体大小、各项超时和并发上限做成后台配置待定（[#731](https://github.com/TYCT-tyct/Axiom/issues/731)）：不在 `product.md` 第一版，现在是代码里的默认值（`gateway.DefaultConfig()`），没有后台读写和热更新。下表是这些默认值；设计是保存时校验它们之间的关系，不满足就拒绝保存，启动时不满足就不启动（各项的关系和内部的期限见 [gateway 模块的「超时与限额」](../../internal/gateway/README.md#超时与限额)）。
+- **限制**：请求体大小、各项超时和并发上限是后台配置——这是 `product.md` 的「可配置」原则和[安全](../security.md)对请求体与在途请求阈值的要求，**当前尚未实现**（[#731](https://github.com/TYCT-tyct/Axiom/issues/731) 跟踪）：现在是代码里的默认值（`gateway.DefaultConfig()`），没有后台读写和热更新。下表是这些默认值；设计是保存时校验它们之间的关系，不满足就拒绝保存，启动时不满足就不启动（各项的关系和内部的期限见 [gateway 模块的「超时与限额」](../../internal/gateway/README.md#超时与限额)）。
 
 | 用户遇到的限制 | 默认 | 到了之后 |
 |---|---|---|
