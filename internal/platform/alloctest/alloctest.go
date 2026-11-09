@@ -121,8 +121,10 @@ func MeasureRetained(t *testing.T, funcs ...RetainedFunction) map[string]uint64 
 // own reads, can only add to a reading; a reading never exceeds what was live.
 //
 // The collector is off between readings so that only a reading collects, and the memory limit is lifted for the same
-// reason; both are restored when the child is done. Like the other measurements it may be called once in t: the child
-// stops t as soon as it has reported.
+// reason; both are restored when the child is done. A reading stops each goroutine only where it calls a function, so
+// that what the goroutine dropped is not read as live (childEnvironment): a goroutine of F in a loop that calls nothing
+// holds the reading, and every other goroutine with it, until the loop ends, so it must not spin waiting for another.
+// Like the other measurements it may be called once in t: the child stops t as soon as it has reported.
 func MeasurePeak(t *testing.T, funcs ...PeakFunction) map[string]uint64 {
 	t.Helper()
 	return measure(t, funcs, peakMode, childPeak, parsePeak)
@@ -185,7 +187,10 @@ func spawn(t *testing.T, mode string) ([]byte, error) {
 // childEnvironment is the child's environment: this process's, with the keys alloctest sets replaced rather than
 // repeated, because which of two entries a reader takes is its own business. A peak child also gets stop-the-world
 // collections: a reading must be the heap live when the collection stopped the world, not what the program allocated
-// between the end of the mark and the reading.
+// between the end of the mark and the reading. And it gets no asynchronous preemption: a goroutine stopped between two
+// calls has its frame and registers scanned conservatively, so a dead slot or a stale register still pointing at memory
+// the program dropped keeps that memory live in the reading, by however much the goroutine happened to drop last.
+// Stopped only at a call, every frame is scanned by its liveness map, and a reading is what the program can reach.
 func childEnvironment(name, mode string) []string {
 	env := os.Environ()
 	out := make([]string, 0, len(env)+3)
@@ -204,7 +209,7 @@ func childEnvironment(name, mode string) []string {
 		if godebug != "" {
 			godebug += ","
 		}
-		out = append(out, "GODEBUG="+godebug+"gcstoptheworld=2")
+		out = append(out, "GODEBUG="+godebug+"gcstoptheworld=2,asyncpreemptoff=1")
 	}
 	return out
 }
