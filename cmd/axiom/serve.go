@@ -88,15 +88,20 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
-	archive, err := openArchiveStore(cfg.objectstore)
+	archive, err := openBucket(cfg.objectstore)
 	if err != nil {
-		return err
+		return fmt.Errorf("object store:\n%w", err)
 	}
 	var archiveStore observability.ArchiveStore
 	if archive != nil {
 		archiveStore = archive
 		defer archive.Close()
 	}
+	replica, closeReplica, err := openReplica(cfg.auditReplica)
+	if err != nil {
+		return err
+	}
+	defer closeReplica()
 	// Claim every listener before the slow steps (database check, cache, queue, call path), so a taken address is named
 	// at once instead of after them. The same listeners serve; shutdown closes them, and a failed start closes them here.
 	servers := listeners(cfg)
@@ -133,7 +138,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer stopCache()
-	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, tel, logger, cfg.valkey.NodeID, cfg.shutdownTimeout, cfg.callLogDir, record)
+	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, replica, tel, logger, cfg.valkey.NodeID, cfg.shutdownTimeout, cfg.callLogDir, record)
 	if err != nil {
 		return err
 	}
@@ -303,8 +308,8 @@ func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) 
 // the datasets through exit, the client the whole node shares.
 func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
 	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger,
-	signals *alert.Bus, paymentSignals *payments.SignalState, nodeID string,
+	directFormats bool, archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
+	logger *slog.Logger, signals *alert.Bus, paymentSignals *payments.SignalState, nodeID string,
 ) (*pg.Queue, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
 	recovery, registration, err := registerNotifications(ctx, db, queue, smtp, cache, master, keys, exit, logger)
@@ -331,10 +336,12 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, ca
 	// The cap counters are added up again from the money they count; a scope where they differ is paused until the
 	// owner repairs it (docs/domains/operations.md「转账的累计金额上限」).
 	// Every committed audit entry is linked into a hash chain after it commits, and the whole chain is checked daily
-	// (docs/domains/operations.md「审计」).
+	// and copied to the replica bucket; each UTC day ends with the owner's digest (docs/domains/operations.md「审计」).
 	if err := errors.Join(operations.RegisterExpiry(db, pg.PlatformScope(), queue, logger),
 		operations.RegisterReconcile(db, pg.PlatformScope(), queue, logger),
-		operations.RegisterAuditChain(db, pg.PlatformScope(), queue, logger)); err != nil {
+		operations.RegisterAuditChain(db, pg.PlatformScope(), queue, logger),
+		operations.RegisterAuditDigest(db, pg.PlatformScope(), queue, logger),
+		registerAuditReplica(db, queue, replica, logger)); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -493,8 +500,8 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 // failing step, including the queue, is closed here, since the caller has no defer of its own yet.
 func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	directFormats bool, archive observability.ArchiveStore, tel *telemetry.Telemetry, logger *slog.Logger, nodeID string,
-	timeout time.Duration, callLogDir string,
+	directFormats bool, archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
+	logger *slog.Logger, nodeID string, timeout time.Duration, callLogDir string,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, *alert.Bus, *payments.SignalState, error) {
 	recorder, err := record(ctx, db, tel, callLogDir, logger)
@@ -506,7 +513,7 @@ func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.K
 	}
 	signals := alert.New(ctx, db, pg.PlatformScope(), logger)
 	paymentSignals := payments.NewSignalState()
-	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, directFormats, archive, tel, logger, signals, paymentSignals, nodeID)
+	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, directFormats, archive, replica, tel, logger, signals, paymentSignals, nodeID)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
 		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
@@ -588,17 +595,14 @@ func registerRetention(db *pg.DB, archive observability.ArchiveStore, queue *pg.
 	})
 }
 
-// openArchiveStore opens the deployment's object store, or none: a bucket that is not configured turns the call log's
-// archive off and leaves every partition in PostgreSQL.
-func openArchiveStore(cfg objectstore.Config) (*objectstore.Client, error) {
+// openBucket opens a configured bucket, or none: a bucket that is not configured turns off what writes to it (the call
+// log's archive leaves every partition in PostgreSQL; the audit chain is not copied off-site).
+func openBucket(cfg objectstore.Config) (*objectstore.Client, error) {
 	client, err := objectstore.Open(cfg)
 	if errors.Is(err, objectstore.ErrNotConfigured) {
-		return nil, nil //nolint:nilnil // no bucket is a valid state: the archive is off
+		return nil, nil //nolint:nilnil // no bucket is a valid state: what writes to it is off
 	}
-	if err != nil {
-		return nil, fmt.Errorf("object store:\n%w", err)
-	}
-	return client, nil
+	return client, err
 }
 
 // closeCache ends the cache's loops and deletes the node's heartbeat within timeout, on a context that outlives the one

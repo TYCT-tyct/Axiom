@@ -130,7 +130,7 @@ func preview(p operations.Proposal) operations.Operation {
 
 // runOperation makes the change op asks for in tx, as the agent's, and answers what it left. A top-up proposal changes
 // nothing yet: its reservation, rechecked here, holds until the agent confirms the money. A sale price is published and
-// counted in the day's envelope. A credit is given and its reservation committed. An endpoint is switched, a group
+// counted in the day's envelope, and so are the prices a pricing rule's change moves. A credit is given and its reservation committed. An endpoint is switched, a group
 // selected or a waiting name mapped. An alert is raised or resolved.
 func (a adminAPI) runOperation(ctx context.Context, tx pg.Tx, op operations.Operation) (map[string]any, error) {
 	switch op.Tool {
@@ -138,6 +138,8 @@ func (a adminAPI) runOperation(ctx context.Context, tx pg.Tx, op operations.Oper
 		return a.runModelStatus(ctx, tx, op)
 	case "price_publish":
 		return a.runPricePublish(ctx, tx, op)
+	case "pricing_rule_create", "pricing_rule_update":
+		return a.runPricingRule(ctx, tx, op)
 	case "credit_grant":
 		return a.runCreditGrant(ctx, tx, op)
 	case "endpoint_set_enabled":
@@ -237,13 +239,13 @@ func operationBody(op operations.Operation) operationsapi.Operation {
 		DryRun: op.ID == (uuid.UUID{}),
 	}
 	body.ErrorCode = optionalText(op.Error)
+	if op.Result != nil {
+		body.Result = new(jsonx.Raw(op.Result))
+	}
 	if body.DryRun {
 		return body
 	}
 	body.OperationId, body.CreatedAt, body.UpdatedAt = new(op.ID.String()), &op.Created, &op.Updated
-	if op.Result != nil {
-		body.Result = new(jsonx.Raw(op.Result))
-	}
 	if op.State == operations.StatePending {
 		body.NextCheckAfterSeconds = new(recheckSeconds)
 	}

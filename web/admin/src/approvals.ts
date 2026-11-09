@@ -33,14 +33,16 @@ export type CapLimits = {
   rev?: number;
 };
 
-const record = (value: unknown): Record<string, unknown> | undefined =>
+export const record = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 
 const integerText = (value: unknown) => (typeof value === "string" && /^\d+$/.test(value) ? value : undefined);
-const count = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) ? value : undefined);
+export const count = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) ? value : undefined);
 
 // complete is values when every one of them was read, and nothing otherwise.
-function complete<T extends Record<string, unknown>>(values: T): { [K in keyof T]: NonNullable<T[K]> } | undefined {
+export function complete<T extends Record<string, unknown>>(
+  values: T,
+): { [K in keyof T]: NonNullable<T[K]> } | undefined {
   return Object.values(values).every((value) => value !== undefined)
     ? (values as { [K in keyof T]: NonNullable<T[K]> })
     : undefined;

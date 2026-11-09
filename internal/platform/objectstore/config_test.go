@@ -144,3 +144,30 @@ func TestOpenCarriesTheBucketInTheHostForVirtualStyle(t *testing.T) {
 		t.Fatalf("host = %q, want the bucket in front of the endpoint's host and port", got)
 	}
 }
+
+func TestReadConfigAtNamesItsOwnVariables(t *testing.T) {
+	const prefix = "AXIOM_AUDIT_REPLICA"
+	cfg, err := ReadConfigAt(config.New(env(
+		prefix+"_ENDPOINT", "https://s3.example.com", prefix+"_BUCKET", "audit",
+		prefix+"_ACCESS_KEY_ID", "A", prefix+"_SECRET_ACCESS_KEY", "S",
+		endpointVar, "https://other.example.com",
+	)), prefix)
+	if err != nil || cfg.Endpoint != "https://s3.example.com" || cfg.Bucket != "audit" || cfg.Region != defaultRegion {
+		t.Fatalf("ReadConfigAt = %+v, %v", cfg, err)
+	}
+	if _, err := Open(cfg); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_, err = ReadConfigAt(config.New(env(prefix+"_ENDPOINT", "s3.example.com", prefix+"_PATH_STYLE", "yes")), prefix)
+	for _, want := range []string{
+		prefix + "_ENDPOINT: want", prefix + "_BUCKET: required", prefix + "_PATH_STYLE: want",
+		prefix + "_ACCESS_KEY_ID and " + prefix + "_SECRET_ACCESS_KEY: required",
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "AXIOM_OBJECTSTORE") {
+		t.Fatalf("err names the program's variables: %v", err)
+	}
+}

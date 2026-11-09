@@ -20,15 +20,15 @@ WHERE site_id = @site_id
 RETURNING *;
 
 -- name: EnsurePriceCounters :exec
--- The site's row and the model's row of a UTC day, made at zero if they are not there yet.
+-- The site's row and the models' rows of a UTC day, made at zero if they are not there yet.
 INSERT INTO operations.price_counters (site_id, day_start, model_id)
-VALUES (@site_id, @day_start, NULL), (@site_id, @day_start, @model_id::uuid)
+SELECT @site_id, @day_start, m FROM unnest(array_prepend(NULL::uuid, @model_ids::uuid[])) AS m
 ON CONFLICT DO NOTHING;
 
 -- name: LockPriceCounters :many
--- The site's row, then the model's: every path locks them in this order.
+-- The site's row, then the models' in ascending order: every path locks them in this order.
 SELECT * FROM operations.price_counters
-WHERE site_id = @site_id AND day_start = @day_start AND (model_id IS NULL OR model_id = @model_id::uuid)
+WHERE site_id = @site_id AND day_start = @day_start AND (model_id IS NULL OR model_id = ANY(@model_ids::uuid[]))
 ORDER BY model_id NULLS FIRST
 FOR UPDATE;
 

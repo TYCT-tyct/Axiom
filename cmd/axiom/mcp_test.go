@@ -49,10 +49,11 @@ func TestBridgeToolsFollowTheContract(t *testing.T) {
 	t.Parallel()
 	tools := contractTools(t)
 	want := []string{
-		"alert_raise", "alert_resolve", "alerts_list", "approval_get", "approval_wait", "approval_withdraw", "approvals_list", "audit_get",
+		"alert_raise", "alert_resolve", "alerts_list", "approval_get", "approval_wait", "approval_withdraw", "approvals_list", "audit_digests", "audit_get",
 		"audit_list", "call_get", "calls_list", "caps_get", "credit_grant", "endpoint_set_enabled", "model_get", "model_set_status",
 		"models_list", "operation_get", "operation_log_list",
-		"operations_list", "pending_mappings_list", "price_publish", "prices_list", "supplier_group_select", "supplier_model_map",
+		"operations_list", "pending_mappings_list", "price_publish", "prices_list", "pricing_rule_create", "pricing_rule_update",
+		"pricing_rules_list", "supplier_group_select", "supplier_model_map",
 		"supplier_top_up_confirm", "supplier_top_up_propose", "suppliers_get", "suppliers_list", "whoami",
 	}
 	if names := slices.Sorted(maps.Keys(tools)); !slices.Equal(names, want) {
@@ -67,6 +68,7 @@ func TestBridgeToolsFollowTheContract(t *testing.T) {
 		{"suppliers_list", []string{"reason"}, true},
 		{"model_set_status", []string{"idempotency_key", "model_id", "reason", "rev", "status"}, false},
 		{"credit_grant", []string{"account_id", "amount", "idempotency_key", "reason"}, false},
+		{"pricing_rule_update", []string{"idempotency_key", "reason", "rev", "rule", "rule_id"}, false},
 	}
 	for _, c := range cases {
 		tool := tools[c.tool].tool

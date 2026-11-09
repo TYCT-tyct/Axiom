@@ -1,11 +1,13 @@
 package operations
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"maps"
 	"math/big"
+	"slices"
 	"time"
 	"uuid"
 
@@ -220,17 +222,112 @@ func lockEnvelope(ctx context.Context, tx pg.Tx, site uuid.UUID) (PriceEnvelope,
 	return envelopeOf(rows[0]), nil
 }
 
-// holdPriceCounters makes and locks the site's and the model's rows of the day, in that order.
-func holdPriceCounters(ctx context.Context, tx pg.Tx, site, model uuid.UUID, day time.Time) (siteRow, modelRow OperationsPriceCounter, err error) {
+// holdPriceCounters makes and locks the day's site row and the rows of models, the site's first and then the models'
+// in ascending order, and answers them by model.
+func holdPriceCounters(ctx context.Context, tx pg.Tx, site uuid.UUID, models []uuid.UUID, day time.Time) (siteRow OperationsPriceCounter, modelRows map[uuid.UUID]OperationsPriceCounter, err error) {
 	q := New()
-	if err := q.EnsurePriceCounters(ctx, tx, EnsurePriceCountersParams{SiteID: site, DayStart: day, ModelID: model}); err != nil {
-		return siteRow, modelRow, fmt.Errorf("make the price counters: %w", err)
+	if err := q.EnsurePriceCounters(ctx, tx, EnsurePriceCountersParams{SiteID: site, DayStart: day, ModelIds: models}); err != nil {
+		return siteRow, nil, fmt.Errorf("make the price counters: %w", err)
 	}
-	rows, err := q.LockPriceCounters(ctx, tx, LockPriceCountersParams{SiteID: site, DayStart: day, ModelID: model})
-	if err != nil || len(rows) != 2 {
-		return siteRow, modelRow, fmt.Errorf("lock the price counters (%d): %w", len(rows), err)
+	rows, err := q.LockPriceCounters(ctx, tx, LockPriceCountersParams{SiteID: site, DayStart: day, ModelIds: models})
+	if err != nil || len(rows) != len(models)+1 {
+		return siteRow, nil, fmt.Errorf("lock the price counters (%d of %d): %w", len(rows), len(models)+1, err)
 	}
-	return rows[0], rows[1], nil
+	modelRows = make(map[uuid.UUID]OperationsPriceCounter, len(models))
+	for _, r := range rows[1:] {
+		modelRows[*r.ModelID] = r
+	}
+	return rows[0], modelRows, nil
+}
+
+// weighing is moves weighed against their site's envelope: the envelope, the day's site row and models' rows as they
+// were before any of moves, and the parts of the envelope any of them does not keep within, none when it covers them all.
+type weighing struct {
+	envelope PriceEnvelope
+	day      time.Time
+	site     OperationsPriceCounter
+	models   map[uuid.UUID]OperationsPriceCounter
+	reasons  []Reason
+	details  []map[string]any
+}
+
+// weighPrices locks site's envelope and the day's counters of the models moves move, then decides each move as if those
+// before it were counted already: a model moved twice is weighed with its first move, and a day's last publication
+// is the one that fills it. details holds, for each move, what the owner is shown of the model's day before it. A site
+// without an envelope is ErrNoPriceEnvelope.
+func weighPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, moves []Repricing) (weighing, error) {
+	e, err := lockEnvelope(ctx, tx, site)
+	if err != nil {
+		return weighing{}, err
+	}
+	w, err := New().CapWindows(ctx, tx)
+	if err != nil {
+		return weighing{}, fmt.Errorf("read the day: %w", err)
+	}
+	siteRow, models, err := holdPriceCounters(ctx, tx, site, movedModels(moves), w.DayStart)
+	if err != nil {
+		return weighing{}, err
+	}
+	out := weighing{envelope: e, day: w.DayStart, site: siteRow, models: maps.Clone(models)}
+	day := siteRow
+	for _, r := range moves {
+		model := models[r.Model]
+		for _, reason := range e.outside(r, day, model) {
+			if !slices.Contains(out.reasons, reason) {
+				out.reasons = append(out.reasons, reason)
+			}
+		}
+		out.details = append(out.details, map[string]any{"model_change_used": model.ChangeBps, "model_moved_today": model.Count > 0})
+		if model.Count == 0 {
+			day.Models++
+		}
+		day.Count++
+		model.Count++
+		model.ChangeBps += r.counted()
+		models[r.Model] = model
+	}
+	return out, nil
+}
+
+// movedModels is each model moves move, once, in ascending order: the order their counters are locked in.
+func movedModels(moves []Repricing) []uuid.UUID {
+	models := make([]uuid.UUID, 0, len(moves))
+	for _, r := range moves {
+		models = append(models, r.Model)
+	}
+	slices.SortFunc(models, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
+	return slices.Compact(models)
+}
+
+// count counts moves in the day they were weighed in.
+func (w weighing) count(ctx context.Context, tx pg.Tx, moves []Repricing) error {
+	q := New()
+	moved := map[uuid.UUID]bool{}
+	for _, r := range moves {
+		if err := q.CountPriceChange(ctx, tx, CountPriceChangeParams{
+			SiteID: r.Site, DayStart: w.day, ModelID: r.Model, ChangeBps: r.counted(), FirstMove: w.models[r.Model].Count == 0 && !moved[r.Model],
+		}); err != nil {
+			return fmt.Errorf("count the price change of model %s: %w", r.Model, err)
+		}
+		moved[r.Model] = true
+	}
+	return nil
+}
+
+// countToday is count for a proposal the agent made: every lock is taken by now, and a day that ended while the
+// proposal waited for them is not where today's moves are counted (ErrWindowEnded).
+func (w weighing) countToday(ctx context.Context, tx pg.Tx, moves []Repricing) error {
+	if err := w.count(ctx, tx, moves); err != nil {
+		return err
+	}
+	ended, err := New().WindowEnded(ctx, tx, w.day)
+	if err != nil {
+		return fmt.Errorf("check the day: %w", err)
+	}
+	if ended {
+		return ErrWindowEnded
+	}
+	return nil
 }
 
 // ProposePrice is Propose for publishing a sale price: it locks r's site's envelope and the day's site and model
@@ -238,65 +335,102 @@ func holdPriceCounters(ctx context.Context, tx pg.Tx, site, model uuid.UUID, day
 // settles, and it is counted here. A site without an envelope is ErrNoPriceEnvelope; a UTC day that ended while the
 // proposal waited for a lock is ErrWindowEnded.
 func ProposePrice(ctx context.Context, tx pg.Tx, p Proposal, r Repricing) (Operation, bool, error) {
-	e, err := lockEnvelope(ctx, tx, r.Site)
+	moves := []Repricing{r}
+	w, err := weighPrices(ctx, tx, r.Site, moves)
 	if err != nil {
 		return Operation{}, false, err
 	}
-	q := New()
-	w, err := q.CapWindows(ctx, tx)
-	if err != nil {
-		return Operation{}, false, fmt.Errorf("read the day: %w", err)
-	}
-	site, model, err := holdPriceCounters(ctx, tx, r.Site, r.Model, w.DayStart)
-	if err != nil {
-		return Operation{}, false, err
-	}
-	if reasons := e.outside(r, site, model); len(reasons) > 0 {
-		p.Summary, p.Reasons = maps.Clone(r.Summary), reasons
-		p.Summary["envelope"] = e.envelopeDetail(r, site, model)
+	if len(w.reasons) > 0 {
+		p.Summary, p.Reasons = maps.Clone(r.Summary), w.reasons
+		p.Summary["envelope"] = w.envelope.envelopeDetail(r, w.site, w.models[r.Model])
 	}
 	op, replayed, err := Propose(ctx, tx, p)
 	if err != nil || replayed || op.State != StateApproved {
 		return op, replayed, err
 	}
-	if err := countPrice(ctx, tx, r, w.DayStart, model); err != nil {
-		return Operation{}, false, err
-	}
-	// Every lock is taken by now; a day that ended meanwhile is not where today's move is counted.
-	ended, err := q.WindowEnded(ctx, tx, w.DayStart)
-	if err != nil {
-		return Operation{}, false, fmt.Errorf("check the day: %w", err)
-	}
-	if ended {
-		return Operation{}, false, ErrWindowEnded
-	}
-	return op, false, nil
+	return op, false, w.countToday(ctx, tx, moves)
 }
 
-// CountPrice counts r, a publication the owner approved, in the day it runs on: approved moves fill the envelope like
-// the agent's own. It locks the envelope, when the site has one, before the counters, as ProposePrice does.
-func CountPrice(ctx context.Context, tx pg.Tx, r Repricing) error {
-	if _, err := lockEnvelope(ctx, tx, r.Site); err != nil && !errors.Is(err, ErrNoPriceEnvelope) {
+// ProposePrices is Propose for a change that moves several of site's sale prices at once, such as a pricing rule's,
+// which the caller has made in tx already and measured as moves (none when it moves no published price). Within the
+// envelope, every move together, it is approved and counted here, and the caller settles it. Outside it, undo takes
+// the change back first and the owner is asked, shown p.Summary with the envelope and moves added to it: at most
+// maxShownMoves of them, beside how many there are. A retry is answered with its operation, after undo too. A site
+// without an envelope is ErrNoPriceEnvelope; a UTC day that ended while the proposal waited for a lock is
+// ErrWindowEnded.
+func ProposePrices(ctx context.Context, tx pg.Tx, p Proposal, site uuid.UUID, moves []Repricing, undo func() error) (Operation, bool, error) {
+	w, err := weighPrices(ctx, tx, site, moves)
+	if err != nil {
+		return Operation{}, false, err
+	}
+	shown := p.Summary
+	p.Summary = nil
+	if len(w.reasons) > 0 {
+		if err := undo(); err != nil {
+			return Operation{}, false, err
+		}
+		p.Summary, p.Reasons = map[string]any{}, w.reasons
+		maps.Copy(p.Summary, shown)
+		p.Summary["envelope"] = w.envelope.dayDetail(w.site)
+		p.Summary["moves"], p.Summary["moves_total"] = shownMoves(moves, w.details), len(moves)
+	}
+	op, replayed, err := Propose(ctx, tx, p)
+	if err == nil && replayed && len(w.reasons) == 0 {
+		err = undo()
+	}
+	if err != nil || replayed || op.State != StateApproved {
+		return op, replayed, err
+	}
+	return op, false, w.countToday(ctx, tx, moves)
+}
+
+// maxShownMoves bounds the moves an approval or a result lists, so either stays well within its 8 KiB: a move is a
+// model with its slug, an audience and four numbers, under 460 bytes.
+const maxShownMoves = 12
+
+// MovesDetail is what an operation records of moves: each move's Summary with its change and margin, at most
+// maxShownMoves of them.
+func MovesDetail(moves []Repricing) []map[string]any {
+	return shownMoves(moves, nil)
+}
+
+func shownMoves(moves []Repricing, details []map[string]any) []map[string]any {
+	shown := make([]map[string]any, 0, min(len(moves), maxShownMoves))
+	for i, r := range moves[:min(len(moves), maxShownMoves)] {
+		d := r.Detail()
+		maps.Copy(d, r.Summary)
+		if details != nil {
+			maps.Copy(d, details[i])
+		}
+		shown = append(shown, d)
+	}
+	return shown
+}
+
+// dayDetail is what the owner is shown of the envelope and of the site's day before a change.
+func (e PriceEnvelope) dayDetail(site OperationsPriceCounter) map[string]any {
+	return map[string]any{
+		"rev": e.Rev, "min_margin_bps": e.MinMargin, "model_daily_change_bps": e.ModelDailyChange,
+		"daily_changes": e.DailyChanges, "daily_changes_used": site.Count, "daily_models": e.DailyModels, "daily_models_used": site.Models,
+	}
+}
+
+// CountPrices counts moves of site, a change the owner approved, in the day it runs on: approved moves fill the
+// envelope like the agent's own. It locks the envelope, when the site has one, before the counters, as ProposePrices
+// does.
+func CountPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, moves []Repricing) error {
+	if _, err := lockEnvelope(ctx, tx, site); err != nil && !errors.Is(err, ErrNoPriceEnvelope) {
 		return err
 	}
 	w, err := New().CapWindows(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("read the day: %w", err)
 	}
-	_, model, err := holdPriceCounters(ctx, tx, r.Site, r.Model, w.DayStart)
+	siteRow, models, err := holdPriceCounters(ctx, tx, site, movedModels(moves), w.DayStart)
 	if err != nil {
 		return err
 	}
-	return countPrice(ctx, tx, r, w.DayStart, model)
-}
-
-func countPrice(ctx context.Context, tx pg.Tx, r Repricing, day time.Time, model OperationsPriceCounter) error {
-	if err := New().CountPriceChange(ctx, tx, CountPriceChangeParams{
-		SiteID: r.Site, DayStart: day, ModelID: r.Model, ChangeBps: r.counted(), FirstMove: model.Count == 0,
-	}); err != nil {
-		return fmt.Errorf("count the price change of model %s: %w", r.Model, err)
-	}
-	return nil
+	return weighing{day: w.DayStart, site: siteRow, models: models}.count(ctx, tx, moves)
 }
 
 // PriceUsage is an envelope with what its site's counters of the current UTC day hold: the publications and models

@@ -307,6 +307,36 @@ paths:
         '404': {$ref: '#/components/responses/OutOfScope'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
         default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/audit/digests:
+    get:
+      operationId: auditDigestsList
+      summary: Daily audit digests
+      description: >-
+        The owner's digest of each UTC day, newest first, made once every transaction that could write into the day has
+        ended, and kept as it was made: the operations proposed that day by tool and where each is now, every cap
+        policy's day against its daily limits, the approvals asked that day by state, the calls refused that day by
+        error code, and how far the audit chain had got when it was made. The same headline reaches the owner's channels
+        as the alert `operations.audit_digest`, keyed by the day.
+      tags: [Audit]
+      security: [{credential: []}]
+      x-axiom-permission: audit.view
+      x-axiom-scope: platform
+      x-mcp-name: audit_digests
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of digests
+          content: {application/json: {schema: {$ref: '#/components/schemas/AuditDigestList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
   /api/operations/v1/audit/{entry_id}:
     get:
       operationId: auditGet
@@ -809,7 +839,8 @@ paths:
         Each model's published sale price and the proposal the automatic publisher made for it, as the admin reads them:
         a proposal whose `status` is `pending` or `blocked` waits for someone to publish it (`pricePublish`) with
         its `candidate_id` and `current_id`. The publisher refreshes the proposals every few seconds, so a proposal read
-        here may be replaced before it is published.
+        here may be replaced before it is published. A credential kept to sites other than the main site reads none of
+        it (404), the platform grant notwithstanding.
       tags: [Pricing]
       security: [{credential: []}]
       x-axiom-permission: pricing.view
@@ -864,6 +895,125 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
         '202':
           description: The publication, waiting for the owner's approval
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/pricing/rules:
+    get:
+      operationId: pricingRulesList
+      summary: The main site's pricing rules
+      description: >-
+        Every rule of the main site, enabled or not, in the order they are tried, as the admin reads them
+        (docs/domains/billing.md「定价」). A rule's `rev` is what `pricingRuleUpdate` changes it as of. A credential kept
+        to sites other than the main site reads none of them (404), the platform grant notwithstanding.
+      tags: [Pricing]
+      security: [{credential: []}]
+      x-axiom-permission: pricing.view
+      x-axiom-scope: platform
+      x-mcp-name: pricing_rules_list
+      parameters:
+        - $ref: '#/components/parameters/Reason'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The rules
+          content: {application/json: {schema: {$ref: '#/components/schemas/PricingRuleList'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+    post:
+      operationId: pricingRuleCreate
+      summary: Add a pricing rule
+      description: >-
+        Adds a rule to the main site as the admin does, with the same checks (`createPricingRule`), and weighs every sale
+        price the rule moves at once against the main site's price envelope (docs/domains/operations.md「售价的累计变动上限」):
+        the publisher's own threshold publishes small moves at once, so the server makes the change, refreshes the
+        prices and measures each change in what a buyer pays, as billing selects it from the audience layers (each tier,
+        and each account with a price of its own in its tier; a new layer for a more specific target can move an
+        account whose own layer did not change), never taking the agent's numbers. Moves within the least
+        margin over cost, the models' daily moves and the day's publications and models, all of them together, are
+        kept and counted (200, `succeeded`), and this node routes at the new prices at once; a change that moves no
+        price is kept. Otherwise the change is taken back and waits for the owner (202), who sees each move; so does a
+        change that gives a model its first price, takes one away or moves one no share of the old price measures, and
+        one that sets a price for a model that cannot be sold yet (no endpoint, an endpoint switched off, or an unknown
+        cost), which the publisher would otherwise publish by itself once the model can be served. Moves over the publisher's threshold wait
+        as proposals, which `pricePublish` publishes within the envelope. A site without an envelope is a 422
+        `cap_exceeded`; a rule for a target and audience that have one is a 409 `conflict`, at once or when the owner
+        approves; a rule over 8 KiB as JSON is a 422 `unprocessable`. The result has `rule_id`, `rev`, `moves_total` and `moves`: up to 12 of the moves, each with
+        `model_id`, `slug`, `audience` (the tier or account first seen paying it), `change_bps` and `margin_bps`. With `dry_run` the same checks run, nothing is written
+        and `result` has `moves_total` and `moves` the change would make now.
+      tags: [Pricing]
+      security: [{credential: []}]
+      x-axiom-permission: pricing.manage
+      x-axiom-money: true
+      x-axiom-scope: platform
+      x-mcp-name: pricing_rule_create
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/PricingRuleWrite'}}}
+      responses:
+        '200':
+          description: The rule added, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '202':
+          description: The rule, waiting for the owner's approval
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/CredentialRejected'}
+        '403': {$ref: '#/components/responses/CredentialForbidden'}
+        '404': {$ref: '#/components/responses/OutOfScope'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/Unprocessable'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        default: {$ref: '#/components/responses/Failure'}
+  /api/operations/v1/pricing/rules/{rule_id}:
+    put:
+      operationId: pricingRuleUpdate
+      summary: Change a pricing rule
+      description: >-
+        Replaces the rule's target, audience, method, constraints and `enabled` as of `rev`, as the admin does
+        (`updatePricingRule`), and weighs every sale price it moves against the main site's price envelope as
+        `pricingRuleCreate` does, with the same answers and result. A rule changed since `rev` is a 409
+        `stale_revision`, at once or when the owner approves.
+      tags: [Pricing]
+      security: [{credential: []}]
+      x-axiom-permission: pricing.manage
+      x-axiom-money: true
+      x-axiom-scope: platform
+      x-mcp-name: pricing_rule_update
+      parameters:
+        - {in: path, name: rule_id, required: true, schema: {$ref: '#/components/schemas/Uuid'}}
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RunId'
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/PricingRuleChange'}}}
+      responses:
+        '200':
+          description: The rule changed, found again under its key as it is now, or previewed
+          headers:
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
+        '202':
+          description: The change, waiting for the owner's approval
           headers:
             Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
           content: {application/json: {schema: {$ref: '#/components/schemas/Operation'}}}
@@ -1309,7 +1459,9 @@ components:
           type: object
           additionalProperties: true
           x-go-type: jsonx.Raw
-          description: What the change answered, once it succeeded.
+          description: >-
+            What the change answered, once it succeeded; for a preview of `pricingRuleCreate` or `pricingRuleUpdate`,
+            the sale prices the change would move now.
         error_code: {type: string, description: "Why it ended `rejected`: the code the target refused the change with."}
         next_check_after_seconds: {type: integer, minimum: 1, description: "While it waits: when to read it again."}
         created_at: {type: string, format: date-time}
@@ -1446,6 +1598,91 @@ components:
           description: The model's current version as read with the proposal; absent when it has none.
         reason: {$ref: '#/components/schemas/AgentReason'}
         dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
+    PricingRuleWrite:
+      type: object
+      additionalProperties: false
+      required: [rule, reason]
+      properties:
+        rule: {$ref: '#/components/schemas/PricingRuleInput'}
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
+    PricingRuleChange:
+      type: object
+      additionalProperties: false
+      required: [rev, rule, reason]
+      properties:
+        rev: {type: integer, format: int64, minimum: 0, description: The rule's `rev` as read.}
+        rule: {$ref: '#/components/schemas/PricingRuleInput'}
+        reason: {$ref: '#/components/schemas/AgentReason'}
+        dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
+    PricingTarget:
+      type: object
+      required: [kind]
+      description: >-
+        What a rule prices, from the most specific to the widest: an endpoint, a supplier group, a supplier, a model, a
+        model author, a source type, or everything. `id` is that thing's ID (a model author's slug), and absent for
+        `all`.
+      properties:
+        kind: {type: string, enum: [endpoint, group, supplier, model, author, source_type, all]}
+        id: {type: string, maxLength: 200}
+    PricingMethod:
+      type: object
+      required: [kind]
+      description: >-
+        How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio`
+        instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios.
+        `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in
+        the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency
+        in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding.
+        A missing exchange rate stops publication for the matched model, without falling through to another rule
+        (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. The members of the other kinds must be absent.
+      properties:
+        kind: {type: string, enum: [cost_plus, reference_multiplier, fixed]}
+        markup_ratio: {$ref: "#/components/schemas/Decimal"}
+        margin_ratio: {$ref: "#/components/schemas/Decimal"}
+        fixed_markup: {$ref: "#/components/schemas/Rates"}
+        multiplier: {$ref: "#/components/schemas/Decimal"}
+        currency_conversion: {type: string, enum: [exchange, face]}
+        schedule: {$ref: "#/components/schemas/PriceSchedule"}
+    PricingConstraints:
+      type: object
+      description: >-
+        Limits on the price a rule sets, as ratios. This release does not apply them: a request that carries any
+        member (`min_margin_ratio`, `reference_min_ratio`, `reference_max_ratio`) is refused as 422 with the field
+        pointer `/rule/constraints/<member>`, so send `{}`. A stored rule that still has one is not priced, and
+        saving it without constraints clears them (#234).
+      properties:
+        min_margin_ratio: {$ref: "#/components/schemas/Decimal"}
+        reference_min_ratio: {$ref: "#/components/schemas/Decimal"}
+        reference_max_ratio: {$ref: "#/components/schemas/Decimal"}
+    PricingRuleInput:
+      type: object
+      required: [enabled, target, audience, method, constraints]
+      properties:
+        enabled: {type: boolean}
+        target: {$ref: "#/components/schemas/PricingTarget"}
+        audience: {$ref: "#/components/schemas/PricingAudience"}
+        method: {$ref: "#/components/schemas/PricingMethod"}
+        constraints: {$ref: "#/components/schemas/PricingConstraints"}
+    PricingRule:
+      type: object
+      required: [id, rev, enabled, target, audience, method, constraints, updated_at]
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        rev: {type: integer, format: int64, minimum: 0}
+        enabled: {type: boolean}
+        target: {$ref: "#/components/schemas/PricingTarget"}
+        audience: {$ref: "#/components/schemas/PricingAudience"}
+        method: {$ref: "#/components/schemas/PricingMethod"}
+        constraints: {$ref: "#/components/schemas/PricingConstraints"}
+        updated_at: {type: string, format: date-time}
+    PricingRuleList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/PricingRule"}
     OperationsPriceEnvelope:
       type: object
       additionalProperties: false
@@ -1770,6 +2007,80 @@ components:
             writes it, so they are not typed here (one schema per action would be a second registry of every change
             every module makes); show it as a tree of labelled values and decide nothing from it. Large integers are
             written as they were, so read it with a parser that keeps them exact.
+    AuditDigestList:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/AuditDigest'}}
+        next_cursor: {type: string}
+    AuditDigest:
+      type: object
+      additionalProperties: false
+      required: [day, made_at, operations, money, approvals, refused, chain]
+      properties:
+        day: {type: string, format: date, description: The UTC day.}
+        made_at: {type: string, format: date-time}
+        operations:
+          type: array
+          description: The agent's operations proposed that day, by tool and the state each is in now.
+          items:
+            type: object
+            additionalProperties: false
+            required: [tool, state, count]
+            properties:
+              tool: {type: string}
+              state: {type: string}
+              count: {type: integer, format: int32, minimum: 1}
+        money:
+          type: array
+          description: >-
+            Every cap policy with what its category held for that UTC day when the digest was made, against the
+            autonomous and hard daily limits.
+          items:
+            type: object
+            additionalProperties: false
+            required: [scope, category, currency, reserved, committed, count, daily_max, hard_daily_max, daily_count_max]
+            properties:
+              scope: {type: string, description: "`platform` or a site's ID."}
+              category: {$ref: '#/components/schemas/OperationsCapCategory'}
+              currency: {type: string, pattern: '^[A-Z]{3}$'}
+              reserved: {$ref: '#/components/schemas/OperationsCapAmount'}
+              committed: {$ref: '#/components/schemas/OperationsCapAmount'}
+              count: {type: integer, format: int32, minimum: 0}
+              daily_max: {$ref: '#/components/schemas/OperationsCapAmount'}
+              hard_daily_max: {$ref: '#/components/schemas/OperationsCapAmount'}
+              daily_count_max: {type: integer, format: int32, minimum: 0}
+        approvals:
+          type: array
+          description: The approvals asked that day, by the state each is in now.
+          items:
+            type: object
+            additionalProperties: false
+            required: [state, count]
+            properties:
+              state: {$ref: '#/components/schemas/OperationsApprovalState'}
+              count: {type: integer, format: int32, minimum: 1}
+        refused:
+          type: array
+          description: The operations calls refused that day (HTTP 4xx), dated by when the database logged them, by error code; empty for a refusal without one.
+          items:
+            type: object
+            additionalProperties: false
+            required: [code, count]
+            properties:
+              code: {type: string}
+              count: {type: integer, format: int32, minimum: 1}
+        chain:
+          type: object
+          additionalProperties: false
+          required: [head_seq, faults]
+          description: The audit hash chain when the digest was made.
+          properties:
+            head_seq: {type: integer, format: int64, minimum: 0, description: The last link; 0 before the first.}
+            head_at: {type: string, format: date-time, description: The time of the last link's entry.}
+            faults: {type: integer, format: int64, minimum: 0, description: Faults found; any stops the chaining until the owner acts.}
+            checked_at: {type: string, format: date-time, description: 'When a check of the whole chain last finished; while a round runs, when the one before it finished.'}
     AuditEntryList:
       type: object
       additionalProperties: false

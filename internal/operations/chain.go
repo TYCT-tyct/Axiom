@@ -57,15 +57,10 @@ var chainActor = audit.System("operations.audit_chain")
 var genesis = make([]byte, sha256.Size)
 
 // linkHash is the hash of the link of e after the link whose hash is prev: SHA-256 of prev followed by the entry's
-// fields as an RFC 8785 JSON array of strings and nulls, the first naming this encoding. The detail is the text
-// PostgreSQL prints for the jsonb, which is the same for the same value. A verifier outside Axiom recomputes it from
-// an export of the log and the chain.
+// fields (entryFields) as an RFC 8785 JSON array. A verifier outside Axiom recomputes it from an export of the log and
+// the chain, or from the replica's objects alone.
 func linkHash(prev []byte, e audit.Entry) ([]byte, error) {
-	encoded, err := jsonx.MarshalCanonical([]any{
-		"axiom.audit.v1", e.ID.String(), e.At.UTC().Format("2006-01-02T15:04:05.000000Z"), e.ActorKind, e.ActorID,
-		nullable(e.RequestID), e.Action, e.Module, e.TargetKind, e.TargetID, nullable(e.Site), nullable(e.Account),
-		e.Reason, string(e.Detail),
-	})
+	encoded, err := jsonx.MarshalCanonical(entryFields(e))
 	if err != nil {
 		return nil, fmt.Errorf("encode audit entry %s: %w", e.ID, err)
 	}
@@ -73,6 +68,16 @@ func linkHash(prev []byte, e audit.Entry) ([]byte, error) {
 	h.Write(prev)
 	h.Write(encoded)
 	return h.Sum(nil), nil
+}
+
+// entryFields is what a link's hash covers of its entry: strings and nulls, the first naming this encoding. The detail
+// is the text PostgreSQL prints for the jsonb, which is the same for the same value.
+func entryFields(e audit.Entry) []any {
+	return []any{
+		"axiom.audit.v1", e.ID.String(), e.At.UTC().Format("2006-01-02T15:04:05.000000Z"), e.ActorKind, e.ActorID,
+		nullable(e.RequestID), e.Action, e.Module, e.TargetKind, e.TargetID, nullable(e.Site), nullable(e.Account),
+		e.Reason, string(e.Detail),
+	}
 }
 
 // nullable is id as text, or null for none.
@@ -323,45 +328,55 @@ func signalCheck(ctx context.Context, tx pg.Tx, round AuditChainCheckRow) error 
 	})
 }
 
-// verifyBatch checks up to chainBatch links from seq from: each follows the link before it, the entry at its place in
-// the log's (at, id) order is its entry, and that entry still hashes to it. An entry behind the head that was never
-// linked takes some link's place, so it is found too. It returns the first fault, or the seq to go on from, 0 when the
-// batch reached the head.
+// verifyBatch checks up to chainBatch links from seq from (checkedLinks). It returns the first fault, or the seq to go
+// on from, 0 when the batch reached the head.
 func verifyBatch(ctx context.Context, tx pg.Tx, from int64) (*fault, int64, error) {
+	links, _, f, err := checkedLinks(ctx, tx, from)
+	switch {
+	case err != nil || f != nil:
+		return f, 0, err
+	case len(links) < chainBatch:
+		return nil, 0, nil
+	}
+	return nil, from + chainBatch, nil
+}
+
+// checkedLinks reads up to chainBatch links from seq from with their entries and checks them: each follows the link
+// before it, the entry at its place in the log's (at, id) order is its entry, and that entry still hashes to it. An
+// entry behind the head that was never linked takes some link's place, so it is found too. It returns the links that
+// hold, each with its entry, up to the first fault, and that fault.
+func checkedLinks(ctx context.Context, tx pg.Tx, from int64) ([]AuditChainLinksRow, []audit.Entry, *fault, error) {
 	q := New()
 	prev, after := genesis, page.Cursor{}
 	if from > 1 {
 		before, err := q.AuditChainLinks(ctx, tx, AuditChainLinksParams{Seq: from - 1, N: 1})
 		if err != nil {
-			return nil, 0, fmt.Errorf("read link %d of the audit chain: %w", from-1, err)
+			return nil, nil, nil, fmt.Errorf("read link %d of the audit chain: %w", from-1, err)
 		}
 		if len(before) == 0 || before[0].Seq != from-1 { // a link removed from behind the batch
-			return &fault{"broken", from - 1, uuid.UUID{}}, 0, nil
+			return nil, nil, &fault{"broken", from - 1, uuid.UUID{}}, nil
 		}
 		prev, after = before[0].Hash, page.Cursor{At: before[0].At, ID: before[0].EntryID}
 	}
 	links, err := q.AuditChainLinks(ctx, tx, AuditChainLinksParams{Seq: from, N: chainBatch})
 	if err != nil {
-		return nil, 0, fmt.Errorf("read the audit chain from %d: %w", from, err)
+		return nil, nil, nil, fmt.Errorf("read the audit chain from %d: %w", from, err)
 	}
 	entries, err := audit.Since(ctx, tx, after, time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), len(links))
 	if err != nil {
-		return nil, 0, fmt.Errorf("read the audit entries from link %d: %w", from, err)
+		return nil, nil, nil, fmt.Errorf("read the audit entries from link %d: %w", from, err)
 	}
 	for i, l := range links {
 		f, err := checkLink(l, prev, entries[i:])
 		if err != nil {
-			return nil, 0, err
+			return nil, nil, nil, err
 		}
 		if f.kind != "" {
-			return &f, 0, nil
+			return links[:i], entries[:i], &f, nil
 		}
 		prev = l.Hash
 	}
-	if len(links) < chainBatch {
-		return nil, 0, nil
-	}
-	return nil, from + chainBatch, nil
+	return links, entries, nil, nil
 }
 
 // checkLink checks link l, which follows the link whose hash is prev, against the entries from its place in the log

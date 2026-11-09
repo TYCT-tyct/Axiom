@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -166,6 +167,22 @@ func (f adminFixture) addUser(email, role string) {
 	if _, err := f.user("", "grant-platform", "--email", email, "--role", role); err != nil {
 		f.t.Fatal(err)
 	}
+}
+
+// childSite makes a second site under the main one, with its own tier, and loads it: a site a credential can be kept to
+// instead of the main site.
+func (f adminFixture) childSite() uuid.UUID {
+	f.t.Helper()
+	child, childTier := uuid.NewV7(), uuid.NewV7()
+	f.run("BEGIN",
+		fmt.Sprintf(`INSERT INTO accounts.sites (id,parent_site_id,owner_account_id,name,status,key_prefix,registration,default_tier_id)
+			SELECT '%s',id,(SELECT a.id FROM accounts.accounts a WHERE a.site_id=s.id LIMIT 1),'Other','active','sk-other-','closed','%s'
+			FROM accounts.sites s WHERE s.is_main`, child, childTier),
+		fmt.Sprintf(`INSERT INTO accounts.tiers(id,site_id,name) VALUES ('%s','%s','Other')`, childTier, child), "COMMIT")
+	if err := f.svc.Load(f.t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		f.t.Fatal(err)
+	}
+	return child
 }
 
 // run executes statements as the database's superuser, who is bound by no row-level security.
