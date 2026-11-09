@@ -1929,7 +1929,7 @@ export interface paths {
         get?: never;
         /**
          * Turn an endpoint on or off for routing
-         * @description A person's switch, which the operations agent also holds (`endpoint_set_enabled`): the supplier sync never writes it, so an endpoint turned off stays off until someone turns it on. Only an enabled endpoint whose cost is `known` is routed to. Every node applies the change on its next reload. Turning an endpoint on here also closes its health breaker, if open, in the same change: the failures that tripped it no longer keep it out, and it comes back with a slow start. The operations agent's switch does not touch the breaker.
+         * @description A person's switch, which the operations agent also holds (`endpoint_set_enabled`): the supplier sync never writes it, so an endpoint turned off stays off until someone turns it on. Only an enabled endpoint whose cost is `known` is routed to. Every node applies the change on its next reload. Turning an endpoint on here also resets its health breaker in the same change: failures from before it no longer keep it out, and it comes back with a slow start. The node that answers applies the reset at once; another node applies it the next time it records a health change for the endpoint, with no fixed bound. The operations agent's switch does not touch the breaker.
          */
         put: operations["setSupplierEndpointEnabled"];
         post?: never;

@@ -224,8 +224,8 @@
 
 - 熔断从不写 `enabled` 或 `cost_state`：每个模块只读写自己的表（[总体架构的「模块边界规则」](../architecture.md#模块边界规则)第 1 条）。所有模块共用一个应用角色 `axiom_app`，数据库的授权分不开模块，所以由测试守住：一个测试扫描本模块的全部 SQL，不得出现 `suppliers.` 的表；另一个测试核对熔断、恢复、重置前后这两列不变。
 - 人停用的端点不在 `suppliers.Service.Routable()` 里，所以既不被路由、也不被试探；熔断状态留着，但不起作用。
-- **人重新启用时清掉自动状态**：管理接口 `PUT /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled` 写 `enabled: true`（端点本来就启用也算）时，`cmd/axiom` 在同一个事务里先调 suppliers 的 `SetEndpointEnabled`，再调本模块的 `ResetHealth`，同成同败（第 5 条：quality 可以引用 suppliers，反过来不行，所以由组装层同时调两边）。重置只作用于开着的熔断：关上熔断、`epoch` 加一、退避归零、清除离线标记、从此刻起慢启动，记一条 `reset` 事件，强制模式下同事务解除这次事故的告警；熔断本来就关着时什么都不改。重新启用就是"人认为它好了"，旧的失败证据不该再挡住它；它要是真坏，会按下面的规则再次熔断。
-  - 提交后处理请求的节点用 `AdoptReset` 立即换上新状态，丢掉它基于旧状态排队的变化；其他节点没有定期重读健康行（H5），它们基于旧 `epoch` 的下一次变化或试探认领会在条件更新上落败，届时从库里采纳重置后的状态，不会发出这次试探。在那之前，它们仍按旧熔断把端点当最后备选或离线，最长一个退避周期（10 分钟）。
+- **人重新启用时清掉自动状态**：管理接口 `PUT /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled` 写 `enabled: true`（端点本来就启用也算）时，`cmd/axiom` 在同一个事务里先调 suppliers 的 `SetEndpointEnabled`，再调本模块的 `ResetHealth`，同成同败（第 5 条：quality 可以引用 suppliers，反过来不行，所以由组装层同时调两边）。重置总是让 `epoch` 加一（没有健康行时建一行），所以任何节点上基于旧状态的变化，包括已在内存里熔断、还没写进库的那次，写入时都会落败；同时关上熔断、退避归零、清除离线标记和试探租约、从此刻起慢启动，记一条 `reset` 事件；库里的熔断原本开着且是强制模式时，同事务解除这次事故的告警。重新启用就是"人认为它好了"，旧的失败证据不该再挡住它；它要是真坏，会按下面的规则再次熔断。
+  - 提交后处理请求的节点用 `AdoptReset` 立即换上新状态，丢掉它基于旧状态排队的变化；如果它在这之间已经从库里读到了重置（或重置之后的新状态）并在其上有了新变化，`AdoptReset` 不覆盖。其他节点没有定期重读健康行（H5），只在它们基于旧 `epoch` 的下一次变化或试探认领在条件更新上落败时，从库里采纳重置后的状态，不会发出这次试探。这个时刻没有上界：既不试探（站点和账户自带的、只有直接格式的端点，或试探预算用完时）、又因有别的候选而收不到真实请求的端点，可能一直按旧熔断当最后备选或离线，直到它有新的变化或节点重启；定期采纳属 H5。
   - 运营 agent 的启用（`endpoint_set_enabled`）不重置：自动的证据不由另一个自动的操作推翻，熔断照常等试探或真实请求恢复。停用不碰熔断。
 
 #### 健康的对象
@@ -379,7 +379,7 @@
 
 | 不变量 | 怎么检查 |
 |---|---|
-| H-I3 人重新启用后自动状态为关，两者同一事务 | `TestResetHealthClosesTheBreaker`：事务回滚时熔断不变；提交后熔断为关、`epoch` 加一，另一节点基于旧状态的变化落败；`TestEnablingAnEndpointResetsItsBreaker`：只有管理接口的启用重置 |
+| H-I3 人重新启用后自动状态为关，两者同一事务 | `TestResetHealthClosesTheBreaker`：事务回滚时熔断不变；提交后熔断为关、`epoch` 加一，另一节点基于旧状态的变化落败；`TestResetHealthVoidsATripNotYetStored`：只在内存里的熔断也被作废；`TestResetHealthKeepsATripAfterIt`：重置之后的新熔断不被迟到的写入或采纳覆盖；`TestEnablingAnEndpointResetsItsBreaker`：只有管理接口的启用重置 |
 | H-I12 线路只因建连、DNS、TLS 失败熔断；疑似拦截和出口失败从不计入端点 | 测试：HTML 响应和出口失败后端点与线路的计数都不变 |
 
 #### 测试

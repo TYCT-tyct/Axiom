@@ -26,14 +26,14 @@ func (a adminAPI) SetSupplierEndpointEnabled(ctx context.Context, request admina
 		func(tx pg.Tx) (adminapi.SupplierEndpoint, error) {
 			e, err := a.suppliers.SetEndpointEnabled(ctx, tx, actor(ctx), supplier, endpoint, request.Body.Enabled, request.Body.Reason)
 			if err == nil && request.Body.Enabled {
-				reset, err = quality.ResetHealth(ctx, tx, endpoint, time.Now())
+				reset, err = a.health.ResetHealth(ctx, tx, endpoint, time.Now())
 			}
 			return endpointBody(e), err
 		})
 	if err != nil {
 		return nil, err
 	}
-	if a.health != nil && !replayed { // the admin's tests run no call path
+	if !replayed {
 		a.health.AdoptReset(reset)
 	}
 	return adminapi.SetSupplierEndpointEnabled200JSONResponse{Body: changed, Headers: adminapi.SetSupplierEndpointEnabled200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil

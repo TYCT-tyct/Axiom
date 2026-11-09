@@ -215,7 +215,10 @@ type Monitor struct {
 
 // State holds one endpoint's measurements and live breaker under its own lock.
 type State struct {
-	generation  uint64
+	generation uint64
+	// synced counts the times record was taken from the store rather than built here: a reset adopted after it was
+	// written must not replace state this node has since read back and built on (AdoptReset).
+	synced      uint64
 	id          suppliers.EndpointID
 	mode        Mode
 	credentials int

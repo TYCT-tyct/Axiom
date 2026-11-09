@@ -74,6 +74,11 @@ func saveHealth(ctx context.Context, tx pg.Tx, c change, now time.Time) (bool, e
 
 // Persist one transition and its event atomically. The epoch also makes an ambiguous commit safe to retry.
 func (l *Loop) write(ctx context.Context, c change) error {
+	return l.writeWith(ctx, c, nil)
+}
+
+// writeWith is write with a test-only barrier between the staleness check and the store write. Production passes nil.
+func (l *Loop) writeWith(ctx context.Context, c change, barrier func()) error {
 	e := l.monitor.of(c.record.ID)
 	e.mu.Lock()
 	stale := c.generation != e.generation
@@ -84,14 +89,20 @@ func (l *Loop) write(ctx context.Context, c change) error {
 	if stale {
 		return nil
 	}
+	if barrier != nil {
+		barrier()
+	}
 	current, err := l.persist(ctx, c)
 	if err != nil {
 		return fmt.Errorf("quality: persist health: %w", err)
 	}
 	e.mu.Lock()
 	e.pending--
-	if current != c.record {
+	// A reset adopted while this change was being written has replaced the state it was built on, and changes may
+	// already be queued on the reset: the row read back here must not overwrite them.
+	if current != c.record && c.generation == e.generation {
 		e.generation++
+		e.synced++
 		e.record = current
 		e.window = window{}
 	}
@@ -174,6 +185,9 @@ func (l *Loop) claim(ctx context.Context, e *State, now time.Time) (healthRecord
 	}
 	e.mu.Lock()
 	if e.pending == 0 && e.record.Epoch == r.Epoch {
+		if e.record != current {
+			e.synced++
+		}
 		e.record = current
 	} else {
 		won = false
@@ -336,30 +350,49 @@ func (l *Loop) restore(ctx context.Context, e *State) error {
 		defer e.mu.Unlock()
 		if found && e.pending == 0 {
 			e.record = r
+			e.synced++
 		}
 		e.loaded = true
 		return nil
 	})
 }
 
-// HealthReset is a breaker ResetHealth closed in a transaction, for AdoptReset once that transaction has committed.
+// HealthReset is a reset ResetHealth wrote in a transaction, for AdoptReset once that transaction has committed.
 type HealthReset struct {
 	record healthRecord
+	// synced is the endpoint's State.synced when the reset was written; known is whether the node held state for it.
+	synced uint64
+	known  bool
 	done   bool
 }
 
-// ResetHealth closes the endpoint's breaker in tx: a person turning it on says it is well again, so the old failure
-// evidence no longer holds it out (docs/domains/quality.md「三条摘除通道，各归各的主人」). It advances the epoch, so a
-// transition or probe result based on the old state loses its conditional write on every node; clears the offline
-// mark and the backoff; starts the slow start at at; records a reset event; and, in enforce mode, resolves the
-// incident's signals in the same transaction. A breaker that is not open is left as it is.
-func ResetHealth(ctx context.Context, tx pg.Tx, id suppliers.EndpointID, at time.Time) (HealthReset, error) {
-	r, err := scanHealth(tx.QueryRow(ctx, `UPDATE quality.endpoint_health SET epoch=epoch+1,opened_at=0,restored_at=$2,
- next_probe_at=0,probe_lease_until=0,backoff=0,failures=0,sources=0,probe_owner=$3,warned=false
- WHERE endpoint_id=$1 AND opened_at>0 RETURNING `+healthColumns, id, at.UnixNano(), uuid.UUID{}))
-	if errors.Is(err, pg.ErrNoRows) {
-		return HealthReset{}, nil
+// ResetHealth resets the endpoint's breaker in tx: a person turning it on says it is well again, so the failure
+// evidence from before no longer holds it out (docs/domains/quality.md「三条摘除通道，各归各的主人」). It always advances
+// the epoch, creating the row if there is none, so every transition built on the old state loses its conditional
+// write on every node, including a trip that is still queued in memory and not yet stored. It closes the breaker,
+// clears the offline mark, the backoff and the probe lease, starts the slow start at at and records a reset event; when
+// the stored breaker was open in enforce mode, it resolves the incident's signals in the same transaction.
+func (m *Monitor) ResetHealth(ctx context.Context, tx pg.Tx, id suppliers.EndpointID, at time.Time) (HealthReset, error) {
+	var reset HealthReset
+	m.mu.RLock()
+	e := m.endpoints[id]
+	m.mu.RUnlock()
+	if e != nil {
+		e.mu.Lock()
+		reset.synced, reset.known = e.synced, true
+		e.mu.Unlock()
 	}
+	var open bool
+	err := tx.QueryRow(ctx, `SELECT opened_at>0 FROM quality.endpoint_health WHERE endpoint_id=$1 FOR UPDATE`, id).Scan(&open)
+	if err != nil && !errors.Is(err, pg.ErrNoRows) {
+		return HealthReset{}, fmt.Errorf("quality: read the breaker to reset: %w", err)
+	}
+	// A new row starts at epoch 1: a queued first trip inserts epoch 0 and updates only where the epoch is still 0.
+	r, err := scanHealth(tx.QueryRow(ctx, `INSERT INTO quality.endpoint_health AS h (endpoint_id,epoch,restored_at,request_id,probe_owner,probe_credential,mode)
+ VALUES ($1,1,$2,$3,$3,$3,$4)
+ ON CONFLICT (endpoint_id) DO UPDATE SET epoch=h.epoch+1,opened_at=0,restored_at=$2,next_probe_at=0,probe_lease_until=0,
+ backoff=0,failures=0,sources=0,probe_owner=$3,warned=false
+ RETURNING `+healthColumns, id, at.UnixNano(), uuid.UUID{}, m.mode))
 	if err != nil {
 		return HealthReset{}, fmt.Errorf("quality: reset health: %w", err)
 	}
@@ -368,17 +401,20 @@ func ResetHealth(ctx context.Context, tx pg.Tx, id suppliers.EndpointID, at time
    VALUES ($1,$2,$3,'reset',$4,0,0,$5,$2,'reset',$6)`, r.ID, r.Epoch, r.Restored, r.Cause, r.Request, r.Mode); err != nil {
 		return HealthReset{}, fmt.Errorf("quality: record the reset: %w", err)
 	}
-	if r.Mode == Enforce {
+	if open && r.Mode == Enforce {
 		if err := persistHealthSignal(ctx, tx, change{record: r, kind: "restored"}); err != nil {
 			return HealthReset{}, fmt.Errorf("quality: resolve the reset endpoint's signals: %w", err)
 		}
 	}
-	return HealthReset{record: r, done: true}, nil
+	reset.record, reset.done = r, true
+	return reset, nil
 }
 
-// AdoptReset makes this node's breaker the one a committed ResetHealth wrote, and drops the transitions it had queued on
-// the old state. Other nodes adopt it from the store when their next probe claim or transition loses on the epoch. An
-// endpoint this node holds no state for reads the row when it reappears.
+// AdoptReset makes this node's breaker the one a committed ResetHealth wrote, and voids the transitions it had queued
+// on the old state. It steps aside when this node has since read a row at or after the reset from the store: it then
+// already holds the reset, or state built on it, which the reset must not replace. Other nodes, and this one in that
+// case, take the reset from the store when a transition built on the old state loses on the epoch. An endpoint this
+// node holds no state for reads the row when it reappears.
 func (m *Monitor) AdoptReset(r HealthReset) {
 	if !r.done {
 		return
@@ -391,10 +427,13 @@ func (m *Monitor) AdoptReset(r HealthReset) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.record.Epoch > r.record.Epoch && e.pending == 0 {
-		return // a later transition, built on the reset, has already been written and adopted
+	// Without a read from the store since the reset was written, everything held here, queued changes included,
+	// predates it. After one, a record older than the reset still predates it; one at or past its epoch may not.
+	if (!r.known || e.synced != r.synced) && e.record.Epoch >= r.record.Epoch {
+		return
 	}
 	e.generation++
+	e.synced++
 	e.record = r.record
 	e.window = window{}
 	e.successes = 0
