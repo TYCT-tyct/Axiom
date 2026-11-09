@@ -34,6 +34,13 @@ var quoteAgent, requestAgent agentRequest = (*Payments).QuoteAgentRefundTx, (*Pa
 // its outcome is read back by the key.
 func TestAgentRefund(t *testing.T) {
 	w, o := refundWorld(t, fakePlugin{caps: CapRefund, refund: refundSucceeds})
+	var owner OrderOwner
+	if err := w.tx(w.p.platform, func(tx pg.Tx) (err error) {
+		owner, err = OrderOwnerTx(t.Context(), tx, o.ID)
+		return err
+	}); err != nil || owner.Site != w.siteA || owner.Account != w.account {
+		t.Fatalf("the order's owner: %+v %v", owner, err)
+	}
 	r := agentRefund(o, o.Credits/2, "op-1")
 	quote, err := w.requestAgentRefund(quoteAgent, r)
 	if err != nil || quote.Credits != o.Credits/2 || quote.Amount.Minor <= 0 {
