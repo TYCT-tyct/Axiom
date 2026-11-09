@@ -215,7 +215,11 @@ type Monitor struct {
 
 // State holds one endpoint's measurements and live breaker under its own lock.
 type State struct {
-	generation  uint64
+	generation uint64
+	// stored is the newest epoch this node has read from the store, or written there itself. The epochs held in
+	// record also count changes queued here and not yet written, so only this says whether the node has seen a
+	// given row: a reset it has already read must not replace what was built on it since (AdoptReset).
+	stored      int64
 	id          suppliers.EndpointID
 	mode        Mode
 	credentials int

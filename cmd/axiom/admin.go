@@ -20,6 +20,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/platform/webui"
+	"axiom/internal/quality"
 	"axiom/internal/routing"
 	"axiom/internal/suppliers"
 	"axiom/internal/websearch"
@@ -53,6 +54,8 @@ type adminAPI struct {
 	// builds that snapshot, and a committed change of what it is built from rebuilds it (refreshAfterCommit).
 	router *routing.Router
 	routes *gateway.RouteDeps
+	// health is the node's endpoint health, whose breaker a person re-enabling an endpoint resets (setEndpointEnabled).
+	health *quality.Monitor
 }
 
 // detectionsPerMinute is how many times a session may run detectSupplier in a minute; testsPerMinute is the same for
