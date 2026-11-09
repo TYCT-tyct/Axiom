@@ -423,6 +423,11 @@ func (s *reader) endUser(r *Request, primary bool) error {
 	return err
 }
 
+// user and safetyIdentifier read the OpenAI formats' end user, user ahead of safety_identifier; user also reads
+// Messages' metadata.user_id, which is its only end-user member: a stray top-level user cannot replace it.
+func (s *scanner) user() error             { return s.endUser(&s.r, true) }
+func (s *scanner) safetyIdentifier() error { return s.endUser(&s.r, false) }
+
 // str reads a string, unquoted, or nil for null. It is valid until the next read.
 func (s *reader) str() ([]byte, error) {
 	v, err := s.raw()

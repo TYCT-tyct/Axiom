@@ -67,7 +67,7 @@ var grammars = [...]grammar{
 	Responses: {
 		top: withProvider(fields{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
-			"user": openAIUser, "safety_identifier": openAISafetyIdentifier,
+			"user": (*scanner).user, "safety_identifier": (*scanner).safetyIdentifier,
 			"max_output_tokens": (*scanner).maxOutput, "input": (*scanner).content,
 			"tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
 			"stop_server_tools_when": noServerStop,
@@ -92,7 +92,7 @@ var grammars = [...]grammar{
 	Chat: {
 		top: withProvider(fields{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
-			"user": openAIUser, "safety_identifier": openAISafetyIdentifier,
+			"user": (*scanner).user, "safety_identifier": (*scanner).safetyIdentifier,
 			"max_tokens": (*scanner).maxOutput, "max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
 			"tools": (*scanner).tools, "functions": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
 			"max_tool_calls": (*scanner).maxToolCalls, "stop_server_tools_when": noServerStop,
@@ -191,13 +191,9 @@ var (
 	chatImageFields      = fields{"url": (*scanner).imageURL}
 	chatFileFields       = fields{"file_data": (*scanner).fileData, "file_id": (*scanner).fileRef}
 	messagesOutputFields = fields{"format": (*scanner).format, "effort": (*scanner).reasoningEffort}
-	// openAIUser and openAISafetyIdentifier read the end user of the OpenAI formats: user, else safety_identifier.
-	// Messages names its end user in metadata.user_id alone, so a stray top-level user cannot replace it.
-	openAIUser             = func(s *scanner) error { return s.endUser(&s.r, true) }
-	openAISafetyIdentifier = func(s *scanner) error { return s.endUser(&s.r, false) }
 	// messagesMetadataFields reads the end user out of Anthropic's metadata: user_id is its identifier for the person
 	// the application serves.
-	messagesMetadataFields = fields{"user_id": func(s *scanner) error { return s.endUser(&s.r, true) }}
+	messagesMetadataFields = fields{"user_id": (*scanner).user}
 	formatHolder           = fields{"format": (*scanner).format}
 	formatFields           = fields{"type": func(s *scanner) error {
 		v, err := s.str()
