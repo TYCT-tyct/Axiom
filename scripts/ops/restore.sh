@@ -20,8 +20,10 @@
 # sets moved to another bucket or prefix. Step 4 would then fail to fetch the database after step 1 had already replaced
 # the file this run started from.
 #
-# A blank environment is the supported one: no database. --overwrite starts that over by deleting the project's database
-# and key ring, which is what a retry after a failed restore needs.
+# A blank environment is the supported one: no database and no call log. --overwrite starts that over by deleting the
+# project's database and key ring and setting its call log aside in a volume of its own, which is what a retry after a
+# failed restore needs. The restored program never copies the audit chain to the bucket the set names: that bucket holds
+# the history the restore abandons, so the installed file names no replica and records which one it was.
 #
 # The images have to be on this machine already: building them is the deployment's build step (what `just up` does), and
 # a restore that built something else would install the wrong program.
@@ -134,6 +136,25 @@ pin AXIOM_OBJECTSTORE_PATH_STYLE AXIOM_BACKUP_S3_FORCE_PATH_STYLE
 [ -z "$(compose ps --quiet axiom)" ] ||
   die "the program is running: docker compose --project-name $project stop axiom"
 
+# The call log holds records of calls the database this volume belonged to had charged, some of them maybe after the set
+# was taken; replayed into the restored database they would be calls it never charged. So the restored program starts
+# with an empty one, and the old one is kept, not deleted: its records are the evidence of what was served after the
+# set. The copy runs in the restore image, which is on this machine, and the original goes only once the copy is whole.
+call_log="${project}_call_log"
+if docker volume ls --quiet --filter "name=^${call_log}$" | grep -q .; then
+  [ -n "$overwrite" ] ||
+    die "this project already has a call log, written for another database: rerun with --overwrite to set it aside"
+  aside="${call_log}_before_$(date -u +%Y%m%d%H%M%S)"
+  ! docker volume ls --quiet --filter "name=^${aside}$" | grep -q . || die "the volume $aside exists already: try again"
+  echo "== setting this project's call log aside in the volume $aside"
+  # The program and the one-shot keys job are the containers that mount it, and a volume still mounted cannot go.
+  compose rm --stop --force axiom keys > /dev/null
+  docker volume create "$aside" > /dev/null
+  compose run --rm --no-deps -T --entrypoint sh --volume "$call_log:/from:ro" --volume "$aside:/to" restore \
+    -c 'cp -a /from/. /to/' || die "cannot copy the call log into $aside; the original is untouched"
+  docker volume rm "$call_log" > /dev/null
+fi
+
 if docker volume ls --quiet --filter "name=^${project}_postgres$" | grep -q .; then
   [ -n "$overwrite" ] ||
     die "this project already has a database and a restore replaces it: rerun with --overwrite to delete it and start over"
@@ -174,6 +195,20 @@ else
 fi
 # Interpolation checks the environment before the file, so the shell must agree with the line just installed.
 export AXIOM_BACKUP_WAL_BUCKET=
+# The audit chain's replica bucket holds the chain up to wherever the lost database had got, beyond this set. The
+# restored chain carries on from the set with links of its own, so copying it there would put a second history next to
+# the first; the copy refuses that, and stops (docs/domains/operations.md「审计」). Clear the six variables instead, and
+# keep a line saying which bucket held the earlier history: the restored chain goes to a new bucket, which copies it
+# from its first link, and the old one is kept as it is.
+replica=$(sed -n 's/^AXIOM_AUDIT_REPLICA_ENDPOINT=//p' "$env_file" | tail -n 1)
+if [ -n "$replica" ]; then
+  replica="$replica/$(sed -n 's/^AXIOM_AUDIT_REPLICA_BUCKET=//p' "$env_file" | tail -n 1)"
+  sed -i 's/^\(AXIOM_AUDIT_REPLICA_[A-Z_]*\)=.*/\1=/' "$env_file"
+  printf '# %s: restored set %s; the audit replica %s holds the history this restore abandoned: the restored chain needs a new bucket.\n' \
+    "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" "$set_name" "$replica" >> "$env_file"
+  echo "== the audit replica $replica is off: it holds the chain the set predates (docs/ops/backup-restore.md「恢复」)"
+fi
+for name in ENDPOINT BUCKET REGION ACCESS_KEY_ID SECRET_ACCESS_KEY PATH_STYLE; do export "AXIOM_AUDIT_REPLICA_$name="; done
 
 echo "== 2/6 create the cluster from it, with the login roles the image's init scripts make"
 # The installed file has the WAL bucket empty, so this start and every later one keep the new cluster out of the old

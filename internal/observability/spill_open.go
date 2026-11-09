@@ -239,31 +239,22 @@ func spillSeq(name string) (uint64, bool) {
 // Any other damage stops startup instead of being repaired: losing a complete record would be worse than refusing to
 // start.
 func scanSegment(path string, last bool, from int64) (size, after int64, pending bool, err error) {
-	file, err := os.OpenFile(path, os.O_RDWR, 0) //nolint:gosec // path is the configured spill directory plus a validated segment name
+	file, err := openSegment(path, os.O_RDWR)
 	if err != nil {
-		return 0, 0, false, fmt.Errorf("observability: open call log segment %s: %w", path, err)
+		return 0, 0, false, err
 	}
 	defer closeQuietly(file)
-	info, err := file.Stat()
-	if err != nil {
-		return 0, 0, false, fmt.Errorf("observability: stat call log segment %s: %w", path, err)
-	}
-	size = info.Size()
-	if size < int64(len(spillHeader)) {
+	size, valid, after, pending, err := readSegment(file, path, last, from)
+	switch {
+	case err != nil:
+		return 0, 0, false, err
+	case size < int64(len(spillHeader)):
 		return 0, 0, false, dropHeaderlessSegment(path, size, last)
-	}
-	if pending, err = checkSegmentHeader(file, path); err != nil {
-		return 0, 0, false, err
-	}
-	valid, after, err := scanRecords(file, path, last, size, from)
-	if err != nil {
-		return 0, 0, false, err
-	}
-	if valid != size { // only the last segment may have a torn tail: scanRecords refuses one elsewhere
+	case valid != size: // only the last segment may have a torn tail: scanRecords refuses one elsewhere
 		if err := truncateSegment(file, valid); err != nil {
 			return 0, 0, false, err
 		}
-	} else if last {
+	case last:
 		// A process crash leaves the last Commits' bytes in the page cache, maybe unsynced; make them durable before
 		// the writer stores them and checkpoints past them.
 		if err := file.Sync(); err != nil {
@@ -273,14 +264,54 @@ func scanSegment(path string, last bool, from int64) (size, after int64, pending
 	return valid, after, pending, nil
 }
 
-// dropHeaderlessSegment removes a segment a crash left before its header was durable. Only the last one can be in that
-// state; an earlier one means data is missing, not just unfinished.
-func dropHeaderlessSegment(path string, size int64, last bool) error {
-	if !last {
-		if size == 0 {
-			return fmt.Errorf("observability: call log segment %s is empty", path)
-		}
+// openSegment opens a segment found in the spill directory, for reading and writing (startup) or reading alone (backlog).
+func openSegment(path string, flag int) (*os.File, error) {
+	file, err := os.OpenFile(path, flag, 0) //nolint:gosec // path is the spill directory plus a validated segment name
+	if err != nil {
+		return nil, fmt.Errorf("observability: open call log segment %s: %w", path, err)
+	}
+	return file, nil
+}
+
+// readSegment validates one open segment without changing it: its size, where its complete records end, how many of
+// them are at or after from, and whether it heads pending records. A segment shorter than its header has no records and
+// is the caller's to judge (headerless).
+func readSegment(file *os.File, path string, last bool, from int64) (size, valid, after int64, pending bool, err error) {
+	info, err := file.Stat()
+	if err != nil {
+		return 0, 0, 0, false, fmt.Errorf("observability: stat call log segment %s: %w", path, err)
+	}
+	size = info.Size()
+	if size < int64(len(spillHeader)) {
+		return size, 0, 0, false, nil
+	}
+	if pending, err = checkSegmentHeader(file, path); err != nil {
+		return 0, 0, 0, false, err
+	}
+	valid, after, err = scanRecords(file, path, last, size, from)
+	if err != nil {
+		return 0, 0, 0, false, err
+	}
+	return size, valid, after, pending, nil
+}
+
+// headerless judges a segment shorter than its header. Only the last one can be in that state, which a crash leaves
+// before the header was durable; an earlier one means data is missing, not just unfinished.
+func headerless(path string, size int64, last bool) error {
+	switch {
+	case last:
+		return nil
+	case size == 0:
+		return fmt.Errorf("observability: call log segment %s is empty", path)
+	default:
 		return fmt.Errorf("observability: call log segment %s has no %q header", path, spillHeader)
+	}
+}
+
+// dropHeaderlessSegment removes the last segment when a crash left it before its header was durable (headerless).
+func dropHeaderlessSegment(path string, size int64, last bool) error {
+	if err := headerless(path, size, last); err != nil {
+		return err
 	}
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("observability: remove headerless call log segment %s: %w", path, err)
@@ -374,4 +405,59 @@ func truncateSegment(file *os.File, size int64) error {
 		return fmt.Errorf("observability: sync truncated call log segment: %w", err)
 	}
 	return nil
+}
+
+// SpillBacklog is the number of call records in the spill directory dir that the database has not confirmed: the
+// records after its checkpoint and the parked pending records. A torn tail is not one, because its Commit never
+// returned; damage the next start would refuse is an error. It changes nothing in dir and takes no lock, so it is exact
+// only while no process owns dir: the backup holds the directory's lock while it asks, with the node stopped
+// (docs/ops/backup-restore.md「备份」).
+func SpillBacklog(dir string) (int64, error) {
+	checkpoint, err := readCheckpoint(dir)
+	if err != nil {
+		return 0, err
+	}
+	files, err := listSegments(dir)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for i, f := range files {
+		if f.seq < checkpoint.seq {
+			continue
+		}
+		from := int64(len(spillHeader))
+		if f.seq == checkpoint.seq {
+			from = checkpoint.offset
+		}
+		after, err := segmentBacklog(f.path, i == len(files)-1, from)
+		if err != nil {
+			return 0, err
+		}
+		n += after
+	}
+	parked, err := os.ReadDir(filepath.Join(dir, parkDir))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("observability: parked call records: %w", err)
+	}
+	for _, entry := range parked {
+		if strings.HasSuffix(entry.Name(), parkSuffix) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// segmentBacklog is the number of records at or after from in one segment, which it only reads.
+func segmentBacklog(path string, last bool, from int64) (int64, error) {
+	file, err := openSegment(path, os.O_RDONLY)
+	if err != nil {
+		return 0, err
+	}
+	defer closeQuietly(file)
+	size, _, after, _, err := readSegment(file, path, last, from)
+	if err == nil && size < int64(len(spillHeader)) {
+		err = headerless(path, size, last)
+	}
+	return after, err
 }

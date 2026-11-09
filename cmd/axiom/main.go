@@ -13,7 +13,7 @@ import (
 	_ "golang.org/x/crypto/x509roots/fallback" // root certificates for the scratch image, which has none (deploy/Dockerfile)
 )
 
-const usage = "usage: axiom serve | migrate | healthcheck | version | web-assets <dir> | site init | user <verb> | catalog sync | catalog check | catalog <operation> <file> | billing <listing> | billing <operation> <file> | keyring <verb> | objectstore <verb> | content <verb>"
+const usage = "usage: axiom serve | migrate | healthcheck | version | web-assets <dir> | site init | user <verb> | catalog sync | catalog check | catalog <operation> <file> | billing <listing> | billing <operation> <file> | keyring <verb> | objectstore <verb> | content <verb> | call-log check <dir>"
 
 func main() {
 	if !validArgs(os.Args) {
@@ -43,7 +43,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-	case "catalog", "site", "user", "billing", "keyring", "objectstore", "content":
+	case "catalog", "site", "user", "billing", "keyring", "objectstore", "content", "call-log":
 		exitOn(operate(context.Background(), os.Environ(), os.Args[1:]))
 	case "web-assets":
 		exitOn(webAssets(os.Args[2:]))
@@ -63,10 +63,11 @@ func main() {
 // validArgs accepts a command, and for the commands that take arguments those arguments.
 func validArgs(args []string) bool {
 	return len(args) == 2 || len(args) > 2 && (args[1] == "catalog" || args[1] == "site" || args[1] == "user" ||
-		args[1] == "billing" || args[1] == "keyring" || args[1] == "objectstore" || args[1] == "content" || args[1] == "web-assets")
+		args[1] == "billing" || args[1] == "keyring" || args[1] == "objectstore" || args[1] == "content" || args[1] == "web-assets" || args[1] == "call-log")
 }
 
-// operate runs a command of the platform's operators, which takes arguments, against AXIOM_DATABASE_URL.
+// operate runs a command of the platform's operators, which takes arguments, against AXIOM_DATABASE_URL; call-log reads
+// only the directory it is given.
 func operate(ctx context.Context, environ, args []string) error {
 	switch args[0] {
 	case "catalog":
@@ -81,6 +82,8 @@ func operate(ctx context.Context, environ, args []string) error {
 		return objectstoreCommand(ctx, environ, args[1:], os.Stdout)
 	case "content":
 		return contentCommand(ctx, environ, args[1:], os.Stdout)
+	case "call-log":
+		return callLogCommand(args[1:], os.Stdout)
 	default:
 		return userCommand(ctx, environ, args[1:], os.Stdin, os.Stdout)
 	}

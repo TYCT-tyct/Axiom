@@ -45,7 +45,7 @@
 | 支付在代码里的接口：渠道接口、billing 要提供的函数、不变量、表与行级安全、事务与任务、PR 拆分 | [internal/payments/README.md](../internal/payments/README.md) | 实现或调用 `payments`、写新的收款渠道插件之前 |
 | 合并队列：怎么排队、出队，标签的含义，列车怎么构建、找出元凶、落地和恢复，失败的列车怎么看，不稳定测试清单 | [ops/merge-train.md](ops/merge-train.md) | 给 PR 加 `queue` 之前；列车失败或卡住时 |
 | 上线前的安全审查：每次查了什么、怎么查、发现了什么、哪些没覆盖 | [ops/security-review.md](ops/security-review.md) | 做上线前审查、复核审查结论、接手遗留发现时 |
-| 备份与恢复：一次备份包含什么、加密与收件人、上传与保留、单实例、空白环境恢复、恢复演练、生产入口 | [ops/backup-restore.md](ops/backup-restore.md) | 配置或检查备份、恢复一台机器、改生产入口之前 |
+| 备份与恢复：一次备份包含什么、停写与调用日志、加密与收件人、上传与保留、单实例、空白环境恢复、恢复演练、生产入口 | [ops/backup-restore.md](ops/backup-restore.md) | 配置或检查备份、恢复一台机器、改生产入口之前 |
 | 发布前：目录规格要补全（请求写法的键怎么写进库、怎么检查），发布前的其他确认 | [ops/release.md](ops/release.md) | 发布或部署之前 |
 | 示例法律文本（demo）：服务条款、隐私政策、OpenRouter 对照、在开发站点发布 | [legal/README.md](legal/README.md) | 准备演示条款/隐私政策、在开发站点发布 demo 版本、负责人审阅前 |
 | 错题：已经发生、还没转成检查或规则的问题，以及上次复盘的日期 | [lessons.md](lessons.md) | 复盘时；评审发现同类问题再次出现时 |

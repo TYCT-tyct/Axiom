@@ -16,6 +16,7 @@ func (s *Slot) Release()                                  // 调用结束但没�
 func (r *Recorder) Enqueue(rec CallRecord) error          // Admit + Commit 的便捷入口，给测试和非 gateway 调用方
 func (r *Recorder) Close(ctx context.Context) error       // 写完 spill；ctx 到期则报告还留在磁盘上的条数
 func (r *Recorder) Done() <-chan struct{}                 // 写入协程退出时关闭；Close 返回前已等待它，测试据此断言没有写入协程留下
+func SpillBacklog(dir string) (int64, error)              // spill 里数据库还没确认的记录数（检查点之后的段内记录加停放的记录），只读、不取锁；备份停机后持锁调用（`axiom call-log check`）
 func ListOwn(ctx, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, error)
 func CheckOwnExportSize(ctx, tx pg.Tx, q OwnQuery) error // 同一 ReadTx 内、开始输出前检查最多 10001 个匹配键；超过 10000 返回 ErrExportSize
 func StreamContentMeta(ctx, tx pg.Tx, q ContentQuery, each func(ContentMeta) error) (ContentStats, error) // 一个只读快照里的正文引用；平台范围
@@ -123,6 +124,8 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 **写入数据库。** 写协程走 [platform 的普通连接池](../platform/README.md#连接池)，不占完成类预留。每批最多 500 条调用，或从第一条起最多等 200 ms：一个事务里先写 `call_log`，再写 `call_attempt`，各是一条 `INSERT … SELECT FROM jsonb_array_elements($1)`，参数是整批行的一个 JSON 数组，成员名就是列名，类型和检查由表来做。先写调用再写尝试，重试也按这个顺序，所以不会出现有尝试、没有调用的批次；同一次写入里两者一起提交，调用总能找到它的尝试。每次写入有自己的期限（`WriteTimeout`，cmd 里 10 s），超时后算失败，退避重试（100 ms 起翻倍，上限 5 s，带抖动），重试到成功为止；超时的那次结果不明，重写同一批由 `ON CONFLICT` 兜底。一个不再应答的连接因此拖不住唯一的写入协程；整体仍由 `Close` 的期限控制。
 
 **数据错误不跳过，也不连带丢掉在途调用。** 数据库说数据本身有问题（`pg.IsDataError`：SQLSTATE 22、23），或编码这批行失败（同样的行每次都失败）时，写协程保留整批、标记 recorder 不可记录并停止写数据库；`Admit` 从此返回 `ErrBroken`，gateway 答 503。已经预占位置、还在上游或结算中的调用仍可 `Commit`：追加文件保持打开，直到在途调用全部写入或释放后才关，否则一条坏行会让随后完成的调用拿到 `ErrClosed` 并永久丢掉记录。坏行留在 spill，请求 ID 和错误在日志里等运维修；代价是它挡住后面的记录，但节点同时停止接新调用，不会静默丢。
+
+**备份要等 spill 写完。** 调用的收费在结算时就进了账本，记录却要等写协程入库，这段时间里它只在本机的 spill 上。所以备份停掉节点（`Close` 在退出时写完 spill），对 `call-log.lock` 取共享锁（运行中的节点持有排他锁，启动中的节点在备份持锁时取不到），再用 `SpillBacklog` 数检查点之后的段内记录和 `pending/` 里停放的记录，不是 0 就不转储（[备份与恢复的「备份」](../../docs/ops/backup-restore.md#备份)）。它和启动用同一套校验（`readSegment`），但不截断、不 fsync、不删文件：截掉的残尾本来就不是记录，损坏照样报错。`testdata/spill` 里是提交进仓库的两份 spill，恢复演练拿它们当「写协程落后的节点」，`TestRehearsalSpillsReplay` 保证新版本仍能计数并重放它们（`go test -update` 用当前版本重写）。
 
 **关闭。** `Close` 先拒绝新的 `Admit`，让写协程把 spill 写完；ctx 到期就停止重试和读取，`Done` 关闭，记录留在段文件里，下一次启动接着写。cmd 的退出顺序是：监听停止并排空，`Close`，最后关数据库；启动失败等其他返回路径也会关闭它，不留写入协程。`Close` 返回 `ErrPending` 时报告还留在磁盘上的条数，不把它们算成丢失。
 

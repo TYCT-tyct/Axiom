@@ -2,20 +2,22 @@
 # One encrypted backup run: the database, the deployment's environment file and the key ring, uploaded to the bucket as
 # one set, then the sets past their retention are dropped (docs/ops/backup-restore.md).
 #
-# Every run is a fresh container of the ops image (deploy/ops/Dockerfile), started by a scheduler or by hand; nothing
-# here runs inside the program and nothing here talks to it.
+# Every run is a fresh container of the ops image (deploy/ops/Dockerfile), started by scripts/ops/backup.sh with the
+# program stopped; nothing here runs inside the program and nothing here talks to it. A run refuses to dump while the
+# program holds its call log or a record there waits for the database.
 set -euo pipefail
 PROGRAM=backup
 . /ops/common.sh
 
 require_env AXIOM_BACKUP_BUCKET AXIOM_BACKUP_PREFIX AXIOM_BACKUP_DB_RECIPIENT AXIOM_BACKUP_SECRETS_RECIPIENT \
   AXIOM_BACKUP_KEEP_SETS AXIOM_BACKUP_KEEP_DAYS AXIOM_BACKUP_STATE_DIR AXIOM_KEYS_DIR AXIOM_DEPLOY_ENV_FILE \
-  PGDATABASE PGPASSWORD
+  AXIOM_CALL_LOG_DIR PGDATABASE PGPASSWORD
 require_objectstore_env
 require_prefix
 require_age_recipient AXIOM_BACKUP_DB_RECIPIENT
 require_age_recipient AXIOM_BACKUP_SECRETS_RECIPIENT
 require_readable "$AXIOM_DEPLOY_ENV_FILE" "$AXIOM_KEYS_DIR/master" "$AXIOM_KEYS_DIR/hash" "$AXIOM_KEYS_DIR/identity"
+[ -d "$AXIOM_CALL_LOG_DIR" ] || die "$AXIOM_CALL_LOG_DIR is not a directory: is the call log mounted?"
 # The key ring is the one secret whose loss no other copy can undo, so it never shares a recipient with the database:
 # one leaked or retired identity must not open both.
 [ "$AXIOM_BACKUP_DB_RECIPIENT" != "$AXIOM_BACKUP_SECRETS_RECIPIENT" ] ||
@@ -55,9 +57,27 @@ trap 'rm -rf "$work"' EXIT
 set_name="$(sql "SELECT to_char(now() at time zone 'utc', 'YYYYMMDDHH24MISS') || '-' || substr(md5(random()::text), 1, 6)")"
 log "backing up into $set_name"
 
+# The call log first. A call's record is fsynced into the program's spill before the call ends and reaches the database
+# after it, while its charge is already in the ledger; a dump taken while records wait there has the charges without the
+# records, and the records go with the machine. So the program is stopped, which drains the spill on its way out, and
+# the dump waits for proof: a shared lock on the spill, which a running program holds exclusively and a starting one
+# cannot take while this run holds it, then a count of what the database has not confirmed. The lock is held until the
+# dump is complete, so the program cannot start and settle a call in between. No lock file means no program ever opened
+# this directory; the count still runs.
+lock="$AXIOM_CALL_LOG_DIR/call-log.lock"
+if [ -e "$lock" ]; then
+  exec 8<"$lock"
+  flock -n -s 8 || die "the program holds the call log: a set is taken with it stopped (scripts/ops/backup.sh)"
+fi
+axiom call-log check "$AXIOM_CALL_LOG_DIR" >/dev/null || die "the call log did not drain, so no set is taken"
+
 # The database, as the superuser: every table forces row security, and a dump that obeyed it would silently lose rows.
 # Owners and grants stay in the archive because the restore puts them back as they were.
 pg_dump --no-password --format=custom --compress=zstd:9 --lock-wait-timeout=30s --file="$work/db.dump"
+exec 8<&-
+# scripts/ops/backup.sh starts the program again on exactly this line: nothing after it depends on the program being
+# stopped.
+log "dumped the database; the program may start"
 
 # The versions the dumped snapshot can reference, read from the dump itself. A second live query cannot share the
 # dump's snapshot: a version added or retired between the query and the dump would make the two disagree with what the
