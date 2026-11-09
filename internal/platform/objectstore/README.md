@@ -3,7 +3,7 @@
 用 S3 接口读写对象。程序里只有这一份对象存储客户端；逻辑备份任务也用它，但用自己的桶和凭证（`deploy/ops`，见
 [备份与恢复](../../../docs/ops/backup-restore.md#与程序的对象存储分开)）。WAL 归档不走这个客户端：pgBackRest 在数据库镜像里
 用自己的 S3 实现写同一个桶的 `<AXIOM_BACKUP_WAL_PREFIX>`（默认 `<前缀>-pgbackrest`），见[WAL 连续归档与时间点恢复](../../../docs/ops/backup-restore.md#wal-连续归档与时间点恢复)。
-observability 的调用记录保留任务用它写每月的归档；对话正文的写入还不经过它（保存正文的平台开关仍然关着），受控导出用它的 `Get` 读正文对象（[记录与告警](../../../docs/domains/observability.md#存储)）。
+observability 的调用记录保留任务用它写每月的归档；operations 用它把审计链复制到部署之外的副本桶（另一组变量，见下文「配置」）；对话正文的写入还不经过它（保存正文的平台开关仍然关着），受控导出用它的 `Get` 读正文对象（[记录与告警](../../../docs/domains/observability.md#存储)）。
 
 架构上的选型是「只依赖 S3 接口」，云厂商的对象存储和自托管的 SeaweedFS 都能接（[总体架构的技术选型](../../../docs/architecture.md#技术选型)）。本包不引入
 AWS SDK：用到的只是签名、五个对象操作和一次列举，自己实现 SigV4 少一批依赖；签名与 S3 的互操作由真实的 SeaweedFS
@@ -14,6 +14,7 @@ AWS SDK：用到的只是签名、五个对象操作和一次列举，自己实�
 ```go
 type Config struct { Endpoint, Bucket, Region, AccessKeyID string; SecretAccessKey secret.Secret; PathStyle bool }
 func ReadConfig(env *config.Env) (Config, error)   // 一个变量都没设时返回零值，表示关闭
+func ReadConfigAt(env *config.Env, prefix string) (Config, error) // 同样的六个变量，名字以 prefix 开头
 func Open(cfg Config) (*Client, error)
 
 func (c *Client) Create(ctx, allowExisting bool) (bool, error) // 先 HEAD；404 才 PUT，返回是否新建；已存在需显式同意
@@ -27,6 +28,15 @@ func (c *Client) List(ctx, ListOptions) (ListPage, error)
 
 `Create`/`Check` 的 HEAD 只证明这些凭证能访问桶，不能证明桶归调用方所有：只对自有的桶运行，桶策略要限制到这些凭证。
 `axiom objectstore create` 对已存在的桶默认报错，确认自有后加 `--allow-existing`；它不会因此写入或改 ACL。
+
+`Upload.NoOverwrite` 发 `If-None-Match: *`（签进签名）：键已存在时桶答 412，`Put` 返回可用 `errors.Is(err, ErrExists)`
+判断的错误，不覆盖；这样的上传总是一次 PUT，因为 multipart 只在完成时才检查条件。不是每个实现都执行这个条件：
+SeaweedFS 3.80 照收不误、照样覆盖，所以调用方不能只靠它，审计链的副本在写前先读这个键。
+
+每个带正文的请求（单次 PUT、multipart 的每一片、建桶）都带 S3 的内容校验 `x-amz-sdk-checksum-algorithm: SHA256` 和
+`x-amz-checksum-sha256`（就是 SigV4 已经算出的那个 SHA-256 的 base64，签进签名）：开了 Object Lock 默认保留期的 S3 桶
+要求上传带 `Content-MD5` 或这样的校验，没有就拒绝；别的桶也用它核对收到的字节。用 SHA-256 而不用 MD5，是因为它已经算好、
+不必再读一遍，也不引入弱哈希。
 
 `List` 一次返回一页和下一页的令牌；要整个前缀的调用方顺着 `NextToken` 循环。`Upload.Size` 在调用方知道字节数时给出
 （文件 `Stat` 一般知道），`-1` 表示由客户端边算哈希边数；给了但对不上是错误，不发请求。知道大小且超过 16 MiB 时走
@@ -47,6 +57,9 @@ multipart，`-1` 仍是单次 PUT（最多 5 GiB）。
 
 六个变量全不设是「关闭」：`ReadConfig` 返回零值，`Open` 返回 `ErrNotConfigured`。设了任何一个就要设全，否则启动
 失败并一次列出缺的变量名；错误只报变量名和要求的形状，不报值，密钥赋错变量时不会进日志。
+
+副本桶用 `ReadConfigAt(env, "AXIOM_AUDIT_REPLICA")` 读 `AXIOM_AUDIT_REPLICA_ENDPOINT` 等同样的六个变量，规则相同，错误报的是
+这一组的变量名。它的凭证与归档的分开：归档要删过期对象，副本的凭证能写、读和列举，不能删、不能覆盖（S3 对没有列举权限的调用方把不存在的键答 403）（[运营的「审计」](../../../docs/domains/operations.md#审计)）。
 
 `serve` 启动时读取并校验这组变量：设了但不成组会启动失败，全不设则对象存储关闭，调用记录的保留任务只预建分区、
 不删除任何东西（[observability 的分区](../../../internal/observability/README.md#分区)）。程序里的写入方是调用记录的
@@ -93,7 +106,7 @@ multipart，`-1` 仍是单次 PUT（最多 5 GiB）。
 botocore 生成的固定向量，固定日期、区域、路径和查询，签名逐字节对得上。
 
 `container_test.go` 启动真实的 SeaweedFS（`chrislusf/seaweedfs:3.80`，只用于测试，不是部署依赖），用它的 shell 建主桶，
-再走一遍 `Create`、`Check`、1.25 MiB 带二进制字节的 PUT、GET、HEAD、LIST 和 DELETE，以及 25 MiB 的 multipart PUT 与逐字节
+再走一遍 `Create`、`Check`、1.25 MiB 带二进制字节的 PUT、GET、HEAD、LIST、DELETE 和带 `If-None-Match` 签名的 PUT，以及 25 MiB 的 multipart PUT 与逐字节
 比对；另有一个桶只由 `Create` 建两次（第二次返回 false），证明真实服务器上的 HEAD/PUT 路径。
 手写的签名器很容易在自己的假服务器上通过，只有真实实现能证明转义、头和分页是对的。这个测试启动容器，机器上要排在
 重型测试锁后面：

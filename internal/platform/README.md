@@ -127,7 +127,7 @@ NAT64：只覆盖不在 `2000::/3` 内的转换前缀，即知名前缀 `64:ff9b
 
 `objectstore` 是程序里唯一的 S3 客户端，只依赖 S3 接口：云厂商的对象存储或自托管的 SeaweedFS（[技术选型](../../docs/architecture.md#技术选型)）。它负责签名、读写、列举和建桶，保留策略由使用它的功能定；单个 PUT 上限 5 GiB，已知大小超过 16 MiB 走 multipart，对象上限 5 TiB。
 
-`ReadConfig` 把 `AXIOM_OBJECTSTORE_*` 读成一份配置：六个变量全空是关闭（零值），设了任何一个就要求整组，错误只报变量名和形状，不报值；`serve` 启动时读一次，半个配置是启动错误而不是第一次归档时才失败。`Open` 不联系桶，`Check` 用一次 HEAD 核对桶和凭证，`axiom objectstore create|check|list|put|get|delete` 是运维验证、建桶和搬归档的入口。
+`ReadConfig` 把 `AXIOM_OBJECTSTORE_*` 读成一份配置：六个变量全空是关闭（零值），设了任何一个就要求整组，错误只报变量名和形状，不报值；`ReadConfigAt` 用同样的规则读另一组前缀的变量（审计链的副本桶 `AXIOM_AUDIT_REPLICA_*`）。`serve` 启动时读一次，半个配置是启动错误而不是第一次归档时才失败。`Open` 不联系桶，`Check` 用一次 HEAD 核对桶和凭证，`axiom objectstore create|check|list|put|get|delete` 是运维验证、建桶和搬归档的入口。
 
 每次操作必须在 `ctx` 上带期限，否则返回 `ErrDeadlineRequired`；只重试连接失败、408、429 和 5xx，共四次尝试，200ms 起翻倍、最多 5s 的退避加抖动，`Retry-After` 最多等 30s 且不越过期限。PUT 的请求体可寻址，重试从头发同一份字节，multipart 的每一片也从头读；GET 的正文读失败不重试；不跟随重定向，101 也拒绝。账本和对话正文都不经过它；备份任务用同一份客户端，但在 `deploy/ops` 里配自己的桶和凭证，正文保存的平台开关仍然关着。
 

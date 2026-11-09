@@ -383,3 +383,57 @@ func TestRetryAfter(t *testing.T) {
 		})
 	}
 }
+
+func TestNoOverwriteKeepsTheObjectThere(t *testing.T) {
+	fake := newFakeS3()
+	client := newTestClient(t, fake)
+	client.threshold = 4 // a NoOverwrite upload stays one PUT however large
+	ctx := deadline(t)
+	if _, err := client.Put(ctx, Upload{Key: "k", Body: strings.NewReader("first"), Size: 5, NoOverwrite: true}); err != nil {
+		t.Fatalf("Put of a new key: %v", err)
+	}
+	if fake.uploadCount() != 0 {
+		t.Fatal("a NoOverwrite upload went up in parts")
+	}
+	_, err := client.Put(ctx, Upload{Key: "k", Body: strings.NewReader("second"), Size: 6, NoOverwrite: true})
+	if !errors.Is(err, ErrExists) || errors.Is(err, ErrNotFound) {
+		t.Fatalf("Put over a taken key = %v, want ErrExists", err)
+	}
+	if got := fake.body("k"); got != "first" {
+		t.Fatalf("the object holds %q, want first", got)
+	}
+	req, err := client.request(ctx, request{method: http.MethodPut, key: "k", payloadHash: emptySHA256, ifNoneMatch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auth := req.Header.Get("Authorization"); !strings.Contains(auth, "SignedHeaders=host;if-none-match;x-amz-content-sha256;x-amz-date,") {
+		t.Fatalf("the condition is not signed: %s", auth)
+	}
+}
+
+// TestUploadsCarryAChecksum: a PUT and a multipart part send the body's SHA-256 as an S3 checksum, which a bucket with
+// Object Lock requires, signed like the content type, and the fake bucket, like S3, refuses a body that does not match
+// it.
+func TestUploadsCarryAChecksum(t *testing.T) {
+	fake := newFakeS3()
+	client := newTestClient(t, fake)
+	ctx := deadline(t)
+	if _, err := client.Put(ctx, Upload{Key: "one", Body: strings.NewReader("hello"), Size: 5}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	client.threshold, client.partSize = 4, 4
+	if _, err := client.Put(ctx, Upload{Key: "parts", Body: strings.NewReader("in three parts"), Size: 14}); err != nil {
+		t.Fatalf("multipart Put: %v", err)
+	}
+	if fake.body("one") != "hello" || fake.body("parts") != "in three parts" {
+		t.Fatalf("stored %q and %q", fake.body("one"), fake.body("parts"))
+	}
+	req, err := client.request(ctx, request{method: http.MethodPut, key: "k", payloadHash: emptySHA256, checksum: emptyChecksum})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Header.Get("X-Amz-Checksum-Sha256") != emptyChecksum ||
+		!strings.Contains(req.Header.Get("Authorization"), "SignedHeaders=host;x-amz-checksum-sha256;x-amz-content-sha256;x-amz-date;x-amz-sdk-checksum-algorithm,") {
+		t.Fatalf("checksum %q, %s", req.Header.Get("X-Amz-Checksum-Sha256"), req.Header.Get("Authorization"))
+	}
+}
