@@ -69,7 +69,13 @@ var (
 	ErrNoApproval = errors.New("operations: no such approval")
 	// ErrNotPending is an approval already decided, expired or withdrawn.
 	ErrNotPending = errors.New("operations: the approval is not pending")
+	// ErrParamsTooLarge is a write whose parameters are more than an operation keeps (maxParams).
+	ErrParamsTooLarge = errors.New("operations: the parameters are larger than an operation keeps (8 KiB)")
 )
+
+// maxParams is the most an operation's canonical parameters take, as the table's CHECK holds them: what is approved is
+// what runs, so they are kept whole or refused.
+const maxParams = 8192
 
 // Reason is why a proposal waits for a person, as the server decided it when the agent asked: the decision's own
 // output, so a page never derives it again from the summary (OperationsApprovalReason in api/admin.yaml).
@@ -142,6 +148,9 @@ func Propose(ctx context.Context, tx pg.Tx, p Proposal) (op Operation, replayed 
 	params, err := jsonx.MarshalCanonical(p.Params)
 	if err != nil {
 		return Operation{}, false, fmt.Errorf("propose %s: encode the parameters: %w", p.Tool, err)
+	}
+	if len(params) > maxParams {
+		return Operation{}, false, ErrParamsTooLarge
 	}
 	hash := requestHash(p.Tool, p.Target, params)
 	state := StateApproved

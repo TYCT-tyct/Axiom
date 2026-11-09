@@ -7992,26 +7992,30 @@ components:
           description: >-
             What the operation does, as the server keeps it; it cannot change after the agent asked. Its shape is the
             `tool`'s: `credit_grant` OperationsCreditGrantParams, `supplier_top_up_propose` OperationsTopUpParams,
-            `price_publish` OperationsPricePublishParams, `model_set_status` OperationsModelStatusParams. `tool` is
-            on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names.
+            `price_publish` OperationsPricePublishParams, `model_set_status` OperationsModelStatusParams,
+            `pricing_rule_create` and `pricing_rule_update` OperationsPricingRuleParams. `tool` is on the approval, not
+            in here, so the schemas are `anyOf`: pick the one the `tool` names.
           anyOf:
             - $ref: "#/components/schemas/OperationsCreditGrantParams"
             - $ref: "#/components/schemas/OperationsTopUpParams"
             - $ref: "#/components/schemas/OperationsPricePublishParams"
             - $ref: "#/components/schemas/OperationsModelStatusParams"
+            - $ref: "#/components/schemas/OperationsPricingRuleParams"
         summary:
           x-go-type: jsonx.Raw
           description: >-
             What the server read of the target when the agent asked, never the agent's words. Its shape is the
             `tool`'s: `credit_grant` OperationsCreditGrantSummary, `supplier_top_up_propose` OperationsTopUpSummary,
-            `price_publish` OperationsPricePublishSummary, `model_set_status` OperationsModelStatusSummary; `tool` is
-            on the approval, not in here, so the schemas are `anyOf`: pick the one the `tool` names. Every member is
-            optional: one an older node did not know is absent, so a page shows what is there.
+            `price_publish` OperationsPricePublishSummary, `model_set_status` OperationsModelStatusSummary,
+            `pricing_rule_create` and `pricing_rule_update` OperationsPricingRuleSummary; `tool` is on the approval, not
+            in here, so the schemas are `anyOf`: pick the one the `tool` names. Every member is optional: one an older
+            node did not know is absent, so a page shows what is there.
           anyOf:
             - $ref: "#/components/schemas/OperationsCreditGrantSummary"
             - $ref: "#/components/schemas/OperationsTopUpSummary"
             - $ref: "#/components/schemas/OperationsPricePublishSummary"
             - $ref: "#/components/schemas/OperationsModelStatusSummary"
+            - $ref: "#/components/schemas/OperationsPricingRuleSummary"
         reasons:
           type: array
           maxItems: 16
@@ -8160,6 +8164,39 @@ components:
         cost: {type: object, additionalProperties: {type: string}}
         prices_complete: {type: boolean}
         envelope: {$ref: "#/components/schemas/OperationsEnvelopeDetail"}
+    OperationsPricingRuleSummary:
+      type: object
+      additionalProperties: true
+      description: >-
+        `pricing_rule_create` and `pricing_rule_update`: the rule changed (absent for a new one) and every sale price of
+        the main site the change moved when the agent asked, each weighed against the envelope, which shows the day
+        before the change. The change itself is in `params`.
+      properties:
+        rule_id: {$ref: "#/components/schemas/Uuid"}
+        rule_rev: {type: integer, format: int64, description: The rule's revision the change is made as of.}
+        currency: {type: string}
+        envelope: {$ref: "#/components/schemas/OperationsEnvelopeDetail"}
+        moves_total: {type: integer, minimum: 0, description: "How many prices it moved; `moves` lists the first 12."}
+        moves:
+          type: array
+          maxItems: 12
+          items: {$ref: "#/components/schemas/OperationsPriceMove"}
+    OperationsPriceMove:
+      type: object
+      additionalProperties: true
+      description: >-
+        One change in what buyers pay for a model that a pricing rule change made: the model and the first buyer seen
+        paying it (a tier, or an account with a price of its own), how far it moved
+        and the margin it keeps, in basis points (`change_bps` null when no share measures the move, as for a first
+        price or one taken away; `margin_bps` null when the cost is unknown), and what the model's day held before it.
+      properties:
+        model_id: {$ref: "#/components/schemas/Uuid"}
+        slug: {type: string}
+        audience: {$ref: "#/components/schemas/PricingAudience"}
+        change_bps: {type: integer, format: int64, nullable: true}
+        margin_bps: {type: integer, format: int64, nullable: true}
+        model_change_used: {type: integer, format: int64}
+        model_moved_today: {type: boolean}
     OperationsModelStatusSummary:
       type: object
       additionalProperties: true
@@ -8189,6 +8226,13 @@ components:
       properties:
         candidate_id: {$ref: "#/components/schemas/Uuid"}
         current_id: {$ref: "#/components/schemas/Uuid"}
+    OperationsPricingRuleParams:
+      type: object
+      additionalProperties: true
+      description: "`pricing_rule_create` and `pricing_rule_update`: the rule as the agent asked for it and, for a change, the revision it was read at."
+      properties:
+        rule: {$ref: "#/components/schemas/PricingRuleInput"}
+        rev: {type: integer, format: int64}
     OperationsModelStatusParams:
       type: object
       additionalProperties: true

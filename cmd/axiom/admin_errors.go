@@ -29,6 +29,7 @@ var adminRefusals = []refusal{
 	{operations.ErrNoOperation, http.StatusNotFound, codeNotFound, "no such resource"},
 	{operations.ErrNoApproval, http.StatusNotFound, codeNotFound, "no such resource"},
 	{operations.ErrNotPending, http.StatusConflict, codeConflict, "the approval was already decided, withdrawn or has expired"},
+	{operations.ErrParamsTooLarge, http.StatusUnprocessableEntity, codeUnprocessable, "the request is larger than an operation keeps (8 KiB of parameters)"},
 	{operations.ErrNoCapPolicy, http.StatusUnprocessableEntity, codeCapExceeded, "no cap policy covers this money, so it moves none"},
 	{operations.ErrPolicyChanged, http.StatusConflict, codeStaleRevision, "the cap policy changed since it was read"},
 	{operations.ErrCurrencyFixed, http.StatusConflict, codeConflict, "a cap policy keeps the currency it was made with"},

@@ -4,11 +4,11 @@ import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { percentOf } from "./approval-parts";
+import { envelopeMaximaOf, type RuleChange, type RuleMove, ruleChangeOf } from "./approval-rule";
 import {
   type CapLimit,
   capOf,
   type EnvelopeLimit,
-  envelopeOf,
   type PriceRow,
   priceRows,
   type Reason,
@@ -17,7 +17,9 @@ import {
 import { formatJSON } from "./lossless";
 import { isPerUse, rateItems } from "./models/catalog";
 import { showRate } from "./models/price-fields";
+import { Rates } from "./models/prices";
 import { Facts, Head } from "./parts";
+import { MethodSummary } from "./pricing/describe";
 
 type Approval = AdminSchemas["OperationsApproval"];
 type Format = ReturnType<typeof useFormat>;
@@ -86,13 +88,13 @@ function capSentence(t: TFunction, format: Format, approval: Approval, limit: Ca
 }
 
 function envelopeSentence(t: TFunction, format: Format, approval: Approval, limit: EnvelopeLimit): string {
-  const envelope = envelopeOf(approval.summary);
+  const envelope = envelopeMaximaOf(approval.summary);
   const percent = percentOf(format.decimal);
   return t(`approvals.why.envelope.${limit}`, {
     min: envelope ? percent(envelope.minMargin) : unknown,
-    max: envelope ? percent(envelope.modelChange.max) : unknown,
-    changes: envelope ? format.number(envelope.changes.max) : unknown,
-    models: envelope ? format.number(envelope.models.max) : unknown,
+    max: envelope ? percent(envelope.modelChange) : unknown,
+    changes: envelope ? format.number(envelope.changes) : unknown,
+    models: envelope ? format.number(envelope.models) : unknown,
   });
 }
 
@@ -243,6 +245,138 @@ function PriceRows({ rows, title, show }: PriceView) {
         </tbody>
       </Table>
     </div>
+  );
+}
+
+// RuleChangePanel is a pricing rule change the agent asked for: the rule as asked, and every sale price it moved when
+// the agent asked, each against the model's change today, beside the day's use of the envelope. The server keeps the
+// first few moves only, and the panel says how many there are.
+export function RuleChangePanel({ approval }: { approval: Approval }) {
+  const { t } = useTranslation();
+  const change = ruleChangeOf(approval);
+  if (!change) {
+    return null;
+  }
+  return (
+    <>
+      <RuleFacts change={change} />
+      <Panel title={t("approvals.rule.moves")}>
+        <div className="space-y-2 px-4 pt-4">
+          <p className="text-t2">{t("approvals.rule.movesIntro")}</p>
+          {change.day ? <DayUse day={change.day} /> : null}
+          {change.total > change.moves.length ? (
+            <p className="text-warn">
+              {t("approvals.rule.truncated", { shown: change.moves.length, total: change.total })}
+            </p>
+          ) : null}
+        </div>
+        {change.moves.length === 0 ? (
+          <p className="p-4 text-t3">{t("approvals.rule.none")}</p>
+        ) : (
+          <ul className="divide-y divide-b1">
+            {change.moves.map((move, i) => (
+              <MoveLine key={`${move.model}:${i}`} move={move} />
+            ))}
+          </ul>
+        )}
+      </Panel>
+    </>
+  );
+}
+
+function RuleFacts({ change }: { change: RuleChange }) {
+  const { t } = useTranslation();
+  const rule = change.rule;
+  if (!rule) {
+    return null;
+  }
+  const rows: [string, ReactNode][] = [
+    [t("pricing.rules.target"), [t(`pricing.target.${rule.target.kind}`), rule.target.id].filter(Boolean).join(" · ")],
+    [
+      t("pricing.rules.audience"),
+      [t(`pricing.audience.${rule.audience.kind}`), rule.audience.id].filter(Boolean).join(" · "),
+    ],
+    [t("pricing.rules.method"), <MethodSummary key="method" method={rule.method} />],
+    [t("pricing.rules.state"), t(rule.enabled ? "pricing.on" : "pricing.off")],
+  ];
+  const conversion = rule.method.currency_conversion;
+  if (conversion) {
+    rows.push([t("pricing.method.conversion"), t(`pricing.method.${conversion}`)]);
+  }
+  if (change.rev !== undefined) {
+    rows.push([t("approvals.rule.rev"), String(change.rev)]);
+  }
+  const prices = methodPrices(rule.method, change.currency);
+  return (
+    <>
+      <Facts title={t("approvals.rule.title")} rows={rows} />
+      {prices ? (
+        <Panel title={t(prices.title, { currency: prices.schedule.currency })}>
+          <div className="space-y-2 pb-3">
+            <Rates schedule={prices.schedule} />
+          </div>
+        </Panel>
+      ) : null}
+    </>
+  );
+}
+
+// methodPrices is every price a rule's method states as an amount, as a price list: a fixed price, or the fixed markup
+// a cost-plus rule adds to cost in the site's currency. The owner approves those numbers, not the method's name.
+function methodPrices(
+  method: AdminSchemas["PricingMethod"],
+  currency: string | undefined,
+):
+  | { title: "approvals.rule.schedule" | "approvals.rule.fixedMarkup"; schedule: AdminSchemas["PriceSchedule"] }
+  | undefined {
+  if (method.kind === "fixed" && method.schedule) {
+    return { title: "approvals.rule.schedule", schedule: method.schedule };
+  }
+  if (method.fixed_markup && Object.keys(method.fixed_markup).length > 0) {
+    return {
+      title: "approvals.rule.fixedMarkup",
+      schedule: { v: 1, currency: currency ?? "", rates: method.fixed_markup },
+    };
+  }
+  return undefined;
+}
+
+function DayUse({ day }: { day: NonNullable<RuleChange["day"]> }) {
+  const { t } = useTranslation();
+  const { number } = useFormat();
+  return (
+    <p className="text-t2 tabular-nums">
+      {t("approvals.rule.day", {
+        changes: number(day.changes.used),
+        changesMax: number(day.changes.max),
+        models: number(day.models.used),
+        modelsMax: number(day.models.max),
+      })}
+    </p>
+  );
+}
+
+// MoveLine is one moved price on its own lines, which wrap at any width.
+function MoveLine({ move }: { move: RuleMove }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const percent = percentOf(format.decimal);
+  return (
+    <li className="space-y-1 px-4 py-3">
+      <p className="font-medium text-t1 [overflow-wrap:anywhere]">
+        {move.slug ?? move.model}
+        {move.audience ? (
+          <span className="ml-2 text-label text-t3">{t(`pricing.audience.${move.audience}`)}</span>
+        ) : null}
+      </p>
+      <p className="text-t2 tabular-nums">
+        {t("approvals.rule.move", {
+          change: move.change === null ? t("approvals.envelope.unmeasured") : percent(move.change),
+          margin: move.margin === null ? t("approvals.envelope.unknownCost") : percent(move.margin),
+          used: move.modelUsed === undefined ? unknown : percent(move.modelUsed),
+        })}
+      </p>
+    </li>
   );
 }
 

@@ -43,19 +43,19 @@ func (q *Queries) CountPriceChange(ctx context.Context, db DBTX, arg CountPriceC
 
 const ensurePriceCounters = `-- name: EnsurePriceCounters :exec
 INSERT INTO operations.price_counters (site_id, day_start, model_id)
-VALUES ($1, $2, NULL), ($1, $2, $3::uuid)
+SELECT $1, $2, m FROM unnest(array_prepend(NULL::uuid, $3::uuid[])) AS m
 ON CONFLICT DO NOTHING
 `
 
 type EnsurePriceCountersParams struct {
 	SiteID   uuid.UUID
 	DayStart time.Time
-	ModelID  uuid.UUID
+	ModelIds []uuid.UUID
 }
 
-// The site's row and the model's row of a UTC day, made at zero if they are not there yet.
+// The site's row and the models' rows of a UTC day, made at zero if they are not there yet.
 func (q *Queries) EnsurePriceCounters(ctx context.Context, db DBTX, arg EnsurePriceCountersParams) error {
-	_, err := db.Exec(ctx, ensurePriceCounters, arg.SiteID, arg.DayStart, arg.ModelID)
+	_, err := db.Exec(ctx, ensurePriceCounters, arg.SiteID, arg.DayStart, arg.ModelIds)
 	return err
 }
 
@@ -96,7 +96,7 @@ func (q *Queries) InsertPriceEnvelope(ctx context.Context, db DBTX, arg InsertPr
 
 const lockPriceCounters = `-- name: LockPriceCounters :many
 SELECT site_id, day_start, model_id, change_bps, count, models FROM operations.price_counters
-WHERE site_id = $1 AND day_start = $2 AND (model_id IS NULL OR model_id = $3::uuid)
+WHERE site_id = $1 AND day_start = $2 AND (model_id IS NULL OR model_id = ANY($3::uuid[]))
 ORDER BY model_id NULLS FIRST
 FOR UPDATE
 `
@@ -104,12 +104,12 @@ FOR UPDATE
 type LockPriceCountersParams struct {
 	SiteID   uuid.UUID
 	DayStart time.Time
-	ModelID  uuid.UUID
+	ModelIds []uuid.UUID
 }
 
-// The site's row, then the model's: every path locks them in this order.
+// The site's row, then the models' in ascending order: every path locks them in this order.
 func (q *Queries) LockPriceCounters(ctx context.Context, db DBTX, arg LockPriceCountersParams) ([]OperationsPriceCounter, error) {
-	rows, err := db.Query(ctx, lockPriceCounters, arg.SiteID, arg.DayStart, arg.ModelID)
+	rows, err := db.Query(ctx, lockPriceCounters, arg.SiteID, arg.DayStart, arg.ModelIds)
 	if err != nil {
 		return nil, err
 	}

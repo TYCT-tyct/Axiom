@@ -7,7 +7,7 @@ import type { TFunction } from "i18next";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ApprovalState, CapTable, EnvelopeTable, Minute, Target, useNow } from "../approval-parts";
-import { PriceTable, RawData, RequestFacts, WhyAsked } from "../approval-request";
+import { PriceTable, RawData, RequestFacts, RuleChangePanel, WhyAsked } from "../approval-request";
 import { capOf, capOver, decidable, envelopeOf, envelopeOver, outcomeOf } from "../approvals";
 import { ChangeDialog } from "../change";
 import { Actions, Code, Facts, PageBody, State } from "../parts";
@@ -34,6 +34,7 @@ export default function ApprovalPage() {
             <ApprovalFacts approval={approval} />
             <RequestFacts approval={approval} />
             <PriceTable approval={approval} />
+            <RuleChangePanel approval={approval} />
             <Limits approval={approval} />
             <AgentReason text={approval.agent_reason} />
             <RawData approval={approval} />

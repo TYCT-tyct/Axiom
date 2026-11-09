@@ -129,6 +129,18 @@ export default {
     unknown: "A reason this page cannot name; see the raw data below.",
     unavailable: "The server that asked did not record why; judge it from the limits and the raw data below.",
   },
+  rule: {
+    title: "The pricing rule asked for",
+    rev: "Changes the rule as of revision",
+    fixedMarkup: "The fixed markup added to cost ({{currency}})",
+    schedule: "The fixed price asked for ({{currency}})",
+    moves: "Sale prices it moves",
+    movesIntro: "As measured when the agent asked; approving makes the change again.",
+    day: "Today before it: {{changes}} of {{changesMax}} price changes, {{models}} of {{modelsMax}} models repriced.",
+    truncated: "It moves {{total}} prices; the server kept the first {{shown}}.",
+    none: "It moves no published price.",
+    move: "Change {{change}} · margin {{margin}} · this model's change today before it {{used}}",
+  },
   request: {
     title: "What is asked",
     amount: "Amount",

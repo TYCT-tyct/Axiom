@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
+	"strings"
 	"testing"
 	"uuid"
 
@@ -222,6 +223,109 @@ func (db opsDB) expectEnvelope(t *testing.T, site uuid.UUID, rev, change int64) 
 	}
 }
 
+// TestProposePrices: a change that moves several prices at once is weighed as all of them: moves each within the
+// envelope but over it together wait for the owner, are taken back first and count nothing, and the owner is shown
+// every move with the day before it; within it they are all counted, a model moved twice counting once among the day's
+// models. A change that moves no price is within any envelope, and a retry is answered with its operation and takes
+// its own change back.
+func TestProposePrices(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	pct := func(n int64) *big.Rat { return big.NewRat(n, 100) }
+	type r = []operations.Reason
+	for _, c := range []movesCase{
+		{"no move", nil, "approved", "0/0", nil, ""},
+		{"within together", []*big.Rat{pct(5), pct(3), pct(2)}, "approved", "3/2 800#2 200#1", nil, ""},
+		{"one model over its move together", []*big.Rat{pct(6), pct(6)}, "pending_approval", "0/0 0#0", r{operations.ReasonModelDailyChange}, "2/2 3 600"},
+		{
+			"over the day's publications together",
+			[]*big.Rat{pct(1), pct(1), pct(1), pct(1)},
+			"pending_approval", "0/0 0#0 0#0 0#0",
+			r{operations.ReasonDailyChanges, operations.ReasonDailyModels},
+			"4/4 3 100",
+		},
+		{"one move unmeasured", []*big.Rat{pct(1), nil}, "pending_approval", "0/0 0#0", r{operations.ReasonUnmeasuredChange}, "2/2 3 100"},
+	} {
+		db.proposeMoves(t, c)
+	}
+	if _, err := db.in(t, func(tx pg.Tx) (operations.Operation, error) {
+		op, _, err := operations.ProposePrices(t.Context(), tx, publish(uuid.NewV7(), uuid.NewV7(), nil, nil).p, uuid.NewV7(), nil, nil)
+		return op, err
+	}); !errors.Is(err, operations.ErrNoPriceEnvelope) {
+		t.Errorf("a site without an envelope: %v", err)
+	}
+}
+
+// movesCase is a change that moves several prices, where it should start, what the counters should hold after it, the
+// reasons one that waits is shown and what the owner is shown of its moves.
+type movesCase struct {
+	name     string
+	changes  []*big.Rat // of models a, a, b, ... in turn: a model is moved twice, by its first two
+	want     string
+	counters string
+	reasons  []operations.Reason
+	shown    string // the moves shown of all, the day's publications and the second move's model's use before it
+}
+
+// proposeMoves proposes c's change in a site of its own, then again under the same key.
+func (db opsDB) proposeMoves(t *testing.T, c movesCase) {
+	t.Helper()
+	site := uuid.NewV7()
+	if _, err := db.setEnvelope(t, envelope(site), 0); err != nil {
+		t.Fatal(err)
+	}
+	models := []uuid.UUID{uuid.NewV7(), uuid.NewV7(), uuid.NewV7()}
+	slices.SortFunc(models, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	var moves []operations.Repricing
+	for i, change := range c.changes {
+		model := models[max(i-1, 0)]
+		moves = append(moves, operations.Repricing{Site: site, Model: model, Change: change, Margin: big.NewRat(1, 2), Summary: map[string]any{"model_id": model.String()}})
+	}
+	p := publish(site, models[0], nil, nil).p
+	p.Tool, p.Target, p.Summary = "pricing_rule_update", operations.Target{Kind: "pricing_rule", ID: uuid.NewV7().String()}, map[string]any{"rule_rev": 3}
+	undone := 0
+	propose := func() (operations.Operation, bool, error) {
+		var op operations.Operation
+		var replayed bool
+		err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
+			op, replayed, err = operations.ProposePrices(t.Context(), tx, p, site, moves, func() error { undone++; return nil })
+			return err
+		})
+		return op, replayed, err
+	}
+	op, _, err := propose()
+	if err != nil || string(op.State) != c.want {
+		t.Fatalf("%s: %s %v", c.name, op.State, err)
+	}
+	expectReasons(t, c.name, op, c.reasons)
+	if got := db.priceCounters(t, site); got != c.counters {
+		t.Errorf("%s: the counters are %s, want %s", c.name, got, c.counters)
+	}
+	pending := op.State == operations.StatePending
+	if pending {
+		db.expectShown(t, c, op)
+	}
+	if want := map[bool]int{true: 1}[pending]; undone != want {
+		t.Errorf("%s: taken back %d times, want %d", c.name, undone, want)
+	}
+	before := undone
+	if again, replayed, err := propose(); err != nil || !replayed || again.ID != op.ID || undone != before+1 {
+		t.Errorf("%s: the retry: %s %v %v, taken back %d times", c.name, again.State, replayed, err, undone-before)
+	}
+}
+
+// expectShown checks what the owner is shown of c's change, which waits as op: its moves and how many, the day's
+// publications, the second move's model's use before it, and the caller's own summary.
+func (db opsDB) expectShown(t *testing.T, c movesCase, op operations.Operation) {
+	t.Helper()
+	shown := db.text(t, `SELECT jsonb_array_length(s->'moves') || '/' || (s->>'moves_total') || ' ' || (s->'envelope'->>'daily_changes') ||
+		' ' || (s->'moves'->1->>'model_change_used') || ' ' || (s->>'rule_rev')
+		FROM (SELECT summary::jsonb AS s FROM operations.approvals WHERE id = '`+op.Approval.ID.String()+`') a`)
+	if shown != c.shown+" 3" {
+		t.Errorf("%s: the owner is shown %q, want %q", c.name, shown, c.shown+" 3")
+	}
+}
+
 // TestCountPrice: a publication the owner approved counts in the day it runs, a move no share measures as all of the
 // old price and one beyond the largest envelope as one more than it, with or without an envelope; and the use of every
 // envelope today reads back.
@@ -239,7 +343,9 @@ func TestCountPrice(t *testing.T) {
 		{Site: site, Model: far, Change: big.NewRat(20_000, 1)},
 		{Site: uuid.NewV7(), Model: model, Change: big.NewRat(1, 100)},
 	} {
-		if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error { return operations.CountPrice(t.Context(), tx, r) }); err != nil {
+		if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+			return operations.CountPrices(t.Context(), tx, r.Site, []operations.Repricing{r})
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -276,33 +382,48 @@ func (db opsDB) expectMoves(t *testing.T, site uuid.UUID, want map[uuid.UUID]ope
 	}
 }
 
-// TestPriceRaces: two publications of one model, each within the envelope and over it together, queue on the model's
-// counters: the second waits for the first to commit and then goes to the owner.
+// TestPriceRaces: two publications of one model, or two changes that move it among other models, each within the
+// envelope and over it together, queue on the model's counters: the second waits for the first to commit and then goes
+// to the owner.
 func TestPriceRaces(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
-	site, model := uuid.NewV7(), uuid.NewV7()
-	if _, err := db.setEnvelope(t, envelope(site), 0); err != nil {
-		t.Fatal(err)
-	}
 	six := big.NewRat(6, 100)
-	var second operations.Operation
-	db.whileWaited(t, func(tx pg.Tx) error {
-		first := publish(site, model, six, big.NewRat(1, 2))
-		op, _, err := operations.ProposePrice(t.Context(), tx, first.p, first.r)
-		if err == nil && op.State != operations.StateApproved {
-			err = fmt.Errorf("the first publication: %s", op.State)
+	for name, propose := range map[string]func(tx pg.Tx, pr pricing) (operations.Operation, error){
+		"publications": func(tx pg.Tx, pr pricing) (operations.Operation, error) {
+			op, _, err := operations.ProposePrice(t.Context(), tx, pr.p, pr.r)
+			return op, err
+		},
+		"changes": func(tx pg.Tx, pr pricing) (operations.Operation, error) {
+			other := pr.r
+			other.Model, other.Change = uuid.NewV7(), big.NewRat(1, 100)
+			op, _, err := operations.ProposePrices(t.Context(), tx, pr.p, pr.r.Site, []operations.Repricing{other, pr.r}, func() error { return nil })
+			return op, err
+		},
+	} {
+		site, model := uuid.NewV7(), uuid.NewV7()
+		if _, err := db.setEnvelope(t, envelope(site), 0); err != nil {
+			t.Fatal(err)
 		}
-		return err
-	}, func() (err error) {
-		second, err = db.proposePrice(t, publish(site, model, six, big.NewRat(1, 2)))
-		return err
-	}, nil)
-	if second.State != operations.StatePending {
-		t.Errorf("the second publication: %s", second.State)
-	}
-	if got := db.priceCounters(t, site); got != "1/1 600#1" {
-		t.Errorf("the counters are %s", got)
+		var second operations.Operation
+		db.whileWaited(t, func(tx pg.Tx) error {
+			op, err := propose(tx, publish(site, model, six, big.NewRat(1, 2)))
+			if err == nil && op.State != operations.StateApproved {
+				err = fmt.Errorf("%s: the first: %s", name, op.State)
+			}
+			return err
+		}, func() (err error) {
+			second, err = db.in(t, func(tx pg.Tx) (operations.Operation, error) {
+				return propose(tx, publish(site, model, six, big.NewRat(1, 2)))
+			})
+			return err
+		}, nil)
+		if second.State != operations.StatePending {
+			t.Errorf("%s: the second: %s", name, second.State)
+		}
+		if got := db.text(t, `SELECT change_bps || '#' || count FROM operations.price_counters WHERE model_id = '`+model.String()+`'`); got != "600#1" {
+			t.Errorf("%s: the model's counter is %s", name, got)
+		}
 	}
 }
 
@@ -326,7 +447,13 @@ func TestPriceFailuresReachTheCaller(t *testing.T) {
 			_, _, err := operations.ProposePrice(ctx, tx, pr.p, pr.r)
 			return err
 		},
-		"CountPrice": func(ctx context.Context, tx pg.Tx) error { return operations.CountPrice(ctx, tx, pr.r) },
+		"ProposePrices": func(ctx context.Context, tx pg.Tx) error {
+			_, _, err := operations.ProposePrices(ctx, tx, pr.p, site, []operations.Repricing{pr.r}, func() error { return nil })
+			return err
+		},
+		"CountPrices": func(ctx context.Context, tx pg.Tx) error {
+			return operations.CountPrices(ctx, tx, site, []operations.Repricing{pr.r})
+		},
 	}
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()

@@ -313,7 +313,7 @@ func TestBasePrices(t *testing.T) {
 	}
 }
 
-// TestPricePublishRoutesAtOnce: every way a sale price is published rebuilds the publishing node's routing once it has
+// TestPricePublishRoutesAtOnce: every way a sale price is published, a pricing rule the agent changes included, rebuilds the publishing node's routing once it has
 // committed, so the node's next call is admitted at the new version, not at the one the periodic rebuild last read.
 // The call path here has no periodic rebuild at all: only the publication's rebuild can bring the new version.
 func TestPricePublishRoutesAtOnce(t *testing.T) {
@@ -337,6 +337,13 @@ func TestPricePublishRoutesAtOnce(t *testing.T) {
 		}
 	}
 	admitsAtCurrent("before any publication")
+
+	f.servedOnly()
+	rule := f.rule() // 1.5 to 1.6 for every model, inside the envelope: the agent changes it itself
+	if rec := f.changeRule(rule.Id, rule.Rev, "1.6", newKey(), ""); rec.Code != http.StatusOK {
+		t.Fatalf("the agent's rule change: %d %s", rec.Code, rec.Body)
+	}
+	admitsAtCurrent("after the agent changed a rule")
 
 	f.reprice("1.8") // 20%, inside the envelope's 25%: the agent publishes it itself
 	if rec := f.publish(model, f.waiting(model), newKey(), ""); rec.Code != http.StatusOK {
