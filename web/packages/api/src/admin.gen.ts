@@ -1929,7 +1929,7 @@ export interface paths {
         get?: never;
         /**
          * Turn an endpoint on or off for routing
-         * @description A person's switch, which the operations agent also holds (`endpoint_set_enabled`): the supplier sync never writes it, so an endpoint turned off stays off until someone turns it on. Only an enabled endpoint whose cost is `known` is routed to. Every node applies the change on its next reload.
+         * @description A person's switch, which the operations agent also holds (`endpoint_set_enabled`): the supplier sync never writes it, so an endpoint turned off stays off until someone turns it on. Only an enabled endpoint whose cost is `known` is routed to. Every node applies the change on its next reload. Turning an endpoint on here also resets its health breaker in the same change: failures from before it no longer keep it out, and it comes back with a slow start. The node that answers applies the reset at once; another node applies it the next time it records a health change for the endpoint, with no fixed bound. The operations agent's switch does not touch the breaker.
          */
         put: operations["setSupplierEndpointEnabled"];
         post?: never;
@@ -4686,9 +4686,9 @@ export interface components {
             classes?: string[] | null;
             /** @description The data policies kept, or `["*"]` for every one. */
             policies?: ("*" | "no_retention" | "retained" | "may_train")[] | null;
-            /** @description The product score an endpoint needs (official direct = 100); an endpoint with none has 0. */
+            /** @description The product score an endpoint needs (official direct = 100). An endpoint without a valid score never meets it, even at 0. */
             min_score?: number | null;
-            /** @description The confidence of that score an endpoint needs. */
+            /** @description The confidence of that score an endpoint needs. An endpoint without a valid score never meets it, even at 0. */
             min_score_confidence?: number | null;
             /** @description Only endpoints verified as the model they claim; an override cannot turn it off. */
             verified_only?: boolean | null;

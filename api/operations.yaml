@@ -510,8 +510,9 @@ paths:
         Turns one of the supplier's endpoints (`suppliers_get` lists them) on or off for routing, as the admin does,
         and runs at once (200, `succeeded`); the result is the endpoint's switch as it now is. Every node routes by it
         from its next reload; only an enabled endpoint whose cost is `known` is routed to, and the supplier sync never
-        turns an endpoint back on. A supplier that is being removed or was removed is a 409 `conflict`. With `dry_run`
-        the same checks run and nothing is written.
+        turns an endpoint back on. Unlike the admin's switch, turning an endpoint on here leaves its health breaker as
+        it is: an endpoint the breaker took out returns when a probe or a real request says it is well. A supplier that
+        is being removed or was removed is a 409 `conflict`. With `dry_run` the same checks run and nothing is written.
       tags: [Suppliers]
       security: [{credential: []}]
       x-axiom-permission: suppliers.manage

@@ -21,6 +21,7 @@ import (
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/quality"
 	"axiom/internal/suppliers"
 )
 
@@ -128,7 +129,7 @@ func startAdminNodeWithSignals(c commandLine, clock *testClock, exit *egress.Cli
 		c.t.Fatal(err)
 	}
 	api := newAdminAPI("test", svc, cat, supplierAdmin, upstreams, c.db, logger)
-	api.keys, api.exit, api.router = masterKeys(c.t), exit, checkRouter(c.t)
+	api.keys, api.exit, api.router, api.health = masterKeys(c.t), exit, checkRouter(c.t), quality.New(nil)
 	api.alerts, api.instance, api.paymentSignals = signals, instance, payments.NewSignalState()
 	opsContract, err := operationsContract()
 	if err != nil {

@@ -5589,10 +5589,10 @@ type RoutingRule struct {
 	Classes  *[]string          `json:"classes,omitempty"`
 	MaxPrice *RoutingPriceLimit `json:"max_price,omitempty"`
 
-	// MinScore The product score an endpoint needs (official direct = 100); an endpoint with none has 0.
+	// MinScore The product score an endpoint needs (official direct = 100). An endpoint without a valid score never meets it, even at 0.
 	MinScore *float32 `json:"min_score,omitempty"`
 
-	// MinScoreConfidence The confidence of that score an endpoint needs.
+	// MinScoreConfidence The confidence of that score an endpoint needs. An endpoint without a valid score never meets it, even at 0.
 	MinScoreConfidence *float32 `json:"min_score_confidence,omitempty"`
 
 	// Policies The data policies kept, or `["*"]` for every one.
@@ -5623,10 +5623,10 @@ type RoutingRuleOverride struct {
 	Classes  *[]string          `json:"classes,omitempty"`
 	MaxPrice *RoutingPriceLimit `json:"max_price,omitempty"`
 
-	// MinScore The product score an endpoint needs (official direct = 100); an endpoint with none has 0.
+	// MinScore The product score an endpoint needs (official direct = 100). An endpoint without a valid score never meets it, even at 0.
 	MinScore *float32 `json:"min_score,omitempty"`
 
-	// MinScoreConfidence The confidence of that score an endpoint needs.
+	// MinScoreConfidence The confidence of that score an endpoint needs. An endpoint without a valid score never meets it, even at 0.
 	MinScoreConfidence *float32 `json:"min_score_confidence,omitempty"`
 
 	// Model A catalog model slug, such as `anthropic/claude-opus-4.1`.

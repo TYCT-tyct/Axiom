@@ -160,8 +160,8 @@ func alone(j ruleJSON, compiled Rule) []condition {
 	}
 	add(j.Classes != nil, "classes", func(c *Rule) { c.Classes = compiled.Classes })
 	add(j.Policies != nil, "policies", func(c *Rule) { c.Policies = compiled.Policies })
-	add(j.MinScore != nil, "min_score", func(c *Rule) { c.MinScore = compiled.MinScore })
-	add(j.MinScoreConfidence != nil, "min_score_confidence", func(c *Rule) { c.MinScoreConfidence = compiled.MinScoreConfidence })
+	add(j.MinScore != nil, "min_score", func(c *Rule) { c.MinScore, c.Scored = compiled.MinScore, true })
+	add(j.MinScoreConfidence != nil, "min_score_confidence", func(c *Rule) { c.MinScoreConfidence, c.Scored = compiled.MinScoreConfidence, true })
 	add(j.VerifiedOnly != nil && *j.VerifiedOnly, "verified_only", func(c *Rule) { c.VerifiedOnly = true })
 	if j.MaxPrice != nil {
 		for _, it := range j.MaxPrice.items() {
