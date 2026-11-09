@@ -53,13 +53,17 @@ func (q *Queries) AccountKeysByPreset(ctx context.Context, db DBTX, arg AccountK
 }
 
 const admitKey = `-- name: AdmitKey :many
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE CASE WHEN coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true) THEN coalesce(a.billing_preference, p.preference, 'subscription_first') ELSE 'subscription_first' END WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE CASE WHEN coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true) THEN coalesce(a.billing_preference, p.preference, 'subscription_first') ELSE 'subscription_first' END WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint) || int4send(coalesce(terms.version, 0)) || int2send((CASE terms.locale WHEN 'zh' THEN 1 WHEN 'en' THEN 2 ELSE 0 END)::smallint) || int4send(coalesce(privacy.version, 0)) || int2send((CASE privacy.locale WHEN 'zh' THEN 1 WHEN 'en' THEN 2 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
 JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
 LEFT JOIN accounts.users owner ON owner.account_id=a.id
 LEFT JOIN accounts.site_billing_preferences p ON p.site_id = a.site_id
+LEFT JOIN LATERAL (SELECT la.version, la.locale FROM accounts.legal_acceptances la
+    WHERE la.user_id = owner.id AND la.site_id = a.site_id AND la.kind = 'terms' ORDER BY la.version DESC LIMIT 1) terms ON true
+LEFT JOIN LATERAL (SELECT la.version, la.locale FROM accounts.legal_acceptances la
+    WHERE la.user_id = owner.id AND la.site_id = a.site_id AND la.kind = 'privacy' ORDER BY la.version DESC LIMIT 1) privacy ON true
 WHERE k.id = $1
     AND accounts.domain_site($2::text, 'api') = k.site_id
     AND k.kind = 'call' AND k.status = 'active' AND k.deleted_at IS NULL
@@ -87,7 +91,9 @@ type AdmitKeyRow struct {
 
 // What a call key may do, read in the key's account scope in the admission transaction: no row unless the request came
 // to an enabled API domain of the key's site and the key and workspace are usable. The account state comes with the
-// same row so suspension is distinguishable without another query. A model call admits a call key alone.
+// same row so suspension is distinguishable without another query. A model call admits a call key alone. The account
+// owner's newest accepted terms and privacy versions come with it, for the call log: acceptances are only ever added, so
+// what this row reads is a version the owner did accept by the time the call started (0 when none).
 func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]AdmitKeyRow, error) {
 	rows, err := db.Query(ctx, admitKey, arg.KeyID, arg.Domain, arg.ClientIp)
 	if err != nil {
@@ -118,13 +124,17 @@ func (q *Queries) AdmitKey(ctx context.Context, db DBTX, arg AdmitKeyParams) ([]
 }
 
 const admitReadKey = `-- name: AdmitReadKey :many
-SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, k.kind, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE CASE WHEN coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true) THEN coalesce(a.billing_preference, p.preference, 'subscription_first') ELSE 'subscription_first' END WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
+SELECT k.preset_id, k.models, k.spend_limit, k.limit_reset, w.budget, w.budget_reset, k.kind, (uuid_send(a.tier_id) || uuid_send(coalesce(owner.id,'00000000-0000-0000-0000-000000000000'::uuid)) || int4send(coalesce(a.rate_requests, t.rate_requests, -1)) || int4send(coalesce(k.rate_requests, a.rate_requests, t.rate_requests, -1)) || int2send((CASE CASE WHEN coalesce((SELECT enabled FROM platform.billing_preference_readiness WHERE id), true) THEN coalesce(a.billing_preference, p.preference, 'subscription_first') ELSE 'subscription_first' END WHEN 'wallet_first' THEN 1 WHEN 'subscription_only' THEN 2 WHEN 'wallet_only' THEN 3 ELSE 0 END)::smallint) || int4send(coalesce(terms.version, 0)) || int2send((CASE terms.locale WHEN 'zh' THEN 1 WHEN 'en' THEN 2 ELSE 0 END)::smallint) || int4send(coalesce(privacy.version, 0)) || int2send((CASE privacy.locale WHEN 'zh' THEN 1 WHEN 'en' THEN 2 ELSE 0 END)::smallint))::bytea AS admission_ids, a.status = 'active' AS account_active
 FROM accounts.api_keys k
 JOIN accounts.workspaces w ON w.site_id = k.site_id AND w.account_id = k.account_id AND w.id = k.workspace_id
 JOIN accounts.accounts a ON a.site_id = k.site_id AND a.id = k.account_id
 JOIN accounts.tiers t ON t.site_id = a.site_id AND t.id = a.tier_id
 LEFT JOIN accounts.users owner ON owner.account_id=a.id
 LEFT JOIN accounts.site_billing_preferences p ON p.site_id = a.site_id
+LEFT JOIN LATERAL (SELECT la.version, la.locale FROM accounts.legal_acceptances la
+    WHERE la.user_id = owner.id AND la.site_id = a.site_id AND la.kind = 'terms' ORDER BY la.version DESC LIMIT 1) terms ON true
+LEFT JOIN LATERAL (SELECT la.version, la.locale FROM accounts.legal_acceptances la
+    WHERE la.user_id = owner.id AND la.site_id = a.site_id AND la.kind = 'privacy' ORDER BY la.version DESC LIMIT 1) privacy ON true
 WHERE k.id = $1
     AND accounts.domain_site($2::text, 'api') = k.site_id
     AND k.kind IN ('call', 'management') AND k.status = 'active' AND k.deleted_at IS NULL

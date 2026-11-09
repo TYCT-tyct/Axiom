@@ -35,7 +35,14 @@ type Admission struct {
 	budget               *int64
 	budgetReset          *string
 	preference           FundingPreference
+	consent              Consent
 }
+
+// Consent is the newest version of each legal document the account's owner had accepted when the call was admitted,
+// as the call log records it (docs/domains/observability.md「写入时记全」). A zero DocumentVersion is a kind the owner
+// accepted no version of: the site published none, or the owner has not accepted one yet. It says what was accepted,
+// never what is allowed: training is a separate decision.
+type Consent struct{ Terms, Privacy DocumentVersion }
 
 // FundingPreference is a funding order, encoded in the admission row as one number: the admission path is hot and a
 // text column would allocate on every call.
@@ -104,6 +111,9 @@ func (a Admission) Budget() (int64, string, bool) { return limit(a.budget, a.bud
 
 // BillingPreference is the funding order the account's calls use (docs/domains/billing.md「资金来源」).
 func (a Admission) BillingPreference() string { return a.preference.String() }
+
+// Consent is the legal documents the account's owner had accepted when the call was admitted.
+func (a Admission) Consent() Consent { return a.consent }
 
 func limit(amount *int64, reset *string) (int64, string, bool) {
 	if amount == nil {
@@ -290,7 +300,29 @@ func admitRow(c Caller, row AdmitKeyRow, kind string) (Admission, error) {
 		owner:       owner, caller: c, kind: kind, tier: tier, preset: row.PresetID, models: row.Models,
 		spendLimit: row.SpendLimit, limitReset: row.LimitReset, budget: row.Budget, budgetReset: row.BudgetReset,
 		preference: admissionPreference(row.AdmissionIds),
+		consent:    admissionConsent(row.AdmissionIds),
 	}, nil
+}
+
+// admissionConsent reads the accepted terms and privacy versions appended to the admission row, each a version and a
+// locale code (0 none, 1 zh, 2 en); a row without them, as an older query wrote, is none accepted.
+func admissionConsent(data []byte) Consent {
+	if len(data) < 54 {
+		return Consent{}
+	}
+	return Consent{Terms: acceptedVersion(LegalTerms, data[42:48]), Privacy: acceptedVersion(LegalPrivacy, data[48:54])}
+}
+
+func acceptedVersion(kind string, data []byte) DocumentVersion {
+	version := binary.BigEndian.Uint32(data)
+	if version == 0 {
+		return DocumentVersion{}
+	}
+	locale := LegalLocaleZH
+	if binary.BigEndian.Uint16(data[4:]) == 2 {
+		locale = LegalLocaleEN
+	}
+	return DocumentVersion{Kind: kind, Locale: locale, Version: int(version)}
 }
 
 // admissionPreference reads the order appended to the admission row; a row an older node wrote has no byte for it and
