@@ -104,13 +104,8 @@ else
   built="$(just axiom-version)"
   docker build --tag "$DEPLOY_IMAGE" deploy
 fi
-# The database image is built from this tree (pgBackRest on the pinned PostgreSQL tag), not consumed as a digest like
-# the program, and built once: a rebuild from a warm cache still names a new image, because the build's provenance
-# attestation differs, and Compose would recreate the database under the running node at the next start (#605).
-docker build --tag "$DEPLOY_POSTGRES_IMAGE" deploy/postgres
-
-# Reuse the same image for every start, including the legacy-role upgrade. Only CI's own environment is initialized.
-start() {
+# Only CI's own environment is initialized here.
+write_env() {
   umask 077
   if [ ! -f deploy/.env ]; then
     printf 'AXIOM_POSTGRES_PASSWORD=%s\nAXIOM_APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" "$(openssl rand -hex 24)" > deploy/.env
@@ -119,15 +114,13 @@ start() {
     { [ -z "$(tail -c 1 deploy/.env)" ] || echo; printf 'AXIOM_MIGRATOR_PASSWORD=%s\n' "$(openssl rand -hex 24)"; } >> deploy/.env
   fi
   chmod 600 deploy/.env
-  # No wall-clock bound around Compose: on the shared host the daemon alone took 34 seconds to deliver a stop signal
-  # (#605), so a per-command limit measured the host's load, not the deployment. The step's 40 minutes bound a hung
-  # daemon, and the database's own healthcheck bounds a start that never becomes ready. The healthcheck is the
-  # condition: Docker keeps probing while PostgreSQL replays WAL and fsyncs the data directory (starting, then
-  # unhealthy) and reports healthy on the first probe that accepts connections. A 60-second --wait-timeout ignored
-  # that transition and failed a recovery that was still progressing at 48 seconds (#605).
-  compose up --detach --no-build --wait postgres
-  compose exec -T postgres sh < deploy/postgres/roles.sh
-  compose up --detach --no-build --wait
+}
+
+# Every start goes through the production entry's own start (scripts/ops/up.sh), so what it does with a running node
+# and its database is what this job checks. Its arguments are up.sh's (--database).
+start() {
+  write_env
+  bash scripts/ops/up.sh --env-file deploy/.env "$@"
   # Include exited one-shot services before teardown, so their resource policy cannot escape inspection.
   local id ids parent
   ids=$(compose ps --all --quiet)
@@ -200,15 +193,33 @@ grep -qi '^cache-control: public, max-age=31536000, immutable$' <<< "$headers" &
 # affect it. DEPLOY_IMAGE is the release digest or the image built from this tree above.
 bash "$(dirname "${BASH_SOURCE[0]}")/old-binary-check.sh" --current-image "$DEPLOY_IMAGE"
 
+# An application release while the node runs: the node's configuration changes (as a new image would change it) and
+# the database must stay the same container, never replaced under the node it serves (#735).
+db="$(compose ps --quiet postgres)"
+node="$(compose ps --quiet axiom)"
+printf 'AXIOM_HEALTH_MODE=observe\n' >> deploy/.env
+start
+[ "$(compose ps --quiet postgres)" = "$db" ] || { echo "::error::an application release replaced the database under a running node"; exit 1; }
+[ "$(compose ps --quiet axiom)" != "$node" ] || { echo "::error::an application release did not replace the node"; exit 1; }
+# A setting no service reads stops the start before it changes anything (#735).
+printf 'AXIOM_HEALTH_MOOD=observe\n' >> deploy/.env
+if refusal="$(bash scripts/ops/up.sh --env-file deploy/.env 2>&1)"; then echo "::error::a misspelled setting was dropped silently"; exit 1; fi
+grep -q AXIOM_HEALTH_MOOD <<< "$refusal" || { echo "$refusal"; echo "::error::the refusal does not name the setting"; exit 1; }
+sed -i '/^AXIOM_HEALTH_MOOD=/d' deploy/.env
+
 # A deployment from before the migration administrator: no such role, an owner role that role did not create, and
 # a deploy/.env without its password, readable by others and lacking a final newline. just up upgrades it in place.
-# Changing the PostgreSQL environment recreates it. Stop the node first: losing its name lock makes it exit,
-# and Compose must not mistake that dying process for a running node during the next start.
-compose stop axiom
+# The new password changes the database's environment, so this is a database upgrade: with the node running, the
+# ordinary start refuses and leaves the database as it was, and --database stops (drains) the node before replacing it.
 compose exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d axiom -c 'DROP OWNED BY axiom_migrator' -c 'DROP ROLE axiom_migrator'
 kept="$(grep -v '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env)"
 printf '%s' "$kept" > deploy/.env && chmod 644 deploy/.env
-start
+db="$(compose ps --quiet postgres)"
+write_env
+if bash scripts/ops/up.sh --env-file deploy/.env; then echo "::error::a database upgrade ran under a running node"; exit 1; fi
+[ "$(compose ps --quiet postgres)" = "$db" ] || { echo "::error::a refused start replaced the database"; exit 1; }
+start --database
+[ "$(compose ps --quiet postgres)" != "$db" ] || { echo "::error::the database upgrade did not apply the new environment"; exit 1; }
 [ "$(grep -v '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env)" = "$kept" ] && [ "$(grep -c '^AXIOM_MIGRATOR_PASSWORD=.' deploy/.env)" = 1 ] || { echo "::error::upgrading deploy/.env changed a password or did not add one"; exit 1; }
 [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::upgrading left deploy/.env readable by others"; exit 1; }
 start # the next start, which repeats every grant on roles that now have it

@@ -45,7 +45,7 @@ class PostgresHealthcheck(unittest.TestCase):
         # A crash-looping container resets its start period, so the production entry's final bound, not the healthcheck,
         # ends a wait that never becomes healthy; it must leave room for the start period and every failed probe.
         budget = duration_seconds(health["start_period"]) + duration_seconds(health["interval"]) * health["retries"]
-        script = (ROOT / "scripts" / "ops" / "deploy.sh").read_text()
+        script = (ROOT / "scripts" / "ops" / "up.sh").read_text()
         match = re.search(r"up --detach --no-build --wait --wait-timeout (\S+) postgres", script)
         self.assertIsNotNone(match, "the production entry must bound the postgres wait")
         # --wait-timeout is an integer number of seconds; 5m would be rejected by Compose at deploy time.
