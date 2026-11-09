@@ -55,6 +55,12 @@ docker() {
     'compose -f deploy/compose.yaml ps --all --quiet migrate') echo migrate ;;
     'compose -f deploy/compose.yaml port axiom 8080') echo 127.0.0.1:12345 ;;
     'compose -f deploy/compose.yaml port axiom 8082') echo 127.0.0.1:12346 ;;
+    # The key ring's refusals: the keys service exits 1, so the node's start fails, and its last line is the reason.
+    'compose -f deploy/compose.yaml up --detach --no-build axiom') return 1 ;;
+    'compose -f deploy/compose.yaml logs --no-log-prefix --tail 1 keys')
+      if [ -n "${AXIOM_KEYRING_GENERATE+set}" ]; then echo "keys: AXIOM_KEYRING_GENERATE must be true or false, not '$AXIOM_KEYRING_GENERATE'"
+      else echo 'keys: /keys has master identity but not hash; restore the whole ring'; fi ;;
+    *'--entrypoint sh keys -c ls /keys') printf 'identity\nmaster\nvalkey-password\n' ;;
   esac
 }
 curl() {
@@ -107,7 +113,8 @@ curl() {
                 database = [i for i, call in enumerate(calls) if call.startswith("build ") and "postgres" in call]
                 self.assertEqual([calls[i] for i in database], ["build --tag axiom-ci-postgres:fixture deploy/postgres"])
                 starts = [i for i, call in enumerate(calls) if " up " in call]
-                self.assertEqual(len(starts), 6)  # database then services for each of three starts
+                # database then services for each of three starts, then the three refused starts of the key ring
+                self.assertEqual(len(starts), 9)
                 self.assertTrue(all("--no-build" in calls[i] for i in starts))
                 # The database's healthcheck, including its start period for crash recovery, is the condition; a
                 # separate wall clock made a slow-but-progressing start fail (#605).

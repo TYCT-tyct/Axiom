@@ -147,16 +147,33 @@ services:
     command:
       - |
         umask 277
-        # A deployment that shares the key ring between nodes must restore the protected volume, never let each node
-        # generate divergent material: with no file and this false, this service refuses instead of making one.
-        if [ "$${AXIOM_KEYRING_GENERATE:-true}" = false ]; then
+        # The three files are one ring, made together on a deployment's first start or not at all. A file made next to
+        # the others would be new material where the database holds what the lost one made: a new hashing key leaves
+        # every API key unmatchable while the node starts normally, because only the master key has a digest in the
+        # database to be checked against. So a volume with some of the files and not the others is refused, whatever
+        # AXIOM_KEYRING_GENERATE says; a release that adds a fourth file must make it in a step of its own.
+        # A deployment whose ring exists, or that shares one ring between nodes, sets AXIOM_KEYRING_GENERATE=false, so
+        # an empty volume is refused too instead of getting a second, divergent ring. A value other than true or false
+        # is refused rather than read as either.
+        case "$$AXIOM_KEYRING_GENERATE" in
+          true | false) ;;
+          *) echo "keys: AXIOM_KEYRING_GENERATE must be true or false, not '$$AXIOM_KEYRING_GENERATE'" >&2; exit 1 ;;
+        esac
+        present=
+        missing=
+        for name in master hash identity; do
+          if [ -f /keys/$$name ]; then present="$$present $$name"; else missing="$$missing $$name"; fi
+        done
+        if [ -n "$$present" ] && [ -n "$$missing" ]; then
+          echo "keys: /keys has$$present but not$$missing; restore the whole ring from the backup set it came from (docs/ops/backup-restore.md「恢复」), never generate the missing files" >&2
+          exit 1
+        fi
+        if [ -z "$$present" ]; then
+          [ "$$AXIOM_KEYRING_GENERATE" = true ] || { echo "keys: /keys has no key ring and AXIOM_KEYRING_GENERATE is false: restore the ring, or set it true for this deployment's first start only" >&2; exit 1; }
           for name in master hash identity; do
-            [ -f /keys/$$name ] || { echo "keys: /keys/$$name is missing and AXIOM_KEYRING_GENERATE is false" >&2; exit 1; }
+            echo "1:$$(head -c 32 /dev/urandom | base64)" > /keys/$$name
           done
         fi
-        for name in master hash identity; do
-          [ -f /keys/$$name ] || echo "1:$$(head -c 32 /dev/urandom | base64)" > /keys/$$name
-        done
         # The cache's password is made once with its two copies: the program's, and the cache's with the ACL file that holds
         # only its SHA-256. The root of this container can create and delete files but not read the ones it has handed
         # over (it has only CHOWN), so nothing here reads a file after the chown: when the three exist, they stay.
@@ -187,7 +204,8 @@ services:
         chown 999:1000 /cache/password /cache/users.acl
         chmod 755 /cache
     environment:
-      AXIOM_KEYRING_GENERATE: ${AXIOM_KEYRING_GENERATE:-true}
+      # Only an unset variable defaults: an empty one reaches the check above and is refused like any other non-boolean.
+      AXIOM_KEYRING_GENERATE: ${AXIOM_KEYRING_GENERATE-true}
     volumes:
       - keys:/keys
       - cache:/cache
