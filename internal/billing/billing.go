@@ -57,6 +57,9 @@ type Billing struct {
 	suppliers Suppliers
 	logger    *slog.Logger
 	beat      atomic.Int64 // unix nanoseconds of the last time the holder's expiry was known to be pushed out
+	// heard is the unix nanoseconds since which the holder has not lapsed (Alive has stayed true): the registration, or
+	// the first beat after a lapse. A sweep reaps others only a whole TTL and grace after it (mayReap).
+	heard atomic.Int64
 	// conn carries the heartbeat and the reap, outside both pools, so that calls holding every pooled connection
 	// cannot delay a beat past the holder's TTL less the margin (#217).
 	conn *pg.Dedicated
@@ -121,6 +124,7 @@ func Start(ctx context.Context, db *pg.DB, platform pg.Scope, config Config, s S
 		return nil, err
 	}
 	b.beat.Store(registered.UnixNano())
+	b.heard.Store(registered.UnixNano())
 	return b, nil
 }
 
@@ -183,6 +187,9 @@ func (b *Billing) Heartbeat(ctx context.Context) error {
 		return nil
 	})
 	if err == nil {
+		if !b.aliveAt(sent) {
+			b.heard.Store(sent.UnixNano())
+		}
 		b.beat.Store(sent.UnixNano())
 	}
 	return err
@@ -193,8 +200,22 @@ func (b *Billing) Heartbeat(ctx context.Context) error {
 // attempt, so that a process cut off from the database stops spending money its reservations may no longer cover
 // (internal/gateway/README.md「尝试」). False is not a verdict that the holder was reaped: only a heartbeat finding
 // that says so (ErrReaped).
-func (b *Billing) Alive() bool {
-	return time.Now().UnixNano() < b.beat.Load()+int64(b.config.HolderTTL-holderMargin)
+func (b *Billing) Alive() bool { return b.aliveAt(time.Now()) }
+
+func (b *Billing) aliveAt(t time.Time) bool {
+	return t.UnixNano() < b.beat.Load()+int64(b.config.HolderTTL-holderMargin)
+}
+
+// mayReap says whether this process has reached the database for long enough to take another holder's silence for its
+// end: its own holder is alive, and has not lapsed for a whole TTL and grace, the silence Reap looks for. Every holder's
+// last beat is old after a database outage, the live ones' too; a sweep that reaped as soon as the database answered,
+// before its own first beat or right after it, would reap them, its own included, before their next beat, and every node
+// would stop and leave its settlements to the cleanup. A process that has just started waits the same, which delays the
+// reap of a crashed predecessor by about the time its restart took: the predecessor's holder becomes reapable a TTL and
+// grace after its last beat, the successor reaps a TTL and grace after its own start.
+func (b *Billing) mayReap() bool {
+	now := time.Now()
+	return b.aliveAt(now) && now.UnixNano() >= b.heard.Load()+int64(b.config.HolderTTL+b.config.ReapGrace)
 }
 
 // Reap marks every holder that expired more than the grace ago as reaped and returns how many. Its FOR UPDATE waits
@@ -315,10 +336,12 @@ func (b *Billing) sweeps(ctx context.Context) {
 // cursor for the next sweep. The reap comes first, so a reservation whose holder has just gone is cleaned in the same
 // sweep.
 func (b *Billing) sweep(ctx context.Context, after uuid.UUID) uuid.UUID {
-	if n, err := b.Reap(ctx); err != nil {
-		b.logger.Error("billing: reaping the holders failed", "err", err)
-	} else if n > 0 {
-		b.logger.Warn("billing: reaped the holders of nodes that stopped heartbeating", "holders", n)
+	if b.mayReap() {
+		if n, err := b.Reap(ctx); err != nil {
+			b.logger.Error("billing: reaping the holders failed", "err", err)
+		} else if n > 0 {
+			b.logger.Warn("billing: reaped the holders of nodes that stopped heartbeating", "holders", n)
+		}
 	}
 	cleaned := 0
 	for range cleanupRounds {

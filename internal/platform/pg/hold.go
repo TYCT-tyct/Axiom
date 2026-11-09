@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"hash/fnv"
+	"slices"
 	"sync"
 	"time"
+	"uuid"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -17,8 +19,13 @@ var ErrHeld = errors.New("pg: the name is held by another session")
 // connection of its own. The ownership belongs to the connection, so it ends when the connection does, whatever way the
 // process went: a crashed process is gone from the database a moment after the system closes its sockets, and the name is
 // free for whoever starts next, with no timer to wait for. While the holder lives it checks the connection, and when the
-// connection is lost Lost is closed: whoever relies on the name is no longer its owner and must stop acting as such.
+// connection is lost Lost is closed: whoever relies on the name is no longer its owner and must stop acting as such until
+// Retake gives it back.
 type Hold struct {
+	db       *DB
+	name     string
+	every    time.Duration
+	tag      string // the application_name of every session this hold and its retakes open (Retake)
 	conn     *pgx.Conn
 	lost     chan struct{}
 	stop     chan struct{}
@@ -31,6 +38,12 @@ type Hold struct {
 // another session holds the name. every is how often the connection is checked, and how long a check may take. Names
 // become 64-bit keys by a hash, so two names can in theory meet; the callers' names are few and chosen.
 func (db *DB) Hold(ctx context.Context, name string, every time.Duration) (*Hold, error) {
+	return db.hold(ctx, name, every, "axiom-hold-"+uuid.NewV4().String())
+}
+
+// hold is Hold for the hold lineage tag: the session is named tag before it tries the lock, so whatever became of the
+// try, Retake can find the session by its name.
+func (db *DB) hold(ctx context.Context, name string, every time.Duration, tag string) (*Hold, error) {
 	borrowed, err := db.pool.Acquire(ctx)
 	if err != nil {
 		return nil, err
@@ -41,7 +54,11 @@ func (db *DB) Hold(ctx context.Context, name string, every time.Duration) (*Hold
 	// hours by default, and the name would be held that long against the node's restart. So the session asks for probes
 	// every 5 s, three of them unanswered, and for unacknowledged data to be given up after 20 s: the server frees the name
 	// within about 20 to 30 s of the host going. A Unix socket ignores the settings, and has no network to be cut.
-	if _, err := conn.Exec(ctx, holdKeepalive); err != nil {
+	_, err = conn.Exec(ctx, `SELECT set_config('application_name', $1, false)`, tag)
+	if err == nil {
+		_, err = conn.Exec(ctx, holdKeepalive)
+	}
+	if err != nil {
 		_ = conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck // the setting's error is the one to report
 		return nil, err
 	}
@@ -53,9 +70,39 @@ func (db *DB) Hold(ctx context.Context, name string, every time.Duration) (*Hold
 	if !got {
 		return nil, errors.Join(ErrHeld, conn.Close(context.WithoutCancel(ctx)))
 	}
-	h := &Hold{conn: conn, lost: make(chan struct{}), stop: make(chan struct{}), done: make(chan struct{})}
+	h := &Hold{
+		db: db, name: name, every: every, tag: tag, conn: conn,
+		lost: make(chan struct{}), stop: make(chan struct{}), done: make(chan struct{}),
+	}
 	go h.watch(context.WithoutCancel(ctx), every)
 	return h, nil
+}
+
+// ErrStale is what Retake returns while the server still keeps a session of this hold, which it could not end in time;
+// the name is still this holder's, and a later Retake takes it.
+var ErrStale = errors.New("pg: the server still keeps a session of the hold")
+
+// Retake takes the name again, on a new connection, after the hold was lost (Lost) and once the database answers. The
+// server may still keep sessions of this hold that the holder has lost: the one that held the name until the server's
+// keepalive finds its connection gone (holdKeepalive), and one of an earlier Retake whose lock the server granted while
+// its answer never arrived. Each holds the name until the server drops it. Every session of a hold and its retakes
+// carries the hold's tag as its application_name, set before it tries the lock, so Retake ends them all by that name
+// before it tries: ErrHeld from Retake means another session holds the name, never one of this holder's own. Call it on
+// the latest hold of a lineage only, which is lost and needs no Release.
+func (h *Hold) Retake(ctx context.Context) (*Hold, error) {
+	var ended []bool
+	rows, err := h.db.pool.Query(ctx, `SELECT pg_terminate_backend(pid, $2) FROM pg_stat_activity
+		WHERE application_name = $1 AND pid <> pg_backend_pid()`, h.tag, h.every.Milliseconds())
+	if err == nil {
+		ended, err = pgx.CollectRows(rows, pgx.RowTo[bool])
+	}
+	if err != nil {
+		return nil, err
+	}
+	if slices.Contains(ended, false) {
+		return nil, ErrStale
+	}
+	return h.db.hold(ctx, h.name, h.every, h.tag)
 }
 
 // holdKeepalive is what the holder's session sets on itself, in milliseconds for tcp_user_timeout and in seconds for the rest.
