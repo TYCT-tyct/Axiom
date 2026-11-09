@@ -46,6 +46,13 @@ ORDER BY o.id
 LIMIT @batch
 FOR UPDATE OF o SKIP LOCKED;
 
+-- name: ExecutingOperations :many
+-- The operations of a tool waiting for their target's outcome, in ID order after @after (operations_executing).
+SELECT * FROM operations.operations
+WHERE state = 'executing' AND tool = @tool AND id > @after::uuid
+ORDER BY id
+LIMIT @batch;
+
 -- name: SetOperationState :one
 UPDATE operations.operations SET state = @state, result = @result, error_code = @error_code, updated_at = now() WHERE id = @id
 RETURNING updated_at;

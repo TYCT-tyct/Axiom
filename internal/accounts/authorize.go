@@ -39,6 +39,9 @@ var (
 	ManageCatalog   = Permission{"catalog.manage", true}
 	ViewPricing     = Permission{"pricing.view", false}
 	ManagePricing   = Permission{"pricing.manage", true}
+	// ManageRefunds proposes a refund of a paid order; only an operations credential holds it today, as the admin
+	// API refunds through the payments review.
+	ManageRefunds = Permission{"refunds.manage", true}
 
 	// The operations API's (docs/domains/operations.md「运营接口」). Every operations credential holds OperationsRead;
 	// OperationsWrite withdraws what it proposed and raises alerts; OperationsMoney is needed, besides the operation's
@@ -56,7 +59,7 @@ var permissions = func() map[string]Permission {
 	for _, p := range []Permission{
 		ViewKeys, ManageKeys, ManageWorkspaces, ViewCalls, ViewBalance, TopUpBalance, ManageUsers, ManageSites, ManagePlatformGrants,
 		SearchCalls, InspectCalls, ViewAudit, ViewUsers, GrantCredits, ViewSuppliers, ManageSuppliers, ViewCatalog, ManageCatalog, ViewPricing, ManagePricing,
-		OperationsRead, OperationsWrite, OperationsMoney, OperationsManage, OperationsApprove,
+		ManageRefunds, OperationsRead, OperationsWrite, OperationsMoney, OperationsManage, OperationsApprove,
 	} {
 		declared[p.name] = p
 	}

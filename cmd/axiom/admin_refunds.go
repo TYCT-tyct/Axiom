@@ -35,10 +35,15 @@ func paymentRefundBody(r payments.Refund, site platform.Currency) adminapi.Payme
 	account := accounts.AccountID(r.AccountID).TypeID()
 	state, via := adminapi.PaymentRefundState(r.State), adminapi.PaymentRefundVia(r.Via)
 	credits, amount := adminMoney(r.Credits, site), adminPayAmount(r.Amount)
-	reason, requested := r.Reason, accounts.UserID(r.RequestedBy).TypeID()
+	reason := r.Reason
 	body := adminapi.PaymentRefund{
 		Id: &id, OrderId: &order, AccountId: &account, State: &state, Via: &via, Credits: &credits, Amount: &amount,
-		Reason: &reason, RequestedBy: &requested, CreatedAt: &r.CreatedAt, FinishedAt: r.FinishedAt,
+		Reason: &reason, CreatedAt: &r.CreatedAt, FinishedAt: r.FinishedAt,
+	}
+	if r.ByAgent {
+		body.RequestedByAgent = new(accounts.AgentID(r.RequestedBy).TypeID())
+	} else {
+		body.RequestedBy = new(accounts.UserID(r.RequestedBy).TypeID())
 	}
 	if r.FirstApprovedBy != nil {
 		first := accounts.UserID(*r.FirstApprovedBy).TypeID()

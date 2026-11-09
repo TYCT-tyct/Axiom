@@ -18,7 +18,7 @@ export default {
   lapsed: "已到期",
   expiresIn_one: "{{count}} 分钟后到期",
   expiresIn_other: "{{count}} 分钟后到期",
-  kind: { account: "账户", supplier: "供应商", model: "模型" },
+  kind: { account: "账户", supplier: "供应商", model: "模型", order: "订单" },
   approvedNotRun: "已批准，未执行",
   risk: {
     routine: "日常操作",
@@ -26,6 +26,7 @@ export default {
     top_up: "供应商充值",
     price: "发布售价",
     gift: "给账户赠额",
+    refund: "退款给账户",
   },
   operationState: {
     pending_approval: "等待审批",
@@ -117,6 +118,7 @@ export default {
     },
     always: {
       gift: "给账户赠额总要你批准，不论金额。",
+      refund: "退款总要你批准，不论金额；你的批准同时是这笔退款的复核。",
       delisting: "下架模型总要你批准。",
       other: "这一类操作总要你批准。",
     },
@@ -181,6 +183,7 @@ export default {
       "充值提案已批准，现在可以给供应商付款。agent 附付款凭证确认到账后计入已用；当天 UTC 结束前没有确认的，预留会释放。",
     price: "售价已发布。",
     gift: "额度已以 agent 的名义赠出，计入已用。",
+    refund: "退款已经渠道退回，计入已用。",
   },
   outcome: { done: "已执行", refused: "没有执行", canceled: "已作废", rejected: "已驳回", other: "已记下" },
   refused: "批准已记下，但目标在提出之后变了，操作没有执行（{{code}}）。需要的话，让 agent 重新提出。",

@@ -18,7 +18,7 @@ export default {
   lapsed: "Expired",
   expiresIn_one: "Expires in {{count}} min",
   expiresIn_other: "Expires in {{count}} min",
-  kind: { account: "Account", supplier: "Supplier", model: "Model" },
+  kind: { account: "Account", supplier: "Supplier", model: "Model", order: "Order" },
   approvedNotRun: "Approved, not run",
   risk: {
     routine: "Routine change",
@@ -26,6 +26,7 @@ export default {
     top_up: "Supplier top-up",
     price: "Publish a sale price",
     gift: "Give credit to an account",
+    refund: "Refund an order",
   },
   operationState: {
     pending_approval: "Waiting for approval",
@@ -123,6 +124,7 @@ export default {
     },
     always: {
       gift: "Credit grants always need your approval, whatever the amount.",
+      refund: "Refunds always need your approval, whatever the amount; your approval is the refund's review too.",
       delisting: "Retiring a model always needs your approval.",
       other: "This kind of operation always needs your approval.",
     },
@@ -190,6 +192,7 @@ export default {
       "The top-up is approved: you can pay the supplier now. It counts as used once the agent confirms the payment with its proof; unconfirmed by the end of the UTC day, the reservation is freed.",
     price: "The sale price is published.",
     gift: "The credit was given as the agent's and counts as used.",
+    refund: "The channel returned the refund, and it counts as used.",
   },
   outcome: { done: "Done", refused: "Not run", canceled: "Canceled", rejected: "Rejected", other: "Recorded" },
   refused:

@@ -150,6 +150,8 @@ func (a adminAPI) runOperation(ctx context.Context, tx pg.Tx, op operations.Oper
 		return a.runModelMap(ctx, tx, op)
 	case "alert_raise", "alert_resolve":
 		return runAlert(ctx, tx, op)
+	case refundTool:
+		return a.runRefundRequest(ctx, tx, op)
 	case "supplier_top_up_propose":
 		r, err := operations.CheckReservation(ctx, tx, op)
 		if err != nil {
@@ -191,8 +193,8 @@ func (a adminAPI) runModelStatus(ctx context.Context, tx pg.Tx, op operations.Op
 	return map[string]any{"status": string(model.Status), "rev": model.Rev}, nil
 }
 
-// runApproved runs op, which the owner has just approved in tx: it succeeds, or ends rejected with the code of the
-// target's refusal when the target changed since the agent asked; the refused change is undone to a savepoint, so the
+// runApproved runs op, which the owner has just approved in tx: it succeeds, or a refund, which its channel ends after
+// tx commits, is executing; or it ends rejected with the code of the target's refusal when the target changed since the agent asked; the refused change is undone to a savepoint, so the
 // decision and the operation's end are still committed. Any other failure fails the approval.
 func (a adminAPI) runApproved(ctx context.Context, tx pg.Tx, op operations.Operation) (operations.Operation, error) {
 	if _, err := tx.Exec(ctx, "SAVEPOINT operation_run"); err != nil {
@@ -207,6 +209,9 @@ func (a adminAPI) runApproved(ctx context.Context, tx pg.Tx, op operations.Opera
 	}
 	if err != nil {
 		return op, err
+	}
+	if op.Tool == refundTool { // the channel sends it once tx commits, and its outcome ends it (concludeRefunds)
+		return operations.Execute(ctx, tx, op, result)
 	}
 	return operations.Settle(ctx, tx, op, result, "")
 }

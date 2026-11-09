@@ -104,8 +104,8 @@ function RefundRow({ refund, self, firstBySelf, onDecide }: RefundRowProps) {
         <span className="block truncate" title={refund.reason}>
           {refund.reason ?? "—"}
         </span>
-        <span className="block text-label text-t3" title={refund.requested_by}>
-          {refund.requested_by ?? ""}
+        <span className="block text-label text-t3" title={refund.requested_by ?? refund.requested_by_agent}>
+          {refund.requested_by ?? refund.requested_by_agent ?? ""}
         </span>
       </Td>
       <Td className="hidden sm:table-cell">
@@ -251,7 +251,9 @@ function RefundFacts({ refund }: { refund: Refund }) {
         <dd className="break-words">{refund.reason ?? "—"}</dd>
         <dt className="text-label text-t3">{t("orders.refund.col.requested")}</dt>
         <dd>
-          <Code title={refund.requested_by}>{refund.requested_by ?? "—"}</Code>
+          <Code title={refund.requested_by ?? refund.requested_by_agent}>
+            {refund.requested_by ?? refund.requested_by_agent ?? "—"}
+          </Code>
         </dd>
         {refund.first_approved_by ? (
           <>

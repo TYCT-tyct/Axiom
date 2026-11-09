@@ -65,6 +65,25 @@ func gift(pm proposal) proposal {
 	return pm
 }
 
+// refund is pm as a refund of an order of an account: the same amounts in the money.refund caps, counted on the account.
+func refund(pm proposal) proposal {
+	account := pm.p.Target.ID
+	pm.p.Tool, pm.p.Risk, pm.p.Target = "refund_request", operations.RiskRefund, operations.Target{Kind: "order", ID: "ord_" + account}
+	pm.m.Category, pm.m.Object = operations.CategoryRefund, operations.Target{Kind: "account", ID: account}
+	return pm
+}
+
+// as is pm in category: a top-up, a credit grant or a refund.
+func as(category operations.Category, pm proposal) proposal {
+	switch category {
+	case operations.CategoryCredit:
+		return gift(pm)
+	case operations.CategoryRefund:
+		return refund(pm)
+	}
+	return pm
+}
+
 func (db opsDB) proposeMoney(t *testing.T, pm proposal) (operations.Operation, bool, error) {
 	t.Helper()
 	var op operations.Operation
@@ -113,12 +132,12 @@ type dimension struct {
 
 // TestCapDimensions: each autonomous limit sends a top-up over it to the owner, each hard limit refuses one over it
 // with nothing written, and a scope without a policy moves no money; one that waits names each limit it goes over. A
-// credit grant has the same hard limits but always waits for the owner, within every autonomous limit too, and only
-// for that reason. Every case is its own site.
+// credit grant and a refund have the same hard limits but always wait for the owner, within every autonomous limit
+// too, and only for that reason. Every case is its own site.
 func TestCapDimensions(t *testing.T) {
 	t.Parallel()
 	db := openOps(t)
-	for _, category := range []operations.Category{operations.CategoryTopUp, operations.CategoryCredit} {
+	for _, category := range []operations.Category{operations.CategoryTopUp, operations.CategoryCredit, operations.CategoryRefund} {
 		for _, c := range []dimension{
 			{"within every limit", 0, 0, 0, 0, 5, "approved", nil},
 			{"at every limit", 15, 30, 5, 2, 10, "approved", nil},
@@ -147,6 +166,9 @@ func TestCapDimensions(t *testing.T) {
 	if _, _, err := db.proposeMoney(t, gift(topUp(uuid.NewV7(), uuid.NewV7(), &other, "s1", 1))); !errors.Is(err, operations.ErrNoCapPolicy) {
 		t.Errorf("a site without a credit policy: %v", err)
 	}
+	if _, _, err := db.proposeMoney(t, refund(topUp(uuid.NewV7(), uuid.NewV7(), &other, "s1", 1))); !errors.Is(err, operations.ErrNoCapPolicy) {
+		t.Errorf("a site without a refund policy: %v", err)
+	}
 	if got := db.text(t, `SELECT count(*)::text FROM operations.operations WHERE state NOT IN ('approved', 'pending_approval')`); got != "0" {
 		t.Errorf("%s operations were left by refusals", got)
 	}
@@ -162,9 +184,8 @@ func (db opsDB) expectDimension(t *testing.T, category operations.Category, c di
 	if _, err := db.setPolicy(t, policy, 0); err != nil {
 		t.Fatal(err)
 	}
-	pm, want, reasons := topUp(uuid.NewV7(), uuid.NewV7(), &site, "s1", c.amount), c.want, c.reasons
-	if category == operations.CategoryCredit {
-		pm = gift(pm)
+	pm, want, reasons := as(category, topUp(uuid.NewV7(), uuid.NewV7(), &site, "s1", c.amount)), c.want, c.reasons
+	if category != operations.CategoryTopUp {
 		if want == "approved" {
 			want = "pending_approval"
 		}

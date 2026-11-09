@@ -54,10 +54,10 @@ func TestAdminCashMovements(t *testing.T) {
 		t.Fatalf("cash cursor: %s", rec.Body.String())
 	}
 	first, second := list.Data[0], list.Data[1]
-	wantPtr(t, rec, "first kind", first.Kind, adminapi.Credit)
+	wantPtr(t, rec, "first kind", first.Kind, adminapi.CashMovementKindCredit)
 	wantPtr(t, rec, "first amount", first.Amount, adminapi.Money{Amount: "2000", Currency: "USD"})
 	wantPtr(t, rec, "first offline channel", first.OfflineChannel, "bank")
-	wantPtr(t, rec, "second kind", second.Kind, adminapi.Refund)
+	wantPtr(t, rec, "second kind", second.Kind, adminapi.CashMovementKindRefund)
 	wantPtr(t, rec, "second amount", second.Amount, adminapi.Money{Amount: "-500", Currency: "USD"})
 	if second.OrderId == nil {
 		t.Fatalf("refund of the older order: %s", rec.Body.String())

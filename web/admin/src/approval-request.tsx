@@ -64,7 +64,7 @@ const unknown = "—";
 function sentenceOf(t: TFunction, format: Format, approval: Approval, reason: Reason): string {
   switch (reason.kind) {
     case "always":
-      return approval.risk === "gift" || approval.risk === "delisting"
+      return approval.risk === "gift" || approval.risk === "delisting" || approval.risk === "refund"
         ? t(`approvals.why.always.${approval.risk}`)
         : t("approvals.why.always.other");
     case "paused":

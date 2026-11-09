@@ -61,7 +61,7 @@ export function Minute({ at }: { at: string | undefined }) {
 
 // Target names what an approval acts on as a person knows it, with the ID below to copy; an approval from an older
 // node that read no name has the ID alone.
-const kinds = ["account", "supplier", "model"] as const;
+const kinds = ["account", "supplier", "model", "order"] as const;
 const isKind = (kind: string): kind is (typeof kinds)[number] => (kinds as readonly string[]).includes(kind);
 
 export function Target({ approval }: { approval: Approval }) {
