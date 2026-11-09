@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,7 +70,28 @@ type loadNode struct {
 type loadLog struct {
 	mu     sync.Mutex
 	counts map[string]int
+	tail   []string // the last lines that are not log records: the testing package's, where a failed serve says why
 	lines  atomic.Int64
+}
+
+// tailLines is how many of the other lines loadLog keeps: a failed serve's error and the test's FAIL lines fit.
+const tailLines = 20
+
+// other keeps a line that is not a log record.
+func (l *loadLog) other(line string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.tail = append(l.tail, line)
+	if len(l.tail) > tailLines {
+		l.tail = l.tail[1:]
+	}
+}
+
+// said is the last lines the node wrote that were not log records.
+func (l *loadLog) said() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.tail)
 }
 
 // add counts a record. A warning or an error is told apart by its cause too, shortened, but only while there are few
@@ -158,7 +180,11 @@ func (n *loadNode) read(stdout io.Reader, serving chan<- addresses) {
 	scan.Buffer(make([]byte, 1<<20), 1<<20)
 	for scan.Scan() {
 		line := scan.Bytes()
-		if len(line) == 0 || line[0] != '{' {
+		if len(line) == 0 {
+			continue
+		}
+		if line[0] != '{' {
+			n.log.other(string(line))
 			continue
 		}
 		var record struct {
