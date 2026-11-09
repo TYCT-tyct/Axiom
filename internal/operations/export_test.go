@@ -23,3 +23,9 @@ var VerifyAuditChainBy = verifyAuditChain
 func MakeAuditDigestsAt(ctx context.Context, db *pg.DB, scope pg.Scope, now, frontier time.Time) (int, error) {
 	return makeAuditDigests(ctx, db, scope, func(context.Context, pg.Tx) (time.Time, time.Time, error) { return now, frontier, nil })
 }
+
+// ErrReplicaConflict is a replica key that holds other bytes.
+var ErrReplicaConflict = errReplicaConflict
+
+// ReplicaAlertKey is a replica target's part of its alerts' keys.
+var ReplicaAlertKey = replicaAlertKey

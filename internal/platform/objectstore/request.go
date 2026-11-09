@@ -48,6 +48,8 @@ type request struct {
 	size        int64
 	contentType string
 	payloadHash string
+	checksum    string // base64 SHA-256 of the body, for a request with one; signed like the content type
+	ifNoneMatch bool   // If-None-Match: *, signed like the content type
 }
 
 // do sends the request, retrying only what may succeed later: a transport failure, 408, 429 and 5xx. A retryable
@@ -153,6 +155,13 @@ func (c *Client) request(ctx context.Context, r request) (*http.Request, error) 
 	req.Header.Set("User-Agent", "Axiom")
 	if r.contentType != "" {
 		req.Header.Set("Content-Type", r.contentType)
+	}
+	if r.checksum != "" {
+		req.Header.Set("X-Amz-Sdk-Checksum-Algorithm", "SHA256")
+		req.Header.Set("X-Amz-Checksum-Sha256", r.checksum)
+	}
+	if r.ifNoneMatch {
+		req.Header.Set("If-None-Match", "*")
 	}
 	c.sign(req, r.payloadHash, c.now())
 	return req, nil
@@ -348,4 +357,45 @@ func newTransport() *http.Transport {
 		MaxIdleConnsPerHost:    10,
 		DisableCompression:     true, // object bytes are already compressed; a gzip layer would only cost CPU
 	}
+}
+
+// Error is a refusal from the bucket, with the server's own code when it sent one.
+type Error struct {
+	Status    int
+	Code      string
+	Message   string
+	RequestID string
+	cause     error
+}
+
+func (e *Error) Error() string {
+	parts := []string{"HTTP " + strconv.Itoa(e.Status)}
+	if e.Code != "" {
+		parts = append(parts, e.Code)
+	}
+	if message := truncate(e.Message, 256); message != "" {
+		parts = append(parts, message)
+	}
+	if e.RequestID != "" {
+		parts = append(parts, "request "+e.RequestID)
+	}
+	return strings.Join(parts, ": ")
+}
+
+// Unwrap exposes a body read or close failure beside the server's answer.
+func (e *Error) Unwrap() error { return e.cause }
+
+// Is lets a caller test errors.Is(err, ErrNotFound) without knowing which implementation answered 404, and
+// errors.Is(err, ErrExists) for the 412 of a conditional PUT.
+func (e *Error) Is(target error) bool {
+	return target == ErrNotFound && e.Status == http.StatusNotFound ||
+		target == ErrExists && e.Status == http.StatusPreconditionFailed
+}
+
+func truncate(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "…"
 }

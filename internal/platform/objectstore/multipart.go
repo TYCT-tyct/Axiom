@@ -158,7 +158,7 @@ func (c *Client) createMultipart(ctx context.Context, key, contentType string) (
 	return result.UploadID, nil
 }
 
-func (c *Client) uploadPart(ctx context.Context, key, uploadID string, number int, body io.ReadSeeker, size int64, hash string) (string, error) {
+func (c *Client) uploadPart(ctx context.Context, key, uploadID string, number int, body io.ReadSeeker, size int64, hash digest) (string, error) {
 	resp, err := c.do(ctx, request{
 		method: http.MethodPut,
 		key:    key,
@@ -168,7 +168,8 @@ func (c *Client) uploadPart(ctx context.Context, key, uploadID string, number in
 		},
 		body:        body,
 		size:        size,
-		payloadHash: hash,
+		payloadHash: hash.sha256,
+		checksum:    hash.checksum,
 	})
 	if err != nil {
 		return "", fmt.Errorf("objectstore: put %q part %d: %w", key, number, err)
