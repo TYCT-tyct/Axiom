@@ -284,6 +284,8 @@ func FuzzPrepare(f *testing.F) {
 			t.Fatalf("%s: %v", out, err)
 		}
 		r.Preset, r.SessionID = "", ""
+		// The end user goes upstream as the tenant's derivation of it, not as the client wrote it.
+		r.EndUser = got.EndUser
 		r.Model, r.Models, r.Provider, r.Previous, r.TextBytes = "up", nil, nil, "", r.TextBytes+int64(len(out)-len(body)) // models and provider are routing's, deleted
 		r = withSmallerCap(r, got)
 		if diff := cmp.Diff(r, got, cmpopts.IgnoreUnexported(protocol.Request{})); diff != "" {

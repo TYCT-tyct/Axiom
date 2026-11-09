@@ -106,6 +106,7 @@ type ExecDeps struct {
 // Executor runs the calls the Handler admits: the attempts down the route, the relay of the answer, and the settlement.
 type Executor struct {
 	ExecDeps
+	endUserKey []byte // the call log's key for end-user hashes, derived from IdentitySecret
 }
 
 // minSecret is the shortest identity secret accepted.
@@ -120,7 +121,9 @@ func NewExecutor(d ExecDeps) (*Executor, error) {
 	if len(d.IdentitySecret) < minSecret {
 		return nil, errors.New("gateway: the identity secret is too short")
 	}
-	return &Executor{ExecDeps: d}, nil
+	mac := hmac.New(sha256.New, d.IdentitySecret)
+	mac.Write([]byte("axiom/call-log/end-user"))
+	return &Executor{ExecDeps: d, endUserKey: mac.Sum(nil)}, nil
 }
 
 // identity maps a value the client sent to the opaque one that goes upstream: the same value of the same account

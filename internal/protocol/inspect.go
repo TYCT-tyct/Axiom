@@ -67,7 +67,11 @@ type Request struct {
 	Models    []string
 	Preset    string // OpenRouter reference, resolved by gateway before routing
 	SessionID string // explicit body session, ahead of the header and legacy identities
-	Stream    bool
+	// EndUser is the end user the request names for the application calling it: user, or safety_identifier when user
+	// is absent (the OpenAI formats), or Anthropic's metadata.user_id. Empty when it names none. The call log keeps only
+	// its keyed hash (docs/domains/observability.md「写入时记全」).
+	EndUser string
+	Stream  bool
 	// Local OpenRouter plugins are validated before their control fields are removed.
 	Compression     Compression
 	ResponseHealing bool
@@ -404,6 +408,25 @@ func (s *reader) raw() (jsontext.Value, error) {
 	}
 	return s.dec.ReadValue()
 }
+
+// endUser reads an end-user identifier into r.EndUser. The primary member (user, metadata.user_id) wins over
+// safety_identifier in whichever order they come; a blank value names no one. A value that is not a string is skipped,
+// as it was before the call log read it: what a request may carry there is its format's rule, not the log's.
+func (s *reader) endUser(r *Request, primary bool) error {
+	if s.dec.PeekKind() != '"' {
+		return s.skip()
+	}
+	v, err := s.str()
+	if err == nil && len(bytes.TrimSpace(v)) > 0 && (primary || r.EndUser == "") {
+		r.EndUser = string(v)
+	}
+	return err
+}
+
+// user and safetyIdentifier read the OpenAI formats' end user, user ahead of safety_identifier; user also reads
+// Messages' metadata.user_id, which is its only end-user member: a stray top-level user cannot replace it.
+func (s *scanner) user() error             { return s.endUser(&s.r, true) }
+func (s *scanner) safetyIdentifier() error { return s.endUser(&s.r, false) }
 
 // str reads a string, unquoted, or nil for null. It is valid until the next read.
 func (s *reader) str() ([]byte, error) {

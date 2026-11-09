@@ -39,13 +39,13 @@ func Module() pg.Module {
 // request named no end user.
 type EndUserHash struct{ sum [sha256.Size]byte }
 
-// HashEndUser is HMAC-SHA256 of id under key: without the key, an identifier cannot be recovered by trying guesses.
-// The key belongs to the site, and rotating it makes earlier hashes unmatchable, which is the point of keeping it
-// out of the database. Nothing calls it yet: the gateway names an end user to the call log when [Issue #29]
-// (https://github.com/TYCT-tyct/Axiom/issues/29) writes it, until then the column holds the zero value.
-func HashEndUser(key []byte, id string) EndUserHash {
+// HashEndUser is HMAC-SHA256 of the account and id under key: without the key, an identifier cannot be recovered by
+// trying guesses, and the same identifier in two accounts hashes apart. The key stays out of the database; rotating it
+// makes earlier hashes unmatchable. The gateway derives it from the node's identity secret.
+func HashEndUser(key []byte, account uuid.UUID, id string) EndUserHash {
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(id)) // hash.Hash.Write never fails
+	mac.Write(account[:]) // hash.Hash.Write never fails
+	mac.Write([]byte(id))
 	return EndUserHash{sum: [sha256.Size]byte(mac.Sum(nil))}
 }
 

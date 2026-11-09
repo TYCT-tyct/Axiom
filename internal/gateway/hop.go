@@ -42,6 +42,7 @@ func (a *attempt) readHop(ctx context.Context, relay *protocol.Relay, idle *time
 		switch st.Kind {
 		case protocol.StepCommit, protocol.StepData, protocol.StepHeartbeat:
 			if !a.deliver(relay, st) {
+				s.failAttempt(a, protocol.Overloaded.String())
 				return over, ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}, false
 			}
 		case protocol.StepUpstreamDone:
@@ -120,8 +121,11 @@ func (a *attempt) runTurn(ctx context.Context, relay *protocol.Relay) (e *ended,
 	turn, err := relay.ServerTurn()
 	switch {
 	case err != nil:
-		return a.abort(turnError(err)), false
+		e, after := turnError(err)
+		a.s.failAttempt(a, e.Type.String())
+		return a.abort(e, after), false
 	case turn.Client:
+		a.s.failAttempt(a, protocol.UpstreamFailed.String()) // the model's turn is what cannot go on, not a search
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0), false
 	case a.s.loop.disabled:
 		return nil, false

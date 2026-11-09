@@ -4520,9 +4520,15 @@ components:
           description: >-
             The application's marketplace categories, from `X-OpenRouter-Categories`: at most two lowercase
             hyphen-separated names, comma-separated. Absent when the client named none.
-        session_id: {type: string}
-        subagent_id: {type: string}
-        request_class: {type: string}
+        session_id:
+          type: string
+          description: >-
+            The session the client named: the body's `session_id`, else the `X-Session-Id`, `X-Claude-Code-Session-Id`
+            or `session_id` header, cut to 128 characters. Empty when it named none.
+        subagent_id: {type: string, description: "Empty: no call format carries a subagent identifier, so it is unknown."}
+        request_class:
+          type: string
+          description: "The kind of call, by the endpoint it came to: `chat`, `completions`, `embeddings`, `rerank` or `compact`."
         model: {type: string, description: The model name the client asked for.}
         usage:
           type: object
@@ -4533,10 +4539,20 @@ components:
         service_tier: {type: string}
         price: {$ref: "#/components/schemas/Money"}
         free: {type: boolean, description: "Waived under the free-of-charge rule (docs/domains/billing.md「免单规则」)."}
-        latency_ms: {type: integer, minimum: 0}
-        first_token_ms: {type: integer, minimum: 0}
+        latency_ms: {type: integer, minimum: 0, description: "From the request's arrival, before admission, to the end of the call."}
+        first_token_ms:
+          type: integer
+          minimum: 0
+          description: >-
+            From the request's arrival, before admission, to the first content of the attempt that answered it. 0 when none answered with
+            content, for embeddings, rerank and compact replies, which arrive whole, and for a cache hit.
         finish_reason: {type: string}
-        error_kind: {type: string, description: "What failed, empty when the call succeeded."}
+        error_kind:
+          type: string
+          description: >-
+            The unified error type the call was answered with, such as `upstream_error` or `timeout` (`internal_error`
+            when the node failed while running it). Empty when the call succeeded or the client left first, which
+            `finish_reason` `cancelled` says.
         cache_hit:
           type: boolean
           description: >-

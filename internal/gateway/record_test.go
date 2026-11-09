@@ -42,7 +42,7 @@ func TestTrailUsesTheCallStart(t *testing.T) {
 	before := time.Date(2026, 10, 31, 11, 59, 59, 990_000_000, time.UTC)
 	after := before.Add(20 * time.Millisecond)
 	s := &session{c: &Call{At: before}, req: &http.Request{Header: http.Header{}}, start: after}
-	tr := s.trail()
+	tr := s.trail("")
 	if !tr.at.Equal(before) {
 		t.Errorf("the log starts at %s, want the call's start %s", tr.at, before)
 	}

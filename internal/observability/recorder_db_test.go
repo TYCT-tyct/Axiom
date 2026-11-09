@@ -262,12 +262,15 @@ func TestRecorderWritesThroughTheDatabase(t *testing.T) {
 	}
 }
 
-// TestEndUserHashIsKeyed: the hash depends on the key and on the identifier, is stable, and is what the row holds.
+// TestEndUserHashIsKeyed: the hash depends on the key, the account and the identifier, is stable, and is what the row
+// holds.
 func TestEndUserHashIsKeyed(t *testing.T) {
 	t.Parallel()
-	a, b := HashEndUser([]byte("key one"), "user-1"), HashEndUser([]byte("key two"), "user-1")
-	if a == b || a == HashEndUser([]byte("key one"), "user-2") || a != HashEndUser([]byte("key one"), "user-1") || a == (EndUserHash{}) {
-		t.Error("the end-user hash is not a stable function of the key and the identifier")
+	acct, other := uuid.NewV7(), uuid.NewV7()
+	a, b := HashEndUser([]byte("key one"), acct, "user-1"), HashEndUser([]byte("key two"), acct, "user-1")
+	if a == b || a == HashEndUser([]byte("key one"), acct, "user-2") || a == HashEndUser([]byte("key one"), other, "user-1") ||
+		a != HashEndUser([]byte("key one"), acct, "user-1") || a == (EndUserHash{}) {
+		t.Error("the end-user hash is not a stable function of the key, the account and the identifier")
 	}
 	rec := record(uuid.NewV7(), now)
 	rec.EndUser = a

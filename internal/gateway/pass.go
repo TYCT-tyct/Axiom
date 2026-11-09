@@ -130,6 +130,7 @@ func readWhole(memory *protocol.Memory, body io.Reader, idle *time.Timer, idleFo
 func (s *session) failedReply(a *attempt, ctx context.Context, err error) (step, ended) {
 	a.obs.Cut, a.obs.Fault = cutOf(ctx), protocol.FaultOf(err)
 	e, finish, again := s.classify(ctx, err, a.conn)
+	s.failAttempt(a, e.Type.String())
 	rec := &s.ends[a.i]
 	rec.Result, rec.Finish = billing.FailedBeforeCommit, finish
 	return s.unanswered(a, e, again, scopeOf(a.obs.Fault))

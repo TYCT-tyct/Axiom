@@ -58,7 +58,7 @@
 
 `Request.Preset` 保存引用，`PresetReference` 识别三种写法并拒绝冲突。仅有有效前缀的 preset 字段时 Inspect 允许暂缺 model，gateway 展开后必须再次 Inspect 得到真实模型。`MergePreset` 以顶层 Raw 值浅合并，保持字符串值（含推理签名）和整数精度；系统提示与工具的例外见[路由](../../docs/domains/routing.md#命名预设)。仅有 models 列表时，合并后第一项成为主模型，其余进入备选，不拼接不同来源的主模型默认值；`TestPresetModelList` 检查请求覆盖后的列表顺序。Messages 的非 null fallbacks 覆盖预设备选而保留主模型，`TestPresetMessagesFallbackOverride` 覆盖 models-only 和显式主模型配置；`MergePreset` 的结构错误统一包装为 ErrInvalid，网关返回 400，`TestPresetMergeErrorsAreInvalidRequests` 覆盖工具结构和缺少 Chat messages。它不执行查库或授权；调用者先按 `PresetCost` 记账，合并后不能使用旧位置表和旧计费摘要。
 
-Messages 的 `fallbacks` 读取为 `Request.Models`，最多三项、只允许非空 model，与非 null models 互斥，和 JSON 成员顺序无关；Prepare 在所有目标格式与 compact 路径删除 preset、fallbacks。`Request.SessionID` 在完整严格扫描中读取，即使出现在会话前缀范围之后也可供 routing 使用；请求体与请求头各自上限为 256 字符，头由 gateway 校验。`TestMessagesFallbacks` 覆盖非法列表和同格式删除，`TestPresetMerge` 覆盖三种格式的覆盖与工具合并。
+Messages 的 `fallbacks` 读取为 `Request.Models`，最多三项、只允许非空 model，与非 null models 互斥，和 JSON 成员顺序无关；Prepare 在所有目标格式与 compact 路径删除 preset、fallbacks。`Request.SessionID` 在完整严格扫描中读取，即使出现在会话前缀范围之后也可供 routing 使用；请求体与请求头各自上限为 256 字符，头由 gateway 校验。`Request.EndUser` 是请求自己的终端用户字段，只供调用记录按账户哈希保存：OpenAI 各格式（含旧版补全、向量、重排）的 `user` 优先，没有时取 `safety_identifier`，与成员顺序无关；Messages 只取 `metadata.user_id`，顶层的 `user` 不算；空白值不算，不是字符串的值照旧跳过、不因此拒绝请求（`TestInspectReadsTheEndUser`）。`TestMessagesFallbacks` 覆盖非法列表和同格式删除，`TestPresetMerge` 覆盖三种格式的覆盖与工具合并。
 
 ### 本地插件
 

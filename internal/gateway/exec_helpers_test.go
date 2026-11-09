@@ -57,6 +57,9 @@ func failing(scope routing.Scope, notExecuted bool, cause suppliers.Failure) *su
 	if notExecuted {
 		f.Executed = suppliers.NotExecuted
 	}
+	if f.Cause == nil { // a supplier's failure always names its cause; the call log keeps it
+		f.Cause = suppliers.UpstreamError{Status: 502}
+	}
 	return &f
 }
 

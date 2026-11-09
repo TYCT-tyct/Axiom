@@ -42,6 +42,12 @@ var grammars = [...]grammar{
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
 			"context_management": func(s *scanner) error { return s.object(editsHolder) },
 			"mcp_servers":        (*scanner).mcpServers,
+			"metadata": func(s *scanner) error {
+				if s.dec.PeekKind() != '{' {
+					return s.skip() // what the member may hold is the format's rule, checked where it is converted
+				}
+				return s.object(messagesMetadataFields)
+			},
 		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).result, "cache_control": (*scanner).cacheControl,
@@ -61,6 +67,7 @@ var grammars = [...]grammar{
 	Responses: {
 		top: withProvider(fields{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"user": (*scanner).user, "safety_identifier": (*scanner).safetyIdentifier,
 			"max_output_tokens": (*scanner).maxOutput, "input": (*scanner).content,
 			"tools": (*scanner).tools, "max_tool_calls": (*scanner).maxToolCalls,
 			"stop_server_tools_when": noServerStop,
@@ -85,6 +92,7 @@ var grammars = [...]grammar{
 	Chat: {
 		top: withProvider(fields{
 			"model": (*scanner).model, "models": (*scanner).models, "stream": (*scanner).stream,
+			"user": (*scanner).user, "safety_identifier": (*scanner).safetyIdentifier,
 			"max_tokens": (*scanner).maxOutput, "max_completion_tokens": (*scanner).maxOutput, "n": (*scanner).choices, "messages": (*scanner).content,
 			"tools": (*scanner).tools, "functions": (*scanner).tools, "web_search_options": (*scanner).webSearchOptions,
 			"max_tool_calls": (*scanner).maxToolCalls, "stop_server_tools_when": noServerStop,
@@ -183,8 +191,11 @@ var (
 	chatImageFields      = fields{"url": (*scanner).imageURL}
 	chatFileFields       = fields{"file_data": (*scanner).fileData, "file_id": (*scanner).fileRef}
 	messagesOutputFields = fields{"format": (*scanner).format, "effort": (*scanner).reasoningEffort}
-	formatHolder         = fields{"format": (*scanner).format}
-	formatFields         = fields{"type": func(s *scanner) error {
+	// messagesMetadataFields reads the end user out of Anthropic's metadata: user_id is its identifier for the person
+	// the application serves.
+	messagesMetadataFields = fields{"user_id": (*scanner).user}
+	formatHolder           = fields{"format": (*scanner).format}
+	formatFields           = fields{"type": func(s *scanner) error {
 		v, err := s.str()
 		if string(v) == "json_schema" || string(v) == "json_object" {
 			s.r.Needs |= StructuredOutput

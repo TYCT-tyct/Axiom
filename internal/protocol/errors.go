@@ -56,6 +56,9 @@ var errorTypes = [...]struct {
 	ContentPolicyViolation: {"content_policy_violation", "permission_error", "The request was declined by a content policy.", 403},
 }
 
+// String is the type's name, the error_type a client reads.
+func (t ErrorType) String() string { return errorTypes[t].name }
+
 // Error is an error to answer or to end a stream with. Details are members of a JSON object that say more, such as
 // "limit_source":"balance" for a 402, each led by a comma; they go next to the error type. Rejection, when set, is
 // what the upstream said of a request it refused. Status, when set, is the HTTP status and the numeric code this error

@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/observability"
@@ -19,11 +21,39 @@ import (
 	"axiom/internal/routing"
 )
 
-// try is what the call log needs of an attempt that the settlement does not carry: the route entry it bound, and when
-// it began. The two run in step with session.ends, one entry each in the order the attempts were made.
+// try is what the call log needs of an attempt that the settlement does not carry: the route entry it bound, when it
+// began, when its first content came (zero when none did) and why it failed (empty when it did not). The two run in
+// step with session.ends, one entry each in the order the attempts were made.
 type try struct {
-	entry   routing.Entry
-	started time.Time
+	entry      routing.Entry
+	started    time.Time
+	firstToken time.Time
+	errorKind  string
+}
+
+// cancelled is the error kind of an attempt the client's leaving ended: what the read saw after that is not the
+// endpoint's failure. A call the client left has no error kind; its finish reason says so.
+const cancelled = "cancelled"
+
+// panicked is the error kind of a call whose run panicked: the client got no ending, and the call was not a success.
+const panicked = "internal_error"
+
+// failAttempt keeps why the attempt failed for the call log: kind, a supplier's cause or the error type the read failed
+// with, unless the client had left by then (docs/domains/observability.md「写入时记全」).
+func (s *session) failAttempt(a *attempt, kind string) {
+	if s.isGone() {
+		kind = cancelled
+	}
+	s.tries[a.i].errorKind = kind
+}
+
+// callError is the error kind of the call that ended with e: the error type the client is answered with, or ends its
+// stream with, and none when the upstream ended normally, a whole reply answered, or the client had left.
+func (s *session) callError(e ended) string {
+	if e.done || e.reply != nil || s.isGone() {
+		return ""
+	}
+	return e.err.Type.String()
 }
 
 // trail is a finished call as the call log takes it: the call, its attempts, when it began and in which currency it was
@@ -38,9 +68,13 @@ type trail struct {
 	clientApp string
 	app       appAttribution
 	cacheHit  bool
+	endUser   observability.EndUserHash
+	sessionID string
+	errorKind string
 }
 
-func (s *session) trail() trail {
+// trail is the call as the log takes it once it ended with errorKind (callError).
+func (s *session) trail(errorKind string) trail {
 	at := s.c.At
 	if at.IsZero() {
 		at = s.start
@@ -48,7 +82,71 @@ func (s *session) trail() trail {
 	return trail{
 		call: s.c, tries: s.tries, at: at, start: s.start, currency: s.currency,
 		clientApp: clientAppOf(s.req.Header), app: attributionOf(s.req.Header), cacheHit: s.cacheHit,
+		endUser: s.x.endUser(s.c), sessionID: namedSession(s.c, s.req.Header), errorKind: errorKind,
 	}
+}
+
+// endUser is the keyed hash of the end user the request names, zero when it names none. The account is part of what is
+// hashed, so one identifier in two accounts is two end users, and the key is derived from the identity secret for this
+// use alone: the log's hash is not the value sent upstream in place of the identifier.
+func (x *Executor) endUser(c *Call) observability.EndUserHash {
+	if c.Request.EndUser == "" {
+		return observability.EndUserHash{}
+	}
+	return observability.HashEndUser(x.endUserKey, uuid.UUID(c.caller.AccountID()), c.Request.EndUser)
+}
+
+// maxSessionID is the width of the call log's session column (migration 00001); the request may name up to 256
+// characters, so a longer one is cut.
+const maxSessionID = 128
+
+// sessionHeaders are the headers a client names its session in, in the order the log prefers them: OpenRouter's, then
+// the ones Claude Code and Codex send with every request of a session.
+var sessionHeaders = [...]string{"X-Session-Id", "X-Claude-Code-Session-Id", "Session_id"}
+
+// namedSession is the session the client named: OpenRouter's session_id for grouping requests, the body's ahead of the
+// headers. The identities routing falls back on without one (a prompt cache key, Anthropic's metadata.user_id) are not
+// a session the client named, so they are not recorded as one.
+func namedSession(c *Call, h http.Header) string {
+	id := c.Request.SessionID
+	for _, name := range sessionHeaders {
+		if strings.TrimSpace(id) != "" {
+			break
+		}
+		id = h.Get(name)
+	}
+	return headerText(id, maxSessionID)
+}
+
+// classOf is the call's request class: what kind of call it was, by the endpoint it came to.
+func classOf(c *Call) string {
+	switch {
+	case c.Compact:
+		return "compact"
+	case c.Request.Format == protocol.Embeddings:
+		return "embeddings"
+	case c.Request.Format == protocol.Rerank:
+		return "rerank"
+	case c.Request.Format == protocol.Completions:
+		return "completions"
+	}
+	return "chat" // the three chat formats
+}
+
+// consentOf is the agreement versions a record names: each legal document the account's owner had accepted when the
+// call was admitted, as kind:locale:version, or none when the owner had accepted none (docs/domains/observability.md
+// 「写入时记全」). It records consent, not permission: training stays not allowed whatever was accepted.
+func consentOf(c accounts.Consent) string {
+	var parts []string
+	for _, d := range []accounts.DocumentVersion{c.Terms, c.Privacy} {
+		if d.Version != 0 {
+			parts = append(parts, d.Kind+":"+d.Locale+":"+strconv.Itoa(d.Version))
+		}
+	}
+	if len(parts) == 0 {
+		return noConsent
+	}
+	return strings.Join(parts, ",")
 }
 
 // clientAppOf is the client application the request's User-Agent names: Claude Code, Codex, or none (empty). It is
@@ -205,27 +303,27 @@ func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billin
 	}
 }
 
-// noConsent is the agreement version of a record made before any user agreement exists to name: the call log refuses a
-// record without one, and "none" says so instead of naming a version nobody agreed to. Training is not allowed then.
+// noConsent is the agreement version of a record whose account owner had accepted no legal document: the call log
+// refuses a record without one, and "none" says so instead of naming a version nobody agreed to.
 const noConsent = "none"
 
 // recordOf is the call log's record of one call: the request, the route it took, its attempts, and what the ledger
-// charged it. What the gateway does not know is left empty rather than guessed: the client's own session and subagent
-// identifiers, the language of the request, and the end user, which is the site's to hash. The first token is not
-// measured yet, so every attempt records none.
+// charged it. What the gateway has no source for is left empty, which the log reads as unknown, rather than guessed:
+// the client's subagent identifier, which no format carries, and the language of the request.
 func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end time.Time) observability.CallRecord {
 	c := t.call
 	rec := observability.CallRecord{
 		ID: c.ID, At: t.at,
 		Site: uuid.UUID(c.site.ID), Account: uuid.UUID(c.caller.AccountID()),
 		Workspace: uuid.UUID(c.caller.WorkspaceID()), Key: uuid.UUID(c.caller.KeyID()), IP: c.ip,
+		EndUser: t.endUser, SessionID: t.sessionID,
 		UsedTools: c.Request.Needs.Has(protocol.Tools), HasImage: c.Request.Images > 0, HasFile: c.Request.Documents > 0,
 		Model: c.Request.Model, ClientApp: t.clientApp,
 		AppReferer: t.app.referer, AppTitle: t.app.title, AppCategories: t.app.categories,
-		Class: "chat", ConsentVersion: noConsent,
+		Class: classOf(c), ConsentVersion: consentOf(c.Admission.Consent()), ErrorKind: t.errorKind,
 		// The cost is what the attempts cost us, whether or not the user paid it.
 		Amounts: amountsOf(f), CostNano: costOf(o), Currency: t.currency,
-		Latency:  end.Sub(t.start),
+		Latency:  end.Sub(t.at),
 		Route:    route,
 		Streamed: c.Request.Stream,
 		CacheHit: t.cacheHit,
@@ -234,7 +332,24 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 	if n := len(rec.Attempts); n > 0 {
 		rec.FinishReason = finishOf(o.Attempts[n-1])
 	}
+	rec.FirstToken = firstTokenOf(t, o)
 	return rec
+}
+
+// firstTokenOf is how long after the request arrived the first content came of the attempt that answered it, the same
+// start the latency counts from: the first of
+// a loop's samplings that did, which closeLoop marks with the loop's result. Zero when no attempt answered with content,
+// and for a whole reply passed through, which has no first token before its end.
+func firstTokenOf(t trail, o billing.Outcome) time.Duration {
+	for i, a := range o.Attempts {
+		if i >= len(t.tries) {
+			break
+		}
+		if ft := t.tries[i].firstToken; !ft.IsZero() && (a.Result == billing.Committed || a.Result == billing.Aggregated) {
+			return ft.Sub(t.at)
+		}
+	}
+	return 0
 }
 
 // amountsOf is what the settlement charged, as the call log keeps it. The charge is what the floor let the user pay.
@@ -323,12 +438,20 @@ func attemptsOf(o billing.Outcome, tries []try) []observability.AttemptRecord {
 			break // a settlement can name no more attempts than were made; the log says what it has
 		}
 		t := tries[i]
+		if t.errorKind == "" && a.Finish == billing.FinishCancelled {
+			t.errorKind = cancelled // the client left before the attempt ended, though nothing failed on its side
+		}
 		class := t.entry.Class
-		out = append(out, observability.AttemptRecord{
+		rec := observability.AttemptRecord{
 			Seq:      platform.AttemptSeq(a.Seq), //nolint:gosec // G115: at most platform.MaxAttemptSeq
 			Endpoint: uuid.UUID(t.entry.Endpoint), Supplier: uuid.UUID(t.entry.Supplier),
-			SourceClass: string(class), Egress: directEgress, Outcome: outcomeOf(a), StartedAt: t.started, FinishedAt: a.FinishedAt,
-		})
+			SourceClass: string(class), Egress: directEgress, Outcome: outcomeOf(a), ErrorKind: t.errorKind,
+			StartedAt: t.started, FinishedAt: a.FinishedAt,
+		}
+		if !t.firstToken.IsZero() {
+			rec.FirstToken = t.firstToken.Sub(t.started)
+		}
+		out = append(out, rec)
 	}
 	return out
 }

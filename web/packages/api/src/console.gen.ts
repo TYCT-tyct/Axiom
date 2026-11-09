@@ -2660,8 +2660,11 @@ export interface components {
             app_title?: string;
             /** @description The application's marketplace categories, from `X-OpenRouter-Categories`: at most two lowercase hyphen-separated names, comma-separated. Absent when the client named none. */
             app_categories?: string;
+            /** @description The session the client named: the body's `session_id`, else the `X-Session-Id`, `X-Claude-Code-Session-Id` or `session_id` header, cut to 128 characters. Empty when it named none. */
             session_id: string;
+            /** @description Empty: no call format carries a subagent identifier, so it is unknown. */
             subagent_id: string;
+            /** @description The kind of call, by the endpoint it came to: `chat`, `completions`, `embeddings`, `rerank` or `compact`. */
             request_class: string;
             /** @description The model name the client asked for. */
             model: string;
@@ -2673,10 +2676,12 @@ export interface components {
             price: components["schemas"]["Money"];
             /** @description Waived under the free-of-charge rule (docs/domains/billing.md「免单规则」). */
             free: boolean;
+            /** @description From the request's arrival, before admission, to the end of the call. */
             latency_ms: number;
+            /** @description From the request's arrival, before admission, to the first content of the attempt that answered it. 0 when none answered with content, for embeddings, rerank and compact replies, which arrive whole, and for a cache hit. */
             first_token_ms: number;
             finish_reason: string;
-            /** @description What failed, empty when the call succeeded. */
+            /** @description The unified error type the call was answered with, such as `upstream_error` or `timeout` (`internal_error` when the node failed while running it). Empty when the call succeeded or the client left first, which `finish_reason` `cancelled` says. */
             error_kind: string;
             /** @description The answer came from the response cache: no upstream attempt was made, so usage counts are zero and price is zero. Different from `free`, which is a charge the free-of-charge rules waived. */
             cache_hit?: boolean;
