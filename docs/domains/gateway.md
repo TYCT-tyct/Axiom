@@ -243,7 +243,7 @@ TTL 按 OpenRouter 的读法：以开头的十进制数字为准，小数截断�
 | 路由预设暂不可用：快照不认识 key 的 `preset_id`（滚动发布/回滚、刚创建还没重建、本节点读不懂它的规则、数据损坏），或它不属于这把 key 的站点、账户、工作区或币种 | 503 `preset_unavailable`，`Retry-After: 5`；不按放行预设继续 | `overloaded_error` | — |
 | 每个端点都不支持这个请求的写法 | 400 `invalid_request`，附原因 | `invalid_request_error` | — |
 | 开启了联网搜索或代码执行，却没写最多用几次，而模型也没有默认次数（费用没有上界，预留不了） | 400 `invalid_request`，说明要写 `max_uses`（Messages 联网搜索）或 `max_tool_calls`（Responses）；没有上限字段的（Chat 的工具、Messages 的代码执行）说明该格式暂不支持，不调用上游 | `invalid_request_error` | — |
-| 上游拒绝上下文过长（HTTP 或流内错误） | 400 `context_length_exceeded`，保留脱敏原话、`param` 和上游的 code（Chat 在 `metadata.provider_code`，Responses 原生流在 `response.error.code`）；不重试 | `invalid_request_error` | 同一 `error_type`，保留已转发内容 |
+| 上游拒绝上下文过长（HTTP 或流内错误） | 400 `context_length_exceeded`，保留脱敏原话、`param` 和上游的 code（Chat 在 `metadata.provider_code`，Responses 原生流在 `response.error.code`）；不重试（OpenAI 直连的 HTTP 答复判为端点的上限，先换端点，见[路由的「失败怎么办」](routing.md#失败怎么办)） | `invalid_request_error` | 同一 `error_type`，保留已转发内容 |
 | 上游内容策略拒绝请求（HTTP 或流内错误） | 403 `content_policy_violation`，保留脱敏原话；不重试 | `permission_error` | 同一 `error_type`，保留已转发内容 |
 | 请求权限拒绝；上游已明确分类的请求体超限 | 403 `permission_denied`；413 `payload_too_large` | `permission_error`；`request_too_large` | 同一 `error_type`；供应商凭证权限失败仍只用来换凭证或端点 |
 | 上游因其他请求问题拒绝（HTTP 或流内错误） | 400 `invalid_request`，带上游的原话、`type`、`param` 和上游的 code（上文），没有原话时用统一的说法；不再换端点 | `invalid_request_error` | 错误事件里保留原话和上游的 code，`error_type` 是 `invalid_request`，已转发的内容保留 |

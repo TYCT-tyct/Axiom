@@ -28,9 +28,9 @@ const (
 )
 
 // Decide maps a failure to what to do next (docs/domains/routing.md「失败怎么办」). The table's rows are told apart by
-// the scope the adapter gives: a malformed request is the request's own; a limit, an overload, a timeout, a context that
-// is too long, a refusal by moderation or a missing model is the endpoint's, the group's or the supplier's, so the next
-// entry may do; a key that is refused or used up is the credential's, and another credential of the endpoint may do; an
+// the scope the adapter gives: a malformed request is the request's own, and so is a refusal by moderation and a context
+// a relay says is too long; a limit, an overload, a timeout, a missing model, or a context a direct provider says is too
+// long is the endpoint's, the group's or the supplier's, so the next entry may do; a key that is refused or used up is the credential's, and another credential of the endpoint may do; an
 // unreachable route is the egress's: changing only the credential cannot fix it, and every endpoint has one egress
 // (direct), so the next entry may do. Once the first byte of the
 // reply has gone to the client nothing is retried, and Decide is not asked.
