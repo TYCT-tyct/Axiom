@@ -2676,8 +2676,9 @@ export interface components {
             price: components["schemas"]["Money"];
             /** @description Waived under the free-of-charge rule (docs/domains/billing.md「免单规则」). */
             free: boolean;
+            /** @description From the request's arrival, before admission, to the end of the call. */
             latency_ms: number;
-            /** @description From the request's start to the first content of the attempt that answered it. 0 when none answered with content, for embeddings, rerank and compact replies, which arrive whole, and for a cache hit. */
+            /** @description From the request's arrival, before admission, to the first content of the attempt that answered it. 0 when none answered with content, for embeddings, rerank and compact replies, which arrive whole, and for a cache hit. */
             first_token_ms: number;
             finish_reason: string;
             /** @description The unified error type the call was answered with, such as `upstream_error` or `timeout` (`internal_error` when the node failed while running it). Empty when the call succeeded or the client left first, which `finish_reason` `cancelled` says. */

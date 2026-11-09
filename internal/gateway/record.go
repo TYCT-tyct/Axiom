@@ -323,7 +323,7 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 		Class: classOf(c), ConsentVersion: consentOf(c.Admission.Consent()), ErrorKind: t.errorKind,
 		// The cost is what the attempts cost us, whether or not the user paid it.
 		Amounts: amountsOf(f), CostNano: costOf(o), Currency: t.currency,
-		Latency:  end.Sub(t.start),
+		Latency:  end.Sub(t.at),
 		Route:    route,
 		Streamed: c.Request.Stream,
 		CacheHit: t.cacheHit,
@@ -336,7 +336,8 @@ func recordOf(t trail, route []byte, o billing.Outcome, f billing.Final, end tim
 	return rec
 }
 
-// firstTokenOf is how long after the call began the first content came of the attempt that answered it: the first of
+// firstTokenOf is how long after the request arrived the first content came of the attempt that answered it, the same
+// start the latency counts from: the first of
 // a loop's samplings that did, which closeLoop marks with the loop's result. Zero when no attempt answered with content,
 // and for a whole reply passed through, which has no first token before its end.
 func firstTokenOf(t trail, o billing.Outcome) time.Duration {
@@ -345,7 +346,7 @@ func firstTokenOf(t trail, o billing.Outcome) time.Duration {
 			break
 		}
 		if ft := t.tries[i].firstToken; !ft.IsZero() && (a.Result == billing.Committed || a.Result == billing.Aggregated) {
-			return ft.Sub(t.start)
+			return ft.Sub(t.at)
 		}
 	}
 	return 0
@@ -437,6 +438,9 @@ func attemptsOf(o billing.Outcome, tries []try) []observability.AttemptRecord {
 			break // a settlement can name no more attempts than were made; the log says what it has
 		}
 		t := tries[i]
+		if t.errorKind == "" && a.Finish == billing.FinishCancelled {
+			t.errorKind = cancelled // the client left before the attempt ended, though nothing failed on its side
+		}
 		class := t.entry.Class
 		rec := observability.AttemptRecord{
 			Seq:      platform.AttemptSeq(a.Seq), //nolint:gosec // G115: at most platform.MaxAttemptSeq

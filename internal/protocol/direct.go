@@ -143,6 +143,8 @@ func (d *directScanner) embeddingsMember() error {
 		return d.model()
 	case "user":
 		return d.endUser(&d.r, true)
+	case "safety_identifier":
+		return d.endUser(&d.r, false)
 	case "provider":
 		return d.provider()
 	case "session_id":
@@ -185,6 +187,8 @@ func (d *directScanner) rerankMember() error {
 		return d.model()
 	case "user":
 		return d.endUser(&d.r, true)
+	case "safety_identifier":
+		return d.endUser(&d.r, false)
 	case "provider":
 		return d.provider()
 	case "session_id":

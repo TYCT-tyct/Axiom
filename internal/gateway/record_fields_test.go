@@ -279,11 +279,13 @@ func TestRecordedRequestFields(t *testing.T) {
 	}
 }
 
-// TestFirstTokenOfTheAnsweringAttempt: the call's first token is the answering attempt's, timed from the call's start;
-// a failed attempt's content does not count, and a call no attempt answered has none.
+// TestFirstTokenOfTheAnsweringAttempt: the call's first token is the answering attempt's, timed from the request's
+// arrival rather than from when execution began after admission; a failed attempt's content does not count, a call no
+// attempt answered has none, and an attempt the client walked away from is marked cancelled.
 func TestFirstTokenOfTheAnsweringAttempt(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	arrived := start.Add(-time.Second) // reading the body, queueing and admission took a second
 	tries := []try{
 		{started: start, firstToken: start.Add(50 * time.Millisecond), errorKind: "upstream_error"},
 		{started: start.Add(time.Second), firstToken: start.Add(1300 * time.Millisecond)},
@@ -293,15 +295,15 @@ func TestFirstTokenOfTheAnsweringAttempt(t *testing.T) {
 		results []billing.Result
 		want    time.Duration
 	}{
-		{"the second answers", []billing.Result{billing.FailedBeforeCommit, billing.Committed}, 1300 * time.Millisecond},
-		{"an aggregated reply", []billing.Result{billing.FailedBeforeCommit, billing.Aggregated}, 1300 * time.Millisecond},
+		{"the second answers", []billing.Result{billing.FailedBeforeCommit, billing.Committed}, 2300 * time.Millisecond},
+		{"an aggregated reply", []billing.Result{billing.FailedBeforeCommit, billing.Aggregated}, 2300 * time.Millisecond},
 		{"none answers", []billing.Result{billing.FailedBeforeCommit, billing.FailedBeforeCommit}, 0},
 	} {
 		o := billing.Outcome{}
 		for i, res := range tc.results {
 			o.Attempts = append(o.Attempts, billing.AttemptResult{Seq: i + 1, Result: res})
 		}
-		if got := firstTokenOf(trail{tries: tries, start: start}, o); got != tc.want {
+		if got := firstTokenOf(trail{tries: tries, at: arrived, start: start}, o); got != tc.want {
 			t.Errorf("%s: first token %s, want %s", tc.name, got, tc.want)
 		}
 	}
@@ -309,5 +311,14 @@ func TestFirstTokenOfTheAnsweringAttempt(t *testing.T) {
 	if attempts[0].FirstToken != 50*time.Millisecond || attempts[0].ErrorKind != "upstream_error" ||
 		attempts[1].FirstToken != 300*time.Millisecond || attempts[1].ErrorKind != "" {
 		t.Errorf("attempts %+v", attempts)
+	}
+	// The client left and the upstream then ended normally, as a stream, a whole reply or a loop's sampling may: only
+	// the finish reason says so, and the attempt is still recorded as cancelled. A failure already named stays named.
+	left := attemptsOf(billing.Outcome{Attempts: []billing.AttemptResult{
+		{Seq: 1, Result: billing.FailedBeforeCommit, Finish: billing.FinishCancelled},
+		{Seq: 2, Result: billing.Committed, Finish: billing.FinishCancelled},
+	}}, tries)
+	if left[0].ErrorKind != "upstream_error" || left[1].ErrorKind != cancelled {
+		t.Errorf("attempts the client left are %q and %q, want upstream_error and cancelled", left[0].ErrorKind, left[1].ErrorKind)
 	}
 }

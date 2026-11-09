@@ -4539,12 +4539,12 @@ components:
         service_tier: {type: string}
         price: {$ref: "#/components/schemas/Money"}
         free: {type: boolean, description: "Waived under the free-of-charge rule (docs/domains/billing.md「免单规则」)."}
-        latency_ms: {type: integer, minimum: 0}
+        latency_ms: {type: integer, minimum: 0, description: "From the request's arrival, before admission, to the end of the call."}
         first_token_ms:
           type: integer
           minimum: 0
           description: >-
-            From the request's start to the first content of the attempt that answered it. 0 when none answered with
+            From the request's arrival, before admission, to the first content of the attempt that answered it. 0 when none answered with
             content, for embeddings, rerank and compact replies, which arrive whole, and for a cache hit.
         finish_reason: {type: string}
         error_kind:

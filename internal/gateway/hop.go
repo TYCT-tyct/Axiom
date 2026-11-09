@@ -121,8 +121,11 @@ func (a *attempt) runTurn(ctx context.Context, relay *protocol.Relay) (e *ended,
 	turn, err := relay.ServerTurn()
 	switch {
 	case err != nil:
-		return a.abort(turnError(err)), false
+		e, after := turnError(err)
+		a.s.failAttempt(a, e.Type.String())
+		return a.abort(e, after), false
 	case turn.Client:
+		a.s.failAttempt(a, protocol.UpstreamFailed.String()) // the model's turn is what cannot go on, not a search
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0), false
 	case a.s.loop.disabled:
 		return nil, false
