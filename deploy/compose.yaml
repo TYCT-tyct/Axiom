@@ -83,7 +83,13 @@ services:
   postgres:
     # The pinned PostgreSQL tag plus pgBackRest (deploy/postgres/Dockerfile). It is built from this tree, like the
     # program image, because the archive tool has to run where PGDATA is; a release deployment builds it before starting.
-    build: ./postgres
+    build:
+      context: ./postgres
+      # The digest of this context that scripts/ops/up.sh builds from; while a node runs it refuses a database whose
+      # image carries another. A build label is not part of the service's Compose hash, so builds elsewhere (`just up`,
+      # the rehearsal) that leave it empty change nothing else.
+      labels:
+        axiom.postgres.source: ${DEPLOY_POSTGRES_SOURCE-}
     image: ${DEPLOY_POSTGRES_IMAGE:-axiom-postgres:local}
     # A CI job sets DEPLOY_RESTART_POLICY=no, so containers a killed job leaves behind never start again; local
     # `just up` keeps the restart the machine wants.

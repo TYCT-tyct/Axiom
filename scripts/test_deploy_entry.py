@@ -85,7 +85,8 @@ class DeployEntry(unittest.TestCase):
             return result, calls.read_text().splitlines() if calls.exists() else []
 
     def config(self, image=IMAGE, migrate=None):
-        return {"services": {"axiom": {"image": image}, "migrate": {"image": migrate or image}}}
+        return {"services": {"axiom": {"image": image}, "migrate": {"image": migrate or image},
+                             "postgres": {"build": {"context": str(ROOT / "deploy" / "postgres")}}}}
 
     def verified(self, calls):
         return [call for call in calls if call.startswith("verify ")]
