@@ -42,6 +42,7 @@ func (a *attempt) readHop(ctx context.Context, relay *protocol.Relay, idle *time
 		switch st.Kind {
 		case protocol.StepCommit, protocol.StepData, protocol.StepHeartbeat:
 			if !a.deliver(relay, st) {
+				s.failAttempt(a, protocol.Overloaded.String())
 				return over, ended{err: protocol.Error{Type: protocol.Overloaded}, after: 1}, false
 			}
 		case protocol.StepUpstreamDone:

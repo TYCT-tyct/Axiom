@@ -36,7 +36,7 @@ func (s *session) conclude(ctx context.Context, e ended) {
 	// The record is in the spill before the ending is written: a process crash after the client sees the answer cannot
 	// leave the call unrecorded. A settlement that committed here gives the record its amounts; one left for the
 	// background leaves it pending until that settlement commits.
-	t, end := s.trail(), time.Now()
+	t, end := s.trail(s.callError(e)), time.Now()
 	s.x.log(ctx, t, o, f, err != nil, end)
 	s.writeEnding(ctx, e, fin, err)
 	s.handedOff = s.x.settled(ctx, t, o, end, err)
@@ -228,7 +228,7 @@ func (s *session) settleOnPanic(ctx context.Context) {
 		}
 		o := billing.Outcome{Attempts: s.ends}
 		f, err := s.x.settle(ctx, s.c, o, time.Now().Add(s.x.Limits.cfg.SettleRetry))
-		t, end := s.trail(), time.Now()
+		t, end := s.trail(panicked), time.Now()
 		s.x.log(ctx, t, o, f, err != nil, end)
 		s.handedOff = s.x.settled(ctx, t, o, end, err)
 	}

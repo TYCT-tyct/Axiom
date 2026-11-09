@@ -60,7 +60,7 @@ func record(account uuid.UUID, at time.Time) CallRecord {
 		ServiceTier: catalog.ServiceTierStandard, PriceNano: 5_000_000, CostNano: 3_000_000,
 		Currency: mustCurrency("USD"), Free: true, Latency: 1200 * time.Millisecond, FirstToken: 300 * time.Millisecond,
 		FinishReason: "stop", ErrorKind: "upstream_error",
-		EndUser: HashEndUser([]byte("site-key"), "user-1"), ConsentVersion: "2026-10", TrainingAllowed: true,
+		EndUser: HashEndUser([]byte("site-key"), uuid.Nil(), "user-1"), ConsentVersion: "2026-10", TrainingAllowed: true,
 	}
 }
 

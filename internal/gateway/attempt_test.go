@@ -72,7 +72,7 @@ func failFirstEntry(t *testing.T, ctx context.Context, scope suppliers.Scope, no
 		},
 		routing: routing.Config{Now: func() time.Time { return *now }},
 	})
-	f := &suppliers.Failure{Scope: scope, Executed: suppliers.NotExecuted}
+	f := &suppliers.Failure{Scope: scope, Executed: suppliers.NotExecuted, Cause: suppliers.Overloaded{}}
 	h.up.endpoint(1).script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) { return nil, f }}
 	h.up.endpoint(2).script = []scripted{whole(h)}
 	h.up.endpoint(3).script = []scripted{whole(h)}
@@ -162,7 +162,7 @@ func TestSupplierStaysExcludedForTheRequestAfterItsLocalPause(t *testing.T) {
 		h.up.endpoint(1).script = []scripted{failure(routing.ScopeSupplier, true)}
 		h.up.endpoint(2).script = []scripted{func(context.Context) (*http.Response, *suppliers.Failure) {
 			now = now.Add(2 * time.Minute)
-			return nil, &suppliers.Failure{Scope: suppliers.ScopeEndpoint}
+			return nil, &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.Overloaded{}}
 		}}
 		h.up.endpoint(3).script = []scripted{whole(h)}
 		h.run()

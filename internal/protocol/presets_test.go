@@ -134,6 +134,39 @@ func TestSessionIDBoundary(t *testing.T) {
 	}
 }
 
+// TestInspectReadsTheEndUser covers where each format names the end user and which member wins: the call log keeps it
+// hashed (docs/domains/observability.md「写入时记全」).
+func TestInspectReadsTheEndUser(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		format protocol.Format
+		body   string
+		want   string
+	}{
+		{"chat user", protocol.Chat, `{"model":"m","messages":[],"user":"u-1"}`, "u-1"},
+		{"chat safety identifier alone", protocol.Chat, `{"model":"m","messages":[],"safety_identifier":"s-1"}`, "s-1"},
+		{"user wins after the safety identifier", protocol.Responses, `{"model":"m","safety_identifier":"s-1","user":"u-1"}`, "u-1"},
+		{"user wins before the safety identifier", protocol.Responses, `{"model":"m","user":"u-1","safety_identifier":"s-1"}`, "u-1"},
+		{"a blank user leaves the safety identifier", protocol.Chat, `{"model":"m","messages":[],"safety_identifier":"s-1","user":"  "}`, "s-1"},
+		{"messages metadata", protocol.Messages, `{"model":"m","max_tokens":1,"messages":[],"metadata":{"other":[1],"user_id":"m-1"}}`, "m-1"},
+		{"messages metadata of another shape", protocol.Messages, `{"model":"m","max_tokens":1,"messages":[],"metadata":"x"}`, ""},
+		{"a user that is not a string", protocol.Chat, `{"model":"m","messages":[],"user":42}`, ""},
+		{"embeddings", protocol.Embeddings, `{"model":"m","input":"a","user":"e-1"}`, "e-1"},
+		{"rerank", protocol.Rerank, `{"model":"m","query":"q","documents":["d"],"user":"r-1"}`, "r-1"},
+		{"completions safety identifier", protocol.Completions, `{"model":"m","prompt":"p","safety_identifier":"c-1"}`, "c-1"},
+		{"none", protocol.Chat, `{"model":"m","messages":[]}`, ""},
+	} {
+		got, err := protocol.Inspect(tc.format, []byte(tc.body))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got.EndUser != tc.want {
+			t.Errorf("%s: end user %q, want %q", tc.name, got.EndUser, tc.want)
+		}
+	}
+}
+
 func TestPresetNamedTools(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

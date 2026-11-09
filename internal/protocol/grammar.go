@@ -42,6 +42,12 @@ var grammars = [...]grammar{
 			"service_tier": (*scanner).serviceTier, "speed": (*scanner).speed, "cache_control": (*scanner).cacheControl,
 			"context_management": func(s *scanner) error { return s.object(editsHolder) },
 			"mcp_servers":        (*scanner).mcpServers,
+			"metadata": func(s *scanner) error {
+				if s.dec.PeekKind() != '{' {
+					return s.skip() // what the member may hold is the format's rule, checked where it is converted
+				}
+				return s.object(messagesMetadataFields)
+			},
 		}),
 		part: fields{
 			"type": (*scanner).partType, "content": (*scanner).result, "cache_control": (*scanner).cacheControl,
@@ -183,8 +189,11 @@ var (
 	chatImageFields      = fields{"url": (*scanner).imageURL}
 	chatFileFields       = fields{"file_data": (*scanner).fileData, "file_id": (*scanner).fileRef}
 	messagesOutputFields = fields{"format": (*scanner).format, "effort": (*scanner).reasoningEffort}
-	formatHolder         = fields{"format": (*scanner).format}
-	formatFields         = fields{"type": func(s *scanner) error {
+	// messagesMetadataFields reads the end user out of Anthropic's metadata: user_id is its identifier for the person
+	// the application serves.
+	messagesMetadataFields = fields{"user_id": func(s *scanner) error { return s.endUser(&s.r, true) }}
+	formatHolder           = fields{"format": (*scanner).format}
+	formatFields           = fields{"type": func(s *scanner) error {
 		v, err := s.str()
 		if string(v) == "json_schema" || string(v) == "json_object" {
 			s.r.Needs |= StructuredOutput
@@ -460,6 +469,8 @@ func withProvider(f fields) fields {
 		s.r.SessionID = string(v)
 		return err
 	}
+	f["user"] = func(s *scanner) error { return s.endUser(&s.r, true) }
+	f["safety_identifier"] = func(s *scanner) error { return s.endUser(&s.r, false) }
 	f["provider"] = (*scanner).provider
 	f["plugins"] = (*scanner).plugins
 	f["transforms"] = (*scanner).transforms

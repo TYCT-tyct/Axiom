@@ -142,7 +142,7 @@ func (d *directScanner) embeddingsMember() error {
 	case "model":
 		return d.model()
 	case "user":
-		return d.skip()
+		return d.endUser(&d.r, true)
 	case "provider":
 		return d.provider()
 	case "session_id":
@@ -184,7 +184,7 @@ func (d *directScanner) rerankMember() error {
 	case "model":
 		return d.model()
 	case "user":
-		return d.skip()
+		return d.endUser(&d.r, true)
 	case "provider":
 		return d.provider()
 	case "session_id":
@@ -219,7 +219,7 @@ func (d *directScanner) completionsMember() error {
 	case "model":
 		return d.model()
 	case "user":
-		return d.skip()
+		return d.endUser(&d.r, true)
 	case "provider":
 		return d.provider()
 	case "session_id":
@@ -263,7 +263,9 @@ func (d *directScanner) completionsMember() error {
 		k, err := d.flag()
 		d.r.Stream = k == 't'
 		return err
-	case "prompt_cache_key", "safety_identifier":
+	case "safety_identifier":
+		return d.endUser(&d.r, false)
+	case "prompt_cache_key":
 		return d.skip()
 	default:
 		return d.skip()

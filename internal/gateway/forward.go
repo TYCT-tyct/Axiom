@@ -70,6 +70,9 @@ func (a *attempt) next(relay *protocol.Relay) (protocol.Step, error) {
 		a.obs.Ended = time.Now()
 	case st.Kind == protocol.StepCommit:
 		a.obs.FirstToken = time.Now()
+		if t := &a.s.tries[a.i]; t.firstToken.IsZero() { // a loop's later hops are samplings of their own
+			t.firstToken = a.obs.FirstToken
+		}
 	}
 	return st, err
 }
@@ -99,6 +102,7 @@ func (a *attempt) broke(ctx context.Context, relay *protocol.Relay, err error) (
 		return a.truncate(relay, cut(failed.err))
 	}
 	e, finish, again := s.classify(ctx, err, a.conn)
+	s.failAttempt(a, e.Type.String())
 	rec := &s.ends[a.i]
 	if s.loop != nil {
 		a.hopDone(relay)
@@ -321,6 +325,7 @@ func (s *session) answered(a *attempt, relay *protocol.Relay) (step, ended) {
 // empty ends an attempt whose upstream answered 200 with nothing in it: a failure, which the next entry answers unless
 // a search already ran.
 func (s *session) empty(a *attempt) (step, ended) {
+	s.failAttempt(a, protocol.UpstreamFailed.String())
 	if s.searched {
 		s.record(a, true, routing.ScopeEndpoint, routing.ReturnToClient)
 		return over, ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
@@ -337,6 +342,7 @@ func (a *attempt) truncate(relay *protocol.Relay, e ended) (step, ended) {
 	s := a.s
 	a.cancel(errCut)
 	a.obs.Cut = quality.Ours
+	s.failAttempt(a, e.err.Type.String())
 	rec := &s.ends[a.i]
 	if s.loop != nil {
 		a.hopDone(relay)

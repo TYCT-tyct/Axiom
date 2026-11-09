@@ -397,6 +397,7 @@ func (a *attempt) send(ctx context.Context, up protocol.Upstream, held int64) (*
 //
 //nolint:cyclop // one branch for the search no-retry rule
 func (s *session) failed(a *attempt, f *suppliers.Failure) (step, ended) {
+	s.failAttempt(a, f.Cause.String())
 	s.ends[a.i].Result = billing.Unknown
 	if s.isGone() { // the client left while the request was out: the failure is the cancel's, and cancelling is never free
 		s.ends[a.i].Finish = billing.FinishCancelled
