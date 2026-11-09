@@ -74,6 +74,12 @@ docker() {
     'compose -f deploy/compose.yaml ps --all --quiet migrate') echo migrate ;;
     'compose -f deploy/compose.yaml port axiom 8080') echo 127.0.0.1:12345 ;;
     'compose -f deploy/compose.yaml port axiom 8082') echo 127.0.0.1:12346 ;;
+    # The key ring's refusals: the keys service exits 1, so the node's start fails, and its last line is the reason.
+    'compose -f deploy/compose.yaml up --detach --no-build axiom') return 1 ;;
+    'compose -f deploy/compose.yaml logs --no-log-prefix --tail 1 keys')
+      if [ -n "${AXIOM_KEYRING_GENERATE+set}" ]; then echo "keys: AXIOM_KEYRING_GENERATE must be true or false, not '$AXIOM_KEYRING_GENERATE'"
+      else echo 'keys: /keys has master identity but not hash; restore the whole ring'; fi ;;
+    *'--entrypoint sh keys -c ls /keys') printf 'identity\nmaster\nvalkey-password\n' ;;
   esac
 }
 curl() {
@@ -126,7 +132,9 @@ curl() {
                 self.assertEqual(calls.count("build --tag axiom-ci:fixture deploy"), 1 if image is None else 0)
                 # The database image is up.sh's to build, only when no node runs (#605).
                 self.assertFalse([call for call in calls if call.startswith("build ") and "postgres" in call], calls)
-                self.assertFalse([call for call in calls if call.startswith("compose ") and " up " in call], calls)
+                # Outside up.sh only the key ring's three starts, each refused by the keys service before the node runs.
+                self.assertEqual([call for call in calls if call.startswith("compose ") and " up " in call],
+                                 ["compose -f deploy/compose.yaml up --detach --no-build axiom"] * 3)
                 starts = [call.removeprefix("bash scripts/ops/up.sh --env-file deploy/.env").strip()
                           for call in calls if call.startswith("bash scripts/ops/up.sh")]
                 # The first start, an application release, a misspelled setting, the legacy upgrade refused under the

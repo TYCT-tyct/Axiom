@@ -223,3 +223,19 @@ start --database
 [ "$(grep -v '^AXIOM_MIGRATOR_PASSWORD=' deploy/.env)" = "$kept" ] && [ "$(grep -c '^AXIOM_MIGRATOR_PASSWORD=.' deploy/.env)" = 1 ] || { echo "::error::upgrading deploy/.env changed a password or did not add one"; exit 1; }
 [ "$(stat -c %a deploy/.env)" = 600 ] || { echo "::error::upgrading left deploy/.env readable by others"; exit 1; }
 start # the next start, which repeats every grant on roles that now have it
+
+# The key ring is made only as a whole, on a first start (deploy/compose.yaml's keys service). With the node stopped, a
+# start with an AXIOM_KEYRING_GENERATE that is neither true nor false, and a start whose volume lost one file of the
+# ring, must both stop at the keys service with its reason, before the node runs, and make no file: a hashing key made
+# next to the old master key would let the node start with every API key unmatchable (#735).
+keys_refuse() {
+  if compose up --detach --no-build axiom; then echo "::error::the stack started with $2"; return 1; fi
+  compose logs --no-log-prefix --tail 1 keys | grep -qF "$1" || { echo "::error::the keys service did not refuse $2 with: $1"; return 1; }
+}
+compose stop axiom
+AXIOM_KEYRING_GENERATE=yes keys_refuse "AXIOM_KEYRING_GENERATE must be true or false, not 'yes'" "AXIOM_KEYRING_GENERATE=yes"
+AXIOM_KEYRING_GENERATE= keys_refuse "AXIOM_KEYRING_GENERATE must be true or false, not ''" "an empty AXIOM_KEYRING_GENERATE"
+compose run --rm --no-deps -T --entrypoint sh keys -c 'rm -f /keys/hash'
+keys_refuse "keys: /keys has master identity but not hash" "a key ring without its hashing key"
+[ "$(compose run --rm --no-deps -T --entrypoint sh keys -c 'ls /keys')" = "$(printf '%s\n' identity master valkey-password)" ] \
+  || { echo "::error::refusing the partial key ring changed the volume"; exit 1; }
