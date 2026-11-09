@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploys one verified release onto this machine (docs/ops/backup-restore.md「生产入口」).
 #
-#   scripts/ops/deploy.sh [-f deploy/compose.yaml -f deploy/compose.edge.yaml] [--env-file FILE] <release.json>
+#   scripts/ops/deploy.sh [-f deploy/compose.yaml -f deploy/compose.edge.yaml] [--env-file FILE] [--database] <release.json>
 #
 # The image is read back from the Compose configuration this run will load, never from the env file alone: interpolation
 # takes an exported DEPLOY_IMAGE before the --env-file, so a value left in the shell is what pull and up consume. Reading
@@ -15,6 +15,7 @@ set -euo pipefail
 env_file=deploy/.env
 files=()
 record=
+database=()
 while [ $# -gt 0 ]; do
   case $1 in
   -f)
@@ -24,6 +25,10 @@ while [ $# -gt 0 ]; do
   --env-file)
     env_file=$2
     shift 2
+    ;;
+  --database)
+    database=(--database)
+    shift
     ;;
   -*)
     echo "deploy: unknown option $1" >&2
@@ -42,7 +47,7 @@ die() {
   exit 1
 }
 
-[ -n "$record" ] || die "usage: scripts/ops/deploy.sh [-f FILE]... [--env-file FILE] <release.json>"
+[ -n "$record" ] || die "usage: scripts/ops/deploy.sh [-f FILE]... [--env-file FILE] [--database] <release.json>"
 [ -r "$record" ] || die "cannot read the release record: $record"
 [ -r "$env_file" ] || die "cannot read $env_file (deploy/.env.example lists what it needs)"
 for file in "${files[@]}"; do
@@ -56,6 +61,7 @@ for file in "${files[@]}"; do
   compose_args+=(-f "$file")
 done
 compose() { docker compose "${compose_args[@]}" --env-file "$env_file" "$@"; }
+up_args=("${compose_args[@]}" --env-file "$env_file" "${database[@]}")
 
 # Both program services must run the same reference, and it must be a digest: a tag can move between verification and
 # pull, and a build would put something other than the verified bytes on this machine.
@@ -75,14 +81,6 @@ compose pull axiom migrate
 # The new build's content-hashed pages must be in the shared volume before the new binary serves them; the old build's
 # files stay, so a request that lands on an old node still finds its chunks.
 compose run --rm --no-deps --user 0:0 axiom web-assets /assets
-# The database image is built from this tree (pgBackRest on the pinned PostgreSQL tag), not consumed as a digest like
-# the program; it has to exist before the no-build start below.
-compose build postgres
-# The database healthcheck is the startup condition, including crash recovery; the old 60-second --wait-timeout
-# failed a recovery that was still progressing at 48 seconds on the shared CI host (#605). A final bound is still
-# needed here: restart: unless-stopped resets a crash-looping container's start period on every restart, so it may
-# never reach unhealthy, and this entry has no CI step timeout. Five minutes covers the 2-minute start period, the
-# three 10-second failure probes and the host's slow Docker daemon, and then fails the deployment.
-compose up --detach --no-build --wait --wait-timeout 300 postgres
-compose exec -T postgres sh < deploy/postgres/roles.sh
-compose up --detach --no-build --wait
+# Everything from here runs on the verified digest already pulled; up.sh never replaces the database under a running
+# node, and --database is the database upgrade that drains the node first.
+bash "$(dirname "${BASH_SOURCE[0]}")/up.sh" "${up_args[@]}"

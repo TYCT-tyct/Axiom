@@ -134,12 +134,9 @@ WAL 仓库读不出来；逻辑 set 仍能用 age 私钥恢复。仓库里已经
 1. `deploy/.env` 设 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_S3_*`、`AXIOM_BACKUP_CIPHER_PASS`（前缀不是 `axiom` 时还有
    `AXIOM_BACKUP_PREFIX`；WAL 用单独的桶时设 `AXIOM_BACKUP_WAL_BUCKET`，否则跟随备份桶；AWS S3 把
    `AXIOM_BACKUP_S3_URI_STYLE` 改成 `host`）。WAL 桶非空却不设口令时数据库拒绝启动并列出缺的变量。
-2. 数据库镜像从本仓库构建，不像程序镜像那样按 digest 拉取：
-
-   ```bash
-   docker compose -f deploy/compose.yaml --env-file deploy/.env build postgres
-   docker compose -f deploy/compose.yaml --env-file deploy/.env up --detach --wait postgres
-   ```
+2. 这些设置改的是数据库的环境，所以是一次数据库升级：按[生产入口](#生产入口)的部署命令加 `--database`，先停（排空）节点，
+   再从本仓库构建并替换数据库。节点在跑时不带 `--database` 的部署会失败，不会在节点底下换掉数据库。还没有部署过的机器
+   （没有节点在跑）照常部署即可。
 
 3. 第一次启动后马上建 stanza。之前 archive-push 会失败（仓库里还没有 `archive.info`），这是预期的，不是数据损坏：
 
@@ -463,15 +460,42 @@ PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
   -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env tmp/release/release.json
 ```
 
-入口按顺序拉取该 digest、发布本构建的前端资源、从本仓库构建数据库镜像、启动数据库、重放 `deploy/postgres/roles.sh`
-的角色授权、再以 `--no-build` 启动整套栈。任何一步失败即停：验签失败时没有 pull，也没有启动。不要把它拆成手工的
-`sed`、验签、`pull`、`up`：只从 `deploy/.env` 取镜像会验文件里的 A 而 Compose 拉环境变量里的 B，分成几段执行也没有
-失败控制。三份数据库口令须已在 `deploy/.env` 中，否则启动数据库或重放角色授权会失败并停下。
+入口按顺序拉取该 digest、发布本构建的前端资源，再交给 `scripts/ops/up.sh` 启动（CI 的部署检查也走它）。任何一步失败即停：
+验签失败时没有 pull，也没有启动。不要把它拆成手工的 `sed`、验签、`pull`、`up`：只从 `deploy/.env` 取值会验文件里的 A
+而 Compose 拉环境变量里的 B，分成几段执行也没有失败控制。三份数据库口令须已在 `deploy/.env` 中，否则启动数据库或重放
+角色授权会失败并停下。
+
+**应用发布不动数据库。** 节点在跑、数据库也在跑时，`up.sh` 要求数据库容器与这次的配置一致：同一个镜像，Compose 对
+`postgres` 服务算出的哈希与容器标签相同，镜像上记的构建输入摘要（`axiom.postgres.source`）与本树的 `deploy/postgres/`
+相同。然后重放角色授权，再用 `--no-deps` 启动除数据库以外的服务：迁移跑完才换节点，
+数据库容器不换。数据库的构建输入（`deploy/postgres/` 下除 `roles.sh` 以外的文件；`roles.sh` 挂载进容器、每次启动重放，不进镜像）、镜像或环境（`deploy/.env` 里归档桶、口令这类数据库读的值）变了，
+这一步什么都不改就失败：在旧节点还接流量时换掉数据库，在途调用会失去连接、结算受阻、节点持有的会话锁丢失，而节点的
+170 秒退出宽限只保护它自己收到停止信号之后的排空。数据库升级单独做，部署命令加 `--database`：先停节点（`stop` 给它
+`stop_grace_period` 排空：在途调用在共享期限内结束并结算，还没写进数据库的调用记录留在本地 spill、下次启动重放），再构建并替换数据库，最后启动整套栈。这期间服务中断，
+入口回 502；先停掉宿主上定时的备份作业，做完再恢复。没有节点在跑时（首次部署、整套栈已停）没有要排空的东西，直接走同一条
+构建数据库的路径。数据库镜像只在这条路径上构建：即使缓存命中，重新构建也会得到新的镜像 ID，Compose 会因此替换数据库（#605）。
+构建时 `up.sh` 把构建输入的摘要写进镜像标签；不经它构建的镜像（`just up`、演练）标签为空，节点在跑时同样要求 `--database`。
+
+**配置原样传给程序。** Compose 只把它列出的变量交给容器，程序拒绝未知变量也只能拒绝它看得到的。`deploy/compose.yaml`
+把核心读的设置逐个传给 `axiom` 服务（`deploy/.env.example` 列出，留空即程序默认，运营监听因此默认关闭）；它自己定下的不传：
+监听地址（发布的端口和入口按它们写）、密钥/spill/前端文件的路径（卷）、数据库和缓存的地址，以及 `AXIOM_SHUTDOWN_TIMEOUT`
+（`stop_grace_period` 按它算）。`up.sh` 动手前先核对 `deploy/.env`：每个非空的 `AXIOM_*` 都必须被这次 `-f` 合并后的
+Compose 文件引用（按未插值、启用全部 profile 的配置找 `${AXIOM_…}`，备份作业读的也算，后面的文件覆盖掉的引用不算），否则报出
+变量名并停下。值按 Compose 读 env 文件的规则取：后一次赋值为准，引号里的内容才是值，未加引号时空格加 `#` 之后是注释，行尾的
+`\r` 不算；取出来是空的就等于没设。所以拼错的名字、这个
+部署固定下来的变量，以及带入口时的 `AXIOM_TRUSTED_PROXIES`（入口把它固定成自己的地址）都会挡住部署，不会被悄悄丢掉。
+
+**密钥环只在第一次启动时生成。** `keys` 服务只在 `keys` 卷里 `master`、`hash`、`identity` 三个文件都没有、且
+`AXIOM_KEYRING_GENERATE=true` 时一起生成整套；卷里只有其中一部分时，不论这个值，它报出有哪几个、缺哪几个后退出 1，
+程序不会启动。这个值不是 `true` 或 `false`（例如 `yes`、`False`、`0`，或写了 `AXIOM_KEYRING_GENERATE=` 的空值）也一样退出；只有完全没设时才按 `true`。生产部署第一次启动成功后，把
+`deploy/.env` 里的它改成 `false` 并一直保持：之后卷丢了或换了机器，`keys` 拒绝空卷，要按[恢复](#恢复)把同一个 set 里的
+整套密钥环放回。缺文件时不要手工补生成，也不要从别处拷单个文件：新的哈希密钥让库里所有 API key 的哈希都对不上，节点
+却照常启动。
 
 迁移和程序使用同一 digest；备份 manifest 的镜像字段也因此记录这个引用。恢复和回滚沿用发布记录里的摘要，不能将
 本地开发的 `axiom:local` 当生产交付物。数据库镜像不是发布产物：它的 Dockerfile 钉住 PostgreSQL 的基础 tag，pgBackRest 和
-三个入口脚本随本仓库走，所以 `scripts/ops/deploy.sh` 在启动数据库前先 `build postgres`，再用 `--no-build` 启动；升级它的
-内容和升级程序是两件事，升级后跑一次 `pgbackrest check` 和 `deploy/postgres` 的恢复测试。
+三个入口脚本随本仓库走，所以由 `scripts/ops/up.sh` 在替换数据库的路径上 `build postgres`，再用 `--no-build` 启动；升级它的
+内容和升级程序是两件事（见上文的 `--database`），升级后跑一次 `pgbackrest check` 和 `deploy/postgres` 的恢复测试。
 
 单独一个文件，是因为入口用的网络钉了子网（程序只认地址/CIDR，入口得有固定地址），而钉死的子网在跑多个项目的机器上可能
 撞车：没有入口的部署（`just up`、CI 的部署检查）不该带上它。
@@ -550,6 +574,21 @@ PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
 - **入口分两个公开域名**：`accounts.site_domains` 的域名是主键，一个域名只属于一种 surface，所以控制台与模型 API 只能各用
   一个域名。代价是每个部署要三份 DNS 与证书，注册站点时也要三个 host；换来的是每种 surface 的来源限制能分开设，程序自己
   的拒绝逻辑不必改动。
+- **应用发布与数据库升级分开，而不是每次发布都重建数据库**：数据库镜像从本仓库构建，即使内容没变，重新构建也是新的镜像 ID，
+  旧入口因此每次发布都在旧节点接流量时替换数据库。选「节点在跑时数据库必须与配置一致、否则失败并要求 `--database`」：
+  普通发布只换节点、不碰数据库，数据库升级有明确的排空和停机。不选「按 Compose 自己判断是否重建」：它在镜像 ID 变化时就会重建，
+  正是要避免的；构建输入另记摘要：Dockerfile 或入口脚本改了而还没人构建时，tag 和容器都还指着旧镜像，只比镜像 ID
+  会放过这次数据库更新。不选「普通发布照常构建」：每次构建都是新的镜像 ID，比较就失去意义。代价是改了 `deploy/postgres/` 或数据库读的环境后，部署要显式加 `--database` 并承受一次停机；忘了加时失败，什么都不改。
+- **部署前核对 `deploy/.env` 的每个 `AXIOM_*` 都有服务读，而不是让 Compose 读整份文件**：`env_file` 会把超级用户口令和备份桶的
+  凭证一起交给程序（程序还会把它们当未知变量拒绝启动），所以仍逐个列出要传的设置；核对按合并后、未插值的配置找引用，一次
+  `docker compose --profile '*' config --no-interpolate`，后面的文件覆盖掉的引用也看得出来。不核对 shell 里导出的 `AXIOM_*`：CI 与运维机器
+  会导出与这次部署无关的变量。
+
+- **部分密钥环由 `keys` 服务拒绝，不另给哈希密钥记库里的摘要**：缺一个文件就补生成，正是 #735 发现的问题——新的
+  哈希密钥让已有 API key 全部失效，节点却照常启动，因为只有主密钥在库里有摘要可以核对。三个文件只能一起生成、缺一个
+  就停，在产生坏状态的那一步关掉它；整套被重新生成时，新主密钥与库里的摘要不符（[主密钥轮换](#主密钥轮换)），`serve`
+  拒绝启动。手工换掉 `hash` 文件仍然查不出来，要查得给哈希密钥也在库里记一份摘要，是数据结构的改动，不在这次的范围。
+  代价：以后新增第四个密钥文件的版本，已有部署的卷里会缺这个文件而被拒绝，那个版本要自带一步单独补它的流程。
 
 ## 待定
 

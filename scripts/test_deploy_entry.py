@@ -21,6 +21,7 @@ case "$*" in
   *" pull "*) exit "${PULL_STATUS:-0}" ;;
   *" run "*) exit "${RUN_STATUS:-0}" ;;
   *" up "*) exit "${UP_STATUS:-0}" ;;
+  *" ps --status running --quiet "*) echo "${RUNNING-}" ;;
 esac
 '''
 # The verified attestation carries the SBOM the release artifact retains, so the predicate here is exactly that document.
@@ -47,7 +48,7 @@ esac
 @unittest.skipUnless(BASH, "Bash is unavailable")
 class DeployEntry(unittest.TestCase):
     def run_deploy(self, config, env_value="registry.example/from-file:latest", exported=None,
-                   verify_status=0, pull_status=0, run_status=0, up_status=0):
+                   verify_status=0, pull_status=0, run_status=0, up_status=0, args=(), running=""):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bindir = root / "bin"
@@ -71,7 +72,7 @@ class DeployEntry(unittest.TestCase):
             environment = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "CALLS": str(calls),
                            "COMPOSE_CONFIG": json.dumps(config), "VERIFY_STATUS": str(verify_status),
                            "PULL_STATUS": str(pull_status), "RUN_STATUS": str(run_status),
-                           "UP_STATUS": str(up_status)}
+                           "UP_STATUS": str(up_status), "RUNNING": running}
             for name in ("GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_REF", "RELEASE_SIGNING_IDENTITY",
                          "RELEASE_SIGNING_ISSUER", "RELEASE_ALLOW_INSECURE_REGISTRY", "DEPLOY_IMAGE"):
                 environment.pop(name, None)
@@ -79,12 +80,13 @@ class DeployEntry(unittest.TestCase):
                 environment["DEPLOY_IMAGE"] = exported
             result = subprocess.run(
                 [BASH, str(SCRIPT), "-f", "deploy/compose.yaml", "-f", "deploy/compose.edge.yaml",
-                 "--env-file", str(env_file), str(record)],
+                 "--env-file", str(env_file), *args, str(record)],
                 env=environment, cwd=ROOT, text=True, capture_output=True)
             return result, calls.read_text().splitlines() if calls.exists() else []
 
     def config(self, image=IMAGE, migrate=None):
-        return {"services": {"axiom": {"image": image}, "migrate": {"image": migrate or image}}}
+        return {"services": {"axiom": {"image": image}, "migrate": {"image": migrate or image},
+                             "postgres": {"build": {"context": str(ROOT / "deploy" / "postgres")}}}}
 
     def verified(self, calls):
         return [call for call in calls if call.startswith("verify ")]
@@ -113,6 +115,14 @@ class DeployEntry(unittest.TestCase):
         # The database image is built from this tree; the no-build starts below would fail without it.
         self.assertLess(next(i for i, call in enumerate(calls) if " build postgres " in call),
                         next(i for i, call in enumerate(calls) if " up " in call))
+
+    def test_a_database_upgrade_drains_the_running_node_before_building_the_database(self):
+        result, calls = self.run_deploy(self.config(), args=("--database",), running="c1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        compose = self.compose_calls(calls)
+        stop = next(i for i, call in enumerate(compose) if " stop axiom " in call)
+        self.assertLess(stop, next(i for i, call in enumerate(compose) if " build postgres " in call))
+        self.assertIn(f"DEPLOY_IMAGE={IMAGE}", compose[stop])
 
     def test_a_database_that_never_becomes_healthy_stops_the_deployment(self):
         # `compose up --wait` returns 1 when its final bound expires. A database whose restart: unless-stopped resets

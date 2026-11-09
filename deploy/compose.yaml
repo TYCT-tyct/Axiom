@@ -83,7 +83,13 @@ services:
   postgres:
     # The pinned PostgreSQL tag plus pgBackRest (deploy/postgres/Dockerfile). It is built from this tree, like the
     # program image, because the archive tool has to run where PGDATA is; a release deployment builds it before starting.
-    build: ./postgres
+    build:
+      context: ./postgres
+      # The digest of this context that scripts/ops/up.sh builds from; while a node runs it refuses a database whose
+      # image carries another. A build label is not part of the service's Compose hash, so builds elsewhere (`just up`,
+      # the rehearsal) that leave it empty change nothing else.
+      labels:
+        axiom.postgres.source: ${DEPLOY_POSTGRES_SOURCE-}
     image: ${DEPLOY_POSTGRES_IMAGE:-axiom-postgres:local}
     # A CI job sets DEPLOY_RESTART_POLICY=no, so containers a killed job leaves behind never start again; local
     # `just up` keeps the restart the machine wants.
@@ -147,16 +153,33 @@ services:
     command:
       - |
         umask 277
-        # A deployment that shares the key ring between nodes must restore the protected volume, never let each node
-        # generate divergent material: with no file and this false, this service refuses instead of making one.
-        if [ "$${AXIOM_KEYRING_GENERATE:-true}" = false ]; then
+        # The three files are one ring, made together on a deployment's first start or not at all. A file made next to
+        # the others would be new material where the database holds what the lost one made: a new hashing key leaves
+        # every API key unmatchable while the node starts normally, because only the master key has a digest in the
+        # database to be checked against. So a volume with some of the files and not the others is refused, whatever
+        # AXIOM_KEYRING_GENERATE says; a release that adds a fourth file must make it in a step of its own.
+        # A deployment whose ring exists, or that shares one ring between nodes, sets AXIOM_KEYRING_GENERATE=false, so
+        # an empty volume is refused too instead of getting a second, divergent ring. A value other than true or false
+        # is refused rather than read as either.
+        case "$$AXIOM_KEYRING_GENERATE" in
+          true | false) ;;
+          *) echo "keys: AXIOM_KEYRING_GENERATE must be true or false, not '$$AXIOM_KEYRING_GENERATE'" >&2; exit 1 ;;
+        esac
+        present=
+        missing=
+        for name in master hash identity; do
+          if [ -f /keys/$$name ]; then present="$$present $$name"; else missing="$$missing $$name"; fi
+        done
+        if [ -n "$$present" ] && [ -n "$$missing" ]; then
+          echo "keys: /keys has$$present but not$$missing; restore the whole ring from the backup set it came from (docs/ops/backup-restore.md「恢复」), never generate the missing files" >&2
+          exit 1
+        fi
+        if [ -z "$$present" ]; then
+          [ "$$AXIOM_KEYRING_GENERATE" = true ] || { echo "keys: /keys has no key ring and AXIOM_KEYRING_GENERATE is false: restore the ring, or set it true for this deployment's first start only" >&2; exit 1; }
           for name in master hash identity; do
-            [ -f /keys/$$name ] || { echo "keys: /keys/$$name is missing and AXIOM_KEYRING_GENERATE is false" >&2; exit 1; }
+            echo "1:$$(head -c 32 /dev/urandom | base64)" > /keys/$$name
           done
         fi
-        for name in master hash identity; do
-          [ -f /keys/$$name ] || echo "1:$$(head -c 32 /dev/urandom | base64)" > /keys/$$name
-        done
         # The cache's password is made once with its two copies: the program's, and the cache's with the ACL file that holds
         # only its SHA-256. The root of this container can create and delete files but not read the ones it has handed
         # over (it has only CHOWN), so nothing here reads a file after the chown: when the three exist, they stay.
@@ -187,7 +210,8 @@ services:
         chown 999:1000 /cache/password /cache/users.acl
         chmod 755 /cache
     environment:
-      AXIOM_KEYRING_GENERATE: ${AXIOM_KEYRING_GENERATE:-true}
+      # Only an unset variable defaults: an empty one reaches the check above and is refused like any other non-boolean.
+      AXIOM_KEYRING_GENERATE: ${AXIOM_KEYRING_GENERATE-true}
     volumes:
       - keys:/keys
       - cache:/cache
@@ -258,6 +282,34 @@ services:
       # Off unless the platform permits reply content in the response cache (docs/domains/gateway.md「响应缓存」).
       AXIOM_RESPONSE_CACHE_CONTENT: ${AXIOM_RESPONSE_CACHE_CONTENT-}
       AXIOM_EXCHANGE_SOURCE: ${AXIOM_EXCHANGE_SOURCE-}
+      # Every other setting a core reads that this file does not fix itself, passed as written in deploy/.env: Compose
+      # passes nothing it is not told to, and the program can refuse only what reaches it. scripts/ops/up.sh refuses an
+      # AXIOM_* setting no service here reads. Fixed here and not passed: the listen addresses (the published ports and
+      # the edge name them), the key, spill and asset paths (the volumes), the database and cache URLs, and
+      # AXIOM_SHUTDOWN_TIMEOUT, which stop_grace_period above is computed from.
+      AXIOM_MODEL_VERIFICATION: ${AXIOM_MODEL_VERIFICATION-}
+      AXIOM_DIRECT_FORMATS: ${AXIOM_DIRECT_FORMATS-}
+      AXIOM_BYOK: ${AXIOM_BYOK-}
+      AXIOM_TRUSTED_PROXIES: ${AXIOM_TRUSTED_PROXIES-}
+      AXIOM_STARTUP_TIMEOUT: ${AXIOM_STARTUP_TIMEOUT-}
+      AXIOM_DB_COMPLETION_RESERVE: ${AXIOM_DB_COMPLETION_RESERVE-}
+      AXIOM_HASH_CONCURRENCY: ${AXIOM_HASH_CONCURRENCY-}
+      AXIOM_HASH_WAIT: ${AXIOM_HASH_WAIT-}
+      AXIOM_CORE_NODES: ${AXIOM_CORE_NODES-}
+      AXIOM_NODE_ID: ${AXIOM_NODE_ID-}
+      # The operations listener stays off unless its address is set (docs/security.md「运营调用面」); this file
+      # publishes no port for it.
+      AXIOM_OPERATIONS_ADDR: ${AXIOM_OPERATIONS_ADDR-}
+      AXIOM_OPERATIONS_SOURCES: ${AXIOM_OPERATIONS_SOURCES-}
+      AXIOM_SMTP_HOST: ${AXIOM_SMTP_HOST-}
+      AXIOM_SMTP_PORT: ${AXIOM_SMTP_PORT-}
+      AXIOM_SMTP_USERNAME: ${AXIOM_SMTP_USERNAME-}
+      AXIOM_SMTP_PASSWORD: ${AXIOM_SMTP_PASSWORD-}
+      AXIOM_SMTP_FROM: ${AXIOM_SMTP_FROM-}
+      AXIOM_SEARCH_URL: ${AXIOM_SEARCH_URL-}
+      AXIOM_SEARCH_KEY: ${AXIOM_SEARCH_KEY-}
+      AXIOM_FILE_PARSER_URL: ${AXIOM_FILE_PARSER_URL-}
+      AXIOM_FILE_PARSER_KEY: ${AXIOM_FILE_PARSER_KEY-}
       # The shared cache, in this single-core deployment too: a rate count that survives this process is one more thing
       # a restart does not take, and it is what `AXIOM_CORE_NODES` above 1 will need (internal/platform/kv/README.md
       # 「配置与启动」). The password is the file, never this environment.
