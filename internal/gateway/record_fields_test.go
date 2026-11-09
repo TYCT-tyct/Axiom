@@ -52,36 +52,43 @@ type loggedAttempt struct {
 	firstToken int64
 }
 
+// firstTokenWait is how long the recording tests' upstreams wait before their first content: the first token stored is
+// at least this.
+const firstTokenWait = 20 * time.Millisecond
+
+// failsUnknown is a supplier failure of a cause no rule recognises, which the next entry is tried after.
+func failsUnknown(context.Context) (*http.Response, *suppliers.Failure) {
+	return nil, failing(routing.ScopeEndpoint, true, suppliers.Failure{Cause: suppliers.Unknown{Status: 520}})
+}
+
+// answersLate streams an answer whose first content comes after firstTokenWait, ending normally or broken off.
+func answersLate(sample []string, broken bool) scripted {
+	beats := []beat{{data: events(sample, evStart)}, {data: events(sample, evBlock)}, {wait: firstTokenWait, data: text(10)}}
+	if broken {
+		return serve(append(beats, beat{hangup: true})...)
+	}
+	return serve(append(beats, beat{data: events(sample, evBlockStop, evMsgDelta, evMsgStop)})...)
+}
+
 // TestCallRecordKeepsErrorKindsAndFirstTokens: the call and each attempt are stored with why they failed and when their
 // first content came, so the log's error filter and its first-token figures reflect real calls (#729 G2).
 func TestCallRecordKeepsErrorKindsAndFirstTokens(t *testing.T) {
 	t.Parallel()
-	const wait = 20 * time.Millisecond // before the first content: the first token is at least this
-	fail := func(ctx context.Context) (*http.Response, *suppliers.Failure) {
-		return nil, failing(routing.ScopeEndpoint, true, suppliers.Failure{Cause: suppliers.Unknown{Status: 520}})
-	}
-	answer := func(sample []string, broken bool) scripted {
-		beats := []beat{{data: events(sample, evStart)}, {data: events(sample, evBlock)}, {wait: wait, data: text(10)}}
-		if broken {
-			return serve(append(beats, beat{hangup: true})...)
-		}
-		return serve(append(beats, beat{data: events(sample, evBlockStop, evMsgDelta, evMsgStop)})...)
-	}
 	for _, tc := range []struct {
 		name      string
 		script    func(sample []string, n int64) scripted // n is the attempt's number across the endpoints
 		callError string
-		attempts  []loggedAttempt // firstToken is 1 where the attempt's first token must be at least wait
+		attempts  []loggedAttempt // firstToken is 1 where the attempt's first token must be at least firstTokenWait
 	}{
 		{"a fallback answers", func(s []string, n int64) scripted {
 			if n == 1 {
-				return fail
+				return failsUnknown
 			}
-			return answer(s, false)
+			return answersLate(s, false)
 		}, "", []loggedAttempt{{"unknown", 0}, {"", 1}}},
-		{"the stream breaks after content", func(s []string, _ int64) scripted { return answer(s, true) },
+		{"the stream breaks after content", func(s []string, _ int64) scripted { return answersLate(s, true) },
 			"upstream_error", []loggedAttempt{{"upstream_error", 1}}},
-		{"every attempt fails", func([]string, int64) scripted { return fail },
+		{"every attempt fails", func([]string, int64) scripted { return failsUnknown },
 			"upstream_error", []loggedAttempt{{"unknown", 0}, {"unknown", 0}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,48 +104,73 @@ func TestCallRecordKeepsErrorKindsAndFirstTokens(t *testing.T) {
 			}
 			r.do(http.MethodPost, "/v1/messages", a.key, strings.NewReader(stream("acme/alpha")))
 			r.flush()
-			var callError string
-			var firstToken, latency int64
-			var got []loggedAttempt
-			if err := r.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-				if err := tx.QueryRow(t.Context(), `SELECT error_kind, first_token_ms, latency_ms FROM observability.call_log`).
-					Scan(&callError, &firstToken, &latency); err != nil {
-					return err
-				}
-				rows, err := tx.Query(t.Context(), `SELECT error_kind, first_token_ms FROM observability.call_attempt ORDER BY attempt_seq`)
-				if err != nil {
-					return err
-				}
-				defer rows.Close()
-				for rows.Next() {
-					var at loggedAttempt
-					if err := rows.Scan(&at.errorKind, &at.firstToken); err != nil {
-						return err
-					}
-					got = append(got, at)
-				}
-				return rows.Err()
-			}); err != nil {
-				t.Fatal(err)
-			}
-			if callError != tc.callError {
-				t.Errorf("the call's error kind is %q, want %q", callError, tc.callError)
-			}
-			answered := tc.attempts[len(tc.attempts)-1].firstToken != 0
-			if answered && (firstToken < wait.Milliseconds() || firstToken > latency) || !answered && firstToken != 0 {
-				t.Errorf("the call's first token is %d ms of %d ms; content came %v after a %s wait", firstToken, latency, answered, wait)
-			}
-			if len(got) != len(tc.attempts) {
-				t.Fatalf("attempts %+v, want %+v", got, tc.attempts)
-			}
-			for i, want := range tc.attempts {
-				if got[i].errorKind != want.errorKind || (want.firstToken == 0) != (got[i].firstToken == 0) ||
-					want.firstToken != 0 && got[i].firstToken < wait.Milliseconds() {
-					t.Errorf("attempt %d is %+v, want %+v (1: at least %s)", i+1, got[i], want, wait)
-				}
-			}
+			call, attempts := r.loggedCall()
+			checkLogged(t, call, attempts, tc.callError, tc.attempts)
 		})
 	}
+}
+
+// checkLogged compares the stored call and attempts with the error kinds wanted and whether each first token came.
+func checkLogged(t *testing.T, call loggedCall, attempts []loggedAttempt, callError string, want []loggedAttempt) {
+	t.Helper()
+	if call.errorKind != callError {
+		t.Errorf("the call's error kind is %q, want %q", call.errorKind, callError)
+	}
+	answered := want[len(want)-1].firstToken != 0
+	if !firstTokenAsWanted(call.firstToken, answered) || call.firstToken > call.latency {
+		t.Errorf("the call's first token is %d ms of %d ms; content came %v after %s", call.firstToken, call.latency, answered, firstTokenWait)
+	}
+	if len(attempts) != len(want) {
+		t.Fatalf("attempts %+v, want %+v", attempts, want)
+	}
+	for i, w := range want {
+		if attempts[i].errorKind != w.errorKind || !firstTokenAsWanted(attempts[i].firstToken, w.firstToken != 0) {
+			t.Errorf("attempt %d is %+v, want %+v (1: at least %s)", i+1, attempts[i], w, firstTokenWait)
+		}
+	}
+}
+
+// firstTokenAsWanted reports whether a stored first token, in milliseconds, is at least firstTokenWait when content
+// came after it, and 0 when none came.
+func firstTokenAsWanted(ms int64, came bool) bool {
+	if !came {
+		return ms == 0
+	}
+	return ms >= firstTokenWait.Milliseconds()
+}
+
+// loggedCall is the one call the rig's log holds and its attempts in order.
+type loggedCall struct {
+	errorKind           string
+	firstToken, latency int64
+}
+
+func (r *rig) loggedCall() (loggedCall, []loggedAttempt) {
+	r.t.Helper()
+	var call loggedCall
+	var attempts []loggedAttempt
+	if err := r.db.Tx(r.t.Context(), platformScope, func(tx pg.Tx) error {
+		if err := tx.QueryRow(r.t.Context(), `SELECT error_kind, first_token_ms, latency_ms FROM observability.call_log`).
+			Scan(&call.errorKind, &call.firstToken, &call.latency); err != nil {
+			return err
+		}
+		rows, err := tx.Query(r.t.Context(), `SELECT error_kind, first_token_ms FROM observability.call_attempt ORDER BY attempt_seq`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var at loggedAttempt
+			if err := rows.Scan(&at.errorKind, &at.firstToken); err != nil {
+				return err
+			}
+			attempts = append(attempts, at)
+		}
+		return rows.Err()
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+	return call, attempts
 }
 
 // TestCallRecordNamesTheRequester: the end user is stored as the account's keyed hash, never as sent; the session is
